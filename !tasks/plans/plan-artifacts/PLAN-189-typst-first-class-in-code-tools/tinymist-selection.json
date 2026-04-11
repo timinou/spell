@@ -1,0 +1,13 @@
+[
+  "tinymist",
+  {
+    "command": "tinymist",
+    "args": ["lsp"],
+    "fileTypes": [".typ"],
+    "rootMarkers": ["typst.toml", ".git"],
+    "initOptions": {
+      "formatterMode": "typstyle"
+    },
+    "resolvedCommand": "/usr/bin/tinymist"
+  }
+]

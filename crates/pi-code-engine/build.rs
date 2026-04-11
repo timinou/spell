@@ -65,6 +65,11 @@ const GRAMMARS: &[GrammarSource] = &[
 		json_subpath:   "src/node-types.json",
 	},
 	GrammarSource {
+		name:           "typst",
+		package_prefix: "codebook-tree-sitter-typst-",
+		json_subpath:   "src/node-types.json",
+	},
+	GrammarSource {
 		name:           "elixir",
 		package_prefix: "tree-sitter-elixir-",
 		json_subpath:   "src/node-types.json",

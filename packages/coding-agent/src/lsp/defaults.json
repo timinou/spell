@@ -122,6 +122,15 @@
 		"fileTypes": [".html", ".css", ".scss", ".js", ".jsx", ".ts", ".tsx", ".vue", ".svelte"],
 		"rootMarkers": ["tailwind.config.js", "tailwind.config.ts", "tailwind.config.mjs", "tailwind.config.cjs"]
 	},
+	"tinymist": {
+		"command": "tinymist",
+		"args": ["lsp"],
+		"fileTypes": [".typ"],
+		"rootMarkers": ["typst.toml", ".git"],
+		"initOptions": {
+			"formatterMode": "typstyle"
+		}
+	},
 	"svelte": {
 		"command": "svelteserver",
 		"args": ["--stdio"],

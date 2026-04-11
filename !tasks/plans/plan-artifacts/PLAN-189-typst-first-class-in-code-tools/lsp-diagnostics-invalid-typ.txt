@@ -1,0 +1,4 @@
+1 error(s):
+# ../../../../../tmp
+## └─ plan-189-typst-diagnostics.typ
+  3:31 [error] [typst] expected expression

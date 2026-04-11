@@ -39,7 +39,9 @@ fn entry_for_node(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Op
 		return None;
 	}
 
-	let decl = declaration_for(profile, node)?;
+	let Some(decl) = declaration_for(profile, node) else {
+		return sole_named_child(node).and_then(|child| entry_for_node(source, profile, child));
+	};
 	let name = text(source, node.child_by_field_name(&decl.name_field)?)?
 		.trim()
 		.to_string();
@@ -57,6 +59,13 @@ fn entry_for_node(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Op
 		signature,
 		children,
 	})
+}
+
+fn sole_named_child(node: Node<'_>) -> Option<Node<'_>> {
+	let mut cursor = node.walk();
+	let mut children = node.named_children(&mut cursor);
+	let child = children.next()?;
+	(children.next().is_none()).then_some(child)
 }
 
 fn class_children(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Vec<OutlineEntry> {
@@ -192,22 +201,25 @@ mod tests {
 		language::{LanguageId, LanguageRegistry},
 	};
 
-	fn fixture_path() -> String {
-		format!("{}/tests/fixtures/sources/hello.ts", env!("CARGO_MANIFEST_DIR"))
-	}
 	fn registry() -> Arc<LanguageRegistry> {
 		Arc::new(LanguageRegistry::with_builtins().expect("registry"))
 	}
-	fn profile() -> LanguageProfile {
+
+	fn fixture_path(name: &str) -> String {
+		format!("{}/tests/fixtures/sources/{name}", env!("CARGO_MANIFEST_DIR"))
+	}
+
+	fn profile(language: &str) -> LanguageProfile {
 		registry()
-			.get(&LanguageId::new("typescript"))
+			.get(&LanguageId::new(language))
 			.expect("profile")
 			.clone()
 	}
-	fn buffer() -> CodeBuffer {
+
+	fn buffer(name: &str, language: &str) -> CodeBuffer {
 		CodeBuffer::from_str(
-			&fs::read_to_string(fixture_path()).expect("fixture"),
-			LanguageId::new("typescript"),
+			&fs::read_to_string(fixture_path(name)).expect("fixture"),
+			LanguageId::new(language),
 			registry(),
 		)
 		.expect("buffer")
@@ -215,8 +227,8 @@ mod tests {
 
 	#[test]
 	fn test_outline_typescript() {
-		let buffer = buffer();
-		let profile = profile();
+		let buffer = buffer("hello.ts", "typescript");
+		let profile = profile("typescript");
 		let entries = outline(&buffer, &profile);
 		assert_eq!(entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), vec![
 			"greet", "Greeter"
@@ -224,10 +236,32 @@ mod tests {
 		assert_eq!(entries[0].kind, "function");
 		assert_eq!(entries[1].kind, "class");
 	}
+
+	#[test]
+	fn test_outline_typst_code_wrappers() {
+		let buffer = buffer("hello.typ", "typst");
+		let profile = profile("typst");
+		let entries = outline(&buffer, &profile);
+		assert_eq!(
+			entries
+				.iter()
+				.map(|entry| entry.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["\"theme.typ\"", "title", "heading.where(level: 1)"]
+		);
+		assert_eq!(
+			entries
+				.iter()
+				.map(|entry| entry.kind.as_str())
+				.collect::<Vec<_>>(),
+			vec!["import", "let", "show"]
+		);
+	}
+
 	#[test]
 	fn test_outline_children() {
-		let buffer = buffer();
-		let profile = profile();
+		let buffer = buffer("hello.ts", "typescript");
+		let profile = profile("typescript");
 		let entries = outline(&buffer, &profile);
 		assert_eq!(
 			entries[1]
@@ -238,18 +272,30 @@ mod tests {
 			vec!["constructor", "greet"]
 		);
 	}
+
 	#[test]
 	fn test_read_resolution_0() {
-		let buffer = buffer();
-		let profile = profile();
+		let buffer = buffer("hello.ts", "typescript");
+		let profile = profile("typescript");
 		let out = read(&buffer, &profile, 0, None, None);
 		assert!(out.contains("greet (function)"));
 		assert!(out.contains("Greeter (class)"));
 	}
+
+	#[test]
+	fn test_read_resolution_0_typst() {
+		let buffer = buffer("hello.typ", "typst");
+		let profile = profile("typst");
+		let out = read(&buffer, &profile, 0, None, None);
+		assert!(out.contains("\"theme.typ\" (import)"));
+		assert!(out.contains("title (let)"));
+		assert!(out.contains("heading.where(level: 1) (show)"));
+	}
+
 	#[test]
 	fn test_read_resolution_3_range() {
-		let buffer = buffer();
-		let profile = profile();
+		let buffer = buffer("hello.ts", "typescript");
+		let profile = profile("typescript");
 		let out = read(&buffer, &profile, 3, Some(1), Some(1));
 		assert!(out.contains("export function greet"));
 		assert!(!out.contains("class Greeter"));

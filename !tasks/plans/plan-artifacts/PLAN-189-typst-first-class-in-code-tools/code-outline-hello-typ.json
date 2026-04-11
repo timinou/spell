@@ -1,0 +1,32 @@
+{
+  "output": [
+    {
+      "name": "\"theme.typ\"",
+      "kind": "import",
+      "line": 1,
+      "end_line": 1,
+      "column": 1,
+      "exported": false,
+      "signature": "import \"theme.typ\": *"
+    },
+    {
+      "name": "title",
+      "kind": "let",
+      "line": 2,
+      "end_line": 2,
+      "column": 1,
+      "exported": false,
+      "signature": "let title ="
+    },
+    {
+      "name": "heading.where(level: 1)",
+      "kind": "show",
+      "line": 3,
+      "end_line": 3,
+      "column": 1,
+      "exported": false,
+      "signature": "show heading.where(level: 1):"
+    }
+  ],
+  "error": false
+}
