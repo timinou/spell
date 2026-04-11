@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { promoteReadyTasks, type TodoDelegation, type TodoPhase } from "../../src/tools/todo-write";
+
+import { promoteReadyTasks, type TodoDelegation, type TodoGroup } from "../../src/tools/todo-write";
 
 function delegated(sessionId: string): TodoDelegation {
 	return { sessionId, agent: "task" };
@@ -7,7 +8,7 @@ function delegated(sessionId: string): TodoDelegation {
 
 describe("promoteReadyTasks", () => {
 	test("starts a single direct task when isolation mode is off", () => {
-		const phases: TodoPhase[] = [
+		const groups: TodoGroup[] = [
 			{
 				id: "phase-1",
 				name: "Execution",
@@ -18,13 +19,12 @@ describe("promoteReadyTasks", () => {
 			},
 		];
 
-		promoteReadyTasks(phases, false);
-
-		expect(phases[0]?.tasks.map(task => task.status)).toEqual(["in_progress", "pending"]);
+		promoteReadyTasks(groups, false);
+		expect(groups[0]?.tasks.map(task => task.status)).toEqual(["in_progress", "pending"]);
 	});
 
 	test("starts independent file-scoped tasks together when isolation mode is on", () => {
-		const phases: TodoPhase[] = [
+		const groups: TodoGroup[] = [
 			{
 				id: "phase-1",
 				name: "Execution",
@@ -35,13 +35,12 @@ describe("promoteReadyTasks", () => {
 			},
 		];
 
-		promoteReadyTasks(phases, true);
-
-		expect(phases[0]?.tasks.map(task => task.status)).toEqual(["in_progress", "in_progress"]);
+		promoteReadyTasks(groups, true);
+		expect(groups[0]?.tasks.map(task => task.status)).toEqual(["in_progress", "in_progress"]);
 	});
 
 	test("serializes overlapping file work even when isolation mode is on", () => {
-		const phases: TodoPhase[] = [
+		const groups: TodoGroup[] = [
 			{
 				id: "phase-1",
 				name: "Execution",
@@ -52,13 +51,12 @@ describe("promoteReadyTasks", () => {
 			},
 		];
 
-		promoteReadyTasks(phases, true);
-
-		expect(phases[0]?.tasks.map(task => task.status)).toEqual(["in_progress", "pending"]);
+		promoteReadyTasks(groups, true);
+		expect(groups[0]?.tasks.map(task => task.status)).toEqual(["in_progress", "pending"]);
 	});
 
 	test("ignores delegated in-progress work for direct-task promotion", () => {
-		const phases: TodoPhase[] = [
+		const groups: TodoGroup[] = [
 			{
 				id: "phase-1",
 				name: "Execution",
@@ -69,13 +67,12 @@ describe("promoteReadyTasks", () => {
 			},
 		];
 
-		promoteReadyTasks(phases, false);
-
-		expect(phases[0]?.tasks.map(task => task.status)).toEqual(["in_progress", "in_progress"]);
+		promoteReadyTasks(groups, false);
+		expect(groups[0]?.tasks.map(task => task.status)).toEqual(["in_progress", "in_progress"]);
 	});
 
 	test("promotes a task once its blocker is completed", () => {
-		const phases: TodoPhase[] = [
+		const groups: TodoGroup[] = [
 			{
 				id: "phase-1",
 				name: "Execution",
@@ -86,13 +83,12 @@ describe("promoteReadyTasks", () => {
 			},
 		];
 
-		promoteReadyTasks(phases, false);
-
-		expect(phases[0]?.tasks.map(task => task.status)).toEqual(["completed", "in_progress"]);
+		promoteReadyTasks(groups, false);
+		expect(groups[0]?.tasks.map(task => task.status)).toEqual(["completed", "in_progress"]);
 	});
 
 	test("auto-satisfies a data node with content and unblocks dependent work", () => {
-		const phases: TodoPhase[] = [
+		const groups: TodoGroup[] = [
 			{
 				id: "phase-1",
 				name: "Execution",
@@ -103,8 +99,7 @@ describe("promoteReadyTasks", () => {
 			},
 		];
 
-		promoteReadyTasks(phases, false);
-
-		expect(phases[0]?.tasks.map(task => task.status)).toEqual(["completed", "in_progress"]);
+		promoteReadyTasks(groups, false);
+		expect(groups[0]?.tasks.map(task => task.status)).toEqual(["completed", "in_progress"]);
 	});
 });

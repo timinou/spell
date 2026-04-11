@@ -1,19 +1,19 @@
 import { describe, expect, it } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "../../src/tools";
-import { type TodoPhase, TodoWriteTool } from "../../src/tools/todo-write";
+import { type TodoGroup, TodoWriteTool } from "../../src/tools/todo-write";
 
-function createSession(initialPhases: TodoPhase[] = []): ToolSession {
-	let phases = initialPhases;
+function createSession(initialGroups: TodoGroup[] = []): ToolSession {
+	let groups = initialGroups;
 	return {
 		cwd: "/tmp/test",
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated(),
-		getTodoPhases: () => phases,
-		setTodoPhases: next => {
-			phases = next;
+		getTodoGroups: () => groups,
+		setTodoGroups: next => {
+			groups = next;
 		},
 	};
 }
@@ -25,7 +25,7 @@ describe("TodoWriteTool auto-start behavior", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Execution",
 							tasks: [{ content: "status" }, { content: "diagnostics" }],
@@ -35,7 +35,7 @@ describe("TodoWriteTool auto-start behavior", () => {
 			],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks.map(task => task.status)).toEqual(["in_progress", "pending"]);
 		const summary = result.content.find(part => part.type === "text");
 		if (!summary || summary.type !== "text") throw new Error("Expected text summary from todo_write");
@@ -50,7 +50,7 @@ describe("TodoWriteTool auto-start behavior", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Execution",
 							tasks: [{ content: "status" }, { content: "diagnostics" }],
@@ -64,7 +64,7 @@ describe("TodoWriteTool auto-start behavior", () => {
 			ops: [{ op: "update", id: "task-1", status: "completed" }],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks.map(task => task.status)).toEqual(["completed", "in_progress"]);
 		const summary = result.content.find(part => part.type === "text");
 		if (!summary || summary.type !== "text") throw new Error("Expected text summary from todo_write");
@@ -87,7 +87,7 @@ describe("TodoWriteTool auto-start behavior", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Execution",
 							tasks: [{ content: "status" }, { content: "diagnostics" }],
@@ -97,7 +97,7 @@ describe("TodoWriteTool auto-start behavior", () => {
 			],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks.map(task => task.status)).toEqual(["in_progress", "pending"]);
 	});
 });
@@ -109,7 +109,7 @@ describe("TodoWriteTool details field", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [
@@ -122,7 +122,7 @@ describe("TodoWriteTool details field", () => {
 			],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[0].details).toBe("Update src/parser.ts line 42");
 		expect(tasks[1].details).toBeUndefined();
 	});
@@ -130,14 +130,14 @@ describe("TodoWriteTool details field", () => {
 	it("preserves details through add_task op", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "First" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "First" }] }] }],
 		});
 
 		const result = await tool.execute("call-2", {
-			ops: [{ op: "add_task", phase: "phase-1", content: "Second", details: "Check edge cases" }],
+			ops: [{ op: "add_task", group: "group-1", content: "Second", details: "Check edge cases" }],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[1].details).toBe("Check edge cases");
 	});
 
@@ -147,7 +147,7 @@ describe("TodoWriteTool details field", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [{ name: "Work", tasks: [{ content: "Fix bug", details: "Old details" }] }],
+					groups: [{ name: "Work", tasks: [{ content: "Fix bug", details: "Old details" }] }],
 				},
 			],
 		});
@@ -156,7 +156,7 @@ describe("TodoWriteTool details field", () => {
 			ops: [{ op: "update", id: "task-1", details: "New details with\nlines" }],
 		});
 
-		const task = result.details?.phases[0]?.tasks[0];
+		const task = result.details?.groups[0]?.tasks[0];
 		expect(task?.details).toBe("New details with\nlines");
 	});
 
@@ -166,7 +166,7 @@ describe("TodoWriteTool details field", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Fix parser", details: "Edit src/parser.ts" }],
@@ -194,7 +194,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Build schema" }, { content: "Build API", blockers: ["task-1"] }],
@@ -212,7 +212,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 		const summary = result.content.find(part => part.type === "text")!.text!;
 		expect(summary).toContain("Cannot start task-2: blocked by task-1 (in_progress)");
 		// task-2 should still be pending
-		const task2 = result.details?.phases[0]?.tasks[1];
+		const task2 = result.details?.groups[0]?.tasks[1];
 		expect(task2?.status).toBe("pending");
 	});
 
@@ -222,7 +222,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Build schema" }, { content: "Build API", blockers: ["task-1"] }],
@@ -238,7 +238,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 
 		const summary = result.content.find(part => part.type === "text")!.text!;
 		expect(summary).not.toContain("Cannot start");
-		const task2 = result.details?.phases[0]?.tasks[1];
+		const task2 = result.details?.groups[0]?.tasks[1];
 		expect(task2?.status).toBe("completed");
 	});
 
@@ -248,7 +248,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Build schema" }, { content: "Build API", blockers: ["task-1"] }],
@@ -264,7 +264,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 
 		const summary = result.content.find(part => part.type === "text")!.text!;
 		expect(summary).not.toContain("Cannot start");
-		const task2 = result.details?.phases[0]?.tasks[1];
+		const task2 = result.details?.groups[0]?.tasks[1];
 		expect(task2?.status).toBe("abandoned");
 	});
 
@@ -274,7 +274,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Build schema" }, { content: "Build API", blockers: ["task-1"] }],
@@ -294,7 +294,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 
 		const summary = result.content.find(part => part.type === "text")!.text!;
 		expect(summary).not.toContain("Cannot start");
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[0].status).toBe("completed");
 		expect(tasks[1].status).toBe("in_progress");
 	});
@@ -305,7 +305,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Build schema" }, { content: "Build API", blockers: ["task-1"] }],
@@ -333,7 +333,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Build schema" }, { content: "Build API", blockers: ["task-1"] }],
@@ -349,7 +349,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 		});
 
 		// task-2 should now be auto-promoted to in_progress since its blocker is resolved
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[0].status).toBe("completed");
 		expect(tasks[1].status).toBe("in_progress");
 	});
@@ -360,7 +360,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Build API", blockers: ["task-99"] }],
@@ -382,7 +382,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Schema" }, { content: "API", blockers: ["task-1"] }],
@@ -393,7 +393,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 		});
 
 		// task-2 should be demoted to pending (blocked), task-1 should be auto-promoted
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[0].status).toBe("in_progress");
 		expect(tasks[1].status).toBe("pending");
 	});
@@ -404,7 +404,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [
@@ -434,13 +434,13 @@ describe("TodoWriteTool smart gate enforcement", () => {
 		expect(summary).not.toContain("task-1 (completed)");
 	});
 
-	it("add_phase with in_progress blocked task demotes to pending", async () => {
+	it("add_group with in_progress blocked task demotes to pending", async () => {
 		const tool = new TodoWriteTool(createSession());
 		const result = await tool.execute("call-1", {
 			ops: [
 				{
 					op: "replace",
-					phases: [{ name: "Setup", tasks: [{ content: "Schema" }] }],
+					groups: [{ name: "Setup", tasks: [{ content: "Schema" }] }],
 				},
 				{
 					op: "add_phase",
@@ -451,9 +451,9 @@ describe("TodoWriteTool smart gate enforcement", () => {
 		});
 
 		// task-2 (API) should be demoted to pending (blocked), task-1 should be auto-promoted
-		const phases = result.details?.phases ?? [];
-		expect(phases[0].tasks[0].status).toBe("in_progress");
-		expect(phases[1].tasks[0].status).toBe("pending");
+		const groups = result.details?.groups ?? [];
+		expect(groups[0].tasks[0].status).toBe("in_progress");
+		expect(groups[1].tasks[0].status).toBe("pending");
 	});
 
 	it("gate rejection preserves co-submitted field updates", async () => {
@@ -462,7 +462,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Schema" }, { content: "API", blockers: ["task-1"] }],
@@ -480,7 +480,7 @@ describe("TodoWriteTool smart gate enforcement", () => {
 		const summary = result.content.find(part => part.type === "text")!.text!;
 		expect(summary).toContain("Cannot start task-2");
 		// Status should be rejected
-		const task2 = result.details?.phases[0]?.tasks[1];
+		const task2 = result.details?.groups[0]?.tasks[1];
 		expect(task2?.status).toBe("pending");
 		// But notes should be preserved
 		expect(task2?.notes).toBe("starting this");
@@ -498,7 +498,7 @@ describe("TodoWriteTool blocker validation scope (BUG-191)", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [{ name: "Work", tasks: [{ content: "Build API", blockers: ["task-99"] }] }],
+					groups: [{ name: "Work", tasks: [{ content: "Build API", blockers: ["task-99"] }] }],
 				},
 			],
 		});
@@ -516,7 +516,7 @@ describe("TodoWriteTool blocker validation scope (BUG-191)", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Task A" }, { content: "Task B", blockers: ["task-1"] }],
@@ -545,9 +545,9 @@ describe("TodoWriteTool blocker validation scope (BUG-191)", () => {
 
 	it("pre-existing dangling blocker is pruned from stored task data", async () => {
 		// Simulate a session that already has a task with a dangling blocker ref.
-		const preExistingPhases: TodoPhase[] = [
+		const preExistingPhases: TodoGroup[] = [
 			{
-				id: "phase-1",
+				id: "group-1",
 				name: "Work",
 				tasks: [
 					{
@@ -577,7 +577,7 @@ describe("TodoWriteTool blocker validation scope (BUG-191)", () => {
 			"task-2 references non-existent blocker task-99 (dangling blocker is ignored for execution)",
 		);
 		// task-99 should be removed from task-2's blockers
-		const task2 = result.details?.phases[0]?.tasks[1];
+		const task2 = result.details?.groups[0]?.tasks[1];
 		expect(task2?.blockers).toBeUndefined();
 	});
 
@@ -588,7 +588,7 @@ describe("TodoWriteTool blocker validation scope (BUG-191)", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [{ content: "Depends on next", blockers: ["task-2"] }, { content: "Independent" }],
@@ -600,7 +600,7 @@ describe("TodoWriteTool blocker validation scope (BUG-191)", () => {
 		const summary = result.content.find(part => part.type === "text")!.text!;
 		expect(summary).not.toContain("references non-existent blocker");
 		// task-1 should remain pending (blocked), task-2 should be in_progress
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[0].status).toBe("pending");
 		expect(tasks[1].status).toBe("in_progress");
 	});
@@ -611,7 +611,7 @@ describe("TodoWriteTool blocker validation scope (BUG-191)", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [{ name: "Work", tasks: [{ content: "Task A" }, { content: "Task B" }] }],
+					groups: [{ name: "Work", tasks: [{ content: "Task A" }, { content: "Task B" }] }],
 				},
 			],
 		});
@@ -632,7 +632,7 @@ describe("TodoWriteTool blocker validation scope (BUG-191)", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [

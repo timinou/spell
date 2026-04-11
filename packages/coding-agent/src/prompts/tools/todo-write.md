@@ -2,7 +2,7 @@ Manages a phased task list. Submit an `ops` array — each op mutates state incr
 **Primary op: `update`.** Use it to mark tasks `in_progress` or `completed`. Only reach for other ops when the structure itself needs to change.
 
 {{#if autoRosterEnabled}}
-Task dispatches may auto-create phases and delegated items in this same roster. Use `todo_write` to pre-structure work, add gates or org links, or revise the auto-created plan after dispatch. Auto-created items behave the same as manual ones once they exist.
+Task dispatches may auto-create groups and delegated items in this same roster. Use `todo_write` to pre-structure work, add gates or org links, or revise the auto-created plan after dispatch. Auto-created items behave the same as manual ones once they exist.
 {{else}}
 Use `todo_write` when you want roster tracking, gates, or blockers before delegating work.
 {{/if}}
@@ -38,8 +38,8 @@ Create a todo list when:
 |---|---|
 |`update`|Mark a task in_progress / completed / abandoned, or edit content/notes|
 |`replace`|Initial setup, or full restructure when the plan changes significantly|
-|`add_phase`|Add a new phase of work discovered mid-task|
-|`add_task`|Add a task to an existing phase|
+|`add_phase`|Legacy alias for `add_group`|
+|`add_task`|Add a task to an existing group|
 
 ## Statuses
 
@@ -57,23 +57,23 @@ Create a todo list when:
 - You **MUST** mark `completed` **immediately** — never defer
 - You **MUST** keep exactly **one** direct task `in_progress`; delegated tasks linked via `task` + `todoRef` may also remain `in_progress`
 - You **MUST NOT** set delegation metadata manually unless you are implementing internal system behavior; the `task` tool owns delegation lifecycle updates
-- You **MUST** complete phases in order — do not mark later tasks `completed` while earlier ones are `pending`
+- You **MUST** complete groups in order — do not mark later tasks `completed` while earlier ones are `pending`
 - On runtime impediments: if you hit an unexpected obstacle, keep the current task `in_progress` (or mark delegated work `failed` truthfully) and add a new task describing the impediment
 - Multiple ops can be batched in one call (e.g., complete current + start next)
 </protocol>
 
 ## Dependency Management
 
-Use `blockers` to express task dependencies when execution order matters beyond phase sequencing.
+Use `blockers` to express task dependencies when execution order matters beyond group sequencing.
 
 ### When to use `blockers`
-- Cross-phase dependencies: a task in Phase B depends on a specific task in Phase A
-- Intra-phase parallel work: two tasks in the same phase, but one must complete first
-- Wave-based execution: tasks form a dependency DAG across multiple phases
+- Cross-group dependencies: a task in Group B depends on a specific task in Group A
+- Intra-group parallel work: two tasks in the same group, but one must complete first
+- Wave-based execution: tasks form a dependency DAG across multiple groups
 
-### When phase ordering suffices (no explicit blockers needed)
-- Simple linear workflows: Phase 1 tasks all complete before Phase 2 starts
-- Tasks within a single phase that are naturally sequential
+### When group ordering suffices (no explicit blockers needed)
+- Simple linear workflows: Group 1 tasks all complete before Group 2 starts
+- Tasks within a single group that are naturally sequential
 
 ### Smart gate enforcement
 - Setting a blocked task to `in_progress` will be **rejected** with an error listing unresolved blockers
@@ -81,9 +81,9 @@ Use `blockers` to express task dependencies when execution order matters beyond 
 - Auto-promotion (`normalizeInProgressTask`) skips blocked tasks
 - If all remaining tasks are blocked and no task is `in_progress`, a deadlock warning is shown
 
-### Cross-phase dependency example
+### Cross-group dependency example
 ```
-ops: [{op: "replace", phases: [
+ops: [{op: "replace", groups: [
   {name: "Foundation", tasks: [
     {content: "Create schema"},
     {content: "Write migrations"}
@@ -143,12 +143,12 @@ ops: [
 
 <example name="add_task">
 Add a follow-up task with implementation specifics in `details`:
-ops: [{op: "add_task", phase: "phase-1", content: "Handle retries", details: "Update retry.ts to cap exponential backoff and preserve AbortSignal handling"}]
+ops: [{op: "add_task", group: "group-1", content: "Handle retries", details: "Update retry.ts to cap exponential backoff and preserve AbortSignal handling"}]
 </example>
 
 <example name="initial-setup">
-Replace is for setup only. Prefer add_phase / add_task for incremental additions.
-ops: [{op: "replace", phases: [
+Replace is for setup only. Prefer add_group / add_task for incremental additions.
+ops: [{op: "replace", groups: [
   {name: "Investigation", tasks: [{content: "Read source"}, {content: "Map callsites"}]},
   {name: "Implementation", tasks: [{content: "Apply fix", details: "Update parser.ts to handle edge case in line 42"}, {content: "Run tests"}]}
 ]}]
@@ -161,7 +161,7 @@ User: "What does this function do?" / "Add a comment" / "Run npm install"
 
 <example name="gated-task">
 Create a task with commit and artifact gates:
-ops: [{op: "replace", phases: [
+ops: [{op: "replace", groups: [
   {name: "Implementation", tasks: [
     {content: "Add gate fields", gateCommit: true, gateArtifact: "packages/coding-agent/test/tools/todo-write-gates.test.ts", verifyCmd: "bun test packages/coding-agent/test/tools/todo-write-gates.test.ts"},
     {content: "Update dashboard", gateCommit: true, blockers: ["task-1"]}
@@ -187,14 +187,14 @@ Abandon a task with proper follow-up tracking:
 
 <example name="org-linked-task">
 Create a task linked to an org item with gating verification:
-ops: [{op: "replace", phases: [
+ops: [{op: "replace", groups: [
   {name: "Implementation", tasks: [
     {content: "Add auth module", orgItemClosingId: "FEAT-001-add-auth", gateCmd: "bun test test/auth.test.ts", gateCommit: true}
   ]}
 ]}]
 
 Create a task with non-gating org lineage:
-ops: [{op: "replace", phases: [
+ops: [{op: "replace", groups: [
   {name: "Implementation", tasks: [
     {content: "Refactor helpers", orgItemId: "FEAT-001-add-auth", gateCommit: true}
   ]}
@@ -202,8 +202,8 @@ ops: [{op: "replace", phases: [
 </example>
 
 <example name="wave-based-plan">
-Create wave-based todo list from a plan's Execution Manifest. Each wave is a phase; tasks within a wave are parallelizable. `orgItemId` tracks lineage (non-gating). `orgItemClosingId` on the final wave task per org item triggers verification.
-ops: [{op: "replace", phases: [
+Create wave-based todo list from a plan's Execution Manifest. Each wave is a group; tasks within a group are parallelizable. `orgItemId` tracks lineage (non-gating). `orgItemClosingId` on the final group task per org item triggers verification.
+ops: [{op: "replace", groups: [
   {name: "foundation", tasks: [
     {content: "Define type interfaces", orgItemId: "FEAT-001", details: "Sub-outline FEAT-001::define-types"},
     {content: "Define parser schema", orgItemId: "FEAT-002", details: "Sub-outline FEAT-002::define-schema"}

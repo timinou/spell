@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as orgModule from "@oh-my-pi/pi-org";
 import type { ToolSession } from "../../src/tools";
-import { type TodoPhase, TodoWriteTool } from "../../src/tools/todo-write";
+import { type TodoGroup, TodoWriteTool } from "../../src/tools/todo-write";
 
 interface MockItem {
 	id: string;
@@ -11,17 +11,17 @@ interface MockItem {
 	body?: string;
 }
 
-function createSession(options: { phases?: TodoPhase[]; orgEnabled?: boolean } = {}): ToolSession {
-	let phases = options.phases ?? [];
+function createSession(options: { groups?: TodoGroup[]; orgEnabled?: boolean } = {}): ToolSession {
+	let groups = options.groups ?? [];
 	return {
 		cwd: "/tmp/test",
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated({ "org.enabled": options.orgEnabled ?? true }),
-		getTodoPhases: () => phases,
-		setTodoPhases: next => {
-			phases = next;
+		getTodoGroups: () => groups,
+		setTodoGroups: next => {
+			groups = next;
 		},
 	};
 }
@@ -55,7 +55,7 @@ describe("TodoWriteTool org lifecycle hooks", () => {
 	test("auto-transitions orgItemId task to DOING when work starts", async () => {
 		const tool = new TodoWriteTool(createSession());
 		const result = await tool.execute("call-1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Implement", orgItemId: "FEAT-001" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Implement", orgItemId: "FEAT-001" }] }] }],
 		});
 
 		expect(updateItemStateSpy).toHaveBeenCalledWith("/tmp/feat-001.org", "FEAT-001", "DOING", expect.any(Array));
@@ -69,7 +69,7 @@ describe("TodoWriteTool org lifecycle hooks", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{ name: "Work", tasks: [{ content: "Ship", orgItemId: "FEAT-001", orgItemClosingId: "FEAT-001" }] },
 					],
 				},
@@ -91,7 +91,7 @@ describe("TodoWriteTool org lifecycle hooks", () => {
 	test("skips hooks cleanly when org is disabled", async () => {
 		const tool = new TodoWriteTool(createSession({ orgEnabled: false }));
 		await tool.execute("call-1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Implement", orgItemId: "FEAT-001" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Implement", orgItemId: "FEAT-001" }] }] }],
 		});
 		expect(updateItemStateSpy).not.toHaveBeenCalled();
 	});
@@ -100,10 +100,10 @@ describe("TodoWriteTool org lifecycle hooks", () => {
 		items.delete("FEAT-001");
 		const tool = new TodoWriteTool(createSession());
 		const result = await tool.execute("call-1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Implement", orgItemId: "FEAT-001" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Implement", orgItemId: "FEAT-001" }] }] }],
 		});
 		expect(updateItemStateSpy).not.toHaveBeenCalled();
-		expect(result.details?.phases[0]?.tasks[0]?.status).toBe("in_progress");
+		expect(result.details?.groups[0]?.tasks[0]?.status).toBe("in_progress");
 		const text = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(text).toContain("WARN: Org item FEAT-001 not found for DOING transition.");
 	});
@@ -112,12 +112,12 @@ describe("TodoWriteTool org lifecycle hooks", () => {
 		vi.spyOn(orgModule, "findItemById").mockRejectedValue(new Error("connection refused"));
 		const tool = new TodoWriteTool(createSession());
 		const result = await tool.execute("call-1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Implement", orgItemId: "FEAT-001" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Implement", orgItemId: "FEAT-001" }] }] }],
 		});
 		const text = result.content.find(part => part.type === "text")?.text ?? "";
 		expect(text).toContain("WARN: Failed to transition org item FEAT-001 to DOING: connection refused");
 		// Task should still be in_progress despite the org hook failure
-		expect(result.details?.phases[0]?.tasks[0]?.status).toBe("in_progress");
+		expect(result.details?.groups[0]?.tasks[0]?.status).toBe("in_progress");
 	});
 
 	test("shared orgItemId only transitions to DOING once", async () => {
@@ -126,7 +126,7 @@ describe("TodoWriteTool org lifecycle hooks", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [
+					groups: [
 						{
 							name: "Work",
 							tasks: [
@@ -148,7 +148,7 @@ describe("TodoWriteTool org lifecycle hooks", () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
 			ops: [
-				{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Finish", orgItemClosingId: "FEAT-001" }] }] },
+				{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Finish", orgItemClosingId: "FEAT-001" }] }] },
 			],
 		});
 

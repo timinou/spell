@@ -16,7 +16,7 @@
 import { describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "../../src/tools";
-import type { FormatSummaryOptions, TodoItem, TodoPhase, TodoStatus } from "../../src/tools/todo-write";
+import type { FormatSummaryOptions, TodoGroup, TodoItem, TodoStatus } from "../../src/tools/todo-write";
 import { formatSummary, TodoWriteTool } from "../../src/tools/todo-write";
 
 // =============================================================================
@@ -27,30 +27,30 @@ function makeTask(overrides: Partial<TodoItem> & { id: string; content: string }
 	return { status: "pending" as TodoStatus, ...overrides };
 }
 
-function makePhase(id: string, name: string, tasks: TodoItem[]): TodoPhase {
+function makePhase(id: string, name: string, tasks: TodoItem[]): TodoGroup {
 	return { id, name, tasks };
 }
 
-function createSession(initialPhases: TodoPhase[] = []): ToolSession {
-	let phases = initialPhases;
+function createSession(initialGroups: TodoGroup[] = []): ToolSession {
+	let groups = initialGroups;
 	return {
 		cwd: "/tmp/test",
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated(),
-		getTodoPhases: () => phases,
-		setTodoPhases: next => {
-			phases = next;
+		getTodoGroups: () => groups,
+		setTodoGroups: next => {
+			groups = next;
 		},
 	};
 }
 
 function callFormatSummary(overrides: Partial<FormatSummaryOptions> = {}): string {
 	return formatSummary({
-		phases: overrides.phases ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do thing" })])],
+		groups: overrides.groups ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do thing" })])],
 		errors: overrides.errors ?? [],
-		completedPhaseIds: overrides.completedPhaseIds ?? [],
+		completedGroupIds: overrides.completedGroupIds ?? [],
 		completedGatedTasks: overrides.completedGatedTasks ?? [],
 		pendingVerificationTasks: overrides.pendingVerificationTasks ?? [],
 		pendingDeferralTasks: overrides.pendingDeferralTasks ?? [],
@@ -72,14 +72,14 @@ describe("deferral gate enforcement", () => {
 	test("rejects abandonment without deferralFupId", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("c1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Build it" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Build it" }] }] }],
 		});
 
 		const result = await tool.execute("c2", {
 			ops: [{ op: "update", id: "task-1", status: "abandoned" }],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[0].status).not.toBe("abandoned");
 		const text = summaryText(result);
 		expect(text).toContain("Deferral Required");
@@ -89,14 +89,14 @@ describe("deferral gate enforcement", () => {
 	test("rejects abandonment with empty string deferralFupId", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("c1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Build it" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Build it" }] }] }],
 		});
 
 		const result = await tool.execute("c2", {
 			ops: [{ op: "update", id: "task-1", status: "abandoned", deferralFupId: "" }],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[0].status).not.toBe("abandoned");
 		expect(summaryText(result)).toContain("Deferral Required");
 	});
@@ -104,14 +104,14 @@ describe("deferral gate enforcement", () => {
 	test("rejects abandonment with whitespace-only deferralFupId", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("c1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Build it" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Build it" }] }] }],
 		});
 
 		const result = await tool.execute("c2", {
 			ops: [{ op: "update", id: "task-1", status: "abandoned", deferralFupId: "   " }],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[0].status).not.toBe("abandoned");
 		expect(summaryText(result)).toContain("Deferral Required");
 	});
@@ -119,14 +119,14 @@ describe("deferral gate enforcement", () => {
 	test("accepts abandonment with valid deferralFupId", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("c1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Build it" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Build it" }] }] }],
 		});
 
 		const result = await tool.execute("c2", {
 			ops: [{ op: "update", id: "task-1", status: "abandoned", deferralFupId: "FUP-008-handle-retries" }],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[0].status).toBe("abandoned");
 		expect(tasks[0].deferralFupId).toBe("FUP-008-handle-retries");
 		expect(summaryText(result)).not.toContain("Deferral Required");
@@ -135,14 +135,14 @@ describe("deferral gate enforcement", () => {
 	test("stores deferralFupId on task in result phases", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("c1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "A" }, { content: "B" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "A" }, { content: "B" }] }] }],
 		});
 
 		const result = await tool.execute("c2", {
 			ops: [{ op: "update", id: "task-2", status: "abandoned", deferralFupId: "FUP-010-thing" }],
 		});
 
-		const task2 = result.details?.phases[0]?.tasks.find((t: TodoItem) => t.id === "task-2");
+		const task2 = result.details?.groups[0]?.tasks.find((t: TodoItem) => t.id === "task-2");
 		expect(task2?.deferralFupId).toBe("FUP-010-thing");
 	});
 
@@ -152,7 +152,7 @@ describe("deferral gate enforcement", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [{ name: "Work", tasks: [{ content: "A" }, { content: "B" }, { content: "C" }] }],
+					groups: [{ name: "Work", tasks: [{ content: "A" }, { content: "B" }, { content: "C" }] }],
 				},
 			],
 		});
@@ -164,7 +164,7 @@ describe("deferral gate enforcement", () => {
 			],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[1].status).toBe("abandoned");
 		expect(tasks[2].status).toBe("abandoned");
 		expect(tasks[1].deferralFupId).toBe("FUP-001-shared");
@@ -174,7 +174,7 @@ describe("deferral gate enforcement", () => {
 	test("batch: multiple tasks with different FUP IDs", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("c1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "A" }, { content: "B" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "A" }, { content: "B" }] }] }],
 		});
 
 		const result = await tool.execute("c2", {
@@ -184,7 +184,7 @@ describe("deferral gate enforcement", () => {
 			],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		expect(tasks[0].deferralFupId).toBe("FUP-001-alpha");
 		expect(tasks[1].deferralFupId).toBe("FUP-002-beta");
 	});
@@ -192,7 +192,7 @@ describe("deferral gate enforcement", () => {
 	test("partial batch: task without FUP rejected while others succeed", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("c1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "A" }, { content: "B" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "A" }, { content: "B" }] }] }],
 		});
 
 		const result = await tool.execute("c2", {
@@ -202,7 +202,7 @@ describe("deferral gate enforcement", () => {
 			],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		// task-1 rejected: status unchanged (auto-started to in_progress)
 		expect(tasks[0].status).not.toBe("abandoned");
 		// task-2 accepted
@@ -222,10 +222,10 @@ describe("bypass prevention", () => {
 	test("replace op creates tasks as pending", async () => {
 		const tool = new TodoWriteTool(createSession());
 		const result = await tool.execute("c1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "A" }, { content: "B" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "A" }, { content: "B" }] }] }],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		// First task auto-started to in_progress, rest pending — none should be abandoned/completed
 		for (const task of tasks) {
 			expect(["pending", "in_progress"]).toContain(task.status);
@@ -235,14 +235,14 @@ describe("bypass prevention", () => {
 	test("add_phase op creates tasks as pending", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("c1", {
-			ops: [{ op: "replace", phases: [{ name: "Phase 1", tasks: [{ content: "A" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Phase 1", tasks: [{ content: "A" }] }] }],
 		});
 
 		const result = await tool.execute("c2", {
 			ops: [{ op: "add_phase", name: "Phase 2", tasks: [{ content: "X" }, { content: "Y" }] }],
 		});
 
-		const phase2 = result.details?.phases.find((p: TodoPhase) => p.name === "Phase 2");
+		const phase2 = result.details?.groups.find((p: TodoGroup) => p.name === "Phase 2");
 		expect(phase2).toBeTruthy();
 		for (const task of phase2!.tasks) {
 			expect(["pending", "in_progress"]).toContain(task.status);
@@ -258,7 +258,7 @@ describe("pre-filled deferral template", () => {
 	test("rejection message includes org create template with task context", () => {
 		const task = makeTask({ id: "task-3", content: "Fix the widget", status: "in_progress" });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [task])],
+			groups: [makePhase("phase-1", "Work", [task])],
 			pendingDeferralTasks: [task],
 		});
 
@@ -278,7 +278,7 @@ describe("pre-filled deferral template", () => {
 			orgItemId: "FEAT-042-auth",
 		});
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [task])],
+			groups: [makePhase("phase-1", "Work", [task])],
 			pendingDeferralTasks: [task],
 		});
 
@@ -294,7 +294,7 @@ describe("pre-filled deferral template", () => {
 			orgItemClosingId: "FEAT-099-legacy",
 		});
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Work", [task])],
+			groups: [makePhase("phase-1", "Work", [task])],
 			pendingDeferralTasks: [task],
 		});
 
@@ -317,11 +317,11 @@ describe("phase completion deferral warnings", () => {
 			deferralFupId: "FUP-005-handle-later",
 		});
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Build", [task1, task2])],
-			completedPhaseIds: ["phase-1"],
+			groups: [makePhase("phase-1", "Build", [task1, task2])],
+			completedGroupIds: ["phase-1"],
 		});
 
-		expect(result).toContain('Phase "Build" complete.');
+		expect(result).toContain('Group "Build" complete.');
 		expect(result).toContain("WARNING");
 		expect(result).toContain("FUP-005-handle-later");
 		expect(result).toContain("task-2");
@@ -330,11 +330,11 @@ describe("phase completion deferral warnings", () => {
 	test("phase without deferred tasks shows no deferral warning", () => {
 		const task1 = makeTask({ id: "task-1", content: "Done", status: "completed", gateCommit: true });
 		const result = callFormatSummary({
-			phases: [makePhase("phase-1", "Build", [task1])],
-			completedPhaseIds: ["phase-1"],
+			groups: [makePhase("phase-1", "Build", [task1])],
+			completedGroupIds: ["phase-1"],
 		});
 
-		expect(result).toContain('Phase "Build" complete.');
+		expect(result).toContain('Group "Build" complete.');
 		expect(result).not.toContain("WARNING");
 		expect(result).not.toContain("deferred");
 	});
@@ -351,7 +351,7 @@ describe("auto-clear behavior", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [{ name: "Work", tasks: [{ content: "A" }, { content: "B" }, { content: "C" }] }],
+					groups: [{ name: "Work", tasks: [{ content: "A" }, { content: "B" }, { content: "C" }] }],
 				},
 			],
 		});
@@ -364,7 +364,7 @@ describe("auto-clear behavior", () => {
 			ops: [{ op: "update", id: "task-2", status: "completed" }],
 		});
 
-		const tasks = result.details?.phases[0]?.tasks ?? [];
+		const tasks = result.details?.groups[0]?.tasks ?? [];
 		const abandoned = tasks.find((t: TodoItem) => t.id === "task-1");
 		expect(abandoned).toBeTruthy();
 		expect(abandoned!.status).toBe("abandoned");
@@ -375,7 +375,7 @@ describe("auto-clear behavior", () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("c1", {
 			ops: [
-				{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Drop this" }, { content: "Keep this" }] }] },
+				{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Drop this" }, { content: "Keep this" }] }] },
 			],
 		});
 

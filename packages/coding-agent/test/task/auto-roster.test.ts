@@ -7,7 +7,7 @@ import * as discoveryModule from "../../src/task/discovery";
 import * as executorModule from "../../src/task/executor";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../../src/task/types";
 import type { ToolSession } from "../../src/tools";
-import type { TodoPhase } from "../../src/tools/todo-write";
+import type { TodoGroup } from "../../src/tools/todo-write";
 
 const baseAgent: AgentDefinition = {
 	name: "task",
@@ -47,10 +47,10 @@ function createResult(
 function createSession(
 	tempDir: string,
 	settings: Settings,
-	initialPhases: TodoPhase[] = [],
-): ToolSession & { snapshots: TodoPhase[][]; getCurrentPhases: () => TodoPhase[] } {
-	let phases = structuredClone(initialPhases);
-	const snapshots: TodoPhase[][] = [];
+	initialGroups: TodoGroup[] = [],
+): ToolSession & { snapshots: TodoGroup[][]; getCurrentGroups: () => TodoGroup[] } {
+	let groups = structuredClone(initialGroups);
+	const snapshots: TodoGroup[][] = [];
 	return {
 		cwd: tempDir,
 		hasUI: false,
@@ -62,9 +62,9 @@ function createSession(
 		getModelString: () => undefined,
 		getArtifactsDir: () => path.join(tempDir, "artifacts"),
 		getSessionId: () => "parent-session",
-		getTodoPhases: () => phases,
-		setTodoPhases: (next: TodoPhase[]) => {
-			phases = structuredClone(next);
+		getTodoGroups: () => groups,
+		setTodoGroups: (next: TodoGroup[]) => {
+			groups = structuredClone(next);
 			snapshots.push(structuredClone(next));
 		},
 		settings,
@@ -75,8 +75,8 @@ function createSession(
 		contextFiles: [],
 		promptTemplates: [],
 		snapshots,
-		getCurrentPhases: () => phases,
-	} as unknown as ToolSession & { snapshots: TodoPhase[][]; getCurrentPhases: () => TodoPhase[] };
+		getCurrentGroups: () => groups,
+	} as unknown as ToolSession & { snapshots: TodoGroup[][]; getCurrentGroups: () => TodoGroup[] };
 }
 
 describe("TaskTool auto-roster", () => {
@@ -194,7 +194,7 @@ describe("TaskTool auto-roster", () => {
 				transcriptPath,
 			},
 		});
-		expect(session.getCurrentPhases()[0]?.tasks[0]).toMatchObject({
+		expect(session.getCurrentGroups()[0]?.tasks[0]).toMatchObject({
 			status: "completed",
 			delegation: {
 				agent: "task",
@@ -227,11 +227,11 @@ describe("TaskTool auto-roster", () => {
 			],
 		});
 
-		const phases = session.getCurrentPhases();
-		expect(phases).toHaveLength(2);
-		expect(phases[0]?.tasks[0]?.id).toBe("task-1");
-		expect(phases[1]?.tasks).toHaveLength(1);
-		expect(phases[1]?.tasks[0]).toMatchObject({ content: "New task" });
+		const groups = session.getCurrentGroups();
+		expect(groups).toHaveLength(2);
+		expect(groups[0]?.tasks[0]?.id).toBe("task-1");
+		expect(groups[1]?.tasks).toHaveLength(1);
+		expect(groups[1]?.tasks[0]).toMatchObject({ content: "New task" });
 	});
 
 	it("uses the provided phase name for auto-created work", async () => {
@@ -278,7 +278,7 @@ describe("TaskTool auto-roster", () => {
 			agent: "quick_task",
 			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect" }],
 		});
-		expect(rosterSuppressed.getCurrentPhases()).toEqual([]);
+		expect(rosterSuppressed.getCurrentGroups()).toEqual([]);
 
 		const settingSuppressed = createSession(
 			tempDir,
@@ -293,7 +293,7 @@ describe("TaskTool auto-roster", () => {
 			agent: "quick_task",
 			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect" }],
 		});
-		expect(settingSuppressed.getCurrentPhases()).toEqual([]);
+		expect(settingSuppressed.getCurrentGroups()).toEqual([]);
 	});
 
 	it("marks auto-created tasks failed on abort without leaving pending items", async () => {
@@ -327,7 +327,7 @@ describe("TaskTool auto-roster", () => {
 			controller.signal,
 		);
 
-		const finalTasks = session.getCurrentPhases()[0]?.tasks ?? [];
+		const finalTasks = session.getCurrentGroups()[0]?.tasks ?? [];
 		expect(finalTasks.map(task => task.status)).toEqual(["failed", "failed"]);
 		expect(finalTasks.some(task => task.status === "pending")).toBe(false);
 	});
@@ -363,7 +363,7 @@ describe("TaskTool auto-roster", () => {
 			controller.signal,
 		);
 
-		const finalTasks = session.getCurrentPhases()[0]?.tasks ?? [];
+		const finalTasks = session.getCurrentGroups()[0]?.tasks ?? [];
 		for (const task of finalTasks) {
 			expect(task.delegation?.sessionId).not.toBe("pending");
 			expect(task.delegation?.sessionId).toBe("skipped");
@@ -401,7 +401,7 @@ describe("TaskTool auto-roster", () => {
 			controller.signal,
 		);
 
-		const finalTasks = session.getCurrentPhases()[0]?.tasks ?? [];
+		const finalTasks = session.getCurrentGroups()[0]?.tasks ?? [];
 		expect(finalTasks[0]?.delegation?.result?.error).toBeDefined();
 		expect(finalTasks[1]?.delegation?.result?.error).toBeDefined();
 	});
@@ -424,7 +424,7 @@ describe("TaskTool auto-roster", () => {
 			tasks: [{ id: "inspect", description: "Inspect", assignment: "## Target\n- Task: Inspect" }],
 		});
 
-		expect(session.getCurrentPhases()).toEqual([]);
+		expect(session.getCurrentGroups()).toEqual([]);
 	});
 
 	it("returns error without orphan items when async enabled but no manager", async () => {
@@ -447,7 +447,7 @@ describe("TaskTool auto-roster", () => {
 
 		const text = result.content.find(p => p.type === "text")?.text ?? "";
 		expect(text).toContain("no async job manager");
-		expect(session.getCurrentPhases()).toEqual([]);
+		expect(session.getCurrentGroups()).toEqual([]);
 	});
 
 	it("sync path still auto-creates roster items after guard", async () => {

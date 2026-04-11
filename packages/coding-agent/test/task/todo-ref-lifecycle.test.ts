@@ -7,7 +7,7 @@ import * as discoveryModule from "../../src/task/discovery";
 import * as executorModule from "../../src/task/executor";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../../src/task/types";
 import type { ToolSession } from "../../src/tools";
-import type { TodoPhase } from "../../src/tools/todo-write";
+import type { TodoGroup } from "../../src/tools/todo-write";
 
 const baseAgent: AgentDefinition = {
 	name: "task",
@@ -42,10 +42,10 @@ function createResult(id: string, transcriptPath: string, overrides: Partial<Sin
 function createSession(
 	tempDir: string,
 	settings: Settings,
-	initialPhases: TodoPhase[],
-): ToolSession & { snapshots: TodoPhase[][] } {
-	let phases = initialPhases;
-	const snapshots: TodoPhase[][] = [];
+	initialGroups: TodoGroup[],
+): ToolSession & { snapshots: TodoGroup[][] } {
+	let groups = structuredClone(initialGroups);
+	const snapshots: TodoGroup[][] = [];
 	return {
 		cwd: tempDir,
 		hasUI: false,
@@ -57,9 +57,9 @@ function createSession(
 		getModelString: () => undefined,
 		getArtifactsDir: () => path.join(tempDir, "artifacts"),
 		getSessionId: () => "parent-session",
-		getTodoPhases: () => phases,
-		setTodoPhases: (next: TodoPhase[]) => {
-			phases = structuredClone(next);
+		getTodoGroups: () => groups,
+		setTodoGroups: (next: TodoGroup[]) => {
+			groups = structuredClone(next);
 			snapshots.push(structuredClone(next));
 		},
 		settings,
@@ -70,7 +70,7 @@ function createSession(
 		contextFiles: [],
 		promptTemplates: [],
 		snapshots,
-	} as unknown as ToolSession & { snapshots: TodoPhase[][] };
+	} as unknown as ToolSession & { snapshots: TodoGroup[][] };
 }
 
 describe("TaskTool todoRef lifecycle", () => {
@@ -110,7 +110,7 @@ describe("TaskTool todoRef lifecycle", () => {
 				durationMs: 0,
 				sessionId: "child-session",
 				transcriptPath,
-				todoPhases: [
+				todoGroups: [
 					{
 						id: "child-phase-1",
 						name: "Delegated Work",
@@ -119,7 +119,7 @@ describe("TaskTool todoRef lifecycle", () => {
 				],
 			};
 			options.onProgress?.(progress);
-			return createResult(options.id, transcriptPath, { todoPhases: progress.todoPhases });
+			return createResult(options.id, transcriptPath, { todoGroups: progress.todoGroups });
 		});
 		const { TaskTool } = await import("../../src/task/index");
 		const tool = await TaskTool.create(session);
@@ -148,7 +148,7 @@ describe("TaskTool todoRef lifecycle", () => {
 				agent: "task",
 				sessionId: "child-session",
 				transcriptPath,
-				childPhases: [
+				childGroups: [
 					{
 						name: "Delegated Work",
 						tasks: [{ content: "Read file", status: "in_progress" }],

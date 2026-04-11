@@ -46,6 +46,54 @@ describe("SwarmScheduler", () => {
 		expect(scheduler.dag.hasNode("D")).toBe(false);
 	});
 
+	test("supports live add-node during an active pump", async () => {
+		const gate = Promise.withResolvers<void>();
+		const scheduler = new SwarmScheduler<NodeLike>([["A", node()]]);
+		const started: string[] = [];
+		const pump = scheduler.pump(async id => {
+			started.push(id);
+			if (id === "A") {
+				scheduler.addNode("B", node(), ["A"]);
+				await gate.promise;
+			}
+			scheduler.markCompleted(id);
+		});
+		await Bun.sleep(10);
+		expect(started).toEqual(["A"]);
+		expect(scheduler.dag.hasNode("B")).toBe(true);
+		gate.resolve();
+		await pump;
+		expect(started).toEqual(["A", "B"]);
+		expect(scheduler.dag.getNode("B")?.status).toBe("completed");
+	});
+
+	test("supports live remove-node cascade during an active pump", async () => {
+		const gate = Promise.withResolvers<void>();
+		const scheduler = new SwarmScheduler<NodeLike>([
+			["A", node()],
+			["B", node(), ["A"]],
+			["C", node(), ["B"]],
+		]);
+		const started: string[] = [];
+		const pump = scheduler.pump(async id => {
+			started.push(id);
+			if (id === "A") {
+				scheduler.removeNode("B");
+				await gate.promise;
+			}
+			scheduler.markCompleted(id);
+		});
+		await Bun.sleep(10);
+		expect(started).toEqual(["A"]);
+		expect(scheduler.dag.hasNode("B")).toBe(false);
+		expect(scheduler.dag.hasNode("C")).toBe(false);
+		gate.resolve();
+		await pump;
+		expect(started).toEqual(["A"]);
+		expect(scheduler.dag.hasNode("B")).toBe(false);
+		expect(scheduler.dag.hasNode("C")).toBe(false);
+	});
+
 	test("treats satisfied data nodes as ready and cascades failure", () => {
 		const scheduler = new SwarmScheduler<NodeLike>([
 			["data", node({ kind: "data", artifactPath: "artifact://x" })],
@@ -55,6 +103,32 @@ describe("SwarmScheduler", () => {
 		expect(scheduler.getReadyNodeIds()).toEqual(["task"]);
 		scheduler.markFailed("task");
 		expect(scheduler.dag.getNode("downstream")?.status).toBe("failed");
+	});
+
+	test("propagates multi-level failure cascades", async () => {
+		const gate = Promise.withResolvers<void>();
+		const scheduler = new SwarmScheduler<NodeLike>([
+			["A", node()],
+			["B", node(), ["A"]],
+			["C", node(), ["B"]],
+		]);
+		const started: string[] = [];
+		const pump = scheduler.pump(async id => {
+			started.push(id);
+			if (id === "A") {
+				await gate.promise;
+				throw new Error("A failed");
+			}
+			scheduler.markCompleted(id);
+		});
+		await Bun.sleep(10);
+		expect(started).toEqual(["A"]);
+		gate.resolve();
+		await pump;
+		expect(started).toEqual(["A"]);
+		expect(scheduler.dag.getNode("A")?.status).toBe("failed");
+		expect(scheduler.dag.getNode("B")?.status).toBe("failed");
+		expect(scheduler.dag.getNode("C")?.status).toBe("failed");
 	});
 
 	test("serializes overlapping files under isolation", async () => {

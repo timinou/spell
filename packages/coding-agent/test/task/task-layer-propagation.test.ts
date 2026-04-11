@@ -3,7 +3,7 @@ import { Value } from "@sinclair/typebox/value";
 import type { TaskPolicy } from "../../src/config/task-policies";
 import { resolveVerificationContext } from "../../src/task/template";
 import { taskItemSchema } from "../../src/task/types";
-import type { TodoPhase } from "../../src/tools/todo-write";
+import type { TodoGroup } from "../../src/tools/todo-write";
 
 const testPolicies: TaskPolicy[] = [
 	{
@@ -14,7 +14,7 @@ const testPolicies: TaskPolicy[] = [
 	},
 ];
 
-function makePhases(layer?: string): TodoPhase[] {
+function makePhases(layer?: string): TodoGroup[] {
 	return [
 		{
 			id: "phase-1",

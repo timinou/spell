@@ -2,19 +2,23 @@ import { describe, expect, test } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { GitBaseline, GitBaselineDiff } from "../../src/session/git-baseline";
 import type { ToolSession } from "../../src/tools";
-import { type TodoPhase, TodoWriteTool } from "../../src/tools/todo-write";
+import { type TodoGroup, TodoWriteTool } from "../../src/tools/todo-write";
+import { FakeEventBus } from "../../src/utils/fake-event-bus";
 
-function createSession(initialPhases: TodoPhase[] = [], overrides: Partial<ToolSession> = {}): ToolSession {
-	let phases = initialPhases;
+function createSession(initialGroups: TodoGroup[] = [], overrides: Partial<ToolSession> = {}): ToolSession {
+	let groups = initialGroups;
+	const eventBus = new FakeEventBus();
 	return {
 		cwd: "/tmp/test",
 		hasUI: false,
 		getSessionFile: () => null,
+		getSessionId: () => "sess-test",
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated(),
-		getTodoPhases: () => phases,
-		setTodoPhases: next => {
-			phases = next;
+		eventBus,
+		getTodoGroups: () => groups,
+		setTodoGroups: next => {
+			groups = next;
 		},
 		...overrides,
 	};
@@ -28,7 +32,7 @@ describe("direct-work gate enforcement", () => {
 	test("verified completion fails when gateCmd evidence is missing", async () => {
 		const tool = new TodoWriteTool(createSession());
 		await tool.execute("call-1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Run tests", gateCmd: "bun test" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Run tests", gateCmd: "bun test" }] }] }],
 		});
 		await tool.execute("call-2", { ops: [{ op: "update", id: "task-1", status: "in_progress" }] });
 
@@ -36,7 +40,7 @@ describe("direct-work gate enforcement", () => {
 			ops: [{ op: "update", id: "task-1", status: "completed", verified: true }],
 		});
 
-		expect(result.details?.phases[0]?.tasks[0]?.status).toBe("in_progress");
+		expect(result.details?.groups[0]?.tasks[0]?.status).toBe("in_progress");
 		expect(textSummary(result)).toContain("--- Gate Verification Failed ---");
 		expect(textSummary(result)).toContain(
 			"gateCmd: expected `bun test`, No successful execution matched the gate command.",
@@ -62,19 +66,19 @@ describe("direct-work gate enforcement", () => {
 			}),
 		);
 		await tool.execute("call-1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Commit work", gateCommit: true }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Commit work", gateCommit: true }] }] }],
 		});
 
 		const started = await tool.execute("call-2", {
 			ops: [{ op: "update", id: "task-1", status: "in_progress" }],
 		});
-		expect(started.details?.phases[0]?.tasks[0]?.gitBaseline).toEqual(baseline);
+		expect(started.details?.groups[0]?.tasks[0]?.gitBaseline).toEqual(baseline);
 
 		const result = await tool.execute("call-3", {
 			ops: [{ op: "update", id: "task-1", status: "completed", verified: true }],
 		});
 
-		expect(result.details?.phases[0]?.tasks[0]?.status).toBe("in_progress");
+		expect(result.details?.groups[0]?.tasks[0]?.status).toBe("in_progress");
 		expect(textSummary(result)).toContain(
 			"gateCommit: expected `git commit`, HEAD did not move after the task entered in_progress.",
 		);
@@ -103,7 +107,7 @@ describe("direct-work gate enforcement", () => {
 			ops: [
 				{
 					op: "replace",
-					phases: [{ name: "Work", tasks: [{ content: "Ship it", gateCmd: "bun test", gateCommit: true }] }],
+					groups: [{ name: "Work", tasks: [{ content: "Ship it", gateCmd: "bun test", gateCommit: true }] }],
 				},
 			],
 		});
@@ -113,7 +117,7 @@ describe("direct-work gate enforcement", () => {
 			ops: [{ op: "update", id: "task-1", status: "completed", verified: true }],
 		});
 
-		expect(result.details?.phases[0]?.tasks[0]?.status).toBe("completed");
+		expect(result.details?.groups[0]?.tasks[0]?.status).toBe("completed");
 		expect(textSummary(result)).not.toContain("--- Gate Verification Failed ---");
 	});
 });

@@ -1,16 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+
 import * as fs from "node:fs";
+
 import * as os from "node:os";
+
 import * as path from "node:path";
+
 import { Agent } from "@oh-my-pi/pi-agent-core";
+
 import { getBundledModel } from "@oh-my-pi/pi-ai";
+
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
+
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+
 import { TodoWriteTool } from "@oh-my-pi/pi-coding-agent/tools";
+
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
 /**
@@ -20,6 +33,7 @@ import { Snowflake } from "@oh-my-pi/pi-utils";
  * If it doesn't, UI code that reloads todos immediately after /new will read the old
  * session artifact dir and keep showing stale todos.
  */
+
 describe("AgentSession newSession clears todo artifacts", () => {
 	let tempDir: string;
 	let session: AgentSession;
@@ -83,22 +97,18 @@ describe("AgentSession newSession clears todo artifacts", () => {
 		const oldSessionFile = session.sessionFile;
 		expect(oldSessionFile).toBeDefined();
 
-		session.setTodoPhases([
-			{
-				id: "phase-1",
-				name: "Tasks",
-				tasks: [{ id: "task-1", content: "do the thing", status: "pending" }],
-			},
+		session.setTodoGroups([
+			{ id: "phase-1", name: "Tasks", tasks: [{ id: "task-1", content: "do the thing", status: "pending" }] },
 		]);
-		expect(session.getTodoPhases()).toHaveLength(1);
-		expect(session.getTodoPhases()[0]?.tasks).toHaveLength(1);
+		expect(session.getTodoGroups()).toHaveLength(1);
+		expect(session.getTodoGroups()[0]?.tasks).toHaveLength(1);
 		await session.newSession();
 
 		const newSessionFile = session.sessionFile;
 		expect(newSessionFile).toBeDefined();
 		expect(newSessionFile).not.toBe(oldSessionFile);
 
-		expect(session.getTodoPhases()).toHaveLength(0);
+		expect(session.getTodoGroups()).toHaveLength(0);
 	});
 
 	it("should clear stale todo cache when branching from the first user message", async () => {
@@ -111,18 +121,18 @@ describe("AgentSession newSession clears todo artifacts", () => {
 		const branchCandidates = session.getUserMessagesForBranching();
 		expect(branchCandidates).toHaveLength(1);
 
-		session.setTodoPhases([
+		session.setTodoGroups([
 			{
 				id: "phase-1",
 				name: "Execution",
 				tasks: [{ id: "task-1", content: "stale from old branch", status: "in_progress" }],
 			},
 		]);
-		expect(session.getTodoPhases()).toHaveLength(1);
+		expect(session.getTodoGroups()).toHaveLength(1);
 
 		const result = await session.branch(branchCandidates[0].entryId);
 		expect(result.cancelled).toBe(false);
 		expect(result.selectedText).toBe("start task");
-		expect(session.getTodoPhases()).toHaveLength(0);
+		expect(session.getTodoGroups()).toHaveLength(0);
 	});
 });

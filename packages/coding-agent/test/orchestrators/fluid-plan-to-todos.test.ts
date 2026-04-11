@@ -1,13 +1,15 @@
 import { describe, expect, test } from "bun:test";
+
 import {
 	computeWaveLayers,
-	fluidPlanToTodoPhases,
+	fluidPlanToTodoGroups,
 	type PlanWave,
-	planWavesToTodoPhases,
+	planWavesToTodoGroups,
 } from "../../src/orchestrators/fluid/plan-to-todos";
+
 import type { FluidPlan } from "../../src/orchestrators/fluid/types";
 
-describe("planWavesToTodoPhases", () => {
+describe("planWavesToTodoGroups", () => {
 	test("maps extracted plan waves without inventing implicit cross-wave blockers", () => {
 		const waves: PlanWave[] = [
 			{
@@ -23,23 +25,23 @@ describe("planWavesToTodoPhases", () => {
 			},
 		];
 
-		const phases = planWavesToTodoPhases(waves);
-		expect(phases.map(phase => phase.name)).toEqual(["foundation", "verify"]);
-		expect(phases[0]).toMatchObject({ id: "phase-1", name: "foundation" });
-		expect(phases[0]?.tasks[0]).toMatchObject({
+		const groups = planWavesToTodoGroups(waves);
+		expect(groups.map(group => group.name)).toEqual(["foundation", "verify"]);
+		expect(groups[0]).toMatchObject({ id: "group-1", name: "foundation" });
+		expect(groups[0]?.tasks[0]).toMatchObject({
 			id: "task-1",
 			content: "Define interfaces",
 			status: "in_progress",
 			orgItemId: "FEAT-001",
 		});
-		expect(phases[0]?.tasks[0]?.orgItemClosingId).toBeUndefined();
-		expect(phases[1]?.tasks.map(task => task.blockers)).toEqual([undefined, undefined]);
-		expect(phases[1]?.tasks[0]?.orgItemClosingId).toBe("FEAT-001");
-		expect(phases[1]?.tasks[1]?.orgItemClosingId).toBe("FEAT-002");
+		expect(groups[0]?.tasks[0]?.orgItemClosingId).toBeUndefined();
+		expect(groups[1]?.tasks.map(task => task.blockers)).toEqual([undefined, undefined]);
+		expect(groups[1]?.tasks[0]?.orgItemClosingId).toBe("FEAT-001");
+		expect(groups[1]?.tasks[1]?.orgItemClosingId).toBe("FEAT-002");
 	});
 });
 
-describe("fluidPlanToTodoPhases", () => {
+describe("fluidPlanToTodoGroups", () => {
 	test("derives canonical waves from a plain FluidPlan with precise blockers", () => {
 		const plan: FluidPlan = {
 			agents: [
@@ -66,19 +68,19 @@ describe("fluidPlanToTodoPhases", () => {
 			step: "Gather data",
 		});
 
-		const phases = fluidPlanToTodoPhases(plan);
-		expect(phases.map(phase => phase.name)).toEqual(["wave-1", "wave-2", "wave-3"]);
-		expect(phases[0]?.tasks[0]).toMatchObject({
+		const groups = fluidPlanToTodoGroups(plan);
+		expect(groups.map(group => group.name)).toEqual(["wave-1", "wave-2", "wave-3"]);
+		expect(groups[0]?.tasks[0]).toMatchObject({
 			content: "Gather data",
 			status: "in_progress",
 			orgItemId: "FEAT-001",
 			orgItemClosingId: "FEAT-001",
 		});
-		expect(phases[0]?.tasks[0]?.details).toContain("Effort: S");
-		expect(phases[0]?.tasks[0]?.details).toContain("Priority: A");
-		expect(phases[0]?.tasks[0]?.details).toContain("Inspect the target module.");
-		expect(phases[1]?.tasks.map(task => task.blockers)).toEqual([["task-1"], ["task-1"]]);
-		expect(phases[2]?.tasks[0]?.blockers).toEqual(["task-2", "task-3"]);
+		expect(groups[0]?.tasks[0]?.details).toContain("Effort: S");
+		expect(groups[0]?.tasks[0]?.details).toContain("Priority: A");
+		expect(groups[0]?.tasks[0]?.details).toContain("Inspect the target module.");
+		expect(groups[1]?.tasks.map(task => task.blockers)).toEqual([["task-1"], ["task-1"]]);
+		expect(groups[2]?.tasks[0]?.blockers).toEqual(["task-2", "task-3"]);
 	});
 
 	test("splits disconnected components and skips fully deferred waves", () => {
@@ -90,10 +92,10 @@ describe("fluidPlanToTodoPhases", () => {
 			],
 		};
 
-		const phases = fluidPlanToTodoPhases(plan);
-		expect(phases.map(phase => phase.name)).toEqual(["component-1-wave-1", "component-2-wave-2"]);
-		expect(phases[0]?.tasks[0]?.content).toBe("Component A work");
-		expect(phases[1]?.tasks[0]).toMatchObject({
+		const groups = fluidPlanToTodoGroups(plan);
+		expect(groups.map(group => group.name)).toEqual(["component-1-wave-1", "component-2-wave-2"]);
+		expect(groups[0]?.tasks[0]?.content).toBe("Component A work");
+		expect(groups[1]?.tasks[0]).toMatchObject({
 			content: "Active work",
 			blockers: undefined,
 			orgItemClosingId: "FEAT-102",

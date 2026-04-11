@@ -8,7 +8,7 @@
 
 import { logger } from "@oh-my-pi/pi-utils";
 import type { EventBus } from "../utils/event-bus";
-import type { TodoPhase } from "./todo-write";
+import type { TodoGroup } from "./todo-write";
 import { hasGate, isTaskBlocked } from "./todo-write";
 
 // =============================================================================
@@ -30,7 +30,7 @@ export interface TodoDashboardTask {
 	orgItemClosingId?: string;
 }
 
-export interface TodoDashboardPhase {
+export interface TodoDashboardGroup {
 	id: string;
 	name: string;
 	tasks: TodoDashboardTask[];
@@ -38,7 +38,7 @@ export interface TodoDashboardPhase {
 
 export interface TodoDashboardPayload {
 	type: "todo_snapshot";
-	phases: TodoDashboardPhase[];
+	groups: TodoDashboardGroup[];
 	hasGatedTasks: boolean;
 }
 
@@ -54,8 +54,8 @@ export interface TodoControlMessage {
 // =============================================================================
 
 interface TodoSessionAccessor {
-	getTodoPhases?: () => TodoPhase[];
-	setTodoPhases?: (phases: TodoPhase[], options?: { reset?: boolean }) => void;
+	getTodoGroups?: () => TodoGroup[];
+	setTodoGroups?: (groups: TodoGroup[], options?: { reset?: boolean }) => void;
 }
 
 // =============================================================================
@@ -79,13 +79,13 @@ export class TodoDashboardBridge {
 	}
 
 	buildSnapshot(): TodoDashboardPayload {
-		const phases = this.#session.getTodoPhases?.() ?? [];
-		const allTasks = phases.flatMap(p => p.tasks);
+		const groups = this.#session.getTodoGroups?.() ?? [];
+		const allTasks = groups.flatMap(group => group.tasks);
 
-		const dashPhases: TodoDashboardPhase[] = phases.map(phase => ({
-			id: phase.id,
-			name: phase.name,
-			tasks: phase.tasks.map(task => ({
+		const dashboardGroups: TodoDashboardGroup[] = groups.map(group => ({
+			id: group.id,
+			name: group.name,
+			tasks: group.tasks.map(task => ({
 				id: task.id,
 				content: task.content,
 				status: task.status,
@@ -103,7 +103,7 @@ export class TodoDashboardBridge {
 
 		return {
 			type: "todo_snapshot",
-			phases: dashPhases,
+			groups: dashboardGroups,
 			hasGatedTasks: allTasks.some(hasGate),
 		};
 	}
@@ -153,12 +153,12 @@ export class TodoDashboardBridge {
 			return;
 		}
 
-		const phases = this.#session.getTodoPhases?.();
-		if (!phases) return;
+		const groups = this.#session.getTodoGroups?.();
+		if (!groups) return;
 
 		let found = false;
-		for (const phase of phases) {
-			for (const task of phase.tasks) {
+		for (const group of groups) {
+			for (const task of group.tasks) {
 				if (task.id === taskId) {
 					if (gate === "gateCommit") {
 						task.gateCommit = enabled;
@@ -183,9 +183,9 @@ export class TodoDashboardBridge {
 			return;
 		}
 
-		this.#session.setTodoPhases?.(phases);
+		this.#session.setTodoGroups?.(groups);
 		// Re-emit so subscribers (including ourselves) refresh
-		this.#eventBus?.emit("todo:change", { phases });
+		this.#eventBus?.emit("todo:change", { groups });
 	}
 
 	dispose(): void {

@@ -7,7 +7,7 @@ import * as discoveryModule from "../../src/task/discovery";
 import * as executorModule from "../../src/task/executor";
 import type { AgentDefinition, AgentProgress, SingleResult } from "../../src/task/types";
 import type { ToolSession } from "../../src/tools";
-import type { TodoPhase } from "../../src/tools/todo-write";
+import type { TodoGroup } from "../../src/tools/todo-write";
 
 const baseAgent: AgentDefinition = {
 	name: "task",
@@ -42,10 +42,10 @@ function createResult(id: string, transcriptPath: string, overrides: Partial<Sin
 function createSession(
 	tempDir: string,
 	settings: Settings,
-	initialPhases: TodoPhase[],
-): ToolSession & { snapshots: TodoPhase[][] } {
-	let phases = initialPhases;
-	const snapshots: TodoPhase[][] = [];
+	initialGroups: TodoGroup[],
+): ToolSession & { snapshots: TodoGroup[][] } {
+	let groups = structuredClone(initialGroups);
+	const snapshots: TodoGroup[][] = [];
 	return {
 		cwd: tempDir,
 		hasUI: false,
@@ -57,9 +57,9 @@ function createSession(
 		getModelString: () => undefined,
 		getArtifactsDir: () => path.join(tempDir, "artifacts"),
 		getSessionId: () => "parent-session",
-		getTodoPhases: () => phases,
-		setTodoPhases: (next: TodoPhase[]) => {
-			phases = structuredClone(next);
+		getTodoGroups: () => groups,
+		setTodoGroups: (next: TodoGroup[]) => {
+			groups = structuredClone(next);
 			snapshots.push(structuredClone(next));
 		},
 		settings,
@@ -70,7 +70,7 @@ function createSession(
 		contextFiles: [],
 		promptTemplates: [],
 		snapshots,
-	} as unknown as ToolSession & { snapshots: TodoPhase[][] };
+	} as unknown as ToolSession & { snapshots: TodoGroup[][] };
 }
 
 function mockRunSubprocess(transcriptPath: string, overrides: Partial<SingleResult> = {}): void {
@@ -118,7 +118,7 @@ describe("child phase gate propagation", () => {
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
 		mockRunSubprocess(transcriptPath, {
-			todoPhases: [
+			todoGroups: [
 				{
 					id: "phase-child-1",
 					name: "Child work",
@@ -149,7 +149,7 @@ describe("child phase gate propagation", () => {
 		]);
 		const transcriptPath = path.join(tempDir, "artifacts", "sub1.jsonl");
 		mockRunSubprocess(transcriptPath, {
-			todoPhases: [
+			todoGroups: [
 				{
 					id: "phase-child-1",
 					name: "Child work",

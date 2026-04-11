@@ -11,8 +11,8 @@ import {
 	formatSummary,
 	getNextTodoIds,
 	injectPolicyGates,
+	type TodoGroup,
 	type TodoItem,
-	type TodoPhase,
 	type TodoStatus,
 	TodoWriteTool,
 } from "../../src/tools/todo-write";
@@ -21,26 +21,26 @@ function makeTask(overrides: Partial<TodoItem> & { id: string; content: string }
 	return { status: "pending" as TodoStatus, ...overrides };
 }
 
-function makePhase(id: string, name: string, tasks: TodoItem[]): TodoPhase {
+function makePhase(id: string, name: string, tasks: TodoItem[]): TodoGroup {
 	return { id, name, tasks };
 }
 
-function fileFromPhases(phases: TodoPhase[]) {
-	const { nextTaskId, nextPhaseId } = getNextTodoIds(phases);
-	return { phases, nextTaskId, nextPhaseId };
+function fileFromPhases(phases: TodoGroup[]) {
+	const { nextTaskId, nextGroupId } = getNextTodoIds(phases);
+	return { groups: phases, nextTaskId, nextGroupId };
 }
 
-function createSession(cwd: string, initialPhases: TodoPhase[] = [], policies?: TaskPolicy[]): ToolSession {
-	let phases = initialPhases;
+function createSession(cwd: string, initialGroups: TodoGroup[] = [], policies?: TaskPolicy[]): ToolSession {
+	let groups = initialGroups;
 	return {
 		cwd,
 		hasUI: false,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated(),
-		getTodoPhases: () => phases,
-		setTodoPhases: next => {
-			phases = next;
+		getTodoGroups: () => groups,
+		setTodoGroups: next => {
+			groups = next;
 		},
 		getResolvedTaskPolicies: policies ? () => policies : undefined,
 	};
@@ -54,9 +54,9 @@ function summaryText(result: { content: Array<{ type: string; text?: string }> }
 
 function makeSummary(overrides: Partial<FormatSummaryOptions> = {}): string {
 	return formatSummary({
-		phases: overrides.phases ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do work" })])],
+		groups: overrides.groups ?? [makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Do work" })])],
 		errors: overrides.errors ?? [],
-		completedPhaseIds: overrides.completedPhaseIds ?? [],
+		completedGroupIds: overrides.completedGroupIds ?? [],
 		completedGatedTasks: overrides.completedGatedTasks ?? [],
 		pendingVerificationTasks: overrides.pendingVerificationTasks ?? [],
 		pendingDeferralTasks: overrides.pendingDeferralTasks ?? [],
@@ -121,12 +121,12 @@ describe("applyOps policy injection", () => {
 	it("injects policy gates on replace and preserves layer", () => {
 		const result = applyOps(
 			fileFromPhases([]),
-			[{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Implement UI", layer: "frontend" }] }] }],
+			[{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Implement UI", layer: "frontend" }] }] }],
 			[],
 			frontendPolicies,
 		);
 
-		const task = result.file.phases[0]?.tasks[0];
+		const task = result.file.groups[0]?.tasks[0];
 		if (!task) throw new Error("Expected task");
 		expect(task.layer).toBe("frontend");
 		expect(task.gateCommit).toBe(true);
@@ -140,10 +140,10 @@ describe("applyOps policy injection", () => {
 		const result = applyOps(
 			initial,
 			[{ op: "update", id: "task-1", layer: "frontend" }],
-			initial.phases,
+			initial.groups,
 			frontendPolicies,
 		);
-		const task = result.file.phases[0]?.tasks[0];
+		const task = result.file.groups[0]?.tasks[0];
 		if (!task) throw new Error("Expected task");
 		expect(task.layer).toBe("frontend");
 		expect(task.gateCommit).toBe(true);
@@ -157,11 +157,11 @@ describe("applyOps policy injection", () => {
 		const result = applyOps(
 			initial,
 			[{ op: "add_phase", name: "Frontend", tasks: [{ content: "Build UI", layer: "frontend" }] }],
-			initial.phases,
+			initial.groups,
 			frontendPolicies,
 		);
 
-		const addedPhase = result.file.phases[1];
+		const addedPhase = result.file.groups[1];
 		if (!addedPhase) throw new Error("Expected added phase");
 		const task = addedPhase.tasks[0];
 		if (!task) throw new Error("Expected task in added phase");
@@ -187,10 +187,10 @@ describe("TodoWriteTool session policy injection", () => {
 		];
 		const tool = new TodoWriteTool(createSession(tempDir, [], sessionPolicies));
 		const result = await tool.execute("call-1", {
-			ops: [{ op: "replace", phases: [{ name: "Work", tasks: [{ content: "Implement UI", layer: "frontend" }] }] }],
+			ops: [{ op: "replace", groups: [{ name: "Work", tasks: [{ content: "Implement UI", layer: "frontend" }] }] }],
 		});
 
-		const task = result.details?.phases[0]?.tasks[0];
+		const task = result.details?.groups[0]?.tasks[0];
 		if (!task) throw new Error("Expected task");
 		expect(task.layer).toBe("frontend");
 		expect(task.gateCommit).toBe(true);
@@ -202,7 +202,7 @@ describe("TodoWriteTool session policy injection", () => {
 describe("formatSummary layer badges", () => {
 	it("shows layer tag in remaining items summary", () => {
 		const text = makeSummary({
-			phases: [
+			groups: [
 				makePhase("phase-1", "Work", [makeTask({ id: "task-1", content: "Implement UI", layer: "frontend" })]),
 			],
 		});

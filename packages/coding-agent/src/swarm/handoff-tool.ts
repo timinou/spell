@@ -2,8 +2,10 @@ import { Type } from "@sinclair/typebox";
 
 import type { CustomTool } from "../extensibility/custom-tools/types";
 import type { EventBus } from "../utils/event-bus";
+import type { SwarmEventMap } from "../utils/typed-event-map";
 import type { SwarmBlackboard } from "./blackboard";
-import type { SwarmEventMap } from "./types";
+
+type SwarmEventSink = Pick<EventBus<SwarmEventMap>, "emit">;
 
 export interface SwarmHandoffToolContext {
 	active: boolean;
@@ -11,7 +13,7 @@ export interface SwarmHandoffToolContext {
 	sessionId: string;
 	currentTaskUri?: string;
 	blackboard: SwarmBlackboard;
-	eventBus: EventBus<SwarmEventMap>;
+	eventBus: SwarmEventSink;
 }
 
 const handoffSchema = Type.Object({
@@ -19,7 +21,9 @@ const handoffSchema = Type.Object({
 	target: Type.Optional(Type.String({ minLength: 1, description: "Optional successor target" })),
 });
 
-export function createHandoffTool(context: SwarmHandoffToolContext): CustomTool<any, any> {
+export function createHandoffTool(
+	context: SwarmHandoffToolContext,
+): CustomTool<typeof handoffSchema, { entryId: string; runId: string; file: string; target: string | null }> {
 	return {
 		name: "handoff",
 		label: "Handoff",

@@ -1,0 +1,119 @@
+#+TITLE: Full Phase to Group naming cutover
+#+STATE: DONE
+#+SESSION_ID: 14b66a7ab4f1eac0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T12-11-49-843Z_14b66a7ab4f1eac0.jsonl]]
+#+CUSTOM_ID: PROJ-028-full-phase-to-group-naming-cutover
+#+EFFORT: M
+#+PRIORITY: A
+#+LAYER: agent-runtime
+#+DEPENDS: FEAT-415-consolidate-swarmeventmap-and-clean-even
+
+NOTE [2026-04-11]: Completed in PLAN-176: full Group naming cutover landed across todo runtime, consumers, prompts, journal mirror, and focused tests.
+
+* Initial Message
+
+bro write a proper todowrite sheet with todoRef support showing all tasks
+
+* Context
+
+PLAN-173 introduced DAG-native groups as cosmetic containers (no execution semantics), but the codebase still uses =TodoPhase= type names, =phases= field names, and "Phase" user-visible strings. This creates a mismatch between the documented architecture (groups are cosmetic, DAG is the ordering authority) and the code surface (which implies phase-sequential semantics to callers and maintainers).
+
+** Design Decisions
+
+1. Use LSP rename where possible for type/method names. Use ast_edit or manual edit for field names in object literals and string output.
+2. Rename targets (exhaustive):
+   - =TodoPhase= → =TodoGroup= (interface, ~25 files)
+   - =TodoWriteToolDetails.phases= → =TodoWriteToolDetails.groups= (remove the dead =groups?= field that was added as a compat bridge)
+   - =getTodoPhases= → =getTodoGroups=, =setTodoPhases= → =setTodoGroups= (session interface + all implementations)
+   - =getNextTodoIds(phases)= param → =getNextTodoIds(groups)=
+   - =flattenTasks(phases)= param → =flattenTasks(groups)=
+   - =cloneTodoPhases= → =cloneTodoGroups=
+   - =getLatestTodoPhasesFromEntries= → =getLatestTodoGroupsFromEntries=
+   - =completedPhaseIds= → =completedGroupIds= (local vars + =ApplyOpsResult= field + =FormatSummaryOptions= field)
+   - =isPhaseComplete= → =isGroupComplete=
+   - =buildPhaseFromInput= → =buildGroupFromInput=
+   - =TodoFile.phases= → =TodoFile.groups=, =TodoFile.nextPhaseId= → =TodoFile.nextGroupId=
+   - =fileFromPhases= → =fileFromGroups=
+   - =applyOrgLifecycleHooks= params: =previousPhases= → =previousGroups=, =nextPhases= → =nextGroups=
+   - =formatSummary= output: "Phase N/M" → "Group N/M", "Phase complete" → "Group complete"
+   - Phase IDs in runtime: =phase-1=, =phase-2= → =group-1=, =group-2=
+3. Schema backward compat: keep =phases= as an accepted property name in the =replace= op schema. Internally map to =groups=. The =add_phase= op stays as a schema alias for =add_group= (both accepted, both do the same thing). This preserves compat with existing LLM callers that have learned the =phases= vocabulary.
+4. The =todo:change= event payload field changes from =phases= to =groups=. Dashboard bridge must update accordingly.
+5. The =writeJournal= call in the execute method must update to pass =groups= instead of =phases= (or the journal function signature must accept the renamed type).
+6. Session entry deserialization (=getLatestTodoGroupsFromEntries=) must handle BOTH old =phases= field name (from historical session entries) and new =groups= field name.
+
+** Files to Modify (non-exhaustive, LSP rename will discover more)
+
+*** Core tool
+- =packages/coding-agent/src/tools/todo-write.ts= — primary rename target
+- =packages/coding-agent/src/tools/todo-dashboard-bridge.ts= — event payload consumer
+
+*** Session / SDK
+- =packages/coding-agent/src/sdk.ts= — =ToolSession= interface methods
+- =packages/coding-agent/src/session/agent-session.ts= — session storage accessors
+- =packages/coding-agent/src/tools/index.ts= — =ToolSession= interface re-export
+
+*** Task infrastructure
+- =packages/coding-agent/src/task/index.ts= — auto-roster creation
+- =packages/coding-agent/src/task/template.ts= — predecessor context resolution
+- =packages/coding-agent/src/task/executor.ts= — child snapshot handling
+
+*** Modes / Orchestrators
+- =packages/coding-agent/src/modes/fluid-mode.ts= — fluid execution, =promoteFirstRunnableTask=
+- =packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts= — wave materialization
+- =packages/coding-agent/src/modes/types.ts= — mode state types
+
+*** Prompt docs
+- =packages/coding-agent/src/prompts/tools/todo-write.md= — user-facing documentation
+
+*** Tests (~12 files)
+- =packages/coding-agent/test/tools/todo-write.test.ts=
+- =packages/coding-agent/test/tools/todo-write-gates.test.ts=
+- =packages/coding-agent/test/tools/todo-write-delegation.test.ts=
+- =packages/coding-agent/test/tools/todo-write-deferral.test.ts=
+- =packages/coding-agent/test/tools/todo-write-failed.test.ts=
+- =packages/coding-agent/test/tools/todo-write-org-hooks.test.ts=
+- =packages/coding-agent/test/tools/todo-write-policies.test.ts=
+- =packages/coding-agent/test/tools/todo-promote-ready.test.ts=
+- =packages/coding-agent/test/tools/todo-apply-ops-dag.test.ts=
+- =packages/coding-agent/test/orchestrators/fluid-plan-to-todos.test.ts=
+- =packages/coding-agent/test/orchestrators/fluid-retry.test.ts=
+- =packages/coding-agent/test/task/task-template.test.ts=
+
+*** Org package
+- =packages/org/src/journal.ts= — journal write function parameter names
+
+** Edge Cases
+- Historical session entries have =details.phases=. The renamed =getLatestTodoGroupsFromEntries= must check for both =details.groups= and =details.phases= to handle deserialization of old sessions.
+- The =add_phase= schema op must continue working (aliased to =add_group= internally).
+- =writeJournal= from =@oh-my-pi/pi-org= accepts a positional parameter; if it's typed as =TodoPhase[]=, the type must update to =TodoGroup[]= or the function must accept either.
+
+** Existing Patterns to Follow
+- The codebase convention for rename is full cutover with no shims (AGENTS.md: "Replace old usage, not write shims. No gradual migration.")
+- Use =export * from= for barrel re-exports per AGENTS.md
+
+* Verification
+- =bun check:ts= passes
+- =bun test packages/coding-agent/test/tools/todo-write.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-write-gates.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-write-delegation.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-promote-ready.test.ts= passes
+- =bun test packages/coding-agent/test/tools/todo-apply-ops-dag.test.ts= passes
+- =bun test packages/coding-agent/test/orchestrators/fluid-plan-to-todos.test.ts= passes
+- =bun test packages/coding-agent/test/orchestrators/fluid-retry.test.ts= passes
+- Grep: zero occurrences of =TodoPhase= in =packages/coding-agent/src/= (except schema compat alias)
+- Grep: zero occurrences of ="Phase "= in formatSummary output strings
+
+* Sub-outline
+
+** PROJ-XXX::rename-types-lsp
+Use LSP rename on =TodoPhase=, =cloneTodoPhases=, =getLatestTodoPhasesFromEntries=, =getTodoPhases=, =setTodoPhases=. Verify compilation after each rename.
+
+** PROJ-XXX::rename-fields-ast
+Depends on: PROJ-XXX::rename-types-lsp. Use ast_edit for field name renames (=phases= → =groups=, =completedPhaseIds= → =completedGroupIds=, etc.) and format string updates ("Phase" → "Group"). Add backward-compat deserialization for old session entries.
+
+** PROJ-XXX::schema-compat
+Depends on: PROJ-XXX::rename-fields-ast. Ensure =replace= op still accepts =phases= as a property name (mapped to =groups= internally). Keep =add_phase= as schema alias.
+
+** PROJ-XXX::verify-rename
+Depends on: PROJ-XXX::schema-compat. Run full verification suite and grep assertions.

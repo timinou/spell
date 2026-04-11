@@ -5,7 +5,7 @@
  *   - journalFilePath produces a stable, deterministic path for a given session ID
  *   - writeJournal produces valid org content mapping todo statuses to org keywords
  *   - Status mapping: pending→ITEM, in_progress→DOING, completed→DONE, abandoned→DONE
- *   - Each phase becomes a top-level heading; each task a sub-heading
+ *   - Each group becomes a top-level heading; each task a sub-heading
  *   - writeJournal does not throw on write failure (best-effort)
  */
 
@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { JournalTodoPhase } from "../src/journal";
+import type { JournalTodoGroup } from "../src/journal";
 import { journalFilePath, writeJournal } from "../src/journal";
 
 let tmpDir: string;
@@ -65,9 +65,9 @@ describe("journalFilePath", () => {
 // writeJournal
 // ---------------------------------------------------------------------------
 
-const phases: JournalTodoPhase[] = [
+const groups: JournalTodoGroup[] = [
 	{
-		id: "phase-1",
+		id: "group-1",
 		name: "Investigation",
 		tasks: [
 			{ id: "task-1", content: "Read source files", status: "completed" },
@@ -75,7 +75,7 @@ const phases: JournalTodoPhase[] = [
 		],
 	},
 	{
-		id: "phase-2",
+		id: "group-2",
 		name: "Implementation",
 		tasks: [
 			{ id: "task-3", content: "Apply fix", status: "in_progress" },
@@ -87,7 +87,7 @@ const phases: JournalTodoPhase[] = [
 
 describe("writeJournal", () => {
 	test("creates the journal file at the expected path", async () => {
-		await writeJournal(tmpDir, "test-session", phases);
+		await writeJournal(tmpDir, "test-session", groups);
 
 		const p = journalFilePath(tmpDir, "test-session");
 		const exists = await fs
@@ -98,52 +98,52 @@ describe("writeJournal", () => {
 	});
 
 	test("produces valid org file header", async () => {
-		await writeJournal(tmpDir, "test-session", phases);
+		await writeJournal(tmpDir, "test-session", groups);
 		const p = journalFilePath(tmpDir, "test-session");
 		const content = await Bun.file(p).text();
 
 		expect(content).toContain("#+TITLE:");
 		expect(content).toContain("#+DATE:");
-		expect(content).toContain("#+TODO: ITEM DOING | DONE");
+		expect(content).toContain("#+TODO: ITEM DOING BLOCKED | DONE");
 	});
 
 	test("maps completed → DONE", async () => {
-		await writeJournal(tmpDir, "test-session", phases);
+		await writeJournal(tmpDir, "test-session", groups);
 		const content = await Bun.file(journalFilePath(tmpDir, "test-session")).text();
 		expect(content).toContain("** DONE Read source files");
 	});
 
 	test("maps in_progress → DOING", async () => {
-		await writeJournal(tmpDir, "test-session", phases);
+		await writeJournal(tmpDir, "test-session", groups);
 		const content = await Bun.file(journalFilePath(tmpDir, "test-session")).text();
 		expect(content).toContain("** DOING Apply fix");
 	});
 
 	test("maps pending → ITEM", async () => {
-		await writeJournal(tmpDir, "test-session", phases);
+		await writeJournal(tmpDir, "test-session", groups);
 		const content = await Bun.file(journalFilePath(tmpDir, "test-session")).text();
 		expect(content).toContain("** ITEM Run tests");
 	});
 
 	test("maps abandoned → DONE", async () => {
-		await writeJournal(tmpDir, "test-session", phases);
+		await writeJournal(tmpDir, "test-session", groups);
 		const content = await Bun.file(journalFilePath(tmpDir, "test-session")).text();
 		expect(content).toContain("** DONE ");
 		// The abandoned task title is wrapped in ~~strikethrough~~
 		expect(content).toContain("~~Old approach~~");
 	});
 
-	test("each phase appears as a top-level heading", async () => {
-		await writeJournal(tmpDir, "test-session", phases);
+	test("each group appears as a top-level heading", async () => {
+		await writeJournal(tmpDir, "test-session", groups);
 		const content = await Bun.file(journalFilePath(tmpDir, "test-session")).text();
 		expect(content).toContain("* Investigation");
 		expect(content).toContain("* Implementation");
 	});
 
 	test("writes task notes when present", async () => {
-		const withNote: JournalTodoPhase[] = [
+		const withNote: JournalTodoGroup[] = [
 			{
-				id: "phase-1",
+				id: "group-1",
 				name: "Work",
 				tasks: [{ id: "task-1", content: "Do thing", status: "in_progress", notes: "Blocked by upstream" }],
 			},
@@ -155,12 +155,12 @@ describe("writeJournal", () => {
 	});
 
 	test("overwrites previous journal on second call", async () => {
-		await writeJournal(tmpDir, "overwrite-session", phases);
+		await writeJournal(tmpDir, "overwrite-session", groups);
 
-		const minimal: JournalTodoPhase[] = [
+		const minimal: JournalTodoGroup[] = [
 			{
-				id: "phase-1",
-				name: "Only phase",
+				id: "group-1",
+				name: "Only group",
 				tasks: [{ id: "task-1", content: "Single task", status: "pending" }],
 			},
 		];
@@ -168,8 +168,8 @@ describe("writeJournal", () => {
 		await writeJournal(tmpDir, "overwrite-session", minimal);
 
 		const content = await Bun.file(journalFilePath(tmpDir, "overwrite-session")).text();
-		expect(content).toContain("Only phase");
-		// Old phase names should be gone (file is fully rewritten)
+		expect(content).toContain("Only group");
+		// Old group names should be gone (file is fully rewritten)
 		expect(content).not.toContain("* Investigation");
 	});
 
@@ -178,9 +178,9 @@ describe("writeJournal", () => {
 		await expect(writeJournal("/tmp/definitely-does-not-exist-pi-org-test/sub", "s", [])).resolves.toBeUndefined();
 	});
 	test("serializes gate properties to org PROPERTIES drawer", async () => {
-		const gatedPhases: JournalTodoPhase[] = [
+		const gatedPhases: JournalTodoGroup[] = [
 			{
-				id: "phase-1",
+				id: "group-1",
 				name: "Gated Work",
 				tasks: [
 					{
@@ -202,9 +202,9 @@ describe("writeJournal", () => {
 	});
 
 	test("serializes blocker properties space-separated", async () => {
-		const blockerPhases: JournalTodoPhase[] = [
+		const blockerPhases: JournalTodoGroup[] = [
 			{
-				id: "phase-1",
+				id: "group-1",
 				name: "Blocked Work",
 				tasks: [
 					{
@@ -222,9 +222,9 @@ describe("writeJournal", () => {
 	});
 
 	test("omits gate properties when not set", async () => {
-		const plainPhases: JournalTodoPhase[] = [
+		const plainPhases: JournalTodoGroup[] = [
 			{
-				id: "phase-1",
+				id: "group-1",
 				name: "Plain Work",
 				tasks: [
 					{
@@ -244,9 +244,9 @@ describe("writeJournal", () => {
 	});
 
 	test("orgItemId and orgItemClosingId written to journal", async () => {
-		const phases: JournalTodoPhase[] = [
+		const groups: JournalTodoGroup[] = [
 			{
-				id: "phase-1",
+				id: "group-1",
 				name: "Linked Work",
 				tasks: [
 					{
@@ -259,16 +259,16 @@ describe("writeJournal", () => {
 				],
 			},
 		];
-		await writeJournal(tmpDir, "linked-session", phases);
+		await writeJournal(tmpDir, "linked-session", groups);
 		const content = await Bun.file(journalFilePath(tmpDir, "linked-session")).text();
 		expect(content).toContain(":ORG_ITEM_ID: FEAT-001-auth");
 		expect(content).toContain(":ORG_ITEM_CLOSING_ID: FEAT-001-auth-close");
 	});
 
 	test("omits org item properties when not set", async () => {
-		const phases: JournalTodoPhase[] = [
+		const groups: JournalTodoGroup[] = [
 			{
-				id: "phase-1",
+				id: "group-1",
 				name: "Plain Work",
 				tasks: [
 					{
@@ -279,16 +279,16 @@ describe("writeJournal", () => {
 				],
 			},
 		];
-		await writeJournal(tmpDir, "no-org-session", phases);
+		await writeJournal(tmpDir, "no-org-session", groups);
 		const content = await Bun.file(journalFilePath(tmpDir, "no-org-session")).text();
 		expect(content).not.toContain(":ORG_ITEM_ID:");
 		expect(content).not.toContain(":ORG_ITEM_CLOSING_ID:");
 	});
 
 	test("serializes details as body text below PROPERTIES drawer", async () => {
-		const detailPhases: JournalTodoPhase[] = [
+		const detailPhases: JournalTodoGroup[] = [
 			{
-				id: "phase-1",
+				id: "group-1",
 				name: "Detailed Work",
 				tasks: [
 					{

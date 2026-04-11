@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
+
 import type { PlanWave } from "../../src/orchestrators/fluid/plan-to-todos";
-import { planWavesToTodoPhases } from "../../src/orchestrators/fluid/plan-to-todos";
+import { planWavesToTodoGroups } from "../../src/orchestrators/fluid/plan-to-todos";
 
 describe("wave layer resolution", () => {
 	it("carries layer from PlanWaveEntry to TodoItem", () => {
@@ -14,9 +15,9 @@ describe("wave layer resolution", () => {
 			},
 		];
 
-		const phases = planWavesToTodoPhases(waves);
-		expect(phases[0]?.tasks[0]?.layer).toBe("frontend");
-		expect(phases[0]?.tasks[1]?.layer).toBe("api");
+		const groups = planWavesToTodoGroups(waves);
+		expect(groups[0]?.tasks[0]?.layer).toBe("frontend");
+		expect(groups[0]?.tasks[1]?.layer).toBe("api");
 	});
 
 	it("leaves TodoItem layer undefined when entry has no layer", () => {
@@ -27,7 +28,7 @@ describe("wave layer resolution", () => {
 			},
 		];
 
-		const phases = planWavesToTodoPhases(waves);
-		expect(phases[0]?.tasks[0]?.layer).toBeUndefined();
+		const groups = planWavesToTodoGroups(waves);
+		expect(groups[0]?.tasks[0]?.layer).toBeUndefined();
 	});
 });

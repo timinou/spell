@@ -87,15 +87,9 @@ function createToolCallAssistantMessage(name: string, args: Record<string, unkno
 }
 
 function getMessageText(message: AgentMessage): string {
-	if (!("content" in message)) {
-		return "";
-	}
-	if (typeof message.content === "string") {
-		return message.content;
-	}
-	if (!Array.isArray(message.content)) {
-		return "";
-	}
+	if (!("content" in message)) return "";
+	if (typeof message.content === "string") return message.content;
+	if (!Array.isArray(message.content)) return "";
 	return message.content
 		.filter(isTextContentBlock)
 		.map(content => content.text)
@@ -159,9 +153,7 @@ describe("AgentSession eager todo enforcement", () => {
 			streamFn: (_model, context, options) => {
 				streamCallCount++;
 				const lastMessage = context.messages.at(-1);
-				if (!lastMessage) {
-					throw new Error("Expected prompt context to include a message");
-				}
+				if (!lastMessage) throw new Error("Expected prompt context to include a message");
 				observedCalls.push({
 					toolChoice: getToolChoiceName(options?.toolChoice),
 					toolNames: (context.tools ?? []).map(tool => tool.name),
@@ -197,9 +189,7 @@ describe("AgentSession eager todo enforcement", () => {
 	});
 
 	afterEach(async () => {
-		if (session) {
-			await session.dispose();
-		}
+		if (session) await session.dispose();
 		authStorage?.close();
 		authStorage = undefined;
 		tempDir.removeSync();
@@ -261,7 +251,7 @@ describe("AgentSession eager todo enforcement", () => {
 		expect(observedCalls[1]?.toolChoice).toBeUndefined();
 		expect(observedCalls[1]?.lastMessageRole).toBe("toolResult");
 		expect(observedCalls[1]?.messageRoles.slice(-2)).toEqual(["assistant", "toolResult"]);
-		expect(session.getTodoPhases()).toHaveLength(1);
-		expect(session.getTodoPhases()[0]?.tasks[0]?.content).toBe("List all git worktrees in the current repository");
+		expect(session.getTodoGroups()).toHaveLength(1);
+		expect(session.getTodoGroups()[0]?.tasks[0]?.content).toBe("List all git worktrees in the current repository");
 	});
 });

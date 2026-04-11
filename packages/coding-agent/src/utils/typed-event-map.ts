@@ -17,7 +17,7 @@ export interface SwarmEventMap {
 	"todo:task:unblocked": { taskUri: string };
 	"todo:dag:node_added": { nodeUri: string; deps: string[] };
 	"todo:dag:node_removed": { nodeUri: string; cascade: string[] };
-	"swarm:artifact": { agentId: string; dataUri: string; storagePath?: string };
+	"swarm:artifact": { runId: string; entryId: string; agent: string; dataUri: string; type: string };
 	"swarm:handoff": { fromAgent: string; toAgent?: string; context: string };
 	"swarm:progress": { agentId: string; progress: number; total: number; label: string };
 }
