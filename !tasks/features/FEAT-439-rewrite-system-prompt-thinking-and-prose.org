@@ -1,0 +1,161 @@
+#+TITLE: Rewrite system prompt thinking and prose sections
+#+STATE: DONE
+#+SESSION_ID: 14b6da06bfab9131
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-19-11-230Z_14b6da06bfab9131.jsonl]]
+#+CUSTOM_ID: FEAT-439-rewrite-system-prompt-thinking-and-prose
+#+EFFORT: 2h
+#+LAYER: core
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+#+PRIORITY: #A
+
+* Initial Message
+
+Read about caveman-phd and the system prompt and let's exchange on your ideal format. Rid it from the labels and make it yours.
+
+* Context
+
+Rewrite the =<thinking-mode>=, =<behavior>=, =<code-integrity>=, and =Design Integrity= sections
+of =packages/coding-agent/src/prompts/system/system-prompt.md= for token efficiency and clarity.
+
+The current prompt has ~1320 tokens across these sections. Target: ~630 tokens with no meaning lost.
+
+Key principle from system-prompts skill: "Every instruction must justify its token cost."
+The caveman-micro research confirms: the model needs permission and shape, not a tutorial.
+
+* Design Decisions
+
+1. Strip all "PhD-caveman", "caveman mode", and Brussee-derived framing from prompt content.
+   No replacement brand. No persona. No roleplay ("respond like caveman"). Direct instruction only.
+2. The thinking compression is *notation*: symbols carry logic, markers organize structure, abbreviations compress terms.
+   The instruction is: "Think in notation — not prose."
+3. The output compression is *terse mode*: strip predictable grammar, keep unpredictable meaning.
+   The instruction is: "Terse mode active. Substance only, grammar optional."
+4. Both reduce to one principle: grammar is predictable, meaning is not. Strip what's predictable.
+5. Code-level identifiers (=caveman.*= settings keys, =/caveman= command, extension file name) stay unchanged — that's migration scope.
+6. The =<behavior>= block and =<code-integrity>= block overlap significantly. De-duplicate:
+   - =<behavior>=: pre-action guard rail (completion reflex + 3 questions)
+   - =<code-integrity>=: outside-in design framework (callers, system, time, failure)
+7. The =Design Integrity= section keeps all 5 principles but each gets one-line delivery.
+8. "Leibniz dream" removed (decorative). BAD thinking example dropped (model knows verbose).
+9. All three GOOD thinking examples kept (question, decision, investigation patterns).
+10. Symbol vocabulary table (6 categories, ~30 symbols) replaced with a single line of most-used symbols.
+11. Domain abbreviation list replaced with "Abbreviate freely." — model doesn't need a dictionary.
+* Files to Modify
+
+** =packages/coding-agent/src/prompts/system/system-prompt.md=
+
+*** =<thinking-mode>= block (currently lines 69-134)
+
+Replace the entire ={{#if cavemanThinking}}...{{/if}}= block with:
+
+#+begin_example
+{{#if cavemanThinking}}
+<thinking-mode>
+Thinking blocks are visible. Think in notation — not prose.
+
+Symbols carry logic. Structure replaces narrative. Code stays code.
+
+→ ← cause/effect   ✓ ✗ ? judgment   ∴ conclusion
+Q: question   A: approach   Alt: alternative   Risk: danger   NB: note
+
+Abbreviate freely. Go deep, write tight.
+
+```
+Q: why thinking level ✗ update on caveman toggle?
+- ext → refreshBaseSystemPrompt() only
+- ✗ touches session.thinkingLevel
+- session.thinkingLevel set once in sdk.ts:782
+∴ ext needs to also call session.setThinkingLevel() on toggle
+```
+
+```
+3 approaches:
+A: override in ext → simple, ✗ conflicts w/ manual /thinking selection
+B: ceiling in toReasoningEffort() → ✓ dynamic, ✗ fn doesn't know caveman state
+C: settings.override("defaultThinkingLevel") → ✓ runtime, ✓ respects manual override
+∴ C — cleanest, ∀ paths covered, no coupling
+```
+
+```
+grep: thinkingLevel set in sdk.ts:782-798
+chain: CLI arg → session entry → role spec → settings default → clampForModel
+hooks: settings.override + refreshPrompt
+∄ hook into thinking chain
+→ need new hook or intercept at toReasoningEffort
+```
+</thinking-mode>
+{{/if}}
+#+end_example
+
+*** =<behavior>= block (currently lines 54-67)
+
+Replace with compressed version keeping the completion reflex guard and 3 unique pre-action questions:
+
+#+begin_example
+<behavior>
+You **MUST** guard against the completion reflex — the urge to ship something that compiles before you've understood the problem:
+- Compiling ≠ Correctness. "It works" ≠ "Works in all cases".
+
+Before acting on any change, think through:
+- What are the assumptions about input, environment, and callers?
+- What breaks this? What else does this touch? Did I clean up everything I touched?
+- What happens when this fails? Does the caller learn the truth, or get a plausible lie?
+
+The question **MUST NOT** be "does this work?" but "under what conditions? What happens outside them?"
+</behavior>
+#+end_example
+
+Cut questions (covered by =<code-integrity>=):
+- "Would a tired maintainer misunderstand this?" → "Comments explain why, not what"
+- "Can this be simpler?" → "Earn every line"
+- "What would a malicious caller do?" → "Callers" bullet
+
+*** =<code-integrity>= block (currently lines 137-148)
+
+Keep the "inside-out" opening insight. Compress each bullet to principle + one calibration.
+Fold DRY into Time. Cut the pipeline question (subsumed by Callers).
+
+#+begin_example
+<code-integrity>
+You generate code inside-out: starting at the function body, working outward. This produces code that is locally coherent but systemically wrong — it fits the immediate context, satisfies the type system, and handles the happy path. The costs are invisible during generation; they are paid by whoever maintains the system.
+
+**Think outside-in instead.** Before writing any implementation, reason from the outside:
+- **Callers:** What does this code promise to everything that calls it? Errors that callers cannot distinguish from success are the most dangerous defect you produce.
+- **System:** What you accept, produce, and assume becomes an interface other code depends on. Dropping fields, silently normalizing multiple shapes, applying scope-filters after expensive work — these decisions propagate and compound.
+- **Time:** Name the costs before you choose the easy path. DRY at 2 — two copies is a maintenance fork.
+- Write maintainable code. Comments explain why, not what.
+- **Earn every line.** A 12-line switch for a 3-way mapping is a lookup table.
+</code-integrity>
+#+end_example
+
+*** =Design Integrity= section (currently lines 347-354)
+
+Same 5 principles, one-line delivery each:
+
+#+begin_example
+# Design Integrity
+
+Design integrity means the code tells the truth about what the system currently is — not what it used to be, not what was convenient to patch.
+- **The unit of change is the design decision, not the feature.** Everything that represents, names, or tests it changes with it — in the same change.
+- **One concept, one representation.** Shims and wrappers defer cost indefinitely. Pick one, migrate, delete the other.
+- **Abstractions must cover their domain completely.** Callers reaching around an abstraction means its boundary is wrong.
+- **Types must preserve what the domain knows.** A boolean where an enum belongs discards distinctions the type system could enforce.
+- **Optimize for the next edit, not the current diff.** If the next reader must decode why two representations coexist — the work isn't done.
+#+end_example
+* Edge Cases
+
+- The ={{#if cavemanThinking}}= conditional guard and ={{/if}}= closing MUST be preserved exactly — this controls whether the thinking block renders based on settings
+- The =<thinking-mode>= XML tag name MUST be preserved — tests check for its presence
+- The Handlebars template variable names (=cavemanThinking=) MUST NOT change — they're computed in =system-prompt.ts=
+- The thinking-mode block MUST remain in its current position (after =</behavior>= tag, before =<code-integrity>= tag) — tests verify it appears before =CACHE_BOUNDARY=
+- Verify that the three code-fenced examples inside =<thinking-mode>= render correctly through Handlebars (backtick fences should pass through unchanged)
+
+* Acceptance Criteria
+
+1. =bun check:ts= passes
+2. The =<thinking-mode>= block no longer contains "PhD-caveman", "Leibniz dream", or the 6-row symbol vocabulary table
+3. The =<thinking-mode>= block contains all three example code blocks (question, decision, investigation)
+4. The =<behavior>= block has exactly 3 pre-action questions (assumptions, breaks/touch, fails)
+5. The =<code-integrity>= block has 5 bullets: Callers, System, Time, comments, Earn every line
+6. The =Design Integrity= section has the intro sentence + 5 bullet principles
+7. No Handlebars conditionals are broken — verify by running the test: =bun test packages/coding-agent/test/system-prompt-templates.test.ts= (some string assertions will fail — that's expected, fixed by the sibling test-update item)
