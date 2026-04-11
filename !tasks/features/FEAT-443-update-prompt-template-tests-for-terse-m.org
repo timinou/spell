@@ -1,0 +1,124 @@
+#+TITLE: Update prompt template tests for terse mode rewrite
+#+STATE: DONE
+#+SESSION_ID: 14b6da06bfab9131
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-19-11-230Z_14b6da06bfab9131.jsonl]]
+#+CUSTOM_ID: FEAT-443-update-prompt-template-tests-for-terse-m
+#+EFFORT: 1h
+#+LAYER: core
+#+DEPENDS: FEAT-439-rewrite-system-prompt-thinking-and-prose FEAT-440-rewrite-caveman-output-template-to-terse FEAT-441-update-caveman-settings-descriptions-and
+#+PRIORITY: #A
+
+* Initial Message
+
+Read about caveman-phd and the system prompt and let's exchange on your ideal format. Rid it from the labels and make it yours.
+
+* Context
+
+After the prompt template rewrites (FEAT-439, FEAT-440, FEAT-441), several test assertions in
+=packages/coding-agent/test/system-prompt-templates.test.ts= will fail because they check for
+strings that no longer exist. Update all affected assertions.
+
+* Design Decisions
+
+1. Tests should verify the *contract* (conditional rendering, positioning, mutual exclusion)
+   not specific brand strings. Where possible, replace brand-specific assertions with
+   behaviorally equivalent checks on the new content.
+2. The =<thinking-mode>= tag name stays — position tests still valid.
+3. The =CACHE_BOUNDARY= ordering tests still valid — thinking-mode must be before it.
+
+* Assertions to Update
+
+** In ="system-prompt renders caveman thinking instructions in stable section when active"=
+
+Current:
+#+begin_src typescript
+expect(rendered).toContain("PhD-caveman");
+expect(rendered).toContain("EVERY thinking block MUST");
+#+end_src
+
+Replace with:
+#+begin_src typescript
+expect(rendered).toContain("Think in notation");
+expect(rendered).toContain("Symbols carry logic");
+#+end_src
+
+The =<thinking-mode>= tag presence and position-before-CACHE_BOUNDARY tests stay unchanged.
+
+** In ="system-prompt omits thinking instructions when caveman inactive"=
+
+No change needed — checks for absence of =<thinking-mode>=.
+
+** In ="system-prompt omits thinking instructions when caveman thinking is disabled"=
+
+Current:
+#+begin_src typescript
+expect(rendered).not.toContain("EVERY thinking block MUST");
+#+end_src
+
+Replace with:
+#+begin_src typescript
+expect(rendered).not.toContain("Think in notation");
+#+end_src
+
+** In =describe("caveman prompt composition")=
+
+*** ="buildSystemPrompt omits thinking instructions when caveman thinking mode is normal"=
+
+Current:
+#+begin_src typescript
+expect(rendered).toContain("IMPORTANT: You are in CAVEMAN MODE.");
+expect(rendered).not.toContain("EVERY thinking block MUST");
+#+end_src
+
+Replace with:
+#+begin_src typescript
+expect(rendered).toContain("Terse mode active");
+expect(rendered).not.toContain("Think in notation");
+#+end_src
+
+*** ="buildSystemPrompt keeps caveman prompt free of thinking instructions"=
+
+Current:
+#+begin_src typescript
+expect(rendered).toContain("IMPORTANT: You are in CAVEMAN MODE.");
+expect(rendered).toContain("<thinking-mode>");
+expect(rendered.indexOf("<thinking-mode>")).toBeLessThan(rendered.indexOf("IMPORTANT: You are in CAVEMAN MODE."));
+expect(rendered.indexOf("EVERY thinking block MUST")).toBeLessThan(
+    rendered.indexOf("IMPORTANT: You are in CAVEMAN MODE."),
+);
+#+end_src
+
+Replace with:
+#+begin_src typescript
+expect(rendered).toContain("Terse mode active");
+expect(rendered).toContain("<thinking-mode>");
+expect(rendered.indexOf("<thinking-mode>")).toBeLessThan(rendered.indexOf("Terse mode active"));
+expect(rendered.indexOf("Think in notation")).toBeLessThan(
+    rendered.indexOf("Terse mode active"),
+);
+#+end_src
+
+** In ="caveman template does not contain thinking instructions"=
+
+Current:
+#+begin_src typescript
+expect(rendered).toContain("CAVEMAN MODE");
+#+end_src
+
+Replace with:
+#+begin_src typescript
+expect(rendered).toContain("Terse mode active");
+#+end_src
+
+* Edge Cases
+
+- If any test checks for exact string "PhD-caveman" (as confirmed by earlier grep of test file line 225), that assertion must be removed or replaced.
+- The test for ="caveman template does not contain thinking instructions"= also checks =.not.toContain("thinking-mode")= — this stays unchanged since the caveman.md template should not contain thinking-mode content.
+- Run the full test file, not just the updated tests, to catch any assertions missed in this enumeration.
+
+* Acceptance Criteria
+
+1. =bun test packages/coding-agent/test/system-prompt-templates.test.ts= passes with zero failures
+2. No test assertion references "PhD-caveman", "CAVEMAN MODE", "IMPORTANT: You are in", or "EVERY thinking block MUST"
+3. All position-ordering tests (thinking-mode before CACHE_BOUNDARY, thinking-mode before terse output) still verify the correct rendering order
+4. =bun check:ts= passes

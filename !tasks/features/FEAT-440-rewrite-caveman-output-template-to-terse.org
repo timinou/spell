@@ -1,0 +1,107 @@
+#+TITLE: Rewrite caveman output template to terse mode
+#+STATE: DONE
+#+SESSION_ID: 14b6da06bfab9131
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-19-11-230Z_14b6da06bfab9131.jsonl]]
+#+CUSTOM_ID: FEAT-440-rewrite-caveman-output-template-to-terse
+#+EFFORT: 1h
+#+LAYER: core
+#+PRIORITY: #A
+
+* Initial Message
+
+Read about caveman-phd and the system prompt and let's exchange on your ideal format. Rid it from the labels and make it yours.
+
+* Context
+
+Rewrite =packages/coding-agent/src/prompts/system/caveman.md= to remove the caveman persona framing
+and replace with direct terse-mode instruction. The model doesn't need a costume — it needs
+permission and shape.
+
+The =/caveman= command name, fire animation, =caveman.*= settings keys, and extension file name
+all stay unchanged. Only the prompt content the model reads changes.
+
+* Design Decisions
+
+1. Drop "IMPORTANT: You are in CAVEMAN MODE." — the label adds noise, the instruction is enough.
+2. Drop "Respond terse like smart caveman." — no persona/roleplay framing.
+3. Replace with direct instruction: "Terse mode active. Every response: substance only, grammar optional."
+4. Core principle: grammar is predictable, meaning is not. Strip what's predictable.
+5. Keep the per-level conditional blocks — they're essential for the level system.
+6. Keep auto-clarity and boundaries sections — they're safety valves.
+7. Keep Bad/Good contrast example — it calibrates the register concretely.
+8. Handlebars variable names (=cavemanActive=, =cavemanLite=, =cavemanFull=, etc.) stay unchanged.
+
+* File to Modify
+
+** =packages/coding-agent/src/prompts/system/caveman.md=
+
+Replace the full template with:
+
+#+begin_example
+{{#if cavemanActive}}
+Terse mode active. Every response: substance only, grammar optional.
+
+Drop articles (a/an/the), filler (just/really/basically/actually/simply), pleasantries, hedging.
+Fragments OK. Short synonyms preferred. Technical terms exact.
+Code blocks unchanged. Errors quoted exact.
+Pattern: [thing] [action] [reason]. [next step].
+
+Not: "Sure! I'd be happy to help you with that. The issue you're experiencing is likely caused by..."
+Yes: "Bug in auth middleware. Token expiry check use `<` not `<=`. Fix:"
+
+{{#if cavemanLite}}
+Level: LITE — No filler/hedging. Keep articles + full sentences. Professional but tight.
+Example: "Your component re-renders because you create a new object reference each render."
+{{/if}}
+{{#if cavemanFull}}
+Level: FULL — Drop articles, fragments OK, short synonyms. Classic terse.
+Example: "New object ref each render. Inline object prop = new ref = re-render. Wrap in `useMemo`."
+{{/if}}
+{{#if cavemanUltra}}
+Level: ULTRA — Abbreviate (DB/auth/cfg/req/res/fn/impl), strip conjunctions, arrows for causality (X → Y).
+Example: "Inline obj prop → new ref → re-render. `useMemo`."
+{{/if}}
+{{#if cavemanWenyanLite}}
+Level: 文言文 LITE — Semi-classical Chinese. Grammar mostly intact. Technical terms stay exact.
+Example: "組件頻重繪，以每繪新生對象參照故。以 useMemo 包之。"
+{{/if}}
+{{#if cavemanWenyan}}
+Level: 文言文 FULL — Classical terseness. Technical terms stay exact.
+Example: "物出新參照，致重繪。useMemo Wrap之。"
+{{/if}}
+{{#if cavemanWenyanUltra}}
+Level: 文言文 ULTRA — Extreme classical compression. Technical terms stay exact.
+Example: "新參照→重繪。useMemo Wrap。"
+{{/if}}
+
+
+Auto-clarity: drop terse mode for security warnings, irreversible action confirmations,
+or when user is confused. Resume after.
+Boundaries: write normal code. Only compress explanations.
+{{/if}}
+#+end_example
+
+Notes on changes from current:
+- "IMPORTANT: You are in CAVEMAN MODE. Respond terse like smart caveman." → "Terse mode active. Every response: substance only, grammar optional."
+- "All technical substance stay. Only fluff die." → removed (redundant with the rules that follow)
+- "Classic caveman" → "Classic terse" in FULL level description
+- "drop caveman for security warnings" → "drop terse mode for security warnings" in auto-clarity
+- All Handlebars conditionals and variable references preserved exactly
+
+* Edge Cases
+
+- The ={{#if cavemanActive}}= outer guard MUST be preserved — controls whether any terse content renders
+- Each level conditional (=cavemanLite=, =cavemanFull=, etc.) is mutually exclusive — only one renders per session
+- The blank line before auto-clarity is intentional spacing
+- The wenyan levels use Chinese characters — ensure no encoding issues in the template
+- Test currently checks for ="IMPORTANT: You are in CAVEMAN MODE."= — this string changes. Fixed by sibling test item.
+- Test currently checks for ="CAVEMAN MODE"= — this goes away. Replaced by ="Terse mode active"=.
+
+* Acceptance Criteria
+
+1. =bun check:ts= passes
+2. Template no longer contains "CAVEMAN MODE", "smart caveman", or "IMPORTANT:"
+3. Template opens with "Terse mode active" when =cavemanActive= is true
+4. All 6 level-specific blocks still render correctly with their examples
+5. Auto-clarity section references "terse mode" not "caveman"
+6. Verify template compiles: =bun test packages/coding-agent/test/system-prompt-templates.test.ts= (string assertions will fail — fixed by sibling test item)

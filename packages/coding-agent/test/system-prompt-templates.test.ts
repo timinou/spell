@@ -186,7 +186,7 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain("## Dependency Management");
 		expect(rendered).toContain("### Smart gate enforcement");
 		expect(rendered).toContain("### When to use `blockers`");
-		expect(rendered).toContain("### Cross-phase dependency example");
+		expect(rendered).toContain("### Cross-group dependency example");
 
 		// FEAT-099: "On blockers:" removed, replaced with "On runtime impediments:"
 		expect(rendered).not.toContain("On blockers:");
@@ -222,8 +222,8 @@ describe("system Handlebars prompt templates", () => {
 			cavemanThinking: true,
 		});
 
-		expect(rendered).toContain("PhD-caveman");
-		expect(rendered).toContain("EVERY thinking block MUST");
+		expect(rendered).toContain("Think in notation");
+		expect(rendered).toContain("Symbols carry logic");
 		expect(rendered.indexOf("<thinking-mode>")).toBeGreaterThan(-1);
 		expect(rendered.indexOf("<thinking-mode>")).toBeLessThan(rendered.indexOf("CACHE_BOUNDARY"));
 	});
@@ -252,7 +252,7 @@ describe("system Handlebars prompt templates", () => {
 		});
 
 		expect(rendered).not.toContain("<thinking-mode>");
-		expect(rendered).not.toContain("EVERY thinking block MUST");
+		expect(rendered).not.toContain("Think in notation");
 	});
 
 	test("caveman template does not contain thinking instructions", async () => {
@@ -266,7 +266,7 @@ describe("system Handlebars prompt templates", () => {
 		});
 
 		expect(rendered).not.toContain("thinking-mode");
-		expect(rendered).toContain("CAVEMAN MODE");
+		expect(rendered).toContain("Terse mode active");
 	});
 });
 
@@ -279,9 +279,9 @@ describe("caveman prompt composition", () => {
 			}),
 		);
 
-		expect(rendered).toContain("IMPORTANT: You are in CAVEMAN MODE.");
+		expect(rendered).toContain("Terse mode active");
 		expect(rendered).not.toContain("<thinking-mode>");
-		expect(rendered).not.toContain("EVERY thinking block MUST");
+		expect(rendered).not.toContain("Think in notation");
 	});
 
 	test("buildSystemPrompt keeps caveman prompt free of thinking instructions", async () => {
@@ -292,12 +292,10 @@ describe("caveman prompt composition", () => {
 			}),
 		);
 
-		expect(rendered).toContain("IMPORTANT: You are in CAVEMAN MODE.");
+		expect(rendered).toContain("Terse mode active");
 		expect(rendered).toContain("<thinking-mode>");
-		expect(rendered.indexOf("<thinking-mode>")).toBeLessThan(rendered.indexOf("IMPORTANT: You are in CAVEMAN MODE."));
-		expect(rendered.indexOf("EVERY thinking block MUST")).toBeLessThan(
-			rendered.indexOf("IMPORTANT: You are in CAVEMAN MODE."),
-		);
+		expect(rendered.indexOf("<thinking-mode>")).toBeLessThan(rendered.indexOf("Terse mode active"));
+		expect(rendered.indexOf("Think in notation")).toBeLessThan(rendered.indexOf("Terse mode active"));
 	});
 });
 

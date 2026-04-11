@@ -1,0 +1,56 @@
+#+TITLE: Update caveman settings descriptions and extension labels
+#+STATE: DONE
+#+SESSION_ID: 14b6da06bfab9131
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-19-11-230Z_14b6da06bfab9131.jsonl]]
+#+CUSTOM_ID: FEAT-441-update-caveman-settings-descriptions-and
+#+EFFORT: 30m
+#+LAYER: core
+#+PRIORITY: #B
+
+* Initial Message
+
+Read about caveman-phd and the system prompt and let's exchange on your ideal format. Rid it from the labels and make it yours.
+
+* Context
+
+Update user-facing descriptions in settings schema and extension dialog to remove "PhD-caveman"
+branding and use plain descriptive language. Code-level identifiers (setting keys, enum values)
+stay unchanged for backwards compatibility.
+
+* Design Decisions
+
+1. Setting keys (=caveman.defaultLevel=, =caveman.thinkingMode=, etc.) keep their names — migration scope.
+2. Enum values ("caveman" | "normal" for thinkingMode) stay — migration scope.
+3. Only =description= strings and UI =label= strings change to remove "PhD-caveman" references.
+4. The extension dialog description for thinkingMode also updates.
+
+* Files to Modify
+
+** =packages/coding-agent/src/config/settings-schema.ts=
+
+Change =caveman.thinkingMode= description:
+
+From: ="Whether thinking uses PhD-caveman notation (caveman) or stays verbose (normal)"=
+To: ="Compress thinking blocks to symbolic shorthand (caveman) or keep verbose (normal)"=
+
+** =packages/coding-agent/src/extensibility/extensions/caveman.ts=
+
+Find the settings dialog item for =caveman.thinkingMode= (around line 126).
+
+Change description:
+
+From: ="PhD-caveman notation or normal verbose thinking"=
+To: ="Symbolic shorthand or verbose thinking"=
+
+* Edge Cases
+
+- There may be other references to "PhD-caveman" in comments or documentation — grep the full =packages/coding-agent/= tree for "PhD" and "phd" to catch any.
+- The extension's dialog title and other UI text should stay as-is (the extension *is* called caveman).
+
+* Acceptance Criteria
+
+1. =bun check:ts= passes
+2. =grep -ri "phd" packages/coding-agent/src/= returns zero hits
+3. The =caveman.thinkingMode= setting description in settings-schema.ts says "symbolic shorthand"
+4. The =caveman.thinkingMode= dialog item description in caveman.ts says "Symbolic shorthand"
+5. No setting key names or enum values changed

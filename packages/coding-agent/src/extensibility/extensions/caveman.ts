@@ -123,7 +123,7 @@ function buildSettingItems(settings: Settings): SettingItem[] {
 		{
 			id: "caveman.thinkingMode",
 			label: "Thinking mode",
-			description: "PhD-caveman notation or normal verbose thinking",
+			description: "Symbolic shorthand or verbose thinking",
 			currentValue: settings.get("caveman.thinkingMode"),
 			values: ["caveman", "normal"],
 		},
