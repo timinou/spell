@@ -1,0 +1,592 @@
+#+TITLE: Create pi-code-engine Crate Foundation
+#+STATE: DONE
+#+SESSION_ID: 14b6b08f5a1d2fb1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T17-18-01-064Z_14b6b08f5a1d2fb1.jsonl]]
+#+CUSTOM_ID: PROJ-029-create-pi-code-engine-crate-foundation
+#+EFFORT: 8h
+#+PRIORITY: A
+#+LAYER: engine
+
+* Context: Why This Crate Exists
+
+The =code= tool in Spell currently has two backends: (1) an Emacs daemon for file-local operations (outline, read, navigate, edit) and (2) a Rust =pi-code-graph= crate for cross-file graph operations (context, impact, deps, flow, etc.). The Emacs path has latency (socat + JSON-RPC per call), requires an Emacs 29+ daemon with tree-sitter, and duplicates language understanding: Elisp defines declaration patterns in =pi-treesit.el= while Rust defines its own extractors in =pi-code-graph/src/language/=.
+
+We are building =pi-code-engine= as a new Rust crate that replaces the Emacs backend entirely for the =code= tool. It will own all file-scoped code intelligence: buffer management, outline, read, navigate, structural edits, and language profiles. The existing =pi-code-graph= crate will be refactored to depend on =pi-code-engine= for language profiles and symbol extraction, eliminating its duplicated TS/Elixir extractors.
+
+The canonical design document is =specs/pi-code-engine-spec.md=. Read it fully before starting any implementation.
+
+* Goal
+
+Create the =pi-code-engine= Rust crate with its module structure, Cargo.toml, build.rs, error types, and the foundational =LanguageProfile= + =LanguageRegistry= system. This item delivers the crate skeleton and the language infrastructure that every subsequent item depends on.
+
+This is wave 1. Nothing else can start until this compiles and passes tests.
+
+* Design Decisions (All Binding on Implementation)
+
+1. Crate location: =crates/pi-code-engine/=
+2. Pure Rust library — no NAPI, no Emacs, no JS. NAPI bindings live in =pi-natives= and are a separate item.
+3. Language profiles are the single source of truth for all language understanding. One profile drives outline, navigate, graph extraction, structural edits.
+4. Profiles have two parts: (a) a runtime-loaded YAML/JSON definition specifying declarations, imports, exports, references, separators; (b) build-time generated production rules from tree-sitter =node-types.json= files.
+5. Built-in profiles for 4 languages: TypeScript/JavaScript (shared profile), Rust, Python, Elixir.
+6. =LanguageRegistry= holds all loaded profiles. Profiles are matched by file extension. Registry is created once, shared via =Arc=, immutable after construction.
+7. Production rules follow the combobulate pattern: each node type maps to its named fields and the child types valid in each field. Inverse rules map child type → possible parent types. These are used by the Procedure DSL (separate item) and for validating structural edits.
+8. =build.rs= generates production rules from grammar crates' =node-types.json= files at compile time. The generated code lives in =$OUT_DIR= and is included via =include!=.
+
+* Existing Codebase Patterns to Follow
+
+Look at =crates/pi-code-graph/= for conventions:
+- =Cargo.toml= format, workspace membership (check =Cargo.toml= at repo root for =[workspace.members]=)
+- Error type pattern: =crates/pi-code-graph/src/error.rs= uses a =CodeGraphError= enum with =thiserror=
+- Module structure: =lib.rs= re-exports public types
+- Tree-sitter grammar dependencies: =crates/pi-code-graph/Cargo.toml= already depends on =tree-sitter= and =tree-sitter-typescript=. Use the same versions.
+
+Also check =crates/pi-natives/Cargo.toml= to see which tree-sitter grammar crate versions are pinned workspace-wide.
+
+* Files to Create (Exhaustive List)
+
+** =crates/pi-code-engine/Cargo.toml=
+
+#+begin_src toml
+[package]
+name = "pi-code-engine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Text buffer
+ropey = "1"
+
+# Parsing
+tree-sitter = "0.25"    # match pi-code-graph's version exactly
+
+# Grammar crates (for build.rs node-types.json access and runtime parsing)
+tree-sitter-typescript = { version = "...", features = ["tsx"] }  # check pi-code-graph for exact version
+tree-sitter-rust = "..."
+tree-sitter-python = "..."
+tree-sitter-elixir = "..."
+
+# CRDT (added by CodeBuffer item, not this item)
+# loro = "..."
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+
+# Utility
+regex = "1"
+thiserror = "2"
+
+[build-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+#+end_src
+
+IMPORTANT: Check exact grammar crate versions used in =crates/pi-code-graph/Cargo.toml= and =crates/pi-natives/Cargo.toml=. Pin to the same versions. Do NOT guess version numbers — read the existing Cargo files.
+
+Also add =pi-code-engine= to the workspace members list in the root =Cargo.toml=.
+
+** =crates/pi-code-engine/build.rs=
+
+This script reads =node-types.json= from each tree-sitter grammar crate and generates Rust code.
+
+How to find =node-types.json=: Each tree-sitter grammar crate bundles this file. The path depends on the crate — typically at the crate's source root or in a =src/= subdirectory. Use the =DEP_TREE_SITTER_<LANG>_DIR= env var if the grammar crate sets it via cargo:rustc-link-search, otherwise locate it via the crate's manifest directory.
+
+Strategy that works reliably:
+1. Use =std::env::var("OUT_DIR")= to get output path
+2. For each grammar, try to find =node-types.json= by searching the grammar crate's source directory (use =pkg_config= or hardcode known relative paths from the crate source)
+3. If found: parse JSON, generate Rust constants
+4. If not found: generate empty constants with a compile-time warning (=println!("cargo:warning=...")=)
+
+Generated file format for each language:
+
+#+begin_src rust
+// Generated by build.rs from tree-sitter-typescript/node-types.json
+// DO NOT EDIT
+
+use std::collections::HashMap;
+
+pub fn production_rules() -> HashMap<&'static str, (&'static [&'static str], &'static [(&'static str, &'static [&'static str])])> {
+    // Maps node_type -> (unnamed_children, [(field_name, [child_types])])
+    let mut rules = HashMap::new();
+    rules.insert("if_statement", (
+        &[] as &[&str],  // unnamed children
+        &[
+            ("alternative", &["else_clause"] as &[&str]),
+            ("condition", &["parenthesized_expression"]),
+            ("consequence", &["statement"]),
+        ] as &[(&str, &[&str])],
+    ));
+    // ... more rules
+    rules
+}
+
+pub fn inverse_rules() -> HashMap<&'static str, &'static [&'static str]> {
+    // Maps child_type -> [parent_types]
+    let mut rules = HashMap::new();
+    rules.insert("else_clause", &["if_statement"] as &[&str]);
+    // ...
+    rules
+}
+
+pub const ALL_TYPES: &[&str] = &["if_statement", "function_declaration", ...];
+pub const SUPERTYPES: &[&str] = &["expression", "statement", "declaration", ...];
+#+end_src
+
+The =node-types.json= schema (from tree-sitter docs):
+- Array of objects, each with: =type= (string), =named= (bool), =fields= (object mapping field name → {types, required, multiple}), =children= (same shape), =subtypes= (array of {type, named})
+- Nodes with =subtypes= are supertypes (abstract, never appear in real tree)
+
+** =crates/pi-code-engine/src/lib.rs=
+
+#+begin_src rust
+pub mod buffer;  // added by CodeBuffer item
+pub mod edit;    // added by structural edits item
+pub mod error;
+pub mod language;
+pub mod navigate; // added by navigate item
+pub mod outline;  // added by outline item
+pub mod procedure; // added by procedure DSL item
+#+end_src
+
+For THIS item, only =error= and =language= modules exist. Other modules are stubs (=pub mod X;= with empty files) or added by later items. The crate must compile with just these two modules.
+
+** =crates/pi-code-engine/src/error.rs=
+
+#+begin_src rust
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum CodeEngineError {
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("Parse error: {0}")]
+    Parse(String),
+
+    #[error("Language not found: {0}")]
+    LanguageNotFound(String),
+
+    #[error("Profile error: {0}")]
+    Profile(String),
+
+    #[error("Tree-sitter error: {0}")]
+    TreeSitter(String),
+
+    #[error("Buffer error: {0}")]
+    Buffer(String),
+
+    #[error("Edit error: {0}")]
+    Edit(String),
+}
+
+pub type Result<T> = std::result::Result<T, CodeEngineError>;
+#+end_src
+
+** =crates/pi-code-engine/src/language/mod.rs=
+
+Core types:
+
+#+begin_src rust
+mod profile;
+mod generated;
+
+pub use profile::*;
+pub use generated::*;
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
+
+/// Opaque language identifier (e.g., "typescript", "rust").
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct LanguageId(pub String);
+
+impl LanguageId {
+    pub fn new(s: impl Into<String>) -> Self { Self(s.into()) }
+    pub fn as_str(&self) -> &str { &self.0 }
+}
+
+/// Central registry of all language profiles.
+/// Created once, shared via Arc, immutable after construction.
+pub struct LanguageRegistry {
+    by_id: HashMap<LanguageId, LanguageProfile>,
+    by_extension: HashMap<String, LanguageId>,
+}
+
+impl LanguageRegistry {
+    pub fn new() -> Self { Self { by_id: HashMap::new(), by_extension: HashMap::new() } }
+
+    /// Register all built-in profiles (TS, Rust, Python, Elixir).
+    pub fn with_builtins() -> crate::error::Result<Self> {
+        let mut reg = Self::new();
+        reg.register(typescript_profile()?)?;
+        reg.register(rust_profile()?)?;
+        reg.register(python_profile()?)?;
+        reg.register(elixir_profile()?)?;
+        Ok(reg)
+    }
+
+    /// Register a profile. Returns error on duplicate language or extension conflict.
+    pub fn register(&mut self, profile: LanguageProfile) -> crate::error::Result<()> {
+        // Check for duplicate language ID
+        // Check for extension conflicts
+        // Insert into both maps
+        todo!()
+    }
+
+    /// Load additional profiles from a directory of YAML files (e.g., .spell/languages/).
+    pub fn load_from_dir(&mut self, dir: &Path) -> crate::error::Result<()> {
+        // Read all .yaml/.yml files in dir, parse each, register
+        todo!()
+    }
+
+    /// Match a file path to a language profile by extension.
+    pub fn match_path(&self, path: &Path) -> Option<&LanguageProfile> {
+        let ext = path.extension()?.to_str()?;
+        let id = self.by_extension.get(ext)?;
+        self.by_id.get(id)
+    }
+
+    pub fn get(&self, id: &LanguageId) -> Option<&LanguageProfile> {
+        self.by_id.get(id)
+    }
+
+    pub fn languages(&self) -> Vec<&LanguageId> {
+        self.by_id.keys().collect()
+    }
+}
+
+/// Built-in profile constructors. Each combines YAML-equivalent config
+/// with build-time generated production rules.
+fn typescript_profile() -> crate::error::Result<LanguageProfile> { todo!() }
+fn rust_profile() -> crate::error::Result<LanguageProfile> { todo!() }
+fn python_profile() -> crate::error::Result<LanguageProfile> { todo!() }
+fn elixir_profile() -> crate::error::Result<LanguageProfile> { todo!() }
+#+end_src
+
+The built-in profile constructors create =LanguageProfile= structs programmatically (not from YAML files) so there's no filesystem dependency for core profiles. They combine hardcoded declaration/import/export patterns with the build-time generated production rules.
+
+** =crates/pi-code-engine/src/language/profile.rs=
+
+The profile data types and YAML loader:
+
+#+begin_src rust
+use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use crate::language::LanguageId;
+
+/// A complete language profile driving outline, navigate, graph extraction, and structural edits.
+#[derive(Debug, Clone)]
+pub struct LanguageProfile {
+    pub id: LanguageId,
+    pub extensions: Vec<String>,
+    pub declarations: Vec<DeclarationPattern>,
+    pub class_like: Vec<ClassLikePattern>,
+    pub imports: Vec<ImportPattern>,
+    pub exports: Vec<ExportPattern>,
+    pub references: Vec<ReferencePattern>,
+    pub separators: Vec<String>,
+    /// Build-time generated. Maps node_type → (unnamed_children, [(field, [child_types])]).
+    pub production_rules: ProductionRules,
+    /// Build-time generated. Maps child_type → [parent_types].
+    pub inverse_rules: InverseRules,
+    /// All known node types for this language.
+    pub all_types: Vec<String>,
+    /// Abstract supertypes (never in real parse tree, used in rule expansion).
+    pub supertypes: Vec<String>,
+    /// tree-sitter Language object for creating parsers.
+    pub ts_language: tree_sitter::Language,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeclarationPattern {
+    pub node_types: Vec<String>,
+    pub name_field: String,
+    pub kind: String,
+    #[serde(default)]
+    pub body_field: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClassLikePattern {
+    pub node_type: String,
+    pub body_field: String,
+    pub member_types: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportPattern {
+    pub node_type: String,
+    pub specifier_field: String,
+    #[serde(default)]
+    pub is_type_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportPattern {
+    pub node_type: String,
+    pub visibility: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReferencePattern {
+    pub node_type: String,
+    pub exclude_parent_types: Vec<String>,
+}
+
+/// Production rules: node_type → field definitions.
+pub type ProductionRules = HashMap<String, ProductionRule>;
+pub type InverseRules = HashMap<String, Vec<String>>;
+
+#[derive(Debug, Clone, Default)]
+pub struct ProductionRule {
+    pub unnamed_children: Vec<String>,
+    pub fields: HashMap<String, Vec<String>>,
+}
+
+/// YAML-loadable profile (subset — no production rules, those are generated).
+#[derive(Debug, Deserialize)]
+pub struct ProfileYaml {
+    pub language: String,
+    pub extensions: Vec<String>,
+    #[serde(default)]
+    pub declarations: Vec<DeclarationPattern>,
+    #[serde(default)]
+    pub class_like: Vec<ClassLikePattern>,
+    #[serde(default)]
+    pub imports: Vec<ImportPattern>,
+    #[serde(default)]
+    pub exports: Vec<ExportPattern>,
+    #[serde(default)]
+    pub references: Vec<ReferencePattern>,
+    #[serde(default)]
+    pub separators: Vec<String>,
+}
+
+/// Load a profile from YAML string. Production rules must be attached separately.
+pub fn load_profile_yaml(yaml: &str) -> crate::error::Result<ProfileYaml> {
+    serde_yaml::from_str(yaml).map_err(|e| crate::error::CodeEngineError::Profile(e.to_string()))
+}
+#+end_src
+
+** =crates/pi-code-engine/src/language/generated/mod.rs=
+
+#+begin_src rust
+// Build-time generated modules — one per supported grammar.
+// Each provides production_rules(), inverse_rules(), ALL_TYPES, SUPERTYPES.
+
+pub mod typescript;
+pub mod rust_lang;  // "rust" is a keyword, use rust_lang
+pub mod python;
+pub mod elixir;
+#+end_src
+
+Each submodule is =include!(concat!(env!("OUT_DIR"), "/typescript.rs"));= etc.
+
+** =crates/pi-code-engine/tests/fixtures/profiles/rust.yaml=
+
+A test fixture YAML profile:
+
+#+begin_src yaml
+language: rust
+extensions: [rs]
+
+declarations:
+  - node_types: [function_item]
+    name_field: name
+    kind: fn
+    body_field: body
+  - node_types: [struct_item]
+    name_field: name
+    kind: struct
+    body_field: body
+  - node_types: [enum_item]
+    name_field: name
+    kind: enum
+    body_field: body
+  - node_types: [impl_item]
+    name_field: type
+    kind: impl
+    body_field: body
+  - node_types: [trait_item]
+    name_field: name
+    kind: trait
+    body_field: body
+  - node_types: [mod_item]
+    name_field: name
+    kind: mod
+    body_field: body
+  - node_types: [type_item]
+    name_field: name
+    kind: type
+  - node_types: [const_item]
+    name_field: name
+    kind: const
+  - node_types: [static_item]
+    name_field: name
+    kind: static
+
+class_like:
+  - node_type: impl_item
+    body_field: body
+    member_types: [function_item, const_item, type_item]
+
+imports:
+  - node_type: use_declaration
+    specifier_field: argument
+
+references:
+  - node_type: identifier
+    exclude_parent_types: [line_comment, block_comment, string_literal, raw_string_literal]
+
+separators: [",", ";"]
+#+end_src
+
+* Sequencing Notes
+
+This item must be completed first. All other items in this plan depend on it.
+
+The implementing agent should:
+1. Start with =Cargo.toml= + workspace registration
+2. Create =error.rs= (simple, no dependencies)
+3. Create =language/profile.rs= with all types + YAML loader
+4. Create =language/mod.rs= with =LanguageRegistry= and built-in profile constructors
+5. Create =build.rs= for production rule generation
+6. Create =language/generated/mod.rs= + include! wiring
+7. Write tests
+8. Verify =cargo build= and =cargo test= pass
+
+Do NOT create stub modules for buffer/edit/outline/navigate/procedure yet — those are other items' responsibility. Only =language= and =error= modules exist after this item.
+
+* Testing (TDD Order)
+
+Write tests FIRST, then implement to make them pass.
+
+** Test 1: =test_profile_yaml_loading=
+#+begin_src rust
+#[test]
+fn test_profile_yaml_loading() {
+    let yaml = include_str!("../../tests/fixtures/profiles/rust.yaml");
+    let profile = load_profile_yaml(yaml).expect("should parse");
+    assert_eq!(profile.language, "rust");
+    assert!(profile.extensions.contains(&"rs".to_string()));
+    assert!(!profile.declarations.is_empty());
+    // Verify function_item declaration has name_field "name" and kind "fn"
+    let fn_decl = profile.declarations.iter().find(|d| d.node_types.contains(&"function_item".to_string()));
+    assert!(fn_decl.is_some());
+    let fn_decl = fn_decl.unwrap();
+    assert_eq!(fn_decl.name_field, "name");
+    assert_eq!(fn_decl.kind, "fn");
+    assert_eq!(fn_decl.body_field, Some("body".to_string()));
+}
+#+end_src
+
+** Test 2: =test_registry_with_builtins=
+#+begin_src rust
+#[test]
+fn test_registry_with_builtins() {
+    let reg = LanguageRegistry::with_builtins().expect("builtins should load");
+    // All 4 languages present
+    assert!(reg.get(&LanguageId::new("typescript")).is_some());
+    assert!(reg.get(&LanguageId::new("rust")).is_some());
+    assert!(reg.get(&LanguageId::new("python")).is_some());
+    assert!(reg.get(&LanguageId::new("elixir")).is_some());
+    // Unknown language returns None
+    assert!(reg.get(&LanguageId::new("haskell")).is_none());
+}
+#+end_src
+
+** Test 3: =test_registry_match_path=
+#+begin_src rust
+#[test]
+fn test_registry_match_path() {
+    let reg = LanguageRegistry::with_builtins().unwrap();
+    // TypeScript
+    let ts = reg.match_path(Path::new("src/foo.ts"));
+    assert!(ts.is_some());
+    assert_eq!(ts.unwrap().id.as_str(), "typescript");
+    // TSX also matches typescript
+    let tsx = reg.match_path(Path::new("component.tsx"));
+    assert!(tsx.is_some());
+    assert_eq!(tsx.unwrap().id.as_str(), "typescript");
+    // Rust
+    let rs = reg.match_path(Path::new("src/main.rs"));
+    assert!(rs.is_some());
+    assert_eq!(rs.unwrap().id.as_str(), "rust");
+    // Python
+    let py = reg.match_path(Path::new("script.py"));
+    assert!(py.is_some());
+    // Elixir
+    let ex = reg.match_path(Path::new("lib/app.ex"));
+    assert!(ex.is_some());
+    // Unknown
+    let unknown = reg.match_path(Path::new("file.xyz"));
+    assert!(unknown.is_none());
+}
+#+end_src
+
+** Test 4: =test_registry_rejects_duplicate=
+#+begin_src rust
+#[test]
+fn test_registry_rejects_duplicate() {
+    let mut reg = LanguageRegistry::with_builtins().unwrap();
+    let dup = /* construct another typescript profile */;
+    let result = reg.register(dup);
+    assert!(result.is_err());
+}
+#+end_src
+
+** Test 5: =test_generated_production_rules=
+#+begin_src rust
+#[test]
+fn test_generated_production_rules() {
+    let reg = LanguageRegistry::with_builtins().unwrap();
+    let ts = reg.get(&LanguageId::new("typescript")).unwrap();
+    // Production rules should be non-empty
+    assert!(!ts.production_rules.is_empty());
+    // if_statement should exist with known fields
+    let if_rule = ts.production_rules.get("if_statement");
+    assert!(if_rule.is_some());
+    let if_rule = if_rule.unwrap();
+    assert!(if_rule.fields.contains_key("condition"));
+    assert!(if_rule.fields.contains_key("consequence"));
+    // supertypes should include "expression"
+    assert!(ts.supertypes.contains(&"expression".to_string()));
+}
+#+end_src
+
+** Test 6: =test_inverse_rules=
+#+begin_src rust
+#[test]
+fn test_inverse_rules() {
+    let reg = LanguageRegistry::with_builtins().unwrap();
+    let ts = reg.get(&LanguageId::new("typescript")).unwrap();
+    // inverse_rules should map some child type to its parent types
+    assert!(!ts.inverse_rules.is_empty());
+}
+#+end_src
+
+** Test 7: =test_load_profile_from_dir=
+#+begin_src rust
+#[test]
+fn test_load_profile_from_dir() {
+    let mut reg = LanguageRegistry::new();
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/profiles");
+    // This should load the rust.yaml fixture
+    // NOTE: loading from dir requires a ts_language, which we may not have for
+    // a YAML-only profile. Design decision: load_from_dir creates profiles with
+    // empty production_rules and no ts_language. They're useful for outline
+    // pattern matching but can't do tree-sitter parsing.
+    // For THIS test, verify the YAML parses and registers.
+}
+#+end_src
+
+* Verification Criteria
+1. =cargo build -p pi-code-engine= succeeds with no errors
+2. =cargo test -p pi-code-engine= passes all 7+ tests
+3. =cargo clippy -p pi-code-engine= passes (the repo uses clippy)
+4. Generated production rules for TypeScript include at least: =if_statement=, =function_declaration=, =class_declaration=, =call_expression=
+5. =LanguageRegistry::with_builtins()= returns profiles for all 4 languages
+6. Each profile has non-empty =declarations=, non-empty =production_rules= (from build.rs generation), and correct extension mappings
+7. The crate compiles as a workspace member without breaking existing crates

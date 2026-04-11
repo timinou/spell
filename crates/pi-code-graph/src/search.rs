@@ -103,6 +103,9 @@ impl SearchIndex {
 					let norm = k1.mul_add(1.0 - b + b * doc_len / self.avg_doc_len.max(1.0), tf);
 					score += idf * ((tf * (k1 + 1.0)) / norm);
 				}
+				let query_lower = query.to_ascii_lowercase();
+				let exact_boost = if doc.label.to_ascii_lowercase().contains(&query_lower) { 10.0 } else { 1.0 };
+				score *= exact_boost;
 				SearchHit {
 					node_index: doc.node_index,
 					score,
@@ -124,11 +127,53 @@ impl SearchIndex {
 }
 
 fn tokenize(text: &str) -> Vec<String> {
-	text
-		.split(|char: char| !char.is_ascii_alphanumeric() && char != '_' && char != '-')
-		.filter(|part| !part.is_empty())
-		.map(|part| part.to_ascii_lowercase())
-		.collect()
+	let mut tokens = Vec::new();
+	for part in text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-') {
+		if part.is_empty() {
+			continue;
+		}
+		let lower = part.to_ascii_lowercase();
+		tokens.push(lower.clone());
+
+		let camel = split_camel_case(part);
+		if camel.len() > 1 {
+			for seg in &camel {
+				let seg_lower = seg.to_ascii_lowercase();
+				if seg_lower != lower {
+					tokens.push(seg_lower);
+				}
+			}
+		}
+
+		if lower.contains('_') {
+			for seg in lower.split('_').filter(|s| !s.is_empty()) {
+				tokens.push(seg.to_string());
+			}
+		}
+	}
+	tokens.sort();
+	tokens.dedup();
+	tokens
+}
+
+fn split_camel_case(s: &str) -> Vec<String> {
+	let mut parts = Vec::new();
+	let mut current = String::new();
+	let chars: Vec<char> = s.chars().collect();
+	for i in 0..chars.len() {
+		if chars[i].is_uppercase() && !current.is_empty() {
+			let prev_lower = i > 0 && chars[i - 1].is_lowercase();
+			let next_lower = i + 1 < chars.len() && chars[i + 1].is_lowercase();
+			if prev_lower || (next_lower && current.len() > 1) {
+				parts.push(std::mem::take(&mut current));
+			}
+		}
+		current.push(chars[i]);
+	}
+	if !current.is_empty() {
+		parts.push(current);
+	}
+	parts
 }
 
 #[cfg(test)]
@@ -137,6 +182,30 @@ mod tests {
 
 	use super::*;
 	use crate::model::{FileNode, GraphStats, PersistedCodeGraph, SymbolKind, SymbolNode};
+
+	#[test]
+	fn test_tokenize_camel_case() {
+		let tokens = tokenize("FluidOrchestrator");
+		assert!(tokens.contains(&"fluid".to_string()));
+		assert!(tokens.contains(&"orchestrator".to_string()));
+		assert!(tokens.contains(&"fluidorchestrator".to_string()));
+	}
+
+	#[test]
+	fn test_tokenize_snake_case() {
+		let tokens = tokenize("build_system_prompt");
+		assert!(tokens.contains(&"build".to_string()));
+		assert!(tokens.contains(&"system".to_string()));
+		assert!(tokens.contains(&"prompt".to_string()));
+	}
+
+	#[test]
+	fn test_tokenize_mixed() {
+		let tokens = tokenize("getHTTPResponse");
+		assert!(tokens.contains(&"get".to_string()));
+		assert!(tokens.contains(&"http".to_string()));
+		assert!(tokens.contains(&"response".to_string()));
+	}
 
 	#[test]
 	fn bm25_prefers_exact_symbol_match() {
@@ -176,4 +245,4 @@ mod tests {
 		let hits = index.search("CodeTool", 5);
 		assert_eq!(hits.first().map(|hit| hit.label.as_str()), Some("tools/code.ts::CodeTool"));
 	}
-}
+	}

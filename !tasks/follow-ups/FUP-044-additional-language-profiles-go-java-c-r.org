@@ -1,0 +1,182 @@
+#+TITLE: Additional Language Profiles Go Java C Ruby
+#+STATE: ITEM
+#+SESSION_ID: 14b6b08f5a1d2fb1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T17-18-01-064Z_14b6b08f5a1d2fb1.jsonl]]
+#+CUSTOM_ID: FUP-044-additional-language-profiles-go-java-c-r
+#+EFFORT: 4h
+#+PRIORITY: C
+#+LAYER: engine
+
+* Initial Message
+
+This is what an agent found out after using the new affordances of the `code` tool:
+
+I exercised the code subtools against this repo and inspected the tool prompt/types. Short version:
+
+ It is very useful, but uneven. The graph-backed subtools are strong. The file-local navigation/editing layer is promising but rougher.
+
+ What I checked directly:
+ - status, index, search, context, impact, deps, flow, dead_code, clusters
+ - languages
+ - outline
+ - read at resolutions 1, 2, 3
+ - navigate with node-at, defun-at, siblings, children, parent, references-local
+ - inspected packages/coding-agent/src/prompts/tools/code.md, packages/coding-agent/src/tools/code.ts, packages/emacs/src/types.ts
+
+ What worked well
+
+ - outline: excellent
+     - Fast structural map of a file.
+     - On packages/coding-agent/src/system-prompt.ts it returned top-level symbols, signatures, exported flags, and child structure cleanly.
+     - This is the best “what is in this file?” tool.
+ - read:
+     - Resolution 1: good API skim.
+     - Resolution 2: very good structural read.
+     - Resolution 3: good targeted body read.
+     - This is much more ergonomic than dumping raw source immediately.
+ - status / index:
+     - Clear and useful.
+     - In this repo the graph reported:
+           - 2291 files
+           - 17899 symbols
+           - 46313 edges
+     - This gives confidence the graph is substantial enough to be useful.
+ - context:
+     - High-value.
+     - For packages/coding-agent/src/system-prompt.ts::buildSystemPrompt, it returned callers, callees, imports, and importers in one shot.
+     - This is one of the best subtools.
+ - impact:
+     - High-value for refactors.
+     - It gave depth-grouped blast radius for the same symbol.
+     - Good for “what breaks if I touch this?”
+ - flow:
+     - Good for forward tracing.
+     - Useful when you want downstream execution shape, not just static callers.
+ - deps:
+     - Good at file-level import topology.
+     - Useful when deciding refactor boundaries.
+ - languages:
+     - Clear and practical.
+     - It showed broad installed grammar support, so the file-scoped tooling has a large surface area.
+
+ What was mediocre
+
+ - search:
+     - Useful, but not exact enough to be your only search tool.
+     - It worked well for buildSystemPrompt.
+     - It failed on some exact-looking queries like FluidOrchestrator and TaskExecutor.
+     - Broader BM25-ish queries like queue orchestrator found the fluid orchestrator files.
+     - Conclusion: good semantic-ish repo search, bad exact-symbol oracle.
+ - buffers / diff:
+     - Conceptually useful, but session-dependent.
+     - buffers returned nil/no data when no managed buffer was open.
+     - So it is useful inside an edit workflow, not as a general-purpose standalone inspection tool.
+
+ What was rough
+
+ - navigate:
+     - Mixed at best.
+     - siblings and children returned usable structure.
+     - node-at, defun-at, and parent returned:
+           - Tool "code-navigate" returned no text content block
+     - references-local was especially shaky: when I asked for resolvedCwd, it returned references for const, not the symbol I wanted.
+     - So the navigation family is not yet ergonomic enough to trust blindly.
+ - dead_code:
+     - Too noisy on a repo this size.
+     - It returned thousands of items and obvious duplicates.
+     - Example: repeated Agent.sessionId, providerSessionState, etc.
+     - Useful for a cleanup campaign, not for routine work.
+ - clusters:
+     - Also noisy.
+     - Top results were many one-file, zero-symbol clusters, which are not immediately actionable.
+     - Might be useful for architecture research, but not ergonomic for day-to-day work.
+
+ Important ergonomics mismatch I found
+
+ There is some surface-area drift between docs/schema/types:
+ - Tool prompt advertises edit ops like splice-self, splice-down, transpose
+ - Tool schema in packages/coding-agent/src/tools/code.ts also advertises them
+ - But packages/emacs/src/types.ts omits them from CodeEditOperation
+ - The Elisp backend does support them
+
+ So the backend is richer than one TS type says. That kind of mismatch hurts confidence and discoverability.
+
+ There is also a smaller doc mismatch:
+ - schema includes navigate action parent
+ - prompt text emphasizes other actions more than parent
+ - actual runtime for parent looked flaky anyway
+
+ My overall assessment
+
+ Usefulness: high
+ Ergonomics: medium
+
+ If I score the subtool families:
+
+ - outline, read, context, impact, deps, flow, status, index: 4.5/5
+ - search: 3/5
+ - languages: 3.5/5
+ - buffers, diff: 3/5 inside an edit session, 2/5 otherwise
+ - navigate: 2/5 currently
+ - dead_code, clusters: 2/5 for daily use, 3/5 for offline architecture analysis
+ - edit, install_grammar: potentially useful, but I did not do destructive/runtime-changing calls here
+
+ Best way to think about it
+
+ It is really two tools under one name:
+
+ - Emacs-backed structural file tool
+     - best for outline, read, maybe edit
+ - Native codegraph tool
+     - best for context, impact, deps, flow, status, index
+
+ That split matters because the graph side feels more reliable than the local navigation side.
+
+ Practical recommendation
+
+ Use code aggressively for:
+ - file orientation
+ - structural reading
+ - blast radius
+ - import topology
+ - call graph exploration
+
+ Do not use it alone for:
+ - exact symbol lookup
+ - exact definitions/types
+ - exact code-pattern search
+
+ For those, pair it with:
+ - lsp for exact semantic questions
+ - grep / ast_grep for exact text or syntax shapes
+
+ Bottom line
+
+ The codegraph half is genuinely valuable and can save a lot of time on nontrivial refactors. The local navigation/editing half is not yet
+ ergonomic enough to be a universal default. If you use the strong subtools and avoid over-trusting navigate, it is a net win.
+
+Please gain your own understanding of them and explain to me how you'd get it to a 5/5. This is exploratory first, I want us to talk to each other before we settle on any decision. Dialectic imagination.
+
+* Context
+
+After pi-code-engine is proven with TypeScript, Rust, Python, and Elixir profiles, add profiles for additional languages. Each profile is a YAML file following the format in =specs/pi-code-engine-spec.md= section 4, plus adding the grammar crate to Cargo.toml for build-time production rule generation.
+
+See =specs/maybe-brainstorm/additional-language-profiles.md= for priority order and per-language notes.
+
+* Priority Order
+1. Go — strong grammar, simple imports
+2. Java — structured grammar, common language
+3. C/C++ — complex headers, start with symbol extraction only
+4. Ruby — convention-based, good grammar
+
+* Per Language: Add Profile YAML + Grammar Crate + Tests
+
+For each language:
+1. Add =tree-sitter-<lang>= to =pi-code-engine/Cargo.toml=
+2. Create YAML profile in the built-in profiles
+3. Add language to =LanguageRegistry::with_builtins()=
+4. Write tests: outline a fixture file, verify declarations/imports found
+5. Verify graph extracts symbols from files of that language
+
+* Depends On
+This depends on the entire pi-code-engine being functional and the profile-driven graph extractor working.

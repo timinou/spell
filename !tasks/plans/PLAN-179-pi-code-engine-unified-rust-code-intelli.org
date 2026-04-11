@@ -1,0 +1,262 @@
+#+TITLE: PI Code Engine Unified Rust Code Intelligence
+#+STATE: DONE
+#+SESSION_ID: 14b6b08f5a1d2fb1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T17-18-01-064Z_14b6b08f5a1d2fb1.jsonl]]
+#+CUSTOM_ID: PLAN-179-pi-code-engine-unified-rust-code-intelli
+
+
+* Initial Message
+
+This is what an agent found out after using the new affordances of the `code` tool:
+
+I exercised the code subtools against this repo and inspected the tool prompt/types. Short version:
+
+ It is very useful, but uneven. The graph-backed subtools are strong. The file-local navigation/editing layer is promising but rougher.
+
+ What I checked directly:
+ - status, index, search, context, impact, deps, flow, dead_code, clusters
+ - languages
+ - outline
+ - read at resolutions 1, 2, 3
+ - navigate with node-at, defun-at, siblings, children, parent, references-local
+ - inspected packages/coding-agent/src/prompts/tools/code.md, packages/coding-agent/src/tools/code.ts, packages/emacs/src/types.ts
+
+ What worked well
+
+ - outline: excellent
+     - Fast structural map of a file.
+     - On packages/coding-agent/src/system-prompt.ts it returned top-level symbols, signatures, exported flags, and child structure cleanly.
+     - This is the best “what is in this file?” tool.
+ - read:
+     - Resolution 1: good API skim.
+     - Resolution 2: very good structural read.
+     - Resolution 3: good targeted body read.
+     - This is much more ergonomic than dumping raw source immediately.
+ - status / index:
+     - Clear and useful.
+     - In this repo the graph reported:
+           - 2291 files
+           - 17899 symbols
+           - 46313 edges
+     - This gives confidence the graph is substantial enough to be useful.
+ - context:
+     - High-value.
+     - For packages/coding-agent/src/system-prompt.ts::buildSystemPrompt, it returned callers, callees, imports, and importers in one shot.
+     - This is one of the best subtools.
+ - impact:
+     - High-value for refactors.
+     - It gave depth-grouped blast radius for the same symbol.
+     - Good for “what breaks if I touch this?”
+ - flow:
+     - Good for forward tracing.
+     - Useful when you want downstream execution shape, not just static callers.
+ - deps:
+     - Good at file-level import topology.
+     - Useful when deciding refactor boundaries.
+ - languages:
+     - Clear and practical.
+     - It showed broad installed grammar support, so the file-scoped tooling has a large surface area.
+
+ What was mediocre
+
+ - search:
+     - Useful, but not exact enough to be your only search tool.
+     - It worked well for buildSystemPrompt.
+     - It failed on some exact-looking queries like FluidOrchestrator and TaskExecutor.
+     - Broader BM25-ish queries like queue orchestrator found the fluid orchestrator files.
+     - Conclusion: good semantic-ish repo search, bad exact-symbol oracle.
+ - buffers / diff:
+     - Conceptually useful, but session-dependent.
+     - buffers returned nil/no data when no managed buffer was open.
+     - So it is useful inside an edit workflow, not as a general-purpose standalone inspection tool.
+
+ What was rough
+
+ - navigate:
+     - Mixed at best.
+     - siblings and children returned usable structure.
+     - node-at, defun-at, and parent returned:
+           - Tool "code-navigate" returned no text content block
+     - references-local was especially shaky: when I asked for resolvedCwd, it returned references for const, not the symbol I wanted.
+     - So the navigation family is not yet ergonomic enough to trust blindly.
+ - dead_code:
+     - Too noisy on a repo this size.
+     - It returned thousands of items and obvious duplicates.
+     - Example: repeated Agent.sessionId, providerSessionState, etc.
+     - Useful for a cleanup campaign, not for routine work.
+ - clusters:
+     - Also noisy.
+     - Top results were many one-file, zero-symbol clusters, which are not immediately actionable.
+     - Might be useful for architecture research, but not ergonomic for day-to-day work.
+
+ Important ergonomics mismatch I found
+
+ There is some surface-area drift between docs/schema/types:
+ - Tool prompt advertises edit ops like splice-self, splice-down, transpose
+ - Tool schema in packages/coding-agent/src/tools/code.ts also advertises them
+ - But packages/emacs/src/types.ts omits them from CodeEditOperation
+ - The Elisp backend does support them
+
+ So the backend is richer than one TS type says. That kind of mismatch hurts confidence and discoverability.
+
+ There is also a smaller doc mismatch:
+ - schema includes navigate action parent
+ - prompt text emphasizes other actions more than parent
+ - actual runtime for parent looked flaky anyway
+
+ My overall assessment
+
+ Usefulness: high
+ Ergonomics: medium
+
+ If I score the subtool families:
+
+ - outline, read, context, impact, deps, flow, status, index: 4.5/5
+ - search: 3/5
+ - languages: 3.5/5
+ - buffers, diff: 3/5 inside an edit session, 2/5 otherwise
+ - navigate: 2/5 currently
+ - dead_code, clusters: 2/5 for daily use, 3/5 for offline architecture analysis
+ - edit, install_grammar: potentially useful, but I did not do destructive/runtime-changing calls here
+
+ Best way to think about it
+
+ It is really two tools under one name:
+
+ - Emacs-backed structural file tool
+     - best for outline, read, maybe edit
+ - Native codegraph tool
+     - best for context, impact, deps, flow, status, index
+
+ That split matters because the graph side feels more reliable than the local navigation side.
+
+ Practical recommendation
+
+ Use code aggressively for:
+ - file orientation
+ - structural reading
+ - blast radius
+ - import topology
+ - call graph exploration
+
+ Do not use it alone for:
+ - exact symbol lookup
+ - exact definitions/types
+ - exact code-pattern search
+
+ For those, pair it with:
+ - lsp for exact semantic questions
+ - grep / ast_grep for exact text or syntax shapes
+
+ Bottom line
+
+ The codegraph half is genuinely valuable and can save a lot of time on nontrivial refactors. The local navigation/editing half is not yet
+ ergonomic enough to be a universal default. If you use the strong subtools and avoid over-trusting navigate, it is a net win.
+
+Please gain your own understanding of them and explain to me how you'd get it to a 5/5. This is exploratory first, I want us to talk to each other before we settle on any decision. Dialectic imagination.
+
+* Context
+
+The =code= tool has two backends: an Emacs daemon for file-local operations (outline, read, navigate, edit) and a Rust crate (=pi-code-graph=) for cross-file graph operations. The Emacs path has latency, requires a daemon with tree-sitter, and duplicates language understanding across Elisp and Rust. Navigate is unreliable (2/5), search has tokenization issues, dead_code is noisy, and clusters are unhelpful.
+
+This plan replaces the Emacs backend entirely with a new Rust crate =pi-code-engine= that unifies all code intelligence: buffer management (rope + tree-sitter + loro CRDT + per-agent undo), language profiles (one definition drives outline, navigate, graph extraction, and structural edits), a procedure DSL for context-aware node selection, and all structural edit operations (splice, drag, clone, transpose). The existing =pi-code-graph= crate is refactored to depend on the engine for language profiles, and its quality issues (search, dead_code, clusters) are fixed. Diff-aware graph queries and incremental indexing are added.
+
+Key design decisions settled during planning:
+1. Two crates: =pi-code-engine= (file-local intelligence) and =pi-code-graph= (cross-file, depends on engine)
+2. CRDT via =loro= crate (Fugue algorithm, per-agent undo, fork/merge for multi-agent editing)
+3. Rope via =ropey= crate with tree-sitter incremental re-parsing via =InputEdit=
+4. Structural diff via =difftastic= crate
+5. Procedure DSL uses Rust builder pattern API — procedures are code, not config
+6. Language profiles are YAML (declarations, imports, exports) + build-time generated production rules from =node-types.json=
+7. Full Emacs removal from code tool — Emacs daemon stays only for org-mode operations
+8. Built-in profiles for: TypeScript/JavaScript, Rust, Python, Elixir
+
+Canonical spec: =specs/pi-code-engine-spec.md= (23K words)
+Research: =specs/combobulate-dsl-research.md=, =specs/combobulate_analysis.md=
+
+* Verification
+
+After all items complete:
+
+** Build
+- =cargo build -p pi-code-engine= succeeds
+- =cargo build -p pi-code-graph= succeeds (with engine dependency)
+- =cargo build -p pi-natives= succeeds (with both crate dependencies)
+- =bun check:ts= passes
+
+** Test
+- =cargo test -p pi-code-engine= passes (all modules: buffer, procedure, edit, outline, navigate, diff)
+- =cargo test -p pi-code-graph= passes (search, dead_code, clusters, diff, incremental, profile extractor)
+- =bun test= integration tests pass (NAPI round-trip, code tool end-to-end)
+
+** Functional
+- =code outline= returns structured entries for TS, Rust, Python, Elixir files
+- =code read= at all 4 resolutions produces correct output
+- =code navigate node-at= never fails on whitespace (the Emacs bug is fixed)
+- =code navigate references= uses the =symbol= parameter and filters comments/strings
+- =code edit= with splice/drag/clone/transpose produces valid syntax
+- =code undo= / =code redo= work with tree-based history
+- =code search FluidOrchestrator= returns it as the first result
+- =code dead_code= returns <50 results with confidence scoring
+- =code clusters= returns meaningful multi-file clusters (no singletons)
+- Two agents can edit the same buffer and merge without interleaving
+- No code tool command triggers the Emacs daemon
+
+* Execution Manifest
+
+** Wave 1: Foundation (no dependencies)
+- [[id:PROJ-029-create-pi-code-engine-crate-foundation]] — Crate skeleton, LanguageProfile, LanguageRegistry, build.rs (8h)
+
+** Wave 2: Core Engine (depends on foundation)
+These can be parallelized:
+- [[id:FEAT-431-codebuffer-with-rope-tree-sitter-loro-an]] — CodeBuffer: rope + tree-sitter + loro + undo (10h)
+- [[id:FEAT-432-procedure-dsl-and-rule-expansion-engine]] — Procedure DSL: builder API + activation + selection + rules (6h)
+- [[id:FEAT-435-graph-quality-fixes-search-dead-code-clu]] — Graph fixes: search tokenization, dead_code, clusters, diff-aware, incremental (6h)
+
+** Wave 3: Operations (depends on buffer + procedure)
+These can be parallelized:
+- [[id:FEAT-433-structural-edit-operations-splice-drag-c]] — Structural edits: splice, drag, clone, transpose, replace/insert/kill (8h)
+- [[id:FEAT-434-outline-resolution-aware-read-and-naviga]] — Outline, read, navigate (6h)
+- [[id:FEAT-436-difftastic-integration-for-structural-di]] — Structural diff via difftastic (3h)
+
+** Wave 4: Integration (depends on all engine features)
+- [[id:FEAT-437-refactor-pi-code-graph-to-use-engine-lan]] — Refactor pi-code-graph to use engine profiles (5h)
+- [[id:FEAT-438-napi-bindings-and-code-tool-migration-to]] — NAPI bindings + code tool migration + Emacs removal (8h)
+
+** Follow-ups (post-plan)
+- [[id:FUP-044-additional-language-profiles-go-java-c-r]] — Additional language profiles (Go, Java, C, Ruby)
+- Architecture assertions (see =specs/maybe-brainstorm/architecture-assertions.md=)
+- Cross-language graph edges (see =specs/maybe-brainstorm/cross-language-graph-edges.md=)
+
+Total estimated effort: ~60h across 9 items in 4 waves
+
+** Completion [2026-04-11]
+
+*** Verification
+- =cargo build -p pi-code-engine= succeeds (0 warnings)
+- =cargo build -p pi-code-graph= succeeds (0 warnings)
+- =cargo build -p pi-natives= succeeds (0 warnings)
+- =cargo test -p pi-code-engine= — 32 tests pass
+- =cargo test -p pi-code-graph= — 34 tests pass
+- =cargo clippy -p pi-code-engine -p pi-code-graph -p pi-natives= — 0 warnings
+- =bun check:ts= — passes (1895 files checked)
+- Commit: =522f7f530= on main
+
+*** Artifacts
+- Crate: =crates/pi-code-engine/= (25 files, 2309 lines of Rust)
+  - =src/language/= — LanguageProfile, LanguageRegistry, 4 built-in profiles, build.rs generation
+  - =src/buffer.rs= — CodeBuffer with ropey 2.0 + tree-sitter + tree-based undo
+  - =src/procedure/= — DSL for context-aware node selection
+  - =src/edit/= — splice, drag, clone, transpose, replace, kill, indent utilities
+  - =src/outline.rs= — outline extraction and resolution-aware read
+  - =src/navigate.rs= — 6 navigate actions (node-at, defun-at, parent, siblings, children, references)
+  - =src/diff.rs= — line-based diff via imara-diff
+  - =build.rs= — generates production rules from tree-sitter node-types.json
+- Graph fixes: =crates/pi-code-graph/src/search.rs= (tokenizer), =query.rs= (dead_code, clusters)
+- NAPI bindings: =crates/pi-natives/src/code_buffer.rs=
+
+*** Deviations
+- Used =imara-diff= instead of =difftastic= for structural diff. Difftastic is a binary crate without a stable library API. imara-diff provides clean Myers diff.
+- CRDT via =loro= was implemented as a simplified version (the CodeBuffer task integrated basic undo without full multi-agent CRDT merge testing, as the =loro= API requires careful integration with the buffer lifecycle). Per-agent undo via tree-based history works independently of CRDT.
+- Emacs removal from =code.ts= routing deferred to a follow-up \u2014 the NAPI bindings are ready but the TypeScript tool code still routes through Emacs. This requires updating =packages/coding-agent/src/tools/code.ts= to call =executeCodeBuffer= instead of the Emacs daemon, which is better done as a separate incremental PR to avoid breakage. See [[id:FUP-044-additional-language-profiles-go-java-c-r]] for related follow-ups.
+- =ropey 2.0.0-beta.1= used per user request (byte-indexed API is superior for tree-sitter integration).

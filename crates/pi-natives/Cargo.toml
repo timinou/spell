@@ -15,8 +15,13 @@ workspace = true
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["full"] }
-napi = { version = "3", features = ["napi10", "tokio_rt", "tokio_time"] }
+
+napi = { version = "3", features = ["napi10", "serde-json", "tokio_rt", "tokio_time"] }
 napi-derive = "3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ropey = "=2.0.0-beta.1"
+
 brush-core = { version = "0.4.0", path = "../brush-core-vendored" }
 brush-builtins = { version = "0.1.0", path = "../brush-builtins-vendored" }
 parking_lot = "0.12.5"
@@ -34,6 +39,7 @@ ast-grep-core = { version = "0.39", default-features = false, features = [
    "tree-sitter",
 ] }
 pi-code-graph = { path = "../pi-code-graph" }
+pi-code-engine = { path = "../pi-code-engine" }
 tree-sitter = "0.25"
 tree-sitter-bash = "0.25"
 tree-sitter-c = "0.24"
