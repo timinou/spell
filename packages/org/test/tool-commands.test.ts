@@ -57,9 +57,7 @@ function makeConfig(): OrgConfig {
 }
 
 function makeTool(config?: OrgConfig): OrgToolDefinition {
-	// None of the tested commands call getEmacsSession; a rejecting factory is fine.
-	const stubEmacs = (): Promise<never> => Promise.reject(new Error("Emacs not available in tests"));
-	return createOrgTool(tmpDir, config ?? makeConfig(), stubEmacs);
+	return createOrgTool(tmpDir, config ?? makeConfig());
 }
 
 /** Seed a file-level org item into a category directory. */
@@ -231,19 +229,20 @@ describe("update section routing", () => {
 		expect(result.message).toBe("update with section cannot combine state, title, or note");
 	});
 
-	test("section with body routes through emacs client path", async () => {
-		const filePath = await seedItem("drafts", "DRAFT-005-section-route", "Section route", { state: "ITEM" });
+	test("section with body uses native engine", async () => {
+		const filePath = await seedItem("drafts", "DRAFT-005-section-route", "Section route", {
+			state: "ITEM",
+			body: "** Implementation\nOld section body\n",
+		});
 		const tool = makeTool();
-
-		await expect(
-			tool.execute({
-				command: "update",
-				id: "DRAFT-005-section-route",
-				file: filePath,
-				section: "Implementation",
-				body: "New section body",
-			}),
-		).rejects.toThrow("Emacs not available in tests");
+		const result = (await tool.execute({
+			command: "update",
+			id: "DRAFT-005-section-route",
+			file: filePath,
+			section: "Implementation",
+			body: "New section body",
+		})) as Record<string, unknown>;
+		expect(result.success).toBe(true);
 	});
 
 	test("non-section body update remains on TS mutation path", async () => {

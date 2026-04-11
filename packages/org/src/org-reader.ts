@@ -1,13 +1,10 @@
 /**
- * Basic TypeScript-based org file reader — no Emacs required.
+ * TypeScript-based org file reader.
  *
- * Provides heading + properties extraction sufficient for:
+ * Provides heading + properties extraction for:
  *   - org query (list items by state / category / priority)
  *   - org get (single item with body)
  *   - Dashboard counts (state totals)
- *
- * For full org-element AST fidelity (wave, validate, dependency graphs),
- * the Emacs-backed client supersedes this.
  *
  * Two item representations are supported:
  *
@@ -463,7 +460,6 @@ export function sortItems(items: OrgItem[], sort?: string): OrgItem[] {
  * Find a single item by CUSTOM_ID across multiple category directories.
  *
  * Scans all provided category directories and returns the first match.
- * When Emacs is available, prefer the Emacs-backed path.
  */
 export async function findItemById(
 	categoryDirs: Array<{ absPath: string; name: string; dir: string }>,

@@ -1,0 +1,152 @@
+#+TITLE: Native Org Query Engine
+#+STATE: DONE
+#+SESSION_ID: 14b6ef804762e676
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-53-00-701Z_14b6ef804762e676.jsonl]]
+#+CUSTOM_ID: FEAT-466-native-org-query-engine
+#+EFFORT: 30h
+#+PRIORITY: #A
+#+LAYER: infra
+#+DEPENDS: PROJ-031-pi-org-engine-foundation-crate
+
+NOTE [2026-04-11]: Built as part of pi-org-engine crate query module. Filter predicates, keyword syntax parser, priority comparison, effort comparison, sort, pagination. All tests pass.
+
+* Initial Message
+
+what's left to completely remove the emacs part of the code tool? clean and final break
+
+* Goal
+
+Implement a native Rust query engine in =crates/pi-org-engine/= that replaces org-ql for filtering org items. This engine supports the keyword query syntax already used by the org tool (=todo:DOING tags:auth priority:>=B=) and extends it with date range, clocked time, effort, and property comparison operators.
+
+* Design Decisions
+
+- No raw org-ql sexp support — keyword query syntax covers all needed use cases
+- The query engine operates on Vec<OrgItem> (output from the foundation crate's item extraction)
+- Filter predicates are composable via AND/OR/NOT
+- Date range queries compare item timestamps (SCHEDULED, DEADLINE, planning dates) against from/to bounds
+- Clocked queries aggregate CLOCK entries and filter by date or total minutes
+- Effort queries parse EFFORT property to minutes and compare with operators (<=, >, =)
+- Property queries support string equality (=) and numeric comparison (<, >, <=, >=)
+- Sort supports: priority, state/todo, id, category (matching current TS-side sort)
+- Pagination via limit/offset applied after filtering and sorting
+
+* Current System Reference
+
+The current =requiresEmacs()= boundary in =packages/org/src/query-builder.ts= defines what goes to Emacs:
+- dateRange, clocked, effort → requires Emacs
+- loopStatus, loopBlocked, acceptanceFailed, dependencyChain, loopDepth → requires Emacs
+- properties with op != "=" → requires Emacs
+- Composite (and/or/not containing above) → requires Emacs
+
+The native engine replaces ALL of these. After migration, =requiresEmacs()= always returns false and is deleted.
+
+* OrgQlFilter Type (Rust equivalent)
+
+#+begin_src rust
+#[derive(Debug, Clone, Deserialize)]
+pub struct OrgQlFilter {
+    pub todo: Option<Vec<String>>,
+    pub tags: Option<Vec<String>>,
+    pub priority: Option<PriorityFilter>,   // { op: ">="|"<="|"=", value: "A"|"B"|"C" }
+    pub properties: Option<Vec<PropertyFilter>>, // { key, value, op: "="|">"|"<"|">="|"<=" }
+    pub date_range: Option<DateRangeFilter>,  // { from?: date_str, to?: date_str }
+    pub clocked: Option<ClockedFilter>,       // { on?: date_str, from?: date_str }
+    pub effort: Option<EffortFilter>,         // { op: "<="|">"|"=", value: effort_str }
+    pub text: Option<String>,                 // full-text body search
+    pub and: Option<Vec<OrgQlFilter>>,
+    pub or: Option<Vec<OrgQlFilter>>,
+    pub not: Option<Box<OrgQlFilter>>,
+}
+#+end_src
+
+* Keyword Query Syntax Parser
+
+Current implementation in =packages/org/src/query-builder.ts= function =parseKeywordQuery()=:
+- =todo:DOING= → filter by TODO state
+- =tags:auth,security= → filter by tags (comma-separated)
+- =priority:>=B= → priority comparison
+- =layer:infra= → property equality shorthand
+- =effort:<=2h= → effort comparison
+- Free text → body text search
+
+The Rust implementation should parse the same syntax into OrgQlFilter.
+
+* Files to Create/Modify
+
+** =crates/pi-org-engine/src/query/mod.rs=
+- =pub mod filter;=
+- =pub mod keyword;=
+- =pub mod sort;=
+
+** =crates/pi-org-engine/src/query/filter.rs=
+- =OrgQlFilter= struct (above)
+- =PriorityFilter=, =PropertyFilter=, =DateRangeFilter=, =ClockedFilter=, =EffortFilter= structs
+- =matches(item: &OrgItem, filter: &OrgQlFilter) -> bool=: evaluate filter against single item
+  - todo: item.state in filter.todo list
+  - tags: all filter.tags present in item's tags
+  - priority: compare item priority (A > B > C) with operator
+  - properties: find property, compare value (string or numeric)
+  - date_range: parse timestamps from body/planning, check if in range
+  - clocked: parse CLOCK entries from body, check date or total
+  - effort: parse EFFORT property, compare minutes
+  - text: case-insensitive substring search in body
+  - and: all sub-filters match
+  - or: any sub-filter matches
+  - not: sub-filter does not match
+- =filter_items(items: &[OrgItem], filter: &OrgQlFilter) -> Vec<&OrgItem>=
+
+** =crates/pi-org-engine/src/query/keyword.rs=
+- =parse_keyword_query(query: &str) -> OrgQlFilter=: parse "todo:DOING tags:auth priority:>=B" syntax
+- Handle: todo:, tags:, priority:, layer:, effort:, free text
+
+** =crates/pi-org-engine/src/query/sort.rs=
+- =SortKey= enum: Priority, State, Id, Category
+- =sort_items(items: &mut [&OrgItem], keys: &[SortKey])=
+- Priority ordering: A > B > C (A is highest)
+- State ordering: DOING > REVIEW > ITEM > INIT > BLOCKED > DONE
+
+* Testing (Rust unit tests)
+
+** filter.rs tests
+- todo filter: items with state DOING/ITEM/DONE, filter todo:DOING → only DOING items
+- tags filter: items with tags [:auth, :api], [:auth], [:ui], filter tags:auth → first two
+- priority filter: items A/B/C, filter priority:>=B → A and B
+- property equality: filter for LAYER=infra → matching items
+- property numeric: EFFORT "2h" with op ">" and value "1h" → matches (120 > 60)
+- date_range: items with timestamps, filter within range → correct subset
+- clocked: items with CLOCK entries, filter clocked on specific date → correct subset
+- effort: items with EFFORT 2h/30m/4h, filter effort:<=2h → 2h and 30m
+- text: body contains "authentication" → matches
+- composite AND: todo:DOING AND tags:auth → intersection
+- composite OR: tags:auth OR tags:api → union
+- NOT: NOT todo:DONE → all non-DONE items
+- Empty filter: returns all items
+
+** keyword.rs tests
+- "todo:DOING" → OrgQlFilter { todo: Some(vec!["DOING"]) }
+- "todo:DOING tags:auth" → filter with both fields
+- "priority:>=B" → PriorityFilter { op: ">=", value: "B" }
+- "effort:<=2h" → EffortFilter { op: "<=", value: "2h" }
+- "authentication" → OrgQlFilter { text: Some("authentication") }
+- Mixed: "todo:DOING tags:auth priority:>=B some text" → all fields populated
+
+** sort.rs tests
+- Sort by priority: C, A, B → A, B, C
+- Sort by state: DONE, DOING, ITEM → DOING, ITEM, DONE
+- Sort by id: FEAT-003, FEAT-001, FEAT-002 → FEAT-001, FEAT-002, FEAT-003
+- Multi-key: priority then state
+
+* Verification
+
+- =cargo test -p pi-org-engine -- query= passes all listed test scenarios
+- =cargo clippy -p pi-org-engine -- -D warnings= clean
+
+* Edge Cases
+
+- Priority "#A" vs "A" normalization (org format uses #A, internal comparison uses A)
+- Effort "0h" matches effort:<=1h (0 <= 60)
+- Empty tags list: matches nothing (not everything)
+- Date parsing: "2024-01-15" bare date vs org timestamp format
+- Property with no value: =:KEY:= (empty value) should match property existence check
+- Unicode in text search
+- Case sensitivity: tag matching is case-sensitive (org convention), text search is case-insensitive

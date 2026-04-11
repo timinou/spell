@@ -1,5 +1,5 @@
 /**
- * Raw org file writer — no Emacs required.
+ * Raw org file writer.
  *
  * Two item representations:
  *

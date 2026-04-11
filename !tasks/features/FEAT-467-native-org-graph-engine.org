@@ -1,0 +1,177 @@
+#+TITLE: Native Org Graph Engine
+#+STATE: DONE
+#+SESSION_ID: 14b6ef804762e676
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-53-00-701Z_14b6ef804762e676.jsonl]]
+#+CUSTOM_ID: FEAT-467-native-org-graph-engine
+#+EFFORT: 30h
+#+PRIORITY: #A
+#+LAYER: infra
+#+DEPENDS: PROJ-031-pi-org-engine-foundation-crate
+
+NOTE [2026-04-11]: Built as part of pi-org-engine crate graph module. DAG construction, iterative DFS cycle detection, Kahn's algorithm for waves, union-find connected components. All tests pass.
+
+* Initial Message
+
+what's left to completely remove the emacs part of the code tool? clean and final break
+
+* Goal
+
+Implement native Rust graph algorithms in =crates/pi-org-engine/= that replace the elisp implementations in =packages/org/elisp/tools/=. These algorithms operate on org task items to compute dependency graphs, detect cycles, compute execution waves, and decompose into connected components.
+
+This replaces: =org-dependency-graph.el=, =org-next-wave.el=, =org-compute-waves.el=, =org-fluid-plan.el=.
+
+* Design Decisions
+
+- All graph algorithms are iterative (not recursive) to avoid stack overflow on deep dependency chains
+- Union-find uses path compression + union by rank for O(alpha(n)) amortized operations
+- Wave computation uses Kahn's algorithm (BFS-based topological sort)
+- Cycle detection uses iterative 3-color DFS
+- DEPENDS/BLOCKS properties are space-separated CUSTOM_ID lists (e.g., =FEAT-001 FEAT-002=)
+- Hierarchical IDs: =FEAT-001::sub-task= syntax means sub-task depends on parent FEAT-001
+- Wave cap: next-wave returns at most 8 items, sorted by priority
+- State filtering: DONE/BLOCKED items are excluded from wave computation
+- Missing dependency IDs are reported as warnings, not errors
+
+* Algorithms (ported from elisp)
+
+** Dependency Graph (replaces org-dependency-graph.el)
+
+Input: list of OrgItems from one or more files
+Output: { nodes: [{ id, title, state }], edges: [{ from, to, type }], cycles: [[id, ...]] }
+
+1. Collect all items, extract CUSTOM_ID, DEPENDS, BLOCKS properties
+2. Build adjacency list: for each item, DEPENDS → edges TO dependency, BLOCKS → edges FROM blocker
+3. Run iterative 3-color DFS for cycle detection:
+   - WHITE (unvisited) → GRAY (in progress) → BLACK (finished)
+   - If we visit a GRAY node from another GRAY node → cycle found
+   - Collect all cycle paths
+4. Return nodes, edges, and cycles as JSON
+
+** Next Wave (replaces org-next-wave.el)
+
+Input: list of OrgItems, optional files list
+Output: { wave: number, items: [OrgItem], total: number }
+
+1. Build dependency map from DEPENDS properties
+2. Build state map: id → state
+3. Compute wave number via iterative BFS:
+   - Wave 1 = items with no deps
+   - Wave N = items whose deps are all in waves < N
+   - Current wave = first wave with incomplete (non-DONE) items
+4. Filter eligible items: all deps DONE, state not DONE/BLOCKED
+5. Sort by priority (A > B > C), cap at 8
+6. Return current wave number, eligible items, total count
+
+** Connected Components (replaces org-fluid-plan.el union-find)
+
+Input: list of OrgItems with dependency edges
+Output: list of component groups, each containing member IDs
+
+1. Initialize union-find: each item ID is its own parent, rank 0
+2. For each dependency edge (A depends on B): union(A, B)
+3. Group items by their root (with path compression)
+4. Return components sorted by size (largest first)
+
+** Wave Computation per Component (replaces org-fluid-plan.el Kahn's)
+
+Input: component item IDs, forward adjacency (id → list of successors)
+Output: list of waves [{ number: N, items: [id1, id2, ...] }]
+
+1. Compute in-degree for each component item
+2. Seed queue with in-degree 0 nodes
+3. Process wave by wave:
+   - Current wave = all items in queue
+   - For each item, decrement successors' in-degree
+   - New queue = items with in-degree 0
+4. Sort items within each wave alphabetically (deterministic output)
+5. If processed count != total items → cycle exists in component
+
+** Sub-outline Waves (replaces org-compute-waves.el)
+
+Input: parent item ID, sub-items with =parent::child= ID syntax
+Output: wave layers for sub-items
+
+Same as wave computation but scoped to items whose ID starts with =parent::=.
+
+* Files to Create
+
+** =crates/pi-org-engine/src/graph/mod.rs=
+- =pub mod dag;=
+- =pub mod cycle;=
+- =pub mod wave;=
+- =pub mod components;=
+
+** =crates/pi-org-engine/src/graph/dag.rs=
+- =DependencyDag= struct: nodes, adjacency (forward + reverse), edge list
+- =build_dag(items: &[OrgItem]) -> DependencyDag=: parse DEPENDS/BLOCKS, build adjacency
+- =DagNode= struct: id, title, state
+- =DagEdge= struct: from, to, edge_type (depends/blocks)
+
+** =crates/pi-org-engine/src/graph/cycle.rs=
+- =detect_cycles(dag: &DependencyDag) -> Vec<Vec<String>>=: iterative 3-color DFS
+- Uses explicit stack (Vec<StackFrame>) instead of recursion
+- Returns list of cycle paths (each a list of CUSTOM_IDs)
+
+** =crates/pi-org-engine/src/graph/wave.rs=
+- =compute_waves(dag: &DependencyDag) -> Vec<Wave>=: Kahn's algorithm
+- =Wave= struct: number (usize), items (Vec<String>)
+- =next_wave(items: &[OrgItem], dag: &DependencyDag, cap: usize) -> NextWaveResult=
+  - Filters eligible items (deps all DONE, state not DONE/BLOCKED)
+  - Sorts by priority, caps at =cap= (default 8)
+  - Computes current wave number
+- =NextWaveResult= struct: wave (usize), items (Vec<OrgItem>), total (usize)
+
+** =crates/pi-org-engine/src/graph/components.rs=
+- =UnionFind= struct: parent (HashMap), rank (HashMap)
+- =new(ids)=, =find(id) -> root= (with path compression), =union(a, b)=
+- =compute_components(items: &[OrgItem], dag: &DependencyDag) -> Vec<Component>=
+- =Component= struct: root_id, member_ids, waves (Vec<Wave>)
+
+* Testing (Rust unit tests)
+
+Port the test scenarios from elisp ERT tests (=test-org-fluid-plan.el=, =org-wave-graph-test.el=):
+
+** dag.rs tests
+- Linear chain: A→B→C, verify 3 nodes, 2 edges
+- Diamond: A→B, A→C, B→D, C→D, verify 4 nodes, 4 edges
+- BLOCKS property: A blocks B → edge from A to B
+- Mixed DEPENDS/BLOCKS: verify both edge types
+- Missing dep: A depends on X (not in items) → warning, no edge
+
+** cycle.rs tests
+- Acyclic: A→B→C → no cycles
+- Simple cycle: A→B→C→A → one cycle [A, B, C, A]
+- Self-loop: A→A → cycle [A, A]
+- Diamond (no cycle): A→B, A→C, B→D, C→D → no cycles
+- Multiple cycles: A→B→A and C→D→C → two cycles
+
+** wave.rs tests
+- All roots (no deps): A, B, C → wave 1: [A, B, C]
+- Linear: A→B→C → wave 1: [A], wave 2: [B], wave 3: [C]
+- Diamond: A→C, B→C → wave 1: [A, B], wave 2: [C]
+- next_wave with DONE deps: A(DONE)→B(ITEM) → B is eligible
+- next_wave with pending deps: A(ITEM)→B(ITEM) → B is NOT eligible
+- next_wave priority sorting: B(#C), A(#A) → returns [A, B]
+- next_wave cap: 10 eligible items, cap 8 → returns 8
+
+** components.rs tests
+- Disjoint: A→B, C→D → 2 components: {A,B}, {C,D}
+- Connected: A→B→C → 1 component: {A,B,C}
+- Isolated node with no deps: separate component
+- Path compression: verify find() returns consistent roots
+
+* Verification
+
+- =cargo test -p pi-org-engine -- graph= passes all listed test scenarios
+- =cargo clippy -p pi-org-engine -- -D warnings= clean
+- Test output matches elisp test expectations from =test-org-fluid-plan.el=
+
+* Edge Cases
+
+- Empty items list: return empty graph, no waves, no components
+- Single item with no deps: wave 1, one component
+- All items DONE: next_wave returns empty list, wave number = max+1
+- Circular dependency: correctly detected and reported, wave computation degrades gracefully
+- Whitespace in DEPENDS: "FEAT-001  FEAT-002" (double space) → trimmed correctly
+- Hierarchical IDs: "FEAT-001::sub-1" depends on "FEAT-001" implicitly
+- DEPENDS referencing non-existent ID: logged as warning, edge not created
