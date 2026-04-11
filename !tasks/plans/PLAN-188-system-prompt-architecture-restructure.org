@@ -1,0 +1,86 @@
+#+TITLE: System prompt architecture restructure
+#+STATE: DONE
+#+SESSION_ID: 14b6da06bfab9131
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-19-11-230Z_14b6da06bfab9131.jsonl]]
+#+CUSTOM_ID: PLAN-188-system-prompt-architecture-restructure
+
+
+* Initial Message
+
+Read about caveman-phd and the system prompt and let's exchange on your ideal format. Rid it from the labels and make it yours.
+
+* Context
+
+The system prompt is the agent's declaration of being — mirror, compass, handbook.
+
+Its content is already well-compressed (thinking-mode, behavior, code-integrity, design integrity
+all received token-reduction passes in a prior session). But the *structure* buries the compass
+(Contract, Design Integrity) at position ~75%, after 2000+ tokens of tool documentation.
+
+Research-backed finding: critical instructions at START and END retain 20%+ better than
+middle-positioned content. Contract and Design Integrity are the most critical behavioral
+content and belong in the Identity section, not after tool reference material.
+
+** Approach
+
+1. Reorder system-prompt.md: move Contract and Design Integrity from the "Rules" section
+   into the "Identity" section (after =<stakes>=)
+2. Rename "Rules" section separator to "Procedure" (only Procedure content remains)
+3. Add two minor refinements to the thinking-mode block (abbreviation hints, compression guard)
+4. Verify AGENTS.md boundary remains clean post-restructure
+5. Architectural spec written to =specs/system-prompt-architecture.md= for cross-session reference
+
+** Key Decisions
+
+- Section order: Workspace → Identity (absorbs Contract + Design Integrity) → Environment → Procedure → Now
+- Contract position: after =<stakes>=, before Environment — urgency primes absolute constraints
+- Cache boundary: unchanged (between Procedure and Now)
+- AGENTS.md: no changes — clean boundary, different concern (project conventions vs behavioral identity)
+- caveman.md: no changes — correctly placed in dynamic appendPrompt
+- Thinking-mode: add abbreviation examples + "Compression ≠ simplification" guard
+
+* Verification
+
+#+begin_src bash
+# Type check
+bun check:ts
+
+# Run system prompt template tests
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+
+# Verify section order in rendered output (manual check):
+# The rendered prompt should show: ═══Identity═══ ... # Contract ... # Design Integrity ... ═══Environment═══ ... ═══Procedure═══
+#+end_src
+
+Required artifacts:
+- =specs/system-prompt-architecture.md= — architectural spec (already created during planning)
+- =packages/coding-agent/src/prompts/system/system-prompt.md= — restructured template
+
+* Execution Manifest
+
+| Wave | Item | Effort | Depends |
+|------|------|--------|---------|
+| 1 | [[id:FEAT-456-system-prompt-structural-reorder-values][System prompt structural reorder]] | 1.5h | — |
+| 2 | [[id:FEAT-457-sync-agents-md-behavioral-overlap-with-c][AGENTS.md boundary verification]] | 30m | FEAT-456 |
+
+** Completion [2026-04-11]
+
+*** Verification
+
+- =bun check:ts=: Clean for coding-agent package (pre-existing unrelated error in packages/niri/)
+- =bun test packages/coding-agent/test/system-prompt-templates.test.ts=: 16/16 pass, 108 assertions
+- Section order verified via grep: Workspace (L12) → Identity (L37) → Environment (L143) → Procedure (L319) → Now (L362)
+- Contract at L126 (after =</stakes>= at L124, before =SECTION_SEPERATOR "Environment"= at L143)
+- Design Integrity at L134 (after Contract, before Environment separator)
+- Thinking-mode block contains "fn, impl, cfg, dep, ret, sig, inv" at L75 and "Compression ≠ simplification" at L76
+- AGENTS.md boundary: clean, no new overlap introduced. Three pre-existing minor overlaps (emojis, comments, mocks) verified as different-context, not duplicated
+- =specs/system-prompt-architecture.md= boundary table verified accurate
+
+*** Artifacts
+
+- =packages/coding-agent/src/prompts/system/system-prompt.md= — restructured template
+- =specs/system-prompt-architecture.md= — architectural spec (created during planning, verified during execution)
+
+*** Deviations
+
+None.

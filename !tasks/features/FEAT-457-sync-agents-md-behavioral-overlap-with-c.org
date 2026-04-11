@@ -1,0 +1,52 @@
+#+TITLE: Sync AGENTSmd behavioral overlap with compressed system prompt
+#+STATE: DONE
+#+SESSION_ID: 14b6da06bfab9131
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-19-11-230Z_14b6da06bfab9131.jsonl]]
+#+CUSTOM_ID: FEAT-457-sync-agents-md-behavioral-overlap-with-c
+#+EFFORT: 30m
+#+LAYER: core
+#+DEPENDS: FEAT-456-system-prompt-structural-reorder-values
+#+PRIORITY: C
+
+NOTE [2026-04-11]: Verified clean boundary. Three pre-existing minor overlaps (emojis, comments, mocks) in different contexts — no new overlap introduced by restructure. Spec boundary table accurate. No changes needed.
+
+* Initial Message
+
+Read about caveman-phd and the system prompt and let's exchange on your ideal format. Rid it from the labels and make it yours.
+
+* Context
+
+After the system prompt restructure (FEAT-456), verify that AGENTS.md and system-prompt.md
+maintain a clean boundary with no meaningful content duplication.
+
+Analysis showed minimal overlap (3 concepts mentioned in both: comments, emojis, mocks).
+None are exact duplicates — they appear in different contexts. But this item ensures
+the restructured prompt doesn't introduce new overlap, and documents the boundary.
+
+* Design Decisions
+
+1. system-prompt.md owns: agent identity, universal engineering principles, tool guidance,
+   operational procedure
+2. AGENTS.md owns: project coding conventions (Bun APIs, imports, file I/O), project testing
+   rules, project commands, project style
+3. No content should be moved between the two files
+4. The spec at =specs/system-prompt-architecture.md= documents this boundary
+
+* File to Verify
+
+=AGENTS.md= — read-only verification, no changes expected.
+=packages/coding-agent/src/prompts/system/system-prompt.md= — verify after FEAT-456 restructure.
+
+* Implementation Steps
+
+1. Read the restructured =system-prompt.md= (post FEAT-456)
+2. Read =AGENTS.md=
+3. Verify the boundary table in =specs/system-prompt-architecture.md= is accurate
+4. If any new overlap was introduced by the restructure, update the spec to note it
+5. If the spec boundary table needs corrections based on actual content, update it
+
+* Acceptance Criteria
+
+1. No content was duplicated between system-prompt.md and AGENTS.md
+2. =specs/system-prompt-architecture.md= boundary table accurately reflects both files
+3. No changes needed to AGENTS.md (verification only)
