@@ -1,0 +1,94 @@
+#+TITLE: Slim pi-emacs package to org-only
+#+STATE: ITEM
+#+SESSION_ID: 14b6d50334ba84c7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T19-57-16-882Z_14b6d50334ba84c7.jsonl]]
+#+CUSTOM_ID: FEAT-449-slim-pi-emacs-package-to-org-only
+#+EFFORT: 2h
+#+LAYER: emacs
+#+DEPENDS: FEAT-448-remove-code-warmup-and-emacssessionmanag
+
+* Initial Message
+
+Emacs (spell-emacs-a09f6243d02d): installing tree-sitter grammars on first run, may take ~60s...
+
+
+do we even need that anymore? look at the recent commits in the crates
+
+* Context
+
+After FEAT-447 (rewire CodeTool) and FEAT-448 (remove code warmup), the =@oh-my-pi/pi-emacs= package contains dead code-intelligence exports that nothing imports. The org tool still needs the daemon infrastructure (=EmacsSessionManager=, =startEmacsSession=, =detectEmacs=, =EmacsSession=, =CodeWarmupResult=, =StartEmacsOptions=). This item removes the dead code.
+
+* Design Decisions
+
+- Delete entire files: =client.ts=, =types.ts= (code-intelligence only)
+- From =tool.ts=: remove =createCodeTool=, =CodeToolDefinition=, =CodeToolDependencies=, =warmupCode=, =CodeWarmupOptions=. Keep =CodeWarmupResult= and =CodeWarmupOptions= ONLY if org tool uses them. Verify: org.ts imports =CodeWarmupResult= from pi-emacs. =CodeWarmupOptions= is only used by =warmupCode=. So keep =CodeWarmupResult=, remove =CodeWarmupOptions= and =warmupCode=.
+- Update barrel exports in =index.ts=
+- Remove code-intelligence-specific tests
+- Keep shared tests (session-manager, daemon-survival, detection)
+- The =packages/org= package re-exports =EmacsSession= and =StartEmacsOptions= from pi-emacs — must not break
+
+* Implementation
+
+** Delete files:
+- =packages/emacs/src/client.ts= — =createEmacsClient=, =CodeClient= factory, socat JSON-RPC transport. Only used by =createCodeTool=.
+- =packages/emacs/src/types.ts= — =CodeClient= interface, =CodeEditOp=, =OutlineEntry=, =LanguageInfo=, =InstallResult=, =Resolution=, =BufferInfo=. All code-intelligence types.
+
+** Modify =packages/emacs/src/tool.ts=:
+
+Remove:
+- =createEmacsClient= import (from =./client=, now deleted)
+- =CodeClient=, =CodeEditOp=, =Resolution= type imports (from =./types=, now deleted)
+- =CodeToolDependencies= interface
+- =CodeToolDefinition= interface
+- =createCodeTool= function (the entire function ~line 26-94)
+- =CodeWarmupOptions= interface (only used by =warmupCode=)
+- =warmupCode= function (~line 135-170)
+
+Keep:
+- =CodeWarmupResult= interface — used by org tool's =warmupOrgEmacs= return type
+- =EMACS_ELISP_DIR= constant — used by =warmupCode= but check if org uses it. Actually =warmupOrgEmacs= in org.ts uses its own =ELISP_DIR= constant. So =EMACS_ELISP_DIR= can be removed IF nothing else imports it. Check: it's used in =warmupCode= only. Remove it.
+
+After cleanup, =tool.ts= should only export =CodeWarmupResult=. If that's the only remaining export, consider whether to move it to a more appropriate location (e.g., =daemon.ts= or a shared =types.ts=). For simplicity, keep it in =tool.ts=.
+
+** Modify =packages/emacs/src/index.ts=:
+
+Remove:
+- =export * from "./client"= (file deleted)
+- =export * from "./types"= (file deleted)
+
+Keep:
+- =export * from "./daemon"=
+- =export * from "./detection"=
+- =export * from "./session-manager"=
+- =export * from "./tool"= (still exports =CodeWarmupResult=)
+
+** Delete test files:
+- =packages/emacs/test/tool-getSession.test.ts= — tests =createCodeTool= behavior with mocked CodeClient
+- =packages/emacs/test/outline.test.ts= — tests =createCodeTool= export
+- =packages/emacs/test/resolution.test.ts= — tests =createEmacsClient=, =createCodeTool= exports
+
+** Keep test files:
+- =packages/emacs/test/session-manager.test.ts= — tests =EmacsSessionManager= (shared with org)
+- =packages/emacs/test/daemon-survival.test.ts= — tests =startEmacsSession= (shared)
+- =packages/emacs/test/detection.test.ts= — tests =detectEmacs= (shared)
+- =packages/emacs/test/buffer.test.ts= — tests =startEmacsSession= export (shared, keep for now)
+
+** Verify =packages/org= re-exports still work:
+=packages/org/src/index.ts= re-exports =EmacsSession= and =StartEmacsOptions= from =@oh-my-pi/pi-emacs=. These live in =daemon.ts= which is untouched. Should work.
+
+* Edge Cases
+
+- =packages/org/src/tool.ts= imports =CodeWarmupResult= from =@oh-my-pi/pi-emacs= — must still resolve after cleanup
+- Any test file importing removed types (=CodeClient=, =CodeEditOp=, etc.) will fail — delete those test files
+- Remaining tests in =packages/emacs/test/= may import from =../src/tool= — verify they don't reference removed exports
+- Check =detection.test.ts= — it tests =detectEmacs= which checks =treesitAvailable=. This is fine to keep since the org daemon detection shares this code, even though org doesn't require treesit.
+
+* Verification
+
+- =bun check:ts= passes (no broken imports across all packages)
+- =bun test packages/emacs/test/session-manager.test.ts= passes
+- =bun test packages/emacs/test/daemon-survival.test.ts= passes
+- =bun test packages/emacs/test/detection.test.ts= passes
+- grep for =createCodeTool= in =packages/= returns zero hits in =.ts= files (excluding =.test.ts= in =emacs/test/= which were deleted)
+- grep for =createEmacsClient= in =packages/= returns zero hits
+- =packages/org= builds cleanly (re-exports still resolve)

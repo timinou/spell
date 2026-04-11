@@ -205,6 +205,8 @@ impl CodeGraph {
 				}
 				let confidence = if symbol.file.file_name().and_then(|name| name.to_str()).is_some_and(|name| matches!(name, "index.ts" | "index.js" | "mod.rs" | "lib.rs")) {
 					"low"
+				} else if symbol.kind == SymbolKind::Function || symbol.kind == SymbolKind::Class {
+					"high"
 				} else {
 					"medium"
 				};

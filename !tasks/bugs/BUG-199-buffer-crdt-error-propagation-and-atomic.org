@@ -1,0 +1,213 @@
+#+TITLE: Buffer CRDT error propagation and atomic batch undo
+#+STATE: DONE
+#+SESSION_ID: 14b6c7cd8a411d9e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T18-59-34-057Z_14b6c7cd8a411d9e.jsonl]]
+#+CUSTOM_ID: BUG-199-buffer-crdt-error-propagation-and-atomic
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: engine
+
+* Initial Message
+
+ropey 2.0 plz
+
+* Goal
+
+Fix two related buffer correctness issues: (1) CRDT operations silently discard errors, leaving rope and CRDT out of sync; (2) =edit_batch()= records individual history entries instead of a single atomic undo unit.
+
+* Context
+
+Both issues are in =crates/pi-code-engine/src/buffer.rs=. The CRDT (loro) tracks the same edits as the rope for multi-agent editing support. If a CRDT operation fails after the rope has already been mutated, the buffer is in an inconsistent state. The batch undo issue means structural edits (which produce multiple =TextEdit= values) can be partially undone, leaving the buffer in an intermediate state never visible to the user.
+
+* Fix 1: CRDT Error Propagation (audit #3)
+
+** Problem
+
+Lines 165, 232-233 in =buffer.rs= use =let _ == on =text.insert()= and =text.delete()= calls:
+
+#+begin_src rust
+// Line 165 — initial content load
+let _ = text.insert(0, &source);
+
+// Lines 232-233 — during apply_text_edit
+let _ = self.crdt.get_text("content").delete(edit.start_byte, edit.old_end_byte - edit.start_byte);
+let _ = self.crdt.get_text("content").insert(edit.start_byte, &edit.new_text);
+#+end_src
+
+** Fix
+
+Check the return type of loro's =LoroText::insert()= and =LoroText::delete()=. They return =LoroResult<()>=. Map errors to =CodeEngineError::Buffer=:
+
+In =from_str_with_path()= (around line 165):
+#+begin_src rust
+text.insert(0, &source).map_err(|e| CodeEngineError::Buffer(format!("CRDT init failed: {e}")))?;
+#+end_src
+
+In =apply_text_edit()= (around lines 232-233):
+#+begin_src rust
+let crdt_text = self.crdt.get_text("content");
+crdt_text.delete(edit.start_byte, edit.old_end_byte - edit.start_byte)
+    .map_err(|e| CodeEngineError::Buffer(format!("CRDT delete failed: {e}")))?;
+crdt_text.insert(edit.start_byte, &edit.new_text)
+    .map_err(|e| CodeEngineError::Buffer(format!("CRDT insert failed: {e}")))?;
+#+end_src
+
+Note: If the rope mutation succeeds but CRDT fails, the buffer IS in an inconsistent state. This is correct behavior — the error signals "buffer is corrupt, don't continue." The caller should not silently proceed. Do NOT attempt to roll back the rope mutation.
+
+** Verification
+
+Existing buffer tests must still pass. The CRDT operations match the rope operations, so they should never fail in practice. The propagation ensures we'd detect it immediately if they did.
+
+* Fix 2: Atomic Batch Undo (audit #4)
+
+** Problem
+
+=edit_batch()= (line 192-197) calls =self.edit()= for each edit, which calls =self.history.record()= for each one. Undoing a batch requires N separate =undo()= calls, and each intermediate state was never visible to the user.
+
+** Fix
+
+Introduce a private =apply_edit_internal()= that does the text mutation (rope + tree + CRDT) without recording history. Then =edit_batch()= collects all forward/inverse pairs, applies them, and records a single compound history entry.
+
+Step-by-step:
+
+1. Rename the current =apply_text_edit()= method. It already does rope+tree+CRDT mutation and returns =EditResult=. Keep it as-is but rename to =apply_text_mutation()=.
+
+2. Modify =edit()= (the single-edit public method) to:
+   #+begin_src rust
+   pub fn edit(&mut self, edit: TextEdit) -> Result<EditResult> {
+       if edit.start_byte == edit.old_end_byte && edit.new_text.is_empty() {
+           return Ok(EditResult { input_edit: edit, changed_ranges: Vec::new(), version: self.version });
+       }
+       let old_text = self.rope.slice(edit.start_byte..edit.old_end_byte).to_string();
+       let inverse = TextEdit {
+           start_byte: edit.start_byte,
+           old_end_byte: edit.start_byte + edit.new_text.len(),
+           new_text: old_text,
+       };
+       let result = self.apply_text_mutation(edit.clone())?;
+       self.history.record(edit, inverse);
+       self.version = self.version.saturating_add(1);
+       self.dirty = true;
+       Ok(EditResult { version: self.version, ..result })
+   }
+   #+end_src
+
+3. Modify =edit_batch()= to apply all edits without recording individual history, then record one compound entry:
+   #+begin_src rust
+   pub fn edit_batch(&mut self, mut edits: Vec<TextEdit>) -> Result<Vec<EditResult>> {
+       edits.sort_by_key(|e| std::cmp::Reverse(e.start_byte));
+       if edits.is_empty() { return Ok(Vec::new()); }
+
+       // Collect forward/inverse pairs and apply without history
+       let mut results = Vec::with_capacity(edits.len());
+       let mut all_forwards = Vec::new();
+       let mut all_inverses = Vec::new();
+
+       for edit in edits {
+           if edit.start_byte == edit.old_end_byte && edit.new_text.is_empty() {
+               results.push(EditResult { input_edit: edit, changed_ranges: Vec::new(), version: self.version });
+               continue;
+           }
+           let old_text = self.rope.slice(edit.start_byte..edit.old_end_byte).to_string();
+           let inverse = TextEdit {
+               start_byte: edit.start_byte,
+               old_end_byte: edit.start_byte + edit.new_text.len(),
+               new_text: old_text,
+           };
+           let result = self.apply_text_mutation(edit.clone())?;
+           all_forwards.push(edit);
+           all_inverses.push(inverse);
+           results.push(result);
+       }
+
+       // Record single compound history entry
+       if !all_forwards.is_empty() {
+           // For undo: apply all inverses in reverse order (low-to-high byte offset)
+           all_inverses.reverse();
+           self.history.record_batch(all_forwards, all_inverses);
+           self.version = self.version.saturating_add(1);
+           self.dirty = true;
+       }
+
+       Ok(results)
+   }
+   #+end_src
+
+4. Extend =History= to support compound revisions:
+   #+begin_src rust
+   struct Revision {
+       parent: Option<usize>,
+       last_child: Option<usize>,
+       forwards: Vec<TextEdit>,   // was: forward: TextEdit
+       inverses: Vec<TextEdit>,   // was: inverse: TextEdit
+   }
+   #+end_src
+
+   Update =History::record()= and add =History::record_batch()=:
+   #+begin_src rust
+   fn record(&mut self, forward: TextEdit, inverse: TextEdit) {
+       self.record_batch(vec![forward], vec![inverse]);
+   }
+
+   fn record_batch(&mut self, forwards: Vec<TextEdit>, inverses: Vec<TextEdit>) {
+       if self.current + 1 < self.revisions.len() {
+           self.revisions.truncate(self.current + 1);
+       }
+       let next = self.revisions.len();
+       self.revisions.push(Revision {
+           parent: Some(self.current),
+           last_child: None,
+           forwards,
+           inverses,
+       });
+       self.revisions[self.current].last_child = Some(next);
+       self.current = next;
+   }
+   #+end_src
+
+5. Update =undo()= and =redo()= to apply multiple edits:
+   #+begin_src rust
+   pub fn undo(&mut self) -> Result<Option<EditResult>> {
+       let current = self.history.current;
+       let Some(parent) = self.history.revisions[current].parent else { return Ok(None); };
+       let inverses = self.history.revisions[current].inverses.clone();
+       let mut last_result = None;
+       for inv in &inverses {
+           last_result = Some(self.apply_text_mutation(inv.clone())?);
+       }
+       self.history.current = parent;
+       Ok(last_result)
+   }
+   #+end_src
+   Same pattern for =redo()= but using =forwards=.
+
+** Verification
+
+*** Test: =test_batch_undo_is_atomic=
+#+begin_src rust
+let source = "abc";
+let mut buffer = CodeBuffer::from_str(source, ts_id, registry).unwrap();
+buffer.edit_batch(vec![
+    TextEdit { start_byte: 0, old_end_byte: 0, new_text: "X".into() },
+    TextEdit { start_byte: 3, old_end_byte: 3, new_text: "Y".into() },
+]).unwrap();
+assert_eq!(buffer.source(), "XabcY"); // both applied (note: sorted desc by start_byte)
+// Actually with desc sort: Y at offset 3 first, then X at offset 0
+// Result depends on sort order — verify actual output
+
+buffer.undo().unwrap();
+assert_eq!(buffer.source(), source); // single undo reverts ALL batch edits
+#+end_src
+
+*** Existing tests
+All existing buffer tests (=test_batch_edit=, =test_undo_restores_original=, =test_redo_reapplies=, =test_undo_tree_branching=) must still pass.
+
+* Files
+
+- =crates/pi-code-engine/src/buffer.rs= — both fixes
+
+* Acceptance
+
+1. =cargo test -p pi-code-engine -- buffer= passes all existing tests plus =test_batch_undo_is_atomic=
+2. =cargo clippy -p pi-code-engine= zero warnings
+3. No =let _ == on CRDT operations in buffer.rs

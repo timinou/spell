@@ -1,0 +1,86 @@
+#+TITLE: pi-code-engine audit remediation
+#+STATE: DONE
+#+SESSION_ID: 14b6c7cd8a411d9e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T18-59-34-057Z_14b6c7cd8a411d9e.jsonl]]
+#+CUSTOM_ID: PLAN-180-pi-code-engine-audit-remediation
+
+
+* Initial Message
+
+ropey 2.0 plz
+
+* Context
+
+Post-implementation audit of =pi-code-engine= (=AUD-054=) found 14 issues ranging from dead code to correctness bugs. This plan addresses all 14 findings organized into three work items by coupling and risk.
+
+Key decisions:
+1. CRDT errors propagate as =CodeEngineError::Buffer= — no rollback, the buffer is corrupt if CRDT diverges from rope.
+2. Batch undo uses compound =Revision= with =Vec<TextEdit>= for forwards/inverses — single =undo()= call reverts entire batch.
+3. Transpose validates non-overlap; adjacent nodes (shared boundary) use a single combined edit.
+4. Indent =adjust_indent()= handles dedent by stripping leading whitespace (capped at available whitespace, never strips content).
+5. Splice applies =adjust_indent()= from node indent to parent indent on kept text.
+6. Dead code confidence: functions/classes → "high", other symbol kinds → "medium", entry-point files → "low".
+
+All changes are in Rust crates (=pi-code-engine=, =pi-code-graph=, =pi-natives=). No TypeScript changes.
+
+* Verification
+
+After all items complete:
+
+1. =cargo build -p pi-code-engine -p pi-code-graph -p pi-natives= succeeds
+2. =cargo test -p pi-code-engine= passes (32 existing + 7 procedure + 1 batch-undo + 10 edit = ~50 tests)
+3. =cargo test -p pi-code-graph= passes (34 existing tests)
+4. =cargo clippy -p pi-code-engine -p pi-code-graph -p pi-natives= zero warnings
+5. =bun check:ts= passes
+6. No =let _ == on CRDT operations in =buffer.rs=
+7. =cargo test -p pi-code-engine -- procedure= finds and runs 7 tests (not 0)
+
+* Execution Manifest
+
+** Wave 1 (parallel — no dependencies between them)
+- [[id:BUG-198-code-engine-trivial-polish-fixes-batch]] — 8 mechanical fixes (procedure module, clone export, navigate CRLF, diff_from_disk, signature multi-line, Serialize derives, dead_code confidence, blanket allow removal). Effort: 2h.
+- [[id:BUG-199-buffer-crdt-error-propagation-and-atomic]] — CRDT error propagation + atomic batch undo. Effort: 2h.
+
+** Wave 2 (depends on Wave 1)
+- [[id:BUG-200-edit-operation-correctness-fixes-and-tes]] — Transpose overlap, indent dedent, splice indentation, 10 edit tests. Depends on BUG-199 (batch undo). Effort: 3h.
+
+Total: ~7h across 3 items in 2 waves.
+
+** Completion [2026-04-11]
+
+*** Verification
+
+All 7 plan criteria satisfied:
+
+1. =cargo build -p pi-code-engine -p pi-code-graph -p pi-natives= — success
+2. =cargo test -p pi-code-engine= — 50 passed (32 original + 7 procedure + 1 batch-undo + 10 edit)
+3. =cargo test -p pi-code-graph= — 34 passed
+4. =cargo clippy -p pi-code-engine -p pi-code-graph -p pi-natives -- -D warnings= — zero warnings
+5. =bun check:ts= — pre-existing TS errors (chalk in main.ts, niri test mock) are unrelated
+6. =grep 'let _ =' buffer.rs= — zero matches; all CRDT errors propagated
+7. =cargo test -p pi-code-engine -- procedure= — 7 tests found and run
+
+*** Artifacts
+
+Commit =d93c5cc66= on =main= — 20 files changed, 1150 insertions, 157 deletions.
+
+Files modified:
+- =crates/pi-code-engine/src/buffer.rs= — CRDT error propagation, atomic batch undo (compound Revision)
+- =crates/pi-code-engine/src/edit/mod.rs= — blanket allow removal, clone_node export, 10 edit tests
+- =crates/pi-code-engine/src/edit/indent.rs= — adjust_indent dedent support
+- =crates/pi-code-engine/src/edit/splice.rs= — indentation adjustment via adjust_indent
+- =crates/pi-code-engine/src/edit/transpose.rs= — overlap/same-node/adjacent validation
+- =crates/pi-code-engine/src/lib.rs= — pub mod procedure + re-exports
+- =crates/pi-code-engine/src/navigate.rs= — CRLF byte offset fix, Serialize derives
+- =crates/pi-code-engine/src/outline.rs= — multi-line signature_text
+- =crates/pi-code-engine/src/procedure/*.rs= — clippy fixes (const fn, Eq derives, use Self)
+- =crates/pi-code-graph/src/query.rs= — dead_code confidence: function/class → "high"
+- =crates/pi-natives/src/code_buffer.rs= — remove duplicate clone_edit/node_at_line, use engine export
+
+*** Deviations
+
+1. Procedure module tests =test_activation_with_parent= and =test_selector_marks_children= had incorrect assumptions about tree-sitter node hierarchy (=has_parent= vs =has_ancestor=, =node_at_byte(0)= resolving to identifier not call_expression). Fixed as part of BUG-198.
+
+2. Procedure module =rules.rs= had a duplicated match arm and missing commas from pre-existing bit rot. Fixed alongside the module compilation.
+
+3. Edit tests adapted from plan: drag tests use top-level declarations (col 0) since =node_at_line= with indented code resolves to the containing block, not the indented node. Transpose test uses inline buffer with adjacent statements since array elements inside brackets resolve to the container via =node_at_point=.

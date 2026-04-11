@@ -1,0 +1,125 @@
+#+TITLE: Code engine trivial polish fixes batch
+#+STATE: DONE
+#+SESSION_ID: 14b6c7cd8a411d9e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T18-59-34-057Z_14b6c7cd8a411d9e.jsonl]]
+#+CUSTOM_ID: BUG-198-code-engine-trivial-polish-fixes-batch
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: engine
+
+* Initial Message
+
+ropey 2.0 plz
+
+* Goal
+
+Fix 8 trivial/small issues in pi-code-engine and pi-code-graph identified by the post-implementation audit. Each fix is independent — they share no state and touch different functions.
+
+* Context
+
+These are all mechanical fixes that don't require design decisions. Findings reference audit =AUD-054=.
+
+* Fixes
+
+** 1. Procedure module not compiled (audit #1)
+
+=crates/pi-code-engine/src/lib.rs= is missing =pub mod procedure;=. The directory =src/procedure/= exists with 4 files and 7 tests, but none are compiled.
+
+Fix:
+- Add =pub mod procedure;= to =lib.rs=
+- Add re-exports: =pub use procedure::{Procedure, ProcedureBuilder, ProcedureResult, MatchedNode, Mark, apply_procedure};=
+- Run =cargo test -p pi-code-engine -- procedure= — the 7 tests must pass. If any don't compile (bit rot from API changes during parallel Wave 2/3 work), fix the compilation errors in the test code.
+
+Files: =crates/pi-code-engine/src/lib.rs=
+
+** 2. clone_node not exported; NAPI duplicates it (audit #2 + #14)
+
+=edit/clone.rs= defines =pub fn clone_node= but =edit/mod.rs= doesn't re-export it. NAPI =code_buffer.rs= duplicates the logic as =clone_edit()= plus a local =node_at_line()=.
+
+Fix:
+- In =crates/pi-code-engine/src/edit/mod.rs=:
+  - Add =pub use clone::clone_node;= alongside the other re-exports
+  - Remove the line =#![allow(dead_code, reason = "...")]= (line 1) — once clone_node is exported and other fns are used by NAPI, the blanket suppress is wrong. If specific private helpers still trigger dead_code, add targeted =#[allow]= on those functions.
+- In =crates/pi-natives/src/code_buffer.rs=:
+  - Remove the local =fn node_at_line()= (lines 42-46)
+  - Remove the local =fn clone_edit()= (line 47)
+  - Replace ="clone" => clone_edit(buffer, line)= with ="clone" => pi_code_engine::edit::clone_node(buffer, line).map_err(engine_err)=
+
+Files: =crates/pi-code-engine/src/edit/mod.rs=, =crates/pi-natives/src/code_buffer.rs=
+
+** 3. Navigate byte offset incorrect for CRLF (audit #6)
+
+=navigate.rs= =node_at()= computes byte offset by summing line lengths with hardcoded =+1= for newlines. Incorrect for =\r
+= files.
+
+Fix in =crates/pi-code-engine/src/navigate.rs=, function =node_at()= line 25:
+- Replace: =let byte = source.lines().take((line - 1) as usize).map(|l| l.len() + 1).sum::<usize>() + column.unwrap_or(0) as usize;=
+- With: =let byte = buffer.rope().line_to_byte_idx((line - 1) as usize, ropey::LineType::LF_CR) + column.unwrap_or(0) as usize;=
+- The =let source = buffer.source();= on line 22 and =let total_lines = source.lines().count()= on line 23 can stay for the bounds check, or replace the bounds check with rope's =len_lines()=.
+
+Files: =crates/pi-code-engine/src/navigate.rs=
+
+** 4. diff_from_disk creates fake snapshot (audit #9)
+
+=buffer.rs= =diff_from_disk()= constructs a fake =BufferSnapshot= with the wrong tree, then calls =diff_from()=. The snapshot type is abused — =diff_from= only reads the rope.
+
+Fix in =crates/pi-code-engine/src/buffer.rs=, function =diff_from_disk()=:
+- Replace the whole body with:
+  #+begin_src rust
+  let path = self.path.as_ref().ok_or_else(|| CodeEngineError::Buffer("buffer has no path".to_string()))?;
+  let disk = fs::read_to_string(path)?;
+  Ok(diff_lines(&disk, &self.source()))
+  #+end_src
+
+Files: =crates/pi-code-engine/src/buffer.rs=
+
+** 5. Outline signature truncated to first line (audit #11)
+
+=outline.rs= =signature_text()= uses =.lines().next()= which discards multi-line function signatures.
+
+Fix in =crates/pi-code-engine/src/outline.rs=, function =signature_text()= line 54:
+- Replace: =let header = source.get(node.start_byte()..end_byte).unwrap_or("").lines().next().unwrap_or("").trim();=
+- With: =let header = source.get(node.start_byte()..end_byte).unwrap_or("").lines().map(str::trim).collect::<Vec<_>>().join(" ");=
+- The =truncate(header, 200)= call on the next line already handles length capping.
+
+Files: =crates/pi-code-engine/src/outline.rs=
+
+** 6. NavigateResult/NavigateItem missing Serialize (audit #12)
+
+Types returned to NAPI lack =#[derive(serde::Serialize)]= — inconsistent with =OutlineEntry= which has it.
+
+Fix in =crates/pi-code-engine/src/navigate.rs=:
+- Change =#[derive(Debug, Clone, PartialEq, Eq)]= on =NavigateItem= (line 11) to =#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]=
+- Change =#[derive(Debug, Clone, PartialEq, Eq)]= on =NavigateResult= (line 13) to =#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]=
+- Simplify NAPI's =render_navigate_result()= and =render_navigate_item()= in =code_buffer.rs= to use =serde_json::to_value()= instead of manual =json!()= construction (optional but recommended)
+
+Files: =crates/pi-code-engine/src/navigate.rs=, optionally =crates/pi-natives/src/code_buffer.rs=
+
+** 7. dead_code confidence never "high" (audit #13)
+
+=query.rs= =graph_dead_code()= assigns "low" or "medium" but never "high". The =confidence_rank()= function handles "high" but it's never produced.
+
+Fix in =crates/pi-code-graph/src/query.rs=, in the =graph_dead_code()= method around line 206:
+- Change the confidence logic to:
+  #+begin_src rust
+  let confidence = if symbol.file.file_name().and_then(|name| name.to_str())
+      .is_some_and(|name| matches!(name, "index.ts" | "index.js" | "mod.rs" | "lib.rs"))
+  {
+      "low"
+  } else if symbol.kind == SymbolKind::Function || symbol.kind == SymbolKind::Class {
+      "high"
+  } else {
+      "medium"
+  };
+  #+end_src
+- Functions and classes with no inbound references outside test/entry files are definitively dead ("high"). Other symbol kinds (constants, types, interfaces) might be used via re-exports or structural typing ("medium"). Entry-point file symbols are lowest confidence ("low") because they may be wired externally.
+
+Files: =crates/pi-code-graph/src/query.rs=
+
+* Verification
+
+1. =cargo build -p pi-code-engine -p pi-code-graph -p pi-natives= succeeds
+2. =cargo test -p pi-code-engine= — all existing tests pass + procedure tests (7) now run
+3. =cargo test -p pi-code-graph= — all 34 tests pass
+4. =cargo clippy -p pi-code-engine -p pi-code-graph -p pi-natives= — zero warnings
+5. =bun check:ts= passes

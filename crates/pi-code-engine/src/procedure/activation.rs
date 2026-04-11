@@ -1,6 +1,6 @@
 use crate::procedure::rules::RuleExpr;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Position {
 	Any,
 	At,
@@ -8,11 +8,11 @@ pub enum Position {
 }
 
 pub struct ActivationRule {
-	pub nodes: RuleExpr,
-	pub position: Position,
-	pub has_parent: Option<RuleExpr>,
+	pub nodes:        RuleExpr,
+	pub position:     Position,
+	pub has_parent:   Option<RuleExpr>,
 	pub has_ancestor: Option<RuleExpr>,
-	pub has_fields: Option<Vec<String>>,
+	pub has_fields:   Option<Vec<String>>,
 }
 
 pub struct ActivationBuilder {
@@ -20,14 +20,14 @@ pub struct ActivationBuilder {
 }
 
 impl ActivationBuilder {
-	pub(crate) fn new() -> Self {
+	pub(crate) const fn new() -> Self {
 		Self {
 			rule: ActivationRule {
-				nodes: RuleExpr::All,
-				position: Position::Any,
-				has_parent: None,
+				nodes:        RuleExpr::All,
+				position:     Position::Any,
+				has_parent:   None,
 				has_ancestor: None,
-				has_fields: None,
+				has_fields:   None,
 			},
 		}
 	}
@@ -52,7 +52,7 @@ impl ActivationBuilder {
 		self
 	}
 
-	pub fn position(mut self, position: Position) -> Self {
+	pub const fn position(mut self, position: Position) -> Self {
 		self.rule.position = position;
 		self
 	}

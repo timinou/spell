@@ -5,7 +5,7 @@ use napi_derive::napi;
 use parking_lot::Mutex;
 use pi_code_engine::{
 	buffer::{BufferRegistry, CodeBuffer},
-	edit::{drag_node, insert_after, insert_before, kill_node, replace_node, splice_node, transpose_nodes, DragDirection, SpliceMode, TextEdit},
+	edit::{clone_node, drag_node, insert_after, insert_before, kill_node, replace_node, splice_node, transpose_nodes, DragDirection, SpliceMode, TextEdit},
 	language::{LanguageId, LanguageProfile, LanguageRegistry},
 	navigate::{navigate as navigate_buffer, NavigateAction, NavigateItem, NavigateResult},
 	outline::{outline as outline_buffer, read as read_buffer},
@@ -39,13 +39,6 @@ fn navigate_action(value: Option<&str>) -> Result<NavigateAction> {
 	}
 }
 
-fn node_at_line(buffer: &CodeBuffer, line: usize) -> Result<tree_sitter::Node<'_>> {
-	let rope = buffer.rope();
-	let byte = rope.line_to_byte_idx(line.saturating_sub(1), ropey::LineType::LF_CR);
-	buffer.tree().root_node().named_descendant_for_byte_range(byte, byte).or_else(|| buffer.tree().root_node().descendant_for_byte_range(byte, byte)).ok_or_else(|| json_err(format!("No node found at line {line}")))
-}
-fn clone_edit(buffer: &CodeBuffer, line: usize) -> Result<Vec<TextEdit>> { let node = node_at_line(buffer, line)?; let text = buffer.source()[node.start_byte()..node.end_byte()].to_string(); let insertion = if text.contains('\n') { format!("{text}\n") } else { format!("{text} ") }; let pos = node.end_byte(); Ok(vec![TextEdit { start_byte: pos, old_end_byte: pos, new_text: insertion }]) }
-
 fn edit_operation(buffer: &CodeBuffer, options: &Value) -> Result<Vec<TextEdit>> {
 	let line = value_to_usize(options.get("line"), 0);
 	let column = value_to_usize(options.get("column"), 0);
@@ -60,7 +53,7 @@ fn edit_operation(buffer: &CodeBuffer, options: &Value) -> Result<Vec<TextEdit>>
 		"splice" => { let mode = match options.get("mode").and_then(Value::as_str).unwrap_or("self") { "up" => SpliceMode::Up, "down" => SpliceMode::Down, _ => SpliceMode::Self_, }; splice_node(buffer, line, mode).map_err(engine_err) },
 		"drag-up" => drag_node(buffer, line, DragDirection::Up).map_err(engine_err),
 		"drag-down" => drag_node(buffer, line, DragDirection::Down).map_err(engine_err),
-		"clone" => clone_edit(buffer, line),
+		"clone" => clone_node(buffer, line).map_err(engine_err),
 		"transpose" => transpose_nodes(buffer, line, column).map_err(engine_err),
 		other => Err(json_err(format!("Unknown edit operation: {other}"))),
 	}

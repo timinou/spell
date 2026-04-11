@@ -1,0 +1,51 @@
+#+TITLE: Spell session crash recovery with niri workspace restore
+#+STATE: DOING
+#+SESSION_ID: 14b6d9b181b3cb2d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-17-43-942Z_14b6d9b181b3cb2d.jsonl]]
+#+CUSTOM_ID: PLAN-182-spell-session-crash-recovery-with-niri-w
+
+* Initial Message
+
+give me the commands to relaunch all the spell sessions that were on before my computer ran out of battery, then make the feature to recover that. Bonus if it brings back the niri workspaces too
+
+* Context
+
+After a power loss or crash, spell sessions persist as JSONL files on disk but there is no mechanism to discover and resume them en masse. Status files (~/.spell/status/<windowId>.json~) survive crashes but lack session identification data (ID, file path, cwd) and are actively deleted by ~StatusFileReader.readAll()~. Niri workspace layouts are entirely ephemeral — lost on compositor restart.
+
+This plan adds:
+1. Recovery metadata to status files (session ID, file path, cwd, workspace name)
+2. A ~spell recover~ command that detects crashed sessions and restores them into ghostty windows across niri workspaces
+3. Auto-detection of crashed sessions on normal ~spell~ launch
+
+** Key Decisions
+- Status files are the primary crash detection signal: clean exits remove them, crashes leave them with dead PIDs
+- ~StatusFileReader.readCrashed()~ reads dead-PID entries without deleting (unlike ~readAll()~ which cleans up)
+- Workspace names are captured from niri IPC at session init and stored in status files
+- Recovery spawns ghostty windows: ~ghostty +new-window --working-directory=<cwd> -e spell -r <sessionId>~
+- Niri workspaces are recreated by name: ~niri msg action focus-workspace <name>~
+- Graceful degradation: no niri → skip workspaces; no ghostty → print resume commands
+- Auto-detect is notification only (stderr), never blocks startup
+
+* Verification
+
+- ~bun check:ts~ passes after all changes
+- ~bun test packages/desktop-common/test/status-file.test.ts~ passes
+- Manual test sequence:
+  1. Start 2+ spell sessions in different niri workspaces
+  2. Verify status files contain sessionId, cwd, workspaceName
+  3. ~kill -9~ both sessions
+  4. Run ~spell recover --dry-run~ — verify correct commands shown
+  5. Run ~spell recover~ — verify ghostty windows open in correct workspaces with sessions resumed
+  6. Start new ~spell~ session — verify no crash notification (all recovered)
+  7. ~kill -9~ a session, start new session — verify crash notification appears
+
+* Execution Manifest
+
+** Wave 1: Foundation (status file extension)
+- [[id:FEAT-442-extend-status-file-with-session-recovery]] (3h, desktop layer) — Extend SessionStatusFile type, update StatusFileWriter/Reader, add workspace query to niri-query.ts, wire through NiriOverviewController and interactive-mode
+
+** Wave 2: Recovery command + auto-detect (parallel)
+- [[id:FEAT-444-spell-recover-command-with-niri-workspac]] (4h, cli layer) — New ~spell recover~ subcommand with ghostty spawning and niri workspace restoration. Depends on FEAT-442.
+- [[id:FEAT-445-auto-detect-crashed-sessions-on-spell-la]] (1h, cli layer) — Startup notification for crashed sessions. Depends on FEAT-442.
+
+Total effort: ~8h

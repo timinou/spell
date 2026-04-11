@@ -1,0 +1,89 @@
+#+TITLE: Remove code warmup and emacsSessionManager from SDK
+#+STATE: ITEM
+#+SESSION_ID: 14b6d50334ba84c7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T19-57-16-882Z_14b6d50334ba84c7.jsonl]]
+#+CUSTOM_ID: FEAT-448-remove-code-warmup-and-emacssessionmanag
+#+EFFORT: 1h
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-447-rewire-codetool-to-native-engine
+
+* Initial Message
+
+Emacs (spell-emacs-a09f6243d02d): installing tree-sitter grammars on first run, may take ~60s...
+
+
+do we even need that anymore? look at the recent commits in the crates
+
+* Context
+
+With =CodeTool= rewired to the native engine (FEAT-447), the Emacs code intelligence daemon is no longer started or used. The SDK still creates an =EmacsSessionManager= for the code daemon, runs =warmupCode()= in the background, records the result, and disposes the manager on session teardown. All of this is now dead code.
+
+The org daemon (=orgSessionManager=) is completely separate and must remain untouched.
+
+* Design Decisions
+
+- Remove ALL code-intelligence Emacs lifecycle from sdk.ts
+- Remove =emacsSessionManager= field from =ToolSession= interface
+- Keep =orgSessionManager= field and org warmup entirely untouched
+- The =EmacsSessionManager= class itself stays in =pi-emacs= — org tool still uses it
+- Remove =warmupCode= import from sdk.ts (org tool imports =startEmacsSession= directly, not =warmupCode=)
+
+* Implementation
+
+** Modify =packages/coding-agent/src/sdk.ts=
+
+*** Remove from imports (line ~33):
+- Remove =warmupCode= from the =@oh-my-pi/pi-emacs= import
+- =EmacsSessionManager= can also be removed from this import IF no other usage in sdk.ts. The =orgSessionManager= is created via =createOrgSessionManager= in org.ts, not in sdk.ts. Check: sdk.ts creates =new EmacsSessionManager(...)= for the code daemon. Once that's removed, =EmacsSessionManager= is no longer needed in sdk.ts.
+- =CodeWarmupResult= type may still be needed if org warmup result is handled here. Check: sdk.ts also handles org warmup results — verify whether =CodeWarmupResult= is used for org. If org warmup is handled entirely in org.ts, remove it.
+
+Final import from pi-emacs in sdk.ts should be empty or removed entirely. Verify no remaining references.
+
+*** Remove code warmup setup (~line 960-969):
+- Remove =startCodeWarmup= closure
+- Remove =const emacsSessionManager = new EmacsSessionManager(...)=
+
+*** Remove from toolSession object (~line 1042):
+- Remove =emacsSessionManager= field assignment
+
+*** Remove code warmup promise (~line 1120-1129):
+- Remove =shouldStartCode= check (=requestedBuiltInToolNames.includes("code")=)
+- Remove =codeWarmupPromise= variable
+- Remove the entire conditional =shouldStartCode ? logger.timeAsync(...) : Promise.resolve(undefined)=
+
+*** Remove warmup result handling (~line 1830-1842):
+- Remove =if (shouldStartCode)= block that awaits =codeWarmupPromise= and calls =recordWarmupResult=
+
+*** Remove from dispose (~line 1844-1849):
+- Remove =emacsSessionManager.dispose()= call and its try/catch
+- Keep =orgSessionManager= dispose untouched
+
+*** Remove from softReset comment (~line 1903):
+- Update comment: remove mention of =emacsSessionManager= (it says "emacsSessionManager and orgSessionManager intentionally NOT touched"). Change to just mention =orgSessionManager=.
+
+** Modify =packages/coding-agent/src/tools/index.ts=
+
+*** Remove =emacsSessionManager= field from =ToolSession= interface (~line 210):
+- Remove =emacsSessionManager?: EmacsSessionManager=
+- Remove =import type { EmacsSessionManager } from "@oh-my-pi/pi-emacs"= if =orgSessionManager= also uses =EmacsSessionManager= type from the same import. Check: =orgSessionManager?: EmacsSessionManager= — yes, the type is still needed for the org field. Keep the import.
+
+Actually, check the exact field name. The exploration showed =orgSessionManager= on ToolSession at line 212. If it uses =EmacsSessionManager= type, keep the import but remove only the =emacsSessionManager= field.
+
+** Update org-related tests if they reference =emacsSessionManager=
+
+Check =packages/coding-agent/test/tools/org-session-manager.test.ts= — it tests that OrgTool prefers =orgSessionManager= over "codeManager". If it creates mock ToolSessions with =emacsSessionManager= field, those references need updating (field no longer exists).
+
+* Edge Cases
+
+- =orgSessionManager= must remain completely untouched — separate daemon, separate lifecycle
+- If any test creates a ToolSession with =emacsSessionManager= field, it needs removal
+- The =chalk= import for the "Starting code..." stderr message may become unused — remove if so
+- The =shouldStartCode= variable may be used elsewhere in sdk.ts — search before removing
+
+* Verification
+
+- =bun check:ts= passes (no references to removed field)
+- =bun test packages/coding-agent/test/tools/org-session-manager.test.ts= passes
+- =bun test packages/coding-agent/test/tools/code.test.ts= passes (already updated in FEAT-447)
+- grep for =emacsSessionManager= in =packages/coding-agent/src/= returns zero hits (only =orgSessionManager= remains)
+- grep for =warmupCode= in =packages/coding-agent/src/= returns zero hits

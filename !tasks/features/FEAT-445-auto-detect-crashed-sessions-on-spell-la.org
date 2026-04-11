@@ -1,0 +1,79 @@
+#+TITLE: Auto-detect crashed sessions on spell launch
+#+STATE: DOING
+#+SESSION_ID: 14b6d9b181b3cb2d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-17-43-942Z_14b6d9b181b3cb2d.jsonl]]
+#+CUSTOM_ID: FEAT-445-auto-detect-crashed-sessions-on-spell-la
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: cli
+#+DEPENDS: FEAT-442-extend-status-file-with-session-recovery
+
+* Initial Message
+
+give me the commands to relaunch all the spell sessions that were on before my computer ran out of battery, then make the feature to recover that. Bonus if it brings back the niri workspaces too
+
+* Goal
+
+When ~spell~ is launched normally (no --resume, --continue, --no-session), check for crashed sessions and print a notification suggesting ~spell recover~.
+
+* Context
+
+Users may not know their sessions crashed. A quick check at startup surfaces this information without being intrusive. This is a lightweight notification, NOT auto-recovery.
+
+* Design Decisions
+
+- Check happens in main.ts createSessionManager() flow, before new session creation
+- Only check when: no --resume, no --continue, no --no-session flags
+- Uses ~StatusFileReader.readCrashed()~ from FEAT-442
+- Prints a single line: ~"N crashed session(s) detected. Run 'spell recover' to restore."~
+- Does NOT block startup — prints and continues normally
+- Does NOT auto-recover or prompt for confirmation
+- Prints to stderr so it doesn't interfere with pipe workflows
+
+* Implementation
+
+** Sub-outline
+
+*** 1. Add crash detection check (packages/coding-agent/src/main.ts)
+
+In the ~createSessionManager()~ function (or near the call site in the main launch flow), after parsing args but before session creation:
+
+#+begin_src typescript
+// Check for crashed sessions (non-blocking notification)
+if (!parsed.resume && !parsed.continue && !parsed.noSession) {
+  try {
+    const reader = new StatusFileReader();
+    const crashed = await reader.readCrashed();
+    const recoverable = crashed.filter(s => s.sessionId && s.cwd);
+    if (recoverable.length > 0) {
+      process.stderr.write(
+        \`\x1b[33m${recoverable.length} crashed session(s) detected. Run 'spell recover' to restore.\x1b[0m
+\`
+      );
+    }
+  } catch {
+    // Best-effort — don't block startup on recovery check failure
+  }
+}
+#+end_src
+
+*** 2. Wrap in try-catch
+
+The entire check is best-effort. If StatusFileReader fails (permissions, corrupt files), silently continue. Never let recovery detection block normal startup.
+
+* Verification
+
+- ~bun check:ts~ passes
+- Manual test: kill -9 a spell session, then start new ~spell~ session, verify yellow notification appears
+- Manual test: with no crashed sessions, verify no notification
+- Manual test: with --resume flag, verify no notification
+- Manual test: with --no-session flag, verify no notification
+
+* Files to Modify
+- packages/coding-agent/src/main.ts
+
+* Edge Cases
+- StatusFileReader throws: silently continue
+- All crashed sessions lack sessionId (old format): show count 0, no notification
+- Very large number of crashed sessions: just show count, don't list them
+- Non-niri environment: check still works (status files are desktop-agnostic)

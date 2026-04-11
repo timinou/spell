@@ -54,12 +54,7 @@ pub struct BufferInfo {
 }
 
 #[derive(Debug, Clone)]
-struct Revision {
-	parent: Option<usize>,
-	last_child: Option<usize>,
-	forward: TextEdit,
-	inverse: TextEdit,
-}
+struct Revision { parent: Option<usize>, last_child: Option<usize>, forwards: Vec<TextEdit>, inverses: Vec<TextEdit> }
 
 #[derive(Debug, Clone)]
 struct History {
@@ -73,19 +68,23 @@ impl History {
 			revisions: vec![Revision {
 				parent: None,
 				last_child: None,
-				forward: TextEdit { start_byte: 0, old_end_byte: 0, new_text: String::new() },
-				inverse: TextEdit { start_byte: 0, old_end_byte: 0, new_text: String::new() },
+				forwards: vec![TextEdit { start_byte: 0, old_end_byte: 0, new_text: String::new() }],
+				inverses: vec![TextEdit { start_byte: 0, old_end_byte: 0, new_text: String::new() }],
 			}],
 			current: 0,
 		}
 	}
 
 	fn record(&mut self, forward: TextEdit, inverse: TextEdit) {
+		self.record_batch(vec![forward], vec![inverse]);
+	}
+
+	fn record_batch(&mut self, forwards: Vec<TextEdit>, inverses: Vec<TextEdit>) {
 		if self.current + 1 < self.revisions.len() {
 			self.revisions.truncate(self.current + 1);
 		}
 		let next = self.revisions.len();
-		self.revisions.push(Revision { parent: Some(self.current), last_child: None, forward, inverse });
+		self.revisions.push(Revision { parent: Some(self.current), last_child: None, forwards, inverses });
 		self.revisions[self.current].last_child = Some(next);
 		self.current = next;
 	}
@@ -162,7 +161,7 @@ impl CodeBuffer {
 		let crdt = LoroDoc::new();
 		crdt.set_peer_id(PeerID::from(1_u64)).map_err(|err| CodeEngineError::Buffer(err.to_string()))?;
 		let text = crdt.get_text("content");
-		let _ = text.insert(0, &source);
+		text.insert(0, &source).map_err(|e| CodeEngineError::Buffer(format!("CRDT init failed: {e}")))?;
 		Ok(Self { rope, tree, parser, language: language_id, path, crdt, history: History::new(), version: 0, dirty: false })
 	}
 
@@ -182,38 +181,70 @@ impl CodeBuffer {
 			return Ok(EditResult { input_edit: edit, changed_ranges: Vec::new(), version: self.version });
 		}
 		let old_text = self.rope.slice(edit.start_byte..edit.old_end_byte).to_string();
-		self.apply_text_edit(edit.clone())?;
+		let result = self.apply_text_mutation(edit.clone())?;
 		self.history.record(edit.clone(), TextEdit { start_byte: edit.start_byte, old_end_byte: edit.start_byte + edit.new_text.len(), new_text: old_text });
 		self.version = self.version.saturating_add(1);
 		self.dirty = true;
-		Ok(EditResult { input_edit: edit, changed_ranges: vec![self.tree.root_node().range()], version: self.version })
+		Ok(EditResult { version: self.version, ..result })
 	}
 
 	pub fn edit_batch(&mut self, mut edits: Vec<TextEdit>) -> Result<Vec<EditResult>> {
-		edits.sort_by_key(|edit| std::cmp::Reverse(edit.start_byte));
+		edits.sort_by_key(|e| std::cmp::Reverse(e.start_byte));
+		if edits.is_empty() {
+			return Ok(Vec::new());
+		}
 		let mut results = Vec::with_capacity(edits.len());
-		for edit in edits { results.push(self.edit(edit)?); }
+		let mut all_forwards = Vec::new();
+		let mut all_inverses = Vec::new();
+		for edit in edits {
+			if edit.start_byte == edit.old_end_byte && edit.new_text.is_empty() {
+				results.push(EditResult { input_edit: edit, changed_ranges: Vec::new(), version: self.version });
+				continue;
+			}
+			let old_text = self.rope.slice(edit.start_byte..edit.old_end_byte).to_string();
+			let inverse = TextEdit { start_byte: edit.start_byte, old_end_byte: edit.start_byte + edit.new_text.len(), new_text: old_text };
+			let result = self.apply_text_mutation(edit.clone())?;
+			all_forwards.push(edit);
+			all_inverses.push(inverse);
+			results.push(result);
+		}
+		if !all_forwards.is_empty() {
+			all_inverses.reverse();
+			self.history.record_batch(all_forwards, all_inverses);
+			self.version = self.version.saturating_add(1);
+			self.dirty = true;
+		}
 		Ok(results)
 	}
 
 	pub fn undo(&mut self) -> Result<Option<EditResult>> {
 		let current = self.history.current;
-		let Some(parent) = self.history.revisions[current].parent else { return Ok(None); };
-		let inverse = self.history.revisions[current].inverse.clone();
-		let result = self.apply_text_edit(inverse)?;
+		let Some(parent) = self.history.revisions[current].parent else {
+			return Ok(None);
+		};
+		let inverses = self.history.revisions[current].inverses.clone();
+		let mut last_result = None;
+		for inv in &inverses {
+			last_result = Some(self.apply_text_mutation(inv.clone())?);
+		}
 		self.history.current = parent;
-		Ok(Some(result))
+		Ok(last_result)
 	}
 
 	pub fn redo(&mut self) -> Result<Option<EditResult>> {
-		let Some(next) = self.history.revisions[self.history.current].last_child else { return Ok(None); };
-		let forward = self.history.revisions[next].forward.clone();
-		let result = self.apply_text_edit(forward)?;
+		let Some(next) = self.history.revisions[self.history.current].last_child else {
+			return Ok(None);
+		};
+		let forwards = self.history.revisions[next].forwards.clone();
+		let mut last_result = None;
+		for fwd in &forwards {
+			last_result = Some(self.apply_text_mutation(fwd.clone())?);
+		}
 		self.history.current = next;
-		Ok(Some(result))
+		Ok(last_result)
 	}
 
-	fn apply_text_edit(&mut self, edit: TextEdit) -> Result<EditResult> {
+	fn apply_text_mutation(&mut self, edit: TextEdit) -> Result<EditResult> {
 		let start = byte_to_point(&self.rope, edit.start_byte);
 		let old_end = byte_to_point(&self.rope, edit.old_end_byte);
 		self.rope.remove(edit.start_byte..edit.old_end_byte);
@@ -229,8 +260,9 @@ impl CodeBuffer {
 		};
 		self.tree.edit(&input_edit);
 		self.tree = Self::parse(&mut self.parser, &self.rope, Some(&self.tree))?;
-		let _ = self.crdt.get_text("content").delete(edit.start_byte, edit.old_end_byte - edit.start_byte);
-		let _ = self.crdt.get_text("content").insert(edit.start_byte, &edit.new_text);
+		let crdt_text = self.crdt.get_text("content");
+		crdt_text.delete(edit.start_byte, edit.old_end_byte - edit.start_byte).map_err(|e| CodeEngineError::Buffer(format!("CRDT delete failed: {e}")))?;
+		crdt_text.insert(edit.start_byte, &edit.new_text).map_err(|e| CodeEngineError::Buffer(format!("CRDT insert failed: {e}")))?;
 		self.dirty = true;
 		Ok(EditResult { input_edit: edit, changed_ranges: vec![self.tree.root_node().range()], version: self.version })
 	}
@@ -245,18 +277,10 @@ impl CodeBuffer {
 	diff_lines(&old_source, &new_source)
 }
 
-	pub fn diff_from_disk(&self) -> Result<Vec<DiffHunk>> {
+pub fn diff_from_disk(&self) -> Result<Vec<DiffHunk>> {
 	let path = self.path.as_ref().ok_or_else(|| CodeEngineError::Buffer("buffer has no path".to_string()))?;
 	let disk = fs::read_to_string(path)?;
-	let temp = BufferSnapshot {
-		rope: Arc::new(Rope::from_str(&disk)),
-		tree: Arc::new(self.tree.clone()),
-		version: self.version,
-		dirty: false,
-		path: self.path.clone(),
-		language: self.language.clone(),
-	};
-	Ok(self.diff_from(temp))
+	Ok(diff_lines(&disk, &self.source()))
 }
 
 	pub fn save(&mut self) -> Result<()> {
@@ -414,5 +438,20 @@ mod tests {
 		reg.close(&path1).expect("close a");
 		assert_eq!(reg.list().len(), 1);
 		assert!(reg.get(&path1).is_none());
+	}
+
+	#[test]
+	fn test_batch_undo_is_atomic() {
+		let source = "abc";
+		let mut buffer = CodeBuffer::from_str(source, LanguageId::new("typescript"), registry()).expect("buffer");
+		buffer.edit_batch(vec![
+			TextEdit { start_byte: 0, old_end_byte: 0, new_text: "X".into() },
+			TextEdit { start_byte: 3, old_end_byte: 3, new_text: "Y".into() },
+		]).expect("batch");
+		assert_eq!(buffer.source(), "XabcY");
+		buffer.undo().expect("undo");
+		assert_eq!(buffer.source(), source);
+		buffer.redo().expect("redo");
+		assert_eq!(buffer.source(), "XabcY");
 	}
 }

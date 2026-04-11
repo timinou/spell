@@ -1,0 +1,264 @@
+#+TITLE: Edit operation correctness fixes and test coverage
+#+STATE: DONE
+#+SESSION_ID: 14b6c7cd8a411d9e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T18-59-34-057Z_14b6c7cd8a411d9e.jsonl]]
+#+CUSTOM_ID: BUG-200-edit-operation-correctness-fixes-and-tes
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: engine
+#+DEPENDS: BUG-199-buffer-crdt-error-propagation-and-atomic
+
+* Initial Message
+
+ropey 2.0 plz
+
+* Goal
+
+Fix three correctness bugs in the structural edit operations (transpose overlap, indent dedent, splice indentation) and add the missing test suite for all edit operations.
+
+* Context
+
+The =crates/pi-code-engine/src/edit/= module has 6 submodules (clone, drag, indent, replace, splice, transpose) with zero tests. Three operations have correctness bugs that produce wrong output in common cases. This item fixes the bugs and adds comprehensive tests using the existing =edit_target.ts= fixture.
+
+Depends on =BUG-199= (atomic batch undo) because structural edits use =edit_batch()= and the tests verify undo behavior.
+
+* Fix 1: Transpose Overlap (audit #5)
+
+** Problem
+
+=transpose.rs= (line 14) emits two =TextEdit= values for left and right nodes. If the nodes overlap (=left.end_byte() > right.start_byte()=) or are the same node, the edits target overlapping byte ranges. When applied high-to-low, the second edit operates on shifted bytes → garbage output.
+
+** File
+
+=crates/pi-code-engine/src/edit/transpose.rs=
+
+** Fix
+
+After computing =left= and =right= nodes, validate non-overlap:
+
+#+begin_src rust
+pub fn transpose_nodes(buffer: &CodeBuffer, line: usize, column: usize) -> Result<Vec<TextEdit>> {
+    let byte = buffer.rope().line_to_byte_idx(line.saturating_sub(1), ropey::LineType::LF_CR) + column;
+    let tree = buffer.tree();
+    let left = node_at_point(tree, byte)
+        .ok_or_else(|| CodeEngineError::Edit(format!("No node found at line {line}")))?;
+    let right = node_at_point(tree, left.end_byte())
+        .ok_or_else(|| CodeEngineError::Edit("No adjacent node to transpose with".into()))?;
+
+    // Validate non-overlap
+    if left.id() == right.id() {
+        return Err(CodeEngineError::Edit("Cannot transpose a node with itself".into()));
+    }
+    if left.end_byte() > right.start_byte() {
+        return Err(CodeEngineError::Edit("Cannot transpose overlapping nodes".into()));
+    }
+
+    // When nodes share a boundary (left.end == right.start), combine into a single edit
+    // covering both nodes to avoid offset issues
+    let left_text = node_text(buffer, left);
+    let right_text = node_text(buffer, right);
+
+    if left.end_byte() == right.start_byte() {
+        // Single replacement: swap text within the combined range
+        Ok(vec![TextEdit {
+            start_byte: left.start_byte(),
+            old_end_byte: right.end_byte(),
+            new_text: format!("{right_text}{left_text}"),
+        }])
+    } else {
+        // Two replacements: process high-to-low (right first since it has higher offset)
+        Ok(vec![
+            TextEdit { start_byte: right.start_byte(), old_end_byte: right.end_byte(), new_text: left_text },
+            TextEdit { start_byte: left.start_byte(), old_end_byte: left.end_byte(), new_text: right_text },
+        ])
+    }
+}
+#+end_src
+
+Note: The edits for non-adjacent case are returned with the higher-offset edit first. The caller (=edit_batch=) sorts by descending =start_byte= anyway, so this is correct regardless of return order.
+
+* Fix 2: adjust_indent Dedent (audit #7)
+
+** Problem
+
+=indent.rs= =adjust_indent()= uses =target_col.saturating_sub(original_col)= which clamps to zero for dedent (target < original). Moving code to a less-indented context produces no change instead of reducing indent.
+
+** File
+
+=crates/pi-code-engine/src/edit/indent.rs=
+
+** Fix
+
+Replace the function with one that handles both indent and dedent:
+
+#+begin_src rust
+pub fn adjust_indent(text: &str, original_col: usize, target_col: usize) -> String {
+    let mut out = String::with_capacity(text.len());
+    for (idx, line) in text.lines().enumerate() {
+        if idx > 0 {
+            out.push('
+');
+        }
+        if idx == 0 || line.trim().is_empty() {
+            out.push_str(line);
+        } else if target_col >= original_col {
+            // Indent: add spaces
+            let pad = " ".repeat(target_col - original_col);
+            out.push_str(&pad);
+            out.push_str(line);
+        } else {
+            // Dedent: strip leading whitespace up to the delta
+            let strip = original_col - target_col;
+            let leading = line.len() - line.trim_start().len();
+            let actual_strip = strip.min(leading);
+            out.push_str(&line[actual_strip..]);
+        }
+    }
+    out
+}
+#+end_src
+
+** Note on Behavior
+
+Dedent strips up to =delta= whitespace chars from line start. If the line has less leading whitespace than the delta, it strips all leading whitespace (doesn't over-strip into content). This is the safe behavior for code that's already at a shallower indent than expected.
+
+* Fix 3: splice_node Missing Indentation (audit #8)
+
+** Problem
+
+=splice.rs= =splice_node()= concatenates kept children text and replaces the parent range without adjusting indentation. Splicing out =if (cond) { ... }= leaves the body statements at their deeper indent level.
+
+** File
+
+=crates/pi-code-engine/src/edit/splice.rs=
+
+** Fix
+
+After collecting kept text, compute indentation delta and adjust:
+
+#+begin_src rust
+use super::{node_at_line, node_text, TextEdit};
+use super::indent::{node_indent, adjust_indent};
+
+pub fn splice_node(buffer: &CodeBuffer, line: usize, mode: SpliceMode) -> Result<Vec<TextEdit>> {
+    let source = buffer.source();
+    let node = node_at_line(buffer, line)?;
+    let parent = node.parent()
+        .ok_or_else(|| CodeEngineError::Edit(format!("No parent node at line {line}")))?;
+
+    let parent_indent = node_indent(&source, parent);
+    let node_indent_col = node_indent(&source, node);
+
+    let mut cursor = parent.walk();
+    let mut kept = String::new();
+    let mut first = true;
+    for child in parent.named_children(&mut cursor) {
+        let keep = match mode {
+            SpliceMode::Up => child.start_byte() >= node.start_byte(),
+            SpliceMode::Self_ => child.start_byte() >= node.start_byte() && child.end_byte() <= node.end_byte(),
+            SpliceMode::Down => child.end_byte() <= node.end_byte(),
+        };
+        if keep {
+            if !first { kept.push('
+'); }
+            first = false;
+            kept.push_str(&node_text(buffer, child));
+        }
+    }
+
+    // Adjust indentation: children were at node_indent_col, parent was at parent_indent
+    let adjusted = adjust_indent(&kept, node_indent_col, parent_indent);
+
+    Ok(vec![TextEdit {
+        start_byte: parent.start_byte(),
+        old_end_byte: parent.end_byte(),
+        new_text: adjusted,
+    }])
+}
+#+end_src
+
+The =indent= module functions need to be =pub(crate)= (they already are via the module being private to the crate). Make sure =node_indent= and =adjust_indent= are accessible from =splice.rs= — they're in the sibling module =indent.rs=. Access via =super::indent::node_indent= or re-export from =mod.rs=.
+
+* Tests (audit #10)
+
+Add tests in a new file =crates/pi-code-engine/src/edit/tests.rs= (or inline in =mod.rs= under =#[cfg(test)]=).
+
+Use the existing fixture =tests/fixtures/sources/edit_target.ts=:
+#+begin_src typescript
+function outer() {
+  if (condition) {
+    const x = 1;
+    const y = 2;
+    return x + y;
+  }
+}
+
+const items = [1, 2, 3, 4, 5];
+
+function add(a: number, b: number): number {
+  return a + b;
+}
+
+class Foo {
+  bar() { return 1; }
+  baz() { return 2; }
+}
+#+end_src
+
+** Test Helpers
+
+#+begin_src rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{buffer::CodeBuffer, language::{LanguageId, LanguageRegistry}};
+    use std::{fs, sync::Arc};
+
+    fn registry() -> Arc<LanguageRegistry> {
+        Arc::new(LanguageRegistry::with_builtins().expect("registry"))
+    }
+
+    fn edit_buffer() -> CodeBuffer {
+        let source = fs::read_to_string(
+            format!("{}/tests/fixtures/sources/edit_target.ts", env!("CARGO_MANIFEST_DIR"))
+        ).expect("fixture");
+        CodeBuffer::from_str(&source, LanguageId::new("typescript"), registry()).expect("buffer")
+    }
+
+    fn apply_and_get(buffer: &mut CodeBuffer, edits: Vec<TextEdit>) -> String {
+        buffer.edit_batch(edits).expect("edit");
+        buffer.source()
+    }
+}
+#+end_src
+
+** Required Tests
+
+1. =test_drag_down_class_method=: Drag method at line 16 (=bar()=) down. Assert =baz()= appears before =bar()= in output.
+
+2. =test_drag_up_first_is_error=: Drag method at line 16 up (already first in class body). Assert returns =Err=.
+
+3. =test_clone_function=: Clone function =add= (line 11). Assert the output contains two copies of the function text.
+
+4. =test_kill_function=: Kill =function_declaration= at line 11. Assert =add= no longer appears in output.
+
+5. =test_replace_node=: Replace =function_declaration= at line 11 with ="function add() {}"=. Assert replacement text is in output.
+
+6. =test_insert_before=: Insert ="// comment
+"= before =function_declaration= at line 11. Assert comment appears before =add=.
+
+7. =test_insert_after=: Insert ="
+// comment"= after =function_declaration= at line 11. Assert comment appears after the function.
+
+8. =test_transpose_not_self=: Call transpose at a position where both sides resolve to different nodes. Assert texts are swapped.
+
+9. =test_transpose_same_node_errors=: Call transpose at a position where both sides resolve to the same node. Assert =Err=.
+
+10. =test_splice_self=: Splice self on =const x = 1= inside the if block. Assert =const x = 1= remains and sibling statements are removed, and indentation is adjusted.
+
+* Verification
+
+1. =cargo test -p pi-code-engine -- edit= passes all 10+ new tests
+2. =cargo test -p pi-code-engine= passes all existing tests (no regressions)
+3. =cargo clippy -p pi-code-engine= zero warnings
+4. The =edit_target.ts= fixture is sufficient for all tests (don't create new fixtures)

@@ -1,0 +1,199 @@
+#+TITLE: Extend status file with session recovery metadata
+#+STATE: DOING
+#+SESSION_ID: 14b6d9b181b3cb2d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-17-43-942Z_14b6d9b181b3cb2d.jsonl]]
+#+CUSTOM_ID: FEAT-442-extend-status-file-with-session-recovery
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: desktop
+
+* Initial Message
+
+give me the commands to relaunch all the spell sessions that were on before my computer ran out of battery, then make the feature to recover that. Bonus if it brings back the niri workspaces too
+
+* Goal
+
+Extend the status file (~/.spell/status/<windowId>.json) with enough information to recover crashed sessions: session ID, session file path, working directory, and niri workspace name. Add a method to read crashed (stale) sessions without cleaning them up.
+
+* Context
+
+Currently ~SessionStatusFile~ has: status, windowId, pid, projectName, sessionTitle, updatedAt. After a power loss or crash, these files survive (clean exits remove them), but they lack the session ID and cwd needed to resume. ~StatusFileReader.readAll()~ actively deletes stale files, destroying recovery evidence.
+
+* Design Decisions
+
+- Add 4 new OPTIONAL fields to ~SessionStatusFile~: ~sessionId: string~, ~sessionFile: string~ (JSONL path), ~cwd: string~, ~workspaceName: string | null~. Optional for backwards compat.
+- ~StatusFileWriter~ gets two new methods: ~setSessionInfo(info: { sessionId: string; sessionFile: string; cwd: string })~ and ~setWorkspaceName(name: string | null)~. Called once at init. ~writeIfChanged~ pulls these from stored state — its signature does NOT change.
+- ~StatusFileReader~ gets ~readCrashed(): Promise<SessionStatusFile[]>~ that returns dead-PID entries WITHOUT deleting them. The existing ~readAll()~ keeps its cleanup behavior.
+- Add ~queryFocusedWorkspace()~ to ~packages/niri/src/niri-query.ts~: runs ~niri msg -j workspaces~ + ~niri msg -j focused-window~, returns ~{ id: number; name: string | null; idx: number } | null~.
+- ~NiriOverviewController~ queries workspace at init (~#initWindowId~) and calls ~writer.setWorkspaceName(name)~.
+- ~NiriOverviewContext~ extended with ~getSessionId(): string~ and ~getSessionFile(): string~ on ~sessionManager~.
+- Interactive-mode provides sessionId and sessionFile through the context it passes to the niri controller.
+
+* Implementation
+
+** Sub-outline
+
+*** 1. Extend types (packages/desktop-common/src/types.ts)
+
+Add to ~SessionStatusFile~:
+
+#+begin_src typescript
+export interface SessionStatusFile {
+  status: AgentStatus;
+  windowId: number | string;
+  pid: number;
+  projectName: string;
+  sessionTitle: string;
+  updatedAt: number;
+  // New recovery fields (optional for backwards compat)
+  sessionId?: string;
+  sessionFile?: string;
+  cwd?: string;
+  workspaceName?: string | null;
+}
+#+end_src
+
+*** 2. Update StatusFileWriter (packages/desktop-common/src/status-file.ts)
+
+Add private fields and methods:
+
+#+begin_src typescript
+class StatusFileWriter {
+  #sessionInfo: { sessionId: string; sessionFile: string; cwd: string } | null = null;
+  #workspaceName: string | null = null;
+
+  setSessionInfo(info: { sessionId: string; sessionFile: string; cwd: string }): void {
+    this.#sessionInfo = info;
+  }
+
+  setWorkspaceName(name: string | null): void {
+    this.#workspaceName = name;
+  }
+  // ... existing methods
+}
+#+end_src
+
+In ~writeIfChanged~, spread ~#sessionInfo~ into the payload:
+#+begin_src typescript
+const payload: SessionStatusFile = {
+  status,
+  windowId: this.#windowId,
+  pid,
+  projectName,
+  sessionTitle,
+  updatedAt: Date.now(),
+  ...(this.#sessionInfo && {
+    sessionId: this.#sessionInfo.sessionId,
+    sessionFile: this.#sessionInfo.sessionFile,
+    cwd: this.#sessionInfo.cwd,
+  }),
+  ...(this.#workspaceName !== undefined && { workspaceName: this.#workspaceName }),
+};
+#+end_src
+
+*** 3. Add readCrashed to StatusFileReader (packages/desktop-common/src/status-file.ts)
+
+#+begin_src typescript
+/** Read status files for sessions that crashed (PID dead). Does NOT clean up. */
+async readCrashed(): Promise<SessionStatusFile[]> {
+  let entries: string[];
+  try { entries = await fs.readdir(this.#statusDir); } catch { return []; }
+  const results: SessionStatusFile[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".json")) continue;
+    try {
+      const data: SessionStatusFile = await Bun.file(path.join(this.#statusDir, entry)).json();
+      if (!data.status || !data.pid) continue;
+      if (!isProcessAlive(data.pid)) results.push(data);
+    } catch { /* skip corrupt */ }
+  }
+  return results;
+}
+#+end_src
+
+*** 4. Add workspace query (packages/niri/src/niri-query.ts)
+
+#+begin_src typescript
+export interface NiriWorkspaceInfo {
+  id: number;
+  name: string | null;
+  idx: number;
+}
+
+export async function queryFocusedWorkspace(): Promise<NiriWorkspaceInfo | null> {
+  try {
+    const [winResult, wsResult] = await Promise.all([
+      $\`niri msg -j focused-window\`.quiet().nothrow(),
+      $\`niri msg -j workspaces\`.quiet().nothrow(),
+    ]);
+    if (winResult.exitCode !== 0 || wsResult.exitCode !== 0) return null;
+    const win = JSON.parse(winResult.text()) as { workspace_id?: number };
+    const workspaces = JSON.parse(wsResult.text()) as Array<{ id: number; name: string | null; idx: number }>;
+    const ws = workspaces.find(w => w.id === win.workspace_id);
+    return ws ? { id: ws.id, name: ws.name, idx: ws.idx } : null;
+  } catch { return null; }
+}
+#+end_src
+
+*** 5. Wire up in NiriOverviewController (packages/niri/src/controller.ts)
+
+Extend ~NiriOverviewContext.sessionManager~ to include:
+#+begin_src typescript
+sessionManager: {
+  getCwd(): string;
+  getSessionName(): string | undefined;
+  getSessionId(): string;       // NEW
+  getSessionFile(): string;     // NEW
+};
+#+end_src
+
+In ~#initWindowId~, also query workspace and set session info:
+#+begin_src typescript
+async #initWindowId(): Promise<void> {
+  await this.#writer.ensureDir();
+  const [windowId, workspace] = await Promise.all([
+    queryNiriFocusedWindowId(),
+    queryFocusedWorkspace(),
+  ]);
+  if (windowId !== null && !this.#destroyed) {
+    this.#writer.setWindowId(windowId);
+    this.#writer.setSessionInfo({
+      sessionId: this.#context.sessionManager.getSessionId(),
+      sessionFile: this.#context.sessionManager.getSessionFile(),
+      cwd: this.#context.sessionManager.getCwd(),
+    });
+    this.#writer.setWorkspaceName(workspace?.name ?? null);
+    this.#writeStatusIfChanged();
+  }
+}
+#+end_src
+
+*** 6. Wire up in interactive-mode (packages/coding-agent/src/modes/interactive-mode.ts)
+
+Where NiriOverviewContext is constructed (~544-597), expose getSessionId/getSessionFile on the sessionManager proxy. SessionManager already has these as ~id~ and ~getSessionFile()~ properties.
+
+*** 7. Update tests (packages/desktop-common/test/status-file.test.ts)
+
+- Test that ~writeIfChanged~ includes new fields when ~setSessionInfo~ is called
+- Test that ~readCrashed~ returns dead-PID entries without cleaning up
+- Test backwards compat: old status files without new fields still parse
+
+* Verification
+
+- ~bun test packages/desktop-common/test/status-file.test.ts~ passes
+- After starting a spell session in niri, verify ~cat ~/.spell/status/<id>.json~ contains sessionId, sessionFile, cwd, workspaceName fields
+- Manual: start session, verify status file has all fields; cleanly exit, verify status file removed; kill -9 a session, verify status file persists and readCrashed returns it
+
+* Files to Modify
+- packages/desktop-common/src/types.ts
+- packages/desktop-common/src/status-file.ts
+- packages/desktop-common/test/status-file.test.ts
+- packages/niri/src/niri-query.ts
+- packages/niri/src/controller.ts
+- packages/coding-agent/src/modes/interactive-mode.ts
+
+* Edge Cases
+- Non-niri environments: workspaceName is null, workspace query returns null — skip gracefully
+- Old status files missing new fields: still parse, readCrashed still returns them
+- Status file written before session has a title: sessionTitle is empty string, that's fine
+- Multiple sessions in same workspace: each has their own status file, all include same workspaceName

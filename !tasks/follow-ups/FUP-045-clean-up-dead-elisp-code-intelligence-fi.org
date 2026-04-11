@@ -1,0 +1,50 @@
+#+TITLE: Clean up dead Elisp code intelligence files
+#+STATE: ITEM
+#+SESSION_ID: 14b6d50334ba84c7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T19-57-16-882Z_14b6d50334ba84c7.jsonl]]
+#+CUSTOM_ID: FUP-045-clean-up-dead-elisp-code-intelligence-fi
+#+EFFORT: 1h
+#+LAYER: emacs
+#+DEPENDS: FEAT-449-slim-pi-emacs-package-to-org-only
+
+* Initial Message
+
+Emacs (spell-emacs-a09f6243d02d): installing tree-sitter grammars on first run, may take ~60s...
+
+
+do we even need that anymore? look at the recent commits in the crates
+
+* Context
+
+After the Emacs code intelligence daemon is no longer started, the Elisp files that powered it become dead code. The code daemon loaded =pi-prelude= → =pi-emacs-mcp= → =pi-emacs-tools= (which require =pi-treesit=, =pi-treesit-recipes=, =pi-buffer=, =pi-outline=, =pi-edit=). The org daemon loads =org-tasks-mcp= via a separate eval expression and does NOT depend on any of these files.
+
+This is deferred cleanup — safe to do after the main migration is complete and verified.
+
+* Scope
+
+Elisp files to remove from =packages/emacs/elisp/=:
+- =pi-buffer.el= — buffer management for code daemon
+- =pi-edit.el= — structural edit operations
+- =pi-outline.el= — outline extraction
+- =pi-treesit.el= — tree-sitter integration helpers
+- =pi-treesit-recipes.el= — grammar recipes for auto-installation
+- =pi-emacs-mcp.el= — MCP server for code daemon
+- =pi-emacs-tools.el= — tool definitions for code daemon
+- =pi-prelude.el= — prelude loaded by code daemon
+
+Elisp test files to remove from =packages/emacs/test/elisp/=:
+- =test-buffer.el=
+- =test-treesit.el=
+- =test-outline.el=
+- =test-resolution.el=
+- =run-tests.el= (if it only tests code-intelligence Elisp)
+
+Files to KEEP:
+- =org-tasks-mcp.el= and any org-related Elisp
+- Any Elisp used by the org daemon eval chain
+
+* Verification
+
+- =bun check:ts= passes (Elisp changes don't affect TS)
+- Org tool still works (org daemon doesn't load any removed files)
+- grep for removed filenames in =packages/emacs/src/= returns zero hits in =require= or =load= calls
