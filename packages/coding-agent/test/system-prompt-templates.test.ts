@@ -212,14 +212,13 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain('DEPENDS: "FEAT-001-add-auth-api"');
 	});
 
-	test("system-prompt renders caveman thinking instructions in stable section when active", async () => {
+	test("system-prompt renders terse thinking instructions in stable section when enabled", async () => {
 		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
 		const template = await Bun.file(templatePath).text();
 
 		const rendered = renderPromptTemplate(template, {
 			...baseRenderContext,
-			cavemanActive: true,
-			cavemanThinking: true,
+			terseThinking: true,
 		});
 
 		expect(rendered).toContain("Think in notation");
@@ -228,31 +227,31 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered.indexOf("<thinking-mode>")).toBeLessThan(rendered.indexOf("CACHE_BOUNDARY"));
 	});
 
-	test("system-prompt omits thinking instructions when caveman inactive", async () => {
+	test("system-prompt omits thinking instructions when terse thinking disabled", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+
+		const rendered = renderPromptTemplate(template, {
+			...baseRenderContext,
+			terseThinking: false,
+		});
+
+		expect(rendered).not.toContain("<thinking-mode>");
+		expect(rendered).not.toContain("Think in notation");
+	});
+
+	test("terse thinking renders independently of caveman output mode", async () => {
 		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
 		const template = await Bun.file(templatePath).text();
 
 		const rendered = renderPromptTemplate(template, {
 			...baseRenderContext,
 			cavemanActive: false,
-			cavemanThinking: false,
+			terseThinking: true,
 		});
 
-		expect(rendered).not.toContain("<thinking-mode>");
-	});
-
-	test("system-prompt omits thinking instructions when caveman thinking is disabled", async () => {
-		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
-		const template = await Bun.file(templatePath).text();
-
-		const rendered = renderPromptTemplate(template, {
-			...baseRenderContext,
-			cavemanActive: true,
-			cavemanThinking: false,
-		});
-
-		expect(rendered).not.toContain("<thinking-mode>");
-		expect(rendered).not.toContain("Think in notation");
+		expect(rendered).toContain("<thinking-mode>");
+		expect(rendered).toContain("Think in notation");
 	});
 
 	test("caveman template does not contain thinking instructions", async () => {
@@ -262,7 +261,7 @@ describe("system Handlebars prompt templates", () => {
 		const rendered = renderPromptTemplate(template, {
 			...baseRenderContext,
 			cavemanActive: true,
-			cavemanThinking: true,
+			terseThinking: true,
 		});
 
 		expect(rendered).not.toContain("thinking-mode");

@@ -1,0 +1,102 @@
+#+TITLE: Update tests for system prompt rewrite
+#+STATE: DONE
+#+SESSION_ID: 14b6ea9c67640cb9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-31-38-781Z_14b6ea9c67640cb9.jsonl]]
+#+CUSTOM_ID: FEAT-464-update-tests-for-system-prompt-rewrite
+#+EFFORT: 45m
+#+LAYER: core
+#+DEPENDS: FEAT-463-rewrite-system-prompt-full-creative-pass
+#+PRIORITY: #B
+
+* Initial Message
+
+how much smaller is the prompt now?
+
+* Context
+
+After the system prompt rewrite (FEAT-463), several test assertions in
+=packages/coding-agent/test/system-prompt-templates.test.ts= will fail because:
+
+1. The thinking-mode conditional changed from =cavemanThinking= to =terseThinking=
+2. String content in tested sections changed (behavior questions, code-integrity, Design Integrity)
+3. The thinking-mode block now renders by default (not gated by caveman mode)
+
+* Design Decisions
+
+1. Tests should verify the *contract* (conditional rendering, positioning, mutual exclusion) not specific prose. Where possible, replace exact-string assertions with behaviorally equivalent checks.
+2. The =<thinking-mode>= tag name stays — position tests still valid.
+3. The =CACHE_BOUNDARY= ordering tests still valid — thinking-mode must be before it.
+4. New test: =terseThinking: true= (no caveman) → thinking-mode block present.
+5. Existing test for "caveman thinking instructions in stable section when active" needs update — the block now renders with =terseThinking: true= regardless of caveman state.
+
+* File to Modify
+
+=packages/coding-agent/test/system-prompt-templates.test.ts=
+
+* Implementation Steps
+
+** Step 1: Update thinking-mode template rendering tests
+
+The test "system-prompt renders caveman thinking instructions in stable section when active" (around line 215) currently:
+- Sets =cavemanActive: true, cavemanThinking: true=
+- Checks for ="Think in notation"= and ="Symbols carry logic"=
+
+Update to:
+- Set =terseThinking: true= (no need for cavemanActive)
+- Same string checks: ="Think in notation"=, ="Symbols carry logic"=
+- Same position check: =<thinking-mode>= before =CACHE_BOUNDARY=
+
+** Step 2: Update thinking-mode omission tests
+
+The test "system-prompt omits thinking instructions when caveman inactive" (around line 231) currently:
+- Sets =cavemanActive: false, cavemanThinking: false=
+- Checks =<thinking-mode>= is absent
+
+Update to:
+- Set =terseThinking: false= (this is the opt-out case)
+- Same absence check
+
+The test "system-prompt omits thinking instructions when caveman thinking is disabled" (around line 244) currently:
+- Sets =cavemanActive: true, cavemanThinking: false=
+- Checks =<thinking-mode>= absent and ="Think in notation"= absent
+
+This test no longer makes sense as-is. Replace with:
+- Test name: "system-prompt omits thinking instructions when terseThinking is false"
+- Set =terseThinking: false=
+- Check =<thinking-mode>= absent
+
+** Step 3: Add new test for default behavior
+
+Add a new test: "system-prompt renders thinking-mode by default without caveman"
+- Set =terseThinking: true= (default), =cavemanActive: false=
+- Verify =<thinking-mode>= block is present
+- Verify it's in the stable section (before CACHE_BOUNDARY)
+
+This verifies the key behavioral change: compressed thinking is available regardless of caveman output mode.
+
+** Step 4: Update buildSystemPrompt composition tests
+
+The "caveman prompt composition" tests (around line 273) test =buildSystemPrompt= with =Settings.isolated()=. These need updating:
+
+Test "buildSystemPrompt omits thinking instructions when caveman thinking mode is normal":
+- Keeps checking =<thinking-mode>= is absent when thinkingMode is "normal"
+- String checks: update to match new content if needed
+
+Test "buildSystemPrompt keeps caveman prompt free of thinking instructions":
+- Keeps checking =<thinking-mode>= appears BEFORE caveman output prompt
+- Update any string assertions for new content
+
+** Step 5: Verify all tests pass
+
+Run: =bun test packages/coding-agent/test/system-prompt-templates.test.ts=
+
+All 16+ tests must pass.
+
+* Acceptance Criteria
+
+1. All tests in =system-prompt-templates.test.ts= pass
+2. New test proves thinking-mode renders without caveman active
+3. Opt-out test proves =terseThinking: false= suppresses thinking-mode
+4. No test checks for removed strings (old behavior/code-integrity/DI content)
+5. Position assertions preserved: =<thinking-mode>= before CACHE_BOUNDARY
+6. =bun check:ts= passes

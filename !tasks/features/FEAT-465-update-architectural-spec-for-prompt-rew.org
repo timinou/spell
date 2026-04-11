@@ -1,0 +1,71 @@
+#+TITLE: Update architectural spec for prompt rewrite
+#+STATE: DONE
+#+SESSION_ID: 14b6ea9c67640cb9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-31-38-781Z_14b6ea9c67640cb9.jsonl]]
+#+CUSTOM_ID: FEAT-465-update-architectural-spec-for-prompt-rew
+#+EFFORT: 20m
+#+LAYER: core
+#+DEPENDS: FEAT-463-rewrite-system-prompt-full-creative-pass
+#+PRIORITY: #C
+
+* Initial Message
+
+how much smaller is the prompt now?
+
+* Context
+
+After the system prompt rewrite (FEAT-463), the architectural spec at =specs/system-prompt-architecture.md= needs updating to reflect the new structure.
+
+* File to Modify
+
+=specs/system-prompt-architecture.md=
+
+* Changes Required
+
+** Identity Section Layout (around line 33)
+
+Update the layout diagram to show thinking-mode as unconditional (remove brackets):
+
+#+begin_example
+<role>           staff engineer, agency, expertise, judgment
+<communication>  style: correctness > brevity > politeness
+<behavior>       completion reflex guard, 5 pre-action questions (adversarial)
+<thinking-mode>  compressed notation (default on, opt-out via thinkingMode: "normal")
+<code-integrity> outside-in framework (callers, system, time, pipeline, DRY, failure)
+<stakes>         urgency, accountability ("pages at 3am")
+# Contract       5 inviolable rules
+# Design Integrity  8 engineering principles (absorbed Procedure philosophy)
+#+end_example
+
+Note the changes:
+- =<thinking-mode>= no longer has square brackets (it is unconditional)
+- =<behavior>= shows 5 questions (was 3)
+- =<code-integrity>= expanded framework
+- =# Design Integrity= shows 8 principles (was 5)
+
+** Design Principles section
+
+Update principle 5 to note that Procedure ## 5 philosophical content moved to Identity:
+#+begin_example
+5. **One section, one concern.** Identity = who + values. Environment = what tools. Procedure = how to work (operational only — philosophy lives in Identity).
+#+end_example
+
+** Caching Model section
+
+Update the note about thinking-mode:
+#+begin_example
+The compressed thinking-mode block IS in the stable section (Identity), because it defines how the agent reasons — a stable characteristic. It renders by default; only suppressed when `caveman.thinkingMode` is set to "normal".
+#+end_example
+
+** Token Budget
+
+Update approximate token counts for the expanded Identity section. The template static content increased by ~400 tokens (expanded code-integrity, expanded Design Integrity, restored behavior questions). Update the row:
+- Template static content: ~4600 → ~5000
+
+* Acceptance Criteria
+
+1. Identity Section Layout matches actual template structure
+2. =<thinking-mode>= documented as unconditional (default on)
+3. Design Integrity documented as 8 principles
+4. Token budget approximately correct
+5. No stale references to "5 engineering principles" or "conditional on terse thinking"
