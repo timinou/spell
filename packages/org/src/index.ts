@@ -1,7 +1,4 @@
-export type { EmacsSession, StartEmacsOptions } from "@oh-my-pi/pi-emacs";
 export * from "./categories";
-export * from "./emacs/client";
-export * from "./emacs/detection";
 export * from "./id-generator";
 export * from "./id-links";
 export * from "./journal";
@@ -9,7 +6,6 @@ export * from "./mutex";
 export * from "./org-parse";
 export * from "./org-reader";
 export * from "./org-writer";
-export * from "./query-builder";
 export * from "./schema/defaults";
-export { createOrgTool, type OrgToolDefinition } from "./tool";
+export * from "./tool";
 export * from "./types";

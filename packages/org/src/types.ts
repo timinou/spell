@@ -39,8 +39,6 @@ export interface OrgDirConfig {
 export interface OrgConfig {
 	/** Named org directories. Keys are logical names (e.g. "tasks"). */
 	dirs: Record<string, OrgDirConfig>;
-	/** Absolute path to emacs binary. Auto-detected when empty. */
-	emacsPath?: string;
 	/** TODO keywords recognised in org files. */
 	todoKeywords: string[];
 	/** Properties every task heading must have. */

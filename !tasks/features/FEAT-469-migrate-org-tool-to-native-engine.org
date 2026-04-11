@@ -1,0 +1,153 @@
+#+TITLE: Migrate Org Tool to Native Engine
+#+STATE: DONE
+#+SESSION_ID: 14b6ef804762e676
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-53-00-701Z_14b6ef804762e676.jsonl]]
+#+CUSTOM_ID: FEAT-469-migrate-org-tool-to-native-engine
+#+EFFORT: 30h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-468-org-napi-bridge-and-typescript-bindings
+
+NOTE [2026-04-11]: Migrated packages/org/src/tool.ts to use native engine via executeOrg. Removed Emacs bridge, query-builder.ts, uniorg deps. Replaced org-parse.ts with native calls + line-based parsers. 238 org tests pass.
+
+* Initial Message
+
+what's left to completely remove the emacs part of the code tool? clean and final break
+
+* Goal
+
+Migrate =packages/org/src/tool.ts= and all org-mode TypeScript code to use the native =executeOrg= NAPI function instead of the Emacs MCP bridge. Remove uniorg dependencies. This is the integration point where the native Rust engine meets the existing org tool interface.
+
+* Design Decisions
+
+- The org tool's external API (subcommands, parameters, output format) stays IDENTICAL — this is a backend swap, not a feature change
+- =executeOrg= from =@oh-my-pi/pi-natives= replaces both =readOrgFile()= (from org-reader.ts) and =client.callTool()= (Emacs bridge)
+- =org-writer.ts= STAYS for item creation and serialization — tree-sitter is for reading, not writing new content
+- Section editing (=org update ... section=) uses native =section_range= command to get byte offsets, then does a surgical text replacement in TypeScript
+- =requiresEmacs()= boundary is deleted — all queries go through native engine
+- =query-builder.ts= is deleted — keyword query parsing moves to native engine
+- =emacs/client.ts= (OrgClient) is deleted — no more socat/JSON-RPC bridge
+- =org-parse.ts= (uniorg integration) is deleted — replaced by native =to_markdown= command
+- uniorg, uniorg-parse, uniorg-rehype, hast-util-to-mdast, mdast-util-gfm-table, mdast-util-to-markdown, orgast-util-to-string — all removed from package.json
+
+* Current Emacs callTool sites in tool.ts (5 operations to replace)
+
+1. =client.callTool("org-ql-query", { files, query, sort })= (lines ~247, ~266) → =executeOrg({ command: "query", files, query, sort })=
+2. =client.callTool("org-edit-section", { file, custom_id, section, body, mode })= (lines ~369, ~411) → native =section_range= + TS text replacement
+3. =client.callTool("org-compute-waves", { ... })= (line ~735) → =executeOrg({ command: "waves", files })=
+4. =client.callTool("org-next-wave", { ... })= (line ~750) → =executeOrg({ command: "wave", files, cap })=
+5. =client.callTool("org-dependency-graph", { ... })= (line ~757) → =executeOrg({ command: "graph", files })=
+
+* Files to Modify
+
+** =packages/org/src/tool.ts= (MAJOR REWRITE)
+- Remove: =getOrgClient()= method, =getEmacsSession()= lazy init, EmacsSessionManager integration
+- Remove: org-ql-query routing in =cmdQuery()=
+- Add: =import { executeOrg } from "@oh-my-pi/pi-natives";=
+- Replace =cmdQuery()= logic:
+  - Remove =requiresEmacs()= branch split
+  - All queries (simple and complex) → =executeOrg({ command: "query", files, query: keywordString, sort, limit, offset })=
+  - Raw =ql= sexp parameter: return error "Raw org-ql sexp is no longer supported; use keyword query syntax"
+- Replace section editing:
+  - Call =executeOrg({ command: "section_range", file, custom_id, section })=
+  - Get =\{ start, end \}= byte offsets
+  - Read file content, splice new body at byte range, write back via atomic-write
+- Replace wave/graph commands:
+  - =cmdWave()= → =executeOrg({ command: "wave", files, cap: 8 })=
+  - =cmdGraph()= → =executeOrg({ command: "graph", files })=
+- Remove: =OrgSessionContext= type (no more session management)
+- The factory =createOrgTool()= no longer needs EmacsSessionManager parameter
+
+** =packages/org/src/org-reader.ts= (DELETE or STRIP)
+- All parsing now handled by native engine
+- Keep only: =applyFilter()= if any TS-side filter logic remains, or delete entirely if native handles all filtering
+- =readOrgFile()=, =readCategory()=, =findItemById()= → replaced by =executeOrg({ command: "parse" })= and =executeOrg({ command: "get" })=
+
+** =packages/org/src/query-builder.ts= (DELETE)
+- =requiresEmacs()= — no longer needed
+- =buildOrgQlSexp()= — no longer needed (no raw sexp)
+- =parseKeywordQuery()= — moved to Rust
+
+** =packages/org/src/emacs/client.ts= (DELETE)
+- OrgClient class and JSON-RPC bridge
+- Entire =packages/org/src/emacs/= directory
+
+** =packages/org/src/org-parse.ts= (DELETE)
+- =orgToMarkdown()= → replaced by =executeOrg({ command: "to_markdown" })=
+- =orgToPlainText()= → replaced by native
+- =extractOrgKeywords()= → replaced by native parsing
+- =parseOrgHeadings()= → replaced by native parsing
+
+** =packages/org/src/index.ts= (MODIFY)
+- Remove: =export type { EmacsSession, StartEmacsOptions } from "@oh-my-pi/pi-emacs";=
+- Remove any EmacsSessionManager re-exports
+- Add: exports for the new native org types if needed
+
+** =packages/org/src/types.ts= (MODIFY)
+- Remove: =OrgSessionContext= type (no more Emacs session)
+- Keep: =OrgItem=, =OrgQueryFilter=, =OrgConfig=, =OrgCreateParams=, etc.
+- Add: =NativeOrgResult= type if needed for NAPI result typing
+
+** =packages/org/package.json= (MODIFY)
+Remove dependencies:
+- uniorg
+- uniorg-parse
+- uniorg-rehype
+- hast-util-to-mdast
+- mdast-util-gfm-table
+- mdast-util-to-markdown
+- orgast-util-to-string
+
+Add dependency:
+- =@oh-my-pi/pi-natives= (if not already present)
+
+* Section Editing Implementation Detail
+
+The current =org-edit-section= elisp tool:
+1. Opens file in Emacs buffer
+2. Finds item by CUSTOM_ID
+3. Navigates to named section heading within item body
+4. Replaces or appends body content
+5. Saves buffer
+
+Native replacement:
+1. Call =executeOrg({ command: "section_range", file, custom_id, section })= → =\{ start_byte, end_byte \}=
+2. Read file with =Bun.file(path).text()=
+3. If mode "replace": =content.slice(0, start_byte) + newBody + content.slice(end_byte)=
+4. If mode "append": =content.slice(0, end_byte) + "\
+" + newBody + content.slice(end_byte)=
+5. Write via =atomicWrite(path, newContent)=
+
+* Testing
+
+** Update existing org tool tests
+Sequencing note: org tests need the compiled native binary, so this runs after the NAPI bridge is working.
+
+- =packages/org/test/tool-wave-graph.test.ts=: remove Emacs mocks, test against native engine
+- =packages/org/test/dispose.test.ts=: remove EmacsSession disposal testing (no daemon to dispose)
+- =packages/org/test/session-manager-recovery.test.ts=: DELETE (no session manager)
+- =packages/org/test/section-update-output.test.ts=: update to test native section editing
+
+** New integration tests
+- Query with date range: create items with timestamps, query with date filter, verify results
+- Query with effort: create items with EFFORT property, filter by effort threshold
+- Section editing: create item with multiple sections, edit one section, verify only that section changed
+- Dependency graph: create items with DEPENDS, verify graph output
+- Wave computation: create dependency chain, verify wave ordering
+- orgToMarkdown: convert org text, verify markdown output
+
+* Verification
+
+- =bun test packages/org/= passes (all org tool tests)
+- =bun check:ts= passes (no type errors from removed imports/types)
+- Org tool subcommands still work identically from the coding-agent (manual test: run =org query todo:DOING=, =org get ID=, =org dashboard=)
+- No reference to =@oh-my-pi/pi-emacs= remains in =packages/org/=
+- No reference to =uniorg= remains in =packages/org/=
+
+* Edge Cases
+
+- Section not found: =section_range= returns error, tool returns descriptive error message
+- Empty query string: returns all items (no filter)
+- Large org directories (100+ files): query should complete in <1s
+- Concurrent mutations: atomic-write + mutex prevents corruption (existing pattern)
+- Backward compatibility: existing org files with file-level and heading-level formats both parse correctly

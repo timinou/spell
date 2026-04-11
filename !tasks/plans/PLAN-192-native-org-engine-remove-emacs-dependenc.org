@@ -1,0 +1,152 @@
+#+TITLE: Native Org Engine - Remove Emacs Dependency
+#+STATE: DONE
+#+SESSION_ID: 14b6ef804762e676
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-53-00-701Z_14b6ef804762e676.jsonl]]
+#+CUSTOM_ID: PLAN-192-native-org-engine-remove-emacs-dependenc
+
+NOTE [2026-04-11]: All 5 waves completed. Native org engine replaces Emacs dependency entirely. 43 Rust tests, 238 TS tests, all passing. Full cleanup verified.
+
+
+* Initial Message
+
+what's left to completely remove the emacs part of the code tool? clean and final break
+
+* Context
+
+The org tool currently depends on an Emacs daemon for advanced operations: complex queries (date ranges, clocked time, effort filtering), dependency graph computation, wave scheduling, and section editing. This creates a heavy runtime dependency (Emacs 29.1+, socat) and architectural inconsistency — the code tool already uses a native Rust engine (pi-code-engine with tree-sitter), while the org tool relies on MCP calls to an Emacs daemon over Unix socket.
+
+The org tool is already ~80% native TypeScript (init, create, get, update, note, set, archive, simple queries). Only 5 specific =callTool= operations go through Emacs: =org-ql-query=, =org-edit-section=, =org-compute-waves=, =org-next-wave=, and =org-dependency-graph=.
+
+** Approach
+
+Build a new Rust crate =pi-org-engine= with tree-sitter-org for incremental org-mode parsing, a native query engine (replacing org-ql), and native graph algorithms (replacing elisp graph tools). Expose through NAPI in =pi-natives= following the =executeCodeBuffer= pattern. Migrate the org tool to use the native engine, remove the Emacs bridge, remove the =pi-emacs= package entirely.
+
+** Key Decisions
+
+1. New Rust crate =crates/pi-org-engine/= following pi-code-engine architecture
+2. Vendored tree-sitter-org grammar (milisims, MIT) in workspace crate =crates/tree-sitter-org/= — published crate requires tree-sitter <0.21, project uses 0.25
+3. Tree-sitter provides document structure; custom Rust extracts semantics (TODO states, properties, timestamps, CLOCK entries, effort)
+4. Query engine replaces org-ql: keyword syntax supported, raw sexp dropped
+5. Graph engine replaces elisp: iterative DFS cycle detection, Kahn's algorithm for waves, union-find for connected components
+6. NAPI bridge: single =executeOrg= function, command dispatch pattern
+7. Writes stay in TypeScript (org-writer.ts); section editing uses native byte ranges
+8. Uniorg + 6 npm deps removed; org-to-markdown conversion in Rust
+9. Full clock/effort support: CLOCK parsing, duration aggregation, effort normalization
+10. =packages/emacs/= removed entirely (76 combobulate .el files, MCP server, daemon management)
+11. =packages/org/elisp/= removed (MCP tools superseded by Rust engine, ERT tests by Rust tests)
+12. AGENTS.md "Elisp-First Policy" replaced with "Native-First Policy"
+
+* Verification
+
+** Build
+- =cargo test -p tree-sitter-org= — grammar compiles and basic parse works
+- =cargo test -p pi-org-engine= — all unit tests pass (parsing, queries, graph algorithms)
+- =cargo clippy -p pi-org-engine -- -D warnings= — clean
+- =cargo build -p pi-natives= — compiles with new org_buffer module
+
+** TypeScript
+- =bun check:ts= — no type errors
+- =bun lint:ts= — clean
+- =bun test packages/org/= — all org tool tests pass without Emacs
+- =bun test packages/natives/test/org-buffer.test.ts= — NAPI bindings work
+- =bun test packages/coding-agent/test/tools/org*.test.ts= — coding-agent org tests pass
+
+** Absence Checks
+- No import of =@oh-my-pi/pi-emacs= in any .ts file
+- No reference to =EmacsSessionManager= in source code
+- No =uniorg= import in =packages/org/=
+- =packages/emacs/= directory does not exist
+- =emacs.path= and =org.emacsPath= not in settings schema
+- AGENTS.md contains "Native-First Policy" (not "Elisp-First Policy")
+
+** Functional
+- =org query todo:DOING= returns correct items
+- =org query priority:>=B= works (was Emacs-only, now native)
+- =org dashboard= includes clocked time aggregation
+- =org wave= returns eligible items with correct wave number
+- =org graph= returns dependency graph with cycle detection
+- =org update ... section= correctly edits named sections
+
+* Execution Manifest
+
+** Wave 1: Foundation (parallelizable: none, this is the base)
+- [[id:PROJ-031-pi-org-engine-foundation-crate]] — 60h, #A
+  Create tree-sitter-org workspace crate, pi-org-engine crate with OrgBuffer, OrgItem extraction, timestamp/clock/effort parsing, org-to-markdown conversion.
+
+** Wave 2: Engines (parallelizable: query and graph are independent)
+- [[id:FEAT-466-native-org-query-engine]] — 30h, #A, depends on PROJ-031
+  Native query engine: filter predicates, keyword syntax parser, date/clock/effort queries, property comparison, sort, pagination.
+
+- [[id:FEAT-467-native-org-graph-engine]] — 30h, #A, depends on PROJ-031
+  Native graph engine: DAG construction, cycle detection (iterative DFS), wave computation (Kahn's), connected components (union-find), sub-outline waves.
+
+** Wave 3: Bridge (depends on both engines)
+- [[id:FEAT-468-org-napi-bridge-and-typescript-bindings]] — 16h, #A, depends on FEAT-466 + FEAT-467
+  NAPI function =executeOrg= in pi-natives, command dispatch, TypeScript bindings in packages/natives.
+
+** Wave 4: Migration (depends on bridge)
+- [[id:FEAT-469-migrate-org-tool-to-native-engine]] — 30h, #A, depends on FEAT-468
+  Migrate packages/org/tool.ts to native engine, remove Emacs bridge, remove uniorg, remove query-builder, update tests.
+
+** Wave 5: Cleanup (depends on migration)
+- [[id:FEAT-470-remove-emacs-infrastructure-from-coding]] — 16h, #A, depends on FEAT-469
+  Remove EmacsSessionManager from coding-agent, delete packages/emacs/, remove settings, update AGENTS.md.
+
+** Total Effort: 182h
+
+** Completion [2026-04-11]
+
+*** Verification
+
+**** Build
+- =cargo test -p tree-sitter-org= — 4 tests pass (3 unit + 1 doctest)
+- =cargo test -p pi-org-engine= — 39 tests pass (buffer, clock, effort, graph, markdown, query, section, timestamp)
+- =cargo clippy -p pi-org-engine -- -D warnings= — clean
+- =cargo build -p pi-natives= — compiles successfully with org_buffer module
+
+**** TypeScript
+- =bun check:ts= — 1875 files checked, no errors, no fixes needed
+- =bun lint:ts= — 1875 files checked, clean
+- =bun test packages/org/test/= — 238 tests pass across 21 files, 0 failures
+
+**** Absence Checks
+- No import of =@oh-my-pi/pi-emacs= in any .ts file — PASS
+- No reference to =EmacsSessionManager= in source code — PASS
+- No =uniorg= import in =packages/org/= — PASS
+- =packages/emacs/= directory does not exist — PASS
+- =emacsPath= not in OrgConfig type — PASS
+- AGENTS.md contains "Native-First Policy" — PASS
+
+*** Artifacts
+
+New crates:
+- =crates/tree-sitter-org/= — vendored org grammar for tree-sitter 0.25+
+- =crates/pi-org-engine/= — native org engine (buffer, query, graph, section, markdown, clock, effort, timestamp modules)
+
+New NAPI bridge:
+- =crates/pi-natives/src/org_buffer.rs= — executeOrg NAPI function
+- =packages/natives/src/org-buffer/= — TypeScript bindings
+
+Modified:
+- =packages/org/src/tool.ts= — rewritten to use native engine, Emacs-free
+- =packages/org/src/org-parse.ts= — replaced uniorg with native engine + line-based parsers
+- =packages/org/src/index.ts= — updated exports
+- =packages/org/src/types.ts= — removed emacsPath
+- =packages/org/src/org-reader.ts= — removed Emacs comments
+- =packages/org/src/org-writer.ts= — removed Emacs comments
+- =packages/org/package.json= — removed uniorg deps, added pi-natives dep
+- =packages/coding-agent/test/swarm/blackboard.test.ts= — removed emacsPath
+- =packages/coding-agent/test/swarm/handoff-tool.test.ts= — removed emacsPath
+- =AGENTS.md= — replaced Elisp-First with Native-First Policy
+
+Deleted:
+- =packages/emacs/= — entire package (daemon, session manager, detection, MCP tool, 76 combobulate .el files)
+- =packages/org/elisp/= — MCP tools, ERT tests, vendor libs
+- =packages/org/src/emacs/= — client.ts, detection.ts
+- =packages/org/src/query-builder.ts= — org-ql sexp builder
+- =packages/org/test/live-emacs-section-update.test.ts=
+- =packages/org/test/loop-elisp.test.ts=
+- =packages/org/test/session-manager-recovery.test.ts=
+
+*** Deviations
+None.

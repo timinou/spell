@@ -24,7 +24,6 @@ function makeOrgConfig() {
 				},
 			},
 		},
-		emacsPath: undefined,
 		todoKeywords: ["INIT", "ITEM", "DOING", "REVIEW", "DONE", "BLOCKED"],
 		requiredProperties: ["AGENT", "TYPE"],
 	};

@@ -1,0 +1,149 @@
+#+TITLE: Remove Emacs Infrastructure from Coding Agent
+#+STATE: DONE
+#+SESSION_ID: 14b6ef804762e676
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-53-00-701Z_14b6ef804762e676.jsonl]]
+#+CUSTOM_ID: FEAT-470-remove-emacs-infrastructure-from-coding
+#+EFFORT: 16h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-469-migrate-org-tool-to-native-engine
+
+NOTE [2026-04-11]: Deleted packages/emacs/, packages/org/elisp/, packages/org/src/emacs/. Removed all @oh-my-pi/pi-emacs imports. Updated AGENTS.md to Native-First Policy. Removed emacsPath from OrgConfig. Updated all test files. bun check:ts and bun lint:ts clean.
+
+* Initial Message
+
+what's left to completely remove the emacs part of the code tool? clean and final break
+
+* Goal
+
+Remove all Emacs daemon infrastructure from =packages/coding-agent/= now that the org tool uses the native engine. This includes the EmacsSessionManager from ToolSession, the daemon lifecycle code from SDK, settings schema entries, and all related tests. Also remove the =packages/emacs/= package entirely since it has no remaining consumers.
+
+* Design Decisions
+
+- EmacsSessionManager property removed from ToolSession interface (was optional, so removal is safe)
+- Emacs daemon startup/dispose lifecycle removed from SDK
+- =emacs.path= and =org.emacsPath= settings removed from schema
+- =packages/emacs/= package deleted entirely (all 76 combobulate .el files, MCP server, daemon management)
+- =packages/org/elisp/= directory retained ONLY if org elisp files are needed for non-agent Emacs users; otherwise deleted
+- All test files that mock or test EmacsSessionManager are updated or removed
+
+* Files to Modify in packages/coding-agent/
+
+** =packages/coding-agent/src/tools/org.ts=
+- Remove: =import { type CodeWarmupResult, EmacsSessionManager, startEmacsSession } from "@oh-my-pi/pi-emacs";=
+- Remove: =ELISP_DIR= constant
+- Remove: =warmupOrgEmacs()= function
+- Remove: =createOrgSessionManager()= function
+- Remove: =#orgSessionManager: EmacsSessionManager= field from OrgTool class
+- Update OrgTool constructor: no longer receives EmacsSessionManager
+- Update OrgTool to call createOrgTool without session manager parameter
+- The tool still wraps createOrgTool from @oh-my-pi/pi-org, but the factory no longer needs Emacs
+
+** =packages/coding-agent/src/tools/index.ts=
+- Remove: =import type { EmacsSessionManager } from "@oh-my-pi/pi-emacs";=
+- Remove: =orgSessionManager?: EmacsSessionManager;= from ToolSession interface
+- Remove: softReset/dispose comments about Emacs daemon lifecycle
+- Keep: OrgTool import and registration in BUILTIN_TOOLS (tool still exists, just Emacs-free)
+
+** =packages/coding-agent/src/sdk.ts=
+- Remove: =import { createOrgSessionManager } from "./tools/org";= (line ~147)
+- Remove: =const orgSessionManager = createOrgSessionManager(orgEmacsPath, cwd, sessionId);= (line ~958)
+- Remove: =orgSessionManager,= from toolSession object (line ~1030)
+- Remove: =orgEmacsPath= variable and its resolution from settings
+- Remove: Emacs daemon disposal block in =toolSession.dispose()= (lines ~1804-1811):
+  #+begin_src typescript
+  if (toolSession.orgSessionManager) {
+      try { await toolSession.orgSessionManager.dispose(); }
+      catch (err) { logger.warn("orgSessionManager dispose failed", ...); }
+  }
+  #+end_src
+- Remove: Comment about orgSessionManager in softReset (line ~1856)
+
+** =packages/coding-agent/src/config/settings-schema.ts=
+- Remove: =emacs.path= setting definition (~line 1598)
+- Remove: =org.emacsPath= setting definition (~line 1605)
+- If these are the only =emacs.*= settings, remove the entire emacs settings group
+
+** =packages/coding-agent/package.json=
+- Remove: ="@oh-my-pi/pi-emacs": "workspace:*"= from dependencies
+
+* Test Files to Update/Remove
+
+** =packages/coding-agent/test/tools/org-session-manager.test.ts= (DELETE)
+- Tests EmacsSessionManager integration with org tool — no longer relevant
+
+** =packages/coding-agent/test/tools/org-cwd-change.test.ts= (UPDATE)
+- Remove EmacsSession/EmacsSessionManager type imports and mocks
+- Update to test org tool without Emacs dependency
+- Keep test scenarios for CWD change behavior if they test something else
+
+** =packages/coding-agent/test/tools/org.test.ts= (UPDATE)
+- Remove EmacsSession disposal testing
+- Keep: schema validation and rendering tests
+
+** =packages/coding-agent/test/tools/org-section-output.test.ts= (UPDATE)
+- Remove: mock of =startEmacsSession from "@oh-my-pi/pi-emacs"=
+- Update to test section editing via native engine
+
+* packages/emacs/ Removal
+
+** Delete the entire =packages/emacs/= directory:
+- =src/daemon.ts= — Emacs daemon lifecycle
+- =src/session-manager.ts= — EmacsSessionManager class
+- =src/detection.ts= — Emacs binary detection
+- =src/tool.ts= — CodeWarmupResult type
+- =src/index.ts= — exports
+- =elisp/vendor/combobulate/= — 76 .el files (dead weight)
+- =elisp/vendor/mcp/= — MCP server for Emacs
+- =elisp/pi-code.el= — code tool elisp (unused since code tool is native)
+- =elisp/pi-emacs.el= — Emacs configuration
+- =package.json=, =tsconfig.json=, etc.
+
+** Update workspace configuration:
+- Remove =packages/emacs= from root =package.json= workspaces array (if present)
+- Remove from =bun.lockb= (happens automatically on next install)
+
+* packages/org/elisp/ Decision
+
+The =packages/org/elisp/= directory contains org-mode MCP tools that ran inside the Emacs daemon. With the native engine, these are no longer called from TypeScript. Options:
+- DELETE if no external Emacs users depend on them
+- KEEP if the elisp tools have independent value for Emacs MCP users
+
+Decision: DELETE =packages/org/elisp/= since these tools were only used via the agent's MCP bridge. The ERT tests (=test-org-fluid-plan.el=, etc.) are superseded by Rust unit tests in pi-org-engine.
+
+* AGENTS.md Update
+
+Modify =AGENTS.md= section "Org Logic: Elisp-First Policy":
+- Rename to "Org Logic: Native-First Policy"
+- Replace content:
+  #+begin_example
+  ## Org Logic: Native-First Policy
+
+  Org-mode algorithms (query engine, dependency analysis, topological sort,
+  wave computation, connected components) live in `crates/pi-org-engine/`
+  (Rust with tree-sitter-org). TypeScript code accesses these through
+  `executeOrg()` from `@oh-my-pi/pi-natives`.
+
+  - **Canonical graph operations**: `pi-org-engine::graph` module — DAG
+    construction, cycle detection, wave computation, connected components
+  - **Query engine**: `pi-org-engine::query` module — replaces org-ql
+  - **Prefer Rust tests** for org algorithm testing over TypeScript unit tests
+  - Plan execution uses native org operations directly (no Emacs daemon)
+  #+end_example
+
+* Verification
+
+- =bun check:ts= passes (no type errors from removed Emacs types)
+- =bun lint:ts= passes
+- =bun test packages/coding-agent/test/tools/org*.test.ts= — all org tests pass without Emacs
+- No import of =@oh-my-pi/pi-emacs= remains anywhere in =packages/coding-agent/= or =packages/org/=
+- No reference to =EmacsSessionManager= remains in source code
+- =packages/emacs/= directory does not exist
+- =emacs.path= and =org.emacsPath= no longer appear in settings schema
+- AGENTS.md contains "Native-First Policy" section
+
+* Edge Cases
+
+- Concurrent sessions: without daemon, each org operation is stateless (file read → parse → respond). Mutex in OrgBufferRegistry handles concurrent access.
+- softReset: no Emacs daemon to preserve, so softReset simply does nothing for org (was already the case — comment says "intentionally NOT touched")
+- Settings migration: users with =emacs.path= in their config get a warning or the setting is silently ignored (prefer silent ignore — removed settings should not error)

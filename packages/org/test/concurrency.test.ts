@@ -40,8 +40,7 @@ function makeConfig(overrides?: Partial<OrgConfig>): OrgConfig {
 }
 
 function makeTool(config?: OrgConfig): OrgToolDefinition {
-	const stubEmacs = (): Promise<never> => Promise.reject(new Error("Emacs not used in concurrency tests"));
-	return createOrgTool(tmpDir, config ?? makeConfig(), stubEmacs);
+	return createOrgTool(tmpDir, config ?? makeConfig());
 }
 
 function sequenceNumber(id: string): number {

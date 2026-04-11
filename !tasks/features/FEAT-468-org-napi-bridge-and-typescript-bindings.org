@@ -1,0 +1,177 @@
+#+TITLE: Org NAPI Bridge and TypeScript Bindings
+#+STATE: DONE
+#+SESSION_ID: 14b6ef804762e676
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-53-00-701Z_14b6ef804762e676.jsonl]]
+#+CUSTOM_ID: FEAT-468-org-napi-bridge-and-typescript-bindings
+#+EFFORT: 16h
+#+PRIORITY: #A
+#+LAYER: infra
+#+DEPENDS: FEAT-466-native-org-query-engine FEAT-467-native-org-graph-engine
+
+NOTE [2026-04-11]: Created executeOrg NAPI function in crates/pi-natives/src/org_buffer.rs with command dispatch (parse, query, graph, computeWaves, nextWave, editSection, toMarkdown, toPlainText). TypeScript bindings in packages/natives/src/org-buffer/.
+
+* Initial Message
+
+what's left to completely remove the emacs part of the code tool? clean and final break
+
+* Goal
+
+Expose =pi-org-engine= through NAPI bindings in =crates/pi-natives/= and provide TypeScript wrapper types in =packages/natives/=. This follows the exact pattern of =executeCodeBuffer= / =executeCodeGraph= for the code tool.
+
+* Design Decisions
+
+- Single NAPI entry point: =executeOrg(options: Value) -> Value= (synchronous, matching code_buffer.rs pattern)
+- Command dispatch via =options.command= string field
+- Results wrapped in ={"output": ..., "error": bool}= envelope (matching code tool pattern)
+- OrgBufferRegistry uses =OnceLock<Mutex<OrgBufferRegistry>>= for thread safety (matching code_buffer.rs)
+- TypeScript types mirror the Rust OrgItem struct
+
+* Reference Pattern: =crates/pi-natives/src/code_buffer.rs=
+
+The code_buffer.rs pattern to follow:
+1. Static registry with OnceLock + Mutex
+2. Helper functions: =engine_err()=, =json_err()=, =json_response()=, =to_json()=
+3. Single =#[napi]= function with match on command string
+4. Each command extracts params from serde_json::Value, calls engine, returns json_response
+
+* Commands to Implement
+
+| Command | Description | Input | Output |
+|---------|-------------|-------|--------|
+| parse | Parse org file, return all items | file path | Vec<OrgItem> as JSON |
+| get | Get single item by ID | file path, custom_id | OrgItem as JSON |
+| query | Filter items with keyword syntax | files[], query string, sort, limit, offset | Vec<OrgItem> as JSON |
+| graph | Build dependency graph | files[] | { nodes, edges, cycles } |
+| wave | Next wave of eligible items | files[], cap | { wave, items, total } |
+| waves | Compute all waves (Kahn's) | files[] | [{ number, items }] |
+| components | Connected components | files[] | [{ root_id, member_ids, waves }] |
+| section_range | Find byte range of named section | file, custom_id, section | { start, end } |
+| to_markdown | Convert org to markdown | file path or text | markdown string |
+| validate | Validate items against schema | files[] | { valid, errors, warnings } |
+
+* Files to Create/Modify
+
+** =crates/pi-natives/src/org_buffer.rs= (NEW)
+#+begin_src rust
+use napi::*;
+use napi_derive::napi;
+use pi_org_engine::*;
+use std::sync::OnceLock;
+use parking_lot::Mutex;
+
+static ORG_REGISTRY: OnceLock<Mutex<OrgBufferRegistry>> = OnceLock::new();
+
+fn org_registry() -> &'static Mutex<OrgBufferRegistry> {
+    ORG_REGISTRY.get_or_init(|| Mutex::new(OrgBufferRegistry::new()))
+}
+
+#[napi(js_name = "executeOrg")]
+pub fn execute_org(options: Value) -> Result<Value> {
+    let command = options.get("command")
+        .and_then(Value::as_str)
+        .ok_or_else(|| json_err("Missing required field: command"))?;
+
+    match command {
+        "parse" => { /* ... */ }
+        "get" => { /* ... */ }
+        "query" => { /* ... */ }
+        "graph" => { /* ... */ }
+        "wave" => { /* ... */ }
+        "waves" => { /* ... */ }
+        "components" => { /* ... */ }
+        "section_range" => { /* ... */ }
+        "to_markdown" => { /* ... */ }
+        "validate" => { /* ... */ }
+        _ => Err(json_err(format!("Unknown org command: {command}")))
+    }
+}
+#+end_src
+
+** =crates/pi-natives/src/lib.rs= (MODIFY)
+Add =pub mod org_buffer;= to the module declarations.
+
+** =crates/pi-natives/Cargo.toml= (MODIFY)
+Add dependency:
+#+begin_src toml
+pi-org-engine = { path = "../pi-org-engine" }
+#+end_src
+
+** =packages/natives/src/org-buffer/index.ts= (NEW)
+#+begin_src typescript
+import type { OrgBufferOptions, OrgBufferResult } from "./types";
+
+// Import the NAPI function (auto-bound via napi-rs)
+const { executeOrg: nativeExecuteOrg } = require("../../native");
+
+export function executeOrg(options: OrgBufferOptions): OrgBufferResult {
+    return nativeExecuteOrg(options);
+}
+#+end_src
+
+** =packages/natives/src/org-buffer/types.ts= (NEW)
+#+begin_src typescript
+export interface OrgBufferOptions {
+    command: string;
+    file?: string;
+    files?: string[];
+    query?: string;
+    custom_id?: string;
+    section?: string;
+    sort?: string;
+    limit?: number;
+    offset?: number;
+    cap?: number;
+    text?: string; // for to_markdown with inline text
+}
+
+export interface OrgBufferResult {
+    output: unknown;
+    error: boolean;
+}
+
+export interface NativeOrgItem {
+    id: string;
+    title: string;
+    state: string;
+    category: string;
+    dir: string;
+    file: string;
+    line: number;
+    level: number;
+    properties: Record<string, string>;
+    body?: string;
+    children?: NativeOrgItem[];
+}
+#+end_src
+
+** =packages/natives/src/index.ts= (MODIFY)
+Add: =export * from "./org-buffer";=
+
+* Testing
+
+** Rust-side NAPI tests (=crates/pi-natives/src/org_buffer.rs=)
+Integration tested via TypeScript since NAPI functions need a JS runtime.
+
+** TypeScript binding tests (=packages/natives/test/org-buffer.test.ts=)
+- Sequencing note: tests require the compiled NAPI binary, so infrastructure must exist before tests can run.
+- parse command: parse a fixture .org file, verify OrgItem fields
+- get command: get item by CUSTOM_ID, verify correct item returned
+- query command: filter by todo state, verify subset
+- graph command: items with DEPENDS, verify nodes/edges/cycles structure
+- wave command: verify eligible items returned with wave number
+- section_range command: verify byte offsets for named section
+- to_markdown command: verify org→markdown conversion
+- Error handling: missing file → error response, bad command → error response
+
+* Verification
+
+- =cargo build -p pi-natives= compiles without errors (includes new org_buffer module)
+- =bun test packages/natives/test/org-buffer.test.ts= passes
+- The NAPI function is accessible from TypeScript as =executeOrg=
+
+* Edge Cases
+
+- Large org files (>1MB): should not crash, may return error for files exceeding size limit
+- Concurrent access: OrgBufferRegistry is Mutex-protected, safe from multiple threads
+- Invalid JSON in options: descriptive error message
+- Missing required fields: specific error message naming the missing field

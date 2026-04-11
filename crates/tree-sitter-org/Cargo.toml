@@ -1,0 +1,24 @@
+[package]
+name = "tree-sitter-org"
+description = "Org-mode grammar for tree-sitter (vendored from milisims/tree-sitter-org, MIT)"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+authors.workspace = true
+repository.workspace = true
+
+build = "build.rs"
+include = ["build.rs", "src/*", "Cargo.toml"]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+cc = "1"
+
+
+[dev-dependencies]
+tree-sitter = "0.25"

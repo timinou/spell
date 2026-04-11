@@ -9,6 +9,7 @@ export * from "./highlight";
 export * from "./html";
 export * from "./image";
 export * from "./keys";
+export * from "./org-buffer";
 export * from "./projfs";
 export * from "./ps";
 export * from "./pty";

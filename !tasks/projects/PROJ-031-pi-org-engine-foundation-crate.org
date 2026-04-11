@@ -1,0 +1,199 @@
+#+TITLE: pi-org-engine Foundation Crate
+#+STATE: DONE
+#+SESSION_ID: 14b6ef804762e676
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-53-00-701Z_14b6ef804762e676.jsonl]]
+#+CUSTOM_ID: PROJ-031-pi-org-engine-foundation-crate
+#+EFFORT: 60h
+#+PRIORITY: #A
+#+LAYER: infra
+
+NOTE [2026-04-11]: Created tree-sitter-org crate with vendored grammar (milisims, MIT, adapted for TS 0.25), pi-org-engine crate with OrgBuffer, item extraction, timestamp/clock/effort parsing, query engine, graph engine, section editing, org-to-markdown conversion. 43 Rust tests pass, clippy clean.
+
+* Initial Message
+
+what's left to completely remove the emacs part of the code tool? clean and final break
+
+* Goal
+
+Create a new Rust crate =crates/pi-org-engine/= that provides native tree-sitter-based org-mode file parsing. This replaces the Emacs daemon + org-element for structural understanding of org files. Follows the same architecture as =crates/pi-code-engine/= (buffer registry, tree-sitter parsing, command dispatch).
+
+* Design Decisions
+
+- Use milisims/tree-sitter-org grammar (MIT license), vendored into a workspace crate =crates/tree-sitter-org/= because the published crate (v1.3.3) requires tree-sitter <0.21 and the project uses tree-sitter 0.25
+- Tree-sitter provides document structure (sections, headlines, drawers, bodies); custom Rust code extracts semantic content (TODO states, property values, timestamps, clocks, effort)
+- OrgBuffer wraps tree-sitter parser for a single org file with incremental reparsing
+- OrgItem is the primary output type: id, title, state, priority, tags, properties, body, children, level, file, line
+- Two org item formats are supported:
+  1. File-level items: =#+KEY: value= frontmatter, level 0, CUSTOM_ID from =#+CUSTOM_ID:= line
+  2. Heading-level items: =* STATE title :tags:= with =:PROPERTIES:= drawer, level from star count
+- Effort format: regex =^[0-9]+[hm]$= (e.g., "2h", "30m"). Effort is parsed to minutes for comparison.
+- Timestamps: active =[<2024-01-15 Mon>]=, inactive =[2024-01-15 Mon]=, ranges, repeating. Parsed to a Rust Timestamp struct.
+- CLOCK entries: =CLOCK: [2024-01-15 Mon 09:00]--[2024-01-15 Mon 10:30] => 1:30= in LOGBOOK drawers. Duration parsed to minutes.
+- Org-to-markdown conversion: walk tree-sitter AST nodes, emit corresponding markdown (headlines -> #, bold -> **, links -> [](), etc.)
+
+* Files to Create
+
+** =crates/tree-sitter-org/Cargo.toml=
+#+begin_src toml
+[package]
+name = "tree-sitter-org"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+cc = "1.0"
+#+end_src
+
+** =crates/tree-sitter-org/build.rs=
+Build the vendored parser.c and scanner.c using cc crate. Follow the pattern in existing tree-sitter grammar crates but use tree-sitter-language 0.1 for the new API.
+
+** =crates/tree-sitter-org/src/lib.rs=
+Export the language function using =tree_sitter_language::LanguageFn=. Follow the pattern used by tree-sitter grammars compatible with tree-sitter 0.25.
+
+** =crates/tree-sitter-org/src/= (vendored)
+Copy parser.c, scanner.c, and tree_sitter/parser.h from https://github.com/milisims/tree-sitter-org/tree/main/src
+
+** =crates/pi-org-engine/Cargo.toml=
+Dependencies: tree-sitter = "0.25", tree-sitter-org (path = "../tree-sitter-org"), ropey, serde, serde_json, chrono (for timestamp parsing).
+
+** =crates/pi-org-engine/src/lib.rs=
+Public API: mod buffer, item, timestamp, clock, effort, error, markdown
+
+** =crates/pi-org-engine/src/buffer.rs=
+- =OrgBuffer= struct: rope (Rope), tree (Tree), parser (Parser), path (Option<PathBuf>)
+- =OrgBufferRegistry= (like CodeBuffer's BufferRegistry): open/close/list, keyed by path
+- =open(path)=: read file, parse with tree-sitter-org, return OrgBuffer
+- =reparse()=: incremental reparse after edit
+- =items()=: extract all OrgItems from the current tree
+
+** =crates/pi-org-engine/src/item.rs=
+- =OrgItem= struct matching the TypeScript interface:
+  #+begin_src rust
+  #[derive(Debug, Clone, Serialize)]
+  pub struct OrgItem {
+      pub id: String,          // CUSTOM_ID
+      pub title: String,
+      pub state: String,       // TODO keyword
+      pub category: String,
+      pub dir: String,
+      pub file: String,
+      pub line: usize,         // 1-indexed
+      pub level: usize,        // 0 for file-level, 1+ for headings
+      pub properties: HashMap<String, String>,
+      pub body: Option<String>,
+      pub children: Vec<OrgItem>,
+  }
+  #+end_src
+- =extract_items(tree, source, file_path)=: walk tree-sitter nodes, extract items
+  - For file-level: find =directive= nodes with name "CUSTOM_ID", "STATE", "TITLE", etc.
+  - For heading-level: find =section= -> =headline= -> parse stars/item/tags; find =property_drawer= -> parse =:KEY: value= lines
+  - Body: text between property drawer end and next section at same/higher level
+- =find_item_by_id(tree, source, id)=: locate specific item by CUSTOM_ID
+- =find_section_range(tree, source, item_id, section_name)=: return byte range of a named sub-heading within an item's body (used for section editing)
+
+** =crates/pi-org-engine/src/timestamp.rs=
+- =OrgTimestamp= enum: Active, Inactive, Range, Diary
+- Each variant contains: year, month, day, optional weekday, optional time (hour, minute), optional repeater
+- =parse_timestamp(text: &str) -> Option<OrgTimestamp>=
+- =timestamp_in_range(ts, from, to) -> bool=
+- Handle formats: =<2024-01-15 Mon>=, =<2024-01-15 Mon 09:00>=, =<2024-01-15>--<2024-01-20>=, etc.
+
+** =crates/pi-org-engine/src/clock.rs=
+- =ClockEntry= struct: start (datetime), end (Option<datetime>), duration_minutes (u32)
+- =parse_clock_entries(body: &str) -> Vec<ClockEntry>=
+  - Parse lines matching =CLOCK: \[...\]--\[...\] =>  H:MM= or =CLOCK: \[...\]=
+- =total_clocked_minutes(entries: &[ClockEntry]) -> u32=
+- =clocked_on_date(entries, date) -> bool=
+
+** =crates/pi-org-engine/src/effort.rs=
+- =parse_effort(text: &str) -> Option<u32>= — returns minutes. "2h" -> 120, "30m" -> 30
+- =effort_matches(effort_minutes: u32, op: &str, threshold: u32) -> bool=
+
+** =crates/pi-org-engine/src/markdown.rs=
+- =org_to_markdown(tree, source) -> String=: walk tree-sitter AST, emit markdown
+  - headline stars -> # depth, bold -> **, italic -> *, links -> [](), lists preserved, code blocks -> triple backticks
+- =org_to_plaintext(tree, source) -> String=: strip all markup
+- =extract_keywords(tree, source) -> HashMap<String, String>=: extract =#+KEY: value= directives
+
+** =crates/pi-org-engine/src/error.rs=
+- =OrgEngineError= enum: Parse, Io, NotFound, InvalidFormat
+- Implement Display and std::error::Error
+
+* Testing Strategy (Rust unit tests)
+
+Tests go in each module file using =#[cfg(test)] mod tests=.
+
+** buffer.rs tests
+- Parse a minimal org file with one heading, verify tree is not null
+- Parse file-level item format, verify item extraction
+- Parse heading-level item format, verify item extraction
+- Incremental reparse after text insertion
+
+** item.rs tests
+- File-level item: =#+CUSTOM_ID: FEAT-001
+#+STATE: ITEM
+#+TITLE: Test= -> OrgItem { id: "FEAT-001", state: "ITEM", title: "Test", level: 0 }
+- Heading-level item: =* DOING Fix bug :urgent:
+:PROPERTIES:
+:CUSTOM_ID: BUG-001
+:EFFORT: 2h
+:END:
+Body text= -> OrgItem { id: "BUG-001", state: "DOING", title: "Fix bug", level: 1, properties: {"EFFORT": "2h"}, body: Some("Body text") }
+- Nested headings: verify children/level
+- Item with DEPENDS property: verify property extracted correctly
+- find_section_range: item with =* Context= and =* Verification= sub-headings, verify correct byte ranges
+
+** timestamp.rs tests
+- Active: =<2024-01-15 Mon>= -> Active { year: 2024, month: 1, day: 15 }
+- With time: =<2024-01-15 Mon 09:00>=
+- Range: =<2024-01-15>--<2024-01-20>=
+- Inactive: =[2024-01-15 Mon]=
+- Range check: timestamp in 2024-01-10..2024-01-20 -> true
+
+** clock.rs tests
+- Full entry: =CLOCK: [2024-01-15 Mon 09:00]--[2024-01-15 Mon 10:30] =>  1:30= -> ClockEntry { duration_minutes: 90 }
+- Running clock (no end): =CLOCK: [2024-01-15 Mon 09:00]=
+- Multiple entries: aggregate total minutes
+- clocked_on_date: verify date matching
+
+** effort.rs tests
+- "2h" -> 120 minutes
+- "30m" -> 30 minutes
+- "0h" -> 0
+- Invalid: "2d" -> None
+- effort_matches: 120 "<=" "3h"(180) -> true
+
+** markdown.rs tests
+- Headline =* Title= -> =# Title=
+- Bold =*text*= -> =**text**=
+- Link =[[url][text]]= -> =[text](url)=
+- Code block -> triple backtick
+- Keyword extraction: =#+TITLE: Foo
+#+AUTHOR: Bar= -> {"TITLE": "Foo", "AUTHOR": "Bar"}
+
+* Verification
+
+- =cargo test -p pi-org-engine= passes with all listed test scenarios
+- =cargo test -p tree-sitter-org= passes (grammar compiles, basic parse works)
+- =cargo clippy -p pi-org-engine -- -D warnings= clean
+- =cargo fmt -p pi-org-engine --check= clean
+- Crate compiles against tree-sitter 0.25 without version conflicts
+
+* Edge Cases
+
+- Empty org file: returns empty items list
+- File with only directives (no headings): returns single file-level item
+- Properties with colons in values: =:URL: https://example.com= — only first colon after key is delimiter
+- Multi-line body text with embedded headlines at lower level
+- Unicode in titles and property values
+- Malformed CLOCK entries (missing end time, no arrow)
+- EFFORT without unit: "2" → None (invalid format)
+- Heading with no TODO state: state should be empty string
+- Tags: =:tag1:tag2:= format, parsed into Vec<String>

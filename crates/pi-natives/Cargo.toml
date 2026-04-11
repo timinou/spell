@@ -46,6 +46,7 @@ ast-grep-core = { version = "0.39", default-features = false, features = [
 pi-code-graph = { path = "../pi-code-graph", features = ["semantic"] }
 pi-code-vectors = { path = "../pi-code-vectors" }
 pi-code-engine = { path = "../pi-code-engine" }
+pi-org-engine = { path = "../pi-org-engine" }
 tree-sitter = "0.25"
 tree-sitter-bash = "0.25"
 tree-sitter-c = "0.24"
