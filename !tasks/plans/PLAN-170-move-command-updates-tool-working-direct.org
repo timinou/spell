@@ -3,6 +3,10 @@
 #+SESSION_ID: 14b6536bf19da158
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-31-05-414Z_14b6536bf19da158.jsonl]]
 #+CUSTOM_ID: PLAN-170-move-command-updates-tool-working-direct
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: coding-agent
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
 
 NOTE [2026-04-11]: Completed after bun check:ts, focused regression tests, and manual /move verification passed.
 
@@ -84,3 +88,5 @@ bun test test/tools/org-cwd-change.test.ts
 
 *** Deviations
 - Deferred scope unchanged: [[id:FUP-043-loopmanager-and-orchestrators-cwd-tracki]]
+
+- The recorded ~bun check:ts~ success depended on additional unstaged workspace changes outside commit ~456a411b6~, so that verification result is not reproducible from that commit alone.

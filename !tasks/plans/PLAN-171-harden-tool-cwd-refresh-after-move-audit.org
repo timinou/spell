@@ -1,0 +1,30 @@
+#+TITLE: Harden tool cwd refresh after move audit fixes
+#+STATE: DONE
+#+SESSION_ID: 14b657c2ac5da15f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-50-02-801Z_14b657c2ac5da15f.jsonl]]
+#+CUSTOM_ID: PLAN-171-harden-tool-cwd-refresh-after-move-audit
+
+
+
+** Completion [2026-04-11]
+
+*** Verification
+- ~bun test packages/coding-agent/test/tools/org-cwd-change.test.ts~
+  - Passed in the current workspace. 3 pass, 0 fail.
+- ~bun test packages/coding-agent/test/tools/tool-cwd-move-integration.test.ts~
+  - Passed in the current workspace. 2 pass, 0 fail.
+- ~bun check:ts~
+  - Passed in the current workspace.
+- ~org get PLAN-170-move-command-updates-tool-working-direct~
+  - Confirmed the ~*** Deviations~ subsection includes the unreproducible-~bun check:ts~ clarification.
+
+*** Artifacts
+- Code: [[file:packages/coding-agent/src/tools/org.ts]]
+- Code: [[file:packages/coding-agent/src/tools/write.ts]]
+- Tests: [[file:packages/coding-agent/test/tools/org-cwd-change.test.ts]]
+- Tests: [[file:packages/coding-agent/test/tools/tool-cwd-move-integration.test.ts]]
+- Documentation: [[id:PLAN-170-move-command-updates-tool-working-direct]]
+- Child items: [[id:BUG-195-fix-atomicity-of-orgtool-and-writetool-c]], [[id:FEAT-388-integration-test-for-tool-cwd-after-sess]], [[id:BUG-196-correct-plan-170-completion-report-verif]]
+
+*** Deviations
+- Detached-worktree reproduction of ~bun check:ts~ was blocked because a fresh worktree lacked the untracked package-local dependency installs and generated artifacts this repository currently relies on. The current-workspace ~bun check:ts~ pass is recorded above, but commit-only reproduction was not re-proven in isolation.

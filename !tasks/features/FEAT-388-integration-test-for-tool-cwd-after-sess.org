@@ -1,0 +1,120 @@
+#+TITLE: Integration test for tool cwd after SessionManager moveTo
+#+STATE: DONE
+#+SESSION_ID: 14b657c2ac5da15f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-50-02-801Z_14b657c2ac5da15f.jsonl]]
+#+CUSTOM_ID: FEAT-388-integration-test-for-tool-cwd-after-sess
+#+EFFORT: M
+#+PRIORITY: #B
+#+LAYER: agent-tools
+#+DEPENDS: BUG-195-fix-atomicity-of-orgtool-and-writetool-c
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-050-audit-implementation:
+
+- **What**: `OrgTool` marks the new cwd as active before the replacement inner tool is safely constructed  
+  **Where**: `packages/coding-agent/src/tools/org.ts`, `#ensureInner()` around lines 183–188  
+  **Why**: If `loadOrgConfig()` or `createOrgTool()` throws during a post-`/move` refresh, `#projectRoot` is still advanced and the old `#inner` has already been disposed. Subsequent calls will think the tool is up to date and keep using a disposed inner tool instead of retrying recovery.  
+  **Effort**: small
+
+- **What**: `WriteTool` updates its tracked cwd before the replacement writethrough is successfully created  
+  **Where**: `packages/coding-agent/src/tools/write.ts`, `#getWritethrough()` around lines 136–141  
+  **Why**: If `createLspWritethrough()` fails for the moved project, `#writethroughCwd` is already updated, so later writes will stop retrying and may keep using the old writethrough bound to the previous cwd. That can hide formatting/diagnostic misrouting after `/move`.  
+  **Effort**: small
+
+- **What**: The completion report claims `bun check:ts` passed, but that pass depended on additional unstaged workspace changes outside the plan commit  
+  **Where**: `!tasks/plans/PLAN-170-move-command-updates-tool-working-direct.org`, `** Completion [2026-04-11]` / `*** Verification`  
+  **Why**: Validation of commit `456a411b6` is not reproducible from the recorded plan artifact alone. The audit run showed repo-wide typecheck only went green after extra uncommitted edits in other files, so a reviewer checking out the commit may not be able to reproduce the reported verification result.  
+  **Effort**: medium
+
+- **What**: `OrgTool` does not refresh its outward-facing description after rebuilding the inner tool for a new cwd  
+  **Where**: `packages/coding-agent/src/tools/org.ts`, constructor vs. `#ensureInner()`  
+  **Why**: The constructor copies `this.#inner.description` once, but the refresh path recreates `#inner` without updating `description`. If per-project org config changes the description/help text, the tool can present stale guidance after `/move`.  
+  **Effort**: trivial
+
+- **What**: Automated coverage exercises mocked cwd mutation, not the real `/move` session lifecycle for `send_file` and `write`  
+  **Where**: `packages/coding-agent/test/tools/org-cwd-change.test.ts`  
+  **Why**: The new test proves the tools react to a changing `session.cwd`, but it does not cover the real `SessionManager.moveTo()` integration path for `send_file`/`write`. A regression in the move wiring or tool-session construction could slip through while the unit test still passes.  
+  **Effort**: medium
+
+* Problem
+
+The existing test suite (~packages/coding-agent/test/tools/org-cwd-change.test.ts~) proves tools react to a changing ~session.cwd~ getter, but it does so by directly mutating a ~cwdState~ object. It does not exercise the real ~SessionManager.moveTo()~ integration path that wires the dynamic getter in production:
+
+#+begin_src typescript
+// sdk.ts, createAgentSession()
+const toolSession: ToolSession = {
+    get cwd() { return sessionManager.getCwd(); },
+    // ...
+};
+#+end_src
+
+A regression in the ~moveTo()~ wiring, the ~getCwd()~ method, or ~SessionManager~ state management could slip through while the unit tests still pass.
+
+* Implementation
+
+** File: ~packages/coding-agent/test/tools/tool-cwd-move-integration.test.ts~ (NEW)
+
+Create a focused integration test that uses a real ~SessionManager~ and real tool instances to verify the end-to-end cwd propagation after ~/move~.
+
+*** Setup pattern (follow ~test/session-manager/move-to.test.ts~ conventions):
+#+begin_src typescript
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { SendFileTool } from "@oh-my-pi/pi-coding-agent/tools/send-file";
+import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
+import { getConfigRootDir, setAgentDir } from "@oh-my-pi/pi-utils";
+#+end_src
+
+*** ~beforeEach~:
+1. Create temp directory tree with ~cwdA~ and ~cwdB~ subdirs.
+2. Call ~setAgentDir(testAgentDir)~ (required for SessionManager — follow ~move-to.test.ts~ pattern).
+3. Create ~SessionManager.create(cwdA)~.
+4. Construct ~toolSession~ with getter backed by ~sessionManager.getCwd()~:
+#+begin_src typescript
+const toolSession: ToolSession = {
+    get cwd() { return sessionManager.getCwd(); },
+    hasUI: false,
+    getSessionFile: () => sessionManager.getSessionFile() ?? null,
+    getSessionSpawns: () => "*",
+    settings: Settings.isolated(),
+};
+#+end_src
+
+*** ~afterEach~:
+1. Restore original ~agentDir~ (follow ~move-to.test.ts~ pattern).
+2. Remove temp directory tree.
+
+*** Test: "WriteTool writes to the moved directory after SessionManager.moveTo()"
+1. Create ~WriteTool~ with ~toolSession~ (LSP disabled via Settings so writethrough is noop).
+2. Execute write: ~{ path: "file-a.txt", content: "before" }~.
+3. Verify file exists at ~path.join(cwdA, "file-a.txt")~ with content "before".
+4. Call ~await sessionManager.moveTo(cwdB)~.
+5. Execute write: ~{ path: "file-b.txt", content: "after" }~.
+6. Verify file exists at ~path.join(cwdB, "file-b.txt")~ with content "after".
+7. Verify ~path.join(cwdA, "file-b.txt")~ does NOT exist.
+
+*** Test: "SendFileTool resolves paths against the moved directory after SessionManager.moveTo()"
+1. Create ~SendFileTool~ with ~toolSession~.
+2. Create a file at ~path.join(cwdB, "report.txt")~.
+3. Call ~await sessionManager.moveTo(cwdB)~.
+4. Execute send_file: ~{ path: "report.txt" }~.
+5. Verify ~result.details.delivery.absolutePath~ equals ~path.join(cwdB, "report.txt")~.
+6. Verify ~result.details.delivery.fileName~ equals ~"report.txt"~.
+
+* Edge Cases
+- WriteTool test uses LSP disabled (~Settings.isolated()~ defaults) to avoid LSP server dependencies.
+- SendFileTool test creates the target file before moveTo to avoid ENOENT.
+- ~SessionManager.create(cwdA)~ requires ~setAgentDir~ — restore in afterEach.
+- ~sessionManager.moveTo(cwdB)~ is async and may write session files; cleanup handles this.
+
+* Verification
+- ~bun check:ts~ passes
+- ~bun test packages/coding-agent/test/tools/tool-cwd-move-integration.test.ts~ passes
+- Test count: 2 tests in 1 file
