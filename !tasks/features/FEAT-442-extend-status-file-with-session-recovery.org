@@ -1,11 +1,13 @@
 #+TITLE: Extend status file with session recovery metadata
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14b6d9b181b3cb2d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-17-43-942Z_14b6d9b181b3cb2d.jsonl]]
 #+CUSTOM_ID: FEAT-442-extend-status-file-with-session-recovery
 #+EFFORT: 3h
 #+PRIORITY: #A
 #+LAYER: desktop
+
+NOTE [2026-04-11]: Implemented recovery metadata fields on session status files, added StatusFileReader.readCrashed(), wired niri workspace capture, and verified with bun test packages/desktop-common/test/status-file.test.ts and bun test packages/niri/test/controller.test.ts.
 
 * Initial Message
 

@@ -570,7 +570,20 @@ export class InteractiveMode implements InteractiveModeContext {
 				get isUserPaused() {
 					return ctx.#isUserPaused;
 				},
-				sessionManager: this.sessionManager,
+				sessionManager: {
+					getCwd() {
+						return ctx.sessionManager.getCwd();
+					},
+					getSessionName() {
+						return ctx.sessionManager.getSessionName();
+					},
+					getSessionId() {
+						return ctx.sessionManager.getSessionId();
+					},
+					getSessionFile() {
+						return ctx.sessionManager.getSessionFile();
+					},
+				},
 				get todoPhases() {
 					return ctx.session.getTodoGroups();
 				},

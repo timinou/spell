@@ -4,6 +4,12 @@ import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AgentStatus, SessionStatusFile } from "./types";
 
+interface SessionRecoveryInfo {
+	sessionId: string;
+	sessionFile: string;
+	cwd: string;
+}
+
 /** Default directory for session status files. */
 export const STATUS_DIR = path.join(os.homedir(), ".spell", "status");
 
@@ -15,6 +21,8 @@ export class StatusFileWriter {
 	#statusDir: string;
 	#windowId: number | string | null = null;
 	#lastWrittenDedup: string | null = null;
+	#sessionInfo: SessionRecoveryInfo | null = null;
+	#workspaceName: string | null | undefined;
 
 	constructor(statusDir = STATUS_DIR) {
 		this.#statusDir = statusDir;
@@ -23,6 +31,14 @@ export class StatusFileWriter {
 	/** Set the window ID. Must be called before write(). */
 	setWindowId(id: number | string): void {
 		this.#windowId = id;
+	}
+
+	setSessionInfo(info: SessionRecoveryInfo): void {
+		this.#sessionInfo = info;
+	}
+
+	setWorkspaceName(name: string | null): void {
+		this.#workspaceName = name;
 	}
 
 	get windowId(): number | string | null {
@@ -55,6 +71,8 @@ export class StatusFileWriter {
 			projectName,
 			sessionTitle,
 			updatedAt: Date.now(),
+			...(this.#sessionInfo ?? {}),
+			...(this.#workspaceName !== undefined ? { workspaceName: this.#workspaceName } : {}),
 		};
 		const filePath = path.join(this.#statusDir, `${this.#windowId}.json`);
 		Bun.write(filePath, JSON.stringify(payload)).catch(() => {});
@@ -82,6 +100,25 @@ export class StatusFileReader {
 
 	/** Read all valid, non-stale session status files. */
 	async readAll(): Promise<SessionStatusFile[]> {
+		const entries = await this.#readStatusFiles();
+		const results: SessionStatusFile[] = [];
+		for (const entry of entries) {
+			if (!isProcessAlive(entry.data.pid)) {
+				await fs.rm(entry.filePath, { force: true }).catch(() => {});
+				continue;
+			}
+			results.push(entry.data);
+		}
+		return results;
+	}
+
+	/** Read stale status files for crashed sessions without cleaning them up. */
+	async readCrashed(): Promise<SessionStatusFile[]> {
+		const entries = await this.#readStatusFiles();
+		return entries.filter(entry => !isProcessAlive(entry.data.pid)).map(entry => entry.data);
+	}
+
+	async #readStatusFiles(): Promise<Array<{ filePath: string; data: SessionStatusFile }>> {
 		let entries: string[];
 		try {
 			entries = await fs.readdir(this.#statusDir);
@@ -89,22 +126,15 @@ export class StatusFileReader {
 			return [];
 		}
 
-		const results: SessionStatusFile[] = [];
+		const results: Array<{ filePath: string; data: SessionStatusFile }> = [];
 		for (const entry of entries) {
 			if (!entry.endsWith(".json")) continue;
 			const filePath = path.join(this.#statusDir, entry);
 			try {
 				const data: SessionStatusFile = await Bun.file(filePath).json();
 				if (!data.status || !data.pid) continue;
-				// Check if the process is still alive
-				if (!isProcessAlive(data.pid)) {
-					// Clean up stale file
-					await fs.rm(filePath, { force: true }).catch(() => {});
-					continue;
-				}
-				results.push(data);
+				results.push({ filePath, data });
 			} catch {
-				// Corrupt or unreadable file — skip
 				logger.debug("StatusFileReader: skipping unreadable status file", { path: filePath });
 			}
 		}

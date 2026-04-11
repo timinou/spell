@@ -6,7 +6,7 @@ import { clearImagePlacements, setTerminalImageProtocol, TERMINAL } from "@oh-my
 import { logger } from "@oh-my-pi/pi-utils";
 import { withLargerFont } from "./font-scaling";
 import { NiriEventStream } from "./ipc";
-import { queryNiriFocusedWindowId } from "./niri-query";
+import { queryFocusedWorkspace, queryNiriFocusedWindowId } from "./niri-query";
 import { OverviewComponent, STATUS_COLORS } from "./overview-component";
 import type { AgentStatus, TodoItemSnapshot, TodoPhaseSnapshot } from "./types";
 
@@ -49,6 +49,8 @@ export interface NiriOverviewContext {
 	sessionManager: {
 		getCwd(): string;
 		getSessionName(): string | undefined;
+		getSessionId(): string;
+		getSessionFile(): string | undefined;
 	};
 	/** Current todo phases. */
 	todoPhases: TodoPhaseView[];
@@ -124,11 +126,19 @@ export class NiriOverviewController {
 	/** One-shot async init: discovers the niri window ID and writes the first status file. */
 	async #initWindowId(): Promise<void> {
 		await this.#writer.ensureDir();
-		const id = await queryNiriFocusedWindowId();
-		if (id !== null && !this.#destroyed) {
-			this.#writer.setWindowId(id);
-			this.#writeStatusIfChanged();
+		const [id, workspace] = await Promise.all([queryNiriFocusedWindowId(), queryFocusedWorkspace()]);
+		if (id === null || this.#destroyed) return;
+		this.#writer.setWindowId(id);
+		const sessionFile = this.#context.sessionManager.getSessionFile();
+		if (sessionFile) {
+			this.#writer.setSessionInfo({
+				sessionId: this.#context.sessionManager.getSessionId(),
+				sessionFile,
+				cwd: this.#context.sessionManager.getCwd(),
+			});
 		}
+		this.#writer.setWorkspaceName(workspace?.name ?? null);
+		this.#writeStatusIfChanged();
 	}
 
 	/** Write status file if status changed since last write. No-op if no window ID. */

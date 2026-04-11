@@ -1,5 +1,5 @@
 #+TITLE: spell recover command with niri workspace restoration
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14b6d9b181b3cb2d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-17-43-942Z_14b6d9b181b3cb2d.jsonl]]
 #+CUSTOM_ID: FEAT-444-spell-recover-command-with-niri-workspac
@@ -7,6 +7,8 @@
 #+PRIORITY: #A
 #+LAYER: cli
 #+DEPENDS: FEAT-442-extend-status-file-with-session-recovery
+
+NOTE [2026-04-11]: Added spell recover command with dry-run/manual fallback behavior, workspace-aware grouping, ghostty spawning, and stale-file cleanup. Verified with bun check:ts plus manual temp-HOME recovery scenarios captured under !tasks/plans/plan-artifacts/PLAN-182-spell-session-crash-recovery-with-niri-w/.
 
 * Initial Message
 

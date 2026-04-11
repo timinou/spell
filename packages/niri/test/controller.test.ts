@@ -153,6 +153,8 @@ function makeCtx(
 		sessionManager: {
 			getCwd: () => "/projects/myapp",
 			getSessionName: () => overrides.sessionName ?? "test-session",
+			getSessionId: () => "session-test",
+			getSessionFile: () => "/tmp/session-test.jsonl",
 		},
 		get todoPhases() {
 			return overrides.todoPhases ?? [];
