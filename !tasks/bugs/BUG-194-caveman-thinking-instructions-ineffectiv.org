@@ -1,0 +1,181 @@
+#+TITLE: Caveman thinking instructions ineffective due to prompt positioning
+#+STATE: DONE
+#+SESSION_ID: 14b648b4c97c977d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T09-44-16-421Z_14b648b4c97c977d.jsonl]]
+#+CUSTOM_ID: BUG-194-caveman-thinking-instructions-ineffectiv
+#+EFFORT: 1h
+#+LAYER: coding-agent
+#+PRIORITY: #B
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+NOTE [2026-04-11]: Implemented prompt-positioning fix and verified stable rendering/tests.
+
+* Initial Message
+
+hi
+
+* Problem
+
+PhD-caveman thinking notation instructions (symbol vocabulary, structural markers, domain
+abbreviations) are placed at the absolute end of the system prompt via =appendPrompt= in
+=system-prompt.md=. After hundreds of lines of tools, rules, and procedures, the thinking
+instructions have minimal salience. The model's extended thinking blocks remain verbose
+despite =caveman.thinkingMode= being set to ="caveman"=.
+
+* Root Cause
+
+In =system-prompt.ts=, the caveman prompt is rendered separately and appended via:
+#+begin_src typescript
+const appendPromptParts = [resolvedAppendPrompt, cavemanPrompt].filter(...);
+#+end_src
+
+This lands at the very end of =system-prompt.md=:
+#+begin_src handlebars
+{{#if appendPrompt}}
+{{appendPrompt}}
+{{/if}}
+#+end_src
+
+The thinking instructions share this position with communication style instructions,
+placing them after =CACHE_BOUNDARY= in the dynamic section — the weakest possible position
+for influencing extended thinking behavior.
+
+* Fix
+
+Two-pronged fix: (1) reposition thinking instructions to high-salience location, (2) rewrite
+prompt with stronger compliance framing, negative examples, and multiple domain-specific
+examples.
+
+** Key design decisions
+- Thinking instructions move from =caveman.md= (rendered into =appendPrompt= at end of
+  system prompt) to =system-prompt.md= right after =</behavior>= in a =<thinking-mode>=
+  XML tag — the highest salience position for reasoning-style instructions
+- Communication style instructions (lite/full/ultra/wenyan level descriptions) remain in
+  =caveman.md= and render via =appendPrompt= at the end — no change
+- No duplication — the =={{#if cavemanThinking}}...{{/if}}== block is removed from =caveman.md=
+- No changes to =system-prompt.ts= — =cavemanThinking= already flows to the main template
+  via =...cavemanPromptData= spread
+- =custom-system-prompt.md= is unchanged — its =appendPrompt= is already near the top
+- This goes before =CACHE_BOUNDARY=, so caveman-on and caveman-off sessions have different
+  cache keys. Acceptable because level is constant within a session.
+
+** Prompt improvements over current version
+1. *Visibility accountability*: "Your thinking blocks are visible to the user" — creates
+   social pressure for compliance
+2. *Negative example first*: show verbose thinking marked as BAD
+3. *Multiple domain-specific examples*: architecture decision, code investigation, debugging
+4. *Trimmed symbol table*: inline the most-used symbols in compact format instead of a
+   large table the model skims over
+5. *Stronger imperative*: "EVERY thinking block MUST" not just "your thinking blocks"
+* Implementation
+
+** Files to modify
+
+*** =packages/coding-agent/src/prompts/system/system-prompt.md=
+After the =</behavior>= closing tag (~line 68), add this block verbatim:
+
+#+begin_src handlebars
+{{#if cavemanThinking}}
+<thinking-mode>
+Your thinking blocks are visible to the user. EVERY thinking block MUST use PhD-caveman compressed notation — no exceptions.
+
+Core rules:
+- Symbols replace grammar: → (leads to) ← (caused by) ⇒ (therefore) ∧ (and) ∨ (or) ¬ (not) ∀ (for all) ∃ (exists)
+- Judgments inline: ✓ ✗ ? ! ~
+- Structure replaces narrative: bullets, labels (Q: A: Alt: Risk: NB: ∴), numbered lists
+- Abbreviate: fn/impl/cfg/dep/req/ret/sig/inv
+- Code stays verbatim — NEVER compress identifiers, paths, types, or code blocks
+- Think deeply — compression ≠ simplification
+
+BAD — verbose thinking:
+```
+I need to understand the problem first. Let me look at how the session
+manager handles thinking level changes. The issue is probably that when
+the user toggles caveman mode, the thinking level doesn't get updated
+because the extension only refreshes the system prompt but doesn't
+modify the session's thinking configuration.
+```
+
+GOOD — PhD-caveman:
+```
+Q: why thinking level ✗ update on caveman toggle?
+- caveman ext → refreshBaseSystemPrompt() only
+- ✗ touches session.thinkingLevel
+- session.thinkingLevel set once in sdk.ts:782
+∴ ext needs to also call session.setThinkingLevel() on toggle
+```
+
+GOOD — architecture decision:
+```
+3 approaches:
+A: override in ext → simple, ✗ conflicts w/ manual /thinking selection
+B: ceiling in toReasoningEffort() → ✓ dynamic, ✗ fn doesn't know caveman state
+C: settings.override("defaultThinkingLevel") in ext → ✓ runtime, ✓ respects manual override via clamp
+∴ C — cleanest, ∀ paths covered, no coupling
+```
+
+GOOD — investigation:
+```
+grep: thinkingLevel set in sdk.ts:782-798
+chain: CLI arg → session entry → role spec → settings default → clampForModel
+caveman hooks: settings.override + refreshPrompt
+∄ hook into thinking chain
+→ need new hook or intercept at toReasoningEffort
+```
+</thinking-mode>
+{{/if}}
+#+end_src
+
+*** =packages/coding-agent/src/prompts/system/caveman.md=
+Remove the =={{#if cavemanThinking}}...{{/if}}== block entirely (lines 39-97 of current file).
+Keep everything else: the =={{#if cavemanActive}}== wrapper, the communication rules,
+level-specific formatting (lite/full/ultra/wenyan), and the auto-clarity escape hatch.
+
+After removal, the file should go directly from the wenyan-ultra level description to
+the "Auto-clarity" line with no thinking content in between.
+
+*** =packages/coding-agent/test/system-prompt-templates.test.ts=
+Add test cases to the existing =describe("system Handlebars prompt templates")= block:
+
+1. Test: "system-prompt renders caveman thinking instructions in stable section when active"
+   - Render =system-prompt.md= with =cavemanThinking: true= and =cavemanActive: true= in context
+   - Assert rendered output contains ="PhD-caveman"=
+   - Assert rendered output contains ="EVERY thinking block MUST"=
+   - Assert the =CACHE_BOUNDARY= marker appears AFTER the =<thinking-mode>= block
+     (verify: =rendered.indexOf("<thinking-mode>") < rendered.indexOf("CACHE_BOUNDARY")=)
+
+2. Test: "system-prompt omits thinking instructions when caveman inactive"
+   - Render =system-prompt.md= with =cavemanThinking: false=
+   - Assert rendered output does NOT contain ="<thinking-mode>"=
+
+3. Test: "caveman template does not contain thinking instructions"
+   - Render =caveman.md= with =cavemanThinking: true=, =cavemanActive: true=
+   - Assert rendered output does NOT contain ="thinking-mode"=
+   - Assert rendered output still contains ="CAVEMAN MODE"=
+
+** Existing patterns to follow
+- The test file uses =renderPromptTemplate= from =@oh-my-pi/pi-coding-agent/config/prompt-templates=
+- =baseRenderContext= provides a base context — extend it with caveman-specific flags
+- Template compilation is already tested; new tests verify conditional rendering
+- No changes to =system-prompt.ts= needed — =cavemanThinking= already flows to main
+  template via =...cavemanPromptData= spread
+* Edge Cases
+- =cavemanThinking= is false when =cavemanActive= is false OR =thinkingMode= is ="normal"=
+  — both paths must produce no thinking-mode block
+- The =<thinking-mode>= tag must be properly closed — unclosed XML tags in system prompt
+  can confuse the model
+- The thinking block in =system-prompt.md= must use the same Handlebars variable names
+  as currently used in =caveman.md= — no renames needed since =cavemanPromptData= is
+  already spread into the main template data
+
+
+* Completion [2026-04-11]
+** Verification
+- `bun test packages/coding-agent/test/system-prompt-templates.test.ts` → pass (13 tests, 0 failures)
+- `bun check:ts` → pass (`biome check . && tsgo -p tsconfig.json`)
+- `bun .tmp-caveman-render-check.mts` equivalent manual render probe confirmed `<thinking-mode>` renders before `CACHE_BOUNDARY` and includes `EVERY thinking block MUST` plus `PhD-caveman`
+** Result
+- Moved caveman thinking instructions into `system-prompt.md` stable section immediately after `</behavior>`
+- Removed duplicate thinking block from `caveman.md`; communication-level caveman instructions remain append-only
+- Added regression tests for stable placement, inactive omission, and caveman template exclusion
