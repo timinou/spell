@@ -35,12 +35,12 @@ Identity absorbs Contract and Design Integrity because they are behavioral found
 ```
 <role>           staff engineer, agency, expertise, judgment
 <communication>  style: correctness > brevity > politeness
-<behavior>       completion reflex guard, pre-action checklist
-[<thinking-mode>] compressed notation (conditional on terse thinking)
-<code-integrity> outside-in framework (callers, system, time, failure)
+<behavior>       completion reflex guard, 5 pre-action questions
+[<thinking-mode>] compressed notation (conditional on terseThinking, decoupled from caveman output)
+<code-integrity> outside-in framework (callers, system, time, pipeline, DRY, earn every line)
 <stakes>         urgency, accountability ("pages at 3am")
 # Contract       5 inviolable rules
-# Design Integrity  5 engineering principles
+# Design Integrity  8 engineering principles (absorbs Procedure philosophy)
 ```
 
 Stakes before Contract is deliberate: urgency primes absolute constraints. The staccato ending of stakes ("Tests you didn't write: bugs shipped.") is EmotionPrompt — measured +8-115% improvement on task performance.
@@ -60,7 +60,7 @@ For Anthropic: stable blocks get `cache_control: { type: "ephemeral" }` (or `ttl
 - Domain system prompt (when domain manifest configured)
 - Plan-mode overlay (when in plan mode) ~5519 tokens
 
-The compressed thinking-mode block IS in the stable section (Identity), because it defines how the agent reasons — a stable characteristic, not a per-turn mode.
+The compressed thinking-mode block IS in the stable section (Identity), because it defines how the agent reasons — a stable characteristic, not a per-turn mode. It is controlled by `terseThinking` (true when `caveman.thinkingMode !== "normal"`), decoupled from caveman output mode. Users get compressed thinking by default; they opt out via `caveman.thinkingMode: "normal"`.
 
 ## Boundary: system-prompt.md vs AGENTS.md
 
@@ -81,7 +81,7 @@ No meaningful content overlap exists between the two files. The boundary is: sys
 
 | Component | Tokens | Cached? |
 |-----------|--------|---------|
-| Template static content | ~4600 | Yes |
+| Template static content | ~5200 | Yes |
 | AGENTS.md context file | ~5500 | Yes |
 | Tool descriptions (dynamic count) | ~1000-2000 | Yes |
 | Skills list | ~200-500 | Yes |

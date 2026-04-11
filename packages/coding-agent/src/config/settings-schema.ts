@@ -455,7 +455,7 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "agent",
 			label: "Caveman Thinking Mode",
-			description: "Compress thinking blocks to symbolic shorthand (caveman) or keep verbose (normal)",
+			description: "Thinking block style: compressed symbolic notation (default) or verbose prose",
 		},
 	},
 

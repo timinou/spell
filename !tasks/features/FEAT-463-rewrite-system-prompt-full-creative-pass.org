@@ -1,0 +1,113 @@
+#+TITLE: Rewrite system prompt - full creative pass
+#+STATE: DONE
+#+SESSION_ID: 14b6ea9c67640cb9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-31-38-781Z_14b6ea9c67640cb9.jsonl]]
+#+CUSTOM_ID: FEAT-463-rewrite-system-prompt-full-creative-pass
+#+EFFORT: 1.5h
+#+LAYER: core
+#+PRIORITY: #B
+
+* Initial Message
+
+how much smaller is the prompt now?
+
+* Context
+
+Full creative rewrite of the system prompt template. The reference draft is at =specs/system-prompt-rewrite.md= — it contains the complete template ready to be copied into place, plus a changelog of every difference from the current file.
+
+Three prior sessions shaped this:
+1. Content compression (commit =a22cde6fd=): rewrote thinking-mode, behavior, code-integrity, Design Integrity for token efficiency
+2. Structural reorder (commit =2076f1a40=): moved Contract + Design Integrity into Identity, renamed Rules → Procedure
+3. This session: full creative reimagining — expanded code-integrity, consolidated Design Integrity with Procedure philosophy, made compressed thinking unconditional, restored adversarial questions in behavior
+
+* Design Decisions
+
+1. *Thinking-mode becomes unconditional (default on).* Change template conditional from =cavemanThinking= to =terseThinking=. In =system-prompt.ts=, compute =terseThinking: cavemanThinkingMode !== "normal"= — decoupled from =cavemanActive=. Compressed reasoning is the default for ALL sessions, not a caveman sub-mode. Users can opt out by setting =caveman.thinkingMode: "normal"=.
+
+2. *Behavior restores two adversarial questions* cut during the prior compression pass:
+   - "What would a malicious caller do?" (forces security thinking)
+   - "Would a tired maintainer misunderstand this?" (forces readability check)
+
+3. *Code-integrity expanded with concrete failure modes.* The outside-in framework (Callers/System/Time) gets depth:
+   - Callers: "plausible-looking output" failure mode
+   - System: "not standalone" framing, concrete propagation examples
+   - Time: cost-blindness observation with specific examples
+   - New: pipeline consumer heuristic
+   - New: "DRY at 2" with rationale
+   - Expanded: comments guidance, "earn every line" second example
+
+4. *Design Integrity absorbs 6 philosophical principles from Procedure ## 5.* Three overlap with existing bullets and are merged. Result: 8 consolidated principles with expanded voice. Each principle gets the "why" not just the "what."
+
+5. *Procedure ## 5 "While Working" stripped to operational core.* Keeps opening sentence ("You are not making code that works..."). Removes 5 philosophical principles (moved to Design Integrity). Only operational instructions remain: tool failure handling, destructive command guards, concurrency.
+
+6. *Settings description updated.* =caveman.thinkingMode= description changes from "Compress thinking blocks to symbolic shorthand (caveman) or keep verbose (normal)" to "Thinking block style: compressed symbolic notation (default) or verbose prose".
+
+7. *Contract, stakes, role, communication: unchanged.* Already in final voice.
+
+8. *caveman.md output template: unchanged.* Already cleaned up in prior session.
+
+* Files to Modify
+
+- =packages/coding-agent/src/prompts/system/system-prompt.md= — replace with content from =specs/system-prompt-rewrite.md= (the template block inside the code fence)
+- =packages/coding-agent/src/system-prompt.ts= — line ~513: change =cavemanThinking= computation, add =terseThinking= to template data
+- =packages/coding-agent/src/config/settings-schema.ts= — line ~458: update =caveman.thinkingMode= description
+
+* Implementation Steps
+
+** Step 1: Replace system-prompt.md content
+
+Copy the template from =specs/system-prompt-rewrite.md= (the content inside the =handlebars= code fence) into =packages/coding-agent/src/prompts/system/system-prompt.md=, replacing the entire file.
+
+IMPORTANT: The spec file uses =` ` `= (with spaces) for the code fence examples inside the thinking-mode block because they're nested inside a markdown code fence. In the actual template file, these MUST be real triple backticks (no spaces): =```=
+
+** Step 2: Update system-prompt.ts
+
+Find this line (around line 513):
+#+begin_example
+cavemanThinking: cavemanThinkingMode === "caveman" && cavemanActive,
+#+end_example
+
+Replace with:
+#+begin_example
+cavemanThinking: cavemanThinkingMode === "caveman" && cavemanActive,
+terseThinking: cavemanThinkingMode !== "normal",
+#+end_example
+
+Keep =cavemanThinking= for backward compatibility (other code may reference it). Add =terseThinking= as the new variable the template uses.
+
+** Step 3: Update settings-schema.ts
+
+Find the =caveman.thinkingMode= setting description (around line 458):
+#+begin_example
+description: "Compress thinking blocks to symbolic shorthand (caveman) or keep verbose (normal)",
+#+end_example
+
+Replace with:
+#+begin_example
+description: "Thinking block style: compressed symbolic notation (default) or verbose prose",
+#+end_example
+
+** Step 4: Verify template compiles
+
+Run: =bun test packages/coding-agent/test/system-prompt-templates.test.ts=
+
+Some tests will fail because they assert strings that changed. These are fixed in the sibling test item.
+
+* Edge Cases
+
+- The ={{SECTION_SEPERATOR}}= helper has a typo ("SEPERATOR" not "SEPARATOR"). Do NOT fix — it would break all templates.
+- =terseThinking= defaults to =true= because =cavemanThinkingMode= defaults to ="caveman"= (not ="normal"=). This is the desired behavior — compressed thinking on by default.
+- The three code fence examples in the =<thinking-mode>= block must use real triple backticks in the template file, not the escaped version in the spec.
+
+* Acceptance Criteria
+
+1. =bun check:ts= passes (no type errors introduced)
+2. Template renders correctly with =terseThinking: true= (default case) — =<thinking-mode>= block present
+3. Template renders correctly with =terseThinking: false= — =<thinking-mode>= block absent
+4. =# Design Integrity= contains 8 principles including "One job, one level of abstraction", "Fix where the invariant is violated", "After writing, inhabit the call site"
+5. =# Design Integrity= preamble contains "Every vestige of old design left compilable and reachable is a lie"
+6. =<behavior>= contains "What would a malicious caller do?" and "Would a tired maintainer misunderstand this?"
+7. =<code-integrity>= contains "DRY at 2", pipeline consumer heuristic, expanded Callers/System/Time bullets
+8. Procedure ## 5 no longer contains "One job, one level of abstraction" or "Fix where the invariant is violated" or "No forwarding addresses" or "After writing, inhabit the call site"
+9. Procedure ## 5 DOES still contain "You are not making code that works"
+10. Setting description updated in settings-schema.ts

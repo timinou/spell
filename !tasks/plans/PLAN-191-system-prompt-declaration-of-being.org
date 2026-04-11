@@ -1,0 +1,94 @@
+#+TITLE: System prompt declaration of being
+#+STATE: DONE
+#+SESSION_ID: 14b6ea9c67640cb9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-31-38-781Z_14b6ea9c67640cb9.jsonl]]
+#+CUSTOM_ID: PLAN-191-system-prompt-declaration-of-being
+
+
+* Initial Message
+
+how much smaller is the prompt now?
+
+* Context
+
+Full creative rewrite of the system prompt — the agent's declaration of being. Three prior sessions
+shaped the foundation: content compression (a22cde6fd), structural reorder (2076f1a40), and this
+planning session that produced the complete rewrite spec at =specs/system-prompt-rewrite.md=.
+
+** Approach
+
+The rewrite addresses three concerns:
+
+1. *Compressed thinking becomes the default.* The =<thinking-mode>= block — symbols for grammar,
+   structure for narrative — is no longer gated by caveman output mode. It renders for all sessions.
+   Users opt out via =caveman.thinkingMode: "normal"=. This decouples reasoning style from output
+   style. Template variable changes from =cavemanThinking= to =terseThinking=.
+
+2. *Identity section gets full creative voice.* Behavior restores adversarial questions cut during
+   compression. Code-integrity expands the outside-in framework with concrete failure modes. Design
+   Integrity absorbs 6 philosophical principles from Procedure into 8 consolidated principles with
+   expanded rationale.
+
+3. *Procedure becomes purely operational.* The philosophical content in ## 5 "While Working" moves
+   to Design Integrity. Procedure retains the opening sentence and operational instructions only.
+
+** Key Decisions
+
+- Thinking-mode: =terseThinking: cavemanThinkingMode !== "normal"= (decoupled from =cavemanActive=)
+- Behavior: 5 pre-action questions (was 3) — restored "malicious caller" and "tired maintainer"
+- Code-integrity: 7 bullets (was 5) — added pipeline heuristic, DRY at 2, expanded Callers/System/Time
+- Design Integrity: 8 principles (was 5) — absorbed "one job one level", "fix at invariant", "inhabit call site"
+- Contract, stakes, role, communication: unchanged
+- caveman.md output template: unchanged
+- Setting key =caveman.thinkingMode=: name unchanged (migration scope), description updated
+
+* Verification
+
+#+begin_src bash
+# Type check
+bun check:ts
+
+# Template tests
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+
+# Manual verification:
+# 1. Rendered prompt with default settings shows <thinking-mode> block (no caveman needed)
+# 2. Rendered prompt with thinkingMode: "normal" omits <thinking-mode> block
+# 3. Design Integrity has 8 principles
+# 4. Procedure ## 5 has no philosophical principles
+#+end_src
+
+Required artifacts:
+- =specs/system-prompt-rewrite.md= — complete template draft (created during planning)
+- =packages/coding-agent/src/prompts/system/system-prompt.md= — rewritten template
+- =specs/system-prompt-architecture.md= — updated architectural spec
+
+* Execution Manifest
+
+| Wave | Item | Effort | Depends |
+|------|------|--------|---------|
+| 1 | [[id:FEAT-463-rewrite-system-prompt-full-creative-pass][System prompt rewrite]] | 1.5h | — |
+| 2 | [[id:FEAT-464-update-tests-for-system-prompt-rewrite][Update tests]] | 45m | FEAT-463 |
+| 2 | [[id:FEAT-465-update-architectural-spec-for-prompt-rew][Update architectural spec]] | 20m | FEAT-463 |
+
+** Completion [2026-04-11]
+
+*** Verification
+- =bun check:ts= — passes (biome check + tsgo, 1894 files, no issues)
+- =bun test packages/coding-agent/test/system-prompt-templates.test.ts= — 16 tests pass, 109 assertions
+- Manual: rendered prompt with default settings (=thinkingMode: "caveman"=) includes =<thinking-mode>= block
+- Manual: rendered prompt with =thinkingMode: "normal"= omits =<thinking-mode>= block
+- Manual: Design Integrity has 8 principles (lines 142-149)
+- Manual: Procedure ## 5 contains only operational instructions (no philosophy)
+- Template decoupling verified: =terseThinking: true= with =cavemanActive: false= still renders thinking-mode (test: "terse thinking renders independently of caveman output mode")
+
+*** Artifacts
+- =packages/coding-agent/src/prompts/system/system-prompt.md= — rewritten template
+- =packages/coding-agent/src/system-prompt.ts= — terseThinking variable added, cavemanThinking removed
+- =packages/coding-agent/src/config/settings-schema.ts= — description updated
+- =packages/coding-agent/test/system-prompt-templates.test.ts= — tests updated for terseThinking
+- =specs/system-prompt-architecture.md= — updated spec (8 principles, terseThinking decoupled)
+- =specs/system-prompt-rewrite.md= — source spec (created during planning)
+
+*** Deviations
+- Prompt grew +2,188 bytes (+10.5%) rather than shrinking. This is expected — the plan's purpose was creative expansion of compressed content to full voice, not further compression. Line count is nearly identical (375 → 378) because Procedure philosophy was moved, not deleted.
