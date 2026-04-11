@@ -168,6 +168,30 @@ describe("coding-agent code tool wiring", () => {
 		);
 	});
 
+	it("does not override navigate line with zero-value target.line", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: { node_type: "identifier", text: "foo", line: 10, end_line: 10 },
+			error: false,
+		});
+		const tool = new CodeTool(createSession());
+		await tool.execute("tool", {
+			command: "navigate",
+			file: "/tmp/test/src/main.ts",
+			action: "node-at",
+			line: 10,
+			target: { line: 0 },
+		});
+
+		expect(bufferSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				command: "navigate",
+				action: "node-at",
+				file: "/tmp/test/src/main.ts",
+				line: 10,
+			}),
+		);
+	});
+
 	it("returns error for install_grammar command", async () => {
 		const tool = new CodeTool(createSession());
 		const result = await tool.execute("tool", { command: "install_grammar" });

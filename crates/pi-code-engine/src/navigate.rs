@@ -62,14 +62,25 @@ pub fn navigate(
 }
 
 fn node_at(buffer: &CodeBuffer, line: u32, column: Option<u32>) -> Result<Node<'_>> {
-	let source = buffer.source();
-	let total_lines = source.lines().count() as u32;
+	let rope = buffer.rope();
+	let raw_lines = rope.len_lines(ropey::LineType::LF_CR);
+	// Rope line counts include a trailing empty segment after a final newline;
+	// trim that sentinel so navigation lines match user-visible content lines.
+	let total_lines = if raw_lines > 0
+		&& rope
+			.line(raw_lines - 1, ropey::LineType::LF_CR)
+			.chars()
+			.next()
+			.is_none()
+	{
+		raw_lines.saturating_sub(1)
+	} else {
+		raw_lines
+	} as u32;
 	if line == 0 || line > total_lines {
 		return Err(CodeEngineError::Buffer("line out of range".into()));
 	}
-	let byte = buffer
-		.rope()
-		.line_to_byte_idx((line - 1) as usize, ropey::LineType::LF_CR)
+	let byte = rope.line_to_byte_idx((line - 1) as usize, ropey::LineType::LF_CR)
 		+ column.unwrap_or(0) as usize;
 	let mut node = buffer
 		.tree()
@@ -369,6 +380,14 @@ mod tests {
 		let buf = buffer("hello.ts", "typescript");
 		let p = profile("typescript");
 		assert!(navigate(&buf, &p, NavigateAction::NodeAt, 2, Some(0), None).is_ok());
+	}
+
+	#[test]
+	fn test_navigate_node_at_last_content_line_with_trailing_newline() {
+		let buf = buffer("hello.ts", "typescript");
+		let p = profile("typescript");
+		assert!(navigate(&buf, &p, NavigateAction::NodeAt, 3, Some(1), None).is_ok());
+		assert!(navigate(&buf, &p, NavigateAction::NodeAt, 4, Some(1), None).is_err());
 	}
 
 	#[test]
