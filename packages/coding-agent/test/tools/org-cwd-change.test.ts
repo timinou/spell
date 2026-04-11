@@ -62,9 +62,14 @@ describe("tool cwd changes after move", () => {
 		}
 	});
 
-	it("recreates the inner org tool when the session cwd changes", async () => {
+	it("retries org tool rebuilds after a failed cwd refresh and updates description on success", async () => {
 		const instances: MockOrgToolInstance[] = [];
+		let secondProjectFailures = 1;
 		const createOrgToolMock = vi.fn((projectRoot: string) => {
+			if (projectRoot === secondProject && secondProjectFailures > 0) {
+				secondProjectFailures -= 1;
+				throw new Error("org config load failed");
+			}
 			const instance: MockOrgToolInstance = {
 				projectRoot,
 				dispose: vi.fn(async (): Promise<void> => {}),
@@ -73,7 +78,7 @@ describe("tool cwd changes after move", () => {
 			instances.push(instance);
 			return {
 				name: "org",
-				description: "mock org tool",
+				description: `mock org tool for ${path.basename(projectRoot)}`,
 				parameters: {},
 				execute: instance.execute,
 				dispose: instance.dispose,
@@ -106,34 +111,48 @@ describe("tool cwd changes after move", () => {
 			}),
 		);
 
+		expect(tool.description).toBe("mock org tool for project-a");
 		await tool.execute("call-1", { command: "query", query: "todo:ITEM" });
-		cwdState.current = secondProject;
-		await tool.execute("call-2", { command: "query", query: "todo:ITEM" });
 
-		expect(createOrgToolMock).toHaveBeenCalledTimes(2);
+		cwdState.current = secondProject;
+		const failedRefresh = await tool.execute("call-2", { command: "query", query: "todo:ITEM" });
+		expect(failedRefresh.details).toEqual({ error: true });
+		expect(tool.description).toBe("mock org tool for project-a");
+		expect(instances[0]?.dispose).not.toHaveBeenCalled();
+		expect(instances[0]?.execute).toHaveBeenCalledTimes(1);
+
+		const recoveredRefresh = await tool.execute("call-3", { command: "query", query: "todo:ITEM" });
+		expect(recoveredRefresh.details).toBeUndefined();
+		expect(tool.description).toBe("mock org tool for project-b");
+
+		expect(createOrgToolMock).toHaveBeenCalledTimes(3);
+		expect(createOrgToolMock.mock.calls[0]?.[0]).toBe(firstProject);
+		expect(createOrgToolMock.mock.calls[1]?.[0]).toBe(secondProject);
+		expect(createOrgToolMock.mock.calls[2]?.[0]).toBe(secondProject);
 		expect(instances).toHaveLength(2);
 		expect(instances[0]?.projectRoot).toBe(firstProject);
 		expect(instances[1]?.projectRoot).toBe(secondProject);
 		expect(instances[0]?.dispose).toHaveBeenCalledTimes(1);
 		expect(instances[1]?.dispose).not.toHaveBeenCalled();
+		expect(instances[1]?.execute).toHaveBeenCalledTimes(1);
 
 		const firstCall = createOrgToolMock.mock.calls[0] as unknown[] | undefined;
-		const secondCall = createOrgToolMock.mock.calls[1] as unknown[] | undefined;
+		const recoveryCall = createOrgToolMock.mock.calls[2] as unknown[] | undefined;
 		const firstOptions = (firstCall?.[2] ?? null) as {
 			emacsSessionManager?: EmacsSessionManager;
 			ownsSessionManager?: boolean;
 		} | null;
-		const secondOptions = (secondCall?.[2] ?? null) as {
+		const recoveryOptions = (recoveryCall?.[2] ?? null) as {
 			emacsSessionManager?: EmacsSessionManager;
 			ownsSessionManager?: boolean;
 		} | null;
 		expect(firstOptions).not.toBeNull();
-		expect(secondOptions).not.toBeNull();
-		if (!firstOptions || !secondOptions) throw new Error("Expected org tool options");
+		expect(recoveryOptions).not.toBeNull();
+		if (!firstOptions || !recoveryOptions) throw new Error("Expected org tool options");
 		expect(firstOptions.emacsSessionManager).toBe(orgSessionManager);
-		expect(secondOptions.emacsSessionManager).toBe(orgSessionManager);
+		expect(recoveryOptions.emacsSessionManager).toBe(orgSessionManager);
 		expect(firstOptions.ownsSessionManager).toBe(false);
-		expect(secondOptions.ownsSessionManager).toBe(false);
+		expect(recoveryOptions.ownsSessionManager).toBe(false);
 
 		await tool.dispose();
 		expect(instances[1]?.dispose).toHaveBeenCalledTimes(1);
@@ -153,13 +172,20 @@ describe("tool cwd changes after move", () => {
 		expect(result.details?.delivery.fileName).toBe("report.txt");
 	});
 
-	it("recreates the write-tool LSP writethrough when the session cwd changes", async () => {
+	it("retries write-tool LSP writethrough creation after a failed cwd refresh", async () => {
 		const writethroughCalls: Array<{ cwd: string; dst: string }> = [];
+		let secondProjectFailures = 1;
 		const createLspWritethroughSpy = vi
 			.spyOn(lspModule, "createLspWritethrough")
-			.mockImplementation((cwd: string) => async dst => {
-				writethroughCalls.push({ cwd, dst });
-				return undefined;
+			.mockImplementation((cwd: string) => {
+				if (cwd === secondProject && secondProjectFailures > 0) {
+					secondProjectFailures -= 1;
+					throw new Error("lsp init failed");
+				}
+				return async dst => {
+					writethroughCalls.push({ cwd, dst });
+					return undefined;
+				};
 			});
 		const { WriteTool } = await import("@oh-my-pi/pi-coding-agent/tools/write");
 		const cwdState = { current: firstProject };
@@ -175,11 +201,17 @@ describe("tool cwd changes after move", () => {
 
 		await tool.execute("call-write-1", { path: "draft.txt", content: "first\n" });
 		cwdState.current = secondProject;
-		await tool.execute("call-write-2", { path: "draft.txt", content: "second\n" });
+		await expect(tool.execute("call-write-2", { path: "draft.txt", content: "second\n" })).rejects.toThrow(
+			"lsp init failed",
+		);
+		expect(writethroughCalls).toEqual([{ cwd: firstProject, dst: path.join(firstProject, "draft.txt") }]);
 
-		expect(createLspWritethroughSpy).toHaveBeenCalledTimes(2);
+		await tool.execute("call-write-3", { path: "draft.txt", content: "third\n" });
+
+		expect(createLspWritethroughSpy).toHaveBeenCalledTimes(3);
 		expect(createLspWritethroughSpy.mock.calls[0]?.[0]).toBe(firstProject);
 		expect(createLspWritethroughSpy.mock.calls[1]?.[0]).toBe(secondProject);
+		expect(createLspWritethroughSpy.mock.calls[2]?.[0]).toBe(secondProject);
 		expect(writethroughCalls).toEqual([
 			{ cwd: firstProject, dst: path.join(firstProject, "draft.txt") },
 			{ cwd: secondProject, dst: path.join(secondProject, "draft.txt") },

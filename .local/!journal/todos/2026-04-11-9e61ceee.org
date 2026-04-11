@@ -1,0 +1,35 @@
+#+TITLE: Session 14b657e94bbb679e Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Map all config.yml load/save paths in Settings class
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Find all config.yml references in discovery system
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Find every config.yml reference across entire codebase
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Map current spell.kdl parser capabilities and KDL library features
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Find all tests related to settings and spell-kdl
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:

@@ -1,0 +1,23 @@
+#+TITLE: Session 14b655871aaa46fd Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Find existing test patterns for config code
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Map the @bgotink/kdl library API for round-trip editing
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Map all consumers of Settings.get/set
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

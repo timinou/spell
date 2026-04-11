@@ -404,7 +404,7 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		// Handle internal URLs (agent://, artifact://, memory://, skill://, rule://, local://, mcp://)
 		const internalRouter = this.session.internalRouter;
 		if (internalRouter?.canHandle(readPath)) {
-			return this.#handleInternalUrl(readPath, offset, limit);
+			return this.#handleInternalUrl(readPath, offset, limit, signal);
 		}
 
 		let absolutePath = resolveReadPath(readPath, this.session.cwd);
@@ -683,7 +683,12 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 	 * Handle internal URLs (agent://, artifact://, memory://, skill://, rule://, local://, mcp://).
 	 * Supports pagination via offset/limit but rejects them when query extraction is used.
 	 */
-	async #handleInternalUrl(url: string, offset?: number, limit?: number): Promise<AgentToolResult<ReadToolDetails>> {
+	async #handleInternalUrl(
+		url: string,
+		offset?: number,
+		limit?: number,
+		signal?: AbortSignal,
+	): Promise<AgentToolResult<ReadToolDetails>> {
 		const internalRouter = this.session.internalRouter!;
 
 		// Check if URL has query extraction (agent:// only)
@@ -707,6 +712,15 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		// Resolve the internal URL
 		const resource = await internalRouter.resolve(url);
 		const details: ReadToolDetails = { resolvedPath: resource.sourcePath };
+
+		if (
+			resource.sourcePath &&
+			resource.content.length === 0 &&
+			((await detectSupportedImageMimeTypeFromFile(resource.sourcePath)) ||
+				CONVERTIBLE_EXTENSIONS.has(path.extname(resource.sourcePath).toLowerCase()))
+		) {
+			return this.execute("internal-binary", { path: resource.sourcePath, offset, limit }, signal);
+		}
 
 		// If extraction was used, return directly (no pagination)
 		if (hasExtraction) {
@@ -912,8 +926,8 @@ export const readToolRenderer = {
 		if (truncation) {
 			if (fallback?.firstLineExceedsLimit) {
 				let warning = `First line exceeds ${formatBytes(fallback.outputBytes ?? fallback.totalBytes)} limit`;
-				if (truncation.artifactId) {
-					warning += `. ${formatFullOutputReference(truncation.artifactId)}`;
+				if (truncation.artifactUri) {
+					warning += `. ${formatFullOutputReference(truncation.artifactUri)}`;
 				}
 				warningLines.push(uiTheme.fg("warning", wrapBrackets(warning, uiTheme)));
 			} else {

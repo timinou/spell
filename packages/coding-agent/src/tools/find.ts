@@ -455,8 +455,8 @@ export const findToolRenderer = {
 		if (details?.resultLimitReached) truncationReasons.push(`limit ${details.resultLimitReached} results`);
 		if (limits?.resultLimit) truncationReasons.push(`limit ${limits.resultLimit.reached} results`);
 		if (truncation) truncationReasons.push(truncation.truncatedBy === "lines" ? "line limit" : "size limit");
-		const artifactId = truncation && "artifactId" in truncation ? truncation.artifactId : undefined;
-		if (artifactId) truncationReasons.push(formatFullOutputReference(artifactId));
+		const artifactUri = truncation && "artifactUri" in truncation ? truncation.artifactUri : undefined;
+		if (artifactUri) truncationReasons.push(formatFullOutputReference(artifactUri));
 
 		const extraLines: string[] = [];
 		if (truncationReasons.length > 0) {

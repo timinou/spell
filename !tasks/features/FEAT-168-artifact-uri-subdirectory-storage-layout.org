@@ -1,0 +1,446 @@
+#+TITLE: Artifact URI subdirectory storage layout and protocol handler
+#+STATE: DONE
+#+SESSION_ID: 14b64b9276f08680
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T09-56-47-707Z_14b64b9276f08680.jsonl]]
+#+CUSTOM_ID: FEAT-168-artifact-uri-subdirectory-storage-layout
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: sdk
+
+NOTE [2026-04-11]: Superseded by FEAT-165 which was updated with the enhanced content from this item."
+
+* Initial Message
+
+make artifact:// have an extension and show it everywhere it is mentioned, use artifact:// for images and screenshot tools, and use the artifact:// uri system for artiface recording during plan executions (explain that)
+
+* Context
+
+Change artifact:// URI format from =artifact://{id}= to =artifact://{toolType}/{id}.{ext}=.
+Change on-disk storage from flat ={id}.{toolType}.log= to subdirectories ={toolType}/{id}.{ext}=.
+
+URI examples:
+- =artifact://bash/0.txt= → =artifacts/bash/0.txt=
+- =artifact://screenshot/3.png= → =artifacts/screenshot/3.png=
+- =artifact://generate_image/5.png= → =artifacts/generate_image/5.png=
+- =artifact://fetch/2.txt= → =artifacts/fetch/2.txt=
+- =artifact://render_mermaid/1.txt= → =artifacts/render_mermaid/1.txt=
+
+Backward compatibility: old =artifact://{id}= URIs (numeric-only host, no path) fall back
+to scanning the root artifacts dir for ={id}.*= files (existing behavior).
+
+** Decision: Extension mapping
+
+Default extension is =txt=. Tool-specific overrides:
+- =screenshot= → =png=
+- =generate_image= → =png= (or mime-derived at save time)
+- All text tool outputs (bash, python, ssh, fetch, grep, find, read, render_mermaid, async) → =txt=
+
+** Decision: ID allocation
+
+Global monotonic counter remains. IDs are unique across all tool types.
+=allocatePath= signature changes to accept extension parameter.
+
+** Decision: URI parsing
+
+For URI =artifact://bash/5.txt=:
+- =rawHost= (from =InternalUrlRouter= URL parsing) = =bash= (tool type)
+- =pathname= = =/5.txt= (id + extension)
+- Resolved to ={artifactsDir}/bash/5.txt=
+
+For legacy URI =artifact://5= (backward compat):
+- =rawHost= is numeric → scan root for ={id}.*= files (existing behavior)
+
+* Implementation
+
+** Sequencing note
+
+Implementation must come before tests for this item because the =ArtifactManager= and
+=ArtifactProtocolHandler= are infrastructure that tests exercise. Tests are listed second
+but the implementer should write them in the same pass.
+
+** Files to modify
+
+*** =packages/coding-agent/src/session/artifacts.ts= (ArtifactManager)
+
+Current file: ~130 lines. Key class: =ArtifactManager=.
+
+1. Change =allocatePath(toolType: string, ext: string = "txt")= signature:
+   - Return ={ id: string; path: string; uri: string }= (add =uri= field)
+   - URI format: =artifact://{toolType}/{id}.{ext}=
+   - Storage path: ={this.#dir}/{toolType}/{id}.{ext}=
+   - Create subdirectory lazily: =await fs.mkdir(path.join(this.#dir, toolType), { recursive: true })=
+
+2. Change =save(content: string, toolType: string, ext: string = "txt")= similarly — delegates to =allocatePath= then writes.
+
+3. Update =#scanExistingIds()= to scan subdirectories:
+   #+begin_src typescript
+   async #scanExistingIds(): Promise<void> {
+     let maxId = -1;
+     // Scan subdirectories (new format)
+     const entries = await this.listEntries();
+     for (const entry of entries) {
+       if (entry.isDirectory()) {
+         const subFiles = await fs.readdir(path.join(this.#dir, entry.name));
+         for (const f of subFiles) {
+           const match = f.match(/^(\d+)\./);
+           if (match) {
+             const id = parseInt(match[1], 10);
+             if (id > maxId) maxId = id;
+           }
+         }
+       }
+     }
+     // Scan root for legacy files ({id}.{toolType}.log)
+     const rootFiles = entries.filter(e => !e.isDirectory()).map(e => e.name);
+     for (const file of rootFiles) {
+       const match = file.match(/^(\d+)\..*\.log$/);
+       if (match) {
+         const id = parseInt(match[1], 10);
+         if (id > maxId) maxId = id;
+       }
+     }
+     this.#nextId = maxId + 1;
+   }
+   #+end_src
+
+   Note: =listFiles()= currently uses =fs.readdir()= returning string[].
+   Need a new helper =listEntries()= using =fs.readdir(dir, { withFileTypes: true })=
+   for directory detection.
+
+4. Update =listFiles()= to return relative paths including subdirectory:
+   #+begin_src typescript
+   async listFiles(): Promise<string[]> {
+     try {
+       const result: string[] = [];
+       const entries = await fs.readdir(this.#dir, { withFileTypes: true });
+       for (const entry of entries) {
+         if (entry.isDirectory()) {
+           const subFiles = await fs.readdir(path.join(this.#dir, entry.name));
+           for (const f of subFiles) result.push(`${entry.name}/${f}`);
+         } else {
+           result.push(entry.name); // legacy root-level files
+         }
+       }
+       return result;
+     } catch {
+       return [];
+     }
+   }
+   #+end_src
+
+5. Update =getPath(id: string)=:
+   - If =id= contains =/= (new format like ="bash/5.txt"=), resolve directly
+   - If =id= is numeric (legacy), scan root for ={id}.*=
+
+6. Update =exists(id: string)= similarly.
+
+*** =packages/coding-agent/src/internal-urls/artifact-protocol.ts= (ArtifactProtocolHandler)
+
+Current file: ~90 lines. Key class: =ArtifactProtocolHandler=.
+
+1. New URI parsing in =resolve()=:
+   #+begin_src typescript
+   async resolve(url: InternalUrl): Promise<InternalResource> {
+     const artifactsDir = this.options.getArtifactsDir();
+     if (!artifactsDir) throw new Error("No session - artifacts unavailable");
+
+     const host = url.rawHost || url.hostname;
+     if (!host) throw new Error("artifact:// URL requires an ID");
+
+     // New format: artifact://toolType/id.ext
+     if (!/^\d+$/.test(host)) {
+       const pathname = (url.rawPathname || url.pathname).replace(/^\//, "");
+       if (!pathname) throw new Error(`artifact:// URL missing filename: artifact://${host}/...`);
+       const relPath = `${host}/${pathname}`;
+       const filePath = path.join(artifactsDir, relPath);
+       // Security: prevent path traversal
+       if (!filePath.startsWith(artifactsDir)) {
+         throw new Error("artifact:// path traversal denied");
+       }
+       try {
+         const content = await Bun.file(filePath).text();
+         return {
+           url: url.href,
+           content,
+           contentType: contentTypeFromExt(path.extname(filePath)),
+           size: Buffer.byteLength(content, "utf-8"),
+           sourcePath: filePath,
+         };
+       } catch (err) {
+         if (isEnoent(err)) {
+           const available = await listAvailableArtifacts(artifactsDir);
+           throw new Error(`Artifact ${relPath} not found. Available: ${available.join(", ") || "none"}`);
+         }
+         throw err;
+       }
+     }
+
+     // Legacy format: artifact://id (numeric)
+     // ... existing scan-root behavior ...
+   }
+   #+end_src
+
+2. Add =contentTypeFromExt= helper:
+   #+begin_src typescript
+   function contentTypeFromExt(ext: string): InternalResource["contentType"] {
+     switch (ext.toLowerCase()) {
+       case ".json": return "application/json";
+       case ".md": return "text/markdown";
+       case ".org": return "text/x-org";
+       default: return "text/plain";
+     }
+   }
+   #+end_src
+
+   Note: =InternalResource.contentType= is a union =text/markdown | application/json | text/plain | text/x-org=.
+   Binary types (=image/png=) are NOT in this union. For image artifacts, the protocol
+   handler returns =sourcePath= and the read tool handles binary content via its
+   existing image-file-by-path codepath.
+
+3. Update =listAvailableArtifacts()= to walk subdirectories:
+   #+begin_src typescript
+   async function listAvailableArtifacts(artifactsDir: string): Promise<string[]> {
+     try {
+       const result: string[] = [];
+       const entries = await fs.readdir(artifactsDir, { withFileTypes: true });
+       for (const entry of entries) {
+         if (entry.isDirectory()) {
+           const subFiles = await fs.readdir(path.join(artifactsDir, entry.name));
+           for (const f of subFiles) {
+             if (/^\d+\./.test(f)) result.push(`${entry.name}/${f}`);
+           }
+         } else if (/^\d+\./.test(entry.name)) {
+           // Legacy root-level files
+           result.push(entry.name.split(".")[0]);
+         }
+       }
+       return result.sort();
+     } catch {
+       return [];
+     }
+   }
+   #+end_src
+
+*** =packages/coding-agent/src/tools/index.ts=
+
+Update =ToolSession= interface =allocateOutputArtifact=:
+#+begin_src typescript
+allocateOutputArtifact?: (toolType: string, ext?: string) => Promise<{ id?: string; path?: string; uri?: string }>;
+#+end_src
+
+*** =packages/coding-agent/src/session/session-manager.ts=
+
+Update =allocateArtifactPath= signature and return type:
+#+begin_src typescript
+async allocateArtifactPath(toolType: string, ext?: string): Promise<{ id?: string; path?: string; uri?: string }> {
+  // ... 
+  return manager.allocatePath(toolType, ext);
+}
+#+end_src
+
+*** =packages/coding-agent/src/sdk.ts=
+
+Update =allocateOutputArtifact= implementation (~line 1024):
+#+begin_src typescript
+allocateOutputArtifact: async (toolType, ext) => {
+  try {
+    return await sessionManager.allocateArtifactPath(toolType, ext);
+  } catch {
+    return {};
+  }
+},
+#+end_src
+
+* Tests
+
+** Test file: =test/session/artifacts.test.ts= (NEW)
+
+#+begin_src typescript
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { ArtifactManager } from "../../src/session/artifacts";
+
+describe("ArtifactManager", () => {
+  let tmpDir: string;
+  let sessionFile: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "artifact-test-"));
+    sessionFile = path.join(tmpDir, "session.jsonl");
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("allocates paths in subdirectory layout", async () => {
+    const mgr = new ArtifactManager(sessionFile);
+    const r = await mgr.allocatePath("bash", "txt");
+    expect(r.path).toBe(path.join(tmpDir, "session", "bash", "0.txt"));
+    expect(r.uri).toBe("artifact://bash/0.txt");
+    expect(r.id).toBe("0");
+  });
+
+  it("defaults extension to txt", async () => {
+    const mgr = new ArtifactManager(sessionFile);
+    const r = await mgr.allocatePath("fetch");
+    expect(r.uri).toBe("artifact://fetch/0.txt");
+  });
+
+  it("supports png extension", async () => {
+    const mgr = new ArtifactManager(sessionFile);
+    const r = await mgr.allocatePath("screenshot", "png");
+    expect(r.uri).toBe("artifact://screenshot/0.png");
+    expect(r.path).toEndWith("/screenshot/0.png");
+  });
+
+  it("maintains monotonic IDs across tool types", async () => {
+    const mgr = new ArtifactManager(sessionFile);
+    const r1 = await mgr.allocatePath("bash", "txt");
+    const r2 = await mgr.allocatePath("screenshot", "png");
+    const r3 = await mgr.allocatePath("fetch", "txt");
+    expect(r1.id).toBe("0");
+    expect(r2.id).toBe("1");
+    expect(r3.id).toBe("2");
+  });
+
+  it("creates subdirectory on first allocation", async () => {
+    const mgr = new ArtifactManager(sessionFile);
+    await mgr.allocatePath("bash", "txt");
+    const stat = await fs.stat(path.join(tmpDir, "session", "bash"));
+    expect(stat.isDirectory()).toBe(true);
+  });
+
+  it("save writes content and returns URI", async () => {
+    const mgr = new ArtifactManager(sessionFile);
+    const id = await mgr.save("hello world", "bash", "txt");
+    expect(id).toBe("0");
+    const content = await Bun.file(path.join(tmpDir, "session", "bash", "0.txt")).text();
+    expect(content).toBe("hello world");
+  });
+
+  it("scans existing subdirectory artifacts on resume", async () => {
+    const artDir = path.join(tmpDir, "session");
+    await fs.mkdir(path.join(artDir, "bash"), { recursive: true });
+    await Bun.write(path.join(artDir, "bash", "3.txt"), "data");
+    await Bun.write(path.join(artDir, "bash", "7.txt"), "data");
+    const mgr = new ArtifactManager(sessionFile);
+    const r = await mgr.allocatePath("fetch", "txt");
+    expect(parseInt(r.id)).toBe(8); // next after 7
+  });
+
+  it("scans legacy root-level artifacts on resume", async () => {
+    const artDir = path.join(tmpDir, "session");
+    await fs.mkdir(artDir, { recursive: true });
+    await Bun.write(path.join(artDir, "5.bash.log"), "legacy data");
+    const mgr = new ArtifactManager(sessionFile);
+    const r = await mgr.allocatePath("fetch", "txt");
+    expect(parseInt(r.id)).toBe(6);
+  });
+
+  it("listFiles returns paths from subdirs and root", async () => {
+    const artDir = path.join(tmpDir, "session");
+    await fs.mkdir(path.join(artDir, "bash"), { recursive: true });
+    await Bun.write(path.join(artDir, "bash", "0.txt"), "a");
+    await Bun.write(path.join(artDir, "1.fetch.log"), "b"); // legacy
+    const mgr = new ArtifactManager(sessionFile);
+    const files = await mgr.listFiles();
+    expect(files).toContain("bash/0.txt");
+    expect(files).toContain("1.fetch.log");
+  });
+});
+#+end_src
+
+** Test file: =test/internal-urls/artifact-protocol.test.ts= (NEW)
+
+#+begin_src typescript
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { ArtifactProtocolHandler } from "../../src/internal-urls/artifact-protocol";
+import { InternalUrlRouter } from "../../src/internal-urls/router";
+
+describe("ArtifactProtocolHandler", () => {
+  let tmpDir: string;
+  let artifactsDir: string;
+  let handler: ArtifactProtocolHandler;
+  let router: InternalUrlRouter;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "artifact-proto-test-"));
+    artifactsDir = path.join(tmpDir, "artifacts");
+    await fs.mkdir(artifactsDir, { recursive: true });
+    handler = new ArtifactProtocolHandler({ getArtifactsDir: () => artifactsDir });
+    router = new InternalUrlRouter();
+    router.register(handler);
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("resolves new format artifact://bash/5.txt", async () => {
+    await fs.mkdir(path.join(artifactsDir, "bash"), { recursive: true });
+    await Bun.write(path.join(artifactsDir, "bash", "5.txt"), "hello");
+    const result = await router.resolve("artifact://bash/5.txt");
+    expect(result.content).toBe("hello");
+    expect(result.sourcePath).toBe(path.join(artifactsDir, "bash", "5.txt"));
+  });
+
+  it("resolves legacy format artifact://5", async () => {
+    await Bun.write(path.join(artifactsDir, "5.bash.log"), "legacy");
+    const result = await router.resolve("artifact://5");
+    expect(result.content).toBe("legacy");
+  });
+
+  it("returns text/plain for .txt", async () => {
+    await fs.mkdir(path.join(artifactsDir, "bash"), { recursive: true });
+    await Bun.write(path.join(artifactsDir, "bash", "0.txt"), "data");
+    const result = await router.resolve("artifact://bash/0.txt");
+    expect(result.contentType).toBe("text/plain");
+  });
+
+  it("returns sourcePath for image artifacts", async () => {
+    await fs.mkdir(path.join(artifactsDir, "screenshot"), { recursive: true });
+    // Write a minimal PNG (just need file to exist for sourcePath)
+    await Bun.write(path.join(artifactsDir, "screenshot", "1.png"), "fake-png");
+    const result = await router.resolve("artifact://screenshot/1.png");
+    expect(result.sourcePath).toBe(path.join(artifactsDir, "screenshot", "1.png"));
+  });
+
+  it("throws for non-existent new-format artifact", async () => {
+    await expect(router.resolve("artifact://bash/999.txt")).rejects.toThrow(/not found/);
+  });
+
+  it("throws for non-existent legacy artifact", async () => {
+    await expect(router.resolve("artifact://999")).rejects.toThrow(/not found/);
+  });
+
+  it("prevents path traversal", async () => {
+    await expect(router.resolve("artifact://../etc/0.txt")).rejects.toThrow(/traversal/);
+  });
+});
+#+end_src
+
+** Update existing test: =test/tools/grep-internal-urls.test.ts=
+
+Update the artifact file creation to use new subdirectory layout:
+- Change =await Bun.write(path.join(artifactsDir, "5.bash.log"), content)=
+  to =await fs.mkdir(path.join(artifactsDir, "bash"), { recursive: true })=
+  followed by =await Bun.write(path.join(artifactsDir, "bash", "5.txt"), content)=
+- Change =artifact://5= to =artifact://bash/5.txt= in test assertions
+
+* Acceptance Criteria
+
+- [ ] =artifact://bash/0.txt= resolves to =artifacts/bash/0.txt= on disk
+- [ ] =artifact://screenshot/1.png= resolves correctly with =sourcePath= set
+- [ ] Legacy =artifact://5= still resolves (backward compat)
+- [ ] IDs remain globally monotonic across tool types
+- [ ] Session resume scans both subdirectories and legacy root files
+- [ ] Path traversal is blocked
+- [ ] Existing test =grep-internal-urls.test.ts= updated and passes
+- [ ] New test files =test/session/artifacts.test.ts= and =test/internal-urls/artifact-protocol.test.ts= pass
+- [ ] =bun test= in =packages/coding-agent= passes

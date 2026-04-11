@@ -1,0 +1,64 @@
+#+TITLE: Session 14b657d80e170294 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 1 Foundation
+
+** DONE Implement artifact URI foundation
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/session/artifacts.test.ts packages/coding-agent/test/internal-urls/artifact-protocol.test.ts
+:ORG_ITEM_ID: FEAT-165-artifact-uri-extension-and-subdirectory
+:END:
+
+Update packages/coding-agent foundation for artifact storage layout, session-scoped URIs with extensions, resolver/backward compatibility, and add focused tests for artifact manager + internal URL protocol. Inspect all consumers with semantic search before edits.
+
+Added session/artifact scope helpers, scoped URI allocation, cross-session protocol resolution, binary artifact path handling, and focused tests in packages/coding-agent/test/session/artifacts.test.ts and packages/coding-agent/test/internal-urls/artifact-protocol.test.ts.
+
+* Wave 2 Consumers
+
+** DONE Update artifact URI consumers
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:VERIFY_CMD: grep -rn 'artifact://\${' packages/coding-agent/src/
+:DEPENDS: task-1
+:ORG_ITEM_ID: FEAT-167-show-artifact-uri-everywhere-and-update
+:END:
+
+After foundation lands, update truncation/emission sites to surface full artifact URI fields everywhere and verify no template-literal artifact:// construction remains in packages/coding-agent/src.
+
+Updated truncation/output consumers to propagate full artifact URIs instead of bare IDs, switched renderers to display full URIs, and removed template-literal artifact:// construction from src.
+
+** DONE Store screenshots and generated images as artifacts
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/tools/browser.test.ts packages/coding-agent/test/tools/gemini-image-artifacts.test.ts
+:DEPENDS: task-1
+:ORG_ITEM_ID: FEAT-166-store-screenshots-and-generated-images-a
+:END:
+
+After foundation lands, update screenshot and generated-image flows to write into artifact storage with typed extensions and add focused verification/tests covering persisted URIs.
+
+Browser, canvas, and generate_image now persist image artifacts through session artifact storage, emit artifact URIs, and keep tmpdir fallback only when no allocator is available. Added focused browser and generated-image artifact tests.
+
+* Wave 3 Documentation and closure
+
+** BLOCKED Document artifact URIs in plan prompts
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: gate_failed
+:GATE_COMMIT: true
+:GATE_CMD: bun test packages/coding-agent
+:GATE_LLM: Ensure plan report cites exact verification commands, artifact links, and truthfully notes deviations/blockers.
+:VERIFY_CMD: bun test packages/coding-agent
+:DEPENDS: task-2 task-3
+:ORG_ITEM_ID: FEAT-169-document-artifact-uri-pattern-in-plan-mo
+:ORG_ITEM_CLOSING_ID: PLAN-075-artifact-uri-extensions-and-image-storag
+:END:
+
+Update plan-mode prompt/static docs to reference artifact:// verification evidence patterns and then run focused package verification, update org completion report, reconcile linked org item states, and prepare a scoped commit.
+
+Implementation and focused verification are complete, but the required gate `bun test packages/coding-agent` is still failing after a targeted re-run. Remaining blockers are unrelated existing suite failures/timeouts in sdk-model-selection, sdk-skills, agent-session-tool-dispose, agent-session-auto-compaction-x-initiator, agent-session-mcp-discovery, sdk-session-isolation, cli-domain-command-routing, and server-command tests.

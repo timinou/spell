@@ -423,6 +423,7 @@ export interface BrowserToolDetails {
 	elementId?: number;
 	result?: string | string[];
 	screenshotPath?: string;
+	artifactUri?: string;
 	mimeType?: string;
 	bytes?: number;
 	viewport?: { width: number; height: number; deviceScaleFactor?: number };
@@ -1360,7 +1361,10 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 				case "screenshot": {
 					const page = await this.#ensurePage(params);
 					const fullPage = params.selector ? false : (params.full_page ?? false);
-					const screenshotPath = resolveScreenshotArtifactPath(params.path, this.session.cwd);
+					const requestedScreenshotPath = params.path?.trim()
+						? resolveScreenshotArtifactPath(params.path, this.session.cwd)
+						: undefined;
+					const artifact = await this.session.allocateOutputArtifact?.("screenshot", "png");
 					let buffer: Buffer;
 
 					if (params.selector) {
@@ -1376,6 +1380,20 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 						buffer = (await untilAborted(signal, () => page.screenshot({ type: "png", fullPage }))) as Buffer;
 					}
 
+					if (artifact?.path) {
+						await Bun.write(artifact.path, buffer);
+					}
+					if (requestedScreenshotPath) {
+						await Bun.write(requestedScreenshotPath, buffer);
+					}
+					const fallbackScreenshotPath =
+						requestedScreenshotPath ??
+						artifact?.path ??
+						resolveScreenshotArtifactPath(undefined, this.session.cwd);
+					if (!requestedScreenshotPath && !artifact?.path) {
+						await Bun.write(fallbackScreenshotPath, buffer);
+					}
+
 					// Compress for API content (same as pasted images)
 					// NOTE: screenshots can be deceptively large (especially PNG) even at modest resolutions,
 					// and tool results are immediately embedded in the next LLM request.
@@ -1385,18 +1403,24 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 						{ maxBytes: 0.75 * 1024 * 1024 },
 					);
 					const dimensionNote = formatDimensionNote(resized);
-					await Bun.write(screenshotPath, buffer);
-					details.screenshotPath = screenshotPath;
+					details.screenshotPath = requestedScreenshotPath ?? artifact?.path ?? fallbackScreenshotPath;
+					details.artifactUri = artifact?.uri;
 					details.mimeType = "image/png";
 					details.bytes = buffer.length;
 
 					// Show both raw bytes (saved to disk) and compressed bytes (sent to model).
-					const lines = [
-						"Screenshot captured",
+					const lines = ["Screenshot captured", `Saved path: ${details.screenshotPath}`];
+					if (requestedScreenshotPath && artifact?.path) {
+						lines.push(`Artifact path: ${artifact.path}`);
+					}
+					if (artifact?.uri) {
+						lines.push(`Artifact: ${artifact.uri}`);
+					}
+					lines.push(
 						`Saved artifact: image/png (${(buffer.length / 1024).toFixed(2)} KB)`,
 						`Preview sent to model: ${resized.mimeType} (${(resized.buffer.length / 1024).toFixed(2)} KB)`,
 						`Dimensions: ${resized.width}x${resized.height}`,
-					];
+					);
 					if (dimensionNote) {
 						lines.push(dimensionNote);
 					}

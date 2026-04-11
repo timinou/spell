@@ -65,6 +65,9 @@ Before your final turn, you **MUST**:
 2. Capture verification evidence:
    - Run the focused tests, checks, and manual verification required by the plan and linked child items.
    - If UI, browser, or visual behavior matters, capture screenshots with `puppeteer` `action: "screenshot"` and save them under `{{orgItemArtifactsDir}}/`.
+	- Screenshots and generated images automatically produce `artifact://` URIs (for example `artifact://14b64b/main/screenshot/3.png`). Reference these URIs in the completion report's `*** Artifacts` section.
+	- To persist a session artifact into the plan record, copy it into `{{orgItemArtifactsDir}}/` using `cp`; `artifact://` URIs resolve to filesystem paths in bash.
+	- Subagent artifacts use the format `artifact://<session-id>/<subagent-name>/<tool>/<file>` and are resolvable from the main session.
    - Use artifact filenames that explain what each file proves.
    - For documentation artifacts (org items, spec files, config files), reference the file path or org heading in the completion report — do not screenshot text-based files.
 3. Update org item `{{orgItemId}}` with a completion report via `org update`:
@@ -72,6 +75,7 @@ Before your final turn, you **MUST**:
    - Include `*** Verification`, `*** Artifacts`, and `*** Deviations` subsections
    - Record exact commands/checks, outcomes, and saved artifact paths
    - When referencing saved artifacts in the report, use org-mode file links such as `[[file:{{orgItemArtifactsDir}}/name.png]]` so they render inline
+   - For session-scoped artifacts not yet copied into `{{orgItemArtifactsDir}}/`, reference them as `artifact://<session-id>/<agent>/<tool>/<file>.<ext>` in the report
    - If any tasks were deferred (abandoned with `deferralFupId`), list all FUP references using `[[id:FUP-xxx]]` org links in the Deviations subsection so they are traceable in the plan record
    - If there were no deviations, write `None.`
 4. Close org lifecycle state truthfully:

@@ -1,0 +1,31 @@
+#+TITLE: Session 14b2afc285bc9803 Todos
+#+DATE: 2026-04-08
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* FUP-042: Polish test files
+
+** DONE Add blank line + fix String.fromCharCode in spec-ingestion.test.ts
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:
+
+* Verification and Close
+
+** DONE Run bun check:ts and all relevant tests
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:END:
+
+** DONE Commit changes
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: completed
+:END:
+
+** DONE Update org items and close lifecycle
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: completed
+:END:

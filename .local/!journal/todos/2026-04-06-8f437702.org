@@ -1,0 +1,23 @@
+#+TITLE: Session 14b0268ae0a0c701 Todos
+#+DATE: 2026-04-06
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Understand subagent system prompt assembly and stagger delay
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Understand stats dashboard and where cache metrics would integrate
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Find all consumers of Context.systemPrompt to understand migration scope
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

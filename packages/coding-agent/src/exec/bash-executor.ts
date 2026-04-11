@@ -19,9 +19,9 @@ export interface BashExecutorOptions {
 	sessionKey?: string;
 	/** Additional environment variables to inject */
 	env?: Record<string, string>;
-	/** Artifact path/id for full output storage */
+	/** Artifact path/URI for full output storage */
 	artifactPath?: string;
-	artifactId?: string;
+	artifactUri?: string;
 }
 
 export interface BashResult {
@@ -33,7 +33,7 @@ export interface BashResult {
 	totalBytes: number;
 	outputLines: number;
 	outputBytes: number;
-	artifactId?: string;
+	artifactUri?: string;
 }
 
 const HARD_TIMEOUT_GRACE_MS = 5_000;
@@ -68,7 +68,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	const sink = new OutputSink({
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
-		artifactId: options?.artifactId,
+		artifactUri: options?.artifactUri,
 	});
 
 	let pendingChunks = Promise.resolve();

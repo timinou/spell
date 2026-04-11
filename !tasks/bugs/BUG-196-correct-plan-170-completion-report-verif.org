@@ -1,0 +1,58 @@
+#+TITLE: Correct PLAN-170 completion report verification accuracy
+#+STATE: DONE
+#+SESSION_ID: 14b657c2ac5da15f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-50-02-801Z_14b657c2ac5da15f.jsonl]]
+#+CUSTOM_ID: BUG-196-correct-plan-170-completion-report-verif
+#+EFFORT: S
+#+PRIORITY: #C
+#+LAYER: documentation
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-050-audit-implementation:
+
+- **What**: `OrgTool` marks the new cwd as active before the replacement inner tool is safely constructed  
+  **Where**: `packages/coding-agent/src/tools/org.ts`, `#ensureInner()` around lines 183–188  
+  **Why**: If `loadOrgConfig()` or `createOrgTool()` throws during a post-`/move` refresh, `#projectRoot` is still advanced and the old `#inner` has already been disposed. Subsequent calls will think the tool is up to date and keep using a disposed inner tool instead of retrying recovery.  
+  **Effort**: small
+
+- **What**: `WriteTool` updates its tracked cwd before the replacement writethrough is successfully created  
+  **Where**: `packages/coding-agent/src/tools/write.ts`, `#getWritethrough()` around lines 136–141  
+  **Why**: If `createLspWritethrough()` fails for the moved project, `#writethroughCwd` is already updated, so later writes will stop retrying and may keep using the old writethrough bound to the previous cwd. That can hide formatting/diagnostic misrouting after `/move`.  
+  **Effort**: small
+
+- **What**: The completion report claims `bun check:ts` passed, but that pass depended on additional unstaged workspace changes outside the plan commit  
+  **Where**: `!tasks/plans/PLAN-170-move-command-updates-tool-working-direct.org`, `** Completion [2026-04-11]` / `*** Verification`  
+  **Why**: Validation of commit `456a411b6` is not reproducible from the recorded plan artifact alone. The audit run showed repo-wide typecheck only went green after extra uncommitted edits in other files, so a reviewer checking out the commit may not be able to reproduce the reported verification result.  
+  **Effort**: medium
+
+- **What**: `OrgTool` does not refresh its outward-facing description after rebuilding the inner tool for a new cwd  
+  **Where**: `packages/coding-agent/src/tools/org.ts`, constructor vs. `#ensureInner()`  
+  **Why**: The constructor copies `this.#inner.description` once, but the refresh path recreates `#inner` without updating `description`. If per-project org config changes the description/help text, the tool can present stale guidance after `/move`.  
+  **Effort**: trivial
+
+- **What**: Automated coverage exercises mocked cwd mutation, not the real `/move` session lifecycle for `send_file` and `write`  
+  **Where**: `packages/coding-agent/test/tools/org-cwd-change.test.ts`  
+  **Why**: The new test proves the tools react to a changing `session.cwd`, but it does not cover the real `SessionManager.moveTo()` integration path for `send_file`/`write`. A regression in the move wiring or tool-session construction could slip through while the unit test still passes.  
+  **Effort**: medium
+
+* Problem
+
+The completion report on ~PLAN-170-move-command-updates-tool-working-direct~ claims ~bun check:ts~ passed, but that pass depended on additional unstaged workspace changes in files not part of commit ~456a411b6~. The affected files include ~artifact-protocol.ts~, ~session/artifacts.ts~, ~tools/index.ts~, ~canvas.ts~, ~gemini-image.ts~, and several test files. A reviewer checking out the commit alone cannot reproduce the verification result.
+
+* Implementation
+
+Use ~org update~ to append a clarifying note to the ~*** Deviations~ subsection in PLAN-170's completion report.
+
+** Steps:
+1. Read ~PLAN-170-move-command-updates-tool-working-direct~ via ~org get~.
+2. Use ~org update~ with ~section: "*** Deviations"~ and ~append~ to add:
+#+begin_example
+- The ~bun check:ts~ pass recorded above depended on additional unstaged workspace changes outside commit ~456a411b6~ (in ~artifact-protocol.ts~, ~session/artifacts.ts~, ~tools/index.ts~, ~canvas.ts~, ~gemini-image.ts~, and associated test files). These changes were part of concurrent artifact-URI work and are not reproducible from the plan commit alone.
+#+end_example
+
+Do NOT rewrite the existing Verification section — append the clarification to Deviations only.
+
+* Verification
+- Read ~PLAN-170-move-command-updates-tool-working-direct~ and confirm the Deviations subsection contains the clarifying note.
+- No code changes; no type check or test run required.

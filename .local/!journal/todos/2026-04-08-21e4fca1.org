@@ -1,0 +1,24 @@
+#+TITLE: Session default Todos
+#+DATE: 2026-04-08
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Work
+
+** DONE Root blocker
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Dependent
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:DEPENDS: task-1
+:END:
+
+** DOING Follow-up
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: in_progress
+:END:

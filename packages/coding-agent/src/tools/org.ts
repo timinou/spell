@@ -95,7 +95,9 @@ type OrgToolDetails = { error?: boolean };
 export class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Theme> {
 	readonly name = "org";
 	readonly label = "Org";
-	readonly description: string;
+	get description(): string {
+		return this.#inner.description;
+	}
 	readonly parameters = orgSchema;
 	readonly lenientArgValidation = true;
 
@@ -116,7 +118,6 @@ export class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Them
 			session.orgSessionManager ?? createOrgSessionManager(emacsPath, this.#projectRoot, sessionId);
 		this.#ownsOrgSessionManager = !session.orgSessionManager;
 		this.#inner = this.#createInner(this.#projectRoot);
-		this.description = this.#inner.description;
 	}
 
 	renderCall(args: OrgParams, _options: RenderResultOptions, theme: Theme): Component {
@@ -183,9 +184,11 @@ export class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Them
 	async #ensureInner(): Promise<void> {
 		const projectRoot = this.#session.cwd ?? getProjectDir();
 		if (projectRoot === this.#projectRoot) return;
-		await this.#inner.dispose?.();
+		const nextInner = this.#createInner(projectRoot);
+		const previousInner = this.#inner;
+		this.#inner = nextInner;
 		this.#projectRoot = projectRoot;
-		this.#inner = this.#createInner(projectRoot);
+		await previousInner.dispose?.();
 	}
 }
 

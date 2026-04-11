@@ -1,0 +1,114 @@
+#+TITLE: Show artifact URI everywhere and update all emission points
+#+STATE: DONE
+#+SESSION_ID: 14b64b9276f08680
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-11T09-56-47-707Z_14b64b9276f08680.jsonl]]
+#+CUSTOM_ID: FEAT-167-show-artifact-uri-everywhere-and-update
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: sdk
+#+DEPENDS: FEAT-165-artifact-uri-extension-and-subdirectory
+
+NOTE [2026-04-11]: Updated truncation and output consumers to emit full artifact URIs and removed artifact URI template-literal construction in source.
+
+* Context
+
+All implementation in =/home/user/code/ora/spell/packages/coding-agent/=.
+
+After [[id:FEAT-165-artifact-uri-extension-and-subdirectory]], =allocateOutputArtifact= returns
+a =uri= field with the full URI like =artifact://14b64b/main/bash/0.txt=.
+
+Every callsite that previously constructed =artifact://${artifactId}= from a bare numeric ID
+must now use the =uri= field directly. No callsite should construct artifact:// URIs by hand.
+
+* Implementation
+
+** Files to modify
+
+*** =src/tools/output-meta.ts=
+
+=formatFullOutputReference= currently:
+#+begin_src typescript
+export function formatFullOutputReference(artifactId: string): string {
+  return `Read/grep from artifact://${artifactId} for full output`;
+}
+#+end_src
+
+Change parameter name and remove string interpolation:
+#+begin_src typescript
+export function formatFullOutputReference(artifactUri: string): string {
+  return `Read/grep from ${artifactUri} for full output`;
+}
+#+end_src
+
+Also update =formatStyledTruncationWarning= (~line 367).
+Also update =formatTruncationMetaNotice= (~line 356):
+- Add =artifactUri?: string= to =TruncationMeta= type
+- Prefer =artifactUri= over =artifactId= when available
+
+*** =src/session/streaming-output.ts=
+
+Update interfaces:
+- =OutputSinkOptions=: add =artifactUri?: string= alongside =artifactId=
+- =OutputSummary=: add =artifactUri?: string=
+- =OutputSink.dump()=: pass through =artifactUri= to summary
+
+*** =src/sdk.ts= (~line 918)
+
+Async result handler currently: =return \`${preview}
+Full output: artifact://${artifactId}\`=
+
+Change to use URI from =allocateArtifactPath= return.
+
+*** =src/tools/render-mermaid.ts= (~line 56-61)
+
+Destructure =uri= from =allocateOutputArtifact=, use in artifact line.
+
+*** =src/tools/bash.ts= (two callsites: ~line 373 async, ~line 414 sync)
+
+Destructure =uri=, pass as =artifactUri= to OutputSink.
+
+*** =src/tools/fetch.ts= (~line 1148)
+
+Same pattern.
+
+*** =src/tools/python.ts= (~line 258)
+
+Same pattern.
+
+*** =src/tools/ssh.ts= (~line 163)
+
+Same pattern.
+
+*** =src/tools/find.ts= (~line 459)
+
+=formatFullOutputReference(artifactId)= → pass URI instead of bare ID.
+
+*** =src/tools/grep.ts= (~line 543)
+
+Same.
+
+*** =src/tools/read.ts= (~line 916)
+
+Same.
+
+*** =src/exec/bash-executor.ts=
+
+Add =artifactUri?: string= to =BashExecutorOptions=. Pass through to OutputSink.
+
+*** =src/ipy/executor.ts=
+
+Same.
+
+*** =src/ssh/ssh-executor.ts=
+
+Same.
+
+* Acceptance Criteria
+
+- [ ] Every truncation notice shows =artifact://sessionId/main/bash/N.txt= format
+- [ ] Async result overflow shows full URI
+- [ ] Render mermaid shows full URI
+- [ ] All tool types (bash, python, ssh, fetch, grep, find, read) show new format
+- [ ] No bare =artifact://${artifactId}= string interpolation in =src/= (excluding comments)
+  - Verify: =grep -rn 'artifact://\${' packages/coding-agent/src/= returns zero code matches
+- [ ] =cd /home/user/code/ora/spell && bun test packages/coding-agent= passes
