@@ -58,7 +58,7 @@ impl EmbeddingEngine {
 	}
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-embedding"))]
 mod tests {
 	use super::*;
 

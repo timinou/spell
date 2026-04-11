@@ -47,6 +47,7 @@ const codeSchema = Type.Object({
 	resolution: Type.Optional(Type.Integer({ description: "Zoom level 0-3 (default 2)" })),
 	offset: Type.Optional(Type.Integer({ description: "Start line 1-indexed (resolution 3 only)" })),
 	limit: Type.Optional(Type.Integer({ description: "Max results or lines" })),
+	semantic: Type.Optional(Type.Boolean({ description: "Require or suppress semantic graph search when supported" })),
 	depth: Type.Optional(Type.Integer({ description: "Max nesting or traversal depth" })),
 	operation: Type.Optional(
 		Type.String({
@@ -184,6 +185,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			query: params.query,
 			depth: params.depth,
 			limit: params.limit,
+			semantic: params.semantic,
 			signal,
 		});
 		return {
@@ -192,6 +194,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				command: params.command,
 				cacheStatus: result.cacheStatus,
 				rebuilt: result.rebuilt,
+				semanticStatus: result.semanticStatus,
 				graph: true,
 			},
 		};

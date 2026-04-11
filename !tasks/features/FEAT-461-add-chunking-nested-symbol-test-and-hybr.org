@@ -1,0 +1,211 @@
+#+TITLE: Add chunking nested symbol test and hybrid search integration test
+#+STATE: DONE
+#+SESSION_ID: 14b6e672eb0c82b8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-13-27-724Z_14b6e672eb0c82b8.jsonl]]
+#+CUSTOM_ID: FEAT-461-add-chunking-nested-symbol-test-and-hybr
+#+EFFORT: 2h
+#+PRIORITY: B
+#+LAYER: native
+#+DEPENDS: BUG-208-fix-semantic-search-contract-violations BUG-209-fix-vector-cache-reliability-atomic-writ
+
+NOTE [2026-04-11]: Added nested chunking regression coverage and hybrid graph_search coverage; verified with cargo test -p pi-code-graph --features semantic and cargo test -p pi-natives code_graph::tests::.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-058-audit-implementation:
+
+- **What**: `index --semantic` reports success even when semantic indexing fails  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `run_code_graph()` `"index"` branch around `build_semantic_index()` handling  
+  **Why**: The command appends `Semantic: failed (...)` to the output string but still returns a successful result. Callers cannot reliably distinguish “graph indexed with vectors” from “graph indexed without vectors after failure,” which can hide missing semantic capability and make later search behavior misleading.  
+  **Effort**: small
+
+- **What**: `semantic` is accepted in the public options type but ignored for search behavior  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `CodeGraphOptions` / `CodeGraphTaskOptions` plus `"search"` dispatch branch  
+  **Why**: The API accepts `semantic: Option<bool>`, but only the `"index"` branch uses it. Search always auto-uses vectors if cache exists, and never uses the flag to force or suppress semantic retrieval. That is a contract violation: callers can pass input that is silently discarded.  
+  **Effort**: small
+
+- **What**: Corrupt or stale vector cache silently degrades to BM25-only search  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `load_vector_cache()` and `"search"` branch fallback logic  
+  **Why**: Any cache open/deserialize failure returns `None`, and query embedding failures also fall back silently. Users get plausible-looking search results without any indication that semantic retrieval was unavailable, which makes failures hard to detect and debug.  
+  **Effort**: small
+
+- **What**: Vector cache writes bypass the graph cache’s atomic persistence path  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `save_vector_cache()`  
+  **Why**: The file is written directly with `File::create(...)` instead of an atomic temp-write/rename flow like the graph cache. A crash or interruption can leave a partial `workspace-vectors.bin`, which is later treated as “no vectors” rather than a surfaced failure.  
+  **Effort**: small
+
+- **What**: Vector cache invalidation hashes only a hand-picked subset of fingerprint state  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `compute_fingerprint_hash()`  
+  **Why**: The vector cache freshness rule is reimplemented separately from the graph cache contract. If `GraphFingerprint` semantics change later, vector invalidation can drift and keep stale embeddings “fresh” even when the graph cache would consider them stale.  
+  **Effort**: small
+
+- **What**: Embedding dimension is hardcoded to `768` instead of derived from model output  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `build_semantic_index()`  
+  **Why**: This is correct for the current model, but brittle. A future model/config change can silently break search or produce dimension mismatches. Deriving the dimension from the first embedding would make the implementation truthfully reflect the actual model output.  
+  **Effort**: trivial
+
+- **What**: Semantic chunking uses a simple line-range heuristic that is not covered for nested/enclosing symbols  
+  **Where**: `crates/pi-code-graph/src/chunking.rs`, `extract_chunks()` end-boundary logic  
+  **Why**: A symbol’s chunk ends at the next symbol’s start line. For nested structures like classes with methods, the enclosing symbol can lose most of its body/context, which hurts retrieval quality. Current tests cover flat sibling symbols, missing files, and truncation, but not nested declarations.  
+  **Effort**: medium
+
+- **What**: No integration test covers the N-API semantic flow end-to-end  
+  **Where**: `crates/pi-natives/src/code_graph.rs` semantic index/search path; test gap across `pi-natives`  
+  **Why**: Lower-level unit tests pass, but there is no test proving that: semantic indexing writes the vector cache, stale vectors are ignored, cached vectors are loaded into search, and hybrid results are returned through the N-API entrypoint. That leaves the highest-risk wiring path unprotected.  
+  **Effort**: medium
+
+- **What**: Real embedding/model lifecycle is not exercised by automated tests  
+  **Where**: `crates/pi-code-vectors/src/embedding.rs`, ignored tests  
+  **Why**: The fastembed API already differed from the original implementation assumptions during development. Because all model-backed tests are ignored, future upstream API or runtime regressions can land undetected while the pure unit tests still pass.  
+  **Effort**: medium
+
+- **What**: `status` does not report vector-index presence or freshness  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `render_status()`  
+  **Why**: After adding a second cache (`workspace-vectors.bin`), the status surface still only reports graph-cache state. That makes semantic indexing hard to inspect operationally and forces users to infer vector availability indirectly from search behavior.  
+  **Effort**: small
+
+* Problem
+
+Two test gaps in the semantic search implementation:
+
+1. *Chunking nested symbols*: =extract_chunks()= in =chunking.rs= uses line-range heuristics where each symbol's chunk ends at the next symbol's start line. For nested structures (class containing methods), the class chunk loses most of its body because the first method's start line truncates it. This behavior is reasonable but untested — no test covers nested declarations.
+
+2. *Hybrid search integration*: No test verifies the full wiring path: graph build → chunk extraction → vector index construction → hybrid search (RRF + graph re-ranking) → result. The existing tests cover individual layers (BM25 search, RRF fusion, cosine search) but not the composition through =graph_search()= with real =CodeGraph::with_vectors()=.
+
+* Design Decisions
+
+1. Chunking nested test doesn't need to change chunking behavior — just verify the current behavior is intentional and documented. The class chunk should contain the class declaration line(s) up to the first method start. Each method gets its own chunk.
+
+2. Integration test lives in =pi-code-graph= behind =#[cfg(test)]= + =#[cfg(feature = "semantic")]= since it needs both crate dependencies. Uses synthetic vector data (mock embeddings) — no real model needed.
+
+* Files to Modify
+
+** =crates/pi-code-graph/src/chunking.rs= — add test
+
+Add test =extract_chunks_nested_class_with_methods=:
+#+begin_src rust
+#[test]
+fn extract_chunks_nested_class_with_methods() {
+    let tmp = std::env::temp_dir().join(format!("pi-graph-nested-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    std::fs::write(
+        tmp.join("widget.ts"),
+        "export class Widget {
+	name: string;
+	constructor(name: string) {
+		this.name = name;
+	}
+	render(): string {
+		return this.name;
+	}
+}
+",
+    ).unwrap();
+
+    let graph = make_graph(&tmp, vec![
+        SymbolNode {
+            name: "Widget".into(),
+            qualified_name: "widget.ts::Widget".into(),
+            file: PathBuf::from("widget.ts"),
+            kind: SymbolKind::Class,
+            exported: true,
+            line: 1,
+            column: 1,
+            detail: None,
+        },
+        SymbolNode {
+            name: "constructor".into(),
+            qualified_name: "widget.ts::Widget::constructor".into(),
+            file: PathBuf::from("widget.ts"),
+            kind: SymbolKind::Method,
+            exported: false,
+            line: 3,
+            column: 2,
+            detail: None,
+        },
+        SymbolNode {
+            name: "render".into(),
+            qualified_name: "widget.ts::Widget::render".into(),
+            file: PathBuf::from("widget.ts"),
+            kind: SymbolKind::Method,
+            exported: false,
+            line: 6,
+            column: 2,
+            detail: None,
+        },
+    ]);
+
+    let chunks = extract_chunks(&graph, 30).expect("extract_chunks");
+    assert_eq!(chunks.len(), 3, "class + 2 methods = 3 chunks");
+
+    // Widget chunk: lines 1-2 (class decl + name field, bounded by constructor at line 3)
+    assert!(chunks[0].text.contains("Class: widget.ts::Widget"));
+    assert!(chunks[0].text.contains("export class Widget"));
+    assert!(!chunks[0].text.contains("constructor"), "class chunk should be bounded by first method");
+
+    // constructor chunk: lines 3-5
+    assert!(chunks[1].text.contains("Method: widget.ts::Widget::constructor"));
+    assert!(chunks[1].text.contains("constructor(name"));
+
+    // render chunk: lines 6-8
+    assert!(chunks[2].text.contains("Method: widget.ts::Widget::render"));
+    assert!(chunks[2].text.contains("render()"));
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+#+end_src
+
+** =crates/pi-code-graph/src/hybrid.rs= — add integration test
+
+Add a test that uses =CodeGraph::with_vectors()= + =graph_search()= to verify the full wiring:
+#+begin_src rust
+#[test]
+fn hybrid_search_outranks_bm25_for_semantic_match() {
+    let graph = test_graph(); // reuse existing test_graph()
+    
+    // Simulate: "rate limiting" query. BM25 won't find "throttle" well because
+    // the name doesn't match. But vector search would rank it highly.
+    // Create synthetic vector entries where throttle (node 1) is closest to the query.
+    let entries = vec![
+        pi_code_vectors::VectorEntry { node_index: 1, vector: vec![0.9, 0.1, 0.0] }, // throttle
+        pi_code_vectors::VectorEntry { node_index: 2, vector: vec![0.7, 0.3, 0.0] }, // rate_limit
+        pi_code_vectors::VectorEntry { node_index: 3, vector: vec![0.1, 0.1, 0.9] }, // handle_request
+        pi_code_vectors::VectorEntry { node_index: 4, vector: vec![0.6, 0.4, 0.0] }, // create_limiter
+    ];
+    let vector_index = pi_code_vectors::VectorIndex::new(entries, 3);
+    
+    // Build CodeGraph with vectors
+    let graph_with_vecs = CodeGraph::with_vectors(graph.into_persisted(), vector_index);
+    
+    // Query vector simulating "rate limiting" intent — close to throttle/rate_limit
+    let query_vector = vec![0.85, 0.15, 0.0];
+    
+    // Hybrid search should find results even though BM25 for "rate_limiting" 
+    // would be weak against "throttle" name
+    let results = graph_with_vecs.graph_search("rate_limiting", Some(&query_vector), 10);
+    assert!(!results.is_empty(), "hybrid search should return results");
+    
+    // BM25-only search for comparison
+    let bm25_graph = CodeGraph::new(graph_with_vecs.into_persisted());
+    let bm25_results = bm25_graph.graph_search("rate_limiting", None, 10);
+    
+    // The hybrid results should include nodes that BM25 missed or ranked lower
+    // Specifically, "throttle" should appear in hybrid but likely not in BM25
+    let hybrid_has_throttle = results.iter().any(|r| r.summary.label.contains("throttle"));
+    assert!(hybrid_has_throttle, "hybrid search should surface 'throttle' via vector similarity");
+}
+#+end_src
+
+* Verification
+
+- =cargo test -p pi-code-graph --features semantic= passes with 42+ tests (existing 40 + 2 new)
+- New test =extract_chunks_nested_class_with_methods= passes
+- New test =hybrid_search_outranks_bm25_for_semantic_match= passes
+- =bun check:rs= passes
+
+* Sub-Outline (test-first: tests depend only on existing types)
+
+1. Add =extract_chunks_nested_class_with_methods= test to =chunking.rs= (depends on existing =make_graph= helper + =SymbolKind= types)
+2. Add =hybrid_search_outranks_bm25_for_semantic_match= integration test to =hybrid.rs= (depends on existing =test_graph()= helper + =CodeGraph::with_vectors=)
+3. Run tests, verify pass

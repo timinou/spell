@@ -1,0 +1,154 @@
+#+TITLE: Harden semantic search audit fix implementation
+#+STATE: DONE
+#+SESSION_ID: 14b6e672eb0c82b8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-13-27-724Z_14b6e672eb0c82b8.jsonl]]
+#+CUSTOM_ID: PLAN-190-harden-semantic-search-audit-fix-impleme
+
+NOTE [2026-04-11]: Completed semantic search hardening across native caches, public search contract, TS wiring, and semantic coverage. Verification evidence recorded in the completion section.
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-058-audit-implementation:
+
+- **What**: `index --semantic` reports success even when semantic indexing fails  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `run_code_graph()` `"index"` branch around `build_semantic_index()` handling  
+  **Why**: The command appends `Semantic: failed (...)` to the output string but still returns a successful result. Callers cannot reliably distinguish “graph indexed with vectors” from “graph indexed without vectors after failure,” which can hide missing semantic capability and make later search behavior misleading.  
+  **Effort**: small
+
+- **What**: `semantic` is accepted in the public options type but ignored for search behavior  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `CodeGraphOptions` / `CodeGraphTaskOptions` plus `"search"` dispatch branch  
+  **Why**: The API accepts `semantic: Option<bool>`, but only the `"index"` branch uses it. Search always auto-uses vectors if cache exists, and never uses the flag to force or suppress semantic retrieval. That is a contract violation: callers can pass input that is silently discarded.  
+  **Effort**: small
+
+- **What**: Corrupt or stale vector cache silently degrades to BM25-only search  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `load_vector_cache()` and `"search"` branch fallback logic  
+  **Why**: Any cache open/deserialize failure returns `None`, and query embedding failures also fall back silently. Users get plausible-looking search results without any indication that semantic retrieval was unavailable, which makes failures hard to detect and debug.  
+  **Effort**: small
+
+- **What**: Vector cache writes bypass the graph cache’s atomic persistence path  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `save_vector_cache()`  
+  **Why**: The file is written directly with `File::create(...)` instead of an atomic temp-write/rename flow like the graph cache. A crash or interruption can leave a partial `workspace-vectors.bin`, which is later treated as “no vectors” rather than a surfaced failure.  
+  **Effort**: small
+
+- **What**: Vector cache invalidation hashes only a hand-picked subset of fingerprint state  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `compute_fingerprint_hash()`  
+  **Why**: The vector cache freshness rule is reimplemented separately from the graph cache contract. If `GraphFingerprint` semantics change later, vector invalidation can drift and keep stale embeddings “fresh” even when the graph cache would consider them stale.  
+  **Effort**: small
+
+- **What**: Embedding dimension is hardcoded to `768` instead of derived from model output  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `build_semantic_index()`  
+  **Why**: This is correct for the current model, but brittle. A future model/config change can silently break search or produce dimension mismatches. Deriving the dimension from the first embedding would make the implementation truthfully reflect the actual model output.  
+  **Effort**: trivial
+
+- **What**: Semantic chunking uses a simple line-range heuristic that is not covered for nested/enclosing symbols  
+  **Where**: `crates/pi-code-graph/src/chunking.rs`, `extract_chunks()` end-boundary logic  
+  **Why**: A symbol’s chunk ends at the next symbol’s start line. For nested structures like classes with methods, the enclosing symbol can lose most of its body/context, which hurts retrieval quality. Current tests cover flat sibling symbols, missing files, and truncation, but not nested declarations.  
+  **Effort**: medium
+
+- **What**: No integration test covers the N-API semantic flow end-to-end  
+  **Where**: `crates/pi-natives/src/code_graph.rs` semantic index/search path; test gap across `pi-natives`  
+  **Why**: Lower-level unit tests pass, but there is no test proving that: semantic indexing writes the vector cache, stale vectors are ignored, cached vectors are loaded into search, and hybrid results are returned through the N-API entrypoint. That leaves the highest-risk wiring path unprotected.  
+  **Effort**: medium
+
+- **What**: Real embedding/model lifecycle is not exercised by automated tests  
+  **Where**: `crates/pi-code-vectors/src/embedding.rs`, ignored tests  
+  **Why**: The fastembed API already differed from the original implementation assumptions during development. Because all model-backed tests are ignored, future upstream API or runtime regressions can land undetected while the pure unit tests still pass.  
+  **Effort**: medium
+
+- **What**: `status` does not report vector-index presence or freshness  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `render_status()`  
+  **Why**: After adding a second cache (`workspace-vectors.bin`), the status surface still only reports graph-cache state. That makes semantic indexing hard to inspect operationally and forces users to infer vector availability indirectly from search behavior.  
+  **Effort**: small
+
+* Context
+
+** Problem
+The hybrid graph+vector semantic search system (implemented in PLAN-184) has 10 audit findings across contract violations, cache reliability, missing tests, and operational observability gaps. The core search works but callers cannot distinguish semantic success from failure, the vector cache can corrupt on crash, and the fingerprint hash can drift out of sync with the graph cache.
+
+** Approach
+Four items fix the findings in dependency order:
+1. N-API contract fixes (semantic flag tri-state, error surfacing, status reporting, dimension derivation)
+2. Vector cache reliability (atomic writes, derived Hash for fingerprint)
+3. Test coverage (nested chunking test, hybrid search integration test)
+4. Model lifecycle test gate (cargo feature for CI opt-in)
+
+** Key Decisions
+1. =CodeGraphResult= gains =semanticStatus: Option<String>= — structured feedback for callers
+2. =semantic= field is tri-state: =true= (require vectors), =false= (force BM25), =None= (auto-detect with degradation hint)
+3. Atomic vector cache writes via temp-file + =fs::rename()=
+4. =Hash= derived on =GraphFingerprint= + =FileFingerprint= — eliminates field-by-field hash drift
+5. Embedding dimension derived from first vector, not hardcoded 768
+6. Model tests gated behind =test-embedding= cargo feature, not =#[ignore]=
+7. =render_status()= reports vector index presence and freshness
+8. TS types and code tool schema updated to pass =semantic= flag through
+
+* Verification
+
+** Build verification
+- =cargo check -p pi-code-graph= compiles (with and without semantic feature)
+- =cargo check -p pi-code-graph --features semantic= compiles
+- =cargo check -p pi-natives= compiles
+- =bun check:rs= passes (fmt + clippy)
+- =bun check:ts= passes (biome + tsgo)
+
+** Test verification
+- =cargo test -p pi-code-vectors= passes (7+ pass, model tests ignored without feature)
+- =cargo test -p pi-code-graph --features semantic= passes (42+ tests including 2 new)
+- =cargo check -p pi-code-vectors --features test-embedding= compiles
+
+** Functional verification
+- =code index= without =semantic= does not build vectors, =semanticStatus= is absent
+- =code search "foo"= without vector cache returns BM25 results, no error
+- =code search "foo"= with =semantic: true= but no vector cache returns descriptive error
+- =code status= reports vector index presence when =workspace-vectors.bin= exists
+
+* Execution Manifest
+
+** Wave 1: Foundation (parallel)
+
+[[id:BUG-209-fix-vector-cache-reliability-atomic-writ]] (2h)
+- Atomic vector cache writes + derived Hash on fingerprint types
+- No dependencies
+
+[[id:FEAT-462-add-ci-gated-embedding-model-lifecycle-t]] (1h)
+- Replace =#[ignore]= with cargo feature gate on model tests
+- No dependencies
+
+** Wave 2: Contract Fixes
+
+[[id:BUG-208-fix-semantic-search-contract-violations]] (3h)
+- Depends on: [[id:BUG-209-fix-vector-cache-reliability-atomic-writ]] (uses the improved =compute_fingerprint_hash= and atomic writes)
+- N-API contract: tri-state semantic, error surfacing, dimension derivation, status reporting, TS types
+
+** Wave 3: Test Coverage
+
+[[id:FEAT-461-add-chunking-nested-symbol-test-and-hybr]] (2h)
+- Depends on: [[id:BUG-208-fix-semantic-search-contract-violations]] (integration test uses =CodeGraph::with_vectors= + =graph_search= with updated signatures)
+- Chunking nested test + hybrid search integration test
+
+Total estimated effort: 8h
+
+
+** Completion [2026-04-11]
+*** Verification
+- `cargo check -p pi-code-graph` — passed.
+- `cargo check -p pi-code-graph --features semantic` — passed.
+- `cargo check -p pi-natives` — passed.
+- `cargo test -p pi-code-vectors` — passed (`7` tests).
+- `cargo check -p pi-code-vectors --features test-embedding` — passed.
+- `cargo test -p pi-code-graph --features semantic` — passed (`42` tests, including `extract_chunks_nested_class_with_methods` and `graph_search_surfaces_vector_only_matches`).
+- `cargo test -p pi-natives code_graph::tests::` — passed (`3` tests covering plain index without vectors, required semantic search failure without vectors, and status reporting corrupt vector-cache presence).
+- `bun check:rs` — passed (`cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings`).
+- `bun check:ts` — passed (`biome check . && tsgo -p tsconfig.json`).
+
+*** Artifacts
+- [[file:crates/pi-natives/src/code_graph.rs]] — semantic tri-state handling, structured `semanticStatus`, vector cache status reporting, and direct native contract tests.
+- [[file:crates/pi-code-graph/src/cache.rs]] — `Hash` derivation for graph/vector cache invalidation alignment.
+- [[file:crates/pi-code-graph/src/chunking.rs]] — nested symbol chunking regression coverage.
+- [[file:crates/pi-code-graph/src/hybrid.rs]] — hybrid `graph_search()` coverage using synthetic vectors.
+- [[file:crates/pi-code-vectors/Cargo.toml]] and [[file:crates/pi-code-vectors/src/embedding.rs]] — feature-gated real-model lifecycle tests.
+- [[file:packages/natives/src/code-graph/types.ts]], [[file:packages/coding-agent/src/tools/code.ts]], [[file:packages/coding-agent/src/prompts/tools/code.md]], and [[file:packages/coding-agent/test/tools/code.test.ts]] — public TS surface, tool schema, prompt, and wiring test updates.
+
+*** Deviations
+- None.

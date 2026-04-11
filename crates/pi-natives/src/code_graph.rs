@@ -63,7 +63,7 @@ struct CodeGraphTaskOptions {
 	query:    Option<String>,
 	depth:    Option<u32>,
 	limit:    Option<u32>,
-	semantic: bool,
+	semantic: Option<bool>,
 }
 
 impl From<CodeGraphOptions<'_>> for CodeGraphTaskOptions {
@@ -76,23 +76,52 @@ impl From<CodeGraphOptions<'_>> for CodeGraphTaskOptions {
 			query:    value.query,
 			depth:    value.depth,
 			limit:    value.limit,
-			semantic: value.semantic.unwrap_or(false),
+			semantic: value.semantic,
 		}
 	}
 }
 
 #[napi(object)]
 pub struct CodeGraphResult {
-	pub output:       String,
+	pub output:          String,
 	#[napi(js_name = "cacheStatus")]
-	pub cache_status: String,
-	pub rebuilt:      bool,
+	pub cache_status:    String,
+	pub rebuilt:         bool,
 	#[napi(js_name = "fileCount")]
-	pub file_count:   u32,
+	pub file_count:      u32,
 	#[napi(js_name = "symbolCount")]
-	pub symbol_count: u32,
+	pub symbol_count:    u32,
 	#[napi(js_name = "edgeCount")]
-	pub edge_count:   u32,
+	pub edge_count:      u32,
+	#[napi(js_name = "semanticStatus")]
+	pub semantic_status: Option<String>,
+}
+
+enum VectorCacheState {
+	Missing,
+	Fresh(pi_code_vectors::PersistedVectorIndex),
+	Stale(pi_code_vectors::PersistedVectorIndex),
+	Corrupt(String),
+}
+
+impl VectorCacheState {
+	fn describe(&self) -> String {
+		match self {
+			Self::Missing => "missing".to_string(),
+			Self::Fresh(persisted) => format!("{} vectors (fresh)", persisted.entries.len()),
+			Self::Stale(persisted) => format!("{} vectors (stale)", persisted.entries.len()),
+			Self::Corrupt(reason) => format!("corrupt ({reason})"),
+		}
+	}
+
+	fn unavailable_reason(&self) -> Option<String> {
+		match self {
+			Self::Missing => Some("no semantic vector index exists".to_string()),
+			Self::Fresh(_) => None,
+			Self::Stale(_) => Some("semantic vector index is stale".to_string()),
+			Self::Corrupt(reason) => Some(format!("semantic vector index is corrupt: {reason}")),
+		}
+	}
 }
 
 #[napi(js_name = "executeCodeGraph")]
@@ -125,16 +154,21 @@ fn run_code_graph(
 	let (graph, cache_status, rebuilt) =
 		ensure_graph(&root, &cache, &builder, &cancel_token, options.command == "index")?;
 	let stats = graph.graph_status();
+	let mut semantic_status = None;
 	let output = match options.command.as_str() {
 		"index" => {
 			let mut status_output = format_status(&stats, &cache_status, rebuilt);
-			if options.semantic {
+			if options.semantic == Some(true) {
 				match build_semantic_index(&graph, &cache) {
 					Ok(vector_count) => {
-						let _ = write!(status_output, "\nSemantic: {vector_count} vectors indexed");
+						let status = format!("{vector_count} vectors indexed");
+						let _ = write!(status_output, "\nSemantic: {status}");
+						semantic_status = Some(status);
 					},
-					Err(e) => {
-						let _ = write!(status_output, "\nSemantic: failed ({e})");
+					Err(error) => {
+						let status = format!("failed: {error}");
+						let _ = write!(status_output, "\nSemantic: {status}");
+						semantic_status = Some(status);
 					},
 				}
 			}
@@ -196,19 +230,60 @@ fn run_code_graph(
 				.as_deref()
 				.ok_or_else(|| Error::from_reason("search requires `query`"))?;
 			let limit = options.limit.unwrap_or(DEFAULT_LIMIT) as usize;
-			let fingerprint_hash = compute_fingerprint_hash(&cache, &root);
-			// Attempt to load vectors and embed the query for hybrid search.
-			let (search_graph, query_vector) = match load_vector_cache(&cache, fingerprint_hash) {
-				Some(vectors) => match get_or_init_engine().and_then(|e| {
-					e.embed_query(query)
-						.map_err(|e| Error::from_reason(e.to_string()))
-				}) {
-					Ok(qv) => (CodeGraph::with_vectors(graph.into_persisted(), vectors), Some(qv)),
-					Err(_) => (graph, None),
-				},
-				None => (graph, None),
-			};
-			format_search(&search_graph.graph_search(query, query_vector.as_deref(), limit))
+
+			if options.semantic == Some(false) {
+				format_search(&graph.graph_search(query, None, limit))
+			} else {
+				match load_vector_cache(&cache, graph_fingerprint_hash(&cache)) {
+					VectorCacheState::Fresh(persisted) => {
+						let vector_count = persisted.entries.len();
+						match get_or_init_engine().and_then(|engine| {
+							engine
+								.embed_query(query)
+								.map_err(|error| Error::from_reason(error.to_string()))
+						}) {
+							Ok(query_vector) => {
+								semantic_status =
+									Some(format!("hybrid search using {vector_count} cached vectors"));
+								let search_graph = CodeGraph::with_vectors(
+									graph.into_persisted(),
+									pi_code_vectors::VectorIndex::from_persisted(persisted),
+								);
+								format_search(&search_graph.graph_search(query, Some(&query_vector), limit))
+							},
+							Err(error) => {
+								let reason = format!("query embedding failed: {error}");
+								if options.semantic == Some(true) {
+									return Err(Error::from_reason(format!(
+										"Semantic search requested but unavailable: {reason}"
+									)));
+								}
+								semantic_status = Some(format!("unavailable: {reason}"));
+								format_search_with_reason(
+									format_search(&graph.graph_search(query, None, limit)),
+									&reason,
+								)
+							},
+						}
+					},
+					state => {
+						let reason = state
+							.unavailable_reason()
+							.expect("non-fresh vector cache state should provide a reason");
+						if options.semantic == Some(true) {
+							return Err(Error::from_reason(format!(
+								"Semantic search requested but unavailable: {reason}. Run `code index` \
+								 with `semantic: true` first."
+							)));
+						}
+						semantic_status = Some(format!("unavailable: {reason}"));
+						format_search_with_reason(
+							format_search(&graph.graph_search(query, None, limit)),
+							&reason,
+						)
+					},
+				}
+			}
 		},
 		other => return Err(Error::from_reason(format!("Unsupported code graph command: {other}"))),
 	};
@@ -220,6 +295,7 @@ fn run_code_graph(
 		file_count: stats.file_count,
 		symbol_count: stats.symbol_count,
 		edge_count: stats.edge_count,
+		semantic_status,
 	})
 }
 
@@ -252,21 +328,23 @@ fn ensure_graph(
 }
 
 fn render_status(root: &Path, builder: &CodeGraphBuilder) -> napi::Result<CodeGraphResult> {
+	let cache = builder.cache();
 	let cache_status = match builder.cache_status(root).map_err(to_napi_error)? {
 		CacheStatus::Missing => "missing".to_string(),
 		CacheStatus::Fresh => "fresh".to_string(),
 		CacheStatus::Stale { reason } => format!("stale ({reason})"),
 	};
-	let status = builder
-		.cache()
+	let status = cache
 		.load(CACHE_NAME)
 		.map_err(to_napi_error)?
 		.map(|entry| CodeGraph::from(entry.graph).graph_status());
-	let output = if let Some(status) = &status {
+	let semantic_status = load_vector_cache(cache, graph_fingerprint_hash(cache)).describe();
+	let mut output = if let Some(status) = &status {
 		format_status(status, &cache_status, false)
 	} else {
 		format!("Code graph cache: {cache_status}\nRoot: {}\nNo index present.", root.display())
 	};
+	let _ = write!(output, "\nSemantic: {semantic_status}");
 	Ok(CodeGraphResult {
 		output,
 		cache_status,
@@ -274,6 +352,7 @@ fn render_status(root: &Path, builder: &CodeGraphBuilder) -> napi::Result<CodeGr
 		file_count: status.as_ref().map_or(0, |status| status.file_count),
 		symbol_count: status.as_ref().map_or(0, |status| status.symbol_count),
 		edge_count: status.as_ref().map_or(0, |status| status.edge_count),
+		semantic_status: Some(semantic_status),
 	})
 }
 
@@ -290,14 +369,15 @@ fn build_semantic_index(graph: &CodeGraph, cache: &CacheStore) -> napi::Result<u
 	let vectors = engine
 		.embed_batch(&texts, None)
 		.map_err(|e| Error::from_reason(format!("Embedding failed: {e}")))?;
+	let dimensions = vectors.first().map_or(768, Vec::len);
 	let entries: Vec<pi_code_vectors::VectorEntry> = chunks
 		.iter()
 		.zip(vectors)
 		.map(|(c, v)| pi_code_vectors::VectorEntry { node_index: c.node_index, vector: v })
 		.collect();
 	let count = entries.len();
-	let vector_index = pi_code_vectors::VectorIndex::new(entries, 768);
-	let fingerprint_hash = compute_fingerprint_hash(cache, graph.root());
+	let vector_index = pi_code_vectors::VectorIndex::new(entries, dimensions);
+	let fingerprint_hash = compute_fingerprint_hash(cache);
 	let persisted = vector_index.to_persisted("jina-embeddings-v2-base-code", fingerprint_hash);
 	save_vector_cache(cache, &persisted)?;
 	// Prime the engine cache for subsequent search queries.
@@ -305,49 +385,62 @@ fn build_semantic_index(graph: &CodeGraph, cache: &CacheStore) -> napi::Result<u
 	Ok(count)
 }
 
+fn graph_fingerprint_hash(cache: &CacheStore) -> Option<u64> {
+	let entry = cache.load(CACHE_NAME).ok().flatten()?;
+	let mut hasher = DefaultHasher::new();
+	entry.fingerprint.hash(&mut hasher);
+	Some(hasher.finish())
+}
+
 /// Compute a deterministic hash of the graph fingerprint for vector cache
 /// validation.
-fn compute_fingerprint_hash(cache: &CacheStore, _root: &Path) -> u64 {
-	let entry = cache.load(CACHE_NAME).ok().flatten();
-	let Some(entry) = entry else {
-		return 0;
-	};
-	let fp = &entry.fingerprint;
-	let mut hasher = DefaultHasher::new();
-	fp.root.hash(&mut hasher);
-	fp.git_head.hash(&mut hasher);
-	for (path, file_fp) in &fp.files {
-		path.hash(&mut hasher);
-		file_fp.size.hash(&mut hasher);
-		file_fp.modified_at_ms.hash(&mut hasher);
-	}
-	hasher.finish()
+fn compute_fingerprint_hash(cache: &CacheStore) -> u64 {
+	graph_fingerprint_hash(cache).unwrap_or(0)
 }
 
 fn save_vector_cache(
 	cache: &CacheStore,
 	vectors: &pi_code_vectors::PersistedVectorIndex,
 ) -> napi::Result<()> {
-	let path = cache.directory().join(format!("{VECTORS_CACHE_NAME}.bin"));
 	fs::create_dir_all(cache.directory())
 		.map_err(|e| Error::from_reason(format!("Failed to create cache dir: {e}")))?;
-	let file = fs::File::create(path)
-		.map_err(|e| Error::from_reason(format!("Failed to create vector cache: {e}")))?;
-	pi_code_vectors::serialize_index(BufWriter::new(file), vectors)
-		.map_err(|e| Error::from_reason(format!("Failed to write vector cache: {e}")))
+	let temp_path = cache
+		.directory()
+		.join(format!("{VECTORS_CACHE_NAME}.bin.tmp"));
+	let final_path = cache.directory().join(format!("{VECTORS_CACHE_NAME}.bin"));
+	let file = fs::File::create(&temp_path)
+		.map_err(|e| Error::from_reason(format!("Failed to create temp vector cache: {e}")))?;
+	{
+		let writer = BufWriter::new(file);
+		pi_code_vectors::serialize_index(writer, vectors)
+			.map_err(|e| Error::from_reason(format!("Failed to write temp vector cache: {e}")))?;
+	}
+	fs::rename(&temp_path, &final_path)
+		.map_err(|e| Error::from_reason(format!("Failed to rename temp vector cache: {e}")))
 }
 
-fn load_vector_cache(
-	cache: &CacheStore,
-	expected_hash: u64,
-) -> Option<pi_code_vectors::VectorIndex> {
+fn load_vector_cache(cache: &CacheStore, expected_hash: Option<u64>) -> VectorCacheState {
 	let path = cache.directory().join(format!("{VECTORS_CACHE_NAME}.bin"));
-	let file = fs::File::open(path).ok()?;
-	let persisted = pi_code_vectors::deserialize_index(BufReader::new(file)).ok()?;
+	let file = match fs::File::open(&path) {
+		Ok(file) => file,
+		Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+			return VectorCacheState::Missing;
+		},
+		Err(error) => {
+			return VectorCacheState::Corrupt(format!("failed to open {}: {error}", path.display()));
+		},
+	};
+	let persisted = match pi_code_vectors::deserialize_index(BufReader::new(file)) {
+		Ok(persisted) => persisted,
+		Err(error) => return VectorCacheState::Corrupt(error.to_string()),
+	};
+	let Some(expected_hash) = expected_hash else {
+		return VectorCacheState::Stale(persisted);
+	};
 	if persisted.graph_fingerprint_hash != expected_hash {
-		return None; // stale vectors
+		return VectorCacheState::Stale(persisted);
 	}
-	Some(pi_code_vectors::VectorIndex::from_persisted(persisted))
+	VectorCacheState::Fresh(persisted)
 }
 
 fn resolve_root(root: Option<&str>) -> napi::Result<PathBuf> {
@@ -479,6 +572,11 @@ fn format_search(matches: &[GraphSearchMatch]) -> String {
 	lines.join("\n")
 }
 
+fn format_search_with_reason(mut output: String, reason: &str) -> String {
+	let _ = write!(output, "\n(Semantic search unavailable: {reason})");
+	output
+}
+
 fn append_section(
 	sections: &mut Vec<String>,
 	title: &str,
@@ -508,5 +606,116 @@ fn append_levels(sections: &mut Vec<String>, levels: &[GraphTraversalLevel], lim
 			lines.push(format!("- ... {} more", level.nodes.len() - limit));
 		}
 		sections.push(lines.join("\n"));
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::{fs, path::PathBuf};
+
+	use super::*;
+
+	fn fixture_root(name: &str) -> PathBuf {
+		let unique = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap_or_default()
+			.as_nanos();
+		let root = std::env::temp_dir()
+			.join(format!("pi-natives-code-graph-{name}-{}-{unique}", std::process::id()));
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(root.join("src")).expect("fixture dir should be created");
+		fs::write(
+			root.join("src/rate_limit.ts"),
+			"export function rateLimit(requests: number): boolean {\n\treturn requests < 10;\n}\n",
+		)
+		.expect("fixture file should be written");
+		fs::write(
+			root.join("src/throttle.ts"),
+			"export function throttle(count: number): boolean {\n\treturn count < 5;\n}\n",
+		)
+		.expect("fixture file should be written");
+		root
+	}
+
+	fn run_fixture_command(
+		root: &Path,
+		command: &str,
+		query: Option<&str>,
+		semantic: Option<bool>,
+	) -> napi::Result<CodeGraphResult> {
+		run_code_graph(
+			CodeGraphTaskOptions {
+				command: command.to_string(),
+				root: Some(root.to_string_lossy().into_owned()),
+				file: None,
+				symbol: None,
+				query: query.map(str::to_string),
+				depth: None,
+				limit: None,
+				semantic,
+			},
+			CancelToken::default(),
+		)
+	}
+
+	#[test]
+	fn index_without_semantic_leaves_vector_cache_absent() {
+		let root = fixture_root("plain-index");
+		let result =
+			run_fixture_command(&root, "index", None, None).expect("plain index should succeed");
+
+		assert!(result.semantic_status.is_none());
+		assert!(
+			!root.join(".spell/graph/workspace-vectors.bin").exists(),
+			"plain index should not create a vector cache"
+		);
+
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn semantic_search_requires_vector_cache_when_requested() {
+		let root = fixture_root("required-search");
+		run_fixture_command(&root, "index", None, None).expect("graph index should succeed");
+
+		let error = match run_fixture_command(&root, "search", Some("limit"), Some(true)) {
+			Ok(_) => panic!("semantic search should fail without vectors"),
+			Err(error) => error,
+		};
+		assert!(
+			error
+				.to_string()
+				.contains("Semantic search requested but unavailable: no semantic vector index exists"),
+			"error should explain why semantic search failed: {error}"
+		);
+
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn status_reports_vector_cache_presence_when_file_exists() {
+		let root = fixture_root("status-vectors");
+		run_fixture_command(&root, "index", None, None).expect("graph index should succeed");
+		let graph_dir = root.join(".spell/graph");
+		fs::create_dir_all(&graph_dir).expect("graph dir should exist");
+		fs::write(graph_dir.join("workspace-vectors.bin"), [1_u8, 2, 3])
+			.expect("fake vector cache should be written");
+
+		let result = run_fixture_command(&root, "status", None, None).expect("status should succeed");
+		assert!(
+			result.output.contains("Semantic: corrupt"),
+			"status output should report vector cache presence: {}",
+			result.output
+		);
+		assert!(
+			result
+				.semantic_status
+				.as_deref()
+				.is_some_and(|status| status.starts_with("corrupt (")),
+			"semantic status should surface corrupt vector cache details: {:?}",
+			result.semantic_status
+		);
+
+		let _ = fs::remove_dir_all(root);
 	}
 }

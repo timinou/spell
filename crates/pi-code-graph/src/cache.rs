@@ -13,13 +13,13 @@ use crate::{
 	model::{CodeGraph, PersistedCodeGraph},
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct FileFingerprint {
 	pub size:           u64,
 	pub modified_at_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct GraphFingerprint {
 	pub root:     PathBuf,
 	pub git_head: Option<String>,

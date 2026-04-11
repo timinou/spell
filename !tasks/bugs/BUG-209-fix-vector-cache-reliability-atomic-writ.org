@@ -1,0 +1,149 @@
+#+TITLE: Fix vector cache reliability atomic writes and fingerprint hash drift
+#+STATE: DONE
+#+SESSION_ID: 14b6e672eb0c82b8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-13-27-724Z_14b6e672eb0c82b8.jsonl]]
+#+CUSTOM_ID: BUG-209-fix-vector-cache-reliability-atomic-writ
+#+EFFORT: 2h
+#+PRIORITY: A
+#+LAYER: native
+
+NOTE [2026-04-11]: Implemented atomic vector-cache writes and fingerprint-hash derivation alignment in cache.rs/code_graph.rs; verified with cargo check -p pi-natives and bun check:rs.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-058-audit-implementation:
+
+- **What**: `index --semantic` reports success even when semantic indexing fails  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `run_code_graph()` `"index"` branch around `build_semantic_index()` handling  
+  **Why**: The command appends `Semantic: failed (...)` to the output string but still returns a successful result. Callers cannot reliably distinguish “graph indexed with vectors” from “graph indexed without vectors after failure,” which can hide missing semantic capability and make later search behavior misleading.  
+  **Effort**: small
+
+- **What**: `semantic` is accepted in the public options type but ignored for search behavior  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `CodeGraphOptions` / `CodeGraphTaskOptions` plus `"search"` dispatch branch  
+  **Why**: The API accepts `semantic: Option<bool>`, but only the `"index"` branch uses it. Search always auto-uses vectors if cache exists, and never uses the flag to force or suppress semantic retrieval. That is a contract violation: callers can pass input that is silently discarded.  
+  **Effort**: small
+
+- **What**: Corrupt or stale vector cache silently degrades to BM25-only search  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `load_vector_cache()` and `"search"` branch fallback logic  
+  **Why**: Any cache open/deserialize failure returns `None`, and query embedding failures also fall back silently. Users get plausible-looking search results without any indication that semantic retrieval was unavailable, which makes failures hard to detect and debug.  
+  **Effort**: small
+
+- **What**: Vector cache writes bypass the graph cache’s atomic persistence path  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `save_vector_cache()`  
+  **Why**: The file is written directly with `File::create(...)` instead of an atomic temp-write/rename flow like the graph cache. A crash or interruption can leave a partial `workspace-vectors.bin`, which is later treated as “no vectors” rather than a surfaced failure.  
+  **Effort**: small
+
+- **What**: Vector cache invalidation hashes only a hand-picked subset of fingerprint state  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `compute_fingerprint_hash()`  
+  **Why**: The vector cache freshness rule is reimplemented separately from the graph cache contract. If `GraphFingerprint` semantics change later, vector invalidation can drift and keep stale embeddings “fresh” even when the graph cache would consider them stale.  
+  **Effort**: small
+
+- **What**: Embedding dimension is hardcoded to `768` instead of derived from model output  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `build_semantic_index()`  
+  **Why**: This is correct for the current model, but brittle. A future model/config change can silently break search or produce dimension mismatches. Deriving the dimension from the first embedding would make the implementation truthfully reflect the actual model output.  
+  **Effort**: trivial
+
+- **What**: Semantic chunking uses a simple line-range heuristic that is not covered for nested/enclosing symbols  
+  **Where**: `crates/pi-code-graph/src/chunking.rs`, `extract_chunks()` end-boundary logic  
+  **Why**: A symbol’s chunk ends at the next symbol’s start line. For nested structures like classes with methods, the enclosing symbol can lose most of its body/context, which hurts retrieval quality. Current tests cover flat sibling symbols, missing files, and truncation, but not nested declarations.  
+  **Effort**: medium
+
+- **What**: No integration test covers the N-API semantic flow end-to-end  
+  **Where**: `crates/pi-natives/src/code_graph.rs` semantic index/search path; test gap across `pi-natives`  
+  **Why**: Lower-level unit tests pass, but there is no test proving that: semantic indexing writes the vector cache, stale vectors are ignored, cached vectors are loaded into search, and hybrid results are returned through the N-API entrypoint. That leaves the highest-risk wiring path unprotected.  
+  **Effort**: medium
+
+- **What**: Real embedding/model lifecycle is not exercised by automated tests  
+  **Where**: `crates/pi-code-vectors/src/embedding.rs`, ignored tests  
+  **Why**: The fastembed API already differed from the original implementation assumptions during development. Because all model-backed tests are ignored, future upstream API or runtime regressions can land undetected while the pure unit tests still pass.  
+  **Effort**: medium
+
+- **What**: `status` does not report vector-index presence or freshness  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `render_status()`  
+  **Why**: After adding a second cache (`workspace-vectors.bin`), the status surface still only reports graph-cache state. That makes semantic indexing hard to inspect operationally and forces users to infer vector availability indirectly from search behavior.  
+  **Effort**: small
+
+* Problem
+
+Two reliability issues in the vector cache layer:
+
+1. =save_vector_cache()= writes directly with =File::create()= — a crash or interruption leaves a partial =workspace-vectors.bin= that is later treated as "no vectors" (silent degradation) or fails to deserialize (swallowed by =.ok()?=).
+
+2. =compute_fingerprint_hash()= manually hashes a hand-picked subset of =GraphFingerprint= fields (root, git_head, per-file path/size/modified_at_ms). If =GraphFingerprint= gains new fields, the hash won't include them, causing stale vectors to appear "fresh."
+
+* Design Decisions
+
+1. *Atomic vector cache writes*: write to =workspace-vectors.tmp.bin=, then =fs::rename()= to =workspace-vectors.bin=. On the same filesystem, rename is atomic. Follow the same pattern as =CacheStore::save()= (which also uses =File::create= directly — but since both are on the same filesystem and cache corruption is recoverable by rebuilding, the rename pattern is the improvement).
+
+2. *Derive Hash on GraphFingerprint*: Add =#[derive(Hash)]= to =GraphFingerprint= and =FileFingerprint= in =cache.rs=. Replace the manual field-by-field hashing in =compute_fingerprint_hash()= with =fp.hash(&mut hasher)=. This ensures any future field additions to the fingerprint automatically invalidate the vector cache.
+
+* Files to Modify
+
+** =crates/pi-code-graph/src/cache.rs=
+
+Add =Hash= to the derive macros on both structs:
+#+begin_src rust
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct FileFingerprint { ... }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct GraphFingerprint { ... }
+#+end_src
+
+Verify: =PathBuf= and =Option<String>= and =BTreeMap<PathBuf, FileFingerprint>= all implement =Hash= (they do, since =PathBuf: Hash=, =BTreeMap<K: Hash, V: Hash>: Hash=).
+
+** =crates/pi-natives/src/code_graph.rs=
+
+*** =save_vector_cache()= (~line 327)
+Replace direct write with atomic temp+rename:
+#+begin_src rust
+fn save_vector_cache(
+    cache: &CacheStore,
+    vectors: &pi_code_vectors::PersistedVectorIndex,
+) -> napi::Result<()> {
+    let dir = cache.directory();
+    fs::create_dir_all(dir)
+        .map_err(|e| Error::from_reason(format!("Failed to create cache dir: {e}")))?;
+    let final_path = dir.join(format!("{VECTORS_CACHE_NAME}.bin"));
+    let tmp_path = dir.join(format!("{VECTORS_CACHE_NAME}.tmp.bin"));
+    let file = fs::File::create(&tmp_path)
+        .map_err(|e| Error::from_reason(format!("Failed to create vector cache temp: {e}")))?;
+    pi_code_vectors::serialize_index(BufWriter::new(file), vectors)
+        .map_err(|e| Error::from_reason(format!("Failed to write vector cache: {e}")))?;
+    fs::rename(&tmp_path, &final_path)
+        .map_err(|e| Error::from_reason(format!("Failed to finalize vector cache: {e}")))?;
+    Ok(())
+}
+#+end_src
+
+*** =compute_fingerprint_hash()= (~line 310)
+Replace manual hashing with derived =Hash=:
+#+begin_src rust
+fn compute_fingerprint_hash(cache: &CacheStore, _root: &Path) -> u64 {
+    let entry = cache.load(CACHE_NAME).ok().flatten();
+    let Some(entry) = entry else {
+        return 0;
+    };
+    let mut hasher = DefaultHasher::new();
+    entry.fingerprint.hash(&mut hasher);
+    hasher.finish()
+}
+#+end_src
+This uses the derived =Hash= impl on =GraphFingerprint= which hashes all fields transitively.
+
+Remove unused imports after this change: the individual =Hash= calls on each field are gone, but =Hash= trait is still needed for =.hash(&mut hasher)=. Keep =hash::{Hash, Hasher}= import.
+
+* Verification
+
+- =cargo check -p pi-code-graph= passes (Hash derive added)
+- =cargo check -p pi-natives= passes
+- =cargo test -p pi-code-graph --features semantic= passes (40 tests, no regression)
+- =bun check:rs= passes (fmt + clippy)
+- Manual: after rebuilding vector index, =workspace-vectors.bin= exists and =workspace-vectors.tmp.bin= does NOT
+
+* Sub-Outline
+
+1. Add =Hash= derive to =FileFingerprint= and =GraphFingerprint= in =cache.rs=
+2. Replace =compute_fingerprint_hash()= body with =entry.fingerprint.hash(&mut hasher)=
+3. Rewrite =save_vector_cache()= with temp-file + rename pattern
+4. Verify clean build and test pass

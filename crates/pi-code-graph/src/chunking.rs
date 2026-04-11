@@ -214,4 +214,67 @@ mod tests {
 		assert_eq!(line_count, 7, "should be 2 header lines + 5 body lines");
 		let _ = std::fs::remove_dir_all(&tmp);
 	}
+	#[test]
+	fn extract_chunks_nested_class_with_methods() {
+		let tmp = std::env::temp_dir().join(format!("pi-graph-nested-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&tmp);
+		std::fs::create_dir_all(&tmp).unwrap();
+		std::fs::write(
+			tmp.join("widget.ts"),
+			"export class Widget {\n\tname: string;\n\tconstructor(name: string) {\n\t\tthis.name = \
+			 name;\n\t}\n\trender(): string {\n\t\treturn this.name;\n\t}\n}\n",
+		)
+		.unwrap();
+
+		let graph = make_graph(&tmp, vec![
+			SymbolNode {
+				name:           "Widget".into(),
+				qualified_name: "widget.ts::Widget".into(),
+				file:           PathBuf::from("widget.ts"),
+				kind:           SymbolKind::Class,
+				exported:       true,
+				line:           1,
+				column:         1,
+				detail:         None,
+			},
+			SymbolNode {
+				name:           "constructor".into(),
+				qualified_name: "widget.ts::Widget::constructor".into(),
+				file:           PathBuf::from("widget.ts"),
+				kind:           SymbolKind::Method,
+				exported:       false,
+				line:           3,
+				column:         2,
+				detail:         None,
+			},
+			SymbolNode {
+				name:           "render".into(),
+				qualified_name: "widget.ts::Widget::render".into(),
+				file:           PathBuf::from("widget.ts"),
+				kind:           SymbolKind::Method,
+				exported:       false,
+				line:           6,
+				column:         2,
+				detail:         None,
+			},
+		]);
+
+		let chunks = extract_chunks(&graph, 30).expect("extract_chunks");
+		assert_eq!(chunks.len(), 3, "class + 2 methods = 3 chunks");
+		assert!(chunks[0].text.contains("Class: widget.ts::Widget"));
+		assert!(chunks[0].text.contains("export class Widget"));
+		assert!(
+			!chunks[0].text.contains("constructor("),
+			"class chunk should stop before the constructor"
+		);
+		assert!(
+			chunks[1]
+				.text
+				.contains("Method: widget.ts::Widget::constructor")
+		);
+		assert!(chunks[1].text.contains("constructor(name: string)"));
+		assert!(chunks[2].text.contains("Method: widget.ts::Widget::render"));
+		assert!(chunks[2].text.contains("render(): string"));
+		let _ = std::fs::remove_dir_all(&tmp);
+	}
 }

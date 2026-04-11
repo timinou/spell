@@ -8,6 +8,7 @@ export interface CodeGraphOptions extends Cancellable {
 	query?: string;
 	depth?: number;
 	limit?: number;
+	semantic?: boolean;
 }
 
 export interface CodeGraphResult {
@@ -17,6 +18,7 @@ export interface CodeGraphResult {
 	fileCount: number;
 	symbolCount: number;
 	edgeCount: number;
+	semanticStatus?: string;
 }
 
 declare module "../bindings" {
