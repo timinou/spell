@@ -1,0 +1,340 @@
+#+TITLE: TypeScript JavaScript Language Support
+#+STATE: DONE
+#+SESSION_ID: 14b666b62d9d5979
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T11-55-22-166Z_14b666b62d9d5979.jsonl]]
+#+CUSTOM_ID: FEAT-398-typescript-javascript-language-support
+#+EFFORT: 3d
+#+PRIORITY: A
+#+LAYER: rust
+#+DEPENDS: FEAT-397-core-graph-engine-and-trait-interfaces
+
+NOTE [2026-04-11]: Completed in PLAN-174 with tree-sitter TS/JS extraction, oxc_resolver integration, and Spell topology tests.
+
+* Context — Why This Exists
+This is one of two Phase 1 language implementations for the pi-code-graph engine (the other is Elixir). TypeScript/JavaScript is the primary language of the Spell codebase and the most common language the agent works with.
+
+This item implements the =LanguageExtractor= and =ImportResolver= traits defined in [[id:FEAT-397-core-graph-engine-and-trait-interfaces]] for TS/JS/TSX/JSX files.
+
+** What This Enables
+After this item, running =code index= on a TS/JS project produces a graph with:
+- Every function, class, interface, type alias, enum, variable, method, and React component as symbol nodes
+- Every import statement resolved to either a local file, external package, or Node built-in
+- Call edges between symbols (=foo()= in function =bar= → edge from bar to foo)
+- Inheritance edges (=class B extends A= → edge from B to A)
+- Type reference edges (=param: UserService= → edge from containing symbol to UserService)
+- Barrel file re-export chains resolved (=import { Foo } from "./index"= traces through to defining file)
+
+** Key Design Decisions
+1. =oxc_resolver= crate (v3) for import resolution — production-grade, handles tsconfig paths, workspaces, barrel files, =node:*= built-ins. Used by swc-node and knip.
+2. Separate tree-sitter parsers for TS vs TSX vs JS vs JSX (different grammars). Thread-local instances for rayon parallelism.
+3. React component detection: any function in a TSX file that returns JSX → =SymbolKind::Component=.
+4. Barrel files: =export * from "./x"= creates =BarrelReExportAll= edge. Named re-exports get direct edges bypassing the barrel.
+
+** Reference Material
+Study (do NOT copy) =code-graph-cli= repo at https://github.com/MonsieurBarti/code-graph-ai for tree-sitter node type names and edge cases:
+- =src/parser/symbols.rs= — TS/JS symbol extraction
+- =src/parser/imports.rs= — import/export parsing
+- =src/parser/relationships.rs= — call/extends/implements extraction
+- =src/resolver/file_resolver.rs= — oxc_resolver wiring
+- =src/resolver/barrel.rs= — barrel chain resolution
+
+** Existing Codebase Patterns
+- pi-natives already has =tree-sitter-typescript = "0.23"= and =tree-sitter-javascript = "0.25"= in its Cargo.toml
+- =crates/pi-natives/src/language/parsers.rs= defines =language_typescript()=, =language_tsx()=, =language_javascript()= functions
+- pi-code-graph will add its own tree-sitter grammar dependencies (same versions) since it's a separate crate
+
+* TDD Sub-Outline
+
+** 1. Test fixtures — create sample TS/JS files
+Create =crates/pi-code-graph/tests/fixtures/ts/= with:
+
+=simple.ts=:
+#+begin_src typescript
+import { readFile } from "node:fs/promises";
+import { UserService } from "./services/user";
+import React from "react";
+
+export interface Config {
+  name: string;
+  timeout: number;
+}
+
+export class AppController {
+  #service: UserService;
+
+  constructor(service: UserService) {
+    this.#service = service;
+  }
+
+  async handleRequest(config: Config): Promise<void> {
+    const data = await readFile("input.txt", "utf-8");
+    const user = this.#service.findUser(data);
+    console.log(user);
+  }
+}
+
+export default function main() {
+  const controller = new AppController(new UserService());
+  controller.handleRequest({ name: "test", timeout: 5000 });
+}
+#+end_src
+
+=services/user.ts=:
+#+begin_src typescript
+export class UserService {
+  findUser(query: string): User | null {
+    return null;
+  }
+}
+
+export interface User {
+  id: string;
+  name: string;
+}
+#+end_src
+
+=index.ts= (barrel):
+#+begin_src typescript
+export * from "./simple";
+export { UserService } from "./services/user";
+#+end_src
+
+=component.tsx=:
+#+begin_src typescript
+import { Config } from "./simple";
+
+interface Props {
+  config: Config;
+}
+
+export function Dashboard({ config }: Props) {
+  return <div>{config.name}</div>;
+}
+#+end_src
+
+** 2. Symbol extraction tests
+#+begin_src rust
+#[test]
+fn extracts_interface_with_properties() {
+    let source = include_bytes!("fixtures/ts/simple.ts");
+    let ext = TypeScriptExtractor;
+    let tree = parse(ext.ts_language(), source);
+    let result = ext.extract(&tree, source, Path::new("simple.ts"));
+    let config = result.symbols.iter().find(|s| s.name == "Config").unwrap();
+    assert_eq!(config.kind, SymbolKind::Interface);
+    assert!(config.is_exported);
+}
+
+#[test]
+fn extracts_class_with_methods() {
+    // Parse simple.ts
+    // Find AppController: kind=Class, is_exported=true
+    // Find handleRequest in relationships or child symbols: kind=Method, parent=Some("AppController")
+}
+
+#[test]
+fn extracts_default_export_function() {
+    // Parse simple.ts, find "main": kind=Function, is_exported=true, is_default (from ExportDef)
+}
+
+#[test]
+fn extracts_react_component_from_tsx() {
+    // Parse component.tsx
+    // Find "Dashboard": kind=Component (returns JSX), is_exported=true
+}
+
+#[test]
+fn extracts_class_from_separate_file() {
+    // Parse services/user.ts
+    // Find "UserService": kind=Class, "User": kind=Interface
+}
+#+end_src
+
+** 3. Symbol extraction implementation
+Implement =TypeScriptExtractor::extract= — the symbol extraction portion.
+
+Walk tree-sitter AST root children. Node types to handle:
+- =function_declaration= → name from =name= child → =SymbolKind::Function=
+- =class_declaration= → name from =name= child → =SymbolKind::Class=, walk body for method_definition children
+- =interface_declaration= → =SymbolKind::Interface=, walk body for property_signature children
+- =type_alias_declaration= → =SymbolKind::TypeAlias=
+- =enum_declaration= → =SymbolKind::Enum=
+- =lexical_declaration= → check =variable_declarator.value= — if =arrow_function= then =Function= else =Variable=
+- =export_statement= → unwrap inner declaration, set =is_exported = true=
+- For TSX: check if function body contains =jsx_element= or =jsx_self_closing_element= → =Component=
+
+** 4. Import extraction tests
+#+begin_src rust
+#[test]
+fn extracts_esm_named_import() {
+    // From simple.ts: import { readFile } from "node:fs/promises"
+    // → ImportRef { specifier: "node:fs/promises", kind: EsmImport, names: [{ name: "readFile", alias: None }] }
+}
+
+#[test]
+fn extracts_esm_default_import() {
+    // From simple.ts: import React from "react"
+    // → ImportRef { specifier: "react", kind: EsmImport, names: [{ name: "default", alias: Some("React") }] }
+}
+
+#[test]
+fn extracts_relative_import() {
+    // From simple.ts: import { UserService } from "./services/user"
+    // → specifier: "./services/user"
+}
+#+end_src
+
+** 5. Import extraction implementation
+Handle these tree-sitter node types:
+- =import_statement= → extract =source= (string literal = specifier), =import_clause= children
+  - =named_imports= → =import_specifier= children → name + optional alias
+  - =identifier= (default import) → =ImportedName { name: "default", alias: Some(ident) }=
+  - =namespace_import= → =ImportedName { name: "*", alias: Some(ident) }=
+- =call_expression= where callee is =require= → =ImportKind::Require=
+- =call_expression= where callee is =import= → =ImportKind::EsmDynamic=
+
+** 6. Export extraction tests
+#+begin_src rust
+#[test]
+fn extracts_named_export_with_declaration() {
+    // "export class AppController" → ExportDef { name: "AppController", is_default: false }
+}
+
+#[test]
+fn extracts_default_export() {
+    // "export default function main" → ExportDef { name: "main", is_default: true }
+}
+
+#[test]
+fn extracts_barrel_reexport_all() {
+    // From index.ts: export * from "./simple"
+    // → ExportDef with re_export_source = Some("./simple"), is_wildcard = true
+}
+
+#[test]
+fn extracts_barrel_named_reexport() {
+    // From index.ts: export { UserService } from "./services/user"
+    // → ExportDef with names: ["UserService"], re_export_source = Some("./services/user")
+}
+#+end_src
+
+** 7. Export extraction implementation
+
+** 8. Relationship extraction tests
+#+begin_src rust
+#[test]
+fn extracts_call_relationships() {
+    // In handleRequest body: readFile(...), this.#service.findUser(...), console.log(...)
+    // → Relationship { from: "handleRequest", to: "readFile", kind: Calls }
+    // → Relationship { from: "handleRequest", to: "findUser", kind: Calls }
+    // Note: "this.#service.findUser" — extract "findUser" as the callee name
+}
+
+#[test]
+fn extracts_new_expression_as_call() {
+    // "new AppController(...)" → Calls edge to "AppController"
+    // "new UserService()" → Calls edge to "UserService"
+}
+
+#[test]
+fn extracts_extends_relationship() {
+    // If we had "class Admin extends AppController" →
+    // Relationship { from: "Admin", to: "AppController", kind: Extends }
+}
+
+#[test]
+fn extracts_type_reference() {
+    // "config: Config" in function param → TypeRef to "Config"
+    // "Promise<void>" — extract "Promise" as TypeRef (built-in, will be unresolved — that's OK)
+}
+#+end_src
+
+** 9. Relationship extraction implementation
+Walk function/method bodies recursively:
+- =call_expression= → callee might be =identifier= (direct call), =member_expression= (method call — take rightmost name), or =new_expression=
+- =class_heritage= → =extends_clause= child → extract parent class name
+- =implements_clause= → extract interface names
+- =type_annotation=, =type_identifier= within function params/return → =TypeRef=
+
+** 10. Resolver tests
+#+begin_src rust
+#[test]
+fn resolves_relative_import_to_file() {
+    // Create temp project with simple.ts and services/user.ts
+    // Resolve "./services/user" from simple.ts → services/user.ts
+}
+
+#[test]
+fn resolves_node_builtin() {
+    // Resolve "node:fs/promises" → Resolution::Builtin("node:fs/promises")
+}
+
+#[test]
+fn resolves_external_package() {
+    // Resolve "react" (no ./prefix, not in project) → Resolution::ExternalPackage { name: "react" }
+}
+
+#[test]
+fn resolves_tsconfig_paths() {
+    // Create tsconfig.json with paths: { "@/*": ["src/*"] }
+    // Resolve "@/services/user" from any file → src/services/user.ts
+}
+
+#[test]
+fn handles_missing_file_gracefully() {
+    // Resolve "./nonexistent" → Resolution::Unresolved
+}
+#+end_src
+
+** 11. Resolver implementation
+- =OxcResolver= struct holds =oxc_resolver::Resolver= instance
+- =init()=: find tsconfig.json, parse workspace packages, build resolver with options
+- =resolve()=: delegate to =oxc_resolver::Resolver::resolve()=, classify result
+
+** 12. Integration test — full pipeline
+#+begin_src rust
+#[test]
+fn indexes_ts_project_end_to_end() {
+    // Create temp dir with simple.ts, services/user.ts, index.ts, component.tsx
+    // Register TypeScript language
+    // Run pipeline::index()
+    // Verify:
+    //   - 4 file nodes
+    //   - Symbols: Config, AppController, handleRequest, main, UserService, User, Dashboard
+    //   - ResolvedImport edge: simple.ts → services/user.ts
+    //   - ExternalPackage node: "react"
+    //   - Builtin node: "node:fs/promises"
+    //   - Calls edge: handleRequest → findUser
+    //   - Barrel: index.ts has BarrelReExportAll to simple.ts
+}
+#+end_src
+
+** 13. Registration + wiring
+#+begin_src rust
+pub fn register(registry: &mut LanguageRegistry) {
+    let extractor = Arc::new(TypeScriptExtractor);
+    let resolver = Arc::new(OxcResolver::new());
+    registry.register(extractor, resolver);
+}
+#+end_src
+
+* Edge Cases and Error Handling
+- Malformed TS files (syntax errors) → tree-sitter still produces a partial tree with ERROR nodes. Extract what we can, skip ERROR subtrees.
+- Files with only type exports (no runtime symbols) → still create symbol nodes (interfaces, type aliases)
+- Circular imports (a.ts imports b.ts imports a.ts) → graph naturally represents this (cycles in directed graph). No special handling needed.
+- Dynamic imports with non-literal specifiers (=import(variable)=) → skip, can't resolve statically
+- =require= with non-literal argument → skip
+- Workspace monorepo: multiple tsconfig.json files → use the one closest to each file being resolved
+
+* Cargo.toml Additions
+Add to =crates/pi-code-graph/Cargo.toml=:
+#+begin_src toml
+oxc_resolver = "3"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.25"
+#+end_src
+
+* Verification
+- All tests from steps 2, 4, 6, 8, 10, 12 pass
+- =cargo test -p pi-code-graph -- typescript= runs all TS-specific tests
+- Integration test proves end-to-end: files on disk → graph with correct topology

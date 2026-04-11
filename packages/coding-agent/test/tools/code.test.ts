@@ -15,6 +15,7 @@ import {
 	type Resolution,
 } from "@oh-my-pi/pi-emacs";
 import * as clientModule from "@oh-my-pi/pi-emacs/client";
+import * as nativesModule from "@oh-my-pi/pi-natives";
 
 function makeSession(name: string, alive: boolean = true): EmacsSession {
 	let currentAlive = alive;
@@ -110,6 +111,28 @@ describe("coding-agent code tool wiring", () => {
 
 	afterEach(() => {
 		vi.restoreAllMocks();
+	});
+
+	it("routes graph commands to the native graph backend", async () => {
+		const executeSpy = spyOn(nativesModule, "executeCodeGraph").mockResolvedValue({
+			output: "Code graph status\nCache: fresh",
+			cacheStatus: "fresh",
+			rebuilt: false,
+			fileCount: 12,
+			symbolCount: 34,
+			edgeCount: 56,
+		});
+		const tool = new CodeTool(createSession({ cwd: "/tmp/project" }));
+		const result = await tool.execute("graph", { command: "status" });
+		const text = result.content.find(content => content.type === "text")?.text;
+
+		expect(text).toBe("Code graph status\nCache: fresh");
+		expect(executeSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				command: "status",
+				root: "/tmp/project",
+			}),
+		);
 	});
 
 	it("uses the session manager to recover from a dead cached daemon", async () => {
