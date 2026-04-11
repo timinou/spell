@@ -1,0 +1,114 @@
+#+TITLE: Fix native code tool audit findings
+#+STATE: DONE
+#+SESSION_ID: 14b6e2caaae063a2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-57-29-004Z_14b6e2caaae063a2.jsonl]]
+#+CUSTOM_ID: PLAN-187-fix-native-code-tool-audit-findings
+
+
+NOTE [2026-04-11]: Execution completed with focused verification and child items closed to DONE.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-057-audit-implementation:
+
+1. **What**: File-local native failures are flattened into plain output and lose their `error` bit  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, `CodeTool.execute()` right after `executeCodeBuffer(options)`  
+   **Why**: The tool serializes `result.output` instead of the full native envelope. If the native layer returns `{ error: true, output: "..." }`, the model only sees the string payload, not a verifiable failure marker. Unsupported-language and bad-command responses can look like normal output.  
+   **Effort**: `small`
+
+2. **What**: Splice direction is no longer expressible, while the schema still advertises unsupported edit operations  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, `codeSchema` + native option mapping; `crates/pi-natives/src/code_buffer.rs`, `edit_operation()`  
+   **Why**: The native engine expects `operation: "splice"` plus `mode`, but the code tool no longer exposes `mode`. At the same time, the schema description still mentions `splice-self`, `splice-down`, and `envelope`. That leaves callers with an advertised API they cannot actually use, and some values now fail with native “Unknown edit operation” errors.  
+   **Effort**: `small`
+
+3. **What**: The code-tool prompt still documents the removed `save: false` edit flag  
+   **Where**: `packages/coding-agent/src/prompts/tools/code.md`, “Preview before saving” example around line 16  
+   **Why**: The native engine uses an explicit `save` command, but the prompt still teaches the old Emacs-era edit contract. Agents can send dead arguments and misunderstand when edits are persisted.  
+   **Effort**: `trivial`
+
+4. **What**: `depth` is still accepted for file-local calls but ignored by the native buffer engine  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, option construction for `params.depth`; `crates/pi-natives/src/code_buffer.rs`, `outline` branch  
+   **Why**: Callers can ask for depth-limited file-local output and silently receive the full structure. That is a contract violation: input is accepted, then discarded with no signal.  
+   **Effort**: `small`
+
+5. **What**: Relative file paths are passed through without rebasing against `session.cwd`  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, file-local option construction for `params.file`  
+   **Why**: Graph commands already root themselves at `session.cwd`, but file-local commands hand the raw path to the native engine. If the process cwd and session cwd diverge, `code read/outline/edit/save` can resolve the wrong file or fail unexpectedly.  
+   **Effort**: `small`
+
+6. **What**: `startEmacsSession` lost its default code-daemon bootstrap, but daemon docs/comments still describe the removed default path  
+   **Where**: `packages/emacs/src/daemon.ts`, around the default eval handling in the Emacs arg builder  
+   **Why**: The implementation no longer loads `pi-prelude` / `pi-emacs-mcp`, but the surrounding source still implies that a default bootstrap exists. That is a rough edge for remaining maintainers and any caller still relying on the exported `startEmacsSession` API.  
+   **Effort**: `small`
+
+7. **What**: The new code-tool tests do not lock in the tricky contract edges introduced by the migration  
+   **Where**: `packages/coding-agent/test/tools/code.test.ts`  
+   **Why**: The suite covers routing and thrown exceptions, but not the native in-band error envelope, ignored `depth`, missing splice `mode`, or relative-path resolution against `session.cwd`. Those are the regressions most likely to ship silently.  
+   **Effort**: `small`
+
+* Context
+
+Audit AUD-057 of the Emacs-to-native migration (PLAN-183) identified 7 findings. This plan addresses all of them in three items:
+
+1. *Error envelope flattening*: In-band native errors (=result.error = true=) are serialized as bare output strings instead of error-wrapped JSON. The LLM cannot distinguish failures from normal output.
+2. *Missing splice mode*: The =mode= field for splice direction is not exposed in the schema or forwarded to the native engine.
+3. *Stale schema description*: Lists =envelope=, =splice-self=, =splice-down= which don't exist in the native engine.
+4. *Depth silently discarded*: Forwarded to file-local commands but no Rust handler reads it.
+5. *Relative paths unresolved*: File-local commands don't resolve paths against =session.cwd=, unlike graph commands.
+6. *Stale documentation*: Prompt still documents removed =save: false= flag; daemon JSDoc describes removed defaults.
+7. *Missing test coverage*: No tests for error envelope, splice mode, path resolution, or depth exclusion.
+
+** Key Decisions
+
+1. Error envelope: match the catch-block format (=JSON.stringify({ error: true, message })=)
+2. Schema: add =mode= field, remove =envelope / splice-self / splice-down= from operation description
+3. Depth: remove forwarding for file-local commands only (graph still needs it)
+4. Path resolution: =path.resolve(session.cwd, file)= for relative paths
+5. Prompt: replace =save: false= example with explicit save command workflow
+6. Daemon JSDoc: update to reflect =evalExpressions=-required API
+
+* Verification
+
+** Type check
+#+begin_src sh
+bun check:ts
+#+end_src
+
+** Unit tests
+#+begin_src sh
+bun test packages/coding-agent/test/tools/code.test.ts
+#+end_src
+
+** Absence checks
+- =grep "envelope" packages/coding-agent/src/tools/code.ts= returns zero hits
+- =grep "splice-self" packages/coding-agent/src/tools/code.ts= returns zero hits
+- =grep "save: false" packages/coding-agent/src/prompts/tools/code.md= returns zero hits
+- =grep "pi-prelude" packages/emacs/src/daemon.ts= returns zero hits in JSDoc
+- =depth= does NOT appear in file-local option building
+
+* Execution Manifest
+
+** Wave 1 — Fixes (parallel)
+- [[id:BUG-206-fix-codetool-error-envelope-mode-forward]] — Fix error envelope, mode forwarding, depth leak, path resolution in code.ts (1h)
+- [[id:BUG-207-fix-stale-code-tool-prompt-and-daemon-js]] — Fix stale prompt and daemon JSDoc (20m)
+
+** Wave 2 — Tests (depends on BUG-206)
+- [[id:FEAT-455-add-contract-edge-tests-for-native-code]] — Add contract-edge tests for native code tool (45m). Depends on BUG-206.
+
+** Total effort: ~2h
+
+
+** Completion [2026-04-11]
+*** Verification
+- `bun test packages/coding-agent/test/tools/code.test.ts` -> passed (`15 pass, 0 fail`).
+- `bun check:ts` -> passed.
+- `grep "save: false" packages/coding-agent/src/prompts/tools/code.md` -> no matches.
+- `grep "envelope|splice-self|splice-down" packages/coding-agent/src/tools/code.ts` -> no matches.
+- `grep "pi-prelude|pi-emacs-mcp" packages/emacs/src/daemon.ts` -> no matches.
+- `grep "options\\.depth" packages/coding-agent/src/tools/code.ts` -> no matches in the file-local option path.
+
+*** Artifacts
+- None. This plan produced text-only code and org changes; verification evidence is captured by the commands above.
+
+*** Deviations
+- None.

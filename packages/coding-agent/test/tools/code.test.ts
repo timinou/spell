@@ -193,8 +193,7 @@ describe("coding-agent code tool wiring", () => {
 			}),
 		);
 	});
-
-	it("surfaces NAPI errors as tool error results", async () => {
+	it("surfaces thrown native exceptions as tool error results", async () => {
 		spyOn(nativesModule, "executeCodeBuffer").mockImplementation(() => {
 			throw new Error("Language profile not found for /tmp/test/foo.go");
 		});
@@ -208,14 +207,70 @@ describe("coding-agent code tool wiring", () => {
 		expect(result.details).toEqual({ error: true, command: "outline" });
 	});
 
-	it("handles error flag from executeCodeBuffer response", async () => {
+	it("surfaces native error envelopes from executeCodeBuffer response", async () => {
 		spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
 			output: "Unknown command: bogus",
 			error: true,
 		});
 		const tool = new CodeTool(createSession());
 		const result = await tool.execute("tool", { command: "bogus" });
+		const text = result.content.find(c => c.type === "text")?.text ?? "";
+		const parsed = JSON.parse(text);
 
+		expect(parsed).toEqual(expect.objectContaining({ error: true, message: "Unknown command: bogus" }));
 		expect(result.details).toEqual({ error: true, command: "bogus" });
+	});
+
+	it("forwards mode for splice edit operations", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: [{ version: 3 }],
+			error: false,
+		});
+		const tool = new CodeTool(createSession());
+		await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			operation: "splice",
+			mode: "down",
+			target: { line: 8, node_type: "block" },
+		});
+
+		expect(bufferSpy).toHaveBeenCalledWith(expect.objectContaining({ operation: "splice", mode: "down" }));
+	});
+
+	it("resolves relative file paths against session cwd", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: "relative content",
+			error: false,
+		});
+		const tool = new CodeTool(createSession({ cwd: "/virtual/session" }));
+		await tool.execute("tool", { command: "outline", file: "src/main.ts" });
+
+		expect(bufferSpy).toHaveBeenCalledWith(expect.objectContaining({ file: "/virtual/session/src/main.ts" }));
+	});
+
+	it("passes through absolute file paths unchanged", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: "absolute content",
+			error: false,
+		});
+		const tool = new CodeTool(createSession({ cwd: "/virtual/session" }));
+		await tool.execute("tool", { command: "outline", file: "/opt/project/src/main.ts" });
+
+		expect(bufferSpy).toHaveBeenCalledWith(expect.objectContaining({ file: "/opt/project/src/main.ts" }));
+	});
+
+	it("does not forward file-local depth", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: "depth content",
+			error: false,
+		});
+		const tool = new CodeTool(createSession());
+		await tool.execute("tool", { command: "outline", file: "/tmp/test/src/main.ts", depth: 2 });
+
+		expect(bufferSpy).toHaveBeenCalledWith(
+			expect.objectContaining({ command: "outline", file: "/tmp/test/src/main.ts" }),
+		);
+		expect(bufferSpy.mock.calls[0]?.[0]).not.toHaveProperty("depth");
 	});
 });

@@ -1,0 +1,114 @@
+#+TITLE: Fix stale code tool prompt and daemon JSDoc after native migration
+#+STATE: DONE
+#+SESSION_ID: 14b6e2caaae063a2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-57-29-004Z_14b6e2caaae063a2.jsonl]]
+#+CUSTOM_ID: BUG-207-fix-stale-code-tool-prompt-and-daemon-js
+#+EFFORT: 20m
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+NOTE [2026-04-11]: Completed in PLAN-187. Prompt now documents edit → diff → save, and daemon docs describe caller-supplied evalExpressions bootstrap.
+
+NOTE [2026-04-11]: Execution started under PLAN-187. Updating stale prompt and daemon documentation in parallel.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-057-audit-implementation:
+
+1. **What**: File-local native failures are flattened into plain output and lose their `error` bit  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, `CodeTool.execute()` right after `executeCodeBuffer(options)`  
+   **Why**: The tool serializes `result.output` instead of the full native envelope. If the native layer returns `{ error: true, output: "..." }`, the model only sees the string payload, not a verifiable failure marker. Unsupported-language and bad-command responses can look like normal output.  
+   **Effort**: `small`
+
+2. **What**: Splice direction is no longer expressible, while the schema still advertises unsupported edit operations  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, `codeSchema` + native option mapping; `crates/pi-natives/src/code_buffer.rs`, `edit_operation()`  
+   **Why**: The native engine expects `operation: "splice"` plus `mode`, but the code tool no longer exposes `mode`. At the same time, the schema description still mentions `splice-self`, `splice-down`, and `envelope`. That leaves callers with an advertised API they cannot actually use, and some values now fail with native “Unknown edit operation” errors.  
+   **Effort**: `small`
+
+3. **What**: The code-tool prompt still documents the removed `save: false` edit flag  
+   **Where**: `packages/coding-agent/src/prompts/tools/code.md`, “Preview before saving” example around line 16  
+   **Why**: The native engine uses an explicit `save` command, but the prompt still teaches the old Emacs-era edit contract. Agents can send dead arguments and misunderstand when edits are persisted.  
+   **Effort**: `trivial`
+
+4. **What**: `depth` is still accepted for file-local calls but ignored by the native buffer engine  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, option construction for `params.depth`; `crates/pi-natives/src/code_buffer.rs`, `outline` branch  
+   **Why**: Callers can ask for depth-limited file-local output and silently receive the full structure. That is a contract violation: input is accepted, then discarded with no signal.  
+   **Effort**: `small`
+
+5. **What**: Relative file paths are passed through without rebasing against `session.cwd`  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, file-local option construction for `params.file`  
+   **Why**: Graph commands already root themselves at `session.cwd`, but file-local commands hand the raw path to the native engine. If the process cwd and session cwd diverge, `code read/outline/edit/save` can resolve the wrong file or fail unexpectedly.  
+   **Effort**: `small`
+
+6. **What**: `startEmacsSession` lost its default code-daemon bootstrap, but daemon docs/comments still describe the removed default path  
+   **Where**: `packages/emacs/src/daemon.ts`, around the default eval handling in the Emacs arg builder  
+   **Why**: The implementation no longer loads `pi-prelude` / `pi-emacs-mcp`, but the surrounding source still implies that a default bootstrap exists. That is a rough edge for remaining maintainers and any caller still relying on the exported `startEmacsSession` API.  
+   **Effort**: `small`
+
+7. **What**: The new code-tool tests do not lock in the tricky contract edges introduced by the migration  
+   **Where**: `packages/coding-agent/test/tools/code.test.ts`  
+   **Why**: The suite covers routing and thrown exceptions, but not the native in-band error envelope, ignored `depth`, missing splice `mode`, or relative-path resolution against `session.cwd`. Those are the regressions most likely to ship silently.  
+   **Effort**: `small`
+
+* Context
+
+After the Emacs-to-native migration (PLAN-183), two documentation artifacts are stale:
+
+1. *Prompt =save: false= example*: =packages/coding-agent/src/prompts/tools/code.md= line 16 says =code edit { …, save: false } then code diff { file }=. The native engine does NOT have a =save= flag on edit — edits are always in-memory until an explicit =code save= command. The =save= schema field was removed in PLAN-183, but the prompt instruction was not updated.
+
+2. *Daemon JSDoc*: =packages/emacs/src/daemon.ts= function =buildEvalArgs= (~line 285-291) has a JSDoc that describes the old default sequence: =load-path → pi-project-root → pi-prelude → pi-emacs-mcp → mcp-server-start=. The code body was updated to remove the default evals, but the JSDoc was left stale.
+
+* Design Decisions
+
+- The prompt line should describe the actual workflow: edit → diff → save (or undo). No =save: false= flag.
+- The daemon JSDoc should document current behavior: callers must provide =evalExpressions=; no default bootstrap.
+
+* Implementation
+
+** File: =packages/coding-agent/src/prompts/tools/code.md=
+
+Replace line 16:
+#+begin_example
+- Preview before saving → `code edit { …, save: false }` then `code diff { file }`
+#+end_example
+
+With:
+#+begin_example
+- Preview before saving → `code edit { … }` then `code diff { file }` (edits are in-memory until `code save`)
+#+end_example
+
+** File: =packages/emacs/src/daemon.ts=
+
+Replace the JSDoc for =buildEvalArgs= (~lines 285-291):
+
+Old:
+#+begin_src typescript
+/**
+ * Build the --eval argument list for the Emacs daemon.
+ *
+ * Default sequence: load-path → pi-project-root → pi-prelude → pi-emacs-mcp → mcp-server-start.
+ * When evalExpressions is provided, those replace the pi-prelude/pi-emacs-mcp requires
+ * while keeping load-path setup and mcp-server-start-unix.
+ */
+#+end_src
+
+New:
+#+begin_src typescript
+/**
+ * Build the --eval argument list for the Emacs daemon.
+ *
+ * Sequence: load-path → pi-project-root → [evalExpressions] → mcp-server-start.
+ * Callers must provide evalExpressions (e.g. the org daemon passes "(require 'org-tasks-mcp)").
+ */
+#+end_src
+
+* Edge Cases
+
+- The prompt is imported as text (=import ... with { type: "text" }=) — no TypeScript type issues.
+- The daemon.ts JSDoc update has no runtime effect — it is purely documentation.
+
+* Verification
+
+- =grep "save: false" packages/coding-agent/src/prompts/tools/code.md= returns zero hits
+- =grep "pi-prelude" packages/emacs/src/daemon.ts= returns zero hits (in JSDoc; the inline comment was already updated)
+- =bun check:ts= passes

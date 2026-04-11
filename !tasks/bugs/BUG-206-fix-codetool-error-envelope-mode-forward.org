@@ -1,0 +1,175 @@
+#+TITLE: Fix CodeTool error envelope mode forwarding depth leak and path resolution
+#+STATE: DONE
+#+SESSION_ID: 14b6e2caaae063a2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-57-29-004Z_14b6e2caaae063a2.jsonl]]
+#+CUSTOM_ID: BUG-206-fix-codetool-error-envelope-mode-forward
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+NOTE [2026-04-11]: Completed in PLAN-187. CodeTool now preserves in-band native error envelopes, exposes splice mode, rebases relative file paths against session.cwd, and stops forwarding file-local depth.
+
+NOTE [2026-04-11]: Execution started under PLAN-187. Implementing CodeTool contract fixes in parallel with BUG-207.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-057-audit-implementation:
+
+1. **What**: File-local native failures are flattened into plain output and lose their `error` bit  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, `CodeTool.execute()` right after `executeCodeBuffer(options)`  
+   **Why**: The tool serializes `result.output` instead of the full native envelope. If the native layer returns `{ error: true, output: "..." }`, the model only sees the string payload, not a verifiable failure marker. Unsupported-language and bad-command responses can look like normal output.  
+   **Effort**: `small`
+
+2. **What**: Splice direction is no longer expressible, while the schema still advertises unsupported edit operations  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, `codeSchema` + native option mapping; `crates/pi-natives/src/code_buffer.rs`, `edit_operation()`  
+   **Why**: The native engine expects `operation: "splice"` plus `mode`, but the code tool no longer exposes `mode`. At the same time, the schema description still mentions `splice-self`, `splice-down`, and `envelope`. That leaves callers with an advertised API they cannot actually use, and some values now fail with native “Unknown edit operation” errors.  
+   **Effort**: `small`
+
+3. **What**: The code-tool prompt still documents the removed `save: false` edit flag  
+   **Where**: `packages/coding-agent/src/prompts/tools/code.md`, “Preview before saving” example around line 16  
+   **Why**: The native engine uses an explicit `save` command, but the prompt still teaches the old Emacs-era edit contract. Agents can send dead arguments and misunderstand when edits are persisted.  
+   **Effort**: `trivial`
+
+4. **What**: `depth` is still accepted for file-local calls but ignored by the native buffer engine  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, option construction for `params.depth`; `crates/pi-natives/src/code_buffer.rs`, `outline` branch  
+   **Why**: Callers can ask for depth-limited file-local output and silently receive the full structure. That is a contract violation: input is accepted, then discarded with no signal.  
+   **Effort**: `small`
+
+5. **What**: Relative file paths are passed through without rebasing against `session.cwd`  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, file-local option construction for `params.file`  
+   **Why**: Graph commands already root themselves at `session.cwd`, but file-local commands hand the raw path to the native engine. If the process cwd and session cwd diverge, `code read/outline/edit/save` can resolve the wrong file or fail unexpectedly.  
+   **Effort**: `small`
+
+6. **What**: `startEmacsSession` lost its default code-daemon bootstrap, but daemon docs/comments still describe the removed default path  
+   **Where**: `packages/emacs/src/daemon.ts`, around the default eval handling in the Emacs arg builder  
+   **Why**: The implementation no longer loads `pi-prelude` / `pi-emacs-mcp`, but the surrounding source still implies that a default bootstrap exists. That is a rough edge for remaining maintainers and any caller still relying on the exported `startEmacsSession` API.  
+   **Effort**: `small`
+
+7. **What**: The new code-tool tests do not lock in the tricky contract edges introduced by the migration  
+   **Where**: `packages/coding-agent/test/tools/code.test.ts`  
+   **Why**: The suite covers routing and thrown exceptions, but not the native in-band error envelope, ignored `depth`, missing splice `mode`, or relative-path resolution against `session.cwd`. Those are the regressions most likely to ship silently.  
+   **Effort**: `small`
+
+* Context
+
+After the Emacs-to-native migration (PLAN-183), the =CodeTool= in =packages/coding-agent/src/tools/code.ts= has four contract violations identified by audit AUD-057:
+
+1. *Error envelope flattening*: When =executeCodeBuffer= returns ={ error: true, output: "..." }=, the tool serializes only =result.output= as content text. The LLM sees a bare string (e.g. ="Unknown command: bogus"=) without any error marker. Compare with the catch block which wraps errors as ={ error: true, message: ... }=.
+
+2. *Missing mode forwarding*: The native engine's =splice= operation reads a =mode= field (="self" | "up" | "down"=) from the options object (see =edit_operation()= in =crates/pi-natives/src/code_buffer.rs= ~line 103). But the TypeBox schema has no =mode= field, and the option-building code doesn't forward it. Agents cannot express splice direction.
+
+3. *Depth silently discarded*: =params.depth= is forwarded to the native buffer engine (line ~140) but NO file-local command reads it. The outline handler in Rust takes =(buffer, &profile)= with no depth parameter. The depth field exists in the schema for graph commands (forwarded separately via =#executeGraphCommand=). Forwarding it to file-local commands is a contract violation: input accepted and discarded.
+
+4. *Relative paths not resolved*: File-local commands pass =params.file= directly to the native engine. The Rust =required_path()= converts it to a =PathBuf= relative to the process CWD. If =session.cwd= differs from process CWD (e.g. subagent with different working directory), the wrong file is opened. Graph commands already resolve against =session.cwd= (line ~174).
+
+* Design Decisions
+
+- When =result.error= is true, serialize content as =JSON.stringify({ error: true, message: ... })= matching the catch-block format
+- Add =mode= field to TypeBox schema: =Type.Optional(Type.String({ description: "Splice mode: self | up | down (default: self)" }))=
+- Forward =mode= to NAPI options alongside =operation=
+- Remove =depth= forwarding from file-local option building (line =if (params.depth !== undefined) options.depth = params.depth;=). Do NOT remove =depth= from the schema — graph commands need it.
+- Resolve relative file paths using =path.resolve(session.cwd ?? getProjectDir(), params.file)= when =!path.isAbsolute(params.file)=. Import: =import * as path from "node:path"= (per AGENTS.md namespace import rule).
+- Apply path resolution only to the file-local code path, not the graph path (which already passes =root=).
+
+* Implementation
+
+** File: =packages/coding-agent/src/tools/code.ts=
+
+*** 1. Add import
+
+Add =import * as path from "node:path";= to the imports section (after the existing imports).
+
+*** 2. Add =mode= to schema
+
+After the =content= field (~line 62), add:
+#+begin_src typescript
+mode: Type.Optional(Type.String({ description: "Splice mode: self | up | down (default: self)" })),
+#+end_src
+
+*** 3. Fix schema =operation= description
+
+Change the operation description from:
+="Edit operation: replace | insert-before | insert-after | splice | splice-self | splice-down | drag-up | drag-down | clone | kill | envelope | transpose"=
+
+To:
+="Edit operation: replace | insert-before | insert-after | splice | drag-up | drag-down | clone | kill | transpose"=
+
+Removed: =splice-self=, =splice-down= (not real operation values; splice direction is expressed via =mode=), =envelope= (not supported by native engine).
+
+*** 4. Fix error envelope in execute()
+
+Replace the current success path (after =executeCodeBuffer= call, ~line 155-160):
+#+begin_src typescript
+const result = executeCodeBuffer(options);
+const text = JSON.stringify(result.output, null, 2);
+return {
+    content: [{ type: "text", text }],
+    details: result.error ? { error: true, command } : { command },
+};
+#+end_src
+
+With:
+#+begin_src typescript
+const result = executeCodeBuffer(options);
+
+if (result.error) {
+    const message = typeof result.output === "string"
+        ? result.output
+        : JSON.stringify(result.output);
+    return {
+        content: [{ type: "text", text: JSON.stringify({ error: true, message }) }],
+        details: { error: true, command },
+    };
+}
+
+const text = JSON.stringify(result.output, null, 2);
+return {
+    content: [{ type: "text", text }],
+    details: { command },
+};
+#+end_src
+
+*** 5. Resolve relative file paths
+
+Replace the file option forwarding (=if (params.file) options.file = params.file;=, ~line 133):
+#+begin_src typescript
+if (params.file) {
+    options.file = path.isAbsolute(params.file)
+        ? params.file
+        : path.resolve(this.#session.cwd ?? getProjectDir(), params.file);
+}
+#+end_src
+
+*** 6. Forward mode
+
+After the =if (params.content !== undefined)= line (~line 142), add:
+#+begin_src typescript
+if (params.mode) options.mode = params.mode;
+#+end_src
+
+Note: =CodeBufferOptions= in =packages/natives/src/code-buffer/types.ts= already has =mode?: string=.
+
+*** 7. Remove depth from file-local forwarding
+
+DELETE this line from the file-local option building (~line 140):
+#+begin_src typescript
+if (params.depth !== undefined) options.depth = params.depth;
+#+end_src
+
+Do NOT touch the graph command path — =depth= is correctly forwarded there.
+
+* Edge Cases
+
+- =result.output= can be a string or an object depending on the command. For error cases, it is typically a string. The =typeof result.output === "string"= check handles both.
+- =path.resolve= with an absolute path returns the absolute path unchanged — the =isAbsolute= check is an optimization, not a requirement.
+- =mode= defaults to ="self"= in the Rust engine when not provided. The TypeBox schema should NOT set a default — let the engine handle it.
+- The =save= command also needs path resolution (it writes to disk). The file option forwarding is shared code, so the fix covers all file-local commands.
+
+* Verification
+
+- =bun check:ts= passes
+- =bun test packages/coding-agent/test/tools/code.test.ts= passes
+- Verify: when =executeCodeBuffer= returns ={ error: true, output: "..." }=, the content text contains ={ "error": true, "message": "..." }=
+- Verify: =grep "envelope" packages/coding-agent/src/tools/code.ts= returns zero hits
+- Verify: =grep "splice-self" packages/coding-agent/src/tools/code.ts= returns zero hits
+- Verify: =depth= does NOT appear in the file-local option building section (search for =options.depth= in the file-local path)

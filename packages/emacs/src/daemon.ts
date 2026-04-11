@@ -26,10 +26,10 @@ export interface StartEmacsOptions {
 	/** Emacs flags prepended before --fg-daemon (default: ["-Q"]). */
 	emacsFlags?: string[];
 	/**
-	 * Custom elisp eval expressions to replace the default load sequence.
-	 * When provided, these are used instead of the default pi-prelude/pi-emacs-mcp evals.
-	 * Each entry becomes a `--eval "(expr)"` argument.
-	 * The load-path setup and mcp-server-start-unix are always included.
+	 * Custom elisp eval expressions for the bootstrap sequence.
+	 * When provided, these expressions are appended as `--eval "(expr)"` arguments.
+	 * The caller is responsible for supplying any bootstrap it needs before
+	 * `mcp-server-start-unix` runs.
 	 */
 	evalExpressions?: string[];
 }
@@ -283,11 +283,11 @@ async function launchDaemon(
 }
 
 /**
- * Build the --eval argument list for the Emacs daemon.
+ * Build the `--eval` argument list for the Emacs daemon.
  *
- * Default sequence: load-path → pi-project-root → pi-prelude → pi-emacs-mcp → mcp-server-start.
- * When evalExpressions is provided, those replace the pi-prelude/pi-emacs-mcp requires
- * while keeping load-path setup and mcp-server-start-unix.
+ * This function always sets `load-path`, `pi-project-root`, and
+ * `mcp-server-start-unix`. Any additional bootstrap comes from `evalExpressions`
+ * supplied by the caller.
  */
 function buildEvalArgs(elispDir: string, projectRoot: string, sock: string, evalExpressions?: string[]): string[] {
 	const args: string[] = [
@@ -302,9 +302,8 @@ function buildEvalArgs(elispDir: string, projectRoot: string, sock: string, eval
 			args.push("--eval", expr);
 		}
 	} else {
-		// No default evals — callers must provide evalExpressions.
-		// The code-intelligence daemon (pi-prelude, pi-emacs-mcp) has been removed;
-		// the org daemon passes its own evalExpressions.
+		// No default bootstrap is injected here; callers must provide evalExpressions
+		// for any project-specific setup they require.
 	}
 
 	args.push("--eval", `(mcp-server-start-unix nil "${sock}")`);
