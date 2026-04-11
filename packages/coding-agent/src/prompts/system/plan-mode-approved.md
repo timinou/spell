@@ -163,7 +163,6 @@ When creating todos from plan execution manifest items, set `orgItemId` on each 
 When spawning task subagents to work on a todo item, set `todoRef` on the task to the todo item's ID (e.g., `task-3`) so verification requirements are automatically injected into the subagent's context.
 After each completed step, you **MUST** immediately update `todo_write` so progress stays visible.
 {{/if}}
-{{/if}}
 If a `todo_write` call fails, you **MUST** fix the todo payload and retry before continuing silently.
 {{/has}}
 </instruction>
