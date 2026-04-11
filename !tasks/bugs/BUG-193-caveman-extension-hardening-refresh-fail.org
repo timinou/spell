@@ -1,0 +1,131 @@
+#+TITLE: Caveman extension hardening refresh failure animation guard dialog theme
+#+STATE: DONE
+#+SESSION_ID: 14b642d8acabe384
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T09-18-40-306Z_14b642d8acabe384.jsonl]]
+#+CUSTOM_ID: BUG-193-caveman-extension-hardening-refresh-fail
+#+EFFORT: 1h
+#+PRIORITY: B
+#+LAYER: coding-agent
+
+NOTE [2026-04-11]: Completed in PLAN-168. packages/coding-agent/src/extensibility/extensions/caveman.ts now surfaces prompt-refresh failure to /caveman callers, skips status animation timers when hasUI is false, and uses the ui.custom dialog theme.
+
+* Initial Message
+
+if not in original plan, find original caveman-phd notation in original transcript to keep it in prompt
+
+* Context
+Audit AUD-049 found three issues in ~packages/coding-agent/src/extensibility/extensions/caveman.ts~:
+1. ~/caveman~ reports success even when prompt refresh fails
+2. Fire animation timer runs in non-interactive sessions (print mode, RPC, subagents)
+3. Config dialog uses global ~theme~ import instead of the theme passed by ~ui.custom()~
+
+All fixes are in the same file, non-overlapping, and small.
+
+* Acceptance Criteria
+- When ~refreshBaseSystemPrompt()~ throws, ~/caveman~ notifies the user of the degraded state instead of reporting success
+- ~syncStatus()~ short-circuits when ~ctx.hasUI === false~, preventing ~setInterval()~ in non-interactive contexts
+- ~CavemanSettingsDialog~ receives the active theme from the ~ui.custom()~ factory callback, not the global import
+- ~bun check:ts~ passes
+- The focused caveman test (sibling item) covers all three paths
+
+* Implementation
+
+** 1. Propagate refresh failure from ~refreshPrompt()~
+File: ~packages/coding-agent/src/extensibility/extensions/caveman.ts~
+
+Change ~refreshPrompt~ to return ~boolean~:
+#+BEGIN_SRC typescript
+const refreshPrompt = async (ctx: ExtensionContext): Promise<boolean> => {
+  try {
+    await ctx.refreshBaseSystemPrompt();
+    return true;
+  } catch (error) {
+    logger.warn("Failed to refresh caveman system prompt", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+};
+#+END_SRC
+
+In ~applyRuntimeLevel~, check the return:
+#+BEGIN_SRC typescript
+const applyRuntimeLevel = async (nextLevel: CavemanLevel, ctx: ExtensionCommandContext): Promise<void> => {
+  settings.override("caveman.defaultLevel", nextLevel);
+  level = nextLevel;
+  api.appendEntry("caveman-level", { level: nextLevel });
+  syncStatus(ctx);
+  const ok = await refreshPrompt(ctx);
+  if (!ok) {
+    ctx.ui.notify("Caveman mode set but prompt refresh failed — may not take effect until next turn", "warning");
+  }
+};
+#+END_SRC
+
+In ~restoreFromSession~, keep silent on failure (background restore, no user action). Already logs via ~refreshPrompt~.
+
+In ~updatePersistedSetting~, the call is ~void refreshPrompt(ctx)~ — keep fire-and-forget but add a catch notification:
+#+BEGIN_SRC typescript
+void refreshPrompt(ctx).then(ok => {
+  if (!ok) ctx.ui.notify("Setting saved but prompt refresh failed", "warning");
+});
+#+END_SRC
+
+** 2. Guard animation behind ~hasUI~
+In ~syncStatus~, add an early return after ~stopAnimation()~:
+#+BEGIN_SRC typescript
+const syncStatus = (ctx: Pick<ExtensionContext, "ui" | "hasUI">): void => {
+  stopAnimation();
+  if (!ctx.hasUI) return;
+  // ... rest unchanged
+};
+#+END_SRC
+
+Update the type of the ~ctx~ parameter from ~Pick<ExtensionContext, "ui">~ to ~Pick<ExtensionContext, "ui" | "hasUI">~.
+
+** 3. Use factory theme in dialog
+Change ~CavemanSettingsDialog~ constructor to accept a ~Theme~ parameter:
+#+BEGIN_SRC typescript
+import type { Theme } from "../../modes/theme/theme";
+
+class CavemanSettingsDialog extends Container {
+  #settingsList: SettingsList;
+  constructor(
+    items: SettingItem[],
+    dialogTheme: Theme,
+    onChange: (id: string, newValue: string) => void,
+    onClose: () => void,
+  ) {
+    super();
+    this.addChild(new DynamicBorder());
+    this.addChild(new Text(dialogTheme.bold(dialogTheme.fg("accent", "  Caveman Config")), 0, 0));
+    this.addChild(new Text(dialogTheme.fg("muted", "  Persisted to spell.kdl"), 0, 0));
+    // ...
+    this.addChild(new Text(dialogTheme.fg("dim", "  ←→ change · Esc close"), 0, 0));
+    // ...
+  }
+}
+#+END_SRC
+
+In ~openConfig~, use the theme from factory:
+#+BEGIN_SRC typescript
+await ctx.ui.custom<void>((_tui, uiTheme, _keybindings, done) => {
+  return new CavemanSettingsDialog(
+    buildSettingItems(settings),
+    uiTheme,
+    (id, newValue) => { updatePersistedSetting(id, newValue, ctx); },
+    () => done(undefined),
+  );
+});
+#+END_SRC
+
+Remove the ~theme~ named import from ~../../modes/theme/theme~ (keep ~getSettingsListTheme~ and the ~Theme~ type import).
+
+** Edge Cases
+- If ~refreshBaseSystemPrompt~ is called during streaming, it may be a no-op on the session side. The boolean return still reports success because no error was thrown. This is acceptable — the prompt rebuilds on next tool activation anyway.
+- ~hasUI~ is always ~false~ in subagent executor contexts (see ~executor.ts~ line ~hasUI: false~).
+- The global ~theme~ import is still needed in ~getSettingsListTheme()~ — verify it is not removed. Actually, ~getSettingsListTheme~ is imported from the same module. Check: if the only use of the ~theme~ named import was the dialog, remove it. If ~getSettingsListTheme~ is a separate export, keep the import line but drop ~theme~ from the specifier.
+
+* Verification
+- ~bun check:ts~ passes
+- Covered by sibling test item

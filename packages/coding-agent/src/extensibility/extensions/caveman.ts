@@ -1,8 +1,8 @@
-import { Container, type SettingItem, SettingsList, Spacer, Text } from "@oh-my-pi/pi-tui";
+import { Container, type SettingItem, SettingsList, type SettingsListTheme, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings, SettingValue } from "../../config/settings";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
-import { getSettingsListTheme, theme } from "../../modes/theme/theme";
+import type { Theme } from "../../modes/theme/theme";
 import type { ExtensionCommandContext, ExtensionContext, ExtensionFactory } from "./types";
 
 const LEVELS = ["off", "lite", "full", "ultra", "wenyan-lite", "wenyan", "wenyan-ultra"] as const;
@@ -43,25 +43,41 @@ const ANIMATIONS: Record<ActiveCavemanLevel, FireAnimation> = {
 	"wenyan-ultra": { label: "文言文極", intervalMs: 100 },
 };
 
+function buildDialogSettingsListTheme(dialogTheme: Theme): SettingsListTheme {
+	return {
+		label: (text: string, selected: boolean) => (selected ? dialogTheme.fg("accent", text) : text),
+		value: (text: string, selected: boolean) =>
+			selected ? dialogTheme.fg("accent", text) : dialogTheme.fg("muted", text),
+		description: (text: string) => dialogTheme.fg("dim", text),
+		cursor: dialogTheme.fg("accent", `${dialogTheme.nav.cursor} `),
+		hint: (text: string) => dialogTheme.fg("dim", text),
+	};
+}
+
 class CavemanSettingsDialog extends Container {
 	#settingsList: SettingsList;
 
-	constructor(items: SettingItem[], onChange: (id: string, newValue: string) => void, onClose: () => void) {
+	constructor(
+		dialogTheme: Theme,
+		items: SettingItem[],
+		onChange: (id: string, newValue: string) => void,
+		onClose: () => void,
+	) {
 		super();
 		this.addChild(new DynamicBorder());
-		this.addChild(new Text(theme.bold(theme.fg("accent", "  Caveman Config")), 0, 0));
-		this.addChild(new Text(theme.fg("muted", "  Persisted to spell.kdl"), 0, 0));
+		this.addChild(new Text(dialogTheme.bold(dialogTheme.fg("accent", "  Caveman Config")), 0, 0));
+		this.addChild(new Text(dialogTheme.fg("muted", "  Persisted to spell.kdl"), 0, 0));
 		this.addChild(new Spacer(1));
 		this.#settingsList = new SettingsList(
 			items,
 			Math.min(items.length, 10),
-			getSettingsListTheme(),
+			buildDialogSettingsListTheme(dialogTheme),
 			onChange,
 			onClose,
 		);
 		this.addChild(this.#settingsList);
 		this.addChild(new Spacer(1));
-		this.addChild(new Text(theme.fg("dim", "  ←→ change · Esc close"), 0, 0));
+		this.addChild(new Text(dialogTheme.fg("dim", "  ←→ change · Esc close"), 0, 0));
 		this.addChild(new DynamicBorder());
 	}
 
@@ -140,11 +156,11 @@ export function createCavemanExtension(settings: Settings): ExtensionFactory {
 			return level;
 		};
 
-		const syncStatus = (ctx: Pick<ExtensionContext, "ui">): void => {
+		const syncStatus = (ctx: Pick<ExtensionContext, "hasUI" | "ui">): void => {
 			stopAnimation();
 			const nextLevel = syncLevelFromSettings();
 			const showStatus = settings.get("caveman.showStatus");
-			if (nextLevel === "off" || !showStatus) {
+			if (!ctx.hasUI || nextLevel === "off" || !showStatus) {
 				ctx.ui.setStatus(STATUS_KEY, undefined);
 				return;
 			}
@@ -163,13 +179,15 @@ export function createCavemanExtension(settings: Settings): ExtensionFactory {
 			animationTimer = setInterval(renderFrame, animation.intervalMs);
 		};
 
-		const refreshPrompt = async (ctx: ExtensionContext): Promise<void> => {
+		const refreshPrompt = async (ctx: ExtensionContext): Promise<boolean> => {
 			try {
 				await ctx.refreshBaseSystemPrompt();
+				return true;
 			} catch (error) {
 				logger.warn("Failed to refresh caveman system prompt", {
 					error: error instanceof Error ? error.message : String(error),
 				});
+				return false;
 			}
 		};
 
@@ -184,12 +202,12 @@ export function createCavemanExtension(settings: Settings): ExtensionFactory {
 			await refreshPrompt(ctx);
 		};
 
-		const applyRuntimeLevel = async (nextLevel: CavemanLevel, ctx: ExtensionCommandContext): Promise<void> => {
+		const applyRuntimeLevel = async (nextLevel: CavemanLevel, ctx: ExtensionCommandContext): Promise<boolean> => {
 			settings.override("caveman.defaultLevel", nextLevel);
 			level = nextLevel;
 			api.appendEntry("caveman-level", { level: nextLevel });
 			syncStatus(ctx);
-			await refreshPrompt(ctx);
+			return await refreshPrompt(ctx);
 		};
 
 		const updatePersistedSetting = (id: string, newValue: string, ctx: ExtensionCommandContext): void => {
@@ -224,8 +242,9 @@ export function createCavemanExtension(settings: Settings): ExtensionFactory {
 				return;
 			}
 
-			await ctx.ui.custom<void>((_tui, _theme, _keybindings, done) => {
+			await ctx.ui.custom<void>((_tui, dialogTheme, _keybindings, done) => {
 				return new CavemanSettingsDialog(
+					dialogTheme,
 					buildSettingItems(settings),
 					(id, newValue) => {
 						updatePersistedSetting(id, newValue, ctx);
@@ -273,7 +292,17 @@ export function createCavemanExtension(settings: Settings): ExtensionFactory {
 					return;
 				}
 
-				await applyRuntimeLevel(nextLevel, ctx);
+				const promptRefreshed = await applyRuntimeLevel(nextLevel, ctx);
+				if (!promptRefreshed) {
+					ctx.ui.notify(
+						nextLevel === "off"
+							? "Caveman mode off, but prompt refresh failed. Change applies after next rebuild."
+							: `Caveman mode: ${ANIMATIONS[nextLevel].label}, but prompt refresh failed. Change applies after next rebuild.`,
+						"warning",
+					);
+					return;
+				}
+
 				ctx.ui.notify(
 					nextLevel === "off" ? "Caveman mode off." : `Caveman mode: ${ANIMATIONS[nextLevel].label}`,
 					"info",

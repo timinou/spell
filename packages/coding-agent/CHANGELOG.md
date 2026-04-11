@@ -20,6 +20,8 @@
 - Non-code language outline support: Markdown headings, YAML keys, TOML tables, JSON keys
 - Improved `code` tool result rendering with tab sanitization, code cells, and truncation
 
+- Built-in caveman mode: token-saving communication that compresses agent output by ~75% while preserving technical accuracy. Toggle with `/caveman`, configure via `/caveman config` or `spell.kdl` settings.
+
 ### Breaking Changes
 
 - Removed `loop_start` tool; replaced with `loop_prepare` + `loop_launch` two-step flow

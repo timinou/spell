@@ -1,0 +1,96 @@
+#+TITLE: Caveman mode committed test suite and changelog
+#+STATE: DONE
+#+SESSION_ID: 14b642d8acabe384
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T09-18-40-306Z_14b642d8acabe384.jsonl]]
+#+CUSTOM_ID: FEAT-378-caveman-mode-committed-test-suite-and-ch
+#+EFFORT: 2h
+#+PRIORITY: B
+#+LAYER: coding-agent
+#+DEPENDS: BUG-193-caveman-extension-hardening-refresh-fail
+
+NOTE [2026-04-11]: Completed in PLAN-168. Added packages/coding-agent/test/caveman.test.ts with prompt, command, restore, and hardening coverage; added the missing caveman changelog entry under the first Unreleased/Added section.
+
+* Initial Message
+
+if not in original plan, find original caveman-phd notation in original transcript to keep it in prompt
+
+* Context
+Audit AUD-049 found that caveman mode has no committed test coverage and no changelog entry. The verification script at ~!tasks/plans/plan-artifacts/PLAN-167-caveman-mode-for-spell/verify-caveman.ts~ is an untracked plan artifact that CI never runs.
+
+This item creates a committed test file and a changelog entry. It depends on [[id:BUG-193-caveman-extension-hardening-refresh-fail]] because the hardening changes add new behavior (refresh failure notification, hasUI guard, dialog theme) that the test must cover.
+
+* Acceptance Criteria
+- A test file exists at ~packages/coding-agent/test/caveman.test.ts~
+- ~bun test packages/coding-agent/test/caveman.test.ts~ passes
+- All test scenarios below are covered
+- Changelog entry added under ~## [Unreleased]~ → ~### Added~
+- ~bun check:ts~ passes
+
+* Implementation
+
+** Test file: ~packages/coding-agent/test/caveman.test.ts~
+Use ~bun:test~ with ~describe~ / ~test~ / ~expect~. Follow the pattern in ~packages/coding-agent/test/system-prompt-templates.test.ts~.
+
+The test must import:
+- ~Settings~ from ~../src/config/settings~ (use ~Settings.isolated()~ for each test)
+- ~buildSystemPrompt~ from ~../src/system-prompt~
+- ~createCavemanExtension~ from ~../src/extensibility/extensions/caveman~
+- ~initTheme~ from ~../src/modes/theme/theme~ (call ~await initTheme(false)~ in a top-level ~beforeAll~)
+
+*** Required test scenarios
+
+**** Prompt injection
+1. ~buildSystemPrompt~ with ~caveman.defaultLevel: "full"~ includes "IMPORTANT: You are in CAVEMAN MODE." and "Level: FULL"
+2. ~buildSystemPrompt~ with ~caveman.defaultLevel: "off"~ does NOT include "CAVEMAN MODE"
+3. ~buildSystemPrompt~ with ~caveman.thinkingMode: "caveman"~ and active level includes "PhD-CAVEMAN"
+4. ~buildSystemPrompt~ with ~caveman.thinkingMode: "normal"~ and active level does NOT include "PhD-CAVEMAN"
+
+**** Subagent gating
+5. ~isSubagent: true~ + ~caveman.affectSubagents: false~ → prompt does NOT include "CAVEMAN MODE"
+6. ~isSubagent: true~ + ~caveman.affectSubagents: true~ → prompt DOES include "CAVEMAN MODE"
+7. ~isSubagent: false~ + ~caveman.affectSubagents: false~ → prompt DOES include "CAVEMAN MODE" (flag only gates subagents)
+
+**** Extension command behavior
+Use a mock API object (same pattern as the plan artifact script). Mock the ~ExtensionAPI~ with ~on()~, ~registerCommand()~, ~appendEntry()~.
+
+8. ~/caveman~ with no args toggles off→full and full→off
+9. ~/caveman ultra~ sets level to ultra
+10. ~/caveman config~ opens ~ui.custom~ dialog
+11. ~/caveman invalid~ notifies error
+
+**** Session restore
+12. ~session_start~ with a stored ~caveman-level~ entry restores the level via ~settings.override~
+13. ~session_start~ with no stored entry clears override
+
+**** Hardening (from BUG-193)
+14. When ~refreshBaseSystemPrompt~ throws, ~/caveman~ notifies warning instead of success
+15. ~syncStatus~ does not call ~setInterval~ when ~ctx.hasUI === false~
+16. Config dialog receives the theme from ~ui.custom~ factory, not the global import
+
+*** Mock structure
+The mock context must provide:
+- ~ui.notify~ — capture calls in an array
+- ~ui.setStatus~ — capture calls in an array
+- ~ui.custom~ — capture invocations, invoke the factory with a mock theme, call ~done()~ immediately
+- ~ui.theme~ — a minimal object with ~fg: (_, text) => text~ and ~bold: (text) => text~
+- ~hasUI~ — boolean, defaults to ~true~
+- ~sessionManager.getEntries()~ — returns the ~appendedEntries~ array
+- ~refreshBaseSystemPrompt~ — a mock function that can be configured to throw
+
+** Changelog entry
+File: ~packages/coding-agent/CHANGELOG.md~
+
+Add under ~## [Unreleased]~ → ~### Added~ (the first one, near the top):
+#+BEGIN_EXAMPLE
+- Built-in caveman mode: token-saving communication that compresses agent output by ~75% while preserving technical accuracy. Toggle with `/caveman`, configure via `/caveman config` or `spell.kdl` settings.
+#+END_EXAMPLE
+
+** Edge Cases
+- ~initTheme(false)~ must be called before any test that touches the global ~theme~ variable. Use ~beforeAll~.
+- ~Settings.isolated()~ creates a clean settings instance per test — no cross-test contamination.
+- Mock ~ui.custom~ must invoke the factory synchronously or the ~await~ in ~openConfig~ will hang. Call ~done(undefined)~ inside the factory.
+
+* Verification
+- ~bun test packages/coding-agent/test/caveman.test.ts~ — all scenarios pass
+- ~bun check:ts~ passes
+- Changelog file contains the new entry under ~## [Unreleased]~ → ~### Added~

@@ -1,0 +1,59 @@
+#+TITLE: Caveman mode audit remediation
+#+STATE: DONE
+#+SESSION_ID: 14b642d8acabe384
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T09-18-40-306Z_14b642d8acabe384.jsonl]]
+#+CUSTOM_ID: PLAN-168-caveman-mode-audit-remediation
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+NOTE [2026-04-11]: Completed after closing BUG-193 and FEAT-378 with passing caveman-focused verification.
+
+* Initial Message
+
+if not in original plan, find original caveman-phd notation in original transcript to keep it in prompt
+
+* Context
+Audit AUD-049 identified five issues in the caveman mode implementation (PLAN-167):
+1. ~/caveman~ reports success even when prompt refresh fails
+2. Fire animation timer runs in non-interactive sessions
+3. Config dialog ignores the UI theme from ~ui.custom()~
+4. No committed regression tests
+5. No changelog entry
+
+Findings 1-3 are code fixes in a single file. Findings 4-5 are test + documentation.
+
+** Key Decisions
+1. ~refreshPrompt()~ returns ~boolean~; callers decide whether to notify or stay silent based on context
+2. Animation guard uses existing ~ctx.hasUI~ from ~ExtensionContext~ — no new plumbing needed
+3. Dialog theme passed via ~ui.custom()~ factory parameter — removes coupling to global theme import
+4. Tests go in ~packages/coding-agent/test/caveman.test.ts~ using ~bun:test~ with ~Settings.isolated()~
+5. Changelog entry under ~### Added~ in the first ~## [Unreleased]~ section
+* Verification
+#+BEGIN_SRC sh
+bun check:ts
+bun test packages/coding-agent/test/caveman.test.ts
+#+END_SRC
+Manual: confirm changelog entry exists under ~## [Unreleased]~ → ~### Added~.
+
+* Execution Manifest
+
+** Wave 1 — Hardening (no dependencies)
+- [[id:BUG-193-caveman-extension-hardening-refresh-fail]] — Refresh failure propagation, animation guard, dialog theme (1h)
+
+** Wave 2 — Test + changelog (depends on Wave 1)
+- [[id:FEAT-378-caveman-mode-committed-test-suite-and-ch]] — Committed test suite and changelog entry (2h)
+
+Total estimated effort: 3h
+
+
+** Completion [2026-04-11]
+*** Verification
+- `bun test packages/coding-agent/test/caveman.test.ts` → passed (`8 pass`, `0 fail`, `35 expect() calls`).
+- `bun check:ts` → passed (`biome check . && tsgo -p tsconfig.json`).
+- Manual verification: confirmed `packages/coding-agent/CHANGELOG.md` places the caveman entry under the first `## [Unreleased]` → `### Added` section.
+*** Artifacts
+- Code: `packages/coding-agent/src/extensibility/extensions/caveman.ts`
+- Tests: `packages/coding-agent/test/caveman.test.ts`
+- Changelog: `packages/coding-agent/CHANGELOG.md`
+*** Deviations
+- None.
