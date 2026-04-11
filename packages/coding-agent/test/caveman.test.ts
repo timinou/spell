@@ -163,9 +163,9 @@ describe("caveman extension", () => {
 				"caveman.thinkingMode": "caveman",
 			}),
 		);
-		expect(fullCaveman).toContain("IMPORTANT: You are in CAVEMAN MODE.");
+		expect(fullCaveman).toContain("Terse mode active");
 		expect(fullCaveman).toContain("Level: FULL");
-		expect(fullCaveman).toContain("PhD-CAVEMAN");
+		expect(fullCaveman).toContain("Think in notation");
 
 		const fullNormalThinking = await renderPrompt(
 			Settings.isolated({
@@ -173,9 +173,9 @@ describe("caveman extension", () => {
 				"caveman.thinkingMode": "normal",
 			}),
 		);
-		expect(fullNormalThinking).toContain("IMPORTANT: You are in CAVEMAN MODE.");
+		expect(fullNormalThinking).toContain("Terse mode active");
 		expect(fullNormalThinking).toContain("Level: FULL");
-		expect(fullNormalThinking).not.toContain("PhD-CAVEMAN");
+		expect(fullNormalThinking).not.toContain("Think in notation");
 
 		const offPrompt = await renderPrompt(
 			Settings.isolated({
@@ -183,8 +183,8 @@ describe("caveman extension", () => {
 				"caveman.thinkingMode": "caveman",
 			}),
 		);
-		expect(offPrompt).not.toContain("CAVEMAN MODE");
-		expect(offPrompt).not.toContain("PhD-CAVEMAN");
+		expect(offPrompt).not.toContain("Terse mode active");
+		expect(offPrompt).not.toContain("Think in notation");
 	});
 
 	it("gates caveman prompt injection for subagents based on settings", async () => {
@@ -195,7 +195,7 @@ describe("caveman extension", () => {
 			}),
 			true,
 		);
-		expect(subagentSuppressed).not.toContain("CAVEMAN MODE");
+		expect(subagentSuppressed).not.toContain("Terse mode active");
 
 		const subagentEnabled = await renderPrompt(
 			Settings.isolated({
@@ -204,7 +204,7 @@ describe("caveman extension", () => {
 			}),
 			true,
 		);
-		expect(subagentEnabled).toContain("CAVEMAN MODE");
+		expect(subagentEnabled).toContain("Terse mode active");
 
 		const rootSession = await renderPrompt(
 			Settings.isolated({
@@ -213,7 +213,7 @@ describe("caveman extension", () => {
 			}),
 			false,
 		);
-		expect(rootSession).toContain("CAVEMAN MODE");
+		expect(rootSession).toContain("Terse mode active");
 	});
 
 	it("toggles levels, accepts explicit levels, opens config, and rejects invalid levels", async () => {

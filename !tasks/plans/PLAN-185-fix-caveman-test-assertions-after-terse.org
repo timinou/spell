@@ -1,0 +1,80 @@
+#+TITLE: Fix caveman test assertions after terse mode rewrite
+#+STATE: DONE
+#+SESSION_ID: 14b6e0427a429389
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-46-25-257Z_14b6e0427a429389.jsonl]]
+#+CUSTOM_ID: PLAN-185-fix-caveman-test-assertions-after-terse
+
+NOTE [2026-04-11]: All 9 assertions fixed, all tests green, no old strings remain.
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-055-audit-implementation:
+
+That confirms it. The `not.toContain` assertions happen to still pass (the strings are gone), but the `toContain` assertions fail. Here's the full audit:
+
+---
+
+## Audit Findings
+
+### Finding 1 — `caveman.test.ts` not updated: 2 tests broken, 9 stale assertions
+
+- **What**: `packages/coding-agent/test/caveman.test.ts` was not part of the plan's test update scope (FEAT-443 only targeted `system-prompt-templates.test.ts`). It contains 5 positive assertions referencing removed strings that now fail, plus 4 negative assertions that pass by accident (the string they negate no longer exists, so they prove nothing useful).
+- **Where**: `packages/coding-agent/test/caveman.test.ts`, lines 159–217 (two test cases: `"renders caveman prompt sections only when the active level enables them"` and `"gates caveman prompt injection for subagents based on settings"`)
+- **Why**: The committed code ships with **2 test failures** in `bun test packages/coding-agent/test/caveman.test.ts`. This breaks CI. The 4 negative assertions also need updating — they currently pass vacuously (checking `.not.toContain("CAVEMAN MODE")` when "CAVEMAN MODE" no longer exists in any template is a tautology that doesn't verify the template is absent for that config).
+- **Effort**: `small` — mechanical string replacements mirroring the work done in `system-prompt-templates.test.ts`:
+  - `"IMPORTANT: You are in CAVEMAN MODE."` → `"Terse mode active"`
+  - `"PhD-CAVEMAN"` → `"Think in notation"` (for thinking-active cases) — note the original `"PhD-CAVEMAN"` was already case-mismatched with the old template's `"PhD-caveman"`, so this was a latent bug masked by the earlier assertion failing first
+  - `"CAVEMAN MODE"` → `"Terse mode active"` (in both positive and negative assertions)
+
+**Affected assertions** (all in `caveman.test.ts`):
+
+| Line | Current | Broken? | Fix |
+|------|---------|---------|-----|
+| 166 | `.toContain("IMPORTANT: You are in CAVEMAN MODE.")` | Yes | `.toContain("Terse mode active")` |
+| 168 | `.toContain("PhD-CAVEMAN")` | Yes (was also pre-existing case bug) | `.toContain("Think in notation")` |
+| 176 | `.toContain("IMPORTANT: You are in CAVEMAN MODE.")` | Yes | `.toContain("Terse mode active")` |
+| 178 | `.not.toContain("PhD-CAVEMAN")` | No (vacuously passes) | `.not.toContain("Think in notation")` |
+| 186 | `.not.toContain("CAVEMAN MODE")` | No (vacuously passes) | `.not.toContain("Terse mode active")` |
+| 187 | `.not.toContain("PhD-CAVEMAN")` | No (vacuously passes) | `.not.toContain("Think in notation")` |
+| 198 | `.not.toContain("CAVEMAN MODE")` | No (vacuously passes) | `.not.toContain("Terse mode active")` |
+| 207 | `.toContain("CAVEMAN MODE")` | Yes | `.toContain("Terse mode active")` |
+| 216 | `.toContain("CAVEMAN MODE")` | Yes | `.toContain("Terse mode active")` |
+
+* Context
+
+PLAN-181 (system prompt terse mode rewrite) updated =system-prompt-templates.test.ts= but missed
+=caveman.test.ts=, which has 9 assertions referencing removed template strings. Two tests now
+fail. This plan fixes the oversight with mechanical string replacements.
+
+Single item, single file, ~15 minutes.
+
+* Verification
+
+#+begin_src sh
+# Both caveman tests pass
+bun test packages/coding-agent/test/caveman.test.ts
+
+# No old strings remain
+grep -E "PhD-CAVEMAN|CAVEMAN MODE|IMPORTANT: You are in" packages/coding-agent/test/caveman.test.ts && echo "FAIL" || echo "OK"
+
+# Original template tests still pass
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+#+end_src
+
+* Execution Manifest
+
+** Wave 1
+- [[id:BUG-201-fix-caveman-test-ts-assertions-broken-by]] — Fix 9 assertions in caveman.test.ts (15m)
+
+** Completion [2026-04-11]
+*** Verification
+- =bun test packages/coding-agent/test/caveman.test.ts= — 8 pass, 0 fail, 35 expect() calls
+- =grep -E "PhD-CAVEMAN|CAVEMAN MODE|IMPORTANT: You are in" packages/coding-agent/test/caveman.test.ts= — no matches (all old strings removed)
+- =bun test packages/coding-agent/test/system-prompt-templates.test.ts= — 16 pass, 0 fail, 108 expect() calls
+
+*** Artifacts
+None (mechanical test-only change, no screenshots needed).
+
+*** Deviations
+None.
