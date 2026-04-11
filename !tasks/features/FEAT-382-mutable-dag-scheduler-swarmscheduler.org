@@ -1,5 +1,9 @@
 #+TITLE: Mutable DAG Scheduler SwarmScheduler
+<<<<<<< HEAD
 #+STATE: DONE
+=======
+#+STATE: ITEM
+>>>>>>> origin/main
 #+SESSION_ID: 14b659b76a31eab8
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
 #+CUSTOM_ID: FEAT-382-mutable-dag-scheduler-swarmscheduler
@@ -7,8 +11,11 @@
 #+PRIORITY: A
 #+LAYER: agent-runtime
 
+<<<<<<< HEAD
 NOTE [2026-04-11]: Superseded by unified swarm plan. Data model changed fundamentally: phases eliminated, URI-addressable nodes (task:// + data://), typed EventBus, 80/20 event model. New items will be created under the revised plan.
 
+=======
+>>>>>>> origin/main
 * Narrative
 
 Spell's current task dispatch system uses =batch-scheduler.ts=: a static DAG built once from a flat list of tasks with =blockers=, then executed via a pump loop. This works for single-batch dispatch but cannot support interconnected agent swarms because:

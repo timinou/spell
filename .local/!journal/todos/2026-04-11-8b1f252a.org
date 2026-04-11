@@ -4,41 +4,29 @@
 
 * Wave 1
 
-** DONE Narrow cache fingerprint scope
-:PROPERTIES:
-:TASK_ID: task-1
-:STATUS: completed
-:VERIFY_CMD: cargo test -p pi-code-graph cache && cargo check -p pi-code-graph && cargo check -p pi-natives
-:ORG_ITEM_ID: FEAT-420-narrow-cache-fingerprint-to-source-files
-:END:
-
-Implemented FEAT-420 in crates/pi-code-graph/src/cache.rs, crates/pi-code-graph/src/indexer.rs, and crates/pi-natives/src/code_graph.rs. Added focused cache tests and verified via cargo test -p pi-code-graph cache && cargo check -p pi-code-graph && cargo check -p pi-natives.
-
-Source-only fingerprinting now excludes .spell output and non-source files; builder/bridge use registry-scoped cache status.
-
-** DOING Add type-only import edges
+** DONE Add type-only import edges
 :PROPERTIES:
 :TASK_ID: task-2
-:STATUS: in_progress
-:VERIFY_CMD: cargo test -p pi-code-graph queries && cargo check -p pi-code-graph
+:STATUS: completed
+:VERIFY_CMD: cargo test -p pi-code-graph type_only && cargo test -p pi-code-graph queries && cargo check -p pi-code-graph && cargo check -p pi-natives
 :ORG_ITEM_ID: FEAT-421-distinguish-type-only-imports-with-edgek
 :END:
 
-Implement FEAT-421 in crates/pi-code-graph/src/model.rs, crates/pi-code-graph/src/indexer.rs, crates/pi-code-graph/src/query.rs, and related extractor tests. Verify focused tests before proceeding.
+Implemented FEAT-421 in crates/pi-code-graph/src/model.rs, crates/pi-code-graph/src/indexer.rs, crates/pi-code-graph/src/query.rs, and crates/pi-code-graph/src/language/typescript.rs. Verified via cargo test -p pi-code-graph type_only && cargo test -p pi-code-graph queries && cargo check -p pi-code-graph && cargo check -p pi-natives.
 
-Implementing FEAT-421 across model, indexer, query, and extractor tests.
+Type-only imports now persist as EdgeKind::TypeImports; impact traverses them and dead_code ignores them as runtime usage.
 
-** ITEM Make Elixir resolver Mix-aware
+** DOING Make Elixir resolver Mix-aware
 :PROPERTIES:
 :TASK_ID: task-3
-:STATUS: pending
+:STATUS: in_progress
 :VERIFY_CMD: cargo test -p pi-code-graph elixir && cargo check -p pi-code-graph
 :ORG_ITEM_ID: FEAT-425-elixir-resolver-mix-aware-lib-prefix-and
 :END:
 
 Implement FEAT-425 in crates/pi-code-graph/src/language/elixir.rs with mix.exs-aware lib/ resolution and focused resolver/builder tests.
 
-Handled after FEAT-421 to avoid concurrent workspace edits while maintaining deterministic verification.
+Implementing FEAT-425 in Elixir resolver and builder tests.
 
 * Wave 2
 

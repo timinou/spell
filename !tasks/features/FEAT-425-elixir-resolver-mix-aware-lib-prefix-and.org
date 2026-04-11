@@ -1,5 +1,5 @@
 #+TITLE: Elixir resolver Mix-aware lib prefix and project detection
-#+STATE: ITEM
+#+STATE: DOING
 #+SESSION_ID: 14b66f75e39d597b
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T12-33-35-630Z_14b66f75e39d597b.jsonl]]
 #+CUSTOM_ID: FEAT-425-elixir-resolver-mix-aware-lib-prefix-and

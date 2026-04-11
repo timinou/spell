@@ -1,5 +1,9 @@
 #+TITLE: Isolation-Gated Concurrency Model for Todo Write
+<<<<<<< HEAD
 #+STATE: DONE
+=======
+#+STATE: ITEM
+>>>>>>> origin/main
 #+SESSION_ID: 14b659b76a31eab8
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
 #+CUSTOM_ID: FEAT-384-isolation-gated-concurrency-model-for-to
@@ -8,8 +12,11 @@
 #+LAYER: agent-runtime
 #+DEPENDS: FEAT-382-mutable-dag-scheduler-swarmscheduler
 
+<<<<<<< HEAD
 NOTE [2026-04-11]: Superseded by unified swarm plan.
 
+=======
+>>>>>>> origin/main
 * Narrative
 
 Today, =todo_write= enforces a hard rule: at most one non-delegated direct task can be =in_progress= at any time (=normalizeInProgressTask()= in =todo-write.ts=, line ~445). This rule exists to prevent race conditions -- two agents editing the same workspace simultaneously would produce conflicts.
