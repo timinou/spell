@@ -1,0 +1,13 @@
+Warning: skipping stale status file for window 103 (legacy: Old format) because recovery metadata is incomplete.
+Found 2 recoverable crashed session(s):
+
+Workspace (unnamed):
+  - infra: Ops followup
+
+Workspace ws-a:
+  - spell: Plan work
+
+Recovered infra: Ops followup.
+Recovered spell: Plan work.
+Recovered 2 session(s).
+Skipped 1 stale status file(s) missing recovery metadata.

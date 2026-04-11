@@ -1,0 +1,2 @@
++new-window --working-directory=/work/infra -e spell -r sess-102
++new-window --working-directory=/work/spell -e spell -r sess-101

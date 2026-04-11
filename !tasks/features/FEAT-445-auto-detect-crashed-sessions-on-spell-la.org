@@ -1,5 +1,5 @@
 #+TITLE: Auto-detect crashed sessions on spell launch
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14b6d9b181b3cb2d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-17-43-942Z_14b6d9b181b3cb2d.jsonl]]
 #+CUSTOM_ID: FEAT-445-auto-detect-crashed-sessions-on-spell-la
@@ -7,6 +7,8 @@
 #+PRIORITY: #B
 #+LAYER: cli
 #+DEPENDS: FEAT-442-extend-status-file-with-session-recovery
+
+NOTE [2026-04-11]: Added best-effort stderr notification for recoverable crashed sessions on normal startup only. Verified with bun check:ts plus temp-HOME startup scenarios showing notification presence and --no-session suppression.
 
 * Initial Message
 

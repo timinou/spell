@@ -11,6 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { StatusFileReader } from "@oh-my-pi/pi-desktop-common";
 import { isDisplayAvailable } from "@oh-my-pi/pi-qml";
 import { $env, getProjectDir, logger, postmortem, setProjectDir, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
@@ -271,6 +272,26 @@ async function getChangelogForDisplay(parsed: Args): Promise<string | undefined>
 	}
 
 	return undefined;
+}
+
+async function notifyRecoverableCrashedSessions(parsed: Args): Promise<void> {
+	if (parsed.resume || parsed.continue || parsed.noSession) {
+		return;
+	}
+
+	try {
+		const crashedSessions = await new StatusFileReader().readCrashed();
+		const recoverableCount = crashedSessions.filter(session => session.sessionId && session.cwd).length;
+		if (recoverableCount === 0) {
+			return;
+		}
+
+		process.stderr.write(
+			`${chalk.yellow(`${recoverableCount} crashed session(s) detected. Run 'spell recover' to restore.`)}\n`,
+		);
+	} catch {
+		// Best-effort only: startup must not block or fail because crash detection failed.
+	}
 }
 
 async function createSessionManager(parsed: Args, cwd: string): Promise<SessionManager | undefined> {
@@ -715,6 +736,8 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 			resolveModelScope(modelPatterns, modelRegistry, modelMatchPreferences),
 		);
 	}
+
+	void notifyRecoverableCrashedSessions(parsedArgs);
 
 	// Create session manager based on CLI flags
 	let sessionManager = await logger.timeAsync("createSessionManager", () => createSessionManager(parsedArgs, cwd));

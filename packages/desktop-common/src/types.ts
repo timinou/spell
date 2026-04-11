@@ -67,4 +67,8 @@ export interface SessionStatusFile {
 	projectName: string;
 	sessionTitle: string;
 	updatedAt: number;
+	sessionId?: string;
+	sessionFile?: string;
+	cwd?: string;
+	workspaceName?: string | null;
 }

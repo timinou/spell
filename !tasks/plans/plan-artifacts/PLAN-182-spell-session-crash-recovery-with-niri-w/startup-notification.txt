@@ -1,0 +1,4 @@
+1 crashed session(s) detected. Run 'spell recover' to restore.
+  Emacs (spell-emacs-d568a62ab685): installing tree-sitter grammars on first run, may take ~60s...
+400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits."},"request_id":"req_011CZxexRSHAsq3Y81jsr6y1"}
+raw-http-request=/tmp/plan182-manual/home/.spell/logs/http-400-requests/1775941144557-1iiktknesqzn.json

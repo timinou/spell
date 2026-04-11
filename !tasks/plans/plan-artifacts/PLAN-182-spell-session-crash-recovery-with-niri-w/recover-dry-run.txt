@@ -1,0 +1,15 @@
+Warning: skipping stale status file for window 103 (legacy: Old format) because recovery metadata is incomplete.
+Found 2 recoverable crashed session(s):
+
+Workspace (unnamed):
+  - infra: Ops followup
+
+Workspace ws-a:
+  - spell: Plan work
+
+Dry run — showing planned recovery commands:
+ghostty +new-window --working-directory=/work/infra -e spell -r sess-102
+niri msg action focus-workspace ws-a
+ghostty +new-window --working-directory=/work/spell -e spell -r sess-101
+
+Skipped 1 stale status file(s) missing recovery metadata.

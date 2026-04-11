@@ -1,0 +1,1 @@
+msg action focus-workspace ws-a

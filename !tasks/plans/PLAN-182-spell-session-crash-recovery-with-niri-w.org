@@ -1,8 +1,11 @@
 #+TITLE: Spell session crash recovery with niri workspace restore
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14b6d9b181b3cb2d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-17-43-942Z_14b6d9b181b3cb2d.jsonl]]
 #+CUSTOM_ID: PLAN-182-spell-session-crash-recovery-with-niri-w
+
+
+NOTE [2026-04-11]: Plan implemented and verified with focused automated checks plus isolated manual recovery/startup scenarios.
 
 * Initial Message
 
@@ -49,3 +52,25 @@ This plan adds:
 - [[id:FEAT-445-auto-detect-crashed-sessions-on-spell-la]] (1h, cli layer) — Startup notification for crashed sessions. Depends on FEAT-442.
 
 Total effort: ~8h
+
+
+** Completion [2026-04-11]
+*** Verification
+- `bun test packages/desktop-common/test/status-file.test.ts` — passed.
+- `bun test packages/niri/test/controller.test.ts` — passed.
+- `bun check:ts` — passed.
+- Manual recovery dry-run (isolated temp HOME with stub `ghostty`/`niri` binaries): `HOME=/tmp/plan182-manual/home PATH=/tmp/plan182-manual/bin:$PATH bun packages/coding-agent/src/cli.ts recover --dry-run` — showed two recoverable sessions, one skipped legacy status file, one planned niri workspace focus command, and two ghostty resume commands.
+- Manual recovery execution (same isolated environment): `HOME=/tmp/plan182-manual/home PATH=/tmp/plan182-manual/bin:$PATH bun packages/coding-agent/src/cli.ts recover` — logged both ghostty launches, logged workspace focus for `ws-a`, and left only the unrecoverable legacy status file in `~/.spell/status/`.
+- Manual startup notification check (same isolated environment, expected upstream API failure after startup): `HOME=/tmp/plan182-manual/home PATH=/tmp/plan182-manual/bin:$PATH bun packages/coding-agent/src/cli.ts --print "hello"` — emitted the crashed-session recovery hint before the later Anthropic billing error.
+- Manual notification suppression check: `HOME=/tmp/plan182-manual/home PATH=/tmp/plan182-manual/bin:$PATH bun packages/coding-agent/src/cli.ts --no-session --print "hello"` — did not emit the recovery hint before the later Anthropic billing error.
+*** Artifacts
+- Dry-run output: [[file:!tasks/plans/plan-artifacts/PLAN-182-spell-session-crash-recovery-with-niri-w/recover-dry-run.txt]]
+- Recovery run output: [[file:!tasks/plans/plan-artifacts/PLAN-182-spell-session-crash-recovery-with-niri-w/recover-run-output.txt]]
+- Fake ghostty launch log: [[file:!tasks/plans/plan-artifacts/PLAN-182-spell-session-crash-recovery-with-niri-w/fake-ghostty.log]]
+- Fake niri workspace log: [[file:!tasks/plans/plan-artifacts/PLAN-182-spell-session-crash-recovery-with-niri-w/fake-niri.log]]
+- Status directory after recovery: [[file:!tasks/plans/plan-artifacts/PLAN-182-spell-session-crash-recovery-with-niri-w/status-dir-after-recover.txt]]
+- Startup notification output: [[file:!tasks/plans/plan-artifacts/PLAN-182-spell-session-crash-recovery-with-niri-w/startup-notification.txt]]
+- Startup `--no-session` output: [[file:!tasks/plans/plan-artifacts/PLAN-182-spell-session-crash-recovery-with-niri-w/startup-no-session.txt]]
+*** Deviations
+- End-to-end compositor verification used an isolated temp-HOME harness with stub `ghostty` and `niri` binaries that recorded the exact commands instead of opening real windows/workspaces. This verified command selection, status-file cleanup, and workspace targeting, but did not exercise a live niri compositor session.
+- A combined `bun test packages/desktop-common/test/status-file.test.ts packages/niri/test/controller.test.ts` invocation failed because the niri test suite leaves `process.kill` mocked across file boundaries; the required focused package tests above both pass when run individually.
