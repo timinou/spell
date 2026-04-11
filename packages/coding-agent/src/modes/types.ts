@@ -10,6 +10,7 @@ import type { CanvasTaskManager } from "../orchestrators/canvas-task-manager";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
+import type { SingleResult } from "../task/types";
 import type { ExitPlanModeDetails } from "../tools";
 import type { TodoGroup, TodoItem } from "../tools/todo-write";
 import type { EventBus } from "../utils/event-bus";
@@ -148,6 +149,7 @@ export interface InteractiveModeContext {
 	rebuildChatFromMessages(): void;
 	setTodos(todos: TodoItem[] | TodoGroup[]): void;
 	reloadTodos(): Promise<void>;
+	recordSubagentResults?(results: SingleResult[]): void;
 	toggleTodoExpansion(): void;
 
 	// Command handling

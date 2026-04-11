@@ -8,6 +8,7 @@ import type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } 
 import { theme } from "../../modes/theme/theme";
 import type { AgentSession } from "../../session/agent-session";
 import { calculatePromptTokens } from "../../session/compaction/compaction";
+import type { SubagentInfo } from "../../task/subagent-tracker";
 import { findGitHeadPathSync, sanitizeStatusText } from "../shared";
 import {
 	canReuseCachedPr,
@@ -53,7 +54,7 @@ export class StatusLineComponent implements Component {
 	#onBranchChange: (() => void) | null = null;
 	#autoCompactEnabled: boolean = true;
 	#hookStatuses: Map<string, string> = new Map();
-	#subagentCount: number = 0;
+	#subagentInfo: SubagentInfo | null = null;
 	#canvasTaskCount: number = 0;
 	#sessionStartTime: number = Date.now();
 	#planModeStatus: { enabled: boolean; paused: boolean; ultraplan?: boolean } | null = null;
@@ -90,8 +91,8 @@ export class StatusLineComponent implements Component {
 		this.#autoCompactEnabled = enabled;
 	}
 
-	setSubagentCount(count: number): void {
-		this.#subagentCount = count;
+	setSubagentInfo(info: SubagentInfo | null): void {
+		this.#subagentInfo = info;
 	}
 
 	setCanvasTaskCount(count: number): void {
@@ -387,7 +388,7 @@ export class StatusLineComponent implements Component {
 			contextPercent,
 			contextWindow,
 			autoCompactEnabled: this.#autoCompactEnabled,
-			subagentCount: this.#subagentCount,
+			subagentInfo: this.#subagentInfo,
 			canvasTaskCount: this.#canvasTaskCount,
 			sessionStartTime: this.#sessionStartTime,
 			git: {

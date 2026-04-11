@@ -1,0 +1,76 @@
+#+TITLE: Status line subtask indicator with cost and activity
+#+STATE: DONE
+#+SESSION_ID: 14b6bd9f49bd2023
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T18-15-05-254Z_14b6bd9f49bd2023.jsonl]]
+#+CUSTOM_ID: FEAT-427-status-line-subtask-indicator-with-cost
+#+EFFORT: 3
+#+LAYER: coding-agent
+#+PRIORITY: #A
+#+DEPENDS: FEAT-426-subagent-tracker-centralized-progress-ag
+
+NOTE [2026-04-11]: Status line now renders live subagent count, spend, and current activity from SubagentTracker.
+
+* Initial Message
+
+bro. now that the Task tool and the todo write tool are well integrated, can you have a thing where I see in the TUI when a subtask is being spun by an agent? And can you see how often subtasks are being launched, and if they are token efficient?
+
+* Goal
+
+Wire the existing (but dead) subagent status line segment to the new SubagentTracker, and enhance it to show running count + aggregate cost + most active agent's current activity. Currently =setSubagentCount= exists but is never called — the subagents segment is always hidden.
+
+* Design Decisions
+
+- Replace =setSubagentCount(count: number)= with =setSubagentInfo(info: SubagentInfo | null)= on StatusLineComponent
+- Expand =SegmentContext.subagentCount= to =SegmentContext.subagentInfo: SubagentInfo | null=
+- Format: =3 agents · $0.42 · editing src/foo.ts= (count, cost, most active agent activity)
+- When only 1 agent: =1 agent · $0.12 · grep: finding tests= (singular)
+- Activity shows =currentTool: lastIntent= (truncated to fit)
+- When no agents running, segment is hidden (same as now)
+- Use =statusLineSubagents= theme color (already exists in theme)
+
+* Files to Modify
+
+** =packages/coding-agent/src/modes/components/status-line.ts=
+
+1. Replace =#subagentCount: number = 0= with =#subagentInfo: SubagentInfo | null = null=
+2. Replace =setSubagentCount(count: number)= with =setSubagentInfo(info: SubagentInfo | null)=
+3. In =#buildSegmentContext()=: replace =subagentCount: this.#subagentCount= with =subagentInfo: this.#subagentInfo=
+
+** =packages/coding-agent/src/modes/components/status-line/types.ts=
+
+1. Import =SubagentInfo= from =../../../task/subagent-tracker=
+2. Replace =subagentCount: number= with =subagentInfo: SubagentInfo | null= in =SegmentContext=
+
+** =packages/coding-agent/src/modes/components/status-line/segments.ts=
+
+1. Rewrite =subagentsSegment.render()= to:
+   - Return hidden if =ctx.subagentInfo === null || ctx.subagentInfo.runningCount === 0=
+   - Build content: count label + cost + activity
+   - Count: =N agent(s)= with icon
+   - Cost: =formatCost(info.totalCost)= (only if >0)
+   - Activity: =info.mostActiveAgent.currentTool: info.mostActiveAgent.lastIntent= (truncated to ~25 chars)
+   - Separator between parts: = · = (theme.sep.dot)
+2. Import =formatCost= from =@oh-my-pi/pi-utils=
+
+** =packages/coding-agent/src/modes/interactive-mode.ts=
+
+1. Import =SubagentTracker= from =../task/subagent-tracker=
+2. In constructor (where eventBus is available), create =SubagentTracker= with onChange callback
+3. onChange callback: call =this.statusLine.setSubagentInfo(this.#subagentTracker.getInfo())= and =this.ui.requestRender()=
+4. In =dispose()=: call =this.#subagentTracker.dispose()=
+5. Store tracker as =#subagentTracker: SubagentTracker=
+
+* Edge Cases
+
+- Status line width is limited — activity text must be truncated. Use =truncateToWidth()= with max ~25 chars for the activity portion
+- Cost of $0.00 — omit cost segment entirely
+- Most active agent has no =currentTool= (idle between tools) — show =lastIntent= or omit activity
+- Multiple agents running but only one active — show the one that has =currentTool= set
+- Pending agents (not yet running) — include pending count separately if >0: =2 running · 1 pending=. Actually, simpler: show total =runningCount + pendingCount= as just the count.
+
+* Acceptance Criteria
+
+- When subtasks are dispatched via Task tool, the status line shows a count badge with cost and activity
+- When all subtasks complete, the indicator disappears
+- =bun check:ts= passes
+- Manual verification: dispatch 2+ subtasks and observe the status bar updates in real-time

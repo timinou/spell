@@ -1,0 +1,1 @@
+Subtasks: 8 launched | 320K tokens | $1.23 | 40K avg/task | 72% cache

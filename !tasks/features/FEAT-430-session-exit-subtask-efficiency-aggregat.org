@@ -1,0 +1,117 @@
+#+TITLE: Session exit subtask efficiency aggregate
+#+STATE: DONE
+#+SESSION_ID: 14b6bd9f49bd2023
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T18-15-05-254Z_14b6bd9f49bd2023.jsonl]]
+#+CUSTOM_ID: FEAT-430-session-exit-subtask-efficiency-aggregat
+#+EFFORT: 2
+#+LAYER: coding-agent
+#+PRIORITY: #B
+#+DEPENDS: FEAT-426-subagent-tracker-centralized-progress-ag
+
+NOTE [2026-04-11]: Session shutdown now prints aggregate subtask usage from SubagentTracker lifetime stats.
+
+
+* Initial Message
+
+bro. now that the Task tool and the todo write tool are well integrated, can you have a thing where I see in the TUI when a subtask is being spun by an agent? And can you see how often subtasks are being launched, and if they are token efficient?
+
+* Goal
+
+When the session exits, append subtask aggregate stats to the existing exit summary line so the user can see at a glance how much of their session was spent on subtasks and whether they were token-efficient.
+
+* Design Decisions
+
+- Add a second line after the existing =Session: 45K in | 12K out | 8K think | 120K cache | $0.42= line
+- Format: =Subtasks: 8 launched · 320K tokens · $1.23 · 40K avg/task · 72% cache=
+- Only show if any subtasks were launched (totalLaunched > 0)
+- Data comes from =SubagentTracker.getLifetimeStats()=
+- Use =chalk.dim()= for the line (same as the existing session summary)
+
+* Files to Modify
+
+** =packages/coding-agent/src/session/token-summary.ts=
+
+1. Add new interface:
+#+begin_src typescript
+export interface SubtaskExitInfo {
+  totalLaunched: number;
+  totalTokens: number;
+  totalCost: number;
+  avgTokensPerSubtask: number;
+  cacheHitRate: number;
+}
+#+end_src
+
+2. Add new function:
+#+begin_src typescript
+export function formatSubtaskExitSummary(info: SubtaskExitInfo): string | null {
+  if (info.totalLaunched === 0) return null;
+  const parts: string[] = [];
+  parts.push(`${info.totalLaunched} launched`);
+  if (info.totalTokens > 0) parts.push(`${formatTokenCount(info.totalTokens)} tokens`);
+  if (info.totalCost > 0) parts.push(`$${info.totalCost.toFixed(2)}`);
+  if (info.avgTokensPerSubtask > 0) parts.push(`${formatTokenCount(info.avgTokensPerSubtask)} avg/task`);
+  if (info.cacheHitRate > 0) parts.push(`${Math.round(info.cacheHitRate * 100)}% cache`);
+  return `Subtasks: ${parts.join(" | ")}`;
+}
+#+end_src
+
+** =packages/coding-agent/src/modes/interactive-mode.ts=
+
+1. In the shutdown/exit section (around line 1530), after the existing session summary:
+2. If =#subagentTracker= has lifetime stats with totalLaunched > 0:
+   - Call =formatSubtaskExitSummary()= with the lifetime stats
+   - Write to =process.stderr= as =chalk.dim(subtaskSummary)=
+3. The tracker must survive until after the exit summary is printed — dispose it after printing
+
+* Implementation Detail
+
+The exit summary is printed in the =shutdown()= method of InteractiveMode (or the cleanup path). The SubagentTracker must still be alive at that point. Ensure dispose happens after the summary.
+
+Current code structure:
+#+begin_src
+// Line ~1530 in interactive-mode.ts
+const stats = this.session.getSessionStats();
+// ... format and print session summary ...
+process.stderr.write(`
+${chalk.dim(summary)}
+`);
+
+// ADD HERE:
+const subtaskStats = this.#subagentTracker?.getLifetimeStats();
+if (subtaskStats && subtaskStats.totalLaunched > 0) {
+  const subtaskSummary = formatSubtaskExitSummary({
+    totalLaunched: subtaskStats.totalLaunched,
+    totalTokens: subtaskStats.totalTokens,
+    totalCost: subtaskStats.totalCost,
+    avgTokensPerSubtask: subtaskStats.avgTokensPerSubtask,
+    cacheHitRate: subtaskStats.cacheHitRate,
+  });
+  if (subtaskSummary) {
+    process.stderr.write(`${chalk.dim(subtaskSummary)}
+`);
+  }
+}
+#+end_src
+
+* Edge Cases
+
+- No subtasks launched in session — no second line printed
+- Subtasks still running at exit (user Ctrl+C) — print stats for what completed so far
+- All subtasks failed — still show stats (tokens were consumed)
+- Very short session with a single subtask — still show if totalLaunched > 0
+- Cost is 0 (e.g., free tier or no cost data) — omit cost part
+
+* Acceptance Criteria
+
+- Session exit prints subtask aggregate line when subtasks were launched
+- Line shows total launched, total tokens, total cost, avg/task, cache rate
+- No extra line when no subtasks were used
+- =bun check:ts= passes
+- Manual verification: run a session that uses Task tool, exit, verify the summary line appears
+
+* Note: Shared File with FEAT-427
+
+Both this item and [[id:FEAT-427-status-line-subtask-indicator-with-cost]] modify =interactive-mode.ts=. FEAT-427 creates the =#subagentTracker= field and its initialization. This item reads =this.#subagentTracker?.getLifetimeStats()= in the shutdown path.
+
+If executing in isolated mode, apply FEAT-427 first. The implementing agent *must* check whether =#subagentTracker= field exists: if it does, use it; if not, create it (same initialization as FEAT-427 specifies).

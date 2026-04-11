@@ -42,7 +42,7 @@ function createPathContext(): SegmentContext {
 		contextPercent: 0,
 		contextWindow: 0,
 		autoCompactEnabled: false,
-		subagentCount: 0,
+		subagentInfo: null,
 		canvasTaskCount: 0,
 		sessionStartTime: Date.now(),
 		git: {

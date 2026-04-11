@@ -1,0 +1,123 @@
+#+TITLE: Inline batch efficiency summary in task tool render
+#+STATE: DONE
+#+SESSION_ID: 14b6bd9f49bd2023
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T18-15-05-254Z_14b6bd9f49bd2023.jsonl]]
+#+CUSTOM_ID: FEAT-429-inline-batch-efficiency-summary-in-task
+#+EFFORT: 2
+#+LAYER: coding-agent
+#+PRIORITY: #B
+#+DEPENDS: 
+
+NOTE [2026-04-11]: Task renderer now appends efficiency summaries for completed multi-task batches.
+
+* Initial Message
+
+bro. now that the Task tool and the todo write tool are well integrated, can you have a thing where I see in the TUI when a subtask is being spun by an agent? And can you see how often subtasks are being launched, and if they are token efficient?
+
+* Goal
+
+After a task tool batch completes, show a compact efficiency summary line below the existing Total line. This tells the user at a glance whether their subtasks are token-efficient.
+
+* Design Decisions
+
+- Append efficiency line after the existing =Total: N succeeded · duration · cost= line in =renderResult()=
+- Format example: =Efficiency: 45K avg/task · 68% cache · 2.3x parallel=
+- Only show when >=2 results (efficiency is meaningless for single task)
+- Only show when there's meaningful data (tokens > 0)
+- Use =theme.fg("dim", ...)= for the efficiency line (secondary information)
+- Data comes from =TaskToolDetails.results[]= and =TaskToolDetails.usage= — already available in renderResult
+
+* Metrics to Display
+
+** Average Tokens Per Subtask
+- =total tokens / number of results=
+- Format: =45K avg/task= using =formatNumber()=
+
+** Cache Hit Rate
+- =sum(result.usage.cacheRead) / sum(result.usage.input + result.usage.cacheRead)= across all results
+- Only show if any results have Usage data
+- Format: =68% cache=
+
+** Parallelism Factor
+- =sum(result.durationMs) / totalDurationMs=
+- Shows how much wall-clock time was saved by parallelism
+- Format: =2.3x parallel= (if >1)
+- If <=1 (sequential or single task), omit this metric
+
+** Cost Per Subtask (if expanded)
+- Only show in expanded mode
+- =totalCost / resultCount=
+- Format: =$0.14 avg=
+
+* Files to Modify
+
+** =packages/coding-agent/src/task/render.ts=
+
+1. In =renderResult()=, after the existing =Total:= summary line (around line 970):
+2. Add a new function =formatEfficiencyLine(results: SingleResult[], totalDurationMs: number, usage: Usage | undefined, theme: Theme, expanded: boolean): string | null=
+3. Call it and append the result if non-null
+4. Import =Usage= type from =@oh-my-pi/pi-ai=
+
+** Implementation of =formatEfficiencyLine=
+
+#+begin_src typescript
+function formatEfficiencyLine(
+  results: SingleResult[],
+  totalDurationMs: number,
+  usage: Usage | undefined,
+  theme: Theme,
+  expanded: boolean,
+): string | null {
+  if (results.length < 2) return null;
+  
+  const totalTokens = results.reduce((sum, r) => sum + r.tokens, 0);
+  if (totalTokens === 0) return null;
+  
+  const parts: string[] = [];
+  
+  // Average tokens per subtask
+  const avgTokens = Math.round(totalTokens / results.length);
+  parts.push(`${formatNumber(avgTokens)} avg/task`);
+  
+  // Cache hit rate (from Usage data)
+  if (usage && (usage.input + usage.cacheRead) > 0) {
+    const cacheRate = usage.cacheRead / (usage.input + usage.cacheRead);
+    parts.push(`${Math.round(cacheRate * 100)}% cache`);
+  }
+  
+  // Parallelism factor
+  if (totalDurationMs > 0) {
+    const sumDuration = results.reduce((sum, r) => sum + r.durationMs, 0);
+    const factor = sumDuration / totalDurationMs;
+    if (factor > 1.05) {
+      parts.push(`${factor.toFixed(1)}x parallel`);
+    }
+  }
+  
+  // Cost per subtask (expanded only)
+  if (expanded && usage?.cost?.total && usage.cost.total > 0) {
+    const avgCost = usage.cost.total / results.length;
+    parts.push(`${formatCost(avgCost)} avg`);
+  }
+  
+  if (parts.length === 0) return null;
+  return `${theme.fg("dim", "Efficiency:")} ${parts.map(p => theme.fg("dim", p)).join(theme.sep.dot)}`;
+}
+#+end_src
+
+* Edge Cases
+
+- Single-task batch — return null, no efficiency line
+- All tasks failed/aborted — still show efficiency (tokens were consumed)
+- Zero tokens (e.g., all aborted before start) — return null
+- Usage data missing on some results — compute cache rate only from results that have it
+- Parallelism factor of exactly 1.0 — omit (no parallelism benefit)
+- Very cheap batches ($0.001) — formatCost handles small amounts
+
+* Acceptance Criteria
+
+- After a multi-task batch completes, an efficiency line appears below the Total summary
+- Efficiency line shows avg tokens/task, cache rate, and parallelism factor
+- Single-task batches do not show the line
+- Expanded mode shows additional cost-per-subtask metric
+- =bun check:ts= passes

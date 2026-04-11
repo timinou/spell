@@ -1,0 +1,82 @@
+#+TITLE: Todo panel inline subtask activity for delegated tasks
+#+STATE: DONE
+#+SESSION_ID: 14b6bd9f49bd2023
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T18-15-05-254Z_14b6bd9f49bd2023.jsonl]]
+#+CUSTOM_ID: FEAT-428-todo-panel-inline-subtask-activity-for-d
+#+EFFORT: 2
+#+LAYER: coding-agent
+#+PRIORITY: #B
+#+DEPENDS: FEAT-426-subagent-tracker-centralized-progress-ag
+
+NOTE [2026-04-11]: Delegated in-progress todos now render live spinner and tool activity with tracker-driven rerenders.
+
+
+* Initial Message
+
+bro. now that the Task tool and the todo write tool are well integrated, can you have a thing where I see in the TUI when a subtask is being spun by an agent? And can you see how often subtasks are being launched, and if they are token efficient?
+
+* Goal
+
+Enrich the todo panel so delegated in-progress tasks show what the subtask is currently doing — spinner + current tool + intent — instead of just the static =[delegated]= label.
+
+* Design Decisions
+
+- Replace the static =[delegated]= label with a live activity indicator for in_progress delegated tasks
+- For completed/failed/aborted delegated tasks, keep the static label (no activity to show)
+- Format: =Task Name ◌ grep: finding references= (spinner + tool + intent)
+- Spinner uses the existing spinner frames from ToolExecutionComponent (80ms animation)
+- Activity comes from =SubagentTracker.getActivityForSession(sessionId)=
+- If no activity available (subtask idle), show =[delegated]=  fallback
+- The SubagentTracker is accessed via the InteractiveMode instance (already storing it for status line)
+
+* Files to Modify
+
+** =packages/coding-agent/src/modes/interactive-mode.ts=
+
+1. Expose =#subagentTracker= to the =#formatTodoLine= method (it's on the same class, so just access =this.#subagentTracker=)
+2. In =#formatTodoLine()=, for =in_progress= status with =isDelegatedTask(todo)=:
+   - Get =activity = this.#subagentTracker?.getActivityForSession(todo.delegation.sessionId)=
+   - If activity has =currentTool=: show =spinner + currentTool: lastIntent= (truncated)
+   - If activity has no currentTool but status is running: show spinner only
+   - If no activity or sessionId is 'pending': show =[delegated]= as fallback
+3. Import a spinner frame provider — the todo list renders at each requestRender call, so use a timestamp-based frame index (=Math.floor(Date.now() / 80) % spinnerFrames.length=)
+
+** Spinner Source
+
+Look up the spinner frames used in ToolExecutionComponent. Reference:
+- =packages/coding-agent/src/modes/components/tool-execution.ts= uses =theme.spinner= or similar
+- Check =packages/tui/= for spinner frame definitions
+- Use the same spinner to maintain visual consistency
+
+* Implementation Details
+
+The todo list already re-renders on each =setTodos()= call and =requestRender()=. The SubagentTracker's onChange callback already calls =requestRender()=. So when a subtask changes tool, the tracker fires onChange → status line update → requestRender → todo panel re-renders with fresh activity data.
+
+However, the todo panel only re-renders when =#renderTodoList()= is explicitly called. Currently it's called from =setTodos()= and =reloadTodos()=. The status line onChange should also trigger a todo re-render.
+
+Update the SubagentTracker onChange callback in InteractiveMode to also call =#renderTodoList()= when there are delegated tasks active.
+
+* Edge Cases
+
+- Delegated task with =sessionId: 'pending'= — show =[delegated · starting...]= or just =[delegated]=
+- Subtask finished but todo not yet updated to completed — activity will return undefined after tracker clears completed agent; show =[delegated]= as fallback
+- Multiple delegated tasks running simultaneously — each gets its own activity from its own sessionId
+- Todo panel in collapsed mode (only 5 tasks visible) — truncation still applies; activity text must fit
+
+* Acceptance Criteria
+
+- Delegated in_progress tasks in todo panel show spinner + current tool activity
+- Activity updates in real-time as the subtask progresses
+- Completed/failed delegated tasks show standard labels (no spinner)
+- =bun check:ts= passes
+- Manual verification: dispatch subtasks with todoRef, observe todo panel shows live activity
+
+* Note: Shared File with FEAT-427
+
+Both this item and [[id:FEAT-427-status-line-subtask-indicator-with-cost]] modify =interactive-mode.ts=. FEAT-427 creates the =#subagentTracker= field and its initialization. This item references =this.#subagentTracker= in =#formatTodoLine()= and adds a =#renderTodoList()= call to the onChange callback.
+
+If executing in isolated mode, apply FEAT-427 first. If executing with full file access, the edits are in non-overlapping regions:
+- FEAT-427 touches: constructor (tracker init), dispose (tracker dispose), field declaration, and adds one import
+- This item touches: =#formatTodoLine()= method body, onChange callback augmentation
+
+The implementing agent *must* check whether FEAT-427 has already been applied: if =#subagentTracker= field exists, use it; if not, create it (same initialization as FEAT-427 specifies) to be idempotent.

@@ -1,5 +1,6 @@
 import type { StatusLinePreset, StatusLineSegmentId, StatusLineSeparatorStyle } from "../../../config/settings-schema";
 import type { AgentSession } from "../../../session/agent-session";
+import type { SubagentInfo } from "../../../task/subagent-tracker";
 import type { StatusLineSegmentOptions, StatusLineSettings } from "../status-line";
 
 export type {
@@ -43,7 +44,7 @@ export interface SegmentContext {
 	contextPercent: number;
 	contextWindow: number;
 	autoCompactEnabled: boolean;
-	subagentCount: number;
+	subagentInfo: SubagentInfo | null;
 	canvasTaskCount: number;
 	sessionStartTime: number;
 	git: {

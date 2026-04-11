@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { formatExitTokenSummary, formatTokenCount } from "@oh-my-pi/pi-coding-agent/session/token-summary";
+import {
+	formatExitTokenSummary,
+	formatSubtaskExitSummary,
+	formatTokenCount,
+} from "@oh-my-pi/pi-coding-agent/session/token-summary";
 
 describe("formatTokenCount", () => {
 	test("formats zero", () => {
@@ -97,5 +101,34 @@ describe("formatExitTokenSummary", () => {
 			cost: 1,
 		});
 		expect(result).toContain("$1.00");
+	});
+});
+
+describe("formatSubtaskExitSummary", () => {
+	test("formats aggregate subtask usage", () => {
+		const result = formatSubtaskExitSummary({
+			totalLaunched: 8,
+			totalTokens: 320_000,
+			totalCost: 1.23,
+			avgTokensPerSubtask: 40_000,
+			cacheHitRate: 0.72,
+		});
+		expect(result).toContain("8 launched");
+		expect(result).toContain("320K tokens");
+		expect(result).toContain("$1.23");
+		expect(result).toContain("40K avg/task");
+		expect(result).toContain("72% cache");
+	});
+
+	test("returns null when no subtasks were launched", () => {
+		expect(
+			formatSubtaskExitSummary({
+				totalLaunched: 0,
+				totalTokens: 0,
+				totalCost: 0,
+				avgTokensPerSubtask: 0,
+				cacheHitRate: 0,
+			}),
+		).toBeNull();
 	});
 });
