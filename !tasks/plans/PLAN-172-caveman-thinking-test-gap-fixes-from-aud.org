@@ -1,0 +1,67 @@
+#+TITLE: Caveman thinking test gap fixes from AUD-051
+#+STATE: DONE
+#+SESSION_ID: 14b6553b97bc977e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-39-00-190Z_14b6553b97bc977e.jsonl]]
+#+CUSTOM_ID: PLAN-172-caveman-thinking-test-gap-fixes-from-aud
+
+NOTE [2026-04-11]: Executed BUG-197. Added the planned caveman regression tests in packages/coding-agent/test/system-prompt-templates.test.ts and verified with the focused test file plus bun check:ts.
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-051-audit-implementation:
+
+- **What**: No regression test covers the `cavemanActive=true` + `cavemanThinking=false` path in the full system prompt render
+  - **Where**: `packages/coding-agent/test/system-prompt-templates.test.ts`, new caveman prompt tests near the added block after the main `describe("system Handlebars prompt templates")`
+  - **Why**: The implementation only tests the fully-on case and a fully-off case. If future template logic accidentally keys the `<thinking-mode>` block off `cavemanActive` instead of `cavemanThinking`, the current suite would miss it and reintroduce the original prompt-positioning bug in one valid configuration.
+  - **Effort**: trivial
+
+- **What**: The audit/manual verification proved placement and presence, but not that the final appended caveman prompt cannot still reintroduce thinking instructions through composition changes
+  - **Where**: `packages/coding-agent/test/system-prompt-templates.test.ts`, around the new `"caveman template does not contain thinking instructions"` test
+  - **Why**: The file-level test for `caveman.md` is useful, but it is not an end-to-end assertion over the final composed prompt path that originally caused the bug. If prompt assembly changes later, a composition-level regression could slip through even while the isolated template tests still pass.
+  - **Effort**: small
+
+* Context
+
+AUD-051 identified two test gaps after PLAN-169 (caveman thinking prompt positioning fix):
+1. No test for =cavemanActive=true= + =cavemanThinking=false= — template could regress to
+   keying off the wrong flag
+2. No composition-level test exercises =buildSystemPrompt= — isolated template tests miss
+   prompt assembly regressions
+
+Single-item fix: add 3 tests to =system-prompt-templates.test.ts= (1 template flag isolation,
+2 composition-level via =buildSystemPrompt=).
+
+Key decisions:
+- All changes in one file: =packages/coding-agent/test/system-prompt-templates.test.ts=
+- Template test goes inside existing =describe("system Handlebars prompt templates")=
+- Composition tests go in new =describe("caveman prompt composition")= block
+- Uses =Settings.isolated()= and =buildSystemPrompt= with =contextFiles: []= / =skills: []= / =rules: []= for test isolation
+- No production code changes
+
+* Verification
+
+#+begin_src sh
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+bun check:ts
+#+end_src
+
+Expect 16 total tests (13 existing + 3 new), 0 failures.
+
+* Execution Manifest
+
+| Wave | Item | Effort | Depends |
+|------+------+--------+---------|
+|    1 | [[id:BUG-197-caveman-thinking-test-gaps-from-aud-051]] | 20m | — |
+
+Single item, no dependencies.
+
+
+** Completion [2026-04-11]
+*** Verification
+- `bun test packages/coding-agent/test/system-prompt-templates.test.ts` -> passed, 16 tests, 0 failures.
+- `bun check:ts` -> passed. Biome reported one pre-existing informational `lint/style/useTemplate` finding in `packages/coding-agent/src/session/artifacts.ts:99`; no failure for this plan.
+*** Artifacts
+- None.
+*** Deviations
+- None.

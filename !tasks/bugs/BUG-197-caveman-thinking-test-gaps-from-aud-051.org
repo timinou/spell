@@ -1,0 +1,160 @@
+#+TITLE: Caveman thinking test gaps from AUD-051
+#+STATE: DONE
+#+SESSION_ID: 14b6553b97bc977e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-39-00-190Z_14b6553b97bc977e.jsonl]]
+#+CUSTOM_ID: BUG-197-caveman-thinking-test-gaps-from-aud-051
+#+EFFORT: 20m
+#+PRIORITY: #C
+#+LAYER: coding-agent
+
+NOTE [2026-04-11]: Added one template-level cavemanThinking=false regression test plus two buildSystemPrompt composition tests in packages/coding-agent/test/system-prompt-templates.test.ts. Verified with bun test packages/coding-agent/test/system-prompt-templates.test.ts and bun check:ts.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-051-audit-implementation:
+
+- **What**: No regression test covers the `cavemanActive=true` + `cavemanThinking=false` path in the full system prompt render
+  - **Where**: `packages/coding-agent/test/system-prompt-templates.test.ts`, new caveman prompt tests near the added block after the main `describe("system Handlebars prompt templates")`
+  - **Why**: The implementation only tests the fully-on case and a fully-off case. If future template logic accidentally keys the `<thinking-mode>` block off `cavemanActive` instead of `cavemanThinking`, the current suite would miss it and reintroduce the original prompt-positioning bug in one valid configuration.
+  - **Effort**: trivial
+
+- **What**: The audit/manual verification proved placement and presence, but not that the final appended caveman prompt cannot still reintroduce thinking instructions through composition changes
+  - **Where**: `packages/coding-agent/test/system-prompt-templates.test.ts`, around the new `"caveman template does not contain thinking instructions"` test
+  - **Why**: The file-level test for `caveman.md` is useful, but it is not an end-to-end assertion over the final composed prompt path that originally caused the bug. If prompt assembly changes later, a composition-level regression could slip through even while the isolated template tests still pass.
+  - **Effort**: small
+
+* Problem
+
+Two test gaps identified in AUD-051 after PLAN-169 (caveman thinking prompt positioning fix):
+
+1. No test covers =cavemanActive=true= + =cavemanThinking=false= — if future template logic
+   accidentally keys =<thinking-mode>= off =cavemanActive= instead of =cavemanThinking=, the
+   suite wouldn't catch it.
+
+2. No composition-level test exercises the real =buildSystemPrompt= path. The existing tests
+   render individual templates in isolation. If prompt assembly in =system-prompt.ts= changes
+   (e.g., =appendPrompt= reintroduces thinking instructions), the isolated template tests
+   would still pass.
+
+* Implementation
+
+All changes in =packages/coding-agent/test/system-prompt-templates.test.ts=.
+
+** Fix 1: Template-level flag isolation test
+
+Add inside the existing =describe("system Handlebars prompt templates")= block, after the
+existing caveman tests (after the test ="caveman template does not contain thinking
+instructions"= at ~line 229):
+
+#+begin_src typescript
+test("system-prompt omits thinking-mode when cavemanActive but cavemanThinking is false", async () => {
+    const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+    const template = await Bun.file(templatePath).text();
+
+    const rendered = renderPromptTemplate(template, {
+        ...baseRenderContext,
+        cavemanActive: true,
+        cavemanThinking: false,
+    });
+
+    expect(rendered).not.toContain("<thinking-mode>");
+});
+#+end_src
+
+This verifies the template keys on =cavemanThinking=, not =cavemanActive=. The scenario is
+real: =cavemanActive=true= with =thinkingMode="normal"= produces =cavemanThinking=false=
+(see =system-prompt.ts= line 513: =cavemanThinking: cavemanThinkingMode === "caveman" && cavemanActive=).
+
+** Fix 2: Composition-level regression test
+
+Add a new =describe("caveman prompt composition")= block after the existing
+=describe("system Handlebars prompt templates")= block (after its closing =});= at ~line 242):
+
+#+begin_src typescript
+import { Settings } from "@oh-my-pi/pi-coding-agent/core/settings-manager";
+import { buildSystemPrompt } from "@oh-my-pi/pi-coding-agent/system-prompt";
+#+end_src
+
+These imports go at the top of the file alongside existing imports.
+
+#+begin_src typescript
+describe("caveman prompt composition", () => {
+    test("buildSystemPrompt places thinking instructions in stable block only", async () => {
+        const blocks = await buildSystemPrompt({
+            settings: Settings.isolated({
+                "caveman.defaultLevel": "full",
+                "caveman.thinkingMode": "caveman",
+            }),
+            contextFiles: [],
+            skills: [],
+            rules: [],
+        });
+
+        const stableBlock = blocks.find(b => b.stable);
+        const dynamicBlock = blocks.find(b => !b.stable);
+
+        expect(stableBlock).toBeDefined();
+        expect(stableBlock!.text).toContain("<thinking-mode>");
+        expect(stableBlock!.text).toContain("PhD-caveman");
+        expect(stableBlock!.text).toContain("EVERY thinking block MUST");
+
+        if (dynamicBlock) {
+            expect(dynamicBlock.text).not.toContain("thinking-mode");
+        }
+    });
+
+    test("buildSystemPrompt omits thinking instructions when thinkingMode is normal", async () => {
+        const blocks = await buildSystemPrompt({
+            settings: Settings.isolated({
+                "caveman.defaultLevel": "full",
+                "caveman.thinkingMode": "normal",
+            }),
+            contextFiles: [],
+            skills: [],
+            rules: [],
+        });
+
+        const allText = blocks.map(b => b.text).join("");
+        expect(allText).not.toContain("<thinking-mode>");
+    });
+});
+#+end_src
+
+** Existing patterns to follow
+
+- =Settings.isolated()= is the standard test helper for creating settings with specific
+  overrides — used in =test/tools/index.test.ts=, =test/tools/python.test.ts=, etc.
+- =buildSystemPrompt= is exported from =packages/coding-agent/src/system-prompt.ts=
+- =SystemPromptBlock= has =text: string= and =stable: boolean= fields
+- =buildSystemPrompt= accepts =contextFiles: []= / =skills: []= / =rules: []= to skip
+  filesystem discovery — important for test isolation
+
+** Import verification
+
+Before adding imports, check the existing imports at the top of the file. Currently it imports:
+- =bun:test= (describe, expect, test)
+- =node:path=
+- =@oh-my-pi/pi-coding-agent/config/prompt-templates= (renderPromptTemplate, TemplateContext)
+- =handlebars=
+
+Add these two new imports:
+- =import { Settings } from "@oh-my-pi/pi-coding-agent/core/settings-manager"=
+- =import { buildSystemPrompt } from "@oh-my-pi/pi-coding-agent/system-prompt"=
+
+* Edge Cases
+
+- =buildSystemPrompt= with no =settings= defaults caveman to off (=settings?.get("caveman.defaultLevel") ?? "off"=)
+  — this is the expected behavior, not a bug
+- The composition test must pass =contextFiles: []= to skip filesystem discovery, otherwise
+  it will try to read project files and may be flaky or slow
+- =Settings.isolated()= creates a minimal settings object with no filesystem backing — safe
+  for unit tests
+
+* Verification
+
+#+begin_src sh
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+bun check:ts
+#+end_src
+
+All existing tests must continue to pass. New tests: 3 additional (1 template-level, 2 composition-level).
