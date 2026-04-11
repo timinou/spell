@@ -1,0 +1,243 @@
+#+TITLE: N-API and coding-agent integration for semantic search
+#+STATE: DONE
+#+SESSION_ID: 14b6d44c4dd3ff67
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T19-54-09-591Z_14b6d44c4dd3ff67.jsonl]]
+#+CUSTOM_ID: FEAT-452-n-api-and-coding-agent-integration-for-s
+#+EFFORT: 5h
+#+PRIORITY: A
+#+LAYER: integration
+#+DEPENDS: FEAT-451-hybrid-graphvector-search-in-pi-code-gra
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Initial Message
+
+kk look online what code-specific vector embeddings do and how that could help with the `code search` task
+
+* Goal
+Wire the hybrid graph+vector search through =pi-natives= N-API bindings and the =coding-agent=
+package so the agent can use semantic code search via the =code search= subcommand.
+This includes the opt-in flow for semantic indexing (=--semantic= flag), model download
+with progress reporting, and graceful degradation when vectors aren't built.
+
+* Background
+=crates/pi-natives/src/code_graph.rs= exposes =CodeGraphOptions= as the N-API interface.
+The =command= field dispatches to graph operations (=search=, =context=, =impact=, etc.).
+The =index= command rebuilds the graph and returns status output.
+
+On the TypeScript side, the =code= tool in the coding-agent dispatches subcommands through
+=executeCodeGraph()= from the =pi-natives= package.
+
+* Design Decisions
+- =CodeGraphOptions= gains a new optional field: =semantic: Option<bool>=
+- When =command == "index"= and =semantic == Some(true)=, build both graph and vectors
+- When =command == "search"= and vectors are available, hybrid search is automatic
+- Model download progress is printed to the result output (no callback needed — the operation
+  is async via =task::Async= already)
+- =pi-natives= Cargo.toml enables the =semantic= feature of =pi-code-graph= and adds
+  =pi-code-vectors= as a dependency
+- The coding-agent's tool description for =code search= is updated to mention semantic search capability
+- A new =code= subcommand variant =semantic_status= (or include in =status=) reports whether
+  vectors are built and what model is in use
+
+* Files to modify
+** =crates/pi-natives/Cargo.toml=
+#+begin_src toml
+[dependencies]
+pi-code-graph = { path = "../pi-code-graph", features = ["semantic"] }
+pi-code-vectors = { path = "../pi-code-vectors" }
+#+end_src
+
+** =crates/pi-natives/src/code_graph.rs=
+*** Extend CodeGraphOptions
+#+begin_src rust
+#[napi(object)]
+pub struct CodeGraphOptions<'env> {
+    pub command:    String,
+    pub root:       Option<String>,
+    pub file:       Option<String>,
+    pub symbol:     Option<String>,
+    pub query:      Option<String>,
+    pub depth:      Option<u32>,
+    pub limit:      Option<u32>,
+    pub semantic:   Option<bool>,     // NEW
+    pub signal:     Option<Unknown<'env>>,
+    #[napi(js_name = "timeoutMs")]
+    pub timeout_ms: Option<u32>,
+}
+#+end_src
+
+*** Cached EmbeddingEngine for query embedding
+The search path needs to embed the query string into a vector. Model loading takes 1-2s,
+so we cache the engine in a =OnceLock= at module level:
+#+begin_src rust
+use std::sync::OnceLock;
+use pi_code_vectors::EmbeddingEngine;
+
+static EMBEDDING_ENGINE: OnceLock<EmbeddingEngine> = OnceLock::new();
+
+fn get_or_init_engine() -> napi::Result<&'static EmbeddingEngine> {
+    EMBEDDING_ENGINE.get_or_try_init(|| {
+        EmbeddingEngine::new(false)
+            .map_err(|e| napi::Error::from_reason(format!("Failed to load embedding model: {e}")))
+    })
+}
+#+end_src
+
+Note: =EmbeddingEngine= must be =Send + Sync= for this. fastembed's =TextEmbedding= is
+internally thread-safe (uses =ort::Session= which is =Send + Sync=). Verify this during
+implementation — if not, wrap in =Mutex=.
+
+*** Modify run_code_graph() dispatch
+For the ="index"= command:
+#+begin_src rust
+"index" => {
+    let (graph, fingerprint_info, rebuilt) = ensure_graph(...)?;
+    let mut sections = vec![format_status(...)];
+
+    if options.semantic.unwrap_or(false) {
+        // Build vector index
+        let engine = pi_code_vectors::EmbeddingEngine::new(true)?; // show download progress
+        let chunks = pi_code_vectors::extract_chunks(graph.persisted(), 30)?;
+        let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+        let vectors = engine.embed_batch(&texts, None)?;
+        let entries: Vec<_> = chunks.iter().zip(vectors).map(|(c, v)| {
+            pi_code_vectors::VectorEntry { node_index: c.node_index, vector: v }
+        }).collect();
+        let vector_index = pi_code_vectors::VectorIndex::new(entries, 768);
+        // Persist vectors
+        let persisted_vectors = vector_index.to_persisted(
+            "jina-embeddings-v2-base-code",
+            compute_fingerprint_hash(&fingerprint),
+        );
+        save_vector_cache(&cache, &persisted_vectors)?;
+        sections.push(format!("Semantic: {} vectors indexed", vector_index.len()));
+    }
+
+    Ok(CodeGraphResult { output: sections.join("
+"), ... })
+}
+#+end_src
+
+For the ="search"= command:
+#+begin_src rust
+"search" => {
+    let (graph, fingerprint_info, _) = ensure_graph(...)?;
+    let fingerprint_hash = compute_fingerprint_hash(&fingerprint_info);
+
+    // Attempt to load vectors and embed query
+    let (code_graph, query_vector) = match load_vector_cache(&cache, fingerprint_hash) {
+        Some(vectors) => {
+            // Vectors available — embed the query
+            match get_or_init_engine() {
+                Ok(engine) => match engine.embed_query(query) {
+                    Ok(qv) => (CodeGraph::with_vectors(graph, vectors), Some(qv)),
+                    Err(_) => (CodeGraph::new(graph), None), // degrade gracefully
+                },
+                Err(_) => (CodeGraph::new(graph), None), // model not available
+            }
+        }
+        None => (CodeGraph::new(graph), None), // no vectors cached
+    };
+
+    let hits = code_graph.search(query, query_vector.as_deref(), limit);
+    Ok(CodeGraphResult { output: format_search(&hits), ... })
+}
+#+end_src
+
+This ensures:
+1. When vectors exist AND the model is loaded: full hybrid search
+2. When vectors exist but model fails to load: BM25 fallback (degrade, don't crash)
+3. When no vectors: BM25 only (zero change from today)
+
+*** Vector cache helpers
+#+begin_src rust
+fn compute_fingerprint_hash(fingerprint: &GraphFingerprint) -> u64 {
+    // Hash the fingerprint deterministically (e.g., hash of serialized bytes)
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    // Hash root + git_head + sorted file entries
+    fingerprint.root.hash(&mut hasher);
+    fingerprint.git_head.hash(&mut hasher);
+    for (path, fp) in &fingerprint.files {
+        path.hash(&mut hasher);
+        fp.size.hash(&mut hasher);
+        fp.modified_at_ms.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn save_vector_cache(cache: &CacheStore, vectors: &PersistedVectorIndex) -> napi::Result<()> {
+    let path = cache.directory().join("workspace-vectors.bin");
+    let file = fs::File::create(path)?;
+    bincode::serialize_into(BufWriter::new(file), vectors)
+        .map_err(|e| napi::Error::from_reason(e.to_string()))
+}
+
+fn load_vector_cache(cache: &CacheStore, expected_hash: u64) -> Option<VectorIndex> {
+    let path = cache.directory().join("workspace-vectors.bin");
+    let file = fs::File::open(path).ok()?;
+    let persisted: PersistedVectorIndex = bincode::deserialize_from(BufReader::new(file)).ok()?;
+    if persisted.graph_fingerprint_hash != expected_hash {
+        return None; // stale vectors
+    }
+    Some(VectorIndex::new(persisted.entries, persisted.dimensions))
+}
+#+end_src
+
+** =packages/coding-agent/= (TypeScript side)
+The TypeScript code that calls =executeCodeGraph= needs to pass the =semantic= option.
+
+*** Locate the tool dispatch code
+The =code= tool dispatches through the Emacs daemon and native bindings. The relevant path is:
+- The code tool's =search= and =index= subcommands in the coding-agent
+- Find where =executeCodeGraph= is called with =command: "search"= and =command: "index"=
+- Add =semantic: true/false= based on user request or configuration
+
+*** Tool prompt update
+Update the =code search= description to mention that semantic search is available when the index
+includes vectors. The agent should know it can search by intent, not just by exact symbol names.
+
+Current prompt is embedded in the code tool system via Emacs MCP — the search subcommand description
+should note: "When semantic index is built (via =code index --semantic=), search understands
+natural language queries and finds code by intent, not just by name."
+
+*** Settings integration
+For the initial implementation, use the simpler approach: the =semantic= flag is passed only when
+the user explicitly runs =code index= with the flag, and search auto-detects vectors based on
+cache presence. No persistent setting needed initially. A followup can add =providers.codeGraph.semantic=.
+* Edge Cases
+- =semantic: true= but model download fails (network error) -> return clear error in output,
+  graph is still built successfully
+- Vector cache exists but graph was rebuilt -> fingerprint mismatch, vectors discarded,
+  search falls back to BM25
+- =semantic= field not provided (undefined in JS) -> defaults to false (backward compatible)
+- Very large codebase (>50K symbols) -> embedding takes minutes, ensure the async task
+  doesn't time out (=timeout_ms= should be respected, with progress output)
+- ort/ONNX shared library not found at runtime -> meaningful error message, not a crash
+
+* Testing
+** Integration test: index with --semantic flag
+- Call =executeCodeGraph= with =command: "index", semantic: true= on a test fixture
+- Verify output mentions vector count
+- Verify =.spell/graph/workspace-vectors.bin= is created
+
+** Integration test: search uses hybrid when vectors exist
+- Build graph + vectors on test fixture
+- Search for a natural-language query
+- Verify results include semantically relevant hits (not just lexical matches)
+
+** Integration test: search falls back without vectors
+- Build graph only (no =--semantic=)
+- Search returns same results as before (BM25 only)
+
+** Test: stale vector cache is discarded
+- Build graph + vectors
+- Modify a source file, rebuild graph only
+- Vectors should be discarded (fingerprint mismatch)
+- Search falls back to BM25
+
+* Verification
+- =bun check:rs= passes (cargo fmt + clippy for pi-natives with new dependency)
+- =cargo test -p pi-natives= passes
+- Manual test: run =code index= with semantic flag on the spell repo itself,
+  then =code search= with a natural-language query, verify results

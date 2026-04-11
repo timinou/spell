@@ -1,0 +1,252 @@
+#+TITLE: pi-code-vectors crate embedding and vector index foundation
+#+STATE: DONE
+#+SESSION_ID: 14b6d44c4dd3ff67
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T19-54-09-591Z_14b6d44c4dd3ff67.jsonl]]
+#+CUSTOM_ID: PROJ-030-pi-code-vectors-crate-embedding-and-vect
+#+EFFORT: 8h
+#+PRIORITY: A
+#+LAYER: infra
+
+* Initial Message
+
+kk look online what code-specific vector embeddings do and how that could help with the `code search` task
+
+* Goal
+Create the =crates/pi-code-vectors/= Rust crate that provides local embedding model management,
+AST-aware code chunk contextualization, vector index persistence, and cosine similarity search.
+This is the foundation for hybrid graph+vector search in Spell's code tool.
+
+* Background
+The =code search= subcommand in Spell currently uses BM25 over symbol names/file paths (=pi-code-graph/src/search.rs=).
+This only matches lexical tokens — it cannot find code by intent, natural language, or semantic similarity.
+Vector embeddings of code chunks enable the agent to query "find rate limiting logic" and match =throttle()=.
+
+The industry consensus (April 2026) is that hybrid search (BM25 + vector + graph structure)
+outperforms either approach alone. Sourcegraph, Cursor, and Augment Code all converge on this pattern.
+Pure vector RAG for code underperforms structural retrieval — the structural side is already strong in Spell,
+so vectors supplement rather than replace.
+
+* Design Decisions
+- Model: =jina-embeddings-v2-base-code= via =fastembed= crate (137M params, 768 dims, 8K context, Apache 2.0)
+- This model is already in fastembed-rs's supported model list (=EmbeddingModel::JinaEmbeddingsV2BaseCode=)
+- =fastembed= uses =ort= (ONNX Runtime) for CPU inference, =tokenizers= crate for encoding
+- Model downloads from HuggingFace on first use (~500MB), cached in =fastembed='s default cache dir
+- Vector dimensions: 768 (fixed for jina-code-v2)
+- Content for embedding: contextualized chunks (see Chunking section)
+- Storage: bincode-serialized file alongside graph cache
+- Search: brute-force cosine similarity (sufficient for <50K symbols)
+
+* Crate Structure
+#+begin_example
+crates/pi-code-vectors/
+  Cargo.toml
+  src/
+    lib.rs          -- public API re-exports
+    embedding.rs    -- fastembed wrapper, model lifecycle
+    chunking.rs     -- contextualized text construction from graph + source files
+    index.rs        -- VectorIndex type, cosine search, persistence
+    error.rs        -- crate error types
+#+end_example
+
+* Dependencies (Cargo.toml)
+#+begin_src toml
+[package]
+name = "pi-code-vectors"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pi-code-graph = { path = "../pi-code-graph" }
+fastembed = "5"
+bincode = "1.3"
+serde = { version = "1", features = ["derive"] }
+#+end_src
+
+* Module: embedding.rs
+** Types and API
+#+begin_src rust
+use fastembed::{TextEmbedding, InitOptions, EmbeddingModel};
+
+pub struct EmbeddingEngine {
+    model: TextEmbedding,
+}
+
+impl EmbeddingEngine {
+    /// Initialize with jina-code-v2. Downloads model on first call.
+    /// `show_progress` controls HuggingFace download progress bars.
+    pub fn new(show_progress: bool) -> Result<Self>;
+
+    /// Check if the model is already cached locally (no download needed).
+    pub fn is_model_cached() -> bool;
+
+    /// Embed a batch of documents. Returns Vec<Vec<f32>> of 768-dim vectors.
+    /// fastembed handles tokenization and batching internally.
+    pub fn embed_batch(&self, documents: &[&str], batch_size: Option<usize>) -> Result<Vec<Vec<f32>>>;
+
+    /// Embed a single query string.
+    pub fn embed_query(&self, query: &str) -> Result<Vec<f32>>;
+}
+#+end_src
+
+** Key implementation notes
+- Use =EmbeddingModel::JinaEmbeddingsV2BaseCode= from fastembed
+- fastembed's =InitOptions= supports =with_show_download_progress(bool)=
+- The model is synchronous (no tokio dependency needed)
+- Batch size default: 256 (fastembed default), tunable
+- Error handling: wrap fastembed errors into crate's =Error= type
+
+* Module: chunking.rs
+** Purpose
+Construct "contextualized text" for each symbol in the graph by reading source files
+and extracting the relevant code body with scope metadata prepended.
+
+** Contextualized text format
+For each =SymbolNode=, the chunk looks like:
+#+begin_example
+# src/tools/render-utils.ts
+# Function: replaceTabs
+export function replaceTabs(text: string, tabWidth?: number): string {
+    const width = tabWidth ?? 4;
+    return text.replace(/	/g, " ".repeat(width));
+}
+#+end_example
+
+** API
+#+begin_src rust
+use pi_code_graph::model::{PersistedCodeGraph, SymbolNode};
+use std::path::Path;
+
+pub struct ChunkResult {
+    pub node_index: usize,
+    pub text: String,
+}
+
+/// Extract contextualized chunks for all symbols in the graph.
+/// Reads source files from disk using the graph's root + symbol file paths.
+/// Returns one chunk per symbol that has extractable code content.
+///
+/// `max_body_lines` controls how many lines of function body to include (default: 30).
+pub fn extract_chunks(
+    graph: &PersistedCodeGraph,
+    max_body_lines: usize,
+) -> Result<Vec<ChunkResult>>;
+#+end_src
+
+** Implementation strategy
+1. Group symbols by file path (to read each file only once)
+2. For each file, read source content
+3. For each symbol in that file, use =symbol.line= to locate the start position
+4. Extract from the symbol's start line up to the next symbol's start line or =max_body_lines=, whichever is less
+5. Prepend =# {relative_path}
+# {kind}: {qualified_name}
+= as context header
+6. Skip symbols with empty/trivial bodies (e.g., type aliases with no body)
+
+** Edge cases
+- File no longer exists on disk (deleted after graph build) -> skip, log warning
+- Symbol line is beyond file length -> skip
+- Binary or non-UTF-8 files -> skip gracefully
+- Very large function bodies -> truncate to =max_body_lines= (default 30)
+
+* Module: index.rs
+** VectorIndex type
+#+begin_src rust
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VectorEntry {
+    pub node_index: usize,
+    pub vector: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedVectorIndex {
+    pub model_name: String,
+    pub dimensions: usize,
+    pub entries: Vec<VectorEntry>,
+    pub graph_fingerprint_hash: u64,
+}
+
+pub struct VectorIndex {
+    entries: Vec<VectorEntry>,
+    dimensions: usize,
+}
+#+end_src
+
+** Search API
+#+begin_src rust
+pub struct VectorSearchHit {
+    pub node_index: usize,
+    pub score: f32,   // cosine similarity, range [-1, 1]
+}
+
+impl VectorIndex {
+    /// Build from embedding results.
+    pub fn new(entries: Vec<VectorEntry>, dimensions: usize) -> Self;
+
+    /// Cosine similarity search. Returns top-k hits sorted by descending score.
+    pub fn search(&self, query_vector: &[f32], limit: usize) -> Vec<VectorSearchHit>;
+
+    /// Number of indexed vectors.
+    pub fn len(&self) -> usize;
+}
+#+end_src
+
+** Cosine similarity implementation
+- Brute-force: iterate all entries, compute =dot(a, b) / (||a|| * ||b||)=
+- Pre-normalize vectors on insert for O(n*d) dot-product search
+- For 20K symbols x 768 dims, this is ~60MB and sub-10ms per query
+
+** Persistence
+- Serialize via bincode to =.spell/graph/{cache_name}-vectors.bin=
+- Include =graph_fingerprint_hash= (hash of the =GraphFingerprint=) to detect staleness
+- On load, if hash doesn't match current graph, discard and rebuild
+- Same =CacheStore= directory as graph cache
+
+* Module: error.rs
+#+begin_src rust
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("Embedding model error: {0}")]
+    Embedding(String),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Serialization error: {0}")]
+    Serialization(#[from] bincode::Error),
+    #[error("Chunking error: {0}")]
+    Chunking(String),
+}
+#+end_src
+Note: add =thiserror= to dependencies.
+
+* Testing
+** Unit tests (in each module)
+*** embedding.rs tests
+- Test =is_model_cached()= returns false before any download
+- Test =embed_batch= with small inputs produces 768-dim vectors
+- Test =embed_query= produces a single 768-dim vector
+- Test that similar code snippets have higher cosine similarity than dissimilar ones
+  (e.g., two sort implementations should be closer than a sort and an HTTP handler)
+  Note: this test requires model download, gate behind =#[ignore]= or a feature flag
+
+*** chunking.rs tests
+- Test contextualized text format for a TypeScript function symbol
+- Test that file-not-found is handled gracefully (skip, no panic)
+- Test max_body_lines truncation
+- Test multiple symbols in the same file (file read once)
+- Test symbol at end of file (no next symbol boundary)
+
+*** index.rs tests
+- Test VectorIndex::search returns correct top-k by cosine similarity
+- Test with pre-computed vectors (no model dependency)
+- Test persistence round-trip (serialize -> deserialize -> same results)
+- Test fingerprint hash mismatch triggers cache invalidation
+- Test empty index returns empty results
+- Test normalized vectors produce correct similarity scores
+
+* Verification
+- =cargo test -p pi-code-vectors= passes (unit tests, no model download needed)
+- =cargo test -p pi-code-vectors --ignored= passes (integration tests requiring model download)
+- =cargo check -p pi-code-vectors= compiles cleanly
+- =cargo clippy -p pi-code-vectors= has no warnings

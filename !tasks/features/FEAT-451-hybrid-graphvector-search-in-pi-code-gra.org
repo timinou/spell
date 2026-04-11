@@ -1,0 +1,191 @@
+#+TITLE: Hybrid graphvector search in pi-code-graph
+#+STATE: DONE
+#+SESSION_ID: 14b6d44c4dd3ff67
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T19-54-09-591Z_14b6d44c4dd3ff67.jsonl]]
+#+CUSTOM_ID: FEAT-451-hybrid-graphvector-search-in-pi-code-gra
+#+EFFORT: 6h
+#+PRIORITY: A
+#+LAYER: infra
+#+DEPENDS: PROJ-030-pi-code-vectors-crate-embedding-and-vect
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+* Initial Message
+
+kk look online what code-specific vector embeddings do and how that could help with the `code search` task
+
+* Goal
+Integrate vector search from =pi-code-vectors= into =pi-code-graph='s search API.
+When a vector index is available, =code search= uses hybrid BM25 + cosine similarity
+with Reciprocal Rank Fusion (RRF) and graph-aware re-ranking.
+When vectors are unavailable, search falls back to BM25-only (no regression).
+
+* Background
+=pi-code-graph/src/search.rs= currently implements BM25 over symbol qualified names and file paths.
+The =SearchIndex= is built in-memory from =PersistedCodeGraph= when =CodeGraph::new()= is called.
+=pi-code-graph/src/query.rs= has =GraphSearchMatch= as the output type for the =search= command.
+
+The graph has rich structural edges: =Defines=, =Imports=, =Calls=, =References=, =Inherits=,
+=Renders=, =TypeImports=, =TypeParameterOf=. These can boost search results — if a top vector
+hit calls another function, that callee is likely relevant too.
+
+* Design Decisions
+- Hybrid scoring uses Reciprocal Rank Fusion (RRF): =score(d) = Σ 1/(k + rank_i(d))= with k=60
+- RRF is the industry standard for merging heterogeneous rankers — simple, parameter-light, proven
+- Graph re-ranking: after RRF, boost nodes that are direct neighbors (via =Calls=, =References=,
+  =Imports=) of the top-5 results. Boost factor: 0.3 * max_rrf_score for direct callers/callees,
+  0.1 * max_rrf_score for same-file siblings
+- =pi-code-graph= gains an *optional* dependency on =pi-code-vectors= behind a cargo feature flag =semantic=
+- =CodeGraph= struct gains an optional =VectorIndex= field
+- The public API remains backward-compatible — =CodeGraph::new(persisted)= still works without vectors
+
+* Files to modify
+** =crates/pi-code-graph/Cargo.toml=
+Add optional dependency:
+#+begin_src toml
+[features]
+default = []
+semantic = ["pi-code-vectors"]
+
+[dependencies]
+pi-code-vectors = { path = "../pi-code-vectors", optional = true }
+#+end_src
+
+** =crates/pi-code-graph/src/model.rs=
+Extend =CodeGraph= to optionally hold a vector index:
+#+begin_src rust
+#[derive(Debug, Clone)]
+pub struct CodeGraph {
+    persisted:    PersistedCodeGraph,
+    search_index: SearchIndex,
+    #[cfg(feature = "semantic")]
+    vector_index: Option<pi_code_vectors::VectorIndex>,
+}
+
+impl CodeGraph {
+    // Existing new() unchanged (no vectors)
+    pub fn new(persisted: PersistedCodeGraph) -> Self { ... }
+
+    // New: construct with vectors
+    #[cfg(feature = "semantic")]
+    pub fn with_vectors(persisted: PersistedCodeGraph, vectors: pi_code_vectors::VectorIndex) -> Self { ... }
+
+    #[cfg(feature = "semantic")]
+    pub fn vector_index(&self) -> Option<&pi_code_vectors::VectorIndex> { ... }
+}
+#+end_src
+
+** =crates/pi-code-graph/src/search.rs= (or new =hybrid.rs= module)
+Add hybrid search logic.
+
+*** Key design: query embedding is the caller's responsibility
+=pi-code-graph= receives a pre-computed query vector from the caller (pi-natives).
+This keeps the ML dependency out of pi-code-graph's runtime path — it only needs
+=pi-code-vectors= for the =VectorIndex= and =VectorSearchHit= types.
+
+*** Updated search API (in query.rs)
+#+begin_src rust
+impl CodeGraph {
+    /// Search the graph. When `query_vector` is provided and a vector index is
+    /// loaded, uses hybrid BM25 + cosine + graph re-ranking. Otherwise BM25-only.
+    pub fn search(
+        &self,
+        query: &str,
+        query_vector: Option<&[f32]>,
+        limit: usize,
+    ) -> Vec<GraphSearchMatch> {
+        #[cfg(feature = "semantic")]
+        if let (Some(vector_index), Some(qv)) = (&self.vector_index, query_vector) {
+            return self.hybrid_search(query, qv, vector_index, limit);
+        }
+        // Fallback: BM25 only (existing behavior, ignores query_vector)
+        self.bm25_search(query, limit)
+    }
+}
+#+end_src
+
+*Important*: The existing =search= callsite in =query.rs= currently calls
+=self.search_index().search(query, limit)=. The refactor changes the public signature
+to accept =query_vector=. All existing callers that don't have a vector pass =None=.
+
+*** New types
+#+begin_src rust
+/// A search hit from hybrid BM25 + vector search
+#[derive(Debug, Clone)]
+pub struct HybridSearchHit {
+    pub node_index: usize,
+    pub score:      f32,
+    pub label:      String,
+    pub path:       PathBuf,
+    pub bm25_rank:  Option<usize>,
+    pub vector_rank: Option<usize>,
+}
+#+end_src
+
+*** RRF fusion function
+#+begin_src rust
+const RRF_K: f32 = 60.0;
+
+fn reciprocal_rank_fusion(
+    bm25_hits: &[SearchHit],
+    vector_hits: &[VectorSearchHit],
+    limit: usize,
+) -> Vec<HybridSearchHit> {
+    // 1. Build a map: node_index -> (bm25_rank, vector_rank)
+    // 2. For each unique node_index, compute RRF score:
+    //    score = 1/(RRF_K + bm25_rank) + 1/(RRF_K + vector_rank)
+    //    where rank is None -> contribution is 0
+    // 3. Sort by score descending, truncate to limit
+}
+#+end_src
+
+*** Graph-aware re-ranking
+#+begin_src rust
+fn graph_rerank(
+    hits: &mut Vec<HybridSearchHit>,
+    graph: &StableGraph<GraphNode, EdgeKind>,
+    top_k: usize,       // default: 5
+    boost_factor: f32,   // default: 0.3
+) {
+    // 1. Collect node indices of top-K hits as anchors
+    // 2. For each anchor, find direct neighbors via Calls, References, Imports edges
+    // 3. For hits that are neighbors of anchors: add boost_factor * max_score
+    // 4. For hits in same file as anchor: add 0.1 * max_score
+    // 5. Re-sort by updated score
+}
+#+end_src
+
+** Existing callers of search in query.rs
+The =search= method in =impl CodeGraph= in =query.rs= currently delegates to
+=self.search_index.search()=. It must be refactored to call the new public method.
+Find the current method, check callers (the N-API layer in =code_graph.rs= is the
+only external caller), and update the signature.
+* Edge Cases
+- Vector index is None (not built yet) -> pure BM25, zero change from today
+- Query matches BM25 but not vectors -> RRF still includes BM25-only hits (vector_rank = None)
+- Query matches vectors but not BM25 -> RRF still includes vector-only hits (bm25_rank = None)
+- Node index in vector results not found in graph (stale vectors) -> skip that entry
+- Empty query -> return empty (as today)
+
+* Testing
+** Test: RRF fusion produces correct ordering
+- Given two ranked lists with known overlaps, verify RRF output
+- Input: BM25 = [A:1, B:2, C:3], Vector = [B:1, D:2, A:3]
+- Expected: B gets highest RRF (ranked #2 in BM25, #1 in vector), then A, then D, then C
+
+** Test: graph re-ranking boosts neighbors
+- Build a small graph where A calls B, B calls C
+- Give B a high RRF score, C a low one
+- After re-ranking, C should be boosted (neighbor of top-hit B)
+
+** Test: fallback to BM25 when no vectors
+- CodeGraph without vectors -> search returns same results as today
+
+** Test: hybrid search with real embeddings (integration, #[ignore])
+- Build a small graph + vectors from test fixtures
+- Query with natural language, verify semantic results rank higher than BM25-only
+
+* Verification
+- =cargo test -p pi-code-graph= passes (existing tests unbroken)
+- =cargo test -p pi-code-graph --features semantic= passes (hybrid tests)
+- =cargo check -p pi-code-graph= compiles (no feature = no vector dependency)
+- =cargo check -p pi-code-graph --features semantic= compiles

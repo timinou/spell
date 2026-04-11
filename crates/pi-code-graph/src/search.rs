@@ -104,7 +104,11 @@ impl SearchIndex {
 					score += idf * ((tf * (k1 + 1.0)) / norm);
 				}
 				let query_lower = query.to_ascii_lowercase();
-				let exact_boost = if doc.label.to_ascii_lowercase().contains(&query_lower) { 10.0 } else { 1.0 };
+				let exact_boost = if doc.label.to_ascii_lowercase().contains(&query_lower) {
+					10.0
+				} else {
+					1.0
+				};
 				score *= exact_boost;
 				SearchHit {
 					node_index: doc.node_index,
@@ -245,4 +249,4 @@ mod tests {
 		let hits = index.search("CodeTool", 5);
 		assert_eq!(hits.first().map(|hit| hit.label.as_str()), Some("tools/code.ts::CodeTool"));
 	}
-	}
+}
