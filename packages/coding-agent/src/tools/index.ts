@@ -1,5 +1,4 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { EmacsSessionManager } from "@oh-my-pi/pi-emacs";
 import type { GatewayClient } from "@oh-my-pi/pi-gateway";
 import { $env, logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async";
@@ -207,7 +206,6 @@ export interface ToolSession {
 	/** Set or clear active checkpoint state. */
 	setCheckpointState?: (state: CheckpointState | null) => void;
 	/** Dedicated org-mode daemon lifecycle manager for org MCP callers. */
-	orgSessionManager?: EmacsSessionManager;
 	/** Active QML remote server; when set, CanvasTool routes panels to the Android client. */
 	qmlRemoteServer?: import("@oh-my-pi/pi-qml-remote").QmlRemoteServer;
 	/** Loop orchestration manager for loop tools, slash commands, and dashboards. */
@@ -216,9 +214,9 @@ export interface ToolSession {
 	orchestratorManager?: CanvasOrchestratorManager;
 	/** Canvas task manager for canvas-backed QML windows. */
 	taskManager?: CanvasTaskManager;
-	/** Dispose session-owned resources (emacs daemon, QML remote server). */
+	/** Dispose session-owned resources (QML remote server). */
 	dispose?(): Promise<void> | void;
-	/** Reset session-specific state while preserving long-lived resources (emacs, org daemons). */
+	/** Reset session-specific state while preserving long-lived resources. */
 	softReset?(): Promise<void> | void;
 	/** Gateway client for managing .localhost service aliases */
 	gatewayClient?: GatewayClient;
