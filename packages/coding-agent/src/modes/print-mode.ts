@@ -83,6 +83,9 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 				getContextUsage: () => session.getContextUsage(),
 				getSystemPrompt: () => session.systemPrompt,
 				getFirstUserMessage: () => session.getFirstUserMessage(),
+				refreshBaseSystemPrompt: async () => {
+					await session.refreshBaseSystemPrompt();
+				},
 				compact: async instructionsOrOptions => {
 					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
 					const options =
@@ -117,6 +120,9 @@ export async function runPrintMode(session: AgentSession, options: PrintModeOpti
 				},
 				reload: async () => {
 					await session.reload();
+				},
+				refreshBaseSystemPrompt: async () => {
+					await session.refreshBaseSystemPrompt();
 				},
 				compact: async instructionsOrOptions => {
 					const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;

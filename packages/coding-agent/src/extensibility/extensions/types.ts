@@ -227,6 +227,8 @@ export interface ExtensionContext {
 	getSystemPrompt(): string;
 	/** Get the first user message that initiated the session. */
 	getFirstUserMessage(): string | undefined;
+	/** Rebuild the base system prompt using current settings and active tools. */
+	refreshBaseSystemPrompt(): Promise<void>;
 	/** @deprecated Use hasPendingMessages() instead */
 	hasQueuedMessages(): boolean;
 }
@@ -259,6 +261,9 @@ export interface ExtensionCommandContext extends ExtensionContext {
 
 	/** Reload the current session/runtime state. */
 	reload(): Promise<void>;
+
+	/** Rebuild the base system prompt using current settings and active tools. */
+	refreshBaseSystemPrompt(): Promise<void>;
 
 	/** Compact the session context (interactive mode shows UI). */
 	compact(instructionsOrOptions?: string | CompactOptions): Promise<void>;
@@ -1273,6 +1278,7 @@ export interface ExtensionContextActions {
 	compact: (instructionsOrOptions?: string | CompactOptions) => Promise<void>;
 	getSystemPrompt: () => string;
 	getFirstUserMessage: () => string | undefined;
+	refreshBaseSystemPrompt: () => Promise<void>;
 }
 
 /** Actions for ExtensionCommandContext (ctx.* in command handlers). */
@@ -1285,6 +1291,7 @@ export interface ExtensionCommandContextActions {
 	}) => Promise<{ cancelled: boolean }>;
 	branch: (entryId: string) => Promise<{ cancelled: boolean }>;
 	navigateTree: (targetId: string, options?: { summarize?: boolean }) => Promise<{ cancelled: boolean }>;
+	refreshBaseSystemPrompt: () => Promise<void>;
 	compact: (instructionsOrOptions?: string | CompactOptions) => Promise<void>;
 	switchSession: (sessionPath: string) => Promise<{ cancelled: boolean }>;
 	reload: () => Promise<void>;

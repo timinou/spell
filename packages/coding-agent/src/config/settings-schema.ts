@@ -427,6 +427,48 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"caveman.defaultLevel": {
+		type: "enum",
+		values: ["off", "lite", "full", "ultra", "wenyan-lite", "wenyan", "wenyan-ultra"] as const,
+		default: "off",
+		ui: {
+			tab: "agent",
+			label: "Caveman Default Level",
+			description: "Token-saving communication level applied on new sessions (off = disabled)",
+		},
+	},
+
+	"caveman.showStatus": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "agent",
+			label: "Caveman Status Bar",
+			description: "Show animated campfire status indicator when caveman mode is active",
+		},
+	},
+
+	"caveman.thinkingMode": {
+		type: "enum",
+		values: ["caveman", "normal"] as const,
+		default: "caveman",
+		ui: {
+			tab: "agent",
+			label: "Caveman Thinking Mode",
+			description: "Whether thinking uses PhD-caveman notation (caveman) or stays verbose (normal)",
+		},
+	},
+
+	"caveman.affectSubagents": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "agent",
+			label: "Caveman Subagents",
+			description: "Apply caveman mode to delegated subagents (task tool)",
+		},
+	},
+
 	followUpMode: {
 		type: "enum",
 		values: ["all", "one-at-a-time"] as const,
@@ -1791,6 +1833,13 @@ export interface SttSettings {
 	modelPath: string | undefined;
 }
 
+export interface CavemanSettings {
+	defaultLevel: SettingValue<"caveman.defaultLevel">;
+	showStatus: boolean;
+	thinkingMode: SettingValue<"caveman.thinkingMode">;
+	affectSubagents: boolean;
+}
+
 export interface BashInterceptorRule {
 	pattern: string;
 	flags?: string;
@@ -1813,6 +1862,7 @@ export interface GroupTypeMap {
 	statusLine: StatusLineSettings;
 	thinkingBudgets: ThinkingBudgetsSettings;
 	stt: SttSettings;
+	caveman: CavemanSettings;
 	modelRoles: Record<string, string>;
 }
 

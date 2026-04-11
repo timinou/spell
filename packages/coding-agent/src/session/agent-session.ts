@@ -2641,6 +2641,9 @@ export class AgentSession {
 				process.exit(0);
 			},
 			hasQueuedMessages: () => this.queuedMessageCount > 0,
+			refreshBaseSystemPrompt: async () => {
+				await this.refreshBaseSystemPrompt();
+			},
 			getContextUsage: () => this.getContextUsage(),
 			waitForIdle: () => this.waitForIdle(),
 			newSession: async options => {

@@ -130,6 +130,9 @@ export class ExtensionUiController {
 			},
 			getSystemPrompt: () => this.ctx.session.systemPrompt,
 			getFirstUserMessage: () => this.ctx.session.getFirstUserMessage(),
+			refreshBaseSystemPrompt: async () => {
+				await this.ctx.session.refreshBaseSystemPrompt();
+			},
 		};
 		const commandActions: ExtensionCommandContextActions = {
 			getContextUsage: () => this.ctx.session.getContextUsage(),
@@ -215,6 +218,9 @@ export class ExtensionUiController {
 				this.ctx.showStatus("Navigated to selected point");
 
 				return { cancelled: false };
+			},
+			refreshBaseSystemPrompt: async () => {
+				await this.ctx.session.refreshBaseSystemPrompt();
 			},
 			compact: async instructionsOrOptions => {
 				const instructions = typeof instructionsOrOptions === "string" ? instructionsOrOptions : undefined;
@@ -326,6 +332,9 @@ export class ExtensionUiController {
 			},
 			getSystemPrompt: () => this.ctx.session.systemPrompt,
 			getFirstUserMessage: () => this.ctx.session.getFirstUserMessage(),
+			refreshBaseSystemPrompt: async () => {
+				await this.ctx.session.refreshBaseSystemPrompt();
+			},
 		};
 		const commandActions: ExtensionCommandContextActions = {
 			getContextUsage: () => this.ctx.session.getContextUsage(),
@@ -339,6 +348,9 @@ export class ExtensionUiController {
 				this.ctx.renderInitialMessages();
 				await this.ctx.reloadTodos();
 				this.ctx.showStatus("Reloaded session");
+			},
+			refreshBaseSystemPrompt: async () => {
+				await this.ctx.session.refreshBaseSystemPrompt();
 			},
 			newSession: async options => {
 				if (this.ctx.isBackgrounded) {
@@ -518,6 +530,9 @@ export class ExtensionUiController {
 						},
 						getSystemPrompt: () => this.ctx.session.systemPrompt,
 						getFirstUserMessage: () => this.ctx.session.getFirstUserMessage(),
+						refreshBaseSystemPrompt: async () => {
+							await this.ctx.session.refreshBaseSystemPrompt();
+						},
 					});
 				} catch (err) {
 					this.showToolError(registeredTool.definition.name, err instanceof Error ? err.message : String(err));
