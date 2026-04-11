@@ -196,6 +196,49 @@ describe("system Handlebars prompt templates", () => {
 		// Example flow shows DEPENDS usage
 		expect(rendered).toContain('DEPENDS: "FEAT-001-add-auth-api"');
 	});
+
+	test("system-prompt renders caveman thinking instructions in stable section when active", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+
+		const rendered = renderPromptTemplate(template, {
+			...baseRenderContext,
+			cavemanActive: true,
+			cavemanThinking: true,
+		});
+
+		expect(rendered).toContain("PhD-caveman");
+		expect(rendered).toContain("EVERY thinking block MUST");
+		expect(rendered.indexOf("<thinking-mode>")).toBeGreaterThan(-1);
+		expect(rendered.indexOf("<thinking-mode>")).toBeLessThan(rendered.indexOf("CACHE_BOUNDARY"));
+	});
+
+	test("system-prompt omits thinking instructions when caveman inactive", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+
+		const rendered = renderPromptTemplate(template, {
+			...baseRenderContext,
+			cavemanActive: false,
+			cavemanThinking: false,
+		});
+
+		expect(rendered).not.toContain("<thinking-mode>");
+	});
+
+	test("caveman template does not contain thinking instructions", async () => {
+		const templatePath = path.join(systemPromptsDir, "caveman.md");
+		const template = await Bun.file(templatePath).text();
+
+		const rendered = renderPromptTemplate(template, {
+			...baseRenderContext,
+			cavemanActive: true,
+			cavemanThinking: true,
+		});
+
+		expect(rendered).not.toContain("thinking-mode");
+		expect(rendered).toContain("CAVEMAN MODE");
+	});
 });
 
 describe("specialized tools in system prompt", () => {

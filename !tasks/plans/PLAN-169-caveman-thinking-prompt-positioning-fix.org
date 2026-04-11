@@ -1,0 +1,66 @@
+#+TITLE: Caveman thinking prompt positioning fix
+#+STATE: DONE
+#+SESSION_ID: 14b648b4c97c977d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T09-44-16-421Z_14b648b4c97c977d.jsonl]]
+#+CUSTOM_ID: PLAN-169-caveman-thinking-prompt-positioning-fix
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-11]: Child BUG-194 marked DONE; plan verification recorded and execution closed.
+
+
+* Initial Message
+
+hi
+
+* Context
+
+PhD-caveman thinking notation instructions are buried at the end of the system prompt via
+=appendPrompt=, resulting in zero model compliance. Extended thinking blocks remain verbose
+despite the setting being enabled. Research confirmed no API mechanism exists to control
+thinking format (only effort/budget controls how MUCH thinking, not its style). Prompt
+engineering is the only lever.
+
+Two-pronged fix:
+1. *Reposition*: move thinking instructions from =caveman.md= (rendered into =appendPrompt=
+   at dead last position) to =system-prompt.md= right after =</behavior>= in the
+   stable/cached section — highest salience for reasoning-style instructions
+2. *Rewrite*: replace the current prompt with stronger compliance framing — visibility
+   accountability ("your thinking is visible to the user"), negative example (verbose BAD),
+   multiple domain-specific GOOD examples, trimmed symbol reference, stronger imperative
+
+Key decisions:
+- Thinking block moves to stable section (before =CACHE_BOUNDARY=)
+- Communication style (level descriptions) stays at end via =appendPrompt=
+- No =system-prompt.ts= changes — =cavemanThinking= data already flows to main template
+- No budget/effort reduction — pure prompt engineering
+- Accept different cache keys for caveman-on vs caveman-off (level is session-constant)
+- Exact prompt text specified verbatim in BUG item
+* Verification
+
+#+begin_src sh
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+bun check:ts
+#+end_src
+
+Manual: start caveman session (=/caveman full=), trigger thinking, verify compressed notation.
+
+* Execution Manifest
+
+| Wave | Item | Effort | Depends |
+|------+------+--------+---------|
+|    1 | [[id:BUG-194-caveman-thinking-instructions-ineffectiv]] | 1h | — |
+
+Single item, no dependencies. Three files: =system-prompt.md=, =caveman.md=,
+=system-prompt-templates.test.ts=.
+
+
+** Completion [2026-04-11]
+*** Verification
+- `bun test packages/coding-agent/test/system-prompt-templates.test.ts` → pass (13 tests, 0 failures)
+- `bun check:ts` → pass (`biome check . && tsgo -p tsconfig.json`)
+- Manual render inspection via prompt-template probe confirmed `<thinking-mode>` is present when `cavemanThinking=true`, contains `EVERY thinking block MUST`, and appears before `CACHE_BOUNDARY`
+*** Artifacts
+- No binary artifacts produced.
+- Verification sources: `packages/coding-agent/src/prompts/system/system-prompt.md`, `packages/coding-agent/src/prompts/system/caveman.md`, `packages/coding-agent/test/system-prompt-templates.test.ts`
+*** Deviations
+- None.
