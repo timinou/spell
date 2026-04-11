@@ -1,0 +1,441 @@
+#+TITLE: CodeBuffer with Rope Tree-Sitter Loro and Undo
+#+STATE: DONE
+#+SESSION_ID: 14b6b08f5a1d2fb1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T17-18-01-064Z_14b6b08f5a1d2fb1.jsonl]]
+#+CUSTOM_ID: FEAT-431-codebuffer-with-rope-tree-sitter-loro-an
+#+EFFORT: 10h
+#+PRIORITY: A
+#+LAYER: engine
+#+DEPENDS: PROJ-029-create-pi-code-engine-crate-foundation
+
+* Context: Why This Exists
+
+The current Emacs-backed code tool opens a fresh buffer for every read operation (=pi-treesit-open-file=), kills it after. For edits, it uses =pi-buffer.el= — a hash-table registry mapping file paths to Emacs buffers with =find-file-noselect=. Diff is =diff-no-select= between buffer content and disk. All of this goes through socat + JSON-RPC with a 30-second timeout per call.
+
+We're replacing this with a Rust-native =CodeBuffer= that is faster (no IPC), persistent (buffers survive across calls), supports multi-agent concurrent editing (via CRDT), and provides tree-based undo/redo per agent.
+
+The canonical design document is =specs/pi-code-engine-spec.md= section 3. Read it before implementing.
+
+This item depends on =PROJ-029-create-pi-code-engine-crate-foundation= (the crate must exist with =LanguageProfile= and =LanguageRegistry= types).
+
+* Goal
+
+Implement =CodeBuffer=, =BufferSnapshot=, =BufferRegistry=, and the tree-based =History= system in =crates/pi-code-engine/src/buffer.rs=. This is the core data structure that outline, navigate, and all edit operations work on.
+
+After this item, you can: open a file → edit it → undo → redo → take snapshots → diff → save. Multiple agents can edit the same buffer concurrently with automatic merge.
+
+* Design Decisions (All Binding)
+
+1. *Rope*: =ropey= crate. O(log N) insert/delete. Arc-based cheap snapshots (=rope.clone()= shares internal nodes). Line-aware (=rope.line()=, =rope.line_to_byte()=).
+
+2. *Tree-sitter incremental parsing*: After each rope mutation, compute an =InputEdit= (byte offsets of the change), call =tree.edit(&input_edit)=, then =parser.parse_with(callback, Some(&old_tree))= where the callback reads from the rope (zero-copy via chunk iteration). This gives sub-millisecond re-parse for typical edits.
+
+3. *CRDT*: =loro= crate. Each buffer owns a =LoroDoc=. Each editing agent has a unique =PeerId=.
+   - Edits go through loro's text type: =doc.get_text("content").insert(pos, text)= / =.delete(pos, len)=
+   - Loro uses the Fugue algorithm which prevents text interleaving anomalies (the failure mode where two agents insert at the same position and their text gets character-interleaved)
+   - =UndoManager::new(&doc)= provides per-agent undo: each agent can undo only their own edits
+   - =doc.fork()= creates an independent branch (speculative editing). =doc.merge(&fork)= integrates it.
+
+4. *Undo*: Tree-based history modeled after Helix editor. Each edit creates a =Revision= with a parent pointer and a =Transaction= (the edits) plus its inverse. Undo walks to parent, redo walks to last_child. Jump-to-revision computes LCA and applies inverse/forward transactions.
+
+5. *Edit flow*: =buffer.edit(TextEdit)= → loro records op → rope mutated → =InputEdit= computed → tree incrementally re-parsed → history records revision → version incremented → =EditResult= returned.
+
+6. *BufferRegistry*: =HashMap<PathBuf, CodeBuffer>= managed by a single owner (the NAPI binding thread). NOT thread-safe — all access is from the same NAPI task thread. Holds an =Arc<LanguageRegistry>= for language lookup.
+
+7. *Diff*: Two kinds: (a) =diff_from(snapshot)= compares current rope against a =BufferSnapshot= (for showing what changed since a checkpoint), (b) =diff_from_disk()= compares current rope against the file on disk (for showing unsaved changes). Use =difftastic= for structural diff where available, fall back to line-based diff (=imara-diff= or similar) for the initial implementation.
+
+* Crate Dependencies to Add
+
+In =crates/pi-code-engine/Cargo.toml=, add:
+
+#+begin_src toml
+ropey = "1"
+loro = "1"  # check crates.io for latest stable version
+#+end_src
+
+IMPORTANT: Check crates.io for the actual latest =loro= version. The crate is =loro= (not =loro-crdt=). Read the loro Rust API docs before implementing — the API may differ from the pseudocode below.
+
+* File: =crates/pi-code-engine/src/buffer.rs=
+
+This is the main file to create. It contains all buffer types.
+
+** Type: =TextEdit=
+
+#+begin_src rust
+/// A text edit to apply to a buffer.
+#[derive(Debug, Clone)]
+pub struct TextEdit {
+    /// Byte offset where the edit starts.
+    pub start_byte: usize,
+    /// Byte offset where the old text ends (for replacement/deletion).
+    pub old_end_byte: usize,
+    /// The new text to insert at start_byte.
+    pub new_text: String,
+}
+#+end_src
+
+A delete is =TextEdit { start_byte: 10, old_end_byte: 20, new_text: "" }=.
+An insert is =TextEdit { start_byte: 10, old_end_byte: 10, new_text: "hello" }=.
+A replace is =TextEdit { start_byte: 10, old_end_byte: 20, new_text: "world" }=.
+
+** Type: =EditResult=
+
+#+begin_src rust
+/// Result of applying an edit.
+#[derive(Debug)]
+pub struct EditResult {
+    /// The tree-sitter InputEdit that was applied.
+    pub input_edit: tree_sitter::InputEdit,
+    /// Ranges of the tree that changed (from tree_sitter::Tree::changed_ranges).
+    pub changed_ranges: Vec<tree_sitter::Range>,
+    /// New version number after this edit.
+    pub version: u64,
+}
+#+end_src
+
+** Type: =CodeBuffer=
+
+#+begin_src rust
+use ropey::Rope;
+use tree_sitter::{Parser, Tree, Language as TsLanguage};
+use crate::language::{LanguageId, LanguageRegistry};
+use crate::error::Result;
+use std::path::{Path, PathBuf};
+
+pub struct CodeBuffer {
+    rope: Rope,
+    tree: Tree,
+    parser: Parser,
+    language: LanguageId,
+
+    // CRDT state
+    crdt: loro::LoroDoc,
+
+    // Undo history
+    history: History,
+
+    // Metadata
+    version: u64,
+    path: Option<PathBuf>,
+    dirty: bool,
+}
+#+end_src
+
+** Constructor: =CodeBuffer::open=
+
+1. Read file bytes from disk: =std::fs::read_to_string(path)=
+2. Match path against =LanguageRegistry= to get =LanguageProfile=
+3. Create =Parser=, set language to =profile.ts_language=
+4. Parse source → get initial =Tree=
+5. Create =Rope::from_str(&source)=
+6. Create =LoroDoc::new()=, insert source text into =doc.get_text("content")=
+7. Create empty =History= with initial revision
+8. Return =CodeBuffer= with version=0, dirty=false
+
+** Constructor: =CodeBuffer::from_str=
+
+Same as =open= but takes source string and =LanguageId= directly. No file path. Used in tests.
+
+** Method: =edit(&mut self, edit: &TextEdit) -> Result<EditResult>=
+
+Step by step:
+1. Validate: =edit.start_byte <= edit.old_end_byte=, =edit.old_end_byte <= self.rope.len_bytes()=
+2. Apply to CRDT: =self.crdt.get_text("content").delete(start, old_end - start)= then =.insert(start, &edit.new_text)=
+3. Apply to rope: =self.rope.remove(byte_range)= then =self.rope.insert(start_char_idx, &edit.new_text)=
+   - CAUTION: rope uses char indices, not byte indices. Convert: =self.rope.byte_to_char(edit.start_byte)=
+4. Compute =InputEdit=:
+   #+begin_src rust
+   let input_edit = tree_sitter::InputEdit {
+       start_byte: edit.start_byte,
+       old_end_byte: edit.old_end_byte,
+       new_end_byte: edit.start_byte + edit.new_text.len(),
+       start_position: byte_to_point(&self.rope, edit.start_byte),
+       old_end_position: byte_to_point(&old_rope, edit.old_end_byte),
+       new_end_position: byte_to_point(&self.rope, edit.start_byte + edit.new_text.len()),
+   };
+   #+end_src
+5. Apply to tree: =self.tree.edit(&input_edit)=
+6. Re-parse: =let new_tree = self.parser.parse_with(&mut rope_callback, Some(&self.tree))?=
+7. =changed_ranges = old_tree.changed_ranges(&new_tree)=
+8. Record in history: store =(edit, inverse_edit)= as a new =Revision=
+9. =self.tree = new_tree=
+10. =self.version += 1=, =self.dirty = true=
+11. Return =EditResult=
+
+The =rope_callback= is a closure that reads bytes from the rope. Tree-sitter's =parse_with= takes a callback =|byte_offset, _position| -> &[u8]= that returns the text at the given byte offset. For ropey, iterate rope chunks starting from the byte offset.
+
+** Method: =edit_batch(&mut self, edits: &[TextEdit]) -> Result<Vec<EditResult>>=
+
+Sort edits by =start_byte= descending (highest first). Apply each in order. This prevents earlier edits from shifting positions of later ones.
+
+** Method: =undo(&mut self) -> Result<Option<TextEdit>>=
+
+1. If =history.current == 0= (at root): return =Ok(None)=
+2. Get inverse transaction from current revision
+3. Apply inverse edits to rope + tree (same flow as =edit()= but skip history recording)
+4. Move =history.current= to parent
+5. Return the inverse edit
+
+** Method: =redo(&mut self) -> Result<Option<TextEdit>>=
+
+1. Get =last_child= of current revision. If None: return =Ok(None)=
+2. Apply forward transaction from child revision
+3. Move =history.current= to child
+4. Return the forward edit
+
+** Method: =snapshot(&self) -> BufferSnapshot=
+
+#+begin_src rust
+pub struct BufferSnapshot {
+    pub rope: Rope,     // Cheap: Rope::clone() is Arc-based O(1)
+    pub version: u64,
+}
+#+end_src
+
+Just =BufferSnapshot { rope: self.rope.clone(), version: self.version }=.
+
+** Method: =diff_from(&self, base: &BufferSnapshot) -> Vec<DiffHunk>=
+
+Compare =base.rope= to =self.rope=. For initial implementation, materialize both to strings and use line-based diff. A =DiffHunk= is:
+
+#+begin_src rust
+pub struct DiffHunk {
+    pub old_start: usize,  // line number in base
+    pub old_count: usize,
+    pub new_start: usize,  // line number in current
+    pub new_count: usize,
+    pub content: String,   // unified diff format for this hunk
+}
+#+end_src
+
+** Method: =diff_from_disk(&self) -> Result<Vec<DiffHunk>>=
+
+Read file from =self.path= (error if None), diff against current rope.
+
+** Method: =save(&mut self) -> Result<()>=
+
+Write rope to disk: =std::fs::write(path, self.rope.to_string())=. Set =dirty = false=.
+
+** Type: =History=
+
+#+begin_src rust
+struct History {
+    revisions: Vec<Revision>,
+    current: usize,  // index into revisions
+}
+
+struct Revision {
+    parent: usize,
+    last_child: Option<usize>,
+    forward: TextEdit,   // the edit that was applied
+    inverse: TextEdit,   // the edit that undoes it
+}
+
+impl History {
+    fn new() -> Self {
+        // Create root revision (dummy, represents initial state)
+        Self {
+            revisions: vec![Revision { parent: 0, last_child: None, forward: TextEdit::empty(), inverse: TextEdit::empty() }],
+            current: 0,
+        }
+    }
+
+    fn record(&mut self, forward: TextEdit, inverse: TextEdit) {
+        let new_idx = self.revisions.len();
+        let parent = self.current;
+        self.revisions.push(Revision { parent, last_child: None, forward, inverse });
+        self.revisions[parent].last_child = Some(new_idx);
+        self.current = new_idx;
+    }
+}
+#+end_src
+
+** Type: =BufferRegistry=
+
+#+begin_src rust
+pub struct BufferRegistry {
+    buffers: HashMap<PathBuf, CodeBuffer>,
+    registry: Arc<LanguageRegistry>,
+}
+
+impl BufferRegistry {
+    pub fn new(registry: Arc<LanguageRegistry>) -> Self { ... }
+    pub fn open(&mut self, path: &Path) -> Result<&mut CodeBuffer> { ... }
+    pub fn close(&mut self, path: &Path) -> Result<()> { ... }
+    pub fn get(&self, path: &Path) -> Option<&CodeBuffer> { ... }
+    pub fn get_mut(&mut self, path: &Path) -> Option<&mut CodeBuffer> { ... }
+    pub fn list(&self) -> Vec<BufferInfo> { ... }
+}
+
+pub struct BufferInfo {
+    pub path: PathBuf,
+    pub language: LanguageId,
+    pub version: u64,
+    pub dirty: bool,
+    pub line_count: usize,
+}
+#+end_src
+
+** Helper: =byte_to_point=
+
+#+begin_src rust
+fn byte_to_point(rope: &Rope, byte_offset: usize) -> tree_sitter::Point {
+    let line = rope.byte_to_line(byte_offset);
+    let line_start_byte = rope.line_to_byte(line);
+    let col = byte_offset - line_start_byte;
+    tree_sitter::Point::new(line, col)
+}
+#+end_src
+
+* Edge Cases (Must Handle)
+
+1. *Byte vs char indices*: Rope uses char indices for insert/remove. Tree-sitter uses byte offsets. Always convert: =rope.byte_to_char(byte_offset)= before rope mutations, =rope.char_to_byte(char_idx)= when going back. Multi-byte UTF-8 characters (emoji, CJK) make these differ.
+
+2. *Empty file*: =CodeBuffer::open= on an empty file should produce a valid buffer with an empty rope and a parsed (trivial) tree.
+
+3. *Binary file*: Before opening, check first 8192 bytes for null bytes (=\0=). If found, return =CodeEngineError::Buffer("binary file detected")=.
+
+4. *File >100MB*: Return error rather than OOMing. Check =std::fs::metadata(path)?.len()=.
+
+5. *Unknown language*: If =registry.match_path(path)= returns None, return =CodeEngineError::LanguageNotFound=.
+
+6. *Parse timeout*: Set =parser.set_timeout_micros(5_000_000)= (5 seconds). If parse returns None after timeout, return error.
+
+7. *Undo past root*: =undo()= at root returns =Ok(None)=, not an error.
+
+8. *Redo with no children*: =redo()= with no =last_child= returns =Ok(None)=.
+
+9. *edit_batch with overlapping edits*: If two edits in the batch overlap in byte range, return error. Don't silently corrupt.
+
+10. *Save without path*: =save()= on a buffer created with =from_str()= (no path) returns error.
+
+* Testing (TDD — Write Tests First)
+
+Create =crates/pi-code-engine/tests/buffer_tests.rs= (integration test file) or tests inside =buffer.rs=.
+
+Create fixture files in =crates/pi-code-engine/tests/fixtures/=:
+- =hello.ts=: a small TypeScript file (~20 lines with a function, a class, imports)
+- =hello.rs=: a small Rust file (~20 lines with a function, a struct, use statements)
+- =empty.ts=: empty file
+- =binary.bin=: file with null bytes (just =b"\x00\x01\x02"=)
+
+** Test 1: =test_open_and_read=
+Open =hello.ts=. Assert:
+- =buffer.source()= matches file content on disk exactly
+- =buffer.tree().root_node().kind()= is ="program"= (TypeScript root)
+- =buffer.tree().root_node().has_error()= is false
+- =buffer.version()= is 0
+- =buffer.is_dirty()= is false
+- =buffer.rope().len_lines()= equals line count of the file
+
+** Test 2: =test_edit_inserts_text=
+Open =hello.ts=. Insert ="// new comment
+"= at byte 0.
+Assert:
+- =buffer.source()= starts with ="// new comment
+"=
+- =buffer.tree().root_node().has_error()= is false (tree re-parsed correctly)
+- =buffer.version()= is 1
+- =buffer.is_dirty()= is true
+- =result.changed_ranges= is non-empty and covers only the changed region (not the whole file)
+
+** Test 3: =test_edit_deletes_text=
+Open =hello.ts=. Delete first line (bytes 0 to end of first line).
+Assert source no longer starts with the original first line.
+Assert tree re-parses without errors.
+
+** Test 4: =test_edit_replaces_text=
+Open =hello.ts=. Replace a known identifier (find its byte range in the source first).
+Assert the new text is present. Assert tree re-parses.
+
+** Test 5: =test_undo_restores_original=
+Open =hello.ts=. Save original =source()=. Edit (insert text). Call =undo()=.
+Assert =buffer.source()= equals original.
+Assert =buffer.version()= is 2 (undo is itself a version bump).
+
+** Test 6: =test_redo_reapplies=
+Continue from test 5 setup. After undo, call =redo()=.
+Assert =buffer.source()= equals the edited version (with insertion).
+
+** Test 7: =test_undo_tree_branching=
+Open =hello.ts=. Edit A (insert "AAA" at byte 0). Edit B (insert "BBB" at byte 0). Undo (reverts B). Edit C (insert "CCC" at byte 0). Now the history has a branch:
+#+begin_example
+root → A → B
+          ↘ C (current)
+#+end_example
+Assert =buffer.source()= contains "CCC" and "AAA" but not "BBB".
+
+** Test 8: =test_snapshot_and_diff=
+Open =hello.ts=. Take snapshot. Insert a line. Call =diff_from(&snapshot)=.
+Assert at least one =DiffHunk= returned.
+Assert the hunk's content reflects the inserted line.
+
+** Test 9: =test_diff_from_disk=
+Open =hello.ts=. Insert text. Call =diff_from_disk()=.
+Assert hunks show the insertion.
+Call =save()= (writes to a temp copy, NOT the fixture — use a temp dir).
+Call =diff_from_disk()= again.
+Assert no hunks (buffer matches disk).
+
+** Test 10: =test_multi_agent_edit=
+Create buffer from string: ="hello world"=.
+Agent A inserts =" beautiful"= at byte 5 → ="hello beautiful world"=.
+Agent B inserts =" cruel"= at byte 5 → ="hello cruel world"= (from B's perspective).
+Merge B's doc into A's doc.
+Assert merged result contains both insertions (Fugue algorithm ensures no interleaving: one of ="hello beautiful cruel world"= or ="hello cruel beautiful world"=, but NOT ="hello bceruaetliful world"=).
+Assert tree re-parses (may have errors since this isn't valid code, but that's OK — we're testing convergence, not syntax validity).
+
+IMPORTANT: Read loro's Rust API docs carefully for the actual fork/merge API. The pseudocode above may not match the exact method names.
+
+** Test 11: =test_multi_agent_undo=
+Agent A inserts "AAA" at byte 0. Agent B inserts "BBB" at end. Agent A calls undo.
+Assert A's insertion is reverted. Assert B's insertion persists.
+
+** Test 12: =test_binary_rejection=
+Attempt =CodeBuffer::open("tests/fixtures/binary.bin", &registry)=.
+Assert error is =CodeEngineError::Buffer= with message containing "binary".
+
+** Test 13: =test_batch_edit=
+Open =hello.ts=. Create 3 non-overlapping edits at different byte positions.
+Call =edit_batch=.
+Assert all 3 edits applied correctly. Assert tree re-parses.
+
+** Test 14: =test_empty_file=
+Open =empty.ts=. Assert rope is empty. Assert tree parses (trivially). Insert text. Assert works.
+
+** Test 15: =test_buffer_registry=
+Create =BufferRegistry=. Open =hello.ts= and =hello.rs=.
+Assert =list()= returns 2 entries.
+Assert =get(hello.ts)= returns Some.
+Close =hello.ts=.
+Assert =list()= returns 1 entry.
+Assert =get(hello.ts)= returns None.
+
+* Sequencing Note
+
+This item does NOT implement outline, navigate, or structural edits. It only implements the buffer data structure and its operations. The buffer is consumed by those other items.
+
+Implement in this order:
+1. =TextEdit= type
+2. =byte_to_point= helper
+3. =History= type
+4. =CodeBuffer::from_str= (simpler, no disk I/O, no binary detection)
+5. =CodeBuffer::edit= (core edit flow without CRDT first — add CRDT after basic rope+tree works)
+6. =CodeBuffer::undo= / =redo=
+7. =CodeBuffer::snapshot= / =diff_from=
+8. =CodeBuffer::open= (adds disk I/O, binary detection, language matching)
+9. =CodeBuffer::save= / =diff_from_disk=
+10. CRDT integration (add loro to the edit flow)
+11. Multi-agent tests
+12. =BufferRegistry=
+
+This ordering lets you test incrementally. Get rope+tree+undo working first, then layer CRDT on top.
+
+* Verification Criteria
+1. =cargo test -p pi-code-engine -- buffer= passes all 15 tests
+2. =cargo clippy -p pi-code-engine= passes
+3. Multi-agent convergence test demonstrates loro merge produces valid combined text (no interleaving)
+4. Undo-tree branching test demonstrates non-linear history navigation
+5. Diff produces correct hunks for known edits
+6. Binary file detection rejects non-text files
+7. Edit + incremental re-parse is <10ms on a 1000-line file (assert with =std::time::Instant= in a test)

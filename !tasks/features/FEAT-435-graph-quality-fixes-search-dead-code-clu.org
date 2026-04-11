@@ -1,0 +1,506 @@
+#+TITLE: Graph Quality Fixes Search Dead-Code Clusters
+#+STATE: DONE
+#+SESSION_ID: 14b6b08f5a1d2fb1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T17-18-01-064Z_14b6b08f5a1d2fb1.jsonl]]
+#+CUSTOM_ID: FEAT-435-graph-quality-fixes-search-dead-code-clu
+#+EFFORT: 6h
+#+PRIORITY: A
+#+LAYER: engine
+#+DEPENDS: PROJ-029-create-pi-code-engine-crate-foundation
+
+* Initial Message
+
+This is what an agent found out after using the new affordances of the `code` tool:
+
+I exercised the code subtools against this repo and inspected the tool prompt/types. Short version:
+
+ It is very useful, but uneven. The graph-backed subtools are strong. The file-local navigation/editing layer is promising but rougher.
+
+ What I checked directly:
+ - status, index, search, context, impact, deps, flow, dead_code, clusters
+ - languages
+ - outline
+ - read at resolutions 1, 2, 3
+ - navigate with node-at, defun-at, siblings, children, parent, references-local
+ - inspected packages/coding-agent/src/prompts/tools/code.md, packages/coding-agent/src/tools/code.ts, packages/emacs/src/types.ts
+
+ What worked well
+
+ - outline: excellent
+     - Fast structural map of a file.
+     - On packages/coding-agent/src/system-prompt.ts it returned top-level symbols, signatures, exported flags, and child structure cleanly.
+     - This is the best “what is in this file?” tool.
+ - read:
+     - Resolution 1: good API skim.
+     - Resolution 2: very good structural read.
+     - Resolution 3: good targeted body read.
+     - This is much more ergonomic than dumping raw source immediately.
+ - status / index:
+     - Clear and useful.
+     - In this repo the graph reported:
+           - 2291 files
+           - 17899 symbols
+           - 46313 edges
+     - This gives confidence the graph is substantial enough to be useful.
+ - context:
+     - High-value.
+     - For packages/coding-agent/src/system-prompt.ts::buildSystemPrompt, it returned callers, callees, imports, and importers in one shot.
+     - This is one of the best subtools.
+ - impact:
+     - High-value for refactors.
+     - It gave depth-grouped blast radius for the same symbol.
+     - Good for “what breaks if I touch this?”
+ - flow:
+     - Good for forward tracing.
+     - Useful when you want downstream execution shape, not just static callers.
+ - deps:
+     - Good at file-level import topology.
+     - Useful when deciding refactor boundaries.
+ - languages:
+     - Clear and practical.
+     - It showed broad installed grammar support, so the file-scoped tooling has a large surface area.
+
+ What was mediocre
+
+ - search:
+     - Useful, but not exact enough to be your only search tool.
+     - It worked well for buildSystemPrompt.
+     - It failed on some exact-looking queries like FluidOrchestrator and TaskExecutor.
+     - Broader BM25-ish queries like queue orchestrator found the fluid orchestrator files.
+     - Conclusion: good semantic-ish repo search, bad exact-symbol oracle.
+ - buffers / diff:
+     - Conceptually useful, but session-dependent.
+     - buffers returned nil/no data when no managed buffer was open.
+     - So it is useful inside an edit workflow, not as a general-purpose standalone inspection tool.
+
+ What was rough
+
+ - navigate:
+     - Mixed at best.
+     - siblings and children returned usable structure.
+     - node-at, defun-at, and parent returned:
+           - Tool "code-navigate" returned no text content block
+     - references-local was especially shaky: when I asked for resolvedCwd, it returned references for const, not the symbol I wanted.
+     - So the navigation family is not yet ergonomic enough to trust blindly.
+ - dead_code:
+     - Too noisy on a repo this size.
+     - It returned thousands of items and obvious duplicates.
+     - Example: repeated Agent.sessionId, providerSessionState, etc.
+     - Useful for a cleanup campaign, not for routine work.
+ - clusters:
+     - Also noisy.
+     - Top results were many one-file, zero-symbol clusters, which are not immediately actionable.
+     - Might be useful for architecture research, but not ergonomic for day-to-day work.
+
+ Important ergonomics mismatch I found
+
+ There is some surface-area drift between docs/schema/types:
+ - Tool prompt advertises edit ops like splice-self, splice-down, transpose
+ - Tool schema in packages/coding-agent/src/tools/code.ts also advertises them
+ - But packages/emacs/src/types.ts omits them from CodeEditOperation
+ - The Elisp backend does support them
+
+ So the backend is richer than one TS type says. That kind of mismatch hurts confidence and discoverability.
+
+ There is also a smaller doc mismatch:
+ - schema includes navigate action parent
+ - prompt text emphasizes other actions more than parent
+ - actual runtime for parent looked flaky anyway
+
+ My overall assessment
+
+ Usefulness: high
+ Ergonomics: medium
+
+ If I score the subtool families:
+
+ - outline, read, context, impact, deps, flow, status, index: 4.5/5
+ - search: 3/5
+ - languages: 3.5/5
+ - buffers, diff: 3/5 inside an edit session, 2/5 otherwise
+ - navigate: 2/5 currently
+ - dead_code, clusters: 2/5 for daily use, 3/5 for offline architecture analysis
+ - edit, install_grammar: potentially useful, but I did not do destructive/runtime-changing calls here
+
+ Best way to think about it
+
+ It is really two tools under one name:
+
+ - Emacs-backed structural file tool
+     - best for outline, read, maybe edit
+ - Native codegraph tool
+     - best for context, impact, deps, flow, status, index
+
+ That split matters because the graph side feels more reliable than the local navigation side.
+
+ Practical recommendation
+
+ Use code aggressively for:
+ - file orientation
+ - structural reading
+ - blast radius
+ - import topology
+ - call graph exploration
+
+ Do not use it alone for:
+ - exact symbol lookup
+ - exact definitions/types
+ - exact code-pattern search
+
+ For those, pair it with:
+ - lsp for exact semantic questions
+ - grep / ast_grep for exact text or syntax shapes
+
+ Bottom line
+
+ The codegraph half is genuinely valuable and can save a lot of time on nontrivial refactors. The local navigation/editing half is not yet
+ ergonomic enough to be a universal default. If you use the strong subtools and avoid over-trusting navigate, it is a net win.
+
+Please gain your own understanding of them and explain to me how you'd get it to a 5/5. This is exploratory first, I want us to talk to each other before we settle on any decision. Dialectic imagination.
+
+* Context
+
+The code tool's graph commands (search, dead_code, clusters) have known quality issues identified in the assessment. Search uses BM25 with naive tokenization that doesn't split camelCase or snake_case, so exact symbol lookups fail. Dead_code reports thousands of false positives because it has no concept of entry points, test files, or confidence. Clusters uses Kosaraju SCC which produces hundreds of trivial 1-file clusters instead of meaningful module boundaries.
+
+These fixes are in the existing =pi-code-graph= crate, not the new =pi-code-engine= crate. They don't require the engine to be built first (they depend only on the foundation item for workspace compilation).
+
+* Goal
+
+Fix the 3 weakest graph subtools to bring them from 2/5 to 5/5:
+1. Search: camelCase/snake_case tokenization + exact-match boost
+2. Dead code: entry point filtering + confidence scoring + test file exclusion
+3. Clusters: weakly connected components + minimum size + sort by size
+
+Also add diff-aware graph queries and incremental indexing.
+
+* Files to Modify
+
+- =crates/pi-code-graph/src/search.rs= — tokenizer and BM25 scoring
+- =crates/pi-code-graph/src/query.rs= — =graph_dead_code()=, =graph_clusters()=, add =graph_diff()=
+- =crates/pi-code-graph/src/indexer.rs= — add incremental build path
+- =crates/pi-code-graph/src/cache.rs= — track per-file changes for incremental
+- =crates/pi-natives/src/code_graph.rs= — add "diff" command to dispatcher, add incremental option to "index"
+
+* Search Fix (search.rs)
+
+** Current Tokenizer (broken)
+#+begin_src rust
+fn tokenize(text: &str) -> Vec<String> {
+    text.split(|char: char| !char.is_ascii_alphanumeric() && char != '_' && char != '-')
+        .filter(|part| !part.is_empty())
+        .map(|part| part.to_ascii_lowercase())
+        .collect()
+}
+#+end_src
+
+Problem: =FluidOrchestrator= becomes =["fluidorchestrator"]=. Query ="Fluid"= doesn't match because the token is the full compound word.
+
+** New Tokenizer
+#+begin_src rust
+fn tokenize(text: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    for part in text.split(|c: char| !c.is_ascii_alphanumeric() && c != '_' && c != '-') {
+        if part.is_empty() { continue; }
+        let lower = part.to_ascii_lowercase();
+
+        // Always include the full token
+        tokens.push(lower.clone());
+
+        // CamelCase splitting: FluidOrchestrator → [fluid, orchestrator]
+        let camel = split_camel_case(part);
+        if camel.len() > 1 {
+            for seg in &camel {
+                let seg_lower = seg.to_ascii_lowercase();
+                if seg_lower != lower {
+                    tokens.push(seg_lower);
+                }
+            }
+        }
+
+        // snake_case splitting: build_system_prompt → [build, system, prompt]
+        if lower.contains('_') {
+            for seg in lower.split('_').filter(|s| !s.is_empty()) {
+                tokens.push(seg.to_string());
+            }
+        }
+    }
+    tokens.sort();
+    tokens.dedup();
+    tokens
+}
+
+fn split_camel_case(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    for i in 0..chars.len() {
+        let c = chars[i];
+        if c.is_uppercase() && !current.is_empty() {
+            // Check if this starts a new word:
+            // - Previous char was lowercase: "fluidO" → split before O
+            // - Next char is lowercase: "FLUIDo" → split before the last uppercase
+            let prev_lower = i > 0 && chars[i - 1].is_lowercase();
+            let next_lower = i + 1 < chars.len() && chars[i + 1].is_lowercase();
+            if prev_lower || (next_lower && current.len() > 1) {
+                parts.push(std::mem::take(&mut current));
+            }
+        }
+        current.push(c);
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    parts
+}
+#+end_src
+
+** Exact-Match Boost
+
+In =SearchIndex::search()=, after computing BM25 score, apply a multiplicative boost if the query is an exact substring of the document label:
+
+#+begin_src rust
+let exact_boost = if doc.label.to_ascii_lowercase().contains(&query.to_ascii_lowercase()) {
+    10.0
+} else {
+    1.0
+};
+score *= exact_boost;
+#+end_src
+
+This ensures that searching "FluidOrchestrator" ranks the exact symbol first, even if other documents have higher BM25 scores from partial token matches.
+
+** Tests to Add
+- =test_tokenize_camel_case=: ="FluidOrchestrator"= → tokens include ="fluid"=, ="orchestrator"=, ="fluidorchestrator"=
+- =test_tokenize_snake_case=: ="build_system_prompt"= → tokens include ="build"=, ="system"=, ="prompt"=, ="build_system_prompt"=
+- =test_tokenize_mixed=: ="getHTTPResponse"= → tokens include ="get"=, ="http"=, ="response"=
+- =test_search_exact_symbol=: search ="FluidOrchestrator"= returns it as first result
+- =test_search_partial=: search ="Orchestrator"= returns FluidOrchestrator near the top
+
+* Dead Code Fix (query.rs)
+
+** Current Algorithm (too noisy)
+Finds ALL non-exported, non-module, non-constructor symbols with zero inbound edges. Reports thousands of results.
+
+** New Algorithm
+#+begin_src rust
+pub struct DeadCodeOptions {
+    pub limit: usize,                    // default 50
+    pub exclude_test_files: bool,        // default true
+    pub exclude_entry_points: bool,      // default true
+}
+
+pub struct GraphDeadCodeItem {
+    pub symbol: GraphNodeSummary,
+    pub reason: String,
+    pub confidence: DeadCodeConfidence,
+}
+
+pub enum DeadCodeConfidence {
+    High,    // unexported, no refs, not in test file, not an entry point
+    Medium,  // unexported, no refs, but in a test file OR is a lifecycle hook
+    Low,     // other heuristic
+}
+#+end_src
+
+Changes to =graph_dead_code()=:
+1. Keep existing filters (skip exported, modules, templates, constructors)
+2. Add: skip symbols in files whose path contains =test/=, =spec/=, =__tests__/=, or whose filename contains =.test.= or =.spec.= — if =exclude_test_files= is true
+3. Add: skip symbols named =main=, =default=, or in files named =index.ts=/=index.js=/=mod.rs=/=lib.rs= — if =exclude_entry_points= is true
+4. Assign confidence: High if none of the above soft-skips applied, Medium if symbol was kept despite being in a test-adjacent context
+5. Sort by confidence desc, then by qualified_name asc
+6. Limit to =options.limit=
+
+** Tests to Add
+- =test_dead_code_excludes_test_files=: symbol in =test/helper.ts= with no refs → NOT reported
+- =test_dead_code_excludes_entry_points=: =main= function with no inbound refs → NOT reported
+- =test_dead_code_confidence_high=: helper function in =src/utils.ts= with no refs → High confidence
+- =test_dead_code_respects_limit=: verify at most =limit= results returned
+
+* Clusters Fix (query.rs)
+
+** Current Algorithm (wrong)
+Uses Kosaraju SCC (strongly connected components). Produces hundreds of 1-file clusters because most files aren't in cycles.
+
+** New Algorithm: Weakly Connected Components
+
+Replace =kosaraju_scc= with a simple BFS/DFS on the undirected graph:
+
+#+begin_src rust
+pub struct ClusterOptions {
+    pub min_size: usize,     // default 2 (filter out singletons)
+    pub limit: usize,        // default 20
+}
+
+pub fn graph_clusters(&self, options: &ClusterOptions) -> Vec<GraphCluster> {
+    let graph = self.graph();
+
+    // Build undirected adjacency: for each edge, connect both directions
+    let mut visited = HashSet::new();
+    let mut components = Vec::new();
+
+    for node_index in graph.node_indices() {
+        if visited.contains(&node_index) { continue; }
+
+        // BFS from this node, following edges in both directions
+        let mut component = Vec::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(node_index);
+        visited.insert(node_index);
+
+        while let Some(current) = queue.pop_front() {
+            component.push(current);
+            // Outgoing edges
+            for edge in graph.edges_directed(current, Direction::Outgoing) {
+                if visited.insert(edge.target()) {
+                    queue.push_back(edge.target());
+                }
+            }
+            // Incoming edges
+            for edge in graph.edges_directed(current, Direction::Incoming) {
+                if visited.insert(edge.source()) {
+                    queue.push_back(edge.source());
+                }
+            }
+        }
+
+        components.push(component);
+    }
+
+    // Convert to GraphCluster, filter by min_size, sort by file count desc
+    let mut clusters: Vec<GraphCluster> = components.into_iter()
+        .enumerate()
+        .filter_map(|(id, component)| {
+            let files = /* extract file nodes */;
+            let symbol_count = /* count symbol nodes */;
+            if files.len() < options.min_size { return None; }
+
+            // Compute cluster name from common path prefix
+            let name = common_path_prefix(&files);
+
+            Some(GraphCluster { id, files, symbol_count, name })
+        })
+        .collect();
+
+    clusters.sort_by(|a, b| b.files.len().cmp(&a.files.len()));
+    clusters.truncate(options.limit);
+    clusters
+}
+#+end_src
+
+Add =name: String= field to =GraphCluster= (currently it only has =id=, =files=, =symbol_count=).
+
+** Tests
+- =test_clusters_no_singletons=: with min_size=2, no 1-file clusters in result
+- =test_clusters_sorted_by_size=: largest cluster first
+- =test_clusters_named=: cluster name is common path prefix of its files
+
+* Diff-Aware Graph (query.rs + code_graph.rs)
+
+** New Command: =graph_diff=
+
+#+begin_src rust
+pub struct GraphDiff {
+    pub added_symbols: Vec<GraphNodeSummary>,
+    pub removed_symbols: Vec<GraphNodeSummary>,
+    pub added_edges: Vec<(GraphNodeSummary, GraphNodeSummary, String)>,  // (from, to, edge_kind)
+    pub removed_edges: Vec<(GraphNodeSummary, GraphNodeSummary, String)>,
+}
+
+pub fn graph_diff(&self, base: &CodeGraph) -> GraphDiff {
+    // Compare self.graph symbols vs base.graph symbols by qualified_name
+    // Compare edges by (source_qualified_name, target_qualified_name, edge_kind)
+}
+#+end_src
+
+Integration in =code_graph.rs=: new "diff" command. Takes =base= parameter (a git ref like "HEAD~3"). Implementation:
+1. Checkout base ref's files to a temp dir (or use =git show= to read individual files)
+2. Build graph from base state
+3. Compare against current graph
+4. Format output
+
+Simpler alternative for v1: compare against the cached graph (before rebuild). When =index= rebuilds, it saves the old graph. =diff= compares old vs new.
+
+** Tests
+- =test_graph_diff_detects_added_symbol=: add a function, rebuild, diff shows it
+- =test_graph_diff_detects_removed_edge=: remove an import, rebuild, diff shows edge removal
+
+* Incremental Indexing (indexer.rs + cache.rs)
+
+** Current: Full rebuild every time cache is stale.
+
+** New: Patch graph for changed files only.
+
+In =cache.rs=, the =GraphFingerprint= already tracks per-file mtimes. Add a method:
+
+#+begin_src rust
+impl GraphFingerprint {
+    pub fn changed_files(&self, other: &GraphFingerprint) -> Vec<PathBuf> {
+        // Files in self that have different mtime than other, or don't exist in other
+    }
+    pub fn removed_files(&self, other: &GraphFingerprint) -> Vec<PathBuf> {
+        // Files in other that don't exist in self
+    }
+}
+#+end_src
+
+In =indexer.rs=, add =build_incremental=:
+
+#+begin_src rust
+pub fn build_incremental(&self, options: &BuildGraphOptions) -> Result<GraphBuildOutcome> {
+    let current_fingerprint = self.compute_fingerprint(&options.root)?;
+    let cached = self.cache.load(CACHE_NAME)?;
+
+    if cached.is_none() {
+        return self.build(options); // No cache, full build
+    }
+
+    let cached = cached.unwrap();
+    let old_fingerprint = /* stored fingerprint from cache */;
+
+    let changed = current_fingerprint.changed_files(&old_fingerprint);
+    let removed = current_fingerprint.removed_files(&old_fingerprint);
+
+    if changed.is_empty() && removed.is_empty() {
+        return Ok(/* cache is fresh */);
+    }
+
+    let mut graph = cached.graph; // Start from cached graph
+
+    // Remove all nodes/edges for changed + removed files
+    for path in changed.iter().chain(removed.iter()) {
+        remove_file_from_graph(&mut graph, path);
+    }
+
+    // Re-extract and add only changed files
+    for path in &changed {
+        let extracted = self.extract_file(path)?;
+        add_file_to_graph(&mut graph, extracted);
+    }
+
+    // Re-resolve imports for changed files (edges may point to new/removed symbols)
+    resolve_imports_for_files(&mut graph, &changed)?;
+
+    // Save updated graph
+    self.cache.save(&graph, &current_fingerprint)?;
+    Ok(GraphBuildOutcome { graph, fingerprint: current_fingerprint })
+}
+#+end_src
+
+petgraph's =StableGraph= supports node/edge removal while keeping other indices stable — this is why it was chosen.
+
+** Tests
+- =test_incremental_adds_new_file=: build graph, add a file, incremental rebuild, verify new symbols appear
+- =test_incremental_removes_file=: build graph, remove a file, incremental rebuild, verify symbols gone
+- =test_incremental_updates_file=: build graph, modify a file (add function), incremental rebuild, verify new function appears and old version is gone
+
+* NAPI Dispatcher Update (code_graph.rs)
+
+Add "diff" to the command dispatcher. Add =incremental= option to "index" command.
+
+* Verification Criteria
+1. =cargo test -p pi-code-graph= passes all new and existing tests
+2. Search for "FluidOrchestrator" returns it as the first result
+3. Dead code on this repo returns <50 results (vs thousands currently)
+4. Clusters on this repo returns meaningful multi-file clusters (no singletons)
+5. Diff shows added/removed symbols after an incremental rebuild
+6. Incremental index is faster than full rebuild when only 1 file changed

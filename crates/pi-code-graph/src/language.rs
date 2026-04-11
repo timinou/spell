@@ -16,6 +16,8 @@ use crate::{
 	model::SymbolKind,
 };
 
+use pi_code_engine::language::LanguageRegistry as EngineRegistry;
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SupportedLanguage(pub String);
 
@@ -26,6 +28,10 @@ impl SupportedLanguage {
 
 	pub fn as_str(&self) -> &str {
 		&self.0
+	}
+
+	pub fn engine_profile<'a>(&self, registry: &'a EngineRegistry) -> Option<&'a pi_code_engine::language::LanguageProfile> {
+		registry.get(&pi_code_engine::language::LanguageId::new(self.as_str()))
 	}
 }
 
@@ -157,6 +163,14 @@ impl LanguageRegistry {
 	pub fn by_language(&self, language: &SupportedLanguage) -> Option<&RegisteredLanguage> {
 		self.by_name.get(language)
 	}
+}
+
+/// Get engine's language registry with built-in profiles.
+/// This provides access to declaration patterns, production rules,
+/// and tree-sitter languages for all supported languages.
+pub fn engine_registry() -> Result<EngineRegistry> {
+	EngineRegistry::with_builtins()
+		.map_err(|e| crate::error::CodeGraphError::MissingLanguage(e.to_string()))
 }
 
 #[cfg(test)]

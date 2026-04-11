@@ -1,0 +1,108 @@
+use tree_sitter::Node;
+
+use crate::{buffer::CodeBuffer, language::{DeclarationPattern, LanguageProfile}};
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OutlineEntry {
+	pub name: String,
+	pub kind: String,
+	pub line: u32,
+	pub end_line: u32,
+	pub column: u32,
+	pub exported: bool,
+	pub signature: String,
+	#[serde(skip_serializing_if = "Vec::is_empty")]
+	pub children: Vec<Self>,
+}
+
+pub fn outline(buffer: &CodeBuffer, profile: &LanguageProfile) -> Vec<OutlineEntry> {
+	let source = buffer.source();
+	let root = buffer.tree().root_node();
+	let mut cursor = root.walk();
+	root.named_children(&mut cursor).filter_map(|node| entry_for_node(&source, profile, node)).collect()
+}
+
+fn entry_for_node(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Option<OutlineEntry> {
+	if node.kind() == "export_statement" {
+		let mut cursor = node.walk();
+		for child in node.named_children(&mut cursor) {
+			if let Some(entry) = entry_for_node(source, profile, child) { return Some(OutlineEntry { exported: true, ..entry }); }
+		}
+		return None;
+	}
+
+	let decl = declaration_for(profile, node)?;
+	let name = text(source, node.child_by_field_name(&decl.name_field)?)?.trim().to_string();
+	let signature = signature_text(source, node, decl);
+	let start = node.start_position();
+	let end = node.end_position();
+	let children = class_children(source, profile, node);
+	Some(OutlineEntry { name, kind: decl.kind.clone(), line: (start.row + 1) as u32, end_line: (end.row + 1) as u32, column: start.column as u32, exported: is_exported(node, decl), signature, children })
+}
+
+fn class_children(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Vec<OutlineEntry> {
+	let Some(class_like) = profile.class_like.iter().find(|class_like| class_like.node_type == node.kind()) else { return Vec::new(); };
+	let Some(body) = node.child_by_field_name(&class_like.body_field) else { return Vec::new(); };
+	let mut cursor = body.walk();
+	body.named_children(&mut cursor).filter_map(|child| if class_like.member_types.iter().any(|kind| kind == child.kind()) { entry_for_node(source, profile, child) } else { None }).collect()
+}
+
+fn declaration_for<'a>(profile: &'a LanguageProfile, node: Node<'_>) -> Option<&'a DeclarationPattern> { profile.declarations.iter().find(|decl| decl.node_types.iter().any(|kind| kind == node.kind())) }
+
+fn signature_text(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> String {
+	let end_byte = decl.body_field.as_ref().and_then(|field| node.child_by_field_name(field).map(|body| body.start_byte())).unwrap_or_else(|| node.end_byte());
+	let header = source.get(node.start_byte()..end_byte).unwrap_or("").lines().next().unwrap_or("").trim();
+	truncate(header, 200)
+}
+
+fn truncate(text: &str, max_chars: usize) -> String { text.chars().take(max_chars).collect() }
+
+fn text<'a>(source: &'a str, node: Node<'a>) -> Option<&'a str> { source.get(node.start_byte()..node.end_byte()) }
+
+fn is_exported(node: Node<'_>, decl: &DeclarationPattern) -> bool { node.parent().is_some_and(|parent| parent.kind() == "export_statement") || decl.visibility.as_ref().and_then(|field| node.child_by_field_name(field)).is_some() }
+
+pub fn read(buffer: &CodeBuffer, profile: &LanguageProfile, resolution: u8, offset: Option<u32>, limit: Option<u32>) -> String {
+	let source = buffer.source();
+	match resolution {
+		0 => outline(buffer, profile).into_iter().map(|entry| format!("{} ({})", entry.name, entry.kind)).collect::<Vec<_>>().join("\n"),
+		1 => render_outline(&outline(buffer, profile), false, 0),
+		2 => render_outline(&outline(buffer, profile), true, 0),
+		_ => slice_source(&source, offset, limit),
+	}
+}
+
+fn render_outline(entries: &[OutlineEntry], show_children: bool, indent: usize) -> String {
+	let mut lines = Vec::new();
+	for entry in entries {
+		lines.push(format!("{}{}", "  ".repeat(indent), entry.signature));
+		if show_children && !entry.children.is_empty() { lines.push(render_outline(&entry.children, true, indent + 1)); }
+	}
+	lines.into_iter().filter(|line| !line.is_empty()).collect::<Vec<_>>().join("\n")
+}
+
+fn slice_source(source: &str, offset: Option<u32>, limit: Option<u32>) -> String {
+	let start = offset.unwrap_or(1).saturating_sub(1) as usize;
+	let len = limit.map_or(usize::MAX, |l| l as usize);
+	source.lines().skip(start).take(len).collect::<Vec<_>>().join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::{language::{LanguageId, LanguageRegistry}, CodeBuffer};
+	use std::{fs, sync::Arc};
+
+	fn fixture_path() -> String { format!("{}/tests/fixtures/sources/hello.ts", env!("CARGO_MANIFEST_DIR")) }
+	fn registry() -> Arc<LanguageRegistry> { Arc::new(LanguageRegistry::with_builtins().expect("registry")) }
+	fn profile() -> LanguageProfile { registry().get(&LanguageId::new("typescript")).expect("profile").clone() }
+	fn buffer() -> CodeBuffer { CodeBuffer::from_str(&fs::read_to_string(fixture_path()).expect("fixture"), LanguageId::new("typescript"), registry()).expect("buffer") }
+
+	#[test]
+	fn test_outline_typescript() { let buffer = buffer(); let profile = profile(); let entries = outline(&buffer, &profile); assert_eq!(entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), vec!["greet", "Greeter"]); assert_eq!(entries[0].kind, "function"); assert_eq!(entries[1].kind, "class"); }
+	#[test]
+	fn test_outline_children() { let buffer = buffer(); let profile = profile(); let entries = outline(&buffer, &profile); assert_eq!(entries[1].children.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), vec!["constructor", "greet"]); }
+	#[test]
+	fn test_read_resolution_0() { let buffer = buffer(); let profile = profile(); let out = read(&buffer, &profile, 0, None, None); assert!(out.contains("greet (function)")); assert!(out.contains("Greeter (class)")); }
+	#[test]
+	fn test_read_resolution_3_range() { let buffer = buffer(); let profile = profile(); let out = read(&buffer, &profile, 3, Some(1), Some(1)); assert!(out.contains("export function greet")); assert!(!out.contains("class Greeter")); }
+}

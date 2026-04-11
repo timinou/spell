@@ -1,0 +1,504 @@
+#+TITLE: Structural Edit Operations Splice Drag Clone Transpose
+#+STATE: DONE
+#+SESSION_ID: 14b6b08f5a1d2fb1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T17-18-01-064Z_14b6b08f5a1d2fb1.jsonl]]
+#+CUSTOM_ID: FEAT-433-structural-edit-operations-splice-drag-c
+#+EFFORT: 8h
+#+PRIORITY: A
+#+LAYER: engine
+#+DEPENDS: FEAT-431-codebuffer-with-rope-tree-sitter-loro-an FEAT-432-procedure-dsl-and-rule-expansion-engine
+
+* Initial Message
+
+This is what an agent found out after using the new affordances of the `code` tool:
+
+I exercised the code subtools against this repo and inspected the tool prompt/types. Short version:
+
+ It is very useful, but uneven. The graph-backed subtools are strong. The file-local navigation/editing layer is promising but rougher.
+
+ What I checked directly:
+ - status, index, search, context, impact, deps, flow, dead_code, clusters
+ - languages
+ - outline
+ - read at resolutions 1, 2, 3
+ - navigate with node-at, defun-at, siblings, children, parent, references-local
+ - inspected packages/coding-agent/src/prompts/tools/code.md, packages/coding-agent/src/tools/code.ts, packages/emacs/src/types.ts
+
+ What worked well
+
+ - outline: excellent
+     - Fast structural map of a file.
+     - On packages/coding-agent/src/system-prompt.ts it returned top-level symbols, signatures, exported flags, and child structure cleanly.
+     - This is the best “what is in this file?” tool.
+ - read:
+     - Resolution 1: good API skim.
+     - Resolution 2: very good structural read.
+     - Resolution 3: good targeted body read.
+     - This is much more ergonomic than dumping raw source immediately.
+ - status / index:
+     - Clear and useful.
+     - In this repo the graph reported:
+           - 2291 files
+           - 17899 symbols
+           - 46313 edges
+     - This gives confidence the graph is substantial enough to be useful.
+ - context:
+     - High-value.
+     - For packages/coding-agent/src/system-prompt.ts::buildSystemPrompt, it returned callers, callees, imports, and importers in one shot.
+     - This is one of the best subtools.
+ - impact:
+     - High-value for refactors.
+     - It gave depth-grouped blast radius for the same symbol.
+     - Good for “what breaks if I touch this?”
+ - flow:
+     - Good for forward tracing.
+     - Useful when you want downstream execution shape, not just static callers.
+ - deps:
+     - Good at file-level import topology.
+     - Useful when deciding refactor boundaries.
+ - languages:
+     - Clear and practical.
+     - It showed broad installed grammar support, so the file-scoped tooling has a large surface area.
+
+ What was mediocre
+
+ - search:
+     - Useful, but not exact enough to be your only search tool.
+     - It worked well for buildSystemPrompt.
+     - It failed on some exact-looking queries like FluidOrchestrator and TaskExecutor.
+     - Broader BM25-ish queries like queue orchestrator found the fluid orchestrator files.
+     - Conclusion: good semantic-ish repo search, bad exact-symbol oracle.
+ - buffers / diff:
+     - Conceptually useful, but session-dependent.
+     - buffers returned nil/no data when no managed buffer was open.
+     - So it is useful inside an edit workflow, not as a general-purpose standalone inspection tool.
+
+ What was rough
+
+ - navigate:
+     - Mixed at best.
+     - siblings and children returned usable structure.
+     - node-at, defun-at, and parent returned:
+           - Tool "code-navigate" returned no text content block
+     - references-local was especially shaky: when I asked for resolvedCwd, it returned references for const, not the symbol I wanted.
+     - So the navigation family is not yet ergonomic enough to trust blindly.
+ - dead_code:
+     - Too noisy on a repo this size.
+     - It returned thousands of items and obvious duplicates.
+     - Example: repeated Agent.sessionId, providerSessionState, etc.
+     - Useful for a cleanup campaign, not for routine work.
+ - clusters:
+     - Also noisy.
+     - Top results were many one-file, zero-symbol clusters, which are not immediately actionable.
+     - Might be useful for architecture research, but not ergonomic for day-to-day work.
+
+ Important ergonomics mismatch I found
+
+ There is some surface-area drift between docs/schema/types:
+ - Tool prompt advertises edit ops like splice-self, splice-down, transpose
+ - Tool schema in packages/coding-agent/src/tools/code.ts also advertises them
+ - But packages/emacs/src/types.ts omits them from CodeEditOperation
+ - The Elisp backend does support them
+
+ So the backend is richer than one TS type says. That kind of mismatch hurts confidence and discoverability.
+
+ There is also a smaller doc mismatch:
+ - schema includes navigate action parent
+ - prompt text emphasizes other actions more than parent
+ - actual runtime for parent looked flaky anyway
+
+ My overall assessment
+
+ Usefulness: high
+ Ergonomics: medium
+
+ If I score the subtool families:
+
+ - outline, read, context, impact, deps, flow, status, index: 4.5/5
+ - search: 3/5
+ - languages: 3.5/5
+ - buffers, diff: 3/5 inside an edit session, 2/5 otherwise
+ - navigate: 2/5 currently
+ - dead_code, clusters: 2/5 for daily use, 3/5 for offline architecture analysis
+ - edit, install_grammar: potentially useful, but I did not do destructive/runtime-changing calls here
+
+ Best way to think about it
+
+ It is really two tools under one name:
+
+ - Emacs-backed structural file tool
+     - best for outline, read, maybe edit
+ - Native codegraph tool
+     - best for context, impact, deps, flow, status, index
+
+ That split matters because the graph side feels more reliable than the local navigation side.
+
+ Practical recommendation
+
+ Use code aggressively for:
+ - file orientation
+ - structural reading
+ - blast radius
+ - import topology
+ - call graph exploration
+
+ Do not use it alone for:
+ - exact symbol lookup
+ - exact definitions/types
+ - exact code-pattern search
+
+ For those, pair it with:
+ - lsp for exact semantic questions
+ - grep / ast_grep for exact text or syntax shapes
+
+ Bottom line
+
+ The codegraph half is genuinely valuable and can save a lot of time on nontrivial refactors. The local navigation/editing half is not yet
+ ergonomic enough to be a universal default. If you use the strong subtools and avoid over-trusting navigate, it is a net win.
+
+Please gain your own understanding of them and explain to me how you'd get it to a 5/5. This is exploratory first, I want us to talk to each other before we settle on any decision. Dialectic imagination.
+
+* Context: What This Replaces
+
+Combobulate (Emacs Lisp, ~1686 lines in =combobulate-manipulation.el=) provides structural editing operations that work on tree-sitter nodes: splice (unwrap a node keeping selected children), drag (swap sibling nodes), clone (duplicate a node), and transpose (swap adjacent sexp-like nodes). These are backed by combobulate's procedure DSL for finding the right nodes.
+
+In the current Spell code tool, these operations are routed through the Emacs daemon: the TypeScript tool sends JSON-RPC to Emacs, which activates combobulate-mode, positions the cursor, calls the combobulate function, and returns the result. This has latency (socat round-trip), requires the Emacs daemon, and the interactive aspects (proffer choices, overlay preview) are unused by the headless agent.
+
+We're reimplementing these in Rust as pure functions on =CodeBuffer=. Each operation uses the procedure DSL (=FEAT-432=) to find target nodes, then performs text mutations on the buffer. No interactive UI. Deterministic: first match wins.
+
+Research documents:
+- =specs/combobulate_analysis.md= — Part II covers all 4 operations with algorithms and pseudocode
+- =specs/pi-code-engine-spec.md= section 6 — Rust API design
+
+* Goal
+
+Implement all structural edit operations in =crates/pi-code-engine/src/edit/=. Each operation takes a =CodeBuffer= reference, finds the relevant node(s) using the procedure DSL, and returns a list of =TextEdit= values to apply.
+
+The operations also include simple edits (replace, insert-before, insert-after, kill) which don't need the procedure DSL — they just need a node at a given line.
+
+* Design Decisions
+
+1. *Operations return =Vec<TextEdit>=, not mutate directly*. The caller decides whether to apply them (via =buffer.edit_batch()=). This enables preview/diff before applying.
+2. *High-to-low ordering*: =edit_batch= sorts edits by start_byte descending automatically. Operations don't need to worry about position shifts.
+3. *Indentation*: Each operation handles indentation adjustment for its specific case. General strategy: measure the indent of the source node, measure the indent of the target position, compute delta, apply to all lines of the moved/cloned text. First line gets absolute indent, subsequent lines get relative shift.
+4. *Separator detection*: Clone appends a separator (comma, semicolon) if the node's next sibling is an anonymous separator node whose text matches the language profile's =separators= list.
+5. *Error on syntax-error trees*: If the tree has ERROR nodes in the region being operated on, return an error rather than producing garbage. Check =node.has_error()=.
+
+* Files to Create
+
+- =crates/pi-code-engine/src/edit/mod.rs= — re-exports, shared types
+- =crates/pi-code-engine/src/edit/splice.rs= — =splice()= function
+- =crates/pi-code-engine/src/edit/drag.rs= — =drag()= function
+- =crates/pi-code-engine/src/edit/clone.rs= — =clone_node()= function
+- =crates/pi-code-engine/src/edit/transpose.rs= — =transpose()= function
+- =crates/pi-code-engine/src/edit/replace.rs= — =replace_node()=, =insert_before()=, =insert_after()=, =kill_node()=
+- =crates/pi-code-engine/src/edit/indent.rs= — indentation utilities
+
+Add =pub mod edit;= to =lib.rs=.
+
+* Shared Types (mod.rs)
+
+#+begin_src rust
+pub use crate::buffer::TextEdit;
+
+#[derive(Debug, Clone, Copy)]
+pub enum SpliceMode {
+    /// Keep self + everything after + larger containing nodes (splice up).
+    Up,
+    /// Keep only self (splice self).
+    Self_,
+    /// Keep self + everything before + larger containing nodes (splice down).
+    Down,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum DragDirection {
+    Up,   // swap with previous sibling
+    Down, // swap with next sibling
+}
+#+end_src
+
+* Operation: Splice (splice.rs)
+
+** What it does
+Removes a node's parent/container, keeping selected parts of the node based on =SpliceMode=. Example: splicing up an if-statement's body keeps the body statements but removes the if-condition and braces.
+
+** Algorithm
+1. Find node at line using tree-sitter: =tree.root_node().descendant_for_point_range(...)=
+2. Walk up to nearest named node if anonymous
+3. Apply the sibling procedure to find all siblings (using the language's registered sibling procedure, or a default: "match all named children of parent")
+4. Partition siblings by position relative to the target node:
+   - =Before=: siblings that start before the target node
+   - =Self=: the target node itself
+   - =After=: siblings that start after the target node
+   - =Around=: nodes that contain the target (larger than it)
+5. Filter by mode:
+   - =Up=: keep Self + After + Around
+   - =Self_=: keep only Self
+   - =Down=: keep Self + Before + Around
+6. Get the range extent (min start_byte, max end_byte) of all kept nodes
+7. Find the splice parent: walk up from the target node, find the first ancestor whose type is in the language's production rules for the current node type's parent
+8. Build =TextEdit=: delete the parent node's range, insert the kept text at the parent's start position
+9. Adjust indentation: the kept text's first line gets the parent's column, subsequent lines shift by (parent_column - original_column)
+
+** Signature
+#+begin_src rust
+pub fn splice(
+    buffer: &CodeBuffer,
+    line: u32,
+    mode: SpliceMode,
+    profile: &LanguageProfile,
+) -> Result<Vec<TextEdit>>
+#+end_src
+
+** Edge Cases
+- No valid splice parent found: return error "No valid splice target"
+- Target node IS the root: return error "Cannot splice root"
+- ERROR node in tree: return error "Cannot splice: syntax error in region"
+- Single child (nothing to partition): splice up/down equivalent to self
+
+* Operation: Drag (drag.rs)
+
+** What it does
+Swaps a node with its adjacent sibling in the given direction. Example: dragging a function parameter up swaps it with the previous parameter.
+
+** Algorithm
+1. Find named node at line
+2. Get the node's parent
+3. Find the node's index among parent's named children
+4. For DragDirection::Up: get the previous named sibling (index - 1). For Down: next (index + 1).
+5. If no sibling in that direction: return error "No sibling to swap with"
+6. Build two =TextEdit= values: one replaces the node's range with the sibling's text, the other replaces the sibling's range with the node's text. Process high-to-low.
+
+** Signature
+#+begin_src rust
+pub fn drag(
+    buffer: &CodeBuffer,
+    line: u32,
+    direction: DragDirection,
+    profile: &LanguageProfile,
+) -> Result<Vec<TextEdit>>
+#+end_src
+
+** Edge Cases
+- Node is first child and direction is Up: error
+- Node is last child and direction is Down: error
+- Separators between nodes (commas): the swap must preserve them. Strategy: swap only the node text, NOT including trailing separators. Separators are anonymous nodes between the named children — they stay in place.
+
+* Operation: Clone (clone.rs)
+
+** What it does
+Duplicates a node, inserting the copy adjacent to the original. Example: cloning an array element duplicates it in the array.
+
+** Algorithm
+1. Find named node at line
+2. Get the node's text from the buffer source
+3. Detect separator: check the next sibling. If it's anonymous and its text is in =profile.separators=, capture it.
+4. Determine insertion mode:
+   - If the line before the node's start position is blank or only whitespace: newline mode (clone on new line)
+   - Otherwise: inline mode (clone inline with separator)
+5. For newline mode:
+   - Calculate node's indentation (column of first non-whitespace on its start line)
+   - Build text: newline + indent + node_text + separator
+   - Insert at =node.end_byte()=
+6. For inline mode:
+   - Build text: separator + " " + node_text
+   - Insert at =node.end_byte()=
+
+** Signature
+#+begin_src rust
+pub fn clone_node(
+    buffer: &CodeBuffer,
+    line: u32,
+    profile: &LanguageProfile,
+) -> Result<Vec<TextEdit>>
+#+end_src
+
+** Edge Cases
+- No separator detected: clone without separator
+- Multi-line node: preserve internal indentation when cloning on a new line
+
+* Operation: Transpose (transpose.rs)
+
+** What it does
+Swaps two adjacent sexp-like nodes around a given position. Simpler than drag — it doesn't use procedures. It finds the node before point and the node after point, then swaps them.
+
+** Algorithm
+1. Convert (line, column) to byte offset
+2. Find the named node ending just before or at the byte offset (backward node)
+3. Find the named node starting just after or at the byte offset (forward node)
+4. If either not found: return error
+5. Swap their text regions (same as drag's swap)
+
+** Signature
+#+begin_src rust
+pub fn transpose(
+    buffer: &CodeBuffer,
+    line: u32,
+    column: u32,
+    profile: &LanguageProfile,
+) -> Result<Vec<TextEdit>>
+#+end_src
+
+* Simple Edits (replace.rs)
+
+These don't use procedures. They find a node by line + optional node_type, then apply a simple text operation.
+
+#+begin_src rust
+/// Find node at line, replace its text with new content.
+pub fn replace_node(
+    buffer: &CodeBuffer,
+    line: u32,
+    node_type: Option<&str>,
+    content: &str,
+) -> Result<Vec<TextEdit>>;
+
+/// Insert text before the node at line.
+pub fn insert_before(
+    buffer: &CodeBuffer,
+    line: u32,
+    node_type: Option<&str>,
+    content: &str,
+) -> Result<Vec<TextEdit>>;
+
+/// Insert text after the node at line.
+pub fn insert_after(
+    buffer: &CodeBuffer,
+    line: u32,
+    node_type: Option<&str>,
+    content: &str,
+) -> Result<Vec<TextEdit>>;
+
+/// Delete the node at line.
+pub fn kill_node(
+    buffer: &CodeBuffer,
+    line: u32,
+    node_type: Option<&str>,
+) -> Result<Vec<TextEdit>>;
+#+end_src
+
+Node finding: walk the tree looking for a named node whose start line matches. If =node_type= is specified, also match =node.kind()=.
+
+* Indentation Utilities (indent.rs)
+
+#+begin_src rust
+/// Get the indentation column of a line (count of leading whitespace chars).
+pub fn line_indent(source: &str, line: usize) -> usize;
+
+/// Get the indentation of a node's first line.
+pub fn node_indent(source: &str, node: &tree_sitter::Node) -> usize;
+
+/// Adjust indentation of multi-line text.
+/// first_line gets absolute indent of `target_column`.
+/// Subsequent lines shift by `target_column - original_column`.
+pub fn adjust_indent(text: &str, original_column: usize, target_column: usize) -> String;
+
+/// Detect indentation style of a file (tabs vs N spaces).
+pub fn detect_indent_style(source: &str) -> IndentStyle;
+
+pub enum IndentStyle {
+    Tabs,
+    Spaces(usize),
+}
+#+end_src
+
+* Testing (TDD)
+
+Create =crates/pi-code-engine/tests/fixtures/edit_target.ts=:
+#+begin_src typescript
+function outer() {
+  if (condition) {
+    const x = 1;
+    const y = 2;
+    return x + y;
+  }
+}
+
+const items = [1, 2, 3, 4, 5];
+
+function add(a: number, b: number): number {
+  return a + b;
+}
+
+class Foo {
+  bar() { return 1; }
+  baz() { return 2; }
+}
+#+end_src
+
+** Test 1: =test_splice_up_if_statement=
+Splice up on the =return x + y;= line inside the if-statement.
+Mode: Up (keep self + after).
+Expected: the if block is removed, =return x + y;= is preserved at the outer function's indentation level.
+
+** Test 2: =test_splice_self_if_statement=
+Splice self on =const x = 1;= inside the if.
+Mode: Self_ (keep only self).
+Expected: only =const x = 1;= survives, de-indented to the parent's level.
+
+** Test 3: =test_splice_down_if_statement=
+Splice down on =const y = 2;= inside the if.
+Mode: Down (keep self + before).
+Expected: =const x = 1;= and =const y = 2;= survive, =return x + y;= is removed.
+
+** Test 4: =test_drag_up_array_element=
+Drag up on the element =3= in the array =[1, 2, 3, 4, 5]=.
+Expected result: =[1, 3, 2, 4, 5]= (3 and 2 swapped).
+
+** Test 5: =test_drag_down_array_element=
+Drag down on =3=.
+Expected: =[1, 2, 4, 3, 5]= (3 and 4 swapped).
+
+** Test 6: =test_drag_up_first_element_errors=
+Drag up on =1= (first element). Expected: error "No sibling to swap with".
+
+** Test 7: =test_drag_function_parameter=
+Drag down on parameter =a= in =function add(a: number, b: number)=.
+Expected: =function add(b: number, a: number)=.
+
+** Test 8: =test_clone_array_element=
+Clone the element =3= in =[1, 2, 3, 4, 5]=.
+Expected: =[1, 2, 3, 3, 4, 5]= (with comma separator).
+
+** Test 9: =test_clone_function=
+Clone the =add= function.
+Expected: the function is duplicated on a new line below, with correct indentation.
+
+** Test 10: =test_clone_class_method=
+Clone =bar()= method in class Foo.
+Expected: =bar()= duplicated with correct indentation inside the class body.
+
+** Test 11: =test_transpose_parameters=
+Point between =a= and =b= parameters. Transpose.
+Expected: =function add(b: number, a: number)=.
+
+** Test 12: =test_replace_node=
+Replace the =function_declaration= at the =add= function's line with new text ="function sum(x: number, y: number): number { return x + y; }"=.
+Verify the source is updated correctly.
+
+** Test 13: =test_insert_before=
+Insert ="// comment
+"= before the =add= function.
+Verify the comment appears on the line before the function.
+
+** Test 14: =test_insert_after=
+Insert ="// end
+"= after the =add= function.
+Verify it appears after the closing brace.
+
+** Test 15: =test_kill_node=
+Kill the =add= function. Verify it's removed from the source.
+
+** Test 16: =test_splice_error_on_syntax_error=
+Parse a file with invalid syntax. Attempt splice on the error region. Verify error returned.
+
+** Test 17: =test_indent_adjustment=
+Splice up a deeply nested block. Verify the de-indented text has correct indentation (not double-indented, not unindented).
+
+* Verification Criteria
+1. =cargo test -p pi-code-engine -- edit= passes all 17 tests
+2. =cargo clippy -p pi-code-engine= passes
+3. Splice produces valid syntax (re-parse after applying edits has no new ERROR nodes) for all 3 modes
+4. Drag preserves separators between swapped nodes
+5. Clone includes separator when one exists
+6. Indentation is correct after all operations (verify by re-parsing and checking no indentation-related parse errors)

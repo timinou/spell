@@ -1,0 +1,541 @@
+#+TITLE: Outline Resolution-Aware Read and Navigate
+#+STATE: DONE
+#+SESSION_ID: 14b6b08f5a1d2fb1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T17-18-01-064Z_14b6b08f5a1d2fb1.jsonl]]
+#+CUSTOM_ID: FEAT-434-outline-resolution-aware-read-and-naviga
+#+EFFORT: 6h
+#+PRIORITY: A
+#+LAYER: engine
+#+DEPENDS: FEAT-431-codebuffer-with-rope-tree-sitter-loro-an
+
+* Initial Message
+
+This is what an agent found out after using the new affordances of the `code` tool:
+
+I exercised the code subtools against this repo and inspected the tool prompt/types. Short version:
+
+ It is very useful, but uneven. The graph-backed subtools are strong. The file-local navigation/editing layer is promising but rougher.
+
+ What I checked directly:
+ - status, index, search, context, impact, deps, flow, dead_code, clusters
+ - languages
+ - outline
+ - read at resolutions 1, 2, 3
+ - navigate with node-at, defun-at, siblings, children, parent, references-local
+ - inspected packages/coding-agent/src/prompts/tools/code.md, packages/coding-agent/src/tools/code.ts, packages/emacs/src/types.ts
+
+ What worked well
+
+ - outline: excellent
+     - Fast structural map of a file.
+     - On packages/coding-agent/src/system-prompt.ts it returned top-level symbols, signatures, exported flags, and child structure cleanly.
+     - This is the best “what is in this file?” tool.
+ - read:
+     - Resolution 1: good API skim.
+     - Resolution 2: very good structural read.
+     - Resolution 3: good targeted body read.
+     - This is much more ergonomic than dumping raw source immediately.
+ - status / index:
+     - Clear and useful.
+     - In this repo the graph reported:
+           - 2291 files
+           - 17899 symbols
+           - 46313 edges
+     - This gives confidence the graph is substantial enough to be useful.
+ - context:
+     - High-value.
+     - For packages/coding-agent/src/system-prompt.ts::buildSystemPrompt, it returned callers, callees, imports, and importers in one shot.
+     - This is one of the best subtools.
+ - impact:
+     - High-value for refactors.
+     - It gave depth-grouped blast radius for the same symbol.
+     - Good for “what breaks if I touch this?”
+ - flow:
+     - Good for forward tracing.
+     - Useful when you want downstream execution shape, not just static callers.
+ - deps:
+     - Good at file-level import topology.
+     - Useful when deciding refactor boundaries.
+ - languages:
+     - Clear and practical.
+     - It showed broad installed grammar support, so the file-scoped tooling has a large surface area.
+
+ What was mediocre
+
+ - search:
+     - Useful, but not exact enough to be your only search tool.
+     - It worked well for buildSystemPrompt.
+     - It failed on some exact-looking queries like FluidOrchestrator and TaskExecutor.
+     - Broader BM25-ish queries like queue orchestrator found the fluid orchestrator files.
+     - Conclusion: good semantic-ish repo search, bad exact-symbol oracle.
+ - buffers / diff:
+     - Conceptually useful, but session-dependent.
+     - buffers returned nil/no data when no managed buffer was open.
+     - So it is useful inside an edit workflow, not as a general-purpose standalone inspection tool.
+
+ What was rough
+
+ - navigate:
+     - Mixed at best.
+     - siblings and children returned usable structure.
+     - node-at, defun-at, and parent returned:
+           - Tool "code-navigate" returned no text content block
+     - references-local was especially shaky: when I asked for resolvedCwd, it returned references for const, not the symbol I wanted.
+     - So the navigation family is not yet ergonomic enough to trust blindly.
+ - dead_code:
+     - Too noisy on a repo this size.
+     - It returned thousands of items and obvious duplicates.
+     - Example: repeated Agent.sessionId, providerSessionState, etc.
+     - Useful for a cleanup campaign, not for routine work.
+ - clusters:
+     - Also noisy.
+     - Top results were many one-file, zero-symbol clusters, which are not immediately actionable.
+     - Might be useful for architecture research, but not ergonomic for day-to-day work.
+
+ Important ergonomics mismatch I found
+
+ There is some surface-area drift between docs/schema/types:
+ - Tool prompt advertises edit ops like splice-self, splice-down, transpose
+ - Tool schema in packages/coding-agent/src/tools/code.ts also advertises them
+ - But packages/emacs/src/types.ts omits them from CodeEditOperation
+ - The Elisp backend does support them
+
+ So the backend is richer than one TS type says. That kind of mismatch hurts confidence and discoverability.
+
+ There is also a smaller doc mismatch:
+ - schema includes navigate action parent
+ - prompt text emphasizes other actions more than parent
+ - actual runtime for parent looked flaky anyway
+
+ My overall assessment
+
+ Usefulness: high
+ Ergonomics: medium
+
+ If I score the subtool families:
+
+ - outline, read, context, impact, deps, flow, status, index: 4.5/5
+ - search: 3/5
+ - languages: 3.5/5
+ - buffers, diff: 3/5 inside an edit session, 2/5 otherwise
+ - navigate: 2/5 currently
+ - dead_code, clusters: 2/5 for daily use, 3/5 for offline architecture analysis
+ - edit, install_grammar: potentially useful, but I did not do destructive/runtime-changing calls here
+
+ Best way to think about it
+
+ It is really two tools under one name:
+
+ - Emacs-backed structural file tool
+     - best for outline, read, maybe edit
+ - Native codegraph tool
+     - best for context, impact, deps, flow, status, index
+
+ That split matters because the graph side feels more reliable than the local navigation side.
+
+ Practical recommendation
+
+ Use code aggressively for:
+ - file orientation
+ - structural reading
+ - blast radius
+ - import topology
+ - call graph exploration
+
+ Do not use it alone for:
+ - exact symbol lookup
+ - exact definitions/types
+ - exact code-pattern search
+
+ For those, pair it with:
+ - lsp for exact semantic questions
+ - grep / ast_grep for exact text or syntax shapes
+
+ Bottom line
+
+ The codegraph half is genuinely valuable and can save a lot of time on nontrivial refactors. The local navigation/editing half is not yet
+ ergonomic enough to be a universal default. If you use the strong subtools and avoid over-trusting navigate, it is a net win.
+
+Please gain your own understanding of them and explain to me how you'd get it to a 5/5. This is exploratory first, I want us to talk to each other before we settle on any decision. Dialectic imagination.
+
+* Context: What This Replaces
+
+Currently the Emacs daemon handles outline (=pi-outline.el=, 158 lines), resolution-aware read (=pi-resolution.el=, 120 lines), and navigate (=pi-edit.el= lines 102-218). Each call opens a fresh buffer over socat JSON-RPC, parses with tree-sitter, computes the result, kills the buffer. The navigate actions have known bugs: =references-local= ignores the =symbol= parameter, =node-at= and =defun-at= fail silently on whitespace, =parent= returns minimal information.
+
+We're reimplementing all of these as Rust functions operating on =CodeBuffer=. They use the =LanguageProfile= declarations to extract names, kinds, and signatures. Navigate's references action integrates with the codegraph when available.
+
+Canonical references:
+- =specs/pi-code-engine-spec.md= section 7
+- =packages/emacs/elisp/pi-outline.el= — existing outline logic to replicate
+- =packages/emacs/elisp/pi-resolution.el= — existing resolution logic to replicate
+- =packages/emacs/elisp/pi-edit.el= lines 102-218 — existing navigate logic (with known bugs to fix)
+
+* Goal
+
+Implement =outline()=, =read()=, and =navigate()= functions in pi-code-engine. These are the read-only code intelligence functions that the agent uses most frequently (outline and read are rated 4.5/5 in the current Emacs version — we need to match or exceed that quality).
+
+* Files to Create
+
+- =crates/pi-code-engine/src/outline.rs= — =outline()= function and =OutlineEntry= type
+- =crates/pi-code-engine/src/navigate.rs= — =navigate()= function, all 6 actions, =NavigateResult= enum
+
+Resolution-aware read can live in =outline.rs= or a separate =read.rs= — implementer's choice. The key is that =read()= delegates to outline at resolution 0-2 and to rope source access at resolution 3.
+
+Add =pub mod outline;= and =pub mod navigate;= to =lib.rs=.
+
+* Outline (outline.rs)
+
+** Types
+
+#+begin_src rust
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OutlineEntry {
+    pub name: String,
+    pub kind: String,         // "function", "class", "struct", "impl", etc.
+    pub line: u32,            // 1-indexed start line
+    pub end_line: u32,        // 1-indexed end line
+    pub column: u32,          // 1-indexed column of the name
+    pub exported: bool,
+    pub signature: String,    // header without body, capped at 200 chars
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<OutlineEntry>,  // class/interface members
+}
+#+end_src
+
+** Algorithm
+
+1. Get tree root node from buffer
+2. Iterate top-level children (named only) via =root.named_children()=
+3. For nodes wrapped in =export_statement= (TypeScript): unwrap to get the inner declaration
+4. For each child, try to match against =profile.declarations=:
+   - Check if =node.kind()= is in any =DeclarationPattern.node_types=
+   - If match: extract name via =node.child_by_field_name(pattern.name_field)=
+   - Extract kind from =pattern.kind=
+   - Compute signature: get node text, find body field (=pattern.body_field=), replace body with ="{ ... }"= (or ="..."= if no braces), cap at 200 chars
+   - Check exported: is the node or its parent an =export_statement=?
+   - Compute line/end_line/column from node positions (1-indexed)
+5. For =profile.class_like= entries: if the node matches a class_like pattern, recurse into its body to extract member entries using the same declaration matching logic
+6. For nodes that DON'T match any declaration pattern: skip them (don't include in outline)
+7. Special cases per existing Elisp behavior:
+   - =lexical_declaration= (TypeScript const/let/var): name is in =declarator.name=
+   - =decorated_definition= (Python): unwrap to inner =definition= field
+   - =impl_item= (Rust): name is in =type= field, not =name=
+   - Markdown =atx_heading=: name is the heading text with level prefix (=h1: Title=)
+   - YAML/JSON/TOML top-level keys: name is the key text
+   - Elixir =call= nodes: check if target text is a def keyword
+
+These special cases are encoded in the language profiles' =declarations= list. The implementer should check the existing Elisp in =pi-treesit.el= lines 193-320 (=pi-treesit-declaration-name=) and =pi-outline.el= lines 93-143 (=pi-outline--entry=) to ensure feature parity.
+
+** Signature Stubbing
+
+To create a signature (header without body):
+1. Find the body child: =node.child_by_field_name(body_field)=
+2. If body exists: return text from node.start_byte to body.start_byte (everything before the body), trimmed
+3. If no body: return full node text
+4. Cap at 200 characters
+
+* Resolution-Aware Read
+
+#+begin_src rust
+/// Read a buffer at the specified resolution level.
+///
+/// - Resolution 0: names only (one name per line)
+/// - Resolution 1: signatures (body stubbed to "{ ... }")
+/// - Resolution 2: structure (class members visible, method bodies stubbed)
+/// - Resolution 3: full source, optionally with line range
+pub fn read(
+    buffer: &CodeBuffer,
+    profile: &LanguageProfile,
+    resolution: u8,
+    offset: Option<u32>,  // 1-indexed start line for resolution 3
+    limit: Option<u32>,   // max lines for resolution 3
+) -> String
+#+end_src
+
+- Resolution 0: call =outline()=, format as ="name (kind)"= per line
+- Resolution 1: call =outline()=, format as signature per entry
+- Resolution 2: call =outline()= with children, format signatures with children expanded (member signatures visible, their bodies stubbed)
+- Resolution 3: return raw source from rope, optionally sliced by line range. If =offset= provided, start from that line (1-indexed). If =limit= provided, return at most that many lines.
+
+* Navigate (navigate.rs)
+
+** Types
+
+#+begin_src rust
+#[derive(Debug, Clone, Copy)]
+pub enum NavigateAction {
+    NodeAt,
+    DefunAt,
+    Parent,
+    Siblings,
+    Children,
+    References,
+}
+
+/// Result depends on the action.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(untagged)]
+pub enum NavigateResult {
+    NodeAt {
+        #[serde(rename = "type")]
+        node_type: String,
+        text: String,       // first line, capped at 80 chars
+        line: u32,
+        end_line: u32,
+        parent: Option<NodeInfo>,
+    },
+    DefunAt {
+        name: String,
+        #[serde(rename = "type")]
+        kind: String,
+        line: u32,
+        end_line: u32,
+    },
+    Parent {
+        name: String,
+        #[serde(rename = "type")]
+        kind: String,
+        line: u32,
+        end_line: u32,
+        child_count: usize,
+    },
+    Siblings {
+        current_index: i32,
+        siblings: Vec<SiblingInfo>,
+    },
+    Children {
+        parent_type: String,
+        parent_name: String,
+        children: Vec<ChildInfo>,
+    },
+    References {
+        name: String,
+        references: Vec<u32>,  // line numbers
+        #[serde(skip_serializing_if = "Option::is_none")]
+        warning: Option<String>,
+    },
+    Error {
+        error: bool,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NodeInfo {
+    #[serde(rename = "type")]
+    pub node_type: String,
+    pub line: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SiblingInfo {
+    #[serde(rename = "type")]
+    pub node_type: String,
+    pub name: String,
+    pub line: u32,
+    pub end_line: u32,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub current: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChildInfo {
+    #[serde(rename = "type")]
+    pub node_type: String,
+    pub name: String,
+    pub line: u32,
+    pub end_line: u32,
+}
+#+end_src
+
+** Main Function
+
+#+begin_src rust
+pub fn navigate(
+    buffer: &CodeBuffer,
+    profile: &LanguageProfile,
+    action: NavigateAction,
+    line: u32,            // 1-indexed
+    column: Option<u32>,  // 1-indexed, optional
+    symbol: Option<&str>, // for References action
+    graph: Option<&dyn GraphLookup>,  // optional graph for cross-referencing
+) -> NavigateResult
+#+end_src
+
+** Action: NodeAt
+
+1. Convert (line, column) to byte offset. If no column, use start of line.
+2. =tree.root_node().descendant_for_byte_range(offset, offset)= to get smallest node
+3. If node is anonymous (not named), walk up to nearest named node via =.parent()=
+4. Extract: type, text (first line, cap 80 chars), line, end_line
+5. Also get parent info if parent exists
+
+FIX vs Emacs: the current Elisp =node-at= fails when =treesit-node-at= returns on whitespace. We fix this by using =descendant_for_byte_range= which always returns a node, then walking up past anonymous nodes.
+
+** Action: DefunAt
+
+1. Convert line to byte offset (start of line)
+2. Walk up from the node at that position looking for declaration nodes:
+   - For each ancestor, check if =node.kind()= matches any =profile.declarations[].node_types=
+3. If found: extract name (via =child_by_field_name(pattern.name_field)=), kind, line, end_line
+4. If not found: return =NavigateResult::Error { message: "No enclosing function found" }=
+
+FIX vs Emacs: the current Elisp =defun-at= relies on =treesit-defun-at-point= which requires =@function.outer= captures in the grammar. Our version walks the parent chain checking against the language profile's declarations — works for any language with a profile, no special grammar captures needed.
+
+** Action: Parent
+
+1. Find named node at (line, column)
+2. Get its parent (=.parent()=)
+3. If parent exists: extract name (via profile declarations), kind, line, end_line, and child_count (=parent.named_child_count()=)
+4. If no parent: return error
+
+FIX vs Emacs: current Elisp returns only type and line. We add name, kind, end_line, and child_count — making it actually useful.
+
+** Action: Siblings
+
+Same logic as current Elisp (which works well). Find named node, get parent, iterate parent's named children, mark which one is current.
+
+** Action: Children
+
+Same logic as current Elisp (which works well). Find node at line, walk up to a node that has a body (via profile's =body_field=), iterate body's named children.
+
+** Action: References
+
+This is the most changed action. Current Elisp =references-local= ignores the =symbol= parameter and does a brute-force text search including comments and strings.
+
+New behavior:
+1. Determine the symbol name:
+   - If =symbol= parameter provided: use it directly
+   - Else: find the node at (line, column), get its text
+2. Walk the entire tree, collecting nodes whose text matches the symbol name AND whose type is NOT in =profile.references[].exclude_parent_types=. This filters out matches inside comments, strings, etc.
+3. If =graph= is provided: cross-reference the file-local matches against graph edges. For each match, check if the graph has a References/Calls/Imports edge from a symbol in this file to/from the target symbol. Matches with graph edges get higher confidence. Include a note in the result like "Graph confirms 5/8 references".
+4. If =graph= not available: include a warning "Graph not available, results are text-based only".
+
+The =GraphLookup= trait:
+#+begin_src rust
+pub trait GraphLookup {
+    /// Check if the graph has a reference from `from_file` to symbol `name`.
+    fn has_reference(&self, from_file: &Path, name: &str) -> bool;
+    /// Get all files that reference symbol `name`.
+    fn references_to(&self, name: &str) -> Vec<PathBuf>;
+}
+#+end_src
+
+This trait is implemented by pi-code-graph's =CodeGraph= (in a separate item). Navigate doesn't depend on pi-code-graph directly — it takes an =Option<&dyn GraphLookup>=.
+
+* Testing (TDD)
+
+Fixture =tests/fixtures/hello.ts= (same as procedure DSL item):
+#+begin_src typescript
+import { foo } from "./foo";
+
+function greet(name: string): string {
+  if (name === "world") {
+    return `Hello, ${name}!`;
+  }
+  return "Hi";
+}
+
+const items = [1, 2, 3];
+
+class Greeter {
+  name: string;
+  greet() { return "hello"; }
+}
+#+end_src
+
+** Outline Tests
+
+*** =test_outline_typescript=
+Call =outline()= on =hello.ts=.
+Assert entries: greet (function), items (const), Greeter (class).
+Assert Greeter has children: name (field), greet (method).
+Assert greet's signature contains ="function greet(name: string): string"= and NOT the body.
+Assert items' kind is "const".
+
+*** =test_outline_exported=
+Create a fixture with =export function foo() {}=. Assert =exported: true=.
+
+*** =test_outline_rust_fixture=
+Create =tests/fixtures/hello.rs=:
+#+begin_src rust
+use std::io;
+
+fn main() {
+    println!("Hello");
+}
+
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+impl Point {
+    fn distance(&self) -> f64 {
+        (self.x * self.x + self.y * self.y).sqrt()
+    }
+}
+#+end_src
+Assert outline entries: main (fn), Point (struct), Point (impl) with child distance (fn).
+
+** Read Tests
+
+*** =test_read_resolution_0=
+Resolution 0 on =hello.ts=. Assert output contains ="greet (function)"=, ="items (const)"=, ="Greeter (class)"= — one per line.
+
+*** =test_read_resolution_1=
+Resolution 1. Assert output contains function signatures without bodies.
+
+*** =test_read_resolution_2=
+Resolution 2. Assert Greeter's members are visible with stubbed bodies.
+
+*** =test_read_resolution_3=
+Resolution 3 full source. Assert output matches =buffer.source()=.
+
+*** =test_read_resolution_3_with_range=
+Resolution 3 with offset=3, limit=5. Assert only lines 3-7 returned.
+
+** Navigate Tests
+
+*** =test_navigate_node_at=
+Point inside =greet= identifier. Assert =NodeAt= result with type="identifier", text="greet".
+
+*** =test_navigate_node_at_whitespace=
+Point on empty line between functions. Assert still returns a valid node (the nearest named node, e.g., the enclosing program).
+
+*** =test_navigate_defun_at=
+Point inside the if-statement body (deeply nested). Assert =DefunAt= returns name="greet", kind="function".
+
+*** =test_navigate_defun_at_outside_function=
+Point on the =const items= line. Assert error "No enclosing function found".
+
+*** =test_navigate_parent=
+Point on the =return= statement inside the if. Assert parent is the if_statement, with name, kind, child_count.
+
+*** =test_navigate_parent_enriched=
+Assert parent result includes name, kind, end_line, child_count (all the fields Emacs was missing).
+
+*** =test_navigate_siblings=
+Point inside the if-statement body. Assert siblings are all statements in the if body.
+
+*** =test_navigate_children=
+Point on the =greet= function. Assert children of the function body are returned (if-statement, return-statement).
+
+*** =test_navigate_references_with_symbol=
+Call references with symbol="name". Assert line numbers include the parameter definition, the condition, and the template literal usage. Assert lines inside the string literal are EXCLUDED (references filters by exclude_parent_types).
+
+*** =test_navigate_references_without_symbol=
+Call references without symbol parameter, point on the =name= identifier. Assert same results as with symbol="name".
+
+*** =test_navigate_references_filters_comments=
+Add a fixture with a comment containing the symbol name. Assert the comment line is NOT in the references.
+
+* Verification Criteria
+1. =cargo test -p pi-code-engine -- outline= and =cargo test -p pi-code-engine -- navigate= pass all tests
+2. Outline entries match the Emacs version's output for the same files (verified by comparing against =code outline { file: "..." }= output on a known file)
+3. Resolution 0-3 each produce correctly formatted output
+4. Navigate =node-at= never returns "no text content block" error (the Emacs bug)
+5. Navigate =defun-at= works without =@function.outer= captures
+6. Navigate =parent= returns name, kind, end_line, child_count
+7. Navigate =references= uses the =symbol= parameter when provided
+8. Navigate =references= filters out comment/string matches

@@ -24,6 +24,7 @@
 pub mod appearance;
 pub mod ast;
 pub mod clipboard;
+pub mod code_buffer;
 pub mod code_graph;
 pub mod fd;
 pub mod fs_cache;

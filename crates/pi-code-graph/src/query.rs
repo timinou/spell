@@ -5,7 +5,6 @@ use std::{
 
 use petgraph::{
 	Direction,
-	algo::kosaraju_scc,
 	stable_graph::NodeIndex,
 	visit::{EdgeRef, NodeIndexable},
 };
@@ -62,13 +61,15 @@ pub struct GraphFlowResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GraphDeadCodeItem {
-	pub symbol: GraphNodeSummary,
-	pub reason: String,
+	pub symbol:     GraphNodeSummary,
+	pub reason:     String,
+	pub confidence: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GraphCluster {
 	pub id:           usize,
+	pub name:         String,
 	pub files:        Vec<GraphNodeSummary>,
 	pub symbol_count: usize,
 }
@@ -182,7 +183,7 @@ impl CodeGraph {
 
 	pub fn graph_dead_code(&self) -> Vec<GraphDeadCodeItem> {
 		let graph = self.graph();
-		graph
+		let mut items = graph
 			.node_indices()
 			.filter_map(|node_index| {
 				let GraphNode::Symbol(symbol) = graph.node_weight(node_index)? else {
@@ -191,59 +192,77 @@ impl CodeGraph {
 				if symbol.exported
 					|| matches!(symbol.kind, SymbolKind::Module | SymbolKind::Template)
 					|| (symbol.kind == SymbolKind::Method && symbol.name == "constructor")
+					|| is_entry_point_symbol(symbol)
+					|| is_test_path(&symbol.file)
 				{
 					return None;
 				}
-				let has_inbound_usage =
-					graph
-						.edges_directed(node_index, Direction::Incoming)
-						.any(|edge| {
-							matches!(
-								edge.weight(),
-								EdgeKind::Calls
-									| EdgeKind::References
-									| EdgeKind::Inherits
-									| EdgeKind::Renders
-							)
-						});
+				let has_inbound_usage = graph
+					.edges_directed(node_index, Direction::Incoming)
+					.any(|edge| matches!(edge.weight(), EdgeKind::Calls | EdgeKind::References | EdgeKind::Inherits | EdgeKind::Renders));
 				if has_inbound_usage {
 					return None;
 				}
+				let confidence = if symbol.file.file_name().and_then(|name| name.to_str()).is_some_and(|name| matches!(name, "index.ts" | "index.js" | "mod.rs" | "lib.rs")) {
+					"low"
+				} else {
+					"medium"
+				};
 				Some(GraphDeadCodeItem {
 					symbol: summary_for_node(graph, node_index)?,
 					reason: "no inbound semantic references".into(),
+					confidence: confidence.into(),
 				})
 			})
-			.collect()
+			.collect::<Vec<_>>();
+		items.sort_by(|left, right| confidence_rank(&right.confidence).cmp(&confidence_rank(&left.confidence)).then_with(|| left.symbol.label.cmp(&right.symbol.label)));
+		items.truncate(50);
+		items
 	}
 
 	pub fn graph_clusters(&self) -> Vec<GraphCluster> {
 		let graph = self.graph();
-		let components = kosaraju_scc(graph);
-		components
-			.into_iter()
-			.enumerate()
-			.filter_map(|(id, component)| {
-				let files = component
-					.iter()
-					.copied()
-					.filter_map(|node_index| match graph.node_weight(node_index) {
-						Some(GraphNode::File(_)) => summary_for_node(graph, node_index),
-						_ => None,
-					})
-					.collect::<Vec<_>>();
-				if files.is_empty() {
-					return None;
+		let mut visited = BTreeSet::new();
+		let mut clusters = Vec::new();
+		for start in graph.node_indices() {
+			if !visited.insert(start) {
+				continue;
+			}
+			let mut queue = VecDeque::from([start]);
+			let mut component = Vec::new();
+			while let Some(node_index) = queue.pop_front() {
+				component.push(node_index);
+				for edge in graph.edges(node_index) {
+					let neighbor = edge.target();
+					if visited.insert(neighbor) {
+						queue.push_back(neighbor);
+					}
 				}
-				let symbol_count = component
-					.iter()
-					.filter(|node_index| {
-						matches!(graph.node_weight(**node_index), Some(GraphNode::Symbol(_)))
-					})
-					.count();
-				Some(GraphCluster { id, files, symbol_count })
-			})
-			.collect()
+				for edge in graph.edges_directed(node_index, Direction::Incoming) {
+					let neighbor = edge.source();
+					if visited.insert(neighbor) {
+						queue.push_back(neighbor);
+					}
+				}
+			}
+			let files = component
+				.iter()
+				.copied()
+				.filter_map(|node_index| match graph.node_weight(node_index) {
+					Some(GraphNode::File(_)) => summary_for_node(graph, node_index),
+					_ => None,
+				})
+				.collect::<Vec<_>>();
+			if files.len() < 2 {
+				continue;
+			}
+			let symbol_count = component.iter().filter(|node_index| matches!(graph.node_weight(**node_index), Some(GraphNode::Symbol(_)))).count();
+			let name = common_path_prefix(&files);
+			clusters.push((name, files, symbol_count));
+		}
+		clusters.sort_by(|left, right| right.1.len().cmp(&left.1.len()).then_with(|| left.0.cmp(&right.0)));
+		clusters.truncate(20);
+		clusters.into_iter().enumerate().map(|(id, (name, files, symbol_count))| GraphCluster { id, name, files, symbol_count }).collect()
 	}
 }
 
@@ -319,9 +338,7 @@ fn neighbors_by_kind(
 		} else {
 			edge.target()
 		};
-		if seen.insert(other.index())
-			&& let Some(summary) = summary_for_node(graph, other)
-		{
+		if seen.insert(other.index()) && let Some(summary) = summary_for_node(graph, other) {
 			result.push(summary);
 		}
 	}
@@ -402,7 +419,48 @@ fn summary_for_node(
 			column:   symbol.column,
 		}),
 	}
+	}
+
+fn is_test_path(path: &Path) -> bool {
+	let path_str = path.to_string_lossy();
+	path_str.contains("/test/") || path_str.contains("/spec/") || path_str.contains("/__tests__/") || path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.contains(".test.") || name.contains(".spec."))
 }
+
+fn is_entry_point_symbol(symbol: &crate::model::SymbolNode) -> bool {
+	symbol.name == "main" || symbol.name == "default"
+}
+
+fn confidence_rank(confidence: &str) -> usize {
+	match confidence {
+		"high" => 3,
+		"medium" => 2,
+		_ => 1,
+	}
+}
+
+fn common_path_prefix(files: &[GraphNodeSummary]) -> String {
+	let mut parts: Option<Vec<_>> = None;
+	for file in files {
+		let current = file.path.components().collect::<Vec<_>>();
+		parts = Some(match parts {
+			None => current,
+			Some(existing) => existing
+				.into_iter()
+				.zip(current)
+				.take_while(|(left, right)| left == right)
+				.map(|(part, _)| part)
+				.collect(),
+		});
+	}
+	let Some(parts) = parts else {
+		return String::new();
+	};
+	if parts.is_empty() {
+		return String::new();
+	}
+	PathBuf::from_iter(parts).to_string_lossy().to_string()
+}
+
 
 #[cfg(test)]
 mod tests {

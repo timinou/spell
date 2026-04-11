@@ -23,4 +23,9 @@ pub use query::{
 	GraphImpactResult, GraphNodeSummary, GraphSearchMatch, GraphStatus, GraphTraversalLevel,
 };
 pub use search::{SearchHit, SearchIndex};
+pub use pi_code_engine::language::{
+	LanguageProfile as EngineLanguageProfile,
+	LanguageRegistry as EngineLanguageRegistry,
+};
+
 pub use store::GraphStore;
