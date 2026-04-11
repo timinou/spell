@@ -14,19 +14,28 @@
  * The NiriEventStream is mocked so tests run without a real socket.
  */
 
-import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+
 import { ImageProtocol, setTerminalImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
+
 import type { NiriOverviewContext } from "../src/controller";
+
 import { NiriOverviewController } from "../src/controller";
+import * as niriQuery from "../src/niri-query";
+
 import type { OverviewComponent } from "../src/overview-component";
+
 import type { AgentStatus } from "../src/types";
 
 // ─── Mock NiriEventStream ─────────────────────────────────────────────────────
 
 // We intercept the module so NiriOverviewController never opens a real socket.
+
 type EventCb = (event: object) => void;
 
 let capturedCallback: EventCb | null = null;
+
 let streamDestroyed = false;
 
 mock.module("../src/ipc.ts", () => ({
@@ -41,32 +50,13 @@ mock.module("../src/ipc.ts", () => ({
 	},
 }));
 
-// ─── Mock Bun.write, node:fs/promises, and niri-query ─────────────────────────────
+// ─── Spy on Bun.write, node:fs/promises, and niri-query ──────────────────────
 
 // Track Bun.write and fs.rm calls to verify status file behavior.
 const writtenFiles: Record<string, string> = {};
 const removedFiles: string[] = [];
 
-// @ts-expect-error — patching global Bun.write to capture writes in tests
-Bun.write = (path: string, content: string) => {
-	writtenFiles[path] = content;
-	return Promise.resolve(content.length);
-};
-
-// Stub fs.mkdir (no-op) and capture fs.rm calls.
-mock.module("node:fs/promises", () => ({
-	mkdir: () => Promise.resolve(),
-	rm: (path: string) => {
-		removedFiles.push(path);
-		return Promise.resolve();
-	},
-}));
-
-// Stub niri-query so tests don't require a running niri compositor.
 let fakeWindowId: number | null = 42;
-mock.module("../src/niri-query.ts", () => ({
-	queryNiriFocusedWindowId: () => Promise.resolve(fakeWindowId),
-}));
 
 type MutableTerminalInfo = {
 	imageProtocol: ImageProtocol | null;
@@ -85,11 +75,31 @@ function restoreStdoutIsTty(): void {
 	delete (process.stdout as unknown as { isTTY?: boolean }).isTTY;
 }
 
+beforeEach(() => {
+	for (const key of Object.keys(writtenFiles)) {
+		delete writtenFiles[key];
+	}
+	removedFiles.length = 0;
+	fakeWindowId = 42;
+	spyOn(Bun, "write").mockImplementation((filePath, content) => {
+		const rendered = typeof content === "string" ? content : String(content);
+		writtenFiles[String(filePath)] = rendered;
+		return Promise.resolve(rendered.length);
+	});
+	spyOn(fs, "mkdir").mockImplementation(async () => undefined);
+	spyOn(fs, "rm").mockImplementation(async targetPath => {
+		removedFiles.push(String(targetPath));
+	});
+	spyOn(niriQuery, "queryNiriFocusedWindowId").mockImplementation(async () => fakeWindowId);
+	spyOn(niriQuery, "queryFocusedWorkspace").mockResolvedValue(null);
+});
+
 afterEach(() => {
 	setTerminalImageProtocol(originalProtocol);
 	terminalInfo.imageProtocol = originalProtocol;
 	process.stdout.write = originalStdoutWrite;
 	restoreStdoutIsTty();
+	vi.restoreAllMocks();
 });
 
 // ─── Factory helpers ──────────────────────────────────────────────────────────

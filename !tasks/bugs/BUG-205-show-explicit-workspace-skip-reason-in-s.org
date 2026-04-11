@@ -1,0 +1,79 @@
+#+TITLE: Show explicit workspace-skip reason in spell recover dry-run output
+#+STATE: DONE
+#+SESSION_ID: 14b6df35f173cb3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-41-50-277Z_14b6df35f173cb3c.jsonl]]
+#+CUSTOM_ID: BUG-205-show-explicit-workspace-skip-reason-in-s
+#+EFFORT: 15m
+#+PRIORITY: #C
+#+LAYER: cli
+#+DEPENDS: 
+
+NOTE [2026-04-11]: Implemented in PLAN-186. Verification: manual dry-run checks covered by packages/coding-agent/test/recover-command.test.ts and focused CLI runs.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-056-audit-implementation:
+
+- **What**: Recovery metadata dedup ignores `sessionId`, `sessionFile`, `cwd`, and `workspaceName`
+  - **Where**: `packages/desktop-common/src/status-file.ts`, `StatusFileWriter.writeIfChanged()` dedup key
+  - **Why**: If the first write happens before workspace lookup succeeds or before recovery metadata is fully available, later writes with the same status/title are skipped. That leaves status files permanently incomplete, so `spell recover` may skip a crashed session or restore it without its workspace.
+  - **Effort**: small
+
+- **What**: Status-file persistence still hides write failures behind fire-and-forget `Bun.write(...).catch(() => {})`
+  - **Where**: `packages/desktop-common/src/status-file.ts`, `StatusFileWriter.writeIfChanged()`
+  - **Why**: Crash recovery now depends on these files. If the write fails due to permissions, disk issues, or shutdown timing, callers get no signal and the user later sees missing or stale recoverable sessions with no explanation.
+  - **Effort**: medium
+
+- **What**: `spell recover` and startup crash notification have no automated coverage
+  - **Where**: `packages/coding-agent/src/commands/recover.ts`, `packages/coding-agent/src/main.ts`
+  - **Why**: The highest-risk behaviors are only manually verified right now: dry-run output, ghostty-missing fallback, niri-unavailable behavior, cleanup of only successfully recovered status files, and notification suppression for `--resume`/`--continue`/`--no-session`. These are easy to regress silently.
+  - **Effort**: small
+
+- **What**: Relevant test suites are not isolation-safe when run together
+  - **Where**: `packages/niri/test/controller.test.ts`, around the mock/teardown for process-liveness behavior
+  - **Why**: Running `packages/desktop-common/test/status-file.test.ts` and `packages/niri/test/controller.test.ts` in one `bun test` invocation fails because global state leaks across files. That weakens confidence in grouped verification and can hide future regressions behind test-order sensitivity.
+  - **Effort**: trivial
+
+- **What**: Dry-run output silently omits workspace restoration when niri is unavailable or `--no-workspace` is used
+  - **Where**: `packages/coding-agent/src/commands/recover.ts`, `--dry-run` branch
+  - **Why**: Dry-run is the main operator-facing preview. When workspace commands are absent, the output does not explicitly say whether workspaces are being skipped by user choice, lack of niri, or missing metadata, which makes troubleshooting harder after a crash.
+  - **Effort**: trivial
+
+* Goal
+
+When ~spell recover --dry-run~ omits workspace restoration commands, print an explicit line explaining why (niri not found vs ~--no-workspace~ flag).
+
+* Context
+
+Currently the dry-run output silently skips ~niri msg action focus-workspace~ commands when either niri is unavailable or ~--no-workspace~ is set. The user cannot tell from the output alone whether workspaces are being skipped intentionally, due to missing niri, or for another reason. This makes post-crash troubleshooting harder.
+
+* Implementation
+
+** File: ~packages/coding-agent/src/commands/recover.ts~
+
+In the dry-run branch (around line 152), after writing the ~spawnMode~ header and before iterating groups, add:
+
+#+begin_src typescript
+if (flags["no-workspace"]) {
+    process.stdout.write("(--no-workspace: workspace commands omitted)
+");
+} else if (!niriAvailable) {
+    process.stdout.write("(niri not found: workspace commands omitted)
+");
+}
+#+end_src
+
+This goes between line 156 (~process.stdout.write(`Dry run — showing ${spawnMode}:
+`)~) and line 157 (~for (const group of groups)~).
+
+* Verification
+
+- ~bun check:ts~ passes
+- Manual: ~spell recover --dry-run --no-workspace~ output includes "(--no-workspace: workspace commands omitted)"
+- Manual: ~spell recover --dry-run~ without niri installed includes "(niri not found: workspace commands omitted)"
+- If automated tests from FEAT-454 are already present, scenarios 3 and 7 should assert on these new strings.
+
+* Edge Cases
+
+- When niri IS available and ~--no-workspace~ is NOT set: no extra line printed (workspace commands appear inline).
+- Order of precedence: ~--no-workspace~ flag is checked first because it's an explicit user choice; niri availability is a fallback reason.

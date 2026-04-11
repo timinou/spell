@@ -1,0 +1,98 @@
+#+TITLE: Fix niri controller test isolation restore Bunwrite and mock queryFocusedWorkspace
+#+STATE: DONE
+#+SESSION_ID: 14b6df35f173cb3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-41-50-277Z_14b6df35f173cb3c.jsonl]]
+#+CUSTOM_ID: BUG-204-fix-niri-controller-test-isolation-resto
+#+EFFORT: 30m
+#+PRIORITY: #A
+#+LAYER: desktop
+
+NOTE [2026-04-11]: Implemented in PLAN-186. Verification: bun test packages/desktop-common/test/status-file.test.ts packages/niri/test/controller.test.ts
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-056-audit-implementation:
+
+- **What**: Recovery metadata dedup ignores `sessionId`, `sessionFile`, `cwd`, and `workspaceName`
+  - **Where**: `packages/desktop-common/src/status-file.ts`, `StatusFileWriter.writeIfChanged()` dedup key
+  - **Why**: If the first write happens before workspace lookup succeeds or before recovery metadata is fully available, later writes with the same status/title are skipped. That leaves status files permanently incomplete, so `spell recover` may skip a crashed session or restore it without its workspace.
+  - **Effort**: small
+
+- **What**: Status-file persistence still hides write failures behind fire-and-forget `Bun.write(...).catch(() => {})`
+  - **Where**: `packages/desktop-common/src/status-file.ts`, `StatusFileWriter.writeIfChanged()`
+  - **Why**: Crash recovery now depends on these files. If the write fails due to permissions, disk issues, or shutdown timing, callers get no signal and the user later sees missing or stale recoverable sessions with no explanation.
+  - **Effort**: medium
+
+- **What**: `spell recover` and startup crash notification have no automated coverage
+  - **Where**: `packages/coding-agent/src/commands/recover.ts`, `packages/coding-agent/src/main.ts`
+  - **Why**: The highest-risk behaviors are only manually verified right now: dry-run output, ghostty-missing fallback, niri-unavailable behavior, cleanup of only successfully recovered status files, and notification suppression for `--resume`/`--continue`/`--no-session`. These are easy to regress silently.
+  - **Effort**: small
+
+- **What**: Relevant test suites are not isolation-safe when run together
+  - **Where**: `packages/niri/test/controller.test.ts`, around the mock/teardown for process-liveness behavior
+  - **Why**: Running `packages/desktop-common/test/status-file.test.ts` and `packages/niri/test/controller.test.ts` in one `bun test` invocation fails because global state leaks across files. That weakens confidence in grouped verification and can hide future regressions behind test-order sensitivity.
+  - **Effort**: trivial
+
+- **What**: Dry-run output silently omits workspace restoration when niri is unavailable or `--no-workspace` is used
+  - **Where**: `packages/coding-agent/src/commands/recover.ts`, `--dry-run` branch
+  - **Why**: Dry-run is the main operator-facing preview. When workspace commands are absent, the output does not explicitly say whether workspaces are being skipped by user choice, lack of niri, or missing metadata, which makes troubleshooting harder after a crash.
+  - **Effort**: trivial
+
+* Goal
+
+Fix ~packages/niri/test/controller.test.ts~ so it does not leak global state (~Bun.write~ patch, ~node:fs/promises~ mock) to other test files when run in the same ~bun test~ invocation. Also add the missing ~queryFocusedWorkspace~ mock export to prevent real shell calls during tests.
+
+* Context
+
+The controller test patches ~Bun.write~ at module scope (line 51) and never restores it in ~afterEach~. Similarly, ~mock.module("node:fs/promises")~ replaces ~fs.mkdir~ and ~fs.rm~ globally. When ~bun test~ runs this file alongside ~packages/desktop-common/test/status-file.test.ts~, the status-file tests fail because ~Bun.write~ writes to ~writtenFiles~ (an in-memory map) instead of disk.
+
+Additionally, the ~mock.module("../src/niri-query.ts")~ stub only exports ~queryNiriFocusedWindowId~ but the controller now also imports ~queryFocusedWorkspace~ (added in PLAN-182). The missing mock means the real function runs during tests, attempting ~niri msg~ shell commands.
+
+* Implementation
+
+** File: ~packages/niri/test/controller.test.ts~
+
+*** 1. Save and restore Bun.write
+
+Before the patch (around line 50), save the original:
+#+begin_src typescript
+const originalBunWrite = Bun.write;
+#+end_src
+
+In the ~afterEach~ block (around line 88), add:
+#+begin_src typescript
+// @ts-expect-error — restoring original Bun.write
+Bun.write = originalBunWrite;
+#+end_src
+
+*** 2. Add queryFocusedWorkspace to the niri-query mock
+
+Change the mock (around line 67-69) from:
+#+begin_src typescript
+mock.module("../src/niri-query.ts", () => ({
+    queryNiriFocusedWindowId: () => Promise.resolve(fakeWindowId),
+}));
+#+end_src
+To:
+#+begin_src typescript
+mock.module("../src/niri-query.ts", () => ({
+    queryNiriFocusedWindowId: () => Promise.resolve(fakeWindowId),
+    queryFocusedWorkspace: () => Promise.resolve(null),
+}));
+#+end_src
+
+*** 3. Clear test state in beforeEach
+
+In the existing ~beforeEach~ (if one exists) or add one near the ~afterEach~, clear the ~writtenFiles~ and ~removedFiles~ tracking maps to prevent cross-test bleed within the same file. Look for existing ~beforeEach~ blocks that clear these; if they exist inside ~describe~ blocks, ensure the top-level state is also cleared.
+
+* Verification
+
+- ~bun test packages/niri/test/controller.test.ts~ passes (37 tests)
+- ~bun test packages/desktop-common/test/status-file.test.ts~ passes (8+ tests)
+- ~bun test packages/niri/test/controller.test.ts packages/desktop-common/test/status-file.test.ts~ passes both suites together in a single invocation — this is the critical acceptance criterion
+- ~bun check:ts~ passes
+
+* Edge Cases
+
+- The ~mock.module~ for ~node:fs/promises~ may also leak. If the combined test still fails after restoring ~Bun.write~, the ~fs~ mock is the next candidate. The executor should check and fix if needed.
+- The ~@ts-expect-error~ on ~Bun.write~ assignment is needed because Bun's type definitions mark it as read-only.

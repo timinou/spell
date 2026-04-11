@@ -1,0 +1,87 @@
+#+TITLE: Harden crash recovery dedup fix write logging test coverage isolation
+#+STATE: DONE
+#+SESSION_ID: 14b6df35f173cb3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-41-50-277Z_14b6df35f173cb3c.jsonl]]
+#+CUSTOM_ID: PLAN-186-harden-crash-recovery-dedup-fix-write-lo
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+
+NOTE [2026-04-11]: Completed implementation and verification for crash recovery hardening.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-056-audit-implementation:
+
+- **What**: Recovery metadata dedup ignores `sessionId`, `sessionFile`, `cwd`, and `workspaceName`
+  - **Where**: `packages/desktop-common/src/status-file.ts`, `StatusFileWriter.writeIfChanged()` dedup key
+  - **Why**: If the first write happens before workspace lookup succeeds or before recovery metadata is fully available, later writes with the same status/title are skipped. That leaves status files permanently incomplete, so `spell recover` may skip a crashed session or restore it without its workspace.
+  - **Effort**: small
+
+- **What**: Status-file persistence still hides write failures behind fire-and-forget `Bun.write(...).catch(() => {})`
+  - **Where**: `packages/desktop-common/src/status-file.ts`, `StatusFileWriter.writeIfChanged()`
+  - **Why**: Crash recovery now depends on these files. If the write fails due to permissions, disk issues, or shutdown timing, callers get no signal and the user later sees missing or stale recoverable sessions with no explanation.
+  - **Effort**: medium
+
+- **What**: `spell recover` and startup crash notification have no automated coverage
+  - **Where**: `packages/coding-agent/src/commands/recover.ts`, `packages/coding-agent/src/main.ts`
+  - **Why**: The highest-risk behaviors are only manually verified right now: dry-run output, ghostty-missing fallback, niri-unavailable behavior, cleanup of only successfully recovered status files, and notification suppression for `--resume`/`--continue`/`--no-session`. These are easy to regress silently.
+  - **Effort**: small
+
+- **What**: Relevant test suites are not isolation-safe when run together
+  - **Where**: `packages/niri/test/controller.test.ts`, around the mock/teardown for process-liveness behavior
+  - **Why**: Running `packages/desktop-common/test/status-file.test.ts` and `packages/niri/test/controller.test.ts` in one `bun test` invocation fails because global state leaks across files. That weakens confidence in grouped verification and can hide future regressions behind test-order sensitivity.
+  - **Effort**: trivial
+
+- **What**: Dry-run output silently omits workspace restoration when niri is unavailable or `--no-workspace` is used
+  - **Where**: `packages/coding-agent/src/commands/recover.ts`, `--dry-run` branch
+  - **Why**: Dry-run is the main operator-facing preview. When workspace commands are absent, the output does not explicitly say whether workspaces are being skipped by user choice, lack of niri, or missing metadata, which makes troubleshooting harder after a crash.
+  - **Effort**: trivial
+
+* Context
+
+Audit AUD-056 identified five hardening gaps in the crash recovery feature (PLAN-182):
+
+1. *Dedup key excludes metadata*: ~StatusFileWriter.writeIfChanged()~ dedup key only includes status+title, so recovery metadata set after the first write is silently dropped.
+2. *Write failures hidden*: ~Bun.write(...).catch(() => {})~ discards filesystem errors that prevent crash recovery from functioning.
+3. *No automated tests*: ~spell recover~ and startup crash notification have zero automated coverage — manual verification only.
+4. *Test isolation leak*: ~packages/niri/test/controller.test.ts~ patches ~Bun.write~ globally without restoring it, breaking co-resident test suites.
+5. *Dry-run silent omission*: ~--dry-run~ omits workspace commands without explaining whether niri is missing or ~--no-workspace~ was used.
+
+Fixes are ordered by dependency: isolation fix first (unblocks running combined tests), dedup + write logging next (foundation correctness), automated tests last (validates all prior fixes), with the trivial dry-run notice fitting anywhere.
+
+* Verification
+
+- ~bun test packages/desktop-common/test/status-file.test.ts packages/niri/test/controller.test.ts~ — passes in a single invocation (proves isolation fix)
+- ~bun test packages/coding-agent/test/recover-command.test.ts~ — all 10 scenarios pass
+- ~bun test packages/desktop-common/test/status-file.test.ts~ — includes new dedup-counter tests
+- ~bun check:ts~ passes across all modified packages
+
+* Execution Manifest
+
+** Wave 1: Isolation + trivial fixes (parallel, no dependencies)
+- [[id:BUG-204-fix-niri-controller-test-isolation-resto]] (30m, desktop layer) — restore ~Bun.write~, add ~queryFocusedWorkspace~ mock
+- [[id:BUG-205-show-explicit-workspace-skip-reason-in-s]] (15m, cli layer) — dry-run workspace notice
+
+** Wave 2: Foundation correctness (parallel, no cross-dependencies)
+- [[id:BUG-202-fix-status-file-dedup-key-to-include-rec]] (1h, desktop layer) — metadata version counter in dedup key
+- [[id:BUG-203-log-status-file-write-failures-instead-o]] (1h, desktop layer) — logger.warn on write/cleanup failures. Depends on BUG-202 (same file).
+
+** Wave 3: Test coverage (depends on all above)
+- [[id:FEAT-454-add-automated-tests-for-spell-recover-co]] (3h, cli layer) — subprocess-based tests for recover command + startup notification
+
+Total effort: ~6h
+
+
+** Completion [2026-04-11]
+*** Verification
+- `bun test packages/desktop-common/test/status-file.test.ts packages/niri/test/controller.test.ts` -> passed (`49 pass`, `0 fail`).
+- `bun test packages/desktop-common/test/status-file.test.ts` -> passed (`12 pass`, `0 fail`).
+- `bun test packages/coding-agent/test/recover-command.test.ts` -> passed (`12 pass`, `0 fail`).
+- `bun check:ts` -> passed (`biome check . && tsgo -p tsconfig.json`).
+- Manual dry-run spot checks:
+  - `HOME=/tmp/plan186-bug205-home bun packages/coding-agent/src/cli.ts recover --dry-run --no-workspace` printed `(--no-workspace: workspace commands omitted)`.
+  - `PATH=<bun-dir> HOME=/tmp/plan186-bug205-home bun packages/coding-agent/src/cli.ts recover --dry-run` printed `(niri not found: workspace commands omitted)`.
+*** Artifacts
+- None.
+*** Deviations
+- None.
