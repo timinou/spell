@@ -340,4 +340,37 @@ mod tests {
 		assert_eq!(hits[0].label, "throttle");
 		assert_eq!(hits[1].label, "rate_limit");
 	}
+	#[test]
+	fn graph_search_surfaces_vector_only_matches() {
+		let graph = test_graph();
+		let bm25_graph = CodeGraph::new(graph.persisted().clone());
+		let vector_index = pi_code_vectors::VectorIndex::new(
+			vec![
+				pi_code_vectors::VectorEntry { node_index: 1, vector: vec![0.95, 0.05, 0.0] },
+				pi_code_vectors::VectorEntry { node_index: 2, vector: vec![0.80, 0.20, 0.0] },
+				pi_code_vectors::VectorEntry { node_index: 4, vector: vec![0.70, 0.30, 0.0] },
+				pi_code_vectors::VectorEntry { node_index: 3, vector: vec![0.05, 0.05, 0.90] },
+			],
+			3,
+		);
+		let graph_with_vectors = CodeGraph::with_vectors(graph.into_persisted(), vector_index);
+		let query_vector = vec![1.0, 0.0, 0.0];
+
+		let hybrid_results = graph_with_vectors.graph_search("limiter", Some(&query_vector), 10);
+		let bm25_results = bm25_graph.graph_search("limiter", None, 10);
+
+		assert!(!hybrid_results.is_empty(), "hybrid search should return results");
+		assert!(
+			hybrid_results
+				.iter()
+				.any(|hit| hit.summary.label.ends_with("src/lib.rs::throttle")),
+			"hybrid search should surface throttle via vector similarity"
+		);
+		assert!(
+			!bm25_results
+				.iter()
+				.any(|hit| hit.summary.label.ends_with("src/lib.rs::throttle")),
+			"bm25-only search should not surface throttle for limiter queries"
+		);
+	}
 }

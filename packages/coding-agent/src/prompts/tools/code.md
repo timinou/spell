@@ -15,14 +15,14 @@ What are you doing? → subcommand:
 - Replace node content → `code edit { operation: "replace", target: { line }, content }`
 - Preview before saving → `code edit { … }` then `code diff { file }` (edits stay in-memory until `code save { file }`)
 - Build or rebuild the project graph → `code index`
-- Check graph cache/index health → `code status`
+- Check graph cache and semantic index health → `code status`
 - Ask how a symbol is connected → `code context { symbol }`
 - Ask what breaks if a symbol changes → `code impact { symbol, depth? }`
 - Inspect file-level dependencies → `code deps { file }`
 - Walk forward call flow → `code flow { symbol, depth? }`
 - Find likely dead symbols → `code dead_code { limit? }`
 - Find architectural clusters → `code clusters { limit? }`
-- Search graph symbols/files → `code search { query, limit? }`
+- Search graph symbols/files → `code search { query, limit?, semantic? }`
 - Non-code file → use `read` tool instead
 
 Workflow:
@@ -47,14 +47,14 @@ Workflow:
 - `redo`: Redo last undo
 - `save`: Save buffer to disk
 - `index`: Build and persist the native project graph under `.spell/graph/`
-- `status`: Report graph cache state, counts, and language coverage
+- `status`: Report graph cache state, semantic index availability, counts, and language coverage
 - `context`: Callers, callees, references, imports, and inheritance around one symbol
 - `impact`: Reverse dependency / blast-radius traversal grouped by depth
 - `deps`: Incoming and outgoing import edges for one file
 - `flow`: Forward call traversal grouped by depth
 - `dead_code`: Symbols with no inbound semantic usage
 - `clusters`: Connected file clusters with symbol counts
-- `search`: BM25-style graph search over symbols and files
+- `search`: Keyword or hybrid semantic graph search over symbols and files
 </operations>
 
 <output>
@@ -66,8 +66,8 @@ Workflow:
 - Use file-scoped commands for local syntax work; use graph commands for cross-file reasoning
 - `context`, `impact`, and `flow` require `symbol`
 - `deps` requires `file`
-- `search` requires `query`
-- `status` reports cache state without forcing a rebuild
+- `search` requires `query`; optional `semantic` forces hybrid search (`true`) or BM25-only search (`false`)
+- `status` reports graph and semantic cache state without forcing a rebuild
 - `index` forces a rebuild; other graph commands auto-build when needed
 - Do NOT default to resolution 3 for file reads
 - Do NOT skip `navigate node-at` before destructive edits

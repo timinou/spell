@@ -1,0 +1,118 @@
+#+TITLE: Add CI-gated embedding model lifecycle tests
+#+STATE: DONE
+#+SESSION_ID: 14b6e672eb0c82b8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-13-27-724Z_14b6e672eb0c82b8.jsonl]]
+#+CUSTOM_ID: FEAT-462-add-ci-gated-embedding-model-lifecycle-t
+#+EFFORT: 1h
+#+PRIORITY: B
+#+LAYER: native
+
+NOTE [2026-04-11]: Replaced ignored model-backed tests with feature-gated coverage in pi-code-vectors; verified with cargo test -p pi-code-vectors and cargo check -p pi-code-vectors --features test-embedding.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-058-audit-implementation:
+
+- **What**: `index --semantic` reports success even when semantic indexing fails  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `run_code_graph()` `"index"` branch around `build_semantic_index()` handling  
+  **Why**: The command appends `Semantic: failed (...)` to the output string but still returns a successful result. Callers cannot reliably distinguish “graph indexed with vectors” from “graph indexed without vectors after failure,” which can hide missing semantic capability and make later search behavior misleading.  
+  **Effort**: small
+
+- **What**: `semantic` is accepted in the public options type but ignored for search behavior  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `CodeGraphOptions` / `CodeGraphTaskOptions` plus `"search"` dispatch branch  
+  **Why**: The API accepts `semantic: Option<bool>`, but only the `"index"` branch uses it. Search always auto-uses vectors if cache exists, and never uses the flag to force or suppress semantic retrieval. That is a contract violation: callers can pass input that is silently discarded.  
+  **Effort**: small
+
+- **What**: Corrupt or stale vector cache silently degrades to BM25-only search  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `load_vector_cache()` and `"search"` branch fallback logic  
+  **Why**: Any cache open/deserialize failure returns `None`, and query embedding failures also fall back silently. Users get plausible-looking search results without any indication that semantic retrieval was unavailable, which makes failures hard to detect and debug.  
+  **Effort**: small
+
+- **What**: Vector cache writes bypass the graph cache’s atomic persistence path  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `save_vector_cache()`  
+  **Why**: The file is written directly with `File::create(...)` instead of an atomic temp-write/rename flow like the graph cache. A crash or interruption can leave a partial `workspace-vectors.bin`, which is later treated as “no vectors” rather than a surfaced failure.  
+  **Effort**: small
+
+- **What**: Vector cache invalidation hashes only a hand-picked subset of fingerprint state  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `compute_fingerprint_hash()`  
+  **Why**: The vector cache freshness rule is reimplemented separately from the graph cache contract. If `GraphFingerprint` semantics change later, vector invalidation can drift and keep stale embeddings “fresh” even when the graph cache would consider them stale.  
+  **Effort**: small
+
+- **What**: Embedding dimension is hardcoded to `768` instead of derived from model output  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `build_semantic_index()`  
+  **Why**: This is correct for the current model, but brittle. A future model/config change can silently break search or produce dimension mismatches. Deriving the dimension from the first embedding would make the implementation truthfully reflect the actual model output.  
+  **Effort**: trivial
+
+- **What**: Semantic chunking uses a simple line-range heuristic that is not covered for nested/enclosing symbols  
+  **Where**: `crates/pi-code-graph/src/chunking.rs`, `extract_chunks()` end-boundary logic  
+  **Why**: A symbol’s chunk ends at the next symbol’s start line. For nested structures like classes with methods, the enclosing symbol can lose most of its body/context, which hurts retrieval quality. Current tests cover flat sibling symbols, missing files, and truncation, but not nested declarations.  
+  **Effort**: medium
+
+- **What**: No integration test covers the N-API semantic flow end-to-end  
+  **Where**: `crates/pi-natives/src/code_graph.rs` semantic index/search path; test gap across `pi-natives`  
+  **Why**: Lower-level unit tests pass, but there is no test proving that: semantic indexing writes the vector cache, stale vectors are ignored, cached vectors are loaded into search, and hybrid results are returned through the N-API entrypoint. That leaves the highest-risk wiring path unprotected.  
+  **Effort**: medium
+
+- **What**: Real embedding/model lifecycle is not exercised by automated tests  
+  **Where**: `crates/pi-code-vectors/src/embedding.rs`, ignored tests  
+  **Why**: The fastembed API already differed from the original implementation assumptions during development. Because all model-backed tests are ignored, future upstream API or runtime regressions can land undetected while the pure unit tests still pass.  
+  **Effort**: medium
+
+- **What**: `status` does not report vector-index presence or freshness  
+  **Where**: `crates/pi-natives/src/code_graph.rs`, `render_status()`  
+  **Why**: After adding a second cache (`workspace-vectors.bin`), the status surface still only reports graph-cache state. That makes semantic indexing hard to inspect operationally and forces users to infer vector availability indirectly from search behavior.  
+  **Effort**: small
+
+* Problem
+
+All real embedding model tests in =crates/pi-code-vectors/src/embedding.rs= are =#[ignore]= because they require a ~500MB model download. This means the fastembed API contract is never tested in CI. During initial implementation, the API already differed from assumptions (=embed()= requires =&mut self=, no =query_embed()= method). Future upstream regressions could land undetected.
+
+* Design Decision
+
+Use a cargo feature =test-embedding= to gate model tests instead of =#[ignore]=. CI can opt in via =cargo test -p pi-code-vectors --features test-embedding=. Local development uses =cargo test -p pi-code-vectors= which skips model tests by default.
+
+This is preferred over an env var gate because:
+- Cargo features integrate with =cfg_attr= cleanly
+- The feature is visible in =Cargo.toml= and self-documenting
+- CI config can add =--features test-embedding= without custom env setup
+
+* Files to Modify
+
+** =crates/pi-code-vectors/Cargo.toml=
+
+Add feature:
+#+begin_src toml
+[features]
+default = []
+test-embedding = []
+#+end_src
+
+** =crates/pi-code-vectors/src/embedding.rs=
+
+Replace each:
+#+begin_src rust
+#[ignore = "requires model download (~500 MB)"]
+#+end_src
+With:
+#+begin_src rust
+#[cfg_attr(not(feature = "test-embedding"), ignore = "requires model download (~500 MB), enable with --features test-embedding")]
+#+end_src
+
+This applies to three tests:
+1. =embed_batch_returns_768_dim_vectors=
+2. =embed_query_returns_768_dim_vector=
+3. =similar_code_has_higher_similarity=
+
+* Verification
+
+- =cargo test -p pi-code-vectors= still skips model tests (7 pass, 3 ignored)
+- =cargo test -p pi-code-vectors --features test-embedding= runs model tests (requires model to be cached; verify locally if model is available, otherwise confirm the attribute compiles and the test is not ignored when feature is enabled)
+- =cargo check -p pi-code-vectors= passes
+- =bun check:rs= passes
+
+* Sub-Outline
+
+1. Add =test-embedding= feature to =pi-code-vectors/Cargo.toml=
+2. Replace =#[ignore]= with =#[cfg_attr(not(feature = "test-embedding"), ignore)]= on all 3 tests
+3. Verify =cargo test -p pi-code-vectors= (no feature) still shows 3 ignored
+4. Verify =cargo check -p pi-code-vectors --features test-embedding= compiles

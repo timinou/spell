@@ -62,21 +62,55 @@ describe("coding-agent code tool wiring", () => {
 
 	it("routes graph commands to the native graph backend", async () => {
 		const executeSpy = spyOn(nativesModule, "executeCodeGraph").mockResolvedValue({
-			output: "Code graph status\nCache: fresh",
+			output: "Code graph status\nCache: fresh\nSemantic: missing",
 			cacheStatus: "fresh",
 			rebuilt: false,
 			fileCount: 12,
 			symbolCount: 34,
 			edgeCount: 56,
+			semanticStatus: "missing",
 		});
 		const tool = new CodeTool(createSession({ cwd: "/tmp/project" }));
 		const result = await tool.execute("graph", { command: "status" });
 		const text = result.content.find(content => content.type === "text")?.text;
 
-		expect(text).toBe("Code graph status\nCache: fresh");
+		expect(text).toBe("Code graph status\nCache: fresh\nSemantic: missing");
+		expect(result.details).toEqual(
+			expect.objectContaining({
+				command: "status",
+				cacheStatus: "fresh",
+				rebuilt: false,
+				semanticStatus: "missing",
+				graph: true,
+			}),
+		);
 		expect(executeSpy).toHaveBeenCalledWith(
 			expect.objectContaining({
 				command: "status",
+				root: "/tmp/project",
+			}),
+		);
+	});
+
+	it("passes semantic search flags through to the native graph backend", async () => {
+		const executeSpy = spyOn(nativesModule, "executeCodeGraph").mockResolvedValue({
+			output: "Search\n- 0.90 src/foo.ts::foo",
+			cacheStatus: "fresh",
+			rebuilt: false,
+			fileCount: 12,
+			symbolCount: 34,
+			edgeCount: 56,
+			semanticStatus: "hybrid search using 8 cached vectors",
+		});
+		const tool = new CodeTool(createSession({ cwd: "/tmp/project" }));
+
+		await tool.execute("graph", { command: "search", query: "foo", semantic: true });
+
+		expect(executeSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				command: "search",
+				query: "foo",
+				semantic: true,
 				root: "/tmp/project",
 			}),
 		);
