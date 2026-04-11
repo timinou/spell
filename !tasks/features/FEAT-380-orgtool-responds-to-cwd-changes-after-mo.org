@@ -1,0 +1,118 @@
+#+TITLE: OrgTool responds to cwd changes after move
+#+STATE: DONE
+#+SESSION_ID: 14b6536bf19da158
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-31-05-414Z_14b6536bf19da158.jsonl]]
+#+CUSTOM_ID: FEAT-380-orgtool-responds-to-cwd-changes-after-mo
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: agent-tools
+#+DEPENDS: FEAT-379-make-toolsession-cwd-dynamic-via-getter
+
+NOTE [2026-04-11]: Implemented in packages/coding-agent/src/tools/org.ts with regression coverage in packages/coding-agent/test/tools/org-cwd-change.test.ts and manual org create verification.
+
+* Initial Message
+
+the /move command should also move where tools liek the Org tool save their files
+
+* Problem
+OrgTool captures ~session.cwd~ at construction time and passes it as ~projectRoot~ to ~createOrgTool()~. The inner ~OrgContext.projectRoot~ is a static string used by ~resolveCategories(config, projectRoot)~ to determine where ~.org~ files are saved. After ~/move~, org files continue saving to the old directory.
+
+* Approach
+OrgTool stores the session reference and tracks the ~projectRoot~ it was initialized with. On each ~execute()~, it compares ~session.cwd~ to the tracked root. If changed:
+1. Dispose old inner tool (~#inner.dispose()~)
+2. Reload org config via ~loadOrgConfig(session)~ (new project may have different settings)
+3. Recreate ~#inner~ via ~createOrgTool(newRoot, newConfig, { emacsSessionManager: session.orgSessionManager, ... })~
+4. Reuse the existing ~EmacsSessionManager~ (Emacs daemon is project-agnostic for org — it just runs org-mode Elisp commands on whatever files you point it to; ~resolveCategories~ in TypeScript determines the file paths)
+
+* Implementation
+
+** File: ~packages/coding-agent/src/tools/org.ts~
+
+*** Modify OrgTool class fields:
+#+begin_src typescript
+class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Theme> {
+    // ... existing fields ...
+    #inner: OrgToolDefinition;
+    #session: ToolSession;          // NEW: store session reference
+    #currentProjectRoot: string;    // NEW: track current root
+#+end_src
+
+*** Modify constructor:
+Keep existing logic but store session and root:
+#+begin_src typescript
+constructor(session: ToolSession) {
+    this.#session = session;
+    const projectRoot = session.cwd ?? getProjectDir();
+    this.#currentProjectRoot = projectRoot;
+    const config = loadOrgConfig(session);
+    // ... rest of existing constructor ...
+}
+#+end_src
+
+*** Add private recreation method:
+#+begin_src typescript
+#recreateForNewRoot(newRoot: string): void {
+    // Dispose old inner tool (closes OrgClient if open)
+    this.#inner.dispose?.();
+
+    const config = loadOrgConfig(this.#session);
+    const orgSessionManager = this.#session.orgSessionManager
+        ?? createOrgSessionManager(
+            this.#session.settings.get("org.emacsPath") as string | undefined || undefined,
+            newRoot,
+            this.#session.getSessionId?.() ?? "default",
+        );
+
+    this.#inner = createOrgTool(newRoot, config, {
+        emacsSessionManager: orgSessionManager,
+        ownsSessionManager: !this.#session.orgSessionManager,
+        getSessionContext: () => buildSessionContext(this.#session),
+    });
+    this.#currentProjectRoot = newRoot;
+    this.description = this.#inner.description;
+}
+#+end_src
+
+*** Modify execute() — add cwd check at top:
+#+begin_src typescript
+async execute(
+    _toolCallId: string,
+    params: OrgParams,
+    _signal?: AbortSignal,
+    _onUpdate?: AgentToolUpdateCallback,
+    _context?: AgentToolContext,
+): Promise<AgentToolResult> {
+    // Check for cwd change (e.g. after /move)
+    const currentCwd = this.#session.cwd ?? getProjectDir();
+    if (currentCwd !== this.#currentProjectRoot) {
+        this.#recreateForNewRoot(currentCwd);
+    }
+    // ... rest of existing execute logic ...
+}
+#+end_src
+
+*** Ensure dispose() is safe:
+The existing ~dispose()~ calls ~this.#inner.dispose?.()~. After cwd change and recreation, the new ~#inner~ is the one disposed. The old one was already disposed in ~#recreateForNewRoot~. This is correct and idempotent.
+
+* Edge Cases
+- **Session without orgSessionManager**: When ~session.orgSessionManager~ is null, ~createOrgSessionManager~ is called with the new root. This creates a new Emacs daemon session manager for the new project. The old one was already disposed via ~#inner.dispose()~ (if ~ownsSessionManager~ was true).
+- **Rapid /move calls without org execute**: No overhead — recreation only happens on next execute, not on every /move.
+- **Org emacs not available**: ~createOrgTool~ handles this gracefully; the tool returns errors on execute if Emacs is unavailable.
+- **Config differences**: ~loadOrgConfig(session)~ reads from session settings which are session-global; project-local org config would need separate handling (out of scope, tracked by existing org config infrastructure).
+
+* Testing
+
+** File: ~packages/coding-agent/test/tools/org-cwd-change.test.ts~
+
+Use the existing test patterns from ~org-session-manager.test.ts~:
+1. Create OrgTool with mock session at cwdA
+2. Mock ~createOrgTool~ to track calls
+3. Execute once — verify ~createOrgTool~ called with cwdA
+4. Mutate ~session.cwd~ to cwdB (simulating the dynamic getter after /move)
+5. Execute again — verify ~createOrgTool~ called again with cwdB
+6. Execute again without cwd change — verify no additional ~createOrgTool~ call
+
+* Verification
+- ~bun check:ts~ passes
+- New test passes: ~bun test test/tools/org-cwd-change.test.ts~
+- Manual: ~/move /tmp/test-project~, then ~org create { title: "test", category: "features" }~ — file created under ~/tmp/test-project/.tasks/features/~ not the original directory

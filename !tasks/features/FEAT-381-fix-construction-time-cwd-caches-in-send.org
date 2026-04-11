@@ -1,0 +1,104 @@
+#+TITLE: Fix construction-time cwd caches in SendFileTool and WriteTool
+#+STATE: DONE
+#+SESSION_ID: 14b6536bf19da158
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-31-05-414Z_14b6536bf19da158.jsonl]]
+#+CUSTOM_ID: FEAT-381-fix-construction-time-cwd-caches-in-send
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: agent-tools
+#+DEPENDS: FEAT-379-make-toolsession-cwd-dynamic-via-getter
+
+NOTE [2026-04-11]: Implemented in packages/coding-agent/src/tools/send-file.ts and packages/coding-agent/src/tools/write.ts with regression coverage in packages/coding-agent/test/tools/org-cwd-change.test.ts.
+
+* Initial Message
+
+the /move command should also move where tools liek the Org tool save their files
+
+* Problem
+Two tools cache ~session.cwd~ at construction time instead of reading it dynamically:
+
+1. **SendFileTool** (~tools/send-file.ts~ line 87): ~this.#cwd = session.cwd~ — copies string at construction, never updated.
+2. **WriteTool** (~tools/write.ts~ line 89): ~createLspWritethrough(session.cwd, ...)~ — the writethrough callback captures cwd in a closure, used for LSP root resolution.
+
+After ~/move~, SendFileTool resolves relative paths against the old directory, and WriteTool's LSP writethrough uses the old root for formatting/diagnostics.
+
+* Implementation
+
+** File: ~packages/coding-agent/src/tools/send-file.ts~
+
+Remove ~#cwd~ field. Store session reference, read ~this.#session.cwd~ at execute time.
+
+Before:
+#+begin_src typescript
+class SendFileTool {
+    #cwd: string;
+    constructor(session: ToolSession) {
+        this.#cwd = session.cwd;
+    }
+    // In execute():
+    const absolutePath = resolveToCwd(params.path, this.#cwd);
+}
+#+end_src
+
+After:
+#+begin_src typescript
+class SendFileTool {
+    #session: ToolSession;
+    constructor(session: ToolSession) {
+        this.#session = session;
+    }
+    // In execute():
+    const absolutePath = resolveToCwd(params.path, this.#session.cwd);
+}
+#+end_src
+
+Note: SendFileTool constructor already receives ~session: ToolSession~. Just need to store the reference and remove ~#cwd~.
+
+Look for ALL uses of ~this.#cwd~ in the file and replace with ~this.#session.cwd~.
+
+** File: ~packages/coding-agent/src/tools/write.ts~
+
+Add cwd tracking and lazy writethrough recreation:
+
+#+begin_src typescript
+class WriteTool {
+    #writethrough: WritethroughCallback;
+    #writethroughCwd: string;  // NEW: track which cwd the writethrough was built for
+    
+    constructor(private readonly session: ToolSession) {
+        const cwd = session.cwd;
+        this.#writethroughCwd = cwd;
+        // ... existing writethrough creation logic ...
+        this.#writethrough = enableLsp
+            ? createLspWritethrough(cwd, { enableFormat, enableDiagnostics })
+            : writethroughNoop;
+    }
+
+    // In execute(), before using #writethrough:
+    #ensureWritethrough(): WritethroughCallback {
+        const currentCwd = this.session.cwd;
+        if (currentCwd !== this.#writethroughCwd) {
+            const enableLsp = this.session.enableLsp ?? true;
+            const enableFormat = enableLsp && this.session.settings.get("lsp.formatOnWrite");
+            const enableDiagnostics = enableLsp && this.session.settings.get("lsp.diagnosticsOnWrite");
+            this.#writethrough = enableLsp
+                ? createLspWritethrough(currentCwd, { enableFormat, enableDiagnostics })
+                : writethroughNoop;
+            this.#writethroughCwd = currentCwd;
+        }
+        return this.#writethrough;
+    }
+}
+#+end_src
+
+In execute: replace ~this.#writethrough(...)~ with ~this.#ensureWritethrough()(...)~.
+
+* Edge Cases
+- **WriteTool noop writethrough**: If LSP is disabled (~enableLsp~ false), writethrough is ~writethroughNoop~ regardless of cwd. The recreation still works correctly — it just assigns ~writethroughNoop~ again.
+- **SendFileTool with absolute paths**: ~resolveToCwd~ already handles absolute paths by returning them unchanged. Dynamic cwd only affects relative path resolution.
+- **No /move occurred**: Both tools perform a cheap string comparison. No overhead when cwd hasn't changed.
+
+* Verification
+- ~bun check:ts~ passes
+- Manual: ~/move /tmp/test~, then use ~write~ tool with a relative path — file appears under ~/tmp/test/~
+- Manual: ~/move /tmp/test~, then use ~send_file~ with a relative path — resolves against ~/tmp/test/~

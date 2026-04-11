@@ -1,0 +1,86 @@
+#+TITLE: Move command updates tool working directories
+#+STATE: DONE
+#+SESSION_ID: 14b6536bf19da158
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-31-05-414Z_14b6536bf19da158.jsonl]]
+#+CUSTOM_ID: PLAN-170-move-command-updates-tool-working-direct
+
+NOTE [2026-04-11]: Completed after bun check:ts, focused regression tests, and manual /move verification passed.
+
+
+
+
+* Initial Message
+
+the /move command should also move where tools liek the Org tool save their files
+
+* Context
+
+The ~/move~ command relocates a session to a new working directory. It correctly updates ~sessionManager.cwd~, the global ~setProjectDir()~, session header, session files on disk, and slash commands. However, tools continue operating against the old directory because:
+
+1. ~toolSession.cwd~ is a static string set once at construction in ~createAgentSession()~ (sdk.ts line 986). No code ever mutates this property after ~/move~.
+2. Some tools (OrgTool, SendFileTool, WriteTool) capture ~session.cwd~ at construction and pass it into internal state that never updates.
+
+The fix is two-layered:
+- **Layer 1**: Make ~toolSession.cwd~ a getter backed by ~sessionManager.getCwd()~. This auto-fixes the ~20+ tools that read ~this.session.cwd~ at runtime.
+- **Layer 2**: Fix tools that cache cwd at construction time — OrgTool (recreates inner tool), SendFileTool (removes cached field), WriteTool (recreates LSP writethrough).
+
+** Key Decisions
+1. ~toolSession.cwd~ becomes a getter, not mutated — a getter on an object literal satisfies ~cwd: string~ in TypeScript
+2. OrgTool lazily recreates its inner tool on execute when cwd changes — reuses existing EmacsSessionManager (Emacs daemon is project-agnostic for org)
+3. No changes to ~AgentTool~ interface — each tool self-manages via lazy cwd comparison
+4. CodeTool needs no change — ~createCodeTool(_projectRoot)~ ignores projectRoot (underscore prefix)
+5. LoopManager/orchestrators deferred to followup — lower impact
+
+* Verification
+
+After implementation:
+#+begin_src sh
+# Type checking
+bun check:ts
+
+# OrgTool cwd change test
+bun test test/tools/org-cwd-change.test.ts
+
+# Manual integration test:
+# 1. Start spell in /project-a
+# 2. /move /project-b
+# 3. org create { title: "Test", category: "features" }
+#    -> Verify file created under /project-b/.tasks/features/ not /project-a/
+# 4. Run: bash { command: "pwd" }
+#    -> Verify output is /project-b/
+#+end_src
+
+* Execution Manifest
+
+** Wave 1: Foundation
+- [[id:FEAT-379-make-toolsession-cwd-dynamic-via-getter]] Make toolSession.cwd dynamic via getter (S)
+
+** Wave 2: Tool fixes (parallelizable, depends on Wave 1)
+- [[id:FEAT-380-orgtool-responds-to-cwd-changes-after-mo]] OrgTool responds to cwd changes after move (M)
+- [[id:FEAT-381-fix-construction-time-cwd-caches-in-send]] Fix construction-time cwd caches in SendFileTool and WriteTool (S)
+
+** Deferred
+- [[id:FUP-043-loopmanager-and-orchestrators-cwd-tracki]] LoopManager and orchestrators cwd tracking (M, followup)
+
+
+** Completion [2026-04-11]
+
+*** Verification
+- ~bun check:ts~
+  - Passed.
+- ~bun test packages/coding-agent/test/tools/org-cwd-change.test.ts packages/coding-agent/test/core/python-executor.test.ts packages/coding-agent/test/streaming-output.test.ts packages/coding-agent/test/task/bash-exit-code-tracking.test.ts packages/coding-agent/test/tools.test.ts packages/coding-agent/test/session-manager/move-to.test.ts packages/coding-agent/test/internal-urls/artifact-protocol.test.ts~
+  - Passed. 115 pass, 1 skip, 0 fail.
+- ~bun -e '...createAgentSession...bash pwd...'~
+  - Passed. Before move: ~/tmp/spell-move-cwd-tiZC6q/a~. After ~SessionManager.moveTo(...)~: ~/tmp/spell-move-cwd-tiZC6q/b~.
+- ~bun -e '...new OrgTool...command: "create"...'~
+  - Passed. Created ~FEAT-001-moved-tool-check.org~ under ~/tmp/spell-org-move-vWT7U9/project-b/!tasks/features/~ after the cwd change.
+
+*** Artifacts
+- Source changes: ~packages/coding-agent/src/sdk.ts~
+- Source changes: ~packages/coding-agent/src/tools/org.ts~
+- Source changes: ~packages/coding-agent/src/tools/send-file.ts~
+- Source changes: ~packages/coding-agent/src/tools/write.ts~
+- Regression test: ~packages/coding-agent/test/tools/org-cwd-change.test.ts~
+
+*** Deviations
+- Deferred scope unchanged: [[id:FUP-043-loopmanager-and-orchestrators-cwd-tracki]]
