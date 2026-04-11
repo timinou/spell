@@ -1,0 +1,44 @@
+#+TITLE: Session 14b642d8acabe384 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 1
+
+** DONE Implement caveman settings and prompt template
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:ORG_ITEM_ID: FEAT-376-caveman-extension-settings-schema-and-pr
+:END:
+
+Read current settings schema and system prompt architecture, inspected the planning transcript for the original caveman thinking notation, then added caveman settings and prompt template per FEAT-376. Verified files via read/grep before moving on.
+
+Completed. Added caveman settings schema, typed caveman group, and prompt template. Prompt preserves the PhD-caveman notation requested in the original planning transcript (thinking++ with math/logic notation, binary thinking mode).
+
+* Wave 2
+
+** DONE Implement caveman extension and wiring
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:DEPENDS: task-1
+:ORG_ITEM_ID: FEAT-377-caveman-extension-module-and-sdk-wiring
+:END:
+
+Added inline extension module, prompt injection wiring, SDK registration, session persistence/status behavior, and context refresh plumbing so runtime toggles immediately rebuild the base system prompt. Verified with bun check:ts and a focused Bun verification script covering prompt injection, subagent gating, command toggle, config dialog rendering, and session restore.
+
+Completed. Added buildSystemPrompt caveman injection, built-in caveman extension, SDK wiring, runtime prompt refresh path for extension contexts, status animation, config dialog, and session restore logic.
+
+* Verification and closeout
+
+** DONE Run checks and close plan lifecycle
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:DEPENDS: task-2
+:ORG_ITEM_ID: PLAN-167-caveman-mode-for-spell
+:END:
+
+Ran bun check:ts and the focused caveman verification script, appended completion report to the plan org item, closed linked child items and the plan item truthfully, staged only related plan/code/org files plus the hook-required .secrets.baseline update, and committed the result.
+
+Completed. Verification recorded in PLAN-167, child org items closed to DONE, plan closed to DONE, and commit created: 405e5057c feat(coding-agent): add built-in caveman mode.

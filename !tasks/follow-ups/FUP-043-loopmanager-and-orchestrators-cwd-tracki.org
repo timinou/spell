@@ -1,0 +1,42 @@
+#+TITLE: LoopManager and orchestrators cwd tracking after move
+#+STATE: ITEM
+#+SESSION_ID: 14b6536bf19da158
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-31-05-414Z_14b6536bf19da158.jsonl]]
+#+CUSTOM_ID: FUP-043-loopmanager-and-orchestrators-cwd-tracki
+#+EFFORT: M
+#+PRIORITY: #C
+#+LAYER: agent-core
+
+* Initial Message
+
+the /move command should also move where tools liek the Org tool save their files
+
+* Context
+~LoopManager~, ~CanvasOrchestratorManager~, and ~CanvasTaskManager~ all capture ~cwd~ at construction time in ~createAgentSession()~ (sdk.ts lines ~969, ~2137, ~2149). After ~/move~, these components continue using the old directory.
+
+This is lower priority because:
+- Loop operations are rarely started after ~/move~
+- Canvas orchestrators are session-level infrastructure
+- The primary user-visible tools (bash, org, write, etc.) are covered by the companion features
+
+* Affected Components
+
+** ~LoopManager~ (~loop/loop-manager.ts~)
+- ~#cwd~ field set at construction (line 89)
+- Used for: git tree checks, manifest paths, worktree creation, snapshot restoration
+- Fix approach: Accept getter or implement lazy cwd tracking similar to OrgTool
+
+** ~CanvasOrchestratorManager~ (~orchestrators/canvas-orchestrator.ts~)
+- ~cwd~ passed in constructor options (sdk.ts line 2137)
+- Used as default cwd for spawned orchestrator sessions
+
+** ~CanvasTaskManager~ (~orchestrators/canvas-task-manager.ts~)
+- ~cwd~ passed in constructor options (sdk.ts line 2149)
+- Used as default cwd for spawned task sessions
+
+* Approach
+Same pattern as the companion items: either make these accept a cwd getter, or track cwd changes lazily.
+
+* Verification
+- ~/move~ then loop operations use new directory
+- ~/move~ then canvas-spawned tasks use new directory

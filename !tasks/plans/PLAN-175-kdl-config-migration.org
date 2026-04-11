@@ -1,0 +1,83 @@
+#+TITLE: KDL Config Migration
+#+STATE: INIT
+#+SESSION_ID: 14b655871aaa46fd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-40-17-514Z_14b655871aaa46fd.jsonl]]
+#+CUSTOM_ID: PLAN-175-kdl-config-migration
+
+* Initial Message
+
+how would you move all of spell's config to spell.kdl config? What would it look like? Could you import bits inside other bits? would it be better to have blocks per mode?
+
+* Context
+
+Spell configuration is fragmented across 5+ formats and locations (config.yml, models.json, keybindings.json, MODE.md YAML frontmatter, spell.kdl). This plan consolidates everything into KDL as the single config format with two file locations: =~/.spell/spell.kdl= (user-global) and =./spell.kdl= (project-local).
+
+Full specification: =specs/kdl-config-migration.md=
+
+** Key Decisions
+1. spell.kdl is the single config format — replaces config.yml, models.json, keybindings.json
+2. Two file locations: =~/.spell/spell.kdl= (user) + =./spell.kdl= (project). Project overrides user.
+3. File-level imports: =import "./file.kdl"= and =import "spell.coding.typescript"= (built-in). Block-level imports deferred.
+4. Settings panel 3-tier writes: Enter=session, Shift+Enter=project, Ctrl+Shift+Enter=user
+5. Settings singleton backed by KDL — config.yml deleted entirely
+6. Models/providers full migration — TypeBox schemas deleted, KDL-native validation
+7. Modes: spell.kdl mode blocks + MODE.md with KDL frontmatter
+8. =spell migrate= CLI converts old formats. Hard cut — old files ignored after migration.
+9. @bgotink/kdl 0.4.0 round-trip API for format-preserving writes
+
+** Risk Profile
+- ~67 files import Settings — API unchanged, only persistence layer changes
+- ~23 test files create ModelRegistry — constructor signature changes
+- ~10 files use parseFrontmatter — return type unchanged
+- KeybindingsManager has 1 create() call site — low risk
+- Settings.isolated() / _resetSettingsForTest() unchanged — tests unaffected
+
+* Verification
+
+After all items complete:
+#+begin_src sh
+bun check:ts
+bun lint:ts
+bun test packages/coding-agent/test/config/
+bun test packages/coding-agent/test/settings-manager.test.ts
+bun test packages/coding-agent/test/model-registry.test.ts
+bun test packages/coding-agent/test/keybindings-display.test.ts
+bun test packages/coding-agent/test/cli/init-command.test.ts
+bun test packages/coding-agent/test/cli/migrate-command.test.ts
+#+end_src
+
+Manual checks:
+- =spell init= in a TS project generates complete spell.kdl with all blocks
+- =spell migrate --dry-run= converts existing config files correctly
+- =spell config get theme.dark= reads from KDL
+- =spell config set theme.dark monokai= writes to KDL
+- Settings panel opens, all tabs render
+- Model selection works with KDL-defined providers
+- No =config.yml=, =models.json=, =keybindings.json= references remain in src/
+
+* Execution Manifest
+
+** Wave 1: Foundation (no consumers changed)
+- [[id:FEAT-403-kdl-helpers-extract-and-extend-shared-ac]] — KDL Helpers (2h)
+- [[id:FEAT-404-kdl-settings-map-bidirectional-settingpa]] — Settings Map (3h) — depends on FEAT-403
+- [[id:FEAT-405-kdl-reader-parse-kdl-documents-to-rawset]] — KDL Reader (3h) — depends on FEAT-403, FEAT-404
+- [[id:FEAT-406-kdl-writer-round-trip-format-preserving]] — KDL Writer (4h) — depends on FEAT-403, FEAT-404
+
+** Wave 2: Block Parsers (no consumers changed)
+- [[id:FEAT-407-kdl-provider-parser-replace-typebox-mode]] — Provider Parser (4h) — depends on FEAT-403
+- [[id:FEAT-408-kdl-keybindings-and-modes-parsers]] — Keybindings + Modes + Frontmatter (3h) — depends on FEAT-403
+
+** Wave 3: Core Migration (consumers changed)
+- [[id:FEAT-409-expand-spell-kdl-ts-all-blocks-file-impo]] — Expand spell-kdl.ts (4h) — depends on FEAT-405, FEAT-407, FEAT-408
+- [[id:FEAT-410-settings-singleton-replace-yaml-backend]] — Settings Singleton KDL Backend (6h) — depends on FEAT-405, FEAT-406, FEAT-409
+- [[id:FEAT-411-model-registry-replace-configfile-typebo]] — Model Registry KDL (5h) — depends on FEAT-407, FEAT-409
+
+** Wave 4: Peripheral Migration
+- [[id:FEAT-412-keybindings-and-modes-replace-json-and-y]] — Keybindings + Modes Cutover (3h) — depends on FEAT-408, FEAT-409
+
+** Wave 5: UI + CLI
+- [[id:FEAT-413-settings-panel-3-tier-writes-modifier-ke]] — Settings Panel Tiers (3h) — depends on FEAT-410
+- [[id:FEAT-414-cli-spell-migrate-command-and-legacy-fil]] — spell migrate + Legacy Warning (4h) — depends on FEAT-410, FEAT-411
+- [[id:FEAT-416-update-spell-init-generate-full-spell-kd]] — Update spell init (2h) — depends on FEAT-409
+
+Total effort: ~46h across 13 items in 5 waves.

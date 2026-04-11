@@ -1,0 +1,95 @@
+#+TITLE: Session 14b696daee1d5989 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 1
+
+** DONE Narrow cache fingerprint scope
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:VERIFY_CMD: cargo test -p pi-code-graph cache && cargo check -p pi-code-graph && cargo check -p pi-natives
+:ORG_ITEM_ID: FEAT-420-narrow-cache-fingerprint-to-source-files
+:END:
+
+Implemented FEAT-420 in crates/pi-code-graph/src/cache.rs, crates/pi-code-graph/src/indexer.rs, and crates/pi-natives/src/code_graph.rs. Added focused cache tests and verified via cargo test -p pi-code-graph cache && cargo check -p pi-code-graph && cargo check -p pi-natives.
+
+Source-only fingerprinting now excludes .spell output and non-source files; builder/bridge use registry-scoped cache status.
+
+** DOING Add type-only import edges
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: in_progress
+:VERIFY_CMD: cargo test -p pi-code-graph queries && cargo check -p pi-code-graph
+:ORG_ITEM_ID: FEAT-421-distinguish-type-only-imports-with-edgek
+:END:
+
+Implement FEAT-421 in crates/pi-code-graph/src/model.rs, crates/pi-code-graph/src/indexer.rs, crates/pi-code-graph/src/query.rs, and related extractor tests. Verify focused tests before proceeding.
+
+Implementing FEAT-421 across model, indexer, query, and extractor tests.
+
+** ITEM Make Elixir resolver Mix-aware
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: pending
+:VERIFY_CMD: cargo test -p pi-code-graph elixir && cargo check -p pi-code-graph
+:ORG_ITEM_ID: FEAT-425-elixir-resolver-mix-aware-lib-prefix-and
+:END:
+
+Implement FEAT-425 in crates/pi-code-graph/src/language/elixir.rs with mix.exs-aware lib/ resolution and focused resolver/builder tests.
+
+Handled after FEAT-421 to avoid concurrent workspace edits while maintaining deterministic verification.
+
+* Wave 2
+
+** ITEM Refine heritage extraction
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: pending
+:VERIFY_CMD: cargo test -p pi-code-graph typescript && cargo check -p pi-natives
+:ORG_ITEM_ID: FEAT-422-precise-heritage-extraction-with-typepar
+:END:
+
+Implement FEAT-422 in crates/pi-code-graph/src/model.rs, crates/pi-code-graph/src/language/typescript.rs, and crates/pi-code-graph/src/query.rs. Add heritage regression tests and run focused TypeScript verification.
+
+** ITEM Remove symbol collision path
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: pending
+:VERIFY_CMD: cargo test -p pi-code-graph indexer && cargo check -p pi-code-graph
+:ORG_ITEM_ID: FEAT-423-eliminate-symbol-name-collisions-in-inde
+:END:
+
+Implement FEAT-423 in crates/pi-code-graph/src/indexer.rs. Remove bare-name map entries, add ambiguity-aware same-file resolution, and verify new indexer tests.
+
+** ITEM Fix constructor dead-code and symbol fallback
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: pending
+:VERIFY_CMD: cargo test -p pi-code-graph queries && cargo test -p pi-code-graph typescript
+:ORG_ITEM_ID: FEAT-424-fix-constructor-dead-code-false-positive
+:END:
+
+Implement FEAT-424 in crates/pi-code-graph/src/language/typescript.rs and crates/pi-code-graph/src/query.rs. Add constructor/reference/symbol-resolution regressions and verify dead_code behavior.
+
+* Closure
+
+** ITEM Run full verification and smoke checks
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: pending
+:VERIFY_CMD: cargo test -p pi-code-graph && cargo check -p pi-natives && bun check:ts && bun check:rs
+:ORG_ITEM_ID: PLAN-177-code-graph-audit-hardening
+:END:
+
+Run plan verification commands and manual smoke checks, capture evidence, and save any needed artifacts under !tasks/plans/plan-artifacts/PLAN-177-code-graph-audit-hardening/.
+
+** ITEM Close org items and commit
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: pending
+:VERIFY_CMD: git status --short
+:ORG_ITEM_ID: PLAN-177-code-graph-audit-hardening
+:END:
+
+Append completion report to PLAN-177, reconcile child org states truthfully, mark the plan DONE, stage only plan-related changes, and commit with a conventional commit message.

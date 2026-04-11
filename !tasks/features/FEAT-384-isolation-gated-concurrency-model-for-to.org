@@ -1,0 +1,129 @@
+#+TITLE: Isolation-Gated Concurrency Model for Todo Write
+#+STATE: DONE
+#+SESSION_ID: 14b659b76a31eab8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-58-35-560Z_14b659b76a31eab8.jsonl]]
+#+CUSTOM_ID: FEAT-384-isolation-gated-concurrency-model-for-to
+#+EFFORT: M
+#+PRIORITY: A
+#+LAYER: agent-runtime
+#+DEPENDS: FEAT-382-mutable-dag-scheduler-swarmscheduler
+
+NOTE [2026-04-11]: Superseded by unified swarm plan.
+
+* Narrative
+
+Today, =todo_write= enforces a hard rule: at most one non-delegated direct task can be =in_progress= at any time (=normalizeInProgressTask()= in =todo-write.ts=, line ~445). This rule exists to prevent race conditions -- two agents editing the same workspace simultaneously would produce conflicts.
+
+But isolation modes (worktree, fuse-overlay, fuse-projfs) already solve workspace conflicts by giving each agent its own filesystem snapshot. When isolation is active, the single-in_progress constraint is unnecessarily conservative: independent tasks that don't touch the same files could safely run in parallel.
+
+The swarm architecture needs multiple agents executing simultaneously. The scheduler (FEAT-382) handles DAG-level parallelism, but =todo_write= -- the source of truth for task status -- must also relax its constraint. Otherwise, =normalizeInProgressTask()= will silently downgrade parallel tasks back to =pending=, defeating the scheduler.
+
+This item makes the concurrency constraint *context-aware*:
+- When isolation is OFF: existing behavior preserved exactly. One direct task at a time.
+- When isolation is ON: multiple direct tasks allowed, subject to two safety checks:
+  1. DAG independence: tasks must be in different connected components (no transitive dependency).
+  2. File-dependency disjointness: tasks must not declare overlapping =filesDeps=.
+
+The implementer should think of this as: "normalizeInProgressTask gains a second mode where, instead of keeping only the first in_progress task, it keeps ALL in_progress tasks that pass the safety checks."
+
+* Design Decisions
+
+1. New field =filesDeps?: string[]= on =TodoItem=. Lists file paths the task expects to modify. Populated by the parent agent, auto-roster, or self-reported by the subagent via =todo_write update=.
+2. =normalizeInProgressTask(phases, isolationMode)= gains a boolean parameter. When =false=: existing logic unchanged. When =true=: allow multiple direct in_progress tasks if they pass safety checks.
+3. New helper =hasFileDependencyOverlap(taskA: TodoItem, taskB: TodoItem): boolean=. Returns =true= if any path in =taskA.filesDeps= appears in =taskB.filesDeps=. Empty =filesDeps= is treated as "no constraint" (never overlaps with anything).
+4. New helper =getRunningDirectTasks(phases: TodoPhase[]): TodoItem[]=. Returns all non-delegated tasks currently =in_progress=.
+5. In isolation mode, =normalizeInProgressTask= checks each pending unblocked task against ALL currently running direct tasks for file overlap. If overlap found, the pending task stays =pending=.
+6. The =splitIntoComponents= algorithm from =MutableDag= (FEAT-382) determines DAG independence. If FEAT-382 isn't available yet, a simpler heuristic is acceptable: tasks with no shared blockers in their transitive closure are independent.
+7. The =todo-write.md= prompt must document the new =filesDeps= field and the conditional concurrency behavior clearly, with examples.
+
+* Files to Modify
+
+** =packages/coding-agent/src/tools/todo-write.ts=
+- Add =filesDeps?: string[]= to =TodoItem= interface (after =layer= field, line ~72)
+- Add =hasFileDependencyOverlap(a: TodoItem, b: TodoItem): boolean= helper
+- Add =getRunningDirectTasks(phases: TodoPhase[]): TodoItem[]= helper
+- Modify =normalizeInProgressTask= signature: =normalizeInProgressTask(phases: TodoPhase[], isolationMode?: boolean): void=
+- In isolation mode branch: iterate pending unblocked tasks, check file overlap against running set, promote all that pass
+- Modify =applyOps()= to pass isolation mode from session settings to =normalizeInProgressTask=
+
+** =packages/coding-agent/src/prompts/tools/todo-write.md=
+- Add =filesDeps= to Task Anatomy section: =- \`filesDeps\`: File paths this task modifies. Used for concurrent execution safety in isolation mode.=
+- Add conditional section under Rules (Handlebars =~{{#if isolationEnabled}}=):
+  #+begin_example
+  When task isolation is active, multiple direct tasks may be `in_progress` simultaneously if they:
+  1. Have no dependency relationship (belong to independent DAG components)
+  2. Do not declare overlapping `filesDeps`
+  Set `filesDeps` to help the scheduler avoid file conflicts.
+  #+end_example
+- Update the concurrency constraint rule to be conditional
+
+* Existing Patterns to Follow
+- =normalizeInProgressTask()= (todo-write.ts ~445-472): current single-in_progress enforcement
+- =hasUnresolvedBlockers()= (todo-write.ts ~430): blocker checking pattern
+- =isDelegatedTask()= (todo-write.ts): delegation detection
+- =splitIntoComponents()= (orchestrators/fluid/dag.ts ~172): component detection via union-find
+
+* Sub-outline (test-first)
+
+** 1. Write isolation-gated concurrency tests
+File: =packages/coding-agent/test/tools/todo-write-isolation-concurrency.test.ts=
+
+All tests use the =normalizeInProgressTask= function directly, constructing =TodoPhase[]= inputs and asserting the resulting status values.
+
+*** Regression: isolation OFF preserves existing behavior
+- Input: 2 phases, 4 tasks: task-1 (pending), task-2 (pending), task-3 (pending, blockers: [task-1]), task-4 (pending).
+- Call =normalizeInProgressTask(phases, false)=.
+- Assert: task-1 status === "in_progress", task-2/3/4 status === "pending". (Only first unblocked promoted.)
+
+*** Isolation ON: independent tasks both promoted
+- Input: task-1 (pending, filesDeps: ["src/a.ts"]), task-2 (pending, filesDeps: ["src/b.ts"]), no blockers between them.
+- Call =normalizeInProgressTask(phases, true)=.
+- Assert: task-1 status === "in_progress", task-2 status === "in_progress". (Both promoted.)
+
+*** Isolation ON: file overlap prevents concurrent promotion
+- Input: task-1 (pending, filesDeps: ["src/parser.ts"]), task-2 (pending, filesDeps: ["src/parser.ts"]).
+- Call =normalizeInProgressTask(phases, true)=.
+- Assert: task-1 status === "in_progress", task-2 status === "pending". (Overlap blocks task-2.)
+
+*** Isolation ON: blocker still respected
+- Input: task-1 (pending), task-2 (pending, blockers: ["task-1"], filesDeps: ["src/b.ts"]).
+- Call =normalizeInProgressTask(phases, true)=.
+- Assert: task-1 status === "in_progress", task-2 status === "pending". (Blocker prevents promotion regardless of isolation.)
+
+*** Empty filesDeps treated as no constraint
+- Input: task-1 (pending, filesDeps: []), task-2 (pending, filesDeps: ["src/a.ts"]).
+- Call =normalizeInProgressTask(phases, true)=.
+- Assert: both "in_progress". (Empty never overlaps.)
+
+*** Undefined filesDeps treated as no constraint
+- Input: task-1 (pending, filesDeps: undefined), task-2 (pending, filesDeps: undefined).
+- Call =normalizeInProgressTask(phases, true)=.
+- Assert: both "in_progress".
+
+*** Mixed delegated + direct
+- Input: task-1 (in_progress, delegated), task-2 (pending, filesDeps: ["src/a.ts"]), task-3 (pending, filesDeps: ["src/b.ts"]).
+- Call =normalizeInProgressTask(phases, true)=.
+- Assert: task-1 stays in_progress (delegated, untouched), task-2 and task-3 both promoted to in_progress.
+
+*** hasFileDependencyOverlap unit tests
+- =(["a.ts"], ["a.ts"])= => true
+- =(["a.ts"], ["b.ts"])= => false
+- =(["a.ts", "b.ts"], ["b.ts", "c.ts"])= => true (intersection: b.ts)
+- =([], ["a.ts"])= => false
+- =(undefined as any, ["a.ts"])= => false
+
+** 2. Implement helpers and modified normalizeInProgressTask
+Depends on: tests from step 1.
+
+** 3. Update applyOps
+Wire isolation mode flag from session settings into =normalizeInProgressTask= calls within =applyOps()=.
+
+** 4. Update todo-write.md prompt
+Add =filesDeps= documentation and conditional concurrency section.
+
+* Verification
+- =bun test packages/coding-agent/test/tools/todo-write.test.ts= passes (existing suite, zero modifications)
+- =bun test packages/coding-agent/test/tools/todo-write-isolation-concurrency.test.ts= passes (new suite)
+- =bun test packages/coding-agent/test/tools/todo-write-gates.test.ts= passes (gate behavior unaffected)
+- =bun test packages/coding-agent/test/tools/todo-write-delegation.test.ts= passes (delegation unaffected)
+- =bun check:ts= passes

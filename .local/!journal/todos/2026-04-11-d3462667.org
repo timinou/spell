@@ -1,0 +1,37 @@
+#+TITLE: Session 14b66727ab376f57 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Commit
+
+** DONE Review staged changes
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+Inspect staged diff summary and key modified files to understand what will be committed.
+
+Reviewed staged diff stat, file list, and key artifact/session implementation diffs. Staged scope combines artifact URI/session artifact refactor, tool cwd refresh coverage, prompt/docs updates, org/task records, local journal org files, and a root spell-session HTML artifact.
+
+** DONE Verify staged changes
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:DEPENDS: task-1
+:END:
+
+Run focused verification that covers the staged coding-agent changes before committing.
+
+Verification passed after one lint fix and detect-secrets allowlisting. Ran bun check:ts, focused modified coding-agent tests (132 tests, 131 pass / 1 skip / 0 fail), and detect-secrets-hook against the staged set until clean.
+
+** DONE Create requested commit
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:DEPENDS: task-2
+:END:
+
+Commit the currently staged changes with a message that matches the actual content.
+
+Created commit 464615a97 with message: feat(coding-agent): scope artifact URIs and harden cwd refresh

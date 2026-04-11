@@ -38,9 +38,9 @@ export interface PythonExecutorOptions {
 	useSharedGateway?: boolean;
 	/** Session file path for accessing task outputs */
 	sessionFile?: string;
-	/** Artifact path/id for full output storage */
+	/** Artifact path/URI for full output storage */
 	artifactPath?: string;
-	artifactId?: string;
+	artifactUri?: string;
 }
 
 export interface PythonKernelExecutor {
@@ -56,8 +56,8 @@ export interface PythonResult {
 	cancelled: boolean;
 	/** Whether the output was truncated */
 	truncated: boolean;
-	/** Artifact ID if full output was saved to artifact storage */
-	artifactId?: string;
+	/** Artifact URI if full output was saved to artifact storage */
+	artifactUri?: string;
 	/** Total number of lines in the output stream */
 	totalLines: number;
 	/** Total number of bytes in the output stream */
@@ -453,7 +453,7 @@ async function executeWithKernel(
 	const sink = new OutputSink({
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
-		artifactId: options?.artifactId,
+		artifactUri: options?.artifactUri,
 	});
 	const displayOutputs: KernelDisplayOutput[] = [];
 

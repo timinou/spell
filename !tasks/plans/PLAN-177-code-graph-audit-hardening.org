@@ -1,0 +1,104 @@
+#+TITLE: Code graph audit hardening
+#+STATE: DOING
+#+SESSION_ID: 14b66f75e39d597b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T12-33-35-630Z_14b66f75e39d597b.jsonl]]
+#+CUSTOM_ID: PLAN-177-code-graph-audit-hardening
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-053-audit-implementation:
+
+Audit findings, highest effort-to-impact first:
+
+1. **What**: Cache fingerprinting is too broad and likely self-invalidates the graph cache
+   - **Where**: `crates/pi-code-graph/src/cache.rs`, `CacheStore::fingerprint_root()`
+   - **Why**: It fingerprints every file under the root, including non-source files and likely `.spell/graph` itself. That means the cache can become stale because of its own output or unrelated docs/artifacts changes, forcing unnecessary rebuilds and making `status`/lazy indexing less trustworthy.
+   - **Effort**: `small`
+
+2. **What**: Graph commands bypass read-only mode even though `index`/auto-index writes `.spell/graph`
+   - **Where**: `packages/coding-agent/src/tools/code.ts`, graph command routing in `execute()` / `#executeGraphCommand()`
+   - **Why**: `context`, `impact`, `deps`, etc. can trigger an implicit rebuild and write cache files, but only `edit` is guarded as a write. In a read-only session this violates the tool’s contract and mutates the workspace unexpectedly.
+   - **Effort**: `small`
+
+3. **What**: Type-only imports are parsed, then silently discarded by the graph pipeline
+   - **Where**: `crates/pi-code-graph/src/language.rs` (`ExtractedImport.is_type_only`) and `crates/pi-code-graph/src/indexer.rs` import edge construction
+   - **Why**: The extractor preserves `is_type_only`, but the builder never uses it. That means callers cannot tell whether a dependency is runtime or type-only, and dead-code / impact / deps results can over-report usage while hiding that distinction.
+   - **Effort**: `small`
+
+4. **What**: Symbol-only commands can silently fall back to file hits
+   - **Where**: `crates/pi-code-graph/src/query.rs`, `resolve_symbol()`
+   - **Why**: If exact symbol lookup fails, `resolve_symbol()` falls back to graph search over both symbols and files. `context`/`flow` therefore can return plausible output for a file when the caller asked for a symbol, which is a contract violation and hard to detect from the output.
+   - **Effort**: `small`
+
+5. **What**: TypeScript inheritance extraction produces false `inherits` edges
+   - **Where**: `crates/pi-code-graph/src/language/typescript.rs`, `collect_heritage_references()`
+   - **Why**: It walks identifiers inside `extends`/`implements` clauses too broadly. In practice this already surfaced as `CodeTool` appearing to “inherit” `codeSchema`, which is not a real inheritance relationship. That pollutes `context`/`impact` results with misleading edges.
+   - **Effort**: `small`
+
+6. **What**: Bare-name symbol indexing collides when multiple symbols in one file share the same name
+   - **Where**: `crates/pi-code-graph/src/indexer.rs`, `symbol_nodes` map population and `resolve_reference_target()`
+   - **Why**: The map is keyed by `(file, symbol.name)`, so duplicate method/function names within one file overwrite each other. References then resolve to whichever symbol was inserted last, making context, flow, impact, and dead-code results incorrect in common class-heavy files.
+   - **Effort**: `medium`
+
+7. **What**: `dead_code` has obvious false positives for constructors and some methods
+   - **Where**: `crates/pi-code-graph/src/query.rs`, `graph_dead_code()`; root cause also in `crates/pi-code-graph/src/language/typescript.rs` reference extraction for `new_expression`
+   - **Why**: `new Foo()` links to `Foo`, not `Foo.constructor`, so constructor symbols tend to look unused. The smoke output already showed entries like `ProxyMessageEventStream.constructor` as dead. A noisy dead-code report will quickly lose user trust.
+   - **Effort**: `medium`
+
+8. **What**: Elixir module resolution does not cover common Mix/Phoenix layouts
+   - **Where**: `crates/pi-code-graph/src/language/elixir.rs`, `ElixirImportResolver::resolve()` / `module_name_to_path()`
+   - **Why**: It maps `MyApp.Tools.Helper` directly to `my_app/tools/helper.ex`, but real projects commonly place modules under `lib/`, umbrella app roots, or other Mix-managed layouts. On typical Elixir repos, aliases/imports will fail to resolve and graph quality will drop sharply.
+   - **Effort**: `medium`
+
+Deferred work check:
+- I did not find abandoned tasks or missing FUP links in the plan closure path.
+
+* Context
+Post-implementation audit (AUD-053) of PLAN-174 (code graph intelligence) surfaced 8 findings. One finding (read-only mode bypass) was dropped per user decision — graph commands intentionally bypass read-only mode and auto-update the cache. The remaining 7 findings are addressed by 6 child items:
+
+** Approach
+All fixes are in the Rust code graph crate (=crates/pi-code-graph/=) and its NAPI bridge (=crates/pi-natives/src/code_graph.rs=). No TypeScript tool-layer changes needed beyond what the bridge signature changes require.
+
+** Key Decisions
+1. *Cache fingerprinting*: Accept a file-matching predicate from the builder. Only fingerprint source files. Exclude =.spell/=.
+2. *Type-only imports*: New =EdgeKind::TypeImports= variant. Dead-code ignores type-only references. Impact includes them.
+3. *Heritage extraction*: New =EdgeKind::TypeParameterOf= variant. Heritage walker distinguishes base types from generic parameters.
+4. *Symbol collision*: Drop bare-name keys from the indexer lookup map. Qualified-name-only keying. Bare-name resolution via scan with ambiguity guard.
+5. *Constructor dead-code*: Synthetic =new Foo() -> Foo.constructor= edge in extractor. Constructor methods excluded from dead_code.
+6. *Symbol resolution*: Fuzzy fallback in =resolve_symbol()= filters to symbol nodes only.
+7. *Elixir resolver*: Detect =mix.exs=, prepend =lib/= candidates. Umbrella support deferred.
+8. *DROPPED*: Read-only mode bypass — graph commands keep auto-updating per user decision.
+
+* Verification
+
+** Build
+- =cargo check -p pi-code-graph= — Rust crate compiles
+- =cargo check -p pi-natives= — NAPI bridge compiles
+- =bun check:ts= — TypeScript unchanged but verify no breakage
+- =bun check:rs= — =cargo fmt --check= + =cargo clippy --workspace -- -D warnings=
+
+** Tests
+- =cargo test -p pi-code-graph= — all tests pass (14 existing + ~14 new)
+- Focused: =cargo test -p pi-code-graph cache= — fingerprint tests
+- Focused: =cargo test -p pi-code-graph typescript= — heritage + constructor tests
+- Focused: =cargo test -p pi-code-graph elixir= — lib/ resolver tests
+- Focused: =cargo test -p pi-code-graph queries= — dead-code + resolution tests
+
+** Manual Smoke
+- =code { command: "status" }= returns fresh after touching a =.md= file (cache narrowing works)
+- =code { command: "context", symbol: "CodeTool" }= does NOT show =codeSchema= in Inherits (heritage fix)
+- =code { command: "dead_code" }= does NOT show =*.constructor= entries (constructor fix)
+- =code { command: "dead_code" }= shows fewer false positives overall (type-only + collision fixes)
+- =code { command: "context", symbol: "nonexistent" }= returns error, not file context (resolution fix)
+
+* Execution Manifest
+
+** Wave 1 — Independent foundations (no dependencies, parallelizable)
+- [[id:FEAT-420-narrow-cache-fingerprint-to-source-files]] [2h] — Cache fingerprint scoped to source files
+- [[id:FEAT-421-distinguish-type-only-imports-with-edgek]] [3h] — EdgeKind::TypeImports for type-only import distinction
+- [[id:FEAT-425-elixir-resolver-mix-aware-lib-prefix-and]] [2h] — Elixir Mix-aware lib/ resolution
+
+** Wave 2 — Depend on FEAT-421 (sequential on EdgeKind enum / query.rs changes)
+- [[id:FEAT-422-precise-heritage-extraction-with-typepar]] [3h] — EdgeKind::TypeParameterOf for heritage precision (depends on FEAT-421)
+- [[id:FEAT-423-eliminate-symbol-name-collisions-in-inde]] [3h] — Drop bare-name keys, scan-based resolution (depends on FEAT-421)
+- [[id:FEAT-424-fix-constructor-dead-code-false-positive]] [3h] — Constructor synthetic edge + dead_code filter + resolve_symbol fix (depends on FEAT-421)

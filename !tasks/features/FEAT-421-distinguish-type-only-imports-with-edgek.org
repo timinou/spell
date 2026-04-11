@@ -1,0 +1,130 @@
+#+TITLE: Distinguish type-only imports with EdgeKind TypeImports
+#+STATE: DOING
+#+SESSION_ID: 14b66f75e39d597b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T12-33-35-630Z_14b66f75e39d597b.jsonl]]
+#+CUSTOM_ID: FEAT-421-distinguish-type-only-imports-with-edgek
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: backend
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-053-audit-implementation:
+
+Audit findings, highest effort-to-impact first:
+
+1. **What**: Cache fingerprinting is too broad and likely self-invalidates the graph cache
+   - **Where**: `crates/pi-code-graph/src/cache.rs`, `CacheStore::fingerprint_root()`
+   - **Why**: It fingerprints every file under the root, including non-source files and likely `.spell/graph` itself. That means the cache can become stale because of its own output or unrelated docs/artifacts changes, forcing unnecessary rebuilds and making `status`/lazy indexing less trustworthy.
+   - **Effort**: `small`
+
+2. **What**: Graph commands bypass read-only mode even though `index`/auto-index writes `.spell/graph`
+   - **Where**: `packages/coding-agent/src/tools/code.ts`, graph command routing in `execute()` / `#executeGraphCommand()`
+   - **Why**: `context`, `impact`, `deps`, etc. can trigger an implicit rebuild and write cache files, but only `edit` is guarded as a write. In a read-only session this violates the tool’s contract and mutates the workspace unexpectedly.
+   - **Effort**: `small`
+
+3. **What**: Type-only imports are parsed, then silently discarded by the graph pipeline
+   - **Where**: `crates/pi-code-graph/src/language.rs` (`ExtractedImport.is_type_only`) and `crates/pi-code-graph/src/indexer.rs` import edge construction
+   - **Why**: The extractor preserves `is_type_only`, but the builder never uses it. That means callers cannot tell whether a dependency is runtime or type-only, and dead-code / impact / deps results can over-report usage while hiding that distinction.
+   - **Effort**: `small`
+
+4. **What**: Symbol-only commands can silently fall back to file hits
+   - **Where**: `crates/pi-code-graph/src/query.rs`, `resolve_symbol()`
+   - **Why**: If exact symbol lookup fails, `resolve_symbol()` falls back to graph search over both symbols and files. `context`/`flow` therefore can return plausible output for a file when the caller asked for a symbol, which is a contract violation and hard to detect from the output.
+   - **Effort**: `small`
+
+5. **What**: TypeScript inheritance extraction produces false `inherits` edges
+   - **Where**: `crates/pi-code-graph/src/language/typescript.rs`, `collect_heritage_references()`
+   - **Why**: It walks identifiers inside `extends`/`implements` clauses too broadly. In practice this already surfaced as `CodeTool` appearing to “inherit” `codeSchema`, which is not a real inheritance relationship. That pollutes `context`/`impact` results with misleading edges.
+   - **Effort**: `small`
+
+6. **What**: Bare-name symbol indexing collides when multiple symbols in one file share the same name
+   - **Where**: `crates/pi-code-graph/src/indexer.rs`, `symbol_nodes` map population and `resolve_reference_target()`
+   - **Why**: The map is keyed by `(file, symbol.name)`, so duplicate method/function names within one file overwrite each other. References then resolve to whichever symbol was inserted last, making context, flow, impact, and dead-code results incorrect in common class-heavy files.
+   - **Effort**: `medium`
+
+7. **What**: `dead_code` has obvious false positives for constructors and some methods
+   - **Where**: `crates/pi-code-graph/src/query.rs`, `graph_dead_code()`; root cause also in `crates/pi-code-graph/src/language/typescript.rs` reference extraction for `new_expression`
+   - **Why**: `new Foo()` links to `Foo`, not `Foo.constructor`, so constructor symbols tend to look unused. The smoke output already showed entries like `ProxyMessageEventStream.constructor` as dead. A noisy dead-code report will quickly lose user trust.
+   - **Effort**: `medium`
+
+8. **What**: Elixir module resolution does not cover common Mix/Phoenix layouts
+   - **Where**: `crates/pi-code-graph/src/language/elixir.rs`, `ElixirImportResolver::resolve()` / `module_name_to_path()`
+   - **Why**: It maps `MyApp.Tools.Helper` directly to `my_app/tools/helper.ex`, but real projects commonly place modules under `lib/`, umbrella app roots, or other Mix-managed layouts. On typical Elixir repos, aliases/imports will fail to resolve and graph quality will drop sharply.
+   - **Effort**: `medium`
+
+Deferred work check:
+- I did not find abandoned tasks or missing FUP links in the plan closure path.
+
+* Context
+The TypeScript extractor parses =import type { Foo } from "./bar"= and correctly sets =ExtractedImport.is_type_only = true=. However, the indexer in =crates/pi-code-graph/src/indexer.rs= never reads =is_type_only= — it creates =EdgeKind::Imports= and =EdgeKind::References= edges identically for runtime and type-only imports. This means:
+- =dead_code= counts type-only references as "used", keeping type-only-referenced symbols alive in the report
+- =impact= and =deps= cannot distinguish runtime breakage from type-level breakage
+- The field is dead data — a contract violation (the extractor promises information the pipeline discards)
+
+* Design Decisions
+1. Add =EdgeKind::TypeImports= variant to the =EdgeKind= enum in =model.rs=. This variant is used for both file-level type-only import edges and symbol-level type-only reference edges.
+2. In the indexer's import-processing loop, check =import.is_type_only=. If true, use =EdgeKind::TypeImports= instead of =EdgeKind::Imports= for the file edge, and =EdgeKind::TypeImports= instead of =EdgeKind::References= for the symbol edges.
+3. In =graph_dead_code()= in =query.rs=, exclude =EdgeKind::TypeImports= from the =has_inbound_usage= check. A symbol referenced only via type-only imports should be reported as dead (no runtime consumer).
+4. In =graph_impact()= in =query.rs=, include =TypeImports= in the traversal edge set so type-level dependents still appear in blast-radius analysis.
+5. =EdgeKind::TypeImports= must derive =Serialize= / =Deserialize= (it already does via the derive on the enum) and have a stable bincode representation. Since we're adding a variant, existing caches will fail to deserialize — this is acceptable; the graph will just rebuild.
+
+* Files to Modify
+- =crates/pi-code-graph/src/model.rs=: Add =TypeImports= to =EdgeKind= enum (after =Renders=)
+- =crates/pi-code-graph/src/indexer.rs=: In the import-processing loop (~line 130-154), branch on =import.is_type_only=
+- =crates/pi-code-graph/src/query.rs=: Update =graph_dead_code()= to exclude =TypeImports= from inbound usage; update =graph_impact()= edge set to include =TypeImports=
+- =crates/pi-code-graph/src/model.rs=: Update =count_edges()= if needed (it's generic — no change needed)
+
+* Implementation
+
+** Tests (write first)
+Add to =indexer.rs= =mod tests=:
+- =type_only_imports_use_type_imports_edge=: Create a fake extractor that returns one import with =is_type_only: true=. Build graph. Assert =count_edges(EdgeKind::TypeImports) == 1= and =count_edges(EdgeKind::Imports) == 0=.
+
+Add to =query.rs= =mod tests=:
+- =dead_code_ignores_type_only_references=: Extend =build_query_graph()= test fixture to include a fourth file (e.g., =type_consumer.query=) that imports =callee= with =is_type_only: true= only. The =callee= symbol should have =exported: false= so it's a dead_code candidate. Assert =callee= appears in =graph_dead_code()= despite the type-only reference.
+
+Add to =language/typescript.rs= =mod tests=:
+- =typescript_extractor_marks_type_only_imports=: Parse =import type { Foo } from "./foo"=. Assert the returned =ExtractedImport= has =is_type_only == true=. Also parse =import { Bar } from "./bar"=. Assert =is_type_only == false=. (This tests the extractor contract, which already works but has no explicit test.)
+
+** Implementation
+1. *model.rs* — Add variant after =Renders=:
+   #+begin_src rust
+   #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+   pub enum EdgeKind {
+       Defines,
+       Imports,
+       Calls,
+       References,
+       Inherits,
+       Renders,
+       TypeImports,
+   }
+   #+end_src
+
+2. *indexer.rs* — In the import-processing loop (inside =for import in imports=), change the edge creation:
+   #+begin_src rust
+   let file_edge = if import.is_type_only { EdgeKind::TypeImports } else { EdgeKind::Imports };
+   let symbol_edge = if import.is_type_only { EdgeKind::TypeImports } else { EdgeKind::References };
+   // ...
+   graph.add_edge(from_index, to_index, file_edge);
+   // ...
+   graph.add_edge(from_index, symbol_index, symbol_edge);
+   #+end_src
+
+3. *query.rs* — In =graph_dead_code()=, the =has_inbound_usage= check currently matches =Calls | References | Inherits | Renders=. Do NOT add =TypeImports= to this list. This means type-only references don't count as usage — which is the desired behavior.
+
+4. *query.rs* — In =graph_impact()=, the BFS edge set is currently =[EdgeKind::Calls, EdgeKind::References, EdgeKind::Inherits, EdgeKind::Imports]=. Add =EdgeKind::TypeImports= so type-level dependents appear in blast-radius:
+   #+begin_src rust
+   &[EdgeKind::Calls, EdgeKind::References, EdgeKind::Inherits, EdgeKind::Imports, EdgeKind::TypeImports]
+   #+end_src
+
+* Edge Cases
+- Mixed imports: =import { type Foo, Bar } from "./baz"= — the TypeScript extractor currently checks if the entire import statement starts with ="import type"=. Inline =type= modifiers on individual specifiers (TS 4.5+) are NOT detected. This is a known limitation; the =is_type_only= field only captures statement-level type imports. Documenting this as a TODO comment in the extractor is sufficient for now.
+- Cache invalidation: Adding a new =EdgeKind= variant changes the bincode schema. Existing =.spell/graph/workspace.bin= files will fail to deserialize. The cache loader returns =None= on deserialization error, triggering a rebuild. This is the correct degradation.
+- =export type { Foo } from= re-exports: The extractor already sets =is_type_only= based on ="export type"= prefix (see =parse_export_statement=). These will correctly produce =TypeImports= edges.
+
+* Acceptance Criteria
+- =cargo test -p pi-code-graph= passes including 3 new tests
+- =cargo check -p pi-code-graph= and =cargo check -p pi-natives= pass
+- =bun check:rs= passes (clippy + fmt)

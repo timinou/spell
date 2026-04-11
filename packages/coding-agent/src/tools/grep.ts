@@ -540,7 +540,7 @@ export const grepToolRenderer = {
 		if (limits?.resultLimit) truncationReasons.push(`limit ${limits.resultLimit.reached} results`);
 		if (truncation) truncationReasons.push(truncation.truncatedBy === "lines" ? "line limit" : "size limit");
 		if (limits?.columnTruncated) truncationReasons.push(`line length ${limits.columnTruncated.maxColumn}`);
-		if (truncation?.artifactId) truncationReasons.push(formatFullOutputReference(truncation.artifactId));
+		if (truncation?.artifactUri) truncationReasons.push(formatFullOutputReference(truncation.artifactUri));
 
 		const extraLines =
 			truncationReasons.length > 0 ? [uiTheme.fg("warning", `truncated: ${truncationReasons.join(", ")}`)] : [];

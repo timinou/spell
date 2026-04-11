@@ -32,8 +32,8 @@ export interface TruncationMeta {
 	maxBytes?: number;
 	/** Line range shown (1-indexed, inclusive) */
 	shownRange?: { start: number; end: number };
-	/** Artifact ID if full output was saved */
-	artifactId?: string;
+	/** Artifact URI if full output was saved */
+	artifactUri?: string;
 	/** Next offset for pagination (head truncation only) */
 	nextOffset?: number;
 }
@@ -82,7 +82,7 @@ export interface TruncationOptions {
 	direction: "head" | "tail";
 	startLine?: number;
 	totalFileLines?: number;
-	artifactId?: string;
+	artifactUri?: string;
 }
 
 export interface TruncationSummaryOptions {
@@ -117,7 +117,7 @@ export class OutputMetaBuilder {
 	truncation(result: TruncationResult, options: TruncationOptions): this {
 		if (!result.truncated) return this;
 
-		const { direction, startLine = 1, totalFileLines, artifactId } = options;
+		const { direction, startLine = 1, totalFileLines, artifactUri } = options;
 		const outputLines = result.outputLines ?? result.totalLines;
 		const outputBytes = result.outputBytes ?? result.totalBytes;
 		const truncatedBy: "lines" | "bytes" = result.truncatedBy === "lines" ? "lines" : "bytes";
@@ -141,7 +141,7 @@ export class OutputMetaBuilder {
 			outputLines,
 			outputBytes,
 			shownRange: { start: shownStart, end: shownEnd },
-			artifactId,
+			artifactUri,
 			nextOffset: direction === "head" ? shownEnd + 1 : undefined,
 		};
 
@@ -180,7 +180,7 @@ export class OutputMetaBuilder {
 			outputLines: summary.outputLines,
 			outputBytes: summary.outputBytes,
 			shownRange: { start: shownStart, end: shownEnd },
-			artifactId: summary.artifactId,
+			artifactUri: summary.artifactUri,
 			nextOffset: direction === "head" ? shownEnd + 1 : undefined,
 		};
 
@@ -329,8 +329,8 @@ export function outputMeta(): OutputMetaBuilder {
 // Notice formatting
 // =============================================================================
 
-export function formatFullOutputReference(artifactId: string): string {
-	return `Read/grep from artifact://${artifactId} for full output`;
+export function formatFullOutputReference(artifactUri: string): string {
+	return `Read/grep from ${artifactUri} for full output`;
 }
 
 export function formatTruncationMetaNotice(truncation: TruncationMeta): string {
@@ -352,8 +352,8 @@ export function formatTruncationMetaNotice(truncation: TruncationMeta): string {
 		notice += `. Use offset=${truncation.nextOffset} to continue`;
 	}
 
-	if (truncation.artifactId != null) {
-		notice += `. ${formatFullOutputReference(truncation.artifactId)}`;
+	if (truncation.artifactUri != null) {
+		notice += `. ${formatFullOutputReference(truncation.artifactUri)}`;
 	}
 
 	return notice;
@@ -363,8 +363,8 @@ export function formatTruncationMetaNotice(truncation: TruncationMeta): string {
  * Format styled artifact reference with warning color and brackets.
  * For TUI rendering of truncation warnings.
  */
-export function formatStyledArtifactReference(artifactId: string, theme: Theme): string {
-	return theme.fg("warning", formatFullOutputReference(artifactId));
+export function formatStyledArtifactReference(artifactUri: string, theme: Theme): string {
+	return theme.fg("warning", formatFullOutputReference(artifactUri));
 }
 
 /**
@@ -481,7 +481,7 @@ async function spillLargeResultToArtifact(
 
 	// Skip if tool already saved an artifact
 	const existingMeta: OutputMeta | undefined = result.details?.meta;
-	if (existingMeta?.truncation?.artifactId) return result;
+	if (existingMeta?.truncation?.artifactUri) return result;
 
 	// Measure total text content
 	const textParts: string[] = [];
@@ -497,8 +497,8 @@ async function spillLargeResultToArtifact(
 	if (totalBytes <= threshold) return result;
 
 	// Save full output as artifact
-	const artifactId = await sessionManager.saveArtifact(fullText, toolName);
-	if (!artifactId) return result;
+	const artifact = await sessionManager.saveArtifact(fullText, toolName);
+	if (!artifact) return result;
 
 	// Truncate to tail
 	const truncated = truncateTail(fullText, {
@@ -528,7 +528,7 @@ async function spillLargeResultToArtifact(
 		outputBytes,
 		maxBytes: tailBytes,
 		shownRange: { start: shownStart, end: truncated.totalLines },
-		artifactId,
+		artifactUri: artifact.uri,
 	};
 
 	const newMeta: OutputMeta = {

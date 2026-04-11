@@ -1,0 +1,111 @@
+#+TITLE: KDL Settings Map  Bidirectional SettingPath to KDL Mapping
+#+STATE: ITEM
+#+SESSION_ID: 14b655871aaa46fd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-40-17-514Z_14b655871aaa46fd.jsonl]]
+#+CUSTOM_ID: FEAT-404-kdl-settings-map-bidirectional-settingpa
+#+EFFORT: 3h
+#+LAYER: core
+#+PRIORITY: #A
+#+DEPENDS: FEAT-403-kdl-helpers-extract-and-extend-shared-ac
+
+* Initial Message
+
+how would you move all of spell's config to spell.kdl config? What would it look like? Could you import bits inside other bits? would it be better to have blocks per mode?
+
+* Reference
+Read =specs/kdl-config-migration.md= Sections 2.2 and 4.2 for the complete design.
+
+* Context
+The KDL migration needs a bidirectional mapping between the existing ~139 =SettingPath= dot-notation keys (e.g., =compaction.enabled=) and their KDL node locations (e.g., =model { compaction enabled=#true }=). This mapping is used by both the KDL reader (parse KDL → RawSettings) and writer (RawSettings → KDL).
+
+* Design Decisions
+- New file: =packages/coding-agent/src/config/kdl-settings-map.ts=
+- Each setting maps to: block name, node path within block, accessor type (argument vs property), property name or argument index
+- The mapping is a static =Record<string, KdlSettingMapping>= — no runtime computation
+- Reverse lookup function for the writer
+- Settings that don't appear in the mapping are internal-only (not persisted to KDL) — they use in-memory defaults only
+- The KDL block names correspond to top-level nodes: =appearance=, =model=, =interaction=, =tools=, =tasks=, =keybindings=, =skills=, =org=
+
+* Implementation
+** Step 1: Define types
+File: =packages/coding-agent/src/config/kdl-settings-map.ts=
+
+#+begin_src typescript
+export interface KdlSettingMapping {
+  /** The SettingPath (dot-notation) */
+  path: string;
+  /** KDL block name (top-level node) — e.g., "appearance", "model", "tools" */
+  block: string;
+  /** Node name within the block (or dot-separated for nested children) — e.g., "theme", "compaction" */
+  nodePath: string;
+  /** How to read the value: "argument" (positional) or "property" (named key=value) */
+  accessor: "argument" | "property";
+  /** Property name when accessor is "property" */
+  propertyName?: string;
+  /** Argument index when accessor is "argument" (default 0) */
+  argumentIndex?: number;
+}
+#+end_src
+
+** Step 2: Write tests FIRST
+File: =packages/coding-agent/test/config/kdl-settings-map.test.ts=
+
+Test scenarios:
+- Every setting path in =SETTINGS_SCHEMA= has a corresponding entry in =KDL_SETTINGS_MAP= (or is explicitly excluded)
+- =getKdlMapping("theme.dark")= returns correct block/nodePath/accessor/propertyName
+- =getKdlMapping("compaction.enabled")= returns block="model", nodePath="compaction", accessor="property", propertyName="enabled"
+- =getKdlMapping("defaultThinkingLevel")= returns block="model", nodePath="thinking", accessor="argument"
+- =findSettingPath("appearance", "symbols")= returns ="symbolPreset"=
+- =findSettingPath("model", "compaction", "enabled")= returns ="compaction.enabled"=
+- =findSettingPath("nonexistent", "node")= returns =undefined=
+- No duplicate mappings (each SettingPath appears exactly once)
+- The mapping covers settings from ALL tabs: appearance, model, interaction, context, editing, tools, tasks, providers
+
+To enumerate all SettingPaths programmatically in the test:
+#+begin_src typescript
+import { SETTINGS_SCHEMA } from "../../src/config/settings-schema";
+const allPaths = Object.keys(SETTINGS_SCHEMA);
+#+end_src
+
+** Step 3: Build the complete mapping
+Populate =KDL_SETTINGS_MAP= with all ~139 settings. Group by KDL block:
+
+Appearance block: =theme.dark=, =theme.light=, =symbolPreset=, =colorBlindMode=, =statusLine.*=, =images.*=, =terminal.*=, =hideThinkingBlock=
+Model block: =defaultThinkingLevel=, =maxThinkingTokens=, =retry.*=, =compaction.*=, =model.serviceTier=, =enabledModels=
+Interaction block: =steeringMode=, =caveman.*=, =doubleEscapeAction=, =followUpMode=, =interruptMode=, =autoCompact=
+Context block: =context.*=, =contextPromotion.*=
+Editing block: =edit.*=
+Tools block: =browser.*=, =org.*=, =mcp.*=, =bash.*=, =checkpoint.*=, =intentTracing=
+Tasks block: =task.*=, =todo.*=
+Providers block: (these are handled separately by kdl-providers.ts — not in this mapping)
+
+Use =packages/coding-agent/src/config/settings-schema.ts= as the authoritative list. Read the =SETTINGS_SCHEMA= object to see every path and its tab assignment.
+
+** Step 4: Implement lookup functions
+#+begin_src typescript
+export function getKdlMapping(settingPath: string): KdlSettingMapping | undefined {
+  return KDL_SETTINGS_MAP[settingPath];
+}
+
+export function findSettingPath(block: string, nodePath: string, propertyName?: string): string | undefined {
+  for (const [path, mapping] of Object.entries(KDL_SETTINGS_MAP)) {
+    if (mapping.block === block && mapping.nodePath === nodePath) {
+      if (propertyName === undefined || mapping.propertyName === propertyName) {
+        return path;
+      }
+    }
+  }
+  return undefined;
+}
+#+end_src
+
+* Edge Cases
+- Some settings don't map to KDL at all (e.g., internal state like =lastChangelogVersion=). These should be explicitly listed in an =EXCLUDED_FROM_KDL= set and tested.
+- Settings with array values (e.g., =statusLine.left= segments) map to KDL nodes with multiple string arguments.
+- Settings with object values (e.g., =compaction.*= subfields) map to KDL property nodes.
+- =modelVariants= (Record<string, EditMode>) and =bashInterceptor.patterns= (BashInterceptorRule[]) are complex types — they need special handling in the reader/writer, but the mapping just records their block/node location.
+
+* Verification
+- =bun test packages/coding-agent/test/config/kdl-settings-map.test.ts= passes
+- =bun check:ts= passes
+- Test confirms every SETTINGS_SCHEMA path is either in KDL_SETTINGS_MAP or EXCLUDED_FROM_KDL

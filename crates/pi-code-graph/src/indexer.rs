@@ -7,7 +7,9 @@ use std::{
 use petgraph::{stable_graph::StableGraph, visit::NodeIndexable};
 
 use crate::{
-	cache::{CacheStore, FileFingerprint, GraphCacheEntry, GraphFingerprint, read_git_head},
+	cache::{
+		CacheStatus, CacheStore, FileFingerprint, GraphCacheEntry, GraphFingerprint, read_git_head,
+	},
 	error::{CodeGraphError, Result},
 	language::{
 		ExtractedImportBinding, ExtractedReference, LanguageRegistry, ResolveRequest,
@@ -50,6 +52,16 @@ impl CodeGraphBuilder {
 
 	pub const fn cache(&self) -> &CacheStore {
 		&self.cache
+	}
+
+	pub fn cache_status(&self, root: &Path) -> Result<CacheStatus> {
+		let root = fs::canonicalize(root)?;
+		if !root.is_dir() {
+			return Err(CodeGraphError::InvalidRoot(root));
+		}
+		self
+			.cache
+			.status("workspace", &root, &|path| self.registry.match_path(path).is_some())
 	}
 
 	pub fn build(&self, options: &BuildGraphOptions) -> Result<GraphBuildOutcome> {

@@ -1,0 +1,33 @@
+#+TITLE: Session 14b657c2ac5da15f Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 3
+
+** DONE Verify, record, and close plan
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:GATE_COMMIT: true
+:VERIFY_CMD: bun check:ts && bun test test/tools/org-cwd-change.test.ts
+:DEPENDS: task-5
+:ORG_ITEM_ID: PLAN-170-move-command-updates-tool-working-direct
+:ORG_ITEM_CLOSING_ID: PLAN-170-move-command-updates-tool-working-direct
+:END:
+
+Run focused verification, update org records with completion evidence, reconcile linked org item states, and commit only plan-related files.
+
+Verified with bun check:ts, focused modified-test coverage, and manual /move checks. Child org items reconciled to DONE, PLAN-170 moved to DONE, and commit 456a411b6 records the plan changes.
+
+* Blockers
+
+** DONE Resolve unrelated typecheck blockers
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:END:
+
+Investigate and resolve the unrelated ArtifactRef and Dirent type errors in packages/coding-agent/src/internal-urls/artifact-protocol.ts, packages/coding-agent/src/session/artifacts.ts, packages/coding-agent/test/session-manager/move-to.test.ts, packages/coding-agent/test/task/bash-exit-code-tracking.test.ts, packages/coding-agent/test/tools.test.ts, and the pre-existing sdk.ts ArtifactRef hunk so bun check:ts can pass and PLAN-170 can be closed.
+
+Resolved workspace type/lint blockers so bun check:ts now passes. Verified with bun check:ts plus focused modified-test coverage.

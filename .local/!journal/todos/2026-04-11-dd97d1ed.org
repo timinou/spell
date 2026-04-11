@@ -1,0 +1,11 @@
+#+TITLE: Session 14b66a7ab4f1eac0 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Inspect fluid-mode scheduler integration
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

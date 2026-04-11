@@ -1,0 +1,21 @@
+#+TITLE: Session 14b2a95a2256138f Todos
+#+DATE: 2026-04-08
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 2
+
+** BLOCKED Verify, document, and commit plan
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: gate_failed
+:GATE_COMMIT: true
+:GATE_CMD: bun check
+:GATE_LLM: All plan acceptance criteria and completion protocol items are satisfied truthfully.
+:VERIFY_CMD: bun test packages/coding-agent/test/tools/todo-write.test.ts && bun test packages/coding-agent/test/agent-session-todo-auto-clear.test.ts && bun test packages/coding-agent/test/agent-session-eager-todo.test.ts && bun test packages/coding-agent/test/agent-session-new-session-todos.test.ts
+:DEPENDS: task-1 task-2 task-3
+:ORG_ITEM_ID: PLAN-165-fix-todo-auto-clear-breaking-blocker-ref
+:END:
+
+Run focused tests and bun check, update org completion report and child states, then commit only plan-related files.
+
+Focused tests and manual acceptance artifact passed, but required `bun check` failed on unrelated existing TypeScript errors in packages/coding-agent/src/tools/autonomy-state/sql-store.ts, packages/coding-agent/test/tools/autonomy-state-sql.test.ts, packages/spell-server/src/http/routes/approvals.ts, packages/spell-server/src/telegram/tool-progress.ts, and packages/utils/src/logger.ts. Plan left blocked truthfully.

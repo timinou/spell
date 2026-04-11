@@ -1,0 +1,29 @@
+#+TITLE: Session 14b66f75e39d597b Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Investigation
+
+** DONE Inspect cache fingerprinting and indexer symbol map
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Inspect code tool routing and query resolution
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Inspect TS extractor heritage and import handling
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Inspect Elixir module resolution
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

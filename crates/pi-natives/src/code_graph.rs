@@ -93,7 +93,7 @@ fn run_code_graph(
 	);
 
 	if options.command == "status" {
-		return render_status(&root, &cache);
+		return render_status(&root, &builder);
 	}
 
 	let (graph, cache_status, rebuilt) =
@@ -179,7 +179,7 @@ fn ensure_graph(
 	force_rebuild: bool,
 ) -> napi::Result<(CodeGraph, String, bool)> {
 	cancel_token.heartbeat()?;
-	let status = cache.status(CACHE_NAME, root).map_err(to_napi_error)?;
+	let status = builder.cache_status(root).map_err(to_napi_error)?;
 	if !force_rebuild && status == CacheStatus::Fresh {
 		let entry = cache
 			.load(CACHE_NAME)
@@ -199,13 +199,14 @@ fn ensure_graph(
 	Ok((outcome.graph, cache_label, true))
 }
 
-fn render_status(root: &Path, cache: &CacheStore) -> napi::Result<CodeGraphResult> {
-	let cache_status = match cache.status(CACHE_NAME, root).map_err(to_napi_error)? {
+fn render_status(root: &Path, builder: &CodeGraphBuilder) -> napi::Result<CodeGraphResult> {
+	let cache_status = match builder.cache_status(root).map_err(to_napi_error)? {
 		CacheStatus::Missing => "missing".to_string(),
 		CacheStatus::Fresh => "fresh".to_string(),
 		CacheStatus::Stale { reason } => format!("stale ({reason})"),
 	};
-	let status = cache
+	let status = builder
+		.cache()
 		.load(CACHE_NAME)
 		.map_err(to_napi_error)?
 		.map(|entry| CodeGraph::from(entry.graph).graph_status());

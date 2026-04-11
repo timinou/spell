@@ -26,7 +26,7 @@ import {
 	Snowflake,
 	toError,
 } from "@oh-my-pi/pi-utils";
-import { ArtifactManager } from "./artifacts";
+import { ArtifactManager, type ArtifactRef } from "./artifacts";
 import {
 	type BlobPutResult,
 	BlobStore,
@@ -1832,27 +1832,31 @@ export class SessionManager {
 	}
 
 	/**
-	 * Allocate a new artifact path and ID for the current session.
-	 * Returns an empty object when the session is not persisted.
-	 */
-	async allocateArtifactPath(toolType: string): Promise<{ id?: string; path?: string }> {
-		const manager = this.#getOrCreateArtifactManager();
-		if (!manager) return {};
-		return manager.allocatePath(toolType);
-	}
-
-	/**
-	 * Save artifact content under the current session and return artifact ID.
+	 * Allocate a new artifact path, URI, and ID for the current session.
 	 * Returns undefined when the session is not persisted.
 	 */
-	async saveArtifact(content: string, toolType: string): Promise<string | undefined> {
+	async allocateArtifactPath(toolType: string, extension?: string): Promise<ArtifactRef | undefined> {
 		const manager = this.#getOrCreateArtifactManager();
 		if (!manager) return undefined;
-		return manager.save(content, toolType);
+		return manager.allocatePath(toolType, extension);
 	}
 
 	/**
-	 * Resolve an artifact ID to an on-disk path for the current session.
+	 * Save artifact content under the current session and return its resolved reference.
+	 * Returns undefined when the session is not persisted.
+	 */
+	async saveArtifact(
+		content: string | Uint8Array,
+		toolType: string,
+		extension?: string,
+	): Promise<ArtifactRef | undefined> {
+		const manager = this.#getOrCreateArtifactManager();
+		if (!manager) return undefined;
+		return manager.save(content, toolType, extension);
+	}
+
+	/**
+	 * Resolve an artifact ID or artifact:// URI to an on-disk path for the current session.
 	 * Returns null when missing or when the session is not persisted.
 	 */
 	async getArtifactPath(id: string): Promise<string | null> {

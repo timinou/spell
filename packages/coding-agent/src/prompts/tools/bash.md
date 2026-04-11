@@ -19,7 +19,7 @@ Executes bash command in shell session for terminal operations like git, bun, ca
 
 <output>
 Returns the output, and an exit code from command execution.
-- If output truncated, full output can be retrieved from `artifact://<id>`, linked in metadata
+- If output is truncated, full output can be retrieved from a session-scoped artifact URI such as `artifact://14b64b/main/bash/0.txt`, linked in metadata
 - Exit codes shown on non-zero exit
 </output>
 

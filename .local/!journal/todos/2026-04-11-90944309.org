@@ -1,0 +1,11 @@
+#+TITLE: Session 14b655871aaa46fd Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Read all org items and spec, verify consistency
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:

@@ -238,6 +238,7 @@ interface GeminiImageToolDetails {
 	model: string;
 	imageCount: number;
 	imagePaths: string[];
+	imageUris?: string[];
 	images: InlineImageData[];
 	responseText?: string;
 	promptFeedback?: GeminiPromptFeedback;
@@ -467,19 +468,60 @@ async function saveImageToTemp(image: InlineImageData): Promise<string> {
 	return filepath;
 }
 
-async function saveImagesToTemp(images: InlineImageData[]): Promise<string[]> {
-	return Promise.all(images.map(saveImageToTemp));
+interface SavedImageArtifact {
+	path: string;
+	uri?: string;
 }
 
+type ImageArtifactAllocator = (
+	toolType: string,
+	extension?: string,
+) => Promise<{ id?: string; path?: string; uri?: string } | undefined>;
+
+export async function saveImageAsArtifact(
+	image: InlineImageData,
+	allocate?: ImageArtifactAllocator,
+): Promise<SavedImageArtifact> {
+	const ext = getExtensionForMime(image.mimeType);
+	if (allocate) {
+		try {
+			const artifact = await allocate("generate_image", ext);
+			if (artifact?.path) {
+				await Bun.write(artifact.path, Buffer.from(image.data, "base64"));
+				return { path: artifact.path, uri: artifact.uri };
+			}
+		} catch {
+			// Fall back to tmpdir when artifact allocation is unavailable.
+		}
+	}
+	return { path: await saveImageToTemp(image) };
+}
+
+async function saveImagesAsArtifacts(
+	images: InlineImageData[],
+	allocate?: ImageArtifactAllocator,
+): Promise<SavedImageArtifact[]> {
+	return Promise.all(images.map(image => saveImageAsArtifact(image, allocate)));
+}
+
+function buildSavedImageDetails(
+	savedImages: SavedImageArtifact[],
+): Pick<GeminiImageToolDetails, "imagePaths" | "imageUris"> {
+	const imageUris = savedImages.map(image => image.uri).filter((uri): uri is string => Boolean(uri));
+	return {
+		imagePaths: savedImages.map(image => image.path),
+		...(imageUris.length > 0 ? { imageUris } : {}),
+	};
+}
 function buildResponseSummary(
 	provider: ImageProvider,
 	model: string,
-	imagePaths: string[],
+	savedImages: SavedImageArtifact[],
 	responseText: string | undefined,
 ): string {
-	const lines = [`Provider: ${provider}`, `Model: ${model}`, `Generated ${imagePaths.length} image(s):`];
-	for (const p of imagePaths) {
-		lines.push(`  ${p}`);
+	const lines = [`Provider: ${provider}`, `Model: ${model}`, `Generated ${savedImages.length} image(s):`];
+	for (const image of savedImages) {
+		lines.push(`  ${image.uri ?? image.path}`);
 	}
 	if (responseText) {
 		lines.push("", responseText.trim());
@@ -619,7 +661,7 @@ export const geminiImageTool: CustomTool<typeof geminiImageSchema, GeminiImageTo
 						: DEFAULT_MODEL;
 			const resolvedModel = provider === "openrouter" ? resolveOpenRouterModel(model) : model;
 			const cwd = ctx.sessionManager.getCwd();
-
+			const allocateArtifact = ctx.sessionManager.allocateArtifactPath.bind(ctx.sessionManager);
 			const resolvedImages: InlineImageData[] = [];
 			if (params.input?.length) {
 				for (const input of params.input) {
@@ -680,6 +722,7 @@ export const geminiImageTool: CustomTool<typeof geminiImageSchema, GeminiImageTo
 							model,
 							imageCount: 0,
 							imagePaths: [],
+							imageUris: [],
 							images: [],
 							responseText,
 							usage: parsed.usage,
@@ -687,15 +730,15 @@ export const geminiImageTool: CustomTool<typeof geminiImageSchema, GeminiImageTo
 					};
 				}
 
-				const imagePaths = await saveImagesToTemp(parsed.images);
+				const savedImages = await saveImagesAsArtifacts(parsed.images, allocateArtifact);
 
 				return {
-					content: [{ type: "text", text: buildResponseSummary(provider, model, imagePaths, responseText) }],
+					content: [{ type: "text", text: buildResponseSummary(provider, model, savedImages, responseText) }],
 					details: {
 						provider,
 						model,
 						imageCount: parsed.images.length,
-						imagePaths,
+						...buildSavedImageDetails(savedImages),
 						images: parsed.images,
 						responseText,
 						usage: parsed.usage,
@@ -755,23 +798,24 @@ export const geminiImageTool: CustomTool<typeof geminiImageSchema, GeminiImageTo
 							model: resolvedModel,
 							imageCount: 0,
 							imagePaths: [],
+							imageUris: [],
 							images: [],
 							responseText,
 						},
 					};
 				}
 
-				const imagePaths = await saveImagesToTemp(inlineImages);
+				const savedImages = await saveImagesAsArtifacts(inlineImages, allocateArtifact);
 
 				return {
 					content: [
-						{ type: "text", text: buildResponseSummary(provider, resolvedModel, imagePaths, responseText) },
+						{ type: "text", text: buildResponseSummary(provider, resolvedModel, savedImages, responseText) },
 					],
 					details: {
 						provider,
 						model: resolvedModel,
 						imageCount: inlineImages.length,
-						imagePaths,
+						...buildSavedImageDetails(savedImages),
 						images: inlineImages,
 						responseText,
 					},
@@ -844,6 +888,7 @@ export const geminiImageTool: CustomTool<typeof geminiImageSchema, GeminiImageTo
 						model,
 						imageCount: 0,
 						imagePaths: [],
+						imageUris: [],
 						images: [],
 						responseText,
 						promptFeedback: data.promptFeedback,
@@ -852,15 +897,15 @@ export const geminiImageTool: CustomTool<typeof geminiImageSchema, GeminiImageTo
 				};
 			}
 
-			const imagePaths = await saveImagesToTemp(inlineImages);
+			const savedImages = await saveImagesAsArtifacts(inlineImages, allocateArtifact);
 
 			return {
-				content: [{ type: "text", text: buildResponseSummary(provider, model, imagePaths, responseText) }],
+				content: [{ type: "text", text: buildResponseSummary(provider, model, savedImages, responseText) }],
 				details: {
 					provider,
 					model,
 					imageCount: inlineImages.length,
-					imagePaths,
+					...buildSavedImageDetails(savedImages),
 					images: inlineImages,
 					responseText,
 					promptFeedback: data.promptFeedback,

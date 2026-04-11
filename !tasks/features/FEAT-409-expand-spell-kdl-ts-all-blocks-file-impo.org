@@ -1,0 +1,173 @@
+#+TITLE: Expand spell-kdlts  All Blocks File Imports User-Level Loading
+#+STATE: ITEM
+#+SESSION_ID: 14b655871aaa46fd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-40-17-514Z_14b655871aaa46fd.jsonl]]
+#+CUSTOM_ID: FEAT-409-expand-spell-kdl-ts-all-blocks-file-impo
+#+EFFORT: 4h
+#+LAYER: core
+#+PRIORITY: #A
+#+DEPENDS: FEAT-405-kdl-reader-parse-kdl-documents-to-rawset FEAT-407-kdl-provider-parser-replace-typebox-mode FEAT-408-kdl-keybindings-and-modes-parsers
+
+* Initial Message
+
+how would you move all of spell's config to spell.kdl config? What would it look like? Could you import bits inside other bits? would it be better to have blocks per mode?
+
+* Reference
+Read =specs/kdl-config-migration.md= Sections 3.1, 4.12, and the full grammar in Section 2.1.
+
+* Context
+Currently =spell-kdl.ts= handles only =domain=, =import= (built-in templates), =layer=, and =policy= nodes. After this item, it handles ALL node types from the grammar, resolves file-relative imports, and supports loading from both project (=./spell.kdl=) and user (=~/.spell/spell.kdl=) levels.
+
+The =SpellProjectConfig= type expands to include all parsed config.
+
+* Design Decisions
+- =SpellProjectConfig= grows from ={domain, policies}= to include settings (RawSettings), providers, keybindings, modes, etc.
+- File-relative imports (=import "./team.kdl"=) resolve against the directory containing the spell.kdl file
+- Built-in template imports (=import "spell.coding.typescript"=) continue working (existing behavior)
+- Import cycle detection via visited-set (prevents infinite loops)
+- User-level loading: new =loadUserSpellKdl()= function that reads =~/.spell/spell.kdl=
+- =loadSpellKdl= gains an optional =baseDir= parameter for import resolution
+- Merge semantics for file imports: imported nodes are merged first, local nodes override
+
+* Implementation
+** Step 1: Expand =SpellProjectConfig= type
+#+begin_src typescript
+export interface SpellProjectConfig {
+  domain?: string;
+  policies: TaskPolicyConfig;
+  settings: RawSettings;           // NEW: parsed via kdl-reader
+  providers?: ParsedProvidersBlock; // NEW: parsed via kdl-providers
+  keybindings?: Record<string, string | string[]>; // NEW: parsed via kdl-keybindings
+  modes?: Array<{ name: string; config: ModeConfigFrontmatter; instructionsPath?: string }>; // NEW
+}
+#+end_src
+
+** Step 2: Update tests
+File: =packages/coding-agent/test/config/spell-kdl.test.ts= (UPDATE existing)
+
+New test scenarios (add to existing describe blocks):
+- Parse spell.kdl with appearance block → settings.theme.dark present
+- Parse spell.kdl with model block → settings.defaultThinkingLevel present
+- Parse spell.kdl with providers block → providers.providers["anthropic"] present
+- Parse spell.kdl with keybindings block → keybindings["interrupt"] present
+- Parse spell.kdl with mode block → modes array has entry
+- File-relative import: =import "./extra.kdl"= loads and merges content from sibling file
+- File-relative import with nested path: =import "../shared/policies.kdl"=
+- File-relative import that doesn't exist → warning logged, continues
+- Import cycle detection: A imports B imports A → warning, no infinite loop
+- Mixed imports: both built-in template and file import in same document
+- User-level spell.kdl: =loadUserSpellKdl(agentDir)= reads =~/.spell/spell.kdl=
+- User-level ENOENT → returns undefined
+
+** Step 3: Expand =parseSpellKdl=
+The existing node loop:
+#+begin_src typescript
+for (const node of document.nodes) {
+  switch (node.getName()) {
+    case "domain": ...
+    case "import": ...
+    case "layer": case "policy": ...
+  }
+}
+#+end_src
+
+Becomes:
+#+begin_src typescript
+for (const node of document.nodes) {
+  switch (node.getName()) {
+    case "domain": ...
+    case "import": ...
+    case "layer": case "policy": ...
+    // NEW: these nodes are handled by the KDL reader/providers/keybindings parsers
+    // but we need to pass the full document to them
+    case "appearance": case "model": case "interaction":
+    case "tools": case "tasks": case "skills": case "org":
+      // Handled by kdlDocumentToSettings() on the full document
+      break;
+    case "providers":
+      // Handled by parseProvidersBlock() on the full document
+      break;
+    case "keybindings":
+      // Handled by parseKeybindingsBlock() on the full document
+      break;
+    case "mode":
+      // Handled by parseModeBlocks() on the full document
+      break;
+  }
+}
+#+end_src
+
+After the node loop, call the sub-parsers:
+#+begin_src typescript
+result.settings = kdlDocumentToSettings(document);
+result.providers = parseProvidersBlock(document);
+result.keybindings = parseKeybindingsBlock(document);
+result.modes = parseModeBlocks(document);
+#+end_src
+
+** Step 4: Add file-relative import resolution
+Change the =import= handling:
+#+begin_src typescript
+case "import": {
+  const ns = getStringArgument(node);
+  if (!ns) break;
+  
+  if (ns.startsWith("./") || ns.startsWith("../")) {
+    // File-relative import
+    if (!baseDir) {
+      logger.warn("spell-kdl: file imports not supported without baseDir");
+      break;
+    }
+    const importPath = path.resolve(baseDir, ns);
+    if (visited.has(importPath)) {
+      logger.warn("spell-kdl: import cycle detected", { path: importPath });
+      break;
+    }
+    visited.add(importPath);
+    try {
+      const content = await Bun.file(importPath).text();
+      const importedConfig = parseSpellKdlInternal(content, path.dirname(importPath), visited);
+      mergeConfigs(result, importedConfig);
+    } catch (err) {
+      if (!isEnoent(err)) {
+        logger.warn("spell-kdl: failed to load import", { path: importPath, error: err });
+      }
+    }
+  } else {
+    // Built-in template (existing behavior)
+    const templateContent = resolveTemplate(ns);
+    // ... existing template logic ...
+  }
+}
+#+end_src
+
+Note: =parseSpellKdl= becomes async (it already is in =loadSpellKdl=, but the pure parser needs to be split into sync parse + async import resolution).
+
+** Step 5: Add =loadUserSpellKdl=
+#+begin_src typescript
+export async function loadUserSpellKdl(): Promise<SpellProjectConfig | undefined> {
+  const userKdlPath = path.join(getConfigRootDir(), "spell.kdl");
+  try {
+    const content = await Bun.file(userKdlPath).text();
+    return await parseSpellKdl(content, path.dirname(userKdlPath));
+  } catch (err) {
+    if (isEnoent(err)) return undefined;
+    logger.warn("spell-kdl: failed to load user spell.kdl", { error: err });
+    return undefined;
+  }
+}
+#+end_src
+
+Import =getConfigRootDir= from =@oh-my-pi/pi-utils=.
+
+* Edge Cases
+- =parseSpellKdl= must remain safe to call with content that has ONLY domain + policies (backward compat with existing spell.kdl files)
+- File imports merge using same override semantics as template imports: local nodes win
+- =import= nodes are processed in order — later imports override earlier ones
+- The =visited= set prevents cycles but allows the same file to be imported from different paths (resolved to absolute)
+- =baseDir= is =undefined= for =parseSpellKdl(content)= calls without a file context (e.g., from tests passing inline strings). File imports log a warning in this case.
+
+* Verification
+- =bun test packages/coding-agent/test/config/spell-kdl.test.ts= passes (existing + new tests)
+- =bun test packages/coding-agent/test/config/config-loading-hierarchy.test.ts= passes (existing tests still work)
+- =bun check:ts= passes

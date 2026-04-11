@@ -1,0 +1,17 @@
+#+TITLE: Session 14afee2ae0359a29 Todos
+#+DATE: 2026-04-06
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Explore growth project .spell/ directory
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Explore founder-sidekick project .spell/ directory
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:

@@ -1,0 +1,212 @@
+#+TITLE: Precise heritage extraction with TypeParameterOf edges
+#+STATE: ITEM
+#+SESSION_ID: 14b66f75e39d597b
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T12-33-35-630Z_14b66f75e39d597b.jsonl]]
+#+CUSTOM_ID: FEAT-422-precise-heritage-extraction-with-typepar
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: backend
+#+DEPENDS: FEAT-421-distinguish-type-only-imports-with-edgek
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-053-audit-implementation:
+
+Audit findings, highest effort-to-impact first:
+
+1. **What**: Cache fingerprinting is too broad and likely self-invalidates the graph cache
+   - **Where**: `crates/pi-code-graph/src/cache.rs`, `CacheStore::fingerprint_root()`
+   - **Why**: It fingerprints every file under the root, including non-source files and likely `.spell/graph` itself. That means the cache can become stale because of its own output or unrelated docs/artifacts changes, forcing unnecessary rebuilds and making `status`/lazy indexing less trustworthy.
+   - **Effort**: `small`
+
+2. **What**: Graph commands bypass read-only mode even though `index`/auto-index writes `.spell/graph`
+   - **Where**: `packages/coding-agent/src/tools/code.ts`, graph command routing in `execute()` / `#executeGraphCommand()`
+   - **Why**: `context`, `impact`, `deps`, etc. can trigger an implicit rebuild and write cache files, but only `edit` is guarded as a write. In a read-only session this violates the tool’s contract and mutates the workspace unexpectedly.
+   - **Effort**: `small`
+
+3. **What**: Type-only imports are parsed, then silently discarded by the graph pipeline
+   - **Where**: `crates/pi-code-graph/src/language.rs` (`ExtractedImport.is_type_only`) and `crates/pi-code-graph/src/indexer.rs` import edge construction
+   - **Why**: The extractor preserves `is_type_only`, but the builder never uses it. That means callers cannot tell whether a dependency is runtime or type-only, and dead-code / impact / deps results can over-report usage while hiding that distinction.
+   - **Effort**: `small`
+
+4. **What**: Symbol-only commands can silently fall back to file hits
+   - **Where**: `crates/pi-code-graph/src/query.rs`, `resolve_symbol()`
+   - **Why**: If exact symbol lookup fails, `resolve_symbol()` falls back to graph search over both symbols and files. `context`/`flow` therefore can return plausible output for a file when the caller asked for a symbol, which is a contract violation and hard to detect from the output.
+   - **Effort**: `small`
+
+5. **What**: TypeScript inheritance extraction produces false `inherits` edges
+   - **Where**: `crates/pi-code-graph/src/language/typescript.rs`, `collect_heritage_references()`
+   - **Why**: It walks identifiers inside `extends`/`implements` clauses too broadly. In practice this already surfaced as `CodeTool` appearing to “inherit” `codeSchema`, which is not a real inheritance relationship. That pollutes `context`/`impact` results with misleading edges.
+   - **Effort**: `small`
+
+6. **What**: Bare-name symbol indexing collides when multiple symbols in one file share the same name
+   - **Where**: `crates/pi-code-graph/src/indexer.rs`, `symbol_nodes` map population and `resolve_reference_target()`
+   - **Why**: The map is keyed by `(file, symbol.name)`, so duplicate method/function names within one file overwrite each other. References then resolve to whichever symbol was inserted last, making context, flow, impact, and dead-code results incorrect in common class-heavy files.
+   - **Effort**: `medium`
+
+7. **What**: `dead_code` has obvious false positives for constructors and some methods
+   - **Where**: `crates/pi-code-graph/src/query.rs`, `graph_dead_code()`; root cause also in `crates/pi-code-graph/src/language/typescript.rs` reference extraction for `new_expression`
+   - **Why**: `new Foo()` links to `Foo`, not `Foo.constructor`, so constructor symbols tend to look unused. The smoke output already showed entries like `ProxyMessageEventStream.constructor` as dead. A noisy dead-code report will quickly lose user trust.
+   - **Effort**: `medium`
+
+8. **What**: Elixir module resolution does not cover common Mix/Phoenix layouts
+   - **Where**: `crates/pi-code-graph/src/language/elixir.rs`, `ElixirImportResolver::resolve()` / `module_name_to_path()`
+   - **Why**: It maps `MyApp.Tools.Helper` directly to `my_app/tools/helper.ex`, but real projects commonly place modules under `lib/`, umbrella app roots, or other Mix-managed layouts. On typical Elixir repos, aliases/imports will fail to resolve and graph quality will drop sharply.
+   - **Effort**: `medium`
+
+Deferred work check:
+- I did not find abandoned tasks or missing FUP links in the plan closure path.
+
+* Context
+=collect_heritage_references()= in =crates/pi-code-graph/src/language/typescript.rs= walks extends/implements clauses and collects ALL identifiers recursively via =collect_identifier_names()=. This means =class Foo extends Bar&lt;Baz&gt;= produces =Inherits= edges to both =Bar= (correct) and =Baz= (incorrect — =Baz= is a type parameter, not a base class).
+
+This was observed in practice: =CodeTool= appeared to "inherit" =codeSchema= because the generic parameter =typeof schema= included =codeSchema= as an identifier.
+
+The fix: add a new =EdgeKind::TypeParameterOf= variant. Rewrite =collect_heritage_references()= to produce =Inherits= edges only for the direct type references in extends/implements clauses, and =TypeParameterOf= edges for identifiers found inside =type_arguments= / =type_parameters= subtrees.
+
+* Design Decisions
+1. Add =EdgeKind::TypeParameterOf= variant to the =EdgeKind= enum in =model.rs= (after =TypeImports= which is added by the dependency item FEAT-421).
+2. Rewrite =collect_heritage_references()= to walk the heritage clause children structurally:
+   - For each direct child of an extends/implements clause that is a type reference (=type_identifier=, =identifier=, =nested_type_identifier=, =generic_type=), collect the top-level type name as =Inherits=.
+   - For identifiers found inside =type_arguments= subtrees of those generic types, collect as =TypeParameterOf=.
+3. =graph_dead_code()= should NOT count =TypeParameterOf= as "usage" (same treatment as =TypeImports=).
+4. =graph_impact()= should include =TypeParameterOf= in the traversal set for completeness.
+5. Adding a variant changes bincode schema — acceptable (cache rebuilds on deserialization failure).
+
+* Dependency
+This item depends on [[id:FEAT-421-distinguish-type-only-imports-with-edgek]] because both add new variants to the =EdgeKind= enum in =model.rs=. Sequential execution avoids merge conflicts on the same enum.
+
+* Files to Modify
+- =crates/pi-code-graph/src/model.rs=: Add =TypeParameterOf= to =EdgeKind= enum
+- =crates/pi-code-graph/src/language/typescript.rs=: Rewrite =collect_heritage_references()=
+- =crates/pi-code-graph/src/query.rs=: Add =TypeParameterOf= to =graph_impact()= edge set; verify =graph_dead_code()= does NOT include it (it shouldn't need a change — it enumerates the "counts as usage" set explicitly)
+
+* Implementation
+
+** Tests (write first)
+Add to =language/typescript.rs= =mod tests=:
+- =heritage_distinguishes_base_from_type_param=: Parse:
+  #+begin_src typescript
+  import { Bar, Baz, Qux } from "./dep";
+  export class Foo extends Bar<Baz> implements Qux {}
+  #+end_src
+  Assert the =Foo= symbol has:
+  - =Inherits= references to =Bar= and =Qux=
+  - =TypeParameterOf= reference to =Baz=
+  - No =Inherits= reference to =Baz=
+
+- =heritage_handles_plain_extends_without_generics=: Parse:
+  #+begin_src typescript
+  export class Child extends Parent {}
+  #+end_src
+  Assert the =Child= symbol has one =Inherits= reference to =Parent= and no =TypeParameterOf= references.
+
+- =interface_extends_type_clause_separates_params=: Parse:
+  #+begin_src typescript
+  export interface Wrapper<T> extends Base<T, string> {}
+  #+end_src
+  Assert =Wrapper= has =Inherits= to =Base= and =TypeParameterOf= to =T=.
+  Note: =string= is a keyword, not an identifier node — it should NOT appear in references.
+
+** Implementation
+1. *model.rs* — Add variant:
+   #+begin_src rust
+   pub enum EdgeKind {
+       Defines,
+       Imports,
+       Calls,
+       References,
+       Inherits,
+       Renders,
+       TypeImports,     // added by FEAT-421
+       TypeParameterOf, // added by this item
+   }
+   #+end_src
+
+2. *typescript.rs* — Rewrite =collect_heritage_references()=. The current implementation:
+   #+begin_src rust
+   fn collect_heritage_references(node: Node<'_>, source: &str) -> Vec<ExtractedReference> {
+       let mut refs = Vec::new();
+       visit_named(node, &mut |child| {
+           if matches!(child.kind(), "extends_clause" | "implements_clause" | "extends_type_clause") {
+               for name in collect_identifier_names(child, source) {
+                   refs.push(ExtractedReference { target_name: name, edge_kind: EdgeKind::Inherits });
+               }
+           }
+       });
+       dedupe_references(refs)
+   }
+   #+end_src
+
+   Replace with a two-phase approach:
+   #+begin_src rust
+   fn collect_heritage_references(node: Node<'_>, source: &str) -> Vec<ExtractedReference> {
+       let mut refs = Vec::new();
+       visit_named(node, &mut |child| {
+           if !matches!(child.kind(), "extends_clause" | "implements_clause" | "extends_type_clause") {
+               return;
+           }
+           // Walk direct value/type children of the clause
+           let mut clause_cursor = child.walk();
+           for clause_child in child.named_children(&mut clause_cursor) {
+               collect_heritage_from_type(clause_child, source, &mut refs);
+           }
+       });
+       dedupe_references(refs)
+   }
+
+   fn collect_heritage_from_type(node: Node<'_>, source: &str, refs: &mut Vec<ExtractedReference>) {
+       match node.kind() {
+           "type_identifier" | "identifier" => {
+               refs.push(ExtractedReference {
+                   target_name: node_text(node, source),
+                   edge_kind: EdgeKind::Inherits,
+               });
+           }
+           "nested_type_identifier" => {
+               // e.g., Foo.Bar — collect the whole dotted name as Inherits
+               refs.push(ExtractedReference {
+                   target_name: node_text(node, source),
+                   edge_kind: EdgeKind::Inherits,
+               });
+           }
+           "generic_type" => {
+               // e.g., Bar<Baz> — the first child is the type name (Inherits),
+               // the type_arguments child contains type params (TypeParameterOf)
+               let mut cursor = node.walk();
+               for child in node.named_children(&mut cursor) {
+                   if child.kind() == "type_arguments" {
+                       for name in collect_identifier_names(child, source) {
+                           refs.push(ExtractedReference {
+                               target_name: name,
+                               edge_kind: EdgeKind::TypeParameterOf,
+                           });
+                       }
+                   } else {
+                       collect_heritage_from_type(child, source, refs);
+                   }
+               }
+           }
+           _ => {}
+       }
+   }
+   #+end_src
+
+3. *query.rs* — In =graph_impact()=, add =TypeParameterOf= to the BFS edge set:
+   #+begin_src rust
+   &[EdgeKind::Calls, EdgeKind::References, EdgeKind::Inherits, EdgeKind::Imports, EdgeKind::TypeImports, EdgeKind::TypeParameterOf]
+   #+end_src
+   Verify =graph_dead_code()= does NOT list =TypeParameterOf= in its =has_inbound_usage= match — it should already not be there since we enumerate the "counts as usage" set explicitly.
+
+* Edge Cases
+- =class Foo extends Bar {}= (no generics): Should produce one =Inherits= edge to =Bar=, no =TypeParameterOf=.
+- =class Foo extends Bar&lt;Baz, Qux&lt;T&gt;&gt;= (nested generics): =Inherits= to =Bar=. =TypeParameterOf= to =Baz=, =Qux=, and =T=. The recursive =collect_identifier_names= inside type_arguments handles nesting.
+- =implements A & B= (intersection types): Both =A= and =B= are direct children of the implements clause. They're not inside =type_arguments=, so both get =Inherits=. This is correct.
+- =extends_type_clause= (interface extends): Same structure as =extends_clause=. The =type= field children are the extended types.
+
+* Acceptance Criteria
+- =cargo test -p pi-code-graph typescript= passes including 3 new heritage tests
+- =cargo test -p pi-code-graph= passes (all tests)
+- =cargo check -p pi-natives= passes
+- =bun check:rs= passes
+- Manual: run =code { command: "context", symbol: "CodeTool" }= and verify =codeSchema= does NOT appear in the Inherits section

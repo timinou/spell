@@ -1,3 +1,4 @@
 planMode:
   allowedFolders:
     domain/growth/specs/: You can write/edit if you find an inconsistency or if you need to write specs ahead of implementing them. All updates and writes should be validated by me in the details before you edit.
+    specs/: Any specs that you deem important to keep as reference across sessions

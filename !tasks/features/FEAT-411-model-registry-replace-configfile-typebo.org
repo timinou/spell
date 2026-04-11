@@ -1,0 +1,183 @@
+#+TITLE: Model Registry  Replace ConfigFileTypeBox with KDL Providers
+#+STATE: ITEM
+#+SESSION_ID: 14b655871aaa46fd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T10-40-17-514Z_14b655871aaa46fd.jsonl]]
+#+CUSTOM_ID: FEAT-411-model-registry-replace-configfile-typebo
+#+EFFORT: 5h
+#+LAYER: core
+#+PRIORITY: #A
+#+DEPENDS: FEAT-407-kdl-provider-parser-replace-typebox-mode FEAT-409-expand-spell-kdl-ts-all-blocks-file-impo
+
+* Initial Message
+
+how would you move all of spell's config to spell.kdl config? What would it look like? Could you import bits inside other bits? would it be better to have blocks per mode?
+
+* Reference
+Read =specs/kdl-config-migration.md= Section 4.10 for the complete design.
+
+* Context
+=ModelRegistry= (=packages/coding-agent/src/config/model-registry.ts=) currently loads custom providers/models from =models.json= via =ConfigFile<ModelsConfig>= with TypeBox schema validation. This item replaces that loading path with KDL-parsed provider configs, while keeping the runtime API (=registerProvider()=, =getApiKey()=, =getAvailable()=) unchanged.
+
+* Design Decisions
+- =ModelRegistry= constructor changes: instead of =modelsPath?: string=, accepts =providerConfigs?: Record<string, KdlProviderConfig>=
+- =ModelsConfigSchema= (TypeBox schema, ~200 lines) deleted
+- =ModelsConfigFile= (=ConfigFile= instance) deleted
+- =ModelsConfig= type deleted
+- =validateProviderConfiguration()= stays (used by both KDL parser and =registerProvider()=)
+- =buildCustomModel()= stays (same logic, receives parsed data from KDL instead of JSON)
+- =#loadCustomModels()= simplified: reads from =this.#providerConfigs= instead of =ModelsConfigFile.load()=
+- Discovery protocols (Ollama, LM Studio, llama.cpp) configs move from hardcoded defaults to KDL but the discovery RUNTIME stays unchanged (same API calls to detect models)
+- =ProviderOverride=, =DiscoveryProviderConfig= interfaces stay
+- =cacheDbPath= still derived from agentDir for SQLite model cache
+- =ConfigFile= class in =config.ts= stays (used by other things) but models.json-specific usage removed
+
+* Implementation
+** Step 1: Update ModelRegistry constructor
+#+begin_src typescript
+// BEFORE:
+constructor(
+  authStorage: AuthStorage,
+  modelsPath?: string,
+) {
+  this.#modelsConfigFile = ModelsConfigFile.relocate(modelsPath);
+  this.#cacheDbPath = modelsPath ? path.join(path.dirname(modelsPath), "models.db") : undefined;
+}
+
+// AFTER:
+constructor(
+  authStorage: AuthStorage,
+  options?: {
+    providerConfigs?: Record<string, KdlProviderConfig>;
+    cacheDbPath?: string;
+  },
+) {
+  this.#providerConfigs = options?.providerConfigs ?? {};
+  this.#cacheDbPath = options?.cacheDbPath;
+}
+#+end_src
+
+** Step 2: Simplify =#loadCustomModels()=
+Current loads from ConfigFile, validates with TypeBox, parses models. New reads from =this.#providerConfigs= (already parsed and validated by KDL parser):
+
+#+begin_src typescript
+#loadCustomModels(): CustomModelsResult {
+  const models: Model<Api>[] = [];
+  const overrides: Map<string, ProviderOverride> = new Map();
+  const discoveryProviders: DiscoveryProviderConfig[] = [];
+
+  for (const [providerName, config] of Object.entries(this.#providerConfigs)) {
+    // Handle provider overrides (baseUrl, headers, apiKey, compat without custom models)
+    if (config.baseUrl || config.headers || config.apiKey || config.compat) {
+      overrides.set(providerName, {
+        baseUrl: config.baseUrl,
+        headers: config.headers,
+        apiKey: config.apiKey,
+        compat: config.compat as Model<Api>["compat"],
+      });
+    }
+
+    // Handle discovery
+    if (config.discovery) {
+      discoveryProviders.push({
+        provider: providerName,
+        api: config.api as Api,
+        baseUrl: config.baseUrl,
+        headers: config.headers,
+        compat: config.compat as Model<Api>["compat"],
+        discovery: config.discovery as ProviderDiscovery,
+        optional: config.optional,
+      });
+    }
+
+    // Handle custom models
+    for (const modelDef of config.models ?? []) {
+      models.push(buildCustomModel(
+        providerName,
+        config.baseUrl!,
+        config.api as Api | undefined,
+        modelDef.api as Api | undefined,
+        modelDef,
+        config.compat as Model<Api>["compat"],
+      ));
+    }
+  }
+
+  return { models, overrides, discoveryProviders };
+}
+#+end_src
+
+** Step 3: Delete TypeBox schema code
+Remove from =model-registry.ts=:
+- =import { Type, type Static } from "@sinclair/typebox"= (and remove from package if no other consumers in file)
+- =ModelsConfigSchema= definition (~200 lines of Type.Object, Type.Optional, Type.String, etc.)
+- =const ModelsConfigFile = new ConfigFile<ModelsConfig>(...)= and its =.withValidation()= chain
+- =type ModelsConfig = Static<typeof ModelsConfigSchema>=
+- Remove =ConfigFile= import from =../config= (if no other uses in this file)
+
+Keep in =model-registry.ts=:
+- =validateProviderConfiguration()= function
+- =buildCustomModel()= function
+- =ProviderOverride= interface
+- =DiscoveryProviderConfig= interface
+- =ProviderDiscoveryStatus= type
+- =ProviderDiscoveryState= interface
+- All runtime model management methods
+
+** Step 4: Update all =new ModelRegistry()= call sites
+Production code (=packages/coding-agent/src/=):
+- =main.ts= line ~585: =new ModelRegistry(authStorage)= → =new ModelRegistry(authStorage, { providerConfigs, cacheDbPath })= where =providerConfigs= comes from =loadSpellKdl()= and =loadUserSpellKdl()=
+- =sdk.ts= line ~684: same pattern
+- =commit/agentic/index.ts= line ~34: same
+- =commit/pipeline.ts= line ~46: same
+- =task/executor.ts= line ~1048: same
+
+For production callers, provider configs are loaded as follows:
+#+begin_src typescript
+const userConfig = await loadUserSpellKdl();
+const projectConfig = await loadSpellKdl(cwd);
+const mergedProviders = { ...userConfig?.providers?.providers, ...projectConfig?.providers?.providers };
+const modelRegistry = new ModelRegistry(authStorage, { providerConfigs: mergedProviders, cacheDbPath });
+#+end_src
+
+Test code (=packages/coding-agent/test/=):
+~19 test files create =new ModelRegistry(authStorage, path.join(tempDir, "models.yml"))=.
+These need to change to create =KdlProviderConfig= objects and pass them:
+#+begin_src typescript
+// BEFORE:
+const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+// writeModelsJson({...}); // wrote JSON fixture
+
+// AFTER:
+const modelRegistry = new ModelRegistry(authStorage, {
+  providerConfigs: {
+    "test-provider": { baseUrl: "http://localhost:8080", api: "openai-completions", models: [...] },
+  },
+  cacheDbPath: path.join(tempDir, "models.db"),
+});
+#+end_src
+
+Alternatively, tests can write =spell.kdl= fixtures and use =parseProvidersBlock(parse(content))= to get =KdlProviderConfig= objects. This is preferred for integration tests.
+
+For =test/utilities.ts= (shared test utility): update =createTestSession= helper.
+
+** Step 5: Update =getError()= / config error display
+Current =getError()= returns =ModelsConfigFile= parse error. Replace with any KDL parse errors captured during load. If no errors, =getError()= returns undefined as before.
+
+** Step 6: Remove =models.json= / =models.yml= references
+Grep for =models.json=, =models.yml=, =ModelsConfigFile= across the package and remove all references.
+
+* Edge Cases
+- =ModelRegistry= with empty =providerConfigs= → only built-in models available (same as current behavior with no models.json)
+- Discovery providers still need baseUrl for runtime API calls — validation catches missing baseUrl+discovery combos
+- =registerProvider()= at runtime (from extensions) merges into the in-memory model list — unchanged
+- API key resolution still goes through =AuthStorage.resolveApiKey()= which calls =resolveConfigValue()= — the =$ENV= and =!cmd= prefixes work because KDL stores them as literal strings, resolved at API call time
+- Test files that use =writeModelsJson()= helper need equivalent =createProviderConfigs()= helper
+
+* Verification
+- =bun test packages/coding-agent/test/model-registry.test.ts= passes (updated)
+- =bun test packages/coding-agent/test/model-resolver.test.ts= passes
+- =bun test packages/coding-agent/test/model-registry-runtime-provider.test.ts= passes (updated)
+- =bun test packages/coding-agent/test/lm-studio-fix.test.ts= passes (updated)
+- All agent-session tests pass (they create ModelRegistry)
+- =bun check:ts= passes
+- No =models.json= or =models.yml= or =ModelsConfigFile= references remain in src/

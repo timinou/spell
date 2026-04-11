@@ -1,0 +1,47 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-052-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Audit findings:
+
+1. **What**: Native loader no longer validates the code-graph binding at startup  
+   **Where**: `packages/natives/src/native.ts`, top-level binding imports and `validateNative()` export checklist  
+   **Why**: Missing `executeCodeGraph` support will now fail later at first use instead of failing truthfully during native load, which hides broken native installs and weakens the loader contract  
+   **Effort**: `trivial`
+
+2. **What**: The shared session event bus is still instantiated without a typed event map  
+   **Where**: `packages/coding-agent/src/sdk.ts`, EventBus construction during session/runtime setup  
+   **Why**: The new typed `EventBus` safety is bypassed at the main integration boundary, so mismatched channel/payload pairs can still compile and circulate through the central bus  
+   **Effort**: `trivial`
+
+3. **What**: The deferred fluid-mode cutover is documented, but not tracked as a follow-up org item  
+   **Where**: `!tasks/plans/PLAN-173-unified-swarm-architecture-with-dag-nati.org`, completion report `*** Deviations` subsection  
+   **Why**: Remaining runtime work is acknowledged but not lifecycle-tracked, so it is easy to forget and leaves the plan looking more complete than the org graph can enforce  
+   **Effort**: `trivial`
+
+4. **What**: Blocker resolution hard-codes `current/main` instead of using the actual swarm/session context  
+   **Where**: `packages/coding-agent/src/tools/todo-write.ts`, `hasUnresolvedBlockers()` / `isTaskBlocked()` helper path  
+   **Why**: Branch-scoped or cross-agent blocker refs can be evaluated in the wrong URI namespace, which can make subagent tasks appear ready or blocked incorrectly  
+   **Effort**: `small`
+
+5. **What**: Swarm runtime cutover is still partial; `fluid-mode` does not execute end-to-end through `SwarmScheduler`  
+   **Where**: `packages/coding-agent/src/modes/fluid-mode.ts`, `executeFluidPlan()` path; `packages/coding-agent/src/task/executor.ts`, `swarmContext`-gated tool wiring  
+   **Why**: Handoff/spawn-successor and live DAG mutation exist, but manual swarm execution can still miss the real scheduler/blackboard path, leaving the runtime contract incomplete  
+   **Effort**: `medium`
+
+6. **What**: `todo_write` still exposes dual `phases`/`groups` terminology and keeps “Phase” wording after the DAG-native group refactor  
+   **Where**: `packages/coding-agent/src/tools/todo-write.ts`, `TodoWriteToolDetails`, execute result details, and `formatSummary()`  
+   **Why**: The API surface still implies phase-order semantics even though execution is DAG-driven, which invites callers and future maintainers to keep relying on the old mental model  
+   **Effort**: `small`
+
+7. **What**: Scheduler coverage still appears thin around live mutation during an active pump  
+   **Where**: `packages/coding-agent/test/task/swarm-scheduler.test.ts`  
+   **Why**: Dynamic DAG mutation is one of the main new contracts; without an active-pump add/remove test through the real scheduling loop, regressions are likely in the most novel concurrency path  
+   **Effort**: `small`
