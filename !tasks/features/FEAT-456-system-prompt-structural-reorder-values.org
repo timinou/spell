@@ -1,0 +1,151 @@
+#+TITLE: System prompt structural reorder - values before tools
+#+STATE: DONE
+#+SESSION_ID: 14b6da06bfab9131
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-19-11-230Z_14b6da06bfab9131.jsonl]]
+#+CUSTOM_ID: FEAT-456-system-prompt-structural-reorder-values
+#+EFFORT: 1.5h
+#+LAYER: core
+#+PRIORITY: B
+
+NOTE [2026-04-11]: All acceptance criteria met: section order correct, thinking-mode updated, tests pass (16/16), type check clean for coding-agent.
+
+* Initial Message
+
+Read about caveman-phd and the system prompt and let's exchange on your ideal format. Rid it from the labels and make it yours.
+
+* Context
+
+The system prompt's section ordering buries Contract (5 inviolable rules) and Design Integrity
+(5 engineering principles) at position ~75% of the stable section — after 2000+ tokens of tool
+documentation. These are the agent's compass. They should prime behavior early, not arrive after
+the agent has already absorbed LSP subcommands and AST pattern syntax.
+
+Research-backed: critical instructions at START and END of prompt retain 20%+ better than
+middle-positioned content (system-prompts skill, "Lost in the Middle" finding).
+
+Architectural spec: =specs/system-prompt-architecture.md=
+
+* Design Decisions
+
+1. Move =# Contract= section from current position (after Environment, before Procedure)
+   into the Identity section, placed AFTER =<stakes>=
+2. Move =# Design Integrity= section from current position (after Contract, before Procedure)
+   into the Identity section, placed AFTER Contract
+3. Rename the ={{SECTION_SEPERATOR "Rules"}}= to ={{SECTION_SEPERATOR "Procedure"}}=
+   since only the Procedure subsections remain after Contract and Design Integrity move out
+4. Add two lines to the =<thinking-mode>= block:
+   - After "Abbreviate freely. Go deep, write tight." add a new line:
+     =Compression ≠ simplification.=
+   - Change "Abbreviate freely." to "Abbreviate freely: fn, impl, cfg, dep, ret, sig, inv."
+5. The empty line between the moved Contract/Design Integrity and the new "Procedure" section
+   separator should be preserved for readability.
+6. Do NOT change any content within Contract or Design Integrity — only their position.
+7. Do NOT move Procedure content — it stays where it is, just under a renamed separator.
+
+* File to Modify
+
+=packages/coding-agent/src/prompts/system/system-prompt.md=
+
+* Implementation Steps
+
+** Step 1: Read current file and identify exact line ranges
+
+The implementer MUST read the full file before editing. The key landmarks:
+
+- ={{SECTION_SEPERATOR "Identity"}}= — currently around line 37
+- =</stakes>= — currently around line 123
+- ={{SECTION_SEPERATOR "Rules"}}= — currently around line 301
+- =# Contract= — currently around line 303
+- =# Design Integrity= — currently around line 311
+- =# Procedure= — currently around line 320
+- ={{CACHE_BOUNDARY}}= — currently around line 362
+
+** Step 2: Cut Contract and Design Integrity
+
+Remove these two blocks from their current position (between the Rules section separator
+and =# Procedure=). This includes:
+
+#+begin_example
+# Contract
+These are inviolable. Violation is system failure.
+[... 5 bullets ...]
+
+# Design Integrity
+
+Design integrity means the code tells the truth...
+[... intro + 5 bullets ...]
+#+end_example
+
+** Step 3: Paste after </stakes>
+
+Insert the Contract and Design Integrity blocks immediately after =</stakes>=
+(with a blank line between =</stakes>= and =# Contract=).
+
+The result in the Identity section should flow:
+#+begin_example
+</stakes>
+
+# Contract
+These are inviolable. Violation is system failure.
+...
+
+# Design Integrity
+
+Design integrity means the code tells the truth...
+...
+
+{{SECTION_SEPERATOR "Environment"}}
+#+end_example
+
+** Step 4: Rename section separator
+
+Change:
+#+begin_example
+{{SECTION_SEPERATOR "Rules"}}
+#+end_example
+
+To:
+#+begin_example
+{{SECTION_SEPERATOR "Procedure"}}
+#+end_example
+
+This separator now sits directly above =## 1. Scope= (the first Procedure subsection).
+
+** Step 5: Refine thinking-mode block
+
+Find the line that says:
+#+begin_example
+Abbreviate freely. Go deep, write tight.
+#+end_example
+
+Replace with:
+#+begin_example
+Abbreviate freely: fn, impl, cfg, dep, ret, sig, inv.
+Compression ≠ simplification. Go deep, write tight.
+#+end_example
+
+* Edge Cases
+
+- The ={{SECTION_SEPERATOR}}= helper has a typo ("SEPERATOR" not "SEPARATOR"). Do NOT fix
+  this — it would break all templates. Leave the typo.
+- Contract and Design Integrity may reference Handlebars conditionals — verify none exist
+  (they shouldn't — these are static content).
+- The =<dir-context>= block in Workspace references AGENTS.md files. This is unrelated
+  to the Identity section — do not move it.
+- After the restructure, the section order MUST be:
+  Workspace → Identity (with Contract + Design Integrity at end) → Environment → Procedure → CACHE_BOUNDARY → Now
+
+* Acceptance Criteria
+
+1. =bun check:ts= passes
+2. The rendered prompt (with all conditionals active) shows this section order:
+   - ═══Workspace═══ ... ═══Identity═══ ... # Contract ... # Design Integrity ... ═══Environment═══ ... ═══Procedure═══ ... ═══Now═══
+3. =# Contract= appears AFTER =</stakes>= and BEFORE ={{SECTION_SEPERATOR "Environment"}}=
+4. =# Design Integrity= appears AFTER =# Contract= and BEFORE ={{SECTION_SEPERATOR "Environment"}}=
+5. ={{SECTION_SEPERATOR "Rules"}}= no longer exists — replaced with ={{SECTION_SEPERATOR "Procedure"}}=
+6. The thinking-mode block contains "fn, impl, cfg, dep, ret, sig, inv"
+7. The thinking-mode block contains "Compression ≠ simplification"
+8. No content within Contract or Design Integrity is changed — only their position
+9. =bun test packages/coding-agent/test/system-prompt-templates.test.ts= passes
+   (if any position assertions fail, update them — the behavioral contracts must be preserved:
+   thinking-mode before CACHE_BOUNDARY, terse output instructions in appendPrompt not in stable section)
