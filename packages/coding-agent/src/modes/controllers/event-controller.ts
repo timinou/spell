@@ -413,6 +413,10 @@ export class EventController {
 						}
 						if (event.toolName === "task") {
 							this.ctx.setTodos(this.ctx.session.getTodoGroups());
+							const details = event.result.details as { results?: unknown[] } | undefined;
+							if (!isBackgroundRunning && Array.isArray(details?.results) && details.results.length > 0) {
+								this.ctx.recordSubagentResults?.(details.results as never);
+							}
 						}
 						this.ctx.ui.requestRender();
 					}

@@ -905,6 +905,46 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 /**
  * Render the tool result.
  */
+function formatEfficiencyLine(
+	results: SingleResult[],
+	totalDurationMs: number,
+	usage: TaskToolDetails["usage"],
+	theme: Theme,
+	expanded: boolean,
+): string | null {
+	if (results.length < 2) return null;
+
+	const totalTokens = results.reduce((sum, item) => sum + item.tokens, 0);
+	if (totalTokens === 0) return null;
+
+	const parts: string[] = [];
+	const avgTokens = Math.round(totalTokens / results.length);
+	parts.push(`${formatNumber(avgTokens)} avg/task`);
+
+	if (usage && usage.input + usage.cacheRead > 0) {
+		const cacheRate = usage.cacheRead / (usage.input + usage.cacheRead);
+		parts.push(`${Math.round(cacheRate * 100)}% cache`);
+	}
+
+	if (totalDurationMs > 0) {
+		const totalWorkDuration = results.reduce((sum, item) => sum + item.durationMs, 0);
+		const parallelFactor = totalWorkDuration / totalDurationMs;
+		if (parallelFactor > 1.05) {
+			parts.push(`${parallelFactor.toFixed(1)}x parallel`);
+		}
+	}
+
+	if (expanded && usage?.cost?.total && usage.cost.total > 0) {
+		parts.push(`${formatCost(usage.cost.total / results.length)} avg`);
+	}
+
+	if (parts.length === 0) return null;
+	return `${theme.fg("dim", "Efficiency:")} ${parts.map(part => theme.fg("dim", part)).join(theme.sep.dot)}`;
+}
+
+/**
+ * Render the tool result.
+ */
 export function renderResult(
 	result: { content: Array<{ type: string; text?: string }>; details?: TaskToolDetails },
 	options: RenderResultOptions,
@@ -971,6 +1011,16 @@ export function renderResult(
 					summary += `${theme.sep.dot}${theme.fg("dim", formatCost(details.usage.cost.total))}`;
 				}
 				lines.push(summary);
+				const efficiencyLine = formatEfficiencyLine(
+					details.results,
+					details.totalDurationMs,
+					details.usage,
+					theme,
+					expanded,
+				);
+				if (efficiencyLine) {
+					lines.push(efficiencyLine);
+				}
 			}
 
 			if (lines.length === 0) {

@@ -48,3 +48,22 @@ export function formatExitTokenSummary(info: ExitTokenInfo): string {
 	if (parts.length === 0) return "Session: no tokens recorded";
 	return `Session: ${parts.join(" | ")}`;
 }
+
+export interface SubtaskExitInfo {
+	totalLaunched: number;
+	totalTokens: number;
+	totalCost: number;
+	avgTokensPerSubtask: number;
+	cacheHitRate: number;
+}
+
+export function formatSubtaskExitSummary(info: SubtaskExitInfo): string | null {
+	if (info.totalLaunched === 0) return null;
+
+	const parts: string[] = [`${info.totalLaunched} launched`];
+	if (info.totalTokens > 0) parts.push(`${formatTokenCount(info.totalTokens)} tokens`);
+	if (info.totalCost > 0) parts.push(`$${info.totalCost.toFixed(2)}`);
+	if (info.avgTokensPerSubtask > 0) parts.push(`${formatTokenCount(info.avgTokensPerSubtask)} avg/task`);
+	if (info.cacheHitRate > 0) parts.push(`${Math.round(info.cacheHitRate * 100)}% cache`);
+	return `Subtasks: ${parts.join(" | ")}`;
+}

@@ -1,0 +1,111 @@
+#+TITLE: Subagent tracker centralized progress aggregation
+#+STATE: DONE
+#+SESSION_ID: 14b6bd9f49bd2023
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T18-15-05-254Z_14b6bd9f49bd2023.jsonl]]
+#+CUSTOM_ID: FEAT-426-subagent-tracker-centralized-progress-ag
+#+EFFORT: 3
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+NOTE [2026-04-11]: Implemented SubagentTracker, wired task batch completion recording, and added focused tracker tests.
+
+* Initial Message
+
+bro. now that the Task tool and the todo write tool are well integrated, can you have a thing where I see in the TUI when a subtask is being spun by an agent? And can you see how often subtasks are being launched, and if they are token efficient?
+
+* Goal
+
+Create a centralized =SubagentTracker= class that subscribes to =TASK_SUBAGENT_PROGRESS_CHANNEL= on the EventBus and maintains real-time state about all running and completed subtasks. This is the foundation for the status line indicator, todo panel enrichment, and efficiency summaries.
+
+* Design Decisions
+
+- Class lives at =packages/coding-agent/src/task/subagent-tracker.ts=
+- Subscribes to =TASK_SUBAGENT_PROGRESS_CHANNEL= (already emitted by executor.ts at 150ms intervals)
+- Maintains =Map<string, AgentProgress>= keyed by =progress.id= (task logical ID)
+- Also maintains a =Map<string, AgentProgress>= keyed by =progress.sessionId= for todo correlation
+- Tracks lifetime stats: total subtasks launched, total tokens consumed, total cost, per-agent-type breakdown
+- Emits a change callback so consumers (status line, todo panel) can re-render
+- Must handle subtask lifecycle: pending → running → completed/failed/aborted
+- When a subtask completes, move it from active map to lifetime stats
+- Uses ES native =#= private fields per project convention
+- No =private=/=protected=/=public= keywords per AGENTS.md
+
+* Interface
+
+#+begin_src typescript
+export interface SubagentInfo {
+  runningCount: number;
+  pendingCount: number;
+  totalCost: number;           // aggregate cost of all running subtasks
+  mostActiveAgent: {           // the agent with most recent tool activity
+    id: string;
+    currentTool: string;
+    lastIntent?: string;
+  } | null;
+}
+
+export interface SubagentLifetimeStats {
+  totalLaunched: number;
+  totalCompleted: number;
+  totalFailed: number;
+  totalAborted: number;
+  totalTokens: number;
+  totalCost: number;
+  avgTokensPerSubtask: number;
+  cacheHitRate: number;        // cacheRead / (input + cacheRead) across all subtasks
+  byAgentType: Map<string, { count: number; tokens: number; cost: number }>;
+}
+
+export class SubagentTracker {
+  constructor(eventBus: EventBus, onChange: () => void);
+  getInfo(): SubagentInfo;
+  getLifetimeStats(): SubagentLifetimeStats;
+  getActivityForSession(sessionId: string): AgentProgress | undefined;
+  dispose(): void;
+}
+#+end_src
+
+* Implementation
+
+** Create =packages/coding-agent/src/task/subagent-tracker.ts=
+
+1. Subscribe to =TASK_SUBAGENT_PROGRESS_CHANNEL= in constructor
+2. On each progress event, extract =SubagentProgressPayload= (same shape as SubagentViewerComponent uses)
+3. Update the active agent map: =this.#activeAgents.set(progress.id, progress)=
+4. Also maintain =this.#bySessionId.set(progress.sessionId, progress)= when sessionId is present
+5. When =progress.status= transitions to =completed|failed|aborted=, accumulate into lifetime stats and remove from active map
+6. Compute =mostActiveAgent= as the running agent with most recent =currentToolStartMs= or highest =toolCount=
+7. Call =onChange()= after each state change (debounced at ~100ms to avoid excessive re-renders)
+8. =dispose()= unsubscribes from EventBus
+
+** Lifetime Stats Accumulation
+
+When a subtask completes:
+- Increment =totalLaunched= (count when first seen as =running=, not =pending=)
+- Increment =totalCompleted/totalFailed/totalAborted= based on final status
+- Add =progress.tokens= to =totalTokens=
+- Add =progress.usage.cost= to =totalCost=
+- Track per-agent-type breakdown using =progress.agent= as key
+
+Cache hit rate requires =Usage= data which is on =SingleResult.usage= not on =AgentProgress=. The tracker should accept completed results via a =recordCompletion(result: SingleResult)= method called from the task tool after execution. The progress events only carry =progress.tokens= and =progress.usage.cost= — for cache rate, the full =Usage= is needed.
+
+** Debounce Strategy
+
+Use =Bun.sleep()= based debounce: set a flag on progress event, schedule a callback if not already scheduled. This avoids calling onChange() on every 150ms progress tick.
+
+* Edge Cases
+
+- Subtask with =sessionId: 'pending'= (before real session starts) — skip the bySessionId map entry
+- Multiple batches running concurrently — tracker handles all of them; lifetime stats accumulate across batches
+- Tracker created before any subtasks exist — getInfo() returns zeros, getLifetimeStats() returns zeros
+- Subtask that never transitions to running (aborted before start) — still count in totalLaunched if it reaches running
+
+* Acceptance Criteria
+
+- Unit test at =packages/coding-agent/test/task/subagent-tracker.test.ts=:
+  - Test progress event updates active agent map correctly
+  - Test lifetime stats accumulate on completion
+  - Test getActivityForSession returns correct agent
+  - Test most active agent selection
+  - Test dispose unsubscribes
+- =bun check:ts= passes

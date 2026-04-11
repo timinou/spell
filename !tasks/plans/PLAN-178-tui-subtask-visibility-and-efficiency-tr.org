@@ -1,0 +1,86 @@
+#+TITLE: TUI subtask visibility and efficiency tracking
+#+STATE: DONE
+#+SESSION_ID: 14b6bd9f49bd2023
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T18-15-05-254Z_14b6bd9f49bd2023.jsonl]]
+#+CUSTOM_ID: PLAN-178-tui-subtask-visibility-and-efficiency-tr
+#+TODO: INIT(I) ITEM(i) DOING(d) REVIEW(r) | DONE(D) BLOCKED(b)
+
+NOTE [2026-04-11]: Implemented subtask visibility and efficiency tracking, captured verification evidence, and closed linked feature items.
+
+
+* Initial Message
+
+bro. now that the Task tool and the todo write tool are well integrated, can you have a thing where I see in the TUI when a subtask is being spun by an agent? And can you see how often subtasks are being launched, and if they are token efficient?
+
+* Context
+
+The Task tool and todo_write are deeply integrated for delegation tracking, but the TUI gives poor visibility into running subtasks. Current state:
+
+- *Status bar*: Has a =subagents= segment with =setSubagentCount()= that is *never called* — completely dead code. The segment would show a count badge, but it never appears.
+- *Todo panel*: Shows =[delegated]= label on delegated tasks, but no live activity (what tool the subtask is running, how much it's costing).
+- *Inline rendering*: Task tool's =renderResult()= shows per-agent progress with spinner, tokens, cost, current tool. This only appears in the chat output block while the tool is running. No efficiency metrics after completion.
+- *Session exit*: Shows total tokens/cost for the session, including subtask tokens (they're accumulated), but *no breakdown* of subtask vs parent usage.
+- *SubagentViewerComponent*: Full detailed overlay accessible via Ctrl+Tab — shows tool timeline, cost, per-agent stats. This is the deep-dive view; what's missing is the at-a-glance indicators.
+
+*Approach*: Create a centralized =SubagentTracker= that subscribes to the existing =TASK_SUBAGENT_PROGRESS_CHANNEL= EventBus channel, then wire it into the status line, todo panel, task render, and session exit.
+
+*Key decisions*:
+1. SubagentTracker is the single source of truth for running subtask state — status line, todo panel, and exit summary all query it
+2. Status line shows: =N agents · $0.42 · editing src/foo.ts= (count + cost + most active agent activity)
+3. Todo panel replaces =[delegated]= with live spinner + tool activity for in-progress tasks
+4. Inline efficiency line after batch completion: =Efficiency: 45K avg/task · 68% cache · 2.3x parallel=
+5. Session exit line: =Subtasks: 8 launched · 320K tokens · $1.23 · 40K avg/task · 72% cache=
+
+* Verification
+
+** Type check
+#+begin_example
+bun check:ts
+#+end_example
+
+** Unit test for SubagentTracker
+#+begin_example
+bun test packages/coding-agent/test/task/subagent-tracker.test.ts
+#+end_example
+
+** Manual verification
+1. Start a session, dispatch 2+ subtasks via Task tool
+2. Verify status bar shows running agent count, cost, and activity
+3. If using todoRef, verify todo panel shows live activity for delegated tasks
+4. Wait for batch to complete — verify efficiency line appears in task result
+5. Exit session — verify subtask aggregate line in exit summary
+
+* Execution Manifest
+
+** Wave 1: Foundation + Independent (parallel)
+- [[id:FEAT-426-subagent-tracker-centralized-progress-ag]] — SubagentTracker class (EFFORT: 3, no dependencies)
+- [[id:FEAT-429-inline-batch-efficiency-summary-in-task]] — Inline efficiency summary in task render (EFFORT: 2, no dependencies — computes from existing TaskToolDetails.results[])
+
+** Wave 2: Tracker consumers (parallel, all depend on FEAT-426)
+- [[id:FEAT-427-status-line-subtask-indicator-with-cost]] — Status line indicator (EFFORT: 3, depends on FEAT-426)
+- [[id:FEAT-428-todo-panel-inline-subtask-activity-for-d]] — Todo panel enrichment (EFFORT: 2, depends on FEAT-426)
+- [[id:FEAT-430-session-exit-subtask-efficiency-aggregat]] — Session exit summary (EFFORT: 2, depends on FEAT-426)
+
+Total effort: 12 points. Wave 1 is two parallel items. Wave 2 is three parallel items. FEAT-427 and FEAT-428 both touch =interactive-mode.ts= but in non-overlapping regions (status line wiring vs todo line formatting). If using isolated execution, apply FEAT-427 first — it creates the tracker initialization in =interactive-mode.ts= that FEAT-428 also references.
+
+
+** Completion [2026-04-11]
+*** Verification
+- `bun test packages/coding-agent/test/task/subagent-tracker.test.ts` -> pass (`4 pass`, `0 fail`).
+- `bun test packages/coding-agent/test/task/render-report-finding.test.ts packages/coding-agent/test/session-token-summary.test.ts packages/coding-agent/test/status-line-path.test.ts` -> pass (`23 pass`, `0 fail`).
+- `bun check:ts` -> pass (`biome check . && tsgo -p tsconfig.json`).
+- Scripted renderer verification captured observable output for the new subtask surfaces:
+  - status-line segment renders count + cost + activity.
+  - todo panel renders delegated live tool activity with spinner.
+  - task renderer renders efficiency summary after multi-task completion.
+  - exit summary formatter renders aggregate subtask usage line.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-178-tui-subtask-visibility-and-efficiency-tr/status-line-subagents.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-178-tui-subtask-visibility-and-efficiency-tr/todo-panel-delegated-activity.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-178-tui-subtask-visibility-and-efficiency-tr/task-efficiency-summary.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-178-tui-subtask-visibility-and-efficiency-tr/subtask-exit-summary.txt]]
+- [[file:packages/coding-agent/test/task/subagent-tracker.test.ts]]
+- [[file:packages/coding-agent/test/task/render-report-finding.test.ts]]
+- [[file:packages/coding-agent/test/session-token-summary.test.ts]]
+*** Deviations
+- Replaced the plan's live hand-driven TUI walkthrough with scripted renderer captures because this harness cannot drive the interactive terminal UI end-to-end. The captured outputs above cover the user-visible status line, todo panel, efficiency summary, and exit summary surfaces.

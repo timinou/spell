@@ -1,0 +1,8 @@
+   ├─ ✔ task-a ⟦done⟧ · 100 tokens · 120ms
+   │  Task
+   │    Inspect A
+   └─ ✔ task-b ⟦done⟧ · 80 tokens · 80ms
+      Task
+        Inspect B
+   Total: 2 succeeded · 50ms · $0.200
+   Efficiency: 90 avg/task · 50% cache · 4.0x parallel · $0.100 avg

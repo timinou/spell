@@ -18,6 +18,7 @@ import {
 	Spacer,
 	Text,
 	TUI,
+	truncateToWidth,
 	visibleWidth,
 } from "@oh-my-pi/pi-tui";
 import { APP_NAME, getProjectDir, hsvToRgb, isEnoent, logger, postmortem } from "@oh-my-pi/pi-utils";
@@ -40,12 +41,15 @@ import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
-import { formatExitTokenSummary } from "../session/token-summary";
+import { formatExitTokenSummary, formatSubtaskExitSummary } from "../session/token-summary";
 import type { SessionBridgeClient } from "../session-bridge/client";
 import { raceWithBridge } from "../session-bridge/race";
 import { getModeCommandDefs, registerModeCommands } from "../slash-commands/builtin-registry";
 import { STTController, type SttState } from "../stt";
+import { SubagentTracker } from "../task/subagent-tracker";
+import type { SingleResult } from "../task/types";
 import type { ExitPlanModeDetails } from "../tools";
+import { replaceTabs } from "../tools/render-utils";
 import { isDelegatedTask } from "../tools/todo-write";
 import type { EventBus } from "../utils/event-bus";
 import { setTerminalTitle } from "../utils/title-generator";
@@ -253,6 +257,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	mcpManager?: import("../mcp").MCPManager;
 	taskManager?: import("../orchestrators/canvas-task-manager").CanvasTaskManager;
 	eventBus?: EventBus;
+	#subagentTracker?: SubagentTracker;
 	sessionBridge?: SessionBridgeClient;
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 
@@ -332,6 +337,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#userPausedFrame = new UserPausedFrameContainer(() => this.#isUserPaused);
 		this.statusLine = new StatusLineComponent(session);
 		this.statusLine.setAutoCompactEnabled(session.autoCompactionEnabled);
+		if (this.eventBus) {
+			this.#subagentTracker = new SubagentTracker(this.eventBus, () => {
+				this.statusLine.setSubagentInfo(this.#subagentTracker?.getInfo() ?? null);
+				if (this.todoGroups.length > 0) {
+					this.#renderTodoList();
+				}
+				this.ui.requestRender();
+			});
+			this.statusLine.setSubagentInfo(this.#subagentTracker.getInfo());
+		} else {
+			this.statusLine.setSubagentInfo(null);
+		}
 
 		this.hideThinkingBlock = settings.get("hideThinkingBlock");
 
@@ -847,6 +864,12 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.renderSessionContext(context);
 	}
 
+	recordSubagentResults(results: SingleResult[]): void {
+		for (const result of results) {
+			this.#subagentTracker?.recordCompletion(result);
+		}
+	}
+
 	#renderChildTodoGroups(todo: TodoItem, prefix: string): string[] {
 		const childGroups = todo.delegation?.childGroups?.filter(group => group.tasks.length > 0) ?? [];
 		if (childGroups.length === 0) return [];
@@ -863,9 +886,44 @@ export class InteractiveMode implements InteractiveModeContext {
 		return lines;
 	}
 
+	#getDelegatedTodoContent(todo: TodoItem): string {
+		if (!isDelegatedTask(todo)) {
+			return todo.content;
+		}
+		if (todo.status !== "in_progress") {
+			return `${todo.content} [delegated]`;
+		}
+
+		const sessionId = todo.delegation?.sessionId;
+		if (!sessionId || sessionId === "pending") {
+			return `${todo.content} [delegated]`;
+		}
+
+		const activity = this.#subagentTracker?.getActivityForSession(sessionId);
+		if (!activity) {
+			return `${todo.content} [delegated]`;
+		}
+
+		const spinnerFrames = getSymbolTheme().spinnerFrames;
+		const spinner = spinnerFrames[Math.floor(Date.now() / 80) % spinnerFrames.length] ?? "";
+		if (!activity.currentTool) {
+			return spinner ? `${todo.content} ${spinner}` : todo.content;
+		}
+
+		const activityText = truncateToWidth(
+			replaceTabs([activity.currentTool, activity.lastIntent].filter(Boolean).join(": ")),
+			42,
+		);
+		if (!activityText) {
+			return spinner ? `${todo.content} ${spinner}` : todo.content;
+		}
+
+		return `${todo.content} ${spinner} ${activityText}`;
+	}
+
 	#formatTodoLine(todo: TodoItem, prefix: string): string {
 		const checkbox = theme.checkbox;
-		const content = isDelegatedTask(todo) ? `${todo.content} [delegated]` : todo.content;
+		const content = this.#getDelegatedTodoContent(todo);
 		const childLines = this.#renderChildTodoGroups(todo, `${prefix}  `);
 		switch (todo.status) {
 			case "completed":
@@ -1530,6 +1588,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Print token usage summary
 		try {
 			const stats = this.session.getSessionStats();
+			let wroteSummary = false;
 			const hasUsage =
 				stats.tokens.input > 0 || stats.tokens.output > 0 || stats.tokens.cacheRead > 0 || stats.cost > 0;
 			if (hasUsage) {
@@ -1541,10 +1600,27 @@ export class InteractiveMode implements InteractiveModeContext {
 					cost: stats.cost,
 				});
 				process.stderr.write(`\n${chalk.dim(summary)}\n`);
+				wroteSummary = true;
+			}
+
+			const subtaskStats = this.#subagentTracker?.getLifetimeStats();
+			if (subtaskStats) {
+				const subtaskSummary = formatSubtaskExitSummary({
+					totalLaunched: subtaskStats.totalLaunched,
+					totalTokens: subtaskStats.totalTokens,
+					totalCost: subtaskStats.totalCost,
+					avgTokensPerSubtask: subtaskStats.avgTokensPerSubtask,
+					cacheHitRate: subtaskStats.cacheHitRate,
+				});
+				if (subtaskSummary) {
+					process.stderr.write(`${wroteSummary ? "" : "\n"}${chalk.dim(subtaskSummary)}\n`);
+				}
 			}
 		} catch {
 			// Non-critical: don't let summary formatting break shutdown
 		}
+		this.#subagentTracker?.dispose();
+		this.#subagentTracker = undefined;
 
 		// Print resumption hint if this is a persisted session
 		const sessionId = this.sessionManager.getSessionId();

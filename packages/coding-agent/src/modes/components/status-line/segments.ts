@@ -1,10 +1,10 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
-import { TERMINAL } from "@oh-my-pi/pi-tui";
-import { formatDuration, formatNumber, getProjectDir, relativePathWithinRoot } from "@oh-my-pi/pi-utils";
+import { TERMINAL, truncateToWidth } from "@oh-my-pi/pi-tui";
+import { formatCost, formatDuration, formatNumber, getProjectDir, relativePathWithinRoot } from "@oh-my-pi/pi-utils";
 import { theme } from "../../../modes/theme/theme";
-import { shortenPath } from "../../../tools/render-utils";
+import { replaceTabs, shortenPath } from "../../../tools/render-utils";
 import { getContextUsageLevel, getContextUsageThemeColor } from "./context-thresholds";
 import type { RenderedSegment, SegmentContext, StatusLineSegment, StatusLineSegmentId } from "./types";
 
@@ -176,11 +176,25 @@ const prSegment: StatusLineSegment = {
 const subagentsSegment: StatusLineSegment = {
 	id: "subagents",
 	render(ctx) {
-		if (ctx.subagentCount === 0) {
+		const info = ctx.subagentInfo;
+		const activeCount = (info?.runningCount ?? 0) + (info?.pendingCount ?? 0);
+		if (!info || activeCount === 0) {
 			return { content: "", visible: false };
 		}
-		const content = withIcon(theme.icon.agents, `${ctx.subagentCount}`);
-		return { content: theme.fg("statusLineSubagents", content), visible: true };
+
+		const parts = [withIcon(theme.icon.agents, activeCount === 1 ? "1 agent" : `${activeCount} agents`)];
+		if (info.totalCost > 0) {
+			parts.push(formatCost(info.totalCost));
+		}
+
+		const activityText = info.mostActiveAgent
+			? [info.mostActiveAgent.currentTool, info.mostActiveAgent.lastIntent].filter(Boolean).join(": ")
+			: "";
+		if (activityText) {
+			parts.push(truncateToWidth(replaceTabs(activityText), 28));
+		}
+
+		return { content: theme.fg("statusLineSubagents", parts.join(theme.sep.dot)), visible: true };
 	},
 };
 
