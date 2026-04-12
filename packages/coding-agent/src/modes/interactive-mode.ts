@@ -49,7 +49,7 @@ import { STTController, type SttState } from "../stt";
 import { SubagentTracker } from "../task/subagent-tracker";
 import type { SingleResult } from "../task/types";
 import type { ExitPlanModeDetails } from "../tools";
-import { replaceTabs } from "../tools/render-utils";
+import { replaceTabs, TRUNCATE_LENGTHS } from "../tools/render-utils";
 import { isDelegatedTask } from "../tools/todo-write";
 import type { EventBus } from "../utils/event-bus";
 import { setTerminalTitle } from "../utils/title-generator";
@@ -979,7 +979,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#renderDetailPreview(details: string, prefix: string): string[] {
 		const firstLine = details.split("\n")[0];
 		if (!firstLine?.trim()) return [];
-		return [theme.fg("dim", `${prefix}  ${truncateToWidth(replaceTabs(firstLine), 60)}`)];
+		return [theme.fg("dim", `${prefix}  ${truncateToWidth(replaceTabs(firstLine), TRUNCATE_LENGTHS.TITLE)}`)];
 	}
 
 	#getActiveGroup(groups: TodoGroup[]): TodoGroup | undefined {

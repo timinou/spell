@@ -131,7 +131,7 @@ function addUsageTotals(target: Usage, usage: Partial<Usage>): void {
  * Build assignment text from a sniper todo's content and details.
  * Returns undefined if the todo has neither content nor details.
  */
-export function buildSniperAssignment(todo: { content: string; details?: string }): string | undefined {
+function buildSniperAssignment(todo: { content: string; details?: string }): string | undefined {
 	if (!todo.content && !todo.details) return undefined;
 	const parts: string[] = [`## Task: ${todo.content}`];
 	if (todo.details) {
@@ -246,13 +246,17 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	#resolveTodoRefAssignments(tasks: TaskItem[]): TaskItem[] {
 		const groups = this.session.getTodoGroups?.();
 		if (!groups || groups.length === 0) return tasks;
-		return tasks.map(task => {
+		let changed = false;
+		const resolvedTasks = tasks.map(task => {
 			if (task.assignment?.trim() || !task.todoRef) return task;
 			const todo = findTask(groups, task.todoRef);
 			if (!todo) return task;
 			const assignment = buildSniperAssignment(todo);
-			return assignment ? { ...task, assignment } : task;
+			if (!assignment) return task;
+			changed = true;
+			return { ...task, assignment };
 		});
+		return changed ? resolvedTasks : tasks;
 	}
 
 	#validateTaskBatch(tasks: TaskItem[]): string | undefined {
@@ -294,6 +298,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			buildBatchGraph(tasks.map(task => ({ id: task.id, blockers: task.blockers })));
 		} catch (error) {
 			problems.push(error instanceof Error ? error.message : String(error));
+		}
+		const missingAssignmentIndexes = tasks.flatMap((task, index) =>
+			!task.assignment?.trim() && !task.todoRef ? [index] : [],
+		);
+		if (missingAssignmentIndexes.length > 0) {
+			problems.push(`Tasks at indexes ${missingAssignmentIndexes.join(", ")} have no assignment and no todoRef`);
 		}
 		return problems.length > 0 ? problems.join(". ") : undefined;
 	}
@@ -621,8 +631,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const asyncEnabled = this.session.settings.get("async.enabled");
-		const resolvedTasks = this.#resolveTodoRefAssignments(params.tasks ?? []);
-		const resolvedParams = resolvedTasks === (params.tasks ?? []) ? params : { ...params, tasks: resolvedTasks };
+		const tasks = params.tasks ?? [];
+		const resolvedTasks = this.#resolveTodoRefAssignments(tasks);
+		const resolvedParams = resolvedTasks === tasks ? params : { ...params, tasks: resolvedTasks };
 		const rawTasks = resolvedParams.tasks ?? [];
 		const taskPayloadValidationError = this.#validateTaskPayloadSize(params);
 		if (taskPayloadValidationError) {
