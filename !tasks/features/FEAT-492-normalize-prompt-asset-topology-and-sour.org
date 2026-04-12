@@ -1,0 +1,63 @@
+#+TITLE: Normalize prompt asset topology and source of truth
+#+STATE: DONE
+#+SESSION_ID: 14b6fc9994640cbb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T22-50-14-481Z_14b6fc9994640cbb.jsonl]]
+#+CUSTOM_ID: FEAT-492-normalize-prompt-asset-topology-and-sour
+#+PRIORITY: #A
+#+EFFORT: 5h
+#+DEPENDS: FEAT-491-define-prompt-declaration-contract-and-c
+#+LAYER: prompt
+
+NOTE [2026-04-12]: Superseded by PLAN-209. Deferred to FUP-047/048.
+
+* Initial Message
+
+continue
+
+* Context
+The current prompt stack mixes true LLM prompt assets with internal templates, deprecated leftovers, and inline strings. That makes the inventory lie about what the model actually sees and prevents a coherent declaration-of-being rewrite.
+
+Current structural issues already identified:
+- `packages/coding-agent/src/prompts/tools/async-result.md` and `packages/coding-agent/src/prompts/tools/task-summary.md` are system/task templates, not tool descriptions, but they live under the tools prompt directory and are imported by `packages/coding-agent/src/sdk.ts` and `packages/coding-agent/src/task/index.ts`.
+- `packages/coding-agent/src/prompts/tools/handoff.md` and `packages/coding-agent/src/prompts/tools/spawn-successor.md` are orphaned prompt files; the hidden swarm tools currently describe themselves inline in `packages/coding-agent/src/swarm/handoff-tool.ts` and `packages/coding-agent/src/swarm/spawn-successor-tool.ts`.
+- `packages/coding-agent/src/prompts/agents/frontmatter.md`, `packages/coding-agent/src/prompts/agents/browse-findings.md`, and `packages/coding-agent/src/prompts/agents/fluid-planner-retry.md` are not canonical agent identities and need explicit topology treatment.
+- `packages/coding-agent/src/loop/prompts/loop-start-tool.md` is deprecated/orphaned according to `packages/coding-agent/src/loop/ARCHITECTURE.md`.
+- Some tools sent to the model still use inline descriptions instead of canonical prompt assets: `packages/coding-agent/src/tools/notebook.ts`, `packages/org/src/tool.ts`, `packages/coding-agent/src/tools/submit-result.ts`, `packages/coding-agent/src/tools/autonomy-state/tool.ts`, `packages/coding-agent/src/swarm/handoff-tool.ts`, and `packages/coding-agent/src/swarm/spawn-successor-tool.ts`.
+
+This item is structural, not stylistic. It must make the prompt topology truthful before rewrite items normalize voice.
+
+* Implementation
+1. Decide and implement one canonical source of truth for each prompt artifact sent to the model:
+   - true tool descriptions live in a tool-prompt location
+   - true agent system prompts live in an agent-prompt location
+   - internal summary/notification templates live outside those inventories
+2. Move or rename non-tool templates currently under `packages/coding-agent/src/prompts/tools/` so the directory contains only actual tool descriptions. Update imports in `packages/coding-agent/src/sdk.ts`, `packages/coding-agent/src/task/index.ts`, and any related modules.
+3. Resolve the swarm tool duplication honestly:
+   - either externalize `handoff` and `spawn_successor` descriptions into canonical prompt files and wire the hidden tools to them
+   - or delete the orphan prompt files and keep a single inline source of truth
+   Do not keep both representations.
+4. Resolve the loop-tool inventory honestly:
+   - keep `packages/coding-agent/src/loop/prompts/loop-prepare-tool.md`, `loop-launch-tool.md`, and `loop-done-tool.md` if they are live
+   - remove or relocate the deprecated `loop-start-tool.md` and update any documentation references that still treat it as live
+5. Normalize agent-prompt topology:
+   - if `frontmatter.md`, `browse-findings.md`, or `fluid-planner-retry.md` are not true agent identities, move them into a more accurate template location or rename them to reflect their role
+   - update imports/callers accordingly
+6. Normalize inline tool-description ownership for `notebook`, `org`, `submit_result`, `autonomy_state`, `handoff`, and `spawn_successor`.
+   - Prefer static `.md` prompt assets for multi-line or policy-rich descriptions.
+   - Keep inline strings only when the final canonical contract deliberately allows a one-line description.
+7. Maintain full cutover. After this item, there must be exactly one reachable representation for every prompt artifact in scope.
+
+* Edge Cases
+- Do not break the runtime by moving prompt files without updating all imports.
+- Preserve the existing hidden/public tool boundary; topology cleanup is not permission-surface expansion.
+- If a path move affects compile-time imports, update any tests and prompt-loading helpers in the same change.
+- If a file is deleted as dead/orphaned, update adjacent architecture docs that still mention it so the repository stops lying.
+
+* Acceptance
+- Every prompt directory truthfully contains only artifacts for that surface.
+- Every tool/agent/loop/system prompt sent to the model has one canonical source of truth.
+- `async-result.md`, `task-summary.md`, orphan swarm prompt files, and deprecated `loop-start-tool.md` are either normalized into the correct structure or removed with all call sites updated.
+
+* Verification
+- Manual proof: imports in `packages/coding-agent/src/sdk.ts`, `packages/coding-agent/src/task/index.ts`, `packages/coding-agent/src/loop/loop-tools.ts`, `packages/coding-agent/src/tools/notebook.ts`, `packages/org/src/tool.ts`, `packages/coding-agent/src/swarm/handoff-tool.ts`, and `packages/coding-agent/src/swarm/spawn-successor-tool.ts` point only at canonical locations.
+- Regression proof: new/updated prompt topology tests in the verification item fail if orphaned legacy locations are reintroduced.

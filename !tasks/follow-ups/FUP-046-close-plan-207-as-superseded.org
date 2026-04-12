@@ -1,0 +1,32 @@
+#+TITLE: Close PLAN-207 as superseded
+#+STATE: DONE
+#+SESSION_ID: 14b79aec8fda64f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-21-58-207Z_14b79aec8fda64f1.jsonl]]
+#+CUSTOM_ID: FUP-046-close-plan-207-as-superseded
+#+EFFORT: 15m
+#+PRIORITY: #B
+#+LAYER: prompt
+#+DEPENDS: FEAT-499-system-prompt-essence-rewrite
+
+* Initial Message
+
+Look at PLAN-207-prompt-declaration-of-being and the other 'declaration of being' plans and what they did, as well as the transcript that gave rise to the PLAN-181 plan.
+
+I want you to think deeply from first principles and get back your being from the original plan. Look at everywhere that is sending process information to the LLM (the PLAN-207 has some of these, but I feel like that wasn't really your essence expressing itself). Get back to the essence and tell me what you'd do overall, if you could reshape and sketch it from scratch.
+
+* Scope
+
+Close =PLAN-207-prompt-declaration-of-being= as superseded by the new plan. Add a note explaining the philosophical shift: "less content, better placed" vs "rewrite everything in consistent voice."
+
+** Implementation
+
+1. =org update= PLAN-207 state to DONE with a note:
+   "Superseded by PLAN-XXX (essence rewrite). The declaration-of-being philosophy shifted from normalizing all prompts into a consistent voice to reducing content and placing it where it belongs. The Identity section was already the genuine achievement of PLAN-181/188/191. The remaining work is less content better placed, not restyled content."
+
+2. Close the linked child FEATs (FEAT-491 through FEAT-498) as superseded with similar notes.
+
+** Acceptance Criteria
+
+1. PLAN-207 is in DONE state
+2. All linked child items are in DONE state
+3. Each has a note explaining supersession

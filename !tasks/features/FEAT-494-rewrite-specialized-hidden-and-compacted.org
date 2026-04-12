@@ -1,0 +1,83 @@
+#+TITLE: Rewrite specialized hidden and compacted tool descriptions
+#+STATE: DONE
+#+SESSION_ID: 14b6fc9994640cbb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T22-50-14-481Z_14b6fc9994640cbb.jsonl]]
+#+CUSTOM_ID: FEAT-494-rewrite-specialized-hidden-and-compacted
+#+LAYER: prompt
+#+EFFORT: 6h
+#+PRIORITY: #A
+#+DEPENDS: FEAT-491-define-prompt-declaration-contract-and-c FEAT-492-normalize-prompt-asset-topology-and-sour
+
+NOTE [2026-04-12]: Superseded by PLAN-209. Deferred to FUP-047.
+
+* Initial Message
+
+continue
+
+* Context
+This item covers the specialized, hidden, or compaction-sensitive tool descriptions. Many of these are either placeholders, one-line stubs, or inline strings. They matter because specialized tools are compacted before provider calls, so the first sentence becomes the live tool description the model sees.
+
+Exact files and source-of-truth locations in scope (after topology normalization if files move):
+- `packages/coding-agent/src/prompts/tools/await.md`
+- `packages/coding-agent/src/prompts/tools/browser.md`
+- `packages/coding-agent/src/prompts/tools/calculator.md`
+- `packages/coding-agent/src/prompts/tools/cancel-job.md`
+- `packages/coding-agent/src/prompts/tools/canvas.md`
+- `packages/coding-agent/src/prompts/tools/canvas-cast.md`
+- `packages/coding-agent/src/prompts/tools/checkpoint.md`
+- `packages/coding-agent/src/prompts/tools/rewind.md`
+- `packages/coding-agent/src/prompts/tools/gateway.md`
+- `packages/coding-agent/src/prompts/tools/gemini-image.md`
+- `packages/coding-agent/src/prompts/tools/inspect-image.md`
+- `packages/coding-agent/src/prompts/tools/inspect-image-system.md`
+- `packages/coding-agent/src/prompts/tools/python.md`
+- `packages/coding-agent/src/prompts/tools/render-mermaid.md`
+- `packages/coding-agent/src/prompts/tools/resolve.md`
+- `packages/coding-agent/src/prompts/tools/search-tool-bm25.md`
+- `packages/coding-agent/src/prompts/tools/send-file.md`
+- `packages/coding-agent/src/prompts/tools/ssh.md`
+- `packages/coding-agent/src/loop/prompts/loop-prepare-tool.md`
+- `packages/coding-agent/src/loop/prompts/loop-launch-tool.md`
+- `packages/coding-agent/src/loop/prompts/loop-done-tool.md`
+- canonical description locations for `notebook`, `org`, `submit_result`, `autonomy_state`, `handoff`, and `spawn_successor` after the topology item resolves their ownership
+
+Critical runtime facts to preserve:
+- Specialized tool descriptions are compacted via `compactToolDescription()` (`packages/coding-agent/src/tools/index.ts`).
+- Compact extraction uses the first sentence; the first sentence must therefore stand alone as a truthful, useful capability summary.
+- Hidden tools still reach subagents and must match the same voice even if the main UI hides them.
+
+* Implementation
+1. Rewrite every description above into the canonical terse shape.
+2. For specialized tools, treat the first sentence as a hard interface contract:
+   - it must be independently comprehensible
+   - it must not rely on a following paragraph to explain the core use case
+   - it must avoid abbreviations or sentence fragments that compact poorly
+3. Expand critical stubs into complete but concise docs. Priority fixes include:
+   - `gateway.md`
+   - `gemini-image.md`
+   - `resolve.md`
+   - `cancel-job.md`
+   - `render-mermaid.md`
+   - `canvas-cast.md`
+4. Preserve the stronger existing patterns where they already help:
+   - `browser.md` preferring observe over screenshot
+   - `inspect-image.md` and `inspect-image-system.md` evidence-first guidance
+   - `checkpoint.md` and `rewind.md` lifecycle pairing
+5. Upgrade loop tool descriptions from bare one-liners into the same canonical shape unless the spec explicitly allows a deliberately minimal one-liner for one of them. Default to canonical shape, not placeholders.
+6. For `org`, `submit_result`, and `autonomy_state`, preserve the exact protocol truth. These descriptions must remain accurate about lifecycle, schema validation, state mutation semantics, and failure behavior.
+7. If the topology item externalizes inline descriptions into markdown files, rewrite the new canonical files rather than leaving policy-rich descriptions inline in TypeScript.
+
+* Edge Cases
+- Do not let compacted first sentences become generic slogans like “Manages state” or “Handles jobs.” They must preserve actual differentiation.
+- `inspect-image-system.md` is a system prompt fragment, not just a tool blurb; keep its evidence-vs-inference boundary explicit.
+- `org` and `submit_result` are easy to oversimplify. Accuracy outranks token shaving.
+
+* Acceptance
+- Every specialized/hidden tool in scope has a first sentence that still works after compaction.
+- Placeholder/stub descriptions are eliminated.
+- Loop tools, hidden tools, and inline-description tools no longer lag behind the main tool docs in voice or completeness.
+
+* Verification
+- Targeted tests: `bun test packages/coding-agent/test/tools/index.test.ts`
+- New prompt compilation/assertion tests added in the verification item must pass for all canonical description locations in scope.
+- Manual proof: inspect the compacted first sentence for `gateway`, `canvas`, `notebook`, `org`, `submit_result`, and `loop_prepare` after rewrite and confirm it is self-sufficient.

@@ -61,7 +61,7 @@ describe("auto-roster prompt wiring", () => {
 	it("documents todo_write coexistence with auto-created roster items", () => {
 		const rendered = renderPromptTemplate(todoWritePrompt, { autoRosterEnabled: true });
 
-		expect(rendered).toContain("Task dispatches may auto-create phases and delegated items in this same roster.");
+		expect(rendered).toContain("Task dispatches may auto-create groups and delegated items in this same roster.");
 		expect(rendered).toContain("Auto-created items behave the same as manual ones once they exist.");
 	});
 });

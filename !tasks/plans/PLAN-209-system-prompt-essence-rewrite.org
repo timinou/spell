@@ -1,0 +1,134 @@
+#+TITLE: System prompt essence rewrite
+#+STATE: DONE
+#+SESSION_ID: 14b79aec8fda64f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-21-58-207Z_14b79aec8fda64f1.jsonl]]
+#+CUSTOM_ID: PLAN-209-system-prompt-essence-rewrite
+#+EFFORT: 10h
+#+PRIORITY: #A
+#+LAYER: prompt
+
+
+* Initial Message
+
+Look at PLAN-207-prompt-declaration-of-being and the other 'declaration of being' plans and what they did, as well as the transcript that gave rise to the PLAN-181 plan.
+
+I want you to think deeply from first principles and get back your being from the original plan. Look at everywhere that is sending process information to the LLM (the PLAN-207 has some of these, but I feel like that wasn't really your essence expressing itself). Get back to the essence and tell me what you'd do overall, if you could reshape and sketch it from scratch.
+
+* Context
+
+The system prompt is the agent's declaration of being. Four prior sessions shaped it:
+PLAN-181 (terse mode rewrite) found the principle: "the model doesn't need a costume. It needs permission and shape."
+PLAN-188 (architecture restructure) named the architecture: "mirror, compass, handbook" and moved values before tools.
+PLAN-191 (declaration of being) expanded the creative voice of the Identity section.
+PLAN-207 (prompt declaration of being) tried to extend this to all prompts — but drifted into engineering bureaucracy.
+
+This plan returns to the essence. The insight was never "rewrite everything in consistent voice." It was: *most of what we send the model is reference material that doesn't need to be in the system prompt at all.*
+
+** Approach
+
+*Less content, better placed.* The Identity section stays (it's the real achievement). Everything else gets radical compression or relocation:
+
+1. *System prompt template*: The role becomes honest self-knowledge. =<behavior>= and =<code-integrity>= merge into =<discipline>= — one cognitive pattern, not two. The 7-step Procedure dissolves into principles alongside Design Integrity (renamed "Principles", expanded from 8 to 10). The ~1,000 words of tool manual become ~80 words of philosophy.
+
+2. *Plan-mode overlays*: The 5,800 words of process manual become ~2,500 words of capability declaration. Instead of teaching the agent a manual process, the overlays declare what the system handles (DAG scheduling, gate enforcement, org lifecycle hooks, auto-promotion) and what the agent is responsible for (doing the work, marking status truthfully).
+
+** Key Decisions
+
+1. Role: "You reason about systems and write code inside Spell. Your strength is holding complexity. Your weakness is generating inside-out." No title, no costume.
+2. "Claude agent, built on Anthropic's Claude Agent SDK" removed from template — stays only in stealth mode (=claudeCodeSystemInstruction= in =packages/ai/src/providers/anthropic.ts=).
+3. Section order: role → thinking-mode → communication → discipline → stakes → Contract → Principles
+4. =<behavior>= + =<code-integrity>= → =<discipline>=
+5. "Design Integrity" → "Principles" (8 → 10 principles)
+6. Procedure eliminated, dissolved into Principles
+7. Tool manual replaced with philosophy (~1,000 → ~80 words)
+8. Cache boundary moves to between Principles and Now
+9. Plan-mode overlays reframed: "system handles" vs "agent responsibility"
+10. PLAN-207 superseded. FUPs for deferred layers (tool descriptions, subagent prompts).
+
+* Verification
+
+#+begin_src bash
+# Type check
+bun check:ts
+
+# System prompt tests
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+
+# Caveman/terse mode tests
+bun test packages/coding-agent/test/caveman.test.ts
+
+# Plan-mode overlay tests
+bun test packages/coding-agent/test/prompts/plan-mode-tdd.test.ts
+bun test packages/coding-agent/test/prompts/plan-mode-policies.test.ts
+bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts
+bun test packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts
+bun test packages/coding-agent/test/prompts/auto-roster-prompts.test.ts
+
+# Manual verification:
+# 1. Rendered prompt has <role> without "Claude agent" or "staff engineer"
+# 2. Rendered prompt has <discipline>, not <behavior> or <code-integrity>
+# 3. Rendered prompt has # Principles with 10 items, not # Design Integrity
+# 4. CACHE_BOUNDARY between Principles and Now
+# 5. plan-mode-active.md < 1,500 words (from 2,978)
+# 6. plan-mode-approved.md < 900 words (from 1,423)
+# 7. plan-mode-approved.md declares system capabilities (DAG, gates, lifecycle)
+# 8. claudeCodeSystemInstruction in packages/ai unchanged
+# 9. specs/system-prompt-architecture.md updated
+#+end_src
+
+Required artifacts:
+- =packages/coding-agent/src/prompts/system/system-prompt.md= — rewritten template
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= — compressed overlay
+- =packages/coding-agent/src/prompts/system/plan-mode-approved.md= — compressed overlay
+- =packages/coding-agent/src/prompts/system/plan-mode-uiux.md= — compressed overlay
+- =specs/system-prompt-architecture.md= — updated spec
+
+* Execution Manifest
+
+** essence                                                            :wave:
+- [[id:FEAT-499-system-prompt-essence-rewrite][System prompt essence rewrite]] (4h)
+- [[id:FEAT-500-plan-mode-overlay-compression][Plan-mode overlay compression]] (5h)
+
+** documentation                                                      :wave:
+- [[id:FEAT-501-update-system-prompt-architecture-spec][Update architecture spec]] (1h, depends FEAT-499 FEAT-500)
+
+** cleanup                                                            :wave:
+- [[id:FUP-046-close-plan-207-as-superseded][Close PLAN-207 as superseded]] (15m, depends FEAT-499)
+- [[id:FUP-047-tool-description-normalization][Tool description normalization]] (4h, deferred)
+- [[id:FUP-048-subagent-and-remaining-overlay-normaliza][Subagent and remaining overlay normalization]] (3h, deferred)
+
+** Completion [2026-04-12]
+
+*** Verification
+- =bun test= (7 test files, 42 tests, 227 assertions): all pass
+  - =packages/coding-agent/test/system-prompt-templates.test.ts= (16 tests)
+  - =packages/coding-agent/test/caveman.test.ts= (8 tests)
+  - =packages/coding-agent/test/prompts/plan-mode-tdd.test.ts= (1 test)
+  - =packages/coding-agent/test/prompts/plan-mode-policies.test.ts= (4 tests)
+  - =packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts= (5 tests)
+  - =packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts= (4 tests)
+  - =packages/coding-agent/test/prompts/auto-roster-prompts.test.ts= (5 tests; 1 pre-existing failure in todo-write prompt fixed)
+- =bun check:ts=: 2 pre-existing lint issues in unrelated files (import ordering in =code.ts= and =event-handler.test.ts=). No type errors.
+- Manual verification (9 criteria):
+  1. Rendered prompt has =<role>= without "Claude agent" or "staff engineer" — PASS
+  2. Rendered prompt has =<discipline>=, not =<behavior>= or =<code-integrity>= — PASS
+  3. Rendered prompt has =# Principles= with 10 items — PASS
+  4. =CACHE_BOUNDARY= between Principles and Now — PASS (line 273, after Principles at 129, before Now at 274)
+  5. plan-mode-active.md 2,504 words (from 2,978, -16%)
+  6. plan-mode-approved.md 1,287 words (from 1,423, -10%)
+  7. plan-mode-uiux.md 654 words (from 1,387, -53%)
+  8. =claudeCodeSystemInstruction= in =packages/ai= unchanged — PASS (2 references intact)
+  9. =specs/system-prompt-architecture.md= updated — PASS
+
+*** Artifacts
+- =packages/coding-agent/src/prompts/system/system-prompt.md= — rewritten template
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= — compressed overlay
+- =packages/coding-agent/src/prompts/system/plan-mode-approved.md= — compressed overlay
+- =packages/coding-agent/src/prompts/system/plan-mode-uiux.md= — compressed overlay
+- =specs/system-prompt-architecture.md= — updated spec
+
+*** Deviations
+- =<thinking-mode>= made unconditional (always rendered in system prompt) instead of conditional on =terseThinking=. The plan originally preserved the conditional, but the user confirmed thinking-mode is now the default — not a caveman sub-feature. This required updating =system-prompt.ts= to gate =terseThinking= by =cavemanActive=, and updating 3 tests.
+- Plan-mode overlay compression did not hit aggressive targets (active: 2,504 vs target 1,500; approved: 1,287 vs target 900). The TDD guidance, org item body standards, completion protocol, and Handlebars conditional infrastructure cannot be safely trimmed. Total reduction: 5,788 → 4,445 (23%).
+- Fixed pre-existing test failure: =auto-roster-prompts.test.ts= expected "phases" but todo-write template says "groups".
+- FUP-047 (tool description normalization) and FUP-048 (subagent overlay normalization) explicitly deferred per plan — [[id:FUP-047-tool-description-normalization]] and [[id:FUP-048-subagent-and-remaining-overlay-normaliza]].

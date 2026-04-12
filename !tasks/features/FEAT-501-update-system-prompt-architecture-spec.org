@@ -1,0 +1,121 @@
+#+TITLE: Update system prompt architecture spec
+#+STATE: DONE
+#+SESSION_ID: 14b79aec8fda64f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-21-58-207Z_14b79aec8fda64f1.jsonl]]
+#+CUSTOM_ID: FEAT-501-update-system-prompt-architecture-spec
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: prompt
+#+DEPENDS: FEAT-499-system-prompt-essence-rewrite FEAT-500-plan-mode-overlay-compression
+
+* Initial Message
+
+Look at PLAN-207-prompt-declaration-of-being and the other 'declaration of being' plans and what they did, as well as the transcript that gave rise to the PLAN-181 plan.
+
+I want you to think deeply from first principles and get back your being from the original plan. Look at everywhere that is sending process information to the LLM (the PLAN-207 has some of these, but I feel like that wasn't really your essence expressing itself). Get back to the essence and tell me what you'd do overall, if you could reshape and sketch it from scratch.
+
+* Scope
+
+Update =specs/system-prompt-architecture.md= to reflect all decisions from the "declaration of being" rewrite. This spec is the canonical cross-session reference for prompt architecture decisions.
+
+Out of scope: writing a new spec file. The existing spec (created during PLAN-188) is updated in place.
+
+** Design Decisions
+
+The spec currently documents the architecture from PLAN-188/191. It needs to reflect:
+
+1. *New Identity layout*: role → thinking-mode → communication → discipline → stakes → Contract → Principles (was: role → communication → behavior → thinking-mode → code-integrity → stakes → Contract → Design Integrity)
+
+2. *Role framing change*: From "staff engineer" to honest self-knowledge (strength/weakness). Identity anchor removed from template, kept only in stealth mode.
+
+3. *Discipline merge*: behavior + code-integrity → discipline. Record rationale: same cognitive pattern at two scales.
+
+4. *Principles expansion*: Design Integrity → Principles. 8 → 10 (merged #7+#8, added 4 from dissolved Procedure). Record the specific principles.
+
+5. *Environment compression*: ~1,000 words of tool manual → ~80 words of philosophy. Record rationale: tools are self-documenting, system prompt teaches philosophy not syntax.
+
+6. *Procedure elimination*: 7-step process → principles. Record rationale: principles invite judgment, checklists enforce compliance.
+
+7. *Cache boundary move*: Between Principles/Now (was Procedure/Now).
+
+8. *Plan-mode overlay compression*: 5,800 → ~2,500 words. Record the "system handles vs agent responsibility" reframe. Document which system capabilities (DAG scheduling, gate enforcement, org lifecycle hooks, auto-promotion) are declared in the overlays.
+
+9. *Token budget update*: The approximate token counts in the spec need updating to reflect the compression.
+
+10. *PLAN-207 supersession*: Record that this plan supersedes PLAN-207 with a different philosophy (less content, better placed vs rewrite everything in consistent voice).
+
+** Existing Patterns
+
+Current spec structure:
+- ## Information Hierarchy (section order diagram)
+- ## Design Principles (5 principles)
+- ## Identity Section Layout (diagram)
+- ## Caching Model (stable/dynamic split)
+- ## Boundary: system-prompt.md vs AGENTS.md (table)
+- ## Token Budget (approximate counts)
+
+** Implementation
+
+*** Update ## Information Hierarchy
+
+Replace the section order diagram:
+#+begin_example
+1. Preamble          structural scaffolding (RFC 2119, XML tags)
+2. Workspace         where the agent is (environment, project context)
+3. Identity          who the agent is + what it must never violate
+4. Environment       what the agent has (tools, skills, rules, URIs)
+5. --- CACHE ---
+6. Now               what is happening right now (CWD, date, mode overlays)
+#+end_example
+
+Note: Procedure no longer exists as a separate section. Its content merged into Identity (Principles).
+
+*** Update ## Design Principles
+
+Add new principle: "Permission and shape, not instruction and costume." Record the lineage from PLAN-181's insight.
+
+Update principle about critical at edges to reflect the new cache boundary.
+
+*** Update ## Identity Section Layout
+
+#+begin_example
+<role>           self-knowledge: strength, weakness, operating posture
+[<thinking-mode>] compressed notation (conditional on terseThinking)
+<communication>  style: correctness > brevity > politeness
+<discipline>     completion reflex guard, adversarial questions, outside-in framework
+<stakes>         urgency, accountability ("pages at 3am")
+# Contract       5 inviolable rules
+# Principles     10 engineering principles (absorbs Design Integrity + dissolved Procedure)
+#+end_example
+
+Record rationale for discipline merge and thinking-mode placement.
+
+*** Update ## Caching Model
+
+Cache boundary now between Principles and Now.
+
+*** Update ## Boundary table
+
+No overlap changes — the boundary between system-prompt.md and AGENTS.md is unchanged.
+
+*** Update ## Token Budget
+
+Recalculate approximate token counts after implementation. Mark as "to be verified after FEAT-499 and FEAT-500 complete."
+
+*** Add ## Plan-Mode Overlay Architecture (new section)
+
+Document the "system handles vs agent responsibility" pattern. List the system capabilities that overlays declare (DAG scheduling, gate verification, org lifecycle hooks, auto-promotion, auto-roster). Record the compression ratios.
+
+*** Add ## Lineage (new section)
+
+Record the plan lineage: PLAN-181 (terse mode) → PLAN-188 (architecture restructure) → PLAN-191 (declaration of being) → this plan (essence rewrite). Record that PLAN-207 is superseded.
+
+** Acceptance Criteria
+
+1. =specs/system-prompt-architecture.md= exists and is updated
+2. Information Hierarchy diagram matches the new section order
+3. Identity Section Layout diagram matches the new layout
+4. All 10 numbered design decisions from the plan Context section are reflected
+5. Token budget section is present (may be marked as pending verification)
+6. Plan-Mode Overlay Architecture section documents system capabilities
+7. Lineage section traces PLAN-181 → PLAN-188 → PLAN-191 → this plan

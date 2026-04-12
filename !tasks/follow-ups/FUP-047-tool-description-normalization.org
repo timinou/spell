@@ -1,0 +1,39 @@
+#+TITLE: Tool description normalization
+#+STATE: ITEM
+#+SESSION_ID: 14b79aec8fda64f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-21-58-207Z_14b79aec8fda64f1.jsonl]]
+#+CUSTOM_ID: FUP-047-tool-description-normalization
+#+EFFORT: 4h
+#+PRIORITY: #C
+#+LAYER: prompt
+
+
+* Initial Message
+
+Look at PLAN-207-prompt-declaration-of-being and the other 'declaration of being' plans and what they did, as well as the transcript that gave rise to the PLAN-181 plan.
+
+I want you to think deeply from first principles and get back your being from the original plan. Look at everywhere that is sending process information to the LLM (the PLAN-207 has some of these, but I feel like that wasn't really your essence expressing itself). Get back to the essence and tell me what you'd do overall, if you could reshape and sketch it from scratch.
+
+* Scope
+
+Deferred Layer 4 from the declaration-of-being rewrite. Most tool descriptions are already good exemplars (=code.md=, =ast-grep.md=, =ast-edit.md=). A few need the same quality treatment.
+
+** Approach
+
+Audit all tool description files in =packages/coding-agent/src/prompts/tools/*.md=. For each:
+- Verify it follows the exemplar pattern: one-line capability, =<instruction>= block, =<examples>=, =<critical>=
+- Verify no content is duplicated between the tool description and the system prompt (after the essence rewrite, the system prompt should no longer duplicate tool content)
+- Compress any verbose tool descriptions that teach process instead of declaring capability
+
+** Key Files
+- =packages/coding-agent/src/prompts/tools/todo-write.md= (1,673 words — largest tool description)
+- =packages/coding-agent/src/prompts/tools/task.md= (1,241 words)
+- =packages/coding-agent/src/prompts/tools/hashline.md= (1,304 words)
+- =packages/coding-agent/src/prompts/tools/canvas.md= (1,108 words)
+- =packages/coding-agent/src/prompts/tools/code.md= (1,076 words — exemplar, probably fine)
+
+** Context
+
+This is the deferred "Layer 4" from the declaration-of-being analysis. The system prompt essence rewrite (FEAT-499) removes tool-manual duplication from the system prompt. This FUP ensures the tool descriptions themselves are tight and non-redundant.
+
+NOTE [2026-04-12]: Deferred from PLAN-209. System prompt essence rewrite completed; tool description normalization is a separate effort.

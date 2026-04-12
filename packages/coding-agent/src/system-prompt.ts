@@ -528,7 +528,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		cavemanWenyanLite: cavemanLevel === "wenyan-lite",
 		cavemanWenyan: cavemanLevel === "wenyan",
 		cavemanWenyanUltra: cavemanLevel === "wenyan-ultra",
-		terseThinking: cavemanThinkingMode !== "normal",
+		terseThinking: cavemanActive && cavemanThinkingMode !== "normal",
 	};
 	const cavemanPrompt = cavemanActive ? renderPromptTemplate(cavemanPromptTemplate, cavemanPromptData) : "";
 	const appendPromptParts = [resolvedAppendPrompt, cavemanPrompt].filter(

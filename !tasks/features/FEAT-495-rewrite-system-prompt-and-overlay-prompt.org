@@ -1,0 +1,79 @@
+#+TITLE: Rewrite system prompt and overlay prompt stack
+#+STATE: DONE
+#+SESSION_ID: 14b6fc9994640cbb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T22-50-14-481Z_14b6fc9994640cbb.jsonl]]
+#+CUSTOM_ID: FEAT-495-rewrite-system-prompt-and-overlay-prompt
+#+EFFORT: 8h
+#+PRIORITY: #A
+#+DEPENDS: FEAT-491-define-prompt-declaration-contract-and-c FEAT-492-normalize-prompt-asset-topology-and-sour FEAT-493-rewrite-core-and-workflow-tool-descripti FEAT-494-rewrite-specialized-hidden-and-compacted
+#+LAYER: prompt
+
+NOTE [2026-04-12]: Superseded by PLAN-209. System prompt rewritten via FEAT-499, overlays via FEAT-500.
+
+* Initial Message
+
+continue
+
+* Context
+This item rewrites the system-level prompt stack so the main agent and its overlays speak in the same declaration-of-being voice as the tool and skill layers.
+
+Exact files in scope:
+- `packages/coding-agent/src/prompts/system/system-prompt.md`
+- `packages/coding-agent/src/prompts/system/custom-system-prompt.md`
+- `packages/coding-agent/src/prompts/system/caveman.md`
+- `packages/coding-agent/src/prompts/system/plan-mode-active.md`
+- `packages/coding-agent/src/prompts/system/plan-mode-approved.md`
+- `packages/coding-agent/src/prompts/system/plan-mode-subagent.md`
+- `packages/coding-agent/src/prompts/system/plan-mode-reference.md`
+- `packages/coding-agent/src/prompts/system/plan-mode-tool-decision-reminder.md`
+- `packages/coding-agent/src/prompts/system/plan-mode-uiux.md`
+- `packages/coding-agent/src/prompts/system/plan-audit.md`
+- `packages/coding-agent/src/prompts/system/eager-todo.md`
+- `packages/coding-agent/src/prompts/system/subagent-system-prompt.md`
+- `packages/coding-agent/src/prompts/system/subagent-user-prompt.md`
+- `packages/coding-agent/src/prompts/system/subagent-submit-reminder.md`
+- `packages/coding-agent/src/prompts/system/subagent-predecessor-results.md`
+- `packages/coding-agent/src/prompts/system/swarm-agent-system-prompt.md`
+- `packages/coding-agent/src/prompts/system/agent-creation-architect.md`
+- `packages/coding-agent/src/prompts/system/agent-creation-user.md`
+- `packages/coding-agent/src/prompts/system/auto-handoff-threshold-focus.md`
+- `packages/coding-agent/src/prompts/system/btw-user.md`
+- `packages/coding-agent/src/prompts/system/file-operations.md`
+- `packages/coding-agent/src/prompts/system/handoff-document.md`
+- `packages/coding-agent/src/prompts/system/summarization-system.md`
+- `packages/coding-agent/src/prompts/system/title-system.md`
+- `packages/coding-agent/src/prompts/system/ttsr-interrupt.md`
+- `packages/coding-agent/src/prompts/system/web-search.md`
+- `packages/coding-agent/src/system-prompt.ts` only if prompt composition or cache-boundary placement must change to support the rewrite
+
+Architectural constraints:
+- Stable/dynamic system prompt splitting must remain intact (`memory://root/memory_summary.md` plus current-repo evidence in `packages/coding-agent/src/system-prompt.ts`).
+- Conditional branches such as caveman/terseThinking, org-enabled plan mode, auto-roster, and MCP discovery must keep working.
+- This initiative rewrites prompt text and topology, not the agent runtime contract.
+
+* Implementation
+1. Rewrite the core system prompt and overlays into the same terse declaration-of-being voice used elsewhere.
+2. Remove stale old-tool guidance from the system layer. The system prompt must prefer the current source-code tool hierarchy (`code`, `lsp`, `ast_grep`, `ast_edit`) instead of teaching older fallback workflows first.
+3. Reduce duplicated critical blocks and repeated procedure fragments, especially in `plan-mode-active.md`. If the prompt is easier to reason about by splitting or relocating sections, do so, but keep behavior equivalent and update imports/tests in the same change.
+4. Keep the current XML/tag discipline and enforcement ordering intact. Rewrite voice and organization, not safety guarantees.
+5. Preserve the stable/dynamic cache boundary and any `CACHE_BOUNDARY`-driven semantics. If text moves across the boundary, justify it in code comments or the spec and confirm it still belongs on that side.
+6. Ensure subagent and swarm overlays stop reading like external API documentation and instead read like imperative, scoped faculties.
+7. Keep prompt-specific behavioral nuances intact:
+   - `caveman.md` remains mode-specific and does not regain removed thinking instructions in the wrong place
+   - plan-mode overlays still enforce org lifecycle, verification, and exit behavior
+   - `eager-todo.md` still explains the auto-roster/todo_write relationship truthfully
+   - `subagent-*` templates still support fresh-context execution
+
+* Edge Cases
+- Do not break prompt rendering branches by simplifying away template variables that tests rely on.
+- Do not move stable content into dynamic sections just for convenience.
+- Avoid converting nuanced planning overlays into vague slogans; terseness must still encode real execution order and gating rules.
+
+* Acceptance
+- The system prompt stack reads as one coherent declaration of being rather than a mix of manuals, overlays, and stitched-on policies.
+- No system-level prompt in scope teaches stale old-tool workflows.
+- Stable/dynamic split, conditional branches, and enforcement semantics remain intact.
+
+* Verification
+- Targeted tests: `bun test packages/coding-agent/test/system-prompt-templates.test.ts packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts packages/coding-agent/test/prompts/auto-roster-prompts.test.ts packages/coding-agent/test/caveman.test.ts`
+- Manual proof: inspect rendered output from the affected tests for `system-prompt.md`, `plan-mode-active.md`, and `subagent-system-prompt.md` to confirm voice unification and preserved conditionals.

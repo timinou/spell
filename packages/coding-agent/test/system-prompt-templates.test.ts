@@ -140,24 +140,16 @@ describe("system Handlebars prompt templates", () => {
 		expect(neither).not.toContain("## Version Control");
 	});
 
-	test("system-prompt conditionally renders inspect_image guidance", async () => {
+	test("system-prompt renders discipline section instead of behavior and code-integrity", async () => {
 		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
 		const template = await Bun.file(templatePath).text();
 
-		const baseTools = baseRenderContext.tools as string[];
-		const withInspectImage = renderPromptTemplate(template, {
-			...baseRenderContext,
-			tools: [...baseTools, "inspect_image"],
-		});
-		expect(withInspectImage).toContain("### Image inspection");
-		expect(withInspectImage).toContain("**MUST** use `inspect_image` over `read`");
-		expect(withInspectImage).toContain("Write a specific `question` for `inspect_image`");
-
-		const withoutInspectImage = renderPromptTemplate(template, {
-			...baseRenderContext,
-			tools: baseTools.filter((tool: string) => tool !== "inspect_image"),
-		});
-		expect(withoutInspectImage).not.toContain("### Image inspection");
+		const rendered = renderPromptTemplate(template, baseRenderContext);
+		expect(rendered).toContain("<discipline>");
+		expect(rendered).not.toContain("<behavior>");
+		expect(rendered).not.toContain("<code-integrity>");
+		expect(rendered).toContain("# Principles");
+		expect(rendered).not.toContain("# Design Integrity");
 	});
 
 	test("system-prompt renders MCP discovery hint when enabled", async () => {
@@ -212,46 +204,18 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain('DEPENDS: "FEAT-001-add-auth-api"');
 	});
 
-	test("system-prompt renders terse thinking instructions in stable section when enabled", async () => {
+	test("system-prompt renders terse thinking instructions in stable section", async () => {
 		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
 		const template = await Bun.file(templatePath).text();
 
 		const rendered = renderPromptTemplate(template, {
 			...baseRenderContext,
-			terseThinking: true,
 		});
 
 		expect(rendered).toContain("Think in notation");
 		expect(rendered).toContain("Symbols carry logic");
 		expect(rendered.indexOf("<thinking-mode>")).toBeGreaterThan(-1);
 		expect(rendered.indexOf("<thinking-mode>")).toBeLessThan(rendered.indexOf("CACHE_BOUNDARY"));
-	});
-
-	test("system-prompt omits thinking instructions when terse thinking disabled", async () => {
-		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
-		const template = await Bun.file(templatePath).text();
-
-		const rendered = renderPromptTemplate(template, {
-			...baseRenderContext,
-			terseThinking: false,
-		});
-
-		expect(rendered).not.toContain("<thinking-mode>");
-		expect(rendered).not.toContain("Think in notation");
-	});
-
-	test("terse thinking renders independently of caveman output mode", async () => {
-		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
-		const template = await Bun.file(templatePath).text();
-
-		const rendered = renderPromptTemplate(template, {
-			...baseRenderContext,
-			cavemanActive: false,
-			terseThinking: true,
-		});
-
-		expect(rendered).toContain("<thinking-mode>");
-		expect(rendered).toContain("Think in notation");
 	});
 
 	test("caveman template does not contain thinking instructions", async () => {
@@ -270,7 +234,7 @@ describe("system Handlebars prompt templates", () => {
 });
 
 describe("caveman prompt composition", () => {
-	test("buildSystemPrompt omits thinking instructions when caveman thinking mode is normal", async () => {
+	test("buildSystemPrompt always includes thinking-mode in system prompt", async () => {
 		const rendered = await renderBuiltSystemPrompt(
 			Settings.isolated({
 				"caveman.defaultLevel": "full",
@@ -279,11 +243,11 @@ describe("caveman prompt composition", () => {
 		);
 
 		expect(rendered).toContain("Terse mode active");
-		expect(rendered).not.toContain("<thinking-mode>");
-		expect(rendered).not.toContain("Think in notation");
+		expect(rendered).toContain("<thinking-mode>");
+		expect(rendered).toContain("Think in notation");
 	});
 
-	test("buildSystemPrompt keeps caveman prompt free of thinking instructions", async () => {
+	test("buildSystemPrompt thinking-mode appears before caveman terse output", async () => {
 		const rendered = await renderBuiltSystemPrompt(
 			Settings.isolated({
 				"caveman.defaultLevel": "full",

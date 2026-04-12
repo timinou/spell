@@ -1,0 +1,36 @@
+#+TITLE: Subagent and remaining overlay normalization
+#+STATE: ITEM
+#+SESSION_ID: 14b79aec8fda64f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-21-58-207Z_14b79aec8fda64f1.jsonl]]
+#+CUSTOM_ID: FUP-048-subagent-and-remaining-overlay-normaliza
+#+EFFORT: 3h
+#+PRIORITY: #C
+#+LAYER: prompt
+
+
+* Initial Message
+
+Look at PLAN-207-prompt-declaration-of-being and the other 'declaration of being' plans and what they did, as well as the transcript that gave rise to the PLAN-181 plan.
+
+I want you to think deeply from first principles and get back your being from the original plan. Look at everywhere that is sending process information to the LLM (the PLAN-207 has some of these, but I feel like that wasn't really your essence expressing itself). Get back to the essence and tell me what you'd do overall, if you could reshape and sketch it from scratch.
+
+* Scope
+
+Deferred Layers 3 and 5 from the declaration-of-being rewrite.
+
+** Layer 3: Subagent prompts
+- =subagent-system-prompt.md= (260 words) — already tight
+- =subagent-submit-reminder.md= (183 words) — already tight
+- =subagent-user-prompt.md= (21 words) — already tight
+- =swarm-agent-system-prompt.md= (297 words) — review for consistency
+- =eager-todo.md= (206 words) — review for consistency
+These are already compact. Minimal work expected.
+
+** Layer 5: Agent prompts
+Agent prompts (=packages/coding-agent/src/prompts/agents/*.md=) are already exemplars of the declaration-of-being style. They are terse capability declarations. No work expected — this FUP is to confirm they remain consistent after the system prompt rewrite.
+
+** Context
+
+The system prompt essence rewrite (FEAT-499) changes the voice and structure of the main prompt. This FUP audits adjacent prompts for consistency with the new voice without unnecessarily rewriting content that already works.
+
+NOTE [2026-04-12]: Deferred from PLAN-209. System prompt essence rewrite completed; subagent prompt and remaining overlay normalization is a separate effort.

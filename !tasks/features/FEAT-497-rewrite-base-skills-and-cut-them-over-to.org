@@ -1,0 +1,62 @@
+#+TITLE: Rewrite base skills and cut them over to new tool guidance
+#+STATE: DONE
+#+SESSION_ID: 14b6fc9994640cbb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T22-50-14-481Z_14b6fc9994640cbb.jsonl]]
+#+CUSTOM_ID: FEAT-497-rewrite-base-skills-and-cut-them-over-to
+#+DEPENDS: FEAT-491-define-prompt-declaration-contract-and-c FEAT-493-rewrite-core-and-workflow-tool-descripti FEAT-494-rewrite-specialized-hidden-and-compacted FEAT-495-rewrite-system-prompt-and-overlay-prompt FEAT-496-rewrite-agent-prompt-catalog-into-declar
+#+PRIORITY: #A
+#+EFFORT: 8h
+#+LAYER: prompt
+
+NOTE [2026-04-12]: Superseded by PLAN-209. Deferred to FUP-047/048.
+
+* Initial Message
+
+continue
+
+* Context
+The user explicitly wants the base skills, not just the bundled prompts, to read as the same declaration of being. This includes both high-signal skills that are already close to the target and weaker skills that still read like manuals or scaffolding.
+
+Exact files in scope:
+- `.spell/skills/system-prompts/SKILL.md`
+- `.spell/skills/coding/SKILL.md`
+- `.spell/skills/semantic-compression/SKILL.md`
+- `.spell/skills/canvas/SKILL.md`
+- `.spell/skills/brand-asset-gallery/SKILL.md`
+- `.spell/skills/qml-testing/SKILL.md`
+- `.spell/skills/voice-agent/SKILL.md`
+- `.spell/skills/spell-server-setup/SKILL.md`
+- `.spell/skills/typst/SKILL.md`
+
+Specific stale guidance already confirmed:
+- `.spell/skills/system-prompts/SKILL.md` still teaches older tool-era examples such as `tools: read, grep, find, bash` in the agent definition example, which conflicts with the current `code`-first source-file workflow.
+- Several skills are overlong procedural manuals (`spell-server-setup`, `qml-testing`) or under-specified stubs (`coding`) rather than clear faculties.
+
+* Implementation
+1. Rewrite every base skill into the same declaration-of-being voice while preserving domain-specific expertise.
+2. Update `.spell/skills/system-prompts/SKILL.md` first among the skills:
+   - replace old tool examples with current guidance (`code`, `ast_grep`, `ast_edit`, `lsp`)
+   - update the tool-documentation template example so it matches the canonical one-line-plus-tags shape chosen in the spec
+   - remove stale agent example tool lists that still imply `read/grep/find/bash` as the default source-code stack
+3. Rewrite `.spell/skills/coding/SKILL.md` into a real compact faculty rather than a near-empty stub.
+4. Compress overlong skills without deleting important operational truth:
+   - `spell-server-setup` should stop being a 700-line manual pasted into the prompt and instead become a concise expert guide with references to repo artifacts where appropriate
+   - `qml-testing` should consolidate fragmented best practices and anti-patterns
+   - `voice-agent` should unify prerequisites and flow into one coherent operational story
+5. Normalize already-strong skills (`canvas`, `semantic-compression`, `brand-asset-gallery`, `typst`) to the same voice, but do not flatten away the substance that makes them useful.
+6. Keep cross-skill references accurate and current. If a skill names a tool or prompt shape, it must describe the post-rewrite reality.
+
+* Edge Cases
+- Do not “optimize” strong skills into vague summaries. Keep the domain knowledge; remove only scaffolding, repetition, or stale examples.
+- If a skill must retain longer examples, make them earn their space and align them with the new tool landscape.
+- Avoid introducing parallel prompt doctrine: the canonical contract lives in `specs/prompt-declaration-of-being.md` and `.spell/skills/system-prompts/SKILL.md` must agree with it.
+
+* Acceptance
+- All nine base skills speak in the same declaration-of-being voice while preserving domain specificity.
+- `.spell/skills/system-prompts/SKILL.md` no longer contains stale old-tool examples and now teaches the current tool hierarchy.
+- Overlong/manual-like skills are materially compressed without losing operational truth.
+
+* Verification
+- Proof artifacts: the nine SKILL.md files above.
+- Manual proof: inspect `.spell/skills/system-prompts/SKILL.md`, `.spell/skills/coding/SKILL.md`, and `.spell/skills/spell-server-setup/SKILL.md` after rewrite and confirm they reflect the canonical prompt contract and the new tool landscape.
+- Final focused verification for changed prompt content happens in the verification item plus `bun check:ts`.
