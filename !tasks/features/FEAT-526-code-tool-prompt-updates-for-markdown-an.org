@@ -1,5 +1,5 @@
 #+TITLE: Code tool prompt updates for markdown and custom operations
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14b7c05e6d83ec68
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-05-34-134Z_14b7c05e6d83ec68.jsonl]]
 #+CUSTOM_ID: FEAT-526-code-tool-prompt-updates-for-markdown-an
