@@ -7,7 +7,12 @@
 
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import { type CodeBufferOptions, executeCodeBuffer, executeCodeGraph } from "@oh-my-pi/pi-natives";
+import {
+	type CodeBufferOptions,
+	type CodeBufferResult,
+	executeCodeBuffer,
+	executeCodeGraph,
+} from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
@@ -18,12 +23,12 @@ import codeDescription from "../prompts/tools/code.md" with { type: "text" };
 import { renderCodeCell } from "../tui";
 import type { ToolSession } from ".";
 import {
-	createCodeGraphDetails,
-	createCodeToolError,
-	formatCodeToolContent,
 	type CodeFileCommand,
 	type CodeGraphCommand,
 	type CodeToolResultDetails,
+	createCodeGraphDetails,
+	createCodeToolError,
+	formatCodeToolContent,
 	normalizeCodeBufferSuccess,
 } from "./code-result";
 import { enforceModeWrite } from "./mode-guard";
@@ -41,6 +46,20 @@ const GRAPH_COMMANDS = new Set([
 	"clusters",
 	"search",
 ]);
+
+const MUTATING_COMMANDS = new Set(["edit", "undo", "redo"]);
+
+function timedCodeBuffer(options: CodeBufferOptions): CodeBufferResult {
+	const start = performance.now();
+	const result = executeCodeBuffer(options);
+	const durationMs = Math.round(performance.now() - start);
+	const file = options.file ? path.basename(options.file) : undefined;
+	logger.debug("code buffer operation", { command: options.command, file, durationMs });
+	if (durationMs > 2000) {
+		logger.warn("slow code buffer operation", { command: options.command, file, durationMs });
+	}
+	return result;
+}
 
 function getTextContent(result: AgentToolResult): string {
 	return result.content
@@ -210,7 +229,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				options.action = params.action === "references-local" ? "references" : params.action;
 			}
 
-			const result = executeCodeBuffer(options);
+			const result = timedCodeBuffer(options);
 			if (result.error) {
 				const details = createCodeToolError({
 					command,
@@ -220,6 +239,19 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 					message: extractCodeToolErrorMessage(result.output),
 				});
 				return toolResult(details).text(formatCodeToolContent(details)).done();
+			}
+
+			if (MUTATING_COMMANDS.has(command) && options.file) {
+				const saveResult = timedCodeBuffer({ command: "save", file: options.file });
+				if (saveResult.error) {
+					const details = createCodeToolError({
+						command,
+						file: options.file,
+						cwd: sessionCwd,
+						message: `Edit succeeded but save to disk failed: ${extractCodeToolErrorMessage(saveResult.output)}`,
+					});
+					return toolResult(details).text(formatCodeToolContent(details)).done();
+				}
 			}
 
 			const details = normalizeCodeBufferSuccess({
@@ -248,6 +280,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 	}
 
 	async #executeGraphCommand(params: CodeParams, signal?: AbortSignal): Promise<AgentToolResult> {
+		const start = performance.now();
 		const result = await executeCodeGraph({
 			command: params.command,
 			root: this.#session.cwd ?? getProjectDir(),
@@ -259,6 +292,11 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			semantic: params.semantic,
 			signal,
 		});
+		const durationMs = Math.round(performance.now() - start);
+		logger.debug("code graph operation", { command: params.command, durationMs });
+		if (durationMs > 2000) {
+			logger.warn("slow code graph operation", { command: params.command, durationMs });
+		}
 		const details = createCodeGraphDetails({
 			command: params.command as CodeGraphCommand,
 			output: result.output,

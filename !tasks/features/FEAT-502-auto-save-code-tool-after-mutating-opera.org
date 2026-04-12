@@ -1,0 +1,172 @@
+#+TITLE: Auto-save code tool after mutating operations
+#+STATE: DONE
+#+SESSION_ID: 14b7b513095f9717
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-16-13-349Z_14b7b513095f9717.jsonl]]
+#+CUSTOM_ID: FEAT-502-auto-save-code-tool-after-mutating-opera
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+NOTE [2026-04-12]: All auto-save logic implemented and tested. 26/26 tests pass.
+
+* Initial Message
+
+Code
+ ┌─── ✔ Code save ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Saved packages/coding-agent/src/system-prompt.ts (buffer version 0).                                                                       │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Update Available
+ New version 14.1.0 is available. Run: spell update
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-07-46-350Z_14b7b323ebb7e1ac.jsonl
+ ID: 14b7b323ebb7e1ac
+
+
+bro save should be automatic, and trace any reason why using the code tool might make spell hang after result
+
+* Problem
+The code tool's =edit=, =undo=, and =redo= commands modify an in-memory buffer but do not persist to disk. The agent must issue a separate =code save { file }= call. This wastes a tool call, and if the agent forgets, edits are lost on session end.
+
+* Design Decisions
+1. After successful =edit=, =undo=, or =redo= in =CodeTool.execute()=, automatically call =executeCodeBuffer({ command: "save", file })=.
+2. If auto-save fails, return the ENTIRE tool call as an error using =createCodeToolError()=. Message: ="Edit succeeded but save to disk failed: {error}"=. The in-memory edit persists but the agent sees an error.
+3. If auto-save succeeds, the original edit/undo/redo result is returned unchanged. Save is transparent.
+4. Update the system prompt (=code.md=) to remove "Edits stay in-memory" and document auto-save behavior.
+5. The =save= command remains available for manual use (no-op if buffer is clean).
+
+* Implementation
+
+Sequencing note: implementation must exist before tests because tests mock =executeCodeBuffer= — they need to mock the additional save call that auto-save introduces. The existing test pattern (=spyOn= on the native module) works directly. Test-first is not practical here because the auto-save call order depends on the implementation shape.
+
+** Modify =packages/coding-agent/src/tools/code.ts=
+
+In the =execute()= method, after the =executeCodeBuffer(options)= call succeeds (=!result.error=) and the command is a mutating command, add the auto-save:
+
+#+begin_src typescript
+const MUTATING_COMMANDS = new Set(["edit", "undo", "redo"]);
+
+// After: const result = executeCodeBuffer(options);
+// After: if (result.error) { ... return error ... }
+
+if (MUTATING_COMMANDS.has(command) && options.file) {
+    const saveResult = executeCodeBuffer({ command: "save", file: options.file });
+    if (saveResult.error) {
+        const details = createCodeToolError({
+            command,
+            file: options.file,
+            cwd: sessionCwd,
+            message: `Edit succeeded but save to disk failed: ${extractCodeToolErrorMessage(saveResult.output)}`,
+        });
+        return toolResult(details).text(formatCodeToolContent(details)).done();
+    }
+}
+
+// Then: const details = normalizeCodeBufferSuccess(...);
+#+end_src
+
+Key points:
+- Define =MUTATING_COMMANDS= as a module-level =Set= (same pattern as =GRAPH_COMMANDS= on line 33)
+- The save call uses =options.file= which was already resolved to absolute path
+- On save failure, return error with the =createCodeToolError= helper (already imported)
+- On save success, fall through to normal result processing
+
+** Modify =packages/coding-agent/src/prompts/tools/code.md=
+
+1. Line 19: Remove ="- Preview before saving → \`code edit { ... }\` then \`code diff { file }\`"= — edits auto-save, no preview-before-save workflow.
+2. Line 51: Change ="- \`diff\`: Unsaved buffer diff"= to ="- \`diff\`: Buffer diff vs disk"=
+3. Line 150: Replace ="- Edits stay in-memory until \`code save { file }\`. Use \`code diff { file }\` to preview unsaved changes"= with ="- Edits are automatically saved to disk after =edit=, =undo=, and =redo=. The =save= command is still available but rarely needed."=
+
+** Modify =packages/coding-agent/test/tools/code.test.ts=
+
+Add the following tests using the existing pattern (=spyOn(nativesModule, "executeCodeBuffer")=):
+
+*** Test: auto-saves after successful edit
+Mock =executeCodeBuffer= to return success for both the edit call and the save call. Verify that =executeCodeBuffer= was called twice: first with =command: "edit"=, then with =command: "save"= and the same file path. Verify the result text contains the edit output (not save output).
+
+#+begin_src typescript
+it("auto-saves to disk after successful edit", async () => {
+    const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+        .mockReturnValueOnce({
+            output: { version: 2, diff: "@@ patch @@
+-old
++new", editCount: 1 },
+            error: false,
+        })
+        .mockReturnValueOnce({
+            output: { success: true, version: 2 },
+            error: false,
+        });
+    const tool = new CodeTool(createSession());
+    const result = await tool.execute("tool", {
+        command: "edit",
+        file: "/tmp/test/src/main.ts",
+        symbol: "fn",
+        operation: "patch",
+        patches: [{ find: "old", replace: "new" }],
+    });
+
+    expect(bufferSpy).toHaveBeenCalledTimes(2);
+    expect(bufferSpy.mock.calls[1]?.[0]).toEqual(
+        expect.objectContaining({ command: "save", file: "/tmp/test/src/main.ts" }),
+    );
+    expect(getText(result)).toContain("Edited");
+    expect(result.isError).toBeFalsy();
+});
+#+end_src
+
+*** Test: auto-saves after successful undo
+Same pattern as edit but with =command: "undo"=. Mock both the undo and save calls. Verify two calls and save as second.
+
+*** Test: auto-saves after successful redo
+Same pattern as edit but with =command: "redo"=.
+
+*** Test: returns error when auto-save fails
+Mock =executeCodeBuffer= to return success for edit, then error for save. Verify the result =isError= is falsy (error is in the details), the text contains "save to disk failed", and the details have =kind: "error"=.
+
+#+begin_src typescript
+it("returns error when auto-save after edit fails", async () => {
+    spyOn(nativesModule, "executeCodeBuffer")
+        .mockReturnValueOnce({
+            output: { version: 2, diff: "@@ patch @@", editCount: 1 },
+            error: false,
+        })
+        .mockReturnValueOnce({
+            output: "Permission denied",
+            error: true,
+        });
+    const tool = new CodeTool(createSession());
+    const result = await tool.execute("tool", {
+        command: "edit",
+        file: "/tmp/test/src/main.ts",
+        symbol: "fn",
+        operation: "patch",
+        patches: [{ find: "old", replace: "new" }],
+    });
+
+    expect(getText(result)).toContain("save to disk failed");
+    expect(result.details).toEqual(
+        expect.objectContaining({ kind: "error", error: true }),
+    );
+});
+#+end_src
+
+*** Test: does NOT auto-save after read/outline/navigate
+Mock =executeCodeBuffer= to return success. Call with =command: "outline"=. Verify =executeCodeBuffer= was called exactly once (no save call).
+
+*** Test: does NOT auto-save when edit fails
+Mock =executeCodeBuffer= to return =error: true= for the edit call. Verify no save call is made (only 1 call total).
+
+* Edge Cases
+- =undo= and =redo= that have no effect (empty history): These still succeed in the native engine (no error), so auto-save fires. This is harmless — the buffer content hasn't changed, so =fs::write= writes the same content.
+- File with no disk path: All code tool operations require a =file= parameter, so =options.file= is always set for mutating commands. The guard =&& options.file= handles the theoretical case.
+- Mode guard: =enforceModeWrite= already runs BEFORE the execute call for =edit= and =save= commands. We need to ensure it also covers the auto-save path. Since =enforceModeWrite= runs on entry for =edit=, the auto-save call (which is just =save= to the same file) is already authorized.
+
+* Verification
+- =bun test packages/coding-agent/test/tools/code.test.ts= — all new and existing tests pass
+- =bun check:ts= — no type errors
