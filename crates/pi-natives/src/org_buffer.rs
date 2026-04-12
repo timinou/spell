@@ -46,7 +46,7 @@ fn cmd_parse_items(options: &Value) -> Result<Value> {
 		.and_then(Value::as_bool)
 		.unwrap_or(false);
 
-	let buffer = OrgBuffer::parse(source).map_err(|e| org_err(e))?;
+	let buffer = OrgBuffer::parse(source).map_err(org_err)?;
 	let items = buffer.extract_items(&todo_keywords, category, dir, file_path, include_body);
 
 	let items_json: Vec<Value> = items
@@ -82,7 +82,7 @@ fn cmd_query(options: &Value) -> Result<Value> {
 		.and_then(Value::as_bool)
 		.unwrap_or(false);
 
-	let buffer = OrgBuffer::parse(source).map_err(|e| org_err(e))?;
+	let buffer = OrgBuffer::parse(source).map_err(org_err)?;
 	let items = buffer.extract_items(&todo_keywords, category, dir, file_path, include_body);
 
 	// Parse filter from options
@@ -134,8 +134,7 @@ fn cmd_next_wave(options: &Value) -> Result<Value> {
 	let done_states: Vec<&str> = options
 		.get("doneStates")
 		.and_then(Value::as_array)
-		.map(|arr| arr.iter().filter_map(Value::as_str).collect())
-		.unwrap_or_else(|| vec!["DONE"]);
+		.map_or_else(|| vec!["DONE"], |arr| arr.iter().filter_map(Value::as_str).collect());
 	let result = graph::next_wave(&items, &done_states);
 	Ok(json_response(serde_json::to_value(&result).unwrap_or(Value::Null), false))
 }
@@ -165,13 +164,11 @@ fn cmd_edit_section(options: &Value) -> Result<Value> {
 	let item_start = options
 		.get("itemStart")
 		.and_then(Value::as_u64)
-		.map(|n| n as usize)
-		.unwrap_or(0);
+		.map_or(0, |n| n as usize);
 	let item_end = options
 		.get("itemEnd")
 		.and_then(Value::as_u64)
-		.map(|n| n as usize)
-		.unwrap_or(source.len());
+		.map_or(source.len(), |n| n as usize);
 
 	let edit = match mode {
 		"append" => section::edit_section_append(source, item_start, item_end, section_name, body),
@@ -262,7 +259,7 @@ fn parse_items_from_options(options: &Value) -> Result<Vec<pi_org_engine::OrgIte
 		.unwrap_or("tasks");
 	let file_path = options.get("file").and_then(Value::as_str).unwrap_or("");
 
-	let buffer = OrgBuffer::parse(source).map_err(|e| org_err(e))?;
+	let buffer = OrgBuffer::parse(source).map_err(org_err)?;
 	Ok(buffer.extract_items(&todo_keywords, category, dir, file_path, false))
 }
 

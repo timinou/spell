@@ -1,0 +1,214 @@
+#+TITLE: Unify Typst editable-scope resolution for navigate and edit
+#+STATE: DONE
+#+SESSION_ID: 14b7152a17a19b17
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T00-37-33-918Z_14b7152a17a19b17.jsonl]]
+#+CUSTOM_ID: BUG-229-unify-typst-editable-scope-resolution-fo
+#+EFFORT: M
+#+PRIORITY: #A
+#+LAYER: backend
+#+DEPENDS: BUG-228-add-typst-editable-scope-regression-cove
+
+NOTE [2026-04-12]: Shared Rust line-target resolver now drives navigate/edit/native fallback; Typst raw kinds and editable scope kinds both resolve for line-target edits; comments resolve as comment nodes.
+
+* Initial Message
+
+I retried and narrowed it further.
+
+  Repro file
+ - 03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ
+
+  Observed node mapping
+  After loading the file into a buffer with code read, navigate node-at reports:
+
+ - line 7 → nodeType: "set"
+ - line 14 → nodeType: "let"
+ - line 57 → nodeType: "let"
+ - line 13 comment → unexpectedly returns nodeType: "source_file" spanning the whole file
+
+  This already hints Typst node targeting is coarse/inconsistent around non-code lines.
+
+  What fails
+  Using the node type reported by navigate does not work for edit:
+
+ 1. Top-level set
+ ```json
+     {
+       "command": "edit",
+       "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+       "operation": "replace",
+       "target": { "line": 7, "node_type": "set" },
+       "content": "#set document(\n  title: \"PRD — Schedule-Service Interface Mamabox × ORA Ventures [probe]\",\n  author: \"ORA Ventures
+   SARL\",\n  date: datetime(year: 2026, month: 3, day: 19),\n)"
+     }
+ ```
+
+  Error:
+
+ ```json
+     {"error":true,"message":"edit error: No node found at line 7"}
+ ```
+
+ 2. Top-level let
+ ```json
+     {
+       "command": "edit",
+       "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+       "operation": "replace",
+       "target": { "line": 14, "node_type": "let" },
+       "content": "let teal-primary = rgb(\"#000000\")"
+     }
+ ```
+
+  Error:
+
+ ```json
+     {"error":true,"message":"edit error: No node found at line 14"}
+ ```
+
+ 3. Multi-line helper let
+ ```json
+     {
+       "command": "edit",
+       "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+       "operation": "replace",
+       "target": { "line": 57, "node_type": "let" },
+       "content": "#let section-title-probe(num, title) = { ... }"
+     }
+ ```
+
+  Error:
+
+ ```json
+     {"error":true,"message":"edit error: No node found at line 57"}
+ ```
+
+  What succeeds
+  The same edits succeed if I target node_type: "code" instead of the concrete Typst node type.
+
+ 1. Replacing a set statement by targeting code
+ ```json
+     {
+       "command": "edit",
+       "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+       "operation": "replace",
+       "target": { "line": 7, "node_type": "code" },
+       "content": "#set document(\n  title: \"PRD — Schedule-Service Interface Mamabox × ORA Ventures [probe]\",\n  author: \"ORA Ventures
+   SARL\",\n  date: datetime(year: 2026, month: 3, day: 19),\n)"
+     }
+ ```
+
+  Result:
+ - success
+ - diff showed only the title line changed inside that block
+
+ 2. Replacing a top-level let by targeting code
+ ```json
+     {
+       "command": "edit",
+       "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+       "operation": "replace",
+       "target": { "line": 14, "node_type": "code" },
+       "content": "#let teal-primary = rgb(\"#000000\")"
+     }
+ ```
+
+  Result:
+ - success
+ - one-line diff exactly as expected
+
+ 3. Replacing a multi-line helper by targeting code
+ ```json
+     {
+       "command": "edit",
+       "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+       "operation": "replace",
+       "target": { "line": 57, "node_type": "code" },
+       "content": "#let section-title-probe(num, title) = {\n  ...\n}"
+     }
+ ```
+
+  Result:
+ - success
+ - diff showed the helper header rename only, because body text was otherwise identical
+
+  I undid all probes and confirmed diff is empty.
+
+  Conclusion                                                                                                                                                                                               ╭────────────╮
+  The Typst code edit path is working, but editable targets are exposed as generic code nodes rather than the concrete syntax kinds that                                                                   │ 🗺 Plotting │
+  navigate reports.                                                                                                                                                                                        ╰────────────╯
+
+  So the bug is likely one of these:
+ - navigate returns raw tree-sitter-like Typst node kinds (let, set), but edit matcher only accepts wrapper/editable nodes (code)
+ - or Typst edit target resolution normalizes all executable content to code, while navigate doesn’t reflect that normalization
+ - plus a secondary oddity: comments can resolve to source_file instead of a comment/local node
+
+  Shortest repro statement
+  For a loaded .typ buffer:
+ - navigate node-at(line=14) returns nodeType="let"
+ - edit replace(target={line:14,node_type:"let"}) fails
+ - edit replace(target={line:14,node_type:"code"}) succeeds
+
+  So yes, you can structurally edit Typst through code, but only if you target code, not the concrete Typst node type currently reported by
+  navigate.
+
+* Problem
+The current line-target path is split across multiple implementations:
+- =crates/pi-code-engine/src/navigate.rs= reports raw parse nodes from =node_at=
+- =crates/pi-code-engine/src/edit/replace.rs= resolves edit targets with separate ancestor/unwrap logic
+- =crates/pi-natives/src/code_buffer.rs= duplicates a second fallback resolver for line-based edit operations
+This split is why Typst can report raw =let= / =set= in navigation while edit only succeeds when callers guess =code=. It also explains the comment-line bug: =navigate::node_at= climbs away from extra nodes, so a comment can degrade to =source_file=.
+
+* Target
+Files to create/modify:
+- =crates/pi-code-engine/src/navigate.rs=
+- =crates/pi-code-engine/src/edit/replace.rs=
+- =crates/pi-code-engine/src/edit/mod.rs= and/or a new shared helper module under =crates/pi-code-engine/src/edit/=
+- =crates/pi-natives/src/code_buffer.rs=
+
+If a cleaner shared helper belongs outside =src/edit/=, create it there instead, but keep one canonical resolver.
+
+* Change
+1. Introduce one shared line-target resolver in Rust that returns both:
+   - the raw node found at the requested line/column
+   - the canonical editable scope/container for that location
+2. Use that shared resolver from both navigation and line-target edit paths. Do not keep parallel Typst-specific ancestor walks in =replace.rs= and =code_buffer.rs=.
+3. Preserve raw navigation truth:
+   - =nodeType= remains the concrete parse node kind
+   - add additive editable metadata named =editableScopeNodeType=
+   - add matching editable scope range metadata (line + end line at minimum) so callers can round-trip the exact container they should edit
+4. Comment handling:
+   - comment lines must resolve to comment nodes instead of collapsing to =source_file=
+   - comments are editable in this design, so their editable scope should remain the comment node unless a larger shared editable container is the true owner
+5. Typst behavior:
+   - line-target edit operations must accept concrete Typst raw kinds reported by navigation (=set=, =let=, multiline helper =let=)
+   - callers may also use the canonical editable scope kind returned by navigation, and both forms must succeed for the same location
+6. Non-Typst behavior:
+   - preserve existing raw =nodeType= behavior for current languages
+   - the new editable-scope metadata is additive only; do not silently rewrite old fields or normalize them in the TypeScript wrapper
+7. Native bridge:
+   - =crates/pi-natives/src/code_buffer.rs= must serialize the new editable-scope metadata so tool callers see it without wrapper-side special casing
+   - line-target pseudo-resolution in the native bridge must use the shared resolver instead of its current hand-rolled parent walk
+
+* Design Constraints
+- Fix the invariant where it breaks: in the Rust engine/native bridge, not in =packages/coding-agent/src/tools/code.ts=.
+- No Typst-only shim in the TS layer.
+- No compatibility alias that leaves two different target-resolution systems reachable.
+- The implementation item depends on the test-first regression item and should satisfy it directly.
+
+* Verification
+Required proof from the implementing agent:
+- Run =cargo test -p pi-code-engine typst=
+- Run =cargo test -p pi-natives code_buffer=
+- Run =bun test packages/coding-agent/test/tools/code.test.ts=
+- Run =bun check:rs=
+- Demonstrate, via test names or captured assertions, the exact invariant:
+  - raw Typst =nodeType= can be =let= / =set=
+  - =editableScopeNodeType= points at the editable container
+  - both raw Typst target kinds and editable-scope target kinds succeed for line-target edits
+  - comment lines no longer report =source_file=
+
+* Acceptance Criteria
+- Navigation and line-target edit share one canonical line-target resolution path.
+- The user repro invariant is covered: =navigate node-at= may report raw Typst kinds while the returned =editableScopeNodeType= gives callers a reliable edit target.
+- Comment lines are first-class navigation/edit targets.
+- Existing non-Typst raw =nodeType= behavior remains additive-only compatible.

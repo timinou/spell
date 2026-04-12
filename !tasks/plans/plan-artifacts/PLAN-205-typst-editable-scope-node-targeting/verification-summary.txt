@@ -1,0 +1,15 @@
+Verification commands run for PLAN-205
+
+PASS
+- cargo test -p pi-code-engine typst
+- cargo test -p pi-natives code_buffer
+- bun test packages/coding-agent/test/tools/code.test.ts
+- bun check:rs
+
+Manual proof
+- Raw Typst node kinds remain visible (`set`, `let`, `comment`)
+- `editableScopeNodeType` resolves to `code` for executable Typst lines and `comment` for comment lines
+- Line-target edit succeeds for both raw Typst kind targeting and editable-scope targeting on the same location
+
+Supporting artifact
+- !tasks/plans/plan-artifacts/PLAN-205-typst-editable-scope-node-targeting/manual-proof.txt

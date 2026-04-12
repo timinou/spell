@@ -1,0 +1,222 @@
+#+TITLE: Typst editable scope node targeting
+#+STATE: DONE
+#+SESSION_ID: 14b7152a17a19b17
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T00-37-33-918Z_14b7152a17a19b17.jsonl]]
+#+CUSTOM_ID: PLAN-205-typst-editable-scope-node-targeting
+
+NOTE [2026-04-12]: All required verification now passes, including bun check:rs. Plan execution complete.
+
+
+* Initial Message
+
+I retried and narrowed it further.
+
+  Repro file
+ - 03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ
+
+  Observed node mapping
+  After loading the file into a buffer with code read, navigate node-at reports:
+
+ - line 7 → nodeType: "set"
+ - line 14 → nodeType: "let"
+ - line 57 → nodeType: "let"
+ - line 13 comment → unexpectedly returns nodeType: "source_file" spanning the whole file
+
+  This already hints Typst node targeting is coarse/inconsistent around non-code lines.
+
+  What fails
+  Using the node type reported by navigate does not work for edit:
+
+ 1. Top-level set
+ ```json
+     {
+       "command": "edit",
+       "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+       "operation": "replace",
+       "target": { "line": 7, "node_type": "set" },
+       "content": "#set document(\n  title: \"PRD — Schedule-Service Interface Mamabox × ORA Ventures [probe]\",\n  author: \"ORA Ventures
+   SARL\",\n  date: datetime(year: 2026, month: 3, day: 19),\n)"
+     }
+ ```
+
+  Error:
+
+ ```json
+     {"error":true,"message":"edit error: No node found at line 7"}
+ ```
+
+ 2. Top-level let
+ ```json
+     {
+       "command": "edit",
+       "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+       "operation": "replace",
+       "target": { "line": 14, "node_type": "let" },
+       "content": "let teal-primary = rgb(\"#000000\")"
+     }
+ ```
+
+  Error:
+
+ ```json
+     {"error":true,"message":"edit error: No node found at line 14"}
+ ```
+
+ 3. Multi-line helper let
+ ```json
+     {
+       "command": "edit",
+       "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+       "operation": "replace",
+       "target": { "line": 57, "node_type": "let" },
+       "content": "#let section-title-probe(num, title) = { ... }"
+     }
+ ```
+
+  Error:
+
+ ```json
+     {"error":true,"message":"edit error: No node found at line 57"}
+ ```
+
+  What succeeds
+  The same edits succeed if I target node_type: "code" instead of the concrete Typst node type.
+
+ 1. Replacing a set statement by targeting code
+ ```json
+     {
+       "command": "edit",
+       "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+       "operation": "replace",
+       "target": { "line": 7, "node_type": "code" },
+       "content": "#set document(\n  title: \"PRD — Schedule-Service Interface Mamabox × ORA Ventures [probe]\",\n  author: \"ORA Ventures
+   SARL\",\n  date: datetime(year: 2026, month: 3, day: 19),\n)"
+     }
+ ```
+
+  Result:
+ - success
+ - diff showed only the title line changed inside that block
+
+ 2. Replacing a top-level let by targeting code
+ ```json
+     {
+       "command": "edit",
+       "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+       "operation": "replace",
+       "target": { "line": 14, "node_type": "code" },
+       "content": "#let teal-primary = rgb(\"#000000\")"
+     }
+ ```
+
+  Result:
+ - success
+ - one-line diff exactly as expected
+
+ 3. Replacing a multi-line helper by targeting code
+ ```json
+     {
+       "command": "edit",
+       "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+       "operation": "replace",
+       "target": { "line": 57, "node_type": "code" },
+       "content": "#let section-title-probe(num, title) = {\n  ...\n}"
+     }
+ ```
+
+  Result:
+ - success
+ - diff showed the helper header rename only, because body text was otherwise identical
+
+  I undid all probes and confirmed diff is empty.
+
+  Conclusion                                                                                                                                                                                               ╭────────────╮
+  The Typst code edit path is working, but editable targets are exposed as generic code nodes rather than the concrete syntax kinds that                                                                   │ 🗺 Plotting │
+  navigate reports.                                                                                                                                                                                        ╰────────────╯
+
+  So the bug is likely one of these:
+ - navigate returns raw tree-sitter-like Typst node kinds (let, set), but edit matcher only accepts wrapper/editable nodes (code)
+ - or Typst edit target resolution normalizes all executable content to code, while navigate doesn’t reflect that normalization
+ - plus a secondary oddity: comments can resolve to source_file instead of a comment/local node
+
+  Shortest repro statement
+  For a loaded .typ buffer:
+ - navigate node-at(line=14) returns nodeType="let"
+ - edit replace(target={line:14,node_type:"let"}) fails
+ - edit replace(target={line:14,node_type:"code"}) succeeds
+
+  So yes, you can structurally edit Typst through code, but only if you target code, not the concrete Typst node type currently reported by
+  navigate.
+
+* Context
+The code tool's Typst line-target behavior is internally inconsistent. Current repo evidence shows Typst declarations are modeled on raw parse kinds (=let=, =import=, =show=) in =crates/pi-code-engine/src/language/mod.rs=, while line-target edit and native fallback resolution live in separate code paths (=crates/pi-code-engine/src/edit/replace.rs= and =crates/pi-natives/src/code_buffer.rs=). Navigation reports raw parse nodes, but edit success currently depends on the caller guessing the enclosing editable container. Comment lines are additionally broken because =crates/pi-code-engine/src/navigate.rs= climbs away from extra nodes, allowing comments to collapse to =source_file=.
+
+Recommended approach: preserve raw =nodeType= for AST truth, add additive editable-scope metadata named =editableScopeNodeType= plus matching editable-scope line/range fields, and unify navigate/edit/native line-target resolution behind one Rust resolver. The fix stays in the engine/native layer; no Typst-only wrapper logic in TypeScript.
+
+Key decisions:
+1. Keep raw =nodeType= unchanged.
+2. Add additive editable-scope metadata named =editableScopeNodeType=.
+3. Include editable scope line/range metadata so callers can round-trip the exact container deterministically.
+4. For non-directly-editable lines, expose the nearest editable parent/container.
+5. Comments are editable here and must stop resolving to =source_file=.
+6. Edit must accept both raw Typst node kinds reported by navigation and the returned editable-scope kind.
+7. Regression coverage must include =set=, single-line =let=, multiline helper =let=, comments, and additive compatibility controls for non-Typst languages.
+
+* Verification
+Focused proof required before declaring this plan done:
+- =cargo test -p pi-code-engine typst=
+- =cargo test -p pi-natives code_buffer=
+- =bun test packages/coding-agent/test/tools/code.test.ts=
+- =bun check:rs=
+
+Manual/result proof required in the implementation report:
+- Show that raw Typst =nodeType= may remain =set= / =let= while =editableScopeNodeType= points to the correct editable container.
+- Show that line-target edit succeeds when using either the raw Typst kind or the reported editable-scope kind for the same location.
+- Show that comment lines no longer report =source_file=.
+- Show the created repro fixture path and the exact tests added for each covered Typst shape.
+
+* Execution Manifest
+** Wave 1 — test-first regression scaffold
+- [[id:BUG-228-add-typst-editable-scope-regression-cove][BUG-228]]
+  - Purpose: encode the user repro as executable tests before implementation
+  - Effort: S
+  - Dependency: none
+  - Scope: new Typst fixture, engine regression tests, tool-level output contract coverage
+
+** Wave 2 — engine/native cutover
+- [[id:BUG-229-unify-typst-editable-scope-resolution-fo][BUG-229]]
+  - Purpose: implement one canonical editable-scope resolver for navigate/edit/native bridge
+  - Effort: M
+  - Dependency: [[id:BUG-228-add-typst-editable-scope-regression-cove][BUG-228]]
+  - Scope: shared Rust resolver, additive navigate metadata, comment handling, native bridge serialization
+
+** Sequencing note
+This plan uses explicit test-first ordering because the change introduces a new cross-layer targeting contract (raw =nodeType= plus additive editable-scope metadata) and adjusts pure resolution logic. The implementation task must satisfy the regression item directly; no parallel legacy path should remain reachable.
+
+
+** Completion [2026-04-12]
+*** Verification
+- `cargo test -p pi-code-engine typst` → passed (15 tests). Added/covered Typst regressions: `test_navigate_typst_node_at_reports_editable_scope_for_set`, `test_navigate_typst_node_at_reports_editable_scope_for_single_line_let`, `test_navigate_typst_node_at_reports_editable_scope_for_multiline_let`, `test_navigate_typst_comment_stays_comment`, `test_replace_typst_set_accepts_raw_and_editable_scope_targets`, `test_replace_typst_single_line_let_accepts_raw_and_editable_scope_targets`, `test_replace_typst_multiline_let_accepts_raw_and_editable_scope_targets`, `test_replace_typst_comment_accepts_reported_comment_target`.
+- `cargo test -p pi-natives code_buffer` → passed (6 tests). Added native bridge coverage: `resolve_target_supports_typst_raw_and_editable_scope_node_types`, `render_navigate_result_includes_editable_scope_metadata`.
+- `bun test packages/coding-agent/test/tools/code.test.ts` → passed (20 tests). Added tool-level coverage for additive navigate metadata preservation and updated expectations for the current compact code-tool summaries.
+- Manual proof via local Bun script against `crates/pi-code-engine/tests/fixtures/sources/typst_edit_targets.typ`:
+  - line 1 navigate returns raw `nodeType=set` with `editableScopeNodeType=code`
+  - line 7 navigate returns raw `nodeType=let` with `editableScopeNodeType=code`
+  - line 6 comment navigate returns `nodeType=comment` (not `source_file`) with `editableScopeNodeType=comment`
+  - line-target edit succeeds for both `node_type=let` and `node_type=code` on line 7
+- `bun check:rs` → failed on unrelated workspace clippy debt outside PLAN-205 changed files (`crates/pi-natives/src/code_buffer.rs`, `crates/pi-natives/src/embedding_worker.rs`, `crates/pi-natives/src/org_buffer.rs`). This blocks truthful plan closure.
+*** Artifacts
+- Fixture: `crates/pi-code-engine/tests/fixtures/sources/typst_edit_targets.typ`
+- Manual proof: [[file:!tasks/plans/plan-artifacts/PLAN-205-typst-editable-scope-node-targeting/manual-proof.txt]]
+- Verification summary: [[file:!tasks/plans/plan-artifacts/PLAN-205-typst-editable-scope-node-targeting/verification-summary.txt]]
+*** Deviations
+- `bun check:rs` remains blocked by unrelated workspace lint debt; PLAN-205 stays in `DOING` until that external verification gate can pass.
+
+*** Verification Addendum [2026-04-12]
+- Re-ran `cargo test -p pi-code-engine typst` → passed.
+- Re-ran `cargo test -p pi-natives code_buffer` → passed.
+- Re-ran `bun test packages/coding-agent/test/tools/code.test.ts` → passed.
+- Re-ran `bun check:rs` → passed after clearing workspace clippy blockers in `crates/pi-natives/src/code_buffer.rs`, `crates/pi-natives/src/embedding_worker.rs`, and `crates/pi-natives/src/org_buffer.rs`.
+*** Deviations Addendum [2026-04-12]
+- Resolved. No remaining deviations.
+
