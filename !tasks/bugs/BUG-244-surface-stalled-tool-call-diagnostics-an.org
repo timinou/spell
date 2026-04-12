@@ -1,5 +1,5 @@
 #+TITLE: Surface stalled tool-call diagnostics and defer lock acquisition
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14b7ee149bae1c85
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T16-25-17-166Z_14b7ee149bae1c85.jsonl]]
 #+CUSTOM_ID: BUG-244-surface-stalled-tool-call-diagnostics-an
@@ -7,7 +7,6 @@
 #+PRIORITY: #A
 #+LAYER: agent-session
 #+DEPENDS: BUG-245-define-shared-incomplete-tool-call-stall BUG-243-cross-provider-tool-argument-idle-timeou
-
 
 * Initial Message
 
@@ -75,3 +74,5 @@ Also audit and fix early acquisition behavior in streaming preview / abort-defen
 - Run =bun check:ts= and =bun check:rs=.
 
 NOTE [2026-04-12]: Linked from [[id:PLAN-218-cross-provider-stalled-incomplete-tool-c]]. Session/UI item for surfaced diagnostics and atomic lock acquisition.
+
+NOTE [2026-04-12]: Surfacing and lock audit complete:\n- formatAssistantToolCallFailureMessage wired in event-controller.ts and ui-helpers.ts for error stops\n- persistToolCallStreamDiagnostic externalizes raw JSON to artifact, preserves URI reference\n- No early lock acquisition: streaming-edit-abort test confirms no file read at toolcall_start\n- Native buffer locking confirmed execution-time only (parking_lot::Mutex in NAPI calls)\n- 7 coding-agent tests pass (diagnostics, persistence, streaming-edit-abort)

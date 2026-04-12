@@ -1,5 +1,5 @@
 #+TITLE: Cross-provider stalled incomplete tool-call hardening
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14b7ee149bae1c85
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T16-25-17-166Z_14b7ee149bae1c85.jsonl]]
 #+CUSTOM_ID: PLAN-218-cross-provider-stalled-incomplete-tool-c
@@ -82,3 +82,38 @@ Implement a shared incomplete-tool-call diagnostic contract first, then cut prov
    Coding-agent transcript/UI surfacing and atomic lock-acquisition changes; depends on items 1 and 2.
 4. [[id:FUP-051-review-retention-controls-for-persisted]]
    Post-plan retention/privacy follow-up; depends on item 3.
+
+** Completion [2026-04-12]
+
+*** Verification
+- =bun test= across 9 test files: 26 tests, 127 expects, all pass
+  - =packages/ai/test/providers/anthropic-idle-timeout.test.ts=: 4 tests (existing, unaffected)
+  - =packages/ai/test/providers/openai-responses-idle-timeout.test.ts=: 2 tests (existing, unaffected)
+  - =packages/ai/test/providers/bedrock-idle-timeout.test.ts=: 4 tests (new)
+  - =packages/ai/test/providers/azure-openai-responses-idle-timeout.test.ts=: 2 tests (new)
+  - =packages/ai/test/providers/codex-idle-timeout.test.ts=: 4 tests (new)
+  - =packages/ai/test/providers/cursor-idle-timeout.test.ts=: 3 tests (new)
+  - =packages/coding-agent/test/session/tool-call-diagnostics.test.ts=: 1 test (existing)
+  - =packages/coding-agent/test/session-manager/signature-persistence.test.ts=: 4 tests (existing)
+  - =packages/coding-agent/test/streaming-edit-abort.test.ts=: 2 tests (existing)
+- =bun check:ts=: clean (only pre-existing =packages/natives/test/staleness.test.ts= error)
+- =bun check:rs=: clean
+- Native buffer lock audit: =parking_lot::Mutex= in =execute_code_buffer_inner= confirmed execution-time scoped
+
+*** Artifacts
+- New test files:
+  - =packages/ai/test/providers/bedrock-idle-timeout.test.ts=
+  - =packages/ai/test/providers/azure-openai-responses-idle-timeout.test.ts=
+  - =packages/ai/test/providers/codex-idle-timeout.test.ts=
+  - =packages/ai/test/providers/cursor-idle-timeout.test.ts=
+- Modified providers:
+  - =packages/ai/src/providers/amazon-bedrock.ts= — idle timeout + stall classification + retry loop
+  - =packages/ai/src/providers/azure-openai-responses.ts= — tool-argument-aware timeout + retry loop
+  - =packages/ai/src/providers/openai-codex-responses.ts= — tool-argument-aware SSE timeout + stall classification
+  - =packages/ai/src/providers/cursor.ts= — stall classification in error handler
+- Modified utility:
+  - =packages/ai/src/utils/idle-iterator.ts= — added =getBedrockStreamIdleTimeoutMs()=
+- FUP-051 note with retention seams documented
+
+*** Deviations
+None."

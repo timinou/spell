@@ -1,12 +1,11 @@
 #+TITLE: Define shared incomplete tool-call stall diagnostics contract
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14b7ee149bae1c85
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T16-25-17-166Z_14b7ee149bae1c85.jsonl]]
 #+CUSTOM_ID: BUG-245-define-shared-incomplete-tool-call-stall
 #+EFFORT: 4h
 #+PRIORITY: #A
 #+LAYER: ai-runtime
-
 
 * Initial Message
 
@@ -70,3 +69,5 @@ Persist the full raw partial tool JSON for debugging by reference through sessio
 - Run =bun check:ts=.
 
 NOTE [2026-04-12]: Linked from [[id:PLAN-218-cross-provider-stalled-incomplete-tool-c]]. Foundation item for the shared stalled-tool-call diagnostic contract and persisted raw payload references.
+
+NOTE [2026-04-12]: Foundation complete. Shared diagnostic types, utilities, persistence, and formatting all verified green (13 tests across 4 files). All providers and coding-agent consume the shared contract.

@@ -19,7 +19,7 @@ import {
 	type ToolConfiguration,
 	ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
-import { $env } from "@oh-my-pi/pi-utils";
+import { $env, abortableSleep } from "@oh-my-pi/pi-utils";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { Effort } from "../model-thinking";
 import { mapEffortToAnthropicAdaptiveEffort, requireSupportedEffort } from "../model-thinking";
@@ -44,8 +44,22 @@ import type {
 import { normalizeToolCallId, resolveCacheRetention, systemPromptBlocks } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { appendRawHttpRequestDumpFor400, type RawHttpRequestDump, withHttpStatus } from "../utils/http-inspector";
+import {
+	getBedrockStreamIdleTimeoutMs,
+	getToolArgumentStreamIdleTimeoutMs,
+	iterateWithIdleTimeout,
+} from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { pushFallbackError } from "../utils/provider-error-boundary";
+import {
+	appendToolCallStreamDiagnostic,
+	classifyToolCallStreamInterruption,
+	getToolCallStreamMaxRetries,
+	getToolCallStreamRetryDelayMs,
+	hasActiveToolArgumentStreaming,
+	isRetryableToolCallStreamDiagnostic,
+	ToolCallStreamDiagnosticError,
+} from "../utils/tool-call-diagnostics";
 import { transformMessages } from "./transform-messages";
 
 export interface BedrockOptions extends StreamOptions {
@@ -155,46 +169,99 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream"> = (
 			};
 			const command = new ConverseStreamCommand(commandInput);
 
-			const response = await client.send(command, { abortSignal: options.signal });
+			const streamIdleTimeoutMs = getBedrockStreamIdleTimeoutMs();
+			const toolArgumentIdleTimeoutMs = getToolArgumentStreamIdleTimeoutMs(streamIdleTimeoutMs);
+			let providerRetryAttempt = 0;
+			let started = false;
+			stream.push({ type: "start", partial: output });
+			do {
+				const requestAbortController = new AbortController();
+				const requestSignal = options.signal
+					? AbortSignal.any([options.signal, requestAbortController.signal])
+					: requestAbortController.signal;
+				const response = await client.send(command, { abortSignal: requestSignal });
 
-			for await (const item of response.stream!) {
-				if (item.messageStart) {
-					if (item.messageStart.role !== ConversationRole.ASSISTANT) {
-						throw new Error("Unexpected assistant message start but got user message start instead");
+				try {
+					for await (const item of iterateWithIdleTimeout(response.stream!, {
+						idleTimeoutMs: streamIdleTimeoutMs,
+						getIdleTimeoutMs: () =>
+							hasActiveToolArgumentStreaming(output) ? toolArgumentIdleTimeoutMs : streamIdleTimeoutMs,
+						errorMessage: "Bedrock stream stalled while waiting for the next event",
+						onIdle: () => requestAbortController.abort(),
+					})) {
+						started = true;
+						if (item.messageStart) {
+							if (item.messageStart.role !== ConversationRole.ASSISTANT) {
+								throw new Error("Unexpected assistant message start but got user message start instead");
+							}
+						} else if (item.contentBlockStart) {
+							if (!firstTokenTime) firstTokenTime = Date.now();
+							handleContentBlockStart(item.contentBlockStart, blocks, output, stream);
+						} else if (item.contentBlockDelta) {
+							if (!firstTokenTime) firstTokenTime = Date.now();
+							handleContentBlockDelta(item.contentBlockDelta, blocks, output, stream);
+						} else if (item.contentBlockStop) {
+							handleContentBlockStop(item.contentBlockStop, blocks, output, stream);
+						} else if (item.messageStop) {
+							output.stopReason = mapStopReason(item.messageStop.stopReason);
+						} else if (item.metadata) {
+							handleMetadata(item.metadata, model, output);
+						} else if (item.internalServerException) {
+							throw new Error(`Internal server error: ${item.internalServerException.message}`);
+						} else if (item.modelStreamErrorException) {
+							throw new Error(`Model stream error: ${item.modelStreamErrorException.message}`);
+						} else if (item.validationException) {
+							throw withHttpStatus(new Error(`Validation error: ${item.validationException.message}`), 400);
+						} else if (item.throttlingException) {
+							throw new Error(`Throttling error: ${item.throttlingException.message}`);
+						} else if (item.serviceUnavailableException) {
+							throw new Error(`Service unavailable: ${item.serviceUnavailableException.message}`);
+						}
 					}
-					stream.push({ type: "start", partial: output });
-				} else if (item.contentBlockStart) {
-					if (!firstTokenTime) firstTokenTime = Date.now();
-					handleContentBlockStart(item.contentBlockStart, blocks, output, stream);
-				} else if (item.contentBlockDelta) {
-					if (!firstTokenTime) firstTokenTime = Date.now();
-					handleContentBlockDelta(item.contentBlockDelta, blocks, output, stream);
-				} else if (item.contentBlockStop) {
-					handleContentBlockStop(item.contentBlockStop, blocks, output, stream);
-				} else if (item.messageStop) {
-					output.stopReason = mapStopReason(item.messageStop.stopReason);
-				} else if (item.metadata) {
-					handleMetadata(item.metadata, model, output);
-				} else if (item.internalServerException) {
-					throw new Error(`Internal server error: ${item.internalServerException.message}`);
-				} else if (item.modelStreamErrorException) {
-					throw new Error(`Model stream error: ${item.modelStreamErrorException.message}`);
-				} else if (item.validationException) {
-					throw withHttpStatus(new Error(`Validation error: ${item.validationException.message}`), 400);
-				} else if (item.throttlingException) {
-					throw new Error(`Throttling error: ${item.throttlingException.message}`);
-				} else if (item.serviceUnavailableException) {
-					throw new Error(`Service unavailable: ${item.serviceUnavailableException.message}`);
+
+					if (options.signal?.aborted) {
+						throw new Error("Request was aborted");
+					}
+
+					if (output.stopReason === "error" || output.stopReason === "aborted") {
+						throw new Error("An unknown error occurred");
+					}
+					break; // Stream completed successfully
+				} catch (streamError) {
+					const stallDiagnostic =
+						streamError instanceof Error &&
+						streamError.message.includes("Bedrock stream stalled while waiting for the next event")
+							? classifyToolCallStreamInterruption(output, {
+									firstTokenTimeMs: firstTokenTime ? firstTokenTime - startTime : undefined,
+									idleTimeoutMs: hasActiveToolArgumentStreaming(output)
+										? toolArgumentIdleTimeoutMs
+										: streamIdleTimeoutMs,
+									providerRetryAttempt,
+								})
+							: undefined;
+					if (stallDiagnostic) {
+						appendToolCallStreamDiagnostic(output, stallDiagnostic);
+					}
+					if (stallDiagnostic?.state === "completed_tool_call_missing_trailing_stop") {
+						output.stopReason = "toolUse";
+						break;
+					}
+					const finalStreamError = stallDiagnostic
+						? new ToolCallStreamDiagnosticError(stallDiagnostic)
+						: streamError;
+					const isTransient = stallDiagnostic ? isRetryableToolCallStreamDiagnostic(stallDiagnostic) : false;
+					if (options.signal?.aborted || providerRetryAttempt >= getToolCallStreamMaxRetries() || !isTransient) {
+						throw finalStreamError;
+					}
+					providerRetryAttempt++;
+					await abortableSleep(getToolCallStreamRetryDelayMs(providerRetryAttempt), options.signal);
+					// Reset output state for clean retry
+					output.content.length = 0;
+					output.stopReason = "stop";
+					firstTokenTime = undefined;
+					started = false;
 				}
-			}
-
-			if (options.signal?.aborted) {
-				throw new Error("Request was aborted");
-			}
-
-			if (output.stopReason === "error" || output.stopReason === "aborted") {
-				throw new Error("An unknown error occurred");
-			}
+			} while (!started);
 
 			output.duration = Date.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;

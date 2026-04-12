@@ -29,6 +29,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { parseStreamingJson } from "../utils/json-parse";
 import { pushFallbackError } from "../utils/provider-error-boundary";
 import { formatErrorMessageWithRetryAfter } from "../utils/retry-after";
+import { appendToolCallStreamDiagnostic, classifyToolCallStreamInterruption } from "../utils/tool-call-diagnostics";
 import type { McpToolDefinition } from "./cursor/gen/agent_pb";
 import {
 	AgentClientMessageSchema,
@@ -550,6 +551,23 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 		} catch (error) {
 			try {
 				output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+				// Classify stalled tool-call diagnostics before finalizing error
+				const stallDiagnostic = classifyToolCallStreamInterruption(output, {
+					api: output.api,
+					provider: output.provider,
+					model: output.model,
+				});
+				if (stallDiagnostic) {
+					appendToolCallStreamDiagnostic(output, stallDiagnostic);
+					if (stallDiagnostic.state === "completed_tool_call_missing_trailing_stop") {
+						output.stopReason = "toolUse";
+						output.duration = Date.now() - startTime;
+						if (firstTokenTime) output.ttft = firstTokenTime - startTime;
+						stream.push({ type: "done", reason: output.stopReason, message: output });
+						stream.end();
+						return;
+					}
+				}
 				output.errorMessage = formatErrorMessageWithRetryAfter(error);
 				output.duration = Date.now() - startTime;
 				if (firstTokenTime) output.ttft = firstTokenTime - startTime;

@@ -8,9 +8,6 @@
 #+LAYER: governance
 #+DEPENDS: BUG-244-surface-stalled-tool-call-diagnostics-an
 
-
-
-
 * Initial Message
 
 ✘ Write: ⌘ !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
@@ -71,3 +68,28 @@ Do not block the main hardening work on this review. Instead, capture concrete n
 NOTE [2026-04-12]: Linked from [[id:PLAN-218-cross-provider-stalled-incomplete-tool-c]]. Follow-up for retention/privacy controls around persisted raw partial tool payloads.
 
 NOTE [2026-04-12]: For this plan, the foundation reference is [[id:BUG-245-define-shared-incomplete-tool-call-stall]], not a project item. Retention work should hook into that shared diagnostic contract and the downstream session/UI surfacing item.
+
+NOTE [2026-04-12]: Implementation review of persisted raw partial tool payload locations and config seams:
+
+** Storage locations
+- Raw partial tool JSON is saved via =ArtifactManager.save()= to the session artifacts directory
+- Artifact type: =tool-call-diagnostic= (constant =TOOL_CALL_DIAGNOSTIC_ARTIFACT_TYPE=)
+- File format: =.json= in the session artifact tree
+- Referenced in JSONL entries via =rawPartialJsonArtifact: { uri: \"artifact://...\", path: \"/abs/path\" }=
+- Inline =rawPartialJson= is stripped after artifact externalization (see =persistToolCallStreamDiagnostic= in =session-manager.ts=)
+
+** Surfacing paths
+- =formatAssistantToolCallFailureMessage= in =packages/coding-agent/src/session/tool-call-diagnostics.ts= renders the concise summary + artifact URI
+- =event-controller.ts= and =ui-helpers.ts= call this for error-stopped assistant messages
+- Session JSONL export includes =streamDiagnostics[]= entries with artifact URIs — any transcript viewer sees them
+
+** Config seams for future retention controls
+- =ArtifactManager= is the natural hook for retention/TTL policy (one save path for all artifact types)
+- The artifact type string =tool-call-diagnostic= can be used to filter/redact/encrypt specific artifact classes
+- Env vars for timeout tuning: =PI_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS=, =PI_BEDROCK_STREAM_IDLE_TIMEOUT_MS=, =PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS=, =PI_OPENAI_STREAM_IDLE_TIMEOUT_MS=
+
+** Recommended next steps
+1. Add an artifact retention config (per-type TTL, max count, max bytes) to =spell.kdl= or session config
+2. Add redaction/truncation option for transcript export paths that include diagnostic artifacts
+3. Consider encrypting diagnostic artifacts at rest if they may contain sensitive user content
+4. The =rawPartialJsonBytes= metadata on the diagnostic entry already allows size-based policy without reading the artifact"
