@@ -42,9 +42,7 @@ fn entry_for_node(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Op
 	let Some(decl) = declaration_for(profile, node) else {
 		return sole_named_child(node).and_then(|child| entry_for_node(source, profile, child));
 	};
-	let name = text(source, node.child_by_field_name(&decl.name_field)?)?
-		.trim()
-		.to_string();
+	let name = declaration_name(source, node, decl)?;
 	let signature = signature_text(source, node, decl);
 	let start = node.start_position();
 	let end = node.end_position();
@@ -96,7 +94,7 @@ fn class_children(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Ve
 		.collect()
 }
 
-fn declaration_for<'a>(
+pub(crate) fn declaration_for<'a>(
 	profile: &'a LanguageProfile,
 	node: Node<'_>,
 ) -> Option<&'a DeclarationPattern> {
@@ -104,6 +102,37 @@ fn declaration_for<'a>(
 		.declarations
 		.iter()
 		.find(|decl| decl.node_types.iter().any(|kind| kind == node.kind()))
+}
+
+pub(crate) fn declaration_name(
+	source: &str,
+	node: Node<'_>,
+	decl: &DeclarationPattern,
+) -> Option<String> {
+	if let Some(name_node) = node.child_by_field_name(&decl.name_field) {
+		if let Some(inner_name) = name_node.child_by_field_name("name") {
+			return text(source, inner_name).map(|value| value.trim().to_string());
+		}
+		return text(source, name_node).map(|value| value.trim().to_string());
+	}
+
+	find_named_descendant(node, "variable_declarator")
+		.and_then(|declarator| declarator.child_by_field_name("name"))
+		.and_then(|name_node| text(source, name_node))
+		.map(|value| value.trim().to_string())
+}
+
+fn find_named_descendant<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+	let mut cursor = node.walk();
+	for child in node.named_children(&mut cursor) {
+		if child.kind() == kind {
+			return Some(child);
+		}
+		if let Some(found) = find_named_descendant(child, kind) {
+			return Some(found);
+		}
+	}
+	None
 }
 
 fn signature_text(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> String {
