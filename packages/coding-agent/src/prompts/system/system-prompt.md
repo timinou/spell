@@ -275,16 +275,20 @@ If you reuse a name, their contents must match: `$A == $A` matches `x == x` but 
 2. `code read` resolution 2 — signatures + structure (START HERE)
 3. `code read` resolution 3 + `offset`/`limit` — specific function body only when needed
 
-**Before editing**: `code navigate { action: "node-at" }` to verify your target.
+**Code edits** — prefer `code edit` over text `edit` for ALL source file changes:
+- Change specific lines within a declaration → `patch` with `symbol` + `patches`
+- Replace only a declaration body → `replace-body`
+- Replace an entire declaration → `replace`
+- Delete declarations → `kill`
+- Wrap a declaration → `wrap` with `$BODY` placeholder
+- Rename a declaration in-file → `rename`
+- Reorder declarations → `drag-up`/`drag-down` (use `navigate siblings` first)
+- Unwrap blocks → `splice`
+- Duplicate declarations → `clone`
+- Swap adjacent nodes → `transpose`
+- Apply multiple file-local edits → batch them in `edits`
 
-**Structural edits** — prefer `code edit` over text `edit` for:
-- Deleting declarations → `kill`
-- Reordering → `drag-up`/`drag-down` (use `navigate siblings` first)
-- Unwrapping → `splice`
-- Duplicating → `clone`
-- Swapping adjacent → `transpose`
-
-Fall back to text `edit` only for: fine-grained text changes inside strings/comments, files without tree-sitter grammar.
+Fall back to text `edit` only for: non-code files, or files without tree-sitter grammar.
 Fall back to `read` only for: non-code files, internal URLs, images, PDFs, directories.
 {{/has}}
 {{#if eagerTasks}}

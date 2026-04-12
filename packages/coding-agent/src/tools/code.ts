@@ -36,13 +36,47 @@ const GRAPH_COMMANDS = new Set([
 // Schema
 // =============================================================================
 
+const patchSchema = Type.Object({
+	find: Type.String({ description: "Text to find within the symbol scope (indent-insensitive)" }),
+	replace: Type.String({ description: "Replacement text" }),
+});
+
+const editEntrySchema = Type.Object({
+	symbol: Type.Optional(
+		Type.String({
+			description: "Symbol name to target (for example 'handleRequest' or 'MyClass.method')",
+		}),
+	),
+	line: Type.Optional(
+		Type.Integer({
+			description: "1-indexed line number for positional operations (drag, splice, clone, transpose)",
+		}),
+	),
+	column: Type.Optional(Type.Integer({ description: "1-indexed column for transpose" })),
+	operation: Type.String({
+		description:
+			"Edit operation: patch | replace | replace-body | wrap | rename | kill | insert-before | insert-after | splice | drag-up | drag-down | clone | transpose",
+	}),
+	content: Type.Optional(
+		Type.String({
+			description: "Content for replace | replace-body | wrap template | rename new name | insert operations",
+		}),
+	),
+	patches: Type.Optional(Type.Array(patchSchema, { description: "Find/replace patches for patch operation" })),
+	mode: Type.Optional(Type.String({ description: "Splice mode: self | up | down (default: self)" })),
+});
+
 const codeSchema = Type.Object({
 	command: Type.String({
 		description:
 			"Subcommand: read | outline | edit | buffers | diff | navigate | languages | undo | redo | save | index | status | context | impact | deps | flow | dead_code | clusters | search",
 	}),
 	file: Type.Optional(Type.String({ description: "Absolute or project-relative file path" })),
-	symbol: Type.Optional(Type.String({ description: "Symbol name for graph commands like context | impact | flow" })),
+	symbol: Type.Optional(
+		Type.String({
+			description: "Symbol name for edit targeting or graph commands like context | impact | flow",
+		}),
+	),
 	query: Type.Optional(Type.String({ description: "Search query for graph search" })),
 	resolution: Type.Optional(Type.Integer({ description: "Zoom level 0-3 (default 2)" })),
 	offset: Type.Optional(Type.Integer({ description: "Start line 1-indexed (resolution 3 only)" })),
@@ -52,24 +86,28 @@ const codeSchema = Type.Object({
 	operation: Type.Optional(
 		Type.String({
 			description:
-				"Edit operation: replace | insert-before | insert-after | splice | drag-up | drag-down | clone | kill | transpose",
+				"Edit operation: patch | replace | replace-body | wrap | rename | kill | insert-before | insert-after | splice | drag-up | drag-down | clone | transpose",
 		}),
 	),
-	target: Type.Optional(
-		Type.Object({
-			line: Type.Integer({ description: "1-indexed line number" }),
-			node_type: Type.Optional(Type.String({ description: "tree-sitter node type to match" })),
+	content: Type.Optional(
+		Type.String({
+			description: "Content for replace | replace-body | wrap template | rename new name | insert operations",
 		}),
 	),
-	content: Type.Optional(Type.String({ description: "Replacement/insertion content" })),
+	patches: Type.Optional(Type.Array(patchSchema, { description: "Find/replace patches for patch operation" })),
+	edits: Type.Optional(Type.Array(editEntrySchema, { description: "Array of edits to apply in sequence" })),
 	mode: Type.Optional(Type.String({ description: "Splice mode: self | up | down (default: self)" })),
 	action: Type.Optional(
 		Type.String({
 			description: "Navigate action: defun-at | parent | references | node-at | siblings | children",
 		}),
 	),
-	line: Type.Optional(Type.Integer({ description: "1-indexed line for navigation" })),
-	column: Type.Optional(Type.Integer({ description: "1-indexed column for navigation" })),
+	line: Type.Optional(
+		Type.Integer({
+			description: "1-indexed line for navigation or positional edit operations",
+		}),
+	),
+	column: Type.Optional(Type.Integer({ description: "1-indexed column for navigation or transpose" })),
 });
 
 type CodeParams = Static<typeof codeSchema>;
@@ -143,12 +181,9 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			if (params.symbol) options.symbol = params.symbol;
 			if (params.operation) options.operation = params.operation;
 			if (params.content !== undefined) options.content = params.content;
+			if (params.patches) options.patches = params.patches;
+			if (params.edits) options.edits = params.edits;
 			if (params.mode) options.mode = params.mode;
-			// Flatten target into top-level fields for NAPI
-			if (params.target) {
-				if (params.target.line) options.line = params.target.line;
-				if (params.target.node_type) options.node_type = params.target.node_type;
-			}
 			// Map navigate action: references-local → references (backward compat)
 			if (command === "navigate" && params.action) {
 				options.action = params.action === "references-local" ? "references" : params.action;

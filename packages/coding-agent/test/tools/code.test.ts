@@ -219,7 +219,7 @@ describe("coding-agent code tool wiring", () => {
 		);
 	});
 
-	it("does not override navigate line with zero-value target.line", async () => {
+	it("passes navigate line unchanged", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
 			output: { node_type: "identifier", text: "foo", line: 10, end_line: 10 },
 			error: false,
@@ -230,7 +230,6 @@ describe("coding-agent code tool wiring", () => {
 			file: "/tmp/test/src/main.ts",
 			action: "node-at",
 			line: 10,
-			target: { line: 0 },
 		});
 
 		expect(bufferSpy).toHaveBeenCalledWith(
@@ -279,26 +278,54 @@ describe("coding-agent code tool wiring", () => {
 		);
 	});
 
-	it("flattens target into top-level fields for edit", async () => {
+	it("forwards symbol-targeted patch edits", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
-			output: [{ version: 2 }],
+			output: { version: 2, diff: "@@ add @@\n-return a + b;\n+return a * b;", editCount: 1 },
 			error: false,
 		});
 		const tool = new CodeTool(createSession());
 		await tool.execute("tool", {
 			command: "edit",
 			file: "/tmp/test/src/main.ts",
-			operation: "kill",
-			target: { line: 5, node_type: "function_declaration" },
+			symbol: "add",
+			operation: "patch",
+			patches: [{ find: "return a + b;", replace: "return a * b;" }],
 		});
 
 		expect(bufferSpy).toHaveBeenCalledWith(
 			expect.objectContaining({
 				command: "edit",
 				file: "/tmp/test/src/main.ts",
-				operation: "kill",
-				line: 5,
-				node_type: "function_declaration",
+				symbol: "add",
+				operation: "patch",
+				patches: [{ find: "return a + b;", replace: "return a * b;" }],
+			}),
+		);
+	});
+
+	it("forwards edit batches", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: { version: 3, diff: "@@ add @@", editCount: 2 },
+			error: false,
+		});
+		const tool = new CodeTool(createSession());
+		await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			edits: [
+				{ symbol: "add", operation: "rename", content: "sum" },
+				{ line: 8, operation: "splice", mode: "down" },
+			],
+		});
+
+		expect(bufferSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				command: "edit",
+				file: "/tmp/test/src/main.ts",
+				edits: [
+					{ symbol: "add", operation: "rename", content: "sum" },
+					{ line: 8, operation: "splice", mode: "down" },
+				],
 			}),
 		);
 	});
@@ -332,7 +359,7 @@ describe("coding-agent code tool wiring", () => {
 
 	it("forwards mode for splice edit operations", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
-			output: [{ version: 3 }],
+			output: { version: 3, diff: "@@ top-level @@", editCount: 1 },
 			error: false,
 		});
 		const tool = new CodeTool(createSession());
@@ -341,10 +368,10 @@ describe("coding-agent code tool wiring", () => {
 			file: "/tmp/test/src/main.ts",
 			operation: "splice",
 			mode: "down",
-			target: { line: 8, node_type: "block" },
+			line: 8,
 		});
 
-		expect(bufferSpy).toHaveBeenCalledWith(expect.objectContaining({ operation: "splice", mode: "down" }));
+		expect(bufferSpy).toHaveBeenCalledWith(expect.objectContaining({ operation: "splice", mode: "down", line: 8 }));
 	});
 
 	it("resolves relative file paths against session cwd", async () => {

@@ -6,14 +6,21 @@ What are you doing? → subcommand:
 - Understand API surface → `code read { file, resolution: 1 }`
 - Understand structure → `code read { file, resolution: 2 }`  [DEFAULT]
 - Read specific implementation → `code read { file, resolution: 3, offset, limit }`
-- Verify edit target → `code navigate { file, action: "node-at", line }`
+- Change specific lines in a declaration → `code edit { file, symbol: "fnName", operation: "patch", patches: [{ find: "old", replace: "new" }] }`
+- Replace a declaration body but keep its signature → `code edit { file, symbol: "fnName", operation: "replace-body", content: "{ ... }" }`
+- Replace an entire declaration → `code edit { file, symbol: "fnName", operation: "replace", content: "..." }`
+- Delete a declaration → `code edit { file, symbol: "fnName", operation: "kill" }`
+- Wrap a declaration in a template → `code edit { file, symbol: "fnName", operation: "wrap", content: "try {\n  $BODY\n} catch (err) {\n  throw err;\n}" }`
+- Rename a declaration in-file → `code edit { file, symbol: "oldName", operation: "rename", content: "newName" }`
+- Make multiple changes in one file → `code edit { file, edits: [...] }`
+- Reorder declarations → `code edit { file, line: N, operation: "drag-down" }`
+- Duplicate a declaration → `code edit { file, line: N, operation: "clone" }`
+- Unwrap a block → `code edit { file, line: N, operation: "splice" }`
+- Preview before saving → `code edit { ... }` then `code diff { file }`
 - See what's around → `code navigate { file, action: "siblings", line }`
 - Inspect children of a class/block → `code navigate { file, action: "children", line }`
 - Find enclosing function → `code navigate { file, action: "defun-at", line }`
 - Find in-file references → `code navigate { file, action: "references", line, symbol }`
-- Delete a declaration → `code edit { operation: "kill", target: { line, node_type } }`
-- Replace node content → `code edit { operation: "replace", target: { line }, content }`
-- Preview before saving → `code edit { … }` then `code diff { file }` (edits stay in-memory until `code save { file }`)
 - Build or rebuild the project graph → `code index`
 - Check graph cache and semantic index health → `code status`
 - Ask how a symbol is connected → `code context { symbol }`
@@ -57,19 +64,94 @@ Workflow:
 - `search`: Keyword or hybrid semantic graph search over symbols and files
 </operations>
 
+<examples>
+- Patch a function without rewriting the whole declaration:
+  ```json
+  {
+    "command": "edit",
+    "file": "src/server.ts",
+    "symbol": "handleRequest",
+    "operation": "patch",
+    "patches": [
+      { "find": "const timeout = 5000;", "replace": "const timeout = 30_000;" },
+      { "find": "return null;", "replace": "return defaultResponse();" }
+    ]
+  }
+  ```
+- Replace only the body of a function:
+  ```json
+  {
+    "command": "edit",
+    "file": "src/utils.ts",
+    "symbol": "formatDate",
+    "operation": "replace-body",
+    "content": "{\n  return new Intl.DateTimeFormat('en-US').format(date);\n}"
+  }
+  ```
+- Wrap a declaration with a template:
+  ```json
+  {
+    "command": "edit",
+    "file": "src/api.ts",
+    "symbol": "fetchData",
+    "operation": "wrap",
+    "content": "try {\n  $BODY\n} catch (err) {\n  logger.error(err);\n  throw err;\n}"
+  }
+  ```
+- Rename a declaration and its in-file references:
+  ```json
+  {
+    "command": "edit",
+    "file": "src/utils.ts",
+    "symbol": "parseConfig",
+    "operation": "rename",
+    "content": "loadConfig"
+  }
+  ```
+- Batch multiple edits in one call:
+  ```json
+  {
+    "command": "edit",
+    "file": "src/server.ts",
+    "edits": [
+      {
+        "symbol": "handleRequest",
+        "operation": "patch",
+        "patches": [
+          { "find": "const timeout = 5000;", "replace": "const timeout = 30_000;" }
+        ]
+      },
+      {
+        "symbol": "processData",
+        "operation": "kill"
+      },
+      {
+        "line": 1,
+        "operation": "insert-after",
+        "content": "import { x } from './x';\n"
+      }
+    ]
+  }
+  ```
+</examples>
+
 <output>
 - File-scoped commands return structured JSON or diffs from the native engine
+- `edit` returns an annotated diff string with `@@ symbolName @@` headers plus the buffer version and edit count
 - Graph commands return compact text optimized for agent reading with grouped sections and “Next:” hints
 </output>
 
 <critical>
 - Use file-scoped commands for local syntax work; use graph commands for cross-file reasoning
+- Use `symbol` to target declarations. Use `line` only for positional operations such as `drag-up`, `drag-down`, `splice`, `clone`, and `transpose`
+- For `patch`, `find` text is matched only within the targeted symbol scope and is indent-insensitive
+- If `patch.find` matches multiple locations, the edit fails — provide more specific context in the `find` text
+- Edits stay in-memory until `code save { file }`. Use `code diff { file }` to preview unsaved changes
 - `context`, `impact`, and `flow` require `symbol`
 - `deps` requires `file`
 - `search` requires `query`; optional `semantic` forces hybrid search (`true`) or BM25-only search (`false`)
-- `status` reports graph and semantic cache state without forcing a rebuild
+- `status` reports graph cache and semantic index state without forcing a rebuild
 - `index` forces a rebuild; other graph commands auto-build when needed
 - Do NOT default to resolution 3 for file reads
-- Do NOT skip `navigate node-at` before destructive edits
 - For non-code resources, use the `read` tool
 </critical>

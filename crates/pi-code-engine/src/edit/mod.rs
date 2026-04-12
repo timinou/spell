@@ -1,16 +1,24 @@
+mod body;
 mod clone;
 mod drag;
-mod indent;
+pub(crate) mod indent;
+mod patch;
+mod rename;
 mod replace;
 mod splice;
 mod transpose;
+mod wrap;
 
+pub use body::replace_body;
 pub use clone::clone_node;
 pub use drag::{DragDirection, drag_node};
+pub use patch::{Patch, apply_patches};
+pub use rename::rename_symbol;
 pub use replace::{insert_after, insert_before, kill_node, replace_node};
 use ropey::LineType;
 pub use splice::{SpliceMode, splice_node};
 pub use transpose::transpose_nodes;
+pub use wrap::wrap_node;
 
 pub use crate::buffer::TextEdit;
 use crate::{
@@ -18,7 +26,7 @@ use crate::{
 	error::{CodeEngineError, Result},
 };
 
-pub(crate) fn node_at_line(buffer: &CodeBuffer, line: usize) -> Result<tree_sitter::Node<'_>> {
+pub fn node_at_line(buffer: &CodeBuffer, line: usize) -> Result<tree_sitter::Node<'_>> {
 	let rope = buffer.rope();
 	let byte = rope.line_to_byte_idx(line.saturating_sub(1), LineType::LF_CR);
 	let tree = buffer.tree();

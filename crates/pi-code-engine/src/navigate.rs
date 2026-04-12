@@ -6,6 +6,7 @@ use crate::{
 	buffer::CodeBuffer,
 	error::{CodeEngineError, Result},
 	language::{DeclarationPattern, LanguageProfile, ReferencePattern},
+	outline::declaration_for,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,16 +281,6 @@ fn excluded(node: Node<'_>, pattern: Option<&ReferencePattern>) -> bool {
 	}
 	false
 }
-fn declaration_for<'a>(
-	profile: &'a LanguageProfile,
-	node: Node<'_>,
-) -> Option<&'a DeclarationPattern> {
-	profile
-		.declarations
-		.iter()
-		.find(|decl| decl.node_types.iter().any(|kind| kind == node.kind()))
-}
-
 fn reference_pattern_for<'a>(
 	profile: &'a LanguageProfile,
 	node: Node<'_>,
