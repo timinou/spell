@@ -8,6 +8,7 @@
 #include <QtWebEngineQuick/QtWebEngineQuick>
 #include <cstring>
 #include "socketserver.h"
+#include "typstdocumentitem.h"
 #include "windowmanager.h"
 
 static bool hasDaemonFlag(int argc, char *argv[]) {
@@ -23,6 +24,7 @@ int main(int argc, char *argv[]) {
 
     QGuiApplication app(argc, argv);
     app.setApplicationName("omp-qml-bridge");
+    qmlRegisterType<TypstDocumentItem>("SpellBridge.Native", 1, 0, "TypstDocumentItem");
 
     WindowManager manager;
 

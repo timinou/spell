@@ -1,0 +1,109 @@
+#+TITLE: Native Typst WYSIWYG Editor
+#+STATE: DONE
+#+SESSION_ID: 14b70e4c6eece845
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T00-07-34-075Z_14b70e4c6eece845.jsonl]]
+#+CUSTOM_ID: PLAN-204-native-typst-wysiwyg-editor
+
+NOTE [2026-04-12]: All execution-manifest items completed with focused verification and artifact capture.
+
+
+* Initial Message
+
+thought experiment: now that you can do structural edits to any typst file, and knowing there's a rust crate for SVG output and another for live click in preview, could you imagine a minimal Rust window with WYSIWYG capabilities for Typst files? Integrated in the QML bridge, ideally?
+
+* Context
+Spell already has a QML bridge, canvas-style QML component patterns, native Rust extension points, and an in-repo Typst integration draft that assumed WebEngine/WASM preview. This plan intentionally supersedes that direction for the primary editing experience.
+
+The chosen approach is an editing-first, Word/Notion-style Typst editor where:
+- QML remains the desktop shell and owns menus, drawers, sidebars, dialogs, and overall window lifecycle.
+- A custom native Rust-rendered document surface is embedded into QML for the page/document canvas.
+- Typst source remains canonical. The visual surface edits a supported Typst/AST subset directly; there is no persisted visual-schema document format.
+- A minimal hidden source/manual mode exists only for recovery and unsupported constructs.
+- If interactive native rendering/editing is unavailable, the editor degrades to truthful SVG preview plus reduced editing/recovery paths.
+- Linux-first development is acceptable, but the renderer/item seam must not dead-end cross-platform support.
+
+Key repo evidence informing this plan:
+- `packages/qml/src/qml-bridge.ts`, `packages/qml/bridge/windowmanager.h`, and `packages/coding-agent/src/tools/canvas.ts` establish QML as the existing window shell and control plane.
+- `domain/growth/src/qml/panels/EditorPanel.qml` is the nearest existing editor shell scaffold.
+- `domain/growth/specs/deep-dive/typst-integration.org` is prior art to reuse or explicitly supersede where it assumes WebEngine/WASM as the primary path.
+- `crates/pi-code-engine/src/language/mod.rs` already includes Typst language support.
+
+The recommended implementation sequence is foundation first: native surface and contracts, then source mapping/edit engine, then the visual QML shell, then template/asset/agent workflows, then fallback/export/verification hardening.
+
+* Verification
+Focused verification only; avoid broad project-wide runs unless necessary.
+
+** Commands
+- Targeted Rust crate tests for the new Typst surface crate and mapping/edit engine.
+- Targeted `bun test` coverage for new `packages/qml/test/` harnesses and any `packages/natives/test/` additions.
+- Narrow package checks needed to ensure the QML/native bindings and TS wrappers type-check after each milestone.
+
+** Manual checks and required artifacts
+- Screenshot set proving: main editing surface, contextual sidebars for multiple block types, template flow, asset picker flow, degraded preview-only mode, unsupported-construct marker, and recovery-mode entry.
+- Recorded mapping artifact proving rendered hit resolution reaches the intended Typst source span or disables editing cleanly with an explicit reason.
+- Export artifacts: representative SVG and PDF output after visual edits to a template-backed document.
+- Degraded-mode proof showing the editor can remain usable/recoverable when native interactive rendering is unavailable.
+
+A milestone is not done if it only compiles. It must produce externally reviewable proof.
+
+* Execution Manifest
+** 1. Native viewport foundation
+- [[id:PROJ-032-build-native-typst-document-surface-foun]]
+- Effort: 3d
+- Dependencies: none
+- Purpose: add the native Rust-rendered document surface, QML embedding item, capability/degraded-state contract, and lifecycle/harness foundation.
+
+** 2. Source-canonical mapping and edit engine
+- [[id:PROJ-033-implement-source-canonical-typst-mapping]]
+- Effort: 3d
+- Dependencies: `PROJ-032-build-native-typst-document-surface-foun`
+- Purpose: define canonical source anchors, supported edit operations, hit-test/mapping behavior, unsupported-construct truthfulness, and hidden recovery entry.
+
+** 3. QML visual shell and contextual UX
+- [[id:PROJ-034-build-the-qml-wysiwyg-shell-and-contextu]]
+- Effort: 4d
+- Dependencies: `PROJ-032-build-native-typst-document-surface-foun`, `PROJ-033-implement-source-canonical-typst-mapping`
+- Purpose: deliver the non-technical-user editing shell: toolbar, contextual sidebars, insert flows, asset/template affordances, and honest degraded/recovery UX.
+
+** 4. Templates, assets, and agent workflows
+- [[id:PROJ-035-integrate-templates-assets-and-agent-ass]]
+- Effort: 3d
+- Dependencies: `PROJ-033-implement-source-canonical-typst-mapping`, `PROJ-034-build-the-qml-wysiwyg-shell-and-contextu`
+- Purpose: make template-backed documents, variable panels, asset replacement, and agent-assisted changes first-class through the same canonical Typst pipeline.
+
+** 5. Fallback, export, and verification hardening
+- [[id:PROJ-036-harden-fallback-export-and-end-to-end-ve]]
+- Effort: 2d
+- Dependencies: `PROJ-032-build-native-typst-document-surface-foun`, `PROJ-033-implement-source-canonical-typst-mapping`, `PROJ-034-build-the-qml-wysiwyg-shell-and-contextu`, `PROJ-035-integrate-templates-assets-and-agent-ass`
+- Purpose: prove the editor behaves truthfully in interactive, degraded, recovery, and export scenarios and can produce the required artifacts.
+
+
+** Completion [2026-04-12]
+*** Verification
+- `cargo test -p pi-typst-surface` -> passed (4 tests)
+- `cd packages/qml && bun run build:bridge` -> passed; native Typst document item linked into the QML bridge
+- `cd packages/qml && bun run check` -> passed
+- `cd packages/qml && bun test test/typst-document-item.test.ts` -> passed (3 tests)
+- `cd packages/natives && bun run build:native` -> passed; N-API addon rebuilt with Typst surface bindings
+- `cd packages/natives && bun run check` -> passed
+- `cd packages/natives && bun test test/typst-surface.test.ts` -> passed (2 tests)
+- `cd domain/growth && bun test test/typst/editor-engine.test.ts test/typst/template-workflow.test.ts test/typst/export-artifacts.test.ts test/panels/editor-panel.test.ts` -> passed (22 tests)
+- Manual artifact capture via `bun .tmp/plan-204-capture.ts '!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor'` -> produced the required editor/fallback/recovery screenshots
+- Manual artifact generation via `bun .tmp/plan-204-artifacts.ts '!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor'` -> produced mapping proof plus synchronized SVG/PDF exports
+*** Artifacts
+- Native surface foundation: [[file:!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/01-native-surface-foundation.png]]
+- Main editing surface: [[file:!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/02-main-editing-surface.png]]
+- Contextual sidebar (paragraph): [[file:!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/03-contextual-sidebar-paragraph.png]]
+- Contextual sidebar (table): [[file:!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/04-contextual-sidebar-table.png]]
+- Template flow: [[file:!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/05-template-flow.png]]
+- Asset picker flow: [[file:!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/06-asset-picker-flow.png]]
+- Preview-only degraded mode: [[file:!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/07-preview-only-mode.png]]
+- Unsupported-construct marker: [[file:!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/08-unsupported-construct-marker.png]]
+- Recovery-mode entry: [[file:!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/09-recovery-source-mode.png]]
+- Mapping proof: [[file:!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/10-mapping-hit-resolution.json]]
+- Exported Typst source: [[file:!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/11-weekly-digest-export.typ]]
+- Exported PDF: [[file:!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/11-weekly-digest-export.pdf]]
+- Exported SVG: [[file:!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/11-weekly-digest-export.svg]]
+- Export summary: [[file:!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/12-export-summary.json]]
+*** Deviations
+- None.

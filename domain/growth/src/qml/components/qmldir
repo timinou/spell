@@ -8,3 +8,9 @@ FilterToolbar 1.0 FilterToolbar.qml
 ComponentPalette 1.0 ComponentPalette.qml
 TemplateSelector 1.0 TemplateSelector.qml
 TypstFileTree 1.0 TypstFileTree.qml
+BlockControls 1.0 BlockControls.qml
+FallbackStatusBanner 1.0 FallbackStatusBanner.qml
+RecoveryBanner 1.0 RecoveryBanner.qml
+InsertMenu 1.0 InsertMenu.qml
+AssetPickerDrawer 1.0 AssetPickerDrawer.qml
+ContextualSidebar 1.0 ContextualSidebar.qml

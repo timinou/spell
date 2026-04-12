@@ -1,0 +1,23 @@
+{
+  "hit": {
+    "kind": "editable-span",
+    "anchor": "block-3",
+    "blockKind": "heading",
+    "span": {
+      "anchor": "block-3",
+      "startLine": 4,
+      "endLine": 4,
+      "startColumn": 1,
+      "endColumn": 20
+    },
+    "bounds": {
+      "page": 1,
+      "x": 72,
+      "y": 200,
+      "width": 672,
+      "height": 58
+    }
+  },
+  "source": "#let report_title = \"Artifact Proof\"\n#let date_range = \"Week of Apr 26\"\n\n= Executive Summary\n\nArtifact verification paragraph after agent rewrite.\n\n- Call out the primary win for the week.\n- Flag one risk that needs follow-up.\n\n#image(\"assets/chart-q2.svg\")\n\n| Metric | Value |\n| CTR | 4.2% |\n| ROAS | 3.8x |",
+  "selectedAnchor": "block-4"
+}

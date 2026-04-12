@@ -47,6 +47,7 @@ pi-code-graph = { path = "../pi-code-graph", features = ["semantic"] }
 pi-code-vectors = { path = "../pi-code-vectors" }
 pi-code-engine = { path = "../pi-code-engine" }
 pi-org-engine = { path = "../pi-org-engine" }
+pi-typst-surface = { path = "../pi-typst-surface" }
 tree-sitter = "0.25"
 tree-sitter-bash = "0.25"
 tree-sitter-c = "0.24"

@@ -1,0 +1,11 @@
+{
+  "sourcePath": "!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/11-weekly-digest-export.typ",
+  "pdf": {
+    "success": true,
+    "outputPath": "!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/11-weekly-digest-export.pdf"
+  },
+  "svg": {
+    "success": true,
+    "outputPath": "!tasks/plans/plan-artifacts/PLAN-204-native-typst-wysiwyg-editor/11-weekly-digest-export.svg"
+  }
+}

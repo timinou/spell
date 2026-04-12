@@ -1,0 +1,88 @@
+#+TITLE: Implement source-canonical Typst mapping and visual edit engine
+#+STATE: DONE
+#+SESSION_ID: 14b70e4c6eece845
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T00-07-34-075Z_14b70e4c6eece845.jsonl]]
+#+CUSTOM_ID: PROJ-033-implement-source-canonical-typst-mapping
+#+EFFORT: 3d
+#+PRIORITY: #A
+#+LAYER: editor-core
+#+DEPENDS: PROJ-032-build-native-typst-document-surface-foun
+
+NOTE [2026-04-12]: Delivered source anchors, hit-test mapping, canonical edit operations, recovery handling, and focused workflow tests.
+
+* Initial Message
+
+thought experiment: now that you can do structural edits to any typst file, and knowing there's a rust crate for SVG output and another for live click in preview, could you imagine a minimal Rust window with WYSIWYG capabilities for Typst files? Integrated in the QML bridge, ideally?
+
+* Context
+This item defines how a visual Word/Notion-style editor can remain faithful to canonical Typst source. No separate persisted visual schema is allowed. The editing surface manipulates Typst source and a supported AST subset directly. Config/variable panels may edit template inputs or frontmatter-like values, but those changes must still flow back into source or source-adjacent inputs. This item provides the canonical edit engine, source-span mapping, and recovery behavior consumed by the renderer and QML shell.
+
+* Target Files
+- Extend `crates/pi-typst-surface/src/` with source-map and edit-operation modules as needed
+- Modify or add focused bindings in `crates/pi-natives/` if higher-level orchestration needs Rust-powered helpers from TS
+- Modify `packages/natives/src/native.ts`
+- Modify `packages/natives/src/index.ts`
+- Add/extend files under `domain/growth/src/typst/` for TS-side orchestration wrappers
+- Add targeted tests under `packages/natives/test/` and/or crate-local Rust tests for mapping/edit behavior
+
+* Design Decisions You MUST Follow
+- Typst source is canonical. Persisted output must remain `.typ` plus any explicit template/config/data files already used by the repo.
+- The visual editor only claims interactive support for a documented subset: paragraphs, headings, lists, images, tables, variables/config fields, and other constructs explicitly added in this item or later items.
+- Unsupported constructs must fail honestly. If an element cannot be safely mapped to an editable visual region, the system must disable direct editing for that region and surface either preview-only or recovery-mode affordances.
+- Recovery/manual mode exists but is hidden from normal workflows. It is a safety valve, not the primary editor.
+
+* Implementation
+** Types and tests first
+Define explicit types before implementation:
+- source span / source anchor type
+- hit-test result union (`editable-span`, `noneditable-preview`, `outside-document`, `error`)
+- edit operation union (`toggle_inline_style`, `set_block_kind`, `insert_block_after`, `delete_block`, `move_block`, `set_variable`, `replace_asset_ref`, etc.)
+- unsupported-construct reason enum
+
+Write tests first for pure mapping and transformation behavior. Implementation must then satisfy those tests.
+
+** Mapping engine
+Provide a stable mapping layer from rendered/hit-tested document regions back to canonical source spans. The contract must allow:
+- click or tap on rendered content → source anchor/span
+- hover/selection feedback for editable vs non-editable regions
+- stable behavior after incremental edits and re-layout
+- explicit disable reasons when a region is not safe to edit visually
+
+** Edit engine
+Implement source-preserving transforms for the supported subset. The edit engine must:
+- preserve formatting and surrounding content where safe
+- avoid lossy rewrites of unsupported syntax
+- refuse transformations it cannot prove safe
+- emit structured diagnostics on rejection instead of producing misleading edits
+
+** Recovery behavior
+Provide a minimal source recovery path for:
+- unsupported constructs within otherwise supported docs
+- mapping drift or stale hit-test results after rapid edits
+- syntax errors that prevent visual editing
+- collaborative/agent edits that temporarily invalidate the interactive mapping state
+
+* Enumerated User Workflows
+The tests and implementation must cover all of these workflows explicitly:
+1. Click paragraph text and edit inline content.
+2. Promote/demote a block between paragraph and heading.
+3. Toggle inline emphasis/strong styling on a text range.
+4. Insert, move, and delete list items.
+5. Replace an image asset reference from the visual surface.
+6. Edit a supported table cell and preserve table structure.
+7. Update a template/config variable from a side panel and observe a source update.
+8. Encounter unsupported Typst syntax and receive preview-only/recovery behavior rather than corrupted source.
+9. Recover from a syntax error and resume visual editing.
+10. Apply an agent-generated edit and re-establish valid mapping.
+
+* Edge Cases and Failure Handling
+- Mapping must not silently target the wrong span after reflow.
+- Two visually identical elements on different pages must remain distinguishable.
+- Operations on partially supported documents must degrade locally, not disable the entire document unnecessarily.
+- If an edit would require rewriting unsupported syntax, reject it and explain why.
+- Source updates from outside the visual editor must invalidate stale mappings deterministically.
+
+* Verification
+- Add narrow tests for mapping resolution, edit transforms, unsupported-construct handling, and recovery-mode entry.
+- Produce a recorded mapping artifact proving that clicking a rendered element resolves to the intended Typst source span, or that the system marks it non-editable with an explicit reason.
+- Acceptance is met when supported operations modify canonical Typst source correctly, unsupported operations fail truthfully, and recovery mode can be entered without data loss.
