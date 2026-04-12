@@ -1,5 +1,5 @@
 #+TITLE: Markdown Code Engine Integration
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14b7c05e6d83ec68
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-05-34-134Z_14b7c05e6d83ec68.jsonl]]
 #+CUSTOM_ID: PLAN-217-markdown-code-engine-integration
@@ -99,3 +99,27 @@ TypeScript (coding-agent):
 ** Wave 5 — Documentation (depends on Wave 4)
 
 - [[id:FEAT-526-code-tool-prompt-updates-for-markdown-an]] — Code tool prompt updates (1h) — depends on FEAT-525
+
+
+* Completion [2026-04-12]
+
+** Verification
+
+*** Verification
+- `cargo build -p pi-code-engine` — passed.
+- `cargo test -p pi-code-engine` — passed (`115 passed; 0 failed`).
+- `cargo test -p pi-natives` — passed (`60 passed; 0 failed`), including markdown promote/replace-code-block and Typst promote/demote dispatch coverage.
+- `cargo clippy -p pi-code-engine -- -D warnings` — passed.
+- `bun check:ts` — passed (`biome check . && tsgo -p tsconfig.json`).
+- `bun -e` script with mocked `executeCodeBuffer` + `CodeTool` — verified first markdown `read` result appends the markdown operations hint, the second markdown call does not, and the first Typst call appends the Typst hint.
+- `bun -e` script with mocked `executeCodeBuffer` error result — verified no language hint is appended on error.
+
+*** Artifacts
+- [[file:packages/coding-agent/src/prompts/tools/code-hint-markdown.md]]
+- [[file:packages/coding-agent/src/prompts/tools/code-hint-typst.md]]
+- [[file:crates/pi-code-engine/tests/fixtures/sources/hello.md]]
+- [[file:packages/coding-agent/src/prompts/tools/code.md]]
+
+*** Deviations
+- Direct manual `executeCodeBuffer` verification through the installed `@oh-my-pi/pi-natives` package still resolved the prebuilt addon in this session, so observable markdown/Typst engine behavior was verified via the Rust test suites (`pi-code-engine`, `pi-natives`) and the Bun `CodeTool` scripts above instead of a live workspace N-API call path.
+- Relative to the current Git HEAD in this checkout, the code/test changes for this plan were already present; this execution produced verification evidence and org lifecycle updates, so the commit contains the plan/feature record closure files only.
