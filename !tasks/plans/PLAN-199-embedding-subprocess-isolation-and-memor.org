@@ -1,0 +1,89 @@
+#+TITLE: Embedding subprocess isolation and memory hardening
+#+STATE: DOING
+#+SESSION_ID: 14b703c224e98c9c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-21-31-027Z_14b703c224e98c9c.jsonl]]
+#+CUSTOM_ID: PLAN-199-embedding-subprocess-isolation-and-memor
+
+
+
+
+* Initial Message
+
+╰─ ============================================================                                                                               ─╯
+Bun v1.3.10 (30e609e0) Linux x64
+Linux Kernel v6.18.6 | glibc v2.42
+CPU: sse42 popcnt avx avx2 avx512
+Args: "bun" "/home/user/.local/share/reflex/bun/bin/spell"
+Features: Bun.stderr(2) Bun.stdin(2) Bun.stdout(2) WebSocket(3) abort_signal(33) bunfig dotenv fetch(150) jsc loaders shell(752) spawn(383) transpiler_cache(33) tsconfig(42) tsconfig_paths(15) process_dlopen yaml_parse(80)
+Builtins: "bun:ffi" "bun:main" "bun:wrap" "bun:sqlite" "node:assert/strict" "node:async_hooks" "node:buffer" "node:child_process" "node:crypto" "node:events" "node:fs" "node:fs/promises" "node:http" "node:https" "node:module" "node:net" "node:os" "node:path" "node:process" "node:querystring" "node:readline/promises" "node:stream" "node:stream/promises" "node:timers" "node:tls" "node:tty" "node:url" "node:util" "node:zlib" "node:worker_threads" "ws" "node:inspector" "node:http2"
+Elapsed: 1009641ms | User: 172885ms | Sys: 30341ms
+RSS: 0.02ZB | Peak: 0.66GB | Commit: 0.02ZB | Faults: 14 | Machine: 49.75GB
+
+panic(main thread): Segmentation fault at address 0x983E7000
+oh no: Bun has crashed. This indicates a bug in Bun, not your code.
+
+To send a redacted crash report to Bun's team,
+please file a GitHub issue using the link below:
+
+* Context
+Bun v1.3.10 segfaults (~Segmentation fault at address 0x983E7000~) during normal interactive sessions. Root cause: =fastembed= (ONNX Runtime v2.0.0-rc.11) runs inside the Bun process via NAPI, and the ONNX Runtime's thread pool, memory-mapped I/O, and SIMD operations conflict with Bun's internals. The crash manifests after ~17 minutes, with corrupted RSS display (0.02ZB) indicating memory tracking corruption.
+
+Secondary findings: several unbounded memory growth patterns (cursor provider conversation caches, grep context buffers, job manager retention) contribute to memory pressure in long-running sessions.
+
+** Approach
+1. Isolate ONNX Runtime in a separate subprocess (=pi-embedding-worker= binary)
+2. Replace direct =EmbeddingEngine= usage in =code_graph.rs= with subprocess IPC via stdin/stdout JSONL
+3. Update build system to build and distribute the worker binary
+4. Fix unbounded memory growth in cursor provider, grep, and job manager
+
+** Key Decisions
+- Worker binary is a standalone Rust crate at =crates/pi-embedding-worker/=
+- JSONL protocol over stdin/stdout (not TCP, not Unix socket — simplest and most portable)
+- Worker stays alive for session duration (reuse across calls)
+- Graceful degradation: if worker is unavailable, semantic features disabled, graph/BM25 still work
+- Worker binary build is non-fatal (spell works without semantic features if build fails)
+- Memory caps: 20 conversation cache entries, 50 context lines per grep match, 100 retained jobs
+
+* Verification
+- =cargo build -p pi-embedding-worker= succeeds
+- =bun --cwd=packages/natives run build:native= builds both .node and worker binary
+- =cargo test -p pi-natives= passes (existing code_graph tests)
+- No =EmbeddingEngine= or =OnceLock<EmbeddingEngine>= remains in code_graph.rs
+- Manual test: =code index { semantic: true }= produces vector cache via subprocess
+- Manual test: kill worker binary mid-operation — graceful error, no segfault
+- =bun check:ts= passes (TypeScript type checking)
+- =bun check:rs= passes (cargo clippy)
+
+* Execution Manifest
+
+** Wave 1: Foundation (parallelizable)
+- [[id:FEAT-485-embedding-subprocess-worker-binary]] — Embedding worker binary crate (3h, #A)
+- [[id:BUG-219-cursor-provider-conversation-caches-grow]] — Cursor cache bounds (1h, #B)
+- [[id:BUG-221-grep-context-buffers-grow-unbounded-per]] — Grep context bounds (30m, #B)
+- [[id:BUG-223-asyncjobmanager-retains-completed-jobs-w]] — Job manager retention cap (30m, #C)
+
+** Wave 2: Integration (depends on FEAT-485)
+- [[id:FEAT-486-subprocess-ipc-integration-in-code-graph]] — Subprocess IPC in code_graph.rs (3h, #A)
+- [[id:FEAT-487-build-system-and-distribution-for-embedd]] — Build system integration (1h, #A)
+
+** Total Effort: ~9h
+
+
+** Completion [2026-04-12]
+*** Verification
+- `cargo build -p pi-embedding-worker` (repo root) — passed.
+- `cargo test -p pi-embedding-worker` (repo root) — passed; 3 tests.
+- `bun --cwd=packages/natives run build:native` — passed; installed `packages/natives/native/pi_natives.linux-x64-modern.node` and `packages/natives/native/pi-embedding-worker`.
+- `bun --cwd=packages/natives run embed:native` — passed; regenerated embedded worker metadata.
+- Clean verification worktree at `/tmp/spell-plan199-verify`: `cargo test -p pi-natives --quiet` — passed; 42 tests.
+- Clean verification worktree at `/tmp/spell-plan199-verify`: `PI_EMBEDDING_WORKER=/tmp/spell-plan199-stub-worker.py bun -e 'import { executeCodeGraph } from "./packages/natives/src/code-graph/index.ts"; const result = await executeCodeGraph({ command: "index", root: "/tmp/spell-plan199-semantic", semantic: true }); console.log(result.output);'` — passed; output ended with `Semantic: 3 vectors indexed` and `/tmp/spell-plan199-semantic/.spell/graph/workspace-vectors.bin` was created.
+- Clean verification worktree at `/tmp/spell-plan199-verify`: `PI_EMBEDDING_WORKER=/tmp/spell-plan199-crash-worker.py bun -e 'import { executeCodeGraph } from "./packages/natives/src/code-graph/index.ts"; const result = await executeCodeGraph({ command: "index", root: "/tmp/spell-plan199-semantic", semantic: true }); console.log(result.output);'` — passed; output reported `Embedding worker unavailable: worker exited before sending a response` with no Bun crash.
+- `bun check:ts` (repo root) — passed.
+- `bun check:rs` (repo root) — failed outside PLAN-199 scope. Current failures are in `crates/tree-sitter-org/src/lib.rs` (`clippy::tabs_in_doc_comments`), `crates/pi-typst-surface/src/session.rs` (`clippy::needless_raw_string_hashes`), and `crates/pi-code-engine/build.rs` (`clippy::redundant_closure`, `clippy::collapsible_if`).
+*** Artifacts
+- None.
+*** Deviations
+- Used deterministic stub workers (`/tmp/spell-plan199-stub-worker.py` and `/tmp/spell-plan199-crash-worker.py`) to verify subprocess success and crash-handling paths because the real embedding model download from Hugging Face failed in this environment (`Connection reset by peer`).
+- PLAN-199 remains open because repo-wide `bun check:rs` is currently failing outside the files touched by this plan. No FUP item was created because the blocker is unrelated pre-existing workspace debt, not deferred PLAN-199 scope.
+
+NOTE [2026-04-12]: Committed PLAN-199 implementation with conventional commit `fix(natives): isolate embeddings in worker subprocess`. Plan state remains DOING because repo-wide `bun check:rs` still fails outside PLAN-199 scope.

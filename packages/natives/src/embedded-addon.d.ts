@@ -4,10 +4,15 @@ export interface EmbeddedAddonFile {
     filename: string;
     filePath: string;
 }
+export interface EmbeddedAddonWorker {
+    filename: string;
+    filePath: string;
+}
 export interface EmbeddedAddon {
     platformTag: string;
     version: string;
     files: EmbeddedAddonFile[];
+    worker: EmbeddedAddonWorker | null;
 }
 export declare const embeddedAddon: EmbeddedAddon | null;
 //# sourceMappingURL=embedded-addon.d.ts.map

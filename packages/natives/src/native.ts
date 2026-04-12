@@ -29,6 +29,7 @@ import "./pty/types";
 import "./shell/types";
 import "./text/types";
 import "./work/types";
+import "./typst-surface/types";
 
 export type { NativeBindings, TsFunc } from "./bindings";
 
@@ -155,19 +156,22 @@ function selectEmbeddedAddonFile(): { filename: string; filePath: string } | nul
 	return embeddedAddon.files.find(file => file.variant === "baseline") ?? null;
 }
 
-function maybeExtractEmbeddedAddon(errors: string[]): string | null {
-	if (!isCompiledBinary || !embeddedAddon) return null;
-	if (embeddedAddon.platformTag !== platformTag || embeddedAddon.version !== packageVersion) return null;
+function selectEmbeddedWorkerFile(): { filename: string; filePath: string } | null {
+	if (!embeddedAddon?.worker) return null;
+	return embeddedAddon.worker;
+}
 
-	const selectedEmbeddedFile = selectEmbeddedAddonFile();
-	if (!selectedEmbeddedFile) return null;
-	const targetPath = path.join(versionedDir, selectedEmbeddedFile.filename);
-
+function maybeExtractEmbeddedFile(
+	targetPath: string,
+	sourcePath: string,
+	description: string,
+	errors: string[],
+): string | null {
 	try {
 		fs.mkdirSync(versionedDir, { recursive: true });
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		errors.push(`embedded addon dir: ${message}`);
+		errors.push(`${description} dir: ${message}`);
 		return null;
 	}
 
@@ -176,18 +180,47 @@ function maybeExtractEmbeddedAddon(errors: string[]): string | null {
 	}
 
 	try {
-		const buffer = fs.readFileSync(selectedEmbeddedFile.filePath);
+		const buffer = fs.readFileSync(sourcePath);
 		fs.writeFileSync(targetPath, buffer);
 		return targetPath;
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
-		errors.push(`embedded addon write (${selectedEmbeddedFile.filename}): ${message}`);
+		errors.push(`${description} write (${path.basename(targetPath)}): ${message}`);
 		return null;
 	}
 }
 
+function maybeExtractEmbeddedAddon(errors: string[]): string | null {
+	if (!isCompiledBinary || !embeddedAddon) return null;
+	if (embeddedAddon.platformTag !== platformTag || embeddedAddon.version !== packageVersion) return null;
+
+	const selectedEmbeddedFile = selectEmbeddedAddonFile();
+	if (!selectedEmbeddedFile) return null;
+	return maybeExtractEmbeddedFile(
+		path.join(versionedDir, selectedEmbeddedFile.filename),
+		selectedEmbeddedFile.filePath,
+		"embedded addon",
+		errors,
+	);
+}
+
+function maybeExtractEmbeddedWorker(errors: string[]): string | null {
+	if (!isCompiledBinary || !embeddedAddon?.worker) return null;
+	if (embeddedAddon.platformTag !== platformTag || embeddedAddon.version !== packageVersion) return null;
+
+	const selectedEmbeddedWorker = selectEmbeddedWorkerFile();
+	if (!selectedEmbeddedWorker) return null;
+	return maybeExtractEmbeddedFile(
+		path.join(versionedDir, selectedEmbeddedWorker.filename),
+		selectedEmbeddedWorker.filePath,
+		"embedded worker",
+		errors,
+	);
+}
+
 function loadNative(): NativeBindings {
 	const errors: string[] = [];
+	logger.time("native:maybeExtractEmbeddedWorker", () => maybeExtractEmbeddedWorker(errors));
 	const embeddedCandidate = logger.time("native:maybeExtractEmbeddedAddon", () => maybeExtractEmbeddedAddon(errors));
 	const runtimeCandidates = embeddedCandidate ? [embeddedCandidate, ...dedupedCandidates] : dedupedCandidates;
 	for (const candidate of runtimeCandidates) {
@@ -220,6 +253,7 @@ function loadNative(): NativeBindings {
 	let helpMessage: string;
 	if (isCompiledBinary) {
 		const expectedPaths = addonFilenames.map(filename => `  ${path.join(versionedDir, filename)}`).join("\n");
+		const workerHint = embeddedAddon?.worker ? `  ${path.join(versionedDir, embeddedAddon.worker.filename)}` : null;
 		const downloadHints = addonFilenames
 			.map(filename => {
 				const downloadUrl = `https://github.com/can1357/oh-my-pi/releases/latest/download/${filename}`;
@@ -228,7 +262,7 @@ function loadNative(): NativeBindings {
 			})
 			.join("\n");
 		helpMessage =
-			`The compiled binary should extract one of:\n${expectedPaths}\n\n` +
+			`The compiled binary should extract one of:\n${expectedPaths}${workerHint ? `\n\nAnd the embedding worker at:\n${workerHint}` : ""}\n\n` +
 			`If missing, delete ${versionedDir} and re-run, or download manually:\n${downloadHints}`;
 	} else {
 		helpMessage =

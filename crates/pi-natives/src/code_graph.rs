@@ -5,7 +5,6 @@ use std::{
 	hash::{Hash, Hasher},
 	io::{BufReader, BufWriter},
 	path::{Path, PathBuf},
-	sync::OnceLock,
 };
 
 use napi::bindgen_prelude::*;
@@ -15,30 +14,16 @@ use pi_code_graph::{
 	GraphContextResult, GraphDeadCodeItem, GraphDepsResult, GraphFlowResult, GraphImpactResult,
 	GraphNodeSummary, GraphSearchMatch, GraphStatus, GraphTraversalLevel, LanguageRegistry,
 };
-use pi_code_vectors::EmbeddingEngine;
 
-use crate::task::{self, CancelToken};
+use crate::{
+	embedding_worker,
+	task::{self, CancelToken},
+};
 
 const DEFAULT_DEPTH: u32 = 3;
 const DEFAULT_LIMIT: u32 = 10;
 const CACHE_NAME: &str = "workspace";
 const VECTORS_CACHE_NAME: &str = "workspace-vectors";
-
-static EMBEDDING_ENGINE: OnceLock<EmbeddingEngine> = OnceLock::new();
-
-fn get_or_init_engine() -> napi::Result<&'static EmbeddingEngine> {
-	if let Some(engine) = EMBEDDING_ENGINE.get() {
-		return Ok(engine);
-	}
-	let engine = EmbeddingEngine::new(false)
-		.map_err(|e| Error::from_reason(format!("Failed to load embedding model: {e}")))?;
-	// Race is benign: if two threads call simultaneously, one set wins, the other
-	// just gets back the winner's engine via the subsequent .get().
-	let _ = EMBEDDING_ENGINE.set(engine);
-	EMBEDDING_ENGINE
-		.get()
-		.ok_or_else(|| Error::from_reason("Engine initialization failed"))
-}
 
 #[napi(object)]
 pub struct CodeGraphOptions<'env> {
@@ -237,11 +222,7 @@ fn run_code_graph(
 				match load_vector_cache(&cache, graph_fingerprint_hash(&cache)) {
 					VectorCacheState::Fresh(persisted) => {
 						let vector_count = persisted.entries.len();
-						match get_or_init_engine().and_then(|engine| {
-							engine
-								.embed_query(query)
-								.map_err(|error| Error::from_reason(error.to_string()))
-						}) {
+						match embedding_worker::embed_query(query) {
 							Ok(query_vector) => {
 								semantic_status =
 									Some(format!("hybrid search using {vector_count} cached vectors"));
@@ -358,17 +339,13 @@ fn render_status(root: &Path, builder: &CodeGraphBuilder) -> napi::Result<CodeGr
 
 /// Build the semantic vector index from the code graph.
 fn build_semantic_index(graph: &CodeGraph, cache: &CacheStore) -> napi::Result<usize> {
-	let engine = EmbeddingEngine::new(true)
-		.map_err(|e| Error::from_reason(format!("Embedding model init failed: {e}")))?;
 	let chunks = pi_code_graph::extract_chunks(graph.persisted(), 30)
 		.map_err(|e| Error::from_reason(format!("Chunking failed: {e}")))?;
 	if chunks.is_empty() {
 		return Ok(0);
 	}
 	let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
-	let vectors = engine
-		.embed_batch(&texts, None)
-		.map_err(|e| Error::from_reason(format!("Embedding failed: {e}")))?;
+	let vectors = embedding_worker::embed_batch(&texts, None)?;
 	let dimensions = vectors.first().map_or(768, Vec::len);
 	let entries: Vec<pi_code_vectors::VectorEntry> = chunks
 		.iter()
@@ -380,8 +357,6 @@ fn build_semantic_index(graph: &CodeGraph, cache: &CacheStore) -> napi::Result<u
 	let fingerprint_hash = compute_fingerprint_hash(cache);
 	let persisted = vector_index.to_persisted("jina-embeddings-v2-base-code", fingerprint_hash);
 	save_vector_cache(cache, &persisted)?;
-	// Prime the engine cache for subsequent search queries.
-	let _ = EMBEDDING_ENGINE.set(engine);
 	Ok(count)
 }
 
@@ -611,9 +586,11 @@ fn append_levels(sections: &mut Vec<String>, levels: &[GraphTraversalLevel], lim
 
 #[cfg(test)]
 mod tests {
-	use std::{fs, path::PathBuf};
+	use std::{env, fs, path::PathBuf, sync::Mutex};
 
 	use super::*;
+
+	static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 	fn fixture_root(name: &str) -> PathBuf {
 		let unique = std::time::SystemTime::now()
@@ -689,6 +666,49 @@ mod tests {
 			"error should explain why semantic search failed: {error}"
 		);
 
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn semantic_index_reports_worker_override_errors_without_crashing() {
+		let _guard = TEST_ENV_LOCK
+			.lock()
+			.expect("test lock should not be poisoned");
+		let root = fixture_root("missing-worker");
+		let missing_worker = root.join("pi-embedding-worker-missing");
+		let original = env::var_os("PI_EMBEDDING_WORKER");
+		unsafe {
+			env::set_var("PI_EMBEDDING_WORKER", &missing_worker);
+		}
+		crate::embedding_worker::reset_for_tests();
+
+		let result = run_fixture_command(&root, "index", None, Some(true))
+			.expect("graph index should still succeed when semantic indexing fails");
+
+		assert!(
+			result.output.contains("Embedding worker unavailable:"),
+			"index output should surface worker failure: {}",
+			result.output
+		);
+		assert!(
+			result.output.contains("PI_EMBEDDING_WORKER points to"),
+			"index output should explain override failure: {}",
+			result.output
+		);
+		assert!(
+			!root.join(".spell/graph/workspace-vectors.bin").exists(),
+			"failed semantic indexing should not create a vector cache"
+		);
+
+		match original {
+			Some(value) => unsafe {
+				env::set_var("PI_EMBEDDING_WORKER", value);
+			},
+			None => unsafe {
+				env::remove_var("PI_EMBEDDING_WORKER");
+			},
+		}
+		crate::embedding_worker::reset_for_tests();
 		let _ = fs::remove_dir_all(root);
 	}
 

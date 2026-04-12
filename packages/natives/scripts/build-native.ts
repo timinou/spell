@@ -80,6 +80,7 @@ function resolveEffectiveVariant(): X64Variant | null {
 
 const effectiveVariant = resolveEffectiveVariant();
 const variantSuffix = effectiveVariant ? `-${effectiveVariant}` : "";
+const exeSuffix = process.platform === "win32" ? ".exe" : "";
 
 // Default to native CPU optimization for local builds; explicit variants use fixed ISA targets.
 if (!isCrossCompile && !Bun.env.RUSTFLAGS) {
@@ -136,15 +137,27 @@ async function installBinary(src: string, dest: string): Promise<void> {
 	}
 }
 
-const cargoArgs = ["build"];
-if (!isDev) cargoArgs.push("--release");
-if (crossTarget) cargoArgs.push("--target", crossTarget);
+async function findBuiltBinary(profileDirs: string[], names: string[]): Promise<string | null> {
+	for (const dir of profileDirs) {
+		for (const name of names) {
+			const fullPath = path.join(dir, name);
+			try {
+				await fs.stat(fullPath);
+				return fullPath;
+			} catch (err) {
+				if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+			}
+		}
+	}
+	return null;
+}
 
-console.log(`Building pi-natives for ${targetPlatform}-${targetArch}${variantSuffix}${isDev ? " (debug)" : ""}…`);
-const buildResult = await $`cargo ${cargoArgs}`.cwd(rustDir).nothrow();
-if (buildResult.exitCode !== 0) {
-	const stderr = buildResult.stderr?.toString("utf-8") ?? "";
-	throw new Error(`cargo build --release failed${stderr ? `:\n${stderr}` : ""}`);
+async function buildCargoPackage(packageName: string): Promise<{ exitCode: number; stderr: string }> {
+	const cargoArgs = ["build", "-p", packageName];
+	if (!isDev) cargoArgs.push("--release");
+	if (crossTarget) cargoArgs.push("--target", crossTarget);
+	const result = await $`cargo ${cargoArgs}`.cwd(repoRoot).nothrow();
+	return { exitCode: result.exitCode, stderr: result.stderr?.toString("utf-8") ?? "" };
 }
 
 const profile = isDev ? "debug" : "release";
@@ -161,36 +174,57 @@ const profileDirs = targetRoots.flatMap(root => {
 	return [path.join(root, profile)];
 });
 
-const libraryNames = ["libpi_natives.so", "libpi_natives.dylib", "pi_natives.dll", "libpi_natives.dll"];
+const addonNames = ["libpi_natives.so", "libpi_natives.dylib", "pi_natives.dll", "libpi_natives.dll"];
+const workerNames = [
+	`pi-embedding-worker${exeSuffix}`,
+	`pi_embedding_worker${exeSuffix}`,
+	`pi-embedding-worker`,
+	`pi_embedding_worker`,
+];
 
-let sourcePath: string | null = null;
-for (const dir of profileDirs) {
-	for (const name of libraryNames) {
-		const fullPath = path.join(dir, name);
-		try {
-			await fs.stat(fullPath);
-			sourcePath = fullPath;
-			break;
-		} catch (err) {
-			if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-		}
-	}
-	if (sourcePath) break;
+console.log(`Building pi-natives for ${targetPlatform}-${targetArch}${variantSuffix}${isDev ? " (debug)" : ""}…`);
+const addonBuild = await buildCargoPackage("pi-natives");
+if (addonBuild.exitCode !== 0) {
+	throw new Error(`cargo build -p pi-natives failed${addonBuild.stderr ? `:\n${addonBuild.stderr}` : ""}`);
 }
 
 await fs.mkdir(nativeDir, { recursive: true });
 await cleanupStaleTemps(nativeDir);
 
+const sourcePath = await findBuiltBinary(profileDirs, addonNames);
 if (!sourcePath) {
 	const checked = profileDirs.map(d => `  - ${d}`).join("\n");
 	throw new Error(`Built library not found. Checked:\n${checked}`);
 }
 
-console.log(`Found: ${sourcePath}`);
+console.log(`Found addon: ${sourcePath}`);
 const taggedPath = isDev
 	? path.join(nativeDir, "pi_natives.dev.node")
 	: path.join(nativeDir, `pi_natives.${targetPlatform}-${targetArch}${variantSuffix}.node`);
-console.log(`Installing: ${taggedPath}`);
+console.log(`Installing addon: ${taggedPath}`);
 await installBinary(sourcePath, taggedPath);
+
+console.log(`Building pi-embedding-worker for ${targetPlatform}-${targetArch}${isDev ? " (debug)" : ""}…`);
+const workerBuild = await buildCargoPackage("pi-embedding-worker");
+if (workerBuild.exitCode !== 0) {
+	console.warn(
+		`Warning: cargo build -p pi-embedding-worker failed; addon install will continue.${workerBuild.stderr ? `\n${workerBuild.stderr}` : ""}`,
+	);
+	console.log("Build complete.");
+	process.exit(0);
+}
+
+const workerSourcePath = await findBuiltBinary(profileDirs, workerNames);
+if (!workerSourcePath) {
+	console.warn(
+		`Warning: pi-embedding-worker built successfully, but no binary was found in:\n${profileDirs.map(d => `  - ${d}`).join("\n")}`,
+	);
+	console.log("Build complete.");
+	process.exit(0);
+}
+
+const workerTaggedPath = path.join(nativeDir, `pi-embedding-worker${exeSuffix}`);
+console.log(`Installing worker: ${workerTaggedPath}`);
+await installBinary(workerSourcePath, workerTaggedPath);
 
 console.log("Build complete.");

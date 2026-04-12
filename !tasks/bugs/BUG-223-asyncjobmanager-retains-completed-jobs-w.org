@@ -1,0 +1,80 @@
+#+TITLE: AsyncJobManager retains completed jobs without hard cap
+#+STATE: DONE
+#+SESSION_ID: 14b703c224e98c9c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-21-31-027Z_14b703c224e98c9c.jsonl]]
+#+CUSTOM_ID: BUG-223-asyncjobmanager-retains-completed-jobs-w
+#+EFFORT: 30m
+#+PRIORITY: #C
+#+LAYER: coding-agent
+
+NOTE [2026-04-12]: Added hard caps for retained jobs and pending deliveries; verification captured in PLAN-199 completion report.
+
+* Initial Message
+
+╰─ ============================================================                                                                               ─╯
+Bun v1.3.10 (30e609e0) Linux x64
+Linux Kernel v6.18.6 | glibc v2.42
+CPU: sse42 popcnt avx avx2 avx512
+Args: "bun" "/home/user/.local/share/reflex/bun/bin/spell"
+Features: Bun.stderr(2) Bun.stdin(2) Bun.stdout(2) WebSocket(3) abort_signal(33) bunfig dotenv fetch(150) jsc loaders shell(752) spawn(383) transpiler_cache(33) tsconfig(42) tsconfig_paths(15) process_dlopen yaml_parse(80)
+Builtins: "bun:ffi" "bun:main" "bun:wrap" "bun:sqlite" "node:assert/strict" "node:async_hooks" "node:buffer" "node:child_process" "node:crypto" "node:events" "node:fs" "node:fs/promises" "node:http" "node:https" "node:module" "node:net" "node:os" "node:path" "node:process" "node:querystring" "node:readline/promises" "node:stream" "node:stream/promises" "node:timers" "node:tls" "node:tty" "node:url" "node:util" "node:zlib" "node:worker_threads" "ws" "node:inspector" "node:http2"
+Elapsed: 1009641ms | User: 172885ms | Sys: 30341ms
+RSS: 0.02ZB | Peak: 0.66GB | Commit: 0.02ZB | Faults: 14 | Machine: 49.75GB
+
+panic(main thread): Segmentation fault at address 0x983E7000
+oh no: Bun has crashed. This indicates a bug in Bun, not your code.
+
+To send a redacted crash report to Bun's team,
+please file a GitHub issue using the link below:
+
+* Problem
+In =packages/coding-agent/src/async/job-manager.ts=, the =AsyncJobManager= stores all completed jobs in =#jobs Map= until eviction timers fire. If =retentionMs= is short but many jobs complete rapidly, the map can grow large. The =#deliveries= array also grows if delivery callbacks fail.
+
+* Solution
+Add a hard cap on retained completed jobs. When the cap is exceeded, evict oldest completed jobs immediately (without waiting for the timer).
+
+* Design Decisions
+- Max 100 retained completed jobs (generous for any realistic session)
+- When a new job completes and completed count > 100, evict oldest completed job immediately
+- =#deliveries= array capped at 200 entries (drop oldest if exceeded)
+- These are safety limits for pathological cases, not expected to trigger in normal use
+
+* Files to Modify
+- =packages/coding-agent/src/async/job-manager.ts= — Add max retention cap
+
+* Specific Change
+Read the file to find where jobs are marked complete (likely a =complete()= or status update method). After adding a completed job, check total completed count and evict if over limit.
+
+#+begin_src typescript
+const MAX_RETAINED_JOBS = 100;
+const MAX_PENDING_DELIVERIES = 200;
+
+// After marking a job complete:
+private pruneCompletedJobs(): void {
+    const completed = [...this.#jobs.entries()]
+        .filter(([, job]) => job.status === "completed" || job.status === "failed");
+    if (completed.length > MAX_RETAINED_JOBS) {
+        // Sort by completion time, evict oldest
+        const toEvict = completed.slice(0, completed.length - MAX_RETAINED_JOBS);
+        for (const [id] of toEvict) {
+            this.#jobs.delete(id);
+            const timer = this.#evictionTimers.get(id);
+            if (timer) { clearTimeout(timer); this.#evictionTimers.delete(id); }
+        }
+    }
+    // Cap deliveries
+    if (this.#deliveries.length > MAX_PENDING_DELIVERIES) {
+        this.#deliveries.splice(0, this.#deliveries.length - MAX_PENDING_DELIVERIES);
+    }
+}
+#+end_src
+
+* Acceptance Criteria
+- Completed jobs never exceed 100 in the =#jobs= Map
+- Deliveries never exceed 200 in the =#deliveries= array
+- Existing job manager functionality unchanged
+- No test regressions
+
+* Testing
+- If job manager tests exist, verify they still pass
+- This is a safety limit change — minimal test surface

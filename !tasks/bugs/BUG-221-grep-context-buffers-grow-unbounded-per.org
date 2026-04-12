@@ -1,0 +1,66 @@
+#+TITLE: Grep context buffers grow unbounded per match
+#+STATE: DONE
+#+SESSION_ID: 14b703c224e98c9c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-21-31-027Z_14b703c224e98c9c.jsonl]]
+#+CUSTOM_ID: BUG-221-grep-context-buffers-grow-unbounded-per
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: native
+
+NOTE [2026-04-12]: Clamped grep context lines to 50 and added regression coverage; verification captured in PLAN-199 completion report.
+
+* Initial Message
+
+╰─ ============================================================                                                                               ─╯
+Bun v1.3.10 (30e609e0) Linux x64
+Linux Kernel v6.18.6 | glibc v2.42
+CPU: sse42 popcnt avx avx2 avx512
+Args: "bun" "/home/user/.local/share/reflex/bun/bin/spell"
+Features: Bun.stderr(2) Bun.stdin(2) Bun.stdout(2) WebSocket(3) abort_signal(33) bunfig dotenv fetch(150) jsc loaders shell(752) spawn(383) transpiler_cache(33) tsconfig(42) tsconfig_paths(15) process_dlopen yaml_parse(80)
+Builtins: "bun:ffi" "bun:main" "bun:wrap" "bun:sqlite" "node:assert/strict" "node:async_hooks" "node:buffer" "node:child_process" "node:crypto" "node:events" "node:fs" "node:fs/promises" "node:http" "node:https" "node:module" "node:net" "node:os" "node:path" "node:process" "node:querystring" "node:readline/promises" "node:stream" "node:stream/promises" "node:timers" "node:tls" "node:tty" "node:url" "node:util" "node:zlib" "node:worker_threads" "ws" "node:inspector" "node:http2"
+Elapsed: 1009641ms | User: 172885ms | Sys: 30341ms
+RSS: 0.02ZB | Peak: 0.66GB | Commit: 0.02ZB | Faults: 14 | Machine: 49.75GB
+
+panic(main thread): Segmentation fault at address 0x983E7000
+oh no: Bun has crashed. This indicates a bug in Bun, not your code.
+
+To send a redacted crash report to Bun's team,
+please file a GitHub issue using the link below:
+
+* Problem
+In =crates/pi-natives/src/grep.rs=, each =CollectedMatch= stores context lines in =SmallVec<[ContextLine; 8]>=. While the SmallVec starts inline (8 elements), it can grow to heap allocation without bound if large context windows are requested. For a search with 10k+ matches each with 50+ context lines, this can consume gigabytes.
+
+* Solution
+Cap the maximum context lines per match. The grep module already has =max_count= for limiting total matches, but there's no cap on context size per match.
+
+* Design Decisions
+- Hard cap of 50 lines for context_before and context_after per match
+- This is a safety limit, not a user-facing config — most grep callers use 3-5 context lines
+- If the caller requests more than 50 via the JS API, silently cap to 50
+- Also validate context_before/context_after parameters at the NAPI boundary
+
+* Files to Modify
+- =crates/pi-natives/src/grep.rs= — Add max context validation in =MatchCollector= or the search parameters
+
+* Specific Change
+In the function that sets up context_before/context_after counts (likely where =SearchParams= is constructed from the NAPI options), clamp the values:
+
+#+begin_src rust
+const MAX_CONTEXT_LINES: usize = 50;
+
+// When constructing SearchParams from JS options:
+let context_before = options.context_before.unwrap_or(0).min(MAX_CONTEXT_LINES);
+let context_after = options.context_after.unwrap_or(0).min(MAX_CONTEXT_LINES);
+#+end_src
+
+Find the exact location by searching for where =context_before= and =context_after= are parsed from the NAPI options object. The JS-side type is in =packages/natives/src/grep/types.ts=.
+
+* Acceptance Criteria
+- Context lines per match never exceed 50 (before + after independently capped)
+- Existing grep functionality unchanged for normal use (3-5 context lines)
+- =cargo test -p pi-natives= passes (existing grep tests)
+- Memory usage is bounded for pathological inputs
+
+* Testing
+- Existing grep tests in =crates/pi-natives/src/grep.rs= should pass unchanged
+- No new tests needed (this is a safety clamp, not user-facing behavior change)

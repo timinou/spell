@@ -15,4 +15,5 @@ export * from "./ps";
 export * from "./pty";
 export * from "./shell";
 export * from "./text";
+export * from "./typst-surface";
 export * from "./work";

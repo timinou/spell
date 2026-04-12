@@ -1,0 +1,91 @@
+#+TITLE: Cursor provider conversation caches grow unbounded
+#+STATE: DONE
+#+SESSION_ID: 14b703c224e98c9c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-21-31-027Z_14b703c224e98c9c.jsonl]]
+#+CUSTOM_ID: BUG-219-cursor-provider-conversation-caches-grow
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: ai
+
+NOTE [2026-04-12]: Bounded Cursor conversation caches to 20 aligned entries; verification captured in PLAN-199 completion report.
+
+* Initial Message
+
+╰─ ============================================================                                                                               ─╯
+Bun v1.3.10 (30e609e0) Linux x64
+Linux Kernel v6.18.6 | glibc v2.42
+CPU: sse42 popcnt avx avx2 avx512
+Args: "bun" "/home/user/.local/share/reflex/bun/bin/spell"
+Features: Bun.stderr(2) Bun.stdin(2) Bun.stdout(2) WebSocket(3) abort_signal(33) bunfig dotenv fetch(150) jsc loaders shell(752) spawn(383) transpiler_cache(33) tsconfig(42) tsconfig_paths(15) process_dlopen yaml_parse(80)
+Builtins: "bun:ffi" "bun:main" "bun:wrap" "bun:sqlite" "node:assert/strict" "node:async_hooks" "node:buffer" "node:child_process" "node:crypto" "node:events" "node:fs" "node:fs/promises" "node:http" "node:https" "node:module" "node:net" "node:os" "node:path" "node:process" "node:querystring" "node:readline/promises" "node:stream" "node:stream/promises" "node:timers" "node:tls" "node:tty" "node:url" "node:util" "node:zlib" "node:worker_threads" "ws" "node:inspector" "node:http2"
+Elapsed: 1009641ms | User: 172885ms | Sys: 30341ms
+RSS: 0.02ZB | Peak: 0.66GB | Commit: 0.02ZB | Faults: 14 | Machine: 49.75GB
+
+panic(main thread): Segmentation fault at address 0x983E7000
+oh no: Bun has crashed. This indicates a bug in Bun, not your code.
+
+To send a redacted crash report to Bun's team,
+please file a GitHub issue using the link below:
+
+* Problem
+In =packages/ai/src/providers/cursor.ts= (lines 128-129), two module-level Maps grow indefinitely:
+
+#+begin_src typescript
+const conversationStateCache = new Map<string, ConversationStateStructure>();
+const conversationBlobStores = new Map<string, Map<string, Uint8Array>>();
+#+end_src
+
+Each unique =conversationId= adds entries that are never evicted. In long-running sessions with conversation branching or tool testing, this accumulates hundreds of MB. There is no TTL, no max size, and no cleanup on session end.
+
+* Solution
+Add LRU-style eviction with a maximum cache size. When the cache exceeds the limit, evict the oldest entries.
+
+* Design Decisions
+- Max 20 conversation states cached (each state can be large with protobuf data)
+- Max 20 blob stores cached
+- Use simple eviction: when inserting a new entry and size > max, delete the oldest entry (first key in Map iteration order, since Map preserves insertion order)
+- No external LRU dependency — use Map's insertion order + manual eviction
+- When evicting a conversation state, also evict its corresponding blob store (and vice versa)
+
+* Files to Modify
+- =packages/ai/src/providers/cursor.ts= — Add eviction logic to the cache set operations
+
+* Specific Changes
+
+Add a helper function:
+#+begin_src typescript
+const MAX_CONVERSATION_CACHE = 20;
+
+function evictOldest<K, V>(map: Map<K, V>, maxSize: number): void {
+    while (map.size > maxSize) {
+        const oldest = map.keys().next().value;
+        if (oldest !== undefined) {
+            map.delete(oldest);
+        } else {
+            break;
+        }
+    }
+}
+#+end_src
+
+After each =conversationStateCache.set()= call, add =evictOldest(conversationStateCache, MAX_CONVERSATION_CACHE)=.
+After each =conversationBlobStores.set()= call, add =evictOldest(conversationBlobStores, MAX_CONVERSATION_CACHE)=.
+
+Also add cleanup of the matching cache when evicting from either:
+#+begin_src typescript
+function evictConversationCaches(): void {
+    evictOldest(conversationStateCache, MAX_CONVERSATION_CACHE);
+    evictOldest(conversationBlobStores, MAX_CONVERSATION_CACHE);
+}
+#+end_src
+
+* Acceptance Criteria
+- =conversationStateCache.size= never exceeds 20
+- =conversationBlobStores.size= never exceeds 20
+- Existing Cursor provider functionality is unchanged
+- No test regressions
+
+* Testing
+- This is a straightforward bounded-cache change in a provider module
+- If cursor provider tests exist, verify they still pass
+- Manual verification: long-running session does not accumulate conversation state memory

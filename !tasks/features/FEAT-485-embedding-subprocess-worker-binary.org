@@ -1,0 +1,133 @@
+#+TITLE: Embedding subprocess worker binary
+#+STATE: DONE
+#+SESSION_ID: 14b703c224e98c9c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-21-31-027Z_14b703c224e98c9c.jsonl]]
+#+CUSTOM_ID: FEAT-485-embedding-subprocess-worker-binary
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: native
+
+NOTE [2026-04-12]: Implemented pi-embedding-worker crate with JSONL stdin/stdout protocol and unit tests; verification captured in PLAN-199 completion report.
+
+* Initial Message
+
+╰─ ============================================================                                                                               ─╯
+Bun v1.3.10 (30e609e0) Linux x64
+Linux Kernel v6.18.6 | glibc v2.42
+CPU: sse42 popcnt avx avx2 avx512
+Args: "bun" "/home/user/.local/share/reflex/bun/bin/spell"
+Features: Bun.stderr(2) Bun.stdin(2) Bun.stdout(2) WebSocket(3) abort_signal(33) bunfig dotenv fetch(150) jsc loaders shell(752) spawn(383) transpiler_cache(33) tsconfig(42) tsconfig_paths(15) process_dlopen yaml_parse(80)
+Builtins: "bun:ffi" "bun:main" "bun:wrap" "bun:sqlite" "node:assert/strict" "node:async_hooks" "node:buffer" "node:child_process" "node:crypto" "node:events" "node:fs" "node:fs/promises" "node:http" "node:https" "node:module" "node:net" "node:os" "node:path" "node:process" "node:querystring" "node:readline/promises" "node:stream" "node:stream/promises" "node:timers" "node:tls" "node:tty" "node:url" "node:util" "node:zlib" "node:worker_threads" "ws" "node:inspector" "node:http2"
+Elapsed: 1009641ms | User: 172885ms | Sys: 30341ms
+RSS: 0.02ZB | Peak: 0.66GB | Commit: 0.02ZB | Faults: 14 | Machine: 49.75GB
+
+panic(main thread): Segmentation fault at address 0x983E7000
+oh no: Bun has crashed. This indicates a bug in Bun, not your code.
+
+To send a redacted crash report to Bun's team,
+please file a GitHub issue using the link below:
+
+* Problem
+Running =fastembed= (ONNX Runtime) inside the Bun process via NAPI causes segfaults. The ONNX Runtime creates its own thread pool, does memory-mapped I/O, and runs SIMD operations that collide with Bun's internals. This manifests as ~Segmentation fault at address 0x983E7000~ after ~17 minutes of session runtime. Documented Bun issue: https://github.com/oven-sh/bun/issues/19802
+
+* Solution
+Create a standalone Rust binary =pi-embedding-worker= that encapsulates all fastembed/ONNX Runtime operations in a separate process. The binary communicates via stdin/stdout JSONL protocol.
+
+* Design Decisions
+- Binary crate at =crates/pi-embedding-worker/=
+- Links against =pi-code-vectors= (which depends on fastembed + ort)
+- Single-threaded: reads JSON commands from stdin, processes, writes JSON responses to stdout
+- Stays alive between calls (long-lived subprocess for session reuse)
+- Model download (~500MB jina-embeddings-v2-base-code) happens in this process, not Bun
+- Progress output goes to stderr (not stdout, which is for protocol messages)
+
+* JSONL Protocol
+#+begin_example
+# Initialize (triggers model download on first run)
+stdin:  {"cmd":"init","show_progress":true}
+stdout: {"ok":true}
+
+# Batch embed documents
+stdin:  {"cmd":"embed_batch","texts":["fn hello()...","class Foo..."],"batch_size":null}
+stdout: {"ok":true,"vectors":[[0.1,0.2,...],[0.3,0.4,...]]}
+
+# Single query embed
+stdin:  {"cmd":"embed_query","text":"find rate limiting"}
+stdout: {"ok":true,"vector":[0.1,0.2,...]}
+
+# Error response
+stdout: {"ok":false,"error":"Failed to load model: ..."}
+#+end_example
+
+* Implementation
+
+** Create crate structure
+- =crates/pi-embedding-worker/Cargo.toml= with dependencies on =pi-code-vectors=, =serde=, =serde_json=
+- =crates/pi-embedding-worker/src/main.rs= with stdin reader loop
+
+** main.rs structure
+#+begin_src rust
+use std::io::{self, BufRead, Write};
+use pi_code_vectors::EmbeddingEngine;
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize)]
+#[serde(tag = "cmd")]
+enum Command {
+    #[serde(rename = "init")]
+    Init { show_progress: Option<bool> },
+    #[serde(rename = "embed_batch")]
+    EmbedBatch { texts: Vec<String>, batch_size: Option<usize> },
+    #[serde(rename = "embed_query")]
+    EmbedQuery { text: String },
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Response {
+    Ok(OkResponse),
+    Err(ErrResponse),
+}
+
+#[derive(Serialize)]
+struct OkResponse { ok: bool, #[serde(flatten)] payload: Payload }
+
+#[derive(Serialize)]
+struct ErrResponse { ok: bool, error: String }
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Payload {
+    Empty,
+    Vectors { vectors: Vec<Vec<f32>> },
+    Vector { vector: Vec<f32> },
+}
+#+end_src
+
+** Read loop
+- Read one JSON line from stdin per iteration
+- Parse into Command enum
+- Lazily initialize EmbeddingEngine on first embed call (or explicit init)
+- Write JSON response line to stdout
+- Flush stdout after each response
+- Exit cleanly on stdin EOF or parse error
+
+** Error handling
+- All panics caught via =std::panic::catch_unwind= on the main loop
+- ONNX Runtime errors converted to error responses, not panics
+- If engine init fails, return error and allow retry on next command
+
+* Acceptance Criteria
+- =cargo build -p pi-embedding-worker= produces a binary
+- Binary reads JSONL from stdin, writes JSONL to stdout
+- =init= command succeeds if model is cached, returns error message if download fails
+- =embed_batch= returns correct number of 768-dim vectors
+- =embed_query= returns single 768-dim vector
+- Invalid JSON input returns error response (does not crash)
+- Binary exits cleanly on stdin EOF
+
+* Testing
+- Unit tests in =main.rs= for Command deserialization and Response serialization
+- Integration test: spawn binary, send init + embed_query, verify 768-dim response (requires model; mark =#[ignore]= like existing fastembed tests)
+- Edge case: malformed JSON input returns error, does not crash
+- Edge case: embed before init auto-initializes

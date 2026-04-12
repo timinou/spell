@@ -461,15 +461,24 @@ fn matches_type_filter(path: &Path, filter: &TypeFilter) -> bool {
 	filter.match_ext(ext)
 }
 
+const MAX_CONTEXT_LINES: u32 = 50;
+
+fn clamp_context_lines(value: u32) -> u32 {
+	value.min(MAX_CONTEXT_LINES)
+}
+
 fn resolve_context(
 	context: Option<u32>,
 	context_before: Option<u32>,
 	context_after: Option<u32>,
 ) -> (u32, u32) {
 	if context_before.is_some() || context_after.is_some() {
-		(context_before.unwrap_or(0), context_after.unwrap_or(0))
+		(
+			clamp_context_lines(context_before.unwrap_or(0)),
+			clamp_context_lines(context_after.unwrap_or(0)),
+		)
 	} else {
-		let value = context.unwrap_or(0);
+		let value = clamp_context_lines(context.unwrap_or(0));
 		(value, value)
 	}
 }
@@ -745,7 +754,7 @@ fn sanitize_braces(pattern: &str) -> Cow<'_, str> {
 
 #[cfg(test)]
 mod tests {
-	use super::sanitize_braces;
+	use super::{resolve_context, sanitize_braces};
 
 	#[test]
 	fn preserves_unicode_property_escapes() {
@@ -770,6 +779,13 @@ mod tests {
 	#[test]
 	fn preserves_valid_quantifiers() {
 		assert_eq!(sanitize_braces("a{2,4}").as_ref(), "a{2,4}");
+	}
+
+	#[test]
+	fn clamps_context_resolution_to_fifty_lines() {
+		assert_eq!(resolve_context(Some(99), None, None), (50, 50));
+		assert_eq!(resolve_context(None, Some(80), Some(3)), (50, 3));
+		assert_eq!(resolve_context(None, Some(80), None), (50, 0));
 	}
 }
 fn build_matcher(

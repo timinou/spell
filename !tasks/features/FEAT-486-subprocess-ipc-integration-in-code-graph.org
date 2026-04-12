@@ -1,0 +1,143 @@
+#+TITLE: Subprocess IPC integration in code_graphrs
+#+STATE: DONE
+#+SESSION_ID: 14b703c224e98c9c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-21-31-027Z_14b703c224e98c9c.jsonl]]
+#+CUSTOM_ID: FEAT-486-subprocess-ipc-integration-in-code-graph
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: native
+#+DEPENDS: FEAT-485-embedding-subprocess-worker-binary
+
+NOTE [2026-04-12]: Replaced in-process embedding with worker subprocess IPC plus graceful-failure regression coverage; verification captured in PLAN-199 completion report.
+
+* Initial Message
+
+╰─ ============================================================                                                                               ─╯
+Bun v1.3.10 (30e609e0) Linux x64
+Linux Kernel v6.18.6 | glibc v2.42
+CPU: sse42 popcnt avx avx2 avx512
+Args: "bun" "/home/user/.local/share/reflex/bun/bin/spell"
+Features: Bun.stderr(2) Bun.stdin(2) Bun.stdout(2) WebSocket(3) abort_signal(33) bunfig dotenv fetch(150) jsc loaders shell(752) spawn(383) transpiler_cache(33) tsconfig(42) tsconfig_paths(15) process_dlopen yaml_parse(80)
+Builtins: "bun:ffi" "bun:main" "bun:wrap" "bun:sqlite" "node:assert/strict" "node:async_hooks" "node:buffer" "node:child_process" "node:crypto" "node:events" "node:fs" "node:fs/promises" "node:http" "node:https" "node:module" "node:net" "node:os" "node:path" "node:process" "node:querystring" "node:readline/promises" "node:stream" "node:stream/promises" "node:timers" "node:tls" "node:tty" "node:url" "node:util" "node:zlib" "node:worker_threads" "ws" "node:inspector" "node:http2"
+Elapsed: 1009641ms | User: 172885ms | Sys: 30341ms
+RSS: 0.02ZB | Peak: 0.66GB | Commit: 0.02ZB | Faults: 14 | Machine: 49.75GB
+
+panic(main thread): Segmentation fault at address 0x983E7000
+oh no: Bun has crashed. This indicates a bug in Bun, not your code.
+
+To send a redacted crash report to Bun's team,
+please file a GitHub issue using the link below:
+
+* Problem
+=crates/pi-natives/src/code_graph.rs= currently runs fastembed/ONNX Runtime directly in the Bun process via a static =OnceLock<EmbeddingEngine>=. This causes segfaults when the ONNX Runtime's memory operations conflict with Bun's internals.
+
+* Solution
+Replace direct =EmbeddingEngine= usage with subprocess communication to the =pi-embedding-worker= binary. All embedding operations delegate to the subprocess via stdin/stdout JSONL.
+
+* Design Decisions
+- Remove =EMBEDDING_ENGINE: OnceLock<EmbeddingEngine>= and =get_or_init_engine()= entirely
+- Remove =use pi_code_vectors::EmbeddingEngine;= import from code_graph.rs
+- Remove =pi-code-vectors= from pi-natives direct dependencies (it's only needed by the worker binary now)
+- Keep =pi-code-vectors= as a dependency for type re-exports (=VectorEntry=, =VectorIndex=, =PersistedVectorIndex=, serialization fns) — but NOT =EmbeddingEngine=
+- New module: =crates/pi-natives/src/embedding_worker.rs= manages subprocess lifecycle
+- Worker subprocess is spawned lazily on first semantic operation
+- Worker stays alive for session duration (reused across multiple calls)
+- If worker crashes or is not found, semantic features degrade gracefully
+
+* Worker Manager Design
+#+begin_src rust
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, Command, Stdio};
+use std::sync::Mutex;
+
+/// Manages the embedding worker subprocess lifecycle.
+struct EmbeddingWorker {
+    child: Child,
+    stdin: std::io::BufWriter<std::process::ChildStdin>,
+    stdout: BufReader<std::process::ChildStdout>,
+}
+
+/// Global worker instance, lazily initialized.
+static WORKER: Mutex<Option<EmbeddingWorker>> = Mutex::new(None);
+
+fn with_worker<T>(f: impl FnOnce(&mut EmbeddingWorker) -> napi::Result<T>) -> napi::Result<T> {
+    let mut guard = WORKER.lock().map_err(|_| Error::from_reason("worker mutex poisoned"))?;
+    let worker = guard.get_or_insert_with(|| spawn_worker());
+    f(worker)
+}
+#+end_src
+
+* Binary Discovery
+The worker binary is located using the same candidate path logic as the .node file:
+1. =packages/natives/native/pi-embedding-worker= (dev builds)
+2. =~/.local/share/spell/natives/<version>/pi-embedding-worker= (compiled binary)
+3. =<exec-dir>/pi-embedding-worker= (alongside the binary)
+
+Discovery function checks candidates in order, returns first that exists and is executable. If none found, semantic features are disabled with a clear error message.
+
+** Important: The binary path discovery MUST be implemented in Rust (in =embedding_worker.rs=), NOT in JavaScript. The code_graph.rs runs on a NAPI worker thread and cannot call back into JS. Use these approaches:
+- Check =std::env::current_exe()= parent directory
+- Check hardcoded platform-specific paths
+- Check =PI_EMBEDDING_WORKER= env var override
+- Look next to the loaded .node file by reading =/proc/self/maps= or similar
+
+* Files to Modify
+- =crates/pi-natives/src/code_graph.rs= — Remove =EMBEDDING_ENGINE=, =get_or_init_engine()=, and =EmbeddingEngine::new()= call in =build_semantic_index()=. Replace with calls to =embedding_worker::embed_batch()= and =embedding_worker::embed_query()=.
+- =crates/pi-natives/src/embedding_worker.rs= (NEW) — Subprocess lifecycle, protocol, binary discovery
+- =crates/pi-natives/src/lib.rs= — Add =mod embedding_worker;=
+- =crates/pi-natives/Cargo.toml= — Remove =pi-code-vectors= from dependencies IF only EmbeddingEngine was used. Keep it if VectorEntry/VectorIndex types are needed (they are — for =build_semantic_index= and =load_vector_cache=). Actually, keep the dependency but the feature flag =semantic= on =pi-code-graph= already pulls it in.
+
+* Specific Code Changes in code_graph.rs
+
+** Remove (lines ~27-41 of current code_graph.rs):
+#+begin_src rust
+// DELETE:
+use pi_code_vectors::EmbeddingEngine;
+static EMBEDDING_ENGINE: OnceLock<EmbeddingEngine> = OnceLock::new();
+fn get_or_init_engine() -> napi::Result<&'static EmbeddingEngine> { ... }
+#+end_src
+
+** Replace build_semantic_index (lines ~305-345):
+#+begin_src rust
+fn build_semantic_index(graph: &CodeGraph, cache: &CacheStore) -> napi::Result<usize> {
+    let chunks = pi_code_graph::extract_chunks(graph.persisted(), 30)
+        .map_err(|e| Error::from_reason(format!("Chunking failed: {e}")))?;
+    if chunks.is_empty() { return Ok(0); }
+
+    // Use subprocess instead of direct EmbeddingEngine
+    let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
+    let vectors = embedding_worker::embed_batch(&texts, None)?;
+
+    // ... rest of validation and cache saving stays the same ...
+}
+#+end_src
+
+** Replace search hybrid path (lines ~242-270):
+#+begin_src rust
+// In the search command handler, replace:
+//   get_or_init_engine().and_then(|engine| engine.embed_query(query)...)
+// With:
+//   embedding_worker::embed_query(query)?
+#+end_src
+
+* Graceful Degradation
+When the worker is unavailable (binary not found, crashed, failed to initialize):
+- =build_semantic_index()= returns an error with message "Embedding worker unavailable: <reason>"
+- =code index { semantic: true }= reports the error but completes graph indexing normally
+- Hybrid search falls back to BM25-only (existing VectorCacheState pattern handles this)
+- The error message includes guidance: "Ensure pi-embedding-worker binary is installed alongside the native addon"
+
+* Acceptance Criteria
+- =EMBEDDING_ENGINE= OnceLock is completely removed from code_graph.rs
+- =get_or_init_engine()= function is completely removed
+- No direct usage of =EmbeddingEngine= in pi-natives crate
+- =code index { semantic: true }= works via subprocess (verified by successful vector index creation)
+- =code search { semantic: true }= uses subprocess for query embedding
+- If worker binary is missing, =code index { semantic: true }= completes graph index and reports semantic error
+- If worker crashes mid-operation, error is returned (not a segfault)
+- =cargo test -p pi-natives= passes (existing code_graph tests still pass)
+
+* Testing
+- Existing tests in =code_graph.rs= (=index_without_semantic_leaves_vector_cache_absent=, etc.) must continue to pass — they don't use semantic features
+- New test: mock or stub the worker binary path to verify graceful degradation when binary is not found
+- Integration: if worker binary is built, verify =build_semantic_index= produces vector cache via subprocess
