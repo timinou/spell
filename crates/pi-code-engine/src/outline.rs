@@ -44,7 +44,7 @@ fn entry_for_node(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Op
 		return None;
 	}
 
-	let Some(decl) = declaration_for(profile, node) else {
+	let Some(decl) = declaration_for(profile, node, source) else {
 		return sole_named_child(node).and_then(|child| entry_for_node(source, profile, child));
 	};
 	let name = declaration_name(source, node, decl)?;
@@ -72,7 +72,7 @@ fn sole_named_child(node: Node<'_>) -> Option<Node<'_>> {
 }
 
 fn class_children(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Vec<OutlineEntry> {
-	class_member_nodes(profile, node)
+	class_member_nodes(profile, node, source)
 		.into_iter()
 		.filter_map(|child| entry_for_node(source, profile, child))
 		.collect()
@@ -81,11 +81,23 @@ fn class_children(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Ve
 pub(crate) fn declaration_for<'a>(
 	profile: &'a LanguageProfile,
 	node: Node<'_>,
+	source: &str,
 ) -> Option<&'a DeclarationPattern> {
-	profile
-		.declarations
-		.iter()
-		.find(|decl| decl.node_types.iter().any(|kind| kind == node.kind()))
+	profile.declarations.iter().find(|decl| {
+		if !decl.node_types.iter().any(|kind| kind == node.kind()) {
+			return false;
+		}
+		if let Some(filter_names) = &decl.filter_names {
+			let name_text = match &decl.name {
+				NameExtractor::Field { name } => node
+					.child_by_field_name(name)
+					.and_then(|n| source.get(n.start_byte()..n.end_byte())),
+				_ => None,
+			};
+			return name_text.is_some_and(|t| filter_names.iter().any(|f| f == t));
+		}
+		true
+	})
 }
 
 pub(crate) fn declaration_name(
@@ -93,6 +105,22 @@ pub(crate) fn declaration_name(
 	node: Node<'_>,
 	decl: &DeclarationPattern,
 ) -> Option<String> {
+	// When name_from_arg is set, extract the display name from the first
+	// argument child.  This handles Elixir patterns where the keyword (def,
+	// defmodule) sits in `target` but the real name is the first argument.
+	if decl.name_from_arg {
+		let args = child_by_field_or_kind(node, "arguments")?;
+		let mut cursor = args.walk();
+		let first = args.named_children(&mut cursor).next()?;
+		// If the first arg is itself a call (e.g. `def start_link(opts)`) use its
+		// target.
+		if let Some(target) = first.child_by_field_name("target") {
+			return text(source, target).map(|v| v.trim().to_string());
+		}
+		// Otherwise use the full text (e.g. `defmodule MyApp.Server`).
+		return text(source, first).map(|v| v.trim().to_string());
+	}
+
 	match &decl.name {
 		NameExtractor::Field { name } => {
 			if let Some(name_node) = node.child_by_field_name(name) {
@@ -119,6 +147,15 @@ pub(crate) fn declaration_name(
 	}
 }
 
+/// Try `child_by_field_name(name)` first; fall back to first named child
+/// with `kind() == name`.  Needed for tree-sitter grammars that use
+/// positional (unnamed) children (e.g. `do_block` and `arguments` in Elixir).
+pub(crate) fn child_by_field_or_kind<'a>(node: Node<'a>, name: &str) -> Option<Node<'a>> {
+	if let Some(child) = node.child_by_field_name(name) {
+		return Some(child);
+	}
+	find_named_child(node, name)
+}
 fn find_named_child<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
 	let mut cursor = node.walk();
 	node
@@ -133,9 +170,9 @@ pub(crate) fn declaration_body_range(
 ) -> Option<(usize, usize)> {
 	match &decl.body {
 		BodyExtractor::None => None,
-		BodyExtractor::Field { name } => node
-			.child_by_field_name(name)
-			.map(|body| (body.start_byte(), body.end_byte())),
+		BodyExtractor::Field { name } => {
+			child_by_field_or_kind(node, name).map(|body| (body.start_byte(), body.end_byte()))
+		},
 		BodyExtractor::AfterChild { child_type } => find_named_child(node, child_type).map(|child| {
 			let mut start = child.end_byte();
 			if let Some(rest) = source.get(start..) {
@@ -150,18 +187,30 @@ pub(crate) fn declaration_body_range(
 	}
 }
 
-pub(crate) fn class_member_nodes<'a>(profile: &LanguageProfile, node: Node<'a>) -> Vec<Node<'a>> {
-	let Some(class_like) = profile
-		.class_like
-		.iter()
-		.find(|class_like| class_like.node_type == node.kind())
-	else {
+pub(crate) fn class_member_nodes<'a>(
+	profile: &LanguageProfile,
+	node: Node<'a>,
+	source: &str,
+) -> Vec<Node<'a>> {
+	let Some(class_like) = profile.class_like.iter().find(|cl| {
+		if cl.node_type != node.kind() {
+			return false;
+		}
+		// Apply filter_field / filter_names when set (e.g. Elixir defmodule).
+		if let (Some(filter_field), Some(filter_names)) = (&cl.filter_field, &cl.filter_names) {
+			let field_text = node
+				.child_by_field_name(filter_field)
+				.and_then(|n| source.get(n.start_byte()..n.end_byte()));
+			return field_text.is_some_and(|t| filter_names.iter().any(|f| f == t));
+		}
+		true
+	}) else {
 		return Vec::new();
 	};
 
 	match &class_like.body {
 		ClassBodyExtractor::Field { name } => {
-			let Some(body) = node.child_by_field_name(name) else {
+			let Some(body) = child_by_field_or_kind(node, name) else {
 				return Vec::new();
 			};
 			let mut cursor = body.walk();
@@ -634,6 +683,42 @@ mod tests {
 			"should include nested symbol hint: {out}"
 		);
 		assert!(out.contains("## Steps (lines"), "should render nested headings: {out}");
+	}
+
+	#[test]
+	fn test_outline_elixir() {
+		let buffer = buffer("hello.ex", "elixir");
+		let profile = profile("elixir");
+		let entries = outline(&buffer, &profile);
+		// Only defmodule should appear as top-level
+		assert_eq!(entries.len(), 1);
+		assert_eq!(entries[0].name, "MyApp.Greeter");
+		assert_eq!(entries[0].kind, "module");
+	}
+
+	#[test]
+	fn test_outline_elixir_children() {
+		let buffer = buffer("hello.ex", "elixir");
+		let profile = profile("elixir");
+		let entries = outline(&buffer, &profile);
+		let children = &entries[0].children;
+		assert_eq!(children.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), vec![
+			"start_link",
+			"greet",
+			"internal_helper",
+			"my_macro"
+		]);
+		assert_eq!(children.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(), vec![
+			"def", "def", "defp", "macro"
+		]);
+	}
+
+	#[test]
+	fn test_read_resolution_0_elixir() {
+		let buffer = buffer("hello.ex", "elixir");
+		let profile = profile("elixir");
+		let out = read(&buffer, &profile, 0, None, None);
+		assert!(out.contains("MyApp.Greeter (module)"), "got: {out}");
 	}
 
 	#[test]

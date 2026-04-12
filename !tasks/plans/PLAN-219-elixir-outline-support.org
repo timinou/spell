@@ -1,0 +1,130 @@
+#+TITLE: Elixir Outline Support
+#+STATE: DONE
+#+SESSION_ID: 14b7be567342b8fe
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl]]
+#+CUSTOM_ID: PLAN-219-elixir-outline-support
+
+* Initial Message
+
+Let me understand the current codebase state before executing.
+
+ Task model: claude-sonnet-4-6
+
+
+ Code
+ ┌─── ✔ Code outline ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Outline lib/hotelcomm/conversations/server.ex (1 top-level, 1 total symbols)                                                               │
+ │ - def defmodule L1-L1519                                                                                                                   │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Code
+ ┌─── ✔ Code outline ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Outline lib/hotelcomm/agents/djinn_executor.ex (1 top-level, 1 total symbols)                                                              │
+ │ - def defmodule L1-L214                                                                                                                    │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Code
+ ┌─── ✔ Code outline ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Outline lib/hotelcomm/agents/overlay_store.ex (1 top-level, 1 total symbols)                                                               │
+ │ - def defmodule L1-L289                                                                                                                    │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Code
+ ┌─── ✔ Code outline ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Outline lib/hotelcomm/agents/config_resolver.ex (1 top-level, 1 total symbols)                                                             │
+ │ - def defmodule L1-L104                                                                                                                    │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+This is not very useful...
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-hotelcomm/2026-04-12T12-54-56-532Z_14b7bdefc50fd377.jsonl
+ ID: 14b7bdefc50fd377
+
+* Context
+
+The Elixir language profile in =pi-code-engine= produces useless outlines -- a single "defmodule" entry with no nested functions. This makes the =code= tool (outline, navigate, resolve, edit) ineffective for Elixir projects.
+
+** Approach
+
+Extend the profile infrastructure with:
+1. =filter_names= on =DeclarationPattern= and =ClassLikePattern= -- generic filter to disambiguate uniform node types (all Elixir constructs are =call= nodes in tree-sitter-elixir)
+2. =name_from_arg= on =DeclarationPattern= -- extract symbol names from arguments instead of the target field
+3. =child_by_field_or_kind()= helper -- fallback for positional children (=do_block= and =arguments= are unnamed in tree-sitter-elixir)
+
+Then rewrite =elixir_profile()= with separate patterns for defmodule/def/defp/defmacro/defmacrop and a ClassLikePattern for defmodule as a container.
+
+** Key Decisions
+
+1. =filter_names: Option<Vec<String>>= on DeclarationPattern/ClassLikePattern -- generic, not Elixir-specific
+2. =name_from_arg: bool= on DeclarationPattern -- extract name from first argument child
+3. =source: &str= added to =declaration_for()= signature (needed for text comparison in filter)
+4. Separate DeclarationPattern per keyword -- clean kind mapping
+5. Deferred: visibility (def=public, defp=private), additional keywords (defstruct etc), navigate name_text unification
+
+** Files Modified
+
+- =crates/pi-code-engine/src/language/profile.rs= -- add fields to pattern structs
+- =crates/pi-code-engine/src/outline.rs= -- helper, logic updates, tests
+- =crates/pi-code-engine/src/language/mod.rs= -- rewrite elixir_profile()
+- =crates/pi-code-engine/src/navigate.rs= -- propagate source param
+- =crates/pi-code-engine/src/resolve.rs= -- propagate source param, update class_like lookup
+- =crates/pi-code-engine/tests/fixtures/sources/hello.ex= -- NEW fixture
+- Full spec: =specs/elixir-outline-support.md=
+
+* Verification
+
+#+begin_src sh
+cd crates/pi-code-engine && cargo test outline::tests::test_outline_elixir
+cd crates/pi-code-engine && cargo test outline::tests::test_outline_elixir_children
+cd crates/pi-code-engine && cargo test outline::tests::test_read_resolution_0_elixir
+cd crates/pi-code-engine && cargo test
+cd crates/pi-code-engine && cargo clippy -- -D warnings
+#+end_src
+
+Required artifacts:
+- =crates/pi-code-engine/tests/fixtures/sources/hello.ex= must exist
+- All existing outline, resolve, and navigate tests must pass
+
+* Execution Manifest
+
+| Wave | Item | Effort | Depends |
+|------+------+--------+---------|
+| 1 | [[id:FEAT-519-elixir-outline-support-in-pi-code-engine]] Elixir outline and declaration support | 3h | -- |
+
+Post-plan followup:
+- [[id:FUP-052-elixir-profile-enhancements-visibility-a]] Visibility, additional keywords, navigate unification (2h)
+
+** Completion [2026-04-12]
+
+*** Verification
+
+- =cargo test=: 118 passed, 0 failed (115 existing + 3 new Elixir tests)
+- =cargo clippy -- -D warnings=: 0 warnings (only pre-existing C warnings from tree-sitter-org dependency)
+- =cargo fmt -- --check=: clean
+- New tests:
+  - =test_outline_elixir=: verifies 1 top-level entry \"MyApp.Greeter\" (module)
+  - =test_outline_elixir_children=: verifies 4 children [start_link (def), greet (def), internal_helper (defp), my_macro (macro)]
+  - =test_read_resolution_0_elixir=: verifies output contains \"MyApp.Greeter (module)\"
+- All existing outline, resolve, and navigate tests pass without regression
+
+*** Artifacts
+
+- =crates/pi-code-engine/tests/fixtures/sources/hello.ex= -- Elixir test fixture (defmodule with def/defp/defmacro/use)
+- =crates/pi-code-engine/src/language/profile.rs= -- DeclarationPattern gains =filter_names= and =name_from_arg=; ClassLikePattern gains =filter_field= and =filter_names=
+- =crates/pi-code-engine/src/outline.rs= -- =child_by_field_or_kind()= helper; =declaration_for()= gains =source= param and filter logic; =declaration_name()= gains =name_from_arg= logic; =class_member_nodes()= gains =source= param and filter + fallback body lookup; =declaration_body_range()= uses =child_by_field_or_kind=
+- =crates/pi-code-engine/src/navigate.rs= -- =source= propagated through =declaration_node()=, =defun_at()=, =unwrap_export()=, =children_result()=
+- =crates/pi-code-engine/src/resolve.rs= -- =source= passed to =declaration_for()= and =class_member_nodes()= in all call sites; =resolve_member()= uses filter-aware class_like lookup
+- =crates/pi-code-engine/src/language/mod.rs= -- =elixir_profile()= rewritten with 5 DeclarationPatterns (defmodule/def/defp/defmacro/defmacrop) and 1 ClassLikePattern for defmodule
+
+*** Deviations
+
+None."

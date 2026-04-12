@@ -79,36 +79,53 @@ pub enum ClassBodyExtractor {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "DeclarationPatternSerde")]
 pub struct DeclarationPattern {
-	pub node_types: Vec<String>,
-	pub name:       NameExtractor,
-	pub kind:       String,
+	pub node_types:    Vec<String>,
+	pub name:          NameExtractor,
+	pub kind:          String,
 	#[serde(default = "default_body_none")]
-	pub body:       BodyExtractor,
+	pub body:          BodyExtractor,
 	/// Optional visibility field (e.g., "pub" keyword presence in Rust).
 	#[serde(default)]
-	pub visibility: Option<String>,
+	pub visibility:    Option<String>,
+	/// When set, only match nodes whose name-field text is in this list.
+	/// Used to disambiguate uniform node types (e.g. all Elixir constructs are
+	/// `call`).
+	#[serde(default)]
+	pub filter_names:  Option<Vec<String>>,
+	/// When true, extract the display name from the first argument child
+	/// instead of the name extractor field.
+	#[serde(default)]
+	pub name_from_arg: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 enum DeclarationPatternSerde {
 	Legacy {
-		node_types: Vec<String>,
-		name_field: String,
-		kind:       String,
+		node_types:    Vec<String>,
+		name_field:    String,
+		kind:          String,
 		#[serde(default)]
-		body_field: Option<String>,
+		body_field:    Option<String>,
 		#[serde(default)]
-		visibility: Option<String>,
+		visibility:    Option<String>,
+		#[serde(default)]
+		filter_names:  Option<Vec<String>>,
+		#[serde(default)]
+		name_from_arg: bool,
 	},
 	Modern {
-		node_types: Vec<String>,
-		name:       NameExtractor,
-		kind:       String,
+		node_types:    Vec<String>,
+		name:          NameExtractor,
+		kind:          String,
 		#[serde(default = "default_body_none")]
-		body:       BodyExtractor,
+		body:          BodyExtractor,
 		#[serde(default)]
-		visibility: Option<String>,
+		visibility:    Option<String>,
+		#[serde(default)]
+		filter_names:  Option<Vec<String>>,
+		#[serde(default)]
+		name_from_arg: bool,
 	},
 }
 
@@ -121,16 +138,26 @@ impl From<DeclarationPatternSerde> for DeclarationPattern {
 				kind,
 				body_field,
 				visibility,
+				filter_names,
+				name_from_arg,
 			} => Self {
 				node_types,
 				name: NameExtractor::Field { name: name_field },
 				kind,
 				body: body_field.map_or(BodyExtractor::None, |name| BodyExtractor::Field { name }),
 				visibility,
+				filter_names,
+				name_from_arg,
 			},
-			DeclarationPatternSerde::Modern { node_types, name, kind, body, visibility } => {
-				Self { node_types, name, kind, body, visibility }
-			},
+			DeclarationPatternSerde::Modern {
+				node_types,
+				name,
+				kind,
+				body,
+				visibility,
+				filter_names,
+				name_from_arg,
+			} => Self { node_types, name, kind, body, visibility, filter_names, name_from_arg },
 		}
 	}
 }
@@ -146,24 +173,61 @@ pub struct ClassLikePattern {
 	pub node_type:    String,
 	pub body:         ClassBodyExtractor,
 	pub member_types: Vec<String>,
+	/// Field to check for filtering (e.g. "target" for Elixir `call` nodes).
+	#[serde(default)]
+	pub filter_field: Option<String>,
+	/// When set (along with `filter_field`), only treat nodes as class-like
+	/// if the filter field text is in this list.
+	#[serde(default)]
+	pub filter_names: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 enum ClassLikePatternSerde {
-	Legacy { node_type: String, body_field: String, member_types: Vec<String> },
-	Modern { node_type: String, body: ClassBodyExtractor, member_types: Vec<String> },
+	Legacy {
+		node_type:    String,
+		body_field:   String,
+		member_types: Vec<String>,
+		#[serde(default)]
+		filter_field: Option<String>,
+		#[serde(default)]
+		filter_names: Option<Vec<String>>,
+	},
+	Modern {
+		node_type:    String,
+		body:         ClassBodyExtractor,
+		member_types: Vec<String>,
+		#[serde(default)]
+		filter_field: Option<String>,
+		#[serde(default)]
+		filter_names: Option<Vec<String>>,
+	},
 }
 
 impl From<ClassLikePatternSerde> for ClassLikePattern {
 	fn from(value: ClassLikePatternSerde) -> Self {
 		match value {
-			ClassLikePatternSerde::Legacy { node_type, body_field, member_types } => {
-				Self { node_type, body: ClassBodyExtractor::Field { name: body_field }, member_types }
+			ClassLikePatternSerde::Legacy {
+				node_type,
+				body_field,
+				member_types,
+				filter_field,
+				filter_names,
+			} => Self {
+				node_type,
+				body: ClassBodyExtractor::Field { name: body_field },
+				member_types,
+				filter_field,
+				filter_names,
 			},
-			ClassLikePatternSerde::Modern { node_type, body, member_types } => {
-				Self { node_type, body, member_types }
-			},
+			ClassLikePatternSerde::Modern {
+				node_type,
+				body,
+				member_types,
+				filter_field,
+				filter_names,
+			} => Self { node_type, body, member_types, filter_field, filter_names },
 		}
 	}
 }
