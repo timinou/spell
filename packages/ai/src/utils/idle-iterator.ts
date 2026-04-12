@@ -29,6 +29,16 @@ const DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = 45_000;
 export function getAnthropicStreamIdleTimeoutMs(): number | undefined {
 	return normalizeIdleTimeoutMs($env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS, DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS);
 }
+const DEFAULT_BEDROCK_STREAM_IDLE_TIMEOUT_MS = 45_000;
+
+/**
+ * Returns the idle timeout used for Bedrock streaming transports.
+ *
+ * Set `PI_BEDROCK_STREAM_IDLE_TIMEOUT_MS=0` to disable the watchdog.
+ */
+export function getBedrockStreamIdleTimeoutMs(): number | undefined {
+	return normalizeIdleTimeoutMs($env.PI_BEDROCK_STREAM_IDLE_TIMEOUT_MS, DEFAULT_BEDROCK_STREAM_IDLE_TIMEOUT_MS);
+}
 
 const DEFAULT_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS = 180_000;
 

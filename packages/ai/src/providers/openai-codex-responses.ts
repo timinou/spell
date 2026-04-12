@@ -39,10 +39,19 @@ import {
 } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
-import { getOpenAIStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
+import {
+	getOpenAIStreamIdleTimeoutMs,
+	getToolArgumentStreamIdleTimeoutMs,
+	iterateWithIdleTimeout,
+} from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { pushFallbackError } from "../utils/provider-error-boundary";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
+import {
+	appendToolCallStreamDiagnostic,
+	classifyToolCallStreamInterruption,
+	hasActiveToolArgumentStreaming,
+} from "../utils/tool-call-diagnostics";
 import {
 	CODEX_BASE_URL,
 	getCodexAccountId,
@@ -397,16 +406,23 @@ function removeTransientBlockIndices(output: AssistantMessage): void {
 	}
 }
 
-function createRequestSetup(options: OpenAICodexResponsesOptions | undefined): CodexRequestSetup {
+function createRequestSetup(
+	options: OpenAICodexResponsesOptions | undefined,
+	output: AssistantMessage,
+): CodexRequestSetup {
 	const requestAbortController = new AbortController();
 	const requestSignal = options?.signal
 		? AbortSignal.any([options.signal, requestAbortController.signal])
 		: requestAbortController.signal;
+	const streamIdleTimeoutMs = getOpenAIStreamIdleTimeoutMs();
+	const toolArgumentIdleTimeoutMs = getToolArgumentStreamIdleTimeoutMs(streamIdleTimeoutMs);
 	const wrapCodexSseStream = (
 		source: AsyncGenerator<Record<string, unknown>>,
 	): AsyncGenerator<Record<string, unknown>> =>
 		iterateWithIdleTimeout(source, {
-			idleTimeoutMs: getOpenAIStreamIdleTimeoutMs(),
+			idleTimeoutMs: streamIdleTimeoutMs,
+			getIdleTimeoutMs: () =>
+				hasActiveToolArgumentStreaming(output) ? toolArgumentIdleTimeoutMs : streamIdleTimeoutMs,
 			errorMessage: "OpenAI Codex SSE stream stalled while waiting for the next event",
 			onIdle: () => requestAbortController.abort(),
 		});
@@ -709,6 +725,20 @@ async function processCodexResponseStream(
 			}
 			return { firstTokenTime };
 		} catch (error) {
+			// Classify stall before attempting recovery
+			if (error instanceof Error && error.message.includes("stalled while waiting for the next event")) {
+				const stallDiagnostic = classifyToolCallStreamInterruption(context.output, {
+					firstTokenTimeMs: context.firstTokenTime ? context.firstTokenTime - context.startTime : undefined,
+				});
+				if (stallDiagnostic) {
+					appendToolCallStreamDiagnostic(context.output, stallDiagnostic);
+					if (stallDiagnostic.state === "completed_tool_call_missing_trailing_stop") {
+						context.output.stopReason = "toolUse";
+						runtime.sawTerminalEvent = true;
+						return { firstTokenTime: context.firstTokenTime };
+					}
+				}
+			}
 			const recovered = await recoverCodexStreamError(context, runtime, error);
 			if (!recovered) {
 				throw error;
@@ -1293,7 +1323,7 @@ export const streamOpenAICodexResponses: StreamFunction<"openai-codex-responses"
 	(async () => {
 		const startTime = Date.now();
 		const output = createAssistantOutput(model);
-		const requestSetup = createRequestSetup(options);
+		const requestSetup = createRequestSetup(options, output);
 		let processingContext: CodexStreamProcessingContext | undefined;
 
 		try {

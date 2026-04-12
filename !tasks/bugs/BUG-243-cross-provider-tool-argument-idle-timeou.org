@@ -1,5 +1,5 @@
 #+TITLE: Cross-provider tool-argument idle timeout hardening v2
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14b7ee149bae1c85
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T16-25-17-166Z_14b7ee149bae1c85.jsonl]]
 #+CUSTOM_ID: BUG-243-cross-provider-tool-argument-idle-timeou
@@ -7,7 +7,6 @@
 #+PRIORITY: #A
 #+LAYER: ai-runtime
 #+DEPENDS: BUG-245-define-shared-incomplete-tool-call-stall
-
 
 * Initial Message
 
@@ -74,3 +73,5 @@ Use the shared diagnostic contract from the foundation item and populate provide
 - Run focused provider tests plus =bun check:ts=.
 
 NOTE [2026-04-12]: Linked from [[id:PLAN-218-cross-provider-stalled-incomplete-tool-c]]. Provider cutover item for longer tool-argument idle budgets and shared cross-provider stall handling.
+
+NOTE [2026-04-12]: Cross-provider cutover complete. Added stall handling to:\n- Amazon Bedrock: idle timeout + retry loop + stall classification (4 tests)\n- Azure OpenAI responses: tool-argument-aware timeout + stall classification + retry (2 tests)\n- OpenAI Codex responses: tool-argument-aware SSE timeout + stall classification in processCodexResponseStream (4 tests)\n- Cursor: stall classification in error handler + completed tool call recovery (3 tests)\n\nAll 19 provider tests pass across 6 files. Existing Anthropic + OpenAI tests unaffected.
