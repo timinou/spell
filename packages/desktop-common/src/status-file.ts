@@ -10,6 +10,18 @@ interface SessionRecoveryInfo {
 	cwd: string;
 }
 
+function hasRecoveryMetadata(status: SessionStatusFile): status is SessionStatusFile & {
+	sessionId: string;
+	cwd: string;
+} {
+	return (
+		typeof status.sessionId === "string" &&
+		status.sessionId.length > 0 &&
+		typeof status.cwd === "string" &&
+		status.cwd.length > 0
+	);
+}
+
 /** Default directory for session status files. */
 export const STATUS_DIR = path.join(os.homedir(), ".spell", "status");
 
@@ -123,6 +135,27 @@ export class StatusFileReader {
 	async readCrashed(): Promise<SessionStatusFile[]> {
 		const entries = await this.#readStatusFiles();
 		return entries.filter(entry => !isProcessAlive(entry.data.pid)).map(entry => entry.data);
+	}
+
+	/** Remove dead-PID status files that are missing recovery metadata and cannot be resumed. */
+	async cleanStale(): Promise<number> {
+		const entries = await this.#readStatusFiles();
+		let cleaned = 0;
+		for (const entry of entries) {
+			if (isProcessAlive(entry.data.pid) || hasRecoveryMetadata(entry.data)) {
+				continue;
+			}
+			try {
+				await fs.rm(entry.filePath, { force: true });
+				cleaned += 1;
+			} catch (err) {
+				logger.warn("StatusFileReader: stale cleanup failed", {
+					path: entry.filePath,
+					err: String(err),
+				});
+			}
+		}
+		return cleaned;
 	}
 
 	async #readStatusFiles(): Promise<Array<{ filePath: string; data: SessionStatusFile }>> {

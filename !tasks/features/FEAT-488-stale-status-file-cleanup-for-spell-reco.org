@@ -1,0 +1,157 @@
+#+TITLE: Stale status file cleanup for spell recover
+#+STATE: DONE
+#+SESSION_ID: 14b7040554521518
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-22-39-825Z_14b7040554521518.jsonl]]
+#+CUSTOM_ID: FEAT-488-stale-status-file-cleanup-for-spell-reco
+#+EFFORT: 45m
+#+PRIORITY: #B
+#+LAYER: cli
+#+DEPENDS: BUG-220-fix-ghostty-new-window-command-not-execu
+
+NOTE [2026-04-12]: Implemented StatusFileReader.cleanStale(), cleanup-only recover --clean, and automatic stale cleanup after normal recovery. Verified via recover-command and status-file tests plus bun check:ts.
+
+* Initial Message
+
+after spell recover:
+
+Warning: skipping stale status file for window 142 (spell_kdl-config: (untitled)) because recovery metadata is incomplete.
+Warning: skipping stale status file for window 144 (spell: (untitled)) because recovery metadata is incomplete.
+Warning: skipping stale status file for window 153 (spell: Code-Specific Vector Embeddings Research) because recovery metadata is incomplete.
+Warning: skipping stale status file for window 155 (spell: Integrating AST Edit Grep and Structural Editing) because recovery metadata is incomplete.
+Found 5 recoverable crashed session(s):
+
+Workspace Hotelcomm:
+  - hotelcomm: Concierge Instruction Adherence Configuration
+
+Workspace (unnamed):
+  - myapp: second-title
+
+Workspace Spell code agent:
+  - spell: Optimizing Code Edit Ergonomics
+  - spell: Continue Previous Coding Task
+  - spell: Sniper Tool Integration for Subtasks
+
+Recovered hotelcomm: Concierge Instruction Adherence Configuration.
+Recovered myapp: second-title.
+Recovered spell: Optimizing Code Edit Ergonomics.
+Recovered spell: Continue Previous Coding Task.
+Recovered spell: Sniper Tool Integration for Subtasks.
+Recovered 5 session(s).
+Skipped 75 stale status file(s) missing recovery metadata.
+
+* Problem
+
+After a system crash, ~spell recover~ reports skipping large numbers of stale status files (e.g., "Skipped 75 stale status file(s) missing recovery metadata"). These files accumulate indefinitely because:
+
+1. Status files are created early (when niri window ID is discovered) before session info is populated
+2. If the process crashes between window ID discovery and session creation, the status file has no ~sessionId~ or ~cwd~
+3. ~readCrashed()~ returns these files, ~isRecoverableSession()~ filters them out, but nobody cleans them up
+4. The only cleanup for dead-PID files happens in ~readAll()~ (used by niri overview), not ~readCrashed()~ (used by recover)
+
+* Design Decisions
+
+1. Add ~--clean~ flag to ~spell recover~ for standalone stale file cleanup (no recovery, just delete stale files)
+2. Auto-clean stale files after recovery completes (always, no flag needed)
+3. Add ~cleanStale()~ method to ~StatusFileReader~ in ~packages/desktop-common/src/status-file.ts~
+4. Stale = file where PID is dead AND (~sessionId~ or ~cwd~ is missing) — these can never be recovered, safe to delete
+5. Print count of cleaned stale files in recovery summary
+
+* Files to Modify
+
+- ~packages/desktop-common/src/status-file.ts~ — add ~cleanStale()~
+- ~packages/coding-agent/src/commands/recover.ts~ — add ~--clean~ flag, auto-cleanup
+- ~packages/coding-agent/test/recover-command.test.ts~ — add cleanup tests
+
+* Implementation
+
+** Add ~cleanStale()~ to ~StatusFileReader~
+
+#+begin_src typescript
+/** Remove stale status files where PID is dead and recovery metadata is incomplete. */
+async cleanStale(): Promise<number> {
+    const entries = await this.#readStatusFiles();
+    let cleaned = 0;
+    for (const entry of entries) {
+        if (isProcessAlive(entry.data.pid)) continue;
+        const hasMetadata =
+            typeof entry.data.sessionId === "string" &&
+            entry.data.sessionId.length > 0 &&
+            typeof entry.data.cwd === "string" &&
+            entry.data.cwd.length > 0;
+        if (hasMetadata) continue;
+        await fs.rm(entry.filePath, { force: true }).catch(() => {});
+        cleaned += 1;
+    }
+    return cleaned;
+}
+#+end_src
+
+** Add ~--clean~ flag to ~RecoverCommand~
+
+#+begin_src typescript
+static flags = {
+    // ... existing flags ...
+    "clean": Flags.boolean({ description: "Remove stale status files without recovery metadata" }),
+};
+#+end_src
+
+When ~--clean~ is set alone (no other action):
+1. Call ~StatusFileReader.cleanStale()~
+2. Print "Cleaned N stale status file(s)."
+3. Exit
+
+** Auto-clean after recovery
+
+At the end of ~RecoverCommand.run()~, after all recovery is complete:
+1. Call ~reader.cleanStale()~ (where ~reader~ is the ~StatusFileReader~ instance)
+2. Print "Cleaned N stale status file(s)." if N > 0
+
+This replaces the current "Skipped N stale status file(s) missing recovery metadata." message with an actionable cleanup.
+
+** Handle ~--clean~ early exit
+
+If ~--clean~ is the only flag (no sessions to recover), the command should:
+1. Read all crashed files
+2. Clean stale ones
+3. Report count
+4. Exit without proceeding to recovery
+
+If ~--clean~ is combined with recovery, do both: recover sessions AND clean stale files.
+
+* Tests
+
+** New test: ~--clean~ removes stale files
+
+Write stale status files (no ~sessionId~/~cwd~) + recoverable files. Run ~spell recover --clean~. Verify:
+- Stale files deleted
+- Recoverable files untouched
+- Output shows cleaned count
+
+** New test: auto-cleanup after recovery
+
+Write recoverable + stale files. Run ~spell recover~ with ghostty stub. Verify:
+- Recoverable sessions recovered
+- Stale files cleaned up
+- Output shows both recovery and cleanup counts
+
+** New test: ~--clean~ with no stale files
+
+Run ~spell recover --clean~ with no status files. Verify friendly message "No stale status files to clean."
+
+** Existing test: "skips stale files with incomplete recovery metadata"
+
+This test currently verifies the skip warning. After this change, the stale file should be cleaned (deleted) instead of just skipped, and the output should say "Cleaned 1 stale status file(s)" instead of just the warning.
+
+* Edge Cases
+
+- Status files with live PIDs must NEVER be deleted by ~cleanStale()~ — only dead-PID + missing-metadata files
+- Recoverable files (dead PID + valid metadata) must not be deleted by ~cleanStale()~ — only files without metadata
+- File permission errors during cleanup: warn and continue, don't fail the whole command
+- Race condition: PID reuse is theoretically possible but negligible in practice (PIDs are large, window IDs are niri-assigned)
+
+* Verification
+
+- ~bun test packages/coding-agent/test/recover-command.test.ts~ passes
+- ~--clean~ flag removes stale files and reports count
+- Auto-cleanup runs after recovery
+- Recoverable and live-PID files are never deleted by cleanup
