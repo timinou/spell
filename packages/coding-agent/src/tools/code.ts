@@ -17,8 +17,18 @@ import type { Theme } from "../modes/theme/theme";
 import codeDescription from "../prompts/tools/code.md" with { type: "text" };
 import { renderCodeCell } from "../tui";
 import type { ToolSession } from ".";
+import {
+	createCodeGraphDetails,
+	createCodeToolError,
+	formatCodeToolContent,
+	type CodeFileCommand,
+	type CodeGraphCommand,
+	type CodeToolResultDetails,
+	normalizeCodeBufferSuccess,
+} from "./code-result";
 import { enforceModeWrite } from "./mode-guard";
 import { replaceTabs } from "./render-utils";
+import { toolResult } from "./tool-result";
 
 const GRAPH_COMMANDS = new Set([
 	"index",
@@ -31,6 +41,26 @@ const GRAPH_COMMANDS = new Set([
 	"clusters",
 	"search",
 ]);
+
+function getTextContent(result: AgentToolResult): string {
+	return result.content
+		.filter(content => content.type === "text")
+		.map(content => content.text ?? "")
+		.join("");
+}
+
+function extractCodeToolErrorMessage(output: unknown): string {
+	if (typeof output === "string") return output;
+	if (typeof output === "number" || typeof output === "boolean") return String(output);
+	if (output && typeof output === "object" && !Array.isArray(output)) {
+		const message = Reflect.get(output, "message");
+		if (typeof message === "string" && message.trim().length > 0) {
+			return message;
+		}
+	}
+	const serialized = JSON.stringify(output);
+	return typeof serialized === "string" && serialized.length > 0 ? serialized : "Code command failed";
+}
 
 // =============================================================================
 // Schema
@@ -138,6 +168,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult> {
 		const command = params.command ?? "";
+		const sessionCwd = this.#session.cwd ?? getProjectDir();
 
 		if (command === "edit" || command === "save") {
 			if (params.file) {
@@ -151,27 +182,18 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			}
 
 			if (command === "install_grammar") {
-				return {
-					content: [
-						{
-							type: "text",
-							text: JSON.stringify({
-								error: true,
-								message:
-									"install_grammar is no longer supported. Grammars for TypeScript, Rust, Python, and Elixir are built-in.",
-							}),
-						},
-					],
-					details: { error: true, command },
-				};
+				const details = createCodeToolError({
+					command,
+					message:
+						"install_grammar is no longer supported. Grammars for TypeScript, Rust, Python, and Elixir are built-in.",
+				});
+				return toolResult(details).text(formatCodeToolContent(details)).done();
 			}
 
-			// Map agent-facing names to NAPI commands
 			const nativeCommand = command === "buffers" ? "list" : command;
 			const options: CodeBufferOptions = { command: nativeCommand };
-			const sessionCwd = this.#session.cwd ?? getProjectDir();
 			const resolveFile = (file: string): string => (path.isAbsolute(file) ? file : path.resolve(sessionCwd, file));
-			// Copy relevant params from the typed schema
+
 			if (params.file) options.file = resolveFile(params.file);
 			if (params.resolution !== undefined) options.resolution = params.resolution;
 			if (params.offset !== undefined) options.offset = params.offset;
@@ -184,30 +206,44 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			if (params.patches) options.patches = params.patches;
 			if (params.edits) options.edits = params.edits;
 			if (params.mode) options.mode = params.mode;
-			// Map navigate action: references-local → references (backward compat)
 			if (command === "navigate" && params.action) {
 				options.action = params.action === "references-local" ? "references" : params.action;
 			}
+
 			const result = executeCodeBuffer(options);
 			if (result.error) {
-				const message = typeof result.output === "string" ? result.output : JSON.stringify(result.output);
-				return {
-					content: [{ type: "text", text: JSON.stringify({ error: true, message }) }],
-					details: { error: true, command },
-				};
+				const details = createCodeToolError({
+					command,
+					file: options.file,
+					cwd: sessionCwd,
+					output: result.output,
+					message: extractCodeToolErrorMessage(result.output),
+				});
+				return toolResult(details).text(formatCodeToolContent(details)).done();
 			}
-			const text = JSON.stringify(result.output, null, 2);
-			return {
-				content: [{ type: "text", text }],
-				details: { command },
-			};
+
+			const details = normalizeCodeBufferSuccess({
+				command: command as CodeFileCommand,
+				output: result.output,
+				file: options.file,
+				cwd: sessionCwd,
+				action: options.action,
+				resolution: params.resolution,
+				offset: params.offset,
+				limit: params.limit,
+			});
+			return toolResult(details).text(formatCodeToolContent(details)).done();
 		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			logger.error("code tool error", { error: msg, command });
-			return {
-				content: [{ type: "text", text: JSON.stringify({ error: true, message: msg }) }],
-				details: { error: true, command },
-			};
+			const message = err instanceof Error ? err.message : String(err);
+			logger.error("code tool error", { error: message, command });
+			const details = createCodeToolError({
+				command,
+				file: params.file ? path.resolve(sessionCwd, params.file) : undefined,
+				cwd: sessionCwd,
+				output: err,
+				message,
+			});
+			return toolResult(details).text(formatCodeToolContent(details)).done();
 		}
 	}
 
@@ -223,73 +259,46 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			semantic: params.semantic,
 			signal,
 		});
-		return {
-			content: [{ type: "text", text: result.output }],
-			details: {
-				command: params.command,
-				cacheStatus: result.cacheStatus,
-				rebuilt: result.rebuilt,
-				semanticStatus: result.semanticStatus,
-				graph: true,
-			},
-		};
+		const details = createCodeGraphDetails({
+			command: params.command as CodeGraphCommand,
+			output: result.output,
+			cacheStatus: result.cacheStatus,
+			rebuilt: result.rebuilt,
+			semanticStatus: result.semanticStatus,
+		});
+		return toolResult(details).text(formatCodeToolContent(details)).done();
 	}
 
-	renderResult(result: AgentToolResult, _options: RenderResultOptions, theme: unknown): Component {
-		const details = result.details as { command?: string; error?: boolean };
-		const isError = Boolean((result as { isError?: boolean }).isError ?? details?.error);
-		const text = result.content
-			.filter(c => c.type === "text")
-			.map(c => (c as { type: string; text: string }).text)
-			.join("");
+	renderResult(result: AgentToolResult, options: RenderResultOptions, theme: unknown): Component {
+		const details = result.details as CodeToolResultDetails | undefined;
 		const uiTheme = theme as Theme;
-
-		const maxChars = 2000;
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(text);
-		} catch {
-			parsed = text;
-		}
-
+		const command = details?.command;
+		const text = details ? formatCodeToolContent(details) : getTextContent(result);
 		const toRender = (value: string): string => {
 			const sanitized = replaceTabs(value);
-			const truncated = sanitized.length > maxChars;
-			return truncated ? `${sanitized.slice(0, maxChars)}\n...truncated` : sanitized;
+			const maxChars = 2_000;
+			return sanitized.length > maxChars ? `${sanitized.slice(0, maxChars)}\n...truncated` : sanitized;
 		};
 
-		if (isError) {
-			if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && "message" in parsed) {
-				const message = String((parsed as { message?: unknown }).message ?? "Unknown error");
-				return new Text(toRender(message), 0, 0);
-			}
-			return new Text(toRender(text), 0, 0);
+		if (result.isError || details?.kind === "error") {
+			return new Text(toRender(details?.kind === "error" ? details.message : text), 0, 0);
 		}
 
-		if (typeof parsed === "string") {
-			const command = details?.command;
-			const language = command === "diff" ? "diff" : "text";
-			return {
-				render: (width: number) =>
-					renderCodeCell(
-						{
-							code: toRender(parsed),
-							language,
-							title: command ? `Code ${command}` : "Code",
-							status: "complete",
-							expanded: true,
-							width,
-						},
-						uiTheme,
-					),
-				invalidate: () => {},
-			};
-		}
-
-		const fallback = JSON.stringify(parsed, null, 2);
-		if (parsed === undefined || fallback === undefined) {
-			return new Text(toRender(String(parsed)), 0, 0);
-		}
-		return new Text(toRender(fallback), 0, 0);
+		const language = command === "edit" || command === "diff" ? "diff" : "text";
+		return {
+			render: (width: number) =>
+				renderCodeCell(
+					{
+						code: toRender(text),
+						language,
+						title: command ? `Code ${command}` : "Code",
+						status: "complete",
+						expanded: options.expanded,
+						width,
+					},
+					uiTheme,
+				),
+			invalidate: () => {},
+		};
 	}
 }

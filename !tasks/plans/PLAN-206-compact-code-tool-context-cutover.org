@@ -1,0 +1,100 @@
+#+TITLE: Compact code tool context cutover
+#+STATE: DONE
+#+SESSION_ID: 14b714f2dae46382
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T00-36-37-355Z_14b714f2dae46382.jsonl]]
+#+CUSTOM_ID: PLAN-206-compact-code-tool-context-cutover
+#+EFFORT: 13h30m
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+
+NOTE [2026-04-12]: Completed implementation and verification for compact code-tool context cutover.
+
+* Context
+Problem: the `code` tool emits verbose file-local payloads that are cheap for machines but expensive for language models. In `packages/coding-agent/src/tools/code.ts`, file-local commands currently send pretty-printed raw JSON into model-visible `content`. Native output from `crates/pi-natives/src/code_buffer.rs` includes low-level editor primitives like `changedRanges`, `inputEdit.startByte`, and diff hunk arrays. This produces noisy context such as the pasted `Code [...]` dumps that are neither token-efficient nor pleasant for an LLM to reason over.
+
+Recommended approach: full cutover for new sessions only. Replace the ad-hoc raw-JSON file-local payload path with a canonical code-tool result contract and a compact model-facing formatter. Preserve all information in structured `details`; make `content` compact, semantic, and task-oriented. Keep graph commands compact. Update transcript/TUI/session consumers to rely on the normalized contract instead of reparsing arbitrary JSON text.
+
+Key decisions
+1. No backward-compatibility shims for old code-tool schemas. New sessions/transcripts only.
+2. Use a hybrid boundary: Rust may rename/regroup especially noisy low-level fields where it meaningfully improves semantics, but TypeScript owns the final normalized contract and model-visible phrasing.
+3. Introduce one canonical contract file, `packages/coding-agent/src/tools/code-result.ts`, with discriminated result types plus one LLM-facing formatter.
+4. Follow existing compact-content/rich-details patterns already used by `search_tool_bm25`, `code_search`, `gemini-image`, and `python`.
+5. Keep the invariant from `packages/coding-agent/src/session/messages.ts`: `toolResult.content` is model-visible; `details` is not. Therefore the fix must happen at the code-tool content contract, not in caller-side workarounds.
+6. Treat live streaming and rebuilt transcript as one design surface. `packages/coding-agent/src/modes/controllers/event-controller.ts`, `packages/coding-agent/src/modes/utils/ui-helpers.ts`, and `packages/coding-agent/src/modes/components/tool-execution.ts` must remain in sync.
+7. Verification must include at least one end-to-end/session-level proof that an agent turn now receives cleaner code-tool context during planning/execution.
+
+Critical files
+- `crates/pi-natives/src/code_buffer.rs`
+- `packages/coding-agent/src/tools/code.ts`
+- `packages/coding-agent/src/tools/code-result.ts` (new)
+- `packages/coding-agent/src/prompts/tools/code.md`
+- `packages/coding-agent/src/modes/components/tool-execution.ts`
+- `packages/coding-agent/src/modes/controllers/event-controller.ts`
+- `packages/coding-agent/src/modes/utils/ui-helpers.ts`
+- `packages/coding-agent/src/session/messages.ts`
+- `packages/coding-agent/src/session/compaction/utils.ts`
+- `packages/coding-agent/test/tools/code.test.ts`
+- `packages/coding-agent/test/tools/code-result.test.ts` (new)
+- `packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts`
+- `packages/coding-agent/test/agent-session-message-pipeline.test.ts`
+
+* Verification
+Focused proof required before declaring the plan done:
+- `bun test packages/coding-agent/test/tools/code-result.test.ts`
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts`
+- `bun test packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts`
+- `bun test packages/coding-agent/test/agent-session-message-pipeline.test.ts`
+- If a new session-level or integration file is added for live-vs-rebuilt parity, run that exact file too
+
+Manual/semantic checks required:
+- For an edit-like code-tool result, model-visible `content` no longer contains the old top-level pretty-printed raw JSON dump
+- Expanded transcript rendering still exposes the information needed to understand changes without hiding errors or warnings
+- Persisted/rebuilt transcript path shows the same semantic result as live streaming
+- No new compatibility branch exists solely for old code-tool payloads
+
+Required artifact/proof:
+- org child item IDs below plus the changed/new test files are the primary durable references
+- Optional screenshot/text artifact only if visual transcript assertions cannot otherwise prove parity
+
+* Execution Manifest
+1. [[id:PROJ-037-define-compact-code-tool-contract]]
+   - Effort: 4h
+   - Dependency: none
+   - Scope: define canonical TypeScript result schema, normalization helpers, and compact formatter; add test-first contract coverage for representative native payloads
+2. [[id:PROJ-038-implement-compact-code-tool-emission]]
+   - Effort: 5h
+   - Dependency: [[id:PROJ-037-define-compact-code-tool-contract]]
+   - Scope: wire Rust + TypeScript tool boundary and prompt docs to emit compact content plus rich details
+3. [[id:BUG-230-cut-over-code-tool-consumers-and-regress]]
+   - Effort: 4h30m
+   - Dependency: [[id:PROJ-038-implement-compact-code-tool-emission]]
+   - Scope: update transcript/session/render consumers and add live-vs-rebuilt regression coverage proving cleaner agent context
+
+
+** Completion [2026-04-12]
+*** Verification
+- `bun test packages/coding-agent/test/tools/code-result.test.ts`
+  - Passed. Contract coverage for normalized outline/navigate/edit/undo+redo/graph+error formatting.
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts`
+  - Passed. Verified file-local code-tool execution now emits semantic summaries instead of raw pretty-printed JSON for edit-style results.
+- `bun test packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts`
+  - Passed. Rebuilt/subagent viewer path renders compact code-tool summaries without exposing raw JSON dumps.
+- `bun test packages/coding-agent/test/agent-session-message-pipeline.test.ts`
+  - Passed. Session conversion keeps compact code-tool `content` visible to the model and does not serialize rich `details` back into model context.
+- Manual semantic checks were encoded in the focused assertions above:
+  - edit-like `code` results now render as `Edited …` summaries with annotated diff text instead of top-level JSON dumps
+  - rebuilt transcript/viewer flow preserves the same semantic summary as the live tool result path
+  - graph command output remained compact and unchanged in model-visible `content`
+*** Artifacts
+- Durable source references:
+  - [[file:packages/coding-agent/src/tools/code-result.ts]]
+  - [[file:packages/coding-agent/src/tools/code.ts]]
+  - [[file:packages/coding-agent/src/prompts/tools/code.md]]
+  - [[file:packages/coding-agent/test/tools/code-result.test.ts]]
+  - [[file:packages/coding-agent/test/tools/code.test.ts]]
+  - [[file:packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts]]
+  - [[file:packages/coding-agent/test/agent-session-message-pipeline.test.ts]]
+- No additional screenshot artifact required; transcript parity was proven by automated session/viewer assertions.
+*** Deviations
+- None.

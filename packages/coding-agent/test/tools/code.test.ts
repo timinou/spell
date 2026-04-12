@@ -14,6 +14,10 @@ function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
 	};
 }
 
+function getText(result: Awaited<ReturnType<CodeTool["execute"]>>): string {
+	return result.content.find(content => content.type === "text")?.text ?? "";
+}
+
 describe("coding-agent code tool wiring", () => {
 	afterEach(() => {
 		try {
@@ -72,11 +76,11 @@ describe("coding-agent code tool wiring", () => {
 		});
 		const tool = new CodeTool(createSession({ cwd: "/tmp/project" }));
 		const result = await tool.execute("graph", { command: "status" });
-		const text = result.content.find(content => content.type === "text")?.text;
 
-		expect(text).toBe("Code graph status\nCache: fresh\nSemantic: missing");
+		expect(getText(result)).toBe("Code graph status\nCache: fresh\nSemantic: missing");
 		expect(result.details).toEqual(
 			expect.objectContaining({
+				kind: "graph",
 				command: "status",
 				cacheStatus: "fresh",
 				rebuilt: false,
@@ -116,16 +120,36 @@ describe("coding-agent code tool wiring", () => {
 		);
 	});
 
-	it("routes file-local commands to executeCodeBuffer", async () => {
+	it("routes file-local commands to executeCodeBuffer with compact summaries", async () => {
+		const outlinePayload = [
+			{
+				name: "main",
+				kind: "function",
+				line: 1,
+				end_line: 3,
+				column: 0,
+				exported: true,
+				signature: "function main()",
+				children: [],
+			},
+		];
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
-			output: { result: "outline data" },
+			output: outlinePayload,
 			error: false,
 		});
 		const tool = new CodeTool(createSession());
 		const result = await tool.execute("tool", { command: "outline", file: "/tmp/test/src/main.ts" });
-		const text = result.content.find(c => c.type === "text")?.text ?? "";
 
-		expect(JSON.parse(text)).toEqual({ result: "outline data" });
+		expect(getText(result)).toContain("Outline src/main.ts (1 top-level, 1 total symbols)");
+		expect(getText(result)).toContain("function main L1-L3");
+		expect(result.details).toEqual(
+			expect.objectContaining({
+				kind: "file",
+				command: "outline",
+				displayPath: "src/main.ts",
+				rawOutput: outlinePayload,
+			}),
+		);
 		expect(bufferSpy).toHaveBeenCalledWith(
 			expect.objectContaining({
 				command: "outline",
@@ -144,6 +168,7 @@ describe("coding-agent code tool wiring", () => {
 				column: 1,
 				exported: false,
 				signature: 'import "theme.typ": *',
+				children: [],
 			},
 			{
 				name: "title",
@@ -153,6 +178,7 @@ describe("coding-agent code tool wiring", () => {
 				column: 1,
 				exported: false,
 				signature: "let title =",
+				children: [],
 			},
 			{
 				name: "heading.where(level: 1)",
@@ -162,6 +188,7 @@ describe("coding-agent code tool wiring", () => {
 				column: 1,
 				exported: false,
 				signature: "show heading.where(level: 1):",
+				children: [],
 			},
 		];
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
@@ -171,12 +198,17 @@ describe("coding-agent code tool wiring", () => {
 		const tool = new CodeTool(createSession({ cwd: "/tmp/test" }));
 		const file = "/tmp/test/docs/report.typ";
 		const result = await tool.execute("tool", { command: "outline", file });
-		const text = result.content.find(c => c.type === "text")?.text ?? "";
-		const parsed = JSON.parse(text);
 
-		expect(parsed).toEqual(outlinePayload);
-		expect(parsed.map((entry: { kind: string }) => entry.kind)).toEqual(["import", "let", "show"]);
-		expect(parsed[2]).toEqual(expect.objectContaining({ name: "heading.where(level: 1)", kind: "show" }));
+		expect(getText(result)).toContain("Outline docs/report.typ (3 top-level, 3 total symbols)");
+		expect(getText(result)).toContain('import "theme.typ" L1');
+		expect(getText(result)).toContain("show heading.where(level: 1) L3");
+		expect(result.details).toEqual(
+			expect.objectContaining({
+				kind: "file",
+				command: "outline",
+				rawOutput: outlinePayload,
+			}),
+		);
 		expect(bufferSpy).toHaveBeenCalledWith(
 			expect.objectContaining({
 				command: "outline",
@@ -242,15 +274,61 @@ describe("coding-agent code tool wiring", () => {
 		);
 	});
 
-	it("returns error for install_grammar command", async () => {
+	it("preserves additive editable-scope metadata for navigate output", async () => {
+		const rawOutput = {
+			nodeType: "let",
+			text: 'let teal-primary = rgb("#008080")',
+			line: 7,
+			endLine: 7,
+			editableScopeNodeType: "code",
+			editableScopeLine: 7,
+			editableScopeEndLine: 7,
+			editableScopeColumn: 0,
+		};
+		spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: rawOutput,
+			error: false,
+		});
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", {
+			command: "navigate",
+			file: "/tmp/test/src/main.typ",
+			action: "node-at",
+			line: 7,
+		});
+
+		expect(getText(result)).toContain("Navigate node-at src/main.typ: let L7");
+		expect(getText(result)).toContain("editable scope: code L7");
+		expect(result.details).toEqual(
+			expect.objectContaining({
+				kind: "file",
+				command: "navigate",
+				rawOutput,
+				data: expect.objectContaining({
+					nodeType: "let",
+					editableScopeNodeType: "code",
+					editableScopeLine: 7,
+					editableScopeEndLine: 7,
+					editableScopeColumn: 0,
+				}),
+			}),
+		);
+	});
+
+	it("returns plain-text error for install_grammar command", async () => {
 		const tool = new CodeTool(createSession());
 		const result = await tool.execute("tool", { command: "install_grammar" });
-		const text = result.content.find(c => c.type === "text")?.text ?? "";
-		const parsed = JSON.parse(text);
 
-		expect(parsed.error).toBe(true);
-		expect(parsed.message).toContain("install_grammar is no longer supported");
-		expect(result.details).toEqual({ error: true, command: "install_grammar" });
+		expect(getText(result)).toBe(
+			"Error: install_grammar is no longer supported. Grammars for TypeScript, Rust, Python, and Elixir are built-in.",
+		);
+		expect(result.details).toEqual(
+			expect.objectContaining({
+				kind: "error",
+				error: true,
+				command: "install_grammar",
+			}),
+		);
 	});
 
 	it("passes through read params (resolution, offset, limit)", async () => {
@@ -259,7 +337,7 @@ describe("coding-agent code tool wiring", () => {
 			error: false,
 		});
 		const tool = new CodeTool(createSession());
-		await tool.execute("tool", {
+		const result = await tool.execute("tool", {
 			command: "read",
 			file: "/tmp/test/src/main.ts",
 			resolution: 2,
@@ -267,6 +345,14 @@ describe("coding-agent code tool wiring", () => {
 			limit: 50,
 		});
 
+		expect(getText(result)).toBe("file content");
+		expect(result.details).toEqual(
+			expect.objectContaining({
+				kind: "file",
+				command: "read",
+				data: expect.objectContaining({ resolution: 2, offset: 10, limit: 50 }),
+			}),
+		);
 		expect(bufferSpy).toHaveBeenCalledWith(
 			expect.objectContaining({
 				command: "read",
@@ -278,13 +364,13 @@ describe("coding-agent code tool wiring", () => {
 		);
 	});
 
-	it("forwards symbol-targeted patch edits", async () => {
+	it("formats edit results as compact diffs instead of raw JSON dumps", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
 			output: { version: 2, diff: "@@ add @@\n-return a + b;\n+return a * b;", editCount: 1 },
 			error: false,
 		});
 		const tool = new CodeTool(createSession());
-		await tool.execute("tool", {
+		const result = await tool.execute("tool", {
 			command: "edit",
 			file: "/tmp/test/src/main.ts",
 			symbol: "add",
@@ -292,6 +378,9 @@ describe("coding-agent code tool wiring", () => {
 			patches: [{ find: "return a + b;", replace: "return a * b;" }],
 		});
 
+		expect(getText(result)).toContain("Edited src/main.ts (1 operation, buffer version 2)");
+		expect(getText(result)).toContain("@@ add @@");
+		expect(getText(result)).not.toMatch(/^\s*\{/);
 		expect(bufferSpy).toHaveBeenCalledWith(
 			expect.objectContaining({
 				command: "edit",
@@ -329,18 +418,18 @@ describe("coding-agent code tool wiring", () => {
 			}),
 		);
 	});
-	it("surfaces thrown native exceptions as tool error results", async () => {
+
+	it("surfaces thrown native exceptions as plain-text tool errors", async () => {
 		spyOn(nativesModule, "executeCodeBuffer").mockImplementation(() => {
 			throw new Error("Language profile not found for /tmp/test/foo.go");
 		});
 		const tool = new CodeTool(createSession());
 		const result = await tool.execute("tool", { command: "outline", file: "/tmp/test/foo.go" });
-		const text = result.content.find(c => c.type === "text")?.text ?? "";
-		const parsed = JSON.parse(text);
 
-		expect(parsed.error).toBe(true);
-		expect(parsed.message).toContain("Language profile not found");
-		expect(result.details).toEqual({ error: true, command: "outline" });
+		expect(getText(result)).toBe("Error: Language profile not found for /tmp/test/foo.go");
+		expect(result.details).toEqual(
+			expect.objectContaining({ kind: "error", error: true, command: "outline", displayPath: "foo.go" }),
+		);
 	});
 
 	it("surfaces native error envelopes from executeCodeBuffer response", async () => {
@@ -350,11 +439,11 @@ describe("coding-agent code tool wiring", () => {
 		});
 		const tool = new CodeTool(createSession());
 		const result = await tool.execute("tool", { command: "bogus" });
-		const text = result.content.find(c => c.type === "text")?.text ?? "";
-		const parsed = JSON.parse(text);
 
-		expect(parsed).toEqual(expect.objectContaining({ error: true, message: "Unknown command: bogus" }));
-		expect(result.details).toEqual({ error: true, command: "bogus" });
+		expect(getText(result)).toBe("Error: Unknown command: bogus");
+		expect(result.details).toEqual(
+			expect.objectContaining({ kind: "error", error: true, command: "bogus", message: "Unknown command: bogus" }),
+		);
 	});
 
 	it("forwards mode for splice edit operations", async () => {
@@ -376,7 +465,7 @@ describe("coding-agent code tool wiring", () => {
 
 	it("resolves relative file paths against session cwd", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
-			output: "relative content",
+			output: [],
 			error: false,
 		});
 		const tool = new CodeTool(createSession({ cwd: "/virtual/session" }));
@@ -387,7 +476,7 @@ describe("coding-agent code tool wiring", () => {
 
 	it("passes through absolute file paths unchanged", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
-			output: "absolute content",
+			output: [],
 			error: false,
 		});
 		const tool = new CodeTool(createSession({ cwd: "/virtual/session" }));
@@ -398,7 +487,7 @@ describe("coding-agent code tool wiring", () => {
 
 	it("does not forward file-local depth", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
-			output: "depth content",
+			output: [],
 			error: false,
 		});
 		const tool = new CodeTool(createSession());

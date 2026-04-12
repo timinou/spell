@@ -1,0 +1,733 @@
+import * as path from "node:path";
+
+export type CodeGraphCommand =
+	| "index"
+	| "status"
+	| "context"
+	| "impact"
+	| "deps"
+	| "flow"
+	| "dead_code"
+	| "clusters"
+	| "search";
+
+export type CodeFileCommand =
+	| "outline"
+	| "read"
+	| "navigate"
+	| "edit"
+	| "undo"
+	| "redo"
+	| "diff"
+	| "save"
+	| "buffers"
+	| "languages";
+
+export interface CodeOutlineEntry {
+	name: string;
+	kind: string;
+	line: number;
+	endLine: number;
+	column?: number;
+	exported?: boolean;
+	signature?: string;
+	children: CodeOutlineEntry[];
+}
+
+export interface CodeNavigateItem {
+	nodeType?: string;
+	text?: string;
+	line?: number;
+	endLine?: number;
+}
+
+export interface CodeNavigateData {
+	action?: string;
+	nodeType?: string;
+	text?: string;
+	line?: number;
+	endLine?: number;
+	column?: number;
+	parentType?: string;
+	editableScopeNodeType?: string;
+	editableScopeLine?: number;
+	editableScopeEndLine?: number;
+	editableScopeColumn?: number;
+	name?: string;
+	kind?: string;
+	items: CodeNavigateItem[];
+	referenceCount: number;
+}
+
+export interface CodeEditData {
+	version?: number;
+	diff: string;
+	editCount: number;
+}
+
+export interface CodeHistoryRange {
+	start?: { line?: number; column?: number };
+	end?: { line?: number; column?: number };
+}
+
+export interface CodeHistoryEntry {
+	version?: number;
+	changedRanges: CodeHistoryRange[];
+	inputEdit?: {
+		startByte?: number;
+		oldEndByte?: number;
+		newText?: string;
+	};
+}
+
+export interface CodeHistoryData {
+	entries: CodeHistoryEntry[] | null;
+	applied: boolean;
+}
+
+export interface CodeDiffHunk {
+	oldStart?: number;
+	oldCount?: number;
+	newStart?: number;
+	newCount?: number;
+	kind?: string;
+	content: string;
+}
+
+export interface CodeBufferInfo {
+	path?: string;
+	language?: string;
+	version?: number;
+	dirty?: boolean;
+	lineCount?: number;
+}
+
+export interface CodeLanguageInfo {
+	id: string;
+	extensions: string[];
+}
+
+interface CodeFileDetailsBase<TCommand extends CodeFileCommand, TData> {
+	kind: "file";
+	command: TCommand;
+	file?: string;
+	displayPath?: string;
+	data: TData;
+	rawOutput: unknown;
+}
+
+export type CodeOutlineDetails = CodeFileDetailsBase<
+	"outline",
+	{
+		entries: CodeOutlineEntry[];
+		topLevelCount: number;
+		totalSymbols: number;
+	}
+>;
+
+export type CodeReadDetails = CodeFileDetailsBase<
+	"read",
+	{
+		text: string;
+		resolution?: number;
+		offset?: number;
+		limit?: number;
+	}
+>;
+
+export type CodeNavigateDetails = CodeFileDetailsBase<"navigate", CodeNavigateData>;
+export type CodeEditDetails = CodeFileDetailsBase<"edit", CodeEditData>;
+export type CodeUndoRedoDetails = CodeFileDetailsBase<"undo" | "redo", CodeHistoryData>;
+export type CodeDiffDetails = CodeFileDetailsBase<"diff", { hunks: CodeDiffHunk[] }>;
+export type CodeSaveDetails = CodeFileDetailsBase<"save", { success: boolean; version?: number }>;
+export type CodeBuffersDetails = CodeFileDetailsBase<"buffers", { buffers: CodeBufferInfo[] }>;
+export type CodeLanguagesDetails = CodeFileDetailsBase<"languages", { languages: CodeLanguageInfo[] }>;
+
+export type CodeFileDetails =
+	| CodeOutlineDetails
+	| CodeReadDetails
+	| CodeNavigateDetails
+	| CodeEditDetails
+	| CodeUndoRedoDetails
+	| CodeDiffDetails
+	| CodeSaveDetails
+	| CodeBuffersDetails
+	| CodeLanguagesDetails;
+
+export interface CodeGraphDetails {
+	kind: "graph";
+	command: CodeGraphCommand;
+	output: string;
+	cacheStatus?: string;
+	rebuilt?: boolean;
+	semanticStatus?: string;
+	graph: true;
+}
+
+export interface CodeToolErrorDetails {
+	kind: "error";
+	command: string;
+	file?: string;
+	displayPath?: string;
+	message: string;
+	error: true;
+	output?: unknown;
+}
+
+export type CodeToolResultDetails = CodeGraphDetails | CodeFileDetails | CodeToolErrorDetails;
+
+const OUTLINE_PREVIEW_LIMIT = 12;
+const NAVIGATE_ITEM_PREVIEW_LIMIT = 6;
+const BUFFER_PREVIEW_LIMIT = 10;
+const LANGUAGE_PREVIEW_LIMIT = 10;
+const HISTORY_PREVIEW_LIMIT = 5;
+const PREVIEW_TEXT_LIMIT = 120;
+
+export function createCodeToolError(input: {
+	command: string;
+	message: string;
+	file?: string;
+	cwd?: string;
+	output?: unknown;
+}): CodeToolErrorDetails {
+	return {
+		kind: "error",
+		command: input.command,
+		file: input.file,
+		displayPath: toDisplayPath(input.file, input.cwd),
+		message: input.message,
+		error: true,
+		output: input.output,
+	};
+}
+
+export function createCodeGraphDetails(input: {
+	command: CodeGraphCommand;
+	output: string;
+	cacheStatus?: string;
+	rebuilt?: boolean;
+	semanticStatus?: string;
+}): CodeGraphDetails {
+	return {
+		kind: "graph",
+		command: input.command,
+		output: input.output,
+		cacheStatus: input.cacheStatus,
+		rebuilt: input.rebuilt,
+		semanticStatus: input.semanticStatus,
+		graph: true,
+	};
+}
+
+export function normalizeCodeBufferSuccess(input: {
+	command: CodeFileCommand;
+	output: unknown;
+	file?: string;
+	cwd?: string;
+	action?: string;
+	resolution?: number;
+	offset?: number;
+	limit?: number;
+}): CodeFileDetails {
+	const displayPath = toDisplayPath(input.file, input.cwd);
+	const base = {
+		kind: "file" as const,
+		command: input.command,
+		file: input.file,
+		displayPath,
+		rawOutput: input.output,
+	};
+
+	if (input.command === "outline") {
+		const entries = normalizeOutlineEntries(input.output);
+		return {
+			...base,
+			command: "outline",
+			data: {
+				entries,
+				topLevelCount: entries.length,
+				totalSymbols: countOutlineEntries(entries),
+			},
+		};
+	}
+
+	if (input.command === "read") {
+		return {
+			...base,
+			command: "read",
+			data: {
+				text: typeof input.output === "string" ? input.output : String(input.output ?? ""),
+				resolution: input.resolution,
+				offset: input.offset,
+				limit: input.limit,
+			},
+		};
+	}
+
+	if (input.command === "navigate") {
+		return {
+			...base,
+			command: "navigate",
+			data: normalizeNavigateData(input.output, input.action),
+		};
+	}
+
+	if (input.command === "edit") {
+		const record = asRecord(input.output);
+		return {
+			...base,
+			command: "edit",
+			data: {
+				version: asNumber(record?.version),
+				diff: asString(record?.diff) ?? "",
+				editCount: asNumber(record?.editCount) ?? 0,
+			},
+		};
+	}
+
+	if (input.command === "undo" || input.command === "redo") {
+		return {
+			...base,
+			command: input.command,
+			data: normalizeHistoryData(input.output),
+		};
+	}
+
+	if (input.command === "diff") {
+		return {
+			...base,
+			command: "diff",
+			data: {
+				hunks: normalizeDiffHunks(input.output),
+			},
+		};
+	}
+
+	if (input.command === "save") {
+		const record = asRecord(input.output);
+		return {
+			...base,
+			command: "save",
+			data: {
+				success: asBoolean(record?.success) ?? false,
+				version: asNumber(record?.version),
+			},
+		};
+	}
+
+	if (input.command === "buffers") {
+		return {
+			...base,
+			command: "buffers",
+			data: {
+				buffers: normalizeBufferInfos(input.output),
+			},
+		};
+	}
+
+	const languagesRecord = asRecord(input.output);
+	return {
+		...base,
+		command: "languages",
+		data: {
+			languages: normalizeLanguages(languagesRecord?.languages),
+		},
+	};
+}
+
+export function formatCodeToolContent(details: CodeToolResultDetails): string {
+	if (details.kind === "error") {
+		return `Error: ${details.message}`;
+	}
+
+	if (details.kind === "graph") {
+		return details.output;
+	}
+
+	if (details.command === "read") {
+		return details.data.text;
+	}
+
+	if (details.command === "outline") {
+		const label = details.displayPath ? ` ${details.displayPath}` : "";
+		const lines = [
+			`Outline${label} (${details.data.topLevelCount} top-level, ${details.data.totalSymbols} total symbols)`,
+		];
+		for (const line of previewList(details.data.entries, OUTLINE_PREVIEW_LIMIT).map(formatOutlineEntry)) {
+			lines.push(`- ${line}`);
+		}
+		const remaining = details.data.entries.length - Math.min(details.data.entries.length, OUTLINE_PREVIEW_LIMIT);
+		if (remaining > 0) {
+			lines.push(`- … ${remaining} more top-level entries`);
+		}
+		return lines.join("\n");
+	}
+
+	if (details.command === "navigate") {
+		const label = details.displayPath ? ` ${details.displayPath}` : "";
+		const action = details.data.action ? ` ${details.data.action}` : "";
+		const nodeLabel = [details.data.nodeType, details.data.name].filter(Boolean).join(" ") || "node";
+		const location = formatLineRange(details.data.line, details.data.endLine, details.data.column);
+		const lines = [`Navigate${action}${label}: ${nodeLabel}${location ? ` ${location}` : ""}`];
+		if (details.data.text && details.data.text !== details.data.name) {
+			lines.push(`- text: ${truncatePreview(details.data.text)}`);
+		}
+		if (details.data.parentType) {
+			lines.push(`- parent: ${details.data.parentType}`);
+		}
+		if (details.data.editableScopeNodeType) {
+			const scopeLocation = formatLineRange(
+				details.data.editableScopeLine,
+				details.data.editableScopeEndLine,
+				details.data.editableScopeColumn,
+			);
+			lines.push(
+				`- editable scope: ${details.data.editableScopeNodeType}${scopeLocation ? ` ${scopeLocation}` : ""}`,
+			);
+		}
+		if (details.data.kind) {
+			lines.push(`- symbol kind: ${details.data.kind}`);
+		}
+		if (details.data.items.length > 0) {
+			lines.push(`- related items: ${details.data.items.length}`);
+			for (const item of previewList(details.data.items, NAVIGATE_ITEM_PREVIEW_LIMIT)) {
+				const itemLocation = formatLineRange(item.line, item.endLine);
+				const itemLabel = [item.nodeType, truncatePreview(item.text)].filter(Boolean).join(" ");
+				lines.push(`  - ${itemLabel}${itemLocation ? ` ${itemLocation}` : ""}`);
+			}
+			const remaining = details.data.items.length - Math.min(details.data.items.length, NAVIGATE_ITEM_PREVIEW_LIMIT);
+			if (remaining > 0) {
+				lines.push(`  - … ${remaining} more related items`);
+			}
+		}
+		if (details.data.referenceCount > 0) {
+			lines.push(`- references: ${details.data.referenceCount}`);
+		}
+		return lines.join("\n");
+	}
+
+	if (details.command === "edit") {
+		const label = details.displayPath ? ` ${details.displayPath}` : "";
+		const header = `Edited${label} (${pluralize(details.data.editCount, "operation")}, buffer version ${details.data.version ?? "unknown"})`;
+		return details.data.diff.trim().length > 0 ? `${header}\n${details.data.diff}` : header;
+	}
+
+	if (details.command === "undo" || details.command === "redo") {
+		const label = details.displayPath ? ` ${details.displayPath}` : "";
+		if (!details.data.applied || !details.data.entries || details.data.entries.length === 0) {
+			return `${capitalize(details.command)}${label} had no effect.`;
+		}
+		const lines = [
+			`${capitalize(details.command)}${label} applied ${pluralize(details.data.entries.length, "history entry")}.`,
+		];
+		for (const entry of previewList(details.data.entries, HISTORY_PREVIEW_LIMIT)) {
+			lines.push(`- ${formatHistoryEntry(entry)}`);
+		}
+		const remaining = details.data.entries.length - Math.min(details.data.entries.length, HISTORY_PREVIEW_LIMIT);
+		if (remaining > 0) {
+			lines.push(`- … ${remaining} more history entries`);
+		}
+		return lines.join("\n");
+	}
+
+	if (details.command === "diff") {
+		const label = details.displayPath ? ` ${details.displayPath}` : "";
+		const lines = [`Unsaved diff${label} (${pluralize(details.data.hunks.length, "hunk")})`];
+		for (const [index, hunk] of details.data.hunks.entries()) {
+			lines.push(`@@ hunk ${index + 1} ${formatHunkSummary(hunk)} @@`);
+			if (hunk.content.trim()) {
+				lines.push(hunk.content);
+			}
+		}
+		return lines.join("\n");
+	}
+
+	if (details.command === "save") {
+		const label = details.displayPath ? ` ${details.displayPath}` : "";
+		return details.data.success
+			? `Saved${label} (buffer version ${details.data.version ?? "unknown"}).`
+			: `Save${label} did not report success.`;
+	}
+
+	if (details.command === "buffers") {
+		const lines = [`Open buffers (${details.data.buffers.length})`];
+		for (const buffer of previewList(details.data.buffers, BUFFER_PREVIEW_LIMIT)) {
+			lines.push(`- ${formatBufferInfo(buffer)}`);
+		}
+		const remaining = details.data.buffers.length - Math.min(details.data.buffers.length, BUFFER_PREVIEW_LIMIT);
+		if (remaining > 0) {
+			lines.push(`- … ${remaining} more buffers`);
+		}
+		return lines.join("\n");
+	}
+
+	const lines = [`Built-in languages (${details.data.languages.length})`];
+	for (const language of previewList(details.data.languages, LANGUAGE_PREVIEW_LIMIT)) {
+		const suffix = language.extensions.length > 0 ? ` (${language.extensions.join(", ")})` : "";
+		lines.push(`- ${language.id}${suffix}`);
+	}
+	const remaining = details.data.languages.length - Math.min(details.data.languages.length, LANGUAGE_PREVIEW_LIMIT);
+	if (remaining > 0) {
+		lines.push(`- … ${remaining} more languages`);
+	}
+	return lines.join("\n");
+}
+
+function normalizeOutlineEntries(value: unknown): CodeOutlineEntry[] {
+	if (!Array.isArray(value)) return [];
+	const entries: CodeOutlineEntry[] = [];
+	for (const item of value) {
+		const record = asRecord(item);
+		if (!record) continue;
+		const name = asString(record.name);
+		const kind = asString(record.kind);
+		const line = asNumber(record.line);
+		const endLine = asNumber(record.endLine ?? record.end_line) ?? line;
+		if (!name || !kind || line === undefined || endLine === undefined) continue;
+		entries.push({
+			name,
+			kind,
+			line,
+			endLine,
+			column: asNumber(record.column),
+			exported: asBoolean(record.exported),
+			signature: asString(record.signature),
+			children: normalizeOutlineEntries(record.children),
+		});
+	}
+	return entries;
+}
+
+function countOutlineEntries(entries: CodeOutlineEntry[]): number {
+	let total = 0;
+	for (const entry of entries) {
+		total += 1 + countOutlineEntries(entry.children);
+	}
+	return total;
+}
+
+function normalizeNavigateData(value: unknown, action?: string): CodeNavigateData {
+	const record = asRecord(value);
+	const items = Array.isArray(record?.items)
+		? record.items.map(item => normalizeNavigateItem(item)).filter((item): item is CodeNavigateItem => item !== null)
+		: [];
+	const references = Array.isArray(record?.references) ? record.references.length : 0;
+	return {
+		action,
+		nodeType: asString(record?.nodeType ?? record?.node_type),
+		text: asString(record?.text),
+		line: asNumber(record?.line),
+		endLine: asNumber(record?.endLine ?? record?.end_line),
+		column: asNumber(record?.column),
+		parentType: asString(record?.parentType ?? record?.parent_type),
+		editableScopeNodeType: asString(record?.editableScopeNodeType ?? record?.editable_scope_node_type),
+		editableScopeLine: asNumber(record?.editableScopeLine ?? record?.editable_scope_line),
+		editableScopeEndLine: asNumber(record?.editableScopeEndLine ?? record?.editable_scope_end_line),
+		editableScopeColumn: asNumber(record?.editableScopeColumn ?? record?.editable_scope_column),
+		name: asString(record?.name),
+		kind: asString(record?.kind),
+		items,
+		referenceCount: references,
+	};
+}
+
+function normalizeNavigateItem(value: unknown): CodeNavigateItem | null {
+	const record = asRecord(value);
+	if (!record) return null;
+	return {
+		nodeType: asString(record.nodeType ?? record.node_type),
+		text: asString(record.text),
+		line: asNumber(record.line),
+		endLine: asNumber(record.endLine ?? record.end_line),
+	};
+}
+
+function normalizeHistoryData(value: unknown): CodeHistoryData {
+	if (!Array.isArray(value)) {
+		return { entries: null, applied: false };
+	}
+	return {
+		entries: value.map(normalizeHistoryEntry).filter((entry): entry is CodeHistoryEntry => entry !== null),
+		applied: value.length > 0,
+	};
+}
+
+function normalizeHistoryEntry(value: unknown): CodeHistoryEntry | null {
+	const record = asRecord(value);
+	if (!record) return null;
+	const changedRanges = Array.isArray(record.changedRanges)
+		? record.changedRanges.map(normalizeHistoryRange).filter((range): range is CodeHistoryRange => range !== null)
+		: [];
+	const inputEditRecord = asRecord(record.inputEdit);
+	return {
+		version: asNumber(record.version),
+		changedRanges,
+		inputEdit: inputEditRecord
+			? {
+					startByte: asNumber(inputEditRecord.startByte),
+					oldEndByte: asNumber(inputEditRecord.oldEndByte),
+					newText: asString(inputEditRecord.newText),
+				}
+			: undefined,
+	};
+}
+
+function normalizeHistoryRange(value: unknown): CodeHistoryRange | null {
+	const record = asRecord(value);
+	if (!record) return null;
+	return {
+		start: normalizePoint(record.start),
+		end: normalizePoint(record.end),
+	};
+}
+
+function normalizePoint(value: unknown): { line?: number; column?: number } | undefined {
+	const record = asRecord(value);
+	if (!record) return undefined;
+	return {
+		line: asNumber(record.line),
+		column: asNumber(record.column),
+	};
+}
+
+function normalizeDiffHunks(value: unknown): CodeDiffHunk[] {
+	if (!Array.isArray(value)) return [];
+	const hunks: CodeDiffHunk[] = [];
+	for (const item of value) {
+		const record = asRecord(item);
+		if (!record) continue;
+		hunks.push({
+			oldStart: asNumber(record.oldStart),
+			oldCount: asNumber(record.oldCount),
+			newStart: asNumber(record.newStart),
+			newCount: asNumber(record.newCount),
+			kind: asString(record.kind),
+			content: asString(record.content) ?? "",
+		});
+	}
+	return hunks;
+}
+
+function normalizeBufferInfos(value: unknown): CodeBufferInfo[] {
+	if (!Array.isArray(value)) return [];
+	const buffers: CodeBufferInfo[] = [];
+	for (const item of value) {
+		const record = asRecord(item);
+		if (!record) continue;
+		buffers.push({
+			path: asString(record.path),
+			language: asString(record.language),
+			version: asNumber(record.version),
+			dirty: asBoolean(record.dirty),
+			lineCount: asNumber(record.lineCount ?? record.line_count),
+		});
+	}
+	return buffers;
+}
+
+function normalizeLanguages(value: unknown): CodeLanguageInfo[] {
+	if (!Array.isArray(value)) return [];
+	const languages: CodeLanguageInfo[] = [];
+	for (const item of value) {
+		const record = asRecord(item);
+		const id = asString(record?.id);
+		if (!id) continue;
+		languages.push({
+			id,
+			extensions: Array.isArray(record?.extensions)
+				? record.extensions.filter((entry): entry is string => typeof entry === "string")
+				: [],
+		});
+	}
+	return languages;
+}
+
+function formatOutlineEntry(entry: CodeOutlineEntry): string {
+	const childCount = entry.children.length;
+	const childSuffix = childCount > 0 ? ` (${pluralize(childCount, "child")})` : "";
+	return `${entry.kind} ${entry.name} ${formatLineRange(entry.line, entry.endLine)}${childSuffix}`;
+}
+
+function formatLineRange(start?: number, end?: number, column?: number): string {
+	if (start === undefined) return "";
+	const lineRange = end !== undefined && end !== start ? `L${start}-L${end}` : `L${start}`;
+	return column !== undefined ? `${lineRange}:C${column}` : lineRange;
+}
+
+function formatHistoryEntry(entry: CodeHistoryEntry): string {
+	const firstRange = entry.changedRanges[0];
+	const range = firstRange
+		? `${formatLineRange(firstRange.start?.line, firstRange.end?.line, firstRange.start?.column)} → ${formatLineRange(firstRange.end?.line, firstRange.end?.line, firstRange.end?.column)}`
+		: "range unknown";
+	const textLen = entry.inputEdit?.newText?.length;
+	const version = entry.version !== undefined ? `v${entry.version}` : "version unknown";
+	const textSuffix = textLen !== undefined ? `, inserted ${textLen} chars` : "";
+	return `${version}, ${range}${textSuffix}`;
+}
+
+function formatHunkSummary(hunk: CodeDiffHunk): string {
+	const kind = hunk.kind?.toLowerCase() ?? "change";
+	const oldSpan = formatSpan(hunk.oldStart, hunk.oldCount);
+	const newSpan = formatSpan(hunk.newStart, hunk.newCount);
+	return `${kind} ${oldSpan} -> ${newSpan}`;
+}
+
+function formatSpan(start?: number, count?: number): string {
+	if (start === undefined) return "unknown";
+	if (count === undefined || count <= 1) return `L${start}`;
+	return `L${start}-L${start + count - 1}`;
+}
+
+function formatBufferInfo(buffer: CodeBufferInfo): string {
+	const label = buffer.path ?? "(unnamed buffer)";
+	const language = buffer.language ? ` [${buffer.language}]` : "";
+	const dirty = buffer.dirty ? " dirty" : " clean";
+	const version = buffer.version !== undefined ? ` v${buffer.version}` : "";
+	const lineCount = buffer.lineCount !== undefined ? ` ${pluralize(buffer.lineCount, "line")}` : "";
+	return `${label}${language}${dirty}${version}${lineCount}`;
+}
+
+function toDisplayPath(file: string | undefined, cwd: string | undefined): string | undefined {
+	if (!file) return undefined;
+	if (!cwd) return file;
+	const relative = path.relative(cwd, file);
+	if (!relative || relative === "") return path.basename(file);
+	return relative.startsWith("..") ? file : relative;
+}
+
+function previewList<T>(items: T[], limit: number): T[] {
+	return items.slice(0, limit);
+}
+
+function truncatePreview(value: string | undefined): string | undefined {
+	if (!value) return value;
+	const singleLine = value.replace(/\s+/g, " ").trim();
+	if (singleLine.length <= PREVIEW_TEXT_LIMIT) return singleLine;
+	return `${singleLine.slice(0, PREVIEW_TEXT_LIMIT - 1)}…`;
+}
+
+function pluralize(count: number, noun: string): string {
+	return `${count} ${noun}${count === 1 ? "" : "s"}`;
+}
+
+function capitalize(value: string): string {
+	return value.length === 0 ? value : `${value[0]?.toUpperCase() ?? ""}${value.slice(1)}`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function asString(value: unknown): string | undefined {
+	return typeof value === "string" ? value : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asBoolean(value: unknown): boolean | undefined {
+	return typeof value === "boolean" ? value : undefined;
+}
