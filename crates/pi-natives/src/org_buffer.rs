@@ -228,7 +228,14 @@ fn parse_items_from_options(options: &Value) -> Result<Vec<pi_org_engine::OrgIte
 	if let Some(items_arr) = options.get("items").and_then(Value::as_array) {
 		let items: Vec<pi_org_engine::OrgItem> = items_arr
 			.iter()
-			.filter_map(|v| serde_json::from_value(v.clone()).ok())
+			.enumerate()
+			.filter_map(|(i, v)| match serde_json::from_value::<pi_org_engine::OrgItem>(v.clone()) {
+				Ok(item) => Some(item),
+				Err(e) => {
+					eprintln!("pi-org-engine: failed to deserialize item[{i}]: {e}");
+					None
+				},
+			})
 			.collect();
 		if !items.is_empty() {
 			return Ok(items);

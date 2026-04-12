@@ -1,7 +1,7 @@
 //! Org item extraction from parsed tree-sitter AST.
 //!
-//! An `OrgItem` represents a task heading (with TODO state or CUSTOM_ID) or
-//! a file-level item (frontmatter with CUSTOM_ID).
+//! An `OrgItem` represents a task heading (with TODO state or `CUSTOM_ID`) or
+//! a file-level item (frontmatter with `CUSTOM_ID`).
 
 use std::collections::HashMap;
 
@@ -12,7 +12,7 @@ use crate::clock::ClockEntry;
 /// A single org-mode item (heading or file-level).
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct OrgItem {
-	/// Unique task ID from CUSTOM_ID property.
+	/// Unique task ID from `CUSTOM_ID` property.
 	pub id:         String,
 	/// Heading title (without TODO keyword or tags).
 	pub title:      String,
@@ -31,17 +31,18 @@ pub struct OrgItem {
 	/// Properties from the PROPERTIES drawer.
 	pub properties: HashMap<String, String>,
 	/// Body text (populated when requested).
-	#[serde(skip_serializing_if = "Option::is_none")]
+	#[serde(skip_serializing_if = "Option::is_none", default)]
 	pub body:       Option<String>,
 	/// CLOCK entries parsed from the body.
-	#[serde(skip_serializing_if = "Vec::is_empty")]
+	#[serde(skip_serializing_if = "Vec::is_empty", default)]
 	pub clocks:     Vec<ClockEntry>,
 	/// Byte range of the entire item in the source file (start, end).
 	/// Used for section editing.
+	#[serde(default)]
 	pub byte_range: (usize, usize),
 	/// Child items (sub-headings that are also items).
-	#[serde(skip_serializing_if = "Vec::is_empty")]
-	pub children:   Vec<OrgItem>,
+	#[serde(skip_serializing_if = "Vec::is_empty", default)]
+	pub children:   Vec<Self>,
 }
 
 impl OrgItem {
@@ -85,5 +86,32 @@ impl OrgItem {
 	/// Total clocked minutes for this item.
 	pub fn total_clocked_minutes(&self) -> u32 {
 		crate::clock::total_clocked_minutes(&self.clocks)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn deserialize_without_optional_fields() {
+		let json = serde_json::json!({
+			"id": "T-001",
+			"title": "Test",
+			"state": "DOING",
+			"category": "test",
+			"dir": "tasks",
+			"file": "/test.org",
+			"line": 1,
+			"level": 1,
+			"properties": {}
+		});
+		let item: OrgItem =
+			serde_json::from_value(json).expect("should deserialize without optional fields");
+		assert_eq!(item.id, "T-001");
+		assert_eq!(item.byte_range, (0, 0));
+		assert!(item.clocks.is_empty());
+		assert!(item.children.is_empty());
+		assert!(item.body.is_none());
 	}
 }

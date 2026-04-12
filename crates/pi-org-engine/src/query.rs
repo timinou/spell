@@ -78,7 +78,7 @@ pub enum CompareOp {
 }
 
 impl CompareOp {
-	fn matches(&self, ordering: Ordering) -> bool {
+	fn matches(self, ordering: Ordering) -> bool {
 		match self {
 			Self::Eq => ordering == Ordering::Equal,
 			Self::Gte => ordering != Ordering::Less,
@@ -206,17 +206,17 @@ pub fn matches_filter(item: &OrgItem, filter: &QueryFilter) -> bool {
 	}
 
 	// Layer filter
-	if let Some(layer) = &filter.layer {
-		if item.layer() != Some(layer.as_str()) {
-			return false;
-		}
+	if let Some(layer) = &filter.layer
+		&& item.layer() != Some(layer.as_str())
+	{
+		return false;
 	}
 
 	// Agent filter
-	if let Some(agent) = &filter.agent {
-		if item.agent() != Some(agent.as_str()) {
-			return false;
-		}
+	if let Some(agent) = &filter.agent
+		&& item.agent() != Some(agent.as_str())
+	{
+		return false;
 	}
 
 	// Category filter
@@ -230,10 +230,10 @@ pub fn matches_filter(item: &OrgItem, filter: &QueryFilter) -> bool {
 	}
 
 	// Level filter
-	if let Some(level) = filter.level {
-		if item.level != level {
-			return false;
-		}
+	if let Some(level) = filter.level
+		&& item.level != level
+	{
+		return false;
 	}
 
 	// Property filters
@@ -249,8 +249,7 @@ pub fn matches_filter(item: &OrgItem, filter: &QueryFilter) -> bool {
 		let item_effort = item
 			.property("EFFORT")
 			.and_then(Effort::parse)
-			.map(|e| e.0)
-			.unwrap_or(0);
+			.map_or(0, |effort| effort.0);
 		let cmp = item_effort.cmp(&ef.minutes);
 		if !ef.op.matches(cmp) {
 			return false;
@@ -296,7 +295,7 @@ fn priority_rank(p: &str) -> u8 {
 ///
 /// Sort keys (space-separated): `priority`, `state`/`todo`, `id`, `category`.
 /// Default: `priority state id`.
-pub fn sort_items<'a>(items: &mut Vec<&'a OrgItem>, sort_spec: Option<&str>) {
+pub fn sort_items(items: &mut Vec<&OrgItem>, sort_spec: Option<&str>) {
 	let spec = sort_spec.unwrap_or("priority state id");
 	let keys: Vec<&str> = spec.split_whitespace().collect();
 
@@ -322,11 +321,11 @@ pub fn sort_items<'a>(items: &mut Vec<&'a OrgItem>, sort_spec: Option<&str>) {
 }
 
 /// Apply pagination (offset + limit) to a result set.
-pub fn paginate<'a>(
-	items: Vec<&'a OrgItem>,
+pub fn paginate(
+	items: Vec<&OrgItem>,
 	offset: Option<usize>,
 	limit: Option<usize>,
-) -> Vec<&'a OrgItem> {
+) -> Vec<&OrgItem> {
 	let start = offset.unwrap_or(0);
 	let iter = items.into_iter().skip(start);
 	if let Some(limit) = limit {

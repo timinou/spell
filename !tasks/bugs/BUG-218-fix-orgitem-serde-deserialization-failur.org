@@ -1,0 +1,176 @@
+#+TITLE: Fix OrgItem serde deserialization failures from missing defaults
+#+STATE: DONE
+#+SESSION_ID: 14b6fb0a71cce49c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T22-43-25-767Z_14b6fb0a71cce49c.jsonl]]
+#+CUSTOM_ID: BUG-218-fix-orgitem-serde-deserialization-failur
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: org
+
+
+NOTE [2026-04-12]: Completed serde deserialization fix and verification.
+
+NOTE [2026-04-12]: Started work on serde defaults and org buffer deserialization error handling.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-061-audit-implementation:
+
+This test was specifically about the Emacs org-ql predicates — correctly deleted. The loop predicates (`loop-status`, `loop-blocked`, etc.) were custom Emacs org-ql predicates that no longer exist. The tool.ts `parseKeywordQuery` doesn't parse these either, which is correct since they were Emacs-only features.
+
+Let me also check the `section.rs` `find_section` for the "last line with no trailing newline" issue:
+
+The `str.lines()` iterator in Rust returns lines without the terminator. For a file ending with `\n`, the last yielded line has `line.len()` not counting the `\n`. The `offset = line_end + 1` works correctly because `line_end` is the byte position of the last char of the line (exclusive of `\n`), and `+1` skips the `\n`.
+
+But for a file NOT ending with `\n`, the last iteration has `offset = line_end + 1` which is 1 past the actual end. And for `\r\n` files, `str.lines()` strips `\r` from the yielded text, so `line.len()` is shorter than the actual bytes between line separators, making `offset` drift out of sync. The comment says `(approx — handles \n)` which acknowledges the issue.
+
+This is a correctness issue for `\r\n` files. However, org files are typically `\n`-only (created by the TS writer which uses `\n`), so the practical impact is low.
+
+Let me now summarize all findings:
+
+---
+
+## Audit Findings
+
+### 1. Silent data loss when deserializing TS items in NAPI bridge
+- **What**: `parse_items_from_options` in `org_buffer.rs` silently drops items that fail serde deserialization via `filter_map(|v| serde_json::from_value(v.clone()).ok())`. TS `OrgItem` objects lack `byte_range` (a required field with no `#[serde(default)]`), so ALL items will fail to deserialize, producing an empty vec.
+- **Where**: `crates/pi-natives/src/org_buffer.rs:229-232` and `crates/pi-org-engine/src/item.rs:41` (missing `#[serde(default)]` on `byte_range`)
+- **Why**: `cmdWave` and `cmdGraph` in tool.ts pass TS-constructed items to `executeOrg({ command: "computeWaves", items })`. These items will all be silently dropped, causing wave/graph commands to return empty results or fail with "Missing required field: source or items". This breaks `org wave` and `org graph` entirely.
+- **Effort**: `trivial` — add `#[serde(default)]` to `byte_range` and `clocks` fields in `OrgItem`
+
+### 2. Priority comparison operators silently discarded
+- **What**: `parseKeywordQuery` in tool.ts extracts only the priority value (`B`) from `priority:>=B`, discarding the operator (`>=`). The TS `applyFilter` does exact string match only. Additionally, the parsed value `B` won't match properties stored as `#B`, so priority filtering is completely broken.
+- **Where**: `packages/org/src/tool.ts:72-74` (regex captures value only), `packages/org/src/org-reader.ts:377-381` (exact match comparison)
+- **Why**: `priority:>=B` was the canonical syntax documented in the tool. It now silently returns no results instead of filtering by priority. Regression from the Emacs-backed path that handled this correctly.
+- **Effort**: `small` — store op+value in `parseKeywordQuery`, add priority comparison logic to `applyFilter`
+
+### 3. `tags:` keyword query is a no-op that sets unrelated field
+- **What**: `parseKeywordQuery` handles `tags:` by setting `filter.agent = undefined`, which is a no-op. Tags filtering is silently ignored.
+- **Where**: `packages/org/src/tool.ts:70`
+- **Why**: Users passing `tags:auth` get no filtering and no error. The old Emacs path supported tag-based queries. Low priority since tags aren't widely used in this project's org workflow, but the code is confusing dead weight.
+- **Effort**: `trivial` — either implement tag support or remove the branch and document the limitation
+
+### 4. `createOrgTool` signature accepts `(() => Promise<unknown>)` as dead compatibility shim
+- **What**: The third parameter accepts a bare async function (old Emacs session factory pattern) that would be used as `getSessionContext`, returning a Promise object as the context value instead of the resolved value.
+- **Where**: `packages/org/src/tool.ts:497`
+- **Why**: Confusing API surface. No callers use this branch. If someone does call it, they get a Promise as the session context object instead of its resolved value — a silent contract violation.
+- **Effort**: `trivial` — remove `| (() => Promise<unknown>)` from the union type
+
+### 5. `section.rs` byte offset calculation breaks on `\r\n` line endings
+- **What**: `find_section` uses `str.lines()` which strips `\r` from line text, but adds a fixed `+1` for `\n` only. On `\r\n` files, offsets will drift, producing corrupted edits.
+- **Where**: `crates/pi-org-engine/src/section.rs:57,61`
+- **Why**: Section editing will silently corrupt files with Windows line endings. Low risk because the TS writer produces `\n` files, but org files from external sources could have `\r\n`.
+- **Effort**: `small` — use byte-offset tracking instead of line length arithmetic, or normalize line endings
+
+### 6. No test coverage for NAPI executeOrg commands
+- **What**: There are no integration tests for the `executeOrg` NAPI function — the TS test plan mentions `bun test packages/natives/test/org-buffer.test.ts` but this file doesn't exist.
+- **Where**: `packages/natives/test/` (missing `org-buffer.test.ts`)
+- **Why**: The NAPI bridge is the critical integration layer between Rust and TS. Without tests, deserialization mismatches (like finding #1) ship undetected. The existing org tests exercise the TS tool layer but never verify the NAPI boundary directly.
+- **Effort**: `medium` — create `org-buffer.test.ts` with basic command dispatch tests
+
+### 7. `ComputedWave` type imported but not used as typed return
+- **What**: `ComputedWave` is imported from types and used only as a type assertion cast on the native engine result. The native engine returns untyped JSON — the cast provides no runtime safety.
+- **Where**: `packages/org/src/tool.ts:18,466`
+- **Why**: Low risk — cosmetic. But the cast at line 466 could hide a field name mismatch between the Rust `WaveResult` serialization and the TS `ComputedWave` type without any compile-time detection.
+- **Effort**: `trivial` — not actionable beyond noting the type gap
+
+### 8. Broad `#![allow]` block in pi-org-engine suppresses useful lints
+- **What**: 14 clippy lints are blanket-suppressed at crate level including `redundant_closure`, `collapsible_if`, and `map_unwrap_or`. Some of these catch real code quality issues.
+- **Where**: `crates/pi-org-engine/src/lib.rs:1-20`
+- **Why**: Future contributors won't get clippy warnings for patterns that are often bugs. `redundant_closure` hides performance issues. `map_unwrap_or` hides Option chains that should use `map_or`. The right fix is to address the individual warnings instead of suppressing them.
+- **Effort**: `small` — fix the ~10 individual clippy warnings and remove the broad allows
+
+* Problem
+
+The Rust =OrgItem= struct in =crates/pi-org-engine/src/item.rs= uses =skip_serializing_if= on three fields (=body=, =clocks=, =children=) but does NOT add =#[serde(default)]= to those fields. A fourth field (=byte_range=) has neither annotation.
+
+When TypeScript-constructed =OrgItem= objects (which lack =byte_range=, =clocks=, and =children= fields) are serialized to JSON and passed to the Rust NAPI bridge via =executeOrg({ command: \"computeWaves\", items })=, serde deserialization fails silently because:
+1. =byte_range: (usize, usize)= is required but absent in the TS JSON
+2. =clocks: Vec<ClockEntry>= is required but absent when skipped by serialization
+3. =children: Vec<OrgItem>= is required but absent when skipped
+
+In =crates/pi-natives/src/org_buffer.rs= line ~231, =filter_map(|v| serde_json::from_value(v.clone()).ok())= silently drops all failed items. This causes =org wave= and =org graph= commands to return empty results.
+
+* Implementation
+
+** File: =crates/pi-org-engine/src/item.rs=
+
+Add =#[serde(default)]= to fields that may be absent when deserializing from TypeScript:
+
+#+begin_src rust
+/// Body text (populated when requested).
+#[serde(skip_serializing_if = "Option::is_none", default)]
+pub body: Option<String>,
+
+/// CLOCK entries parsed from the body.
+#[serde(skip_serializing_if = "Vec::is_empty", default)]
+pub clocks: Vec<ClockEntry>,
+
+/// Byte range of the entire item in the source file (start, end).
+/// Used for section editing.
+#[serde(default)]
+pub byte_range: (usize, usize),
+
+/// Child items (sub-headings that are also items).
+#[serde(skip_serializing_if = "Vec::is_empty", default)]
+pub children: Vec<OrgItem>,
+#+end_src
+
+** File: =crates/pi-natives/src/org_buffer.rs=
+
+Replace the silent =filter_map= in =parse_items_from_options= with explicit error handling that warns on deserialization failures instead of silently dropping items:
+
+#+begin_src rust
+let items: Vec<pi_org_engine::OrgItem> = items_arr
+    .iter()
+    .enumerate()
+    .filter_map(|(i, v)| {
+        match serde_json::from_value::<pi_org_engine::OrgItem>(v.clone()) {
+            Ok(item) => Some(item),
+            Err(e) => {
+                // Log but don't fail — the caller may have extra fields
+                eprintln!("pi-org-engine: failed to deserialize item[{i}]: {e}");
+                None
+            }
+        }
+    })
+    .collect();
+#+end_src
+
+Note: =eprintln!= is acceptable here because NAPI runs in the Node process and stderr goes to logs, not TUI. The =logger= from pi-utils is TypeScript-side only.
+
+* Verification
+
+- =cargo test -p pi-org-engine= — all existing tests still pass
+- =cargo clippy -p pi-org-engine -- -D warnings= — clean
+- New test in =crates/pi-org-engine/src/item.rs=:
+
+#+begin_src rust
+#[test]
+fn deserialize_without_byte_range() {
+    let json = serde_json::json!({
+        "id": "T-001",
+        "title": "Test",
+        "state": "DOING",
+        "category": "test",
+        "dir": "tasks",
+        "file": "/test.org",
+        "line": 1,
+        "level": 1,
+        "properties": {}
+    });
+    let item: OrgItem = serde_json::from_value(json).expect("should deserialize without optional fields");
+    assert_eq!(item.id, "T-001");
+    assert_eq!(item.byte_range, (0, 0));
+    assert!(item.clocks.is_empty());
+    assert!(item.children.is_empty());
+}
+#+end_src
+
+
+
+Completion report:
+- Added serde defaults for OrgItem.body, clocks, byte_range, and children.
+- Added deserialize_without_optional_fields regression test.
+- Updated org_buffer parsing to log item deserialization failures with item index instead of silently dropping them.
+- Verified with `cargo test -p pi-org-engine` and `cargo build -p pi-natives` (both passed).

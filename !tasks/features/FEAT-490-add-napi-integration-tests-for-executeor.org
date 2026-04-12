@@ -1,0 +1,181 @@
+#+TITLE: Add NAPI integration tests for executeOrg commands
+#+STATE: DONE
+#+SESSION_ID: 14b6fb0a71cce49c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T22-43-25-767Z_14b6fb0a71cce49c.jsonl]]
+#+CUSTOM_ID: FEAT-490-add-napi-integration-tests-for-executeor
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: org
+#+DEPENDS: BUG-218-fix-orgitem-serde-deserialization-failur
+
+
+NOTE [2026-04-12]: Starting work on executeOrg NAPI integration tests.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-061-audit-implementation:
+
+This test was specifically about the Emacs org-ql predicates — correctly deleted. The loop predicates (`loop-status`, `loop-blocked`, etc.) were custom Emacs org-ql predicates that no longer exist. The tool.ts `parseKeywordQuery` doesn't parse these either, which is correct since they were Emacs-only features.
+
+Let me also check the `section.rs` `find_section` for the "last line with no trailing newline" issue:
+
+The `str.lines()` iterator in Rust returns lines without the terminator. For a file ending with `\n`, the last yielded line has `line.len()` not counting the `\n`. The `offset = line_end + 1` works correctly because `line_end` is the byte position of the last char of the line (exclusive of `\n`), and `+1` skips the `\n`.
+
+But for a file NOT ending with `\n`, the last iteration has `offset = line_end + 1` which is 1 past the actual end. And for `\r\n` files, `str.lines()` strips `\r` from the yielded text, so `line.len()` is shorter than the actual bytes between line separators, making `offset` drift out of sync. The comment says `(approx — handles \n)` which acknowledges the issue.
+
+This is a correctness issue for `\r\n` files. However, org files are typically `\n`-only (created by the TS writer which uses `\n`), so the practical impact is low.
+
+Let me now summarize all findings:
+
+---
+
+## Audit Findings
+
+### 1. Silent data loss when deserializing TS items in NAPI bridge
+- **What**: `parse_items_from_options` in `org_buffer.rs` silently drops items that fail serde deserialization via `filter_map(|v| serde_json::from_value(v.clone()).ok())`. TS `OrgItem` objects lack `byte_range` (a required field with no `#[serde(default)]`), so ALL items will fail to deserialize, producing an empty vec.
+- **Where**: `crates/pi-natives/src/org_buffer.rs:229-232` and `crates/pi-org-engine/src/item.rs:41` (missing `#[serde(default)]` on `byte_range`)
+- **Why**: `cmdWave` and `cmdGraph` in tool.ts pass TS-constructed items to `executeOrg({ command: "computeWaves", items })`. These items will all be silently dropped, causing wave/graph commands to return empty results or fail with "Missing required field: source or items". This breaks `org wave` and `org graph` entirely.
+- **Effort**: `trivial` — add `#[serde(default)]` to `byte_range` and `clocks` fields in `OrgItem`
+
+### 2. Priority comparison operators silently discarded
+- **What**: `parseKeywordQuery` in tool.ts extracts only the priority value (`B`) from `priority:>=B`, discarding the operator (`>=`). The TS `applyFilter` does exact string match only. Additionally, the parsed value `B` won't match properties stored as `#B`, so priority filtering is completely broken.
+- **Where**: `packages/org/src/tool.ts:72-74` (regex captures value only), `packages/org/src/org-reader.ts:377-381` (exact match comparison)
+- **Why**: `priority:>=B` was the canonical syntax documented in the tool. It now silently returns no results instead of filtering by priority. Regression from the Emacs-backed path that handled this correctly.
+- **Effort**: `small` — store op+value in `parseKeywordQuery`, add priority comparison logic to `applyFilter`
+
+### 3. `tags:` keyword query is a no-op that sets unrelated field
+- **What**: `parseKeywordQuery` handles `tags:` by setting `filter.agent = undefined`, which is a no-op. Tags filtering is silently ignored.
+- **Where**: `packages/org/src/tool.ts:70`
+- **Why**: Users passing `tags:auth` get no filtering and no error. The old Emacs path supported tag-based queries. Low priority since tags aren't widely used in this project's org workflow, but the code is confusing dead weight.
+- **Effort**: `trivial` — either implement tag support or remove the branch and document the limitation
+
+### 4. `createOrgTool` signature accepts `(() => Promise<unknown>)` as dead compatibility shim
+- **What**: The third parameter accepts a bare async function (old Emacs session factory pattern) that would be used as `getSessionContext`, returning a Promise object as the context value instead of the resolved value.
+- **Where**: `packages/org/src/tool.ts:497`
+- **Why**: Confusing API surface. No callers use this branch. If someone does call it, they get a Promise as the session context object instead of its resolved value — a silent contract violation.
+- **Effort**: `trivial` — remove `| (() => Promise<unknown>)` from the union type
+
+### 5. `section.rs` byte offset calculation breaks on `\r\n` line endings
+- **What**: `find_section` uses `str.lines()` which strips `\r` from line text, but adds a fixed `+1` for `\n` only. On `\r\n` files, offsets will drift, producing corrupted edits.
+- **Where**: `crates/pi-org-engine/src/section.rs:57,61`
+- **Why**: Section editing will silently corrupt files with Windows line endings. Low risk because the TS writer produces `\n` files, but org files from external sources could have `\r\n`.
+- **Effort**: `small` — use byte-offset tracking instead of line length arithmetic, or normalize line endings
+
+### 6. No test coverage for NAPI executeOrg commands
+- **What**: There are no integration tests for the `executeOrg` NAPI function — the TS test plan mentions `bun test packages/natives/test/org-buffer.test.ts` but this file doesn't exist.
+- **Where**: `packages/natives/test/` (missing `org-buffer.test.ts`)
+- **Why**: The NAPI bridge is the critical integration layer between Rust and TS. Without tests, deserialization mismatches (like finding #1) ship undetected. The existing org tests exercise the TS tool layer but never verify the NAPI boundary directly.
+- **Effort**: `medium` — create `org-buffer.test.ts` with basic command dispatch tests
+
+### 7. `ComputedWave` type imported but not used as typed return
+- **What**: `ComputedWave` is imported from types and used only as a type assertion cast on the native engine result. The native engine returns untyped JSON — the cast provides no runtime safety.
+- **Where**: `packages/org/src/tool.ts:18,466`
+- **Why**: Low risk — cosmetic. But the cast at line 466 could hide a field name mismatch between the Rust `WaveResult` serialization and the TS `ComputedWave` type without any compile-time detection.
+- **Effort**: `trivial` — not actionable beyond noting the type gap
+
+### 8. Broad `#![allow]` block in pi-org-engine suppresses useful lints
+- **What**: 14 clippy lints are blanket-suppressed at crate level including `redundant_closure`, `collapsible_if`, and `map_unwrap_or`. Some of these catch real code quality issues.
+- **Where**: `crates/pi-org-engine/src/lib.rs:1-20`
+- **Why**: Future contributors won't get clippy warnings for patterns that are often bugs. `redundant_closure` hides performance issues. `map_unwrap_or` hides Option chains that should use `map_or`. The right fix is to address the individual warnings instead of suppressing them.
+- **Effort**: `small` — fix the ~10 individual clippy warnings and remove the broad allows
+
+* Problem
+
+There are no integration tests for the =executeOrg= NAPI function. The plan verification mentioned =bun test packages/natives/test/org-buffer.test.ts= but this file does not exist. The NAPI bridge is the critical integration layer between the Rust org engine and TypeScript consumers. Without tests, deserialization mismatches (like the =byte_range= issue in BUG-218) ship undetected.
+
+* Design
+
+Create =packages/natives/test/org-buffer.test.ts= following the existing =native.test.ts= pattern. Test all 9 =executeOrg= commands through the actual NAPI boundary.
+
+Tests import =executeOrg= from =../src/index= and call it with in-memory org source strings. No filesystem fixtures needed for most tests (org content is passed as strings).
+
+* Implementation
+
+** File: =packages/natives/test/org-buffer.test.ts=
+
+#+begin_src typescript
+import { describe, expect, it } from \"bun:test\";
+import { executeOrg } from \"../src/index\";
+#+end_src
+
+*** Test: parse command
+- Input: simple org source with one heading, PROPERTIES drawer, body
+- Assert: =result.error === false=, =result.output.items= has length 1, item has correct id/title/state/level
+
+*** Test: parse with file-level item
+- Input: org source with =#+CUSTOM_ID:= frontmatter
+- Assert: item level is 0, correct properties extracted
+
+*** Test: query with todo filter
+- Input: org source with 3 items (DOING, ITEM, DONE)
+- Pass =query: \"todo:DOING\"=
+- Assert: only 1 item returned, total is 1
+
+*** Test: query with priority filter
+- Input: org source with items at #A, #B, #C
+- Pass =query: \"priority:>=B\"= (note: depends on BUG-222 being applied for this to work via the TS layer; here we test the native engine's own query which uses its own =parse_keyword_query=)
+- Actually, the native =cmd_query= uses =pi_org_engine::query::parse_keyword_query= which IS the Rust implementation and DOES handle operators correctly. So this test should work directly.
+- Assert: 2 items returned (#A and #B)
+
+*** Test: graph command
+- Input: pre-serialized items array (3 items, B blocks on A, C blocks on A and B)
+- Pass =command: \"graph\", items: [...]= 
+- Assert: result has nodes (3), edges (3), cycles empty
+
+*** Test: computeWaves command
+- Input: same items as graph test
+- Assert: 3 waves (A=0, B=1, C=2)
+
+*** Test: nextWave command
+- Input: items where A is DONE, B blocks on A
+- Pass =doneStates: [\"DONE\"]=
+- Assert: B is in the next wave
+
+*** Test: editSection command
+- Input: org source with two sections (Context, Implementation)
+- Pass =command: \"editSection\", source, section: \"Context\", body: \"New content\", mode: \"replace\"=
+- Assert: =result.output.source= contains \"New content\" and still contains \"** Implementation\"
+
+*** Test: editSection append
+- Same source, =mode: \"append\"=
+- Assert: source contains both old and appended content
+
+*** Test: toMarkdown command
+- Input: =* Heading\
+#+begin_src rust\
+fn main() {}\
+#+end_src=
+- Assert: result contains =# Heading= and =```rust=
+
+*** Test: toPlainText command
+- Input: =* Heading\
+Body text=
+- Assert: result contains \"Heading\" and \"Body text\", no =*= prefix
+
+*** Test: connectedComponents command
+- Input: two disconnected pairs of items
+- Assert: 2 components returned
+
+*** Test: unknown command
+- Pass =command: \"bogus\"=
+- Assert: =result.error === true=
+
+*** Test: missing source
+- Pass =command: \"parse\"= with no source
+- Assert: throws or returns error
+
+*** Test: deserialize TS-shaped items (regression test for BUG-218)
+- Pass items WITHOUT =byte_range= field to =computeWaves=
+- Assert: items are correctly deserialized and waves computed (not silently dropped)
+
+* Verification
+
+- =PI_DEV=1 bun test packages/natives/test/org-buffer.test.ts= — all tests pass
+- Confirm the file imports from =../src/index= (uses the NAPI boundary)
+- At least 14 test cases covering all 9 commands + error paths
+
+
+
+Completion report:
+- Added integration coverage for executeOrg parse/query/graph/waves/nextWave/connectedComponents/editSection/toMarkdown/toPlainText plus error cases.
+- Verified with `PI_DEV=1 bun test packages/natives/test/org-buffer.test.ts`.

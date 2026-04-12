@@ -62,16 +62,37 @@ function paginateResult(
 	return { items: result, total: totalBeforePagination };
 }
 
+const PRIORITY_ORDER = ["#A", "#B", "#C"];
+
+function expandPriorityFilter(op: string, value: string): string[] {
+	const idx = PRIORITY_ORDER.indexOf(`#${value}`);
+	if (idx === -1) return [`#${value}`];
+	switch (op) {
+		case ">=":
+			return PRIORITY_ORDER.slice(0, idx + 1);
+		case "<=":
+			return PRIORITY_ORDER.slice(idx);
+		case ">":
+			return PRIORITY_ORDER.slice(0, idx);
+		case "<":
+			return PRIORITY_ORDER.slice(idx + 1);
+		default:
+			return [`#${value}`];
+	}
+}
+
 function parseKeywordQuery(input: string): OrgQueryFilter {
 	const filter: OrgQueryFilter = {};
 	for (const token of input.trim().split(/\s+/)) {
 		if (!token) continue;
 		if (token.startsWith("todo:")) filter.state = token.slice(5).split(",").filter(Boolean);
-		else if (token.startsWith("tags:")) filter.agent = undefined;
 		else if (token.startsWith("priority:")) {
 			const val = token.slice(9);
-			const match = /^(>=|<=|=)?([A-C#])$/.exec(val);
-			if (match) filter.priority = match[2]!;
+			const match = /^(>=|<=|>|<|=)?#?([A-C])$/i.exec(val);
+			if (match) {
+				const op = match[1] ?? "=";
+				filter.priority = expandPriorityFilter(op, match[2]!.toUpperCase());
+			}
 		} else if (token.startsWith("property:")) {
 			const [key, value] = token.slice(9).split("=", 2);
 			if (key && value !== undefined) {
@@ -80,6 +101,7 @@ function parseKeywordQuery(input: string): OrgQueryFilter {
 			}
 		}
 	}
+
 	return filter;
 }
 
@@ -174,6 +196,9 @@ async function cmdQuery(
 	const parsed = filter.query ? parseKeywordQuery(filter.query) : {};
 	const merged: OrgQueryFilter = { ...parsed, ...filter };
 	if (parsed.state && !filter.state) merged.state = parsed.state;
+	if (parsed.priority && !filter.priority) merged.priority = parsed.priority;
+	if (parsed.layer && !filter.layer) merged.layer = parsed.layer;
+	if (parsed.agent && !filter.agent) merged.agent = parsed.agent;
 	const allItems: OrgItem[] = [];
 	await Promise.all(
 		targetCats.map(async cat =>
@@ -494,15 +519,12 @@ async function cmdArchive(ctx: OrgContext, args: { category?: string }): Promise
 export function createOrgTool(
 	projectRoot: string,
 	config: OrgConfig = DEFAULT_ORG_CONFIG,
-	options?: CreateOrgToolOptions | (() => Promise<unknown>),
+	options?: CreateOrgToolOptions,
 ): OrgToolDefinition {
 	const ctx: OrgContext = {
 		config,
 		projectRoot,
-		getSessionContext:
-			typeof options === "function"
-				? options
-				: (options?.getSessionContext as (() => OrgSessionContext) | undefined),
+		getSessionContext: options?.getSessionContext as (() => OrgSessionContext) | undefined,
 	};
 	return {
 		name: "org",

@@ -192,7 +192,7 @@ fn detect_cycles(items: &[OrgItem]) -> Vec<Cycle> {
 /// Items depending only on wave-0 items are wave 1, etc.
 ///
 /// `items`: the items to wave-sort.
-/// `parent_id_fn`: maps item ID to parent_id for sub-outline grouping.
+/// `parent_id_fn`: maps item ID to `parent_id` for sub-outline grouping.
 pub fn compute_waves(items: &[OrgItem], parent_id_fn: impl Fn(&str) -> String) -> WaveResult {
 	let id_set: HashSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
 	let mut warnings = Vec::new();
