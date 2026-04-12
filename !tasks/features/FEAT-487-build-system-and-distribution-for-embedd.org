@@ -1,0 +1,106 @@
+#+TITLE: Build system and distribution for embedding worker
+#+STATE: DONE
+#+SESSION_ID: 14b703c224e98c9c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-21-31-027Z_14b703c224e98c9c.jsonl]]
+#+CUSTOM_ID: FEAT-487-build-system-and-distribution-for-embedd
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: native
+#+DEPENDS: FEAT-485-embedding-subprocess-worker-binary
+
+NOTE [2026-04-12]: Updated native build/embed flow to package the worker binary and extract it for compiled-binary runs; verification captured in PLAN-199 completion report.
+
+* Initial Message
+
+╰─ ============================================================                                                                               ─╯
+Bun v1.3.10 (30e609e0) Linux x64
+Linux Kernel v6.18.6 | glibc v2.42
+CPU: sse42 popcnt avx avx2 avx512
+Args: "bun" "/home/user/.local/share/reflex/bun/bin/spell"
+Features: Bun.stderr(2) Bun.stdin(2) Bun.stdout(2) WebSocket(3) abort_signal(33) bunfig dotenv fetch(150) jsc loaders shell(752) spawn(383) transpiler_cache(33) tsconfig(42) tsconfig_paths(15) process_dlopen yaml_parse(80)
+Builtins: "bun:ffi" "bun:main" "bun:wrap" "bun:sqlite" "node:assert/strict" "node:async_hooks" "node:buffer" "node:child_process" "node:crypto" "node:events" "node:fs" "node:fs/promises" "node:http" "node:https" "node:module" "node:net" "node:os" "node:path" "node:process" "node:querystring" "node:readline/promises" "node:stream" "node:stream/promises" "node:timers" "node:tls" "node:tty" "node:url" "node:util" "node:zlib" "node:worker_threads" "ws" "node:inspector" "node:http2"
+Elapsed: 1009641ms | User: 172885ms | Sys: 30341ms
+RSS: 0.02ZB | Peak: 0.66GB | Commit: 0.02ZB | Faults: 14 | Machine: 49.75GB
+
+panic(main thread): Segmentation fault at address 0x983E7000
+oh no: Bun has crashed. This indicates a bug in Bun, not your code.
+
+To send a redacted crash report to Bun's team,
+please file a GitHub issue using the link below:
+
+* Problem
+The new =pi-embedding-worker= binary must be built alongside the .node native addon and distributed in the same locations so it can be found at runtime.
+
+* Solution
+Extend =packages/natives/scripts/build-native.ts= to also build and install the worker binary.
+
+* Design Decisions
+- Worker binary built via =cargo build -p pi-embedding-worker= (same profile as the .node file)
+- Binary installed to the same =native/= directory as the .node file
+- Named =pi-embedding-worker= (or =pi-embedding-worker.exe= on Windows)
+- Cross-compilation uses the same =CROSS_TARGET= env var
+- The binary must also be included in the =embed:native= script for compiled binary distribution
+- No variant suffixes needed (the binary links statically, ISA is handled by the Rust target)
+
+* Files to Modify
+- =packages/natives/scripts/build-native.ts= — Add worker binary build and install step
+- =packages/natives/scripts/embed-native.ts= — Include worker binary in embedded addon (if this script exists for compiled binary packaging)
+- =packages/natives/package.json= — Ensure =native/= directory includes the worker binary in =files= array (already includes "native")
+
+* Specific Changes to build-native.ts
+
+After the existing =cargo build= for the .node file, add:
+
+#+begin_src typescript
+// Build the embedding worker binary
+console.log("Building pi-embedding-worker...");
+const workerBuildResult = await $`cargo build ${isDev ? "" : "--release"} -p pi-embedding-worker ${crossTarget ? `--target ${crossTarget}` : ""}`.cwd(repoRoot).nothrow();
+if (workerBuildResult.exitCode !== 0) {
+    console.warn("Warning: pi-embedding-worker build failed (semantic features will be unavailable)");
+    // Non-fatal: the .node file is the primary artifact
+} else {
+    // Find and install the worker binary
+    const workerNames = process.platform === "win32"
+        ? ["pi-embedding-worker.exe", "pi_embedding_worker.exe"]
+        : ["pi-embedding-worker", "pi_embedding_worker"];
+
+    let workerSourcePath: string | null = null;
+    for (const dir of profileDirs) {
+        for (const name of workerNames) {
+            const fullPath = path.join(dir, name);
+            try {
+                await fs.stat(fullPath);
+                workerSourcePath = fullPath;
+                break;
+            } catch {}
+        }
+        if (workerSourcePath) break;
+    }
+
+    if (workerSourcePath) {
+        const workerDestName = process.platform === "win32" ? "pi-embedding-worker.exe" : "pi-embedding-worker";
+        const workerDestPath = path.join(nativeDir, workerDestName);
+        console.log(`Installing worker: ${workerDestPath}`);
+        await installBinary(workerSourcePath, workerDestPath);
+    } else {
+        console.warn("Warning: pi-embedding-worker binary not found after build");
+    }
+}
+#+end_src
+
+* Important Notes
+- The worker binary build is NON-FATAL. If it fails, the .node file is still installed and spell works without semantic features.
+- The =installBinary()= function already handles atomic rename (used for .node files), reuse it for the worker binary.
+- The =cargo build= command uses the same RUSTFLAGS, CROSS_TARGET, and profile as the main build.
+- On Cargo workspace level, building pi-embedding-worker is a separate crate build — it does NOT affect the pi-natives cdylib.
+
+* Acceptance Criteria
+- =bun --cwd=packages/natives run build:native= builds BOTH the .node file and the worker binary
+- Worker binary appears in =packages/natives/native/pi-embedding-worker=
+- If worker build fails, the .node file is still installed (non-fatal warning)
+- Cross-compilation works with =CROSS_TARGET= env var
+- Dev builds (=--dev= flag) build debug worker binary
+
+* Testing
+- Run =bun --cwd=packages/natives run build:native= and verify both artifacts exist
+- Verify =ls packages/natives/native/= shows both =pi_natives.*.node= and =pi-embedding-worker=

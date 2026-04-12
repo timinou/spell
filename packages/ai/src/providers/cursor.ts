@@ -127,6 +127,27 @@ export const CURSOR_CLIENT_VERSION = "cli-2026.01.09-231024f";
 
 const conversationStateCache = new Map<string, ConversationStateStructure>();
 const conversationBlobStores = new Map<string, Map<string, Uint8Array>>();
+const MAX_CONVERSATION_CACHE_ENTRIES = 20;
+
+function setConversationCacheEntry(
+	conversationId: string,
+	conversationState: ConversationStateStructure,
+	blobStore: Map<string, Uint8Array>,
+): void {
+	const isExistingConversation =
+		conversationStateCache.has(conversationId) || conversationBlobStores.has(conversationId);
+	conversationStateCache.set(conversationId, conversationState);
+	conversationBlobStores.set(conversationId, blobStore);
+	if (isExistingConversation || conversationStateCache.size <= MAX_CONVERSATION_CACHE_ENTRIES) {
+		return;
+	}
+	const oldestConversationId = conversationStateCache.keys().next().value as string | undefined;
+	if (!oldestConversationId || oldestConversationId === conversationId) {
+		return;
+	}
+	conversationStateCache.delete(oldestConversationId);
+	conversationBlobStores.delete(oldestConversationId);
+}
 
 export interface CursorOptions extends StreamOptions {
 	customSystemPrompt?: string;
@@ -333,14 +354,13 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 
 			const conversationId = options?.conversationId ?? options?.sessionId ?? crypto.randomUUID();
 			const blobStore = conversationBlobStores.get(conversationId) ?? new Map<string, Uint8Array>();
-			conversationBlobStores.set(conversationId, blobStore);
 			const cachedState = conversationStateCache.get(conversationId);
 			const { requestBytes, conversationState } = buildGrpcRequest(model, context, options, {
 				conversationId,
 				blobStore,
 				conversationState: cachedState,
 			});
-			conversationStateCache.set(conversationId, conversationState);
+			setConversationCacheEntry(conversationId, conversationState, blobStore);
 			const requestContextTools = buildMcpToolDefinitions(context.tools);
 
 			const baseUrl = model.baseUrl || CURSOR_API_URL;
@@ -396,7 +416,7 @@ export const streamCursor: StreamFunction<"cursor-agent"> = (
 			};
 
 			const onConversationCheckpoint = (checkpoint: ConversationStateStructure) => {
-				conversationStateCache.set(conversationId, checkpoint);
+				setConversationCacheEntry(conversationId, checkpoint, blobStore);
 			};
 
 			h2Request.on("data", (chunk: Buffer) => {

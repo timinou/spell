@@ -5,6 +5,8 @@ const DELIVERY_RETRY_MAX_MS = 30_000;
 const DELIVERY_RETRY_JITTER_MS = 200;
 const DEFAULT_RETENTION_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_RUNNING_JOBS = 15;
+const MAX_RETAINED_FINISHED_JOBS = 100;
+const MAX_PENDING_DELIVERIES = 200;
 
 export interface AsyncJobProgress {
 	text: string;
@@ -286,23 +288,55 @@ export class AsyncJobManager {
 		return candidate;
 	}
 
+	#cleanupJobArtifacts(jobId: string): void {
+		const timer = this.#evictionTimers.get(jobId);
+		if (timer) {
+			clearTimeout(timer);
+			this.#evictionTimers.delete(jobId);
+		}
+		this.#suppressedDeliveries.delete(jobId);
+		this.#deliveries.splice(
+			0,
+			this.#deliveries.length,
+			...this.#deliveries.filter(delivery => delivery.jobId !== jobId),
+		);
+	}
+
+	#pruneCompletedJobs(): void {
+		const finishedJobs = Array.from(this.#jobs.values())
+			.filter(job => job.status !== "running")
+			.sort((a, b) => a.startTime - b.startTime);
+		const excessJobs = finishedJobs.length - MAX_RETAINED_FINISHED_JOBS;
+		if (excessJobs <= 0) return;
+
+		for (const job of finishedJobs.slice(0, excessJobs)) {
+			this.#cleanupJobArtifacts(job.id);
+			this.#jobs.delete(job.id);
+		}
+	}
+
 	#scheduleEviction(jobId: string): void {
 		if (this.#retentionMs <= 0) {
+			this.#cleanupJobArtifacts(jobId);
 			this.#jobs.delete(jobId);
-			this.#suppressedDeliveries.delete(jobId);
+			this.#pruneCompletedJobs();
 			return;
 		}
+
 		const existing = this.#evictionTimers.get(jobId);
 		if (existing) {
 			clearTimeout(existing);
 		}
+
 		const timer = setTimeout(() => {
 			this.#evictionTimers.delete(jobId);
+			this.#cleanupJobArtifacts(jobId);
 			this.#jobs.delete(jobId);
-			this.#suppressedDeliveries.delete(jobId);
+			this.#pruneCompletedJobs();
 		}, this.#retentionMs);
 		timer.unref();
 		this.#evictionTimers.set(jobId, timer);
+		this.#pruneCompletedJobs();
 	}
 
 	#clearEvictionTimers(): void {
@@ -326,6 +360,9 @@ export class AsyncJobManager {
 			attempt: 0,
 			nextAttemptAt: Date.now(),
 		});
+		if (this.#deliveries.length > MAX_PENDING_DELIVERIES) {
+			this.#deliveries.splice(0, this.#deliveries.length - MAX_PENDING_DELIVERIES);
+		}
 		this.#ensureDeliveryLoop();
 	}
 
@@ -375,6 +412,9 @@ export class AsyncJobManager {
 				this.#deliveries.shift();
 				if (!this.#isDeliverySuppressed(delivery.jobId)) {
 					this.#deliveries.push(delivery);
+					if (this.#deliveries.length > MAX_PENDING_DELIVERIES) {
+						this.#deliveries.splice(0, this.#deliveries.length - MAX_PENDING_DELIVERIES);
+					}
 				}
 				logger.warn("Async job completion delivery failed", {
 					jobId: delivery.jobId,
