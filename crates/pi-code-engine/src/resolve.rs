@@ -96,7 +96,7 @@ fn match_declaration<'a>(
 	source: &str,
 ) -> Option<Node<'a>> {
 	let inner = unwrap_export(node);
-	if let Some(decl) = declaration_for(profile, inner) {
+	if let Some(decl) = declaration_for(profile, inner, source) {
 		if let Some(decl_name) = declaration_name(source, inner, decl) {
 			if decl_name == name {
 				return Some(inner);
@@ -131,7 +131,7 @@ fn unwrap_export(node: Node<'_>) -> Node<'_> {
 
 /// Build a ResolvedSymbol from a declaration node.
 fn build_resolved(node: Node<'_>, profile: &LanguageProfile, source: &str) -> ResolvedSymbol {
-	let decl = declaration_for(profile, node);
+	let decl = declaration_for(profile, node, source);
 	let name = decl
 		.and_then(|d| declaration_name(source, node, d))
 		.unwrap_or_default();
@@ -165,7 +165,18 @@ fn resolve_member(
 	let class_like = profile
 		.class_like
 		.iter()
-		.find(|cl| cl.node_type == class_node.kind())
+		.find(|cl| {
+			if cl.node_type != class_node.kind() {
+				return false;
+			}
+			if let (Some(filter_field), Some(filter_names)) = (&cl.filter_field, &cl.filter_names) {
+				let field_text = class_node
+					.child_by_field_name(filter_field)
+					.and_then(|n| source.get(n.start_byte()..n.end_byte()));
+				return field_text.is_some_and(|t| filter_names.iter().any(|f| f == t));
+			}
+			true
+		})
 		.ok_or_else(|| {
 			CodeEngineError::Edit(format!(
 				"'{}' is not a class-like container, cannot resolve member '{}'",
@@ -173,14 +184,14 @@ fn resolve_member(
 			))
 		})?;
 
-	let members = class_member_nodes(profile, class_node);
+	let members = class_member_nodes(profile, class_node, source);
 	if members.is_empty() && !class_like.member_types.is_empty() {
 		return Err(CodeEngineError::Edit(format!("'{}' has no body", class_name)));
 	}
 
 	let mut matches: Vec<Node<'_>> = Vec::new();
 	for child in members {
-		if let Some(decl) = declaration_for(profile, child) {
+		if let Some(decl) = declaration_for(profile, child, source) {
 			if let Some(n) = declaration_name(source, child, decl) {
 				if n == member_name {
 					matches.push(child);
@@ -220,7 +231,7 @@ fn collect_top_level_names(root: Node<'_>, profile: &LanguageProfile, source: &s
 	let mut cursor = root.walk();
 	for child in root.named_children(&mut cursor) {
 		let inner = unwrap_export(child);
-		if let Some(decl) = declaration_for(profile, inner) {
+		if let Some(decl) = declaration_for(profile, inner, source) {
 			if let Some(n) = declaration_name(source, inner, decl) {
 				names.push(n);
 			}
@@ -236,8 +247,8 @@ fn collect_member_names(
 	source: &str,
 ) -> Vec<String> {
 	let mut names = Vec::new();
-	for child in class_member_nodes(profile, class_node) {
-		if let Some(decl) = declaration_for(profile, child) {
+	for child in class_member_nodes(profile, class_node, source) {
+		if let Some(decl) = declaration_for(profile, child, source) {
 			if let Some(n) = declaration_name(source, child, decl) {
 				names.push(n);
 			}

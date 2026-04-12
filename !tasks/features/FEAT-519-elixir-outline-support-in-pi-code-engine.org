@@ -1,54 +1,135 @@
-#+TITLE: Elixir outline support in pi-code-engine
-#+STATE: ITEM
+#+TITLE: Elixir outline and declaration support in pi-code-engine
+#+STATE: DONE
 #+SESSION_ID: 14b7be567342b8fe
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl]]
 #+CUSTOM_ID: FEAT-519-elixir-outline-support-in-pi-code-engine
 #+EFFORT: 3h
 #+LAYER: code-engine
+#+PRIORITY: #B
 
-* Initial Message
+* Problem
 
-Let me understand the current codebase state before executing.
+The Elixir language profile in =pi-code-engine= has an empty =class_like= vector and a single =DeclarationPattern= that matches all =call= nodes. This causes =code outline= on Elixir files to show only a single =defmodule= entry (named "defmodule") with no nested functions. The outline is useless for navigation, symbol lookup, and structural editing.
 
- Task model: claude-sonnet-4-6
+Root causes:
+1. tree-sitter-elixir represents ALL constructs (defmodule, def, defp, defmacro, use, import) as generic =call= nodes -- no semantic node types
+2. The single =DeclarationPattern= matches every =call= node and extracts the macro name ("defmodule", "def") from the =target= field instead of the actual symbol name
+3. =do_block= is a positional (unnamed) child in tree-sitter-elixir, not a field -- =child_by_field_name("do_block")= returns =None=, breaking body extraction
+4. Empty =class_like= means =defmodule= is never treated as a container with nested members
 
+* Design Decisions
 
- Code
- ┌─── ✔ Code outline ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
- │ Outline lib/hotelcomm/conversations/server.ex (1 top-level, 1 total symbols)                                                               │
- │ - def defmodule L1-L1519                                                                                                                   │
- └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+1. Add =filter_names: Option<Vec<String>>= to =DeclarationPattern= (serde default None). When set, =declaration_for()= only matches nodes whose =name_field= text is in this list.
+2. Add =name_from_arg: bool= to =DeclarationPattern= (serde default false). When true, =declaration_name()= extracts the display name from the first argument child instead of =name_field=.
+3. Add =filter_field: Option<String>= and =filter_names: Option<Vec<String>>= to =ClassLikePattern= (serde defaults). When both set, only treat nodes as class-like if =filter_field= text is in =filter_names=.
+4. Add =child_by_field_or_kind()= helper in outline.rs: tries =child_by_field_name(name)= first, falls back to first named child with =kind() == name=.
+5. Add =source: &str= parameter to =declaration_for()= and update all call sites (outline.rs, navigate.rs, resolve.rs).
+6. Separate =DeclarationPattern= entries for defmodule (kind: "module"), def (kind: "def"), defp (kind: "defp"), defmacro (kind: "macro"), defmacrop (kind: "macrop").
+7. =ClassLikePattern= for defmodule: filter_field "target", filter_names ["defmodule"], body_field "do_block", member_types ["call"].
+8. Deferred to followup: exported/private visibility, defstruct/defimpl/defprotocol/defguard/defdelegate.
 
+* Implementation
 
+Sequencing note: infrastructure changes (profile structs + outline logic) and Elixir profile configuration are tightly coupled. Tests come last since they require both.
 
- Code
- ┌─── ✔ Code outline ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
- │ Outline lib/hotelcomm/agents/djinn_executor.ex (1 top-level, 1 total symbols)                                                              │
- │ - def defmodule L1-L214                                                                                                                    │
- └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Full implementation spec with code samples: see =specs/elixir-outline-support.md=
 
+** 1. Update DeclarationPattern in profile.rs
 
+File: =crates/pi-code-engine/src/language/profile.rs=
 
- Code
- ┌─── ✔ Code outline ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
- │ Outline lib/hotelcomm/agents/overlay_store.ex (1 top-level, 1 total symbols)                                                               │
- │ - def defmodule L1-L289                                                                                                                    │
- └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Add two fields to =DeclarationPattern=:
+- =filter_names: Option<Vec<String>>= with =#[serde(default)]=
+- =name_from_arg: bool= with =#[serde(default)]=
 
+Add two fields to =ClassLikePattern=:
+- =filter_field: Option<String>= with =#[serde(default)]=
+- =filter_names: Option<Vec<String>>= with =#[serde(default)]=
 
+Also add both new fields (with defaults) to the =ProfileYaml= structs at the bottom of the file.
 
- Code
- ┌─── ✔ Code outline ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
- │ Outline lib/hotelcomm/agents/config_resolver.ex (1 top-level, 1 total symbols)                                                             │
- │ - def defmodule L1-L104                                                                                                                    │
- └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+** 2. Add child_by_field_or_kind() helper in outline.rs
 
+File: =crates/pi-code-engine/src/outline.rs=
 
-This is not very useful...
+Try =child_by_field_name(name)= first; fall back to first named child with =kind() == name=. Make it =pub(crate)= so resolve.rs can use it.
 
-Session Info
+** 3. Update declaration_for() signature and logic
 
- File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-hotelcomm/2026-04-12T12-54-56-532Z_14b7bdefc50fd377.jsonl
- ID: 14b7bdefc50fd377
+File: =crates/pi-code-engine/src/outline.rs=
 
-Placeholder — body will be added via update.
+Add =source: &str= parameter. When =filter_names= is set, check the =name_field= child text against the list. Update call site in =entry_for_node= (same file, has =source= available).
+
+** 4. Update declaration_name() for name_from_arg
+
+File: =crates/pi-code-engine/src/outline.rs=
+
+Add early return at top of =declaration_name()=: find =arguments= child by kind, get first named child, if child has =target= field use target text (handles =def start_link=), otherwise use full child text (handles =defmodule MyApp.Server=).
+
+Handles: =def start_link(opts)= -> "start_link", =def init do= -> "init", =defmodule MyApp.Server= -> "MyApp.Server"
+
+** 5. Update class_children() for filter and body fallback
+
+File: =crates/pi-code-engine/src/outline.rs=
+
+Update class_like find to check =filter_field= / =filter_names=. Update body lookup to use =child_by_field_or_kind=.
+
+** 6. Update signature_text() body fallback
+
+File: =crates/pi-code-engine/src/outline.rs=
+
+Replace =node.child_by_field_name(field)= with =child_by_field_or_kind(node, field)=.
+
+** 7. Update call sites in navigate.rs and resolve.rs
+
+File: =crates/pi-code-engine/src/navigate.rs=
+- Add =source: &str= to =declaration_node()= (L122)
+- Update =defun_at()= (L110) to pass source
+- Propagate source through =declaration_node= (caller has =buffer= -> =buffer.source()=)
+
+File: =crates/pi-code-engine/src/resolve.rs=
+- All 5 call sites already have =source= in scope -- just pass to =declaration_for=
+- Update =resolve_member()= class_like lookup to use =child_by_field_or_kind= and filter check
+
+** 8. Update elixir_profile() in mod.rs
+
+File: =crates/pi-code-engine/src/language/mod.rs=
+
+Replace with separate DeclarationPatterns for defmodule/def/defp/defmacro/defmacrop (each with =filter_names= and =name_from_arg: true=). Add ClassLikePattern for defmodule (=filter_field: "target"=, =filter_names: ["defmodule"]=, =body_field: "do_block"=, =member_types: ["call"]=).
+
+** 9. Add test fixture
+
+File: =crates/pi-code-engine/tests/fixtures/sources/hello.ex= (NEW)
+
+Minimal Elixir module with def, defp, defmacro, use GenServer.
+
+** 10. Add tests
+
+File: =crates/pi-code-engine/src/outline.rs= (mod tests)
+
+- =test_outline_elixir=: one top-level "MyApp.Greeter" (module)
+- =test_outline_elixir_children=: children start_link/greet/internal_helper/my_macro with correct kinds
+- =test_read_resolution_0_elixir=: output contains "MyApp.Greeter (module)"
+
+* Edge Cases
+
+- Zero-arity functions (=def init do=): first arg is identifier, no target field -> full text -> "init"
+- Inline syntax (=def foo, do: :ok=): no do_block -> signature includes full text
+- use/import/alias/require calls: not in any filter_names -> filtered out
+- Nested modules: inner defmodule matches module pattern -> gets own class_children -> recursion works
+- Module attributes (@doc): unary_operator nodes -> filtered by member_types ["call"]
+- Qualified module names (Foo.Bar.Baz): nested dot node -> full text gives dotted name
+
+* Verification
+
+#+begin_src sh
+cd crates/pi-code-engine && cargo test outline::tests::test_outline_elixir
+cd crates/pi-code-engine && cargo test outline::tests::test_outline_elixir_children
+cd crates/pi-code-engine && cargo test outline::tests::test_read_resolution_0_elixir
+cd crates/pi-code-engine && cargo test
+cd crates/pi-code-engine && cargo clippy -- -D warnings
+#+end_src
+
+Must not regress: test_outline_typescript, test_outline_children, test_outline_typst_code_wrappers, test_read_resolution_0, all resolve and navigate tests.
+
+NOTE [2026-04-12]: All changes implemented and verified. 118 tests pass (115 existing + 3 new), 0 clippy warnings.

@@ -102,12 +102,13 @@ fn defun_at(
 	profile: &LanguageProfile,
 	mut node: Node<'_>,
 ) -> Result<NavigateResult> {
+	let source = buffer.source();
 	loop {
-		if let Some(target) = declaration_node(profile, node) {
+		if let Some(target) = declaration_node(profile, node, &source) {
 			return Ok(declaration_result(
 				buffer,
 				target,
-				declaration_for(profile, target).expect("decl"),
+				declaration_for(profile, target, &source).expect("decl"),
 			));
 		}
 		if let Some(parent) = node.parent() {
@@ -118,21 +119,29 @@ fn defun_at(
 	}
 }
 
-fn declaration_node<'a>(profile: &'a LanguageProfile, node: Node<'a>) -> Option<Node<'a>> {
-	if declaration_for(profile, node).is_some() {
+fn declaration_node<'a>(
+	profile: &'a LanguageProfile,
+	node: Node<'a>,
+	source: &str,
+) -> Option<Node<'a>> {
+	if declaration_for(profile, node, source).is_some() {
 		return Some(node);
 	}
 	if node.kind() == "export_statement" {
-		return unwrap_export(profile, node);
+		return unwrap_export(profile, node, source);
 	}
-	sole_named_child(node).and_then(|child| declaration_node(profile, child))
+	sole_named_child(node).and_then(|child| declaration_node(profile, child, source))
 }
 
-fn unwrap_export<'a>(profile: &'a LanguageProfile, node: Node<'a>) -> Option<Node<'a>> {
+fn unwrap_export<'a>(
+	profile: &'a LanguageProfile,
+	node: Node<'a>,
+	source: &str,
+) -> Option<Node<'a>> {
 	let mut cursor = node.walk();
 	node
 		.named_children(&mut cursor)
-		.find_map(|child| declaration_node(profile, child))
+		.find_map(|child| declaration_node(profile, child, source))
 }
 
 fn sole_named_child(node: Node<'_>) -> Option<Node<'_>> {
@@ -184,7 +193,7 @@ fn children_result(
 	profile: &LanguageProfile,
 	node: Node<'_>,
 ) -> NavigateResult {
-	let items = class_member_nodes(profile, node)
+	let items = class_member_nodes(profile, node, &buffer.source())
 		.into_iter()
 		.map(|child| NavigateItem {
 			node_type: child.kind().to_string(),
