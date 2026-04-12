@@ -257,14 +257,14 @@ fn cmd_update_item(options: &Value) -> Result<Value> {
 
 	if let Some(state) = options.get("state").and_then(Value::as_str) {
 		let Some(edits) = org_edit::update_state(&buffer, id, state, &keywords) else {
-			return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{}' not found", id)));
+			return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{id}' not found")));
 		};
 		buffer.edit_batch(edits).map_err(engine_err)?;
 		updated.push("state");
 	}
 	if let Some(title) = options.get("title").and_then(Value::as_str) {
 		let Some(edits) = org_edit::update_title(&buffer, id, title, &keywords) else {
-			return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{}' not found", id)));
+			return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{id}' not found")));
 		};
 		buffer.edit_batch(edits).map_err(engine_err)?;
 		updated.push("title");
@@ -280,21 +280,21 @@ fn cmd_update_item(options: &Value) -> Result<Value> {
 			)
 		};
 		let Some(edits) = org_edit::replace_body(&buffer, id, body, &keywords) else {
-			return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{}' not found", id)));
+			return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{id}' not found")));
 		};
 		buffer.edit_batch(edits).map_err(engine_err)?;
 		updated.push("body");
 	}
 	if let Some(append) = options.get("append").and_then(Value::as_str) {
 		let Some(edits) = org_edit::append_body(&buffer, id, append, &keywords) else {
-			return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{}' not found", id)));
+			return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{id}' not found")));
 		};
 		buffer.edit_batch(edits).map_err(engine_err)?;
 		updated.push("append");
 	}
 	if let Some(note) = options.get("note").and_then(Value::as_str) {
 		let Some(edits) = org_edit::append_note(&buffer, id, note, &keywords) else {
-			return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{}' not found", id)));
+			return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{id}' not found")));
 		};
 		buffer.edit_batch(edits).map_err(engine_err)?;
 		updated.push("note");
@@ -316,7 +316,7 @@ fn cmd_set_property(options: &Value) -> Result<Value> {
 	let buffer = buffer_registry().open(&path).map_err(engine_err)?;
 	let mut buffer = buffer.lock();
 	let Some(edits) = org_edit::set_property(&buffer, id, property, value, &keywords) else {
-		return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{}' not found", id)));
+		return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{id}' not found")));
 	};
 	buffer.edit_batch(edits).map_err(engine_err)?;
 	buffer.save().map_err(engine_err)?;
@@ -331,7 +331,7 @@ fn cmd_append_note(options: &Value) -> Result<Value> {
 	let buffer = buffer_registry().open(&path).map_err(engine_err)?;
 	let mut buffer = buffer.lock();
 	let Some(edits) = org_edit::append_note(&buffer, id, note, &keywords) else {
-		return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{}' not found", id)));
+		return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{id}' not found")));
 	};
 	buffer.edit_batch(edits).map_err(engine_err)?;
 	buffer.save().map_err(engine_err)?;
@@ -357,10 +357,7 @@ fn cmd_edit_section(options: &Value) -> Result<Value> {
 		let mut buffer = buffer.lock();
 		let Some(edits) = org_edit::edit_section(&buffer, id, section_name, body, mode, &keywords)
 		else {
-			return Ok(not_found(
-				"SECTION_NOT_FOUND",
-				format!("Section '{}' not found", section_name),
-			));
+			return Ok(not_found("SECTION_NOT_FOUND", format!("Section '{section_name}' not found")));
 		};
 		buffer.edit_batch(edits).map_err(engine_err)?;
 		buffer.save().map_err(engine_err)?;
@@ -402,7 +399,7 @@ fn cmd_edit_section(options: &Value) -> Result<Value> {
 				false,
 			))
 		},
-		None => Ok(not_found("SECTION_NOT_FOUND", format!("Section '{}' not found", section_name))),
+		None => Ok(not_found("SECTION_NOT_FOUND", format!("Section '{section_name}' not found"))),
 	}
 }
 

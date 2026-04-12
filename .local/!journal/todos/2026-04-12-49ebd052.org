@@ -1,0 +1,43 @@
+#+TITLE: Session 14b716ff842f735c Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DOING Inspect grep-tool scope
+:PROPERTIES:
+:TASK_ID: inspect-scope
+:STATUS: in_progress
+:END:
+
+Read relevant repo files, patterns, and existing tool gating behavior for forbidding grep.
+
+** ITEM Settle design decisions
+:PROPERTIES:
+:TASK_ID: settle-decisions
+:STATUS: pending
+:END:
+
+Ask clarifying questions, enumerate options, and record final decisions before creating org items.
+
+** ITEM Write org plan items
+:PROPERTIES:
+:TASK_ID: write-plan-items
+:STATUS: pending
+:END:
+
+Create child org items, create PLAN item, consistency-check all items, then call exit_plan_mode.
+
+* Investigation
+
+** BLOCKED Map runtime/tool exposure
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: failed
+:END:
+
+** BLOCKED Map prompts/docs/tests
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: failed
+:END:

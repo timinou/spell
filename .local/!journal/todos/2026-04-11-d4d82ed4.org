@@ -1,0 +1,53 @@
+#+TITLE: Session 14b6eb318fa063ab Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Fix code tool native contract bugs
+:PROPERTIES:
+:TASK_ID: bug-206
+:STATUS: completed
+:ORG_ITEM_ID: BUG-206-fix-codetool-error-envelope-mode-forward
+:END:
+
+File: packages/coding-agent/src/tools/code.ts. Result: relative files resolve from session.cwd, file-local depth is not forwarded, unsupported operation names were removed from schema text, splice mode is exposed/forwarded, and file-local native failures preserve an error marker.
+
+Completed implementation in packages/coding-agent/src/tools/code.ts. Reviewed delegated patch, then added the missing `mode` schema/forwarding and tightened native error wrapping so result.error always returns an explicit `{ error: true, message }` envelope.
+
+** DONE Fix stale prompt and daemon docs
+:PROPERTIES:
+:TASK_ID: bug-207
+:STATUS: completed
+:ORG_ITEM_ID: BUG-207-fix-stale-code-tool-prompt-and-daemon-js
+:END:
+
+Files: packages/coding-agent/src/prompts/tools/code.md and packages/emacs/src/daemon.ts.
+
+Delegated wave-1 documentation task completed and reviewed. Prompt now documents explicit save workflow; daemon docs describe caller-provided evalExpressions bootstrap.
+
+** DONE Add native code tool contract tests
+:PROPERTIES:
+:TASK_ID: feat-455
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/tools/code.test.ts
+:DEPENDS: bug-206
+:ORG_ITEM_ID: FEAT-455-add-contract-edge-tests-for-native-code
+:END:
+
+File: packages/coding-agent/test/tools/code.test.ts. Delegated verification reported `bun test packages/coding-agent/test/tools/code.test.ts` passed.
+
+Delegated FEAT-455 completed and reviewed. The test file now covers native in-band error envelopes, splice mode forwarding, relative and absolute path handling, and exclusion of file-local depth.
+
+** DONE Verify plan and close lifecycle
+:PROPERTIES:
+:TASK_ID: verify-closeout
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/tools/code.test.ts && bun check:ts
+:DEPENDS: bug-206 bug-207 feat-455
+:ORG_ITEM_ID: PLAN-187-fix-native-code-tool-audit-findings
+:END:
+
+Verification: `bun test packages/coding-agent/test/tools/code.test.ts` -> 15 pass; `bun check:ts` -> passed; absence greps for `save: false`, stale schema op names, stale daemon bootstrap docs, and `options.depth` in file-local code path all returned no matches. Org updates: BUG-206, BUG-207, FEAT-455, and PLAN-187 moved to DONE with completion notes/report. Commit staged only the four code/doc/test files plus their linked org files.
+
+Focused verification passed, org items were reconciled to DONE, and the staged plan files were committed as `3ef2908a2` (`fix(coding-agent): harden native code tool contracts`). Unrelated workspace changes remain unstaged.

@@ -1,8 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { SessionManager, type SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { type AssistantMessage, createToolCallStreamDiagnostic } from "@oh-my-pi/pi-ai";
+import {
+	loadEntriesFromFile,
+	SessionManager,
+	type SessionMessageEntry,
+} from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getBlobsDir, TempDir } from "@oh-my-pi/pi-utils";
 
 function isAssistantSessionEntry(entry: unknown): entry is SessionMessageEntry & { message: AssistantMessage } {
@@ -122,5 +126,81 @@ describe("SessionManager signature persistence", () => {
 				},
 			],
 		});
+	});
+
+	it("externalizes raw stalled tool payloads to artifacts and preserves references across reload", async () => {
+		using tempDir = TempDir.createSync("@pi-session-tool-call-diagnostic-persistence-");
+		const session = SessionManager.create(tempDir.path(), tempDir.path());
+		const rawPartialJson = '{"path":"specs/markdown-code-engine-integration.md"}';
+
+		session.appendMessage({ role: "user", content: "continue", timestamp: 1 });
+		session.appendMessage({
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "tool_1",
+					name: "write",
+					arguments: { path: "specs/markdown-code-engine-integration.md" },
+				},
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet-4-5",
+			usage: {
+				input: 1,
+				output: 1,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 2,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "error",
+			errorMessage: "Anthropic messages stream stalled while streaming incomplete write tool arguments",
+			streamDiagnostics: [
+				createToolCallStreamDiagnostic({
+					state: "stalled_incomplete_tool_args",
+					api: "anthropic-messages",
+					provider: "anthropic",
+					model: "claude-sonnet-4-5",
+					toolName: "write",
+					toolCallId: "tool_1",
+					arguments: { path: "specs/markdown-code-engine-integration.md" },
+					rawPartialJson,
+					firstTokenTimeMs: 120,
+					idleTimeoutMs: 45_000,
+					providerRetryAttempt: 1,
+				}),
+			],
+			timestamp: 2,
+		} satisfies AssistantMessage);
+		await session.flush();
+
+		const sessionFile = session.getSessionFile();
+		if (!sessionFile) throw new Error("Expected persisted session file");
+		const persistedEntries = await loadEntriesFromFile(sessionFile);
+		const persistedEntry = persistedEntries.find(isAssistantSessionEntry);
+		if (!persistedEntry) throw new Error("Expected persisted assistant message");
+		const persistedDiagnostic = persistedEntry.message.streamDiagnostics?.[0];
+		const rawArtifact = persistedDiagnostic?.rawPartialJsonArtifact;
+
+		expect(persistedDiagnostic?.rawPartialJson).toBeUndefined();
+		expect(persistedDiagnostic?.rawPartialJsonBytes).toBe(new TextEncoder().encode(rawPartialJson).length);
+		expect(rawArtifact?.uri).toMatch(/^artifact:\/\//);
+		expect(rawArtifact?.path).toContain("tool-call-diagnostic");
+
+		if (!rawArtifact?.uri || !rawArtifact.path) {
+			throw new Error("Expected persisted stalled-tool artifact reference");
+		}
+		expect(await session.getArtifactPath(rawArtifact.uri)).toBe(rawArtifact.path);
+		expect(await Bun.file(rawArtifact.path).text()).toBe(rawPartialJson);
+
+		const reloaded = await SessionManager.open(sessionFile);
+		const assistant = getAssistantMessage(reloaded);
+		const reloadedDiagnostic = assistant.streamDiagnostics?.[0];
+
+		expect(reloadedDiagnostic?.rawPartialJson).toBeUndefined();
+		expect(reloadedDiagnostic?.rawPartialJsonArtifact).toEqual(rawArtifact);
+		expect(await reloaded.getArtifactPath(rawArtifact.uri)).toBe(rawArtifact.path);
 	});
 });

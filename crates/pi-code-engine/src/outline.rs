@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use tree_sitter::Node;
 
 use crate::{
@@ -5,6 +7,7 @@ use crate::{
 	language::{
 		BodyExtractor, ClassBodyExtractor, DeclarationPattern, LanguageProfile, NameExtractor,
 	},
+	resolve::resolve_symbol,
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -109,6 +112,7 @@ pub(crate) fn declaration_name(
 			.and_then(|name_node| text(source, name_node))
 			.map(|value| value.trim().to_string()),
 		NameExtractor::ChildText { child_type } => find_named_child(node, child_type)
+			.or_else(|| find_named_descendant(node, child_type))
 			.and_then(|child| text(source, child))
 			.map(|value| value.trim().to_string()),
 		NameExtractor::Literal { name } => Some(name.clone()),
@@ -123,6 +127,7 @@ fn find_named_child<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
 }
 
 pub(crate) fn declaration_body_range(
+	source: &str,
 	node: Node<'_>,
 	decl: &DeclarationPattern,
 ) -> Option<(usize, usize)> {
@@ -131,9 +136,17 @@ pub(crate) fn declaration_body_range(
 		BodyExtractor::Field { name } => node
 			.child_by_field_name(name)
 			.map(|body| (body.start_byte(), body.end_byte())),
-		BodyExtractor::AfterChild { child_type } => {
-			find_named_child(node, child_type).map(|child| (child.end_byte(), node.end_byte()))
-		},
+		BodyExtractor::AfterChild { child_type } => find_named_child(node, child_type).map(|child| {
+			let mut start = child.end_byte();
+			if let Some(rest) = source.get(start..) {
+				if rest.starts_with("\r\n") {
+					start += 2;
+				} else if rest.starts_with('\n') {
+					start += 1;
+				}
+			}
+			(start, node.end_byte())
+		}),
 	}
 }
 
@@ -191,14 +204,14 @@ fn find_named_descendant<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
 }
 
 fn signature_text(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> String {
-	let end_byte = declaration_body_range(node, decl)
-		.map(|(start_byte, _)| start_byte)
-		.unwrap_or_else(|| node.end_byte());
+	let end_byte = declaration_body_range(source, node, decl)
+		.map_or_else(|| node.end_byte(), |(start_byte, _)| start_byte);
 	let header = source
 		.get(node.start_byte()..end_byte)
 		.unwrap_or("")
 		.lines()
 		.map(str::trim)
+		.filter(|line| !line.is_empty())
 		.collect::<Vec<_>>()
 		.join(" ");
 	truncate(&header, 200)
@@ -231,6 +244,9 @@ pub fn read(
 	limit: Option<u32>,
 ) -> String {
 	let source = buffer.source();
+	if profile.id.as_str() == "markdown" && resolution <= 2 {
+		return read_markdown(buffer, profile, resolution);
+	}
 	match resolution {
 		0 => outline(buffer, profile)
 			.into_iter()
@@ -241,6 +257,204 @@ pub fn read(
 		2 => render_outline(&outline(buffer, profile), true, 0),
 		_ => slice_source(&source, offset, limit),
 	}
+}
+
+fn exact_node_for_range(buffer: &CodeBuffer, start: usize, end: usize) -> Option<Node<'_>> {
+	let mut node = buffer
+		.tree()
+		.root_node()
+		.named_descendant_for_byte_range(start, end)
+		.or_else(|| {
+			buffer
+				.tree()
+				.root_node()
+				.descendant_for_byte_range(start, end)
+		})?;
+	loop {
+		if node.start_byte() == start && node.end_byte() == end {
+			return Some(node);
+		}
+		node = node.parent()?;
+	}
+}
+
+fn markdown_code_language(source: &str, node: Node<'_>) -> Option<String> {
+	let info = find_named_child(node, "info_string")?;
+	if let Some(language) = find_named_child(info, "language") {
+		return text(source, language).map(str::to_string);
+	}
+	text(source, info)
+		.map(|value| value.trim().to_string())
+		.filter(|value| !value.is_empty())
+}
+
+fn markdown_annotation(source: &str, node: Node<'_>, has_children: bool) -> String {
+	let mut paragraphs = 0usize;
+	let mut code_blocks = 0usize;
+	let mut code_languages = Vec::new();
+	let mut lists = 0usize;
+	let mut tables = 0usize;
+	let mut block_quotes = 0usize;
+	let mut html_blocks = 0usize;
+	let mut cursor = node.walk();
+	for child in node.named_children(&mut cursor) {
+		match child.kind() {
+			"atx_heading" | "section" | "setext_heading" | "block_continuation" => {},
+			"paragraph" => paragraphs += 1,
+			"fenced_code_block" => {
+				code_blocks += 1;
+				if let Some(language) = markdown_code_language(source, child)
+					&& !code_languages.iter().any(|existing| existing == &language)
+				{
+					code_languages.push(language);
+				}
+			},
+			"indented_code_block" => code_blocks += 1,
+			"list" => lists += 1,
+			"pipe_table" => tables += 1,
+			"block_quote" => block_quotes += 1,
+			"html_block" => html_blocks += 1,
+			_ => {},
+		}
+	}
+	let mut parts = Vec::new();
+	if paragraphs > 0 {
+		parts.push(format!(
+			"{} {}",
+			paragraphs,
+			if paragraphs == 1 {
+				"paragraph"
+			} else {
+				"paragraphs"
+			}
+		));
+	}
+	if code_blocks > 0 {
+		let mut label = format!(
+			"{} {}",
+			code_blocks,
+			if code_blocks == 1 {
+				"code block"
+			} else {
+				"code blocks"
+			}
+		);
+		if !code_languages.is_empty() {
+			let _ = write!(label, " ({})", code_languages.join(", "));
+		}
+		parts.push(label);
+	}
+	if lists > 0 {
+		parts.push(format!("{} {}", lists, if lists == 1 { "list" } else { "lists" }));
+	}
+	if tables > 0 {
+		parts.push(format!("{} {}", tables, if tables == 1 { "table" } else { "tables" }));
+	}
+	if block_quotes > 0 {
+		parts.push(format!(
+			"{} {}",
+			block_quotes,
+			if block_quotes == 1 {
+				"block quote"
+			} else {
+				"block quotes"
+			}
+		));
+	}
+	if html_blocks > 0 {
+		parts.push(format!(
+			"{} {}",
+			html_blocks,
+			if html_blocks == 1 {
+				"HTML block"
+			} else {
+				"HTML blocks"
+			}
+		));
+	}
+	if parts.is_empty() {
+		return if has_children {
+			"(subsections only)".into()
+		} else {
+			"(empty)".into()
+		};
+	}
+	truncate(&parts.join(", "), 120)
+}
+
+fn read_markdown(buffer: &CodeBuffer, profile: &LanguageProfile, resolution: u8) -> String {
+	let entries = outline(buffer, profile);
+	match resolution {
+		0 => entries
+			.into_iter()
+			.map(|entry| format!("{} ({})", entry.name, entry.kind))
+			.collect::<Vec<_>>()
+			.join("\n"),
+		1 => render_outline(&entries, true, 0),
+		2 => render_markdown_entries(buffer, profile, &entries, 0, None),
+		_ => unreachable!(),
+	}
+}
+
+fn render_markdown_entries(
+	buffer: &CodeBuffer,
+	profile: &LanguageProfile,
+	entries: &[OutlineEntry],
+	indent: usize,
+	parent_path: Option<&str>,
+) -> String {
+	let mut lines = Vec::new();
+	for entry in entries {
+		let indent_str = "  ".repeat(indent);
+		if entry.kind == "frontmatter" {
+			let label = match resolve_symbol(buffer, profile, "frontmatter")
+				.ok()
+				.and_then(|resolved| {
+					exact_node_for_range(buffer, resolved.start_byte, resolved.end_byte)
+				})
+				.map(|node| node.kind().to_string())
+				.as_deref()
+			{
+				Some("minus_metadata") => "frontmatter (yaml)",
+				Some("plus_metadata") => "frontmatter (toml)",
+				_ => "frontmatter",
+			};
+			lines.push(format!("{indent_str}{label}"));
+			continue;
+		}
+		let symbol_path = parent_path
+			.map_or_else(|| entry.name.clone(), |parent| format!("{parent}.{}", entry.name));
+		lines.push(format!(
+			"{indent_str}{} (lines {}-{})",
+			entry.signature, entry.line, entry.end_line
+		));
+		if let Ok(resolved) = resolve_symbol(buffer, profile, &symbol_path)
+			&& let Some(node) = exact_node_for_range(buffer, resolved.start_byte, resolved.end_byte)
+		{
+			lines.push(format!(
+				"{indent_str}  {}",
+				markdown_annotation(&buffer.source(), node, !entry.children.is_empty())
+			));
+		}
+		let hint = if symbol_path.split('.').count() > 2 {
+			format!(
+				"> code read {{ symbol: \"{symbol_path}\", resolution: 3 }} (use line offset instead)"
+			)
+		} else {
+			format!("> code read {{ symbol: \"{symbol_path}\", resolution: 3 }}")
+		};
+		lines.push(format!("{indent_str}  {hint}"));
+		if !entry.children.is_empty() {
+			lines.push(render_markdown_entries(
+				buffer,
+				profile,
+				&entry.children,
+				indent + 1,
+				Some(&symbol_path),
+			));
+		}
+	}
+	lines.join("\n")
 }
 
 fn render_outline(entries: &[OutlineEntry], show_children: bool, indent: usize) -> String {
@@ -368,6 +582,58 @@ mod tests {
 		assert!(out.contains("\"theme.typ\" (import)"));
 		assert!(out.contains("title (let)"));
 		assert!(out.contains("heading.where(level: 1) (show)"));
+	}
+
+	#[test]
+	fn test_outline_markdown_sections() {
+		let buffer = buffer("hello.md", "markdown");
+		let profile = profile("markdown");
+		let entries = outline(&buffer, &profile);
+		assert_eq!(
+			entries
+				.iter()
+				.map(|entry| entry.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["frontmatter", "Introduction", "Installation", "API Reference"]
+		);
+		assert_eq!(
+			entries[2]
+				.children
+				.iter()
+				.map(|entry| entry.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["Prerequisites", "Steps"]
+		);
+		assert_eq!(
+			entries[3]
+				.children
+				.iter()
+				.map(|entry| entry.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["Authentication"]
+		);
+	}
+
+	#[test]
+	fn test_read_resolution_2_markdown() {
+		let buffer = buffer("hello.md", "markdown");
+		let profile = profile("markdown");
+		let out = read(&buffer, &profile, 2, None, None);
+		assert!(out.contains("frontmatter (yaml)"), "should render frontmatter label: {out}");
+		assert!(
+			out.contains("# Installation (lines"),
+			"should include section signature + lines: {out}"
+		);
+		assert!(out.contains("1 paragraph"), "should annotate direct section content: {out}");
+		assert!(
+			out.contains("1 code block (bash), 1 list"),
+			"should include nested code/list annotation: {out}"
+		);
+		assert!(
+			out.contains("Installation.Prerequisites"),
+			"should include nested symbol hint: {out}"
+		);
+		assert!(out.contains("## Steps (lines"), "should render nested headings: {out}");
 	}
 
 	#[test]

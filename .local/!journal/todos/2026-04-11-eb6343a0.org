@@ -1,0 +1,96 @@
+#+TITLE: Session 14b70bbb43a98ca5 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 1 Foundation
+
+** DOING Implement embedding worker binary
+:PROPERTIES:
+:TASK_ID: plan199-worker-binary
+:STATUS: in_progress
+:VERIFY_CMD: cargo build -p pi-embedding-worker
+:ORG_ITEM_ID: FEAT-485-embedding-subprocess-worker-binary
+:END:
+
+Create crates/pi-embedding-worker with JSONL protocol, tests, and acceptance verification.
+
+Maps to org child FEAT-485-embedding-subprocess-worker-binary.
+
+** DOING Bound cursor conversation caches
+:PROPERTIES:
+:TASK_ID: plan199-cursor-cache
+:STATUS: in_progress
+:VERIFY_CMD: bun check:ts
+:ORG_ITEM_ID: BUG-219-cursor-provider-conversation-caches-grow
+:END:
+
+Cap cache entries to 20 and preserve paired eviction semantics in packages/ai/src/providers/cursor.ts.
+
+Maps to org child BUG-219-cursor-provider-conversation-caches-grow.
+
+** DOING Cap grep context buffers
+:PROPERTIES:
+:TASK_ID: plan199-grep-cap
+:STATUS: in_progress
+:VERIFY_CMD: cargo test -p pi-natives
+:ORG_ITEM_ID: BUG-221-grep-context-buffers-grow-unbounded-per
+:END:
+
+Clamp before/after context at NAPI boundary and keep grep behavior unchanged for normal requests.
+
+Maps to org child BUG-221-grep-context-buffers-grow-unbounded-per.
+
+** DOING Cap async job retention
+:PROPERTIES:
+:TASK_ID: plan199-job-cap
+:STATUS: in_progress
+:VERIFY_CMD: bun check:ts
+:ORG_ITEM_ID: BUG-223-asyncjobmanager-retains-completed-jobs-w
+:END:
+
+Limit retained completed jobs and pending deliveries in packages/coding-agent/src/async/job-manager.ts.
+
+Maps to org child BUG-223-asyncjobmanager-retains-completed-jobs-w.
+
+* Wave 2 Integration
+
+** ITEM Route semantic indexing through worker IPC
+:PROPERTIES:
+:TASK_ID: plan199-code-graph-ipc
+:STATUS: pending
+:VERIFY_CMD: cargo test -p pi-natives
+:DEPENDS: plan199-worker-binary
+:ORG_ITEM_ID: FEAT-486-subprocess-ipc-integration-in-code-graph
+:END:
+
+Remove in-process EmbeddingEngine usage from pi-natives and add subprocess lifecycle/error handling.
+
+Maps to org child FEAT-486-subprocess-ipc-integration-in-code-graph.
+
+** ITEM Build and install worker binary
+:PROPERTIES:
+:TASK_ID: plan199-build-dist
+:STATUS: pending
+:VERIFY_CMD: bun --cwd packages/natives run build:native
+:DEPENDS: plan199-worker-binary
+:ORG_ITEM_ID: FEAT-487-build-system-and-distribution-for-embedd
+:END:
+
+Update packages/natives build scripts so native builds package the worker binary non-fatally.
+
+Maps to org child FEAT-487-build-system-and-distribution-for-embedd.
+
+* Wave 3 Verification and closeout
+
+** ITEM Run verification and close plan
+:PROPERTIES:
+:TASK_ID: plan199-verify-close
+:STATUS: pending
+:VERIFY_CMD: cargo test -p pi-natives && bun check:ts && bun check:rs
+:DEPENDS: plan199-code-graph-ipc plan199-build-dist plan199-cursor-cache plan199-grep-cap plan199-job-cap
+:ORG_ITEM_ID: PLAN-199-embedding-subprocess-isolation-and-memor
+:END:
+
+Run targeted Rust and TypeScript checks plus manual semantic-index behavior, then append completion report and reconcile org states.
+
+Record evidence, update org items, and commit only touched files.

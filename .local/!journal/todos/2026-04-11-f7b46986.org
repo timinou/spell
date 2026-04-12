@@ -1,0 +1,28 @@
+#+TITLE: Session 14b70bb4f84dfb6e Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DOING Dispatch and integrate plan changes
+:PROPERTIES:
+:TASK_ID: dispatch-integrate
+:STATUS: in_progress
+:ORG_ITEM_ID: PLAN-195-harden-typst-first-class-support-from-au
+:END:
+
+Parallelize the five audit fixes, then review the returned diffs and adapt as needed before verification.
+
+Inspect current implementations, delegate the independent plan items, and merge verified patches into the working tree.
+
+** ITEM Verify, close org, and commit
+:PROPERTIES:
+:TASK_ID: verify-close-commit
+:STATUS: pending
+:DEPENDS: dispatch-integrate
+:ORG_ITEM_ID: PLAN-195-harden-typst-first-class-support-from-au
+:END:
+
+Execute the exact verification commands from the plan, update completion notes/artifacts in the PLAN item, mark linked child items DONE if appropriate, then create a conventional commit referencing the plan work.
+
+Run the required checks, record completion evidence, reconcile org states, and commit only plan-related files.

@@ -1,0 +1,29 @@
+#+TITLE: Session 14b6bd9f49bd2023 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Explore Task tool implementation and dispatch
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Explore TUI rendering of tools and agent state
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Explore todo_write integration with Task tool
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Explore stats package for token tracking
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

@@ -1,0 +1,23 @@
+#+TITLE: Session 14b6d9b181b3cb2d Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Repo
+
+** DONE How sessions exit cleanly vs crash
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Ghostty CLI and niri workspace IPC
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Existing CLI subcommand patterns
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

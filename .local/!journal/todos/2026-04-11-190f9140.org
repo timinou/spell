@@ -1,0 +1,14 @@
+#+TITLE: Session 14b6e6b5d342938a Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Fix 9 assertions in caveman.test.ts
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:GATE_CMD: bun test packages/coding-agent/test/caveman.test.ts
+:END:
+
+Update broken/vacuous string assertions to match new terse mode template strings

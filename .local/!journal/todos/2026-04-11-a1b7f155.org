@@ -1,0 +1,48 @@
+#+TITLE: Session 14b70283780c82c8 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 2 rust tests
+
+** DONE Add Rust tests for semantic auto-degrade paths
+:PROPERTIES:
+:TASK_ID: auto-degrade-rust-tests
+:STATUS: completed
+:ORG_ITEM_ID: BUG-211-add-tests-for-auto-degrade-semantic-sear
+:END:
+
+Extend crates/pi-natives/src/code_graph.rs tests to cover semantic: None auto mode when vector cache is corrupt or stale, asserting BM25 fallback plus semanticStatus degradation hints.
+
+Added stale and corrupt vector-cache auto-mode tests in code_graph.rs. Verified with `cargo test -p pi-natives code_graph::tests::` (5 tests passing in this module).
+
+* Wave 3 napi integration
+
+** DONE Add N-API integration coverage for semanticStatus
+:PROPERTIES:
+:TASK_ID: napi-semantic-status-test
+:STATUS: completed
+:DEPENDS: auto-degrade-rust-tests
+:ORG_ITEM_ID: FEAT-471-add-n-api-integration-test-for-executeco
+:END:
+
+Update packages/natives/test/native.test.ts to call real executeCodeGraph against temp fixtures and assert semanticStatus is marshalled for both success and degraded auto mode responses.
+
+Added three real executeCodeGraph tests covering status responses plus auto-degraded search with missing and corrupt vector caches. Verified with `bun test packages/natives/test/native.test.ts`.
+
+* Verification
+
+** BLOCKED Run focused checks and reconcile org state
+:PROPERTIES:
+:TASK_ID: run-focused-verification
+:STATUS: gate_failed
+:GATE_COMMIT: true
+:GATE_CMD: cargo check -p pi-natives && cargo test -p pi-natives code_graph::tests:: && bun test packages/natives/test/native.test.ts && bun check:rs && bun check:ts
+:GATE_LLM: Ensure completion report lists exact verification outcomes and linked child org items are moved to DONE truthfully.
+:DEPENDS: napi-semantic-status-test
+:ORG_ITEM_ID: PLAN-194-harden-semantic-search-post-implementati
+:ORG_ITEM_CLOSING_ID: PLAN-194-harden-semantic-search-post-implementati
+:END:
+
+Run cargo check -p pi-natives, cargo test -p pi-natives code_graph::tests::, bun test packages/natives/test/native.test.ts, bun check:rs, bun check:ts, then update org items, append completion report, and commit only plan-related files.
+
+Focused verification and org reconciliation are finished. `cargo check -p pi-natives`, `cargo test -p pi-natives code_graph::tests::`, `bun test packages/natives/test/native.test.ts`, and `bun check:ts` passed. `bun check:rs` failed due unrelated workspace issues in `crates/tree-sitter-org/src/lib.rs` (clippy tabs_in_doc_comments) and `crates/pi-code-engine/src/navigate.rs` (`ropey::Rope::len_bytes` no longer exists). Plan org item remains DOING truthfully; child org items are DONE; commit `a1d6dd103` records the org execution state.

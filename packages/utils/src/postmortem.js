@@ -173,7 +173,7 @@ function formatFatalError(label, err) {
     const formattedStack = stackLines.length > 0 ? `\n${stackLines.join("\n")}` : "";
     return `\n[${label}] ${name}: ${message}${formattedStack}\n`;
 }
-function writeCrashReport(reason, err, raw) {
+export function writeCrashReport(reason, err, raw) {
     try {
         const reportsDir = getReportsDir();
         fs.mkdirSync(reportsDir, { recursive: true });
@@ -214,6 +214,7 @@ let inspectorOpened = false;
 if (isMainThread) {
     process
         .on("SIGINT", async () => {
+        writeCrashReport(Reason.SIGINT, new Error("Process received SIGINT"));
         await runCleanup(Reason.SIGINT);
         process.exit(130); // 128 + SIGINT (2)
     })
@@ -244,10 +245,12 @@ if (isMainThread) {
         void runCleanup(Reason.EXIT); // fire and forget (exit imminent)
     })
         .on("SIGTERM", async () => {
+        writeCrashReport(Reason.SIGTERM, new Error("Process received SIGTERM"));
         await runCleanup(Reason.SIGTERM);
         process.exit(143); // 128 + SIGTERM (15)
     })
         .on("SIGHUP", async () => {
+        writeCrashReport(Reason.SIGHUP, new Error("Process received SIGHUP"));
         await runCleanup(Reason.SIGHUP);
         process.exit(129); // 128 + SIGHUP (1)
     });
@@ -261,6 +264,17 @@ else {
         void runCleanup(Reason.EXIT);
     });
 }
+// Register logger flush as first callback so it is started last when callbacks are
+// iterated in reverse. Note: runCleanup uses Promise.allSettled, so all callbacks
+// execute concurrently — ordering only affects initiation sequence, not completion.
+register("logger-flush", async () => {
+    try {
+        await Promise.race([logger.close(), Bun.sleep(2000)]);
+    }
+    catch {
+        // Ignore flush failures during shutdown
+    }
+});
 /**
  * Register a process cleanup callback, to be run on shutdown, signal, or fatal error.
  *

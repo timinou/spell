@@ -1,0 +1,69 @@
+#+TITLE: Cross-provider tool-argument idle timeout hardening
+#+STATE: ITEM
+#+SESSION_ID: 14b7ee149bae1c85
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T16-25-17-166Z_14b7ee149bae1c85.jsonl]]
+#+CUSTOM_ID: BUG-243-cross-provider-tool-argument-idle-timeou
+
+* Initial Message
+
+✘ Write: ⌘ !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+ ✘ Error: Tool execution failed due to an error: Anthropic messages stream stalled while streaming incomplete write tool arguments
+
+
+ Task model: gpt-5.4-mini
+
+
+ ┌─── ✔ Bash ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ $ wc -l !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org                                                 ╭──────────╮
+ ├─── Output ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│ 🗺 Paused │
+ │ 54 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org                                                      ╰──────────╯
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Write ⢿ 🗒 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+
+
+
+ Write ⣟ 🗒 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl
+ ID: 14b7be567342b8fe
+
+
+
+explain this: Tool execution failed due to an error: Anthropic messages stream stalled while streaming incomplete write tool arguments
+
+* User workflows
+1. Large =write=, =org=, =edit=, or similar tool calls can stream arguments for a long time without being mistaken for dead connections.
+2. Anthropic, OpenAI-family, Cursor, and Bedrock providers classify incomplete tool-call stalls the same way and emit the shared diagnostic contract from the foundation item.
+3. Providers retry incomplete tool-call stalls in a consistent way, then surface an explicit final error when recovery is exhausted.
+4. Completed tool calls missing only trailing stop events still recover as successful tool use.
+
+* Scope
+Cut over every provider that already accumulates partial tool JSON to one shared incomplete-tool-call stall path. Add a longer idle timeout budget specifically while tool arguments are streaming; do not simply raise the global stream timeout. Keep the normal watchdog for idle streams before tool-call JSON starts. The implementation must keep the existing recovery for completed tool calls that only lost trailing stop events.
+
+This item must use the shared diagnostic contract from the foundation item and populate provider/model/tool-specific metadata consistently. Prefer one shared helper for classifying incomplete-tool-call stalls, counting retry attempts, and building final surfaced errors, with thin adapters inside each provider.
+
+* Files
+- =packages/ai/src/providers/anthropic.ts=
+- =packages/ai/src/providers/openai-responses-shared.ts=
+- =packages/ai/src/providers/openai-codex-responses.ts=
+- =packages/ai/src/providers/cursor.ts=
+- =packages/ai/src/providers/amazon-bedrock.ts=
+- =packages/ai/src/utils/idle-iterator.ts=
+- provider tests under =packages/ai/test/providers/=
+
+* Acceptance
+- All streaming providers that emit partial tool JSON share one incomplete-tool-call stall contract.
+- Tool-argument streaming gets a longer idle budget than generic stream idle time.
+- Final surfaced errors include shared diagnostics instead of provider-specific ad hoc strings.
+- Existing completed-tool-call recovery remains intact.
+
+* Verification
+- Extend =packages/ai/test/providers/anthropic-idle-timeout.test.ts=.
+- Add at least one OpenAI-family regression and one non-OpenAI regression covering incomplete tool-argument stalls.
+- Run focused provider tests plus =bun check:ts=.

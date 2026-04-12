@@ -1,0 +1,23 @@
+#+TITLE: Session 14b7b080a31d9287 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Design
+
+** DONE Settle remediation design decisions
+:PROPERTIES:
+:TASK_ID: settle-decisions
+:STATUS: completed
+:END:
+
+Settled on regression-hardening rather than a new runtime fix because current repo already contains the Anthropic idle-timeout, audit-reset, and continuation logging changes.
+
+* Plan
+
+** DONE Create child items and orchestration plan
+:PROPERTIES:
+:TASK_ID: write-org-plan
+:STATUS: completed
+:END:
+
+Consistency sweep passed: child items are self-contained, dependency graph is acyclic (no dependencies), effort sizes match scope, and plan/body references are consistent.

@@ -1,0 +1,17 @@
+#+TITLE: Session 14b7bffcf7d9caf0 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Explore edit tool input/output interface
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE How tools are registered and schemas sent to API
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

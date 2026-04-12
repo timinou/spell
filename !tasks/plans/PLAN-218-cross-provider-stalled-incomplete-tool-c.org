@@ -1,0 +1,84 @@
+#+TITLE: Cross-provider stalled incomplete tool-call hardening
+#+STATE: DOING
+#+SESSION_ID: 14b7ee149bae1c85
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T16-25-17-166Z_14b7ee149bae1c85.jsonl]]
+#+CUSTOM_ID: PLAN-218-cross-provider-stalled-incomplete-tool-c
+#+EFFORT: 12h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+* Initial Message
+
+✘ Write: ⌘ !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+ ✘ Error: Tool execution failed due to an error: Anthropic messages stream stalled while streaming incomplete write tool arguments
+
+
+ Task model: gpt-5.4-mini
+
+
+ ┌─── ✔ Bash ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ $ wc -l !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org                                                 ╭──────────╮
+ ├─── Output ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│ 🗺 Paused │
+ │ 54 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org                                                      ╰──────────╯
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Write ⢿ 🗒 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+
+
+
+ Write ⣟ 🗒 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl
+ ID: 14b7be567342b8fe
+
+
+
+explain this: Tool execution failed due to an error: Anthropic messages stream stalled while streaming incomplete write tool arguments
+
+* Context
+The user reported repeated failures of the form =Anthropic messages stream stalled while streaming incomplete write tool arguments= and asked for the causes, then requested a plan for a fix. Repo and transcript review established the following facts:
+- Transcript =/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl= shows serial, not concurrent, write attempts. The failing =write= tool calls contain only =_i= and =path=, never a complete =content= field.
+- =packages/ai/src/providers/anthropic.ts= currently converts an idle-timeout stall that occurs mid-tool-call JSON into =Anthropic messages stream stalled while streaming incomplete <tool> tool arguments=.
+- =packages/ai/src/utils/idle-iterator.ts= enforces a 45s idle watchdog today, and the transcript timings line up with that watchdog firing after tool-argument streaming begins.
+- =packages/coding-agent/src/session/session-manager.ts= strips =partialJson= from persisted entries today, which weakens postmortem debugging.
+- =packages/coding-agent/src/session/agent-session.ts= pre-caches edit-file state on =toolcall_start= for streaming-abort defenses; this conflicts with the approved atomic-locking requirement.
+- Native code-buffer locking in =crates/pi-natives/src/code_buffer.rs= appears execution-time scoped already; keep an explicit audit/regression step so rope/buffer locking stays execution-time only.
+
+** Settled decisions
+1. Scope is cross-provider, not Anthropic-only.
+2. Persist the full raw partial tool JSON for debugging, but by reference/artifact instead of bloating transcript rows inline.
+3. Add a longer idle timeout only while tool arguments are streaming; do not raise the generic stream watchdog globally.
+4. Defer any file/session write lock and rope/buffer lock acquisition until execution is ready to validate/apply the final instruction payload.
+5. UI/transcript surfaces show concise diagnostics by default while preserving access to the raw persisted payload.
+6. Keep recovery for completed tool calls that only lost trailing stop events.
+
+** Recommended approach
+Implement a shared incomplete-tool-call diagnostic contract first, then cut providers over to a common stall/retry/timeout path, then wire coding-agent persistence/rendering/atomic-lock behavior to that shared contract.
+
+* Verification
+- Provider-level regression coverage for incomplete tool-call stalls across Anthropic and at least one OpenAI-family plus one non-OpenAI provider.
+- Coding-agent/session persistence coverage proving raw stalled-tool payloads persist by reference and survive reload.
+- Coding-agent regression coverage proving stalled tool-call surfaces do not claim tool success.
+- Audit/regression coverage proving streaming preview paths do not grab write/session/rope state at stream start.
+- Focused commands expected during implementation:
+  - =bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts=
+  - additional focused provider tests added by implementation
+  - focused coding-agent/session tests for transcript persistence / surfaced diagnostics
+  - focused native/code-buffer coverage for lock timing if the audit requires it
+  - =bun check:ts=
+  - =bun check:rs=
+
+* Execution Manifest
+1. [[id:BUG-245-define-shared-incomplete-tool-call-stall]]
+   Shared diagnostic contract + persisted raw partial payload references.
+2. [[id:BUG-243-cross-provider-tool-argument-idle-timeou]]
+   Cross-provider timeout/retry cutover using the shared contract; depends on item 1.
+3. [[id:BUG-244-surface-stalled-tool-call-diagnostics-an]]
+   Coding-agent transcript/UI surfacing and atomic lock-acquisition changes; depends on items 1 and 2.
+4. [[id:FUP-051-review-retention-controls-for-persisted]]
+   Post-plan retention/privacy follow-up; depends on item 3.

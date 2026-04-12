@@ -45,7 +45,7 @@ struct GrammarSource {
 	/// any.
 	dependency_name: Option<&'static str>,
 	/// Path to node-types source relative to crate source in the cargo registry.
-	/// For vendored grammars this points at the embedded NODE_TYPES source in
+	/// For vendored grammars this points at the embedded `NODE_TYPES` source in
 	/// lib.rs. For registry crates we still resolve the installed crate dir and
 	/// read the embedded node-types file from there.
 	package_prefix:  &'static str,
@@ -83,6 +83,12 @@ const GRAMMARS: &[GrammarSource] = &[
 		dependency_name: Some("tree-sitter-elixir"),
 		package_prefix:  "tree-sitter-elixir-",
 		json_subpath:    "src/node-types.json",
+	},
+	GrammarSource {
+		name:            "markdown",
+		dependency_name: Some("tree-sitter-md"),
+		package_prefix:  "tree-sitter-md-",
+		json_subpath:    "tree-sitter-markdown/src/node-types.json",
 	},
 	GrammarSource {
 		name:            "org",

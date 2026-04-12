@@ -1,0 +1,54 @@
+#+TITLE: Session 14b6e0427a429389 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 1 — Template Rewrites
+
+** DONE Rewrite system-prompt.md sections
+:PROPERTIES:
+:TASK_ID: feat-439
+:STATUS: completed
+:END:
+
+behavior, thinking-mode, code-integrity, Design Integrity in system-prompt.md
+
+** DONE Rewrite caveman.md to terse mode
+:PROPERTIES:
+:TASK_ID: feat-440
+:STATUS: completed
+:END:
+
+Replace caveman persona with direct terse-mode instruction
+
+** DONE Update settings descriptions
+:PROPERTIES:
+:TASK_ID: feat-441
+:STATUS: completed
+:END:
+
+Remove PhD-caveman from settings-schema.ts and caveman.ts
+
+* Wave 2 — Tests
+
+** DONE Update prompt template tests
+:PROPERTIES:
+:TASK_ID: feat-443
+:STATUS: completed
+:GATE_CMD: bun test packages/coding-agent/test/system-prompt-templates.test.ts
+:DEPENDS: feat-439 feat-440 feat-441
+:END:
+
+Fix assertions in system-prompt-templates.test.ts
+
+All 16 tests pass (0 failures). Also fixed pre-existing Cross-phase/Cross-group mismatch.
+
+* Verification
+
+** DONE Final verification and commit
+:PROPERTIES:
+:TASK_ID: verify
+:STATUS: completed
+:DEPENDS: feat-443
+:END:
+
+bun check:ts, grep for remnants, close org items

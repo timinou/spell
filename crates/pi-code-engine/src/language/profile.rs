@@ -135,7 +135,7 @@ impl From<DeclarationPatternSerde> for DeclarationPattern {
 	}
 }
 
-fn default_body_none() -> BodyExtractor {
+const fn default_body_none() -> BodyExtractor {
 	BodyExtractor::None
 }
 

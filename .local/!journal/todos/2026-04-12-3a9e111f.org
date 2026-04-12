@@ -1,0 +1,13 @@
+#+TITLE: Session 14b7b513095f9717 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Write org plan items
+:PROPERTIES:
+:TASK_ID: write-org-plan
+:STATUS: completed
+:END:
+
+Create child items first, then PLAN item. Re-read all child items, verify consistency, then exit plan mode.

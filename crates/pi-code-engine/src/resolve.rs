@@ -138,7 +138,7 @@ fn build_resolved(node: Node<'_>, profile: &LanguageProfile, source: &str) -> Re
 	let kind = decl.map(|d| d.kind.clone()).unwrap_or_default();
 
 	let (body_start, body_end) = decl
-		.and_then(|d| declaration_body_range(node, d))
+		.and_then(|d| declaration_body_range(source, node, d))
 		.map(|(start, end)| (Some(start), Some(end)))
 		.unwrap_or((None, None));
 
@@ -266,6 +266,15 @@ mod tests {
 		CodeBuffer::from_str(&source, LanguageId::new("typescript"), registry()).expect("buffer")
 	}
 
+	fn markdown_buffer() -> CodeBuffer {
+		let source = fs::read_to_string(format!(
+			"{}/tests/fixtures/sources/hello.md",
+			env!("CARGO_MANIFEST_DIR")
+		))
+		.expect("fixture");
+		CodeBuffer::from_str(&source, LanguageId::new("markdown"), registry()).expect("buffer")
+	}
+
 	#[test]
 	fn resolve_top_level_function() {
 		let buffer = test_buffer();
@@ -379,6 +388,38 @@ mod tests {
 		let err = resolve_symbol(&buffer, profile, "Foo.bar.deep").unwrap_err();
 		let msg = err.to_string();
 		assert!(msg.contains("at most 2 levels"), "should reject 3-level: {msg}");
+	}
+
+	#[test]
+	fn resolve_markdown_section() {
+		let buffer = markdown_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("markdown")).unwrap();
+
+		let resolved = resolve_symbol(&buffer, profile, "Installation").expect("resolve section");
+		assert_eq!(resolved.name, "Installation");
+		assert_eq!(resolved.kind, "section");
+		assert!(resolved.body_start_byte.is_some());
+		assert!(resolved.body_end_byte.is_some());
+		let body =
+			&buffer.source()[resolved.body_start_byte.unwrap()..resolved.body_end_byte.unwrap()];
+		assert!(
+			body.starts_with("Follow these steps"),
+			"body should start after heading line: {body:?}"
+		);
+	}
+
+	#[test]
+	fn resolve_markdown_nested_section() {
+		let buffer = markdown_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("markdown")).unwrap();
+
+		let resolved = resolve_symbol(&buffer, profile, "Installation.Prerequisites")
+			.expect("resolve nested section");
+		assert_eq!(resolved.name, "Prerequisites");
+		assert_eq!(resolved.kind, "section");
+		assert!(resolved.line < resolved.end_line);
 	}
 
 	#[test]

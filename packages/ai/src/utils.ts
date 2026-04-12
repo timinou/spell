@@ -8,6 +8,7 @@ import type {
 } from "./types";
 
 export { isRecord } from "@oh-my-pi/pi-utils";
+export * from "./utils/tool-call-diagnostics";
 
 export function toNumber(value: unknown): number | undefined {
 	if (typeof value === "number" && Number.isFinite(value)) return value;

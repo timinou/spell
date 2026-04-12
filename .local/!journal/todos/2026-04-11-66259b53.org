@@ -1,0 +1,23 @@
+#+TITLE: Session 14b6e672eb0c82b8 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Key files
+
+** DONE Read pi-natives code_graph.rs fully
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Read graph cache, store, and model
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Read chunking module for nested symbol handling
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

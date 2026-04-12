@@ -1,0 +1,45 @@
+#+TITLE: Session 14b6c2a985a0bc08 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Inspect code paths and references
+:PROPERTIES:
+:TASK_ID: inspect-and-scope
+:STATUS: completed
+:ORG_ITEM_ID: PLAN-178-tui-subtask-visibility-and-efficiency-tr
+:END:
+
+Review task progress events, status line, todo panel, task render, exit summary, and relevant tests before editing. Capture dependent symbols and file list.
+
+Inspected task progress payloads, status line segment consumers, todo rendering, task result rendering, shutdown summary, and existing tests. TypeScript LSP was unavailable, so callsite discovery fell back to grep after confirming no TS server in lsp status.
+
+** DONE Implement tracker and TUI consumers
+:PROPERTIES:
+:TASK_ID: implement-subagent-visibility
+:STATUS: completed
+:DEPENDS: inspect-and-scope
+:ORG_ITEM_ID: PLAN-178-tui-subtask-visibility-and-efficiency-tr
+:END:
+
+Add SubagentTracker, wire status line/todo panel/exit summary, add task efficiency summary, and add focused tests for tracker and formatting behavior.
+
+Added SubagentTracker, wired status line/todo panel/session exit consumers, recorded task batch completions from EventController, added task efficiency summaries, and added focused tests plus renderer artifacts.
+
+** DONE Verify plan and close records
+:PROPERTIES:
+:TASK_ID: verify-and-close
+:STATUS: completed
+:GATE_COMMIT: true
+:GATE_CMD: bun check:ts
+:GATE_LLM: Confirm subtask visibility and efficiency reporting are covered by focused evidence and plan/org states match reality.
+:VERIFY_CMD: bun test packages/coding-agent/test/task/subagent-tracker.test.ts
+:DEPENDS: implement-subagent-visibility
+:ORG_ITEM_ID: PLAN-178-tui-subtask-visibility-and-efficiency-tr
+:ORG_ITEM_CLOSING_ID: PLAN-178-tui-subtask-visibility-and-efficiency-tr
+:END:
+
+Run focused tests/checks, perform manual verification or capture truthful blocker, append completion report to org item, reconcile child org states, commit touched files only.
+
+Verification complete: tracker test, supporting renderer/summary tests, and bun check:ts all passed; renderer artifacts saved under the plan artifact directory; linked org items moved to DONE; committed staged plan files as feat(coding-agent): surface subtask visibility and efficiency.

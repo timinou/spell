@@ -1,0 +1,92 @@
+#+TITLE: Session 14b7c631ce70dcba Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* contract
+
+** DONE Define prompt surface compression contract
+:PROPERTIES:
+:TASK_ID: feat-506
+:STATUS: completed
+:ORG_ITEM_ID: FEAT-506-define-prompt-surface-compression-contra
+:END:
+
+Create specs/prompt-surface-compression.md with principles, rules per category, validation criteria. References PLAN-181/209 lineage.
+
+* high-impact
+
+** DONE Compress AGENTS.md to terse constraint notation
+:PROPERTIES:
+:TASK_ID: feat-507
+:STATUS: completed
+:DEPENDS: feat-506
+:ORG_ITEM_ID: FEAT-507-compress-agents-md-to-terse-constraint-n
+:END:
+
+Rewrite AGENTS.md: ~5500 tokens → ~1800. Delete BAD/GOOD code pairs, tutorials → constraint lists.
+
+** DONE Compress large tool descriptions (5 files)
+:PROPERTIES:
+:TASK_ID: feat-508
+:STATUS: completed
+:DEPENDS: feat-506
+:ORG_ITEM_ID: FEAT-508-compress-large-tool-descriptions
+:END:
+
+code.md, hashline.md, todo-write.md, task.md, bash.md. ~5700 → ~2050 words.
+
+* sweep
+
+** DONE Compress structural/search tool descriptions (6 files)
+:PROPERTIES:
+:TASK_ID: feat-509
+:STATUS: completed
+:DEPENDS: feat-506
+:ORG_ITEM_ID: FEAT-509-compress-structural-and-search-tool-desc
+:END:
+
+ast-grep.md, ast-edit.md, grep.md, find.md, lsp.md, code-search.md.
+
+** DONE Compress IO/interaction/remaining tool descriptions (30 files)
+:PROPERTIES:
+:TASK_ID: feat-510
+:STATUS: completed
+:DEPENDS: feat-506
+:ORG_ITEM_ID: FEAT-510-compress-io-interaction-and-remaining-to
+:END:
+
+read.md, write.md, ask.md, fetch.md, web-search.md, browser.md, python.md + specialized + utility.
+
+** DONE Compress plan-mode overlays and system prompts
+:PROPERTIES:
+:TASK_ID: feat-511
+:STATUS: completed
+:DEPENDS: feat-506
+:ORG_ITEM_ID: FEAT-511-compress-plan-mode-overlays-and-system-p
+:END:
+
+plan-mode-active.md, plan-mode-approved.md, plan-mode-uiux.md + system prompts.
+
+plan-mode-active: 2504→1569 (37%), plan-mode-approved: 1287→1135 (12%), agent-creation-architect: 729→301 (59%). plan-mode-approved stayed above 900 target — heavily Handlebars-conditional, most content renders only in specific configs.
+
+** DONE Compress subagent/agent/auxiliary prompt templates
+:PROPERTIES:
+:TASK_ID: feat-512
+:STATUS: completed
+:DEPENDS: feat-506
+:ORG_ITEM_ID: FEAT-512-compress-subagent-agent-and-auxiliary-pr
+:END:
+
+Subagent system prompts, 19 agent descriptions, compaction + memory templates.
+
+* verification
+
+** DONE Update regression tests and architecture spec
+:PROPERTIES:
+:TASK_ID: feat-513
+:STATUS: completed
+:DEPENDS: feat-507 feat-508 feat-509 feat-510 feat-511 feat-512
+:ORG_ITEM_ID: FEAT-513-update-regression-tests-and-architecture
+:END:
+
+Fix test assertions, measure token delta, update specs/system-prompt-architecture.md, close FUP-047/048.

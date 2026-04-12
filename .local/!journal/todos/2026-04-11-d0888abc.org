@@ -1,0 +1,23 @@
+#+TITLE: Session 14b703c224e98c9c Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Investigate NAPI bindings and native module usage
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Check subprocess and resource lifecycle management
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Check for known problematic Bun API patterns
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

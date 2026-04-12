@@ -1,0 +1,210 @@
+#+TITLE: Procedure DSL transform layer with declarative and custom transforms
+#+STATE: ITEM
+#+SESSION_ID: 14b7c05e6d83ec68
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-05-34-134Z_14b7c05e6d83ec68.jsonl]]
+#+CUSTOM_ID: FEAT-522-procedure-dsl-transform-layer-with-decla
+#+EFFORT: 4h
+#+PRIORITY: A
+#+LAYER: code-engine
+
+* Initial Message
+
+looking at the typst and org integrations to pi-code-engine, what would you want to implement for your markdown usage to be a delight?
+
+* Context
+
+The procedure DSL in ~pi-code-engine~ (~crates/pi-code-engine/src/procedure/~) currently provides activation rules and node selection but has no transform layer — it can find and select nodes but cannot describe what to do with them. This feature extends the DSL with a declarative transform layer so language profiles can register custom edit operations without writing per-operation Rust functions.
+
+** Design Decisions
+
+- Add ~Transform~ enum with declarative variants + a ~Custom~ escape hatch
+- ~Transform::Custom~ is documented as a flag for DSL improvement — its existence means the DSL should eventually be extended to express that operation declaratively
+- Procedures register on ~LanguageProfile~ keyed by operation name
+- The edit dispatch (~single_edit_operation~ in ~code_buffer.rs~) falls back to profile procedures when no built-in operation matches
+- Procedure transforms produce ~Vec<TextEdit>~ — same type as all other edit operations
+- The activation rules determine WHEN the procedure applies (node type matching)
+- The selector determines WHICH nodes to operate on
+- The transform determines WHAT to do with selected nodes
+
+* Scope
+
+** ~crates/pi-code-engine/src/procedure/mod.rs~
+
+*** Add ~Transform~ enum
+
+#+begin_src rust
+/// Declarative transform applied to each matched node.
+///
+/// When `Custom` is used, it indicates the DSL should eventually be extended
+/// to express this operation declaratively. Treat `Custom` as a flag for
+/// improvement, not a permanent escape hatch.
+#[derive(Clone)]
+pub enum Transform {
+    /// Remove N characters from the start of each matched node's text.
+    /// Example: "##" → "#" with count=1 for heading promotion.
+    TrimStart { count: usize },
+    /// Remove N characters from the end of each matched node's text.
+    /// Example: "===" → "==" with count=1 for Typst heading promotion.
+    TrimEnd { count: usize },
+    /// Prepend text to each matched node.
+    /// Example: "#" → "##" with text="#" for heading demotion.
+    Prepend { text: String },
+    /// Append text to each matched node.
+    Append { text: String },
+    /// Replace matched node text using regex.
+    RegexReplace { pattern: String, replacement: String },
+    /// Delete matched nodes entirely.
+    Delete,
+    /// Replace the content (not delimiters) of matched nodes.
+    /// Used with additional context from the operation options.
+    ReplaceContent { content_field: Option<String> },
+    /// Escape hatch for transforms that don't fit declarative patterns.
+    /// Document WHY this can't be expressed declaratively and what DSL
+    /// extension would eliminate it.
+    Custom(Box<dyn Fn(&str, &serde_json::Value) -> crate::Result<String> + Send + Sync>),
+}
+#+end_src
+
+Note: ~Transform~ cannot derive ~Debug~ due to the ~Custom~ variant. Implement ~Debug~ manually, printing ~"Custom(fn)"~ for the function variant.
+
+*** Add ~transform~ field to ~Procedure~
+
+#+begin_src rust
+pub struct Procedure {
+    pub name: String,
+    pub description: String,  // For agent-facing documentation
+    pub activation_rules: Vec<ActivationRule>,
+    pub selector: Option<Selector>,
+    pub transform: Transform,
+}
+#+end_src
+
+*** Add ~apply_procedure_transform()~
+
+#+begin_src rust
+pub fn apply_procedure_transform(
+    procedure: &Procedure,
+    source: &str,
+    matched_nodes: &[MatchedNode],
+    options: &serde_json::Value,
+) -> crate::Result<Vec<TextEdit>> {
+    let mut edits = Vec::new();
+    for node in matched_nodes {
+        if node.mark != Mark::Match {
+            continue;
+        }
+        let text = &source[node.byte_range.clone()];
+        let new_text = match &procedure.transform {
+            Transform::TrimStart { count } => text.chars().skip(*count).collect(),
+            Transform::TrimEnd { count } => {
+                let chars: Vec<char> = text.chars().collect();
+                chars[..chars.len().saturating_sub(*count)].iter().collect()
+            },
+            Transform::Prepend { text: prefix } => format!("{prefix}{text}"),
+            Transform::Append { text: suffix } => format!("{text}{suffix}"),
+            Transform::RegexReplace { pattern, replacement } => {
+                let re = regex::Regex::new(pattern)
+                    .map_err(|e| crate::CodeEngineError::Edit(e.to_string()))?;
+                re.replace_all(text, replacement.as_str()).into_owned()
+            },
+            Transform::Delete => String::new(),
+            Transform::ReplaceContent { .. } => {
+                // Content replacement uses the "content" field from options
+                options.get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string()
+            },
+            Transform::Custom(f) => f(text, options)?,
+        };
+        edits.push(TextEdit {
+            start_byte: node.byte_range.start,
+            old_end_byte: node.byte_range.end,
+            new_text,
+        });
+    }
+    Ok(edits)
+}
+#+end_src
+
+*** Update ~ProcedureBuilder~
+
+Add ~.name()~, ~.description()~, ~.transform()~ methods.
+
+** ~crates/pi-code-engine/src/language/profile.rs~
+
+*** Add procedures map to ~LanguageProfile~
+
+#+begin_src rust
+pub struct LanguageProfile {
+    // ... existing fields ...
+    /// Language-specific custom operations registered as named procedures.
+    pub procedures: HashMap<String, Procedure>,
+}
+#+end_src
+
+** ~crates/pi-natives/src/code_buffer.rs~
+
+*** Wire procedures into edit dispatch
+
+In ~single_edit_operation~, after the existing ~match operation { ... }~ arms, add a fallback:
+
+#+begin_src rust
+other => {
+    // Try language-specific procedures
+    let proc = profile.procedures.get(other)
+        .ok_or_else(|| json_err(format!("Unknown edit operation: {other}")))?;
+    let resolved = resolve_target(buffer, &profile, &options)?;
+    // Find the node in the tree
+    let node = buffer.tree().root_node()
+        .descendant_for_byte_range(resolved.start_byte, resolved.end_byte)
+        .ok_or_else(|| json_err("Node not found for resolved target"))?;
+    let result = apply_procedure(&proc, &node, resolved.start_byte, &profile)
+        .ok_or_else(|| json_err(format!("Procedure '{}' did not match", other)))?;
+    apply_procedure_transform(&proc, &buffer.source(), &result.matched_nodes, &options)
+        .map_err(engine_err)
+}
+#+end_src
+
+* Edge Cases
+- ~TrimStart~ on single-char node: produces empty string (heading promotion ~#~ → ~""~ is invalid). Validate minimum text length before applying
+- ~RegexReplace~ with invalid pattern: return ~CodeEngineError::Edit~ with regex error message
+- Empty matched_nodes list: return empty edits (no-op)
+- ~Custom~ function that panics: wrap in ~std::panic::catch_unwind~? Or document that Custom fns must not panic
+- Procedure name conflicts with built-in operations: built-in operations take precedence (they match first in the dispatch). Document this
+- Profile without procedures: ~procedures~ map is empty, fallback always hits "Unknown operation" — correct behavior
+- **Parallel edit conflict**: This item and [[id:FEAT-514-extend-declarationpattern-with-flexible]] both modify ~LanguageProfile~ struct and all profile constructor fns in ~language/mod.rs~. They are independent wave-1 items. If executing in parallel, the second to merge will need to resolve struct field additions. If executing sequentially, FEAT-514 first is recommended since its changes are more pervasive. All existing profile constructors must include ~procedures: HashMap::new()~ after this item.
+* Test Plan
+
+** Unit tests for each Transform variant
+
+- ~TrimStart { count: 1 }~ on ~"## Heading"~ → ~"# Heading"~
+- ~TrimEnd { count: 1 }~ on ~"=== Heading"~ → ~"== Heading"~
+- ~Prepend { text: "#" }~ on ~"# Heading"~ → ~"## Heading"~
+- ~Append { text: "!" }~ on ~"Hello"~ → ~"Hello!"~
+- ~Delete~ on any text → ~""~
+- ~RegexReplace~ with pattern and replacement
+- ~Custom~ with a simple function
+
+** Integration test: procedure dispatch
+
+- Register a test procedure on the TypeScript profile (or a test profile)
+- Call ~single_edit_operation~ with the procedure name
+- Verify it produces correct TextEdits
+
+** Negative tests
+
+- Unknown operation name without procedure: error message
+- ~RegexReplace~ with invalid regex: error
+- ~TrimStart~ with count > text length: produces empty string
+
+* Acceptance Criteria
+
+- ~Transform~ enum with all variants compiles and is usable
+- ~apply_procedure_transform~ produces correct ~Vec<TextEdit>~ for each variant
+- Edit dispatch falls back to profile procedures for unknown operation names
+- Built-in operations still take precedence over procedure names
+- ~Transform::Custom~ is documented as DSL improvement flag
+- ~cargo test -p pi-code-engine~ passes
+- ~cargo test -p pi-natives~ passes (dispatch integration)
+- ~cargo clippy~ clean

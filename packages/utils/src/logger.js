@@ -72,7 +72,7 @@ export function setStderrDebugEnabled(enabled) {
             return;
         }
         winstonLogger.remove(stderrTransport);
-        stderrTransport.close();
+        stderrTransport.close?.();
         stderrTransport = null;
     }
     catch {
@@ -192,6 +192,26 @@ export async function timeAsync(op, fn, ...args) {
     }
     finally {
         logTiming(op, performance.now() - start);
+    }
+}
+let closed = false;
+/**
+ * Close the logger, flushing all pending writes.
+ * After this call the logger is unusable — intended for process shutdown.
+ * Idempotent: subsequent calls resolve immediately.
+ */
+export async function close() {
+    if (closed)
+        return;
+    closed = true;
+    try {
+        const { promise, resolve } = Promise.withResolvers();
+        winstonLogger.on("finish", resolve);
+        winstonLogger.end();
+        await promise;
+    }
+    catch {
+        // Silently ignore logger close failures
     }
 }
 //# sourceMappingURL=logger.js.map

@@ -1,0 +1,29 @@
+#+TITLE: Session 14b6fb0a71cce49c Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Read Rust OrgItem struct and serde attributes
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Read NAPI bridge parse_items_from_options and section edit
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Read TS tool parseKeywordQuery, applyFilter, and OrgQueryFilter
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Read existing native test patterns for org-buffer test design
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

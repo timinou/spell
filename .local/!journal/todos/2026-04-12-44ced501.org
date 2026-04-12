@@ -1,0 +1,17 @@
+#+TITLE: Session 14b7e68d6deda817 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Repo Layout
+
+** DONE Research Loro CRDT API and how it can serve as the single source of truth
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Research tree-sitter-org grammar options
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:

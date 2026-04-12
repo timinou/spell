@@ -1,0 +1,66 @@
+#+TITLE: Shared incomplete tool-call stall diagnostics contract
+#+STATE: ITEM
+#+SESSION_ID: 14b7ee149bae1c85
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T16-25-17-166Z_14b7ee149bae1c85.jsonl]]
+#+CUSTOM_ID: PROJ-039-shared-incomplete-tool-call-stall-diagno
+
+* Initial Message
+
+✘ Write: ⌘ !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+ ✘ Error: Tool execution failed due to an error: Anthropic messages stream stalled while streaming incomplete write tool arguments
+
+
+ Task model: gpt-5.4-mini
+
+
+ ┌─── ✔ Bash ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ $ wc -l !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org                                                 ╭──────────╮
+ ├─── Output ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│ 🗺 Paused │
+ │ 54 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org                                                      ╰──────────╯
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Write ⢿ 🗒 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+
+
+
+ Write ⣟ 🗒 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl
+ ID: 14b7be567342b8fe
+
+
+
+explain this: Tool execution failed due to an error: Anthropic messages stream stalled while streaming incomplete write tool arguments
+
+* User workflows
+1. A provider stalls while streaming tool arguments; the session must retain enough raw diagnostic state to explain what was being emitted.
+2. A maintainer reopens the transcript later and can recover the provider, tool name, retry counts, timeout budget, byte counts, parsed keys, and the full raw partial tool JSON without re-running the failure.
+3. Downstream UI/rendering layers can consume one shared diagnostic shape instead of provider-specific error strings.
+4. Large debug payloads do not bloat the JSONL transcript inline; persistence remains durable and reconstructible.
+
+* Scope
+Define one provider-agnostic incomplete-tool-call diagnostic contract and one persistence path for raw partial tool-call payloads. Prefer a shared utility under =packages/ai/src/utils/= rather than copying Anthropic-style logic into each provider. The contract must distinguish: stalled before any tool args, stalled with incomplete tool args, and completed tool call missing trailing stop events.
+
+Persist the full raw partial tool JSON for debugging, but do so atomically through session artifact/blob infrastructure rather than stuffing unbounded raw strings directly into transcript entries. The persisted transcript/session entry must keep stable references and summary metadata: provider, model, tool name, parsed argument keys, raw byte count, first-token timing, idle-timeout budget, provider retry attempt count, and artifact URI/path for the full raw partial JSON.
+
+* Files
+- =packages/ai/src/types.ts=
+- shared helper in =packages/ai/src/utils/=
+- =packages/coding-agent/src/session/session-manager.ts=
+- =packages/coding-agent/src/session/artifacts.ts= and/or blob persistence helpers if needed
+
+* Acceptance
+- A single shared diagnostic shape exists and is used as the cross-provider target format.
+- Full raw partial tool JSON is persisted by reference, not silently discarded.
+- Transcript/session persistence survives reload and still points to recoverable raw debug payloads.
+- This item does not change provider-specific timeout policy yet; it only establishes the contract and persistence mechanism consumed by later items.
+
+* Verification
+- Add focused persistence tests in coding-agent/session coverage proving a stalled incomplete tool-call entry round-trips with artifact reference intact.
+- Run =bun test packages/coding-agent/test/session-messages.test.ts= (or the new focused transcript persistence test if placed elsewhere).
+- Run =bun check:ts=.

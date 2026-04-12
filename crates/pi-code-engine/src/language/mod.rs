@@ -1,11 +1,14 @@
 mod generated;
 mod profile;
 
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 pub use profile::*;
 
-use crate::error::{CodeEngineError, Result};
+use crate::{
+	error::{CodeEngineError, Result},
+	procedure::{Procedure, Transform, types},
+};
 
 /// Opaque language identifier (e.g., "typescript", "rust").
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -40,13 +43,14 @@ impl LanguageRegistry {
 	}
 
 	/// Create a registry with all built-in profiles (TypeScript, Rust, Python,
-	/// Typst, Elixir, Org).
+	/// Typst, Markdown, Elixir, Org).
 	pub fn with_builtins() -> Result<Self> {
 		let mut reg = Self::new();
 		reg.register(typescript_profile())?;
 		reg.register(rust_profile())?;
 		reg.register(python_profile())?;
 		reg.register(typst_profile())?;
+		reg.register(markdown_profile())?;
 		reg.register(elixir_profile())?;
 		reg.register(org_profile())?;
 		Ok(reg)
@@ -364,12 +368,305 @@ fn python_profile() -> LanguageProfile {
 	}
 }
 
+fn typst_heading_level(line: &str) -> Option<(usize, usize)> {
+	let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
+	let trimmed = &line[indent..];
+	let level = trimmed.chars().take_while(|ch| *ch == '=').count();
+	if !(1..=6).contains(&level) {
+		return None;
+	}
+	let rest = trimmed[level..].chars().next();
+	if rest.is_some_and(|ch| ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n') {
+		return None;
+	}
+	Some((indent, level))
+}
+
+fn typst_shift_headings(text: &str, delta: isize) -> crate::Result<String> {
+	let mut out = String::with_capacity(text.len());
+	for line in text.split_inclusive('\n') {
+		if let Some((indent, level)) = typst_heading_level(line) {
+			let new_level = level as isize + delta;
+			if !(1..=6).contains(&new_level) {
+				return Err(CodeEngineError::Edit(if delta < 0 {
+					"Cannot promote h1 heading".into()
+				} else {
+					"Cannot demote beyond h6".into()
+				}));
+			}
+			let prefix = &line[..indent];
+			let trimmed = &line[indent..];
+			out.push_str(prefix);
+			out.push_str(&"=".repeat(new_level as usize));
+			out.push_str(&trimmed[level..]);
+			continue;
+		}
+		out.push_str(line);
+	}
+	Ok(out)
+}
+
+fn typst_promote_heading(text: &str, _options: &serde_json::Value) -> crate::Result<String> {
+	typst_shift_headings(text, -1)
+}
+
+fn typst_demote_heading(text: &str, _options: &serde_json::Value) -> crate::Result<String> {
+	typst_shift_headings(text, 1)
+}
+
+fn markdown_fence_marker(line: &str) -> Option<(char, usize)> {
+	let trimmed = line.trim_start_matches([' ', '\t']);
+	let mut chars = trimmed.chars();
+	let marker = chars.next()?;
+	if marker != '`' && marker != '~' {
+		return None;
+	}
+	let count = trimmed.chars().take_while(|ch| *ch == marker).count();
+	(count >= 3).then_some((marker, count))
+}
+
+fn markdown_heading_level(line: &str) -> Option<(usize, usize)> {
+	let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
+	let trimmed = &line[indent..];
+	let level = trimmed.chars().take_while(|ch| *ch == '#').count();
+	if !(1..=6).contains(&level) {
+		return None;
+	}
+	let rest = trimmed[level..].chars().next();
+	if rest.is_some_and(|ch| ch != ' ' && ch != '\t' && ch != '\r' && ch != '\n') {
+		return None;
+	}
+	Some((indent, level))
+}
+
+fn markdown_shift_headings(text: &str, delta: isize) -> crate::Result<String> {
+	let mut out = String::with_capacity(text.len());
+	let mut in_fence: Option<(char, usize)> = None;
+	for line in text.split_inclusive('\n') {
+		let trimmed = line.trim_start_matches([' ', '\t']);
+		if let Some((marker, count)) = markdown_fence_marker(trimmed) {
+			match in_fence {
+				Some((open_marker, open_count)) if open_marker == marker && count >= open_count => {
+					in_fence = None;
+					out.push_str(line);
+					continue;
+				},
+				None => {
+					in_fence = Some((marker, count));
+					out.push_str(line);
+					continue;
+				},
+				_ => {},
+			}
+		}
+		if in_fence.is_some() {
+			out.push_str(line);
+			continue;
+		}
+		if let Some((indent, level)) = markdown_heading_level(line) {
+			let new_level = level as isize + delta;
+			if !(1..=6).contains(&new_level) {
+				return Err(CodeEngineError::Edit(if delta < 0 {
+					"Cannot promote h1 heading — already at top level".into()
+				} else {
+					"Cannot demote h6 heading — already at deepest level".into()
+				}));
+			}
+			let prefix = &line[..indent];
+			let trimmed = &line[indent..];
+			out.push_str(prefix);
+			out.push_str(&"#".repeat(new_level as usize));
+			out.push_str(&trimmed[level..]);
+			continue;
+		}
+		out.push_str(line);
+	}
+	Ok(out)
+}
+
+fn replace_markdown_code_block(text: &str, options: &serde_json::Value) -> crate::Result<String> {
+	#[derive(Debug)]
+	struct CodeBlock {
+		content_start: usize,
+		content_end:   usize,
+		language:      Option<String>,
+	}
+
+	let mut blocks = Vec::new();
+	let mut offset = 0usize;
+	let mut lines = text.split_inclusive('\n');
+	while let Some(line) = lines.next() {
+		let trimmed = line.trim_start_matches([' ', '\t']);
+		let Some((marker, count)) = markdown_fence_marker(trimmed) else {
+			offset += line.len();
+			continue;
+		};
+		let language = trimmed[count..]
+			.split_whitespace()
+			.next()
+			.map(str::to_string)
+			.filter(|value| !value.is_empty());
+		let content_start = offset + line.len();
+		offset += line.len();
+		let mut content_end = content_start;
+		for next_line in lines.by_ref() {
+			let next_trimmed = next_line.trim_start_matches([' ', '\t']);
+			if let Some((next_marker, next_count)) = markdown_fence_marker(next_trimmed)
+				&& next_marker == marker
+				&& next_count >= count
+			{
+				content_end = offset;
+				offset += next_line.len();
+				break;
+			}
+			offset += next_line.len();
+		}
+		blocks.push(CodeBlock { content_start, content_end, language });
+	}
+
+	if blocks.is_empty() {
+		return Err(CodeEngineError::Edit("No code blocks found in section".into()));
+	}
+
+	let target_index = options.get("index").and_then(serde_json::Value::as_u64);
+	let target_language = options.get("language").and_then(serde_json::Value::as_str);
+	let target = if let Some(index) = target_index {
+		blocks.get(index as usize).ok_or_else(|| {
+			CodeEngineError::Edit(format!(
+				"Code block index {} out of range ({} available)",
+				index,
+				blocks.len()
+			))
+		})?
+	} else if let Some(language) = target_language {
+		blocks
+			.iter()
+			.find(|block| block.language.as_deref() == Some(language))
+			.ok_or_else(|| {
+				CodeEngineError::Edit(format!("No code block with language '{language}' found"))
+			})?
+	} else {
+		&blocks[0]
+	};
+
+	let mut replacement = options
+		.get("content")
+		.and_then(serde_json::Value::as_str)
+		.unwrap_or("")
+		.to_string();
+	if !replacement.is_empty() && !replacement.ends_with('\n') {
+		replacement.push('\n');
+	}
+	let mut updated = String::with_capacity(
+		text.len() - (target.content_end - target.content_start) + replacement.len(),
+	);
+	updated.push_str(&text[..target.content_start]);
+	updated.push_str(&replacement);
+	updated.push_str(&text[target.content_end..]);
+	Ok(updated)
+}
+
+fn markdown_profile() -> LanguageProfile {
+	let gd = generated::markdown::grammar();
+	let procedures = HashMap::from([
+		(
+			"promote".into(),
+			Procedure::builder()
+				.name("promote")
+				.description("Decrease heading level of section and descendant headings")
+				.activate(|a| a.nodes(types(&["section"])))
+				.transform(Transform::Custom(Arc::new(|text, _options| {
+					markdown_shift_headings(text, -1)
+				})))
+				.build(),
+		),
+		(
+			"demote".into(),
+			Procedure::builder()
+				.name("demote")
+				.description("Increase heading level of section and descendant headings")
+				.activate(|a| a.nodes(types(&["section"])))
+				.transform(Transform::Custom(Arc::new(|text, _options| {
+					markdown_shift_headings(text, 1)
+				})))
+				.build(),
+		),
+		(
+			"replace-code-block".into(),
+			Procedure::builder()
+				.name("replace-code-block")
+				.description("Replace a fenced code block within a section")
+				.activate(|a| a.nodes(types(&["section"])))
+				.transform(Transform::Custom(Arc::new(replace_markdown_code_block)))
+				.build(),
+		),
+	]);
+	LanguageProfile {
+		id: LanguageId::new("markdown"),
+		extensions: vec!["md".into(), "mdx".into(), "markdown".into()],
+		declarations: vec![
+			DeclarationPattern {
+				node_types: vec!["section".into()],
+				name:       NameExtractor::ChildField {
+					child_type: "atx_heading".into(),
+					field:      "heading_content".into(),
+				},
+				kind:       "section".into(),
+				body:       BodyExtractor::AfterChild { child_type: "atx_heading".into() },
+				visibility: None,
+			},
+			DeclarationPattern {
+				node_types: vec!["minus_metadata".into(), "plus_metadata".into()],
+				name:       NameExtractor::Literal { name: "frontmatter".into() },
+				kind:       "frontmatter".into(),
+				body:       BodyExtractor::None,
+				visibility: None,
+			},
+		],
+		class_like: vec![ClassLikePattern {
+			node_type:    "section".into(),
+			body:         ClassBodyExtractor::Direct,
+			member_types: vec!["section".into()],
+		}],
+		imports: vec![],
+		exports: vec![],
+		references: vec![],
+		separators: vec![],
+		procedures,
+		production_rules: gd.production_rules,
+		inverse_rules: gd.inverse_rules,
+		all_types: gd.all_types,
+		supertypes: gd.supertypes,
+		ts_language: tree_sitter_md::LANGUAGE.into(),
+	}
+}
+
 fn typst_profile() -> LanguageProfile {
 	let gd = generated::typst::grammar();
+	let procedures = HashMap::from([
+		(
+			"promote".into(),
+			Procedure::builder()
+				.name("promote")
+				.description("Decrease Typst heading level")
+				.activate(|a| a.nodes(types(&["section"])))
+				.transform(Transform::Custom(Arc::new(typst_promote_heading)))
+				.build(),
+		),
+		(
+			"demote".into(),
+			Procedure::builder()
+				.name("demote")
+				.description("Increase Typst heading level")
+				.activate(|a| a.nodes(types(&["section"])))
+				.transform(Transform::Custom(Arc::new(typst_demote_heading)))
+				.build(),
+		),
+	]);
 	LanguageProfile {
-		id:               LanguageId::new("typst"),
-		extensions:       vec!["typ".into()],
-		declarations:     vec![
+		id: LanguageId::new("typst"),
+		extensions: vec!["typ".into()],
+		declarations: vec![
 			DeclarationPattern {
 				node_types: vec!["let".into()],
 				name:       NameExtractor::Field { name: "pattern".into() },
@@ -391,25 +688,32 @@ fn typst_profile() -> LanguageProfile {
 				body:       BodyExtractor::Field { name: "value".into() },
 				visibility: None,
 			},
+			DeclarationPattern {
+				node_types: vec!["section".into()],
+				name:       NameExtractor::ChildText { child_type: "text".into() },
+				kind:       "heading".into(),
+				body:       BodyExtractor::AfterChild { child_type: "heading".into() },
+				visibility: None,
+			},
 		],
-		class_like:       vec![],
-		imports:          vec![ImportPattern {
+		class_like: vec![],
+		imports: vec![ImportPattern {
 			node_type:       "import".into(),
 			specifier_field: "import".into(),
 			is_type_only:    false,
 		}],
-		exports:          vec![],
-		references:       vec![ReferencePattern {
+		exports: vec![],
+		references: vec![ReferencePattern {
 			node_type:            "ident".into(),
 			exclude_parent_types: vec!["comment".into(), "string".into()],
 		}],
-		separators:       vec![",".into()],
-		procedures:       HashMap::new(),
+		separators: vec![",".into()],
+		procedures,
 		production_rules: gd.production_rules,
-		inverse_rules:    gd.inverse_rules,
-		all_types:        gd.all_types,
-		supertypes:       gd.supertypes,
-		ts_language:      codebook_tree_sitter_typst::LANGUAGE.into(),
+		inverse_rules: gd.inverse_rules,
+		all_types: gd.all_types,
+		supertypes: gd.supertypes,
+		ts_language: codebook_tree_sitter_typst::LANGUAGE.into(),
 	}
 }
 
@@ -487,12 +791,13 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn registry_with_builtins_loads_all_six_languages() {
+	fn registry_with_builtins_loads_all_seven_languages() {
 		let reg = LanguageRegistry::with_builtins().expect("builtins should load");
 		assert!(reg.get(&LanguageId::new("typescript")).is_some());
 		assert!(reg.get(&LanguageId::new("rust")).is_some());
 		assert!(reg.get(&LanguageId::new("python")).is_some());
 		assert!(reg.get(&LanguageId::new("typst")).is_some());
+		assert!(reg.get(&LanguageId::new("markdown")).is_some());
 		assert!(reg.get(&LanguageId::new("elixir")).is_some());
 		assert!(reg.get(&LanguageId::new("org")).is_some());
 		assert!(reg.get(&LanguageId::new("haskell")).is_none());
@@ -516,6 +821,13 @@ mod tests {
 		assert_eq!(py.unwrap().id.as_str(), "python");
 		let pyi = reg.match_path(Path::new("types.pyi"));
 		assert_eq!(pyi.unwrap().id.as_str(), "python");
+
+		let md = reg.match_path(Path::new("README.md"));
+		assert_eq!(md.unwrap().id.as_str(), "markdown");
+		let mdx = reg.match_path(Path::new("docs/guide.mdx"));
+		assert_eq!(mdx.unwrap().id.as_str(), "markdown");
+		let markdown = reg.match_path(Path::new("docs/guide.markdown"));
+		assert_eq!(markdown.unwrap().id.as_str(), "markdown");
 
 		let ex = reg.match_path(Path::new("lib/app.ex"));
 		assert_eq!(ex.unwrap().id.as_str(), "elixir");
@@ -608,6 +920,32 @@ mod tests {
 		assert_eq!(reg.match_path(Path::new("doc.typ")).unwrap().id.as_str(), "typst");
 		assert_eq!(typst.ts_language, codebook_tree_sitter_typst::LANGUAGE.into());
 		assert!(!typst.production_rules.is_empty(), "Typst production rules should not be empty");
+	}
+
+	#[test]
+	fn markdown_profile_has_expected_declarations_and_procedures() {
+		let reg = LanguageRegistry::with_builtins().unwrap();
+		let markdown = reg.get(&LanguageId::new("markdown")).unwrap();
+
+		assert_eq!(markdown.extensions, vec![
+			"md".to_string(),
+			"mdx".to_string(),
+			"markdown".to_string()
+		]);
+		assert_eq!(markdown.declarations.len(), 2);
+		assert!(matches!(markdown.declarations[0].name, NameExtractor::ChildField { .. }));
+		assert!(matches!(
+			markdown.declarations[0].body,
+			BodyExtractor::AfterChild { ref child_type } if child_type == "atx_heading"
+		));
+		assert!(matches!(markdown.declarations[1].name, NameExtractor::Literal { .. }));
+		assert_eq!(markdown.class_like.len(), 1);
+		assert!(matches!(markdown.class_like[0].body, ClassBodyExtractor::Direct));
+		assert!(markdown.procedures.contains_key("promote"));
+		assert!(markdown.procedures.contains_key("demote"));
+		assert!(markdown.procedures.contains_key("replace-code-block"));
+		assert_eq!(reg.match_path(Path::new("README.md")).unwrap().id.as_str(), "markdown");
+		assert_eq!(markdown.ts_language, tree_sitter_md::LANGUAGE.into());
 	}
 
 	#[test]

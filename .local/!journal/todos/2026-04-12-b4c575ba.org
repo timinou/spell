@@ -1,0 +1,64 @@
+#+TITLE: Session 14b716eab52ce84c Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Build native surface foundation
+:PROPERTIES:
+:TASK_ID: foundation
+:STATUS: completed
+:ORG_ITEM_ID: PROJ-032-build-native-typst-document-surface-foun
+:END:
+
+Implemented plan item PROJ-032: add Typst surface crate/QML item/contracts/tests and verify with focused Rust/QML commands before advancing.
+
+Added crates/pi-typst-surface with FFI/session/render contracts, registered TypstDocumentItem in the QML bridge, added QML harness fixture, and verified with cargo + package-local QML test/build.
+
+** DONE Implement canonical mapping engine
+:PROPERTIES:
+:TASK_ID: mapping
+:STATUS: completed
+:DEPENDS: foundation
+:ORG_ITEM_ID: PROJ-033-implement-source-canonical-typst-mapping
+:END:
+
+Implement plan item PROJ-033: add source anchors/edit ops/recovery/mapping tests and verify before advancing.
+
+Added native TypstSurfaceSession bindings, TS wrapper + TypstVisualEditEngine, and verified edit workflows for anchors/styles/lists/assets/tables/variables/recovery/agent patches.
+
+** DONE Build QML editor shell
+:PROPERTIES:
+:TASK_ID: qml-shell
+:STATUS: completed
+:DEPENDS: mapping
+:ORG_ITEM_ID: PROJ-034-build-the-qml-wysiwyg-shell-and-contextu
+:END:
+
+Implement plan item PROJ-034: add editor panel/contextual UX/harness screenshots and verify before advancing.
+
+Replaced the placeholder split view with a visual-first native Typst shell, contextual sidebar, insert menu, recovery/fallback banners, asset drawer, and deterministic panel tests.
+
+** DONE Integrate template asset workflows
+:PROPERTIES:
+:TASK_ID: workflow
+:STATUS: completed
+:DEPENDS: qml-shell
+:ORG_ITEM_ID: PROJ-035-integrate-templates-assets-and-agent-ass
+:END:
+
+Implement plan item PROJ-035: wire templates/assets/agent assists through canonical pipeline with focused verification.
+
+Added template catalog + workflow controller over the canonical edit engine, wired asset/variable/agent flows, extended panel protocol, and verified TS/QML workflows with focused tests.
+
+** DONE Harden fallback and verification
+:PROPERTIES:
+:TASK_ID: hardening
+:STATUS: completed
+:DEPENDS: workflow
+:ORG_ITEM_ID: PROJ-036-harden-fallback-export-and-end-to-end-ve
+:END:
+
+Implement plan item PROJ-036: add exports/artifacts/failure-state verification, update org completion report, and stage only relevant files for commit.
+
+Added export helpers, mapping/export artifacts, final screenshot set, and reran the focused Rust/QML/native/growth verification suite successfully.

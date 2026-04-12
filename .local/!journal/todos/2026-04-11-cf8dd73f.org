@@ -1,0 +1,17 @@
+#+TITLE: Session 14b7024995033d2b Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Eliminate navigate line-count allocation
+:PROPERTIES:
+:TASK_ID: eliminate-navigate-allocation
+:STATUS: completed
+:VERIFY_CMD: cargo test -p pi-code-engine
+:ORG_ITEM_ID: BUG-215-eliminate-unnecessary-string-allocation
+:END:
+
+Verified with cargo test -p pi-code-engine (56 pass), cargo clippy -p pi-code-engine -- -D warnings, cargo fmt -p pi-code-engine -- --check, and a manual code navigate node-at invocation on packages/coding-agent/src/tools/code.ts line 10 with target.line=0, which returned an import_statement node. bun check:rs remains workspace-red due a pre-existing tree-sitter-org contradiction: cargo fmt --check wants tabs in crates/tree-sitter-org/src/lib.rs while cargo clippy -D warnings rejects those same tabs.
+
+Completed. crates/pi-code-engine/src/navigate.rs now validates against rope-native line counts without allocating the full source string, and includes a regression test for trailing-newline last-content-line navigation.

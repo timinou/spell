@@ -15,6 +15,7 @@ pub use edit::{DragDirection, SpliceMode};
 pub use error::{CodeEngineError, Result};
 pub use language::{LanguageId, LanguageProfile, LanguageRegistry};
 pub use procedure::{
-	Mark, MatchedNode, Procedure, ProcedureBuilder, ProcedureResult, apply_procedure,
+	Mark, MatchedNode, Procedure, ProcedureBuilder, ProcedureResult, Transform, apply_procedure,
+	apply_procedure_transform,
 };
 pub use resolve::{ResolvedSymbol, resolve_symbol};

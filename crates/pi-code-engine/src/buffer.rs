@@ -151,9 +151,10 @@ impl BufferRegistry {
 	}
 
 	pub fn list(&self) -> Vec<BufferInfo> {
-		let buffers: Vec<_> = self.buffers.read().values().cloned().collect();
-		buffers
-			.into_iter()
+		self
+			.buffers
+			.read()
+			.values()
 			.map(|buffer| buffer.lock().info())
 			.collect()
 	}

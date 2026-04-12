@@ -1,0 +1,96 @@
+#+TITLE: Session 14b70bbb43a98ca5 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 1 Foundation
+
+** DONE Implement embedding worker binary
+:PROPERTIES:
+:TASK_ID: plan199-worker-binary
+:STATUS: completed
+:VERIFY_CMD: cargo build -p pi-embedding-worker
+:ORG_ITEM_ID: FEAT-485-embedding-subprocess-worker-binary
+:END:
+
+Create crates/pi-embedding-worker with JSONL protocol, tests, and acceptance verification.
+
+Maps to org child FEAT-485-embedding-subprocess-worker-binary.
+
+** DONE Bound cursor conversation caches
+:PROPERTIES:
+:TASK_ID: plan199-cursor-cache
+:STATUS: completed
+:VERIFY_CMD: bun check:ts
+:ORG_ITEM_ID: BUG-219-cursor-provider-conversation-caches-grow
+:END:
+
+Cap cache entries to 20 and preserve paired eviction semantics in packages/ai/src/providers/cursor.ts.
+
+Maps to org child BUG-219-cursor-provider-conversation-caches-grow.
+
+** DONE Cap grep context buffers
+:PROPERTIES:
+:TASK_ID: plan199-grep-cap
+:STATUS: completed
+:VERIFY_CMD: cargo test -p pi-natives
+:ORG_ITEM_ID: BUG-221-grep-context-buffers-grow-unbounded-per
+:END:
+
+Clamp before/after context at NAPI boundary and keep grep behavior unchanged for normal requests.
+
+Maps to org child BUG-221-grep-context-buffers-grow-unbounded-per.
+
+** DONE Cap async job retention
+:PROPERTIES:
+:TASK_ID: plan199-job-cap
+:STATUS: completed
+:VERIFY_CMD: bun check:ts
+:ORG_ITEM_ID: BUG-223-asyncjobmanager-retains-completed-jobs-w
+:END:
+
+Limit retained completed jobs and pending deliveries in packages/coding-agent/src/async/job-manager.ts.
+
+Maps to org child BUG-223-asyncjobmanager-retains-completed-jobs-w.
+
+* Wave 2 Integration
+
+** DONE Route semantic indexing through worker IPC
+:PROPERTIES:
+:TASK_ID: plan199-code-graph-ipc
+:STATUS: completed
+:VERIFY_CMD: cargo test -p pi-natives
+:DEPENDS: plan199-worker-binary
+:ORG_ITEM_ID: FEAT-486-subprocess-ipc-integration-in-code-graph
+:END:
+
+Verification: clean-worktree cargo test -p pi-natives passed; stub-worker semantic index produced workspace-vectors.bin; crashing worker simulation returned graceful error without segfault.
+
+Added crates/pi-natives/src/embedding_worker.rs, removed in-process EmbeddingEngine usage from code_graph.rs, and added a regression test for missing worker override failures.
+
+** DONE Build and install worker binary
+:PROPERTIES:
+:TASK_ID: plan199-build-dist
+:STATUS: completed
+:VERIFY_CMD: bun --cwd packages/natives run build:native
+:DEPENDS: plan199-worker-binary
+:ORG_ITEM_ID: FEAT-487-build-system-and-distribution-for-embedd
+:END:
+
+Update packages/natives build scripts so native builds package the worker binary non-fatally.
+
+Maps to org child FEAT-487-build-system-and-distribution-for-embedd.
+
+* Wave 3 Verification and closeout
+
+** DONE Run verification and close plan
+:PROPERTIES:
+:TASK_ID: plan199-verify-close
+:STATUS: completed
+:VERIFY_CMD: cargo test -p pi-natives && bun check:ts && bun check:rs
+:DEPENDS: plan199-code-graph-ipc plan199-build-dist plan199-cursor-cache plan199-grep-cap plan199-job-cap
+:ORG_ITEM_ID: PLAN-199-embedding-subprocess-isolation-and-memor
+:END:
+
+Successful evidence: cargo build/test for pi-embedding-worker, packages/natives build/embed, clean-worktree cargo test -p pi-natives, stub-worker semantic index success, crash-worker graceful failure, bun check:ts pass. Blocking evidence: bun check:rs fails on unrelated files.
+
+Verification evidence captured and org items updated truthfully. PLAN-199 remains DOING because bun check:rs fails outside PLAN-199 scope in tree-sitter-org, pi-typst-surface, and pi-code-engine.

@@ -36,7 +36,7 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 - `navigate`: In-file navigation helpers
 - `buffers`: Open managed buffers
 - `diff`: Buffer diff vs disk
-- `languages`: Built-in language profiles
+- `languages`: Built-in language profiles (TypeScript, Rust, Python, Elixir, Typst, Markdown, Org)
 - `undo` / `redo`: revert or reapply last edit
 - `save`: Save buffer to disk
 - `index`: Build the native project graph under `.spell/graph/`
@@ -72,6 +72,15 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
       { "line": 1, "operation": "insert-after", "content": ["import { x } from './x';"] }
     ]
   }
+- Edit a markdown section by heading name:
+  ```json
+  {
+    "command": "edit",
+    "file": "README.md",
+    "symbol": "Installation",
+    "operation": "replace-body",
+    "content": "Updated installation instructions.\n\n```bash\nbun install\n```"
+  }
   ```
 </examples>
 
@@ -96,5 +105,7 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 - `status` reports graph cache and semantic index state without forcing a rebuild
 - `index` forces a rebuild; other graph commands auto-build when needed
 - Do NOT default to resolution 3 for file reads
+- For markdown files, section headings are declarations: use `symbol: "Heading Text"` to target sections
+- Language-specific operations (promote, demote, replace-code-block, etc.) are shown on first use of a supported file type
 - For non-code resources, use `read`
 </critical>

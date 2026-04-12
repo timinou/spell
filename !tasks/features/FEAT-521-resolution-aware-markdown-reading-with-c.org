@@ -1,0 +1,142 @@
+#+TITLE: Resolution-aware markdown reading with content annotations
+#+STATE: ITEM
+#+SESSION_ID: 14b7c05e6d83ec68
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-05-34-134Z_14b7c05e6d83ec68.jsonl]]
+#+CUSTOM_ID: FEAT-521-resolution-aware-markdown-reading-with-c
+#+EFFORT: 3h
+#+PRIORITY: A
+#+LAYER: code-engine
+#+DEPENDS: FEAT-520-markdown-language-profile-with-section-a
+
+* Initial Message
+
+looking at the typst and org integrations to pi-code-engine, what would you want to implement for your markdown usage to be a delight?
+
+* Context
+
+With the markdown profile from [[id:FEAT-520-markdown-language-profile-with-section-a]], the code engine can outline and edit markdown sections. But the resolution-aware reading (res 0-2) uses the generic ~render_outline()~ function which only shows signatures. For markdown, resolution 2 should provide rich content annotations so the agent knows what each section contains without reading the full file.
+
+** Design Decisions
+
+- Resolution 0: heading names only, flat list — ~"Introduction (section)"~, ~"Installation (section)"~
+- Resolution 1: indented heading tree with signatures — ~"## Installation"~, ~"  ### Prerequisites"~
+- Resolution 2: heading tree + content type annotations + symbol paths for drill-in. Example:
+
+#+begin_example
+## Installation (lines 11-30)
+  2 paragraphs, 1 code block (bash), 1 list
+  > code read { symbol: "Installation", resolution: 3 }
+  ### Prerequisites (lines 13-18)
+    1 paragraph, 1 list
+    > code read { symbol: "Installation.Prerequisites", resolution: 3 }
+  ### Steps (lines 20-30)
+    1 paragraph, 1 code block (bash)
+    > code read { symbol: "Installation.Steps", resolution: 3 }
+#+end_example
+
+- Resolution 3: full source (already works via generic implementation)
+- The content annotations count children by type: paragraphs, code blocks (with language if available), lists, tables, block quotes, HTML blocks
+- Symbol paths use dotted notation matching ~resolve_symbol~ conventions
+- The drill-in hint shows the exact ~code read~ call to get full content
+
+* Scope
+
+** ~crates/pi-code-engine/src/outline.rs~
+
+*** Markdown-specific ~read()~ override
+
+The existing ~read()~ function dispatches on resolution (0=names, 1=signatures, 2=signatures+children, 3=source). For markdown, override the behavior when the language is ~"markdown"~:
+
+Option A: Add a ~custom_read~ function pointer to ~LanguageProfile~ that overrides default ~read()~ behavior for specific resolutions.
+
+Option B: Check language ID in ~read()~ and call a markdown-specific renderer for res 2.
+
+Option C (recommended): Add a ~ReadHook~ trait/function to the profile that intercepts res 0-2 rendering. The default hook uses ~render_outline()~. Markdown provides a custom hook.
+
+For simplicity in the initial implementation, option B is acceptable. The hook can be extracted in a follow-up refactor.
+
+*** Content annotation logic
+
+For each ~section~ outline entry at res 2, walk the section's AST children (excluding child sections and the heading itself) and count:
+
+#+begin_src rust
+struct ContentAnnotation {
+    paragraphs: usize,
+    code_blocks: Vec<Option<String>>, // language per code block
+    lists: usize,
+    tables: usize,
+    block_quotes: usize,
+    html_blocks: usize,
+}
+#+end_src
+
+Walk the section node's children:
+- ~paragraph~ → increment paragraphs
+- ~fenced_code_block~ → extract language from ~info_string~ child's ~language~ child text, push to code_blocks
+- ~list~ → increment lists
+- ~pipe_table~ → increment tables
+- ~block_quote~ → increment block_quotes
+- ~html_block~ → increment html_blocks
+- ~section~ → skip (handled as child outline entry)
+
+Format as: ~"2 paragraphs, 1 code block (bash), 1 list"~
+
+*** Symbol path generation
+
+For each section in the outline, compute the dotted path from root:
+- Top-level: ~"Installation"~
+- Nested: ~"Installation.Prerequisites"~
+
+Emit as a hint line: ~"> code read { symbol: \"Installation.Prerequisites\", resolution: 3 }"~
+
+NOTE: Current ~resolve_symbol~ only supports 2-level dotting. For sections nested deeper than 2 levels, show the path but add ~"(use line offset instead)"~ hint with the line number.
+
+** ~crates/pi-natives/src/code_buffer.rs~
+
+No changes needed — the ~read~ command already calls ~outline::read()~ which will pick up the new markdown behavior.
+
+* Edge Cases
+
+- Empty sections (heading only): annotation is ~"(empty)"~
+- Sections with only nested sections (no direct content): annotation is ~"(subsections only)"~
+- Code blocks without language: listed as ~"1 code block"~ without parens
+- Code blocks with language: ~"1 code block (rust)"~
+- Multiple code blocks with different languages: ~"2 code blocks (bash, typescript)"~
+- Frontmatter at res 2: show ~"frontmatter (yaml)"~ or ~"frontmatter (toml)"~ based on node type (~minus_metadata~ vs ~plus_metadata~)
+- Very wide annotations: truncate to 120 chars
+- Sections beyond 2-level nesting: show path but note offset-based access
+
+* Test Plan
+
+Using the ~hello.md~ fixture from FEAT-520:
+
+** Res 0 test
+Input: ~code read { file: "hello.md", resolution: 0 }~
+Expected: contains ~"frontmatter (frontmatter)"~, ~"Introduction (section)"~, ~"Installation (section)"~, ~"API Reference (section)"~
+
+** Res 1 test
+Input: ~code read { file: "hello.md", resolution: 1 }~
+Expected: indented tree with ~"## Installation"~, ~"  ### Prerequisites"~, ~"  ### Steps"~
+
+** Res 2 test
+Input: ~code read { file: "hello.md", resolution: 2 }~
+Expected:
+- ~"## Installation"~ line
+- Content annotation mentioning paragraphs, code blocks, lists
+- Hint line with ~code read { symbol: "Installation", resolution: 3 }~
+- Child sections indented with their own annotations
+
+** Res 3 test
+Input: ~code read { file: "hello.md", resolution: 3 }~
+Expected: full markdown source text
+
+* Acceptance Criteria
+
+- ~code read~ at res 0 returns flat section name list for markdown files
+- ~code read~ at res 1 returns indented heading tree
+- ~code read~ at res 2 returns heading tree with content annotations and drill-in hints
+- Annotations correctly count paragraphs, code blocks (with languages), lists, tables
+- Symbol paths in hints match what ~resolve_symbol~ accepts
+- ~code read~ at res 3 returns full source (unchanged behavior)
+- Non-markdown languages unaffected — generic outline rendering still works
+- ~cargo test -p pi-code-engine~ passes

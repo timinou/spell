@@ -35,4 +35,6 @@ export declare function pluralize(label: string, count: number): string;
  * Format a ratio as a percentage.
  */
 export declare function formatPercent(ratio: number): string;
+/** Format a dollar cost for display. Shows $0.0012 for tiny values, $0.123 for sub-dollar, $1.23 for larger. */
+export declare function formatCost(n: number): string;
 //# sourceMappingURL=format.d.ts.map

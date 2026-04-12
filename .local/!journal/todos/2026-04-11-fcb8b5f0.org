@@ -1,0 +1,35 @@
+#+TITLE: Session 14b6d50334ba84c7 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Key files already identified
+
+** DONE Map sdk.ts warmup and session lifecycle for code Emacs
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Map ToolSession type and emacsSessionManager field usage
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Map executeCodeBuffer NAPI surface and how to call it from TS
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Map what pi-emacs exports and what org tool still needs
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+** DONE Find existing code tool tests
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:

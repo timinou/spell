@@ -1,0 +1,11 @@
+#+TITLE: Session 14b7c05e6d83ec68 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Check dependency chains of all plan items
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:

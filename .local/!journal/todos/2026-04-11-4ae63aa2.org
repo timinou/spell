@@ -1,0 +1,23 @@
+#+TITLE: Session 14b6e1b08a8dfb55 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Explore existing Typst files and patterns in ~/code
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Explore the code tools infrastructure in coding-agent
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Explore how skills work and how a typst skill could integrate
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

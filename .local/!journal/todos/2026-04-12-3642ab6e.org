@@ -1,0 +1,79 @@
+#+TITLE: Session 14b70d337a0ce4a9 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 1: Critical fixes
+
+** DONE Fix OrgItem serde deserialization failures
+:PROPERTIES:
+:TASK_ID: bug-218
+:STATUS: completed
+:GATE_CMD: cargo test -p pi-org-engine
+:ORG_ITEM_CLOSING_ID: BUG-218-fix-orgitem-serde-deserialization-failur
+:END:
+
+Add #[serde(default)] to byte_range, clocks, children, body in item.rs. Add deserialization test. Fix error handling in org_buffer.rs.
+
+** DONE Fix priority filter + remove dead code in tool.ts
+:PROPERTIES:
+:TASK_ID: bug-222
+:STATUS: completed
+:GATE_CMD: PI_DEV=1 bun test packages/org/test/tool-commands.test.ts
+:ORG_ITEM_CLOSING_ID: BUG-222-fix-priority-filter-broken-in-parsekeywo
+:END:
+
+Fix parseKeywordQuery priority parsing, add expandPriorityFilter helper, remove dead tags: branch, remove compat shim from createOrgTool.
+
+* Wave 2: Hardening
+
+** DONE Fix section.rs CRLF byte offset drift
+:PROPERTIES:
+:TASK_ID: bug-224
+:STATUS: completed
+:GATE_CMD: cargo test -p pi-org-engine
+:DEPENDS: bug-218
+:ORG_ITEM_CLOSING_ID: BUG-224-fix-section-rs-byte-offset-drift-on-crlf
+:END:
+
+Replace str.lines() + manual offset with direct byte scanning in find_section. Add CRLF and no-trailing-newline tests.
+
+** DONE Add NAPI integration tests for executeOrg
+:PROPERTIES:
+:TASK_ID: feat-490
+:STATUS: completed
+:GATE_CMD: PI_DEV=1 bun test packages/natives/test/org-buffer.test.ts
+:DEPENDS: bug-218
+:ORG_ITEM_CLOSING_ID: FEAT-490-add-napi-integration-tests-for-executeor
+:END:
+
+Create packages/natives/test/org-buffer.test.ts with tests for all executeOrg commands.
+
+14/14 tests pass. Test uses direct native require to bypass embedded-addon.ts import chain which has pre-existing infrastructure issues with auto-generated file imports.
+
+* Wave 3: Polish
+
+** DONE Remove broad clippy allows from pi-org-engine
+:PROPERTIES:
+:TASK_ID: feat-489
+:STATUS: completed
+:GATE_CMD: cargo clippy -p pi-org-engine --no-deps -- -D warnings
+:DEPENDS: bug-218 bug-224
+:ORG_ITEM_CLOSING_ID: FEAT-489-remove-broad-clippy-allows-from-pi-org-e
+:END:
+
+Updated crates/pi-org-engine/src/lib.rs, buffer.rs, query.rs, markdown.rs, item.rs, and graph.rs to remove broad allows and satisfy crate-local clippy warnings.
+
+Removed the broad crate-level clippy allow block from crates/pi-org-engine/src/lib.rs, refactored buffer/query/markdown/item/graph helpers to satisfy clippy directly, and verified with cargo clippy -p pi-org-engine --no-deps -- -D warnings.
+
+* Verification
+
+** DONE Final verification and commit
+:PROPERTIES:
+:TASK_ID: verify
+:STATUS: completed
+:DEPENDS: bug-218 bug-222 bug-224 feat-490 feat-489
+:END:
+
+Verification completed with cargo test -p pi-org-engine, cargo clippy -p pi-org-engine --no-deps -- -D warnings, PI_DEV=1 bun test packages/org/test/tool-commands.test.ts, cargo build -p pi-natives, and PI_DEV=1 bun test packages/natives/test/org-buffer.test.ts.
+
+Ran final verification, updated FEAT-489 and PLAN-200 org items, staged only PLAN-200-related files, and committed them as fix(org): resolve org engine audit findings (PLAN-200).

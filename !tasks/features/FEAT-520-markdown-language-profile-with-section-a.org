@@ -1,0 +1,186 @@
+#+TITLE: Markdown language profile with section-as-declaration semantics
+#+STATE: ITEM
+#+SESSION_ID: 14b7c05e6d83ec68
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-05-34-134Z_14b7c05e6d83ec68.jsonl]]
+#+CUSTOM_ID: FEAT-520-markdown-language-profile-with-section-a
+#+EFFORT: 4h
+#+PRIORITY: A
+#+LAYER: code-engine
+#+DEPENDS: FEAT-514-extend-declarationpattern-with-flexible FEAT-515-add-tree-sitter-markdown-block-grammar-t
+
+* Initial Message
+
+looking at the typst and org integrations to pi-code-engine, what would you want to implement for your markdown usage to be a delight?
+
+* Context
+
+With the flexible extraction strategies from [[id:FEAT-514-extend-declarationpattern-with-flexible]] and the tree-sitter-markdown grammar from [[id:FEAT-515-add-tree-sitter-markdown-block-grammar-t]], this feature creates the actual markdown language profile that makes ~.md~ files first-class citizens in the code engine.
+
+The core insight: markdown ~section~ nodes ARE declarations. A section contains its heading and all content until the next heading at the same or higher level. Sections nest hierarchically — they are also class-like containers whose members are child sections.
+
+** Design Decisions
+
+- ~section~ node type = declaration. Kind: ~"section"~
+- Name extracted via ~NameExtractor::ChildField { child_type: "atx_heading", field: "heading_content" }~
+- Body extracted via ~BodyExtractor::AfterChild { child_type: "atx_heading" }~
+- ~section~ is also class-like: ~ClassLikePattern { node_type: "section", body: ClassBodyExtractor::Direct, member_types: ["section"] }~
+- Dotted symbol resolution: ~symbol: "Installation.Prerequisites"~ resolves nested sections
+- Frontmatter (~minus_metadata~, ~plus_metadata~) = separate declaration with kind ~"frontmatter"~ and ~NameExtractor::ChildText~ yielding name ~"frontmatter"~
+- Signature includes heading markers: ~## Installation~ (not just ~Installation~)
+- The outline must unwrap the ~document~ root into its child ~section~ nodes. The existing ~outline()~ function iterates ~root.named_children()~, which for markdown returns ~section~ nodes directly — this should work without special handling since ~section~ matches the declaration pattern
+
+** tree-sitter-markdown AST Reference
+
+#+begin_example
+document
+  minus_metadata        (YAML frontmatter)
+  section
+    atx_heading
+      atx_h1_marker     "#"
+      heading_content    "Title"       (field on atx_heading)
+    paragraph
+    section              (nested)
+      atx_heading
+        atx_h2_marker   "##"
+        heading_content  "Subtitle"
+      paragraph
+      fenced_code_block
+        info_string → language
+        code_fence_content
+#+end_example
+
+* Scope
+
+** ~crates/pi-code-engine/src/language/mod.rs~
+
+*** Create ~markdown_profile()~ function
+#+begin_src rust
+fn markdown_profile() -> LanguageProfile {
+    let gd = generated::markdown::grammar();
+    LanguageProfile {
+        id: LanguageId::new("markdown"),
+        extensions: vec!["md".into(), "mdx".into(), "markdown".into()],
+        declarations: vec![
+            DeclarationPattern {
+                node_types: vec!["section".into()],
+                name: NameExtractor::ChildField {
+                    child_type: "atx_heading".into(),
+                    field: "heading_content".into(),
+                },
+                kind: "section".into(),
+                body: BodyExtractor::AfterChild {
+                    child_type: "atx_heading".into(),
+                },
+                visibility: None,
+            },
+            DeclarationPattern {
+                node_types: vec!["minus_metadata".into(), "plus_metadata".into()],
+                name: NameExtractor::Literal { name: "frontmatter".into() },
+                kind: "frontmatter".into(),
+                body: BodyExtractor::None, // entire node is the content
+                visibility: None,
+            },
+        ],
+        class_like: vec![ClassLikePattern {
+            node_type: "section".into(),
+            body: ClassBodyExtractor::Direct,
+            member_types: vec!["section".into()],
+        }],
+        imports: vec![],
+        exports: vec![],
+        references: vec![],
+        separators: vec![],
+        production_rules: gd.production_rules,
+        inverse_rules: gd.inverse_rules,
+        all_types: gd.all_types,
+        supertypes: gd.supertypes,
+        ts_language: /* markdown crate LANGUAGE constant */,
+    }
+}
+#+end_src
+
+Register in ~with_builtins()~: add ~registry.register(markdown_profile())?;~ alongside existing profiles.
+*** Register in ~with_builtins()~
+
+Add ~registry.register(markdown_profile())?;~ alongside existing profiles.
+
+** Frontmatter name extraction
+
+The ~minus_metadata~ / ~plus_metadata~ nodes contain YAML/TOML content. For the ~NameExtractor~, we want the name to always be ~"frontmatter"~. Options:
+1. Use ~NameExtractor::ChildText~ and the text will be the raw YAML — not ideal
+2. Add a ~NameExtractor::Literal { name: String }~ variant — simplest
+
+Add ~NameExtractor::Literal { name: String }~ to FEAT-514's ~NameExtractor~ enum. This returns a fixed string regardless of AST content. Use: ~NameExtractor::Literal { name: "frontmatter".into() }~.
+
+NOTE: This requires a small update to FEAT-514 — add the ~Literal~ variant. Communicate this to the FEAT-514 implementer or handle it in this item if FEAT-514 is already complete.
+
+** Test fixtures
+
+Create ~crates/pi-code-engine/tests/fixtures/sources/hello.md~:
+
+#+begin_example
+---
+title: Test Document
+tags: [test, markdown]
+---
+
+# Introduction
+
+This is the introduction paragraph.
+
+## Installation
+
+Follow these steps to install.
+
+### Prerequisites
+
+- Node.js 18+
+- Bun runtime
+
+### Steps
+
+1. Clone the repository
+2. Run the install command:
+
+```bash
+bun install
+```
+
+## API Reference
+
+The API provides the following endpoints.
+
+```typescript
+interface Config {
+  port: number;
+  host: string;
+}
+```
+
+### Authentication
+
+Use bearer tokens for auth.
+#+end_example
+
+* Edge Cases
+
+- Heading-only sections (no body content): ~replace-body~ with empty string should leave just the heading
+- Top-level content before first heading: tree-sitter-markdown wraps this in a section without a heading — the name extraction returns ~None~, so it's skipped in outline (acceptable)
+- Setext headings (~setext_heading~ node): not handled in initial profile (ATX only). Document as known limitation. Can be added later by extending ~node_types~ in the section declaration
+- MDX files (~.mdx~): included in extensions but JSX content inside markdown won't parse. The block structure (headings, sections) still works
+- Duplicate heading names at same level: ~resolve_symbol~ will return ambiguity error with line numbers — same behavior as duplicate function names in TypeScript. This is correct
+- Very deep nesting (h1→h2→h3→h4→h5→h6): dotted names like ~"A.B.C.D"~ — current resolve_symbol only supports 2 levels. Document this limitation; suggest using ~code read~ at res 3 with offset/limit for deeply nested sections
+
+* Acceptance Criteria
+
+- ~code outline~ on ~hello.md~ returns: frontmatter, Introduction, Installation (with Prerequisites, Steps children), API Reference (with Authentication child)
+- ~code read { file: "hello.md", resolution: 0 }~ returns section names
+- ~code read { file: "hello.md", resolution: 1 }~ returns indented heading tree with signatures
+- ~code read { file: "hello.md", resolution: 2 }~ returns signatures with child outlines
+- ~code edit { file: "hello.md", symbol: "Installation", operation: "patch", patches: [...] }~ works
+- ~code edit { file: "hello.md", symbol: "Installation", operation: "replace-body", content: "..." }~ replaces section body keeping heading
+- ~code edit { file: "hello.md", symbol: "Installation", operation: "kill" }~ removes entire section
+- ~code edit { file: "hello.md", symbol: "Installation.Prerequisites", operation: "patch", ... }~ targets nested section
+- All existing language tests pass unchanged
+- ~cargo test -p pi-code-engine~ passes
+- ~cargo clippy -p pi-code-engine~ clean

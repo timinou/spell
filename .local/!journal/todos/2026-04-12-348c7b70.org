@@ -1,0 +1,67 @@
+#+TITLE: Session 14b70ae7cd2b6f82 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Finalize
+
+** DONE Update org state and commit plan work
+:PROPERTIES:
+:TASK_ID: close-plan
+:STATUS: completed
+:ORG_ITEM_ID: PLAN-195-harden-typst-first-class-support-from-au
+:END:
+
+Commit: 6ae6548a3 fix(coding-agent): harden typst support from audit
+Plan item intentionally remains DOING because unrelated current-workspace failures still block truthful completion of the required full verification matrix.
+
+Completed earlier. Org child items were closed truthfully, the plan record and verification artifact were updated repeatedly as late task confirmations arrived, and the implementation commit was amended accordingly.
+
+* Implementation
+
+** DONE Wire skill globs into prompt loading and add tests
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:ORG_ITEM_ID: FEAT-472-wire-skill-globs-for-conditional-prompt
+:END:
+
+Changed files: packages/coding-agent/src/extensibility/skills.ts, packages/coding-agent/src/system-prompt.ts, packages/coding-agent/test/extensibility/skill-globs.test.ts
+Verification evidence: bun test packages/coding-agent/test/extensibility/skill-globs.test.ts packages/coding-agent/test/skills.test.ts -> PASS (29 pass, 0 fail)
+
+Completed earlier. Skill globs now propagate through extensibility loading, system-prompt filtering is workspace-relative, and regression coverage was added. Late job confirmation also recorded in the plan artifact.
+
+** DONE Fix LSP status wording and add Tinymist root-marker regression tests
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:ORG_ITEM_ID: BUG-216-lsp-status-reports-configured-servers-as
+:END:
+
+Changed files: packages/coding-agent/src/lsp/index.ts, packages/coding-agent/test/tools/lsp-regressions.test.ts
+Verification evidence: bun test packages/coding-agent/test/tools/lsp-regressions.test.ts -> PASS
+
+Completed earlier. LSP status now distinguishes active clients from configured-but-not-started servers, and Typst .git-root activation plus negative control coverage landed in lsp-regressions.test.ts.
+
+** DONE Add TypeScript-side Typst code tool smoke coverage
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:ORG_ITEM_ID: FEAT-474-add-typst-outline-smoke-test-for-code-to
+:END:
+
+Changed file: packages/coding-agent/test/tools/code.test.ts
+Verification evidence: bun test packages/coding-agent/test/tools/code.test.ts -> PASS (18 pass, 0 fail)
+
+Completed earlier. Added absolute-path Typst outline smoke coverage for the code tool boundary using a realistic import/let/show payload.
+
+** DONE Make grammar generation prefer the Cargo-selected Typst version
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:ORG_ITEM_ID: BUG-217-build-rs-grammar-generation-picks-first
+:END:
+
+Changed file: crates/pi-code-engine/build.rs
+Verification evidence: cargo check -p pi-code-engine -> PASS
+
+Completed earlier. build.rs now prefers the dependency-selected cargo-registry version before falling back, and reruns on Cargo.toml changes.

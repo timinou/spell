@@ -765,10 +765,6 @@ export class AgentSession {
 			}
 		}
 
-		if (event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_start") {
-			this.#preCacheStreamingEditFile(event);
-		}
-
 		if (
 			event.type === "message_update" &&
 			(event.assistantMessageEvent.type === "toolcall_end" || event.assistantMessageEvent.type === "toolcall_delta")
@@ -1313,30 +1309,6 @@ export class AgentSession {
 		this.#streamingEditAbortTriggered = false;
 		this.#streamingEditCheckedLineCounts.clear();
 		this.#streamingEditFileCache.clear();
-	}
-
-	async #preCacheStreamingEditFile(event: AgentEvent): Promise<void> {
-		if (!this.settings.get("edit.streamingAbort")) return;
-		if (event.type !== "message_update") return;
-		const assistantEvent = event.assistantMessageEvent;
-		if (assistantEvent.type !== "toolcall_start") return;
-		if (event.message.role !== "assistant") return;
-
-		const contentIndex = assistantEvent.contentIndex;
-		const messageContent = event.message.content;
-		if (!Array.isArray(messageContent) || contentIndex >= messageContent.length) return;
-		const toolCall = messageContent[contentIndex] as ToolCall;
-		if (toolCall.name !== "edit") return;
-
-		const args = toolCall.arguments;
-		if (!args || typeof args !== "object" || Array.isArray(args)) return;
-		if ("old_text" in args || "new_text" in args) return;
-
-		const path = typeof args.path === "string" ? args.path : undefined;
-		if (!path) return;
-
-		const resolvedPath = resolveToCwd(path, this.sessionManager.getCwd());
-		this.#ensureFileCache(resolvedPath);
 	}
 
 	#ensureFileCache(resolvedPath: string): void {

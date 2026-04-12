@@ -1,0 +1,168 @@
+#+TITLE: Markdown custom procedures promote demote replace-code-block
+#+STATE: ITEM
+#+SESSION_ID: 14b7c05e6d83ec68
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-05-34-134Z_14b7c05e6d83ec68.jsonl]]
+#+CUSTOM_ID: FEAT-523-markdown-custom-procedures-promote-demot
+#+EFFORT: 3h
+#+PRIORITY: B
+#+LAYER: code-engine
+#+DEPENDS: FEAT-520-markdown-language-profile-with-section-a FEAT-522-procedure-dsl-transform-layer-with-decla
+
+* Initial Message
+
+looking at the typst and org integrations to pi-code-engine, what would you want to implement for your markdown usage to be a delight?
+
+* Context
+
+With the markdown profile from [[id:FEAT-520-markdown-language-profile-with-section-a]] and the procedure DSL transform layer from [[id:FEAT-522-procedure-dsl-transform-layer-with-decla]], this feature registers markdown-specific edit operations as named procedures on the markdown profile.
+
+** Design Decisions
+
+- ~promote~: decrease heading level of a section and all its descendant headings (~## → #~, ~### → ##~, etc.). Uses declarative ~Transform::TrimStart { count: 1 }~ on heading marker nodes
+- ~demote~: increase heading level (~# → ##~, ~## → ###~). Uses declarative ~Transform::Prepend { text: "#" }~ on heading marker nodes
+- ~replace-code-block~: replace the content of a specific fenced code block within a section. Uses ~Transform::Custom~ because it needs runtime parameters (which code block to target by index or language). Document why Custom is needed: the selection depends on runtime parameters, not static AST patterns
+- These operations are invoked as: ~code edit { file, symbol: "Installation", operation: "promote" }~
+- Promote/demote on h1 promote or h6 demote: promote on h1 is a no-op (can't go above h1); demote on h6 is a no-op (can't go below h6). Validate and return error
+- replace-code-block uses ~content~ parameter for new code and an optional ~index~ or ~language~ parameter to select which code block
+
+* Scope
+
+** ~crates/pi-code-engine/src/language/mod.rs~ — in ~markdown_profile()~
+
+*** Register ~promote~ procedure
+
+#+begin_src rust
+procedures.insert("promote".into(), Procedure::builder()
+    .name("promote")
+    .description("Decrease heading level of section and all descendant headings")
+    .activate(|a| a.nodes(types(&["section"])))
+    .select(|s| s.descendants(types(&[
+        "atx_h2_marker", "atx_h3_marker", "atx_h4_marker",
+        "atx_h5_marker", "atx_h6_marker",
+    ])))
+    .transform(Transform::TrimStart { count: 1 })
+    .build()
+);
+#+end_src
+
+Note: ~atx_h1_marker~ is excluded from selection — cannot promote above h1. If the resolved section's own heading is h1, the procedure should return an error. Handle this with a pre-check in the dispatch or a validation activation rule.
+
+*** Register ~demote~ procedure
+
+#+begin_src rust
+procedures.insert("demote".into(), Procedure::builder()
+    .name("demote")
+    .description("Increase heading level of section and all descendant headings")
+    .activate(|a| a.nodes(types(&["section"])))
+    .select(|s| s.descendants(types(&[
+        "atx_h1_marker", "atx_h2_marker", "atx_h3_marker",
+        "atx_h4_marker", "atx_h5_marker",
+    ])))
+    .transform(Transform::Prepend { text: "#".into() })
+    .build()
+);
+#+end_src
+
+Note: ~atx_h6_marker~ excluded — cannot demote below h6.
+
+*** Register ~replace-code-block~ procedure
+
+#+begin_src rust
+procedures.insert("replace-code-block".into(), Procedure::builder()
+    .name("replace-code-block")
+    .description("Replace content of a fenced code block by index or language")
+    .activate(|a| a.nodes(types(&["section"])))
+    .select(|s| s.descendants(types(&["fenced_code_block"])))
+    .transform(Transform::Custom(Box::new(|_text, options| {
+        // Custom: needs to match specific code block by index or language,
+        // then replace only the code_fence_content portion.
+        //
+        // DSL improvement note: This needs a "parameterized selection" feature
+        // where the selector can filter by index or by child node text content.
+        // That would allow: .select(|s| s.descendants(types(&["fenced_code_block"]))
+        //                                .filter_by_index(options.index)
+        //                                .filter_by_child_text("language", options.language))
+        //
+        // For now, the Custom fn handles the selection + replacement logic.
+        // See implementation notes below.
+    })))
+    .build()
+);
+#+end_src
+
+** Selector extension for descendant matching
+
+The current ~Selector~ supports ~Target::Self_~, ~Target::Parent~, ~Target::Grandparent~ with ~ChildFilter~. For promote/demote, we need to select ALL descendant nodes of specific types within a resolved target's byte range — not just direct children.
+
+*** Add ~Target::Descendants~ or a ~descendants()~ method on ~SelectorBuilder~
+
+This collects all named nodes of the specified types within the target node, recursively. Implementation: walk the tree within the resolved byte range, collect nodes matching the type filter.
+
+This is a necessary extension to the selector. Without it, promote/demote can only affect the section's direct children, not nested headings.
+
+** ~replace-code-block~ Custom implementation
+
+The Custom function receives the full section text and options JSON. It needs to:
+1. Parse ~index~ (0-based) or ~language~ from options
+2. Find the Nth fenced code block or the first with matching language
+3. Extract the ~code_fence_content~ byte range within the code block
+4. Return a replacement that preserves fence delimiters and info string but replaces content
+
+Since ~Transform::Custom~ receives text and options but NOT the AST nodes, the implementation needs to either:
+- Re-parse to find code block boundaries (undesirable)
+- Extend Custom signature to receive ~&[MatchedNode]~ and the buffer
+
+Consider extending ~Transform::Custom~ signature:
+
+#+begin_src rust
+Custom(Box<dyn Fn(&CodeBuffer, &[MatchedNode], &serde_json::Value) -> crate::Result<Vec<TextEdit>> + Send + Sync>)
+#+end_src
+
+This gives the Custom fn access to the buffer (for AST queries) and matched nodes (for context). The Custom fn returns ~Vec<TextEdit>~ directly instead of transformed text per node. Update ~apply_procedure_transform~ accordingly — when transform is Custom, call it directly and return its edits.
+
+* Edge Cases
+
+- Promote h1 section: return error ~"Cannot promote h1 heading — already at top level"~
+- Demote h6 section: return error ~"Cannot demote h6 heading — already at deepest level"~
+- Promote/demote with nested sections: ALL headings in the subtree shift. If promoting a section that contains h2→h3→h4, result is h1→h2→h3
+- replace-code-block with no code blocks in section: return error ~"No code blocks found in section"~
+- replace-code-block by language with no match: return error ~"No code block with language 'X' found"~
+- replace-code-block by index out of range: return error with count of available blocks
+- Code block with empty content: replacement works, just replaces empty with new content
+- Code block with no info_string (no language): matchable only by index, not by language
+
+* Test Plan
+
+Using the ~hello.md~ fixture from FEAT-520:
+
+** Promote test
+- Promote "Installation" (h2): heading becomes h1, Prerequisites/Steps become h2
+- Verify heading marker text changes: ~"##"~ → ~"#"~, ~"###"~ → ~"##"~
+
+** Demote test
+- Demote "Introduction" (h1): heading becomes h2
+- Verify heading marker text changes: ~"#"~ → ~"##"~
+
+** Promote h1 error test
+- Attempt promote on "Introduction" (already h1): error returned
+
+** Demote h6 error test
+- Create fixture with h6 heading, attempt demote: error returned
+
+** replace-code-block by language test
+- Replace bash code block in "Steps" section with new content
+- Verify fence markers and language annotation preserved
+- Verify only the code_fence_content changed
+
+** replace-code-block by index test
+- Replace code block at index 0 in "API Reference" section
+- Verify correct block targeted
+
+* Acceptance Criteria
+
+- ~code edit { symbol: "Installation", operation: "promote" }~ decreases all heading levels in section
+- ~code edit { symbol: "Introduction", operation: "demote" }~ increases heading level
+- ~code edit { symbol: "Steps", operation: "replace-code-block", content: "new code" }~ replaces code block content
+- Boundary validation: h1 promote and h6 demote return errors
+- All edits preserve document structure outside the targeted section
+- ~cargo test -p pi-code-engine~ passes

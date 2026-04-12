@@ -1,0 +1,37 @@
+#+TITLE: Session 14b7c3fa47c1abaf Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Write-stall follow-up
+
+** DONE Investigate incomplete write stall
+:PROPERTIES:
+:TASK_ID: investigate-incomplete-write-stall
+:STATUS: completed
+:END:
+
+Trace why Anthropic sometimes emits a write tool call with only `path` and no `content`, then stalls. Inspect stream parsing, tool-call argument assembly, and the write tool renderer path. Acceptance: identify the precise failure mode and the narrowest safe recovery or UX fix.
+
+Root cause split: (1) some Anthropic stalls happen before required tool args finish streaming, leaving path-only or id-only tool calls incomplete and unsafe to execute; (2) the write renderer ignores `isError` and derives `0 lines` from missing `args.content`, so failed incomplete writes can render like successful zero-line writes.
+
+** DONE Patch incomplete write handling
+:PROPERTIES:
+:TASK_ID: patch-incomplete-write-handling
+:STATUS: completed
+:DEPENDS: investigate-incomplete-write-stall
+:END:
+
+Implement a safe fix for incomplete write tool-call stalls. The fix must not execute partial writes or silently fabricate missing content. Acceptance: path-only stalled write calls no longer present as successful or misleading zero-line writes, and complete write calls still work.
+
+Implemented two-part fix. Anthropic provider now treats stalled incomplete tool-call arguments as retryable and surfaces a clearer final error when retries exhaust. Write renderer now honors `isError` and no longer shows failed path-only writes as successful `0 lines` writes.
+
+** DONE Verify incomplete write fix
+:PROPERTIES:
+:TASK_ID: verify-incomplete-write-fix
+:STATUS: completed
+:DEPENDS: patch-incomplete-write-handling
+:END:
+
+Add or run focused regression coverage proving incomplete stalled write calls are surfaced accurately and complete writes are unaffected. Acceptance: observed targeted test or checks for both incomplete and healthy write paths.
+
+Verified with `bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts packages/coding-agent/test/tools/write-renderer.test.ts`, `bunx --bun biome check packages/ai/src/providers/anthropic.ts packages/ai/test/providers/anthropic-idle-timeout.test.ts packages/coding-agent/src/tools/write.ts packages/coding-agent/test/tools/write-renderer.test.ts`, and `bunx --bun tsgo -p packages/ai/tsconfig.json`. `bunx --bun tsgo -p packages/coding-agent/tsconfig.json` still fails on pre-existing unrelated `code.ts` / `code-result.ts` package errors.

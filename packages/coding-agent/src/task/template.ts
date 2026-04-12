@@ -23,11 +23,11 @@ interface RenderResult {
  */
 export function renderTemplate(context: string | undefined, task: TaskItem): RenderResult {
 	let { id, description, assignment } = task;
-	assignment = assignment.trim();
+	assignment = assignment?.trim() ?? "";
 	context = context?.trim();
 
 	if (!context || !assignment) {
-		return { task: assignment || context!, assignment: assignment || context!, id, description };
+		return { task: assignment || context || "", assignment: assignment || context || "", id, description };
 	}
 	return {
 		task: renderPromptTemplate(subagentUserPromptTemplate, { context, assignment }),

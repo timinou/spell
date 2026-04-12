@@ -1,0 +1,11 @@
+#+TITLE: Session 14b6b08f5a1d2fb1 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Write spec and create all org items for pi-code-engine plan
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:

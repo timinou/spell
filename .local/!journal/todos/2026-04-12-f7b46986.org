@@ -1,0 +1,41 @@
+#+TITLE: Session 14b70bb4f84dfb6e Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Dispatch and integrate plan changes
+:PROPERTIES:
+:TASK_ID: dispatch-integrate
+:STATUS: completed
+:ORG_ITEM_ID: PLAN-195-harden-typst-first-class-support-from-au
+:END:
+
+Integrated plan files: packages/coding-agent/src/extensibility/skills.ts, packages/coding-agent/src/system-prompt.ts, packages/coding-agent/src/lsp/index.ts, packages/coding-agent/test/extensibility/skill-globs.test.ts, packages/coding-agent/test/tools/code.test.ts, packages/coding-agent/test/tools/lsp-regressions.test.ts, crates/pi-code-engine/build.rs, crates/pi-code-engine/src/outline.rs, crates/pi-code-engine/src/resolve.rs.
+
+Implemented the plan-scoped code/test changes in coding-agent and pi-code-engine, including the lsp status split, skill glob filtering, Typst code-tool smoke coverage, tinymist activation regression coverage, and version-aware grammar selection with declaration-name fixes uncovered during engine verification.
+
+** DONE Verify, close org, and commit
+:PROPERTIES:
+:TASK_ID: verify-close-commit
+:STATUS: completed
+:DEPENDS: dispatch-integrate
+:ORG_ITEM_ID: PLAN-195-harden-typst-first-class-support-from-au
+:END:
+
+Verification passed: cargo check -p pi-code-engine; cargo test -p pi-code-engine; bun check:ts; bun test packages/coding-agent/test/tools/code.test.ts; bun test packages/coding-agent/test/tools/lsp-regressions.test.ts; bun test packages/coding-agent/test/extensibility/skill-globs.test.ts. Committed only plan-owned paths via git commit --only.
+
+All required verification commands now pass in the live workspace. Plan file updated to DONE, linked child org items were already DONE, and the plan files were committed with d779ccaee (fix(coding-agent): harden typst support from audit).
+
+** DONE Unblock global TypeScript check
+:PROPERTIES:
+:TASK_ID: unblock-global-ts-check
+:STATUS: completed
+:VERIFY_CMD: bun check:ts
+:DEPENDS: dispatch-integrate
+:ORG_ITEM_ID: PLAN-195-harden-typst-first-class-support-from-au
+:END:
+
+Adjusted packages/natives build/embed loader files and import organization so the workspace-wide TypeScript check succeeds. These changes were needed to satisfy the approved verification gate even though they were outside the original audit scope.
+
+Resolved the repo-wide TypeScript gate blockers in packages/natives so bun check:ts passes again in the active workspace.

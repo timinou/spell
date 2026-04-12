@@ -1,0 +1,27 @@
+#+TITLE: Session 14b7d34e2c664356 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Verify and close plan
+:PROPERTIES:
+:TASK_ID: finalize-plan-216
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/tools/code.test.ts && bun test packages/natives/test/code-buffer.test.ts && bun check:ts
+:ORG_ITEM_ID: PLAN-216-plan-213-audit-remediation-dynamic-exten
+:END:
+
+Verification run:
+- bun test packages/coding-agent/test/tools/code.test.ts -> passed
+- bun test packages/natives/test/code-buffer.test.ts -> passed
+- bun check:ts -> failed due to unrelated existing type errors outside this plan's scope
+- manual unsupported-file check for README.md -> passed with updated message
+Org lifecycle:
+- BUG-240 DONE
+- BUG-241 DONE
+- BUG-242 DONE
+- PLAN-216 BLOCKED with completion report appended
+Commit: fea56ef79 fix(coding-agent): harden code tool language guard
+
+Ran plan-level verification, updated PLAN-213 and PLAN-216 org records, closed child bug items, committed the scoped implementation, and left PLAN-216 blocked truthfully because bun check:ts still fails from unrelated workspace type errors.

@@ -33,15 +33,26 @@ import type {
 	ToolResultMessage,
 } from "../types";
 import {
+	appendToolCallStreamDiagnostic,
+	classifyToolCallStreamInterruption,
+	getToolCallStreamMaxRetries,
+	getToolCallStreamRetryDelayMs,
+	hasActiveToolArgumentStreaming,
 	isAnthropicOAuthToken,
+	isRetryableToolCallStreamDiagnostic,
 	normalizeToolCallId,
 	resolveCacheRetention,
 	systemPromptBlocks,
 	systemPromptText,
+	ToolCallStreamDiagnosticError,
 } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
-import { getAnthropicStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
+import {
+	getAnthropicStreamIdleTimeoutMs,
+	getToolArgumentStreamIdleTimeoutMs,
+	iterateWithIdleTimeout,
+} from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { pushFallbackError } from "../utils/provider-error-boundary";
 import {
@@ -532,9 +543,6 @@ function mergeHeaders(...headerSources: (Record<string, string> | undefined)[]):
 	return merged;
 }
 
-const PROVIDER_MAX_RETRIES = 3;
-const PROVIDER_BASE_DELAY_MS = 2000;
-
 /**
  * Check if an error from the Anthropic SDK is a rate-limit/transient error that
  * should be retried before any content has been emitted.
@@ -639,6 +647,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			// Retry loop for transient errors from the stream.
 			// Rate-limit/overload: only before content starts (safe to restart).
 			// Truncated JSON: also after content starts (partial response is unusable).
+			const streamIdleTimeoutMs = getAnthropicStreamIdleTimeoutMs();
+			const toolArgumentIdleTimeoutMs = getToolArgumentStreamIdleTimeoutMs(streamIdleTimeoutMs);
 			let providerRetryAttempt = 0;
 			let started = false;
 			do {
@@ -653,7 +663,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 
 				try {
 					for await (const event of iterateWithIdleTimeout(anthropicStream, {
-						idleTimeoutMs: getAnthropicStreamIdleTimeoutMs(),
+						idleTimeoutMs: streamIdleTimeoutMs,
+						getIdleTimeoutMs: () =>
+							hasActiveToolArgumentStreaming(output) ? toolArgumentIdleTimeoutMs : streamIdleTimeoutMs,
 						errorMessage: "Anthropic messages stream stalled while waiting for the next event",
 						onIdle: () => requestAbortController.abort(),
 					})) {
@@ -822,26 +834,48 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						throw new Error("Request was aborted");
 					}
 
+					if (output.stopReason === "stop" && output.content.some(block => block.type === "toolCall")) {
+						output.stopReason = "toolUse";
+					}
 					if (output.stopReason === "aborted" || output.stopReason === "error") {
 						throw new Error("An unknown error occurred");
 					}
 					break; // Stream completed successfully
 				} catch (streamError) {
-					// Transient stream parse errors (truncated JSON) are retryable even after content
-					// has started streaming, since the partial response is unusable anyway.
-					// Rate-limit/overload errors are only retried before content starts.
-					const isTransient = isTransientStreamParseError(streamError);
+					const stallDiagnostic =
+						streamError instanceof Error &&
+						streamError.message.includes("Anthropic messages stream stalled while waiting for the next event")
+							? classifyToolCallStreamInterruption(output, {
+									firstTokenTimeMs: firstTokenTime ? firstTokenTime - startTime : undefined,
+									idleTimeoutMs: hasActiveToolArgumentStreaming(output)
+										? toolArgumentIdleTimeoutMs
+										: streamIdleTimeoutMs,
+									providerRetryAttempt,
+								})
+							: undefined;
+					if (stallDiagnostic) {
+						appendToolCallStreamDiagnostic(output, stallDiagnostic);
+					}
+					if (stallDiagnostic?.state === "completed_tool_call_missing_trailing_stop") {
+						output.stopReason = "toolUse";
+						break;
+					}
+					const finalStreamError = stallDiagnostic
+						? new ToolCallStreamDiagnosticError(stallDiagnostic)
+						: streamError;
+					const isTransient =
+						isTransientStreamParseError(streamError) ||
+						(stallDiagnostic ? isRetryableToolCallStreamDiagnostic(stallDiagnostic) : false);
 					if (
 						options?.signal?.aborted ||
-						providerRetryAttempt >= PROVIDER_MAX_RETRIES ||
+						providerRetryAttempt >= getToolCallStreamMaxRetries() ||
 						(!isTransient && firstTokenTime !== undefined) ||
 						(!isTransient && !isProviderRetryableError(streamError))
 					) {
-						throw streamError;
+						throw finalStreamError;
 					}
 					providerRetryAttempt++;
-					const delayMs = PROVIDER_BASE_DELAY_MS * 2 ** (providerRetryAttempt - 1);
-					await abortableSleep(delayMs, options?.signal);
+					await abortableSleep(getToolCallStreamRetryDelayMs(providerRetryAttempt), options?.signal);
 					// Reset output state for clean retry
 					output.content.length = 0;
 					output.stopReason = "stop";
@@ -856,7 +890,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			stream.end();
 		} catch (error) {
 			try {
-				for (const block of output.content) delete (block as any).index;
+				for (const block of output.content) {
+					if ("index" in block) delete block.index;
+					if ("partialJson" in block) delete block.partialJson;
+				}
 				output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 				output.errorMessage = await finalizeErrorMessage(error, rawRequestDump);
 				output.duration = Date.now() - startTime;

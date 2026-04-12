@@ -1,0 +1,56 @@
+#+TITLE: Session Stall Regression Hardening
+#+STATE: ITEM
+#+SESSION_ID: 14b7b080a31d9287
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T11-56-14-860Z_14b7b080a31d9287.jsonl]]
+#+CUSTOM_ID: PLAN-210-session-stall-regression-hardening
+#+EFFORT: 5h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+* Initial Message
+
+Like many other sessions, this one stopped after Code outline: 
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-21-58-207Z_14b79aec8fda64f1.jsonl
+ ID: 14b79aec8fda64f1
+
+
+(freezes, refuses to continue)
+
+why?
+
+* Context
+The three frozen transcripts =14b79dc662a38caa=, =14b79aec8fda64f1=, and =14b7b06a42dae224= all show the same historical failure pattern: tool results completed successfully, then the next Anthropic model call never produced any stream events. The apparent correlation with =code outline= is incidental; those calls simply happened late in already-large sessions. In =14b79aec8fda64f1= the visible =mode_change= occurred about 8m42s after the final tool result, so it was a later recovery attempt, not the original blocker.
+
+Current repo state already contains the runtime fixes that explain these historical freezes:
+- =packages/ai/src/providers/anthropic.ts= now wraps the Anthropic stream in =iterateWithIdleTimeout(...)= with =getAnthropicStreamIdleTimeoutMs()= and abort-on-idle behavior.
+- =packages/ai/src/utils/idle-iterator.ts= now exposes the Anthropic timeout getter.
+- =packages/coding-agent/src/session/agent-session.ts= now clears pending audit state on explicit user prompts and logs previously silent continuation failures.
+
+The remaining risk is regression coverage. The present tests are too indirect:
+- =packages/ai/test/providers/anthropic-idle-timeout.test.ts= proves the iterator helper, but not that the Anthropic provider still uses it.
+- =packages/coding-agent/test/session/audit-state-on-user-prompt.test.ts= proves a local state reducer, but not that =AgentSession.prompt()= and post-turn audit handling preserve the intended recovery contract.
+
+** Recommended approach
+Add contract-level automated tests at the provider boundary and the session boundary. Do not reopen the already-landed runtime fix unless those tests expose a real behavioral gap.
+
+** Key decisions
+1. Treat the frozen sessions as historical evidence for one Anthropic stall class, not as a fresh production-code redesign request.
+2. Focus new work on regression-hardening, because the code path fixes and log instrumentation are already present in current repo state.
+3. Replace helper-level assertions with provider/session contract tests that would fail if the production seams regressed.
+4. Keep acceptance fully automated: focused unit/integration tests only, no manual repro requirement.
+
+* Verification
+- =bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts=
+- =bun test packages/coding-agent/test/session/audit-state-on-user-prompt.test.ts=
+- If either item splits coverage into additional files, the completion report must list every exact test command needed to prove the contract.
+- Required proof for FUP-049: a provider-level test that exercises =packages/ai/src/providers/anthropic.ts= and fails if the Anthropic provider stops enforcing idle timeout.
+- Required proof for FUP-050: a session-level test that exercises real =AgentSession= behavior and fails if explicit user prompts no longer clear pending audit or if the current continuation-error logging hooks regress.
+
+* Execution Manifest
+** [[id:FUP-049-add-provider-level-anthropic-stall-regre]]
+Effort: 2h | Priority: #A | Layer: ai
+Provider-boundary regression hardening for the historical Anthropic stall path.
+
+** [[id:FUP-050-add-agentsession-stall-recovery-regressi]]
+Effort: 3h | Priority: #A | Layer: coding-agent
+Session-boundary regression hardening for recovery prompts, audit suppression, and logged continuation failures.

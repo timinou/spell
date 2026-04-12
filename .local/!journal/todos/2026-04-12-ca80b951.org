@@ -1,0 +1,57 @@
+#+TITLE: Session 14b8291dbdae1c8e Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Define shared stall contract
+:PROPERTIES:
+:TASK_ID: shared-diagnostic-contract
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/session-manager/signature-persistence.test.ts
+:ORG_ITEM_ID: BUG-245-define-shared-incomplete-tool-call-stall
+:END:
+
+Implemented BUG-245: added shared incomplete tool-call diagnostic contract in packages/ai plus persisted raw partial payload references in session persistence. Verified with bun test packages/coding-agent/test/session-manager/signature-persistence.test.ts.
+
+Added shared tool-call stream diagnostic types/helpers in packages/ai and persisted raw stalled tool JSON by artifact reference in session persistence. Verified with signature persistence regression test.
+
+** DONE Cut providers to shared path
+:PROPERTIES:
+:TASK_ID: cross-provider-cutover
+:STATUS: completed
+:VERIFY_CMD: bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts && bun test packages/ai/test/providers/openai-responses-idle-timeout.test.ts
+:DEPENDS: shared-diagnostic-contract
+:ORG_ITEM_ID: BUG-243-cross-provider-tool-argument-idle-timeou
+:END:
+
+Implemented BUG-243 for Anthropic and OpenAI Responses: shared stalled-tool diagnostics, longer idle budget while tool arguments stream, retry on incomplete stalls, and recovery when only trailing stop events are missing. Verified with bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts and bun test packages/ai/test/providers/openai-responses-idle-timeout.test.ts.
+
+Anthropic and OpenAI Responses now use shared stalled-tool diagnostics with dynamic tool-argument idle budgets and retry/recovery behavior. Added focused OpenAI Responses timeout regressions and updated Anthropic regressions for the new extended tool-argument timeout.
+
+** DONE Wire diagnostics and lock timing
+:PROPERTIES:
+:TASK_ID: coding-agent-surfacing-locks
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/session-manager/signature-persistence.test.ts packages/coding-agent/test/streaming-edit-abort.test.ts packages/coding-agent/test/session/tool-call-diagnostics.test.ts
+:DEPENDS: shared-diagnostic-contract cross-provider-cutover
+:ORG_ITEM_ID: BUG-244-surface-stalled-tool-call-diagnostics-an
+:END:
+
+Implemented BUG-244: coding-agent now formats shared stalled-tool diagnostics for transcript/UI surfaces, live tool-call failures no longer appear as pending successes, and streaming edit pre-cache at toolcall_start was removed so file reads happen only when later preview checks actually need content. Verified with bun test packages/coding-agent/test/session-manager/signature-persistence.test.ts packages/coding-agent/test/streaming-edit-abort.test.ts packages/coding-agent/test/session/tool-call-diagnostics.test.ts.
+
+Added coding-agent formatting for shared stalled-tool diagnostics, surfaced them through live/replayed tool-call error rendering, removed toolcall-start edit pre-cache, and added regressions for persistence formatting plus no-precache streaming abort behavior. Native code buffer audit found lock acquisition already scoped to execution handlers; no Rust source change required.
+
+** DOING Verify org update and commit
+:PROPERTIES:
+:TASK_ID: final-verification-wrapup
+:STATUS: in_progress
+:GATE_COMMIT: true
+:GATE_CMD: bun check:ts && bun check:rs
+:VERIFY_CMD: bun check:ts && bun check:rs
+:DEPENDS: coding-agent-surfacing-locks
+:ORG_ITEM_ID: PLAN-218-cross-provider-stalled-incomplete-tool-c
+:ORG_ITEM_CLOSING_ID: PLAN-218-cross-provider-stalled-incomplete-tool-c
+:END:
+
+Run required focused tests and checks, collect artifacts, update plan completion report, reconcile org states, and commit only plan-related changes.

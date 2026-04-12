@@ -1,0 +1,130 @@
+#+TITLE: Typst custom procedures promote and demote headings
+#+STATE: ITEM
+#+SESSION_ID: 14b7c05e6d83ec68
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-05-34-134Z_14b7c05e6d83ec68.jsonl]]
+#+CUSTOM_ID: FEAT-524-typst-custom-procedures-promote-and-demo
+#+EFFORT: 2h
+#+PRIORITY: B
+#+LAYER: code-engine
+#+DEPENDS: FEAT-522-procedure-dsl-transform-layer-with-decla
+
+* Initial Message
+
+looking at the typst and org integrations to pi-code-engine, what would you want to implement for your markdown usage to be a delight?
+
+* Context
+
+This feature proves the procedure DSL extension point from [[id:FEAT-522-procedure-dsl-transform-layer-with-decla]] works across languages by registering promote/demote heading operations on the existing Typst profile.
+
+Typst headings use ~=~ markers: ~= Title~ (h1), ~== Subtitle~ (h2), ~=== Section~ (h3), etc. Promotion removes one ~=~, demotion adds one.
+
+** Design Decisions
+
+- Typst headings are ~heading~ nodes containing a marker child (not a named field — the ~=~ characters are part of the heading node text)
+- In tree-sitter-typst, the heading node type is ~heading~. The marker text is the leading ~=~ characters. There is no separate ~heading_marker~ node type — the equals signs are anonymous tokens
+- Since there's no separate marker node to select, the procedure needs to target the ~heading~ node itself and transform its leading ~=~ characters
+- Promote: ~Transform::Custom~ that strips one leading ~=~ from the heading node text. Custom needed because we must preserve everything after the markers
+- Demote: ~Transform::Custom~ that prepends one ~=~ to the heading node text
+- Alternative: use ~Transform::RegexReplace { pattern: "^(=+)", replacement: ... }~ — but regex doesn't easily express "remove one char from a capture group." Custom is cleaner here
+
+NOTE: Verify the actual tree-sitter-typst AST structure for headings before implementing. The heading markers might be separate nodes or part of the text. Check ~crates/pi-code-engine/tests/fixtures/sources/hello.typ~ or create a test fixture.
+
+* Scope
+
+** ~crates/pi-code-engine/src/language/mod.rs~ — in ~typst_profile()~
+
+*** Register ~promote~ procedure
+
+#+begin_src rust
+procedures.insert("promote".into(), Procedure::builder()
+    .name("promote")
+    .description("Decrease heading level in Typst (=== → ==)")
+    .activate(|a| a.nodes(types(&["heading"])))
+    .select(|s| /* select heading node itself or marker child */)
+    .transform(Transform::Custom(Box::new(|text, _options| {
+        // Remove one leading '=' if level > 1
+        if text.starts_with("==") {
+            Ok(text[1..].to_string())
+        } else {
+            Err(crate::CodeEngineError::Edit(
+                "Cannot promote h1 heading".into()
+            ))
+        }
+    })))
+    .build()
+);
+#+end_src
+
+*** Register ~demote~ procedure
+
+#+begin_src rust
+procedures.insert("demote".into(), Procedure::builder()
+    .name("demote")
+    .description("Increase heading level in Typst (== → ===)")
+    .activate(|a| a.nodes(types(&["heading"])))
+    .select(|s| /* select heading node itself or marker child */)
+    .transform(Transform::Custom(Box::new(|text, _options| {
+        // Add one leading '='
+        // Typst has no hard limit on heading levels, but cap at 6 for sanity
+        let level = text.chars().take_while(|c| *c == '=').count();
+        if level >= 6 {
+            Err(crate::CodeEngineError::Edit(
+                "Cannot demote beyond h6".into()
+            ))
+        } else {
+            Ok(format!("={text}"))
+        }
+    })))
+    .build()
+);
+#+end_src
+
+** AST verification
+
+Before implementing, verify the Typst heading AST by:
+1. Reading ~crates/pi-code-engine/tests/fixtures/sources/hello.typ~
+2. Running outline on it to see heading detection
+3. Using navigate to inspect heading node structure
+
+If headings have a separate marker child node in tree-sitter-typst, the procedures can use declarative ~TrimEnd~ / ~Append~ transforms instead of Custom. This would be a win for the DSL — document it either way.
+
+* Test Plan
+
+** Create/use Typst fixture with headings at multiple levels
+
+#+begin_example
+= Top Level
+== Section One
+Some content.
+=== Subsection
+More content.
+== Section Two
+Final content.
+#+end_example
+
+** Promote test
+- Promote "Section One" (h2): becomes h1, Subsection becomes h2
+- Verify marker text changes
+
+** Demote test
+- Demote "Top Level" (h1): becomes h2
+- Verify marker text changes
+
+** Boundary tests
+- Promote h1: error
+- Demote h6: error
+
+* Edge Cases
+
+- Typst heading with content on same line: ~= Title~ — the ~=~ and title are part of the same node. Transformation must preserve the space and title text
+- Headings in Typst can have inline content (bold, etc.): the transformation only affects the leading ~=~ characters
+- Nested show/set rules under headings: these are not headings and should not be affected by promote/demote
+
+* Acceptance Criteria
+
+- ~code edit { symbol: "Section One", operation: "promote" }~ changes ~==~ to ~=~
+- ~code edit { symbol: "Top Level", operation: "demote" }~ changes ~=~ to ~==~
+- Boundary validation works (h1 promote, h6 demote)
+- Existing Typst outline and edit tests unaffected
+- This proves the procedure DSL is language-agnostic — same dispatch mechanism works for both markdown and typst
+- ~cargo test -p pi-code-engine~ passes

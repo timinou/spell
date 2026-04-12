@@ -1,0 +1,60 @@
+#+TITLE: Add provider-level Anthropic stall regression coverage
+#+STATE: ITEM
+#+SESSION_ID: 14b7b080a31d9287
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T11-56-14-860Z_14b7b080a31d9287.jsonl]]
+#+CUSTOM_ID: FUP-049-add-provider-level-anthropic-stall-regre
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: ai
+
+
+* Initial Message
+
+Like many other sessions, this one stopped after Code outline: 
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-21-58-207Z_14b79aec8fda64f1.jsonl
+ ID: 14b79aec8fda64f1
+
+
+(freezes, refuses to continue)
+
+why?
+
+* Goal
+Harden regression coverage for the historical session-stall bug proven by transcripts =14b79dc662a38caa=, =14b79aec8fda64f1=, and =14b7b06a42dae224=. Current production code already wraps the Anthropic SSE stream with =iterateWithIdleTimeout= and aborts the request on idle; this item exists because the current test only exercises the helper iterator and would still pass if =packages/ai/src/providers/anthropic.ts= stopped using that helper.
+
+* Discovered Patterns To Follow
+- =packages/ai/src/providers/openai-responses.ts= is the reference shape for idle-timeout + =requestAbortController= + abort-on-idle behavior.
+- =packages/ai/src/providers/anthropic.ts= currently imports =getAnthropicStreamIdleTimeoutMs= and =iterateWithIdleTimeout= and wraps the provider stream.
+- =packages/ai/test/abort.test.ts= and =packages/ai/test/stream.test.ts= show provider-level streaming test style.
+- Existing =packages/ai/test/providers/anthropic-idle-timeout.test.ts= is helper-level and should not remain the only protection for this behavior.
+
+* Scope
+Files to modify:
+- =packages/ai/test/providers/anthropic-idle-timeout.test.ts= and/or a new adjacent provider test file under =packages/ai/test/providers/=
+- Only add tiny test-only helpers if required; do not change runtime files unless the test proves a real contract gap.
+
+* Change
+Write contract-level tests around =streamAnthropic()= or the package-level =stream()= entrypoint using a fake/stubbed Anthropic stream path with no network requirement.
+
+Required scenarios:
+1. A stalled Anthropic stream that never yields any event must terminate with an assistant error whose surfaced message contains =Anthropic messages stream stalled while waiting for the next event=.
+2. The idle path must abort the underlying request/stream exactly once so the transport is not left hanging.
+3. A healthy Anthropic stream must still complete normally under the same harness.
+4. If the test shortens the timeout, it must do so via the real config/env path used by production, not by re-testing =iterateWithIdleTimeout()= directly.
+
+* Constraints
+- Do not keep a helper-only test as the primary proof of the bug fix.
+- Do not require a real API key, network, or long sleeps.
+- Prefer the narrowest seam that still exercises =packages/ai/src/providers/anthropic.ts=.
+- If the provider surface is too hard to test without invasive changes, add the smallest test seam at the provider boundary and document why.
+
+* Acceptance
+- There is an automated provider-level regression test that would fail if Anthropic stopped using the idle-timeout watchdog.
+- The test runs locally without network access.
+- Verification command: =bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts=
+- If a new file is created instead, record the exact replacement command in the completion report and ensure the old helper-only test no longer carries the contract alone.
+
+
+
+* Parent Plan
+[[id:PLAN-210-session-stall-regression-hardening]]

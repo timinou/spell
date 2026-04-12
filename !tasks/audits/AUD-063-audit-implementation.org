@@ -1,0 +1,42 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-063-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+Good — the subagent system prompt applies to ALL subagent types uniformly. This confirms the MUST applies to all, which is the intended design.
+
+Here's my audit report:
+
+---
+
+## Audit Findings
+
+### 1. Missing validation for assignment-less tasks without todoRef
+- **What**: Tasks with neither `assignment` nor `todoRef` now pass schema validation silently and produce subagents with empty task text.
+- **Where**: `packages/coding-agent/src/task/index.ts` — `#validateTaskBatch()` around line 258
+- **Why**: Before this change, TypeBox enforced `assignment` as required. Now a model can omit `assignment` without `todoRef` and the subagent gets an empty string. No error, no warning — the subagent just receives `""` as its task. This is a contract regression: the previous schema guaranteed subagents always received instructions.
+- **Effort**: `small` — Add a check in `#validateTaskBatch` (or after resolution, before dispatch) that verifies each task has either `assignment?.trim()` or was successfully resolved from `todoRef`.
+
+### 2. Magic number `60` in `#renderDetailPreview`
+- **What**: Hardcoded truncation width `60` instead of `TRUNCATE_LENGTHS.TITLE` constant.
+- **Where**: `packages/coding-agent/src/modes/interactive-mode.ts` line 982
+- **Why**: The project's TUI sanitization rules (AGENTS.md) specify using `TRUNCATE_LENGTHS` constants for consistency. The value matches `TRUNCATE_LENGTHS.TITLE` (also 60), but the reference isn't used. If the constant changes, this callsite would drift.
+- **Effort**: `trivial` — Import `TRUNCATE_LENGTHS` from `render-utils` and use `.TITLE`.
+
+### 3. `buildSniperAssignment` exported unnecessarily
+- **What**: Function is `export`-ed from `index.ts` but only consumed internally by `#resolveTodoRefAssignments` in the same file.
+- **Where**: `packages/coding-agent/src/task/index.ts` line 134
+- **Why**: Adds the function to the package's public API surface unnecessarily. Any future consumer would create an implicit dependency on the assignment format. If it's needed externally later, it can be exported then. Exporting preemptively increases the contract surface.
+- **Effort**: `trivial` — Remove the `export` keyword.
+
+### 4. `resolvedParams` identity check always fails when todo groups exist
+- **What**: `#resolveTodoRefAssignments` uses `.map()` which always returns a new array, so `resolvedTasks === (params.tasks ?? [])` is always `false` when any todo groups exist — even if zero assignments were actually resolved.
+- **Where**: `packages/coding-agent/src/task/index.ts` lines 624-625
+- **Why**: Creates an unnecessary shallow copy of `params` on every `execute()` call when the session has any todo groups (the common case). Not a correctness bug — just wasted allocation. The pattern of identity-checking map results requires tracking whether any item actually changed.
+- **Effort**: `small` — Track a `changed` flag in the map, return the original array if no items were modified. Or accept the allocation cost since it's trivial.
