@@ -1,12 +1,11 @@
-Creates or overwrites file at specified path.
+Creates or overwrites a file.
 
 <conditions>
-- Creating new files explicitly required by task
-- Replacing entire file contents when editing would be more complex
+Use for new files when creation is explicitly required, or when replacing an entire file is simpler than editing.
 </conditions>
 
 <critical>
-- You **SHOULD** use Edit tool for modifying existing files (more precise, preserves formatting)
-- You **MUST NOT** create documentation files (*.md, README) unless explicitly requested
-- You **MUST NOT** use emojis unless requested
+- Prefer Edit for existing files
+- Do not create documentation files unless explicitly requested
+- Do not use emojis unless requested
 </critical>

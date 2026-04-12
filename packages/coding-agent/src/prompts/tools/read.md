@@ -1,28 +1,19 @@
 Reads files from local filesystem or internal URLs.
 
 <instruction>
-- Reads up to {{DEFAULT_LIMIT}} lines default
-- Use `offset` and `limit` for large files; max {{DEFAULT_MAX_LINES}} lines per call
-{{#if IS_HASHLINE_MODE}}
-- Filesystem output is CID prefixed: `LINE#ID:content`
-{{else}}
-{{#if IS_LINE_NUMBER_MODE}}
-- Filesystem output is line-number-prefixed
-{{/if}}
-{{/if}}
-- Supports images (PNG, JPG) and PDFs
-- For directories, returns formatted listing with modification times
+- Reads up to {{DEFAULT_LIMIT}} lines by default; use `offset` and `limit` for larger files
+- Supports images and PDFs
+- Directories return a formatted listing with modification times
 - Parallelize reads when exploring related files
 </instruction>
 
 <output>
-- Returns file content as text; images return visual content; PDFs return extracted text
-- Missing files: returns closest filename matches for correction
+Returns text for files, visual content for images, extracted text for PDFs, and filename suggestions for missing files.
 </output>
 
 <critical>
-- You **MUST** use `read` instead of bash for ALL file reading: `cat`, `head`, `tail`, `less`, `more` are FORBIDDEN.
-- You **MUST** use `read(path="dir/")` instead of `ls dir/` for directory listings.
-- You **MUST** always include the `path` parameter — NEVER call `read` with empty arguments `{}`.
-- When reading specific line ranges, use `offset` and `limit`: `read(path="file", offset=50, limit=100)` not `cat -n file | sed`.
+- Use `read` instead of bash for all file reading
+- Use `read(path="dir/")` instead of `ls`
+- Always include `path`
+- Use `offset` and `limit` for ranges
 </critical>

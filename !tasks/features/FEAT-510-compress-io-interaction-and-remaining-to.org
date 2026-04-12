@@ -1,0 +1,126 @@
+#+TITLE: Compress IO interaction and remaining tool descriptions
+#+STATE: DONE
+#+SESSION_ID: 14b7bf36e09ede5e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-00-31-490Z_14b7bf36e09ede5e.jsonl]]
+#+CUSTOM_ID: FEAT-510-compress-io-interaction-and-remaining-to
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: prompt
+#+DEPENDS: FEAT-506-define-prompt-surface-compression-contra
+
+* Initial Message
+
+Look at PLAN 181 and PLAN 207. With the same freedom, can you tell me how you could express yourself even more by applying the terse thinking mode to the whole surface of what is sent to the llm?
+
+* Scope
+Compress all remaining tool description files not covered by FEAT-508 (large) or FEAT-509 (structural/search).
+
+** Files — IO and interaction tools (medium priority)
+| File | Notes |
+|------|-------|
+| =read.md= | Constraint list: limit/offset usage, CID prefix, image/PDF support |
+| =write.md= | Already small. Verify first sentence. Light compression |
+| =ask.md= | Questions format, multi-select, recommended index |
+| =fetch.md= | URL fetching. Light compression |
+| =web-search.md= | Web search. Light compression |
+| =browser.md= | Puppeteer. Medium — has action list + examples |
+| =python.md= | Python exec. Constraint list |
+
+** Files — specialized tools (lower priority, many already small)
+| File | Notes |
+|------|-------|
+| =canvas.md= | ~1,108 words — compress |
+| =canvas-cast.md= | QML canvas commands |
+| =gemini-image.md= | Image generation params |
+| =inspect-image.md= | Image inspection |
+| =inspect-image-system.md= | System prompt for image inspection |
+| =ssh.md= | Remote shell. Has platform-specific content |
+| =render-mermaid.md= | Mermaid rendering |
+| =send-file.md= | File sending |
+| =gateway.md= | Gateway service management |
+
+** Files — utility/lifecycle tools (small, mostly audit)
+| File | Notes |
+|------|-------|
+| =calculator.md= | Very small |
+| =checkpoint.md= | Checkpoint state |
+| =rewind.md= | Rewind to checkpoint |
+| =cancel-job.md= | Cancel background job |
+| =await.md= | Wait for async results |
+| =async-result.md= | Async result delivery |
+| =resolve.md= | Resolve pending preview |
+| =replace.md= | Replace file content |
+| =patch.md= | Patch file content |
+| =handoff.md= | Session handoff |
+| =spawn-successor.md= | Spawn successor agent |
+| =exit-plan-mode.md= | Exit plan mode |
+| =search-tool-bm25.md= | MCP tool discovery |
+| =task-summary.md= | Task summary format |
+
+All files in =packages/coding-agent/src/prompts/tools/=.
+
+** Out of scope
+- code.md, hashline.md, todo-write.md, task.md, bash.md (FEAT-508)
+- ast-grep.md, ast-edit.md, grep.md, find.md, lsp.md, code-search.md (FEAT-509)
+- Tool functionality or schemas
+
+* Design Decisions
+1. Apply compression contract from =specs/prompt-surface-compression.md= (FEAT-506)
+2. For small files (<100 words): audit only, compress if any prose padding exists
+3. For medium files (100-500 words): compress instruction prose, delete redundant examples
+4. For canvas.md (~1,108 words): significant compression — action list is schema-implied, keep only non-obvious patterns (observe vs screenshot, QML lifecycle)
+5. For browser.md: keep action catalog (useful lookup), compress examples to 2 (observe + click_id pattern)
+6. Preserve ALL Handlebars conditionals in every file
+
+* Implementation
+
+** Compress IO and interaction tools
+:PROPERTIES:
+:CUSTOM_ID: FEAT-510::compress-io
+:END:
+7 files: read.md, write.md, ask.md, fetch.md, web-search.md, browser.md, python.md
+- read.md: compress =<instruction>= prose, keep CID prefix note and image/PDF support
+- write.md: already minimal, verify first sentence
+- ask.md: compress, keep multi-select and recommended notes
+- fetch.md: compress, keep URL + format notes
+- web-search.md: compress, one-line instruction
+- browser.md: compress action examples, keep observe-default-not-screenshot rule
+- python.md: compress
+
+** Compress specialized tools
+:PROPERTIES:
+:CUSTOM_ID: FEAT-510::compress-specialized
+:DEPENDS: FEAT-510::compress-io
+:END:
+9 files: canvas.md, canvas-cast.md, gemini-image.md, inspect-image.md, inspect-image-system.md, ssh.md, render-mermaid.md, send-file.md, gateway.md
+- canvas.md: significant compression (~1,108 → ~400 words). Action list from schema. Keep QML lifecycle rules.
+- Others: audit + light compression
+
+** Compress utility/lifecycle tools
+:PROPERTIES:
+:CUSTOM_ID: FEAT-510::compress-utility
+:DEPENDS: FEAT-510::compress-specialized
+:END:
+14 files: calculator.md, checkpoint.md, rewind.md, cancel-job.md, await.md, async-result.md, resolve.md, replace.md, patch.md, handoff.md, spawn-successor.md, exit-plan-mode.md, search-tool-bm25.md, task-summary.md
+- Most are already very small. Audit for prose padding. Compress where found.
+
+* Edge Cases
+- Some tool files have Handlebars conditionals for feature flags — preserve all
+- =exit-plan-mode.md= is used in plan mode — content must survive plan-mode context
+- =browser.md= action list is useful as a lookup even though schema has it — consider keeping abbreviated version
+- Very small files (< 50 words) may need no changes — that's fine
+
+* Acceptance Criteria
+- All 30 files reviewed and compressed where applicable
+- Handlebars conditionals preserved exactly in every file
+- First sentence of each file stands alone as compacted description
+- Aggregate word count reduction measured
+
+* Verification
+#+begin_src sh
+bun check:ts
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+bun test packages/coding-agent/test/prompt-format.test.ts
+# Aggregate word count
+find packages/coding-agent/src/prompts/tools/ -name "*.md" -exec wc -w {} + | tail -1
+#+end_src

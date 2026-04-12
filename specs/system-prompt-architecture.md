@@ -89,13 +89,13 @@ No meaningful content overlap exists between the two files. The boundary is: sys
 | Component | Tokens | Cached? |
 |-----------|--------|---------|
 | Template static content | ~4200 | Yes |
-| AGENTS.md context file | ~5500 | Yes |
-| Tool descriptions (dynamic count) | ~1000-2000 | Yes |
+| AGENTS.md context file | ~1400 | Yes |
+| Tool descriptions (dynamic count) | ~600-1200 | Yes |
 | Skills list | ~200-500 | Yes |
-| **Stable total** | **~10000-11600** | **Yes** |
+| **Stable total** | **~6400-7300** | **Yes** |
 | Now section | ~180 | No |
-| appendPrompt (varies by mode) | ~200-4500 | No |
-| **Dynamic total** | **~380-4700** | **No** |
+| appendPrompt (varies by mode) | ~200-3500 | No |
+| **Dynamic total** | **~380-3700** | **No** |
 
 The stable section is the cache investment. Changes to it invalidate cached prompts — a one-time cost per deployment, amortized across all sessions.
 
@@ -112,11 +112,14 @@ Plan-mode overlays declare what the system handles automatically and what the ag
 
 **Agent responsibility:** Execute work, mark status truthfully, satisfy verification gates.
 
-**Compression results (PLAN-209):**
-- plan-mode-active.md: 2,978 → 2,504 words (16% reduction)
-- plan-mode-approved.md: 1,423 → 1,287 words (10% reduction)
-- plan-mode-uiux.md: 1,387 → 654 words (53% reduction)
-- Total: 5,788 → 4,445 words (23% reduction)
+**Compression results (PLAN-214, cumulative with PLAN-209):**
+- AGENTS.md: 2,961 → 1,392 words (53% reduction)
+- Tool descriptions: 12,554 → 7,664 words (39% reduction)
+- plan-mode-active.md: 2,504 → 1,653 words (34% reduction)
+- plan-mode-approved.md: 1,287 → 1,135 words (12% reduction)
+- plan-mode-uiux.md: 654 words (unchanged from PLAN-209)
+- agent-creation-architect.md: 729 → 301 words (59% reduction)
+- Total prompt surface: ~23,000 → ~15,600 words (~32% reduction)
 
 ## Lineage
 
@@ -125,3 +128,4 @@ Plan-mode overlays declare what the system handles automatically and what the ag
 - **PLAN-191** (declaration of being): Expanded the creative voice of the Identity section.
 - **PLAN-207** (prompt declaration of being): Attempted to extend declaration-of-being to all prompts. Superseded by PLAN-209 — the philosophy shifted from "normalize all prompts into a consistent voice" to "less content, better placed."
 - **PLAN-209** (essence rewrite): Returned to the core insight. Merged behavior+code-integrity into discipline, dissolved Procedure into Principles, compressed tool manual to philosophy, compressed plan-mode overlays.
+- **PLAN-214** (terse input surface compression): Extended the compression principle to the entire input surface. AGENTS.md compressed to constraint notation, 41 tool descriptions compressed, plan-mode overlays further compressed, agent prompts audited. Contract: `specs/prompt-surface-compression.md`.

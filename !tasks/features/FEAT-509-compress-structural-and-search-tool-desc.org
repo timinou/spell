@@ -1,0 +1,99 @@
+#+TITLE: Compress structural and search tool descriptions
+#+STATE: DONE
+#+SESSION_ID: 14b7bf36e09ede5e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-00-31-490Z_14b7bf36e09ede5e.jsonl]]
+#+CUSTOM_ID: FEAT-509-compress-structural-and-search-tool-desc
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: prompt
+#+DEPENDS: FEAT-506-define-prompt-surface-compression-contra
+
+* Initial Message
+
+Look at PLAN 181 and PLAN 207. With the same freedom, can you tell me how you could express yourself even more by applying the terse thinking mode to the whole surface of what is sent to the llm?
+
+* Scope
+Compress tool descriptions for structural search and code intelligence tools.
+
+** Files
+| File | Notes |
+|------|-------|
+| =packages/coding-agent/src/prompts/tools/ast-grep.md= | ~600 words. Metavariable semantics are non-obvious — keep key rules |
+| =packages/coding-agent/src/prompts/tools/ast-edit.md= | Similar to ast-grep. Keep non-obvious rewrite semantics |
+| =packages/coding-agent/src/prompts/tools/grep.md= | Medium. Compress instruction prose |
+| =packages/coding-agent/src/prompts/tools/find.md= | Small. Light compression |
+| =packages/coding-agent/src/prompts/tools/lsp.md= | Medium. Operations list may be schema-implied |
+| =packages/coding-agent/src/prompts/tools/code-search.md= | Medium. Examples teach grep-style query formation |
+
+** Out of scope
+- Other tool description files
+- Tool functionality or schemas
+
+* Design Decisions
+
+1. **ast-grep.md** — The metavariable rules (=$= vs =$$$=, =$_= wildcard, partial-text prohibition, contextual =sel= mode) are genuinely non-obvious and cause real errors. Keep ALL constraint bullets. The 8 examples — keep 3 (multi-pattern, contextual sel, method body fragment). Delete 5 that teach basic call matching.
+
+2. **ast-edit.md** — Same structure as ast-grep. Keep metavariable rules, contextual =sel= rewrite semantics. Keep 2 examples (rename call site, contextual method rewrite). Delete basic examples.
+
+3. **grep.md** — Compress instruction to constraint list. Keep regex syntax note. Delete prose explanations of parameters.
+
+4. **find.md** — Already small. Light compression — remove prose, keep constraint list.
+
+5. **lsp.md** — Operations list (diagnostics, definition, references, hover, etc.) is useful as a lookup. Compress to one-line-per-operation. Keep =symbol=, =occurrence= semantics (non-obvious).
+
+6. **code-search.md** — The "good queries vs bad queries" examples teach grep-style query formation. Keep 3 good examples, delete 3 bad examples (the model understands the contrast from the instruction).
+
+* Existing Patterns
+- =specs/prompt-surface-compression.md= (FEAT-506) — compression rules
+- ast-grep and ast-edit descriptions follow exemplar pattern well
+- First sentence used by =compactToolDescription()= for specialized tools
+
+* Implementation
+
+** Compress ast-grep.md and ast-edit.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-509::compress-ast
+:END:
+- Keep all metavariable constraint bullets (=$$$NAME= not =$$NAME=, =$_= wildcard, partial-text prohibition, contextual sel mode, same-metavar identity)
+- ast-grep: keep 3 of 8 examples (multi-pattern scoped, contextual sel, method body fragment with sel)
+- ast-edit: keep 2 examples (rename call site, contextual method rewrite)
+- Compress =<critical>= to pure constraint list
+- Compress =<output>= to one line
+
+** Compress grep.md, find.md, lsp.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-509::compress-search
+:DEPENDS: FEAT-509::compress-ast
+:END:
+- grep: constraint list only. Keep regex syntax note and multiline flag.
+- find: compress instruction prose.
+- lsp: one-line-per-operation format. Keep =symbol=/=occurrence= semantics, timeout note.
+
+** Compress code-search.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-509::compress-codesearch
+:DEPENDS: FEAT-509::compress-search
+:END:
+- Keep instruction: grep-style queries, exact tokens, short fragments
+- Keep 3 good query examples
+- Delete bad query examples (model understands contrast from instruction)
+- Compress =<avoid>= to one line
+
+* Edge Cases
+- ast-grep/ast-edit have no Handlebars conditionals — straightforward compression
+- grep has =gitignore=, =multiline= parameter notes — keep if non-obvious
+- lsp has operation-specific parameter requirements — keep (non-obvious which operations need which params)
+
+* Acceptance Criteria
+- All 6 files compressed
+- All metavariable rules in ast-grep/ast-edit survive
+- All constraint bullets preserved
+- Word count: measure before/after, target ~50% reduction across group
+
+* Verification
+#+begin_src sh
+bun check:ts
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+bun test packages/coding-agent/test/prompt-format.test.ts
+wc -w packages/coding-agent/src/prompts/tools/{ast-grep,ast-edit,grep,find,lsp,code-search}.md
+#+end_src

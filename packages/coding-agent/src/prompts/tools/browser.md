@@ -1,24 +1,30 @@
-Navigates, clicks, types, scrolls, drags, queries DOM content, and captures screenshots.
+BrowserWindow provides agent-driven web navigation, DOM inspection, interaction, and page-side evaluation.
 
 <instruction>
-- `"open"` starts a headless session (or implicitly on first action); `"goto"` navigates to `url`; `"close"` releases the browser
-- `"observe"` captures a numbered accessibility snapshot — prefer `click_id`/`type_id`/`fill_id` using returned `element_id` values; flags: `include_all`, `viewport_only`
-- `"click"`, `"type"`, `"fill"`, `"press"`, `"scroll"`, `"drag"` for selector-based interactions — prefer ARIA/text selectors (`p-aria/[name="Sign in"]`, `p-text/Continue`) over brittle CSS
-- `"click_id"`, `"type_id"`, `"fill_id"` to interact with observed elements without selectors
-- `"wait_for_selector"` before interacting when the page is dynamic
-- `"evaluate"` runs a JS expression in page context
-- `"get_text"`, `"get_html"`, `"get_attribute"` for DOM queries — batch via `args: [{ selector, attribute? }]`
-- `"extract_readable"` returns reader-mode content; `format`: `"markdown"` (default) or `"text"`
-- `"screenshot"` captures images (optionally with `selector`); can save to disk via `path`
+- Launch once, then drive it with `send_message` payloads whose `action` starts with `browser:`
+- Default to `browser:observe` to inspect state and collect stable `element_id` values before interaction
+- Prefer ARIA/text selectors; use `click_id`/`type_id`/`fill_id` when you already have observed ids
+- Wait for dynamic pages before interacting; use `browser:extract_readable` for simplified text; `browser:screenshot` only for visible-viewport capture
 </instruction>
 
-<critical>
-**You **MUST** default to `observe`, not `screenshot`.**
-- `observe` is cheaper, faster, and returns structured data — use it to understand page state, find elements, and plan interactions.
-- You **SHOULD** only use `screenshot` when visual appearance matters (verifying layout, debugging CSS, capturing a visual artifact for the user).
-- You **MUST NOT** screenshot just to "see what's on the page" — `observe` gives you that with element IDs you can act on immediately.
-</critical>
-
 <output>
-Text for navigation/DOM queries, images for screenshots.
+Text for navigation/DOM queries; images for screenshots.
 </output>
+
+<browser>
+The BrowserWindow is launched from `canvas://stdlib/canvas/BrowserWindow.qml` with an optional `initialUrl`. Default armed tools: `["read", "write", "grep", "find"]`.
+
+Supported actions, abbreviated: `browser:sync`, `browser:goto`, `browser:force_reload`, `browser:evaluate`, `browser:observe`, `browser:click`, `browser:type`, `browser:fill`, `browser:press`, `browser:scroll`, `browser:drag`, `browser:wait_for_selector`, `browser:get_text`, `browser:get_html`, `browser:get_attribute`, `browser:extract_readable`, `browser:screenshot`.
+
+Give async commands a unique `_rid` and match follow-up results by `_rid`.
+
+Examples:
+```json
+{ "action": "send_message", "id": "browser-1", "payload": { "action": "browser:observe", "_rid": "obs-1" } }
+{ "action": "send_message", "id": "browser-1", "payload": { "action": "browser:click", "_rid": "click-1", "element_id": 12 } }
+```
+</browser>
+
+<lint>
+QML files are automatically linted with `qmllint` after every `write`. Use type-safe QML; `bridge`, `windowWidth`, `windowHeight`, and `windowTitle` are injected at runtime and safe to use.
+</lint>

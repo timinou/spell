@@ -1,0 +1,137 @@
+#+TITLE: Compress large tool descriptions
+#+STATE: DONE
+#+SESSION_ID: 14b7bf36e09ede5e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-00-31-490Z_14b7bf36e09ede5e.jsonl]]
+#+CUSTOM_ID: FEAT-508-compress-large-tool-descriptions
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: prompt
+#+DEPENDS: FEAT-506-define-prompt-surface-compression-contra
+
+* Initial Message
+
+Look at PLAN 181 and PLAN 207. With the same freedom, can you tell me how you could express yourself even more by applying the terse thinking mode to the whole surface of what is sent to the llm?
+
+* Scope
+Compress the 5 largest tool description files. These account for ~60% of total tool description tokens.
+
+** Files
+| File | Current (est. words) | Target |
+|------|---------------------|--------|
+| =packages/coding-agent/src/prompts/tools/code.md= | 1,076 | ~500 |
+| =packages/coding-agent/src/prompts/tools/hashline.md= | 1,304 | ~600 |
+| =packages/coding-agent/src/prompts/tools/todo-write.md= | 1,673 | ~700 |
+| =packages/coding-agent/src/prompts/tools/task.md= | 1,241 | ~550 |
+| =packages/coding-agent/src/prompts/tools/bash.md= | ~400 | ~200 |
+
+** Out of scope
+- All other tool description files (separate items)
+- Changing tool functionality or parameter schemas
+- Changing the tool registration code in =packages/coding-agent/src/tools/index.ts=
+
+* Design Decisions
+
+1. **code.md** — The 33-line =<instruction>= lookup table (intent → subcommand) is the primary value. Keep it but compress entries to one line each. The 5 JSON examples teach =code edit= patterns — keep 2 (patch + batch), delete 3 (the model knows JSON from the schema). =<operations>= list is schema duplication — compress to one line per group. =<critical>= — keep all constraints. =<output>= — keep.
+
+2. **hashline.md** — The 6 examples are genuinely non-obvious (block boundary traveling rules). Keep 3: single-line replace, block body replace (shape a), and full block replace (shape b) with the bad/good contrast. Delete: delete-lines (trivial), shared boundary (explained in critical), insert-between (trivial). =<critical>= — keep ALL block boundary rules (these prevent real errors). The =<operations>= section explains pos/end/lines semantics — keep compressed.
+
+3. **todo-write.md** — 10 examples for 4 operations. Keep 3: start+complete (basic lifecycle), gated-task (non-obvious protocol), wave-based-plan (complex pattern). Delete 7: initial-setup, skip, add_task, gated-completion, deferral, org-linked-task, sniper-todos-dispatch (derivable from schema + rules). The Sniper Pattern section — keep the contract, delete the example. Dependency Management — compress to constraint list. Verification Protocol — keep (non-obvious). Handlebars conditionals MUST be preserved exactly (=swarmEnabled=, =autoRosterEnabled=).
+
+4. **task.md** — 3 examples. Keep 1 (rename+update callers — shows parallelization). Delete 2 (auto-roster, sniper dispatch — derivable from schema). The =<parallelization>= table — keep (decision table). =<templates>= — keep (structural contract). =<checklist>= — compress. =<scope>= — keep. Agent listing (={{#list agents}}=) — preserve exactly (Handlebars).
+
+5. **bash.md** — The redirect/pipe prohibition table (=|Instead of|Use|=) — keep (prevents real tool misuse). =<instruction>= — compress. Handlebars conditionals (=asyncEnabled=, =hasAstGrep=, =hasAstEdit=) — preserve exactly.
+
+* Existing Patterns
+- =specs/prompt-surface-compression.md= (created by FEAT-506) — compression rules
+- Tool descriptions follow: one-line capability → =<instruction>= → =<examples>= → =<output>= → =<critical>=
+- =compactToolDescription()= in =packages/coding-agent/src/tools/index.ts= extracts first sentence for specialized tools
+- First sentence MUST stand alone truthfully as the compacted version
+
+* Implementation
+
+** Compress code.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-508::compress-code
+:END:
+- Instruction lookup table: one line per intent→subcommand mapping (remove verbose descriptions)
+- Delete 3 of 5 examples (keep patch + batch)
+- Operations: group by category (file-local: read/outline/edit/navigate | graph: context/impact/deps/flow/search | lifecycle: undo/redo/save/buffers/diff)
+- Critical: keep all constraints verbatim
+- Output: keep
+
+** Compress hashline.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-508::compress-hashline
+:DEPENDS: FEAT-508::compress-code
+:END:
+- Keep 3 of 6 examples: single-line replace, body replace (shape a), full block replace (shape b)
+- Delete: delete-lines, shared-boundary, insert-between
+- Operations section: compress pos/end/lines explanation
+- Critical: keep ALL block boundary rules — these are genuinely non-obvious and prevent real errors
+- The Handlebars =hlinefull= and =hlineref= helpers MUST be preserved exactly
+
+** Compress todo-write.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-508::compress-todowrite
+:DEPENDS: FEAT-508::compress-hashline
+:END:
+- Keep 3 of 10 examples: start+complete lifecycle, gated-task, wave-based-plan
+- Delete 7 examples: initial-setup, skip, add_task, gated-completion, deferral, org-linked-task, dispatch-sniper
+- Dependency Management: compress to constraint list
+- Task Anatomy: compress to table format
+- Sniper Pattern: keep contract, delete example (model knows JSON)
+- Verification Protocol: keep two-phase description
+- Preserve Handlebars: =swarmEnabled=, =autoRosterEnabled= blocks
+
+** Compress task.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-508::compress-task
+:DEPENDS: FEAT-508::compress-todowrite
+:END:
+- Keep 1 of 3 examples (rename+callers — shows parallel decomposition)
+- Delete 2: auto-roster batch, sniper dispatch
+- Parallelization table: keep
+- Templates: keep (structural contract)
+- Checklist: compress
+- Preserve Handlebars: =asyncEnabled=, =swarmEnabled=, =autoRosterEnabled=, ={{#list agents}}=
+
+** Compress bash.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-508::compress-bash
+:DEPENDS: FEAT-508::compress-task
+:END:
+- Redirect prohibition table: keep
+- Instruction: compress to constraint list
+- Preserve Handlebars: =asyncEnabled=, =hasAstGrep=, =hasAstEdit=
+
+* Edge Cases
+- hashline.md uses Handlebars helpers (=hlinefull=, =hlineref=) to generate example content dynamically — these MUST be preserved exactly
+- task.md ends with ={{#list agents}}= Handlebars loop that renders agent catalog — preserve exactly
+- todo-write.md has conditional blocks for swarm mode — preserve all conditionals
+- The first sentence of each file is used by =compactToolDescription()= for specialized tool compaction — verify first sentence stands alone
+
+* Acceptance Criteria
+- All 5 files compressed
+- All MUST/MUST NOT constraints from originals survive
+- All Handlebars conditionals preserved exactly
+- First sentence of each file is a truthful standalone capability description
+- Word count targets met (measure before/after)
+- Token reduction: ~5,700 words → ~2,050 words (~64% reduction)
+
+* Verification
+#+begin_src sh
+# Type check (tool imports)
+bun check:ts
+
+# System prompt tests
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+
+# Prompt format tests
+bun test packages/coding-agent/test/prompt-format.test.ts
+
+# Tool index tests (if any)
+bun test packages/coding-agent/test/tools/index.test.ts
+
+# Word count measurement
+wc -w packages/coding-agent/src/prompts/tools/{code,hashline,todo-write,task,bash}.md
+#+end_src

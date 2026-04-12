@@ -1,41 +1,27 @@
 Signals plan completion, requests user approval, and provides the final plan title for handoff.
 
 <conditions>
-Use when:
-- Plan written as org item via `org create`
-- No unresolved questions about requirements or approach
-- Ready for user review and approval
+Use when the plan is already an org item, requirements are settled, and the user is ready to review.
 </conditions>
 
 <instruction>
-- You **MUST** create the plan as an org item (via `org create`) BEFORE calling this tool
-- You **MUST** provide `title`: final plan name in SCREAMING_SNAKE_CASE (e.g. `AUTH_REFACTOR`)
-- You **MUST** provide `itemId`: the CUSTOM_ID of the PLAN item (e.g. `PLAN-003-auth-refactor`)
-- PLAN body **MUST** include child references via `[[id:…]]` links
-- User sees plan contents when reviewing
+- Create the plan as an org item before calling this tool
+- Provide `title` as the final plan name in SCREAMING_SNAKE_CASE
+- Provide `itemId` as the PLAN item CUSTOM_ID
+- PLAN body must include child references via `[[id:…]]` links
 </instruction>
 
 <output>
-Presents plan to user for approval. If approved, plan mode exits with full tool access restored and the approved plan is accessible at `local://<title>.md` in the execution session.
+Presents the plan for approval; if approved, plan mode exits and the approved plan is available at `local://<title>.md`.
 </output>
 
-<example name="ready">
-PLAN item `PLAN-003-auth-refactor` created, child links valid, no open questions.
-→ Call `exit_plan_mode` with `{ "title": "AUTH_REFACTOR", "itemId": "PLAN-003-auth-refactor" }`
-</example>
-
-<example name="unclear">
-Unsure about auth method (OAuth vs JWT).
-→ Use `ask` first to clarify, then call `exit_plan_mode`
-</example>
-
 <avoid>
-- **MUST NOT** call before creating the PLAN org item
-- **MUST NOT** omit `title` or `itemId`
-- **MUST NOT** use `ask` to request plan approval (this tool does that)
-- **MUST NOT** call after pure research tasks (no implementation planned)
+- Do not call before creating the PLAN org item
+- Do not omit `title` or `itemId`
+- Do not use `ask` to request approval
+- Do not call after pure research tasks
 </avoid>
 
 <critical>
-You **MUST** only use when planning implementation steps. Research tasks (searching, reading, understanding) do not need this tool.
+Use only when planning implementation steps.
 </critical>

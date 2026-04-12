@@ -1,0 +1,122 @@
+#+TITLE: Compress subagent agent and auxiliary prompt templates
+#+STATE: DONE
+#+SESSION_ID: 14b7bf36e09ede5e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-00-31-490Z_14b7bf36e09ede5e.jsonl]]
+#+CUSTOM_ID: FEAT-512-compress-subagent-agent-and-auxiliary-pr
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: prompt
+#+DEPENDS: FEAT-506-define-prompt-surface-compression-contra
+
+* Initial Message
+
+Look at PLAN 181 and PLAN 207. With the same freedom, can you tell me how you could express yourself even more by applying the terse thinking mode to the whole surface of what is sent to the llm?
+
+* Scope
+Audit and compress subagent system prompts, agent description prompts, compaction templates, and memory templates.
+
+FUP-048 noted these are mostly already tight. This item confirms consistency and compresses where found.
+
+** Subagent system prompts
+| File | Current words | Notes |
+|------|--------------|-------|
+| =subagent-system-prompt.md= | ~260 | Audit — already tight per FUP-048 |
+| =swarm-agent-system-prompt.md= | ~297 | Review for consistency |
+| =subagent-user-prompt.md= | ~21 | Already minimal |
+| =subagent-submit-reminder.md= | ~183 | Already tight |
+| =subagent-predecessor-results.md= | unknown | Audit |
+
+** Agent description prompts (19 files)
+| File | Notes |
+|------|-------|
+| =explore.md= | Role + instructions |
+| =oracle.md= | Role + instructions |
+| =librarian.md= | Role + instructions |
+| =reviewer.md= | Role + instructions |
+| =designer.md= | Role + instructions |
+| =plan.md= | Role + instructions |
+| =task.md= | Role + instructions |
+| =init.md= | Role + instructions |
+| =metis.md= | Role + instructions (gap analysis) |
+| =momus.md= | Role + instructions (review) |
+| =daedalus.md= | Role + instructions (DAG review) |
+| =aphrodite.md= | Role + instructions |
+| =athena.md= | Role + instructions |
+| =canvas-orchestrator.md= | Role + instructions |
+| =fluid-planner.md= | Role + instructions |
+| =fluid-planner-retry.md= | Role + instructions |
+| =fluid-plan-validator.md= | Role + instructions |
+| =browse-findings.md= | Role + instructions |
+| =frontmatter.md= | Frontmatter format spec |
+
+** Compaction templates (8 files)
+| File | Current words | Notes |
+|------|--------------|-------|
+| =compaction-summary.md= | ~250 | Summary schema |
+| =compaction-short-summary.md= | ~80 | Already tight |
+| =compaction-turn-prefix.md= | ~120 | Already tight |
+| =compaction-update-summary.md= | ~300 | Merge protocol |
+| =compaction-summary-context.md= | unknown | Audit |
+| =branch-summary.md= | ~150 | Already tight |
+| =branch-summary-preamble.md= | unknown | Audit |
+| =branch-summary-context.md= | unknown | Audit |
+
+** Memory templates (4 files)
+| File | Notes |
+|------|-------|
+| =consolidation.md= | ~200 words. Memory extraction schema |
+| =read-path.md= | ~150 words. Trust hierarchy |
+| =stage_one_input.md= | unknown |
+| =stage_one_system.md= | ~180 words. Memory extraction |
+
+All in =packages/coding-agent/src/prompts/=.
+
+* Design Decisions
+1. Agent prompts have frontmatter (name, description, tools, model, thinking-level, blocking) — frontmatter stays untouched, only body gets compressed.
+2. FUP-048 says agent prompts are "already exemplars of the declaration-of-being style" — expect minimal changes.
+3. Compaction templates are consumed by summarization LLM calls — they must remain complete instructions.
+4. Memory templates define JSON schemas — compress prose framing, keep schema definitions.
+5. Subagent system prompts are consumed by subagent sessions — they must remain self-contained instructions.
+
+* Implementation
+
+** Audit and compress subagent system prompts
+:PROPERTIES:
+:CUSTOM_ID: FEAT-512::compress-subagent
+:END:
+5 files. Read each, compress prose framing where found. Preserve all Handlebars conditionals.
+
+** Audit and compress agent description prompts
+:PROPERTIES:
+:CUSTOM_ID: FEAT-512::compress-agents
+:DEPENDS: FEAT-512::compress-subagent
+:END:
+19 files. Read each, compress instruction prose to constraint lists where found. Preserve frontmatter exactly.
+
+** Audit and compress compaction + memory templates
+:PROPERTIES:
+:CUSTOM_ID: FEAT-512::compress-compaction
+:DEPENDS: FEAT-512::compress-agents
+:END:
+12 files. Read each, compress prose framing. Preserve schema definitions and output format specifications.
+
+* Edge Cases
+- Agent frontmatter is YAML — parsed separately from body. Do not modify.
+- Agent =description= field in frontmatter is used in the parent prompt's agent catalog listing. It must remain a truthful one-line capability statement.
+- Compaction templates are consumed by non-main-agent LLM calls (summarization). They cannot assume tool context.
+- Some agent prompts contain embedded examples (metis.md, momus.md) — apply non-obvious exemplar test.
+
+* Acceptance Criteria
+- All files audited
+- Compressed where prose padding found
+- Agent frontmatter unchanged
+- Compaction template output format specs preserved
+- No regressions in agent dispatch or summarization
+
+* Verification
+#+begin_src sh
+bun check:ts
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+bun test packages/coding-agent/test/prompts/auto-roster-prompts.test.ts
+bun test packages/coding-agent/test/caveman.test.ts
+#+end_src

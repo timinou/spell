@@ -16,7 +16,7 @@ describe("auto-roster prompt wiring", () => {
 		});
 
 		expect(rendered).toContain("`phase`: Optional phase name for the auto-created roster phase");
-		expect(rendered).toContain("`.blockers`: Optional task IDs within this batch");
+		expect(rendered).toContain(".blockers");
 		expect(rendered).toContain("Task dispatch auto-creates todo roster entries");
 	});
 
@@ -61,7 +61,7 @@ describe("auto-roster prompt wiring", () => {
 	it("documents todo_write coexistence with auto-created roster items", () => {
 		const rendered = renderPromptTemplate(todoWritePrompt, { autoRosterEnabled: true });
 
-		expect(rendered).toContain("Task dispatches may auto-create groups and delegated items in this same roster.");
-		expect(rendered).toContain("Auto-created items behave the same as manual ones once they exist.");
+		expect(rendered).toContain("auto-create groups and delegated items in this roster");
+		expect(rendered).toContain("Auto-created items behave the same as manual ones");
 	});
 });

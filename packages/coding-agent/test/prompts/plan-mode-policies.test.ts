@@ -128,7 +128,7 @@ describe("plan-mode task policy prompts", () => {
 			"- **App verification** (layer: `app`): `bun test packages/coding-agent/test/prompts/plan-mode-policies.test.ts` + LLM review + commit",
 		);
 		expect(rendered).toContain(
-			"For org-linked tasks, layer is resolved automatically from the org item's `:LAYER:` property",
+			"For org-linked tasks, layer resolves automatically from the org item's `:LAYER:` property",
 		);
 	});
 
