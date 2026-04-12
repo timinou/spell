@@ -1,0 +1,84 @@
+#+TITLE: Define compact code tool contract
+#+STATE: DONE
+#+SESSION_ID: 14b714f2dae46382
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T00-36-37-355Z_14b714f2dae46382.jsonl]]
+#+CUSTOM_ID: PROJ-037-define-compact-code-tool-contract
+#+EFFORT: 4h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+NOTE [2026-04-12]: Completed as part of PLAN-206 compact code tool context cutover.
+
+* Context
+The current `code` tool sends raw `JSON.stringify(result.output, null, 2)` text to the model for file-local commands in `packages/coding-agent/src/tools/code.ts`. Native file-local results from `crates/pi-natives/src/code_buffer.rs` include low-level payloads such as `changedRanges`, `inputEdit.startByte`, `inputEdit.oldEndByte`, and diff hunk arrays with `oldStart`/`oldCount`/`newStart`/`newCount`. Graph commands already emit compact text, but file-local commands do not. The redesign goal is full cutover for new sessions only: preserve all information, but move verbose/raw structure out of model-visible `content` and into structured `details`.
+
+Stakeholders:
+- LLM consumer: needs compact, task-oriented summaries, not byte-offset JSON blobs.
+- Transcript/TUI maintainer: needs one stable contract that can render live streaming and rebuilt transcripts consistently.
+- Native/TypeScript boundary maintainer: needs an explicit, typed schema instead of ad-hoc `unknown` JSON.
+
+Existing patterns to follow:
+- `packages/coding-agent/src/tools/search-tool-bm25.ts` returns compact `content` plus rich `details`.
+- `packages/coding-agent/src/web/search/code-search.ts` formats LLM-facing text separately from raw provider response in `details`.
+- `packages/coding-agent/src/tools/gemini-image.ts` and `packages/coding-agent/src/tools/python.ts` keep non-LLM-heavy data in `details` to avoid bloating context.
+- `packages/coding-agent/src/session/messages.ts` sends `toolResult.content` to the model and excludes `details`, so the compact textual contract must live in `content`.
+
+* Target files
+- Create: `packages/coding-agent/src/tools/code-result.ts`
+- Create: `packages/coding-agent/test/tools/code-result.test.ts`
+- Read while implementing: `packages/coding-agent/src/tools/code.ts`, `crates/pi-natives/src/code_buffer.rs`, `packages/coding-agent/src/session/messages.ts`
+
+* Required design decisions to encode
+1. Full cutover only for new sessions/transcripts. No indefinite dual-schema support.
+2. Introduce a canonical TypeScript discriminated union for code-tool results, for example `CodeToolDetails`, keyed by command family.
+3. Introduce a single formatter, for example `formatCodeResultForLlm(details: CodeToolDetails): string`, that emits compact model-visible text.
+4. Preserve raw/native data in `details.native` or command-specific detail fields; do not expose byte offsets or entire raw JSON blobs in `content` unless the command is explicitly a raw/read-style command.
+5. Edit-family commands (`edit`, `undo`, `redo`, `diff`, `save`) must summarize semantic outcomes first: file, version, edit count, changed regions/hunks, success/error, and any user-actionable warnings.
+6. Read-style commands (`outline`, `read`, `navigate`, `buffers`, `languages`) may still expose structured content, but it must be compact, stable, and free of pretty-printed JSON indentation noise.
+7. Graph commands keep their current compact text model unless the new shared contract needs metadata normalization in `details`.
+
+* Implementation
+** Test-first slice
+Create `packages/coding-agent/test/tools/code-result.test.ts` first. The test file must define representative native payload fixtures for at least:
+- file-local `outline`
+- file-local `read`
+- file-local `navigate`
+- edit result with diff text
+- undo/redo result with `changedRanges` + `inputEdit`
+- diff result with hunk arrays
+- save success result
+- error payload
+The tests must assert the public contract, not internal implementation details:
+- `formatCodeResultForLlm()` returns compact text without JSON indentation spam.
+- `normalizeCodeResult()` or equivalent preserves the full native payload in details.
+- edit-family summaries do not include byte offsets in the model-visible text.
+- important semantics remain visible: path/file, command, version, edit count, changed line ranges or hunk counts, and explicit error messages.
+- whitespace-sensitive regressions: no tabs, no leading `Code [` / array dump formatting, no raw `inputEdit.startByte` in compact summaries.
+
+** Implementation slice
+Create `packages/coding-agent/src/tools/code-result.ts` with:
+- named types for the normalized contract
+- command-family normalization helpers from native output -> normalized details
+- the single model-facing formatter used by the tool wrapper
+- bounded summary helpers for large payloads so the output is token-efficient but still truthful
+Comments must explain why data stays in details versus content.
+
+Do not change TUI rendering paths in this item except as needed to make the new contract compile. Renderer-specific work belongs downstream.
+
+* Acceptance
+- A fresh reader can identify one canonical code-tool result schema in `packages/coding-agent/src/tools/code-result.ts`.
+- Contract tests cover every command family listed above.
+- The tests prove lossless preservation in details plus compact model-visible summaries.
+
+* Verification
+- `bun test packages/coding-agent/test/tools/code-result.test.ts`
+- Reference artifact: org item produced by this task plus the new source/test file paths above
+
+* Related items
+- Downstream implementation: [[id:PROJ-038-implement-compact-code-tool-emission]]
+- Downstream consumer cutover: [[id:BUG-230-cut-over-code-tool-consumers-and-regress]]
+
+* Non-goals
+- Do not rewrite transcript/TUI reconstruction here.
+- Do not update session compaction logic here.
+- Do not add backward-compat shims for legacy schema persistence.

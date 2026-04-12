@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Message, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { CodeTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import * as nativesModule from "@oh-my-pi/pi-natives";
 
 function createAgent(): Agent {
 	return new Agent({
@@ -13,6 +15,26 @@ function createAgent(): Agent {
 			tools: [],
 		},
 	});
+}
+
+function createToolSession(overrides: Partial<ToolSession> = {}): ToolSession {
+	return {
+		cwd: "/tmp/test",
+		hasUI: false,
+		getSessionFile: () => null,
+		getSessionSpawns: () => "*",
+		settings: Settings.isolated(),
+		...overrides,
+	};
+}
+
+function getText(message: Message | undefined): string {
+	if (!message || typeof message.content === "string")
+		return typeof message?.content === "string" ? message.content : "";
+	return message.content
+		.filter(content => content.type === "text")
+		.map(content => content.text)
+		.join("");
 }
 
 describe("AgentSession message pipeline", () => {
@@ -79,7 +101,7 @@ describe("AgentSession message pipeline", () => {
 		});
 		sessions.push(session);
 		const options: SimpleStreamOptions = {
-			apiKey: "key",
+			apiKey: "key", // pragma: allowlist secret
 			onPayload: requestOnPayload,
 		};
 
@@ -89,5 +111,48 @@ describe("AgentSession message pipeline", () => {
 		expect(sessionOnPayload).toHaveBeenCalledWith({ original: true }, undefined);
 		expect(requestOnPayload).toHaveBeenCalledWith({ original: true, session: true }, undefined);
 		expect(result).toEqual({ original: true, session: true });
+	});
+
+	it("passes compact code tool context through the session pipeline without serializing details", async () => {
+		spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: { version: 2, diff: "@@ add @@\n-return a + b;\n+return a * b;", editCount: 1 },
+			error: false,
+		});
+		const codeTool = new CodeTool(createToolSession());
+		const toolResult = await codeTool.execute("call-1", {
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			symbol: "add",
+			operation: "patch",
+			patches: [{ find: "return a + b;", replace: "return a * b;" }],
+		});
+
+		const session = new AgentSession({
+			agent: createAgent(),
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated({ "compaction.enabled": false }),
+			modelRegistry: {} as never,
+		});
+		sessions.push(session);
+
+		const converted = await session.convertMessagesToLlm([
+			{
+				role: "toolResult",
+				toolCallId: "call-1",
+				toolName: "code",
+				content: toolResult.content,
+				details: toolResult.details,
+				isError: false,
+				timestamp: Date.now(),
+			},
+		]);
+
+		expect(converted).toHaveLength(1);
+		expect(converted[0]?.role).toBe("toolResult");
+		const text = getText(converted[0]);
+		expect(text).toContain("Edited src/main.ts (1 operation, buffer version 2)");
+		expect(text).toContain("@@ add @@");
+		expect(text).not.toContain('"editCount"');
+		expect(text).not.toContain('"version"');
 	});
 });

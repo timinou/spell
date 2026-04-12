@@ -136,8 +136,9 @@ Workflow:
 </examples>
 
 <output>
-- File-scoped commands return structured JSON or diffs from the native engine
-- `edit` returns an annotated diff string with `@@ symbolName @@` headers plus the buffer version and edit count
+- File-scoped commands return compact, model-facing summaries in `content` and preserve the full normalized payload in structured `details`
+- `read` returns source text directly in `content`; `outline`, `navigate`, `buffers`, `languages`, `diff`, `undo`, `redo`, `save`, and `edit` summarize the result semantically instead of dumping raw JSON
+- `edit` summaries include the annotated diff and edit count; `details` retain version and normalized payload data
 - Graph commands return compact text optimized for agent reading with grouped sections and “Next:” hints
 </output>
 

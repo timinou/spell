@@ -1,0 +1,78 @@
+#+TITLE: Implement compact code tool emission
+#+STATE: DONE
+#+SESSION_ID: 14b714f2dae46382
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T00-36-37-355Z_14b714f2dae46382.jsonl]]
+#+CUSTOM_ID: PROJ-038-implement-compact-code-tool-emission
+#+EFFORT: 5h
+#+DEPENDS: PROJ-037-define-compact-code-tool-contract
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+NOTE [2026-04-12]: Completed as part of PLAN-206 compact code tool context cutover.
+
+* Context
+This item consumes the normalized contract from [[id:PROJ-037-define-compact-code-tool-contract]] and applies it at the actual tool boundary. Today, `packages/coding-agent/src/tools/code.ts` returns raw pretty-printed JSON for file-local commands and only `{ command }` in `details`. Native code output is produced in `crates/pi-natives/src/code_buffer.rs`; graph commands already return compact text. The goal is to make new code-tool executions emit compact LLM-facing text plus rich structured details, with no legacy compatibility layer.
+
+Existing patterns to follow:
+- `packages/coding-agent/src/tools/search-tool-bm25.ts`: compact `content`, rich `details`, renderer reads details.
+- `packages/coding-agent/src/lsp/index.ts` and `packages/coding-agent/src/lsp/render.ts`: request metadata stored in details, renderer uses structured details.
+- Repo rule: prompts live in static `.md` files, so update `packages/coding-agent/src/prompts/tools/code.md` rather than embedding prompt strings in TypeScript.
+
+* Target files
+- Modify: `packages/coding-agent/src/tools/code.ts`
+- Modify: `crates/pi-natives/src/code_buffer.rs`
+- Modify: `packages/coding-agent/src/prompts/tools/code.md`
+- Modify: `packages/coding-agent/test/tools/code.test.ts`
+- Use contract from: `packages/coding-agent/src/tools/code-result.ts`
+
+* Required design decisions to implement
+1. `code.ts` must stop using `JSON.stringify(result.output, null, 2)` as the default file-local tool content.
+2. `code.ts` must normalize every command result through the canonical contract and format the model-visible text from that contract.
+3. `result.details` must include the command, schema version, and normalized/raw data needed by downstream renderers. Preserve all information.
+4. Native Rust output may be reshaped where it meaningfully reduces noise or improves semantic naming, but TypeScript remains the owner of final LLM-facing phrasing.
+5. `code` graph commands may keep their existing text output, but their `details` shape should be brought into the same contract family where practical.
+6. The tool description in `packages/coding-agent/src/prompts/tools/code.md` must describe the new output behavior and stop implying that raw JSON blobs are the primary agent experience.
+
+* Implementation
+** Sequencing note
+This is not pure test-first end-to-end work because the native tool boundary and prompt docs must exist before transcript/render tests can pass. Use the contract tests from [[id:PROJ-037-define-compact-code-tool-contract]] as the foundation, then wire production code.
+
+** Native boundary work
+Review `crates/pi-natives/src/code_buffer.rs` command handlers for:
+- `edit`
+- `undo`
+- `redo`
+- `diff`
+- `save`
+- `outline`
+- `read`
+- `navigate`
+Decide whether any fields should be renamed or regrouped before crossing into TypeScript. Prefer semantic names over editor-internal names when the current shape is purely implementation-detail noise. Do not drop fields the TypeScript normalizer depends on.
+
+** TypeScript tool wrapper work
+Update `packages/coding-agent/src/tools/code.ts` to:
+- call the new normalization/formatting helpers for file-local results
+- populate `details` with the normalized schema, raw/native payload, and command metadata
+- keep error paths explicit and compact
+- keep graph command behavior coherent with the shared details contract
+- ensure `renderResult()` prefers normalized details instead of reparsing raw JSON strings whenever possible
+
+** Prompt/tool-doc work
+Update `packages/coding-agent/src/prompts/tools/code.md` so the documented outputs match the real contract. The prompt must steer agents toward the new compact command summaries and away from expecting large raw JSON dumps.
+
+* Acceptance
+- Direct code-tool execution no longer produces pretty-printed raw JSON as the primary file-local `content` payload.
+- `details` contains enough structure for downstream renderers and future consumers to reconstruct a richer view without asking the model to parse raw native dumps.
+- Updated tool tests assert the new contract for at least one read-style command, one edit-style command, one undo/redo-style command, one diff command, and one error case.
+
+* Verification
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts`
+- Manual proof in test assertions or snapshots that model-visible text no longer contains raw top-level JSON array/object dumps for edit-family commands
+
+* Related items
+- Depends on [[id:PROJ-037-define-compact-code-tool-contract]]
+- Downstream consumer cutover: [[id:BUG-230-cut-over-code-tool-consumers-and-regress]]
+
+* Non-goals
+- Do not update every transcript/UI consumer here unless required to keep tests compiling.
+- Do not add compatibility branches for legacy session files.

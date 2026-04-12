@@ -1,0 +1,85 @@
+#+TITLE: Cut over code tool consumers and regressions
+#+STATE: DONE
+#+SESSION_ID: 14b714f2dae46382
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T00-36-37-355Z_14b714f2dae46382.jsonl]]
+#+CUSTOM_ID: BUG-230-cut-over-code-tool-consumers-and-regress
+#+EFFORT: 4h30m
+#+DEPENDS: PROJ-038-implement-compact-code-tool-emission
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+NOTE [2026-04-12]: Completed as part of PLAN-206 compact code tool context cutover.
+
+* Context
+This item completes the full cutover after [[id:PROJ-038-implement-compact-code-tool-emission]]. The new code-tool payload/schema is only valuable if every downstream consumer uses it consistently. Current evidence from the repo:
+- `packages/coding-agent/src/modes/components/tool-execution.ts` builds render state, merges call/result rendering, and passes preview-only fields such as `__partialJson`.
+- `packages/coding-agent/src/modes/controllers/event-controller.ts` has a live-stream path that creates and updates `ToolExecutionComponent` instances.
+- `packages/coding-agent/src/modes/utils/ui-helpers.ts` has a transcript rebuild path that reconstructs the same components from persisted session context.
+- `packages/coding-agent/src/session/messages.ts` sends `toolResult.content` to the model and excludes `details` from model context.
+- `packages/coding-agent/src/session/compaction/utils.ts` serializes tool-result text for summarization, so first-turn token savings must come from the new content format, not from late-stage pruning.
+
+Existing patterns/tests to follow:
+- `packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts` for event-driven tool component lifecycle.
+- `packages/coding-agent/test/tools/lsp-regressions.test.ts` for renderer assertions driven by structured `details`.
+- `packages/coding-agent/test/agent-session-message-pipeline.test.ts` for context conversion hooks.
+- `packages/coding-agent/src/session/compaction/pruning.ts` remains post-hoc truncation only; do not rely on it to fix code-tool payload design.
+
+* Target files
+- Modify: `packages/coding-agent/src/modes/components/tool-execution.ts`
+- Modify: `packages/coding-agent/src/modes/controllers/event-controller.ts`
+- Modify: `packages/coding-agent/src/modes/utils/ui-helpers.ts`
+- Modify as needed: `packages/coding-agent/src/session/messages.ts`
+- Modify as needed: `packages/coding-agent/src/session/compaction/utils.ts`
+- Add/modify focused tests under:
+  - `packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts`
+  - `packages/coding-agent/test/tools/code.test.ts` or a new renderer-focused test file
+  - `packages/coding-agent/test/agent-session-message-pipeline.test.ts`
+  - a new end-to-end scenario file if existing unit/session tests cannot prove live + rebuilt parity
+
+* Required design decisions to implement
+1. Live streaming path and transcript rebuild path must consume the same normalized code-tool details contract.
+2. `ToolExecutionComponent` must prefer structured code-tool details over reparsing arbitrary raw JSON text.
+3. The code-tool renderer must show compact, semantically labeled output in both collapsed and expanded views while preserving access to richer diff/read detail when expanded.
+4. New-session full cutover is allowed; do not keep old code-tool schema branches alive just for transcript replay.
+5. If `session/messages.ts` or compaction serialization needs adjustments, keep the rule intact: `content` is model-visible, `details` is not. The fix location is the code-tool content contract, not a caller-side workaround.
+
+* Implementation
+** Transcript/UI wiring
+Update both `event-controller.ts` and `ui-helpers.ts` so they pass through whatever structured detail state the new renderer needs, just as bash preview currently preserves `__partialJson` in both paths. Do not fix only live streaming or only rebuilt transcript; both paths must remain identical.
+
+** Renderer work
+Update the code-tool rendering path so:
+- collapsed view shows concise action/result summaries
+- expanded view shows richer structured detail without dumping unreadable raw blobs
+- error rendering remains truthful and compact
+- tabs/overflow are sanitized following existing TUI rules
+If a shared helper is needed for code-tool rendering across live and rebuilt transcripts, extract it instead of duplicating formatting logic.
+
+** Verification coverage
+Add a focused end-to-end scenario proving an agent/session receives cleaner code-tool context during execution. Minimum acceptable proof:
+- execute or simulate a code-tool turn for an edit-like command that used to produce noisy raw JSON
+- assert the persisted/new-session-visible tool result text is the new compact summary, not the old dump
+- assert the transcript reconstruction path renders the same semantic output as the live path
+- assert important information is still present somewhere accessible (typically `details` and expanded renderer output)
+- assert compaction/serialization helpers do not reintroduce the old noisy raw dump format
+
+If a browser/QML artifact is needed to prove the visual cutover, capture one screenshot or text artifact showing the code tool before/after style in expanded transcript view. Only require this if unit/session assertions cannot adequately prove visual parity.
+
+* Acceptance
+- All code-tool consumers in the listed files use the new compact contract consistently.
+- No new-session live or rebuilt transcript path shows the old raw pretty-printed JSON payload as the primary code-tool result view.
+- At least one end-to-end/session-level test proves an agent turn now gets cleaner code-tool context during planning/execution.
+
+* Verification
+- `bun test packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts`
+- `bun test packages/coding-agent/test/agent-session-message-pipeline.test.ts`
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts`
+- If added: the new focused end-to-end/session test file for code-tool context cutover
+
+* Related items
+- Depends on [[id:PROJ-038-implement-compact-code-tool-emission]]
+- Upstream contract: [[id:PROJ-037-define-compact-code-tool-contract]]
+
+* Non-goals
+- Do not add a compatibility renderer for legacy code-tool schemas.
+- Do not rely on compaction pruning as the primary token-efficiency mechanism.
