@@ -9,6 +9,7 @@ use tree_sitter::Node;
 
 use crate::language::LanguageProfile;
 
+#[derive(Debug, Clone)]
 pub struct Procedure {
 	pub activation_rules: Vec<ActivationRule>,
 	pub selector:         Option<Selector>,

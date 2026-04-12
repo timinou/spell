@@ -11,13 +11,17 @@
 
 pub mod buffer;
 pub mod clock;
+pub mod edit;
 pub mod effort;
 pub mod graph;
 pub mod item;
+pub mod locate;
 pub mod markdown;
 pub mod query;
 pub mod section;
 pub mod timestamp;
 
-pub use buffer::OrgBuffer;
+pub use buffer::{OrgBuffer, extract_items_from_buffer, extract_items_from_source};
+pub use edit::*;
 pub use item::OrgItem;
+pub use locate::*;

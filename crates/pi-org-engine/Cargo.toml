@@ -13,9 +13,11 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+pi-code-engine = { path = "../pi-code-engine" }
 tree-sitter = "0.25"
 tree-sitter-org = { path = "../tree-sitter-org" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 regex = "1"
+chrono = "0.4.42"

@@ -1,0 +1,119 @@
+#+TITLE: Per-buffer locking in BufferRegistry
+#+STATE: DONE
+#+SESSION_ID: 14b7e68d6deda817
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T15-52-23-735Z_14b7e68d6deda817.jsonl]]
+#+CUSTOM_ID: FEAT-521-per-buffer-locking
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: code-engine
+#+DEPENDS: FEAT-520-strip-crdt-from-codebuffer
+
+NOTE [2026-04-12]: Completed under PLAN-200 unified buffer execution; BufferRegistry now uses per-buffer locking with parallel-lock regression coverage.
+
+* Initial Message
+
+⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+                                                                                            ╭────────────╮
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine                        │ 🗺 Plotting │
+ Tool execution failed due to an error: Anthropic messages stream stalled while streaming in╰────────────╯
+ tool arguments
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl
+ ID: 14b7be567342b8fe
+
+
+
+Think from first principles about the edit actions that the rust pi-code-engine crate does, and how it ends up creating this mess. Find the root cause, TDD fix it once and for all with proper trait choices and concurrency models on the CRDT (if that's the root cause
+
+* Goal
+
+Replace the global =Mutex&lt;BufferRegistry&gt;= with per-buffer locking so operations
+on different files don't block each other. This is prerequisite for the org tool
+to share the buffer registry without blocking code operations.
+
+Currently =crates/pi-natives/src/code_buffer.rs= has:
+#+BEGIN_SRC rust
+static BUFFER_REGISTRY: OnceLock<Mutex<BufferRegistry>> = OnceLock::new();
+#+END_SRC
+
+Every operation (outline, read, navigate, edit, save) acquires this single lock.
+A slow tree-sitter parse on one file blocks ALL operations on ALL files.
+
+* Architecture
+
+** BufferRegistry changes (=crates/pi-code-engine/src/buffer.rs=)
+
+Change internal storage from =HashMap&lt;PathBuf, CodeBuffer&gt;= to
+=HashMap&lt;PathBuf, Arc&lt;parking_lot::Mutex&lt;CodeBuffer&gt;&gt;&gt;=.
+
+#+BEGIN_SRC rust
+pub struct BufferRegistry {
+    buffers:  HashMap<PathBuf, Arc<Mutex<CodeBuffer>>>,
+    registry: Arc<LanguageRegistry>,
+}
+#+END_SRC
+
+New API:
+- =open(&self, path) -> Result<Arc<Mutex<CodeBuffer>>>=  (takes =&self= not =&mut self=)
+- =get(&self, path) -> Option<Arc<Mutex<CodeBuffer>>>=
+- =close(&self, path)= — removes entry
+- =list(&self) -> Vec<BufferInfo>= — locks each briefly to collect info
+
+The registry itself needs a lightweight lock (=RwLock=) for the HashMap:
+#+BEGIN_SRC rust
+pub struct BufferRegistry {
+    buffers:  RwLock<HashMap<PathBuf, Arc<Mutex<CodeBuffer>>>>,
+    registry: Arc<LanguageRegistry>,
+}
+#+END_SRC
+
+- =open=: write-lock registry briefly to insert, return =Arc<Mutex<CodeBuffer>>=
+- =get=: read-lock registry to find entry, return clone of Arc
+- Operations lock individual buffer via the Arc<Mutex>
+
+** NAPI changes (=crates/pi-natives/src/code_buffer.rs=)
+
+Change static from =OnceLock<Mutex<BufferRegistry>>= to =OnceLock<BufferRegistry>=
+(registry itself uses internal RwLock now).
+
+The dispatch pattern changes from:
+#+BEGIN_SRC rust
+let mut guard = registry().lock();
+let buffer = guard.get_mut(&path).unwrap();
+#+END_SRC
+To:
+#+BEGIN_SRC rust
+let buf_arc = registry().get_or_open(&path)?;
+let mut buffer = buf_arc.lock();
+#+END_SRC
+
+* Files to modify
+
+- =crates/pi-code-engine/src/buffer.rs= — =BufferRegistry= struct and impl
+- =crates/pi-natives/src/code_buffer.rs= — static registry type, all =registry().lock()= call sites
+
+* Verification
+
+- =cargo test -p pi-code-engine= passes (existing buffer registry tests)
+- =cargo test -p pi-natives= passes if any
+- =cargo check -p pi-natives= passes
+- Verify =list()= doesn't deadlock (lock each buffer briefly, release)
+
+* Edge cases
+
+- =close()= while a buffer lock is held by another operation — the Arc ensures the buffer lives until the operation completes, then is dropped
+- =open()= called concurrently for the same path — write-lock on registry HashMap serializes, second caller gets existing entry
+- =list()= during active edits — must not hold registry read-lock while locking individual buffers (lock ordering: registry first, then buffer)

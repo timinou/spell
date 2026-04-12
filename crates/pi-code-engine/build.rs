@@ -44,10 +44,12 @@ struct GrammarSource {
 	/// Cargo dependency name used to resolve the selected registry version, if
 	/// any.
 	dependency_name: Option<&'static str>,
-	/// Path to node-types.json relative to crate source in the cargo registry.
-	/// We search for the crate directory by matching the package prefix.
+	/// Path to node-types source relative to crate source in the cargo registry.
+	/// For vendored grammars this points at the embedded NODE_TYPES source in
+	/// lib.rs. For registry crates we still resolve the installed crate dir and
+	/// read the embedded node-types file from there.
 	package_prefix:  &'static str,
-	/// Sub-path within the crate directory to find node-types.json.
+	/// Sub-path within the crate directory to find node-types source.
 	json_subpath:    &'static str,
 }
 
@@ -82,6 +84,12 @@ const GRAMMARS: &[GrammarSource] = &[
 		package_prefix:  "tree-sitter-elixir-",
 		json_subpath:    "src/node-types.json",
 	},
+	GrammarSource {
+		name:            "org",
+		dependency_name: Some("tree-sitter-org"),
+		package_prefix:  "tree-sitter-org-",
+		json_subpath:    "src/node-types.json",
+	},
 ];
 
 fn main() {
@@ -111,13 +119,18 @@ fn find_and_generate(grammar: &GrammarSource, out_dir: &str) -> Result<(), Strin
 	fs::write(&out_path, code)
 		.map_err(|e| format!("failed to write {}: {e}", out_path.display()))?;
 
-	// Tell cargo to rebuild if the source JSON changes.
 	println!("cargo:rerun-if-changed={}", json_path.display());
 
 	Ok(())
 }
 
 fn find_node_types_json(grammar: &GrammarSource) -> Result<std::path::PathBuf, String> {
+	if grammar.name == "org" {
+		return Ok(
+			Path::new(env!("CARGO_MANIFEST_DIR")).join("../tree-sitter-org/src/node-types.json")
+		);
+	}
+
 	// Strategy: scan cargo registry src directories for the matching crate prefix.
 	let home = env::var("CARGO_HOME")
 		.or_else(|_| env::var("HOME").map(|h| format!("{h}/.cargo")))
@@ -132,10 +145,10 @@ fn find_node_types_json(grammar: &GrammarSource) -> Result<std::path::PathBuf, S
 		.dependency_name
 		.and_then(selected_dependency_version);
 
-	// Iterate registry index directories (e.g., index.crates.io-HASH/)
-	let entries = fs::read_dir(&registry_src).map_err(|e| format!("cannot read registry: {e}"))?;
-
-	for entry in entries.flatten() {
+	for entry in fs::read_dir(&registry_src)
+		.map_err(|e| format!("cannot read registry: {e}"))?
+		.flatten()
+	{
 		let index_dir = entry.path();
 		if !index_dir.is_dir() {
 			continue;
@@ -151,7 +164,7 @@ fn find_node_types_json(grammar: &GrammarSource) -> Result<std::path::PathBuf, S
 	Err(format!(
 		"node-types.json not found for {} (searched {})",
 		grammar.name,
-		registry_src.display(),
+		registry_src.display()
 	))
 }
 
@@ -376,7 +389,6 @@ fn generate_grammar_module(node_types: &[NodeType]) -> String {
 	writeln!(code, "// DO NOT EDIT").unwrap();
 	writeln!(code).unwrap();
 
-	// Generate the grammar() function
 	writeln!(
 		code,
 		"#[allow(unused_mut, clippy::field_reassign_with_default, clippy::vec_init_then_push, \
@@ -396,14 +408,10 @@ fn generate_grammar_module(node_types: &[NodeType]) -> String {
 			continue;
 		}
 
-		// Collect all types
 		writeln!(code, "\tall_types.push({:?}.to_string());", nt.r#type).unwrap();
 
-		// Supertypes: nodes with subtypes array
 		if let Some(subtypes) = &nt.subtypes {
 			writeln!(code, "\tsupertypes.push({:?}.to_string());", nt.r#type).unwrap();
-
-			// Add inverse rules: each subtype -> this supertype
 			for st in subtypes {
 				if st.named {
 					writeln!(
@@ -414,11 +422,9 @@ fn generate_grammar_module(node_types: &[NodeType]) -> String {
 					.unwrap();
 				}
 			}
-			// Supertypes don't have production rules themselves
 			continue;
 		}
 
-		// Production rules for nodes with fields or children
 		if nt.fields.is_empty() && nt.children.is_none() {
 			continue;
 		}
@@ -426,7 +432,6 @@ fn generate_grammar_module(node_types: &[NodeType]) -> String {
 		writeln!(code, "\t{{").unwrap();
 		writeln!(code, "\t\tlet mut rule = ProductionRule::default();").unwrap();
 
-		// Fields
 		for (field_name, field_info) in &nt.fields {
 			let child_types: Vec<&str> = field_info
 				.types
@@ -445,8 +450,6 @@ fn generate_grammar_module(node_types: &[NodeType]) -> String {
 						.join(", ")
 				)
 				.unwrap();
-
-				// Add inverse rules: each child type -> this parent
 				for ct in &child_types {
 					writeln!(
 						code,
@@ -459,7 +462,6 @@ fn generate_grammar_module(node_types: &[NodeType]) -> String {
 			}
 		}
 
-		// Unnamed children
 		if let Some(children) = &nt.children {
 			let child_types: Vec<&str> = children
 				.types
@@ -486,7 +488,6 @@ fn generate_grammar_module(node_types: &[NodeType]) -> String {
 	}
 
 	writeln!(code).unwrap();
-	writeln!(code, "\t// Deduplicate inverse rules").unwrap();
 	writeln!(code, "\tfor parents in inverse_rules.values_mut() {{").unwrap();
 	writeln!(code, "\t\tparents.sort();").unwrap();
 	writeln!(code, "\t\tparents.dedup();").unwrap();
@@ -513,8 +514,7 @@ pub fn grammar() -> GeneratedGrammar {
 		all_types: Vec::new(),
 		supertypes: Vec::new(),
 	}
-}
-";
+}";
 	let out_path = Path::new(out_dir).join(format!("grammar_{name}.rs"));
 	fs::write(out_path, code).ok();
 }

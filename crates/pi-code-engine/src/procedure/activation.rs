@@ -1,12 +1,13 @@
 use crate::procedure::rules::RuleExpr;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Position {
 	Any,
 	At,
 	In,
 }
 
+#[derive(Debug, Clone)]
 pub struct ActivationRule {
 	pub nodes:        RuleExpr,
 	pub position:     Position,

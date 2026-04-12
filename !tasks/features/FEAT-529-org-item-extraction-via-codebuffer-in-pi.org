@@ -1,0 +1,112 @@
+#+TITLE: Org item extraction via CodeBuffer in pi-org-engine
+#+STATE: DONE
+#+SESSION_ID: 14b7e68d6deda817
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T15-52-23-735Z_14b7e68d6deda817.jsonl]]
+#+CUSTOM_ID: FEAT-529-org-extraction-via-codebuffer
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: code-engine
+#+DEPENDS: FEAT-528-org-language-profile
+
+NOTE [2026-04-12]: Completed under PLAN-200 unified buffer execution; pi-org-engine extraction now runs on CodeBuffer-backed parsing.
+
+* Initial Message
+
+⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+                                                                                            ╭────────────╮
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine                        │ 🗺 Plotting │
+ Tool execution failed due to an error: Anthropic messages stream stalled while streaming in╰────────────╯
+ tool arguments
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl
+ ID: 14b7be567342b8fe
+
+
+
+Think from first principles about the edit actions that the rust pi-code-engine crate does, and how it ends up creating this mess. Find the root cause, TDD fix it once and for all with proper trait choices and concurrency models on the CRDT (if that's the root cause
+
+* Goal
+
+Refactor =pi-org-engine= to depend on =pi-code-engine= and use =CodeBuffer= for parsing
+instead of its own standalone =OrgBuffer=. This eliminates the duplicate parser and
+makes org items accessible through the unified buffer system.
+
+* Current state
+
+=pi-org-engine/src/buffer.rs= has =OrgBuffer= which:
+1. Creates its own =tree_sitter::Parser= and parses source
+2. Walks the tree to extract =OrgItem= structs
+3. Has no buffer management (re-parses every call)
+
+=pi-code-engine= has =CodeBuffer= which:
+1. Manages parser + rope + tree-sitter tree
+2. Supports incremental re-parsing after edits
+3. Has buffer registry with persistence
+
+* Architecture change
+
+=pi-org-engine= adds =pi-code-engine= as a dependency. =OrgBuffer= is replaced with
+functions that operate on =&CodeBuffer= (or on =&str= source + =&Tree= for stateless ops).
+
+** New API in pi-org-engine
+
+#+BEGIN_SRC rust
+// Stateless extraction from source text (for queries without buffer)
+pub fn extract_items_from_source(
+    source: &str,
+    todo_keywords: &[&str],
+    category: &str,
+    dir: &str,
+    file_path: &str,
+    include_body: bool,
+) -> Result<Vec<OrgItem>>;
+
+// Extraction from a CodeBuffer (for buffered operations)
+pub fn extract_items_from_buffer(
+    buffer: &CodeBuffer,
+    todo_keywords: &[&str],
+    category: &str,
+    dir: &str,
+    include_body: bool,
+) -> Vec<OrgItem>;
+#+END_SRC
+
+The tree-walking logic (=extract_headings=, =extract_section_item=, =parse_headline=,
+=extract_properties=) stays in =pi-org-engine= — it just reads from =buffer.source()=
+and =buffer.tree()= instead of its own fields.
+
+** Backward compatibility
+
+Keep a =parse_items= function that creates a temporary CodeBuffer from source text
+for the NAPI =cmd_parse_items= path (stateless queries).
+
+* Files to modify
+
+- =crates/pi-org-engine/Cargo.toml= — add =pi-code-engine = { path = \"../pi-code-engine\" }=
+- =crates/pi-org-engine/src/buffer.rs= — replace =OrgBuffer= struct with functions on =CodeBuffer=
+- =crates/pi-org-engine/src/lib.rs= — update exports
+- =crates/pi-natives/src/org_buffer.rs= — update =cmd_parse_items= and =cmd_query= to use new API
+
+* Verification
+
+- =cargo test -p pi-org-engine= — all 44 existing tests pass
+- New test: =extract_items_from_buffer= on a CodeBuffer gives same results as old =OrgBuffer=
+- =cargo test -p pi-natives= passes
+
+* Key constraint
+
+The =query=, =graph=, =compute_waves=, =next_wave= modules stay unchanged — they operate on
+=Vec&lt;OrgItem&gt;= which is the same output regardless of parser.

@@ -1,0 +1,131 @@
+#+TITLE: Migrate org TS tool to native buffer operations
+#+STATE: DONE
+#+SESSION_ID: 14b7e68d6deda817
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T15-52-23-735Z_14b7e68d6deda817.jsonl]]
+#+CUSTOM_ID: FEAT-532-migrate-org-tool-to-native
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-531-shared-buffer-registry-napi
+
+NOTE [2026-04-12]: Completed under PLAN-200 unified buffer execution; packages/org now uses native parse/write commands and legacy reader/writer modules were removed.
+
+* Initial Message
+
+⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+                                                                                            ╭────────────╮
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine                        │ 🗺 Plotting │
+ Tool execution failed due to an error: Anthropic messages stream stalled while streaming in╰────────────╯
+ tool arguments
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl
+ ID: 14b7be567342b8fe
+
+
+
+Think from first principles about the edit actions that the rust pi-code-engine crate does, and how it ends up creating this mess. Find the root cause, TDD fix it once and for all with proper trait choices and concurrency models on the CRDT (if that's the root cause
+
+* Goal
+
+Rewrite the org tool's TS adapter (=packages/coding-agent/src/tools/org.ts= and
+=packages/org/src/tool.ts=) to call the new native buffer-backed org commands
+instead of the TS =org-reader.ts= and =org-writer.ts=.
+
+* Current architecture (to be replaced)
+
+=tool.ts= dispatches 13 commands:
+- Reads: =query=, =get=, =dashboard=, =validate=, =wave=, =graph=, =archive=
+  - Use =org-reader.ts= (TS line-state-machine parser) for item extraction
+  - Call native =executeOrg= only for graph/wave algorithms
+- Writes: =create=, =update=, =note=, =set=
+  - Use =org-writer.ts= (TS line-array mutator) for all file mutations
+- Init: =init=
+  - Creates directory structure and reference.org file
+
+* New architecture
+
+** Write commands
+
+Replace =org-writer.ts= calls with native NAPI commands:
+
+| TS function | Native command |
+|---|---|
+| =appendItemToFile()= | =executeOrg({command: \"createItem\", file, ...})= |
+| =applyItemMutations()= | =executeOrg({command: \"updateItem\", file, id, state, title, body, append})= |
+| =setPropertyInFile()= | =executeOrg({command: \"setProperty\", file, id, property, value})= |
+| Note (via update) | =executeOrg({command: \"appendNote\", file, id, note})= |
+| Section edit | =executeOrg({command: \"editSection\", file, id, section, body, mode})= |
+
+The native commands handle: open buffer → locate item → produce TextEdits →
+apply → save. The TS side just calls and handles the response.
+
+** Read commands
+
+Replace =org-reader.ts= calls with native parsing:
+
+| TS function | Native replacement |
+|---|---|
+| =readOrgFile()= | =executeOrg({command: \"parse\", file, ...})= (already exists but takes source, change to accept file path) |
+| =readCategory()= | Loop over =.org= files in category dir, call parse on each |
+| =findItemById()= | =executeOrg({command: \"findItem\", id, dirs})= (new native command) |
+
+** Category and ID logic stays in TS
+
+=categories.ts= (resolveCategories, findCategory, findCategoryForId), =id-generator.ts=
+(generateId), and directory scanning remain in TypeScript — they're filesystem/config
+operations, not parsing.
+
+* Migration sequence
+
+1. Add file-path-based parsing to native =executeOrg= (instead of requiring source string)
+2. Replace write operations one by one: create → update → set → note
+3. Replace read operations: use native parse for item extraction
+4. Remove =org-reader.ts= imports from =tool.ts=
+5. Remove =org-writer.ts= imports from =tool.ts=
+6. Verify all 13 commands still work
+
+* Files to modify
+
+- =packages/org/src/tool.ts= — rewrite =cmdCreate=, =cmdUpdate=, =cmdSet=, =cmdNote=, =cmdGet=, =cmdQuery=, =cmdDashboard=, =cmdValidate=, =cmdWave=, =cmdGraph=, =cmdArchive=
+- =packages/org/src/index.ts= — remove re-exports of org-reader.ts and org-writer.ts internals
+
+* Files to delete (after migration)
+
+- =packages/org/src/org-reader.ts= — replaced by native parsing
+- =packages/org/src/org-writer.ts= — replaced by native edit operations
+
+* Files to keep
+
+- =packages/org/src/categories.ts= — filesystem/config logic
+- =packages/org/src/id-generator.ts= — ID generation with scan
+- =packages/org/src/mutex.ts= — may still be needed for category-level locking during create
+- =packages/org/src/atomic-write.ts= — no longer needed (native save handles this) — delete
+- =packages/org/src/types.ts= — keep OrgItem, OrgConfig, etc. types
+- =packages/org/src/schema/= — keep defaults and validation
+
+* Verification
+
+- =bun test packages/org/test/= — all existing org tool tests pass
+- Manual test: create item, update state, set property, query, get, dashboard
+- Verify =org get= finds items created by =org create= (the original NOT_FOUND bug)
+- =bun check:ts= passes
+
+* Edge cases
+
+- File does not exist on create: native command should create the file (open with empty content, insert item, save)
+- Section update without file hint: TS still needs to scan categories to find the file, then pass file path to native command
+- =cmdUpdate= section branch: currently uses =Bun.write()= directly without mutex — the native buffer path eliminates this race condition
+- Archive command: moves items between files — may need a =moveItem= native command or handle as delete + create in TS

@@ -12,7 +12,7 @@ use crate::{
 	buffer::CodeBuffer,
 	error::{CodeEngineError, Result},
 	language::LanguageProfile,
-	outline::{declaration_for, declaration_name},
+	outline::{class_member_nodes, declaration_body_range, declaration_for, declaration_name},
 };
 
 /// Resolved symbol with byte range and optional body range.
@@ -138,9 +138,8 @@ fn build_resolved(node: Node<'_>, profile: &LanguageProfile, source: &str) -> Re
 	let kind = decl.map(|d| d.kind.clone()).unwrap_or_default();
 
 	let (body_start, body_end) = decl
-		.and_then(|d| d.body_field.as_ref())
-		.and_then(|field| node.child_by_field_name(field))
-		.map(|body| (Some(body.start_byte()), Some(body.end_byte())))
+		.and_then(|d| declaration_body_range(node, d))
+		.map(|(start, end)| (Some(start), Some(end)))
 		.unwrap_or((None, None));
 
 	ResolvedSymbol {
@@ -174,20 +173,13 @@ fn resolve_member(
 			))
 		})?;
 
-	let body = class_node
-		.child_by_field_name(&class_like.body_field)
-		.ok_or_else(|| CodeEngineError::Edit(format!("'{}' has no body", class_name)))?;
+	let members = class_member_nodes(profile, class_node);
+	if members.is_empty() && !class_like.member_types.is_empty() {
+		return Err(CodeEngineError::Edit(format!("'{}' has no body", class_name)));
+	}
 
 	let mut matches: Vec<Node<'_>> = Vec::new();
-	let mut cursor = body.walk();
-	for child in body.named_children(&mut cursor) {
-		if !class_like
-			.member_types
-			.iter()
-			.any(|kind| kind == child.kind())
-		{
-			continue;
-		}
+	for child in members {
 		if let Some(decl) = declaration_for(profile, child) {
 			if let Some(n) = declaration_name(source, child, decl) {
 				if n == member_name {
@@ -198,7 +190,7 @@ fn resolve_member(
 	}
 
 	if matches.is_empty() {
-		let available = collect_member_names(body, &class_like.member_types, profile, source);
+		let available = collect_member_names(class_node, profile, source);
 		return Err(CodeEngineError::Edit(format!(
 			"Member '{}' not found in '{}'. Available: [{}]",
 			member_name,
@@ -239,17 +231,12 @@ fn collect_top_level_names(root: Node<'_>, profile: &LanguageProfile, source: &s
 
 /// Collect names of members within a class-like body for error messages.
 fn collect_member_names(
-	body: Node<'_>,
-	member_types: &[String],
+	class_node: Node<'_>,
 	profile: &LanguageProfile,
 	source: &str,
 ) -> Vec<String> {
 	let mut names = Vec::new();
-	let mut cursor = body.walk();
-	for child in body.named_children(&mut cursor) {
-		if !member_types.iter().any(|kind| kind == child.kind()) {
-			continue;
-		}
+	for child in class_member_nodes(profile, class_node) {
 		if let Some(decl) = declaration_for(profile, child) {
 			if let Some(n) = declaration_name(source, child, decl) {
 				names.push(n);

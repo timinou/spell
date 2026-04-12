@@ -1,0 +1,126 @@
+#+TITLE: Add org language profile to pi-code-engine
+#+STATE: DONE
+#+SESSION_ID: 14b7e68d6deda817
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T15-52-23-735Z_14b7e68d6deda817.jsonl]]
+#+CUSTOM_ID: FEAT-528-org-language-profile
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: code-engine
+
+NOTE [2026-04-12]: Completed under PLAN-200 unified buffer execution; pi-code-engine now registers org as a builtin language profile.
+
+* Initial Message
+
+⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+                                                                                            ╭────────────╮
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine                        │ 🗺 Plotting │
+ Tool execution failed due to an error: Anthropic messages stream stalled while streaming in╰────────────╯
+ tool arguments
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl
+ ID: 14b7be567342b8fe
+
+
+
+Think from first principles about the edit actions that the rust pi-code-engine crate does, and how it ends up creating this mess. Find the root cause, TDD fix it once and for all with proper trait choices and concurrency models on the CRDT (if that's the root cause
+
+* Goal
+
+Wire =tree-sitter-org= (already vendored at =crates/tree-sitter-org/=) into
+=pi-code-engine='s =LanguageRegistry= so org files can be opened as =CodeBuffer= with
+full tree-sitter structural editing.
+
+* Tree-sitter-org AST node types (from existing =pi-org-engine= usage)
+
+Key node hierarchy:
+- =document= → top-level root
+  - =section= → contains headline + body + sub-sections
+    - =headline= → contains =stars=, =item= (title + optional TODO keyword), =tag_list=
+    - =property_drawer= → contains =property= nodes
+    - =body= → free-form content
+    - =section= → nested sub-sections
+
+Frontmatter (=#+KEY: value=) nodes: =directive= at document level.
+
+* Files to modify
+
+- =crates/pi-code-engine/Cargo.toml= — add =tree-sitter-org = { path = \"../tree-sitter-org\" }= dependency
+- =crates/pi-code-engine/src/language/mod.rs= — add =fn org_profile() -> LanguageProfile= and register in =with_builtins()=
+- =crates/pi-code-engine/build.rs= — add org grammar data extraction (production_rules, inverse_rules, all_types, supertypes) using the tree-sitter node-types.json
+
+* Language profile design
+
+#+BEGIN_SRC rust
+fn org_profile() -> LanguageProfile {
+    let gd = generated::org::grammar();
+    LanguageProfile {
+        id: LanguageId::new(\"org\"),
+        extensions: vec![\"org\".into()],
+        declarations: vec![
+            // Headings are the primary declarations
+            DeclarationPattern {
+                node_types: vec![\"section\".into()],
+                name_field: \"headline\".into(),  // or first child
+                kind: \"heading\".into(),
+                body_field: Some(\"body\".into()),
+                visibility: None,
+            },
+        ],
+        class_like: vec![
+            // Sections contain sub-sections (headings contain sub-headings)
+            ClassLikePattern {
+                node_type: \"section\".into(),
+                body_field: \"body\".into(),
+                member_types: vec![\"section\".into()],
+            },
+        ],
+        imports: vec![],
+        exports: vec![],
+        references: vec![],
+        separators: vec![],
+        production_rules: gd.production_rules,
+        inverse_rules: gd.inverse_rules,
+        all_types: gd.all_types,
+        supertypes: gd.supertypes,
+        ts_language: tree_sitter_org::LANGUAGE.into(),
+    }
+}
+#+END_SRC
+
+Note: the exact field names depend on what =tree-sitter-org='s =node-types.json= provides.
+The build.rs grammar extraction step will reveal the actual field names. Cross-reference
+with how =pi-org-engine/src/buffer.rs= walks the tree (=headline=, =property_drawer=, =body=,
+=section=, =stars=, =item=, =property=, =tag_list=).
+
+* Build-time grammar extraction
+
+Follow the same pattern as other languages in =build.rs=. The =tree-sitter-org= crate's
+=src/node-types.json= must be read at build time to generate =production_rules=,
+=inverse_rules=, =all_types=, and =supertypes= in =src/language/generated.rs=.
+
+* Verification
+
+- =cargo check -p pi-code-engine= passes
+- =cargo test -p pi-code-engine= — new test: =org_profile_has_expected_declarations()=
+- =cargo test -p pi-code-engine= — new test: parse a sample org file, verify tree root is =document=
+- Existing =all_builtin_profiles_can_create_parser= test passes with org included
+- =registry_with_builtins_loads_all_five_languages= becomes six languages
+
+* Edge cases
+
+- tree-sitter-org may not use named fields for headline children — if =child_by_field_name= doesn't work, the profile should use positional patterns
+- Frontmatter (=#+KEY: value=) lines may parse as =directive= nodes — verify and include in declarations if needed
+- The =outline()= function must produce useful output for org files (headings with their titles, not just \"section\" nodes)

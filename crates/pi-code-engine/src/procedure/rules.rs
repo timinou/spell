@@ -2,7 +2,7 @@ use regex::Regex;
 
 use crate::language::LanguageProfile;
 
-#[derive(Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RuleExpr {
 	Types(Vec<String>),
 	Rule(String),

@@ -1,22 +1,28 @@
-//! Org buffer: parse org files and extract items using tree-sitter.
+//! Org buffer: parse org files and extract items using the shared CodeBuffer.
 //!
 //! The tree-sitter grammar gives us document structure (headings, drawers,
 //! body). We extract semantic information (TODO states, properties, CLOCK
 //! lines, timestamps) by walking the AST and interpreting text content.
 
-use std::collections::HashMap;
+use std::{
+	collections::HashMap,
+	sync::{Arc, OnceLock},
+};
 
-use tree_sitter::{Node, Parser};
+use pi_code_engine::{
+	buffer::CodeBuffer,
+	language::{LanguageId, LanguageRegistry},
+};
+use tree_sitter::Node;
 
 use crate::{
 	clock::{self, ClockEntry},
 	item::OrgItem,
 };
 
-/// A parsed org-mode buffer.
+/// A parsed org-mode buffer backed by the shared CodeBuffer implementation.
 pub struct OrgBuffer {
-	source: String,
-	tree:   tree_sitter::Tree,
+	buffer: CodeBuffer,
 }
 
 struct ExtractOptions<'a> {
@@ -27,30 +33,27 @@ struct ExtractOptions<'a> {
 	include_body:  bool,
 }
 
+fn language_registry() -> Arc<LanguageRegistry> {
+	static REGISTRY: OnceLock<Arc<LanguageRegistry>> = OnceLock::new();
+	REGISTRY
+		.get_or_init(|| Arc::new(LanguageRegistry::with_builtins().expect("org language profile")))
+		.clone()
+}
+
 impl OrgBuffer {
 	/// Parse an org-mode source string.
 	pub fn parse(source: &str) -> Result<Self, &'static str> {
-		let mut parser = Parser::new();
-		parser
-			.set_language(&tree_sitter_org::LANGUAGE.into())
-			.map_err(|_| "Failed to load org grammar")?;
-		let tree = parser
-			.parse(source, None)
-			.ok_or("Failed to parse org source")?;
-		Ok(Self { source: source.to_string(), tree })
+		let buffer = CodeBuffer::from_str(source, LanguageId::new("org"), language_registry())
+			.map_err(|_| "Failed to parse org source")?;
+		Ok(Self { buffer })
 	}
 
 	/// Get the raw source text.
-	pub fn source(&self) -> &str {
-		&self.source
+	pub fn source(&self) -> String {
+		self.buffer.source()
 	}
 
 	/// Extract all items from the buffer.
-	///
-	/// `todo_keywords`: set of recognized TODO keywords.
-	/// `category`, `dir`: metadata to attach to each item.
-	/// `file_path`: absolute path to the source file.
-	/// `include_body`: whether to include body text.
 	pub fn extract_items(
 		&self,
 		todo_keywords: &[&str],
@@ -59,272 +62,265 @@ impl OrgBuffer {
 		file_path: &str,
 		include_body: bool,
 	) -> Vec<OrgItem> {
-		let root = self.tree.root_node();
-		let mut items = Vec::new();
-
-		// Try file-level item from frontmatter
-		if let Some(file_item) =
-			self.extract_file_level_item(todo_keywords, category, dir, file_path, include_body)
-		{
-			items.push(file_item);
-		}
-
-		// Extract heading-level items
-		let options = ExtractOptions { todo_keywords, category, dir, file_path, include_body };
-		self.extract_headings(root, &options, &mut items);
-
-		items
+		extract_items_from_buffer(&self.buffer, todo_keywords, category, dir, file_path, include_body)
 	}
 
-	/// Extract a file-level item from `#+KEY: value` frontmatter.
-	fn extract_file_level_item(
-		&self,
-		todo_keywords: &[&str],
-		category: &str,
-		dir: &str,
-		file_path: &str,
-		include_body: bool,
-	) -> Option<OrgItem> {
-		let mut properties = HashMap::new();
-		let mut title = String::new();
-		let mut state = String::new();
-		let mut frontmatter_end = 0usize;
+	pub fn code_buffer(&self) -> &CodeBuffer {
+		&self.buffer
+	}
+}
 
-		for line in self.source.lines() {
-			if let Some(rest) = line.strip_prefix("#+") {
-				if let Some((key, value)) = rest.split_once(':') {
-					let key = key.trim().to_uppercase();
-					let value = value.trim().to_string();
-					match key.as_str() {
-						"TITLE" => title = value,
-						"STATE" => {
-							if todo_keywords.contains(&value.as_str()) {
-								state = value;
-							}
-						},
-						_ => {
-							properties.insert(key, value);
-						},
+pub fn extract_items_from_source(
+	source: &str,
+	todo_keywords: &[&str],
+	category: &str,
+	dir: &str,
+	file_path: &str,
+	include_body: bool,
+) -> Result<Vec<OrgItem>, &'static str> {
+	let buffer = CodeBuffer::from_str(source, LanguageId::new("org"), language_registry())
+		.map_err(|_| "Failed to parse org source")?;
+	Ok(extract_items_from_buffer(&buffer, todo_keywords, category, dir, file_path, include_body))
+}
+
+pub fn extract_items_from_buffer(
+	buffer: &CodeBuffer,
+	todo_keywords: &[&str],
+	category: &str,
+	dir: &str,
+	file_path: &str,
+	include_body: bool,
+) -> Vec<OrgItem> {
+	let source = buffer.source();
+	let root = buffer.tree().root_node();
+	let mut items = Vec::new();
+
+	if let Some(file_item) =
+		extract_file_level_item(&source, todo_keywords, category, dir, file_path, include_body)
+	{
+		items.push(file_item);
+	}
+
+	let options = ExtractOptions { todo_keywords, category, dir, file_path, include_body };
+	extract_headings(&source, root, &options, &mut items);
+	items
+}
+
+fn extract_file_level_item(
+	source: &str,
+	todo_keywords: &[&str],
+	category: &str,
+	dir: &str,
+	file_path: &str,
+	include_body: bool,
+) -> Option<OrgItem> {
+	let mut properties = HashMap::new();
+	let mut title = String::new();
+	let mut state = String::new();
+	let mut frontmatter_end = 0usize;
+
+	for line in source.lines() {
+		if let Some(rest) = line.strip_prefix("#+") {
+			if let Some((key, value)) = rest.split_once(':') {
+				let key = key.trim().to_uppercase();
+				let value = value.trim().to_string();
+				match key.as_str() {
+					"TITLE" => title = value,
+					"STATE" => {
+						if todo_keywords.contains(&value.as_str()) {
+							state = value;
+						}
+					},
+					_ => {
+						properties.insert(key, value);
+					},
+				}
+			}
+			frontmatter_end += line.len() + 1;
+		} else {
+			break;
+		}
+	}
+
+	let custom_id = properties.get("CUSTOM_ID")?.clone();
+	let body = if include_body {
+		let body_start = source[frontmatter_end..]
+			.find(|c: char| !c.is_whitespace())
+			.map_or(source.len(), |pos| frontmatter_end + pos);
+		let body_text = source[body_start..].trim_end();
+		if body_text.is_empty() {
+			None
+		} else {
+			Some(body_text.to_string())
+		}
+	} else {
+		None
+	};
+	let clocks = parse_clocks_from_range(source, frontmatter_end, source.len());
+
+	Some(OrgItem {
+		id: custom_id,
+		title,
+		state,
+		category: category.to_string(),
+		dir: dir.to_string(),
+		file: file_path.to_string(),
+		line: 1,
+		level: 0,
+		properties,
+		body,
+		clocks,
+		byte_range: (0, source.len()),
+		children: Vec::new(),
+	})
+}
+
+fn extract_headings(
+	source: &str,
+	node: Node<'_>,
+	options: &ExtractOptions<'_>,
+	items: &mut Vec<OrgItem>,
+) {
+	let mut cursor = node.walk();
+	if !cursor.goto_first_child() {
+		return;
+	}
+
+	loop {
+		let child = cursor.node();
+		if child.kind() == "section"
+			&& let Some(item) = extract_section_item(source, child, options)
+		{
+			items.push(item);
+		}
+		if !cursor.goto_next_sibling() {
+			break;
+		}
+	}
+}
+
+fn extract_section_item(
+	source: &str,
+	section: Node<'_>,
+	options: &ExtractOptions<'_>,
+) -> Option<OrgItem> {
+	let mut cursor = section.walk();
+	if !cursor.goto_first_child() {
+		return None;
+	}
+
+	let headline = cursor.node();
+	if headline.kind() != "headline" {
+		return None;
+	}
+
+	let (level, state, title) = parse_headline(source, headline, options.todo_keywords);
+	let mut properties = HashMap::new();
+	let mut body_parts = Vec::new();
+	let mut clocks = Vec::new();
+	let mut children = Vec::new();
+
+	while cursor.goto_next_sibling() {
+		let child = cursor.node();
+		match child.kind() {
+			"property_drawer" => extract_properties(source, child, &mut properties),
+			"body" => {
+				if options.include_body {
+					let text = node_text(source, child).trim().to_string();
+					if !text.is_empty() {
+						body_parts.push(text);
 					}
 				}
-				frontmatter_end += line.len() + 1; // +1 for newline
-			} else {
-				break;
-			}
+				for line in node_text(source, child).lines() {
+					if let Some(entry) = clock::parse_clock_line(line) {
+						clocks.push(entry);
+					}
+				}
+			},
+			"section" => {
+				if let Some(child_item) = extract_section_item(source, child, options) {
+					children.push(child_item);
+				}
+			},
+			_ => {
+				if options.include_body {
+					let text = node_text(source, child).trim().to_string();
+					if !text.is_empty() {
+						body_parts.push(text);
+					}
+				}
+				for line in node_text(source, child).lines() {
+					if let Some(entry) = clock::parse_clock_line(line) {
+						clocks.push(entry);
+					}
+				}
+			},
 		}
-
-		let custom_id = properties.get("CUSTOM_ID")?.clone();
-
-		let body = if include_body {
-			let body_start = self.source[frontmatter_end..]
-				.find(|c: char| !c.is_whitespace())
-				.map_or(self.source.len(), |pos| frontmatter_end + pos);
-			let body_text = self.source[body_start..].trim_end();
-			if body_text.is_empty() {
-				None
-			} else {
-				Some(body_text.to_string())
-			}
-		} else {
-			None
-		};
-
-		// Parse CLOCK entries from body
-		let clocks = self.parse_clocks_from_range(frontmatter_end, self.source.len());
-
-		Some(OrgItem {
-			id: custom_id,
-			title,
-			state,
-			category: category.to_string(),
-			dir: dir.to_string(),
-			file: file_path.to_string(),
-			line: 1,
-			level: 0,
-			properties,
-			body,
-			clocks,
-			byte_range: (0, self.source.len()),
-			children: Vec::new(),
-		})
 	}
 
-	/// Walk the AST and extract heading-level items.
-	fn extract_headings(&self, node: Node, options: &ExtractOptions<'_>, items: &mut Vec<OrgItem>) {
-		let mut cursor = node.walk();
-		if !cursor.goto_first_child() {
-			return;
-		}
+	let custom_id = properties.get("CUSTOM_ID").cloned();
+	if state.is_empty() && custom_id.is_none() {
+		return None;
+	}
 
+	let id = custom_id.unwrap_or_default();
+	let body = if options.include_body && !body_parts.is_empty() {
+		Some(body_parts.join("\n"))
+	} else {
+		None
+	};
+
+	Some(OrgItem {
+		id,
+		title,
+		state,
+		category: options.category.to_string(),
+		dir: options.dir.to_string(),
+		file: options.file_path.to_string(),
+		line: headline.start_position().row + 1,
+		level,
+		properties,
+		body,
+		clocks,
+		byte_range: (section.start_byte(), section.end_byte()),
+		children,
+	})
+}
+
+fn parse_headline(
+	source: &str,
+	headline: Node<'_>,
+	todo_keywords: &[&str],
+) -> (usize, String, String) {
+	let mut level = 0usize;
+	let mut state = String::new();
+	let mut title_parts = Vec::new();
+
+	let mut cursor = headline.walk();
+	if cursor.goto_first_child() {
 		loop {
 			let child = cursor.node();
-			if child.kind() == "section"
-				&& let Some(item) = self.extract_section_item(child, options)
-			{
-				items.push(item);
-			}
-			if !cursor.goto_next_sibling() {
-				break;
-			}
-		}
-	}
-
-	/// Extract an item from a section node (contains headline + body +
-	/// sub-sections).
-	fn extract_section_item(&self, section: Node, options: &ExtractOptions<'_>) -> Option<OrgItem> {
-		let mut cursor = section.walk();
-		if !cursor.goto_first_child() {
-			return None;
-		}
-
-		// First child should be headline
-		let headline = cursor.node();
-		if headline.kind() != "headline" {
-			return None;
-		}
-
-		let (level, state, title) = self.parse_headline(headline, options.todo_keywords);
-
-		// Gather properties, body, clock entries, and children
-		let mut properties = HashMap::new();
-		let mut body_parts = Vec::new();
-		let mut clocks = Vec::new();
-		let mut children = Vec::new();
-
-		while cursor.goto_next_sibling() {
-			let child = cursor.node();
 			match child.kind() {
-				"property_drawer" => {
-					self.extract_properties(child, &mut properties);
-				},
-				"body" => {
-					if options.include_body {
-						let text = self.node_text(child).trim().to_string();
-						if !text.is_empty() {
-							body_parts.push(text);
-						}
-					}
-					// Parse CLOCK entries from body
-					let body_text = self.node_text(child);
-					for line in body_text.lines() {
-						if let Some(entry) = clock::parse_clock_line(line) {
-							clocks.push(entry);
-						}
-					}
-				},
-				"section" => {
-					// Sub-section = potential child item
-					if let Some(child_item) = self.extract_section_item(child, options) {
-						children.push(child_item);
-					}
-				},
-				_ => {
-					// Other content nodes (paragraphs, lists, etc.) — part of body
-					if options.include_body {
-						let text = self.node_text(child).trim().to_string();
-						if !text.is_empty() {
-							body_parts.push(text);
-						}
-					}
-					// Check for CLOCK entries in any content
-					let text = self.node_text(child);
-					for line in text.lines() {
-						if let Some(entry) = clock::parse_clock_line(line) {
-							clocks.push(entry);
-						}
-					}
-				},
-			}
-		}
-
-		let custom_id = properties.get("CUSTOM_ID").cloned();
-
-		// Only include items that have a TODO state or CUSTOM_ID
-		if state.is_empty() && custom_id.is_none() {
-			return None;
-		}
-
-		let id = custom_id.unwrap_or_default();
-		let body = if options.include_body && !body_parts.is_empty() {
-			Some(body_parts.join("\n"))
-		} else {
-			None
-		};
-
-		Some(OrgItem {
-			id,
-			title,
-			state,
-			category: options.category.to_string(),
-			dir: options.dir.to_string(),
-			file: options.file_path.to_string(),
-			line: headline.start_position().row + 1, // 1-indexed
-			level,
-			properties,
-			body,
-			clocks,
-			byte_range: (section.start_byte(), section.end_byte()),
-			children,
-		})
-	}
-
-	/// Parse a headline node to extract level, state, and title.
-	fn parse_headline(&self, headline: Node, todo_keywords: &[&str]) -> (usize, String, String) {
-		let mut level = 0usize;
-		let mut state = String::new();
-		let mut title_parts = Vec::new();
-
-		let mut cursor = headline.walk();
-		if cursor.goto_first_child() {
-			loop {
-				let child = cursor.node();
-				match child.kind() {
-					"stars" => {
-						level = self.node_text(child).len();
-					},
-					"item" => {
-						let text = self.node_text(child).trim().to_string();
-						// First word might be a TODO keyword
-						if state.is_empty() {
-							let first_word = text.split_whitespace().next().unwrap_or("");
-							if todo_keywords.contains(&first_word) {
-								state = first_word.to_string();
-								let rest = text[first_word.len()..].trim().to_string();
-								if !rest.is_empty() {
-									title_parts.push(rest);
-								}
-							} else {
-								title_parts.push(text);
+				"stars" => level = node_text(source, child).len(),
+				"item" => {
+					let text = node_text(source, child).trim().to_string();
+					if state.is_empty() {
+						let first_word = text.split_whitespace().next().unwrap_or("");
+						if todo_keywords.contains(&first_word) {
+							state = first_word.to_string();
+							let rest = text[first_word.len()..].trim().to_string();
+							if !rest.is_empty() {
+								title_parts.push(rest);
 							}
 						} else {
 							title_parts.push(text);
 						}
-					},
-					"tag_list" => {
-						// Tags are not part of the title
-					},
-					_ => {},
-				}
-				if !cursor.goto_next_sibling() {
-					break;
-				}
-			}
-		}
-
-		let title = title_parts.join(" ");
-		(level, state, title)
-	}
-
-	/// Extract properties from a `property_drawer` node.
-	fn extract_properties(&self, drawer: Node, properties: &mut HashMap<String, String>) {
-		let mut cursor = drawer.walk();
-		if !cursor.goto_first_child() {
-			return;
-		}
-		loop {
-			let child = cursor.node();
-			if child.kind() == "property" {
-				self.extract_single_property(child, properties);
+					} else {
+						title_parts.push(text);
+					}
+				},
+				"tag_list" => {},
+				_ => {},
 			}
 			if !cursor.goto_next_sibling() {
 				break;
@@ -332,31 +328,45 @@ impl OrgBuffer {
 		}
 	}
 
-	/// Extract a single property from a property node.
-	fn extract_single_property(&self, prop: Node, properties: &mut HashMap<String, String>) {
-		let text = self.node_text(prop).trim().to_string();
-		// Property format: `:KEY: value`
-		if let Some(rest) = text.strip_prefix(':')
-			&& let Some((key, value)) = rest.split_once(':')
-		{
-			let key = key.trim().to_string();
-			let value = value.trim().to_string();
-			if !key.is_empty() {
-				properties.insert(key, value);
-			}
+	(level, state, title_parts.join(" "))
+}
+
+fn extract_properties(source: &str, drawer: Node<'_>, properties: &mut HashMap<String, String>) {
+	let mut cursor = drawer.walk();
+	if !cursor.goto_first_child() {
+		return;
+	}
+	loop {
+		let child = cursor.node();
+		if child.kind() == "property" {
+			extract_single_property(source, child, properties);
+		}
+		if !cursor.goto_next_sibling() {
+			break;
 		}
 	}
+}
 
-	/// Parse CLOCK entries from a byte range.
-	fn parse_clocks_from_range(&self, start: usize, end: usize) -> Vec<ClockEntry> {
-		let text = &self.source[start..end.min(self.source.len())];
-		text.lines().filter_map(clock::parse_clock_line).collect()
+fn extract_single_property(source: &str, prop: Node<'_>, properties: &mut HashMap<String, String>) {
+	let text = node_text(source, prop).trim().to_string();
+	if let Some(rest) = text.strip_prefix(':')
+		&& let Some((key, value)) = rest.split_once(':')
+	{
+		let key = key.trim().to_string();
+		let value = value.trim().to_string();
+		if !key.is_empty() {
+			properties.insert(key, value);
+		}
 	}
+}
 
-	/// Get the text content of a node.
-	fn node_text(&self, node: Node) -> &str {
-		&self.source[node.byte_range()]
-	}
+fn parse_clocks_from_range(source: &str, start: usize, end: usize) -> Vec<ClockEntry> {
+	let text = &source[start..end.min(source.len())];
+	text.lines().filter_map(clock::parse_clock_line).collect()
+}
+
+fn node_text<'a>(source: &'a str, node: Node<'_>) -> &'a str {
+	&source[node.byte_range()]
 }
 
 #[cfg(test)]
@@ -423,5 +433,24 @@ mod tests {
 		let buf = OrgBuffer::parse(src).unwrap();
 		let items = buf.extract_items(TODO_KEYWORDS, "test", "tasks", "/test.org", false);
 		assert_eq!(items[0].blockers(), vec!["T-001", "T-003"]);
+	}
+
+	#[test]
+	fn extract_items_from_buffer_matches_wrapper() {
+		let src = "* DOING Task\n:PROPERTIES:\n:CUSTOM_ID: T-001\n:END:\nBody text.\n";
+		let buf = OrgBuffer::parse(src).unwrap();
+		let from_wrapper = buf.extract_items(TODO_KEYWORDS, "test", "tasks", "/test.org", true);
+		let from_buffer = extract_items_from_buffer(
+			buf.code_buffer(),
+			TODO_KEYWORDS,
+			"test",
+			"tasks",
+			"/test.org",
+			true,
+		);
+		assert_eq!(from_wrapper.len(), from_buffer.len());
+		assert_eq!(from_wrapper[0].id, from_buffer[0].id);
+		assert_eq!(from_wrapper[0].title, from_buffer[0].title);
+		assert_eq!(from_wrapper[0].body, from_buffer[0].body);
 	}
 }

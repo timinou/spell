@@ -40,7 +40,7 @@ impl LanguageRegistry {
 	}
 
 	/// Create a registry with all built-in profiles (TypeScript, Rust, Python,
-	/// Typst, Elixir).
+	/// Typst, Elixir, Org).
 	pub fn with_builtins() -> Result<Self> {
 		let mut reg = Self::new();
 		reg.register(typescript_profile())?;
@@ -48,6 +48,7 @@ impl LanguageRegistry {
 		reg.register(python_profile())?;
 		reg.register(typst_profile())?;
 		reg.register(elixir_profile())?;
+		reg.register(org_profile())?;
 		Ok(reg)
 	}
 
@@ -115,57 +116,57 @@ fn typescript_profile() -> LanguageProfile {
 		declarations:     vec![
 			DeclarationPattern {
 				node_types: vec!["function_declaration".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "function".into(),
-				body_field: Some("body".into()),
+				body:       BodyExtractor::Field { name: "body".into() },
 				visibility: None,
 			},
 			DeclarationPattern {
 				node_types: vec!["class_declaration".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "class".into(),
-				body_field: Some("body".into()),
+				body:       BodyExtractor::Field { name: "body".into() },
 				visibility: None,
 			},
 			DeclarationPattern {
 				node_types: vec!["interface_declaration".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "interface".into(),
-				body_field: Some("body".into()),
+				body:       BodyExtractor::Field { name: "body".into() },
 				visibility: None,
 			},
 			DeclarationPattern {
 				node_types: vec!["type_alias_declaration".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "type".into(),
-				body_field: None,
+				body:       BodyExtractor::None,
 				visibility: None,
 			},
 			DeclarationPattern {
 				node_types: vec!["enum_declaration".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "enum".into(),
-				body_field: Some("body".into()),
+				body:       BodyExtractor::Field { name: "body".into() },
 				visibility: None,
 			},
 			DeclarationPattern {
 				node_types: vec!["lexical_declaration".into(), "variable_declaration".into()],
-				name_field: "declarator".into(),
+				name:       NameExtractor::Field { name: "declarator".into() },
 				kind:       "variable".into(),
-				body_field: None,
+				body:       BodyExtractor::None,
 				visibility: None,
 			},
 			DeclarationPattern {
 				node_types: vec!["method_definition".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "method".into(),
-				body_field: Some("body".into()),
+				body:       BodyExtractor::Field { name: "body".into() },
 				visibility: None,
 			},
 		],
 		class_like:       vec![ClassLikePattern {
 			node_type:    "class_declaration".into(),
-			body_field:   "body".into(),
+			body:         ClassBodyExtractor::Field { name: "body".into() },
 			member_types: vec![
 				"method_definition".into(),
 				"public_field_definition".into(),
@@ -191,6 +192,7 @@ fn typescript_profile() -> LanguageProfile {
 			],
 		}],
 		separators:       vec![",".into(), ";".into()],
+		procedures:       HashMap::new(),
 		production_rules: gd.production_rules,
 		inverse_rules:    gd.inverse_rules,
 		all_types:        gd.all_types,
@@ -207,71 +209,71 @@ fn rust_profile() -> LanguageProfile {
 		declarations:     vec![
 			DeclarationPattern {
 				node_types: vec!["function_item".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "fn".into(),
-				body_field: Some("body".into()),
+				body:       BodyExtractor::Field { name: "body".into() },
 				visibility: Some("pub".into()),
 			},
 			DeclarationPattern {
 				node_types: vec!["struct_item".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "struct".into(),
-				body_field: Some("body".into()),
+				body:       BodyExtractor::Field { name: "body".into() },
 				visibility: Some("pub".into()),
 			},
 			DeclarationPattern {
 				node_types: vec!["enum_item".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "enum".into(),
-				body_field: Some("body".into()),
+				body:       BodyExtractor::Field { name: "body".into() },
 				visibility: Some("pub".into()),
 			},
 			DeclarationPattern {
 				node_types: vec!["impl_item".into()],
-				name_field: "type".into(),
+				name:       NameExtractor::Field { name: "type".into() },
 				kind:       "impl".into(),
-				body_field: Some("body".into()),
+				body:       BodyExtractor::Field { name: "body".into() },
 				visibility: None,
 			},
 			DeclarationPattern {
 				node_types: vec!["trait_item".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "trait".into(),
-				body_field: Some("body".into()),
+				body:       BodyExtractor::Field { name: "body".into() },
 				visibility: Some("pub".into()),
 			},
 			DeclarationPattern {
 				node_types: vec!["mod_item".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "mod".into(),
-				body_field: Some("body".into()),
+				body:       BodyExtractor::Field { name: "body".into() },
 				visibility: Some("pub".into()),
 			},
 			DeclarationPattern {
 				node_types: vec!["type_item".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "type".into(),
-				body_field: None,
+				body:       BodyExtractor::None,
 				visibility: Some("pub".into()),
 			},
 			DeclarationPattern {
 				node_types: vec!["const_item".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "const".into(),
-				body_field: None,
+				body:       BodyExtractor::None,
 				visibility: Some("pub".into()),
 			},
 			DeclarationPattern {
 				node_types: vec!["static_item".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "static".into(),
-				body_field: None,
+				body:       BodyExtractor::None,
 				visibility: Some("pub".into()),
 			},
 		],
 		class_like:       vec![ClassLikePattern {
 			node_type:    "impl_item".into(),
-			body_field:   "body".into(),
+			body:         ClassBodyExtractor::Field { name: "body".into() },
 			member_types: vec!["function_item".into(), "const_item".into(), "type_item".into()],
 		}],
 		imports:          vec![ImportPattern {
@@ -293,6 +295,7 @@ fn rust_profile() -> LanguageProfile {
 			],
 		}],
 		separators:       vec![",".into(), ";".into()],
+		procedures:       HashMap::new(),
 		production_rules: gd.production_rules,
 		inverse_rules:    gd.inverse_rules,
 		all_types:        gd.all_types,
@@ -309,29 +312,29 @@ fn python_profile() -> LanguageProfile {
 		declarations:     vec![
 			DeclarationPattern {
 				node_types: vec!["function_definition".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "function".into(),
-				body_field: Some("body".into()),
+				body:       BodyExtractor::Field { name: "body".into() },
 				visibility: None,
 			},
 			DeclarationPattern {
 				node_types: vec!["class_definition".into()],
-				name_field: "name".into(),
+				name:       NameExtractor::Field { name: "name".into() },
 				kind:       "class".into(),
-				body_field: Some("body".into()),
+				body:       BodyExtractor::Field { name: "body".into() },
 				visibility: None,
 			},
 			DeclarationPattern {
 				node_types: vec!["decorated_definition".into()],
-				name_field: "definition".into(),
+				name:       NameExtractor::Field { name: "definition".into() },
 				kind:       "decorated".into(),
-				body_field: None,
+				body:       BodyExtractor::None,
 				visibility: None,
 			},
 		],
 		class_like:       vec![ClassLikePattern {
 			node_type:    "class_definition".into(),
-			body_field:   "body".into(),
+			body:         ClassBodyExtractor::Field { name: "body".into() },
 			member_types: vec!["function_definition".into(), "decorated_definition".into()],
 		}],
 		imports:          vec![
@@ -352,6 +355,7 @@ fn python_profile() -> LanguageProfile {
 			exclude_parent_types: vec!["comment".into(), "string".into()],
 		}],
 		separators:       vec![",".into()],
+		procedures:       HashMap::new(),
 		production_rules: gd.production_rules,
 		inverse_rules:    gd.inverse_rules,
 		all_types:        gd.all_types,
@@ -368,23 +372,23 @@ fn typst_profile() -> LanguageProfile {
 		declarations:     vec![
 			DeclarationPattern {
 				node_types: vec!["let".into()],
-				name_field: "pattern".into(),
+				name:       NameExtractor::Field { name: "pattern".into() },
 				kind:       "let".into(),
-				body_field: Some("value".into()),
+				body:       BodyExtractor::Field { name: "value".into() },
 				visibility: None,
 			},
 			DeclarationPattern {
 				node_types: vec!["import".into()],
-				name_field: "import".into(),
+				name:       NameExtractor::Field { name: "import".into() },
 				kind:       "import".into(),
-				body_field: None,
+				body:       BodyExtractor::None,
 				visibility: None,
 			},
 			DeclarationPattern {
 				node_types: vec!["show".into()],
-				name_field: "pattern".into(),
+				name:       NameExtractor::Field { name: "pattern".into() },
 				kind:       "show".into(),
-				body_field: Some("value".into()),
+				body:       BodyExtractor::Field { name: "value".into() },
 				visibility: None,
 			},
 		],
@@ -400,6 +404,7 @@ fn typst_profile() -> LanguageProfile {
 			exclude_parent_types: vec!["comment".into(), "string".into()],
 		}],
 		separators:       vec![",".into()],
+		procedures:       HashMap::new(),
 		production_rules: gd.production_rules,
 		inverse_rules:    gd.inverse_rules,
 		all_types:        gd.all_types,
@@ -415,9 +420,9 @@ fn elixir_profile() -> LanguageProfile {
 		extensions:       vec!["ex".into(), "exs".into()],
 		declarations:     vec![DeclarationPattern {
 			node_types: vec!["call".into()],
-			name_field: "target".into(),
+			name:       NameExtractor::Field { name: "target".into() },
 			kind:       "def".into(),
-			body_field: Some("do_block".into()),
+			body:       BodyExtractor::Field { name: "do_block".into() },
 			visibility: None,
 		}],
 		class_like:       vec![],
@@ -432,6 +437,7 @@ fn elixir_profile() -> LanguageProfile {
 			exclude_parent_types: vec!["comment".into(), "string".into()],
 		}],
 		separators:       vec![",".into()],
+		procedures:       HashMap::new(),
 		production_rules: gd.production_rules,
 		inverse_rules:    gd.inverse_rules,
 		all_types:        gd.all_types,
@@ -440,18 +446,55 @@ fn elixir_profile() -> LanguageProfile {
 	}
 }
 
+fn org_profile() -> LanguageProfile {
+	let gd = generated::org::grammar();
+	LanguageProfile {
+		id:               LanguageId::new("org"),
+		extensions:       vec!["org".into()],
+		declarations:     vec![DeclarationPattern {
+			node_types: vec!["section".into()],
+			name:       NameExtractor::ChildField {
+				child_type: "headline".into(),
+				field:      "item".into(),
+			},
+			kind:       "heading".into(),
+			body:       BodyExtractor::AfterChild { child_type: "headline".into() },
+			visibility: None,
+		}],
+		class_like:       vec![ClassLikePattern {
+			node_type:    "section".into(),
+			body:         ClassBodyExtractor::Direct,
+			member_types: vec!["section".into()],
+		}],
+		imports:          vec![],
+		exports:          vec![],
+		references:       vec![ReferencePattern {
+			node_type:            "expr".into(),
+			exclude_parent_types: vec!["comment".into()],
+		}],
+		separators:       vec![" ".into(), ":".into()],
+		procedures:       HashMap::new(),
+		production_rules: gd.production_rules,
+		inverse_rules:    gd.inverse_rules,
+		all_types:        gd.all_types,
+		supertypes:       gd.supertypes,
+		ts_language:      tree_sitter_org::LANGUAGE.into(),
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
 
 	#[test]
-	fn registry_with_builtins_loads_all_five_languages() {
+	fn registry_with_builtins_loads_all_six_languages() {
 		let reg = LanguageRegistry::with_builtins().expect("builtins should load");
 		assert!(reg.get(&LanguageId::new("typescript")).is_some());
 		assert!(reg.get(&LanguageId::new("rust")).is_some());
 		assert!(reg.get(&LanguageId::new("python")).is_some());
 		assert!(reg.get(&LanguageId::new("typst")).is_some());
 		assert!(reg.get(&LanguageId::new("elixir")).is_some());
+		assert!(reg.get(&LanguageId::new("org")).is_some());
 		assert!(reg.get(&LanguageId::new("haskell")).is_none());
 	}
 
@@ -459,7 +502,6 @@ mod tests {
 	fn registry_match_path_resolves_extensions() {
 		let reg = LanguageRegistry::with_builtins().unwrap();
 
-		// TypeScript variants
 		let ts = reg.match_path(Path::new("src/foo.ts"));
 		assert_eq!(ts.unwrap().id.as_str(), "typescript");
 		let tsx = reg.match_path(Path::new("component.tsx"));
@@ -467,23 +509,22 @@ mod tests {
 		let js = reg.match_path(Path::new("index.js"));
 		assert_eq!(js.unwrap().id.as_str(), "typescript");
 
-		// Rust
 		let rs = reg.match_path(Path::new("src/main.rs"));
 		assert_eq!(rs.unwrap().id.as_str(), "rust");
 
-		// Python
 		let py = reg.match_path(Path::new("script.py"));
 		assert_eq!(py.unwrap().id.as_str(), "python");
 		let pyi = reg.match_path(Path::new("types.pyi"));
 		assert_eq!(pyi.unwrap().id.as_str(), "python");
 
-		// Elixir
 		let ex = reg.match_path(Path::new("lib/app.ex"));
 		assert_eq!(ex.unwrap().id.as_str(), "elixir");
 		let exs = reg.match_path(Path::new("test/app_test.exs"));
 		assert_eq!(exs.unwrap().id.as_str(), "elixir");
 
-		// Unknown
+		let org = reg.match_path(Path::new("notes.org"));
+		assert_eq!(org.unwrap().id.as_str(), "org");
+
 		assert!(reg.match_path(Path::new("file.xyz")).is_none());
 	}
 
@@ -508,7 +549,6 @@ mod tests {
 		assert!(!typst.production_rules.is_empty(), "Typst production rules should not be empty");
 		assert!(!typst.all_types.is_empty(), "Typst all_types should not be empty");
 
-		// Specific rule: if_statement should have condition and consequence fields
 		let if_rule = ts.production_rules.get("if_statement");
 		assert!(if_rule.is_some(), "if_statement rule should exist");
 		let if_rule = if_rule.unwrap();
@@ -525,7 +565,6 @@ mod tests {
 		let ts = reg.get(&LanguageId::new("typescript")).unwrap();
 
 		assert!(!ts.supertypes.is_empty(), "TypeScript supertypes should not be empty");
-		// "expression" and "statement" are standard supertypes in TS grammar
 		assert!(
 			ts.supertypes.iter().any(|s| s.contains("expression")),
 			"should have an expression supertype, got: {:?}",
@@ -556,8 +595,8 @@ mod tests {
 			.iter()
 			.find(|decl| decl.kind == "show")
 			.expect("show declaration pattern");
-		assert_eq!(show_decl.name_field, "pattern");
-		assert_eq!(show_decl.body_field.as_deref(), Some("value"));
+		assert!(matches!(show_decl.name, NameExtractor::Field { .. }));
+		assert!(matches!(show_decl.body, BodyExtractor::Field { .. }));
 		assert_eq!(
 			typst
 				.references
@@ -584,6 +623,32 @@ mod tests {
 		assert!(kinds.contains(&"trait"), "should have trait declarations");
 
 		assert!(!rs.production_rules.is_empty(), "Rust production rules should not be empty");
+	}
+
+	#[test]
+	fn org_profile_has_expected_declarations() {
+		let reg = LanguageRegistry::with_builtins().unwrap();
+		let org = reg.get(&LanguageId::new("org")).unwrap();
+
+		assert_eq!(org.extensions, vec!["org".to_string()]);
+		assert_eq!(org.declarations.len(), 1);
+		assert!(matches!(org.declarations[0].name, NameExtractor::ChildField { .. }));
+		assert!(matches!(
+			org.declarations[0].body,
+			BodyExtractor::AfterChild { ref child_type } if child_type == "headline"
+		));
+		assert_eq!(org.class_like.len(), 1);
+		assert!(matches!(org.class_like[0].body, ClassBodyExtractor::Direct));
+	}
+
+	#[test]
+	fn org_profile_parses_document() {
+		let reg = LanguageRegistry::with_builtins().unwrap();
+		let org = reg.get(&LanguageId::new("org")).unwrap();
+		let mut parser = tree_sitter::Parser::new();
+		parser.set_language(&org.ts_language).expect("org parser");
+		let tree = parser.parse("* TODO Heading\nBody\n", None).expect("tree");
+		assert_eq!(tree.root_node().kind(), "document");
 	}
 
 	#[test]
@@ -620,5 +685,12 @@ mod tests {
 		assert!(profile.extensions.contains(&"test".to_string()));
 		assert_eq!(profile.declarations.len(), 1);
 		assert_eq!(profile.declarations[0].kind, "fn");
+		assert!(
+			matches!(profile.declarations[0].name, NameExtractor::Field { ref name } if name == "name")
+		);
+		assert!(matches!(
+			profile.declarations[0].body,
+			BodyExtractor::Field { ref name } if name == "body"
+		));
 	}
 }

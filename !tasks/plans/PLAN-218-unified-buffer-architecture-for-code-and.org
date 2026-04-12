@@ -1,0 +1,112 @@
+#+TITLE: Unified buffer architecture for code and org operations
+#+STATE: DONE
+#+SESSION_ID: 14b7e68d6deda817
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T15-52-23-735Z_14b7e68d6deda817.jsonl]]
+#+CUSTOM_ID: PLAN-200-unified-buffer-architecture
+
+NOTE [2026-04-12]: Execution completed with verification captured on 2026-04-12.
+
+
+* Initial Message
+
+⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+                                                                                            ╭────────────╮
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine                        │ 🗺 Plotting │
+ Tool execution failed due to an error: Anthropic messages stream stalled while streaming in╰────────────╯
+ tool arguments
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl
+ ID: 14b7be567342b8fe
+
+
+
+Think from first principles about the edit actions that the rust pi-code-engine crate does, and how it ends up creating this mess. Find the root cause, TDD fix it once and for all with proper trait choices and concurrency models on the CRDT (if that's the root cause
+
+* Context
+
+The coding agent has two completely separate file editing systems that should be one:
+
+1. *Code tool*: TypeScript → NAPI → Rust =pi-code-engine= (CodeBuffer with Rope + tree-sitter + dead LoroDoc CRDT). Buffer-managed, in-memory edits, explicit save. Supports TS, Rust, Python, Typst, Elixir.
+
+2. *Org tool*: TypeScript =org-reader.ts= (line-state-machine parser) + =org-writer.ts= (line-array mutator) + partial Rust =pi-org-engine= (tree-sitter parser for 3 commands: editSection, graph, waves). No buffer management — reads from disk every time, writes via atomicWrite.
+
+This causes:
+- Duplicate parsers (TS line-state-machine AND Rust tree-sitter for the same org files)
+- Fragile line-based text manipulation instead of structural AST edits
+- No shared buffer state between code and org operations
+- Dead CRDT adding failure modes to code edits (LoroDoc never merges, mirrors rope byte-by-byte)
+- Global Mutex blocking all buffer operations across files
+
+** Settled design decisions
+
+1. *CRDT removal*: Strip LoroDoc from CodeBuffer. Undo/redo already works via separate History struct.
+2. *Per-buffer locking*: =BufferRegistry= holds =RwLock<HashMap<PathBuf, Arc<Mutex<CodeBuffer>>>>= instead of =Mutex<BufferRegistry>=.
+3. *Shared buffer registry*: Both =executeCodeBuffer= and =executeOrg= NAPI entry points share the same BufferRegistry static.
+4. *Crate structure*: =pi-org-engine= depends on =pi-code-engine=, uses CodeBuffer for parsing, keeps domain logic (query, graph, item extraction).
+5. *NAPI entry points*: Separate functions (=executeCodeBuffer=, =executeOrg=) sharing one BufferRegistry.
+6. *TS elimination*: =org-reader.ts= and =org-writer.ts= die. =tool.ts= becomes thin adapter calling native ops.
+
+* Verification
+
+** Rust layer
+- =cargo test -p pi-code-engine= passes — CRDT removal doesn't break existing tests
+- =cargo test -p pi-org-engine= passes — extraction refactor produces identical OrgItem output
+- =cargo check -p pi-natives= passes
+
+** TS layer
+- =bun test packages/org/test/= — existing org tool tests pass
+- =bun check:ts= — type checking passes
+
+** Integration
+- Create org item via agent, query it, verify found (the original NOT_FOUND regression)
+- Edit code file and org file concurrently — no blocking
+
+* Execution Manifest
+
+** Wave 1 — Foundation (parallel)
+- [[id:FEAT-520-strip-crdt-from-codebuffer]] Strip LoroDoc CRDT from CodeBuffer
+- [[id:FEAT-528-org-language-profile]] Add org language profile to pi-code-engine
+
+** Wave 2 — Infrastructure
+- [[id:FEAT-521-per-buffer-locking]] Per-buffer locking in BufferRegistry (depends on Wave 1: CRDT removal)
+
+** Wave 3 — Org engine refactor
+- [[id:FEAT-529-org-extraction-via-codebuffer]] Org item extraction via CodeBuffer (depends on Wave 1: org profile)
+
+** Wave 4 — Org write operations
+- [[id:FEAT-530-org-write-ops-via-codebuffer]] Org structural write operations via CodeBuffer (depends on Wave 3)
+
+** Wave 5 — NAPI integration
+- [[id:FEAT-531-shared-buffer-registry-napi]] Shared BufferRegistry in NAPI org dispatch (depends on Waves 2+4)
+
+** Wave 6 — TS migration
+- [[id:FEAT-532-migrate-org-tool-to-native]] Migrate org TS tool to native buffer operations (depends on Wave 5)
+
+
+** Completion [2026-04-12]
+*** Verification
+- `cargo test -p pi-code-engine` → passed (101 tests), including the new per-buffer parallel-lock regression.
+- `cargo test -p pi-org-engine` → passed (57 tests), covering CodeBuffer-backed extraction and org write TextEdit operations.
+- `cargo check -p pi-natives` → passed.
+- `PI_DEV=1 bun test packages/org/test/` → passed (138 assertions across 14 files) against the rebuilt debug native addon.
+- `bun check:ts` → passed.
+- Manual create/query/get flow via `PI_DEV=1 bun -e '...createOrgTool(...)...'` → created `DRAFT-001-flow-task`, query returned total `1`, and `get` returned the same item in state `ITEM`.
+- `PI_DEV=1 bun test packages/natives/test/org-buffer.test.ts` → passed (14 tests) on the rebuilt debug native addon.
+*** Artifacts
+- Manual create/query/get result: [[file:!tasks/plans/plan-artifacts/PLAN-200-unified-buffer-architecture/create-query-get.json]]
+*** Deviations
+- Completed the prerequisite flexible extractor cutover in `crates/pi-code-engine` because the current branch already contained a partial `NameExtractor`/`BodyExtractor` migration that left the crate uncompilable; the plan work now includes the full cutover needed for org language support.
+- `packages/org/src/atomic-write.ts` was retained because `packages/org/src/journal.ts` still depends on it; the legacy org reader/writer modules were removed, but atomic journal persistence remains in use.

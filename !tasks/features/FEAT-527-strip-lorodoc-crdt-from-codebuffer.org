@@ -1,0 +1,91 @@
+#+TITLE: Strip LoroDoc CRDT from CodeBuffer
+#+STATE: DONE
+#+SESSION_ID: 14b7e68d6deda817
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T15-52-23-735Z_14b7e68d6deda817.jsonl]]
+#+CUSTOM_ID: FEAT-520-strip-crdt-from-codebuffer
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: code-engine
+
+NOTE [2026-04-12]: Completed under PLAN-200 unified buffer execution; CodeBuffer no longer uses LoroDoc and pi-code-engine tests pass.
+
+* Initial Message
+
+⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+                                                                                            ╭────────────╮
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine                        │ 🗺 Plotting │
+ Tool execution failed due to an error: Anthropic messages stream stalled while streaming in╰────────────╯
+ tool arguments
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl
+ ID: 14b7be567342b8fe
+
+
+
+Think from first principles about the edit actions that the rust pi-code-engine crate does, and how it ends up creating this mess. Find the root cause, TDD fix it once and for all with proper trait choices and concurrency models on the CRDT (if that's the root cause
+
+* Goal
+
+Remove the dead-weight LoroDoc CRDT from =CodeBuffer= in =pi-code-engine=.
+The CRDT is initialized with a single peer (=PeerID(1)=), never merges, mirrors every
+rope operation byte-by-byte, and adds failure modes with zero benefit. If CRDT ops
+fail after rope/tree are mutated, buffer state is corrupted with no rollback.
+
+Undo/redo already works independently via the =History= struct — it does NOT
+depend on LoroDoc.
+
+* Files to modify
+
+- =crates/pi-code-engine/Cargo.toml= — remove =loro = "0.16"= dependency
+- =crates/pi-code-engine/src/buffer.rs= — remove =crdt: LoroDoc= field, =use loro::*= imports, all CRDT operations in =from_str_with_path()= and =apply_text_mutation()=
+
+* Changes
+
+** Remove from =CodeBuffer= struct
+- Delete field =crdt: LoroDoc=
+- Delete =use loro::{LoroDoc, PeerID}= import
+
+** Simplify =from_str_with_path()=
+Remove these lines (approximately lines 148-155 in current source):
+#+BEGIN_SRC rust
+let crdt = LoroDoc::new();
+crdt.set_peer_id(PeerID::from(1_u64))...;
+let text = crdt.get_text("content");
+text.insert(0, &source)...;
+#+END_SRC
+And remove =crdt= from the struct initialization.
+
+** Simplify =apply_text_mutation()=
+Remove these lines (approximately lines 360-367 in current source):
+#+BEGIN_SRC rust
+let crdt_text = self.crdt.get_text("content");
+crdt_text.delete(edit.start_byte, edit.old_end_byte - edit.start_byte)...;
+crdt_text.insert(edit.start_byte, &edit.new_text)...;
+#+END_SRC
+
+** Remove dependency
+Remove =loro = "0.16"= from =[dependencies]= in =Cargo.toml=.
+
+* Verification
+
+- =cargo check -p pi-code-engine= passes
+- =cargo test -p pi-code-engine= — all existing tests pass (History undo/redo, edit, batch, snapshot, diff)
+- =cargo check -p pi-natives= passes (NAPI boundary unaffected — it calls buffer methods, not CRDT directly)
+
+* Edge cases
+
+- Ensure =from_str_with_path= error path doesn't reference CRDT init
+- The =dirty= flag is set both in =edit()= and =apply_text_mutation()= — the duplicate set in =apply_text_mutation= is now the only one that matters during undo/redo (verify undo sets dirty correctly)

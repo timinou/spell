@@ -11,10 +11,21 @@ export interface OrgBufferOptions {
 	items?: unknown[];
 	doneStates?: string[];
 	section?: string;
-	body?: string;
+	body?: string | null;
+	append?: string;
 	mode?: string;
 	itemStart?: number;
 	itemEnd?: number;
+	id?: string;
+	title?: string;
+	state?: string;
+	properties?: Record<string, string>;
+	sessionId?: string;
+	transcriptPath?: string;
+	initialMessage?: string;
+	note?: string;
+	property?: string;
+	value?: string;
 }
 
 export interface OrgBufferResult {
