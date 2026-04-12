@@ -1,0 +1,72 @@
+#+TITLE: Define shared incomplete tool-call stall diagnostics contract
+#+STATE: DOING
+#+SESSION_ID: 14b7ee149bae1c85
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T16-25-17-166Z_14b7ee149bae1c85.jsonl]]
+#+CUSTOM_ID: BUG-245-define-shared-incomplete-tool-call-stall
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: ai-runtime
+
+
+* Initial Message
+
+✘ Write: ⌘ !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+ ✘ Error: Tool execution failed due to an error: Anthropic messages stream stalled while streaming incomplete write tool arguments
+
+
+ Task model: gpt-5.4-mini
+
+
+ ┌─── ✔ Bash ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ $ wc -l !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org                                                 ╭──────────╮
+ ├─── Output ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│ 🗺 Paused │
+ │ 54 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org                                                      ╰──────────╯
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Write ⢿ 🗒 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+
+
+
+ Write ⣟ 🗒 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl
+ ID: 14b7be567342b8fe
+
+
+
+explain this: Tool execution failed due to an error: Anthropic messages stream stalled while streaming incomplete write tool arguments
+
+* User workflows
+1. A provider stalls while streaming tool arguments; the session retains enough raw diagnostic state to explain what was emitted.
+2. A maintainer reopens the transcript later and can recover provider, model, tool name, retry counts, timeout budget, byte counts, parsed keys, and the full raw partial tool JSON without re-running the failure.
+3. Downstream UI/rendering layers consume one shared diagnostic shape instead of provider-specific error strings.
+4. Large debug payloads do not bloat JSONL inline; persistence stays reconstructible.
+
+* Scope
+Define one provider-agnostic incomplete-tool-call diagnostic contract and one persistence path for raw partial tool-call payloads. Prefer a shared utility under =packages/ai/src/utils/= rather than provider-specific copies. The contract must distinguish: stalled before any tool args, stalled with incomplete tool args, and completed tool call missing trailing stop events.
+
+Persist the full raw partial tool JSON for debugging by reference through session artifact/blob infrastructure. The persisted session/transcript metadata must include provider, model, tool name, parsed argument keys, raw byte count, first-token timing, idle-timeout budget, provider retry attempt count, and artifact URI/path for the full raw partial JSON.
+
+* Files
+- =packages/ai/src/types.ts=
+- shared helper in =packages/ai/src/utils/=
+- =packages/coding-agent/src/session/session-manager.ts=
+- =packages/coding-agent/src/session/artifacts.ts= and/or blob persistence helpers if needed
+
+* Acceptance
+- One shared diagnostic shape exists and is the cross-provider target format.
+- Full raw partial tool JSON is persisted by reference, not silently discarded.
+- Session persistence survives reload and still points to recoverable raw debug payloads.
+- No provider-specific timeout policy changes land in this item.
+
+* Verification
+- Add focused persistence tests proving a stalled incomplete tool-call entry round-trips with artifact reference intact.
+- Run =bun test packages/coding-agent/test/session-messages.test.ts= or the new focused persistence test.
+- Run =bun check:ts=.
+
+NOTE [2026-04-12]: Linked from [[id:PLAN-218-cross-provider-stalled-incomplete-tool-c]]. Foundation item for the shared stalled-tool-call diagnostic contract and persisted raw payload references.

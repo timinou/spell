@@ -1,0 +1,43 @@
+#+TITLE: Session 14b7b323ebb7e1ac Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Essence
+
+** DONE Rewrite system-prompt.md template
+:PROPERTIES:
+:TASK_ID: feat-499
+:STATUS: completed
+:END:
+
+FEAT-499: Merge <behavior>+<code-integrity> into <discipline>, rename Design Integrity to Principles (10 items), eliminate Procedure, compress Environment tool manual, move cache boundary. Remove 'Claude agent' from role.
+
+** DONE Compress plan-mode overlays
+:PROPERTIES:
+:TASK_ID: feat-500
+:STATUS: completed
+:END:
+
+FEAT-500: Compress plan-mode-active.md, plan-mode-approved.md, plan-mode-uiux.md. Preserve all Handlebars conditionals and test assertions.
+
+* Documentation
+
+** DONE Update architecture spec
+:PROPERTIES:
+:TASK_ID: feat-501
+:STATUS: completed
+:DEPENDS: feat-499 feat-500
+:END:
+
+FEAT-501: Update specs/system-prompt-architecture.md to reflect new layout, discipline merge, principles, cache boundary, plan-mode compression.
+
+* Verification
+
+** DONE Run all tests and verify
+:PROPERTIES:
+:TASK_ID: verify
+:STATUS: completed
+:DEPENDS: feat-499 feat-500 feat-501
+:END:
+
+Run bun check:ts, all plan-mode tests, system-prompt tests, caveman tests. Manual verification of all 9 criteria.

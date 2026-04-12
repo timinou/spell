@@ -10,6 +10,7 @@ import { TtsrNotificationComponent } from "../../modes/components/ttsr-notificat
 import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoGroup } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
+import { formatAssistantToolCallFailureMessage } from "../../session/tool-call-diagnostics";
 import type { ExitPlanModeDetails } from "../../tools";
 import { formatBytes } from "../../tools/render-utils";
 
@@ -272,10 +273,25 @@ export class EventController {
 						this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
 					}
 
-					if (
-						this.ctx.streamingMessage.stopReason !== "aborted" &&
-						this.ctx.streamingMessage.stopReason !== "error"
-					) {
+					const hasErrorStop =
+						this.ctx.streamingMessage.stopReason === "aborted" ||
+						this.ctx.streamingMessage.stopReason === "error";
+					const toolFailureMessage = hasErrorStop
+						? (formatAssistantToolCallFailureMessage(this.ctx.streamingMessage) ?? errorMessage)
+						: undefined;
+					if (hasErrorStop && toolFailureMessage) {
+						for (const content of this.ctx.streamingMessage.content) {
+							if (content.type !== "toolCall") continue;
+							const component = this.ctx.pendingTools.get(content.id);
+							if (!component) continue;
+							component.updateResult(
+								{ content: [{ type: "text", text: toolFailureMessage }], isError: true },
+								false,
+								content.id,
+							);
+							this.ctx.pendingTools.delete(content.id);
+						}
+					} else {
 						for (const [toolCallId, component] of this.ctx.pendingTools.entries()) {
 							component.setArgsComplete(toolCallId);
 						}

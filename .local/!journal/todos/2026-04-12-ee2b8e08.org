@@ -1,0 +1,57 @@
+#+TITLE: Session 14b70cfac41a439a Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 1: Foundation (prompts)
+
+** DONE Define sniper pattern in todo-write.md and subagent-system-prompt.md
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:ORG_ITEM_ID: FEAT-481-sniper-todo-prompt-guidance
+:END:
+
+FEAT-481: Add Sniper Pattern section to todo-write.md after Task Anatomy. Update subagent-system-prompt.md closure section.
+
+* Wave 2: Runtime
+
+** DONE Make assignment optional, resolve from todoRef
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:DEPENDS: task-1
+:ORG_ITEM_ID: FEAT-482-todoref-derived-assignment-for-zero-fric
+:END:
+
+FEAT-482: Type.Optional on assignment in types.ts. Add resolveTodoRefAssignments + buildSniperAssignment in index.ts. Update task.md.
+
+** DONE Show child task detail previews in TUI
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:DEPENDS: task-1
+:ORG_ITEM_ID: FEAT-484-tui-child-task-details-display
+:END:
+
+FEAT-484: Add showDetailPreview param to #formatTodoLine. Show first line of details dimmed for non-in_progress child tasks.
+
+* Wave 3: Prompt cascade
+
+** DONE Teach task agent plan-then-delegate workflow
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:DEPENDS: task-1 task-2
+:ORG_ITEM_ID: FEAT-483-task-agent-plan-then-delegate-prompt
+:END:
+
+FEAT-483: Add <workflow> section to task.md agent prompt with plan-then-delegate pattern and example.
+
+* Verification
+
+** DONE Run bun check:ts and verify all changes
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:DEPENDS: task-1 task-2 task-3 task-4
+:END:

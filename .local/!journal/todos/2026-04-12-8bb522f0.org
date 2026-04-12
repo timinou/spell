@@ -1,0 +1,23 @@
+#+TITLE: Session 14b7c64d74a6434f Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Find native language registry extensions and how they map to SUPPORTED_EXTENSIONS
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Find existing integration test patterns for NAPI code buffer
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Identify the pre-existing biome import-order issue blocking bun check:ts
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

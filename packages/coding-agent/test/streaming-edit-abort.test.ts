@@ -2,7 +2,7 @@
  * Streaming edit abort tests.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -262,6 +262,52 @@ describe("streaming edit abort", () => {
 				} finally {
 					authStorage.close();
 				}
+			}
+		}
+	});
+
+	it("does not read edit targets at toolcall_start before complete instructions arrive", async () => {
+		const samplePath = path.join(tempDir, "sample.txt");
+		await Bun.write(samplePath, "alpha\nbeta\ngamma\n");
+		const originalReadFileSync = fs.readFileSync;
+		let sampleReadCount = 0;
+		const readFileSyncSpy = vi.spyOn(fs, "readFileSync").mockImplementation(((
+			filePath: Parameters<typeof fs.readFileSync>[0],
+			options?: Parameters<typeof fs.readFileSync>[1],
+		) => {
+			if (path.resolve(String(filePath)) === samplePath) {
+				sampleReadCount += 1;
+			}
+			return originalReadFileSync(filePath, options as never);
+		}) as typeof fs.readFileSync);
+
+		const streamFn: Agent["streamFn"] = () => {
+			const stream = new MockAssistantStream();
+			queueMicrotask(() => {
+				const startMessage = createAssistantMessage([], "stop");
+				stream.push({ type: "start", partial: startMessage });
+				const startCall = createToolCall("call_edit_start", { path: samplePath, diff: "" });
+				const errorMessage = createAssistantMessage([startCall], "error");
+				stream.push({
+					type: "toolcall_start",
+					contentIndex: 0,
+					partial: createAssistantMessage([startCall], "stop"),
+				});
+				stream.push({ type: "error", reason: "error", error: errorMessage });
+			});
+			return stream;
+		};
+
+		const { session, authStorage } = await createSession(tempDir, streamFn, editTool);
+		try {
+			await session.prompt("apply patch");
+			expect(sampleReadCount).toBe(0);
+		} finally {
+			readFileSyncSpy.mockRestore();
+			try {
+				await session.dispose();
+			} finally {
+				authStorage.close();
 			}
 		}
 	});

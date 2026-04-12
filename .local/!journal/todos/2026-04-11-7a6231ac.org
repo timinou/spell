@@ -1,0 +1,145 @@
+#+TITLE: Session 14b6c7cd8a411d9e Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 1: Foundation
+
+** DONE Wave 1 verification
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:
+
+cargo build, cargo test, cargo clippy for pi-code-engine
+
+Verified: 9/9 tests pass, 0 clippy warnings, existing crates compile
+
+* Wave 2: Core Engine (parallel)
+
+** DONE Implement CodeBuffer with rope + tree-sitter + undo
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:DEPENDS: task-4
+:END:
+
+buffer.rs: CodeBuffer, History, TextEdit, BufferRegistry, snapshot, diff
+
+Buffer with rope+tree-sitter+undo implemented, 10 buffer tests pass
+
+** DONE Implement Procedure DSL
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:DEPENDS: task-4
+:END:
+
+procedure/: builder API, activation rules, selector, rule expansion engine
+
+Procedure DSL with builder, activation, selector, rules implemented
+
+** DONE Fix graph quality: search, dead_code, clusters
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:DEPENDS: task-4
+:END:
+
+pi-code-graph: tokenizer fix, dead code confidence, WCC clusters, incremental indexing
+
+Search tokenizer fixed, dead_code limited to 50 with confidence, clusters use WCC
+
+** DONE Wave 2 verification
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: completed
+:GATE_CMD: cargo test -p pi-code-engine && cargo test -p pi-code-graph
+:DEPENDS: task-5 task-6 task-7
+:END:
+
+cargo test for pi-code-engine (buffer, procedure) and pi-code-graph
+
+19 engine tests + 34 graph tests pass, 0 clippy warnings
+
+* Wave 3: Operations (parallel)
+
+** DONE Implement structural edit operations
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: completed
+:DEPENDS: task-8
+:END:
+
+edit/: splice, drag, clone, transpose, replace, indent utilities
+
+Edit operations implemented (drag, clone, replace, kill, splice, transpose, indent). Some operations created by outline task which fixed API issues.
+
+** DONE Implement outline, resolution-aware read, navigate
+:PROPERTIES:
+:TASK_ID: task-10
+:STATUS: completed
+:DEPENDS: task-8
+:END:
+
+outline.rs, navigate.rs: all actions, resolution 0-3
+
+Outline (with children, exports), read (res 0-3), navigate (node-at, defun-at, siblings, references) all implemented with 11 tests.
+
+** DONE Integrate difftastic for structural diff
+:PROPERTIES:
+:TASK_ID: task-11
+:STATUS: completed
+:DEPENDS: task-8
+:END:
+
+diff.rs: structural diff between buffer versions and disk
+
+imara-diff integration with DiffHunk type, buffer.rs refactored to use diff::diff_lines. 6 diff tests.
+
+** DONE Wave 3 verification
+:PROPERTIES:
+:TASK_ID: task-12
+:STATUS: completed
+:GATE_CMD: cargo test -p pi-code-engine
+:DEPENDS: task-9 task-10 task-11
+:END:
+
+cargo test for all engine modules
+
+32 engine tests pass, 0 clippy warnings, all crates build
+
+* Wave 4: Integration
+
+** DONE Refactor pi-code-graph to use engine profiles
+:PROPERTIES:
+:TASK_ID: task-13
+:STATUS: completed
+:DEPENDS: task-12
+:END:
+
+Remove duplicated extractors, use LanguageRegistry from engine
+
+pi-code-graph depends on pi-code-engine, re-exports EngineLanguageProfile/Registry, 34 graph tests pass
+
+** DONE NAPI bindings and code tool migration
+:PROPERTIES:
+:TASK_ID: task-14
+:STATUS: completed
+:DEPENDS: task-13
+:END:
+
+pi-natives bindings, code.ts routing, Emacs removal from code tool
+
+NAPI bindings via execute_code_buffer in pi-natives, all builds pass
+
+** DONE Final verification and completion
+:PROPERTIES:
+:TASK_ID: task-15
+:STATUS: completed
+:GATE_CMD: cargo build -p pi-code-engine && cargo build -p pi-code-graph && cargo build -p pi-natives
+:DEPENDS: task-14
+:END:
+
+Full cargo build, bun check:ts, integration tests
+
+All verification passed, org items closed, commit ameded with org files

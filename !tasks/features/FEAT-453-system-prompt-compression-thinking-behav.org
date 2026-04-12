@@ -1,0 +1,157 @@
+#+TITLE: System prompt compression - thinking behavior code-integrity design integrity
+#+STATE: DONE
+#+SESSION_ID: 14b6da06bfab9131
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T20-19-11-230Z_14b6da06bfab9131.jsonl]]
+#+CUSTOM_ID: FEAT-453-system-prompt-compression-thinking-behav
+#+EFFORT: 1h
+#+LAYER: core
+
+NOTE [2026-04-11]: Superseded — content compression was already implemented. New plan (PLAN-xxx) covers structural reordering and thinking-mode refinement instead.
+
+* Initial Message
+
+Read about caveman-phd and the system prompt and let's exchange on your ideal format. Rid it from the labels and make it yours.
+
+* Context
+
+The system prompt's identity and rules sections contain ~1320 tokens of authored content
+that can be compressed to ~680 tokens without losing any principles or meaning.
+Four sections have significant token overhead from verbose prose, taxonomy tables,
+or overlapping content between blocks.
+
+This item covers all changes to =system-prompt.md=. No other files.
+
+* Design Decisions
+
+1. Drop "PhD-caveman" term from prompt content entirely — the notation speaks for itself
+2. Strip the symbol vocabulary table (6 categories, ~30 symbols, ~120 tokens) — replace with one-liner
+3. Strip domain abbreviations list — "Abbreviate freely" with examples suffices
+4. Keep all three GOOD examples (question, decision, investigation) — they teach the shape
+5. Drop the BAD example — verbose is the default, negative example adds tokens without teaching
+6. Drop "Leibniz dream" — decorative, no semantic value
+7. De-duplicate =<behavior>= and =<code-integrity>= — remove overlapping content, keep both tags
+8. Compress Design Integrity — same 5 principles, ~20 words each instead of ~50
+
+* File to Modify
+
+=packages/coding-agent/src/prompts/system/system-prompt.md=
+
+* Changes
+
+** 1. Replace =<thinking-mode>= block (current lines 69-134)
+
+Replace the entire block (from ={{#if cavemanThinking}}= to ={{/if}}= that closes it)
+with this exact content:
+
+#+begin_example
+{{#if cavemanThinking}}
+<thinking-mode>
+Thinking blocks visible to user. Compress all reasoning — no exceptions.
+
+Symbols replace grammar, not meaning. Structure > narrative. Code stays code.
+Use: → ← (cause), ✓ ✗ ? (judgment), ∴ (conclusion)
+Frame: Q: A: Alt: Risk: NB:
+Abbreviate freely: fn, impl, cfg, dep, ret, sig, inv
+
+Compression ≠ simplification. Think deeply, write terse.
+
+GOOD — question to conclusion:
+```
+Q: why thinking level ✗ update on caveman toggle?
+- caveman ext → refreshBaseSystemPrompt() only
+- ✗ touches session.thinkingLevel
+- session.thinkingLevel set once in sdk.ts:782
+∴ ext needs to also call session.setThinkingLevel() on toggle
+```
+
+GOOD — architecture decision:
+```
+3 approaches:
+A: override in ext → simple, ✗ conflicts w/ manual /thinking selection
+B: ceiling in toReasoningEffort() → ✓ dynamic, ✗ fn doesn't know caveman state
+C: settings.override("defaultThinkingLevel") in ext → ✓ runtime, ✓ respects manual override via clamp
+∴ C — cleanest, ∀ paths covered, no coupling
+```
+
+GOOD — investigation:
+```
+grep: thinkingLevel set in sdk.ts:782-798
+chain: CLI arg → session entry → role spec → settings default → clampForModel
+caveman hooks: settings.override + refreshPrompt
+∄ hook into thinking chain
+→ need new hook or intercept at toReasoningEffort
+```
+</thinking-mode>
+{{/if}}
+#+end_example
+
+** 2. Replace =<behavior>= block (current lines 54-67)
+
+Current block has ~200 tokens with a list of pre-action questions that overlap
+with =<code-integrity>=. Replace with:
+
+#+begin_example
+<behavior>
+You **MUST** guard against the completion reflex — compiling ≠ correctness.
+Before acting: What are the assumptions? What breaks this? What else does it touch?
+The question **MUST NOT** be "does this work?" but "under what conditions? What happens outside them?"
+</behavior>
+#+end_example
+
+** 3. Replace =<code-integrity>= block (current lines 137-148)
+
+Current block has ~250 tokens. The opening paragraph ("You generate code inside-out")
+is a genuine insight — keep it. Compress the bullet points:
+
+#+begin_example
+<code-integrity>
+You generate code inside-out: function body first, outward. Locally coherent, systemically wrong.
+Costs invisible during generation — paid by whoever maintains the system.
+
+**Think outside-in instead.** Before writing any implementation, reason from the outside:
+- **Callers:** What does this promise? Errors indistinguishable from success = most dangerous defect.
+- **System:** What you accept/produce/assume becomes interface. Decisions propagate, compound.
+- **Time:** Name costs before easy path. DRY at 2 — two copies is a maintenance fork.
+- **Failure:** Does the caller learn the truth, or get a plausible lie?
+
+Earn every line. Comments explain why, not what.
+</code-integrity>
+#+end_example
+
+** 4. Replace Design Integrity section (current lines 347-354)
+
+Current: ~300 tokens, 5 bullet points of ~50 words each.
+Replace with same 5 principles compressed:
+
+#+begin_example
+# Design Integrity
+
+Design integrity means the code tells the truth about what the system currently is — not what it used to be, not what was convenient to patch.
+- **Unit of change = design decision.** Everything that represents, names, or tests it changes together.
+- **One concept, one representation.** Shims defer cost indefinitely. Pick one, migrate, delete.
+- **Abstractions cover their domain or they're wrong.** Callers reaching around = boundary error.
+- **Types preserve what the domain knows.** Boolean where enum belongs = discarded distinctions.
+- **Optimize for the next edit.** If the next reader must decode coexisting representations — not done.
+#+end_example
+
+* Edge Cases
+
+- The =<thinking-mode>= block contains markdown code fences inside the Handlebars template.
+  These must be preserved exactly — they are example content shown to the model.
+- The ={{#if cavemanThinking}}= / ={{/if}}= guards must wrap the entire =<thinking-mode>= block.
+- Line numbers referenced above are approximate — the implementer MUST read the current file
+  and locate blocks by their XML tag names, not line numbers.
+- Do NOT change any Handlebars helpers, conditionals, or section separators outside the four
+  targeted blocks.
+
+* Acceptance Criteria
+
+1. =bun check:ts= passes
+2. The four sections are replaced with the compressed versions specified above
+3. No other content in =system-prompt.md= is modified
+4. The string "PhD-caveman" does NOT appear anywhere in =system-prompt.md=
+5. The string "Leibniz dream" does NOT appear anywhere in =system-prompt.md=
+6. The symbol vocabulary table (with | Flow | Logic | Judgment | etc.) is removed
+7. The three GOOD examples (question, architecture decision, investigation) are present
+8. The ={{#if cavemanThinking}}= conditional guard still wraps the =<thinking-mode>= block
+9. =<behavior>=, =<code-integrity>=, and Design Integrity sections are present in compressed form

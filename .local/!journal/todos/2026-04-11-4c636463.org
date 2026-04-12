@@ -1,0 +1,11 @@
+#+TITLE: Session 14b7040554521518 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Key areas to explore
+
+** DONE Understand how recovered sessions spawn terminal windows
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

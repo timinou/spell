@@ -20,6 +20,7 @@ export interface CrashSessionContext {
         key: string | null;
     } | null;
 }
+export declare function writeCrashReport(reason: Reason, err: Error, raw?: unknown): string | undefined;
 export declare function registerSessionContext(getter: () => CrashSessionContext | null | undefined): void;
 /**
  * Register a process cleanup callback, to be run on shutdown, signal, or fatal error.

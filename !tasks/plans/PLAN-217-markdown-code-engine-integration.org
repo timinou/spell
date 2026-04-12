@@ -1,0 +1,101 @@
+#+TITLE: Markdown Code Engine Integration
+#+STATE: DOING
+#+SESSION_ID: 14b7c05e6d83ec68
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-05-34-134Z_14b7c05e6d83ec68.jsonl]]
+#+CUSTOM_ID: PLAN-217-markdown-code-engine-integration
+#+EFFORT: 24h
+#+PRIORITY: A
+
+* Initial Message
+
+looking at the typst and org integrations to pi-code-engine, what would you want to implement for your markdown usage to be a delight?
+
+* Context
+
+The pi-code-engine provides structural code intelligence (outline, read, edit, navigate) driven by tree-sitter grammars and language profiles. Currently supports TypeScript, Rust, Python, Typst, and Elixir. Markdown files (~.md~) fall through to plain text with no structural understanding.
+
+This plan makes markdown a first-class language in the code engine by:
+1. Extending the declaration/profile system to support document languages where names and bodies aren't simple AST fields
+2. Adding a tree-sitter-markdown grammar and markdown language profile with section-as-declaration semantics
+3. Building a procedure DSL transform layer so languages can register custom edit operations declaratively
+4. Proving the extension point works across languages with Typst promote/demote procedures
+5. Adding tool result injection so agents learn about language-specific operations on first use
+
+** Key Decisions
+
+1. ~DeclarationPattern~ extended with ~NameExtractor~ (Field, ChildField, ChildText, Literal) and ~BodyExtractor~ (None, Field, AfterChild) — enables document languages
+2. ~ClassLikePattern~ extended with ~ClassBodyExtractor~ (Field, Direct) — sections have direct child members
+3. Markdown sections are declarations (kind: "section"), nested sections are class-like members. Symbol resolution: ~"Installation.Prerequisites"~
+4. Frontmatter is a declaration with ~NameExtractor::Literal { name: "frontmatter" }~
+5. Procedure DSL gets a declarative ~Transform~ enum with ~Custom(fn)~ escape hatch (documented as DSL improvement flag — its existence signals the DSL should eventually express that pattern)
+6. Resolution 2 for markdown: heading tree + content type annotations (paragraph/code block/list counts) + symbol paths for drill-in
+7. Tool result injection: first code tool result on a new language appends a concise operations guide. Per-language, per-session
+8. Block grammar only — inline grammar (bold/italic/links) not needed for section-level operations
+9. No extract-code-block operation — res 2 metadata + normal read with offset/limit covers this
+
+** Key Files
+
+Rust (pi-code-engine):
+- ~crates/pi-code-engine/src/language/profile.rs~ — NameExtractor, BodyExtractor, ClassBodyExtractor types
+- ~crates/pi-code-engine/src/language/mod.rs~ — markdown_profile(), procedure registration
+- ~crates/pi-code-engine/src/outline.rs~ — extraction dispatch, resolution reading
+- ~crates/pi-code-engine/src/resolve.rs~ — body range computation
+- ~crates/pi-code-engine/src/procedure/mod.rs~ — Transform enum, apply_procedure_transform
+- ~crates/pi-code-engine/build.rs~ — grammar source list
+- ~crates/pi-natives/src/code_buffer.rs~ — procedure dispatch in edit path
+
+TypeScript (coding-agent):
+- ~packages/coding-agent/src/tools/code.ts~ — injection tracking
+- ~packages/coding-agent/src/prompts/tools/code.md~ — prompt updates
+- ~packages/coding-agent/src/prompts/tools/code-hint-markdown.md~ — injection content (new)
+- ~packages/coding-agent/src/prompts/tools/code-hint-typst.md~ — injection content (new)
+
+* Verification
+
+** Build verification
+
+- ~cargo build -p pi-code-engine~ — grammar compiles, profile registers
+- ~cargo test -p pi-code-engine~ — all existing + new tests pass
+- ~cargo clippy -p pi-code-engine~ — clean
+- ~bun check:ts~ — TypeScript types valid
+
+** Functional verification
+
+- ~code outline~ on a ~.md~ file returns heading tree with nested sections
+- ~code read { resolution: 2 }~ on a ~.md~ file shows content annotations + drill-in hints
+- ~code edit { symbol: "Installation", operation: "patch" }~ works on markdown sections
+- ~code edit { symbol: "Installation", operation: "promote" }~ shifts heading levels
+- ~code edit { symbol: "Section One", operation: "promote" }~ works on Typst headings
+- First ~code~ call on ~.md~ file includes markdown operations hint in result
+- Second ~code~ call on ~.md~ file does NOT include hint
+
+** Regression verification
+
+- All existing outline/resolve/edit tests for TypeScript, Rust, Python, Typst, Elixir pass unchanged
+- Existing code tool behavior for non-markdown files unaffected
+
+* Execution Manifest
+
+** Wave 1 — Foundation (parallel, no dependencies)
+
+- [[id:FEAT-514-extend-declarationpattern-with-flexible]] — Extend DeclarationPattern with flexible name/body extraction (4h)
+- [[id:FEAT-515-add-tree-sitter-markdown-block-grammar-t]] — Add tree-sitter-markdown block grammar (1h)
+- [[id:FEAT-522-procedure-dsl-transform-layer-with-decla]] — Procedure DSL transform layer (4h)
+
+** Wave 2 — Markdown Profile (depends on Wave 1: FEAT-514, FEAT-515)
+
+- [[id:FEAT-520-markdown-language-profile-with-section-a]] — Markdown language profile with section semantics (4h)
+
+** Wave 3 — Custom Operations + Reading (parallel, mixed deps)
+
+- [[id:FEAT-521-resolution-aware-markdown-reading-with-c]] — Resolution-aware markdown reading (3h) — depends on FEAT-520
+- [[id:FEAT-523-markdown-custom-procedures-promote-demot]] — Markdown procedures: promote, demote, replace-code-block (3h) — depends on FEAT-520, FEAT-522
+- [[id:FEAT-524-typst-custom-procedures-promote-and-demo]] — Typst procedures: promote, demote (2h) — depends on FEAT-522
+
+** Wave 4 — Integration (depends on Wave 3)
+
+- [[id:FEAT-525-tool-result-injection-for-language-speci]] — Tool result injection mechanism (2h) — depends on FEAT-520, FEAT-523, FEAT-524
+
+** Wave 5 — Documentation (depends on Wave 4)
+
+- [[id:FEAT-526-code-tool-prompt-updates-for-markdown-an]] — Code tool prompt updates (1h) — depends on FEAT-525

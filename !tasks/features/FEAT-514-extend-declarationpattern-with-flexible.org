@@ -1,0 +1,160 @@
+#+TITLE: Extend DeclarationPattern with flexible namebody extraction strategies
+#+STATE: ITEM
+#+SESSION_ID: 14b7c05e6d83ec68
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-05-34-134Z_14b7c05e6d83ec68.jsonl]]
+#+CUSTOM_ID: FEAT-514-extend-declarationpattern-with-flexible
+#+EFFORT: 4h
+#+PRIORITY: A
+#+LAYER: code-engine
+
+* Initial Message
+
+looking at the typst and org integrations to pi-code-engine, what would you want to implement for your markdown usage to be a delight?
+
+* Context
+
+The current ~DeclarationPattern~ in ~pi-code-engine~ assumes names come from a named field on the declaration node (~child_by_field_name~) and bodies come from another named field. This works for programming languages (TypeScript: ~name~ field, ~body~ field) but fails for document languages where:
+
+- Markdown: section's name comes from a *child node* (~atx_heading~) and then *that node's field* (~heading_content~)
+- Markdown: section's body is everything *after* the heading child, not a named field
+- Markdown: class-like containers (~section~) have members as direct children, not inside a ~body~ field
+
+This feature extends the declaration, class-like, and extraction machinery to support these patterns, enabling markdown (and future document languages) to use the full code engine profile system.
+
+** Design Decisions
+
+- New ~NameExtractor~ enum replaces the flat ~name_field: String~
+- New ~BodyExtractor~ enum replaces the flat ~body_field: Option<String>~
+- New ~ClassBodyExtractor~ enum replaces the flat ~body_field: String~ in ~ClassLikePattern~
+- Existing profiles MUST continue to work identically — this is a generalization, not a breaking change
+- All outline, resolve, and edit code that uses ~name_field~ / ~body_field~ must be updated to dispatch on the new enums
+
+* Scope
+
+** ~crates/pi-code-engine/src/language/profile.rs~
+
+*** Add ~NameExtractor~ enum
+#+begin_src rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "strategy", rename_all = "snake_case")]
+pub enum NameExtractor {
+    /// Name from a named field on the declaration node itself.
+    /// Equivalent to current `child_by_field_name(name)`.
+    Field { name: String },
+    /// Name from a child node's field: find first child of `child_type`, then read `field`.
+    /// For markdown: child_type = "atx_heading", field = "heading_content".
+    ChildField { child_type: String, field: String },
+    /// Name from the full text of a specific child node type.
+    ChildText { child_type: String },
+    /// Fixed literal name regardless of AST content.
+    /// For markdown frontmatter: always returns "frontmatter".
+    Literal { name: String },
+}
+#+end_src
+*** Add ~BodyExtractor~ enum
+
+#+begin_src rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "strategy", rename_all = "snake_case")]
+pub enum BodyExtractor {
+    /// No body concept for this declaration.
+    None,
+    /// Body is a named field on the declaration node.
+    /// Equivalent to current `body_field`.
+    Field { name: String },
+    /// Body is everything after the first child of this type.
+    /// For markdown: child_type = "atx_heading" — body starts after the heading.
+    AfterChild { child_type: String },
+}
+#+end_src
+
+*** Update ~DeclarationPattern~
+
+Replace ~name_field: String~ with ~name: NameExtractor~.
+Replace ~body_field: Option<String>~ with ~body: BodyExtractor~.
+
+*** Update ~ClassLikePattern~
+
+Replace ~body_field: String~ with a body extraction mode:
+- ~Field(String)~: current behavior, find body via named field
+- ~Direct~: members are direct children of the class-like node
+
+*** Serde compatibility
+
+Implement ~Deserialize~ so the JSON profile format (~ProfileYaml~) still accepts the old ~"name_field": "name"~ shape. Use ~#[serde(untagged)]~ or a custom deserializer. Old JSON:
+~{ "name_field": "name", "body_field": "body" }~ → ~NameExtractor::Field { name: "name" }~, ~BodyExtractor::Field { name: "body" }~.
+
+New JSON for markdown: ~{ "name": { "strategy": "child_field", "child_type": "atx_heading", "field": "heading_content" }, "body": { "strategy": "after_child", "child_type": "atx_heading" } }~
+
+** ~crates/pi-code-engine/src/outline.rs~
+
+*** Update ~declaration_name()~ to dispatch on ~NameExtractor~
+
+- ~Field~: current behavior (~child_by_field_name~)
+- ~ChildField~: find first named child of ~child_type~, then ~child_by_field_name(field)~ on that child
+- ~ChildText~: find first named child of ~child_type~, return its full text
+
+*** Update ~signature_text()~ to dispatch on ~BodyExtractor~
+
+- ~Field~: current behavior (signature ends at body start)
+- ~AfterChild~: signature is everything up to and including the named child (the heading line)
+- ~None~: signature is full node text, truncated
+
+*** Update ~class_children()~ to handle ~Direct~ body mode
+
+- ~Field~: current behavior (~child_by_field_name~ then iterate)
+- ~Direct~: iterate named children of the node directly, filter by ~member_types~
+
+** ~crates/pi-code-engine/src/resolve.rs~
+
+*** Update ~build_resolved()~ to dispatch on ~BodyExtractor~
+
+- ~Field~: current behavior
+- ~AfterChild~: body_start_byte = end of first child matching ~child_type~, body_end_byte = node.end_byte
+- ~None~: body_start/end remain None
+
+** ~crates/pi-code-engine/src/language/mod.rs~
+
+*** Migrate all existing profiles
+
+Convert ~typescript_profile()~, ~rust_profile()~, ~python_profile()~, ~typst_profile()~, ~elixir_profile()~ to use the new enum types. This is mechanical — ~name_field: "name".into()~ becomes ~name: NameExtractor::Field { name: "name".into() }~, etc.
+
+** ~crates/pi-code-engine/src/edit/mod.rs~
+
+*** Update ~replace_body()~
+
+Currently uses ~body_start_byte~ / ~body_end_byte~ from ~ResolvedSymbol~. With ~AfterChild~, the body start is computed differently. The edit function itself doesn't change — it already operates on the byte range. But verify it handles the ~AfterChild~ case correctly (body starts immediately after the heading line's newline, not at the heading's end byte — there may be a newline between heading and body content).
+
+* Edge Cases
+
+- ~ChildField~ with missing child type: return ~None~ name (treat as unnamed declaration, skip in outline)
+- ~AfterChild~ with no matching child: body_start == node.start_byte (entire node is body)
+- Empty sections (heading only, no body content): body_start == body_end, ~replace-body~ with empty content should work
+- Existing JSON profiles loaded via ~ProfileYaml~: must deserialize without error
+- Rust ~visibility~ field on declarations: unaffected by name/body changes
+
+* Test Plan
+
+** Backward compatibility tests (critical)
+
+- Load all 5 existing profiles, verify outline output is identical to before
+- Resolve symbols in TypeScript/Rust/Python fixtures, verify identical byte ranges
+- Run all existing ~outline.rs~, ~resolve.rs~, ~code_buffer.rs~ tests — all must pass unchanged
+
+** New extraction strategy tests
+
+- Create test fixture with mock markdown-like structure
+- Test ~ChildField~ name extraction: correct name from child's field
+- Test ~ChildText~ name extraction: correct name from child's text
+- Test ~AfterChild~ body extraction: correct byte range
+- Test ~Direct~ class body: correct member iteration
+- Test serde round-trip for new enum variants
+
+* Acceptance Criteria
+
+- All existing tests pass (zero regressions)
+- ~NameExtractor::ChildField~ correctly extracts names from child node fields
+- ~BodyExtractor::AfterChild~ correctly computes body byte ranges
+- ~ClassBodyExtractor::Direct~ correctly finds direct child members
+- ~cargo test -p pi-code-engine~ passes
+- ~cargo clippy -p pi-code-engine~ clean

@@ -1,0 +1,41 @@
+#+TITLE: Session 14b710f4981a439b Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Inspect target files and references
+:PROPERTIES:
+:TASK_ID: inspect-targets
+:STATUS: completed
+:ORG_ITEM_ID: BUG-227-sniper-todo-audit-fixes-validation-expor
+:END:
+
+Read packages/coding-agent/src/task/index.ts and packages/coding-agent/src/modes/interactive-mode.ts, inspect current implementations, and gather LSP references before editing.
+
+Read target sections, confirmed buildSniperAssignment is only used in index.ts, and LSP references are unavailable in this workspace so exact symbol grep was used as fallback evidence.
+
+** DONE Apply audit fixes in code
+:PROPERTIES:
+:TASK_ID: apply-fixes
+:STATUS: completed
+:DEPENDS: inspect-targets
+:ORG_ITEM_ID: BUG-227-sniper-todo-audit-fixes-validation-expor
+:END:
+
+Implement validation hardening, remove unnecessary export, preserve task array identity when unchanged, and replace magic truncation width with TRUNCATE_LENGTHS.TITLE.
+
+Implemented all four planned fixes across task/index.ts and interactive-mode.ts.
+
+** DONE Verify changes close org and commit
+:PROPERTIES:
+:TASK_ID: verify-close-commit
+:STATUS: completed
+:VERIFY_CMD: bun check:ts
+:DEPENDS: apply-fixes
+:ORG_ITEM_ID: PLAN-203-sniper-todo-audit-fixes
+:END:
+
+Run focused verification, update org completion report, reconcile org states, and create the final commit with only plan-related files.
+
+Ran bun check:ts, recorded completion evidence in the plan org item, reconciled org states to DONE, and committed the scoped files as b9c30536b.

@@ -20,6 +20,7 @@ export interface Logger {
     setStderrDebugEnabled(enabled: boolean): void;
     time<T>(op: string, fn: () => T): T;
     timeAsync<T>(op: string, fn: () => PromiseLike<T>): Promise<T>;
+    close(): Promise<void>;
 }
 /**
  * Enable or disable mirroring logger output to stderr.
@@ -73,4 +74,10 @@ export declare function time<T, A extends unknown[]>(op: string, fn: (...args: A
  * @returns The result of the function.
  */
 export declare function timeAsync<R, A extends unknown[]>(op: string, fn: (...args: A) => R, ...args: A): Promise<Awaited<R>>;
+/**
+ * Close the logger, flushing all pending writes.
+ * After this call the logger is unusable — intended for process shutdown.
+ * Idempotent: subsequent calls resolve immediately.
+ */
+export declare function close(): Promise<void>;
 //# sourceMappingURL=logger.d.ts.map

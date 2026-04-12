@@ -1,0 +1,17 @@
+#+TITLE: Session 14b6eb1ef233cb4c Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 3
+
+** DONE Add recover and startup coverage
+:PROPERTIES:
+:TASK_ID: feat-454
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/recover-command.test.ts
+:ORG_ITEM_ID: FEAT-454-add-automated-tests-for-spell-recover-co
+:END:
+
+Created packages/coding-agent/test/recover-command.test.ts with 12 subprocess scenarios covering dry-run preview variants, ghostty fallback, niri-unavailable recovery, partial cleanup, old-format skips, and startup warning suppression/display cases.
+
+Added subprocess CLI coverage for recover dry-run/full recovery/startup notification cases and reran all plan verification commands successfully.

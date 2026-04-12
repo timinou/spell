@@ -1,0 +1,30 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-062-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+1. **What**: `--clean` short-circuits every other flag, so combined modes do not work and `--dry-run --clean` would still delete files  
+   **Where**: `packages/coding-agent/src/commands/recover.ts`, top of `RecoverCommand.run()` in the early `if (flags.clean)` branch  
+   **Why**: This violates the command contract established by the plan: `--clean` cannot be combined with recovery, and `--dry-run` loses its non-mutating guarantee if passed with `--clean`. That is both a UX inconsistency and a real footgun.  
+   **Effort**: small
+
+2. **What**: Direct-mode recovery reports success without verifying Ghostty actually accepted or kept the new process alive  
+   **Where**: `packages/coding-agent/src/commands/recover.ts`, `spawnRecoveredSession(..., direct)` returning `true` immediately for direct launches  
+   **Why**: In `--direct` mode the command deletes the status file after a successful `Bun.spawn(...)` call, even if Ghostty exits immediately or rejects the arguments after launch. That recreates the original “retry becomes impossible” failure mode in the explicit fallback path.  
+   **Effort**: small
+
+3. **What**: The actual `--command=` payload is built from an unvalidated raw `sessionId`, while the displayed dry-run command implies shell-safe quoting  
+   **Where**: `packages/coding-agent/src/commands/recover.ts`, `formatGhosttyCommandValue()` and `buildSpawnArgs()`  
+   **Why**: Today session IDs are probably simple, but the code contract accepts any non-empty string from the status file. If the format ever changes, or the file is corrupted/tampered with, the Ghostty command payload can split unexpectedly or execute a different command than intended. The dry-run output looks safer than the real execution path.  
+   **Effort**: trivial
+
+4. **What**: There is no test coverage for the flag interaction bug around `--clean` with other modes  
+   **Where**: `packages/coding-agent/test/recover-command.test.ts`  
+   **Why**: The current suite covers `--clean` alone, normal recovery, and dry-run separately, but not the highest-risk interaction: `--clean --dry-run` or `--clean` combined with normal recovery flags. That leaves the current contract regression unguarded.  
+   **Effort**: trivial

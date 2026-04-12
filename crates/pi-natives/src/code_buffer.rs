@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use napi::{Error, bindgen_prelude::*};
 use napi_derive::napi;
 use pi_code_engine::{
+	apply_procedure, apply_procedure_transform,
 	buffer::CodeBuffer,
 	edit::{
 		DragDirection, Patch, SpliceMode, TextEdit, apply_patches, clone_node, drag_node,
@@ -126,6 +127,30 @@ fn required_str<'a>(options: &'a Value, field: &str) -> Result<&'a str> {
 		.get(field)
 		.and_then(Value::as_str)
 		.ok_or_else(|| json_err(format!("Missing required field: {field}")))
+}
+
+fn resolved_node<'a>(
+	buffer: &'a CodeBuffer,
+	resolved: &ResolvedSymbol,
+) -> Option<tree_sitter::Node<'a>> {
+	let mut node = buffer
+		.tree()
+		.root_node()
+		.named_descendant_for_byte_range(resolved.start_byte, resolved.end_byte)
+		.or_else(|| {
+			buffer
+				.tree()
+				.root_node()
+				.descendant_for_byte_range(resolved.start_byte, resolved.end_byte)
+		})?;
+
+	loop {
+		if node.start_byte() == resolved.start_byte && node.end_byte() == resolved.end_byte {
+			return Some(node);
+		}
+		let parent = node.parent()?;
+		node = parent;
+	}
 }
 
 /// Dispatch a single edit operation (symbol-targeted or line-targeted).
@@ -264,7 +289,19 @@ fn single_edit_operation(
 			let column = value_to_usize(options.get("column"), 0);
 			transpose_nodes(buffer, line, column).map_err(engine_err)
 		},
-		other => Err(json_err(format!("Unknown edit operation: {other}"))),
+		other => {
+			let procedure = profile
+				.procedures
+				.get(other)
+				.ok_or_else(|| json_err(format!("Unknown edit operation: {other}")))?;
+			let resolved = resolve_target(buffer, profile, options)?;
+			let node = resolved_node(buffer, &resolved)
+				.ok_or_else(|| json_err("Node not found for resolved target"))?;
+			let result = apply_procedure(procedure, &node, resolved.start_byte, profile)
+				.ok_or_else(|| json_err(format!("Procedure '{other}' did not match")))?;
+			apply_procedure_transform(procedure, &buffer.source(), &result.matched_nodes, options)
+				.map_err(engine_err)
+		},
 	}
 }
 
@@ -506,6 +543,13 @@ mod tests {
 			.clone()
 	}
 
+	fn markdown_profile() -> LanguageProfile {
+		registry_for_tests()
+			.get(&LanguageId::new("markdown"))
+			.expect("profile")
+			.clone()
+	}
+
 	#[test]
 	fn parse_patches_reads_entries() {
 		let options = json!({
@@ -533,6 +577,85 @@ mod tests {
 		assert_eq!(edits.len(), 1);
 		assert_eq!(edits[0].start_byte, 0);
 		assert!(edits[0].new_text.contains("return a * b"));
+	}
+
+	#[test]
+	fn single_edit_operation_supports_markdown_promote() {
+		let mut buffer = CodeBuffer::from_str(
+			"## Installation\n\nFollow these steps.\n\n### Steps\n\n```bash\nbun install\n```\n",
+			LanguageId::new("markdown"),
+			registry_for_tests(),
+		)
+		.expect("buffer");
+		let profile = markdown_profile();
+		let options = json!({
+			"operation": "promote",
+			"symbol": "Installation"
+		});
+		let edits = single_edit_operation(&buffer, &profile, &options).expect("promote");
+		buffer.edit_batch(edits).expect("apply");
+		let updated = buffer.source();
+		assert!(
+			updated.starts_with("# Installation\n"),
+			"promote should shift section heading: {updated}"
+		);
+		assert!(updated.contains("## Steps"), "promote should shift child heading: {updated}");
+	}
+
+	#[test]
+	fn single_edit_operation_supports_markdown_replace_code_block() {
+		let mut buffer = CodeBuffer::from_str(
+			"## Installation\n\nFollow these steps.\n\n```bash\nbun install\n```\n",
+			LanguageId::new("markdown"),
+			registry_for_tests(),
+		)
+		.expect("buffer");
+		let profile = markdown_profile();
+		let options = json!({
+			"operation": "replace-code-block",
+			"symbol": "Installation",
+			"language": "bash",
+			"content": "bun add hono"
+		});
+		let edits = single_edit_operation(&buffer, &profile, &options).expect("replace code block");
+		buffer.edit_batch(edits).expect("apply");
+		let updated = buffer.source();
+		assert!(
+			updated.contains("```bash\nbun add hono\n```"),
+			"should preserve fence + language: {updated}"
+		);
+	}
+
+	#[test]
+	fn single_edit_operation_supports_typst_promote_and_demote() {
+		let mut promote_buffer = CodeBuffer::from_str(
+			"== Section One\nSome content.\n",
+			LanguageId::new("typst"),
+			registry_for_tests(),
+		)
+		.expect("buffer");
+		let profile = typst_profile();
+		let promote = json!({
+			"operation": "promote",
+			"symbol": "Section One"
+		});
+		let edits = single_edit_operation(&promote_buffer, &profile, &promote).expect("promote");
+		promote_buffer.edit_batch(edits).expect("apply");
+		assert!(promote_buffer.source().starts_with("= Section One\n"));
+
+		let mut demote_buffer = CodeBuffer::from_str(
+			"= Top Level\nSome content.\n",
+			LanguageId::new("typst"),
+			registry_for_tests(),
+		)
+		.expect("buffer");
+		let demote = json!({
+			"operation": "demote",
+			"symbol": "Top Level"
+		});
+		let edits = single_edit_operation(&demote_buffer, &profile, &demote).expect("demote");
+		demote_buffer.edit_batch(edits).expect("apply");
+		assert!(demote_buffer.source().starts_with("== Top Level\n"));
 	}
 
 	#[test]
@@ -639,12 +762,12 @@ mod tests {
 	#[test]
 	fn unsupported_language_returns_error_envelope() {
 		let dir = tempfile::tempdir().expect("tempdir");
-		let md_file = dir.path().join("readme.md");
-		fs::write(&md_file, "# Hello\n").expect("write");
+		let unknown_file = dir.path().join("readme.xyz");
+		fs::write(&unknown_file, "hello\n").expect("write");
 
 		let result = execute_code_buffer(json!({
 			"command": "read",
-			"file": md_file.to_str().expect("utf8 path")
+			"file": unknown_file.to_str().expect("utf8 path")
 		}))
 		.expect("should not throw");
 

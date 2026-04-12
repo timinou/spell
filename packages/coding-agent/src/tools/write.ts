@@ -22,6 +22,7 @@ import { enforceModeWrite, resolvePlanPath } from "./mode-guard";
 import { type OutputMeta, outputMeta } from "./output-meta";
 import {
 	formatDiagnostics,
+	formatErrorMessage,
 	formatExpandHint,
 	formatMoreItems,
 	formatStatusIcon,
@@ -233,7 +234,7 @@ export const writeToolRenderer = {
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: WriteToolDetails },
+		result: { content: Array<{ type: string; text?: string }>; details?: WriteToolDetails; isError?: boolean },
 		options: RenderResultOptions,
 		uiTheme: Theme,
 		args?: WriteRenderArgs,
@@ -244,7 +245,20 @@ export const writeToolRenderer = {
 		const lang = getLanguageFromPath(rawPath);
 		const langIcon = uiTheme.fg("muted", uiTheme.getLangIcon(lang));
 		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", "…");
-		const lineCount = countLines(fileContent);
+		const lineCount = typeof args?.content === "string" ? countLines(fileContent) : null;
+		const textContent = result.content.find(content => content.type === "text")?.text ?? "";
+		const diagnostics = result.details?.diagnostics;
+		if (result.isError) {
+			const header = renderStatusLine(
+				{
+					icon: "error",
+					title: "Write",
+					description: `${langIcon} ${pathDisplay}`,
+				},
+				uiTheme,
+			);
+			return new Text([header, formatErrorMessage(textContent, uiTheme)].join("\n"), 0, 0);
+		}
 
 		// Build header with status icon
 		const header = renderStatusLine(
@@ -256,7 +270,6 @@ export const writeToolRenderer = {
 			uiTheme,
 		);
 		const metadataLine = formatMetadataLine(lineCount, lang ?? "text", uiTheme);
-		const diagnostics = result.details?.diagnostics;
 
 		let cached: RenderCache | undefined;
 

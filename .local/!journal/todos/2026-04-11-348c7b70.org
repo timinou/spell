@@ -1,0 +1,116 @@
+#+TITLE: Session 14b70ae7cd2b6f82 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 1
+
+** ITEM Wire skill globs through prompt loading
+:PROPERTIES:
+:TASK_ID: skill-globs
+:STATUS: pending
+:ORG_ITEM_ID: FEAT-472-wire-skill-globs-for-conditional-prompt
+:END:
+
+Propagate skill globs from extensibility parser to prompt-building path and add regression test.
+
+Plan item FEAT-472
+
+** ITEM Make LSP status report truthful
+:PROPERTIES:
+:TASK_ID: lsp-status
+:STATUS: pending
+:ORG_ITEM_ID: BUG-216-lsp-status-reports-configured-servers-as
+:END:
+
+Separate configured vs active servers in LSP status output and cover with regression test.
+
+Plan item BUG-216
+
+** ITEM Add Tinymist git-root regression test
+:PROPERTIES:
+:TASK_ID: tinymist-regression
+:STATUS: pending
+:ORG_ITEM_ID: FEAT-473-add-regression-test-for-git-based-tinymi
+:END:
+
+Add TempDir-based regression tests around .git root-marker activation for Typst files.
+
+Plan item FEAT-473
+
+** ITEM Add Typst code-tool smoke test
+:PROPERTIES:
+:TASK_ID: typst-code-smoke
+:STATUS: pending
+:ORG_ITEM_ID: FEAT-474-add-typst-outline-smoke-test-for-code-to
+:END:
+
+Add TypeScript-side smoke coverage for Typst code tool rendering path.
+
+Plan item FEAT-474
+
+** ITEM Make build.rs prefer selected Typst grammar version
+:PROPERTIES:
+:TASK_ID: buildrs-versioning
+:STATUS: pending
+:ORG_ITEM_ID: BUG-217-build-rs-grammar-generation-picks-first
+:END:
+
+Parse Cargo.toml dependency versions and prefer matching cargo-registry node-types path during generation.
+
+Plan item BUG-217
+
+* Finalize
+
+** ITEM Run focused verification and collect evidence
+:PROPERTIES:
+:TASK_ID: verify-plan
+:STATUS: pending
+:DEPENDS: task://plan-195/skill-globs task://plan-195/lsp-status task://plan-195/tinymist-regression task://plan-195/typst-code-smoke task://plan-195/buildrs-versioning
+:ORG_ITEM_ID: PLAN-195-harden-typst-first-class-support-from-au
+:END:
+
+Run plan verification commands, capture outputs/artifacts, and confirm changed behavior.
+
+** ITEM Update org state and commit plan work
+:PROPERTIES:
+:TASK_ID: close-plan
+:STATUS: pending
+:DEPENDS: task://plan-195/verify
+:ORG_ITEM_ID: PLAN-195-harden-typst-first-class-support-from-au
+:END:
+
+Append completion report, mark linked org items DONE truthfully, and commit only plan-related files.
+
+* Implementation
+
+** ITEM Wire skill globs into prompt loading and add tests
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: pending
+:END:
+
+** ITEM Fix LSP status wording and add Tinymist root-marker regression tests
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: pending
+:END:
+
+** ITEM Add TypeScript-side Typst code tool smoke coverage
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: pending
+:END:
+
+** ITEM Make grammar generation prefer the Cargo-selected Typst version
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: pending
+:END:
+
+* Implementation
+
+** DONE Fix LSP status wording and add Tinymist root-marker regression tests
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:END:

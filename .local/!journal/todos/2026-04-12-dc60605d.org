@@ -1,0 +1,50 @@
+#+TITLE: Session 14b70e4c6eece845 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Review context and patterns
+:PROPERTIES:
+:TASK_ID: review-context
+:STATUS: completed
+:END:
+
+Read memory summary, Typst/QML skill/spec context, and current repo patterns relevant to a Typst WYSIWYG editor integrated with the QML bridge. Summarize discovered patterns before design decisions.
+
+Verified QML bridge, canvas styling, existing Typst editor placeholder/spec, native binding conventions, and test patterns. Enough context gathered to settle architecture.
+
+** DONE Settle architecture decisions
+:PROPERTIES:
+:TASK_ID: settle-design
+:STATUS: completed
+:DEPENDS: review-context
+:END:
+
+Ask clarifying questions about scope, acceptance criteria, error handling, testing, and the editing surface architecture. Produce a numbered list of settled decisions before creating org items.
+
+Architecture settled: QML shell plus embedded custom Rust document surface, canonical Typst source, editing-first visual UX, hidden recovery mode, SVG fallback, Linux-first with cross-platform seams, and artifact-heavy verification.
+
+** DONE Create child org items
+:PROPERTIES:
+:TASK_ID: write-items
+:STATUS: completed
+:DEPENDS: settle-design
+:END:
+
+Create self-contained child org items with explicit file paths, dependencies, test requirements, acceptance criteria, and verification details. Keep scopes non-overlapping.
+
+Created four project child items plus the orchestration plan item. Next step is consistency sweep and exit.
+
+** DONE Create plan and consistency sweep
+:PROPERTIES:
+:TASK_ID: finalize-plan
+:STATUS: completed
+:DEPENDS: write-items
+:END:
+
+Create the orchestration PLAN item, then read every child item back, verify consistency, dependencies, effort, and self-contained detail, fix discrepancies, and call exit_plan_mode.
+
+Read all child items and the PLAN back. Dependencies are complete and acyclic. Decisions are reflected consistently: custom Rust document surface in QML, canonical Typst source, hidden recovery mode, SVG fallback, Linux-first/cross-platform seam, and artifact-based verification.
+
+* Status

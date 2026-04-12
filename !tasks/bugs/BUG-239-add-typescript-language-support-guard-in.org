@@ -1,0 +1,161 @@
+#+TITLE: Add TypeScript language-support guard in code tool
+#+STATE: DONE
+#+SESSION_ID: 14b7c0345fa6434e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-04-51-070Z_14b7c0345fa6434e.jsonl]]
+#+CUSTOM_ID: BUG-239-add-typescript-language-support-guard-in
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: coding-agent
+#+DEPENDS: BUG-238-convert-napi-execute-code-buffer-from-th
+
+NOTE [2026-04-12]: Added SUPPORTED_EXTENSIONS and FILE_COMMANDS guard in packages/coding-agent/src/tools/code.ts, added regression coverage in packages/coding-agent/test/tools/code.test.ts, and verified the focused code-tool test suite passed.
+
+* Initial Message
+
+Code
+ language not found for path: /home/user/code/ora/spell/packages/coding-agent/src/prompts/system/system-prompt.md                ╭────────────╮
+                                                                                                                                 │ 🗺 Plotting │
+                                                                                                                                 ╰────────────╯
+
+ ✔ Find: packages/coding-agent/src/prompts/**/*.md 100 files · in packages/coding-agent/src/prompts
+ ├─ 📝 system/system-prompt.md
+ ├─ 📝 tools/code.md
+ ├─ 📝 tools/handoff.md
+ ├─ 📝 tools/spawn-successor.md
+ ├─ 📝 tools/task.md
+ ├─ 📝 tools/todo-write.md
+ ├─ 📝 system/caveman.md
+ ├─ 📝 system/plan-mode-active.md
+ └─ … 92 more files
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-00-31-490Z_14b7bf36e09ede5e.jsonl
+ ID: 14b7bf36e09ede5e
+
+
+
+
+and then it froze. look at the recent hang fixes that were done on the code tool and its backing rust crates, and extract the structural fix to this.
+
+* Problem
+The code tool accepts any file path and passes it to the native NAPI engine. When the file has an unsupported extension (e.g. =.md=, =.json=, =.yaml=, =.toml=, =.txt=), the Rust engine returns =LanguageNotFound=. The error propagates correctly but:
+1. Wastes a round-trip into native code for a predictable failure
+2. The error message ("language not found for path: ...") gives the model no guidance on what to do instead
+3. The model often retries or stalls instead of falling back to the =read= tool
+
+* Design Decisions
+1. Add a =SUPPORTED_EXTENSIONS= constant in =code.ts= listing all file extensions supported by the native engine: =ts, tsx, js, jsx, mjs, cjs, mts, cts, rs, py, pyi, typ, ex, exs=
+2. For file-requiring commands (=outline=, =read=, =navigate=, =edit=, =undo=, =redo=, =diff=, =save=), check the file extension before calling =timedCodeBuffer=
+3. Return a structured error via =createCodeToolError= with a message that explicitly tells the model to use the =read= tool instead
+4. Commands that don't require a file (=buffers=, =languages=, =list=) and graph commands skip this check
+5. The =SUPPORTED_EXTENSIONS= set is the source of truth in TypeScript — if a new language is added to the Rust engine, this set must be updated. This is acceptable because language additions are rare and involve coordinated changes across layers anyway.
+
+* Implementation
+
+** Modify =packages/coding-agent/src/tools/code.ts=
+
+*** Add constant after existing =MUTATING_COMMANDS= set
+
+#+begin_src typescript
+const SUPPORTED_EXTENSIONS = new Set([
+    "ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts",
+    "rs",
+    "py", "pyi",
+    "typ",
+    "ex", "exs",
+]);
+
+const FILE_COMMANDS = new Set([
+    "outline", "read", "navigate", "edit", "undo", "redo", "diff", "save", "open", "close",
+]);
+#+end_src
+
+*** Add guard in =execute()= after file resolution, before NAPI call
+
+After the line =if (params.file) options.file = resolveFile(params.file);= and after all other option assignments, before =const result = timedCodeBuffer(options);=, add:
+
+#+begin_src typescript
+if (FILE_COMMANDS.has(nativeCommand) && options.file) {
+    const ext = path.extname(options.file).slice(1).toLowerCase();
+    if (ext && !SUPPORTED_EXTENSIONS.has(ext)) {
+        const details = createCodeToolError({
+            command,
+            file: options.file,
+            cwd: sessionCwd,
+            message: `Unsupported file type .${ext}. Use the read tool for non-code files.`,
+        });
+        return toolResult(details).text(formatCodeToolContent(details)).done();
+    }
+}
+#+end_src
+
+Note: the check uses =ext && !SUPPORTED_EXTENSIONS.has(ext)= — if there's no extension, let NAPI handle it (extensionless files like =Makefile= are rejected at the Rust level anyway, and the error envelope from BUG-238 will handle it cleanly).
+
+** Add TypeScript tests
+
+In =packages/coding-agent/test/tools/code.test.ts=, add tests alongside the existing error-handling tests:
+
+*** Test 1: Unsupported extension returns error without NAPI call
+
+#+begin_src typescript
+it("rejects unsupported file extensions before calling NAPI", async () => {
+    const bufferSpy = spyOn(nativesModule, "executeCodeBuffer");
+    const tool = new CodeTool(createSession());
+    const result = await tool.execute("tool", {
+        command: "read",
+        file: "/tmp/test/doc.md",
+    });
+    const text = getText(result);
+    expect(text).toContain("Unsupported file type .md");
+    expect(text).toContain("read tool");
+    expect(bufferSpy).not.toHaveBeenCalled();
+});
+#+end_src
+
+*** Test 2: Supported extension still reaches NAPI
+
+#+begin_src typescript
+it("allows supported file extensions through to NAPI", async () => {
+    const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+        output: "content",
+        error: false,
+    });
+    const tool = new CodeTool(createSession());
+    await tool.execute("tool", { command: "read", file: "/tmp/test/main.ts" });
+    expect(bufferSpy).toHaveBeenCalled();
+});
+#+end_src
+
+*** Test 3: Commands without file (buffers, languages) bypass check
+
+#+begin_src typescript
+it("bypasses extension check for non-file commands", async () => {
+    const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+        output: { languages: [] },
+        error: false,
+    });
+    const tool = new CodeTool(createSession());
+    await tool.execute("tool", { command: "languages" });
+    expect(bufferSpy).toHaveBeenCalled();
+});
+#+end_src
+
+*** Test 4: Extensionless files pass through (NAPI decides)
+
+#+begin_src typescript
+it("allows extensionless files through to NAPI", async () => {
+    const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+        output: "content",
+        error: false,
+    });
+    const tool = new CodeTool(createSession());
+    await tool.execute("tool", { command: "read", file: "/tmp/test/Makefile" });
+    expect(bufferSpy).toHaveBeenCalled();
+});
+#+end_src
+
+* Verification
+- =bun test packages/coding-agent/test/tools/code.test.ts= — existing tests pass + 4 new tests
+- =bun check:ts= — no type errors

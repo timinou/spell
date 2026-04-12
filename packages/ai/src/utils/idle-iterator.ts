@@ -30,8 +30,23 @@ export function getAnthropicStreamIdleTimeoutMs(): number | undefined {
 	return normalizeIdleTimeoutMs($env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS, DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS);
 }
 
+const DEFAULT_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS = 180_000;
+
+/**
+ * Returns the idle timeout used while a provider is actively streaming tool arguments.
+ *
+ * Set `PI_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS=0` to disable the extended watchdog.
+ */
+export function getToolArgumentStreamIdleTimeoutMs(baseIdleTimeoutMs?: number): number | undefined {
+	return normalizeIdleTimeoutMs(
+		$env.PI_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS,
+		Math.max(baseIdleTimeoutMs ?? 0, DEFAULT_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS),
+	);
+}
+
 export interface IdleTimeoutIteratorOptions {
 	idleTimeoutMs?: number;
+	getIdleTimeoutMs?: () => number | undefined;
 	errorMessage: string;
 	onIdle?: () => void;
 }
@@ -43,27 +58,27 @@ export async function* iterateWithIdleTimeout<T>(
 	iterable: AsyncIterable<T>,
 	options: IdleTimeoutIteratorOptions,
 ): AsyncGenerator<T> {
-	if (options.idleTimeoutMs === undefined || options.idleTimeoutMs <= 0) {
-		for await (const item of iterable) {
-			yield item;
-		}
-		return;
-	}
-
 	const iterator = iterable[Symbol.asyncIterator]();
 
 	while (true) {
+		const idleTimeoutMs = options.getIdleTimeoutMs?.() ?? options.idleTimeoutMs;
 		const nextResultPromise = iterator.next().then(
 			result => ({ kind: "next" as const, result }),
 			error => ({ kind: "error" as const, error }),
 		);
-		const { promise: timeoutPromise, resolve: resolveTimeout } = Promise.withResolvers<{
-			kind: "timeout";
-		}>();
-		const timer = setTimeout(() => resolveTimeout({ kind: "timeout" }), options.idleTimeoutMs);
+
+		let timeoutPromise: Promise<{ kind: "timeout" }> | undefined;
+		let timer: NodeJS.Timeout | undefined;
+		if (idleTimeoutMs !== undefined && idleTimeoutMs > 0) {
+			const timeoutResult = Promise.withResolvers<{ kind: "timeout" }>();
+			timeoutPromise = timeoutResult.promise;
+			timer = setTimeout(() => timeoutResult.resolve({ kind: "timeout" }), idleTimeoutMs);
+		}
 
 		try {
-			const outcome = await Promise.race([nextResultPromise, timeoutPromise]);
+			const outcome = timeoutPromise
+				? await Promise.race([nextResultPromise, timeoutPromise])
+				: await nextResultPromise;
 			if (outcome.kind === "timeout") {
 				options.onIdle?.();
 				const returnPromise = iterator.return?.();
@@ -80,7 +95,7 @@ export async function* iterateWithIdleTimeout<T>(
 			}
 			yield outcome.result.value;
 		} finally {
-			clearTimeout(timer);
+			if (timer) clearTimeout(timer);
 		}
 	}
 }

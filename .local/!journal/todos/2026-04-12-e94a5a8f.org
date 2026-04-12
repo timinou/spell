@@ -1,0 +1,23 @@
+#+TITLE: Session 14b7b93721521a68 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Manual verification
+
+** DONE Diagnose code edit crash after result
+:PROPERTIES:
+:TASK_ID: verify-restarted-session
+:STATUS: completed
+:END:
+
+Completed.
+
+Reproduced in restarted session. Logs showed edit/save timing entries followed by agent loop failure: structuredClone crash in extension runner emitContext. Fixed by skipping context cloning when no handlers are registered and adding clone-safe fallback sanitization when handlers exist. Verified with new regression tests.
+
+** DONE Commit extension clone-safety fix
+:PROPERTIES:
+:TASK_ID: commit-followup-fix
+:STATUS: completed
+:END:
+
+Committed as 9ee7dff56.

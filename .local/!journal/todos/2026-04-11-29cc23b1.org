@@ -1,0 +1,23 @@
+#+TITLE: Session 14b6ff95b1033d24 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Key files to investigate
+
+** DONE Find and outline the code tool TypeScript implementation
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Find and outline the Emacs Lisp navigate implementation
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Find Typst language registration and tree-sitter config
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

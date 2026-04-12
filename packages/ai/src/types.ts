@@ -292,6 +292,36 @@ export interface ToolCall {
 	intent?: string; // Harness-level intent metadata extracted from traced tool arguments
 }
 
+export interface PersistedDebugArtifactRef {
+	uri?: string;
+	path?: string;
+}
+
+export type ToolCallStreamDiagnosticState =
+	| "stalled_before_tool_args"
+	| "stalled_incomplete_tool_args"
+	| "completed_tool_call_missing_trailing_stop";
+
+export interface ToolCallStreamDiagnostic {
+	kind: "tool_call_stream_diagnostic";
+	state: ToolCallStreamDiagnosticState;
+	api: Api;
+	provider: Provider;
+	model: string;
+	toolName?: string;
+	toolCallId?: string;
+	contentIndex?: number;
+	parsedArgumentKeys: string[];
+	rawPartialJson?: string;
+	rawPartialJsonBytes: number;
+	rawPartialJsonArtifact?: PersistedDebugArtifactRef;
+	firstTokenTimeMs?: number;
+	idleTimeoutMs?: number;
+	providerRetryAttempt: number;
+}
+
+export type AssistantStreamDiagnostic = ToolCallStreamDiagnostic;
+
 export interface Usage {
 	input: number;
 	output: number;
@@ -350,6 +380,7 @@ export interface AssistantMessage {
 	usage: Usage;
 	stopReason: StopReason;
 	errorMessage?: string;
+	streamDiagnostics?: AssistantStreamDiagnostic[];
 	/** Provider-specific opaque payload used to reconstruct transport-native history. */
 	providerPayload?: ProviderPayload;
 	timestamp: number; // Unix timestamp in milliseconds

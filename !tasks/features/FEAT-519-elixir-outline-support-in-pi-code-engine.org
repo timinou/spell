@@ -1,0 +1,54 @@
+#+TITLE: Elixir outline support in pi-code-engine
+#+STATE: ITEM
+#+SESSION_ID: 14b7be567342b8fe
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl]]
+#+CUSTOM_ID: FEAT-519-elixir-outline-support-in-pi-code-engine
+#+EFFORT: 3h
+#+LAYER: code-engine
+
+* Initial Message
+
+Let me understand the current codebase state before executing.
+
+ Task model: claude-sonnet-4-6
+
+
+ Code
+ ┌─── ✔ Code outline ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Outline lib/hotelcomm/conversations/server.ex (1 top-level, 1 total symbols)                                                               │
+ │ - def defmodule L1-L1519                                                                                                                   │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Code
+ ┌─── ✔ Code outline ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Outline lib/hotelcomm/agents/djinn_executor.ex (1 top-level, 1 total symbols)                                                              │
+ │ - def defmodule L1-L214                                                                                                                    │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Code
+ ┌─── ✔ Code outline ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Outline lib/hotelcomm/agents/overlay_store.ex (1 top-level, 1 total symbols)                                                               │
+ │ - def defmodule L1-L289                                                                                                                    │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Code
+ ┌─── ✔ Code outline ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Outline lib/hotelcomm/agents/config_resolver.ex (1 top-level, 1 total symbols)                                                             │
+ │ - def defmodule L1-L104                                                                                                                    │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+This is not very useful...
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-hotelcomm/2026-04-12T12-54-56-532Z_14b7bdefc50fd377.jsonl
+ ID: 14b7bdefc50fd377
+
+Placeholder — body will be added via update.

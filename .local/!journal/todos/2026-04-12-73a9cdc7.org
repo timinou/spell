@@ -1,0 +1,48 @@
+#+TITLE: Session 14b7e423ad99caf7 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Inspect code tool baseline
+:PROPERTIES:
+:TASK_ID: inspect-current-code-tool
+:STATUS: completed
+:END:
+
+Read current code tool implementation, result formatter, tests, prompt, and linked org child items before edits. Acceptance: identify exact symbols/files to change and current child item states.
+
+Inspected linked org items plus current code.ts, code-result.ts, tests, and code.md. Chose sequential direct execution because Wave 1 changes overlap in code.test.ts and tool contract/output behavior.
+
+** DONE Implement wave1 code changes
+:PROPERTIES:
+:TASK_ID: implement-wave1
+:STATUS: completed
+:DEPENDS: inspect-current-code-tool
+:END:
+
+Update code.ts input normalization/schema, code-result.ts compact formatting, and package tests for both behaviors. Acceptance: focused tests for code and code-result pass.
+
+Focused tool tests passed: code.test.ts and code-result.test.ts. Input normalization and compact formatter behavior verified.
+
+** DONE Update code tool prompt
+:PROPERTIES:
+:TASK_ID: implement-wave2
+:STATUS: completed
+:DEPENDS: implement-wave1
+:END:
+
+Revise packages/coding-agent/src/prompts/tools/code.md examples and output description to use array-of-lines input and compact result formatting. Acceptance: prompt reflects new interface consistently.
+
+Read static prompt file and rendered prompt via renderPromptTemplate; examples now prefer line arrays and output docs describe compact hashline summaries.
+
+** DONE Verify and close plan
+:PROPERTIES:
+:TASK_ID: verify-and-close-plan
+:STATUS: completed
+:DEPENDS: implement-wave2
+:END:
+
+Run required focused tests/checks, update org completion report and child item states, then commit only plan-related changes. Acceptance: verification commands pass, org plan is DONE, commit created.
+
+Verification passed (focused tests, bun check:ts, bun lint:ts, rendered prompt inspection). Updated plan/child org items to DONE and committed staged plan files as 448387ec6.

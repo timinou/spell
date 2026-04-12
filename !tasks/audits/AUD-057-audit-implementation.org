@@ -1,0 +1,45 @@
+#+TITLE: Audit implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-057-audit-implementation
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+1. **What**: File-local native failures are flattened into plain output and lose their `error` bit  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, `CodeTool.execute()` right after `executeCodeBuffer(options)`  
+   **Why**: The tool serializes `result.output` instead of the full native envelope. If the native layer returns `{ error: true, output: "..." }`, the model only sees the string payload, not a verifiable failure marker. Unsupported-language and bad-command responses can look like normal output.  
+   **Effort**: `small`
+
+2. **What**: Splice direction is no longer expressible, while the schema still advertises unsupported edit operations  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, `codeSchema` + native option mapping; `crates/pi-natives/src/code_buffer.rs`, `edit_operation()`  
+   **Why**: The native engine expects `operation: "splice"` plus `mode`, but the code tool no longer exposes `mode`. At the same time, the schema description still mentions `splice-self`, `splice-down`, and `envelope`. That leaves callers with an advertised API they cannot actually use, and some values now fail with native “Unknown edit operation” errors.  
+   **Effort**: `small`
+
+3. **What**: The code-tool prompt still documents the removed `save: false` edit flag  
+   **Where**: `packages/coding-agent/src/prompts/tools/code.md`, “Preview before saving” example around line 16  
+   **Why**: The native engine uses an explicit `save` command, but the prompt still teaches the old Emacs-era edit contract. Agents can send dead arguments and misunderstand when edits are persisted.  
+   **Effort**: `trivial`
+
+4. **What**: `depth` is still accepted for file-local calls but ignored by the native buffer engine  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, option construction for `params.depth`; `crates/pi-natives/src/code_buffer.rs`, `outline` branch  
+   **Why**: Callers can ask for depth-limited file-local output and silently receive the full structure. That is a contract violation: input is accepted, then discarded with no signal.  
+   **Effort**: `small`
+
+5. **What**: Relative file paths are passed through without rebasing against `session.cwd`  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, file-local option construction for `params.file`  
+   **Why**: Graph commands already root themselves at `session.cwd`, but file-local commands hand the raw path to the native engine. If the process cwd and session cwd diverge, `code read/outline/edit/save` can resolve the wrong file or fail unexpectedly.  
+   **Effort**: `small`
+
+6. **What**: `startEmacsSession` lost its default code-daemon bootstrap, but daemon docs/comments still describe the removed default path  
+   **Where**: `packages/emacs/src/daemon.ts`, around the default eval handling in the Emacs arg builder  
+   **Why**: The implementation no longer loads `pi-prelude` / `pi-emacs-mcp`, but the surrounding source still implies that a default bootstrap exists. That is a rough edge for remaining maintainers and any caller still relying on the exported `startEmacsSession` API.  
+   **Effort**: `small`
+
+7. **What**: The new code-tool tests do not lock in the tricky contract edges introduced by the migration  
+   **Where**: `packages/coding-agent/test/tools/code.test.ts`  
+   **Why**: The suite covers routing and thrown exceptions, but not the native in-band error envelope, ignored `depth`, missing splice `mode`, or relative-path resolution against `session.cwd`. Those are the regressions most likely to ship silently.  
+   **Effort**: `small`

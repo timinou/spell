@@ -1,0 +1,15 @@
+#+TITLE: Session 14b7152a17a19b17 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Write org child items and plan
+:PROPERTIES:
+:TASK_ID: write-org-plan
+:STATUS: completed
+:END:
+
+Create self-contained child items first, then PLAN item, perform consistency sweep by re-reading every item, and call exit_plan_mode.
+
+Created BUG-228 and BUG-229 child items, created PLAN-205 orchestration plan in plans, and performed consistency sweep by re-reading both child items and the plan. Dependency chain is linear and acyclic: BUG-229 depends on BUG-228.

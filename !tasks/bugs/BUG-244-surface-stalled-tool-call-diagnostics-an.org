@@ -1,0 +1,77 @@
+#+TITLE: Surface stalled tool-call diagnostics and defer lock acquisition
+#+STATE: DOING
+#+SESSION_ID: 14b7ee149bae1c85
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T16-25-17-166Z_14b7ee149bae1c85.jsonl]]
+#+CUSTOM_ID: BUG-244-surface-stalled-tool-call-diagnostics-an
+#+EFFORT: 5h
+#+PRIORITY: #A
+#+LAYER: agent-session
+#+DEPENDS: BUG-245-define-shared-incomplete-tool-call-stall BUG-243-cross-provider-tool-argument-idle-timeou
+
+
+* Initial Message
+
+✘ Write: ⌘ !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+ ✘ Error: Tool execution failed due to an error: Anthropic messages stream stalled while streaming incomplete write tool arguments
+
+
+ Task model: gpt-5.4-mini
+
+
+ ┌─── ✔ Bash ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ $ wc -l !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org                                                 ╭──────────╮
+ ├─── Output ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│ 🗺 Paused │
+ │ 54 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org                                                      ╰──────────╯
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Write ⢿ 🗒 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+
+
+
+ Write ⣟ 🗒 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl
+ ID: 14b7be567342b8fe
+
+
+
+explain this: Tool execution failed due to an error: Anthropic messages stream stalled while streaming incomplete write tool arguments
+
+* User workflows
+1. When a stalled incomplete tool call fails, the transcript and UI show enough information to debug the failure without claiming the tool actually ran.
+2. Raw partial tool JSON is recoverable through the persisted diagnostic reference, but the normal renderer shows a concise summary by default.
+3. Streaming preview paths do not grab file/session write state or rope/buffer state at tool-call start; acquisition happens only when execution is ready to apply instructions.
+4. A failed or stalled stream leaves no lingering write/session/rope lock and no stale preview cache that blocks later edits.
+
+* Scope
+Wire the shared stalled-tool-call diagnostics into coding-agent session persistence and user-visible surfaces. The session layer should preserve summary metadata and references to the full raw payload, and renderer layers should display concise actionable summaries.
+
+Also audit and fix early acquisition behavior in streaming preview / abort-defense paths. In particular, remove any toolcall-start prefetch or cache warming that reads or pins writable state before complete instructions are available. The target behavior is atomic locking: file/session write state and rope/buffer state are only acquired at the moment execution is ready to validate/apply the final instruction payload, and they are always released on stall, abort, or retry.
+
+* Files
+- =packages/coding-agent/src/session/agent-session.ts=
+- =packages/coding-agent/src/session/session-manager.ts=
+- =packages/coding-agent/src/modes/controllers/event-controller.ts=
+- =packages/coding-agent/src/modes/utils/ui-helpers.ts=
+- =packages/coding-agent/src/modes/components/tool-execution.ts=
+- =packages/coding-agent/src/tools/write.ts= and related renderers as needed
+- audit =crates/pi-natives/src/code_buffer.rs= and =crates/pi-code-engine/src/buffer.rs= to prove lock timing remains execution-time, not stream-start
+
+* Acceptance
+- Transcript/UI surfaces expose concise stalled-tool-call diagnostics with reference to the raw persisted payload.
+- No preview path claims success or leaves stale writable state after a stall.
+- Early streaming pre-cache / lock acquisition is removed or deferred until execution-ready.
+- Native rope/buffer locking is either unchanged because it is already execution-time only, or tightened with regression coverage if the audit finds an earlier acquisition path.
+
+* Verification
+- Add focused coding-agent/session regression coverage for stalled tool-call rendering and persistence.
+- Add/extend native/code-buffer coverage proving lock acquisition is execution-time only.
+- Capture one transcript artifact or screenshot proving the surfaced diagnostic path.
+- Run =bun check:ts= and =bun check:rs=.
+
+NOTE [2026-04-12]: Linked from [[id:PLAN-218-cross-provider-stalled-incomplete-tool-c]]. Session/UI item for surfaced diagnostics and atomic lock acquisition.

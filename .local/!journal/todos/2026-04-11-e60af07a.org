@@ -1,0 +1,23 @@
+#+TITLE: Session 14b7024d5e1da06d Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Verify FEAT-475 symbol resolution item
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Verify FEAT-476 patch operation item
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Verify FEAT-478 NAPI integration item
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

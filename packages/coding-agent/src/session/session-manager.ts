@@ -2,14 +2,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
-import type {
-	ImageContent,
-	Message,
-	MessageAttribution,
-	ProviderPayload,
-	ServiceTier,
-	TextContent,
-	Usage,
+import {
+	type ImageContent,
+	isToolCallStreamDiagnostic,
+	type Message,
+	type MessageAttribution,
+	type ProviderPayload,
+	type ServiceTier,
+	type TextContent,
+	type ToolCallStreamDiagnostic,
+	type Usage,
 } from "@oh-my-pi/pi-ai";
 import { getTerminalId } from "@oh-my-pi/pi-tui";
 import {
@@ -939,6 +941,8 @@ const TRUNCATION_NOTICE = "\n\n[Session persistence truncated large content]";
 /** Minimum base64 length to externalize to blob store (skip tiny inline images) */
 const BLOB_EXTERNALIZE_THRESHOLD = 1024;
 const TEXT_CONTENT_KEY = "content";
+const TOOL_CALL_DIAGNOSTIC_ARTIFACT_TYPE = "tool-call-diagnostic";
+const UTF8_ENCODER = new TextEncoder();
 
 /**
  * Recursively truncate large strings in an object for session persistence.
@@ -970,16 +974,66 @@ function isImageBlock(value: unknown): value is { type: "image"; data: string; m
 	);
 }
 
-async function truncateForPersistence(obj: FileEntry, blobStore: BlobStore, key?: string): Promise<FileEntry>;
-async function truncateForPersistence(obj: string, blobStore: BlobStore, key?: string): Promise<string>;
-async function truncateForPersistence(obj: unknown[], blobStore: BlobStore, key?: string): Promise<unknown[]>;
-async function truncateForPersistence(obj: object, blobStore: BlobStore, key?: string): Promise<object>;
+async function persistToolCallStreamDiagnostic(
+	diagnostic: ToolCallStreamDiagnostic,
+	artifactManager: ArtifactManager | null,
+): Promise<ToolCallStreamDiagnostic> {
+	const rawPartialJson = diagnostic.rawPartialJson;
+	if (typeof rawPartialJson !== "string" || rawPartialJson.length === 0) {
+		return diagnostic;
+	}
+	if (diagnostic.rawPartialJsonArtifact?.uri || diagnostic.rawPartialJsonArtifact?.path) {
+		return diagnostic;
+	}
+	if (!artifactManager) {
+		return diagnostic;
+	}
+
+	const artifact = await artifactManager.save(rawPartialJson, TOOL_CALL_DIAGNOSTIC_ARTIFACT_TYPE, "json");
+	const { rawPartialJson: _rawPartialJson, ...rest } = diagnostic;
+	return {
+		...rest,
+		rawPartialJsonBytes: diagnostic.rawPartialJsonBytes || UTF8_ENCODER.encode(rawPartialJson).length,
+		rawPartialJsonArtifact: { uri: artifact.uri, path: artifact.path },
+	};
+}
+
+async function truncateForPersistence(
+	obj: FileEntry,
+	blobStore: BlobStore,
+	artifactManager: ArtifactManager | null,
+	key?: string,
+): Promise<FileEntry>;
+async function truncateForPersistence(
+	obj: string,
+	blobStore: BlobStore,
+	artifactManager: ArtifactManager | null,
+	key?: string,
+): Promise<string>;
+async function truncateForPersistence(
+	obj: unknown[],
+	blobStore: BlobStore,
+	artifactManager: ArtifactManager | null,
+	key?: string,
+): Promise<unknown[]>;
+async function truncateForPersistence(
+	obj: object,
+	blobStore: BlobStore,
+	artifactManager: ArtifactManager | null,
+	key?: string,
+): Promise<object>;
 async function truncateForPersistence(
 	obj: null | undefined,
 	blobStore: BlobStore,
+	artifactManager: ArtifactManager | null,
 	key?: string,
 ): Promise<null | undefined>;
-async function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: string): Promise<unknown> {
+async function truncateForPersistence(
+	obj: unknown,
+	blobStore: BlobStore,
+	artifactManager: ArtifactManager | null,
+	key?: string,
+): Promise<unknown> {
 	if (obj === null || obj === undefined) return obj;
 
 	if (typeof obj === "string") {
@@ -1014,7 +1068,7 @@ async function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: 
 					}
 				}
 
-				const newItem = await truncateForPersistence(item, blobStore, key);
+				const newItem = await truncateForPersistence(item, blobStore, artifactManager, key);
 				if (newItem !== item) changed = true;
 				return newItem;
 			}),
@@ -1023,9 +1077,12 @@ async function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: 
 	}
 
 	if (typeof obj === "object") {
-		let changed = false;
+		const candidate = isToolCallStreamDiagnostic(obj)
+			? await persistToolCallStreamDiagnostic(obj, artifactManager)
+			: obj;
+		let changed = candidate !== obj;
 		const entries: Array<readonly [string, unknown]> = await Promise.all(
-			Object.entries(obj).flatMap(([childKey, value]) => {
+			Object.entries(candidate).flatMap(([childKey, value]) => {
 				// Strip transient/redundant properties that shouldn't be persisted.
 				// - partialJson: streaming accumulator for tool call JSON parsing
 				// - jsonlEvents: raw subprocess streaming events (already saved to artifact files)
@@ -1036,7 +1093,7 @@ async function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: 
 
 				return [
 					(async () => {
-						const newValue = await truncateForPersistence(value, blobStore, childKey);
+						const newValue = await truncateForPersistence(value, blobStore, artifactManager, childKey);
 						if (newValue !== value) changed = true;
 						return [childKey, newValue] as const;
 					})(),
@@ -1044,7 +1101,7 @@ async function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: 
 			}),
 		);
 
-		if (!changed) return obj;
+		if (!changed) return candidate;
 
 		const contentEntry = entries.find(([childKey]) => childKey === "content");
 		const lineCountEntry = entries.find(([childKey]) => childKey === "lineCount");
@@ -1066,8 +1123,12 @@ async function truncateForPersistence(obj: unknown, blobStore: BlobStore, key?: 
 	return obj;
 }
 
-async function prepareEntryForPersistence(entry: FileEntry, blobStore: BlobStore): Promise<FileEntry> {
-	return truncateForPersistence(entry, blobStore);
+async function prepareEntryForPersistence(
+	entry: FileEntry,
+	blobStore: BlobStore,
+	artifactManager: ArtifactManager | null,
+): Promise<FileEntry> {
+	return truncateForPersistence(entry, blobStore, artifactManager);
 }
 
 class NdjsonFileWriter {
@@ -1746,8 +1807,9 @@ export class SessionManager {
 		if (!this.persist || !this.#sessionFile) return;
 		await this.#queuePersistTask(async () => {
 			await this.#closePersistWriterInternal();
+			const artifactManager = this.#getOrCreateArtifactManager();
 			const entries = await Promise.all(
-				this.#fileEntries.map(entry => prepareEntryForPersistence(entry, this.#blobStore)),
+				this.#fileEntries.map(entry => prepareEntryForPersistence(entry, this.#blobStore, artifactManager)),
 			);
 			await this.#writeEntriesAtomically(entries);
 			this.#flushed = true;
@@ -1901,8 +1963,9 @@ export class SessionManager {
 			void this.#queuePersistTask(async () => {
 				const writer = this.#ensurePersistWriter();
 				if (!writer) return;
+				const artifactManager = this.#getOrCreateArtifactManager();
 				const entries = await Promise.all(
-					this.#fileEntries.map(e => prepareEntryForPersistence(e, this.#blobStore)),
+					this.#fileEntries.map(e => prepareEntryForPersistence(e, this.#blobStore, artifactManager)),
 				);
 				for (const persistedEntry of entries) {
 					await writer.write(persistedEntry);
@@ -1912,7 +1975,8 @@ export class SessionManager {
 			void this.#queuePersistTask(async () => {
 				const writer = this.#ensurePersistWriter();
 				if (!writer) return;
-				const persistedEntry = await prepareEntryForPersistence(entry, this.#blobStore);
+				const artifactManager = this.#getOrCreateArtifactManager();
+				const persistedEntry = await prepareEntryForPersistence(entry, this.#blobStore, artifactManager);
 				await writer.write(persistedEntry);
 			});
 		}

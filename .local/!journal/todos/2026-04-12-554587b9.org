@@ -1,0 +1,11 @@
+#+TITLE: Session 14b829407c425bf9 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Key question
+
+** DONE Explore native build pipeline and binary resolution
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:

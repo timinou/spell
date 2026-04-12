@@ -1,0 +1,95 @@
+#+TITLE: Shared incomplete tool-call stall diagnostics contract v2
+#+STATE: ITEM
+#+SESSION_ID: 14b7ee149bae1c85
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T16-25-17-166Z_14b7ee149bae1c85.jsonl]]
+#+0: E
+#+1: F
+#+2: F
+#+3: O
+#+4: R
+#+5: T
+#+6: :
+#+7:  
+#+8: 4
+#+9: h
+#+10: 
+
+#+11: L
+#+12: A
+#+13: Y
+#+14: E
+#+15: R
+#+16: :
+#+17:  
+#+18: a
+#+19: i
+#+20: -
+#+21: r
+#+22: u
+#+23: n
+#+24: t
+#+25: i
+#+26: m
+#+27: e
+#+CUSTOM_ID: PROJ-039-shared-incomplete-tool-call-stall-diagno
+
+* Initial Message
+
+✘ Write: ⌘ !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+ ✘ Error: Tool execution failed due to an error: Anthropic messages stream stalled while streaming incomplete write tool arguments
+
+
+ Task model: gpt-5.4-mini
+
+
+ ┌─── ✔ Bash ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ $ wc -l !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org                                                 ╭──────────╮
+ ├─── Output ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│ 🗺 Paused │
+ │ 54 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org                                                      ╰──────────╯
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Write ⢿ 🗒 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+
+
+
+ Write ⣟ 🗒 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl
+ ID: 14b7be567342b8fe
+
+
+
+explain this: Tool execution failed due to an error: Anthropic messages stream stalled while streaming incomplete write tool arguments
+
+* User workflows
+1. A provider stalls while streaming tool arguments; the session must retain enough raw diagnostic state to explain what was being emitted.
+2. A maintainer reopens the transcript later and can recover provider, model, tool name, retry counts, timeout budget, byte counts, parsed keys, and the full raw partial tool JSON without re-running the failure.
+3. Downstream UI/rendering layers consume one shared diagnostic shape instead of provider-specific error strings.
+4. Large debug payloads do not bloat JSONL inline; persistence stays reconstructible.
+
+* Scope
+Define one provider-agnostic incomplete-tool-call diagnostic contract and one persistence path for raw partial tool-call payloads. Prefer a shared utility under =packages/ai/src/utils/= rather than copying Anthropic-specific logic into each provider. The contract must distinguish: stalled before any tool args, stalled with incomplete tool args, and completed tool call missing trailing stop events.
+
+Persist the full raw partial tool JSON for debugging by reference through session artifact/blob infrastructure. The persisted session/transcript metadata must include provider, model, tool name, parsed argument keys, raw byte count, first-token timing, idle-timeout budget, provider retry attempt count, and artifact URI/path for the full raw partial JSON.
+
+* Files
+- =packages/ai/src/types.ts=
+- shared helper in =packages/ai/src/utils/=
+- =packages/coding-agent/src/session/session-manager.ts=
+- =packages/coding-agent/src/session/artifacts.ts= and/or blob persistence helpers if needed
+
+* Acceptance
+- One shared diagnostic shape exists and is the cross-provider target format.
+- Full raw partial tool JSON is persisted by reference, not silently discarded.
+- Session persistence survives reload and still points to recoverable raw debug payloads.
+- No provider-specific timeout policy changes land in this item.
+
+* Verification
+- Add focused persistence tests proving a stalled incomplete tool-call entry round-trips with artifact reference intact.
+- Run =bun test packages/coding-agent/test/session-messages.test.ts= or the new focused persistence test.
+- Run =bun check:ts=.

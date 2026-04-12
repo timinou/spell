@@ -1,0 +1,43 @@
+#+TITLE: Session 14b6d695e3011db1 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 1 (parallel)
+
+** DONE BUG-198: 8 trivial polish fixes
+:PROPERTIES:
+:TASK_ID: bug198
+:STATUS: completed
+:END:
+
+Procedure module, clone export, navigate CRLF, diff_from_disk, signature multi-line, Serialize derives, dead_code confidence, blanket allow removal
+
+** DONE BUG-199: CRDT error propagation + atomic batch undo
+:PROPERTIES:
+:TASK_ID: bug199
+:STATUS: completed
+:END:
+
+Fix let _ = on CRDT ops, restructure History for compound Revision, add record_batch, update undo/redo
+
+* Wave 2
+
+** DONE BUG-200: Edit operation fixes + test coverage
+:PROPERTIES:
+:TASK_ID: bug200
+:STATUS: completed
+:DEPENDS: bug199
+:END:
+
+Transpose overlap, indent dedent, splice indentation, 10 edit tests
+
+* Verification & Close
+
+** DONE Final verification and plan closure
+:PROPERTIES:
+:TASK_ID: verify
+:STATUS: completed
+:DEPENDS: bug198 bug199 bug200
+:END:
+
+cargo build/test/clippy across all 3 crates, bun check:ts, commit

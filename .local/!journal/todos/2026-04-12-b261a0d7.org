@@ -1,0 +1,42 @@
+#+TITLE: Session 14b7ec95cf2da81e Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Inspect plan and repo state
+:PROPERTIES:
+:TASK_ID: inspect-plan-state
+:STATUS: completed
+:ORG_ITEM_ID: PLAN-200-unified-buffer-architecture
+:END:
+
+Read PLAN-200 and linked child items FEAT-520/521/528/529/530/531/532. Searched relevant crates/packages and confirmed tasks are still pending in source.
+
+Plan item is DOING; all linked child org items remain ITEM. Repo has no substantive implementation for the unified-buffer plan beyond unrelated pi-natives error-envelope changes. Relevant code still contains LoroDoc in CodeBuffer, global Mutex registry, standalone OrgBuffer parser, stateless executeOrg, and TS org-reader/org-writer imports in packages/org/src/tool.ts.
+
+** DONE Complete unified buffer changes
+:PROPERTIES:
+:TASK_ID: complete-implementation
+:STATUS: completed
+:DEPENDS: inspect-plan-state
+:ORG_ITEM_ID: PLAN-200-unified-buffer-architecture
+:END:
+
+Finished Rust and TS plan work across `crates/pi-code-engine`, `crates/pi-org-engine`, `crates/pi-natives`, `packages/org`, and `packages/natives`. Removed legacy TS org-reader/org-writer modules and obsolete direct tests; added native helper exports for coding-agent consumers.
+
+Implemented all planned waves: CRDT removal, org language profile, per-buffer locking, CodeBuffer-backed org extraction, CodeBuffer-based org edit operations, shared native buffer registry + org write commands, and TS org-tool migration to native parsing/edit commands. Also completed prerequisite flexible extractor cutover in pi-code-engine because the current branch had partial uncommitted extractor changes that made the crate uncompilable.
+
+** DONE Verify, close plan, commit
+:PROPERTIES:
+:TASK_ID: verify-close-and-commit
+:STATUS: completed
+:GATE_COMMIT: true
+:DEPENDS: complete-implementation
+:ORG_ITEM_ID: PLAN-200-unified-buffer-architecture
+:ORG_ITEM_CLOSING_ID: PLAN-200-unified-buffer-architecture
+:END:
+
+Verification run: `cargo test -p pi-code-engine && cargo test -p pi-org-engine && cargo check -p pi-natives && PI_DEV=1 bun test packages/org/test/ && bun check:ts` plus manual `PI_DEV=1 bun -e '...createOrgTool(...)...'` flow and `PI_DEV=1 bun test packages/natives/test/org-buffer.test.ts`.
+
+Captured verification evidence, updated linked org items and PLAN-200 completion report, reconciled child states to DONE, wrote manual flow artifact, and committed plan-related files as `13efa39f4 refactor(natives): unify code and org buffer architecture`.

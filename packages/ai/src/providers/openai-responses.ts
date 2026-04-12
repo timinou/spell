@@ -1,4 +1,4 @@
-import { $env } from "@oh-my-pi/pi-utils";
+import { $env, abortableSleep } from "@oh-my-pi/pi-utils";
 import OpenAI from "openai";
 import type {
 	Tool as OpenAITool,
@@ -20,15 +20,26 @@ import {
 	type ToolChoice,
 } from "../types";
 import {
+	appendToolCallStreamDiagnostic,
+	classifyToolCallStreamInterruption,
 	createOpenAIResponsesHistoryPayload,
 	getOpenAIResponsesHistoryItems,
 	getOpenAIResponsesHistoryPayload,
+	getToolCallStreamMaxRetries,
+	getToolCallStreamRetryDelayMs,
+	hasActiveToolArgumentStreaming,
+	isRetryableToolCallStreamDiagnostic,
 	resolveOpenAICacheParams,
 	systemPromptText,
+	ToolCallStreamDiagnosticError,
 } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
-import { getOpenAIStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
+import {
+	getOpenAIStreamIdleTimeoutMs,
+	getToolArgumentStreamIdleTimeoutMs,
+	iterateWithIdleTimeout,
+} from "../utils/idle-iterator";
 import { pushFallbackError } from "../utils/provider-error-boundary";
 import { adaptSchemaForStrict, NO_STRICT } from "../utils/schema";
 import { mapToOpenAIResponsesToolChoice } from "../utils/tool-choice";
@@ -113,42 +124,88 @@ export const streamOpenAIResponses: StreamFunction<"openai-responses"> = (
 				options?.initiatorOverride,
 			);
 			const { params } = buildParams(model, context, options);
-			const requestAbortController = new AbortController();
-			const requestSignal = options?.signal
-				? AbortSignal.any([options.signal, requestAbortController.signal])
-				: requestAbortController.signal;
-			options?.onPayload?.(params);
-			rawRequestDump = {
-				provider: model.provider,
-				api: output.api,
-				model: model.id,
-				method: "POST",
-				url: `${baseUrl ?? "https://api.openai.com/v1"}/responses`,
-				body: params,
-			};
-			const openaiStream = await client.responses.create(params, { signal: requestSignal });
-			if (copilotPremiumRequests !== undefined) output.usage.premiumRequests = copilotPremiumRequests;
+			const streamIdleTimeoutMs = getOpenAIStreamIdleTimeoutMs();
+			const toolArgumentIdleTimeoutMs = getToolArgumentStreamIdleTimeoutMs(streamIdleTimeoutMs);
+			let providerRetryAttempt = 0;
 			stream.push({ type: "start", partial: output });
 
 			const nativeOutputItems: Array<Record<string, unknown>> = [];
-			await processResponsesStream(
-				iterateWithIdleTimeout(openaiStream, {
-					idleTimeoutMs: getOpenAIStreamIdleTimeoutMs(),
-					errorMessage: "OpenAI responses stream stalled while waiting for the next event",
-					onIdle: () => requestAbortController.abort(),
-				}),
-				output,
-				stream,
-				model,
-				{
-					onFirstToken: () => {
-						if (!firstTokenTime) firstTokenTime = Date.now();
-					},
-					onOutputItemDone: item => {
-						nativeOutputItems.push(structuredClone(item as unknown as Record<string, unknown>));
-					},
-				},
-			);
+			for (;;) {
+				const requestAbortController = new AbortController();
+				const requestSignal = options?.signal
+					? AbortSignal.any([options.signal, requestAbortController.signal])
+					: requestAbortController.signal;
+				options?.onPayload?.(params);
+				rawRequestDump = {
+					provider: model.provider,
+					api: output.api,
+					model: model.id,
+					method: "POST",
+					url: `${baseUrl ?? "https://api.openai.com/v1"}/responses`,
+					body: params,
+				};
+				try {
+					const openaiStream = await client.responses.create(params, { signal: requestSignal });
+					if (copilotPremiumRequests !== undefined) output.usage.premiumRequests = copilotPremiumRequests;
+					await processResponsesStream(
+						iterateWithIdleTimeout(openaiStream, {
+							idleTimeoutMs: streamIdleTimeoutMs,
+							getIdleTimeoutMs: () =>
+								hasActiveToolArgumentStreaming(output) ? toolArgumentIdleTimeoutMs : streamIdleTimeoutMs,
+							errorMessage: "OpenAI responses stream stalled while waiting for the next event",
+							onIdle: () => requestAbortController.abort(),
+						}),
+						output,
+						stream,
+						model,
+						{
+							onFirstToken: () => {
+								if (!firstTokenTime) firstTokenTime = Date.now();
+							},
+							onOutputItemDone: item => {
+								nativeOutputItems.push(structuredClone(item as unknown as Record<string, unknown>));
+							},
+						},
+					);
+					break;
+				} catch (streamError) {
+					const stallDiagnostic =
+						streamError instanceof Error &&
+						streamError.message.includes("OpenAI responses stream stalled while waiting for the next event")
+							? classifyToolCallStreamInterruption(output, {
+									firstTokenTimeMs: firstTokenTime ? firstTokenTime - startTime : undefined,
+									idleTimeoutMs: hasActiveToolArgumentStreaming(output)
+										? toolArgumentIdleTimeoutMs
+										: streamIdleTimeoutMs,
+									providerRetryAttempt,
+								})
+							: undefined;
+					if (stallDiagnostic) {
+						appendToolCallStreamDiagnostic(output, stallDiagnostic);
+					}
+					if (stallDiagnostic?.state === "completed_tool_call_missing_trailing_stop") {
+						output.stopReason = "toolUse";
+						break;
+					}
+					const finalStreamError = stallDiagnostic
+						? new ToolCallStreamDiagnosticError(stallDiagnostic)
+						: streamError;
+					if (
+						options?.signal?.aborted ||
+						!stallDiagnostic ||
+						!isRetryableToolCallStreamDiagnostic(stallDiagnostic) ||
+						providerRetryAttempt >= getToolCallStreamMaxRetries()
+					) {
+						throw finalStreamError;
+					}
+					providerRetryAttempt++;
+					await abortableSleep(getToolCallStreamRetryDelayMs(providerRetryAttempt), options?.signal);
+					output.content.length = 0;
+					output.stopReason = "stop";
+					nativeOutputItems.length = 0;
+					firstTokenTime = undefined;
+				}
+			}
 			if (copilotPremiumRequests !== undefined) output.usage.premiumRequests = copilotPremiumRequests;
 
 			if (options?.signal?.aborted) {

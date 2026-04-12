@@ -1,0 +1,17 @@
+#+TITLE: Session 14b7be567342b8fe Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Key questions to answer
+
+** DONE Find language profiles and outline logic in code tool
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Check tree-sitter Elixir grammar and node types
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:

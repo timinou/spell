@@ -1,0 +1,74 @@
+#+TITLE: Add tree-sitter-markdown block grammar to pi-code-engine
+#+STATE: ITEM
+#+SESSION_ID: 14b7c05e6d83ec68
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-05-34-134Z_14b7c05e6d83ec68.jsonl]]
+#+CUSTOM_ID: FEAT-515-add-tree-sitter-markdown-block-grammar-t
+#+EFFORT: 1h
+#+PRIORITY: A
+#+LAYER: code-engine
+
+* Initial Message
+
+looking at the typst and org integrations to pi-code-engine, what would you want to implement for your markdown usage to be a delight?
+
+* Context
+
+The pi-code-engine compiles tree-sitter grammars at build time from Cargo dependencies. Currently includes: TypeScript, Rust, Python, Typst, Elixir. Markdown needs to be added as a built-in grammar to enable the markdown language profile.
+
+tree-sitter-markdown has TWO sub-grammars:
+1. Block structure (~tree-sitter-markdown/src~) — sections, headings, code blocks, lists, tables
+2. Inline structure (~tree-sitter-markdown-inline/src~) — bold, italic, links, code spans
+
+Only the BLOCK grammar is needed. The inline grammar is not required for section-level structural editing.
+
+** Design Decisions
+
+- Use the block grammar only (~tree-sitter-markdown/src~)
+- The Cargo crate to use is likely ~tree-sitter-md~ (wraps ~tree-sitter-grammars/tree-sitter-markdown~). Verify on crates.io. Alternative: vendor the grammar from GitHub
+- Follow the existing pattern: add to ~GRAMMARS~ in ~build.rs~, the grammar metadata generates at compile time
+
+* Scope
+
+** ~crates/pi-code-engine/Cargo.toml~
+
+Add tree-sitter-markdown as a dependency. Look at how ~codebook-tree-sitter-typst~ or ~tree-sitter-typescript~ are declared and follow the same pattern.
+
+If no suitable crate exists on crates.io, add a git dependency pointing to ~https://github.com/tree-sitter-grammars/tree-sitter-markdown~.
+
+** ~crates/pi-code-engine/build.rs~
+
+Add a ~GrammarSource~ entry to the ~GRAMMARS~ array:
+
+#+begin_src rust
+GrammarSource {
+    name:            "markdown",
+    dependency_name: Some("tree-sitter-md"),  // verify actual crate name
+    package_prefix:  "tree-sitter-md-",       // verify
+    json_subpath:    "tree-sitter-markdown/src/node-types.json",  // verify path in crate
+},
+#+end_src
+
+The ~json_subpath~ must point to the block grammar's node-types.json, NOT the inline grammar's.
+
+** ~crates/pi-code-engine/src/language/generated.rs~
+
+Add ~include_grammar!(markdown)~ following the pattern of existing grammars.
+
+** Verify compilation
+
+- ~cargo build -p pi-code-engine~ must succeed
+- The generated ~grammar_markdown.rs~ in ~OUT_DIR~ should contain valid production rules
+- Spot-check: ~atx_heading~, ~section~, ~fenced_code_block~, ~document~ should appear in the generated types
+
+* Edge Cases
+
+- The crate may use a different package name than expected — search crates.io for "tree-sitter-markdown" and pick the one wrapping the ~tree-sitter-grammars/tree-sitter-markdown~ repository
+- Some crates expose the language via ~LANGUAGE~ constant, others via a function — match the pattern used by the crate (see how ~codebook-tree-sitter-typst::LANGUAGE~ is accessed in ~typst_profile()~)
+- If the node-types.json path differs from expected, check the crate's file structure after adding the dependency
+
+* Acceptance Criteria
+
+- ~cargo build -p pi-code-engine~ succeeds with the new grammar
+- Generated grammar metadata includes ~section~, ~atx_heading~, ~fenced_code_block~, ~document~ node types
+- No warnings from ~cargo clippy -p pi-code-engine~
+- Existing grammar builds unaffected

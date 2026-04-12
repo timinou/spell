@@ -35,5 +35,6 @@ include_grammar!(rust_lang, "grammar_rust.rs");
 include_grammar!(python, "grammar_python.rs");
 include_grammar!(typst, "grammar_typst.rs");
 include_grammar!(elixir, "grammar_elixir.rs");
+include_grammar!(markdown, "grammar_markdown.rs");
 
 include_grammar!(org, "grammar_org.rs");

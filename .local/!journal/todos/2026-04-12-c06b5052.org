@@ -1,0 +1,23 @@
+#+TITLE: Session 14b7bf36e09ede5e Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Measure tool description token surface
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Map subagent and agent prompt surface
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Map compaction and memory prompt surface
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

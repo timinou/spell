@@ -1,0 +1,146 @@
+#+TITLE: Tool result injection for language-specific code operations
+#+STATE: ITEM
+#+SESSION_ID: 14b7c05e6d83ec68
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-05-34-134Z_14b7c05e6d83ec68.jsonl]]
+#+CUSTOM_ID: FEAT-525-tool-result-injection-for-language-speci
+#+EFFORT: 2h
+#+PRIORITY: B
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-520-markdown-language-profile-with-section-a FEAT-523-markdown-custom-procedures-promote-demot FEAT-524-typst-custom-procedures-promote-and-demo
+
+* Initial Message
+
+looking at the typst and org integrations to pi-code-engine, what would you want to implement for your markdown usage to be a delight?
+
+* Context
+
+When the agent uses the code tool on a markdown file for the first time in a session, it doesn't know about markdown-specific operations (promote, demote, replace-code-block) or the section-as-declaration semantics. This feature adds a tool result injection mechanism: on first use of the code tool per language, the result includes a brief guide about available language-specific operations.
+
+** Design Decisions
+
+- Injection is per-language, per-session: first time a ~.md~ file is opened → inject markdown hints. First time a ~.typ~ file is opened → inject Typst hints
+- Injection appends to the tool result text, not the system prompt — this keeps it contextual and avoids bloating the system prompt
+- The injection content is static markdown text, stored alongside the tool definition or in a prompt file
+- Track "seen languages" as a ~Set<string>~ on the ~CodeTool~ instance
+- The injection fires on ANY code tool command (read, outline, edit, navigate) — not just the first ~open~
+- The injection is a one-time hint per language per session — subsequent operations on ~.md~ files do NOT re-inject
+- The native code engine returns the language ID in its response. The TypeScript ~CodeTool.execute()~ checks if this language has been seen before
+
+* Scope
+
+** ~packages/coding-agent/src/tools/code.ts~
+
+*** Add language tracking
+
+#+begin_src typescript
+class CodeTool implements AgentTool<typeof codeSchema> {
+    // ... existing fields ...
+    #seenLanguages = new Set<string>();
+    // ...
+}
+#+end_src
+
+*** Inject on first use
+
+In ~execute()~, after a successful result for file-scoped commands:
+
+1. Extract the language ID from the native result (the buffer info or from file extension matching)
+2. Check if ~#seenLanguages.has(languageId)~
+3. If not seen, look up injection content for that language
+4. If injection content exists, append it to the result text
+5. Add language to ~#seenLanguages~
+
+The language ID can be determined by:
+- The ~open~ command returns ~{ language: "markdown" }~
+- For other commands, the buffer is already open — query the buffer info or track which language a file uses when it's first opened
+
+Simplest approach: track by file extension mapping. When ~params.file~ ends with ~.md~, the language is ~"markdown"~. Keep a static map of extension → language for known profiles.
+
+*** Injection content lookup
+
+Create a map of language → injection text:
+
+#+begin_src typescript
+const LANGUAGE_INJECTIONS: Record<string, string> = {
+    markdown: `
+---
+Markdown-specific operations available:
+- Sections are declarations: \`symbol: "Installation"\` targets the section under that heading
+- Nested sections: \`symbol: "Installation.Prerequisites"\` for dotted access
+- \`operation: "promote"\` — decrease heading level (## → #) for section and all children
+- \`operation: "demote"\` — increase heading level (# → ##)
+- \`operation: "replace-code-block"\` — replace code block content by index or language
+- \`operation: "replace-body"\` — replace section content keeping heading
+- Resolution 2 shows content annotations with drill-in hints
+`,
+    typst: `
+---
+Typst-specific operations available:
+- \`operation: "promote"\` — decrease heading level (=== → ==)
+- \`operation: "demote"\` — increase heading level (== → ===)
+`,
+};
+#+end_src
+
+Alternatively, store these as ~.md~ files in ~packages/coding-agent/src/prompts/tools/~ and import them with Bun text imports per AGENTS.md conventions:
+
+#+begin_src typescript
+import markdownHint from "./code-hint-markdown.md" with { type: "text" };
+import typstHint from "./code-hint-typst.md" with { type: "text" };
+#+end_src
+
+** Prompt files to create
+
+*** ~packages/coding-agent/src/prompts/tools/code-hint-markdown.md~
+
+Concise guide to markdown-specific code tool operations. Content:
+- Section-as-declaration semantics
+- Dotted symbol resolution for nested sections
+- Custom operations: promote, demote, replace-code-block
+- Resolution 2 content annotation format
+- Examples of common operations
+
+*** ~packages/coding-agent/src/prompts/tools/code-hint-typst.md~
+
+Concise guide to Typst-specific code tool operations. Content:
+- promote/demote heading operations
+- Examples
+
+* Edge Cases
+
+- File with unknown extension: no injection, no error
+- File with multiple extensions (e.g., ~.test.md~): check last extension
+- Code tool used on same language after session restart: injection fires again (correct — new session)
+- Agent uses code tool on a ~.md~ file but the markdown profile isn't compiled in (shouldn't happen but): the native engine returns an error about missing profile, injection doesn't fire
+- Very first code tool call fails (file not found, etc.): don't inject — wait for a successful result
+- The injection text must not be too long — keep under 500 tokens to avoid dominating the tool result
+
+* Test Plan
+
+** Unit test: injection fires on first markdown use
+
+- Create CodeTool instance
+- Execute ~code outline~ on a ~.md~ file (mock the native result)
+- Verify result text contains markdown injection content
+- Execute ~code outline~ on the same or another ~.md~ file
+- Verify result text does NOT contain injection content (already seen)
+
+** Unit test: injection fires per language
+
+- Execute ~code outline~ on a ~.md~ file → markdown injection
+- Execute ~code outline~ on a ~.typ~ file → typst injection
+- Execute ~code outline~ on a ~.ts~ file → no injection (no TypeScript-specific hints)
+
+** Unit test: no injection on error
+
+- Execute ~code outline~ on nonexistent ~.md~ file → error result, no injection
+
+* Acceptance Criteria
+
+- First ~code~ operation on a ~.md~ file appends markdown operations guide to result
+- First ~code~ operation on a ~.typ~ file appends Typst operations guide to result
+- Subsequent operations on same language do not re-inject
+- Injection content is concise (under 500 tokens)
+- Injection does not fire on error results
+- ~bun check:ts~ passes
+- No injection content appears in system prompt (tool result only)

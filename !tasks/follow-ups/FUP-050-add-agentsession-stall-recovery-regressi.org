@@ -1,0 +1,58 @@
+#+TITLE: Add AgentSession stall recovery regression coverage
+#+STATE: ITEM
+#+SESSION_ID: 14b7b080a31d9287
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T11-56-14-860Z_14b7b080a31d9287.jsonl]]
+#+CUSTOM_ID: FUP-050-add-agentsession-stall-recovery-regressi
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+
+* Initial Message
+
+Like many other sessions, this one stopped after Code outline: 
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-21-58-207Z_14b79aec8fda64f1.jsonl
+ ID: 14b79aec8fda64f1
+
+
+(freezes, refuses to continue)
+
+why?
+
+* Goal
+Harden regression coverage for the session-recovery side of the historical stall bug. Current production code already does the right runtime work in =packages/coding-agent/src/session/agent-session.ts=: it clears pending audit state on explicit user prompts and logs silent failures in =#trackPostPromptTask= and =#scheduleAgentContinue=. The remaining gap is that the current tests are reducer-level, not session-contract-level.
+
+* Discovered Patterns To Follow
+- =packages/coding-agent/test/agent-session-auto-compaction-queue.test.ts= shows how to instantiate =AgentSession=, emit =message_end= / =agent_end= events, and observe continuation behavior.
+- =packages/coding-agent/test/session/audit-detection.test.ts= and =packages/coding-agent/test/modes/audit-lifecycle.test.ts= are state-machine tests; reuse their state expectations, but do not stop there.
+- =packages/coding-agent/src/session/agent-session.ts= public seams include =setAuditState()=, =prompt()=, event subscription, and emitted session events.
+
+* Scope
+Files to modify:
+- =packages/coding-agent/test/session/audit-state-on-user-prompt.test.ts= (replace helper-only coverage with real session coverage) and/or adjacent =packages/coding-agent/test/session/*.test.ts= files if separation is clearer.
+- Optionally add one more focused test file for logging assertions if that keeps responsibilities cleaner.
+
+* Change
+Add contract-level tests that exercise real =AgentSession= behavior rather than a local helper function.
+
+Required scenarios:
+1. With audit state pending (=auto= and =suggest= cases), a non-synthetic =session.prompt("continue")= clears pending audit before post-turn audit injection logic runs.
+2. A synthetic prompt preserves pending audit state.
+3. After a user recovery prompt, a final assistant stop must not inject the audit prompt or emit an unexpected audit escalation/suggestion event.
+4. If =agent.continue()= rejects inside =#scheduleAgentContinue=, the current =logger.error()= path must be exercised by an automated test.
+5. If a post-prompt background task rejects, the current =logger.error()= path in =#trackPostPromptTask= must be exercised by an automated test.
+
+* Constraints
+- Do not keep the current helper-only =applyPromptAuditReset()= style test as the main proof.
+- Prefer real =AgentSession= construction and public APIs over reaching into private methods.
+- Use focused spies/subscriptions for logger/event assertions; do not add broad mocks that invent production behavior.
+
+* Acceptance
+- Automated session-level tests fail if =prompt()= stops clearing pending audit or if the error-logging hooks regress.
+- Verification command: =bun test packages/coding-agent/test/session/audit-state-on-user-prompt.test.ts=
+- If coverage is split across files, document the exact commands in the completion report and ensure both files are wired into the execution plan.
+
+
+
+* Parent Plan
+[[id:PLAN-210-session-stall-regression-hardening]]

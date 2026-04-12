@@ -1,0 +1,43 @@
+#+TITLE: Session 14b6f114040c82c2 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Implement vector cache reliability foundation
+:PROPERTIES:
+:TASK_ID: foundation-reliability
+:STATUS: completed
+:VERIFY_CMD: cargo check -p pi-natives
+:ORG_ITEM_ID: BUG-209-fix-vector-cache-reliability-atomic-writ
+:END:
+
+Update fingerprint hashing and atomic vector cache persistence in crates/pi-natives and related graph fingerprint types. Verify focused Rust checks before advancing.
+
+Wave 1 foundation work for BUG-209.
+
+** DONE Fix semantic search API contract
+:PROPERTIES:
+:TASK_ID: semantic-contract
+:STATUS: completed
+:VERIFY_CMD: cargo check -p pi-natives && bun check:ts
+:DEPENDS: foundation-reliability
+:ORG_ITEM_ID: BUG-208-fix-semantic-search-contract-violations
+:END:
+
+Updated crates/pi-natives/src/code_graph.rs, packages/natives/src/code-graph/types.ts, packages/coding-agent/src/tools/code.ts, packages/coding-agent/src/prompts/tools/code.md, and packages/coding-agent/test/tools/code.test.ts. Verified with cargo check -p pi-natives and bun check:ts.
+
+Implemented tri-state semantic handling, structured semanticStatus feedback, status reporting, dimension derivation, prompt/schema/type wiring, and focused TS wiring coverage.
+
+** DONE Add semantic chunking and integration coverage
+:PROPERTIES:
+:TASK_ID: semantic-tests
+:STATUS: completed
+:VERIFY_CMD: cargo test -p pi-code-graph --features semantic && cargo test -p pi-natives code_graph::tests::
+:DEPENDS: semantic-contract
+:ORG_ITEM_ID: FEAT-461-add-chunking-nested-symbol-test-and-hybr
+:END:
+
+Updated crates/pi-code-graph/src/chunking.rs, crates/pi-code-graph/src/hybrid.rs, and crates/pi-natives/src/code_graph.rs tests. Verified with cargo test -p pi-code-graph --features semantic and cargo test -p pi-natives code_graph::tests::. Also re-ran full Rust/TS verification commands.
+
+Added nested chunking regression coverage, graph_search hybrid coverage, and direct pi-natives semantic contract tests for runtime behaviors.

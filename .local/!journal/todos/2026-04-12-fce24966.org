@@ -1,0 +1,67 @@
+#+TITLE: Session 14b7acee3d9cc621 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 1: Idle timeout + logging
+
+** DOING Add idle timeout to Anthropic SSE stream
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: in_progress
+:GATE_CMD: bun check:ts
+:END:
+
+File: packages/ai/src/providers/anthropic.ts
+- Import iterateWithIdleTimeout
+- Add getAnthropicStreamIdleTimeoutMs() with PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS env var
+- Create requestAbortController for clean abort
+- Wrap for-await in iterateWithIdleTimeout
+
+** ITEM Add defense-in-depth logging to agent-session.ts
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: pending
+:END:
+
+File: packages/coding-agent/src/session/agent-session.ts
+- Log errors in #scheduleAgentContinue catch block
+- Log errors in #trackPostPromptTask catch block
+
+** ITEM Write idle timeout test
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: pending
+:GATE_CMD: bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts
+:END:
+
+File: packages/ai/test/providers/anthropic-idle-timeout.test.ts
+Test stalled stream throws, active stream passes through
+
+* Wave 2: Audit state fix
+
+** ITEM Clear pending audit on explicit user prompt
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: pending
+:END:
+
+File: packages/coding-agent/src/session/agent-session.ts
+In prompt() method, reset auditState.pending when !options?.synthetic
+
+** ITEM Write audit state test
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: pending
+:GATE_CMD: bun test packages/coding-agent/test/session/audit-state-on-user-prompt.test.ts
+:END:
+
+File: packages/coding-agent/test/session/audit-state-on-user-prompt.test.ts
+
+* Verification
+
+** ITEM Run bun check:ts and all new tests
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: pending
+:GATE_CMD: bun check:ts
+:END:

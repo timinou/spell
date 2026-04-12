@@ -1,0 +1,91 @@
+#+TITLE: Code tool prompt updates for markdown and custom operations
+#+STATE: ITEM
+#+SESSION_ID: 14b7c05e6d83ec68
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-05-34-134Z_14b7c05e6d83ec68.jsonl]]
+#+CUSTOM_ID: FEAT-526-code-tool-prompt-updates-for-markdown-an
+#+EFFORT: 1h
+#+PRIORITY: B
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-525-tool-result-injection-for-language-speci
+
+* Initial Message
+
+looking at the typst and org integrations to pi-code-engine, what would you want to implement for your markdown usage to be a delight?
+
+* Context
+
+With markdown profile, custom procedures, and tool result injection in place, the code tool's main prompt (~packages/coding-agent/src/prompts/tools/code.md~) needs minor updates to:
+1. List markdown as a supported language in the ~languages~ operation description
+2. Document that custom operations exist (without listing every language's ops — that's the injection's job)
+3. Add a markdown example to the examples section
+
+** Design Decisions
+
+- Keep the main prompt language-agnostic — don't enumerate every language's custom ops in the system prompt
+- Add a single note that language-specific operations are available and will be shown on first use
+- Add one markdown example showing section-as-declaration usage
+- Update the ~languages~ operation description to include Markdown
+
+* Scope
+
+** ~packages/coding-agent/src/prompts/tools/code.md~
+
+*** Update operations list (~<operations>~ section)
+
+Change:
+~- \`languages\`: Built-in language profiles (TypeScript, Rust, Python, Elixir)~
+
+To:
+~- \`languages\`: Built-in language profiles (TypeScript, Rust, Python, Elixir, Typst, Markdown)~
+
+*** Add instruction hint about custom operations
+
+In the ~<instruction>~ section, after the existing guidance lines, add:
+
+#+begin_example
+- Edit markdown sections by heading name → `code edit { file, symbol: "Installation", operation: "patch", patches: [...] }`
+- Language-specific operations (promote, demote, etc.) are shown on first use of a supported file type
+#+end_example
+
+*** Add markdown example
+
+In the ~<examples>~ section, add:
+
+#+begin_example
+- Edit a markdown section by heading name:
+  ```json
+  {
+    "command": "edit",
+    "file": "README.md",
+    "symbol": "Installation",
+    "operation": "replace-body",
+    "content": "Updated installation instructions.
+
+```bash
+bun install
+```
+"
+  }
+  ```
+#+end_example
+
+*** Add critical note about markdown
+
+In the ~<critical>~ section, add:
+
+#+begin_example
+- For markdown files, section headings are declarations: use `symbol: "Heading Text"` to target sections
+#+end_example
+
+* Edge Cases
+
+- The prompt file uses Handlebars conditionals (~{{#has tools "code"}}~). Verify the markdown additions are inside the correct conditional block
+- Don't add language-specific operation details to the prompt — that's handled by tool result injection at runtime. The prompt should only hint that they exist
+
+* Acceptance Criteria
+
+- Code tool prompt mentions Markdown in the languages list
+- Code tool prompt includes one markdown editing example
+- Code tool prompt notes that language-specific operations are shown on first use
+- Prompt renders correctly (no broken Handlebars)
+- ~bun check:ts~ passes

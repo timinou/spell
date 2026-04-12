@@ -1,0 +1,37 @@
+#+TITLE: Session 14b7ee149bae1c85 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Create child org items
+:PROPERTIES:
+:TASK_ID: create-child-items
+:STATUS: completed
+:END:
+
+Child items created under !tasks/bugs, !tasks/follow-ups. Foundation item uses BUG-245 because project-category org lookup/set was unreliable; dependent items now point to BUG-245.
+
+Created foundation BUG-245, provider BUG-243, session/UI BUG-244, and FUP-051. Earlier stray project-file attempt is ignored and not referenced by the plan.
+
+** DONE Create PLAN org item
+:PROPERTIES:
+:TASK_ID: create-plan-item
+:STATUS: completed
+:DEPENDS: create-child-items
+:END:
+
+Plan item path: !tasks/plans/PLAN-218-cross-provider-stalled-incomplete-tool-c.org. It links BUG-245, BUG-243, BUG-244, and FUP-051.
+
+Created PLAN-218 with Context, Verification, and Execution Manifest. Used repo-native ITEM state because existing plan files under !tasks/plans use ITEM, while org tool rejected INIT.
+
+** DONE Consistency sweep and exit
+:PROPERTIES:
+:TASK_ID: sweep-and-exit
+:STATUS: completed
+:DEPENDS: create-plan-item
+:END:
+
+Ready to hand off via exit_plan_mode with PLAN-218-cross-provider-stalled-incomplete-tool-c.
+
+Dependency chain verified as BUG-245 -> BUG-243 -> BUG-244 -> FUP-051. Plan links all child items, child items have backlinks via notes, and metadata is present on the active child items and PLAN. Repo convention uses ITEM for plan files under !tasks/plans, so PLAN-218 was created with ITEM after org create rejected INIT.

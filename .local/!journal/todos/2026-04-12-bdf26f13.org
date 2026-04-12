@@ -1,0 +1,23 @@
+#+TITLE: Session 14b70df0ae89e0db Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Key Files
+
+** DONE Find the TypeScript code tool dispatch for navigate vs edit
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Find the Elisp functions for navigate and edit node resolution
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Check Typst tree-sitter grammar and language config
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

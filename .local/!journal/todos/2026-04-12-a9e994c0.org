@@ -1,0 +1,37 @@
+#+TITLE: Session 14b6fc9994640cbb Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Inspect existing prompt plans
+:PROPERTIES:
+:TASK_ID: inspect-existing-plans
+:STATUS: completed
+:END:
+
+No existing org item covers the full prompt stack rewrite spanning system prompt, overlays, agent prompts, tool descriptions, inline tool strings, and base skills.
+
+Queried org items for prompt/tool/skill/system-prompt work. Found related historical prompt items but no existing plan matching this declaration-of-being full-stack rewrite, so this is treated as a new plan.
+
+** DONE Settle scope and decisions
+:PROPERTIES:
+:TASK_ID: settle-scope-and-decisions
+:STATUS: completed
+:DEPENDS: inspect-existing-plans
+:END:
+
+The plan now reflects the final scope and acceptance bar. Proceeding to create child org items and orchestration plan.
+
+Settled decisions: full prompt stack in scope; full cutover required; terse declaration-of-being voice; structural cleanup required; current tool hierarchy must use code/lsp/ast_grep era guidance.
+
+** DONE Write org plan and children
+:PROPERTIES:
+:TASK_ID: write-org-plan
+:STATUS: completed
+:DEPENDS: settle-scope-and-decisions
+:END:
+
+Ready for plan handoff via exit_plan_mode.
+
+Created eight child feature items plus the orchestration plan, re-read each item, verified dependencies are acyclic, and confirmed the plan captures the settled scope and tool-hierarchy decisions.

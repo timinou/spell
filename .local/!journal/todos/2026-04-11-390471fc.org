@@ -1,0 +1,11 @@
+#+TITLE: Session 14b6ef804762e676 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Read the exact NAPI pattern used by code_buffer.rs
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:END:

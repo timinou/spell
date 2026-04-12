@@ -1,0 +1,35 @@
+#+TITLE: Session 14b714f2dae46382 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Investigation
+
+** BLOCKED Inspect code tool surface
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: failed
+:END:
+
+** BLOCKED Inspect transcript render flow
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: failed
+:END:
+
+** BLOCKED Inspect LLM-facing inclusion path
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: failed
+:END:
+
+* Finalize
+
+** DONE Verify and submit plan
+:PROPERTIES:
+:TASK_ID: verify-and-submit-plan
+:STATUS: completed
+:END:
+
+Plan shape: 3 child items plus orchestration plan. Recommended approach remains compact-content/rich-details full cutover for new sessions only. Verification commands and critical file list are included. No destructive changes made outside org items.
+
+Consistency sweep passed. Re-read all three child items and the orchestration plan; verified raw org file for PLAN-206 contains `#+STATE: INIT`, effort/priority/layer metadata, and clean body headings. Dependency chain is acyclic: PROJ-037 -> PROJ-038 -> BUG-230. Cross-links are bidirectionally correct.

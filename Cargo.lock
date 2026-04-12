@@ -3125,6 +3125,7 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-elixir",
  "tree-sitter-javascript",
+ "tree-sitter-md",
  "tree-sitter-org",
  "tree-sitter-python",
  "tree-sitter-rust",

@@ -1,0 +1,73 @@
+#+TITLE: Review retention controls for persisted raw partial tool payloads
+#+STATE: ITEM
+#+SESSION_ID: 14b7ee149bae1c85
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T16-25-17-166Z_14b7ee149bae1c85.jsonl]]
+#+CUSTOM_ID: FUP-051-review-retention-controls-for-persisted
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: governance
+#+DEPENDS: BUG-244-surface-stalled-tool-call-diagnostics-an
+
+
+
+
+* Initial Message
+
+✘ Write: ⌘ !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+ ✘ Error: Tool execution failed due to an error: Anthropic messages stream stalled while streaming incomplete write tool arguments
+
+
+ Task model: gpt-5.4-mini
+
+
+ ┌─── ✔ Bash ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ $ wc -l !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org                                                 ╭──────────╮
+ ├─── Output ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│ 🗺 Paused │
+ │ 54 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org                                                      ╰──────────╯
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Write ⢿ 🗒 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+
+
+
+ Write ⣟ 🗒 !tasks/features/FEAT-519-elixir-outline-support-in-pi-code-engine.org
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl
+ ID: 14b7be567342b8fe
+
+
+
+explain this: Tool execution failed due to an error: Anthropic messages stream stalled while streaming incomplete write tool arguments
+
+* User workflows
+1. Maintainers can debug a stalled tool-call postmortem using persisted raw partial JSON.
+2. Operators can later tighten retention/redaction policy without re-deriving where raw stalled-tool payloads are stored.
+3. Future work can add config, encryption, truncation, or retention windows without changing the core stall-handling contract again.
+
+* Scope
+Document and review the consequences of persisting full raw partial tool JSON for debugging. This follow-up exists because the approved plan intentionally keeps the full raw payload available for postmortems. The execution item should audit where those payload artifacts live, how long they live, whether exports/transcript viewers expose them by default, and which config seam should own future retention/redaction policy.
+
+Do not block the main hardening work on this review. Instead, capture concrete next-step options and the file seams where a later privacy/retention control can land cleanly.
+
+* Files / references
+- Artifact/session persistence from the project item
+- Transcript/UI surfacing from the session item
+- Any export paths that may reveal raw payload references
+
+* Acceptance
+- A concrete retention/redaction follow-up note exists with exact file seams and config hooks.
+- The implementing agent can decide whether a later item should add encryption, truncation, retention windows, or hidden-by-default export behavior.
+- This item does not weaken the approved debugging requirement for the main plan.
+
+* Verification
+- Reference the created org follow-up item from the PLAN execution manifest.
+- Manual proof: the final implementation plan names the storage and surfacing seams that a future retention control would change.
+
+NOTE [2026-04-12]: Linked from [[id:PLAN-218-cross-provider-stalled-incomplete-tool-c]]. Follow-up for retention/privacy controls around persisted raw partial tool payloads.
+
+NOTE [2026-04-12]: For this plan, the foundation reference is [[id:BUG-245-define-shared-incomplete-tool-call-stall]], not a project item. Retention work should hook into that shared diagnostic contract and the downstream session/UI surfacing item.

@@ -1,0 +1,56 @@
+#+TITLE: Session 14b710b078c9e0e2 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Inspect target code and org item
+:PROPERTIES:
+:TASK_ID: inspect-target
+:STATUS: completed
+:ORG_ITEM_ID: BUG-225-code-edit-fails-to-resolve-nodes-inside
+:END:
+
+Read BUG-225 org item, locate the Rust edit resolution helpers in crates/pi-code-engine, inspect current tests and call sites before modifying code. Run semantic/text reference lookup for the helper being changed.
+
+Read PLAN-201 and BUG-225, verified rust-analyzer availability, inspected replace.rs, outline.rs sole_named_child pattern, and existing edit/navigate tests before changing code.
+
+** DONE Implement wrapper node resolution fix
+:PROPERTIES:
+:TASK_ID: implement-fix
+:STATUS: completed
+:DEPENDS: inspect-target
+:ORG_ITEM_ID: BUG-225-code-edit-fails-to-resolve-nodes-inside
+:END:
+
+Update crates/pi-code-engine edit node targeting to resolve wrapper->child chains, rename helper as planned if appropriate, and ensure replace/insert-before/insert-after/kill use the shared fix. Keep the solution language-agnostic.
+
+Replaced upward-only find_ancestor with find_target + sole-named-child unwrap_to fallback in crates/pi-code-engine/src/edit/replace.rs, and routed replace/insert-before/insert-after/kill through it.
+
+** DONE Add Typst edit regression tests
+:PROPERTIES:
+:TASK_ID: add-tests
+:STATUS: completed
+:DEPENDS: implement-fix
+:ORG_ITEM_ID: BUG-225-code-edit-fails-to-resolve-nodes-inside
+:END:
+
+Add focused tests in crates/pi-code-engine covering replace and kill against Typst wrapper nodes, ensuring the repro now succeeds.
+
+Added typst_buffer helper plus focused replace/kill regression tests in crates/pi-code-engine/src/edit/mod.rs using tests/fixtures/sources/hello.typ.
+
+** DONE Run verification and close plan
+:PROPERTIES:
+:TASK_ID: verify-and-close
+:STATUS: completed
+:GATE_COMMIT: true
+:GATE_CMD: cd crates/pi-code-engine && cargo test && cargo clippy && cargo fmt --check
+:VERIFY_CMD: cd crates/pi-code-engine && cargo test test_replace_typst -- --nocapture && cargo test test_kill_typst -- --nocapture
+:DEPENDS: add-tests
+:ORG_ITEM_ID: BUG-225-code-edit-fails-to-resolve-nodes-inside
+:ORG_ITEM_CLOSING_ID: PLAN-201-fix-code-edit-node-resolution-for-wrappe
+:END:
+
+Run cargo test, focused Typst tests, cargo clippy, and cargo fmt --check in crates/pi-code-engine. Update org completion report, close child and plan states truthfully, and commit only plan-related files.
+
+Verified targeted Typst regressions plus full pi-code-engine test suite, fmt check, and clippy. Closed BUG-225 and PLAN-201 in org, then committed the staged plan files as 21c67e40c (fix(pi-code-engine): resolve wrapped edit targets (PLAN-201)).

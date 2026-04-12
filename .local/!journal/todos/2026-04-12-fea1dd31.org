@@ -1,0 +1,51 @@
+#+TITLE: Session 14b718eb1f219b18 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Add Typst regression scaffold
+:PROPERTIES:
+:TASK_ID: regression-scaffold
+:STATUS: completed
+:ORG_ITEM_ID: BUG-228-add-typst-editable-scope-regression-cove
+:END:
+
+Create the dedicated Typst repro fixture and add regression coverage in pi-code-engine and coding-agent tests per BUG-228 before implementation changes. Verify focused tests relevant to added scaffolding before moving on.
+
+Added typst_edit_targets.typ plus regression tests in navigate.rs, edit/mod.rs, and code.test.ts. Verified code.test.ts passes; cargo test -p pi-code-engine typst now fails at the new editable-scope NavigateResult assertions as expected before implementation.
+
+** DONE Cut over shared resolver
+:PROPERTIES:
+:TASK_ID: resolver-cutover
+:STATUS: completed
+:DEPENDS: regression-scaffold
+:ORG_ITEM_ID: BUG-229-unify-typst-editable-scope-resolution-fo
+:END:
+
+Implement one canonical editable-scope resolver in Rust, wire navigate/edit/native bridge to it, and satisfy the new regression contract per BUG-229. Verify focused Rust and tool tests before moving on.
+
+Implemented shared Rust line-target resolver, additive navigate metadata, native bridge serialization, and Typst raw/editable-scope edit support. Focused engine/native/tool tests pass.
+
+** DONE Verify and close plan
+:PROPERTIES:
+:TASK_ID: verify-close-plan
+:STATUS: completed
+:DEPENDS: resolver-cutover
+:ORG_ITEM_ID: PLAN-205-typst-editable-scope-node-targeting
+:END:
+
+Run required verification commands, capture manual proof and any artifacts, update the plan/org completion report, reconcile child org states, mark PLAN-205 done if truthful, and create a conventional commit with only plan-related files.
+
+Required tests passed, plan/org records updated, and plan is ready for commit.
+
+** DONE Resolve workspace clippy debt
+:PROPERTIES:
+:TASK_ID: workspace-clippy-blocker
+:STATUS: completed
+:ORG_ITEM_ID: PLAN-205-typst-editable-scope-node-targeting
+:END:
+
+Workspace-level Rust lint gate still fails outside the PLAN-205 files. Remaining failures include crates/pi-natives/src/code_buffer.rs (uninlined format args), crates/pi-natives/src/embedding_worker.rs, and crates/pi-natives/src/org_buffer.rs. PLAN-205 implementation is otherwise verified by focused tests and manual proof, but final closure remains blocked until bun check:rs passes.
+
+Cleared the remaining workspace clippy blockers required for bun check:rs in pi-natives code_buffer, embedding_worker, and org_buffer.

@@ -270,11 +270,11 @@ fn serialize_file_item(params: &CreateItemParams) -> String {
 		lines.push(String::new());
 		lines.extend(initial_message.trim_end().split('\n').map(str::to_string));
 	}
-	if let Some(body) = &params.body {
-		if !body.trim().is_empty() {
-			lines.push(String::new());
-			lines.extend(body.trim_end().split('\n').map(str::to_string));
-		}
+	if let Some(body) = &params.body
+		&& !body.trim().is_empty()
+	{
+		lines.push(String::new());
+		lines.extend(body.trim_end().split('\n').map(str::to_string));
 	}
 	lines.push(String::new());
 	render_lines(&lines)
@@ -292,11 +292,11 @@ fn serialize_heading(level: usize, params: &CreateItemParams) -> String {
 		lines.push(format!(":{key}: {value}"));
 	}
 	lines.push(":END:".into());
-	if let Some(body) = &params.body {
-		if !body.trim().is_empty() {
-			lines.push(String::new());
-			lines.extend(body.trim_end().split('\n').map(str::to_string));
-		}
+	if let Some(body) = &params.body
+		&& !body.trim().is_empty()
+	{
+		lines.push(String::new());
+		lines.extend(body.trim_end().split('\n').map(str::to_string));
 	}
 	lines.push(String::new());
 	render_lines(&lines)

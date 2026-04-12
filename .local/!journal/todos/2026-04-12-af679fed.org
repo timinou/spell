@@ -1,0 +1,83 @@
+#+TITLE: Session 14b70ceb3bfe1816 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Wave 1: Foundation
+
+** DONE Symbol resolution module in pi-code-engine
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:GATE_CMD: cargo test -p pi-code-engine resolve
+:END:
+
+Create crates/pi-code-engine/src/resolve.rs with resolve_symbol(). Consolidate declaration_for() in outline.rs, delete duplicate in navigate.rs.
+
+Verified with `cargo test -p pi-code-engine resolve`.
+
+* Wave 2: Edit Operations
+
+** DONE Scoped find/replace patch operation
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:GATE_CMD: cargo test -p pi-code-engine patch
+:DEPENDS: task-1
+:END:
+
+Create crates/pi-code-engine/src/edit/patch.rs with apply_patches(). Indent-insensitive matching, ambiguity detection.
+
+Verified with `cargo test -p pi-code-engine patch`.
+
+** DONE Replace-body, wrap, and rename operations
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:GATE_CMD: cargo test -p pi-code-engine -- body wrap rename
+:DEPENDS: task-1
+:END:
+
+Create body.rs, wrap.rs, rename.rs in edit/. All return Vec<TextEdit>.
+
+Verified with `cargo test -p pi-code-engine body`, `cargo test -p pi-code-engine wrap`, and `cargo test -p pi-code-engine rename`.
+
+* Wave 3: NAPI Integration
+
+** DONE Multi-edit dispatch, symbol targeting, annotated diff
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:GATE_CMD: cargo test -p pi-natives
+:DEPENDS: task-2 task-3
+:END:
+
+Refactor crates/pi-natives/src/code_buffer.rs: resolve_target(), single_edit_operation(), multi-edit, annotated diff.
+
+Verified with `cargo test -p pi-natives` and manual NAPI checks for symbol patch + 3-edit batching.
+
+* Wave 4: TypeScript Layer
+
+** DONE Schema and code.ts integration
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:DEPENDS: task-4
+:END:
+
+Update packages/coding-agent/src/tools/code.ts schema + execute. Update packages/natives/src/code-buffer/types.ts.
+
+Verified with `bun check:ts`.
+
+* Wave 5: Prompt
+
+** DONE code.md + system-prompt.md rewrite
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:DEPENDS: task-5
+:END:
+
+Rewrite edit section in code.md with new operations, examples. Update system-prompt.md structural edits section.
+
+Prompt examples updated to symbol-targeted patch / replace-body / wrap / rename / multi-edit UX.

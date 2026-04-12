@@ -20,6 +20,8 @@ import { type Static, Type } from "@sinclair/typebox";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import codeDescription from "../prompts/tools/code.md" with { type: "text" };
+import markdownHint from "../prompts/tools/code-hint-markdown.md" with { type: "text" };
+import typstHint from "../prompts/tools/code-hint-typst.md" with { type: "text" };
 import { renderCodeCell } from "../tui";
 import type { ToolSession } from ".";
 import {
@@ -62,11 +64,27 @@ const FALLBACK_EXTENSIONS = new Set([
 	"py",
 	"pyi",
 	"typ",
+	"md",
+	"mdx",
+	"markdown",
+	"org",
 	"ex",
 	"exs",
 ]);
 
 let supportedExtensionsCache: Set<string> | undefined;
+
+const LANGUAGE_BY_EXTENSION = new Map<string, string>([
+	["typ", "typst"],
+	["md", "markdown"],
+	["mdx", "markdown"],
+	["markdown", "markdown"],
+]);
+
+const LANGUAGE_INJECTIONS = new Map<string, string>([
+	["markdown", markdownHint.trim()],
+	["typst", typstHint.trim()],
+]);
 
 function extractSupportedExtensions(output: unknown): Set<string> {
 	const record = output as { languages?: Array<{ extensions?: string[] }> } | undefined;
@@ -100,6 +118,11 @@ function getSupportedExtensions(): Set<string> {
 
 export function _resetSupportedExtensionsForTest(override?: Set<string>): void {
 	supportedExtensionsCache = override;
+}
+
+function languageForFile(file: string): string | undefined {
+	const extension = path.extname(file).slice(1).toLowerCase();
+	return extension ? LANGUAGE_BY_EXTENSION.get(extension) : undefined;
 }
 
 const FILE_COMMANDS = new Set(["outline", "read", "navigate", "edit", "undo", "redo", "diff", "save", "open", "close"]);
@@ -259,10 +282,21 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 	readonly lenientArgValidation = true;
 
 	#session: ToolSession;
+	#seenLanguages = new Set<string>();
 
 	constructor(session: ToolSession) {
 		this.#session = session;
 		this.description = codeDescription;
+	}
+
+	#maybeInjectLanguageHint(file?: string): string | undefined {
+		if (!file) return undefined;
+		const language = languageForFile(file);
+		if (!language || this.#seenLanguages.has(language)) return undefined;
+		const hint = LANGUAGE_INJECTIONS.get(language);
+		if (!hint) return undefined;
+		this.#seenLanguages.add(language);
+		return hint;
 	}
 
 	async execute(
@@ -322,7 +356,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 						command,
 						file: options.file,
 						cwd: sessionCwd,
-						message: `Unsupported file type .${ext}. The code tool supports TypeScript, Rust, Python, Typst, and Elixir. Use the read tool instead.`,
+						message: `Unsupported file type .${ext}. The code tool supports TypeScript, Rust, Python, Typst, Markdown, Org, and Elixir. Use the read tool instead.`,
 					});
 					return toolResult(details).text(formatCodeToolContent(details)).done();
 				}
@@ -363,7 +397,12 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				offset: params.offset,
 				limit: params.limit,
 			});
-			return toolResult(details).text(formatCodeToolContent(details)).done();
+			const injectedHint = this.#maybeInjectLanguageHint(options.file);
+			if (injectedHint) {
+				(details as CodeToolResultDetails & { injectedHint?: string }).injectedHint = injectedHint;
+			}
+			const text = formatCodeToolContent(details);
+			return toolResult(details).text(text).done();
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			logger.error("code tool error", { error: message, command });

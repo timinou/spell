@@ -1,0 +1,17 @@
+#+TITLE: Session 14b6e2caaae063a2 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Read code.ts tool implementation
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Read Rust NAPI and daemon.ts
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

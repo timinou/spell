@@ -17,6 +17,7 @@ import { theme } from "../../modes/theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "../../modes/types";
 import { type CustomMessage, SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
 import type { SessionContext } from "../../session/session-manager";
+import { formatAssistantToolCallFailureMessage } from "../../session/tool-call-diagnostics";
 import { formatBytes, formatDuration } from "../../tools/render-utils";
 
 type TextBlock = { type: "text"; text: string };
@@ -237,15 +238,19 @@ export class UiHelpers {
 				}
 				readGroup = null;
 				const hasErrorStop = message.stopReason === "aborted" || message.stopReason === "error";
+				const toolFailureMessage = message.content.some(content => content.type === "toolCall")
+					? formatAssistantToolCallFailureMessage(message)
+					: undefined;
 				const errorMessage = hasErrorStop
 					? message.stopReason === "aborted"
-						? (() => {
+						? (toolFailureMessage ??
+							(() => {
 								const retryAttempt = this.ctx.session.retryAttempt;
 								return retryAttempt > 0
 									? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
 									: "Operation aborted";
-							})()
-						: message.errorMessage || "Error"
+							})())
+						: (toolFailureMessage ?? (message.errorMessage || "Error"))
 					: null;
 
 				// Render tool call components

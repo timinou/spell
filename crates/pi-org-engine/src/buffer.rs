@@ -1,4 +1,4 @@
-//! Org buffer: parse org files and extract items using the shared CodeBuffer.
+//! Org buffer: parse org files and extract items using the shared `CodeBuffer`.
 //!
 //! The tree-sitter grammar gives us document structure (headings, drawers,
 //! body). We extract semantic information (TODO states, properties, CLOCK
@@ -20,7 +20,7 @@ use crate::{
 	item::OrgItem,
 };
 
-/// A parsed org-mode buffer backed by the shared CodeBuffer implementation.
+/// A parsed org-mode buffer backed by the shared `CodeBuffer` implementation.
 pub struct OrgBuffer {
 	buffer: CodeBuffer,
 }
@@ -65,7 +65,7 @@ impl OrgBuffer {
 		extract_items_from_buffer(&self.buffer, todo_keywords, category, dir, file_path, include_body)
 	}
 
-	pub fn code_buffer(&self) -> &CodeBuffer {
+	pub const fn code_buffer(&self) -> &CodeBuffer {
 		&self.buffer
 	}
 }

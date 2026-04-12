@@ -1,119 +1,271 @@
-import { describe, expect, it } from "bun:test";
-import { iterateWithIdleTimeout } from "../../src/utils/idle-iterator";
+import { afterEach, describe, expect, it, mock } from "bun:test";
+import { getBundledModel } from "../../src/models";
+import type { AssistantMessageEvent, Context, Model } from "../../src/types";
 
-describe("Anthropic stream idle timeout", () => {
-	it("throws after idle timeout when stream stalls", async () => {
-		async function* stalledStream() {
-			await new Promise(() => {}); // never resolves
-		}
+type MockEvent = {
+	type: string;
+	[key: string]: unknown;
+};
 
-		const wrapped = iterateWithIdleTimeout(stalledStream(), {
-			idleTimeoutMs: 50,
-			errorMessage: "Anthropic messages stream stalled while waiting for the next event",
-		});
+interface MockAnthropicStream extends AsyncIterable<MockEvent>, AsyncIterator<MockEvent> {
+	abortCount: number;
+	returnCount: number;
+}
 
-		await expect(async () => {
-			for await (const _event of wrapped) {
-				// should never reach here
+interface MockStreamSpec {
+	events: MockEvent[];
+	stallAfterEvents?: boolean;
+}
+
+let streamSpecs: MockStreamSpec[] = [{ events: [] }];
+let streamCallCount = 0;
+let lastStream: MockAnthropicStream | null = null;
+let createdStreams: MockAnthropicStream[] = [];
+
+class MockAnthropic {
+	messages = {
+		stream: (_params: unknown, options?: { signal?: AbortSignal }) => {
+			const spec = streamSpecs[Math.min(streamCallCount, streamSpecs.length - 1)] ?? { events: [] };
+			streamCallCount += 1;
+			lastStream = createMockAnthropicStream(spec.events, {
+				signal: options?.signal,
+				stallAfterEvents: spec.stallAfterEvents,
+			});
+			createdStreams.push(lastStream);
+			return lastStream;
+		},
+	};
+}
+
+mock.module("@anthropic-ai/sdk", () => ({
+	default: MockAnthropic,
+}));
+
+const { streamAnthropic } = await import("../../src/providers/anthropic");
+
+const model = getBundledModel("anthropic", "claude-opus-4-6") as Model<"anthropic-messages">;
+
+const context: Context = {
+	messages: [{ role: "user", content: "Create the item", timestamp: Date.now() }],
+};
+
+function createMockAnthropicStream(
+	events: MockEvent[],
+	options: { signal?: AbortSignal; stallAfterEvents?: boolean },
+): MockAnthropicStream {
+	let index = 0;
+	let releaseStall: (() => void) | undefined;
+	const iterator: MockAnthropicStream = {
+		abortCount: 0,
+		returnCount: 0,
+		[Symbol.asyncIterator]() {
+			return iterator;
+		},
+		async next(): Promise<IteratorResult<MockEvent>> {
+			if (index < events.length) {
+				return { value: events[index++]!, done: false };
 			}
-		}).toThrow("Anthropic messages stream stalled");
-	});
+			if (options.stallAfterEvents) {
+				await new Promise<void>(resolve => {
+					releaseStall = resolve;
+				});
+			}
+			return { value: undefined, done: true };
+		},
+		async return(): Promise<IteratorResult<MockEvent>> {
+			iterator.returnCount += 1;
+			releaseStall?.();
+			return { value: undefined, done: true };
+		},
+	};
 
-	it("calls onIdle callback before throwing", async () => {
-		let idleCalled = false;
-		async function* stalledStream() {
-			await new Promise(() => {});
-		}
+	options.signal?.addEventListener(
+		"abort",
+		() => {
+			iterator.abortCount += 1;
+			releaseStall?.();
+		},
+		{ once: true },
+	);
 
-		const wrapped = iterateWithIdleTimeout(stalledStream(), {
-			idleTimeoutMs: 50,
-			errorMessage: "stalled",
-			onIdle: () => {
-				idleCalled = true;
+	return iterator;
+}
+
+function configureStream(events: MockEvent[], options: { stallAfterEvents?: boolean } = {}): void {
+	configureStreamSequence([{ events, stallAfterEvents: options.stallAfterEvents }]);
+}
+
+function configureStreamSequence(specs: MockStreamSpec[]): void {
+	streamSpecs = specs;
+	streamCallCount = 0;
+	lastStream = null;
+	createdStreams = [];
+}
+
+function buildToolUseEvents(options: {
+	toolName?: string;
+	partialJson?: string;
+	closeToolBlock?: boolean;
+	includeTerminalMessage: boolean;
+}): MockEvent[] {
+	const usage = {
+		input_tokens: 12,
+		output_tokens: 0,
+		cache_read_input_tokens: 0,
+		cache_creation_input_tokens: 0,
+	};
+	const events: MockEvent[] = [
+		{ type: "message_start", message: { usage } },
+		{
+			type: "content_block_start",
+			index: 0,
+			content_block: { type: "tool_use", id: "toolu_123", name: options.toolName ?? "org", input: {} },
+		},
+		{
+			type: "content_block_delta",
+			index: 0,
+			delta: {
+				type: "input_json_delta",
+				partial_json: options.partialJson ?? '{"_i":"Creating org item","command":"create","category":"features"}',
 			},
+		},
+	];
+	if (options.closeToolBlock !== false) {
+		events.push({ type: "content_block_stop", index: 0 });
+	}
+	if (options.includeTerminalMessage) {
+		events.push(
+			{
+				type: "message_delta",
+				delta: { stop_reason: "tool_use" },
+				usage: {
+					input_tokens: 12,
+					output_tokens: 5,
+					cache_read_input_tokens: 0,
+					cache_creation_input_tokens: 0,
+				},
+			},
+			{ type: "message_stop" },
+		);
+	}
+	return events;
+}
+
+async function collectEventTypes(response: AsyncIterable<AssistantMessageEvent>): Promise<string[]> {
+	const eventTypes: string[] = [];
+	for await (const event of response) {
+		eventTypes.push(event.type);
+	}
+	return eventTypes;
+}
+
+afterEach(() => {
+	delete Bun.env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS;
+	delete Bun.env.PI_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS;
+	lastStream = null;
+	createdStreams = [];
+	streamSpecs = [{ events: [] }];
+	streamCallCount = 0;
+});
+
+describe("Anthropic provider idle timeout regression", () => {
+	it("surfaces an error and aborts the request when the stream never starts", async () => {
+		Bun.env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = "10";
+		configureStream([], { stallAfterEvents: true });
+
+		const response = streamAnthropic(model, context, { apiKey: "test-key" });
+		const eventTypes = await collectEventTypes(response);
+		const result = await response.result();
+
+		expect(eventTypes).toEqual(["start", "error"]);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("Anthropic messages stream stalled while waiting for the next event");
+		expect(lastStream?.abortCount).toBe(1);
+		expect(lastStream?.returnCount).toBe(1);
+	});
+
+	it("retries an incomplete stalled tool call instead of surfacing a partial write", async () => {
+		Bun.env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = "10";
+		Bun.env.PI_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS = "10";
+		configureStreamSequence([
+			{
+				events: buildToolUseEvents({
+					toolName: "write",
+					partialJson: '{"path":"specs/markdown-code-engine-integration.md"}',
+					closeToolBlock: false,
+					includeTerminalMessage: false,
+				}),
+				stallAfterEvents: true,
+			},
+			{
+				events: buildToolUseEvents({
+					toolName: "write",
+					partialJson: '{"path":"specs/markdown-code-engine-integration.md","content":"draft"}',
+					includeTerminalMessage: true,
+				}),
+			},
+		]);
+
+		const response = streamAnthropic(model, context, { apiKey: "test-key" });
+		const eventTypes = await collectEventTypes(response);
+		const result = await response.result();
+		const toolCall = result.content.find(block => block.type === "toolCall");
+
+		expect(createdStreams).toHaveLength(2);
+		expect(createdStreams[0]?.abortCount).toBe(1);
+		expect(createdStreams[0]?.returnCount).toBe(1);
+		expect(createdStreams[1]?.abortCount).toBe(0);
+		expect(eventTypes).toContain("toolcall_end");
+		expect(eventTypes.at(-1)).toBe("done");
+		expect(result.stopReason).toBe("toolUse");
+		if (toolCall?.type !== "toolCall") {
+			throw new Error("Expected recovered write tool call after provider retry");
+		}
+		expect(toolCall.name).toBe("write");
+		expect(toolCall.arguments).toEqual({
+			path: "specs/markdown-code-engine-integration.md",
+			content: "draft",
 		});
-
-		try {
-			for await (const _event of wrapped) {
-				// unreachable
-			}
-		} catch {
-			// expected
-		}
-
-		expect(idleCalled).toBe(true);
 	});
 
-	it("passes through events normally when stream is active", async () => {
-		async function* activeStream() {
-			yield { type: "event1" };
-			yield { type: "event2" };
-			yield { type: "event3" };
-		}
+	it("recovers a completed tool call when Anthropic stalls before trailing stop events", async () => {
+		Bun.env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = "10";
+		configureStream(buildToolUseEvents({ includeTerminalMessage: false }), { stallAfterEvents: true });
 
-		const events: unknown[] = [];
-		for await (const event of iterateWithIdleTimeout(activeStream(), {
-			idleTimeoutMs: 5000,
-			errorMessage: "stalled",
-		})) {
-			events.push(event);
-		}
+		const response = streamAnthropic(model, context, { apiKey: "test-key" });
+		const eventTypes = await collectEventTypes(response);
+		const result = await response.result();
+		const toolCall = result.content.find(block => block.type === "toolCall");
 
-		expect(events).toHaveLength(3);
-		expect(events[0]).toEqual({ type: "event1" });
-		expect(events[2]).toEqual({ type: "event3" });
+		expect(eventTypes).toContain("toolcall_end");
+		expect(eventTypes.at(-1)).toBe("done");
+		expect(result.stopReason).toBe("toolUse");
+		expect(toolCall?.type).toBe("toolCall");
+		if (toolCall?.type !== "toolCall") {
+			throw new Error("Expected completed tool call in recovered response");
+		}
+		expect(toolCall.name).toBe("org");
+		expect(toolCall.arguments).toEqual({
+			_i: "Creating org item",
+			command: "create",
+			category: "features",
+		});
+		expect(lastStream?.abortCount).toBe(1);
+		expect(lastStream?.returnCount).toBe(1);
 	});
 
-	it("resets timeout between events", async () => {
-		async function* slowButActiveStream() {
-			yield "a";
-			await Bun.sleep(30);
-			yield "b";
-			await Bun.sleep(30);
-			yield "c";
-		}
+	it("still completes healthy tool-use streams normally", async () => {
+		Bun.env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = "10";
+		configureStream(buildToolUseEvents({ includeTerminalMessage: true }));
 
-		const events: string[] = [];
-		for await (const event of iterateWithIdleTimeout(slowButActiveStream(), {
-			idleTimeoutMs: 100, // each gap is 30ms, well under 100ms
-			errorMessage: "stalled",
-		})) {
-			events.push(event);
-		}
+		const response = streamAnthropic(model, context, { apiKey: "test-key" });
+		const eventTypes = await collectEventTypes(response);
+		const result = await response.result();
 
-		expect(events).toEqual(["a", "b", "c"]);
-	});
-
-	it("passes through without timeout when idleTimeoutMs is undefined", async () => {
-		async function* activeStream() {
-			yield 1;
-			yield 2;
-		}
-
-		const events: number[] = [];
-		for await (const event of iterateWithIdleTimeout(activeStream(), {
-			idleTimeoutMs: undefined,
-			errorMessage: "stalled",
-		})) {
-			events.push(event);
-		}
-
-		expect(events).toEqual([1, 2]);
-	});
-
-	it("passes through without timeout when idleTimeoutMs is 0 (disabled)", async () => {
-		async function* activeStream() {
-			yield "x";
-		}
-
-		const events: string[] = [];
-		for await (const event of iterateWithIdleTimeout(activeStream(), {
-			idleTimeoutMs: 0,
-			errorMessage: "stalled",
-		})) {
-			events.push(event);
-		}
-
-		expect(events).toEqual(["x"]);
+		expect(eventTypes.at(-1)).toBe("done");
+		expect(result.stopReason).toBe("toolUse");
+		expect(result.errorMessage).toBeUndefined();
+		expect(lastStream?.abortCount).toBe(0);
+		expect(lastStream?.returnCount).toBe(0);
 	});
 });

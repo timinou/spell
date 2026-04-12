@@ -1,0 +1,43 @@
+#+TITLE: Session 14b6fc9994640cbb Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** BLOCKED Inventory append/overlay prompts
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: failed
+:END:
+
+* Tasks
+
+** BLOCKED Read worst offender tool descriptions
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: failed
+:END:
+
+** BLOCKED Read exemplar tool descriptions
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: failed
+:END:
+
+** BLOCKED Read stub tool descriptions
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: failed
+:END:
+
+** BLOCKED Read mid-tier tool descriptions
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: failed
+:END:
+
+** BLOCKED Read edit-related tool descriptions
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: failed
+:END:

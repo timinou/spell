@@ -16,6 +16,10 @@ const TEST_EXTENSIONS = new Set([
 	"py",
 	"pyi",
 	"typ",
+	"md",
+	"mdx",
+	"markdown",
+	"org",
 	"ex",
 	"exs",
 ]);
@@ -165,6 +169,37 @@ describe("coding-agent code tool wiring", () => {
 		expect(bufferSpy).toHaveBeenCalledWith(
 			expect.objectContaining({ command: "outline", file: "/tmp/test/src/main.ts" }),
 		);
+	});
+	it("injects markdown hint only on first successful markdown use", async () => {
+		spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({ output: "# Installation", error: false });
+		const tool = new CodeTool(createSession());
+
+		const first = await tool.execute("tool", { command: "read", file: "/tmp/test/README.md" });
+		expect(getText(first)).toContain("Markdown-specific code operations:");
+		expect(getText(first)).toContain("replace-code-block");
+
+		const second = await tool.execute("tool", { command: "read", file: "/tmp/test/guide.md" });
+		expect(getText(second)).not.toContain("Markdown-specific code operations:");
+	});
+
+	it("injects hints independently per language", async () => {
+		spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({ output: "content", error: false });
+		const tool = new CodeTool(createSession());
+
+		const markdown = await tool.execute("tool", { command: "read", file: "/tmp/test/README.md" });
+		expect(getText(markdown)).toContain("Markdown-specific code operations:");
+
+		const typst = await tool.execute("tool", { command: "read", file: "/tmp/test/doc.typ" });
+		expect(getText(typst)).toContain("Typst-specific code operations:");
+	});
+
+	it("does not inject language hints on error results", async () => {
+		spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({ output: "missing file", error: true });
+		const tool = new CodeTool(createSession());
+
+		const result = await tool.execute("tool", { command: "read", file: "/tmp/test/README.md" });
+		expect(getText(result)).not.toContain("Markdown-specific code operations:");
+		expect(getText(result)).toContain("missing file");
 	});
 
 	it("joins array content for replace-body edits before invoking NAPI", async () => {
@@ -323,10 +358,10 @@ describe("coding-agent code tool wiring", () => {
 			error: false,
 		});
 		const tool = new CodeTool(createSession());
-		const result = await tool.execute("tool", { command: "read", file: "/tmp/test/doc.md" });
+		const result = await tool.execute("tool", { command: "read", file: "/tmp/test/doc.foo" });
 
-		expect(getText(result)).toContain("Unsupported file type .md");
-		expect(getText(result)).toContain("supports TypeScript, Rust, Python, Typst, and Elixir");
+		expect(getText(result)).toContain("Unsupported file type .foo");
+		expect(getText(result)).toContain("supports TypeScript, Rust, Python, Typst, Markdown, Org, and Elixir");
 		expect(getText(result)).toContain("read tool");
 		expect(bufferSpy).not.toHaveBeenCalled();
 	});

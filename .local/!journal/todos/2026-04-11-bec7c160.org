@@ -1,0 +1,43 @@
+#+TITLE: Session 14b70bc39f92151f Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Inspect recover command and affected status reader
+:PROPERTIES:
+:TASK_ID: inspect-recover-implementation
+:STATUS: completed
+:ORG_ITEM_ID: BUG-220-fix-ghostty-new-window-command-not-execu
+:END:
+
+Context gathered from packages/coding-agent/src/commands/recover.ts, packages/desktop-common/src/status-file.ts, packages/coding-agent/test/recover-command.test.ts, packages/desktop-common/test/status-file.test.ts, packages/coding-agent/src/main.ts.
+
+Read recover.ts, status-file.ts, recover-command.test.ts, desktop-common status-file tests, and main.ts recover warning path. LSP references unavailable in this workspace, so I used AST search for StatusFileReader consumers. Key findings: recover.ts currently deletes only successful recovery files, readCrashed never cleans stale metadata-less files, startup warning already ignores metadata-less crashes, and tests currently assert the old -e spawn shape and stale-skip wording.
+
+** DOING Implement recover command overhaul
+:PROPERTIES:
+:TASK_ID: implement-recover-overhaul
+:STATUS: in_progress
+:VERIFY_CMD: bun test packages/coding-agent/test/recover-command.test.ts
+:DEPENDS: task://plan-198/inspect-recover
+:ORG_ITEM_ID: FEAT-488-stale-status-file-cleanup-for-spell-reco
+:END:
+
+Apply Wave 1 then Wave 2: fix Ghostty command construction, add direct mode/manual fallback, add stale cleanup API and recover --clean / auto-clean behavior, update tests and any package-local verification impacted by the new reader method.
+
+Proceeding sequentially: Wave 1 Ghostty command fix/direct fallback first, then Wave 2 stale cleanup API and recover flow changes.
+
+** ITEM Verify plan, update org, and commit
+:PROPERTIES:
+:TASK_ID: verify-org-and-commit
+:STATUS: pending
+:GATE_COMMIT: true
+:GATE_CMD: bun test packages/coding-agent/test/recover-command.test.ts && bun check:ts
+:GATE_LLM: Confirm plan report includes exact commands, outcomes, artifacts, and deviations.
+:DEPENDS: task://plan-198/implement-recover
+:ORG_ITEM_ID: PLAN-198-spell-recover-overhaul
+:ORG_ITEM_CLOSING_ID: PLAN-198-spell-recover-overhaul
+:END:
+
+Run focused verification and typecheck, capture evidence, append completion report to PLAN-198, reconcile BUG-220/FEAT-488/PLAN-198 states truthfully, then stage only plan-related files and commit with conventional message.

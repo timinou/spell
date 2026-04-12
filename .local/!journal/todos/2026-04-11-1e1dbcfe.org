@@ -1,0 +1,23 @@
+#+TITLE: Session 14b6d527dbb63fd1 Todos
+#+DATE: 2026-04-11
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Explore the code tool implementation and capabilities
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Explore ast_grep and ast_edit tool implementations
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Explore the code graph/index system that powers cross-file queries
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

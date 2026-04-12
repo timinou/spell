@@ -1,0 +1,23 @@
+#+TITLE: Session 14b7a505e274a416 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Bug 1: Silent API stall after tool results
+
+** DONE Trace the prompt loop from tool results to next API call
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Trace audit state lifecycle and how it interacts with continue/resume
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Investigate the retry and error handling for API calls
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:

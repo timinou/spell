@@ -116,6 +116,7 @@ interface CodeFileDetailsBase<TCommand extends CodeFileCommand, TData> {
 	displayPath?: string;
 	data: TData;
 	rawOutput: unknown;
+	injectedHint?: string;
 	meta?: OutputMeta;
 }
 
@@ -349,8 +350,11 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		return details.output;
 	}
 
+	const withHint = (content: string): string =>
+		details.injectedHint ? `${content}\n\n${details.injectedHint}` : content;
+
 	if (details.command === "read") {
-		return details.data.text;
+		return withHint(details.data.text);
 	}
 
 	if (details.command === "outline") {
@@ -363,7 +367,7 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		if (remaining > 0) {
 			lines.push(`- … ${remaining} more top-level entries`);
 		}
-		return lines.join("\n");
+		return withHint(lines.join("\n"));
 	}
 
 	if (details.command === "navigate") {
@@ -401,14 +405,14 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		if (remaining > 0) {
 			lines.push(`  … ${remaining} more items`);
 		}
-		return lines.join("\n");
+		return withHint(lines.join("\n"));
 	}
 
 	if (details.command === "edit") {
 		const label = details.displayPath ? ` ${details.displayPath}` : "";
 		const header = `Edited${label}`;
 		if (details.data.diff.trim().length === 0) {
-			return header;
+			return withHint(header);
 		}
 		const preview = buildCompactHashlineDiffPreview(details.data.diff);
 		const changes = countDiffChanges(details.data.diff);
@@ -416,13 +420,13 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		if (preview.preview.trim().length > 0) {
 			lines.push("Diff preview:", preview.preview);
 		}
-		return lines.join("\n");
+		return withHint(lines.join("\n"));
 	}
 
 	if (details.command === "undo" || details.command === "redo") {
 		const label = details.displayPath ? ` ${details.displayPath}` : "";
 		if (!details.data.applied || !details.data.entries || details.data.entries.length === 0) {
-			return `${capitalize(details.command)}${label} had no effect.`;
+			return withHint(`${capitalize(details.command)}${label} had no effect.`);
 		}
 		const lines = [`${capitalize(details.command)}${label} (${pluralize(details.data.entries.length, "entry")})`];
 		for (const entry of previewList(details.data.entries, HISTORY_PREVIEW_LIMIT)) {
@@ -432,7 +436,7 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		if (remaining > 0) {
 			lines.push(`… ${remaining} more entries`);
 		}
-		return lines.join("\n");
+		return withHint(lines.join("\n"));
 	}
 
 	if (details.command === "diff") {
@@ -444,14 +448,16 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 				lines.push(hunk.content);
 			}
 		}
-		return lines.join("\n");
+		return withHint(lines.join("\n"));
 	}
 
 	if (details.command === "save") {
 		const label = details.displayPath ? ` ${details.displayPath}` : "";
-		return details.data.success
-			? `Saved${label} (buffer version ${details.data.version ?? "unknown"}).`
-			: `Save${label} did not report success.`;
+		return withHint(
+			details.data.success
+				? `Saved${label} (buffer version ${details.data.version ?? "unknown"}).`
+				: `Save${label} did not report success.`,
+		);
 	}
 
 	if (details.command === "buffers") {
@@ -463,7 +469,7 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		if (remaining > 0) {
 			lines.push(`- … ${remaining} more buffers`);
 		}
-		return lines.join("\n");
+		return withHint(lines.join("\n"));
 	}
 	if (details.command === "languages") {
 		const lines = [`Built-in languages (${details.data.languages.length})`];
@@ -475,7 +481,7 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		if (remaining > 0) {
 			lines.push(`- … ${remaining} more languages`);
 		}
-		return lines.join("\n");
+		return withHint(lines.join("\n"));
 	}
 
 	return "";
