@@ -1,0 +1,152 @@
+#+TITLE: Sniper todo audit fixes validation export scope identity magic number
+#+STATE: DONE
+#+SESSION_ID: 14b70cfac41a439a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T00-01-48-304Z_14b70cfac41a439a.jsonl]]
+#+CUSTOM_ID: BUG-227-sniper-todo-audit-fixes-validation-expor
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: agent-runtime
+
+NOTE [2026-04-12]: Implemented the four sniper todo audit fixes and verified them with bun check:ts plus targeted source checks.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-063-audit-implementation:
+
+Good — the subagent system prompt applies to ALL subagent types uniformly. This confirms the MUST applies to all, which is the intended design.
+
+Here's my audit report:
+
+---
+
+## Audit Findings
+
+### 1. Missing validation for assignment-less tasks without todoRef
+- **What**: Tasks with neither `assignment` nor `todoRef` now pass schema validation silently and produce subagents with empty task text.
+- **Where**: `packages/coding-agent/src/task/index.ts` — `#validateTaskBatch()` around line 258
+- **Why**: Before this change, TypeBox enforced `assignment` as required. Now a model can omit `assignment` without `todoRef` and the subagent gets an empty string. No error, no warning — the subagent just receives `""` as its task. This is a contract regression: the previous schema guaranteed subagents always received instructions.
+- **Effort**: `small` — Add a check in `#validateTaskBatch` (or after resolution, before dispatch) that verifies each task has either `assignment?.trim()` or was successfully resolved from `todoRef`.
+
+### 2. Magic number `60` in `#renderDetailPreview`
+- **What**: Hardcoded truncation width `60` instead of `TRUNCATE_LENGTHS.TITLE` constant.
+- **Where**: `packages/coding-agent/src/modes/interactive-mode.ts` line 982
+- **Why**: The project's TUI sanitization rules (AGENTS.md) specify using `TRUNCATE_LENGTHS` constants for consistency. The value matches `TRUNCATE_LENGTHS.TITLE` (also 60), but the reference isn't used. If the constant changes, this callsite would drift.
+- **Effort**: `trivial` — Import `TRUNCATE_LENGTHS` from `render-utils` and use `.TITLE`.
+
+### 3. `buildSniperAssignment` exported unnecessarily
+- **What**: Function is `export`-ed from `index.ts` but only consumed internally by `#resolveTodoRefAssignments` in the same file.
+- **Where**: `packages/coding-agent/src/task/index.ts` line 134
+- **Why**: Adds the function to the package's public API surface unnecessarily. Any future consumer would create an implicit dependency on the assignment format. If it's needed externally later, it can be exported then. Exporting preemptively increases the contract surface.
+- **Effort**: `trivial` — Remove the `export` keyword.
+
+### 4. `resolvedParams` identity check always fails when todo groups exist
+- **What**: `#resolveTodoRefAssignments` uses `.map()` which always returns a new array, so `resolvedTasks === (params.tasks ?? [])` is always `false` when any todo groups exist — even if zero assignments were actually resolved.
+- **Where**: `packages/coding-agent/src/task/index.ts` lines 624-625
+- **Why**: Creates an unnecessary shallow copy of `params` on every `execute()` call when the session has any todo groups (the common case). Not a correctness bug — just wasted allocation. The pattern of identity-checking map results requires tracking whether any item actually changed.
+- **Effort**: `small` — Track a `changed` flag in the map, return the original array if no items were modified. Or accept the allocation cost since it's trivial.
+
+* Context
+Post-implementation audit of PLAN-197-sniper-todo-pattern found 4 small issues across 2 files. All are polish/hardening — no behavioral bugs, but one contract regression (missing validation).
+
+* Design Decisions
+1. Validation check goes in ~#validateTaskBatch~ AFTER resolution, checking that each task has ~assignment?.trim()~ or ~todoRef~
+2. ~buildSniperAssignment~ loses its ~export~ keyword — only used in the same file
+3. ~#resolveTodoRefAssignments~ uses a ~changed~ flag to avoid always creating a new array from ~.map()~
+4. ~#renderDetailPreview~ uses ~TRUNCATE_LENGTHS.TITLE~ constant instead of hardcoded ~60~
+
+* Implementation
+
+** Fix 1: Missing validation for assignment-less tasks without todoRef
+File: ~packages/coding-agent/src/task/index.ts~
+Method: ~#validateTaskBatch~ (around line 258)
+
+After the existing blocker DAG check (around line 293), add:
+
+#+begin_src typescript
+const missingAssignment: number[] = [];
+for (let index = 0; index < tasks.length; index++) {
+    const task = tasks[index];
+    if (!task?.assignment?.trim() && !task?.todoRef) {
+        missingAssignment.push(index);
+    }
+}
+if (missingAssignment.length > 0) {
+    problems.push(`Tasks at indexes ${missingAssignment.join(", ")} have no assignment and no todoRef`);
+}
+#+end_src
+
+This runs after ~#resolveTodoRefAssignments~ has already filled in assignments from todoRef, so a task that was resolved successfully will have ~assignment~ set and won't trigger this.
+
+** Fix 2: Remove unnecessary export from buildSniperAssignment
+File: ~packages/coding-agent/src/task/index.ts~, line 134
+
+Change:
+: export function buildSniperAssignment(...)
+To:
+: function buildSniperAssignment(...)
+
+Verify no other file imports it (confirmed: only used on line 253 in the same file).
+
+** Fix 3: Fix identity check in resolveTodoRefAssignments
+File: ~packages/coding-agent/src/task/index.ts~, method ~#resolveTodoRefAssignments~ (line 246)
+
+Rewrite to track whether any task was actually modified:
+
+#+begin_src typescript
+#resolveTodoRefAssignments(tasks: TaskItem[]): TaskItem[] {
+    const groups = this.session.getTodoGroups?.();
+    if (!groups || groups.length === 0) return tasks;
+    let changed = false;
+    const result = tasks.map(task => {
+        if (task.assignment?.trim() || !task.todoRef) return task;
+        const todo = findTask(groups, task.todoRef);
+        if (!todo) return task;
+        const assignment = buildSniperAssignment(todo);
+        if (!assignment) return task;
+        changed = true;
+        return { ...task, assignment };
+    });
+    return changed ? result : tasks;
+}
+#+end_src
+
+Then simplify the caller in ~execute()~ (around line 624):
+
+#+begin_src typescript
+const rawTasks = this.#resolveTodoRefAssignments(params.tasks ?? []);
+const resolvedParams = rawTasks !== (params.tasks ?? []) ? { ...params, tasks: rawTasks } : params;
+#+end_src
+
+Wait — the identity check ~rawTasks !== (params.tasks ?? [])~ still evaluates ~?? []~ twice when ~params.tasks~ is undefined. But ~params.tasks~ is a required ~Type.Array~ field in the schema, so it's always defined. To be safe, simplify to:
+
+#+begin_src typescript
+const tasks = params.tasks ?? [];
+const resolvedTasks = this.#resolveTodoRefAssignments(tasks);
+const resolvedParams = resolvedTasks === tasks ? params : { ...params, tasks: resolvedTasks };
+const rawTasks = resolvedParams.tasks ?? [];
+#+end_src
+
+This extracts the ~?? []~ to avoid double evaluation and makes the identity check correct.
+
+** Fix 4: Replace magic number with TRUNCATE_LENGTHS.TITLE
+File: ~packages/coding-agent/src/modes/interactive-mode.ts~
+
+Add ~TRUNCATE_LENGTHS~ to the existing import from ~render-utils~ (line 52):
+: import { replaceTabs, TRUNCATE_LENGTHS } from "../tools/render-utils";
+
+In ~#renderDetailPreview~ (line 982), change:
+: truncateToWidth(replaceTabs(firstLine), 60)
+To:
+: truncateToWidth(replaceTabs(firstLine), TRUNCATE_LENGTHS.TITLE)
+
+* Edge Cases
+- Fix 1: A task with ~todoRef~ that resolved to an empty ~buildSniperAssignment~ (content is empty string, no details) would have ~assignment = undefined~ and ~todoRef~ set — the validation would NOT flag it because it checks ~todoRef~ presence, not resolution success. This is correct: the task still has a todoRef link, the subagent gets verification context even if the todo had empty content.
+- Fix 3: When ~params.tasks~ is undefined (shouldn't happen via schema), the fallback ~[]~ creates a new array each call, but the early return in ~#resolveTodoRefAssignments~ (no groups) returns the same reference, so the identity check works.
+
+* Verification
+- ~bun check:ts~ passes
+- Grep ~export function buildSniperAssignment~ — should NOT exist (no export)
+- Grep ~function buildSniperAssignment~ — should exist (non-exported)
+- Grep ~TRUNCATE_LENGTHS.TITLE~ in ~interactive-mode.ts~ — exists
+- Grep ~no assignment and no todoRef~ in ~index.ts~ — validation message exists
+- Grep ~let changed~ in ~#resolveTodoRefAssignments~ — identity tracking exists
