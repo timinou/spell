@@ -7,16 +7,16 @@ What are you doing? → subcommand:
 - Understand structure → `code read { file, resolution: 2 }`  [DEFAULT]
 - Read specific implementation → `code read { file, resolution: 3, offset, limit }`
 - Change specific lines in a declaration → `code edit { file, symbol: "fnName", operation: "patch", patches: [{ find: "old", replace: "new" }] }`
-- Replace a declaration body but keep its signature → `code edit { file, symbol: "fnName", operation: "replace-body", content: "{ ... }" }`
-- Replace an entire declaration → `code edit { file, symbol: "fnName", operation: "replace", content: "..." }`
+- Replace a declaration body but keep its signature → `code edit { file, symbol: "fnName", operation: "replace-body", content: "{ … }" }`
+- Replace an entire declaration → `code edit { file, symbol: "fnName", operation: "replace", content: "…" }`
 - Delete a declaration → `code edit { file, symbol: "fnName", operation: "kill" }`
 - Wrap a declaration in a template → `code edit { file, symbol: "fnName", operation: "wrap", content: "try {\n  $BODY\n} catch (err) {\n  throw err;\n}" }`
 - Rename a declaration in-file → `code edit { file, symbol: "oldName", operation: "rename", content: "newName" }`
-- Make multiple changes in one file → `code edit { file, edits: [...] }`
+- Make multiple changes in one file → `code edit { file, edits: […] }`
 - Reorder declarations → `code edit { file, line: N, operation: "drag-down" }`
 - Duplicate a declaration → `code edit { file, line: N, operation: "clone" }`
 - Unwrap a block → `code edit { file, line: N, operation: "splice" }`
-- Preview before saving → `code edit { ... }` then `code diff { file }`
+- Preview unsaved edits → `code diff { file }`
 - See what's around → `code navigate { file, action: "siblings", line }`
 - Inspect children of a class/block → `code navigate { file, action: "children", line }`
 - Find enclosing function → `code navigate { file, action: "defun-at", line }`
@@ -48,7 +48,7 @@ Workflow:
 - `edit`: AST-aware structural editing
 - `navigate`: In-file navigation helpers
 - `buffers`: Open managed buffers
-- `diff`: Unsaved buffer diff
+- `diff`: Buffer diff vs disk
 - `languages`: Built-in language profiles (TypeScript, Rust, Python, Elixir)
 - `undo`: Undo last edit
 - `redo`: Redo last undo
@@ -147,7 +147,7 @@ Workflow:
 - Use `symbol` to target declarations. Use `line` only for positional operations such as `drag-up`, `drag-down`, `splice`, `clone`, and `transpose`
 - For `patch`, `find` text is matched only within the targeted symbol scope and is indent-insensitive
 - If `patch.find` matches multiple locations, the edit fails — provide more specific context in the `find` text
-- Edits stay in-memory until `code save { file }`. Use `code diff { file }` to preview unsaved changes
+- Edits from `edit`, `undo`, and `redo` are automatically saved to disk. The `save` command is still available but rarely needed.
 - `context`, `impact`, and `flow` require `symbol`
 - `deps` requires `file`
 - `search` requires `query`; optional `semantic` forces hybrid search (`true`) or BM25-only search (`false`)

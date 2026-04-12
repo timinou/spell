@@ -498,4 +498,128 @@ describe("coding-agent code tool wiring", () => {
 		);
 		expect(bufferSpy.mock.calls[0]?.[0]).not.toHaveProperty("depth");
 	});
+	it("auto-saves to disk after successful edit", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({
+				output: { version: 2, diff: "@@ patch @@\n-old\n+new", editCount: 1 },
+				error: false,
+			})
+			.mockReturnValueOnce({
+				output: { success: true, version: 2 },
+				error: false,
+			});
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			symbol: "fn",
+			operation: "patch",
+			patches: [{ find: "old", replace: "new" }],
+		});
+
+		expect(bufferSpy).toHaveBeenCalledTimes(2);
+		expect(bufferSpy.mock.calls[1]?.[0]).toEqual(
+			expect.objectContaining({ command: "save", file: "/tmp/test/src/main.ts" }),
+		);
+		expect(getText(result)).toContain("Edited");
+		expect(result.details).toEqual(expect.objectContaining({ kind: "file" }));
+	});
+
+	it("auto-saves to disk after successful undo", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({
+				output: { version: 1, diff: "@@ undo @@" },
+				error: false,
+			})
+			.mockReturnValueOnce({
+				output: { success: true },
+				error: false,
+			});
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", {
+			command: "undo",
+			file: "/tmp/test/src/main.ts",
+		});
+
+		expect(bufferSpy).toHaveBeenCalledTimes(2);
+		expect(bufferSpy.mock.calls[1]?.[0]).toEqual(
+			expect.objectContaining({ command: "save", file: "/tmp/test/src/main.ts" }),
+		);
+		expect(result.details).toEqual(expect.objectContaining({ kind: "file" }));
+	});
+
+	it("auto-saves to disk after successful redo", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({
+				output: { version: 3, diff: "@@ redo @@" },
+				error: false,
+			})
+			.mockReturnValueOnce({
+				output: { success: true },
+				error: false,
+			});
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", {
+			command: "redo",
+			file: "/tmp/test/src/main.ts",
+		});
+
+		expect(bufferSpy).toHaveBeenCalledTimes(2);
+		expect(bufferSpy.mock.calls[1]?.[0]).toEqual(
+			expect.objectContaining({ command: "save", file: "/tmp/test/src/main.ts" }),
+		);
+		expect(result.details).toEqual(expect.objectContaining({ kind: "file" }));
+	});
+
+	it("returns error when auto-save after edit fails", async () => {
+		spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({
+				output: { version: 2, diff: "@@ patch @@", editCount: 1 },
+				error: false,
+			})
+			.mockReturnValueOnce({
+				output: "Permission denied",
+				error: true,
+			});
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			symbol: "fn",
+			operation: "patch",
+			patches: [{ find: "old", replace: "new" }],
+		});
+
+		expect(getText(result)).toContain("save to disk failed");
+		expect(result.details).toEqual(expect.objectContaining({ kind: "error", error: true }));
+	});
+
+	it("does not auto-save after non-mutating commands", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: [],
+			error: false,
+		});
+		const tool = new CodeTool(createSession());
+		await tool.execute("tool", { command: "outline", file: "/tmp/test/src/main.ts" });
+
+		expect(bufferSpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not auto-save when edit fails", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: "patch.find matched 0 locations",
+			error: true,
+		});
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			symbol: "fn",
+			operation: "patch",
+			patches: [{ find: "old", replace: "new" }],
+		});
+
+		expect(bufferSpy).toHaveBeenCalledTimes(1);
+		expect(getText(result)).toContain("patch.find matched 0 locations");
+	});
 });

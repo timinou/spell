@@ -1,0 +1,99 @@
+#+TITLE: Add timing instrumentation to code tool for hang diagnosis
+#+STATE: DONE
+#+SESSION_ID: 14b7b513095f9717
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-16-13-349Z_14b7b513095f9717.jsonl]]
+#+CUSTOM_ID: FEAT-503-add-timing-instrumentation-to-code-tool
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-502-auto-save-code-tool-after-mutating-opera
+
+NOTE [2026-04-12]: Timing instrumentation added to all executeCodeBuffer and executeCodeGraph calls. timedCodeBuffer helper logs debug on every call, warns at >2s. All 26 tests pass.
+
+* Initial Message
+
+Code
+ ┌─── ✔ Code save ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Saved packages/coding-agent/src/system-prompt.ts (buffer version 0).                                                                       │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Update Available
+ New version 14.1.0 is available. Run: spell update
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-07-46-350Z_14b7b323ebb7e1ac.jsonl
+ ID: 14b7b323ebb7e1ac
+
+
+bro save should be automatic, and trace any reason why using the code tool might make spell hang after result
+
+* Problem
+The code tool can hang during execution. The native =executeCodeBuffer= is synchronous (blocks the event loop), and =executeCodeGraph= runs on a worker thread. When operations are slow or stuck, there is no diagnostic output to identify the cause.
+
+Potential hang sources identified during investigation:
+1. *Tree-sitter re-parse*: After edit, the buffer re-parses. Pathological input could cause long parse times.
+2. *=buffer.save()= I/O*: Sync =fs::write= in the Rust crate. Slow on NFS, very large files, or full disks.
+3. *=registry().lock()=*: =parking_lot::Mutex= in =code_buffer.rs=. Single-threaded access from JS, but if Rust code panics mid-operation, internal state could be corrupt.
+4. *Graph building*: =executeCodeGraph= builds the full code graph. Large repos with many files can take seconds to minutes.
+5. *Semantic search*: Vector operations in the graph engine.
+
+* Design Decisions
+1. Wrap every =executeCodeBuffer= and =executeCodeGraph= call with =performance.now()= timing.
+2. Log every call via =logger.debug("code tool operation", { command, file, durationMs })=.
+3. Log a warning via =logger.warn= when any operation exceeds 2000ms.
+4. No runtime behavior changes — this is diagnostic instrumentation only.
+
+* Implementation
+
+** Modify =packages/coding-agent/src/tools/code.ts=
+
+This item depends on FEAT-502 (auto-save) because the auto-save adds a second =executeCodeBuffer= call that also needs instrumentation. Apply timing AFTER the auto-save changes are in place.
+
+*** Add timing helper
+
+Add a module-level helper function:
+
+#+begin_src typescript
+function timedCodeBuffer(options: CodeBufferOptions): CodeBufferResult {
+    const start = performance.now();
+    const result = executeCodeBuffer(options);
+    const durationMs = Math.round(performance.now() - start);
+    const file = options.file ? path.basename(options.file) : undefined;
+    logger.debug("code buffer operation", { command: options.command, file, durationMs });
+    if (durationMs > 2000) {
+        logger.warn("slow code buffer operation", { command: options.command, file, durationMs });
+    }
+    return result;
+}
+#+end_src
+
+Import =CodeBufferOptions= and =CodeBufferResult= from =@oh-my-pi/pi-natives= (they are already available via the existing import of =executeCodeBuffer=). Import type only — use =import type { CodeBufferOptions, CodeBufferResult }=.
+
+*** Replace all =executeCodeBuffer= calls
+
+Replace every direct call to =executeCodeBuffer(...)= in the =execute()= method with =timedCodeBuffer(...)=. This includes:
+1. The main operation call
+2. The auto-save call (added by FEAT-502)
+
+*** Add timing to graph commands
+
+In ==#executeGraphCommand()=, wrap the =executeCodeGraph(...)= call:
+
+#+begin_src typescript
+const start = performance.now();
+const result = await executeCodeGraph({ ... });
+const durationMs = Math.round(performance.now() - start);
+logger.debug("code graph operation", { command: params.command, durationMs });
+if (durationMs > 2000) {
+    logger.warn("slow code graph operation", { command: params.command, durationMs });
+}
+#+end_src
+
+* Verification
+- =bun check:ts= — no type errors
+- =bun test packages/coding-agent/test/tools/code.test.ts= — existing tests still pass (timing wrapper is transparent)
+- Manual verification: run =spell= with a code tool operation, check =~/.spell/logs/spell.*.log= for =code buffer operation= entries with =durationMs=

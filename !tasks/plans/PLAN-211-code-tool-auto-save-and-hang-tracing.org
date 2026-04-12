@@ -1,0 +1,79 @@
+#+TITLE: Code tool auto-save and hang tracing
+#+STATE: DONE
+#+SESSION_ID: 14b7b513095f9717
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-16-13-349Z_14b7b513095f9717.jsonl]]
+#+CUSTOM_ID: PLAN-211-code-tool-auto-save-and-hang-tracing
+
+
+* Initial Message
+
+Code
+ ┌─── ✔ Code save ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Saved packages/coding-agent/src/system-prompt.ts (buffer version 0).                                                                       │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Update Available
+ New version 14.1.0 is available. Run: spell update
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-07-46-350Z_14b7b323ebb7e1ac.jsonl
+ ID: 14b7b323ebb7e1ac
+
+
+bro save should be automatic, and trace any reason why using the code tool might make spell hang after result
+
+* Context
+The code tool (=packages/coding-agent/src/tools/code.ts=) wraps a native tree-sitter engine via NAPI bindings. Mutating operations (=edit=, =undo=, =redo=) modify an in-memory buffer but do not persist to disk — requiring the agent to issue a separate =code save= call. This wastes tool calls and risks data loss.
+
+Additionally, the code tool can hang during execution with no diagnostic output. The sync NAPI call =executeCodeBuffer= blocks the event loop, and the async =executeCodeGraph= runs on a worker thread. Both lack timing instrumentation.
+
+** Approach
+1. Add auto-save to =CodeTool.execute()=: after successful =edit=, =undo=, =redo=, automatically call =executeCodeBuffer({ command: "save", file })=. On save failure, return the entire call as an error.
+2. Update the system prompt (=code.md=) to reflect auto-save behavior.
+3. Add =performance.now()= timing around all native calls, logging via =logger.debug= and warning at >2s.
+
+** Key Decisions
+- Auto-save triggers on: =edit=, =undo=, =redo= (not =read=, =outline=, =navigate=, etc.)
+- Save failure = entire tool call error (agent sees error, in-memory edit persists)
+- Save success = transparent (original result returned unchanged)
+- System prompt updated to remove manual save instructions
+- Timing is diagnostic only — no behavioral changes
+- =save= command remains available for manual use
+
+* Verification
+#+begin_src bash
+bun test packages/coding-agent/test/tools/code.test.ts
+bun check:ts
+#+end_src
+
+Manual checks:
+- In a spell session, =code edit= operations should show the edit result without a separate save step
+- =~/.spell/logs/spell.*.log= should contain =code buffer operation= entries with =durationMs= fields
+
+* Execution Manifest
+
+| Wave | Item | Effort | Notes |
+|------+------+--------+-------|
+| 1 | [[id:FEAT-502-auto-save-code-tool-after-mutating-opera]] | 1h | Auto-save logic, prompt update, tests |
+| 2 | [[id:FEAT-503-add-timing-instrumentation-to-code-tool]] | 30m | Timing wrapper around native calls (depends on wave 1) |
+
+Total effort: ~1.5h
+
+** Completion [2026-04-12]
+
+*** Verification
+- =bun test packages/coding-agent/test/tools/code.test.ts= — 26 pass, 0 fail (6 new auto-save tests added)
+- =bunx biome check packages/coding-agent/src/tools/code.ts packages/coding-agent/test/tools/code.test.ts= — clean, no fixes needed
+- =tsgo= — 19 pre-existing errors in =code-result.ts= / =code-result.test.ts= / =code.ts= (discriminated union narrowing, =DetailsWithMeta= constraint, =isError= on =AgentToolResult=). Zero new errors introduced by this change.
+
+*** Artifacts
+- =packages/coding-agent/src/tools/code.ts= — auto-save logic + =timedCodeBuffer()= helper + graph timing
+- =packages/coding-agent/src/prompts/tools/code.md= — updated to document auto-save behavior
+- =packages/coding-agent/test/tools/code.test.ts= — 6 new tests covering auto-save contracts
+
+*** Deviations
+None.
