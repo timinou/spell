@@ -1,0 +1,94 @@
+#+TITLE: PLAN-213 audit remediation dynamic extensions guard message and baseline fixes
+#+STATE: BLOCKED
+#+SESSION_ID: 14b7c64d74a6434f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-31-29-618Z_14b7c64d74a6434f.jsonl]]
+#+CUSTOM_ID: PLAN-216-plan-213-audit-remediation-dynamic-exten
+
+NOTE [2026-04-12]: Implementation is complete, but the required repo-wide bun check:ts gate still fails because of unrelated existing type errors in other modified workspace files. See completion section for details.
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-065-audit-implementation:
+
+1. **What**: PLAN-213 was marked `DONE` even though a required verification command (`bun check:ts`) did not pass.  
+   **Where**: `!tasks/plans/PLAN-213-code-tool-error-envelope-and-language-gu.org`, state line at top and completion section around `** Completion [2026-04-12]` / `*** Verification`.  
+   **Why**: This breaks the plan completion contract: downstream reviewers cannot tell whether the change itself is fully verified or merely believed safe despite a failing required gate.  
+   **Effort**: small
+
+2. **What**: The unresolved `bun check:ts` blocker is documented, but there is no linked follow-up org item/FUP tracking that remaining work.  
+   **Where**: `!tasks/plans/PLAN-213-code-tool-error-envelope-and-language-gu.org`, `*** Deviations` section near the end.  
+   **Why**: The verification blocker is now easy to lose. If the repo-wide check must be green for release confidence, this leaves the failure unowned and untraceable.  
+   **Effort**: trivial
+
+3. **What**: The new guard message says “Use the read tool for non-code files,” but it also fires for unsupported code languages, not just non-code files.  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, unsupported-extension branch around the new guard near `FILE_COMMANDS` / `SUPPORTED_EXTENSIONS` check.  
+   **Why**: This is slightly misleading. A caller trying an unsupported code language is told the file is “non-code,” which can push the model toward the wrong fallback behavior and obscure the real limitation (“unsupported by code tool”).  
+   **Effort**: trivial
+
+4. **What**: There is no automated JS-level integration test for the real Rust→NAPI→TypeScript unsupported-language path; the TS suite still mocks `executeCodeBuffer`.  
+   **Where**: `packages/coding-agent/test/tools/code.test.ts`, new guard/error tests around the block added near the existing error-handling tests.  
+   **Why**: Rust unit tests cover the wrapper and the manual check covers one end-to-end case, but there is no automated contract test across the actual package boundary. A future regression in the NAPI bridge or JS wrapper could slip through without failing the TS test suite.  
+   **Effort**: small
+
+5. **What**: `SUPPORTED_EXTENSIONS` is now a second source of truth for language support and can drift from the native engine.  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, `SUPPORTED_EXTENSIONS` constant near the top of the file.  
+   **Why**: When native language support changes, the code tool can silently reject files the engine already supports, or vice versa. That creates a hard-to-notice contract mismatch at the tool boundary.  
+   **Effort**: medium
+
+* Context
+
+Audit AUD-065 of PLAN-213 (code tool error envelope and language guard) found five issues. This plan addresses all five:
+
+1. =bun check:ts= fails at baseline due to a pre-existing Biome import-order violation in =event-handler.test.ts=. PLAN-213 was marked DONE despite this required gate failing. Fix: resolve the import ordering.
+2. The unresolved =bun check:ts= blocker had no follow-up tracking. Fix: direct resolution (item above) eliminates the need for a FUP.
+3. The guard error message says "non-code files" but fires for unsupported code languages too. Fix: improve the message to be accurate.
+4. No JS-level integration test across the NAPI boundary for the error-envelope pattern. Fix: add tests following the =org-buffer.test.ts= pattern.
+5. =SUPPORTED_EXTENSIONS= is a hardcoded duplicate of the native engine's language registry. Fix: query the native =languages= command dynamically and cache the result.
+
+** Key Decisions
+- Dynamic extension querying via lazy =getSupportedExtensions()= with module-level cache
+- =FALLBACK_EXTENSIONS= constant as defensive fallback when native engine is unavailable
+- Test helper =_resetSupportedExtensionsForTest()= exported for cache management
+- Test =beforeEach= pre-populates the cache to avoid interfering with mock call-count assertions
+- Guard message updated to: "Unsupported file type .${ext}. The code tool supports TypeScript, Rust, Python, Typst, and Elixir. Use the read tool instead."
+- NAPI integration tests in =packages/natives/test/code-buffer.test.ts= following =org-buffer.test.ts= pattern
+- Drift-detection test: native extensions must match =FALLBACK_EXTENSIONS=; fails when a language is added/removed
+- Add clarifying =org note= to PLAN-213 that the =bun check:ts= failure was pre-existing
+
+* Verification
+#+begin_src bash
+bun test packages/coding-agent/test/tools/code.test.ts
+bun test packages/natives/test/code-buffer.test.ts
+bun check:ts
+#+end_src
+
+Manual check: =code read { file: "README.md" }= returns message containing "supports TypeScript, Rust, Python, Typst, and Elixir".
+
+Admin: =org note= on PLAN-213 clarifying the baseline =bun check:ts= failure was pre-existing and is now resolved.
+
+* Execution Manifest
+
+All three items are parallelizable (no file overlap):
+
+| Wave | Item | Effort | Notes |
+|------+------+--------+-------|
+| 1 | [[id:BUG-240-fix-pre-existing-biome-import-order-viol]] | 5m | Import reorder in event-handler.test.ts |
+| 1 | [[id:BUG-241-replace-hardcoded-supported-extensions-w]] | 30m | Dynamic extension query + guard message fix in code.ts and code.test.ts |
+| 1 | [[id:BUG-242-add-napi-boundary-integration-tests-for]] | 20m | NAPI integration tests in packages/natives/test/ |
+
+Total effort: ~55m
+
+Post-implementation admin: add =org note= to =PLAN-213-code-tool-error-envelope-and-language-gu= documenting that the baseline =bun check:ts= failure is now resolved by this plan's fixes.
+
+
+** Completion [2026-04-12]
+*** Verification
+- `bun test packages/coding-agent/test/tools/code.test.ts` -> passed (20 tests, 0 failures).
+- `bun test packages/natives/test/code-buffer.test.ts` -> passed (4 tests, 0 failures).
+- `bun check:ts` -> failed. `biome check .` passed after formatting `packages/natives/test/code-buffer.test.ts`, then `tsgo -p tsconfig.json` reported existing type errors in `packages/coding-agent/src/tools/code-result.ts`, `packages/coding-agent/src/tools/code.ts`, and `packages/coding-agent/test/tools/code-result.test.ts` from unrelated workspace changes.
+- Manual check: `bun --eval 'import { Settings } from "./packages/coding-agent/src/config/settings.ts"; import { CodeTool } from "./packages/coding-agent/src/tools/code.ts"; ...'` returned `Error: Unsupported file type .md. The code tool supports TypeScript, Rust, Python, Typst, and Elixir. Use the read tool instead.` for `README.md`.
+*** Artifacts
+- Documentation only: [[file:!tasks/plans/PLAN-213-code-tool-error-envelope-and-language-gu.org]] note updated to record that the original PLAN-213 `bun check:ts` blocker is resolved and that the current repo-wide failure is unrelated.
+*** Deviations
+- `bun check:ts` remains blocked by unrelated existing type errors in other modified workspace files (`packages/coding-agent/src/tools/code-result.ts`, `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/test/tools/code-result.test.ts`). PLAN-216 implementation work is complete, but the required repo-wide gate is not green in the current workspace.

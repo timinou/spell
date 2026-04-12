@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, test, spyOn } from "bun:test";
+import { beforeEach, describe, expect, spyOn, test } from "bun:test";
 import type { AgentEvent } from "@oh-my-pi/pi-agent-core";
 import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import * as nativesModule from "@oh-my-pi/pi-natives";
 import { Container } from "@oh-my-pi/pi-tui";
 import { _resetSettingsForTest, Settings } from "../../../../src/config/settings";
 import { AssistantMessageComponent } from "../../../../src/modes/components/assistant-message";
@@ -9,7 +10,6 @@ import { SubagentViewerEventHandler } from "../../../../src/modes/components/sub
 import type { SubagentViewerContext } from "../../../../src/modes/components/subagent-viewer/types";
 import { ToolExecutionComponent } from "../../../../src/modes/components/tool-execution";
 import { CodeTool, type ToolSession } from "../../../../src/tools";
-import * as nativesModule from "@oh-my-pi/pi-natives";
 
 const ev = (event: unknown) => event as AgentEvent;
 

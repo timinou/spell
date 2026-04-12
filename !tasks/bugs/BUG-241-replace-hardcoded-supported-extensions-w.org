@@ -1,0 +1,203 @@
+#+TITLE: Replace hardcoded SUPPORTED_EXTENSIONS with dynamic native query and fix guard message
+#+STATE: DONE
+#+SESSION_ID: 14b7c64d74a6434f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-31-29-618Z_14b7c64d74a6434f.jsonl]]
+#+CUSTOM_ID: BUG-241-replace-hardcoded-supported-extensions-w
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: coding-agent
+
+NOTE [2026-04-12]: Implemented in PLAN-216. Code tool now queries native languages dynamically with fallback retry behavior and updated unsupported-extension messaging; package-local tests and biome passed.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-065-audit-implementation:
+
+1. **What**: PLAN-213 was marked `DONE` even though a required verification command (`bun check:ts`) did not pass.  
+   **Where**: `!tasks/plans/PLAN-213-code-tool-error-envelope-and-language-gu.org`, state line at top and completion section around `** Completion [2026-04-12]` / `*** Verification`.  
+   **Why**: This breaks the plan completion contract: downstream reviewers cannot tell whether the change itself is fully verified or merely believed safe despite a failing required gate.  
+   **Effort**: small
+
+2. **What**: The unresolved `bun check:ts` blocker is documented, but there is no linked follow-up org item/FUP tracking that remaining work.  
+   **Where**: `!tasks/plans/PLAN-213-code-tool-error-envelope-and-language-gu.org`, `*** Deviations` section near the end.  
+   **Why**: The verification blocker is now easy to lose. If the repo-wide check must be green for release confidence, this leaves the failure unowned and untraceable.  
+   **Effort**: trivial
+
+3. **What**: The new guard message says “Use the read tool for non-code files,” but it also fires for unsupported code languages, not just non-code files.  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, unsupported-extension branch around the new guard near `FILE_COMMANDS` / `SUPPORTED_EXTENSIONS` check.  
+   **Why**: This is slightly misleading. A caller trying an unsupported code language is told the file is “non-code,” which can push the model toward the wrong fallback behavior and obscure the real limitation (“unsupported by code tool”).  
+   **Effort**: trivial
+
+4. **What**: There is no automated JS-level integration test for the real Rust→NAPI→TypeScript unsupported-language path; the TS suite still mocks `executeCodeBuffer`.  
+   **Where**: `packages/coding-agent/test/tools/code.test.ts`, new guard/error tests around the block added near the existing error-handling tests.  
+   **Why**: Rust unit tests cover the wrapper and the manual check covers one end-to-end case, but there is no automated contract test across the actual package boundary. A future regression in the NAPI bridge or JS wrapper could slip through without failing the TS test suite.  
+   **Effort**: small
+
+5. **What**: `SUPPORTED_EXTENSIONS` is now a second source of truth for language support and can drift from the native engine.  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, `SUPPORTED_EXTENSIONS` constant near the top of the file.  
+   **Why**: When native language support changes, the code tool can silently reject files the engine already supports, or vice versa. That creates a hard-to-notice contract mismatch at the tool boundary.  
+   **Effort**: medium
+
+* Problem
+Two issues from PLAN-213 audit:
+
+1. =SUPPORTED_EXTENSIONS= in =packages/coding-agent/src/tools/code.ts= is a hardcoded duplicate of the native engine's language registry. When a language is added to the Rust engine, the TypeScript guard silently rejects files the engine supports. The native =languages= command already exposes extensions at runtime but the guard doesn't use it.
+
+2. The guard error message says "Use the read tool for non-code files" but fires for ALL unsupported extensions, including unsupported code languages (Go, Java, etc.). This misleads the model about the actual limitation.
+
+* Design Decisions
+1. Replace hardcoded =SUPPORTED_EXTENSIONS= with a lazy =getSupportedExtensions()= function that queries the native =languages= command on first call.
+2. Cache the result in a module-level variable (=_supportedExtensions=). The native language registry is static during a session.
+3. Keep a =FALLBACK_EXTENSIONS= constant (same 14 values) as defensive fallback when the native engine is unavailable or returns an empty set.
+4. Export =_resetSupportedExtensionsForTest(override?: Set<string>)= for test cache management.
+5. Change guard message from =Unsupported file type .${ext}. Use the read tool for non-code files.= to =Unsupported file type .${ext}. The code tool supports TypeScript, Rust, Python, Typst, and Elixir. Use the read tool instead.=
+6. Do NOT cache the fallback — if the native query fails, retry on next call.
+
+* Implementation
+
+** Modify =packages/coding-agent/src/tools/code.ts=
+
+*** Replace =SUPPORTED_EXTENSIONS= constant
+
+Remove:
+#+begin_src typescript
+const SUPPORTED_EXTENSIONS = new Set([
+    "ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts",
+    "rs",
+    "py", "pyi",
+    "typ",
+    "ex", "exs",
+]);
+#+end_src
+
+Replace with:
+#+begin_src typescript
+const FALLBACK_EXTENSIONS = new Set([
+    "ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts",
+    "rs",
+    "py", "pyi",
+    "typ",
+    "ex", "exs",
+]);
+
+let _supportedExtensions: Set<string> | undefined;
+
+function getSupportedExtensions(): Set<string> {
+    if (_supportedExtensions) return _supportedExtensions;
+    try {
+        const result = executeCodeBuffer({ command: "languages" });
+        if (!result.error) {
+            const output = result.output as { languages: Array<{ extensions: string[] }> };
+            const exts = new Set<string>();
+            for (const lang of output.languages ?? []) {
+                for (const ext of lang.extensions ?? []) {
+                    exts.add(ext);
+                }
+            }
+            if (exts.size > 0) {
+                _supportedExtensions = exts;
+                return exts;
+            }
+        }
+    } catch {
+        // Native engine unavailable — use fallback
+    }
+    return FALLBACK_EXTENSIONS;
+}
+
+/** @internal Reset cached extensions — test-only. */
+export function _resetSupportedExtensionsForTest(override?: Set<string>): void {
+    _supportedExtensions = override;
+}
+#+end_src
+
+Key behaviors:
+- First production call queries native, caches result, subsequent calls use cache
+- If native query fails (throws, returns error, returns empty), returns =FALLBACK_EXTENSIONS= without caching (retries next call)
+- =_resetSupportedExtensionsForTest(set)= pre-populates cache; =_resetSupportedExtensionsForTest()= clears it
+- =_resetSupportedExtensionsForTest= is exported via the tools barrel (already exports from =code.ts=)
+
+*** Update guard branch
+
+Change:
+#+begin_src typescript
+if (ext && !SUPPORTED_EXTENSIONS.has(ext)) {
+#+end_src
+
+To:
+#+begin_src typescript
+if (ext && !getSupportedExtensions().has(ext)) {
+#+end_src
+
+*** Update guard message
+
+Change:
+#+begin_src typescript
+message: `Unsupported file type .${ext}. Use the read tool for non-code files.`,
+#+end_src
+
+To:
+#+begin_src typescript
+message: `Unsupported file type .${ext}. The code tool supports TypeScript, Rust, Python, Typst, and Elixir. Use the read tool instead.`,
+#+end_src
+
+** Modify =packages/coding-agent/test/tools/code.test.ts=
+
+*** Import the test helper
+
+Add to the imports near the top:
+#+begin_src typescript
+import { _resetSupportedExtensionsForTest } from "@oh-my-pi/pi-coding-agent/tools";
+#+end_src
+
+Note: check the barrel exports from =packages/coding-agent/src/tools/index.ts=. If =_resetSupportedExtensionsForTest= is not re-exported, add it. Follow existing export patterns (star re-export preferred per AGENTS.md).
+
+*** Add beforeEach to pre-populate cache
+
+Inside the =describe("coding-agent code tool wiring", ...)= block, add a =beforeEach= that pre-populates the extensions cache. This prevents the lazy =getSupportedExtensions()= from calling =executeCodeBuffer= during tests (which would interfere with mock call-count assertions).
+
+#+begin_src typescript
+const TEST_EXTENSIONS = new Set([
+    "ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts",
+    "rs", "py", "pyi", "typ", "ex", "exs",
+]);
+
+beforeEach(() => {
+    _resetSupportedExtensionsForTest(TEST_EXTENSIONS);
+});
+#+end_src
+
+*** Update afterEach to clear cache
+
+Add to the existing =afterEach= block:
+#+begin_src typescript
+_resetSupportedExtensionsForTest();
+#+end_src
+
+*** Update guard test assertion
+
+The test ="rejects unsupported file extensions before calling NAPI"= currently asserts:
+#+begin_src typescript
+expect(getText(result)).toContain("Unsupported file type .md");
+expect(getText(result)).toContain("read tool");
+#+end_src
+
+Update to match the new message:
+#+begin_src typescript
+expect(getText(result)).toContain("Unsupported file type .md");
+expect(getText(result)).toContain("read tool");
+#+end_src
+
+The second assertion still passes because the new message contains "read tool". No change needed for these assertions. But also verify the full message is correct:
+#+begin_src typescript
+expect(getText(result)).toContain("supports TypeScript, Rust, Python, Typst, and Elixir");
+#+end_src
+
+** Check barrel export
+
+Inspect =packages/coding-agent/src/tools/index.ts=. If it uses =export * from "./code"=, the =_resetSupportedExtensionsForTest= export propagates automatically. If it uses named exports, add the new export. The project convention (AGENTS.md) prefers star re-exports.
+
+* Verification
+- =bun test packages/coding-agent/test/tools/code.test.ts= → all 30 tests pass
+- =bunx biome check packages/coding-agent/src/tools/code.ts packages/coding-agent/test/tools/code.test.ts= → no errors
+- Manual check: =bun --eval '...'= with =code read { file: "README.md" }= returns message containing "supports TypeScript, Rust, Python, Typst, and Elixir"

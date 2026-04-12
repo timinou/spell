@@ -1,0 +1,160 @@
+#+TITLE: Add NAPI boundary integration tests for code buffer error envelope
+#+STATE: DONE
+#+SESSION_ID: 14b7c64d74a6434f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-31-29-618Z_14b7c64d74a6434f.jsonl]]
+#+CUSTOM_ID: BUG-242-add-napi-boundary-integration-tests-for
+#+EFFORT: 20m
+#+PRIORITY: #B
+#+LAYER: natives
+
+NOTE [2026-04-12]: Implemented in PLAN-216. Added direct-addon executeCodeBuffer integration coverage and verified with bun test packages/natives/test/code-buffer.test.ts.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-065-audit-implementation:
+
+1. **What**: PLAN-213 was marked `DONE` even though a required verification command (`bun check:ts`) did not pass.  
+   **Where**: `!tasks/plans/PLAN-213-code-tool-error-envelope-and-language-gu.org`, state line at top and completion section around `** Completion [2026-04-12]` / `*** Verification`.  
+   **Why**: This breaks the plan completion contract: downstream reviewers cannot tell whether the change itself is fully verified or merely believed safe despite a failing required gate.  
+   **Effort**: small
+
+2. **What**: The unresolved `bun check:ts` blocker is documented, but there is no linked follow-up org item/FUP tracking that remaining work.  
+   **Where**: `!tasks/plans/PLAN-213-code-tool-error-envelope-and-language-gu.org`, `*** Deviations` section near the end.  
+   **Why**: The verification blocker is now easy to lose. If the repo-wide check must be green for release confidence, this leaves the failure unowned and untraceable.  
+   **Effort**: trivial
+
+3. **What**: The new guard message says “Use the read tool for non-code files,” but it also fires for unsupported code languages, not just non-code files.  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, unsupported-extension branch around the new guard near `FILE_COMMANDS` / `SUPPORTED_EXTENSIONS` check.  
+   **Why**: This is slightly misleading. A caller trying an unsupported code language is told the file is “non-code,” which can push the model toward the wrong fallback behavior and obscure the real limitation (“unsupported by code tool”).  
+   **Effort**: trivial
+
+4. **What**: There is no automated JS-level integration test for the real Rust→NAPI→TypeScript unsupported-language path; the TS suite still mocks `executeCodeBuffer`.  
+   **Where**: `packages/coding-agent/test/tools/code.test.ts`, new guard/error tests around the block added near the existing error-handling tests.  
+   **Why**: Rust unit tests cover the wrapper and the manual check covers one end-to-end case, but there is no automated contract test across the actual package boundary. A future regression in the NAPI bridge or JS wrapper could slip through without failing the TS test suite.  
+   **Effort**: small
+
+5. **What**: `SUPPORTED_EXTENSIONS` is now a second source of truth for language support and can drift from the native engine.  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, `SUPPORTED_EXTENSIONS` constant near the top of the file.  
+   **Why**: When native language support changes, the code tool can silently reject files the engine already supports, or vice versa. That creates a hard-to-notice contract mismatch at the tool boundary.  
+   **Effort**: medium
+
+* Problem
+The code tool's TypeScript test suite mocks =executeCodeBuffer= for all tests. There are no automated JS-level tests that exercise the real Rust→NAPI→TypeScript path for the error-envelope pattern introduced in PLAN-213. The Rust side has unit tests, but a regression in the NAPI bridge, JS wrapper, or result shape could slip through undetected.
+
+An established pattern exists in =packages/natives/test/org-buffer.test.ts= for direct NAPI testing.
+
+* Design Decisions
+1. Add =packages/natives/test/code-buffer.test.ts= following the =org-buffer.test.ts= pattern: direct =require= of the =.node= addon, no mocks.
+2. Test the error envelope contract: unsupported language, missing command, and a success case.
+3. Add a drift-detection test: query the native =languages= command, extract all extensions, assert they match the known set. If the native engine adds a language, this test fails and signals the developer to update =FALLBACK_EXTENSIONS= in =code.ts=.
+4. Use =tempfile= (via =node:fs= + =node:os=) for creating test files with unsupported extensions.
+
+* Implementation
+
+** Create =packages/natives/test/code-buffer.test.ts=
+
+Follow the exact loading pattern from =org-buffer.test.ts=:
+
+#+begin_src typescript
+import { describe, expect, it } from "bun:test";
+import { createRequire } from "node:module";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
+// Load native addon directly, bypassing the embedded-addon import chain
+const require_ = createRequire(import.meta.url);
+const nativesDir = path.join(import.meta.dir, "..", "native");
+const native = require_(path.join(nativesDir, "pi_natives.dev.node")) as {
+    executeCodeBuffer(options: Record<string, unknown>): { output: unknown; error: boolean };
+};
+
+function executeCodeBuffer(options: Record<string, unknown>): { output: unknown; error: boolean } {
+    return native.executeCodeBuffer(options);
+}
+#+end_src
+
+** Test: unsupported language returns error envelope
+
+#+begin_src typescript
+describe("executeCodeBuffer NAPI bridge", () => {
+    it("returns error envelope for unsupported language", () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "code-buffer-test-"));
+        const mdFile = path.join(tmpDir, "readme.md");
+        fs.writeFileSync(mdFile, "# Hello
+");
+
+        try {
+            const result = executeCodeBuffer({ command: "read", file: mdFile });
+            expect(result.error).toBe(true);
+            expect(typeof result.output).toBe("string");
+            expect(result.output as string).toContain("language");
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+#+end_src
+
+** Test: missing command returns error envelope
+
+#+begin_src typescript
+    it("returns error envelope for missing command", () => {
+        const result = executeCodeBuffer({});
+        expect(result.error).toBe(true);
+        expect(typeof result.output).toBe("string");
+        expect(result.output as string).toContain("Missing required field: command");
+    });
+#+end_src
+
+** Test: languages command returns extension list
+
+#+begin_src typescript
+    it("returns language list via languages command", () => {
+        const result = executeCodeBuffer({ command: "languages" });
+        expect(result.error).toBe(false);
+        const output = result.output as { languages: Array<{ id: string; extensions: string[] }> };
+        expect(Array.isArray(output.languages)).toBe(true);
+        expect(output.languages.length).toBeGreaterThan(0);
+
+        // Every language entry has a string id and array of extensions
+        for (const lang of output.languages) {
+            expect(typeof lang.id).toBe("string");
+            expect(Array.isArray(lang.extensions)).toBe(true);
+            expect(lang.extensions.length).toBeGreaterThan(0);
+        }
+    });
+#+end_src
+
+** Test: native extensions match known fallback set (drift detection)
+
+#+begin_src typescript
+    it("native language extensions match FALLBACK_EXTENSIONS in code tool", () => {
+        const result = executeCodeBuffer({ command: "languages" });
+        expect(result.error).toBe(false);
+        const output = result.output as { languages: Array<{ extensions: string[] }> };
+
+        const nativeExtensions = new Set<string>();
+        for (const lang of output.languages) {
+            for (const ext of lang.extensions) {
+                nativeExtensions.add(ext);
+            }
+        }
+
+        // Must match FALLBACK_EXTENSIONS in packages/coding-agent/src/tools/code.ts
+        // If this fails, a language was added/removed in the native engine.
+        // Update FALLBACK_EXTENSIONS to match.
+        const expected = new Set([
+            "ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts",
+            "rs",
+            "py", "pyi",
+            "typ",
+            "ex", "exs",
+        ]);
+        expect(nativeExtensions).toEqual(expected);
+    });
+});
+#+end_src
+
+* Verification
+- =bun test packages/natives/test/code-buffer.test.ts= → 4 tests pass
+- No new dependencies needed (uses =bun:test=, =node:fs=, =node:os=, =node:path=, =node:module=)

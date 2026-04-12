@@ -1,0 +1,104 @@
+#+TITLE: Code tool error envelope and language guard
+#+STATE: DONE
+#+SESSION_ID: 14b7c0345fa6434e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-04-51-070Z_14b7c0345fa6434e.jsonl]]
+#+CUSTOM_ID: PLAN-213-code-tool-error-envelope-and-language-gu
+
+
+NOTE [2026-04-12]: Implemented the Rust error-envelope wrapper and TypeScript extension guard, recorded verification evidence, and isolated the repo-wide bun check:ts baseline failure in the completion report.
+
+
+* Initial Message
+
+Code
+ language not found for path: /home/user/code/ora/spell/packages/coding-agent/src/prompts/system/system-prompt.md                ╭────────────╮
+                                                                                                                                 │ 🗺 Plotting │
+                                                                                                                                 ╰────────────╯
+
+ ✔ Find: packages/coding-agent/src/prompts/**/*.md 100 files · in packages/coding-agent/src/prompts
+ ├─ 📝 system/system-prompt.md
+ ├─ 📝 tools/code.md
+ ├─ 📝 tools/handoff.md
+ ├─ 📝 tools/spawn-successor.md
+ ├─ 📝 tools/task.md
+ ├─ 📝 tools/todo-write.md
+ ├─ 📝 system/caveman.md
+ ├─ 📝 system/plan-mode-active.md
+ └─ … 92 more files
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-00-31-490Z_14b7bf36e09ede5e.jsonl
+ ID: 14b7bf36e09ede5e
+
+
+
+
+and then it froze. look at the recent hang fixes that were done on the code tool and its backing rust crates, and extract the structural fix to this.
+
+* Context
+
+The code tool froze a session when called on a =.md= file. The chain:
+1. Native engine returned =LanguageNotFound= error → NAPI threw JS exception → TypeScript caught it → returned error to agent
+2. Anthropic SSE stream silently dropped while waiting for the model's response → no idle timeout → permanent hang
+
+The SSE idle timeout fix (=9106faa9a=) addresses the transport-level hang. Two structural issues remain:
+
+** Issue 1: NAPI exception propagation
+=execute_code_buffer= has ~30 error sites that throw JS exceptions via =engine_err= / =json_err= + =?=. The TypeScript side has two error paths: structured (=result.error= check → full context) and fallback (=catch= block → just the message). All operational errors route through the inferior fallback path.
+
+** Issue 2: No early rejection of unsupported files
+The code tool passes any file to NAPI without checking language support. Unsupported files predictably fail, but the error message gives no guidance. The model retries or stalls instead of falling back to the =read= tool.
+
+** Approach
+1. Wrap =execute_code_buffer= Rust NAPI function so ALL errors become =\{ output, error: true \}= JSON envelopes — never NAPI throws. Single wrapper function, zero changes to internal =?= operators.
+2. Add TypeScript-level =SUPPORTED_EXTENSIONS= check before calling NAPI. Returns a helpful error: "Unsupported file type .md. Use the read tool for non-code files."
+
+** Key Decisions
+- Rust wrapper: =execute_code_buffer= calls =execute_code_buffer_inner= + catches =Err= into =json_response(error, true)=
+- TypeScript guard applies to file-requiring commands only (outline, read, navigate, edit, undo, redo, diff, save, open, close)
+- Extensionless files pass through to NAPI (e.g. =Makefile=)
+- =SUPPORTED_EXTENSIONS=: ts, tsx, js, jsx, mjs, cjs, mts, cts, rs, py, pyi, typ, ex, exs
+- The TypeScript =catch= block remains as safety net for truly unexpected errors
+- No prompt changes needed
+
+* Verification
+#+begin_src bash
+cargo test -p pi-natives
+bun test packages/coding-agent/test/tools/code.test.ts
+bun check:ts
+#+end_src
+
+Manual check: in a spell session, =code read { file: "README.md" }= should return a structured error mentioning the =read= tool, not throw or hang.
+
+* Execution Manifest
+
+| Wave | Item | Effort | Notes |
+|------+------+--------+-------|
+| 1 | [[id:BUG-238-convert-napi-execute-code-buffer-from-th]] | 45m | Rust NAPI error envelope wrapper + 2 tests |
+| 2 | [[id:BUG-239-add-typescript-language-support-guard-in]] | 30m | TypeScript extension check + 4 tests (depends on wave 1 for consistent error path) |
+
+Total effort: ~1h15m
+
+
+** Completion [2026-04-12]
+*** Verification
+- `cargo test -p pi-natives` → Passed. 56 tests passed.
+- `bun test packages/coding-agent/test/tools/code.test.ts` → Passed. 30 tests passed.
+- `bunx biome check packages/coding-agent/src/tools/code.ts packages/coding-agent/test/tools/code.test.ts` → Passed.
+- `cargo fmt --check --all -- crates/pi-natives/src/code_buffer.rs` → Passed.
+- Manual check:
+  #+begin_src bash
+  bun --eval 'import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings"; import { CodeTool } from "@oh-my-pi/pi-coding-agent/tools"; const tool = new CodeTool({ cwd: "/home/user/code/ora/spell", hasUI: false, getSessionFile: () => null, getSessionSpawns: () => "*", settings: Settings.isolated() }); const result = await tool.execute("tool", { command: "read", file: "README.md" }); const text = result.content.find(content => content.type === "text")?.text ?? ""; process.stdout.write(text);'
+  #+end_src
+  → Returned `Error: Unsupported file type .md. Use the read tool for non-code files.`
+- `bun check:ts` in an isolated clean HEAD worktree with shared `node_modules` → Failed on a pre-existing Biome import-order issue in `packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts`.
+- `bun check:ts` in an isolated HEAD+patch worktree with shared `node_modules` → Failed on the same pre-existing Biome import-order issue in `packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts`.
+*** Artifacts
+- [[file:!tasks/bugs/BUG-238-convert-napi-execute-code-buffer-from-th.org]]
+- [[file:!tasks/bugs/BUG-239-add-typescript-language-support-guard-in.org]]
+*** Deviations
+- Repo-wide `bun check:ts` is not currently green. In the dirty workspace it stops on unrelated formatting drift in `packages/ai/src/providers/cursor.ts`; in isolated clean/patched worktrees it stops on the same pre-existing Biome import-order issue in `packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts`.
+
+NOTE [2026-04-12]: PLAN-216 resolved the original bun check:ts blocker from this plan (Biome import-order violation in packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts). Current repo-wide bun check:ts failures now come from unrelated type errors in other modified workspace files, not from this plan's original deviation.
