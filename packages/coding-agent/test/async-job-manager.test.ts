@@ -212,6 +212,60 @@ describe("AsyncJobManager", () => {
 		expect(attempts).toBe(attemptsAfterAck);
 	});
 
+	test("orders recent jobs by completion time instead of start time", async () => {
+		const longRunning = Promise.withResolvers<string>();
+		const manager = new AsyncJobManager({
+			maxRunningJobs: 10,
+			onJobComplete: async () => {},
+		});
+
+		const longJobId = manager.register("task", "long", async () => longRunning.promise, { id: "long-recent" });
+		const shortJobId = manager.register("task", "short", async () => "short-done", { id: "short-recent" });
+
+		const shortCompletionDeadline = Date.now() + 2_000;
+		while (manager.getJob(shortJobId)?.status === "running") {
+			if (Date.now() >= shortCompletionDeadline) throw new Error("Timed out waiting for short job to finish");
+			await Bun.sleep(5);
+		}
+
+		longRunning.resolve("long-done");
+		await manager.waitForAll();
+		await manager.drainDeliveries({ timeoutMs: 2_000 });
+
+		const recentJobIds = manager.getRecentJobs(2).map(job => job.id);
+		expect(recentJobIds).toEqual([longJobId, shortJobId]);
+		expect(manager.getJob(longJobId)?.endTime).toBeDefined();
+		expect(manager.getJob(shortJobId)?.endTime).toBeDefined();
+	});
+
+	test("keeps the most recently completed job when pruning overflow", async () => {
+		const longRunning = Promise.withResolvers<string>();
+		const manager = new AsyncJobManager({
+			maxRunningJobs: 150,
+			retentionMs: 60_000,
+			onJobComplete: async () => {},
+		});
+
+		const longJobId = manager.register("task", "long", async () => longRunning.promise, { id: "long" });
+		const shortJobIds = Array.from({ length: 100 }, (_, index) =>
+			manager.register("task", `short-${index}`, async () => `short-${index}`, { id: `short-${index}` }),
+		);
+
+		const shortCompletionDeadline = Date.now() + 2_000;
+		while (shortJobIds.some(jobId => manager.getJob(jobId)?.status === "running")) {
+			if (Date.now() >= shortCompletionDeadline) throw new Error("Timed out waiting for short jobs to finish");
+			await Bun.sleep(5);
+		}
+
+		longRunning.resolve("long-done");
+		await manager.waitForAll();
+		await manager.drainDeliveries({ timeoutMs: 2_000 });
+
+		expect(manager.getAllJobs()).toHaveLength(100);
+		expect(manager.getJob(longJobId)?.status).toBe("completed");
+		expect(shortJobIds.some(jobId => manager.getJob(jobId) === undefined)).toBe(true);
+	});
+
 	test("dispose clears jobs and pending deliveries", async () => {
 		const manager = new AsyncJobManager({
 			onJobComplete: async () => {

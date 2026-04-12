@@ -80,7 +80,7 @@ function resolveEffectiveVariant(): X64Variant | null {
 
 const effectiveVariant = resolveEffectiveVariant();
 const variantSuffix = effectiveVariant ? `-${effectiveVariant}` : "";
-const exeSuffix = process.platform === "win32" ? ".exe" : "";
+const exeSuffix = targetPlatform === "win32" ? ".exe" : "";
 
 // Default to native CPU optimization for local builds; explicit variants use fixed ISA targets.
 if (!isCrossCompile && !Bun.env.RUSTFLAGS) {

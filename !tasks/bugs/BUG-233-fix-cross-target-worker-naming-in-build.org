@@ -1,0 +1,67 @@
+#+TITLE: Fix cross-target worker naming in build-nativets
+#+STATE: DONE
+#+SESSION_ID: 14b799f1a726d3bb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-17-41-276Z_14b799f1a726d3bb.jsonl]]
+#+CUSTOM_ID: BUG-233-fix-cross-target-worker-naming-in-build
+#+EFFORT: trivial
+#+PRIORITY: #A
+#+LAYER: build
+
+NOTE [2026-04-12]: Implemented in packages/natives/scripts/build-native.ts by switching worker exe suffix selection to targetPlatform. Verified source update landed.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-064-audit-implementation:
+
+ - What: Cross-target worker naming uses the host platform instead of the target platform.
+     - Where: packages/natives/scripts/build-native.ts, around const exeSuffix = process.platform === "win32" ? ".exe" : "";
+     - Why: Cross-compiling a Windows worker from Linux/macOS will install it without .exe, so post-build lookup and embedding can miss the worker even though the build succeeded.
+     - Effort: trivial
+ - What: Worker runtime discovery does not cover every path the native addon loader can use.
+     - Where: crates/pi-natives/src/embedding_worker.rs (worker_candidates() / versioned_native_dir()), compared with packages/natives/src/native.ts (compiledCandidates includes userDataDir)
+     - Why: If the addon is loaded from the userDataDir fallback, the worker is not searched there, so semantic features can fail even though the addon itself loads successfully.
+     - Effort: small
+ - What: Conversation cache eviction is FIFO, not activity-aware.
+     - Where: packages/ai/src/providers/cursor.ts, setConversationCacheEntry(...) near the top of the file
+     - Why: Updating an existing Map entry does not refresh insertion order, so an older but still-active conversation can be evicted first after the 21st conversation ID appears, causing
+ unexpected loss of cached state/blob data mid-session.
+     - Effort: small
+ - What: Semantic index construction trusts worker output shape without validating it.
+     - Where: crates/pi-natives/src/code_graph.rs, build_semantic_index(...) and semantic search query-vector handling
+     - Why: If the worker returns fewer vectors than chunks, or vectors with inconsistent dimensions, the code silently truncates via zip or accepts bad dimensions. Because PI_EMBEDDING_WORKER
+ is overrideable, this is externally reachable and can yield a corrupt vector cache while reporting success.
+     - Effort: small
+ - What: Pending-delivery capping silently drops completion notifications.
+     - Where: packages/coding-agent/src/async/job-manager.ts, #enqueueDelivery() and the failed-delivery requeue path in #runDeliveryLoop()
+     - Why: When the queue exceeds 200, oldest deliveries are discarded with no log or surfaced state change. The job record remains, but the caller can miss the automatic completion delivery
+ and perceive the job result as lost.
+     - Effort: small
+ - What: Finished-job pruning uses startTime rather than completion time.
+     - Where: packages/coding-agent/src/async/job-manager.ts, #pruneCompletedJobs()
+     - Why: A long-running job that just completed can be pruned before a short job that completed much earlier, which makes “recent jobs” less truthful and can hide the freshest result under
+ pressure.
+     - Effort: trivial
+ - What: Automated coverage does not fully exercise the worker IPC contract from the pi-natives side.
+     - Where: crates/pi-natives/src/code_graph.rs tests and crates/pi-natives/src/embedding_worker.rs
+     - Why: The missing-worker error path is covered, but successful semantic indexing, malformed worker responses, and worker restart-after-failure behavior are only manually verified. A
+ protocol drift between worker and host could pass cargo test and break runtime behavior.
+     - Effort: medium
+
+* Problem
+Cross-compiling a Windows worker from Linux/macOS installs the worker binary without the =.exe= suffix because =exeSuffix= is derived from =process.platform= (host) instead of =targetPlatform= (target). Post-build lookup and embedding discovery then fail to find the worker.
+
+* File
+=packages/natives/scripts/build-native.ts=
+
+* Change
+Line 83: change =const exeSuffix = process.platform === "win32" ? ".exe" : "";= to =const exeSuffix = targetPlatform === "win32" ? ".exe" : "";=
+
+=targetPlatform= is already defined at line 12 from =Bun.env.TARGET_PLATFORM || process.platform=, so this is a one-line fix. All downstream uses of =exeSuffix= (lines 178-183 workerNames, line 226 workerTaggedPath) automatically get the correct suffix.
+
+* Verification
+** The addon naming at lines 201-203 already uses =targetPlatform= for the addon filename — confirm this pattern is followed consistently.
+** Run =bun check:ts= to confirm no type errors.
+** Verify manually: =grep -n 'process\.platform' packages/natives/scripts/build-native.ts= should show =process.platform= only at line 12 (the fallback default) and line 15 (the isCrossCompile check), NOT at line 83.
+
+* Edge Cases
+- When =TARGET_PLATFORM= is not set, =targetPlatform= defaults to =process.platform=, preserving native-build behavior unchanged.

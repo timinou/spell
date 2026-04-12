@@ -1,0 +1,96 @@
+#+TITLE: Fix conversation cache FIFO eviction to be activity-aware
+#+STATE: DONE
+#+SESSION_ID: 14b799f1a726d3bb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-17-41-276Z_14b799f1a726d3bb.jsonl]]
+#+CUSTOM_ID: BUG-235-fix-conversation-cache-fifo-eviction-to
+#+EFFORT: small
+#+PRIORITY: #B
+#+LAYER: ai
+
+NOTE [2026-04-12]: Implemented in packages/ai/src/providers/cursor.ts by delete-then-insert refresh of conversation cache recency.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-064-audit-implementation:
+
+ - What: Cross-target worker naming uses the host platform instead of the target platform.
+     - Where: packages/natives/scripts/build-native.ts, around const exeSuffix = process.platform === "win32" ? ".exe" : "";
+     - Why: Cross-compiling a Windows worker from Linux/macOS will install it without .exe, so post-build lookup and embedding can miss the worker even though the build succeeded.
+     - Effort: trivial
+ - What: Worker runtime discovery does not cover every path the native addon loader can use.
+     - Where: crates/pi-natives/src/embedding_worker.rs (worker_candidates() / versioned_native_dir()), compared with packages/natives/src/native.ts (compiledCandidates includes userDataDir)
+     - Why: If the addon is loaded from the userDataDir fallback, the worker is not searched there, so semantic features can fail even though the addon itself loads successfully.
+     - Effort: small
+ - What: Conversation cache eviction is FIFO, not activity-aware.
+     - Where: packages/ai/src/providers/cursor.ts, setConversationCacheEntry(...) near the top of the file
+     - Why: Updating an existing Map entry does not refresh insertion order, so an older but still-active conversation can be evicted first after the 21st conversation ID appears, causing
+ unexpected loss of cached state/blob data mid-session.
+     - Effort: small
+ - What: Semantic index construction trusts worker output shape without validating it.
+     - Where: crates/pi-natives/src/code_graph.rs, build_semantic_index(...) and semantic search query-vector handling
+     - Why: If the worker returns fewer vectors than chunks, or vectors with inconsistent dimensions, the code silently truncates via zip or accepts bad dimensions. Because PI_EMBEDDING_WORKER
+ is overrideable, this is externally reachable and can yield a corrupt vector cache while reporting success.
+     - Effort: small
+ - What: Pending-delivery capping silently drops completion notifications.
+     - Where: packages/coding-agent/src/async/job-manager.ts, #enqueueDelivery() and the failed-delivery requeue path in #runDeliveryLoop()
+     - Why: When the queue exceeds 200, oldest deliveries are discarded with no log or surfaced state change. The job record remains, but the caller can miss the automatic completion delivery
+ and perceive the job result as lost.
+     - Effort: small
+ - What: Finished-job pruning uses startTime rather than completion time.
+     - Where: packages/coding-agent/src/async/job-manager.ts, #pruneCompletedJobs()
+     - Why: A long-running job that just completed can be pruned before a short job that completed much earlier, which makes “recent jobs” less truthful and can hide the freshest result under
+ pressure.
+     - Effort: trivial
+ - What: Automated coverage does not fully exercise the worker IPC contract from the pi-natives side.
+     - Where: crates/pi-natives/src/code_graph.rs tests and crates/pi-natives/src/embedding_worker.rs
+     - Why: The missing-worker error path is covered, but successful semantic indexing, malformed worker responses, and worker restart-after-failure behavior are only manually verified. A
+ protocol drift between worker and host could pass cargo test and break runtime behavior.
+     - Effort: medium
+
+* Problem
+In =packages/ai/src/providers/cursor.ts=, =setConversationCacheEntry()= (lines 132-150) uses two parallel ES6 Maps for conversation state and blob data. Eviction is FIFO based on Map insertion order. When an existing entry is updated via =Map.set()=, insertion order is NOT refreshed — the entry stays at its original position. This means an older but actively-used conversation can be evicted before newer but unused conversations.
+
+* File
+=packages/ai/src/providers/cursor.ts=, function =setConversationCacheEntry= (lines 132-150)
+
+* Change
+Use delete-then-insert pattern to refresh Map insertion order when updating existing entries. Before =.set()=, delete both keys first:
+
+#+begin_src typescript
+function setConversationCacheEntry(
+	conversationId: string,
+	conversationState: ConversationStateStructure,
+	blobStore: Map<string, Uint8Array>,
+): void {
+	const isExisting =
+		conversationStateCache.has(conversationId) || conversationBlobStores.has(conversationId);
+	// Delete before set to refresh insertion order (Map.set on existing key does not move it)
+	if (isExisting) {
+		conversationStateCache.delete(conversationId);
+		conversationBlobStores.delete(conversationId);
+	}
+	conversationStateCache.set(conversationId, conversationState);
+	conversationBlobStores.set(conversationId, blobStore);
+	if (isExisting || conversationStateCache.size <= MAX_CONVERSATION_CACHE_ENTRIES) {
+		return;
+	}
+	const oldestConversationId = conversationStateCache.keys().next().value as string | undefined;
+	if (!oldestConversationId || oldestConversationId === conversationId) {
+		return;
+	}
+	conversationStateCache.delete(oldestConversationId);
+	conversationBlobStores.delete(oldestConversationId);
+}
+#+end_src
+
+The eviction guard =if (isExisting || ...)= still correctly skips eviction when updating an existing entry (size didn't grow), but now =isExisting= is computed before the delete, so the logic is unchanged.
+
+* Verification
+** =bun check:ts= passes.
+** Verify: after the change, a conversation that is frequently updated (via checkpoints during streaming) stays at the "newest" position in Map iteration order and is evicted last, not first.
+** =MAX_CONVERSATION_CACHE_ENTRIES= remains 20. The 21st unique conversation triggers eviction of the least-recently-used, not the least-recently-inserted.
+
+* Edge Cases
+- New entry (not previously cached): delete is a no-op, behavior unchanged.
+- Entry updated multiple times in rapid succession: each update refreshes position correctly.
+- Eviction of self: the guard =oldestConversationId === conversationId= prevents a newly-inserted entry from evicting itself (important when it was just deleted and re-inserted).

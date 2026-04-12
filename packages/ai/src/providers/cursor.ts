@@ -134,11 +134,13 @@ function setConversationCacheEntry(
 	conversationState: ConversationStateStructure,
 	blobStore: Map<string, Uint8Array>,
 ): void {
-	const isExistingConversation =
-		conversationStateCache.has(conversationId) || conversationBlobStores.has(conversationId);
+	if (conversationStateCache.has(conversationId)) {
+		conversationStateCache.delete(conversationId);
+		conversationBlobStores.delete(conversationId);
+	}
 	conversationStateCache.set(conversationId, conversationState);
 	conversationBlobStores.set(conversationId, blobStore);
-	if (isExistingConversation || conversationStateCache.size <= MAX_CONVERSATION_CACHE_ENTRIES) {
+	if (conversationStateCache.size <= MAX_CONVERSATION_CACHE_ENTRIES) {
 		return;
 	}
 	const oldestConversationId = conversationStateCache.keys().next().value as string | undefined;
