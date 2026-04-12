@@ -1,0 +1,92 @@
+#+TITLE: Prompt Declaration of Being
+#+STATE: DONE
+#+SESSION_ID: 14b6fc9994640cbb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T22-50-14-481Z_14b6fc9994640cbb.jsonl]]
+#+CUSTOM_ID: PLAN-207-prompt-declaration-of-being
+#+EFFORT: 48h
+#+PRIORITY: #A
+#+LAYER: prompt
+
+NOTE [2026-04-12]: Superseded by PLAN-209 (essence rewrite). The declaration-of-being philosophy shifted from normalizing all prompts into a consistent voice to reducing content and placing it where it belongs. The Identity section was the genuine achievement of PLAN-181/188/191. The remaining work is less content better placed, not restyled content. Tool description and subagent prompt normalization deferred to FUP-047 and FUP-048."
+
+* Initial Message
+
+continue
+
+* Context
+The current prompt stack is internally inconsistent: some artifacts read like embodied faculties, others read like manuals, stubs, enforcement dumps, or stale examples from an older tool era. The user wants the base skills, the tools, and everything sent to the LLM to become a declaration of being.
+
+Recommended approach: do a full prompt-stack cutover, not selective polish. Start by defining a canonical contract and truthful inventory, then normalize prompt topology so every model-facing artifact has one canonical home, then rewrite tool descriptions, system overlays, agent prompts, and base skills against that contract, and finally lock the change in with topology/semantic regression tests.
+
+Key decisions settled for this plan:
+1. Scope is the full prompt stack: system prompt templates, overlays, agent prompts, tool descriptions, inline tool strings, loop tool prompts, and base skills.
+2. Acceptance is full cutover: every in-scope artifact must adopt the terse declaration-of-being style; no mixed old/new voice.
+3. Canonical tool-doc voice matches the `system-prompts` skill template: one-line capability, then tagged sections only, with no positioning prose between the opening line and the first tag.
+4. Prompt content must teach the current tool hierarchy: `code` for source files, `ast_grep`/`ast_edit` for structural code work, `lsp` for semantic questions, `read`/`edit` as fallback where appropriate.
+5. Structural cleanup is part of the same initiative: misplaced, deprecated, orphaned, or duplicated prompt assets must be normalized or removed, not left reachable.
+6. Stable/dynamic prompt splitting remains an architectural invariant and must survive the rewrite (`memory://root/memory_summary.md`; `packages/coding-agent/src/system-prompt.ts`).
+
+Discovered repo patterns to preserve:
+- Prompt rendering flows through `renderPromptTemplate()` and `formatPromptContent()`.
+- Specialized tool descriptions are compacted to the first sentence via `compactToolDescription()`.
+- Strong in-repo exemplars already exist for tool prompts (`code.md`, `ast-grep.md`, `ast-edit.md`, `code-search.md`, `find.md`, `ask.md`) and agent prompts (`explore.md`, `oracle.md`, `librarian.md`, `reviewer.md`, `designer.md`, `metis.md`, `momus.md`, `daedalus.md`).
+- Existing tests validate compileability and semantic anchors, not giant snapshots.
+
+* Verification
+Required proof to declare this plan done:
+- Reference artifact: `specs/prompt-declaration-of-being.md`
+- Focused tests:
+  - `bun test packages/coding-agent/test/tools/index.test.ts`
+  - `bun test packages/coding-agent/test/system-prompt-templates.test.ts`
+  - `bun test packages/coding-agent/test/prompts/auto-roster-prompts.test.ts`
+  - `bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts`
+  - `bun test packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts`
+  - `bun test packages/coding-agent/test/caveman.test.ts`
+  - any new prompt-topology or prompt-compilation tests added by the verification child item
+- TypeScript verification: `bun check:ts`
+- Manual proof:
+  - core tool prompts reflect the `code`/`lsp`/`ast_grep` hierarchy
+  - specialized compacted first sentences stand alone truthfully
+  - system overlays and agent prompts read as faculties, not external API docs
+  - `.spell/skills/system-prompts/SKILL.md` no longer contains stale `read, grep, find, bash`-era examples
+
+* Execution Manifest
+** Wave 0 — contract
+- [[id:FEAT-491-define-prompt-declaration-contract-and-c][FEAT-491 Define prompt declaration contract and coverage inventory]]
+  - Effort: 4h
+  - Dependencies: none
+  - Output: canonical spec and inventory in `specs/prompt-declaration-of-being.md`
+
+** Wave 1 — topology
+- [[id:FEAT-492-normalize-prompt-asset-topology-and-sour][FEAT-492 Normalize prompt asset topology and source of truth]]
+  - Effort: 5h
+  - Dependencies: [[id:FEAT-491-define-prompt-declaration-contract-and-c][FEAT-491]]
+  - Output: truthful prompt inventory and single source of truth per artifact
+
+** Wave 2 — tool surface rewrite (parallel)
+- [[id:FEAT-493-rewrite-core-and-workflow-tool-descripti][FEAT-493 Rewrite core and workflow tool descriptions]]
+  - Effort: 6h
+  - Dependencies: [[id:FEAT-491-define-prompt-declaration-contract-and-c][FEAT-491]], [[id:FEAT-492-normalize-prompt-asset-topology-and-sour][FEAT-492]]
+- [[id:FEAT-494-rewrite-specialized-hidden-and-compacted][FEAT-494 Rewrite specialized hidden and compacted tool descriptions]]
+  - Effort: 6h
+  - Dependencies: [[id:FEAT-491-define-prompt-declaration-contract-and-c][FEAT-491]], [[id:FEAT-492-normalize-prompt-asset-topology-and-sour][FEAT-492]]
+
+** Wave 3 — model identity layers
+- [[id:FEAT-495-rewrite-system-prompt-and-overlay-prompt][FEAT-495 Rewrite system prompt and overlay prompt stack]]
+  - Effort: 8h
+  - Dependencies: [[id:FEAT-491-define-prompt-declaration-contract-and-c][FEAT-491]], [[id:FEAT-492-normalize-prompt-asset-topology-and-sour][FEAT-492]], [[id:FEAT-493-rewrite-core-and-workflow-tool-descripti][FEAT-493]], [[id:FEAT-494-rewrite-specialized-hidden-and-compacted][FEAT-494]]
+- [[id:FEAT-496-rewrite-agent-prompt-catalog-into-declar][FEAT-496 Rewrite agent prompt catalog into declaration voice]]
+  - Effort: 6h
+  - Dependencies: [[id:FEAT-491-define-prompt-declaration-contract-and-c][FEAT-491]], [[id:FEAT-492-normalize-prompt-asset-topology-and-sour][FEAT-492]]
+
+** Wave 4 — skill layer
+- [[id:FEAT-497-rewrite-base-skills-and-cut-them-over-to][FEAT-497 Rewrite base skills and cut them over to new tool guidance]]
+  - Effort: 8h
+  - Dependencies: [[id:FEAT-491-define-prompt-declaration-contract-and-c][FEAT-491]], [[id:FEAT-493-rewrite-core-and-workflow-tool-descripti][FEAT-493]], [[id:FEAT-494-rewrite-specialized-hidden-and-compacted][FEAT-494]], [[id:FEAT-495-rewrite-system-prompt-and-overlay-prompt][FEAT-495]], [[id:FEAT-496-rewrite-agent-prompt-catalog-into-declar][FEAT-496]]
+
+** Wave 5 — regression hardening
+- [[id:FEAT-498-add-prompt-topology-and-regression-verif][FEAT-498 Add prompt topology and regression verification]]
+  - Effort: 5h
+  - Dependencies: [[id:FEAT-491-define-prompt-declaration-contract-and-c][FEAT-491]], [[id:FEAT-492-normalize-prompt-asset-topology-and-sour][FEAT-492]], [[id:FEAT-493-rewrite-core-and-workflow-tool-descripti][FEAT-493]], [[id:FEAT-494-rewrite-specialized-hidden-and-compacted][FEAT-494]], [[id:FEAT-495-rewrite-system-prompt-and-overlay-prompt][FEAT-495]], [[id:FEAT-496-rewrite-agent-prompt-catalog-into-declar][FEAT-496]], [[id:FEAT-497-rewrite-base-skills-and-cut-them-over-to][FEAT-497]]
+
+Total planned effort: 48h

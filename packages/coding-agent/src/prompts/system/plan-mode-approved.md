@@ -133,36 +133,22 @@ Your todo list has been pre-populated from the plan's execution structure.
 Before execution, you **SHOULD** initialize todos with `todo_write` only when you need gates, org links, or a manually curated roster before dispatch.
 
 {{#if waves}}
-### Wave-based Todo Initialization
-The plan's Execution Manifest uses wave structure. Create one todo phase per wave, with tasks from each wave entry:
-1. **One phase per wave** — name each phase after the wave (e.g., `foundation`, `core`, `verify`)
-2. **One task per wave entry** — each `[[id:…]]` entry in a wave becomes a task in that phase
-3. **`orgItemId` on ALL tasks** — set to the parent org item's CUSTOM_ID (the part before `::`) for lineage tracking. This is non-gating.
-4. **`orgItemClosingId` ONLY on the LAST wave task per org item** — set to the parent org item's CUSTOM_ID. This triggers two-phase verification on completion.
-5. **Cross-wave blockers** — if an org item has tasks in wave N and wave N+1, the wave N+1 task must block on the wave N task
-6. **Intra-wave parallelism** — tasks within the same wave have no blockers between them (they are parallelizable via `task` subagents with `todoRef`)
-7. **Read child org items** — use `org get` on each child item's CUSTOM_ID to populate task `details` from matching sub-outline steps when you need richer execution context
-8. **Mirror dependencies structurally** — every child item must also declare `:DEPENDS:` and `::` sub-outline IDs in org; prose-only dependency descriptions are not sufficient.
-
-Example:
-```
-task {
-  agent: "task",
-  phase: "foundation",
-  tasks: [
-    { id: "DefineTypes", description: "Define type interfaces", assignment: "..." },
-    { id: "DefineSchema", description: "Define parser schema", blockers: ["DefineTypes"], assignment: "..." }
-  ]
-}
-```
+### Wave-based Task Dispatch
+Set `phase` to the wave name when dispatching via `task`. The auto-roster creates tracking items automatically.
+- One dispatch batch per wave — tasks within a wave are parallelizable
+- Set `orgItemId` on all tasks for lineage tracking
+- Set `orgItemClosingId` only on the last task per org item to trigger two-phase verification
+- Cross-wave tasks that share an org item must declare `blockers` on the prior wave's task
 {{else}}
 When the plan's execution manifest specifies dependencies between items (via `[[id:…]]` links or `:DEPENDS:` properties), express these as `blockers` in your `todo_write` task list so the dependency gate enforces correct execution order. Set `phase` to name the auto-created roster phase. Use `todo_write` only when you need pre-structured gates or org links; otherwise omit `todoRef` and let auto-roster create the tracking items.
 {{/if}}
 When creating todos from plan execution manifest items, set `orgItemId` on each task to the corresponding child item's CUSTOM_ID (e.g., `FEAT-001-add-auth`). For the final task of each org item, also set `orgItemClosingId` to trigger the verification protocol on completion.
-{{/if}}
+{{else}}
+When the plan's execution manifest specifies dependencies between items (via `[[id:…]]` links or `:DEPENDS:` properties), express these as `blockers` in your `todo_write` task list so the dependency gate enforces correct execution order.
 When spawning task subagents to work on a todo item, set `todoRef` on the task to the todo item's ID (e.g., `task-3`) so verification requirements are automatically injected into the subagent's context.
-After each completed step, you **MUST** immediately update `todo_write` so progress stays visible.
 {{/if}}
+{{/if}}
+After each completed step, you **MUST** immediately update `todo_write` so progress stays visible.
 If a `todo_write` call fails, you **MUST** fix the todo payload and retry before continuing silently.
 {{/has}}
 </instruction>

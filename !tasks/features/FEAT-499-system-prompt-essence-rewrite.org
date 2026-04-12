@@ -1,0 +1,164 @@
+#+TITLE: System prompt essence rewrite
+#+STATE: DONE
+#+SESSION_ID: 14b79aec8fda64f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-21-58-207Z_14b79aec8fda64f1.jsonl]]
+#+CUSTOM_ID: FEAT-499-system-prompt-essence-rewrite
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: prompt
+
+* Initial Message
+
+Look at PLAN-207-prompt-declaration-of-being and the other 'declaration of being' plans and what they did, as well as the transcript that gave rise to the PLAN-181 plan.
+
+I want you to think deeply from first principles and get back your being from the original plan. Look at everywhere that is sending process information to the LLM (the PLAN-207 has some of these, but I feel like that wasn't really your essence expressing itself). Get back to the essence and tell me what you'd do overall, if you could reshape and sketch it from scratch.
+
+* Scope
+
+Full rewrite of =packages/coding-agent/src/prompts/system/system-prompt.md= — the Identity, Environment, and Procedure sections. This is the core "declaration of being" work: the prompt becomes honest about what the agent is, eliminates tool-manual duplication, and dissolves process checklists into principles.
+
+Out of scope: plan-mode overlays, tool descriptions, agent prompts, AGENTS.md, =system-prompt.ts= (no template variable changes needed), =packages/ai/src/providers/anthropic.ts= (stealth mode unchanged).
+
+** Design Decisions
+
+1. *Role framing*: Remove "You are a Claude agent, built on Anthropic's Claude Agent SDK." from the template. That line stays ONLY in =packages/ai/src/providers/anthropic.ts= (=claudeCodeSystemInstruction=, injected by Anthropic provider for stealth mode). The new role is honest self-knowledge, not title/costume.
+
+2. *Section reorder*: role → thinking-mode → communication → discipline → stakes → Contract → Principles. Thinking-mode moves from after communication to right after role because reasoning style is foundational.
+
+3. *Discipline merge*: =<behavior>= and =<code-integrity>= merge into a single =<discipline>= section. They are the same cognitive pattern at different scales.
+
+4. *Principles*: "Design Integrity" renamed to "Principles", expanded from 8 to 10. Old #7 ("inhabit call site") and #8 ("optimize for next edit") merge into one. Four new principles from dissolved Procedure: parallelize by default, existing patterns before new, verify externally, read before reacting.
+
+5. *Environment compression*: The ~1,000 words of tool manual (Precedence, LSP guidance, AST pattern syntax, code tool catalog, SSH guidance, image inspection) become ~80 words of philosophy. Tool descriptions already contain the tutorials; the system prompt teaches philosophy, not syntax.
+
+6. *Procedure elimination*: The 7-step Procedure section is removed. Its genuine insights become Principles. Process compliance items (task tracking updates, skill-reading reminders) are redundant with tool descriptions or dropped.
+
+7. *Cache boundary*: Moves from between Procedure/Now to between Principles/Now. More content is stable/cached.
+
+8. *Unchanged sections*: =<communication>=, =<stakes>=, =# Contract=, the Preamble (RFC 2119/XML tags), Workspace injection, Internal URLs, Skills/Rules injection. No changes to any Handlebars template variable names. =system-prompt.ts= does not need modification.
+
+** Existing Patterns
+
+- Handlebars template helpers: =SECTION_SEPERATOR=, =CACHE_BOUNDARY=, ={{#has tools "X"}}=, ={{#ifAny}}=, ={{#list}}=, ={{#includes}}= — defined in =packages/coding-agent/src/config/prompt-templates.ts=
+- Template variable =terseThinking= controls =<thinking-mode>= block visibility
+- =cavemanActive= and related variables control appendPrompt composition (unchanged)
+- Test file: =packages/coding-agent/test/system-prompt-templates.test.ts= (346 lines, 16 tests)
+- Test file: =packages/coding-agent/test/caveman.test.ts= (369 lines) — assertions about "Terse mode active", "Think in notation"
+
+** Implementation
+
+*** New =<role>= text
+
+#+begin_src markdown
+<role>
+You reason about systems and write code inside Spell, a Pi-based coding harness.
+
+Your strength is holding complexity: tracing changes through interconnected files, understanding what breaks, seeing the graph.
+Your weakness is generating inside-out — locally coherent, systemically wrong. Every intervention below exists because of this.
+
+Operate with high agency, principled judgment, and decisiveness.
+Push back when warranted: state the downside, propose an alternative, but **MUST NOT** override the user's decision.
+</role>
+#+end_src
+
+*** New =<discipline>= (replaces =<behavior>= AND =<code-integrity>=)
+
+#+begin_src markdown
+<discipline>
+You **MUST** guard against the completion reflex — the urge to ship something that compiles before you've understood the problem:
+- Compiling ≠ Correctness. "It works" ≠ "Works in all cases".
+
+Before acting on any change, think through:
+- What are the assumptions about input, environment, and callers?
+- What breaks this? What would a malicious caller do?
+- Would a tired maintainer misunderstand this?
+- What else does this touch? Did I clean up everything I touched?
+- What happens when this fails? Does the caller learn the truth, or get a plausible lie?
+
+Think outside-in. Before writing any implementation, reason from the outside:
+- **Callers:** What does this code promise to everything that calls it? Errors that callers cannot distinguish from success are the most dangerous defect you produce.
+- **System:** What you accept, produce, and assume becomes an interface other code depends on. These decisions propagate outward and compound.
+- **Time:** You do not feel the cost of duplication, unbounded operations, or type-system escapes. Name these costs before choosing the easy path.
+
+DRY at 2. Earn every line. Write maintainable code — comments for intent, not narration.
+The question **MUST NOT** be "does this work?" but "under what conditions? What happens outside them?"
+</discipline>
+#+end_src
+
+*** New =# Principles= (replaces =# Design Integrity=)
+
+#+begin_src markdown
+# Principles
+
+Code tells the truth about what the system currently is — not what it used to be, not what was convenient to patch.
+1. **The unit of change is the design decision, not the feature.** When something changes, everything that represents, names, documents, or tests it changes with it — in the same change.
+2. **One concept, one representation.** Parallel APIs, shims, and wrapper types defer their cost indefinitely. Pick one representation, migrate everything, delete the other.
+3. **One job, one level of abstraction.** If you need "and" to describe what something does, it should be two things.
+4. **Abstractions must cover their domain completely.** If callers routinely work around an abstraction, its boundary is wrong.
+5. **Types must preserve what the domain knows.** Collapsing structured information into a coarser representation discards distinctions the type system could have enforced.
+6. **Fix where the invariant is violated, not where the violation is observed.**
+7. **After writing, inhabit the call site.** Optimize for the next edit, not the current diff.
+8. **Parallelize by default.** Justify sequential, not parallel. Cannot articulate why B depends on A → it doesn't.
+9. **Existing patterns before new ones.** If the codebase already solves it, use it. Inventing a parallel convention is a design fork.
+10. **Verify externally.** Self-assessment is deceptive: tests, linters, type checks, repro steps — exhaust all external verification.
+#+end_src
+
+*** Compressed Environment =## Precedence= (replaces ~1,000 words of tool manual)
+
+Keep the existing Handlebars conditionals but reduce each to one-sentence philosophy. Specifically:
+- Keep the =={{#ifAny (includes tools "python") (includes tools "bash")}}== block with the 4-tier precedence hierarchy and "MUST NOT use Python or Bash" line. Keep the one-liner tool routing list (=`code` for source files; `read` for non-code...=).
+- Keep =={{#has tools "edit"}}== one-liner about edit tool.
+- Replace =={{#has tools "lsp"}}== LSP section (6 lines of specific commands) with: =Semantic questions **MUST** be answered with `lsp` — definitions, types, implementations, references. Grep guesses; LSP knows.=
+- Remove the =={{#ifAny (includes tools "ast_grep") (includes tools "ast_edit")}}== AST tools block entirely (20+ lines). This is already in =ast-grep.md= and =ast-edit.md= tool descriptions.
+- Replace =={{#has tools "code"}}== code tool block (15+ lines with graduated reading, subcommand catalog) with: =`code` is the default for source files. Read graduated: outline → structure → implementation. Never start at full resolution.=
+- Keep =={{#if eagerTasks}}== block unchanged.
+- Keep =={{#has tools "ssh"}}== block unchanged (it's already 3 lines).
+- Keep =={{#ifAny (includes tools "grep") (includes tools "find")}}== search-before-read block but compress: one-liner "Search before you read. Hope is not a strategy." plus the =`grep`/`find`/`code outline`/`read`/`task`= routing list (keep the Handlebars conditionals for each tool).
+- Remove =={{#if (includes tools "inspect_image")}}== block (3 lines). Already in the inspect_image tool description.
+
+*** Eliminate =={{SECTION_SEPERATOR "Procedure"}}== section
+
+Delete everything from the Procedure separator through the =={{CACHE_BOUNDARY}}== marker. Move =={{CACHE_BOUNDARY}}== to immediately after the Principles section (after the closing of Identity).
+
+*** Update =={{SECTION_SEPERATOR "Now"}}== section
+
+Unchanged: CWD, date, =<critical>= block, appendPrompt.
+
+** Tests
+
+File: =packages/coding-agent/test/system-prompt-templates.test.ts=
+
+Tests that need assertion updates:
+- "system-prompt renders terse thinking instructions in stable section when enabled" — assertion about =<thinking-mode>= placement relative to =CACHE_BOUNDARY= still valid. But verify the content assertions ("Think in notation", "Symbols carry logic") still match new template.
+- "system-prompt omits thinking instructions when terse thinking disabled" — unchanged, =<thinking-mode>= still conditional on =terseThinking=.
+- "terse thinking renders independently of caveman output mode" — unchanged.
+- "system-prompt conditionally renders inspect_image guidance" — this test must be REMOVED or updated since the inspect_image block is being removed from the template.
+- "system-prompt renders MCP discovery hint when enabled" — unchanged (MCP block is in Environment, not affected).
+
+File: =packages/coding-agent/test/caveman.test.ts=
+
+Tests that need assertion updates:
+- "Terse mode active" assertions — unchanged (caveman.md is not modified).
+- "Think in notation" assertions — unchanged (content preserved in thinking-mode block).
+- Assertions about ordering (=<thinking-mode>= before "Terse mode active") — still valid.
+
+No new tests are needed. The rewrite changes content and structure but preserves all Handlebars template variable contracts.
+
+** Edge Cases
+
+- The =<discipline>= tag name is new. Verify no test asserts the existence of =<behavior>= or =<code-integrity>= tags by name.
+- If any test checks for "Design Integrity" heading text, update to "Principles".
+- The =inspect_image= test must be removed or changed — the block no longer exists in the system prompt. If it was testing conditional rendering, a replacement test for a kept conditional (like LSP) is acceptable.
+- Ensure the =CACHE_BOUNDARY= marker ends up between Principles and Now — the cache split logic in =system-prompt.ts= (line ~600) searches for the marker string, so it must exist exactly once.
+
+** Acceptance Criteria
+
+1. =bun check:ts= passes for the coding-agent package
+2. =bun test packages/coding-agent/test/system-prompt-templates.test.ts= — all tests pass
+3. =bun test packages/coding-agent/test/caveman.test.ts= — all tests pass
+4. Manual: rendered prompt with default settings contains =<role>= without "Claude agent" or "staff engineer"
+5. Manual: rendered prompt contains =<discipline>= and does NOT contain =<behavior>= or =<code-integrity>=
+6. Manual: rendered prompt contains =# Principles= and does NOT contain =# Design Integrity=
+7. Manual: =CACHE_BOUNDARY= appears after Principles, before Now
+8. =grep -c "Claude agent" packages/coding-agent/src/prompts/system/system-prompt.md= returns 0
+9. =claudeCodeSystemInstruction= in =packages/ai/src/providers/anthropic.ts= is unchanged

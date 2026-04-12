@@ -175,7 +175,8 @@ describe("caveman extension", () => {
 		);
 		expect(fullNormalThinking).toContain("Terse mode active");
 		expect(fullNormalThinking).toContain("Level: FULL");
-		expect(fullNormalThinking).not.toContain("Think in notation");
+		// Think in notation is always in system prompt (not caveman-specific)
+		expect(fullNormalThinking).toContain("Think in notation");
 
 		const offPrompt = await renderPrompt(
 			Settings.isolated({
@@ -184,7 +185,8 @@ describe("caveman extension", () => {
 			}),
 		);
 		expect(offPrompt).not.toContain("Terse mode active");
-		expect(offPrompt).not.toContain("Think in notation");
+		// Think in notation is always in the system prompt unconditionally
+		expect(offPrompt).toContain("Think in notation");
 	});
 
 	it("gates caveman prompt injection for subagents based on settings", async () => {

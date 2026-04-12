@@ -1,0 +1,58 @@
+#+TITLE: Define prompt declaration contract and coverage inventory
+#+STATE: DONE
+#+SESSION_ID: 14b6fc9994640cbb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T22-50-14-481Z_14b6fc9994640cbb.jsonl]]
+#+CUSTOM_ID: FEAT-491-define-prompt-declaration-contract-and-c
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: prompt
+
+NOTE [2026-04-12]: Superseded by PLAN-209. Core system prompt rewritten via FEAT-499.
+
+* Initial Message
+
+continue
+
+* Context
+The user wants the base skills, tools, and every prompt artifact sent to the LLM to read as a declaration of being, not an API manual, placeholder, or prohibition table. Scope is the full prompt stack: system prompt templates, system overlays, agent prompts, tool descriptions, inline tool strings, loop tool prompts, and bundled base skills.
+
+Discovered patterns and constraints to preserve:
+- `renderPromptTemplate()` plus `formatPromptContent()` is the common render path for prompt markdown (`packages/coding-agent/src/config/prompt-templates.ts`).
+- Specialized tool descriptions are compacted to the first sentence by `compactToolDescription()` before provider calls (`packages/coding-agent/src/tools/index.ts`, `packages/coding-agent/src/sdk.ts`). First-sentence quality is therefore a runtime contract, not just style.
+- Stable/dynamic prompt splitting is architectural and must remain intact (`memory://root/memory_summary.md`; current-repo evidence: `packages/coding-agent/src/system-prompt.ts`).
+- Existing prompt exemplars worth preserving structurally: tools `packages/coding-agent/src/prompts/tools/code.md`, `ast-grep.md`, `ast-edit.md`, `code-search.md`, `find.md`, `ask.md`; agents `packages/coding-agent/src/prompts/agents/explore.md`, `oracle.md`, `librarian.md`, `reviewer.md`, `designer.md`, `metis.md`, `momus.md`, `daedalus.md`.
+- Existing tests assert semantic anchors and Handlebars compilation rather than giant snapshots (`packages/coding-agent/test/system-prompt-templates.test.ts`, `packages/coding-agent/test/prompts/auto-roster-prompts.test.ts`, `packages/coding-agent/test/tools/index.test.ts`).
+
+Final design decisions that this item must codify for downstream executors:
+1. Full prompt-stack scope: system prompt, overlays, agent prompts, tool descriptions, inline tool strings, loop tool prompts, and base skills.
+2. Acceptance bar is full cutover, not selective cleanup: every in-scope artifact must adopt the terse declaration-of-being style.
+3. Canonical voice for tool docs is the `system-prompts` skill template style: one-line capability, then tagged sections only; no extra positioning prose between the capability line and the first tag.
+4. Prompt content must teach the current tool landscape: `code` for source-file work, `ast_grep`/`ast_edit` for structural code work, `lsp` for semantic questions, `read`/`edit` only as fallback where appropriate.
+5. Structural cleanup is required in the same initiative: misplaced, orphaned, deprecated, or duplicate prompt assets must be normalized or removed.
+
+* Implementation
+1. Create `specs/prompt-declaration-of-being.md` as the canonical reference for this initiative.
+2. In that spec, define the canonical prompt shape for:
+   - one-line capability opening
+   - tagged sections only (`<instruction>`, `<output>`, `<critical>`, optional `<caution>`, `<example>`, `<avoid>`)
+   - terse declaration/faculty voice rather than external API documentation voice
+   - first-sentence rules for compacted specialized tools
+   - code-tool-era guidance (`code`, `ast_grep`, `ast_edit`, `lsp`) replacing older source-reading/editing examples
+3. Include a coverage inventory table listing every in-scope artifact class and its target handling:
+   - `packages/coding-agent/src/prompts/system/*.md`
+   - `packages/coding-agent/src/prompts/agents/*.md`
+   - `packages/coding-agent/src/prompts/tools/*.md`
+   - `packages/coding-agent/src/loop/prompts/*tool*.md`
+   - inline tool descriptions currently living in `packages/coding-agent/src/tools/notebook.ts`, `packages/org/src/tool.ts`, `packages/coding-agent/src/tools/submit-result.ts`, `packages/coding-agent/src/tools/autonomy-state/tool.ts`, `packages/coding-agent/src/swarm/handoff-tool.ts`, `packages/coding-agent/src/swarm/spawn-successor-tool.ts`
+   - base skills in `.spell/skills/*/SKILL.md`
+4. Explicitly call out the stale guidance that must disappear in later items: bash-first file operations, `read/grep/find/bash`-centric source-code examples, duplicated prohibition tables, placeholder one-liners that hide actual semantics, and old-tool examples inside `.spell/skills/system-prompts/SKILL.md`.
+5. Keep this item documentation-only. Do not change runtime behavior here beyond creating the spec artifact.
+
+* Acceptance
+- `specs/prompt-declaration-of-being.md` exists and is the single canonical contract referenced by the rest of the plan.
+- The spec enumerates every prompt artifact class above and distinguishes rewrite vs move/delete/inline-normalization work.
+- The spec explicitly records the five final design decisions above so later executors do not have to reconstruct them from session history.
+
+* Verification
+- Proof artifact: `specs/prompt-declaration-of-being.md`
+- Manual proof: the file contains the exact path groups above, a specialized-tool first-sentence section, and a section replacing old source-file guidance with `code`/`ast_grep`/`lsp` guidance.

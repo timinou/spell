@@ -1,0 +1,74 @@
+#+TITLE: Rewrite agent prompt catalog into declaration voice
+#+STATE: DONE
+#+SESSION_ID: 14b6fc9994640cbb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T22-50-14-481Z_14b6fc9994640cbb.jsonl]]
+#+CUSTOM_ID: FEAT-496-rewrite-agent-prompt-catalog-into-declar
+#+LAYER: prompt
+#+PRIORITY: #A
+#+EFFORT: 6h
+#+DEPENDS: FEAT-491-define-prompt-declaration-contract-and-c FEAT-492-normalize-prompt-asset-topology-and-sour
+
+NOTE [2026-04-12]: Superseded by PLAN-209. Deferred to FUP-048.
+
+* Initial Message
+
+continue
+
+* Context
+This item rewrites the bundled agent prompt catalog so each real agent reads like a distinct faculty instead of a placeholder, callback stub, or external API note.
+
+Exact files in scope after topology normalization resolves non-agent templates:
+- `packages/coding-agent/src/prompts/agents/explore.md`
+- `packages/coding-agent/src/prompts/agents/plan.md`
+- `packages/coding-agent/src/prompts/agents/task.md`
+- `packages/coding-agent/src/prompts/agents/oracle.md`
+- `packages/coding-agent/src/prompts/agents/librarian.md`
+- `packages/coding-agent/src/prompts/agents/reviewer.md`
+- `packages/coding-agent/src/prompts/agents/designer.md`
+- `packages/coding-agent/src/prompts/agents/athena.md`
+- `packages/coding-agent/src/prompts/agents/aphrodite.md`
+- `packages/coding-agent/src/prompts/agents/daedalus.md`
+- `packages/coding-agent/src/prompts/agents/metis.md`
+- `packages/coding-agent/src/prompts/agents/momus.md`
+- `packages/coding-agent/src/prompts/agents/canvas-orchestrator.md`
+- `packages/coding-agent/src/prompts/agents/fluid-planner.md`
+- `packages/coding-agent/src/prompts/agents/fluid-plan-validator.md`
+- `packages/coding-agent/src/prompts/agents/init.md`
+- plus any canonical destination chosen for `packages/coding-agent/src/prompts/agents/frontmatter.md`, `browse-findings.md`, and `fluid-planner-retry.md` if they remain model-facing after the topology item
+
+Existing exemplars to use as anchor points rather than inventing a new style:
+- `explore.md`
+- `oracle.md`
+- `librarian.md`
+- `reviewer.md`
+- `designer.md`
+- `metis.md`
+- `momus.md`
+- `daedalus.md`
+
+* Implementation
+1. Rewrite weak/stubby agents so each one declares what it is, what it sees, and how it decides.
+2. Bring the whole catalog into the terse declaration-of-being style without flattening distinct roles into one generic worker voice.
+3. Priority targets called out by the audit:
+   - `task.md` needs a real executor voice
+   - `canvas-orchestrator.md` needs scoped-assistant identity instead of pure restrictions
+   - `fluid-planner.md` needs decomposer persona and sharper decomposition protocol
+   - `fluid-plan-validator.md` needs evaluator voice
+   - `init.md` needs documentarian/setup voice
+4. Remove stale tool guidance inside agent prompts. Where agent examples or procedures mention tool choices, they must reflect the current hierarchy (`code`/`lsp`/`ast_grep`) rather than old read/grep/bash habits.
+5. If the topology item determines that some current files are not real model-facing agent prompts, move them or rename them honestly instead of leaving fake prompt files in the catalog.
+6. Preserve frontmatter metadata and schema expectations for spawned agents. If tool lists or descriptions are updated, keep them accurate.
+
+* Edge Cases
+- Do not homogenize specialized reviewers/critics into generic task executors. The point is consistent voice plus distinct faculties.
+- If an agent intentionally remains narrow or callback-like, express that as a crisp declared function, not a placeholder.
+- Keep output expectations and any structured-schema commitments intact.
+
+* Acceptance
+- Every real bundled agent prompt has a clear role, directives, procedure, and output contract in the new voice.
+- Weak/stub files no longer read like template filler.
+- Old-tool guidance is removed from agent examples and procedures.
+
+* Verification
+- Targeted tests: add/update prompt compilation tests for the agent catalog in the verification item.
+- Manual proof: inspect `task.md`, `canvas-orchestrator.md`, `fluid-planner.md`, `fluid-plan-validator.md`, and `init.md` after rewrite and confirm each now reads like a distinct faculty, not a placeholder.

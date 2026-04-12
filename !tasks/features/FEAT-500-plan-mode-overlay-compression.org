@@ -1,0 +1,188 @@
+#+TITLE: Plan-mode overlay compression
+#+STATE: DONE
+#+SESSION_ID: 14b79aec8fda64f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-21-58-207Z_14b79aec8fda64f1.jsonl]]
+#+CUSTOM_ID: FEAT-500-plan-mode-overlay-compression
+#+EFFORT: 5h
+#+PRIORITY: #A
+#+LAYER: prompt
+
+* Initial Message
+
+Look at PLAN-207-prompt-declaration-of-being and the other 'declaration of being' plans and what they did, as well as the transcript that gave rise to the PLAN-181 plan.
+
+I want you to think deeply from first principles and get back your being from the original plan. Look at everywhere that is sending process information to the LLM (the PLAN-207 has some of these, but I feel like that wasn't really your essence expressing itself). Get back to the essence and tell me what you'd do overall, if you could reshape and sketch it from scratch.
+
+* Scope
+
+Compress three plan-mode overlays from ~5,800 words to ~2,500 words total. The key reframe: stop teaching the agent a manual process. Instead, declare what the system handles automatically and what the agent is responsible for.
+
+Files:
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= (445 lines, 2,978 words → ~1,200 words)
+- =packages/coding-agent/src/prompts/system/plan-mode-approved.md= (173 lines, 1,423 words → ~700 words)
+- =packages/coding-agent/src/prompts/system/plan-mode-uiux.md= (236 lines, 1,387 words → ~600 words)
+
+Out of scope: =plan-mode-subagent.md= (208 words, already compact), =plan-mode-reference.md= (43 words), =plan-mode-tool-decision-reminder.md= (87 words), =system-prompt.md= (handled by sibling FEAT), =system-prompt.ts= (no variable changes).
+
+** Design Decisions
+
+1. *"System handles" framing*: The todo_write tool has a DAG scheduler with automatic promotion (=promoteReadyTasks=), two-phase gate verification (gateCmd/gateArtifact/gateCommit/orgItemClosingId → rejected until =verified: true=), org lifecycle hooks (auto-transitions ITEM→DOING→DONE via =applyOrgLifecycleHooks=), and blocker enforcement (rejects =in_progress= on blocked tasks). The task tool has auto-roster. The org tool has wave computation. The overlays should declare these capabilities rather than teach manual workarounds.
+
+2. *Inline compression*: Content stays in overlays (no extraction to specs). Reduce by cutting: redundant org tutorials, extended examples, multi-paragraph explanations of things the tool descriptions already cover.
+
+3. *Preserve all Handlebars conditionals*: Every ={{#if}}=, ={{#unless}}=, ={{#has}}=, ={{#each}}= block must survive. The conditionals control rendering for different session configurations (org enabled/disabled, ultraplan, iterative, design flavor, etc.).
+
+4. *Preserve all template variables*: No variable names change. No =system-prompt.ts= changes.
+
+** Existing Patterns
+
+- Handlebars template helpers in =packages/coding-agent/src/config/prompt-templates.ts=
+- Template variables for plan-mode: =orgEnabled=, =planCategory=, =childCategories=, =exitToolName=, =askToolName=, =editToolName=, =writeToolName=, =ultraplan=, =customDecomposition=, =iterative=, =designFlavor=, =reentry=, =allowedFolders=, =taskPolicies=, =gateMetisDisabled=, =gateDaedalusDisabled=, =gateMomusDisabled=, =autoInitialized=, =autoRosterEnabled=, =waves=, =executionItems=, =planContent=, =planningTranscriptPath=, =modeExecutionInstructions=
+- Test files that assert plan-mode overlay content:
+  - =packages/coding-agent/test/system-prompt-templates.test.ts= — "plan-mode-active includes DEPENDS property guidance" test
+  - =packages/coding-agent/test/prompts/plan-mode-tdd.test.ts= — TDD ordering assertions
+  - =packages/coding-agent/test/prompts/plan-mode-policies.test.ts= — policy rendering
+  - =packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts= — approved overlay content
+  - =packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts= — allowed folders rendering
+  - =packages/coding-agent/test/prompts/auto-roster-prompts.test.ts= — auto-roster prompt rendering
+
+** Implementation
+
+*** plan-mode-active.md compression strategy
+
+The file has three main conditional paths: default (standard planning), =iterative=, and =ultraplan= (with optional =designFlavor=). All three need compression.
+
+**** Keep (mode constraints — ~80 lines):
+- =<critical>= read-only block with allowed folders (lines 13-32)
+- Fresh-context =<caution>= (lines 134-138)
+- Pre-exit consistency check (lines 422-432)
+- Decision-change =<critical>= (lines 398-406 and duplicates in iterative/ultraplan paths)
+- Final directives and turn-ending =<critical>= (lines 434-445)
+- Revising existing items section (lines 140-147)
+
+**** Compress (planning workflow — ~60 lines):
+- The "## Plan" section (org-native output order): compress the 6-step list and item requirements. Keep the requirement for EFFORT/PRIORITY/LAYER, self-contained items, DEPENDS properties, test-first ordering. Cut the extended explanation paragraphs that restate what the org tool description covers.
+- Planning Workflow procedure: compress 5 phases into tight directives. Cut the "source over browser" paragraph and "search for ALL existing patterns" list — these are general agent behavior, not plan-mode-specific.
+- Iterative planning path: compress 4 numbered phases into 2-3 lines each.
+
+**** Cut (~200 lines):
+- Child item example flow (lines 76-93) — the org tool description has examples.
+- The ultraplan "Org Item Body Standard" section (lines 305-339) — this is 35 lines of body section requirements. Compress to ~10 lines: list the section names (Scope, Existing Patterns, Tests, Implementation, Edge Cases, Acceptance Criteria) with one-line descriptions, keep the sub-outline =CUSTOM_ID= format example, cut the extended template.
+- The ultraplan "Phase 3: Create Org Items" task parallelization example (lines 366-380) — the task tool description covers this.
+- The Daedalus advisory review section (lines 382-396) — keep the conditional block but compress to 3 lines.
+- The Metis gap analysis section (lines 283-296) — keep the conditional block but compress to 4 lines.
+
+**** TDD guidance preservation:
+The TDD-first ordering guidance (test-first sub-outline ordering) and the anti-pattern caution about tests-last ordering must survive in compressed form. Tests assert this content exists (=plan-mode-tdd.test.ts=). Keep:
+- "Test-first sub-outline ordering is **REQUIRED** for pure functions and new types" sentence
+- The sub-outline example with =FEAT-001::define-types=, =FEAT-001::parser-tests=, =FEAT-001::implement-parser= and their =:DEPENDS:= chains
+- The "test-contracts" and "core" wave example
+- The anti-pattern caution about tests-last ordering
+
+*** plan-mode-approved.md compression strategy
+
+The current overlay has two major paths: =executionItems= (coordinator mode with pre-populated todos) and simple mode (plan artifact + completion protocol).
+
+**** Key reframe — declare system capabilities:
+
+Replace the manual wave-dispatch instructions and detailed org lifecycle bookkeeping with a capabilities declaration:
+
+#+begin_src markdown
+## What the system handles
+
+- **DAG scheduling**: =todo_write= auto-promotes the next ready task when you complete one. Blockers are enforced — you cannot start a blocked task.
+- **Gate verification**: Tasks with =gateCmd=, =gateArtifact=, or =gateCommit= require two-phase completion. Mark complete → system rejects with checklist → verify → mark complete with =verified: true=.
+- **Org lifecycle**: When a task with =orgItemId= enters =in_progress=, the linked org item auto-transitions to DOING. When a task with =orgItemClosingId= completes with =verified: true=, the org item auto-transitions to DONE.
+- **Auto-roster**: The =task= tool auto-creates todo items for dispatched subtasks when =task.autoRoster= is enabled.
+
+## What you do
+
+- Execute work directly or delegate via =task= tool.
+- Mark status truthfully in =todo_write=. The system handles the rest.
+- Satisfy verification gates before marking gated tasks complete.
+#+end_src
+
+**** Coordinator mode (=executionItems= path):
+Keep planned items listing, protocol section, and rules. Compress from ~48 lines to ~25 lines. Cut the redundant explanations of what todo_write does — the capabilities declaration covers it.
+
+**** Simple mode:
+Keep completion protocol (verification evidence, completion report, org lifecycle closeout, commit). Compress from ~60 lines to ~35 lines. The org lifecycle section can reference the capabilities declaration rather than re-explain auto-transitions.
+
+**** Wave-based todo initialization:
+The =={{#if waves}}== block (lines 136-157) teaches manual wave initialization. The system now has auto-roster and DAG scheduling. Compress this to ~5 lines: create one phase per wave, set =orgItemId= on all tasks, set =orgItemClosingId= on the last task per org item.
+
+**** Instruction block:
+The final =<instruction>= block (lines 120-168) is verbose. Compress to essential directives only.
+
+*** plan-mode-uiux.md compression strategy
+
+**** Keep:
+- Design planning workflow introduction
+- Aphrodite gate (mandatory, conditional on =gateAphroditeDisabled=) — compress the spawn example to 3 lines
+- Design Direction Brief requirements (the actual content the agent must produce)
+- Momus gate (conditional) — compress to 3 lines
+
+**** Cut:
+- Extended procedure phases that duplicate the standard planning workflow
+- Verbose brief template example — compress to section headings with one-line descriptions
+- Repeated fresh-context and consistency-check blocks that duplicate plan-mode-active
+
+** Tests
+
+Tests that need assertion updates:
+
+*** =packages/coding-agent/test/system-prompt-templates.test.ts=
+- "plan-mode-active includes DEPENDS property guidance" — assertions for =:DEPENDS:=, =properties: { DEPENDS: "ITEM-ID-1 ITEM-ID-2" }=, and =DEPENDS: "FEAT-001-add-auth-api"= must still match. Keep these exact strings in the compressed template.
+
+*** =packages/coding-agent/test/prompts/plan-mode-tdd.test.ts=
+ALL assertions must continue to pass. This means the compressed plan-mode-active.md MUST still contain:
+- "Test-first sub-outline ordering is **REQUIRED** for pure functions and new types"
+- "** Define TypeScript interfaces" with =:CUSTOM_ID: FEAT-001::define-types=
+- "** Write parser tests (TDD: before implementation)" with =:DEPENDS: FEAT-001::define-types=
+- "** Implement core parser (satisfies parser-tests)" with =:DEPENDS: FEAT-001::parser-tests=
+- "** test-contracts" wave heading with =:wave:= tag
+- "** core" wave heading with =:wave:= tag
+- "**Anti-pattern: tests-last ordering.**"
+- Ordering: define-types before parser-tests before implement-parser
+- Ordering: test-contracts wave before core wave
+
+*** =packages/coding-agent/test/prompts/plan-mode-policies.test.ts=
+Assertions about policy rendering in the =={{#if taskPolicies}}== block. Keep the policy section template unchanged — it is already compact.
+
+*** =packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts=
+Assertions about:
+- "## Completion Protocol" heading
+- Artifact directory references
+- "Append a ** Completion [YYYY-MM-DD] section"
+- Commit instructions
+- Blockers and =:DEPENDS:= guidance
+- Auto-initialized messages ("Your todo list has been pre-populated")
+- "Child org item state transitions happen automatically"
+These must survive in the compressed template. Some may need assertion updates if wording changes slightly.
+
+*** =packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts=
+Assertions about allowed folder rendering. The =<critical>= read-only block is preserved unchanged, so these tests should pass without changes.
+
+*** =packages/coding-agent/test/prompts/auto-roster-prompts.test.ts=
+Assertions about auto-roster rendering in plan-mode-approved.md. Keep the relevant template sections that these tests assert against.
+
+** Edge Cases
+
+- Handlebars conditionals must survive compression. When removing content, ensure the ={{#if}}=/={{/if}}= pairs remain balanced.
+- The =ultraplan= path has nested conditionals (=customDecomposition=, =gateMetisDisabled=, =gateDaedalusDisabled=). All must survive.
+- plan-mode-uiux.md has design-specific conditionals (=designHistory=, =gateAphroditeDisabled=, =gateMomusDisabled=). All must survive.
+- The =reentry= conditional path in plan-mode-active.md must survive.
+
+** Acceptance Criteria
+
+1. =bun check:ts= passes for the coding-agent package
+2. =bun test packages/coding-agent/test/system-prompt-templates.test.ts= — all tests pass
+3. =bun test packages/coding-agent/test/prompts/plan-mode-tdd.test.ts= — all tests pass
+4. =bun test packages/coding-agent/test/prompts/plan-mode-policies.test.ts= — all tests pass
+5. =bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts= — all tests pass
+6. =bun test packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts= — all tests pass
+7. =bun test packages/coding-agent/test/prompts/auto-roster-prompts.test.ts= — all tests pass
+8. Manual: plan-mode-active.md word count < 1,500 (from 2,978)
+9. Manual: plan-mode-approved.md word count < 900 (from 1,423)
+10. Manual: plan-mode-approved.md contains a "system handles" section that declares DAG scheduling, gate verification, and org lifecycle automation
+11. Manual: all Handlebars conditionals render without errors

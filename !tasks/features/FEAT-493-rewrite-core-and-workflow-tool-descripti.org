@@ -1,0 +1,81 @@
+#+TITLE: Rewrite core and workflow tool descriptions
+#+STATE: DONE
+#+SESSION_ID: 14b6fc9994640cbb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T22-50-14-481Z_14b6fc9994640cbb.jsonl]]
+#+CUSTOM_ID: FEAT-493-rewrite-core-and-workflow-tool-descripti
+#+EFFORT: 6h
+#+DEPENDS: FEAT-491-define-prompt-declaration-contract-and-c FEAT-492-normalize-prompt-asset-topology-and-sour
+#+LAYER: prompt
+#+PRIORITY: #A
+
+NOTE [2026-04-12]: Superseded by PLAN-209. Deferred to FUP-047.
+
+* Initial Message
+
+continue
+
+* Context
+This item rewrites the core and workflow-heavy tool descriptions that define how the model reasons about the workspace. These descriptions are high-leverage because they shape tool choice on every session, not just niche operations.
+
+Exact files in scope:
+- `packages/coding-agent/src/prompts/tools/ask.md`
+- `packages/coding-agent/src/prompts/tools/ast-edit.md`
+- `packages/coding-agent/src/prompts/tools/ast-grep.md`
+- `packages/coding-agent/src/prompts/tools/bash.md`
+- `packages/coding-agent/src/prompts/tools/code.md`
+- `packages/coding-agent/src/prompts/tools/code-search.md`
+- `packages/coding-agent/src/prompts/tools/exit-plan-mode.md`
+- `packages/coding-agent/src/prompts/tools/fetch.md`
+- `packages/coding-agent/src/prompts/tools/find.md`
+- `packages/coding-agent/src/prompts/tools/grep.md`
+- `packages/coding-agent/src/prompts/tools/lsp.md`
+- `packages/coding-agent/src/prompts/tools/read.md`
+- `packages/coding-agent/src/prompts/tools/task.md`
+- `packages/coding-agent/src/prompts/tools/todo-write.md`
+- `packages/coding-agent/src/prompts/tools/web-search.md`
+- `packages/coding-agent/src/prompts/tools/write.md`
+
+Existing in-repo patterns to follow rather than inventing a new convention:
+- `packages/coding-agent/src/prompts/tools/code.md`
+- `packages/coding-agent/src/prompts/tools/ast-grep.md`
+- `packages/coding-agent/src/prompts/tools/ast-edit.md`
+- `packages/coding-agent/src/prompts/tools/code-search.md`
+- `packages/coding-agent/src/prompts/tools/find.md`
+- `packages/coding-agent/src/prompts/tools/ask.md`
+
+* Implementation
+1. Rewrite every file above into the canonical declaration-of-being shape from `specs/prompt-declaration-of-being.md`:
+   - one-line capability opening
+   - tagged sections only
+   - terse voice
+   - no extra explanatory prose between the opening line and the first tag
+2. Preserve factual runtime behavior. These are documentation rewrites, not semantic tool changes.
+3. Replace stale source-code guidance with the current tool hierarchy:
+   - `code` first for source-file reading/orientation/structural edits when tree-sitter is available
+   - `lsp` for semantic questions
+   - `ast_grep`/`ast_edit` for structural code search and codemods
+   - `grep` for plain text/regex only
+   - `read` as fallback for non-code files, URLs, images, PDFs, and directories
+4. Remove duplicated enforcement where a single canonical reminder is enough. Specific hot spots:
+   - `bash.md` currently reads like an enforcement wall; rewrite it as a capability with a concise fallback-role explanation and one compact critical section.
+   - `read.md` and `grep.md` must stop duplicating bash restrictions and must describe their own boundaries clearly.
+   - `task.md` and `todo-write.md` must be compressed without losing real semantics around auto-roster, blockers, gates, and verification protocol.
+   - `write.md` and `fetch.md` must lead with what they are for before restrictions.
+5. Keep syntax-heavy examples where they materially reduce failure risk (`ast-*`, `task`, `todo_write`, `exit_plan_mode`). Delete filler examples that merely restate obvious behavior.
+6. Update any examples that still imply old-tool workflows, especially examples that steer source-code reading toward `read` or shell search when `code`, `lsp`, or `ast_grep` should be first.
+
+* Edge Cases
+- Do not erase important warning content for `task`, `todo_write`, or `exit_plan_mode`; compress repetition, not safety.
+- Preserve template branches such as `autoRosterEnabled` and any conditional text in these prompt files.
+- Avoid “terse” becoming ambiguous. The model still needs enough operational detail to use each tool correctly.
+
+* Acceptance
+- Every file in scope opens with a single truthful capability sentence and then tagged sections only.
+- No file in scope contains stale bash-first or old-tool source-code guidance.
+- `bash.md`, `grep.md`, and `read.md` no longer duplicate the same prohibition table in different words.
+- `task.md` and `todo-write.md` remain semantically complete while materially shorter and less repetitive.
+
+* Verification
+- Targeted tests: `bun test packages/coding-agent/test/prompts/auto-roster-prompts.test.ts packages/coding-agent/test/tools/index.test.ts`
+- Additional targeted prompt compilation/assertion tests added in the verification item must pass for the files above.
+- Manual proof: spot-check `bash.md`, `read.md`, `grep.md`, `task.md`, and `todo-write.md` for the exact canonical shape and updated tool hierarchy.

@@ -1,0 +1,61 @@
+#+TITLE: Add prompt topology and regression verification
+#+STATE: DONE
+#+SESSION_ID: 14b6fc9994640cbb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T22-50-14-481Z_14b6fc9994640cbb.jsonl]]
+#+CUSTOM_ID: FEAT-498-add-prompt-topology-and-regression-verif
+#+LAYER: test
+#+DEPENDS: FEAT-491-define-prompt-declaration-contract-and-c FEAT-492-normalize-prompt-asset-topology-and-sour FEAT-493-rewrite-core-and-workflow-tool-descripti FEAT-494-rewrite-specialized-hidden-and-compacted FEAT-495-rewrite-system-prompt-and-overlay-prompt FEAT-496-rewrite-agent-prompt-catalog-into-declar FEAT-497-rewrite-base-skills-and-cut-them-over-to
+#+PRIORITY: #A
+#+EFFORT: 5h
+
+NOTE [2026-04-12]: Superseded by PLAN-209. Deferred to FUP-047/048.
+
+* Initial Message
+
+continue
+
+* Context
+This initiative changes a large amount of model-facing text. Without targeted regression tests, the next edit can silently reintroduce stale old-tool guidance, broken template placement, or low-quality compact summaries.
+
+Current test patterns to build on:
+- `packages/coding-agent/test/system-prompt-templates.test.ts` compiles every system template and asserts semantic anchors/conditionals.
+- `packages/coding-agent/test/tools/index.test.ts` verifies tool tiers and `compactToolDescription()` semantics.
+- `packages/coding-agent/test/prompts/auto-roster-prompts.test.ts` checks prompt branches by semantic content instead of snapshots.
+- `packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts` and `packages/coding-agent/test/caveman.test.ts` verify important overlay behavior.
+
+This item should harden coverage around the rewrite without adding fragile giant snapshots.
+
+* Implementation
+1. Add tool-prompt compilation coverage for actual canonical tool prompt assets after the topology cleanup. This should fail if non-tool templates creep back into the tool directory or if a live tool prompt stops compiling.
+2. Add agent-prompt compilation coverage for actual canonical agent prompt assets after topology normalization.
+3. Extend existing tool tests to assert the post-rewrite contracts that matter:
+   - specialized-tool first sentences remain compact-worthy and truthful
+   - moved prompt files are no longer imported from legacy/orphaned paths
+   - canonical description sources exist for inline/hidden tools normalized by the topology item
+4. Extend existing system-prompt tests to assert the new tool-era guidance where it matters:
+   - relevant prompts prefer `code` for source-file work
+   - stale old-tool examples no longer appear in the system layer
+   - plan-mode overlays and caveman/terseThinking branches still render truthfully
+5. If skill content needs direct regression checks, keep them semantic and narrow. Prefer verifying the specific stale examples are gone rather than snapshotting entire SKILL files.
+6. Final verification must include focused prompt tests plus `bun check:ts` because topology cleanup may move prompt imports and descriptions across TypeScript files.
+
+* Edge Cases
+- Do not write tests that only prove a file exists. Each assertion must protect a contract: compileability, canonical source-of-truth, absence of stale guidance, or compact-summary behavior.
+- Avoid brittle exact-string tests unless downstream behavior depends on exact bytes.
+- Keep verification focused on changed surfaces; do not add package-wide smoke tests that say little.
+
+* Acceptance
+- New or updated tests fail if legacy prompt topology or stale old-tool guidance is reintroduced.
+- The rewritten prompt stack compiles/renders under focused test coverage.
+- `bun check:ts` passes after the prompt and topology changes land.
+
+* Verification
+- Exact commands:
+  - `bun test packages/coding-agent/test/tools/index.test.ts`
+  - `bun test packages/coding-agent/test/system-prompt-templates.test.ts`
+  - `bun test packages/coding-agent/test/prompts/auto-roster-prompts.test.ts`
+  - `bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts`
+  - `bun test packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts`
+  - `bun test packages/coding-agent/test/caveman.test.ts`
+  - any new targeted prompt-topology tests added by this item
+  - `bun check:ts`
