@@ -1,0 +1,133 @@
+#+TITLE: Remove broad clippy allows from pi-org-engine
+#+STATE: DONE
+#+SESSION_ID: 14b6fb0a71cce49c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T22-43-25-767Z_14b6fb0a71cce49c.jsonl]]
+#+CUSTOM_ID: FEAT-489-remove-broad-clippy-allows-from-pi-org-e
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: org
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-061-audit-implementation:
+
+This test was specifically about the Emacs org-ql predicates — correctly deleted. The loop predicates (`loop-status`, `loop-blocked`, etc.) were custom Emacs org-ql predicates that no longer exist. The tool.ts `parseKeywordQuery` doesn't parse these either, which is correct since they were Emacs-only features.
+
+Let me also check the `section.rs` `find_section` for the "last line with no trailing newline" issue:
+
+The `str.lines()` iterator in Rust returns lines without the terminator. For a file ending with `\n`, the last yielded line has `line.len()` not counting the `\n`. The `offset = line_end + 1` works correctly because `line_end` is the byte position of the last char of the line (exclusive of `\n`), and `+1` skips the `\n`.
+
+But for a file NOT ending with `\n`, the last iteration has `offset = line_end + 1` which is 1 past the actual end. And for `\r\n` files, `str.lines()` strips `\r` from the yielded text, so `line.len()` is shorter than the actual bytes between line separators, making `offset` drift out of sync. The comment says `(approx — handles \n)` which acknowledges the issue.
+
+This is a correctness issue for `\r\n` files. However, org files are typically `\n`-only (created by the TS writer which uses `\n`), so the practical impact is low.
+
+Let me now summarize all findings:
+
+---
+
+## Audit Findings
+
+### 1. Silent data loss when deserializing TS items in NAPI bridge
+- **What**: `parse_items_from_options` in `org_buffer.rs` silently drops items that fail serde deserialization via `filter_map(|v| serde_json::from_value(v.clone()).ok())`. TS `OrgItem` objects lack `byte_range` (a required field with no `#[serde(default)]`), so ALL items will fail to deserialize, producing an empty vec.
+- **Where**: `crates/pi-natives/src/org_buffer.rs:229-232` and `crates/pi-org-engine/src/item.rs:41` (missing `#[serde(default)]` on `byte_range`)
+- **Why**: `cmdWave` and `cmdGraph` in tool.ts pass TS-constructed items to `executeOrg({ command: "computeWaves", items })`. These items will all be silently dropped, causing wave/graph commands to return empty results or fail with "Missing required field: source or items". This breaks `org wave` and `org graph` entirely.
+- **Effort**: `trivial` — add `#[serde(default)]` to `byte_range` and `clocks` fields in `OrgItem`
+
+### 2. Priority comparison operators silently discarded
+- **What**: `parseKeywordQuery` in tool.ts extracts only the priority value (`B`) from `priority:>=B`, discarding the operator (`>=`). The TS `applyFilter` does exact string match only. Additionally, the parsed value `B` won't match properties stored as `#B`, so priority filtering is completely broken.
+- **Where**: `packages/org/src/tool.ts:72-74` (regex captures value only), `packages/org/src/org-reader.ts:377-381` (exact match comparison)
+- **Why**: `priority:>=B` was the canonical syntax documented in the tool. It now silently returns no results instead of filtering by priority. Regression from the Emacs-backed path that handled this correctly.
+- **Effort**: `small` — store op+value in `parseKeywordQuery`, add priority comparison logic to `applyFilter`
+
+### 3. `tags:` keyword query is a no-op that sets unrelated field
+- **What**: `parseKeywordQuery` handles `tags:` by setting `filter.agent = undefined`, which is a no-op. Tags filtering is silently ignored.
+- **Where**: `packages/org/src/tool.ts:70`
+- **Why**: Users passing `tags:auth` get no filtering and no error. The old Emacs path supported tag-based queries. Low priority since tags aren't widely used in this project's org workflow, but the code is confusing dead weight.
+- **Effort**: `trivial` — either implement tag support or remove the branch and document the limitation
+
+### 4. `createOrgTool` signature accepts `(() => Promise<unknown>)` as dead compatibility shim
+- **What**: The third parameter accepts a bare async function (old Emacs session factory pattern) that would be used as `getSessionContext`, returning a Promise object as the context value instead of the resolved value.
+- **Where**: `packages/org/src/tool.ts:497`
+- **Why**: Confusing API surface. No callers use this branch. If someone does call it, they get a Promise as the session context object instead of its resolved value — a silent contract violation.
+- **Effort**: `trivial` — remove `| (() => Promise<unknown>)` from the union type
+
+### 5. `section.rs` byte offset calculation breaks on `\r\n` line endings
+- **What**: `find_section` uses `str.lines()` which strips `\r` from line text, but adds a fixed `+1` for `\n` only. On `\r\n` files, offsets will drift, producing corrupted edits.
+- **Where**: `crates/pi-org-engine/src/section.rs:57,61`
+- **Why**: Section editing will silently corrupt files with Windows line endings. Low risk because the TS writer produces `\n` files, but org files from external sources could have `\r\n`.
+- **Effort**: `small` — use byte-offset tracking instead of line length arithmetic, or normalize line endings
+
+### 6. No test coverage for NAPI executeOrg commands
+- **What**: There are no integration tests for the `executeOrg` NAPI function — the TS test plan mentions `bun test packages/natives/test/org-buffer.test.ts` but this file doesn't exist.
+- **Where**: `packages/natives/test/` (missing `org-buffer.test.ts`)
+- **Why**: The NAPI bridge is the critical integration layer between Rust and TS. Without tests, deserialization mismatches (like finding #1) ship undetected. The existing org tests exercise the TS tool layer but never verify the NAPI boundary directly.
+- **Effort**: `medium` — create `org-buffer.test.ts` with basic command dispatch tests
+
+### 7. `ComputedWave` type imported but not used as typed return
+- **What**: `ComputedWave` is imported from types and used only as a type assertion cast on the native engine result. The native engine returns untyped JSON — the cast provides no runtime safety.
+- **Where**: `packages/org/src/tool.ts:18,466`
+- **Why**: Low risk — cosmetic. But the cast at line 466 could hide a field name mismatch between the Rust `WaveResult` serialization and the TS `ComputedWave` type without any compile-time detection.
+- **Effort**: `trivial` — not actionable beyond noting the type gap
+
+### 8. Broad `#![allow]` block in pi-org-engine suppresses useful lints
+- **What**: 14 clippy lints are blanket-suppressed at crate level including `redundant_closure`, `collapsible_if`, and `map_unwrap_or`. Some of these catch real code quality issues.
+- **Where**: `crates/pi-org-engine/src/lib.rs:1-20`
+- **Why**: Future contributors won't get clippy warnings for patterns that are often bugs. `redundant_closure` hides performance issues. `map_unwrap_or` hides Option chains that should use `map_or`. The right fix is to address the individual warnings instead of suppressing them.
+- **Effort**: `small` — fix the ~10 individual clippy warnings and remove the broad allows
+
+* Problem
+
+=crates/pi-org-engine/src/lib.rs= has a blanket =#![allow(...)]= block suppressing 17 clippy lints at crate level. This hides useful warnings from future contributors. The lints suppressed include =redundant_closure=, =collapsible_if=, =map_unwrap_or=, and =doc_markdown= — all of which catch real code quality issues.
+
+The block was added during initial implementation to pass =cargo clippy -D warnings= quickly. The correct fix is to address each individual warning in the source.
+
+* Implementation
+
+** Step 1: Remove the =#![allow(...)]= block
+
+Delete lines 1-20 of =crates/pi-org-engine/src/lib.rs= (the entire =#![allow(...)]= block).
+
+** Step 2: Run =cargo clippy -p pi-org-engine -- -D warnings= and fix each warning
+
+Expected warning categories and how to fix each:
+- =doc_markdown=: Add backticks around identifier names in doc comments (e.g. =property_drawer= → =`property_drawer`=)
+- =too_many_arguments=: Add =#[allow(clippy::too_many_arguments, reason = \"...\")] on the specific function (=extract_headings= and =extract_section_item=)
+- =collapsible_if=: Merge nested =if= statements where safe
+- =map_unwrap_or=: Replace =.map(f).unwrap_or(x)= with =.map_or(x, f)=
+- =redundant_closure=: Replace =|e| func(e)= with =func=
+- =format_push_string=: Use =write!= or =push_str= with pre-formatted string
+- =trivially_copy_pass_by_ref=: Change =&bool= parameters to =bool= (if any)
+- =needless_lifetimes=: Remove explicit lifetimes where Rust can infer them
+- =missing_const_for_fn=: Add =const= where clippy suggests (or allow individually with reason)
+- =use_self=: Use =Self= instead of the struct name in impl blocks
+
+For lints that are genuinely noisy for this crate (e.g. =too_many_arguments= on tree-walking functions), add per-function =#[allow(clippy::X, reason = \"...\")] with a specific reason.
+
+** Step 3: Verify
+
+- =cargo clippy -p pi-org-engine -- -D warnings= — clean with no crate-level allows
+- =cargo test -p pi-org-engine= — all tests pass
+
+* Verification
+
+- =cargo clippy -p pi-org-engine -- -D warnings= exits 0
+- No =#![allow(= lines in =crates/pi-org-engine/src/lib.rs=
+- =cargo test -p pi-org-engine= — all tests pass
+
+
+
+** Completion [2026-04-12]
+*** Verification
+- Ran `cargo clippy -p pi-org-engine --no-deps -- -D warnings` in `/home/user/code/ora/spell`.
+- Ran `cargo test -p pi-org-engine` in `/home/user/code/ora/spell`.
+- Result: both commands passed.
+*** Artifacts
+- Source: `crates/pi-org-engine/src/lib.rs`
+- Source: `crates/pi-org-engine/src/buffer.rs`
+- Source: `crates/pi-org-engine/src/query.rs`
+- Source: `crates/pi-org-engine/src/markdown.rs`
+- Source: `crates/pi-org-engine/src/item.rs`
+- Source: `crates/pi-org-engine/src/graph.rs`
+*** Deviations
+- Used `--no-deps` for clippy verification so dependency-crate warnings outside `pi-org-engine` do not block the task; `pi-org-engine` itself is warning-free.

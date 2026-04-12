@@ -1,24 +1,3 @@
-// Pedantic clippy lints that don't affect correctness in this crate.
-#![allow(
-	clippy::doc_markdown,
-	clippy::too_many_arguments,
-	clippy::if_not_else,
-	clippy::format_push_string,
-	clippy::trivially_copy_pass_by_ref,
-	clippy::redundant_closure_for_method_calls,
-	clippy::needless_lifetimes,
-	clippy::map_unwrap_or,
-	clippy::collapsible_if,
-	clippy::unnecessary_self_imports,
-	clippy::use_self,
-	clippy::missing_const_for_fn,
-	clippy::redundant_else,
-	clippy::manual_strip,
-	clippy::if_same_then_else,
-	clippy::redundant_closure,
-	reason = "Pedantic lints from workspace config; not correctness-relevant"
-)]
-
 //! Native org-mode engine using tree-sitter for parsing.
 //!
 //! Provides:

@@ -19,6 +19,14 @@ pub struct OrgBuffer {
 	tree:   tree_sitter::Tree,
 }
 
+struct ExtractOptions<'a> {
+	todo_keywords: &'a [&'a str],
+	category:      &'a str,
+	dir:           &'a str,
+	file_path:     &'a str,
+	include_body:  bool,
+}
+
 impl OrgBuffer {
 	/// Parse an org-mode source string.
 	pub fn parse(source: &str) -> Result<Self, &'static str> {
@@ -62,15 +70,8 @@ impl OrgBuffer {
 		}
 
 		// Extract heading-level items
-		self.extract_headings(
-			root,
-			todo_keywords,
-			category,
-			dir,
-			file_path,
-			include_body,
-			&mut items,
-		);
+		let options = ExtractOptions { todo_keywords, category, dir, file_path, include_body };
+		self.extract_headings(root, &options, &mut items);
 
 		items
 	}
@@ -117,8 +118,7 @@ impl OrgBuffer {
 		let body = if include_body {
 			let body_start = self.source[frontmatter_end..]
 				.find(|c: char| !c.is_whitespace())
-				.map(|pos| frontmatter_end + pos)
-				.unwrap_or(self.source.len());
+				.map_or(self.source.len(), |pos| frontmatter_end + pos);
 			let body_text = self.source[body_start..].trim_end();
 			if body_text.is_empty() {
 				None
@@ -150,16 +150,7 @@ impl OrgBuffer {
 	}
 
 	/// Walk the AST and extract heading-level items.
-	fn extract_headings(
-		&self,
-		node: Node,
-		todo_keywords: &[&str],
-		category: &str,
-		dir: &str,
-		file_path: &str,
-		include_body: bool,
-		items: &mut Vec<OrgItem>,
-	) {
+	fn extract_headings(&self, node: Node, options: &ExtractOptions<'_>, items: &mut Vec<OrgItem>) {
 		let mut cursor = node.walk();
 		if !cursor.goto_first_child() {
 			return;
@@ -167,17 +158,10 @@ impl OrgBuffer {
 
 		loop {
 			let child = cursor.node();
-			if child.kind() == "section" {
-				if let Some(item) = self.extract_section_item(
-					child,
-					todo_keywords,
-					category,
-					dir,
-					file_path,
-					include_body,
-				) {
-					items.push(item);
-				}
+			if child.kind() == "section"
+				&& let Some(item) = self.extract_section_item(child, options)
+			{
+				items.push(item);
 			}
 			if !cursor.goto_next_sibling() {
 				break;
@@ -187,15 +171,7 @@ impl OrgBuffer {
 
 	/// Extract an item from a section node (contains headline + body +
 	/// sub-sections).
-	fn extract_section_item(
-		&self,
-		section: Node,
-		todo_keywords: &[&str],
-		category: &str,
-		dir: &str,
-		file_path: &str,
-		include_body: bool,
-	) -> Option<OrgItem> {
+	fn extract_section_item(&self, section: Node, options: &ExtractOptions<'_>) -> Option<OrgItem> {
 		let mut cursor = section.walk();
 		if !cursor.goto_first_child() {
 			return None;
@@ -207,7 +183,7 @@ impl OrgBuffer {
 			return None;
 		}
 
-		let (level, state, title) = self.parse_headline(headline, todo_keywords);
+		let (level, state, title) = self.parse_headline(headline, options.todo_keywords);
 
 		// Gather properties, body, clock entries, and children
 		let mut properties = HashMap::new();
@@ -222,7 +198,7 @@ impl OrgBuffer {
 					self.extract_properties(child, &mut properties);
 				},
 				"body" => {
-					if include_body {
+					if options.include_body {
 						let text = self.node_text(child).trim().to_string();
 						if !text.is_empty() {
 							body_parts.push(text);
@@ -238,20 +214,13 @@ impl OrgBuffer {
 				},
 				"section" => {
 					// Sub-section = potential child item
-					if let Some(child_item) = self.extract_section_item(
-						child,
-						todo_keywords,
-						category,
-						dir,
-						file_path,
-						include_body,
-					) {
+					if let Some(child_item) = self.extract_section_item(child, options) {
 						children.push(child_item);
 					}
 				},
 				_ => {
 					// Other content nodes (paragraphs, lists, etc.) — part of body
-					if include_body {
+					if options.include_body {
 						let text = self.node_text(child).trim().to_string();
 						if !text.is_empty() {
 							body_parts.push(text);
@@ -276,7 +245,7 @@ impl OrgBuffer {
 		}
 
 		let id = custom_id.unwrap_or_default();
-		let body = if include_body && !body_parts.is_empty() {
+		let body = if options.include_body && !body_parts.is_empty() {
 			Some(body_parts.join("\n"))
 		} else {
 			None
@@ -286,9 +255,9 @@ impl OrgBuffer {
 			id,
 			title,
 			state,
-			category: category.to_string(),
-			dir: dir.to_string(),
-			file: file_path.to_string(),
+			category: options.category.to_string(),
+			dir: options.dir.to_string(),
+			file: options.file_path.to_string(),
 			line: headline.start_position().row + 1, // 1-indexed
 			level,
 			properties,
@@ -346,7 +315,7 @@ impl OrgBuffer {
 		(level, state, title)
 	}
 
-	/// Extract properties from a property_drawer node.
+	/// Extract properties from a `property_drawer` node.
 	fn extract_properties(&self, drawer: Node, properties: &mut HashMap<String, String>) {
 		let mut cursor = drawer.walk();
 		if !cursor.goto_first_child() {
@@ -367,13 +336,13 @@ impl OrgBuffer {
 	fn extract_single_property(&self, prop: Node, properties: &mut HashMap<String, String>) {
 		let text = self.node_text(prop).trim().to_string();
 		// Property format: `:KEY: value`
-		if let Some(rest) = text.strip_prefix(':') {
-			if let Some((key, value)) = rest.split_once(':') {
-				let key = key.trim().to_string();
-				let value = value.trim().to_string();
-				if !key.is_empty() {
-					properties.insert(key, value);
-				}
+		if let Some(rest) = text.strip_prefix(':')
+			&& let Some((key, value)) = rest.split_once(':')
+		{
+			let key = key.trim().to_string();
+			let value = value.trim().to_string();
+			if !key.is_empty() {
+				properties.insert(key, value);
 			}
 		}
 	}

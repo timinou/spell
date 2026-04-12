@@ -65,13 +65,18 @@ async function seedItem(
 	category: string,
 	id: string,
 	title: string,
-	opts?: { state?: string; body?: string },
+	opts?: { state?: string; body?: string; properties?: Record<string, string> },
 ): Promise<string> {
 	const state = opts?.state ?? "ITEM";
 	const dir = path.join(tmpDir, "tasks", category);
 	await fs.mkdir(dir, { recursive: true });
 	const filePath = path.join(dir, `${id}.org`);
 	let content = `#+TITLE: ${title}\n#+STATE: ${state}\n#+CUSTOM_ID: ${id}\n`;
+	if (opts?.properties) {
+		for (const [key, value] of Object.entries(opts.properties)) {
+			content += `#+${key}: ${value}\n`;
+		}
+	}
 	if (opts?.body) {
 		content += `\n${opts.body}\n`;
 	}
@@ -465,5 +470,53 @@ describe("query sort and pagination", () => {
 		// Items should be offset by 2 from the full sorted list
 		expect(paginated.items[0].id).toBe(all.items[2].id);
 		expect(paginated.items[1].id).toBe(all.items[3].id);
+	});
+});
+
+describe("priority queries", () => {
+	test("priority:>=B returns items with priority A and B", async () => {
+		await seedItem("drafts", "DRAFT-PRI-A", "Priority A", { state: "ITEM", properties: { PRIORITY: "#A" } });
+		await seedItem("drafts", "DRAFT-PRI-B", "Priority B", { state: "ITEM", properties: { PRIORITY: "#B" } });
+		await seedItem("drafts", "DRAFT-PRI-C", "Priority C", { state: "ITEM", properties: { PRIORITY: "#C" } });
+		const tool = makeTool();
+		const result = (await tool.execute({ command: "query", query: "priority:>=B" })) as {
+			items: unknown[];
+			total: number;
+		};
+		expect(result.total).toBe(2);
+	});
+
+	test("priority:A matches only #A items", async () => {
+		await seedItem("drafts", "DRAFT-PRI-ONLY-A", "Only A", { state: "ITEM", properties: { PRIORITY: "#A" } });
+		await seedItem("drafts", "DRAFT-PRI-ONLY-B", "Only B", { state: "ITEM", properties: { PRIORITY: "#B" } });
+		const tool = makeTool();
+		const result = (await tool.execute({ command: "query", query: "priority:A" })) as {
+			items: unknown[];
+			total: number;
+		};
+		expect(result.total).toBe(1);
+	});
+
+	test("priority:<=B returns items with priority B and C", async () => {
+		await seedItem("drafts", "DRAFT-PRI-LTE-A", "LTE A", { state: "ITEM", properties: { PRIORITY: "#A" } });
+		await seedItem("drafts", "DRAFT-PRI-LTE-B", "LTE B", { state: "ITEM", properties: { PRIORITY: "#B" } });
+		await seedItem("drafts", "DRAFT-PRI-LTE-C", "LTE C", { state: "ITEM", properties: { PRIORITY: "#C" } });
+		const tool = makeTool();
+		const result = (await tool.execute({ command: "query", query: "priority:<=B" })) as {
+			items: unknown[];
+			total: number;
+		};
+		expect(result.total).toBe(2);
+	});
+
+	test("priority:#B matches #B items (with hash prefix)", async () => {
+		await seedItem("drafts", "DRAFT-PRI-HASH-A", "Hash A", { state: "ITEM", properties: { PRIORITY: "#A" } });
+		await seedItem("drafts", "DRAFT-PRI-HASH-B", "Hash B", { state: "ITEM", properties: { PRIORITY: "#B" } });
+		const tool = makeTool();
+		const result = (await tool.execute({ command: "query", query: "priority:#B" })) as {
+			items: unknown[];
+			total: number;
+		};
+		expect(result.total).toBe(1);
 	});
 });

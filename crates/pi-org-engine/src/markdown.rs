@@ -1,6 +1,6 @@
 //! Org-to-Markdown conversion — replaces uniorg pipeline.
 //!
-//! Converts org-mode text to CommonMark markdown.
+//! Converts org-mode text to `CommonMark` markdown.
 //! Handles headings, emphasis, links, lists, code blocks, tables.
 
 /// Convert org-mode text to Markdown.
@@ -18,7 +18,9 @@ pub fn org_to_markdown(org: &str) -> String {
 		{
 			in_src_block = true;
 			let src_lang = rest.trim();
-			output.push_str(&format!("```{src_lang}\n"));
+			output.push_str("```");
+			output.push_str(src_lang);
+			output.push('\n');
 			continue;
 		}
 		if trimmed.eq_ignore_ascii_case("#+END_SRC") {
@@ -75,7 +77,10 @@ pub fn org_to_markdown(org: &str) -> String {
 		if let Some(level_and_rest) = parse_org_heading(trimmed) {
 			let (level, text) = level_and_rest;
 			let hashes = "#".repeat(level);
-			output.push_str(&format!("{hashes} {}\n", convert_inline(text)));
+			output.push_str(&hashes);
+			output.push(' ');
+			output.push_str(&convert_inline(text));
+			output.push('\n');
 			continue;
 		}
 
@@ -129,7 +134,7 @@ pub fn org_to_plain_text(org: &str) -> String {
 	output
 }
 
-/// Parse an org heading line, returning (level, rest_of_line).
+/// Parse an org heading line, returning `(level, rest_of_line)`.
 fn parse_org_heading(line: &str) -> Option<(usize, &str)> {
 	if !line.starts_with('*') {
 		return None;
@@ -160,40 +165,64 @@ fn convert_inline(text: &str) -> String {
 
 	while i < len {
 		// Org links: [[url][desc]] or [[url]]
-		if chars[i] == '[' && i + 1 < len && chars[i + 1] == '[' {
-			if let Some((link_end, url, desc)) = parse_org_link(&chars, i) {
-				if let Some(desc) = desc {
-					result.push_str(&format!("[{desc}]({url})"));
-				} else {
-					result.push_str(&format!("<{url}>"));
-				}
-				i = link_end;
-				continue;
+		if chars[i] == '['
+			&& i + 1 < len
+			&& chars[i + 1] == '['
+			&& let Some((link_end, url, desc)) = parse_org_link(&chars, i)
+		{
+			if let Some(desc) = desc {
+				result.push('[');
+				result.push_str(&desc);
+				result.push_str("](");
+				result.push_str(&url);
+				result.push(')');
+			} else {
+				result.push('<');
+				result.push_str(&url);
+				result.push('>');
 			}
+			i = link_end;
+			continue;
 		}
 
 		// Inline markup: must be preceded by whitespace/BOL and followed by
 		// whitespace/punctuation/EOL
-		if is_markup_char(chars[i]) && is_pre_markup(i, &chars) {
+		if is_markup_char(chars[i])
+			&& is_pre_markup(i, &chars)
+			&& let Some(end) = find_closing_markup(&chars, i + 1, chars[i])
+			&& is_post_markup(end, &chars)
+		{
 			let marker = chars[i];
-			if let Some(end) = find_closing_markup(&chars, i + 1, marker) {
-				if is_post_markup(end, &chars) {
-					let content: String = chars[i + 1..end].iter().collect();
-					match marker {
-						'*' => result.push_str(&format!("**{content}**")),
-						'/' => result.push_str(&format!("*{content}*")),
-						'~' | '=' => result.push_str(&format!("`{content}`")),
-						'+' => result.push_str(&format!("~~{content}~~")),
-						_ => {
-							result.push(marker);
-							result.push_str(&content);
-							result.push(marker);
-						},
-					}
-					i = end + 1;
-					continue;
-				}
+			let content: String = chars[i + 1..end].iter().collect();
+			match marker {
+				'*' => {
+					result.push_str("**");
+					result.push_str(&content);
+					result.push_str("**");
+				},
+				'/' => {
+					result.push('*');
+					result.push_str(&content);
+					result.push('*');
+				},
+				'~' | '=' => {
+					result.push('`');
+					result.push_str(&content);
+					result.push('`');
+				},
+				'+' => {
+					result.push_str("~~");
+					result.push_str(&content);
+					result.push_str("~~");
+				},
+				_ => {
+					result.push(marker);
+					result.push_str(&content);
+					result.push(marker);
+				},
 			}
+			i = end + 1;
+			continue;
 		}
 
 		result.push(chars[i]);
@@ -203,7 +232,7 @@ fn convert_inline(text: &str) -> String {
 	result
 }
 
-fn is_markup_char(c: char) -> bool {
+const fn is_markup_char(c: char) -> bool {
 	matches!(c, '*' | '/' | '~' | '=' | '_' | '+')
 }
 

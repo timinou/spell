@@ -28,44 +28,57 @@ pub fn find_section(
 	item_end: usize,
 	section_name: &str,
 ) -> Option<(usize, usize, usize)> {
-	let region = &source[item_start..item_end];
-	let mut offset = 0usize;
+	let region = source.get(item_start..item_end)?;
+	let bytes = region.as_bytes();
+	let mut pos = 0usize;
 	let mut found_heading_level = 0usize;
 	let mut body_start = 0usize;
 
-	for line in region.lines() {
-		let line_start = offset;
-		let line_end = offset + line.len();
+	while pos < bytes.len() {
+		let line_start = pos;
+		// Find the next \n or end of buffer
+		let newline_pos = bytes[pos..].iter().position(|&b| b == b'\n');
+		let line_end_exclusive = match newline_pos {
+			Some(p) => pos + p,
+			None => bytes.len(),
+		};
+		// Trim trailing \r for the text view
+		let text_end = if line_end_exclusive > line_start && bytes[line_end_exclusive - 1] == b'\r' {
+			line_end_exclusive - 1
+		} else {
+			line_end_exclusive
+		};
+		let line = &region[line_start..text_end];
 
 		if let Some(level) = heading_level(line) {
 			let heading_text = extract_heading_text(line, level);
-
-			if found_heading_level > 0 {
-				// We were inside our section; this heading ends it
-				if level <= found_heading_level {
-					// Body is [body_start..line_start]
-					return Some((
-						item_start + body_start,
-						item_start + body_start,
-						item_start + line_start,
-					));
-				}
+			if found_heading_level > 0 && level <= found_heading_level {
+				return Some((
+					item_start + body_start,
+					item_start + body_start,
+					item_start + line_start,
+				));
 			}
-
 			if heading_text.eq_ignore_ascii_case(section_name) {
 				found_heading_level = level;
-				body_start = line_end + 1; // +1 for newline
+				// body starts after the newline (or at buffer end)
+				body_start = match newline_pos {
+					Some(_) => line_end_exclusive + 1,
+					None => bytes.len(),
+				};
 			}
 		}
 
-		offset = line_end + 1; // +1 for newline (approx — handles \n)
+		// Advance past the newline or to end
+		pos = match newline_pos {
+			Some(_) => line_end_exclusive + 1,
+			None => bytes.len(),
+		};
 	}
 
-	// If we found the heading but reached end of region
 	if found_heading_level > 0 {
 		return Some((item_start + body_start, item_start + body_start, item_end));
 	}
-
 	None
 }
 
@@ -172,5 +185,43 @@ mod tests {
 		let new_src = apply_edit(src, &edit);
 		assert!(new_src.contains("Existing."));
 		assert!(new_src.contains("Appended."));
+	}
+
+	#[test]
+	fn find_section_crlf() {
+		let src = "** Context\r\nOld content.\r\n\r\n** Implementation\r\nCode here.\r\n";
+		let result = find_section(src, 0, src.len(), "Context");
+		assert!(result.is_some());
+		let (_, start, end) = result.unwrap();
+		let body = &src[start..end];
+		assert!(body.contains("Old content."));
+		assert!(!body.contains("** Implementation"));
+	}
+
+	#[test]
+	fn find_section_no_trailing_newline() {
+		let src = "** Context\nContent here.";
+		let result = find_section(src, 0, src.len(), "Context");
+		assert!(result.is_some());
+		let (_, start, end) = result.unwrap();
+		let body = &src[start..end];
+		assert!(body.contains("Content here."));
+	}
+
+	#[test]
+	fn edit_section_replace_crlf() {
+		let src = "** Context\r\nOld content.\r\n\r\n** Implementation\r\nCode.\r\n";
+		let edit = edit_section_replace(src, 0, src.len(), "Context", "New content.").unwrap();
+		let new_src = apply_edit(src, &edit);
+		assert!(new_src.contains("New content."));
+		assert!(!new_src.contains("Old content."));
+		assert!(new_src.contains("** Implementation"));
+	}
+
+	#[test]
+	fn find_section_out_of_bounds() {
+		let src = "** Context\nBody.\n";
+		let result = find_section(src, 0, src.len() + 100, "Context");
+		assert!(result.is_none());
 	}
 }

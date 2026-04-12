@@ -1,0 +1,210 @@
+#+TITLE: Fix sectionrs byte offset drift on CRLF and trailing newline
+#+STATE: DONE
+#+SESSION_ID: 14b6fb0a71cce49c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T22-43-25-767Z_14b6fb0a71cce49c.jsonl]]
+#+CUSTOM_ID: BUG-224-fix-section-rs-byte-offset-drift-on-crlf
+#+EFFORT: 2h
+#+PRIORITY: #B
+#+LAYER: org
+
+
+
+
+NOTE [2026-04-12]: Starting CRLF byte-offset fix in crates/pi-org-engine/src/section.rs; will replace str.lines() scanning with byte scanning and add regression tests.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-061-audit-implementation:
+
+This test was specifically about the Emacs org-ql predicates — correctly deleted. The loop predicates (`loop-status`, `loop-blocked`, etc.) were custom Emacs org-ql predicates that no longer exist. The tool.ts `parseKeywordQuery` doesn't parse these either, which is correct since they were Emacs-only features.
+
+Let me also check the `section.rs` `find_section` for the "last line with no trailing newline" issue:
+
+The `str.lines()` iterator in Rust returns lines without the terminator. For a file ending with `\n`, the last yielded line has `line.len()` not counting the `\n`. The `offset = line_end + 1` works correctly because `line_end` is the byte position of the last char of the line (exclusive of `\n`), and `+1` skips the `\n`.
+
+But for a file NOT ending with `\n`, the last iteration has `offset = line_end + 1` which is 1 past the actual end. And for `\r\n` files, `str.lines()` strips `\r` from the yielded text, so `line.len()` is shorter than the actual bytes between line separators, making `offset` drift out of sync. The comment says `(approx — handles \n)` which acknowledges the issue.
+
+This is a correctness issue for `\r\n` files. However, org files are typically `\n`-only (created by the TS writer which uses `\n`), so the practical impact is low.
+
+Let me now summarize all findings:
+
+---
+
+## Audit Findings
+
+### 1. Silent data loss when deserializing TS items in NAPI bridge
+- **What**: `parse_items_from_options` in `org_buffer.rs` silently drops items that fail serde deserialization via `filter_map(|v| serde_json::from_value(v.clone()).ok())`. TS `OrgItem` objects lack `byte_range` (a required field with no `#[serde(default)]`), so ALL items will fail to deserialize, producing an empty vec.
+- **Where**: `crates/pi-natives/src/org_buffer.rs:229-232` and `crates/pi-org-engine/src/item.rs:41` (missing `#[serde(default)]` on `byte_range`)
+- **Why**: `cmdWave` and `cmdGraph` in tool.ts pass TS-constructed items to `executeOrg({ command: "computeWaves", items })`. These items will all be silently dropped, causing wave/graph commands to return empty results or fail with "Missing required field: source or items". This breaks `org wave` and `org graph` entirely.
+- **Effort**: `trivial` — add `#[serde(default)]` to `byte_range` and `clocks` fields in `OrgItem`
+
+### 2. Priority comparison operators silently discarded
+- **What**: `parseKeywordQuery` in tool.ts extracts only the priority value (`B`) from `priority:>=B`, discarding the operator (`>=`). The TS `applyFilter` does exact string match only. Additionally, the parsed value `B` won't match properties stored as `#B`, so priority filtering is completely broken.
+- **Where**: `packages/org/src/tool.ts:72-74` (regex captures value only), `packages/org/src/org-reader.ts:377-381` (exact match comparison)
+- **Why**: `priority:>=B` was the canonical syntax documented in the tool. It now silently returns no results instead of filtering by priority. Regression from the Emacs-backed path that handled this correctly.
+- **Effort**: `small` — store op+value in `parseKeywordQuery`, add priority comparison logic to `applyFilter`
+
+### 3. `tags:` keyword query is a no-op that sets unrelated field
+- **What**: `parseKeywordQuery` handles `tags:` by setting `filter.agent = undefined`, which is a no-op. Tags filtering is silently ignored.
+- **Where**: `packages/org/src/tool.ts:70`
+- **Why**: Users passing `tags:auth` get no filtering and no error. The old Emacs path supported tag-based queries. Low priority since tags aren't widely used in this project's org workflow, but the code is confusing dead weight.
+- **Effort**: `trivial` — either implement tag support or remove the branch and document the limitation
+
+### 4. `createOrgTool` signature accepts `(() => Promise<unknown>)` as dead compatibility shim
+- **What**: The third parameter accepts a bare async function (old Emacs session factory pattern) that would be used as `getSessionContext`, returning a Promise object as the context value instead of the resolved value.
+- **Where**: `packages/org/src/tool.ts:497`
+- **Why**: Confusing API surface. No callers use this branch. If someone does call it, they get a Promise as the session context object instead of its resolved value — a silent contract violation.
+- **Effort**: `trivial` — remove `| (() => Promise<unknown>)` from the union type
+
+### 5. `section.rs` byte offset calculation breaks on `\r\n` line endings
+- **What**: `find_section` uses `str.lines()` which strips `\r` from line text, but adds a fixed `+1` for `\n` only. On `\r\n` files, offsets will drift, producing corrupted edits.
+- **Where**: `crates/pi-org-engine/src/section.rs:57,61`
+- **Why**: Section editing will silently corrupt files with Windows line endings. Low risk because the TS writer produces `\n` files, but org files from external sources could have `\r\n`.
+- **Effort**: `small` — use byte-offset tracking instead of line length arithmetic, or normalize line endings
+
+### 6. No test coverage for NAPI executeOrg commands
+- **What**: There are no integration tests for the `executeOrg` NAPI function — the TS test plan mentions `bun test packages/natives/test/org-buffer.test.ts` but this file doesn't exist.
+- **Where**: `packages/natives/test/` (missing `org-buffer.test.ts`)
+- **Why**: The NAPI bridge is the critical integration layer between Rust and TS. Without tests, deserialization mismatches (like finding #1) ship undetected. The existing org tests exercise the TS tool layer but never verify the NAPI boundary directly.
+- **Effort**: `medium` — create `org-buffer.test.ts` with basic command dispatch tests
+
+### 7. `ComputedWave` type imported but not used as typed return
+- **What**: `ComputedWave` is imported from types and used only as a type assertion cast on the native engine result. The native engine returns untyped JSON — the cast provides no runtime safety.
+- **Where**: `packages/org/src/tool.ts:18,466`
+- **Why**: Low risk — cosmetic. But the cast at line 466 could hide a field name mismatch between the Rust `WaveResult` serialization and the TS `ComputedWave` type without any compile-time detection.
+- **Effort**: `trivial` — not actionable beyond noting the type gap
+
+### 8. Broad `#![allow]` block in pi-org-engine suppresses useful lints
+- **What**: 14 clippy lints are blanket-suppressed at crate level including `redundant_closure`, `collapsible_if`, and `map_unwrap_or`. Some of these catch real code quality issues.
+- **Where**: `crates/pi-org-engine/src/lib.rs:1-20`
+- **Why**: Future contributors won't get clippy warnings for patterns that are often bugs. `redundant_closure` hides performance issues. `map_unwrap_or` hides Option chains that should use `map_or`. The right fix is to address the individual warnings instead of suppressing them.
+- **Effort**: `small` — fix the ~10 individual clippy warnings and remove the broad allows
+
+* Problem
+
+=find_section= in =crates/pi-org-engine/src/section.rs= uses =str.lines()= to iterate over lines and manually tracks byte offsets with =offset = line_end + 1=. This has two correctness issues:
+
+1. **CRLF drift**: =str.lines()= strips =\\r= from line text, so =line.len()= is one byte too short for =\\r\
+= files. Each line adds 1 byte of drift, compounding over the file. After N lines, the offset is off by N bytes.
+
+2. **Last line without trailing newline**: For files not ending in =\
+=, the last line's =offset = line_end + 1= points 1 byte past the actual content end. This can cause off-by-one in section boundary detection.
+
+Both issues produce silently corrupted section edits (wrong byte ranges → wrong content replaced or appended at wrong location).
+
+Risk is LOW because the TS org-writer produces =\
+= files. But org files from external sources (git clones on Windows, copy-paste from editors) can have =\\r\
+=.
+
+* Implementation
+
+** File: =crates/pi-org-engine/src/section.rs=
+
+Replace the =str.lines()= + manual offset pattern in =find_section= with direct byte scanning:
+
+#+begin_src rust
+pub fn find_section(
+    source: &str,
+    item_start: usize,
+    item_end: usize,
+    section_name: &str,
+) -> Option<(usize, usize, usize)> {
+    let region = source.get(item_start..item_end)?;
+    let bytes = region.as_bytes();
+    let mut pos = 0usize;
+    let mut found_heading_level = 0usize;
+    let mut body_start = 0usize;
+
+    while pos < bytes.len() {
+        // Find end of current line
+        let line_start = pos;
+        let line_end = memchr_or_end(bytes, b'\
+', pos);
+        // Trim \\r if present
+        let text_end = if line_end > line_start && bytes[line_end - 1] == b'\\r' {
+            line_end - 1
+        } else {
+            line_end
+        };
+        let line = &region[line_start..text_end];
+
+        if let Some(level) = heading_level(line) {
+            let heading_text = extract_heading_text(line, level);
+            if found_heading_level > 0 && level <= found_heading_level {
+                return Some((
+                    item_start + body_start,
+                    item_start + body_start,
+                    item_start + line_start,
+                ));
+            }
+            if heading_text.eq_ignore_ascii_case(section_name) {
+                found_heading_level = level;
+                body_start = if line_end < bytes.len() { line_end + 1 } else { line_end };
+            }
+        }
+
+        // Advance past the newline (or to end)
+        pos = if line_end < bytes.len() { line_end + 1 } else { bytes.len() };
+    }
+
+    if found_heading_level > 0 {
+        return Some((item_start + body_start, item_start + body_start, item_end));
+    }
+    None
+}
+
+fn memchr_or_end(bytes: &[u8], needle: u8, start: usize) -> usize {
+    bytes[start..].iter().position(|&b| b == needle).map_or(bytes.len(), |p| start + p)
+}
+#+end_src
+
+Also add a guard in =find_section= for =item_start..item_end= being out of bounds (use =source.get()= which returns =None= instead of panicking on invalid ranges).
+
+* Verification
+
+- =cargo test -p pi-org-engine= — all existing tests pass
+- Add tests in =crates/pi-org-engine/src/section.rs=:
+
+#+begin_src rust
+#[test]
+fn find_section_crlf() {
+    let src = \"** Context\\r\
+Old content.\\r\
+\\r\
+** Implementation\\r\
+Code here.\\r\
+\";
+    let result = find_section(src, 0, src.len(), \"Context\");
+    assert!(result.is_some());
+    let (_, start, end) = result.unwrap();
+    let body = &src[start..end];
+    assert!(body.contains(\"Old content.\"));
+    assert!(!body.contains(\"** Implementation\"));
+}
+
+#[test]
+fn find_section_no_trailing_newline() {
+    let src = \"** Context\
+Content here.\";
+    let result = find_section(src, 0, src.len(), \"Context\");
+    assert!(result.is_some());
+    let (_, start, end) = result.unwrap();
+    let body = &src[start..end];
+    assert!(body.contains(\"Content here.\"));
+}
+#+end_src
+
+NOTE [2026-04-12]: Replaced find_section with direct byte scanning and added CRLF/no-trailing-newline/out-of-bounds regression tests; next step is cargo test -p pi-org-engine.
+
+
+
+** Completion [2026-04-12]
+*** Verification
+- Ran `cargo test -p pi-org-engine` in `/home/user/code/ora/spell`.
+- Result: passed, 44 tests passed, 0 failed.
+- Covered CRLF regression, no-trailing-newline, and out-of-bounds cases in `crates/pi-org-engine/src/section.rs`.
+*** Artifacts
+- Source: `crates/pi-org-engine/src/section.rs`
+- Verification output: terminal run from `cargo test -p pi-org-engine`
+*** Deviations
+None.
