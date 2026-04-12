@@ -1,0 +1,88 @@
+#+TITLE: Code tool hashline-style interface
+#+STATE: DONE
+#+SESSION_ID: 14b7bffcf7d9caf0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-03-54-335Z_14b7bffcf7d9caf0.jsonl]]
+#+CUSTOM_ID: PLAN-215-code-tool-hashline-style-interface
+
+NOTE [2026-04-12]: Completed after focused tests, bun check:ts, bun lint:ts, and rendered prompt inspection.
+
+
+* Initial Message
+
+yo. how would you gain by getting the code tool interface to be xml instead of json, when communicating with the LLM
+
+* Context
+
+The code tool currently requires the LLM to JSON-escape all code content when making tool calls. Multi-line function bodies, patch find/replace strings, and wrap templates must be encoded as single JSON strings with =
+=, =	=, =\\=, =\"= escaping. This:
+
+- Wastes tokens (5-15% escaping overhead on code-heavy payloads)
+- Causes tool call failures (broken escaping is common)
+- Makes the model reason about code through a string-encoding lens instead of writing code naturally
+
+The hashline edit tool (=packages/coding-agent/src/patch/index.ts=) already solves this for its domain: its =edits[].lines= field accepts =string | string[] | null=, where each array element is a line of code — no =
+= escaping needed. Its output is also compact: terse status line + change counts + compact diff preview.
+
+This plan applies the same pattern to the code tool:
+
+1. *Input*: All content-carrying fields (=content=, =patches[].find=, =patches[].replace=) accept =string | string[]= — array elements joined with =
+= before passing to the native engine
+2. *Output*: =formatCodeToolContent()= rewritten for compact, hashline-style results — terse status, compact diff previews for edits, reduced label verbosity for navigate/outline/undo
+3. *Prompt*: Examples in =code.md= updated to show array-of-lines format
+
+** Key Decisions
+
+- Native layer (=CodeBufferOptions=, =Patch=) stays unchanged — normalization from =string[]= to =string= happens in =code.ts=
+- Clean cutover: old single-string format still accepted (it's a subset of =string | string[]=), but prompt examples train the model toward arrays
+- Edit output uses =buildCompactHashlineDiffPreview()= from =patch/hashline.ts= instead of dumping raw diff
+- =read= and =graph= output unchanged (already optimal)
+- TUI rendering (=renderResult=) unaffected — it reads from =details=, not the LLM-facing =content= text
+
+* Verification
+
+#+begin_src sh
+# All code tool tests pass with new format
+bun test packages/coding-agent/test/tools/code.test.ts
+bun test packages/coding-agent/test/tools/code-result.test.ts
+
+# Type check
+bun check:ts
+
+# Lint
+bun lint:ts
+#+end_src
+
+Manual verification:
+- Inspect code.md prompt — examples show array format, output section describes compact format
+- Verify =formatCodeToolContent= output for each command type is compact and readable
+
+* Execution Manifest
+
+** Wave 1 (parallel, no dependencies)
+- [[id:FEAT-516-code-tool-input-schema-line-array-suppor]] — Input schema restructuring (2h)
+  Files: =code.ts=, =code.test.ts=
+- [[id:FEAT-517-code-tool-output-format-compact-hashline]] — Output format rewrite (3h)
+  Files: =code-result.ts=, =code-result.test.ts=, =code.test.ts= (output assertions only)
+
+** Wave 2 (depends on both Wave 1 items)
+- [[id:FEAT-518-code-tool-prompt-line-array-examples-and]] — Prompt update (1h)
+  Files: =code.md=
+  Depends: FEAT-516, FEAT-517
+
+Total effort: ~6h
+
+
+** Completion [2026-04-12]
+*** Verification
+- `bun test packages/coding-agent/test/tools/code.test.ts` -> pass (24 tests, 0 failures)
+- `bun test packages/coding-agent/test/tools/code-result.test.ts` -> pass (5 tests, 0 failures)
+- `bun check:ts` -> pass (`biome check . && tsgo -p tsconfig.json`)
+- `bun lint:ts` -> pass (`biome lint .`)
+- `bun -e 'import codeDescription from "./packages/coding-agent/src/prompts/tools/code.md" with { type: "text" }; import { renderPromptTemplate } from "./packages/coding-agent/src/config/prompt-templates"; console.log(renderPromptTemplate(codeDescription));'` -> rendered prompt shows line-array edit examples and compact output docs
+*** Artifacts
+- [[file:packages/coding-agent/src/prompts/tools/code.md]]
+- [[file:!tasks/features/FEAT-516-code-tool-input-schema-line-array-suppor.org]]
+- [[file:!tasks/features/FEAT-517-code-tool-output-format-compact-hashline.org]]
+- [[file:!tasks/features/FEAT-518-code-tool-prompt-line-array-examples-and.org]]
+*** Deviations
+- None.

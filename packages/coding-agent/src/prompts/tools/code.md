@@ -4,10 +4,10 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 - Understand structure → `code read { file, resolution: 2 }` [DEFAULT]
 - Read specific implementation → `code read { file, resolution: 3, offset, limit }`
 - Change specific lines in a declaration → `code edit { file, symbol: "fnName", operation: "patch", patches: [{ find: "old", replace: "new" }] }`
-- Replace a declaration body → `code edit { file, symbol: "fnName", operation: "replace-body", content: "{ … }" }`
-- Replace an entire declaration → `code edit { file, symbol: "fnName", operation: "replace", content: "…" }`
+- Replace a declaration body → `code edit { file, symbol: "fnName", operation: "replace-body", content: ["{", "  …", "}"] }`
+- Replace an entire declaration → `code edit { file, symbol: "fnName", operation: "replace", content: ["…"] }`
 - Delete a declaration → `code edit { file, symbol: "fnName", operation: "kill" }`
-- Wrap a declaration in a template → `code edit { file, symbol: "fnName", operation: "wrap", content: "try {\n  $BODY\n} catch (err) {\n  throw err;\n}" }`
+- Wrap a declaration in a template → `code edit { file, symbol: "fnName", operation: "wrap", content: ["try {", "  $BODY", "} catch (err) {", "  throw err;", "}"] }`
 - Rename a declaration in-file → `code edit { file, symbol: "oldName", operation: "rename", content: "newName" }`
 - Make multiple changes in one file → `code edit { file, edits: […] }`
 - Reorder declarations → `code edit { file, line: N, operation: "drag-down" }`
@@ -58,7 +58,7 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
     "file": "src/server.ts",
     "symbol": "handleRequest",
     "operation": "patch",
-    "patches": [{ "find": "const timeout = 5000;", "replace": "const timeout = 30_000;" }]
+    "patches": [{ "find": ["const timeout = 5000;"], "replace": ["const timeout = 30_000;"] }]
   }
   ```
 - Batch multiple edits in one call:
@@ -67,19 +67,21 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
     "command": "edit",
     "file": "src/server.ts",
     "edits": [
-      { "symbol": "handleRequest", "operation": "patch", "patches": [{ "find": "const timeout = 5000;", "replace": "const timeout = 30_000;" }] },
+      { "symbol": "handleRequest", "operation": "patch", "patches": [{ "find": ["const timeout = 5000;"], "replace": ["const timeout = 30_000;"] }] },
       { "symbol": "processData", "operation": "kill" },
-      { "line": 1, "operation": "insert-after", "content": "import { x } from './x';\n" }
+      { "line": 1, "operation": "insert-after", "content": ["import { x } from './x';"] }
     ]
   }
   ```
 </examples>
 
 <output>
-- File-scoped commands return compact, model-facing summaries in `content` and preserve normalized payload in `details`
-- `read` returns source text; `outline`, `navigate`, `buffers`, `languages`, `diff`, `undo`, `redo`, `save`, and `edit` summarize semantically
-- `edit` summaries include diff and edit count; `details` retain version and normalized payload data
+- File-scoped commands return compact, hashline-style summaries in `content` and preserve normalized payload in `details`
+- `read` returns source text directly
+- `edit` returns a status line, change counts (`Changes: +N -M`), and a compact diff preview
+- `outline`, `navigate`, `buffers`, `languages`, `diff`, `undo`, `redo`, and `save` return terse structured summaries
 - Graph commands return compact text with grouped sections and Next hints
+- Full normalized payload remains available in `details` for TUI rendering
 </output>
 
 <critical>

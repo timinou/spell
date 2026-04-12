@@ -141,8 +141,10 @@ function extractCodeToolErrorMessage(output: unknown): string {
 // =============================================================================
 
 const patchSchema = Type.Object({
-	find: Type.String({ description: "Text to find within the symbol scope (indent-insensitive)" }),
-	replace: Type.String({ description: "Replacement text" }),
+	find: Type.Union([Type.String(), Type.Array(Type.String())], {
+		description: "Text to find within the symbol scope (indent-insensitive)",
+	}),
+	replace: Type.Union([Type.String(), Type.Array(Type.String())], { description: "Replacement text" }),
 });
 
 const editEntrySchema = Type.Object({
@@ -162,7 +164,7 @@ const editEntrySchema = Type.Object({
 			"Edit operation: patch | replace | replace-body | wrap | rename | kill | insert-before | insert-after | splice | drag-up | drag-down | clone | transpose",
 	}),
 	content: Type.Optional(
-		Type.String({
+		Type.Union([Type.String(), Type.Array(Type.String())], {
 			description: "Content for replace | replace-body | wrap template | rename new name | insert operations",
 		}),
 	),
@@ -194,7 +196,7 @@ const codeSchema = Type.Object({
 		}),
 	),
 	content: Type.Optional(
-		Type.String({
+		Type.Union([Type.String(), Type.Array(Type.String())], {
 			description: "Content for replace | replace-body | wrap template | rename new name | insert operations",
 		}),
 	),
@@ -215,6 +217,35 @@ const codeSchema = Type.Object({
 });
 
 type CodeParams = Static<typeof codeSchema>;
+
+type NormalizedCodeEdit = NonNullable<CodeBufferOptions["edits"]>[number];
+
+function normalizeLines(value: CodeParams["content"]): string | undefined {
+	if (value === undefined) return undefined;
+	return typeof value === "string" ? value : value.join("\n");
+}
+
+function normalizePatches(patches: CodeParams["patches"]): CodeBufferOptions["patches"] | undefined {
+	if (!patches) return undefined;
+	return patches.map(patch => ({
+		find: normalizeLines(patch.find) ?? "",
+		replace: normalizeLines(patch.replace) ?? "",
+	}));
+}
+
+function normalizeEditEntries(edits: CodeParams["edits"]): CodeBufferOptions["edits"] | undefined {
+	if (!edits) return undefined;
+	return edits.map(edit => {
+		const normalizedEdit: NormalizedCodeEdit = { operation: edit.operation };
+		if (edit.symbol !== undefined) normalizedEdit.symbol = edit.symbol;
+		if (edit.line !== undefined) normalizedEdit.line = edit.line;
+		if (edit.column !== undefined) normalizedEdit.column = edit.column;
+		if (edit.content !== undefined) normalizedEdit.content = normalizeLines(edit.content);
+		if (edit.patches) normalizedEdit.patches = normalizePatches(edit.patches);
+		if (edit.mode !== undefined) normalizedEdit.mode = edit.mode;
+		return normalizedEdit;
+	});
+}
 
 // =============================================================================
 // Tool class
@@ -276,9 +307,9 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			if (params.column !== undefined) options.column = params.column;
 			if (params.symbol) options.symbol = params.symbol;
 			if (params.operation) options.operation = params.operation;
-			if (params.content !== undefined) options.content = params.content;
-			if (params.patches) options.patches = params.patches;
-			if (params.edits) options.edits = params.edits;
+			if (params.content !== undefined) options.content = normalizeLines(params.content);
+			if (params.patches) options.patches = normalizePatches(params.patches);
+			if (params.edits) options.edits = normalizeEditEntries(params.edits);
 			if (params.mode) options.mode = params.mode;
 			if (command === "navigate" && params.action) {
 				options.action = params.action === "references-local" ? "references" : params.action;
@@ -385,8 +416,8 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			const maxChars = 2_000;
 			return sanitized.length > maxChars ? `${sanitized.slice(0, maxChars)}\n...truncated` : sanitized;
 		};
-
-		if (result.isError || details?.kind === "error") {
+		const isError = "isError" in result && result.isError === true;
+		if (isError || details?.kind === "error") {
 			return new Text(toRender(details?.kind === "error" ? details.message : text), 0, 0);
 		}
 

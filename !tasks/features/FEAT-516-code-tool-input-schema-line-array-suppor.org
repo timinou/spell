@@ -1,0 +1,109 @@
+#+TITLE: Code tool input schema  line array support
+#+STATE: DONE
+#+SESSION_ID: 14b7bffcf7d9caf0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-03-54-335Z_14b7bffcf7d9caf0.jsonl]]
+#+CUSTOM_ID: FEAT-516-code-tool-input-schema-line-array-suppor
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+NOTE [2026-04-12]: Completed in PLAN-215 after verification: code.test.ts, code-result.test.ts, bun check:ts, bun lint:ts.
+
+* Initial Message
+
+yo. how would you gain by getting the code tool interface to be xml instead of json, when communicating with the LLM
+
+* Goal
+
+Restructure the code tool's input schema so code content uses =string[]= (array of lines) instead of requiring JSON-escaped single strings. Inspired by the hashline edit tool which uses =edits[].lines: string | string[] | null=.
+
+This eliminates the JSON escaping pain when the LLM passes multi-line code as tool arguments: no more =
+=, =	=, =\\=, =\"= escaping inside content fields.
+
+* Design Decisions
+
+- Accept =string | string[]= for all content-carrying fields
+- When =string[]=, join elements with =
+= before passing to native engine
+- Native layer (=CodeBufferOptions=, =Patch= in =packages/natives/src/code-buffer/types.ts=) stays unchanged — it expects =string=
+- Conversion happens in =code.ts= before calling =executeCodeBuffer()=
+- Clean cutover: old single-string format still works (it's a superset), but prompt examples show the new array format
+
+* Files to Modify
+
+** =packages/coding-agent/src/tools/code.ts=
+- Update =patchSchema=: change =find= and =replace= from =Type.String()= to =Type.Union([Type.String(), Type.Array(Type.String())])=
+- Update =editEntrySchema=: change =content= from =Type.String()= to =Type.Union([Type.String(), Type.Array(Type.String())])=
+- Update =codeSchema=: change top-level =content= from =Type.String()= to =Type.Union([Type.String(), Type.Array(Type.String())])=
+- Add a normalization function =normalizeLines(value: string | string[]): string= that joins arrays with =
+= and passes strings through
+- In =CodeTool.execute()=, before building the =options= object for =timedCodeBuffer()=, normalize:
+  - =params.content= → =normalizeLines(params.content)=
+  - =params.patches= → map each patch's =find= and =replace= through =normalizeLines=
+  - =params.edits= → map each edit's =content= through =normalizeLines=, and each edit's =patches= through the same normalization
+
+** Normalization function:
+
+#+begin_src typescript
+function normalizeLines(value: string | string[] | undefined): string | undefined {
+    if (value === undefined) return undefined;
+    if (typeof value === "string") return value;
+    return value.join("
+");
+}
+
+function normalizePatches(patches: Array<{ find: string | string[]; replace: string | string[] }> | undefined): Patch[] | undefined {
+    if (!patches) return undefined;
+    return patches.map(p => ({
+        find: normalizeLines(p.find) ?? "",
+        replace: normalizeLines(p.replace) ?? "",
+    }));
+}
+#+end_src
+
+** =packages/coding-agent/test/tools/code.test.ts=
+Add tests that verify:
+1. Array-of-lines content gets joined and passed to native as single string
+2. Array-of-lines patches get joined correctly
+3. Single string content still works (backward compat)
+4. Batch edits with array content work
+
+* Test Scenarios
+
+** Test 1: Array content for replace-body
+Input: =content: ["{
+", "  return x;", "}"]= with =operation: "replace-body"=
+Expected: =executeCodeBuffer= receives =content: "{
+
+  return x;
+}"=
+
+** Test 2: Array patches
+Input: =patches: [{ find: ["const x = 1;", "const y = 2;"], replace: ["const x = 10;", "const y = 20;"] }]=
+Expected: =executeCodeBuffer= receives =patches: [{ find: "const x = 1;
+const y = 2;", replace: "const x = 10;
+const y = 20;" }]=
+
+** Test 3: Single string still works
+Input: =content: "newName"= with =operation: "rename"=
+Expected: =executeCodeBuffer= receives =content: "newName"= (unchanged)
+
+** Test 4: Batch edits with mixed formats
+Input: =edits: [{ symbol: "fn", operation: "replace-body", content: ["{", "  return 42;", "}"] }]=
+Expected: =executeCodeBuffer= receives =edits: [{ ..., content: "{
+  return 42;
+}" }]=
+
+* Edge Cases
+
+- Empty array =[]= → joins to =""= (empty string)
+- Single-element array =["foo"]= → joins to ="foo"=
+- =undefined= stays =undefined=
+- =null= in patches: not allowed by schema, TypeBox validates
+
+* Verification
+
+#+begin_src sh
+bun test packages/coding-agent/test/tools/code.test.ts
+bun check:ts
+#+end_src

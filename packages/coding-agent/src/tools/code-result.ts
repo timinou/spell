@@ -1,4 +1,6 @@
 import * as path from "node:path";
+import { buildCompactHashlineDiffPreview } from "../patch/hashline";
+import type { OutputMeta } from "./output-meta";
 
 export type CodeGraphCommand =
 	| "index"
@@ -114,6 +116,7 @@ interface CodeFileDetailsBase<TCommand extends CodeFileCommand, TData> {
 	displayPath?: string;
 	data: TData;
 	rawOutput: unknown;
+	meta?: OutputMeta;
 }
 
 export type CodeOutlineDetails = CodeFileDetailsBase<
@@ -162,6 +165,7 @@ export interface CodeGraphDetails {
 	rebuilt?: boolean;
 	semanticStatus?: string;
 	graph: true;
+	meta?: OutputMeta;
 }
 
 export interface CodeToolErrorDetails {
@@ -172,6 +176,7 @@ export interface CodeToolErrorDetails {
 	message: string;
 	error: true;
 	output?: unknown;
+	meta?: OutputMeta;
 }
 
 export type CodeToolResultDetails = CodeGraphDetails | CodeFileDetails | CodeToolErrorDetails;
@@ -350,9 +355,7 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 
 	if (details.command === "outline") {
 		const label = details.displayPath ? ` ${details.displayPath}` : "";
-		const lines = [
-			`Outline${label} (${details.data.topLevelCount} top-level, ${details.data.totalSymbols} total symbols)`,
-		];
+		const lines = [`Outline${label} (${details.data.topLevelCount} top, ${details.data.totalSymbols} total)`];
 		for (const line of previewList(details.data.entries, OUTLINE_PREVIEW_LIMIT).map(formatOutlineEntry)) {
 			lines.push(`- ${line}`);
 		}
@@ -370,46 +373,50 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		const location = formatLineRange(details.data.line, details.data.endLine, details.data.column);
 		const lines = [`Navigate${action}${label}: ${nodeLabel}${location ? ` ${location}` : ""}`];
 		if (details.data.text && details.data.text !== details.data.name) {
-			lines.push(`- text: ${truncatePreview(details.data.text)}`);
+			lines.push(`text: ${truncatePreview(details.data.text)}`);
 		}
-		if (details.data.parentType) {
-			lines.push(`- parent: ${details.data.parentType}`);
-		}
+		const metadata: string[] = [];
+		if (details.data.parentType) metadata.push(`parent: ${details.data.parentType}`);
 		if (details.data.editableScopeNodeType) {
 			const scopeLocation = formatLineRange(
 				details.data.editableScopeLine,
 				details.data.editableScopeEndLine,
 				details.data.editableScopeColumn,
 			);
-			lines.push(
-				`- editable scope: ${details.data.editableScopeNodeType}${scopeLocation ? ` ${scopeLocation}` : ""}`,
-			);
+			metadata.push(`scope: ${details.data.editableScopeNodeType}${scopeLocation ? ` ${scopeLocation}` : ""}`);
 		}
-		if (details.data.kind) {
-			lines.push(`- symbol kind: ${details.data.kind}`);
+		if (details.data.kind) metadata.push(`kind: ${details.data.kind}`);
+		if (metadata.length > 0) lines.push(metadata.join(" | "));
+		const summary: string[] = [];
+		if (details.data.items.length > 0) summary.push(pluralize(details.data.items.length, "item"));
+		if (details.data.referenceCount > 0) summary.push(pluralize(details.data.referenceCount, "ref"));
+		if (summary.length > 0) lines.push(summary.join(", "));
+
+		for (const item of previewList(details.data.items, NAVIGATE_ITEM_PREVIEW_LIMIT)) {
+			const itemLocation = formatLineRange(item.line, item.endLine);
+			const itemLabel = [item.nodeType, truncatePreview(item.text)].filter(Boolean).join(" ");
+			lines.push(`  ${itemLabel}${itemLocation ? ` ${itemLocation}` : ""}`);
 		}
-		if (details.data.items.length > 0) {
-			lines.push(`- related items: ${details.data.items.length}`);
-			for (const item of previewList(details.data.items, NAVIGATE_ITEM_PREVIEW_LIMIT)) {
-				const itemLocation = formatLineRange(item.line, item.endLine);
-				const itemLabel = [item.nodeType, truncatePreview(item.text)].filter(Boolean).join(" ");
-				lines.push(`  - ${itemLabel}${itemLocation ? ` ${itemLocation}` : ""}`);
-			}
-			const remaining = details.data.items.length - Math.min(details.data.items.length, NAVIGATE_ITEM_PREVIEW_LIMIT);
-			if (remaining > 0) {
-				lines.push(`  - … ${remaining} more related items`);
-			}
-		}
-		if (details.data.referenceCount > 0) {
-			lines.push(`- references: ${details.data.referenceCount}`);
+		const remaining = details.data.items.length - Math.min(details.data.items.length, NAVIGATE_ITEM_PREVIEW_LIMIT);
+		if (remaining > 0) {
+			lines.push(`  … ${remaining} more items`);
 		}
 		return lines.join("\n");
 	}
 
 	if (details.command === "edit") {
 		const label = details.displayPath ? ` ${details.displayPath}` : "";
-		const header = `Edited${label} (${pluralize(details.data.editCount, "operation")}, buffer version ${details.data.version ?? "unknown"})`;
-		return details.data.diff.trim().length > 0 ? `${header}\n${details.data.diff}` : header;
+		const header = `Edited${label}`;
+		if (details.data.diff.trim().length === 0) {
+			return header;
+		}
+		const preview = buildCompactHashlineDiffPreview(details.data.diff);
+		const changes = countDiffChanges(details.data.diff);
+		const lines = [header, `Changes: +${changes.addedLines} -${changes.removedLines}`];
+		if (preview.preview.trim().length > 0) {
+			lines.push("Diff preview:", preview.preview);
+		}
+		return lines.join("\n");
 	}
 
 	if (details.command === "undo" || details.command === "redo") {
@@ -417,15 +424,13 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		if (!details.data.applied || !details.data.entries || details.data.entries.length === 0) {
 			return `${capitalize(details.command)}${label} had no effect.`;
 		}
-		const lines = [
-			`${capitalize(details.command)}${label} applied ${pluralize(details.data.entries.length, "history entry")}.`,
-		];
+		const lines = [`${capitalize(details.command)}${label} (${pluralize(details.data.entries.length, "entry")})`];
 		for (const entry of previewList(details.data.entries, HISTORY_PREVIEW_LIMIT)) {
-			lines.push(`- ${formatHistoryEntry(entry)}`);
+			lines.push(formatHistoryEntry(entry));
 		}
 		const remaining = details.data.entries.length - Math.min(details.data.entries.length, HISTORY_PREVIEW_LIMIT);
 		if (remaining > 0) {
-			lines.push(`- … ${remaining} more history entries`);
+			lines.push(`… ${remaining} more entries`);
 		}
 		return lines.join("\n");
 	}
@@ -460,17 +465,20 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		}
 		return lines.join("\n");
 	}
+	if (details.command === "languages") {
+		const lines = [`Built-in languages (${details.data.languages.length})`];
+		for (const language of previewList(details.data.languages, LANGUAGE_PREVIEW_LIMIT)) {
+			const suffix = language.extensions.length > 0 ? ` (${language.extensions.join(", ")})` : "";
+			lines.push(`- ${language.id}${suffix}`);
+		}
+		const remaining = details.data.languages.length - Math.min(details.data.languages.length, LANGUAGE_PREVIEW_LIMIT);
+		if (remaining > 0) {
+			lines.push(`- … ${remaining} more languages`);
+		}
+		return lines.join("\n");
+	}
 
-	const lines = [`Built-in languages (${details.data.languages.length})`];
-	for (const language of previewList(details.data.languages, LANGUAGE_PREVIEW_LIMIT)) {
-		const suffix = language.extensions.length > 0 ? ` (${language.extensions.join(", ")})` : "";
-		lines.push(`- ${language.id}${suffix}`);
-	}
-	const remaining = details.data.languages.length - Math.min(details.data.languages.length, LANGUAGE_PREVIEW_LIMIT);
-	if (remaining > 0) {
-		lines.push(`- … ${remaining} more languages`);
-	}
-	return lines.join("\n");
+	return "";
 }
 
 function normalizeOutlineEntries(value: unknown): CodeOutlineEntry[] {
@@ -654,15 +662,37 @@ function formatLineRange(start?: number, end?: number, column?: number): string 
 	return column !== undefined ? `${lineRange}:C${column}` : lineRange;
 }
 
-function formatHistoryEntry(entry: CodeHistoryEntry): string {
+function formatHistoryRange(entry: CodeHistoryEntry): string {
 	const firstRange = entry.changedRanges[0];
-	const range = firstRange
-		? `${formatLineRange(firstRange.start?.line, firstRange.end?.line, firstRange.start?.column)} → ${formatLineRange(firstRange.end?.line, firstRange.end?.line, firstRange.end?.column)}`
-		: "range unknown";
+	const startLine = firstRange?.start?.line ?? firstRange?.end?.line;
+	const endLine = firstRange?.end?.line ?? startLine;
+	if (startLine === undefined) return "range unknown";
+	return endLine !== undefined && endLine !== startLine ? `L${startLine}-${endLine}` : `L${startLine}`;
+}
+
+function formatHistoryEntry(entry: CodeHistoryEntry): string {
+	const range = formatHistoryRange(entry);
 	const textLen = entry.inputEdit?.newText?.length;
 	const version = entry.version !== undefined ? `v${entry.version}` : "version unknown";
-	const textSuffix = textLen !== undefined ? `, inserted ${textLen} chars` : "";
-	return `${version}, ${range}${textSuffix}`;
+	const textSuffix = textLen !== undefined ? ` +${textLen} chars` : "";
+	return `${version} ${range}${textSuffix}`;
+}
+
+function countDiffChanges(diff: string): { addedLines: number; removedLines: number } {
+	let addedLines = 0;
+	let removedLines = 0;
+	for (const line of diff.split("\n")) {
+		if (line.startsWith("+++")) continue;
+		if (line.startsWith("---")) continue;
+		if (line.startsWith("+")) {
+			addedLines += 1;
+			continue;
+		}
+		if (line.startsWith("-")) {
+			removedLines += 1;
+		}
+	}
+	return { addedLines, removedLines };
 }
 
 function formatHunkSummary(hunk: CodeDiffHunk): string {

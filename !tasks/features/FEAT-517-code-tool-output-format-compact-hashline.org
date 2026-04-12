@@ -1,0 +1,159 @@
+#+TITLE: Code tool output format  compact hashline style
+#+STATE: DONE
+#+SESSION_ID: 14b7bffcf7d9caf0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-03-54-335Z_14b7bffcf7d9caf0.jsonl]]
+#+CUSTOM_ID: FEAT-517-code-tool-output-format-compact-hashline
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+NOTE [2026-04-12]: Completed in PLAN-215 after verification: code.test.ts, code-result.test.ts, bun check:ts, bun lint:ts.
+
+* Initial Message
+
+yo. how would you gain by getting the code tool interface to be xml instead of json, when communicating with the LLM
+
+* Goal
+
+Rewrite =formatCodeToolContent()= in =code-result.ts= to produce compact, hashline-style output instead of verbose prose. The hashline edit tool (=packages/coding-agent/src/patch/index.ts=) returns terse status + compact diff previews. Apply the same philosophy to all code tool commands.
+
+The output is what the LLM reads back as the tool result. Making it compact and structured means the LLM spends fewer tokens parsing, and humans reading transcripts understand results faster.
+
+* Design Decisions
+
+- =edit=: Use =buildCompactHashlineDiffPreview()= from =packages/coding-agent/src/patch/hashline.ts= to produce a compact diff preview instead of dumping the full raw diff. Format: =Edited <path>
+Changes: +N -M
+Diff preview:
+<compact diff>=
+- =outline=: Tighten labels. =Outline <path> (N top, M total)= instead of =(N top-level, M total symbols)=
+- =navigate=: Collapse metadata lines. Combine =parent=, =editable scope=, =symbol kind= onto fewer lines. Use pipe separators.
+- =undo/redo=: Compact. =Undo <path> (N entries)= instead of =applied N history entries.=
+- =diff=: Keep current format (already shows hunks directly)
+- =save=: Keep current (already one-liner)
+- =buffers=: Keep current (already compact list)
+- =languages=: Keep current (already compact list)
+- =read=: No change (raw text)
+- =graph=: No change (already optimized by native engine)
+- =error=: No change (=Error: <message>=)
+
+* Files to Modify
+
+** =packages/coding-agent/src/tools/code-result.ts=
+
+*** =formatCodeToolContent()= changes by command:
+
+**** edit
+Before:
+#+begin_example
+Edited src/main.ts (1 operation, buffer version 2)
+@@ add @@
+-return a + b;
++return a * b;
+#+end_example
+
+After:
+#+begin_example
+Edited src/main.ts
+Changes: +1 -1
+Diff preview:
+-return a + b;
++return a * b;
+#+end_example
+
+Import =buildCompactHashlineDiffPreview= from =../../patch/hashline=. Call it on =details.data.diff= to get =preview=, =addedLines=, =removedLines=.
+
+**** outline
+Before: =Outline src/foo.ts (10 top-level, 14 total symbols)=
+After: =Outline src/foo.ts (10 top, 14 total)=
+
+Keep the per-entry format. It's already compact.
+
+**** navigate
+Before:
+#+begin_example
+Navigate node-at docs/theme.typ: let teal-primary L7:C1
+- text: let teal-primary = rgb("#008080")
+- parent: code
+- editable scope: code L7
+- symbol kind: let
+- related items: 1
+  - string rgb("#008080") L7
+- references: 2
+#+end_example
+
+After:
+#+begin_example
+Navigate node-at docs/theme.typ: let teal-primary L7:C1
+text: let teal-primary = rgb("#008080")
+parent: code | scope: code L7 | kind: let
+1 item, 2 refs
+  string rgb("#008080") L7
+#+end_example
+
+Combine single-value metadata lines with pipe separators. Drop the =- = prefix.
+
+**** undo/redo
+Before: =Undo src/main.ts applied 1 history entry.=
+After: =Undo src/main.ts (1 entry)=
+
+Keep history entry details but tighten format:
+Before: =- v4, L10-L12:C2 → L12:C0, inserted 13 chars=
+After: =v4 L10-12 +13 chars=
+
+** =packages/coding-agent/src/tools/code.ts=
+- Update import to include =buildCompactHashlineDiffPreview= (if needed in code.ts rather than code-result.ts)
+- Actually, the import should be in =code-result.ts= since that's where formatting happens
+
+** =packages/coding-agent/test/tools/code-result.test.ts=
+Update all assertion strings to match new compact format:
+- ="Outline packages/coding-agent/src/tools/code.ts (2 top-level, 3 total symbols)"= → ="Outline packages/coding-agent/src/tools/code.ts (2 top, 3 total)"=
+- ="Navigate node-at docs/theme.typ: let teal-primary L7:C1"= → stays same (header didn't change)
+- ="related items: 1"= → ="1 item"= or ="1 item, 2 refs"=
+- ="references: 2"= → combined into items/refs line
+- ="Edited src/main.ts (1 operation, buffer version 2)"= → ="Edited src/main.ts"= + ="Changes: +N -M"=
+- ="Undo src/main.ts applied 1 history entry."= → ="Undo src/main.ts (1 entry)"=
+
+** =packages/coding-agent/test/tools/code.test.ts=
+Update output assertions:
+- ="Edited src/main.ts (1 operation, buffer version 2)"= → ="Edited src/main.ts"=
+- ="Outline src/main.ts (1 top-level, 1 total symbols)"= → ="Outline src/main.ts (1 top, 1 total)"=
+- Navigate and other assertions that reference specific output text
+
+* Import for buildCompactHashlineDiffPreview
+
+The function is in =packages/coding-agent/src/patch/hashline.ts= and is already exported. Import it in =code-result.ts=:
+
+#+begin_src typescript
+import { buildCompactHashlineDiffPreview } from "../patch/hashline";
+#+end_src
+
+Use it in the edit branch:
+#+begin_src typescript
+if (details.command === "edit") {
+    const label = details.displayPath ? ` ${details.displayPath}` : "";
+    const header = `Edited${label}`;
+    if (details.data.diff.trim().length === 0) return header;
+    const preview = buildCompactHashlineDiffPreview(details.data.diff);
+    const changes = `Changes: +${preview.addedLines} -${preview.removedLines}`;
+    const diffBlock = preview.preview ? `
+Diff preview:
+${preview.preview}` : "";
+    return `${header}
+${changes}${diffBlock}`;
+}
+#+end_src
+
+* Edge Cases
+
+- Empty diff (no actual changes after edit) → just show =Edited <path>= with no diff section
+- Very long diffs → =buildCompactHashlineDiffPreview= already handles truncation with =maxOutputLines= (default 16)
+- Navigate with no items and no references → omit the items/refs line entirely
+- Navigate with items but no references (or vice versa) → only show what's present
+
+* Verification
+
+#+begin_src sh
+bun test packages/coding-agent/test/tools/code-result.test.ts
+bun test packages/coding-agent/test/tools/code.test.ts
+bun check:ts
+#+end_src

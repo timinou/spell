@@ -1,0 +1,143 @@
+#+TITLE: Code tool prompt  line array examples and output docs
+#+STATE: DONE
+#+SESSION_ID: 14b7bffcf7d9caf0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-03-54-335Z_14b7bffcf7d9caf0.jsonl]]
+#+CUSTOM_ID: FEAT-518-code-tool-prompt-line-array-examples-and
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-516-code-tool-input-schema-line-array-suppor FEAT-517-code-tool-output-format-compact-hashline
+
+NOTE [2026-04-12]: Completed in PLAN-215 after verification, including rendered prompt inspection via renderPromptTemplate(codeDescription).
+
+* Initial Message
+
+yo. how would you gain by getting the code tool interface to be xml instead of json, when communicating with the LLM
+
+* Goal
+
+Update the code tool prompt (=packages/coding-agent/src/prompts/tools/code.md=) to:
+1. Show =string[]= (line array) format in all examples that carry code content
+2. Update the =<output>= section to document the new compact output format
+
+* Design Decisions
+
+- All examples that include =content= or =patches= fields should use =string[]= format
+- Keep =content= as plain string for simple cases (rename — =content: "newName"=)
+- The =<output>= section should briefly describe the compact format: status line + changes + diff preview for edits
+- Do NOT change the =<instruction>=, =<operations>=, or =<critical>= sections — those describe behavior, not format
+
+* Files to Modify
+
+** =packages/coding-agent/src/prompts/tools/code.md=
+
+*** Example updates (=<examples>= section):
+
+**** Patch example (lines 68-80):
+Before:
+#+begin_example
+```json
+{
+    "command": "edit",
+    "file": "src/server.ts",
+    "symbol": "handleRequest",
+    "operation": "patch",
+    "patches": [
+      { "find": "const timeout = 5000;", "replace": "const timeout = 30_000;" },
+      { "find": "return null;", "replace": "return defaultResponse();" }
+    ]
+}
+```
+#+end_example
+
+After:
+#+begin_example
+```json
+{
+    "command": "edit",
+    "file": "src/server.ts",
+    "symbol": "handleRequest",
+    "operation": "patch",
+    "patches": [
+      { "find": ["const timeout = 5000;"], "replace": ["const timeout = 30_000;"] },
+      { "find": ["return null;"], "replace": ["return defaultResponse();"] }
+    ]
+}
+```
+#+end_example
+
+Note: Single-line patches can use either format. Using arrays consistently trains the model toward the array format.
+
+**** Replace-body example (lines 81-90):
+Before: ="content": "{
+  return new Intl.DateTimeFormat('en-US').format(date);
+}"=
+After:
+#+begin_example
+"content": [
+  "{",
+  "  return new Intl.DateTimeFormat('en-US').format(date);",
+  "}"
+]
+#+end_example
+
+**** Wrap example (lines 91-100):
+Before: ="content": "try {
+  $BODY
+} catch (err) {
+  logger.error(err);
+  throw err;
+}"=
+After:
+#+begin_example
+"content": [
+  "try {",
+  "  $BODY",
+  "} catch (err) {",
+  "  logger.error(err);",
+  "  throw err;",
+  "}"
+]
+#+end_example
+
+**** Rename example (lines 101-110):
+Keep as-is: ="content": "loadConfig"= — single string for simple values.
+
+**** Batch edits example (lines 111-135):
+Update the =insert-after= content:
+Before: ="content": "import { x } from './x';
+"=
+After: ="content": ["import { x } from './x';"]= (trailing newline not needed in array form)
+
+*** Output section update (=<output>= section, lines 138-143):
+Replace with:
+#+begin_example
+<output>
+- File-scoped commands return compact, hashline-style summaries in `content`
+- `read` returns source text directly
+- `edit` returns: status line, change counts (`Changes: +N -M`), and a compact diff preview
+- `outline`, `navigate`, `buffers`, `languages`, `diff`, `undo`, `redo`, `save` return terse structured summaries
+- Graph commands return compact text with grouped sections and "Next:" hints
+- Full normalized payload preserved in `details` for TUI rendering
+</output>
+#+end_example
+
+*** Instruction section (lines 3-39):
+Update the inline examples to use array format where applicable. The quick-reference lines like:
+=- Change specific lines in a declaration → `code edit { file, symbol: "fnName", operation: "patch", patches: [{ find: "old", replace: "new" }] }`=
+
+These short inline examples can stay as single strings (they're documentation shorthand, not full JSON). But the =content= examples should hint at arrays:
+=- Replace a declaration body but keep its signature → `code edit { file, symbol: "fnName", operation: "replace-body", content: ["{ … }"] }`=
+
+Keep changes minimal in the instruction section — just enough to signal that arrays are the expected format.
+
+* Edge Cases
+
+- The prompt must not contradict the schema. Since =string | string[]= is a union, both formats are valid. Examples should prefer arrays for multi-line and strings for single-value.
+- Handlebars template syntax: code.md does NOT use Handlebars (unlike hashline.md which uses ={{hlinefull}}=). It's static markdown. No template concerns.
+
+* Verification
+
+- Read the rendered prompt (=renderPromptTemplate(codeDescription)=) and verify examples show array format
+- =bun check:ts= passes (no compile errors from prompt changes — it's a text file)
+- Manually verify the prompt reads well and examples are syntactically valid JSON
