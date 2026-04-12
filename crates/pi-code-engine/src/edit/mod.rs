@@ -15,27 +15,15 @@ pub use drag::{DragDirection, drag_node};
 pub use patch::{Patch, apply_patches};
 pub use rename::rename_symbol;
 pub use replace::{insert_after, insert_before, kill_node, replace_node};
-use ropey::LineType;
 pub use splice::{SpliceMode, splice_node};
 pub use transpose::transpose_nodes;
 pub use wrap::wrap_node;
 
 pub use crate::buffer::TextEdit;
-use crate::{
-	buffer::CodeBuffer,
-	error::{CodeEngineError, Result},
-};
+use crate::{buffer::CodeBuffer, error::Result, line_target::resolve_line_target};
 
 pub fn node_at_line(buffer: &CodeBuffer, line: usize) -> Result<tree_sitter::Node<'_>> {
-	let rope = buffer.rope();
-	let byte = rope.line_to_byte_idx(line.saturating_sub(1), LineType::LF_CR);
-	let tree = buffer.tree();
-	let node = tree
-		.root_node()
-		.named_descendant_for_byte_range(byte, byte)
-		.or_else(|| tree.root_node().descendant_for_byte_range(byte, byte))
-		.ok_or_else(|| CodeEngineError::Edit(format!("No node found at line {line}")))?;
-	Ok(node)
+	Ok(resolve_line_target(buffer, line as u32, None)?.raw)
 }
 
 pub(crate) fn node_text(buffer: &CodeBuffer, node: tree_sitter::Node<'_>) -> String {
@@ -68,6 +56,15 @@ mod tests {
 	fn typst_buffer() -> CodeBuffer {
 		let source = fs::read_to_string(format!(
 			"{}/tests/fixtures/sources/hello.typ",
+			env!("CARGO_MANIFEST_DIR")
+		))
+		.expect("fixture");
+		CodeBuffer::from_str(&source, LanguageId::new("typst"), registry()).expect("buffer")
+	}
+
+	fn typst_target_buffer() -> CodeBuffer {
+		let source = fs::read_to_string(format!(
+			"{}/tests/fixtures/sources/typst_edit_targets.typ",
 			env!("CARGO_MANIFEST_DIR")
 		))
 		.expect("fixture");
@@ -159,6 +156,124 @@ mod tests {
 		assert!(out.contains("#let title = [Pi]"), "replacement should preserve valid Typst syntax");
 		assert!(!out.contains("#let title = [Spell]"), "old binding should be gone");
 		assert!(out.contains("= #title"), "body content should remain");
+	}
+
+	#[test]
+	fn test_replace_typst_set_accepts_raw_and_editable_scope_targets() {
+		let mut raw_buffer = typst_target_buffer();
+		let raw_edits = replace_node(
+			&raw_buffer,
+			1,
+			"set",
+			"set document(\n  title: \"Raw set\",\n  author: \"Spell\",\n)",
+		)
+		.expect("replace typst set raw");
+		let raw_out = apply_and_get(&mut raw_buffer, raw_edits);
+		assert!(raw_out.contains("title: \"Raw set\""), "raw set target should update title");
+		assert!(
+			!raw_out.contains("Editable scope fixture"),
+			"raw set target should remove old title"
+		);
+
+		let mut scope_buffer = typst_target_buffer();
+		let scope_edits = replace_node(
+			&scope_buffer,
+			1,
+			"code",
+			"#set document(\n  title: \"Scope set\",\n  author: \"Spell\",\n)",
+		)
+		.expect("replace typst set scope");
+		let scope_out = apply_and_get(&mut scope_buffer, scope_edits);
+		assert!(
+			scope_out.contains("title: \"Scope set\""),
+			"editable scope target should update title"
+		);
+		assert!(
+			!scope_out.contains("Editable scope fixture"),
+			"editable scope target should remove old title"
+		);
+	}
+
+	#[test]
+	fn test_replace_typst_single_line_let_accepts_raw_and_editable_scope_targets() {
+		let mut raw_buffer = typst_target_buffer();
+		let raw_edits = replace_node(&raw_buffer, 7, "let", "let teal-primary = rgb(\"#000000\")")
+			.expect("replace typst single-line let raw");
+		let raw_out = apply_and_get(&mut raw_buffer, raw_edits);
+		assert!(
+			raw_out.contains("#let teal-primary = rgb(\"#000000\")"),
+			"raw let target should update binding"
+		);
+		assert!(
+			!raw_out.contains("#let teal-primary = rgb(\"#008080\")"),
+			"raw let target should remove old binding"
+		);
+
+		let mut scope_buffer = typst_target_buffer();
+		let scope_edits =
+			replace_node(&scope_buffer, 7, "code", "#let teal-primary = rgb(\"#111111\")")
+				.expect("replace typst single-line let scope");
+		let scope_out = apply_and_get(&mut scope_buffer, scope_edits);
+		assert!(
+			scope_out.contains("#let teal-primary = rgb(\"#111111\")"),
+			"editable scope target should update binding"
+		);
+		assert!(
+			!scope_out.contains("#let teal-primary = rgb(\"#008080\")"),
+			"editable scope target should remove old binding"
+		);
+	}
+
+	#[test]
+	fn test_replace_typst_multiline_let_accepts_raw_and_editable_scope_targets() {
+		let mut raw_buffer = typst_target_buffer();
+		let raw_edits = replace_node(
+			&raw_buffer,
+			11,
+			"let",
+			"let section-title-probe(num, title) = {\n  [#num :: #title]\n}",
+		)
+		.expect("replace typst multiline let raw");
+		let raw_out = apply_and_get(&mut raw_buffer, raw_edits);
+		assert!(
+			raw_out.contains("section-title-probe"),
+			"raw multiline let target should update helper name"
+		);
+		assert!(
+			!raw_out.contains("section-title(num, title)"),
+			"raw multiline let target should remove old helper"
+		);
+
+		let mut scope_buffer = typst_target_buffer();
+		let scope_edits = replace_node(
+			&scope_buffer,
+			11,
+			"code",
+			"#let section-title-scope(num, title) = {\n  [#num == #title]\n}",
+		)
+		.expect("replace typst multiline let scope");
+		let scope_out = apply_and_get(&mut scope_buffer, scope_edits);
+		assert!(
+			scope_out.contains("section-title-scope"),
+			"editable scope target should update helper name"
+		);
+		assert!(
+			!scope_out.contains("section-title(num, title)"),
+			"editable scope target should remove old helper"
+		);
+	}
+
+	#[test]
+	fn test_replace_typst_comment_accepts_reported_comment_target() {
+		let mut buffer = typst_target_buffer();
+		let edits = replace_node(&buffer, 6, "comment", "// rewritten comment")
+			.expect("replace typst comment");
+		let out = apply_and_get(&mut buffer, edits);
+		assert!(out.contains("// rewritten comment"), "comment target should replace comment text");
+		assert!(
+			!out.contains("// editable comment before bindings"),
+			"comment target should remove old comment"
+		);
 	}
 
 	#[test]

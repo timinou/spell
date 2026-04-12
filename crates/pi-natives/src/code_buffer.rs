@@ -14,6 +14,7 @@ use pi_code_engine::{
 		splice_node, transpose_nodes, wrap_node,
 	},
 	language::{LanguageId, LanguageProfile, LanguageRegistry},
+	line_target::resolve_edit_target,
 	navigate::{NavigateAction, NavigateItem, NavigateResult, navigate as navigate_buffer},
 	outline::{OutlineEntry, outline as outline_buffer, read as read_buffer},
 	resolve::{ResolvedSymbol, resolve_symbol},
@@ -94,28 +95,12 @@ fn resolve_target(
 	if let Some(symbol) = options.get("symbol").and_then(Value::as_str) {
 		resolve_symbol(buffer, profile, symbol).map_err(engine_err)
 	} else if let Some(line) = options.get("line").and_then(Value::as_u64) {
-		// Fallback: construct a pseudo-ResolvedSymbol from line + node_type
 		let line = line as usize;
 		let node_type = options
 			.get("node_type")
 			.and_then(Value::as_str)
 			.unwrap_or("");
-		// Use the old line-based node finding
-		use pi_code_engine::edit::node_at_line;
-		let node = node_at_line(buffer, line).map_err(engine_err)?;
-		let target = if node_type.is_empty() {
-			node
-		} else {
-			let mut n = node;
-			loop {
-				if n.kind() == node_type {
-					break n;
-				}
-				n = n
-					.parent()
-					.ok_or_else(|| json_err(format!("No {node_type} found at line {line}")))?;
-			}
-		};
+		let target = resolve_edit_target(buffer, line, node_type).map_err(engine_err)?;
 		Ok(ResolvedSymbol {
 			name:            String::new(),
 			kind:            target.kind().to_string(),
@@ -329,9 +314,9 @@ fn render_annotated_diff(
 	for hunk in &hunks {
 		let symbol = find_enclosing_symbol(&outline, hunk.new_start);
 		let label = symbol.as_deref().unwrap_or("top-level");
-		let _ = writeln!(out, "@@ {} @@", label);
+		let _ = writeln!(out, "@@ {label} @@");
 		for line in hunk.content.lines() {
-			let _ = writeln!(out, "{}", line);
+			let _ = writeln!(out, "{line}");
 		}
 	}
 	out
@@ -350,7 +335,7 @@ fn render_navigate_item(item: NavigateItem) -> Value {
 	json!({ "nodeType": item.node_type, "text": item.text, "line": item.line, "endLine": item.end_line })
 }
 fn render_navigate_result(result: NavigateResult) -> Value {
-	json!({ "nodeType": result.node_type, "text": result.text, "line": result.line, "endLine": result.end_line, "column": result.column, "parentType": result.parent_type, "name": result.name, "kind": result.kind, "items": result.items.into_iter().map(render_navigate_item).collect::<Vec<_>>(), "references": result.references })
+	json!({ "nodeType": result.node_type, "text": result.text, "line": result.line, "endLine": result.end_line, "column": result.column, "parentType": result.parent_type, "editableScopeNodeType": result.editable_scope_node_type, "editableScopeLine": result.editable_scope_line, "editableScopeEndLine": result.editable_scope_end_line, "editableScopeColumn": result.editable_scope_column, "name": result.name, "kind": result.kind, "items": result.items.into_iter().map(render_navigate_item).collect::<Vec<_>>(), "references": result.references })
 }
 fn render_diff_hunk(hunk: pi_code_engine::diff::DiffHunk) -> Value {
 	json!({ "oldStart": hunk.old_start, "oldCount": hunk.old_count, "newStart": hunk.new_start, "newCount": hunk.new_count, "kind": format!("{:?}", hunk.kind), "content": hunk.content })
@@ -494,7 +479,7 @@ pub fn execute_code_buffer(options: Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
-	use std::sync::Arc;
+	use std::{fs, sync::Arc};
 
 	use pi_code_engine::language::LanguageRegistry;
 	use serde_json::json;
@@ -513,6 +498,22 @@ mod tests {
 	fn ts_profile() -> LanguageProfile {
 		registry_for_tests()
 			.get(&LanguageId::new("typescript"))
+			.expect("profile")
+			.clone()
+	}
+
+	fn typst_buffer() -> CodeBuffer {
+		let source = fs::read_to_string(format!(
+			"{}/../pi-code-engine/tests/fixtures/sources/typst_edit_targets.typ",
+			env!("CARGO_MANIFEST_DIR")
+		))
+		.expect("fixture");
+		CodeBuffer::from_str(&source, LanguageId::new("typst"), registry_for_tests()).expect("buffer")
+	}
+
+	fn typst_profile() -> LanguageProfile {
+		registry_for_tests()
+			.get(&LanguageId::new("typst"))
 			.expect("profile")
 			.clone()
 	}
@@ -591,5 +592,60 @@ mod tests {
 		let diff = render_annotated_diff(&buffer, &before, &profile);
 		assert!(diff.contains("@@ add @@"), "diff should label add hunk: {diff}");
 		assert!(diff.contains("return a * b;"), "diff should include changed line: {diff}");
+	}
+	#[test]
+	fn resolve_target_supports_typst_raw_and_editable_scope_node_types() {
+		let buffer = typst_buffer();
+		let profile = typst_profile();
+
+		let raw = resolve_target(&buffer, &profile, &json!({ "line": 7, "node_type": "let" }))
+			.expect("resolve raw typst target");
+		assert_eq!(raw.kind, "let");
+		assert_eq!((raw.line, raw.end_line), (7, 7));
+
+		let scope = resolve_target(&buffer, &profile, &json!({ "line": 7, "node_type": "code" }))
+			.expect("resolve editable-scope typst target");
+		assert_eq!(scope.kind, "code");
+		assert_eq!((scope.line, scope.end_line), (7, 7));
+	}
+
+	#[test]
+	fn render_navigate_result_includes_editable_scope_metadata() {
+		let rendered = render_navigate_result(NavigateResult {
+			node_type:                "let".into(),
+			text:                     "let teal-primary = rgb(\"#008080\")".into(),
+			line:                     7,
+			end_line:                 7,
+			column:                   1,
+			parent_type:              Some("code".into()),
+			editable_scope_node_type: Some("code".into()),
+			editable_scope_line:      Some(7),
+			editable_scope_end_line:  Some(7),
+			editable_scope_column:    Some(0),
+			name:                     None,
+			kind:                     None,
+			items:                    vec![],
+			references:               vec![],
+		});
+
+		assert_eq!(
+			rendered,
+			json!({
+				"nodeType": "let",
+				"text": "let teal-primary = rgb(\"#008080\")",
+				"line": 7,
+				"endLine": 7,
+				"column": 1,
+				"parentType": "code",
+				"editableScopeNodeType": "code",
+				"editableScopeLine": 7,
+				"editableScopeEndLine": 7,
+				"editableScopeColumn": 0,
+				"name": null,
+				"kind": null,
+				"items": [],
+				"references": [],
+			}),
+		);
 	}
 }

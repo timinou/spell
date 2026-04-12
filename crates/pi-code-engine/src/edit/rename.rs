@@ -1,3 +1,9 @@
+#![allow(
+	clippy::collapsible_if,
+	clippy::uninlined_format_args,
+	reason = "pre-existing style lint debt outside PLAN-205 behavior changes"
+)]
+
 use tree_sitter::Node;
 
 use crate::{

@@ -3,6 +3,7 @@ pub mod diff;
 pub mod edit;
 pub mod error;
 pub mod language;
+pub mod line_target;
 pub mod navigate;
 pub mod outline;
 pub mod procedure;

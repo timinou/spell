@@ -6,6 +6,7 @@ use crate::{
 	buffer::CodeBuffer,
 	error::{CodeEngineError, Result},
 	language::{DeclarationPattern, LanguageProfile, ReferencePattern},
+	line_target::{editable_scope_for_node, resolve_line_target},
 	outline::declaration_for,
 };
 
@@ -29,16 +30,20 @@ pub struct NavigateItem {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct NavigateResult {
-	pub node_type:   String,
-	pub text:        String,
-	pub line:        u32,
-	pub end_line:    u32,
-	pub column:      u32,
-	pub parent_type: Option<String>,
-	pub name:        Option<String>,
-	pub kind:        Option<String>,
-	pub items:       Vec<NavigateItem>,
-	pub references:  Vec<u32>,
+	pub node_type:                String,
+	pub text:                     String,
+	pub line:                     u32,
+	pub end_line:                 u32,
+	pub column:                   u32,
+	pub parent_type:              Option<String>,
+	pub editable_scope_node_type: Option<String>,
+	pub editable_scope_line:      Option<u32>,
+	pub editable_scope_end_line:  Option<u32>,
+	pub editable_scope_column:    Option<u32>,
+	pub name:                     Option<String>,
+	pub kind:                     Option<String>,
+	pub items:                    Vec<NavigateItem>,
+	pub references:               Vec<u32>,
 }
 
 pub fn navigate(
@@ -49,7 +54,8 @@ pub fn navigate(
 	column: Option<u32>,
 	symbol: Option<&str>,
 ) -> Result<NavigateResult> {
-	let node = node_at(buffer, line, column)?;
+	let target = resolve_line_target(buffer, line, column)?;
+	let node = target.raw;
 	match action {
 		NavigateAction::NodeAt => Ok(node_result(buffer, node)),
 		NavigateAction::DefunAt => defun_at(buffer, profile, node),
@@ -62,54 +68,32 @@ pub fn navigate(
 	}
 }
 
-fn node_at(buffer: &CodeBuffer, line: u32, column: Option<u32>) -> Result<Node<'_>> {
-	let rope = buffer.rope();
-	let raw_lines = rope.len_lines(ropey::LineType::LF_CR);
-	// Rope line counts include a trailing empty segment after a final newline;
-	// trim that sentinel so navigation lines match user-visible content lines.
-	let total_lines = if raw_lines > 0
-		&& rope
-			.line(raw_lines - 1, ropey::LineType::LF_CR)
-			.chars()
-			.next()
-			.is_none()
-	{
-		raw_lines.saturating_sub(1)
-	} else {
-		raw_lines
-	} as u32;
-	if line == 0 || line > total_lines {
-		return Err(CodeEngineError::Buffer("line out of range".into()));
-	}
-	let byte = rope.line_to_byte_idx((line - 1) as usize, ropey::LineType::LF_CR)
-		+ column.unwrap_or(0) as usize;
-	let mut node = buffer
-		.tree()
-		.root_node()
-		.descendant_for_byte_range(byte, byte)
-		.ok_or_else(|| CodeEngineError::Buffer("node not found".into()))?;
-	while !node.is_named() || node.is_extra() {
-		if let Some(parent) = node.parent() {
-			node = parent;
-		} else {
-			break;
-		}
-	}
-	Ok(node)
+fn node_result(buffer: &CodeBuffer, node: Node<'_>) -> NavigateResult {
+	result_for_node(buffer, node, None, None)
 }
 
-fn node_result(buffer: &CodeBuffer, node: Node<'_>) -> NavigateResult {
+fn result_for_node(
+	buffer: &CodeBuffer,
+	node: Node<'_>,
+	name: Option<String>,
+	kind: Option<String>,
+) -> NavigateResult {
+	let editable_scope = editable_scope_for_node(node);
 	NavigateResult {
-		node_type:   node.kind().to_string(),
-		text:        first_line(&node_text(buffer, node), 80),
-		line:        (node.start_position().row + 1) as u32,
-		end_line:    (node.end_position().row + 1) as u32,
-		column:      node.start_position().column as u32,
+		node_type: node.kind().to_string(),
+		text: first_line(&node_text(buffer, node), 80),
+		line: (node.start_position().row + 1) as u32,
+		end_line: (node.end_position().row + 1) as u32,
+		column: node.start_position().column as u32,
 		parent_type: node.parent().map(|p| p.kind().to_string()),
-		name:        None,
-		kind:        None,
-		items:       vec![],
-		references:  vec![],
+		editable_scope_node_type: Some(editable_scope.kind().to_string()),
+		editable_scope_line: Some((editable_scope.start_position().row + 1) as u32),
+		editable_scope_end_line: Some((editable_scope.end_position().row + 1) as u32),
+		editable_scope_column: Some(editable_scope.start_position().column as u32),
+		name,
+		kind,
+		items: vec![],
+		references: vec![],
 	}
 }
 
@@ -162,18 +146,7 @@ fn declaration_result(
 	node: Node<'_>,
 	decl: &DeclarationPattern,
 ) -> NavigateResult {
-	NavigateResult {
-		node_type:   node.kind().to_string(),
-		text:        first_line(&node_text(buffer, node), 80),
-		line:        (node.start_position().row + 1) as u32,
-		end_line:    (node.end_position().row + 1) as u32,
-		column:      node.start_position().column as u32,
-		parent_type: node.parent().map(|p| p.kind().to_string()),
-		name:        name_text(buffer, node, decl),
-		kind:        Some(decl.kind.clone()),
-		items:       vec![],
-		references:  vec![],
-	}
+	result_for_node(buffer, node, name_text(buffer, node, decl), Some(decl.kind.clone()))
 }
 fn parent_result(buffer: &CodeBuffer, node: Node<'_>) -> Result<NavigateResult> {
 	Ok(node_result(
@@ -234,16 +207,20 @@ fn references_result(
 	let mut refs = BTreeSet::new();
 	collect_references(buffer, profile, buffer.tree().root_node(), symbol, &mut refs);
 	NavigateResult {
-		node_type:   "references".into(),
-		text:        symbol.to_string(),
-		line:        1,
-		end_line:    1,
-		column:      0,
-		parent_type: None,
-		name:        None,
-		kind:        None,
-		items:       vec![],
-		references:  refs.into_iter().collect(),
+		node_type:                "references".into(),
+		text:                     symbol.to_string(),
+		line:                     1,
+		end_line:                 1,
+		column:                   0,
+		parent_type:              None,
+		editable_scope_node_type: None,
+		editable_scope_line:      None,
+		editable_scope_end_line:  None,
+		editable_scope_column:    None,
+		name:                     None,
+		kind:                     None,
+		items:                    vec![],
+		references:               refs.into_iter().collect(),
 	}
 }
 fn collect_references(
@@ -423,5 +400,60 @@ mod tests {
 		let r =
 			navigate(&buf, &p, NavigateAction::References, 2, Some(5), Some("title")).expect("nav");
 		assert_eq!(r.references, vec![2, 5]);
+	}
+	#[test]
+	fn test_navigate_typst_node_at_reports_editable_scope_for_set() {
+		let buf = buffer("typst_edit_targets.typ", "typst");
+		let p = profile("typst");
+		let r = navigate(&buf, &p, NavigateAction::NodeAt, 1, Some(1), None).expect("nav");
+		assert_eq!(r.node_type, "set");
+		assert_eq!(r.editable_scope_node_type.as_deref(), Some("code"));
+		assert_eq!(r.editable_scope_line, Some(1));
+		assert_eq!(r.editable_scope_end_line, Some(4));
+	}
+
+	#[test]
+	fn test_navigate_typst_node_at_reports_editable_scope_for_single_line_let() {
+		let buf = buffer("typst_edit_targets.typ", "typst");
+		let p = profile("typst");
+		let r = navigate(&buf, &p, NavigateAction::NodeAt, 7, Some(1), None).expect("nav");
+		assert_eq!(r.node_type, "let");
+		assert_eq!(r.editable_scope_node_type.as_deref(), Some("code"));
+		assert_eq!(r.editable_scope_line, Some(7));
+		assert_eq!(r.editable_scope_end_line, Some(7));
+	}
+
+	#[test]
+	fn test_navigate_typst_node_at_reports_editable_scope_for_multiline_let() {
+		let buf = buffer("typst_edit_targets.typ", "typst");
+		let p = profile("typst");
+		let r = navigate(&buf, &p, NavigateAction::NodeAt, 11, Some(1), None).expect("nav");
+		assert_eq!(r.node_type, "let");
+		assert_eq!(r.editable_scope_node_type.as_deref(), Some("code"));
+		assert_eq!(r.editable_scope_line, Some(11));
+		assert_eq!(r.editable_scope_end_line, Some(13));
+	}
+
+	#[test]
+	fn test_navigate_typst_comment_stays_comment() {
+		let buf = buffer("typst_edit_targets.typ", "typst");
+		let p = profile("typst");
+		let r = navigate(&buf, &p, NavigateAction::NodeAt, 6, Some(1), None).expect("nav");
+		assert_eq!(r.node_type, "comment");
+		assert_ne!(r.node_type, "source_file");
+		assert_eq!(r.editable_scope_node_type.as_deref(), Some("comment"));
+		assert_eq!(r.editable_scope_line, Some(6));
+		assert_eq!(r.editable_scope_end_line, Some(6));
+	}
+
+	#[test]
+	fn test_navigate_typescript_raw_kind_is_additive_compatible() {
+		let buf = buffer("hello.ts", "typescript");
+		let p = profile("typescript");
+		let r = navigate(&buf, &p, NavigateAction::NodeAt, 1, Some(1), None).expect("nav");
+		assert_eq!(r.node_type, "export_statement");
+		assert_eq!(r.editable_scope_node_type.as_deref(), Some("export_statement"));
+		assert_eq!(r.editable_scope_line, Some(1));
+		assert_eq!(r.editable_scope_end_line, Some(1));
 	}
 }

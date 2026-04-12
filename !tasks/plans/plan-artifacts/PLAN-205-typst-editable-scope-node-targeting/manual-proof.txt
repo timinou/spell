@@ -1,0 +1,32 @@
+Manual proof captured via local Bun script using @oh-my-pi/pi-natives executeCodeBuffer against crates/pi-code-engine/tests/fixtures/sources/typst_edit_targets.typ
+
+navigate-set
+- nodeType: set
+- editableScopeNodeType: code
+- line/endLine: 1/4
+- editableScopeLine/editableScopeEndLine: 1/4
+
+navigate-comment
+- nodeType: comment
+- parentType: source_file
+- editableScopeNodeType: comment
+- line/endLine: 6/6
+- comment no longer collapses to source_file
+
+navigate-let
+- nodeType: let
+- editableScopeNodeType: code
+- line/endLine: 7/7
+- editableScopeLine/editableScopeEndLine: 7/7
+
+edit-let-raw
+- command: edit replace line=7 node_type=let content='let teal-primary = rgb("#000000")'
+- result: success
+- diff: teal-primary changed from #008080 to #000000
+
+edit-let-scope
+- command: edit replace line=7 node_type=code content='#let teal-primary = rgb("#111111")'
+- result: success
+- diff: teal-primary changed from #008080 to #111111
+
+Both raw Typst kind targeting and editable-scope targeting succeed for the same line.

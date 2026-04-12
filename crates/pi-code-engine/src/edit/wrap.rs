@@ -1,3 +1,8 @@
+#![allow(
+	clippy::map_unwrap_or,
+	reason = "pre-existing style lint debt outside PLAN-205 behavior changes"
+)]
+
 use crate::{
 	TextEdit,
 	buffer::CodeBuffer,

@@ -152,10 +152,10 @@ fn with_worker<T>(f: impl FnOnce(&mut EmbeddingWorker) -> Result<T>) -> Result<T
 			.ok_or_else(|| worker_error("worker failed to initialize"))?;
 		f(worker)
 	};
-	if result.is_err() {
-		if let Some(mut worker) = guard.take() {
-			worker.stop();
-		}
+	if result.is_err()
+		&& let Some(mut worker) = guard.take()
+	{
+		worker.stop();
 	}
 	result
 }
@@ -267,7 +267,11 @@ fn loaded_addon_dir() -> Option<PathBuf> {
 	let maps = fs::read_to_string("/proc/self/maps").ok()?;
 	for line in maps.lines() {
 		let path = line.split_whitespace().last()?;
-		if !path.contains("pi_natives") || !path.ends_with(".node") {
+		if !path.contains("pi_natives")
+			|| !Path::new(path)
+				.extension()
+				.is_some_and(|ext| ext.eq_ignore_ascii_case("node"))
+		{
 			continue;
 		}
 		let cleaned = path.strip_suffix(" (deleted)").unwrap_or(path);

@@ -1,3 +1,7 @@
+#![allow(
+	clippy::tabs_in_doc_comments,
+	reason = "vendored upstream docs use code-block indentation"
+)]
 //! Org-mode grammar for the [tree-sitter][] parsing library.
 //!
 //! Vendored from [milisims/tree-sitter-org](https://github.com/milisims/tree-sitter-org) (MIT),
@@ -8,8 +12,8 @@
 //!
 //! let mut parser = Parser::new();
 //! parser
-//!     .set_language(&tree_sitter_org::LANGUAGE.into())
-//!     .expect("Error loading org grammar");
+//! 	.set_language(&tree_sitter_org::LANGUAGE.into())
+//! 	.expect("Error loading org grammar");
 //! let tree = parser.parse("* TODO Hello\n", None).unwrap();
 //! assert!(!tree.root_node().has_error());
 //! ```

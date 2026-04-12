@@ -130,7 +130,7 @@ fn find_node_types_json(grammar: &GrammarSource) -> Result<std::path::PathBuf, S
 
 	let selected_version = grammar
 		.dependency_name
-		.and_then(|dep_name| selected_dependency_version(dep_name));
+		.and_then(selected_dependency_version);
 
 	// Iterate registry index directories (e.g., index.crates.io-HASH/)
 	let entries = fs::read_dir(&registry_src).map_err(|e| format!("cannot read registry: {e}"))?;
@@ -234,16 +234,18 @@ fn manifest_dependency_version(manifest: &Path, dep_name: &str) -> Option<String
 		}
 
 		if let Some((key, value)) = split_toml_key_value(line) {
-			if in_dependencies && key == dep_name {
-				if let Some(version) = extract_dependency_version(value) {
-					return Some(version);
-				}
+			if in_dependencies
+				&& key == dep_name
+				&& let Some(version) = extract_dependency_version(value)
+			{
+				return Some(version);
 			}
 
-			if current_table_dep == Some(dep_name) && key == "version" {
-				if let Some(version) = extract_toml_string(value) {
-					return Some(version);
-				}
+			if current_table_dep == Some(dep_name)
+				&& key == "version"
+				&& let Some(version) = extract_toml_string(value)
+			{
+				return Some(version);
 			}
 		}
 	}
@@ -259,7 +261,7 @@ fn find_registry_candidate(
 	let crate_entries =
 		fs::read_dir(index_dir).map_err(|e| format!("cannot read index dir: {e}"))?;
 	let mut fallback = None;
-	let exact_suffix = selected_version.map(|version| format!("-{}", version));
+	let exact_suffix = selected_version.map(|version| format!("-{version}"));
 
 	for crate_entry in crate_entries.flatten() {
 		let name = crate_entry.file_name();
@@ -273,10 +275,10 @@ fn find_registry_candidate(
 			continue;
 		}
 
-		if let Some(exact_suffix) = exact_suffix.as_deref() {
-			if name_str.ends_with(exact_suffix) {
-				return Ok(Some(candidate));
-			}
+		if let Some(exact_suffix) = exact_suffix.as_deref()
+			&& name_str.ends_with(exact_suffix)
+		{
+			return Ok(Some(candidate));
 		}
 
 		if fallback.is_none() {
