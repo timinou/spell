@@ -1,0 +1,33 @@
+#+TITLE: Session 14b839a0b3b1301d Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Cleanup
+
+** DONE Inspect large file history
+:PROPERTIES:
+:TASK_ID: inspect-large-file
+:STATUS: completed
+:END:
+
+Identify the exact large path, confirm whether it is tracked in HEAD, inspect available history-rewrite tooling, and determine the safest repo-local rewrite approach. Acceptance: know the exact command sequence needed to remove packages/natives/native/pi-embedding-worker from all history and prevent reintroduction.
+
+Confirmed the oversized blob is tracked at packages/natives/native/pi-embedding-worker in commit e868d2f6bbbe6b0e7b4f0d3a5453c7666b418a0d. git-filter-repo is installed. Origin is git@github.com:timinou/kika.git and may need restoration after rewrite because git-filter-repo often drops remotes on destructive rewrites.
+
+** DOING Rewrite branch history
+:PROPERTIES:
+:TASK_ID: rewrite-history
+:STATUS: in_progress
+:DEPENDS: inspect-large-file
+:END:
+
+Remove packages/natives/native/pi-embedding-worker from git history across refs in the local repository, preserving other content. Acceptance: object/path no longer appears in reachable history and push-blocking oversized blob is gone from rewritten refs.
+
+** ITEM Ignore binary path
+:PROPERTIES:
+:TASK_ID: ignore-large-binary
+:STATUS: pending
+:DEPENDS: rewrite-history
+:END:
+
+Add packages/natives/native/pi-embedding-worker to the repository ignore rules without altering unrelated ignore behavior. Acceptance: .gitignore contains the path and git status no longer proposes the file after rewrite.

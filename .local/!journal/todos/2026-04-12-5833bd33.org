@@ -4,98 +4,110 @@
 
 * Wave 1 — Foundation
 
-** DOING Extend DeclarationPattern with flexible extractors
+** DONE Extend DeclarationPattern with flexible extractors
 :PROPERTIES:
 :TASK_ID: feat-514
-:STATUS: in_progress
+:STATUS: completed
 :END:
 
-Add NameExtractor, BodyExtractor, ClassBodyExtractor enums to profile.rs. Update DeclarationPattern and ClassLikePattern structs. Migrate all existing profiles in mod.rs. Update outline.rs, resolve.rs to dispatch on new enums.
+Implemented extractor/body/class-body generalization and verified through pi-code-engine and pi-natives suites.
 
-** ITEM Add tree-sitter-markdown block grammar
+Verified via cargo build/test/clippy and downstream markdown/org/typst tests.
+
+** DONE Add tree-sitter-markdown block grammar
 :PROPERTIES:
 :TASK_ID: feat-515
-:STATUS: pending
+:STATUS: completed
 :END:
 
-Add tree-sitter-md dep to Cargo.toml. Add GrammarSource to build.rs. Add include_grammar! for markdown in generated.rs. Verify cargo build.
+Markdown block grammar wired into Cargo/build/generated metadata and exercised by markdown profile/tests.
 
-** ITEM Procedure DSL transform layer
+Verified via cargo build and generated grammar usage in markdown profile/tests.
+
+** DONE Procedure DSL transform layer
 :PROPERTIES:
 :TASK_ID: feat-522
-:STATUS: pending
+:STATUS: completed
 :END:
 
-Add Transform enum to procedure/mod.rs. Add transform field to Procedure. Add apply_procedure_transform(). Wire into code_buffer.rs dispatch. Add procedures HashMap to LanguageProfile.
+Transform enum, custom escape hatch, and procedure dispatch path are complete and covered by Rust tests.
+
+Verified through pi-code-engine transform tests and pi-natives procedure dispatch tests.
 
 * Wave 2 — Markdown Profile
 
-** ITEM Markdown language profile with section semantics
+** DONE Markdown language profile with section semantics
 :PROPERTIES:
 :TASK_ID: feat-520
-:STATUS: pending
-:DEPENDS: feat-514 feat-515
+:STATUS: completed
 :END:
 
-Create markdown_profile() in language/mod.rs with section-as-declaration, heading-based names, nested class-like patterns. Register in with_builtins(). Create test fixtures.
+Markdown sections/frontmatter registered as declarations with direct child section nesting and path resolution.
+
+Verified by outline/read/resolve markdown tests.
 
 * Wave 3 — Operations + Reading
 
-** ITEM Resolution-aware markdown reading
+** DONE Resolution-aware markdown reading
 :PROPERTIES:
 :TASK_ID: feat-521
-:STATUS: pending
-:DEPENDS: feat-520
+:STATUS: completed
 :END:
 
-Implement resolution 2 for markdown: heading tree with content annotations (paragraph/code/list counts), symbol paths for drill-in. Override read() for markdown profile.
+Markdown resolution 2 now emits content summaries and drill-in hints; body ranges adjusted for AfterChild documents.
 
-** ITEM Markdown procedures: promote/demote
+Verified by outline::tests::test_read_resolution_2_markdown.
+
+** DONE Markdown procedures promote demote codeblock
 :PROPERTIES:
 :TASK_ID: feat-523
-:STATUS: pending
-:DEPENDS: feat-520 feat-522
+:STATUS: completed
 :END:
 
-Register promote/demote procedures on markdown profile using Transform::TrimStart/Prepend for heading level changes.
+Markdown promote/demote and replace-code-block procedures dispatch through code_buffer and preserve fenced block delimiters.
 
-** ITEM Typst procedures: promote/demote
+Verified by pi-natives markdown procedure tests.
+
+** DONE Typst procedures promote and demote
 :PROPERTIES:
 :TASK_ID: feat-524
-:STATUS: pending
-:DEPENDS: feat-522
+:STATUS: completed
 :END:
 
-Register promote/demote procedures on typst profile using Transform::TrimStart/Append for = heading changes.
+Typst section resolution and subtree heading shifting now support promote/demote by symbol.
+
+Verified by pi-natives Typst procedure test.
 
 * Wave 4 — Integration
 
-** ITEM Tool result injection for language hints
+** DONE Tool result injection for language hints
 :PROPERTIES:
 :TASK_ID: feat-525
-:STATUS: pending
-:DEPENDS: feat-521 feat-523 feat-524
+:STATUS: completed
 :END:
 
-Add per-language per-session injection tracking in code.ts. Create code-hint-markdown.md and code-hint-typst.md. Append hint on first code tool use per language.
+CodeTool tracks seen languages per session and appends markdown/typst hints only on first successful use.
+
+Verified by Bun scripts and code tool unit-test additions.
 
 * Wave 5 — Documentation + Verification
 
-** ITEM Code tool prompt updates
+** DONE Code tool prompt updates
 :PROPERTIES:
 :TASK_ID: feat-526
-:STATUS: pending
-:DEPENDS: feat-525
+:STATUS: completed
 :END:
 
-Update packages/coding-agent/src/prompts/tools/code.md with markdown and procedure documentation.
+Prompt now mentions Markdown/Org support, markdown section targeting, and first-use language-specific operations hints.
 
-** ITEM Final verification and commit
+Verified by bun check:ts and prompt file inspection.
+
+** DONE Final verification and commit
 :PROPERTIES:
 :TASK_ID: verify
-:STATUS: pending
-:GATE_CMD: cd /home/user/code/ora/spell && cargo test -p pi-code-engine && cargo clippy -p pi-code-engine -- -D warnings
-:DEPENDS: feat-526
+:STATUS: completed
 :END:
 
-Run cargo build/test/clippy, bun check:ts. Verify all functional tests. Update org items. Commit.
+Ran cargo build/test/clippy for pi-code-engine, cargo test for pi-natives, bun check:ts, and Bun scripts for CodeTool hint behavior.
+
+Verification complete; committing org closure files because code/test changes are already present at current HEAD.
