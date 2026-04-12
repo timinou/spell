@@ -1,0 +1,85 @@
+#+TITLE: TUI Child Task Details Display
+#+STATE: DONE
+#+SESSION_ID: 14b702a6c9bedfec
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-16-40-870Z_14b702a6c9bedfec.jsonl]]
+#+CUSTOM_ID: FEAT-484-tui-child-task-details-display
+#+EFFORT: 1h
+#+PRIORITY: #B
+#+LAYER: tui
+
+NOTE [2026-04-12]: showDetailPreview param added to #formatTodoLine. Child tasks now show first line of details dimmed for non-in_progress states.
+
+* Initial Message
+
+I want tasks to be encouraged to use the sniper tool. make it so that the todo write, when used by subagents, uses the sniper tool (i.e. provides the exact context needed to efficiently do it then leave (no room for questions, terse). This is the level of the subtodos that should be shown in the UI. Explain how to make this a powerful tool that is used
+
+* Context
+Child tasks (rendered via ~delegation.childGroups~) currently only show their ~details~ field when the child task's status is ~in_progress~. For sniper todos to be visible and useful to the observer, the first line of ~details~ should always be shown — so the user can see the precise scope of each subtask at a glance.
+
+* Design Decisions
+- Show first line of ~details~ for ALL child tasks regardless of status
+- The detail line is dimmed (~theme.fg("dim", ...)~) and truncated to terminal width
+- Only applies to child tasks rendered inside ~#renderChildTodoGroups~ — NOT to top-level todos (those keep current behavior: details only on in_progress)
+- For ~in_progress~ child tasks, show full details (current behavior preserved)
+- For non-in_progress child tasks, show only the first line of details
+
+* Implementation
+
+** Modify ~packages/coding-agent/src/modes/interactive-mode.ts~
+
+The change is in the ~#formatTodoLine~ method. Currently, details are only shown in the ~in_progress~ case. For child tasks (which are always called from ~#renderChildTodoGroups~), we need to show the first line of details regardless of status.
+
+Approach: Add a ~showDetailPreview~ parameter to ~#formatTodoLine~ (default ~false~). When ~true~, show first line of details for non-in_progress statuses. Set ~true~ when called from ~#renderChildTodoGroups~.
+
+#+begin_src typescript
+// In #renderChildTodoGroups, change the call:
+// Before:
+lines.push(this.#formatTodoLine(nestedChild, `${prefix}  `));
+// After:
+lines.push(this.#formatTodoLine(nestedChild, `${prefix}  `, true));
+
+// In #formatTodoLine, add parameter:
+#formatTodoLine(todo: TodoItem, prefix: string, showDetailPreview = false): string {
+    // ... existing switch logic ...
+    // For non-in_progress cases (completed, pending, default), after the main line:
+    // Add detail preview if showDetailPreview && todo.details
+}
+#+end_src
+
+Specifically, for each non-in_progress branch in the switch:
+
+#+begin_src typescript
+case "completed": {
+    const main = theme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(content)}`);
+    const lines = [main];
+    if (showDetailPreview && todo.details) {
+        const firstLine = todo.details.split("
+")[0];
+        if (firstLine) {
+            lines.push(theme.fg("dim", `${prefix}  ${truncateToWidth(replaceTabs(firstLine), 60)}`));
+        }
+    }
+    return [...lines, ...childLines].join("
+");
+}
+#+end_src
+
+Apply the same pattern to: ~completed~, ~abandoned~, ~failed~, ~gate_failed~, and ~default~ (pending) cases.
+
+The ~in_progress~ case already shows full details — no change needed there.
+
+Import ~truncateToWidth~ and ~replaceTabs~ from the appropriate modules (already imported in this file — verify via grep).
+
+* Edge Cases
+- Child task with no ~details~: nothing extra is shown (same as before)
+- Child task with empty first line in details (e.g., details starts with ~
+~): skip the preview
+- Very long first line: truncated to 60 chars via ~truncateToWidth~
+- Tabs in details: sanitized via ~replaceTabs~ (required by TUI sanitization rules)
+
+* Verification
+- Read ~packages/coding-agent/src/modes/interactive-mode.ts~ — ~#formatTodoLine~ has ~showDetailPreview~ parameter
+- ~#renderChildTodoGroups~ passes ~true~ for ~showDetailPreview~
+- ~bun check:ts~ passes
+- Visual: when a task agent creates sniper todos that become childGroups, the TUI should show the first line of details under each child task name, dimmed, even for pending tasks
+- Screenshot artifact: not required (prompt-only change + minor TUI tweak), but manual visual verification recommended

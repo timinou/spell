@@ -893,7 +893,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				const nestedChild = child.delegation
 					? { ...child, delegation: { ...child.delegation, childGroups: undefined } }
 					: child;
-				lines.push(this.#formatTodoLine(nestedChild, `${prefix}  `));
+				lines.push(this.#formatTodoLine(nestedChild, `${prefix}  `, true));
 			}
 		}
 		return lines;
@@ -934,14 +934,19 @@ export class InteractiveMode implements InteractiveModeContext {
 		return `${todo.content} ${spinner} ${activityText}`;
 	}
 
-	#formatTodoLine(todo: TodoItem, prefix: string): string {
+	#formatTodoLine(todo: TodoItem, prefix: string, showDetailPreview = false): string {
 		const checkbox = theme.checkbox;
 		const content = this.#getDelegatedTodoContent(todo);
 		const childLines = this.#renderChildTodoGroups(todo, `${prefix}  `);
+		const detailPreview =
+			showDetailPreview && todo.status !== "in_progress" && todo.details
+				? this.#renderDetailPreview(todo.details, prefix)
+				: [];
 		switch (todo.status) {
 			case "completed":
 				return [
 					theme.fg("success", `${prefix}${checkbox.checked} ${chalk.strikethrough(content)}`),
+					...detailPreview,
 					...childLines,
 				].join("\n");
 			case "in_progress": {
@@ -955,13 +960,26 @@ export class InteractiveMode implements InteractiveModeContext {
 			case "abandoned":
 				return [
 					theme.fg("error", `${prefix}${checkbox.unchecked} ${chalk.strikethrough(content)}`),
+					...detailPreview,
 					...childLines,
 				].join("\n");
 			case "failed":
-				return [theme.fg("error", `${prefix}${checkbox.unchecked} ${content}`), ...childLines].join("\n");
+				return [
+					theme.fg("error", `${prefix}${checkbox.unchecked} ${content}`),
+					...detailPreview,
+					...childLines,
+				].join("\n");
 			default:
-				return [theme.fg("dim", `${prefix}${checkbox.unchecked} ${content}`), ...childLines].join("\n");
+				return [theme.fg("dim", `${prefix}${checkbox.unchecked} ${content}`), ...detailPreview, ...childLines].join(
+					"\n",
+				);
 		}
+	}
+
+	#renderDetailPreview(details: string, prefix: string): string[] {
+		const firstLine = details.split("\n")[0];
+		if (!firstLine?.trim()) return [];
+		return [theme.fg("dim", `${prefix}  ${truncateToWidth(replaceTabs(firstLine), 60)}`)];
 	}
 
 	#getActiveGroup(groups: TodoGroup[]): TodoGroup | undefined {

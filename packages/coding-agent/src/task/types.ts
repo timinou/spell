@@ -41,10 +41,12 @@ export const taskItemSchema = Type.Object({
 	description: Type.String({
 		description: "Short one-liner for UI display only — not seen by the subagent",
 	}),
-	assignment: Type.String({
-		description:
-			"Complete per-task instructions the subagent executes. Must follow the Target/Change/Edge Cases/Acceptance structure. Only include per-task deltas — shared background belongs in `context`.",
-	}),
+	assignment: Type.Optional(
+		Type.String({
+			description:
+				"Complete per-task instructions the subagent executes. When omitted and todoRef is set, auto-derived from the linked todo's content and details. Must follow the Target/Change/Edge Cases/Acceptance structure when provided explicitly.",
+		}),
+	),
 	blockers: Type.Optional(
 		Type.Array(Type.String(), {
 			description:

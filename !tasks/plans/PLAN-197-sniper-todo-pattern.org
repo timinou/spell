@@ -1,0 +1,83 @@
+#+TITLE: Sniper Todo Pattern
+#+STATE: DONE
+#+SESSION_ID: 14b702a6c9bedfec
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-16-40-870Z_14b702a6c9bedfec.jsonl]]
+#+CUSTOM_ID: PLAN-197-sniper-todo-pattern
+
+
+NOTE [2026-04-12]: All 4 child items completed and transitioned to DONE. Plan execution complete.
+
+* Initial Message
+
+I want tasks to be encouraged to use the sniper tool. make it so that the todo write, when used by subagents, uses the sniper tool (i.e. provides the exact context needed to efficiently do it then leave (no room for questions, terse). This is the level of the subtodos that should be shown in the UI. Explain how to make this a powerful tool that is used
+
+* Context
+
+** Problem
+Subagents create variable-quality todo items when planning work. The weak guidance ("MAY use todo_write") produces vague tasks that require exploration and questions to execute. This wastes tokens and time.
+
+** Approach: The Sniper Pattern
+Define and enforce a "sniper todo" pattern: tasks so precise they can be executed mechanically — exact files, exact changes, exact acceptance. Aim, fire, done.
+
+The cascade makes this powerful:
+1. Parent dispatches a ~task~ agent
+2. Task agent investigates, then creates sniper todos via ~todo_write~
+3. Task agent dispatches each sniper todo to ~quick_task~ via the ~task~ tool using ~todoRef~
+4. Quick_task agents execute mechanically in parallel
+5. Task agent verifies results
+
+The key enabler: todoRef-derived assignment. When ~todoRef~ is set and ~assignment~ is omitted, the system auto-constructs the assignment from the todo's content+details. Zero duplication, zero friction.
+
+** Key Decisions
+1. Sniper format: ~content~ = ultra-terse verb+target (5-10 words); ~details~ = full execution spec
+2. Prompt strength: MUST for ~task~ agents, SHOULD for others
+3. ~assignment~ becomes optional in TaskItem schema; auto-derived from todoRef when missing
+4. TUI shows first line of child task ~details~ regardless of status (dimmed, truncated)
+5. Task agent prompt teaches plan-then-delegate workflow with concrete example
+
+* Verification
+- ~bun check:ts~ passes from repo root
+- Grep "sniper" in ~packages/coding-agent/src/prompts/~ — term established in todo-write.md and subagent-system-prompt.md
+- Grep ~Type.Optional~ around ~assignment~ in ~packages/coding-agent/src/task/types.ts~ — assignment is optional
+- Grep ~resolveTodoRefAssignments~ in ~packages/coding-agent/src/task/index.ts~ — resolution logic exists
+- Grep ~showDetailPreview~ in ~packages/coding-agent/src/modes/interactive-mode.ts~ — child detail display works
+- Read ~packages/coding-agent/src/prompts/agents/task.md~ — plan-then-delegate workflow documented
+
+* Execution Manifest
+
+** Wave 1: Foundation (prompts)
+- [[id:FEAT-481-sniper-todo-prompt-guidance]] — Define sniper pattern in todo-write.md and subagent-system-prompt.md (1h)
+
+** Wave 2: Runtime (code, depends on Wave 1)
+- [[id:FEAT-482-todoref-derived-assignment-for-zero-fric]] — Make assignment optional, resolve from todoRef (2h). Depends on FEAT-481.
+- [[id:FEAT-484-tui-child-task-details-display]] — Show child task detail previews in TUI (1h). Independent, can run parallel with FEAT-482.
+
+** Wave 3: Prompt cascade (depends on Wave 2)
+- [[id:FEAT-483-task-agent-plan-then-delegate-prompt]] — Teach task agent the cascade workflow (1h). Depends on FEAT-481 + FEAT-482.
+
+Total effort: ~5h
+
+
+** Completion [2026-04-12]
+
+*** Verification
+- ~bun check:ts~ passes (biome check + tsgo): 1877 files, 0 errors
+- Grep "sniper" in ~packages/coding-agent/src/prompts/~: found in todo-write.md (section heading + body), subagent-system-prompt.md (MUST guidance), task.md tool (dispatch example, todoRef docs), task.md agent (workflow section)
+- ~Type.Optional~ wraps ~assignment~ in ~packages/coding-agent/src/task/types.ts~ line 44
+- ~resolveTodoRefAssignments~ exists in ~packages/coding-agent/src/task/index.ts~ line 246, called from ~execute()~ line 624
+- ~buildSniperAssignment~ exported from ~packages/coding-agent/src/task/index.ts~ line 134
+- ~showDetailPreview~ parameter in ~#formatTodoLine~ at ~packages/coding-agent/src/modes/interactive-mode.ts~ line 937
+- ~#renderDetailPreview~ helper at line 981 renders first line of details dimmed/truncated for child tasks
+- Task agent prompt ~packages/coding-agent/src/prompts/agents/task.md~ has ~<workflow>~ section with plan-then-delegate pattern
+
+*** Artifacts
+- ~packages/coding-agent/src/prompts/tools/todo-write.md~ — Sniper Pattern section (lines 117-146)
+- ~packages/coding-agent/src/prompts/system/subagent-system-prompt.md~ — MUST sniper guidance (line 18)
+- ~packages/coding-agent/src/task/types.ts~ — assignment made Optional (line 44)
+- ~packages/coding-agent/src/task/index.ts~ — buildSniperAssignment (line 134), #resolveTodoRefAssignments (line 246)
+- ~packages/coding-agent/src/prompts/tools/task.md~ — updated .assignment/.todoRef docs, sniper dispatch example
+- ~packages/coding-agent/src/prompts/agents/task.md~ — <workflow> plan-then-delegate section
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ — showDetailPreview + #renderDetailPreview
+
+*** Deviations
+None.

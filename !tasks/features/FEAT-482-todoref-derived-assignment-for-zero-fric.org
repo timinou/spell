@@ -1,0 +1,116 @@
+#+TITLE: TodoRef-Derived Assignment for Zero-Friction Dispatch
+#+STATE: DONE
+#+SESSION_ID: 14b702a6c9bedfec
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-16-40-870Z_14b702a6c9bedfec.jsonl]]
+#+CUSTOM_ID: FEAT-482-todoref-derived-assignment-for-zero-fric
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: agent-runtime
+#+DEPENDS: FEAT-481-sniper-todo-prompt-guidance
+
+NOTE [2026-04-12]: assignment made Type.Optional in taskItemSchema. resolveTodoRefAssignments + buildSniperAssignment added to index.ts. task.md updated with docs and example.
+
+* Initial Message
+
+I want tasks to be encouraged to use the sniper tool. make it so that the todo write, when used by subagents, uses the sniper tool (i.e. provides the exact context needed to efficiently do it then leave (no room for questions, terse). This is the level of the subtodos that should be shown in the UI. Explain how to make this a powerful tool that is used
+
+* Context
+Currently the ~task~ tool requires ~assignment~ as a required string field. When a task agent creates sniper todos via ~todo_write~ and wants to delegate them to ~quick_task~ agents, it must duplicate the sniper todo's content+details into the ~assignment~ field. This is wasteful and error-prone.
+
+The fix: make ~assignment~ optional. When a task has ~todoRef~ but no ~assignment~, auto-construct the assignment from the linked todo item's ~content~ and ~details~.
+
+This makes the sniper todo THE assignment — zero duplication, zero friction.
+
+* Design Decisions
+- ~assignment~ becomes optional in the TypeBox schema (it's already optional in the internal ~TaskItem~ TS interface at line 173 of types.ts)
+- Resolution happens early in ~execute()~, before validation and dispatch
+- The constructed assignment format: ~## Task: <content>
+
+<details>~
+- If ~todoRef~ is provided but the todo is not found OR has no details, fall through to the existing validation (which will error on missing assignment)
+- The ~task.md~ tool prompt must document this: "When ~todoRef~ is set and ~assignment~ is omitted, the assignment is auto-derived from the linked todo's content and details."
+
+* Implementation
+
+** Modify ~packages/coding-agent/src/task/types.ts~
+Change ~assignment~ from required to optional in ~taskItemSchema~:
+#+begin_src typescript
+// Before:
+assignment: Type.String({ description: "..." }),
+
+// After:
+assignment: Type.Optional(Type.String({ description: "..." })),
+#+end_src
+
+** Modify ~packages/coding-agent/src/task/index.ts~
+Add a resolution step early in ~execute()~ (and ~#executeSync~), before ~#validateTaskBatch~ is called.
+
+Create a new private method:
+#+begin_src typescript
+#resolveTodoRefAssignments(tasks: TaskItem[]): TaskItem[] {
+    const groups = this.session.getTodoGroups?.();
+    if (!groups || groups.length === 0) return tasks;
+    return tasks.map(task => {
+        if (task.assignment?.trim() || !task.todoRef) return task;
+        const todo = findTask(groups, task.todoRef);
+        if (!todo) return task;
+        const assignment = buildSniperAssignment(todo);
+        return assignment ? { ...task, assignment } : task;
+    });
+}
+#+end_src
+
+Add a helper function (can be module-level or in template.ts):
+#+begin_src typescript
+export function buildSniperAssignment(todo: TodoItem): string | undefined {
+    if (!todo.details && !todo.content) return undefined;
+    const parts: string[] = [];
+    parts.push(`## Task: ${todo.content}`);
+    if (todo.details) {
+        parts.push("");
+        parts.push(todo.details);
+    }
+    return parts.join("
+");
+}
+#+end_src
+
+Call ~#resolveTodoRefAssignments~ in both ~execute()~ and ~#executeSync()~ right after extracting ~rawTasks~ from params but before any validation.
+
+** Modify ~packages/coding-agent/src/prompts/tools/task.md~
+Add a note about todoRef-derived assignment after the existing ~.todoRef~ parameter documentation:
+
+#+begin_example
+When `todoRef` is set and `assignment` is omitted, the assignment is automatically derived from the linked todo item's `content` and `details` fields. This enables zero-friction dispatch of sniper todos — create precise todos via `todo_write`, then dispatch them with just a `todoRef`.
+#+end_example
+
+Add a new example showing the pattern:
+#+begin_example
+<example label="Dispatch sniper todos via todoRef">
+After creating sniper todos with `todo_write`, dispatch them to `quick_task` agents using only `todoRef`:
+```
+{
+  agent: "quick_task",
+  tasks: [
+    { id: "ExtractValidate", description: "Extract validate()", todoRef: "task-4" },
+    { id: "UpdateCallers", description: "Update callers", todoRef: "task-5" },
+    { id: "AddExpiry", description: "Add expiry check", todoRef: "task-6", blockers: ["ExtractValidate", "UpdateCallers"] },
+  ]
+}
+```
+Each task's assignment is auto-derived from the linked todo item's content and details. No need to duplicate the sniper spec.
+</example>
+#+end_example
+
+* Edge Cases
+- If ~todoRef~ is set but the todo item doesn't exist: task proceeds with empty assignment, validation will catch it
+- If todo item exists but has no ~details~: assignment is constructed from ~content~ alone (minimal but functional)
+- If both ~assignment~ and ~todoRef~ are provided: explicit ~assignment~ takes precedence (no override)
+- If the todo's details are very long: no truncation — the task tool already has payload size validation
+
+* Verification
+- ~bun check:ts~ passes from repo root
+- Grep ~taskItemSchema~ in types.ts: ~assignment~ should be wrapped in ~Type.Optional~
+- Grep ~resolveTodoRefAssignments~ in index.ts: called in both ~execute~ and ~#executeSync~
+- Grep ~buildSniperAssignment~ in the codebase: exists and is tested
+- Manual test: dispatch a task with ~todoRef~ and no ~assignment~, verify the subagent receives the todo's content+details as its assignment
