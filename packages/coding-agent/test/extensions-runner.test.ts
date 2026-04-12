@@ -266,6 +266,74 @@ describe("ExtensionRunner", () => {
 			expect(errors[0].error).toContain("Handler error!");
 			expect(errors[0].event).toBe("context");
 		});
+
+		it("returns messages unchanged when no context handlers are registered", async () => {
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+
+			const messages = [
+				{
+					role: "toolResult" as const,
+					toolCallId: "tool-1",
+					toolName: "code",
+					content: [{ type: "text" as const, text: "ok" }],
+					details: { bad: () => "boom" },
+					isError: false,
+					timestamp: Date.now(),
+				},
+			];
+
+			const emitted = await runner.emitContext(messages);
+
+			expect(emitted).toBe(messages);
+		});
+
+		it("sanitizes non-cloneable context messages before invoking handlers", async () => {
+			const extCode = `
+			export default function(pi) {
+				pi.on("context", async (event) => ({ messages: event.messages }));
+			}
+		`;
+			fs.writeFileSync(path.join(extensionsDir, "clone-safe.ts"), extCode);
+
+			const result = await loadTestExtensions();
+			const runner = new ExtensionRunner(
+				result.extensions,
+				result.runtime,
+				tempDir.path(),
+				sessionManager,
+				modelRegistry,
+			);
+
+			const emitted = await runner.emitContext([
+				{
+					role: "toolResult" as const,
+					toolCallId: "tool-1",
+					toolName: "code",
+					content: [{ type: "text" as const, text: "ok" }],
+					details: {
+						keep: "ok",
+						bad: function bad() {
+							return "boom";
+						},
+					},
+					isError: false,
+					timestamp: Date.now(),
+				},
+			]);
+
+			expect(emitted[0]).toEqual(
+				expect.objectContaining({
+					details: { keep: "ok", bad: "[Function bad]" },
+				}),
+			);
+		});
 	});
 
 	describe("message renderers", () => {

@@ -128,6 +128,54 @@ export async function emitSessionShutdownEvent(extensionRunner: ExtensionRunner 
 	return false;
 }
 
+function makeCloneSafe(value: unknown, seen = new WeakSet<object>()): unknown {
+	if (value === null) return null;
+	switch (typeof value) {
+		case "string":
+		case "number":
+		case "boolean":
+			return value;
+		case "bigint":
+			return value.toString();
+		case "undefined":
+			return undefined;
+		case "symbol":
+			return value.toString();
+		case "function":
+			return `[Function ${value.name || "anonymous"}]`;
+		case "object":
+			if (value instanceof Date) return value.toISOString();
+			if (value instanceof Error) {
+				return { name: value.name, message: value.message, stack: value.stack };
+			}
+			if (Array.isArray(value)) {
+				return value.map(item => makeCloneSafe(item, seen));
+			}
+			if (seen.has(value)) return "[Circular]";
+			seen.add(value);
+			try {
+				const clone: Record<string, unknown> = {};
+				for (const [key, entry] of Object.entries(value)) {
+					clone[key] = makeCloneSafe(entry, seen);
+				}
+				return clone;
+			} catch {
+				return String(value);
+			}
+	}
+}
+
+function cloneContextMessages(messages: AgentMessage[]): AgentMessage[] {
+	try {
+		return structuredClone(messages);
+	} catch (err) {
+		logger.warn("extension context clone fallback", {
+			error: err instanceof Error ? err.message : String(err),
+		});
+		return makeCloneSafe(messages) as AgentMessage[];
+	}
+}
+
 const noOpUIContext: ExtensionUIContext = {
 	select: async (_title, _options, _dialogOptions) => undefined,
 	confirm: async (_title, _message, _dialogOptions) => false,
@@ -695,9 +743,12 @@ export class ExtensionRunner {
 	}
 
 	async emitContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
-		const ctx = this.createContext();
-		let currentMessages = structuredClone(messages);
+		if (!this.hasHandlers("context")) {
+			return messages;
+		}
 
+		const ctx = this.createContext();
+		let currentMessages = cloneContextMessages(messages);
 		for (const ext of this.extensions) {
 			const handlers = ext.handlers.get("context");
 			if (!handlers || handlers.length === 0) continue;
