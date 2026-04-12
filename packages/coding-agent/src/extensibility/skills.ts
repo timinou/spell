@@ -8,12 +8,19 @@ import { type Skill as CapabilitySkill, loadCapability } from "../discovery";
 import { compareSkillOrder, scanSkillsFromDir } from "../discovery/helpers";
 import { expandTilde } from "../tools/path-utils";
 
+function normalizeSkillGlobs(globs: unknown): string[] | undefined {
+	if (!Array.isArray(globs)) return undefined;
+	const normalized = globs.map(glob => (typeof glob === "string" ? glob.trim() : "")).filter(glob => glob.length > 0);
+	return normalized.length > 0 ? normalized : undefined;
+}
+
 export interface Skill {
 	name: string;
 	description: string;
 	filePath: string;
 	baseDir: string;
 	source: string;
+	globs?: string[];
 	/** Source metadata for display */
 	_source?: SourceMeta;
 }
@@ -56,6 +63,7 @@ export async function loadSkillsFromDir(options: LoadSkillsFromDirOptions): Prom
 			filePath: capSkill.path,
 			baseDir: capSkill.path.replace(/\/SKILL\.(md|org)$/, ""),
 			source: options.source,
+			globs: normalizeSkillGlobs(capSkill.frontmatter?.globs),
 			_source: capSkill._source,
 		})),
 		warnings: (result.warnings ?? []).map(message => ({ skillPath: options.dir, message })),
@@ -170,6 +178,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 				filePath: capSkill.path,
 				baseDir: capSkill.path.replace(/\/SKILL\.(md|org)$/, ""),
 				source: `${capSkill._source.provider}:${capSkill.level}`,
+				globs: normalizeSkillGlobs(capSkill.frontmatter?.globs),
 				_source: capSkill._source,
 			});
 			realPathSet.add(resolvedPath);
@@ -206,6 +215,7 @@ export async function loadSkills(options: LoadSkillsOptions = {}): Promise<LoadS
 					filePath: capSkill.path,
 					baseDir: capSkill.path.replace(/\/SKILL\.(md|org)$/, ""),
 					source: "custom:user",
+					globs: normalizeSkillGlobs(capSkill.frontmatter?.globs),
 					_source: { ...capSkill._source, providerName: "Custom" },
 				},
 				path: capSkill.path,

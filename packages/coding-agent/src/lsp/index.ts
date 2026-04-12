@@ -952,7 +952,31 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 		// Status action doesn't need a file
 		if (action === "status") {
-			const servers = Object.keys(config.servers);
+			const activeClients = getActiveClients();
+			const configuredEntries = Object.entries(config.servers);
+			const activeClientNames = new Set(activeClients.map(client => client.name));
+			const activeConfiguredServerNames = Array.from(
+				new Set(
+					configuredEntries
+						.filter(([, serverConfig]) =>
+							activeClients.some(
+								client => client.name === serverConfig.command || client.name === serverConfig.resolvedCommand,
+							),
+						)
+						.map(([serverName]) => serverName),
+				),
+			);
+			const unmatchedActiveClientNames = Array.from(activeClientNames).filter(
+				clientName =>
+					!configuredEntries.some(
+						([, serverConfig]) =>
+							clientName === serverConfig.command || clientName === serverConfig.resolvedCommand,
+					),
+			);
+			const activeServerNames = [...activeConfiguredServerNames, ...unmatchedActiveClientNames];
+			const configuredButNotStarted = configuredEntries
+				.map(([serverName]) => serverName)
+				.filter(serverName => !activeConfiguredServerNames.includes(serverName));
 			const lspmuxState = await detectLspmux();
 			const lspmuxStatus = lspmuxState.available
 				? lspmuxState.running
@@ -960,12 +984,18 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 					: "lspmux: installed but server not running"
 				: "";
 
-			const serverStatus =
-				servers.length > 0
-					? `Active language servers: ${servers.join(", ")}`
-					: "No language servers configured for this project";
+			const statusLines: string[] = [];
+			if (activeServerNames.length > 0) {
+				statusLines.push(`Active language servers: ${activeServerNames.join(", ")}`);
+			}
+			if (configuredButNotStarted.length > 0) {
+				statusLines.push(`Configured but not started language servers: ${configuredButNotStarted.join(", ")}`);
+			}
+			if (statusLines.length === 0) {
+				statusLines.push("No language servers configured for this project");
+			}
 
-			const output = lspmuxStatus ? `${serverStatus}\n${lspmuxStatus}` : serverStatus;
+			const output = lspmuxStatus ? `${statusLines.join("\n")}\n${lspmuxStatus}` : statusLines.join("\n");
 			return {
 				content: [{ type: "text", text: output }],
 				details: { action, success: true, request: params },

@@ -1,0 +1,94 @@
+#+TITLE: Add Typst outline smoke test for code tool
+#+STATE: DONE
+#+SESSION_ID: 14b6ef4f37cdfb5c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-52-10-463Z_14b6ef4f37cdfb5c.jsonl]]
+#+CUSTOM_ID: FEAT-474-add-typst-outline-smoke-test-for-code-to
+#+EFFORT: 20m
+#+PRIORITY: C
+#+LAYER: coding-agent
+
+NOTE [2026-04-12]: Implemented under PLAN-195: added TypeScript-side code tool smoke coverage for Typst outline wiring.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-059-audit-implementation:
+
+- **What**: Skill `globs` are parsed but dropped before prompt-building, so the new Typst skill cannot actually auto-activate based on `.typ` file presence.
+  - **Where**: `packages/coding-agent/src/extensibility/skills.ts` around the `CapabilitySkill -> Skill` mapping (`loadSkillsFromDir` and `loadSkills` result assembly); downstream consumers in `packages/coding-agent/src/sdk.ts` / `packages/coding-agent/src/system-prompt.ts`
+  - **Why**: This leaves a core plan contract only partially met: the Typst skill exists, but current runtime skill loading cannot use `globs: ["**/*.typ"]` to load it conditionally. The frontmatter is effectively decorative for the execution path that builds prompts.
+  - **Effort**: `medium`
+
+- **What**: `lsp status` reports configured servers as “Active language servers,” even when no client has been started.
+  - **Where**: `packages/coding-agent/src/lsp/index.ts` around the `action === "status"` branch
+  - **Why**: After adding `.git` to Typst root markers, this can now report `tinymist` as active before any Typst file has actually initialized a client. That is a contract violation in the operator-facing surface: callers cannot distinguish “configured” from “running.”
+  - **Effort**: `trivial`
+
+- **What**: There is no automated regression test for the `.git`-based Tinymist activation path.
+  - **Where**: `packages/coding-agent/test/` LSP test coverage; specifically no test around `loadConfig()` / `getServerForFile()` for `.typ` files in a repo without `typst.toml`
+  - **Why**: Current Typst LSP support depends on a deliberate deviation from the original plan (`rootMarkers: ["typst.toml", ".git"]`). Without a test, a future cleanup could silently remove `.git` and break Typst LSP in ordinary repos.
+  - **Effort**: `small`
+
+- **What**: Grammar generation still resolves Typst node-types by the first matching cargo-registry prefix, not the dependency version Cargo actually selected.
+  - **Where**: `crates/pi-code-engine/build.rs`, `GRAMMARS` Typst entry and `find_node_types_json()`
+  - **Why**: If multiple `codebook-tree-sitter-typst-*` versions exist in the cargo cache, generated rules can drift from the linked parser crate. That creates a non-deterministic failure mode that depends on machine state, not source state.
+  - **Effort**: `medium`
+
+- **What**: There is no TypeScript-side smoke test that the `code` tool surface handles a real `.typ` file end-to-end.
+  - **Where**: `packages/coding-agent/test/tools/code.test.ts`
+  - **Why**: Rust tests prove native Typst outline/navigation behavior, but they do not protect the user-facing `code` tool boundary. A future wiring/rendering regression in `packages/coding-agent` could break Typst support while `pi-code-engine` tests still pass.
+  - **Effort**: `small`
+
+* Context
+
+The code tool (=packages/coding-agent/src/tools/code.ts=) delegates to =executeCodeBuffer= from =@oh-my-pi/pi-natives=. Rust tests in =pi-code-engine= prove Typst outline/navigation works at the native level, but there is no TypeScript-side test proving the code tool correctly wires and formats a =.typ= outline result. A future wiring/rendering regression could break Typst support while Rust tests still pass.
+
+* Design
+
+** File: =packages/coding-agent/test/tools/code.test.ts=
+
+Follow the existing mock pattern (e.g., the test at lines 85-101 "routes file-local commands to executeCodeBuffer"). All existing tests mock =executeCodeBuffer= via =spyOn(nativesModule, "executeCodeBuffer").mockReturnValue(...)=.
+
+** Test case
+
+#+begin_src typescript
+it("formats Typst outline result from native code buffer", async () => {
+    const typstOutline = [
+        { name: "\"theme.typ\"", kind: "import", line: 1, end_line: 1, column: 1, exported: false, signature: "import \"theme.typ\": *" },
+        { name: "title", kind: "let", line: 2, end_line: 2, column: 1, exported: false, signature: "let title =" },
+        { name: "heading.where(level: 1)", kind: "show", line: 3, end_line: 3, column: 1, exported: false, signature: "show heading.where(level: 1):" },
+    ];
+    const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+        output: typstOutline,
+        error: false,
+    });
+    const tool = new CodeTool(createSession());
+    const result = await tool.execute("tool", { command: "outline", file: "/tmp/test/doc.typ" });
+    const text = result.content.find(c => c.type === "text")?.text ?? "";
+    const parsed = JSON.parse(text);
+
+    expect(parsed).toHaveLength(3);
+    expect(parsed[0].kind).toBe("import");
+    expect(parsed[1].kind).toBe("let");
+    expect(parsed[2].kind).toBe("show");
+    expect(parsed[2].name).toBe("heading.where(level: 1)");
+
+    expect(bufferSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+            command: "outline",
+            file: "/tmp/test/doc.typ",
+        }),
+    );
+});
+#+end_src
+
+** What this proves
+
+- The code tool correctly passes the outline command and file path to =executeCodeBuffer=
+- The result is correctly JSON-serialized and returned as text content
+- The Typst-specific declaration kinds (import, let, show) survive the formatting pipeline
+- A future regression in the wiring will fail this test before hitting production
+
+* Verification
+
+- =bun test packages/coding-agent/test/tools/code.test.ts= passes
+- =bun check:ts= passes

@@ -1,0 +1,172 @@
+#+TITLE: buildrs grammar generation picks first registry match not locked version
+#+STATE: DONE
+#+SESSION_ID: 14b6ef4f37cdfb5c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-52-10-463Z_14b6ef4f37cdfb5c.jsonl]]
+#+CUSTOM_ID: BUG-217-build-rs-grammar-generation-picks-first
+#+EFFORT: 1h
+#+PRIORITY: B
+#+LAYER: rust
+
+NOTE [2026-04-12]: Implemented under PLAN-195: build.rs now prefers dependency-selected registry versions and reruns on Cargo.toml changes.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-059-audit-implementation:
+
+- **What**: Skill `globs` are parsed but dropped before prompt-building, so the new Typst skill cannot actually auto-activate based on `.typ` file presence.
+  - **Where**: `packages/coding-agent/src/extensibility/skills.ts` around the `CapabilitySkill -> Skill` mapping (`loadSkillsFromDir` and `loadSkills` result assembly); downstream consumers in `packages/coding-agent/src/sdk.ts` / `packages/coding-agent/src/system-prompt.ts`
+  - **Why**: This leaves a core plan contract only partially met: the Typst skill exists, but current runtime skill loading cannot use `globs: ["**/*.typ"]` to load it conditionally. The frontmatter is effectively decorative for the execution path that builds prompts.
+  - **Effort**: `medium`
+
+- **What**: `lsp status` reports configured servers as “Active language servers,” even when no client has been started.
+  - **Where**: `packages/coding-agent/src/lsp/index.ts` around the `action === "status"` branch
+  - **Why**: After adding `.git` to Typst root markers, this can now report `tinymist` as active before any Typst file has actually initialized a client. That is a contract violation in the operator-facing surface: callers cannot distinguish “configured” from “running.”
+  - **Effort**: `trivial`
+
+- **What**: There is no automated regression test for the `.git`-based Tinymist activation path.
+  - **Where**: `packages/coding-agent/test/` LSP test coverage; specifically no test around `loadConfig()` / `getServerForFile()` for `.typ` files in a repo without `typst.toml`
+  - **Why**: Current Typst LSP support depends on a deliberate deviation from the original plan (`rootMarkers: ["typst.toml", ".git"]`). Without a test, a future cleanup could silently remove `.git` and break Typst LSP in ordinary repos.
+  - **Effort**: `small`
+
+- **What**: Grammar generation still resolves Typst node-types by the first matching cargo-registry prefix, not the dependency version Cargo actually selected.
+  - **Where**: `crates/pi-code-engine/build.rs`, `GRAMMARS` Typst entry and `find_node_types_json()`
+  - **Why**: If multiple `codebook-tree-sitter-typst-*` versions exist in the cargo cache, generated rules can drift from the linked parser crate. That creates a non-deterministic failure mode that depends on machine state, not source state.
+  - **Effort**: `medium`
+
+- **What**: There is no TypeScript-side smoke test that the `code` tool surface handles a real `.typ` file end-to-end.
+  - **Where**: `packages/coding-agent/test/tools/code.test.ts`
+  - **Why**: Rust tests prove native Typst outline/navigation behavior, but they do not protect the user-facing `code` tool boundary. A future wiring/rendering regression in `packages/coding-agent` could break Typst support while `pi-code-engine` tests still pass.
+  - **Effort**: `small`
+
+* Context
+
+=crates/pi-code-engine/build.rs= generates grammar modules from =node-types.json= files found in the cargo registry. The =find_node_types_json()= function (lines 111-151) scans =~/.cargo/registry/src/= for directories matching a package prefix and returns the FIRST match. If multiple versions of a grammar crate exist in the registry cache (e.g., =codebook-tree-sitter-typst-0.12.0= and =codebook-tree-sitter-typst-0.12.1=), the generated grammar rules may not match the version Cargo actually linked.
+
+This affects ALL five grammar entries (typescript, rust, python, typst, elixir), not just Typst. The =GRAMMARS= array (lines 51-77) uses identical prefix-matching for all.
+
+Grammar crates do not use =links= keys, so =DEP_*= environment variables are unavailable. No new build-dependencies are needed — the fix uses string parsing of =Cargo.toml=.
+
+* Design
+
+** 1. Add version extraction from Cargo.toml
+
+Add a helper function that reads the dependency version spec from Cargo.toml:
+
+#+begin_src rust
+/// Extract the version spec for a dependency from Cargo.toml.
+/// Handles both `name = "version"` and `name = { version = "..." }` forms.
+fn dependency_version(dep_name: &str) -> Option<String> {
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").ok()?;
+    let cargo_toml = fs::read_to_string(Path::new(&manifest_dir).join("Cargo.toml")).ok()?;
+    for line in cargo_toml.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with(dep_name) {
+            continue;
+        }
+        let after_name = trimmed[dep_name.len()..].trim_start();
+        if !after_name.starts_with('=') {
+            continue;
+        }
+        // Extract the first quoted string (version spec)
+        if let Some(start) = after_name.find('"') {
+            if let Some(end) = after_name[start + 1..].find('"') {
+                return Some(after_name[start + 1..start + 1 + end].to_string());
+            }
+        }
+    }
+    None
+}
+#+end_src
+
+** 2. Add a =dep_name= field to GrammarSource
+
+#+begin_src rust
+struct GrammarSource {
+    name:           &'static str,
+    package_prefix: &'static str,
+    json_subpath:   &'static str,
+    dep_name:       &'static str, // Cargo.toml dependency name
+}
+#+end_src
+
+Populate for each entry:
+- typescript: ="tree-sitter-typescript"=
+- rust: ="tree-sitter-rust"=
+- python: ="tree-sitter-python"=
+- typst: ="codebook-tree-sitter-typst"=
+- elixir: ="tree-sitter-elixir"=
+
+** 3. Modify find_node_types_json to prefer versioned match
+
+Instead of returning the first prefix match, collect all candidates:
+
+#+begin_src rust
+fn find_node_types_json(grammar: &GrammarSource, out_dir: &str) -> Result<std::path::PathBuf, String> {
+    let version_spec = dependency_version(grammar.dep_name);
+
+    // ... existing registry scanning ...
+
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+    for entry in entries.flatten() {
+        // ... existing nested loop ...
+        if name_str.starts_with(grammar.package_prefix) {
+            let candidate = crate_entry.path().join(grammar.json_subpath);
+            if candidate.exists() {
+                // If we have a version spec, check if directory name matches
+                if let Some(ref spec) = version_spec {
+                    let dir_version = &name_str[grammar.package_prefix.len()..];
+                    if dir_version == spec.as_str() || dir_version.starts_with(&format!("{spec}.")) {
+                        // Exact or compatible match — use immediately
+                        return Ok(candidate);
+                    }
+                }
+                candidates.push(candidate);
+            }
+        }
+    }
+
+    // Fallback to first candidate (existing behavior)
+    candidates.into_iter().next().ok_or_else(|| format!(
+        "node-types.json not found for {} (searched {})",
+        grammar.name, registry_src.display()
+    ))
+}
+#+end_src
+
+The version matching logic:
+- Extract the version suffix from the directory name (everything after the prefix)
+- Compare against the Cargo.toml version spec
+- Exact match (e.g., ="0.12.1"= matches directory =codebook-tree-sitter-typst-0.12.1=) → use immediately
+- Compatible match (e.g., ="0.23"= matches =tree-sitter-typescript-0.23.2= because ="0.23.2".starts_with("0.23.")=) → use immediately
+- No match → fall back to first candidate (graceful degradation)
+
+** 4. Add rerun-if-changed for Cargo.toml
+
+Since build.rs now reads Cargo.toml, add:
+#+begin_src rust
+println!("cargo:rerun-if-changed=Cargo.toml");
+#+end_src
+
+* Verification
+
+** Tests
+
+The existing test =generated_production_rules_nonempty= in =crates/pi-code-engine/src/language/mod.rs= verifies that all grammar modules produce non-empty rules. This catches the failure case where the wrong version has different node types.
+
+Add a focused test:
+#+begin_src rust
+#[test]
+fn typst_grammar_has_let_production_rule() {
+    let reg = LanguageRegistry::with_builtins().unwrap();
+    let typst = reg.get(&LanguageId::new("typst")).unwrap();
+    assert!(typst.production_rules.contains_key("let"),
+        "Typst grammar should have 'let' production rule (version mismatch?)");
+}
+#+end_src
+
+** Manual checks
+
+- =cargo check -p pi-code-engine= passes
+- =cargo test -p pi-code-engine= passes
+- Build log shows =cargo:rerun-if-changed=Cargo.toml= (verify with =cargo build -p pi-code-engine -vv=)

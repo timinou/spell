@@ -1,0 +1,112 @@
+#+TITLE: LSP status reports configured servers as active
+#+STATE: DONE
+#+SESSION_ID: 14b6ef4f37cdfb5c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-52-10-463Z_14b6ef4f37cdfb5c.jsonl]]
+#+CUSTOM_ID: BUG-216-lsp-status-reports-configured-servers-as
+#+EFFORT: 30m
+#+PRIORITY: A
+#+LAYER: coding-agent
+
+NOTE [2026-04-12]: Implemented under PLAN-195: lsp status now distinguishes active clients from configured-but-not-started servers, with regression coverage in lsp-regressions.test.ts.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-059-audit-implementation:
+
+- **What**: Skill `globs` are parsed but dropped before prompt-building, so the new Typst skill cannot actually auto-activate based on `.typ` file presence.
+  - **Where**: `packages/coding-agent/src/extensibility/skills.ts` around the `CapabilitySkill -> Skill` mapping (`loadSkillsFromDir` and `loadSkills` result assembly); downstream consumers in `packages/coding-agent/src/sdk.ts` / `packages/coding-agent/src/system-prompt.ts`
+  - **Why**: This leaves a core plan contract only partially met: the Typst skill exists, but current runtime skill loading cannot use `globs: ["**/*.typ"]` to load it conditionally. The frontmatter is effectively decorative for the execution path that builds prompts.
+  - **Effort**: `medium`
+
+- **What**: `lsp status` reports configured servers as “Active language servers,” even when no client has been started.
+  - **Where**: `packages/coding-agent/src/lsp/index.ts` around the `action === "status"` branch
+  - **Why**: After adding `.git` to Typst root markers, this can now report `tinymist` as active before any Typst file has actually initialized a client. That is a contract violation in the operator-facing surface: callers cannot distinguish “configured” from “running.”
+  - **Effort**: `trivial`
+
+- **What**: There is no automated regression test for the `.git`-based Tinymist activation path.
+  - **Where**: `packages/coding-agent/test/` LSP test coverage; specifically no test around `loadConfig()` / `getServerForFile()` for `.typ` files in a repo without `typst.toml`
+  - **Why**: Current Typst LSP support depends on a deliberate deviation from the original plan (`rootMarkers: ["typst.toml", ".git"]`). Without a test, a future cleanup could silently remove `.git` and break Typst LSP in ordinary repos.
+  - **Effort**: `small`
+
+- **What**: Grammar generation still resolves Typst node-types by the first matching cargo-registry prefix, not the dependency version Cargo actually selected.
+  - **Where**: `crates/pi-code-engine/build.rs`, `GRAMMARS` Typst entry and `find_node_types_json()`
+  - **Why**: If multiple `codebook-tree-sitter-typst-*` versions exist in the cargo cache, generated rules can drift from the linked parser crate. That creates a non-deterministic failure mode that depends on machine state, not source state.
+  - **Effort**: `medium`
+
+- **What**: There is no TypeScript-side smoke test that the `code` tool surface handles a real `.typ` file end-to-end.
+  - **Where**: `packages/coding-agent/test/tools/code.test.ts`
+  - **Why**: Rust tests prove native Typst outline/navigation behavior, but they do not protect the user-facing `code` tool boundary. A future wiring/rendering regression in `packages/coding-agent` could break Typst support while `pi-code-engine` tests still pass.
+  - **Effort**: `small`
+
+* Context
+
+The =lsp status= action in =LspTool.execute()= reports =Object.keys(config.servers)= as "Active language servers". This shows configured-but-not-yet-started servers as "active". After adding =.git= to Tinymist =rootMarkers=, this now reports =tinymist= as active in any git repo before any =.typ= file has been opened.
+
+The =getActiveClients()= function in =client.ts= correctly returns only instantiated clients from the global =clients= Map, but status doesn't use it.
+
+* Design
+
+** File: =packages/coding-agent/src/lsp/index.ts=, lines 954-972
+
+Current code:
+#+begin_src typescript
+if (action === "status") {
+    const servers = Object.keys(config.servers);
+    // ... lspmux detection ...
+    const serverStatus =
+        servers.length > 0
+            ? `Active language servers: ${servers.join(", ")}`
+            : "No language servers configured for this project";
+    // ...
+}
+#+end_src
+
+Replace with:
+#+begin_src typescript
+if (action === "status") {
+    const activeClients = getActiveClients();
+    const activeNames = activeClients.map(c => c.name);
+    const configuredNames = Object.keys(config.servers);
+    const idleNames = configuredNames.filter(name => !activeNames.includes(name));
+    // ... lspmux detection ...
+
+    const lines: string[] = [];
+    if (activeNames.length > 0) {
+        lines.push(`Active language servers: ${activeNames.join(", ")}`);
+    }
+    if (idleNames.length > 0) {
+        lines.push(`Configured (not started): ${idleNames.join(", ")}`);
+    }
+    if (lines.length === 0) {
+        lines.push("No language servers configured for this project");
+    }
+    const serverStatus = lines.join("
+");
+    // ... rest unchanged ...
+}
+#+end_src
+
+Note: =getActiveClients= is already imported in =index.ts= (line 15). The =getActiveClients= return shape is ={ name, status, fileTypes }[]=, where =name= is =client.config.command= (e.g., "tinymist", "rust-analyzer").
+
+** Edge case: name matching
+
+=getActiveClients()= returns =client.config.command= as =name=, while =config.servers= keys are server identifiers (e.g., "tinymist", "rust-analyzer"). These may differ if the command name differs from the config key. To handle this, compare using the config key stored on the client, not the command name.
+
+Check =client.ts= line 20 — the =clients= Map key. If the key is the config key (server name), use =Array.from(clients.keys())= for active names instead of =getActiveClients().map(c => c.name)=.
+
+If the Map key is something else (e.g., resolved command path), an additional mapping step is needed. Inspect and adapt accordingly.
+
+* Verification
+
+** Tests
+
+Add to =packages/coding-agent/test/tools/code.test.ts= or create =packages/coding-agent/test/tools/lsp-status.test.ts=:
+
+1. *Status with no active clients shows configured servers*: Mock =getActiveClients= returning empty array, mock config with 2 servers. Assert output contains "Configured (not started)" with both names and does NOT contain "Active language servers".
+2. *Status with active client shows running*: Mock =getActiveClients= returning one client, mock config with 2 servers. Assert output shows the running one as "Active" and the other as "Configured".
+3. *Status with no configured servers*: Mock empty config. Assert "No language servers configured".
+
+** Manual checks
+
+- =bun check:ts= passes
+- =lsp status= in a running session shows correct distinction between active and configured servers

@@ -1,0 +1,155 @@
+#+TITLE: Harden Typst first-class support from audit AUD-059
+#+STATE: DOING
+#+SESSION_ID: 14b6ef4f37cdfb5c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-52-10-463Z_14b6ef4f37cdfb5c.jsonl]]
+#+CUSTOM_ID: PLAN-195-harden-typst-first-class-support-from-au
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-059-audit-implementation:
+
+- **What**: Skill `globs` are parsed but dropped before prompt-building, so the new Typst skill cannot actually auto-activate based on `.typ` file presence.
+  - **Where**: `packages/coding-agent/src/extensibility/skills.ts` around the `CapabilitySkill -> Skill` mapping (`loadSkillsFromDir` and `loadSkills` result assembly); downstream consumers in `packages/coding-agent/src/sdk.ts` / `packages/coding-agent/src/system-prompt.ts`
+  - **Why**: This leaves a core plan contract only partially met: the Typst skill exists, but current runtime skill loading cannot use `globs: ["**/*.typ"]` to load it conditionally. The frontmatter is effectively decorative for the execution path that builds prompts.
+  - **Effort**: `medium`
+
+- **What**: `lsp status` reports configured servers as “Active language servers,” even when no client has been started.
+  - **Where**: `packages/coding-agent/src/lsp/index.ts` around the `action === "status"` branch
+  - **Why**: After adding `.git` to Typst root markers, this can now report `tinymist` as active before any Typst file has actually initialized a client. That is a contract violation in the operator-facing surface: callers cannot distinguish “configured” from “running.”
+  - **Effort**: `trivial`
+
+- **What**: There is no automated regression test for the `.git`-based Tinymist activation path.
+  - **Where**: `packages/coding-agent/test/` LSP test coverage; specifically no test around `loadConfig()` / `getServerForFile()` for `.typ` files in a repo without `typst.toml`
+  - **Why**: Current Typst LSP support depends on a deliberate deviation from the original plan (`rootMarkers: ["typst.toml", ".git"]`). Without a test, a future cleanup could silently remove `.git` and break Typst LSP in ordinary repos.
+  - **Effort**: `small`
+
+- **What**: Grammar generation still resolves Typst node-types by the first matching cargo-registry prefix, not the dependency version Cargo actually selected.
+  - **Where**: `crates/pi-code-engine/build.rs`, `GRAMMARS` Typst entry and `find_node_types_json()`
+  - **Why**: If multiple `codebook-tree-sitter-typst-*` versions exist in the cargo cache, generated rules can drift from the linked parser crate. That creates a non-deterministic failure mode that depends on machine state, not source state.
+  - **Effort**: `medium`
+
+- **What**: There is no TypeScript-side smoke test that the `code` tool surface handles a real `.typ` file end-to-end.
+  - **Where**: `packages/coding-agent/test/tools/code.test.ts`
+  - **Why**: Rust tests prove native Typst outline/navigation behavior, but they do not protect the user-facing `code` tool boundary. A future wiring/rendering regression in `packages/coding-agent` could break Typst support while `pi-code-engine` tests still pass.
+  - **Effort**: `small`
+
+* Context
+
+Audit AUD-059 identified five hardening gaps in the PLAN-189 Typst first-class support implementation. This plan addresses all five findings: skill glob-based conditional loading, LSP status truthfulness, tinymist config regression test, build.rs version-aware grammar resolution, and TypeScript-side Typst code tool smoke test.
+
+** Key decisions
+
+1. Skill globs are carried through the =CapabilitySkill → extensibility Skill= mapping and used for conditional prompt inclusion in =system-prompt.ts=. Skills without globs remain always-loaded (backward compatible). No existing skills use globs, so this is safe.
+2. LSP status distinguishes "Active" (running clients via =getActiveClients()=) from "Configured (not started)" (in =config.servers= but no client instantiated).
+3. Tinymist config test uses existing =TempDir= pattern in =lsp-regressions.test.ts=, covers =.git=-based activation and absence without root markers.
+4. =build.rs= reads =Cargo.toml= to extract dependency version specs and prefers registry directories matching the declared version. Falls back to first match for graceful degradation. No new build dependencies.
+5. Code tool smoke test follows existing =spyOn(nativesModule, "executeCodeBuffer")= pattern, mocks real Typst outline shape, asserts formatting.
+
+* Verification
+
+After all items are complete:
+
+#+begin_src bash
+# Rust engine
+cargo check -p pi-code-engine
+cargo test -p pi-code-engine
+
+# TypeScript checks
+bun check:ts
+
+# Focused tests
+bun test packages/coding-agent/test/tools/code.test.ts
+bun test packages/coding-agent/test/tools/lsp-regressions.test.ts
+bun test packages/coding-agent/test/extensibility/skill-globs.test.ts
+#+end_src
+
+All six commands must pass.
+
+* Execution Manifest
+
+All five items are independent and can execute in parallel (no cross-dependencies):
+
+| Wave | Item | Effort | Notes |
+|------+------+--------+-------|
+| 1 | [[id:BUG-216-lsp-status-reports-configured-servers-as]] | 30m | Trivial status branch fix + test |
+| 1 | [[id:FEAT-473-add-regression-test-for-git-based-tinymi]] | 30m | TempDir-based config test |
+| 1 | [[id:FEAT-474-add-typst-outline-smoke-test-for-code-to]] | 20m | Mock-based code tool test |
+| 1 | [[id:FEAT-472-wire-skill-globs-for-conditional-prompt]] | 2h | Interface + mapping + filtering + tests |
+| 1 | [[id:BUG-217-build-rs-grammar-generation-picks-first]] | 1h | Cargo.toml parsing + version-aware scan |
+
+
+** Completion [2026-04-11]
+*** Verification
+- Implemented the planned code and test changes in:
+  - [[file:crates/pi-code-engine/build.rs]]
+  - [[file:packages/coding-agent/src/extensibility/skills.ts]]
+  - [[file:packages/coding-agent/src/lsp/index.ts]]
+  - [[file:packages/coding-agent/src/system-prompt.ts]]
+  - [[file:packages/coding-agent/test/extensibility/skill-globs.test.ts]]
+  - [[file:packages/coding-agent/test/tools/code.test.ts]]
+  - [[file:packages/coding-agent/test/tools/lsp-regressions.test.ts]]
+- Clean-worktree verification with only the PLAN-195 diff applied at =/tmp/plan195-verify=:
+  - =cargo check -p pi-code-engine= -- passed
+  - =cargo test -p pi-code-engine= -- passed (56 passed, 0 failed)
+- Focused delegated verification completed before unrelated workspace churn:
+  - =bun test packages/coding-agent/test/tools/code.test.ts= -- passed
+  - =bun test packages/coding-agent/test/tools/lsp-regressions.test.ts= -- passed
+  - =bun test packages/coding-agent/test/extensibility/skill-globs.test.ts packages/coding-agent/test/skills.test.ts= -- passed
+- Required workspace-wide TypeScript verification could not be completed truthfully in the current checkout because unrelated concurrent changes outside PLAN-195 kept breaking =bun check:ts= and current-workspace Bun test execution.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-195-harden-typst-first-class-support-from-au/verification-summary.txt]]
+- [[file:crates/pi-code-engine/build.rs]]
+- [[file:packages/coding-agent/test/extensibility/skill-globs.test.ts]]
+- [[file:packages/coding-agent/test/tools/code.test.ts]]
+- [[file:packages/coding-agent/test/tools/lsp-regressions.test.ts]]
+*** Deviations
+- PLAN-195 remains blocked from DONE because full current-workspace verification is unstable for reasons outside this plan. Observed blockers during reruns included unrelated drift in =packages/natives/scripts/build-native.ts=, =packages/natives/src/native.ts=, =packages/natives/test/org-buffer.test.ts=, and current-workspace Bun test failures caused by unrelated native-addon embedding changes.
+- None of the linked child items remain BLOCKED; each scoped implementation item is complete, but the parent PLAN stays DOING until the workspace can support the required final verification commands without unrelated failures.
+
+
+** Completion [2026-04-11]
+*** Verification
+- `cargo check -p pi-code-engine` -> passed
+- `cargo test -p pi-code-engine` -> passed (66 tests)
+- `bun test packages/coding-agent/test/tools/code.test.ts` -> passed (18 tests)
+- `bun test packages/coding-agent/test/tools/lsp-regressions.test.ts` -> passed (14 tests)
+- `bun test packages/coding-agent/test/extensibility/skill-globs.test.ts` -> passed (3 tests)
+- `bun check:ts` -> failed due unrelated existing workspace changes in `packages/natives/scripts/build-native.ts`, `packages/natives/scripts/embed-native.ts`, `packages/natives/src/embedded-addon.ts`, and `packages/natives/src/native.ts` (unused-variable + formatting violations outside PLAN-195 scope)
+*** Artifacts
+- Source changes: [[file:packages/coding-agent/src/extensibility/skills.ts]]
+- Source changes: [[file:packages/coding-agent/src/system-prompt.ts]]
+- Source changes: [[file:packages/coding-agent/src/lsp/index.ts]]
+- Test coverage: [[file:packages/coding-agent/test/extensibility/skill-globs.test.ts]]
+- Test coverage: [[file:packages/coding-agent/test/tools/code.test.ts]]
+- Test coverage: [[file:packages/coding-agent/test/tools/lsp-regressions.test.ts]]
+- Rust build script: [[file:crates/pi-code-engine/build.rs]]
+- Rust declaration-name fixes required by engine verification: [[file:crates/pi-code-engine/src/outline.rs]], [[file:crates/pi-code-engine/src/resolve.rs]]
+*** Deviations
+- Required global verification could not be completed truthfully because `bun check:ts` is currently failing on unrelated modified `packages/natives/*` files already present in the workspace.
+- To keep the plan state truthful, linked child items and this PLAN remain open until the unrelated TypeScript check blocker is cleared.
+
+
+- Commit created for implemented plan files and org records: =59251a46b= (=fix(coding-agent): harden typst support from audit=).
+
+- Final amended commit hash: =e2db9a6af=.
+
+- Latest commit containing the PLAN-195 changes and updated plan record: =fcef3a6ca= (=fix(coding-agent): harden typst support from audit=).
+- Late background confirmation: =bun test packages/coding-agent/test/tools/code.test.ts= completed successfully with 18 passing tests from task job =6-TypstCodeSmoke=.
+- Late background confirmation: =bun test packages/coding-agent/test/extensibility/skill-globs.test.ts packages/coding-agent/test/skills.test.ts= completed successfully with 29 passing tests from task job =4-SkillGlobs=.
+- Late background confirmation: =cargo check -p pi-code-engine= completed successfully from task job =7-BuildRsVersioning=.
+- Late background confirmation: =bun test packages/coding-agent/test/tools/lsp-regressions.test.ts= completed successfully from task job =5-LspStatusAndTinymist=.

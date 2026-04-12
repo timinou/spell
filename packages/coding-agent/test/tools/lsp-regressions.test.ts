@@ -1,5 +1,12 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { RenderResultOptions } from "@oh-my-pi/pi-agent-core";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import * as lspClientModule from "@oh-my-pi/pi-coding-agent/lsp/client";
+import * as lspConfigModule from "@oh-my-pi/pi-coding-agent/lsp/config";
+import { LspTool } from "@oh-my-pi/pi-coding-agent/lsp/index";
+import * as lspmuxModule from "@oh-my-pi/pi-coding-agent/lsp/lspmux";
 import { renderCall, renderResult } from "@oh-my-pi/pi-coding-agent/lsp/render";
 import type { CodeAction, SymbolInformation } from "@oh-my-pi/pi-coding-agent/lsp/types";
 import {
@@ -11,11 +18,16 @@ import {
 	resolveSymbolColumn,
 } from "@oh-my-pi/pi-coding-agent/lsp/utils";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { clampTimeout } from "@oh-my-pi/pi-coding-agent/tools/tool-timeouts";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 describe("lsp regressions", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	it("detects bracket-style glob patterns", () => {
 		expect(hasGlobPattern("src/[ab].ts")).toBe(true);
 		expect(hasGlobPattern("src/**/*.ts")).toBe(true);
@@ -129,6 +141,7 @@ describe("lsp regressions", () => {
 		expect(unique).toHaveLength(1);
 		expect(unique[0]?.name).toBe("logger");
 	});
+
 	it("applies command-only code actions by executing workspace commands", async () => {
 		const executedCommands: string[] = [];
 		const result = await applyCodeAction(
@@ -223,4 +236,111 @@ describe("lsp regressions", () => {
 		expect(normalizedResultText).toContain("occurrence: 2");
 		expect(resultText).not.toContain("\t");
 	});
+
+	it("detects Typst via .git marker without typst.toml", async () => {
+		const tempDir = TempDir.createSync("@spell-lsp-typst-");
+		const originalPath = Bun.env.PATH;
+		try {
+			await fs.mkdir(path.join(tempDir.path(), ".git"), { recursive: true });
+			await Bun.write(path.join(tempDir.path(), "main.typ"), "= heading\n");
+			await fs.mkdir(path.join(tempDir.path(), "bin"), { recursive: true });
+			await Bun.write(path.join(tempDir.path(), "bin", "tinymist"), "#!/usr/bin/env sh\nexit 0\n");
+			await fs.chmod(path.join(tempDir.path(), "bin", "tinymist"), 0o755);
+			Bun.env.PATH = `${path.join(tempDir.path(), "bin")}:${originalPath ?? ""}`;
+
+			const config = lspConfigModule.loadConfig(tempDir.path());
+			const server = lspConfigModule.getServerForFile(config, path.join(tempDir.path(), "main.typ"));
+
+			expect(config.servers.tinymist).toBeDefined();
+			expect(server?.[0]).toBe("tinymist");
+		} finally {
+			Bun.env.PATH = originalPath;
+			tempDir.removeSync();
+		}
+	});
+
+	it("does not activate Typst without any root markers", async () => {
+		const tempDir = TempDir.createSync("@spell-lsp-typst-missing-root-");
+		const originalPath = Bun.env.PATH;
+		try {
+			await Bun.write(path.join(tempDir.path(), "main.typ"), "= heading\n");
+			await fs.mkdir(path.join(tempDir.path(), "bin"), { recursive: true });
+			await Bun.write(path.join(tempDir.path(), "bin", "tinymist"), "#!/usr/bin/env sh\nexit 0\n");
+			await fs.chmod(path.join(tempDir.path(), "bin", "tinymist"), 0o755);
+			Bun.env.PATH = `${path.join(tempDir.path(), "bin")}:${originalPath ?? ""}`;
+
+			const config = lspConfigModule.loadConfig(tempDir.path());
+
+			expect(config.servers.tinymist).toBeUndefined();
+			expect(lspConfigModule.getServerForFile(config, path.join(tempDir.path(), "main.typ"))).toBeNull();
+		} finally {
+			Bun.env.PATH = originalPath;
+			tempDir.removeSync();
+		}
+	});
+
+	it("reports active and configured servers separately in status output", async () => {
+		const cwd = `${path.join("/tmp", "lsp-status-test")}-${Date.now()}`;
+		vi.spyOn(lspConfigModule, "loadConfig").mockReturnValue({
+			servers: {
+				tinymist: { command: "tinymist", fileTypes: [".typ"], rootMarkers: [".git"] } as never,
+				biome: { command: "biome", fileTypes: [".ts"], rootMarkers: ["package.json"] } as never,
+			},
+			idleTimeoutMs: undefined,
+		});
+		vi.spyOn(lspClientModule, "getActiveClients").mockReturnValue([
+			{ name: "tinymist", status: "ready", fileTypes: [".typ"] },
+		]);
+		vi.spyOn(lspmuxModule, "detectLspmux").mockResolvedValue({
+			available: false,
+			running: false,
+			binaryPath: null,
+			config: null,
+		} as never);
+
+		const tool = new LspTool(createSession(cwd));
+		const result = await tool.execute("status-test", { action: "status" } as never);
+		const text = result.content[0];
+		expect(text.type).toBe("text");
+		if (text.type === "text") {
+			expect(text.text).toContain("Active language servers: tinymist");
+			expect(text.text).toContain("Configured but not started language servers: biome");
+		}
+	});
+
+	it("does not call configured servers active when no clients are running", async () => {
+		const cwd = `${path.join("/tmp", "lsp-status-empty-test")}-${Date.now()}`;
+		vi.spyOn(lspConfigModule, "loadConfig").mockReturnValue({
+			servers: {
+				tinymist: { command: "tinymist", fileTypes: [".typ"], rootMarkers: [".git"] } as never,
+			},
+			idleTimeoutMs: undefined,
+		});
+		vi.spyOn(lspClientModule, "getActiveClients").mockReturnValue([]);
+		vi.spyOn(lspmuxModule, "detectLspmux").mockResolvedValue({
+			available: false,
+			running: false,
+			binaryPath: null,
+			config: null,
+		} as never);
+
+		const tool = new LspTool(createSession(cwd));
+		const result = await tool.execute("status-test", { action: "status" } as never);
+		const text = result.content[0];
+		expect(text.type).toBe("text");
+		if (text.type === "text") {
+			expect(text.text).not.toContain("Active language servers:");
+			expect(text.text).toContain("Configured but not started language servers: tinymist");
+		}
+	});
 });
+
+function createSession(cwd: string): ToolSession {
+	return {
+		cwd,
+		hasUI: false,
+		getSessionFile: () => null,
+		getSessionSpawns: () => "*",
+		settings: Settings.isolated(),
+	};
+}

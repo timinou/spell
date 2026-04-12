@@ -1,0 +1,118 @@
+#+TITLE: Add regression test for git-based tinymist LSP activation
+#+STATE: DONE
+#+SESSION_ID: 14b6ef4f37cdfb5c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-52-10-463Z_14b6ef4f37cdfb5c.jsonl]]
+#+CUSTOM_ID: FEAT-473-add-regression-test-for-git-based-tinymi
+#+EFFORT: 30m
+#+PRIORITY: B
+#+LAYER: coding-agent
+
+NOTE [2026-04-12]: Implemented under PLAN-195: added .git-root and no-root-marker Typst loadConfig/getServerForFile regression coverage.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-059-audit-implementation:
+
+- **What**: Skill `globs` are parsed but dropped before prompt-building, so the new Typst skill cannot actually auto-activate based on `.typ` file presence.
+  - **Where**: `packages/coding-agent/src/extensibility/skills.ts` around the `CapabilitySkill -> Skill` mapping (`loadSkillsFromDir` and `loadSkills` result assembly); downstream consumers in `packages/coding-agent/src/sdk.ts` / `packages/coding-agent/src/system-prompt.ts`
+  - **Why**: This leaves a core plan contract only partially met: the Typst skill exists, but current runtime skill loading cannot use `globs: ["**/*.typ"]` to load it conditionally. The frontmatter is effectively decorative for the execution path that builds prompts.
+  - **Effort**: `medium`
+
+- **What**: `lsp status` reports configured servers as “Active language servers,” even when no client has been started.
+  - **Where**: `packages/coding-agent/src/lsp/index.ts` around the `action === "status"` branch
+  - **Why**: After adding `.git` to Typst root markers, this can now report `tinymist` as active before any Typst file has actually initialized a client. That is a contract violation in the operator-facing surface: callers cannot distinguish “configured” from “running.”
+  - **Effort**: `trivial`
+
+- **What**: There is no automated regression test for the `.git`-based Tinymist activation path.
+  - **Where**: `packages/coding-agent/test/` LSP test coverage; specifically no test around `loadConfig()` / `getServerForFile()` for `.typ` files in a repo without `typst.toml`
+  - **Why**: Current Typst LSP support depends on a deliberate deviation from the original plan (`rootMarkers: ["typst.toml", ".git"]`). Without a test, a future cleanup could silently remove `.git` and break Typst LSP in ordinary repos.
+  - **Effort**: `small`
+
+- **What**: Grammar generation still resolves Typst node-types by the first matching cargo-registry prefix, not the dependency version Cargo actually selected.
+  - **Where**: `crates/pi-code-engine/build.rs`, `GRAMMARS` Typst entry and `find_node_types_json()`
+  - **Why**: If multiple `codebook-tree-sitter-typst-*` versions exist in the cargo cache, generated rules can drift from the linked parser crate. That creates a non-deterministic failure mode that depends on machine state, not source state.
+  - **Effort**: `medium`
+
+- **What**: There is no TypeScript-side smoke test that the `code` tool surface handles a real `.typ` file end-to-end.
+  - **Where**: `packages/coding-agent/test/tools/code.test.ts`
+  - **Why**: Rust tests prove native Typst outline/navigation behavior, but they do not protect the user-facing `code` tool boundary. A future wiring/rendering regression in `packages/coding-agent` could break Typst support while `pi-code-engine` tests still pass.
+  - **Effort**: `small`
+
+* Context
+
+Typst LSP support depends on =.git= being in Tinymist's =rootMarkers= (=packages/coding-agent/src/lsp/defaults.json=, lines 125-133). Without =.git=, the current =loadConfig()= implementation would not activate Tinymist in ordinary repos (most repos lack =typst.toml=). This deviation has no test coverage — a cleanup could silently break Typst LSP.
+
+* Design
+
+** File: =packages/coding-agent/test/tools/lsp-regressions.test.ts=
+
+Add a new =describe= block using the existing =TempDir= pattern from this file (e.g., lines 31-45 which use =TempDir.createSync= with try/finally).
+
+** Test cases
+
+*** 1. Tinymist selected for .typ file in git repo
+
+#+begin_src typescript
+it("selects tinymist for .typ files in a repo with .git marker", () => {
+    const tempDir = TempDir.createSync("@spell-lsp-tinymist-");
+    try {
+        // Create .git directory marker
+        fs.mkdirSync(path.join(tempDir.path(), ".git"));
+        const config = loadConfig(tempDir.path());
+        const server = getServerForFile(config, path.join(tempDir.path(), "doc.typ"));
+        expect(server).not.toBeNull();
+        expect(server![0]).toBe("tinymist");
+        expect(server![1].initOptions?.formatterMode).toBe("typstyle");
+    } finally {
+        tempDir.removeSync();
+    }
+});
+#+end_src
+
+*** 2. No server for .typ file without root markers
+
+#+begin_src typescript
+it("returns no server for .typ files without root markers", () => {
+    const tempDir = TempDir.createSync("@spell-lsp-tinymist-none-");
+    try {
+        // No .git, no typst.toml
+        const config = loadConfig(tempDir.path());
+        const server = getServerForFile(config, path.join(tempDir.path(), "doc.typ"));
+        expect(server).toBeNull();
+    } finally {
+        tempDir.removeSync();
+    }
+});
+#+end_src
+
+*** 3. Tinymist selected with typst.toml
+
+#+begin_src typescript
+it("selects tinymist for .typ files in a repo with typst.toml marker", () => {
+    const tempDir = TempDir.createSync("@spell-lsp-tinymist-toml-");
+    try {
+        Bun.writeSync(path.join(tempDir.path(), "typst.toml"), "");
+        const config = loadConfig(tempDir.path());
+        const server = getServerForFile(config, path.join(tempDir.path(), "doc.typ"));
+        expect(server).not.toBeNull();
+        expect(server![0]).toBe("tinymist");
+    } finally {
+        tempDir.removeSync();
+    }
+});
+#+end_src
+
+** Imports needed
+
+#+begin_src typescript
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { loadConfig, getServerForFile } from "@oh-my-pi/pi-coding-agent/lsp/config";
+#+end_src
+
+Note: =loadConfig= resolves the =tinymist= binary via =resolveCommand= which calls =Bun.which("tinymist")=. On the CI/dev machine, =/usr/bin/tinymist= exists. If not, the test should skip or mock =resolveCommand=. Check whether =Bun.which("tinymist")= succeeds in the test environment; if not, use =vi.spyOn= on =resolveCommand= to return a stub path.
+
+* Verification
+
+- =bun test packages/coding-agent/test/tools/lsp-regressions.test.ts= passes
+- =bun check:ts= passes
