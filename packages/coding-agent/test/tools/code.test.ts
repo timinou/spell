@@ -152,7 +152,7 @@ describe("coding-agent code tool wiring", () => {
 		const tool = new CodeTool(createSession());
 		const result = await tool.execute("tool", { command: "outline", file: "/tmp/test/src/main.ts" });
 
-		expect(getText(result)).toContain("Outline src/main.ts (1 top-level, 1 total symbols)");
+		expect(getText(result)).toContain("Outline src/main.ts (1 top, 1 total)");
 		expect(getText(result)).toContain("function main L1-L3");
 		expect(result.details).toEqual(
 			expect.objectContaining({
@@ -165,6 +165,113 @@ describe("coding-agent code tool wiring", () => {
 		expect(bufferSpy).toHaveBeenCalledWith(
 			expect.objectContaining({ command: "outline", file: "/tmp/test/src/main.ts" }),
 		);
+	});
+
+	it("joins array content for replace-body edits before invoking NAPI", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: { version: 2, diff: "@@ replace-body @@", editCount: 1 }, error: false })
+			.mockReturnValueOnce({ output: { success: true, version: 2 }, error: false });
+		const tool = new CodeTool(createSession());
+
+		await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			symbol: "main",
+			operation: "replace-body",
+			content: ["{", "  return 42;", "}"],
+		});
+
+		expect(bufferSpy.mock.calls[0]?.[0]).toMatchObject({
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			operation: "replace-body",
+			content: "{\n  return 42;\n}",
+		});
+	});
+
+	it("joins array patch text before invoking NAPI", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: { version: 2, diff: "@@ patch @@", editCount: 1 }, error: false })
+			.mockReturnValueOnce({ output: { success: true, version: 2 }, error: false });
+		const tool = new CodeTool(createSession());
+
+		await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			symbol: "main",
+			operation: "patch",
+			patches: [
+				{
+					find: ["const x = 1;", "const y = 2;"],
+					replace: ["const x = 10;", "const y = 20;"],
+				},
+			],
+		});
+
+		expect(bufferSpy.mock.calls[0]?.[0]).toMatchObject({
+			command: "edit",
+			patches: [
+				{
+					find: "const x = 1;\nconst y = 2;",
+					replace: "const x = 10;\nconst y = 20;",
+				},
+			],
+		});
+	});
+
+	it("preserves single-string content for rename edits", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: { version: 2, diff: "@@ rename @@", editCount: 1 }, error: false })
+			.mockReturnValueOnce({ output: { success: true, version: 2 }, error: false });
+		const tool = new CodeTool(createSession());
+
+		await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			symbol: "main",
+			operation: "rename",
+			content: "renamedMain",
+		});
+
+		expect(bufferSpy.mock.calls[0]?.[0]).toMatchObject({
+			command: "edit",
+			operation: "rename",
+			content: "renamedMain",
+		});
+	});
+
+	it("normalizes mixed-format batch edits before invoking NAPI", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: { version: 2, diff: "@@ batch @@", editCount: 3 }, error: false })
+			.mockReturnValueOnce({ output: { success: true, version: 2 }, error: false });
+		const tool = new CodeTool(createSession());
+
+		await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			edits: [
+				{ symbol: "main", operation: "replace-body", content: ["{", "  return 42;", "}"] },
+				{
+					symbol: "main",
+					operation: "patch",
+					patches: [{ find: ["const x = 1;", "const y = 2;"], replace: ["const x = 10;", "const y = 20;"] }],
+				},
+				{ line: 1, operation: "insert-after", content: ["import { x } from './x';"] },
+			],
+		});
+
+		expect(bufferSpy.mock.calls[0]?.[0]).toMatchObject({
+			command: "edit",
+			edits: [
+				{ symbol: "main", operation: "replace-body", content: "{\n  return 42;\n}" },
+				{
+					symbol: "main",
+					operation: "patch",
+					patches: [{ find: "const x = 1;\nconst y = 2;", replace: "const x = 10;\nconst y = 20;" }],
+				},
+				{ line: 1, operation: "insert-after", content: "import { x } from './x';" },
+			],
+		});
 	});
 
 	it("bypasses extension check for non-file commands", async () => {

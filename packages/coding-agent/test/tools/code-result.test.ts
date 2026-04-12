@@ -48,12 +48,13 @@ describe("code tool result contract", () => {
 		});
 
 		expect(details.command).toBe("outline");
+		if (details.command !== "outline") throw new Error("Expected outline details");
 		expect(details.displayPath).toBe("packages/coding-agent/src/tools/code.ts");
 		expect(details.data.totalSymbols).toBe(3);
 		expect(details.data.entries[0]?.children[0]?.endLine).toBe(212);
 
 		const content = formatCodeToolContent(details);
-		expect(content).toContain("Outline packages/coding-agent/src/tools/code.ts (2 top-level, 3 total symbols)");
+		expect(content).toContain("Outline packages/coding-agent/src/tools/code.ts (2 top, 3 total)");
 		expect(content).toContain("class CodeTool L119-L295 (1 child)");
 		expect(content).not.toContain('"end_line"');
 	});
@@ -83,13 +84,16 @@ describe("code tool result contract", () => {
 		});
 
 		expect(details.command).toBe("navigate");
+		if (details.command !== "navigate") throw new Error("Expected navigate details");
 		expect(details.rawOutput).toEqual(rawOutput);
 		expect(details.data.referenceCount).toBe(2);
 
 		const content = formatCodeToolContent(details);
 		expect(content).toContain("Navigate node-at docs/theme.typ: let teal-primary L7:C1");
-		expect(content).toContain("related items: 1");
-		expect(content).toContain("references: 2");
+		expect(content).toContain('text: let teal-primary = rgb("#008080")');
+		expect(content).toContain("parent: code | scope: code L7 | kind: let");
+		expect(content).toContain("1 item, 2 refs");
+		expect(content).toContain('  string rgb("#008080") L7');
 		expect(content).not.toContain('"editableScopeNodeType"');
 	});
 
@@ -106,7 +110,9 @@ describe("code tool result contract", () => {
 		});
 
 		const content = formatCodeToolContent(details);
-		expect(content).toContain("Edited src/main.ts (1 operation, buffer version 2)");
+		expect(content).toContain("Edited src/main.ts");
+		expect(content).toContain("Changes: +1 -1");
+		expect(content).toContain("Diff preview:");
 		expect(content).toContain("@@ add @@");
 		expect(content).not.toMatch(/^\s*\{/);
 	});
@@ -130,13 +136,13 @@ describe("code tool result contract", () => {
 			],
 		});
 
+		if (details.command !== "undo") throw new Error("Expected undo details");
 		expect(details.data.applied).toBe(true);
 		expect(details.data.entries?.[0]?.inputEdit?.startByte).toBe(120);
 
 		const content = formatCodeToolContent(details);
-		expect(content).toContain("Undo src/main.ts applied 1 history entry.");
-		expect(content).toContain("v4");
-		expect(content).toContain("inserted 13 chars");
+		expect(content).toContain("Undo src/main.ts (1 entry)");
+		expect(content).toContain("v4 L10-12 +13 chars");
 	});
 
 	it("keeps graph output compact and error output plain text", () => {
