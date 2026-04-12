@@ -1,0 +1,124 @@
+#+TITLE: Compress plan-mode overlays and system prompts
+#+STATE: DONE
+#+SESSION_ID: 14b7bf36e09ede5e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-00-31-490Z_14b7bf36e09ede5e.jsonl]]
+#+CUSTOM_ID: FEAT-511-compress-plan-mode-overlays-and-system-p
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: prompt
+#+DEPENDS: FEAT-506-define-prompt-surface-compression-contra
+
+* Initial Message
+
+Look at PLAN 181 and PLAN 207. With the same freedom, can you tell me how you could express yourself even more by applying the terse thinking mode to the whole surface of what is sent to the llm?
+
+* Scope
+Compress plan-mode overlays (further beyond PLAN-209) and system-level prompt files.
+
+** Plan-mode overlay files
+| File | Current words | Target |
+|------|--------------|--------|
+| =plan-mode-active.md= | 2,504 | ~1,500 |
+| =plan-mode-approved.md= | 1,287 | ~800 |
+| =plan-mode-uiux.md= | 654 | ~400 |
+| =plan-mode-subagent.md= | unknown | audit |
+| =plan-mode-reference.md= | unknown | audit |
+| =plan-mode-tool-decision-reminder.md= | unknown | audit |
+| =plan-audit.md= | unknown | audit |
+
+** System prompt files
+| File | Notes |
+|------|-------|
+| =eager-todo.md= | ~206 words. Audit |
+| =btw-user.md= | Unknown. Compress if verbose |
+| =auto-handoff-threshold-focus.md= | Unknown. Compress if verbose |
+| =file-operations.md= | Unknown. Compress if verbose |
+| =commit-message-system.md= | Commit message generation prompt |
+| =summarization-system.md= | Summarization prompt |
+| =title-system.md= | Title generation prompt |
+| =web-search.md= (system) | Web search system prompt |
+| =ttsr-interrupt.md= | Unknown |
+| =custom-system-prompt.md= | Custom system prompt template |
+| =handoff-document.md= | Handoff document template |
+| =agent-creation-architect.md= | Agent creation prompt |
+| =agent-creation-user.md= | Agent creation user prompt |
+
+All in =packages/coding-agent/src/prompts/system/=.
+
+** Out of scope
+- =system-prompt.md= (the main template — already compressed by PLAN-209)
+- =caveman.md= (already compressed by PLAN-181)
+- =subagent-system-prompt.md=, =swarm-agent-system-prompt.md= (separate item)
+
+* Design Decisions
+
+1. **plan-mode-active.md** — This is the fattest overlay at 2,504 words (387 lines). Key compression targets:
+   - The "design decision change" =<critical>= block appears identically in 3 conditional branches (default workflow, iterative, ultraplan). Deduplicate: emit it once after all branches close.
+   - Org Item Body Standard (ultraplan mode): the sub-outline example is verbose — compress to pattern + 1 example.
+   - Phase descriptions: each phase is 2-4 lines of prose. Compress to 1 line notation per phase.
+   - Child item requirements: 10 bullet points, some are multi-sentence. Compress to one sentence each.
+   - Pre-Exit Consistency Check: 6 prose bullets → 6 terse bullets.
+   - Example flow: keep 1 compressed example.
+
+2. **plan-mode-approved.md** — Compress phase descriptions, merge repeated instructions.
+
+3. **plan-mode-uiux.md** — Already 53% cut. Audit for remaining prose.
+
+4. **System prompts** — Many are small (commit message, title generation). Audit each. Compress only if verbose.
+
+5. Preserve ALL Handlebars conditionals exactly. Plan-mode overlays are heavily conditional.
+
+* Implementation
+
+** Compress plan-mode-active.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-511::compress-plan-active
+:END:
+- Deduplicate "design decision change" critical block (appears 3 times → 1)
+- Phase descriptions: 1 line each
+- Child item requirements: one sentence per bullet
+- Org item body standard: compress sub-outline example
+- Pre-exit consistency check: terse bullets
+- Preserve ALL Handlebars conditionals (=orgEnabled=, =ultraplan=, =iterative=, =designFlavor=, =reentry=, =taskPolicies=, =gateMomusDisabled=, =gateMetisDisabled=, =gateDaedalusDisabled=, =customDecomposition=)
+
+** Compress plan-mode-approved.md and plan-mode-uiux.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-511::compress-plan-approved
+:DEPENDS: FEAT-511::compress-plan-active
+:END:
+- Approved: compress phase descriptions, deduplicate constraints
+- UI/UX: audit remaining prose, compress if found
+
+** Compress remaining plan-mode and system prompts
+:PROPERTIES:
+:CUSTOM_ID: FEAT-511::compress-system
+:DEPENDS: FEAT-511::compress-plan-approved
+:END:
+- plan-mode-subagent.md, plan-mode-reference.md, plan-mode-tool-decision-reminder.md, plan-audit.md: audit + compress
+- System prompts (eager-todo, btw-user, auto-handoff, file-operations, commit-message-system, summarization-system, title-system, web-search, ttsr-interrupt, custom-system-prompt, handoff-document, agent-creation-*): audit + compress where verbose
+
+* Edge Cases
+- plan-mode-active.md has complex Handlebars branching (=orgEnabled= + =ultraplan= + =iterative= + =designFlavor= + =reentry=). Each branch has different content. Deduplication of the "design decision change" block requires careful placement after all branches close.
+- Some system prompts (commit-message-system, title-system) are consumed by non-agent LLM calls — they need to be complete instructions, not compressed notation that assumes tool context.
+- =custom-system-prompt.md= is a template for user-provided custom prompts — may not benefit from compression.
+
+* Acceptance Criteria
+- plan-mode-active.md: < 1,600 words (from 2,504)
+- plan-mode-approved.md: < 900 words (from 1,287)
+- "Design decision change" critical block: appears exactly once in plan-mode-active.md
+- All Handlebars conditionals preserved exactly
+- All system prompt files audited
+
+* Verification
+#+begin_src sh
+bun check:ts
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+bun test packages/coding-agent/test/prompts/plan-mode-tdd.test.ts
+bun test packages/coding-agent/test/prompts/plan-mode-policies.test.ts
+bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts
+bun test packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts
+bun test packages/coding-agent/test/prompts/auto-roster-prompts.test.ts
+bun test packages/coding-agent/test/caveman.test.ts
+wc -w packages/coding-agent/src/prompts/system/plan-mode-active.md
+wc -w packages/coding-agent/src/prompts/system/plan-mode-approved.md
+#+end_src

@@ -1,11 +1,10 @@
-Retrieves content from a URL and returns it in a clean, readable format.
+Retrieves a URL and returns cleaned readable content.
 
 <instruction>
-- Extract information from web pages, GitHub issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, technical blogs, RSS/Atom feeds, JSON endpoints
-- Read PDF or DOCX files hosted at a URL
+- Extract information from web pages, issues/PRs, Stack Overflow, Wikipedia, Reddit, NPM, arXiv, blogs, RSS/Atom feeds, and JSON endpoints
 - Use `raw: true` for untouched HTML or debugging
 </instruction>
 
 <output>
-Returns processed, readable content. HTML transformed to remove boilerplate. PDF/DOCX converted to text. JSON returned formatted. With `raw: true`, returns untransformed HTML.
+Returns processed readable content; HTML is de-boilerplated, PDFs/DOCX are converted to text, JSON is formatted, and `raw: true` returns raw HTML.
 </output>

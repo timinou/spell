@@ -1,11 +1,13 @@
 #+TITLE: Tool description normalization
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14b79aec8fda64f1
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-21-58-207Z_14b79aec8fda64f1.jsonl]]
 #+CUSTOM_ID: FUP-047-tool-description-normalization
 #+EFFORT: 4h
 #+PRIORITY: #C
 #+LAYER: prompt
+
+NOTE [2026-04-12]: Subsumed by PLAN-214: all 41 tool description files compressed per prompt-surface-compression contract.
 
 
 * Initial Message

@@ -69,9 +69,9 @@ it("describes auto-initialized todo execution without manual initialization step
 		autoInitialized: true,
 	});
 
-	expect(rendered).toContain("Your todo list has been pre-populated from the plan's execution structure.");
+	expect(rendered).toContain("Todo list pre-populated from plan's execution structure.");
 	expect(rendered).toContain("Child org item state transitions happen automatically");
-	expect(rendered).toContain("`todo_write` does not finish the parent plan for you");
+	expect(rendered).toContain("completion report and final PLAN closeout are explicit steps");
 	expect(rendered).not.toContain("Wave-based Todo Initialization");
 	expect(rendered).toContain("4. Close org lifecycle state truthfully:");
 });

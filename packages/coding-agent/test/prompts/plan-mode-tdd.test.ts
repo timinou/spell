@@ -30,10 +30,8 @@ describe("plan-mode TDD prompt guidance", () => {
 	it("renders TDD-first child item guidance and examples in ultraplan mode", () => {
 		const rendered = renderUltraplanPrompt();
 
-		expect(rendered).toContain("Test-first sub-outline ordering is **REQUIRED** for pure functions and new types");
-		expect(rendered).toContain(
-			"Test sub-outline items **MUST** appear before their corresponding implementation sub-items in the dependency graph",
-		);
+		expect(rendered).toContain("test-first sub-outline ordering **REQUIRED** for pure functions/new types");
+		expect(rendered).toContain("Test sub-items **MUST** precede implementation sub-items in dependency graph");
 		expect(rendered).toContain("** Write parser tests (TDD: before implementation)");
 		expect(rendered).toContain(":DEPENDS: FEAT-001::define-types");
 		expect(rendered).toContain(":DEPENDS: FEAT-001::parser-tests");

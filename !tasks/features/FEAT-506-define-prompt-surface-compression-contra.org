@@ -1,0 +1,95 @@
+#+TITLE: Define prompt surface compression contract
+#+STATE: DONE
+#+SESSION_ID: 14b7bf36e09ede5e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-00-31-490Z_14b7bf36e09ede5e.jsonl]]
+#+CUSTOM_ID: FEAT-506-define-prompt-surface-compression-contra
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: prompt
+
+* Initial Message
+
+Look at PLAN 181 and PLAN 207. With the same freedom, can you tell me how you could express yourself even more by applying the terse thinking mode to the whole surface of what is sent to the llm?
+
+* Scope
+Create the compression contract spec that governs all subsequent compression work. This spec defines what to keep, what to cut, and how to validate.
+
+** In scope
+- Create =specs/prompt-surface-compression.md=
+- Define compression principles, rules, and non-obvious exemplar test
+- Include before/after examples for each content category
+
+** Out of scope
+- Compressing any actual prompt files (subsequent items handle that)
+
+* Existing Patterns
+- =specs/system-prompt-architecture.md= — documents current architecture and token budget
+- PLAN-181 insight: "Grammar is predictable; meaning is not. Strip what's predictable."
+- PLAN-209 insight: "Less content, better placed."
+- Tool descriptions follow exemplar pattern: one-line capability, =<instruction>= block, =<examples>=, =<critical>=
+
+* Implementation
+
+** Define compression contract spec
+:PROPERTIES:
+:CUSTOM_ID: FEAT-502::define-contract
+:END:
+
+Create =specs/prompt-surface-compression.md= with these sections:
+
+*** Principles
+1. Grammar is predictable; meaning is not → delete grammar
+2. The model knows more than we teach → teach only what it can't derive
+3. Schema-implied content → delete from description (parameter types, formats already in JSON Schema)
+4. Non-obvious exemplar test: keep an example only if the model would get the pattern wrong without it
+5. Handlebars conditionals → preserve exactly (structural, not content)
+6. XML structural tags → preserve or consolidate (semantic meaning must survive)
+
+*** Rules per content category
+For each category (AGENTS.md, tool descriptions, overlays, agent prompts), specify:
+- What constitutes "predictable grammar" in that category
+- What constitutes "non-derivable meaning"
+- Concrete before/after transform examples
+
+*** AGENTS.md rules
+- BAD/GOOD code pairs → delete unless pattern is genuinely non-obvious
+- API tutorials → replace with constraint statements
+- Table format for decision rules
+- Example before: "**NEVER use named imports from `node:fs`** — always use namespace imports: // BAD: import { readdir } from 'node:fs/promises' // GOOD: import * as fs from 'node:fs/promises'"
+- Example after: "- node:fs, node:path, node:os → =import * as= namespace only"
+
+*** Tool description rules
+- One capability sentence (first line, no positioning prose)
+- =<instruction>= → constraint list only, no prose explanations
+- =<examples>= → keep only if non-obvious exemplar test passes; JSON structure examples deleted
+- =<critical>= → MUST/MUST NOT bullet list, no redundant restatement
+- =<output>= → one-line summary
+- Parameter prose → delete if schema covers it
+- Verbose "avoid" sections → compress to anti-pattern list
+
+*** Overlay/system prompt rules
+- Process manual prose → decision tables + constraint lists
+- Repeated constraint blocks → deduplicate (appears once)
+- Workflow phases → notation (one line per phase, not paragraphs)
+- Example flows → compress to minimal structural example
+
+*** Agent prompt rules
+- Already mostly exemplars — audit for consistency
+- Role description → one sentence capability
+- Instructions → constraint list
+
+*** Validation criteria
+- Each compressed file must pass: key constraints preserved (semantic anchor grep)
+- Token count measured before/after
+- No Handlebars conditional removed or altered
+- All MUST/MUST NOT rules survive compression
+
+* Acceptance Criteria
+- =specs/prompt-surface-compression.md= exists
+- Contains sections: Principles, Rules per content category, Validation criteria
+- Includes at least 3 before/after examples covering different categories
+- References PLAN-181, PLAN-209 lineage
+
+* Verification
+- File exists at =specs/prompt-surface-compression.md=
+- Content covers all categories (AGENTS.md, tool descriptions, overlays, agent/subagent prompts, compaction)

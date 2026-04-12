@@ -1,0 +1,125 @@
+#+TITLE: Terse input surface compression
+#+STATE: DONE
+#+SESSION_ID: 14b7bf36e09ede5e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-00-31-490Z_14b7bf36e09ede5e.jsonl]]
+#+CUSTOM_ID: PLAN-214-terse-input-surface-compression
+#+EFFORT: 18h
+#+PRIORITY: #A
+#+LAYER: prompt
+
+
+* Initial Message
+
+Look at PLAN 181 and PLAN 207. With the same freedom, can you tell me how you could express yourself even more by applying the terse thinking mode to the whole surface of what is sent to the llm?
+
+* Context
+
+The system prompt is the agent's declaration of being. Four prior plans shaped the Identity section into compressed, honest self-knowledge. But the Identity section is the *smallest* part of what the LLM receives (~2,200 tokens). Three untouched layers dwarf it:
+
+| Layer | Tokens | Compressed? |
+|-------|--------|-------------|
+| Identity (role→principles) | ~2,200 | Yes (PLAN-181/209) |
+| AGENTS.md context file | ~5,500 | No |
+| Tool descriptions (API) | ~12,000-15,000 | No |
+| Plan-mode overlays | ~4,500 | Partially (23% cut) |
+| Subagent/agent/misc | ~2,000 | No |
+
+PLAN-181 found the principle: "Grammar is predictable; meaning is not."
+PLAN-209 found the corollary: "Less content, better placed."
+
+This plan extends both to the entire input surface: "The model knows more than we teach it. Teach only what it can't derive."
+
+The model can reconstruct what namespace imports look like from "namespace imports only." It can produce correct JSON from a parameter schema without 10 examples. It understands code blocks without tutorials on block boundaries (though it does need the block-boundary-traveling rule itself).
+
+** Approach
+
+Permanent, aggressive compression of ALL prompt files (.md sources). Not conditional on terse mode — the model never needs tutorials. This subsumes FUP-047 (tool description normalization) and FUP-048 (subagent/overlay normalization).
+
+** Key Decisions
+
+1. AGENTS.md compressed in place — becomes terse constraint notation. Developers read constraints, not tutorials.
+2. All 41 tool .md files compressed permanently. Each: one capability sentence + constraints + non-obvious examples only.
+3. Plan-mode overlays further compressed. Deduplicate repeated blocks. Notation over prose.
+4. Agent/subagent/compaction/memory prompts: audit + compress where verbose.
+5. Compression is permanent — source .md files become terse.
+6. Contract spec written first (=specs/prompt-surface-compression.md=) — all items reference it.
+7. Handlebars conditionals preserved exactly in all files.
+8. Examples survive only if they pass the non-obvious exemplar test: would the model get the pattern wrong without it?
+9. Testing via semantic anchor assertions in existing test files. No snapshot tests.
+10. Target: ~57% reduction on compressible surface (~22,000 → ~9,500 tokens).
+
+* Verification
+
+All prompt-related tests must pass:
+#+begin_src sh
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+bun test packages/coding-agent/test/caveman.test.ts
+bun test packages/coding-agent/test/prompts/plan-mode-tdd.test.ts
+bun test packages/coding-agent/test/prompts/plan-mode-policies.test.ts
+bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts
+bun test packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts
+bun test packages/coding-agent/test/prompts/auto-roster-prompts.test.ts
+bun test packages/coding-agent/test/prompt-format.test.ts
+bun check:ts
+#+end_src
+
+Manual verification:
+- AGENTS.md < 2,000 words (from ~4,500)
+- Aggregate tool descriptions < 5,000 words (from ~12,000)
+- plan-mode-active.md < 1,600 words (from 2,504)
+- =specs/system-prompt-architecture.md= token budget updated
+- FUP-047 and FUP-048 marked DONE
+
+Required artifacts:
+- =specs/prompt-surface-compression.md= — compression contract
+- =specs/system-prompt-architecture.md= — updated token budget and lineage
+- All compressed .md files in =packages/coding-agent/src/prompts/=
+- Updated =AGENTS.md=
+
+* Execution Manifest
+
+** contract                                                           :wave:
+- [[id:FEAT-506-define-prompt-surface-compression-contra][FEAT-506 Define prompt surface compression contract]] (1h)
+
+** high-impact                                                        :wave:
+- [[id:FEAT-507-compress-agents-md-to-terse-constraint-n][FEAT-507 Compress AGENTS.md to terse constraint notation]] (2h, depends FEAT-506)
+- [[id:FEAT-508-compress-large-tool-descriptions][FEAT-508 Compress large tool descriptions]] (3h, depends FEAT-506)
+
+** sweep                                                              :wave:
+- [[id:FEAT-509-compress-structural-and-search-tool-desc][FEAT-509 Compress structural and search tool descriptions]] (2h, depends FEAT-506)
+- [[id:FEAT-510-compress-io-interaction-and-remaining-to][FEAT-510 Compress IO interaction and remaining tool descriptions]] (3h, depends FEAT-506)
+- [[id:FEAT-511-compress-plan-mode-overlays-and-system-p][FEAT-511 Compress plan-mode overlays and system prompts]] (3h, depends FEAT-506)
+- [[id:FEAT-512-compress-subagent-agent-and-auxiliary-pr][FEAT-512 Compress subagent agent and auxiliary prompt templates]] (2h, depends FEAT-506)
+
+** verification                                                       :wave:
+- [[id:FEAT-513-update-regression-tests-and-architecture][FEAT-513 Update regression tests and architecture spec]] (2h, depends FEAT-507 FEAT-508 FEAT-509 FEAT-510 FEAT-511 FEAT-512)
+
+Total: 18h
+
+** Completion [2026-04-12]
+
+*** Verification
+- =bun test= (8 prompt test files): 48 pass, 0 fail, 231 expect() calls
+- =bun check:ts=: no new type errors introduced (pre-existing errors in code.ts/code-result.ts unrelated to prompt changes)
+- AGENTS.md: 2,961 → 1,392 words (53% reduction). =grep -c MUST AGENTS.md= = 21. No BAD/GOOD code blocks remain.
+- Tool descriptions total: 12,554 → 7,664 words (39% reduction)
+- plan-mode-active.md: 2,504 → 1,653 words (34% reduction). Design-decision-change critical block deduplicated from 3 copies to 1.
+- plan-mode-approved.md: 1,287 → 1,135 words (12% reduction). Heavily Handlebars-conditional; most content renders only in specific configs.
+- agent-creation-architect.md: 729 → 301 words (59% reduction)
+- FUP-047 and FUP-048 marked DONE (subsumed)
+- =specs/system-prompt-architecture.md= updated with new token budget and lineage
+
+*** Artifacts
+- =specs/prompt-surface-compression.md= — compression contract (new file)
+- =specs/system-prompt-architecture.md= — updated token budget and lineage section
+- =AGENTS.md= — compressed to terse constraint notation
+- All 41 files in =packages/coding-agent/src/prompts/tools/= — compressed tool descriptions
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= — compressed overlay
+- =packages/coding-agent/src/prompts/system/plan-mode-approved.md= — compressed overlay
+- =packages/coding-agent/src/prompts/system/agent-creation-architect.md= — compressed system prompt
+- Updated test files: system-prompt-templates.test.ts, plan-mode-tdd.test.ts, plan-mode-policies.test.ts, plan-mode-approved-prompt.test.ts, plan-mode-allowed-folders-prompt.test.ts, auto-roster-prompts.test.ts
+
+*** Deviations
+- plan-mode-approved.md finished at 1,135 words vs target of <900. The file is heavily Handlebars-conditional (orgItemId, autoInitialized, autoRosterEnabled, waves). The actual rendered word count for any single config is much less than the full file. Further compression would require removing structural content.
+- FEAT-512 (subagent/agent/auxiliary prompts): FUP-048 was correct — these were already mostly tight. Minimal changes made to agent descriptions; compaction and memory templates preserved their schema definitions.
+- Total reduction: ~23,000 → ~15,600 words (~32% reduction) vs target of ~46%. The gap is because: (1) plan-mode-approved has significant irreducible Handlebars structure; (2) the TDD sub-outline example and execution manifest example in plan-mode-active were restored after testing showed they pass the non-obvious exemplar test; (3) tool descriptions retained more examples than planned after the exemplar test was applied rigorously.

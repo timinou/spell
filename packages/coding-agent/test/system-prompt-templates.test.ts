@@ -169,16 +169,14 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain("call `search_tool_bm25` before concluding no such tool exists");
 	});
 
-	test("todo-write prompt includes Dependency Management section and omits 'On blockers:'", async () => {
+	test("todo-write prompt includes dependency management content and omits 'On blockers:'", async () => {
 		const templatePath = path.join(import.meta.dir, "../src/prompts/tools/todo-write.md");
 		const template = await Bun.file(templatePath).text();
 		const rendered = renderPromptTemplate(template, baseRenderContext);
 
-		// FEAT-099: Dependency Management section present
-		expect(rendered).toContain("## Dependency Management");
-		expect(rendered).toContain("### Smart gate enforcement");
-		expect(rendered).toContain("### When to use `blockers`");
-		expect(rendered).toContain("### Cross-group dependency example");
+		// FEAT-099: Dependency management content present
+		expect(rendered).toContain("dependency-management");
+		expect(rendered).toContain("blockers");
 
 		// FEAT-099: "On blockers:" removed, replaced with "On runtime impediments:"
 		expect(rendered).not.toContain("On blockers:");
@@ -199,9 +197,7 @@ describe("system Handlebars prompt templates", () => {
 
 		// FEAT-098: DEPENDS property guidance in child item requirements
 		expect(rendered).toContain(":DEPENDS:");
-		expect(rendered).toContain('properties: { DEPENDS: "ITEM-ID-1 ITEM-ID-2" }');
-		// Example flow shows DEPENDS usage
-		expect(rendered).toContain('DEPENDS: "FEAT-001-add-auth-api"');
+		expect(rendered).toContain("inter-item dependencies");
 	});
 
 	test("system-prompt renders terse thinking instructions in stable section", async () => {

@@ -57,11 +57,9 @@ describe("plan-mode allowed folder prompts", () => {
 			planModeUiuxPrompt: "",
 		});
 
-		expect(rendered).toContain(
-			"Include verification criteria: exact tests, checks, or manual proof the executor must produce",
-		);
+		expect(rendered).toContain("verification criteria (exact tests, checks, or manual proof)");
 		expect(rendered).toContain("* Verification");
-		expect(rendered).toContain("required screenshot/artifact and what it must prove");
+		expect(rendered).toContain("screenshots/artifacts for UI behavior");
 	});
 
 	it("keeps the subagent prompt read-only when no folders are configured", () => {

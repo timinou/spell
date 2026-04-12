@@ -1,0 +1,133 @@
+#+TITLE: Compress AGENTSmd to terse constraint notation
+#+STATE: DONE
+#+SESSION_ID: 14b7bf36e09ede5e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-00-31-490Z_14b7bf36e09ede5e.jsonl]]
+#+CUSTOM_ID: FEAT-507-compress-agents-md-to-terse-constraint-n
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: prompt
+#+DEPENDS: FEAT-506-define-prompt-surface-compression-contra
+
+* Initial Message
+
+Look at PLAN 181 and PLAN 207. With the same freedom, can you tell me how you could express yourself even more by applying the terse thinking mode to the whole surface of what is sent to the llm?
+
+* Scope
+Compress =AGENTS.md= from ~5,500 tokens of developer tutorial prose to ~1,800 tokens of terse constraint notation. This is the single highest-impact compression target.
+
+** In scope
+- Rewrite =AGENTS.md= to terse constraint notation
+- Preserve all constraints and rules (MUST/MUST NOT)
+- Preserve all project-specific information the model cannot derive
+
+** Out of scope
+- System prompt template (=system-prompt.md=) — separate item
+- Tool descriptions — separate items
+- Adding new rules or changing existing rules (content-preserving rewrite only)
+
+* Existing Patterns
+- =specs/prompt-surface-compression.md= (created by FEAT-506) — defines the compression rules
+- =specs/system-prompt-architecture.md= — documents AGENTS.md boundary: "AGENTS.md encodes how THIS project works"
+- Current AGENTS.md structure: Package Structure, Org Logic, Code Quality, Bun Over Node, Logging, TUI Rendering, Commands, Testing, GitHub Issues, Style, Changelog, Releasing
+
+* Design Decisions
+1. Compress in place — the file itself becomes terse. Developers read constraint notation.
+2. No BAD/GOOD code pairs unless the pattern is genuinely non-obvious (the model knows what namespace imports look like)
+3. Tables for decision rules (e.g., "Where Bun Wins" table stays but shrinks)
+4. Package Structure table: keep as-is (already concise)
+5. Commands table: keep as-is (already concise)
+6. Code Quality section: each rule becomes one bullet, no code examples
+7. Bun Over Node section: biggest opportunity — ~2,000 words of tutorials → ~400 words of constraint lists
+8. Testing Guidance: already reasonably terse, light compression
+9. Preserve Handlebars-consumable markdown format (the file is injected raw into prompts)
+
+* Implementation
+
+** Compress Code Quality section
+:PROPERTIES:
+:CUSTOM_ID: FEAT-507::compress-code-quality
+:END:
+Transform from prose + code examples to bullet constraints.
+
+Before (example):
+#+begin_src
+- **No `private`/`protected`/`public` keyword on class fields or methods** — use ES native `#` private fields...
+  ```typescript
+  // BAD: TypeScript keyword privacy
+  class Foo {
+      private bar: string;
+  }
+  // GOOD: ES native # for private
+  class Foo {
+      #bar: string;
+  }
+  ```
+#+end_src
+
+After:
+#+begin_src
+- Class encapsulation: ES =#= private fields, bare for accessible. No =private=/=protected=/=public= keywords except constructor parameter properties.
+#+end_src
+
+Apply same transform to: no =any=, export style, no =ReturnType<>=, no inline imports, Promise.withResolvers, no inline prompts, import text files via Bun, =import * as= for node builtins.
+
+** Compress Bun Over Node section
+:PROPERTIES:
+:CUSTOM_ID: FEAT-507::compress-bun
+:DEPENDS: FEAT-507::compress-code-quality
+:END:
+This is ~2,000 words. Target: ~400 words.
+
+- Delete all BAD/GOOD code pair blocks
+- Process Execution: "=$= template literals for simple commands; =Bun.spawn= only for long-running/streaming/lifecycle"
+- Sleep: "=Bun.sleep(ms)= not setTimeout promise"
+- Node imports: "=import * as fs= namespace only for node:fs, node:path, node:os"
+- File I/O: constraint list only. "=Bun.file()= for read, =Bun.write()= for write (auto-creates dirs), =node:fs/promises= for directories"
+- Anti-patterns section: compress to one-line-per-pattern table
+- "Where Bun Wins" table: keep structure, remove "Not" column (just state the rule)
+- Streams: "Use =readStream()=, =readLines()= helpers. Manual reader loops only for SSE/streaming JSON-RPC."
+- JSON5/JSONL/StringWidth/WrapAnsi: one line each
+
+** Compress remaining sections
+:PROPERTIES:
+:CUSTOM_ID: FEAT-507::compress-remaining
+:DEPENDS: FEAT-507::compress-bun
+:END:
+- Logging: already 3 lines, keep
+- TUI Rendering: compress to constraint list (tabs→spaces, truncate lines, shorten paths)
+- Testing Guidance: compress prose to constraint list
+- GitHub Issues: compress
+- Style: already terse, keep
+- Changelog: compress format section
+- Releasing: keep (already 3 lines)
+- Streaming tool previews: compress to constraint list
+
+* Edge Cases
+- AGENTS.md is consumed raw by the prompt system (no rendering pipeline). The file IS the prompt content.
+- Some AGENTS.md rules reference specific function names (=replaceTabs()=, =shortenPath()=, =readStream()=) — these MUST survive compression.
+- The file is also read by human developers — constraint notation must be unambiguous.
+- Some code examples in the Bun section are genuinely helpful for developers new to Bun APIs. But the LLM knows Bun. Favor LLM efficiency over developer onboarding.
+
+* Acceptance Criteria
+- =AGENTS.md= exists, is valid markdown
+- All MUST/MUST NOT constraints from the original survive
+- All project-specific rules preserved (no rule deleted)
+- No BAD/GOOD code pairs remain (unless genuinely non-obvious)
+- Token count: measure before and after; target ~65% reduction
+- Existing tests pass: =bun test packages/coding-agent/test/system-prompt-templates.test.ts=
+
+* Verification
+#+begin_src sh
+# Tests
+bun test packages/coding-agent/test/system-prompt-templates.test.ts
+
+# Key constraint survival (spot-check)
+grep -c "MUST" AGENTS.md  # should be >= 15
+grep -q "import \* as" AGENTS.md  # namespace import rule survives
+grep -q "Bun.file" AGENTS.md  # Bun file API rule survives
+grep -q "#.*private" AGENTS.md  # ES private field rule survives
+grep -q "console.log" AGENTS.md  # logging prohibition survives
+
+# Token count measurement
+wc -w AGENTS.md  # target: < 2000 words (from ~4500)
+#+end_src

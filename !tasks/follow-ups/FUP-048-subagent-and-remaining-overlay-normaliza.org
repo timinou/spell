@@ -1,11 +1,13 @@
 #+TITLE: Subagent and remaining overlay normalization
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14b79aec8fda64f1
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-21-58-207Z_14b79aec8fda64f1.jsonl]]
 #+CUSTOM_ID: FUP-048-subagent-and-remaining-overlay-normaliza
 #+EFFORT: 3h
 #+PRIORITY: #C
 #+LAYER: prompt
+
+NOTE [2026-04-12]: Subsumed by PLAN-214: subagent prompts audited, agent descriptions compressed where prose padding found, plan-mode overlays further compressed.
 
 
 * Initial Message
