@@ -1,0 +1,71 @@
+#+TITLE: Harden Spell Recover Audit Findings
+#+STATE: DONE
+#+SESSION_ID: 14b70bc39f92151f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-56-29-694Z_14b70bc39f92151f.jsonl]]
+#+CUSTOM_ID: PLAN-202-harden-spell-recover-audit-findings
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-062-audit-implementation:
+
+1. **What**: `--clean` short-circuits every other flag, so combined modes do not work and `--dry-run --clean` would still delete files  
+   **Where**: `packages/coding-agent/src/commands/recover.ts`, top of `RecoverCommand.run()` in the early `if (flags.clean)` branch  
+   **Why**: This violates the command contract established by the plan: `--clean` cannot be combined with recovery, and `--dry-run` loses its non-mutating guarantee if passed with `--clean`. That is both a UX inconsistency and a real footgun.  
+   **Effort**: small
+
+2. **What**: Direct-mode recovery reports success without verifying Ghostty actually accepted or kept the new process alive  
+   **Where**: `packages/coding-agent/src/commands/recover.ts`, `spawnRecoveredSession(..., direct)` returning `true` immediately for direct launches  
+   **Why**: In `--direct` mode the command deletes the status file after a successful `Bun.spawn(...)` call, even if Ghostty exits immediately or rejects the arguments after launch. That recreates the original “retry becomes impossible” failure mode in the explicit fallback path.  
+   **Effort**: small
+
+3. **What**: The actual `--command=` payload is built from an unvalidated raw `sessionId`, while the displayed dry-run command implies shell-safe quoting  
+   **Where**: `packages/coding-agent/src/commands/recover.ts`, `formatGhosttyCommandValue()` and `buildSpawnArgs()`  
+   **Why**: Today session IDs are probably simple, but the code contract accepts any non-empty string from the status file. If the format ever changes, or the file is corrupted/tampered with, the Ghostty command payload can split unexpectedly or execute a different command than intended. The dry-run output looks safer than the real execution path.  
+   **Effort**: trivial
+
+4. **What**: There is no test coverage for the flag interaction bug around `--clean` with other modes  
+   **Where**: `packages/coding-agent/test/recover-command.test.ts`  
+   **Why**: The current suite covers `--clean` alone, normal recovery, and dry-run separately, but not the highest-risk interaction: `--clean --dry-run` or `--clean` combined with normal recovery flags. That leaves the current contract regression unguarded.  
+   **Effort**: trivial
+
+
+* Context
+
+Post-implementation audit (AUD-062) of PLAN-198 (spell recover overhaul) identified four hardening gaps in ~packages/coding-agent/src/commands/recover.ts~:
+
+1. ~--clean~ flag short-circuits ~--dry-run~, violating the non-mutating guarantee of dry-run mode
+2. ~--direct~ mode reports spawn success without checking whether Ghostty actually accepted the command
+3. ~isRecoverableSession~ accepts any non-empty string as ~sessionId~, allowing corrupted status files to inject unexpected content into Ghostty command payloads
+4. No test coverage for ~--clean --dry-run~ interaction or ~--direct~ immediate-exit failure
+
+All fixes are scoped to two files (~recover.ts~ + ~recover-command.test.ts~), total effort ~30min.
+
+** Key Decisions
+
+1. ~--clean~ branch checks ~flags["dry-run"]~ first; dry path counts stale files via ~reader.readCrashed()~ + ~isRecoverableSession~ filter, reports count, does not delete
+2. Direct mode uses ~Promise.race([proc.exited, Bun.sleep(200)])~ to detect immediate rejection; still-running after 200ms = success (normal GUI), exit 0 = success, exit non-zero = failure
+3. ~isRecoverableSession~ validates ~sessionId~ against ~/^[a-zA-Z0-9_\-]+$/~ instead of just ~length > 0~
+4. Two new tests: (a) ~--clean --dry-run~ previews without deleting, (b) ~--direct~ with failing ghostty preserves status file
+
+* Verification
+
+- ~bun test packages/coding-agent/test/recover-command.test.ts~ — all tests pass including two new ones
+- ~bun check:ts~ — no type errors in modified packages
+
+* Execution Manifest
+
+** Wave 1: All fixes (single item, all in same two files)
+- [[id:BUG-226-harden-spell-recover-flag-interactions-a]] — ~30m effort, #B priority
+
+
+** Completion [2026-04-12]
+*** Verification
+- `bun test packages/coding-agent/test/recover-command.test.ts` -> passed (`20 pass`, `0 fail`). Verified the new regressions for corrupted session IDs staying non-recoverable in dry-run mode, `--clean --dry-run` preserving files, and `--direct` immediate-exit Ghostty failures preserving status files.
+- `bun check:ts` -> passed (`biome check . && tsgo -p tsconfig.json`).
+*** Artifacts
+- [[file:packages/coding-agent/src/commands/recover.ts]]
+- [[file:packages/coding-agent/test/recover-command.test.ts]]
+- [[file:!tasks/bugs/BUG-226-harden-spell-recover-flag-interactions-a.org]]
+*** Deviations
+- Added `10_000` ms per-test timeouts to the existing startup-warning CLI integration tests in `packages/coding-agent/test/recover-command.test.ts` because the file-level run was intermittently exceeding Bun's default `5_000` ms timeout even when the assertions passed. Coverage and assertions are unchanged.
