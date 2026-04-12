@@ -5,6 +5,8 @@
 #+CUSTOM_ID: PLAN-194-harden-semantic-search-post-implementati
 
 
+
+
 * Initial Message
 
 Implement these audit recommendations from org://AUD-060-audit-implementation:
@@ -113,3 +115,9 @@ Total estimated effort: 3h45m
 - Prompt documentation: [[file:packages/coding-agent/src/prompts/tools/code.md]]
 *** Deviations
 - Full `bun check:rs` verification remains blocked by unrelated workspace failures in `crates/tree-sitter-org/src/lib.rs` and `crates/pi-code-engine/src/navigate.rs`, so this PLAN item remains in `DOING` rather than `DONE`.
+
+
+*** Verification Retry
+- Per follow-up instruction, retried `bun check:rs` before committing again.
+- Result: still failed due unrelated workspace issues outside PLAN-194 scope, now in `crates/pi-code-engine/build.rs` (multiple clippy violations: `collapsible_if`, `uninlined_format_args`).
+- Commit requested anyway; plan state remains truthful (`DOING`).
