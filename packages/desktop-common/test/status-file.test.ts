@@ -223,6 +223,83 @@ describe("StatusFileReader", () => {
 		expect(await Bun.file(path.join(TEST_DIR, "2.json")).exists()).toBe(true);
 	});
 
+	it("removes only dead status files that cannot be recovered", async () => {
+		const reader = new StatusFileReader(TEST_DIR);
+		await Bun.write(
+			path.join(TEST_DIR, "3.json"),
+			JSON.stringify({
+				status: "running",
+				windowId: 3,
+				pid: 999999,
+				projectName: "stale",
+				sessionTitle: "missing-metadata",
+				updatedAt: Date.now(),
+			}),
+		);
+		await Bun.write(
+			path.join(TEST_DIR, "4.json"),
+			JSON.stringify({
+				status: "running",
+				windowId: 4,
+				pid: 999999,
+				projectName: "recoverable",
+				sessionTitle: "resume-me",
+				updatedAt: Date.now(),
+				sessionId: "sess-4",
+				cwd: "/tmp/project-4",
+			}),
+		);
+		await Bun.write(
+			path.join(TEST_DIR, "5.json"),
+			JSON.stringify({
+				status: "running",
+				windowId: 5,
+				pid: process.pid,
+				projectName: "live",
+				sessionTitle: "keep-me",
+				updatedAt: Date.now(),
+			}),
+		);
+
+		const cleaned = await reader.cleanStale();
+		expect(cleaned).toBe(1);
+		expect(await Bun.file(path.join(TEST_DIR, "3.json")).exists()).toBe(false);
+		expect(await Bun.file(path.join(TEST_DIR, "4.json")).exists()).toBe(true);
+		expect(await Bun.file(path.join(TEST_DIR, "5.json")).exists()).toBe(true);
+	});
+
+	it("logs stale cleanup failures and continues", async () => {
+		const reader = new StatusFileReader(TEST_DIR);
+		const stalePath = path.join(TEST_DIR, "6.json");
+		await Bun.write(
+			stalePath,
+			JSON.stringify({
+				status: "running",
+				windowId: 6,
+				pid: 999999,
+				projectName: "stale",
+				sessionTitle: "permission-error",
+				updatedAt: Date.now(),
+			}),
+		);
+		const warnSpy = spyOn(logger, "warn").mockImplementation(() => {});
+		spyOn(fs, "rm").mockImplementation(async targetPath => {
+			if (String(targetPath) === stalePath) {
+				throw new Error("permission denied");
+			}
+		});
+
+		const cleaned = await reader.cleanStale();
+		expect(cleaned).toBe(0);
+		expect(warnSpy).toHaveBeenCalledWith(
+			"StatusFileReader: stale cleanup failed",
+			expect.objectContaining({
+				path: stalePath,
+				err: "Error: permission denied",
+			}),
+		);
+	});
+
 	it("keeps backwards compatibility with older status files", async () => {
 		const reader = new StatusFileReader(TEST_DIR);
 
@@ -248,5 +325,6 @@ describe("StatusFileReader", () => {
 		const reader = new StatusFileReader("/nonexistent/path/spell-test");
 		expect(await reader.readAll()).toEqual([]);
 		expect(await reader.readCrashed()).toEqual([]);
+		expect(await reader.cleanStale()).toBe(0);
 	});
 });

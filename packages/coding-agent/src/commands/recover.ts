@@ -37,8 +37,15 @@ function formatSessionLabel(session: SessionStatusFile): string {
 	return `${session.projectName}: ${session.sessionTitle || "(untitled)"}`;
 }
 
-function formatSpawnCommand(session: RecoverableStatusSession): string {
-	return `ghostty +new-window --working-directory=${shellQuote(session.cwd)} -e spell -r ${shellQuote(session.sessionId)}`;
+function formatGhosttyCommandValue(session: RecoverableStatusSession): string {
+	return `spell -r ${session.sessionId}`;
+}
+
+function formatSpawnCommand(session: RecoverableStatusSession, direct = false): string {
+	if (direct) {
+		return `ghostty --working-directory=${shellQuote(session.cwd)} --title=${shellQuote(formatSessionLabel(session))} -e spell -r ${shellQuote(session.sessionId)}`;
+	}
+	return `ghostty +new-window --working-directory=${shellQuote(session.cwd)} --title=${shellQuote(formatSessionLabel(session))} --command=${shellQuote(formatGhosttyCommandValue(session))}`;
 }
 
 function formatManualResumeCommand(session: RecoverableStatusSession): string {
@@ -51,6 +58,23 @@ function formatWorkspaceCommand(workspaceName: string): string {
 
 function commandExists(command: string): boolean {
 	return Boolean(Bun.which(command));
+}
+
+function writeCleanupSummary(cleanedStale: number): void {
+	if (cleanedStale > 0) {
+		process.stdout.write(`Cleaned ${cleanedStale} stale status file(s).\n`);
+	}
+}
+
+function writeManualFallbackInstructions(groups: RecoveryGroup[]): void {
+	process.stdout.write(
+		"\nIf you see an empty shell instead of a recovered session, re-run with --direct or run one of these commands manually:\n",
+	);
+	for (const group of groups) {
+		for (const { session } of group.sessions) {
+			process.stdout.write(`  ${formatManualResumeCommand(session)}\n`);
+		}
+	}
 }
 
 async function activateWorkspace(workspaceName: string): Promise<boolean> {
@@ -67,17 +91,39 @@ async function activateWorkspace(workspaceName: string): Promise<boolean> {
 	}
 }
 
-async function spawnRecoveredSession(session: RecoverableStatusSession): Promise<boolean> {
+function buildSpawnArgs(session: RecoverableStatusSession, direct: boolean): string[] {
+	const title = formatSessionLabel(session);
+	if (direct) {
+		return [
+			"ghostty",
+			`--working-directory=${session.cwd}`,
+			`--title=${title}`,
+			"-e",
+			"spell",
+			"-r",
+			session.sessionId,
+		];
+	}
+	return [
+		"ghostty",
+		"+new-window",
+		`--working-directory=${session.cwd}`,
+		`--title=${title}`,
+		`--command=${formatGhosttyCommandValue(session)}`,
+	];
+}
+
+async function spawnRecoveredSession(session: RecoverableStatusSession, direct: boolean): Promise<boolean> {
 	try {
-		const proc = Bun.spawn(
-			["ghostty", "+new-window", `--working-directory=${session.cwd}`, "-e", "spell", "-r", session.sessionId],
-			{
-				stdin: "ignore",
-				stdout: "pipe",
-				stderr: "pipe",
-				windowsHide: true,
-			},
-		);
+		const proc = Bun.spawn(buildSpawnArgs(session, direct), {
+			stdin: "ignore",
+			stdout: direct ? "ignore" : "pipe",
+			stderr: direct ? "ignore" : "pipe",
+			windowsHide: true,
+		});
+		if (direct) {
+			return true;
+		}
 		return (await proc.exited) === 0;
 	} catch {
 		return false;
@@ -104,12 +150,24 @@ export default class RecoverCommand extends Command {
 	static flags = {
 		"dry-run": Flags.boolean({ description: "Preview recovery without spawning windows" }),
 		"no-workspace": Flags.boolean({ description: "Skip niri workspace activation" }),
+		direct: Flags.boolean({
+			description: "Launch standalone Ghostty processes instead of using +new-window IPC",
+		}),
+		clean: Flags.boolean({ description: "Remove stale status files without recovery metadata" }),
 	};
 
 	async run(): Promise<void> {
 		const { flags } = await this.parse(RecoverCommand);
-		const crashed = await new StatusFileReader().readCrashed();
+		const reader = new StatusFileReader();
+		if (flags.clean) {
+			const cleanedStale = await reader.cleanStale();
+			process.stdout.write(
+				cleanedStale > 0 ? `Cleaned ${cleanedStale} stale status file(s).\n` : "No stale status files to clean.\n",
+			);
+			return;
+		}
 
+		const crashed = await reader.readCrashed();
 		if (crashed.length === 0) {
 			process.stdout.write("No crashed sessions to recover.\n");
 			return;
@@ -120,9 +178,6 @@ export default class RecoverCommand extends Command {
 		for (const session of crashed) {
 			if (!isRecoverableSession(session)) {
 				skippedMissingMetadata += 1;
-				process.stderr.write(
-					`Warning: skipping stale status file for window ${session.windowId} (${formatSessionLabel(session)}) because recovery metadata is incomplete.\n`,
-				);
 				continue;
 			}
 			recoverable.push({
@@ -133,6 +188,7 @@ export default class RecoverCommand extends Command {
 
 		if (recoverable.length === 0) {
 			process.stdout.write("No recoverable crashed sessions found.\n");
+			writeCleanupSummary(await reader.cleanStale());
 			return;
 		}
 
@@ -151,7 +207,9 @@ export default class RecoverCommand extends Command {
 
 		if (flags["dry-run"]) {
 			const spawnMode = ghosttyAvailable
-				? "planned recovery commands"
+				? flags.direct
+					? "planned direct recovery commands"
+					: "planned recovery commands"
 				: "manual fallback commands (ghostty not found)";
 			process.stdout.write(`Dry run — showing ${spawnMode}:\n`);
 			if (flags["no-workspace"]) {
@@ -165,13 +223,13 @@ export default class RecoverCommand extends Command {
 				}
 				for (const { session } of group.sessions) {
 					process.stdout.write(
-						`${ghosttyAvailable ? formatSpawnCommand(session) : formatManualResumeCommand(session)}\n`,
+						`${ghosttyAvailable ? formatSpawnCommand(session, flags.direct) : formatManualResumeCommand(session)}\n`,
 					);
 				}
 			}
 			if (skippedMissingMetadata > 0) {
 				process.stdout.write(
-					`\nSkipped ${skippedMissingMetadata} stale status file(s) missing recovery metadata.\n`,
+					`\nWould clean ${skippedMissingMetadata} stale status file(s) missing recovery metadata during a real recovery run.\n`,
 				);
 			}
 			return;
@@ -184,9 +242,7 @@ export default class RecoverCommand extends Command {
 					process.stdout.write(`${formatManualResumeCommand(session)}\n`);
 				}
 			}
-			if (skippedMissingMetadata > 0) {
-				process.stdout.write(`Skipped ${skippedMissingMetadata} stale status file(s) missing recovery metadata.\n`);
-			}
+			writeCleanupSummary(await reader.cleanStale());
 			return;
 		}
 
@@ -206,7 +262,7 @@ export default class RecoverCommand extends Command {
 				}
 			}
 			for (const { session, statusFilePath } of group.sessions) {
-				const spawned = await spawnRecoveredSession(session);
+				const spawned = await spawnRecoveredSession(session, flags.direct === true);
 				if (!spawned) {
 					failedCount += 1;
 					process.stderr.write(`Warning: failed to recover ${formatSessionLabel(session)}.\n`);
@@ -228,8 +284,7 @@ export default class RecoverCommand extends Command {
 				`Recovery failed for ${failedCount} session(s); their status files were left in place.\n`,
 			);
 		}
-		if (skippedMissingMetadata > 0) {
-			process.stdout.write(`Skipped ${skippedMissingMetadata} stale status file(s) missing recovery metadata.\n`);
-		}
+		writeCleanupSummary(await reader.cleanStale());
+		writeManualFallbackInstructions(groups);
 	}
 }

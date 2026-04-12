@@ -1,0 +1,173 @@
+#+TITLE: Fix ghostty new-window command not executing spell -r
+#+STATE: DONE
+#+SESSION_ID: 14b7040554521518
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-22-39-825Z_14b7040554521518.jsonl]]
+#+CUSTOM_ID: BUG-220-fix-ghostty-new-window-command-not-execu
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: cli
+
+NOTE [2026-04-12]: Implemented Ghostty recovery command overhaul: +new-window now uses --title and --command, --direct launches standalone Ghostty processes, and recover prints manual fallback commands after recovery. Verified via recover-command tests and bun check:ts.
+
+* Initial Message
+
+after spell recover:
+
+Warning: skipping stale status file for window 142 (spell_kdl-config: (untitled)) because recovery metadata is incomplete.
+Warning: skipping stale status file for window 144 (spell: (untitled)) because recovery metadata is incomplete.
+Warning: skipping stale status file for window 153 (spell: Code-Specific Vector Embeddings Research) because recovery metadata is incomplete.
+Warning: skipping stale status file for window 155 (spell: Integrating AST Edit Grep and Structural Editing) because recovery metadata is incomplete.
+Found 5 recoverable crashed session(s):
+
+Workspace Hotelcomm:
+  - hotelcomm: Concierge Instruction Adherence Configuration
+
+Workspace (unnamed):
+  - myapp: second-title
+
+Workspace Spell code agent:
+  - spell: Optimizing Code Edit Ergonomics
+  - spell: Continue Previous Coding Task
+  - spell: Sniper Tool Integration for Subtasks
+
+Recovered hotelcomm: Concierge Instruction Adherence Configuration.
+Recovered myapp: second-title.
+Recovered spell: Optimizing Code Edit Ergonomics.
+Recovered spell: Continue Previous Coding Task.
+Recovered spell: Sniper Tool Integration for Subtasks.
+Recovered 5 session(s).
+Skipped 75 stale status file(s) missing recovery metadata.
+
+* Problem
+
+~spell recover~ spawns Ghostty windows via IPC (~ghostty +new-window~), but the ~-e spell -r <sessionId>~ command is not executed inside the new window. The window opens with the user's default shell prompt instead of the recovered spell session. This affects Ghostty 1.3.0 and is likely caused by multi-argument forwarding bugs in the ~+new-window~ IPC path.
+
+The current command format:
+#+begin_example
+ghostty +new-window --working-directory=<cwd> -e spell -r <sessionId>
+#+end_example
+
+Uses ~-e~ with multiple subsequent arguments (~spell~, ~-r~, ~<sessionId>~) as separate argv entries. Ghostty's IPC protocol must serialize these and deserialize them in the receiving instance. The multi-arg parsing is buggy in 1.3.0.
+
+* Design Decisions
+
+1. Switch from ~-e <args...>~ (multi-arg) to ~--command=<full command>~ (single key-value pair). Ghostty docs confirm ~--command~ is supported for ~+new-window~. A single k=v pair is more robust for IPC serialization.
+2. Add ~--title=<project: session>~ to windows for identification.
+3. Add ~--direct~ flag to bypass ~+new-window~ IPC entirely and launch standalone ~ghostty~ processes. This is a guaranteed workaround for any IPC bugs. When ~--direct~ is set, spawn ~ghostty --working-directory=<cwd> -e spell -r <id>~ (no IPC, new process per window).
+4. Always print manual fallback commands after recovery so users have a backup.
+
+* Files to Modify
+
+- ~packages/coding-agent/src/commands/recover.ts~
+- ~packages/coding-agent/test/recover-command.test.ts~
+
+* Implementation
+
+** Update ~formatSpawnCommand~ function
+
+Change from:
+#+begin_src typescript
+function formatSpawnCommand(session: RecoverableStatusSession): string {
+    return `ghostty +new-window --working-directory=${shellQuote(session.cwd)} -e spell -r ${shellQuote(session.sessionId)}`;
+}
+#+end_src
+
+To:
+#+begin_src typescript
+function formatSpawnCommand(session: RecoverableStatusSession): string {
+    return `ghostty +new-window --working-directory=${shellQuote(session.cwd)} --title=${shellQuote(formatSessionLabel(session))} --command=${shellQuote(`spell -r ${session.sessionId}`)}`;
+}
+#+end_src
+
+** Update ~spawnRecoveredSession~ function
+
+Change from:
+#+begin_src typescript
+Bun.spawn(
+    ["ghostty", "+new-window", `--working-directory=${session.cwd}`, "-e", "spell", "-r", session.sessionId],
+    { stdin: "ignore", stdout: "pipe", stderr: "pipe", windowsHide: true },
+);
+#+end_src
+
+To:
+#+begin_src typescript
+Bun.spawn(
+    ["ghostty", "+new-window", `--working-directory=${session.cwd}`, `--title=${formatSessionLabel(session)}`, `--command=spell -r ${session.sessionId}`],
+    { stdin: "ignore", stdout: "pipe", stderr: "pipe", windowsHide: true },
+);
+#+end_src
+
+** Add direct mode variant
+
+Add a ~formatDirectSpawnCommand~ and ~spawnRecoveredSessionDirect~ that bypass IPC:
+
+#+begin_src typescript
+function formatDirectSpawnCommand(session: RecoverableStatusSession): string {
+    return `ghostty --working-directory=${shellQuote(session.cwd)} --title=${shellQuote(formatSessionLabel(session))} -e spell -r ${shellQuote(session.sessionId)}`;
+}
+
+async function spawnRecoveredSessionDirect(session: RecoverableStatusSession): Promise<boolean> {
+    try {
+        Bun.spawn(
+            ["ghostty", `--working-directory=${session.cwd}`, `--title=${formatSessionLabel(session)}`, "-e", "spell", "-r", session.sessionId],
+            { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
+        );
+        // Direct launch stays alive as a child process — detach by not awaiting
+        return true;
+    } catch {
+        return false;
+    }
+}
+#+end_src
+
+Note: direct mode uses ~-e~ with standalone ghostty (no IPC), which works reliably. ~Bun.spawn~ without awaiting ~proc.exited~ lets the process run independently.
+
+** Add ~--direct~ flag to ~RecoverCommand.flags~
+
+#+begin_src typescript
+static flags = {
+    "dry-run": Flags.boolean({ description: "Preview recovery without spawning windows" }),
+    "no-workspace": Flags.boolean({ description: "Skip niri workspace activation" }),
+    "direct": Flags.boolean({ description: "Launch standalone Ghostty processes instead of using +new-window IPC" }),
+};
+#+end_src
+
+** Update ~run()~ method
+
+After the main recovery loop, always print manual fallback commands:
+#+begin_src
+If you see an empty shell instead of a recovered session, re-run with --direct or manually:
+  cd /path/to/project && spell -r sess-id
+#+end_src
+
+Use ~flags.direct~ to choose between ~spawnRecoveredSession~ and ~spawnRecoveredSessionDirect~.
+
+** Update dry-run output to show new command format
+
+When ~--direct~ is set, dry-run shows standalone commands. Otherwise shows ~+new-window~ with ~--command=~.
+
+* Tests to Update
+
+** Existing test: "shows dry-run ghostty and niri commands"
+Update assertion from:
+~ghostty +new-window --working-directory=/tmp/alpha -e spell -r sess-1~
+to the new ~--command=~ format.
+
+** Existing test: "recovers sessions with ghostty"
+Update ghostty log assertion to match new command format.
+
+** New test: ~--direct~ dry-run shows standalone commands
+Create status files, run with ~--dry-run --direct~, verify output shows standalone ~ghostty --working-directory=... -e spell -r ...~ format (no ~+new-window~).
+
+** New test: ~--direct~ recovery spawns standalone processes
+Create stub ghostty, run with ~--direct~, verify ghostty log shows standalone format.
+
+** New test: manual commands printed after recovery
+Run recovery, verify stdout includes "If you see an empty shell" fallback message with manual commands.
+
+* Verification
+
+- ~bun test packages/coding-agent/test/recover-command.test.ts~ passes
+- Dry-run output shows ~--command=~ format instead of ~-e~
+- ~--direct~ flag produces standalone ghostty commands
+- Manual fallback commands always printed after recovery
