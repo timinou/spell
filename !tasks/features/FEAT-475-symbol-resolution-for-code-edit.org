@@ -1,0 +1,132 @@
+#+TITLE: Symbol Resolution for Code Edit
+#+STATE: DONE
+#+SESSION_ID: 14b7024d5e1da06d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-15-09-305Z_14b7024d5e1da06d.jsonl]]
+#+CUSTOM_ID: FEAT-475-symbol-resolution-for-code-edit
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: engine
+
+NOTE [2026-04-12]: Implemented symbol resolution, declaration_for consolidation, and resolve.rs tests verified with cargo test -p pi-code-engine resolve.
+
+* Initial Message
+
+How would you make the edit experience with the code tool so ergonomic it's even more ergonomic than giving line diffs in the language?
+
+* Context
+
+The code tool's edit operations currently target nodes by =line + node_type=.
+This is fragile (the agent must know tree-sitter node type names) and requires
+a =navigate node-at= pre-step to verify the target.
+
+Symbol targeting replaces this: =symbol: "handleRequest"= or =symbol: "MyClass.method"=
+(dotted for class members) unambiguously identifies a declaration without coordinates.
+
+This is the foundation for all new edit operations (patch, replace-body, wrap, rename).
+
+* Design Decisions
+1. Symbol resolution lives in a new module =crates/pi-code-engine/src/resolve.rs=
+2. Resolution walks the tree-sitter tree directly (not through outline → line → node_at_line) but reuses =declaration_for()= from outline.rs
+3. =declaration_for()= currently exists as a private =fn= in *both* =outline.rs= (line ~99) and =navigate.rs= (line ~283) — identical implementations. Consolidate: make the one in =outline.rs= =pub(crate)=, then delete the duplicate in =navigate.rs= and have =navigate.rs= import from =outline.rs= instead. This ensures one source of truth.
+4. Dotted names: =symbol.split('.')= — first part matches a top-level declaration, second part matches a class member (via =class_like= patterns and =body_field=)
+5. Ambiguity: if multiple declarations share a name (e.g., overloads), return error listing all candidates with line numbers
+6. Returns =ResolvedSymbol= struct with the node's byte range and optional body byte range
+7. For =export_statement= wrappers (TypeScript), unwrap to the inner declaration (same logic as outline.rs =entry_for_node=)
+8. *body_field availability* (verified from =crates/pi-code-engine/src/language/mod.rs= lines 100-170):
+   - TypeScript declarations WITH body_field: =function_declaration=, =class_declaration=, =interface_declaration=, =enum_declaration=, =method_definition= (all =Some("body")=)
+   - TypeScript declarations WITHOUT body_field: =type_alias_declaration=, =lexical_declaration= / =variable_declaration= (all =None=)
+   - This means =const items = [...]= resolves to a =lexical_declaration= with =body_start_byte: None= / =body_end_byte: None=
+
+* API
+
+#+begin_src rust
+// crates/pi-code-engine/src/resolve.rs
+
+/// Resolved symbol with byte range and optional body range.
+pub struct ResolvedSymbol {
+    pub name: String,
+    pub kind: String,          // "fn", "class", "const", etc.
+    pub start_byte: usize,
+    pub end_byte: usize,
+    pub line: u32,             // 1-indexed
+    pub end_line: u32,         // 1-indexed
+    pub body_start_byte: Option<usize>,
+    pub body_end_byte: Option<usize>,
+}
+
+/// Resolve a symbol by name within a buffer.
+/// Supports dotted names for class members: "ClassName.methodName"
+pub fn resolve_symbol(
+    buffer: &CodeBuffer,
+    profile: &LanguageProfile,
+    symbol: &str,
+) -> Result<ResolvedSymbol>;
+#+end_src
+
+The function:
+1. Splits =symbol= on ='.'= to get parts
+2. Walks root node's named children
+3. For each child, unwraps =export_statement= (same as outline.rs)
+4. Calls =declaration_for(profile, node)= to check if it's a declaration
+5. Reads the name field: =node.child_by_field_name(&decl.name_field)=
+6. Compares name text against =parts[0]=
+7. If single-part and match → extract byte ranges, check =body_field= for body range
+8. If dotted and match → look up class_like body, walk members for =parts[1]=
+9. If no match → error "Symbol 'X' not found. Available: [list top-level names]"
+10. If multiple matches → error "Ambiguous symbol 'X': found at lines N, M"
+
+* Files to Create/Modify
+- *Create*: =crates/pi-code-engine/src/resolve.rs=
+- *Modify*: =crates/pi-code-engine/src/lib.rs= — add =pub mod resolve;= and re-export =ResolvedSymbol=, =resolve_symbol=
+- *Modify*: =crates/pi-code-engine/src/outline.rs= — change =fn declaration_for= (line ~99) to =pub(crate) fn declaration_for=
+- *Modify*: =crates/pi-code-engine/src/navigate.rs= — delete the duplicate =fn declaration_for= (line ~283) and import =use crate::outline::declaration_for;= instead
+
+* Test Plan (test-first — write tests before implementation)
+
+Test file: =crates/pi-code-engine/src/resolve.rs= (inline =#[cfg(test)]= module)
+
+Use the existing fixture =crates/pi-code-engine/tests/fixtures/sources/edit_target.ts=:
+#+begin_src typescript
+function outer() {
+  if (condition) {
+    const x = 1;
+    const y = 2;
+    return x + y;
+  }
+}
+
+const items = [1, 2, 3, 4, 5];
+
+function add(a: number, b: number): number {
+  return a + b;
+}
+
+class Foo {
+  bar() { return 1; }
+  baz() { return 2; }
+}
+#+end_src
+
+Test cases:
+1. =resolve_symbol(buffer, profile, "outer")= → ResolvedSymbol with name="outer", kind="fn", line=1, end_line=7, body range covering lines 1-7
+2. =resolve_symbol(buffer, profile, "add")= → name="add", kind="fn", line=11, end_line=13, body range present
+3. =resolve_symbol(buffer, profile, "items")= → name="items", kind="const", line=9, end_line=9, body range = None (const has no body_field in some profiles... actually it does have body "value" or similar. Check the profile.)
+4. =resolve_symbol(buffer, profile, "Foo")= → name="Foo", kind="class", line=15, end_line=18
+5. =resolve_symbol(buffer, profile, "Foo.bar")= → name="bar", line=16, end_line=16 (member resolution)
+6. =resolve_symbol(buffer, profile, "Foo.baz")= → name="baz", line=17, end_line=17
+7. =resolve_symbol(buffer, profile, "nonexistent")= → Err with "not found"
+8. =resolve_symbol(buffer, profile, "Foo.nonexistent")= → Err with "not found in Foo"
+9. =resolve_symbol(buffer, profile, "Foo.bar.deep")= → Err (only 2 levels supported)
+
+** Edge Cases
+- TypeScript =export function foo()= — must unwrap export_statement to find the function_declaration
+- =const x = 1= — verify body_field behavior for lexical_declaration (TypeScript profile has body_field for this?)
+  - Check: in the TypeScript profile built-in, what node_types have body_field? The implementing agent MUST inspect =crates/pi-code-engine/src/language/mod.rs= lines 100-170 to see the TypeScript profile's declarations list and which have body_field.
+- Empty class (no members) — =Foo.anything= should error cleanly
+
+* Acceptance Criteria
+
+1. =cargo test -p pi-code-engine resolve= passes — all 9+ test cases green
+2. =declaration_for= is =pub(crate)= and used by both =outline.rs= and =resolve.rs=
+3. =resolve_symbol= returns correct byte ranges that match the tree-sitter node's actual span
+4. Error messages include helpful context (available symbols, line numbers)

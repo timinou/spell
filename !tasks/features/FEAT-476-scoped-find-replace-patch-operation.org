@@ -1,0 +1,222 @@
+#+TITLE: Scoped FindReplace Patch Operation
+#+STATE: DONE
+#+SESSION_ID: 14b7024d5e1da06d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-15-09-305Z_14b7024d5e1da06d.jsonl]]
+#+CUSTOM_ID: FEAT-476-scoped-find-replace-patch-operation
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: engine
+#+DEPENDS: FEAT-475-symbol-resolution-for-code-edit
+
+NOTE [2026-04-12]: Implemented patch.rs with indent-insensitive scoped patching and verified with cargo test -p pi-code-engine patch.
+
+* Initial Message
+
+How would you make the edit experience with the code tool so ergonomic it's even more ergonomic than giving line diffs in the language?
+
+* Context
+
+The single biggest ergonomic gap in the code tool: to change one line in a 50-line
+function, the agent must reproduce all 50 lines. The scoped find/replace patch
+operation solves this — the agent specifies only what changes, within a named scope.
+
+This is the core new capability that makes code edit more ergonomic than line diffs.
+
+* Design Decisions
+1. New module: =crates/pi-code-engine/src/edit/patch.rs=
+2. Operation name: ="patch"=
+3. Input: a =ResolvedSymbol= (from FEAT-475) byte range + a list of ={ find, replace }= pairs
+4. *Indent-insensitive matching*: for each line in =find= text, strip leading whitespace before comparison. The matched region's indentation is preserved. Replacement text's indentation is adjusted to match the matched region's indent level.
+5. *Ambiguity*: if =find= text matches multiple locations within the symbol scope, return error with all match positions (byte offsets and line numbers). The agent must provide more specific text.
+6. *No buffer mutation inside =apply_patches=*: the function takes =&CodeBuffer= (immutable) and computes ALL =TextEdit= values against the *original* buffer text. It does NOT re-parse between patches. All =find= texts are matched against the same original scope text. If the user needs dependent patches (where patch 2 matches the output of patch 1), they must use multi-edit batching (two separate ="patch"= edits in the =edits= array at the NAPI layer, which applies and re-parses between each).
+7. Returns =Vec<TextEdit>= like other edit operations — integrates with existing =edit_batch=.
+8. *Non-overlapping enforcement*: since all patches match the same original text, their matched byte ranges must not overlap. If two patches produce overlapping TextEdits, return an error. The =edit_batch()= function in =buffer.rs= already sorts edits by start_byte descending before applying, so non-overlapping edits compose safely.
+
+* API
+
+#+begin_src rust
+// crates/pi-code-engine/src/edit/patch.rs
+
+pub struct Patch {
+    pub find: String,
+    pub replace: String,
+}
+
+/// Apply find/replace patches within a byte range of the buffer.
+/// `scope_start` and `scope_end` define the byte range to search within.
+/// Returns TextEdits for each matched patch.
+///
+/// Matching: each line of `find` has leading whitespace stripped for comparison.
+/// The replacement inherits the indentation level of the matched region.
+pub fn apply_patches(
+    buffer: &CodeBuffer,
+    scope_start: usize,
+    scope_end: usize,
+    patches: &[Patch],
+) -> Result<Vec<TextEdit>>;
+#+end_src
+
+* Algorithm
+All patches are computed against the *original* buffer text (no mutation between patches):
+
+1. Extract the scope text: =buffer.source()[scope_start..scope_end]=
+2. For each patch, find the match position in the *original* scope text:
+   a. Normalize the =find= text: split into lines, strip leading whitespace from each, rejoin with =
+=
+   b. Scan the scope text with same normalization: for each possible byte position in scope, extract a region of the same byte length as =find=, normalize it, compare
+   c. Record all match positions (absolute byte offsets within the buffer)
+3. Validate each patch:
+   - If 0 matches → error: ="Patch find text not found in scope. Scope content:
+{first_20_lines}..."=
+   - If >1 matches → error: ="Patch find text is ambiguous: found at N locations (lines X, Y, Z) within scope"=
+4. For each patch with exactly 1 match:
+   a. Determine the indent level of the matched region's first line
+   b. Determine the indent level of the =find= text's first non-empty line  
+   c. Compute indent delta
+   d. Apply indent delta to each line of =replace= text using =adjust_indent= from =indent.rs=
+   e. Create =TextEdit { start_byte: match_start, old_end_byte: match_end, new_text: adjusted_replace }=
+5. Check for overlapping TextEdits — if any two edits overlap in byte range, return error
+6. Return all TextEdits sorted by start_byte descending (=edit_batch= requires this order)
+
+* Indent-Insensitive Matching Detail
+
+Example:
+#+begin_src
+// Symbol scope (function body):
+    if (err) {
+        return null;
+    }
+
+// Agent provides find:
+if (err) {
+    return null;
+}
+
+// Normalization strips leading whitespace per line:
+// scope normalized: "if (err) {
+return null;
+}"
+// find normalized:  "if (err) {
+return null;
+}"
+// → Match!
+
+// Replacement: agent provides:
+if (err) {
+    logger.error(err);
+    throw err;
+}
+
+// Replacement is re-indented to match the original scope indent (4 spaces):
+    if (err) {
+        logger.error(err);
+        throw err;
+    }
+#+end_src
+
+Indent adjustment reuses =crates/pi-code-engine/src/edit/indent.rs= (=adjust_indent= function).
+
+* Files to Create/Modify
+
+- *Create*: =crates/pi-code-engine/src/edit/patch.rs=
+- *Modify*: =crates/pi-code-engine/src/edit/mod.rs= — add =mod patch; pub use patch::{Patch, apply_patches};=
+
+* Test Plan (test-first)
+
+Test file: =crates/pi-code-engine/src/edit/patch.rs= (inline =#[cfg(test)]= module)
+
+Use inline test buffers (not fixture files) for precise control:
+
+** Single-line patch
+#+begin_src typescript
+function greet(name: string): string {
+  const prefix = "Hello";
+  return prefix + " " + name;
+}
+#+end_src
+Patch: =find: "const prefix = \"Hello\"", replace: "const prefix = \"Hi\""=
+Expected: single TextEdit replacing that line, rest untouched.
+
+** Multi-line patch
+#+begin_src typescript
+function process(data: Input): Output {
+  if (data.error) {
+    return null;
+  }
+  return transform(data);
+}
+#+end_src
+Patch: =find: "if (data.error) {
+    return null;
+  }", replace: "if (data.error) {
+    logger.error(data.error);
+    throw data.error;
+  }"=
+Expected: TextEdit replaces the if block, indentation preserved.
+
+** Indent-insensitive matching
+Same buffer as above. Agent provides find without indentation:
+=find: "if (data.error) {
+return null;
+}"=
+Should still match the indented version in the function body.
+
+** Multiple patches in one call
+Two patches on the same function: one changes a variable, another changes a return.
+Both applied sequentially.
+
+** Ambiguous match error
+#+begin_src typescript
+function test() {
+  log("hello");
+  log("hello");
+}
+#+end_src
+Patch: =find: "log(\"hello\")"=
+Expected: error with "ambiguous: found at 2 locations (lines 2, 3)"
+
+** No match error
+Patch: =find: "nonexistent text"=
+Expected: error with "not found in scope"
+
+** Empty replace (deletion)
+Patch: =find: "const unused = true;
+", replace: ""=
+Expected: line deleted.
+
+** Patch near scope boundary
+Patch that matches text at the very start or end of the scope range.
+
+
+** Overlapping patches error
+Two patches whose =find= texts overlap in the source:
+#+begin_src typescript
+function test() {
+  const x = foo(bar(1));
+}
+#+end_src
+Patch 1: =find: "foo(bar(1))", replace: "baz(1)"=
+Patch 2: =find: "bar(1)", replace: "qux(2)"=
+Both match non-overlapping... actually =bar(1)= is inside =foo(bar(1))=, so the TextEdits overlap.
+Expected: error with \"overlapping patches\"
+
+** All patches match original text
+#+begin_src typescript
+function test() {
+  const a = 1;
+  const b = 2;
+}
+#+end_src
+Patch 1: =find: \"const a = 1\", replace: \"const a = 10\"=
+Patch 2: =find: \"const b = 2\", replace: \"const b = 20\"=
+Both patches match against the ORIGINAL text (not after patch 1 is applied).
+Expected: both TextEdits returned, both correct.
+
+* Acceptance Criteria
+
+1. =cargo test -p pi-code-engine patch= passes — all 8+ test cases green
+2. Indent-insensitive matching correctly normalizes whitespace for comparison
+3. Indentation adjustment on replacement text uses =adjust_indent= from =indent.rs=
+4. Ambiguous match returns error with all match locations
+5. No-match returns error with scope preview for debugging
+6. Multiple patches compose correctly (applied sequentially)

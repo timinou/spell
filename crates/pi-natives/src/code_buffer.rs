@@ -9,12 +9,14 @@ use parking_lot::Mutex;
 use pi_code_engine::{
 	buffer::{BufferRegistry, CodeBuffer},
 	edit::{
-		DragDirection, SpliceMode, TextEdit, clone_node, drag_node, insert_after, insert_before,
-		kill_node, replace_node, splice_node, transpose_nodes,
+		DragDirection, Patch, SpliceMode, TextEdit, apply_patches, clone_node, drag_node,
+		insert_after, insert_before, kill_node, rename_symbol, replace_body, replace_node,
+		splice_node, transpose_nodes, wrap_node,
 	},
 	language::{LanguageId, LanguageProfile, LanguageRegistry},
 	navigate::{NavigateAction, NavigateItem, NavigateResult, navigate as navigate_buffer},
-	outline::{outline as outline_buffer, read as read_buffer},
+	outline::{OutlineEntry, outline as outline_buffer, read as read_buffer},
+	resolve::{ResolvedSymbol, resolve_symbol},
 };
 use serde_json::{Value, json};
 
@@ -83,24 +85,188 @@ fn navigate_action(value: Option<&str>) -> Result<NavigateAction> {
 	}
 }
 
-fn edit_operation(buffer: &CodeBuffer, options: &Value) -> Result<Vec<TextEdit>> {
-	let line = value_to_usize(options.get("line"), 0);
-	let column = value_to_usize(options.get("column"), 0);
-	let content = options.get("content").and_then(Value::as_str).unwrap_or("");
-	let node_type = options
-		.get("node_type")
+/// Resolve the edit target from the options — either by symbol or line.
+fn resolve_target(
+	buffer: &CodeBuffer,
+	profile: &LanguageProfile,
+	options: &Value,
+) -> Result<ResolvedSymbol> {
+	if let Some(symbol) = options.get("symbol").and_then(Value::as_str) {
+		resolve_symbol(buffer, profile, symbol).map_err(engine_err)
+	} else if let Some(line) = options.get("line").and_then(Value::as_u64) {
+		// Fallback: construct a pseudo-ResolvedSymbol from line + node_type
+		let line = line as usize;
+		let node_type = options
+			.get("node_type")
+			.and_then(Value::as_str)
+			.unwrap_or("");
+		// Use the old line-based node finding
+		use pi_code_engine::edit::node_at_line;
+		let node = node_at_line(buffer, line).map_err(engine_err)?;
+		let target = if node_type.is_empty() {
+			node
+		} else {
+			let mut n = node;
+			loop {
+				if n.kind() == node_type {
+					break n;
+				}
+				n = n
+					.parent()
+					.ok_or_else(|| json_err(format!("No {node_type} found at line {line}")))?;
+			}
+		};
+		Ok(ResolvedSymbol {
+			name:            String::new(),
+			kind:            target.kind().to_string(),
+			start_byte:      target.start_byte(),
+			end_byte:        target.end_byte(),
+			line:            (target.start_position().row + 1) as u32,
+			end_line:        (target.end_position().row + 1) as u32,
+			body_start_byte: None,
+			body_end_byte:   None,
+		})
+	} else {
+		Err(json_err("Edit requires 'symbol' or 'line' field"))
+	}
+}
+
+/// Parse patches from JSON options.
+fn parse_patches(options: &Value) -> Result<Vec<Patch>> {
+	let arr = options
+		.get("patches")
+		.and_then(Value::as_array)
+		.ok_or_else(|| json_err("'patch' operation requires 'patches' array"))?;
+	let mut patches = Vec::with_capacity(arr.len());
+	for entry in arr {
+		let find = entry
+			.get("find")
+			.and_then(Value::as_str)
+			.ok_or_else(|| json_err("Each patch must have a 'find' string"))?;
+		let replace = entry
+			.get("replace")
+			.and_then(Value::as_str)
+			.ok_or_else(|| json_err("Each patch must have a 'replace' string"))?;
+		patches.push(Patch { find: find.into(), replace: replace.into() });
+	}
+	Ok(patches)
+}
+
+fn required_str<'a>(options: &'a Value, field: &str) -> Result<&'a str> {
+	options
+		.get(field)
 		.and_then(Value::as_str)
-		.unwrap_or("");
+		.ok_or_else(|| json_err(format!("Missing required field: {field}")))
+}
+
+/// Dispatch a single edit operation (symbol-targeted or line-targeted).
+fn single_edit_operation(
+	buffer: &CodeBuffer,
+	profile: &LanguageProfile,
+	options: &Value,
+) -> Result<Vec<TextEdit>> {
 	let operation = options
 		.get("operation")
 		.and_then(Value::as_str)
 		.ok_or_else(|| json_err("Missing required field: operation"))?;
+
 	match operation {
-		"replace" => replace_node(buffer, line, node_type, content).map_err(engine_err),
-		"insert-before" => insert_before(buffer, line, node_type, content).map_err(engine_err),
-		"insert-after" => insert_after(buffer, line, node_type, content).map_err(engine_err),
-		"kill" => kill_node(buffer, line, node_type).map_err(engine_err),
+		// Symbol-targeted content operations
+		"patch" => {
+			let resolved = resolve_target(buffer, profile, options)?;
+			let patches = parse_patches(options)?;
+			apply_patches(buffer, resolved.start_byte, resolved.end_byte, &patches).map_err(engine_err)
+		},
+		"replace-body" => {
+			let resolved = resolve_target(buffer, profile, options)?;
+			let content = required_str(options, "content")?;
+			replace_body(buffer, &resolved, content).map_err(engine_err)
+		},
+		"wrap" => {
+			let resolved = resolve_target(buffer, profile, options)?;
+			let content = required_str(options, "content")?;
+			wrap_node(buffer, &resolved, content).map_err(engine_err)
+		},
+		"rename" => {
+			let resolved = resolve_target(buffer, profile, options)?;
+			let new_name = required_str(options, "content")?;
+			rename_symbol(buffer, &resolved, new_name).map_err(engine_err)
+		},
+		// Content operations that accept symbol OR line
+		"replace" => {
+			let content = required_str(options, "content")?;
+			if options.get("symbol").is_some() {
+				let resolved = resolve_target(buffer, profile, options)?;
+				Ok(vec![TextEdit {
+					start_byte:   resolved.start_byte,
+					old_end_byte: resolved.end_byte,
+					new_text:     content.to_string(),
+				}])
+			} else {
+				let line = value_to_usize(options.get("line"), 0);
+				let node_type = options
+					.get("node_type")
+					.and_then(Value::as_str)
+					.unwrap_or("");
+				replace_node(buffer, line, node_type, content).map_err(engine_err)
+			}
+		},
+		"kill" => {
+			if options.get("symbol").is_some() {
+				let resolved = resolve_target(buffer, profile, options)?;
+				Ok(vec![TextEdit {
+					start_byte:   resolved.start_byte,
+					old_end_byte: resolved.end_byte,
+					new_text:     String::new(),
+				}])
+			} else {
+				let line = value_to_usize(options.get("line"), 0);
+				let node_type = options
+					.get("node_type")
+					.and_then(Value::as_str)
+					.unwrap_or("");
+				kill_node(buffer, line, node_type).map_err(engine_err)
+			}
+		},
+		"insert-before" => {
+			let content = required_str(options, "content")?;
+			if options.get("symbol").is_some() {
+				let resolved = resolve_target(buffer, profile, options)?;
+				Ok(vec![TextEdit {
+					start_byte:   resolved.start_byte,
+					old_end_byte: resolved.start_byte,
+					new_text:     content.to_string(),
+				}])
+			} else {
+				let line = value_to_usize(options.get("line"), 0);
+				let node_type = options
+					.get("node_type")
+					.and_then(Value::as_str)
+					.unwrap_or("");
+				insert_before(buffer, line, node_type, content).map_err(engine_err)
+			}
+		},
+		"insert-after" => {
+			let content = required_str(options, "content")?;
+			if options.get("symbol").is_some() {
+				let resolved = resolve_target(buffer, profile, options)?;
+				Ok(vec![TextEdit {
+					start_byte:   resolved.end_byte,
+					old_end_byte: resolved.end_byte,
+					new_text:     content.to_string(),
+				}])
+			} else {
+				let line = value_to_usize(options.get("line"), 0);
+				let node_type = options
+					.get("node_type")
+					.and_then(Value::as_str)
+					.unwrap_or("");
+				insert_after(buffer, line, node_type, content).map_err(engine_err)
+			}
+		},
+		// Positional operations (line-only)
 		"splice" => {
+			let line = value_to_usize(options.get("line"), 0);
 			let mode = match options
 				.get("mode")
 				.and_then(Value::as_str)
@@ -112,12 +278,63 @@ fn edit_operation(buffer: &CodeBuffer, options: &Value) -> Result<Vec<TextEdit>>
 			};
 			splice_node(buffer, line, mode).map_err(engine_err)
 		},
-		"drag-up" => drag_node(buffer, line, DragDirection::Up).map_err(engine_err),
-		"drag-down" => drag_node(buffer, line, DragDirection::Down).map_err(engine_err),
-		"clone" => clone_node(buffer, line).map_err(engine_err),
-		"transpose" => transpose_nodes(buffer, line, column).map_err(engine_err),
+		"drag-up" => {
+			let line = value_to_usize(options.get("line"), 0);
+			drag_node(buffer, line, DragDirection::Up).map_err(engine_err)
+		},
+		"drag-down" => {
+			let line = value_to_usize(options.get("line"), 0);
+			drag_node(buffer, line, DragDirection::Down).map_err(engine_err)
+		},
+		"clone" => {
+			let line = value_to_usize(options.get("line"), 0);
+			clone_node(buffer, line).map_err(engine_err)
+		},
+		"transpose" => {
+			let line = value_to_usize(options.get("line"), 0);
+			let column = value_to_usize(options.get("column"), 0);
+			transpose_nodes(buffer, line, column).map_err(engine_err)
+		},
 		other => Err(json_err(format!("Unknown edit operation: {other}"))),
 	}
+}
+
+/// Find the enclosing symbol for a given line in the outline.
+fn find_enclosing_symbol(entries: &[OutlineEntry], line: u32) -> Option<String> {
+	for entry in entries.iter().rev() {
+		if line >= entry.line && line <= entry.end_line {
+			// Check children first for more specific match
+			if let Some(child_name) = find_enclosing_symbol(&entry.children, line) {
+				return Some(format!("{}.{}", entry.name, child_name));
+			}
+			return Some(entry.name.clone());
+		}
+	}
+	None
+}
+
+/// Render annotated diff with @@ symbolName @@ context headers.
+fn render_annotated_diff(
+	buffer: &CodeBuffer,
+	snapshot_source: &str,
+	profile: &LanguageProfile,
+) -> String {
+	use std::fmt::Write;
+	let hunks = pi_code_engine::diff_lines(snapshot_source, &buffer.source());
+	if hunks.is_empty() {
+		return "(no changes)".into();
+	}
+	let outline = outline_buffer(buffer, profile);
+	let mut out = String::new();
+	for hunk in &hunks {
+		let symbol = find_enclosing_symbol(&outline, hunk.new_start);
+		let label = symbol.as_deref().unwrap_or("top-level");
+		let _ = writeln!(out, "@@ {} @@", label);
+		for line in hunk.content.lines() {
+			let _ = writeln!(out, "{}", line);
+		}
+	}
+	out
 }
 
 fn render_buffer_info(info: pi_code_engine::buffer::BufferInfo) -> Value {
@@ -226,10 +443,24 @@ pub fn execute_code_buffer(options: Value) -> Result<Value> {
 					Ok(json_response(render_navigate_result(result), false))
 				},
 				"edit" => {
-					let results = buffer
-						.edit_batch(edit_operation(buffer, &options)?)
-						.map_err(engine_err)?;
-					Ok(json_response(render_edit_results(results), false))
+					let before = buffer.source();
+					let edit_count = if let Some(edits) = options.get("edits").and_then(Value::as_array)
+					{
+						for edit in edits {
+							let text_edits = single_edit_operation(buffer, &profile, edit)?;
+							buffer.edit_batch(text_edits).map_err(engine_err)?;
+						}
+						edits.len()
+					} else {
+						let text_edits = single_edit_operation(buffer, &profile, &options)?;
+						buffer.edit_batch(text_edits).map_err(engine_err)?;
+						1
+					};
+					let diff = render_annotated_diff(buffer, &before, &profile);
+					Ok(json_response(
+						json!({ "version": buffer.version(), "diff": diff, "editCount": edit_count }),
+						false,
+					))
 				},
 				"undo" => Ok(json_response(
 					render_optional_edit_result(buffer.undo().map_err(engine_err)?),
@@ -258,5 +489,107 @@ pub fn execute_code_buffer(options: Value) -> Result<Value> {
 			}
 		},
 		other => Ok(json_response(Value::String(format!("Unknown command: {other}")), true)),
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::sync::Arc;
+
+	use pi_code_engine::language::LanguageRegistry;
+	use serde_json::json;
+
+	use super::*;
+
+	fn registry_for_tests() -> Arc<LanguageRegistry> {
+		Arc::new(LanguageRegistry::with_builtins().expect("registry"))
+	}
+
+	fn ts_buffer(source: &str) -> CodeBuffer {
+		CodeBuffer::from_str(source, LanguageId::new("typescript"), registry_for_tests())
+			.expect("buffer")
+	}
+
+	fn ts_profile() -> LanguageProfile {
+		registry_for_tests()
+			.get(&LanguageId::new("typescript"))
+			.expect("profile")
+			.clone()
+	}
+
+	#[test]
+	fn parse_patches_reads_entries() {
+		let options = json!({
+			"patches": [
+				{ "find": "return a + b;", "replace": "return a * b;" },
+				{ "find": "const x = 1;", "replace": "const x = 2;" }
+			]
+		});
+		let patches = parse_patches(&options).expect("patches");
+		assert_eq!(patches.len(), 2);
+		assert_eq!(patches[0].find, "return a + b;");
+		assert_eq!(patches[1].replace, "const x = 2;");
+	}
+
+	#[test]
+	fn single_edit_operation_supports_symbol_replace() {
+		let buffer = ts_buffer("function add(a: number, b: number): number {\n  return a + b;\n}\n");
+		let profile = ts_profile();
+		let options = json!({
+			"operation": "replace",
+			"symbol": "add",
+			"content": "function add(a: number, b: number): number {\n  return a * b;\n}"
+		});
+		let edits = single_edit_operation(&buffer, &profile, &options).expect("edit");
+		assert_eq!(edits.len(), 1);
+		assert_eq!(edits[0].start_byte, 0);
+		assert!(edits[0].new_text.contains("return a * b"));
+	}
+
+	#[test]
+	fn find_enclosing_symbol_prefers_nested_child() {
+		let entries = vec![OutlineEntry {
+			name:      "Foo".into(),
+			kind:      "class".into(),
+			line:      1,
+			end_line:  10,
+			column:    0,
+			exported:  false,
+			signature: "class Foo".into(),
+			children:  vec![OutlineEntry {
+				name:      "bar".into(),
+				kind:      "method".into(),
+				line:      3,
+				end_line:  5,
+				column:    2,
+				exported:  false,
+				signature: "bar()".into(),
+				children:  vec![],
+			}],
+		}];
+		assert_eq!(find_enclosing_symbol(&entries, 4).as_deref(), Some("Foo.bar"));
+		assert_eq!(find_enclosing_symbol(&entries, 2).as_deref(), Some("Foo"));
+	}
+
+	#[test]
+	fn render_annotated_diff_labels_symbol_hunk() {
+		let mut buffer = ts_buffer(
+			"function add(a: number, b: number): number {\n  return a + b;\n}\n\nfunction sub(a: \
+			 number, b: number): number {\n  return a - b;\n}\n",
+		);
+		let profile = ts_profile();
+		let options = json!({
+			"operation": "patch",
+			"symbol": "add",
+			"patches": [
+				{ "find": "return a + b;", "replace": "return a * b;" }
+			]
+		});
+		let before = buffer.source();
+		let edits = single_edit_operation(&buffer, &profile, &options).expect("patch");
+		buffer.edit_batch(edits).expect("apply");
+		let diff = render_annotated_diff(&buffer, &before, &profile);
+		assert!(diff.contains("@@ add @@"), "diff should label add hunk: {diff}");
+		assert!(diff.contains("return a * b;"), "diff should include changed line: {diff}");
 	}
 }

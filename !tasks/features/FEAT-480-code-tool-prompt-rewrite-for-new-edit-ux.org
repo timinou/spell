@@ -1,0 +1,190 @@
+#+TITLE: Code Tool Prompt Rewrite for New Edit UX
+#+STATE: DONE
+#+SESSION_ID: 14b7024d5e1da06d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-15-09-305Z_14b7024d5e1da06d.jsonl]]
+#+CUSTOM_ID: FEAT-480-code-tool-prompt-rewrite-for-new-edit-ux
+#+EFFORT: 2h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+#+DEPENDS: FEAT-479-typescript-schema-and-code-tool-integrat
+
+NOTE [2026-04-12]: Rewrote code.md and updated system-prompt.md for symbol-targeted patch-based edit UX.
+
+* Initial Message
+
+How would you make the edit experience with the code tool so ergonomic it's even more ergonomic than giving line diffs in the language?
+
+* Context
+
+The agent prompt (=packages/coding-agent/src/prompts/tools/code.md=) must be
+rewritten to teach the agent the new edit operations. This is the most
+user-facing part of the change — a bad prompt means agents won't use the
+new capabilities correctly.
+
+Also update the system prompt section that references code edit operations:
+=packages/coding-agent/src/prompts/system/system-prompt.md= (around line 280).
+
+* Design Decisions
+
+1. The prompt must show the new "What are you doing? → subcommand" decision tree with all new operations
+2. Examples must be concrete and cover common editing patterns
+3. Old =target: { line, node_type }= pattern must be fully removed from examples
+4. Structural ops (drag, splice, clone, transpose) keep line-based examples
+5. All content operations show symbol-based targeting
+6. Patch operation gets the most examples (it's the primary new capability)
+7. Multi-edit gets at least one example showing batched operations
+
+* New Prompt Structure
+
+The code.md prompt should have this decision tree in the =<instruction>= block:
+
+#+begin_src markdown
+What are you doing? → subcommand:
+- Orientation on unknown file → `code outline { file }`
+- Understand API surface → `code read { file, resolution: 1 }`
+- Understand structure → `code read { file, resolution: 2 }`  [DEFAULT]
+- Read specific implementation → `code read { file, resolution: 3, offset, limit }`
+- Change specific lines in a function → `code edit { file, symbol: "fnName", operation: "patch", patches: [{ find: "old", replace: "new" }] }`
+- Replace a function's body → `code edit { file, symbol: "fnName", operation: "replace-body", content: "{ ... }" }`
+- Replace an entire declaration → `code edit { file, symbol: "fnName", operation: "replace", content: "..." }`
+- Delete a declaration → `code edit { file, symbol: "fnName", operation: "kill" }`
+- Wrap a declaration → `code edit { file, symbol: "fnName", operation: "wrap", content: "try { $BODY } catch ..." }`
+- Rename a declaration (in-file) → `code edit { file, symbol: "oldName", operation: "rename", content: "newName" }`
+- Multiple changes in one file → `code edit { file, edits: [...] }`
+- Reorder declarations → `code edit { file, line: N, operation: "drag-down" }`
+- Duplicate a declaration → `code edit { file, line: N, operation: "clone" }`
+- Unwrap a block → `code edit { file, line: N, operation: "splice" }`
+- Preview before saving → `code edit { ... }` then `code diff { file }`
+- See what's around → `code navigate { ... }`
+- Build the project graph → `code index`
+- [graph commands unchanged]
+- Non-code file → use `read` tool instead
+#+end_src
+
+* Key Examples to Include
+
+** Patch operation (primary example)
+#+begin_src json
+{
+  "command": "edit",
+  "file": "src/server.ts",
+  "symbol": "handleRequest",
+  "operation": "patch",
+  "patches": [
+    { "find": "const timeout = 5000;", "replace": "const timeout = 30_000;" },
+    { "find": "return null;", "replace": "return defaultResponse();" }
+  ]
+}
+#+end_src
+
+** Multi-edit batching
+#+begin_src json
+{
+  "command": "edit",
+  "file": "src/server.ts",
+  "edits": [
+    { "symbol": "handleRequest", "operation": "patch", "patches": [
+      { "find": "const timeout = 5000;", "replace": "const timeout = 30_000;" }
+    ]},
+    { "symbol": "processData", "operation": "kill" },
+    { "line": 1, "operation": "insert-after", "content": "import { x } from './x';
+" }
+  ]
+}
+#+end_src
+
+** Replace-body
+#+begin_src json
+{
+  "command": "edit",
+  "file": "src/utils.ts",
+  "symbol": "formatDate",
+  "operation": "replace-body",
+  "content": "{
+  return new Intl.DateTimeFormat('en-US').format(date);
+}"
+}
+#+end_src
+
+** Wrap
+#+begin_src json
+{
+  "command": "edit",
+  "file": "src/api.ts",
+  "symbol": "fetchData",
+  "operation": "wrap",
+  "content": "try {
+  $BODY
+} catch (err) {
+  logger.error(err);
+  throw err;
+}"
+}
+#+end_src
+
+** Rename
+#+begin_src json
+{
+  "command": "edit",
+  "file": "src/utils.ts",
+  "symbol": "parseConfig",
+  "operation": "rename",
+  "content": "loadConfig"
+}
+#+end_src
+
+* Critical Section Updates
+
+The =<critical>= section should include:
+- "Use =symbol= to target declarations. =line= is only for positional operations (drag, splice, clone, transpose)."
+- "For =patch= operation: if find text is ambiguous (matches multiple locations), provide more context in the find string."
+- "Edits stay in-memory until =code save { file }=. Use =code diff { file }= to preview."
+- Remove: "Do NOT skip =navigate node-at= before destructive edits" (symbol targeting makes this unnecessary for symbol-addressed ops)
+- Keep: "Do NOT default to resolution 3 for file reads"
+
+* System Prompt Update
+
+File: =packages/coding-agent/src/prompts/system/system-prompt.md= (around line 280)
+
+Current:
+#+begin_src markdown
+**Structural edits** — prefer `code edit` over text `edit` for:
+- Deleting declarations → `kill`
+- Reordering → `drag-up`/`drag-down` (use `navigate siblings` first)
+- Unwrapping → `splice`
+- Duplicating → `clone`
+- Swapping adjacent → `transpose`
+
+Fall back to text `edit` only for: fine-grained text changes inside strings/comments
+#+end_src
+
+New:
+#+begin_src markdown
+**Code edits** — prefer `code edit` over text `edit` for ALL source file changes:
+- Change specific lines → `patch` with find/replace (targets by symbol name)
+- Replace function body → `replace-body` (keeps signature)
+- Delete declarations → `kill` (by symbol name)
+- Wrap in template → `wrap` with $BODY placeholder
+- Rename in-file → `rename`
+- Reorder → `drag-up`/`drag-down`
+- Duplicate → `clone`
+- Unwrap → `splice`
+- Multiple changes → batch in `edits` array
+
+Fall back to text `edit` only for: non-code files, or files without tree-sitter grammar.
+#+end_src
+
+* Files to Modify
+
+- *Modify*: =packages/coding-agent/src/prompts/tools/code.md= — full rewrite of edit-related content
+- *Modify*: =packages/coding-agent/src/prompts/system/system-prompt.md= — update structural edits section (~line 280)
+
+* Acceptance Criteria
+
+1. =code.md= includes decision tree with all new operations
+2. =code.md= includes concrete JSON examples for patch, multi-edit, replace-body, wrap, rename
+3. =code.md= critical section updated (symbol targeting, no more node_type)
+4. =system-prompt.md= structural edits section updated to promote patch as primary edit
+5. No references to =node_type= in any prompt examples
+6. No references to =target: { line, node_type }= pattern
+7. =navigate node-at= is no longer listed as required before symbol-targeted edits

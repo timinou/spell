@@ -1,0 +1,175 @@
+#+TITLE: Replace-Body Wrap and Rename Operations
+#+STATE: DONE
+#+SESSION_ID: 14b7024d5e1da06d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-15-09-305Z_14b7024d5e1da06d.jsonl]]
+#+CUSTOM_ID: FEAT-477-replace-body-wrap-and-rename-operations
+#+EFFORT: 3h
+#+PRIORITY: #B
+#+LAYER: engine
+#+DEPENDS: FEAT-475-symbol-resolution-for-code-edit
+
+NOTE [2026-04-12]: Implemented body.rs, wrap.rs, rename.rs and verified with cargo test -p pi-code-engine body/wrap/rename.
+
+* Initial Message
+
+How would you make the edit experience with the code tool so ergonomic it's even more ergonomic than giving line diffs in the language?
+
+* Context
+
+Three additional edit operations that complement symbol targeting and patches.
+These are smaller than the patch operation but important for common editing patterns:
+
+- *replace-body*: Replace only a function/method body, keeping the signature. The agent writes the new body without reproducing parameters, return type, decorators.
+- *wrap*: Wrap a declaration in a template (e.g., try/catch, error boundary). =\$BODY= placeholder replaced with current node text.
+- *rename*: Rename a declaration and all its in-file references. Uses tree-sitter text matching within the file.
+
+All three depend on symbol resolution (FEAT-475).
+
+* Design Decisions
+
+** replace-body
+1. New file: =crates/pi-code-engine/src/edit/body.rs=
+2. Uses =ResolvedSymbol.body_start_byte= / =body_end_byte= to target the body node
+3. If the symbol has no =body_field= (e.g., =type= alias, =const= without initializer), return error: "Symbol 'X' (kind: Y) has no body to replace"
+4. The =content= is the new body text — it replaces everything between the body node's braces (exclusive of the braces themselves? Or inclusive?)
+   - *Inclusive of braces*: the agent provides ={ ... }= as the body. This is simpler and avoids ambiguity about whether braces are included.
+   - So for =function add(a, b) { return a + b; }=, replace-body with content ={ return a * b; }= gives =function add(a, b) { return a * b; }=
+5. Indentation: the replacement content is adjusted to match the original body's indent level using =adjust_indent= from =indent.rs=.
+
+** wrap
+1. New file: =crates/pi-code-engine/src/edit/wrap.rs=
+2. The =template= string contains a =\$BODY= placeholder (literal =$BODY= in the string)
+3. The placeholder is replaced with the current text of the targeted node
+4. The entire node is replaced with the result
+5. Indentation: the =\$BODY= insertion inherits the indent level implied by the template. Specifically:
+   - Find the line containing =\$BODY= in the template
+   - Determine that line's indent
+   - Adjust the original node text to that indent level
+   - Replace =\$BODY= with the adjusted text
+6. Example: wrapping =function add(a, b) { return a + b; }= with template =try {
+  \$BODY
+} catch (err) {
+  throw err;
+}= produces:
+   #+begin_src typescript
+   try {
+     function add(a, b) { return a + b; }
+   } catch (err) {
+     throw err;
+   }
+   #+end_src
+
+** rename
+1. New file: =crates/pi-code-engine/src/edit/rename.rs=
+2. Renames a declaration and all in-file occurrences of that name
+3. Algorithm:
+   a. Resolve symbol → get the name text and node
+   b. Scan the entire buffer source for occurrences of the old name as whole words
+   c. For each occurrence, check that it's an =identifier= or =property_identifier= node (not inside a string or comment) using tree-sitter node type at that position
+   d. Build TextEdits for all occurrences (including the declaration's name field)
+4. This is in-file only — cross-file rename is a graph operation and out of scope
+5. Error if new_name is empty or contains non-identifier characters
+
+
+** Function Signatures
+
+#+begin_src rust
+// crates/pi-code-engine/src/edit/body.rs
+
+/// Replace only the body of a declaration, keeping its signature.
+/// `resolved` must have body_start_byte/body_end_byte (Some).
+/// `content` is the new body text including braces: "{ ... }".
+/// Indentation is adjusted to match the original body's indent level.
+pub fn replace_body(
+    buffer: &CodeBuffer,
+    resolved: &ResolvedSymbol,
+    content: &str,
+) -> Result<Vec<TextEdit>>;
+
+
+// crates/pi-code-engine/src/edit/wrap.rs
+
+/// Wrap a node in a template. $BODY in the template is replaced
+/// with the node's current text, indentation-adjusted to match
+/// the $BODY line's indent level.
+pub fn wrap_node(
+    buffer: &CodeBuffer,
+    resolved: &ResolvedSymbol,
+    template: &str,
+) -> Result<Vec<TextEdit>>;
+
+
+// crates/pi-code-engine/src/edit/rename.rs
+
+/// Rename a declaration and all in-file references.
+/// Scans the buffer for whole-word occurrences of the old name,
+/// filtering to identifier/property_identifier nodes only (no strings/comments).
+pub fn rename_symbol(
+    buffer: &CodeBuffer,
+    resolved: &ResolvedSymbol,
+    new_name: &str,
+) -> Result<Vec<TextEdit>>;
+#+end_src
+
+* Files to Create/Modify
+
+- *Create*: =crates/pi-code-engine/src/edit/body.rs=
+- *Create*: =crates/pi-code-engine/src/edit/wrap.rs=
+- *Create*: =crates/pi-code-engine/src/edit/rename.rs=
+- *Modify*: =crates/pi-code-engine/src/edit/mod.rs= — add mod declarations, pub use exports
+- *Modify*: =crates/pi-code-engine/src/lib.rs= — re-export new types if needed
+
+* Existing Patterns to Follow
+
+- Edit operations return =Result<Vec<TextEdit>>= (see =replace.rs=, =splice.rs=)
+- Use =node_text(buffer, node)= from =edit/mod.rs= to extract node text
+- Use =adjust_indent= from =edit/indent.rs= for indentation
+- Use =node_at_line= from =edit/mod.rs= for finding nodes (though for these operations, the node is already resolved via =ResolvedSymbol=)
+
+* Test Plan (test-first)
+
+All tests in their respective files as =#[cfg(test)]= modules.
+
+** replace-body tests (body.rs)
+Use inline TypeScript buffer:
+#+begin_src typescript
+function add(a: number, b: number): number {
+  return a + b;
+}
+#+end_src
+
+1. Replace body with ={ return a * b; }= → signature preserved, body changed
+2. Replace body of a class method: =class Foo { bar() { return 1; } }= → =bar()= body changed, class structure preserved
+3. Error: symbol has no body_field (e.g., a type alias =type X = string=)
+4. Multi-line body replacement with indentation adjustment
+
+** wrap tests (wrap.rs)
+1. Wrap function with try/catch template:
+   - Input: =function risky() { doThing(); }=
+   - Template: =try {
+  \$BODY
+} catch (err) {
+  logger.error(err);
+}=
+   - Expected: function wrapped in try/catch, indentation correct
+2. Wrap a class member
+3. Template with =\$BODY= at different indent levels
+4. Error: template without =\$BODY= placeholder
+
+** rename tests (rename.rs)
+1. Rename =add= to =sum=: declaration + all call sites in file change
+2. Rename does NOT change occurrences inside strings: =console.log("add")= unchanged
+3. Rename does NOT change occurrences inside comments: =// calls add= unchanged
+4. Rename a class: =Foo= → =Bar=, including =new Foo()= call sites
+5. Rename a class member: =Foo.bar= → =Foo.qux= (only the member, not the class)
+6. Error: empty new_name
+7. Error: new_name with invalid characters (spaces, operators)
+
+* Acceptance Criteria
+
+1. =cargo test -p pi-code-engine body= passes
+2. =cargo test -p pi-code-engine wrap= passes
+3. =cargo test -p pi-code-engine rename= passes
+4. All three operations return =Vec<TextEdit>= compatible with =edit_batch=
+5. Indentation adjustment works correctly for all operations
+6. Error messages are clear and include the symbol name/kind

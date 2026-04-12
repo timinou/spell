@@ -1,0 +1,8 @@
+{
+  "output": {
+    "version": 1,
+    "diff": "@@ add @@\n@@ -2,1 +2,1 @@\n-  const timeout = 5000;\n+  const timeout = 30_000;\n",
+    "editCount": 1
+  },
+  "error": false
+}

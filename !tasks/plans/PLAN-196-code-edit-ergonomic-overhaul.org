@@ -1,0 +1,112 @@
+#+TITLE: Code Edit Ergonomic Overhaul
+#+STATE: DONE
+#+SESSION_ID: 14b7024d5e1da06d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-15-09-305Z_14b7024d5e1da06d.jsonl]]
+#+CUSTOM_ID: PLAN-196-code-edit-ergonomic-overhaul
+
+NOTE [2026-04-12]: Completed all five execution waves, verified Rust/NAPI/TypeScript/manual checks, and captured durable verification artifacts.
+
+
+* Initial Message
+
+How would you make the edit experience with the code tool so ergonomic it's even more ergonomic than giving line diffs in the language?
+
+* Context
+
+The code tool's edit operations are less ergonomic than line-diff editing for
+content changes. To change one line in a 50-line function, the agent must
+reproduce all 50 lines as =content= in a =replace= operation. The agent must
+also know tree-sitter node type names and run =navigate node-at= before editing.
+
+This plan overhauls the code edit UX with three core capabilities:
+
+1. *Symbol targeting*: Address declarations by name (=symbol: "handleRequest"= or
+   =symbol: "MyClass.method"=) instead of =line + node_type=.
+
+2. *Scoped find/replace patches*: The agent specifies only what changes. =find= text
+   is matched within the symbol's scope (indent-insensitive), and =replace= text
+   inherits the matched region's indentation. If =find= is ambiguous (multiple matches),
+   the operation errors — the agent must provide more specific text.
+
+3. *Multi-edit batching*: An =edits= array in a single tool call replaces multiple
+   sequential calls.
+
+Plus: =replace-body= (keep signature), =wrap= (template with =$BODY=), =rename=
+(in-file), and annotated diff response (=@@ symbolName @@= headers).
+
+** Key Design Decisions
+
+1. Symbol resolution via tree-sitter tree walk + =declaration_for()= from outline.rs
+2. =node_type= field removed from content operations (replace, insert, kill)
+3. =line= retained only for positional operations (drag, splice, clone, transpose)
+4. Indent-insensitive matching: leading whitespace stripped per line for comparison
+5. Ambiguous match → error with all match positions (no replace-all, no occurrence field)
+6. Annotated diff with =@@ symbolName @@= context headers in response
+7. Full stack: Rust engine + NAPI + TypeScript schema + prompt
+
+* Verification
+
+** Rust engine tests
+#+begin_src sh
+cargo test -p pi-code-engine resolve
+cargo test -p pi-code-engine patch
+cargo test -p pi-code-engine body
+cargo test -p pi-code-engine wrap
+cargo test -p pi-code-engine rename
+#+end_src
+
+** NAPI integration
+#+begin_src sh
+cargo test -p pi-natives
+#+end_src
+
+** TypeScript compilation
+#+begin_src sh
+bun check:ts
+#+end_src
+
+** Manual verification
+1. Open the code tool prompt (=code.md=) and verify all new operations documented
+2. Run a test edit through NAPI: open a buffer, apply a patch edit with symbol targeting, verify annotated diff in response
+3. Verify multi-edit batching: apply 3 edits in one call, verify all applied
+
+* Execution Manifest
+
+** Wave 1: Foundation (no dependencies)
+- [[id:FEAT-475-symbol-resolution-for-code-edit]] — Symbol resolution module in pi-code-engine (3h, #A)
+
+** Wave 2: Edit operations (parallel, depend on Wave 1)
+- [[id:FEAT-476-scoped-find-replace-patch-operation]] — Patch operation with find/replace (4h, #A)
+- [[id:FEAT-477-replace-body-wrap-and-rename-operations]] — replace-body, wrap, rename (3h, #B)
+
+** Wave 3: NAPI integration (depends on Wave 1+2)
+- [[id:FEAT-478-napi-integration-multi-edit-symbol-dispa]] — Multi-edit dispatch, symbol targeting, annotated diff (4h, #A)
+
+** Wave 4: TypeScript layer (depends on Wave 3)
+- [[id:FEAT-479-typescript-schema-and-code-tool-integrat]] — Schema + code.ts changes (2h, #A)
+
+** Wave 5: Prompt (depends on Wave 4)
+- [[id:FEAT-480-code-tool-prompt-rewrite-for-new-edit-ux]] — code.md + system-prompt.md rewrite (2h, #A)
+
+** Total effort: ~18h
+
+
+** Completion [2026-04-12]
+*** Verification
+- `cargo test -p pi-code-engine resolve` → passed (11 tests)
+- `cargo test -p pi-code-engine patch` → passed (9 tests)
+- `cargo test -p pi-code-engine body` → passed (5 tests)
+- `cargo test -p pi-code-engine wrap` → passed (5 tests)
+- `cargo test -p pi-code-engine rename` → passed (5 tests)
+- `cargo test -p pi-natives` → passed (46 tests, including new code_buffer helper coverage)
+- `bun check:ts` → passed (`biome check . && tsgo -p tsconfig.json`)
+- Manual prompt verification → confirmed `packages/coding-agent/src/prompts/tools/code.md` documents symbol targeting, patch, replace-body, wrap, rename, and batched `edits`
+- Manual NAPI verification (symbol patch) → `executeCodeBuffer({ command: "edit", symbol: "add", operation: "patch", ... })` returned annotated diff with `@@ add @@`
+- Manual NAPI verification (multi-edit batching) → one `executeCodeBuffer({ command: "edit", edits: [...] })` call applied 3 edits sequentially and returned `editCount: 3`
+*** Artifacts
+- Prompt documentation: [[file:packages/coding-agent/src/prompts/tools/code.md]]
+- System prompt guidance: [[file:packages/coding-agent/src/prompts/system/system-prompt.md]]
+- Manual symbol patch NAPI output: [[file:!tasks/plans/plan-artifacts/PLAN-196-code-edit-ergonomic-overhaul/manual-symbol-patch-napi.json]]
+- Manual multi-edit NAPI output: [[file:!tasks/plans/plan-artifacts/PLAN-196-code-edit-ergonomic-overhaul/manual-multi-edit-napi.json]]
+*** Deviations
+- None.

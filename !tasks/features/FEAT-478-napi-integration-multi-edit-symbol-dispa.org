@@ -1,0 +1,257 @@
+#+TITLE: NAPI Integration Multi-Edit Symbol Dispatch Annotated Diff
+#+STATE: DONE
+#+SESSION_ID: 14b7024d5e1da06d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-15-09-305Z_14b7024d5e1da06d.jsonl]]
+#+CUSTOM_ID: FEAT-478-napi-integration-multi-edit-symbol-dispa
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: napi
+#+DEPENDS: FEAT-475-symbol-resolution-for-code-edit FEAT-476-scoped-find-replace-patch-operation FEAT-477-replace-body-wrap-and-rename-operations
+
+NOTE [2026-04-12]: Implemented symbol dispatch, multi-edit batching, annotated diff, and helper tests; verified with cargo test -p pi-natives and manual NAPI runs.
+
+* Initial Message
+
+How would you make the edit experience with the code tool so ergonomic it's even more ergonomic than giving line diffs in the language?
+
+* Context
+
+The NAPI layer (=crates/pi-natives/src/code_buffer.rs=) dispatches tool calls from
+TypeScript to the Rust engine. This item integrates all new Rust operations into
+the NAPI interface and adds two new capabilities:
+
+1. *Multi-edit batching*: accept an =edits= array, apply all in one call
+2. *Symbol dispatch*: route operations via =symbol= field instead of =line + node_type=
+3. *Annotated diff response*: return human-readable diffs with symbol context headers
+
+* Design Decisions
+
+1. The existing =edit_operation()= function is refactored to accept symbol targeting
+2. New function =resolve_edit_target()= handles the symbol → byte range resolution
+3. Multi-edit: new top-level match arm in =execute_code_buffer= for =command: "edit"= when =edits= array is present
+4. =node_type= field is removed from content operations (replace, insert-before, insert-after, kill). These now use =symbol= for targeting. Line-based targeting remains for positional ops (drag, splice, clone, transpose).
+5. Annotated diff: after edits are applied, generate a diff between pre-edit and post-edit buffer states using =diff_from(snapshot)=. Annotate each hunk with the enclosing symbol name using the outline.
+6. Response format changes:
+   - Old: ={"version": N, "changedRanges": [...], "inputEdit": {...}}=
+   - New: ={"version": N, "diff": "annotated diff string", "editCount": N}=
+
+* Current Code Analysis
+
+The current =edit_operation()= function in =code_buffer.rs= (lines 86-120):
+#+begin_src rust
+fn edit_operation(buffer: &CodeBuffer, options: &Value) -> Result<Vec<TextEdit>> {
+    let line = value_to_usize(options.get("line"), 0);
+    let column = value_to_usize(options.get("column"), 0);
+    let content = options.get("content").and_then(Value::as_str).unwrap_or("");
+    let node_type = options.get("node_type").and_then(Value::as_str).unwrap_or("");
+    let operation = options.get("operation").and_then(Value::as_str)
+        .ok_or_else(|| json_err("Missing required field: operation"))?;
+    match operation {
+        "replace" => replace_node(buffer, line, node_type, content),
+        "insert-before" => insert_before(buffer, line, node_type, content),
+        "insert-after" => insert_after(buffer, line, node_type, content),
+        "kill" => kill_node(buffer, line, node_type),
+        "splice" => { ... splice_node(buffer, line, mode) },
+        "drag-up" => drag_node(buffer, line, DragDirection::Up),
+        "drag-down" => drag_node(buffer, line, DragDirection::Down),
+        "clone" => clone_node(buffer, line),
+        "transpose" => transpose_nodes(buffer, line, column),
+        _ => Err(...)
+    }
+}
+#+end_src
+
+* New Dispatch Design
+
+#+begin_src rust
+/// Resolve the target of an edit operation.
+/// Returns (start_byte, end_byte, body_start, body_end, name).
+fn resolve_target(
+    buffer: &CodeBuffer,
+    profile: &LanguageProfile,
+    options: &Value,
+) -> Result<ResolvedSymbol> {
+    if let Some(symbol) = options.get("symbol").and_then(Value::as_str) {
+        resolve_symbol(buffer, profile, symbol).map_err(engine_err)
+    } else if let Some(line) = options.get("line").and_then(Value::as_u64) {
+        // Fallback for positional operations — construct a ResolvedSymbol from line
+        // This path is only used by drag/splice/clone/transpose
+        ...
+    } else {
+        Err(json_err("Edit requires 'symbol' or 'line' field"))
+    }
+}
+
+fn single_edit_operation(
+    buffer: &CodeBuffer,
+    profile: &LanguageProfile,
+    options: &Value,
+) -> Result<Vec<TextEdit>> {
+    let operation = options.get("operation").and_then(Value::as_str)
+        .ok_or_else(|| json_err("Missing: operation"))?;
+
+    match operation {
+        // Symbol-targeted operations (new)
+        "patch" => {
+            let resolved = resolve_target(buffer, profile, options)?;
+            let patches = parse_patches(options)?;
+            apply_patches(buffer, resolved.start_byte, resolved.end_byte, &patches)
+                .map_err(engine_err)
+        },
+        "replace-body" => {
+            let resolved = resolve_target(buffer, profile, options)?;
+            let content = required_str(options, "content")?;
+            replace_body(buffer, &resolved, content).map_err(engine_err)
+        },
+        "wrap" => {
+            let resolved = resolve_target(buffer, profile, options)?;
+            let template = required_str(options, "content")?;  // template in content field
+            wrap_node(buffer, &resolved, template).map_err(engine_err)
+        },
+        "rename" => {
+            let resolved = resolve_target(buffer, profile, options)?;
+            let new_name = required_str(options, "content")?;
+            rename_symbol(buffer, &resolved, new_name).map_err(engine_err)
+        },
+        // Symbol-targeted but also accepting line (backward compat for kill)
+        "replace" => {
+            let resolved = resolve_target(buffer, profile, options)?;
+            let content = required_str(options, "content")?;
+            Ok(vec![TextEdit {
+                start_byte: resolved.start_byte,
+                old_end_byte: resolved.end_byte,
+                new_text: content.to_string(),
+            }])
+        },
+        "kill" => {
+            let resolved = resolve_target(buffer, profile, options)?;
+            Ok(vec![TextEdit {
+                start_byte: resolved.start_byte,
+                old_end_byte: resolved.end_byte,
+                new_text: String::new(),
+            }])
+        },
+        "insert-before" => {
+            let resolved = resolve_target(buffer, profile, options)?;
+            let content = required_str(options, "content")?;
+            Ok(vec![TextEdit {
+                start_byte: resolved.start_byte,
+                old_end_byte: resolved.start_byte,
+                new_text: content.to_string(),
+            }])
+        },
+        "insert-after" => {
+            let resolved = resolve_target(buffer, profile, options)?;
+            let content = required_str(options, "content")?;
+            Ok(vec![TextEdit {
+                start_byte: resolved.end_byte,
+                old_end_byte: resolved.end_byte,
+                new_text: content.to_string(),
+            }])
+        },
+        // Positional operations (line-only, no symbol)
+        "splice" => { /* existing logic, uses line */ },
+        "drag-up" | "drag-down" => { /* existing, uses line */ },
+        "clone" => { /* existing, uses line */ },
+        "transpose" => { /* existing, uses line + column */ },
+        _ => Err(json_err(format!("Unknown operation: {other}"))),
+    }
+}
+#+end_src
+
+** Multi-edit dispatch
+
+In =execute_code_buffer= for the ="edit"= command:
+
+#+begin_src rust
+"edit" => {
+    let snapshot = buffer.snapshot();
+    if let Some(edits_array) = options.get("edits").and_then(Value::as_array) {
+        // Multi-edit mode
+        for edit_opts in edits_array {
+            let text_edits = single_edit_operation(buffer, &profile, edit_opts)?;
+            buffer.edit_batch(text_edits).map_err(engine_err)?;
+        }
+    } else {
+        // Single edit mode (backward compat)
+        let text_edits = single_edit_operation(buffer, &profile, &options)?;
+        buffer.edit_batch(text_edits).map_err(engine_err)?;
+    }
+    let diff = render_annotated_diff(buffer, snapshot, &profile);
+    Ok(json_response(json!({
+        "version": buffer.version(),
+        "diff": diff,
+    }), false))
+}
+#+end_src
+
+** Annotated diff rendering
+
+#+begin_src rust
+fn render_annotated_diff(
+    buffer: &CodeBuffer,
+    snapshot: BufferSnapshot,
+    profile: &LanguageProfile,
+) -> String {
+    let hunks = buffer.diff_from(snapshot);
+    if hunks.is_empty() {
+        return String::from("(no changes)");
+    }
+    let outline = outline(buffer, profile);
+    let mut out = String::new();
+    for hunk in &hunks {
+        // Find enclosing symbol for this hunk's line range
+        let symbol_name = find_enclosing_symbol(&outline, hunk.new_start);
+        out.push_str(&format!("@@ {} @@
+", symbol_name.unwrap_or("top-level")));
+        // Render hunk lines with +/- prefixes
+        for line in &hunk.content {
+            // format as unified diff lines
+        }
+    }
+    out
+}
+#+end_src
+
+=find_enclosing_symbol= walks the outline entries to find which symbol contains a given line number.
+
+* Files to Modify
+
+- *Modify*: =crates/pi-natives/src/code_buffer.rs= — refactor edit_operation, add resolve_target, multi-edit, annotated diff, new operation dispatch
+- *Note*: This file is the ONLY file modified in this item. All Rust engine functions are already implemented by FEAT-475/476/477.
+
+* Existing Helpers to Reuse
+
+- =value_to_usize=, =value_to_u32=, =required_path=, =json_err=, =engine_err=, =json_response= — all in =code_buffer.rs=
+- =outline()= from =pi_code_engine::outline= — for annotated diff symbol context
+- =resolve_symbol()= from =pi_code_engine::resolve= — for symbol targeting
+- =apply_patches()= from =pi_code_engine::edit::patch= — for patch operation
+- =replace_body()=, =wrap_node()=, =rename_symbol()= from the respective edit modules
+
+* Test Plan
+
+Testing at the NAPI level requires TypeScript integration tests. However, the core
+logic can be unit-tested in Rust:
+
+** Rust unit tests (in code_buffer.rs)
+1. =parse_patches= correctly extracts Patch structs from JSON Value
+2. =resolve_target= with symbol field resolves correctly
+3. =resolve_target= with line field (positional ops) resolves correctly
+4. =resolve_target= with neither symbol nor line errors
+5. =find_enclosing_symbol= maps line numbers to symbol names
+6. =render_annotated_diff= produces correct format
+
+** Integration test pattern
+The implementing agent should verify the NAPI works end-to-end by writing a small
+TypeScript test that calls =executeCodeBuffer= with the new options. Place in
+=packages/natives/src/code-buffer/__tests__/= or equivalent.
+
+* Acceptance Criteria
+
+1. =cargo test -p pi-natives= passes — new unit tests green
+2. Single edit with =symbol= field dispatches correctly to all operations
+3. Multi-edit with =edits= array applies all edits sequentially
+4. Annotated diff output includes =@@ symbolName @@= headers
+5. Positional operations (drag, splice, clone, transpose) still work with =line= field
+6. Existing =operation: "replace"= with =symbol= instead of =line + node_type= works
+7. Error when neither =symbol= nor =line= provided for content operations

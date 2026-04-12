@@ -1,3 +1,18 @@
+export interface Patch {
+	find: string;
+	replace: string;
+}
+
+export interface EditEntry {
+	symbol?: string;
+	line?: number;
+	column?: number;
+	operation: string;
+	content?: string;
+	patches?: Patch[];
+	mode?: string;
+}
+
 export interface CodeBufferOptions {
 	command: string;
 	file?: string;
@@ -10,9 +25,10 @@ export interface CodeBufferOptions {
 	symbol?: string;
 	operation?: string;
 	content?: string;
-	node_type?: string;
 	mode?: string;
 	depth?: number;
+	patches?: Patch[];
+	edits?: EditEntry[];
 }
 
 export interface CodeBufferResult {
