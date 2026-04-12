@@ -1,0 +1,79 @@
+#+TITLE: Sniper Todo Prompt Guidance
+#+STATE: DONE
+#+SESSION_ID: 14b702a6c9bedfec
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-16-40-870Z_14b702a6c9bedfec.jsonl]]
+#+CUSTOM_ID: FEAT-481-sniper-todo-prompt-guidance
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: prompts
+
+NOTE [2026-04-12]: Sniper Pattern section added to todo-write.md. Subagent system prompt updated from MAY to MUST with sniper todo guidance.
+
+* Initial Message
+
+I want tasks to be encouraged to use the sniper tool. make it so that the todo write, when used by subagents, uses the sniper tool (i.e. provides the exact context needed to efficiently do it then leave (no room for questions, terse). This is the level of the subtodos that should be shown in the UI. Explain how to make this a powerful tool that is used
+
+* Context
+Subagents currently receive weak guidance on todo_write usage ("You MAY use todo_write to plan complex work into steps"). The result is variable-quality child todos that don't communicate enough context for mechanical execution. We need to define and enforce the "sniper todo" pattern: tasks so precise that any agent can execute them without exploration or questions.
+
+* Design Decisions
+- Sniper todo format: ~content~ = ultra-terse verb+target (5-10 words); ~details~ = full execution spec
+- MUST for ~task~ agents, SHOULD for ~explore~, ~plan~, and other agents
+- The sniper pattern is defined once in ~todo-write.md~ and referenced from ~subagent-system-prompt.md~
+
+* Implementation
+
+** Modify ~packages/coding-agent/src/prompts/tools/todo-write.md~
+Add a new section after "## Task Anatomy" called "## Sniper Pattern":
+
+#+begin_example
+## Sniper Pattern
+
+When creating tasks as a subagent, write *sniper todos*: each task must be precise enough to execute mechanically without exploration or questions.
+
+### Sniper task fields:
+- `content`: Ultra-terse label. Verb + target + what. (5-10 words)
+  - Good: "Add null guard to parseConfig input"
+  - Good: "Update 3 callers to use validate()"
+  - Bad: "Fix the parser"
+  - Bad: "Handle edge cases"
+- `details`: The full execution spec (shown in TUI when active):
+  - Exact file path(s) to modify
+  - Exact change description (what to add/remove/modify and where)
+  - Exact acceptance criteria (test command, observable behavior)
+  - Edge cases or constraints that affect the change
+
+### Example
+```
+{
+  content: "Add retry with backoff to fetchUser",
+  details: "File: src/api/user.ts, function fetchUser()
+Change: Wrap fetch() in retry loop — max 3 attempts, exponential backoff 100/200/400ms
+Preserve: AbortSignal passthrough, existing error types
+Acceptance: bun test test/api/user.test.ts — new case for retry exhaustion + success-on-retry-2"
+}
+```
+
+### Anti-pattern
+```
+{content: "Fix the API", details: "Look at the API and fix the issues"}
+{content: "Update tests"}  // no details at all
+```
+#+end_example
+
+** Modify ~packages/coding-agent/src/prompts/system/subagent-system-prompt.md~
+Change the existing line:
+: You **MAY** use `todo_write` to plan complex work into steps. For 3+ step tasks, planning first improves reliability.
+
+To:
+: You **MUST** use `todo_write` to plan tasks with 3+ steps. Write each task as a **sniper todo** — precise enough for mechanical execution. Every sniper task needs a terse `content` label and a `details` field with exact file paths, exact changes, and exact acceptance criteria. See the Sniper Pattern section in todo_write docs.
+
+This change appears in the ~{{SECTION_SEPERATOR "Closure"}}~ section of the subagent system prompt.
+
+Note: The MUST applies uniformly to all subagents that receive this prompt. The distinction between task-agent-MUST and other-agent-SHOULD is handled by the fact that task agents already have stronger assignment templates that push planning, while explore agents are read-only and rarely create todos.
+
+* Verification
+- Read ~packages/coding-agent/src/prompts/tools/todo-write.md~ and confirm "Sniper Pattern" section exists after "Task Anatomy"
+- Read ~packages/coding-agent/src/prompts/system/subagent-system-prompt.md~ and confirm MUST language for sniper todos
+- Run ~bun check:ts~ from repo root — no type errors (prompt files are plain text, but imports may shift)
+- Grep for "sniper" in both files to confirm the term is established

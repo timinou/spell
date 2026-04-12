@@ -114,6 +114,36 @@ task-3 and task-4 both depend on task-1 (schema). task-5 depends on both task-3 
 
 When implementing plan items, set gate fields to track required deliverables. The tool response focuses on actionable verification; linked org side-effects happen automatically when applicable.
 
+## Sniper Pattern
+
+When creating tasks as a subagent, write **sniper todos**: each task must be precise enough to execute mechanically — no exploration, no questions. Aim, fire, done.
+
+### Fields
+- `content`: Ultra-terse verb + target (5-10 words)
+  - Good: "Add null guard to parseConfig input"
+  - Good: "Update 3 callers to use validate()"
+  - Bad: "Fix the parser"
+  - Bad: "Handle edge cases"
+- `details`: Full execution spec (shown in TUI when active):
+  - Exact file path(s) to modify
+  - Exact change description (what to add/remove/modify and where)
+  - Exact acceptance criteria (test command, observable behavior)
+  - Edge cases or constraints that affect the change
+
+### Example
+```
+{
+  content: "Add retry with backoff to fetchUser",
+  details: "File: src/api/user.ts, function fetchUser()\nChange: Wrap fetch() in retry loop — max 3 attempts, exponential backoff 100/200/400ms\nPreserve: AbortSignal passthrough, existing error types\nAcceptance: bun test test/api/user.test.ts — new case for retry exhaustion + success-on-retry-2"
+}
+```
+
+### Anti-patterns
+```
+{content: "Fix the API", details: "Look at the API and fix the issues"}
+{content: "Update tests"}  // no details at all
+```
+
 ## Verification Protocol
 
 Tasks with **required gates** (`gateCommit`, `gateArtifact`, `gateCmd`, or `orgItemClosingId`) use two-phase completion:

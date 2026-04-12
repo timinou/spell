@@ -1,0 +1,81 @@
+#+TITLE: Task Agent Plan-Then-Delegate Prompt
+#+STATE: DONE
+#+SESSION_ID: 14b702a6c9bedfec
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-16-40-870Z_14b702a6c9bedfec.jsonl]]
+#+CUSTOM_ID: FEAT-483-task-agent-plan-then-delegate-prompt
+#+EFFORT: 1h
+#+PRIORITY: #A
+#+LAYER: prompts
+#+DEPENDS: FEAT-481-sniper-todo-prompt-guidance FEAT-482-todoref-derived-assignment-for-zero-fric
+
+NOTE [2026-04-12]: workflow section added to task.md agent prompt with plan-then-delegate pattern and concrete example.
+
+* Initial Message
+
+I want tasks to be encouraged to use the sniper tool. make it so that the todo write, when used by subagents, uses the sniper tool (i.e. provides the exact context needed to efficiently do it then leave (no room for questions, terse). This is the level of the subtodos that should be shown in the UI. Explain how to make this a powerful tool that is used
+
+* Context
+The ~task~ agent prompt (~packages/coding-agent/src/prompts/agents/task.md~) currently describes a generic worker agent. With sniper todos and todoRef-derived assignments in place, the task agent should be taught the plan-then-delegate workflow: investigate, create sniper todos, dispatch them to ~quick_task~ agents via the ~task~ tool, and verify results.
+
+This is the cascade pattern that makes sniper todos powerful:
+: Parent → task agent → sniper todos → quick_task delegation → mechanical execution
+
+* Design Decisions
+- The plan-then-delegate workflow is ENCOURAGED, not mandatory — simple 1-2 step tasks can still be executed directly
+- The task agent already has ~spawns: "explore, quick_task"~ in its frontmatter (defined in ~packages/coding-agent/src/task/agents.ts~ line 57)
+- The prompt teaches WHEN to use the cascade (3+ file changes, parallelizable work) vs direct execution (single file, trivial edit)
+- Use todoRef-only dispatch (no assignment duplication) — depends on FEAT-482
+
+* Implementation
+
+** Modify ~packages/coding-agent/src/prompts/agents/task.md~
+Add a new section after the existing ~<directives>~ block:
+
+#+begin_example
+<workflow>
+## Plan-Then-Delegate
+
+For tasks touching 3+ files or requiring parallel work:
+1. **Investigate** — grep, read, understand the scope
+2. **Plan** — create sniper todos via `todo_write` (terse `content`, detailed `details` with exact files/changes/acceptance)
+3. **Delegate** — dispatch each sniper todo to `quick_task` via `task` tool using `todoRef` (no assignment needed)
+4. **Verify** — check results, run gates, fix anything that failed
+
+For simple tasks (1-2 files, linear changes), execute directly — don't over-engineer.
+
+### Example
+```
+// 1. After investigating, create sniper todos:
+todo_write({ ops: [{ op: "replace", groups: [{
+  name: "Implementation",
+  tasks: [
+    { content: "Extract validate() to auth/validate.ts", details: "Move lines 42-89 from auth/index.ts to new file auth/validate.ts
+Export: validateToken, isExpired
+Acceptance: bun test test/auth" },
+    { content: "Update 3 callers to import from validate.ts", details: "Files: api.ts, middleware.ts, refresh.ts
+Change: import { validateToken } from './auth' → from './auth/validate'
+Acceptance: bun check:ts" },
+  ]
+}]}]})
+
+// 2. Dispatch via todoRef:
+task({
+  agent: "quick_task",
+  tasks: [
+    { id: "Extract", description: "Extract validate()", todoRef: "task-1" },
+    { id: "Callers", description: "Update callers", todoRef: "task-2", blockers: ["Extract"] },
+  ]
+})
+```
+</workflow>
+#+end_example
+
+* Edge Cases
+- If the task agent is itself a subagent (taskDepth > 0), it may not have auto-roster enabled — the plan-then-delegate pattern still works because todoRef can reference the agent's own local todos
+- If the dispatched quick_task fails, the task agent should handle the failure (retry or fix) — this is already covered by existing task tool error handling
+- The cascade is one level: task → quick_task. Quick_task agents don't have ~spawns~ and can't further delegate
+
+* Verification
+- Read ~packages/coding-agent/src/prompts/agents/task.md~ — confirm ~<workflow>~ section exists with plan-then-delegate pattern
+- The prompt must mention: investigate, sniper todos, ~todo_write~, ~task~ tool, ~quick_task~, ~todoRef~
+- Verify the example uses todoRef-only dispatch (no ~assignment~ field in the task call)

@@ -25,9 +25,9 @@ Subagents lack your conversation history. Every decision, file content, and user
 - `tasks`: Tasks to execute in parallel.
   - `.id`: CamelCase identifier, max 32 chars
   - `.description`: UI display only — subagent never sees it
-  - `.assignment`: Complete self-contained instructions. One-liners PROHIBITED; missing acceptance criteria = too vague.
+  - `.assignment`: Complete self-contained instructions. Optional when `.todoRef` is set — auto-derived from the linked todo's `content` and `details`. When provided explicitly: one-liners PROHIBITED; missing acceptance criteria = too vague.
   - `.blockers`: Optional task IDs within this batch that must complete before this task starts. Use for intra-batch DAG scheduling.
-  - `.todoRef`: Optional todo item ID (e.g. `task-3`). When set, the subagent receives the linked todo's verification requirements (gates, orgItemId) automatically injected into its context. Use this when delegating to an existing structured todo item.
+  - `.todoRef`: Optional todo item ID (e.g. `task-3`). When set, the subagent receives the linked todo's verification requirements (gates, orgItemId) automatically injected into its context. When `assignment` is omitted, it is auto-derived from the todo's `content` and `details` — enabling zero-friction dispatch of sniper todos.
 - `isolated`: Run in isolated environment; returns patches. Use when tasks edit overlapping files.
 </parameters>
 
@@ -164,6 +164,21 @@ A single `task` call can both schedule the work and populate the roster:
   ]
 }
 ```
+</example>
+
+<example label="Dispatch sniper todos via todoRef">
+After creating sniper todos with `todo_write`, dispatch them to `quick_task` agents using only `todoRef` — no assignment duplication:
+```
+{
+  agent: "quick_task",
+  tasks: [
+    { id: "ExtractValidate", description: "Extract validate()", todoRef: "task-4" },
+    { id: "UpdateCallers", description: "Update callers", todoRef: "task-5" },
+    { id: "AddExpiry", description: "Add expiry check", todoRef: "task-6", blockers: ["ExtractValidate", "UpdateCallers"] },
+  ]
+}
+```
+Each task's assignment is auto-derived from the linked todo item's content and details.
 </example>
 
 {{#list agents join="\n"}}

@@ -127,6 +127,20 @@ function addUsageTotals(target: Usage, usage: Partial<Usage>): void {
 	target.cost.total += cost.total;
 }
 
+/**
+ * Build assignment text from a sniper todo's content and details.
+ * Returns undefined if the todo has neither content nor details.
+ */
+export function buildSniperAssignment(todo: { content: string; details?: string }): string | undefined {
+	if (!todo.content && !todo.details) return undefined;
+	const parts: string[] = [`## Task: ${todo.content}`];
+	if (todo.details) {
+		parts.push("");
+		parts.push(todo.details);
+	}
+	return parts.join("\n");
+}
+
 // Re-export types and utilities
 export { loadBundledAgents as BUNDLED_AGENTS } from "./agents";
 export { discoverCommands, expandCommand, getCommand } from "./commands";
@@ -224,7 +238,20 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				resolveVerificationContext(task.todoRef, groups, activePolicies),
 			].filter((block): block is string => Boolean(block));
 			if (blocks.length === 0) return task;
-			return { ...task, assignment: `${task.assignment.trim()}\n\n${blocks.join("\n\n")}` };
+			return { ...task, assignment: `${(task.assignment ?? "").trim()}\n\n${blocks.join("\n\n")}` };
+		});
+	}
+
+	/** Resolve todoRef-derived assignments for tasks missing explicit assignment. */
+	#resolveTodoRefAssignments(tasks: TaskItem[]): TaskItem[] {
+		const groups = this.session.getTodoGroups?.();
+		if (!groups || groups.length === 0) return tasks;
+		return tasks.map(task => {
+			if (task.assignment?.trim() || !task.todoRef) return task;
+			const todo = findTask(groups, task.todoRef);
+			if (!todo) return task;
+			const assignment = buildSniperAssignment(todo);
+			return assignment ? { ...task, assignment } : task;
 		});
 	}
 
@@ -594,7 +621,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		onUpdate?: AgentToolUpdateCallback<TaskToolDetails>,
 	): Promise<AgentToolResult<TaskToolDetails>> {
 		const asyncEnabled = this.session.settings.get("async.enabled");
-		const rawTasks = params.tasks ?? [];
+		const resolvedTasks = this.#resolveTodoRefAssignments(params.tasks ?? []);
+		const resolvedParams = resolvedTasks === (params.tasks ?? []) ? params : { ...params, tasks: resolvedTasks };
+		const rawTasks = resolvedParams.tasks ?? [];
 		const taskPayloadValidationError = this.#validateTaskPayloadSize(params);
 		if (taskPayloadValidationError) {
 			return {
@@ -616,8 +645,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
 			};
 		}
-		const preparedTasks = signal?.aborted ? rawTasks : await this.#autoCreateTodoRefs(params, selectedAgent);
-		const dispatchParams = preparedTasks === params.tasks ? params : { ...params, tasks: preparedTasks };
+		const preparedTasks = signal?.aborted ? rawTasks : await this.#autoCreateTodoRefs(resolvedParams, selectedAgent);
+		const dispatchParams =
+			preparedTasks === resolvedParams.tasks ? resolvedParams : { ...resolvedParams, tasks: preparedTasks };
 		if (!asyncEnabled || selectedAgent?.blocking === true) {
 			return this.#executeSync(_toolCallId, dispatchParams, signal, onUpdate);
 		}
