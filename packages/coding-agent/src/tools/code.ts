@@ -49,6 +49,61 @@ const GRAPH_COMMANDS = new Set([
 
 const MUTATING_COMMANDS = new Set(["edit", "undo", "redo"]);
 
+const FALLBACK_EXTENSIONS = new Set([
+	"ts",
+	"tsx",
+	"js",
+	"jsx",
+	"mjs",
+	"cjs",
+	"mts",
+	"cts",
+	"rs",
+	"py",
+	"pyi",
+	"typ",
+	"ex",
+	"exs",
+]);
+
+let supportedExtensionsCache: Set<string> | undefined;
+
+function extractSupportedExtensions(output: unknown): Set<string> {
+	const record = output as { languages?: Array<{ extensions?: string[] }> } | undefined;
+	const extensions = new Set<string>();
+	for (const language of record?.languages ?? []) {
+		for (const extension of language.extensions ?? []) {
+			if (extension) extensions.add(extension.toLowerCase());
+		}
+	}
+	return extensions;
+}
+
+function getSupportedExtensions(): Set<string> {
+	if (supportedExtensionsCache) return supportedExtensionsCache;
+
+	try {
+		const result = timedCodeBuffer({ command: "languages" });
+		if (result.error) {
+			return FALLBACK_EXTENSIONS;
+		}
+
+		const extensions = extractSupportedExtensions(result.output);
+		if (extensions.size > 0) {
+			supportedExtensionsCache = extensions;
+			return extensions;
+		}
+	} catch {}
+
+	return FALLBACK_EXTENSIONS;
+}
+
+export function _resetSupportedExtensionsForTest(override?: Set<string>): void {
+	supportedExtensionsCache = override;
+}
+
+const FILE_COMMANDS = new Set(["outline", "read", "navigate", "edit", "undo", "redo", "diff", "save", "open", "close"]);
+
 function timedCodeBuffer(options: CodeBufferOptions): CodeBufferResult {
 	const start = performance.now();
 	const result = executeCodeBuffer(options);
@@ -227,6 +282,19 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			if (params.mode) options.mode = params.mode;
 			if (command === "navigate" && params.action) {
 				options.action = params.action === "references-local" ? "references" : params.action;
+			}
+
+			if (FILE_COMMANDS.has(nativeCommand) && options.file) {
+				const ext = path.extname(options.file).slice(1).toLowerCase();
+				if (ext && !getSupportedExtensions().has(ext)) {
+					const details = createCodeToolError({
+						command,
+						file: options.file,
+						cwd: sessionCwd,
+						message: `Unsupported file type .${ext}. The code tool supports TypeScript, Rust, Python, Typst, and Elixir. Use the read tool instead.`,
+					});
+					return toolResult(details).text(formatCodeToolContent(details)).done();
+				}
 			}
 
 			const result = timedCodeBuffer(options);

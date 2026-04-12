@@ -1,0 +1,91 @@
+#+TITLE: Fix pre-existing biome import-order violation blocking bun checkts
+#+STATE: DONE
+#+SESSION_ID: 14b7c64d74a6434f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T13-31-29-618Z_14b7c64d74a6434f.jsonl]]
+#+CUSTOM_ID: BUG-240-fix-pre-existing-biome-import-order-viol
+#+EFFORT: 5m
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+NOTE [2026-04-12]: Implemented in PLAN-216. Import order fixed and verified with biome + file-local bun test.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-065-audit-implementation:
+
+1. **What**: PLAN-213 was marked `DONE` even though a required verification command (`bun check:ts`) did not pass.  
+   **Where**: `!tasks/plans/PLAN-213-code-tool-error-envelope-and-language-gu.org`, state line at top and completion section around `** Completion [2026-04-12]` / `*** Verification`.  
+   **Why**: This breaks the plan completion contract: downstream reviewers cannot tell whether the change itself is fully verified or merely believed safe despite a failing required gate.  
+   **Effort**: small
+
+2. **What**: The unresolved `bun check:ts` blocker is documented, but there is no linked follow-up org item/FUP tracking that remaining work.  
+   **Where**: `!tasks/plans/PLAN-213-code-tool-error-envelope-and-language-gu.org`, `*** Deviations` section near the end.  
+   **Why**: The verification blocker is now easy to lose. If the repo-wide check must be green for release confidence, this leaves the failure unowned and untraceable.  
+   **Effort**: trivial
+
+3. **What**: The new guard message says “Use the read tool for non-code files,” but it also fires for unsupported code languages, not just non-code files.  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, unsupported-extension branch around the new guard near `FILE_COMMANDS` / `SUPPORTED_EXTENSIONS` check.  
+   **Why**: This is slightly misleading. A caller trying an unsupported code language is told the file is “non-code,” which can push the model toward the wrong fallback behavior and obscure the real limitation (“unsupported by code tool”).  
+   **Effort**: trivial
+
+4. **What**: There is no automated JS-level integration test for the real Rust→NAPI→TypeScript unsupported-language path; the TS suite still mocks `executeCodeBuffer`.  
+   **Where**: `packages/coding-agent/test/tools/code.test.ts`, new guard/error tests around the block added near the existing error-handling tests.  
+   **Why**: Rust unit tests cover the wrapper and the manual check covers one end-to-end case, but there is no automated contract test across the actual package boundary. A future regression in the NAPI bridge or JS wrapper could slip through without failing the TS test suite.  
+   **Effort**: small
+
+5. **What**: `SUPPORTED_EXTENSIONS` is now a second source of truth for language support and can drift from the native engine.  
+   **Where**: `packages/coding-agent/src/tools/code.ts`, `SUPPORTED_EXTENSIONS` constant near the top of the file.  
+   **Why**: When native language support changes, the code tool can silently reject files the engine already supports, or vice versa. That creates a hard-to-notice contract mismatch at the tool boundary.  
+   **Effort**: medium
+
+* Problem
+=bun check:ts= fails at baseline (even on clean HEAD) due to a Biome =organizeImports= violation in =packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts=. The =@oh-my-pi/pi-natives= import is positioned after relative imports instead of with the other scoped-package imports.
+
+This blocks the repo-wide type-check gate for all plans, including PLAN-213 which documented this as a deviation.
+
+* Design Decisions
+- Fix only the import ordering — no functional changes.
+- Use =bunx biome check --write= to auto-fix (or manually reorder if that flag is unavailable; use =bunx biome check --fix= as alternative).
+- Verify the fix by running =bunx biome check packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts=.
+
+* Implementation
+
+** Modify =packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts=
+
+The current committed import order is:
+
+#+begin_src typescript
+import { beforeEach, describe, expect, spyOn, test } from "bun:test";
+import type { AgentEvent } from "@oh-my-pi/pi-agent-core";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import { Container } from "@oh-my-pi/pi-tui";
+import { _resetSettingsForTest, Settings } from "../../../../src/config/settings";
+import { AssistantMessageComponent } from "../../../../src/modes/components/assistant-message";
+import { ReadToolGroupComponent } from "../../../../src/modes/components/read-tool-group";
+import { SubagentViewerEventHandler } from "../../../../src/modes/components/subagent-viewer/event-handler";
+import type { SubagentViewerContext } from "../../../../src/modes/components/subagent-viewer/types";
+import { ToolExecutionComponent } from "../../../../src/modes/components/tool-execution";
+import { CodeTool, type ToolSession } from "../../../../src/tools";
+import * as nativesModule from "@oh-my-pi/pi-natives";
+#+end_src
+
+The last line (=@oh-my-pi/pi-natives=) must move into the scoped-package group (between =@oh-my-pi/pi-coding-agent= and =@oh-my-pi/pi-tui=, alphabetically). Run =bunx biome check --write= on this file or manually reorder to:
+
+#+begin_src typescript
+import { beforeEach, describe, expect, spyOn, test } from "bun:test";
+import type { AgentEvent } from "@oh-my-pi/pi-agent-core";
+import { initTheme } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
+import * as nativesModule from "@oh-my-pi/pi-natives";
+import { Container } from "@oh-my-pi/pi-tui";
+import { _resetSettingsForTest, Settings } from "../../../../src/config/settings";
+import { AssistantMessageComponent } from "../../../../src/modes/components/assistant-message";
+import { ReadToolGroupComponent } from "../../../../src/modes/components/read-tool-group";
+import { SubagentViewerEventHandler } from "../../../../src/modes/components/subagent-viewer/event-handler";
+import type { SubagentViewerContext } from "../../../../src/modes/components/subagent-viewer/types";
+import { ToolExecutionComponent } from "../../../../src/modes/components/tool-execution";
+import { CodeTool, type ToolSession } from "../../../../src/tools";
+#+end_src
+
+* Verification
+- =bunx biome check packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts= → must pass with no errors
+- =bun test packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts= → tests must still pass (import reorder only, no behavior change)
