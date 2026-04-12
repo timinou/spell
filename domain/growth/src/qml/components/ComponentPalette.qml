@@ -19,6 +19,7 @@ Item {
         { type: "text-block",     label: "Text Block",     icon: "✏️" },
         { type: "table",          label: "Table",          icon: "🗂️" }
     ]
+    signal componentPicked(string componentType)
 
     ColumnLayout {
         anchors.fill: parent
@@ -28,7 +29,7 @@ Item {
         Text {
             text: "Components"
             font.pixelSize: 13
-            font.weight: Font.SemiBold
+            font.weight: Font.DemiBold
             color: "#CDD6F4"
         }
 
@@ -97,6 +98,7 @@ Item {
                     drag.target: tile
 
                     onClicked: {
+                        root.componentPicked(modelData.type)
                         if (typeof bridge !== 'undefined') {
                             bridge.send({ type: 'component_pick', componentType: modelData.type })
                         }

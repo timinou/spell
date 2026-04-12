@@ -17,6 +17,7 @@ Item {
 
     // Currently selected file path (highlighted in the list)
     property string selectedPath: ""
+    signal fileSelected(string filePath)
 
     ColumnLayout {
         anchors.fill: parent
@@ -30,7 +31,7 @@ Item {
             Text {
                 text: "Files"
                 font.pixelSize: 11
-                font.weight: Font.SemiBold
+                font.weight: Font.DemiBold
                 color: "#A6ADC8"
             }
 
@@ -101,6 +102,7 @@ Item {
 
                 onClicked: {
                     fileTree.selectedPath = modelData.path || ""
+                    fileTree.fileSelected(modelData.path || "")
                     if (typeof bridge !== 'undefined') {
                         bridge.send({
                             type: 'file_selected',

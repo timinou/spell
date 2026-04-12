@@ -1,0 +1,83 @@
+#+TITLE: Build the QML WYSIWYG shell and contextual editing UX
+#+STATE: DONE
+#+SESSION_ID: 14b70e4c6eece845
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T00-07-34-075Z_14b70e4c6eece845.jsonl]]
+#+CUSTOM_ID: PROJ-034-build-the-qml-wysiwyg-shell-and-contextu
+#+EFFORT: 4d
+#+PRIORITY: #A
+#+LAYER: frontend
+#+DEPENDS: PROJ-032-build-native-typst-document-surface-foun PROJ-033-implement-source-canonical-typst-mapping
+
+NOTE [2026-04-12]: Delivered the visual-first QML shell, contextual sidebar, insert/template/asset flows, and deterministic panel verification.
+
+* Initial Message
+
+thought experiment: now that you can do structural edits to any typst file, and knowing there's a rust crate for SVG output and another for live click in preview, could you imagine a minimal Rust window with WYSIWYG capabilities for Typst files? Integrated in the QML bridge, ideally?
+
+* Context
+This item delivers the user-facing desktop shell for the Typst WYSIWYG editor. The primary experience is editing-first and visual-first: non-technical users interact with a Notion/Word-style surface, not raw Typst. QML remains the application shell and should reuse the styling/component conventions already present in the repo. This item consumes the native document surface and the source-canonical edit engine from earlier items.
+
+* Target Files
+- Modify `domain/growth/src/qml/panels/EditorPanel.qml` or replace it with a clearly named successor if a full rewrite is cleaner
+- Modify or extend `domain/growth/src/qml/panels/EditorPanelTestHarness.qml`
+- Modify or extend `domain/growth/src/qml/components/TemplateSelector.qml`
+- Modify or extend `domain/growth/src/qml/components/ComponentPalette.qml`
+- Modify or extend `domain/growth/src/qml/components/TypstFileTree.qml`
+- Add new focused QML components under `domain/growth/src/qml/components/` for contextual sidebars, block controls, insert menu, asset picker drawer, recovery banner, and fallback status
+- Reuse styling patterns from `packages/coding-agent/src/modes/qml/SpellTheme.qml` and canvas components instead of inventing a separate design language
+
+* Design Decisions You MUST Follow
+- The visual surface is primary. Optional true preview is secondary and must not dominate the layout.
+- Source/manual mode is hidden behind recovery/advanced affordances and is not first-class navigation.
+- Unsupported regions must be shown honestly with disabled or preview-only affordances; do not pretend every visual element is editable.
+- The UI should feel desktop-polished: keyboardable controls, focus treatment, explicit busy/error states, and clear recovery banners.
+
+* Implementation
+** Shell composition
+Build a panel/shell that includes:
+- the embedded native document surface as the central editing area
+- toolbar with common text/block operations
+- slash/insert menu or equivalent insert affordance
+- contextual sidebar that changes based on current selection/block type
+- template chooser and file/template navigation where applicable
+- asset picker flow for images and document resources
+- visible fallback/recovery state when interactive editing is degraded
+
+** Contextual UX
+The contextual sidebar and controls must support, at minimum:
+- paragraph/heading/list formatting
+- image replacement and caption-oriented controls
+- table-oriented controls for supported table interactions
+- variable/config editing panels for template-driven documents
+- block reorder/delete/add affordances that call the edit engine rather than inventing a second document model
+
+** Recovery and degraded states
+Design and implement explicit UX for:
+- renderer unavailable → preview-only banner
+- unsupported construct → non-editable marker with explanation
+- source recovery mode → hidden but reachable from error/fallback surfaces
+- agent/collaborative update in progress → busy/refresh state without losing editor context
+
+* Enumerated User Workflows
+The UI and harness verification must cover all of these scenarios:
+1. Open a template-backed document and start typing without seeing Typst source.
+2. Apply heading/list formatting from toolbar/sidebar.
+3. Use insert/slash affordance to add a supported block.
+4. Select an image and replace its asset from a picker flow.
+5. Open a contextual panel for variables/config values and update them.
+6. Encounter an unsupported construct and receive a truthful preview-only affordance.
+7. Enter hidden recovery/source mode from an error/fallback path.
+8. Return from recovery mode back to the visual surface.
+9. Receive an agent-applied update and continue editing without reopening the document.
+
+* Edge Cases and Failure Handling
+- Sidebar state must track selection changes without lagging behind the document surface.
+- Fallback banners must not obscure the document beyond recovery.
+- Keyboard focus must remain usable after modal pickers/drawers close.
+- Preview-only regions must be visually distinguishable but not visually noisy.
+- Long-running asset/template loads must surface progress and failure honestly.
+
+* Verification
+- Produce screenshots for: main editing surface, contextual sidebar for at least two block types, template flow, asset picker flow, degraded preview-only mode, unsupported-construct marker, and recovery-mode entry.
+- Add or extend a QML harness so these states can be reproduced deterministically.
+- Acceptance is met when a non-technical user can complete core formatting/content tasks from the visual shell without seeing raw Typst in normal flow, and degraded states remain understandable and recoverable.

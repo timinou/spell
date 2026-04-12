@@ -1,0 +1,73 @@
+#+TITLE: Integrate templates assets and agent-assisted Typst workflows
+#+STATE: DONE
+#+SESSION_ID: 14b70e4c6eece845
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T00-07-34-075Z_14b70e4c6eece845.jsonl]]
+#+CUSTOM_ID: PROJ-035-integrate-templates-assets-and-agent-ass
+#+EFFORT: 3d
+#+PRIORITY: #A
+#+LAYER: workflow
+#+DEPENDS: PROJ-033-implement-source-canonical-typst-mapping PROJ-034-build-the-qml-wysiwyg-shell-and-contextu
+
+NOTE [2026-04-12]: Added template workflow orchestration, variable/asset flows, and agent-assisted canonical edits with focused tests.
+
+* Initial Message
+
+thought experiment: now that you can do structural edits to any typst file, and knowing there's a rust crate for SVG output and another for live click in preview, could you imagine a minimal Rust window with WYSIWYG capabilities for Typst files? Integrated in the QML bridge, ideally?
+
+* Context
+The editor is not just a blank rich text surface. The accepted scope includes template-driven documents, variable/config editing, asset management, and agent-assisted updates that remain compatible with canonical Typst source. This item connects the visual editor to the existing growth/Typst domain model and ensures template-backed workflows are first-class.
+
+* Target Files
+- Modify or extend files under `domain/growth/src/typst/` for template loading, variable/config hydration, asset references, and export orchestration
+- Modify or extend `domain/growth/src/qml/components/TemplateSelector.qml`
+- Add any required asset-picker or template-variable QML components under `domain/growth/src/qml/components/`
+- Modify the growth/editor panel wiring so template, variable, and asset operations route through the canonical edit engine
+- Modify `packages/coding-agent/src/tools/canvas.ts` or adjacent orchestration only if agent-driven canvas interactions require explicit new message types
+- Add focused tests/harnesses for template and asset workflows
+
+* Design Decisions You MUST Follow
+- Templates and variables are part of the initial plan, not a later nice-to-have.
+- Variable/config editing may use source-adjacent inputs where appropriate, but the relationship back to canonical Typst documents must remain explicit and deterministic.
+- Agent operations are assistive. They must use the same canonical update path as user edits, not a parallel mutation pipeline.
+- Asset replacement must update canonical references truthfully; no hidden shadow asset model.
+
+* Implementation
+** Template workflows
+Support opening or creating documents from known templates. The editor should surface template-specific variable/config controls without exposing raw source in normal use. When variables are changed, the resulting canonical source/config inputs must be updated through the same mapping/orchestration layer used elsewhere.
+
+** Asset workflows
+Provide a user-facing asset picker/replacement flow for supported assets, especially images. The flow must:
+- show current asset usage
+- replace canonical references rather than mutating only the rendered surface
+- surface validation errors for missing or invalid assets
+- preserve document recovery when an asset cannot load
+
+** Agent-assisted workflows
+Define and wire agent affordances for actions such as:
+- insert section from prompt
+- rewrite selected paragraph/block
+- populate template variables from structured data
+- refresh a generated summary/analysis block
+
+All agent changes must re-enter through the same edit engine and mapping refresh path as manual edits. If an agent proposes an unsupported construct, the system must surface it honestly and preserve recovery options.
+
+* Enumerated User Workflows
+1. Create a document from a template and fill required variables.
+2. Re-open a template-backed document and preserve its variable panel state.
+3. Replace an image asset and observe the canonical source/reference update.
+4. Trigger an agent rewrite for a selected block and keep cursor/context stable afterward.
+5. Ask the agent to insert a supported section or component.
+6. Encounter a bad/missing asset and recover without losing document state.
+7. Encounter an agent-generated unsupported construct and fall back truthfully.
+
+* Edge Cases and Failure Handling
+- Template metadata/schema mismatch must surface clearly.
+- Missing template assets must not corrupt canonical source.
+- Concurrent agent/user updates must avoid silent last-writer-wins lies; at minimum, show refresh/reload state truthfully.
+- Variables edited through panels must stay in sync with rendered content after recompile.
+
+* Verification
+- Produce screenshots showing: template selection, variable/config sidebar, asset replacement flow, and at least one agent-assisted editing action.
+- Produce an export artifact from a representative template-backed document after variables/assets/agent changes have been applied.
+- Add focused tests for template-variable round trips, asset reference updates, and agent update routing.
+- Acceptance is met when template-backed, asset-backed, and agent-assisted workflows operate through the same canonical Typst pipeline and remain recoverable under failure.

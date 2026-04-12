@@ -1,0 +1,70 @@
+#+TITLE: Build native Typst document surface foundation
+#+STATE: DONE
+#+SESSION_ID: 14b70e4c6eece845
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T00-07-34-075Z_14b70e4c6eece845.jsonl]]
+#+CUSTOM_ID: PROJ-032-build-native-typst-document-surface-foun
+#+EFFORT: 3d
+#+PRIORITY: #A
+#+LAYER: frontend-native
+
+NOTE [2026-04-12]: Implemented in the native Typst surface crate/QML bridge integration and verified with focused Rust + QML tests.
+
+* Initial Message
+
+thought experiment: now that you can do structural edits to any typst file, and knowing there's a rust crate for SVG output and another for live click in preview, could you imagine a minimal Rust window with WYSIWYG capabilities for Typst files? Integrated in the QML bridge, ideally?
+
+* Context
+This item establishes the native page/document viewport for a Word/Notion-style Typst editor. The settled direction is: QML owns the surrounding application chrome, but the editable document canvas is a native Rust-rendered surface embedded inside the existing Qt/QML shell. Do not use WebEngineView or Monaco for the primary editor surface. Do not use iced as the widget toolkit. The objective of this item is to create the rendering and embedding foundation that later items will consume.
+
+* Target Files
+- Create `crates/pi-typst-surface/Cargo.toml`
+- Create `crates/pi-typst-surface/src/lib.rs`
+- Create `crates/pi-typst-surface/src/ffi.rs`
+- Create `crates/pi-typst-surface/src/renderer.rs`
+- Create `crates/pi-typst-surface/src/session.rs`
+- Create `packages/qml/native/typstdocumentitem.h`
+- Create `packages/qml/native/typstdocumentitem.cpp`
+- Modify `packages/qml/CMakeLists.txt`
+- Modify `packages/qml/bridge/main.cpp` only as needed to register the native QML item/module
+- Add a focused harness or test entry under `packages/qml/test/` for the document item lifecycle
+
+* Design Decisions You MUST Follow
+- QML remains the window owner and control shell. The new native surface is a QML item hosted inside the existing bridge process.
+- The document surface must be implemented as a dedicated native item/plugin for Qt Quick. Avoid Linux-only APIs at the item boundary; keep backend abstraction explicit so later Metal/D3D/OpenGL compatibility work is possible.
+- Rust owns rendering, hit-test geometry, selection/caret overlay primitives, and viewport state. QML does not draw the page contents itself.
+- This item is foundation only: do not implement full editing UX here. Provide enough API surface for later items to drive document loading, page sizing, viewport scroll/zoom, selection decoration, hit-testing requests, and fallback activation.
+- If GPU/native interactive rendering cannot initialize, the surface must expose a clean fallback state that later items can switch to SVG preview mode without crashing or wedging the QML shell.
+
+* Implementation
+** Contracts first
+Define the stable cross-language contract before full rendering work:
+- renderer/session lifecycle (`create`, `dispose`, `set_document`, `set_viewport`, `hit_test`, `snapshot_svg`, `last_error`)
+- returned state structures for page metrics, readiness, degraded/fallback mode, and render diagnostics
+- explicit backend capability enum rather than booleans
+
+Write test coverage for contract serialization and session lifecycle before finishing the implementation. This is required because the contract is consumed by both the native QML item and higher-level orchestration.
+
+** Native embedding
+Implement a Qt Quick item that hosts the Rust renderer output inside the existing `packages/qml` build. The item must:
+- initialize lazily
+- survive resizes and repeated document reloads
+- surface ready/error/degraded signals to QML
+- support page scrolling/zoom hooks even if the first version only exposes basic behavior
+- avoid deadlocking the QML render thread on document compile or GPU init failure
+
+** Rendering behavior
+Use a backend-flexible design. Linux-first implementation may use Vulkan/wgpu-backed rendering internally, but the Rust crate boundary must not hard-code Linux-only assumptions into public types or initialization. If the selected interactive backend is unavailable, return a degraded capability and keep the item alive.
+
+* Edge Cases and Failure Handling
+- Renderer init failure on unsupported GPU/driver must not crash the bridge process.
+- Repeated window open/close cycles must dispose native resources cleanly.
+- Large document page counts must not freeze first paint; expose incremental readiness/page availability where needed.
+- Invalid Typst input must report a structured error and keep the viewport recoverable.
+- If backend capability changes across launches, the item must still expose the same QML-facing API.
+
+* Verification
+- Add focused tests for lifecycle/contract behavior and native item initialization.
+- Produce a QML harness screenshot showing the native document item embedded in a window with a representative sample document visible.
+- Produce an artifact proving degraded mode is detectable without a crash (for example a harness screenshot or captured state output when forcing fallback).
+- Verification commands should be package-local, e.g. targeted `bun test` entries for the new QML/native tests plus the narrow native build/test command required for the Rust crate.
+- Acceptance is met when a QML harness can host the native surface, render a representative Typst page, and report either interactive-ready or degraded-preview state through a stable API.

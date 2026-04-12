@@ -10,6 +10,7 @@ Item {
     // Populated by the host via bridge message { type: 'templates_list', templates: [...] }
     // Each entry: { id: string, name: string, description: string, path: string }
     property var templates: []
+    signal templateSelected(string templateId, string templatePath)
 
     ColumnLayout {
         anchors.fill: parent
@@ -19,7 +20,7 @@ Item {
         Text {
             text: "Templates"
             font.pixelSize: 13
-            font.weight: Font.SemiBold
+            font.weight: Font.DemiBold
             color: "#CDD6F4"
         }
 
@@ -71,6 +72,7 @@ Item {
                 }
 
                 onClicked: {
+                    templateSelector.templateSelected(modelData.id || "", modelData.path || "")
                     if (typeof bridge !== 'undefined') {
                         bridge.send({
                             type: 'template_selected',

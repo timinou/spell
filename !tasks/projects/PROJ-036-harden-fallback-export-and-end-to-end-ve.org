@@ -1,0 +1,67 @@
+#+TITLE: Harden fallback export and end-to-end verification for the Typst editor
+#+STATE: DONE
+#+SESSION_ID: 14b70e4c6eece845
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T00-07-34-075Z_14b70e4c6eece845.jsonl]]
+#+CUSTOM_ID: PROJ-036-harden-fallback-export-and-end-to-end-ve
+#+EFFORT: 2d
+#+PRIORITY: #A
+#+LAYER: verification
+#+DEPENDS: PROJ-032-build-native-typst-document-surface-foun PROJ-033-implement-source-canonical-typst-mapping PROJ-034-build-the-qml-wysiwyg-shell-and-contextu PROJ-035-integrate-templates-assets-and-agent-ass
+
+NOTE [2026-04-12]: Added export helpers, artifact generation, degraded/recovery verification, and the final screenshot/mapping/export evidence set.
+
+* Initial Message
+
+thought experiment: now that you can do structural edits to any typst file, and knowing there's a rust crate for SVG output and another for live click in preview, could you imagine a minimal Rust window with WYSIWYG capabilities for Typst files? Integrated in the QML bridge, ideally?
+
+* Context
+The plan requires polished degraded states, honest error handling, representative export proof, and deterministic verification artifacts. This item is responsible for making the editor trustworthy under failure, not merely feature-rich on the happy path. It closes the loop across renderer, edit engine, QML shell, template workflows, and export.
+
+* Target Files
+- Modify or extend Typst export/orchestration files under `domain/growth/src/typst/`
+- Add/export representative sample documents and harness inputs in the smallest practical package-local locations
+- Add focused tests under `packages/qml/test/`, `packages/natives/test/`, and/or crate-local Rust tests as appropriate
+- Add or extend QML harnesses needed to deterministically capture screenshots and degraded-mode states
+- Modify any narrow orchestration files needed to collect artifacts or surface structured diagnostics
+
+* Design Decisions You MUST Follow
+- Fallback to SVG preview is required. Fail-fast/no-fallback is explicitly rejected.
+- The editor must tell the truth about capability: interactive-ready, preview-only, recovery-needed, export-failed, etc. Avoid vague generic errors.
+- Verification must prove behavior externally. Screenshots, mapping artifacts, and exported PDF/SVG artifacts are required outputs, not optional notes.
+- Narrow tests only; avoid project-wide verification unless a package-local command is impossible.
+
+* Implementation
+** Fallback and capability truthfulness
+Implement and verify end-to-end degraded flows:
+- GPU/native renderer unavailable at startup
+- document contains unsupported interactive constructs
+- mapping/edit engine rejects an operation
+- export succeeds while interactive editing is degraded
+- export fails with actionable diagnostics
+
+** Export pipeline
+Ensure representative documents can be exported to at least SVG and PDF through the approved Typst path. Export should reflect canonical source after visual edits, variable changes, asset replacement, and agent-assisted updates.
+
+** Test/harness matrix
+Create a reproducible matrix that covers:
+1. interactive-ready visual editing path
+2. preview-only fallback path
+3. hidden recovery/source entry path
+4. mapping artifact generation path
+5. template+asset+agent flow ending in successful export
+6. export failure with surfaced diagnostics
+
+Where a pure automated test is insufficient, add a deterministic harness and require captured artifacts.
+
+* Edge Cases and Failure Handling
+- Degraded mode must still preserve export if the canonical source is valid.
+- Exported output must not silently omit recent edits due to stale synchronization.
+- Artifact capture must remain deterministic enough for regression review.
+- If one page/region is unsupported interactively, the system should still export the full document if Typst can compile it.
+
+* Verification
+- Produce the full screenshot set for the core flows and degraded flows.
+- Produce at least one recorded mapping artifact from a representative document.
+- Produce exported SVG and PDF artifacts from a representative template-backed document after visual edits.
+- Add focused automated tests for capability-state transitions and export synchronization.
+- Acceptance is met when the editor can prove, with artifacts, that it behaves correctly in interactive, degraded, recovery, and export scenarios without lying about what is or is not editable.
