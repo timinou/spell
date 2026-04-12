@@ -1,0 +1,277 @@
+#+TITLE: code edit fails to resolve nodes inside grammar wrapper nodes
+#+STATE: DONE
+#+SESSION_ID: 14b70df0ae89e0db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T00-06-00-122Z_14b70df0ae89e0db.jsonl]]
+#+CUSTOM_ID: BUG-225-code-edit-fails-to-resolve-nodes-inside
+#+EFFORT: 1h
+#+PRIORITY: A
+#+LAYER: natives
+
+
+* Initial Message
+
+What now works
+ 1. Load the file into a managed buffer first:
+ ```json
+   {
+     "command": "read",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "resolution": 3,
+     "offset": 1,
+     "limit": 20
+   }
+ ```
+
+ 2. Confirm buffer exists:
+ ```json
+   {
+     "command": "buffers"
+   }
+ ```
+
+ Observed:
+
+ ```json
+   {
+     "path": "/home/user/code/ora/BackDesk-C/03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "language": "typst",
+     "version": 0,
+     "dirty": false,
+     "lineCount": 522
+   }
+ ```
+
+ 3. After that, navigate node-at works:
+ ```json
+   {
+     "command": "navigate",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "action": "node-at",
+     "line": 57,
+     "column": 1
+   }
+ ```
+
+ Observed:
+
+ ```json
+   {
+     "nodeType": "let",
+     "text": "let section-title(num, title) = {",
+     "line": 57,
+     "endLine": 72,
+     "column": 1,
+     "parentType": "code"
+   }
+ ```
+
+ What still fails
+ Even with the buffer loaded, code edit does not find the same node that navigate node-at just found.
+
+ Tried on helper binding:
+
+ ```json
+   {
+     "command": "edit",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "operation": "replace",
+     "target": { "line": 57, "node_type": "let" },
+     "content": "#let section-title-probe(num, title) = {\n  v(0.3cm)\n  grid(\n    columns: (auto, 1fr),\n    gutter: 10pt,\n    rect(fill:
+ teal-primary, radius: 4pt, inset: (x: 10pt, y: 5pt))[\n      #text(size: 10pt, weight: \"bold\", fill: white, tracking: 0.5pt)[#num]\n    ],\n
+ align(left + horizon)[\n      #text(font: title-font, size: 16pt, weight: \"bold\", fill: charcoal)[#title]\n    ],\n  )\n  v(6pt)\n
+ line(length: 100%, stroke: 0.8pt + sand.darken(10%))\n  v(0.4cm)\n}"
+   }
+ ```
+
+ Error:
+
+ ```json
+   {"error":true,"message":"edit error: No node found at line 57"}
+ ```
+
+ Also tried a single-line top-level binding:
+
+ ```json
+   {
+     "command": "navigate",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "action": "node-at",
+     "line": 14,
+     "column": 1
+   }
+ ```
+
+ Observed:
+
+ ```json
+   {
+     "nodeType": "let",
+     "text": "let teal-primary = rgb(\"#26849c\")",
+     "line": 14,
+     "endLine": 14,
+     "column": 1,
+     "parentType": "code"
+   }
+ ```
+
+ Then:
+
+ ```json
+   {
+     "command": "edit",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "operation": "replace",
+     "target": { "line": 14, "node_type": "let" },
+     "content": "#let teal-primary = rgb(\"#000000\")"
+   }
+ ```
+
+ Error:
+
+ ```json
+   {"error":true,"message":"edit error: No node found at line 14"}
+ ```
+
+ Net conclusion
+ - code outline on Typst: works
+ - code read on Typst: works
+ - code navigate on Typst: works, but only after the file has been loaded into a managed buffer
+ - code edit on Typst: still broken for me; it cannot resolve nodes that navigate node-at can resolve
+
+ Minimal repro for fixing
+ 1. code read a .typ file
+ 2. code buffers shows Typst buffer with correct lineCount
+ 3. code navigate node-at on a top-level let returns a node
+ 4. code edit replace on the same line and node_type fails with No node found at line X
+
+* Problem
+
+~code edit~ (replace, kill, insert-before, insert-after) fails with "No node
+found at line X" on Typst files, even though ~code navigate node-at~ finds
+nodes successfully at the same line.
+
+Root cause: ~find_ancestor~ in ~edit/replace.rs~ only walks UP from the
+initially-resolved node. In Typst (and any grammar with wrapper nodes), the
+line starts with ~#~ which belongs to a ~code~ wrapper node. The target ~let~
+node is a CHILD of ~code~, not an ancestor — so the upward search fails.
+
+This is not Typst-specific. Any grammar where declarations nest inside wrapper
+nodes triggers the same bug (e.g., TypeScript ~export_statement~ wrapping
+~function_declaration~ when editing from column 0).
+
+* Reproduction
+
+1. ~code read~ a ~.typ~ file (loads buffer)
+2. ~code navigate node-at~ on a ~#let~ line → returns ~{ nodeType: "let", parentType: "code" }~
+3. ~code edit replace~ with ~target: { line: N, node_type: "let" }~ → "No node found at line N"
+
+* Design Decisions
+
+1. Fix in ~find_ancestor~ (rename to ~find_target~): after ancestor walk-up fails, try a
+   sole-named-child descent. This matches the existing pattern in ~outline.rs::entry_for_node~
+   where ~sole_named_child()~ is used to unwrap ~code~ → ~let~.
+2. The descent uses the sole-named-child heuristic: only recurse into a child if it is the
+   ONLY named child. This prevents false matches in nodes with multiple children.
+3. The fix is language-agnostic — no Typst-specific logic needed.
+
+* Implementation
+
+Files to modify:
+- ~crates/pi-code-engine/src/edit/replace.rs~ — main fix
+- ~crates/pi-code-engine/src/edit/mod.rs~ — add Typst edit tests
+
+** Step 1: Modify find_ancestor → find_target in replace.rs
+
+In ~crates/pi-code-engine/src/edit/replace.rs~:
+
+1. Rename ~find_ancestor~ to ~find_target~
+2. After the existing ancestor walk-up loop, add a sole-named-child descent fallback:
+
+#+begin_src rust
+fn find_target<'a>(
+    node: tree_sitter::Node<'a>,
+    node_type: &str,
+) -> Option<tree_sitter::Node<'a>> {
+    // Walk up ancestors (existing logic)
+    let mut current = node;
+    loop {
+        if current.kind() == node_type {
+            return Some(current);
+        }
+        match current.parent() {
+            Some(p) => current = p,
+            None => break,
+        }
+    }
+    // Unwrap sole-named-child chains downward.
+    // Handles grammars where declarations nest inside wrapper nodes
+    // (e.g., Typst `code` → `let`, TS `export_statement` → `function_declaration`).
+    // Mirrors the pattern in outline.rs::entry_for_node.
+    unwrap_to(node, node_type)
+}
+
+fn unwrap_to<'a>(
+    node: tree_sitter::Node<'a>,
+    node_type: &str,
+) -> Option<tree_sitter::Node<'a>> {
+    let mut cursor = node.walk();
+    let mut children = node.named_children(&mut cursor);
+    let child = children.next()?;
+    if children.next().is_some() {
+        return None; // Multiple named children — don't guess
+    }
+    if child.kind() == node_type {
+        return Some(child);
+    }
+    unwrap_to(child, node_type)
+}
+#+end_src
+
+3. Update all four callers (~replace_node~, ~insert_before~, ~insert_after~, ~kill_node~)
+   to call ~find_target~ instead of ~find_ancestor~.
+
+** Step 2: Add tests in edit/mod.rs
+
+Add to the existing ~#[cfg(test)] mod tests~ block in ~crates/pi-code-engine/src/edit/mod.rs~:
+
+1. Helper: ~fn typst_buffer() -> CodeBuffer~ using the existing ~hello.typ~ fixture
+   (matches ~buffer("hello.typ", "typst")~ pattern in navigate tests)
+2. ~test_replace_typst_let~: Call ~replace_node(&buffer, 2, "let", ...)~ on ~hello.typ~
+   line 2 (~#let title = [Spell]~). Assert old value gone, new value present.
+3. ~test_kill_typst_let~: Call ~kill_node(&buffer, 2, "let")~ on ~hello.typ~ line 2.
+   Assert the let binding is removed, other content preserved.
+
+* Existing Patterns to Follow
+
+- Test helpers: see ~edit/mod.rs::tests::edit_buffer()~ and ~navigate::tests::buffer()~
+- Wrapper unwrap pattern: see ~outline.rs::entry_for_node~ and ~outline.rs::sole_named_child~
+- Typst fixture: ~crates/pi-code-engine/tests/fixtures/sources/hello.typ~
+
+* Verification
+
+Run the pi-code-engine edit tests:
+#+begin_src sh
+cd crates/pi-code-engine && cargo test edit -- --nocapture
+#+end_src
+
+Verify ALL existing tests pass (no regressions):
+#+begin_src sh
+cd crates/pi-code-engine && cargo test -- --nocapture
+#+end_src
+
+Expected: all existing TypeScript edit tests pass unchanged, new Typst edit tests pass.
+
+* Edge Cases
+
+- ~find_target~ descendant search must use sole-named-child heuristic to prevent false
+  matches in complex trees
+- The descendant search should NOT recurse into nodes with multiple named children
+- Error message "No node found at line X" remains for genuinely missing nodes
+- The fix must not change behavior for languages without wrapper nodes (TypeScript
+  function_declaration at column 0 still works via ancestor search)
+
+
+** Resolution [2026-04-12]
+- Updated [[file:crates/pi-code-engine/src/edit/replace.rs]] to resolve edit targets by walking ancestors first, then unwrapping sole-named-child wrapper chains via `find_target`/`unwrap_to`.
+- Added Typst regression coverage in [[file:crates/pi-code-engine/src/edit/mod.rs]] for replace and kill against `hello.typ` wrapper nodes.
+- Verification: `cargo test test_replace_typst -- --nocapture`, `cargo test test_kill_typst -- --nocapture`, `cargo test`, `cargo fmt --check`, `cargo clippy` in `crates/pi-code-engine`.

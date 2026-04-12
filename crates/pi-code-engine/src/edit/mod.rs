@@ -57,6 +57,15 @@ mod tests {
 		CodeBuffer::from_str(&source, LanguageId::new("typescript"), registry()).expect("buffer")
 	}
 
+	fn typst_buffer() -> CodeBuffer {
+		let source = fs::read_to_string(format!(
+			"{}/tests/fixtures/sources/hello.typ",
+			env!("CARGO_MANIFEST_DIR")
+		))
+		.expect("fixture");
+		CodeBuffer::from_str(&source, LanguageId::new("typst"), registry()).expect("buffer")
+	}
+
 	fn apply_and_get(buffer: &mut CodeBuffer, edits: Vec<TextEdit>) -> String {
 		buffer.edit_batch(edits).expect("edit");
 		buffer.source()
@@ -112,6 +121,16 @@ mod tests {
 		assert!(out.contains("class Foo"), "Foo should remain");
 	}
 
+	#[test]
+	fn test_kill_typst() {
+		let mut buffer = typst_buffer();
+		let edits = kill_node(&buffer, 2, "let").expect("kill typst let");
+		let out = apply_and_get(&mut buffer, edits);
+		assert!(!out.contains("let title = [Spell]"), "let binding should be removed");
+		assert!(out.contains("#show heading.where(level: 1)"), "other code should remain");
+		assert!(out.contains("= #title"), "body content should remain");
+	}
+
 	// -- replace / insert tests --
 
 	#[test]
@@ -122,6 +141,16 @@ mod tests {
 		let out = apply_and_get(&mut buffer, edits);
 		assert!(out.contains("function add() {}"), "replacement should be present");
 		assert!(!out.contains("return a + b"), "old body should be gone");
+	}
+
+	#[test]
+	fn test_replace_typst() {
+		let mut buffer = typst_buffer();
+		let edits = replace_node(&buffer, 2, "let", "let title = [Pi]").expect("replace typst let");
+		let out = apply_and_get(&mut buffer, edits);
+		assert!(out.contains("#let title = [Pi]"), "replacement should preserve valid Typst syntax");
+		assert!(!out.contains("#let title = [Spell]"), "old binding should be gone");
+		assert!(out.contains("= #title"), "body content should remain");
 	}
 
 	#[test]

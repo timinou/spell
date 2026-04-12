@@ -1,0 +1,201 @@
+#+TITLE: Fix code edit node resolution for wrapper grammars
+#+STATE: DONE
+#+SESSION_ID: 14b70df0ae89e0db
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T00-06-00-122Z_14b70df0ae89e0db.jsonl]]
+#+CUSTOM_ID: PLAN-201-fix-code-edit-node-resolution-for-wrappe
+
+
+* Initial Message
+
+What now works
+ 1. Load the file into a managed buffer first:
+ ```json
+   {
+     "command": "read",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "resolution": 3,
+     "offset": 1,
+     "limit": 20
+   }
+ ```
+
+ 2. Confirm buffer exists:
+ ```json
+   {
+     "command": "buffers"
+   }
+ ```
+
+ Observed:
+
+ ```json
+   {
+     "path": "/home/user/code/ora/BackDesk-C/03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "language": "typst",
+     "version": 0,
+     "dirty": false,
+     "lineCount": 522
+   }
+ ```
+
+ 3. After that, navigate node-at works:
+ ```json
+   {
+     "command": "navigate",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "action": "node-at",
+     "line": 57,
+     "column": 1
+   }
+ ```
+
+ Observed:
+
+ ```json
+   {
+     "nodeType": "let",
+     "text": "let section-title(num, title) = {",
+     "line": 57,
+     "endLine": 72,
+     "column": 1,
+     "parentType": "code"
+   }
+ ```
+
+ What still fails
+ Even with the buffer loaded, code edit does not find the same node that navigate node-at just found.
+
+ Tried on helper binding:
+
+ ```json
+   {
+     "command": "edit",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "operation": "replace",
+     "target": { "line": 57, "node_type": "let" },
+     "content": "#let section-title-probe(num, title) = {\n  v(0.3cm)\n  grid(\n    columns: (auto, 1fr),\n    gutter: 10pt,\n    rect(fill:
+ teal-primary, radius: 4pt, inset: (x: 10pt, y: 5pt))[\n      #text(size: 10pt, weight: \"bold\", fill: white, tracking: 0.5pt)[#num]\n    ],\n
+ align(left + horizon)[\n      #text(font: title-font, size: 16pt, weight: \"bold\", fill: charcoal)[#title]\n    ],\n  )\n  v(6pt)\n
+ line(length: 100%, stroke: 0.8pt + sand.darken(10%))\n  v(0.4cm)\n}"
+   }
+ ```
+
+ Error:
+
+ ```json
+   {"error":true,"message":"edit error: No node found at line 57"}
+ ```
+
+ Also tried a single-line top-level binding:
+
+ ```json
+   {
+     "command": "navigate",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "action": "node-at",
+     "line": 14,
+     "column": 1
+   }
+ ```
+
+ Observed:
+
+ ```json
+   {
+     "nodeType": "let",
+     "text": "let teal-primary = rgb(\"#26849c\")",
+     "line": 14,
+     "endLine": 14,
+     "column": 1,
+     "parentType": "code"
+   }
+ ```
+
+ Then:
+
+ ```json
+   {
+     "command": "edit",
+     "file": "03-commercial/prospects/mamabox/prd-schedule-interface-mamabox-2026-03.typ",
+     "operation": "replace",
+     "target": { "line": 14, "node_type": "let" },
+     "content": "#let teal-primary = rgb(\"#000000\")"
+   }
+ ```
+
+ Error:
+
+ ```json
+   {"error":true,"message":"edit error: No node found at line 14"}
+ ```
+
+ Net conclusion
+ - code outline on Typst: works
+ - code read on Typst: works
+ - code navigate on Typst: works, but only after the file has been loaded into a managed buffer
+ - code edit on Typst: still broken for me; it cannot resolve nodes that navigate node-at can resolve
+
+ Minimal repro for fixing
+ 1. code read a .typ file
+ 2. code buffers shows Typst buffer with correct lineCount
+ 3. code navigate node-at on a top-level let returns a node
+ 4. code edit replace on the same line and node_type fails with No node found at line X
+
+* Context
+
+~code edit~ (replace, kill, insert-before, insert-after) fails on Typst files with "No
+node found at line X" even when ~code navigate node-at~ finds the node successfully.
+
+Root cause: ~find_ancestor~ in ~edit/replace.rs~ only walks UP the tree. In Typst, every
+declaration lives inside a ~code~ wrapper node (~code~ → ~let~). When ~node_at_line~ resolves
+byte 0 of a ~#let~ line, it lands on the ~#~ character belonging to ~code~. The ancestor
+search walks up from ~code~ and never finds ~let~ which is a child, not an ancestor.
+
+Fix: extend ~find_ancestor~ to also search sole-named-child chains downward when ancestor
+walk-up fails. This matches the existing pattern in ~outline.rs::entry_for_node~ and is
+language-agnostic.
+
+Key decisions:
+1. Rename ~find_ancestor~ → ~find_target~, add ~unwrap_to~ helper using sole-named-child heuristic
+2. No Typst-specific logic — the fix handles any grammar with wrapper nodes
+3. All four edit operations (replace, insert-before, insert-after, kill) use the same fix
+
+* Verification
+
+All pi-code-engine tests must pass:
+#+begin_src sh
+cd crates/pi-code-engine && cargo test
+#+end_src
+
+New Typst-specific edit tests must be present and passing:
+#+begin_src sh
+cd crates/pi-code-engine && cargo test test_replace_typst -- --nocapture
+cd crates/pi-code-engine && cargo test test_kill_typst -- --nocapture
+#+end_src
+
+Rust checks:
+#+begin_src sh
+cd crates/pi-code-engine && cargo clippy
+cd crates/pi-code-engine && cargo fmt --check
+#+end_src
+
+* Execution Manifest
+
+Single item, ~1h effort:
+
+1. [[id:BUG-225-code-edit-fails-to-resolve-nodes-inside]] — Fix find_ancestor + add Typst edit tests
+
+
+** Completion [2026-04-12]
+*** Verification
+- `cd crates/pi-code-engine && cargo test test_replace_typst -- --nocapture` -> passed (`edit::tests::test_replace_typst`).
+- `cd crates/pi-code-engine && cargo test test_kill_typst -- --nocapture` -> passed (`edit::tests::test_kill_typst`).
+- `cd crates/pi-code-engine && cargo test` -> passed (89 tests, 0 failed; doc-tests 0).
+- `cd crates/pi-code-engine && cargo fmt --check` -> passed.
+- `cd crates/pi-code-engine && cargo clippy` -> passed with existing pedantic warnings in `crates/pi-code-engine/src/resolve.rs`; no failures.
+*** Artifacts
+- [[file:crates/pi-code-engine/src/edit/replace.rs]]
+- [[file:crates/pi-code-engine/src/edit/mod.rs]]
+- [[file:!tasks/bugs/BUG-225-code-edit-fails-to-resolve-nodes-inside.org]]
+*** Deviations
+- None.
