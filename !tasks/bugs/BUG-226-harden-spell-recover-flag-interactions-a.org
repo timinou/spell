@@ -1,0 +1,227 @@
+#+TITLE: Harden spell recover flag interactions and direct mode verification
+#+STATE: DONE
+#+SESSION_ID: 14b70bc39f92151f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T23-56-29-694Z_14b70bc39f92151f.jsonl]]
+#+CUSTOM_ID: BUG-226-harden-spell-recover-flag-interactions-a
+#+EFFORT: 30m
+#+PRIORITY: #B
+#+LAYER: cli
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-062-audit-implementation:
+
+1. **What**: `--clean` short-circuits every other flag, so combined modes do not work and `--dry-run --clean` would still delete files  
+   **Where**: `packages/coding-agent/src/commands/recover.ts`, top of `RecoverCommand.run()` in the early `if (flags.clean)` branch  
+   **Why**: This violates the command contract established by the plan: `--clean` cannot be combined with recovery, and `--dry-run` loses its non-mutating guarantee if passed with `--clean`. That is both a UX inconsistency and a real footgun.  
+   **Effort**: small
+
+2. **What**: Direct-mode recovery reports success without verifying Ghostty actually accepted or kept the new process alive  
+   **Where**: `packages/coding-agent/src/commands/recover.ts`, `spawnRecoveredSession(..., direct)` returning `true` immediately for direct launches  
+   **Why**: In `--direct` mode the command deletes the status file after a successful `Bun.spawn(...)` call, even if Ghostty exits immediately or rejects the arguments after launch. That recreates the original “retry becomes impossible” failure mode in the explicit fallback path.  
+   **Effort**: small
+
+3. **What**: The actual `--command=` payload is built from an unvalidated raw `sessionId`, while the displayed dry-run command implies shell-safe quoting  
+   **Where**: `packages/coding-agent/src/commands/recover.ts`, `formatGhosttyCommandValue()` and `buildSpawnArgs()`  
+   **Why**: Today session IDs are probably simple, but the code contract accepts any non-empty string from the status file. If the format ever changes, or the file is corrupted/tampered with, the Ghostty command payload can split unexpectedly or execute a different command than intended. The dry-run output looks safer than the real execution path.  
+   **Effort**: trivial
+
+4. **What**: There is no test coverage for the flag interaction bug around `--clean` with other modes  
+   **Where**: `packages/coding-agent/test/recover-command.test.ts`  
+   **Why**: The current suite covers `--clean` alone, normal recovery, and dry-run separately, but not the highest-risk interaction: `--clean --dry-run` or `--clean` combined with normal recovery flags. That leaves the current contract regression unguarded.  
+   **Effort**: trivial
+
+
+* Problem
+
+Four hardening issues in ~spell recover~ (from audit AUD-062):
+
+1. *--clean short-circuits --dry-run*: ~--clean --dry-run~ actually deletes files because ~if (flags.clean)~ exits before ~flags["dry-run"]~ is checked.
+2. *Direct mode fire-and-forget*: ~spawnRecoveredSession(session, true)~ returns ~true~ immediately after ~Bun.spawn()~ without checking whether Ghostty rejected the arguments. The status file is then deleted, making retry impossible — the same failure mode the ~--direct~ flag was supposed to solve.
+3. *Unvalidated sessionId in command payload*: ~isRecoverableSession()~ accepts any non-empty string as ~sessionId~. While IDs are currently 8-char hex, a corrupted/tampered status file could inject unexpected content into the ~--command=~ payload.
+4. *No test coverage for flag interactions*: ~--clean --dry-run~ and ~--direct~ with immediate-exit ghostty have no test coverage.
+
+* Design Decisions
+
+1. Inside the ~if (flags.clean)~ branch, check ~flags["dry-run"]~ first. Dry path: call ~reader.readCrashed()~, count entries that fail ~isRecoverableSession()~, print ~"Dry run — would clean N stale status file(s)."~ without deleting anything. Non-dry path: call ~reader.cleanStale()~ and report (unchanged).
+
+2. In ~spawnRecoveredSession()~ direct mode, after ~Bun.spawn()~, race ~proc.exited~ against a 200ms timeout using ~Promise.race~. If the process exits non-zero within 200ms, return ~false~. If still running (exitCode ~null~) or exited 0, return ~true~. Pattern:
+#+begin_src typescript
+if (direct) {
+    const settled = await Promise.race([
+        proc.exited.then(code => code),
+        Bun.sleep(200).then(() => null),
+    ]);
+    return settled === null || settled === 0;
+}
+#+end_src
+
+3. Add a regex check ~/^[a-zA-Z0-9_\-]+$/~ to ~isRecoverableSession()~ for ~sessionId~. This rejects corrupted/tampered IDs before they reach command construction. No changes to ~formatGhosttyCommandValue~ or ~buildSpawnArgs~ needed — the gate is at the type guard.
+
+4. Add two new tests covering the gaps.
+
+* Files to Modify
+
+- ~packages/coding-agent/src/commands/recover.ts~
+- ~packages/coding-agent/test/recover-command.test.ts~
+
+* Implementation
+
+** Update ~isRecoverableSession~ (finding 3)
+
+Change from:
+#+begin_src typescript
+function isRecoverableSession(session: SessionStatusFile): session is RecoverableStatusSession {
+    return (
+        typeof session.sessionId === "string" &&
+        session.sessionId.length > 0 &&
+        typeof session.cwd === "string" &&
+        session.cwd.length > 0
+    );
+}
+#+end_src
+
+To:
+#+begin_src typescript
+function isRecoverableSession(session: SessionStatusFile): session is RecoverableStatusSession {
+    return (
+        typeof session.sessionId === "string" &&
+        /^[a-zA-Z0-9_\-]+$/.test(session.sessionId) &&
+        typeof session.cwd === "string" &&
+        session.cwd.length > 0
+    );
+}
+#+end_src
+
+This replaces the ~length > 0~ check on ~sessionId~ with a safe-chars regex. The regex is intentionally permissive (alphanumeric + underscore + hyphen) to tolerate any reasonable ID format, while rejecting spaces, shell metacharacters, and empty strings.
+
+** Update ~if (flags.clean)~ branch (finding 1)
+
+Change from:
+#+begin_src typescript
+if (flags.clean) {
+    const cleanedStale = await reader.cleanStale();
+    process.stdout.write(
+        cleanedStale > 0 ? `Cleaned ${cleanedStale} stale status file(s).
+` : "No stale status files to clean.
+",
+    );
+    return;
+}
+#+end_src
+
+To:
+#+begin_src typescript
+if (flags.clean) {
+    if (flags["dry-run"]) {
+        const crashed = await reader.readCrashed();
+        const staleCount = crashed.filter(s => !isRecoverableSession(s)).length;
+        process.stdout.write(
+            staleCount > 0
+                ? `Dry run — would clean ${staleCount} stale status file(s).
+`
+                : "No stale status files to clean.
+",
+        );
+        return;
+    }
+    const cleanedStale = await reader.cleanStale();
+    process.stdout.write(
+        cleanedStale > 0 ? `Cleaned ${cleanedStale} stale status file(s).
+` : "No stale status files to clean.
+",
+    );
+    return;
+}
+#+end_src
+
+** Update ~spawnRecoveredSession~ direct mode (finding 2)
+
+Change from:
+#+begin_src typescript
+if (direct) {
+    return true;
+}
+#+end_src
+
+To:
+#+begin_src typescript
+if (direct) {
+    const settled = await Promise.race([
+        proc.exited.then(code => code),
+        Bun.sleep(200).then(() => null),
+    ]);
+    // null = still running after 200ms (normal for GUI), 0 = clean exit
+    return settled === null || settled === 0;
+}
+#+end_src
+
+Note: ~proc.exitCode~ is ~null~ while the process is running and becomes a ~number~ after exit. The ~proc.exited~ promise resolves with the exit code. If ghostty rejects bad arguments, it exits non-zero immediately (well within 200ms). If it starts a GUI window successfully, it stays alive past 200ms.
+
+** New test: ~--clean --dry-run~ previews without deleting (finding 4a)
+
+#+begin_src typescript
+it("previews stale cleanup without deleting when --clean and --dry-run are combined", async () => {
+    const stalePath = await writeStatusFile(homeDir, 20, {
+        sessionId: undefined,
+        cwd: undefined,
+    });
+
+    const result = runCli(["recover", "--clean", "--dry-run"], { cwd: tempDir, homeDir });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Dry run — would clean 1 stale status file(s).");
+    expect(result.stdout).not.toContain("Cleaned ");
+    // File must still exist — dry-run must not mutate
+    expect(await Bun.file(stalePath).exists()).toBe(true);
+});
+#+end_src
+
+** New test: ~--direct~ reports failure when ghostty exits immediately (finding 4b)
+
+The existing stub ~createStubBin~ already supports ~failSessionId~. Create a status file whose sessionId matches the fail pattern, run ~recover --direct~, and assert the status file is preserved and recovery is reported as failed.
+
+#+begin_src typescript
+it("reports failure and preserves status file when --direct ghostty exits non-zero", async () => {
+    const statusPath = await writeStatusFile(homeDir, 21, {
+        projectName: "pi",
+        sessionTitle: "direct-fail",
+        cwd: "/tmp/pi",
+        sessionId: "sess-direct-fail",
+    });
+    const stubs = await createStubBin(tempDir, { ghostty: { failSessionId: "sess-direct-fail" } });
+
+    const result = runCli(["recover", "--direct"], {
+        cwd: tempDir,
+        homeDir,
+        pathValue: stubs.binDir,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("Warning: failed to recover pi: direct-fail.");
+    expect(await Bun.file(statusPath).exists()).toBe(true);
+});
+#+end_src
+
+Note: The stub ghostty script exits 1 when it sees ~-r sess-direct-fail~ in its arguments. In ~--direct~ mode the 200ms settle check will detect the non-zero exit and report failure, preserving the status file for retry.
+
+* Edge Cases
+
+- ~--clean --dry-run~ with no stale files: should print "No stale status files to clean." (same message, no mutation)
+- ~--clean --dry-run~ with only recoverable files: staleCount is 0, same friendly message
+- Direct mode where ghostty exits 0 within 200ms: treated as success (unusual but valid — e.g., version check mode)
+- Direct mode where ghostty is not on PATH: caught by ~catch~ block in ~spawnRecoveredSession~, returns false (unchanged)
+- Session IDs with dots (e.g., "1.2.3"): rejected by the new regex. This is intentional — dots are not part of the current ID format and could be path traversal in other contexts. If the ID format ever needs dots, update the regex.
+
+* Verification
+
+- ~bun test packages/coding-agent/test/recover-command.test.ts~ — all tests pass including two new ones
+- ~bun check:ts~ — no type errors
+- Existing tests unchanged and passing
+
+
+* Completion
+- Hardened `packages/coding-agent/src/commands/recover.ts` for `--clean --dry-run`, stale-only dry-runs, direct-launch immediate-exit detection, and validated recoverable `sessionId` values before Ghostty command construction.
+- Extended `packages/coding-agent/test/recover-command.test.ts` with regressions for invalid-session dry-runs, `--clean --dry-run`, and `--direct` immediate-exit failure.
+- Verified with `bun test packages/coding-agent/test/recover-command.test.ts` and `bun check:ts`.

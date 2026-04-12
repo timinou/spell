@@ -27,7 +27,7 @@ function shellQuote(value: string): string {
 function isRecoverableSession(session: SessionStatusFile): session is RecoverableStatusSession {
 	return (
 		typeof session.sessionId === "string" &&
-		session.sessionId.length > 0 &&
+		/^[A-Za-z0-9_-]+$/.test(session.sessionId) &&
 		typeof session.cwd === "string" &&
 		session.cwd.length > 0
 	);
@@ -60,9 +60,14 @@ function commandExists(command: string): boolean {
 	return Boolean(Bun.which(command));
 }
 
-function writeCleanupSummary(cleanedStale: number): void {
+function writeCleanupSummary(cleanedStale: number, options: { includeZero?: boolean; dryRun?: boolean } = {}): void {
 	if (cleanedStale > 0) {
-		process.stdout.write(`Cleaned ${cleanedStale} stale status file(s).\n`);
+		const verb = options.dryRun ? "Dry run — would clean" : "Cleaned";
+		process.stdout.write(`${verb} ${cleanedStale} stale status file(s).\n`);
+		return;
+	}
+	if (options.includeZero) {
+		process.stdout.write("No stale status files to clean.\n");
 	}
 }
 
@@ -122,7 +127,11 @@ async function spawnRecoveredSession(session: RecoverableStatusSession, direct: 
 			windowsHide: true,
 		});
 		if (direct) {
-			return true;
+			const settled = await Promise.race([
+				proc.exited.then(code => code),
+				Bun.sleep(200).then(() => "running" as const),
+			]);
+			return settled === "running" || settled === 0;
 		}
 		return (await proc.exited) === 0;
 	} catch {
@@ -160,10 +169,12 @@ export default class RecoverCommand extends Command {
 		const { flags } = await this.parse(RecoverCommand);
 		const reader = new StatusFileReader();
 		if (flags.clean) {
-			const cleanedStale = await reader.cleanStale();
-			process.stdout.write(
-				cleanedStale > 0 ? `Cleaned ${cleanedStale} stale status file(s).\n` : "No stale status files to clean.\n",
-			);
+			if (flags["dry-run"]) {
+				const staleCount = (await reader.readCrashed()).filter(session => !isRecoverableSession(session)).length;
+				writeCleanupSummary(staleCount, { includeZero: true, dryRun: true });
+				return;
+			}
+			writeCleanupSummary(await reader.cleanStale(), { includeZero: true });
 			return;
 		}
 
@@ -188,6 +199,10 @@ export default class RecoverCommand extends Command {
 
 		if (recoverable.length === 0) {
 			process.stdout.write("No recoverable crashed sessions found.\n");
+			if (flags["dry-run"]) {
+				writeCleanupSummary(skippedMissingMetadata, { includeZero: true, dryRun: true });
+				return;
+			}
 			writeCleanupSummary(await reader.cleanStale());
 			return;
 		}

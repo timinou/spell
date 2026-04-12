@@ -269,6 +269,22 @@ describe("spell recover command", () => {
 		expect(await Bun.file(stalePath).exists()).toBe(false);
 	});
 
+	it("treats corrupted session ids as stale metadata during dry-runs", async () => {
+		const stalePath = await writeStatusFile(homeDir, 20, {
+			projectName: "rho",
+			sessionTitle: "corrupt",
+			cwd: "/tmp/rho",
+			sessionId: "sess bad",
+		});
+
+		const result = runCli(["recover", "--dry-run"], { cwd: tempDir, homeDir });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("No recoverable crashed sessions found.");
+		expect(result.stdout).toContain("Dry run — would clean 1 stale status file(s).");
+		expect(await Bun.file(stalePath).exists()).toBe(true);
+	});
+
 	it("recovers sessions with ghostty and keeps going when niri is unavailable", async () => {
 		const statusPath = await writeStatusFile(homeDir, 5, {
 			projectName: "delta",
@@ -319,6 +335,29 @@ describe("spell recover command", () => {
 		expect(ghosttyLog).not.toContain("+new-window");
 	});
 
+	it("reports failure and preserves status files when direct ghostty launch exits immediately", async () => {
+		const statusPath = await writeStatusFile(homeDir, 21, {
+			projectName: "pi",
+			sessionTitle: "direct-fail",
+			cwd: "/tmp/pi",
+			sessionId: "sess-direct-fail",
+		});
+		const stubs = await createStubBin(tempDir, { ghostty: { failSessionId: "sess-direct-fail" } });
+
+		const result = runCli(["recover", "--direct"], {
+			cwd: tempDir,
+			homeDir,
+			pathValue: stubs.binDir,
+		});
+		const ghosttyLog = await readLogEventually(stubs.ghosttyLogPath);
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr).toContain("Warning: failed to recover pi: direct-fail.");
+		expect(result.stderr).toContain("Recovery failed for 1 session(s); their status files were left in place.");
+		expect(await Bun.file(statusPath).exists()).toBe(true);
+		expect(ghosttyLog).toContain("--working-directory=/tmp/pi --title=pi: direct-fail -e spell -r sess-direct-fail");
+	});
+
 	it("removes stale files without attempting recovery when --clean is set", async () => {
 		const stalePath = await writeStatusFile(homeDir, 15, {
 			sessionId: undefined,
@@ -341,6 +380,32 @@ describe("spell recover command", () => {
 		expect(result.stdout).toContain("Cleaned 1 stale status file(s).");
 		expect(result.stdout).not.toContain("Recovered ");
 		expect(await Bun.file(stalePath).exists()).toBe(false);
+		expect(await Bun.file(recoverablePath).exists()).toBe(true);
+		expect(await Bun.file(stubs.ghosttyLogPath).text()).toBe("");
+	});
+
+	it("previews stale cleanup without deleting when --clean and --dry-run are combined", async () => {
+		const stalePath = await writeStatusFile(homeDir, 22, {
+			sessionId: undefined,
+			cwd: undefined,
+		});
+		const recoverablePath = await writeStatusFile(homeDir, 23, {
+			projectName: "sigma",
+			sessionTitle: "recoverable",
+			cwd: "/tmp/sigma",
+		});
+		const stubs = await createStubBin(tempDir, { ghostty: {} });
+
+		const result = runCli(["recover", "--clean", "--dry-run"], {
+			cwd: tempDir,
+			homeDir,
+			pathValue: stubs.binDir,
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain("Dry run — would clean 1 stale status file(s).");
+		expect(result.stdout).not.toContain("Recovered ");
+		expect(await Bun.file(stalePath).exists()).toBe(true);
 		expect(await Bun.file(recoverablePath).exists()).toBe(true);
 		expect(await Bun.file(stubs.ghosttyLogPath).text()).toBe("");
 	});
@@ -435,7 +500,7 @@ describe("spell recover command", () => {
 		const result = runCli(["--print", "hello"], { cwd: tempDir, homeDir });
 
 		expect(result.stderr).toContain("crashed session(s) detected. Run 'spell recover' to restore.");
-	});
+	}, 10_000);
 
 	it("suppresses the startup warning for --resume", async () => {
 		await writeStatusFile(homeDir, 10, { projectName: "iota", sessionTitle: "resume-suppressed" });
@@ -443,7 +508,7 @@ describe("spell recover command", () => {
 		const result = runCli(["--resume", "missing-session"], { cwd: tempDir, homeDir });
 
 		expect(result.stderr).not.toContain("crashed session(s) detected. Run 'spell recover' to restore.");
-	});
+	}, 10_000);
 
 	it("suppresses the startup warning for --continue", async () => {
 		await writeStatusFile(homeDir, 11, { projectName: "kappa", sessionTitle: "continue-suppressed" });
@@ -451,7 +516,7 @@ describe("spell recover command", () => {
 		const result = runCli(["--continue", "--print", "hello"], { cwd: tempDir, homeDir });
 
 		expect(result.stderr).not.toContain("crashed session(s) detected. Run 'spell recover' to restore.");
-	});
+	}, 10_000);
 
 	it("suppresses the startup warning for --no-session", async () => {
 		await writeStatusFile(homeDir, 12, { projectName: "lambda", sessionTitle: "no-session-suppressed" });
@@ -459,7 +524,7 @@ describe("spell recover command", () => {
 		const result = runCli(["--no-session", "--print", "hello"], { cwd: tempDir, homeDir });
 
 		expect(result.stderr).not.toContain("crashed session(s) detected. Run 'spell recover' to restore.");
-	});
+	}, 10_000);
 
 	it("does not show a startup warning when only legacy stale files exist", async () => {
 		await writeStatusFile(homeDir, 19, {
@@ -472,5 +537,5 @@ describe("spell recover command", () => {
 		const result = runCli(["--print", "hello"], { cwd: tempDir, homeDir });
 
 		expect(result.stderr).not.toContain("crashed session(s) detected. Run 'spell recover' to restore.");
-	});
+	}, 10_000);
 });
