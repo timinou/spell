@@ -7,7 +7,7 @@ use crate::{
 	error::{CodeEngineError, Result},
 	language::{DeclarationPattern, LanguageProfile, ReferencePattern},
 	line_target::{editable_scope_for_node, resolve_line_target},
-	outline::declaration_for,
+	outline::{class_member_nodes, declaration_for, declaration_name},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,7 +146,12 @@ fn declaration_result(
 	node: Node<'_>,
 	decl: &DeclarationPattern,
 ) -> NavigateResult {
-	result_for_node(buffer, node, name_text(buffer, node, decl), Some(decl.kind.clone()))
+	result_for_node(
+		buffer,
+		node,
+		declaration_name(&buffer.source(), node, decl),
+		Some(decl.kind.clone()),
+	)
 }
 fn parent_result(buffer: &CodeBuffer, node: Node<'_>) -> Result<NavigateResult> {
 	Ok(node_result(
@@ -179,24 +184,15 @@ fn children_result(
 	profile: &LanguageProfile,
 	node: Node<'_>,
 ) -> NavigateResult {
-	let items = profile
-		.class_like
-		.iter()
-		.find(|c| c.node_type == node.kind())
-		.and_then(|class_like| node.child_by_field_name(&class_like.body_field))
-		.map(|body| {
-			let mut cursor = body.walk();
-			body
-				.named_children(&mut cursor)
-				.map(|child| NavigateItem {
-					node_type: child.kind().to_string(),
-					text:      first_line(&node_text(buffer, child), 80),
-					line:      (child.start_position().row + 1) as u32,
-					end_line:  (child.end_position().row + 1) as u32,
-				})
-				.collect()
+	let items = class_member_nodes(profile, node)
+		.into_iter()
+		.map(|child| NavigateItem {
+			node_type: child.kind().to_string(),
+			text:      first_line(&node_text(buffer, child), 80),
+			line:      (child.start_position().row + 1) as u32,
+			end_line:  (child.end_position().row + 1) as u32,
 		})
-		.unwrap_or_default();
+		.collect();
 	node_result(buffer, node).with_items(items)
 }
 fn references_result(
@@ -266,12 +262,6 @@ fn reference_pattern_for<'a>(
 		.references
 		.iter()
 		.find(|pattern| pattern.node_type == node.kind())
-}
-fn name_text(buffer: &CodeBuffer, node: Node<'_>, decl: &DeclarationPattern) -> Option<String> {
-	node
-		.child_by_field_name(&decl.name_field)
-		.and_then(|n| slice(buffer, n))
-		.map(|s| s.trim().to_string())
 }
 fn slice(buffer: &CodeBuffer, node: Node<'_>) -> Option<String> {
 	buffer

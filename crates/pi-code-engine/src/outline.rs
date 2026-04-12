@@ -2,7 +2,9 @@ use tree_sitter::Node;
 
 use crate::{
 	buffer::CodeBuffer,
-	language::{DeclarationPattern, LanguageProfile},
+	language::{
+		BodyExtractor, ClassBodyExtractor, DeclarationPattern, LanguageProfile, NameExtractor,
+	},
 };
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -67,30 +69,9 @@ fn sole_named_child(node: Node<'_>) -> Option<Node<'_>> {
 }
 
 fn class_children(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Vec<OutlineEntry> {
-	let Some(class_like) = profile
-		.class_like
-		.iter()
-		.find(|class_like| class_like.node_type == node.kind())
-	else {
-		return Vec::new();
-	};
-	let Some(body) = node.child_by_field_name(&class_like.body_field) else {
-		return Vec::new();
-	};
-	let mut cursor = body.walk();
-	body
-		.named_children(&mut cursor)
-		.filter_map(|child| {
-			if class_like
-				.member_types
-				.iter()
-				.any(|kind| kind == child.kind())
-			{
-				entry_for_node(source, profile, child)
-			} else {
-				None
-			}
-		})
+	class_member_nodes(profile, node)
+		.into_iter()
+		.filter_map(|child| entry_for_node(source, profile, child))
 		.collect()
 }
 
@@ -109,17 +90,91 @@ pub(crate) fn declaration_name(
 	node: Node<'_>,
 	decl: &DeclarationPattern,
 ) -> Option<String> {
-	if let Some(name_node) = node.child_by_field_name(&decl.name_field) {
-		if let Some(inner_name) = name_node.child_by_field_name("name") {
-			return text(source, inner_name).map(|value| value.trim().to_string());
-		}
-		return text(source, name_node).map(|value| value.trim().to_string());
-	}
+	match &decl.name {
+		NameExtractor::Field { name } => {
+			if let Some(name_node) = node.child_by_field_name(name) {
+				if let Some(inner_name) = name_node.child_by_field_name("name") {
+					return text(source, inner_name).map(|value| value.trim().to_string());
+				}
+				return text(source, name_node).map(|value| value.trim().to_string());
+			}
 
-	find_named_descendant(node, "variable_declarator")
-		.and_then(|declarator| declarator.child_by_field_name("name"))
-		.and_then(|name_node| text(source, name_node))
-		.map(|value| value.trim().to_string())
+			find_named_descendant(node, "variable_declarator")
+				.and_then(|declarator| declarator.child_by_field_name("name"))
+				.and_then(|name_node| text(source, name_node))
+				.map(|value| value.trim().to_string())
+		},
+		NameExtractor::ChildField { child_type, field } => find_named_child(node, child_type)
+			.and_then(|child| child.child_by_field_name(field))
+			.and_then(|name_node| text(source, name_node))
+			.map(|value| value.trim().to_string()),
+		NameExtractor::ChildText { child_type } => find_named_child(node, child_type)
+			.and_then(|child| text(source, child))
+			.map(|value| value.trim().to_string()),
+		NameExtractor::Literal { name } => Some(name.clone()),
+	}
+}
+
+fn find_named_child<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+	let mut cursor = node.walk();
+	node
+		.named_children(&mut cursor)
+		.find(|child| child.kind() == kind)
+}
+
+pub(crate) fn declaration_body_range(
+	node: Node<'_>,
+	decl: &DeclarationPattern,
+) -> Option<(usize, usize)> {
+	match &decl.body {
+		BodyExtractor::None => None,
+		BodyExtractor::Field { name } => node
+			.child_by_field_name(name)
+			.map(|body| (body.start_byte(), body.end_byte())),
+		BodyExtractor::AfterChild { child_type } => {
+			find_named_child(node, child_type).map(|child| (child.end_byte(), node.end_byte()))
+		},
+	}
+}
+
+pub(crate) fn class_member_nodes<'a>(profile: &LanguageProfile, node: Node<'a>) -> Vec<Node<'a>> {
+	let Some(class_like) = profile
+		.class_like
+		.iter()
+		.find(|class_like| class_like.node_type == node.kind())
+	else {
+		return Vec::new();
+	};
+
+	match &class_like.body {
+		ClassBodyExtractor::Field { name } => {
+			let Some(body) = node.child_by_field_name(name) else {
+				return Vec::new();
+			};
+			let mut cursor = body.walk();
+			body
+				.named_children(&mut cursor)
+				.filter(|child| {
+					class_like
+						.member_types
+						.iter()
+						.any(|kind| kind == child.kind())
+				})
+				.collect()
+		},
+		ClassBodyExtractor::Direct => {
+			let mut cursor = node.walk();
+			node
+				.named_children(&mut cursor)
+				.filter(|child| {
+					class_like
+						.member_types
+						.iter()
+						.any(|kind| kind == child.kind())
+				})
+				.collect()
+		},
+	}
 }
 
 fn find_named_descendant<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
@@ -136,14 +191,8 @@ fn find_named_descendant<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
 }
 
 fn signature_text(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> String {
-	let end_byte = decl
-		.body_field
-		.as_ref()
-		.and_then(|field| {
-			node
-				.child_by_field_name(field)
-				.map(|body| body.start_byte())
-		})
+	let end_byte = declaration_body_range(node, decl)
+		.map(|(start_byte, _)| start_byte)
 		.unwrap_or_else(|| node.end_byte());
 	let header = source
 		.get(node.start_byte()..end_byte)

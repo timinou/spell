@@ -1,17 +1,19 @@
 use super::Mark;
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum Target {
 	Self_,
 	Parent,
 	Grandparent,
 }
 
+#[derive(Debug, Clone)]
 pub struct Selector {
 	pub target:       Target,
 	pub child_filter: Option<ChildFilter>,
 }
 
+#[derive(Debug, Clone)]
 pub struct ChildFilter {
 	pub discard_types: Vec<String>,
 	pub default_mark:  Mark,

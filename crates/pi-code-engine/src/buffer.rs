@@ -5,7 +5,7 @@ use std::{
 	sync::Arc,
 };
 
-use loro::{LoroDoc, PeerID};
+use parking_lot::{Mutex, RwLock};
 use ropey::{LineType, Rope};
 use tree_sitter::{InputEdit, Parser, Point, Range, Tree};
 
@@ -114,46 +114,52 @@ pub struct CodeBuffer {
 	parser:   Parser,
 	language: LanguageId,
 	path:     Option<PathBuf>,
-	crdt:     LoroDoc,
-	history:  History,
-	version:  u64,
-	dirty:    bool,
+
+	history: History,
+	version: u64,
+	dirty:   bool,
 }
 
 pub struct BufferRegistry {
-	buffers:  HashMap<PathBuf, CodeBuffer>,
+	buffers:  RwLock<HashMap<PathBuf, Arc<Mutex<CodeBuffer>>>>,
 	registry: Arc<LanguageRegistry>,
 }
 
 impl BufferRegistry {
 	pub fn new(registry: Arc<LanguageRegistry>) -> Self {
-		Self { buffers: HashMap::new(), registry }
+		Self { buffers: RwLock::new(HashMap::new()), registry }
 	}
 
-	pub fn open(&mut self, path: &Path) -> Result<&mut CodeBuffer> {
-		let buffer = CodeBuffer::open(path, self.registry.clone())?;
-		self.buffers.insert(path.to_path_buf(), buffer);
-		self
-			.buffers
-			.get_mut(path)
-			.ok_or_else(|| CodeEngineError::Buffer("buffer insertion failed".to_string()))
+	pub fn open(&self, path: &Path) -> Result<Arc<Mutex<CodeBuffer>>> {
+		if let Some(buffer) = self.get(path) {
+			return Ok(buffer);
+		}
+
+		let mut buffers = self.buffers.write();
+		if let Some(buffer) = buffers.get(path) {
+			return Ok(buffer.clone());
+		}
+
+		let buffer = Arc::new(Mutex::new(CodeBuffer::open(path, self.registry.clone())?));
+		buffers.insert(path.to_path_buf(), buffer.clone());
+		Ok(buffer)
 	}
 
-	pub fn close(&mut self, path: &Path) -> Result<()> {
-		self.buffers.remove(path);
+	pub fn close(&self, path: &Path) -> Result<()> {
+		self.buffers.write().remove(path);
 		Ok(())
 	}
 
 	pub fn list(&self) -> Vec<BufferInfo> {
-		self.buffers.values().map(CodeBuffer::info).collect()
+		let buffers: Vec<_> = self.buffers.read().values().cloned().collect();
+		buffers
+			.into_iter()
+			.map(|buffer| buffer.lock().info())
+			.collect()
 	}
 
-	pub fn get(&self, path: &Path) -> Option<&CodeBuffer> {
-		self.buffers.get(path)
-	}
-
-	pub fn get_mut(&mut self, path: &Path) -> Option<&mut CodeBuffer> {
-		self.buffers.get_mut(path)
+	pub fn get(&self, path: &Path) -> Option<Arc<Mutex<CodeBuffer>>> {
+		self.buffers.read().get(path).cloned()
 	}
 }
 
@@ -210,21 +216,12 @@ impl CodeBuffer {
 		parser.set_timeout_micros(PARSE_TIMEOUT_MICROS);
 		let rope = Rope::from_str(&source);
 		let tree = Self::parse(&mut parser, &rope, None)?;
-		let crdt = LoroDoc::new();
-		crdt
-			.set_peer_id(PeerID::from(1_u64))
-			.map_err(|err| CodeEngineError::Buffer(err.to_string()))?;
-		let text = crdt.get_text("content");
-		text
-			.insert(0, &source)
-			.map_err(|e| CodeEngineError::Buffer(format!("CRDT init failed: {e}")))?;
 		Ok(Self {
 			rope,
 			tree,
 			parser,
 			language: language_id,
 			path,
-			crdt,
 			history: History::new(),
 			version: 0,
 			dirty: false,
@@ -357,13 +354,6 @@ impl CodeBuffer {
 		};
 		self.tree.edit(&input_edit);
 		self.tree = Self::parse(&mut self.parser, &self.rope, Some(&self.tree))?;
-		let crdt_text = self.crdt.get_text("content");
-		crdt_text
-			.delete(edit.start_byte, edit.old_end_byte - edit.start_byte)
-			.map_err(|e| CodeEngineError::Buffer(format!("CRDT delete failed: {e}")))?;
-		crdt_text
-			.insert(edit.start_byte, &edit.new_text)
-			.map_err(|e| CodeEngineError::Buffer(format!("CRDT insert failed: {e}")))?;
 		self.dirty = true;
 		Ok(EditResult {
 			input_edit:     edit,
@@ -626,7 +616,7 @@ mod tests {
 			.expect("write a");
 		fs::write(&path2, fs::read_to_string(fixture("hello.ts")).expect("fixture readable"))
 			.expect("write b");
-		let mut reg = BufferRegistry::new(registry());
+		let reg = BufferRegistry::new(registry());
 		reg.open(&path1).expect("open a");
 		reg.open(&path2).expect("open b");
 		assert_eq!(reg.list().len(), 2);
@@ -634,6 +624,47 @@ mod tests {
 		reg.close(&path1).expect("close a");
 		assert_eq!(reg.list().len(), 1);
 		assert!(reg.get(&path1).is_none());
+	}
+	#[test]
+	fn test_buffer_registry_allows_parallel_locks() {
+		use std::{
+			thread,
+			time::{Duration, Instant},
+		};
+
+		let path1 = temp_path("parallel-a.rs");
+		let path2 = temp_path("parallel-b.org");
+		fs::write(&path1, fs::read_to_string(fixture("hello.rs")).expect("fixture readable"))
+			.expect("write a");
+		fs::write(&path2, "* ITEM Parallel\n:PROPERTIES:\n:CUSTOM_ID: PAR-1\n:END:\n")
+			.expect("write b");
+
+		let reg = Arc::new(BufferRegistry::new(registry()));
+		let buf1 = reg.open(&path1).expect("open a");
+		let buf2 = reg.open(&path2).expect("open b");
+
+		let handle1 = {
+			let buf1 = buf1.clone();
+			thread::spawn(move || {
+				let _guard = buf1.lock();
+				thread::sleep(Duration::from_millis(200));
+			})
+		};
+		let handle2 = {
+			let buf2 = buf2.clone();
+			thread::spawn(move || {
+				let start = Instant::now();
+				let _guard = buf2.lock();
+				start.elapsed()
+			})
+		};
+
+		handle1.join().expect("thread a");
+		let elapsed = handle2.join().expect("thread b");
+		assert!(
+			elapsed < Duration::from_millis(100),
+			"different buffers should not block each other: {elapsed:?}"
+		);
 	}
 
 	#[test]

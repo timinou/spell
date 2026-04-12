@@ -1,0 +1,162 @@
+#+TITLE: Org structural write operations via CodeBuffer
+#+STATE: DONE
+#+SESSION_ID: 14b7e68d6deda817
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T15-52-23-735Z_14b7e68d6deda817.jsonl]]
+#+CUSTOM_ID: FEAT-530-org-write-ops-via-codebuffer
+#+EFFORT: 6h
+#+PRIORITY: #A
+#+LAYER: code-engine
+#+DEPENDS: FEAT-529-org-extraction-via-codebuffer
+
+NOTE [2026-04-12]: Completed under PLAN-200 unified buffer execution; pi-org-engine now emits TextEdits for org write operations.
+
+* Initial Message
+
+⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+                                                                                            ╭────────────╮
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine                        │ 🗺 Plotting │
+ Tool execution failed due to an error: Anthropic messages stream stalled while streaming in╰────────────╯
+ tool arguments
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl
+ ID: 14b7be567342b8fe
+
+
+
+Think from first principles about the edit actions that the rust pi-code-engine crate does, and how it ends up creating this mess. Find the root cause, TDD fix it once and for all with proper trait choices and concurrency models on the CRDT (if that's the root cause
+
+* Goal
+
+Implement tree-sitter-based structural edit operations for org files in =pi-org-engine=,
+replacing the line-based text manipulation in =org-writer.ts=. All operations produce
+=Vec&lt;TextEdit&gt;= that are applied via =CodeBuffer::edit_batch()=.
+
+* Operations to implement
+
+Each function takes =&CodeBuffer= + operation-specific args, returns =Vec&lt;TextEdit&gt;=.
+
+** 1. =create_item(buffer, params) -> Vec<TextEdit>=
+
+Serialize a new org item (heading or file-level) and insert at the correct position.
+- If buffer is empty or has no headings: create file-level item with =#+= frontmatter
+- If buffer has content: append heading-level item at end of file
+
+Serialization follows the same format as current =org-writer.ts::serializeFileItem()=
+and =serializeHeading()=.
+
+** 2. =update_state(buffer, custom_id, new_state, todo_keywords) -> Option<Vec<TextEdit>>=
+
+Locate the item by CUSTOM_ID (walk tree to find property_drawer with matching property).
+For heading-level items: find the =item= child of =headline=, replace the TODO keyword.
+For file-level items: find the =#+STATE:= directive, replace the value.
+
+** 3. =update_title(buffer, custom_id, new_title, todo_keywords) -> Option<Vec<TextEdit>>=
+
+Same locate logic. Replace the title portion of the =item= node (after the TODO keyword).
+
+** 4. =replace_body(buffer, custom_id, new_body) -> Option<Vec<TextEdit>>=
+
+Locate item. Find the =body= child of its =section=. Replace the entire body range with
+new content. If no body exists, insert after =property_drawer= (or after =headline= if
+no drawer).
+
+** 5. =append_body(buffer, custom_id, text) -> Option<Vec<TextEdit>>=
+
+Locate item. Find end of body (or end of property_drawer if no body). Insert text
+at that position.
+
+** 6. =set_property(buffer, custom_id, key, value) -> Option<Vec<TextEdit>>=
+
+Locate item's =property_drawer=. Find existing =property= node with matching key and
+replace, or insert new property line before =:END:=.
+If no property_drawer exists, create one after the headline.
+
+** 7. =append_note(buffer, custom_id, note_text) -> Option<Vec<TextEdit>>=
+
+Locate item. Insert a dated NOTE entry in the body (=NOTE [YYYY-MM-DD]: text=).
+
+** 8. =edit_section(buffer, custom_id, section_name, body, mode) -> Option<Vec<TextEdit>>=
+
+Locate item. Find named sub-heading (=* section_name=). Replace or append to its body.
+Reuses logic from current =pi-org-engine/src/section.rs= but produces TextEdits instead
+of new source strings.
+
+* Item location helper
+
+All write operations need to locate an item by CUSTOM_ID within the tree-sitter AST.
+This is a reusable function:
+
+#+BEGIN_SRC rust
+pub fn locate_item_by_id<'a>(
+    tree: &'a Tree,
+    source: &str,
+    custom_id: &str,
+) -> Option<ItemLocation<'a>> {
+    // Walk document -> sections -> property_drawers -> properties
+    // Find property with :CUSTOM_ID: matching value
+    // Return the section/headline node and property_drawer node
+}
+
+pub struct ItemLocation<'a> {
+    pub section: Node<'a>,
+    pub headline: Node<'a>,
+    pub property_drawer: Option<Node<'a>>,
+    pub body: Option<Node<'a>>,
+    pub level: usize,        // 0 = file-level
+    pub is_file_level: bool,
+}
+#+END_SRC
+
+For file-level items, locate by scanning =#+CUSTOM_ID:= directive nodes.
+
+* Files to create/modify
+
+- =crates/pi-org-engine/src/edit.rs= (NEW) — all write operation functions
+- =crates/pi-org-engine/src/locate.rs= (NEW) — =locate_item_by_id= and =ItemLocation=
+- =crates/pi-org-engine/src/lib.rs= — add =pub mod edit; pub mod locate;=
+
+* Verification (test-first)
+
+Write tests BEFORE implementation for each operation:
+
+- =test_create_item_in_empty_file= — creates file-level item with frontmatter
+- =test_create_item_in_existing_file= — appends heading-level item
+- =test_update_state= — changes TODO keyword in heading
+- =test_update_state_file_level= — changes =#+STATE:= directive
+- =test_update_title= — changes heading title text
+- =test_replace_body= — replaces body content
+- =test_append_body= — appends to existing body
+- =test_set_property_existing= — updates existing property value
+- =test_set_property_new= — inserts new property in drawer
+- =test_set_property_no_drawer= — creates drawer and inserts property
+- =test_edit_section_replace= — replaces named section body
+- =test_edit_section_append= — appends to named section body
+
+Each test:
+1. Creates a CodeBuffer from a sample org source
+2. Calls the edit function to get TextEdits
+3. Applies edits via =buffer.edit_batch()=
+4. Asserts the resulting source matches expected output
+5. Verifies the tree is still valid (=buffer.tree().root_node().has_error()= is false)
+
+* Edge cases
+
+- Item not found: return =None=
+- File-level vs heading-level: different edit strategies for state/title/body
+- Missing property_drawer: must create =:PROPERTIES:....:END:= block
+- UTF-8 byte offsets: all TextEdit positions are byte offsets into rope, not character offsets
+- Heading with no body: insert after property_drawer or headline
+- Nested sections: update only targets the correct level

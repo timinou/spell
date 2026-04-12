@@ -1,19 +1,15 @@
-use std::{
-	path::{Path, PathBuf},
-	sync::{Arc, OnceLock},
-};
+use std::path::{Path, PathBuf};
 
 use napi::{Error, bindgen_prelude::*};
 use napi_derive::napi;
-use parking_lot::Mutex;
 use pi_code_engine::{
-	buffer::{BufferRegistry, CodeBuffer},
+	buffer::CodeBuffer,
 	edit::{
 		DragDirection, Patch, SpliceMode, TextEdit, apply_patches, clone_node, drag_node,
 		insert_after, insert_before, kill_node, rename_symbol, replace_body, replace_node,
 		splice_node, transpose_nodes, wrap_node,
 	},
-	language::{LanguageId, LanguageProfile, LanguageRegistry},
+	language::{LanguageId, LanguageProfile},
 	line_target::resolve_edit_target,
 	navigate::{NavigateAction, NavigateItem, NavigateResult, navigate as navigate_buffer},
 	outline::{OutlineEntry, outline as outline_buffer, read as read_buffer},
@@ -21,19 +17,7 @@ use pi_code_engine::{
 };
 use serde_json::{Value, json};
 
-static LANGUAGE_REGISTRY: OnceLock<Arc<LanguageRegistry>> = OnceLock::new();
-static BUFFER_REGISTRY: OnceLock<Mutex<BufferRegistry>> = OnceLock::new();
-
-fn language_registry() -> Arc<LanguageRegistry> {
-	LANGUAGE_REGISTRY
-		.get_or_init(|| {
-			Arc::new(LanguageRegistry::with_builtins().expect("failed to load language profiles"))
-		})
-		.clone()
-}
-fn registry() -> &'static Mutex<BufferRegistry> {
-	BUFFER_REGISTRY.get_or_init(|| Mutex::new(BufferRegistry::new(language_registry())))
-}
+use crate::{buffer_registry, language_registry};
 fn engine_err(e: pi_code_engine::error::CodeEngineError) -> Error {
 	Error::from_reason(e.to_string())
 }
@@ -341,17 +325,16 @@ fn render_diff_hunk(hunk: pi_code_engine::diff::DiffHunk) -> Value {
 	json!({ "oldStart": hunk.old_start, "oldCount": hunk.old_count, "newStart": hunk.new_start, "newCount": hunk.new_count, "kind": format!("{:?}", hunk.kind), "content": hunk.content })
 }
 
-#[napi(js_name = "executeCodeBuffer")]
-pub fn execute_code_buffer(options: Value) -> Result<Value> {
+fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 	let command = options
 		.get("command")
 		.and_then(Value::as_str)
 		.ok_or_else(|| json_err("Missing required field: command"))?;
 	match command {
 		"open" => {
-			let path = required_path(&options)?;
-			let mut guard = registry().lock();
-			let buffer = guard.open(&path).map_err(engine_err)?;
+			let path = required_path(options)?;
+			let buffer = buffer_registry().open(&path).map_err(engine_err)?;
+			let buffer = buffer.lock();
 			let lines = buffer
 				.source()
 				.lines()
@@ -363,12 +346,12 @@ pub fn execute_code_buffer(options: Value) -> Result<Value> {
 			))
 		},
 		"close" => {
-			let path = required_path(&options)?;
-			registry().lock().close(&path).map_err(engine_err)?;
+			let path = required_path(options)?;
+			buffer_registry().close(&path).map_err(engine_err)?;
 			Ok(json_response(json!({ "success": true }), false))
 		},
 		"list" => {
-			let buffers = registry().lock().list();
+			let buffers = buffer_registry().list();
 			Ok(json_response(
 				Value::Array(buffers.into_iter().map(render_buffer_info).collect()),
 				false,
@@ -387,15 +370,12 @@ pub fn execute_code_buffer(options: Value) -> Result<Value> {
 			Ok(json_response(json!({ "languages": langs }), false))
 		},
 		"outline" | "read" | "navigate" | "edit" | "undo" | "redo" | "diff" | "save" => {
-			let path = required_path(&options)?;
-			let mut guard = registry().lock();
-			if guard.get(&path).is_none() {
-				guard.open(&path).map_err(engine_err)?;
-			}
-			let buffer = guard.get_mut(&path).unwrap();
+			let path = required_path(options)?;
+			let buffer = buffer_registry().open(&path).map_err(engine_err)?;
+			let mut buffer = buffer.lock();
 			let profile = get_profile(&path, buffer.language())?;
 			match command {
-				"outline" => Ok(json_response(to_json(outline_buffer(buffer, &profile))?, false)),
+				"outline" => Ok(json_response(to_json(outline_buffer(&buffer, &profile))?, false)),
 				"read" => {
 					let resolution = options
 						.get("resolution")
@@ -411,7 +391,7 @@ pub fn execute_code_buffer(options: Value) -> Result<Value> {
 						.and_then(Value::as_u64)
 						.and_then(|n| u32::try_from(n).ok());
 					Ok(json_response(
-						Value::String(read_buffer(buffer, &profile, resolution, offset, limit)),
+						Value::String(read_buffer(&buffer, &profile, resolution, offset, limit)),
 						false,
 					))
 				},
@@ -423,7 +403,7 @@ pub fn execute_code_buffer(options: Value) -> Result<Value> {
 						.and_then(Value::as_u64)
 						.and_then(|n| u32::try_from(n).ok());
 					let symbol = options.get("symbol").and_then(Value::as_str);
-					let result = navigate_buffer(buffer, &profile, action, line, column, symbol)
+					let result = navigate_buffer(&buffer, &profile, action, line, column, symbol)
 						.map_err(engine_err)?;
 					Ok(json_response(render_navigate_result(result), false))
 				},
@@ -432,16 +412,16 @@ pub fn execute_code_buffer(options: Value) -> Result<Value> {
 					let edit_count = if let Some(edits) = options.get("edits").and_then(Value::as_array)
 					{
 						for edit in edits {
-							let text_edits = single_edit_operation(buffer, &profile, edit)?;
+							let text_edits = single_edit_operation(&buffer, &profile, edit)?;
 							buffer.edit_batch(text_edits).map_err(engine_err)?;
 						}
 						edits.len()
 					} else {
-						let text_edits = single_edit_operation(buffer, &profile, &options)?;
+						let text_edits = single_edit_operation(&buffer, &profile, options)?;
 						buffer.edit_batch(text_edits).map_err(engine_err)?;
 						1
 					};
-					let diff = render_annotated_diff(buffer, &before, &profile);
+					let diff = render_annotated_diff(&buffer, &before, &profile);
 					Ok(json_response(
 						json!({ "version": buffer.version(), "diff": diff, "editCount": edit_count }),
 						false,
@@ -474,6 +454,14 @@ pub fn execute_code_buffer(options: Value) -> Result<Value> {
 			}
 		},
 		other => Ok(json_response(Value::String(format!("Unknown command: {other}")), true)),
+	}
+}
+
+#[napi(js_name = "executeCodeBuffer")]
+pub fn execute_code_buffer(options: Value) -> Result<Value> {
+	match execute_code_buffer_inner(&options) {
+		Ok(value) => Ok(value),
+		Err(error) => Ok(json_response(json!(error.to_string()), true)),
 	}
 }
 
@@ -646,6 +634,37 @@ mod tests {
 				"items": [],
 				"references": [],
 			}),
+		);
+	}
+	#[test]
+	fn unsupported_language_returns_error_envelope() {
+		let dir = tempfile::tempdir().expect("tempdir");
+		let md_file = dir.path().join("readme.md");
+		fs::write(&md_file, "# Hello\n").expect("write");
+
+		let result = execute_code_buffer(json!({
+			"command": "read",
+			"file": md_file.to_str().expect("utf8 path")
+		}))
+		.expect("should not throw");
+
+		assert_eq!(result["error"], true);
+		let output = result["output"].as_str().expect("string error output");
+		assert!(
+			output.contains("language not found"),
+			"expected language not found error, got: {output}"
+		);
+	}
+
+	#[test]
+	fn missing_command_returns_error_envelope() {
+		let result = execute_code_buffer(json!({})).expect("should not throw");
+
+		assert_eq!(result["error"], true);
+		let output = result["output"].as_str().expect("string error output");
+		assert!(
+			output.contains("Missing required field: command"),
+			"expected missing command error, got: {output}"
 		);
 	}
 }

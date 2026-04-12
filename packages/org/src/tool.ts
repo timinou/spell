@@ -10,14 +10,11 @@ import { findCategory, findCategoryForId, resolveCategories } from "./categories
 import { generateId } from "./id-generator";
 import { parseSubOutlineId } from "./id-links";
 import { KeyedMutex } from "./mutex";
-import { applyFilter, findItemById, readCategory, readOrgFile, sortItems } from "./org-reader";
-import { appendItemToFile, applyItemMutations, initCategoryDir, setPropertyInFile } from "./org-writer";
 import { DEFAULT_ORG_CONFIG, EFFORT_REGEXP, PRIORITY_REGEXP, REQUIRED_PROPERTIES } from "./schema/defaults";
 import type {
 	CategoryMetrics,
 	ComputedWave,
 	OrgConfig,
-	OrgCreateParams,
 	OrgItem,
 	OrgQueryFilter,
 	OrgSessionContext,
@@ -105,6 +102,144 @@ function parseKeywordQuery(input: string): OrgQueryFilter {
 	return filter;
 }
 
+const STATE_ORDER: Record<string, number> = { INIT: 0, DOING: 1, REVIEW: 2, ITEM: 3, BLOCKED: 4, DONE: 5 };
+
+interface ReadOrgFileOptions {
+	filePath: string;
+	category: string;
+	dir: string;
+	todoKeywords: string[];
+	includeBody?: boolean;
+}
+
+async function readOrgFile(opts: ReadOrgFileOptions): Promise<OrgItem[]> {
+	const result = executeOrg({
+		command: "parse",
+		file: opts.filePath,
+		category: opts.category,
+		dir: opts.dir,
+		todoKeywords: opts.todoKeywords,
+		includeBody: opts.includeBody ?? false,
+	});
+	if (result.error) {
+		try {
+			await Bun.file(opts.filePath).text();
+		} catch (err) {
+			if (isEnoent(err)) return [];
+		}
+		throw new Error(String(result.output));
+	}
+	return ((result.output as { items?: OrgItem[] }).items ?? []) as OrgItem[];
+}
+
+async function readCategory(
+	categoryAbsPath: string,
+	category: string,
+	dir: string,
+	todoKeywords: string[],
+	includeBody = false,
+): Promise<OrgItem[]> {
+	let entries: string[];
+	try {
+		entries = await fs.readdir(categoryAbsPath);
+	} catch (err) {
+		if (isEnoent(err)) return [];
+		throw err;
+	}
+	const orgFiles = entries.filter(entry => entry.endsWith(".org") && entry !== "reference.org");
+	const results = await Promise.all(
+		orgFiles.map(file =>
+			readOrgFile({
+				filePath: path.join(categoryAbsPath, file),
+				category,
+				dir,
+				todoKeywords,
+				includeBody,
+			}),
+		),
+	);
+	return results.flat();
+}
+
+function applyFilter(items: OrgItem[], filter: OrgQueryFilter): OrgItem[] {
+	return items.filter(item => {
+		if (filter.level !== undefined && item.level !== filter.level) return false;
+		if (filter.state) {
+			const states = Array.isArray(filter.state) ? filter.state : [filter.state];
+			if (!states.includes(item.state)) return false;
+		}
+		if (filter.category) {
+			const categories = Array.isArray(filter.category) ? filter.category : [filter.category];
+			if (!categories.includes(item.category)) return false;
+		}
+		if (filter.dir) {
+			const dirs = Array.isArray(filter.dir) ? filter.dir : [filter.dir];
+			if (!dirs.includes(item.dir)) return false;
+		}
+		if (filter.priority) {
+			const priorities = Array.isArray(filter.priority) ? filter.priority : [filter.priority];
+			if (!item.properties.PRIORITY || !priorities.includes(item.properties.PRIORITY)) return false;
+		}
+		if (filter.layer) {
+			const layers = Array.isArray(filter.layer) ? filter.layer : [filter.layer];
+			if (!item.properties.LAYER || !layers.includes(item.properties.LAYER)) return false;
+		}
+		if (filter.agent && item.properties.AGENT !== filter.agent) return false;
+		return true;
+	});
+}
+
+function compareByKey(a: OrgItem, b: OrgItem, key: string): number {
+	if (key === "priority") {
+		const left = a.properties.PRIORITY ? PRIORITY_ORDER.indexOf(a.properties.PRIORITY) : Number.MAX_SAFE_INTEGER;
+		const right = b.properties.PRIORITY ? PRIORITY_ORDER.indexOf(b.properties.PRIORITY) : Number.MAX_SAFE_INTEGER;
+		return left - right;
+	}
+	if (key === "state" || key === "todo") return (STATE_ORDER[a.state] ?? 999) - (STATE_ORDER[b.state] ?? 999);
+	if (key === "category") return a.category.localeCompare(b.category);
+	if (key === "id") return a.id.localeCompare(b.id);
+	return 0;
+}
+
+function sortItems(items: OrgItem[], sort?: string): OrgItem[] {
+	const keys = sort ? sort.split(/\s+/).filter(Boolean) : ["priority", "state", "id"];
+	return items.sort((a, b) => {
+		for (const key of keys) {
+			const cmp = compareByKey(a, b, key);
+			if (cmp !== 0) return cmp;
+		}
+		return 0;
+	});
+}
+
+async function findItemById(
+	categoryDirs: Array<{ absPath: string; name: string; dir: string }>,
+	customId: string,
+	todoKeywords: string[],
+): Promise<OrgItem | undefined> {
+	for (const category of categoryDirs) {
+		const items = await readCategory(category.absPath, category.name, category.dir, todoKeywords, true);
+		const found = items.find(item => item.id === customId);
+		if (found) return found;
+	}
+	return undefined;
+}
+
+function buildReferenceOrg(prefix: string, todoKeywords: string[]): string {
+	const keywords = todoKeywords.join(" | ");
+	return `#+TITLE: Reference\n#+DESCRIPTION: Schema contract for this org directory.\n#+TODO: ${keywords}\n\n* Schema\n\n** Task ID Format\n\nTask IDs follow the pattern: ${prefix}-NNN-kebab-title\nExample: ${prefix}-001-implement-feature\n\n** TODO Keywords\n\n| Keyword | Meaning                            |\n|---------+------------------------------------|\n| ITEM    | Not started                        |\n| DOING   | Actively being worked on           |\n| REVIEW  | Work done, awaiting review         |\n| DONE    | Complete                           |\n| BLOCKED | Waiting on external dependency     |\n`;
+}
+
+async function initCategoryDir(categoryAbsPath: string, prefix: string, todoKeywords: string[]): Promise<void> {
+	await fs.mkdir(categoryAbsPath, { recursive: true });
+	const refPath = path.join(path.dirname(categoryAbsPath), "reference.org");
+	try {
+		await Bun.file(refPath).text();
+	} catch {
+		await Bun.write(refPath, buildReferenceOrg(prefix, todoKeywords));
+	}
+}
+
 async function fetchItem(ctx: OrgContext, id: string): Promise<OrgItem | undefined> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 	return findItemById(
@@ -147,33 +282,35 @@ async function cmdCreate(
 	const catName = args.category ?? categories[0]?.name;
 	if (!catName) return { error: true, message: "No categories configured" };
 	const cat = findCategory(categories, catName);
-	if (!cat)
+	if (!cat) {
 		return {
 			error: true,
 			message: `Category not found: "${catName}". Known: ${categories.map(c => c.name).join(", ")}`,
 		};
+	}
 	const state = args.state ?? ctx.config.todoKeywords[0] ?? "ITEM";
-	if (!ctx.config.todoKeywords.includes(state))
+	if (!ctx.config.todoKeywords.includes(state)) {
 		return { error: true, message: `Unknown state: "${state}". Valid: ${ctx.config.todoKeywords.join(", ")}` };
+	}
 	await fs.mkdir(cat.absPath, { recursive: true });
+	const session = cat.writeInitialPrompt ? (ctx.getSessionContext?.() as OrgSessionContext | undefined) : undefined;
 	const { id, filePath } = await createCategoryMutex.withLock(cat.absPath, async () => {
 		const id = await generateId(cat.absPath, cat.prefix, args.title);
 		const fileName = args.file ? (args.file.endsWith(".org") ? args.file : `${args.file}.org`) : `${id}.org`;
 		const filePath = path.join(cat.absPath, fileName);
-		await appendItemToFile(
-			filePath,
-			{
-				title: args.title,
-				category: catName,
-				state,
-				id,
-				properties: args.properties,
-				body: args.body,
-				file: args.file,
-			} as OrgCreateParams & { id: string },
+		const result = executeOrg({
+			command: "createItem",
+			file: filePath,
+			id,
+			title: args.title,
 			state,
-			cat.writeInitialPrompt ? (ctx.getSessionContext?.() as OrgSessionContext | undefined) : undefined,
-		);
+			properties: args.properties,
+			body: args.body,
+			sessionId: session?.sessionId,
+			transcriptPath: session?.transcriptPath,
+			initialMessage: session?.initialMessage,
+		});
+		if (result.error) throw new Error(String(result.output));
 		return { id, filePath };
 	});
 	logger.debug("org:create", { id, filePath, category: cat.name });
@@ -261,47 +398,84 @@ async function cmdUpdate(
 	},
 ): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
-	if (args.state && !ctx.config.todoKeywords.includes(args.state))
+	if (args.state && !ctx.config.todoKeywords.includes(args.state)) {
 		return { error: true, message: `Unknown state: "${args.state}". Valid: ${ctx.config.todoKeywords.join(", ")}` };
+	}
 	if (args.section !== undefined) {
-		if ((args.body === undefined) === (args.append === undefined))
+		if ((args.body === undefined) === (args.append === undefined)) {
 			return { error: true, message: "update with section requires exactly one of: body, append" };
-		if (args.state !== undefined || args.title !== undefined || args.note !== undefined)
+		}
+		if (args.state !== undefined || args.title !== undefined || args.note !== undefined) {
 			return { error: true, message: "update with section cannot combine state, title, or note" };
+		}
 		const mode = args.body !== undefined ? "replace" : "append";
 		const body = args.body ?? args.append ?? "";
-		let targetFile = args.file;
-		if (!targetFile) {
-			const item = await fetchItem(ctx, args.id);
-			if (!item) return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
-			targetFile = item.file;
-		}
-		const source = await Bun.file(targetFile).text();
-		const result = executeOrg({ command: "editSection", source, section: args.section, body, mode });
-		if (result.error) return result.output;
-		await Bun.write(
-			targetFile,
-			String(
-				(result.output as { source?: string; text?: string; markdown?: string }).source ??
-					(result.output as { source?: string }).source ??
-					source,
-			),
-		);
-		logger.debug("org:update", { id: args.id, section: args.section, file: targetFile });
-		return {
-			success: true,
-			id: args.id,
-			updated: [mode === "replace" ? "body" : "append"],
-			file: targetFile,
-			section: args.section,
+		const trySectionUpdate = async (filePath: string): Promise<Record<string, unknown> | null> => {
+			let result: ReturnType<typeof executeOrg>;
+			try {
+				result = executeOrg({
+					command: "editSection",
+					file: filePath,
+					id: args.id,
+					section: args.section,
+					body,
+					mode,
+					todoKeywords: ctx.config.todoKeywords,
+				});
+			} catch {
+				return null;
+			}
+			if (result.error) return null;
+			logger.debug("org:update", { id: args.id, section: args.section, file: filePath });
+			return {
+				success: true,
+				id: args.id,
+				updated: [mode === "replace" ? "body" : "append"],
+				file: filePath,
+				section: args.section,
+			};
 		};
+		if (args.file) {
+			const direct = await trySectionUpdate(args.file);
+			if (direct) return direct;
+		}
+		const item = await fetchItem(ctx, args.id);
+		if (!item) return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
+		return (
+			(await trySectionUpdate(item.file)) ?? {
+				error: true,
+				code: "NOT_FOUND",
+				message: `Item not found: ${args.id}`,
+			}
+		);
 	}
-	if (!args.state && args.body === undefined && args.append === undefined && !args.title)
+	if (!args.state && args.body === undefined && args.append === undefined && !args.title && !args.note) {
 		return { error: true, message: "update requires at least one of: state, body, append, title" };
-	const mutations = { state: args.state, title: args.title, body: args.body, append: args.append, note: args.note };
+	}
+	const tryUpdate = async (filePath: string): Promise<Record<string, unknown> | null> => {
+		let result: ReturnType<typeof executeOrg>;
+		try {
+			result = executeOrg({
+				command: "updateItem",
+				file: filePath,
+				id: args.id,
+				state: args.state,
+				title: args.title,
+				body: args.body,
+				append: args.append,
+				note: args.note,
+				todoKeywords: ctx.config.todoKeywords,
+			});
+		} catch {
+			return null;
+		}
+		if (result.error) return null;
+		const output = result.output as { updated?: string[] };
+		return await buildMutationResponse(args.id, output.updated ?? [], filePath, args.includeBody, ctx);
+	};
 	if (args.file) {
-		const result = await applyItemMutations(args.file, args.id, mutations, ctx.config.todoKeywords);
-		if (result !== null) return await buildMutationResponse(args.id, result, args.file, args.includeBody, ctx);
+		const direct = await tryUpdate(args.file);
+		if (direct) return direct;
 	}
 	for (const cat of categories) {
 		let entries: string[];
@@ -310,11 +484,10 @@ async function cmdUpdate(
 		} catch {
 			continue;
 		}
-		for (const file of entries.filter(e => e.endsWith(".org"))) {
+		for (const file of entries.filter(entry => entry.endsWith(".org"))) {
 			const filePath = path.join(cat.absPath, file);
-			const result = await applyItemMutations(filePath, args.id, mutations, ctx.config.todoKeywords);
-			if (result !== null && result.length > 0)
-				return await buildMutationResponse(args.id, result, filePath, args.includeBody, ctx);
+			const response = await tryUpdate(filePath);
+			if (response) return response;
 		}
 	}
 	return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
@@ -338,17 +511,33 @@ async function cmdSet(
 	args: { id: string; property: string; value: string; file?: string; includeBody?: boolean },
 ): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
-	if (args.file) {
-		const updated = await setPropertyInFile(args.file, args.id, args.property, args.value);
-		if (updated)
-			return {
-				success: true,
+	const trySet = async (filePath: string): Promise<Record<string, unknown> | null> => {
+		let result: ReturnType<typeof executeOrg>;
+		try {
+			result = executeOrg({
+				command: "setProperty",
+				file: filePath,
 				id: args.id,
 				property: args.property,
 				value: args.value,
-				file: args.file,
-				item: args.includeBody ? await fetchItem(ctx, args.id) : undefined,
-			};
+				todoKeywords: ctx.config.todoKeywords,
+			});
+		} catch {
+			return null;
+		}
+		if (result.error) return null;
+		return {
+			success: true,
+			id: args.id,
+			property: args.property,
+			value: args.value,
+			file: filePath,
+			item: args.includeBody ? await fetchItem(ctx, args.id) : undefined,
+		};
+	};
+	if (args.file) {
+		const direct = await trySet(args.file);
+		if (direct) return direct;
 	}
 	for (const cat of categories) {
 		let entries: string[];
@@ -357,18 +546,10 @@ async function cmdSet(
 		} catch {
 			continue;
 		}
-		for (const file of entries.filter(e => e.endsWith(".org"))) {
+		for (const file of entries.filter(entry => entry.endsWith(".org"))) {
 			const filePath = path.join(cat.absPath, file);
-			if (await setPropertyInFile(filePath, args.id, args.property, args.value)) {
-				return {
-					success: true,
-					id: args.id,
-					property: args.property,
-					value: args.value,
-					file: filePath,
-					item: args.includeBody ? await fetchItem(ctx, args.id) : undefined,
-				};
-			}
+			const response = await trySet(filePath);
+			if (response) return response;
 		}
 	}
 	return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
@@ -378,8 +559,41 @@ async function cmdNote(
 	ctx: OrgContext,
 	args: { id: string; note: string; file?: string; includeBody?: boolean },
 ): Promise<unknown> {
-	const dated = `NOTE [${new Date().toISOString().slice(0, 10)}]: ${args.note}`;
-	return cmdUpdate(ctx, { id: args.id, append: dated, file: args.file, includeBody: args.includeBody });
+	const categories = resolveCategories(ctx.config, ctx.projectRoot);
+	const tryNote = async (filePath: string): Promise<Record<string, unknown> | null> => {
+		let result: ReturnType<typeof executeOrg>;
+		try {
+			result = executeOrg({
+				command: "appendNote",
+				file: filePath,
+				id: args.id,
+				note: args.note,
+				todoKeywords: ctx.config.todoKeywords,
+			});
+		} catch {
+			return null;
+		}
+		if (result.error) return null;
+		return await buildMutationResponse(args.id, ["note"], filePath, args.includeBody, ctx);
+	};
+	if (args.file) {
+		const direct = await tryNote(args.file);
+		if (direct) return direct;
+	}
+	for (const cat of categories) {
+		let entries: string[];
+		try {
+			entries = await fs.readdir(cat.absPath);
+		} catch {
+			continue;
+		}
+		for (const file of entries.filter(entry => entry.endsWith(".org"))) {
+			const filePath = path.join(cat.absPath, file);
+			const response = await tryNote(filePath);
+			if (response) return response;
+		}
+	}
+	return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
 }
 
 async function cmdDashboard(ctx: OrgContext): Promise<unknown> {

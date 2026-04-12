@@ -1,0 +1,110 @@
+#+TITLE: Shared BufferRegistry in NAPI org dispatch
+#+STATE: DONE
+#+SESSION_ID: 14b7e68d6deda817
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T15-52-23-735Z_14b7e68d6deda817.jsonl]]
+#+CUSTOM_ID: FEAT-531-shared-buffer-registry-napi
+#+EFFORT: 3h
+#+PRIORITY: #A
+#+LAYER: napi
+#+DEPENDS: FEAT-521-per-buffer-locking FEAT-530-org-write-ops-via-codebuffer
+
+NOTE [2026-04-12]: Completed under PLAN-200 unified buffer execution; executeCodeBuffer and executeOrg now share the same native buffer registry.
+
+* Initial Message
+
+⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+                                                                                            ╭────────────╮
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine                        │ 🗺 Plotting │
+ Tool execution failed due to an error: Anthropic messages stream stalled while streaming in╰────────────╯
+ tool arguments
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+
+ ⏳ Org: update id:FEAT-519-elixir-outline-support-in-pi-code-engine
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T12-56-41-677Z_14b7be567342b8fe.jsonl
+ ID: 14b7be567342b8fe
+
+
+
+Think from first principles about the edit actions that the rust pi-code-engine crate does, and how it ends up creating this mess. Find the root cause, TDD fix it once and for all with proper trait choices and concurrency models on the CRDT (if that's the root cause
+
+* Goal
+
+Make =executeOrg= NAPI function use the same =BufferRegistry= as =executeCodeBuffer=
+so org files are managed through the unified buffer system. Org write commands
+operate on in-memory buffers with auto-save, eliminating the TS read-modify-write
+pattern.
+
+* Current state
+
+- =crates/pi-natives/src/code_buffer.rs= — =static BUFFER_REGISTRY: OnceLock&lt;BufferRegistry&gt;=
+- =crates/pi-natives/src/org_buffer.rs= — stateless, re-parses source every call
+
+* Architecture
+
+** Shared registry access
+
+Move the buffer registry static to a shared module or make it accessible from both
+=code_buffer.rs= and =org_buffer.rs=:
+
+#+BEGIN_SRC rust
+// crates/pi-natives/src/lib.rs or shared module
+pub(crate) fn buffer_registry() -> &'static BufferRegistry {
+    static REGISTRY: OnceLock<BufferRegistry> = OnceLock::new();
+    REGISTRY.get_or_init(|| BufferRegistry::new(language_registry()))
+}
+#+END_SRC
+
+Both NAPI entry points call =buffer_registry()=.
+
+** New org write commands in =executeOrg=
+
+Add commands that operate on buffered org files:
+
+- =createItem= — open/create buffer, apply create_item TextEdits, save
+- =updateItem= — open buffer, apply state/title/body edits, save
+- =setProperty= — open buffer, apply set_property edits, save
+- =appendNote= — open buffer, apply append_note edits, save
+- =editSection= — open buffer, apply section edits, save (replaces current stateless version)
+
+Each write command follows the pattern:
+1. Get or open buffer from registry
+2. Call pi-org-engine edit function to produce =Vec&lt;TextEdit&gt;=
+3. Apply edits via =buffer.edit_batch()=
+4. =buffer.save()= (auto-save)
+5. Return success response
+
+** Keep stateless read commands
+
+=parse=, =query=, =graph=, =computeWaves=, =nextWave= can remain stateless (parse from
+source string) for efficiency — they don't need buffer management. But they should
+also work on buffered files when a buffer is already open (avoid re-reading disk).
+
+* Files to modify
+
+- =crates/pi-natives/src/code_buffer.rs= — extract registry static into shared location
+- =crates/pi-natives/src/org_buffer.rs= — add write commands that use shared buffer registry
+- =crates/pi-natives/src/lib.rs= — shared registry accessor
+
+* Verification
+
+- =cargo check -p pi-natives= passes
+- New test: create item via =executeOrg({command: \"createItem\", ...})=, then read file from disk to verify content
+- New test: update item state via =executeOrg({command: \"updateItem\", ...})=, verify disk
+- Existing stateless org tests still pass (parse, query, graph)
+
+* Edge cases
+
+- Opening a =.org= file requires the org language profile to be registered (depends on FEAT-528)
+- Buffer save failure: report error to caller, buffer remains dirty
+- Concurrent access: per-buffer lock ensures safety (depends on FEAT-521)
