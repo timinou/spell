@@ -985,7 +985,12 @@ export class AgentSession {
 		this.#postPromptTaskIds.add(taskId);
 		this.#ensurePostPromptTasksPromise();
 		void task
-			.catch(() => {})
+			.catch(err => {
+				logger.error("Post-prompt task failed silently", {
+					taskId,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			})
 			.finally(() => {
 				this.#postPromptTaskIds.delete(taskId);
 				if (this.#postPromptTaskIds.size === 0) {
@@ -1036,7 +1041,11 @@ export class AgentSession {
 				}
 				try {
 					await this.agent.continue();
-				} catch {
+				} catch (err) {
+					logger.error("agent.continue() failed in scheduleAgentContinue", {
+						error: err instanceof Error ? err.message : String(err),
+						generation: options?.generation,
+					});
 					options?.onError?.();
 				}
 			},
@@ -2348,6 +2357,12 @@ export class AgentSession {
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
+
+		// Reset pending audit on explicit user prompt — the user is directing the agent
+		// to continue working, not signaling completion.
+		if (!options?.synthetic && this.#auditState.pending) {
+			this.#auditState = { ...this.#auditState, pending: false };
+		}
 
 		// Handle extension commands first (execute immediately, even during streaming)
 		if (expandPromptTemplates && text.startsWith("/")) {

@@ -1,0 +1,235 @@
+#+TITLE: Anthropic SSE stream hangs silently — no idle timeout, no error surfaced
+#+STATE: DONE
+#+SESSION_ID: 14b7a505e274a416
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T11-06-05-577Z_14b7a505e274a416.jsonl]]
+#+CUSTOM_ID: BUG-231-silent-session-stall-when-agent-continue
+#+EFFORT: S
+#+PRIORITY: #A
+#+LAYER: agent-session
+
+NOTE [2026-04-12]: Implemented idle timeout wrapper for Anthropic SSE stream using iterateWithIdleTimeout (same pattern as OpenAI providers). Added requestAbortController for clean SDK stream abort. Added defense-in-depth error logging in #scheduleAgentContinue and #trackPostPromptTask catch blocks. All tests pass.
+
+* Problem
+When the Anthropic API call following a tool result silently fails to stream any
+events, the session hangs permanently. No error, no timeout, no log entry, no recovery.
+
+Confirmed in two sessions with transcript evidence:
+
+1. Session =14b79dc662a38caa= (hotelcomm): 90,635 tokens context on claude-opus-4-6.
+   Tool results returned at 10:40:57 (grep, code outline x2, find). 25 min hang.
+
+2. Session =14b79aec8fda64f1= (spell): 210,160 tokens context on claude-opus-4-6.
+   =code outline= returned in 2ms at 11:47:41.015. Transcript ends there — 18 min hang,
+   zero log activity from the PID during that time.
+
+In both cases the tool itself worked fine (returned instantly). The hang occurs in
+=streamAssistantResponse()= in the agent loop — the =for await= on the Anthropic SSE
+stream blocks forever because the API connection stalls without sending any events.
+
+The correlation with =code outline= / =code edit= is incidental — these tools are used
+deep into exploration sessions when context is already enormous (90K-210K tokens). The
+real trigger is the large context causing the API to stall during stream establishment.
+
+** Root Cause
+
+=packages/ai/src/providers/anthropic.ts= line ~650:
+
+#+begin_src typescript
+for await (const event of anthropicStream) { ... }
+#+end_src
+
+This bare =for await= has **no idle timeout**. Compare with every OpenAI-family provider,
+which all wrap their streams in =iterateWithIdleTimeout= (45s default):
+
+#+begin_src typescript
+for await (const chunk of iterateWithIdleTimeout(openaiStream, {
+    idleTimeoutMs: getOpenAIStreamIdleTimeoutMs(),
+    errorMessage: "OpenAI responses stream stalled while waiting for the next event",
+    onIdle: () => requestAbortController.abort(),
+})) { ... }
+#+end_src
+
+When the Anthropic API opens a connection but stops sending events (transient network
+issue, API overload on large context, connection silently dropped), the =for await=
+blocks forever. The agent loop never progresses, no =agent_end= event fires.
+
+** Secondary Issue: Silent Error Swallowing
+
+~#scheduleAgentContinue~ (agent-session.ts line 1037-1041) and ~#trackPostPromptTask~
+(line 988) also swallow errors silently. Defense-in-depth — the primary fix is the
+missing timeout, but silent error swallowing in other paths should also be fixed.
+* Fix
+
+** File: =packages/ai/src/providers/anthropic.ts= (PRIMARY)
+
+*** Add idle timeout to the Anthropic SSE stream
+
+The existing infrastructure already exists: =iterateWithIdleTimeout= from
+=../utils/idle-iterator= and a timeout constant pattern.
+
+1. Import the idle iterator utility:
+#+begin_src typescript
+import { iterateWithIdleTimeout } from "../utils/idle-iterator";
+#+end_src
+
+2. Add an Anthropic-specific timeout getter (add near the top of the file, or in
+   =idle-iterator.ts= alongside the OpenAI one):
+#+begin_src typescript
+const DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = 45_000;
+
+export function getAnthropicStreamIdleTimeoutMs(): number | undefined {
+    return normalizeIdleTimeoutMs(
+        $env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS,
+        DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS,
+    );
+}
+#+end_src
+
+If adding to idle-iterator.ts, also export =normalizeIdleTimeoutMs= (currently private).
+Alternatively, inline the constant and env check in anthropic.ts.
+
+3. Wrap the stream iteration at line ~650:
+#+begin_src typescript
+// BEFORE:
+for await (const event of anthropicStream) {
+
+// AFTER:
+for await (const event of iterateWithIdleTimeout(anthropicStream, {
+    idleTimeoutMs: getAnthropicStreamIdleTimeoutMs(),
+    errorMessage: "Anthropic messages stream stalled while waiting for the next event",
+    onIdle: () => {
+        // Abort the request so the SDK cleans up its connection
+        if (options?.signal && !options.signal.aborted) {
+            // The signal comes from the agent loop; aborting it tears down the request
+        }
+        // The anthropicStream itself needs aborting — check if the SDK exposes .abort()
+        // or if the requestAbortController (if one exists in scope) can be used.
+        // Alternatively, anthropicStream.controller?.abort() may work.
+    },
+})) {
+#+end_src
+
+*** Important: Anthropic stream abort mechanism
+
+The Anthropic SDK's =client.messages.stream()= returns a =MessageStream= object. Check
+how to cleanly abort it when idle timeout fires. Options:
+- The =requestAbortController= may not exist in the current Anthropic code path (unlike OpenAI).
+  If not, create one:
+#+begin_src typescript
+const requestAbortController = new AbortController();
+const combinedSignal = options?.signal
+    ? AbortSignal.any([options.signal, requestAbortController.signal])
+    : requestAbortController.signal;
+// Pass combinedSignal to the SDK stream call
+const anthropicStream = client.messages.stream(
+    { ...params, stream: true },
+    { signal: combinedSignal },
+);
+// Then in onIdle:
+onIdle: () => requestAbortController.abort(),
+#+end_src
+
+Look at the OpenAI provider (e.g., =openai-responses.ts=) for the exact pattern — it
+creates a =requestAbortController= and passes it through.
+
+** File: =packages/ai/src/utils/idle-iterator.ts= (if centralizing)
+
+If adding the Anthropic getter here, export =normalizeIdleTimeoutMs= and add:
+#+begin_src typescript
+const DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = 45_000;
+
+export function getAnthropicStreamIdleTimeoutMs(): number | undefined {
+    return normalizeIdleTimeoutMs(
+        $env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS,
+        DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS,
+    );
+}
+#+end_src
+
+** File: =packages/coding-agent/src/session/agent-session.ts= (SECONDARY — defense-in-depth)
+
+*** 1. Log errors in ~#scheduleAgentContinue~ catch block (line 1037-1041)
+
+#+begin_src typescript
+try {
+    await this.agent.continue();
+} catch (err) {
+    logger.error("agent.continue() failed in scheduleAgentContinue", {
+        error: err instanceof Error ? err.message : String(err),
+        generation: options?.generation,
+    });
+    options?.onError?.();
+}
+#+end_src
+
+*** 2. Log errors in ~#trackPostPromptTask~ catch (line 988)
+
+#+begin_src typescript
+.catch((err) => {
+    logger.error("Post-prompt task failed silently", {
+        taskId,
+        error: err instanceof Error ? err.message : String(err),
+    });
+})
+#+end_src
+
+* Edge Cases
+
+- =PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS=0= disables the timeout (matches OpenAI pattern)
+- Anthropic's own SDK may have internal keepalive pings that reset the idle timer —
+  this is fine, the timeout only fires when NO events arrive
+- The timeout error message should be caught by the existing retry mechanism (it matches
+  =stream stall= in =isRetryableErrorMessage=, line ~4835 of agent-session.ts)
+- On abort, the SDK should clean up its HTTP connection — verify no resource leak
+
+* Verification
+
+** Test file: =packages/ai/test/providers/anthropic-idle-timeout.test.ts=
+
+#+begin_src typescript
+import { describe, it, expect } from "bun:test";
+import { iterateWithIdleTimeout } from "../../src/utils/idle-iterator";
+
+describe("Anthropic stream idle timeout", () => {
+    it("throws after idle timeout when stream stalls", async () => {
+        // Create a mock async iterable that never yields
+        async function* stalledStream() {
+            await new Promise(() => {}); // never resolves
+        }
+
+        const wrapped = iterateWithIdleTimeout(stalledStream(), {
+            idleTimeoutMs: 100, // short for testing
+            errorMessage: "Anthropic messages stream stalled",
+        });
+
+        await expect(async () => {
+            for await (const _event of wrapped) {
+                // should never reach here
+            }
+        }).toThrow("Anthropic messages stream stalled");
+    });
+
+    it("passes through events normally when stream is active", async () => {
+        async function* activeStream() {
+            yield { type: "event1" };
+            yield { type: "event2" };
+        }
+
+        const events = [];
+        for await (const event of iterateWithIdleTimeout(activeStream(), {
+            idleTimeoutMs: 1000,
+            errorMessage: "stalled",
+        })) {
+            events.push(event);
+        }
+
+        expect(events).toHaveLength(2);
+    });
+});
+#+end_src
+
+** Manual checks
+- ~bun check:ts~ passes
+- ~bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts~ passes
+- Verify the error from idle timeout is retried by the retry mechanism (the message
+  "stream stalled" matches the retry regex)
