@@ -41,6 +41,7 @@ import {
 } from "../utils";
 import { AssistantMessageEventStream } from "../utils/event-stream";
 import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-inspector";
+import { getAnthropicStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
 import { parseStreamingJson } from "../utils/json-parse";
 import { pushFallbackError } from "../utils/provider-error-boundary";
 import {
@@ -641,13 +642,21 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			let providerRetryAttempt = 0;
 			let started = false;
 			do {
-				const anthropicStream = client.messages.stream({ ...params, stream: true }, { signal: options?.signal });
+				const requestAbortController = new AbortController();
+				const requestSignal = options?.signal
+					? AbortSignal.any([options.signal, requestAbortController.signal])
+					: requestAbortController.signal;
+				const anthropicStream = client.messages.stream({ ...params, stream: true }, { signal: requestSignal });
 				if (copilotDynamicHeaders && output.usage.premiumRequests === undefined) {
 					output.usage.premiumRequests = copilotDynamicHeaders.premiumRequests;
 				}
 
 				try {
-					for await (const event of anthropicStream) {
+					for await (const event of iterateWithIdleTimeout(anthropicStream, {
+						idleTimeoutMs: getAnthropicStreamIdleTimeoutMs(),
+						errorMessage: "Anthropic messages stream stalled while waiting for the next event",
+						onIdle: () => requestAbortController.abort(),
+					})) {
 						started = true;
 						if (event.type === "message_start") {
 							// Capture initial token usage from message_start event

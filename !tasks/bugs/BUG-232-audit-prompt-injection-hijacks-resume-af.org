@@ -1,0 +1,138 @@
+#+TITLE: Audit prompt injection hijacks resume after session stall
+#+STATE: DONE
+#+SESSION_ID: 14b7a505e274a416
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T11-06-05-577Z_14b7a505e274a416.jsonl]]
+#+CUSTOM_ID: BUG-232-audit-prompt-injection-hijacks-resume-af
+#+EFFORT: S
+#+PRIORITY: #B
+#+LAYER: agent-session
+#+DEPENDS: BUG-231-silent-session-stall-when-agent-continue
+
+NOTE [2026-04-12]: Added audit state reset in prompt() method: non-synthetic user prompts clear pending audit state. Synthetic prompts and active audits are unaffected. All 6 test cases pass.
+
+* Initial Message
+
+why did session 14b79dc662a38caa just stop and didn't start again when I did 'continue'? What was the blocker?
+
+* Problem
+
+When a session stalls (see [[id:BUG-231-silent-session-stall-when-agent-continue]]) and the user
+types "continue" to resume, the system injects the plan-audit prompt instead of letting the model
+resume its work.
+
+Observed in session =14b79dc662a38caa=: user sent "continue" at 11:05:52. Instead of resuming
+from the pending tool results, the system injected:
+
+: "You have just completed implementing a plan. Before the user validates, perform a thorough audit..."
+
+The model's response was immediately aborted (0 tokens, "Operation aborted").
+
+** Root Cause
+
+The audit state lifecycle has a gap:
+
+1. When plan mode activates (interactive-mode.ts ~line 1335-1342~), audit state is set to
+   ~pending: "auto"~ (ultraplan) or ~pending: "suggest"~ (regular plan):
+
+#+begin_src typescript
+this.session.setAuditState({
+    type: "audit",
+    pending: this.planModeUltraplan ? "auto" : "suggest",
+    active: false,
+    sourceRef: planReferencePath,
+    auditDepth: this.#auditDepth,
+    maxDepth: this.#auditMaxDepth,
+});
+#+end_src
+
+2. This pending state persists indefinitely until the agent yields with a non-tool-use stop.
+
+3. When the user sends "continue", the model responds, ~agent_end~ fires, and
+   ~#checkAuditPhase()~ (agent-session.ts ~line 4197~) finds ~pending === "auto"~ and
+   immediately injects the audit prompt — even though the user explicitly asked to continue working.
+
+4. The audit fires on the FIRST non-tool-use yield after plan mode activation, which may be
+   the model's response to the user's recovery message rather than the agent's natural
+   completion of its work.
+
+* Fix
+
+** File: =packages/coding-agent/src/session/agent-session.ts=
+
+*** Clear pending audit on explicit user prompt
+
+In the ~prompt()~ method (around line 2349), add audit state reset when the message is a
+non-synthetic user message:
+
+#+begin_src typescript
+async prompt(text: string, options?: PromptOptions): Promise<void> {
+    // Reset pending audit on explicit user prompt — the user is directing the agent
+    // to continue working, not signaling completion.
+    if (!options?.synthetic && this.#auditState.pending) {
+        this.#auditState = { ...this.#auditState, pending: false };
+    }
+    // ... rest of existing method
+#+end_src
+
+This goes right at the top of ~prompt()~, before the slash command check (line 2353).
+
+*** Why this is correct
+
+- ~synthetic: true~ is used for system-injected prompts (audit, todo reminders, steering).
+  These should NOT clear the audit state.
+- ~synthetic: false~ (or undefined, the default) means the user explicitly typed something.
+  User input always means "I want the agent to work on this", not "the plan is done".
+- The audit state is re-set by ~interactive-mode.ts~ when the plan mode approval flow
+  completes, so clearing it here doesn't break the normal audit lifecycle.
+
+** File: =packages/coding-agent/src/modes/interactive-mode.ts=
+
+No changes needed. The audit state is set in the plan mode activation flow, which runs
+after plan approval. If the user sends a message that clears the pending state, the
+audit simply won't fire — which is correct behavior. The user can still manually trigger
+an audit via the audit command.
+
+* Edge Cases
+
+- User sends "continue" during normal plan execution (no stall): audit pending is cleared,
+  which is correct — the user is redirecting the agent.
+- Empty message via "." or "c" shortcut: these go through ~onInputCallback~ which calls
+  ~prompt("")~ with default options (non-synthetic), so audit IS cleared. This is correct —
+  the user is explicitly asking the agent to continue.
+- Steering messages (sent while agent is streaming): these go through ~#queueSteer~, not
+  ~prompt()~, so they don't clear audit. Correct.
+- Follow-up messages: same — they go through ~#queueFollowUp~, not ~prompt()~. Correct.
+
+* Verification
+
+** Test file: =packages/coding-agent/test/session/audit-state-on-user-prompt.test.ts=
+
+#+begin_src typescript
+import { describe, it, expect } from "bun:test";
+
+describe("audit state on user prompt", () => {
+    it("clears pending audit on non-synthetic user prompt", async () => {
+        // Setup: create session with audit state { pending: "auto" }
+        // Act: call session.prompt("continue") with default options
+        // Assert: audit state pending is now false
+    });
+
+    it("preserves pending audit on synthetic prompt", async () => {
+        // Setup: create session with audit state { pending: "auto" }
+        // Act: call session.prompt("...", { synthetic: true })
+        // Assert: audit state pending is still "auto"
+    });
+
+    it("does not clear audit when already active", async () => {
+        // Setup: create session with audit state { active: true, pending: false }
+        // Act: call session.prompt("continue")
+        // Assert: audit state active is still true
+    });
+});
+#+end_src
+
+** Manual check
+- Run ~bun check:ts~ — no type errors
+- Run the new test: ~bun test packages/coding-agent/test/session/audit-state-on-user-prompt.test.ts~
+- Scenario: enter plan mode, let agent start working, then send a user message —
+  verify no audit prompt is injected after the model's response

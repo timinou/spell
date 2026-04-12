@@ -1,0 +1,104 @@
+#+TITLE: Fix session stall and audit hijack bugs
+#+STATE: DONE
+#+SESSION_ID: 14b7a505e274a416
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T11-06-05-577Z_14b7a505e274a416.jsonl]]
+#+CUSTOM_ID: PLAN-208-fix-session-stall-and-audit-hijack-bugs
+
+
+* Context
+Two compounding bugs cause sessions to become permanently stuck with no recovery path.
+
+** Bug 1: Anthropic SSE stream has no idle timeout
+
+After a tool result returns, the agent loop calls =streamAssistantResponse()= to make the
+next API call. When the Anthropic API connection stalls (no SSE events arrive), the
+=for await= at =packages/ai/src/providers/anthropic.ts= line ~650 blocks forever.
+Every OpenAI-family provider wraps its stream in =iterateWithIdleTimeout= (45s default),
+but the Anthropic provider does a bare =for await= with no stall protection.
+
+Transcript evidence from two sessions:
+
+1. Session =14b79dc662a38caa=: 90,635 tokens on claude-opus-4-6. Tool results returned
+   at 10:40:57. Transcript ends there — 25 min hang, zero log activity.
+
+2. Session =14b79aec8fda64f1=: 210,160 tokens on claude-opus-4-6. =code outline= returned
+   in 2ms at 11:47:41.015. Transcript ends at line 343 — 18 min hang, zero log activity.
+
+In both cases, tools worked correctly. The correlation with =code outline= / =code edit= is
+incidental — these tools are used deep into exploration sessions when context is enormous.
+The real trigger is the Anthropic API silently stalling on large-context stream connections.
+
+Secondary defense-in-depth: =agent-session.ts= has two silent error catch sites
+(=#scheduleAgentContinue= line 1037, =#trackPostPromptTask= line 988) that should log
+instead of silently dropping.
+
+** Bug 2: Audit hijacks resume
+
+When a user tries to recover from a stall by typing "continue", the plan-mode audit check
+fires on the model's first non-tool-use response. If audit state is =pending: "auto"=
+(set when plan mode activated), the audit prompt is injected instead of letting the model
+resume work. Fix: clear pending audit state on explicit (non-synthetic) user prompts.
+
+** Key Decisions
+
+1. Wrap Anthropic SSE stream in =iterateWithIdleTimeout= (same pattern as all OpenAI providers)
+2. Add =PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS= env var (default 45s, 0 to disable)
+3. Create a =requestAbortController= to cleanly abort the SDK stream on idle timeout
+4. The timeout error ("stream stalled") already matches the retry regex in =isRetryableErrorMessage=
+5. Add =logger.error()= in =#scheduleAgentContinue= and =#trackPostPromptTask= catch blocks
+6. Clear pending audit state in =prompt()= for non-synthetic user messages
+* Verification
+
+- ~bun check:ts~ passes
+- ~bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts~ passes
+- ~bun test packages/coding-agent/test/session/audit-state-on-user-prompt.test.ts~ passes
+- Manual: verify that a stalled Anthropic stream triggers timeout error after ~45s
+- Manual: verify the timeout error is auto-retried by the retry mechanism
+- Manual: verify typing "continue" after a stall does NOT trigger the audit prompt
+
+* Execution Manifest
+
+** Wave 1: [[id:BUG-231-silent-session-stall-when-agent-continue]]
+Effort: S | Priority: #A
+Add idle timeout to Anthropic SSE stream in =packages/ai/src/providers/anthropic.ts=.
+Add defense-in-depth logging in =packages/coding-agent/src/session/agent-session.ts=.
+
+** Wave 2: [[id:BUG-232-audit-prompt-injection-hijacks-resume-af]]
+Effort: S | Priority: #B | Depends: BUG-231
+Clear pending audit state on explicit user prompt in =agent-session.ts= prompt() method.
+
+** Completion [2026-04-12]
+
+*** Verification
+
+1. ~bun tsgo -p tsconfig.json~ — zero errors in modified files (pre-existing errors in code-result.ts/code.ts unrelated)
+2. ~bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts~ — 6/6 pass (707ms)
+   - Stalled stream throws after timeout
+   - onIdle callback fires before throwing
+   - Active stream passes through normally
+   - Timeout resets between events
+   - idleTimeoutMs=undefined passes through (disabled)
+   - idleTimeoutMs=0 passes through (disabled)
+3. ~bun test packages/coding-agent/test/session/audit-state-on-user-prompt.test.ts~ — 6/6 pass (128ms)
+   - Clears pending 'auto' on non-synthetic prompt
+   - Clears pending 'suggest' on non-synthetic prompt
+   - Preserves pending on synthetic prompt
+   - No modification when audit already active
+   - No-op when no pending audit
+   - Treats undefined synthetic as non-synthetic
+4. Timeout error message \"Anthropic messages stream stalled\" matches ~/stream stall/i~ in retry regex — confirmed via runtime check
+5. ~getAnthropicStreamIdleTimeoutMs()~ returns 45000 default, ~undefined~ for PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS=0, custom values work
+
+*** Artifacts
+
+Modified files:
+- =packages/ai/src/utils/idle-iterator.ts= — exported normalizeIdleTimeoutMs, added getAnthropicStreamIdleTimeoutMs()
+- =packages/ai/src/providers/anthropic.ts= — imported idle-iterator utils, added requestAbortController + signal combining, wrapped stream in iterateWithIdleTimeout
+- =packages/coding-agent/src/session/agent-session.ts= — added logger.error in #scheduleAgentContinue and #trackPostPromptTask catch blocks; added audit state reset in prompt() for non-synthetic messages
+
+New test files:
+- =packages/ai/test/providers/anthropic-idle-timeout.test.ts=
+- =packages/coding-agent/test/session/audit-state-on-user-prompt.test.ts=
+
+*** Deviations
+None.
