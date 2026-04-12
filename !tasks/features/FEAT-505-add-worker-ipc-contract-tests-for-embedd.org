@@ -1,0 +1,146 @@
+#+TITLE: Add worker IPC contract tests for embedding pipeline
+#+STATE: DONE
+#+SESSION_ID: 14b799f1a726d3bb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-17-41-276Z_14b799f1a726d3bb.jsonl]]
+#+CUSTOM_ID: FEAT-505-add-worker-ipc-contract-tests-for-embedd
+#+EFFORT: medium
+#+PRIORITY: #B
+#+LAYER: native
+#+DEPENDS: FEAT-504-validate-worker-output-in-semantic-index
+
+NOTE [2026-04-12]: Added mock worker IPC coverage for success, malformed count/dimension responses, query-dimension fallback, and restart-after-failure behavior.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-064-audit-implementation:
+
+ - What: Cross-target worker naming uses the host platform instead of the target platform.
+     - Where: packages/natives/scripts/build-native.ts, around const exeSuffix = process.platform === "win32" ? ".exe" : "";
+     - Why: Cross-compiling a Windows worker from Linux/macOS will install it without .exe, so post-build lookup and embedding can miss the worker even though the build succeeded.
+     - Effort: trivial
+ - What: Worker runtime discovery does not cover every path the native addon loader can use.
+     - Where: crates/pi-natives/src/embedding_worker.rs (worker_candidates() / versioned_native_dir()), compared with packages/natives/src/native.ts (compiledCandidates includes userDataDir)
+     - Why: If the addon is loaded from the userDataDir fallback, the worker is not searched there, so semantic features can fail even though the addon itself loads successfully.
+     - Effort: small
+ - What: Conversation cache eviction is FIFO, not activity-aware.
+     - Where: packages/ai/src/providers/cursor.ts, setConversationCacheEntry(...) near the top of the file
+     - Why: Updating an existing Map entry does not refresh insertion order, so an older but still-active conversation can be evicted first after the 21st conversation ID appears, causing
+ unexpected loss of cached state/blob data mid-session.
+     - Effort: small
+ - What: Semantic index construction trusts worker output shape without validating it.
+     - Where: crates/pi-natives/src/code_graph.rs, build_semantic_index(...) and semantic search query-vector handling
+     - Why: If the worker returns fewer vectors than chunks, or vectors with inconsistent dimensions, the code silently truncates via zip or accepts bad dimensions. Because PI_EMBEDDING_WORKER
+ is overrideable, this is externally reachable and can yield a corrupt vector cache while reporting success.
+     - Effort: small
+ - What: Pending-delivery capping silently drops completion notifications.
+     - Where: packages/coding-agent/src/async/job-manager.ts, #enqueueDelivery() and the failed-delivery requeue path in #runDeliveryLoop()
+     - Why: When the queue exceeds 200, oldest deliveries are discarded with no log or surfaced state change. The job record remains, but the caller can miss the automatic completion delivery
+ and perceive the job result as lost.
+     - Effort: small
+ - What: Finished-job pruning uses startTime rather than completion time.
+     - Where: packages/coding-agent/src/async/job-manager.ts, #pruneCompletedJobs()
+     - Why: A long-running job that just completed can be pruned before a short job that completed much earlier, which makes “recent jobs” less truthful and can hide the freshest result under
+ pressure.
+     - Effort: trivial
+ - What: Automated coverage does not fully exercise the worker IPC contract from the pi-natives side.
+     - Where: crates/pi-natives/src/code_graph.rs tests and crates/pi-natives/src/embedding_worker.rs
+     - Why: The missing-worker error path is covered, but successful semantic indexing, malformed worker responses, and worker restart-after-failure behavior are only manually verified. A
+ protocol drift between worker and host could pass cargo test and break runtime behavior.
+     - Effort: medium
+
+* Problem
+Automated coverage does not exercise the worker IPC contract from the pi-natives side. The missing-worker error path is covered, but successful semantic indexing, malformed worker responses, and worker restart-after-failure are only manually verified. A protocol drift between worker and host could pass =cargo test= and break runtime.
+
+* Approach: Rust Mock Worker Binary
+Create a mock worker as a small Rust binary in =crates/pi-natives/tests/mock-worker/=. This binary:
+- Reads JSONL commands from stdin (same protocol as the real worker)
+- Returns controlled JSONL responses to stdout
+- Behavior controlled via CLI args or environment variables
+
+The mock worker is built as a =[[test]]= binary target in =crates/pi-natives/Cargo.toml= (or a separate workspace crate) so =cargo test= builds it automatically.
+
+* Files to Create
+** =crates/pi-natives/tests/mock-worker/main.rs=
+A standalone binary that speaks the embedding worker JSONL protocol:
+#+begin_src rust
+// Reads {"command":"embed_batch","texts":[...],"batch_size":N}
+// Returns {"ok":true,"vectors":[[...],[...],...]}
+// Reads {"command":"embed_query","text":"..."}
+// Returns {"ok":true,"vector":[...]}
+#+end_src
+
+Modes controlled by environment:
+- =MOCK_WORKER_MODE=normal= — returns valid vectors of consistent dimension (default dim=4)
+- =MOCK_WORKER_MODE=count_mismatch= — returns fewer vectors than input texts
+- =MOCK_WORKER_MODE=dimension_mismatch= — returns vectors with inconsistent dimensions
+- =MOCK_WORKER_MODE=crash_after_n= (=MOCK_WORKER_CRASH_AFTER=N=) — crashes (exit 1) after N successful responses
+- =MOCK_WORKER_MODE=malformed_json= — returns invalid JSON
+- =MOCK_WORKER_MODE=error= — returns ={"ok":false,"error":"simulated error"}=
+
+* Files to Modify
+** =crates/pi-natives/Cargo.toml=
+Add a =[[test]]= or =[[bin]]= entry for the mock worker (or add as a separate =crates/mock-embedding-worker= crate).
+
+** =crates/pi-natives/src/embedding_worker.rs= — add tests
+Add a =mod tests= section (currently absent) with test functions that:
+1. Set =PI_EMBEDDING_WORKER= to the mock worker binary path
+2. Call =embed_batch()= / =embed_query()= with known inputs
+3. Assert correct outputs or expected errors
+4. Use =reset_for_tests()= between tests for worker cleanup
+
+** =crates/pi-natives/src/code_graph.rs= — add tests
+Add tests that exercise the full =build_semantic_index= pipeline with the mock worker.
+
+* Test Scenarios
+
+** Happy Path Tests
+1. *Successful embed_batch*: mock returns N vectors of consistent dimension for N texts → =embed_batch()= returns =Ok(Vec<Vec<f32>>)= with correct count and dimensions
+2. *Successful embed_query*: mock returns a single vector → =embed_query()= returns =Ok(Vec<f32>)=
+3. *Full semantic index build*: mock returns valid vectors → =build_semantic_index()= returns =Ok(count)= with count > 0, vector cache file is created on disk
+
+** Validation Error Tests (depend on FEAT-504 validation changes)
+4. *Count mismatch*: mock returns fewer vectors than texts → =embed_batch()= succeeds but =build_semantic_index()= returns error with "returned N vectors for M chunks"
+5. *Dimension mismatch*: mock returns vectors with inconsistent lengths → =embed_batch()= returns error with "inconsistent vector dimensions"
+6. *Malformed JSON*: mock returns garbage → =embed_batch()= returns error with "malformed worker response"
+
+** Error Handling Tests
+7. *Worker error response*: mock returns ={"ok":false,"error":"..."}= → =embed_batch()= returns error
+8. *Worker crash*: mock exits immediately → =embed_batch()= returns error, subsequent call spawns a new worker (restart behavior via =with_worker= error path at lines 155-158)
+
+** Integration Test
+9. *Search after index build*: build index with mock → run semantic search with mock embed_query → verify hits are returned (not empty)
+
+* Implementation Notes
+- All tests MUST use =reset_for_tests()= in setup/teardown to avoid worker leaks across tests
+- Tests that modify =PI_EMBEDDING_WORKER= MUST use the existing =TEST_ENV_LOCK= mutex from =code_graph.rs= tests to avoid env var races
+- The mock worker binary path can be found via =env!("CARGO_BIN_EXE_mock-embedding-worker")= or by building it as a test artifact
+- Keep mock dimensions small (e.g., 4) for fast execution
+- Use =fixture_root()= pattern from existing tests for temp directory management
+
+* Worker Protocol Reference
+Command format (JSONL on stdin):
+#+begin_src json
+{"command":"embed_batch","texts":["hello","world"],"batch_size":null}
+{"command":"embed_query","text":"hello"}
+{"command":"init"}
+#+end_src
+
+Response format (JSONL on stdout):
+#+begin_src json
+{"ok":true,"vectors":[[0.1,0.2],[0.3,0.4]]}
+{"ok":true,"vector":[0.1,0.2]}
+{"ok":false,"error":"something went wrong"}
+#+end_src
+
+* Verification
+** =cargo test -p pi-natives= passes with all new tests.
+** =cargo test -p pi-natives -- --list= shows at least 6 new test functions.
+** =cargo clippy -p pi-natives= clean.
+** No flaky tests: mock worker is deterministic, env vars are mutex-protected.
+
+* Sub-outline
+1. Create mock worker binary (=crates/pi-natives/tests/mock-worker/main.rs=)
+2. Add build configuration (=Cargo.toml= entry)
+3. Add =embed_batch= / =embed_query= unit tests in =embedding_worker.rs=
+4. Add =build_semantic_index= integration tests in =code_graph.rs=
+5. Verify all tests pass

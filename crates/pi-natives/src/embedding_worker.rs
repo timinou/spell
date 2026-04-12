@@ -20,6 +20,16 @@ const WORKER_BINARY_NAME: &str = "pi-embedding-worker";
 
 static WORKER: OnceLock<Mutex<Option<EmbeddingWorker>>> = OnceLock::new();
 
+#[cfg(test)]
+static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn lock_test_env() -> std::sync::MutexGuard<'static, ()> {
+	TEST_ENV_LOCK
+		.lock()
+		.unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[allow(dead_code, reason = "explicit init remains part of the worker protocol")]
 #[derive(Serialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
@@ -224,6 +234,9 @@ fn worker_candidates() -> Vec<PathBuf> {
 	if let Some(versioned_dir) = versioned_native_dir() {
 		push(versioned_dir.join(WORKER_BINARY_NAME));
 	}
+	if let Some(user_data_dir) = user_data_native_dir() {
+		push(user_data_dir.join(WORKER_BINARY_NAME));
+	}
 	candidates
 }
 
@@ -238,17 +251,21 @@ fn current_exe_dir() -> Option<PathBuf> {
 }
 
 fn versioned_native_dir() -> Option<PathBuf> {
+	user_data_native_dir().map(|dir| dir.join(WORKER_VERSION))
+}
+
+fn user_data_native_dir() -> Option<PathBuf> {
 	let home = home_dir()?;
 	#[cfg(windows)]
 	{
 		let base = env::var_os("LOCALAPPDATA")
 			.map(PathBuf::from)
 			.unwrap_or_else(|| home.join("AppData/Local"));
-		return Some(base.join("spell/natives").join(WORKER_VERSION));
+		return Some(base.join("spell/natives"));
 	}
 	#[cfg(not(windows))]
 	{
-		Some(home.join(".local/share/spell/natives").join(WORKER_VERSION))
+		Some(home.join(".local/share/spell/natives"))
 	}
 }
 
@@ -294,5 +311,107 @@ pub(crate) fn reset_for_tests() {
 		&& let Some(mut worker) = guard.take()
 	{
 		worker.stop();
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::{ffi::OsString, path::Path, sync::MutexGuard};
+
+	use super::*;
+
+	struct TestWorkerEnv {
+		_guard:          MutexGuard<'static, ()>,
+		original_worker: Option<OsString>,
+		original_mode:   Option<OsString>,
+		original_state:  Option<OsString>,
+	}
+
+	impl TestWorkerEnv {
+		fn new(mode: &str, state_file: Option<&Path>) -> Self {
+			let guard = lock_test_env();
+			let original_worker = env::var_os(WORKER_ENV_VAR);
+			let original_mode = env::var_os("PI_TEST_EMBEDDING_WORKER_MODE");
+			let original_state = env::var_os("PI_TEST_EMBEDDING_WORKER_STATE_FILE");
+			unsafe {
+				env::set_var(WORKER_ENV_VAR, mock_worker_path());
+				env::set_var("PI_TEST_EMBEDDING_WORKER_MODE", mode);
+				match state_file {
+					Some(path) => env::set_var("PI_TEST_EMBEDDING_WORKER_STATE_FILE", path),
+					None => env::remove_var("PI_TEST_EMBEDDING_WORKER_STATE_FILE"),
+				}
+			}
+			reset_for_tests();
+			Self { _guard: guard, original_worker, original_mode, original_state }
+		}
+	}
+
+	impl Drop for TestWorkerEnv {
+		fn drop(&mut self) {
+			unsafe {
+				match &self.original_worker {
+					Some(value) => env::set_var(WORKER_ENV_VAR, value),
+					None => env::remove_var(WORKER_ENV_VAR),
+				}
+				match &self.original_mode {
+					Some(value) => env::set_var("PI_TEST_EMBEDDING_WORKER_MODE", value),
+					None => env::remove_var("PI_TEST_EMBEDDING_WORKER_MODE"),
+				}
+				match &self.original_state {
+					Some(value) => env::set_var("PI_TEST_EMBEDDING_WORKER_STATE_FILE", value),
+					None => env::remove_var("PI_TEST_EMBEDDING_WORKER_STATE_FILE"),
+				}
+			}
+			reset_for_tests();
+		}
+	}
+
+	fn mock_worker_path() -> PathBuf {
+		let bin_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test-bin");
+		#[cfg(windows)]
+		{
+			return bin_dir.join("mock_embedding_worker.cmd");
+		}
+		#[cfg(not(windows))]
+		{
+			bin_dir.join("mock_embedding_worker.js")
+		}
+	}
+
+	fn temp_state_file(name: &str) -> PathBuf {
+		let unique = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.expect("time should be monotonic")
+			.as_nanos();
+		env::temp_dir().join(format!("pi-natives-{name}-{unique}-{}.state", std::process::id()))
+	}
+
+	#[test]
+	fn worker_override_supports_successful_batch_and_query() {
+		let _env = TestWorkerEnv::new("success", None);
+
+		let batch = embed_batch(&["alpha", "beta"], None).expect("batch embedding should succeed");
+		assert_eq!(batch, vec![vec![1.0, 1.0, 2.0], vec![1.0, 2.0, 2.0]]);
+
+		let query = embed_query("graph").expect("query embedding should succeed");
+		assert_eq!(query, vec![1.0, 5.0, 1.0]);
+	}
+
+	#[test]
+	fn worker_restarts_after_malformed_response() {
+		let state_file = temp_state_file("malformed-once");
+		let _env = TestWorkerEnv::new("malformed_once", Some(&state_file));
+
+		let error = embed_query("retry").expect_err("first request should fail");
+		assert!(
+			error
+				.to_string()
+				.contains("received malformed worker response"),
+			"error should surface malformed response: {error}"
+		);
+
+		let query = embed_query("retry").expect("worker should restart after malformed response");
+		assert_eq!(query, vec![1.0, 5.0, 1.0]);
+		let _ = fs::remove_file(state_file);
 	}
 }

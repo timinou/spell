@@ -1,0 +1,159 @@
+#+TITLE: Validate worker output in semantic index construction
+#+STATE: DONE
+#+SESSION_ID: 14b799f1a726d3bb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-17-41-276Z_14b799f1a726d3bb.jsonl]]
+#+CUSTOM_ID: FEAT-504-validate-worker-output-in-semantic-index
+#+EFFORT: small
+#+PRIORITY: #A
+#+LAYER: native
+
+NOTE [2026-04-12]: Implemented across pi-code-vectors, pi-code-graph, and pi-natives with explicit dimension mismatch errors plus worker output count/dimension validation.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-064-audit-implementation:
+
+ - What: Cross-target worker naming uses the host platform instead of the target platform.
+     - Where: packages/natives/scripts/build-native.ts, around const exeSuffix = process.platform === "win32" ? ".exe" : "";
+     - Why: Cross-compiling a Windows worker from Linux/macOS will install it without .exe, so post-build lookup and embedding can miss the worker even though the build succeeded.
+     - Effort: trivial
+ - What: Worker runtime discovery does not cover every path the native addon loader can use.
+     - Where: crates/pi-natives/src/embedding_worker.rs (worker_candidates() / versioned_native_dir()), compared with packages/natives/src/native.ts (compiledCandidates includes userDataDir)
+     - Why: If the addon is loaded from the userDataDir fallback, the worker is not searched there, so semantic features can fail even though the addon itself loads successfully.
+     - Effort: small
+ - What: Conversation cache eviction is FIFO, not activity-aware.
+     - Where: packages/ai/src/providers/cursor.ts, setConversationCacheEntry(...) near the top of the file
+     - Why: Updating an existing Map entry does not refresh insertion order, so an older but still-active conversation can be evicted first after the 21st conversation ID appears, causing
+ unexpected loss of cached state/blob data mid-session.
+     - Effort: small
+ - What: Semantic index construction trusts worker output shape without validating it.
+     - Where: crates/pi-natives/src/code_graph.rs, build_semantic_index(...) and semantic search query-vector handling
+     - Why: If the worker returns fewer vectors than chunks, or vectors with inconsistent dimensions, the code silently truncates via zip or accepts bad dimensions. Because PI_EMBEDDING_WORKER
+ is overrideable, this is externally reachable and can yield a corrupt vector cache while reporting success.
+     - Effort: small
+ - What: Pending-delivery capping silently drops completion notifications.
+     - Where: packages/coding-agent/src/async/job-manager.ts, #enqueueDelivery() and the failed-delivery requeue path in #runDeliveryLoop()
+     - Why: When the queue exceeds 200, oldest deliveries are discarded with no log or surfaced state change. The job record remains, but the caller can miss the automatic completion delivery
+ and perceive the job result as lost.
+     - Effort: small
+ - What: Finished-job pruning uses startTime rather than completion time.
+     - Where: packages/coding-agent/src/async/job-manager.ts, #pruneCompletedJobs()
+     - Why: A long-running job that just completed can be pruned before a short job that completed much earlier, which makes “recent jobs” less truthful and can hide the freshest result under
+ pressure.
+     - Effort: trivial
+ - What: Automated coverage does not fully exercise the worker IPC contract from the pi-natives side.
+     - Where: crates/pi-natives/src/code_graph.rs tests and crates/pi-natives/src/embedding_worker.rs
+     - Why: The missing-worker error path is covered, but successful semantic indexing, malformed worker responses, and worker restart-after-failure behavior are only manually verified. A
+ protocol drift between worker and host could pass cargo test and break runtime behavior.
+     - Effort: medium
+
+* Problem
+Semantic index construction trusts worker output shape without validation. Three gaps:
+1. =build_semantic_index()= in =code_graph.rs= uses =zip(vectors)= at line 352, silently truncating when the worker returns fewer vectors than chunks.
+2. Dimension consistency is not validated — =vectors.first().map_or(768, Vec::len)= at line 349 assumes all vectors share the first vector's dimension without checking.
+3. =VectorIndex::search()= in =pi-code-vectors/src/index.rs= silently returns empty results on dimension mismatch (line 56-58) instead of reporting an error.
+
+Since =PI_EMBEDDING_WORKER= is overrideable, all three are externally reachable.
+
+* Files
+- =crates/pi-natives/src/code_graph.rs= — =build_semantic_index()= function
+- =crates/pi-natives/src/embedding_worker.rs= — =embed_batch()= function
+- =crates/pi-code-vectors/src/index.rs= — =VectorIndex::search()= method
+- =crates/pi-code-vectors/src/error.rs= — =Error= enum
+- =crates/pi-code-graph/src/query.rs= — =graph_search()= method (caller of =VectorIndex::search=)
+
+* Changes
+
+** 1. Add =DimensionMismatch= error variant to =pi-code-vectors=
+In =crates/pi-code-vectors/src/error.rs=, add:
+#+begin_src rust
+#[error("Dimension mismatch: query has {query} dimensions but index has {index} dimensions")]
+DimensionMismatch { query: usize, index: usize },
+#+end_src
+
+** 2. Change =VectorIndex::search()= to return =Result=
+In =crates/pi-code-vectors/src/index.rs=, change =search= signature from:
+#+begin_src rust
+pub fn search(&self, query_vector: &[f32], limit: usize) -> Vec<VectorSearchHit>
+#+end_src
+to:
+#+begin_src rust
+pub fn search(&self, query_vector: &[f32], limit: usize) -> Result<Vec<VectorSearchHit>>
+#+end_src
+
+- Empty index: return =Ok(Vec::new())= (not an error)
+- Dimension mismatch: return =Err(Error::DimensionMismatch { query: query_vector.len(), index: self.dimensions })=
+- Normal path: return =Ok(hits)=
+
+Update the existing tests in =index.rs= (6 test calls to =.search()=):
+- =search_returns_correct_top_k=: add =.unwrap()=
+- =search_empty_index_returns_empty=: add =.unwrap()=
+- =search_dimension_mismatch_returns_empty=: change to assert =Err(Error::DimensionMismatch { .. })=
+- =persistence_round_trip=: add =.unwrap()=
+- =identical_vectors_have_similarity_1=: add =.unwrap()=
+
+** 3. Update =graph_search()= caller in =pi-code-graph=
+In =crates/pi-code-graph/src/query.rs= line 118, change:
+#+begin_src rust
+let vector_hits = vector_index.search(qv, limit * 2);
+#+end_src
+to:
+#+begin_src rust
+let vector_hits = vector_index.search(qv, limit * 2).unwrap_or_default();
+#+end_src
+This gracefully degrades to BM25-only search on dimension mismatch (the build-time validation prevents this from happening with correctly built indexes, but this is defense-in-depth).
+
+Also update =crates/pi-code-graph/src/search.rs= line 249 (test code) to add =.unwrap()=.
+
+** 4. Validate in =build_semantic_index()=
+In =crates/pi-natives/src/code_graph.rs=, after the =embed_batch= call:
+#+begin_src rust
+let vectors = embedding_worker::embed_batch(&texts, None)?;
+if vectors.len() != chunks.len() {
+    return Err(Error::from_reason(format!(
+        "Embedding worker returned {} vectors for {} chunks",
+        vectors.len(),
+        chunks.len()
+    )));
+}
+let dimensions = vectors.first().map_or(768, Vec::len);
+if let Some(bad) = vectors.iter().find(|v| v.len() != dimensions) {
+    return Err(Error::from_reason(format!(
+        "Embedding worker returned inconsistent dimensions: expected {dimensions}, got {}",
+        bad.len()
+    )));
+}
+#+end_src
+
+** 5. Validate in =embed_batch()=
+In =crates/pi-natives/src/embedding_worker.rs=, in =embed_batch()= before returning vectors, add dimension consistency validation:
+#+begin_src rust
+let vectors = response
+    .vectors
+    .ok_or_else(|| worker_error("worker response missing `vectors` field"))?;
+if let Some(first_len) = vectors.first().map(Vec::len) {
+    if let Some(bad) = vectors.iter().find(|v| v.len() != first_len) {
+        return Err(worker_error(format!(
+            "worker returned inconsistent vector dimensions: expected {first_len}, got {}",
+            bad.len()
+        )));
+    }
+}
+Ok(vectors)
+#+end_src
+
+* Verification
+** =cargo check -p pi-code-vectors= passes.
+** =cargo check -p pi-code-graph --features semantic= passes.
+** =cargo check -p pi-natives= passes.
+** =cargo test -p pi-code-vectors= — all existing tests pass (with updated assertions).
+** =cargo clippy -p pi-code-vectors -p pi-code-graph -p pi-natives= clean.
+
+* Sub-outline
+1. Add =DimensionMismatch= variant to =pi-code-vectors/src/error.rs=
+2. Change =VectorIndex::search= return type and update tests in =pi-code-vectors/src/index.rs=
+3. Update callers in =pi-code-graph/src/query.rs= and =pi-code-graph/src/search.rs=
+4. Add validation in =pi-natives/src/code_graph.rs= =build_semantic_index()=
+5. Add validation in =pi-natives/src/embedding_worker.rs= =embed_batch()=
+
+Steps 1-2 must be done first (API change), then 3 (caller update), then 4-5 (new validation).

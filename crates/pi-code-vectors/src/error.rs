@@ -9,6 +9,8 @@ pub enum Error {
 	Serialization(#[from] bincode::Error),
 	#[error("Chunking error: {0}")]
 	Chunking(String),
+	#[error("Vector dimension mismatch: expected {expected}, got {actual}")]
+	DimensionMismatch { expected: usize, actual: usize },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

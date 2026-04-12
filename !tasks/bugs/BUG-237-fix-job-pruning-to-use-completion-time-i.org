@@ -1,0 +1,107 @@
+#+TITLE: Fix job pruning to use completion time instead of start time
+#+STATE: DONE
+#+SESSION_ID: 14b799f1a726d3bb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-17-41-276Z_14b799f1a726d3bb.jsonl]]
+#+CUSTOM_ID: BUG-237-fix-job-pruning-to-use-completion-time-i
+#+EFFORT: trivial
+#+PRIORITY: #B
+#+LAYER: agent
+
+NOTE [2026-04-12]: Implemented in packages/coding-agent/src/async/job-manager.ts by recording endTime and pruning recent jobs by completion time.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-064-audit-implementation:
+
+ - What: Cross-target worker naming uses the host platform instead of the target platform.
+     - Where: packages/natives/scripts/build-native.ts, around const exeSuffix = process.platform === "win32" ? ".exe" : "";
+     - Why: Cross-compiling a Windows worker from Linux/macOS will install it without .exe, so post-build lookup and embedding can miss the worker even though the build succeeded.
+     - Effort: trivial
+ - What: Worker runtime discovery does not cover every path the native addon loader can use.
+     - Where: crates/pi-natives/src/embedding_worker.rs (worker_candidates() / versioned_native_dir()), compared with packages/natives/src/native.ts (compiledCandidates includes userDataDir)
+     - Why: If the addon is loaded from the userDataDir fallback, the worker is not searched there, so semantic features can fail even though the addon itself loads successfully.
+     - Effort: small
+ - What: Conversation cache eviction is FIFO, not activity-aware.
+     - Where: packages/ai/src/providers/cursor.ts, setConversationCacheEntry(...) near the top of the file
+     - Why: Updating an existing Map entry does not refresh insertion order, so an older but still-active conversation can be evicted first after the 21st conversation ID appears, causing
+ unexpected loss of cached state/blob data mid-session.
+     - Effort: small
+ - What: Semantic index construction trusts worker output shape without validating it.
+     - Where: crates/pi-natives/src/code_graph.rs, build_semantic_index(...) and semantic search query-vector handling
+     - Why: If the worker returns fewer vectors than chunks, or vectors with inconsistent dimensions, the code silently truncates via zip or accepts bad dimensions. Because PI_EMBEDDING_WORKER
+ is overrideable, this is externally reachable and can yield a corrupt vector cache while reporting success.
+     - Effort: small
+ - What: Pending-delivery capping silently drops completion notifications.
+     - Where: packages/coding-agent/src/async/job-manager.ts, #enqueueDelivery() and the failed-delivery requeue path in #runDeliveryLoop()
+     - Why: When the queue exceeds 200, oldest deliveries are discarded with no log or surfaced state change. The job record remains, but the caller can miss the automatic completion delivery
+ and perceive the job result as lost.
+     - Effort: small
+ - What: Finished-job pruning uses startTime rather than completion time.
+     - Where: packages/coding-agent/src/async/job-manager.ts, #pruneCompletedJobs()
+     - Why: A long-running job that just completed can be pruned before a short job that completed much earlier, which makes “recent jobs” less truthful and can hide the freshest result under
+ pressure.
+     - Effort: trivial
+ - What: Automated coverage does not fully exercise the worker IPC contract from the pi-natives side.
+     - Where: crates/pi-natives/src/code_graph.rs tests and crates/pi-natives/src/embedding_worker.rs
+     - Why: The missing-worker error path is covered, but successful semantic indexing, malformed worker responses, and worker restart-after-failure behavior are only manually verified. A
+ protocol drift between worker and host could pass cargo test and break runtime behavior.
+     - Effort: medium
+
+* Problem
+=#pruneCompletedJobs()= (lines 305-316) sorts finished jobs by =startTime= (ascending) and removes the oldest. A long-running job that just completed can be pruned before a short job that completed much earlier. This makes "recent jobs" less truthful and can hide the freshest result under pressure.
+
+* File
+=packages/coding-agent/src/async/job-manager.ts=
+
+* Changes
+
+** 1. Add =endTime= field to =AsyncJob= interface
+At line 17, add:
+#+begin_src typescript
+endTime?: number;
+#+end_src
+
+** 2. Set =endTime= at all terminal status transitions
+There are three places where job status transitions to a terminal state:
+- Line 132: =job.status = "completed"= — add =job.endTime = Date.now();= before this line
+- Line 143: =job.status = "failed"= — add =job.endTime = Date.now();= before this line
+- Line 158: =job.status = "cancelled"= — add =job.endTime = Date.now();= before this line
+- Line 220: =job.status = "cancelled"= (in =cancelAll()=) — add =job.endTime = Date.now();= before this line
+
+Also set =endTime= at lines 127-130 (early return when already cancelled during completion):
+#+begin_src typescript
+if (job.status === "cancelled") {
+    job.resultText = text;
+    job.endTime ??= Date.now();
+    this.#scheduleEviction(id);
+    return;
+}
+#+end_src
+And similarly at lines 137-140 (early return when already cancelled during failure):
+#+begin_src typescript
+if (job.status === "cancelled") {
+    job.errorText = error instanceof Error ? error.message : String(error);
+    job.endTime ??= Date.now();
+    this.#scheduleEviction(id);
+    return;
+}
+#+end_src
+
+** 3. Sort by =endTime= in =#pruneCompletedJobs()=
+Change line 308:
+#+begin_src typescript
+// Before:
+.sort((a, b) => a.startTime - b.startTime)
+// After:
+.sort((a, b) => (a.endTime ?? a.startTime) - (b.endTime ?? b.startTime))
+#+end_src
+
+The fallback to =startTime= handles any edge case where =endTime= was not set (should not happen for finished jobs, but is defensive).
+
+* Verification
+** =bun check:ts= passes.
+** Verify: every code path that sets =job.status= to a terminal value (=completed=, =failed=, =cancelled=) also sets =job.endTime=.
+** Verify: =#pruneCompletedJobs()= sorts by =endTime=.
+
+* Coordination
+This item adds =endTime= to =AsyncJob=. The sibling delivery-queue item also adds =deliveryDropped= to =AsyncJob=. Both modify the same interface — the implementer should apply both additions together if working on the same file.

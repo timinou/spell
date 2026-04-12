@@ -1,0 +1,97 @@
+#+TITLE: Add userDataDir fallback to embedding worker discovery
+#+STATE: DONE
+#+SESSION_ID: 14b799f1a726d3bb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-17-41-276Z_14b799f1a726d3bb.jsonl]]
+#+CUSTOM_ID: BUG-234-add-userdatadir-fallback-to-embedding-wo
+#+EFFORT: small
+#+PRIORITY: #A
+#+LAYER: native
+
+NOTE [2026-04-12]: Implemented in crates/pi-natives/src/embedding_worker.rs by adding the user data native dir fallback to worker candidate discovery.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-064-audit-implementation:
+
+ - What: Cross-target worker naming uses the host platform instead of the target platform.
+     - Where: packages/natives/scripts/build-native.ts, around const exeSuffix = process.platform === "win32" ? ".exe" : "";
+     - Why: Cross-compiling a Windows worker from Linux/macOS will install it without .exe, so post-build lookup and embedding can miss the worker even though the build succeeded.
+     - Effort: trivial
+ - What: Worker runtime discovery does not cover every path the native addon loader can use.
+     - Where: crates/pi-natives/src/embedding_worker.rs (worker_candidates() / versioned_native_dir()), compared with packages/natives/src/native.ts (compiledCandidates includes userDataDir)
+     - Why: If the addon is loaded from the userDataDir fallback, the worker is not searched there, so semantic features can fail even though the addon itself loads successfully.
+     - Effort: small
+ - What: Conversation cache eviction is FIFO, not activity-aware.
+     - Where: packages/ai/src/providers/cursor.ts, setConversationCacheEntry(...) near the top of the file
+     - Why: Updating an existing Map entry does not refresh insertion order, so an older but still-active conversation can be evicted first after the 21st conversation ID appears, causing
+ unexpected loss of cached state/blob data mid-session.
+     - Effort: small
+ - What: Semantic index construction trusts worker output shape without validating it.
+     - Where: crates/pi-natives/src/code_graph.rs, build_semantic_index(...) and semantic search query-vector handling
+     - Why: If the worker returns fewer vectors than chunks, or vectors with inconsistent dimensions, the code silently truncates via zip or accepts bad dimensions. Because PI_EMBEDDING_WORKER
+ is overrideable, this is externally reachable and can yield a corrupt vector cache while reporting success.
+     - Effort: small
+ - What: Pending-delivery capping silently drops completion notifications.
+     - Where: packages/coding-agent/src/async/job-manager.ts, #enqueueDelivery() and the failed-delivery requeue path in #runDeliveryLoop()
+     - Why: When the queue exceeds 200, oldest deliveries are discarded with no log or surfaced state change. The job record remains, but the caller can miss the automatic completion delivery
+ and perceive the job result as lost.
+     - Effort: small
+ - What: Finished-job pruning uses startTime rather than completion time.
+     - Where: packages/coding-agent/src/async/job-manager.ts, #pruneCompletedJobs()
+     - Why: A long-running job that just completed can be pruned before a short job that completed much earlier, which makes “recent jobs” less truthful and can hide the freshest result under
+ pressure.
+     - Effort: trivial
+ - What: Automated coverage does not fully exercise the worker IPC contract from the pi-natives side.
+     - Where: crates/pi-natives/src/code_graph.rs tests and crates/pi-natives/src/embedding_worker.rs
+     - Why: The missing-worker error path is covered, but successful semantic indexing, malformed worker responses, and worker restart-after-failure behavior are only manually verified. A
+ protocol drift between worker and host could pass cargo test and break runtime behavior.
+     - Effort: medium
+
+* Problem
+The TypeScript native addon loader (=packages/natives/src/native.ts=) searches =userDataDir= as a fallback path for compiled binaries:
+- Linux/macOS: =~/.local/bin=
+- Windows: =%LOCALAPPDATA%/spell= (fallback: =~/AppData/Local/spell=)
+
+The Rust embedding worker discovery (=crates/pi-natives/src/embedding_worker.rs=, =worker_candidates()=) does NOT search this directory. If the addon loads from =userDataDir=, the worker binary at the same location is invisible, breaking semantic features.
+
+* File
+=crates/pi-natives/src/embedding_worker.rs=
+
+* Change
+** Add a =user_data_dir()= helper function matching =native.ts= lines 43-46:
+#+begin_src rust
+fn user_data_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let base = env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home_dir().map(|h| h.join("AppData/Local")).unwrap_or_default());
+        Some(base.join("spell"))
+    }
+    #[cfg(not(windows))]
+    {
+        home_dir().map(|h| h.join(".local/bin"))
+    }
+}
+#+end_src
+** Add =user_data_dir()= as a candidate in =worker_candidates()= after the =versioned_native_dir= candidate:
+#+begin_src rust
+if let Some(user_dir) = user_data_dir() {
+    push(user_dir.join(WORKER_BINARY_NAME));
+}
+#+end_src
+
+* Reference: TypeScript Paths
+=packages/natives/src/native.ts= lines 43-46:
+- =process.platform === "win32" ? path.join(Bun.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "spell") : path.join(os.homedir(), ".local", "bin")=
+- This path is included in =compiledCandidates= (line 67) for compiled binary builds.
+
+* Verification
+** =cargo check -p pi-natives= passes.
+** =cargo clippy -p pi-natives= passes.
+** Verify =worker_candidates()= now returns 5 candidate paths (dev + addon + exe + versioned + userdata) by reviewing the function body.
+** On Windows: ensure =LOCALAPPDATA= is consulted first, with =~/AppData/Local= as fallback.
+
+* Edge Cases
+- =home_dir()= returns None on systems without HOME/USERPROFILE: =user_data_dir()= returns None, candidate is skipped (no crash).
+- On Windows with empty =LOCALAPPDATA= and no USERPROFILE, the =unwrap_or_default()= on =home_dir()= yields an empty PathBuf — the join still works but produces a non-existent path, which is harmlessly skipped during candidate iteration.

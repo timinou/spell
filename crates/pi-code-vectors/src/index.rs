@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 
 /// A single entry in the vector index mapping a graph node to its embedding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,9 +52,15 @@ impl VectorIndex {
 	///
 	/// Since vectors are pre-normalized, cosine similarity reduces to dot
 	/// product.
-	pub fn search(&self, query_vector: &[f32], limit: usize) -> Vec<VectorSearchHit> {
-		if self.entries.is_empty() || query_vector.len() != self.dimensions {
-			return Vec::new();
+	pub fn search(&self, query_vector: &[f32], limit: usize) -> Result<Vec<VectorSearchHit>> {
+		if self.entries.is_empty() {
+			return Ok(Vec::new());
+		}
+		if query_vector.len() != self.dimensions {
+			return Err(Error::DimensionMismatch {
+				expected: self.dimensions,
+				actual:   query_vector.len(),
+			});
 		}
 
 		// Normalize the query vector.
@@ -73,7 +79,7 @@ impl VectorIndex {
 		// Partial sort: only need top-k.
 		hits.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
 		hits.truncate(limit);
-		hits
+		Ok(hits)
 	}
 
 	/// Number of indexed vectors.
@@ -153,7 +159,7 @@ mod tests {
 		let index = VectorIndex::new(entries, 3);
 
 		let query = vec![0.6, 0.8, 0.0];
-		let hits = index.search(&query, 2);
+		let hits = index.search(&query, 2).expect("search should succeed");
 		assert_eq!(hits.len(), 2);
 		// Entry 2 (0.7, 0.7, 0.1) should be closest to (0.6, 0.8, 0.0).
 		assert_eq!(hits[0].node_index, 2);
@@ -164,17 +170,20 @@ mod tests {
 	#[test]
 	fn search_empty_index_returns_empty() {
 		let index = VectorIndex::new(Vec::new(), 3);
-		let hits = index.search(&[1.0, 0.0, 0.0], 5);
+		let hits = index
+			.search(&[1.0, 0.0, 0.0], 5)
+			.expect("search should succeed");
 		assert!(hits.is_empty());
 	}
 
 	#[test]
-	fn search_dimension_mismatch_returns_empty() {
+	fn search_dimension_mismatch_returns_error() {
 		let entries = vec![make_entry(0, vec![1.0, 0.0, 0.0])];
 		let index = VectorIndex::new(entries, 3);
-		// Query has wrong dimensions.
-		let hits = index.search(&[1.0, 0.0], 5);
-		assert!(hits.is_empty());
+		let error = index
+			.search(&[1.0, 0.0], 5)
+			.expect_err("mismatched query dimensions should fail");
+		assert!(matches!(error, Error::DimensionMismatch { expected: 3, actual: 2 }));
 	}
 
 	#[test]
@@ -195,7 +204,7 @@ mod tests {
 		// Restored index should produce identical search results.
 		let restored = VectorIndex::from_persisted(loaded);
 		let query = vec![1.0, 0.0, 0.0];
-		let hits = restored.search(&query, 1);
+		let hits = restored.search(&query, 1).expect("search should succeed");
 		assert_eq!(hits[0].node_index, 0);
 	}
 
@@ -211,7 +220,9 @@ mod tests {
 	fn identical_vectors_have_similarity_1() {
 		let entries = vec![make_entry(0, vec![1.0, 2.0, 3.0])];
 		let index = VectorIndex::new(entries, 3);
-		let hits = index.search(&[1.0, 2.0, 3.0], 1);
+		let hits = index
+			.search(&[1.0, 2.0, 3.0], 1)
+			.expect("search should succeed");
 		assert!(
 			(hits[0].score - 1.0).abs() < 1e-5,
 			"identical vectors should have cosine similarity ~1.0"

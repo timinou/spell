@@ -346,18 +346,48 @@ fn build_semantic_index(graph: &CodeGraph, cache: &CacheStore) -> napi::Result<u
 	}
 	let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
 	let vectors = embedding_worker::embed_batch(&texts, None)?;
-	let dimensions = vectors.first().map_or(768, Vec::len);
-	let entries: Vec<pi_code_vectors::VectorEntry> = chunks
-		.iter()
-		.zip(vectors)
-		.map(|(c, v)| pi_code_vectors::VectorEntry { node_index: c.node_index, vector: v })
-		.collect();
+	let (entries, dimensions) = validate_worker_vectors(&chunks, vectors)?;
 	let count = entries.len();
 	let vector_index = pi_code_vectors::VectorIndex::new(entries, dimensions);
 	let fingerprint_hash = compute_fingerprint_hash(cache);
 	let persisted = vector_index.to_persisted("jina-embeddings-v2-base-code", fingerprint_hash);
 	save_vector_cache(cache, &persisted)?;
 	Ok(count)
+}
+
+fn validate_worker_vectors(
+	chunks: &[pi_code_graph::ChunkResult],
+	vectors: Vec<Vec<f32>>,
+) -> napi::Result<(Vec<pi_code_vectors::VectorEntry>, usize)> {
+	if vectors.len() != chunks.len() {
+		return Err(Error::from_reason(format!(
+			"Embedding worker returned {} vectors for {} chunks",
+			vectors.len(),
+			chunks.len()
+		)));
+	}
+	let dimensions = vectors.first().map_or(0, Vec::len);
+	if dimensions == 0 {
+		return Err(Error::from_reason(
+			"Embedding worker returned zero-dimension vectors".to_string(),
+		));
+	}
+	for (index, vector) in vectors.iter().enumerate() {
+		if vector.len() != dimensions {
+			return Err(Error::from_reason(format!(
+				"Embedding worker returned inconsistent vector dimensions: expected {dimensions}, got \
+				 {} at index {index}",
+				vector.len()
+			)));
+		}
+	}
+
+	let entries = chunks
+		.iter()
+		.zip(vectors)
+		.map(|(chunk, vector)| pi_code_vectors::VectorEntry { node_index: chunk.node_index, vector })
+		.collect();
+	Ok((entries, dimensions))
 }
 
 fn graph_fingerprint_hash(cache: &CacheStore) -> Option<u64> {
@@ -586,11 +616,15 @@ fn append_levels(sections: &mut Vec<String>, levels: &[GraphTraversalLevel], lim
 
 #[cfg(test)]
 mod tests {
-	use std::{env, fs, path::PathBuf, sync::Mutex};
+	use std::{
+		env,
+		ffi::OsString,
+		fs,
+		path::{Path, PathBuf},
+		sync::MutexGuard,
+	};
 
 	use super::*;
-
-	static TEST_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 	fn fixture_root(name: &str) -> PathBuf {
 		let unique = std::time::SystemTime::now()
@@ -635,6 +669,73 @@ mod tests {
 		)
 	}
 
+	fn mock_worker_path() -> PathBuf {
+		let bin_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("test-bin");
+		#[cfg(windows)]
+		{
+			return bin_dir.join("mock_embedding_worker.cmd");
+		}
+		#[cfg(not(windows))]
+		{
+			bin_dir.join("mock_embedding_worker.js")
+		}
+	}
+
+	fn temp_state_file(name: &str) -> PathBuf {
+		let unique = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.expect("time should be monotonic")
+			.as_nanos();
+		env::temp_dir()
+			.join(format!("pi-natives-code-graph-{name}-{unique}-{}.state", std::process::id()))
+	}
+
+	struct MockWorkerEnv {
+		_guard:          MutexGuard<'static, ()>,
+		original_worker: Option<OsString>,
+		original_mode:   Option<OsString>,
+		original_state:  Option<OsString>,
+	}
+
+	impl MockWorkerEnv {
+		fn new(mode: &str, state_file: Option<&Path>) -> Self {
+			let guard = crate::embedding_worker::lock_test_env();
+			let original_worker = env::var_os("PI_EMBEDDING_WORKER");
+			let original_mode = env::var_os("PI_TEST_EMBEDDING_WORKER_MODE");
+			let original_state = env::var_os("PI_TEST_EMBEDDING_WORKER_STATE_FILE");
+			unsafe {
+				env::set_var("PI_EMBEDDING_WORKER", mock_worker_path());
+				env::set_var("PI_TEST_EMBEDDING_WORKER_MODE", mode);
+				match state_file {
+					Some(path) => env::set_var("PI_TEST_EMBEDDING_WORKER_STATE_FILE", path),
+					None => env::remove_var("PI_TEST_EMBEDDING_WORKER_STATE_FILE"),
+				}
+			}
+			crate::embedding_worker::reset_for_tests();
+			Self { _guard: guard, original_worker, original_mode, original_state }
+		}
+	}
+
+	impl Drop for MockWorkerEnv {
+		fn drop(&mut self) {
+			unsafe {
+				match &self.original_worker {
+					Some(value) => env::set_var("PI_EMBEDDING_WORKER", value),
+					None => env::remove_var("PI_EMBEDDING_WORKER"),
+				}
+				match &self.original_mode {
+					Some(value) => env::set_var("PI_TEST_EMBEDDING_WORKER_MODE", value),
+					None => env::remove_var("PI_TEST_EMBEDDING_WORKER_MODE"),
+				}
+				match &self.original_state {
+					Some(value) => env::set_var("PI_TEST_EMBEDDING_WORKER_STATE_FILE", value),
+					None => env::remove_var("PI_TEST_EMBEDDING_WORKER_STATE_FILE"),
+				}
+			}
+			crate::embedding_worker::reset_for_tests();
+		}
+	}
+
 	#[test]
 	fn index_without_semantic_leaves_vector_cache_absent() {
 		let root = fixture_root("plain-index");
@@ -671,9 +772,7 @@ mod tests {
 
 	#[test]
 	fn semantic_index_reports_worker_override_errors_without_crashing() {
-		let _guard = TEST_ENV_LOCK
-			.lock()
-			.expect("test lock should not be poisoned");
+		let _guard = crate::embedding_worker::lock_test_env();
 		let root = fixture_root("missing-worker");
 		let missing_worker = root.join("pi-embedding-worker-missing");
 		let original = env::var_os("PI_EMBEDDING_WORKER");
@@ -709,6 +808,109 @@ mod tests {
 			},
 		}
 		crate::embedding_worker::reset_for_tests();
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn semantic_index_builds_vector_cache_with_mock_worker() {
+		let root = fixture_root("mock-success");
+		let _env = MockWorkerEnv::new("success", None);
+
+		let result = run_fixture_command(&root, "index", None, Some(true))
+			.expect("semantic index should succeed with mock worker");
+
+		assert!(
+			result.output.contains("vectors indexed"),
+			"semantic index output should confirm vector build: {}",
+			result.output
+		);
+		assert!(
+			result
+				.semantic_status
+				.as_deref()
+				.is_some_and(|status| status.ends_with("vectors indexed")),
+			"semantic status should summarize vector indexing: {:?}",
+			result.semantic_status
+		);
+		assert!(
+			root.join(".spell/graph/workspace-vectors.bin").exists(),
+			"successful semantic indexing should persist the vector cache"
+		);
+
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn semantic_index_rejects_vector_count_mismatch() {
+		let root = fixture_root("short-batch");
+		let _env = MockWorkerEnv::new("short_batch", None);
+
+		let result = run_fixture_command(&root, "index", None, Some(true))
+			.expect("graph index should continue when semantic batch size is malformed");
+
+		assert!(
+			result.output.contains("Embedding worker returned")
+				&& result.output.contains("vectors for")
+				&& result.output.contains("chunks"),
+			"index output should surface the vector count mismatch: {}",
+			result.output
+		);
+		assert!(
+			!root.join(".spell/graph/workspace-vectors.bin").exists(),
+			"failed semantic indexing should not write a vector cache"
+		);
+
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn semantic_index_rejects_inconsistent_vector_dimensions() {
+		let root = fixture_root("dimension-mismatch");
+		let _env = MockWorkerEnv::new("batch_dim_mismatch", None);
+
+		let result = run_fixture_command(&root, "index", None, Some(true))
+			.expect("graph index should continue when semantic batch dimensions are malformed");
+
+		assert!(
+			result.output.contains("inconsistent vector dimensions"),
+			"index output should surface the dimension mismatch: {}",
+			result.output
+		);
+		assert!(
+			!root.join(".spell/graph/workspace-vectors.bin").exists(),
+			"failed semantic indexing should not write a vector cache"
+		);
+
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn semantic_search_falls_back_when_query_vector_dimensions_do_not_match() {
+		let root = fixture_root("query-dimension-mismatch");
+		{
+			let _env = MockWorkerEnv::new("success", None);
+			run_fixture_command(&root, "index", None, Some(true))
+				.expect("semantic index should succeed with mock worker");
+		}
+
+		let _env = MockWorkerEnv::new("query_dim_mismatch", Some(&temp_state_file("query-dim")));
+		let result = run_fixture_command(&root, "search", Some("rateLimit"), Some(true))
+			.expect("semantic search should fall back instead of failing on query dimension mismatch");
+
+		assert!(
+			result.output.contains("rateLimit"),
+			"search output should still return lexical matches when semantic vectors mismatch: {}",
+			result.output
+		);
+		assert!(
+			result
+				.semantic_status
+				.as_deref()
+				.is_some_and(|status| status.contains("hybrid search using")),
+			"semantic status should report cached vectors were available: {:?}",
+			result.semantic_status
+		);
+
 		let _ = fs::remove_dir_all(root);
 	}
 

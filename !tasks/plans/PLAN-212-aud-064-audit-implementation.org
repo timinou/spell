@@ -1,0 +1,109 @@
+#+TITLE: AUD-064 Audit Implementation
+#+STATE: DOING
+#+SESSION_ID: 14b799f1a726d3bb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T10-17-41-276Z_14b799f1a726d3bb.jsonl]]
+#+CUSTOM_ID: PLAN-212-aud-064-audit-implementation
+
+
+
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-064-audit-implementation:
+
+ - What: Cross-target worker naming uses the host platform instead of the target platform.
+     - Where: packages/natives/scripts/build-native.ts, around const exeSuffix = process.platform === "win32" ? ".exe" : "";
+     - Why: Cross-compiling a Windows worker from Linux/macOS will install it without .exe, so post-build lookup and embedding can miss the worker even though the build succeeded.
+     - Effort: trivial
+ - What: Worker runtime discovery does not cover every path the native addon loader can use.
+     - Where: crates/pi-natives/src/embedding_worker.rs (worker_candidates() / versioned_native_dir()), compared with packages/natives/src/native.ts (compiledCandidates includes userDataDir)
+     - Why: If the addon is loaded from the userDataDir fallback, the worker is not searched there, so semantic features can fail even though the addon itself loads successfully.
+     - Effort: small
+ - What: Conversation cache eviction is FIFO, not activity-aware.
+     - Where: packages/ai/src/providers/cursor.ts, setConversationCacheEntry(...) near the top of the file
+     - Why: Updating an existing Map entry does not refresh insertion order, so an older but still-active conversation can be evicted first after the 21st conversation ID appears, causing
+ unexpected loss of cached state/blob data mid-session.
+     - Effort: small
+ - What: Semantic index construction trusts worker output shape without validating it.
+     - Where: crates/pi-natives/src/code_graph.rs, build_semantic_index(...) and semantic search query-vector handling
+     - Why: If the worker returns fewer vectors than chunks, or vectors with inconsistent dimensions, the code silently truncates via zip or accepts bad dimensions. Because PI_EMBEDDING_WORKER
+ is overrideable, this is externally reachable and can yield a corrupt vector cache while reporting success.
+     - Effort: small
+ - What: Pending-delivery capping silently drops completion notifications.
+     - Where: packages/coding-agent/src/async/job-manager.ts, #enqueueDelivery() and the failed-delivery requeue path in #runDeliveryLoop()
+     - Why: When the queue exceeds 200, oldest deliveries are discarded with no log or surfaced state change. The job record remains, but the caller can miss the automatic completion delivery
+ and perceive the job result as lost.
+     - Effort: small
+ - What: Finished-job pruning uses startTime rather than completion time.
+     - Where: packages/coding-agent/src/async/job-manager.ts, #pruneCompletedJobs()
+     - Why: A long-running job that just completed can be pruned before a short job that completed much earlier, which makes “recent jobs” less truthful and can hide the freshest result under
+ pressure.
+     - Effort: trivial
+ - What: Automated coverage does not fully exercise the worker IPC contract from the pi-natives side.
+     - Where: crates/pi-natives/src/code_graph.rs tests and crates/pi-natives/src/embedding_worker.rs
+     - Why: The missing-worker error path is covered, but successful semantic indexing, malformed worker responses, and worker restart-after-failure behavior are only manually verified. A
+ protocol drift between worker and host could pass cargo test and break runtime behavior.
+     - Effort: medium
+
+* Context
+Implements 7 findings from =AUD-064-audit-implementation=, spanning build scripts (worker naming), native crates (worker discovery, semantic validation, IPC tests), the AI provider layer (cache eviction), and the async job manager (delivery observability, pruning).
+
+** Key Decisions
+1. Cross-target naming: one-line fix, =process.platform= → =targetPlatform=
+2. Worker discovery: add =user_data_dir()= to Rust matching TypeScript's =userDataDir= fallback
+3. Cache eviction: delete-then-insert to refresh Map insertion order (no LRU class needed)
+4. Semantic validation: validate at build time (count + dimension) AND change =VectorIndex::search= to return =Result= with =DimensionMismatch= error; caller gracefully degrades via =unwrap_or_default()=
+5. Delivery queue: add logging + =deliveryDropped= flag on =AsyncJob= — keep 200 cap as safety valve
+6. Job pruning: add =endTime= field to =AsyncJob=, set at terminal transitions, sort by it
+7. Worker tests: Rust mock worker binary, controlled via env vars, 8+ test scenarios
+
+** Dependency Structure
+- Items 1-3, 5-6 are fully independent (different files, different packages)
+- Item 4 (semantic validation) changes API in =pi-code-vectors= used by =pi-code-graph= and =pi-natives=
+- Item 7 (tests) depends on item 4 (tests validate the new error paths from validation)
+- Items 5-6 modify the same file and interface — should be executed together or sequentially
+
+* Verification
+After all items are implemented:
+1. =bun check:ts= — TypeScript type checking and Biome linting pass
+2. =cargo check -p pi-code-vectors -p pi-code-graph --features semantic -p pi-natives= — Rust compilation passes
+3. =cargo test -p pi-code-vectors= — vector index tests pass (including updated dimension mismatch test)
+4. =cargo test -p pi-natives= — all existing + new IPC contract tests pass
+5. =cargo clippy -p pi-code-vectors -p pi-code-graph -p pi-natives= — no warnings
+
+* Execution Manifest
+
+** Wave 1 — Independent Fixes (parallel)
+- [[id:BUG-233-fix-cross-target-worker-naming-in-build]] — trivial, build layer
+- [[id:BUG-234-add-userdatadir-fallback-to-embedding-wo]] — small, native layer
+- [[id:BUG-235-fix-conversation-cache-fifo-eviction-to]] — small, AI layer
+- [[id:BUG-236-add-observability-for-delivery-queue-cap]] — small, agent layer
+- [[id:BUG-237-fix-job-pruning-to-use-completion-time-i]] — trivial, agent layer
+
+** Wave 2 — Semantic Validation (depends on wave 1 for pi-code-vectors API stability, but no code dependency)
+- [[id:FEAT-504-validate-worker-output-in-semantic-index]] — small, native layer (3 crates)
+
+** Wave 3 — Test Coverage (depends on FEAT-504)
+- [[id:FEAT-505-add-worker-ipc-contract-tests-for-embedd]] — medium, native layer
+
+
+** Completion [2026-04-12]
+*** Verification
+- `bun test packages/coding-agent/test/async-job-manager.test.ts` — passed (12 tests, 0 failures).
+- `cargo test -p pi-code-vectors` — passed (7 tests, 0 failures).
+- `cargo check -p pi-code-vectors -p pi-code-graph --features semantic -p pi-natives` — passed.
+- `cargo test -p pi-natives` — passed (56 tests, 0 failures).
+- `cargo clippy -p pi-code-vectors -p pi-code-graph -p pi-natives` — passed.
+- `bun check:ts` — failed due existing TypeScript errors outside this plan's touched files: `packages/coding-agent/src/tools/code-result.ts`, `packages/coding-agent/src/tools/code.ts`, and `packages/coding-agent/test/tools/code-result.test.ts`.
+*** Artifacts
+- [[file:crates/pi-natives/test-bin/mock_embedding_worker.js]] — cross-platform mock embedding worker used by the new pi-natives IPC tests.
+- [[file:crates/pi-natives/test-bin/mock_embedding_worker.cmd]] — Windows wrapper for the mock worker fixture.
+*** Deviations
+- Full plan closeout is blocked because `bun check:ts` does not pass in the current workspace for unrelated pre-existing TypeScript errors under `packages/coding-agent/src/tools/` and `packages/coding-agent/test/tools/`.
+- No FUP items were created.
+
+
+*** Verification Addendum
+- `PATH="/home/user/code/ora/spell/node_modules/.bin:$PATH" bun --cwd <clean-worktree-at-96c300b19> check:ts` — failed in a detached clean worktree for this commit on an unrelated pre-existing Biome import-order issue in `packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts`.
+*** Deviations Addendum
+- The earlier dirty-workspace `bun check:ts` failure also reflected unrelated local modifications outside this plan. Clean-worktree verification confirmed the plan commit itself is still blocked by a separate pre-existing TypeScript/Biome issue not introduced by this audit work.
