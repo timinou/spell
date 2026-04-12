@@ -343,6 +343,24 @@ export function buildSystemPromptToolMetadata(
 	);
 }
 
+function normalizeSkillGlobs(globs: string[] | undefined): string[] {
+	return (globs ?? []).map(glob => glob.trim()).filter(glob => glob.length > 0);
+}
+
+async function skillMatchesWorkspace(cwd: string, globs: string[] | undefined): Promise<boolean> {
+	const normalizedGlobs = normalizeSkillGlobs(globs);
+	if (normalizedGlobs.length === 0) return true;
+	for (const glob of normalizedGlobs) {
+		const matcher = new Bun.Glob(glob);
+		try {
+			for await (const _ of matcher.scan({ cwd, onlyFiles: true })) {
+				return true;
+			}
+		} catch {}
+	}
+	return false;
+}
+
 export interface BuildSystemPromptOptions {
 	/** Custom system prompt (replaces default). */
 	customPrompt?: string;
@@ -538,10 +556,16 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		description: tools?.get(name)?.description ?? "",
 	}));
 
-	// Filter skills to only include those with read tool
 	const hasRead = tools?.has("read");
-	const filteredSkills = hasRead ? skills : [];
-
+	const filteredSkills = hasRead
+		? await Promise.all(
+				skills.map(async skill => ({ skill, matches: await skillMatchesWorkspace(resolvedCwd, skill.globs) })),
+			).then(entries =>
+				entries
+					.filter(({ skill, matches }) => matches || normalizeSkillGlobs(skill.globs).length === 0)
+					.map(({ skill }) => skill),
+			)
+		: [];
 	const environment = await logger.timeAsync("getEnvironmentInfo", getEnvironmentInfo);
 	const data = {
 		systemPromptCustomization: systemPromptCustomization ?? "",

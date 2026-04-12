@@ -1,0 +1,40 @@
+PLAN-195 verification summary (2026-04-11)
+
+Implemented files
+- crates/pi-code-engine/build.rs
+- packages/coding-agent/src/extensibility/skills.ts
+- packages/coding-agent/src/lsp/index.ts
+- packages/coding-agent/src/system-prompt.ts
+- packages/coding-agent/test/extensibility/skill-globs.test.ts
+- packages/coding-agent/test/tools/code.test.ts
+- packages/coding-agent/test/tools/lsp-regressions.test.ts
+
+Clean-worktree verification
+- Created detached worktree at /tmp/plan195-verify from HEAD.
+- Applied only the PLAN-195 file diff.
+- cargo check -p pi-code-engine  -> PASS
+- cargo test -p pi-code-engine   -> PASS (56 passed, 0 failed)
+
+Workspace-local focused verification observed earlier in delegated runs
+- bun test packages/coding-agent/test/tools/code.test.ts -> PASS (subagent run)
+- bun test packages/coding-agent/test/tools/lsp-regressions.test.ts -> PASS (subagent run)
+- bun test packages/coding-agent/test/extensibility/skill-globs.test.ts packages/coding-agent/test/skills.test.ts -> PASS (subagent run)
+
+Current workspace blockers
+- bun check:ts is unstable due unrelated ongoing workspace edits outside PLAN-195 (examples observed during reruns: packages/natives/scripts/build-native.ts, packages/natives/src/native.ts, packages/natives/test/org-buffer.test.ts).
+- Current-workspace bun test runs are also blocked by unrelated native-addon churn (example observed: packages/natives/src/embedded-addon.ts missing pi-embedding-worker artifact).
+
+Conclusion
+- PLAN-195 code changes and Rust verification pass in an isolated clean worktree containing only the plan diff.
+- Full workspace TypeScript verification remains blocked by unrelated concurrent changes, so the plan must stay DOING until the workspace is stable enough to rerun the required commands truthfully.
+
+
+Late-arriving background confirmation
+- bun test packages/coding-agent/test/tools/code.test.ts -> PASS (18 pass, 0 fail)
+- This came from completed task job 6-TypstCodeSmoke after the earlier plan report was written.
+- bun test packages/coding-agent/test/extensibility/skill-globs.test.ts packages/coding-agent/test/skills.test.ts -> PASS (29 pass, 0 fail)
+- This came from completed task job 4-SkillGlobs after the earlier plan report was written.
+- cargo check -p pi-code-engine -> PASS (task job 7-BuildRsVersioning)
+- This came from completed task job 7-BuildRsVersioning after the earlier plan report was written.
+- bun test packages/coding-agent/test/tools/lsp-regressions.test.ts -> PASS (task job 5-LspStatusAndTinymist)
+- This came from completed task job 5-LspStatusAndTinymist after the earlier plan report was written.

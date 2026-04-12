@@ -1,0 +1,135 @@
+#+TITLE: Wire skill globs for conditional prompt inclusion
+#+STATE: DONE
+#+SESSION_ID: 14b6ef4f37cdfb5c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-11T21-52-10-463Z_14b6ef4f37cdfb5c.jsonl]]
+#+CUSTOM_ID: FEAT-472-wire-skill-globs-for-conditional-prompt
+#+EFFORT: 2h
+#+PRIORITY: B
+#+LAYER: coding-agent
+
+NOTE [2026-04-12]: Implemented under PLAN-195: skill globs now flow through extensibility and conditional system-prompt inclusion has regression tests.
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-059-audit-implementation:
+
+- **What**: Skill `globs` are parsed but dropped before prompt-building, so the new Typst skill cannot actually auto-activate based on `.typ` file presence.
+  - **Where**: `packages/coding-agent/src/extensibility/skills.ts` around the `CapabilitySkill -> Skill` mapping (`loadSkillsFromDir` and `loadSkills` result assembly); downstream consumers in `packages/coding-agent/src/sdk.ts` / `packages/coding-agent/src/system-prompt.ts`
+  - **Why**: This leaves a core plan contract only partially met: the Typst skill exists, but current runtime skill loading cannot use `globs: ["**/*.typ"]` to load it conditionally. The frontmatter is effectively decorative for the execution path that builds prompts.
+  - **Effort**: `medium`
+
+- **What**: `lsp status` reports configured servers as “Active language servers,” even when no client has been started.
+  - **Where**: `packages/coding-agent/src/lsp/index.ts` around the `action === "status"` branch
+  - **Why**: After adding `.git` to Typst root markers, this can now report `tinymist` as active before any Typst file has actually initialized a client. That is a contract violation in the operator-facing surface: callers cannot distinguish “configured” from “running.”
+  - **Effort**: `trivial`
+
+- **What**: There is no automated regression test for the `.git`-based Tinymist activation path.
+  - **Where**: `packages/coding-agent/test/` LSP test coverage; specifically no test around `loadConfig()` / `getServerForFile()` for `.typ` files in a repo without `typst.toml`
+  - **Why**: Current Typst LSP support depends on a deliberate deviation from the original plan (`rootMarkers: ["typst.toml", ".git"]`). Without a test, a future cleanup could silently remove `.git` and break Typst LSP in ordinary repos.
+  - **Effort**: `small`
+
+- **What**: Grammar generation still resolves Typst node-types by the first matching cargo-registry prefix, not the dependency version Cargo actually selected.
+  - **Where**: `crates/pi-code-engine/build.rs`, `GRAMMARS` Typst entry and `find_node_types_json()`
+  - **Why**: If multiple `codebook-tree-sitter-typst-*` versions exist in the cargo cache, generated rules can drift from the linked parser crate. That creates a non-deterministic failure mode that depends on machine state, not source state.
+  - **Effort**: `medium`
+
+- **What**: There is no TypeScript-side smoke test that the `code` tool surface handles a real `.typ` file end-to-end.
+  - **Where**: `packages/coding-agent/test/tools/code.test.ts`
+  - **Why**: Rust tests prove native Typst outline/navigation behavior, but they do not protect the user-facing `code` tool boundary. A future wiring/rendering regression in `packages/coding-agent` could break Typst support while `pi-code-engine` tests still pass.
+  - **Effort**: `small`
+
+* Context
+
+Skill frontmatter supports =globs= (e.g., =["**/*.typ"]=) and the discovery system parses them, but the extensibility =Skill= interface drops them during the =CapabilitySkill → Skill= mapping. The system prompt builder includes ALL discovered skills unconditionally. This means skills like the Typst skill waste prompt tokens in projects that have no =.typ= files.
+
+No existing skills in =.spell/skills/= currently set =globs=, so adding conditional filtering is backward-compatible. The Typst skill (=.spell/skills/typst/SKILL.md=) is the first to use it.
+
+* Design
+
+** 1. Add =globs= to extensibility Skill interface
+
+File: =packages/coding-agent/src/extensibility/skills.ts=, lines 11-19.
+
+Current interface:
+#+begin_src typescript
+export interface Skill {
+    name: string;
+    description: string;
+    filePath: string;
+    baseDir: string;
+    source: string;
+    _source?: SourceMeta;
+}
+#+end_src
+
+Add:
+#+begin_src typescript
+export interface Skill {
+    name: string;
+    description: string;
+    filePath: string;
+    baseDir: string;
+    source: string;
+    globs?: string[];
+    _source?: SourceMeta;
+}
+#+end_src
+
+** 2. Carry globs through both mapping sites
+
+In =loadSkillsFromDir= (lines 53-60), add =globs= to the mapped object:
+#+begin_src typescript
+globs: capSkill.frontmatter?.globs,
+#+end_src
+
+In =loadSkills= main mapping (lines 167-174), same addition:
+#+begin_src typescript
+globs: capSkill.frontmatter?.globs,
+#+end_src
+
+** 3. Filter in system-prompt.ts
+
+File: =packages/coding-agent/src/system-prompt.ts=. After skills are loaded (around line 471 where =skills= is assigned), filter them:
+
+#+begin_src typescript
+// Filter skills by globs: skills with globs only load when matching files exist
+skills = skills.filter(skill => {
+    if (!skill.globs || skill.globs.length === 0) return true;
+    return skill.globs.some(pattern => {
+        const scan = new Bun.Glob(pattern).scanSync({ cwd: resolvedCwd, onlyFiles: true });
+        for (const _ of scan) return true;
+        return false;
+    });
+});
+#+end_src
+
+This uses =Bun.Glob.scanSync= with lazy iteration — stops on first match for performance.
+
+** 4. Filtering rules
+
+- =globs= undefined or empty array → always include (backward compatible)
+- =globs= non-empty → include only when at least one file in project cwd matches any pattern
+- No separate =alwaysApply= handling needed — skills that want to always load should not set =globs=
+
+* Verification
+
+** Tests
+
+Add a test in a new file =packages/coding-agent/test/extensibility/skill-globs.test.ts=:
+
+1. *Globs field survives mapping*: Call =loadSkillsFromDir= with a temp dir containing a skill with =globs: ["**/*.typ"]=. Assert returned Skill has =globs= field.
+2. *No-globs skill always passes filter*: Create a Skill without globs, apply the filter logic, assert it passes.
+3. *Glob match includes skill*: Create a TempDir with a =.typ= file and a skill with =globs: ["**/*.typ"]=, apply filter, assert included.
+4. *Glob no-match excludes skill*: Create a TempDir with no =.typ= files, same skill, assert excluded.
+
+** Manual checks
+
+- =bun check:ts= passes
+- =bun test packages/coding-agent/test/extensibility/skill-globs.test.ts= passes
+
+* Sub-outline
+
+1. Add =globs= field to extensibility Skill interface (=skills.ts=)
+2. Carry globs through =loadSkillsFromDir= and =loadSkills= mappings (=skills.ts=)
+3. Add glob-based filtering in =system-prompt.ts=
+4. Add tests proving the contract (=skill-globs.test.ts=)

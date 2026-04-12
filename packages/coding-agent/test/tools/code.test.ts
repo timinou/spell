@@ -134,6 +134,57 @@ describe("coding-agent code tool wiring", () => {
 		);
 	});
 
+	it("smoke-tests Typst outline wiring for .typ files", async () => {
+		const outlinePayload = [
+			{
+				name: '"theme.typ"',
+				kind: "import",
+				line: 1,
+				end_line: 1,
+				column: 1,
+				exported: false,
+				signature: 'import "theme.typ": *',
+			},
+			{
+				name: "title",
+				kind: "let",
+				line: 2,
+				end_line: 2,
+				column: 1,
+				exported: false,
+				signature: "let title =",
+			},
+			{
+				name: "heading.where(level: 1)",
+				kind: "show",
+				line: 3,
+				end_line: 3,
+				column: 1,
+				exported: false,
+				signature: "show heading.where(level: 1):",
+			},
+		];
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: outlinePayload,
+			error: false,
+		});
+		const tool = new CodeTool(createSession({ cwd: "/tmp/test" }));
+		const file = "/tmp/test/docs/report.typ";
+		const result = await tool.execute("tool", { command: "outline", file });
+		const text = result.content.find(c => c.type === "text")?.text ?? "";
+		const parsed = JSON.parse(text);
+
+		expect(parsed).toEqual(outlinePayload);
+		expect(parsed.map((entry: { kind: string }) => entry.kind)).toEqual(["import", "let", "show"]);
+		expect(parsed[2]).toEqual(expect.objectContaining({ name: "heading.where(level: 1)", kind: "show" }));
+		expect(bufferSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				command: "outline",
+				file,
+			}),
+		);
+	});
+
 	it("maps 'buffers' command to 'list' for NAPI", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
 			output: [{ path: "src/main.ts", dirty: false }],
