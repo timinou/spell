@@ -75,6 +75,7 @@ Good — include the function's own `}` so the old closer is consumed.
 ```
 </example>
 
+- Do not use this tool on any code-supported file (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`, `.rs`, `.py`, `.pyi`, `.typ`, `.md`, `.mdx`, `.markdown`, `.org`, `.ex`, `.exs`); use `code edit` instead
 <critical>
 - You **MUST NOT** reformat, reindent, or adjust whitespace; run the formatter instead
 - Every tag **MUST** be copied exactly from the most recent `read` output as `N#ID`

@@ -3,7 +3,7 @@ Performs fuzzy string replacements in files.
 <instruction>
 - Use the smallest edit that uniquely identifies the change
 - If `old_text` is not unique, expand context or set `all: true`
-- Prefer editing existing files
+- Prefer editing existing unsupported plain-text files
 </instruction>
 
 <output>
@@ -12,6 +12,7 @@ Returns success or failure; failures report missing text or ambiguous matches.
 
 <critical>
 - Read the file at least once before editing
+- Do not use this tool on any code-supported file (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`, `.rs`, `.py`, `.pyi`, `.typ`, `.md`, `.mdx`, `.markdown`, `.org`, `.ex`, `.exs`); use `code edit` instead
 </critical>
 
 <bash-alternatives>

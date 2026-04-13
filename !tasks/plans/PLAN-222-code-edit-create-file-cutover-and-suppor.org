@@ -1,0 +1,127 @@
+#+TITLE: Code edit create-file cutover and supported-file enforcement
+#+STATE: DONE
+#+SESSION_ID: 14b97effd0e6a60a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T21-36-55-619Z_14b97effd0e6a60a.jsonl]]
+#+CUSTOM_ID: PLAN-222-code-edit-create-file-cutover-and-suppor
+#+EFFORT: 16h
+#+LAYER: coding-agent pi-natives pi-code-engine
+#+PRIORITY: #A
+
+* Initial Message
+
+make 'code edit' able to write new files (show me how). forbid edit and write usage if the file is supported by code edit. propose improvement to make code edit excellent.
+
+* Context
+Tooling note: the current `org` tool does not accept `INIT` and only supports `ITEM`, `DOING`, `DONE`, `BLOCKED`, `CANCELLED`, and `REVIEW`. This orchestration record is therefore stored as `ITEM` and should be treated as the plan-mode `INIT` equivalent for handoff.
+
+User request: make `code edit` able to write new files, show the exact API shape, forbid `edit` and `write` usage when the file is supported by `code edit`, and propose one improvement that would make `code edit` excellent.
+
+Repository facts verified before planning:
+- `packages/coding-agent/src/tools/code.ts` currently forwards `command:"edit"` to native `executeCodeBuffer(...)` and auto-saves after successful `edit` / `undo` / `redo`.
+- `crates/pi-natives/src/code_buffer.rs` currently routes file-local commands through `buffer_registry().open(&path)`, so a missing file fails before edit begins.
+- `crates/pi-code-engine/src/buffer.rs` implements `CodeBuffer::open()` with `fs::metadata(path)?` + `fs::read(path)?`; `CodeBuffer::save()` writes the buffer path to disk but does not itself establish missing-file creation semantics.
+- `packages/coding-agent/src/patch/index.ts` (`edit`) and `packages/coding-agent/src/tools/write.ts` (`write`) currently lack any block against code-supported extensions.
+- `packages/coding-agent/src/prompts/tools/code.md` documents only existing declaration/body edits; `packages/coding-agent/src/prompts/system/system-prompt.md` still presents `edit`/`write` as generic fallback tools.
+
+** Settled Decisions
+1. New-file support will use explicit `code edit { file, operation: "create", content }`.
+2. `operation:"create"` is missing-file only and whole-file only in v1. If the path exists, error and point callers to `replace` / `replace-body`. Reject unrelated targeting fields (`symbol`, `line`, `patches`, `edits`) for truthfulness.
+3. Supported-file gating will use the same NAPI-supported extension set that `code` already uses today. Extract a single source of truth in TypeScript rather than duplicating extension lists.
+4. Create must preserve structural-engine semantics rather than delegating to `write`: keep buffer history/diff/undo coherent, then run the existing formatter-before-save path, then persist.
+5. Create should preserve current write ergonomics by creating missing parent directories before save.
+6. `edit` and `write` will hard-error on supported files with actionable replacement examples; no silent auto-reroute.
+7. Proposed excellence improvement: make `code edit` failures self-recovering by returning structured recovery hints (closest declarations / suggested next commands) for target-resolution and patch-match failures.
+
+** Recommended approach
+Tradeoffs considered:
+- Explicit `operation:"create"` vs dedicated `command:"create"`: explicit op keeps all file mutations under one mental model and reuses existing `command:"edit"` plumbing.
+- Explicit `create` vs implicit missing-file `replace`: explicit is better because missing-file creation is a materially different operation with different validation and error cases.
+- Runtime hard-block vs prompt-only guidance for `edit`/`write`: runtime hard-block is required; otherwise the policy can be bypassed and source-of-truth remains ambiguous.
+
+Recommendation:
+1. Build native create support first (`pi-code-engine` + `pi-natives` + `code.ts` + result/docs/tests).
+2. Then cut over supported-file `edit`/`write` calls to hard errors using a shared support detector and matching prompt docs.
+3. Keep the excellence work as a follow-up after the cutover so the mandatory path is correct before optimizing failure recovery.
+
+** How the caller should use it after implementation
+Create a new supported file:
+#+begin_src json
+{
+  "command": "edit",
+  "file": "src/new-module.ts",
+  "operation": "create",
+  "content": [
+    "export function newModule() {",
+    "  return 42;",
+    "}"
+  ]
+}
+#+end_src
+
+Expected behavior:
+- Missing supported file → created, formatted if formatter exists, then saved.
+- Existing file → actionable error telling the caller to use `replace` / `replace-body` instead.
+- Calling `write` on `src/new-module.ts` or `edit` on other supported-code files → actionable error pointing at `code edit`.
+
+** Critical files
+- `packages/coding-agent/src/tools/code.ts`
+- `packages/coding-agent/src/tools/code-result.ts`
+- `packages/coding-agent/src/tools/write.ts`
+- `packages/coding-agent/src/patch/index.ts`
+- `packages/coding-agent/src/prompts/tools/code.md`
+- `packages/coding-agent/src/prompts/tools/write.md`
+- `packages/coding-agent/src/prompts/tools/patch.md`
+- `packages/coding-agent/src/prompts/tools/replace.md`
+- `packages/coding-agent/src/prompts/tools/hashline.md`
+- `packages/coding-agent/src/prompts/system/system-prompt.md`
+- `packages/coding-agent/test/tools/code.test.ts`
+- `packages/coding-agent/test/tools/code-result.test.ts`
+- `packages/coding-agent/test/tools.test.ts`
+- `packages/natives/test/code-buffer.test.ts`
+- `crates/pi-natives/src/code_buffer.rs`
+- `crates/pi-code-engine/src/buffer.rs`
+
+* Verification
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts packages/coding-agent/test/tools.test.ts`
+- `bun test packages/natives/test/code-buffer.test.ts`
+- `cargo test -p pi-code-engine`
+- `cargo test -p pi-natives code_buffer -- --nocapture`
+- `bun check:ts`
+- `bun check:rs`
+
+Manual proof artifacts to collect during execution:
+- one successful `code edit create` artifact for a missing supported file
+- one existing-file rejection artifact for `operation:"create"`
+- one `write` rejection artifact on a supported file
+- one `edit` rejection artifact on a supported file
+- optional follow-up artifact showing self-recovering `code edit` failure hints
+
+* Execution Manifest
+** Wave 1 — native + wrapper create support
+- [[id:PROJ-041-add-code-edit-create-file-operation]]
+
+** Wave 2 — supported-file enforcement cutover
+- [[id:FEAT-539-cut-over-supported-file-edit-and-write-c]]
+
+** Deferred excellence follow-up
+- [[id:FUP-054-make-code-edit-failures-self-recovering]]
+
+** Completion [2026-04-13]
+*** Verification
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts packages/coding-agent/test/tools.test.ts` → passed (`92 pass`, `1 skip`, `0 fail`).
+- `bun run dev:native` → passed; rebuilt `packages/natives/native/pi_natives.dev.node` for manual proof + NAPI bridge verification.
+- `bun test packages/natives/test/code-buffer.test.ts` → passed (`6 pass`, `0 fail`).
+- `cargo test -p pi-code-engine` → passed (`120 passed`, `0 failed`).
+- `cargo test -p pi-natives code_buffer -- --nocapture` → passed (`13 passed`, `0 failed`).
+- `bun check:ts` → passed (`biome check . && tsgo -p tsconfig.json`).
+- `bun check:rs` → passed (`cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings`).
+- Manual proof: exercised the rebuilt dev native addon with `PI_DEV=1` and confirmed `code edit { file, operation: "create", content }` creates/saves a missing `.ts` file, rejects existing-file create, and that `write` / `edit` now hard-error on supported files with actionable `code edit` guidance.
+*** Artifacts
+- Successful `code edit` create proof: [[file:!tasks/plans/plan-artifacts/PLAN-222-code-edit-create-file-cutover-and-suppor/code-edit-create-success.txt]]
+- Existing-file `operation:"create"` rejection proof: [[file:!tasks/plans/plan-artifacts/PLAN-222-code-edit-create-file-cutover-and-suppor/code-edit-create-existing-file-rejection.txt]]
+- `write` rejection on supported file: [[file:!tasks/plans/plan-artifacts/PLAN-222-code-edit-create-file-cutover-and-suppor/write-tool-supported-file-rejection.txt]]
+- `edit` rejection on supported file: [[file:!tasks/plans/plan-artifacts/PLAN-222-code-edit-create-file-cutover-and-suppor/edit-tool-supported-file-rejection.txt]]
+*** Deviations
+- Deferred excellence follow-up intentionally not implemented in this cutover: [[id:FUP-054-make-code-edit-failures-self-recovering]]. Child item left BLOCKED for explicit follow-up.
+
+NOTE [2026-04-13]: Completed create-file cutover, enforced code-edit-only policy for supported files, captured verification/artifacts, and left the deferred excellence follow-up blocked for separate work.

@@ -298,6 +298,13 @@ describe("Coding Agent Tools", () => {
 
 			expect(getTextOutput(result)).toContain("Successfully wrote");
 		});
+		it("should reject code-supported files and point to code edit", async () => {
+			const testFile = path.join(testDir, "write-test.ts");
+			await expect(
+				writeTool.execute("test-call-4-code", { path: testFile, content: "export const value = 1;\n" }),
+			).rejects.toThrow(/The write tool is blocked for code-supported files/);
+		});
+
 		it("should write to a new local:// path under the session local root", async () => {
 			const localPath = "local://handoffs/new-output.json";
 			const content = '{"ok":true}\n';
@@ -328,6 +335,18 @@ describe("Coding Agent Tools", () => {
 			expect(result.details!.diff).toBeDefined();
 			expect(typeof result.details!.diff).toBe("string");
 			expect(result.details!.diff).toContain("testing");
+		});
+
+		it("should reject code-supported files and point to code edit", async () => {
+			const testFile = path.join(testDir, "edit-test.ts");
+			fs.writeFileSync(testFile, "export const value = 1;\n");
+			await expect(
+				editTool.execute("test-call-5-code", {
+					path: testFile,
+					old_text: "value = 1",
+					new_text: "value = 2",
+				}),
+			).rejects.toThrow(/The edit tool is blocked for code-supported files/);
 		});
 
 		it("should fail if text not found", async () => {

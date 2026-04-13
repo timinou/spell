@@ -1,0 +1,65 @@
+#+TITLE: Add code edit create-file operation
+#+STATE: DONE
+#+SESSION_ID: 14b97effd0e6a60a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T21-36-55-619Z_14b97effd0e6a60a.jsonl]]
+#+CUSTOM_ID: PROJ-041-add-code-edit-create-file-operation
+#+EFFORT: 10h
+#+PRIORITY: #A
+#+LAYER: coding-agent pi-natives pi-code-engine
+
+* Initial Message
+
+make 'code edit' able to write new files (show me how). forbid edit and write usage if the file is supported by code edit. propose improvement to make code edit excellent.
+
+* Context
+User request: make `code edit` able to write new files and show the calling shape. Current code proves this is not possible today. `packages/coding-agent/src/tools/code.ts` forwards `command:"edit"` to native `executeCodeBuffer(...)`. Native `crates/pi-natives/src/code_buffer.rs` routes file-local commands through `buffer_registry().open(&path)`, and `crates/pi-code-engine/src/buffer.rs` implements `CodeBuffer::open()` with `fs::metadata(path)?` + `fs::read(path)?`, so missing paths fail before any edit can happen. `CodeBuffer::save()` writes the buffer path to disk but only after a buffer already exists. The create path therefore must be added below the TypeScript wrapper, not faked with the `write` tool.
+
+Settled decisions for this item:
+1. New-file creation uses explicit `code edit { file, operation: "create", content }`.
+2. `create` is valid only when the target file does not exist; existing files must error and tell the caller to use `replace` / `replace-body`.
+3. `create` is whole-file only in v1: reject `symbol`, `line`, `patches`, `edits`, and other target-specific fields for truthfulness.
+4. Supported scope is the same NAPI-supported extension set that `code` already uses today.
+5. Parent directories must be created on save so supported-code create preserves the practical contract that `write` already gives users.
+6. The native implementation should preserve buffer history/diff semantics instead of bypassing them, so undo/redo/diff stay coherent after create.
+
+* User workflows
+1. Create a new supported source/document file from scratch with one `code edit` call, for example a missing `.ts`, `.rs`, `.py`, `.typ`, `.md`, `.org`, `.ex`, or `.exs` file.
+2. Create the file with a relative path from session cwd.
+3. Create the file in a missing nested directory and have the save path succeed without a follow-up mkdir step.
+4. Receive an explicit error when attempting `operation:"create"` against an existing file.
+5. See a truthful result summary that makes clear the file was created, how many lines changed, and whether formatting ran.
+6. Use normal `undo` / `redo` / `diff` semantics after create without a separate compatibility path.
+
+* Scope
+- Modify `packages/coding-agent/src/tools/code.ts` to accept/document `operation:"create"`, validate the top-level create payload, and preserve the existing formatter-before-save flow.
+- Modify `packages/coding-agent/src/tools/code-result.ts` so create results are rendered as creation, not generic edit text.
+- Modify `packages/coding-agent/src/prompts/tools/code.md` to show the exact new-file call shape and constraints.
+- Modify `crates/pi-natives/src/code_buffer.rs` to dispatch create without forcing `buffer_registry().open()` on a missing file.
+- Modify `crates/pi-code-engine/src/buffer.rs` (and any directly related helper files) to support path-bound empty/new buffers, parent-dir creation on save, and history-consistent creation edits.
+- Add or update tests in `packages/coding-agent/test/tools/code.test.ts`, `packages/coding-agent/test/tools/code-result.test.ts`, and native tests such as `packages/natives/test/code-buffer.test.ts` and/or Rust unit tests covering create semantics.
+
+* Sequencing note
+This is integration-heavy native/tooling work, so pure test-first ordering is recommended but not absolute. Start by writing failing contract tests for the TypeScript wrapper/result text and native create behavior, then implement the native buffer path, then wire prompt docs.
+
+* Acceptance
+- `code edit { file, operation: "create", content }` succeeds for a missing supported file and persists the created file to disk.
+- The same call fails with an actionable error when the file already exists.
+- Missing parent directories are created automatically before save.
+- Create results surface as creation-oriented output instead of generic edit output.
+- No `write` tool shim or fallback is used for supported-file creation.
+
+* Verification
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts`
+- `bun test packages/natives/test/code-buffer.test.ts`
+- `cargo test -p pi-code-engine`
+- `cargo test -p pi-natives code_buffer -- --nocapture`
+
+* Non-goals
+- Do not add multi-file create transactions here.
+- Do not add template/scaffold generation here.
+- Do not expand supported scope beyond files the native code tool already recognizes.
+
+* Related plan
+- [[id:PLAN-222-code-edit-create-file-cutover-and-suppor]]
+
+NOTE [2026-04-13]: Implemented code edit create support across pi-code-engine, pi-natives, code tool/result/docs, and focused tests. Verified with: bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts; bun run dev:native; bun test packages/natives/test/code-buffer.test.ts; cargo test -p pi-code-engine; cargo test -p pi-natives code_buffer -- --nocapture.

@@ -120,6 +120,27 @@ describe("code tool result contract", () => {
 		expect(content).not.toMatch(/^\s*\{/);
 	});
 
+	it("formats create payloads as creation summaries", () => {
+		const details = normalizeCodeBufferSuccess({
+			command: "edit",
+			file: "/repo/src/new-module.ts",
+			cwd: "/repo",
+			output: {
+				version: 1,
+				diff: "@@ top-level @@\n+export const created = 1;",
+				editCount: 1,
+				created: true,
+			},
+			formatting: "unchanged",
+		});
+
+		const content = formatCodeToolContent(details);
+		expect(content).toContain("Created src/new-module.ts");
+		expect(content).toContain("Formatting: unchanged");
+		expect(content).toContain("Changes: +1 -0");
+		expect(content).not.toContain("Edited src/new-module.ts");
+	});
+
 	it("summarizes undo history without dropping low-level edit primitives", () => {
 		const details = normalizeCodeBufferSuccess({
 			command: "undo",

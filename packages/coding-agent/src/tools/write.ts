@@ -17,6 +17,7 @@ import writeDescription from "../prompts/tools/write.md" with { type: "text" };
 import { enforcePathWrite } from "../sandbox";
 import type { ToolSession } from "../sdk";
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
+import { describeCodeToolSupportedFiles, isCodeToolSupportedPath } from "./code-supported-files";
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import { enforceModeWrite, resolvePlanPath } from "./mode-guard";
 import { type OutputMeta, outputMeta } from "./output-meta";
@@ -101,6 +102,11 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			const sandboxError = enforcePathWrite(path, this.session.cwd, this.session.sandboxPolicy);
 			if (sandboxError) throw new Error(sandboxError);
 			const absolutePath = resolvePlanPath(this.session, path);
+			if (isCodeToolSupportedPath(absolutePath)) {
+				throw new Error(
+					`The write tool is blocked for code-supported files (${describeCodeToolSupportedFiles()}). Use code edit { file: ${JSON.stringify(path)}, operation: "create", content: ["..."] } instead.`,
+				);
+			}
 			const batchRequest = getLspBatchRequest(context?.toolCall);
 			const writethrough = this.#getWritethrough();
 

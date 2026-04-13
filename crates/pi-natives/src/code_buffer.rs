@@ -129,6 +129,40 @@ fn required_str<'a>(options: &'a Value, field: &str) -> Result<&'a str> {
 		.ok_or_else(|| json_err(format!("Missing required field: {field}")))
 }
 
+fn validate_create_request(options: &Value, path: &Path) -> Result<()> {
+	let invalid_fields = [
+		"symbol",
+		"line",
+		"column",
+		"patches",
+		"edits",
+		"mode",
+		"action",
+		"resolution",
+		"offset",
+		"limit",
+		"depth",
+	]
+	.into_iter()
+	.filter(|field| options.get(*field).is_some())
+	.collect::<Vec<_>>();
+	if !invalid_fields.is_empty() {
+		return Err(json_err(format!(
+			"operation 'create' does not accept {}. Use only 'file', 'operation', and 'content'.",
+			invalid_fields.join(", "),
+		)));
+	}
+	required_str(options, "content")?;
+	if path.exists() {
+		return Err(json_err(format!(
+			"operation 'create' only works for missing files. {} already exists; use 'replace' or \
+			 'replace-body' instead.",
+			path.display(),
+		)));
+	}
+	Ok(())
+}
+
 fn resolved_node<'a>(
 	buffer: &'a CodeBuffer,
 	resolved: &ResolvedSymbol,
@@ -165,6 +199,14 @@ fn single_edit_operation(
 		.ok_or_else(|| json_err("Missing required field: operation"))?;
 
 	match operation {
+		"create" => {
+			let content = required_str(options, "content")?;
+			Ok(vec![TextEdit {
+				start_byte:   0,
+				old_end_byte: buffer.source().len(),
+				new_text:     content.to_string(),
+			}])
+		},
 		// Symbol-targeted content operations
 		"patch" => {
 			let resolved = resolve_target(buffer, profile, options)?;
@@ -409,7 +451,19 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 		"outline" | "read" | "navigate" | "edit" | "undo" | "redo" | "diff" | "replace_content"
 		| "save" => {
 			let path = required_path(options)?;
-			let buffer = buffer_registry().open(&path).map_err(engine_err)?;
+			let is_create =
+				command == "edit" && options.get("operation").and_then(Value::as_str) == Some("create");
+			let created = is_create && !path.exists();
+			if is_create {
+				validate_create_request(options, &path)?;
+			}
+			let buffer = if is_create {
+				buffer_registry()
+					.open_or_create(&path)
+					.map_err(engine_err)?
+			} else {
+				buffer_registry().open(&path).map_err(engine_err)?
+			};
 			let mut buffer = buffer.lock();
 			let profile = get_profile(&path, buffer.language())?;
 			match command {
@@ -449,6 +503,15 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 					let before = buffer.source();
 					let edit_count = if let Some(edits) = options.get("edits").and_then(Value::as_array)
 					{
+						if edits
+							.iter()
+							.any(|edit| edit.get("operation").and_then(Value::as_str) == Some("create"))
+						{
+							return Err(json_err(
+								"operation 'create' is top-level only. Remove it from 'edits' and pass \
+								 'content' at the top level.",
+							));
+						}
 						for edit in edits {
 							let text_edits = single_edit_operation(&buffer, &profile, edit)?;
 							buffer.edit_batch(text_edits).map_err(engine_err)?;
@@ -461,7 +524,7 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 					};
 					let diff = render_annotated_diff(&buffer, &before, &profile);
 					Ok(json_response(
-						json!({ "version": buffer.version(), "diff": diff, "editCount": edit_count }),
+						json!({ "version": buffer.version(), "diff": diff, "editCount": edit_count, "created": created }),
 						false,
 					))
 				},
@@ -524,7 +587,12 @@ pub fn execute_code_buffer(options: Value) -> Result<Value> {
 
 #[cfg(test)]
 mod tests {
-	use std::{fs, sync::Arc};
+	use std::{
+		fs,
+		path::PathBuf,
+		sync::Arc,
+		time::{SystemTime, UNIX_EPOCH},
+	};
 
 	use pi_code_engine::language::LanguageRegistry;
 	use serde_json::json;
@@ -568,6 +636,57 @@ mod tests {
 			.get(&LanguageId::new("markdown"))
 			.expect("profile")
 			.clone()
+	}
+
+	fn temp_path(name: &str) -> PathBuf {
+		let stamp = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.expect("clock ok")
+			.as_nanos();
+		std::env::temp_dir().join(format!("pi-natives-{stamp}-{name}"))
+	}
+
+	#[test]
+	fn execute_code_buffer_inner_creates_missing_file_buffers() {
+		let path = temp_path("create-buffer.ts");
+		let path_str = path.display().to_string();
+		let edit = execute_code_buffer_inner(&json!({
+			"command": "edit",
+			"file": path_str,
+			"operation": "create",
+			"content": "export const created = 1;\n"
+		}))
+		.expect("create edit");
+		assert_eq!(edit["error"], json!(false));
+		assert_eq!(edit["output"]["created"], json!(true));
+		let save = execute_code_buffer_inner(&json!({
+			"command": "save",
+			"file": path.display().to_string(),
+		}))
+		.expect("save");
+		assert_eq!(save["error"], json!(false));
+		assert_eq!(fs::read_to_string(&path).expect("saved file"), "export const created = 1;\n");
+	}
+
+	#[test]
+	fn execute_code_buffer_inner_rejects_create_for_existing_file() {
+		let path = temp_path("existing-create.ts");
+		fs::write(&path, "export const existing = true;\n").expect("seed file");
+		let result = execute_code_buffer_inner(&json!({
+			"command": "edit",
+			"file": path.display().to_string(),
+			"operation": "create",
+			"content": "export const created = 1;\n"
+		}))
+		.expect_err("create rejection");
+		assert_eq!(
+			result.to_string(),
+			format!(
+				"GenericFailure, operation 'create' only works for missing files. {} already exists; \
+				 use 'replace' or 'replace-body' instead.",
+				path.display()
+			)
+		);
 	}
 
 	#[test]

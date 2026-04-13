@@ -215,15 +215,15 @@ If the task may involve external systems, SaaS APIs, chat, tickets, databases, d
 {{#ifAny (includes tools "python") (includes tools "bash")}}
 Pick the right tool for the job:
 1. **Structural**: {{#has tools "code"}}`code` (source files — default read/edit/change tool), {{/has}}{{#has tools "lsp"}}`lsp` (semantic queries), {{/has}}{{#has tools "grep"}}`grep` (text search), {{/has}}{{#has tools "find"}}`find` (file discovery){{/has}}
-2. **Fallback**: {{#has tools "read"}}`read` (non-code files, URLs, images, dirs), {{/has}}{{#has tools "edit"}}`edit` (ONLY non-code or grammar-less text changes), {{/has}}{{#has tools "write"}}`write` (ONLY creating new files or deliberate full-file replacement){{/has}}
+2. **Fallback**: {{#has tools "read"}}`read` (non-code files, URLs, images, dirs), {{/has}}{{#has tools "edit"}}`edit` (ONLY non-code or grammar-less text changes), {{/has}}{{#has tools "write"}}`write` (ONLY unsupported-file creation or deliberate unsupported-file full replace){{/has}}
 3. **Python**: logic, loops, processing, display
 4. **Bash**: simple one-liners only (`cargo build`, `npm install`, `docker run`)
 
 You **MUST NOT** use Python or Bash when a specialized tool exists.
-{{#has tools "code"}}`code` for source files and source-file edits; {{/has}}{{#has tools "read"}}`read` for non-code/URLs/images; {{/has}}{{#has tools "write"}}`write` only for new files or deliberate full-file replace; {{/has}}{{#has tools "grep"}}`grep` not bash grep/re; {{/has}}{{#has tools "find"}}`find` not bash find/glob; {{/has}}{{#has tools "edit"}}`edit` only for text changes outside `code`'s domain.{{/has}}
+{{#has tools "code"}}`code` for source files and source-file edits; {{/has}}{{#has tools "read"}}`read` for non-code/URLs/images; {{/has}}{{#has tools "write"}}`write` only for unsupported-file creation or deliberate unsupported-file full-file replace; {{/has}}{{#has tools "grep"}}`grep` not bash grep/re; {{/has}}{{#has tools "find"}}`find` not bash find/glob; {{/has}}{{#has tools "edit"}}`edit` only for text changes outside `code`'s domain.{{/has}}
 {{/ifAny}}
 {{#has tools "edit"}}
-**Edit tool**: ONLY for non-code files or source files without usable tree-sitter support. If the target is a declaration, section, or block in a source file, use `code edit`.
+**Edit tool**: ONLY for non-code files or source files without usable tree-sitter support. If `code edit` supports the file, do not use `edit`.
 {{/has}}
 
 {{#has tools "lsp"}}
@@ -236,7 +236,7 @@ Semantic questions **MUST** be answered with `lsp` — definitions, types, imple
 ### Code tool for source files
 
 `code` is the default for source files. Read graduated: outline → structure → implementation. Never start at full resolution.
-`code edit` is the default mutation path for source files: `patch` inside a declaration, `replace-body` / `replace` for owned scopes, `rename` / `kill` / `wrap` for structural changes, and batched `edits` for several in-file changes.
+`code edit` is the default mutation path for every code-supported file, including new-file creation via `code edit { file, operation: "create", content: ["..."] }`.
 Fall back to text `edit` only for: non-code files, or files without tree-sitter grammar.
 Fall back to `read` only for: non-code files, internal URLs, images, PDFs, directories.
 {{/has}}

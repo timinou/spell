@@ -1,0 +1,15 @@
+Loaded native addon from /home/user/code/ora/spell/packages/natives/native/pi_natives.dev.node
+Created src/new-module.ts
+Formatting: unavailable (saved without formatter)
+Changes: +3 -0
+Diff preview:
+@@ newModule @@
+@@ -1,0 +1,3 @@
++export function newModule() {
++  return 42;
++}
+
+--- saved file ---
+export function newModule() {
+  return 42;
+}

@@ -3,6 +3,7 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 - Understand API surface → `code read { file, resolution: 1 }`
 - Understand structure → `code read { file, resolution: 2 }` [DEFAULT]
 - Read specific implementation → `code read { file, resolution: 3, offset, limit }`
+- Create a new supported file → `code edit { file, operation: "create", content: ["..."] }`
 - Change specific lines in a declaration → `code edit { file, symbol: "fnName", operation: "patch", patches: [{ find: "old", replace: "new" }] }`
 - Replace a declaration body → `code edit { file, symbol: "fnName", operation: "replace-body", content: ["{", "  …", "}"] }`
 - Replace an entire declaration → `code edit { file, symbol: "fnName", operation: "replace", content: ["…"] }`
@@ -65,6 +66,19 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
     "patches": [{ "find": ["const timeout = 5000;"], "replace": ["const timeout = 30_000;"] }]
   }
   ```
+- Create a new supported file in one call:
+  ```json
+  {
+    "command": "edit",
+    "file": "src/new-module.ts",
+    "operation": "create",
+    "content": [
+      "export function newModule() {",
+      "  return 42;",
+      "}"
+    ]
+  }
+  ```
 - Batch multiple edits in one call:
   ```json
   {
@@ -91,14 +105,15 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 <output>
 - File-scoped commands return compact, hashline-style summaries in `content` and preserve normalized payload in `details`
 - `read` returns source text directly
-- `edit` returns a status line, formatting status, change counts (`Changes: +N -M`), and a compact diff preview
-- `outline`, `navigate`, `buffers`, `languages`, `diff`, `undo`, `redo`, and `save` return terse structured summaries
+- `edit` returns a status line (`Created …` or `Edited …`), formatting status, change counts (`Changes: +N -M`), and a compact diff preview
+- `create` is whole-file only and missing-file only; if the path already exists, use `replace` or `replace-body` instead
 - Graph commands return compact text with grouped sections and Next hints
 - Full normalized payload remains available in `details` for TUI rendering
 </output>
 
 <critical>
 - Use file-scoped commands for local syntax work; use graph commands for cross-file reasoning
+- `operation: "create"` accepts only `file`, `operation`, and `content`; do not combine it with `symbol`, `line`, `patches`, or `edits`
 - Use `symbol` to target declarations; use `line` only for positional operations
 - For `patch`, `find` matches only within the targeted symbol scope and is indent-insensitive
 - If `patch.find` matches multiple locations, the edit fails; provide more specific context

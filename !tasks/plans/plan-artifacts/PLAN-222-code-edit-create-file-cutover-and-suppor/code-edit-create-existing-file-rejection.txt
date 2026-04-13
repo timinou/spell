@@ -1,0 +1,2 @@
+Loaded native addon from /home/user/code/ora/spell/packages/natives/native/pi_natives.dev.node
+Error: GenericFailure, operation 'create' only works for missing files. /tmp/plan-222-existing-tfRNtV/src/existing.ts already exists; use 'replace' or 'replace-body' instead.
