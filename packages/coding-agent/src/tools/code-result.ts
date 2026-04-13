@@ -67,6 +67,7 @@ export interface CodeEditData {
 	version?: number;
 	diff: string;
 	editCount: number;
+	created?: boolean;
 	formatting?: "formatted" | "unchanged" | "unavailable";
 	formatterServer?: string;
 }
@@ -293,6 +294,7 @@ export function normalizeCodeBufferSuccess(input: {
 				version: asNumber(record?.version),
 				diff: asString(record?.diff) ?? "",
 				editCount: asNumber(record?.editCount) ?? 0,
+				created: asBoolean(record?.created) ?? false,
 				formatting: input.formatting,
 				formatterServer: input.formatterServer,
 			},
@@ -418,7 +420,7 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 
 	if (details.command === "edit") {
 		const label = details.displayPath ? ` ${details.displayPath}` : "";
-		const header = `Edited${label}`;
+		const header = `${details.data.created ? "Created" : "Edited"}${label}`;
 		const formatting = details.data.formatting
 			? formatEditFormatting(details.data.formatting, details.data.formatterServer)
 			: undefined;

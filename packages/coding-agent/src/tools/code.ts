@@ -34,6 +34,11 @@ import {
 	formatCodeToolContent,
 	normalizeCodeBufferSuccess,
 } from "./code-result";
+import {
+	_resetSupportedExtensionsForTest,
+	describeCodeToolSupportedFiles,
+	getSupportedExtensions,
+} from "./code-supported-files";
 import { enforceModeWrite } from "./mode-guard";
 import { replaceTabs } from "./render-utils";
 import { toolResult } from "./tool-result";
@@ -54,29 +59,6 @@ const GRAPH_COMMANDS = new Set([
 
 const MUTATING_COMMANDS = new Set(["edit", "undo", "redo"]);
 
-const FALLBACK_EXTENSIONS = new Set([
-	"ts",
-	"tsx",
-	"js",
-	"jsx",
-	"mjs",
-	"cjs",
-	"mts",
-	"cts",
-	"rs",
-	"py",
-	"pyi",
-	"typ",
-	"md",
-	"mdx",
-	"markdown",
-	"org",
-	"ex",
-	"exs",
-]);
-
-let supportedExtensionsCache: Set<string> | undefined;
-
 const LANGUAGE_BY_EXTENSION = new Map<string, string>([
 	["typ", "typst"],
 	["md", "markdown"],
@@ -89,39 +71,7 @@ const LANGUAGE_INJECTIONS = new Map<string, string>([
 	["typst", typstHint.trim()],
 ]);
 
-function extractSupportedExtensions(output: unknown): Set<string> {
-	const record = output as { languages?: Array<{ extensions?: string[] }> } | undefined;
-	const extensions = new Set<string>();
-	for (const language of record?.languages ?? []) {
-		for (const extension of language.extensions ?? []) {
-			if (extension) extensions.add(extension.toLowerCase());
-		}
-	}
-	return extensions;
-}
-
-function getSupportedExtensions(): Set<string> {
-	if (supportedExtensionsCache) return supportedExtensionsCache;
-
-	try {
-		const result = timedCodeBuffer({ command: "languages" });
-		if (result.error) {
-			return FALLBACK_EXTENSIONS;
-		}
-
-		const extensions = extractSupportedExtensions(result.output);
-		if (extensions.size > 0) {
-			supportedExtensionsCache = extensions;
-			return extensions;
-		}
-	} catch {}
-
-	return FALLBACK_EXTENSIONS;
-}
-
-export function _resetSupportedExtensionsForTest(override?: Set<string>): void {
-	supportedExtensionsCache = override;
-}
+export { _resetSupportedExtensionsForTest };
 
 function languageForFile(file: string): string | undefined {
 	const extension = path.extname(file).slice(1).toLowerCase();
@@ -160,6 +110,27 @@ function extractCodeToolErrorMessage(output: unknown): string {
 	}
 	const serialized = JSON.stringify(output);
 	return typeof serialized === "string" && serialized.length > 0 ? serialized : "Code command failed";
+}
+
+function validateCreatePayload(params: CodeParams, resolvedFile?: string): string | undefined {
+	if (params.command !== "edit" || params.operation !== "create") return undefined;
+	if (!resolvedFile) return "operation 'create' requires 'file'.";
+	if (params.content === undefined) return "operation 'create' requires 'content'.";
+	const invalidFields = [
+		params.symbol !== undefined ? "symbol" : undefined,
+		params.line !== undefined ? "line" : undefined,
+		params.column !== undefined ? "column" : undefined,
+		params.patches ? "patches" : undefined,
+		params.edits ? "edits" : undefined,
+		params.mode ? "mode" : undefined,
+		params.action ? "action" : undefined,
+		params.resolution !== undefined ? "resolution" : undefined,
+		params.offset !== undefined ? "offset" : undefined,
+		params.limit !== undefined ? "limit" : undefined,
+		params.depth !== undefined ? "depth" : undefined,
+	].filter((field): field is string => field !== undefined);
+	if (invalidFields.length === 0) return undefined;
+	return `operation 'create' does not accept ${invalidFields.join(", ")}. Use only 'file', 'operation', and 'content'.`;
 }
 
 // =============================================================================
@@ -218,7 +189,7 @@ const codeSchema = Type.Object({
 	operation: Type.Optional(
 		Type.String({
 			description:
-				"Edit operation: patch | replace | replace-body | wrap | rename | kill | insert-before | insert-after | splice | drag-up | drag-down | clone | transpose",
+				"Edit operation: create | patch | replace | replace-body | wrap | rename | kill | insert-before | insert-after | splice | drag-up | drag-down | clone | transpose",
 		}),
 	),
 	content: Type.Optional(
@@ -343,7 +314,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 
 		if (command === "edit" || command === "save") {
 			if (params.file) {
-				enforceModeWrite(this.#session, params.file);
+				enforceModeWrite(this.#session, params.file, { op: params.operation === "create" ? "create" : "update" });
 			}
 		}
 
@@ -381,6 +352,17 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				options.action = params.action === "references-local" ? "references" : params.action;
 			}
 
+			const createPayloadError = validateCreatePayload(params, options.file);
+			if (createPayloadError) {
+				const details = createCodeToolError({
+					command,
+					file: options.file,
+					cwd: sessionCwd,
+					message: createPayloadError,
+				});
+				return toolResult(details).text(formatCodeToolContent(details)).done();
+			}
+
 			if (FILE_COMMANDS.has(nativeCommand) && options.file) {
 				const ext = path.extname(options.file).slice(1).toLowerCase();
 				if (ext && !getSupportedExtensions().has(ext)) {
@@ -388,7 +370,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 						command,
 						file: options.file,
 						cwd: sessionCwd,
-						message: `Unsupported file type .${ext}. The code tool supports TypeScript, Rust, Python, Typst, Markdown, Org, and Elixir. Use the read tool instead.`,
+						message: `Unsupported file type .${ext}. The code tool supports ${describeCodeToolSupportedFiles()}. Use the read tool instead.`,
 					});
 					return toolResult(details).text(formatCodeToolContent(details)).done();
 				}

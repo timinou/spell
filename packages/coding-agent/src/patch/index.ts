@@ -26,6 +26,7 @@ import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
 import { enforcePathWrite } from "../sandbox";
 import type { ToolSession } from "../tools";
+import { describeCodeToolSupportedFiles, isCodeToolSupportedPath } from "../tools/code-supported-files";
 import {
 	invalidateFsScanAfterDelete,
 	invalidateFsScanAfterRename,
@@ -336,6 +337,10 @@ function isReplaceParams(params: ReplaceParams | PatchParams | HashlineParams): 
 	return "old_text" in params && "new_text" in params;
 }
 
+function codeToolRedirectMessage(path: string): string {
+	return `The edit tool is blocked for code-supported files (${describeCodeToolSupportedFiles()}). Use code outline { file: ${JSON.stringify(path)} } to find a target, then code edit instead. For new files, use code edit { file: ${JSON.stringify(path)}, operation: "create", content: ["..."] }.`;
+}
+
 /**
  * Edit tool implementation.
  *
@@ -481,6 +486,9 @@ export class EditTool implements AgentTool<TInput> {
 			}
 
 			const absolutePath = resolvePlanPath(this.session, path);
+			if (isCodeToolSupportedPath(absolutePath)) {
+				throw new Error(codeToolRedirectMessage(path));
+			}
 			const resolvedMove = move ? resolvePlanPath(this.session, move) : undefined;
 			if (resolvedMove === absolutePath) {
 				throw new Error("move path is the same as source path");
@@ -689,6 +697,9 @@ export class EditTool implements AgentTool<TInput> {
 				if (sandboxRenameError) throw new Error(sandboxRenameError);
 			}
 			const resolvedPath = resolvePlanPath(this.session, path);
+			if (isCodeToolSupportedPath(resolvedPath)) {
+				throw new Error(codeToolRedirectMessage(path));
+			}
 			const resolvedRename = rename ? resolvePlanPath(this.session, rename) : undefined;
 
 			if (path.endsWith(".ipynb")) {
@@ -785,6 +796,9 @@ export class EditTool implements AgentTool<TInput> {
 		}
 
 		const absolutePath = resolvePlanPath(this.session, path);
+		if (isCodeToolSupportedPath(absolutePath)) {
+			throw new Error(codeToolRedirectMessage(path));
+		}
 
 		if (!(await fs.exists(absolutePath))) {
 			throw new Error(`File not found: ${path}`);

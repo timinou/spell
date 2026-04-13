@@ -1,0 +1,2 @@
+Loaded native addon from /home/user/code/ora/spell/packages/natives/native/pi_natives.dev.node
+The edit tool is blocked for code-supported files (TypeScript, Rust, Python, Typst, Markdown, Org, and Elixir). Use code outline { file: "/tmp/plan-222-edit-kWVzLv/src/edit-test.ts" } to find a target, then code edit instead. For new files, use code edit { file: "/tmp/plan-222-edit-kWVzLv/src/edit-test.ts", operation: "create", content: ["..."] }.

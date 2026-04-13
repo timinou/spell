@@ -7,7 +7,7 @@ Applies diff hunks to existing files.
 - Copy anchors and context lines verbatim, including whitespace
 - When editing structured blocks, include opening and closing lines so the edit stays inside the block
 - Do not use anchors as comments, place new lines outside the intended block, retry the same failing diff, or use this tool to reformat or fix indentation
-- For source files with tree-sitter support, prefer `code edit` over this tool; use this tool only when the target is non-code text or `code edit` cannot express the change safely
+- This tool is only for unsupported plain-text files or cases where `code edit` cannot express the change safely
 </instruction>
 
 <parameters>
@@ -25,8 +25,12 @@ Success or failure; failures report whether anchors are ambiguous, context is st
 </output>
 
 <anti-patterns>
-- Do not reach for patch mode first on TypeScript, JavaScript, Rust, Python, or other source files when `code edit` can target the declaration/section directly
+- Do not use patch mode on any code-supported file (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`, `.rs`, `.py`, `.pyi`, `.typ`, `.md`, `.mdx`, `.markdown`, `.org`, `.ex`, `.exs`); use `code edit` instead
 </anti-patterns>
+
+<bash-alternatives>
+Use Replace for content-addressed changes. Use bash only when position or regex identifies the change.
+</bash-alternatives>
 
 <bash-alternatives>
 Use Replace when content identifies location. Use bash only when position or regex identifies the change.

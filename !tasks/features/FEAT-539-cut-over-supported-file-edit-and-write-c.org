@@ -1,0 +1,59 @@
+#+TITLE: Cut over supported-file edit and write calls to code edit
+#+STATE: DONE
+#+SESSION_ID: 14b97effd0e6a60a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T21-36-55-619Z_14b97effd0e6a60a.jsonl]]
+#+CUSTOM_ID: FEAT-539-cut-over-supported-file-edit-and-write-c
+#+LAYER: coding-agent
+#+EFFORT: 6h
+#+DEPENDS: PROJ-041-add-code-edit-create-file-operation
+#+PRIORITY: #A
+
+* Initial Message
+
+make 'code edit' able to write new files (show me how). forbid edit and write usage if the file is supported by code edit. propose improvement to make code edit excellent.
+
+* Context
+Once `code edit` can create supported files, the old text tools must stop handling those same files. Current behavior is inconsistent: `code.ts` already knows the native-supported extension set through its `getSupportedExtensions()` cache and rejects unsupported extensions before NAPI, but `packages/coding-agent/src/patch/index.ts` (`edit`) and `packages/coding-agent/src/tools/write.ts` (`write`) have no corresponding guard. That allows structurally-aware files such as `.ts` and `.rs` to bypass the preferred engine entirely, which is exactly the ambiguity the user wants removed.
+
+Settled decisions for this item:
+1. `edit` and `write` must hard-fail on files supported by NAPI/code edit.
+2. The error must be actionable and show the equivalent `code edit` shape, not just say “forbidden”.
+3. The support check must reuse the same runtime extension set as `code`, not a duplicated hand-maintained list.
+4. Unsupported/plain-text files keep the current `edit` / `write` behavior.
+5. This cutover depends on [[id:PROJ-041-add-code-edit-create-file-operation]] so we do not remove existing capability before the replacement exists.
+
+* User workflows
+1. A call to `write` for a supported missing `.ts` / `.rs` / `.py` / `.typ` / `.md` / `.org` / `.ex` / `.exs` file is rejected with a message that shows `code edit { file, operation: "create", content }`.
+2. A call to `edit` for a supported file is rejected with a message that points the caller to `code edit` operations appropriate for source files.
+3. A call to `write` or `edit` for unsupported/plain-text files such as `.txt` continues to work.
+4. The system prompt / tool descriptions steer agents toward the same policy, so runtime and prompt contracts match.
+5. Future extension-set changes do not silently drift between `code` and the legacy tools.
+
+* Scope
+- Extract or centralize the supported-file detection currently living in `packages/coding-agent/src/tools/code.ts` so `code`, `write`, and `edit` share one source of truth.
+- Update `packages/coding-agent/src/tools/write.ts` to block supported files before write-through, with a tailored create-oriented error message.
+- Update `packages/coding-agent/src/patch/index.ts` to block supported files before patch/replace/hashline mutation, with a tailored structural-edit error message.
+- Update prompt guidance in `packages/coding-agent/src/prompts/system/system-prompt.md` plus the relevant tool prompt docs (`packages/coding-agent/src/prompts/tools/write.md`, `packages/coding-agent/src/prompts/tools/patch.md`, `packages/coding-agent/src/prompts/tools/replace.md`, `packages/coding-agent/src/prompts/tools/hashline.md`) so the docs no longer encourage legacy text tools for code-supported files.
+- Add or update tests in `packages/coding-agent/test/tools.test.ts` and `packages/coding-agent/test/tools/code.test.ts` covering both blocked and allowed cases.
+
+* Sequencing note
+This is a cutover, not a compatibility shim. Replace policy and runtime behavior in the same change. Prompt/doc updates are required in the same item so the model-visible contract matches actual enforcement.
+
+* Acceptance
+- `write` rejects supported-code files with an actionable `code edit create` message.
+- `edit` rejects supported-code files with an actionable `code edit` message.
+- Unsupported files still use `edit` / `write` normally.
+- `code`, `edit`, and `write` share one support detector or equivalent single source of truth.
+
+* Verification
+- `bun test packages/coding-agent/test/tools.test.ts packages/coding-agent/test/tools/code.test.ts`
+- `bun check:ts`
+
+* Non-goals
+- Do not auto-reroute legacy tool calls behind the user’s back.
+- Do not broaden code-tool support beyond the native extension set.
+
+* Related plan
+- [[id:PLAN-222-code-edit-create-file-cutover-and-suppor]]
+
+NOTE [2026-04-13]: Cut over supported-file edit/write calls to code edit via shared extension detection and runtime hard errors. Verified with: bun test packages/coding-agent/test/tools.test.ts packages/coding-agent/test/tools/code.test.ts; bun check:ts.

@@ -264,6 +264,44 @@ describe("coding-agent code tool wiring", () => {
 		expect(getText(result)).toContain("Formatting: formatted via biome");
 	});
 
+	it("creates missing supported files through edit create and auto-saves", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({
+				output: { version: 1, diff: "@@ top-level @@\n+export const created = 1;", editCount: 1, created: true },
+				error: false,
+			})
+			.mockReturnValueOnce({ output: { success: true, version: 1 }, error: false });
+		const tool = new CodeTool(createSession({ settings: Settings.isolated({ "lsp.enabled": false }) }));
+		const result = await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/new-module.ts",
+			operation: "create",
+			content: ["export const created = 1;"],
+		});
+		expect(bufferSpy.mock.calls[0]?.[0]).toMatchObject({
+			command: "edit",
+			file: "/tmp/test/src/new-module.ts",
+			operation: "create",
+			content: "export const created = 1;",
+		});
+		expect(bufferSpy.mock.calls[1]?.[0]).toMatchObject({ command: "save", file: "/tmp/test/src/new-module.ts" });
+		expect(getText(result)).toContain("Created src/new-module.ts");
+	});
+
+	it("rejects invalid create payloads before invoking NAPI", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({ output: [], error: false });
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/new-module.ts",
+			operation: "create",
+			symbol: "main",
+			content: ["export const created = 1;"],
+		});
+		expect(getText(result)).toContain("operation 'create' does not accept symbol");
+		expect(bufferSpy).not.toHaveBeenCalled();
+	});
+
 	it("joins array content for replace-body edits before invoking NAPI", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
 			.mockReturnValueOnce({ output: { version: 2, diff: "@@ replace-body @@", editCount: 1 }, error: false })

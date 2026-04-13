@@ -1,0 +1,47 @@
+#+TITLE: Make code edit failures self-recovering
+#+STATE: BLOCKED
+#+SESSION_ID: 14b97effd0e6a60a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T21-36-55-619Z_14b97effd0e6a60a.jsonl]]
+#+CUSTOM_ID: FUP-054-make-code-edit-failures-self-recovering
+#+EFFORT: 4h
+#+PRIORITY: #B
+#+DEPENDS: PROJ-041-add-code-edit-create-file-operation FEAT-539-cut-over-supported-file-edit-and-write-c
+#+LAYER: coding-agent pi-natives
+
+* Initial Message
+
+make 'code edit' able to write new files (show me how). forbid edit and write usage if the file is supported by code edit. propose improvement to make code edit excellent.
+
+* Context
+Requested extra: propose one improvement that would make `code edit` excellent, beyond merely replacing `write`/`edit` for supported files. The highest-leverage improvement is not another mutation primitive; it is better recovery when structural targeting fails. Current evidence in `packages/coding-agent/test/tools/code.test.ts` shows failure paths such as raw `patch.find matched 0 locations`, and `crates/pi-natives/src/code_buffer.rs` emits terse native errors like `Edit requires 'symbol' or 'line' field`. Once `code edit` becomes the mandatory path for supported files, these low-context failures become the main productivity bottleneck.
+
+Recommended improvement: add structured recovery hints to `code edit` errors. When a structural edit fails, the tool should return not only the reason, but also the next-best actionable guidance: likely target symbols, nearby outline entries, or a suggested next command (`code outline`, `code navigate`, or a refined `code edit` payload). This keeps agents inside the structural workflow instead of bouncing back to grep/read/manual re-derivation.
+
+* User workflows
+1. A `symbol` target is missing or ambiguous, and the result shows likely matching declarations or nearby outline entries.
+2. A `patch.find` misses or matches too broadly, and the result tells the caller to narrow scope plus points at the enclosing declaration.
+3. A line-targeted edit hits the wrong abstraction boundary, and the result suggests `code navigate { action: "siblings" | "children" }` or the nearest declaration span.
+4. The returned guidance remains compact enough for tool-use prompts/transcripts and does not dump raw AST internals.
+
+* Scope
+- Extend native/TypeScript error plumbing so `code edit` failures can carry structured hint payloads instead of only raw strings.
+- Likely touch `crates/pi-natives/src/code_buffer.rs`, `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/tools/code-result.ts`, and `packages/coding-agent/src/prompts/tools/code.md`.
+- Add focused tests covering at least one missing-symbol case and one failed-patch case.
+
+* Acceptance
+- At least the main failure modes (`symbol` resolution failure and `patch.find` miss) return short, actionable recovery hints.
+- Hints preserve truthfulness: no fabricated symbol names, no fake edit previews.
+- The improvement reduces the need to fall back to grep/read after a failed structural edit.
+
+* Verification
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts`
+- Manual proof artifact showing one failed edit before/after with the new hint payload
+
+* Non-goals
+- Do not add speculative auto-fixes.
+- Do not silently rerun alternate edits.
+
+* Related plan
+- [[id:PLAN-222-code-edit-create-file-cutover-and-suppor]]
+
+NOTE [2026-04-13]: Deferred by PLAN-222 after create/cutover landed. Proposal captured in the plan; implementation intentionally left for follow-up.

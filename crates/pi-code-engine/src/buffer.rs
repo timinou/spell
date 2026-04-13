@@ -145,6 +145,25 @@ impl BufferRegistry {
 		Ok(buffer)
 	}
 
+	pub fn open_or_create(&self, path: &Path) -> Result<Arc<Mutex<CodeBuffer>>> {
+		if let Some(buffer) = self.get(path) {
+			return Ok(buffer);
+		}
+
+		let mut buffers = self.buffers.write();
+		if let Some(buffer) = buffers.get(path) {
+			return Ok(buffer.clone());
+		}
+
+		let buffer = Arc::new(Mutex::new(if path.exists() {
+			CodeBuffer::open(path, self.registry.clone())?
+		} else {
+			CodeBuffer::create(path, self.registry.clone())?
+		}));
+		buffers.insert(path.to_path_buf(), buffer.clone());
+		Ok(buffer)
+	}
+
 	pub fn close(&self, path: &Path) -> Result<()> {
 		self.buffers.write().remove(path);
 		Ok(())
@@ -180,11 +199,20 @@ impl CodeBuffer {
 		}
 		let source = String::from_utf8(bytes)
 			.map_err(|err| CodeEngineError::Buffer(format!("invalid utf-8: {err}")))?;
-		let language = registry
+		let language = Self::language_for_path(path, registry.as_ref())?;
+		Self::from_str_with_path(source, language, registry, Some(path.to_path_buf()))
+	}
+
+	pub fn create(path: &Path, registry: Arc<LanguageRegistry>) -> Result<Self> {
+		let language = Self::language_for_path(path, registry.as_ref())?;
+		Self::from_str_with_path(String::new(), language, registry, Some(path.to_path_buf()))
+	}
+
+	fn language_for_path(path: &Path, registry: &LanguageRegistry) -> Result<LanguageId> {
+		registry
 			.match_path(path)
 			.map(|profile| profile.id.clone())
-			.ok_or_else(|| CodeEngineError::LanguageNotFound(path.to_path_buf()))?;
-		Self::from_str_with_path(source, language, registry, Some(path.to_path_buf()))
+			.ok_or_else(|| CodeEngineError::LanguageNotFound(path.to_path_buf()))
 	}
 
 	pub fn from_str(
@@ -385,7 +413,11 @@ impl CodeBuffer {
 			.path
 			.as_ref()
 			.ok_or_else(|| CodeEngineError::Buffer("buffer has no path".to_string()))?;
-		let disk = fs::read_to_string(path)?;
+		let disk = match fs::read_to_string(path) {
+			Ok(disk) => disk,
+			Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+			Err(error) => return Err(error.into()),
+		};
 		Ok(diff_lines(&disk, &self.source()))
 	}
 
@@ -394,6 +426,12 @@ impl CodeBuffer {
 			.path
 			.as_ref()
 			.ok_or_else(|| CodeEngineError::Buffer("buffer has no path".to_string()))?;
+		if let Some(parent) = path
+			.parent()
+			.filter(|parent| !parent.as_os_str().is_empty())
+		{
+			fs::create_dir_all(parent)?;
+		}
 		fs::write(path, self.source())?;
 		self.dirty = false;
 		Ok(())
@@ -607,6 +645,36 @@ mod tests {
 			})
 			.expect("insert");
 		assert_eq!(buffer.source(), "let x = 1;\n");
+	}
+
+	#[test]
+	fn test_create_buffer_saves_missing_parent_dirs() {
+		let path = temp_path("nested/created.ts");
+		let mut buffer = CodeBuffer::create(&path, registry()).expect("create buffer");
+		buffer
+			.edit(TextEdit {
+				start_byte:   0,
+				old_end_byte: 0,
+				new_text:     "export const value = 42;\n".to_string(),
+			})
+			.expect("insert");
+		let diff = buffer.diff_from_disk().expect("diff");
+		assert_eq!(diff.len(), 1);
+		assert!(diff[0].content.contains("+export const value = 42;"));
+		buffer.save().expect("save");
+		assert_eq!(fs::read_to_string(&path).expect("saved file"), "export const value = 42;\n");
+	}
+
+	#[test]
+	fn test_buffer_registry_open_or_create_missing_file() {
+		let path = temp_path("registry-create/new.rs");
+		let reg = BufferRegistry::new(registry());
+		let buffer = reg.open_or_create(&path).expect("create buffer");
+		let buffer = buffer.lock();
+		assert_eq!(buffer.source(), "");
+		assert_eq!(buffer.language(), &LanguageId::new("rust"));
+		drop(buffer);
+		assert!(reg.get(&path).is_some());
 	}
 
 	#[test]
