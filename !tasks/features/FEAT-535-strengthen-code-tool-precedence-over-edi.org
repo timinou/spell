@@ -1,0 +1,121 @@
+#+TITLE: Strengthen code tool precedence over edit/write in system prompt
+#+STATE: DONE
+#+SESSION_ID: 14b97e59a437ee05
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T21-34-05-457Z_14b97e59a437ee05.jsonl]]
+#+CUSTOM_ID: FEAT-535-strengthen-code-tool-precedence-over-edi
+#+EFFORT: 1h
+#+LAYER: prompt
+#+PRIORITY: #B
+
+* Initial Message
+
+look at the system prompt instructions (system, plan modes, etc.). find where 'edit', 'write', and 'task' are shown. look at the history. explain how you would make 'edit' and 'write' less important (in favour of `code` tool), and make sure 'task' is more used.
+in plan mode, force the subfiles to have ITEM outlines with custom id of format FILE-LEVEL-ID::suboutline-id, with :DEPENDS:
+Evaluate usage of :DEPENDS:
+
+* Scope
+
+Modify system prompt and tool description files to make `code edit` the unambiguous default for source file modifications, demoting `edit` and `write` to explicit fallback roles.
+
+In-scope:
+- system-prompt.md precedence section wording
+- code tool subsection expansion
+- patch.md (edit) anti-pattern addition
+- write.md anti-pattern addition
+
+Out-of-scope:
+- Tool tier classification in tools/index.ts (already correct: code=core, edit/write=standard)
+- Code tool description (code.md) — already comprehensive
+- Changing tool parameter schemas
+
+* Existing Patterns
+
+- Precedence section: `packages/coding-agent/src/prompts/system/system-prompt.md` lines ~214-241
+  - Handlebars template with `{{#has tools "code"}}` conditionals
+  - 4-tier model: Structural → Fallback → Python → Bash
+- Tool descriptions loaded from markdown files in `packages/coding-agent/src/prompts/tools/`
+- `code.md` (116 lines), `patch.md` (29 lines), `write.md` (12 lines)
+- Code tool subsection already says: "Fall back to text `edit` only for: non-code files, or files without tree-sitter grammar."
+
+* Tests
+
+File: `packages/coding-agent/test/system-prompt.test.ts` (if exists) or manual verification
+Scenarios:
+1. Rendered system prompt contains "ONLY non-code" or equivalent for edit fallback
+2. Rendered system prompt contains code-edit operation list (patch, replace, replace-body, etc.)
+3. patch.md contains critical anti-pattern directing to `code edit`
+4. write.md contains critical anti-pattern directing to `code edit` for existing files
+5. Precedence tier 2 wording includes "ONLY" qualifier for edit
+
+* Implementation
+
+** Strengthen precedence tier 2 wording
+:PROPERTIES:
+:CUSTOM_ID: FEAT-prompt-code-precedence::tier2-wording
+:END:
+- File: `packages/coding-agent/src/prompts/system/system-prompt.md`
+- In the tier 2 line, change `edit` description from `(text-based edits)` to `(ONLY non-code or grammar-less files)`
+- In the summary line after the tiers, change ``edit` for text-based edits` to ``edit` ONLY for non-code files`
+
+** Expand code tool subsection with edit operations
+:PROPERTIES:
+:CUSTOM_ID: FEAT-prompt-code-precedence::code-edit-section
+:DEPENDS: FEAT-prompt-code-precedence::tier2-wording
+:END:
+- File: `packages/coding-agent/src/prompts/system/system-prompt.md`
+- In the "Code tool for source files" subsection (after the graduated read guidance), add:
+
+```
+`code edit` is the default for source file modifications:
+- Patch specific functions: `operation: "patch"`
+- Replace declarations: `operation: "replace"`, `"replace-body"`
+- Insert new code: `operation: "insert-before"`, `"insert-after"`
+- Structural ops: `operation: "rename"`, `"kill"`, `"wrap"`
+```
+
+** Add anti-pattern to edit tool description
+:PROPERTIES:
+:CUSTOM_ID: FEAT-prompt-code-precedence::edit-antipattern
+:DEPENDS: FEAT-prompt-code-precedence::tier2-wording
+:END:
+- File: `packages/coding-agent/src/prompts/tools/patch.md`
+- Add after the existing instruction/critical section:
+
+```
+<critical>
+For source files with tree-sitter support (TypeScript, Rust, Python, etc.), use `code edit` instead.
+This tool is for non-code files, configs without grammar support, or when `code edit` is unavailable.
+</critical>
+```
+
+** Add anti-pattern to write tool description
+:PROPERTIES:
+:CUSTOM_ID: FEAT-prompt-code-precedence::write-antipattern
+:DEPENDS: FEAT-prompt-code-precedence::tier2-wording
+:END:
+- File: `packages/coding-agent/src/prompts/tools/write.md`
+- Add to the conditions section:
+
+```
+<critical>
+For adding code to existing source files, use `code edit` with insert operations.
+Use `write` only for creating new files.
+</critical>
+```
+
+* Edge Cases
+
+- Handlebars conditionals: all changes must remain inside `{{#has tools "code"}}` / `{{#has tools "edit"}}` guards so sessions without these tools don't show broken references.
+- patch.md is used for ALL edit modes (patch, hashline, replace) — the anti-pattern applies to all.
+- The edit tool description is dynamic based on mode (`EditTool.mode`). The markdown file is the base; the anti-pattern should go in the markdown, not the dynamic code.
+
+* Acceptance Criteria
+
+- [ ] system-prompt.md tier 2 explicitly says edit is ONLY for non-code files
+- [ ] system-prompt.md has expanded code-edit operation list
+- [ ] patch.md has critical anti-pattern directing to `code edit`
+- [ ] write.md has critical anti-pattern directing to `code edit` for existing files
+- [ ] `bun check:ts` passes
+- [ ] Handlebars conditionals remain correct
+
+NOTE [2026-04-13]: Implemented prompt/tool precedence hardening and verified via prompt tests + bun check:ts.

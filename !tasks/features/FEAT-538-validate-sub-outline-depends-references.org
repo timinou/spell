@@ -1,0 +1,128 @@
+#+TITLE: Validate sub-outline DEPENDS references in exit-plan-mode
+#+STATE: DONE
+#+SESSION_ID: 14b97e59a437ee05
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T21-34-05-457Z_14b97e59a437ee05.jsonl]]
+#+CUSTOM_ID: FEAT-538-validate-sub-outline-depends-references
+#+DEPENDS: FEAT-537-port-ultraplan-sub-outline-body-standard
+#+EFFORT: 2h
+#+LAYER: tool
+#+PRIORITY: #A
+
+* Initial Message
+
+look at the system prompt instructions (system, plan modes, etc.). find where 'edit', 'write', and 'task' are shown. look at the history. explain how you would make 'edit' and 'write' less important (in favour of `code` tool), and make sure 'task' is more used.
+in plan mode, force the subfiles to have ITEM outlines with custom id of format FILE-LEVEL-ID::suboutline-id, with :DEPENDS:
+Evaluate usage of :DEPENDS:
+
+* Scope
+
+Extend exit-plan-mode validation to parse child item bodies for sub-outline `CUSTOM_ID` entries (with `::` separator) and validate all `:DEPENDS:` references — both top-level and sub-outline — against a combined ID set.
+
+In-scope:
+- `exit-plan-mode.ts` validation logic expansion
+- Reuse `parseOrgDependProperties` from `org-depend.ts` or equivalent parsing
+- Cycle detection across the combined dependency graph
+- Test coverage for the new validation
+
+Out-of-scope:
+- Changing `org-depend.ts` (reuse as-is)
+- Wave extraction logic (already handles `::` IDs correctly)
+- Runtime execution ordering (already works via wave→todo blockers)
+
+* Existing Patterns
+
+- Validation code: `packages/coding-agent/src/tools/exit-plan-mode.ts` lines ~195-209
+  - Builds `childIdSet` from `childItemIds` (top-level only)
+  - Iterates `resolvedChildren` checking `properties.DEPENDS`
+  - Reports broken references as `ToolError`
+- Dependency parser: `packages/coding-agent/src/loop/ingestion/org-depend.ts`
+  - `parseOrgDependProperties(content)` — parses ALL headings with CUSTOM_ID from org content
+  - Returns `OrgDependProperties[]` with `customId`, `blockers`, etc.
+  - `buildDependencyGraph(props)` — builds adjacency map
+  - `detectCycles(adjacency, nodeIds)` — returns cycle arrays
+- Sub-outline IDs use format `PARENT-ID::sub-slug`
+- Wave extraction: `extractPlanWaves` at line ~62 handles `[[id:PARENT-ID::sub-slug]]` links
+- Layer resolution: line ~232 handles `::` separator to resolve parent item layer
+
+* Tests
+
+File: `packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts`
+
+Scenarios:
+1. **Happy path**: plan with child items containing valid sub-outline DEPENDS → passes
+2. **Broken sub-outline DEPENDS**: child item body has `DEPENDS: FEAT-001::nonexistent` → error with clear message
+3. **Cross-item sub-outline DEPENDS**: item A sub-outline depends on item B sub-outline → passes if both exist
+4. **Cycle detection**: A::step1 depends on B::step2, B::step2 depends on A::step1 → error with cycle description
+5. **Top-level DEPENDS still validated**: existing behavior preserved — top-level item depending on non-plan item → error
+6. **Mixed levels**: top-level item DEPENDS on sub-outline ID → passes if sub-outline exists in another child
+7. **No sub-outlines**: child items without any sub-outline CUSTOM_IDs → existing validation only, no regression
+8. **Duplicate CUSTOM_IDs**: two sub-outlines with same `::` ID → error
+
+* Implementation
+
+** Write tests for sub-outline DEPENDS validation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-suboutline-depends-validation::write-tests
+:END:
+- File: `packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts`
+- Test the validation function in isolation (extract it or test through the tool)
+- Cover all 8 scenarios from Tests section
+- Use mock org content strings, not full tool execution
+- Import `parseOrgDependProperties` from `org-depend.ts` to verify parsing behavior
+
+** Extract sub-outline ID collection into helper
+:PROPERTIES:
+:CUSTOM_ID: FEAT-suboutline-depends-validation::extract-helper
+:DEPENDS: FEAT-suboutline-depends-validation::write-tests
+:END:
+- File: `packages/coding-agent/src/tools/exit-plan-mode.ts`
+- Create function: `collectSubOutlineIds(childBodies: Map<string, string>): { allIds: Set<string>; duplicates: string[] }`
+  - For each child item body, call `parseOrgDependProperties(body)` (import from `org-depend.ts`)
+  - Collect all `customId` values that contain `::`
+  - Track duplicates
+  - Return combined set of ALL known IDs (top-level childItemIds + sub-outline IDs)
+
+** Extend DEPENDS validation to check sub-outline references
+:PROPERTIES:
+:CUSTOM_ID: FEAT-suboutline-depends-validation::extend-validation
+:DEPENDS: FEAT-suboutline-depends-validation::extract-helper
+:END:
+- File: `packages/coding-agent/src/tools/exit-plan-mode.ts`
+- After existing `childIdSet` construction (line ~196), extend:
+  1. Build `allIds` set from `collectSubOutlineIds`
+  2. Merge `childIdSet` into `allIds`
+  3. Check for duplicate IDs → throw ToolError
+  4. For EACH child item body, parse sub-outline DEPENDS and validate against `allIds`
+  5. Also validate top-level `properties.DEPENDS` against `allIds` (not just `childIdSet`)
+  6. Run cycle detection using `detectCycles` from `org-depend.ts` on the full graph
+
+** Add cycle detection to validation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-suboutline-depends-validation::cycle-detection
+:DEPENDS: FEAT-suboutline-depends-validation::extend-validation
+:END:
+- File: `packages/coding-agent/src/tools/exit-plan-mode.ts`
+- After collecting all DEPENDS, build adjacency map and run `detectCycles`
+- If cycles found, throw `ToolError` with cycle description: "Dependency cycle detected: A → B → A"
+- Import `detectCycles` from `packages/coding-agent/src/loop/ingestion/org-depend.ts`
+
+* Edge Cases
+
+- Items with no sub-outlines: validation falls back to existing top-level-only behavior. No regression.
+- `parseOrgDependProperties` parses ALL headings in content, including the top-level heading of the item itself. Filter: only collect IDs containing `::` for sub-outlines, or handle the top-level ID gracefully.
+- Sub-outline DEPENDS can reference both `::` IDs and top-level IDs (e.g., a sub-step depending on completion of an entire sibling item).
+- The `::` separator in wave extraction (line ~232) splits on first `::`. The validation must use the same split logic.
+- Performance: parsing all child bodies is O(n * m) where n = children, m = avg body lines. Should be negligible for plan sizes.
+
+* Acceptance Criteria
+
+- [ ] Sub-outline CUSTOM_IDs with `::` are collected from all child item bodies
+- [ ] DEPENDS references (both top-level and sub-outline) are validated against the combined ID set
+- [ ] Duplicate CUSTOM_IDs are detected and reported
+- [ ] Dependency cycles are detected and reported
+- [ ] Existing top-level validation behavior is preserved (no regression)
+- [ ] Tests cover all 8 scenarios
+- [ ] `bun check:ts` passes
+- [ ] `bun test packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts` passes
+
+NOTE [2026-04-13]: Added sub-outline CUSTOM_ID/DEPENDS validation, duplicate detection, and cycle checks with focused tests.

@@ -38,7 +38,7 @@ describe("ExitPlanModeTool validation", () => {
 		category: "plans" | "features" | "bugs",
 		id: string,
 		body: string,
-		props?: { effort?: string; priority?: string; layer?: string },
+		props?: { effort?: string; priority?: string; layer?: string; depends?: string },
 	): Promise<void> {
 		const categoryDir = path.join(tmpDir, "!tasks", category);
 		await fs.mkdir(categoryDir, { recursive: true });
@@ -49,11 +49,84 @@ describe("ExitPlanModeTool validation", () => {
 		else lines.push("#+PRIORITY: #A");
 		if (props?.layer !== undefined) lines.push(`#+LAYER: ${props.layer}`);
 		else lines.push("#+LAYER: backend");
+		if (props?.depends !== undefined) lines.push(`#+DEPENDS: ${props.depends}`);
 		lines.push("", body, "");
 		await Bun.write(path.join(categoryDir, `${id}.org`), lines.join("\n"));
 	}
 
-	const VALID_BODY = [
+	function buildPlanBody(...childIds: string[]): string {
+		return [
+			"* Context",
+			"Validation test",
+			"",
+			"* Execution Manifest",
+			...childIds.map(id => `- [[id:${id}]] ${id}`),
+		].join("\n");
+	}
+
+	function buildValidBody(
+		itemId: string,
+		options?: {
+			defineId?: string;
+			testId?: string;
+			implId?: string;
+			testDepends?: string;
+			implDepends?: string;
+		},
+	): string {
+		const defineId = options?.defineId ?? `${itemId}::define-types`;
+		const testId = options?.testId ?? `${itemId}::auth-tests`;
+		const implId = options?.implId ?? `${itemId}::implement-auth`;
+		const testDepends = options?.testDepends ?? defineId;
+		const implDepends = options?.implDepends ?? testId;
+		const testDependsLine = testDepends ? [`:DEPENDS: ${testDepends}`] : [];
+		const implDependsLine = implDepends ? [`:DEPENDS: ${implDepends}`] : [];
+
+		return [
+			"* Scope",
+			"Implement the authentication API with JWT tokens, refresh sessions, and consistent auth error handling.",
+			"",
+			"* Existing Patterns",
+			"Reuse src/auth.ts and the middleware conventions from src/middleware/auth.ts instead of inventing a new flow.",
+			"",
+			"* Tests",
+			"- test/auth.test.ts covers login success, invalid credentials, token expiry, and session revocation.",
+			"",
+			"* Implementation",
+			"** Define TypeScript interfaces",
+			":PROPERTIES:",
+			`:CUSTOM_ID: ${defineId}`,
+			":END:",
+			"- File: src/auth/types.ts",
+			"",
+			"** Write auth tests",
+			":PROPERTIES:",
+			`:CUSTOM_ID: ${testId}`,
+			...testDependsLine,
+			":END:",
+			"- File: test/auth.test.ts",
+			"- Start with failing contract tests for login, invalid credentials, and token refresh.",
+			"",
+			"** Implement auth flow",
+			":PROPERTIES:",
+			`:CUSTOM_ID: ${implId}`,
+			...implDependsLine,
+			":END:",
+			"- File: src/auth.ts",
+			"- Reuse middleware patterns from src/middleware/auth.ts and satisfy the test scenarios above.",
+			"",
+			"* Edge Cases",
+			"- Invalid credentials return 401 and do not create a session.",
+			"- Expired tokens return a typed auth error without leaking implementation details.",
+			"",
+			"* Acceptance Criteria",
+			"- POST /api/auth/login returns a valid JWT on correct credentials.",
+			"- Invalid credentials return 401 with an error message.",
+		].join("\n");
+	}
+
+	const THIN_BODY = ["* Scope", "Too small."].join("\n");
+	const LEGACY_BODY = [
 		"* Scope",
 		"Implement the authentication API with JWT tokens and session management.",
 		"",
@@ -67,11 +140,7 @@ describe("ExitPlanModeTool validation", () => {
 
 	it("rejects child items with empty body", async () => {
 		await writeOrgItem("features", "FEAT-100-empty", "");
-		await writeOrgItem(
-			"plans",
-			"PLAN-100-test",
-			"* Context\nTest\n\n* Execution Manifest\n- [[id:FEAT-100-empty]] empty item",
-		);
+		await writeOrgItem("plans", "PLAN-100-test", buildPlanBody("FEAT-100-empty"));
 
 		const tool = new ExitPlanModeTool(createSession());
 		await expect(tool.execute("call-empty-body", { title: "TEST_PLAN", itemId: "PLAN-100-test" })).rejects.toThrow(
@@ -80,12 +149,8 @@ describe("ExitPlanModeTool validation", () => {
 	});
 
 	it("rejects child items with body under 100 characters", async () => {
-		await writeOrgItem("features", "FEAT-101-thin", "Short body that is not enough.");
-		await writeOrgItem(
-			"plans",
-			"PLAN-101-test",
-			"* Context\nTest\n\n* Execution Manifest\n- [[id:FEAT-101-thin]] thin item",
-		);
+		await writeOrgItem("features", "FEAT-101-thin", THIN_BODY);
+		await writeOrgItem("plans", "PLAN-101-test", buildPlanBody("FEAT-101-thin"));
 
 		const tool = new ExitPlanModeTool(createSession());
 		await expect(tool.execute("call-thin-body", { title: "TEST_PLAN", itemId: "PLAN-101-test" })).rejects.toThrow(
@@ -93,137 +158,113 @@ describe("ExitPlanModeTool validation", () => {
 		);
 	});
 
-	it("rejects child items missing EFFORT property", async () => {
-		await writeOrgItem("features", "FEAT-102-no-effort", VALID_BODY, { effort: "" });
-		await writeOrgItem(
-			"plans",
-			"PLAN-102-test",
-			"* Context\nTest\n\n* Execution Manifest\n- [[id:FEAT-102-no-effort]] missing effort",
-		);
+	it("reports all missing top-level properties in one error", async () => {
+		await writeOrgItem("features", "FEAT-102-bare", buildValidBody("FEAT-102-bare"), {
+			effort: "",
+			priority: "",
+			layer: "",
+		});
+		await writeOrgItem("plans", "PLAN-102-test", buildPlanBody("FEAT-102-bare"));
 
 		const tool = new ExitPlanModeTool(createSession());
-		await expect(tool.execute("call-no-effort", { title: "TEST_PLAN", itemId: "PLAN-102-test" })).rejects.toThrow(
-			"EFFORT",
+		await expect(tool.execute("call-all-missing", { title: "TEST_PLAN", itemId: "PLAN-102-test" })).rejects.toThrow(
+			/EFFORT.*PRIORITY.*LAYER/,
 		);
 	});
 
-	it("rejects child items missing PRIORITY property", async () => {
-		await writeOrgItem("features", "FEAT-103-no-priority", VALID_BODY, { priority: "" });
-		await writeOrgItem(
-			"plans",
-			"PLAN-103-test",
-			"* Context\nTest\n\n* Execution Manifest\n- [[id:FEAT-103-no-priority]] missing priority",
-		);
+	it("rejects broken top-level DEPENDS references", async () => {
+		await writeOrgItem("features", "FEAT-103-dep", buildValidBody("FEAT-103-dep"), {
+			depends: "FEAT-999-nonexistent",
+		});
+		await writeOrgItem("plans", "PLAN-103-test", buildPlanBody("FEAT-103-dep"));
 
 		const tool = new ExitPlanModeTool(createSession());
-		await expect(tool.execute("call-no-priority", { title: "TEST_PLAN", itemId: "PLAN-103-test" })).rejects.toThrow(
-			"PRIORITY",
-		);
-	});
-
-	it("rejects child items missing LAYER property", async () => {
-		await writeOrgItem("features", "FEAT-104-no-layer", VALID_BODY, { layer: "" });
-		await writeOrgItem(
-			"plans",
-			"PLAN-104-test",
-			"* Context\nTest\n\n* Execution Manifest\n- [[id:FEAT-104-no-layer]] missing layer",
-		);
-
-		const tool = new ExitPlanModeTool(createSession());
-		await expect(tool.execute("call-no-layer", { title: "TEST_PLAN", itemId: "PLAN-104-test" })).rejects.toThrow(
-			"LAYER",
-		);
-	});
-
-	it("rejects broken DEPENDS references", async () => {
-		await writeOrgItem("features", "FEAT-105-dep", VALID_BODY);
-		// Write FEAT-105-dep with a DEPENDS pointing to an item NOT in this plan
-		const depDir = path.join(tmpDir, "!tasks", "features");
-		await Bun.write(
-			path.join(depDir, "FEAT-105-dep.org"),
-			[
-				"#+TITLE: FEAT-105-dep",
-				"#+CUSTOM_ID: FEAT-105-dep",
-				"#+STATE: ITEM",
-				"#+EFFORT: 1h",
-				"#+PRIORITY: #A",
-				"#+LAYER: backend",
-				"#+DEPENDS: FEAT-999-nonexistent",
-				"",
-				VALID_BODY,
-				"",
-			].join("\n"),
-		);
-		await writeOrgItem(
-			"plans",
-			"PLAN-105-test",
-			"* Context\nTest\n\n* Execution Manifest\n- [[id:FEAT-105-dep]] dep item",
-		);
-
-		const tool = new ExitPlanModeTool(createSession());
-		await expect(tool.execute("call-broken-deps", { title: "TEST_PLAN", itemId: "PLAN-105-test" })).rejects.toThrow(
+		await expect(tool.execute("call-broken-deps", { title: "TEST_PLAN", itemId: "PLAN-103-test" })).rejects.toThrow(
 			"FEAT-999-nonexistent",
 		);
 	});
 
-	it("passes when all validations are satisfied", async () => {
-		await writeOrgItem("features", "FEAT-200-valid", VALID_BODY);
+	it("rejects child items missing structured sub-outline CUSTOM_IDs", async () => {
+		await writeOrgItem("features", "FEAT-104-legacy", LEGACY_BODY);
+		await writeOrgItem("plans", "PLAN-104-test", buildPlanBody("FEAT-104-legacy"));
+
+		const tool = new ExitPlanModeTool(createSession());
+		await expect(
+			tool.execute("call-missing-suboutlines", { title: "TEST_PLAN", itemId: "PLAN-104-test" }),
+		).rejects.toThrow("FILE-LEVEL-ID::suboutline-id");
+	});
+
+	it("rejects sub-outline CUSTOM_IDs outside the owning child namespace", async () => {
 		await writeOrgItem(
-			"plans",
-			"PLAN-200-test",
-			"* Context\nValid plan\n\n* Execution Manifest\n- [[id:FEAT-200-valid]] valid item (1h)",
+			"features",
+			"FEAT-105-namespace",
+			buildValidBody("FEAT-105-namespace", { defineId: "WRONG::define-types" }),
 		);
+		await writeOrgItem("plans", "PLAN-105-test", buildPlanBody("FEAT-105-namespace"));
+
+		const tool = new ExitPlanModeTool(createSession());
+		await expect(tool.execute("call-bad-namespace", { title: "TEST_PLAN", itemId: "PLAN-105-test" })).rejects.toThrow(
+			"WRONG::define-types",
+		);
+	});
+
+	it("rejects broken sub-outline DEPENDS references", async () => {
+		await writeOrgItem(
+			"features",
+			"FEAT-106-subdep",
+			buildValidBody("FEAT-106-subdep", { implDepends: "FEAT-999::missing-step" }),
+		);
+		await writeOrgItem("plans", "PLAN-106-test", buildPlanBody("FEAT-106-subdep"));
+
+		const tool = new ExitPlanModeTool(createSession());
+		await expect(
+			tool.execute("call-broken-subdeps", { title: "TEST_PLAN", itemId: "PLAN-106-test" }),
+		).rejects.toThrow("FEAT-999::missing-step");
+	});
+
+	it("rejects duplicate sub-outline CUSTOM_IDs within a child item", async () => {
+		await writeOrgItem(
+			"features",
+			"FEAT-108-duplicate",
+			buildValidBody("FEAT-108-duplicate", { testId: "FEAT-108-duplicate::define-types" }),
+		);
+		await writeOrgItem("plans", "PLAN-107-test", buildPlanBody("FEAT-108-duplicate"));
+
+		const tool = new ExitPlanModeTool(createSession());
+		await expect(
+			tool.execute("call-duplicate-subids", { title: "TEST_PLAN", itemId: "PLAN-107-test" }),
+		).rejects.toThrow("Duplicate sub-outline CUSTOM_ID values");
+	});
+
+	it("rejects cyclic sub-outline DEPENDS graphs", async () => {
+		const itemId = "FEAT-109-cycle";
+		await writeOrgItem(
+			"features",
+			itemId,
+			buildValidBody(itemId, {
+				testDepends: `${itemId}::implement-auth`,
+				implDepends: `${itemId}::auth-tests`,
+			}),
+		);
+		await writeOrgItem("plans", "PLAN-109-test", buildPlanBody(itemId));
+
+		const tool = new ExitPlanModeTool(createSession());
+		await expect(tool.execute("call-cycle", { title: "TEST_PLAN", itemId: "PLAN-109-test" })).rejects.toThrow(
+			"Sub-outline dependency cycles",
+		);
+	});
+
+	it("accepts valid top-level and sub-outline dependencies within the plan", async () => {
+		await writeOrgItem("features", "FEAT-200-base", buildValidBody("FEAT-200-base"));
+		await writeOrgItem("features", "FEAT-201-consumer", buildValidBody("FEAT-201-consumer"), {
+			depends: "FEAT-200-base",
+		});
+		await writeOrgItem("plans", "PLAN-200-test", buildPlanBody("FEAT-200-base", "FEAT-201-consumer"));
 
 		const tool = new ExitPlanModeTool(createSession());
 		const result = await tool.execute("call-valid", { title: "TEST_PLAN", itemId: "PLAN-200-test" });
 
-		expect(result.details?.childItemIds).toEqual(["FEAT-200-valid"]);
+		expect(result.details?.childItemIds).toEqual(["FEAT-200-base", "FEAT-201-consumer"]);
 		expect(result.content[0]).toEqual({ type: "text", text: expect.stringContaining("Plan ready for approval") });
-	});
-
-	it("accepts valid DEPENDS within the plan", async () => {
-		await writeOrgItem("features", "FEAT-201-base", VALID_BODY);
-		// Write FEAT-201-consumer with DEPENDS on FEAT-201-base (both in plan)
-		const depDir = path.join(tmpDir, "!tasks", "features");
-		await Bun.write(
-			path.join(depDir, "FEAT-201-consumer.org"),
-			[
-				"#+TITLE: FEAT-201-consumer",
-				"#+CUSTOM_ID: FEAT-201-consumer",
-				"#+STATE: ITEM",
-				"#+EFFORT: 2h",
-				"#+PRIORITY: #A",
-				"#+LAYER: backend",
-				"#+DEPENDS: FEAT-201-base",
-				"",
-				VALID_BODY,
-				"",
-			].join("\n"),
-		);
-		await writeOrgItem(
-			"plans",
-			"PLAN-201-test",
-			"* Context\nDep test\n\n* Execution Manifest\n- [[id:FEAT-201-base]] base (1h)\n- [[id:FEAT-201-consumer]] consumer (2h, depends FEAT-201-base)",
-		);
-
-		const tool = new ExitPlanModeTool(createSession());
-		const result = await tool.execute("call-valid-deps", { title: "TEST_PLAN", itemId: "PLAN-201-test" });
-
-		expect(result.details?.childItemIds).toContain("FEAT-201-base");
-		expect(result.details?.childItemIds).toContain("FEAT-201-consumer");
-	});
-
-	it("reports all missing properties in one error", async () => {
-		await writeOrgItem("features", "FEAT-106-bare", VALID_BODY, { effort: "", priority: "", layer: "" });
-		await writeOrgItem(
-			"plans",
-			"PLAN-106-test",
-			"* Context\nTest\n\n* Execution Manifest\n- [[id:FEAT-106-bare]] bare item",
-		);
-
-		const tool = new ExitPlanModeTool(createSession());
-		await expect(tool.execute("call-all-missing", { title: "TEST_PLAN", itemId: "PLAN-106-test" })).rejects.toThrow(
-			/EFFORT.*PRIORITY.*LAYER/,
-		);
 	});
 });

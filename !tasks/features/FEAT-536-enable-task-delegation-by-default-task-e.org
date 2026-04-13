@@ -1,0 +1,80 @@
+#+TITLE: Enable task delegation by default (task.eager = true)
+#+STATE: DONE
+#+SESSION_ID: 14b97e59a437ee05
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T21-34-05-457Z_14b97e59a437ee05.jsonl]]
+#+CUSTOM_ID: FEAT-536-enable-task-delegation-by-default-task-e
+#+EFFORT: 30m
+#+LAYER: config
+#+PRIORITY: #B
+
+* Initial Message
+
+look at the system prompt instructions (system, plan modes, etc.). find where 'edit', 'write', and 'task' are shown. look at the history. explain how you would make 'edit' and 'write' less important (in favour of `code` tool), and make sure 'task' is more used.
+in plan mode, force the subfiles to have ITEM outlines with custom id of format FILE-LEVEL-ID::suboutline-id, with :DEPENDS:
+Evaluate usage of :DEPENDS:
+
+* Scope
+
+Change `task.eager` setting default from `false` to `true`, making the agent delegate to subagents by default. Also add a weaker always-on task recommendation in the base precedence section for sessions where eagerTasks is explicitly disabled.
+
+In-scope:
+- settings-schema.ts default value change
+- system-prompt.md: add task to precedence section or strengthen existing mentions
+
+Out-of-scope:
+- eager-todo.md content (already correct for when eagerTasks=true)
+- Task tool description (task.md) — already comprehensive
+- Task agent definitions (agents/task.md)
+
+* Existing Patterns
+
+- Setting: `packages/coding-agent/src/config/settings-schema.ts` line 1257
+  - `"task.eager": { type: "boolean", default: false, ... }`
+- Read at: `packages/coding-agent/src/sdk.ts` line 1373
+  - `const eagerTasks = settings.get("task.eager");`
+- Rendered at: `packages/coding-agent/src/system-prompt.ts` line 590
+  - Passed to template data as `eagerTasks`
+- In system-prompt.md:
+  - `{{#if eagerTasks}}` block (line ~242) contains the delegation-by-default instructions
+  - "Search before you read" section has: `task for investigate+edit in one pass`
+
+* Tests
+
+File: `packages/coding-agent/test/config/settings-schema.test.ts` (if exists) or manual verification
+Scenarios:
+1. `settings.get("task.eager")` returns `true` by default
+2. System prompt rendered with default settings includes the eager-tasks delegation block
+3. System prompt still renders correctly when task.eager is explicitly set to false
+
+* Implementation
+
+** Change task.eager default to true
+:PROPERTIES:
+:CUSTOM_ID: FEAT-task-eager-default::change-default
+:END:
+- File: `packages/coding-agent/src/config/settings-schema.ts`
+- Change `"task.eager": { type: "boolean", default: false, ... }` to `default: true`
+
+** Add task to base precedence section
+:PROPERTIES:
+:CUSTOM_ID: FEAT-task-eager-default::precedence-mention
+:DEPENDS: FEAT-task-eager-default::change-default
+:END:
+- File: `packages/coding-agent/src/prompts/system/system-prompt.md`
+- In the precedence section, add `task` mention to tier 1 or as tier 0:
+  - Option: modify tier 1 line to include `{{#has tools "task"}}`task` (delegate multi-file work),{{/has}}`
+  - Or add before tier 1: `0. **Delegation**: `task` (multi-file changes, parallel work — delegate when design is settled)`
+
+* Edge Cases
+
+- Users who have explicitly set `task.eager: false` in their config will still get `false` — the default only affects new/unset configs.
+- The `eagerTasks` template variable flows through `sdk.ts` → `system-prompt.ts` → template. No other consumers.
+- `eager-todo.md` prompt already handles the `{{#if autoRosterEnabled}}` branch correctly for the eager case.
+
+* Acceptance Criteria
+
+- [ ] `settings-schema.ts` has `default: true` for `task.eager`
+- [ ] Default-rendered system prompt includes the delegation block (the `{{#if eagerTasks}}` content)
+- [ ] `bun check:ts` passes
+
+NOTE [2026-04-13]: Set task.eager default true and verified eager task prompt rendering + bun check:ts.

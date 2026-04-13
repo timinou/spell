@@ -1,0 +1,106 @@
+#+TITLE: Port ultraplan sub-outline body standard to standard plan mode
+#+STATE: DONE
+#+SESSION_ID: 14b97e59a437ee05
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T21-34-05-457Z_14b97e59a437ee05.jsonl]]
+#+CUSTOM_ID: FEAT-537-port-ultraplan-sub-outline-body-standard
+#+EFFORT: 1h30m
+#+LAYER: prompt
+#+PRIORITY: #A
+
+* Initial Message
+
+look at the system prompt instructions (system, plan modes, etc.). find where 'edit', 'write', and 'task' are shown. look at the history. explain how you would make 'edit' and 'write' less important (in favour of `code` tool), and make sure 'task' is more used.
+in plan mode, force the subfiles to have ITEM outlines with custom id of format FILE-LEVEL-ID::suboutline-id, with :DEPENDS:
+Evaluate usage of :DEPENDS:
+
+* Scope
+
+Port the structured Org Item Body Standard (currently ultraplan-only) into the standard plan mode, making it mandatory for all child org items in all plan modes. This includes:
+- Required sections: Scope, Existing Patterns, Tests, Implementation, Edge Cases, Acceptance Criteria
+- Sub-headings in Implementation with `CUSTOM_ID: PARENT-ID::sub-slug` format
+- `:DEPENDS:` on sub-headings for intra-item dependency ordering
+- Instruction to use `org wave` to compute wave structure
+
+In-scope:
+- `plan-mode-active.md` — add body standard to the non-ultraplan path
+- Restructure so ultraplan and standard share the same body standard (DRY)
+
+Out-of-scope:
+- `plan-mode-subagent.md` (read-only subagent, doesn't create items)
+- `plan-mode-approved.md` (execution phase, not planning)
+- Changing ultraplan content (only sharing it with standard mode)
+- Iterative planning mode (has its own lighter workflow)
+
+* Existing Patterns
+
+- File: `packages/coding-agent/src/prompts/system/plan-mode-active.md`
+- Ultraplan body standard: lines ~205-236 (inside `{{#if ultraplan}}` → `{{#if customDecomposition}} ... {{else}}` block)
+- Standard mode child requirements: line ~44, a single dense paragraph mentioning "test-first sub-outline ordering REQUIRED" and ":DEPENDS: property"
+- The standard mode does NOT prescribe:
+  - Section names (Scope, Tests, etc.)
+  - CUSTOM_ID format for sub-headings
+  - `org wave` usage
+- The ultraplan standard is inside `{{#if ultraplan}}` → `{{else}}` block for `customDecomposition`
+
+* Tests
+
+File: manual prompt rendering verification
+Scenarios:
+1. Non-ultraplan plan mode includes the Org Item Body Standard section with all required sections
+2. The CUSTOM_ID `PARENT-ID::sub-slug` example is visible in non-ultraplan rendering
+3. `:DEPENDS:` example is visible in non-ultraplan rendering
+4. The section is NOT duplicated — one definition shared between ultraplan and standard
+5. Ultraplan rendering still includes the body standard (no regression)
+6. `org wave` instruction appears in both ultraplan and standard mode
+7. Iterative mode inherits the body standard if it uses org items
+
+* Implementation
+
+** Extract shared body standard into reusable section
+:PROPERTIES:
+:CUSTOM_ID: FEAT-suboutline-standard::extract-shared
+:END:
+- File: `packages/coding-agent/src/prompts/system/plan-mode-active.md`
+- Move the Org Item Body Standard out of the `{{#if ultraplan}}` block
+- Place it in the shared section, after "Child item requirements" paragraph but before the mode-specific workflow sections
+- Keep the `{{#if customDecomposition}}` / `{{else}}` structure for customizable sections
+- The standard should be visible when `orgEnabled` is true, regardless of `ultraplan`
+
+** Add org wave instruction to standard mode
+:PROPERTIES:
+:CUSTOM_ID: FEAT-suboutline-standard::org-wave-standard
+:DEPENDS: FEAT-suboutline-standard::extract-shared
+:END:
+- File: `packages/coding-agent/src/prompts/system/plan-mode-active.md`
+- In the standard "Phase 5: Write Plan" section, add step:
+  "Run `org wave` to compute wave structure from sub-outline dependency graph before creating the PLAN item"
+- Mirror the ultraplan Phase 3 instruction: "Run `org wave` to compute wave structure from sub-outline dependency graph"
+
+** Update child item requirements paragraph
+:PROPERTIES:
+:CUSTOM_ID: FEAT-suboutline-standard::update-requirements
+:DEPENDS: FEAT-suboutline-standard::extract-shared
+:END:
+- File: `packages/coding-agent/src/prompts/system/plan-mode-active.md`
+- The dense paragraph at line ~44 currently says "test-first sub-outline ordering REQUIRED" inline
+- Add cross-reference to the new shared body standard section: "See Org Item Body Standard below for required sections and sub-outline format"
+- Remove the inline sub-outline mention to avoid duplication
+
+* Edge Cases
+
+- `{{#if customDecomposition}}` — when a mode declares custom decomposition sections, those override the default body standard sections. This must still work.
+- `{{#unless ultraplan}}` sections must not break — the body standard should be outside all mode-conditional blocks
+- Iterative planning mode (`{{#if iterative}}`) has its own lighter workflow. If it uses org items (`orgEnabled`), the body standard should apply there too.
+- Handlebars nesting: the body standard contains backtick-fenced code blocks with `:PROPERTIES:` examples. These must not conflict with Handlebars parsing.
+
+* Acceptance Criteria
+
+- [ ] Standard plan mode (non-ultraplan) renders the full Org Item Body Standard
+- [ ] Ultraplan still renders the body standard (no regression)
+- [ ] `CUSTOM_ID: PARENT-ID::sub-slug` format is documented in standard mode
+- [ ] `:DEPENDS:` on sub-headings is documented in standard mode
+- [ ] `org wave` instruction appears in standard mode workflow
+- [ ] `{{#if customDecomposition}}` override still works
+- [ ] `bun check:ts` passes
+
+NOTE [2026-04-13]: Shared the sub-outline body standard into standard plan mode and verified org wave/body standard rendering.

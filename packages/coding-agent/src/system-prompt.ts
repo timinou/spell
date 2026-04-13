@@ -422,11 +422,12 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		intentField,
 		mcpDiscoveryMode = false,
 		mcpDiscoveryServerSummaries = [],
-		eagerTasks = false,
+		eagerTasks,
 		autoRosterEnabled = false,
 		specializedToolNames = [],
 	} = options;
 	const resolvedCwd = cwd ?? getProjectDir();
+	const resolvedEagerTasks = eagerTasks ?? (settings?.get("task.eager") as boolean | undefined) ?? false;
 
 	const prepPromise = (() => {
 		const systemPromptCustomizationPromise = logger.timeAsync("loadSystemPromptFiles", loadSystemPromptFiles, {
@@ -587,7 +588,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		mcpDiscoveryMode,
 		hasMCPDiscoveryServers: mcpDiscoveryServerSummaries.length > 0,
 		mcpDiscoveryServerSummaries,
-		eagerTasks,
+		eagerTasks: resolvedEagerTasks,
 		autoRosterEnabled,
 		specializedToolNames,
 		hasSpecializedTools: specializedToolNames.length > 0,

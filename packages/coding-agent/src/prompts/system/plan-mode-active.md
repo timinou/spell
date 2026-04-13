@@ -41,14 +41,54 @@ Available child categories:
 - `{{name}}` (`{{prefix}}`): {{description}}
 {{/each}}
 
-Child item requirements (`org create`): include `EFFORT`, `PRIORITY`, `LAYER`; concrete acceptance criteria; non-overlapping scopes; verification criteria (exact tests, checks, or manual proof); test-first sub-outline ordering **REQUIRED** for pure functions/new types (test depends on types, impl depends on test; for integration code where infrastructure must exist first, test-first is **RECOMMENDED** with explicit sequencing note); name required screenshots/artifacts for UI behavior; reference file path or org ID for documentation artifacts; set `:DEPENDS:` property for inter-item dependencies (space-separated CUSTOM_IDs); each item **MUST** be self-contained for an agent with NO session history (all decisions, file paths, signatures, edge cases, test scenarios); err toward verbose (500-word body > 50-word body requiring re-derivation); enumerate ALL user workflows first when planning test coverage.
+### Org Item Body Standard
+{{#if customDecomposition}}
+Every child org item body **MUST** include these sections:
+{{#each customDecompositionSections}}
+- **{{this}}**
+{{/each}}
+{{else}}
+- **Scope** — in-scope/out-of-scope boundaries with rationale
+- **Existing Patterns** — DSLs, helpers, modules, conventions from codebase this item **MUST** use (file paths + signatures)
+- **Tests** — file paths, concrete scenarios. Test sub-items **MUST** precede implementation sub-items in dependency graph. Enumerate ALL workflows first.
+- **Implementation** — ordered steps tied to explicit test scenarios
+- **Edge Cases** — failure modes, error codes, degradation, race conditions, recovery
+- **Acceptance Criteria** — falsifiable, manually checkable outcomes
+{{/if}}
+
+Implementation sub-steps **MUST** be sub-headings with `:CUSTOM_ID: FILE-LEVEL-ID::suboutline-id` and `:DEPENDS:` properties. Steps reference the test scenarios they satisfy. Example:
+```
+** Define TypeScript interfaces
+:PROPERTIES:
+:CUSTOM_ID: FEAT-001::define-types
+:END:
+- File: src/types/foo.ts
+
+** Write parser tests (TDD: before implementation)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-001::parser-tests
+:DEPENDS: FEAT-001::define-types
+:END:
+- File: test/parser.test.ts
+- Scenarios from Tests section as initially-failing tests
+
+** Implement core parser (satisfies parser-tests)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-001::implement-parser
+:DEPENDS: FEAT-001::parser-tests
+:END:
+- File: src/parser.ts
+```
+
+Child item requirements (`org create`): include `EFFORT`, `PRIORITY`, `LAYER`; concrete acceptance criteria; non-overlapping scopes; verification criteria (exact tests, checks, or manual proof); each child item body **MUST** follow the Org Item Body Standard above; test-first sub-outline ordering **REQUIRED** for pure functions/new types (test depends on types, impl depends on test; for integration code where infrastructure must exist first, test-first is **RECOMMENDED** with explicit sequencing note); name required screenshots/artifacts for UI behavior; reference file path or org ID for documentation artifacts; set `:DEPENDS:` property for inter-item dependencies (space-separated CUSTOM_IDs); each item **MUST** be self-contained for an agent with NO session history (all decisions, file paths, signatures, edge cases, test scenarios); err toward verbose (500-word body > 50-word body requiring re-derivation); enumerate ALL user workflows first when planning test coverage.
 
 PLAN item requirements (`org create` in `{{planCategory}}`):
 - `state: "INIT"`
 - Body uses org headings (`*`, `**`, `***`)
 - Include `* Context`, `* Verification`, and `* Execution Manifest` headings
+- Run `org wave` on the child-item sub-outline dependency graph, then mirror those waves in `* Execution Manifest` with `[[id:...]]` links
 
-Example: create children (`state: "ITEM"`) → create PLAN in `{{planCategory}}` (`state: "INIT"`, body with `* Context`, `* Verification`, `* Execution Manifest` headings and `[[id:...]]` links) → call `{{exitToolName}}` with `title` and `itemId`.
+Example: create children (`state: "ITEM"`) → run `org wave` → create PLAN in `{{planCategory}}` (`state: "INIT"`, body with `* Context`, `* Verification`, `* Execution Manifest` headings and `[[id:...]]` links) → call `{{exitToolName}}` with `title` and `itemId`.
 {{else}}
 Plan file: {{#if planExists}}`{{planFilePath}}` exists; you **MUST** read and update it incrementally.{{else}}you **MUST** create a plan at `{{planFilePath}}`.{{/if}}
 
@@ -119,11 +159,11 @@ Plan execution runs in fresh context (session cleared). You **MUST** make the pl
 You **MUST** use `find`, `grep`, `read` to understand the codebase. Prefer source code over browser for architecture understanding.
 
 ### 2. Interview
-You **MUST** use `{{askToolName}}` to clarify scope, acceptance criteria, error handling, testing, and tradeoffs. Batch questions. Do not ask what you can answer by exploring.
+You **MUST** use `{{askToolName}}` to clarify scope, acceptance criteria, error handling, testing, and tradeoffs. Batch questions. Only ask what you could not determine with full clarity by exploring.
 
 ### 3. Write Plan
 {{#if orgEnabled}}
-Create child items first, then create PLAN (`state: "INIT"`) with `[[id:…]]` execution manifest links.
+Create child items first, run `org wave` on the child-item sub-outline dependency graph, then create PLAN (`state: "INIT"`) with `:wave:` execution-manifest headings and `[[id:…]]` links.
 {{else}}
 Use `{{editToolName}}` to update plan file as you learn; **MUST NOT** wait until end.
 {{/if}}
@@ -151,11 +191,11 @@ You **MUST** verify critical files and assumptions. You **SHOULD** use `{{askToo
 
 ### Phase 5: Write Plan
 {{#if orgEnabled}}
-Create child items first, then create PLAN in `{{planCategory}}` with:
+Create child items first, then run `org wave` and create PLAN in `{{planCategory}}` with:
 - Recommended approach only
 - Critical file paths
 - Verification section
-- Execution manifest using `[[id:…]]` links
+- Execution manifest grouped into `:wave:` headings using the `org wave` output and `[[id:…]]` links
 {{else}}
 Update `{{planFilePath}}` (`{{editToolName}}` for changes, `{{writeToolName}}` only if creating from scratch) with:
 - Recommended approach only
@@ -197,48 +237,9 @@ task:
 Address Metis gaps with further user questions where needed.
 {{/unless}}
 
-{{#if customDecomposition}}
-### Org Item Body Standard (customized)
-Every child org item body **MUST** include these sections:
-{{#each customDecompositionSections}}
-- **{{this}}**
-{{/each}}
-{{else}}
-### Org Item Body Standard
-- **Scope** — in-scope/out-of-scope boundaries with rationale
-- **Existing Patterns** — DSLs, helpers, modules, conventions from codebase this item **MUST** use (file paths + signatures)
-- **Tests** — file paths, concrete scenarios. Test sub-items **MUST** precede implementation sub-items in dependency graph. Enumerate ALL workflows first.
-- **Implementation** — each step: sub-heading with `:CUSTOM_ID: PARENT-ID::sub-slug` and `:DEPENDS:` property. Steps reference test scenarios they satisfy. Example:
-  ```
-  ** Define TypeScript interfaces
-  :PROPERTIES:
-  :CUSTOM_ID: FEAT-001::define-types
-  :END:
-  - File: src/types/foo.ts
-
-  ** Write parser tests (TDD: before implementation)
-  :PROPERTIES:
-  :CUSTOM_ID: FEAT-001::parser-tests
-  :DEPENDS: FEAT-001::define-types
-  :END:
-  - File: test/parser.test.ts
-  - Scenarios from Tests section as initially-failing tests
-
-  ** Implement core parser (satisfies parser-tests)
-  :PROPERTIES:
-  :CUSTOM_ID: FEAT-001::implement-parser
-  :DEPENDS: FEAT-001::parser-tests
-  :END:
-  - File: src/parser.ts
-  ```
-- **Edge Cases** — failure modes, error codes, degradation, race conditions, recovery
-- **Acceptance Criteria** — falsifiable, manually checkable outcomes
-- File paths **MUST** be explicit; dependencies expressed as `:DEPENDS:` properties (space-separated CUSTOM_IDs)
-{{/if}}
-
 ### Phase 3: Create Org Items Directly
-1. Create children (`state: "ITEM"`)
-2. Run `org wave` to compute wave structure from sub-outline dependency graph
+1. Create children (`state: "ITEM"`) using the Org Item Body Standard above
+2. Run `org wave` to compute wave structure from the sub-outline dependency graph
 3. Create PLAN (`state: "INIT"`) with `[[id:…]]` manifest links using wave headings (`:wave:` tag):
 
 ```

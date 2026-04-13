@@ -1,0 +1,64 @@
+#+TITLE: Tool precedence hardening and plan mode sub-outline standardization
+#+STATE: DONE
+#+SESSION_ID: 14b97e59a437ee05
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T21-34-05-457Z_14b97e59a437ee05.jsonl]]
+#+CUSTOM_ID: PLAN-221-tool-precedence-hardening-and-plan-mode
+
+* Initial Message
+
+look at the system prompt instructions (system, plan modes, etc.). find where 'edit', 'write', and 'task' are shown. look at the history. explain how you would make 'edit' and 'write' less important (in favour of `code` tool), and make sure 'task' is more used.
+in plan mode, force the subfiles to have ITEM outlines with custom id of format FILE-LEVEL-ID::suboutline-id, with :DEPENDS:
+Evaluate usage of :DEPENDS:
+
+* Context
+
+The agent's system prompt has three problems that reduce execution quality:
+
+1. **Tool precedence**: `edit` and `write` are presented as general-purpose tools, but `code edit` should be the unambiguous default for source file modifications. The tool descriptions (patch.md, write.md) don't mention `code edit` at all — a model reading them in isolation doesn't know a better option exists.
+
+2. **Task delegation**: The `eagerTasks` setting that promotes delegation defaults to `false`. Most sessions don't see the "delegate by default" instruction, leading agents to do multi-file work manually instead of dispatching subagents.
+
+3. **Plan mode sub-outlines**: Standard plan mode items have unstructured bodies. The ultraplan body standard (required sections, `PARENT-ID::sub-slug` CUSTOM_IDs, `:DEPENDS:` on sub-headings) only appears in ultraplan mode. Standard plans can't use `org wave` because items lack the structured sub-outline format.
+
+4. **DEPENDS validation gap**: `exit-plan-mode.ts` validates top-level `:DEPENDS:` references but not sub-outline `::` IDs. Broken sub-outline dependencies, duplicates, and cycles pass validation silently and only surface at execution time.
+
+** Decisions
+
+1. Change `task.eager` default from `false` to `true`
+2. Strengthen precedence wording: edit is "ONLY non-code", write is "new files only"
+3. Add `code edit` operation list to system prompt
+4. Add anti-patterns to patch.md and write.md directing to `code edit`
+5. Port full ultraplan Org Item Body Standard to shared section (both modes)
+6. Add `org wave` instruction to standard plan mode workflow
+7. Extend exit-plan-mode validation: sub-outline ID collection, cross-reference validation, cycle detection
+
+* Verification
+
+- `bun check:ts` passes after all changes
+- `bun test packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts` passes
+- Manual prompt rendering check: non-ultraplan mode shows body standard
+- Manual prompt rendering check: default settings render eager-tasks block
+
+* Execution Manifest
+
+** wave-1: prompt-and-config                       :wave:
+- [[id:FEAT-535-strengthen-code-tool-precedence-over-edi]] Strengthen code tool precedence in system prompt and tool descriptions (1h)
+- [[id:FEAT-536-enable-task-delegation-by-default-task-e]] Change task.eager default to true (30m)
+
+** wave-2: plan-mode-standard                      :wave:
+- [[id:FEAT-537-port-ultraplan-sub-outline-body-standard]] Port ultraplan sub-outline body standard to standard plan mode (1h30m)
+
+** wave-3: validation-hardening                    :wave:
+- [[id:FEAT-538-validate-sub-outline-depends-references]] Validate sub-outline DEPENDS references in exit-plan-mode (2h, depends FEAT-537-port-ultraplan-sub-outline-body-standard)
+
+** Completion [2026-04-13]
+*** Verification
+- `bun check:ts` → passed after prompt/config/tool/test updates.
+- `bun test packages/coding-agent/test/system-prompt-templates.test.ts packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts` → 25 passed, 0 failed.
+- Manual prompt rendering check (`bun -e ...renderPromptTemplate(...)...`) → `{ "planHasSuboutlineStandard": true, "planHasOrgWave": true, "systemHasTaskSection": true, "systemHasEagerSection": true, "eagerDefault": true }`.
+
+*** Artifacts
+- None.
+
+*** Deviations
+- Repo-wide `bun check:ts` initially failed on an unrelated Biome import-order violation in `packages/natives/test/code-buffer.test.ts`; reordered those imports so the required verification command could pass.
