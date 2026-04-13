@@ -11,8 +11,9 @@ use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use pi_code_graph::{
 	BuildGraphOptions, CacheStatus, CacheStore, CodeGraph, CodeGraphBuilder, GraphCluster,
-	GraphContextResult, GraphDeadCodeItem, GraphDepsResult, GraphFlowResult, GraphImpactResult,
-	GraphNodeSummary, GraphSearchMatch, GraphStatus, GraphTraversalLevel, LanguageRegistry,
+	GraphContextResult, GraphDeadCodeItem, GraphDepsResult, GraphFilesResult, GraphFlowResult,
+	GraphImpactResult, GraphNodeSummary, GraphSearchMatch, GraphStatus, GraphSymbolsResult,
+	GraphTraversalLevel, LanguageRegistry,
 };
 
 use crate::{
@@ -209,6 +210,22 @@ fn run_code_graph(
 		"clusters" => {
 			format_clusters(&graph.graph_clusters(), options.limit.unwrap_or(DEFAULT_LIMIT) as usize)
 		},
+		"symbols" => {
+			let query = options
+				.query
+				.as_deref()
+				.ok_or_else(|| Error::from_reason("symbols requires `query`"))?;
+			format_symbols(
+				&graph.graph_symbols(query, options.limit.unwrap_or(DEFAULT_LIMIT) as usize),
+			)
+		},
+		"files" => {
+			let query = options
+				.query
+				.as_deref()
+				.ok_or_else(|| Error::from_reason("files requires `query`"))?;
+			format_files(&graph.graph_files(query, options.limit.unwrap_or(DEFAULT_LIMIT) as usize))
+		},
 		"search" => {
 			let query = options
 				.query
@@ -254,7 +271,7 @@ fn run_code_graph(
 						if options.semantic == Some(true) {
 							return Err(Error::from_reason(format!(
 								"Semantic search requested but unavailable: {reason}. Run `code index` \
-								 with `semantic: true` first."
+								 with semantic: true first."
 							)));
 						}
 						semantic_status = Some(format!("unavailable: {reason}"));
@@ -566,6 +583,53 @@ fn format_clusters(clusters: &[GraphCluster], limit: usize) -> String {
 	lines.join("\n")
 }
 
+fn format_symbols(result: &GraphSymbolsResult) -> String {
+	let mut lines = vec![
+		"Symbols".to_string(),
+		format!("Query: {}", result.query),
+		format!("Status: {}", result.status),
+	];
+	append_lookup_lines(&mut lines, &result.matches);
+	if result.status == "ambiguous" {
+		lines.push("Next: refine the query with a qualified name or file path".into());
+	}
+	lines.join("\n")
+}
+
+fn format_files(result: &GraphFilesResult) -> String {
+	let mut lines = vec![
+		"Files".to_string(),
+		format!("Query: {}", result.query),
+		format!("Status: {}", result.status),
+	];
+	append_lookup_lines(&mut lines, &result.matches);
+	if result.status == "ambiguous" {
+		lines.push("Next: refine the query with more of the path".into());
+	}
+	lines.join("\n")
+}
+
+fn append_lookup_lines(lines: &mut Vec<String>, matches: &[GraphNodeSummary]) {
+	if matches.is_empty() {
+		lines.push("No matches found.".into());
+		return;
+	}
+	for entry in matches {
+		if entry.kind == "file" {
+			lines.push(format!("- {}", entry.label));
+		} else {
+			lines.push(format!(
+				"- {} [{}] {}:{}:{}",
+				entry.label,
+				entry.kind,
+				entry.path.display(),
+				entry.line,
+				entry.column,
+			));
+		}
+	}
+}
+
 fn format_search(matches: &[GraphSearchMatch]) -> String {
 	if matches.is_empty() {
 		return "Search\nNo graph matches found.".into();
@@ -734,6 +798,54 @@ mod tests {
 			}
 			crate::embedding_worker::reset_for_tests();
 		}
+	}
+
+	#[test]
+	fn symbols_lookup_reports_exact_matches() {
+		let root = fixture_root("symbols");
+		run_fixture_command(&root, "index", None, None).expect("graph index should succeed");
+		let result = run_fixture_command(&root, "symbols", Some("rateLimit"), None)
+			.expect("symbols lookup should succeed");
+		assert!(
+			result.output.contains("Symbols"),
+			"symbols output should include a heading: {}",
+			result.output
+		);
+		assert!(
+			result.output.contains("Status: exact"),
+			"symbols output should report exact matches: {}",
+			result.output
+		);
+		assert!(
+			result.output.contains("rate_limit.ts::rateLimit"),
+			"symbols output should list the resolved symbol: {}",
+			result.output
+		);
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn files_lookup_reports_exact_matches() {
+		let root = fixture_root("files");
+		run_fixture_command(&root, "index", None, None).expect("graph index should succeed");
+		let result = run_fixture_command(&root, "files", Some("rate_limit.ts"), None)
+			.expect("files lookup should succeed");
+		assert!(
+			result.output.contains("Files"),
+			"files output should include a heading: {}",
+			result.output
+		);
+		assert!(
+			result.output.contains("Status: exact"),
+			"files output should report exact matches: {}",
+			result.output
+		);
+		assert!(
+			result.output.contains("src/rate_limit.ts"),
+			"files output should list the resolved path: {}",
+			result.output
+		);
+		let _ = fs::remove_dir_all(root);
 	}
 
 	#[test]

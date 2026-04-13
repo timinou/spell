@@ -616,6 +616,72 @@ async function formatContent(
 	return content;
 }
 
+export interface FormatFileContentResult {
+	content: string;
+	formatter: FileFormatResult | "unavailable";
+	server?: string;
+}
+
+async function hasFormattingProvider(servers: Array<[string, ServerConfig]>, cwd: string): Promise<boolean> {
+	if (servers.some(([, serverConfig]) => serverConfig.createClient)) {
+		return true;
+	}
+	for (const [, serverConfig] of servers) {
+		try {
+			const client = await getOrCreateClient(serverConfig, cwd);
+			if (client.serverCapabilities?.documentFormattingProvider) {
+				return true;
+			}
+		} catch {}
+	}
+	return false;
+}
+
+export async function formatFileContent(
+	absolutePath: string,
+	content: string,
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<FormatFileContentResult> {
+	const servers = getServersForFile(getConfig(cwd), absolutePath);
+	const server = servers.length > 0 ? servers.map(([name]) => name).join(", ") : undefined;
+	if (servers.length === 0) {
+		return { content, formatter: "unavailable", server };
+	}
+	const { lspServers, customLinterServers } = splitServers(servers);
+	const timeoutSignal = AbortSignal.timeout(10_000);
+	const operationSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+	try {
+		if (customLinterServers.length > 0) {
+			const formatted = await formatContent(absolutePath, content, cwd, customLinterServers, operationSignal);
+			if (lspServers.length > 0) {
+				await syncFileContent(absolutePath, formatted, cwd, lspServers, operationSignal);
+			}
+			return {
+				content: formatted,
+				formatter: formatted !== content ? FileFormatResult.FORMATTED : FileFormatResult.UNCHANGED,
+				server,
+			};
+		}
+		if (!(await hasFormattingProvider(lspServers, cwd))) {
+			return { content, formatter: "unavailable", server };
+		}
+		await syncFileContent(absolutePath, content, cwd, lspServers, operationSignal);
+		const formatted = await formatContent(absolutePath, content, cwd, lspServers, operationSignal);
+		if (formatted !== content) {
+			await syncFileContent(absolutePath, formatted, cwd, lspServers, operationSignal);
+		}
+		return {
+			content: formatted,
+			formatter: formatted !== content ? FileFormatResult.FORMATTED : FileFormatResult.UNCHANGED,
+			server,
+		};
+	} catch {
+		throwIfAborted(signal);
+		return { content, formatter: "unavailable", server };
+	}
+}
+
 /** Options for creating the LSP writethrough callback */
 export interface WritethroughOptions {
 	/** Whether to format the file using LSP after writing */

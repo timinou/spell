@@ -329,3 +329,65 @@ function validateNative(bindings: NativeBindings, source: string): void {
 }
 
 export const native = logger.time("native:loadNative", () => loadNative());
+
+export interface NativeStalenessResult {
+	stale: boolean;
+	newestSourceFile: string;
+	binaryPath: string;
+	newestSourceMtimeMs: number;
+	binaryMtimeMs: number;
+}
+
+function collectTrackedSources(root: string, out: string[]): void {
+	const entries = fs.readdirSync(root, { withFileTypes: true });
+	for (const entry of entries) {
+		const fullPath = path.join(root, entry.name);
+		if (entry.isDirectory()) {
+			if (entry.name === "target") continue;
+			collectTrackedSources(fullPath, out);
+			continue;
+		}
+		if (entry.name === "Cargo.toml" || entry.name === "build.rs" || fullPath.endsWith(".rs")) {
+			out.push(fullPath);
+		}
+	}
+}
+
+export function checkStaleness(binaryPath: string, cratesDir: string): NativeStalenessResult | null {
+	if (!fs.existsSync(binaryPath) || !fs.existsSync(cratesDir)) {
+		return null;
+	}
+	const sourceFiles: string[] = [];
+	collectTrackedSources(cratesDir, sourceFiles);
+	if (sourceFiles.length === 0) {
+		return null;
+	}
+	let newestSourceFile = sourceFiles[0];
+	let newestSourceMtimeMs = fs.statSync(newestSourceFile).mtimeMs;
+	for (const sourceFile of sourceFiles.slice(1)) {
+		const sourceMtimeMs = fs.statSync(sourceFile).mtimeMs;
+		if (sourceMtimeMs > newestSourceMtimeMs) {
+			newestSourceFile = sourceFile;
+			newestSourceMtimeMs = sourceMtimeMs;
+		}
+	}
+	const binaryMtimeMs = fs.statSync(binaryPath).mtimeMs;
+	return {
+		stale: newestSourceMtimeMs > binaryMtimeMs,
+		newestSourceFile,
+		binaryPath,
+		newestSourceMtimeMs,
+		binaryMtimeMs,
+	};
+}
+
+export function checkNativeStaleness(cratesDir: string): NativeStalenessResult | null {
+	if (!process.env.PI_DEV) {
+		return null;
+	}
+	const binaryPath = dedupedCandidates.find(candidate => fs.existsSync(candidate));
+	if (!binaryPath) {
+		return null;
+	}
+	return checkStaleness(binaryPath, cratesDir);
+}

@@ -406,7 +406,8 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 				.collect();
 			Ok(json_response(json!({ "languages": langs }), false))
 		},
-		"outline" | "read" | "navigate" | "edit" | "undo" | "redo" | "diff" | "save" => {
+		"outline" | "read" | "navigate" | "edit" | "undo" | "redo" | "diff" | "replace_content"
+		| "save" => {
 			let path = required_path(options)?;
 			let buffer = buffer_registry().open(&path).map_err(engine_err)?;
 			let mut buffer = buffer.lock();
@@ -483,6 +484,25 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 					),
 					false,
 				)),
+				"replace_content" => {
+					let before = buffer.source();
+					let content = options
+						.get("content")
+						.and_then(Value::as_str)
+						.ok_or_else(|| json_err("Missing required field: content"))?;
+					buffer
+						.edit_batch(vec![TextEdit {
+							start_byte:   0,
+							old_end_byte: before.len(),
+							new_text:     content.to_string(),
+						}])
+						.map_err(engine_err)?;
+					let diff = render_annotated_diff(&buffer, &before, &profile);
+					Ok(json_response(
+						json!({ "version": buffer.version(), "diff": diff, "editCount": 1 }),
+						false,
+					))
+				},
 				"save" => {
 					buffer.save().map_err(engine_err)?;
 					Ok(json_response(json!({ "success": true, "version": buffer.version() }), false))

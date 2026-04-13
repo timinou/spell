@@ -1,0 +1,46 @@
+#+TITLE: Enrich declarative graph edges beyond baseline references
+#+STATE: ITEM
+#+SESSION_ID: 14b8fc8c0f83347f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T12-06-58-366Z_14b8fc8c0f83347f.jsonl]]
+#+CUSTOM_ID: FUP-053-enrich-declarative-graph-edges-beyond-ba
+#+PRIORITY: #B
+#+LAYER: backend
+#+DEPENDS: PROJ-040-declarative-code-graph-extraction-and-la
+#+EFFORT: 6h
+
+* Initial Message
+
+Do an analysis of spell's pi-code-graph and pi-code-engine, and give me your overall review. I would like to implement auto-formatting to the output of the code  tool, for example, as well as explore ways to do symbol search or whatever, in order to reduce the reliance of the harness of grep to do its work. Do a deep research and present your findings
+
+* Context
+
+Using =pi-code-engine= =LanguageProfile= makes =pi-code-graph= language-parity feasible for declarations/imports/exports/generic references, but it does not fully replace the richer language-specific semantics that the current bespoke TypeScript extractor provides (=Calls=, =Inherits=, =TypeParameterOf=, and other higher-signal edges). The same applies to Elixir-specific render/call behavior and any future Markdown/Typst/Org semantic relations.
+
+This follow-up tracks the second phase after baseline parity lands: recover or improve higher-signal edge kinds through optional enrichers layered on top of the declarative extractor.
+
+* User Workflows
+
+1. =code flow= uses real call edges instead of generic reference edges where the language supports them.
+2. =code context= separates inheritance, render, and type-parameter relations from generic references.
+3. Search reranking can boost true call-graph neighbors instead of generic identifier co-occurrence.
+
+* Scope
+
+Future work only. Likely files:
+- =crates/pi-code-graph/src/language/*=
+- =crates/pi-code-graph/src/indexer.rs=
+- =crates/pi-code-graph/src/query.rs=
+- =crates/pi-code-graph/src/hybrid.rs=
+
+* Acceptance Criteria
+
+- Each supported language has a documented decision: baseline-only or enriched edge typing.
+- Flow/context/impact quality measurably improves on representative fixtures without regressing the declarative baseline.
+- Verification commands should include =cargo test -p pi-code-graph= plus fixture-driven query comparisons.
+
+* Dependency
+
+Do not start until declarative extraction parity is complete and stable.
+
+* Parent Plan
+- [[id:PLAN-220-pi-code-graph-declarative-discovery-and]]

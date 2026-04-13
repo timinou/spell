@@ -91,6 +91,20 @@ pub struct GraphSearchMatch {
 	pub summary: GraphNodeSummary,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphSymbolsResult {
+	pub query:   String,
+	pub status:  String,
+	pub matches: Vec<GraphNodeSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphFilesResult {
+	pub query:   String,
+	pub status:  String,
+	pub matches: Vec<GraphNodeSummary>,
+}
+
 impl CodeGraph {
 	pub fn graph_status(&self) -> GraphStatus {
 		GraphStatus {
@@ -141,6 +155,98 @@ impl CodeGraph {
 					.map(|summary| GraphSearchMatch { score: hit.score, summary })
 			})
 			.collect()
+	}
+
+	pub fn graph_symbols(&self, query: &str, limit: usize) -> GraphSymbolsResult {
+		let graph = self.graph();
+		let exact = exact_symbol_matches(graph, query);
+		if exact.len() == 1 {
+			return GraphSymbolsResult {
+				query:   query.to_string(),
+				status:  "exact".into(),
+				matches: exact
+					.into_iter()
+					.filter_map(|node_index| summary_for_node(graph, node_index))
+					.collect(),
+			};
+		}
+		if exact.len() > 1 {
+			return GraphSymbolsResult {
+				query:   query.to_string(),
+				status:  "ambiguous".into(),
+				matches: dedupe_summaries(
+					exact
+						.into_iter()
+						.filter_map(|node_index| summary_for_node(graph, node_index))
+						.collect(),
+					limit,
+				),
+			};
+		}
+		let matches = dedupe_summaries(
+			self
+				.graph_search(query, None, limit.saturating_mul(2).max(limit))
+				.into_iter()
+				.filter(|hit| hit.summary.kind != "file")
+				.map(|hit| hit.summary)
+				.collect(),
+			limit,
+		);
+		GraphSymbolsResult {
+			query: query.to_string(),
+			status: if matches.is_empty() {
+				"none".into()
+			} else {
+				"ranked".into()
+			},
+			matches,
+		}
+	}
+
+	pub fn graph_files(&self, query: &str, limit: usize) -> GraphFilesResult {
+		let graph = self.graph();
+		let exact = exact_file_matches(graph, query);
+		if exact.len() == 1 {
+			return GraphFilesResult {
+				query:   query.to_string(),
+				status:  "exact".into(),
+				matches: exact
+					.into_iter()
+					.filter_map(|node_index| summary_for_node(graph, node_index))
+					.collect(),
+			};
+		}
+		if exact.len() > 1 {
+			return GraphFilesResult {
+				query:   query.to_string(),
+				status:  "ambiguous".into(),
+				matches: dedupe_summaries(
+					exact
+						.into_iter()
+						.filter_map(|node_index| summary_for_node(graph, node_index))
+						.collect(),
+					limit,
+				),
+			};
+		}
+		let matches = dedupe_summaries(
+			self
+				.graph_search(query, None, limit.saturating_mul(2).max(limit))
+				.into_iter()
+				.filter(|hit| hit.summary.kind == "file")
+				.map(|hit| hit.summary)
+				.collect(),
+			limit,
+		);
+		GraphFilesResult {
+			query: query.to_string(),
+			status: if matches.is_empty() {
+				"none".into()
+			} else {
+				"ranked".into()
+			},
+			matches,
+		}
 	}
 
 	pub fn graph_context(&self, query: &str) -> Option<GraphContextResult> {
@@ -362,6 +468,39 @@ fn resolve_file(
 			Some(GraphNode::File(file)) => file.path == Path::new(query) || file.path.ends_with(query),
 			_ => false,
 		})
+}
+
+fn exact_symbol_matches(
+	graph: &petgraph::stable_graph::StableGraph<GraphNode, EdgeKind>,
+	query: &str,
+) -> Vec<NodeIndex> {
+	graph
+		.node_indices()
+		.filter(|&node_index| match graph.node_weight(node_index) {
+			Some(GraphNode::Symbol(symbol)) => symbol.qualified_name == query || symbol.name == query,
+			_ => false,
+		})
+		.collect()
+}
+
+fn exact_file_matches(
+	graph: &petgraph::stable_graph::StableGraph<GraphNode, EdgeKind>,
+	query: &str,
+) -> Vec<NodeIndex> {
+	graph
+		.node_indices()
+		.filter(|&node_index| match graph.node_weight(node_index) {
+			Some(GraphNode::File(file)) => file.path == Path::new(query) || file.path.ends_with(query),
+			_ => false,
+		})
+		.collect()
+}
+
+fn dedupe_summaries(mut summaries: Vec<GraphNodeSummary>, limit: usize) -> Vec<GraphNodeSummary> {
+	let mut seen = BTreeSet::new();
+	summaries.retain(|summary| seen.insert((summary.label.clone(), summary.path.clone())));
+	summaries.truncate(limit);
+	summaries
 }
 
 fn resolve_symbol_or_file(
@@ -755,6 +894,29 @@ mod tests {
 	fn resolve_symbol_does_not_match_files() {
 		let graph = build_query_graph();
 		assert!(graph.graph_context("caller.query").is_none());
+	}
+
+	#[test]
+	fn queries_symbol_and_file_lookup_distinguish_exact_from_ranked() {
+		let graph = build_query_graph();
+		let symbols = graph.graph_symbols("callee", 5);
+		assert_eq!(symbols.status, "exact");
+		assert_eq!(symbols.matches.len(), 1);
+		assert!(symbols.matches[0].label.ends_with("callee.query::callee"));
+
+		let ranked_symbols = graph.graph_symbols("caller.query", 5);
+		assert_eq!(ranked_symbols.status, "ranked");
+		assert!(
+			ranked_symbols
+				.matches
+				.iter()
+				.any(|node| node.label.ends_with("caller.query::caller"))
+		);
+
+		let files = graph.graph_files("caller.query", 5);
+		assert_eq!(files.status, "exact");
+		assert_eq!(files.matches.len(), 1);
+		assert_eq!(files.matches[0].label, "caller.query");
 	}
 
 	#[test]

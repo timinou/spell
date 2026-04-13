@@ -107,10 +107,13 @@ describe("code tool result contract", () => {
 				diff: "@@ add @@\n-return a + b;\n+return a * b;",
 				editCount: 1,
 			},
+			formatting: "formatted",
+			formatterServer: "biome",
 		});
 
 		const content = formatCodeToolContent(details);
 		expect(content).toContain("Edited src/main.ts");
+		expect(content).toContain("Formatting: formatted via biome");
 		expect(content).toContain("Changes: +1 -1");
 		expect(content).toContain("Diff preview:");
 		expect(content).toContain("@@ add @@");

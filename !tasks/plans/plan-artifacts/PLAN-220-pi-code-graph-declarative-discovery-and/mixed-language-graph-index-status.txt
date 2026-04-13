@@ -1,0 +1,26 @@
+Command:
+bun -e 'import { executeCodeGraph } from "./packages/natives/src/code-graph/index.ts"; const root="/tmp/plan220-mixed"; const index=await executeCodeGraph({command:"index",root}); const status=await executeCodeGraph({command:"status",root}); console.log(["# code index", index.output, "", "# code status", status.output].join("\n"));'
+
+Output:
+# code index
+Code graph status
+Root: /tmp/plan220-mixed
+Cache: missing
+Rebuilt: yes
+Files: 8
+Symbols: 11
+Edges: 11
+Git HEAD: unknown
+Languages: elixir=2, markdown=1, org=1, python=1, rust=1, typescript=1, typst=1
+
+# code status
+Code graph status
+Root: /tmp/plan220-mixed
+Cache: fresh
+Rebuilt: no
+Files: 8
+Symbols: 11
+Edges: 11
+Git HEAD: unknown
+Languages: elixir=2, markdown=1, org=1, python=1, rust=1, typescript=1, typst=1
+Semantic: missing

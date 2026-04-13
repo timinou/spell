@@ -18,6 +18,7 @@ import { Text } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import { FileFormatResult, formatFileContent } from "../lsp";
 import type { Theme } from "../modes/theme/theme";
 import codeDescription from "../prompts/tools/code.md" with { type: "text" };
 import markdownHint from "../prompts/tools/code-hint-markdown.md" with { type: "text" };
@@ -46,6 +47,8 @@ const GRAPH_COMMANDS = new Set([
 	"flow",
 	"dead_code",
 	"clusters",
+	"symbols",
+	"files",
 	"search",
 ]);
 
@@ -198,7 +201,7 @@ const editEntrySchema = Type.Object({
 const codeSchema = Type.Object({
 	command: Type.String({
 		description:
-			"Subcommand: read | outline | edit | buffers | diff | navigate | languages | undo | redo | save | index | status | context | impact | deps | flow | dead_code | clusters | search",
+			"Subcommand: read | outline | edit | buffers | diff | navigate | languages | undo | redo | save | index | status | context | impact | deps | flow | dead_code | clusters | symbols | files | search",
 	}),
 	file: Type.Optional(Type.String({ description: "Absolute or project-relative file path" })),
 	symbol: Type.Optional(
@@ -206,7 +209,7 @@ const codeSchema = Type.Object({
 			description: "Symbol name for edit targeting or graph commands like context | impact | flow",
 		}),
 	),
-	query: Type.Optional(Type.String({ description: "Search query for graph search" })),
+	query: Type.Optional(Type.String({ description: "Search or lookup query for graph search, symbols, or files" })),
 	resolution: Type.Optional(Type.Integer({ description: "Zoom level 0-3 (default 2)" })),
 	offset: Type.Optional(Type.Integer({ description: "Start line 1-indexed (resolution 3 only)" })),
 	limit: Type.Optional(Type.Integer({ description: "Max results or lines" })),
@@ -299,6 +302,35 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 		return hint;
 	}
 
+	async #prepareEditedFileForSave(
+		file: string,
+		cwd: string,
+		signal?: AbortSignal,
+	): Promise<{ formatting: "formatted" | "unchanged" | "unavailable"; formatterServer?: string }> {
+		if (!this.#session.settings.get("lsp.enabled")) {
+			return { formatting: "unavailable" };
+		}
+		const readResult = timedCodeBuffer({ command: "read", file, resolution: 3 });
+		if (readResult.error || typeof readResult.output !== "string") {
+			return { formatting: "unavailable" };
+		}
+		const formatted = await formatFileContent(file, readResult.output, cwd, signal);
+		if (formatted.formatter === FileFormatResult.FORMATTED) {
+			const replaceResult = timedCodeBuffer({
+				command: "replace_content",
+				file,
+				content: formatted.content,
+			});
+			if (replaceResult.error) {
+				return { formatting: "unavailable", formatterServer: formatted.server };
+			}
+		}
+		return {
+			formatting: formatted.formatter,
+			formatterServer: formatted.server,
+		};
+	}
+
 	async execute(
 		_toolCallId: string,
 		params: CodeParams,
@@ -374,6 +406,14 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				return toolResult(details).text(formatCodeToolContent(details)).done();
 			}
 
+			let formatting: "formatted" | "unchanged" | "unavailable" | undefined;
+			let formatterServer: string | undefined;
+			if (command === "edit" && options.file) {
+				const formatResult = await this.#prepareEditedFileForSave(options.file, sessionCwd, _signal);
+				formatting = formatResult.formatting;
+				formatterServer = formatResult.formatterServer;
+			}
+
 			if (MUTATING_COMMANDS.has(command) && options.file) {
 				const saveResult = timedCodeBuffer({ command: "save", file: options.file });
 				if (saveResult.error) {
@@ -396,6 +436,8 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				resolution: params.resolution,
 				offset: params.offset,
 				limit: params.limit,
+				formatting,
+				formatterServer,
 			});
 			const injectedHint = this.#maybeInjectLanguageHint(options.file);
 			if (injectedHint) {

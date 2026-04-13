@@ -1,0 +1,20 @@
+Command:
+bun -e 'import { executeCodeGraph } from "./packages/natives/src/code-graph/index.ts"; const root=process.cwd(); const exact=await executeCodeGraph({command:"symbols",root,query:"CodeTool",limit:5}); const ambiguous=await executeCodeGraph({command:"symbols",root,query:"execute",limit:5}); console.log(["# code symbols exact", exact.output, "", "# code symbols ambiguous", ambiguous.output].join("\n"));'
+
+Output:
+# code symbols exact
+Symbols
+Query: CodeTool
+Status: exact
+- packages/coding-agent/src/tools/code.ts::CodeTool [class] packages/coding-agent/src/tools/code.ts:280:14
+
+# code symbols ambiguous
+Symbols
+Query: execute
+Status: ambiguous
+- crates/brush-builtins-vendored/src/alias.rs::AliasCommand.execute [method] crates/brush-builtins-vendored/src/alias.rs:21:14
+- crates/brush-builtins-vendored/src/bg.rs::BgCommand.execute [method] crates/brush-builtins-vendored/src/bg.rs:16:14
+- crates/brush-builtins-vendored/src/bind.rs::BindCommand.execute [method] crates/brush-builtins-vendored/src/bind.rs:93:14
+- crates/brush-builtins-vendored/src/break_.rs::BreakCommand.execute [method] crates/brush-builtins-vendored/src/break_.rs:16:14
+- crates/brush-builtins-vendored/src/brushinfo.rs::BrushInfoCommand.execute [method] crates/brush-builtins-vendored/src/brushinfo.rs:58:14
+Next: refine the query with a qualified name or file path

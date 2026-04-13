@@ -11,6 +11,8 @@ export type CodeGraphCommand =
 	| "flow"
 	| "dead_code"
 	| "clusters"
+	| "symbols"
+	| "files"
 	| "search";
 
 export type CodeFileCommand =
@@ -65,6 +67,8 @@ export interface CodeEditData {
 	version?: number;
 	diff: string;
 	editCount: number;
+	formatting?: "formatted" | "unchanged" | "unavailable";
+	formatterServer?: string;
 }
 
 export interface CodeHistoryRange {
@@ -234,6 +238,8 @@ export function normalizeCodeBufferSuccess(input: {
 	resolution?: number;
 	offset?: number;
 	limit?: number;
+	formatting?: CodeEditData["formatting"];
+	formatterServer?: string;
 }): CodeFileDetails {
 	const displayPath = toDisplayPath(input.file, input.cwd);
 	const base = {
@@ -287,6 +293,8 @@ export function normalizeCodeBufferSuccess(input: {
 				version: asNumber(record?.version),
 				diff: asString(record?.diff) ?? "",
 				editCount: asNumber(record?.editCount) ?? 0,
+				formatting: input.formatting,
+				formatterServer: input.formatterServer,
 			},
 		};
 	}
@@ -411,16 +419,30 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 	if (details.command === "edit") {
 		const label = details.displayPath ? ` ${details.displayPath}` : "";
 		const header = `Edited${label}`;
+		const formatting = details.data.formatting
+			? formatEditFormatting(details.data.formatting, details.data.formatterServer)
+			: undefined;
 		if (details.data.diff.trim().length === 0) {
-			return withHint(header);
+			return withHint([header, formatting].filter(Boolean).join("\n"));
 		}
 		const preview = buildCompactHashlineDiffPreview(details.data.diff);
 		const changes = countDiffChanges(details.data.diff);
-		const lines = [header, `Changes: +${changes.addedLines} -${changes.removedLines}`];
+		const lines = [header, formatting, `Changes: +${changes.addedLines} -${changes.removedLines}`].filter(Boolean);
 		if (preview.preview.trim().length > 0) {
 			lines.push("Diff preview:", preview.preview);
 		}
 		return withHint(lines.join("\n"));
+	}
+
+	function formatEditFormatting(
+		formatting: NonNullable<CodeEditData["formatting"]>,
+		formatterServer?: string,
+	): string {
+		if (formatting === "unavailable") {
+			return "Formatting: unavailable (saved without formatter)";
+		}
+		const via = formatterServer ? ` via ${formatterServer}` : "";
+		return `Formatting: ${formatting}${via}`;
 	}
 
 	if (details.command === "undo" || details.command === "redo") {

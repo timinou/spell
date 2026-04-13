@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import * as lspModule from "@oh-my-pi/pi-coding-agent/lsp";
 import { _resetSupportedExtensionsForTest, CodeTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import * as nativesModule from "@oh-my-pi/pi-natives";
 
@@ -50,6 +51,9 @@ describe("coding-agent code tool wiring", () => {
 		} catch {}
 		try {
 			(spyOn(nativesModule, "executeCodeGraph") as any).mockRestore?.();
+		} catch {}
+		try {
+			(spyOn(lspModule, "formatFileContent") as any).mockRestore?.();
 		} catch {}
 		_resetSupportedExtensionsForTest();
 	});
@@ -136,6 +140,28 @@ describe("coding-agent code tool wiring", () => {
 		);
 	});
 
+	it("routes symbol and file lookup commands to the native graph backend", async () => {
+		const executeSpy = spyOn(nativesModule, "executeCodeGraph").mockResolvedValue({
+			output: "Symbols\nQuery: CodeTool\nStatus: exact\n- src/tools/code.ts::CodeTool [class] src/tools/code.ts:1:1",
+			cacheStatus: "fresh",
+			rebuilt: false,
+			fileCount: 12,
+			symbolCount: 34,
+			edgeCount: 56,
+		});
+		const tool = new CodeTool(createSession({ cwd: "/tmp/project" }));
+
+		await tool.execute("graph", { command: "symbols", query: "CodeTool" });
+		expect(executeSpy).toHaveBeenLastCalledWith(
+			expect.objectContaining({ command: "symbols", query: "CodeTool", root: "/tmp/project" }),
+		);
+
+		await tool.execute("graph", { command: "files", query: "code.ts" });
+		expect(executeSpy).toHaveBeenLastCalledWith(
+			expect.objectContaining({ command: "files", query: "code.ts", root: "/tmp/project" }),
+		);
+	});
+
 	it("routes file-local commands to executeCodeBuffer with compact summaries", async () => {
 		const outlinePayload = [
 			{
@@ -200,6 +226,42 @@ describe("coding-agent code tool wiring", () => {
 		const result = await tool.execute("tool", { command: "read", file: "/tmp/test/README.md" });
 		expect(getText(result)).not.toContain("Markdown-specific code operations:");
 		expect(getText(result)).toContain("missing file");
+	});
+
+	it("formats edited buffers before the final save when a formatter is available", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: { version: 2, diff: "@@ patch @@", editCount: 1 }, error: false })
+			.mockReturnValueOnce({ output: "function main( ) {\nreturn 42;\n}\n", error: false })
+			.mockReturnValueOnce({ output: { version: 3, diff: "@@ format @@", editCount: 1 }, error: false })
+			.mockReturnValueOnce({ output: { success: true, version: 3 }, error: false });
+		const formatSpy = spyOn(lspModule, "formatFileContent").mockResolvedValue({
+			content: "function main() {\n  return 42;\n}\n",
+			formatter: lspModule.FileFormatResult.FORMATTED,
+			server: "biome",
+		});
+		const tool = new CodeTool(createSession());
+
+		const result = await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			symbol: "main",
+			operation: "replace-body",
+			content: ["{", "return 42;", "}"],
+		});
+
+		expect(formatSpy).toHaveBeenCalledWith(
+			"/tmp/test/src/main.ts",
+			"function main( ) {\nreturn 42;\n}\n",
+			"/tmp/test",
+			undefined,
+		);
+		expect(bufferSpy.mock.calls[2]?.[0]).toMatchObject({
+			command: "replace_content",
+			file: "/tmp/test/src/main.ts",
+			content: "function main() {\n  return 42;\n}\n",
+		});
+		expect(bufferSpy.mock.calls[3]?.[0]).toMatchObject({ command: "save", file: "/tmp/test/src/main.ts" });
+		expect(getText(result)).toContain("Formatting: formatted via biome");
 	});
 
 	it("joins array content for replace-body edits before invoking NAPI", async () => {
@@ -422,7 +484,7 @@ describe("coding-agent code tool wiring", () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
 			.mockReturnValueOnce({ output: { version: 2, diff: "@@ patch @@\n-old\n+new", editCount: 1 }, error: false })
 			.mockReturnValueOnce({ output: { success: true, version: 2 }, error: false });
-		const tool = new CodeTool(createSession());
+		const tool = new CodeTool(createSession({ settings: Settings.isolated({ "lsp.enabled": false }) }));
 		const result = await tool.execute("tool", {
 			command: "edit",
 			file: "/tmp/test/src/main.ts",
@@ -471,7 +533,7 @@ describe("coding-agent code tool wiring", () => {
 		spyOn(nativesModule, "executeCodeBuffer")
 			.mockReturnValueOnce({ output: { version: 2, diff: "@@ patch @@", editCount: 1 }, error: false })
 			.mockReturnValueOnce({ output: "Permission denied", error: true });
-		const tool = new CodeTool(createSession());
+		const tool = new CodeTool(createSession({ settings: Settings.isolated({ "lsp.enabled": false }) }));
 		const result = await tool.execute("tool", {
 			command: "edit",
 			file: "/tmp/test/src/main.ts",

@@ -1,0 +1,77 @@
+#+TITLE: Declarative code graph extraction and language parity
+#+STATE: DONE
+#+SESSION_ID: 14b8fc8c0f83347f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T12-06-58-366Z_14b8fc8c0f83347f.jsonl]]
+#+CUSTOM_ID: PROJ-040-declarative-code-graph-extraction-and-la
+#+EFFORT: 8h
+#+LAYER: backend
+#+PRIORITY: #A
+
+* Initial Message
+
+Do an analysis of spell's pi-code-graph and pi-code-engine, and give me your overall review. I would like to implement auto-formatting to the output of the code  tool, for example, as well as explore ways to do symbol search or whatever, in order to reduce the reliance of the harness of grep to do its work. Do a deep research and present your findings
+
+* Context
+
+The current =code= file engine and =pi-code-engine= language registry support TypeScript, Rust, Python, Typst, Markdown, Org, and Elixir, but =pi-code-graph= defaults to only TypeScript + Elixir. The graph also duplicates language extraction logic in bespoke extractors, which creates drift against =crates/pi-code-engine/src/language/mod.rs= and makes language expansion expensive.
+
+This item establishes a declarative graph-extraction core that treats =pi-code-engine= =LanguageProfile= as the canonical source for declarations, class/member hierarchy, imports, exports, and generic reference patterns. The goal is parity of language coverage, not full parity of language-specific semantic richness. Language-specific import resolution and semantic edge enrichment remain explicit extension hooks.
+
+* User Workflows
+
+1. A caller runs =code index= in a Rust, Python, Typst, Markdown, Org, TypeScript, or Elixir workspace and gets graph coverage instead of silent language drop-off.
+2. A caller runs =code status= and sees file/symbol counts that reflect every language the =code= tool already accepts.
+3. A later feature can add new graph queries without rewriting per-language extraction from scratch.
+4. A maintainer adding a new language to =pi-code-engine= has one canonical schema to extend instead of two divergent stacks.
+
+* Scope
+
+Backend-only. All implementation in:
+- =crates/pi-code-graph/src/language.rs=
+- =crates/pi-code-graph/src/indexer.rs=
+- new helper modules under =crates/pi-code-graph/src/language/= or =src/extract/= as needed
+- selective reuse of =crates/pi-code-engine/src/outline.rs=, =resolve.rs=, =navigate.rs=, and =language/profile.rs=
+
+Do not add new =code= commands here. Do not edit =packages/coding-agent/src/tools/code.ts= or =code-result.ts= in this item.
+
+* Design Decisions
+
+1. Use =LanguageProfile= as the declarative schema for baseline graph extraction.
+2. Build a generic extractor that emits declarations, member relationships, imports, exports, and generic references from engine profiles.
+3. Keep import resolution pluggable per language; do not force a fake universal resolver.
+4. Keep edge enrichment pluggable per language/domain; baseline parity may emit more =References= edges before richer =Calls/Inherits/Renders/TypeParameterOf= enrichment exists.
+5. Preserve stable qualified-name rules per language and document them in code comments/tests.
+
+* Test Coverage
+
+List workflows first, then implement tests first for pure helpers/new types:
+1. Generic extractor builds =ExtractedFile= from engine profiles for each supported language fixture.
+2. Registry default coverage includes all seven languages and matches engine-supported extensions.
+3. Index build includes Rust/Python/Typst/Markdown/Org files instead of skipping them.
+4. Existing TypeScript/Elixir graph behavior remains valid where generic extraction applies.
+5. Import-resolution hooks fail loudly and diagnostically when a language is configured but unresolved.
+
+Required test-first sequencing:
+- Add fixture-driven unit tests for generic extraction helpers before implementation.
+- Add indexer coverage tests for each newly supported language before wiring defaults.
+- Then implement resolver/enricher hook plumbing.
+
+* Acceptance Criteria
+
+- =pi-code-graph= default registry covers TypeScript, Rust, Python, Typst, Markdown, Org, and Elixir.
+- Declarative extraction reads engine profiles instead of hardcoding parallel declaration/reference tables for baseline coverage.
+- =code index= can ingest mixed-language workspaces containing the seven supported languages.
+- TypeScript and Elixir existing graph tests still pass after the refactor.
+- Verification commands:
+  - =cargo test -p pi-code-graph=
+  - =cargo test -p pi-code-engine=
+  - =bun check:rs=
+
+* Manual Proof Artifact
+
+Record a short artifact/transcript showing =code status= or native graph stats on a mixed-language fixture workspace after indexing; save/reference it from the implementing session record.
+
+* Parent Plan
+- [[id:PLAN-220-pi-code-graph-declarative-discovery-and]]
+
+NOTE [2026-04-13]: Implemented declarative graph extraction parity and verified mixed-language indexing artifact.
