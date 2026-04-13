@@ -24,7 +24,7 @@ describe("plan-mode-approved prompt", () => {
 
 		expect(rendered).toContain("## Completion Protocol");
 		expect(rendered).toContain("!tasks/plans/plan-artifacts/PLAN-003-plan-completion-artifacts-and-lifecycle/");
-		expect(rendered).toContain("Append a `** Completion [YYYY-MM-DD]` section");
+		expect(rendered).toContain("Append `** Completion [YYYY-MM-DD]`");
 		expect(rendered).toContain(
 			"PLAN item `PLAN-003-plan-completion-artifacts-and-lifecycle` **MUST** move from `DOING` to `DONE`",
 		);
@@ -57,47 +57,47 @@ describe("plan-mode-approved prompt", () => {
 		expect(rendered).toContain("dependency gate enforces correct execution order");
 		expect(rendered).toContain(":DEPENDS:");
 	});
-});
 
-it("describes auto-initialized todo execution without manual initialization steps", () => {
-	const rendered = renderPromptTemplate(planModeApprovedPrompt, {
-		planContent: "1. Do work",
-		finalPlanFilePath: "org://PLAN-062-test",
-		orgItemId: "PLAN-062-test",
-		orgItemArtifactsDir: "!tasks/plans/plan-artifacts/PLAN-062-test",
-		tools: ["read", "todo_write", "edit", "task"],
-		autoInitialized: true,
+	it("describes auto-initialized todo execution without manual initialization steps", () => {
+		const rendered = renderPromptTemplate(planModeApprovedPrompt, {
+			planContent: "1. Do work",
+			finalPlanFilePath: "org://PLAN-062-test",
+			orgItemId: "PLAN-062-test",
+			orgItemArtifactsDir: "!tasks/plans/plan-artifacts/PLAN-062-test",
+			tools: ["read", "todo_write", "edit", "task"],
+			autoInitialized: true,
+		});
+
+		expect(rendered).toContain("Todo list pre-populated from plan's execution structure.");
+		expect(rendered).toContain("Child org item state transitions happen automatically");
+		expect(rendered).toContain("completion report and final PLAN closeout are explicit steps");
+		expect(rendered).not.toContain("Wave-based Todo Initialization");
+		expect(rendered).toContain("4. Close org lifecycle state truthfully:");
 	});
 
-	expect(rendered).toContain("Todo list pre-populated from plan's execution structure.");
-	expect(rendered).toContain("Child org item state transitions happen automatically");
-	expect(rendered).toContain("completion report and final PLAN closeout are explicit steps");
-	expect(rendered).not.toContain("Wave-based Todo Initialization");
-	expect(rendered).toContain("4. Close org lifecycle state truthfully:");
-});
+	it("renders the coordinator execution branch when execution items are provided", () => {
+		const rendered = renderPromptTemplate(planModeApprovedPrompt, {
+			planId: "fluid-canvas",
+			executionItems: [
+				{ id: "root", task: "Gather data", dependsOn: [], effort: "S", priority: "A", body: "Inspect the code." },
+				{
+					id: "merge",
+					task: "Merge findings",
+					dependsOn: ["root"],
+					effort: "M",
+					priority: "B",
+					body: "Summarize outputs.",
+				},
+			],
+			itemCount: 2,
+			isSimple: true,
+		});
 
-it("renders the coordinator execution branch when execution items are provided", () => {
-	const rendered = renderPromptTemplate(planModeApprovedPrompt, {
-		planId: "fluid-canvas",
-		executionItems: [
-			{ id: "root", task: "Gather data", dependsOn: [], effort: "S", priority: "A", body: "Inspect the code." },
-			{
-				id: "merge",
-				task: "Merge findings",
-				dependsOn: ["root"],
-				effort: "M",
-				priority: "B",
-				body: "Summarize outputs.",
-			},
-		],
-		itemCount: 2,
-		isSimple: true,
+		expect(rendered).toContain("# Coordinator");
+		expect(rendered).toContain("Coordinate 2 planned tasks for `fluid-canvas`.");
+		expect(rendered).toContain("### root");
+		expect(rendered).toContain("### merge");
+		expect(rendered).toContain("Keep at most one direct task `in_progress` at a time.");
+		expect(rendered).not.toContain("Plan approved. You **MUST** execute it now.");
 	});
-
-	expect(rendered).toContain("# Coordinator");
-	expect(rendered).toContain("You are coordinating execution of 2 planned tasks for `fluid-canvas`.");
-	expect(rendered).toContain("### root");
-	expect(rendered).toContain("### merge");
-	expect(rendered).toContain("Keep at most one direct task `in_progress` at a time.");
-	expect(rendered).not.toContain("Plan approved. You **MUST** execute it now.");
 });

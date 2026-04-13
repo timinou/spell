@@ -1,0 +1,87 @@
+#+TITLE: Compress notation voice in execution and audit prompts
+#+STATE: DONE
+#+SESSION_ID: 14b982c81852bd7a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T21-53-27-137Z_14b982c81852bd7a.jsonl]]
+#+CUSTOM_ID: FEAT-541-compress-notation-voice-in-execution-and
+#+EFFORT: 2h
+#+LAYER: coding-agent
+#+PRIORITY: B
+
+* Initial Message
+
+read the <language> part of @packages/coding-agent/src/prompts/system/system-prompt.md. look at the .md file in that folder that are used for:
+- plan
+- ultraplan
+- default
+- audit
+
+modes, and apply the language shown on those system prompts. compress information, strengthen meaning.
+
+User clarification settled for this item:
+- `plan-mode-approved.md` is explicitly in scope even though it is execution-phase rather than a mode-entry prompt.
+- Rewrite depth: language + structure pass allowed when semantics stay the same.
+
+* Parent Plan
+
+- [[id:PLAN-223-compressed-notation-rewrite-for-system-p]] Compressed notation rewrite for system prompt modes
+
+* Scope
+
+This item covers execution-phase and audit-phase prompts plus their direct prompt tests:
+- `packages/coding-agent/src/prompts/system/plan-mode-approved.md`
+- `packages/coding-agent/src/prompts/system/plan-audit.md`
+- `packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts`
+- Add a focused audit prompt test under `packages/coding-agent/test/plan-mode/` if current coverage is insufficient
+
+Out of scope:
+- `packages/coding-agent/src/prompts/system/system-prompt.md`
+- `packages/coding-agent/src/prompts/system/plan-mode-active.md`
+- Planner org-item semantics or execution engine logic in TypeScript unless a prompt render variable is proven missing (not expected)
+
+* Existing Code Reality
+
+`plan-mode-approved.md` is rendered in both interactive approval flow and fluid execution flow. `plan-audit.md` is injected from `AgentSession.#injectAuditPrompt()`. Reference-only loader paths:
+- `packages/coding-agent/src/modes/interactive-mode.ts`
+- `packages/coding-agent/src/modes/fluid-mode.ts`
+- `packages/coding-agent/src/session/agent-session.ts`
+
+Current test reality:
+- `packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts` already asserts critical execution/completion protocol content
+- no dedicated prompt-template test currently covers `plan-audit.md`
+
+* Design Decisions
+
+1. Apply the same notation/compression style to execution and audit prose, but preserve every required step, lifecycle constraint, artifact rule, and clean-exit marker exactly where behavior depends on exact tokens.
+2. Keep both branches of `plan-mode-approved.md` semantically intact: coordinator branch and approved-execution branch.
+3. Preserve the literal `[AUDIT_CLEAN]` marker and all artifact URI/path examples unchanged where downstream behavior or user expectations depend on exact bytes.
+4. Add explicit automated coverage for `plan-audit.md` so future copy edits do not silently drop audit contract requirements.
+5. Prefer semantic assertions over brittle full-paragraph snapshots; only assert exact wording where the exact phrase is itself the contract.
+
+* User Workflows To Preserve
+
+1. Approved plan execution still instructs the agent to execute, verify, update org lifecycle, and commit in the correct order.
+2. Coordinator execution still guides todo orchestration without accidentally switching into implementation-language phrasing.
+3. Audit injection still enforces read-only review and preserves the exact clean-exit token.
+4. Org-backed execution still references artifact directories, artifact URIs, and completion report subsections correctly.
+5. Prompt tests fail loudly if required protocol sections disappear during copy compression.
+
+* Verification
+
+Required checks for this item:
+- `bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts`
+- `bun test packages/coding-agent/test/plan-mode/plan-mode-audit-prompt.test.ts` if added, otherwise the exact focused test file created for audit prompt coverage
+
+Acceptance criteria:
+- `plan-mode-approved.md` reads in the notation/compressed voice while preserving ordered execution protocol and coordinator branch behavior.
+- `plan-audit.md` reads in the same compressed voice while preserving read-only constraints and exact `[AUDIT_CLEAN]` marker guidance.
+- Focused tests cover both prompt families and assert durable semantic anchors.
+- No planning-mode prompt files outside this scope are modified.
+
+* Implementation Outline
+
+1. Add/adjust focused tests first so changed copy is intentional and guarded.
+2. Rewrite `plan-mode-approved.md` with tighter imperative language, preserving numbered protocols and literal examples.
+3. Rewrite `plan-audit.md` with compressed audit language, preserving the read-only ban and clean-exit token.
+4. Rerun focused tests and tighten any assertions that still encode obsolete verbose phrasing.
+
+NOTE [2026-04-13]: Completed 2026-04-13. Rewrote `plan-mode-approved.md` + `plan-audit.md`, added dedicated audit prompt coverage, and verified with focused prompt tests.

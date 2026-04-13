@@ -1,0 +1,79 @@
+#+TITLE: Compress notation voice in default and planning prompts
+#+STATE: DONE
+#+SESSION_ID: 14b982c81852bd7a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T21-53-27-137Z_14b982c81852bd7a.jsonl]]
+#+CUSTOM_ID: FEAT-540-compress-notation-voice-in-default-and-p
+#+EFFORT: 2h
+#+LAYER: coding-agent
+#+PRIORITY: B
+
+* Initial Message
+
+read the <language> part of @packages/coding-agent/src/prompts/system/system-prompt.md. look at the .md file in that folder that are used for:
+- plan
+- ultraplan
+- default
+- audit
+
+modes, and apply the language shown on those system prompts. compress information, strengthen meaning.
+
+User clarification settled for this item:
+- Include `plan-mode-approved.md` in scope overall, but that file belongs to sibling item FEAT-execution/audit prompt rewrite.
+- Rewrite depth: language + structure pass allowed when semantics stay the same.
+
+* Parent Plan
+
+- [[id:PLAN-223-compressed-notation-rewrite-for-system-p]] Compressed notation rewrite for system prompt modes
+
+* Scope
+
+This item covers the prompt files that define the baseline assistant voice and the planning/ultraplan planning workflow only:
+- `packages/coding-agent/src/prompts/system/system-prompt.md`
+- `packages/coding-agent/src/prompts/system/plan-mode-active.md`
+- `packages/coding-agent/test/system-prompt-templates.test.ts`
+- `packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts` only if wording changes break current assertions
+
+Out of scope:
+- `packages/coding-agent/src/prompts/system/plan-mode-approved.md`
+- `packages/coding-agent/src/prompts/system/plan-audit.md`
+- Any TypeScript prompt-loading code unless a prompt structure change forces a render-context adjustment (not expected)
+
+* Existing Code Reality
+
+`system-prompt.md` provides the default agent voice and contains the canonical `<language>` section. `plan-mode-active.md` is the single planning template for both `/plan` and `/ultraplan`; ultraplan is not a separate markdown file but a conditional section inside this template. Render path evidence:
+- `packages/coding-agent/src/system-prompt.ts` imports `system-prompt.md`
+- `packages/coding-agent/src/session/agent-session.ts` renders `plan-mode-active.md` with `ultraplan` conditionals
+
+* Design Decisions
+
+1. Preserve XML tags, Handlebars placeholders, RFC 2119 keywords, tool names, file paths, and behavioral constraints exactly where they carry executable meaning.
+2. Apply notation-first language from `<language>` to prose in `system-prompt.md` and `plan-mode-active.md`: shorter directives, denser semantics, less narrative glue.
+3. Keep structural meaning stable unless a local reorder clearly improves instruction salience; no behavioral change, no new policy, no removed requirement.
+4. Because `/plan` and `/ultraplan` share `plan-mode-active.md`, rewrite both standard and conditional ultraplan sections in one pass so voice stays internally consistent.
+5. Prefer durable tests that anchor on preserved contract phrases, section presence, conditional rendering, and ordering. Update exact-string assertions only where the requested copy change makes them obsolete.
+
+* User Workflows To Preserve
+
+1. Default session startup renders `system-prompt.md` with notation guidance intact and without accidental wrapper regressions.
+2. Plan mode renders read-only constraints, org-planning order, verification requirements, and exit protocol.
+3. Ultraplan mode renders the stricter Metis/Daedalus/Momus guidance without losing dependency-graph and wave instructions.
+4. Allowed-folder messaging still appears exactly where the plan-mode renderer expects it when folders are configured.
+5. Existing prompt-template tests continue to prove stable semantics after copy compression.
+
+* Verification
+
+Required checks for this item:
+- `bun test packages/coding-agent/test/system-prompt-templates.test.ts`
+- `bun test packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts`
+
+Acceptance criteria:
+- Default prompt still contains the notation-first identity, but wording is materially tighter.
+- Plan/ultraplan instructions are more compressed and directive-heavy, with no loss of required planning order or exit constraints.
+- Any changed assertions match the new contract rather than incidental old wording.
+- No out-of-scope prompt files are modified.
+
+* Implementation Outline
+
+Test-first is RECOMMENDED here because the change is copy/structure-heavy rather than algorithmic. Sequence the work so expectation updates/new assertions land before or alongside prompt rewrites, then rewrite the markdown templates, then rerun the focused tests.
+
+NOTE [2026-04-13]: Completed 2026-04-13. Rewrote `system-prompt.md` + `plan-mode-active.md` into denser notation-first voice and verified with focused prompt tests.

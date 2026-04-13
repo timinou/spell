@@ -146,6 +146,8 @@ describe("system Handlebars prompt templates", () => {
 
 		const rendered = renderPromptTemplate(template, baseRenderContext);
 		expect(rendered).toContain("<discipline>");
+		expect(rendered).toContain("</discipline>");
+		expect(rendered).toContain('Q not: "does this work?"');
 		expect(rendered).not.toContain("<behavior>");
 		expect(rendered).not.toContain("<code-integrity>");
 		expect(rendered).toContain("# Principles");
