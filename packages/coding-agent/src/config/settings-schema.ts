@@ -1256,7 +1256,7 @@ export const SETTINGS_SCHEMA = {
 
 	"task.eager": {
 		type: "boolean",
-		default: false,
+		default: true,
 		ui: {
 			tab: "tasks",
 			label: "Prefer Task Delegation",

@@ -174,16 +174,13 @@ describe("system Handlebars prompt templates", () => {
 		const template = await Bun.file(templatePath).text();
 		const rendered = renderPromptTemplate(template, baseRenderContext);
 
-		// FEAT-099: Dependency management content present
 		expect(rendered).toContain("dependency-management");
 		expect(rendered).toContain("blockers");
-
-		// FEAT-099: "On blockers:" removed, replaced with "On runtime impediments:"
 		expect(rendered).not.toContain("On blockers:");
 		expect(rendered).toContain("On runtime impediments:");
 	});
 
-	test("plan-mode-active includes DEPENDS property guidance for child items", async () => {
+	test("plan-mode-active standard mode includes sub-outline body standard and org wave guidance", async () => {
 		const templatePath = path.join(systemPromptsDir, "plan-mode-active.md");
 		const template = await Bun.file(templatePath).text();
 		const rendered = renderPromptTemplate(template, {
@@ -192,15 +189,45 @@ describe("system Handlebars prompt templates", () => {
 			planCategory: "plans",
 			childCategories: [{ name: "features", prefix: "FEAT", description: "Feature items" }],
 			exitToolName: "exit_plan_mode",
-			askToolName: "ask",
+			askToolName: "task",
+			askPolicies: false,
+			allowedFolders: undefined,
+			customDecomposition: false,
+			customDecompositionSections: undefined,
+			ultraplan: false,
+			modeContext: "",
+			modeInstructions: "",
+			taskPolicyLayers: {},
+			taskPolicyList: [],
+			reentry: false,
+			iterative: false,
+			designFlavor: false,
+			askPolicyEnabled: false,
+			tools: [...(baseRenderContext.tools as string[]), "code"],
 		});
 
-		// FEAT-098: DEPENDS property guidance in child item requirements
-		expect(rendered).toContain(":DEPENDS:");
-		expect(rendered).toContain("inter-item dependencies");
+		expect(rendered).toContain(":CUSTOM_ID: FEAT-001::define-types");
+		expect(rendered).toContain("FILE-LEVEL-ID::suboutline-id");
+		expect(rendered).toContain("run `org wave`");
+		expect(rendered).toContain(":wave:` headings");
 	});
 
-	test("system-prompt renders terse thinking instructions in stable section", async () => {
+	test("system-prompt renders eager task guidance from default settings", async () => {
+		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
+		const template = await Bun.file(templatePath).text();
+		const settings = Settings.isolated();
+		const rendered = renderPromptTemplate(template, {
+			...baseRenderContext,
+			tools: [...(baseRenderContext.tools as string[]), "code"],
+			eagerTasks: settings.get("task.eager"),
+		});
+
+		expect(settings.get("task.eager")).toBe(true);
+		expect(rendered).toContain("### Task tool for parallel work");
+		expect(rendered).toContain("Delegate work to subagents by default");
+	});
+
+	test("system-prompt renders notation guidance in stable section", async () => {
 		const templatePath = path.join(systemPromptsDir, "system-prompt.md");
 		const template = await Bun.file(templatePath).text();
 
@@ -208,10 +235,9 @@ describe("system Handlebars prompt templates", () => {
 			...baseRenderContext,
 		});
 
-		expect(rendered).toContain("Think in notation");
+		expect(rendered).toContain("Think and speak in notation");
 		expect(rendered).toContain("Symbols carry logic");
-		expect(rendered.indexOf("<thinking-mode>")).toBeGreaterThan(-1);
-		expect(rendered.indexOf("<thinking-mode>")).toBeLessThan(rendered.indexOf("CACHE_BOUNDARY"));
+		expect(rendered).not.toContain("<thinking-mode>");
 	});
 
 	test("caveman template does not contain thinking instructions", async () => {
@@ -230,7 +256,7 @@ describe("system Handlebars prompt templates", () => {
 });
 
 describe("caveman prompt composition", () => {
-	test("buildSystemPrompt always includes thinking-mode in system prompt", async () => {
+	test("buildSystemPrompt renders terse caveman guidance without thinking-mode wrapper", async () => {
 		const rendered = await renderBuiltSystemPrompt(
 			Settings.isolated({
 				"caveman.defaultLevel": "full",
@@ -239,11 +265,11 @@ describe("caveman prompt composition", () => {
 		);
 
 		expect(rendered).toContain("Terse mode active");
-		expect(rendered).toContain("<thinking-mode>");
-		expect(rendered).toContain("Think in notation");
+		expect(rendered).not.toContain("<thinking-mode>");
+		expect(rendered).not.toContain("Think in notation");
 	});
 
-	test("buildSystemPrompt thinking-mode appears before caveman terse output", async () => {
+	test("buildSystemPrompt keeps terse caveman guidance in caveman mode", async () => {
 		const rendered = await renderBuiltSystemPrompt(
 			Settings.isolated({
 				"caveman.defaultLevel": "full",
@@ -252,9 +278,8 @@ describe("caveman prompt composition", () => {
 		);
 
 		expect(rendered).toContain("Terse mode active");
-		expect(rendered).toContain("<thinking-mode>");
-		expect(rendered.indexOf("<thinking-mode>")).toBeLessThan(rendered.indexOf("Terse mode active"));
-		expect(rendered.indexOf("Think in notation")).toBeLessThan(rendered.indexOf("Terse mode active"));
+		expect(rendered).not.toContain("<thinking-mode>");
+		expect(rendered).not.toContain("Think in notation");
 	});
 });
 

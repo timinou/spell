@@ -5,6 +5,7 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { resolveLayerFromProperties } from "../config/task-policies";
+import { buildDependencyGraph, parseOrgDependProperties } from "../loop/ingestion/org-depend";
 import type { PlanWave } from "../orchestrators/fluid";
 import { resolvePlanItem } from "../plan-mode/org-plan";
 import exitPlanModeDescription from "../prompts/tools/exit-plan-mode.md" with { type: "text" };
@@ -94,6 +95,98 @@ export function extractPlanWaves(body: string): PlanWave[] | undefined {
 	}
 
 	return waves.length > 0 ? waves : undefined;
+}
+
+type ResolvedChildItem = {
+	id: string;
+	file: string;
+	body: string;
+	properties: Record<string, string>;
+};
+
+function validateChildSuboutlineGraph(resolvedChildren: Map<string, ResolvedChildItem>): void {
+	const parsedByChildId = new Map<string, ReturnType<typeof parseOrgDependProperties>>();
+	const missingStructuredBodies: string[] = [];
+	const namespaceViolations: string[] = [];
+	const duplicateSuboutlineIds: string[] = [];
+	const brokenSuboutlineDeps: string[] = [];
+	const allSuboutlines: ReturnType<typeof parseOrgDependProperties> = [];
+	const ownerBySuboutlineId = new Map<string, string>();
+	const suboutlineIdSet = new Set<string>();
+
+	for (const [childItemId, childItem] of resolvedChildren) {
+		const parsed = parseOrgDependProperties(childItem.body);
+		parsedByChildId.set(childItemId, parsed);
+		if (parsed.length === 0) {
+			missingStructuredBodies.push(childItemId);
+			continue;
+		}
+
+		for (const suboutline of parsed) {
+			allSuboutlines.push(suboutline);
+			const expectedPrefix = `${childItemId}::`;
+			const suffix = suboutline.customId.startsWith(expectedPrefix)
+				? suboutline.customId.slice(expectedPrefix.length)
+				: "";
+			if (
+				!suboutline.customId.startsWith(expectedPrefix) ||
+				suffix.length === 0 ||
+				!/^[A-Za-z0-9_-]+$/.test(suffix)
+			) {
+				namespaceViolations.push(
+					`${childItemId} sub-outline CUSTOM_ID must match ${childItemId}::suboutline-id (got ${suboutline.customId})`,
+				);
+			}
+			const existingOwner = ownerBySuboutlineId.get(suboutline.customId);
+			if (existingOwner) {
+				duplicateSuboutlineIds.push(`${suboutline.customId} declared in both ${existingOwner} and ${childItemId}`);
+				continue;
+			}
+			ownerBySuboutlineId.set(suboutline.customId, childItemId);
+			suboutlineIdSet.add(suboutline.customId);
+		}
+	}
+
+	if (missingStructuredBodies.length > 0) {
+		throw new ToolError(
+			`These child items are missing sub-outline steps with :CUSTOM_ID: FILE-LEVEL-ID::suboutline-id properties:\n${missingStructuredBodies.join("\n")}\nAdd structured implementation sub-headings before exiting.`,
+		);
+	}
+	if (namespaceViolations.length > 0) {
+		throw new ToolError(
+			`Invalid sub-outline CUSTOM_ID values:\n${namespaceViolations.join("\n")}\nSub-outline CUSTOM_IDs must stay within the owning child item's namespace.`,
+		);
+	}
+	if (duplicateSuboutlineIds.length > 0) {
+		throw new ToolError(
+			`Duplicate sub-outline CUSTOM_ID values:\n${duplicateSuboutlineIds.join("\n")}\nEvery sub-outline CUSTOM_ID must be globally unique.`,
+		);
+	}
+
+	for (const parsed of parsedByChildId.values()) {
+		for (const suboutline of parsed) {
+			for (const depId of suboutline.blockers) {
+				if (!suboutlineIdSet.has(depId)) {
+					brokenSuboutlineDeps.push(
+						`${suboutline.customId} depends on ${depId} which is not a declared sub-outline CUSTOM_ID in this plan`,
+					);
+				}
+			}
+		}
+	}
+
+	if (brokenSuboutlineDeps.length > 0) {
+		throw new ToolError(
+			`Broken sub-outline dependency references:\n${brokenSuboutlineDeps.join("\n")}\nAll sub-outline :DEPENDS: values must reference declared sub-outline CUSTOM_IDs in linked child items.`,
+		);
+	}
+
+	const graph = buildDependencyGraph(allSuboutlines);
+	if (graph.cycles.length > 0) {
+		throw new ToolError(
+			`Sub-outline dependency cycles:\n${graph.cycles.map(cycle => cycle.join(" -> ")).join("\n")}\nSub-outline :DEPENDS: graphs must be acyclic.`,
+		);
+	}
 }
 
 export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, ExitPlanModeDetails> {
@@ -191,8 +284,7 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 					`Child items with missing required properties:\n${missingProps.join("\n")}\nSet EFFORT, PRIORITY, and LAYER on all child items before exiting.`,
 				);
 			}
-
-			// Validate DEPENDS references are within the plan's child set
+			// Validate top-level child item DEPENDS references stay within the linked child set
 			const childIdSet = new Set(childItemIds);
 			const brokenDeps: string[] = [];
 			for (const [childItemId, childItem] of resolvedChildren) {
@@ -209,6 +301,9 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 					`Broken dependency references:\n${brokenDeps.join("\n")}\nAll DEPENDS must reference items linked in this plan.`,
 				);
 			}
+
+			// Validate structured sub-outline CUSTOM_ID and :DEPENDS: graphs within linked child items
+			validateChildSuboutlineGraph(resolvedChildren);
 
 			const waves = extractPlanWaves(item.body);
 			if (waves) {
