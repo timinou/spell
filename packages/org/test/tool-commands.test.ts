@@ -436,6 +436,32 @@ describe("query sort and pagination", () => {
 		expect(highIdx).toBeLessThan(lowIdx);
 	});
 
+	test("query uses descending ids as the default tie-breaker", async () => {
+		await seedItem("projects", "PROJ-100-old", "Old item", { state: "ITEM", properties: { PRIORITY: "#B" } });
+		await seedItem("projects", "PROJ-101-new", "New item", { state: "ITEM", properties: { PRIORITY: "#B" } });
+		const tool = makeTool();
+		const result = (await tool.execute({ command: "query", category: "projects" })) as {
+			items: Array<{ id: string }>;
+			total: number;
+		};
+
+		expect(result.items[0]?.id).toBe("PROJ-101-new");
+		expect(result.items[1]?.id).toBe("PROJ-100-old");
+	});
+
+	test("query sorts ids descending when sort=id", async () => {
+		await seedItem("projects", "PROJ-200-old", "Old item", { state: "ITEM" });
+		await seedItem("projects", "PROJ-201-new", "New item", { state: "ITEM" });
+		const tool = makeTool();
+		const result = (await tool.execute({ command: "query", category: "projects", sort: "id" })) as {
+			items: Array<{ id: string }>;
+			total: number;
+		};
+
+		expect(result.items[0]?.id).toBe("PROJ-201-new");
+		expect(result.items[1]?.id).toBe("PROJ-200-old");
+	});
+
 	test("query with limit returns at most N items", async () => {
 		for (let i = 0; i < 5; i++) {
 			await seedItem("drafts", `DRAFT-20${i}-lim`, `Limit test ${i}`, { state: "ITEM" });

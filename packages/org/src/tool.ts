@@ -196,8 +196,8 @@ function compareByKey(a: OrgItem, b: OrgItem, key: string): number {
 		return left - right;
 	}
 	if (key === "state" || key === "todo") return (STATE_ORDER[a.state] ?? 999) - (STATE_ORDER[b.state] ?? 999);
-	if (key === "category") return a.category.localeCompare(b.category);
-	if (key === "id") return a.id.localeCompare(b.id);
+	if (key === "category") return b.category.localeCompare(a.category);
+	if (key === "id") return b.id.localeCompare(a.id);
 	return 0;
 }
 
