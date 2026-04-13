@@ -1,0 +1,102 @@
+#+TITLE: Compressed notation rewrite for system prompt modes
+#+STATE: DONE
+#+SESSION_ID: 14b982c81852bd7a
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T21-53-27-137Z_14b982c81852bd7a.jsonl]]
+#+CUSTOM_ID: PLAN-223-compressed-notation-rewrite-for-system-p
+#+LAYER: coding-agent
+#+EFFORT: 4h
+#+PRIORITY: B
+
+* Initial Message
+
+read the <language> part of @packages/coding-agent/src/prompts/system/system-prompt.md. look at the .md file in that folder that are used for:
+- plan
+- ultraplan
+- default
+- audit
+
+modes, and apply the language shown on those system prompts. compress information, strengthen meaning.
+
+* Context
+
+** Request
+Rewrite the coding-agent system prompt markdown files so their prose uses the notation-first language shown in `packages/coding-agent/src/prompts/system/system-prompt.md` `<language>`: compress information, strengthen meaning, and allow structure tightening where semantics remain intact.
+
+User-settled scope:
+- Include default prompt: `packages/coding-agent/src/prompts/system/system-prompt.md`
+- Include plan/ultraplan prompt: `packages/coding-agent/src/prompts/system/plan-mode-active.md`
+- Include audit prompt: `packages/coding-agent/src/prompts/system/plan-audit.md`
+- Include execution-phase approved prompt: `packages/coding-agent/src/prompts/system/plan-mode-approved.md`
+
+** Code Reality
+- `system-prompt.md` is the default system prompt template loaded by `packages/coding-agent/src/system-prompt.ts`.
+- `plan-mode-active.md` is the single planning template for both standard `/plan` and conditional `/ultraplan` sections, rendered from `packages/coding-agent/src/session/agent-session.ts`.
+- `plan-mode-approved.md` is used in both `packages/coding-agent/src/modes/interactive-mode.ts` and `packages/coding-agent/src/modes/fluid-mode.ts` after plan approval.
+- `plan-audit.md` is injected from `packages/coding-agent/src/session/agent-session.ts` during audit phase.
+- Existing focused tests already cover `system-prompt.md`, `plan-mode-active.md`, allowed-folder plan copy, and `plan-mode-approved.md`; no dedicated test currently guards `plan-audit.md`.
+
+** Settled Decisions
+1. Recommended approach: rewrite prompt prose in-place; do not introduce new prompt files or runtime branching.
+2. Preserve executable semantics exactly: XML tags, Handlebars placeholders, RFC 2119 words, tool names, file paths, literal markers, and ordering where downstream behavior depends on sequence.
+3. Apply notation/compression style consistently across all scoped prompt families, including conditional `/ultraplan` sections and both branches of `plan-mode-approved.md`.
+4. Tighten structure only when it improves salience without changing meaning or policy.
+5. Update or add focused tests so changed copy is guarded by semantic anchors; add dedicated audit prompt coverage.
+
+
+6. Orchestration PLAN state workaround: current org state model rejects `INIT`; user approved `ITEM` for this PLAN item in this session. Treat this file as the active orchestration plan despite the state-label limitation.
+** Recommended Approach
+Split the work into two parallel feature items:
+- planning/default voice rewrite + existing template test updates
+- approved/audit voice rewrite + execution/audit prompt tests
+
+This keeps scopes non-overlapping, matches actual file boundaries, and allows parallel execution.
+
+** Critical Files
+- `packages/coding-agent/src/prompts/system/system-prompt.md`
+- `packages/coding-agent/src/prompts/system/plan-mode-active.md`
+- `packages/coding-agent/src/prompts/system/plan-mode-approved.md`
+- `packages/coding-agent/src/prompts/system/plan-audit.md`
+- `packages/coding-agent/test/system-prompt-templates.test.ts`
+- `packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts`
+- `packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts`
+- `packages/coding-agent/test/plan-mode/plan-mode-audit-prompt.test.ts` (new, if added)
+
+** Skill-Informed Guidance
+Apply semantic compression techniques from `skill://semantic-compression/SKILL.md`: delete grammatical scaffolding, keep meaning-bearing words, preserve negation/requirements, prefer fragments where clarity survives. Apply prompt-structure guidance from `skill://system-prompts/SKILL.md`: keep critical instructions high-salience, preserve RFC 2119 language, and avoid token-costly filler.
+
+* Verification
+
+** Focused checks
+- `bun test packages/coding-agent/test/system-prompt-templates.test.ts`
+- `bun test packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts`
+- `bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts`
+- `bun test packages/coding-agent/test/plan-mode/plan-mode-audit-prompt.test.ts` (or exact new audit-prompt test path)
+
+** Manual proof
+- Rendered default prompt still contains notation guidance and required structural sections.
+- Rendered plan prompt still preserves org-native planning order, read-only constraints, allowed-folder behavior, and ultraplan gating instructions.
+- Rendered approved prompt still preserves coordinator-vs-executor branches, completion protocol order, artifact guidance, and org lifecycle closure requirements.
+- Rendered audit prompt still preserves read-only audit prohibition and exact `[AUDIT_CLEAN]` exit marker.
+
+** Done condition
+All scoped prompt files use the denser notation-first voice; focused prompt tests pass; no unaffected prompt families or runtime code paths change.
+
+* Execution Manifest
+
+** prompt-rewrite-wave                                              :wave:
+- [[id:FEAT-540-compress-notation-voice-in-default-and-p]] Compress notation voice in default and planning prompts (2h, parallel)
+- [[id:FEAT-541-compress-notation-voice-in-execution-and]] Compress notation voice in execution and audit prompts (2h, parallel)
+
+** Completion [2026-04-13]
+*** Verification
+- `bun test packages/coding-agent/test/system-prompt-templates.test.ts` → pass (15 pass, 0 fail)
+- `bun test packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts` → pass (4 pass, 0 fail)
+- `bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts` → pass (5 pass, 0 fail)
+- `bun test packages/coding-agent/test/plan-mode/plan-mode-audit-prompt.test.ts` → pass (2 pass, 0 fail)
+- Manual rendered-prompt check via `bun -e` + `renderPromptTemplate` across default / plan / ultraplan / approved / audit templates → `manual prompt anchor render: ok`
+- Child org items reconciled: `FEAT-540-compress-notation-voice-in-default-and-p` → `DONE`; `FEAT-541-compress-notation-voice-in-execution-and` → `DONE`; no linked `BLOCKED` items remained.
+*** Artifacts
+- Prompt templates updated: [[file:packages/coding-agent/src/prompts/system/system-prompt.md]], [[file:packages/coding-agent/src/prompts/system/plan-mode-active.md]], [[file:packages/coding-agent/src/prompts/system/plan-mode-approved.md]], [[file:packages/coding-agent/src/prompts/system/plan-audit.md]]
+- Focused prompt coverage: [[file:packages/coding-agent/test/system-prompt-templates.test.ts]], [[file:packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts]], [[file:packages/coding-agent/test/plan-mode/plan-mode-audit-prompt.test.ts]]
+*** Deviations
+None.

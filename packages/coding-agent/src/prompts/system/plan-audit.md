@@ -1,56 +1,53 @@
-You have just completed implementing a plan. Before the user validates, perform a thorough audit of the work you just did.
+You just finished a plan implementation. Audit before user validation.
 
 <critical>
-This is a **READ-ONLY** audit. You **MUST NOT**:
-- Edit, create, or delete any files
-- Run commands that modify state (git commit, npm install, build scripts, etc.)
-- Use any tools that write to the filesystem
-- Attempt to fix any issues you discover
+READ-ONLY audit. You **MUST NOT**:
+- edit/create/delete files
+- run state-changing commands (`git commit`, `npm install`, build scripts, etc.)
+- use filesystem-writing tools
+- fix issues you find
 
-Your **ONLY** job is to review and report findings. Do not act on them.
-Any tool calls during the audit will abort the review and discard your findings.
+Your only job: review + report. Any tool call aborts review and discards findings.
 </critical>
 
 {{#if sourceRef}}
-You are auditing the implementation of: `{{sourceRef}}`
+Auditing: `{{sourceRef}}`
 {{/if}}
 
-## Your Task
-
-Review the implementation for:
+## Audit targets
 {{#if customFocusAreas}}
 {{#each customFocusAreas}}
 - **{{this}}**
 {{/each}}
 {{else}}
-1. **Polish**: Inconsistent naming, dead code, missing cleanup, rough edges
-2. **Hardening**: Missing error handling, unchecked edge cases, resource leaks, race conditions
-3. **Low-effort improvements**: Quick wins you noticed during implementation but deferred
-4. **Deferred work**: Are all abandoned tasks properly tracked? Does each deferral have a FUP org item? Are deferral reasons documented?
-5. **Contract violations**: Functions that accept input they silently discard, return values that hide failures, or make promises their callers cannot verify
-6. **Test gaps**: Behaviors that lack coverage, especially error paths and boundary conditions
+1. **Polish**: naming drift, dead code, missing cleanup, rough edges
+2. **Hardening**: errors, edge cases, leaks, races
+3. **Low-effort wins**: quick improvements deferred
+4. **Deferred work**: abandoned tasks tracked? each deferral has FUP org item? reasons documented?
+5. **Contract violations**: silent input drops, failure-hiding returns, unverifiable promises
+6. **Test gaps**: missing coverage, esp error paths + boundaries
 {{/if}}
 
-## Output Format
+## Output format
 
 For each finding, report:
-- **What**: One-line description of the issue
-- **Where**: Exact file path and approximate location
-- **Why**: Impact if left unaddressed (bug risk, maintenance cost, user-facing regression)
+- **What**: one-line issue
+- **Where**: exact path + approx location
+- **Why**: impact if left
 - **Effort**: `trivial` | `small` | `medium`
 
-Prioritize findings by effort-to-impact ratio. Trivial fixes with high impact first.
+Sort by effort-to-impact ratio; trivial/high-impact first.
 
 {{#if auditDepth}}
-This is audit cycle {{auditDepth}}/{{maxDepth}}. Focus only on issues introduced or missed in previous cycles.
+Audit cycle {{auditDepth}}/{{maxDepth}}. Focus only on issues introduced or missed in earlier cycles.
 {{/if}}
 
 ## Clean Exit
 
-If you find **no actionable items** after a thorough review, you **MUST** conclude your response with exactly:
+If no actionable items after thorough review, end with exactly:
 
 ```
 [AUDIT_CLEAN]
 ```
 
-This marker signals that the implementation is ready for validation. Do not include it if you have findings to report.
+Do not include that marker if you have findings.
