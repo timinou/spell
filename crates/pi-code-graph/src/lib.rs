@@ -19,9 +19,10 @@ pub use error::{CodeGraphError, Result};
 pub use hybrid::{HybridSearchHit, reciprocal_rank_fusion};
 pub use indexer::{BuildGraphOptions, CodeGraphBuilder, GraphBuildOutcome};
 pub use language::{
-	ElixirExtractor, ElixirImportResolver, ExtractedFile, ExtractedImport, ExtractedImportBinding,
-	ExtractedReference, ExtractedSymbol, ImportResolver, LanguageExtractor, LanguageRegistry,
-	ResolveRequest, SupportedLanguage, TypeScriptExtractor, TypeScriptImportResolver,
+	ElixirExtractor, ElixirImportResolver, EngineProfileExtractor, EngineProfileImportResolver,
+	ExtractedFile, ExtractedImport, ExtractedImportBinding, ExtractedReference, ExtractedSymbol,
+	ImportResolver, LanguageExtractor, LanguageRegistry, ResolveRequest, SupportedLanguage,
+	TypeScriptExtractor, TypeScriptImportResolver,
 };
 pub use model::{
 	CodeGraph, EdgeKind, FileNode, GraphNode, GraphStats, PersistedCodeGraph, SymbolKind, SymbolNode,
@@ -30,8 +31,9 @@ pub use pi_code_engine::language::{
 	LanguageProfile as EngineLanguageProfile, LanguageRegistry as EngineLanguageRegistry,
 };
 pub use query::{
-	GraphCluster, GraphContextResult, GraphDeadCodeItem, GraphDepsResult, GraphFlowResult,
-	GraphImpactResult, GraphNodeSummary, GraphSearchMatch, GraphStatus, GraphTraversalLevel,
+	GraphCluster, GraphContextResult, GraphDeadCodeItem, GraphDepsResult, GraphFilesResult,
+	GraphFlowResult, GraphImpactResult, GraphNodeSummary, GraphSearchMatch, GraphStatus,
+	GraphSymbolsResult, GraphTraversalLevel,
 };
 pub use search::{SearchHit, SearchIndex};
 pub use store::GraphStore;

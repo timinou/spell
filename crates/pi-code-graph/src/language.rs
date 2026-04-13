@@ -1,4 +1,5 @@
 mod elixir;
+mod generic;
 mod typescript;
 
 use std::{
@@ -8,6 +9,7 @@ use std::{
 };
 
 pub use elixir::{ElixirExtractor, ElixirImportResolver};
+pub use generic::{EngineProfileExtractor, EngineProfileImportResolver};
 use pi_code_engine::language::LanguageRegistry as EngineRegistry;
 use serde::{Deserialize, Serialize};
 pub use typescript::{TypeScriptExtractor, TypeScriptImportResolver};
@@ -123,8 +125,28 @@ impl LanguageRegistry {
 		Ok(self)
 	}
 
-	pub fn with_defaults(self) -> Result<Self> {
-		self.with_typescript()?.with_elixir()
+	pub fn with_defaults(mut self) -> Result<Self> {
+		self = self.with_typescript()?.with_elixir()?;
+		let engine = Arc::new(engine_registry()?);
+		let mut languages = engine
+			.languages()
+			.into_iter()
+			.map(|language| language.as_str().to_string())
+			.collect::<Vec<_>>();
+		languages.sort();
+		for language in languages {
+			if matches!(language.as_str(), "typescript" | "elixir") {
+				continue;
+			}
+			self.register(
+				Arc::new(EngineProfileExtractor::new(
+					SupportedLanguage::new(language.clone()),
+					engine.clone(),
+				)),
+				Arc::new(EngineProfileImportResolver::new(SupportedLanguage::new(language))),
+			)?;
+		}
+		Ok(self)
 	}
 
 	pub fn register(

@@ -1,0 +1,19 @@
+Command:
+bun -e 'import { Settings } from "./packages/coding-agent/src/config/settings"; import { CodeTool } from "./packages/coding-agent/src/tools/code"; const session={cwd:process.cwd(),hasUI:false,getSessionFile:()=>null,getSessionSpawns:()=>"*",settings:Settings.isolated({"lsp.enabled":true})}; const tool=new CodeTool(session); const result=await tool.execute("tool",{command:"edit",file:"packages/coding-agent/src/__plan220-format.ts",symbol:"main",operation:"replace-body",content:["{","const    value={foo:1};","return value;","}"]}); const text=result.content.find(content=>content.type==="text")?.text ?? ""; console.log(text);'
+
+Tool output:
+Edited packages/coding-agent/src/__plan220-format.ts
+Formatting: formatted via biome
+Changes: +2 -1
+Diff preview:
+@@ main @@
+@@ -2,1 +2,2 @@
+-	return 1;
++const    value={foo:1};
++return value;
+
+Saved file:
+export function main() {
+	const value = { foo: 1 };
+	return value;
+}

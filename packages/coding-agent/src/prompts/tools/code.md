@@ -26,7 +26,9 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 - Walk forward call flow → `code flow { symbol, depth? }`
 - Find likely dead symbols → `code dead_code { limit? }`
 - Find architectural clusters → `code clusters { limit? }`
-- Search graph symbols/files → `code search { query, limit?, semantic? }`
+- Exact or ranked declaration lookup → `code symbols { query, limit? }`
+- Exact or ranked file lookup → `code files { query, limit? }`
+- Broad lexical or hybrid exploration → `code search { query, limit?, semantic? }`
 - Non-code file → use `read` tool instead
 
 <operations>
@@ -47,6 +49,8 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 - `flow`: Forward call traversal
 - `dead_code`: Symbols with no inbound semantic usage
 - `clusters`: Connected file clusters with symbol counts
+- `symbols`: Exact or ranked declaration lookup
+- `files`: Exact or ranked file lookup
 - `search`: Keyword or hybrid semantic graph search
 </operations>
 
@@ -87,7 +91,7 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 <output>
 - File-scoped commands return compact, hashline-style summaries in `content` and preserve normalized payload in `details`
 - `read` returns source text directly
-- `edit` returns a status line, change counts (`Changes: +N -M`), and a compact diff preview
+- `edit` returns a status line, formatting status, change counts (`Changes: +N -M`), and a compact diff preview
 - `outline`, `navigate`, `buffers`, `languages`, `diff`, `undo`, `redo`, and `save` return terse structured summaries
 - Graph commands return compact text with grouped sections and Next hints
 - Full normalized payload remains available in `details` for TUI rendering
@@ -101,7 +105,7 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 - Edits from `edit`, `undo`, and `redo` are automatically saved to disk; `save` is rarely needed
 - `context`, `impact`, and `flow` require `symbol`
 - `deps` requires `file`
-- `search` requires `query`; optional `semantic` forces hybrid or BM25-only search
+- `symbols`, `files`, and `search` require `query`; use `symbols` / `files` for declaration or path discovery before falling back to broad `search`; optional `semantic` forces hybrid or BM25-only search
 - `status` reports graph cache and semantic index state without forcing a rebuild
 - `index` forces a rebuild; other graph commands auto-build when needed
 - Do NOT default to resolution 3 for file reads

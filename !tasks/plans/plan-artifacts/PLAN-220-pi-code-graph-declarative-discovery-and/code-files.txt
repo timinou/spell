@@ -1,0 +1,11 @@
+Command:
+bun -e 'import { executeCodeGraph } from "./packages/natives/src/code-graph/index.ts"; const root=process.cwd(); const files=await executeCodeGraph({command:"files",root,query:"code.ts",limit:5}); console.log(["# code files", files.output].join("\n"));'
+
+Output:
+# code files
+Files
+Query: code.ts
+Status: ambiguous
+- packages/coding-agent/src/tools/code.ts
+- packages/coding-agent/src/loop/domains/code.ts
+Next: refine the query with more of the path

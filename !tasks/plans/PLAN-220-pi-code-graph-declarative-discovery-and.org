@@ -1,0 +1,141 @@
+#+TITLE: PI code graph declarative discovery and code tool formatting
+#+STATE: DONE
+#+SESSION_ID: 14b8fc8c0f83347f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T12-06-58-366Z_14b8fc8c0f83347f.jsonl]]
+#+CUSTOM_ID: PLAN-220-pi-code-graph-declarative-discovery-and
+#+PRIORITY: #A
+#+EFFORT: 20h
+#+LAYER: backend coding-agent
+
+* Initial Message
+
+Do an analysis of spell's pi-code-graph and pi-code-engine, and give me your overall review. I would like to implement auto-formatting to the output of the code  tool, for example, as well as explore ways to do symbol search or whatever, in order to reduce the reliance of the harness of grep to do its work. Do a deep research and present your findings
+
+* Context
+
+Tooling note: the current =org= tool does not expose an =INIT= state, so this orchestration item is recorded as =ITEM= and should be treated as the plan-mode =INIT=-equivalent handoff record.
+
+User request: perform a deep analysis of Spell's =pi-code-graph= and =pi-code-engine=, review the overall architecture, plan auto-formatting for =code= tool output/edit flows, and explore graph/symbol search so the harness relies less on =grep= for code discovery.
+
+** Overall Review
+
+Strengths
+1. =packages/coding-agent/src/tools/code-result.ts= is already the canonical formatting seam for =code= output. That is the right adapter boundary for presentation changes.
+2. =packages/coding-agent/src/lsp/index.ts= already contains a formatter reuse seam (=formatContent()= and writethrough logic). The repo has an existing pattern for format-before-write.
+3. =pi-code-engine= already ships a declarative =LanguageProfile= with declarations, class-like nodes, imports, exports, and references for TypeScript, Rust, Python, Typst, Markdown, Org, and Elixir.
+4. =pi-code-graph= already has useful graph queries (=context/impact/deps/flow/dead_code/clusters=) plus lexical and optional semantic search.
+
+Weaknesses / review findings
+1. =pi-code-graph= defaults to only TypeScript + Elixir despite =pi-code-engine= supporting seven languages.
+2. Graph extraction duplicates language logic instead of reusing engine profiles, so the graph and file engine can drift.
+3. Discovery is still text-first: exact symbol lookup exists only as an internal helper, and graph output is flattened to text in =crates/pi-natives/src/code_graph.rs=.
+4. =code edit= saves immediately after native edits and does not reuse the existing formatter pipeline that =write= and patch writethrough already use.
+5. =LanguageProfile= is sufficient for declarative baseline extraction, but not by itself for the richer semantic edge types currently hand-modeled in TypeScript (for example =Calls= vs generic =References=, =Inherits=, =TypeParameterOf=, render-like edges).
+
+** Answer to the key design question
+
+Can =pi-code-engine= provide the required primitives to make =pi-code-graph= language-independent/declarative?
+
+Yes for the baseline, no for the full semantic graph.
+
+- Yes: =LanguageProfile= already provides declarative primitives for declarations, class/member hierarchy, imports, exports, and generic references across all seven supported languages. =outline.rs= and =navigate.rs= prove those profiles are already operational, not just metadata.
+- No: a language-independent graph still needs pluggable import resolution, canonical qualified-name rules, and optional edge enrichers when a language can distinguish =Calls=, =Inherits=, =Renders=, or type-parameter relationships better than generic reference matching.
+- Therefore the recommended architecture is a two-layer graph stack:
+  1. declarative baseline extractor backed by =pi-code-engine= profiles
+  2. optional per-language resolver/enricher hooks for higher-signal edges
+
+** Critical files
+
+- =packages/coding-agent/src/tools/code.ts=
+- =packages/coding-agent/src/tools/code-result.ts=
+- =packages/coding-agent/src/lsp/index.ts=
+- =packages/coding-agent/src/prompts/tools/code.md=
+- =crates/pi-natives/src/code_buffer.rs=
+- =crates/pi-natives/src/code_graph.rs=
+- =crates/pi-code-engine/src/language/profile.rs=
+- =crates/pi-code-engine/src/language/mod.rs=
+- =crates/pi-code-engine/src/outline.rs=
+- =crates/pi-code-engine/src/navigate.rs=
+- =crates/pi-code-graph/src/language.rs=
+- =crates/pi-code-graph/src/indexer.rs=
+- =crates/pi-code-graph/src/query.rs=
+- =crates/pi-code-graph/src/search.rs=
+- =crates/pi-code-graph/src/hybrid.rs=
+
+** Settled Decisions
+
+1. Expand =pi-code-graph= to parity with =pi-code-engine= language coverage in this plan: TypeScript, Rust, Python, Typst, Markdown, Org, and Elixir.
+2. Use =pi-code-engine= =LanguageProfile= as the canonical declarative schema for baseline graph extraction.
+3. Add first-class =code symbols= and =code files= commands rather than stretching text-only =search= further.
+4. Keep =code search= for broad lexical/hybrid exploration, but move declaration and file lookup to the new structured commands.
+5. Always attempt formatting after a successful =code edit= before final save; if no formatter exists or formatting fails/times out, keep the edit and report degraded formatting truthfully.
+6. Reuse the existing LSP/custom-linter formatting seam for =code edit= save behavior instead of inventing code-tool-specific formatting.
+7. Separate edit-time formatting from presentation formatting: one changes saved file content when a formatter exists; the other improves result readability regardless of formatter availability.
+8. Update docs/prompts so declaration and file lookup prefer =code symbols= / =code files=, with grep retained only for regex/content search.
+9. Ship declarative graph parity first for non-TypeScript/Elixir languages (declarations/imports/generic references), then recover richer semantic edges in a follow-up.
+
+** Recommended Approach
+
+Implement the work in three waves:
+1. declarative graph foundation on top of =pi-code-engine= profiles
+2. structured native symbol/file discovery commands
+3. =code= tool integration, prompt steering, and format-on-edit reuse
+
+* Verification
+
+Backend
+- =cargo test -p pi-code-graph=
+- =cargo test -p pi-code-engine=
+- =cargo test -p pi-natives code_graph -- --nocapture=
+- =bun check:rs=
+
+TypeScript / tool integration
+- =bun test packages/coding-agent/test/tools/code.test.ts=
+- =bun test packages/coding-agent/test/tools/code-result.test.ts=
+- =bun check:ts=
+
+Manual proof artifacts
+- mixed-language graph index/status artifact
+- structured =code symbols= artifact with exact hit and ambiguity case
+- structured =code files= artifact
+- =code edit= formatter-backed artifact showing saved output is formatted
+- =code edit= degraded-formatting artifact showing the edit succeeded and the formatter status was reported truthfully
+
+* Execution Manifest
+
+** Wave 1 — graph foundation
+- [[id:PROJ-040-declarative-code-graph-extraction-and-la]]
+
+** Wave 2 — structured native discovery
+- [[id:FEAT-533-structured-symbol-and-file-discovery-for]]
+
+** Wave 3 — code tool integration + format-on-edit
+- [[id:FEAT-534-wire-code-tool-discovery-and-format-edit]]
+
+** Deferred follow-up — semantic edge enrichment after baseline parity
+- [[id:FUP-053-enrich-declarative-graph-edges-beyond-ba]]
+
+* Completion [2026-04-13]
+
+** Verification
+- Passed: =cargo test -p pi-code-graph=
+- Passed: =cargo test -p pi-code-engine=
+- Passed: =cargo test -p pi-natives code_graph -- --nocapture=
+- Passed: =cargo test -p pi-natives code_buffer -- --nocapture=
+- Passed: =bun --cwd=packages/natives run build:native=
+- Passed: =bun check:rs=
+- Passed: =bun test packages/coding-agent/test/tools/code.test.ts=
+- Passed: =bun test packages/coding-agent/test/tools/code-result.test.ts=
+- Passed: =bun check:ts=
+
+** Artifacts
+- [[file:plan-artifacts/PLAN-220-pi-code-graph-declarative-discovery-and/mixed-language-graph-index-status.txt][mixed-language graph index/status]]
+- [[file:plan-artifacts/PLAN-220-pi-code-graph-declarative-discovery-and/code-symbols.txt][code symbols exact + ambiguity]]
+- [[file:plan-artifacts/PLAN-220-pi-code-graph-declarative-discovery-and/code-files.txt][code files ambiguity]]
+- [[file:plan-artifacts/PLAN-220-pi-code-graph-declarative-discovery-and/code-edit-formatted.txt][code edit formatter-backed save]]
+- [[file:plan-artifacts/PLAN-220-pi-code-graph-declarative-discovery-and/code-edit-formatting-unavailable.txt][code edit degraded formatting]]
+
+** Deviations
+None.
+
+NOTE [2026-04-13]: All planned waves completed, verified, and artifacts recorded.

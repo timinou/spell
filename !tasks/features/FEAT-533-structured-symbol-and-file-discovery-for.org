@@ -1,0 +1,95 @@
+#+TITLE: Structured symbol and file discovery for code graph
+#+STATE: DONE
+#+SESSION_ID: 14b8fc8c0f83347f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T12-06-58-366Z_14b8fc8c0f83347f.jsonl]]
+#+CUSTOM_ID: FEAT-533-structured-symbol-and-file-discovery-for
+#+DEPENDS: PROJ-040-declarative-code-graph-extraction-and-la
+#+LAYER: backend
+#+PRIORITY: #A
+#+EFFORT: 6h
+
+* Initial Message
+
+Do an analysis of spell's pi-code-graph and pi-code-engine, and give me your overall review. I would like to implement auto-formatting to the output of the code  tool, for example, as well as explore ways to do symbol search or whatever, in order to reduce the reliance of the harness of grep to do its work. Do a deep research and present your findings
+
+* Context
+
+Today =pi-code-graph= exposes only text-oriented graph commands (=status/context/impact/deps/flow/dead_code/clusters/search=). Exact symbol lookup exists only as an internal helper in =crates/pi-code-graph/src/query.rs=, and =search= flattens results to plain text in =crates/pi-natives/src/code_graph.rs=. That is useful for a human, but weak for harness automation and still pushes callers toward =grep= for discovery.
+
+This item adds native structured discovery primitives for symbols and files so the harness can ask the graph for exact/qualified/fuzzy matches with metadata instead of scraping plain text.
+
+* User Workflows
+
+1. A caller asks for symbols matching =CodeTool= and gets structured hits with kind, exported flag, language, path, line, and score.
+2. A caller asks for files under a path prefix or suffix and gets structured file hits without regex grep.
+3. A caller asks for exact qualified-name resolution and gets one stable answer or an explicit ambiguity/absence result.
+4. A caller can still use =code search= for broad lexical/hybrid exploration after symbol/file discovery exists.
+5. A later TS wrapper can present compact text while preserving machine-usable =details=.
+
+* Scope
+
+Rust backend only:
+- =crates/pi-code-graph/src/query.rs=
+- =crates/pi-code-graph/src/search.rs=
+- =crates/pi-code-graph/src/model.rs= if new summary fields/types are needed
+- =crates/pi-natives/src/code_graph.rs=
+- =crates/pi-natives/src/lib.rs= / NAPI bindings if needed
+- backend tests in the affected crates
+
+Do not change =packages/coding-agent/src/tools/code.ts= or =code-result.ts= here; that integration is a separate item.
+
+* Command Surface
+
+Add these first-class native commands:
+- =symbols= — structured symbol discovery with exact/qualified/fuzzy modes and filters
+- =files= — structured file/path discovery with exact/prefix/suffix/fuzzy modes
+- retain =search= as the broad lexical/hybrid text search
+
+Required filters/inputs:
+- =query=
+- exact vs fuzzy mode
+- optional =kind= filter
+- optional =exported= filter
+- optional =language= filter
+- optional =path prefix/scope= filter
+- limit
+
+* Design Decisions
+
+1. Structured result types are the source of truth; pretty text is a renderer, not the transport contract.
+2. Exact symbol lookup must prefer qualified names, then unqualified names, then fuzzy search; ambiguity must be explicit.
+3. File discovery must not depend on BM25 relevance alone; support deterministic exact/prefix/suffix matching.
+4. Preserve existing =search= behavior for broad keyword/hybrid search; do not regress current text workflows.
+
+* Test Coverage
+
+List workflows first, then implement tests first for pure query helpers:
+1. Exact qualified symbol lookup returns one deterministic hit.
+2. Ambiguous short-name lookup reports multiple hits without pretending one is canonical.
+3. Kind/exported/language/path filters reduce result sets correctly.
+4. File discovery exact/prefix/suffix/fuzzy matching works on mixed-language fixtures.
+5. NAPI command output preserves structured metadata and still renders readable text.
+6. Existing =search= command behavior remains intact.
+
+Test-first sequencing required for new pure helpers and types:
+- add query helper tests in =pi-code-graph= before implementation
+- add NAPI contract tests for =symbols= / =files= before TypeScript integration
+
+* Acceptance Criteria
+
+- Native graph surface exposes structured symbol and file discovery as first-class commands separate from plain-text =search=.
+- Results include enough metadata for harness selection without grep: label/name, kind, exported, language, path, line/column, score/match mode.
+- Exact match, ambiguity, and no-match cases are distinguishable in the result contract.
+- Verification commands:
+  - =cargo test -p pi-code-graph=
+  - =cargo test -p pi-natives code_graph -- --nocapture=
+  - =bun check:rs=
+
+* Manual Proof Artifact
+
+Capture a session artifact showing native =symbols= and =files= queries on a mixed-language fixture workspace, including one exact hit and one ambiguity case.
+
+* Parent Plan
+- [[id:PLAN-220-pi-code-graph-declarative-discovery-and]]
+
+NOTE [2026-04-13]: Implemented native symbols/files queries with exact and ambiguity artifacts.

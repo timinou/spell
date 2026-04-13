@@ -1,0 +1,89 @@
+#+TITLE: Wire code tool discovery and format edited output
+#+STATE: DONE
+#+SESSION_ID: 14b8fc8c0f83347f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-13T12-06-58-366Z_14b8fc8c0f83347f.jsonl]]
+#+CUSTOM_ID: FEAT-534-wire-code-tool-discovery-and-format-edit
+#+EFFORT: 6h
+#+PRIORITY: #A
+#+DEPENDS: FEAT-533-structured-symbol-and-file-discovery-for
+#+LAYER: coding-agent
+
+* Initial Message
+
+Do an analysis of spell's pi-code-graph and pi-code-engine, and give me your overall review. I would like to implement auto-formatting to the output of the code  tool, for example, as well as explore ways to do symbol search or whatever, in order to reduce the reliance of the harness of grep to do its work. Do a deep research and present your findings
+
+* Context
+
+The =code= tool already has the right high-level split: native graph/file operations produce data, =packages/coding-agent/src/tools/code-result.ts= normalizes and formats it, and =CodeTool.renderResult()= renders it in the TUI. But two gaps remain:
+
+1. New graph-backed symbol/file discovery is not yet exposed as first-class =code= commands and therefore cannot replace grep-oriented discovery in the harness.
+2. =code edit= saves the buffer immediately after native edits without reusing the existing LSP/custom-linter formatting pipeline that =write.ts= and patch writethrough already use. The result text for =read= / graph commands is also minimally formatted.
+
+This item handles the TypeScript-side integration and user-facing output contract.
+
+* User Workflows
+
+1. A caller runs =code symbols { query: "CodeTool" }= and sees a compact summary while machine-readable details remain attached.
+2. A caller runs =code files { query: "code-result" }= and gets file discovery without grep.
+3. A caller runs =code edit ...= on a supported file; the tool always attempts formatting after a successful edit, and if no formatter exists or formatting fails/times out, the edit still succeeds and the degraded formatting state is reported truthfully.
+4. A caller runs =code read= / graph discovery and sees stable, compact output that is easier for both the model and the TUI to consume.
+5. Tool docs and prompts steer declaration/file lookup toward =code symbols= / =code files=, while grep remains the regex/content-search fallback.
+
+* Scope
+
+All implementation in:
+- =packages/coding-agent/src/tools/code.ts=
+- =packages/coding-agent/src/tools/code-result.ts=
+- =packages/coding-agent/src/lsp/index.ts= (or a new shared helper extracted from it)
+- =packages/coding-agent/src/prompts/tools/code.md=
+- =packages/coding-agent/test/tools/code.test.ts=
+- =packages/coding-agent/test/tools/code-result.test.ts=
+- any focused LSP tests needed for the formatter reuse seam
+
+Do not modify Rust graph extraction logic here except for consuming the already-exposed native commands.
+
+* Design Decisions
+
+1. Keep structured =details= canonical; text content is a derived presentation layer.
+2. Reuse the existing LSP/custom-linter formatting pipeline instead of inventing code-tool-specific formatting logic.
+3. Always attempt formatting after a successful =code edit= before final save; if no formatter exists or formatting degrades, keep the successful edit and report the truth.
+4. Separate content mutation from presentation: edit-time formatting changes saved file content when a formatter is available; result-text formatting always improves readability regardless of formatter availability.
+5. Grep remains a fallback for regex/content search; prompt/tool docs should steer symbol/file lookup to =code= first.
+
+* Test Coverage
+
+Workflows first:
+1. =code symbols= and =code files= pass params through and normalize structured results.
+2. Text output for discovery commands is compact, deterministic, and keeps enough metadata for debugging.
+3. =code edit= invokes formatter reuse before save when enabled and supported.
+4. =code edit= preserves previous behavior when no formatter is configured or formatting times out/fails, while still surfacing degraded formatting truthfully.
+5. =renderResult()= still sanitizes tabs/truncates safely after richer formatting.
+6. Prompt/docs examples show symbol/file discovery as first-class commands.
+
+Required sequencing for new helpers/pure formatting functions:
+- add result-normalization/formatting tests before implementation
+- add =code edit= formatter integration tests before wiring the save path
+
+* Acceptance Criteria
+
+- =code= exposes graph-backed =symbols= and =files= commands and prompt/docs describe when to use them.
+- =code edit= reuses the existing formatting seam before save instead of saving raw edited text immediately.
+- Formatter failure, timeout, or absence does not hide a successful edit; it reports truthful degraded behavior.
+- Result text stays sanitized and compact in both model output and TUI rendering.
+- Verification commands:
+  - =bun test packages/coding-agent/test/tools/code.test.ts=
+  - =bun test packages/coding-agent/test/tools/code-result.test.ts=
+  - =bun check:ts=
+
+* Manual Proof Artifact
+
+Capture one transcript or screenshot artifact for each:
+- =code symbols= on a known symbol
+- =code files= on a known file fragment
+- =code edit= on a formatter-backed file showing the saved result is formatted
+- =code edit= on a file without formatter support or with forced formatter degradation showing truthful reporting
+
+* Parent Plan
+- [[id:PLAN-220-pi-code-graph-declarative-discovery-and]]
+
+NOTE [2026-04-13]: Integrated code symbols/files and edit-time formatter reuse with formatter-backed and degraded artifacts.
