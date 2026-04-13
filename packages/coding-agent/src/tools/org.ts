@@ -53,7 +53,8 @@ const orgSchema = Type.Object({
 	includeBody: Type.Optional(Type.Boolean({ description: "Include body text in query results" })),
 	sort: Type.Optional(
 		Type.String({
-			description: "Sort key(s), space-separated: priority, state/todo, id, category. Default: priority state id",
+			description:
+				"Sort key(s), space-separated: priority, state/todo, id, category. Keys sort descending by default. Default: priority state id",
 		}),
 	),
 	limit: Type.Optional(Type.Number({ description: "Max items to return" })),

@@ -169,7 +169,7 @@ export interface OrgQueryFilter {
 	includeBody?: boolean;
 	/** Filter by heading level. 0 = file-level items only. Omit for all levels. */
 	level?: number;
-	/** Sort key(s). Default: priority > state > id. Space-separated for multi-key. */
+	/** Sort key(s). Default: priority > state > id. Keys sort descending by default. Space-separated for multi-key. */
 	sort?: string;
 	/** Maximum number of items to return. */
 	limit?: number;
