@@ -304,6 +304,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					label: `AST Edit: ${result.totalReplacements} replacement${previewReplacementPlural} in ${result.filesTouched} file${previewFilePlural}`,
 					sourceToolName: this.name,
 					files: [...touchedAbsoluteFiles],
+					invalidateManagedCodeBuffers: true,
 					apply: async (_reason: string) => {
 						const applyResult = await astEdit({
 							rewrites: normalizedRewrites,

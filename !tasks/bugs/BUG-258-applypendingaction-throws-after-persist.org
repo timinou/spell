@@ -1,0 +1,153 @@
+#+TITLE: applyPendingAction throws after persist leaving ambiguous state
+#+STATE: DONE
+#+SESSION_ID: 14ba5c57dda011f2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T13-43-59-606Z_14ba5c57dda011f2.jsonl]]
+#+CUSTOM_ID: BUG-258-applypendingaction-throws-after-persist
+#+EFFORT: 2h
+#+LAYER: coding-agent
+#+PRIORITY: #B
+
+* Scope
+** In scope
+- Harden =applyPendingAction()= so callers always receive a truthful =PendingActionResolution= even when buffer invalidation fails after persist
+- Add opt-in =invalidateManagedCodeBuffers= flag on =PendingAction= interface so only producers that manage code buffers request invalidation
+- Warn when =persisted: true= + opted-in + files list is empty (contract hole)
+- Tighten =isPendingActionResolution()= type guard from ="result" in value= to multi-field structural check
+- Wire AST edit preview action to set =invalidateManagedCodeBuffers: true=
+- Add =bufferInvalidationError= field to =PendingActionResolution= and =ResolveToolDetails=
+- Surface =bufferInvalidationError= in resolve tool result text
+
+** Out of scope
+- Renderer provenance display (separate item [[id:BUG-259-resolve-tui-renderer-hides-mutation-prov]])
+- Removing =PendingActionStore.pop()= (legitimate API)
+- Changes to code tool =normalizeCodeBufferSuccess= (already correct)
+
+* Existing Patterns
+- =packages/coding-agent/src/tools/pending-action.ts=: =PendingAction=, =PendingActionResolution=, =MutationProvenance=, =applyPendingAction()=, =discardPendingAction()=, =invalidateCodeBuffers()=, =normalizeResolution()=, =isPendingActionResolution()=
+- =packages/coding-agent/src/tools/resolve.ts=: =ResolveTool.execute()=, =ResolveToolDetails=
+- =packages/coding-agent/src/tools/ast-edit.ts=: =AstEditTool.execute()= preview action construction at L303-360 (sets =files: [...touchedAbsoluteFiles]= and calls =applyPendingAction()= for auto-apply)
+- =packages/coding-agent/src/tools/tool-errors.ts=: =ToolError=
+- =executeCodeBuffer({ command: "close", file })= is used for buffer invalidation
+
+* Tests
+- File: =packages/coding-agent/test/tools/resolve.test.ts=
+- File: =packages/coding-agent/test/tools/ast-edit.test.ts=
+
+** Scenario: persisted apply with invalidation failure returns degraded resolution
+Push pending action with =invalidateManagedCodeBuffers: true= and valid files. Mock =executeCodeBuffer= to fail on ="close"= command. Apply via =ResolveTool=. Assert: result has =mutationState: "applied"=, =persisted: true=, text contains the invalidation error, =bufferInvalidationError= present in details, pending action is removed from store.
+
+** Scenario: persisted apply with empty files and opt-in returns warning
+Push pending action with =invalidateManagedCodeBuffers: true=, =files: []= (or undefined). Apply via =ResolveTool=. Assert: result has =mutationState: "applied"=, =persisted: true=, =bufferInvalidationError= contains "did not report touched files", pending action removed.
+
+** Scenario: apply without opt-in skips invalidation entirely
+Push pending action WITHOUT =invalidateManagedCodeBuffers=. Apply. Assert: =executeCodeBuffer= never called with ="close"=, result has no =bufferInvalidationError=.
+
+** Scenario: auto-apply with invalidation failure returns result with warning
+Use =Settings.isolated({ "edit.previewResolvePolicy": "auto-apply" })= + spy =executeCodeBuffer= to fail on ="close"=. Execute ast edit. Assert: result is returned (not thrown), contains =bufferInvalidationError= in details text.
+
+** Scenario: tighter isPendingActionResolution guard rejects false positives
+Call =normalizeResolution()= with an =AgentToolResult= that incidentally has a =result= property in details. Assert: falls through to fallback path, not misidentified as =PendingActionResolution=.
+
+* Implementation
+
+** Tighten isPendingActionResolution guard
+:PROPERTIES:
+:CUSTOM_ID: BUG-258-applypendingaction-throws-after-persist::tighten-guard
+:END:
+- File: =packages/coding-agent/src/tools/pending-action.ts=
+- Change =isPendingActionResolution()= from ="result" in value= to:
+  #+begin_src typescript
+  function isPendingActionResolution(value: unknown): value is PendingActionResolution {
+    return (
+      !!value &&
+      typeof value === "object" &&
+      "result" in value &&
+      "mutationState" in value &&
+      "persisted" in value &&
+      "files" in value
+    );
+  }
+  #+end_src
+
+** Add invalidation opt-in flag and bufferInvalidationError
+:PROPERTIES:
+:CUSTOM_ID: BUG-258-applypendingaction-throws-after-persist::contract-fields
+:DEPENDS: BUG-258-applypendingaction-throws-after-persist::tighten-guard
+:END:
+- File: =packages/coding-agent/src/tools/pending-action.ts=
+- Add =invalidateManagedCodeBuffers?: boolean= to =PendingAction= interface
+- Add =bufferInvalidationError?: string= to =PendingActionResolution= interface
+- Rename =invalidateCodeBuffers= → =tryInvalidateCodeBuffers=, return =string | undefined= instead of throwing
+- Rewrite =applyPendingAction()=:
+  #+begin_src typescript
+  export async function applyPendingAction(action: PendingAction, reason: string): Promise<PendingActionResolution> {
+    const resolution = normalizeResolution(await action.apply(reason), {
+      mutationState: "applied",
+      persisted: true,
+      files: action.files,
+    });
+    if (!resolution) {
+      throw new ToolError(`Pending action ${action.label} did not return a result.`);
+    }
+    if (!resolution.persisted || action.invalidateManagedCodeBuffers !== true) {
+      return resolution;
+    }
+    if (resolution.files.length === 0) {
+      return {
+        ...resolution,
+        bufferInvalidationError:
+          "Applied preview persisted to disk, but did not report touched files needed to invalidate managed code buffers.",
+      };
+    }
+    const bufferInvalidationError = await tryInvalidateCodeBuffers(resolution.files);
+    return bufferInvalidationError ? { ...resolution, bufferInvalidationError } : resolution;
+  }
+  #+end_src
+
+** Wire AST edit preview to opt in
+:PROPERTIES:
+:CUSTOM_ID: BUG-258-applypendingaction-throws-after-persist::ast-edit-optin
+:DEPENDS: BUG-258-applypendingaction-throws-after-persist::contract-fields
+:END:
+- File: =packages/coding-agent/src/tools/ast-edit.ts=
+- In the preview action object (L303), add =invalidateManagedCodeBuffers: true= alongside existing =files=, =label=, =sourceToolName=, =apply=
+- Auto-apply path already calls =applyPendingAction()= so it inherits the new behavior
+
+** Propagate bufferInvalidationError in resolve
+:PROPERTIES:
+:CUSTOM_ID: BUG-258-applypendingaction-throws-after-persist::resolve-propagate
+:DEPENDS: BUG-258-applypendingaction-throws-after-persist::contract-fields
+:END:
+- File: =packages/coding-agent/src/tools/resolve.ts=
+- Add =bufferInvalidationError?: string= to =ResolveToolDetails= interface
+- In apply branch: copy =applyResolution.bufferInvalidationError= into resolveDetails
+- In summary text: when =bufferInvalidationError= is present, append it as a warning line after the summary
+
+** Write tests for hardened contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-258-applypendingaction-throws-after-persist::tests
+:DEPENDS: BUG-258-applypendingaction-throws-after-persist::resolve-propagate
+:END:
+- File: =packages/coding-agent/test/tools/resolve.test.ts=
+- File: =packages/coding-agent/test/tools/ast-edit.test.ts=
+- Implement all 5 test scenarios from Tests section above
+- Use =spyOn(nativesModule, "executeCodeBuffer")= to simulate close failures
+- Use =PendingActionStore= directly for unit-level tests, =createTools()= for integration
+
+* Edge Cases
+- Apply callback throws before returning (pre-persist failure): existing behavior preserved — =applyPendingAction= lets it propagate, pending action stays in store
+- Apply callback returns bare =AgentToolResult= (no =PendingActionResolution=): =normalizeResolution= fallback assigns =persisted: true= + =files: action.files= → invalidation still attempted correctly via fallback files
+- =invalidateManagedCodeBuffers= is false/undefined: invalidation skipped entirely, no error possible
+- Multiple files where only one fails close: =tryInvalidateCodeBuffers= returns error on first failure (consistent with current behavior)
+- Empty files list from =normalizeResolution= fallback: =action.files= is =undefined= → fallback is =[]= → triggers missing-files warning when opted in
+
+* Acceptance Criteria
+- =applyPendingAction()= never throws after a successful persist — it returns a resolution with =bufferInvalidationError= instead
+- Actions without =invalidateManagedCodeBuffers: true= skip buffer invalidation entirely
+- AST edit preview actions set =invalidateManagedCodeBuffers: true=
+- =isPendingActionResolution()= requires =mutationState=, =persisted=, and =files= fields — not just =result=
+- =ResolveToolDetails= surfaces =bufferInvalidationError= when present
+- All 5 test scenarios pass
+- Existing tests in ast-edit, resolve, code, code-result continue to pass
+
+NOTE [2026-04-14]: Implemented contract hardening and verified with focused tests.

@@ -1,0 +1,17 @@
+== persisted ==
+                                                                                                    
+ ✔ Accept: 2 replacements in 1 file ⟦AST Edit⟧                                                      
+ state: applied · persisted to disk                                                                 
+                                                                                                    
+                                                                                                    
+ All replacements are correct                                                                       
+                                                                                                    
+
+== warning ==
+                                                                                                                        
+ ✔ Accept: 1 replacement in 1 file ⟦AST Edit⟧                                                                           
+ state: applied · persisted to disk · buffer invalidation warning                                                       
+ Applied preview persisted to disk, but failed to invalidate the managed code buffer for /tmp/main.ts: close failed     
+                                                                                                                        
+ Disk write succeeded but close failed                                                                                  
+                                                                                                                        

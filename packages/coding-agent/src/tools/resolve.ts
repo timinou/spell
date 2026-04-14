@@ -28,6 +28,7 @@ export interface ResolveToolDetails {
 	label?: string;
 	mutationState: "applied" | "discarded";
 	persisted: boolean;
+	bufferInvalidationError?: string;
 }
 
 function resolveReasonPreview(reason?: string): string | undefined {
@@ -81,6 +82,7 @@ export class ResolveTool implements AgentTool<typeof resolveSchema, ResolveToolD
 					...baseResolveDetails,
 					mutationState: "applied",
 					persisted: applyResolution.persisted,
+					bufferInvalidationError: applyResolution.bufferInvalidationError,
 				};
 				const appliedText = applyResolution.result.content
 					.filter(part => part.type === "text")
@@ -88,9 +90,11 @@ export class ResolveTool implements AgentTool<typeof resolveSchema, ResolveToolD
 					.filter(text => text != null && text.length > 0)
 					.join("\n");
 				const summary = applyResolution.persisted
-					? `Applied preview: ${pendingAction.label}. Persisted to disk.`
+					? applyResolution.bufferInvalidationError
+						? `Applied preview: ${pendingAction.label}. Persisted to disk with buffer invalidation warnings.`
+						: `Applied preview: ${pendingAction.label}. Persisted to disk.`
 					: `Applied preview: ${pendingAction.label}. Persistence was not reported.`;
-				const text = appliedText ? `${summary}\n${appliedText}` : summary;
+				const text = [summary, applyResolution.bufferInvalidationError, appliedText].filter(Boolean).join("\n");
 				return { ...toolResult().text(text).done(), details: resolveDetails };
 			}
 
@@ -143,6 +147,17 @@ export const resolveToolRenderer = {
 		const label = replaceTabs(details?.label ?? "pending action");
 		const reason = replaceTabs(details?.reason?.trim() || "No reason provided");
 		const action = details?.action ?? "apply";
+		const mutationState = details?.mutationState ?? (action === "discard" ? "discarded" : "applied");
+		const statusText =
+			action === "discard"
+				? undefined
+				: [
+						`state: ${mutationState}`,
+						details?.persisted ? "persisted to disk" : "persistence not reported",
+						details?.bufferInvalidationError ? "buffer invalidation warning" : undefined,
+					]
+						.filter(Boolean)
+						.join(" · ");
 		const isApply = action === "apply" && !result.isError;
 		const bgColor = result.isError ? "error" : isApply ? "success" : "warning";
 		const icon = isApply ? uiTheme.status.success : uiTheme.status.error;
@@ -155,8 +170,17 @@ export const resolveToolRenderer = {
 			? uiTheme.bold(`${uiTheme.format.bracketLeft}${sourceLabel}${uiTheme.format.bracketRight}`)
 			: undefined;
 		const headerLine = `${icon} ${uiTheme.bold(`${verb}:`)} ${summaryLabel}${sourceBadge ? ` ${sourceBadge}` : ""}`;
-		const lines = ["", headerLine, "", uiTheme.italic(reason), ""];
-
+		const lines = [
+			"",
+			headerLine,
+			statusText ? uiTheme.fg(details?.bufferInvalidationError ? "warning" : "muted", statusText) : undefined,
+			details?.bufferInvalidationError
+				? uiTheme.fg("warning", replaceTabs(details.bufferInvalidationError))
+				: undefined,
+			"",
+			uiTheme.italic(reason),
+			"",
+		].filter((line): line is string => line !== undefined);
 		return {
 			render(width: number) {
 				const lineWidth = Math.max(3, width);

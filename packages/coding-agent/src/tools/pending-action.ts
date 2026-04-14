@@ -13,24 +13,41 @@ export interface MutationProvenance {
 export interface PendingActionResolution extends MutationProvenance {
 	result: AgentToolResult<unknown>;
 	files: string[];
+	bufferInvalidationError?: string;
 }
 
 export interface PendingAction {
 	label: string;
 	sourceToolName: string;
-	files?: string[];
+	files: string[];
+	invalidateManagedCodeBuffers?: boolean;
 	apply(reason: string): Promise<AgentToolResult<unknown> | PendingActionResolution>;
 	reject?(reason: string): Promise<AgentToolResult<unknown> | PendingActionResolution | undefined>;
 	details?: unknown;
 }
 
+function isMutationState(value: unknown): value is MutationState {
+	return value === "pending_preview" || value === "applied" || value === "discarded" || value === "noop";
+}
+
 function isPendingActionResolution(value: unknown): value is PendingActionResolution {
-	return !!value && typeof value === "object" && "result" in value;
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return false;
+	}
+	const candidate = value as Record<string, unknown>;
+	return (
+		"result" in candidate &&
+		isMutationState(candidate.mutationState) &&
+		typeof candidate.persisted === "boolean" &&
+		Array.isArray(candidate.files) &&
+		candidate.files.every(file => typeof file === "string") &&
+		(candidate.bufferInvalidationError === undefined || typeof candidate.bufferInvalidationError === "string")
+	);
 }
 
 function normalizeResolution(
 	value: AgentToolResult<unknown> | PendingActionResolution | undefined,
-	fallback: MutationProvenance & { files?: string[] },
+	fallback: MutationProvenance & { files: string[] },
 ): PendingActionResolution | undefined {
 	if (value === undefined) return undefined;
 	if (isPendingActionResolution(value)) {
@@ -38,7 +55,8 @@ function normalizeResolution(
 			result: value.result,
 			mutationState: value.mutationState,
 			persisted: value.persisted,
-			files: value.files,
+			files: [...value.files],
+			bufferInvalidationError: value.bufferInvalidationError,
 		};
 	}
 
@@ -46,20 +64,22 @@ function normalizeResolution(
 		result: value,
 		mutationState: fallback.mutationState,
 		persisted: fallback.persisted,
-		files: fallback.files ?? [],
+		files: [...fallback.files],
 	};
 }
 
-async function invalidateCodeBuffers(files: string[]): Promise<void> {
+async function invalidateCodeBuffers(files: string[]): Promise<string | undefined> {
 	const uniqueFiles = [...new Set(files.filter(file => file.length > 0))];
+	if (uniqueFiles.length === 0) {
+		return "Applied preview persisted to disk, but no files were provided for managed code buffer invalidation.";
+	}
 	for (const file of uniqueFiles) {
 		const closeResult = executeCodeBuffer({ command: "close", file });
 		if (closeResult.error) {
-			throw new ToolError(
-				`Applied preview persisted to disk, but failed to invalidate the managed code buffer for ${file}: ${String(closeResult.output ?? "unknown error")}`,
-			);
+			return `Applied preview persisted to disk, but failed to invalidate the managed code buffer for ${file}: ${String(closeResult.output ?? "unknown error")}`;
 		}
 	}
+	return undefined;
 }
 
 export async function applyPendingAction(action: PendingAction, reason: string): Promise<PendingActionResolution> {
@@ -71,10 +91,11 @@ export async function applyPendingAction(action: PendingAction, reason: string):
 	if (!resolution) {
 		throw new ToolError(`Pending action ${action.label} did not return a result.`);
 	}
-	if (resolution.persisted) {
-		await invalidateCodeBuffers(resolution.files);
+	if (!resolution.persisted || action.invalidateManagedCodeBuffers !== true) {
+		return resolution;
 	}
-	return resolution;
+	const bufferInvalidationError = await invalidateCodeBuffers(resolution.files);
+	return bufferInvalidationError ? { ...resolution, bufferInvalidationError } : resolution;
 }
 
 export async function discardPendingAction(

@@ -1,0 +1,87 @@
+#+TITLE: Resolve TUI renderer hides mutation provenance and persistence state
+#+STATE: DONE
+#+SESSION_ID: 14ba5c57dda011f2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T13-43-59-606Z_14ba5c57dda011f2.jsonl]]
+#+CUSTOM_ID: BUG-259-resolve-tui-renderer-hides-mutation-prov
+#+DEPENDS: BUG-258-applypendingaction-throws-after-persist
+#+EFFORT: 1h
+#+LAYER: coding-agent
+#+PRIORITY: #C
+
+* Scope
+** In scope
+- Surface =persisted= state in =resolveToolRenderer.renderResult()= as a status indicator line
+- Surface =bufferInvalidationError= as a warning line in the rendered resolve block
+- Update existing render test to include provenance fields and assert they appear
+- Add render tests for degraded persistence state (=persisted: false=, =bufferInvalidationError= present)
+
+** Out of scope
+- =applyPendingAction()= contract changes ([[id:BUG-258-applypendingaction-throws-after-persist]])
+- AST edit tool details/renderer changes
+- Code tool result formatting (already handled in prior PLAN-228)
+
+* Existing Patterns
+- =packages/coding-agent/src/tools/resolve.ts=: =resolveToolRenderer.renderResult()= at L137-173 — builds inverse-colored block with icon, verb, summary label, source badge, and reason
+- =packages/coding-agent/src/tools/resolve.ts=: =ResolveToolDetails= interface at L24-31 — has =mutationState=, =persisted=, =bufferInvalidationError?= (after BUG-258)
+- =packages/coding-agent/test/tools/resolve.test.ts=: existing render test at L198-224 asserts "Accept: 2 replacements in 1 file" format, AST Edit badge, reason text
+- TUI helpers: =uiTheme.fg("success"|"warning"|"error"|"muted", text)=, =uiTheme.italic()=, =uiTheme.bold()=, =uiTheme.status.success=, =uiTheme.status.error=
+- =sanitizeText= from =@oh-my-pi/pi-natives= for render output assertion
+
+* Tests
+- File: =packages/coding-agent/test/tools/resolve.test.ts=
+
+** Scenario: render persisted apply shows persistence confirmation
+Render result with =mutationState: "applied"=, =persisted: true=, no =bufferInvalidationError=. Assert: rendered text contains "Persisted to disk" or equivalent success indicator. Does not contain warning text.
+
+** Scenario: render non-persisted apply shows persistence warning
+Render result with =mutationState: "applied"=, =persisted: false=. Assert: rendered text contains "Not persisted" or equivalent warning. Does not contain success persistence indicator.
+
+** Scenario: render apply with bufferInvalidationError shows warning
+Render result with =mutationState: "applied"=, =persisted: true=, =bufferInvalidationError: "failed to invalidate buffer for /tmp/foo.ts"=. Assert: rendered text contains the invalidation error. Contains persistence confirmation. Uses warning coloring.
+
+** Scenario: render discard shows no persistence indicator
+Render result with =mutationState: "discarded"=, =persisted: false=. Assert: rendered text contains "Discard". Does not contain persistence text.
+
+** Scenario: existing render test updated with provenance fields
+Update the existing ="renders a highlighted apply summary"= test to include =mutationState: "applied"=, =persisted: true= in details. Assert: still passes all existing assertions plus new persistence indicator.
+
+* Implementation
+
+** Add persistence indicator to renderResult
+:PROPERTIES:
+:CUSTOM_ID: BUG-259-resolve-tui-renderer-hides-mutation-prov::render-persistence
+:DEPENDS: BUG-258-applypendingaction-throws-after-persist::resolve-propagate
+:END:
+- File: =packages/coding-agent/src/tools/resolve.ts=
+- In =renderResult()= after L158 (=const lines = [...]= construction):
+  - If =details?.mutationState === "applied"= and =details.persisted=: insert a muted success line like =uiTheme.fg("success", "Persisted to disk")=
+  - If =details?.mutationState === "applied"= and =!details.persisted=: insert =uiTheme.fg("warning", "Persistence was not reported")=
+  - If =details?.bufferInvalidationError=: insert =uiTheme.fg("warning", details.bufferInvalidationError)=
+  - If =details?.mutationState === "discarded"=: no persistence line (already clear from verb)
+- Keep lines array structure: =["", headerLine, persistenceLine?, warningLine?, "", uiTheme.italic(reason), ""]= — filter out undefined entries
+
+** Write render tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-259-resolve-tui-renderer-hides-mutation-prov::render-tests
+:DEPENDS: BUG-259-resolve-tui-renderer-hides-mutation-prov::render-persistence
+:END:
+- File: =packages/coding-agent/test/tools/resolve.test.ts=
+- Update existing ="renders a highlighted apply summary"= test: add =mutationState: "applied"=, =persisted: true= to details, assert output contains persistence confirmation
+- Add 3 new render tests for the scenarios above (non-persisted, bufferInvalidationError, discard)
+- All use =resolveToolRenderer.renderResult()= + =sanitizeText()= for assertion
+
+* Edge Cases
+- =details= is undefined (legacy/missing): no persistence line rendered, no crash
+- =bufferInvalidationError= is very long: truncated by =truncateToWidth= in the existing line-level truncation already applied in render()
+- =mutationState= not present on details (type allows it via =details?=): skip persistence line
+
+* Acceptance Criteria
+- Applied resolve results show "Persisted to disk" when =persisted: true=
+- Applied resolve results show "Persistence was not reported" when =persisted: false=
+- =bufferInvalidationError= text appears as a warning in rendered output when present
+- Discarded resolve results show no persistence indicator
+- Existing render test still passes with added provenance fields
+- All 5 scenario tests pass
+- Existing tests in ast-edit, resolve, code, code-result continue to pass
+
+NOTE [2026-04-14]: Implemented resolve renderer provenance display and verified with focused tests.
