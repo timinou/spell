@@ -923,6 +923,9 @@ export function kimiCodeModelManagerOptions(
 ): ModelManagerOptions<"openai-completions"> {
 	const apiKey = config?.apiKey;
 	const baseUrl = config?.baseUrl ?? "https://api.kimi.com/coding/v1";
+	const references = createBundledReferenceMap<"openai-completions">(
+		"kimi-code" as Parameters<typeof getBundledModels>[0],
+	);
 	return {
 		providerId: "kimi-code",
 		...(apiKey && {
@@ -941,15 +944,20 @@ export function kimiCodeModelManagerOptions(
 						defaults: Model<"openai-completions">,
 						_context: OpenAICompatibleModelMapperContext<"openai-completions">,
 					): Model<"openai-completions"> => {
-						const id = defaults.id;
+						const reference = references.get(defaults.id);
+						const model = mapWithBundledReference(entry, defaults, reference);
+						const id = model.id.toLowerCase();
+						const supportsImage =
+							entry.supports_image_in === true || model.input.includes("image") || id.includes("k2.5");
 						return {
-							...defaults,
-							name: typeof entry.display_name === "string" ? entry.display_name : defaults.name,
-							reasoning: entry.supports_reasoning === true || id.includes("thinking"),
-							input: entry.supports_image_in === true || id.includes("k2.5") ? ["text", "image"] : ["text"],
-							contextWindow: typeof entry.context_length === "number" ? entry.context_length : 262144,
-							maxTokens: 32000,
+							...model,
+							name: typeof entry.display_name === "string" ? entry.display_name : model.name,
+							reasoning: entry.supports_reasoning === true || id.includes("thinking") || model.reasoning,
+							input: supportsImage ? ["text", "image"] : ["text"],
+							contextWindow: toPositiveNumber(entry.context_length, reference?.contextWindow ?? 262144),
+							maxTokens: toPositiveNumber(entry.max_completion_tokens, reference?.maxTokens ?? 32000),
 							compat: {
+								...model.compat,
 								thinkingFormat: "zai",
 								reasoningContentField: "reasoning_content",
 								supportsDeveloperRole: false,
