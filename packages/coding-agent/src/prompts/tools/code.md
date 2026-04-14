@@ -6,7 +6,8 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 - Create a new supported file → `code edit { file, operation: "create", content: ["..."] }`
 - Change specific lines in a declaration → `code edit { file, symbol: "fnName", operation: "patch", patches: [{ find: "old", replace: "new" }] }`
 - Replace a declaration body → `code edit { file, symbol: "fnName", operation: "replace-body", content: ["{", "  …", "}"] }`
-- Replace an entire declaration → `code edit { file, symbol: "fnName", operation: "replace", content: ["…"] }`
+- Replace an entire declaration (symbol-targeted) → `code edit { file, symbol: "fnName", operation: "replace", content: ["…"] }`
+- Replace an entire existing file → `code edit { file, operation: "replace", content: ["…"] }`
 - Delete a declaration → `code edit { file, symbol: "fnName", operation: "kill" }`
 - Wrap a declaration in a template → `code edit { file, symbol: "fnName", operation: "wrap", content: ["try {", "  $BODY", "} catch (err) {", "  throw err;", "}"] }`
 - Rename a declaration in-file → `code edit { file, symbol: "oldName", operation: "rename", content: "newName" }`
@@ -66,6 +67,19 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
     "patches": [{ "find": ["const timeout = 5000;"], "replace": ["const timeout = 30_000;"] }]
   }
   ```
+- Replace an existing file wholesale:
+  ```json
+  {
+    "command": "edit",
+    "file": "src/server.ts",
+    "operation": "replace",
+    "content": [
+      "export function handleRequest() {",
+      "  return new Response(\"ok\");",
+      "}"
+    ]
+  }
+  ```
 - Create a new supported file in one call:
   ```json
   {
@@ -115,6 +129,8 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 - Use file-scoped commands for local syntax work; use graph commands for cross-file reasoning
 - `operation: "create"` accepts only `file`, `operation`, and `content`; do not combine it with `symbol`, `line`, `patches`, or `edits`
 - Use `symbol` to target declarations; use `line` only for positional operations
+- `operation: "replace"` uses `symbol` for declaration replacement, `line` for positional replacement, and omitting both replaces the entire existing file
+- Whole-file `replace` edits existing supported files only; use `create` for missing files
 - For `patch`, `find` matches only within the targeted symbol scope and is indent-insensitive
 - If `patch.find` matches multiple locations, the edit fails; provide more specific context
 - Edits from `edit`, `undo`, and `redo` are automatically saved to disk; `save` is rarely needed

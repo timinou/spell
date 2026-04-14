@@ -238,13 +238,23 @@ fn single_edit_operation(
 					old_end_byte: resolved.end_byte,
 					new_text:     content.to_string(),
 				}])
-			} else {
-				let line = value_to_usize(options.get("line"), 0);
+			} else if let Some(line) = options
+				.get("line")
+				.and_then(Value::as_u64)
+				.filter(|line| *line > 0)
+				.and_then(|line| usize::try_from(line).ok())
+			{
 				let node_type = options
 					.get("node_type")
 					.and_then(Value::as_str)
 					.unwrap_or("");
 				replace_node(buffer, line, node_type, content).map_err(engine_err)
+			} else {
+				Ok(vec![TextEdit {
+					start_byte:   0,
+					old_end_byte: buffer.source().len(),
+					new_text:     content.to_string(),
+				}])
 			}
 		},
 		"kill" => {
@@ -716,6 +726,37 @@ mod tests {
 		assert_eq!(edits.len(), 1);
 		assert_eq!(edits[0].start_byte, 0);
 		assert!(edits[0].new_text.contains("return a * b"));
+	}
+
+	#[test]
+	fn single_edit_operation_supports_whole_file_replace_without_target() {
+		let buffer = ts_buffer("function add(a: number, b: number): number {\n  return a + b;\n}\n");
+		let profile = ts_profile();
+		let options = json!({
+			"operation": "replace",
+			"content": "export const replaced = 2;\n"
+		});
+		let edits = single_edit_operation(&buffer, &profile, &options).expect("edit");
+		assert_eq!(edits.len(), 1);
+		assert_eq!(edits[0].start_byte, 0);
+		assert_eq!(edits[0].old_end_byte, buffer.source().len());
+		assert_eq!(edits[0].new_text, "export const replaced = 2;\n");
+	}
+
+	#[test]
+	fn single_edit_operation_preserves_line_replace_precedence() {
+		let buffer = ts_buffer("function add(a: number, b: number): number {\n  return a + b;\n}\n");
+		let profile = ts_profile();
+		let options = json!({
+			"operation": "replace",
+			"line": 1,
+			"content": "const replaced = true;\n"
+		});
+		let edits = single_edit_operation(&buffer, &profile, &options).expect("edit");
+		assert_eq!(edits.len(), 1);
+		assert_eq!(edits[0].start_byte, 0);
+		assert_ne!(edits[0].old_end_byte, buffer.source().len());
+		assert_eq!(edits[0].new_text, "const replaced = true;\n");
 	}
 
 	#[test]

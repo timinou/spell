@@ -89,6 +89,42 @@ describe("executeCodeBuffer NAPI bridge", () => {
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
 
+	it("replaces the full contents of an existing supported file", async () => {
+		const tempDir = path.join(os.tmpdir(), `pi-natives-replace-${Date.now()}`);
+		const file = path.join(tempDir, "module.ts");
+		await fs.mkdir(tempDir, { recursive: true });
+		await Bun.write(file, "export const original = 1;\n");
+		const edit = executeCodeBuffer({
+			command: "edit",
+			file,
+			operation: "replace",
+			content: "export const replaced = 2;\n",
+		});
+		expect(edit.error).toBe(false);
+		expect(edit.output).toEqual(expect.objectContaining({ editCount: 1, created: false }));
+		const save = executeCodeBuffer({ command: "save", file });
+		expect(save.error).toBe(false);
+		expect(await Bun.file(file).text()).toBe("export const replaced = 2;\n");
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("rejects full-file replace for missing supported files", async () => {
+		const tempDir = path.join(os.tmpdir(), `pi-natives-missing-replace-${Date.now()}`);
+		const file = path.join(tempDir, "missing.ts");
+		await fs.mkdir(tempDir, { recursive: true });
+		const result = executeCodeBuffer({
+			command: "edit",
+			file,
+			operation: "replace",
+			content: "export const created = 1;\n",
+		});
+		expect(result).toEqual({
+			error: true,
+			output: expect.stringContaining("No such file or directory"),
+		});
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
 	it("detects native-extension drift", () => {
 		const result = executeCodeBuffer({
 			command: "languages",

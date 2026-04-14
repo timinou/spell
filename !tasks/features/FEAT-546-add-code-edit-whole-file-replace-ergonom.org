@@ -1,0 +1,131 @@
+#+TITLE: Add code edit whole-file replace ergonomics
+#+STATE: DONE
+#+SESSION_ID: 14ba431c79b9ac0e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-53-45-190Z_14ba431c79b9ac0e.jsonl]]
+#+CUSTOM_ID: FEAT-546-add-code-edit-whole-file-replace-ergonom
+#+DEPENDS: 
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: coding-agent pi-natives pi-code-engine
+
+* Scope
+
+** In scope
+- Add explicit whole-file replacement ergonomics for existing code-supported files via `code edit { file, operation: "replace", content }` with no `symbol` and no `line`
+- Preserve existing declaration-targeted `replace` (`symbol`) and line-targeted `replace` (`line`) behavior unchanged
+- Keep missing-file creation on the existing `operation: "create"` path from PLAN-222; whole-file replace MUST NOT become an implicit create path
+- Update tool documentation and tests so subagents do not conclude that “the code tool won’t allow replacing a full module” when the intended operation is a full-file rewrite
+
+** Out of scope
+- Dotted symbol resolution for Elixir / deep markdown; that remains covered by the separate dotted-name resolver planning work
+- New edit operation names beyond `replace`
+- Self-recovering target-resolution hints / fuzzy suggestions; keep scope to full-file replace ergonomics only
+- Unsupported-file behavior changes for `read`, `edit`, or `write`
+
+Orchestration: [[id:PLAN-226-code-edit-whole-file-replace-ergonomics]].
+External prerequisite: complete the separate dotted-name resolver work first so full-module targeting and whole-file replacement ergonomics do not get conflated during implementation.
+
+* Existing Patterns
+- `packages/coding-agent/src/tools/code.ts` — `CodeTool.execute()` normalizes file-local edit requests, forwards to native `executeCodeBuffer(...)`, then auto-formats and auto-saves mutating commands
+- `packages/coding-agent/src/prompts/tools/code.md` — canonical repo prompt for code tool examples and constraints; currently documents declaration-level `replace` but not file-wide `replace`
+- `crates/pi-natives/src/code_buffer.rs` — `single_edit_operation(...)` dispatches `operation: "replace"`; today it chooses symbol-targeted replacement when `symbol` is present, otherwise falls through to line-targeted `replace_node(...)`
+- `crates/pi-code-engine/src/edit/replace.rs` — provides line-targeted replacement helpers used by the native dispatcher
+- `packages/coding-agent/test/tools/code.test.ts` — existing wrapper tests for create, replace-body, patch, rename, undo/redo, and autosave behavior
+- `packages/natives/test/code-buffer.test.ts` — NAPI-facing behavior tests for create semantics and native language support
+- `crates/pi-code-engine/src/line_target.rs` — line `0` is invalid, which explains why file-only `replace` currently fails instead of meaning “whole file”
+
+* Tests
+
+User workflows to cover first:
+1. Existing supported file, full rewrite intent → `code edit { file, operation: "replace", content }` replaces the entire file and auto-saves
+2. Existing supported file, declaration rewrite intent → `code edit { file, symbol, operation: "replace", content }` still targets only that declaration
+3. Existing supported file, positional rewrite intent → `code edit { file, line, operation: "replace", content }` still targets the resolved node on that line
+4. Missing supported file → caller must still use `operation: "create"`; file-only `replace` must not silently create
+5. Docs / prompt examples → show full-file replace as the ergonomic path for module-wide rewrites
+
+Concrete test files and scenarios:
+- `packages/coding-agent/test/tools/code.test.ts`
+  - add wrapper test proving `command:"edit" + operation:"replace" + file + content` forwards no `symbol` / no `line`, produces an edited result, and triggers the existing auto-save path
+  - keep existing symbol-scoped and line-scoped replace behavior green as regression coverage
+- `packages/natives/test/code-buffer.test.ts`
+  - add NAPI test proving a real existing `.ts` file is fully replaced when `operation:"replace"` is called with only `file` + `content`
+  - add NAPI test proving missing-file `operation:"replace"` still errors instead of creating a file
+- If implementation extracts a reusable Rust helper in `pi-code-engine`, add a focused Rust unit test near that helper; otherwise wrapper + NAPI tests are the minimum required TDD surface
+
+* Implementation
+
+** Add failing whole-file replace tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-546-add-code-edit-whole-file-replace-ergonom::whole-file-replace-tests
+:END:
+- Files: `packages/coding-agent/test/tools/code.test.ts`, `packages/natives/test/code-buffer.test.ts`
+- Write the workflow tests above first so current behavior fails for the full-file path
+- Keep tests explicit about the contract difference between `replace` and `create`
+- Scenarios satisfied: 1, 4, 5
+
+** Extend native replace dispatch for file-wide edits
+:PROPERTIES:
+:CUSTOM_ID: FEAT-546-add-code-edit-whole-file-replace-ergonom::native-replace-dispatch
+:DEPENDS: FEAT-546-add-code-edit-whole-file-replace-ergonom::whole-file-replace-tests
+:END:
+- File: `crates/pi-natives/src/code_buffer.rs`
+- In `single_edit_operation(...)`, keep current precedence:
+  1. `symbol` present → declaration-scoped replace
+  2. else `line` present → line-targeted replace
+  3. else → replace byte range `0..buffer.source().len()` as the whole file
+- Do not change `create` semantics; missing-file creation remains `operation:"create"`
+- If a lower-level helper is needed for clarity, place it in `crates/pi-code-engine/src/edit/replace.rs` with a small unit test near the edit helpers
+- Scenarios satisfied: 1, 2, 3, 4
+
+** Update code-tool docs and wrapper expectations
+:PROPERTIES:
+:CUSTOM_ID: FEAT-546-add-code-edit-whole-file-replace-ergonom::docs-and-wrapper
+:DEPENDS: FEAT-546-add-code-edit-whole-file-replace-ergonom::native-replace-dispatch
+:END:
+- Files: `packages/coding-agent/src/prompts/tools/code.md`, optionally `packages/coding-agent/src/tools/code.ts` descriptions if the schema text needs to mention whole-file replace explicitly
+- Add an example for `code edit { file, operation: "replace", content: [...] }` that clearly means “replace the entire existing file”
+- Keep declaration-targeted examples intact so subagents understand when `symbol` is appropriate versus when omission means whole-file replacement
+- Ensure wrapper-level tests reflect the ergonomic path and existing save behavior
+- Scenarios satisfied: 1, 2, 3, 5
+
+** Verify cutover end-to-end
+:PROPERTIES:
+:CUSTOM_ID: FEAT-546-add-code-edit-whole-file-replace-ergonom::verify
+:DEPENDS: FEAT-546-add-code-edit-whole-file-replace-ergonom::docs-and-wrapper
+:END:
+- Run the focused test commands from Acceptance Criteria
+- Confirm the feature is self-consistent with PLAN-222 create semantics and does not overlap with the separate dotted-name resolver work
+- Capture one manual proof artifact showing file-only `replace` on an existing supported file
+
+* Edge Cases
+- Empty content is valid: replacing the full file with an empty string should behave as a deliberate truncate, not as a no-op
+- Existing declaration/line replace precedence must stay stable when `symbol` or `line` is present
+- Missing file must still fail on `replace` so callers do not accidentally bypass explicit create validation
+- Binary / unsupported files remain governed by existing code-buffer language detection and supported-extension checks
+- Formatting should continue to run through the current post-edit path; a whole-file replace must not skip formatter/save orchestration already used by `edit`
+- Diff rendering should remain truthful even when the entire file changes
+
+* Acceptance Criteria
+1. `code edit { file, operation: "replace", content }` on an existing supported file replaces the entire file and auto-saves
+2. `code edit { file, symbol, operation: "replace", content }` continues to replace only the targeted declaration
+3. `code edit { file, line, operation: "replace", content }` continues to replace only the resolved positional target
+4. `code edit { file, operation: "replace", content }` on a missing supported file errors instead of creating a file
+5. `packages/coding-agent/src/prompts/tools/code.md` documents the whole-file replace path clearly enough that subagents no longer infer “full module replacement is unsupported”
+6. Verification passes:
+   - `bun test packages/coding-agent/test/tools/code.test.ts`
+   - `bun test packages/natives/test/code-buffer.test.ts`
+   - `cargo test -p pi-natives code_buffer -- --nocapture`
+   - if a new Rust helper/unit test is added in `pi-code-engine`, run the targeted `cargo test -p pi-code-engine` selection that covers it
+7. Manual proof artifact exists for one successful whole-file replace on an existing supported file
+
+** Completion [2026-04-14]
+*** Verification
+- `bun test packages/coding-agent/test/tools/code.test.ts` → pass (35 tests)
+- `bun test packages/natives/test/code-buffer.test.ts` → pass (8 tests)
+- `cargo test -p pi-natives code_buffer -- --nocapture` → pass (15 tests in filtered module)
+- Manual proof: `PI_DEV=1 bun -e '<CodeTool whole-file replace proof script>'` → pass; existing `.ts` file replaced via `code edit { file, operation: "replace", content }`
+*** Artifact
+- [[file:!tasks/plans/plan-artifacts/PLAN-226-code-edit-whole-file-replace-ergonomics/manual-whole-file-replace-proof.json]]
+*** Notes
+- Native `replace` now falls back to full-file replacement only when no meaningful `line` is present.
+- Wrapper sanitizes zero-valued `line` / `column` placeholders so full-file replace no longer degrades to line `0`.

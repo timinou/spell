@@ -1,0 +1,27 @@
+{
+  "command": "PI_DEV=1 bun -e '<CodeTool whole-file replace proof script>'",
+  "file": "/tmp/plan226-manual-GpKZjp/module.ts",
+  "text": "Edited module.ts\nFormatting: unavailable (saved without formatter)\nChanges: +1 -1\nDiff preview:\n@@ replaced @@\n@@ -1,1 +1,1 @@\n-export const original = 1;\n+export const replaced = 2;\n",
+  "details": {
+    "kind": "file",
+    "command": "edit",
+    "file": "/tmp/plan226-manual-GpKZjp/module.ts",
+    "displayPath": "module.ts",
+    "rawOutput": {
+      "version": 1,
+      "diff": "@@ replaced @@\n@@ -1,1 +1,1 @@\n-export const original = 1;\n+export const replaced = 2;\n",
+      "editCount": 1,
+      "created": false
+    },
+    "data": {
+      "version": 1,
+      "diff": "@@ replaced @@\n@@ -1,1 +1,1 @@\n-export const original = 1;\n+export const replaced = 2;\n",
+      "editCount": 1,
+      "created": false,
+      "noop": false,
+      "idempotent": false,
+      "formatting": "unavailable"
+    }
+  },
+  "finalText": "export const replaced = 2;"
+}
