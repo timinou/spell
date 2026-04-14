@@ -68,6 +68,8 @@ export interface CodeEditData {
 	diff: string;
 	editCount: number;
 	created?: boolean;
+	noop?: boolean;
+	idempotent?: boolean;
 	formatting?: "formatted" | "unchanged" | "unavailable";
 	formatterServer?: string;
 }
@@ -241,6 +243,8 @@ export function normalizeCodeBufferSuccess(input: {
 	limit?: number;
 	formatting?: CodeEditData["formatting"];
 	formatterServer?: string;
+	noop?: boolean;
+	idempotent?: boolean;
 }): CodeFileDetails {
 	const displayPath = toDisplayPath(input.file, input.cwd);
 	const base = {
@@ -295,6 +299,8 @@ export function normalizeCodeBufferSuccess(input: {
 				diff: asString(record?.diff) ?? "",
 				editCount: asNumber(record?.editCount) ?? 0,
 				created: asBoolean(record?.created) ?? false,
+				noop: input.noop ?? false,
+				idempotent: input.idempotent ?? false,
 				formatting: input.formatting,
 				formatterServer: input.formatterServer,
 			},
@@ -424,6 +430,10 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		const formatting = details.data.formatting
 			? formatEditFormatting(details.data.formatting, details.data.formatterServer)
 			: undefined;
+		if (details.data.noop) {
+			const noopHeader = `${details.data.created ? "No-op create" : "No-op edit"}${label}${details.data.idempotent ? " (idempotent)" : ""}`;
+			return withHint([noopHeader, formatting, "No semantic changes applied."].filter(Boolean).join("\n"));
+		}
 		if (details.data.diff.trim().length === 0) {
 			return withHint([header, formatting].filter(Boolean).join("\n"));
 		}

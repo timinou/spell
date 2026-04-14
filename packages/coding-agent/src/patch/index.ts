@@ -26,7 +26,7 @@ import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
 import { enforcePathWrite } from "../sandbox";
 import type { ToolSession } from "../tools";
-import { describeCodeToolSupportedFiles, isCodeToolSupportedPath } from "../tools/code-supported-files";
+// import { describeCodeToolSupportedFiles, isCodeToolSupportedPath } from "../tools/code-supported-files";
 import {
 	invalidateFsScanAfterDelete,
 	invalidateFsScanAfterRename,
@@ -67,7 +67,11 @@ export * from "./hashline";
 // Normalization
 export * from "./normalize";
 // Parsing
-export { normalizeCreateContent, normalizeDiff, parseHunks as parseDiffHunks } from "./parser";
+export {
+	normalizeCreateContent,
+	normalizeDiff,
+	parseHunks as parseDiffHunks,
+} from "./parser";
 export type { EditRenderContext, EditToolDetails } from "./shared";
 // Rendering
 export { editToolRenderer, getLspBatchRequest } from "./shared";
@@ -79,9 +83,15 @@ export * from "./types";
 
 const replaceEditSchema = Type.Object({
 	path: Type.String({ description: "File path (relative or absolute)" }),
-	old_text: Type.String({ description: "Text to find (fuzzy whitespace matching enabled)" }),
+	old_text: Type.String({
+		description: "Text to find (fuzzy whitespace matching enabled)",
+	}),
 	new_text: Type.String({ description: "Replacement text" }),
-	all: Type.Optional(Type.Boolean({ description: "Replace all occurrences (default: unique match required)" })),
+	all: Type.Optional(
+		Type.Boolean({
+			description: "Replace all occurrences (default: unique match required)",
+		}),
+	),
 });
 
 const patchEditSchema = Type.Object({
@@ -92,7 +102,11 @@ const patchEditSchema = Type.Object({
 		}),
 	),
 	rename: Type.Optional(Type.String({ description: "New path for move" })),
-	diff: Type.Optional(Type.String({ description: "Diff hunks (update) or full content (create)" })),
+	diff: Type.Optional(
+		Type.String({
+			description: "Diff hunks (update) or full content (create)",
+		}),
+	),
 });
 
 export type ReplaceParams = Static<typeof replaceEditSchema>;
@@ -337,10 +351,6 @@ function isReplaceParams(params: ReplaceParams | PatchParams | HashlineParams): 
 	return "old_text" in params && "new_text" in params;
 }
 
-function codeToolRedirectMessage(path: string): string {
-	return `The edit tool is blocked for code-supported files (${describeCodeToolSupportedFiles()}). Use code outline { file: ${JSON.stringify(path)} } to find a target, then code edit instead. For new files, use code edit { file: ${JSON.stringify(path)}, operation: "create", content: ["..."] }.`;
-}
-
 /**
  * Edit tool implementation.
  *
@@ -473,7 +483,10 @@ export class EditTool implements AgentTool<TInput> {
 			}
 			const { path, edits, delete: deleteFile, move } = params;
 
-			enforceModeWrite(this.session, path, { op: deleteFile ? "delete" : "update", move });
+			enforceModeWrite(this.session, path, {
+				op: deleteFile ? "delete" : "update",
+				move,
+			});
 			const sandboxError = enforcePathWrite(path, this.session.cwd, this.session.sandboxPolicy);
 			if (sandboxError) throw new Error(sandboxError);
 			if (move) {
@@ -486,9 +499,10 @@ export class EditTool implements AgentTool<TInput> {
 			}
 
 			const absolutePath = resolvePlanPath(this.session, path);
-			if (isCodeToolSupportedPath(absolutePath)) {
-				throw new Error(codeToolRedirectMessage(path));
-			}
+			// NOTE: commented until Code Edit works welll
+			// if (isCodeToolSupportedPath(absolutePath)) {
+			// 	throw new Error(codeToolRedirectMessage(path));
+			// }
 			const resolvedMove = move ? resolvePlanPath(this.session, move) : undefined;
 			if (resolvedMove === absolutePath) {
 				throw new Error("move path is the same as source path");
@@ -697,9 +711,10 @@ export class EditTool implements AgentTool<TInput> {
 				if (sandboxRenameError) throw new Error(sandboxRenameError);
 			}
 			const resolvedPath = resolvePlanPath(this.session, path);
-			if (isCodeToolSupportedPath(resolvedPath)) {
-				throw new Error(codeToolRedirectMessage(path));
-			}
+			// NOTE: commented unti.l code tool works well
+			// if (isCodeToolSupportedPath(resolvedPath)) {
+			//   throw new Error(codeToolRedirectMessage(path));
+			// }
 			const resolvedRename = rename ? resolvePlanPath(this.session, rename) : undefined;
 
 			if (path.endsWith(".ipynb")) {
@@ -709,7 +724,12 @@ export class EditTool implements AgentTool<TInput> {
 				throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
 			}
 
-			const input: PatchInput = { path: resolvedPath, op, rename: resolvedRename, diff };
+			const input: PatchInput = {
+				path: resolvedPath,
+				op,
+				rename: resolvedRename,
+				diff,
+			};
 			const fs = new LspFileSystem(this.#writethrough, signal, batchRequest);
 			const result = await applyPatch(input, {
 				cwd: this.session.cwd,
@@ -796,9 +816,10 @@ export class EditTool implements AgentTool<TInput> {
 		}
 
 		const absolutePath = resolvePlanPath(this.session, path);
-		if (isCodeToolSupportedPath(absolutePath)) {
-			throw new Error(codeToolRedirectMessage(path));
-		}
+		// NOTE: commnted until code edit is well supported
+		// if (isCodeToolSupportedPath(absolutePath)) {
+		//   throw new Error(codeToolRedirectMessage(path));
+		// }
 
 		if (!(await fs.exists(absolutePath))) {
 			throw new Error(`File not found: ${path}`);
@@ -868,7 +889,12 @@ export class EditTool implements AgentTool<TInput> {
 
 		return {
 			content: [{ type: "text", text: resultText }],
-			details: { diff: diffResult.diff, firstChangedLine: diffResult.firstChangedLine, diagnostics, meta },
+			details: {
+				diff: diffResult.diff,
+				firstChangedLine: diffResult.firstChangedLine,
+				diagnostics,
+				meta,
+			},
 		};
 	}
 }

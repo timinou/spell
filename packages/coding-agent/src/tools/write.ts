@@ -17,7 +17,7 @@ import writeDescription from "../prompts/tools/write.md" with { type: "text" };
 import { enforcePathWrite } from "../sandbox";
 import type { ToolSession } from "../sdk";
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
-import { describeCodeToolSupportedFiles, isCodeToolSupportedPath } from "./code-supported-files";
+// import { describeCodeToolSupportedFiles, isCodeToolSupportedPath } from "./code-supported-files";
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import { enforceModeWrite, resolvePlanPath } from "./mode-guard";
 import { type OutputMeta, outputMeta } from "./output-meta";
@@ -33,7 +33,9 @@ import {
 } from "./render-utils";
 
 const writeSchema = Type.Object({
-	path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
+	path: Type.String({
+		description: "Path to the file to write (relative or absolute)",
+	}),
 	content: Type.String({ description: "Content to write to the file" }),
 });
 
@@ -102,11 +104,12 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			const sandboxError = enforcePathWrite(path, this.session.cwd, this.session.sandboxPolicy);
 			if (sandboxError) throw new Error(sandboxError);
 			const absolutePath = resolvePlanPath(this.session, path);
-			if (isCodeToolSupportedPath(absolutePath)) {
-				throw new Error(
-					`The write tool is blocked for code-supported files (${describeCodeToolSupportedFiles()}). Use code edit { file: ${JSON.stringify(path)}, operation: "create", content: ["..."] } instead.`,
-				);
-			}
+			// NOTE: Commented until the code edit tool works well
+			// if (isCodeToolSupportedPath(absolutePath)) {
+			// 	throw new Error(
+			// 		`The write tool is blocked for code-supported files (${describeCodeToolSupportedFiles()}). Use code edit { file: ${JSON.stringify(path)}, operation: "create", content: ["..."] } instead.`,
+			// 	);
+			// }
 			const batchRequest = getLspBatchRequest(context?.toolCall);
 			const writethrough = this.#getWritethrough();
 
@@ -240,7 +243,11 @@ export const writeToolRenderer = {
 	},
 
 	renderResult(
-		result: { content: Array<{ type: string; text?: string }>; details?: WriteToolDetails; isError?: boolean },
+		result: {
+			content: Array<{ type: string; text?: string }>;
+			details?: WriteToolDetails;
+			isError?: boolean;
+		},
 		options: RenderResultOptions,
 		uiTheme: Theme,
 		args?: WriteRenderArgs,

@@ -289,38 +289,51 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			if (!result.applied && result.totalReplacements > 0) {
 				const previewReplacementPlural = result.totalReplacements !== 1 ? "s" : "";
 				const previewFilePlural = result.filesTouched !== 1 ? "s" : "";
+				const applyPreview = async (_reason: string) => {
+					const applyResult = await astEdit({
+						rewrites: normalizedRewrites,
+						lang: params.lang?.trim(),
+						path: resolvedSearchPath,
+						glob: globFilter,
+						selector: params.sel?.trim(),
+						dryRun: false,
+						maxReplacements,
+						maxFiles,
+						failOnParseError: false,
+					});
+					const dedupedApplyParseErrors = dedupeParseErrors(applyResult.parseErrors);
+					if (!applyResult.applied || applyResult.totalReplacements === 0) {
+						const parseErrorText =
+							dedupedApplyParseErrors.length > 0
+								? ` ${formatParseErrors(dedupedApplyParseErrors).join(" ")}`
+								: "";
+						throw new ToolError(
+							`Preview matched replacements, but apply did not persist any changes.${parseErrorText}`.trim(),
+						);
+					}
+					const appliedDetails: AstEditToolDetails = {
+						totalReplacements: applyResult.totalReplacements,
+						filesTouched: applyResult.filesTouched,
+						filesSearched: applyResult.filesSearched,
+						applied: applyResult.applied,
+						limitReached: applyResult.limitReached,
+						parseErrors: dedupedApplyParseErrors,
+						scopePath,
+						files: fileList,
+						fileReplacements,
+					};
+					const appliedReplacementPlural = applyResult.totalReplacements !== 1 ? "s" : "";
+					const appliedFilePlural = applyResult.filesTouched !== 1 ? "s" : "";
+					const text = `Applied ${applyResult.totalReplacements} replacement${appliedReplacementPlural} in ${applyResult.filesTouched} file${appliedFilePlural}.`;
+					return toolResult(appliedDetails).text(text).done();
+				};
+				if (this.session.settings.get("edit.previewResolvePolicy") === "auto-apply") {
+					return await applyPreview("Auto-applied by edit.previewResolvePolicy");
+				}
 				this.session.pendingActionStore?.push({
 					label: `AST Edit: ${result.totalReplacements} replacement${previewReplacementPlural} in ${result.filesTouched} file${previewFilePlural}`,
 					sourceToolName: this.name,
-					apply: async (_reason: string) => {
-						const applyResult = await astEdit({
-							rewrites: normalizedRewrites,
-							lang: params.lang?.trim(),
-							path: resolvedSearchPath,
-							glob: globFilter,
-							selector: params.sel?.trim(),
-							dryRun: false,
-							maxReplacements,
-							maxFiles,
-							failOnParseError: false,
-						});
-						const dedupedApplyParseErrors = dedupeParseErrors(applyResult.parseErrors);
-						const appliedDetails: AstEditToolDetails = {
-							totalReplacements: applyResult.totalReplacements,
-							filesTouched: applyResult.filesTouched,
-							filesSearched: applyResult.filesSearched,
-							applied: applyResult.applied,
-							limitReached: applyResult.limitReached,
-							parseErrors: dedupedApplyParseErrors,
-							scopePath,
-							files: fileList,
-							fileReplacements,
-						};
-						const appliedReplacementPlural = applyResult.totalReplacements !== 1 ? "s" : "";
-						const appliedFilePlural = applyResult.filesTouched !== 1 ? "s" : "";
-						const text = `Applied ${applyResult.totalReplacements} replacement${appliedReplacementPlural} in ${applyResult.filesTouched} file${appliedFilePlural}.`;
-						return toolResult(appliedDetails).text(text).done();
-					},
+					apply: applyPreview,
 				});
 			}
 

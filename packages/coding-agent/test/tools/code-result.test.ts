@@ -141,6 +141,27 @@ describe("code tool result contract", () => {
 		expect(content).not.toContain("Edited src/new-module.ts");
 	});
 
+	it("formats idempotent no-op edits without edited success text", () => {
+		const details = normalizeCodeBufferSuccess({
+			command: "edit",
+			file: "/repo/src/main.ts",
+			cwd: "/repo",
+			output: {
+				version: 2,
+				diff: "",
+				editCount: 1,
+			},
+			noop: true,
+			idempotent: true,
+			formatting: "unchanged",
+		});
+
+		const content = formatCodeToolContent(details);
+		expect(content).toContain("No-op edit src/main.ts (idempotent)");
+		expect(content).toContain("No semantic changes applied.");
+		expect(content).not.toContain("Edited src/main.ts");
+		expect(content).not.toContain("Changes: +0 -0");
+	});
 	it("summarizes undo history without dropping low-level edit primitives", () => {
 		const details = normalizeCodeBufferSuccess({
 			command: "undo",

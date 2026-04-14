@@ -101,6 +101,20 @@ describe("AgentSession resolve reminder", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("suppresses resolve reminders for auto-apply previews", async () => {
+		session.settings.override("edit.previewResolvePolicy", "auto-apply" as never);
+
+		await session.prompt("run preview");
+
+		expect(streamCallCount).toBe(1);
+		expect(
+			session.agent.state.messages.findIndex(
+				message => message.role === "custom" && message.customType === "resolve-reminder",
+			),
+		).toBe(-1);
+		expect(pendingActionStore.hasPending).toBe(true);
+	});
+
 	it("forces an immediate steering turn and injects resolve reminder before second assistant response", async () => {
 		await session.prompt("run preview");
 

@@ -112,25 +112,59 @@ function extractCodeToolErrorMessage(output: unknown): string {
 	return typeof serialized === "string" && serialized.length > 0 ? serialized : "Code command failed";
 }
 
+function isMeaningfulIndex(value: number | undefined): value is number {
+	return value !== undefined && value > 0;
+}
+
+function isMeaningfulOptionalNumber(value: number | undefined): value is number {
+	return value !== undefined && value !== 0;
+}
+
 function validateCreatePayload(params: CodeParams, resolvedFile?: string): string | undefined {
 	if (params.command !== "edit" || params.operation !== "create") return undefined;
 	if (!resolvedFile) return "operation 'create' requires 'file'.";
 	if (params.content === undefined) return "operation 'create' requires 'content'.";
 	const invalidFields = [
 		params.symbol !== undefined ? "symbol" : undefined,
-		params.line !== undefined ? "line" : undefined,
-		params.column !== undefined ? "column" : undefined,
+		isMeaningfulIndex(params.line) ? "line" : undefined,
+		isMeaningfulIndex(params.column) ? "column" : undefined,
 		params.patches ? "patches" : undefined,
 		params.edits ? "edits" : undefined,
 		params.mode ? "mode" : undefined,
 		params.action ? "action" : undefined,
-		params.resolution !== undefined ? "resolution" : undefined,
-		params.offset !== undefined ? "offset" : undefined,
-		params.limit !== undefined ? "limit" : undefined,
-		params.depth !== undefined ? "depth" : undefined,
+		isMeaningfulOptionalNumber(params.resolution) ? "resolution" : undefined,
+		isMeaningfulOptionalNumber(params.offset) ? "offset" : undefined,
+		isMeaningfulOptionalNumber(params.limit) ? "limit" : undefined,
+		isMeaningfulOptionalNumber(params.depth) ? "depth" : undefined,
 	].filter((field): field is string => field !== undefined);
 	if (invalidFields.length === 0) return undefined;
 	return `operation 'create' does not accept ${invalidFields.join(", ")}. Use only 'file', 'operation', and 'content'.`;
+}
+function countDiffChanges(diff: string): { addedLines: number; removedLines: number } {
+	let addedLines = 0;
+	let removedLines = 0;
+	for (const line of diff.split("\n")) {
+		if (line.startsWith("+++")) continue;
+		if (line.startsWith("---")) continue;
+		if (line.startsWith("+")) {
+			addedLines += 1;
+			continue;
+		}
+		if (line.startsWith("-")) {
+			removedLines += 1;
+		}
+	}
+	return { addedLines, removedLines };
+}
+
+function countBufferDiffHunks(output: unknown): number {
+	return Array.isArray(output) ? output.length : 0;
+}
+
+function shouldCheckBufferFreshness(command: string, isCreate: boolean): boolean {
+	if (command === "save") return false;
+	if (!MUTATING_COMMANDS.has(command)) return false;
+	return !(command === "edit" && isCreate);
 }
 
 // =============================================================================
@@ -197,6 +231,11 @@ const codeSchema = Type.Object({
 			description: "Content for replace | replace-body | wrap template | rename new name | insert operations",
 		}),
 	),
+	idempotent: Type.Optional(
+		Type.Boolean({
+			description: "Allow mutating edit commands to succeed when they intentionally make no semantic change",
+		}),
+	),
 	patches: Type.Optional(Type.Array(patchSchema, { description: "Find/replace patches for patch operation" })),
 	edits: Type.Optional(Type.Array(editEntrySchema, { description: "Array of edits to apply in sequence" })),
 	mode: Type.Optional(Type.String({ description: "Splice mode: self | up | down (default: self)" })),
@@ -235,8 +274,8 @@ function normalizeEditEntries(edits: CodeParams["edits"]): CodeBufferOptions["ed
 	return edits.map(edit => {
 		const normalizedEdit: NormalizedCodeEdit = { operation: edit.operation };
 		if (edit.symbol !== undefined) normalizedEdit.symbol = edit.symbol;
-		if (edit.line !== undefined) normalizedEdit.line = edit.line;
-		if (edit.column !== undefined) normalizedEdit.column = edit.column;
+		if (isMeaningfulIndex(edit.line)) normalizedEdit.line = edit.line;
+		if (isMeaningfulIndex(edit.column)) normalizedEdit.column = edit.column;
 		if (edit.content !== undefined) normalizedEdit.content = normalizeLines(edit.content);
 		if (edit.patches) normalizedEdit.patches = normalizePatches(edit.patches);
 		if (edit.mode !== undefined) normalizedEdit.mode = edit.mode;
@@ -333,6 +372,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			}
 
 			const nativeCommand = command === "buffers" ? "list" : command;
+			const isCreate = command === "edit" && params.operation === "create";
 			const options: CodeBufferOptions = { command: nativeCommand };
 			const resolveFile = (file: string): string => (path.isAbsolute(file) ? file : path.resolve(sessionCwd, file));
 
@@ -340,8 +380,8 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			if (params.resolution !== undefined) options.resolution = params.resolution;
 			if (params.offset !== undefined) options.offset = params.offset;
 			if (params.limit !== undefined) options.limit = params.limit;
-			if (params.line !== undefined) options.line = params.line;
-			if (params.column !== undefined) options.column = params.column;
+			if (isMeaningfulIndex(params.line)) options.line = params.line;
+			if (isMeaningfulIndex(params.column)) options.column = params.column;
 			if (params.symbol) options.symbol = params.symbol;
 			if (params.operation) options.operation = params.operation;
 			if (params.content !== undefined) options.content = normalizeLines(params.content);
@@ -376,6 +416,31 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				}
 			}
 
+			if (options.file && shouldCheckBufferFreshness(command, isCreate)) {
+				const freshness = timedCodeBuffer({ command: "diff", file: options.file });
+				if (freshness.error) {
+					const details = createCodeToolError({
+						command,
+						file: options.file,
+						cwd: sessionCwd,
+						output: freshness.output,
+						message: `Unable to verify buffer freshness before ${command}: ${extractCodeToolErrorMessage(freshness.output)}`,
+					});
+					return toolResult(details).text(formatCodeToolContent(details)).done();
+				}
+				const staleHunks = countBufferDiffHunks(freshness.output);
+				if (staleHunks > 0) {
+					const details = createCodeToolError({
+						command,
+						file: options.file,
+						cwd: sessionCwd,
+						output: freshness.output,
+						message: `Stale code buffer detected (${staleHunks} ${staleHunks === 1 ? "hunk" : "hunks"} differ from disk). Run code diff to inspect, then reconcile the on-disk file before retrying this mutation.`,
+					});
+					return toolResult(details).text(formatCodeToolContent(details)).done();
+				}
+			}
+
 			const result = timedCodeBuffer(options);
 			if (result.error) {
 				const details = createCodeToolError({
@@ -390,6 +455,46 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 
 			let formatting: "formatted" | "unchanged" | "unavailable" | undefined;
 			let formatterServer: string | undefined;
+			const editDiff =
+				command === "edit" && result.output && typeof result.output === "object" && !Array.isArray(result.output)
+					? Reflect.get(result.output, "diff")
+					: undefined;
+			const editChangeSummary = typeof editDiff === "string" ? countDiffChanges(editDiff) : undefined;
+			const isNoopEdit =
+				command === "edit" &&
+				editChangeSummary !== undefined &&
+				editChangeSummary.addedLines === 0 &&
+				editChangeSummary.removedLines === 0;
+
+			if (isNoopEdit) {
+				if (params.idempotent !== true) {
+					const details = createCodeToolError({
+						command,
+						file: options.file,
+						cwd: sessionCwd,
+						output: result.output,
+						message:
+							"Edit produced no semantic changes. Non-idempotent mutations must change the file. Retry with idempotent: true only when an intentional no-op is acceptable.",
+					});
+					return toolResult(details).text(formatCodeToolContent(details)).done();
+				}
+
+				const details = normalizeCodeBufferSuccess({
+					command: command as CodeFileCommand,
+					output: result.output,
+					file: options.file,
+					cwd: sessionCwd,
+					action: options.action,
+					resolution: params.resolution,
+					offset: params.offset,
+					limit: params.limit,
+					noop: true,
+					idempotent: true,
+				});
+				const text = formatCodeToolContent(details);
+				return toolResult(details).text(text).done();
+			}
+
 			if (command === "edit" && options.file) {
 				const formatResult = await this.#prepareEditedFileForSave(options.file, sessionCwd, _signal);
 				formatting = formatResult.formatting;
@@ -420,6 +525,8 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				limit: params.limit,
 				formatting,
 				formatterServer,
+				noop: false,
+				idempotent: params.idempotent === true,
 			});
 			const injectedHint = this.#maybeInjectLanguageHint(options.file);
 			if (injectedHint) {

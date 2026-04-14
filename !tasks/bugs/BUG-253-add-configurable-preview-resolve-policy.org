@@ -1,0 +1,71 @@
+#+TITLE: Add configurable preview resolve policy for pending edits
+#+STATE: DONE
+#+SESSION_ID: 14ba470308c6b0e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T12-10-47-715Z_14ba470308c6b0e2.jsonl]]
+#+CUSTOM_ID: BUG-253-add-configurable-preview-resolve-policy
+#+PRIORITY: #A
+#+EFFORT: 4h
+#+LAYER: backend
+
+* Scope
+- In scope: pending preview lifecycle policy for deferred edits in `packages/coding-agent/src/tools/pending-action.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/coding-agent/src/tools/ast-edit.ts`, `packages/coding-agent/src/tools/resolve.ts`, and `packages/coding-agent/src/config/settings-schema.ts`.
+- In scope: configurable policy with default explicit resolve (`resolve` required) and optional auto-apply mode.
+- Out of scope: changing AST matching/rewrite semantics themselves.
+
+* Existing Patterns
+- `PendingActionStore` (`tools/pending-action.ts`) currently push/pop/peek queue semantics.
+- `AgentSession` subscribes to pending-action pushes and emits hidden `resolve-reminder` custom messages unconditionally.
+- `AstEditTool.execute(...)` registers pending actions for previewed replacements and defers apply/discard through `resolve`.
+- `ResolveTool.execute(...)` is strict and throws when no pending action exists.
+- Settings follow typed schema entries in `config/settings-schema.ts` under editing tab.
+
+* Tests
+User workflows to enumerate first:
+1. Default policy = explicit resolve; reminder emitted; action remains pending until `resolve`.
+2. Auto-apply policy applies immediately, no orphan pending action, no misleading unresolved reminder.
+3. Apply failure in auto mode surfaces as error with original tool context.
+4. `resolve` without pending action still returns strict error.
+5. Policy toggling across calls remains deterministic and does not apply stale actions.
+
+* Implementation
+** Write failing policy tests first
+:PROPERTIES:
+:CUSTOM_ID: BUG-253-add-configurable-preview-resolve-policy::policy-tests
+:END:
+- Files: `packages/coding-agent/test/tools/ast-edit.test.ts`, `packages/coding-agent/test/tools/resolve.test.ts`, and any required focused session test file.
+- Add workflows (1)-(5) as failing tests before implementation.
+
+** Add settings contract for preview policy
+:PROPERTIES:
+:CUSTOM_ID: BUG-253-add-configurable-preview-resolve-policy::settings-contract
+:DEPENDS: BUG-253-add-configurable-preview-resolve-policy::policy-tests
+:END:
+- File: `packages/coding-agent/src/config/settings-schema.ts`.
+- Introduce explicit policy enum/setting with default explicit resolve.
+
+** Wire policy through pending-action lifecycle
+:PROPERTIES:
+:CUSTOM_ID: BUG-253-add-configurable-preview-resolve-policy::policy-wiring
+:DEPENDS: BUG-253-add-configurable-preview-resolve-policy::settings-contract
+:END:
+- Files: `packages/coding-agent/src/tools/pending-action.ts`, `packages/coding-agent/src/session/agent-session.ts`, `packages/coding-agent/src/tools/ast-edit.ts`, `packages/coding-agent/src/tools/resolve.ts`.
+- Keep default explicit flow unchanged.
+- Add auto-apply path with truthful success/error propagation.
+
+* Edge Cases
+- Auto-apply must not swallow failures; failure payload must remain truthful and attributable.
+- Switching policy mid-session must not act on stale queued actions unexpectedly.
+- Explicit mode must preserve hidden reminder behavior.
+- No mode may silently drop pending actions.
+
+* Acceptance Criteria
+- Default remains explicit resolve workflow.
+- Configurable auto-apply works and clears pending action immediately.
+- `resolve` remains strict when queue empty.
+- Tests cover both policies and failure propagation.
+- Verification: `bun test packages/coding-agent/test/tools/ast-edit.test.ts packages/coding-agent/test/tools/resolve.test.ts`
+
+* Related Plan
+- [[id:PLAN-227-code-edit-reliability-hardening-and-org]]
+
+NOTE [2026-04-14]: Added edit.previewResolvePolicy with explicit default, AST auto-apply path, explicit-only reminders, failure propagation, and focused tests.

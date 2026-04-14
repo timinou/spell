@@ -1,0 +1,57 @@
+#+TITLE: Fix org command-surface parity for delete and validate-plan
+#+STATE: DONE
+#+SESSION_ID: 14ba470308c6b0e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T12-10-47-715Z_14ba470308c6b0e2.jsonl]]
+#+CUSTOM_ID: BUG-254-fix-org-command-surface-parity-for-delet
+#+PRIORITY: #A
+#+LAYER: backend
+#+EFFORT: 2h
+
+* Scope
+- In scope: command-surface parity in `packages/org/src/tool.ts` so type/interface, parameter enum, description text, and runtime switch are synchronized for `delete` and `validate-plan`.
+- In scope: regression tests in `packages/org/test/tool-commands.test.ts` that fail on metadata/runtime drift.
+- Out of scope: semantic redesign of `cmdDelete` or `cmdValidatePlan`.
+
+* Existing Patterns
+- `createOrgTool(...)` owns both metadata (`description`, `parameters`) and runtime command dispatch switch.
+- Drift risk currently exists when command cases are added to switch without synchronized enum/description/interface updates.
+- Existing tests in `packages/org/test/tool-commands.test.ts` already validate dispatch behavior and should be extended to enforce parity.
+
+* Tests
+User workflows to enumerate and lock:
+1. Tool metadata includes `delete` and `validate-plan` in documented command surface.
+2. Runtime dispatch accepts `delete` and `validate-plan` and does not fall through to unknown-command path.
+3. `CreateOrgToolOptions` typing includes any callback wiring required by `validate-plan` path.
+4. Future command-surface drift is caught by deterministic test assertions.
+
+* Implementation
+** Write failing parity tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-254-fix-org-command-surface-parity-for-delet::parity-tests
+:END:
+- File: `packages/org/test/tool-commands.test.ts`.
+- Add failing tests for workflows (1)-(4).
+
+** Implement synchronized command-surface source
+:PROPERTIES:
+:CUSTOM_ID: BUG-254-fix-org-command-surface-parity-for-delet::command-surface-impl
+:DEPENDS: BUG-254-fix-org-command-surface-parity-for-delet::parity-tests
+:END:
+- File: `packages/org/src/tool.ts`.
+- Consolidate command metadata so description/enum/switch/interface stay in lockstep for delete + validate-plan.
+
+* Edge Cases
+- Unknown command fallback must remain intact for unsupported commands.
+- New command additions should require single-source update path that keeps metadata/runtime synchronized.
+- Type-level callback surface must match runtime usage.
+
+* Acceptance Criteria
+- `delete` and `validate-plan` are present consistently across metadata + runtime dispatch.
+- Valid command invocations no longer return `Unknown command` for these commands.
+- Parity regression tests added and passing.
+- Verification: `bun test packages/org/test/tool-commands.test.ts`
+
+* Related Plan
+- [[id:PLAN-227-code-edit-reliability-hardening-and-org]]
+
+NOTE [2026-04-14]: Restored delete/validate-plan command-surface parity across metadata, typing, runtime dispatch, and regression tests.

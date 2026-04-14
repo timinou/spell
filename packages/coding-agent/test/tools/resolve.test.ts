@@ -130,6 +130,23 @@ describe("ResolveTool", () => {
 		expect(firstApplied).toBe(true);
 		expect(pendingActionStore.hasPending).toBe(false);
 	});
+
+	it("surfaces apply failures from pending actions", async () => {
+		const pendingActionStore = new PendingActionStore();
+		pendingActionStore.push({
+			label: "Broken action",
+			sourceToolName: "ast_edit",
+			apply: async () => {
+				throw new Error("apply failed");
+			},
+		});
+
+		const tool = new ResolveTool(createSession(pendingActionStore));
+		await expect(tool.execute("call-apply-error", { action: "apply", reason: "try apply" })).rejects.toThrow(
+			"apply failed",
+		);
+		expect(pendingActionStore.hasPending).toBe(false);
+	});
 });
 
 it("renders a highlighted apply summary", async () => {
