@@ -1,0 +1,144 @@
+#+TITLE: Fix generic whole-file replace path in code tool
+#+STATE: DONE
+#+SESSION_ID: 14ba808e59ae3495
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T16-22-12-582Z_14ba808e59ae3495.jsonl]]
+#+CUSTOM_ID: BUG-261-fix-generic-whole-file-replace-path-in-c
+#+EFFORT: 6h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+* Initial Message
+
+Good, no errors. Now let me improve the TestChat module to actually use the draft overlay resolution via the registry:
+
+
+ Code
+ GenericFailure, buffer error: line out of range
+
+
+
+ Code
+ GenericFailure, edit error: Symbol 'Agentmaker.AgentConfig.TestChat' must be a name or Container.member (at most 2
+ levels)
+
+
+
+ Code
+ GenericFailure, edit error: Symbol 'TestChat' not found. Available: [Agentmaker.AgentConfig.TestChat]
+
+
+
+ Code
+ GenericFailure, buffer error: line out of range
+
+
+
+ Code
+ ┌─── ✔ Code save ──────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Saved lib/agentmaker/agent_config/test_chat.ex (buffer version 0).                                                   │
+ └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Code
+ GenericFailure, buffer error: line out of range
+
+
+
+Trace these messages using jq here:
+
+/home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-14T16-08-31-282Z_14ba7d6c4c924699.jsonl
+ ID: 14ba7d6c4c924699
+
+
+and explain what's happening.
+
+* Scope
+
+*In scope*: Fix the =code edit { operation: "replace" }= path when it targets an existing supported file without =symbol= or =line=. The contract is generic across supported languages, not Elixir-specific: whole-file replacement must succeed without manufacturing an invalid line target.
+
+*Out of scope*: Symbol-targeted replacement, language-specific declaration replacement, and short-name Elixir aliases. Those are separate work items.
+
+*User-visible failure*: A valid request like replacing =lib/agentmaker/agent_config/test_chat.ex= wholesale produced ="GenericFailure, buffer error: line out of range"= even though the file had already been read successfully. The same failure repeated on multiple retries until the session fell back to raw =write=.
+
+* Existing Patterns
+
+Primary files:
+- =packages/coding-agent/src/tools/code.ts= — request normalization, whole-file replace transport, save/persist lifecycle
+- =packages/coding-agent/test/tools/code.test.ts= — tool-wiring contract tests already covering whole-file replace happy path (=replaces an existing file when replace omits symbol and line=)
+- =crates/pi-code-engine/src/line_target.rs= — rejects =line == 0= with ="buffer error: line out of range"=
+- =crates/pi-code-engine/src/edit/replace.rs= — line-based declaration replacement helper; not sufficient for whole-file replace by itself
+
+Observed repo facts to preserve:
+- =code.ts= currently forwards top-level =line= only when =isMeaningfulIndex(params.line)=
+- =code.test.ts= already asserts whole-file replace should route correctly when =symbol= and =line= are omitted
+- The trace proves the real path can still fail at runtime even when the file is readable and symbol discovery works
+
+* Tests
+
+Enumerate workflows first.
+
+*Workflow 1 — replace existing file without symbol/line*
+- File: =packages/coding-agent/test/tools/code.test.ts=
+- Scenario: =command: "edit", operation: "replace", file: "/tmp/test/src/main.ts", content: ["export const replaced = 2;"]=
+- Assert: native buffer call receives whole-file replace payload with no synthetic =line: 0= and no symbol requirement; save occurs exactly once after successful edit; result text reports edited file
+
+*Workflow 2 — transport includes empty edits array alongside whole-file replace*
+- File: =packages/coding-agent/test/tools/code.test.ts=
+- Scenario: same as above plus =edits: []=
+- Assert: empty edits transport does not reroute away from whole-file replace; native payload remains whole-file replace
+
+*Workflow 3 — failed whole-file replace does not create phantom dirty/save state*
+- File: =packages/coding-agent/test/tools/code.test.ts=
+- Scenario: force native edit error on the whole-file replace call
+- Assert: tool returns the real failure, does not synthesize success text, and does not issue an automatic save after the failed edit
+
+*Workflow 4 — engine-level whole-file replace entry point never resolves line zero*
+- File: =crates/pi-code-engine/src/=... (exact file determined during implementation after tracing dispatch)
+- Scenario: invoke the edit dispatch used by whole-file replace with content-only replacement and no symbol/line target
+- Assert: replacement succeeds on a multi-line file and does not call line-target resolution with =0=
+
+** Add failing regression tests for whole-file replace contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-261-fix-generic-whole-file-replace-path-in-c::whole-file-replace-tests
+:END:
+- Files: =packages/coding-agent/test/tools/code.test.ts= and the exact Rust edit-dispatch test file once the dispatch point is confirmed
+- Add the four workflows above as initially failing tests before the implementation change
+- The TypeScript tests are mandatory; the Rust regression is mandatory if the root cause is inside the native edit dispatcher rather than JS normalization
+
+** Fix whole-file replace dispatch
+:PROPERTIES:
+:CUSTOM_ID: BUG-261-fix-generic-whole-file-replace-path-in-c::fix-whole-file-replace-dispatch
+:DEPENDS: BUG-261-fix-generic-whole-file-replace-path-in-c::whole-file-replace-tests
+:END:
+- Files: =packages/coding-agent/src/tools/code.ts= plus the exact native dispatch file under =crates/pi-code-engine/src/= that handles whole-file replace
+- Ensure whole-file replace uses a dedicated full-buffer replacement path rather than any declaration/line-target path
+- Preserve current symbol/line-based behavior for declaration replacement
+- Preserve existing create semantics: missing file still requires =operation: "create"=
+
+** Verify save lifecycle after replace
+:PROPERTIES:
+:CUSTOM_ID: BUG-261-fix-generic-whole-file-replace-path-in-c::verify-save-lifecycle
+:DEPENDS: BUG-261-fix-generic-whole-file-replace-path-in-c::fix-whole-file-replace-dispatch
+:END:
+- File: =packages/coding-agent/src/tools/code.ts=
+- Confirm automatic save still occurs exactly once after successful whole-file replace
+- Confirm failed replace does not report a persisted mutation
+- Keep result details truthful: applied vs failed must match observable behavior
+
+* Edge Cases
+- Empty content replacement should produce an empty file, not an error about missing symbol/line
+- Multi-line content arrays must normalize identically to other replace operations
+- Freshness checks must still protect against stale buffers before mutating existing files
+- Unsupported file types remain rejected before any replace attempt
+- The fix must remain language-agnostic across supported source files
+
+* Acceptance Criteria
+- [ ] Whole-file =operation: "replace"= succeeds for existing supported files without =symbol= or =line=
+- [ ] No whole-file replace path emits ="buffer error: line out of range"= solely because the request omitted line targeting
+- [ ] Failed whole-file replace does not auto-save or report a persisted mutation
+- [ ] =packages/coding-agent/test/tools/code.test.ts= contains the new failing-then-passing regressions
+- [ ] Any required Rust edit-dispatch regression test exists and passes
+- [ ] Verification: focused tool tests pass and a direct whole-file replace repro no longer fails with line-range error
+
+NOTE [2026-04-14]: Verified whole-file replace without symbol/line via TS wiring tests, native tests, and fresh-process repro. Added regression coverage in packages/coding-agent/test/tools/code.test.ts and crates/pi-natives/src/code_buffer.rs; no line-range error remains.

@@ -1,0 +1,143 @@
+#+TITLE: Accept fully-qualified Elixir module names in code edit
+#+STATE: DONE
+#+SESSION_ID: 14ba808e59ae3495
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T16-22-12-582Z_14ba808e59ae3495.jsonl]]
+#+CUSTOM_ID: BUG-262-accept-fully-qualified-elixir-module-nam
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: engine
+
+* Initial Message
+
+Good, no errors. Now let me improve the TestChat module to actually use the draft overlay resolution via the registry:
+
+
+ Code
+ GenericFailure, buffer error: line out of range
+
+
+
+ Code
+ GenericFailure, edit error: Symbol 'Agentmaker.AgentConfig.TestChat' must be a name or Container.member (at most 2
+ levels)
+
+
+
+ Code
+ GenericFailure, edit error: Symbol 'TestChat' not found. Available: [Agentmaker.AgentConfig.TestChat]
+
+
+
+ Code
+ GenericFailure, buffer error: line out of range
+
+
+
+ Code
+ ┌─── ✔ Code save ──────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Saved lib/agentmaker/agent_config/test_chat.ex (buffer version 0).                                                   │
+ └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Code
+ GenericFailure, buffer error: line out of range
+
+
+
+Trace these messages using jq here:
+
+/home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-14T16-08-31-282Z_14ba7d6c4c924699.jsonl
+ ID: 14ba7d6c4c924699
+
+
+and explain what's happening.
+
+* Scope
+
+*In scope*: Align =code= symbol-targeting for Elixir with the names the tool already exposes via =outline= / =read=. If the tool reports a top-level Elixir module as =Agentmaker.AgentConfig.TestChat=, edit operations must accept exactly that fully-qualified name.
+
+*Out of scope*: Short-name aliases such as =TestChat=, fuzzy matching, or relaxing the contract to accept multiple spellings for the same symbol.
+
+*User-visible failure*: The session discovered =Available: [Agentmaker.AgentConfig.TestChat]= for =lib/agentmaker/agent_config/test_chat.ex=, but the subsequent edit call using that exact symbol failed with ="Symbol 'Agentmaker.AgentConfig.TestChat' must be a name or Container.member (at most 2 levels)"=. Retrying with =TestChat= then failed with ="Symbol 'TestChat' not found. Available: [Agentmaker.AgentConfig.TestChat]"=. The tool therefore advertised a symbol it refused to accept.
+
+* Existing Patterns
+
+Primary files:
+- =crates/pi-code-engine/src/resolve.rs= — =resolve_symbol/4=, available-name error reporting, dotted-name handling
+- =crates/pi-code-engine/src/language/mod.rs= — Elixir profile, including =defmodule= declaration extraction with =name_from_arg: true=
+- =packages/coding-agent/src/tools/code.ts= — tool schema / parameter forwarding for =symbol=-targeted edits
+- =packages/coding-agent/test/tools/code.test.ts= — wiring-level tests for symbol forwarding
+
+Observed repo facts to preserve:
+- Elixir profile declares =defmodule= as a top-level module declaration
+- =resolve.rs= already supports dotted symbols by first attempting full-string matching, then falling back to container/member resolution
+- The failure message about =name or Container.member (at most 2 levels)= does not come from =resolve.rs=; it indicates a validation layer earlier in the edit pipeline
+- The tool contract must be: one concept, one representation. The symbol spelling shown to the user is the spelling accepted by edit commands
+
+* Tests
+
+Enumerate workflows first.
+
+*Workflow 1 — outline/read output symbol is accepted verbatim for edit*
+- Files: =packages/coding-agent/test/tools/code.test.ts= and native engine tests around symbol validation / resolution
+- Scenario: Elixir file with top-level =defmodule Agentmaker.AgentConfig.TestChat do ... end=
+- Assert: symbol-targeted edit using =Agentmaker.AgentConfig.TestChat= is accepted and forwarded/resolved successfully
+
+*Workflow 2 — fully-qualified module replacement does not get misclassified as Container.member*
+- Files: native engine tests in the exact validation file once located
+- Scenario: pass =Agentmaker.AgentConfig.TestChat= to the symbol parser / resolver used by edit operations
+- Assert: the name is treated as a valid top-level symbol, not rejected for having more than one dot
+
+*Workflow 3 — error messaging stays truthful for rejected short names*
+- File: native engine or tool tests, depending on where the rejection surfaces
+- Scenario: pass short name =TestChat= when only the fully-qualified module exists
+- Assert: failure remains explicit and points to the fully-qualified available symbol; no silent aliasing
+
+*Workflow 4 — member syntax still works for real container.member cases*
+- Files: native engine resolution tests
+- Scenario: existing class/container member case in a language that supports =Container.member=
+- Assert: relaxing Elixir top-level FQ module names does not break true member resolution elsewhere
+
+** Add failing regression tests for fully-qualified Elixir symbols
+:PROPERTIES:
+:CUSTOM_ID: BUG-262-accept-fully-qualified-elixir-module-nam::fq-elixir-symbol-tests
+:END:
+- Files: =packages/coding-agent/test/tools/code.test.ts= plus the exact native resolver/validator test file under =crates/pi-code-engine/src/= or its companion tests
+- Add the four workflows above as initially failing tests before implementation
+- Ensure at least one test exercises the same fully-qualified module shape seen in the session trace
+
+** Fix symbol validation / resolution contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-262-accept-fully-qualified-elixir-module-nam::fix-fq-elixir-symbols
+:DEPENDS: BUG-262-accept-fully-qualified-elixir-module-nam::fq-elixir-symbol-tests
+:END:
+- Files: the exact symbol validation layer that currently rejects =Agentmaker.AgentConfig.TestChat=, plus any resolver/profile file required to preserve exact-name matching
+- Make the accepted edit symbol grammar include fully-qualified top-level Elixir module names exactly as reported by =outline= / =read=
+- Do not introduce short-name aliasing or fuzzy fallback
+- Keep true =Container.member= handling intact for languages that actually expose container members
+
+** Align tool-facing contract and errors
+:PROPERTIES:
+:CUSTOM_ID: BUG-262-accept-fully-qualified-elixir-module-nam::align-symbol-contract
+:DEPENDS: BUG-262-accept-fully-qualified-elixir-module-nam::fix-fq-elixir-symbols
+:END:
+- Files: =packages/coding-agent/src/tools/code.ts= and any native error-rendering layer if needed
+- Confirm user-facing errors and available-symbol lists use the same accepted representation
+- If tool docs/examples mention symbol forms, update them to avoid contradicting the accepted contract
+
+* Edge Cases
+- Nested Elixir namespaces with multiple dots must still be treated as one top-level module name when that is what the parser reports
+- Ambiguous symbol errors must continue to work if two declarations with the same exact name are somehow present
+- Non-Elixir languages must not gain accidental aliasing or loosened symbol matching
+- Container/member resolution must remain available where the language profile actually models containers and members
+
+* Acceptance Criteria
+- [ ] A symbol returned by Elixir =outline= / =read= is accepted verbatim by Elixir edit operations
+- [ ] =Agentmaker.AgentConfig.TestChat= no longer fails validation solely because it has multiple dots
+- [ ] Short-name =TestChat= remains rejected when only the fully-qualified module exists
+- [ ] Existing real =Container.member= behavior stays intact in non-Elixir cases
+- [ ] Focused tool/native regression tests exist and pass
+- [ ] Verification: a symbol-targeted edit using the fully-qualified Elixir module name reaches the real edit path instead of dying in pre-validation
+
+NOTE [2026-04-14]: Verified exact fully-qualified Elixir module symbols are accepted verbatim and short aliases remain rejected. Added wiring/native regressions and re-ran existing resolve.rs Elixir tests.

@@ -1,0 +1,59 @@
+{
+  "wholeFileReplace": {
+    "edit": {
+      "output": {
+        "version": 1,
+        "diff": "@@ replaced @@\n@@ -1,1 +1,1 @@\n-export const original = 1;\n+export const replaced = 2;\n",
+        "editCount": 1,
+        "created": false
+      },
+      "error": false
+    },
+    "save": {
+      "output": {
+        "success": true,
+        "version": 1
+      },
+      "error": false
+    },
+    "fileText": "export const replaced = 2;\n"
+  },
+  "fqElixirSymbol": {
+    "edit": {
+      "output": {
+        "version": 1,
+        "diff": "@@ Agentmaker.AgentConfig.TestChat.render @@\n@@ -2,1 +2,1 @@\n-  def render(), do: :ok\n+  def render(), do: :updated\n@@ top-level @@\n@@ -4,0 +4,1 @@\n+\n",
+        "editCount": 1,
+        "created": false
+      },
+      "error": false
+    },
+    "save": {
+      "output": {
+        "success": true,
+        "version": 1
+      },
+      "error": false
+    },
+    "fileText": "defmodule Agentmaker.AgentConfig.TestChat do\n  def render(), do: :updated\nend\n\n"
+  },
+  "failureThenSave": {
+    "failedText": "Error: GenericFailure, edit error: Symbol 'missing' not found. Available: [replaced]",
+    "failedDetails": {
+      "kind": "error",
+      "command": "edit",
+      "displayPath": "replace.ts",
+      "message": "GenericFailure, edit error: Symbol 'missing' not found. Available: [replaced]"
+    },
+    "saveText": "Saved replace.ts (buffer version 0).",
+    "saveDetails": {
+      "kind": "file",
+      "command": "save",
+      "displayPath": "replace.ts",
+      "data": {
+        "success": true,
+        "version": 0
+      }
+    }
+  }
+}

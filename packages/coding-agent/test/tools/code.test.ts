@@ -415,6 +415,36 @@ describe("coding-agent code tool wiring", () => {
 		expect(bufferSpy.mock.calls[1]?.[0]).not.toHaveProperty("edits");
 	});
 
+	it("forwards fully qualified Elixir module symbols unchanged", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: [], error: false })
+			.mockReturnValueOnce({
+				output: {
+					version: 2,
+					diff: "@@ Agentmaker.AgentConfig.TestChat @@\n-old\n+new",
+					editCount: 1,
+				},
+				error: false,
+			})
+			.mockReturnValueOnce({ output: { success: true, version: 2 }, error: false });
+		const tool = new CodeTool(createSession({ settings: Settings.isolated({ "lsp.enabled": false }) }));
+
+		const result = await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/lib/test_chat.ex",
+			symbol: "Agentmaker.AgentConfig.TestChat",
+			operation: "replace",
+			content: ["defmodule Agentmaker.AgentConfig.TestChat do", "  def render(), do: :updated", "end"],
+		});
+
+		expect(getText(result)).toContain("Edited lib/test_chat.ex");
+		expect(bufferSpy.mock.calls[1]?.[0]).toMatchObject({
+			command: "edit",
+			file: "/tmp/test/lib/test_chat.ex",
+			symbol: "Agentmaker.AgentConfig.TestChat",
+			operation: "replace",
+		});
+	});
 	it("routes whole-file replace edits when transport sends edits as an empty array", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
 			.mockReturnValueOnce({ output: [], error: false })
@@ -769,7 +799,10 @@ describe("coding-agent code tool wiring", () => {
 			patches: [{ find: "old", replace: "new" }],
 		});
 
-		expect(bufferSpy).toHaveBeenCalledTimes(2);
+		expect(bufferSpy).toHaveBeenCalledTimes(3);
+		expect(bufferSpy.mock.calls[2]?.[0]).toEqual(
+			expect.objectContaining({ command: "close", file: "/tmp/test/src/main.ts" }),
+		);
 		expect(getText(result)).toContain("patch.find matched 0 locations");
 	});
 });
@@ -946,6 +979,102 @@ it("invalidates only files touched by applied previews", async () => {
 		expect(await Bun.file(untouchedFile).text()).toContain("return 3;");
 	} finally {
 		executeSpy.mockRestore();
+		await fs.rm(tempDir, { recursive: true, force: true });
+	}
+});
+it("keeps failed edits and clean saves distinguishable", async () => {
+	_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-save-distinction-"));
+	try {
+		const filePath = path.join(tempDir, "main.ts");
+		await Bun.write(filePath, "export function main() {\n  return oldCall();\n}\n");
+		const tool = new CodeTool(createSession({ cwd: tempDir, settings: Settings.isolated({ "lsp.enabled": false }) }));
+
+		const failed = await tool.execute("tool-fail", {
+			command: "edit",
+			file: filePath,
+			symbol: "missing",
+			operation: "patch",
+			patches: [{ find: "return oldCall();", replace: "return newCall();" }],
+		});
+		expect(failed.details).toEqual(expect.objectContaining({ kind: "error", command: "edit", error: true }));
+		expect(getText(failed)).toContain("Symbol 'missing' not found");
+
+		const saved = await tool.execute("tool-save", { command: "save", file: filePath });
+		expect(saved.details).toEqual(
+			expect.objectContaining({
+				kind: "file",
+				command: "save",
+				data: expect.objectContaining({ success: true, version: 0 }),
+			}),
+		);
+		expect(getText(saved)).toContain("Saved main.ts (buffer version 0).");
+		expect(getText(saved)).not.toContain("Edited main.ts");
+	} finally {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	}
+});
+
+it("persists missing supported files created through edit create", async () => {
+	_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-create-missing-"));
+	try {
+		const tool = new CodeTool(createSession({ cwd: tempDir, settings: Settings.isolated({ "lsp.enabled": false }) }));
+		const filePath = path.join(tempDir, "src", "new-module.ts");
+
+		const result = await tool.execute("tool", {
+			command: "edit",
+			file: filePath,
+			operation: "create",
+			content: ["export const created = 1;"],
+		});
+
+		expect(getText(result)).toContain("Created src/new-module.ts");
+		expect(await Bun.file(filePath).text()).toBe("export const created = 1;");
+
+		const readBack = await tool.execute("tool-read", { command: "read", file: filePath, resolution: 3 });
+		expect(getText(readBack)).toContain("export const created = 1;");
+	} finally {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	}
+});
+it("does not leave stale buffers after a failed multi-edit", async () => {
+	_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-stale-rollback-"));
+	try {
+		const filePath = path.join(tempDir, "main.ts");
+		await Bun.write(filePath, "export function main() {\n  return oldCall();\n}\n");
+		const tool = new CodeTool(createSession({ cwd: tempDir, settings: Settings.isolated({ "lsp.enabled": false }) }));
+
+		const failed = await tool.execute("tool-fail", {
+			command: "edit",
+			file: filePath,
+			edits: [
+				{
+					symbol: "main",
+					operation: "patch",
+					patches: [{ find: "return oldCall();", replace: "return newCall();" }],
+				},
+				{
+					symbol: "missing",
+					operation: "patch",
+					patches: [{ find: "return oldCall();", replace: "return shouldNotApply();" }],
+				},
+			],
+		});
+		expect(failed.details).toEqual(expect.objectContaining({ kind: "error", error: true }));
+		expect(await Bun.file(filePath).text()).toContain("return oldCall();");
+
+		const followUp = await tool.execute("tool-follow", {
+			command: "edit",
+			file: filePath,
+			symbol: "main",
+			operation: "patch",
+			patches: [{ find: "return oldCall();", replace: "return finalCall();" }],
+		});
+		expect(getText(followUp)).not.toContain("Stale code buffer detected");
+		expect(await Bun.file(filePath).text()).toContain("return finalCall();");
+	} finally {
 		await fs.rm(tempDir, { recursive: true, force: true });
 	}
 });

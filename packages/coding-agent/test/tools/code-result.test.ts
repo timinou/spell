@@ -210,6 +210,23 @@ describe("code tool result contract", () => {
 		expect(content).not.toContain("Edited src/main.ts");
 	});
 
+	it("formats clean save results without edited success text", () => {
+		const details = normalizeCodeBufferSuccess({
+			command: "save",
+			file: "/repo/src/main.ts",
+			cwd: "/repo",
+			output: { success: true, version: 0 },
+		});
+
+		expect(details.command).toBe("save");
+		if (details.command !== "save") throw new Error("Expected save details");
+		expect(details.data.success).toBe(true);
+		expect(details.data.version).toBe(0);
+
+		const content = formatCodeToolContent(details);
+		expect(content).toContain("Saved src/main.ts (buffer version 0).");
+		expect(content).not.toContain("Edited src/main.ts");
+	});
 	it("summarizes undo history without dropping low-level edit primitives", () => {
 		const details = normalizeCodeBufferSuccess({
 			command: "undo",
