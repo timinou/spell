@@ -1,0 +1,82 @@
+#+TITLE: CODE_EDIT_WHOLE_FILE_REPLACE_ERGONOMICS
+#+STATE: DONE
+#+SESSION_ID: 14ba431c79b9ac0e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-53-45-190Z_14ba431c79b9ac0e.jsonl]]
+#+CUSTOM_ID: PLAN-226-code-edit-whole-file-replace-ergonomics
+#+EFFORT: 4h
+#+DEPENDS: 
+#+PRIORITY: #A
+#+LAYER: coding-agent pi-natives pi-code-engine
+
+* Context
+
+Tooling note: the current `org` tool rejects `INIT` and only accepts `ITEM`, `DOING`, `DONE`, `BLOCKED`, `CANCELLED`, and `REVIEW`. This orchestration record is therefore stored as `ITEM` and MUST be treated as the plan-mode `INIT` equivalent for handoff.
+
+User request: trace why the Feat182Forms subagent concluded that “the code tool won't allow replacing a full module”, then hand off a TDD fix with better ergonomics.
+
+Repository reality verified before planning:
+- The transcript in `/home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-14T11-19-39-642Z_14ba3b4ede9e442a/4-Feat182Forms.jsonl` shows two separate failures:
+  1. symbol targeting failed because the subagent tried `symbol:"SalesAgentComponent"` against an Elixir module named `AgentmakerWeb.Admin.SalesAgentComponent`
+  2. after retrying the fully-qualified dotted module name, the resolver rejected it because `resolve_symbol()` treats `.` as `Container.member` syntax
+- That dotted-symbol root cause is already covered by separate dotted-name resolver planning work. This sibling plan MUST NOT duplicate that work.
+- Separate ergonomics gap: even if the caller intentionally wants a full-file/module rewrite, current `replace` semantics do not provide an explicit file-only path. In `crates/pi-natives/src/code_buffer.rs`, `operation:"replace"` currently means:
+  - symbol-scoped replace when `symbol` exists
+  - else line-targeted replace via `replace_node(...)`
+  - else implicit line `0`, which fails because `crates/pi-code-engine/src/line_target.rs` rejects line `0`
+- Current prompt docs in `packages/coding-agent/src/prompts/tools/code.md` document declaration replacement, not whole-file replacement, which reinforces the wrong conclusion for subagents under time pressure.
+
+Settled decisions:
+1. Scope boundary → this plan handles whole-file replace ergonomics only; dotted-symbol resolution stays in separate resolver work.
+2. API shape → use `code edit { file, operation: "replace", content }` as the explicit whole-file rewrite path for existing supported files.
+3. Semantics → keep current precedence: `symbol` wins for declaration replacement, `line` wins for positional replacement, and only omission of both means whole-file replacement.
+4. Create boundary → missing-file creation remains `operation: "create"`; file-only `replace` MUST error on missing files rather than becoming implicit create.
+5. Verification approach → TDD at wrapper + native layers, update code-tool docs, and capture one manual proof artifact for an existing supported file.
+
+Recommended approach:
+- Implement whole-file `replace` in the native dispatcher by treating no-target `replace` as byte range `0..buffer.source().len()` on an already-open existing buffer.
+- Keep wrapper orchestration untouched except for tests/docs unless schema text needs a clarification example.
+- Document the distinction between declaration replace and whole-file replace directly in the code-tool prompt so subagents choose the correct path.
+
+Critical files:
+- `packages/coding-agent/src/prompts/tools/code.md`
+- `packages/coding-agent/test/tools/code.test.ts`
+- `packages/natives/test/code-buffer.test.ts`
+- `crates/pi-natives/src/code_buffer.rs`
+- optional helper site if extracted: `crates/pi-code-engine/src/edit/replace.rs`
+- prerequisite context only: `crates/pi-code-engine/src/resolve.rs`
+
+Child item for execution:
+- [[id:FEAT-546-add-code-edit-whole-file-replace-ergonom]]
+
+* Verification
+
+Focused verification required after implementation:
+- `bun test packages/coding-agent/test/tools/code.test.ts`
+- `bun test packages/natives/test/code-buffer.test.ts`
+- `cargo test -p pi-natives code_buffer -- --nocapture`
+- if implementation adds a Rust helper/unit test in `pi-code-engine`, run the targeted `cargo test -p pi-code-engine` selection covering that helper
+
+Manual proof artifact required:
+- one successful `code edit { file, operation: "replace", content }` run against an existing supported file, persisted under the plan artifact directory and referenced from the child item closure note
+
+Consistency checks for execution:
+- Confirm `operation:"create"` behavior from PLAN-222 remains unchanged
+- Confirm no overlap/duplication with the separate dotted-name resolver work
+- Confirm docs show both declaration-targeted and whole-file replace paths distinctly
+
+* Execution Manifest
+
+** :wave: 1 — whole-file replace ergonomics
+- [[id:FEAT-546-add-code-edit-whole-file-replace-ergonom]]
+
+** Completion [2026-04-14]
+*** Verification
+- `bun test packages/coding-agent/test/tools/code.test.ts` → pass (35 tests, 0 fail)
+- `bun test packages/natives/test/code-buffer.test.ts` → pass (8 tests, 0 fail)
+- `cargo test -p pi-natives code_buffer -- --nocapture` → pass (15 tests in filtered module, 0 fail)
+- `PI_DEV=1 bun -e '<CodeTool whole-file replace proof script>'` → pass; output showed `Edited module.ts`, diff preview, and final file contents `export const replaced = 2;`
+- Consistency checks: `create` semantics remain explicit-only; missing-file `replace` still errors; docs now distinguish symbol-targeted declaration replace vs whole-file replace; no dotted-symbol resolver changes were made in this plan.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-226-code-edit-whole-file-replace-ergonomics/manual-whole-file-replace-proof.json]]
+*** Deviations
+- None.
