@@ -521,8 +521,8 @@ Deep section body.
 		let profile = registry();
 		let profile = profile.get(&LanguageId::new("elixir")).unwrap();
 
-		let resolved = resolve_symbol(&buffer, profile, "MyApp.Greeter.greet")
-			.expect("resolve greet");
+		let resolved =
+			resolve_symbol(&buffer, profile, "MyApp.Greeter.greet").expect("resolve greet");
 		assert_eq!(resolved.name, "greet");
 		assert_eq!(resolved.kind, "def");
 		assert_eq!(resolved.line, 8);
@@ -534,8 +534,8 @@ Deep section body.
 		let profile = registry();
 		let profile = profile.get(&LanguageId::new("elixir")).unwrap();
 
-		let resolved = resolve_symbol(&buffer, profile, "MyApp.Greeter.start_link")
-			.expect("resolve start_link");
+		let resolved =
+			resolve_symbol(&buffer, profile, "MyApp.Greeter.start_link").expect("resolve start_link");
 		assert_eq!(resolved.name, "start_link");
 		assert_eq!(resolved.kind, "def");
 		assert_eq!(resolved.line, 4);
@@ -580,10 +580,7 @@ Deep section body.
 			msg.contains("Symbol 'NonExistent.Module' not found"),
 			"should say module not found: {msg}"
 		);
-		assert!(
-			msg.contains("MyApp.Greeter"),
-			"should list available module names: {msg}"
-		);
+		assert!(msg.contains("MyApp.Greeter"), "should list available module names: {msg}");
 	}
 
 	#[test]

@@ -192,7 +192,7 @@ export const PROVIDER_DESCRIPTORS: readonly ProviderDescriptor[] = [
 	),
 	catalogDescriptor(
 		"kimi-code",
-		"kimi-k2.5",
+		"k2.6-code-preview",
 		config => kimiCodeModelManagerOptions(config),
 		catalog("Kimi Code", ["KIMI_API_KEY"]),
 	),

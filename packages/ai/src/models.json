@@ -14494,6 +14494,40 @@
 				"minLevel": "minimal",
 				"maxLevel": "high"
 			}
+		},
+		"k2.6-code-preview": {
+			"id": "k2.6-code-preview",
+			"name": "Kimi K2.6 Code Preview",
+			"api": "openai-completions",
+			"provider": "kimi-code",
+			"baseUrl": "https://api.kimi.com/coding/v1",
+			"headers": {
+				"User-Agent": "KimiCLI/1.0",
+				"X-Msh-Platform": "kimi_cli"
+			},
+			"reasoning": true,
+			"input": [
+				"text",
+				"image"
+			],
+			"cost": {
+				"input": 0,
+				"output": 0,
+				"cacheRead": 0,
+				"cacheWrite": 0
+			},
+			"contextWindow": 262144,
+			"maxTokens": 65536,
+			"compat": {
+				"thinkingFormat": "zai",
+				"reasoningContentField": "reasoning_content",
+				"supportsDeveloperRole": false
+			},
+			"thinking": {
+				"mode": "effort",
+				"minLevel": "minimal",
+				"maxLevel": "high"
+			}
 		}
 	},
 	"litellm": {
