@@ -66,6 +66,33 @@ describe("OrgTool", () => {
 		await tool.dispose();
 	});
 
+	it("renders delete and validate-plan call labels with id details", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const tool = new OrgTool(createSession());
+
+		const deleteComponent = tool.renderCall(
+			{ command: "delete", id: "FEAT-001" },
+			{ expanded: false, isPartial: false },
+			uiTheme,
+		);
+		const deleteOutput = sanitizeText(deleteComponent.render(120).join("\n")).replace(/\s+/g, " ");
+		expect(deleteOutput).toContain("delete");
+		expect(deleteOutput).toContain("id:FEAT-001");
+
+		const validatePlanComponent = tool.renderCall(
+			{ command: "validate-plan", id: "PLAN-001" },
+			{ expanded: false, isPartial: false },
+			uiTheme,
+		);
+		const validatePlanOutput = sanitizeText(validatePlanComponent.render(120).join("\n")).replace(/\s+/g, " ");
+		expect(validatePlanOutput).toContain("validate-plan");
+		expect(validatePlanOutput).toContain("id:PLAN-001");
+
+		await tool.dispose();
+	});
+
 	it("declares query and ql in the adapter schema", async () => {
 		const tool = new OrgTool(createSession());
 		const schema = tool.parameters as {

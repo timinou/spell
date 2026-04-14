@@ -1,0 +1,75 @@
+#+TITLE: PLAN-224 audit fixup: regressions, test gaps, body echo alignment
+#+STATE: DONE
+#+SESSION_ID: 14ba406cf0d96a78
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-42-01-155Z_14ba406cf0d96a78.jsonl]]
+#+CUSTOM_ID: PLAN-229-plan-224-audit-fixup-regressions-test-ga
+#+EFFORT: 2h
+#+PRIORITY: #A
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-066-audit-implementation:
+
+- **What**: `createOrgTool()` help text appears out of sync with the actual command surface; `delete` / `validate-plan` were added in code paths but the inner description string was still observed without them.
+  - **Where**: `packages/org/src/tool.ts`, `createOrgTool()` description block near the command enum/switch
+  - **Why**: `OrgTool.get description()` forwards this inner description; stale docs make the agent/tool prompt under-describe valid commands, which directly hurts discoverability and can recreate the ergonomics problem the plan was fixing.
+  - **Effort**: `trivial`
+
+- **What**: New org-wrapper presentation behavior lacks direct regression coverage.
+  - **Where**: `packages/coding-agent/src/tools/org.ts`, `formatOrgResult()` success branch and `buildOrgCallPreview()` delete/validate-plan handling; no corresponding targeted assertions were added in `packages/coding-agent/test/tools/org-format-result.test.ts` / `packages/coding-agent/test/tools/org.test.ts`
+  - **Why**: `bodyLength` rendering, `delete` preview metadata, and `validate-plan` formatting are now part of the user/agent-facing contract; without focused tests, future prompt/formatter churn can silently regress them while core org package tests still pass.
+  - **Effort**: `trivial`
+
+- **What**: `org create` body echo is produced from the locally rewritten request body, not a read-back of persisted content.
+  - **Where**: `packages/org/src/tool.ts`, `cmdCreate()` success response near `return { success: true, id, file, category, state, body, bodyLength }`
+  - **Why**: the new transparency contract says the response tells the agent what was persisted; if native create-time normalization or category-specific create behavior mutates body content, the echoed `body`/`bodyLength` can drift from disk and reintroduce “must org get to verify” uncertainty in edge cases.
+  - **Effort**: `small`
+
+- **What**: `validate-plan` is exposed as a first-class org command but only works when an external callback is injected.
+  - **Where**: `packages/org/src/tool.ts`, `cmdValidatePlan()` + `CreateOrgToolOptions`; invoked from `packages/coding-agent/src/tools/org.ts`
+  - **Why**: standalone consumers of `createOrgTool()` can successfully discover/call `validate-plan` yet only receive “not available in this org tool context”; that is surface-level contract drift, and it makes the command behave like a partial feature rather than a real org capability.
+  - **Effort**: `small`
+
+* Context
+
+Audit of PLAN-224 (org tool ergonomic improvements, commit =155e59d47=) revealed:
+
+1. *Type regression*: =CreateOrgToolOptions= interface lost its =validatePlan= field during code tool buffer/disk desync → 3 tsgo type errors on =packages/org/src/tool.ts=, =packages/coding-agent/src/tools/org.ts=, =packages/org/test/tool-commands.test.ts=.
+2. *Dead code*: Duplicate =case "validate-plan":= switch entry at lines ~879 and ~901 (second is unreachable).
+3. *Lint regression*: Biome import ordering broken for =rewriteSubOutlineIds= import.
+4. *Test gaps*: Zero coverage for new =bodyLength= rendering, =delete= preview, =validate-plan= preview, and =validate-plan= result formatting in =formatOrgResult= / =buildOrgCallPreview=.
+5. *Contract asymmetry*: =cmdCreate= echoes local rewritten body; =cmdUpdate= reads back from disk via =fetchItem=. Create should match update.
+
+Audit finding #4 (validate-plan standalone exposure) is accepted as-is: the error message is clear and the command surface is static, so no change needed.
+
+Pre-existing type errors in =agent-session.ts= (line 542) and =code.ts= (lines 483/520) are unrelated and out of scope.
+
+* Verification
+- =npx tsgo -p tsconfig.json= shows no NEW errors from =packages/org/= or =packages/coding-agent/src/tools/org.ts=
+- =bunx biome check packages/org/src/tool.ts packages/coding-agent/src/tools/org.ts= passes
+- =bun test packages/org/test/= passes
+- =bun test packages/coding-agent/test/tools/org-format-result.test.ts packages/coding-agent/test/tools/org.test.ts= passes
+
+* Execution Manifest
+** foundation :wave:
+- [[id:BUG-257-fix-plan-224-regressions-missing-type-fi]] Fix type field, duplicate switch case, biome lint (30m)
+
+** coverage :wave:
+- [[id:FEAT-547-add-regression-tests-for-new-org-formatt]] Add formatter/preview regression tests (1h)
+- [[id:FEAT-548-align-cmdcreate-body-echo-with-cmdupdate]] Align cmdCreate body echo with cmdUpdate read-back (30m)
+
+** Completion [2026-04-14]
+*** Verification
+- `npx tsgo -p tsconfig.json` → passed
+- `bunx biome check packages/org/src/tool.ts packages/coding-agent/src/tools/org.ts packages/org/test/tool-commands.test.ts packages/coding-agent/test/tools/org-format-result.test.ts packages/coding-agent/test/tools/org.test.ts` → passed
+- `bun test packages/org/test/` → passed (163 pass / 0 fail)
+- `bun test packages/coding-agent/test/tools/org-format-result.test.ts packages/coding-agent/test/tools/org.test.ts` → passed (12 pass / 0 fail)
+*** Artifacts
+- [[file:packages/org/src/tool.ts]]
+- [[file:packages/org/test/tool-commands.test.ts]]
+- [[file:packages/coding-agent/test/tools/org-format-result.test.ts]]
+- [[file:packages/coding-agent/test/tools/org.test.ts]]
+*** Deviations
+- None.
+
+NOTE [2026-04-14]: Completed on 2026-04-14 with focused org package + coding-agent wrapper verification.

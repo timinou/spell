@@ -1,0 +1,91 @@
+#+TITLE: Fix PLAN-224 regressions: missing type field, duplicate switch case, biome lint
+#+STATE: DONE
+#+SESSION_ID: 14ba406cf0d96a78
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-42-01-155Z_14ba406cf0d96a78.jsonl]]
+#+CUSTOM_ID: BUG-257-fix-plan-224-regressions-missing-type-fi
+#+EFFORT: 30m
+#+LAYER: tools
+#+PRIORITY: #A
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-066-audit-implementation:
+
+- **What**: `createOrgTool()` help text appears out of sync with the actual command surface; `delete` / `validate-plan` were added in code paths but the inner description string was still observed without them.
+  - **Where**: `packages/org/src/tool.ts`, `createOrgTool()` description block near the command enum/switch
+  - **Why**: `OrgTool.get description()` forwards this inner description; stale docs make the agent/tool prompt under-describe valid commands, which directly hurts discoverability and can recreate the ergonomics problem the plan was fixing.
+  - **Effort**: `trivial`
+
+- **What**: New org-wrapper presentation behavior lacks direct regression coverage.
+  - **Where**: `packages/coding-agent/src/tools/org.ts`, `formatOrgResult()` success branch and `buildOrgCallPreview()` delete/validate-plan handling; no corresponding targeted assertions were added in `packages/coding-agent/test/tools/org-format-result.test.ts` / `packages/coding-agent/test/tools/org.test.ts`
+  - **Why**: `bodyLength` rendering, `delete` preview metadata, and `validate-plan` formatting are now part of the user/agent-facing contract; without focused tests, future prompt/formatter churn can silently regress them while core org package tests still pass.
+  - **Effort**: `trivial`
+
+- **What**: `org create` body echo is produced from the locally rewritten request body, not a read-back of persisted content.
+  - **Where**: `packages/org/src/tool.ts`, `cmdCreate()` success response near `return { success: true, id, file, category, state, body, bodyLength }`
+  - **Why**: the new transparency contract says the response tells the agent what was persisted; if native create-time normalization or category-specific create behavior mutates body content, the echoed `body`/`bodyLength` can drift from disk and reintroduce “must org get to verify” uncertainty in edge cases.
+  - **Effort**: `small`
+
+- **What**: `validate-plan` is exposed as a first-class org command but only works when an external callback is injected.
+  - **Where**: `packages/org/src/tool.ts`, `cmdValidatePlan()` + `CreateOrgToolOptions`; invoked from `packages/coding-agent/src/tools/org.ts`
+  - **Why**: standalone consumers of `createOrgTool()` can successfully discover/call `validate-plan` yet only receive “not available in this org tool context”; that is surface-level contract drift, and it makes the command behave like a partial feature rather than a real org capability.
+  - **Effort**: `small`
+
+* Scope
+
+Fix 3 regressions introduced by PLAN-224 org tool ergonomics commit (155e59d47) that were caused by code tool buffer/disk desync during implementation.
+
+*In scope*:
+- Add =validatePlan= field back to =CreateOrgToolOptions= interface
+- Remove duplicate =validate-plan= switch case (line ~901, duplicate of ~879)
+- Run =bunx biome check --write packages/org/src/tool.ts= to fix import ordering
+
+*Out of scope*:
+- Pre-existing type errors in =agent-session.ts= (line 542, "edit.previewResolvePolicy") and =code.ts= (lines 483/520, "noop") — those are from unrelated work
+
+* Existing Patterns
+- =packages/org/src/tool.ts= — =OrgContext= interface already has =validatePlan?: (id: string) => Promise&lt;unknown&gt;= at line 31
+- =packages/org/src/tool.ts= — =CreateOrgToolOptions= at line 33 is missing the matching field
+- =packages/org/src/tool.ts= — duplicate =case "validate-plan":= at lines 879 and 901 (first one is correct, second is unreachable dead code)
+
+* Tests
+- No new tests needed — these are regressions that restore existing passing state
+- Verification: =bun test packages/org/test/tool-commands.test.ts= still passes after fixes
+- Verification: =npx tsgo -p tsconfig.json= shows 0 errors from =packages/org/= and =packages/coding-agent/src/tools/org.ts=
+
+* Implementation
+** Add validatePlan to CreateOrgToolOptions
+:PROPERTIES:
+:CUSTOM_ID: BUG-257-fix-plan-224-regressions-missing-type-fi::add-validate-plan-type
+:END:
+- File: =packages/org/src/tool.ts=, line ~34
+- Add =validatePlan?: (id: string) => Promise&lt;unknown&gt;;= to =CreateOrgToolOptions= interface
+- This restores the field that was lost when the code tool's stale buffer overwrote disk
+
+** Remove duplicate validate-plan switch case
+:PROPERTIES:
+:CUSTOM_ID: BUG-257-fix-plan-224-regressions-missing-type-fi::remove-duplicate-switch
+:DEPENDS: BUG-257-fix-plan-224-regressions-missing-type-fi::add-validate-plan-type
+:END:
+- File: =packages/org/src/tool.ts=, line ~901
+- Delete the second =case "validate-plan":= and its =return cmdValidatePlan(ctx, { id: args.id as string });= line
+- The first occurrence at line ~879 (after =case "validate":=) is the correct one
+
+** Fix biome import ordering
+:PROPERTIES:
+:CUSTOM_ID: BUG-257-fix-plan-224-regressions-missing-type-fi::fix-biome-imports
+:DEPENDS: BUG-257-fix-plan-224-regressions-missing-type-fi::remove-duplicate-switch
+:END:
+- Run: =bunx biome check --write packages/org/src/tool.ts=
+- The =rewriteSubOutlineIds= import is out of alphabetical order relative to =KeyedMutex= and =DEFAULT_ORG_CONFIG=
+* Edge Cases
+- The duplicate switch case is unreachable (JavaScript switch falls to first match), so removing it has no behavioral effect
+- The biome fix only reorders imports, no semantic change
+
+* Acceptance Criteria
+- [ ] =npx tsgo -p tsconfig.json= shows no errors from =packages/org/src/tool.ts=, =packages/coding-agent/src/tools/org.ts=, or =packages/org/test/tool-commands.test.ts=
+- [ ] =bunx biome check packages/org/src/tool.ts= passes with no fixes needed
+- [ ] =bun test packages/org/test/tool-commands.test.ts= passes
+- [ ] Only one =case "validate-plan":= exists in the switch statement
+
+NOTE [2026-04-14]: Completed in PLAN-229 on 2026-04-14. Restored org tool command surface/type wiring and repaired mutation/get regressions required for package verification.

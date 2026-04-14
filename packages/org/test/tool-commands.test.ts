@@ -60,6 +60,18 @@ function makeTool(config?: OrgConfig): OrgToolDefinition {
 	return createOrgTool(tmpDir, config ?? makeConfig());
 }
 
+describe("tool metadata parity", () => {
+	test("exposes delete and validate-plan in description and schema", () => {
+		const tool = makeTool();
+		expect(tool.description).toContain("delete       Delete an item file");
+		expect(tool.description).toContain("validate-plan Validate a plan via injected callback");
+		const commands = (
+			(tool.parameters as { properties?: { command?: { enum?: string[] } } }).properties?.command?.enum ?? []
+		).slice();
+		expect(commands).toContain("delete");
+		expect(commands).toContain("validate-plan");
+	});
+});
 /** Seed a file-level org item into a category directory. */
 async function seedItem(
 	category: string,
@@ -663,17 +675,20 @@ describe("delete command", () => {
 });
 
 describe("mutation body responses", () => {
-	test("create with body returns body and bodyLength", async () => {
+	test("create with body returns persisted body and bodyLength", async () => {
 		const tool = makeTool();
+		const inputBody = "* Scope\n** Step\n:PROPERTIES:\n:CUSTOM_ID: define-types\n:END:";
 		const result = (await tool.execute({
 			command: "create",
 			title: "Body response",
 			category: "drafts",
-			body: "* Scope\nDetailed body text",
+			body: inputBody,
 		})) as Record<string, unknown>;
 
-		expect(result.body).toBe("* Scope\nDetailed body text");
-		expect(result.bodyLength).toBe("* Scope\nDetailed body text".length);
+		const expectedBody = `* Scope\n** Step\n:PROPERTIES:\n:CUSTOM_ID: ${String(result.id)}::define-types\n:END:`;
+		expect(result.body).toBe(expectedBody);
+		expect(result.bodyLength).toBe(expectedBody.length);
+		expect(await readFile(String(result.file))).toContain(expectedBody);
 	});
 
 	test("create without body omits body fields", async () => {
