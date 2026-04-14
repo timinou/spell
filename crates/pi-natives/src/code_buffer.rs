@@ -129,22 +129,34 @@ fn required_str<'a>(options: &'a Value, field: &str) -> Result<&'a str> {
 		.ok_or_else(|| json_err(format!("Missing required field: {field}")))
 }
 
+fn has_meaningful_string(value: Option<&Value>) -> bool {
+	matches!(value.and_then(Value::as_str), Some(text) if !text.is_empty())
+}
+
+fn has_entries(value: Option<&Value>) -> bool {
+	matches!(value.and_then(Value::as_array), Some(entries) if !entries.is_empty())
+}
+
+fn has_meaningful_index_field(value: Option<&Value>) -> bool {
+	value.and_then(Value::as_u64).is_some_and(|n| n > 0)
+}
+
 fn validate_create_request(options: &Value, path: &Path) -> Result<()> {
 	let invalid_fields = [
-		"symbol",
-		"line",
-		"column",
-		"patches",
-		"edits",
-		"mode",
-		"action",
-		"resolution",
-		"offset",
-		"limit",
-		"depth",
+		("symbol", has_meaningful_string(options.get("symbol"))),
+		("line", has_meaningful_index_field(options.get("line"))),
+		("column", has_meaningful_index_field(options.get("column"))),
+		("patches", has_entries(options.get("patches"))),
+		("edits", has_entries(options.get("edits"))),
+		("mode", has_meaningful_string(options.get("mode"))),
+		("action", has_meaningful_string(options.get("action"))),
+		("resolution", has_meaningful_index_field(options.get("resolution"))),
+		("offset", has_meaningful_index_field(options.get("offset"))),
+		("limit", has_meaningful_index_field(options.get("limit"))),
+		("depth", has_meaningful_index_field(options.get("depth"))),
 	]
 	.into_iter()
-	.filter(|field| options.get(*field).is_some())
+	.filter_map(|(field, present)| present.then_some(field))
 	.collect::<Vec<_>>();
 	if !invalid_fields.is_empty() {
 		return Err(json_err(format!(
@@ -511,7 +523,10 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 				},
 				"edit" => {
 					let before = buffer.source();
-					let edit_count = if let Some(edits) = options.get("edits").and_then(Value::as_array)
+					let edit_count = if let Some(edits) = options
+						.get("edits")
+						.and_then(Value::as_array)
+						.filter(|edits| !edits.is_empty())
 					{
 						if edits
 							.iter()
@@ -676,6 +691,55 @@ mod tests {
 		.expect("save");
 		assert_eq!(save["error"], json!(false));
 		assert_eq!(fs::read_to_string(&path).expect("saved file"), "export const created = 1;\n");
+	}
+
+	#[test]
+	fn execute_code_buffer_inner_accepts_create_with_empty_transport_defaults() {
+		let path = temp_path("create-buffer-transport.ts");
+		let edit = execute_code_buffer_inner(&json!({
+			"command": "edit",
+			"file": path.display().to_string(),
+			"operation": "create",
+			"content": "export const created = 1;\n",
+			"symbol": "",
+			"patches": [],
+			"edits": [],
+			"mode": "",
+			"action": "",
+			"line": 0,
+			"column": 0,
+			"resolution": 0,
+			"offset": 0,
+			"limit": 0,
+			"depth": 0
+		}))
+		.expect("create edit with defaults");
+		assert_eq!(edit["error"], json!(false));
+		assert_eq!(edit["output"]["created"], json!(true));
+	}
+
+	#[test]
+	fn execute_code_buffer_inner_ignores_empty_edits_for_top_level_operations() {
+		let path = temp_path("empty-edits-shadow.ts");
+		fs::write(&path, "export const original = 1;\n").expect("seed file");
+		let edit = execute_code_buffer_inner(&json!({
+			"command": "edit",
+			"file": path.display().to_string(),
+			"operation": "replace",
+			"content": "export const replaced = 2;\n",
+			"edits": []
+		}))
+		.expect("replace edit");
+		assert_eq!(edit["error"], json!(false));
+		assert_eq!(edit["output"]["editCount"], json!(1));
+		assert_ne!(edit["output"]["diff"], json!("(no changes)"));
+		let save = execute_code_buffer_inner(&json!({
+			"command": "save",
+			"file": path.display().to_string(),
+		}))
+		.expect("save");
+		assert_eq!(save["error"], json!(false));
+		assert_eq!(fs::read_to_string(&path).expect("saved file"), "export const replaced = 2;\n");
 	}
 
 	#[test]

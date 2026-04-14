@@ -120,18 +120,26 @@ function isMeaningfulOptionalNumber(value: number | undefined): value is number 
 	return value !== undefined && value !== 0;
 }
 
+function isMeaningfulString(value: string | undefined): value is string {
+	return value !== undefined && value.length > 0;
+}
+
+function hasEntries<T>(value: T[] | undefined): value is T[] {
+	return value !== undefined && value.length > 0;
+}
+
 function validateCreatePayload(params: CodeParams, resolvedFile?: string): string | undefined {
 	if (params.command !== "edit" || params.operation !== "create") return undefined;
 	if (!resolvedFile) return "operation 'create' requires 'file'.";
 	if (params.content === undefined) return "operation 'create' requires 'content'.";
 	const invalidFields = [
-		params.symbol !== undefined ? "symbol" : undefined,
+		isMeaningfulString(params.symbol) ? "symbol" : undefined,
 		isMeaningfulIndex(params.line) ? "line" : undefined,
 		isMeaningfulIndex(params.column) ? "column" : undefined,
-		params.patches ? "patches" : undefined,
-		params.edits ? "edits" : undefined,
-		params.mode ? "mode" : undefined,
-		params.action ? "action" : undefined,
+		hasEntries(params.patches) ? "patches" : undefined,
+		hasEntries(params.edits) ? "edits" : undefined,
+		isMeaningfulString(params.mode) ? "mode" : undefined,
+		isMeaningfulString(params.action) ? "action" : undefined,
 		isMeaningfulOptionalNumber(params.resolution) ? "resolution" : undefined,
 		isMeaningfulOptionalNumber(params.offset) ? "offset" : undefined,
 		isMeaningfulOptionalNumber(params.limit) ? "limit" : undefined,
@@ -262,7 +270,7 @@ function normalizeLines(value: CodeParams["content"]): string | undefined {
 }
 
 function normalizePatches(patches: CodeParams["patches"]): CodeBufferOptions["patches"] | undefined {
-	if (!patches) return undefined;
+	if (!hasEntries(patches)) return undefined;
 	return patches.map(patch => ({
 		find: normalizeLines(patch.find) ?? "",
 		replace: normalizeLines(patch.replace) ?? "",
@@ -270,15 +278,15 @@ function normalizePatches(patches: CodeParams["patches"]): CodeBufferOptions["pa
 }
 
 function normalizeEditEntries(edits: CodeParams["edits"]): CodeBufferOptions["edits"] | undefined {
-	if (!edits) return undefined;
+	if (!hasEntries(edits)) return undefined;
 	return edits.map(edit => {
 		const normalizedEdit: NormalizedCodeEdit = { operation: edit.operation };
-		if (edit.symbol !== undefined) normalizedEdit.symbol = edit.symbol;
+		if (isMeaningfulString(edit.symbol)) normalizedEdit.symbol = edit.symbol;
 		if (isMeaningfulIndex(edit.line)) normalizedEdit.line = edit.line;
 		if (isMeaningfulIndex(edit.column)) normalizedEdit.column = edit.column;
 		if (edit.content !== undefined) normalizedEdit.content = normalizeLines(edit.content);
-		if (edit.patches) normalizedEdit.patches = normalizePatches(edit.patches);
-		if (edit.mode !== undefined) normalizedEdit.mode = edit.mode;
+		if (hasEntries(edit.patches)) normalizedEdit.patches = normalizePatches(edit.patches);
+		if (isMeaningfulString(edit.mode)) normalizedEdit.mode = edit.mode;
 		return normalizedEdit;
 	});
 }
@@ -377,18 +385,24 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			const resolveFile = (file: string): string => (path.isAbsolute(file) ? file : path.resolve(sessionCwd, file));
 
 			if (params.file) options.file = resolveFile(params.file);
-			if (params.resolution !== undefined) options.resolution = params.resolution;
-			if (params.offset !== undefined) options.offset = params.offset;
-			if (params.limit !== undefined) options.limit = params.limit;
+			if (params.resolution !== undefined && (!isCreate || isMeaningfulOptionalNumber(params.resolution))) {
+				options.resolution = params.resolution;
+			}
+			if (params.offset !== undefined && (!isCreate || isMeaningfulOptionalNumber(params.offset))) {
+				options.offset = params.offset;
+			}
+			if (params.limit !== undefined && (!isCreate || isMeaningfulOptionalNumber(params.limit))) {
+				options.limit = params.limit;
+			}
 			if (isMeaningfulIndex(params.line)) options.line = params.line;
 			if (isMeaningfulIndex(params.column)) options.column = params.column;
-			if (params.symbol) options.symbol = params.symbol;
+			if (isMeaningfulString(params.symbol)) options.symbol = params.symbol;
 			if (params.operation) options.operation = params.operation;
 			if (params.content !== undefined) options.content = normalizeLines(params.content);
-			if (params.patches) options.patches = normalizePatches(params.patches);
-			if (params.edits) options.edits = normalizeEditEntries(params.edits);
-			if (params.mode) options.mode = params.mode;
-			if (command === "navigate" && params.action) {
+			if (hasEntries(params.patches)) options.patches = normalizePatches(params.patches);
+			if (hasEntries(params.edits)) options.edits = normalizeEditEntries(params.edits);
+			if (isMeaningfulString(params.mode)) options.mode = params.mode;
+			if (command === "navigate" && isMeaningfulString(params.action)) {
 				options.action = params.action === "references-local" ? "references" : params.action;
 			}
 

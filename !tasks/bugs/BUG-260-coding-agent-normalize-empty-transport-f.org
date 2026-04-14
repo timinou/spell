@@ -1,0 +1,162 @@
+#+TITLE: coding-agent: normalize empty transport fields in code edits
+#+STATE: DONE
+#+SESSION_ID: 14ba6e5252564ca7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T15-02-32-521Z_14ba6e5252564ca7.jsonl]]
+#+CUSTOM_ID: BUG-260-coding-agent-normalize-empty-transport-f
+#+EFFORT: 90m
+#+PRIORITY: A
+#+LAYER: coding-agent
+
+* Initial Message
+
+The triggering evidence is session =14ba6cc6e0c29d9b= at =~/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-14T14-55-47-587Z_14ba6cc6e0c29d9b.jsonl=.
+
+Observed failures from that session:
+- Repeated =code edit { operation: "create" }= attempts for =test/agentmaker_web/components/layouts_test.exs= failed with:
+  - =operation 'create' does not accept symbol, patches, edits. Use only 'file', 'operation', and 'content'.=
+- Multiple =code edit { operation: "patch" | "replace" }= attempts failed with:
+  - =Edit produced no semantic changes. Non-idempotent mutations must change the file. Retry with idempotent: true only when an intentional no-op is acceptable.=
+- The user then bypassed the tool by instructing the agent to use the plain =write=/=edit= tools directly.
+
+Root-cause evidence already verified in repo + session trace:
+- The captured create payload was not empty and not stream-truncated. It contained full =content= plus transport-default extras like =symbol: ""=, =patches: []=, =edits: []=, =resolution: 0=, =offset: 0=, =limit: 0=.
+- In =packages/coding-agent/src/tools/code.ts=, =validateCreatePayload()= currently rejects those default extras because it checks presence/truthiness rather than semantic meaning.
+- In the same file, =normalizeEditEntries([])= returns =[]= and =options.edits = []= is forwarded because empty arrays are truthy in JS.
+- In =crates/pi-natives/src/code_buffer.rs=, =execute_code_buffer_inner()= branches on =options.get("edits").and_then(Value::as_array)=. An empty =edits: []= array therefore takes the batch-edit path, skips the top-level operation entirely, and returns a clean diff/no-op. This explains the false “no semantic changes” errors for real mutations.
+
+
+- Orchestration plan: [[id:PLAN-231-code-edit-transport-normalization]].
+* Scope
+
+** In scope
+- Normalize transport-default empty values before validation/dispatch for =code= tool edit requests:
+  - empty string fields used as sentinels (for example =symbol: ""=)
+  - empty arrays (notably =patches: []= and =edits: []=)
+  - default numeric zeroes for optional routing fields that use =0= as “unset” in transport wrappers (=resolution=, =offset=, =limit=, =depth=, =line=, =column= where already treated as optional)
+- Preserve strictness for meaningful create misuse: non-empty =symbol=, non-empty =patches=, non-empty =edits=, meaningful line/column/routing fields must still be rejected for =operation: "create"=.
+- Add regression coverage for both failure classes from the captured session:
+  1. create rejected because empty transport defaults were treated as real fields
+  2. patch/replace silently downgraded to no-op because empty =edits: []= shadowed the top-level operation
+- Keep the fix inside Spell’s code-edit stack only: TypeScript tool normalization + native/engine regression coverage as needed.
+
+** Out of scope
+- Changing the public =code= tool contract to accept truly populated unrelated fields on create.
+- Adding broad best-effort coercion that silently drops meaningful user intent.
+- Reworking edit-engine semantics for legitimate no-op edits beyond the specific transport-default shadowing bug.
+- Touching unrelated tools or plan-mode behavior.
+
+* Existing Patterns
+
+- =packages/coding-agent/src/tools/code.ts=
+  - =validateCreatePayload(params, resolvedFile?)= is the current TS-side create guard.
+  - =normalizeLines()=, =normalizePatches()=, =normalizeEditEntries()= already centralize request shaping before NAPI dispatch.
+  - =CodeTool.execute()= builds =CodeBufferOptions= and is the correct place to normalize transport-default empties once.
+- =crates/pi-natives/src/code_buffer.rs=
+  - =validate_create_request(options, path)= is the native create guard.
+  - =single_edit_operation(...)= dispatches top-level edit operations.
+  - =execute_code_buffer_inner(...)= currently prioritizes =edits[]= over top-level =operation=. This behavior is correct only when =edits= is non-empty.
+- =packages/coding-agent/test/tools/code.test.ts=
+  - Existing direct tool tests already cover create rejection and file-local edit dispatch.
+  - Extend this file with captured-payload regressions instead of inventing a parallel test harness.
+- =crates/pi-natives/src/code_buffer.rs= inline Rust unit tests
+  - Existing tests already cover create and edit dispatch at the native layer; extend here for empty-array shadowing if TS-only coverage is insufficient.
+
+* Tests
+
+All user-observable workflows to defend:
+1. Transport-wrapped create request with full =content= plus empty/default extras should create a missing file.
+2. Transport-wrapped patch request with non-empty =patches= plus empty =edits: []= should still apply the top-level patch.
+3. Transport-wrapped whole-file replace request with non-empty =content= plus empty =edits: []= should still replace the file.
+4. True create misuse with meaningful extras must still fail early and say which meaningful fields are forbidden.
+5. Empty/default extras must not reach the native batch-edit branch in a way that converts intended mutations into no-ops.
+
+Concrete test locations and scenarios:
+- =packages/coding-agent/test/tools/code.test.ts=
+  - captured create payload regression: use the exact transport shape from session =14ba6cc6e0c29d9b= (empty =symbol=, empty arrays, zero routing fields, non-empty content) and assert successful create dispatch rather than rejection.
+  - captured patch regression: pass top-level =operation: "patch"= with non-empty patches and =edits: []=, assert the NAPI spy receives top-level patch options and the tool returns an edited diff rather than no-op.
+  - captured replace regression: pass top-level =operation: "replace"= with content and =edits: []=, assert whole-file replacement reaches NAPI and returns an edit.
+  - strict-create regression: non-empty =symbol= or non-empty =edits= on create still produce the create-specific validation error.
+- =crates/pi-natives/src/code_buffer.rs=
+  - if needed, add a unit test proving empty =edits[]= is treated as absent so top-level =operation= still runs.
+  - if needed, add/adjust native create validation tests to confirm only meaningful create extras are rejected after TS normalization assumptions are documented.
+
+Verification commands expected during implementation:
+- =bun test packages/coding-agent/test/tools/code.test.ts=
+- =cargo test -p pi-natives code_buffer=
+- =bun check:ts=
+- =bun check:rs=
+
+* Implementation
+
+** Add captured transport regression tests first
+:PROPERTIES:
+:CUSTOM_ID: BUG-260-coding-agent-normalize-empty-transport-f::tool-regression-tests
+:END:
+- File: =packages/coding-agent/test/tools/code.test.ts=
+- Encode the exact captured transport-default payload shapes from session =14ba6cc6e0c29d9b= before changing implementation.
+- Cover workflows 1-4 from the Tests section.
+- These tests should fail against current behavior.
+
+** Normalize semantically empty edit params before validation and dispatch
+:PROPERTIES:
+:CUSTOM_ID: BUG-260-coding-agent-normalize-empty-transport-f::normalize-tool-params
+:DEPENDS: BUG-260-coding-agent-normalize-empty-transport-f::tool-regression-tests
+:END:
+- File: =packages/coding-agent/src/tools/code.ts=
+- Introduce one normalization pass that converts transport-default empties to absence before both:
+  - create validation
+  - =CodeBufferOptions= construction
+- Important invariants:
+  - =symbol: ""= behaves like missing
+  - =patches: []= and =edits: []= behave like missing
+  - meaningful non-empty values still flow through unchanged
+  - create remains strict for meaningful extras only
+- Do not implement best-effort dropping of populated unrelated fields.
+
+** Harden native empty-edits handling against top-level operation shadowing
+:PROPERTIES:
+:CUSTOM_ID: BUG-260-coding-agent-normalize-empty-transport-f::native-empty-edits-guard
+:DEPENDS: BUG-260-coding-agent-normalize-empty-transport-f::normalize-tool-params
+:END:
+- File: =crates/pi-natives/src/code_buffer.rs=
+- Make the native edit dispatcher treat =edits: []= as absent, not as a batch-edit command.
+- This is defense in depth in case a future caller bypasses TS normalization or another wrapper sends empty arrays again.
+- Preserve the existing rule that non-empty =edits[]= takes precedence and that =create= is top-level only.
+
+** Add native regression coverage for the defense-in-depth path
+:PROPERTIES:
+:CUSTOM_ID: BUG-260-coding-agent-normalize-empty-transport-f::native-regression-tests
+:DEPENDS: BUG-260-coding-agent-normalize-empty-transport-f::native-empty-edits-guard
+:END:
+- File: =crates/pi-natives/src/code_buffer.rs=
+- Add/adjust focused unit tests for empty =edits[]= shadowing and create semantics if not already fully proven by the TypeScript tests.
+- Keep coverage narrow to the transport-default bug; do not expand into unrelated edit-engine behavior.
+
+* Edge Cases
+
+- Empty string vs meaningful string:
+  - =symbol: ""= is transport noise and must be stripped.
+  - =symbol: "main"= is meaningful and must preserve existing behavior.
+- Empty arrays vs populated arrays:
+  - =edits: []= must be treated as absent.
+  - =edits: [{...}]= must continue to trigger batch-edit execution.
+  - =patches: []= must be absent, not an empty patch operation.
+- Zero routing fields:
+  - current tool already treats many zeroes as “unset”; normalization must stay aligned with existing semantics and not accidentally drop meaningful positive values.
+- Defense in depth:
+  - even if TS normalization regresses later, native handling must not silently convert real top-level edits into no-op results merely because =edits: []= is present.
+- Error quality:
+  - create misuse should continue to surface the create-specific message, not fall through to a generic no-op or missing-target error.
+
+* Acceptance Criteria
+
+- The exact create payload shape captured in session =14ba6cc6e0c29d9b= is accepted and creates the target file when the file is missing.
+- Top-level patch/replace payloads from the same captured transport shape no longer return false no-op errors solely because =edits: []= was present.
+- Create still rejects meaningful extras with the existing strict contract.
+- Focused TypeScript regression tests pass.
+- Native regression coverage for empty =edits[]= shadowing passes.
+- =bun check:ts= and =bun check:rs= pass after the implementation.
+
+NOTE [2026-04-14]: Code + regression tests are in place. Verification: bun test packages/coding-agent/test/tools/code.test.ts = PASS; cargo test -p pi-natives code_buffer = PASS; bun check:rs = PASS; bun check:ts = FAIL outside this change because of existing TypeScript errors in packages/coding-agent/src/tools/ast-edit.ts and packages/coding-agent/test/agent-session-resolve-reminder.test.ts. Item stays DOING pending repo-wide TS green.
+
+NOTE [2026-04-14]: Completed via PLAN-231. Transport-default empty code-edit fields now normalize to absence, native empty `edits: []` no longer shadows top-level operations, and focused regressions plus package checks passed.

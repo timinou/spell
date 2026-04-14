@@ -342,6 +342,119 @@ describe("coding-agent code tool wiring", () => {
 		expect(bufferSpy).not.toHaveBeenCalled();
 	});
 
+	it("accepts create payloads with empty transport defaults", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({
+				output: { version: 1, diff: "@@ top-level @@\n+export const created = 1;", editCount: 1, created: true },
+				error: false,
+			})
+			.mockReturnValueOnce({ output: { success: true, version: 1 }, error: false });
+		const tool = new CodeTool(createSession({ settings: Settings.isolated({ "lsp.enabled": false }) }));
+		const result = await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/new-module.ts",
+			operation: "create",
+			content: ["export const created = 1;"],
+			symbol: "",
+			patches: [],
+			edits: [],
+			resolution: 0,
+			offset: 0,
+			limit: 0,
+			depth: 0,
+			line: 0,
+			column: 0,
+			mode: "",
+			action: "",
+		});
+
+		expect(getText(result)).toContain("Created src/new-module.ts");
+		const editCall = bufferSpy.mock.calls[0]?.[0];
+		expect(editCall).toMatchObject({
+			command: "edit",
+			file: "/tmp/test/src/new-module.ts",
+			operation: "create",
+			content: "export const created = 1;",
+		});
+		expect(editCall).not.toHaveProperty("symbol");
+		expect(editCall).not.toHaveProperty("patches");
+		expect(editCall).not.toHaveProperty("edits");
+		expect(editCall).not.toHaveProperty("resolution");
+		expect(editCall).not.toHaveProperty("offset");
+		expect(editCall).not.toHaveProperty("limit");
+		expect(editCall).not.toHaveProperty("line");
+		expect(editCall).not.toHaveProperty("column");
+		expect(editCall).not.toHaveProperty("mode");
+		expect(editCall).not.toHaveProperty("action");
+	});
+
+	it("routes top-level patch edits when transport sends edits as an empty array", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: [], error: false })
+			.mockReturnValueOnce({ output: { version: 2, diff: "@@ patch @@\n-old\n+new", editCount: 1 }, error: false })
+			.mockReturnValueOnce({ output: { success: true, version: 2 }, error: false });
+		const tool = new CodeTool(createSession({ settings: Settings.isolated({ "lsp.enabled": false }) }));
+
+		const result = await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			symbol: "main",
+			operation: "patch",
+			patches: [{ find: "old", replace: "new" }],
+			edits: [],
+		});
+
+		expect(getText(result)).toContain("Edited src/main.ts");
+		expect(bufferSpy.mock.calls[1]?.[0]).toMatchObject({
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			symbol: "main",
+			operation: "patch",
+			patches: [{ find: "old", replace: "new" }],
+		});
+		expect(bufferSpy.mock.calls[1]?.[0]).not.toHaveProperty("edits");
+	});
+
+	it("routes whole-file replace edits when transport sends edits as an empty array", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: [], error: false })
+			.mockReturnValueOnce({ output: { version: 2, diff: "@@ replace @@\n-old\n+new", editCount: 1 }, error: false })
+			.mockReturnValueOnce({ output: { success: true, version: 2 }, error: false });
+		const tool = new CodeTool(createSession({ settings: Settings.isolated({ "lsp.enabled": false }) }));
+
+		const result = await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			operation: "replace",
+			content: ["export const replaced = 2;"],
+			edits: [],
+		});
+
+		expect(getText(result)).toContain("Edited src/main.ts");
+		expect(bufferSpy.mock.calls[1]?.[0]).toMatchObject({
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			operation: "replace",
+			content: "export const replaced = 2;",
+		});
+		expect(bufferSpy.mock.calls[1]?.[0]).not.toHaveProperty("edits");
+	});
+
+	it("still rejects create payloads with meaningful edits", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({ output: [], error: false });
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/new-module.ts",
+			operation: "create",
+			content: ["export const created = 1;"],
+			edits: [{ line: 1, operation: "insert-after", content: ["export const created = 1;"] }],
+		});
+
+		expect(getText(result)).toContain("operation 'create' does not accept edits");
+		expect(bufferSpy).not.toHaveBeenCalled();
+	});
+
 	it("joins array content for replace-body edits before invoking NAPI", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
 			.mockReturnValueOnce({ output: [], error: false })
