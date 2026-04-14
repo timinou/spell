@@ -1,0 +1,133 @@
+#+TITLE: CODE_TOOL_EDIT_RELIABILITY_AND_ELIXIR_SYMBOL_CONTRACT
+#+STATE: DONE
+#+SESSION_ID: 14ba808e59ae3495
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T16-22-12-582Z_14ba808e59ae3495.jsonl]]
+#+CUSTOM_ID: PLAN-232-code-tool-edit-reliability-and-elixir-sy
+
+* Initial Message
+
+Good, no errors. Now let me improve the TestChat module to actually use the draft overlay resolution via the registry:
+
+
+ Code
+ GenericFailure, buffer error: line out of range
+
+
+
+ Code
+ GenericFailure, edit error: Symbol 'Agentmaker.AgentConfig.TestChat' must be a name or Container.member (at most 2
+ levels)
+
+
+
+ Code
+ GenericFailure, edit error: Symbol 'TestChat' not found. Available: [Agentmaker.AgentConfig.TestChat]
+
+
+
+ Code
+ GenericFailure, buffer error: line out of range
+
+
+
+ Code
+ ┌─── ✔ Code save ──────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Saved lib/agentmaker/agent_config/test_chat.ex (buffer version 0).                                                   │
+ └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Code
+ GenericFailure, buffer error: line out of range
+
+
+
+Trace these messages using jq here:
+
+/home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-14T16-08-31-282Z_14ba7d6c4c924699.jsonl
+ ID: 14ba7d6c4c924699
+
+
+and explain what's happening.
+
+* Context
+
+** Problem
+The traced session =14ba7d6c4c924699= exposed two hard correctness failures in the =code= tool path and one operator-trust gap around edit lifecycle reporting:
+1. whole-file =operation: "replace"= on an existing supported file failed with ="buffer error: line out of range"= despite the file being readable,
+2. Elixir edit symbol discovery exposed =Agentmaker.AgentConfig.TestChat=, but the same symbol was rejected by edit validation,
+3. the surrounding edit/save lifecycle allowed a transcript story of repeated failures followed by =Saved ... (buffer version 0)=, which is technically possible but operationally easy to misread as progress.
+
+** Settled decisions
+1. Fix whole-file replace generically across supported languages; do not ship an Elixir-only workaround.
+2. The accepted Elixir edit symbol is the exact fully-qualified module name reported by =outline= / =read=.
+3. No short-name aliasing such as =TestChat=.
+4. TDD is required: regression tests must be written first in the implementation session.
+5. Regression scope includes adjacent edit lifecycle truthfulness around failure/save/version semantics, not just the two primary failures.
+6. Use the traced session only as context/evidence; do not create a separate spec artifact.
+
+** Critical files
+- =packages/coding-agent/src/tools/code.ts=
+- =packages/coding-agent/src/tools/code-result.ts=
+- =packages/coding-agent/test/tools/code.test.ts=
+- =packages/coding-agent/test/tools/code-result.test.ts=
+- =crates/pi-code-engine/src/line_target.rs=
+- =crates/pi-code-engine/src/resolve.rs=
+- =crates/pi-code-engine/src/language/mod.rs=
+- exact native edit-dispatch / symbol-validation files to be confirmed during TDD tracing
+
+** Child items
+- [[id:BUG-261-fix-generic-whole-file-replace-path-in-c]]
+- [[id:BUG-262-accept-fully-qualified-elixir-module-nam]]
+- [[id:BUG-263-harden-code-edit-regressions-around-save]]
+
+* Verification
+
+** Focused tests
+- =bun test packages/coding-agent/test/tools/code.test.ts=
+- =bun test packages/coding-agent/test/tools/code-result.test.ts=
+- targeted Rust/native tests for the edit-dispatch and symbol-resolution changes in the exact files touched
+
+** Manual repro checks
+- Whole-file replace repro: existing supported file, =command: "edit"=, =operation: "replace"=, omit =symbol= and =line= → succeeds, no line-range error
+- Elixir symbol repro: top-level =defmodule Agentmaker.AgentConfig.TestChat= resolved by =outline= / =read= → same exact symbol accepted by edit path
+- Failure/save lifecycle repro: failed edit followed by save remains distinguishable from a persisted edit in result metadata/text
+
+** Exit conditions
+- No child item body contradicts the settled decisions above
+- Regression tests are enumerated first and implementation steps depend on them
+- Execution waves follow explicit item dependencies: BUG-263 after BUG-261 + BUG-262
+
+* Execution Manifest
+
+** :wave: 1 — root-cause fixes (parallel)
+- [[id:BUG-261-fix-generic-whole-file-replace-path-in-c][BUG-261 — Fix generic whole-file replace path in code tool]]
+- [[id:BUG-262-accept-fully-qualified-elixir-module-nam][BUG-262 — Accept fully-qualified Elixir module names in code edit]]
+
+Both are independent root-cause fixes and both are prerequisites for the lifecycle hardening pass.
+
+** :wave: 2 — lifecycle hardening + transcript truthfulness
+- [[id:BUG-263-harden-code-edit-regressions-around-save][BUG-263 — Harden code edit regressions around save, buffer, and version semantics]]
+
+This wave depends on Wave 1 because it re-verifies the full edit story after the root-cause fixes land.
+
+** Completion [2026-04-14]
+*** Verification
+- `bun --cwd=packages/natives run build:native` → rebuilt release addon used by fresh Bun processes for runtime verification.
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts` → 55 pass, 0 fail.
+- `cargo test -p pi-natives execute_code_buffer_inner_clears_failed_multi_edit_state -- --nocapture` → pass.
+- `cargo test -p pi-natives single_edit_operation_accepts_fully_qualified_elixir_module_symbols -- --nocapture` → pass.
+- `cargo test -p pi-natives single_edit_operation_rejects_short_elixir_aliases_when_only_fq_module_exists -- --nocapture` → pass.
+- `cargo test -p pi-code-engine resolve_elixir_module -- --nocapture` → pass.
+- `cargo test -p pi-code-engine resolve_elixir_missing_module -- --nocapture` → pass.
+- Fresh-process manual repro via `bun -e`:
+  - whole-file `operation: "replace"` without `symbol`/`line` succeeded and saved `export const replaced = 2;` with no line-range error,
+  - exact Elixir symbol `Agentmaker.AgentConfig.TestChat` was accepted and replaced successfully,
+  - failed edit returned an edit error while a subsequent explicit save returned `Saved ... (buffer version 0)` with save metadata, keeping the outcomes distinguishable.
+*** Artifacts
+- Manual repro log: [[file:!tasks/plans/plan-artifacts/PLAN-232-code-tool-edit-reliability-and-elixir-sy/manual-repros.json]]
+- Child items closed in this execution: [[id:BUG-261-fix-generic-whole-file-replace-path-in-c]], [[id:BUG-262-accept-fully-qualified-elixir-module-nam]], [[id:BUG-263-harden-code-edit-regressions-around-save]]
+*** Deviations
+- Current repository source already contained the generic whole-file replace and Elixir resolver behavior described by BUG-261/BUG-262; execution added regression coverage, rebuilt the release addon for runtime parity, and fixed the adjacent failed multi-edit dirty-buffer regression required for the focused verification file.
+
+NOTE [2026-04-14]: Execution complete. Verified focused TS/native tests and fresh-process manual repros; completion report appended with artifact link.

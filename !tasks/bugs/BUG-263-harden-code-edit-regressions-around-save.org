@@ -1,0 +1,149 @@
+#+TITLE: Harden code edit regressions around save buffer and version semantics
+#+STATE: DONE
+#+SESSION_ID: 14ba808e59ae3495
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T16-22-12-582Z_14ba808e59ae3495.jsonl]]
+#+CUSTOM_ID: BUG-263-harden-code-edit-regressions-around-save
+#+EFFORT: 3h
+#+DEPENDS: BUG-261-fix-generic-whole-file-replace-path-in-c BUG-262-accept-fully-qualified-elixir-module-nam
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+* Initial Message
+
+Good, no errors. Now let me improve the TestChat module to actually use the draft overlay resolution via the registry:
+
+
+ Code
+ GenericFailure, buffer error: line out of range
+
+
+
+ Code
+ GenericFailure, edit error: Symbol 'Agentmaker.AgentConfig.TestChat' must be a name or Container.member (at most 2
+ levels)
+
+
+
+ Code
+ GenericFailure, edit error: Symbol 'TestChat' not found. Available: [Agentmaker.AgentConfig.TestChat]
+
+
+
+ Code
+ GenericFailure, buffer error: line out of range
+
+
+
+ Code
+ ┌─── ✔ Code save ──────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Saved lib/agentmaker/agent_config/test_chat.ex (buffer version 0).                                                   │
+ └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Code
+ GenericFailure, buffer error: line out of range
+
+
+
+Trace these messages using jq here:
+
+/home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-14T16-08-31-282Z_14ba7d6c4c924699.jsonl
+ ID: 14ba7d6c4c924699
+
+
+and explain what's happening.
+
+* Scope
+
+*In scope*: Expand regression coverage around the =code= edit lifecycle so the tool tells the truth before and after failures. This item is specifically about edit-path observability and persistence semantics: failed edits must stay failed, successful edits must report persistence truthfully, and follow-on save/version behavior must not mask a broken mutation path.
+
+*Out of scope*: The root-cause fixes for whole-file replace targeting and fully-qualified Elixir symbol validation. Those are handled by sibling bug items and are inputs to this regression-hardening work.
+
+*Why separate this*: The traced session showed a dangerous operator experience pattern:
+- repeated edit failures,
+- then =Saved ... (buffer version 0)=,
+- then fallback to raw =write=,
+- with the conversational narration incorrectly treating the save as progress.
+
+The save message itself may be technically truthful, but the surrounding edit-path contract needs explicit regression coverage so failed mutations cannot be mistaken for successful cutover.
+
+* Existing Patterns
+
+Primary files:
+- =packages/coding-agent/src/tools/code.ts= — error/result rendering, mutation metadata, persistence flags, auto-save lifecycle
+- =packages/coding-agent/src/tools/code-result.ts= — compact result shaping / textual contract
+- =packages/coding-agent/test/tools/code.test.ts= — existing whole-file replace, replace-body, stale-buffer, no-op, and persistence tests
+- =packages/coding-agent/test/tools/code-result.test.ts= — result rendering contract where needed
+
+Observed repo facts to preserve:
+- =code.ts= already distinguishes =mutationState: "applied"= and =persisted: true= on successful edits
+- freshness checks can block edits before mutation
+- no-op edits already have explicit handling in =code.ts=
+- successful replace operations auto-save; create has distinct freshness behavior
+
+* Tests
+
+Enumerate workflows first.
+
+*Workflow 1 — failed edit never reports persisted mutation*
+- File: =packages/coding-agent/test/tools/code.test.ts=
+- Scenario: native edit call returns an error for a mutation command
+- Assert: result details are error-kind, =persisted= is absent/false, and no synthetic success text is emitted
+
+*Workflow 2 — successful edit reports applied + persisted exactly once*
+- File: =packages/coding-agent/test/tools/code.test.ts=
+- Scenario: successful whole-file replace and successful symbol-targeted edit
+- Assert: mutation state is applied, save is invoked once, and result text reflects edited file
+
+*Workflow 3 — explicit save on a clean buffer stays recognizable as a no-op save*
+- File: =packages/coding-agent/test/tools/code.test.ts= and/or result tests if message shaping changes
+- Scenario: invoke =code save= with unchanged buffer state (=version 0= or equivalent clean state)
+- Assert: the result does not imply that a prior failed edit succeeded; if the text remains minimal, the metadata must still allow the caller/UI to distinguish clean save from applied edit
+
+*Workflow 4 — failed edit followed by save does not blur history in transcript-facing output*
+- Files: =packages/coding-agent/test/tools/code.test.ts= and =packages/coding-agent/test/tools/code-result.test.ts= if rendering changes are needed
+- Scenario: failed edit result followed by successful save on clean buffer
+- Assert: the rendered/result contract remains truthful and distinguishable to a transcript consumer
+
+** Add failing regression tests for edit lifecycle truthfulness
+:PROPERTIES:
+:CUSTOM_ID: BUG-263-harden-code-edit-regressions-around-save::edit-lifecycle-tests
+:DEPENDS: BUG-261-fix-generic-whole-file-replace-path-in-c::verify-save-lifecycle BUG-262-accept-fully-qualified-elixir-module-nam::align-symbol-contract
+:END:
+- Files: =packages/coding-agent/test/tools/code.test.ts= and =packages/coding-agent/test/tools/code-result.test.ts= if message-shaping assertions are needed
+- Add the four workflows above as initially failing tests before implementation adjustments
+- Reuse existing test helpers and native spies instead of inventing a parallel harness
+
+** Tighten code tool result contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-263-harden-code-edit-regressions-around-save::tighten-result-contract
+:DEPENDS: BUG-263-harden-code-edit-regressions-around-save::edit-lifecycle-tests
+:END:
+- Files: =packages/coding-agent/src/tools/code.ts= and =packages/coding-agent/src/tools/code-result.ts= if necessary
+- Ensure mutation metadata and rendered text stay aligned with reality across success, failure, clean save, and no-op cases
+- Preserve concise output; fix ambiguity, not verbosity
+
+** Re-verify regressions against sibling fixes
+:PROPERTIES:
+:CUSTOM_ID: BUG-263-harden-code-edit-regressions-around-save::reverify-after-root-fixes
+:DEPENDS: BUG-263-harden-code-edit-regressions-around-save::tighten-result-contract
+:END:
+- Files: test files only unless small tool-result tweaks are required
+- Re-run the regression matrix after the whole-file replace and fully-qualified Elixir symbol fixes land
+- Confirm the user-facing session story cannot regress to repeated hard failures followed by misleading apparent progress
+
+* Edge Cases
+- No-op edits with =idempotent: true= must remain distinguishable from failed edits
+- Stale-buffer rejections must remain errors, not partial successes
+- Clean save after successful edit must still be representable if a caller explicitly invokes save again
+- Compact result rendering must remain safe for transcript rebuild paths and not drop the fields needed to interpret mutation state
+
+* Acceptance Criteria
+- [ ] Failed edit results cannot be mistaken for persisted edits in tool details or rendered text
+- [ ] Successful edits still report applied + persisted once and auto-save exactly once
+- [ ] Clean save is distinguishable from edit success in the result contract
+- [ ] Regression tests covering failed-edit → save sequencing exist and pass
+- [ ] Verification: focused code tool/result tests prove the transcript-visible mutation story stays truthful
+
+NOTE [2026-04-14]: Added failed-edit/save truthfulness regressions and fixed failed multi-edit cleanup so follow-up edits no longer hit stale-buffer freshness errors. Manual repro confirms error result and clean save remain distinguishable.

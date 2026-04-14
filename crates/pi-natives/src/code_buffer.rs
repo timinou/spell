@@ -368,6 +368,37 @@ fn single_edit_operation(
 		},
 	}
 }
+fn apply_edit_entries_transactionally(
+	buffer: &mut CodeBuffer,
+	profile: &LanguageProfile,
+	edits: &[Value],
+) -> Result<usize> {
+	if edits
+		.iter()
+		.any(|edit| edit.get("operation").and_then(Value::as_str) == Some("create"))
+	{
+		return Err(json_err(
+			"operation 'create' is top-level only. Remove it from 'edits' and pass 'content' at the \
+			 top level.",
+		));
+	}
+
+	let before = buffer.source();
+	let mut staged = CodeBuffer::from_str(&before, buffer.language().clone(), language_registry())
+		.map_err(engine_err)?;
+	for edit in edits {
+		let text_edits = single_edit_operation(&staged, profile, edit)?;
+		staged.edit_batch(text_edits).map_err(engine_err)?;
+	}
+	buffer
+		.edit_batch(vec![TextEdit {
+			start_byte:   0,
+			old_end_byte: before.len(),
+			new_text:     staged.source(),
+		}])
+		.map_err(engine_err)?;
+	Ok(edits.len())
+}
 
 /// Find the enclosing symbol for a given line in the outline.
 fn find_enclosing_symbol(entries: &[OutlineEntry], line: u32) -> Option<String> {
@@ -528,20 +559,7 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 						.and_then(Value::as_array)
 						.filter(|edits| !edits.is_empty())
 					{
-						if edits
-							.iter()
-							.any(|edit| edit.get("operation").and_then(Value::as_str) == Some("create"))
-						{
-							return Err(json_err(
-								"operation 'create' is top-level only. Remove it from 'edits' and pass \
-								 'content' at the top level.",
-							));
-						}
-						for edit in edits {
-							let text_edits = single_edit_operation(&buffer, &profile, edit)?;
-							buffer.edit_batch(text_edits).map_err(engine_err)?;
-						}
-						edits.len()
+						apply_edit_entries_transactionally(&mut buffer, &profile, edits)?
 					} else {
 						let text_edits = single_edit_operation(&buffer, &profile, options)?;
 						buffer.edit_batch(text_edits).map_err(engine_err)?;
@@ -663,6 +681,22 @@ mod tests {
 			.clone()
 	}
 
+	fn elixir_buffer() -> CodeBuffer {
+		CodeBuffer::from_str(
+			"defmodule Agentmaker.AgentConfig.TestChat do\n  def render(), do: :ok\nend\n",
+			LanguageId::new("elixir"),
+			registry_for_tests(),
+		)
+		.expect("elixir buffer")
+	}
+
+	fn elixir_profile() -> LanguageProfile {
+		registry_for_tests()
+			.get(&LanguageId::new("elixir"))
+			.expect("elixir profile")
+			.clone()
+	}
+
 	fn temp_path(name: &str) -> PathBuf {
 		let stamp = SystemTime::now()
 			.duration_since(UNIX_EPOCH)
@@ -740,6 +774,67 @@ mod tests {
 		.expect("save");
 		assert_eq!(save["error"], json!(false));
 		assert_eq!(fs::read_to_string(&path).expect("saved file"), "export const replaced = 2;\n");
+	}
+
+	#[test]
+	fn execute_code_buffer_inner_clears_failed_multi_edit_state() {
+		let path = temp_path("failed-multi-edit.ts");
+		fs::write(&path, "export function main() {\n  return oldCall();\n}\n").expect("seed file");
+
+		let failed = execute_code_buffer_inner(&json!({
+			"command": "edit",
+			"file": path.display().to_string(),
+			"edits": [
+				{
+					"symbol": "main",
+					"operation": "patch",
+					"patches": [{ "find": "return oldCall();", "replace": "return newCall();" }]
+				},
+				{
+					"symbol": "missing",
+					"operation": "patch",
+					"patches": [{ "find": "return oldCall();", "replace": "return shouldNotApply();" }]
+				}
+			]
+		}))
+		.expect_err("failed multi edit");
+		assert!(failed.to_string().contains("Symbol 'missing' not found"));
+
+		let listed =
+			execute_code_buffer_inner(&json!({ "command": "list" })).expect("list after fail");
+		let retained = listed["output"]
+			.as_array()
+			.expect("buffer list")
+			.iter()
+			.find(|buffer| buffer["path"] == json!(path.display().to_string()));
+		assert!(
+			retained.is_none()
+				|| (retained.is_some_and(
+					|buffer| buffer["dirty"] == json!(false) && buffer["version"] == json!(0)
+				)),
+			"failed multi-edit should not leave a dirty staged buffer behind: {listed}",
+		);
+
+		let follow_up = execute_code_buffer_inner(&json!({
+			"command": "edit",
+			"file": path.display().to_string(),
+			"symbol": "main",
+			"operation": "patch",
+			"patches": [{ "find": "return oldCall();", "replace": "return finalCall();" }]
+		}))
+		.expect("follow-up edit");
+		assert_eq!(follow_up["error"], json!(false));
+		let save = execute_code_buffer_inner(&json!({
+			"command": "save",
+			"file": path.display().to_string(),
+		}))
+		.expect("save follow-up");
+		assert_eq!(save["error"], json!(false));
+		assert!(
+			fs::read_to_string(&path)
+				.expect("saved file")
+				.contains("return finalCall();")
+		);
 	}
 
 	#[test]
@@ -821,6 +916,37 @@ mod tests {
 		assert_eq!(edits[0].start_byte, 0);
 		assert_ne!(edits[0].old_end_byte, buffer.source().len());
 		assert_eq!(edits[0].new_text, "const replaced = true;\n");
+	}
+
+	#[test]
+	fn single_edit_operation_accepts_fully_qualified_elixir_module_symbols() {
+		let buffer = elixir_buffer();
+		let profile = elixir_profile();
+		let options = json!({
+			"operation": "replace",
+			"symbol": "Agentmaker.AgentConfig.TestChat",
+			"content": "defmodule Agentmaker.AgentConfig.TestChat do\n  def render(), do: :updated\nend\n"
+		});
+		let edits = single_edit_operation(&buffer, &profile, &options).expect("elixir replace");
+		assert_eq!(edits.len(), 1);
+		assert_eq!(edits[0].start_byte, 0);
+		assert!(edits[0].old_end_byte >= buffer.source().trim_end().len());
+	}
+
+	#[test]
+	fn single_edit_operation_rejects_short_elixir_aliases_when_only_fq_module_exists() {
+		let buffer = elixir_buffer();
+		let profile = elixir_profile();
+		let options = json!({
+			"operation": "replace",
+			"symbol": "TestChat",
+			"content": "defmodule TestChat do\nend\n"
+		});
+		let error =
+			single_edit_operation(&buffer, &profile, &options).expect_err("short alias should fail");
+		let message = error.to_string();
+		assert!(message.contains("Symbol 'TestChat' not found"));
+		assert!(message.contains("Agentmaker.AgentConfig.TestChat"));
 	}
 
 	#[test]
