@@ -14,7 +14,6 @@ import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, t
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
 import type { OutputMeta } from "./output-meta";
-import { applyPendingAction } from "./pending-action";
 import {
 	combineSearchGlobs,
 	hasGlobPathChars,
@@ -23,6 +22,7 @@ import {
 	resolveMultiSearchPath,
 	resolveToCwd,
 } from "./path-utils";
+import { applyPendingAction, type PendingAction } from "./pending-action";
 import {
 	dedupeParseErrors,
 	formatCount,
@@ -300,7 +300,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 			if (!result.applied && result.totalReplacements > 0) {
 				const previewReplacementPlural = result.totalReplacements !== 1 ? "s" : "";
 				const previewFilePlural = result.filesTouched !== 1 ? "s" : "";
-				const previewAction = {
+				const previewAction: PendingAction = {
 					label: `AST Edit: ${result.totalReplacements} replacement${previewReplacementPlural} in ${result.filesTouched} file${previewFilePlural}`,
 					sourceToolName: this.name,
 					files: [...touchedAbsoluteFiles],

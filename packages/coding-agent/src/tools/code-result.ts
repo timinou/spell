@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { buildCompactHashlineDiffPreview } from "../patch/hashline";
-import type { MutationState } from "./pending-action";
 import type { OutputMeta } from "./output-meta";
+import type { MutationState } from "./pending-action";
 
 export type CodeGraphCommand =
 	| "index"
