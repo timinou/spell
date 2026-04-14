@@ -105,7 +105,14 @@ function parseKeywordQuery(input: string): OrgQueryFilter {
 	return filter;
 }
 
-const STATE_ORDER: Record<string, number> = { INIT: 0, DOING: 1, REVIEW: 2, ITEM: 3, BLOCKED: 4, DONE: 5 };
+const STATE_ORDER: Record<string, number> = {
+	INIT: 0,
+	DOING: 1,
+	REVIEW: 2,
+	ITEM: 3,
+	BLOCKED: 4,
+	DONE: 5,
+};
 
 interface ReadOrgFileOptions {
 	filePath: string;
@@ -116,13 +123,6 @@ interface ReadOrgFileOptions {
 }
 
 async function readOrgFile(opts: ReadOrgFileOptions): Promise<OrgItem[]> {
-	try {
-		await fs.stat(opts.filePath);
-	} catch (err) {
-		if (isEnoent(err)) return [];
-		throw err;
-	}
-
 	const result = executeOrg({
 		command: "parse",
 		file: opts.filePath,
@@ -253,7 +253,11 @@ async function initCategoryDir(categoryAbsPath: string, prefix: string, todoKeyw
 async function fetchItem(ctx: OrgContext, id: string): Promise<OrgItem | undefined> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 	return findItemById(
-		categories.map(c => ({ absPath: c.absPath, name: c.name, dir: c.dirName })),
+		categories.map(c => ({
+			absPath: c.absPath,
+			name: c.name,
+			dir: c.dirName,
+		})),
 		id,
 		ctx.config.todoKeywords,
 	);
@@ -265,14 +269,22 @@ async function cmdInit(ctx: OrgContext, args: { category?: string }): Promise<un
 		? ([findCategory(categories, args.category)].filter(Boolean) as typeof categories)
 		: categories;
 	if (targets.length === 0) return { error: true, message: `Category not found: ${args.category}` };
-	const results: Array<{ category: string; absPath: string; created: boolean }> = [];
+	const results: Array<{
+		category: string;
+		absPath: string;
+		created: boolean;
+	}> = [];
 	for (const cat of targets) {
 		const existed = await fs
 			.stat(cat.absPath)
 			.then(() => true)
 			.catch(() => false);
 		await initCategoryDir(cat.absPath, cat.prefix, ctx.config.todoKeywords);
-		results.push({ category: cat.name, absPath: cat.absPath, created: !existed });
+		results.push({
+			category: cat.name,
+			absPath: cat.absPath,
+			created: !existed,
+		});
 	}
 	return { success: true, initialized: results };
 }
@@ -300,11 +312,14 @@ async function cmdCreate(
 	}
 	const state = args.state ?? ctx.config.todoKeywords[0] ?? "ITEM";
 	if (!ctx.config.todoKeywords.includes(state)) {
-		return { error: true, message: `Unknown state: "${state}". Valid: ${ctx.config.todoKeywords.join(", ")}` };
+		return {
+			error: true,
+			message: `Unknown state: "${state}". Valid: ${ctx.config.todoKeywords.join(", ")}`,
+		};
 	}
 	await fs.mkdir(cat.absPath, { recursive: true });
 	const session = cat.writeInitialPrompt ? (ctx.getSessionContext?.() as OrgSessionContext | undefined) : undefined;
-	const { id, filePath, body } = await createCategoryMutex.withLock(cat.absPath, async () => {
+	const { id, filePath } = await createCategoryMutex.withLock(cat.absPath, async () => {
 		const id = await generateId(cat.absPath, cat.prefix, args.title);
 		const fileName = args.file ? (args.file.endsWith(".org") ? args.file : `${args.file}.org`) : `${id}.org`;
 		const filePath = path.join(cat.absPath, fileName);
@@ -322,15 +337,30 @@ async function cmdCreate(
 			initialMessage: session?.initialMessage,
 		});
 		if (result.error) throw new Error(String(result.output));
-		return { id, filePath, body: rewrittenBody };
+		return { id, filePath };
 	});
+	const createdItem = args.body === undefined ? undefined : await fetchItem(ctx, id);
 	logger.debug("org:create", { id, filePath, category: cat.name });
-	return { success: true, id, file: filePath, category: cat.name, state, body, bodyLength: body?.length };
+	return {
+		success: true,
+		id,
+		file: filePath,
+		category: cat.name,
+		state,
+		body: createdItem?.body,
+		bodyLength: createdItem ? (createdItem.body ?? "").length : undefined,
+	};
 }
 
 async function cmdQuery(
 	ctx: OrgContext,
-	filter: OrgQueryFilter & { query?: string; ql?: string; sort?: string; limit?: number; offset?: number },
+	filter: OrgQueryFilter & {
+		query?: string;
+		ql?: string;
+		sort?: string;
+		limit?: number;
+		offset?: number;
+	},
 ): Promise<unknown> {
 	if (filter.ql) return { error: true, message: "raw sexp queries are no longer supported" };
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
@@ -372,9 +402,11 @@ async function cmdGet(ctx: OrgContext, args: { id: string }): Promise<unknown> {
 	if (category) {
 		const subOutline = parseSubOutlineId(args.id);
 		const fileBaseName = subOutline ? subOutline.parentId : args.id;
+		const filePath = path.join(category.absPath, `${fileBaseName}.org`);
 		try {
+			await fs.stat(filePath);
 			const items = await readOrgFile({
-				filePath: path.join(category.absPath, `${fileBaseName}.org`),
+				filePath,
 				category: category.name,
 				dir: category.dirName,
 				todoKeywords: ctx.config.todoKeywords,
@@ -387,7 +419,11 @@ async function cmdGet(ctx: OrgContext, args: { id: string }): Promise<unknown> {
 		}
 	}
 	const item = await findItemById(
-		categories.map(c => ({ absPath: c.absPath, name: c.name, dir: c.dirName })),
+		categories.map(c => ({
+			absPath: c.absPath,
+			name: c.name,
+			dir: c.dirName,
+		})),
 		args.id,
 		ctx.config.todoKeywords,
 	);
@@ -410,14 +446,23 @@ async function cmdUpdate(
 ): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 	if (args.state && !ctx.config.todoKeywords.includes(args.state)) {
-		return { error: true, message: `Unknown state: "${args.state}". Valid: ${ctx.config.todoKeywords.join(", ")}` };
+		return {
+			error: true,
+			message: `Unknown state: "${args.state}". Valid: ${ctx.config.todoKeywords.join(", ")}`,
+		};
 	}
 	if (args.section !== undefined) {
 		if ((args.body === undefined) === (args.append === undefined)) {
-			return { error: true, message: "update with section requires exactly one of: body, append" };
+			return {
+				error: true,
+				message: "update with section requires exactly one of: body, append",
+			};
 		}
 		if (args.state !== undefined || args.title !== undefined || args.note !== undefined) {
-			return { error: true, message: "update with section cannot combine state, title, or note" };
+			return {
+				error: true,
+				message: "update with section cannot combine state, title, or note",
+			};
 		}
 		const mode = args.body !== undefined ? "replace" : "append";
 		const body = args.body ?? args.append ?? "";
@@ -437,7 +482,11 @@ async function cmdUpdate(
 				return null;
 			}
 			if (result.error) return null;
-			logger.debug("org:update", { id: args.id, section: args.section, file: filePath });
+			logger.debug("org:update", {
+				id: args.id,
+				section: args.section,
+				file: filePath,
+			});
 			return {
 				success: true,
 				id: args.id,
@@ -451,7 +500,12 @@ async function cmdUpdate(
 			if (direct) return direct;
 		}
 		const item = await fetchItem(ctx, args.id);
-		if (!item) return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
+		if (!item)
+			return {
+				error: true,
+				code: "NOT_FOUND",
+				message: `Item not found: ${args.id}`,
+			};
 		return (
 			(await trySectionUpdate(item.file)) ?? {
 				error: true,
@@ -461,7 +515,10 @@ async function cmdUpdate(
 		);
 	}
 	if (!args.state && args.body === undefined && args.append === undefined && !args.title && !args.note) {
-		return { error: true, message: "update requires at least one of: state, body, append, title" };
+		return {
+			error: true,
+			message: "update requires at least one of: state, body, append, title",
+		};
 	}
 	const rewrittenBody = args.body === undefined ? undefined : rewriteSubOutlineIds(args.id, args.body).body;
 	const tryUpdate = async (filePath: string): Promise<Record<string, unknown> | null> => {
@@ -489,8 +546,7 @@ async function cmdUpdate(
 			filePath,
 			args.includeBody,
 			ctx,
-			undefined,
-			args.body !== undefined ? { includeBodyText: true } : args.append !== undefined ? {} : undefined,
+			args.body !== undefined ? "full" : args.append !== undefined ? "length" : undefined,
 		);
 	};
 	if (args.file) {
@@ -510,7 +566,11 @@ async function cmdUpdate(
 			if (response) return response;
 		}
 	}
-	return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
+	return {
+		error: true,
+		code: "NOT_FOUND",
+		message: `Item not found: ${args.id}`,
+	};
 }
 
 async function buildMutationResponse(
@@ -519,23 +579,32 @@ async function buildMutationResponse(
 	file: string,
 	includeBody: boolean | undefined,
 	ctx: OrgContext,
-	extra?: Record<string, unknown>,
-	bodyResponse?: { includeBodyText?: boolean },
+	bodyResponse?: "full" | "length",
 ): Promise<Record<string, unknown>> {
-	const response: Record<string, unknown> = { success: true, id, updated, file, ...extra };
+	const response: Record<string, unknown> = {
+		success: true,
+		id,
+		updated,
+		file,
+	};
 	const item = includeBody || bodyResponse ? await fetchItem(ctx, id) : undefined;
 	if (includeBody) response.item = item;
 	if (bodyResponse) {
-		const finalBody = item?.body ?? "";
-		response.bodyLength = finalBody.length;
-		if (bodyResponse.includeBodyText) response.body = finalBody;
+		if (bodyResponse === "full") response.body = item?.body;
+		response.bodyLength = (item?.body ?? "").length;
 	}
 	return response;
 }
 
 async function cmdSet(
 	ctx: OrgContext,
-	args: { id: string; property: string; value: string; file?: string; includeBody?: boolean },
+	args: {
+		id: string;
+		property: string;
+		value: string;
+		file?: string;
+		includeBody?: boolean;
+	},
 ): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 	const trySet = async (filePath: string): Promise<Record<string, unknown> | null> => {
@@ -579,7 +648,11 @@ async function cmdSet(
 			if (response) return response;
 		}
 	}
-	return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
+	return {
+		error: true,
+		code: "NOT_FOUND",
+		message: `Item not found: ${args.id}`,
+	};
 }
 
 async function cmdNote(
@@ -620,7 +693,11 @@ async function cmdNote(
 			if (response) return response;
 		}
 	}
-	return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
+	return {
+		error: true,
+		code: "NOT_FOUND",
+		message: `Item not found: ${args.id}`,
+	};
 }
 
 async function cmdDelete(ctx: OrgContext, args: { id: string; file?: string }): Promise<unknown> {
@@ -641,9 +718,17 @@ async function cmdDelete(ctx: OrgContext, args: { id: string; file?: string }): 
 	};
 
 	const item = (args.file ? await tryResolveItem(args.file) : undefined) ?? (await fetchItem(ctx, args.id));
-	if (!item) return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
+	if (!item)
+		return {
+			error: true,
+			code: "NOT_FOUND",
+			message: `Item not found: ${args.id}`,
+		};
 	if (item.state === "DOING" || item.state === "REVIEW") {
-		return { error: true, message: `Cannot delete active item ${args.id} while it is ${item.state}` };
+		return {
+			error: true,
+			message: `Cannot delete active item ${args.id} while it is ${item.state}`,
+		};
 	}
 
 	await fs.unlink(item.file);
@@ -666,9 +751,20 @@ async function cmdDashboard(ctx: OrgContext): Promise<unknown> {
 			if (item.state === "DOING" || item.state === "REVIEW") inProgress.push(item);
 			if (item.state === "BLOCKED") blocked.push(item);
 		}
-		catMetrics.push({ category: cat.name, prefix: cat.prefix, total: topLevelItems.length, byState });
+		catMetrics.push({
+			category: cat.name,
+			prefix: cat.prefix,
+			total: topLevelItems.length,
+			byState,
+		});
 	}
-	return { root: ctx.projectRoot, categories: catMetrics, totals, inProgress, blocked };
+	return {
+		root: ctx.projectRoot,
+		categories: catMetrics,
+		totals,
+		inProgress,
+		blocked,
+	};
 }
 
 async function cmdValidate(ctx: OrgContext, args: { category?: string; file?: string }): Promise<unknown> {
@@ -717,7 +813,10 @@ async function cmdValidate(ctx: OrgContext, args: { category?: string; file?: st
 
 async function cmdValidatePlan(ctx: OrgContext, args: { id: string }): Promise<unknown> {
 	if (!ctx.validatePlan) {
-		return { error: true, message: "validate-plan is not available in this org tool context" };
+		return {
+			error: true,
+			message: "validate-plan is not available in this org tool context",
+		};
 	}
 
 	return ctx.validatePlan(args.id);
@@ -759,10 +858,18 @@ async function cmdWave(
 	args: { file?: string; category?: string; manifest?: boolean },
 ): Promise<unknown> {
 	const items = await collectItems(ctx, args);
-	const raw = executeOrg({ command: args.manifest ? "computeWaves" : "nextWave", items, doneStates: ["DONE"] });
+	const raw = executeOrg({
+		command: args.manifest ? "computeWaves" : "nextWave",
+		items,
+		doneStates: ["DONE"],
+	});
 	if (raw.error) return raw.output;
 	if (args.manifest) {
-		const output = raw.output as { waves?: ComputedWave[]; warnings?: string[]; total_sub_outlines?: number };
+		const output = raw.output as {
+			waves?: ComputedWave[];
+			warnings?: string[];
+			total_sub_outlines?: number;
+		};
 		return {
 			manifest: formatWaveManifest(output.waves ?? []),
 			waves: output.waves ?? [],
@@ -803,7 +910,7 @@ export function createOrgTool(
 	};
 	return {
 		name: "org",
-		description: `Org-mode project management. Subcommands:\n  init        Initialize org directories and category subdirs\n  create      Create a new task item (ID auto-generated)\n  query       List/filter items (state, category, priority, layer, or keyword query)\n  get         Get single item by ID with full body\n  update      Change state, body, title, or append text (any combo in one call)\n  note        Append a dated NOTE entry to an item (no state change)\n  set         Set a single PROPERTIES drawer value\n  validate    Validate items\n  dashboard   Project metrics and in-progress/blocked summary\n  wave        Next wave of ready items by priority\n  graph       Dependency graph\n  archive     Archive DONE items\n`,
+		description: `Org-mode project management. Subcommands:\n  init        Initialize org directories and category subdirs\n  create      Create a new task item (ID auto-generated)\n  query       List/filter items (state, category, priority, layer, or keyword query)\n  get         Get single item by ID with full body\n  update      Change state, body, title, or append text (any combo in one call)\n  note        Append a dated NOTE entry to an item (no state change)\n  set         Set a single PROPERTIES drawer value\n  validate    Validate items\n  delete       Delete an item file\n  validate-plan Validate a plan via injected callback\n  dashboard   Project metrics and in-progress/blocked summary\n  wave        Next wave of ready items by priority\n  graph       Dependency graph\n  archive     Archive DONE items\n`,
 		parameters: {
 			type: "object",
 			properties: {
@@ -818,6 +925,8 @@ export function createOrgTool(
 						"note",
 						"set",
 						"validate",
+						"delete",
+						"validate-plan",
 						"dashboard",
 						"wave",
 						"graph",
@@ -831,7 +940,9 @@ export function createOrgTool(
 			const command = args.command as string;
 			switch (command) {
 				case "init":
-					return cmdInit(ctx, { category: args.category as string | undefined });
+					return cmdInit(ctx, {
+						category: args.category as string | undefined,
+					});
 				case "create":
 					return cmdCreate(ctx, {
 						title: args.title as string,
@@ -875,6 +986,8 @@ export function createOrgTool(
 						id: args.id as string,
 						file: args.file as string | undefined,
 					});
+				case "validate-plan":
+					return cmdValidatePlan(ctx, { id: args.id as string });
 				case "note":
 					return cmdNote(ctx, {
 						id: args.id as string,
@@ -895,8 +1008,6 @@ export function createOrgTool(
 						category: args.category as string | undefined,
 						file: args.file as string | undefined,
 					});
-				case "validate-plan":
-					return cmdValidatePlan(ctx, { id: args.id as string });
 				case "dashboard":
 					return cmdDashboard(ctx);
 				case "wave":
@@ -911,7 +1022,9 @@ export function createOrgTool(
 						category: args.category as string | undefined,
 					});
 				case "archive":
-					return cmdArchive(ctx, { category: args.category as string | undefined });
+					return cmdArchive(ctx, {
+						category: args.category as string | undefined,
+					});
 				default:
 					return { error: true, message: `Unknown command: ${command}` };
 			}

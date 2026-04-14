@@ -39,6 +39,36 @@ describe("formatOrgResult", () => {
 		expect(output).toBe("error: Something went wrong");
 	});
 
+	it("formats mutation success with body length", () => {
+		const result = { success: true, id: "FEAT-002-body-length", file: "/path/to/file.org", bodyLength: 0 };
+		const output = formatOrgResult(result);
+		expect(output).toContain("body_length: 0");
+	});
+
+	it("omits body length when missing from success result", () => {
+		const result = { success: true, id: "FEAT-003-no-body-length", file: "/path/to/file.org" };
+		const output = formatOrgResult(result);
+		expect(output).not.toContain("body_length:");
+	});
+
+	it("formats validate-plan success with issue count", () => {
+		const result = { valid: true, issues: [] };
+		const output = formatOrgResult(result);
+		expect(output).toBe("valid: true\nissues: 0");
+	});
+
+	it("formats validate-plan issues with categories and items", () => {
+		const result = {
+			valid: false,
+			issues: [{ category: "thin-child-body", message: "Add details", items: ["FEAT-101"] }],
+		};
+		const output = formatOrgResult(result);
+		expect(output).toContain("valid: false");
+		expect(output).toContain("issues: 1");
+		expect(output).toContain("thin-child-body: Add details");
+		expect(output).toContain("- FEAT-101");
+	});
+
 	it("falls through to JSON for unknown shapes", () => {
 		const result = { unexpected: "data" };
 		const output = formatOrgResult(result);

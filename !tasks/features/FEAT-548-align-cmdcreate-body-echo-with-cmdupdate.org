@@ -1,0 +1,78 @@
+#+TITLE: Align cmdCreate body echo with cmdUpdate read-back behavior
+#+STATE: DONE
+#+SESSION_ID: 14ba406cf0d96a78
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-42-01-155Z_14ba406cf0d96a78.jsonl]]
+#+CUSTOM_ID: FEAT-548-align-cmdcreate-body-echo-with-cmdupdate
+#+DEPENDS: BUG-257-fix-plan-224-regressions-missing-type-fi
+#+EFFORT: 30m
+#+LAYER: tools
+#+PRIORITY: #B
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-066-audit-implementation:
+
+- **What**: `createOrgTool()` help text appears out of sync with the actual command surface; `delete` / `validate-plan` were added in code paths but the inner description string was still observed without them.
+  - **Where**: `packages/org/src/tool.ts`, `createOrgTool()` description block near the command enum/switch
+  - **Why**: `OrgTool.get description()` forwards this inner description; stale docs make the agent/tool prompt under-describe valid commands, which directly hurts discoverability and can recreate the ergonomics problem the plan was fixing.
+  - **Effort**: `trivial`
+
+- **What**: New org-wrapper presentation behavior lacks direct regression coverage.
+  - **Where**: `packages/coding-agent/src/tools/org.ts`, `formatOrgResult()` success branch and `buildOrgCallPreview()` delete/validate-plan handling; no corresponding targeted assertions were added in `packages/coding-agent/test/tools/org-format-result.test.ts` / `packages/coding-agent/test/tools/org.test.ts`
+  - **Why**: `bodyLength` rendering, `delete` preview metadata, and `validate-plan` formatting are now part of the user/agent-facing contract; without focused tests, future prompt/formatter churn can silently regress them while core org package tests still pass.
+  - **Effort**: `trivial`
+
+- **What**: `org create` body echo is produced from the locally rewritten request body, not a read-back of persisted content.
+  - **Where**: `packages/org/src/tool.ts`, `cmdCreate()` success response near `return { success: true, id, file, category, state, body, bodyLength }`
+  - **Why**: the new transparency contract says the response tells the agent what was persisted; if native create-time normalization or category-specific create behavior mutates body content, the echoed `body`/`bodyLength` can drift from disk and reintroduce “must org get to verify” uncertainty in edge cases.
+  - **Effort**: `small`
+
+- **What**: `validate-plan` is exposed as a first-class org command but only works when an external callback is injected.
+  - **Where**: `packages/org/src/tool.ts`, `cmdValidatePlan()` + `CreateOrgToolOptions`; invoked from `packages/coding-agent/src/tools/org.ts`
+  - **Why**: standalone consumers of `createOrgTool()` can successfully discover/call `validate-plan` yet only receive “not available in this org tool context”; that is surface-level contract drift, and it makes the command behave like a partial feature rather than a real org capability.
+  - **Effort**: `small`
+
+* Scope
+
+=cmdCreate= currently echoes the locally rewritten body string in its response, while =cmdUpdate= (via =buildMutationResponse=) reads the final body back from disk via =fetchItem=. This asymmetry means the create response is technically showing what was *requested* rather than what was *persisted*. Although the native engine does not currently mutate body content during persist, aligning the behavior ensures the transparency contract holds if that changes.
+
+*In scope*:
+- Change =cmdCreate= to read body back from disk after persist (via =fetchItem=) instead of echoing the local =rewrittenBody= variable
+- Reuse the =buildMutationResponse= pattern or equivalent
+
+*Out of scope*:
+- Changing =cmdUpdate= behavior (already correct)
+- Changing the native engine's persist logic
+- Changing =org create= response shape (=body=, =bodyLength= fields stay the same)
+
+* Existing Patterns
+- =packages/org/src/tool.ts= — =cmdCreate()= at line ~306: returns =body: rewrittenBody= directly from the local variable
+- =packages/org/src/tool.ts= — =buildMutationResponse()= at line ~515: uses =fetchItem(ctx, id)= to read body from disk when =bodyResponse= flag is set
+- =packages/org/src/tool.ts= — =fetchItem()= scans categories and parses file with =includeBody: true= to get the persisted body
+
+* Tests
+- File: =packages/org/test/tool-commands.test.ts=
+- Existing test "create with body returns body and bodyLength" already asserts on =result.body= matching the input — update it to verify the body was actually read from disk by checking it matches file content
+- No new test file needed — extend existing test
+
+* Implementation
+** Refactor cmdCreate to read-back body
+:PROPERTIES:
+:CUSTOM_ID: FEAT-548-align-cmdcreate-body-echo-with-cmdupdate::create-readback-body
+:END:
+- File: =packages/org/src/tool.ts=, symbol: =cmdCreate=
+- After the =createCategoryMutex.withLock= block returns ={ id, filePath }=, use =fetchItem(ctx, id)= to get the persisted body
+- Return =body: fetchedItem?.body= and =bodyLength: (fetchedItem?.body ?? "").length= instead of the local =rewrittenBody=
+- Remove =body= from the =createCategoryMutex.withLock= return value (it's no longer needed)
+- The =fetchItem= call happens outside the mutex so it doesn't hold the lock during the read
+* Edge Cases
+- Create with no body: =fetchItem= returns item with =undefined= body → =body= remains =undefined= in response (matches current behavior)
+- Create with empty body: =fetchItem= may return empty string → =bodyLength= is 0 (matches current behavior)
+- =fetchItem= fails to find newly created item: theoretically impossible since we just wrote it, but guard with fallback to =undefined=
+
+* Acceptance Criteria
+- [ ] =bun test packages/org/test/tool-commands.test.ts= passes (existing "create with body" test still works)
+- [ ] =org create= body response matches the content read from the persisted file, not the request input
+- [ ] =bun check:ts= passes (no new type errors)
+
+NOTE [2026-04-14]: Completed in PLAN-229 on 2026-04-14. cmdCreate now reports persisted body/bodyLength and tests assert read-back from disk-backed content.
