@@ -1,0 +1,69 @@
+#+TITLE: CODE_TOOL_MUTATION_COHERENCE_AND_PROVENANCE_HARDENING
+#+STATE: DONE
+#+SESSION_ID: 14ba42e2c96011f0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-52-46-117Z_14ba42e2c96011f0.jsonl]]
+#+CUSTOM_ID: PLAN-228-code-tool-mutation-coherence-and-provena
+#+PRIORITY: #A
+#+EFFORT: 7h
+#+LAYER: coding-agent
+#+DEPENDS: 
+
+* Initial Message
+
+in your future audit, please check all the ways in which you had a hard time editing using the code tool, and then propose your improvements. things like the tests not being written in the end for example, or auto-save not being triggered, etc. and propose both root causes and clean TDD implemenations of the fixes
+
+* Context
+
+Tooling note: the current `org` tool rejects `INIT` and only accepts `ITEM`, `DOING`, `DONE`, `BLOCKED`, `CANCELLED`, and `REVIEW`. This orchestration record is therefore stored as `ITEM` and MUST be treated as the plan-mode `INIT` equivalent for handoff.
+
+User request: turn the remaining postmortem from BUG-252 through BUG-254 into a new execution plan, assuming those three items are already fixed by the time this plan starts.
+
+Repository reality and settled scope:
+1. BUG-252 covers strict no-op failure and stale-buffer guards for mutating `code edit`.
+2. BUG-253 covers configurable preview resolution policy.
+3. BUG-254 covers org command-surface parity and belongs to org ergonomics, not the code-tool mutation path itself.
+4. The remaining gaps are lower-level cutover correctness and truthful mutation-state reporting:
+   - preview/apply/discard must converge buffer state and disk state deterministically across `ast_edit`, `resolve`, and follow-up `code` operations
+   - tool results must report whether a mutation is still pending, was applied, was discarded, and whether persistence actually happened
+5. This plan intentionally excludes whole-file replace ergonomics already tracked elsewhere and excludes AST matching semantics themselves.
+
+Recommended approach:
+- Fix authoritative cutover first so one mutation path owns apply/discard + persistence + buffer invalidation.
+- Then layer explicit mutation-state/result provenance on top of that stable substrate.
+- Keep the plan to two child bugs with a strict dependency chain so behavior and result copy cannot drift apart.
+
+Child items:
+- [[id:BUG-255-preview-apply-cutover-can-leave-code-buf]]
+- [[id:BUG-256-tool-results-hide-authoritative-mutation]]
+
+* Verification
+
+Required verification after execution:
+- `bun test packages/coding-agent/test/tools/ast-edit.test.ts packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code.test.ts`
+- `bun test packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code-result.test.ts`
+
+Consistency checks during execution:
+- BUG-252 assumptions remain intact: non-idempotent no-op still hard-fails.
+- BUG-253 assumptions remain intact: preview-policy choice still behaves as already planned.
+- No result path claims persistence or application that did not happen.
+- Cross-tool follow-up reads/edits observe the same post-apply content.
+
+* Execution Manifest
+
+** :wave: 1 — authoritative preview/apply cutover
+- [[id:BUG-255-preview-apply-cutover-can-leave-code-buf]] [4h] — make preview apply/discard converge managed buffers and disk before any follow-up edit path runs
+
+** :wave: 2 — truthful mutation-state reporting
+- [[id:BUG-256-tool-results-hide-authoritative-mutation]] [3h] — expose explicit preview/apply/discard state in tool results after cutover is authoritative
+
+** Completion [2026-04-14]
+*** Verification
+- `bun test packages/coding-agent/test/tools/ast-edit.test.ts packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code.test.ts` → pass (`52 pass`, `0 fail`).
+- `bun test packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code-result.test.ts` → pass (`17 pass`, `0 fail`).
+- Regression coverage now proves: applied previews refresh only touched managed buffers, apply failures keep pending actions resolvable, follow-up code reads/edits observe post-apply disk state, and result payloads/text distinguish `pending_preview`, `applied`, `discarded`, and `noop` states truthfully.
+*** Artifacts
+- None.
+*** Deviations
+- None.
+
+NOTE [2026-04-14]: Completed execution; child items BUG-255 and BUG-256 are DONE and verification commands passed.

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -6,6 +6,7 @@ import { adaptSchemaForStrict } from "@oh-my-pi/pi-ai/utils/schema";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { PendingActionStore } from "@oh-my-pi/pi-coding-agent/tools/pending-action";
+import * as nativesModule from "@oh-my-pi/pi-natives";
 
 function createTestSession(cwd = "/tmp/test", overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
@@ -100,8 +101,9 @@ describe("ast_edit tool schema", () => {
 				lang: "typescript",
 				path: filePath,
 			});
-			expect(previewResult.details).toBeDefined();
-			expect((previewResult.details as { applied?: boolean }).applied).toBe(false);
+			expect(previewResult.details).toEqual(
+				expect.objectContaining({ applied: false, mutationState: "pending_preview", persisted: false }),
+			);
 
 			const pending = pendingActionStore.peek();
 			expect(pending).not.toBeNull();
@@ -112,6 +114,55 @@ describe("ast_edit tool schema", () => {
 			const updated = await Bun.file(filePath).text();
 			expect(updated).toContain("modernWrap(x, value)");
 		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("surfaces apply persistence failures without mutating disk", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-edit-apply-failure-"));
+		const originalAstEdit = nativesModule.astEdit;
+		const astEditSpy = spyOn(nativesModule, "astEdit");
+		try {
+			const filePath = path.join(tempDir, "legacy.ts");
+			await Bun.write(filePath, "legacyWrap(x, value)\n");
+			const pendingActionStore = new PendingActionStore();
+
+			astEditSpy.mockImplementation(async options => {
+				if (options.dryRun === false) {
+					return {
+						changes: [],
+						fileChanges: [],
+						totalReplacements: 0,
+						filesTouched: 0,
+						filesSearched: 1,
+						applied: false,
+						limitReached: false,
+					};
+				}
+
+				return await originalAstEdit(options);
+			});
+
+			const tools = await createTools(createTestSession(tempDir, { pendingActionStore }));
+			const tool = tools.find(entry => entry.name === "ast_edit");
+			expect(tool).toBeDefined();
+
+			await tool!.execute("ast-edit-preview", {
+				ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
+				lang: "typescript",
+				path: filePath,
+			});
+
+			const pending = pendingActionStore.peek();
+			expect(pending).not.toBeNull();
+			if (!pending) throw new Error("Expected pending action to be registered");
+
+			await expect(pending.apply("apply previewed AST edit")).rejects.toThrow(
+				"Preview matched replacements, but apply did not persist any changes.",
+			);
+			expect(await Bun.file(filePath).text()).toBe("legacyWrap(x, value)\n");
+		} finally {
+			astEditSpy.mockRestore();
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
 	});
@@ -193,7 +244,14 @@ describe("ast_edit tool schema", () => {
 				path: filePath,
 			});
 
-			expect(result.details).toEqual(expect.objectContaining({ applied: true, totalReplacements: 1 }));
+			expect(result.details).toEqual(
+				expect.objectContaining({
+					applied: true,
+					totalReplacements: 1,
+					mutationState: "applied",
+					persisted: true,
+				}),
+			);
 			expect(result.content.find(content => content.type === "text")?.text ?? "").toContain(
 				"Applied 1 replacement in 1 file.",
 			);

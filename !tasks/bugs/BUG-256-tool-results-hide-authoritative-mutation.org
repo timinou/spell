@@ -1,0 +1,77 @@
+#+TITLE: Tool results hide authoritative mutation state after preview and apply
+#+STATE: DONE
+#+SESSION_ID: 14ba42e2c96011f0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-52-46-117Z_14ba42e2c96011f0.jsonl]]
+#+CUSTOM_ID: BUG-256-tool-results-hide-authoritative-mutation
+#+DEPENDS: BUG-255-preview-apply-cutover-can-leave-code-buf
+#+LAYER: backend
+#+PRIORITY: #A
+#+EFFORT: 3h
+
+* Initial Message
+
+in your future audit, please check all the ways in which you had a hard time editing using the code tool, and then propose your improvements. things like the tests not being written in the end for example, or auto-save not being triggered, etc. and propose both root causes and clean TDD implemenations of the fixes
+
+* Scope
+
+** In scope
+- Make mutation tool results truthful about what happened: preview queued, preview applied, preview discarded, persisted to disk, or no persisted change.
+- Cover `ast_edit`, `resolve`, and code-tool result shaping where current success text can be ambiguous about whether the change is still pending, only buffered, or fully saved.
+- Update result formatting and any structured metadata path in `packages/coding-agent/src/tools/resolve.ts`, `packages/coding-agent/src/tools/code-result.ts`, and the narrowest result helpers used by preview-capable tools.
+- Add regression coverage in `packages/coding-agent/test/tools/resolve.test.ts`, `packages/coding-agent/test/tools/code-result.test.ts`, and any focused preview-result test file.
+
+** Out of scope
+- Changing preview policy defaults (assume BUG-253 is already fixed).
+- Changing no-op hard-fail semantics for non-idempotent code edits (assume BUG-252 is already fixed).
+- Buffer/disk cutover mechanics themselves; treat BUG-255 as the lower-layer prerequisite.
+
+* Existing Patterns
+- `formatCodeToolContent(...)` and `normalizeCodeBufferSuccess(...)` in `packages/coding-agent/src/tools/code-result.ts` are the canonical user-facing formatter seam for code mutations.
+- `ResolveTool.execute(...)` already decides apply/discard outcomes and therefore owns the highest-fidelity point to emit authoritative post-resolution status.
+- Pending previews are queued through `PendingActionStore`; result copy must align with queue reality and must not imply persistence that has not happened.
+
+* Tests
+User workflows to lock first:
+1. Preview-producing tool result says the action is pending preview/resolve, not already edited/applied.
+2. Apply result explicitly states the change was applied and persisted (or applied but not persisted if that state can exist truthfully).
+3. Discard result explicitly states no mutation landed.
+4. Structured success metadata is stable enough for renderers/tests to distinguish `pending_preview`, `applied`, and `discarded` states without parsing prose.
+5. No successful mutation result can present `Edited` semantics when the tool knows the action is still pending or discarded.
+
+* Implementation
+** Write failing authoritative-result tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-256-tool-results-hide-authoritative-mutation::result-tests
+:END:
+- Files: `packages/coding-agent/test/tools/resolve.test.ts`, `packages/coding-agent/test/tools/code-result.test.ts`.
+- Add workflows (1) through (5) as initially failing tests.
+
+** Add structured mutation-state contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-256-tool-results-hide-authoritative-mutation::state-contract
+:DEPENDS: BUG-256-tool-results-hide-authoritative-mutation::result-tests
+:END:
+- Files: `packages/coding-agent/src/tools/resolve.ts`, `packages/coding-agent/src/tools/code-result.ts`.
+- Introduce a narrow explicit state enum/field for preview-capable mutation outcomes.
+
+** Align renderer text with authoritative state
+:PROPERTIES:
+:CUSTOM_ID: BUG-256-tool-results-hide-authoritative-mutation::renderer-alignment
+:DEPENDS: BUG-256-tool-results-hide-authoritative-mutation::state-contract
+:END:
+- Files: `packages/coding-agent/src/tools/code-result.ts` and the smallest preview-result seam needed.
+- Ensure user-facing text is derived from the explicit state contract and cannot drift into ambiguous success language.
+
+* Edge Cases
+- Preview queued + reminder emitted must still report pending state even if a diff preview is present.
+- Discard must not claim a mutation or persistence occurred.
+- Apply failures must remain hard errors, not downgraded success-with-warning shapes.
+- Existing non-preview code edits must keep current success language when a real persisted mutation happened.
+
+* Acceptance Criteria
+- Preview/apply/discard results are distinguishable by structured state and user-facing text.
+- Successful results do not overclaim persistence or mutation status.
+- Renderers/tests no longer need brittle prose parsing to know what happened.
+- Verification: `bun test packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code-result.test.ts`
+
+NOTE [2026-04-14]: Exposed explicit mutation-state provenance in preview/apply/discard/noop result payloads and renderer text; verified with `bun test packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code-result.test.ts`.
