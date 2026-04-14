@@ -22,6 +22,7 @@ describe("plan-mode allowed folder prompts", () => {
 			reentry: false,
 			iterative: false,
 			orgEnabled: false,
+			planInitState: "ITEM",
 			planCategory: "plans",
 			childCategories: [],
 			allowedFolders,
@@ -48,6 +49,7 @@ describe("plan-mode allowed folder prompts", () => {
 			reentry: false,
 			iterative: false,
 			orgEnabled: true,
+			planInitState: "ITEM",
 			planCategory: "plans",
 			childCategories: [{ name: "features", prefix: "FEAT", description: "Feature work" }],
 			allowedFolders: undefined,
@@ -60,6 +62,52 @@ describe("plan-mode allowed folder prompts", () => {
 		expect(rendered).toContain("verification criteria (exact tests, checks, or manual proof)");
 		expect(rendered).toContain("* Verification");
 		expect(rendered).toContain("screenshots/artifacts for UI behavior");
+	});
+
+	it("uses ITEM when INIT is unavailable", () => {
+		const rendered = renderPromptTemplate(planModeActivePrompt, {
+			planFilePath: "org" + "://PLAN-002-auth-initiative",
+			planExists: true,
+			writeToolName: "write",
+			editToolName: "edit",
+			exitToolName: "exit_plan_mode",
+			reentry: false,
+			iterative: false,
+			orgEnabled: true,
+			planInitState: "ITEM",
+			planCategory: "plans",
+			childCategories: [{ name: "features", prefix: "FEAT", description: "Feature work" }],
+			allowedFolders: undefined,
+			ultraplan: false,
+			designFlavor: false,
+			designHistory: "",
+			planModeUiuxPrompt: "",
+		});
+
+		expect(rendered).toContain('Create orchestration PLAN item in `plans` (`state: "ITEM"`)');
+	});
+
+	it("preserves INIT when the org config starts with INIT", () => {
+		const rendered = renderPromptTemplate(planModeActivePrompt, {
+			planFilePath: "org" + "://PLAN-003-auth-initiative",
+			planExists: true,
+			writeToolName: "write",
+			editToolName: "edit",
+			exitToolName: "exit_plan_mode",
+			reentry: false,
+			iterative: false,
+			orgEnabled: true,
+			planInitState: "INIT",
+			planCategory: "plans",
+			childCategories: [{ name: "features", prefix: "FEAT", description: "Feature work" }],
+			allowedFolders: undefined,
+			ultraplan: false,
+			designFlavor: false,
+			designHistory: "",
+			planModeUiuxPrompt: "",
+		});
+
+		expect(rendered).toContain('Create orchestration PLAN item in `plans` (`state: "INIT"`)');
 	});
 
 	it("keeps the subagent prompt read-only when no folders are configured", () => {

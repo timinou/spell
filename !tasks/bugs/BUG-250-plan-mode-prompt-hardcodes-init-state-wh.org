@@ -1,0 +1,72 @@
+#+TITLE: Plan mode prompt hardcodes INIT state which may not exist in project config
+#+STATE: DONE
+#+SESSION_ID: 14ba375a65996a65
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-02-22-870Z_14ba375a65996a65.jsonl]]
+#+CUSTOM_ID: BUG-250-plan-mode-prompt-hardcodes-init-state-wh
+#+EFFORT: 1h
+#+LAYER: prompts
+#+PRIORITY: #A
+
+tell me why 
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-14T09-00-29-497Z_14ba1b746e1d987d.jsonl
+ ID: 14ba1b746e1d987d
+
+the org tool didn't get used properly and the agent had to re-use and re-write the plan several times before it worked. I want the org tool to be ergonomic.
+
+Exclusively use jq ont he session, don't read it directly.
+
+* Scope
+
+The plan-mode-active.md prompt hardcodes =state: "INIT"= for PLAN item creation, but the project's org config may not include =INIT= as a valid TODO keyword. This causes =org create= to fail with =Unknown state: "INIT". Valid: ITEM, DOING, DONE, BLOCKED, CANCELLED, REVIEW=. The agent then has to retry with =state: "ITEM"=, wasting a tool call.
+
+*In scope*:
+- Fix =packages/coding-agent/src/prompts/system/plan-mode-active.md= to use =state: "ITEM"= instead of =state: "INIT"= for PLAN creation (ITEM is universally valid)
+- OR: make the prompt template inject the correct initial state dynamically from the project's org config
+
+*Out of scope*:
+- Changing the default TODO keywords
+- Changing the org engine's state validation logic
+- Changing how other org commands work
+
+* Existing Patterns
+- =packages/coding-agent/src/prompts/system/plan-mode-active.md= — Handlebars template with ={{planCategory}}=, ={{exitToolName}}= etc.
+- The prompt currently hardcodes =state: "INIT"= in 5 places (lines 41, 104, 109, 184, 261)
+- =packages/coding-agent/src/modes/plan-mode.ts= or wherever the template context is built — could inject ={{planInitState}}= as a Handlebars variable
+- =packages/org/src/schema/defaults.ts= — =DEFAULT_TODO_KEYWORDS= includes INIT but project configs can override
+
+Decision: Use a Handlebars variable ={{planInitState}}= that defaults to the first TODO keyword from the project's org config. This way the prompt adapts to whatever the project has configured.
+
+* Tests
+- Scenario 1: Project with default config (includes INIT) → prompt says =state: "INIT"=
+- Scenario 2: Project with custom config (no INIT) → prompt says =state: "ITEM"= (or whatever the first keyword is)
+- Verification: grep the rendered prompt for the state value after template expansion
+
+* Implementation
+
+** Fix plan-mode-active.md template
+:PROPERTIES:
+:CUSTOM_ID: BUG-250-plan-mode-prompt-hardcodes-init-state-wh::fix-template
+:END:
+- File: =packages/coding-agent/src/prompts/system/plan-mode-active.md=
+- Replace all 5 occurrences of =state: "INIT"= with =state: "{{planInitState}}"=
+- The variable should be injected from the template context
+
+** Wire planInitState into template context
+:PROPERTIES:
+:CUSTOM_ID: BUG-250-plan-mode-prompt-hardcodes-init-state-wh::wire-context
+:DEPENDS: BUG-250-plan-mode-prompt-hardcodes-init-state-wh::fix-template
+:END:
+- File: wherever the plan-mode-active template context is built (likely =packages/coding-agent/src/modes/plan-mode.ts= or =packages/coding-agent/src/config/prompt-templates.ts=)
+- Add =planInitState= to the template context
+- Value: first keyword from the org config's =todoKeywords= array, or "ITEM" as fallback
+- Read from =session.settings.get("org.todoKeywords")= or the resolved =OrgConfig=
+
+* Edge Cases
+- No org config at all → default to "ITEM"
+- Org config with empty todoKeywords → default to "ITEM"
+- Project config includes INIT → uses INIT (backward compatible)
+
+* Acceptance Criteria
+- [ ] Plan mode prompt no longer hardcodes INIT
+- [ ] Agent in a project without INIT gets the correct state in instructions
+- [ ] =bun check:ts= passes

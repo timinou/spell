@@ -42,6 +42,7 @@ const baseRenderContext: TemplateContext = {
 	path: "packages/coding-agent/src/config/prompt-templates.ts",
 	planContent: "1. Read code\n2. Add tests",
 	planExists: true,
+	planInitState: "ITEM",
 	planFilePath: "local://PLAN.md",
 	readFiles: ["packages/coding-agent/src/prompts/system/custom-system-prompt.md"],
 	repeatToolDescriptions: true,

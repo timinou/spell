@@ -1,0 +1,97 @@
+#+TITLE: Auto-prefix sub-outline CUSTOM_IDs on org create and update
+#+STATE: DONE
+#+SESSION_ID: 14ba375a65996a65
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-02-22-870Z_14ba375a65996a65.jsonl]]
+#+CUSTOM_ID: FEAT-542-auto-prefix-sub-outline-custom-ids-on-or
+#+EFFORT: 4h
+#+LAYER: tools
+#+PRIORITY: #A
+
+* Scope
+
+When =org create= or =org update body== is called with a body containing sub-heading =:CUSTOM_ID:= properties, automatically rewrite those IDs to use the parent item's full CUSTOM_ID as prefix. Also rewrite =:DEPENDS:= references within the same body that reference local sub-outline IDs.
+
+*In scope*:
+- Auto-prefix sub-outline =:CUSTOM_ID:= values in body on =org create= (prefix with generated parent ID)
+- Auto-prefix sub-outline =:CUSTOM_ID:= values in body on =org update body== (prefix with item's existing ID)
+- Auto-prefix =:DEPENDS:= values within body that reference local sub-outline IDs
+- Return the rewritten body and body length in the create/update response
+- Skip prefixing if the ID already starts with =PARENT_ID::=
+
+*Out of scope*:
+- Changing the ID generation algorithm itself
+- Modifying the native Rust engine
+- Changing =org update append== behavior (append doesn't replace full body so auto-prefix is ambiguous)
+
+* Existing Patterns
+- =packages/org/src/tool.ts= — =cmdCreate()= generates the ID via =generateId()= then passes body to =executeOrg({ command: \"createItem\", ... body })=
+- =packages/org/src/tool.ts= — =cmdUpdate()= passes body to =executeOrg({ command: \"updateItem\", ... body })=
+- =packages/coding-agent/src/loop/ingestion/org-depend.ts= — =extractHeadings()= and =parseOrgDependProperties()= parse sub-outline headings from body content — reuse for detection
+- =packages/org/src/tool.ts= — =normalizeOrgBody()= already preprocesses body text
+
+The body rewriting should happen in TypeScript in =cmdCreate= / =cmdUpdate= AFTER the ID is known but BEFORE passing to the native engine.
+
+* Tests
+- File: =packages/org/test/sub-outline-rewrite.test.ts=
+- Scenario 1: =org create= with body containing =:CUSTOM_ID: define-types= rewritten to =PARENT-ID::define-types=
+- Scenario 2: =org create= with body containing =:DEPENDS: define-types= where =define-types= is a local sub-outline rewritten to =PARENT-ID::define-types=
+- Scenario 3: =org create= with body containing =:DEPENDS: OTHER-ITEM::step= (cross-item dep) NOT rewritten
+- Scenario 4: =org create= with body containing already-prefixed CUSTOM_ID NOT double-prefixed
+- Scenario 5: =org update body== with body containing short IDs rewritten using item's existing ID
+- Scenario 6: =org create= with no sub-outline headings in body body unchanged
+- Scenario 7: Response includes =body= field with the rewritten content and =bodyLength= field
+- Scenario 8: =:DEPENDS:= with multiple space-separated IDs, some local, some cross-item only local ones rewritten
+
+* Implementation
+
+** Write sub-outline rewrite tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-542-auto-prefix-sub-outline-custom-ids-on-or::rewrite-tests
+:END:
+- File: =packages/org/test/sub-outline-rewrite.test.ts=
+- Test the =rewriteSubOutlineIds(parentId, body)= function directly
+- Cover all 8 scenarios from Tests section
+- Tests should initially fail (TDD)
+
+** Implement rewriteSubOutlineIds function
+:PROPERTIES:
+:CUSTOM_ID: FEAT-542-auto-prefix-sub-outline-custom-ids-on-or::rewrite-impl
+:DEPENDS: FEAT-542-auto-prefix-sub-outline-custom-ids-on-or::rewrite-tests
+:END:
+- File: =packages/org/src/sub-outline-rewrite.ts=
+- Export =rewriteSubOutlineIds(parentId: string, body: string): { body: string; rewrites: Map<string, string> }=
+- Algorithm:
+  1. Parse all sub-headings with CUSTOM_ID from body
+  2. Collect local IDs that don't already start with parentId::
+  3. Build rewrite map: shortId to parentId::shortId
+  4. Walk body line by line, replace CUSTOM_ID: shortId to CUSTOM_ID: parentId::shortId
+  5. Walk body line by line, replace DEPENDS entries that match local short IDs
+  6. Return rewritten body + the rewrite map
+
+** Wire rewrite into cmdCreate and cmdUpdate
+:PROPERTIES:
+:CUSTOM_ID: FEAT-542-auto-prefix-sub-outline-custom-ids-on-or::wire-rewrite
+:DEPENDS: FEAT-542-auto-prefix-sub-outline-custom-ids-on-or::rewrite-impl
+:END:
+- File: =packages/org/src/tool.ts=
+- In =cmdCreate=: after =generateId()= returns =id=, call =rewriteSubOutlineIds(id, body)= on the body before passing to =executeOrg=
+- In =cmdUpdate=: when =body= is provided, call =rewriteSubOutlineIds(args.id, body)= before passing to =executeOrg=
+- Add =body= and =bodyLength= to the success response object
+- Export the rewrite function from =packages/org/src/index.ts=
+
+* Edge Cases
+- Body with no headings: pass through unchanged
+- Body with headings but no CUSTOM_ID properties: pass through unchanged
+- DEPENDS referencing a non-local ID: leave unchanged
+- DEPENDS with mixed local and cross-item IDs on same line: only rewrite the local ones
+- Empty body string: pass through unchanged
+- Body with CUSTOM_ID already prefixed: skip
+- =org update append== does NOT auto-prefix
+
+* Acceptance Criteria
+- [ ] =bun test packages/org/test/sub-outline-rewrite.test.ts= passes all 8 scenarios
+- [ ] =org create= with short sub-outline IDs produces correctly prefixed file content
+- [ ] =org create= response includes =body= (rewritten) and =bodyLength= fields
+- [ ] =org update body== with short sub-outline IDs produces correctly prefixed file content
+- [ ] Existing tests in =packages/org/test/= still pass
+- [ ] =bun check:ts= passes

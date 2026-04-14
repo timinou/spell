@@ -109,12 +109,39 @@ describe("ExitPlanModeTool", () => {
 		await writeOrgItem(
 			"features",
 			"FEAT-001-auth-api",
-			"* Scope\nImplement the authentication API with JWT tokens and session management.\n\n* Implementation\nModify src/auth.ts to add login endpoint using existing middleware patterns.\n\n* Acceptance Criteria\n- POST /api/auth/login returns valid JWT",
+			[
+				"* Scope",
+				"Implement the authentication API with JWT tokens and session management.",
+				"",
+				"* Implementation",
+				"** Define interfaces",
+				":PROPERTIES:",
+				":CUSTOM_ID: FEAT-001-auth-api::define-interfaces",
+				":END:",
+				"- File: src/auth/types.ts",
+				"",
+				"** Implement login flow",
+				":PROPERTIES:",
+				":CUSTOM_ID: FEAT-001-auth-api::implement-login",
+				":DEPENDS: FEAT-001-auth-api::define-interfaces",
+				":END:",
+				"- File: src/auth.ts",
+				"- Reuse the existing middleware patterns.",
+				"",
+				"* Acceptance Criteria",
+				"- POST /api/auth/login returns valid JWT",
+			].join("\n"),
 		);
 		await writeOrgItem(
 			"plans",
 			"PLAN-001-auth-initiative",
-			"* Context\nAuth rollout\n\n* Execution Manifest\n1. [[id:FEAT-001-auth-api]] (depends: none, effort: 1h)",
+			[
+				"* Context",
+				"Auth rollout",
+				"",
+				"* Execution Manifest",
+				"1. [[id:FEAT-001-auth-api]] (depends: none, effort: 1h)",
+			].join("\n"),
 		);
 
 		const tool = new ExitPlanModeTool(createSession());
@@ -141,7 +168,7 @@ describe("ExitPlanModeTool", () => {
 				title: "AUTH_INITIATIVE",
 				itemId: "PLAN-002-missing-child",
 			}),
-		).rejects.toThrow('PLAN item "PLAN-002-missing-child" references missing child items: BUG-999-does-not-exist.');
+		).rejects.toThrow(/missing linked items[\s\S]*BUG-999-does-not-exist/);
 	});
 
 	it("rejects org plan without child links", async () => {

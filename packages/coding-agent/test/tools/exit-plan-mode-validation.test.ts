@@ -233,7 +233,7 @@ describe("ExitPlanModeTool validation", () => {
 		const tool = new ExitPlanModeTool(createSession());
 		await expect(
 			tool.execute("call-duplicate-subids", { title: "TEST_PLAN", itemId: "PLAN-107-test" }),
-		).rejects.toThrow("Duplicate sub-outline CUSTOM_ID values");
+		).rejects.toThrow(/duplicate suboutline id|globally unique/);
 	});
 
 	it("rejects cyclic sub-outline DEPENDS graphs", async () => {
@@ -250,8 +250,52 @@ describe("ExitPlanModeTool validation", () => {
 
 		const tool = new ExitPlanModeTool(createSession());
 		await expect(tool.execute("call-cycle", { title: "TEST_PLAN", itemId: "PLAN-109-test" })).rejects.toThrow(
-			"Sub-outline dependency cycles",
+			/acyclic|cyclic suboutline depends/,
 		);
+	});
+
+	it("reports thin bodies and missing properties together", async () => {
+		await writeOrgItem("features", "FEAT-110-combined", THIN_BODY, {
+			effort: "",
+			priority: "",
+			layer: "",
+		});
+		await writeOrgItem("plans", "PLAN-110-test", buildPlanBody("FEAT-110-combined"));
+
+		const tool = new ExitPlanModeTool(createSession());
+		await expect(
+			tool.execute("call-combined-thin-props", { title: "TEST_PLAN", itemId: "PLAN-110-test" }),
+		).rejects.toThrow(/empty or minimal bodies|thin child body[\s\S]*EFFORT.*PRIORITY.*LAYER/);
+	});
+
+	it("reports broken top-level deps and bad sub-outline namespaces together", async () => {
+		await writeOrgItem(
+			"features",
+			"FEAT-111-multi",
+			buildValidBody("FEAT-111-multi", { defineId: "WRONG::define-types" }),
+			{ depends: "FEAT-999-missing" },
+		);
+		await writeOrgItem("plans", "PLAN-111-test", buildPlanBody("FEAT-111-multi"));
+
+		const tool = new ExitPlanModeTool(createSession());
+		await expect(
+			tool.execute("call-combined-namespace-deps", { title: "TEST_PLAN", itemId: "PLAN-111-test" }),
+		).rejects.toThrow(/FEAT-999-missing[\s\S]*WRONG::define-types|WRONG::define-types[\s\S]*FEAT-999-missing/);
+	});
+
+	it("reports issues across multiple child items in one response", async () => {
+		await writeOrgItem("features", "FEAT-112-thin", THIN_BODY);
+		await writeOrgItem(
+			"features",
+			"FEAT-113-broken-deps",
+			buildValidBody("FEAT-113-broken-deps", { implDepends: "FEAT-999::missing-step" }),
+		);
+		await writeOrgItem("plans", "PLAN-112-test", buildPlanBody("FEAT-112-thin", "FEAT-113-broken-deps"));
+
+		const tool = new ExitPlanModeTool(createSession());
+		await expect(
+			tool.execute("call-multi-item-issues", { title: "TEST_PLAN", itemId: "PLAN-112-test" }),
+		).rejects.toThrow(/FEAT-112-thin[\s\S]*FEAT-999::missing-step|FEAT-999::missing-step[\s\S]*FEAT-112-thin/);
 	});
 
 	it("accepts valid top-level and sub-outline dependencies within the plan", async () => {

@@ -2275,6 +2275,8 @@ export class AgentSession {
 		const projectPolicies = await loadTaskPolicies(this.sessionManager.getCwd());
 		const mergedPolicies = mergePolicies(projectPolicies, modeConfig?.frontmatter.taskPolicies);
 		const hasTaskPolicies = mergedPolicies.policies.length > 0 || Object.keys(mergedPolicies.layers).length > 0;
+		const rawOrgTodoKeywords = this.settings.get("org.todoKeywords") as readonly string[] | string[] | undefined;
+		const planInitState = rawOrgTodoKeywords && rawOrgTodoKeywords.length > 0 ? rawOrgTodoKeywords[0] : "ITEM";
 		const content = renderPromptTemplate(planModeActivePrompt, {
 			planFilePath: displayPlanPath,
 			planExists,
@@ -2288,6 +2290,7 @@ export class AgentSession {
 			reentry: state.reentry ?? false,
 			iterative: state.workflow === "iterative",
 			orgEnabled,
+			planInitState,
 			planCategory,
 			childCategories,
 			allowedFolders: allowedFolders.length > 0 ? allowedFolders : undefined,

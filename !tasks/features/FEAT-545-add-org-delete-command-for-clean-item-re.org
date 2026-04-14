@@ -1,0 +1,95 @@
+#+TITLE: Add org delete command for clean item removal
+#+STATE: DONE
+#+SESSION_ID: 14ba375a65996a65
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-02-22-870Z_14ba375a65996a65.jsonl]]
+#+CUSTOM_ID: FEAT-545-add-org-delete-command-for-clean-item-re
+#+EFFORT: 2h
+#+LAYER: tools
+#+PRIORITY: #B
+
+* Initial Message
+
+tell me why 
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-14T09-00-29-497Z_14ba1b746e1d987d.jsonl
+ ID: 14ba1b746e1d987d
+
+the org tool didn't get used properly and the agent had to re-use and re-write the plan several times before it worked. I want the org tool to be ergonomic.
+
+Exclusively use jq ont he session, don't read it directly.
+
+* Scope
+
+Add an =org delete= command that removes an org item file entirely. Currently the only way to "remove" an item is =org update state=CANCELLED=, which leaves the file on disk and causes validators to still traverse it via stale =[[id:...]]= links. A clean delete is simpler and avoids cascading validation issues from zombie items.
+
+*In scope*:
+- Add =org delete= command that deletes the org file for a given CUSTOM_ID
+- Add the command to the tool schema, description, and execute switch
+- Return ={ success: true, id, file, deleted: true }= on success
+- Return NOT_FOUND error if item doesn't exist
+- Safety: refuse to delete items in DOING or REVIEW state (active work)
+
+*Out of scope*:
+- Bulk delete
+- Archive functionality (already exists as =org archive=)
+- Cascading deletes (deleting a parent doesn't delete children)
+- Undo/recycle bin
+
+* Existing Patterns
+- =packages/org/src/tool.ts= — =cmdArchive()= finds items by state and lists them — similar pattern for locating item files
+- =packages/org/src/tool.ts= — =cmdUpdate()= locates item file by scanning category directories — reuse for finding the file to delete
+- File deletion: =node:fs/promises= =unlink()=
+
+* Tests
+- File: =packages/org/test/tool-commands.test.ts= (extend)
+- Scenario 1: Delete an ITEM-state item → file removed, success response
+- Scenario 2: Delete a DONE-state item → file removed, success response
+- Scenario 3: Delete a CANCELLED-state item → file removed, success response
+- Scenario 4: Delete a DOING-state item → refused with error message
+- Scenario 5: Delete a non-existent ID → NOT_FOUND error
+- Scenario 6: Delete an item and then =org get= → NOT_FOUND
+
+* Implementation
+
+** Write delete command tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-545-add-org-delete-command-for-clean-item-re::delete-tests
+:END:
+- File: =packages/org/test/tool-commands.test.ts=
+- Add tests for scenarios 1-6
+- Tests should initially fail
+
+** Implement cmdDelete
+:PROPERTIES:
+:CUSTOM_ID: FEAT-545-add-org-delete-command-for-clean-item-re::delete-impl
+:DEPENDS: FEAT-545-add-org-delete-command-for-clean-item-re::delete-tests
+:END:
+- File: =packages/org/src/tool.ts=
+- Add =cmdDelete(ctx, { id, file? })= function:
+  1. Locate item (same scan logic as =cmdUpdate=)
+  2. Check state — refuse if DOING or REVIEW
+  3. =fs.unlink(filePath)=
+  4. Return success with id and file path
+- Add "delete" to the switch statement in =createOrgTool=
+- Add "delete" to the command enum in the schema
+- Update the tool description string to include =delete=
+
+** Update org tool wrapper
+:PROPERTIES:
+:CUSTOM_ID: FEAT-545-add-org-delete-command-for-clean-item-re::delete-wrapper
+:DEPENDS: FEAT-545-add-org-delete-command-for-clean-item-re::delete-impl
+:END:
+- File: =packages/coding-agent/src/tools/org.ts=
+- Add "delete" to the =orgSchema= command enum
+- Add case preview in =buildOrgCallPreview=
+- =formatOrgResult= already handles ={success, id, file}= pattern — verify it works
+
+* Edge Cases
+- Item file has multiple headings (shouldn't happen in current architecture — one item per file): delete the entire file
+- Race condition with concurrent reads: acceptable — file disappears, reads get NOT_FOUND
+- File permissions: propagate OS error
+
+* Acceptance Criteria
+- [ ] =bun test packages/org/test/tool-commands.test.ts= passes delete scenarios
+- [ ] =org delete id=ITEM-XXX= removes the file from disk
+- [ ] =org delete= on DOING items returns an error
+- [ ] =bun check:ts= passes

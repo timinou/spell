@@ -1,0 +1,101 @@
+#+TITLE: Report all exit_plan_mode validation errors at once plus validate-plan command
+#+STATE: DONE
+#+SESSION_ID: 14ba375a65996a65
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-02-22-870Z_14ba375a65996a65.jsonl]]
+#+CUSTOM_ID: FEAT-543-report-all-exit-plan-mode-validation-err
+#+EFFORT: 3h
+#+LAYER: tools
+#+PRIORITY: #A
+
+* Initial Message
+
+tell me why 
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-14T09-00-29-497Z_14ba1b746e1d987d.jsonl
+ ID: 14ba1b746e1d987d
+
+the org tool didn't get used properly and the agent had to re-use and re-write the plan several times before it worked. I want the org tool to be ergonomic.
+
+Exclusively use jq ont he session, don't read it directly.
+
+* Scope
+
+Change =exit_plan_mode= validation to collect ALL error categories and report them in a single response instead of throwing on the first failure class. Also add an =org validate-plan= command that runs the same validation so the agent can pre-check before calling =exit_plan_mode=.
+
+*In scope*:
+- Refactor =validateChildSuboutlineGraph()= to collect all errors and return them as a combined list
+- Refactor the main =execute()= method in =ExitPlanModeTool= to collect all validation errors (thin body, missing properties, broken deps, sub-outline issues) and report them together
+- Add =org validate-plan= command that accepts a PLAN item ID and runs the same validation
+- Return structured error response with categorized issues
+
+*Out of scope*:
+- Changing what is validated (the rules stay the same)
+- Changing the sub-outline ID format (handled by sibling FEAT)
+- Changing the org tool's TUI rendering
+
+* Existing Patterns
+- =packages/coding-agent/src/tools/exit-plan-mode.ts= — =validateChildSuboutlineGraph()= currently throws =ToolError= on first category; =execute()= has sequential try-catch-style checks
+- =packages/coding-agent/src/tools/exit-plan-mode.ts= — =resolvePlanItem()= resolves child items by ID
+- =packages/org/src/tool.ts= — existing =cmdValidate()= collects all issues before returning — use same pattern
+- =packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts= — existing tests verify individual validation classes
+
+* Tests
+- File: =packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts= (extend existing)
+- File: =packages/org/test/tool-commands.test.ts= (extend for validate-plan)
+- Scenario 1: Item with BOTH thin body AND missing properties → single error lists both issues
+- Scenario 2: Item with bad sub-outline namespace AND broken deps → single error lists both
+- Scenario 3: Multiple items each with different issues → all reported in one response
+- Scenario 4: =org validate-plan= on a valid plan → returns =valid: true= with empty issues
+- Scenario 5: =org validate-plan= on an invalid plan → returns structured issues matching exit_plan_mode validation
+- Scenario 6: All existing exit-plan-mode-validation tests still pass (error messages may change from single-category to multi-category)
+
+* Implementation
+
+** Write combined-error tests for exit_plan_mode
+:PROPERTIES:
+:CUSTOM_ID: FEAT-543-report-all-exit-plan-mode-validation-err::combined-error-tests
+:END:
+- File: =packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts=
+- Add tests for scenarios 1-3: multiple error categories in one response
+- Update existing tests if error message format changes (they should still detect the same keywords)
+- Tests should initially fail (TDD)
+
+** Refactor exit_plan_mode to collect all errors
+:PROPERTIES:
+:CUSTOM_ID: FEAT-543-report-all-exit-plan-mode-validation-err::refactor-validation
+:DEPENDS: FEAT-543-report-all-exit-plan-mode-validation-err::combined-error-tests
+:END:
+- File: =packages/coding-agent/src/tools/exit-plan-mode.ts=
+- Create a =PlanValidationIssue= type: ={ category: string; items: string[]; message: string }=
+- Refactor =validateChildSuboutlineGraph()= to return issues array instead of throwing
+- Refactor =execute()= to:
+  1. Collect thin-body issues
+  2. Collect missing-property issues
+  3. Collect broken-dep issues
+  4. Call =validateChildSuboutlineGraph()= and collect its issues
+  5. If any issues exist, throw a single =ToolError= with all issues formatted together
+- Format: group by category, list affected items, show corrective action for each category
+
+** Add validate-plan command to org tool
+:PROPERTIES:
+:CUSTOM_ID: FEAT-543-report-all-exit-plan-mode-validation-err::validate-plan-cmd
+:DEPENDS: FEAT-543-report-all-exit-plan-mode-validation-err::refactor-validation
+:END:
+- File: =packages/org/src/tool.ts= — add =cmdValidatePlan()= function
+- File: =packages/coding-agent/src/tools/org.ts= — add "validate-plan" to command enum and schema
+- The command accepts =id= (PLAN item CUSTOM_ID) and runs the same validation logic
+- Extract shared validation into a function importable by both exit-plan-mode and the org tool
+- The shared function lives in =packages/coding-agent/src/plan-mode/plan-validation.ts= (new file)
+- Return ={ valid: boolean, issues: PlanValidationIssue[] }=
+
+* Edge Cases
+- Plan with 0 child items: report "no child items" as a single issue
+- Plan referencing a non-existent child: include in issues, don't crash
+- All children valid: return clean success
+- =validate-plan= on a non-existent ID: return NOT_FOUND error (same as =org get=)
+
+* Acceptance Criteria
+- [ ] =bun test packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts= passes
+- [ ] Agent seeing one =exit_plan_mode= rejection gets ALL issues in one message
+- [ ] =org validate-plan id=PLAN-XXX= returns structured issues
+- [ ] =bun check:ts= passes
+- [ ] Existing exit-plan-mode tests still pass

@@ -1,0 +1,90 @@
+#+TITLE: Return body in org create and update mutation responses
+#+STATE: DONE
+#+SESSION_ID: 14ba375a65996a65
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-02-22-870Z_14ba375a65996a65.jsonl]]
+#+CUSTOM_ID: FEAT-544-return-body-in-org-create-and-update-mut
+#+DEPENDS: FEAT-542-auto-prefix-sub-outline-custom-ids-on-or
+#+EFFORT: 2h
+#+LAYER: tools
+#+PRIORITY: #A
+
+* Initial Message
+
+tell me why 
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-14T09-00-29-497Z_14ba1b746e1d987d.jsonl
+ ID: 14ba1b746e1d987d
+
+the org tool didn't get used properly and the agent had to re-use and re-write the plan several times before it worked. I want the org tool to be ergonomic.
+
+Exclusively use jq ont he session, don't read it directly.
+
+* Scope
+
+Make =org create= and =org update= (when body/append is provided) include the final body content and body length in the response. This gives the agent immediate feedback on what was persisted without needing a follow-up =org get=.
+
+*In scope*:
+- =org create= with body → response includes =body= (string) and =bodyLength= (number)
+- =org update body== → response includes =body= and =bodyLength=
+- =org update append== → response includes =bodyLength= (full body too large to always include; agent can =org get= if needed)
+- Update =formatOrgResult()= in =packages/coding-agent/src/tools/org.ts= to render the body summary in the response text
+
+*Out of scope*:
+- Changing =org get= response format
+- Changing =org set= or =org note= responses
+- Adding body to =org query= results (already has =includeBody= flag)
+
+* Existing Patterns
+- =packages/org/src/tool.ts= — =cmdCreate()= returns ={ success, id, file, category, state }= — extend with =body=, =bodyLength=
+- =packages/org/src/tool.ts= — =buildMutationResponse()= builds update responses — extend similarly
+- =packages/org/src/tool.ts= — =cmdUpdate()= with =includeBody= already supports returning item body via =fetchItem= — the new behavior makes body feedback automatic for body mutations
+- =packages/coding-agent/src/tools/org.ts= — =formatOrgResult()= renders the success response text
+
+The body returned should be the final body AFTER any sub-outline rewriting (from FEAT-542). So this depends on FEAT-542 being wired in first — the response body reflects what was actually written to disk.
+
+* Tests
+- File: =packages/org/test/tool-commands.test.ts= (extend)
+- Scenario 1: =org create= with body → response has =body= string matching written content and =bodyLength= > 0
+- Scenario 2: =org create= without body → response has no =body= field
+- Scenario 3: =org update body== → response has =body= and =bodyLength=
+- Scenario 4: =org update append== → response has =bodyLength= but not full =body=
+- Scenario 5: =org update state== (no body change) → response has no =body= field
+
+* Implementation
+
+** Write body-in-response tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-544-return-body-in-org-create-and-update-mut::body-response-tests
+:END:
+- File: =packages/org/test/tool-commands.test.ts=
+- Add tests for scenarios 1-5
+- Tests should initially fail
+
+** Add body to create and update responses
+:PROPERTIES:
+:CUSTOM_ID: FEAT-544-return-body-in-org-create-and-update-mut::body-response-impl
+:DEPENDS: FEAT-544-return-body-in-org-create-and-update-mut::body-response-tests
+:END:
+- File: =packages/org/src/tool.ts=
+- In =cmdCreate=: after writing, read back the item body via =fetchItem= or store the (rewritten) body locally, include in response
+- In =cmdUpdate=: when =body= or =append= is provided, include body info in response via =buildMutationResponse= extension
+- Add =body?: string= and =bodyLength?: number= to the response objects
+
+** Update formatOrgResult for body field
+:PROPERTIES:
+:CUSTOM_ID: FEAT-544-return-body-in-org-create-and-update-mut::format-body
+:DEPENDS: FEAT-544-return-body-in-org-create-and-update-mut::body-response-impl
+:END:
+- File: =packages/coding-agent/src/tools/org.ts=
+- In =formatOrgResult()=: when =record.body= exists, append =body_length: N= to the output (don't dump full body to keep response compact)
+- When =record.bodyLength= exists, show it as metadata
+
+* Edge Cases
+- Empty body: =bodyLength= is 0, =body= is empty string
+- Very large body (>10KB): still return full body in response object (agent may need it for sub-outline ID verification)
+- =org update= with both =body= and =state=: include body in response
+
+* Acceptance Criteria
+- [ ] =bun test packages/org/test/tool-commands.test.ts= passes new scenarios
+- [ ] =org create body="..."= response includes =body= and =bodyLength=
+- [ ] =org update body="..."= response includes =body= and =bodyLength=
+- [ ] =bun check:ts= passes

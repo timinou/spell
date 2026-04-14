@@ -6,5 +6,6 @@ export * from "./mutex";
 export * from "./native-ops";
 export * from "./org-parse";
 export * from "./schema/defaults";
+export * from "./sub-outline-rewrite";
 export * from "./tool";
 export * from "./types";
