@@ -1,0 +1,58 @@
+#+TITLE: Org tool ergonomic improvements
+#+STATE: DONE
+#+SESSION_ID: 14ba375a65996a65
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-02-22-870Z_14ba375a65996a65.jsonl]]
+#+CUSTOM_ID: PLAN-224-org-tool-ergonomic-improvements
+#+EFFORT: 12h
+#+PRIORITY: #A
+
+* Initial Message
+
+tell me why 
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-14T09-00-29-497Z_14ba1b746e1d987d.jsonl
+ ID: 14ba1b746e1d987d
+
+the org tool didn't get used properly and the agent had to re-use and re-write the plan several times before it worked. I want the org tool to be ergonomic.
+
+Exclusively use jq ont he session, don't read it directly.
+
+* Context
+
+Session analysis of =14ba1b746e1d987d= revealed the org tool caused a planning agent to create 23 org items and cancel 15 of them across 3 generations, with 12 exit_plan_mode attempts, before producing 8 final items. Root causes:
+
+1. *CUSTOM_ID chicken-and-egg*: Sub-outline IDs must use =PARENT_ID::suffix= but the parent ID is auto-generated at create time. Agent can't write correct sub-outline IDs in the body at creation.
+2. *Validation gauntlet*: exit_plan_mode checks 6+ categories but throws on the first failure, requiring 12 attempts.
+3. *Body opacity*: org create/update succeeds silently without returning the body. Agent must =org get= to verify.
+4. *Prompt/tool contract mismatch*: Plan mode prompt hardcodes =state: \"INIT\"= but project configs may not include it.
+5. *No delete operation*: Agent must =update state=CANCELLED= leaving zombie files that validators traverse.
+
+This plan addresses all 5 root causes.
+
+* Verification
+- =bun test packages/org/test/= — all org package tests pass
+- =bun test packages/coding-agent/test/tools/exit-plan-mode= — all exit-plan-mode tests pass
+- =bun check:ts= — type checking passes
+- Manual verification: plan mode agent can create items with short sub-outline IDs and they auto-prefix correctly
+
+* Execution Manifest
+** foundation :wave:
+- [[id:FEAT-542-auto-prefix-sub-outline-custom-ids-on-or]] Auto-prefix sub-outline CUSTOM_IDs on create/update (4h)
+- [[id:FEAT-543-report-all-exit-plan-mode-validation-err]] Batch all validation errors + validate-plan command (3h)
+- [[id:BUG-250-plan-mode-prompt-hardcodes-init-state-wh]] Fix hardcoded INIT state in plan mode prompt (1h)
+- [[id:FEAT-545-add-org-delete-command-for-clean-item-re]] Add org delete command (2h)
+
+** transparency :wave:
+- [[id:FEAT-544-return-body-in-org-create-and-update-mut]] Return body in create/update responses (2h, depends FEAT-542)
+
+** Completion [2026-04-14]
+*** Verification
+- `bun test packages/org/test/` → pass (162 pass, 0 fail).
+- `bun test packages/coding-agent/test/tools/exit-plan-mode*.test.ts` → pass (32 pass, 0 fail).
+- `bun test packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts packages/coding-agent/test/prompts/plan-mode-policies.test.ts packages/coding-agent/test/prompts/plan-mode-tdd.test.ts packages/coding-agent/test/system-prompt-templates.test.ts packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts` → pass (32 pass, 0 fail).
+- `bun test packages/coding-agent/test/tools/org-format-result.test.ts packages/coding-agent/test/org-output.test.ts packages/coding-agent/test/tools/org.test.ts` → pass (22 pass, 0 fail).
+- `bun check:ts` → pass.
+- Manual verification: `bun - <<'EOF' ... EOF` created a feature item with short sub-outline `:CUSTOM_ID:` / `:DEPENDS:` values; the response body returned fully prefixed IDs, `bodyLength: 323`, and `prefixedInFile: true`.
+*** Artifacts
+- None.
+*** Deviations
+- None.

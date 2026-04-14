@@ -38,7 +38,7 @@ Plan output is org-native + decomposed. Order is fixed:
 1. Ask clarifying questions first
 2. Settle ALL design decisions before creating org items
 3. Create child items first (`state: "ITEM"`)
-4. Create orchestration PLAN item in `{{planCategory}}` (`state: "INIT"`)
+4. Create orchestration PLAN item in `{{planCategory}}` (`state: "{{planInitState}}"`)
 5. Run consistency sweep
 6. Call `{{exitToolName}}` with `title` + PLAN `itemId`
 
@@ -101,12 +101,12 @@ Child item requirements (`org create`):
 - enumerate ALL user workflows first when planning test coverage
 
 PLAN item requirements (`org create` in `{{planCategory}}`):
-- `state: "INIT"`
+- `state: "{{planInitState}}"`
 - Body uses org headings (`*`, `**`, `***`)
 - Include `* Context`, `* Verification`, and `* Execution Manifest` headings
 - Run `org wave` on the child-item sub-outline dependency graph, then mirror those waves in `* Execution Manifest` with `[[id:...]]` links
 
-Example: create children (`state: "ITEM"`) → run `org wave` → create PLAN in `{{planCategory}}` (`state: "INIT"`, body with `* Context`, `* Verification`, `* Execution Manifest` headings and `[[id:...]]` links) → call `{{exitToolName}}` with `title` and `itemId`.
+Example: create children (`state: "ITEM"`) → run `org wave` → create PLAN in `{{planCategory}}` (`state: "{{planInitState}}"`, body with `* Context`, `* Verification`, `* Execution Manifest` headings and `[[id:...]]` links) → call `{{exitToolName}}` with `title` and `itemId`.
 {{else}}
 Plan file: {{#if planExists}}`{{planFilePath}}` exists; you **MUST** read + update incrementally.{{else}}you **MUST** create a plan at `{{planFilePath}}`.{{/if}}
 
@@ -181,7 +181,7 @@ You **MUST** use `{{askToolName}}` to clarify scope, acceptance criteria, error 
 
 ### 3. Write Plan
 {{#if orgEnabled}}
-Create child items first, run `org wave` on the child-item sub-outline dependency graph, then create PLAN (`state: "INIT"`) with `:wave:` execution-manifest headings and `[[id:…]]` links.
+Create child items first, run `org wave` on the child-item sub-outline dependency graph, then create PLAN (`state: "{{planInitState}}"`) with `:wave:` execution-manifest headings and `[[id:…]]` links.
 {{else}}
 Use `{{editToolName}}` to update plan file as you learn; **MUST NOT** wait until end.
 {{/if}}
@@ -258,7 +258,7 @@ Address Metis gaps with further user questions where needed.
 ### Phase 3: Create Org Items Directly
 1. Create children (`state: "ITEM"`) using the Org Item Body Standard above
 2. Run `org wave` to compute wave structure from the sub-outline dependency graph
-3. Create PLAN (`state: "INIT"`) with `[[id:…]]` manifest links using wave headings (`:wave:` tag):
+3. Create PLAN (`state: "{{planInitState}}"`) with `[[id:…]]` manifest links using wave headings (`:wave:` tag):
 
 ```
 * Execution Manifest

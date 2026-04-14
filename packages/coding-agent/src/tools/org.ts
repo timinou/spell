@@ -18,6 +18,7 @@ import { Text } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { Theme } from "../modes/theme/theme";
+import { validatePlanItem } from "../plan-mode/plan-validation";
 import { renderStatusLine } from "../tui/status-line";
 import type { ToolSession } from ".";
 import { formatOrgQueryResult, renderItemOrg } from "./org-format";
@@ -26,7 +27,7 @@ import { replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "./r
 const orgSchema = Type.Object({
 	command: Type.String({
 		description:
-			"Subcommand: init | create | query | get | update | note | set | validate | dashboard | wave | graph | archive",
+			"Subcommand: init | create | query | get | update | delete | note | set | validate | validate-plan | dashboard | wave | graph | archive",
 	}),
 	title: Type.Optional(Type.String({ description: "Item title (create, or update to rename)" })),
 	category: Type.Optional(
@@ -146,7 +147,14 @@ export class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Them
 
 	#createInner(projectRoot: string): OrgToolDefinition {
 		const config = loadOrgConfig(this.#session);
-		return createOrgTool(projectRoot, config, { getSessionContext: () => buildSessionContext(this.#session) });
+		return createOrgTool(projectRoot, config, {
+			getSessionContext: () => buildSessionContext(this.#session),
+			validatePlan: async (id: string) => {
+				const result = await validatePlanItem(this.#session.settings, projectRoot, id);
+				if (!result) return { error: true, code: "NOT_FOUND", message: `Item not found: ${id}` };
+				return { valid: result.valid, issues: result.issues };
+			},
+		});
 	}
 
 	async #ensureInner(): Promise<void> {
@@ -203,7 +211,10 @@ function buildOrgCallPreview(args: Record<string, unknown>): OrgCallPreview {
 			break;
 		case "get":
 		case "note":
+		case "delete":
+		case "validate-plan":
 			pushMeta(meta, "id", args.id);
+			pushPathMeta(meta, args.file);
 			break;
 		case "update":
 			pushMeta(meta, "id", args.id);
@@ -291,6 +302,17 @@ export function formatOrgResult(result: unknown): string {
 	if (record && "fileContent" in record && typeof record.fileContent === "string") return record.fileContent;
 	if (record && "item" in record && typeof record.item === "object" && record.item !== null)
 		return renderItemOrg(record.item as OrgItem, true, Infinity);
+	if (record && "valid" in record && Array.isArray(record.issues)) {
+		const issues = record.issues as Array<Record<string, unknown>>;
+		const lines = [`valid: ${String(record.valid)}`, `issues: ${issues.length}`];
+		for (const issue of issues) {
+			const category = typeof issue.category === "string" ? issue.category : "unknown";
+			const items = Array.isArray(issue.items) ? issue.items : [];
+			lines.push(`${category}: ${typeof issue.message === "string" ? issue.message : ""}`.trimEnd());
+			for (const item of items) lines.push(`- ${String(item)}`);
+		}
+		return lines.join("\n");
+	}
 	if (record && "success" in record) {
 		const parts: string[] = [];
 		if (record.success) parts.push("success");
@@ -300,6 +322,7 @@ export function formatOrgResult(result: unknown): string {
 		if (typeof record.section === "string") parts.push(`section: ${record.section}`);
 		if (typeof record.state === "string") parts.push(`state: ${record.state}`);
 		if (typeof record.category === "string") parts.push(`category: ${record.category}`);
+		if (typeof record.bodyLength === "number") parts.push(`body_length: ${record.bodyLength}`);
 		return parts.join("\n");
 	}
 	if (record && "error" in record)

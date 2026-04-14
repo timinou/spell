@@ -11,6 +11,7 @@ import { generateId } from "./id-generator";
 import { parseSubOutlineId } from "./id-links";
 import { KeyedMutex } from "./mutex";
 import { DEFAULT_ORG_CONFIG, EFFORT_REGEXP, PRIORITY_REGEXP, REQUIRED_PROPERTIES } from "./schema/defaults";
+import { rewriteSubOutlineIds } from "./sub-outline-rewrite";
 import type {
 	CategoryMetrics,
 	ComputedWave,
@@ -27,10 +28,12 @@ interface OrgContext {
 	config: OrgConfig;
 	projectRoot: string;
 	getSessionContext?: () => unknown;
+	validatePlan?: (id: string) => Promise<unknown>;
 }
 
 export interface CreateOrgToolOptions {
 	getSessionContext?: () => unknown;
+	validatePlan?: (id: string) => Promise<unknown>;
 }
 
 export interface OrgToolDefinition {
@@ -113,6 +116,13 @@ interface ReadOrgFileOptions {
 }
 
 async function readOrgFile(opts: ReadOrgFileOptions): Promise<OrgItem[]> {
+	try {
+		await fs.stat(opts.filePath);
+	} catch (err) {
+		if (isEnoent(err)) return [];
+		throw err;
+	}
+
 	const result = executeOrg({
 		command: "parse",
 		file: opts.filePath,
@@ -294,10 +304,11 @@ async function cmdCreate(
 	}
 	await fs.mkdir(cat.absPath, { recursive: true });
 	const session = cat.writeInitialPrompt ? (ctx.getSessionContext?.() as OrgSessionContext | undefined) : undefined;
-	const { id, filePath } = await createCategoryMutex.withLock(cat.absPath, async () => {
+	const { id, filePath, body } = await createCategoryMutex.withLock(cat.absPath, async () => {
 		const id = await generateId(cat.absPath, cat.prefix, args.title);
 		const fileName = args.file ? (args.file.endsWith(".org") ? args.file : `${args.file}.org`) : `${id}.org`;
 		const filePath = path.join(cat.absPath, fileName);
+		const rewrittenBody = args.body === undefined ? undefined : rewriteSubOutlineIds(id, args.body).body;
 		const result = executeOrg({
 			command: "createItem",
 			file: filePath,
@@ -305,16 +316,16 @@ async function cmdCreate(
 			title: args.title,
 			state,
 			properties: args.properties,
-			body: args.body,
+			body: rewrittenBody,
 			sessionId: session?.sessionId,
 			transcriptPath: session?.transcriptPath,
 			initialMessage: session?.initialMessage,
 		});
 		if (result.error) throw new Error(String(result.output));
-		return { id, filePath };
+		return { id, filePath, body: rewrittenBody };
 	});
 	logger.debug("org:create", { id, filePath, category: cat.name });
-	return { success: true, id, file: filePath, category: cat.name, state };
+	return { success: true, id, file: filePath, category: cat.name, state, body, bodyLength: body?.length };
 }
 
 async function cmdQuery(
@@ -452,6 +463,7 @@ async function cmdUpdate(
 	if (!args.state && args.body === undefined && args.append === undefined && !args.title && !args.note) {
 		return { error: true, message: "update requires at least one of: state, body, append, title" };
 	}
+	const rewrittenBody = args.body === undefined ? undefined : rewriteSubOutlineIds(args.id, args.body).body;
 	const tryUpdate = async (filePath: string): Promise<Record<string, unknown> | null> => {
 		let result: ReturnType<typeof executeOrg>;
 		try {
@@ -461,7 +473,7 @@ async function cmdUpdate(
 				id: args.id,
 				state: args.state,
 				title: args.title,
-				body: args.body,
+				body: rewrittenBody,
 				append: args.append,
 				note: args.note,
 				todoKeywords: ctx.config.todoKeywords,
@@ -471,7 +483,15 @@ async function cmdUpdate(
 		}
 		if (result.error) return null;
 		const output = result.output as { updated?: string[] };
-		return await buildMutationResponse(args.id, output.updated ?? [], filePath, args.includeBody, ctx);
+		return await buildMutationResponse(
+			args.id,
+			output.updated ?? [],
+			filePath,
+			args.includeBody,
+			ctx,
+			undefined,
+			args.body !== undefined ? { includeBodyText: true } : args.append !== undefined ? {} : undefined,
+		);
 	};
 	if (args.file) {
 		const direct = await tryUpdate(args.file);
@@ -500,9 +520,16 @@ async function buildMutationResponse(
 	includeBody: boolean | undefined,
 	ctx: OrgContext,
 	extra?: Record<string, unknown>,
+	bodyResponse?: { includeBodyText?: boolean },
 ): Promise<Record<string, unknown>> {
 	const response: Record<string, unknown> = { success: true, id, updated, file, ...extra };
-	if (includeBody) response.item = await fetchItem(ctx, id);
+	const item = includeBody || bodyResponse ? await fetchItem(ctx, id) : undefined;
+	if (includeBody) response.item = item;
+	if (bodyResponse) {
+		const finalBody = item?.body ?? "";
+		response.bodyLength = finalBody.length;
+		if (bodyResponse.includeBodyText) response.body = finalBody;
+	}
 	return response;
 }
 
@@ -596,6 +623,32 @@ async function cmdNote(
 	return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
 }
 
+async function cmdDelete(ctx: OrgContext, args: { id: string; file?: string }): Promise<unknown> {
+	const tryResolveItem = async (filePath: string): Promise<OrgItem | undefined> => {
+		try {
+			const items = await readOrgFile({
+				filePath,
+				category: path.basename(path.dirname(filePath)),
+				dir: path.basename(path.dirname(filePath)),
+				todoKeywords: ctx.config.todoKeywords,
+				includeBody: true,
+			});
+			return items.find(item => item.id === args.id);
+		} catch (err) {
+			if (isEnoent(err)) return undefined;
+			throw err;
+		}
+	};
+
+	const item = (args.file ? await tryResolveItem(args.file) : undefined) ?? (await fetchItem(ctx, args.id));
+	if (!item) return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
+	if (item.state === "DOING" || item.state === "REVIEW") {
+		return { error: true, message: `Cannot delete active item ${args.id} while it is ${item.state}` };
+	}
+
+	await fs.unlink(item.file);
+	return { success: true, id: item.id, file: item.file, deleted: true };
+}
 async function cmdDashboard(ctx: OrgContext): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 	const catMetrics: CategoryMetrics[] = [];
@@ -662,6 +715,13 @@ async function cmdValidate(ctx: OrgContext, args: { category?: string; file?: st
 	};
 }
 
+async function cmdValidatePlan(ctx: OrgContext, args: { id: string }): Promise<unknown> {
+	if (!ctx.validatePlan) {
+		return { error: true, message: "validate-plan is not available in this org tool context" };
+	}
+
+	return ctx.validatePlan(args.id);
+}
 async function collectItems(ctx: OrgContext, args: { file?: string; category?: string }): Promise<OrgItem[]> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 	if (args.file) {
@@ -739,6 +799,7 @@ export function createOrgTool(
 		config,
 		projectRoot,
 		getSessionContext: options?.getSessionContext as (() => OrgSessionContext) | undefined,
+		validatePlan: options?.validatePlan,
 	};
 	return {
 		name: "org",
@@ -809,6 +870,11 @@ export function createOrgTool(
 						section: args.section as string | undefined,
 						includeBody: args.includeBody as boolean | undefined,
 					});
+				case "delete":
+					return cmdDelete(ctx, {
+						id: args.id as string,
+						file: args.file as string | undefined,
+					});
 				case "note":
 					return cmdNote(ctx, {
 						id: args.id as string,
@@ -829,6 +895,8 @@ export function createOrgTool(
 						category: args.category as string | undefined,
 						file: args.file as string | undefined,
 					});
+				case "validate-plan":
+					return cmdValidatePlan(ctx, { id: args.id as string });
 				case "dashboard":
 					return cmdDashboard(ctx);
 				case "wave":

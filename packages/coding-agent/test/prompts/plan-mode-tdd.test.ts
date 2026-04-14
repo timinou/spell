@@ -13,6 +13,7 @@ function renderUltraplanPrompt(): string {
 		reentry: false,
 		iterative: false,
 		orgEnabled: true,
+		planInitState: "ITEM",
 		planCategory: "plans",
 		childCategories: [{ name: "features", prefix: "FEAT", description: "Feature work" }],
 		allowedFolders: undefined,

@@ -16,7 +16,7 @@ import * as path from "node:path";
 import { createOrgTool, type OrgToolDefinition } from "../src/tool";
 import type { OrgConfig } from "../src/types";
 
-const TODO_KEYWORDS = ["ITEM", "DOING", "REVIEW", "DONE", "BLOCKED"];
+const TODO_KEYWORDS = ["ITEM", "DOING", "REVIEW", "DONE", "BLOCKED", "CANCELLED"];
 
 let tmpDir: string;
 
@@ -544,5 +544,201 @@ describe("priority queries", () => {
 			total: number;
 		};
 		expect(result.total).toBe(1);
+	});
+});
+
+describe("validate-plan command", () => {
+	test("delegates to injected validator result", async () => {
+		const issues = [{ category: "thin-child-body", items: ["FEAT-101-thin"], message: "Body too small" }];
+		const tool = createOrgTool(tmpDir, makeConfig(), {
+			validatePlan: async (id: string) => ({ valid: false, id, issues }),
+		});
+
+		const result = (await tool.execute({ command: "validate-plan", id: "PLAN-101-test" })) as Record<string, unknown>;
+
+		expect(result).toEqual({ valid: false, id: "PLAN-101-test", issues });
+	});
+
+	test("returns an error when no validator is configured", async () => {
+		const tool = makeTool();
+		const result = (await tool.execute({ command: "validate-plan", id: "PLAN-404" })) as Record<string, unknown>;
+
+		expect(result.error).toBe(true);
+		expect(result.message).toBe("validate-plan is not available in this org tool context");
+	});
+});
+
+describe("delete command", () => {
+	test("deletes an ITEM-state item", async () => {
+		const filePath = await seedItem("drafts", "DRAFT-030-delete-item", "Delete me", { state: "ITEM" });
+		const tool = makeTool();
+
+		const result = (await tool.execute({ command: "delete", id: "DRAFT-030-delete-item" })) as Record<
+			string,
+			unknown
+		>;
+
+		expect(result).toEqual({ success: true, id: "DRAFT-030-delete-item", file: filePath, deleted: true });
+		await expect(fs.stat(filePath)).rejects.toBeDefined();
+	});
+
+	test("deletes a DONE-state item", async () => {
+		const filePath = await seedItem("drafts", "DRAFT-031-delete-done", "Delete done", { state: "DONE" });
+		const tool = makeTool();
+
+		const result = (await tool.execute({ command: "delete", id: "DRAFT-031-delete-done" })) as Record<
+			string,
+			unknown
+		>;
+
+		expect(result.success).toBe(true);
+		expect(result.file).toBe(filePath);
+		await expect(fs.stat(filePath)).rejects.toBeDefined();
+	});
+
+	test("deletes a CANCELLED-state item", async () => {
+		const filePath = await seedItem("drafts", "DRAFT-032-delete-cancelled", "Delete cancelled", {
+			state: "CANCELLED",
+		});
+		const tool = makeTool();
+
+		const result = (await tool.execute({ command: "delete", id: "DRAFT-032-delete-cancelled" })) as Record<
+			string,
+			unknown
+		>;
+
+		expect(result.success).toBe(true);
+		expect(result.file).toBe(filePath);
+		await expect(fs.stat(filePath)).rejects.toBeDefined();
+	});
+
+	test("refuses to delete a DOING-state item", async () => {
+		const filePath = await seedItem("drafts", "DRAFT-033-delete-doing", "Delete doing", { state: "DOING" });
+		const tool = makeTool();
+
+		const result = (await tool.execute({
+			command: "delete",
+			id: "DRAFT-033-delete-doing",
+			file: filePath,
+		})) as Record<string, unknown>;
+
+		expect(result.error).toBe(true);
+		expect(result.message).toBe("Cannot delete active item DRAFT-033-delete-doing while it is DOING");
+		const content = await readFile(filePath);
+		expect(content).toContain("#+STATE: DOING");
+	});
+
+	test("refuses to delete a REVIEW-state item", async () => {
+		const filePath = await seedItem("drafts", "DRAFT-034-delete-review", "Delete review", { state: "REVIEW" });
+		const tool = makeTool();
+
+		const result = (await tool.execute({
+			command: "delete",
+			id: "DRAFT-034-delete-review",
+			file: filePath,
+		})) as Record<string, unknown>;
+
+		expect(result.error).toBe(true);
+		expect(result.message).toBe("Cannot delete active item DRAFT-034-delete-review while it is REVIEW");
+	});
+
+	test("returns NOT_FOUND when deleting a missing item", async () => {
+		const tool = makeTool();
+		const result = (await tool.execute({ command: "delete", id: "DRAFT-404-missing" })) as Record<string, unknown>;
+
+		expect(result.error).toBe(true);
+		expect(result.code).toBe("NOT_FOUND");
+	});
+
+	test("deleted items are no longer returned by get", async () => {
+		await seedItem("projects", "PROJ-035-delete-get", "Delete then get", { state: "ITEM" });
+		const tool = makeTool();
+
+		await tool.execute({ command: "delete", id: "PROJ-035-delete-get" });
+		const result = (await tool.execute({ command: "get", id: "PROJ-035-delete-get" })) as Record<string, unknown>;
+
+		expect(result.error).toBe(true);
+		expect(result.code).toBe("NOT_FOUND");
+	});
+});
+
+describe("mutation body responses", () => {
+	test("create with body returns body and bodyLength", async () => {
+		const tool = makeTool();
+		const result = (await tool.execute({
+			command: "create",
+			title: "Body response",
+			category: "drafts",
+			body: "* Scope\nDetailed body text",
+		})) as Record<string, unknown>;
+
+		expect(result.body).toBe("* Scope\nDetailed body text");
+		expect(result.bodyLength).toBe("* Scope\nDetailed body text".length);
+	});
+
+	test("create without body omits body fields", async () => {
+		const tool = makeTool();
+		const result = (await tool.execute({
+			command: "create",
+			title: "No body response",
+			category: "drafts",
+		})) as Record<string, unknown>;
+
+		expect(result.body).toBeUndefined();
+		expect(result.bodyLength).toBeUndefined();
+	});
+
+	test("update with body returns final body and bodyLength", async () => {
+		const filePath = await seedItem("drafts", "DRAFT-040-update-body-response", "Body replace", {
+			state: "ITEM",
+			body: "Old body",
+		});
+		const tool = makeTool();
+		const result = (await tool.execute({
+			command: "update",
+			id: "DRAFT-040-update-body-response",
+			file: filePath,
+			body: "* Scope\nReplaced body",
+		})) as Record<string, unknown>;
+
+		expect(result.body).toBe("* Scope\nReplaced body");
+		expect(result.bodyLength).toBe("* Scope\nReplaced body".length);
+	});
+
+	test("update with append returns bodyLength without body", async () => {
+		const filePath = await seedItem("drafts", "DRAFT-041-update-append-response", "Body append", {
+			state: "ITEM",
+			body: "Start",
+		});
+		const tool = makeTool();
+		const result = (await tool.execute({
+			command: "update",
+			id: "DRAFT-041-update-append-response",
+			file: filePath,
+			append: "\nMore detail",
+		})) as Record<string, unknown>;
+
+		expect(result.body).toBeUndefined();
+		const fetched = (await tool.execute({ command: "get", id: "DRAFT-041-update-append-response" })) as {
+			item: { body?: string };
+		};
+		expect(result.bodyLength).toBe((fetched.item.body ?? "").length);
+	});
+
+	test("update without body mutation omits body fields", async () => {
+		const filePath = await seedItem("drafts", "DRAFT-042-update-state-response", "State only", {
+			state: "ITEM",
+			body: "Body stays",
+		});
+		const tool = makeTool();
+		const result = (await tool.execute({
+			command: "update",
+			id: "DRAFT-042-update-state-response",
+			file: filePath,
+			state: "DOING",
+		})) as Record<string, unknown>;
+
+		expect(result.body).toBeUndefined();
+		expect(result.bodyLength).toBeUndefined();
 	});
 });
