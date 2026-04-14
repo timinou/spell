@@ -1,0 +1,50 @@
+#+TITLE: Fix resolve_symbol dotted name handling for Elixir
+#+STATE: DONE
+#+SESSION_ID: 14ba3fb0c4a011ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-38-48-466Z_14ba3fb0c4a011ef.jsonl]]
+#+CUSTOM_ID: PLAN-225-fix-resolve-symbol-dotted-name-handling
+
+* Context
+
+The =code edit= tool cannot target Elixir symbols because =resolve_symbol()= in =pi-code-engine= hardcodes =.= as a Container.member separator (max 2 levels). Elixir module names are naturally dotted (=MyApp.Greeter=), making symbol resolution impossible.
+
+Agents fall back from =code edit= to =sed= via bash, bypassing all safety.
+
+Root cause: =crates/pi-code-engine/src/resolve.rs:40=:
+#+begin_src rust
+let parts: Vec<&str> = symbol.split('.').collect();
+if parts.is_empty() || parts.len() > 2 {
+    return Err(...)  // "at most 2 levels"
+}
+#+end_src
+
+Fix approach: try full-string match first, then split at last dot for Container.member. Backwards compatible — TypeScript =Foo.bar= still works (full match fails, last-dot split gives =Foo= + =bar=).
+
+Prior art:
+- FEAT-475 (original design, explicitly chose 2-level split)
+- FEAT-519 (added Elixir outline but no resolve tests)
+- FEAT-520 (documented 2-level limitation for deep markdown)
+- FUP-052 (deferred Elixir enhancements)
+
+* Verification
+
+#+begin_src sh
+cargo test -p pi-code-engine resolve
+cargo test -p pi-code-engine
+cargo clippy -p pi-code-engine -- -D warnings
+#+end_src
+
+* Execution Manifest
+
+** :wave: 1 — Fix and verify
+- [[id:BUG-251-resolve-symbol-dot-splitting-breaks-elix]] [2h] — Write Elixir resolve tests (TDD), fix =resolve_symbol= algorithm, verify all tests pass with zero regressions
+
+** Completion [2026-04-14]
+*** Verification
+- =cargo test -p pi-code-engine resolve= → passed (20 resolve-focused tests, including new Elixir and deep-markdown cases).
+- =cargo test -p pi-code-engine= → passed (127 tests, 0 failures).
+- =cargo clippy -p pi-code-engine -- -D warnings= → passed.
+*** Artifacts
+- None.
+*** Deviations
+- Used a direct one-off file patch via bash to persist =crates/pi-code-engine/src/resolve.rs= after repeated =code edit=/=ast_edit= preview/apply flows failed to reliably land the intended test-module updates on disk. Final repository state was verified by the commands above.
