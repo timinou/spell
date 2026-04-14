@@ -1,0 +1,80 @@
+#+TITLE: Harden code edit mutation contract and stale buffer checks
+#+STATE: DONE
+#+SESSION_ID: 14ba470308c6b0e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T12-10-47-715Z_14ba470308c6b0e2.jsonl]]
+#+CUSTOM_ID: BUG-252-harden-code-edit-mutation-contract-and-s
+#+PRIORITY: #A
+#+EFFORT: 6h
+#+LAYER: backend
+
+* Scope
+- In scope: `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/tools/code-result.ts`, `packages/coding-agent/src/patch/index.ts`, and tests in `packages/coding-agent/test/tools/code.test.ts` + `packages/coding-agent/test/tools/code-result.test.ts`.
+- In scope: strict mutation contract for mutating `code edit`: non-idempotent no-op (`Changes: +0 -0`) must hard-fail.
+- In scope: explicit idempotent override path for callers that intentionally allow no-op.
+- In scope: stale-buffer protection for file-scoped `code` commands so external disk mutation cannot silently diverge from in-memory buffer state.
+- Out of scope: modifying structural matching algorithms in `pi-code-engine`.
+
+* Existing Patterns
+- `CodeTool.execute(...)` (`packages/coding-agent/src/tools/code.ts`) currently validates create payloads, executes native buffer ops, formats, then saves.
+- `normalizeCodeBufferSuccess(...)` and `formatCodeToolContent(...)` (`packages/coding-agent/src/tools/code-result.ts`) determine user-facing `Edited/Created` + `Changes: +N -M` text.
+- Hashline/patch summaries are compacted via `buildCompactHashlineDiffPreview(...)` in `packages/coding-agent/src/patch/hashline.ts` and consumed by result rendering.
+- Current tests in `packages/coding-agent/test/tools/code.test.ts` already assert create validation and save behavior and should remain the canonical contract suite.
+
+* Tests
+User workflows to lock first as failing tests:
+1. Non-idempotent mutating edit returns no semantic diff -> tool returns hard error, not success text.
+2. Explicit idempotent mutating edit returns no semantic diff -> tool succeeds with explicit no-op/applied metadata.
+3. Mutating edit with real diff still succeeds and keeps formatting/save behavior.
+4. Stale buffer detected before mutation -> deterministic stale-buffer error with corrective next steps.
+5. In-sync buffer path remains unblocked.
+6. Cross-tool transcript fixture validates classification path (`Edited` + `Changes: +0 -0`) is treated as failure for non-idempotent mutation.
+
+* Implementation
+** Write failing mutation-contract tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-252-harden-code-edit-mutation-contract-and-s::contract-tests
+:END:
+- Files: `packages/coding-agent/test/tools/code.test.ts`, `packages/coding-agent/test/tools/code-result.test.ts`.
+- Add workflows (1), (2), (3) with exact output/details assertions.
+
+** Write failing stale-buffer and transcript-fixture tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-252-harden-code-edit-mutation-contract-and-s::stale-buffer-tests
+:DEPENDS: BUG-252-harden-code-edit-mutation-contract-and-s::contract-tests
+:END:
+- File: `packages/coding-agent/test/tools/code.test.ts`.
+- Add workflow (4)/(5) stale-buffer guard tests and workflow (6) transcript fixture classification test.
+
+** Implement strict no-op contract + idempotent override
+:PROPERTIES:
+:CUSTOM_ID: BUG-252-harden-code-edit-mutation-contract-and-s::implement-code-tool-contract
+:DEPENDS: BUG-252-harden-code-edit-mutation-contract-and-s::stale-buffer-tests
+:END:
+- File: `packages/coding-agent/src/tools/code.ts`.
+- Add idempotent opt-in field and hard-fail no-op enforcement for mutating edits by default.
+
+** Implement stale-buffer preflight and result-shape alignment
+:PROPERTIES:
+:CUSTOM_ID: BUG-252-harden-code-edit-mutation-contract-and-s::implement-result-shape
+:DEPENDS: BUG-252-harden-code-edit-mutation-contract-and-s::implement-code-tool-contract
+:END:
+- Files: `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/tools/code-result.ts`.
+- Add stale-buffer preflight for mutating file commands and ensure no-op cannot render as successful mutation.
+
+* Edge Cases
+- Formatting-only churn that nets zero semantic change still follows strict no-op contract unless idempotent is explicit.
+- Idempotent override is per-call only; no global silent bypass.
+- Stale-buffer guard must avoid false positives on clean synchronized state.
+- Error surfaces must remain truthful (no fabricated symbols/hunks).
+
+* Acceptance Criteria
+- Non-idempotent no-op mutating edit hard-fails.
+- Idempotent no-op mutating edit succeeds with explicit no-op/applied metadata.
+- Stale-buffer divergence is surfaced before mutation with actionable guidance.
+- Real mutations continue succeeding with existing format/save behavior.
+- Verification: `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts`
+
+* Related Plan
+- [[id:PLAN-227-code-edit-reliability-hardening-and-org]]
+
+NOTE [2026-04-14]: Implemented strict no-op mutation failure, per-call idempotent override, stale-buffer preflight, truthful no-op rendering, and focused regression tests.

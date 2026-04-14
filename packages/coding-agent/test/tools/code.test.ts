@@ -230,7 +230,8 @@ describe("coding-agent code tool wiring", () => {
 
 	it("formats edited buffers before the final save when a formatter is available", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
-			.mockReturnValueOnce({ output: { version: 2, diff: "@@ patch @@", editCount: 1 }, error: false })
+			.mockReturnValueOnce({ output: [], error: false })
+			.mockReturnValueOnce({ output: { version: 2, diff: "@@ patch @@\n-old\n+new", editCount: 1 }, error: false })
 			.mockReturnValueOnce({ output: "function main( ) {\nreturn 42;\n}\n", error: false })
 			.mockReturnValueOnce({ output: { version: 3, diff: "@@ format @@", editCount: 1 }, error: false })
 			.mockReturnValueOnce({ output: { success: true, version: 3 }, error: false });
@@ -239,7 +240,7 @@ describe("coding-agent code tool wiring", () => {
 			formatter: lspModule.FileFormatResult.FORMATTED,
 			server: "biome",
 		});
-		const tool = new CodeTool(createSession());
+		const tool = new CodeTool(createSession({ settings: Settings.isolated({ "lsp.enabled": true }) }));
 
 		const result = await tool.execute("tool", {
 			command: "edit",
@@ -255,12 +256,12 @@ describe("coding-agent code tool wiring", () => {
 			"/tmp/test",
 			undefined,
 		);
-		expect(bufferSpy.mock.calls[2]?.[0]).toMatchObject({
+		expect(bufferSpy.mock.calls[3]?.[0]).toMatchObject({
 			command: "replace_content",
 			file: "/tmp/test/src/main.ts",
 			content: "function main() {\n  return 42;\n}\n",
 		});
-		expect(bufferSpy.mock.calls[3]?.[0]).toMatchObject({ command: "save", file: "/tmp/test/src/main.ts" });
+		expect(bufferSpy.mock.calls[4]?.[0]).toMatchObject({ command: "save", file: "/tmp/test/src/main.ts" });
 		expect(getText(result)).toContain("Formatting: formatted via biome");
 	});
 
@@ -288,6 +289,36 @@ describe("coding-agent code tool wiring", () => {
 		expect(getText(result)).toContain("Created src/new-module.ts");
 	});
 
+	it("replaces an existing file when replace omits symbol and line", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: [], error: false })
+			.mockReturnValueOnce({
+				output: {
+					version: 2,
+					diff: "@@ top-level @@\n-export const original = 1;\n+export const replaced = 2;",
+					editCount: 1,
+					created: false,
+				},
+				error: false,
+			})
+			.mockReturnValueOnce({ output: { success: true, version: 2 }, error: false });
+		const tool = new CodeTool(createSession({ settings: Settings.isolated({ "lsp.enabled": false }) }));
+		const result = await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			operation: "replace",
+			content: ["export const replaced = 2;"],
+		});
+		expect(bufferSpy.mock.calls[1]?.[0]).toMatchObject({
+			command: "edit",
+			file: "/tmp/test/src/main.ts",
+			operation: "replace",
+			content: "export const replaced = 2;",
+		});
+		expect(bufferSpy.mock.calls[2]?.[0]).toMatchObject({ command: "save", file: "/tmp/test/src/main.ts" });
+		expect(getText(result)).toContain("Edited src/main.ts");
+	});
+
 	it("rejects invalid create payloads before invoking NAPI", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({ output: [], error: false });
 		const tool = new CodeTool(createSession());
@@ -304,6 +335,7 @@ describe("coding-agent code tool wiring", () => {
 
 	it("joins array content for replace-body edits before invoking NAPI", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: [], error: false })
 			.mockReturnValueOnce({ output: { version: 2, diff: "@@ replace-body @@", editCount: 1 }, error: false })
 			.mockReturnValueOnce({ output: { success: true, version: 2 }, error: false });
 		const tool = new CodeTool(createSession());
@@ -316,7 +348,7 @@ describe("coding-agent code tool wiring", () => {
 			content: ["{", "  return 42;", "}"],
 		});
 
-		expect(bufferSpy.mock.calls[0]?.[0]).toMatchObject({
+		expect(bufferSpy.mock.calls[1]?.[0]).toMatchObject({
 			command: "edit",
 			file: "/tmp/test/src/main.ts",
 			operation: "replace-body",
@@ -326,6 +358,7 @@ describe("coding-agent code tool wiring", () => {
 
 	it("joins array patch text before invoking NAPI", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: [], error: false })
 			.mockReturnValueOnce({ output: { version: 2, diff: "@@ patch @@", editCount: 1 }, error: false })
 			.mockReturnValueOnce({ output: { success: true, version: 2 }, error: false });
 		const tool = new CodeTool(createSession());
@@ -343,7 +376,7 @@ describe("coding-agent code tool wiring", () => {
 			],
 		});
 
-		expect(bufferSpy.mock.calls[0]?.[0]).toMatchObject({
+		expect(bufferSpy.mock.calls[1]?.[0]).toMatchObject({
 			command: "edit",
 			patches: [
 				{
@@ -356,6 +389,7 @@ describe("coding-agent code tool wiring", () => {
 
 	it("preserves single-string content for rename edits", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: [], error: false })
 			.mockReturnValueOnce({ output: { version: 2, diff: "@@ rename @@", editCount: 1 }, error: false })
 			.mockReturnValueOnce({ output: { success: true, version: 2 }, error: false });
 		const tool = new CodeTool(createSession());
@@ -368,7 +402,7 @@ describe("coding-agent code tool wiring", () => {
 			content: "renamedMain",
 		});
 
-		expect(bufferSpy.mock.calls[0]?.[0]).toMatchObject({
+		expect(bufferSpy.mock.calls[1]?.[0]).toMatchObject({
 			command: "edit",
 			operation: "rename",
 			content: "renamedMain",
@@ -377,6 +411,7 @@ describe("coding-agent code tool wiring", () => {
 
 	it("normalizes mixed-format batch edits before invoking NAPI", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: [], error: false })
 			.mockReturnValueOnce({ output: { version: 2, diff: "@@ batch @@", editCount: 3 }, error: false })
 			.mockReturnValueOnce({ output: { success: true, version: 2 }, error: false });
 		const tool = new CodeTool(createSession());
@@ -395,7 +430,7 @@ describe("coding-agent code tool wiring", () => {
 			],
 		});
 
-		expect(bufferSpy.mock.calls[0]?.[0]).toMatchObject({
+		expect(bufferSpy.mock.calls[1]?.[0]).toMatchObject({
 			command: "edit",
 			edits: [
 				{ symbol: "main", operation: "replace-body", content: "{\n  return 42;\n}" },
@@ -520,6 +555,7 @@ describe("coding-agent code tool wiring", () => {
 
 	it("auto-saves to disk after successful edit", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: [], error: false })
 			.mockReturnValueOnce({ output: { version: 2, diff: "@@ patch @@\n-old\n+new", editCount: 1 }, error: false })
 			.mockReturnValueOnce({ output: { success: true, version: 2 }, error: false });
 		const tool = new CodeTool(createSession({ settings: Settings.isolated({ "lsp.enabled": false }) }));
@@ -531,8 +567,8 @@ describe("coding-agent code tool wiring", () => {
 			patches: [{ find: "old", replace: "new" }],
 		});
 
-		expect(bufferSpy).toHaveBeenCalledTimes(2);
-		expect(bufferSpy.mock.calls[1]?.[0]).toEqual(
+		expect(bufferSpy).toHaveBeenCalledTimes(3);
+		expect(bufferSpy.mock.calls[2]?.[0]).toEqual(
 			expect.objectContaining({ command: "save", file: "/tmp/test/src/main.ts" }),
 		);
 		expect(getText(result)).toContain("Edited");
@@ -541,13 +577,14 @@ describe("coding-agent code tool wiring", () => {
 
 	it("auto-saves to disk after successful undo", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: [], error: false })
 			.mockReturnValueOnce({ output: { version: 1, diff: "@@ undo @@" }, error: false })
 			.mockReturnValueOnce({ output: { success: true }, error: false });
 		const tool = new CodeTool(createSession());
 		const result = await tool.execute("tool", { command: "undo", file: "/tmp/test/src/main.ts" });
 
-		expect(bufferSpy).toHaveBeenCalledTimes(2);
-		expect(bufferSpy.mock.calls[1]?.[0]).toEqual(
+		expect(bufferSpy).toHaveBeenCalledTimes(3);
+		expect(bufferSpy.mock.calls[2]?.[0]).toEqual(
 			expect.objectContaining({ command: "save", file: "/tmp/test/src/main.ts" }),
 		);
 		expect(result.details).toEqual(expect.objectContaining({ kind: "file" }));
@@ -555,13 +592,14 @@ describe("coding-agent code tool wiring", () => {
 
 	it("auto-saves to disk after successful redo", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: [], error: false })
 			.mockReturnValueOnce({ output: { version: 3, diff: "@@ redo @@" }, error: false })
 			.mockReturnValueOnce({ output: { success: true }, error: false });
 		const tool = new CodeTool(createSession());
 		const result = await tool.execute("tool", { command: "redo", file: "/tmp/test/src/main.ts" });
 
-		expect(bufferSpy).toHaveBeenCalledTimes(2);
-		expect(bufferSpy.mock.calls[1]?.[0]).toEqual(
+		expect(bufferSpy).toHaveBeenCalledTimes(3);
+		expect(bufferSpy.mock.calls[2]?.[0]).toEqual(
 			expect.objectContaining({ command: "save", file: "/tmp/test/src/main.ts" }),
 		);
 		expect(result.details).toEqual(expect.objectContaining({ kind: "file" }));
@@ -569,7 +607,8 @@ describe("coding-agent code tool wiring", () => {
 
 	it("returns error when auto-save after edit fails", async () => {
 		spyOn(nativesModule, "executeCodeBuffer")
-			.mockReturnValueOnce({ output: { version: 2, diff: "@@ patch @@", editCount: 1 }, error: false })
+			.mockReturnValueOnce({ output: [], error: false })
+			.mockReturnValueOnce({ output: { version: 2, diff: "@@ patch @@\n-old\n+new", editCount: 1 }, error: false })
 			.mockReturnValueOnce({ output: "Permission denied", error: true });
 		const tool = new CodeTool(createSession({ settings: Settings.isolated({ "lsp.enabled": false }) }));
 		const result = await tool.execute("tool", {
@@ -593,10 +632,12 @@ describe("coding-agent code tool wiring", () => {
 	});
 
 	it("does not auto-save when edit fails", async () => {
-		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
-			output: "patch.find matched 0 locations",
-			error: true,
-		});
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: [], error: false })
+			.mockReturnValueOnce({
+				output: "patch.find matched 0 locations",
+				error: true,
+			});
 		const tool = new CodeTool(createSession());
 		const result = await tool.execute("tool", {
 			command: "edit",
@@ -606,7 +647,80 @@ describe("coding-agent code tool wiring", () => {
 			patches: [{ find: "old", replace: "new" }],
 		});
 
-		expect(bufferSpy).toHaveBeenCalledTimes(1);
+		expect(bufferSpy).toHaveBeenCalledTimes(2);
 		expect(getText(result)).toContain("patch.find matched 0 locations");
 	});
+});
+
+it("fails non-idempotent no-op edits before save", async () => {
+	_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
+	try {
+		(spyOn(nativesModule, "executeCodeBuffer") as any).mockRestore?.();
+	} catch {}
+	const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+		.mockReturnValueOnce({ output: [], error: false })
+		.mockReturnValueOnce({ output: { version: 2, diff: "", editCount: 1 }, error: false });
+	const tool = new CodeTool(createSession({ settings: Settings.isolated({ "lsp.enabled": false }) }));
+
+	const result = await tool.execute("tool", {
+		command: "edit",
+		file: "/tmp/test/src/main.ts",
+		symbol: "fn",
+		operation: "patch",
+		patches: [{ find: "old", replace: "old" }],
+	});
+
+	expect(getText(result)).toContain("Edit produced no semantic changes");
+	expect(bufferSpy).toHaveBeenCalledTimes(2);
+	expect(result.details).toEqual(expect.objectContaining({ kind: "error", error: true }));
+});
+
+it("renders idempotent no-op edits truthfully", async () => {
+	_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
+	try {
+		(spyOn(nativesModule, "executeCodeBuffer") as any).mockRestore?.();
+	} catch {}
+	const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+		.mockReturnValueOnce({ output: [], error: false })
+		.mockReturnValueOnce({ output: { version: 2, diff: "", editCount: 1 }, error: false });
+	const tool = new CodeTool(createSession({ settings: Settings.isolated({ "lsp.enabled": false }) }));
+
+	const result = await tool.execute("tool", {
+		command: "edit",
+		file: "/tmp/test/src/main.ts",
+		symbol: "fn",
+		operation: "patch",
+		patches: [{ find: "old", replace: "old" }],
+		idempotent: true,
+	});
+
+	expect(getText(result)).toContain("No-op edit src/main.ts (idempotent)");
+	expect(getText(result)).toContain("No semantic changes applied.");
+	expect(getText(result)).not.toContain("Changes: +0 -0");
+	expect(bufferSpy).toHaveBeenCalledTimes(2);
+	expect(result.details).toEqual(expect.objectContaining({ kind: "file", command: "edit" }));
+});
+
+it("blocks stale buffers before mutating", async () => {
+	_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
+	try {
+		(spyOn(nativesModule, "executeCodeBuffer") as any).mockRestore?.();
+	} catch {}
+	const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValueOnce({
+		output: [{ kind: "change", content: "@@ -1 +1 @@" }],
+		error: false,
+	});
+	const tool = new CodeTool(createSession({ settings: Settings.isolated({ "lsp.enabled": false }) }));
+
+	const result = await tool.execute("tool", {
+		command: "edit",
+		file: "/tmp/test/src/main.ts",
+		symbol: "fn",
+		operation: "patch",
+		patches: [{ find: "old", replace: "new" }],
+	});
+
+	expect(getText(result)).toContain("Stale code buffer detected (1 hunk differ from disk)");
+	expect(bufferSpy).toHaveBeenCalledTimes(1);
+	expect(result.details).toEqual(expect.objectContaining({ kind: "error", error: true }));
 });

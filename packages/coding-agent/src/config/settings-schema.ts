@@ -843,6 +843,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"edit.previewResolvePolicy": {
+		type: "enum",
+		values: ["explicit", "auto-apply"] as const,
+		default: "explicit",
+		ui: {
+			tab: "editing",
+			label: "Preview Resolve Policy",
+			description: "Require explicit resolve or auto-apply previewed structural edits",
+		},
+	},
+
 	// Read tool
 	readLineNumbers: {
 		type: "boolean",

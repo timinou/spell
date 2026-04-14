@@ -1,0 +1,79 @@
+#+TITLE: Code edit reliability hardening and org command parity
+#+STATE: DONE
+#+SESSION_ID: 14ba470308c6b0e2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T12-10-47-715Z_14ba470308c6b0e2.jsonl]]
+#+CUSTOM_ID: PLAN-227-code-edit-reliability-hardening-and-org
+#+EFFORT: 12h
+#+LAYER: backend
+#+PRIORITY: #A
+
+* Initial Message
+
+File:
+ /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-42-01
+ -155Z_14ba406cf0d96a78.jsonl
+ ID: 14ba406cf0d96a78
+
+and
+
+File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-52-46-117Z_14ba42e2c96011f0.jsonl
+ ID: 14ba42e2c96011f0
+
+use `jq` to find all usages of `code edit` and trace the root cause of it not saving the requested data
+
+* Context
+- Objective: harden `code edit` reliability end-to-end from observed failure modes in sessions `14ba406cf0d96a78` and `14ba42e2c96011f0`.
+- Confirmed failure patterns to eliminate:
+  1. Non-semantic edit no-ops surfaced as apparent success (`Edited ...` with `Changes: +0 -0`).
+  2. Stale in-memory buffer vs disk divergence created misleading reads/edits.
+  3. Preview-apply lifecycle ambiguity increased unresolved pending actions and operator confusion.
+  4. `org` command surface drift allowed runtime/metadata mismatch for `delete` and `validate-plan`.
+- Settled decisions (locked):
+  1. Scope is end-to-end and includes `packages/coding-agent` + `packages/org`.
+  2. Non-idempotent no-op mutation must hard-fail.
+  3. Preview policy is configurable; default remains explicit `resolve`.
+  4. Verification includes focused unit/integration edge cases plus one transcript fixture for code-edit result classification.
+  5. Strict no-op enforcement ships default-on immediately.
+- Child items in this plan:
+  - [[id:BUG-252-harden-code-edit-mutation-contract-and-s]]
+  - [[id:BUG-253-add-configurable-preview-resolve-policy]]
+  - [[id:BUG-254-fix-org-command-surface-parity-for-delet]]
+
+* Verification
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts`
+- `bun test packages/coding-agent/test/tools/ast-edit.test.ts packages/coding-agent/test/tools/resolve.test.ts`
+- `bun test packages/org/test/tool-commands.test.ts`
+- Transcript-fixture proof: assert non-idempotent `Edited` + `Changes: +0 -0` classification path fails deterministically.
+- Final gate: `bun check:ts`
+
+* Execution Manifest
+** :wave:0
+- [[id:BUG-252-harden-code-edit-mutation-contract-and-s]] Harden code edit mutation contract and stale buffer checks
+- [[id:BUG-253-add-configurable-preview-resolve-policy]] Add configurable preview resolve policy for pending edits
+- [[id:BUG-254-fix-org-command-surface-parity-for-delet]] Fix org command-surface parity for delete and validate-plan
+
+** Notes on wave derivation
+- `org wave` results for each child file returned wave-0 for each item (no inter-item blockers).
+- Internal execution order inside each child remains controlled by sub-outline `:DEPENDS:` chains.
+
+** Completion [2026-04-14]
+*** Verification
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts` -> passed (`42 pass`, `0 fail`).
+- `bun test packages/coding-agent/test/tools/ast-edit.test.ts packages/coding-agent/test/tools/resolve.test.ts` -> passed (`13 pass`, `0 fail`).
+- `bun test packages/org/test/tool-commands.test.ts` -> passed (`41 pass`, `0 fail`).
+- `bun test packages/coding-agent/test/agent-session-resolve-reminder.test.ts` -> passed (`2 pass`, `0 fail`) to verify explicit-only reminder behavior after preview-policy wiring.
+- `bun check:ts` -> passed (`biome check . && tsgo -p tsconfig.json`).
+- Transcript-derived no-op classification proof now lives in `packages/coding-agent/test/tools/code.test.ts`: non-idempotent empty-diff edit fails deterministically, while explicit `idempotent: true` renders `No-op edit ...` instead of `Edited ... Changes: +0 -0`.
+*** Artifacts
+- [[file:packages/coding-agent/src/tools/code.ts]]
+- [[file:packages/coding-agent/src/tools/code-result.ts]]
+- [[file:packages/coding-agent/src/tools/ast-edit.ts]]
+- [[file:packages/coding-agent/src/config/settings-schema.ts]]
+- [[file:packages/org/src/tool.ts]]
+- [[file:packages/coding-agent/test/tools/code.test.ts]]
+- [[file:packages/coding-agent/test/tools/ast-edit.test.ts]]
+- [[file:packages/org/test/tool-commands.test.ts]]
+*** Deviations
+- None.
+
+NOTE [2026-04-14]: Completed verification, appended completion report, reconciled child items, and prepared scoped commit.

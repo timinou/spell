@@ -174,4 +174,33 @@ describe("ast_edit tool schema", () => {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
 	});
+
+	it("auto-applies previews when policy is auto-apply", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-edit-auto-apply-"));
+		try {
+			const filePath = path.join(tempDir, "legacy.ts");
+			await Bun.write(filePath, "legacyWrap(x, value)\n");
+			const pendingActionStore = new PendingActionStore();
+			const settings = Settings.isolated({ "edit.previewResolvePolicy": "auto-apply" });
+
+			const tools = await createTools(createTestSession(tempDir, { pendingActionStore, settings }));
+			const tool = tools.find(entry => entry.name === "ast_edit");
+			expect(tool).toBeDefined();
+
+			const result = await tool!.execute("ast-edit-auto-apply", {
+				ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
+				lang: "typescript",
+				path: filePath,
+			});
+
+			expect(result.details).toEqual(expect.objectContaining({ applied: true, totalReplacements: 1 }));
+			expect(result.content.find(content => content.type === "text")?.text ?? "").toContain(
+				"Applied 1 replacement in 1 file.",
+			);
+			expect(pendingActionStore.hasPending).toBe(false);
+			expect(await Bun.file(filePath).text()).toContain("modernWrap(x, value)");
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
 });

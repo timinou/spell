@@ -539,6 +539,7 @@ export class AgentSession {
 		this.#toolSession = config.toolSession;
 		this.#loopManager = config.loopManager;
 		this.#unsubscribePendingActionPush = this.#pendingActionStore?.subscribePush(action => {
+			if (this.settings.get("edit.previewResolvePolicy") !== "explicit") return;
 			const reminderText = [
 				"<system-reminder>",
 				"This is a preview. Call the `resolve` tool to apply or discard these changes.",
