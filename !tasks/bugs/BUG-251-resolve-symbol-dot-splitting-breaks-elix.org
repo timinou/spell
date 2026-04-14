@@ -1,0 +1,228 @@
+#+TITLE: resolve_symbol dot-splitting breaks Elixir (and deep markdown) symbol targeting
+#+STATE: DONE
+#+SESSION_ID: 14ba3fb0c4a011ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-38-48-466Z_14ba3fb0c4a011ef.jsonl]]
+#+CUSTOM_ID: BUG-251-resolve-symbol-dot-splitting-breaks-elix
+#+EFFORT: 2h
+#+LAYER: engine
+#+PRIORITY: #A
+
+* Scope
+
+** In scope
+- Fix =resolve_symbol= in =pi-code-engine= to handle languages with dotted identifiers (Elixir module names, deeply-nested markdown sections)
+- Add Elixir-specific resolve tests
+- Ensure backwards compatibility with existing TypeScript/Rust/Python/Markdown Container.member behavior
+
+** Out of scope
+- Elixir LSP integration
+- Elixir defstruct/defimpl/defprotocol support (deferred in FEAT-519)
+- New edit operations or tool description changes
+
+* Problem
+
+=resolve_symbol()= in =crates/pi-code-engine/src/resolve.rs= (line 40) hardcodes =.= as a Container.member separator with a 2-level maximum:
+
+#+begin_src rust
+let parts: Vec<&str> = symbol.split('.').collect();
+if parts.is_empty() || parts.len() > 2 {
+    return Err(...)  // "at most 2 levels"
+}
+#+end_src
+
+Elixir module names are naturally dotted (=MyApp.Greeter=, =Agentmaker.AgentConfig.PipelineMaterializer=). This makes it impossible to:
+1. Target a module: =symbol: "MyApp.Greeter"= splits into =["MyApp", "Greeter"]= → interpreted as Container.member, fails because no top-level =MyApp=
+2. Target a member function: =symbol: "MyApp.Greeter.greet"= → 3 parts → rejected by 2-level limit
+3. Target by short name: =symbol: "PipelineMaterializer"= → no top-level match (stored name is full dotted path)
+
+Side effect: deeply nested markdown sections (=h1.h2.h3.h4=) are also blocked by the 2-level limit (documented as a known limitation in FEAT-520).
+
+Agents that encounter this fall back from =code edit= to =sed=, bypassing safety.
+
+* Existing Patterns
+
+- =resolve_symbol()=: =crates/pi-code-engine/src/resolve.rs= — =pub fn resolve_symbol(buffer: &CodeBuffer, profile: &LanguageProfile, symbol: &str) -> Result<ResolvedSymbol>=
+- =match_declaration()=: same file — walks root children matching by =declaration_name()=
+- =resolve_member()=: same file — resolves member within a class-like container
+- =declaration_name()= with =name_from_arg=: =crates/pi-code-engine/src/outline.rs= — extracts Elixir names from first argument child
+- =class_member_nodes()=: =crates/pi-code-engine/src/outline.rs= — lists members of class-like containers (works for Elixir defmodule)
+- Elixir test fixture: =crates/pi-code-engine/tests/fixtures/sources/hello.ex= — =defmodule MyApp.Greeter do= with =def start_link=, =def greet=, =defp internal_helper=, =defmacro my_macro=
+- Existing TS resolve tests in =crates/pi-code-engine/src/resolve.rs::tests= — 12 tests covering top-level, class member, exported, markdown section, not-found, and ambiguous cases
+
+* Tests
+
+File: =crates/pi-code-engine/src/resolve.rs= (add to existing =mod tests=)
+
+Scenarios:
+1. =resolve_symbol(buffer, profile, "MyApp.Greeter")= → name="MyApp.Greeter", kind="module", line=1
+2. =resolve_symbol(buffer, profile, "MyApp.Greeter.greet")= → name="greet", kind="def", line=8
+3. =resolve_symbol(buffer, profile, "MyApp.Greeter.start_link")= → name="start_link", kind="def", line=4
+4. =resolve_symbol(buffer, profile, "MyApp.Greeter.internal_helper")= → name="internal_helper", kind="defp", line=12
+5. =resolve_symbol(buffer, profile, "MyApp.Greeter.nonexistent")= → Err containing "not found in 'MyApp.Greeter'"
+6. =resolve_symbol(buffer, profile, "NonExistent.Module")= → full-string match fails, last-dot split tries "NonExistent" → not found → Err with available names
+7. Backwards compat: existing TS =resolve_symbol(buffer, profile, "Foo.bar")= still works (step 1 fails, step 2 splits at last dot: "Foo" + "bar")
+8. Markdown deep nesting: =resolve_symbol(buffer, profile, "Installation.Prerequisites")= still works (existing test, but verify no regression)
+
+* Implementation
+
+** Write Elixir resolve tests (TDD: before fix)
+:PROPERTIES:
+:CUSTOM_ID: BUG-251-resolve-symbol-dot-splitting-breaks-elix::elixir-resolve-tests
+:END:
+
+File: =crates/pi-code-engine/src/resolve.rs= (=mod tests=)
+
+Add helper:
+#+begin_src rust
+fn elixir_buffer() -> CodeBuffer {
+    let source = fs::read_to_string(format!(
+        "{}/tests/fixtures/sources/hello.ex",
+        env!("CARGO_MANIFEST_DIR")
+    )).expect("fixture");
+    CodeBuffer::from_str(&source, LanguageId::new("elixir"), registry()).expect("buffer")
+}
+#+end_src
+
+Add 6 test functions covering scenarios 1-6 from Tests section.
+
+These tests MUST fail initially (verifying the bug exists).
+
+** Fix resolve_symbol algorithm
+:PROPERTIES:
+:CUSTOM_ID: BUG-251-resolve-symbol-dot-splitting-breaks-elix::fix-resolve
+:DEPENDS: BUG-251-resolve-symbol-dot-splitting-breaks-elix::elixir-resolve-tests
+:END:
+
+File: =crates/pi-code-engine/src/resolve.rs=, function =resolve_symbol=
+
+Replace the current splitting logic with:
+
+#+begin_src rust
+pub fn resolve_symbol(
+    buffer: &CodeBuffer,
+    profile: &LanguageProfile,
+    symbol: &str,
+) -> Result<ResolvedSymbol> {
+    let source = buffer.source();
+    let root = buffer.tree().root_node();
+
+    // Step 1: Try full string as a top-level declaration name.
+    // This handles Elixir dotted module names (MyApp.Greeter) and simple names.
+    let mut cursor = root.walk();
+    let mut top_matches: Vec<Node<'_>> = Vec::new();
+    for child in root.named_children(&mut cursor) {
+        if let Some(node) = match_declaration(child, profile, symbol, &source) {
+            top_matches.push(node);
+        }
+    }
+
+    if top_matches.len() == 1 {
+        return Ok(build_resolved(top_matches[0], profile, &source));
+    }
+    if top_matches.len() > 1 {
+        let lines: Vec<String> = top_matches
+            .iter()
+            .map(|n| (n.start_position().row + 1).to_string())
+            .collect();
+        return Err(CodeEngineError::Edit(format!(
+            "Ambiguous symbol '{}': found at lines {}",
+            symbol,
+            lines.join(", ")
+        )));
+    }
+
+    // Step 2: If the full string wasn't found and contains dots,
+    // split at the last dot: prefix is the container, suffix is the member.
+    if let Some(last_dot) = symbol.rfind('.') {
+        let container_name = &symbol[..last_dot];
+        let member_name = &symbol[last_dot + 1..];
+        if !member_name.is_empty() {
+            // Find container as top-level
+            let mut cursor = root.walk();
+            let mut container_matches: Vec<Node<'_>> = Vec::new();
+            for child in root.named_children(&mut cursor) {
+                if let Some(node) = match_declaration(child, profile, container_name, &source) {
+                    container_matches.push(node);
+                }
+            }
+            if container_matches.len() == 1 {
+                return resolve_member(
+                    container_matches[0], profile, &source,
+                    container_name, member_name,
+                );
+            }
+            if container_matches.len() > 1 {
+                let lines: Vec<String> = container_matches
+                    .iter()
+                    .map(|n| (n.start_position().row + 1).to_string())
+                    .collect();
+                return Err(CodeEngineError::Edit(format!(
+                    "Ambiguous symbol '{}': found at lines {}",
+                    container_name,
+                    lines.join(", ")
+                )));
+            }
+        }
+    }
+
+    // Step 3: Nothing matched — report error with available names
+    let available = collect_top_level_names(root, profile, &source);
+    Err(CodeEngineError::Edit(format!(
+        "Symbol '{}' not found. Available: [{}]",
+        symbol,
+        available.join(", ")
+    )))
+}
+#+end_src
+
+Key changes from current code:
+1. Remove =symbol.split('.')= and the =parts.len() > 2= guard
+2. Try full string match first (handles dotted Elixir names)
+3. Use =rfind('.')= for last-dot split (handles =A.B.C.D= → container =A.B.C=, member =D=)
+4. Same =match_declaration= / =build_resolved= / =resolve_member= helpers — no changes needed
+
+This is backwards compatible because for TypeScript =Foo.bar=:
+- Step 1 tries =Foo.bar= as top-level → not found (no declaration named =Foo.bar=)
+- Step 2 splits at last dot: container =Foo=, member =bar= → works identically to current behavior
+
+** Verify all tests pass
+:PROPERTIES:
+:CUSTOM_ID: BUG-251-resolve-symbol-dot-splitting-breaks-elix::verify
+:DEPENDS: BUG-251-resolve-symbol-dot-splitting-breaks-elix::fix-resolve
+:END:
+
+Run:
+#+begin_src sh
+cargo test -p pi-code-engine resolve
+cargo test -p pi-code-engine -- --include-ignored
+cargo clippy -p pi-code-engine -- -D warnings
+#+end_src
+
+Must pass: all 12 existing resolve tests + 6 new Elixir tests.
+Must not regress: outline, navigate, edit tests.
+
+* Edge Cases
+
+1. =MyApp.Greeter= (full dotted module name as top-level): Step 1 matches directly
+2. =MyApp.Greeter.greet= (dotted container + member): Step 1 fails, Step 2 splits at last dot → =MyApp.Greeter= + =greet=
+3. =Foo.bar= (TypeScript class.method): Step 1 fails (no top-level =Foo.bar=), Step 2 splits → =Foo= + =bar= (identical to current)
+4. =greet= (simple non-dotted name): Step 1 matches (no dots involved)
+5. =NonExistent.thing= (container not found): Step 1 fails, Step 2 fails → error with available names
+6. =MyApp.Greeter.nonexistent= (container found, member not): Step 2 → =resolve_member= → error "not found in 'MyApp.Greeter'"
+7. Name collision: both a module =Foo.bar= AND a class =Foo= with member =bar= — Step 1 finds =Foo.bar= module first. This is correct: prefer the more-specific full-string match.
+8. Deeply nested markdown =A.B.C= (3+ levels): Step 1 tries =A.B.C= (not a section name), Step 2: =A.B= container + =C= member → works if =A.B= is a valid dotted section name via class_like nesting
+9. Empty member (trailing dot =MyApp.=): =rfind= finds dot, member is empty → skip step 2, fall to error
+10. No dots: Step 1 handles it (current single-name behavior)
+
+* Acceptance Criteria
+
+1. =cargo test -p pi-code-engine resolve= passes with all new Elixir tests green
+2. =cargo test -p pi-code-engine= shows zero regressions across outline, navigate, edit, and resolve modules
+3. =cargo clippy -p pi-code-engine -- -D warnings= clean
+4. =code edit { file: "hello.ex", symbol: "MyApp.Greeter", operation: "patch", patches: [...] }= successfully targets the module
+5. =code edit { file: "hello.ex", symbol: "MyApp.Greeter.greet", operation: "patch", patches: [...] }= successfully targets the function
+
+* Completion [2026-04-14]
+- Updated =crates/pi-code-engine/src/resolve.rs= so symbol resolution now prefers an exact full-name match, then recursively resolves the last dotted segment as container.member.
+- Added focused resolve coverage for Elixir dotted modules/members and deeply nested markdown sections.
+- Verified with =cargo test -p pi-code-engine resolve=, =cargo test -p pi-code-engine=, and =cargo clippy -p pi-code-engine -- -D warnings=.

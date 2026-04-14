@@ -30,63 +30,25 @@ pub struct ResolvedSymbol {
 
 /// Resolve a symbol by name within a buffer.
 ///
-/// Supports dotted names for class members: `"ClassName.methodName"`.
-/// Only two-level dotting is supported (container.member).
+/// Supports dotted names by first matching the full string, then resolving the
+/// prefix recursively as a container path and the suffix as a member name.
 pub fn resolve_symbol(
 	buffer: &CodeBuffer,
 	profile: &LanguageProfile,
 	symbol: &str,
 ) -> Result<ResolvedSymbol> {
-	let parts: Vec<&str> = symbol.split('.').collect();
-	if parts.is_empty() || parts.len() > 2 {
-		return Err(CodeEngineError::Edit(format!(
-			"Symbol '{}' must be a name or Container.member (at most 2 levels)",
-			symbol
-		)));
-	}
-
 	let source = buffer.source();
 	let root = buffer.tree().root_node();
-	let mut cursor = root.walk();
-	let top_name = parts[0];
-
-	// Collect all top-level matches (unwrapping export_statement wrappers)
-	let mut matches: Vec<Node<'_>> = Vec::new();
-	for child in root.named_children(&mut cursor) {
-		if let Some(node) = match_declaration(child, profile, top_name, &source) {
-			matches.push(node);
-		}
-	}
-
-	if matches.is_empty() {
-		let available = collect_top_level_names(root, profile, &source);
-		return Err(CodeEngineError::Edit(format!(
-			"Symbol '{}' not found. Available: [{}]",
-			top_name,
-			available.join(", ")
-		)));
-	}
-	if matches.len() > 1 {
-		let lines: Vec<String> = matches
-			.iter()
-			.map(|n| (n.start_position().row + 1).to_string())
-			.collect();
-		return Err(CodeEngineError::Edit(format!(
-			"Ambiguous symbol '{}': found at lines {}",
-			top_name,
-			lines.join(", ")
-		)));
-	}
-
-	let node = matches[0];
-
-	if parts.len() == 1 {
+	if let Some(node) = find_symbol_node(root, profile, &source, symbol)? {
 		return Ok(build_resolved(node, profile, &source));
 	}
 
-	// Dotted: resolve member within a class-like container
-	let member_name = parts[1];
-	resolve_member(node, profile, &source, top_name, member_name)
+	let available = collect_top_level_names(root, profile, &source);
+	Err(CodeEngineError::Edit(format!(
+		"Symbol '{}' not found. Available: [{}]",
+		symbol,
+		available.join(", ")
+	)))
 }
 
 fn match_declaration<'a>(
@@ -155,13 +117,75 @@ fn build_resolved(node: Node<'_>, profile: &LanguageProfile, source: &str) -> Re
 }
 
 /// Resolve a member within a class-like node.
-fn resolve_member(
-	class_node: Node<'_>,
+fn find_top_level_matches<'a>(
+	root: Node<'a>,
+	profile: &LanguageProfile,
+	source: &str,
+	name: &str,
+) -> Vec<Node<'a>> {
+	let mut cursor = root.walk();
+	let mut matches: Vec<Node<'a>> = Vec::new();
+	for child in root.named_children(&mut cursor) {
+		if let Some(node) = match_declaration(child, profile, name, source) {
+			matches.push(node);
+		}
+	}
+	matches
+}
+
+fn ambiguous_symbol_error(name: &str, matches: &[Node<'_>]) -> CodeEngineError {
+	let lines: Vec<String> = matches
+		.iter()
+		.map(|n| (n.start_position().row + 1).to_string())
+		.collect();
+	CodeEngineError::Edit(format!(
+		"Ambiguous symbol '{}': found at lines {}",
+		name,
+		lines.join(", ")
+	))
+}
+
+fn find_symbol_node<'a>(
+	root: Node<'a>,
+	profile: &LanguageProfile,
+	source: &str,
+	symbol: &str,
+) -> Result<Option<Node<'a>>> {
+	let matches = find_top_level_matches(root, profile, source, symbol);
+	if matches.len() == 1 {
+		return Ok(Some(matches[0]));
+	}
+	if matches.len() > 1 {
+		return Err(ambiguous_symbol_error(symbol, &matches));
+	}
+
+	if let Some(last_dot) = symbol.rfind('.') {
+		let container_name = &symbol[..last_dot];
+		let member_name = &symbol[last_dot + 1..];
+		if !container_name.is_empty() && !member_name.is_empty() {
+			if let Some(container_node) = find_symbol_node(root, profile, source, container_name)? {
+				return resolve_member_node(
+					container_node,
+					profile,
+					source,
+					container_name,
+					member_name,
+				)
+				.map(Some);
+			}
+		}
+	}
+
+	Ok(None)
+}
+
+fn resolve_member_node<'a>(
+	class_node: Node<'a>,
 	profile: &LanguageProfile,
 	source: &str,
 	class_name: &str,
 	member_name: &str,
-) -> Result<ResolvedSymbol> {
+) -> Result<Node<'a>> {
 	let class_like = profile
 		.class_like
 		.iter()
@@ -222,7 +246,20 @@ fn resolve_member(
 		)));
 	}
 
-	Ok(build_resolved(matches[0], profile, source))
+	Ok(matches[0])
+}
+
+/// Resolve a member within a class-like node.
+#[allow(dead_code, reason = "legacy helper kept for focused resolve tests")]
+fn resolve_member(
+	class_node: Node<'_>,
+	profile: &LanguageProfile,
+	source: &str,
+	class_name: &str,
+	member_name: &str,
+) -> Result<ResolvedSymbol> {
+	let node = resolve_member_node(class_node, profile, source, class_name, member_name)?;
+	Ok(build_resolved(node, profile, source))
 }
 
 /// Collect names of all top-level declarations for error messages.
@@ -284,6 +321,15 @@ mod tests {
 		))
 		.expect("fixture");
 		CodeBuffer::from_str(&source, LanguageId::new("markdown"), registry()).expect("buffer")
+	}
+
+	fn elixir_buffer() -> CodeBuffer {
+		let source = fs::read_to_string(format!(
+			"{}/tests/fixtures/sources/hello.ex",
+			env!("CARGO_MANIFEST_DIR")
+		))
+		.expect("fixture");
+		CodeBuffer::from_str(&source, LanguageId::new("elixir"), registry()).expect("buffer")
 	}
 
 	#[test]
@@ -391,14 +437,17 @@ mod tests {
 	}
 
 	#[test]
-	fn resolve_too_many_levels() {
+	fn resolve_non_class_deep_member() {
 		let buffer = test_buffer();
 		let profile = registry();
 		let profile = profile.get(&LanguageId::new("typescript")).unwrap();
 
 		let err = resolve_symbol(&buffer, profile, "Foo.bar.deep").unwrap_err();
 		let msg = err.to_string();
-		assert!(msg.contains("at most 2 levels"), "should reject 3-level: {msg}");
+		assert!(
+			msg.contains("'Foo.bar' is not a class-like container"),
+			"should attempt recursive container resolution: {msg}"
+		);
 	}
 
 	#[test]
@@ -434,8 +483,111 @@ mod tests {
 	}
 
 	#[test]
+	fn resolve_markdown_deep_nested_section() {
+		let source = "# A
+
+## B
+
+### C
+
+Deep section body.
+";
+		let buffer =
+			CodeBuffer::from_str(source, LanguageId::new("markdown"), registry()).expect("buf");
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("markdown")).unwrap();
+
+		let resolved = resolve_symbol(&buffer, profile, "A.B.C").expect("resolve nested section");
+		assert_eq!(resolved.name, "C");
+		assert_eq!(resolved.kind, "section");
+		assert_eq!(resolved.line, 5);
+	}
+
+	#[test]
+	fn resolve_elixir_module() {
+		let buffer = elixir_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("elixir")).unwrap();
+
+		let resolved = resolve_symbol(&buffer, profile, "MyApp.Greeter").expect("resolve module");
+		assert_eq!(resolved.name, "MyApp.Greeter");
+		assert_eq!(resolved.kind, "module");
+		assert_eq!(resolved.line, 1);
+	}
+
+	#[test]
+	fn resolve_elixir_member_greet() {
+		let buffer = elixir_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("elixir")).unwrap();
+
+		let resolved = resolve_symbol(&buffer, profile, "MyApp.Greeter.greet")
+			.expect("resolve greet");
+		assert_eq!(resolved.name, "greet");
+		assert_eq!(resolved.kind, "def");
+		assert_eq!(resolved.line, 8);
+	}
+
+	#[test]
+	fn resolve_elixir_member_start_link() {
+		let buffer = elixir_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("elixir")).unwrap();
+
+		let resolved = resolve_symbol(&buffer, profile, "MyApp.Greeter.start_link")
+			.expect("resolve start_link");
+		assert_eq!(resolved.name, "start_link");
+		assert_eq!(resolved.kind, "def");
+		assert_eq!(resolved.line, 4);
+	}
+
+	#[test]
+	fn resolve_elixir_private_member() {
+		let buffer = elixir_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("elixir")).unwrap();
+
+		let resolved = resolve_symbol(&buffer, profile, "MyApp.Greeter.internal_helper")
+			.expect("resolve internal_helper");
+		assert_eq!(resolved.name, "internal_helper");
+		assert_eq!(resolved.kind, "defp");
+		assert_eq!(resolved.line, 12);
+	}
+
+	#[test]
+	fn resolve_elixir_missing_member() {
+		let buffer = elixir_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("elixir")).unwrap();
+
+		let err = resolve_symbol(&buffer, profile, "MyApp.Greeter.nonexistent").unwrap_err();
+		let msg = err.to_string();
+		assert!(
+			msg.contains("not found in 'MyApp.Greeter'"),
+			"should say not found in MyApp.Greeter: {msg}"
+		);
+	}
+
+	#[test]
+	fn resolve_elixir_missing_module() {
+		let buffer = elixir_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("elixir")).unwrap();
+
+		let err = resolve_symbol(&buffer, profile, "NonExistent.Module").unwrap_err();
+		let msg = err.to_string();
+		assert!(
+			msg.contains("Symbol 'NonExistent.Module' not found"),
+			"should say module not found: {msg}"
+		);
+		assert!(
+			msg.contains("MyApp.Greeter"),
+			"should list available module names: {msg}"
+		);
+	}
+
+	#[test]
 	fn resolve_exported_function() {
-		// Test that export-wrapped declarations are found
 		let source = "export function greet(name: string) { return name; }";
 		let buffer =
 			CodeBuffer::from_str(source, LanguageId::new("typescript"), registry()).expect("buf");
