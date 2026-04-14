@@ -102,6 +102,7 @@ export class CustomToolLoader {
 				pendingActionStore.push({
 					label: action.label,
 					sourceToolName: action.sourceToolName ?? "custom_tool",
+					files: [],
 					apply: action.apply,
 					reject: action.reject,
 					details: action.details,

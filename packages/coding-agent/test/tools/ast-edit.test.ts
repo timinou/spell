@@ -109,6 +109,8 @@ describe("ast_edit tool schema", () => {
 			expect(pending).not.toBeNull();
 			if (!pending) throw new Error("Expected pending action to be registered");
 			expect(pending.sourceToolName).toBe("ast_edit");
+			expect(pending.files).toEqual([filePath]);
+			expect(pending.invalidateManagedCodeBuffers).toBe(true);
 
 			await pending.apply("apply previewed AST edit");
 			const updated = await Bun.file(filePath).text();

@@ -1,12 +1,13 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-import { PendingActionStore } from "@oh-my-pi/pi-coding-agent/tools/pending-action";
+import { applyPendingAction, PendingActionStore } from "@oh-my-pi/pi-coding-agent/tools/pending-action";
 import { ResolveTool, resolveToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/resolve";
+import * as nativesModule from "@oh-my-pi/pi-natives";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
 
 function createSession(pendingActionStore?: PendingActionStore, overrides: Partial<ToolSession> = {}): ToolSession {
@@ -45,6 +46,7 @@ describe("ResolveTool", () => {
 		pendingActionStore.push({
 			label: "AST Edit: 2 replacements in 1 file",
 			sourceToolName: "ast_edit",
+			files: [],
 			apply: async (_reason: string) => ({ content: [{ type: "text", text: "should not run" }] }),
 			reject: async (reason: string) => {
 				rejectedReason = reason;
@@ -77,6 +79,7 @@ describe("ResolveTool", () => {
 		pendingActionStore.push({
 			label: "AST Edit: 1 replacement in 1 file",
 			sourceToolName: "ast_edit",
+			files: [],
 			apply: async reason => {
 				applied = true;
 				appliedReason = reason;
@@ -101,7 +104,116 @@ describe("ResolveTool", () => {
 			label: "AST Edit: 1 replacement in 1 file",
 			mutationState: "applied",
 			persisted: true,
+			bufferInvalidationError: undefined,
 		});
+	});
+
+	it("degrades applied results when buffer invalidation fails after persistence", async () => {
+		const pendingActionStore = new PendingActionStore();
+		const closeSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: "close failed",
+			error: true,
+		});
+		try {
+			pendingActionStore.push({
+				label: "AST Edit: 1 replacement in 1 file",
+				sourceToolName: "ast_edit",
+				files: ["/tmp/main.ts"],
+				invalidateManagedCodeBuffers: true,
+				apply: async () => ({ content: [{ type: "text", text: "Applied 1 replacement in 1 file." }] }),
+			});
+			const tool = new ResolveTool(createSession(pendingActionStore));
+			const result = await tool.execute("call-apply-degraded", {
+				action: "apply",
+				reason: "Preview is correct",
+			});
+
+			expect(getText(result)).toContain("Persisted to disk with buffer invalidation warnings.");
+			expect(getText(result)).toContain(
+				"Applied preview persisted to disk, but failed to invalidate the managed code buffer for /tmp/main.ts: close failed",
+			);
+			expect(result.details).toEqual(
+				expect.objectContaining({
+					mutationState: "applied",
+					persisted: true,
+					bufferInvalidationError: expect.stringContaining("failed to invalidate the managed code buffer"),
+				}),
+			);
+			expect(closeSpy).toHaveBeenCalledWith(expect.objectContaining({ command: "close", file: "/tmp/main.ts" }));
+			expect(pendingActionStore.hasPending).toBe(false);
+		} finally {
+			closeSpy.mockRestore();
+		}
+	});
+
+	it("does not invalidate managed buffers unless the pending action opts in", async () => {
+		const pendingActionStore = new PendingActionStore();
+		const closeSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({ output: [], error: false });
+		try {
+			pendingActionStore.push({
+				label: "Custom preview",
+				sourceToolName: "custom_tool",
+				files: ["/tmp/main.ts"],
+				apply: async () => ({ content: [{ type: "text", text: "Applied custom preview." }] }),
+			});
+			const tool = new ResolveTool(createSession(pendingActionStore));
+			const result = await tool.execute("call-apply-custom", {
+				action: "apply",
+				reason: "Ship it",
+			});
+
+			expect(getText(result)).toContain("Applied custom preview.");
+			expect(result.details).toEqual(
+				expect.objectContaining({ mutationState: "applied", persisted: true, bufferInvalidationError: undefined }),
+			);
+			expect(closeSpy).not.toHaveBeenCalled();
+		} finally {
+			closeSpy.mockRestore();
+		}
+	});
+
+	it("surfaces missing invalidation file lists as degraded apply results", async () => {
+		const pendingActionStore = new PendingActionStore();
+		pendingActionStore.push({
+			label: "AST Edit: 1 replacement in 0 files",
+			sourceToolName: "ast_edit",
+			files: [],
+			invalidateManagedCodeBuffers: true,
+			apply: async () => ({ content: [{ type: "text", text: "Applied 1 replacement in 0 files." }] }),
+		});
+		const tool = new ResolveTool(createSession(pendingActionStore));
+		const result = await tool.execute("call-apply-empty-files", {
+			action: "apply",
+			reason: "Check degraded result",
+		});
+
+		expect(getText(result)).toContain("Persisted to disk with buffer invalidation warnings.");
+		expect(getText(result)).toContain("no files were provided for managed code buffer invalidation");
+		expect(result.details).toEqual(
+			expect.objectContaining({
+				mutationState: "applied",
+				persisted: true,
+				bufferInvalidationError: expect.stringContaining("no files were provided"),
+			}),
+		);
+	});
+
+	it("does not misclassify result-like objects as pending action resolutions", async () => {
+		const fakeResultLike = { result: { content: [{ type: "text", text: "inner result" }] } } as never;
+		const resolution = await applyPendingAction(
+			{
+				label: "Result-like payload",
+				sourceToolName: "ast_edit",
+				files: ["/tmp/main.ts"],
+				apply: async () => fakeResultLike,
+			},
+			"normalize weird shape",
+		);
+
+		expect(resolution.result).toBe(fakeResultLike);
+		expect(resolution.mutationState).toBe("applied");
+		expect(resolution.persisted).toBe(true);
+		expect(resolution.files).toEqual(["/tmp/main.ts"]);
 	});
 
 	it("resolves pending actions in LIFO order", async () => {
@@ -112,6 +224,7 @@ describe("ResolveTool", () => {
 		pendingActionStore.push({
 			label: "First action",
 			sourceToolName: "ast_edit",
+			files: [],
 			apply: async (_reason: string) => {
 				firstApplied = true;
 				return { content: [{ type: "text", text: "first" }] };
@@ -120,6 +233,7 @@ describe("ResolveTool", () => {
 		pendingActionStore.push({
 			label: "Second action",
 			sourceToolName: "ast_edit",
+			files: [],
 			apply: async () => {
 				secondApplied = true;
 				return { content: [{ type: "text", text: "second" }] };
@@ -144,6 +258,7 @@ describe("ResolveTool", () => {
 		pendingActionStore.push({
 			label: "Broken action",
 			sourceToolName: "ast_edit",
+			files: [],
 			apply: async () => {
 				throw new Error("apply failed");
 			},
@@ -208,6 +323,8 @@ it("renders a highlighted apply summary", async () => {
 				reason: "All replacements are correct",
 				sourceToolName: "ast_edit",
 				label: "AST Edit: 2 replacements in 1 file",
+				mutationState: "applied",
+				persisted: true,
 			},
 		},
 		{ expanded: false, isPartial: false },
@@ -217,8 +334,67 @@ it("renders a highlighted apply summary", async () => {
 	const rendered = sanitizeText(component.render(90).join("\n"));
 	expect(rendered).toContain("Accept: 2 replacements in 1 file");
 	expect(rendered).toContain("AST Edit");
+	expect(rendered).toContain("state: applied · persisted to disk");
 	expect(rendered).toContain("All replacements are correct");
 	expect(rendered).not.toContain("Applied 2 replacements in 1 file.");
 	expect(rendered).not.toContain("Decision");
 	expect(rendered).not.toContain("┌");
+});
+
+it("renders buffer invalidation provenance warnings", async () => {
+	const theme = await getThemeByName("dark");
+	expect(theme).toBeDefined();
+	const uiTheme = theme!;
+
+	const component = resolveToolRenderer.renderResult(
+		{
+			content: [{ type: "text", text: "Applied 1 replacement in 1 file." }],
+			details: {
+				action: "apply",
+				reason: "Disk write succeeded but close failed",
+				sourceToolName: "ast_edit",
+				label: "AST Edit: 1 replacement in 1 file",
+				mutationState: "applied",
+				persisted: true,
+				bufferInvalidationError:
+					"Applied preview persisted to disk, but failed to invalidate the managed code buffer for /tmp/main.ts: close failed",
+			},
+		},
+		{ expanded: false, isPartial: false },
+		uiTheme,
+	);
+
+	const rendered = sanitizeText(component.render(120).join("\n"));
+	expect(rendered).toContain("state: applied · persisted to disk · buffer invalidation warning");
+	expect(rendered).toContain("failed to invalidate the managed code buffer for /tmp/main.ts");
+	expect(rendered).toContain("Disk write succeeded but close failed");
+});
+
+it("does not show persistence provenance for discarded previews", async () => {
+	const theme = await getThemeByName("dark");
+	expect(theme).toBeDefined();
+	const uiTheme = theme!;
+
+	const component = resolveToolRenderer.renderResult(
+		{
+			content: [{ type: "text", text: "Discarded preview." }],
+			details: {
+				action: "discard",
+				reason: "Preview changed wrong callsites",
+				sourceToolName: "ast_edit",
+				label: "AST Edit: 2 replacements in 1 file",
+				mutationState: "discarded",
+				persisted: false,
+			},
+		},
+		{ expanded: false, isPartial: false },
+		uiTheme,
+	);
+
+	const rendered = sanitizeText(component.render(100).join("\n"));
+	expect(rendered).toContain("Discard: 2 replacements in 1 file");
+	expect(rendered).toContain("Preview changed wrong callsites");
+	expect(rendered).not.toContain("state: discarded");
+	expect(rendered).not.toContain("persisted to disk");
+	expect(rendered).not.toContain("persistence not reported");
 });

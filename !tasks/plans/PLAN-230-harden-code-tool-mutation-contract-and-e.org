@@ -1,0 +1,66 @@
+#+TITLE: Harden code tool mutation contract and edge case coverage
+#+STATE: DONE
+#+SESSION_ID: 14ba5c57dda011f2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T13-43-59-606Z_14ba5c57dda011f2.jsonl]]
+#+CUSTOM_ID: PLAN-230-harden-code-tool-mutation-contract-and-e
+#+EFFORT: 3h
+#+LAYER: coding-agent
+#+PRIORITY: #B
+
+* Initial Message
+
+yo bro the very issues that you're trying to change are in the code edit tool. use Edit/Write for this session and remember the failure cases when it comes to making tests and shit
+
+* Context
+Audit AUD-067 identified four hardening gaps in the preview/apply mutation path implemented by PLAN-228:
+
+1. =applyPendingAction()= throws after persist succeeds when buffer invalidation fails → caller loses the resolution, state is ambiguous
+2. =PendingAction.files?= is optional → persisted mutations with empty file lists silently skip buffer invalidation, reintroducing stale-buffer divergence
+3. =isPendingActionResolution()= type guard uses only ="result" in value= → fragile, could misidentify future =AgentToolResult= shapes
+4. Resolve TUI renderer hides the new =mutationState=/=persisted= provenance fields already computed
+
+Approach: BUG-258 fixes the contract substrate (invalidation failure → degraded result, opt-in invalidation flag, tighter guard). BUG-259 layers renderer provenance display on top.
+
+Key design decisions:
+- Invalidation failure returns =bufferInvalidationError= string on the resolution instead of throwing — callers always get a truthful resolution
+- =invalidateManagedCodeBuffers?: boolean= opt-in flag on =PendingAction= — only AST edit preview sets it, safe default for unknown future producers
+- Tighter =isPendingActionResolution= checks =mutationState=, =persisted=, =files=, and =result= (not just =result=)
+- Resolve renderer adds persistence status indicator line below header
+- =ResolveToolDetails= gains optional =bufferInvalidationError= field
+
+Executor notes:
+- Use =Edit=/=Write= tools for source mutations (code tool itself is the subject of these changes)
+- Do NOT use =code edit= for any test or source file in this plan
+- All test spying uses =spyOn(nativesModule, "executeCodeBuffer")= to simulate close failures
+- Run =bun test= only on the specific test files — never =bun test= globally
+
+* Verification
+Required verification after execution:
+- =bun test packages/coding-agent/test/tools/ast-edit.test.ts packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code.test.ts=
+- =bun test packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code-result.test.ts=
+
+Consistency checks:
+- PLAN-228 assumptions remain intact: non-idempotent no-op still hard-fails, preview-policy choice still works, stale-buffer guard still blocks
+- No result path claims persistence that did not happen
+- =invalidateManagedCodeBuffers= only fires for AST edit previews (not bare =AgentToolResult= returns)
+
+* Execution Manifest
+
+** :wave: 1 — contract hardening
+- [[id:BUG-258-applypendingaction-throws-after-persist]] [2h] — harden =applyPendingAction= contract, tighten guard, add opt-in invalidation, wire AST edit, add 5 edge case tests
+
+** :wave: 2 — renderer provenance
+- [[id:BUG-259-resolve-tui-renderer-hides-mutation-prov]] [1h] — surface persistence/invalidation state in resolve TUI renderer, update and add render tests
+
+** Completion [2026-04-14]
+*** Verification
+- `bun test packages/coding-agent/test/tools/ast-edit.test.ts packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code.test.ts` → 58 pass, 0 fail.
+- `bun test packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code-result.test.ts` → 23 pass, 0 fail.
+- Observed resolve renderer output via direct themed render snapshot after the final code changes.
+*** Artifacts
+- Renderer provenance snapshot: [[file:!tasks/plans/plan-artifacts/PLAN-230-harden-code-tool-mutation-contract-and-e/resolve-renderer-provenance.txt]]
+- Code changes: =packages/coding-agent/src/tools/pending-action.ts=, =packages/coding-agent/src/tools/ast-edit.ts=, =packages/coding-agent/src/tools/resolve.ts=, =packages/coding-agent/src/extensibility/custom-tools/loader.ts=
+- Test changes: =packages/coding-agent/test/tools/ast-edit.test.ts=, =packages/coding-agent/test/tools/resolve.test.ts=
+*** Deviations
+- None.
+
