@@ -1,12 +1,15 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
-import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { PendingActionStore } from "@oh-my-pi/pi-coding-agent/tools/pending-action";
 import { ResolveTool, resolveToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/resolve";
 import { sanitizeText } from "@oh-my-pi/pi-natives";
 
-function createSession(pendingActionStore?: PendingActionStore): ToolSession {
+function createSession(pendingActionStore?: PendingActionStore, overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
 		cwd: "/tmp",
 		hasUI: false,
@@ -14,6 +17,7 @@ function createSession(pendingActionStore?: PendingActionStore): ToolSession {
 		getSessionSpawns: () => "*",
 		settings: Settings.isolated(),
 		pendingActionStore,
+		...overrides,
 	};
 }
 
@@ -61,6 +65,8 @@ describe("ResolveTool", () => {
 			reason: "Preview changed wrong callsites",
 			sourceToolName: "ast_edit",
 			label: "AST Edit: 2 replacements in 1 file",
+			mutationState: "discarded",
+			persisted: false,
 		});
 	});
 
@@ -93,6 +99,8 @@ describe("ResolveTool", () => {
 			reason: "Preview is correct",
 			sourceToolName: "ast_edit",
 			label: "AST Edit: 1 replacement in 1 file",
+			mutationState: "applied",
+			persisted: true,
 		});
 	});
 
@@ -145,8 +153,46 @@ describe("ResolveTool", () => {
 		await expect(tool.execute("call-apply-error", { action: "apply", reason: "try apply" })).rejects.toThrow(
 			"apply failed",
 		);
-		expect(pendingActionStore.hasPending).toBe(false);
+		expect(pendingActionStore.hasPending).toBe(true);
 	});
+});
+
+it("discards previewed ast edits without mutating disk", async () => {
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "resolve-discard-preview-"));
+	try {
+		const filePath = path.join(tempDir, "legacy.ts");
+		await Bun.write(filePath, "legacyWrap(x, value)\n");
+		const pendingActionStore = new PendingActionStore();
+		const tools = await createTools(
+			createSession(pendingActionStore, {
+				cwd: tempDir,
+				settings: Settings.isolated({ "lsp.enabled": false }),
+			}),
+		);
+		const astEditTool = tools.find(entry => entry.name === "ast_edit");
+		const resolveTool = tools.find(entry => entry.name === "resolve");
+		expect(astEditTool).toBeDefined();
+		expect(resolveTool).toBeDefined();
+
+		await astEditTool!.execute("ast-edit-preview", {
+			ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
+			lang: "typescript",
+			path: filePath,
+		});
+		expect(pendingActionStore.hasPending).toBe(true);
+
+		const result = await resolveTool!.execute("resolve-discard", {
+			action: "discard",
+			reason: "Preview should not land",
+		});
+
+		expect(getText(result)).toContain("Discarded");
+		expect(result.details).toEqual(expect.objectContaining({ mutationState: "discarded", persisted: false }));
+		expect(pendingActionStore.hasPending).toBe(false);
+		expect(await Bun.file(filePath).text()).toBe("legacyWrap(x, value)\n");
+	} finally {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	}
 });
 
 it("renders a highlighted apply summary", async () => {

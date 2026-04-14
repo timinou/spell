@@ -1,7 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as lspModule from "@oh-my-pi/pi-coding-agent/lsp";
-import { _resetSupportedExtensionsForTest, CodeTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import {
+	_resetSupportedExtensionsForTest,
+	CodeTool,
+	createTools,
+	type ToolSession,
+} from "@oh-my-pi/pi-coding-agent/tools";
+import { PendingActionStore } from "@oh-my-pi/pi-coding-agent/tools/pending-action";
 import * as nativesModule from "@oh-my-pi/pi-natives";
 
 const TEST_EXTENSIONS = new Set([
@@ -723,4 +732,107 @@ it("blocks stale buffers before mutating", async () => {
 	expect(getText(result)).toContain("Stale code buffer detected (1 hunk differ from disk)");
 	expect(bufferSpy).toHaveBeenCalledTimes(1);
 	expect(result.details).toEqual(expect.objectContaining({ kind: "error", error: true }));
+});
+
+it("uses applied preview content for follow-up code edits", async () => {
+	_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-preview-followup-"));
+	try {
+		const filePath = path.join(tempDir, "main.ts");
+		await Bun.write(filePath, "export function main() {\n  return legacyWrap(x, value);\n}\n");
+		const pendingActionStore = new PendingActionStore();
+		const tools = await createTools(
+			createSession({
+				cwd: tempDir,
+				settings: Settings.isolated({ "lsp.enabled": false }),
+				pendingActionStore,
+			}),
+		);
+		const codeTool = tools.find(entry => entry.name === "code");
+		const astEditTool = tools.find(entry => entry.name === "ast_edit");
+		const resolveTool = tools.find(entry => entry.name === "resolve");
+		expect(codeTool).toBeDefined();
+		expect(astEditTool).toBeDefined();
+		expect(resolveTool).toBeDefined();
+
+		await codeTool!.execute("code-read-before", { command: "read", file: filePath, resolution: 3 });
+		await astEditTool!.execute("ast-edit-preview", {
+			ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
+			lang: "typescript",
+			path: filePath,
+		});
+		await resolveTool!.execute("resolve-apply", { action: "apply", reason: "Preview is correct" });
+
+		const readAfterApply = await codeTool!.execute("code-read-after", {
+			command: "read",
+			file: filePath,
+			resolution: 3,
+		});
+		expect(getText(readAfterApply)).toContain("modernWrap(x, value)");
+
+		const editAfterApply = await codeTool!.execute("code-edit-after", {
+			command: "edit",
+			file: filePath,
+			symbol: "main",
+			operation: "patch",
+			patches: [{ find: "return modernWrap(x, value);", replace: "return modernWrap(y, value);" }],
+		});
+		expect(getText(editAfterApply)).not.toContain("Stale code buffer detected");
+		expect(await Bun.file(filePath).text()).toContain("modernWrap(y, value)");
+	} finally {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	}
+});
+
+it("invalidates only files touched by applied previews", async () => {
+	_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-preview-invalidate-"));
+	const executeSpy = spyOn(nativesModule, "executeCodeBuffer");
+	try {
+		const targetFile = path.join(tempDir, "target.ts");
+		const untouchedFile = path.join(tempDir, "untouched.ts");
+		await Bun.write(targetFile, "export function target() {\n  return legacyWrap(x, value);\n}\n");
+		await Bun.write(untouchedFile, "export function untouched() {\n  return 2;\n}\n");
+		const pendingActionStore = new PendingActionStore();
+		const tools = await createTools(
+			createSession({
+				cwd: tempDir,
+				settings: Settings.isolated({ "lsp.enabled": false }),
+				pendingActionStore,
+			}),
+		);
+		const codeTool = tools.find(entry => entry.name === "code");
+		const astEditTool = tools.find(entry => entry.name === "ast_edit");
+		const resolveTool = tools.find(entry => entry.name === "resolve");
+		expect(codeTool).toBeDefined();
+		expect(astEditTool).toBeDefined();
+		expect(resolveTool).toBeDefined();
+
+		await codeTool!.execute("read-target", { command: "read", file: targetFile, resolution: 3 });
+		await codeTool!.execute("read-untouched", { command: "read", file: untouchedFile, resolution: 3 });
+		await astEditTool!.execute("ast-edit-preview", {
+			ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
+			lang: "typescript",
+			path: targetFile,
+		});
+		await resolveTool!.execute("resolve-apply", { action: "apply", reason: "Preview is correct" });
+		await codeTool!.execute("edit-untouched", {
+			command: "edit",
+			file: untouchedFile,
+			symbol: "untouched",
+			operation: "patch",
+			patches: [{ find: "return 2;", replace: "return 3;" }],
+		});
+
+		const closeCalls = executeSpy.mock.calls
+			.map(call => call[0])
+			.filter(options => options.command === "close" && String(options.file).startsWith(tempDir))
+			.map(options => String(options.file));
+		expect(closeCalls).toEqual([targetFile]);
+		expect(await Bun.file(targetFile).text()).toContain("modernWrap(x, value)");
+		expect(await Bun.file(untouchedFile).text()).toContain("return 3;");
+	} finally {
+		executeSpy.mockRestore();
+		await fs.rm(tempDir, { recursive: true, force: true });
+	}
 });

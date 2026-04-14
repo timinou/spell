@@ -9,6 +9,7 @@ import type { Theme } from "../modes/theme/theme";
 import resolveDescription from "../prompts/tools/resolve.md" with { type: "text" };
 import { Ellipsis, padToWidth, renderStatusLine, truncateToWidth } from "../tui";
 import type { ToolSession } from ".";
+import { applyPendingAction, discardPendingAction } from "./pending-action";
 import { replaceTabs } from "./render-utils";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -25,6 +26,8 @@ export interface ResolveToolDetails {
 	reason: string;
 	sourceToolName?: string;
 	label?: string;
+	mutationState: "applied" | "discarded";
+	persisted: boolean;
 }
 
 function resolveReasonPreview(reason?: string): string | undefined {
@@ -58,11 +61,11 @@ export class ResolveTool implements AgentTool<typeof resolveSchema, ResolveToolD
 				throw new ToolError("No pending action to resolve. Nothing to apply or discard.");
 			}
 
-			const pendingAction = store.pop();
+			const pendingAction = store.peek();
 			if (!pendingAction) {
 				throw new ToolError("No pending action to resolve. Nothing to apply or discard.");
 			}
-			const resolveDetails: ResolveToolDetails = {
+			const baseResolveDetails = {
 				action: params.action,
 				reason: params.reason,
 				sourceToolName: pendingAction.sourceToolName,
@@ -70,26 +73,44 @@ export class ResolveTool implements AgentTool<typeof resolveSchema, ResolveToolD
 			};
 
 			if (params.action === "apply") {
-				const applyResult = await pendingAction.apply(params.reason);
-				const appliedText = applyResult.content
+				const applyResolution = await applyPendingAction(pendingAction, params.reason);
+				if (!store.remove(pendingAction)) {
+					throw new ToolError(`Applied preview, but pending action ${pendingAction.label} was already cleared.`);
+				}
+				const resolveDetails: ResolveToolDetails = {
+					...baseResolveDetails,
+					mutationState: "applied",
+					persisted: applyResolution.persisted,
+				};
+				const appliedText = applyResolution.result.content
 					.filter(part => part.type === "text")
 					.map(part => part.text)
 					.filter(text => text != null && text.length > 0)
 					.join("\n");
-				const baseResult = toolResult()
-					.text(appliedText || `Applied: ${pendingAction.label}.`)
-					.done();
-				return { ...baseResult, details: resolveDetails };
+				const summary = applyResolution.persisted
+					? `Applied preview: ${pendingAction.label}. Persisted to disk.`
+					: `Applied preview: ${pendingAction.label}. Persistence was not reported.`;
+				const text = appliedText ? `${summary}\n${appliedText}` : summary;
+				return { ...toolResult().text(text).done(), details: resolveDetails };
 			}
 
-			if (params.action === "discard" && pendingAction.reject != null) {
-				const discardResult = await pendingAction.reject(params.reason);
-				if (discardResult != null) {
-					return { ...discardResult, details: resolveDetails };
-				}
+			const discardResolution = await discardPendingAction(pendingAction, params.reason);
+			if (!store.remove(pendingAction)) {
+				throw new ToolError(`Discarded preview, but pending action ${pendingAction.label} was already cleared.`);
 			}
-			const discardResult = toolResult().text(`Discarded: ${pendingAction.label}. Reason: ${params.reason}`).done();
-			return { ...discardResult, details: resolveDetails };
+			const resolveDetails: ResolveToolDetails = {
+				...baseResolveDetails,
+				mutationState: "discarded",
+				persisted: false,
+			};
+			const discardedText = discardResolution?.result.content
+				.filter(part => part.type === "text")
+				.map(part => part.text)
+				.filter(text => text != null && text.length > 0)
+				.join("\n");
+			const summary = `Discarded preview: ${pendingAction.label}. No mutation landed.`;
+			const text = discardedText ? `${summary}\n${discardedText}` : summary;
+			return { ...toolResult().text(text).done(), details: resolveDetails };
 		});
 	}
 }

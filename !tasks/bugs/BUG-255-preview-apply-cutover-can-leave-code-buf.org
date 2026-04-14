@@ -1,0 +1,84 @@
+#+TITLE: Preview/apply cutover can leave code buffers and disk out of sync
+#+STATE: DONE
+#+SESSION_ID: 14ba42e2c96011f0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T11-52-46-117Z_14ba42e2c96011f0.jsonl]]
+#+CUSTOM_ID: BUG-255-preview-apply-cutover-can-leave-code-buf
+#+EFFORT: 4h
+#+LAYER: backend
+#+PRIORITY: #A
+
+* Initial Message
+
+in your future audit, please check all the ways in which you had a hard time editing using the code tool, and then propose your improvements. things like the tests not being written in the end for example, or auto-save not being triggered, etc. and propose both root causes and clean TDD implemenations of the fixes
+
+* Scope
+
+** In scope
+- Harden cross-tool mutation cutover for previewed edits so =ast_edit= preview/apply, =resolve= apply/discard, managed code buffers, and filesystem reads converge on one authoritative post-action state.
+- Cover the concrete failure class seen in planning/execution sessions: preview applied successfully, but subsequent =code read= / =code edit= / =read= observe different content or stale test blocks.
+- Touch the minimum set of files needed across `packages/coding-agent/src/tools/ast-edit.ts`, `packages/coding-agent/src/tools/resolve.ts`, `packages/coding-agent/src/tools/pending-action.ts`, `packages/coding-agent/src/tools/code.ts`, and any native bridge/buffer helper that owns the authoritative save/refresh path.
+- Add regression coverage in `packages/coding-agent/test/tools/ast-edit.test.ts`, `packages/coding-agent/test/tools/resolve.test.ts`, and `packages/coding-agent/test/tools/code.test.ts`.
+
+** Out of scope
+- Changing AST matching semantics or the preview policy toggle itself; assume BUG-252 and BUG-253 are already fixed before this item starts.
+- New code-edit ergonomics such as whole-file replace; treat PLAN-226/FEAT-546 as separate work.
+
+* Existing Patterns
+- `PendingActionStore` in `packages/coding-agent/src/tools/pending-action.ts` is the canonical queue for deferred preview actions.
+- `AstEditTool.execute(...)` registers previewed replacements; `ResolveTool.execute(...)` is the only apply/discard entrypoint.
+- `CodeTool.execute(...)` in `packages/coding-agent/src/tools/code.ts` already owns file-scoped save behavior for managed code buffers and is the correct place to enforce cutover invariants when buffers are dirty or stale.
+- Existing tests in `packages/coding-agent/test/tools/code.test.ts` already assert save behavior and mutation contracts; extend them rather than introducing a parallel suite.
+
+* Tests
+Enumerate end-user workflows first; each must be written as a failing test before implementation:
+1. Preview a structural rewrite, apply through `resolve`, then `code read` and raw filesystem-backed follow-up both observe identical updated content.
+2. Preview a structural rewrite, discard through `resolve`, then later `code read` and filesystem-backed follow-up both observe the original content.
+3. Apply a preview, then run a second mutating `code edit` on the same file; the second edit must target the newly applied content, not a stale pre-preview buffer.
+4. Preview/apply on one file must not invalidate unrelated clean buffers.
+5. If persistence fails after apply, the tool surfaces a hard error and does not claim success.
+
+* Implementation
+** Write failing preview/apply coherence tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-255-preview-apply-cutover-can-leave-code-buf::coherence-tests
+:END:
+- Files: `packages/coding-agent/test/tools/ast-edit.test.ts`, `packages/coding-agent/test/tools/resolve.test.ts`.
+- Add workflows (1), (2), and (5) as initially failing tests.
+
+** Write failing cross-tool follow-up edit tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-255-preview-apply-cutover-can-leave-code-buf::cross-tool-tests
+:DEPENDS: BUG-255-preview-apply-cutover-can-leave-code-buf::coherence-tests
+:END:
+- File: `packages/coding-agent/test/tools/code.test.ts`.
+- Add workflows (3) and (4) as failing integration tests.
+
+** Implement authoritative apply/discard cutover
+:PROPERTIES:
+:CUSTOM_ID: BUG-255-preview-apply-cutover-can-leave-code-buf::authoritative-cutover
+:DEPENDS: BUG-255-preview-apply-cutover-can-leave-code-buf::cross-tool-tests
+:END:
+- Files: `packages/coding-agent/src/tools/ast-edit.ts`, `packages/coding-agent/src/tools/resolve.ts`, `packages/coding-agent/src/tools/pending-action.ts`, plus the smallest buffer/save helper seam needed.
+- Make apply/discard update one authoritative state path, then flush/invalidate dependent buffer state deterministically.
+
+** Implement post-apply follow-up safety
+:PROPERTIES:
+:CUSTOM_ID: BUG-255-preview-apply-cutover-can-leave-code-buf::followup-safety
+:DEPENDS: BUG-255-preview-apply-cutover-can-leave-code-buf::authoritative-cutover
+:END:
+- Files: `packages/coding-agent/src/tools/code.ts` and any narrow helper.
+- Ensure later file-scoped edits/readbacks cannot reuse stale pre-apply snapshots.
+
+* Edge Cases
+- Discard after preview must be a true no-op on both buffer and disk.
+- Apply must not partially update one layer and silently leave another stale.
+- Dirty-buffer handling must stay truthful: if an operation cannot safely reconcile state, hard-fail with actionable guidance.
+- Unrelated buffers must not be globally invalidated unless required.
+
+* Acceptance Criteria
+- Preview apply/discard converge buffer + disk state deterministically.
+- A second edit after apply sees the newly applied content.
+- Persistence failures do not report success.
+- Verification: `bun test packages/coding-agent/test/tools/ast-edit.test.ts packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code.test.ts`
+
+NOTE [2026-04-14]: Implemented authoritative preview/apply/discard cutover; verified with `bun test packages/coding-agent/test/tools/ast-edit.test.ts packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code.test.ts`.

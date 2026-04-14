@@ -490,6 +490,8 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 					limit: params.limit,
 					noop: true,
 					idempotent: true,
+					mutationState: "noop",
+					persisted: false,
 				});
 				const text = formatCodeToolContent(details);
 				return toolResult(details).text(text).done();
@@ -527,6 +529,8 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				formatterServer,
 				noop: false,
 				idempotent: params.idempotent === true,
+				mutationState: command === "edit" ? "applied" : undefined,
+				persisted: command === "edit",
 			});
 			const injectedHint = this.#maybeInjectLanguageHint(options.file);
 			if (injectedHint) {

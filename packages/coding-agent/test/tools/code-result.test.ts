@@ -162,6 +162,54 @@ describe("code tool result contract", () => {
 		expect(content).not.toContain("Edited src/main.ts");
 		expect(content).not.toContain("Changes: +0 -0");
 	});
+	it("formats pending preview edits without edited success text", () => {
+		const details = normalizeCodeBufferSuccess({
+			command: "edit",
+			file: "/repo/src/main.ts",
+			cwd: "/repo",
+			output: {
+				version: 2,
+				diff: "@@ add @@\n-return legacyWrap(x, value);\n+return modernWrap(x, value);",
+				editCount: 1,
+			},
+			mutationState: "pending_preview",
+			persisted: false,
+		});
+
+		if (details.command !== "edit") throw new Error("Expected edit details");
+		expect(details.data.mutationState).toBe("pending_preview");
+		expect(details.data.persisted).toBe(false);
+
+		const content = formatCodeToolContent(details);
+		expect(content).toContain("Preview queued src/main.ts");
+		expect(content).toContain("Resolve required before disk changes.");
+		expect(content).not.toContain("Edited src/main.ts");
+	});
+
+	it("formats discarded preview edits without edited success text", () => {
+		const details = normalizeCodeBufferSuccess({
+			command: "edit",
+			file: "/repo/src/main.ts",
+			cwd: "/repo",
+			output: {
+				version: 2,
+				diff: "@@ add @@\n-return legacyWrap(x, value);\n+return modernWrap(x, value);",
+				editCount: 1,
+			},
+			mutationState: "discarded",
+			persisted: false,
+		});
+
+		if (details.command !== "edit") throw new Error("Expected edit details");
+		expect(details.data.mutationState).toBe("discarded");
+		expect(details.data.persisted).toBe(false);
+
+		const content = formatCodeToolContent(details);
+		expect(content).toContain("Preview discarded src/main.ts");
+		expect(content).toContain("No mutation landed.");
+		expect(content).not.toContain("Edited src/main.ts");
+	});
+
 	it("summarizes undo history without dropping low-level edit primitives", () => {
 		const details = normalizeCodeBufferSuccess({
 			command: "undo",

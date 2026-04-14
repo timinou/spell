@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { buildCompactHashlineDiffPreview } from "../patch/hashline";
+import type { MutationState } from "./pending-action";
 import type { OutputMeta } from "./output-meta";
 
 export type CodeGraphCommand =
@@ -72,6 +73,8 @@ export interface CodeEditData {
 	idempotent?: boolean;
 	formatting?: "formatted" | "unchanged" | "unavailable";
 	formatterServer?: string;
+	mutationState: MutationState;
+	persisted: boolean;
 }
 
 export interface CodeHistoryRange {
@@ -245,6 +248,8 @@ export function normalizeCodeBufferSuccess(input: {
 	formatterServer?: string;
 	noop?: boolean;
 	idempotent?: boolean;
+	mutationState?: CodeEditData["mutationState"];
+	persisted?: boolean;
 }): CodeFileDetails {
 	const displayPath = toDisplayPath(input.file, input.cwd);
 	const base = {
@@ -303,6 +308,10 @@ export function normalizeCodeBufferSuccess(input: {
 				idempotent: input.idempotent ?? false,
 				formatting: input.formatting,
 				formatterServer: input.formatterServer,
+				mutationState: input.mutationState ?? (input.noop ? "noop" : "applied"),
+				persisted:
+					input.persisted ??
+					(input.mutationState !== "pending_preview" && input.mutationState !== "discarded" && !input.noop),
 			},
 		};
 	}
@@ -426,7 +435,6 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 
 	if (details.command === "edit") {
 		const label = details.displayPath ? ` ${details.displayPath}` : "";
-		const header = `${details.data.created ? "Created" : "Edited"}${label}`;
 		const formatting = details.data.formatting
 			? formatEditFormatting(details.data.formatting, details.data.formatterServer)
 			: undefined;
@@ -434,6 +442,23 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 			const noopHeader = `${details.data.created ? "No-op create" : "No-op edit"}${label}${details.data.idempotent ? " (idempotent)" : ""}`;
 			return withHint([noopHeader, formatting, "No semantic changes applied."].filter(Boolean).join("\n"));
 		}
+		if (details.data.mutationState === "pending_preview") {
+			const preview = buildCompactHashlineDiffPreview(details.data.diff);
+			const changes = countDiffChanges(details.data.diff);
+			const lines = [
+				`Preview queued${label}`,
+				"Resolve required before disk changes.",
+				`Changes: +${changes.addedLines} -${changes.removedLines}`,
+			].filter(Boolean);
+			if (preview.preview.trim().length > 0) {
+				lines.push("Diff preview:", preview.preview);
+			}
+			return withHint(lines.join("\n"));
+		}
+		if (details.data.mutationState === "discarded") {
+			return withHint([`Preview discarded${label}`, "No mutation landed."].join("\n"));
+		}
+		const header = `${details.data.created ? "Created" : "Edited"}${label}`;
 		if (details.data.diff.trim().length === 0) {
 			return withHint([header, formatting].filter(Boolean).join("\n"));
 		}
