@@ -110,6 +110,26 @@ mod tests {
 		let first = out.find("function add").expect("first");
 		let second = out[first + 1..].find("function add");
 		assert!(second.is_some(), "should have two copies of add");
+		// Cloned function should be on its own line, not concatenated
+		let between = &out[first + "function add".len()..first + 1 + second.unwrap()];
+		assert!(between.contains('\n'), "cloned function should be separated by newline");
+	}
+
+	#[test]
+	fn test_clone_preserves_indentation() {
+		let mut buffer = edit_buffer();
+		// line 16 is `  bar() { return 1; }`
+		let edits = clone_node(&buffer, 16).expect("clone bar");
+		let out = apply_and_get(&mut buffer, edits);
+		// Each occurrence of bar should be on its own indented line
+		for line in out.lines() {
+			if line.contains("bar()") {
+				assert!(line.starts_with("  "), "cloned bar should preserve 2-space indent");
+			}
+		}
+		// There should be two distinct bar lines
+		let count = out.lines().filter(|l| l.contains("bar()")).count();
+		assert_eq!(count, 2, "should have two bar methods");
 	}
 
 	// -- kill test --

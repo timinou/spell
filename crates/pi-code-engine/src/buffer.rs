@@ -63,14 +63,15 @@ struct Revision {
 
 #[derive(Debug, Clone)]
 struct History {
-	revisions: Vec<Revision>,
-	current:   usize,
+	revisions:      Vec<Revision>,
+	current:        usize,
+	saved_revision: Option<usize>,
 }
 
 impl History {
 	fn new() -> Self {
 		Self {
-			revisions: vec![Revision {
+			revisions:      vec![Revision {
 				parent:     None,
 				last_child: None,
 				forwards:   vec![TextEdit {
@@ -84,7 +85,8 @@ impl History {
 					new_text:     String::new(),
 				}],
 			}],
-			current:   0,
+			current:        0,
+			saved_revision: Some(0),
 		}
 	}
 
@@ -96,6 +98,12 @@ impl History {
 		if self.current + 1 < self.revisions.len() {
 			self.revisions.truncate(self.current + 1);
 		}
+		if self
+			.saved_revision
+			.map_or(false, |r| r >= self.revisions.len())
+		{
+			self.saved_revision = None;
+		}
 		let next = self.revisions.len();
 		self.revisions.push(Revision {
 			parent: Some(self.current),
@@ -105,6 +113,14 @@ impl History {
 		});
 		self.revisions[self.current].last_child = Some(next);
 		self.current = next;
+	}
+
+	fn is_clean(&self) -> bool {
+		self.saved_revision == Some(self.current)
+	}
+
+	fn mark_saved(&mut self) {
+		self.saved_revision = Some(self.current);
 	}
 }
 
@@ -351,6 +367,7 @@ impl CodeBuffer {
 			last_result = Some(self.apply_text_mutation(inv.clone())?);
 		}
 		self.history.current = parent;
+		self.dirty = !self.history.is_clean();
 		Ok(last_result)
 	}
 
@@ -364,6 +381,7 @@ impl CodeBuffer {
 			last_result = Some(self.apply_text_mutation(fwd.clone())?);
 		}
 		self.history.current = next;
+		self.dirty = !self.history.is_clean();
 		Ok(last_result)
 	}
 
@@ -433,6 +451,7 @@ impl CodeBuffer {
 			fs::create_dir_all(parent)?;
 		}
 		fs::write(path, self.source())?;
+		self.history.mark_saved();
 		self.dirty = false;
 		Ok(())
 	}
@@ -752,5 +771,72 @@ mod tests {
 		assert_eq!(buffer.source(), source);
 		buffer.redo().expect("redo");
 		assert_eq!(buffer.source(), "XabcY");
+	}
+
+	#[test]
+	fn test_dirty_cleared_on_undo_to_saved() {
+		let source = "abc";
+		let mut buffer =
+			CodeBuffer::from_str(source, LanguageId::new("typescript"), registry()).expect("buffer");
+		buffer
+			.edit(TextEdit { start_byte: 0, old_end_byte: 0, new_text: "X".into() })
+			.expect("edit");
+		assert!(buffer.is_dirty());
+		buffer.undo().expect("undo");
+		assert!(!buffer.is_dirty(), "undo back to initial saved state should clear dirty");
+	}
+
+	#[test]
+	fn test_dirty_tracking_with_save() {
+		let path = temp_path("dirty-track.ts");
+		fs::write(&path, "abc").expect("write fixture");
+		let mut buffer = CodeBuffer::open(&path, registry()).expect("open");
+		assert!(!buffer.is_dirty());
+
+		buffer
+			.edit(TextEdit { start_byte: 0, old_end_byte: 0, new_text: "X".into() })
+			.expect("edit");
+		assert!(buffer.is_dirty());
+
+		buffer.undo().expect("undo");
+		assert!(!buffer.is_dirty(), "undo to original saved state");
+
+		buffer
+			.edit(TextEdit { start_byte: 0, old_end_byte: 0, new_text: "Y".into() })
+			.expect("edit");
+		buffer.save().expect("save");
+		assert!(!buffer.is_dirty(), "save should clear dirty");
+
+		buffer
+			.edit(TextEdit { start_byte: 1, old_end_byte: 1, new_text: "Z".into() })
+			.expect("edit");
+		assert!(buffer.is_dirty());
+		buffer.undo().expect("undo");
+		assert!(!buffer.is_dirty(), "undo back to post-save state");
+		buffer.redo().expect("redo");
+		assert!(buffer.is_dirty(), "redo away from saved state");
+	}
+
+	#[test]
+	fn test_dirty_past_saved_state() {
+		let path = temp_path("dirty-past.ts");
+		fs::write(&path, "abc").expect("write fixture");
+		let mut buffer = CodeBuffer::open(&path, registry()).expect("open");
+
+		buffer
+			.edit(TextEdit { start_byte: 0, old_end_byte: 0, new_text: "X".into() })
+			.expect("edit 1");
+		buffer.save().expect("save");
+		assert!(!buffer.is_dirty());
+
+		buffer
+			.edit(TextEdit { start_byte: 1, old_end_byte: 1, new_text: "Y".into() })
+			.expect("edit 2");
+		buffer.undo().expect("undo");
+		assert!(!buffer.is_dirty(), "undo to saved state");
+		buffer.undo().expect("undo past saved");
+		assert!(buffer.is_dirty(), "undo past saved state should be dirty");
+		buffer.redo().expect("redo to saved");
+		assert!(!buffer.is_dirty(), "redo back to saved state");
 	}
 }

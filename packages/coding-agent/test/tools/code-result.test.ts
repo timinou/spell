@@ -255,6 +255,40 @@ describe("code tool result contract", () => {
 		expect(content).toContain("v4 L10-12 +13 chars");
 	});
 
+	it("formats open results with path, language, and line count", () => {
+		const details = normalizeCodeBufferSuccess({
+			command: "open",
+			file: "/repo/src/main.ts",
+			cwd: "/repo",
+			output: { success: true, language: "typescript", lines: ["export const a = 1;", "export const b = 2;"] },
+		});
+
+		expect(details.command).toBe("open");
+		if (details.command !== "open") throw new Error("Expected open details");
+		expect(details.data.success).toBe(true);
+		expect(details.data.language).toBe("typescript");
+		expect(details.data.lineCount).toBe(2);
+
+		const content = formatCodeToolContent(details);
+		expect(content).toBe("Opened src/main.ts [typescript] 2 lines");
+	});
+
+	it("formats close results with path", () => {
+		const details = normalizeCodeBufferSuccess({
+			command: "close",
+			file: "/repo/src/main.ts",
+			cwd: "/repo",
+			output: { success: true },
+		});
+
+		expect(details.command).toBe("close");
+		if (details.command !== "close") throw new Error("Expected close details");
+		expect(details.data.success).toBe(true);
+
+		const content = formatCodeToolContent(details);
+		expect(content).toBe("Closed src/main.ts");
+	});
+
 	it("keeps graph output compact and error output plain text", () => {
 		const graph = createCodeGraphDetails({
 			command: "status",

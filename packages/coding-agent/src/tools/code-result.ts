@@ -25,6 +25,8 @@ export type CodeFileCommand =
 	| "redo"
 	| "diff"
 	| "save"
+	| "open"
+	| "close"
 	| "buffers"
 	| "languages";
 
@@ -156,6 +158,8 @@ export type CodeDiffDetails = CodeFileDetailsBase<"diff", { hunks: CodeDiffHunk[
 export type CodeSaveDetails = CodeFileDetailsBase<"save", { success: boolean; version?: number }>;
 export type CodeBuffersDetails = CodeFileDetailsBase<"buffers", { buffers: CodeBufferInfo[] }>;
 export type CodeLanguagesDetails = CodeFileDetailsBase<"languages", { languages: CodeLanguageInfo[] }>;
+export type CodeOpenDetails = CodeFileDetailsBase<"open", { success: boolean; language?: string; lineCount?: number }>;
+export type CodeCloseDetails = CodeFileDetailsBase<"close", { success: boolean }>;
 
 export type CodeFileDetails =
 	| CodeOutlineDetails
@@ -166,7 +170,9 @@ export type CodeFileDetails =
 	| CodeDiffDetails
 	| CodeSaveDetails
 	| CodeBuffersDetails
-	| CodeLanguagesDetails;
+	| CodeLanguagesDetails
+	| CodeOpenDetails
+	| CodeCloseDetails;
 
 export interface CodeGraphDetails {
 	kind: "graph";
@@ -356,6 +362,31 @@ export function normalizeCodeBufferSuccess(input: {
 		};
 	}
 
+	if (input.command === "open") {
+		const record = asRecord(input.output);
+		const lines = Array.isArray(record?.lines) ? record.lines : undefined;
+		return {
+			...base,
+			command: "open",
+			data: {
+				success: asBoolean(record?.success) ?? false,
+				language: asString(record?.language),
+				lineCount: lines?.length,
+			},
+		};
+	}
+
+	if (input.command === "close") {
+		const record = asRecord(input.output);
+		return {
+			...base,
+			command: "close",
+			data: {
+				success: asBoolean(record?.success) ?? false,
+			},
+		};
+	}
+
 	const languagesRecord = asRecord(input.output);
 	return {
 		...base,
@@ -541,6 +572,18 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 			lines.push(`- … ${remaining} more languages`);
 		}
 		return withHint(lines.join("\n"));
+	}
+
+	if (details.command === "open") {
+		const label = details.displayPath ? ` ${details.displayPath}` : "";
+		const language = details.data.language ? ` [${details.data.language}]` : "";
+		const lineCount = details.data.lineCount !== undefined ? ` ${pluralize(details.data.lineCount, "line")}` : "";
+		return withHint(`Opened${label}${language}${lineCount}`);
+	}
+
+	if (details.command === "close") {
+		const label = details.displayPath ? ` ${details.displayPath}` : "";
+		return withHint(`Closed${label}`);
 	}
 
 	return "";
