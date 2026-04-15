@@ -4,7 +4,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { adaptSchemaForStrict } from "@oh-my-pi/pi-ai/utils/schema";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { getThemeByName } from "@oh-my-pi/pi-coding-agent/modes/theme/theme";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { astEditToolRenderer } from "@oh-my-pi/pi-coding-agent/tools/ast-edit";
 import { PendingActionStore } from "@oh-my-pi/pi-coding-agent/tools/pending-action";
 import * as nativesModule from "@oh-my-pi/pi-natives";
 
@@ -226,6 +228,81 @@ describe("ast_edit tool schema", () => {
 		} finally {
 			await fs.rm(tempDir, { recursive: true, force: true });
 		}
+	});
+
+	it("degrades auto-apply when buffer invalidation fails after persistence", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ast-edit-auto-apply-degraded-"));
+		try {
+			const filePath = path.join(tempDir, "legacy.ts");
+			await Bun.write(filePath, "legacyWrap(x, value)\n");
+			const pendingActionStore = new PendingActionStore();
+			const settings = Settings.isolated({ "edit.previewResolvePolicy": "auto-apply" });
+
+			const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockImplementation(options => {
+				if (options.command === "close") {
+					return { output: "mock buffer close failure", error: true };
+				}
+				return { output: "", error: false };
+			});
+
+			const tools = await createTools(createTestSession(tempDir, { pendingActionStore, settings }));
+			const tool = tools.find(entry => entry.name === "ast_edit");
+			expect(tool).toBeDefined();
+
+			const result = await tool!.execute("ast-edit-auto-apply-degraded", {
+				ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
+				lang: "typescript",
+				path: filePath,
+			});
+
+			expect(result.details).toEqual(
+				expect.objectContaining({
+					applied: true,
+					totalReplacements: 1,
+					mutationState: "applied",
+					persisted: true,
+					bufferInvalidationError: expect.stringContaining("failed to invalidate the managed code buffer"),
+				}),
+			);
+			const text = result.content.find(content => content.type === "text")?.text ?? "";
+			expect(text).toContain("Applied 1 replacement in 1 file.");
+			expect(text).toContain("failed to invalidate the managed code buffer");
+			expect(pendingActionStore.hasPending).toBe(false);
+			expect(await Bun.file(filePath).text()).toContain("modernWrap(x, value)");
+
+			bufferSpy.mockRestore();
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("renderer shows warning when bufferInvalidationError is present", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+
+		const result = {
+			content: [{ type: "text", text: "Applied 1 replacement in 1 file.\n\n+1#abc:modernWrap(x, value)" }],
+			details: {
+				totalReplacements: 1,
+				filesTouched: 1,
+				filesSearched: 1,
+				applied: true,
+				mutationState: "applied" as const,
+				persisted: true,
+				limitReached: false,
+				bufferInvalidationError:
+					"Applied preview persisted to disk, but failed to invalidate the managed code buffer for /tmp/test.ts: mock error",
+			},
+		};
+
+		const rendered = astEditToolRenderer.renderResult(result, { expanded: true, isPartial: false }, uiTheme, {
+			ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
+		});
+		const lines = rendered.render(120);
+		const output = lines.join("\n");
+		expect(output).toContain("replacement");
+		expect(output).toContain("failed to invalidate the managed code buffer");
 	});
 
 	it("auto-applies previews when policy is auto-apply", async () => {

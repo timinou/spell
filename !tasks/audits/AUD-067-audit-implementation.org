@@ -1,0 +1,37 @@
+#+TITLE: Audit: implementation
+#+STATE: DONE
+#+CUSTOM_ID: AUD-067-audit-implementation
+#+EFFORT: 1h
+#+LAYER: coding-agent
+#+PRIORITY: #B
+
+* Source
+Manual audit
+
+* Findings
+Blocked; cannot continue implementation in current session.
+
+Cause
+- active read-only audit guard still in force
+- attempted write already failed with:
+  - `Audit mode: file modifications are not allowed.`
+
+Open todo state
+- `Harden code edit flows` → blocked
+- `Add edge case tests` → blocked
+- `Verify code edit hardening` → blocked
+
+Ready-to-run next once writable
+- enforce touched-file reporting for persisted preview applies
+- downgrade post-persist invalidation failures into truthful result provenance instead of throw-after-persist ambiguity
+- expose degraded persistence/invalidation state in resolve/result text
+- add tests:
+  - persisted-without-files
+  - persisted + invalidation failure
+  - degraded manual resolve apply
+  - degraded auto-apply
+  - renderer/result truthfulness for those paths
+
+∴ needs writable non-audit turn/session before I can truthfully proceed.
+
+NOTE [2026-04-15]: All preview/persist hardening items are now addressed by BUG-264. Verified: auto-apply surfaces buffer invalidation degradation, ast-edit renderer shows warning, focused ast-edit/resolve tests pass, adjacent reviewer audit found no further high-confidence truthfulness gaps.

@@ -1,0 +1,7 @@
+$ bun test packages/coding-agent/test/tools/resolve.test.ts
+bun test v1.3.10 (30e609e0)
+
+ 14 pass
+ 0 fail
+ 60 expect() calls
+Ran 14 tests across 1 file. [1.79s]

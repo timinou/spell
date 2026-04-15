@@ -1,0 +1,41 @@
+#+TITLE: Close AUD-067 after preview pipeline hardening
+#+STATE: DONE
+#+SESSION_ID: 14ba90dc1d2e3497
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T17-33-26-516Z_14ba90dc1d2e3497.jsonl]]
+#+CUSTOM_ID: FUP-055-close-aud-067-after-preview-pipeline-har
+#+DEPENDS: BUG-264-fix-auto-apply-dropping-buffer-invalidat
+#+EFFORT: 5m
+#+LAYER: coding-agent
+#+PRIORITY: #C
+
+* Scope
+After BUG-264 is verified and merged, close AUD-067 as DONE.
+
+** In scope
+- =org update= AUD-067 state to DONE
+- Add a note referencing BUG-264 and its verification evidence
+
+** Out of scope
+- Any code changes (all done in BUG-264)
+
+* Existing Patterns
+AUD-067 is in =!tasks/audits/AUD-067-audit-implementation.org=, currently state DOING.
+
+* Tests
+None — org state update only.
+
+* Implementation
+** Close AUD-067
+:PROPERTIES:
+:CUSTOM_ID: FUP-055-close-aud-067-after-preview-pipeline-har::close-aud067
+:END:
+- Run: =org update --id AUD-067-audit-implementation --state DONE --note "All open items addressed by BUG-264. Verified: auto-apply degradation surfaced, renderer shows warning, tests pass."=
+
+* Edge Cases
+None.
+
+* Acceptance Criteria
+1. AUD-067 state is DONE
+2. Note references BUG-264 verification
+
+NOTE [2026-04-15]: Closed AUD-067 after BUG-264 verification. Evidence saved under !tasks/plans/plan-artifacts/PLAN-233-preview-pipeline-degradation-hardening/.

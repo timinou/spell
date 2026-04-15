@@ -1,0 +1,67 @@
+#+TITLE: Preview pipeline degradation hardening
+#+STATE: DONE
+#+SESSION_ID: 14ba90dc1d2e3497
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T17-33-26-516Z_14ba90dc1d2e3497.jsonl]]
+#+CUSTOM_ID: PLAN-233-preview-pipeline-degradation-hardening
+#+EFFORT: 1h
+#+LAYER: coding-agent
+#+PRIORITY: #B
+
+* Initial Message
+
+dude. try to find other ways in which this could break. this is important. fix them. I have restarted the session so you are using the stuff you have made. if you see a problem, list it in the audit
+
+* Context
+Addresses open items from AUD-067 (preview/persist pipeline hardening) and closes AUD-069 (merge confirmation).
+
+** Problem
+The ast-edit auto-apply path at =packages/coding-agent/src/tools/ast-edit.ts= line 362-364 extracts only =.result= from =PendingActionResolution=, silently discarding =.bufferInvalidationError=, =.files=, and =.persisted=. When buffer invalidation fails post-persist during auto-apply, the user sees a clean success message with no degradation warning.
+
+The manual resolve path (resolve tool) already handles this correctly: it surfaces =bufferInvalidationError= in result text, details, and TUI rendering.
+
+** Prior work (AUD-068, already merged)
+- Mode guard extended to block undo/redo in read-only modes
+- Clone output fixed for proper separator/indent
+- Dirty tracking fixed with saved_revision
+- Open/close result normalization added
+- Failed edit buffer invalidation restored
+
+** What remains (from AUD-067)
+- Auto-apply drops =bufferInvalidationError= → fix in ast-edit.ts
+- =AstEditToolDetails= lacks =bufferInvalidationError= field → add it
+- Ast-edit TUI renderer silent on invalidation warnings → add warning rendering
+- Test: degraded auto-apply → missing
+- Test: ast-edit renderer with =bufferInvalidationError= → missing
+
+* Verification
+- =bun test packages/coding-agent/test/tools/ast-edit.test.ts= — all pass including new degradation tests
+- =bun test packages/coding-agent/test/tools/resolve.test.ts= — no regression
+- AUD-067 state updated to DONE
+
+* Execution Manifest
+** Wave 1: Fix + tests
+[[id:BUG-264-fix-auto-apply-dropping-buffer-invalidat]]
+- Add =bufferInvalidationError= to =AstEditToolDetails=
+- Fix auto-apply path to capture full =PendingActionResolution= and surface degradation
+- Update ast-edit TUI renderer for warning display
+- Add regression tests for degraded auto-apply and renderer
+
+** Wave 2: Cleanup
+[[id:FUP-055-close-aud-067-after-preview-pipeline-har]]
+- Close AUD-067 as DONE with verification evidence
+
+** Completion [2026-04-15]
+*** Verification
+- =bun test packages/coding-agent/test/tools/ast-edit.test.ts= → pass (9 pass, 0 fail, 52 expect calls). Output saved at [[file:!tasks/plans/plan-artifacts/PLAN-233-preview-pipeline-degradation-hardening/ast-edit-test.txt]].
+- =bun test packages/coding-agent/test/tools/resolve.test.ts= → pass (14 pass, 0 fail, 60 expect calls). Output saved at [[file:!tasks/plans/plan-artifacts/PLAN-233-preview-pipeline-degradation-hardening/resolve-test.txt]].
+- Adjacent preview/persist truthfulness audit → no additional high-confidence issues found. Output saved at [[file:!tasks/plans/plan-artifacts/PLAN-233-preview-pipeline-degradation-hardening/audit-review.txt]].
+
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-233-preview-pipeline-degradation-hardening/ast-edit-test.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-233-preview-pipeline-degradation-hardening/resolve-test.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-233-preview-pipeline-degradation-hardening/audit-review.txt]]
+
+*** Deviations
+- None.
+
+NOTE [2026-04-15]: Completed BUG-264 and closed AUD-067/FUP-055 with focused verification evidence saved under !tasks/plans/plan-artifacts/PLAN-233-preview-pipeline-degradation-hardening/.
