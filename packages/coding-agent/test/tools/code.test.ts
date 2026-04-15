@@ -103,6 +103,42 @@ describe("coding-agent code tool wiring", () => {
 		);
 	});
 
+	it("enforces mode guard for undo operations", async () => {
+		const tool = new CodeTool(
+			createSession({
+				getActiveModeState: () => ({
+					type: "user",
+					name: "readonly",
+					config: {} as any,
+					enabled: true,
+					readOnly: true,
+				}),
+			}),
+		);
+
+		await expect(tool.execute("tool", { command: "undo", file: "test.txt" })).rejects.toThrow(
+			'Read-only mode "readonly": file modifications are not allowed.',
+		);
+	});
+
+	it("enforces mode guard for redo operations", async () => {
+		const tool = new CodeTool(
+			createSession({
+				getActiveModeState: () => ({
+					type: "user",
+					name: "readonly",
+					config: {} as any,
+					enabled: true,
+					readOnly: true,
+				}),
+			}),
+		);
+
+		await expect(tool.execute("tool", { command: "redo", file: "test.txt" })).rejects.toThrow(
+			'Read-only mode "readonly": file modifications are not allowed.',
+		);
+	});
+
 	it("routes graph commands to the native graph backend", async () => {
 		const executeSpy = spyOn(nativesModule, "executeCodeGraph").mockResolvedValue({
 			output: "Code graph status\nCache: fresh\nSemantic: missing",

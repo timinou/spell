@@ -359,7 +359,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 		const command = params.command ?? "";
 		const sessionCwd = this.#session.cwd ?? getProjectDir();
 
-		if (command === "edit" || command === "save") {
+		if (MUTATING_COMMANDS.has(command) || command === "save") {
 			if (params.file) {
 				enforceModeWrite(this.#session, params.file, { op: params.operation === "create" ? "create" : "update" });
 			}
@@ -457,6 +457,15 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 
 			const result = timedCodeBuffer(options);
 			if (result.error) {
+				if (command === "edit" && options.file) {
+					const closeResult = timedCodeBuffer({ command: "close", file: options.file });
+					if (closeResult.error) {
+						logger.warn("failed to invalidate buffer after edit error", {
+							file: options.file,
+							error: extractCodeToolErrorMessage(closeResult.output),
+						});
+					}
+				}
 				const details = createCodeToolError({
 					command,
 					file: options.file,
