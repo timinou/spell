@@ -1,0 +1,8 @@
+Reviewer audit: preview/persist truthfulness review
+
+Result:
+{
+  "overall_correctness": "correct",
+  "explanation": "The patch correctly fixes the bufferInvalidationError truthfulness gap in the auto-apply path. Buffer invalidation errors are now properly threaded through text, details, and the renderer. The code.ts changes for buffer close on edit error are sound. No high-confidence bugs introduced by this patch.",
+  "confidence": 0.9
+}

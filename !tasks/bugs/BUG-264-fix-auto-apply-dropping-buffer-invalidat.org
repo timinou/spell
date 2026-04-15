@@ -1,0 +1,190 @@
+#+TITLE: Fix auto-apply dropping buffer invalidation errors in ast-edit
+#+STATE: DONE
+#+SESSION_ID: 14ba90dc1d2e3497
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T17-33-26-516Z_14ba90dc1d2e3497.jsonl]]
+#+CUSTOM_ID: BUG-264-fix-auto-apply-dropping-buffer-invalidat
+#+EFFORT: 1h
+#+LAYER: coding-agent
+#+PRIORITY: #B
+
+* Scope
+** In scope
+- Fix auto-apply path in ast-edit to capture and surface =bufferInvalidationError= from =PendingActionResolution=
+- Add =bufferInvalidationError?: string= to =AstEditToolDetails= interface
+- Update ast-edit TUI renderer to show buffer invalidation warning when present
+- Add regression tests for degraded auto-apply and renderer paths
+
+** Out of scope
+- Resolve tool (already handles degradation correctly)
+- Manual resolve path (already tested in resolve.test.ts)
+- =invalidateCodeBuffers= implementation (already correct — returns string, does not throw)
+- =PendingActionResolution= interface (already carries =bufferInvalidationError=)
+
+* Existing Patterns
+** =PendingActionResolution= (pending-action.ts L13-17)
+#+begin_src typescript
+export interface PendingActionResolution extends MutationProvenance {
+  result: AgentToolResult<unknown>;
+  files: string[];
+  bufferInvalidationError?: string;
+}
+#+end_src
+
+** =applyPendingAction= (pending-action.ts L85-99)
+Returns =PendingActionResolution= with =bufferInvalidationError= populated when =invalidateCodeBuffers= fails.
+
+** Resolve tool degradation pattern (resolve.ts L92-98)
+#+begin_src typescript
+const summary = applyResolution.persisted
+  ? applyResolution.bufferInvalidationError
+    ? `Applied preview: ${pendingAction.label}. Persisted to disk with buffer invalidation warnings.`
+    : `Applied preview: ${pendingAction.label}. Persisted to disk.`
+  : `Applied preview: ${pendingAction.label}. Persistence was not reported.`;
+const text = [summary, applyResolution.bufferInvalidationError, appliedText].filter(Boolean).join("
+");
+#+end_src
+
+** Resolve TUI renderer provenance warning (resolve.ts L167-174)
+Shows =state: applied · persisted to disk · buffer invalidation warning= status line and the full error text below, using =uiTheme.fg("warning", ...)=.
+
+** Auto-apply path (ast-edit.ts L362-364) — THE BUG
+#+begin_src typescript
+if (this.session.settings.get("edit.previewResolvePolicy") === "auto-apply") {
+  return (await applyPendingAction(previewAction, "Auto-applied by edit.previewResolvePolicy"))
+    .result as AgentToolResult<AstEditToolDetails>;
+}
+#+end_src
+Extracts only =.result=, discarding =.bufferInvalidationError=, =.files=, =.persisted=.
+
+** Existing auto-apply test (ast-edit.test.ts L231-267)
+Happy-path only: asserts =applied: true, totalReplacements: 1, mutationState: "applied", persisted: true=. Does not test degradation.
+
+** Existing resolve degradation tests (resolve.test.ts)
+- "degrades applied results when buffer invalidation fails after persistence" — mocks =executeCodeBuffer= to return =error: true=
+- "surfaces missing invalidation file lists as degraded apply results" — tests empty files case
+- "renders buffer invalidation provenance warnings" — tests renderer with =bufferInvalidationError= in details
+
+* Tests
+Test file: =packages/coding-agent/test/tools/ast-edit.test.ts=
+
+** Scenario 1: Auto-apply with invalidation failure surfaces warning
+- Setup: write fixture file, create tools with =edit.previewResolvePolicy: "auto-apply"=
+- Mock =executeCodeBuffer= to return =error: true= for close commands only (let other commands through or mock them appropriately)
+- Execute ast-edit with a valid pattern match
+- Assert: result text contains "buffer invalidation" warning
+- Assert: =result.details.bufferInvalidationError= is a string containing "failed to invalidate"
+- Assert: =result.details.mutationState= is "applied"
+- Assert: =result.details.persisted= is true
+- Assert: file on disk contains the replacement (mutation landed despite invalidation failure)
+
+** Scenario 2: Auto-apply with empty files surfaces warning
+- Setup: create a =PendingAction= with =files: []= and =invalidateManagedCodeBuffers: true=
+- Use =applyPendingAction= directly (unit test level)
+- Assert: resolution =bufferInvalidationError= contains "no files were provided"
+- Note: this is already covered in resolve.test.ts — only add if we need to verify the auto-apply integration
+
+** Scenario 3: Ast-edit renderer shows invalidation warning
+- Setup: call =astEditToolRenderer.renderResult= with details that include =bufferInvalidationError=
+- Assert: rendered output contains the warning text
+- Assert: rendered output contains a visual warning indicator (not just plain text)
+
+* Implementation
+
+** Add =bufferInvalidationError= to =AstEditToolDetails=
+:PROPERTIES:
+:CUSTOM_ID: BUG-264-fix-auto-apply-dropping-buffer-invalidat::add-details-field
+:END:
+- File: =packages/coding-agent/src/tools/ast-edit.ts=
+- Add =bufferInvalidationError?: string= to the =AstEditToolDetails= interface (after =persisted: boolean=, line ~60)
+- No other interface changes needed
+
+** Fix auto-apply path to surface degradation
+:PROPERTIES:
+:CUSTOM_ID: BUG-264-fix-auto-apply-dropping-buffer-invalidat::fix-auto-apply
+:DEPENDS: BUG-264-fix-auto-apply-dropping-buffer-invalidat::add-details-field
+:END:
+- File: =packages/coding-agent/src/tools/ast-edit.ts=
+- Replace lines 362-364:
+#+begin_src typescript
+// BEFORE (drops bufferInvalidationError):
+if (this.session.settings.get("edit.previewResolvePolicy") === "auto-apply") {
+  return (await applyPendingAction(previewAction, "Auto-applied by edit.previewResolvePolicy"))
+    .result as AgentToolResult<AstEditToolDetails>;
+}
+
+// AFTER (surfaces degradation):
+if (this.session.settings.get("edit.previewResolvePolicy") === "auto-apply") {
+  const autoResolution = await applyPendingAction(previewAction, "Auto-applied by edit.previewResolvePolicy");
+  const autoResult = autoResolution.result as AgentToolResult<AstEditToolDetails>;
+  if (autoResolution.bufferInvalidationError) {
+    const existingText = autoResult.content.find(part => part.type === "text")?.text ?? "";
+    const warningText = [existingText, autoResolution.bufferInvalidationError].filter(Boolean).join("
+");
+    autoResult.content = autoResult.content.map(part =>
+      part.type === "text" ? { ...part, text: warningText } : part,
+    );
+    if (autoResult.details) {
+      (autoResult.details as AstEditToolDetails).bufferInvalidationError = autoResolution.bufferInvalidationError;
+    }
+  }
+  return autoResult;
+}
+#+end_src
+- This preserves all existing behavior for the happy path (no invalidation error → unchanged result)
+- On degradation: appends warning to text content and sets the details field
+
+** Update TUI renderer for degradation warning
+:PROPERTIES:
+:CUSTOM_ID: BUG-264-fix-auto-apply-dropping-buffer-invalidat::update-renderer
+:DEPENDS: BUG-264-fix-auto-apply-dropping-buffer-invalidat::add-details-field
+:END:
+- File: =packages/coding-agent/src/tools/ast-edit.ts= (renderer section, ~line 450+)
+- In the renderer =renderResult= method, after building the status header line and before the change groups:
+  - If =details.bufferInvalidationError= is truthy, add a warning line: =uiTheme.fg("warning", details.bufferInvalidationError)=
+  - Also append "buffer invalidation warning" to the meta array when present
+- Mirror the resolve renderer pattern from =resolve.ts= L167-174
+
+** Write regression tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-264-fix-auto-apply-dropping-buffer-invalidat::write-tests
+:DEPENDS: BUG-264-fix-auto-apply-dropping-buffer-invalidat::fix-auto-apply BUG-264-fix-auto-apply-dropping-buffer-invalidat::update-renderer
+:END:
+- File: =packages/coding-agent/test/tools/ast-edit.test.ts=
+
+*** Test: auto-apply with invalidation failure surfaces warning
+- Inside the existing =describe("AstEditTool")= block
+- Use =spyOn(nativesModule, "executeCodeBuffer")= to intercept close commands and return =error: true=
+- IMPORTANT: =astEdit= uses the =astEdit= native function, not =executeCodeBuffer=. The close invalidation in =invalidateCodeBuffers= (pending-action.ts L78) uses =executeCodeBuffer=. So mocking =executeCodeBuffer= for close works without interfering with the ast-edit execution.
+- Setup: temp dir, fixture file, =Settings.isolated({ "edit.previewResolvePolicy": "auto-apply" })=
+- Mock: =spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({ output: "close failed", error: true })=
+- Execute: ast-edit with valid match
+- Assert: =getText(result)= contains "failed to invalidate"
+- Assert: =result.details?.bufferInvalidationError= contains "failed to invalidate"
+- Assert: =result.details?.mutationState= is "applied"
+- Assert: =result.details?.persisted= is true
+- Assert: file on disk contains the replacement
+- Cleanup: restore mock, remove temp dir
+
+*** Test: ast-edit renderer shows buffer invalidation warning
+- Use =astEditToolRenderer.renderResult= directly
+- Pass details with =bufferInvalidationError= set
+- Assert: rendered output (via =sanitizeText=) contains the error text
+- This follows the pattern of resolve renderer tests in resolve.test.ts
+
+* Edge Cases
+- Auto-apply happy path (no invalidation error) must be unchanged — existing test "auto-applies previews when policy is auto-apply" must still pass
+- If =bufferInvalidationError= is undefined/absent, no warning appears in text or renderer
+- =result.details= may be undefined in some edge cases (the renderer already guards for this)
+- Mock must not interfere with =astEdit= native calls — only =executeCodeBuffer= close commands
+
+* Acceptance Criteria
+1. =AstEditToolDetails= interface includes =bufferInvalidationError?: string=
+2. Auto-apply path captures full =PendingActionResolution= and injects =bufferInvalidationError= into result text and details when present
+3. Ast-edit TUI renderer shows warning text when =bufferInvalidationError= is present in details
+4. New test: auto-apply + invalidation failure → warning in result text and details, file still mutated on disk
+5. New test: renderer + =bufferInvalidationError= → warning visible in rendered output
+6. Existing test: "auto-applies previews when policy is auto-apply" still passes (happy path unbroken)
+7. =bun test packages/coding-agent/test/tools/ast-edit.test.ts= passes
+8. =bun test packages/coding-agent/test/tools/resolve.test.ts= passes (no regression)
+
+NOTE [2026-04-15]: Implemented in ast-edit.ts and ast-edit.test.ts. Verified: bun test packages/coding-agent/test/tools/ast-edit.test.ts (9 pass, 0 fail) and bun test packages/coding-agent/test/tools/resolve.test.ts (14 pass, 0 fail).

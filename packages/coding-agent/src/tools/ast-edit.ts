@@ -64,6 +64,7 @@ export interface AstEditToolDetails {
 	files?: string[];
 	fileReplacements?: Array<{ path: string; count: number }>;
 	meta?: OutputMeta;
+	bufferInvalidationError?: string;
 }
 
 export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolDetails> {
@@ -360,8 +361,21 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 					},
 				};
 				if (this.session.settings.get("edit.previewResolvePolicy") === "auto-apply") {
-					return (await applyPendingAction(previewAction, "Auto-applied by edit.previewResolvePolicy"))
-						.result as AgentToolResult<AstEditToolDetails>;
+					const resolution = await applyPendingAction(previewAction, "Auto-applied by edit.previewResolvePolicy");
+					const resolutionResult = resolution.result as AgentToolResult<AstEditToolDetails>;
+					if (resolution.bufferInvalidationError && resolutionResult.details) {
+						const amendedDetails: AstEditToolDetails = {
+							...resolutionResult.details,
+							bufferInvalidationError: resolution.bufferInvalidationError,
+						};
+						const textParts = resolution.result.content
+							.filter(part => part.type === "text")
+							.map(part => part.text)
+							.filter((text): text is string => text != null && text.length > 0);
+						const amendedText = [...textParts, resolution.bufferInvalidationError].join("\n");
+						return { ...toolResult(amendedDetails).text(amendedText).done(), details: amendedDetails };
+					}
+					return resolutionResult;
 				}
 				this.session.pendingActionStore?.push(previewAction);
 			}
@@ -511,6 +525,9 @@ export const astEditToolRenderer = {
 					? `${PARSE_ERRORS_LIMIT} / ${total} parse issues`
 					: `${total} parse issue${total !== 1 ? "s" : ""}`;
 			extraLines.push(uiTheme.fg("warning", label));
+		}
+		if (details?.bufferInvalidationError) {
+			extraLines.push(uiTheme.fg("warning", details.bufferInvalidationError));
 		}
 		let cached: RenderCache | undefined;
 		return {
