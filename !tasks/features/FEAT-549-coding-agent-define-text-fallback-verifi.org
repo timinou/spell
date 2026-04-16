@@ -1,0 +1,86 @@
+#+TITLE: coding-agent: define text-fallback verification matrix and gates
+#+STATE: DONE
+#+SESSION_ID: 14bcb0d0792f8e78
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-16T09-10-00-932Z_14bcb0d0792f8e78.jsonl]]
+#+CUSTOM_ID: FEAT-549-coding-agent-define-text-fallback-verifi
+#+DEPENDS: PROJ-045-coding-agent-survey-semantic-editing-ses
+#+LAYER: tools
+#+PRIORITY: #A
+#+EFFORT: 16h
+
+:PROPERTIES:
+:EFFORT: 16h
+:LAYER: tools
+:END:
+
+* Scope
+- In scope: author the full verification matrix for shipping `code` text-buffer fallback with confidence across TypeScript and Rust.
+- In scope: add deterministic replay-gate plumbing, fuzz/property tests for edit-history + newline/BOM preservation, and explicit verification commands.
+- In scope: test scenarios for fallback lifecycle parity (`open/read/diff/edit/save/undo/redo/buffers/create/move/delete/replace-content`) and for semantic-hint suppression on non-semantic files.
+- Out of scope: the production implementation of fallback buffers or edit-adapter routing itself; this item defines and installs the test harness that later implementation MUST satisfy.
+
+* Existing Patterns
+- TypeScript tool integration tests: `packages/coding-agent/test/tools/code.test.ts`, `packages/coding-agent/test/tools/resolve.test.ts`, `packages/coding-agent/test/tools/tool-cwd-move-integration.test.ts`, `packages/coding-agent/test/tools/plan-mode-guard*.test.ts`.
+- Code-tool lifecycle hooks: `packages/coding-agent/src/tools/code.ts` (`shouldCheckBufferFreshness`, `#prepareEditedFileForSave`, autosave on mutating commands).
+- Edit-tool write/move/delete behavior and adapter target surface: `packages/coding-agent/src/patch/index.ts`.
+- Native engine / NAPI bridge surfaces: `packages/natives`, `crates/pi-code-engine`.
+- Supported-file detection today: `packages/coding-agent/src/tools/code-supported-files.ts`.
+
+* Tests
+- Workflow 1: non-binary unsupported text file opens in `code`, mutates through full lifecycle, persists to disk, and preserves history integrity.
+- Workflow 2: `code` fallback create/move/delete/replace-content behaves consistently with current code-buffer semantics.
+- Workflow 3: stale/external-drift detection still blocks unsafe mutation and never leaves poisoned buffers after errors.
+- Workflow 4: semantic-capable files receive helpful semantic hints; fallback-only text files suppress semantic-only hints while still exposing lifecycle hints.
+- Workflow 5: `resolve` / preview flows persist + invalidate buffers correctly for fallback files.
+- Workflow 6: deterministic replay corpus gate passes on curated recent-session cases.
+- Workflow 7: fuzz/property tests preserve BOM, CRLF/LF, empty-file behavior, and undo/redo history invariants.
+- File targets:
+  - `packages/coding-agent/test/tools/code.test.ts`
+  - `packages/coding-agent/test/tools/resolve.test.ts`
+  - new/updated replay tests under `packages/coding-agent/test/tools/`
+  - native/Rust tests under `packages/natives` and `crates/pi-code-engine`
+
+* Implementation
+** Define failing TypeScript lifecycle and hint tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-549-coding-agent-define-text-fallback-verifi::ts-tests
+:END:
+- Add initially-failing tests for fallback open/read/diff/edit/save/undo/redo/buffers/create/move/delete/replace-content.
+- Cover semantic-hint presence/suppression and adapter-visible persistence behavior.
+
+** Define failing Rust/native lifecycle tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-549-coding-agent-define-text-fallback-verifi::rust-tests
+:DEPENDS: FEAT-549-coding-agent-define-text-fallback-verifi::ts-tests
+:END:
+- Add native engine tests for non-binary text detection, buffer creation, save/reopen, external-drift detection, and payload stability back to TypeScript.
+
+** Add fuzz/property tests for fallback history and newline/BOM preservation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-549-coding-agent-define-text-fallback-verifi::fuzz-tests
+:DEPENDS: FEAT-549-coding-agent-define-text-fallback-verifi::rust-tests
+:END:
+- Cover repeated edit/save/undo/redo cycles, CRLF/LF mixing, BOM retention/removal invariants, and empty/large text files.
+
+** Install deterministic replay gate as required verification command
+:PROPERTIES:
+:CUSTOM_ID: FEAT-549-coding-agent-define-text-fallback-verifi::replay-gate
+:DEPENDS: FEAT-549-coding-agent-define-text-fallback-verifi::fuzz-tests PROJ-045-coding-agent-survey-semantic-editing-ses::gate
+:END:
+- Consume the curated corpus from the project item.
+- Expose a single repo-local verification command that future implementation and CI can run deterministically.
+
+* Edge Cases
+- Large text files that are unsupported by tree-sitter but still valid text.
+- Mixed newline files where edits touch only part of the buffer.
+- Create/delete/move flows interacting with undo/redo history.
+- Preview/apply flows across fallback files and current code-supported files.
+- False semantic hints on text fallback files MUST be suppressed.
+
+* Acceptance Criteria
+- TS and Rust tests exist for every lifecycle step in scope.
+- Fuzz/property tests cover history invariants and newline/BOM preservation.
+- Replay corpus gate is deterministic and repo-local.
+- The later implementation item has a concrete verification contract instead of ad hoc test selection.
+
+NOTE [2026-04-16]: Completed during PLAN-235 execution. Installed replay gate script, focused TS/native tests, and buffer history/BOM/CRLF coverage.

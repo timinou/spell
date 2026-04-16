@@ -439,7 +439,14 @@ fn render_annotated_diff(
 }
 
 fn render_buffer_info(info: pi_code_engine::buffer::BufferInfo) -> Value {
-	json!({ "path": info.path.map(|path| path.display().to_string()), "language": info.language.to_string(), "version": info.version, "dirty": info.dirty, "lineCount": info.line_count })
+	json!({
+		"path": info.path.map(|path| path.display().to_string()),
+		"language": info.language.to_string(),
+		"semanticCapable": info.semantic_capable,
+		"version": info.version,
+		"dirty": info.dirty,
+		"lineCount": info.line_count,
+	})
 }
 fn render_edit_results(results: Vec<pi_code_engine::buffer::EditResult>) -> Value {
 	Value::Array(results.into_iter().map(|result| json!({ "version": result.version, "changedRanges": result.changed_ranges.into_iter().map(|range| json!({ "start": {"line": range.start_point.row + 1, "column": range.start_point.column}, "end": {"line": range.end_point.row + 1, "column": range.end_point.column} })).collect::<Vec<_>>(), "inputEdit": { "startByte": result.input_edit.start_byte, "oldEndByte": result.input_edit.old_end_byte, "newText": result.input_edit.new_text } })).collect())
@@ -462,6 +469,7 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 		.get("command")
 		.and_then(Value::as_str)
 		.ok_or_else(|| json_err("Missing required field: command"))?;
+
 	match command {
 		"open" => {
 			let path = required_path(options)?;
@@ -473,7 +481,12 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 				.map(ToOwned::to_owned)
 				.collect::<Vec<_>>();
 			Ok(json_response(
-				json!({ "success": true, "language": buffer.language().to_string(), "lines": lines }),
+				json!({
+					"success": true,
+					"language": buffer.language().to_string(),
+					"semanticCapable": buffer.language().as_str() != "text",
+					"lines": lines,
+				}),
 				false,
 			))
 		},
@@ -494,23 +507,27 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 			let langs: Vec<Value> = reg
 				.languages()
 				.iter()
-				.map(|id| {
-					let profile = reg.get(id).unwrap();
-					json!({ "id": id.to_string(), "extensions": profile.extensions })
+				.filter_map(|id| {
+					let profile = reg.get(id)?;
+					(!profile.extensions.is_empty()).then_some(json!({
+						"id": id.to_string(),
+						"extensions": profile.extensions,
+					}))
 				})
 				.collect();
 			Ok(json_response(json!({ "languages": langs }), false))
 		},
-		"outline" | "read" | "navigate" | "edit" | "undo" | "redo" | "diff" | "replace_content"
+		"outline" | "navigate" | "read" | "edit" | "undo" | "redo" | "diff" | "replace_content"
 		| "save" => {
 			let path = required_path(options)?;
 			let is_create =
 				command == "edit" && options.get("operation").and_then(Value::as_str) == Some("create");
-			let created = is_create && !path.exists();
+			let allow_missing = is_create || command == "replace_content";
+			let created = allow_missing && !path.exists();
 			if is_create {
 				validate_create_request(options, &path)?;
 			}
-			let buffer = if is_create {
+			let buffer = if allow_missing {
 				buffer_registry()
 					.open_or_create(&path)
 					.map_err(engine_err)?
@@ -519,28 +536,27 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 			};
 			let mut buffer = buffer.lock();
 			let profile = get_profile(&path, buffer.language())?;
+			let text_fallback = buffer.language().as_str() == "text";
+
 			match command {
-				"outline" => Ok(json_response(to_json(outline_buffer(&buffer, &profile))?, false)),
-				"read" => {
-					let resolution = options
-						.get("resolution")
-						.and_then(Value::as_u64)
-						.and_then(|n| u8::try_from(n).ok())
-						.unwrap_or(3);
-					let offset = options
-						.get("offset")
-						.and_then(Value::as_u64)
-						.and_then(|n| u32::try_from(n).ok());
-					let limit = options
-						.get("limit")
-						.and_then(Value::as_u64)
-						.and_then(|n| u32::try_from(n).ok());
-					Ok(json_response(
-						Value::String(read_buffer(&buffer, &profile, resolution, offset, limit)),
-						false,
-					))
+				"outline" => {
+					if text_fallback {
+						return Err(json_err(
+							"Semantic structure is unavailable for fallback text buffers. Use \
+							 read/diff/replace_content/save/undo/redo or full-file edit replace/create \
+							 instead.",
+						));
+					}
+					Ok(json_response(to_json(outline_buffer(&buffer, &profile))?, false))
 				},
 				"navigate" => {
+					if text_fallback {
+						return Err(json_err(
+							"Semantic navigation is unavailable for fallback text buffers. Use \
+							 read/diff/replace_content/save/undo/redo or full-file edit replace/create \
+							 instead.",
+						));
+					}
 					let action = navigate_action(options.get("action").and_then(Value::as_str))?;
 					let line = value_to_u32(options.get("line"), 1);
 					let column = options
@@ -552,22 +568,78 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 						.map_err(engine_err)?;
 					Ok(json_response(render_navigate_result(result), false))
 				},
+				"read" => {
+					if text_fallback {
+						Ok(json_response(Value::String(buffer.source()), false))
+					} else {
+						let resolution = options
+							.get("resolution")
+							.and_then(Value::as_u64)
+							.and_then(|n| u8::try_from(n).ok())
+							.unwrap_or(3);
+						let offset = options
+							.get("offset")
+							.and_then(Value::as_u64)
+							.and_then(|n| u32::try_from(n).ok());
+						let limit = options
+							.get("limit")
+							.and_then(Value::as_u64)
+							.and_then(|n| u32::try_from(n).ok());
+						Ok(json_response(
+							Value::String(read_buffer(&buffer, &profile, resolution, offset, limit)),
+							false,
+						))
+					}
+				},
 				"edit" => {
 					let before = buffer.source();
-					let edit_count = if let Some(edits) = options
+					if text_fallback {
+						if options
+							.get("edits")
+							.and_then(Value::as_array)
+							.is_some_and(|edits| !edits.is_empty())
+						{
+							return Err(json_err(
+								"Fallback text buffers do not support batched semantic edits. Use \
+								 full-file replace/create or replace_content instead.",
+							));
+						}
+						match options.get("operation").and_then(Value::as_str) {
+							Some("create" | "replace") => {
+								let content = required_str(options, "content")?;
+								buffer
+									.edit_batch(vec![TextEdit {
+										start_byte:   0,
+										old_end_byte: before.len(),
+										new_text:     content.to_string(),
+									}])
+									.map_err(engine_err)?;
+							},
+							_ => {
+								return Err(json_err(
+									"Fallback text buffers only support full-file edit create/replace. Use \
+									 replace_content for whole-buffer writes.",
+								));
+							},
+						}
+					} else if let Some(edits) = options
 						.get("edits")
 						.and_then(Value::as_array)
 						.filter(|edits| !edits.is_empty())
 					{
-						apply_edit_entries_transactionally(&mut buffer, &profile, edits)?
+						apply_edit_entries_transactionally(&mut buffer, &profile, edits)?;
 					} else {
 						let text_edits = single_edit_operation(&buffer, &profile, options)?;
 						buffer.edit_batch(text_edits).map_err(engine_err)?;
-						1
-					};
+					}
 					let diff = render_annotated_diff(&buffer, &before, &profile);
 					Ok(json_response(
-						json!({ "version": buffer.version(), "diff": diff, "editCount": edit_count, "created": created }),
+						json!({
+							 "version": buffer.version(),
+							"diff": diff,
+							"editCount": 1,
+							"created": created,
+						}),
 						false,
 					))
 				},

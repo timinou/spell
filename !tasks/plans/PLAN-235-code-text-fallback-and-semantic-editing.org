@@ -1,0 +1,93 @@
+#+TITLE: CODE_TEXT_FALLBACK_AND_SEMANTIC_EDITING_PREVALENCE_PLAN
+#+STATE: DONE
+#+SESSION_ID: 14bcb0d0792f8e78
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-16T09-10-00-932Z_14bcb0d0792f8e78.jsonl]]
+#+CUSTOM_ID: PLAN-235-code-text-fallback-and-semantic-editing
+
+* Initial Message
+
+- give me the complexity of implementing hashline mode onto edit. give me pushback.
+- same thing for folding the `edit` tool fully into the `code edit` tool. give me pushback.
+
+* Context
+** Request
+- Make semantic editing more prevalent and ergonomic.
+- Support `code` undo/redo/buffers for all non-binary text-like files, not only current tree-sitter-supported extensions.
+- Add helpful hints that incentivize semantic editing when semantic support exists.
+- During migration, make `edit` a temporary adapter for all non-binary text files; later hard redirect can be a follow-up.
+- Ship with full confidence: exhaustive TypeScript + Rust coverage, fuzz/property tests, and a deterministic recent-session replay gate.
+
+** Settled decisions
+1. Evidence first: inspect recent local Spell sessions from the last 14 days under `~/.spell/agent/sessions/` and derive a deterministic replay corpus.
+2. Architecture: `code` gains a text-buffer fallback for any non-binary text file, backed by the native rope-based buffer lifecycle.
+3. Scope: fallback ships with full mutation parity (`open/read/diff/edit/save/undo/redo/buffers/create/move/delete/replace-content`), not read-only lifecycle only.
+4. Semantic guidance: hints appear on `code` results broadly, but semantic-only hints are suppressed when the file lacks semantic support.
+5. Migration: `edit` becomes an adapter for all non-binary text files so one lifecycle owns persistence, stale detection, buffers, undo, and redo.
+6. Confidence bar: add both fuzz/property tests for history + newline/BOM preservation and a deterministic curated recent-session replay gate as required verification.
+
+** Current code reality
+- `packages/coding-agent/src/tools/code.ts` currently owns freshness checks, autosave, formatting preparation, and managed buffer semantics.
+- `packages/coding-agent/src/tools/code-supported-files.ts` still gates `code` primarily by supported extensions.
+- `packages/coding-agent/src/patch/index.ts` still owns `edit` replace/patch/hashline mutation semantics and therefore represents a separate mutation model today.
+- `packages/coding-agent/src/tools/pending-action.ts` / `resolve.ts` already contain buffer invalidation logic that must remain correct once fallback + adapter routing land.
+
+** Evidence from recent sessions
+- Last-14-day local transcript scan showed `edit` used 8,395 times vs `code` 7,787 times.
+- `edit` payloads were overwhelmingly hashline-style (8,045 hashline vs 350 replace), showing current agents strongly prefer line-addressed text mutation.
+- `code` usage skewed toward discovery (`read` 5,484; `outline` 1,034) while `code edit` appeared only 848 times.
+- `edit` targeted many files that are text-like but not currently code-supported (`.json`, `.kdl`, `.nix`, `.toml`, `.txt`, etc.), validating the need for a text fallback rather than a code-extension-only solution.
+- `edit` also still targeted current code-capable files heavily (`.ts`, `.ex`, `.exs`, `.rs`), validating the migration need toward one lifecycle and better semantic nudges.
+
+* Verification
+** Required commands after implementation
+- Deterministic replay gate command produced by [[id:PROJ-045-coding-agent-survey-semantic-editing-ses]] and installed by [[id:FEAT-549-coding-agent-define-text-fallback-verifi]].
+- Focused TypeScript tool tests covering fallback lifecycle, adapter routing, stale-buffer regressions, and hint behavior.
+- Focused Rust/native tests covering non-binary text detection, fallback buffer operations, save/reopen, drift detection, and payload stability.
+- Fuzz/property tests covering edit history integrity and BOM/newline preservation.
+- Final repo checks appropriate to changed surfaces (`bun check:ts`, `bun check:rs`) after targeted tests pass.
+
+** Acceptance proof
+- Any non-binary text file can participate in the `code` managed lifecycle without lying about semantic support.
+- `edit` no longer creates a separate persistence model for non-binary text during migration.
+- Helpful semantic hints increase visibility of richer semantic commands without polluting fallback-only text flows.
+- Deterministic replay corpus proves the most common recent semantic-editing misses are now covered.
+
+* Execution Manifest
+** Wave 1
+- [[id:PROJ-045-coding-agent-survey-semantic-editing-ses]]
+- Outcome: jq-backed evidence pass, deterministic replay corpus, and repo-local replay-gate contract.
+
+** Wave 2
+- [[id:FEAT-549-coding-agent-define-text-fallback-verifi]]
+- Outcome: failing TS/Rust/fuzz/replay tests define the ship bar before implementation.
+
+** Wave 3
+- [[id:FEAT-550-coding-agent-add-code-text-buffer-fallba]]
+- Outcome: native + TypeScript `code` text-buffer fallback with full non-binary text lifecycle parity.
+
+** Wave 4
+- [[id:BUG-265-coding-agent-route-edit-through-code-fal]]
+- Outcome: `edit` adapter routing plus semantic nudges, with preview/resolve and stale-buffer hardening preserved.
+
+** Wave 5 (post-cutover follow-up)
+- [[id:FUP-056-coding-agent-remove-temporary-edit-adapt]]
+- Outcome: remove the temporary `edit` adapter once replay evidence shows the hard redirect is safe.
+
+** Completion [2026-04-16]
+*** Verification
+- `bun --cwd=packages/natives run build:native` ✓ rebuilt native addon before native package tests.
+- `bun test packages/natives/test/code-buffer.test.ts` ✓ 11 pass; verified text fallback open/read/replace_content/save/undo/redo, semantic-command rejection on fallback buffers, and binary rejection.
+- `cargo test -p pi-code-engine text_fallback` ✓ 5 pass; verified text fallback registration, open/create fallback behavior, multi-revision history round-trips, and BOM/CRLF preservation on save.
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/replay-corpus.test.ts` ✓ 71 pass; verified code-tool fallback lifecycle, semantic/text hint behavior, stale-buffer regressions, hashline/edit shared lifecycle coverage, resolve safety, and replay corpus validation.
+- `bun --cwd=packages/coding-agent run replay-gate` ✓ 3 pass; verified installed deterministic replay-gate command works from package scope.
+- `bun check:ts` ✓ passed.
+- `bun check:rs` ✓ passed.
+*** Artifacts
+- Replay corpus fixture: [[file:packages/coding-agent/test/fixtures/replay-corpus.jsonl]]
+- Replay corpus metadata: [[file:packages/coding-agent/test/fixtures/replay-corpus.meta.json]]
+- Semantic hint prompt: [[file:packages/coding-agent/src/prompts/tools/code-hint-semantic.md]]
+- Text fallback hint prompt: [[file:packages/coding-agent/src/prompts/tools/code-hint-text-fallback.md]]
+*** Deviations
+- [[id:FUP-056-coding-agent-remove-temporary-edit-adapt]] remains BLOCKED intentionally. PLAN-235 ships the migration adapter; hard redirect/removal is deferred until post-cutover evidence justifies it.
+
+NOTE [2026-04-16]: Execution completed with verification evidence recorded in Completion section. Post-cutover adapter removal remains blocked under FUP-056.

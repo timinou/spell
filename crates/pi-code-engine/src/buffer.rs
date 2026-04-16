@@ -46,11 +46,12 @@ pub struct BufferSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BufferInfo {
-	pub path:       Option<PathBuf>,
-	pub language:   LanguageId,
-	pub version:    u64,
-	pub dirty:      bool,
-	pub line_count: usize,
+	pub path:             Option<PathBuf>,
+	pub language:         LanguageId,
+	pub semantic_capable: bool,
+	pub version:          u64,
+	pub dirty:            bool,
+	pub line_count:       usize,
 }
 
 #[derive(Debug, Clone)]
@@ -100,7 +101,7 @@ impl History {
 		}
 		if self
 			.saved_revision
-			.map_or(false, |r| r >= self.revisions.len())
+			.is_some_and(|r| r >= self.revisions.len())
 		{
 			self.saved_revision = None;
 		}
@@ -119,7 +120,7 @@ impl History {
 		self.saved_revision == Some(self.current)
 	}
 
-	fn mark_saved(&mut self) {
+	const fn mark_saved(&mut self) {
 		self.saved_revision = Some(self.current);
 	}
 }
@@ -220,15 +221,31 @@ impl CodeBuffer {
 	}
 
 	pub fn create(path: &Path, registry: Arc<LanguageRegistry>) -> Result<Self> {
-		let language = Self::language_for_path(path, registry.as_ref())?;
+		let language = Self::language_for_create_path(path, registry.as_ref());
 		Self::from_str_with_path(String::new(), language, registry, Some(path.to_path_buf()))
 	}
 
 	fn language_for_path(path: &Path, registry: &LanguageRegistry) -> Result<LanguageId> {
+		if let Some(profile) = registry.match_path(path) {
+			return Ok(profile.id.clone());
+		}
+		let bytes = fs::read(path)?;
+		if bytes
+			.iter()
+			.take(BINARY_SAMPLE_BYTES)
+			.any(|byte| *byte == 0)
+		{
+			return Err(CodeEngineError::Buffer(format!("binary file rejected: {}", path.display())));
+		}
+		String::from_utf8(bytes)
+			.map(|_| LanguageId::new("text"))
+			.map_err(|err| CodeEngineError::Buffer(format!("invalid utf-8: {err}")))
+	}
+
+	fn language_for_create_path(path: &Path, registry: &LanguageRegistry) -> LanguageId {
 		registry
 			.match_path(path)
-			.map(|profile| profile.id.clone())
-			.ok_or_else(|| CodeEngineError::LanguageNotFound(path.to_path_buf()))
+			.map_or_else(|| LanguageId::new("text"), |profile| profile.id.clone())
 	}
 
 	pub fn from_str(
@@ -486,11 +503,12 @@ impl CodeBuffer {
 
 	pub fn info(&self) -> BufferInfo {
 		BufferInfo {
-			path:       self.path.clone(),
-			language:   self.language.clone(),
-			version:    self.version,
-			dirty:      self.dirty,
-			line_count: self.rope.len_lines(LineType::LF_CR),
+			path:             self.path.clone(),
+			language:         self.language.clone(),
+			semantic_capable: self.language.as_str() != "text",
+			version:          self.version,
+			dirty:            self.dirty,
+			line_count:       self.rope.len_lines(LineType::LF_CR),
 		}
 	}
 }
@@ -838,5 +856,71 @@ mod tests {
 		assert!(buffer.is_dirty(), "undo past saved state should be dirty");
 		buffer.redo().expect("redo to saved");
 		assert!(!buffer.is_dirty(), "redo back to saved state");
+	}
+
+	#[test]
+	fn test_open_unknown_extension_uses_text_fallback() {
+		let path = temp_path("fallback-notes.kdl");
+		fs::write(&path, "alpha\nbeta\n").expect("write fallback file");
+		let buffer = CodeBuffer::open(&path, registry()).expect("open fallback text file");
+		assert_eq!(buffer.language(), &LanguageId::new("text"));
+		assert_eq!(buffer.source(), "alpha\nbeta\n");
+	}
+
+	#[test]
+	fn test_create_unknown_extension_uses_text_fallback() {
+		let path = temp_path("fallback-create.txt");
+		let mut buffer = CodeBuffer::create(&path, registry()).expect("create fallback buffer");
+		assert_eq!(buffer.language(), &LanguageId::new("text"));
+		buffer
+			.edit(TextEdit { start_byte: 0, old_end_byte: 0, new_text: "hello\n".into() })
+			.expect("edit fallback buffer");
+		buffer.save().expect("save fallback buffer");
+		assert_eq!(fs::read_to_string(&path).expect("read saved file"), "hello\n");
+	}
+
+	#[test]
+	fn test_text_fallback_history_round_trips_multiple_revisions() {
+		let path = temp_path("fallback-history.txt");
+		let mut buffer = CodeBuffer::create(&path, registry()).expect("create fallback buffer");
+		let revisions = ["alpha\n", "beta\ngamma\n", "delta\n", "epsilon\nzeta\neta\n"];
+
+		for revision in revisions {
+			let current = buffer.source();
+			buffer
+				.edit(TextEdit {
+					start_byte:   0,
+					old_end_byte: current.len(),
+					new_text:     revision.to_string(),
+				})
+				.expect("replace revision");
+		}
+		assert_eq!(buffer.source(), "epsilon\nzeta\neta\n");
+
+		for expected in ["delta\n", "beta\ngamma\n", "alpha\n", ""] {
+			buffer.undo().expect("undo revision");
+			assert_eq!(buffer.source(), expected);
+		}
+		for expected in revisions {
+			buffer.redo().expect("redo revision");
+			assert_eq!(buffer.source(), expected);
+		}
+	}
+
+	#[test]
+	fn test_text_fallback_preserves_bom_and_crlf_on_save() {
+		let path = temp_path("fallback-bom.txt");
+		fs::write(&path, "\u{feff}first\r\nsecond\r\n").expect("write fixture");
+		let mut buffer = CodeBuffer::open(&path, registry()).expect("open fallback buffer");
+		let start = buffer.source().find("second").expect("find second");
+		let end = start + "second".len();
+		buffer
+			.edit(TextEdit { start_byte: start, old_end_byte: end, new_text: "updated".into() })
+			.expect("edit fallback buffer");
+		buffer.save().expect("save fallback buffer");
+		assert_eq!(
+			fs::read_to_string(&path).expect("read saved file"),
+			"\u{feff}first\r\nupdated\r\n"
+		);
 	}
 }

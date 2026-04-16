@@ -22,6 +22,8 @@ import { FileFormatResult, formatFileContent } from "../lsp";
 import type { Theme } from "../modes/theme/theme";
 import codeDescription from "../prompts/tools/code.md" with { type: "text" };
 import markdownHint from "../prompts/tools/code-hint-markdown.md" with { type: "text" };
+import semanticHint from "../prompts/tools/code-hint-semantic.md" with { type: "text" };
+import textFallbackHint from "../prompts/tools/code-hint-text-fallback.md" with { type: "text" };
 import typstHint from "../prompts/tools/code-hint-typst.md" with { type: "text" };
 import { renderCodeCell } from "../tui";
 import type { ToolSession } from ".";
@@ -304,20 +306,39 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 
 	#session: ToolSession;
 	#seenLanguages = new Set<string>();
+	#semanticHintShown = false;
+	#textFallbackHintShown = false;
 
 	constructor(session: ToolSession) {
 		this.#session = session;
 		this.description = codeDescription;
 	}
 
-	#maybeInjectLanguageHint(file?: string): string | undefined {
+	#maybeInjectHints(file?: string): string | undefined {
 		if (!file) return undefined;
-		const language = languageForFile(file);
-		if (!language || this.#seenLanguages.has(language)) return undefined;
-		const hint = LANGUAGE_INJECTIONS.get(language);
-		if (!hint) return undefined;
-		this.#seenLanguages.add(language);
-		return hint;
+		const extension = path.extname(file).slice(1).toLowerCase();
+		const semanticCapable = extension.length > 0 && getSupportedExtensions().has(extension);
+		const hints: string[] = [];
+
+		if (semanticCapable) {
+			if (!this.#semanticHintShown) {
+				hints.push(semanticHint.trim());
+				this.#semanticHintShown = true;
+			}
+			const language = languageForFile(file);
+			if (language && !this.#seenLanguages.has(language)) {
+				const languageHint = LANGUAGE_INJECTIONS.get(language);
+				if (languageHint) {
+					hints.push(languageHint);
+					this.#seenLanguages.add(language);
+				}
+			}
+		} else if (!this.#textFallbackHintShown) {
+			hints.push(textFallbackHint.trim(), `Semantic built-ins currently cover ${describeCodeToolSupportedFiles()}.`);
+			this.#textFallbackHintShown = true;
+		}
+
+		return hints.length > 0 ? hints.join("\n\n") : undefined;
 	}
 
 	async #prepareEditedFileForSave(
@@ -417,19 +438,6 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				return toolResult(details).text(formatCodeToolContent(details)).done();
 			}
 
-			if (FILE_COMMANDS.has(nativeCommand) && options.file) {
-				const ext = path.extname(options.file).slice(1).toLowerCase();
-				if (ext && !getSupportedExtensions().has(ext)) {
-					const details = createCodeToolError({
-						command,
-						file: options.file,
-						cwd: sessionCwd,
-						message: `Unsupported file type .${ext}. The code tool supports ${describeCodeToolSupportedFiles()}. Use the read tool instead.`,
-					});
-					return toolResult(details).text(formatCodeToolContent(details)).done();
-				}
-			}
-
 			if (options.file && shouldCheckBufferFreshness(command, isCreate)) {
 				const freshness = timedCodeBuffer({ command: "diff", file: options.file });
 				if (freshness.error) {
@@ -516,6 +524,10 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 					mutationState: "noop",
 					persisted: false,
 				});
+				const injectedHint = FILE_COMMANDS.has(nativeCommand) ? this.#maybeInjectHints(options.file) : undefined;
+				if (injectedHint) {
+					(details as CodeToolResultDetails & { injectedHint?: string }).injectedHint = injectedHint;
+				}
 				const text = formatCodeToolContent(details);
 				return toolResult(details).text(text).done();
 			}
@@ -555,7 +567,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				mutationState: command === "edit" ? "applied" : undefined,
 				persisted: command === "edit",
 			});
-			const injectedHint = this.#maybeInjectLanguageHint(options.file);
+			const injectedHint = FILE_COMMANDS.has(nativeCommand) ? this.#maybeInjectHints(options.file) : undefined;
 			if (injectedHint) {
 				(details as CodeToolResultDetails & { injectedHint?: string }).injectedHint = injectedHint;
 			}

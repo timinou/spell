@@ -1,0 +1,87 @@
+#+TITLE: coding-agent: survey semantic-editing sessions and curate replay corpus
+#+STATE: DONE
+#+SESSION_ID: 14bcb0d0792f8e78
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-16T09-10-00-932Z_14bcb0d0792f8e78.jsonl]]
+#+CUSTOM_ID: PROJ-045-coding-agent-survey-semantic-editing-ses
+#+PRIORITY: #A
+#+EFFORT: 8h
+#+LAYER: tools
+
+:PROPERTIES:
+:EFFORT: 8h
+:LAYER: tools
+:END:
+
+* Scope
+- In scope: inspect recent local Spell session transcripts from the last 14 days under `~/.spell/agent/sessions/`, classify where `code` vs `edit` were chosen, identify tool-choice failures that suppressed semantic editing, and curate a deterministic replay corpus checked into the repo for future verification.
+- In scope: define the corpus shape, storage path, and verification command contract that later items MUST consume.
+- Out of scope: implementing runtime mutation changes, native buffer fallback, or UI hinting. This item is evidence + fixture infrastructure only.
+- Rationale: the user explicitly asked for a jq-backed evidence pass before design lock, and for a deterministic recent-session replay gate rather than a fresh local scan at verification time.
+
+* Existing Patterns
+- Session transcripts: `~/.spell/agent/sessions/**/*.jsonl` with assistant tool calls embedded in `.message.content[] | select(.type=="toolCall")`.
+- Existing code-tool tests and stale/autosave regressions: `packages/coding-agent/test/tools/code.test.ts`, `packages/coding-agent/test/tools/resolve.test.ts`.
+- Existing plan/tooling conventions: `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/patch/index.ts`, `packages/coding-agent/src/tools/code-supported-files.ts`.
+- Existing command surface to classify: `code` subcommands in `packages/coding-agent/src/tools/code.ts`; edit-mode payloads in `packages/coding-agent/src/patch/index.ts`.
+- Existing test-fixture style MUST be reused instead of inventing a new harness layout.
+
+* Tests
+- Workflow 1: recent-session jq analysis produces reproducible counts for `code`, `code edit`, `edit`, and dominant `edit` payload shapes.
+- Workflow 2: curated corpus captures representative semantic-editing misses, including `edit` on text-like files, `edit` on current code-supported files, and `code` usage lacking discoverability of richer semantic subcommands.
+- Workflow 3: replay metadata is stable enough to become a required verification input for later items.
+- File targets:
+  - new deterministic fixture location under `packages/coding-agent/test/fixtures/` for replay corpus
+  - new replay-analysis/verifier tests under `packages/coding-agent/test/tools/`
+- Concrete scenarios:
+  1. corpus entry from a session that used `edit` hashline on a `.ts`/`.ex`/`.rs` file even though a semantic-capable `code edit` path existed
+  2. corpus entry from a session that touched unsupported text-like files (`.json`, `.kdl`, `.txt`, `.nix`, etc.) where future `code` text fallback should absorb the mutation lifecycle
+  3. corpus entry from a `code` usage session where `context`/`impact`/`symbols`/`outline` hints would have made a better semantic edit path more obvious
+  4. replay verifier rejects malformed or incomplete corpus entries
+
+* Implementation
+** Write failing replay-fixture and verifier tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-045-coding-agent-survey-semantic-editing-ses::tests
+:END:
+- Files: `packages/coding-agent/test/tools/` + new `packages/coding-agent/test/fixtures/` corpus path
+- Encode the scenarios above as initially-failing tests and fixture expectations.
+
+** Survey recent sessions with jq and classify tool-choice failures
+:PROPERTIES:
+:CUSTOM_ID: PROJ-045-coding-agent-survey-semantic-editing-ses::survey
+:DEPENDS: PROJ-045-coding-agent-survey-semantic-editing-ses::tests
+:END:
+- Use jq over the last 14 days of `~/.spell/agent/sessions/`.
+- Record counts for `edit`, `code`, `code edit`, dominant edit payload shapes, and target file extensions.
+- Extract a deterministic subset that demonstrates the highest-value migration targets.
+
+** Curate deterministic replay corpus
+:PROPERTIES:
+:CUSTOM_ID: PROJ-045-coding-agent-survey-semantic-editing-ses::corpus
+:DEPENDS: PROJ-045-coding-agent-survey-semantic-editing-ses::survey
+:END:
+- Check in a curated, minimal, representative transcript corpus with metadata explaining why each sample exists.
+- Make the corpus stable across machines; do not depend on local `~/.spell` state at test time.
+
+** Expose required replay verification command contract
+:PROPERTIES:
+:CUSTOM_ID: PROJ-045-coding-agent-survey-semantic-editing-ses::gate
+:DEPENDS: PROJ-045-coding-agent-survey-semantic-editing-ses::corpus
+:END:
+- Define the exact verification command later items MUST pass.
+- Command MUST be deterministic and repo-local.
+
+* Edge Cases
+- Transcript schema drift between session versions.
+- Sessions with aborted/partial tool calls.
+- Tool calls nested inside assistant messages rather than top-level events.
+- Multiple semantically-equivalent failures; corpus should deduplicate without losing coverage.
+- Sensitive/irrelevant transcript content MUST be excluded from curated fixtures.
+
+* Acceptance Criteria
+- A repo-local deterministic replay corpus exists and covers the required scenarios.
+- A verifier command can replay/classify the curated corpus without reading `~/.spell`.
+- The corpus documents why semantic editing was not chosen in each captured case.
+- Later plan items can depend on this item without needing fresh transcript access.
+
+NOTE [2026-04-16]: Completed during PLAN-235 execution. Checked-in deterministic replay corpus + metadata landed under packages/coding-agent/test/fixtures/ and replay gate command is repo-local.

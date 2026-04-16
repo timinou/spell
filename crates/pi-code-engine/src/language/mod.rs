@@ -43,7 +43,7 @@ impl LanguageRegistry {
 	}
 
 	/// Create a registry with all built-in profiles (TypeScript, Rust, Python,
-	/// Typst, Markdown, Elixir, Org).
+	/// Typst, Markdown, Elixir, Org, plus fallback text).
 	pub fn with_builtins() -> Result<Self> {
 		let mut reg = Self::new();
 		reg.register(typescript_profile())?;
@@ -53,6 +53,7 @@ impl LanguageRegistry {
 		reg.register(markdown_profile())?;
 		reg.register(elixir_profile())?;
 		reg.register(org_profile())?;
+		reg.register(text_profile())?;
 		Ok(reg)
 	}
 
@@ -854,6 +855,25 @@ fn elixir_profile() -> LanguageProfile {
 	}
 }
 
+fn text_profile() -> LanguageProfile {
+	LanguageProfile {
+		id:               LanguageId::new("text"),
+		extensions:       vec![],
+		declarations:     vec![],
+		class_like:       vec![],
+		imports:          vec![],
+		exports:          vec![],
+		references:       vec![],
+		separators:       vec![],
+		procedures:       HashMap::new(),
+		production_rules: HashMap::new(),
+		inverse_rules:    HashMap::new(),
+		all_types:        vec![],
+		supertypes:       vec![],
+		ts_language:      tree_sitter_md::LANGUAGE.into(),
+	}
+}
+
 fn org_profile() -> LanguageProfile {
 	let gd = generated::org::grammar();
 	LanguageProfile {
@@ -1139,4 +1159,12 @@ mod tests {
 			BodyExtractor::Field { ref name } if name == "body"
 		));
 	}
+}
+
+#[test]
+fn registry_registers_text_fallback_without_extensions() {
+	let reg = LanguageRegistry::with_builtins().unwrap();
+	let text = reg.get(&LanguageId::new("text")).unwrap();
+	assert!(text.extensions.is_empty());
+	assert_eq!(text.ts_language, tree_sitter_md::LANGUAGE.into());
 }

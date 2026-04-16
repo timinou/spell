@@ -1,0 +1,91 @@
+#+TITLE: coding-agent: add code text-buffer fallback for non-binary text files
+#+STATE: DONE
+#+SESSION_ID: 14bcb0d0792f8e78
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-16T09-10-00-932Z_14bcb0d0792f8e78.jsonl]]
+#+CUSTOM_ID: FEAT-550-coding-agent-add-code-text-buffer-fallba
+#+DEPENDS: PROJ-045-coding-agent-survey-semantic-editing-ses FEAT-549-coding-agent-define-text-fallback-verifi
+#+EFFORT: 32h
+#+PRIORITY: #A
+#+LAYER: tools
+
+:PROPERTIES:
+:EFFORT: 32h
+:LAYER: tools
+:END:
+
+* Scope
+- In scope: extend `code` so any non-binary text file can use a managed rope-backed buffer lifecycle even without tree-sitter grammar support.
+- In scope: full mutation parity for fallback files: `open/read/diff/edit/save/undo/redo/buffers/create/move/delete/replace-content`.
+- In scope: native + TypeScript plumbing needed to distinguish semantic-capable buffers from generic text fallback buffers.
+- Out of scope: edit-tool adapter migration and runtime hint UX; those are handled by a separate item.
+- Out of scope: binary-file support.
+
+* Existing Patterns
+- `packages/coding-agent/src/tools/code.ts` — command dispatch, freshness checks, autosave, formatting hook, result normalization.
+- `packages/coding-agent/src/tools/code-supported-files.ts` — current allowlist gate that must evolve from hard rejection to capability-aware routing.
+- `packages/coding-agent/src/patch/index.ts` — current text-file mutation semantics to preserve during parity work.
+- Native managed-buffer entrypoint: `executeCodeBuffer` / code-buffer commands in `@oh-my-pi/pi-natives` and `crates/pi-code-engine`.
+- Rope-backed editing already exists natively; fallback MUST reuse that substrate rather than inventing a parallel text-buffer implementation in TypeScript.
+
+* Tests
+- Workflow 1: unsupported text-like file (`.json`, `.kdl`, `.txt`, `.nix`, `.toml`, `.yaml`, etc.) can be opened and listed in buffers.
+- Workflow 2: fallback file can be edited, diffed, saved, undone, redone, reopened, and moved/deleted/created while preserving disk truth.
+- Workflow 3: external disk drift is detected before mutation and stale buffers are rejected consistently.
+- Workflow 4: binary files are rejected explicitly rather than being mis-read as text.
+- Workflow 5: formatting/diagnostics behavior is well-defined for fallback files and never lies about semantic support.
+- File targets:
+  - `packages/coding-agent/src/tools/code.ts`
+  - `packages/coding-agent/src/tools/code-supported-files.ts`
+  - `packages/natives/...`
+  - `crates/pi-code-engine/...`
+  - any shared result-normalization / capability plumbing files required by the native bridge
+
+* Implementation
+** Define failing fallback-capability tests against the `code` surface
+:PROPERTIES:
+:CUSTOM_ID: FEAT-550-coding-agent-add-code-text-buffer-fallba::tests
+:DEPENDS: FEAT-549-coding-agent-define-text-fallback-verifi::replay-gate
+:END:
+- Wire the test expectations from the verification item directly into `code` behavior.
+- Treat unsupported text-like files as currently-failing fixtures until implementation lands.
+
+** Extend native buffer capabilities for grammar-less text files
+:PROPERTIES:
+:CUSTOM_ID: FEAT-550-coding-agent-add-code-text-buffer-fallba::native
+:DEPENDS: FEAT-550-coding-agent-add-code-text-buffer-fallba::tests
+:END:
+- Add capability detection for non-binary text vs binary.
+- Reuse rope-backed buffers for fallback files and expose create/move/delete/replace-content/save/undo/redo semantics.
+- Return capability metadata to TypeScript so semantic-only features can be suppressed.
+
+** Update `code` dispatch and result normalization for fallback files
+:PROPERTIES:
+:CUSTOM_ID: FEAT-550-coding-agent-add-code-text-buffer-fallba::ts-surface
+:DEPENDS: FEAT-550-coding-agent-add-code-text-buffer-fallba::native
+:END:
+- Replace the current hard-reject allowlist with capability-aware routing.
+- Preserve freshness checks, autosave, and no-op/error semantics across both semantic and fallback buffers.
+- Keep graph commands separate; only file/buffer lifecycle commands gain fallback behavior.
+
+** Harden persistence, drift detection, and command parity
+:PROPERTIES:
+:CUSTOM_ID: FEAT-550-coding-agent-add-code-text-buffer-fallba::parity
+:DEPENDS: FEAT-550-coding-agent-add-code-text-buffer-fallba::ts-surface
+:END:
+- Ensure create/move/delete/replace-content participate in one managed lifecycle.
+- Confirm save failures, external edits, and reopen flows report truthfully.
+
+* Edge Cases
+- Text files with unusual extensions or no extension.
+- Large but valid text files.
+- Files that flip from absent → created → moved → deleted within one undo/redo history.
+- Unsupported semantic commands (`symbols`, `context`, `impact`, etc.) on fallback files must degrade explicitly, not pretend support.
+- LSP formatting/diagnostics may be unavailable; result metadata MUST say so.
+
+* Acceptance Criteria
+- `code` no longer rejects non-binary text files solely because they lack a tree-sitter-supported extension.
+- Fallback files support the full lifecycle in scope with the same autosave/drift guarantees as current code-supported files.
+- Capability metadata lets callers distinguish semantic-capable vs fallback-only buffers.
+- Binary files remain rejected.
+
+NOTE [2026-04-16]: Completed during PLAN-235 execution. Native text fallback now opens unknown non-binary text files with managed buffer lifecycle and truthful semantic degradation.
