@@ -20,7 +20,7 @@ pub fn clone_node(buffer: &CodeBuffer, line: usize) -> Result<Vec<TextEdit>> {
 	let indent = super::indent::node_indent(&buffer.source(), node);
 	let indent_str = " ".repeat(indent);
 	let text = text.trim_end_matches('\n');
-	let insertion = format!("\n{}{}\n", indent_str, text);
+	let insertion = format!("\n{indent_str}{text}\n");
 	let pos = node.end_byte();
 	Ok(vec![TextEdit { start_byte: pos, old_end_byte: pos, new_text: insertion }])
 }

@@ -643,30 +643,6 @@ describe("coding-agent code tool wiring", () => {
 		expect(bufferSpy).toHaveBeenCalled();
 	});
 
-	it("refreshes supported extensions after cache reset", async () => {
-		_resetSupportedExtensionsForTest();
-		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
-			.mockReturnValueOnce({ output: { languages: [{ extensions: ["foo"] }] }, error: false })
-			.mockReturnValueOnce({ output: "content", error: false })
-			.mockReturnValueOnce({ output: { languages: [{ extensions: ["bar"] }] }, error: false })
-			.mockReturnValueOnce({ output: "content", error: false });
-
-		const tool = new CodeTool(createSession());
-		await tool.execute("tool", { command: "read", file: "/tmp/test/example.foo" });
-		_resetSupportedExtensionsForTest();
-		await tool.execute("tool", { command: "read", file: "/tmp/test/example.bar" });
-
-		expect(bufferSpy).toHaveBeenCalledTimes(4);
-		expect(bufferSpy.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ command: "languages" }));
-		expect(bufferSpy.mock.calls[1]?.[0]).toEqual(
-			expect.objectContaining({ command: "read", file: "/tmp/test/example.foo" }),
-		);
-		expect(bufferSpy.mock.calls[2]?.[0]).toEqual(expect.objectContaining({ command: "languages" }));
-		expect(bufferSpy.mock.calls[3]?.[0]).toEqual(
-			expect.objectContaining({ command: "read", file: "/tmp/test/example.bar" }),
-		);
-	});
-
 	it("allows extensionless files through to NAPI", async () => {
 		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({ output: "content", error: false });
 		const tool = new CodeTool(createSession());
@@ -675,18 +651,27 @@ describe("coding-agent code tool wiring", () => {
 		expect(bufferSpy).toHaveBeenCalled();
 	});
 
-	it("rejects unsupported file extensions before calling NAPI", async () => {
-		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
-			output: { languages: [{ extensions: ["ts"] }] },
-			error: false,
-		});
+	it("allows unsupported text-like extensions through to NAPI fallback", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({ output: "content", error: false });
 		const tool = new CodeTool(createSession());
 		const result = await tool.execute("tool", { command: "read", file: "/tmp/test/doc.foo" });
 
-		expect(getText(result)).toContain("Unsupported file type .foo");
-		expect(getText(result)).toContain("supports TypeScript, Rust, Python, Typst, Markdown, Org, and Elixir");
-		expect(getText(result)).toContain("read tool");
-		expect(bufferSpy).not.toHaveBeenCalled();
+		expect(getText(result)).toContain("content");
+		expect(getText(result)).toContain("Fallback text mode is active here:");
+		expect(bufferSpy).toHaveBeenCalledWith(expect.objectContaining({ command: "read", file: "/tmp/test/doc.foo" }));
+	});
+
+	it("surfaces binary rejection from native fallback", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: "binary file rejected: /tmp/test/blob.bin",
+			error: true,
+		});
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", { command: "read", file: "/tmp/test/blob.bin" });
+
+		expect(getText(result)).toContain("binary file rejected");
+		expect(bufferSpy).toHaveBeenCalledWith(expect.objectContaining({ command: "read", file: "/tmp/test/blob.bin" }));
+		expect(result.details).toEqual(expect.objectContaining({ kind: "error", error: true }));
 	});
 
 	it("allows supported file extensions through to NAPI", async () => {
@@ -695,6 +680,29 @@ describe("coding-agent code tool wiring", () => {
 		await tool.execute("tool", { command: "read", file: "/tmp/test/main.ts" });
 
 		expect(bufferSpy).toHaveBeenCalled();
+	});
+
+	it("injects semantic follow-up hints for semantic-capable files", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({ output: "content", error: false });
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", { command: "read", file: "/tmp/test/main.ts" });
+
+		expect(getText(result)).toContain("Semantic follow-ups available here:");
+		expect(getText(result)).not.toContain("Fallback text mode is active here:");
+		expect(bufferSpy).toHaveBeenCalledWith(expect.objectContaining({ command: "read", file: "/tmp/test/main.ts" }));
+	});
+
+	it("injects fallback lifecycle hints without semantic hints for text fallback files", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: "text content",
+			error: false,
+		});
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", { command: "read", file: "/tmp/test/notes.foo" });
+
+		expect(getText(result)).toContain("Fallback text mode is active here:");
+		expect(getText(result)).not.toContain("Semantic follow-ups available here:");
+		expect(bufferSpy).toHaveBeenCalledWith(expect.objectContaining({ command: "read", file: "/tmp/test/notes.foo" }));
 	});
 
 	it("forwards mode for splice edit operations", async () => {
@@ -989,7 +997,6 @@ it("invalidates only files touched by applied previews", async () => {
 		expect(codeTool).toBeDefined();
 		expect(astEditTool).toBeDefined();
 		expect(resolveTool).toBeDefined();
-
 		await codeTool!.execute("read-target", { command: "read", file: targetFile, resolution: 3 });
 		await codeTool!.execute("read-untouched", { command: "read", file: untouchedFile, resolution: 3 });
 		await astEditTool!.execute("ast-edit-preview", {
@@ -1005,7 +1012,6 @@ it("invalidates only files touched by applied previews", async () => {
 			operation: "patch",
 			patches: [{ find: "return 2;", replace: "return 3;" }],
 		});
-
 		const closeCalls = executeSpy.mock.calls
 			.map(call => call[0])
 			.filter(options => options.command === "close" && String(options.file).startsWith(tempDir))
@@ -1018,6 +1024,113 @@ it("invalidates only files touched by applied previews", async () => {
 		await fs.rm(tempDir, { recursive: true, force: true });
 	}
 });
+
+it("routes unsupported text edits through the code buffer lifecycle", async () => {
+	_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-unsupported-text-lifecycle-"));
+	const executeSpy = spyOn(nativesModule, "executeCodeBuffer");
+	try {
+		const filePath = path.join(tempDir, "notes.foo");
+		await Bun.write(filePath, "first line\nsecond line\n");
+		const tool = new CodeTool(createSession({ cwd: tempDir, settings: Settings.isolated({ "lsp.enabled": false }) }));
+		const editResult = await tool.execute("unsupported-edit", {
+			command: "edit",
+			file: filePath,
+			operation: "replace",
+			content: ["first line", "updated line", "second line"],
+		});
+		expect(getText(editResult)).toContain("Edited notes.foo");
+		expect(getText(editResult)).toContain("updated line");
+		expect(await Bun.file(filePath).text()).toContain("updated line");
+		const readBack = await tool.execute("unsupported-read", { command: "read", file: filePath, resolution: 3 });
+		expect(getText(readBack)).toContain("updated line");
+		const undoResult = await tool.execute("unsupported-undo", { command: "undo", file: filePath });
+		expect(getText(undoResult)).not.toContain("Stale code buffer detected");
+		expect(getText(undoResult)).toContain("Undo");
+		expect(await Bun.file(filePath).text()).toContain("second line");
+		const redoResult = await tool.execute("unsupported-redo", { command: "redo", file: filePath });
+		expect(getText(redoResult)).not.toContain("Stale code buffer detected");
+		expect(getText(redoResult)).toContain("Redo");
+		expect(await Bun.file(filePath).text()).toContain("updated line");
+	} finally {
+		executeSpy.mockRestore();
+		await fs.rm(tempDir, { recursive: true, force: true });
+	}
+});
+
+it("keeps semantic-capable edits on the shared lifecycle", async () => {
+	_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-semantic-lifecycle-"));
+	const executeSpy = spyOn(nativesModule, "executeCodeBuffer");
+	try {
+		const filePath = path.join(tempDir, "main.ts");
+		await Bun.write(filePath, "export function main() {\n  return oldCall();\n}\n");
+		const tool = new CodeTool(createSession({ cwd: tempDir, settings: Settings.isolated({ "lsp.enabled": false }) }));
+		const editResult = await tool.execute("semantic-edit", {
+			command: "edit",
+			file: filePath,
+			symbol: "main",
+			operation: "patch",
+			patches: [{ find: "return oldCall();", replace: "return newCall();" }],
+		});
+		expect(getText(editResult)).toContain("Edited main.ts");
+		expect(await Bun.file(filePath).text()).toContain("return newCall();");
+		const readBack = await tool.execute("semantic-read", { command: "read", file: filePath, resolution: 3 });
+		expect(getText(readBack)).toContain("return newCall();");
+		const undoResult = await tool.execute("semantic-undo", { command: "undo", file: filePath });
+		expect(getText(undoResult)).not.toContain("Stale code buffer detected");
+		expect(await Bun.file(filePath).text()).toContain("return oldCall();");
+		const redoResult = await tool.execute("semantic-redo", { command: "redo", file: filePath });
+		expect(getText(redoResult)).not.toContain("Stale code buffer detected");
+		expect(await Bun.file(filePath).text()).toContain("return newCall();");
+	} finally {
+		executeSpy.mockRestore();
+		await fs.rm(tempDir, { recursive: true, force: true });
+	}
+});
+it("invalidates managed buffers after hashline edits on code files", async () => {
+	_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-hashline-invalidate-"));
+	try {
+		const filePath = path.join(tempDir, "main.ts");
+		await Bun.write(filePath, "export function main() {\n  return oldCall();\n}\n");
+		const tools = await createTools(
+			createSession({
+				cwd: tempDir,
+				settings: Settings.isolated({ "lsp.enabled": false, "edit.mode": "hashline" }),
+			}),
+		);
+		const codeTool = tools.find(entry => entry.name === "code");
+		const editTool = tools.find(entry => entry.name === "edit");
+		expect(codeTool).toBeDefined();
+		expect(editTool).toBeDefined();
+
+		await codeTool!.execute("code-read-before", { command: "read", file: filePath, resolution: 3 });
+		await editTool!.execute("hashline-edit", {
+			path: filePath,
+			edits: [
+				{
+					op: "replace",
+					pos: "2#HM",
+					lines: ["  return midCall();"],
+				},
+			],
+		});
+
+		const followUp = await codeTool!.execute("code-edit-after", {
+			command: "edit",
+			file: filePath,
+			symbol: "main",
+			operation: "patch",
+			patches: [{ find: "return midCall();", replace: "return finalCall();" }],
+		});
+		expect(getText(followUp)).not.toContain("Stale code buffer detected");
+		expect(await Bun.file(filePath).text()).toContain("return finalCall();");
+	} finally {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	}
+});
+
 it("keeps failed edits and clean saves distinguishable", async () => {
 	_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
 	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-save-distinction-"));
@@ -1110,6 +1223,71 @@ it("does not leave stale buffers after a failed multi-edit", async () => {
 		});
 		expect(getText(followUp)).not.toContain("Stale code buffer detected");
 		expect(await Bun.file(filePath).text()).toContain("return finalCall();");
+	} finally {
+		await fs.rm(tempDir, { recursive: true, force: true });
+	}
+});
+
+it("routes unsupported text-like edit lifecycle through code buffers", async () => {
+	_resetSupportedExtensionsForTest(new Set(["ts"]));
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-edit-text-fallback-"));
+	const executeSpy = spyOn(nativesModule, "executeCodeBuffer");
+	try {
+		const filePath = path.join(tempDir, "notes.txt");
+		await Bun.write(filePath, "alpha\nbeta\n");
+		const tool = new CodeTool(createSession({ cwd: tempDir, settings: Settings.isolated({ "lsp.enabled": false }) }));
+
+		const result = await tool.execute("tool-edit", {
+			command: "edit",
+			file: filePath,
+			operation: "replace",
+			content: "alpha\ngamma\n",
+		});
+
+		expect(getText(result)).toContain("Edited notes.txt");
+		expect(await Bun.file(filePath).text()).toContain("gamma");
+		expect(executeSpy.mock.calls.some(call => call[0].command === "diff" && call[0].file === filePath)).toBe(true);
+
+		const readBack = await tool.execute("tool-read", { command: "read", file: filePath, resolution: 3 });
+		expect(getText(readBack)).toContain("gamma");
+
+		const undo = await tool.execute("tool-undo", { command: "undo", file: filePath });
+		expect(getText(undo)).toContain("Undo");
+		const redo = await tool.execute("tool-redo", { command: "redo", file: filePath });
+		expect(getText(redo)).toContain("Redo");
+	} finally {
+		executeSpy.mockRestore();
+		await fs.rm(tempDir, { recursive: true, force: true });
+	}
+});
+
+it("still preserves semantic-capable edit lifecycle", async () => {
+	_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
+	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-edit-ts-lifecycle-"));
+	try {
+		const filePath = path.join(tempDir, "main.ts");
+		await Bun.write(filePath, "export function main() {\n  return oldCall();\n}\n");
+		const tool = new CodeTool(createSession({ cwd: tempDir, settings: Settings.isolated({ "lsp.enabled": false }) }));
+
+		const result = await tool.execute("tool-edit", {
+			command: "edit",
+			file: filePath,
+			symbol: "main",
+			operation: "patch",
+			patches: [{ find: "return oldCall();", replace: "return newCall();" }],
+		});
+
+		expect(getText(result)).toContain("Edited main.ts");
+		expect(await Bun.file(filePath).text()).toContain("return newCall();");
+
+		const followUp = await tool.execute("tool-follow", {
+			command: "edit",
+			file: filePath,
+			symbol: "main",
+			operation: "patch",
+			patches: [{ find: "return newCall();", replace: "return finalCall();" }],
+		});
+		expect(getText(followUp)).not.toContain("Stale code buffer detected");
 	} finally {
 		await fs.rm(tempDir, { recursive: true, force: true });
 	}

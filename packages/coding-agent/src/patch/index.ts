@@ -12,6 +12,7 @@ import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { StringEnum } from "@oh-my-pi/pi-ai";
+import { executeCodeBuffer } from "@oh-my-pi/pi-natives";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import {
@@ -26,7 +27,6 @@ import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
 import { enforcePathWrite } from "../sandbox";
 import type { ToolSession } from "../tools";
-// import { describeCodeToolSupportedFiles, isCodeToolSupportedPath } from "../tools/code-supported-files";
 import {
 	invalidateFsScanAfterDelete,
 	invalidateFsScanAfterRename,
@@ -76,6 +76,63 @@ export type { EditRenderContext, EditToolDetails } from "./shared";
 // Rendering
 export { editToolRenderer, getLspBatchRequest } from "./shared";
 export * from "./types";
+
+function extractCodeToolErrorMessage(output: unknown): string {
+	if (typeof output === "string") return output;
+	if (typeof output === "number" || typeof output === "boolean") return String(output);
+	if (output && typeof output === "object" && !Array.isArray(output)) {
+		const message = Reflect.get(output, "message");
+		if (typeof message === "string" && message.trim().length > 0) {
+			return message;
+		}
+	}
+	const serialized = JSON.stringify(output);
+	return typeof serialized === "string" && serialized.length > 0 ? serialized : "Code command failed";
+}
+
+function countBufferDiffHunks(output: unknown): number {
+	return Array.isArray(output) ? output.length : 0;
+}
+
+function invalidateManagedCodeBuffersForPaths(paths: string[]): void {
+	const uniquePaths = [...new Set(paths.filter(file => file.length > 0 && nodePath.isAbsolute(file)))];
+	for (const file of uniquePaths) {
+		const closeResult = executeCodeBuffer({ command: "close", file });
+		if (closeResult.error) {
+			throw new Error(
+				`Edit succeeded on disk, but failed to invalidate the managed code buffer for ${file}: ${String(closeResult.output ?? "unknown error")}`,
+			);
+		}
+	}
+}
+
+function ensureManagedBufferFresh(file: string): void {
+	const freshness = executeCodeBuffer({ command: "diff", file });
+	if (freshness.error) {
+		throw new Error(
+			`Unable to verify buffer freshness before edit: ${extractCodeToolErrorMessage(freshness.output)}`,
+		);
+	}
+	const staleHunks = countBufferDiffHunks(freshness.output);
+	if (staleHunks > 0) {
+		throw new Error(
+			`Stale code buffer detected (${staleHunks} ${staleHunks === 1 ? "hunk" : "hunks"} differ from disk). Run code diff to inspect, then reconcile the on-disk file before retrying this mutation.`,
+		);
+	}
+}
+
+function applyManagedBufferContent(file: string, content: string, options: { create: boolean }): void {
+	const result = options.create
+		? executeCodeBuffer({ command: "edit", file, operation: "create", content })
+		: executeCodeBuffer({ command: "replace_content", file, content });
+	if (result.error) {
+		throw new Error(`Managed code buffer update failed for ${file}: ${extractCodeToolErrorMessage(result.output)}`);
+	}
+	const saveResult = executeCodeBuffer({ command: "save", file });
+	if (saveResult.error) {
+		throw new Error(`Managed code buffer save failed for ${file}: ${extractCodeToolErrorMessage(saveResult.output)}`);
+	}
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Schemas
@@ -509,8 +566,11 @@ export class EditTool implements AgentTool<TInput> {
 			}
 			const sourceExists = await fs.exists(absolutePath);
 			const isMoveOnly = Boolean(resolvedMove) && edits.length === 0;
+			const touchedPaths =
+				resolvedMove && resolvedMove !== absolutePath ? [absolutePath, resolvedMove] : [absolutePath];
 
 			if (deleteFile) {
+				invalidateManagedCodeBuffersForPaths(touchedPaths);
 				if (sourceExists) {
 					await fs.unlink(absolutePath);
 				}
@@ -526,6 +586,7 @@ export class EditTool implements AgentTool<TInput> {
 			}
 
 			if (isMoveOnly && resolvedMove) {
+				invalidateManagedCodeBuffersForPaths(touchedPaths);
 				if (!sourceExists) {
 					throw new Error(`File not found: ${path}`);
 				}
@@ -561,7 +622,8 @@ export class EditTool implements AgentTool<TInput> {
 						throw new Error(`File not found: ${path}`);
 					}
 				}
-				await fs.writeFile(absolutePath, lines.join("\n"));
+				applyManagedBufferContent(absolutePath, lines.join("\n"), { create: true });
+				invalidateFsScanAfterWrite(absolutePath);
 				return {
 					content: [{ type: "text", text: `Created ${path}` }],
 					details: {
@@ -574,6 +636,7 @@ export class EditTool implements AgentTool<TInput> {
 
 			const anchorEdits = resolveEditAnchors(edits);
 
+			ensureManagedBufferFresh(absolutePath);
 			const rawContent = await fs.readFile(absolutePath, "utf-8");
 			const { bom, text } = stripBom(rawContent);
 			const originalEnding = detectLineEnding(text);
@@ -649,18 +712,15 @@ export class EditTool implements AgentTool<TInput> {
 
 			const finalContent = bom + restoreLineEndings(result.text, originalEnding);
 			const writePath = resolvedMove ?? absolutePath;
-			const diagnostics = await this.#writethrough(
-				writePath,
-				finalContent,
-				signal,
-				Bun.file(writePath),
-				batchRequest,
-			);
-			if (resolvedMove && resolvedMove !== absolutePath) {
+			let diagnostics: FileDiagnosticsResult | undefined;
+			if (!resolvedMove || resolvedMove === absolutePath) {
+				applyManagedBufferContent(writePath, finalContent, { create: false });
+				invalidateFsScanAfterWrite(absolutePath);
+			} else {
+				invalidateManagedCodeBuffersForPaths(touchedPaths);
+				diagnostics = await this.#writethrough(writePath, finalContent, signal, Bun.file(writePath), batchRequest);
 				await fs.unlink(absolutePath);
 				invalidateFsScanAfterRename(absolutePath, resolvedMove);
-			} else {
-				invalidateFsScanAfterWrite(absolutePath);
 			}
 			const diffResult = generateDiffString(originalNormalized, result.text);
 
@@ -724,6 +784,10 @@ export class EditTool implements AgentTool<TInput> {
 				throw new Error("Cannot edit Jupyter notebooks with the Edit tool. Use the NotebookEdit tool instead.");
 			}
 
+			invalidateManagedCodeBuffersForPaths(
+				resolvedRename && resolvedRename !== resolvedPath ? [resolvedPath, resolvedRename] : [resolvedPath],
+			);
+
 			const input: PatchInput = {
 				path: resolvedPath,
 				op,
@@ -746,7 +810,6 @@ export class EditTool implements AgentTool<TInput> {
 			}
 			const effRename = result.change.newPath ? rename : undefined;
 
-			// Generate diff for display
 			let diffResult: { diff: string; firstChangedLine: number | undefined } = {
 				diff: "",
 				firstChangedLine: undefined,
@@ -825,6 +888,7 @@ export class EditTool implements AgentTool<TInput> {
 			throw new Error(`File not found: ${path}`);
 		}
 
+		ensureManagedBufferFresh(absolutePath);
 		const rawContent = await fs.readFile(absolutePath, "utf-8");
 		const { bom, text: content } = stripBom(rawContent);
 		const originalEnding = detectLineEnding(content);
@@ -868,13 +932,8 @@ export class EditTool implements AgentTool<TInput> {
 		}
 
 		const finalContent = bom + restoreLineEndings(result.content, originalEnding);
-		const diagnostics = await this.#writethrough(
-			absolutePath,
-			finalContent,
-			signal,
-			Bun.file(absolutePath),
-			batchRequest,
-		);
+		applyManagedBufferContent(absolutePath, finalContent, { create: false });
+		let diagnostics: FileDiagnosticsResult | undefined;
 		invalidateFsScanAfterWrite(absolutePath);
 		const diffResult = generateDiffString(normalizedContent, result.content);
 

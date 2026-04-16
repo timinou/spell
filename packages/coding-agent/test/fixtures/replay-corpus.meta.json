@@ -1,0 +1,30 @@
+{
+  "name": "replay-corpus",
+  "version": 1,
+  "entries": [
+    {
+      "id": "replay-corpus-1",
+      "kind": "edit",
+      "classification": "semantic-capable",
+      "why": "hashline edit on supported code file"
+    },
+    {
+      "id": "replay-corpus-2",
+      "kind": "edit",
+      "classification": "unsupported-text-fallback",
+      "why": "future fallback target for text-like files"
+    },
+    {
+      "id": "replay-corpus-3",
+      "kind": "code",
+      "classification": "semantic-hints",
+      "why": "code usage that benefits from richer hints"
+    },
+    {
+      "id": "replay-corpus-4",
+      "kind": "malformed",
+      "classification": "reject",
+      "why": "invalid corpus entry"
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+#+TITLE: coding-agent: remove temporary edit adapter after text fallback stabilizes
+#+STATE: BLOCKED
+#+SESSION_ID: 14bcb0d0792f8e78
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-16T09-10-00-932Z_14bcb0d0792f8e78.jsonl]]
+#+CUSTOM_ID: FUP-056-coding-agent-remove-temporary-edit-adapt
+#+PRIORITY: #B
+#+EFFORT: 8h
+#+DEPENDS: BUG-265-coding-agent-route-edit-through-code-fal
+#+LAYER: tools
+
+:PROPERTIES:
+:EFFORT: 8h
+:LAYER: tools
+:END:
+
+* Scope
+- In scope: remove the temporary `edit` adapter for non-binary text files after the `code` fallback lifecycle has proven stable and adoption evidence shows the compatibility layer is no longer needed.
+- In scope: convert migration-time compatibility messaging into a hard redirect or explicit error that points agents to `code`.
+- Out of scope: building the initial text fallback, replay gate, or semantic hinting; those are prerequisites.
+
+* Existing Patterns
+- Migration-time adapter work from `packages/coding-agent/src/patch/index.ts` into `packages/coding-agent/src/tools/code.ts`.
+- Replay/evidence corpus from `[[id:PROJ-045-coding-agent-survey-semantic-editing-ses]]`.
+- Final adapter behavior from `[[id:BUG-265-coding-agent-route-edit-through-code-fal]]`.
+
+* Tests
+- Workflow 1: `edit` on non-binary text files fails or redirects deterministically to `code` after migration is complete.
+- Workflow 2: transcript/replay corpus shows semantic-editing prevalence improved enough to justify removing compatibility.
+- Workflow 3: no stale-buffer or persistence regressions appear after adapter removal.
+
+* Implementation
+** Define success threshold for removing the adapter
+:PROPERTIES:
+:CUSTOM_ID: FUP-056-coding-agent-remove-temporary-edit-adapt::threshold
+:DEPENDS: BUG-265-coding-agent-route-edit-through-code-fal::resolve
+:END:
+- Use replay/evidence tooling to define what “stable enough to remove adapter” means.
+
+** Replace compatibility routing with explicit redirect/error
+:PROPERTIES:
+:CUSTOM_ID: FUP-056-coding-agent-remove-temporary-edit-adapt::cutover
+:DEPENDS: FUP-056-coding-agent-remove-temporary-edit-adapt::threshold
+:END:
+- Update prompts/result text/tool docs so agents are pointed straight at `code`.
+
+* Edge Cases
+- Legacy prompts or sessions still attempting `edit` on text files.
+- Avoid regressions in non-text or notebook paths.
+
+* Acceptance Criteria
+- `edit` no longer silently routes non-binary text mutations once the migration is complete.
+- Guidance and replay evidence both support the cutover.
+
+NOTE [2026-04-16]: Intentionally deferred after PLAN-235. Temporary edit adapter remains until migration evidence justifies hard redirect removal.

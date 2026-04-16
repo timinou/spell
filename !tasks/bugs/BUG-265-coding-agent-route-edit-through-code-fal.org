@@ -1,0 +1,88 @@
+#+TITLE: coding-agent: route edit through code fallback and nudge semantic editing
+#+STATE: DONE
+#+SESSION_ID: 14bcb0d0792f8e78
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-16T09-10-00-932Z_14bcb0d0792f8e78.jsonl]]
+#+CUSTOM_ID: BUG-265-coding-agent-route-edit-through-code-fal
+#+DEPENDS: PROJ-045-coding-agent-survey-semantic-editing-ses FEAT-549-coding-agent-define-text-fallback-verifi FEAT-550-coding-agent-add-code-text-buffer-fallba
+#+PRIORITY: #A
+#+LAYER: tools
+#+EFFORT: 24h
+
+:PROPERTIES:
+:EFFORT: 24h
+:LAYER: tools
+:END:
+
+* Scope
+- In scope: during migration, make `edit` a temporary adapter for all non-binary text files so mutations land inside the `code` lifecycle instead of a separate persistence path.
+- In scope: add helpful runtime hints that incentivize semantic editing when semantic support exists, while suppressing semantic-only hints on fallback-only files.
+- In scope: user-visible result shaping for adapter flows so undo/redo/buffers semantics remain coherent regardless of whether the original call was `edit` or `code`.
+- Out of scope: inventing a second fallback engine or keeping two independent mutation lifecycles for text files.
+- Out of scope: hard redirect/removal of `edit`; that remains a later follow-up after compatibility proves stable.
+
+* Existing Patterns
+- Current edit modes and write behavior: `packages/coding-agent/src/patch/index.ts`.
+- Current code-result shaping and optional injected hints: `packages/coding-agent/src/tools/code.ts` (`#maybeInjectLanguageHint`, result formatting, freshness/save flow).
+- Pending preview/resolve invalidation path: `packages/coding-agent/src/tools/pending-action.ts`, `packages/coding-agent/src/tools/resolve.ts`.
+- Existing stale-buffer regression coverage: `packages/coding-agent/test/tools/code.test.ts`, `packages/coding-agent/test/tools/resolve.test.ts`.
+
+* Tests
+- Workflow 1: `edit` on any non-binary text file routes into the same managed lifecycle as `code`, preserving autosave, stale detection, and undo/redo/buffers behavior.
+- Workflow 2: `edit` compatibility surface still returns understandable mutation results during migration.
+- Workflow 3: semantic-capable files receive helpful hints about higher-value semantic subcommands (for example `outline`, `symbols`, `context`, `impact`) after `code` usage.
+- Workflow 4: fallback-only text files suppress semantic-only hints but may still advertise lifecycle capabilities.
+- Workflow 5: preview/apply/discard flows plus adapter routing never reintroduce stale-buffer bugs.
+- File targets:
+  - `packages/coding-agent/src/patch/index.ts`
+  - `packages/coding-agent/src/tools/code.ts`
+  - `packages/coding-agent/src/tools/pending-action.ts`
+  - `packages/coding-agent/src/tools/resolve.ts`
+  - `packages/coding-agent/test/tools/code.test.ts`
+  - `packages/coding-agent/test/tools/resolve.test.ts`
+
+* Implementation
+** Write failing adapter + hint tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-265-coding-agent-route-edit-through-code-fal::tests
+:DEPENDS: FEAT-549-coding-agent-define-text-fallback-verifi::replay-gate FEAT-550-coding-agent-add-code-text-buffer-fallba::parity
+:END:
+- Add initially-failing tests for `edit`→`code` routing across unsupported text files and current code-supported files.
+- Add tests for semantic-hint presence/suppression and for preview/apply stale-buffer regressions.
+
+** Route `edit` mutation paths into `code` lifecycle for non-binary text
+:PROPERTIES:
+:CUSTOM_ID: BUG-265-coding-agent-route-edit-through-code-fal::routing
+:DEPENDS: BUG-265-coding-agent-route-edit-through-code-fal::tests
+:END:
+- Preserve compatibility at the tool boundary while ensuring one persistence lifecycle underneath.
+- Cover replace/patch/hashline-style entry shapes where possible; reject only when the fallback cannot faithfully represent the requested mutation.
+
+** Add helpful semantic nudges to `code` results
+:PROPERTIES:
+:CUSTOM_ID: BUG-265-coding-agent-route-edit-through-code-fal::hints
+:DEPENDS: BUG-265-coding-agent-route-edit-through-code-fal::routing
+:END:
+- On semantic-capable files, mention richer follow-up subcommands such as `outline`, `symbols`, `context`, and `impact` when they are genuinely useful.
+- Suppress semantic-only hints on fallback-only files.
+
+** Harden preview/resolve + invalidation across adapter flows
+:PROPERTIES:
+:CUSTOM_ID: BUG-265-coding-agent-route-edit-through-code-fal::resolve
+:DEPENDS: BUG-265-coding-agent-route-edit-through-code-fal::hints
+:END:
+- Ensure adapter flows cannot leave stale buffers behind after apply/discard/error paths.
+- Keep undo/redo/buffers truthful after adapter-mediated mutations.
+
+* Edge Cases
+- `edit` payloads that describe mutations unsupported by the initial fallback surface.
+- Move/create/delete routed through adapter while preserving buffer identity/history semantics.
+- Hint spam: runtime nudges MUST be useful, not constant noise.
+- Preview/apply on semantic-capable files vs fallback-only files.
+
+* Acceptance Criteria
+- `edit` no longer creates a separate persistence lifecycle for any non-binary text file during migration.
+- `code` remains the source of truth for undo/redo/buffers across text files.
+- Helpful semantic nudges appear only when semantic support exists and are suppressed otherwise.
+- Existing stale-buffer class regressions remain closed.
+
+NOTE [2026-04-16]: Completed during PLAN-235 execution. Code/edit lifecycle now shares managed buffer behavior for migrated text flows, and semantic/text hints are injected appropriately.
