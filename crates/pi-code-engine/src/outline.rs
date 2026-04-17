@@ -117,9 +117,7 @@ pub(crate) fn declaration_name(
 
 #[derive(Debug, Clone)]
 pub(crate) struct NameResolution {
-	pub text:       String,
-	pub start_byte: usize,
-	pub end_byte:   usize,
+	pub text: String,
 }
 
 pub(crate) fn declaration_name_resolution(
@@ -158,11 +156,7 @@ pub(crate) fn declaration_name_resolution(
 		NameExtractor::ChildText { child_type } => find_named_child(node, child_type)
 			.or_else(|| find_named_descendant(node, child_type))
 			.and_then(|child| resolution_from_node(source, child, None, false)),
-		NameExtractor::Literal { name } => Some(NameResolution {
-			text:       name.clone(),
-			start_byte: node.start_byte(),
-			end_byte:   node.start_byte(),
-		}),
+		NameExtractor::Literal { name } => Some(NameResolution { text: name.clone() }),
 		NameExtractor::AttributeValue { within_type, attr_name, prefix, take_first_token } => {
 			attribute_value_resolution(
 				source,
@@ -215,11 +209,7 @@ fn resolution_from_node(
 	prefix: Option<&str>,
 	take_first_token: bool,
 ) -> Option<NameResolution> {
-	let raw = text(source, node)?
-		.trim()
-		.trim_matches('"')
-		.trim_matches('\'')
-		.trim_matches('`');
+	let raw = text(source, node)?.trim();
 	let token = if take_first_token {
 		raw.split_whitespace().next()?
 	} else {
@@ -229,9 +219,7 @@ fn resolution_from_node(
 		return None;
 	}
 	Some(NameResolution {
-		text:       prefix.map_or_else(|| token.to_string(), |prefix| format!("{prefix}{token}")),
-		start_byte: node.start_byte(),
-		end_byte:   node.end_byte(),
+		text: prefix.map_or_else(|| token.to_string(), |prefix| format!("{prefix}{token}")),
 	})
 }
 
@@ -252,7 +240,22 @@ fn attribute_value_resolution(
 		.find(|attribute| attribute_name_matches(source, *attribute, attr_name))?;
 	let value_node = find_named_child(attribute, "quoted_attribute_value")
 		.or_else(|| find_named_child(attribute, "attribute_value"))?;
-	resolution_from_node(source, value_node, prefix, take_first_token)
+	let raw = text(source, value_node)?
+		.trim()
+		.trim_matches('"')
+		.trim_matches('\'')
+		.trim_matches('`');
+	let token = if take_first_token {
+		raw.split_whitespace().next()?
+	} else {
+		raw
+	};
+	if token.is_empty() {
+		return None;
+	}
+	Some(NameResolution {
+		text: prefix.map_or_else(|| token.to_string(), |prefix| format!("{prefix}{token}")),
+	})
 }
 
 fn attribute_name_matches(source: &str, attribute: Node<'_>, attr_name: &str) -> bool {
@@ -406,7 +409,8 @@ fn should_deduplicate_entry(profile: &LanguageProfile, decl: &DeclarationPattern
 }
 
 fn should_deduplicate_entry_for_kind(kind: &str) -> bool {
-	matches!(kind, "element" | "style" | "script")
+	let should_deduplicate = matches!(kind, "element" | "style" | "script");
+	should_deduplicate
 }
 fn deduplicate_entries(entries: &mut [OutlineEntry]) {
 	for entry in entries.iter_mut() {

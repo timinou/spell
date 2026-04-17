@@ -41,6 +41,7 @@ pub fn resolve_edit_target<'a>(
 }
 
 pub fn editable_scope_for_node(mut node: Node<'_>) -> Node<'_> {
+	let original = node;
 	if node.kind() == "comment" {
 		return node;
 	}
@@ -66,7 +67,7 @@ pub fn editable_scope_for_node(mut node: Node<'_>) -> Node<'_> {
 		}
 		node = parent;
 	}
-	node
+	original
 }
 
 fn find_requested_node<'a>(target: LineTarget<'a>, node_type: &str) -> Option<Node<'a>> {

@@ -102,7 +102,7 @@ pub enum NameExtractor {
 	},
 	/// Compose a base extractor with attribute-derived suffixes such as `#id` or
 	/// `.class`.
-	Attributed { base: Box<NameExtractor>, enrichments: Vec<AttributeEnrichment> },
+	Attributed { base: Box<Self>, enrichments: Vec<AttributeEnrichment> },
 }
 
 /// How to extract a declaration's body range from the AST.

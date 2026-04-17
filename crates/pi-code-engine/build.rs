@@ -189,9 +189,10 @@ fn find_node_types_json(grammar: &GrammarSource) -> Result<std::path::PathBuf, S
 fn selected_dependency_version(dep_name: &str) -> Option<String> {
 	let manifest_dir_value = env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
 	let manifest_dir = Path::new(&manifest_dir_value);
+	let manifest_path = manifest_dir.join("Cargo.toml");
 	find_lockfile(manifest_dir)
 		.and_then(|lockfile| lock_dependency_version(&lockfile, dep_name))
-		.or_else(|| manifest_dependency_version(&manifest_dir.join("Cargo.toml"), dep_name))
+		.or_else(|| manifest_dependency_version(manifest_path.as_path(), dep_name))
 }
 
 fn find_lockfile(manifest_dir: &Path) -> Option<std::path::PathBuf> {

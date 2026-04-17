@@ -98,6 +98,9 @@ const fn symbol_kind_label(kind: &SymbolKind) -> &'static str {
 		SymbolKind::Module => "Module",
 		SymbolKind::Macro => "Macro",
 		SymbolKind::Template => "Template",
+		SymbolKind::Element => "Element",
+		SymbolKind::CssRule => "CssRule",
+		SymbolKind::CssProperty => "CssProperty",
 	}
 }
 

@@ -8,10 +8,12 @@ import * as path from "node:path";
 const require_ = createRequire(import.meta.url);
 const nativesDir = path.join(import.meta.dir, "..", "native");
 const addonPath = (() => {
+	const devPath = path.join(nativesDir, "pi_natives.dev.node");
+	if (nodeFs.existsSync(devPath)) return devPath;
 	const preferred = nodeFs
 		.readdirSync(nativesDir)
 		.find(name => name.startsWith("pi_natives.") && name.endsWith(".node") && name !== "pi_natives.dev.node");
-	return preferred ? path.join(nativesDir, preferred) : path.join(nativesDir, "pi_natives.dev.node");
+	return preferred ? path.join(nativesDir, preferred) : devPath;
 })();
 const native = require_(addonPath) as {
 	executeCodeBuffer(options: Record<string, unknown>): { output: unknown; error: boolean };
@@ -44,6 +46,8 @@ describe("executeCodeBuffer NAPI bridge", () => {
 					extensions: expect.arrayContaining(["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"]),
 				}),
 				expect.objectContaining({ id: "elixir", extensions: expect.arrayContaining(["ex", "exs"]) }),
+				expect.objectContaining({ id: "html", extensions: expect.arrayContaining(["html", "htm"]) }),
+				expect.objectContaining({ id: "css", extensions: expect.arrayContaining(["css"]) }),
 				expect.objectContaining({ id: "typst", extensions: expect.arrayContaining(["typ"]) }),
 			]),
 		});
@@ -218,7 +222,7 @@ describe("executeCodeBuffer NAPI bridge", () => {
 		expect(result.error).toBe(false);
 		const output = result.output as { languages: Array<{ id: string }> };
 		expect(output.languages.map(language => language.id).sort()).toEqual(
-			["elixir", "markdown", "org", "python", "rust", "typst", "typescript"].sort(),
+			["css", "elixir", "html", "markdown", "org", "python", "rust", "typst", "typescript"].sort(),
 		);
 	});
 });
