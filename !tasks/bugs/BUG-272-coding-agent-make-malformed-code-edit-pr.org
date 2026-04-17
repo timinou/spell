@@ -1,5 +1,5 @@
 #+TITLE: coding-agent: make malformed code-edit previews fail loudly
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14be2b039951fa47
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T12-42-23-717Z_14be2b039951fa47.jsonl]]
 #+CUSTOM_ID: BUG-272-coding-agent-make-malformed-code-edit-pr
@@ -80,3 +80,5 @@
 - Applied edit output preserves enough exact context to diagnose boundary-splice problems.
 - Live preview and rebuilt transcript show the same failure/apply story.
 - Focused renderer/tool tests lock the user-visible contract for failed, applied, previewed, and no-op code edits.
+
+NOTE [2026-04-17]: Implemented in PLAN-241 execution; code-tool failures now render with failure class plus recovery guidance and focused tests cover the user-visible contract.

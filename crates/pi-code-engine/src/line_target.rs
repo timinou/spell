@@ -36,8 +36,31 @@ pub fn resolve_edit_target<'a>(
 	node_type: &str,
 ) -> Result<Node<'a>> {
 	let target = resolve_line_target(buffer, line as u32, None)?;
+	if node_type.is_empty() {
+		return default_edit_target(target, line);
+	}
 	find_requested_node(target, node_type)
 		.ok_or_else(|| CodeEngineError::Edit(format!("No node found at line {line}")))
+}
+
+fn default_edit_target(target: LineTarget<'_>, line: usize) -> Result<Node<'_>> {
+	if same_target_node(target.raw, target.editable_scope) {
+		return Ok(target.editable_scope);
+	}
+
+	Err(CodeEngineError::Edit(format!(
+		"Ambiguous line target at line {line}: raw node '{}' expands to editable scope '{}'. \
+		 Specify node_type or use symbol targeting.",
+		target.raw.kind(),
+		target.editable_scope.kind(),
+	)))
+}
+
+fn same_target_node(left: Node<'_>, right: Node<'_>) -> bool {
+	left.id() == right.id()
+		|| (left.kind() == right.kind()
+			&& left.start_byte() == right.start_byte()
+			&& left.end_byte() == right.end_byte())
 }
 
 pub fn editable_scope_for_node(mut node: Node<'_>) -> Node<'_> {
@@ -71,9 +94,6 @@ pub fn editable_scope_for_node(mut node: Node<'_>) -> Node<'_> {
 }
 
 fn find_requested_node<'a>(target: LineTarget<'a>, node_type: &str) -> Option<Node<'a>> {
-	if node_type.is_empty() {
-		return Some(target.editable_scope);
-	}
 	if target.raw.kind() == node_type {
 		return Some(target.raw);
 	}

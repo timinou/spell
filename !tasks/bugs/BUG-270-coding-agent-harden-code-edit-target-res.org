@@ -1,5 +1,5 @@
 #+TITLE: coding-agent: harden code-edit target resolution and batch invariants
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14be2b039951fa47
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T12-42-23-717Z_14be2b039951fa47.jsonl]]
 #+CUSTOM_ID: BUG-270-coding-agent-harden-code-edit-target-res
@@ -100,3 +100,5 @@
 - Raw-node vs editable-scope ambiguity no longer produces silent partial declaration edits.
 - Mixed edit batches are atomic and reject malformed entries before save/format.
 - Focused TypeScript/native/Rust tests cover the transcript-shaped regressions and keep them fixed.
+
+NOTE [2026-04-17]: Implemented in PLAN-241 execution; engine/tool contract now rejects ambiguous or unsafe line-target edits atomically with focused TS/native/Rust coverage.

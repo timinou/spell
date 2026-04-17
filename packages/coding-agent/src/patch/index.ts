@@ -27,6 +27,7 @@ import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
 import { enforcePathWrite } from "../sandbox";
 import type { ToolSession } from "../tools";
+import { describeCodeToolSupportedFiles, isCodeToolSupportedPath } from "../tools/code-supported-files";
 import {
 	invalidateFsScanAfterDelete,
 	invalidateFsScanAfterRename,
@@ -50,6 +51,10 @@ import { type EditToolDetails, getLspBatchRequest } from "./shared";
 // Internal imports
 import type { FileSystem, Operation, PatchInput } from "./types";
 import { EditMatchError } from "./types";
+
+function codeToolRedirectMessage(path: string): string {
+	return `The edit tool is blocked for code-supported files (${describeCodeToolSupportedFiles()}). Use code edit for structural edits on ${JSON.stringify(path)}; if the structural edit fails, re-read/navigate and tighten the target instead of switching to text edit.`;
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Re-exports
@@ -556,10 +561,9 @@ export class EditTool implements AgentTool<TInput> {
 			}
 
 			const absolutePath = resolvePlanPath(this.session, path);
-			// NOTE: commented until Code Edit works welll
-			// if (isCodeToolSupportedPath(absolutePath)) {
-			// 	throw new Error(codeToolRedirectMessage(path));
-			// }
+			if (isCodeToolSupportedPath(absolutePath)) {
+				throw new Error(codeToolRedirectMessage(path));
+			}
 			const resolvedMove = move ? resolvePlanPath(this.session, move) : undefined;
 			if (resolvedMove === absolutePath) {
 				throw new Error("move path is the same as source path");
@@ -771,10 +775,9 @@ export class EditTool implements AgentTool<TInput> {
 				if (sandboxRenameError) throw new Error(sandboxRenameError);
 			}
 			const resolvedPath = resolvePlanPath(this.session, path);
-			// NOTE: commented unti.l code tool works well
-			// if (isCodeToolSupportedPath(resolvedPath)) {
-			//   throw new Error(codeToolRedirectMessage(path));
-			// }
+			if (isCodeToolSupportedPath(resolvedPath)) {
+				throw new Error(codeToolRedirectMessage(path));
+			}
 			const resolvedRename = rename ? resolvePlanPath(this.session, rename) : undefined;
 
 			if (path.endsWith(".ipynb")) {
@@ -879,10 +882,9 @@ export class EditTool implements AgentTool<TInput> {
 		}
 
 		const absolutePath = resolvePlanPath(this.session, path);
-		// NOTE: commnted until code edit is well supported
-		// if (isCodeToolSupportedPath(absolutePath)) {
-		//   throw new Error(codeToolRedirectMessage(path));
-		// }
+		if (isCodeToolSupportedPath(absolutePath)) {
+			throw new Error(codeToolRedirectMessage(path));
+		}
 
 		if (!(await fs.exists(absolutePath))) {
 			throw new Error(`File not found: ${path}`);

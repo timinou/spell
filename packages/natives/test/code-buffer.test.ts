@@ -246,4 +246,86 @@ describe("executeCodeBuffer NAPI bridge", () => {
 			["css", "elixir", "html", "markdown", "org", "python", "rust", "typst", "typescript"].sort(),
 		);
 	});
+
+	it("rejects unsafe line-target import insertion before save", async () => {
+		const tempDir = path.join(os.tmpdir(), `pi-natives-unsafe-import-${Date.now()}`);
+		const file = path.join(tempDir, "main.ts");
+		await fs.mkdir(tempDir, { recursive: true });
+		await Bun.write(file, 'import { a } from "./a";\nexport const value = a;\n');
+
+		const result = executeCodeBuffer({
+			command: "edit",
+			file,
+			line: 1,
+			node_type: "import_statement",
+			operation: "insert-after",
+			content: 'import { b } from "./b";',
+		});
+		expect(result).toEqual({
+			error: true,
+			output: expect.stringContaining("must start with a newline"),
+		});
+		expect(await Bun.file(file).text()).toBe('import { a } from "./a";\nexport const value = a;\n');
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("rejects structurally invalid supported-file edits before save", async () => {
+		const tempDir = path.join(os.tmpdir(), `pi-natives-invalid-structure-${Date.now()}`);
+		const file = path.join(tempDir, "module.ts");
+		await fs.mkdir(tempDir, { recursive: true });
+		await Bun.write(file, "export const value = 1;\n");
+
+		const result = executeCodeBuffer({
+			command: "edit",
+			file,
+			operation: "replace",
+			content: "export const = ;\n",
+		});
+		expect(result).toEqual({
+			error: true,
+			output: expect.stringContaining("structurally invalid"),
+		});
+		expect(await Bun.file(file).text()).toBe("export const value = 1;\n");
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("keeps failed batch edits atomic for follow-up edits", async () => {
+		const tempDir = path.join(os.tmpdir(), `pi-natives-batch-atomic-${Date.now()}`);
+		const file = path.join(tempDir, "main.ts");
+		await fs.mkdir(tempDir, { recursive: true });
+		await Bun.write(file, "export function main() {\n  return oldCall();\n}\n");
+
+		const failed = executeCodeBuffer({
+			command: "edit",
+			file,
+			edits: [
+				{
+					symbol: "main",
+					operation: "patch",
+					patches: [{ find: "return oldCall();", replace: "return newCall();" }],
+				},
+				{
+					symbol: "missing",
+					operation: "patch",
+					patches: [{ find: "return oldCall();", replace: "return shouldNotApply();" }],
+				},
+			],
+		});
+		expect(failed.error).toBe(true);
+
+		const followUp = executeCodeBuffer({
+			command: "edit",
+			file,
+			symbol: "main",
+			operation: "patch",
+			patches: [{ find: "return oldCall();", replace: "return finalCall();" }],
+		});
+		expect(followUp.error).toBe(false);
+		expect(executeCodeBuffer({ command: "save", file })).toEqual({
+			error: false,
+			output: expect.objectContaining({ success: true }),
+		});
+		expect(await Bun.file(file).text()).toContain("return finalCall();");
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
 });

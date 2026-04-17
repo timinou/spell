@@ -324,7 +324,7 @@ describe("code tool result contract", () => {
 		expect(content).toBe("Closed src/main.ts");
 	});
 
-	it("keeps graph output compact and error output plain text", () => {
+	it("keeps graph output compact and error output actionable", () => {
 		const graph = createCodeGraphDetails({
 			command: "status",
 			output: "Code graph status\nCache: fresh\nSemantic: missing",
@@ -342,6 +342,7 @@ describe("code tool result contract", () => {
 			output: "Language profile not found",
 		});
 		expect(error.displayPath).toBe("src/main.ts");
-		expect(formatCodeToolContent(error)).toBe("Error: Language profile not found");
+		expect(error.failureKind).toBe("execution_failure");
+		expect(formatCodeToolContent(error)).toBe("Error [execution_failure] src/main.ts: Language profile not found");
 	});
 });
