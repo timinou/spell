@@ -12,25 +12,29 @@ use crate::{
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct OutlineEntry {
-	pub name:      String,
-	pub kind:      String,
-	pub line:      u32,
-	pub end_line:  u32,
-	pub column:    u32,
-	pub exported:  bool,
-	pub signature: String,
+	pub name:        String,
+	pub kind:        String,
+	pub line:        u32,
+	pub end_line:    u32,
+	pub column:      u32,
+	pub exported:    bool,
+	pub signature:   String,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
-	pub children:  Vec<Self>,
+	pub children:    Vec<Self>,
+	#[serde(skip)]
+	pub deduplicate: bool,
 }
 
 pub fn outline(buffer: &CodeBuffer, profile: &LanguageProfile) -> Vec<OutlineEntry> {
 	let source = buffer.source();
 	let root = buffer.tree().root_node();
 	let mut cursor = root.walk();
-	root
+	let mut entries = root
 		.named_children(&mut cursor)
 		.filter_map(|node| entry_for_node(&source, profile, node))
-		.collect()
+		.collect::<Vec<_>>();
+	deduplicate_entries(&mut entries);
+	entries
 }
 
 fn entry_for_node(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Option<OutlineEntry> {
@@ -48,7 +52,7 @@ fn entry_for_node(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Op
 		return sole_named_child(node).and_then(|child| entry_for_node(source, profile, child));
 	};
 	let name = declaration_name(source, node, decl)?;
-	let signature = signature_text(source, node, decl);
+	let signature = semantic_signature(&name, source, node, decl);
 	let start = node.start_position();
 	let end = node.end_position();
 	let children = class_children(source, profile, node);
@@ -61,6 +65,7 @@ fn entry_for_node(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Op
 		exported: is_exported(node, decl),
 		signature,
 		children,
+		deduplicate: should_deduplicate_entry(profile, decl),
 	})
 }
 
@@ -72,10 +77,12 @@ fn sole_named_child(node: Node<'_>) -> Option<Node<'_>> {
 }
 
 fn class_children(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Vec<OutlineEntry> {
-	class_member_nodes(profile, node, source)
+	let mut children = class_member_nodes(profile, node, source)
 		.into_iter()
 		.filter_map(|child| entry_for_node(source, profile, child))
-		.collect()
+		.collect::<Vec<_>>();
+	deduplicate_entries(&mut children);
+	children
 }
 
 pub(crate) fn declaration_for<'a>(
@@ -105,46 +112,158 @@ pub(crate) fn declaration_name(
 	node: Node<'_>,
 	decl: &DeclarationPattern,
 ) -> Option<String> {
-	// When name_from_arg is set, extract the display name from the first
-	// argument child.  This handles Elixir patterns where the keyword (def,
-	// defmodule) sits in `target` but the real name is the first argument.
+	declaration_name_resolution(source, node, decl).map(|resolution| resolution.text)
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NameResolution {
+	pub text:       String,
+	pub start_byte: usize,
+	pub end_byte:   usize,
+}
+
+pub(crate) fn declaration_name_resolution(
+	source: &str,
+	node: Node<'_>,
+	decl: &DeclarationPattern,
+) -> Option<NameResolution> {
 	if decl.name_from_arg {
 		let args = child_by_field_or_kind(node, "arguments")?;
 		let mut cursor = args.walk();
 		let first = args.named_children(&mut cursor).next()?;
-		// If the first arg is itself a call (e.g. `def start_link(opts)`) use its
-		// target.
 		if let Some(target) = first.child_by_field_name("target") {
-			return text(source, target).map(|v| v.trim().to_string());
+			return resolution_from_node(source, target, None, false);
 		}
-		// Otherwise use the full text (e.g. `defmodule MyApp.Server`).
-		return text(source, first).map(|v| v.trim().to_string());
+		return resolution_from_node(source, first, None, false);
 	}
 
 	match &decl.name {
 		NameExtractor::Field { name } => {
 			if let Some(name_node) = node.child_by_field_name(name) {
-				if let Some(inner_name) = name_node.child_by_field_name("name") {
-					return text(source, inner_name).map(|value| value.trim().to_string());
-				}
-				return text(source, name_node).map(|value| value.trim().to_string());
+				return resolution_from_node(
+					source,
+					name_node.child_by_field_name("name").unwrap_or(name_node),
+					None,
+					false,
+				);
 			}
 
 			find_named_descendant(node, "variable_declarator")
 				.and_then(|declarator| declarator.child_by_field_name("name"))
-				.and_then(|name_node| text(source, name_node))
-				.map(|value| value.trim().to_string())
+				.and_then(|name_node| resolution_from_node(source, name_node, None, false))
 		},
 		NameExtractor::ChildField { child_type, field } => find_named_child(node, child_type)
 			.and_then(|child| child.child_by_field_name(field))
-			.and_then(|name_node| text(source, name_node))
-			.map(|value| value.trim().to_string()),
+			.and_then(|name_node| resolution_from_node(source, name_node, None, false)),
 		NameExtractor::ChildText { child_type } => find_named_child(node, child_type)
 			.or_else(|| find_named_descendant(node, child_type))
-			.and_then(|child| text(source, child))
-			.map(|value| value.trim().to_string()),
-		NameExtractor::Literal { name } => Some(name.clone()),
+			.and_then(|child| resolution_from_node(source, child, None, false)),
+		NameExtractor::Literal { name } => Some(NameResolution {
+			text:       name.clone(),
+			start_byte: node.start_byte(),
+			end_byte:   node.start_byte(),
+		}),
+		NameExtractor::AttributeValue { within_type, attr_name, prefix, take_first_token } => {
+			attribute_value_resolution(
+				source,
+				node,
+				within_type.as_deref(),
+				attr_name,
+				prefix.as_deref(),
+				*take_first_token,
+			)
+		},
+		NameExtractor::Attributed { base, enrichments } => {
+			let mut base_resolution = name_resolution(source, node, base)?;
+			for enrichment in enrichments {
+				if let Some(extra) = attribute_value_resolution(
+					source,
+					node,
+					enrichment.within_type.as_deref(),
+					&enrichment.attr_name,
+					Some(enrichment.prefix.as_str()),
+					enrichment.take_first_token,
+				) {
+					base_resolution.text.push_str(&extra.text);
+				}
+			}
+			Some(base_resolution)
+		},
 	}
+}
+
+fn name_resolution(
+	source: &str,
+	node: Node<'_>,
+	extractor: &NameExtractor,
+) -> Option<NameResolution> {
+	let decl = DeclarationPattern {
+		node_types:    Vec::new(),
+		name:          extractor.clone(),
+		kind:          String::new(),
+		body:          BodyExtractor::None,
+		visibility:    None,
+		filter_names:  None,
+		name_from_arg: false,
+	};
+	declaration_name_resolution(source, node, &decl)
+}
+
+fn resolution_from_node(
+	source: &str,
+	node: Node<'_>,
+	prefix: Option<&str>,
+	take_first_token: bool,
+) -> Option<NameResolution> {
+	let raw = text(source, node)?
+		.trim()
+		.trim_matches('"')
+		.trim_matches('\'')
+		.trim_matches('`');
+	let token = if take_first_token {
+		raw.split_whitespace().next()?
+	} else {
+		raw
+	};
+	if token.is_empty() {
+		return None;
+	}
+	Some(NameResolution {
+		text:       prefix.map_or_else(|| token.to_string(), |prefix| format!("{prefix}{token}")),
+		start_byte: node.start_byte(),
+		end_byte:   node.end_byte(),
+	})
+}
+
+fn attribute_value_resolution(
+	source: &str,
+	node: Node<'_>,
+	within_type: Option<&str>,
+	attr_name: &str,
+	prefix: Option<&str>,
+	take_first_token: bool,
+) -> Option<NameResolution> {
+	let scope = within_type
+		.and_then(|kind| find_named_child(node, kind).or_else(|| find_named_descendant(node, kind)))
+		.unwrap_or(node);
+	let attribute = named_children(scope)
+		.into_iter()
+		.filter(|child| child.kind() == "attribute")
+		.find(|attribute| attribute_name_matches(source, *attribute, attr_name))?;
+	let value_node = find_named_child(attribute, "quoted_attribute_value")
+		.or_else(|| find_named_child(attribute, "attribute_value"))?;
+	resolution_from_node(source, value_node, prefix, take_first_token)
+}
+
+fn attribute_name_matches(source: &str, attribute: Node<'_>, attr_name: &str) -> bool {
+	find_named_child(attribute, "attribute_name")
+		.and_then(|name_node| text(source, name_node))
+		.is_some_and(|value| value.trim() == attr_name)
+}
+
+fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
+	let mut cursor = node.walk();
+	node.named_children(&mut cursor).collect()
 }
 
 /// Try `child_by_field_name(name)` first; fall back to first named child
@@ -252,6 +371,22 @@ fn find_named_descendant<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
 	None
 }
 
+fn semantic_signature(
+	name: &str,
+	source: &str,
+	node: Node<'_>,
+	decl: &DeclarationPattern,
+) -> String {
+	if matches!(
+		decl.kind.as_str(),
+		"element" | "style" | "script" | "rule" | "at-rule" | "keyframes" | "property"
+	) || should_deduplicate_entry_for_kind(decl.kind.as_str())
+	{
+		return format!("{name} ({})", decl.kind);
+	}
+	signature_text(source, node, decl)
+}
+
 fn signature_text(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> String {
 	let end_byte = declaration_body_range(source, node, decl)
 		.map_or_else(|| node.end_byte(), |(start_byte, _)| start_byte);
@@ -264,6 +399,41 @@ fn signature_text(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> St
 		.collect::<Vec<_>>()
 		.join(" ");
 	truncate(&header, 200)
+}
+
+fn should_deduplicate_entry(profile: &LanguageProfile, decl: &DeclarationPattern) -> bool {
+	profile.id.as_str() == "html" && should_deduplicate_entry_for_kind(decl.kind.as_str())
+}
+
+fn should_deduplicate_entry_for_kind(kind: &str) -> bool {
+	matches!(kind, "element" | "style" | "script")
+}
+fn deduplicate_entries(entries: &mut [OutlineEntry]) {
+	for entry in entries.iter_mut() {
+		deduplicate_entries(&mut entry.children);
+	}
+	let mut totals = std::collections::BTreeMap::<(String, String), usize>::new();
+	for entry in entries.iter() {
+		if entry.deduplicate {
+			*totals
+				.entry((entry.kind.clone(), entry.name.clone()))
+				.or_default() += 1;
+		}
+	}
+	let mut seen = std::collections::BTreeMap::<(String, String), usize>::new();
+	for entry in entries.iter_mut() {
+		if !entry.deduplicate {
+			continue;
+		}
+		let key = (entry.kind.clone(), entry.name.clone());
+		if totals.get(&key).copied().unwrap_or_default() <= 1 {
+			continue;
+		}
+		let occurrence = seen.entry(key).or_default();
+		*occurrence += 1;
+		entry.name = format!("{}[{}]", entry.name, occurrence);
+		entry.signature = format!("{} ({})", entry.name, entry.kind);
+	}
 }
 
 fn truncate(text: &str, max_chars: usize) -> String {

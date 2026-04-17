@@ -1,0 +1,15 @@
+#+TITLE: Session 14ba808e59ae3495 Todos
+#+DATE: 2026-04-14
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Analysis
+
+** DONE Trace TestChat session errors
+:PROPERTIES:
+:TASK_ID: trace-testchat-session
+:STATUS: completed
+:END:
+
+Inspect /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-14T16-08-31-282Z_14ba7d6c4c924699.jsonl with jq, correlate GenericFailure and save messages, explain root cause and sequence. Read-only only.
+
+Used jq on session JSONL to reconstruct code/write sequence and explain failure modes: whole-file code replace hit line-target bug, symbol fallback mismatched symbol grammar, save persisted unchanged buffer version 0, final write bypassed code tool and still did not implement registry-based resolution.

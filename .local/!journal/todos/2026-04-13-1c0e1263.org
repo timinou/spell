@@ -1,0 +1,52 @@
+#+TITLE: Session 14b9823b61f7ee0e Todos
+#+DATE: 2026-04-13
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Execute wave 1 changes
+:PROPERTIES:
+:TASK_ID: plan221-wave1
+:STATUS: completed
+:ORG_ITEM_ID: PLAN-221-tool-precedence-hardening-and-plan-mode
+:END:
+
+Update tool precedence wording/tool docs and set task eager default true. Verify focused prompt/config behavior before moving to wave 2.
+
+Verified prompt/config changes with focused prompt tests.
+
+** DONE Execute wave 2 plan mode
+:PROPERTIES:
+:TASK_ID: plan221-wave2
+:STATUS: completed
+:DEPENDS: plan221-wave1
+:ORG_ITEM_ID: PLAN-221-tool-precedence-hardening-and-plan-mode
+:END:
+
+Port ultraplan sub-outline body standard into standard plan mode and add org wave guidance. Verify rendered prompt/body output before moving to wave 3.
+
+Verified standard plan-mode prompt now includes shared body standard and org wave guidance via focused prompt tests.
+
+** DONE Execute wave 3 validation
+:PROPERTIES:
+:TASK_ID: plan221-wave3
+:STATUS: completed
+:DEPENDS: plan221-wave2
+:ORG_ITEM_ID: PLAN-221-tool-precedence-hardening-and-plan-mode
+:END:
+
+Extend exit-plan-mode validation for sub-outline IDs/DEPENDS refs/cycles and add focused tests. Verify test suite before completion.
+
+Verified sub-outline CUSTOM_ID/DEPENDS validation with focused exit-plan-mode tests.
+
+** DONE Verify org and commit
+:PROPERTIES:
+:TASK_ID: plan221-closeout
+:STATUS: completed
+:DEPENDS: plan221-wave3
+:ORG_ITEM_ID: PLAN-221-tool-precedence-hardening-and-plan-mode
+:END:
+
+Run final checks, update org completion report, reconcile linked item states, and create scoped commit for plan files + code.
+
+Ran final checks, updated org items to DONE, appended completion report, and committed scoped changes as 964766d87.

@@ -12,9 +12,10 @@ import type {
 	AgentToolUpdateCallback,
 } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
-import { getDefault, type Settings } from "../config/settings";
+
 import { formatGroupedDiagnosticMessages } from "../lsp/utils";
 import type { Theme } from "../modes/theme/theme";
+import { getInlineSpillBudget, resolveToolSpillPolicy, shouldSpillText } from "../session/spill-policy";
 import { type OutputSummary, type TruncationResult, truncateTail } from "../session/streaming-output";
 import { formatBytes, wrapBrackets } from "./render-utils";
 import { renderError, ToolAbortError, ToolError } from "./tool-errors";
@@ -453,15 +454,58 @@ const kUnwrappedExecute = Symbol("OutputMeta.UnwrappedExecute");
 // =============================================================================
 
 /** Resolved artifact spill config sourced from the session settings (or schema defaults). */
-function getSpillConfig(s: Settings | undefined) {
-	const get = <P extends "tools.artifactSpillThreshold" | "tools.artifactTailBytes" | "tools.artifactTailLines">(
-		path: P,
-	) => s?.get(path) ?? getDefault(path);
+function buildArtifactTruncationMeta(
+	truncation: TruncationResult,
+	maxBytes: number,
+	artifactUri: string,
+): TruncationMeta {
+	const outputLines = truncation.outputLines ?? truncation.totalLines;
+	const outputBytes = truncation.outputBytes ?? truncation.totalBytes;
+	const shownStart = Math.max(1, truncation.totalLines - outputLines + 1);
 	return {
-		threshold: get("tools.artifactSpillThreshold") * 1024,
-		tailBytes: get("tools.artifactTailBytes") * 1024,
-		tailLines: get("tools.artifactTailLines"),
+		direction: "tail",
+		truncatedBy: truncation.truncatedBy ?? "bytes",
+		totalLines: truncation.totalLines,
+		totalBytes: truncation.totalBytes,
+		outputLines,
+		outputBytes,
+		maxBytes,
+		shownRange: { start: shownStart, end: truncation.totalLines },
+		artifactUri,
 	};
+}
+
+async function spillTextToArtifact(
+	text: string,
+	toolName: string,
+	context: AgentToolContext | undefined,
+	success: boolean,
+): Promise<{ text: string; meta?: OutputMeta }> {
+	const sessionManager = context?.sessionManager;
+	if (!sessionManager) return { text };
+	const policy = resolveToolSpillPolicy({ settings: context?.settings, toolName });
+	if (!shouldSpillText(text, policy)) return { text };
+	const artifact = await sessionManager.saveArtifact(text, toolName);
+	if (!artifact) return { text };
+	const budget = getInlineSpillBudget(policy, success);
+	const truncated = truncateTail(text, {
+		maxBytes: budget.maxBytes,
+		maxLines: budget.maxLines,
+	});
+	return {
+		text: truncated.content,
+		meta: { truncation: buildArtifactTruncationMeta(truncated, budget.maxBytes, artifact.uri) },
+	};
+}
+
+async function spillErrorTextToArtifact(
+	text: string,
+	toolName: string,
+	context: AgentToolContext | undefined,
+): Promise<string> {
+	const spilled = await spillTextToArtifact(text, toolName, context, false);
+	if (!spilled.meta) return text;
+	return spilled.text + formatOutputNotice(spilled.meta);
 }
 
 /**
@@ -475,15 +519,9 @@ async function spillLargeResultToArtifact(
 	toolName: string,
 	context: AgentToolContext | undefined,
 ): Promise<AgentToolResult> {
-	const sessionManager = context?.sessionManager;
-	if (!sessionManager) return result;
-	const { threshold, tailBytes, tailLines } = getSpillConfig(context?.settings);
-
-	// Skip if tool already saved an artifact
 	const existingMeta: OutputMeta | undefined = result.details?.meta;
 	if (existingMeta?.truncation?.artifactUri) return result;
 
-	// Measure total text content
 	const textParts: string[] = [];
 	for (const block of result.content) {
 		if (block.type === "text" && block.text) {
@@ -493,50 +531,22 @@ async function spillLargeResultToArtifact(
 	if (textParts.length === 0) return result;
 
 	const fullText = textParts.length === 1 ? textParts[0] : textParts.join("\n");
-	const totalBytes = Buffer.byteLength(fullText, "utf-8");
-	if (totalBytes <= threshold) return result;
+	const spilled = await spillTextToArtifact(fullText, toolName, context, true);
+	if (!spilled.meta) return result;
 
-	// Save full output as artifact
-	const artifact = await sessionManager.saveArtifact(fullText, toolName);
-	if (!artifact) return result;
-
-	// Truncate to tail
-	const truncated = truncateTail(fullText, {
-		maxBytes: tailBytes,
-		maxLines: tailLines,
-	});
-
-	// Replace text blocks with single tail-truncated block, keep images
 	const newContent: (TextContent | ImageContent)[] = [];
 	for (const block of result.content) {
 		if (block.type !== "text") {
 			newContent.push(block);
 		}
 	}
-	newContent.push({ type: "text", text: truncated.content });
-
-	// Build truncation meta
-	const outputLines = truncated.outputLines ?? truncated.totalLines;
-	const outputBytes = truncated.outputBytes ?? truncated.totalBytes;
-	const shownStart = truncated.totalLines - outputLines + 1;
-	const truncationMeta: TruncationMeta = {
-		direction: "tail",
-		truncatedBy: truncated.truncatedBy ?? "bytes",
-		totalLines: truncated.totalLines,
-		totalBytes: truncated.totalBytes,
-		outputLines,
-		outputBytes,
-		maxBytes: tailBytes,
-		shownRange: { start: shownStart, end: truncated.totalLines },
-		artifactUri: artifact.uri,
-	};
+	newContent.push({ type: "text", text: spilled.text });
 
 	const newMeta: OutputMeta = {
 		...(existingMeta ?? {}),
-		truncation: truncationMeta,
+		...spilled.meta,
 	};
 	const newDetails = { ...(result.details ?? {}), meta: newMeta };
-
 	return { ...result, content: newContent, details: newDetails };
 }
 
@@ -556,11 +566,7 @@ async function wrappedExecute(
 
 	try {
 		let result = await originalExecute.call(this, toolCallId, params, signal, onUpdate, context);
-
-		// Spill large results to artifact, truncate to tail
 		result = await spillLargeResultToArtifact(result, this.name, context);
-
-		// Append notices from meta
 		const meta: OutputMeta | undefined = result.details?.meta;
 		if (meta) {
 			return {
@@ -571,9 +577,10 @@ async function wrappedExecute(
 		return result;
 	} catch (e) {
 		if (e instanceof ToolAbortError) throw e;
-		if (e instanceof ToolError) throw new ToolError(renderError(e), e.context);
-		// Re-throw with formatted message so agent-loop sets isError flag.
-		throw new Error(renderError(e));
+		const rendered = renderError(e);
+		const spilled = await spillErrorTextToArtifact(rendered, this.name, context);
+		if (e instanceof ToolError) throw new ToolError(spilled, e.context);
+		throw new Error(spilled);
 	}
 }
 

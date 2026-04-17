@@ -1,0 +1,9 @@
+TODO Prefix sub-outline IDs in FEAT-543 org file
+- File: /home/user/code/ora/spell/!tasks/features/FEAT-543-report-all-exit-plan-mode-validation-err.org
+- Change: prepend parent ID to sub-outline :CUSTOM_ID: values and matching :DEPENDS: refs
+- Acceptance: grep shows only full PARENT::suffix forms for the three sub-outline IDs and two DEPENDS refs
+
+TODO Verify replacements with grep
+- File: /home/user/code/ora/spell/!tasks/features/FEAT-543-report-all-exit-plan-mode-validation-err.org
+- Change: confirm the file contains FEAT-543-report-all-exit-plan-mode-validation-err::combined-error-tests, ::refactor-validation, and ::validate-plan-cmd
+- Acceptance: no bare short IDs remain in the target file

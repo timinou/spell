@@ -13,10 +13,13 @@ import type { PreludeHelper, PythonStatusEvent } from "../ipy/kernel";
 import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import { getMarkdownTheme, type Theme } from "../modes/theme/theme";
 import pythonDescription from "../prompts/tools/python.md" with { type: "text" };
-import { DEFAULT_MAX_BYTES, OutputSink, type OutputSummary, TailBuffer } from "../session/streaming-output";
+import { getRetainedSpillBudget, resolveToolSpillPolicy } from "../session/spill-policy";
+import { OutputSink, type OutputSummary, TailBuffer } from "../session/streaming-output";
 import { getTreeBranch, getTreeContinuePrefix, renderCodeCell } from "../tui";
 import type { ToolSession } from ".";
+
 import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
+
 import { resolveToCwd } from "./path-utils";
 import { formatTitle, replaceTabs, shortenPath, truncateToWidth, wrapBrackets } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
@@ -182,6 +185,8 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 		const timeoutMs = timeoutSec * 1000;
 		const timeoutSignal = AbortSignal.timeout(timeoutMs);
 		const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+		const spillPolicy = resolveToolSpillPolicy({ settings: this.session.settings, toolName: this.name });
+		const retainedBudget = getRetainedSpillBudget(spillPolicy);
 		let outputSink: OutputSink | undefined;
 		let outputSummary: OutputSummary | undefined;
 		let outputDumped = false;
@@ -208,7 +213,7 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 				throw new ToolError(`Working directory is not a directory: ${commandCwd}`);
 			}
 
-			const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES * 2);
+			const tailBuffer = new TailBuffer(retainedBudget.maxBytes);
 			const jsonOutputs: unknown[] = [];
 			const images: ImageContent[] = [];
 			const statusEvents: PythonStatusEvent[] = [];
@@ -259,6 +264,10 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 			outputSink = new OutputSink({
 				artifactPath,
 				artifactUri,
+				spillThresholdBytes: spillPolicy.trigger.maxBytes,
+				spillThresholdLines: spillPolicy.trigger.maxLines,
+				retainMaxBytes: retainedBudget.maxBytes,
+				retainMaxLines: retainedBudget.maxLines,
 				onChunk: chunk => {
 					appendTail(chunk);
 					pushUpdate();
@@ -273,6 +282,7 @@ export class PythonTool implements AgentTool<typeof pythonSchema> {
 				kernelMode: this.session.settings.get("python.kernelMode"),
 				useSharedGateway: this.session.settings.get("python.sharedGateway"),
 				sessionFile: sessionFile ?? undefined,
+				spillPolicy,
 			};
 
 			for (let i = 0; i < cells.length; i++) {

@@ -1,0 +1,92 @@
+#+TITLE: Broad grep staging and duplicate-query reuse
+#+STATE: ITEM
+#+SESSION_ID: 14be1383cbba71b9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T10-59-43-534Z_14be1383cbba71b9.jsonl]]
+#+CUSTOM_ID: FEAT-559-broad-grep-staging-and-duplicate-query-reuse
+#+DEPENDS: PROJ-047-cross-tool-context-pressure-policy
+#+EFFORT: 6h
+#+PRIORITY: A
+#+LAYER: coding-agent
+
+* Initial Message
+
+I have an inkling that a lot of token usage comes from the Bash tool during my sessions. PLease look at my recent sessions transcripts using jq and graph in ASCII the token usage, and within the token usage, the commands that led to the most token usage. Or graph in HTML/CSS. Or something else. But basically do a full review kind of thing (as a summary in chat, once you do that and you find the culprits for most of the useless context injecitons, we can start thinking about how to smartly manage context for these situations)
+
+* Scope
+In scope:
+- Add summary-first staged behavior for broad or weakly scoped grep requests: workspace-wide searches, path-light searches, and pattern sweeps whose first step should be file-hit discovery rather than immediate large content injection.
+- Preserve current direct content behavior for already narrow grep calls (explicit file/path/type/glob constraints or obviously focused searches).
+- Reuse shared policy classification from `PROJ-047-cross-tool-context-pressure-policy` so transcript/session grep and broad exploratory grep share one policy vocabulary.
+- Reduce repeated near-identical grep churn by reusing prior compact summaries when the query/path scope is unchanged and the underlying state has not meaningfully changed.
+
+Out of scope:
+- Turning grep into a semantic search tool; `code search`, `ast_grep`, and `lsp` remain the better surfaces for that.
+- Forcing staged behavior on tightly scoped grep that already functions as a precise inspection tool.
+- Generic workspace caching for all tools; only grep-specific reuse needed for these workflows belongs here.
+
+Rationale:
+- `grep:source search` + `grep:other search` together contribute ~14.0% of sampled tokens and ~13.9% of fresh input.
+- Many exact grep calls in the review are classic exploration churn: large token cost, tiny visible yield, broad paths, and immediate follow-up searches with slightly refined patterns.
+- Fresh-input reduction is the primary optimization objective settled for this plan, and broad grep is one of the clearest input-heavy categories after `read`.
+
+* Existing Patterns
+- Main implementation: `packages/coding-agent/src/tools/grep.ts`, especially `DEFAULT_MATCH_LIMIT`, `GrepTool.execute(...)`, the internal limit expansion (`effectiveLimit` / `internalLimit`), and `grepToolRenderer`.
+- Existing precision alternatives that grep should point toward when appropriate: `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/tools/read.ts`, `packages/coding-agent/src/tools/lsp`, and `ast_grep` usage in the tool surface.
+- Shared classification / summary contract: `PROJ-047-cross-tool-context-pressure-policy`.
+- Review baseline: `specs/token-usage-pareto-review.md`.
+
+* Tests
+Workflows to enumerate and defend first:
+1. Workflow 1 — a broad grep returns file-hit counts and representative matches first instead of dumping a large match body.
+2. Workflow 2 — a narrow grep (single file, explicit path/glob/type scope, or obviously precise query) still returns direct content results without forced staging.
+3. Workflow 3 — transcript/session grep under `.spell` is classified as high-noise and defaults to compact summaries.
+4. Workflow 4 — a repeated near-identical broad grep can reuse a compact prior summary when state has not changed, instead of paying the full exploration cost again.
+5. Workflow 5 — the staged summary exposes the truthful next-step path so the agent can auto-escalate to a narrower grep or a follow-up read/code tool call.
+
+Test files / scenarios:
+- New focused file: `packages/coding-agent/test/tools/grep-staging.test.ts`.
+- Extend `packages/coding-agent/test/tools/grep-internal-urls.test.ts` only if transcript/internal path handling shares that surface; otherwise keep the staging tests self-contained.
+- Add direct assertions for broad-vs-narrow classification, summary text shape, and repeat-query reuse behavior.
+
+* Implementation
+** Define broad-vs-narrow grep contract and tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-559-broad-grep-staging-and-duplicate-query-reuse::define-grep-staging-contract-and-tests
+:END:
+- Files: `packages/coding-agent/src/tools/grep.ts`, `packages/coding-agent/test/tools/grep-staging.test.ts`.
+- Define the staging trigger conditions using path scope, type/glob constraints, and pattern specificity.
+- Add initially-failing tests for Workflows 1 through 5.
+
+** Implement summary-first broad grep mode
+:PROPERTIES:
+:CUSTOM_ID: FEAT-559-broad-grep-staging-and-duplicate-query-reuse::implement-summary-first-broad-grep
+:DEPENDS: FEAT-559-broad-grep-staging-and-duplicate-query-reuse::define-grep-staging-contract-and-tests
+:END:
+- Files: `packages/coding-agent/src/tools/grep.ts` and any shared helper(s) from `PROJ-047-cross-tool-context-pressure-policy`.
+- Return file-hit summaries, representative examples, and explicit next-step guidance for broad grep calls.
+- Keep narrow grep behavior direct and precise.
+
+** Implement repeated-query reuse for unchanged broad searches
+:PROPERTIES:
+:CUSTOM_ID: FEAT-559-broad-grep-staging-and-duplicate-query-reuse::implement-repeat-query-reuse
+:DEPENDS: FEAT-559-broad-grep-staging-and-duplicate-query-reuse::define-grep-staging-contract-and-tests
+:END:
+- Files: `packages/coding-agent/src/tools/grep.ts` and session-local helper/state chosen during implementation.
+- Fingerprint broad grep scope + pattern and reuse the last compact summary when safe.
+- Ensure stale reuse does not occur after relevant state changes.
+* Edge Cases
+- A grep can be broad by path but precise by pattern; staging should look at both, not only one dimension.
+- A narrow grep may still return many matches; do not accidentally stage every high-cardinality precise grep if the user intentionally scoped it.
+- Transcript/session grep under `.spell` should stage even when the query itself is precise, because the domain is inherently noisy.
+- Reuse logic must not return stale summaries after edits or file changes that could invalidate match sets.
+- Representative examples must not lie about omitted matches or file counts.
+
+* Acceptance Criteria
+- Broad grep searches become summary-first and reduce fresh-input / turn-count pressure.
+- Narrow grep searches preserve direct precision behavior.
+- Transcript/session grep defaults to compact summary behavior.
+- Repeated broad grep calls can reuse prior summaries when safe.
+- Focused tests cover broad-vs-narrow staging, transcript grep handling, repeat-query reuse, and truthful next-step guidance.
+
+* Parent Plan
+- [[id:PLAN-240-post-plan239-context-pressure-followup-plan]] POST_PLAN239_CONTEXT_PRESSURE_FOLLOWUP_PLAN

@@ -1,0 +1,15 @@
+#+TITLE: Session 14b83dd2c9801912 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Verify org get after restart
+:PROPERTIES:
+:TASK_ID: verify-org-get-after-restart
+:STATUS: completed
+:END:
+
+Use the actual org tool in this restarted session to verify org get against the newly created verification item, then report the observed result.
+
+Confirmed: org get returned the BUG-249 item body and properties in this restarted session.

@@ -1,0 +1,64 @@
+#+TITLE: Session 14be280aaf74b0ec Todos
+#+DATE: 2026-04-17
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Inspect wave 1 scope
+:PROPERTIES:
+:TASK_ID: wave1-dsl
+:STATUS: completed
+:ORG_ITEM_ID: FEAT-553-pi-code-engine-define-html-css-affordanc
+:END:
+
+Completed investigation of FEAT-553/554/555/556 scope by reading plan child items plus current engine/graph/tool code. Verified current blockers: no html/css profiles in crates/pi-code-engine/src/language/mod.rs, no embedded region contract in profile.rs, outline/resolve assume unique declaration names, graph model lacks style kinds/edges, code-supported-files hardcodes semantic languages without html/css.
+
+Settled execution delta: extend LanguageProfile with capability + embedded-region metadata; add NameExtractor attribute enrichment + duplicate-name disambiguation for repeated HTML siblings; add HTML/CSS built-ins via build.rs; extend graph SymbolKind/EdgeKind for style semantics and separate confidence metadata; add HTML import resolution for stylesheet links. Architecture grounded in current declaration-centric gaps in outline.rs/resolve.rs/language/generic.rs/indexer.rs.
+
+** DOING Implement plan waves
+:PROPERTIES:
+:TASK_ID: implement-core
+:STATUS: in_progress
+:DEPENDS: wave1-dsl
+:ORG_ITEM_ID: PLAN-238-html-css-code-graph-engine-plan
+:END:
+
+Execute FEAT-553/554/555/556 in order, verifying each wave before proceeding. Use focused subagents where file sets are independent. Update linked org child items truthfully as each wave completes.
+
+Proceeding with FEAT-553/554/555/556 in sequence. First cut: engine + graph core in Rust, then native/TS tool surface, with focused verification after each wave.
+
+** ITEM Verify and close plan
+:PROPERTIES:
+:TASK_ID: verify-close
+:STATUS: pending
+:GATE_COMMIT: true
+:GATE_CMD: cargo test -p pi-code-engine && cargo test -p pi-code-graph && bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts && bun check:ts && bun check:rs
+:VERIFY_CMD: cargo test -p pi-code-engine && cargo test -p pi-code-graph && bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts && bun check:ts && bun check:rs
+:DEPENDS: implement-core
+:ORG_ITEM_ID: PLAN-238-html-css-code-graph-engine-plan
+:ORG_ITEM_CLOSING_ID: PLAN-238-html-css-code-graph-engine-plan
+:END:
+
+Run required verification commands, capture manual proof and any artifacts, update PLAN-238 completion report, reconcile child org states, create focused git commit staging only plan files, and mark plan DONE if verification passes.
+
+* Wave2EngineCore
+
+** BLOCKED Extend engine DSL/types and register HTML/CSS built-ins
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: failed
+:END:
+
+* Wave2EngineRepair
+
+** BLOCKED Repair DSL and built-in HTML/CSS profiles
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: failed
+:END:
+
+** BLOCKED Repair outline resolve targets and generic extractor
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: failed
+:END:

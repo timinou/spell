@@ -14,6 +14,7 @@ import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import xterm from "@xterm/headless";
 import { NON_INTERACTIVE_ENV } from "../exec/non-interactive-env";
 import type { Theme } from "../modes/theme/theme";
+import type { SpillPolicy } from "../session/spill-policy";
 import { OutputSink, type OutputSummary } from "../session/streaming-output";
 import { sanitizeWithOptionalSixelPassthrough } from "../utils/sixel";
 import { formatStatusIcon, replaceTabs } from "./render-utils";
@@ -292,9 +293,23 @@ export async function runInteractiveBashPty(
 		env?: Record<string, string>;
 		artifactPath?: string;
 		artifactUri?: string;
+		spillPolicy?: SpillPolicy;
 	},
 ): Promise<BashInteractiveResult> {
-	const sink = new OutputSink({ artifactPath: options.artifactPath, artifactUri: options.artifactUri });
+	const retainedBudget = options.spillPolicy
+		? {
+				maxBytes: Math.max(options.spillPolicy.success.maxBytes, options.spillPolicy.failure.maxBytes),
+				maxLines: Math.max(options.spillPolicy.success.maxLines, options.spillPolicy.failure.maxLines),
+			}
+		: undefined;
+	const sink = new OutputSink({
+		artifactPath: options.artifactPath,
+		artifactUri: options.artifactUri,
+		spillThresholdBytes: options.spillPolicy?.trigger.maxBytes,
+		spillThresholdLines: options.spillPolicy?.trigger.maxLines,
+		retainMaxBytes: retainedBudget?.maxBytes,
+		retainMaxLines: retainedBudget?.maxLines,
+	});
 	let pendingChunks = Promise.resolve();
 	const result = await ui.custom<BashInteractiveResult>(
 		(tui, uiTheme, _keybindings, done) => {
@@ -310,7 +325,11 @@ export async function runInteractiveBashPty(
 				void (async () => {
 					await component.flushOutput();
 					await pendingChunks;
-					const summary = await sink.dump();
+					const budget =
+						run.exitCode === 0 && !run.cancelled && !run.timedOut
+							? options.spillPolicy?.success
+							: options.spillPolicy?.failure;
+					const summary = await sink.dump({ maxBytes: budget?.maxBytes, maxLines: budget?.maxLines });
 					done({
 						exitCode: run.exitCode,
 						cancelled: run.cancelled,

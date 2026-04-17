@@ -1,0 +1,90 @@
+#+TITLE: CODE_EDIT_FAILURE_PREVENTION_PLAN
+#+STATE: ITEM
+#+SESSION_ID: 14be2b039951fa47
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T12-42-23-717Z_14be2b039951fa47.jsonl]]
+#+CUSTOM_ID: PLAN-241-code-edit-failure-prevention-plan
+#+LAYER: coding-agent
+#+EFFORT: 22h
+#+PRIORITY: #A
+
+* Initial Message
+
+File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T12-29-42-673Z_14be281c6474c15d.jsonl
+ ID: 14be281c6474c15d
+
+
+At some point it said:
+
+"I need a different approach since the code tool isn't reliable for text manipulation."
+
+
+Bro this is wrong on so many levels. please explain the gap between the agent's expectations and the final result, tell me how you'd have exquisite regression tests for that use-case, and find the bugs/improvements that you need to dsolve to make sure this type of failure doesn't happen again
+
+* Context
+- Request: explain the gap between the agent's expectations and the final result in session `14be281c6474c15d`, then produce a self-contained remediation plan that prevents this failure class from recurring.
+- Primary transcript evidence:
+  - `packages/coding-agent/src/prompts/system/system-prompt.md:237-240` currently tells agents that `code` is the default mutation path for every code-supported file.
+  - `packages/coding-agent/src/prompts/tools/code.md:96-105` currently teaches `insert-after` with content that omits an explicit sibling-safe separator.
+  - `packages/coding-agent/src/tools/write.ts:107-112` and `packages/coding-agent/src/patch/index.ts:559-562, 882-885` still carry commented redirects saying code-edit enforcement is disabled until the code tool works well.
+  - Transcript lines `136-145` show the concrete failure: the agent treated `insert-after` like a text line append, the engine inserted at node end bytes, the preview showed concatenated tokens, and the agent then generalized that into "the code tool isn't reliable for text manipulation."
+- Gap summary:
+  1. Agent expectation: line-target `insert-after` behaves like generic line text insertion and safe declaration growth.
+  2. Actual engine behavior: line-target edits resolve AST/node boundaries (`crates/pi-code-engine/src/line_target.rs`, `crates/pi-code-engine/src/edit/replace.rs`) and perform raw byte insertion with no implicit separator.
+  3. Prompt/runtime mismatch: prompts oversell `code edit` and even model an unsafe `insert-after` example, while runtime code still contains disabled redirects because reliability is known to be incomplete.
+  4. Result-truthfulness gap: malformed edits can surface as successful compact diffs until a human notices the corrupted line or formatter side effects.
+
+** Settled Decisions
+1. Scope is full-stack, per user selection: engine hardening + prompt/tool-doc alignment + runtime routing enforcement + preview/result truthfulness.
+2. No shim/fallback ambiguity: structural edit failures must become explicit contract errors, not edits that land and hope formatter cleanup makes them acceptable.
+3. Prompt language and runtime enforcement must converge; if `code` is the default for structural source edits, `write` / text `edit` must stop silently remaining open for code-supported files because of stale exceptions.
+4. Regression tests must encode the exact transcript-shaped failures: import insertion without a safe boundary, interface-member insertion that concatenates tokens, create payload misuse, and previews that hide the real corruption line.
+5. Execution order is engine first, then prompts/routing and observability in parallel.
+
+** Recommended Approach
+- Implement [[id:BUG-270-coding-agent-harden-code-edit-target-res]] first so the engine/tool contract stops permitting unsafe target resolution and malformed edit batches.
+- Then cut over the human-facing and runtime contract in [[id:BUG-271-coding-agent-align-code-edit-prompts-exa]] so the agent is no longer taught the wrong mental model.
+- In parallel after engine hardening, implement [[id:BUG-272-coding-agent-make-malformed-code-edit-pr]] so even future regressions fail loudly and truthfully.
+
+** Critical Files
+- `packages/coding-agent/src/tools/code.ts`
+- `packages/coding-agent/src/tools/code-result.ts`
+- `packages/coding-agent/src/tools/write.ts`
+- `packages/coding-agent/src/patch/index.ts`
+- `packages/coding-agent/src/prompts/system/system-prompt.md`
+- `packages/coding-agent/src/prompts/tools/code.md`
+- `packages/coding-agent/src/prompts/tools/patch.md`
+- `packages/coding-agent/src/prompts/system/plan-mode-tool-decision-reminder.md`
+- `packages/coding-agent/test/tools/code.test.ts`
+- `packages/coding-agent/test/tools/code-result.test.ts`
+- `packages/coding-agent/test/system-prompt-templates.test.ts`
+- `packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts`
+- `packages/natives/test/code-buffer.test.ts`
+- `crates/pi-natives/src/code_buffer.rs`
+- `crates/pi-code-engine/src/line_target.rs`
+- `crates/pi-code-engine/src/edit/replace.rs`
+- `crates/pi-code-engine/src/buffer.rs`
+
+* Verification
+- Focused TypeScript tests:
+  - `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts packages/coding-agent/test/system-prompt-templates.test.ts packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts`
+- Focused native bridge tests:
+  - `bun test packages/natives/test/code-buffer.test.ts`
+- Focused Rust verification:
+  - `cargo test -p pi-code-engine`
+- Final checks:
+  - `bun check:ts`
+  - `bun check:rs`
+- Manual proof expectations:
+  - the transcript-shaped `insert-after` cases fail before save with actionable errors
+  - prompt text and runtime redirects describe the same structural-edit boundary
+  - code tool previews/results no longer report malformed edits as successful compact diffs
+
+* Execution Manifest
+** Wave 1
+- [[id:BUG-270-coding-agent-harden-code-edit-target-res]]
+- Rationale: the engine/tool contract must stop unsafe edits before prompts or renderers can tell the truth about it.
+
+** Wave 2
+- [[id:BUG-271-coding-agent-align-code-edit-prompts-exa]]
+- [[id:BUG-272-coding-agent-make-malformed-code-edit-pr]]
+- Rationale: once the mutation contract is hard, align the agent/runtime boundary and make user-visible previews/results equally truthful.

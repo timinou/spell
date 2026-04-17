@@ -230,31 +230,31 @@ export const SETTINGS_SCHEMA = {
 	},
 	"tools.artifactSpillThreshold": {
 		type: "number",
-		default: 50,
+		default: 2.5,
 		ui: {
 			tab: "tools",
 			label: "Artifact spill threshold (KB)",
-			description: "Tool output above this size is saved as an artifact; tail is kept inline",
+			description: "Default spill trigger for non-precision tools; outputs above this size spill to artifacts",
 			submenu: true,
 		},
 	},
 	"tools.artifactTailBytes": {
 		type: "number",
-		default: 20,
+		default: 1,
 		ui: {
 			tab: "tools",
 			label: "Artifact tail size (KB)",
-			description: "Amount of tail content kept inline when output spills to artifact",
+			description: "Default success tail kept inline for non-precision tools after artifact spill",
 			submenu: true,
 		},
 	},
 	"tools.artifactTailLines": {
 		type: "number",
-		default: 500,
+		default: 50,
 		ui: {
 			tab: "tools",
 			label: "Artifact tail lines",
-			description: "Maximum lines of tail content kept inline when output spills to artifact",
+			description: "Default success line tail kept inline for non-precision tools after artifact spill",
 			submenu: true,
 		},
 	},

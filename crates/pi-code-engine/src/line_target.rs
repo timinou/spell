@@ -40,7 +40,7 @@ pub fn resolve_edit_target<'a>(
 		.ok_or_else(|| CodeEngineError::Edit(format!("No node found at line {line}")))
 }
 
-pub fn editable_scope_for_node(node: Node<'_>) -> Node<'_> {
+pub fn editable_scope_for_node(mut node: Node<'_>) -> Node<'_> {
 	if node.kind() == "comment" {
 		return node;
 	}
@@ -48,6 +48,23 @@ pub fn editable_scope_for_node(node: Node<'_>) -> Node<'_> {
 		&& parent.kind() == "code"
 	{
 		return parent;
+	}
+	while let Some(parent) = node.parent() {
+		if matches!(
+			parent.kind(),
+			"element"
+				| "self_closing_tag"
+				| "style_element"
+				| "script_element"
+				| "rule_set"
+				| "media_statement"
+				| "supports_statement"
+				| "keyframes_statement"
+				| "declaration"
+		) {
+			return parent;
+		}
+		node = parent;
 	}
 	node
 }

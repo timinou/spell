@@ -1,0 +1,45 @@
+#+TITLE: Session 14ba5c57dda011f2 Todos
+#+DATE: 2026-04-14
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Inspect code edit gaps
+:PROPERTIES:
+:TASK_ID: inspect-code-edit-hardening
+:STATUS: completed
+:END:
+
+Reviewed `packages/coding-agent/src/tools/{pending-action,resolve,ast-edit,code-result,code}.ts` and related tests. Settled next implementation scope, but source mutation is currently blocked by session audit read-only enforcement.
+
+Inspected current code-edit mutation/provenance paths and confirmed highest-value hardening targets: persisted-without-files contract hole, post-persist invalidation failure handling, renderer truthfulness, and missing edge-case tests around those branches.
+
+** DOING Harden code edit flows
+:PROPERTIES:
+:TASK_ID: implement-code-edit-hardening
+:STATUS: in_progress
+:DEPENDS: inspect-code-edit-hardening
+:END:
+
+Planned fixes: require/verify touched-file reporting for persisted preview applications, degrade invalidation failures into truthful provenance instead of throw-after-persist, surface invalidation/persistence state in resolve/code result text, and cover those edges with focused tests. Execution cannot continue in the current read-only session state.
+
+Blocked by active audit-mode read-only enforcement: attempted source edit was rejected with `Audit mode: file modifications are not allowed.` Cannot truthfully proceed with implementation or tests that require code changes until writable mode is restored.
+
+** ITEM Add edge case tests
+:PROPERTIES:
+:TASK_ID: expand-edge-case-tests
+:STATUS: pending
+:DEPENDS: implement-code-edit-hardening
+:END:
+
+Add focused regression tests covering hardened code edit edge cases, especially error paths and boundary conditions.
+
+** ITEM Verify code edit hardening
+:PROPERTIES:
+:TASK_ID: verify-code-edit-hardening
+:STATUS: pending
+:GATE_CMD: bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code-result.test.ts packages/coding-agent/test/tools/ast-edit.test.ts
+:DEPENDS: expand-edge-case-tests
+:END:
+
+Run focused bun tests for updated code tool behavior and report exact results.

@@ -1,0 +1,178 @@
+#+TITLE: Session 14b843f425d94d26 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* BUG-245: Verify foundation (shared diagnostic contract)
+
+** DONE Verify shared diagnostic contract tests pass
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+Run existing tests:
+- bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts
+- bun test packages/coding-agent/test/session/tool-call-diagnostics.test.ts
+- bun test packages/coding-agent/test/session-manager/signature-persistence.test.ts
+- bun test packages/coding-agent/test/streaming-edit-abort.test.ts
+
+All types, utilities, and persistence paths already exist. This item validates they're green.
+
+All 13 tests pass across 4 test files. Foundation contract fully implemented.
+
+* BUG-243: Cross-provider idle timeout cutover
+
+** DONE Add stall handling to Amazon Bedrock provider
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:DEPENDS: task-1
+:END:
+
+File: packages/ai/src/providers/amazon-bedrock.ts
+
+1. Import idle-iterator, tool-call-diagnostics helpers
+2. Wrap response.stream! iteration with iterateWithIdleTimeout using getIdleTimeoutMs callback
+3. Add retry loop around stream iteration (matching Anthropic pattern)
+4. Classify stalls with classifyToolCallStreamInterruption
+5. Handle completed_tool_call_missing_trailing_stop as recovery
+6. Retry retryable stalls up to getToolCallStreamMaxRetries()
+7. Add test: packages/ai/test/providers/bedrock-idle-timeout.test.ts
+
+Added idle timeout, stall classification, and retry loop to Bedrock. 4 tests pass.
+
+** DONE Add stall handling to Azure OpenAI responses provider
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:DEPENDS: task-1
+:END:
+
+File: packages/ai/src/providers/azure-openai-responses.ts
+
+1. Add tool-argument-aware idle timeout (getIdleTimeoutMs callback + hasActiveToolArgumentStreaming)
+2. Add stall classification + diagnostics in catch block
+3. Add retry loop matching OpenAI responses pattern
+4. Handle completed_tool_call_missing_trailing_stop as recovery
+5. Add test: packages/ai/test/providers/azure-openai-responses-idle-timeout.test.ts
+
+Added tool-argument-aware timeout, stall classification, and retry to Azure OpenAI. 2 tests pass.
+
+** DONE Add stall handling to OpenAI Codex responses provider
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:DEPENDS: task-1
+:END:
+
+File: packages/ai/src/providers/openai-codex-responses.ts
+
+1. In createRequestSetup, add tool-argument-aware timeout via getIdleTimeoutMs callback
+2. The wrapCodexSseStream already wraps with iterateWithIdleTimeout - just needs the getIdleTimeoutMs callback
+3. In recoverCodexStreamError (or processCodexResponseStream catch), classify stalls and append diagnostics
+4. Need to pass output reference to createRequestSetup for hasActiveToolArgumentStreaming
+5. Add focused test
+
+Added tool-argument-aware timeout to SSE wrapper and stall classification to processCodexResponseStream. 4 tests pass.
+
+** DONE Add stall handling to Cursor provider
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: completed
+:DEPENDS: task-1
+:END:
+
+File: packages/ai/src/providers/cursor.ts
+
+Cursor uses protobuf gRPC-style streaming. Evaluate feasibility:
+- If stream iteration is async iterable, wrap with iterateWithIdleTimeout
+- Add tool-argument-aware timeout
+- Classify stalls in error handler
+- If transport is fundamentally different, document why and skip
+- Add test if applicable
+
+Added stall classification to Cursor error handler. Completed tool call recovery and incomplete tool arg classification work. 3 tests pass.
+
+** DONE Run all provider idle timeout tests
+:PROPERTIES:
+:TASK_ID: task-6
+:STATUS: completed
+:DEPENDS: task-2 task-3 task-4 task-5
+:END:
+
+Run:
+- bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts
+- bun test packages/ai/test/providers/openai-responses-idle-timeout.test.ts
+- New bedrock/azure/codex tests
+- bun check:ts
+
+19 tests pass across 6 provider files. bun check:ts clean (only pre-existing natives issue). bun check:rs clean.
+
+* BUG-244: Surface diagnostics + audit lock acquisition
+
+** DONE Audit and verify lock acquisition is execution-time only
+:PROPERTIES:
+:TASK_ID: task-7
+:STATUS: completed
+:DEPENDS: task-6
+:END:
+
+1. Confirm native buffer locking in crates/pi-code-engine/src/buffer.rs is execution-time (DONE - parking_lot::Mutex acquired in NAPI calls only)
+2. Confirm streaming-edit-abort.test.ts passes (no read at toolcall_start)
+3. Confirm event-controller.ts and ui-helpers.ts surface formatAssistantToolCallFailureMessage for error stops
+4. Verify no pending tools claim success after stall
+5. Run bun check:rs for Rust audit
+
+Audit complete:
+- Buffer locking: parking_lot::Mutex in execute_code_buffer_inner, sync-scoped only
+- streaming-edit-abort.test.ts passes (no read at toolcall_start)
+- event-controller.ts surfaces formatAssistantToolCallFailureMessage for error stops
+- Pending tools marked as error on stall, not success
+- bun check:rs clean
+
+** DONE Run final verification suite
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: completed
+:DEPENDS: task-7
+:END:
+
+Run:
+- bun check:ts
+- bun check:rs
+- bun test packages/coding-agent/test/streaming-edit-abort.test.ts
+- All new provider tests
+- All existing diagnostic/persistence tests
+
+26 tests pass across 9 files. bun check:ts clean. bun check:rs clean.
+
+* FUP-051: Retention review + close plan
+
+** DONE Document retention seams for FUP-051
+:PROPERTIES:
+:TASK_ID: task-9
+:STATUS: completed
+:DEPENDS: task-8
+:END:
+
+Write concrete retention note in org item FUP-051 listing:
+- Storage location: artifact manager (session artifacts dir)
+- Surfacing: tool-call-diagnostics.ts formatting
+- Config seams: PI_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS env vars
+- Export paths: session JSONL references artifact URIs
+- Recommended hooks for future retention controls
+
+Documented retention seams in FUP-051 org note.
+
+** DONE Close org lifecycle and commit
+:PROPERTIES:
+:TASK_ID: task-10
+:STATUS: completed
+:DEPENDS: task-9
+:END:
+
+1. Update all child org items to DONE
+2. Update PLAN item to DONE
+3. Commit all changes
+
+Committed as 05d43d1fa. All org items closed. PLAN-218 → DONE.

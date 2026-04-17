@@ -1,0 +1,16 @@
+#+TITLE: Session 14be1e420c74b0e5 Todos
+#+DATE: 2026-04-17
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Design HTML/CSS graph approach
+:PROPERTIES:
+:TASK_ID: design-html-css-graph-plan
+:STATUS: completed
+:ORG_ITEM_ID: PLAN-238-html-css-code-graph-engine-plan
+:END:
+
+Plan covers HTML/CSS-first engine + graph + code-tool rollout with reusable HEEx substrate, conservative refactors, and explicit comprehensive test matrices/edge cases in each child item body. Exit plan mode next.
+
+Created child org items FEAT-553/554/555/556 and FUP-057, created PLAN-238, validated plan item, and mirrored execution waves from explicit DEPENDS DAG after org wave failed to isolate the session subset cleanly.

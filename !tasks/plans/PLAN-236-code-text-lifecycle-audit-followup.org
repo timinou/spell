@@ -1,0 +1,74 @@
+#+TITLE: CODE_TEXT_LIFECYCLE_AUDIT_FOLLOWUP
+#+STATE: ITEM
+#+SESSION_ID: 14bcee07e4b8b89f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-16T13-37-28-466Z_14bcee07e4b8b89f.jsonl]]
+#+CUSTOM_ID: PLAN-236-code-text-lifecycle-audit-followup
+#+EFFORT: 18h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+* Context
+- Source audit: `AUD-070-audit-implementation`
+- Parent implementation baseline: `PLAN-235-code-text-fallback-and-semantic-editing`
+- Request: implement all six audit recommendations together, including full `code` move/delete parity and an end-to-end deterministic replay gate using checked-in sanitized transcript fixtures.
+
+** Settled Decisions
+1. Canonical terminology is `semanticCapable` / semantic-capability, not `supported`. This is a full naming cutover inside coding-agent helpers and result typing; no compatibility aliases remain after implementation.
+2. `code-result` structured details must preserve native `semanticCapable` metadata for `open` and `buffers`; callers must not need injected prose hints to distinguish semantic vs fallback buffers.
+3. Non-binary text persistence must converge further on one managed-buffer lifecycle: patch mode joins replace/hashline on the shared freshness / mutation / save flow, and migrated writes regain immediate diagnostics/writethrough metadata.
+4. `code` grows explicit top-level file commands for `move` and `delete`; the plan does not overload declaration-level `edit` operations or reuse symbol-level `rename` for file moves.
+5. Replay verification remains deterministic and repo-local: checked-in sanitized `.jsonl` fixtures are parsed through the real session parser/migration path; the gate must not read `~/.spell`.
+6. Execution remains split by design decision, not by file count: metadata/naming cleanup, lifecycle/diagnostics convergence, move/delete parity, then replay-gate finalization.
+
+** Recommended Approach
+- Fix the metadata contract and naming drift first so downstream tests/assertions target the right structured surface.
+- Converge patch mode and diagnostics on the managed-buffer lifecycle next; move/delete parity then extends the same lifecycle outward through `code` instead of leaving more behavior inside `edit`.
+- Upgrade the replay gate last so the deterministic corpus locks the final behavior instead of a transient intermediate state.
+
+** Critical Files
+- `packages/coding-agent/src/tools/code-result.ts`
+- `packages/coding-agent/src/tools/code-supported-files.ts`
+- `packages/coding-agent/src/tools/code.ts`
+- `packages/coding-agent/src/prompts/tools/code.md`
+- `packages/coding-agent/src/patch/index.ts`
+- `packages/coding-agent/src/tools/pending-action.ts`
+- `packages/coding-agent/src/tools/resolve.ts`
+- `packages/coding-agent/test/tools/code-result.test.ts`
+- `packages/coding-agent/test/tools/code.test.ts`
+- `packages/coding-agent/test/tools/resolve.test.ts`
+- `packages/coding-agent/test/tools/replay-corpus.test.ts`
+- `packages/coding-agent/test/fixtures/replay-corpus.jsonl`
+- `packages/coding-agent/test/fixtures/replay-corpus.meta.json`
+- `packages/coding-agent/package.json`
+- `crates/pi-natives/src/code_buffer.rs`
+- `packages/natives/test/code-buffer.test.ts`
+
+* Verification
+- Focused TypeScript tests:
+  - `bun test packages/coding-agent/test/tools/code-result.test.ts packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/replay-corpus.test.ts`
+- Focused native/tool tests:
+  - `bun test packages/natives/test/code-buffer.test.ts`
+- Deterministic replay gate:
+  - `bun --cwd=packages/coding-agent run replay-gate`
+- Final checks:
+  - `bun check:ts`
+  - `bun check:rs`
+- Manual proof expectations:
+  - `code open` / `code buffers` structured details expose `semanticCapable`
+  - patch-mode `edit` shares freshness/undo/redo behavior with `code`
+  - `code move` / `code delete` work for fallback text and semantic-capable files with truthful errors
+  - replay gate parses sanitized transcript fixtures through real session parsing helpers
+
+* Execution Manifest
+** Wave 1
+- [[id:BUG-266-coding-agent-preserve-semanticcapable-me]]
+- [[id:BUG-267-coding-agent-route-patch-mode-and-diagno]]
+- Rationale: metadata contract + managed-buffer convergence define the truthful surface everything else builds on.
+
+** Wave 2
+- [[id:FEAT-551-coding-agent-add-code-tool-move-and-dele]]
+- Rationale: file-lifecycle parity extends the converged persistence model into explicit `code` commands.
+
+** Wave 3
+- [[id:FEAT-552-coding-agent-make-replay-gate-exercise-r]]
+- Rationale: deterministic replay coverage should lock the final implemented behavior, including the new move/delete surface.

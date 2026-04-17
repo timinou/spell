@@ -1,0 +1,5 @@
+#+TITLE: Fresh process verified
+#+STATE: ITEM
+#+CUSTOM_ID: BUG-248-fresh-process-verified
+
+repro

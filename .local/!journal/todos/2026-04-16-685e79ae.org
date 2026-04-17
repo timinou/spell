@@ -1,0 +1,39 @@
+#+TITLE: Session 14bcb0d0792f8e78 Todos
+#+DATE: 2026-04-16
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Isolate stale buffer case
+:PROPERTIES:
+:TASK_ID: isolate-stale-buffer-case
+:STATUS: completed
+:END:
+
+Inspect the provided session transcript and relevant coding-agent code paths to identify the concrete case where a code buffer mutation remained unsaved and later triggered the stale-buffer error. Capture exact sequence and owning logic.
+
+Repro isolated from the provided transcript. The successful `resolve` persisted the AST preview to disk, then a later hashline `edit` on the same code-supported file rewrote disk without invalidating the managed code buffer. The subsequent `code edit` freshness guard reported the stale in-memory hunk.
+
+** DONE Fix code autosave path
+:PROPERTIES:
+:TASK_ID: fix-code-autosave-path
+:STATUS: completed
+:DEPENDS: isolate-stale-buffer-case
+:END:
+
+Patch the code tool path so one successful code edit call always persists to disk before returning. Remove the identified stale-buffer gap instead of adding shims or manual recovery. Update any affected save/reconcile logic in packages/coding-agent only.
+
+`packages/coding-agent/src/patch/index.ts` now closes managed code buffers before hashline, patch, or replace-mode edit writes touch code-supported files. That prevents later `code edit` calls from seeing a stale in-memory hunk after an external disk mutation.
+
+** DONE Add stale buffer regression test
+:PROPERTIES:
+:TASK_ID: add-regression-test
+:STATUS: completed
+:GATE_CMD: bun test packages/coding-agent/test --grep "stale buffer"
+:VERIFY_CMD: bun test packages/coding-agent/test --grep "stale buffer"
+:DEPENDS: fix-code-autosave-path
+:END:
+
+Add a focused regression test that reproduces the identified unsaved-buffer edge case and proves the code edit result is flushed to disk automatically. Verify via targeted test command.
+
+Added `it("invalidates managed buffers after hashline edits on code files", ...)` in `packages/coding-agent/test/tools/code.test.ts`. Verified targeted file (`bun test packages/coding-agent/test/tools/code.test.ts`) and gate command (`bun test packages/coding-agent/test --grep "stale buffer"`).

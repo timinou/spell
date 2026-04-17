@@ -1,0 +1,41 @@
+#+TITLE: Session 14ba7200bc964ca8 Todos
+#+DATE: 2026-04-14
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Implement transport normalization fix
+:PROPERTIES:
+:TASK_ID: implement-transport-normalization
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/tools/code.test.ts && cargo test -p pi-natives code_buffer && bun test packages/coding-agent/test/agent-session-resolve-reminder.test.ts && bun check:ts && bun check:rs
+:ORG_ITEM_ID: BUG-260-coding-agent-normalize-empty-transport-f
+:END:
+
+Files: packages/coding-agent/test/tools/code.test.ts, packages/coding-agent/src/tools/code.ts, crates/pi-natives/src/code_buffer.rs, packages/coding-agent/src/tools/ast-edit.ts, packages/coding-agent/src/tools/code-result.ts, packages/coding-agent/test/agent-session-resolve-reminder.test.ts.
+
+Completed. Transport normalization + native guard landed; focused regressions pass. Also fixed repo-local TypeScript blockers in ast-edit/code-result imports and resolve reminder test so bun check:ts passes.
+
+** DONE Close org items and commit
+:PROPERTIES:
+:TASK_ID: close-plan-record
+:STATUS: completed
+:VERIFY_CMD: git rev-parse --short HEAD
+:DEPENDS: implement-transport-normalization
+:ORG_ITEM_ID: PLAN-231-code-edit-transport-normalization
+:END:
+
+Updated !tasks/bugs/BUG-260-coding-agent-normalize-empty-transport-f.org and !tasks/plans/PLAN-231-code-edit-transport-normalization.org; staged only plan-related source/test/org files; committed with conventional message referencing PLAN-231.
+
+BUG-260 and PLAN-231 marked DONE, completion report appended to PLAN-231, and plan-related files committed as 7bbd24957 with message `fix(coding-agent): normalize code edit transport defaults`.
+
+** DONE Report unrelated TypeScript blocker
+:PROPERTIES:
+:TASK_ID: report-typescript-blocker
+:STATUS: completed
+:ORG_ITEM_ID: PLAN-231-code-edit-transport-normalization
+:END:
+
+No open blocker remains. Ancillary fixes were included in the same commit and recorded under PLAN-231 completion deviations.
+
+Resolved instead of reporting permanently. Added minimal fixes in ast-edit/code-result imports and resolve reminder test so `bun check:ts` now passes.

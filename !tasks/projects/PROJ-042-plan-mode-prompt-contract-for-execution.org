@@ -1,0 +1,96 @@
+#+TITLE: Plan-mode prompt contract for execution-first org plans
+#+STATE: ITEM
+#+SESSION_ID: 14bcb670654ffcc4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-16T09-34-35-413Z_14bcb670654ffcc4.jsonl]]
+#+CUSTOM_ID: PROJ-042-plan-mode-prompt-contract-for-execution
+#+EFFORT: 8h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+* Scope
+In scope:
+- Rework the planning prompt contract so PLAN artifacts remain high-context but become execution-first for fresh execution sessions.
+- Update planning-facing prompt surfaces that define what a good plan must contain: `packages/coding-agent/src/prompts/system/plan-mode-active.md`, `packages/coding-agent/src/prompts/system/plan-mode-subagent.md`, and any directly-coupled prompt assertions in prompt-template tests.
+- Introduce explicit PLAN-level implementation guidance requirements in addition to `* Context`, `* Verification`, and `* Execution Manifest`.
+- Require child-item implementation sub-step headings to use TODO-outline form with `ITEM` plus `:CUSTOM_ID:` / `:DEPENDS:`.
+
+Out of scope:
+- Changing the org storage model or category layout.
+- Removing or shortening rationale-heavy sections (`Scope`, `Existing Patterns`, `Tests`, `Edge Cases`, findings/rationale in PLAN `Context`).
+- Planner execution handoff prompts and runtime orchestration wording beyond the surfaces listed above; covered by sibling child item.
+
+Rationale: recent plans are structurally valid but often over-index on exploration findings and critical files, leaving a fresh execution agent to reconstruct the actual implementation path. This item fixes the plan contract at the prompt layer without reducing plan resolution.
+
+* Existing Patterns
+- Spec anchor: `specs/plan-mode-prompt-guidance-2026.md` — canonical findings, bias diagnosis, and target behavior.
+- Prompt template source: `packages/coding-agent/src/prompts/system/plan-mode-active.md` — current org-native plan contract, Org Item Body Standard, wave requirements, and current PLAN-item shape.
+- Planning subagent prompt: `packages/coding-agent/src/prompts/system/plan-mode-subagent.md` — currently ends with `### Critical Files for Implementation`; must evolve to request execution-ready guidance, not only architecture findings.
+- Prompt rendering coverage: `packages/coding-agent/test/system-prompt-templates.test.ts` and `packages/coding-agent/test/prompts/plan-mode-tdd.test.ts`.
+- Existing conventions to preserve: org-native decomposition, `org wave`, `:CUSTOM_ID: CHILD::suboutline-id`, test-first ordering, self-contained fresh-session handoff.
+
+* Tests
+Workflows that must be planned first and then encoded as prompt assertions:
+- Workflow 1: planner produces a child item whose `* Implementation` section uses `** ITEM ...` headings for every implementation sub-step.
+- Workflow 2: planner produces a PLAN item that preserves findings/rationale in `* Context` but also contains explicit PLAN-level implementation guidance, not just a manifest of links.
+- Workflow 3: planning subagent returns implementation-ready findings with concrete execution guidance, not only critical files.
+- Workflow 4: prompt output still preserves the full-resolution context/rationale requirements and does not regress to terse minimal plans.
+
+Test files / scenarios:
+- `packages/coding-agent/test/system-prompt-templates.test.ts`
+  - assert rendered plan-mode-active prompt contains PLAN-level implementation guidance requirements
+  - assert rendered plan-mode-active prompt contains `** ITEM` example headings for child implementation steps
+- `packages/coding-agent/test/prompts/plan-mode-tdd.test.ts`
+  - preserve test-first ordering guidance while updating examples to TODO-outline `ITEM` headings
+- Add / extend prompt test for `packages/coding-agent/src/prompts/system/plan-mode-subagent.md`
+  - assert output asks for execution-ready implementation outline in addition to critical files
+
+* Implementation
+** ITEM Define plan artifact contract
+:PROPERTIES:
+:CUSTOM_ID: PROJ-042-plan-mode-prompt-contract-for-execution::define-plan-contract
+:END:
+- Files: `specs/plan-mode-prompt-guidance-2026.md`, `packages/coding-agent/src/prompts/system/plan-mode-active.md`
+- Translate the spec into prompt-level requirements for PLAN `Context` vs PLAN implementation guidance.
+- Satisfies Workflows 1, 2, and 4.
+
+** ITEM Write prompt rendering tests first
+:PROPERTIES:
+:CUSTOM_ID: PROJ-042-plan-mode-prompt-contract-for-execution::prompt-contract-tests
+:DEPENDS: PROJ-042-plan-mode-prompt-contract-for-execution::define-plan-contract
+:END:
+- Files: `packages/coding-agent/test/system-prompt-templates.test.ts`, `packages/coding-agent/test/prompts/plan-mode-tdd.test.ts`, new/adjacent prompt test for planning subagent prompt.
+- Encode initially-failing assertions for `** ITEM` headings, PLAN-level implementation guidance, and preserved rationale density.
+- Satisfies Workflows 1, 2, 3, and 4.
+
+** ITEM Rewrite active prompt contract
+:PROPERTIES:
+:CUSTOM_ID: PROJ-042-plan-mode-prompt-contract-for-execution::rewrite-active-prompt
+:DEPENDS: PROJ-042-plan-mode-prompt-contract-for-execution::prompt-contract-tests
+:END:
+- File: `packages/coding-agent/src/prompts/system/plan-mode-active.md`
+- Add explicit separation between research findings and execution instructions.
+- Require PLAN-level implementation-oriented heading(s) in addition to `* Execution Manifest`.
+- Update examples so child implementation steps use `ITEM` TODO headings.
+- Satisfies Workflows 1, 2, and 4.
+
+** ITEM Rewrite planning subagent prompt
+:PROPERTIES:
+:CUSTOM_ID: PROJ-042-plan-mode-prompt-contract-for-execution::rewrite-subagent-prompt
+:DEPENDS: PROJ-042-plan-mode-prompt-contract-for-execution::prompt-contract-tests
+:END:
+- File: `packages/coding-agent/src/prompts/system/plan-mode-subagent.md`
+- Keep read-only constraints, but require execution-ready output sections such as implementation outline / first edits / execution risks alongside critical files.
+- Satisfies Workflow 3.
+
+* Edge Cases
+- Plans with rich architectural findings but weak manifests must now be considered incomplete; prompt wording should make this explicit.
+- Smaller tasks must not be forced into shallow or lower-resolution plans; they may have fewer workstreams, but each still needs executable steps.
+- TODO-outline `ITEM` headings must not break test-first ordering guidance; tests still precede implementation where applicable.
+- Prompt updates must not accidentally imply that rationale sections are optional or should be compressed.
+
+* Acceptance Criteria
+- Rendered planning prompts explicitly distinguish high-context findings from execution instructions.
+- Child implementation examples use `** ITEM ...` headings while preserving `:CUSTOM_ID:` / `:DEPENDS:` structure.
+- Rendered plan-mode guidance requires PLAN-level implementation instructions beyond a flat or wave-based manifest.
+- Planning subagent guidance requests implementation-ready output, not only critical files.
+- Prompt tests fail if planning regresses back to findings-heavy but execution-thin output.

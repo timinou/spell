@@ -1,0 +1,47 @@
+#+TITLE: Session 14ba90dc1d2e3497 Todos
+#+DATE: 2026-04-14
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Hardening
+
+** DOING Audit code edit failure modes
+:PROPERTIES:
+:TASK_ID: investigate-code-edit
+:STATUS: in_progress
+:END:
+
+Inspect native + coding-agent code edit paths for additional breakage modes beyond PLAN-232. Reproduce concrete failures where possible. Record any unresolved issue in !tasks/audits/.
+
+Inspecting code edit paths and reproducing additional breakage modes.
+
+** ITEM Implement code edit fixes
+:PROPERTIES:
+:TASK_ID: implement-hardening
+:STATUS: pending
+:DEPENDS: task://investigate-code-edit
+:END:
+
+Apply focused fixes for validated failure modes. Keep full cutover. Add regression tests covering each externally observable bug.
+
+** ITEM Verify code edit hardening
+:PROPERTIES:
+:TASK_ID: verify-hardening
+:STATUS: pending
+:DEPENDS: task://implement-hardening
+:END:
+
+Run focused TS + Rust verification for new regressions and any rebuilt native artifacts required by fresh Bun sessions.
+
+* Investigation
+
+** DOING Inspect native edit paths for remaining breakage modes
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: in_progress
+:END:
+
+** DONE Inspect TS code tool validation/result handling
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:

@@ -1,0 +1,82 @@
+#+TITLE: coding-agent: make replay gate exercise real transcript replay paths
+#+STATE: ITEM
+#+SESSION_ID: 14bcee07e4b8b89f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-16T13-37-28-466Z_14bcee07e4b8b89f.jsonl]]
+#+CUSTOM_ID: FEAT-552-coding-agent-make-replay-gate-exercise-r
+#+EFFORT: 4h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+#+DEPENDS: BUG-267-coding-agent-route-patch-mode-and-diagno FEAT-551-coding-agent-add-code-tool-move-and-dele
+
+* Scope
+- In scope: upgrade the replay gate from fixture-shape validation to deterministic end-to-end replay of checked-in sanitized transcript fixtures through the real session/transcript parsing path.
+- In scope: keep the gate fully deterministic and repo-local; it must not read `~/.spell` or depend on mutable local session state at test time.
+- In scope: expand the checked-in corpus and metadata as needed so replay assertions cover the behaviors introduced by this audit plan, including fallback text flows and file-lifecycle parity.
+- Out of scope: live integration against a user’s actual recent sessions directory. The gate must stay deterministic.
+
+* Existing Patterns
+- `packages/coding-agent/test/tools/replay-corpus.test.ts`
+  - current fixture-shape gate to replace/expand
+- `packages/coding-agent/test/fixtures/replay-corpus.jsonl`
+- `packages/coding-agent/test/fixtures/replay-corpus.meta.json`
+- `packages/coding-agent/src/session/session-manager.ts`
+  - `parseSessionEntries(content)`
+  - `migrateSessionEntries(entries)`
+- Existing fixture-loading pattern:
+  - `packages/coding-agent/test/compaction.test.ts` via checked-in `.jsonl` and `parseSessionEntries(...)`
+- Package command surface:
+  - `packages/coding-agent/package.json` `replay-gate`
+
+* Tests
+- Workflow 1: replay gate parses the checked-in transcript corpus through the real session parser (`parseSessionEntries` / migrations) without reading external session directories.
+- Workflow 2: replay gate asserts the corpus actually contains replay-relevant message/tool-call shapes for semantic-capable edit cases, fallback text cases, semantic-hint discovery cases, and final move/delete parity cases.
+- Workflow 3: malformed fixture entries fail deterministically with explicit assertions.
+- Workflow 4: replay gate command remains package-local and deterministic from `packages/coding-agent`.
+- Workflow 5: corpus metadata and test expectations stay aligned; drift is caught by the test.
+
+* Implementation
+** Define the deterministic replay contract
+:PROPERTIES:
+:CUSTOM_ID: FEAT-552-coding-agent-make-replay-gate-exercise-r::define-contract
+:DEPENDS: BUG-267-coding-agent-route-patch-mode-and-diagno::resolve-contract FEAT-551-coding-agent-add-code-tool-move-and-dele::interoperability
+:END:
+- Files: `packages/coding-agent/test/tools/replay-corpus.test.ts`, `packages/coding-agent/test/fixtures/replay-corpus.*`
+- Recommended approach: keep sanitized checked-in `.jsonl` fixtures, but parse them through the real session parser and assert replay-relevant structures instead of only validating raw JSON shape.
+
+** Write failing replay assertions first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-552-coding-agent-make-replay-gate-exercise-r::write-tests
+:DEPENDS: FEAT-552-coding-agent-make-replay-gate-exercise-r::define-contract
+:END:
+- File: `packages/coding-agent/test/tools/replay-corpus.test.ts`
+- Encode Workflows 1–5 as initially failing tests.
+- Assert real parser/migration traversal, not just `JSON.parse` line-by-line.
+
+** Expand sanitized fixtures and metadata
+:PROPERTIES:
+:CUSTOM_ID: FEAT-552-coding-agent-make-replay-gate-exercise-r::fixtures
+:DEPENDS: FEAT-552-coding-agent-make-replay-gate-exercise-r::write-tests
+:END:
+- Files: `packages/coding-agent/test/fixtures/replay-corpus.jsonl`, `packages/coding-agent/test/fixtures/replay-corpus.meta.json`
+- Add or adjust sanitized fixtures so the corpus covers the final implemented behaviors, including fallback text lifecycle and new move/delete `code` commands.
+- Keep all content deterministic and scrubbed.
+
+** Reconcile the package command contract
+:PROPERTIES:
+:CUSTOM_ID: FEAT-552-coding-agent-make-replay-gate-exercise-r::command-contract
+:DEPENDS: FEAT-552-coding-agent-make-replay-gate-exercise-r::fixtures
+:END:
+- File: `packages/coding-agent/package.json`
+- Ensure `bun run replay-gate` remains the canonical deterministic verification entry point for this corpus.
+
+* Edge Cases
+- Session fixtures may require migration before assertions; do not bypass migration helpers if the parser path expects them.
+- Tool-call payloads may be partially malformed by design; malformed coverage must stay explicit and deterministic.
+- Avoid assertions that depend on exact local paths, timestamps, or machine-specific session IDs beyond sanitized fixed values.
+- Update metadata and parser assertions in the same change when move/delete coverage is added so the corpus stays representative.
+
+* Acceptance Criteria
+- Replay gate parses checked-in transcript fixtures through the real session parsing path.
+- The gate remains deterministic and package-local; no dependency on `~/.spell` or mutable local sessions.
+- The corpus asserts replay-relevant structures for semantic edit, fallback text, semantic hints, malformed entries, and new lifecycle commands introduced by this plan.
+- `bun --cwd=packages/coding-agent run replay-gate` remains the single documented verification command.

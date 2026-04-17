@@ -1,0 +1,15 @@
+#+TITLE: Session 14be1f6c92f4c15c Todos
+#+DATE: 2026-04-17
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Ask clarifying questions
+:PROPERTIES:
+:TASK_ID: ask-clarifying-questions
+:STATUS: completed
+:END:
+
+Used ask to challenge scope, trigger mode, inline residue, failure handling, global reach, threshold values, and override shape before creating org items. Child items and plan now reflect the settled design decisions and estimated gains from .local/token-usage/token-usage-review.data.js.
+
+Settled decisions: hybrid low-spill default; exempt precision tools; 2.5KB or 50-line trigger; 1KB/50-line success residue; 5KB/120-line failure residue; bash-only per-call lenientSpill override with warning; artifact:// follow-up workflow retained.

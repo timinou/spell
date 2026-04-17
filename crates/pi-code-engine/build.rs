@@ -73,6 +73,18 @@ const GRAMMARS: &[GrammarSource] = &[
 		json_subpath:    "src/node-types.json",
 	},
 	GrammarSource {
+		name:            "html",
+		dependency_name: Some("tree-sitter-html"),
+		package_prefix:  "tree-sitter-html-",
+		json_subpath:    "src/node-types.json",
+	},
+	GrammarSource {
+		name:            "css",
+		dependency_name: Some("tree-sitter-css"),
+		package_prefix:  "tree-sitter-css-",
+		json_subpath:    "src/node-types.json",
+	},
+	GrammarSource {
 		name:            "typst",
 		dependency_name: Some("codebook-tree-sitter-typst"),
 		package_prefix:  "codebook-tree-sitter-typst-",

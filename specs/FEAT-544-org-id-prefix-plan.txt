@@ -1,0 +1,10 @@
+FEAT-544 org sub-outline ID prefix fix
+Scope:
+- File: /home/user/code/ora/spell/!tasks/features/FEAT-544-return-body-in-org-create-and-update-mut.org
+- Replace sub-outline CUSTOM_ID values with full parent prefix FEAT-544-return-body-in-org-create-and-update-mut::...
+- Replace DEPENDS values to full prefixed form
+- No other edits
+Acceptance:
+- grep shows only prefixed CUSTOM_ID values for body-response-tests, body-response-impl, format-body
+- grep shows DEPENDS references also prefixed
+- file content otherwise unchanged

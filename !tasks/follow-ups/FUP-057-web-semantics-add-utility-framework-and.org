@@ -1,0 +1,55 @@
+#+TITLE: web semantics: add utility-framework and single-file-component support after core HTML/CSS
+#+STATE: ITEM
+#+SESSION_ID: 14be1e420c74b0e5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T11-46-39-793Z_14be1e420c74b0e5.jsonl]]
+#+CUSTOM_ID: FUP-057-web-semantics-add-utility-framework-and
+#+EFFORT: 16h
+#+LAYER: web-semantics
+#+PRIORITY: #B
+#+DEPENDS: FEAT-556-coding-agent-surface-html-css-code-tool
+
+* Scope
+- In scope: capture the deliberate post-core expansion surface after HTML/CSS semantics land: utility frameworks, CSS Modules/CSS-in-JS adapters, and single-file component/template hosts such as HEEx full-template semantics, Vue, Svelte, Astro, and MDX-style HTML hosts.
+- In scope: preserve the decisions that core work should not overfit to any one framework, while still identifying the reusable contracts those later integrations must consume.
+- Out of scope: implementing any of these expansions inside the core HTML/CSS rollout.
+
+* Existing Patterns
+- `crates/pi-code-engine/src/language/profile.rs`
+  - future hosts should consume the affordance DSL instead of adding bespoke extractors whenever possible.
+- `crates/pi-code-engine/src/language/mod.rs`
+  - built-in language registration now becomes the expansion point for follow-on host/template languages.
+- `crates/pi-code-graph/src/language/elixir.rs`
+  - current HEEx handling is intentionally minimal and should be refactored onto the new HTML/CSS substrate rather than extended indefinitely.
+- `crates/pi-code-graph/src/model.rs`, `src/query.rs`
+  - style-specific symbol/edge kinds introduced by the core rollout should be reused by utility/SFC integrations.
+
+* Tests
+- Workflow 1: utility frameworks are modeled as token systems over the core HTML/CSS graph, not as raw string grep.
+- Workflow 2: SFC/template hosts reuse host/guest region contracts so HTML/CSS semantics do not get reimplemented per framework.
+- Workflow 3: dynamic-class-heavy ecosystems are confidence-aware and refuse unsafe dead-style claims.
+- Workflow 4: framework integrations preserve the conservative refactor posture established by the core rollout.
+- Future test files likely include dedicated host-language extractors plus fixture workspaces for Tailwind-like utilities and SFC embeddings.
+
+* Implementation
+** Inventory reusable contracts from the core rollout
+:PROPERTIES:
+:CUSTOM_ID: FUP-057-web-semantics-add-utility-framework-and::inventory-contracts
+:DEPENDS: FEAT-556-coding-agent-surface-html-css-code-tool::conservative-refactors
+:END:
+- Document which DSL nodes, graph edges, confidence states, and code-tool payloads proved reusable versus framework-specific.
+
+** Add one framework family at a time behind the core contracts
+:PROPERTIES:
+:CUSTOM_ID: FUP-057-web-semantics-add-utility-framework-and::incremental-hosts
+:DEPENDS: FUP-057-web-semantics-add-utility-framework-and::inventory-contracts
+:END:
+- Sequence recommendation: full HEEx host semantics first, then utility frameworks, then other SFC/template hosts.
+- Each addition must bring its own fixture matrix and refusal cases before implementation.
+
+* Edge Cases
+- Framework-specific compile steps or macro expansion may require new confidence states rather than pretending exact static truth.
+- Generated class names, variant prefixes, and scoped-style hashes should not be forced into the core HTML/CSS model prematurely.
+
+* Acceptance Criteria
+- The follow-up preserves architectural direction: reuse the core substrate, do not fork it.
+- Later framework work remains explicitly blocked until the core HTML/CSS rollout is complete and verified.

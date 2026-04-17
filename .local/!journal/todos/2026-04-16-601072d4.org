@@ -1,0 +1,13 @@
+#+TITLE: Session 14bd0c177dd30e31 Todos
+#+DATE: 2026-04-16
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Approval
+
+** DOING Present plan approval handoff
+:PROPERTIES:
+:TASK_ID: present-plan-approval
+:STATUS: in_progress
+:END:
+
+Retrieve PLAN-234-plan-mode-execution-first-handoff, verify it is ready for approval handoff, then call exit_plan_mode with the final plan title and item CUSTOM_ID.

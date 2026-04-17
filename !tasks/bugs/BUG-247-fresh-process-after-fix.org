@@ -1,0 +1,5 @@
+#+TITLE: Fresh process after fix
+#+STATE: ITEM
+#+CUSTOM_ID: BUG-247-fresh-process-after-fix
+
+repro

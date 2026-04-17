@@ -1,0 +1,99 @@
+#+TITLE: coding-agent: add code-tool move and delete lifecycle parity
+#+STATE: ITEM
+#+SESSION_ID: 14bcee07e4b8b89f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-16T13-37-28-466Z_14bcee07e4b8b89f.jsonl]]
+#+CUSTOM_ID: FEAT-551-coding-agent-add-code-tool-move-and-dele
+#+DEPENDS: BUG-267-coding-agent-route-patch-mode-and-diagno
+#+EFFORT: 6h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+* Scope
+- In scope: add explicit `code` file-lifecycle support for move and delete so those operations no longer live only in `edit` during the migration window.
+- In scope: extend the TypeScript schema, tool documentation, result typing/rendering, and native code-buffer bridge so move/delete are first-class `code` file commands with truthful semantics.
+- In scope: preserve managed-buffer invalidation, filesystem cache invalidation, and error reporting for semantic-capable and fallback-text files.
+- Out of scope: removing the temporary `edit` adapter entirely. That remains the existing follow-up once parity is proven.
+
+* Existing Patterns
+- `packages/coding-agent/src/tools/code.ts`
+  - file-command dispatch / freshness handling / mutating command handling
+  - command-schema validation patterns
+- `packages/coding-agent/src/tools/code-result.ts`
+  - command-specific result typing + `formatCodeToolContent(...)`
+- `packages/coding-agent/src/prompts/tools/code.md`
+  - tool contract documentation must stay aligned with the real command surface
+- `crates/pi-natives/src/code_buffer.rs`
+  - top-level file lifecycle command dispatch already handles `open`, `close`, `save`, `replace_content`, `edit`, etc.
+- `packages/coding-agent/src/tools/fs-cache-invalidation.ts`
+  - `invalidateFsScanAfterDelete(...)`
+  - `invalidateFsScanAfterRename(...)`
+- Buffer invalidation patterns:
+  - `packages/coding-agent/src/tools/pending-action.ts`
+  - `packages/coding-agent/src/patch/index.ts`
+- Tests to extend:
+  - `packages/coding-agent/test/tools/code.test.ts`
+  - `packages/natives/test/code-buffer.test.ts`
+
+* Tests
+- Workflow 1: `code delete { file }` deletes an existing text file, returns truthful success details, and invalidates any managed buffer for that path.
+- Workflow 2: `code move { file, destination }` moves an existing file, preserves content, invalidates source/destination buffer state, and invalidates filesystem scan caches on both paths.
+- Workflow 3: move/delete behave truthfully for fallback text buffers and semantic-capable files.
+- Workflow 4: missing source paths, existing destinations, and illegal payload combinations produce explicit errors rather than silent no-ops.
+- Workflow 5: tool docs and structured details match the final command surface exactly.
+- Workflow 6: `edit`/`code` interoperability remains truthful after move/delete parity lands; no stale-buffer false positives when a follow-up `code` command touches the moved path.
+
+* Implementation
+** Define the command surface and payload contract
+:PROPERTIES:
+:CUSTOM_ID: FEAT-551-coding-agent-add-code-tool-move-and-dele::define-contract
+:DEPENDS: BUG-267-coding-agent-route-patch-mode-and-diagno::resolve-contract
+:END:
+- Files: `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/tools/code-result.ts`, `packages/coding-agent/src/prompts/tools/code.md`
+- Recommended approach: add explicit top-level file commands `delete` and `move` to the `code` tool, with a dedicated `destination` parameter for move. Do not overload semantic `edit` operations or reuse declaration-level `rename`.
+
+** Write failing TypeScript and native tests first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-551-coding-agent-add-code-tool-move-and-dele::write-tests
+:DEPENDS: FEAT-551-coding-agent-add-code-tool-move-and-dele::define-contract
+:END:
+- Files: `packages/coding-agent/test/tools/code.test.ts`, `packages/natives/test/code-buffer.test.ts`
+- Encode Workflows 1–6 as initially failing tests.
+- Cover fallback text and semantic-capable files, plus error-path boundaries.
+
+** Extend native file lifecycle commands
+:PROPERTIES:
+:CUSTOM_ID: FEAT-551-coding-agent-add-code-tool-move-and-dele::native-commands
+:DEPENDS: FEAT-551-coding-agent-add-code-tool-move-and-dele::write-tests
+:END:
+- File: `crates/pi-natives/src/code_buffer.rs`
+- Implement top-level `move` / `delete` file commands with truthful error handling and buffer invalidation semantics.
+- Reuse existing cache/buffer lifecycle patterns instead of inventing a parallel command path.
+
+** Wire schema docs and result rendering
+:PROPERTIES:
+:CUSTOM_ID: FEAT-551-coding-agent-add-code-tool-move-and-dele::tool-surface
+:DEPENDS: FEAT-551-coding-agent-add-code-tool-move-and-dele::native-commands
+:END:
+- Files: `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/tools/code-result.ts`, `packages/coding-agent/src/prompts/tools/code.md`
+- Add `delete` / `move` to the schema and textual guidance.
+- Add result-detail types and formatting for both commands.
+
+** Reconcile adapter interplay and stale-buffer behavior
+:PROPERTIES:
+:CUSTOM_ID: FEAT-551-coding-agent-add-code-tool-move-and-dele::interoperability
+:DEPENDS: FEAT-551-coding-agent-add-code-tool-move-and-dele::tool-surface
+:END:
+- Files: `packages/coding-agent/src/patch/index.ts`, tests only if behavior changes require it.
+- Ensure Workflow 6 stays truthful while the temporary `edit` adapter still exists.
+
+* Edge Cases
+- Destination path must be explicit and validated; avoid overloading `content` or declaration-level `rename` semantics.
+- Deleting an open buffer must not leave stale buffer entries behind.
+- Moving across semantic/fallback extension boundaries must not lie about semantic support after the destination opens again.
+- Existing destination handling must be explicit: either reject or replace, but the command contract must state which and tests must lock it down.
+
+* Acceptance Criteria
+- `code` exposes explicit move/delete file commands with matching docs, schema, and result details.
+- Move/delete no longer require `edit` for plain file-lifecycle parity.
+- Focused native and coding-agent tests prove buffer invalidation, cache invalidation, and truthful error handling.
+- The migration surface is more complete, but the temporary adapter remains documented separately for later removal.

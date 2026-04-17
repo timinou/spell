@@ -1,0 +1,73 @@
+#+TITLE: Session 14bcee07e4b8b89f Todos
+#+DATE: 2026-04-16
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Inspect plan235 current state
+:PROPERTIES:
+:TASK_ID: inspect-state
+:STATUS: completed
+:ORG_ITEM_ID: PLAN-235-code-text-fallback-and-semantic-editing
+:END:
+
+Read linked org items, inspect current code/test surfaces, derive exact file targets and wave boundaries for PLAN-235 execution. No edits beyond task orchestration.
+
+Identified current hard gate in code-supported-files/code.ts, native buffer extension gating in pi-code-engine buffer.rs, NAPI dispatch in crates/pi-natives/src/code_buffer.rs, adapter surface in patch/index.ts, and relevant TS/Rust test files. Found partial local WIP already touching patch/index.ts + code.test.ts; will absorb into full cutover rather than discard blindly.
+
+** DONE Land plan235 implementation
+:PROPERTIES:
+:TASK_ID: land-implementation
+:STATUS: completed
+:DEPENDS: inspect-state
+:ORG_ITEM_ID: PLAN-235-code-text-fallback-and-semantic-editing
+:END:
+
+Execute wave tasks for replay corpus, verification gate, text fallback, edit adapter, hints, and tests. Use subagents where scopes are independent. Keep implementation aligned with plan and current repo patterns.
+
+Landed replay corpus gate, native text fallback, semantic/text hints, managed text lifecycle tests, and edit-to-code-buffer routing for replace/hashline text writes. Added focused Rust history/BOM/CRLF tests and native/code-tool coverage. Also repaired small clippy blocker in clone.rs so final rs checks pass truthfully.
+
+** DONE Verify and close plan235
+:PROPERTIES:
+:TASK_ID: verify-close
+:STATUS: completed
+:DEPENDS: land-implementation
+:ORG_ITEM_ID: PLAN-235-code-text-fallback-and-semantic-editing
+:ORG_ITEM_CLOSING_ID: PLAN-235-code-text-fallback-and-semantic-editing
+:END:
+
+Run required targeted/final verification, update org completion report, reconcile child org states, stage only relevant files, and commit with conventional message referencing the plan.
+
+Verified focused TS/native/Rust gates plus repo checks, updated linked org items and plan completion report, committed scoped changes as f181d1c8a.
+
+* Plan235Implementation
+
+** BLOCKED Add native text fallback capabilities
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: failed
+:END:
+
+* Plan235Design
+
+** BLOCKED Review fallback architecture
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: failed
+:END:
+
+* Plan235Implementation
+
+** BLOCKED Implement native text fallback with explicit capability metadata
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: failed
+:END:
+
+* Plan235Implementation
+
+** BLOCKED Route edit text mutations through code lifecycle
+:PROPERTIES:
+:TASK_ID: task-5
+:STATUS: failed
+:END:

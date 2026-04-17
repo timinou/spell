@@ -12,7 +12,8 @@ import { truncateToVisualLines } from "../modes/components/visual-truncate";
 import type { Theme } from "../modes/theme/theme";
 import bashDescription from "../prompts/tools/bash.md" with { type: "text" };
 import { enforceBashCommand } from "../sandbox";
-import { DEFAULT_MAX_BYTES, TailBuffer } from "../session/streaming-output";
+import { getRetainedSpillBudget, resolveToolSpillPolicy } from "../session/spill-policy";
+import { TailBuffer } from "../session/streaming-output";
 import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import { getSixelLineMask } from "../utils/sixel";
@@ -21,7 +22,9 @@ import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-intera
 import { checkBashInterception } from "./bash-interceptor";
 import { applyHeadTail } from "./bash-normalize";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
-import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
+
+import { formatOutputNotice, formatStyledTruncationWarning, outputMeta, type OutputMeta } from "./output-meta";
+
 import { resolveToCwd } from "./path-utils";
 import { replaceTabs } from "./render-utils";
 import { ToolAbortError, ToolError } from "./tool-errors";
@@ -31,6 +34,7 @@ import { clampTimeout } from "./tool-timeouts";
 export const BASH_DEFAULT_PREVIEW_LINES = 10;
 
 const BASH_ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const LENIENT_SPILL_WARNING = "[lenientSpill enabled: using legacy wider inline spill budget for this bash call only]";
 
 const bashSchemaBase = Type.Object({
 	command: Type.String({ description: "Command to execute" }),
@@ -47,6 +51,11 @@ const bashSchemaBase = Type.Object({
 	pty: Type.Optional(
 		Type.Boolean({
 			description: "Run in PTY mode when command needs a real terminal (e.g. sudo/ssh/top/less); default: false",
+		}),
+	),
+	lenientSpill: Type.Optional(
+		Type.Boolean({
+			description: "Use the legacy wider inline spill budget for this bash call only; default: false",
 		}),
 	),
 });
@@ -71,12 +80,14 @@ export interface BashToolInput {
 	tail?: number;
 	async?: boolean;
 	pty?: boolean;
+	lenientSpill?: boolean;
 }
 
 export interface BashToolDetails {
 	meta?: OutputMeta;
 	exitCode?: number;
 	cwd?: string;
+	lenientSpill?: boolean;
 	async?: {
 		state: "running" | "completed" | "failed";
 		jobId: string;
@@ -240,28 +251,55 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		return outputText;
 	}
 
+	#applyWarnings(outputText: string, lenientSpill: boolean): string {
+		return lenientSpill ? `${LENIENT_SPILL_WARNING}\n${outputText}` : outputText;
+	}
+
+	#appendTruncationNotice(outputText: string, result: BashResult | BashInteractiveResult): string {
+		const meta = outputMeta().truncationFromSummary(result, { direction: "tail" }).get();
+		return meta ? outputText + formatOutputNotice(meta) : outputText;
+	}
+
 	#buildResultText(
 		result: BashResult | BashInteractiveResult,
 		timeoutSec: number,
 		outputText: string,
 		cwd: string,
+		lenientSpill: boolean,
 	): string {
+		const warnedOutput = this.#applyWarnings(outputText, lenientSpill);
+		const errorOutput = this.#appendTruncationNotice(warnedOutput, result);
 		if (result.cancelled) {
-			throw new ToolError(normalizeResultOutput(result) || "Command aborted", { cwd });
+			throw new ToolError(
+				this.#appendTruncationNotice(
+					this.#applyWarnings(normalizeResultOutput(result) || "Command aborted", lenientSpill),
+					result,
+				),
+				{ cwd },
+			);
 		}
 		if (isInteractiveResult(result) && result.timedOut) {
-			throw new ToolError(normalizeResultOutput(result) || `Command timed out after ${timeoutSec} seconds`, { cwd });
+			throw new ToolError(
+				this.#appendTruncationNotice(
+					this.#applyWarnings(
+						normalizeResultOutput(result) || `Command timed out after ${timeoutSec} seconds`,
+						lenientSpill,
+					),
+					result,
+				),
+				{ cwd },
+			);
 		}
 		if (result.exitCode === undefined) {
-			throw new ToolError(`${outputText}\n\nCommand failed: missing exit status`, { cwd });
+			throw new ToolError(`${errorOutput}\n\nCommand failed: missing exit status`, { cwd });
 		}
 		if (result.exitCode !== 0) {
-			throw new ToolError(`${outputText}\n\nCommand exited with code ${result.exitCode}`, {
+			throw new ToolError(`${errorOutput}\n\nCommand exited with code ${result.exitCode}`, {
 				exitCode: result.exitCode,
 				cwd,
 			});
 		}
-		return outputText;
+		return warnedOutput;
 	}
 
 	async execute(
@@ -275,6 +313,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			tail,
 			async: asyncRequested = false,
 			pty = false,
+			lenientSpill = false,
 		}: BashToolInput,
 		signal?: AbortSignal,
 		onUpdate?: AgentToolUpdateCallback<BashToolDetails>,
@@ -357,6 +396,12 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		// Clamp to reasonable range: 1s - 3600s (1 hour)
 		const timeoutSec = clampTimeout("bash", rawTimeout);
 		const timeoutMs = timeoutSec * 1000;
+		const spillPolicy = resolveToolSpillPolicy({
+			settings: this.session.settings,
+			toolName: this.name,
+			lenient: lenientSpill,
+		});
+		const retainedBudget = getRetainedSpillBudget(spillPolicy);
 
 		if (asyncRequested) {
 			const manager = this.session.asyncJobManager;
@@ -364,7 +409,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				throw new ToolError("Async job manager unavailable for this session.");
 			}
 			const label = command.length > 120 ? `${command.slice(0, 117)}...` : command;
-			const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES);
+			const tailBuffer = new TailBuffer(retainedBudget.maxBytes);
 			const jobId = manager.register(
 				"bash",
 				label,
@@ -380,18 +425,28 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 							env: resolvedEnv,
 							artifactPath,
 							artifactUri,
+							spillPolicy,
 							onChunk: chunk => {
 								tailBuffer.append(chunk);
-								void reportProgress(tailBuffer.text(), { async: { state: "running", jobId, type: "bash" } });
+								void reportProgress(tailBuffer.text(), {
+									async: { state: "running", jobId, type: "bash" },
+									lenientSpill: lenientSpill || undefined,
+								});
 							},
 						});
 						const outputText = this.#formatResultOutput(result, headLines, tailLines);
-						const finalText = this.#buildResultText(result, timeoutSec, outputText, commandCwd);
-						await reportProgress(finalText, { async: { state: "completed", jobId, type: "bash" } });
+						const finalText = this.#buildResultText(result, timeoutSec, outputText, commandCwd, lenientSpill);
+						await reportProgress(finalText, {
+							async: { state: "completed", jobId, type: "bash" },
+							lenientSpill: lenientSpill || undefined,
+						});
 						return finalText;
 					} catch (error) {
 						const message = error instanceof Error ? error.message : String(error);
-						await reportProgress(message, { async: { state: "failed", jobId, type: "bash" } });
+						await reportProgress(message, {
+							async: { state: "failed", jobId, type: "bash" },
+							lenientSpill: lenientSpill || undefined,
+						});
 						throw error;
 					}
 				},
@@ -403,12 +458,12 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			);
 			return {
 				content: [{ type: "text", text: `Background job ${jobId} started: ${label}` }],
-				details: { async: { state: "running", jobId, type: "bash" } },
+				details: { async: { state: "running", jobId, type: "bash" }, lenientSpill: lenientSpill || undefined },
 			};
 		}
 
 		// Track output for streaming updates (tail only)
-		const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES);
+		const tailBuffer = new TailBuffer(retainedBudget.maxBytes);
 
 		// Allocate artifact for truncated output storage
 		const { path: artifactPath, uri: artifactUri } = (await this.session.allocateOutputArtifact?.("bash")) ?? {};
@@ -423,6 +478,7 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					env: resolvedEnv,
 					artifactPath,
 					artifactUri,
+					spillPolicy,
 				})
 			: await executeBash(command, {
 					cwd: commandCwd,
@@ -432,40 +488,34 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 					env: resolvedEnv,
 					artifactPath,
 					artifactUri,
+					spillPolicy,
 					onChunk: chunk => {
 						tailBuffer.append(chunk);
 						if (onUpdate) {
 							onUpdate({
 								content: [{ type: "text", text: tailBuffer.text() }],
-								details: {},
+								details: { lenientSpill: lenientSpill || undefined },
 							});
 						}
 					},
 				});
-		if (result.cancelled) {
-			if (signal?.aborted) {
-				throw new ToolAbortError(normalizeResultOutput(result) || "Command aborted");
-			}
-			throw new ToolError(normalizeResultOutput(result) || "Command aborted", { cwd: commandCwd });
-		}
-		if (isInteractiveResult(result) && result.timedOut) {
-			throw new ToolError(normalizeResultOutput(result) || `Command timed out after ${timeoutSec} seconds`, {
-				cwd: commandCwd,
-			});
-		}
 
+		if (result.cancelled && signal?.aborted) {
+			throw new ToolAbortError(
+				this.#appendTruncationNotice(
+					this.#applyWarnings(normalizeResultOutput(result) || "Command aborted", lenientSpill),
+					result,
+				),
+			);
+		}
 		const outputText = this.#formatResultOutput(result, headLines, tailLines);
-		const details: BashToolDetails = { exitCode: result.exitCode, cwd: commandCwd };
-		const resultBuilder = toolResult(details).text(outputText).truncationFromSummary(result, { direction: "tail" });
-		if (result.exitCode === undefined) {
-			throw new ToolError(`${outputText}\n\nCommand failed: missing exit status`, { cwd: commandCwd });
-		}
-		if (result.exitCode !== 0 && result.exitCode !== undefined) {
-			throw new ToolError(`${outputText}\n\nCommand exited with code ${result.exitCode}`, {
-				exitCode: result.exitCode,
-				cwd: commandCwd,
-			});
-		}
+		const finalText = this.#buildResultText(result, timeoutSec, outputText, commandCwd, lenientSpill);
+		const details: BashToolDetails = {
+			exitCode: result.exitCode,
+			cwd: commandCwd,
+			lenientSpill: lenientSpill || undefined,
+		};
+		const resultBuilder = toolResult(details).text(finalText).truncationFromSummary(result, { direction: "tail" });
 
 		return resultBuilder.done();
 	}

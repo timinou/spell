@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { getAgentDir, getProjectDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { getRetainedSpillBudget, resolveToolSpillPolicy, type SpillPolicy } from "../session/spill-policy";
 import { OutputSink } from "../session/streaming-output";
 import { shutdownSharedGateway } from "./gateway-coordinator";
 import {
@@ -41,6 +42,7 @@ export interface PythonExecutorOptions {
 	/** Artifact path/URI for full output storage */
 	artifactPath?: string;
 	artifactUri?: string;
+	spillPolicy?: SpillPolicy;
 }
 
 export interface PythonKernelExecutor {
@@ -450,11 +452,21 @@ async function executeWithKernel(
 	code: string,
 	options: PythonExecutorOptions | undefined,
 ): Promise<PythonResult> {
+	const spillPolicy = options?.spillPolicy ?? resolveToolSpillPolicy({ toolName: "python" });
+	const retainedBudget = getRetainedSpillBudget(spillPolicy);
 	const sink = new OutputSink({
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactUri: options?.artifactUri,
+		spillThresholdBytes: spillPolicy.trigger.maxBytes,
+		spillThresholdLines: spillPolicy.trigger.maxLines,
+		retainMaxBytes: retainedBudget.maxBytes,
+		retainMaxLines: retainedBudget.maxLines,
 	});
+	const dump = async (success: boolean, notice?: string) => {
+		const budget = success ? spillPolicy.success : spillPolicy.failure;
+		return await sink.dump({ notice, maxBytes: budget.maxBytes, maxLines: budget.maxLines });
+	};
 	const displayOutputs: KernelDisplayOutput[] = [];
 
 	try {
@@ -474,7 +486,7 @@ async function executeWithKernel(
 				cancelled: true,
 				displayOutputs,
 				stdinRequested: result.stdinRequested,
-				...(await sink.dump(annotation)),
+				...(await dump(false, annotation)),
 			};
 		}
 
@@ -484,7 +496,7 @@ async function executeWithKernel(
 				cancelled: false,
 				displayOutputs,
 				stdinRequested: true,
-				...(await sink.dump("Kernel requested stdin; interactive input is not supported.")),
+				...(await dump(false, "Kernel requested stdin; interactive input is not supported.")),
 			};
 		}
 
@@ -494,7 +506,7 @@ async function executeWithKernel(
 			cancelled: false,
 			displayOutputs,
 			stdinRequested: false,
-			...(await sink.dump()),
+			...(await dump(exitCode === 0)),
 		};
 	} catch (err) {
 		const error = err instanceof Error ? err : new Error(String(err));

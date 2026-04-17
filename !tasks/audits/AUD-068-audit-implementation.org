@@ -1,0 +1,44 @@
+#+TITLE: Audit: implementation
+#+STATE: DONE
+#+SESSION_ID: 14ba90dc1d2e3497
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-14T17-33-26-516Z_14ba90dc1d2e3497.jsonl]]
+#+CUSTOM_ID: AUD-068-audit-implementation
+
+* Initial Message
+
+dude. try to find other ways in which this could break. this is important. fix them. I have restarted the session so you are using the stuff you have made. if you see a problem, list it in the audit
+
+* Source
+Manual audit
+
+* Findings
+- **What**: `undo` / `redo` bypassed the mode write guard and could still persist disk changes in read-only / plan / audit modes via the normal auto-save path.
+  - **Where**: `packages/coding-agent/src/tools/code.ts`
+  - **Why**: the guard only checked `edit` / `save`, while `undo` and `redo` were already classified as mutating commands.
+  - **Resolution**: guard now uses `MUTATING_COMMANDS.has(command) || command === "save"`; added regression tests for both commands.
+
+- **What**: `clone` concatenated cloned nodes onto the original declaration or lost sibling indentation.
+  - **Where**: `crates/pi-code-engine/src/edit/clone.rs`
+  - **Why**: the inserted clone text had no structural separator/indent derived from the target line.
+  - **Resolution**: clone now emits the duplicate on its own line with matching indent; added regressions for top-level function and indented method cloning.
+
+- **What**: `dirty` stayed `true` after undo / redo returned the buffer to the last saved state.
+  - **Where**: `crates/pi-code-engine/src/buffer.rs`
+  - **Why**: undo/redo reused low-level mutation code that always marks dirty, but never recomputed cleanliness relative to the saved history position.
+  - **Resolution**: history now tracks the saved revision; undo/redo recompute `dirty` from that state; added regression tests for undo/save/redo transitions.
+
+- **What**: successful `open` / `close` operations normalized as `languages`, producing lying result text.
+  - **Where**: `packages/coding-agent/src/tools/code-result.ts`
+  - **Why**: `open` / `close` were accepted by the runtime path but absent from the result normalization/format unions.
+  - **Resolution**: added explicit open/close details + formatting branches and tests.
+
+- **What**: failed `edit` operations no longer invalidated the managed buffer before returning the error.
+  - **Where**: `packages/coding-agent/src/tools/code.ts`
+  - **Why**: the edit-error branch returned immediately without the prior `close` invalidation step.
+  - **Resolution**: failed edits now close the buffer before surfacing the original error; existing regression now passes.
+
+* Verification
+- `bun --cwd=packages/natives run build:native`
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts`
+- `cargo test -p pi-code-engine test_clone_`
+- `cargo test -p pi-code-engine test_dirty_`

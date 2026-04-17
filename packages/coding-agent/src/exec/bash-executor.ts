@@ -6,6 +6,7 @@
 import * as fs from "node:fs/promises";
 import { executeShell, Shell } from "@oh-my-pi/pi-natives";
 import { Settings } from "../config/settings";
+import { getRetainedSpillBudget, resolveToolSpillPolicy, type SpillPolicy } from "../session/spill-policy";
 import { OutputSink } from "../session/streaming-output";
 import { getOrCreateSnapshot } from "../utils/shell-snapshot";
 import { NON_INTERACTIVE_ENV } from "./non-interactive-env";
@@ -22,6 +23,7 @@ export interface BashExecutorOptions {
 	/** Artifact path/URI for full output storage */
 	artifactPath?: string;
 	artifactUri?: string;
+	spillPolicy?: SpillPolicy;
 }
 
 export interface BashResult {
@@ -59,17 +61,25 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 	const snapshotPath = shell.includes("bash") ? await getOrCreateSnapshot(shell, shellEnv) : null;
 	const commandCwd = await resolveShellCwd(options?.cwd);
 	const commandEnv = options?.env ? { ...NON_INTERACTIVE_ENV, ...options.env } : NON_INTERACTIVE_ENV;
+	const spillPolicy = options?.spillPolicy ?? resolveToolSpillPolicy({ settings, toolName: "bash" });
+	const retainedBudget = getRetainedSpillBudget(spillPolicy);
 
-	// Apply command prefix if configured
 	const prefixedCommand = prefix ? `${prefix} ${command}` : command;
 	const finalCommand = prefixedCommand;
 
-	// Create output sink for truncation and artifact handling
 	const sink = new OutputSink({
 		onChunk: options?.onChunk,
 		artifactPath: options?.artifactPath,
 		artifactUri: options?.artifactUri,
+		spillThresholdBytes: spillPolicy.trigger.maxBytes,
+		spillThresholdLines: spillPolicy.trigger.maxLines,
+		retainMaxBytes: retainedBudget.maxBytes,
+		retainMaxLines: retainedBudget.maxLines,
 	});
+	const dump = async (success: boolean, notice?: string) => {
+		const budget = success ? spillPolicy.success : spillPolicy.failure;
+		return await sink.dump({ notice, maxBytes: budget.maxBytes, maxLines: budget.maxLines });
+	};
 
 	let pendingChunks = Promise.resolve();
 	const enqueueChunk = (chunk: string) => {
@@ -80,7 +90,7 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		return {
 			exitCode: undefined,
 			cancelled: true,
-			...(await sink.dump("Command cancelled")),
+			...(await dump(false, "Command cancelled")),
 		};
 	}
 
@@ -102,7 +112,6 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			runAbortController.abort();
 		}
 		if (shellSession) {
-			// Native abort is async; fire-and-forget because the caller races the command separately.
 			void shellSession.abort();
 		}
 	};
@@ -165,18 +174,15 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		if (winner.kind === "hard-timeout") {
 			if (shellSession) {
 				resetSession = true;
-				// Fall back to one-shot execution for the rest of the process once
-				// a persistent session has stopped responding to cancellation.
 				brokenShellSessions.add(sessionKey);
 			}
 			return {
 				exitCode: undefined,
 				cancelled: true,
-				...(await sink.dump(`Command exceeded hard timeout after ${Math.round(hardTimeoutMs / 1000)} seconds`)),
+				...(await dump(false, `Command exceeded hard timeout after ${Math.round(hardTimeoutMs / 1000)} seconds`)),
 			};
 		}
 
-		// Handle timeout
 		if (winner.result.timedOut) {
 			const annotation = options?.timeout
 				? `Command timed out after ${Math.round(options.timeout / 1000)} seconds`
@@ -185,25 +191,23 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 			return {
 				exitCode: undefined,
 				cancelled: true,
-				...(await sink.dump(annotation)),
+				...(await dump(false, annotation)),
 			};
 		}
 
-		// Handle cancellation
 		if (winner.result.cancelled) {
 			resetSession = true;
 			return {
 				exitCode: undefined,
 				cancelled: true,
-				...(await sink.dump("Command cancelled")),
+				...(await dump(false, "Command cancelled")),
 			};
 		}
 
-		// Normal completion
 		return {
 			exitCode: winner.result.exitCode,
 			cancelled: false,
-			...(await sink.dump()),
+			...(await dump(winner.result.exitCode === 0)),
 		};
 	} catch (err) {
 		resetSession = true;
@@ -218,6 +222,9 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		await pendingChunks;
 		if (resetSession) {
 			shellSessions.delete(sessionKey);
+			if (shellSession) {
+				void shellSession.shutdown().catch(() => {});
+			}
 		}
 	}
 }

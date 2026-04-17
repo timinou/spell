@@ -1,0 +1,15 @@
+#+TITLE: Session 14be110665c26667 Todos
+#+DATE: 2026-04-17
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Plan Anthropic stall fix
+:PROPERTIES:
+:TASK_ID: investigate-anthropic-stall-fix
+:STATUS: completed
+:END:
+
+Planned a two-layer fix for Anthropic stream stalls: provider-side truthful classification/recovery in `packages/ai` and generic session/TUI retry-context improvements in `packages/coding-agent`. Created self-contained org items BUG-268, BUG-269, and PLAN-237 with ordered execution waves and verification criteria.
+
+Settled scope/design via ask, created child BUG items BUG-268 and BUG-269 plus orchestration PLAN-237, and verified plan consistency against the recorded failure mode and repo code paths.

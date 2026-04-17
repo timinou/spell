@@ -1,0 +1,52 @@
+#+TITLE: Session 14be158491c2666c Todos
+#+DATE: 2026-04-17
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Execute wave1 Anthropic fix
+:PROPERTIES:
+:TASK_ID: execute-wave1-anthropic-provider
+:STATUS: completed
+:GATE_CMD: bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts
+:GATE_LLM: Provider diagnostics are truthful, classified, and do not fake success for text/thinking stalls.
+:VERIFY_CMD: bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts
+:ORG_ITEM_ID: BUG-268-classify-and-recover-anthropic-idle-stre
+:END:
+
+Implemented BUG-268 in packages/ai. Changed packages/ai/src/providers/anthropic.ts, packages/ai/src/utils/tool-call-diagnostics.ts, packages/ai/src/types.ts, and packages/ai/test/providers/anthropic-idle-timeout.test.ts. Added classified no-content/text stall states; Anthropic only internally retries stalled_incomplete_tool_args; completed_tool_call_missing_trailing_stop still recovers to toolUse; duplicate final diagnostic append is deduped. Verified with bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts.
+
+Completed directly after delegated partial pass. Anthropic now classifies no-content/text stalls truthfully, preserves safe tool-call recovery paths, and provider test passes.
+
+** DONE Execute wave2 retry UX
+:PROPERTIES:
+:TASK_ID: execute-wave2-session-ui
+:STATUS: completed
+:GATE_LLM: Repeated stall failures remain visible and understandable; final exhaustion is clearly final; richer tool diagnostics remain intact.
+:VERIFY_CMD: bun test packages/coding-agent/test/session/tool-call-diagnostics.test.ts packages/coding-agent/test/agent-session-stream-stall-retry.test.ts
+:DEPENDS: execute-wave1-anthropic-provider
+:ORG_ITEM_ID: BUG-269-make-stream-stall-retries-readable-witho
+:END:
+
+Changed packages/coding-agent/src/session/agent-session.ts, packages/coding-agent/src/session/tool-call-diagnostics.ts, packages/coding-agent/src/modes/controllers/event-controller.ts, packages/coding-agent/test/session/tool-call-diagnostics.test.ts, and packages/coding-agent/test/agent-session-stream-stall-retry.test.ts. Added retry-context helpers, formatted attempt/final labels into persisted assistant failures, retried structured stream-stall diagnostics generically, and improved final retry rendering text. Verified with bun test packages/coding-agent/test/session/tool-call-diagnostics.test.ts packages/coding-agent/test/agent-session-stream-stall-retry.test.ts.
+
+Completed BUG-269. Session retry detection now honors structured stream diagnostics, assistant failures get attempt/final context in persisted history, and final retry status avoids redundant wording.
+
+* Finalize
+
+** DONE Verify finalize and commit
+:PROPERTIES:
+:TASK_ID: verify-org-and-commit-plan237
+:STATUS: completed
+:GATE_COMMIT: true
+:GATE_CMD: bun check:ts
+:GATE_LLM: Verification evidence is recorded; org lifecycle matches reality; commit includes only plan-related files.
+:VERIFY_CMD: bun check:ts
+:DEPENDS: execute-wave2-session-ui
+:ORG_ITEM_ID: PLAN-237-anthropic-stream-stall-handling-plan
+:ORG_ITEM_CLOSING_ID: PLAN-237-anthropic-stream-stall-handling-plan
+:END:
+
+Verification passed: bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts; bun test packages/coding-agent/test/session/tool-call-diagnostics.test.ts packages/coding-agent/test/agent-session-stream-stall-retry.test.ts; bun check:ts. Appended completion report to !tasks/plans/PLAN-237-anthropic-stream-stall-handling-plan.org. Updated !tasks/bugs/BUG-268-classify-and-recover-anthropic-idle-stre.org and !tasks/bugs/BUG-269-make-stream-stall-retries-readable-witho.org to DONE. Committed staged plan-related code/test/org files with git commit 5ac7591b2: fix(coding-agent): classify anthropic stream stalls (PLAN-237).
+
+Verification complete; org items BUG-268, BUG-269, and PLAN-237 moved to DONE; committed staged plan files as 5ac7591b2.

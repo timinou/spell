@@ -1,0 +1,93 @@
+#+TITLE: Global org compact mode with escalation and query-wave memoization
+#+STATE: ITEM
+#+SESSION_ID: 14be1383cbba71b9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T10-59-43-534Z_14be1383cbba71b9.jsonl]]
+#+CUSTOM_ID: FEAT-560-global-org-compact-mode-and-query-wave-memoization
+#+DEPENDS: PROJ-047-cross-tool-context-pressure-policy
+#+EFFORT: 7h
+#+LAYER: coding-agent
+#+PRIORITY: A
+
+* Initial Message
+
+I have an inkling that a lot of token usage comes from the Bash tool during my sessions. PLease look at my recent sessions transcripts using jq and graph in ASCII the token usage, and within the token usage, the commands that led to the most token usage. Or graph in HTML/CSS. Or something else. But basically do a full review kind of thing (as a summary in chat, once you do that and you find the culprits for most of the useless context injecitons, we can start thinking about how to smartly manage context for these situations)
+
+* Scope
+In scope:
+- Make compact result mode the default for `org create`, `update`, `set`, `note`, `query`, `get`, `wave`, and `graph` in the coding-agent tool surface.
+- Preserve agent auto-escalation to fuller output when the compact response is insufficient; no user confirmation step is required.
+- Reduce repeated plan/query/wave churn by reusing prior compact summaries when the same org state is queried repeatedly and the underlying files have not changed.
+- Keep the plan-mode and execution-mode contracts truthful: compact responses must still surface the exact IDs, state changes, and follow-up paths needed to continue the workflow.
+
+Out of scope:
+- Rewriting org file storage or native org-engine semantics.
+- Changing the org item body standard itself.
+- Replacing `org get` / `org query` with another tool; this item changes default result surfaces, not the domain model.
+
+Rationale:
+- `org:item mutation` is ~11.1% of sampled tokens with tiny char share: classic high-chatter, low-signal output.
+- `org:lookup/query` and `org:planning graph` together contribute large visible outputs, especially repeated `wave` and query result bodies.
+- The settled design decision is global compact default, not plan-mode-only compacting, because org tax appears both inside and outside strict planning flows.
+
+* Existing Patterns
+- Tool implementation and preview helpers: `packages/coding-agent/src/tools/org.ts`, specifically `buildOrgCallPreview(...)`, `previewArgValue(...)`, and `formatOrgResult(result)`.
+- Org result formatting tests already exist in `packages/coding-agent/test/tools/org-format-result.test.ts` and `packages/coding-agent/test/tools/org.test.ts`.
+- Plan-mode-specific org behaviors are exercised in `packages/coding-agent/test/plan-mode/org-plan.test.ts` and `packages/coding-agent/test/plan-mode/org-plan-properties.test.ts`; this item must preserve those contracts while changing default result verbosity.
+- Shared policy contract from `PROJ-047-cross-tool-context-pressure-policy` should drive compact / escalation metadata rather than ad-hoc org-only notices.
+- Review baseline: `specs/token-usage-pareto-review.md`.
+
+* Tests
+Workflows to enumerate and defend first:
+1. Workflow 1 — create/update/set/note return compact success acks containing exactly the IDs, changed fields, and state/category facts needed for the next step.
+2. Workflow 2 — query/get default to compact lists / summaries instead of dumping full item bodies unless escalation is warranted.
+3. Workflow 3 — wave/graph default to compact rollups plus top blockers / ready items instead of emitting repeated huge item lists.
+4. Workflow 4 — repeated query/wave calls against unchanged org state can reuse prior compact summaries safely.
+5. Workflow 5 — when fuller output is genuinely needed, the compact response exposes the truthful auto-escalation path and the tool can still surface the full content.
+
+Test files / scenarios:
+- Extend `packages/coding-agent/test/tools/org-format-result.test.ts` for compact mutation/query/wave formatting.
+- Extend `packages/coding-agent/test/tools/org.test.ts` for execute-path behavior and escalation metadata.
+- Add focused memoization / unchanged-state coverage either in `packages/coding-agent/test/tools/org.test.ts` or a new `packages/coding-agent/test/tools/org-compact-mode.test.ts` if separation is cleaner.
+- Re-run or extend plan-mode org tests only where changed compact defaults intersect with planning flows.
+
+* Implementation
+** Define compact org result contract and tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-560-global-org-compact-mode-and-query-wave-memoization::define-compact-org-contract-and-tests
+:END:
+- Files: `packages/coding-agent/src/tools/org.ts`, `packages/coding-agent/test/tools/org-format-result.test.ts`, `packages/coding-agent/test/tools/org.test.ts`.
+- Define the compact default for mutation, query/get, and wave/graph responses.
+- Add initially-failing tests for Workflows 1 through 5.
+
+** Implement compact mutation and lookup outputs
+:PROPERTIES:
+:CUSTOM_ID: FEAT-560-global-org-compact-mode-and-query-wave-memoization::implement-compact-mutation-and-lookup
+:DEPENDS: FEAT-560-global-org-compact-mode-and-query-wave-memoization::define-compact-org-contract-and-tests
+:END:
+- Files: `packages/coding-agent/src/tools/org.ts`.
+- Keep exact IDs and state changes visible while shrinking low-value body text.
+- For query/get, prefer counts + top IDs/titles + explicit escalation path over full rendered bodies by default.
+
+** Implement wave/query memoization for unchanged org state
+:PROPERTIES:
+:CUSTOM_ID: FEAT-560-global-org-compact-mode-and-query-wave-memoization::implement-wave-query-memoization
+:DEPENDS: FEAT-560-global-org-compact-mode-and-query-wave-memoization::define-compact-org-contract-and-tests
+:END:
+- Files: `packages/coding-agent/src/tools/org.ts` and any helper/state introduced for memoization.
+- Reuse prior compact summaries when the same query/wave call repeats against unchanged org content.
+- Ensure stale results are invalidated after any org file mutation.
+* Edge Cases
+- Compact mutation acks must still expose enough information for later `org set`, `org update`, and `exit_plan_mode` flows to work without ambiguity.
+- `org get` sometimes needs the full item body for planning; the compact default must make escalation obvious and cheap.
+- `wave` output can be legitimately large when many items are ready; compacting must not hide blockers or dependency facts that change the next action.
+- Memoization must invalidate on create/update/delete/set/note operations touching relevant org files.
+- Compact defaults must not break existing plan-mode tests that rely on stable anchor text or specific success cues.
+
+* Acceptance Criteria
+- Org mutation/query/wave traffic becomes compact by default while preserving truthful next-step guidance.
+- Repeated unchanged query/wave calls can reuse prior compact summaries.
+- Full output is still available through automatic escalation when genuinely needed.
+- Focused org tests cover compact formatting, unchanged-state reuse, and compatibility with planning flows.
+
+* Parent Plan
+- [[id:PLAN-240-post-plan239-context-pressure-followup-plan]] POST_PLAN239_CONTEXT_PRESSURE_FOLLOWUP_PLAN

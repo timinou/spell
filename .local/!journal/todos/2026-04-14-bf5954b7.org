@@ -1,0 +1,26 @@
+#+TITLE: Session 14ba42e2c96011f0 Todos
+#+DATE: 2026-04-14
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Inspect BUG-252..254
+:PROPERTIES:
+:TASK_ID: inspect-bug-items
+:STATUS: completed
+:END:
+
+Read BUG-252, BUG-253, BUG-254 and any active related plan/context. Identify missing scope/tests/implementation/dependencies/self-contained details against plan-mode standards.
+
+BUG-252 misses preview/apply persistence + autosave/buffer↔disk coherence coverage; BUG-253 solves preview policy choice but misses preview state provenance/persistence correctness; BUG-254 needs explicit typecheck verification and likely belongs under org ergonomics rather than code-tool hardening.
+
+** DOING Prepare plan updates
+:PROPERTIES:
+:TASK_ID: prepare-plan-updates
+:STATUS: in_progress
+:DEPENDS: inspect-bug-items
+:END:
+
+If task is to convert code-tool audit into plan work, settle design decisions and draft/update child org items + plan item consistently.
+
+Need one scope decision before creating/updating plan items: whether BUG-254 stays with org ergonomics or is bundled with code-tool hardening. Recommend split: BUG-252/253 new code-tool hardening plan; BUG-254 under PLAN-224 org ergonomics.

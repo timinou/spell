@@ -1,0 +1,92 @@
+#+TITLE: Source-aware read routing and transcript-aware read compaction
+#+STATE: ITEM
+#+SESSION_ID: 14be1383cbba71b9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T10-59-43-534Z_14be1383cbba71b9.jsonl]]
+#+CUSTOM_ID: FEAT-558-source-aware-read-routing-and-transcript-compaction
+#+DEPENDS: PROJ-047-cross-tool-context-pressure-policy
+#+EFFORT: 7h
+#+PRIORITY: A
+#+LAYER: coding-agent
+
+* Initial Message
+
+I have an inkling that a lot of token usage comes from the Bash tool during my sessions. PLease look at my recent sessions transcripts using jq and graph in ASCII the token usage, and within the token usage, the commands that led to the most token usage. Or graph in HTML/CSS. Or something else. But basically do a full review kind of thing (as a summary in chat, once you do that and you find the culprits for most of the useless context injecitons, we can start thinking about how to smartly manage context for these situations)
+
+* Scope
+In scope:
+- Change `read` so source/test files default to a summary-first path instead of acting as the repo’s generic code browser.
+- Preserve explicit literal-line reading for the cases where exact lines/ranges are the real contract: user-requested ranges, unsupported grammars, non-code files, and deliberate agent follow-up after the summary-first response.
+- Add compact handling for high-noise read targets such as `.spell` session JSONL / logs and `jobs://` so repeated polling or transcript spelunking does not flood fresh input.
+- Reuse the shared policy surfaces from `PROJ-047-cross-tool-context-pressure-policy` instead of hard-coding isolated heuristics.
+
+Out of scope:
+- Replacing `code` / `lsp`; this item should route toward them, not re-implement them.
+- Global duplicate-call caching across all tools; only read-specific behavior needed to satisfy these workflows belongs here.
+- Artifact-spill defaults already handled by `PLAN-239-bash-low-spill-artifact-policy-plan`.
+
+Rationale:
+- The review in `specs/token-usage-pareto-review.md` shows `read` is the single largest sampled sink: 34.3% token share, 44.3% fresh-input share, 49.1% result-char share.
+- `read:source files` alone contributes 23.7% of sampled tokens, and `read:tests` adds another 4.9%.
+- High-char but low-value transcript/log reads under `.spell` are smaller in token share but disproportionately pollute visible context.
+
+* Existing Patterns
+- Primary tool implementation: `packages/coding-agent/src/tools/read.ts`, especially `ReadTool.execute(...)`, `streamLinesFromFile(...)`, `#handleInternalUrl(...)`, `#readDirectory(...)`, and the default limit path around `read.defaultLimit`.
+- Existing precise code-reading affordances that this item should push agents toward: `packages/coding-agent/src/tools/code.ts` / code tool prompts and `packages/coding-agent/src/tools/lsp` usage.
+- Current memory / policy hooks: `packages/coding-agent/src/memories/index.ts`, `packages/coding-agent/src/session/messages.ts`, and shared policy helpers delivered by `PROJ-047-cross-tool-context-pressure-policy`.
+- Review artifact: `specs/token-usage-pareto-review.md` — the useful/leaking boundary in that document is binding for this item.
+
+* Tests
+Workflows to enumerate and defend first:
+1. Workflow 1 — reading a source/test file without explicit `offset`/`limit` returns a compact summary-first response that points the agent toward `code`/`lsp` or a narrower raw follow-up.
+2. Workflow 2 — reading a source/test file with explicit line-range intent still returns literal file content exactly as requested.
+3. Workflow 3 — non-code files, internal URLs that are genuinely precise, and unsupported grammars keep working without accidental redirection.
+4. Workflow 4 — `.spell` session/log reads and `jobs://` reads default to compact summaries rather than giant raw bodies.
+5. Workflow 5 — the agent can auto-escalate in the next step to an exact raw read when the summary-first response was insufficient; the first response must make that path obvious.
+
+Test files / scenarios:
+- New focused read test file: `packages/coding-agent/test/tools/read-routing.test.ts`.
+- Extend internal URL coverage around `packages/coding-agent/test/internal-urls/memory-protocol.test.ts` or add `packages/coding-agent/test/internal-urls/read-internal-urls.test.ts` if better scoped.
+- If the tool result text changes materially, add focused assertions that the compact response still points to the truthful next step and does not silently hide exact-range follow-up behavior.
+
+* Implementation
+** Define source-aware routing contract and tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-558-source-aware-read-routing-and-transcript-compaction::define-routing-contract-and-tests
+:END:
+- Files: `packages/coding-agent/src/tools/read.ts`, `packages/coding-agent/test/tools/read-routing.test.ts`.
+- Define the conditions for summary-first routing vs literal raw read: source/test path class, explicit range presence, internal URL class, and unsupported-grammar escape hatches.
+- Add initially-failing tests for Workflows 1 through 5.
+
+** Implement summary-first source/test reads
+:PROPERTIES:
+:CUSTOM_ID: FEAT-558-source-aware-read-routing-and-transcript-compaction::implement-summary-first-source-reads
+:DEPENDS: FEAT-558-source-aware-read-routing-and-transcript-compaction::define-routing-contract-and-tests
+:END:
+- Files: `packages/coding-agent/src/tools/read.ts` plus any shared helper imported from `PROJ-047-cross-tool-context-pressure-policy`.
+- For source/test files without explicit line targeting, return a compact response that preserves truthful file identity and suggests the correct precision follow-up (`code`, `lsp`, or explicit `read` range).
+- Keep exact-range reads literal and unchanged.
+
+** Compact transcript/log and job-status reads
+:PROPERTIES:
+:CUSTOM_ID: FEAT-558-source-aware-read-routing-and-transcript-compaction::compact-transcript-log-and-job-reads
+:DEPENDS: FEAT-558-source-aware-read-routing-and-transcript-compaction::define-routing-contract-and-tests
+:END:
+- Files: `packages/coding-agent/src/tools/read.ts`, relevant internal URL helpers, and any shared policy helper(s).
+- Detect `.spell` session/log targets and `jobs://` polling targets; return compact summaries by default with truthful escalation paths.
+- Avoid treating ordinary artifact/internal URL reads as noise accidentally.
+* Edge Cases
+- A source file requested with explicit `offset`/`limit` must not be rewritten into an imprecise summary.
+- A very small source file may still be more usefully served via summary-first if it is likely to cause repeated browsing behavior; do not key only on byte size.
+- Internal URLs differ in value; `jobs://` and transcript/log paths are noisy, but other internal URLs may be the intended precision surface.
+- If the agent explicitly asks for literal lines after the summary response, the second call must work without additional policy friction.
+- Hashline / line-number modes must remain truthful when literal read mode is used.
+
+* Acceptance Criteria
+- `read` no longer serves as the default generic browser for source/test files.
+- Explicit literal line reads still behave exactly and truthfully.
+- `.spell` transcript/log reads and `jobs://` polling default to compact summaries.
+- Summary-first read responses expose an obvious precise follow-up path that the agent can auto-escalate to without user confirmation.
+- Focused tests cover routing, exact-range preservation, non-code exemptions, and transcript/job compaction.
+
+* Parent Plan
+- [[id:PLAN-240-post-plan239-context-pressure-followup-plan]] POST_PLAN239_CONTEXT_PRESSURE_FOLLOWUP_PLAN

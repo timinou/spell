@@ -1,0 +1,95 @@
+#+TITLE: coding-agent: surface HTML/CSS code-tool affordances and conservative refactors
+#+STATE: ITEM
+#+SESSION_ID: 14be1e420c74b0e5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T11-46-39-793Z_14be1e420c74b0e5.jsonl]]
+#+CUSTOM_ID: FEAT-556-coding-agent-surface-html-css-code-tool
+#+EFFORT: 20h
+#+LAYER: web-semantics
+#+PRIORITY: #A
+#+DEPENDS: FEAT-553-pi-code-engine-define-html-css-affordanc FEAT-554-pi-code-engine-add-html-embedded-region FEAT-555-pi-code-graph-add-css-selector-cascade-t
+
+* Scope
+- In scope: surface HTML/CSS semantic support through `packages/natives` and `packages/coding-agent` so the code tool can read, navigate, graph, and refactor markup/stylesheets truthfully.
+- In scope: expose conservative, high-confidence structural refactors for the operations most useful to an agent: class token rename, id rename, custom property rename, selector body replacement, dead-style removal with proof, and explain-before-edit flows for ambiguous cases.
+- In scope: make the prompt/docs/result surface capability-based rather than assuming statement/block languages; HTML/CSS users should understand what the tool can and cannot prove.
+- Out of scope: unsafe automatic rewrites when consumer matching is uncertain, bulk utility-framework migrations, or browser-rendered visual verification.
+
+* Existing Patterns
+- `packages/coding-agent/src/tools/code.ts`
+  - schema validation, graph/file-command routing, language-hint injection, and freshness handling.
+- `packages/coding-agent/src/tools/code-result.ts`
+  - typed details + human-readable rendering; HTML/CSS capability and confidence metadata should land here instead of prose-only hints.
+- `packages/coding-agent/src/tools/code-supported-files.ts`
+  - extension-driven support detection; must reflect new semantic-capable languages truthfully.
+- `packages/coding-agent/src/prompts/tools/code.md`
+  - tool contract documentation must stay synchronized with real affordances.
+- `packages/natives/src/code-buffer/types.ts`, `packages/natives/src/code-graph/types.ts`
+  - TS-side native shape definitions; update instead of ad-hoc JSON parsing.
+- `crates/pi-natives/src/code_buffer.rs`, `crates/pi-natives/src/code_graph.rs`
+  - bridge layer for file-local and graph commands; any new metadata or operations pass through here.
+
+* Tests
+- Workflow 1: HTML/CSS extensions are reported as semantic-capable in support detection, tool hints, and `code languages` output.
+- Workflow 2: code-tool docs and schema examples teach HTML/CSS usage accurately, including capability limits and ambiguity handling.
+- Workflow 3: file-scoped commands (`outline`, `read`, `navigate`, `edit`) return readable result shapes for HTML/CSS instead of statement-language assumptions.
+- Workflow 4: graph commands (`context`, `impact`, `dead_code`, `search`, `symbols`) render style-aware results with confidence/provenance that the agent can act on.
+- Workflow 5: high-confidence renames propagate across HTML/CSS consumers correctly for class tokens, ids, and custom properties.
+- Workflow 6: ambiguous rename/remove operations refuse mutation and surface a proof-oriented explanation of why confidence is too low.
+- Workflow 7: result details preserve enough machine-readable metadata for future UI/rendering work; no important HTML/CSS state exists only in prose.
+- Exact test files to extend/add:
+  - `packages/coding-agent/test/tools/code.test.ts`
+  - `packages/coding-agent/test/tools/code-result.test.ts`
+  - `packages/natives/test/code-buffer.test.ts`
+  - add focused native graph-bridge tests if required near `crates/pi-natives/src/code_graph.rs`
+  - add prompt/plan-mode expectation tests if the tool documentation text changes materially
+- Required scenarios:
+  - `.html`/`.css` path support, mixed host/guest files, success/failure render paths, selector/token result annotations, rename refusal on uncertain dynamic classes, exact rename on literal class/id/custom-property matches, and dead-style removal guarded by proof of zero confident consumers.
+
+* Implementation
+** Define the code-tool HTML/CSS contract and failing integration tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-556-coding-agent-surface-html-css-code-tool::define-contract
+:DEPENDS: FEAT-555-pi-code-graph-add-css-selector-cascade-t::query-surface
+:END:
+- Files: `packages/coding-agent/src/tools/code.ts`, `src/tools/code-result.ts`, `src/prompts/tools/code.md`, test files above.
+- Decide the final user-facing surface: which operations stay under generic `edit`, which gain language-specific names, and how confidence/refusal is rendered.
+- Satisfies Tests Workflow 1–7.
+
+** Extend native bridge payloads and result typing
+:PROPERTIES:
+:CUSTOM_ID: FEAT-556-coding-agent-surface-html-css-code-tool::bridge-payloads
+:DEPENDS: FEAT-556-coding-agent-surface-html-css-code-tool::define-contract
+:END:
+- Files: `packages/natives/src/code-buffer/types.ts`, `packages/natives/src/code-graph/types.ts`, `crates/pi-natives/src/code_buffer.rs`, `crates/pi-natives/src/code_graph.rs`
+- Pass capability metadata, confidence annotations, and any new conservative operation identifiers through typed bridge contracts.
+- Satisfies Tests Workflow 3, 4, and 7.
+
+** Surface semantic-capable support, hints, and result rendering
+:PROPERTIES:
+:CUSTOM_ID: FEAT-556-coding-agent-surface-html-css-code-tool::tool-surface
+:DEPENDS: FEAT-556-coding-agent-surface-html-css-code-tool::bridge-payloads
+:END:
+- Files: `packages/coding-agent/src/tools/code-supported-files.ts`, `src/tools/code.ts`, `src/tools/code-result.ts`, `src/prompts/tools/code.md`
+- Update support detection, prompt hints, examples, and renderer logic so HTML/CSS are first-class, with capability-based guidance instead of misleading statement-language assumptions.
+- Satisfies Tests Workflow 1–4 and 7.
+
+** Add conservative refactor flows and refusal proofs
+:PROPERTIES:
+:CUSTOM_ID: FEAT-556-coding-agent-surface-html-css-code-tool::conservative-refactors
+:DEPENDS: FEAT-556-coding-agent-surface-html-css-code-tool::tool-surface
+:END:
+- Files: bridge files above plus any engine/profile procedure registration files required by the chosen operations.
+- Implement only the high-confidence refactors: exact class/id/custom-property rename, selector body replace, and proof-backed dead-style removal. Ambiguous operations must fail loudly with actionable explanation.
+- Satisfies Tests Workflow 5 and 6.
+
+* Edge Cases
+- Code-tool renderers must sanitize HTML/CSS result text the same way as every other tool path; previews must not leak raw tabs or overly wide lines.
+- Dynamic class concatenation, unknown template expressions, or selector matches crossing unsupported host languages must produce refusal/proof output rather than partial mutation.
+- Support detection must not lie when only local semantics are available but graph features are unavailable or stale.
+- Operation names must remain structurally coherent; do not add a parallel HTML/CSS-only tool when `code` can express the capability.
+
+* Acceptance Criteria
+- The code tool treats HTML/CSS as first-class semantic languages end-to-end.
+- HTML/CSS affordances are discoverable in prompts, structured details, and rendered results.
+- Conservative refactors succeed for provable cases and refuse ambiguous ones with explicit reasoning.
+- Focused coding-agent/native tests lock the user-facing contract and failure modes listed above.

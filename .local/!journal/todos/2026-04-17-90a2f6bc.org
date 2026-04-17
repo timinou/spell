@@ -1,0 +1,26 @@
+#+TITLE: Session 14be2b039951fa47 Todos
+#+DATE: 2026-04-17
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Design prevention fixes
+:PROPERTIES:
+:TASK_ID: design-fixes
+:STATUS: completed
+:END:
+
+Settle remediation scope: engine validation, prompt/tool docs, observability, and regression tests.
+
+Settled full-stack remediation: engine hardening first, then prompt/routing and preview/result truthfulness in parallel.
+
+** DONE Write org remediation plan
+:PROPERTIES:
+:TASK_ID: write-org-plan
+:STATUS: completed
+:DEPENDS: task://design-fixes
+:END:
+
+Create self-contained child org items + orchestration plan, run org wave, consistency sweep, and exit plan mode.
+
+Plan ready for approval as PLAN-241-code-edit-failure-prevention-plan / CODE_EDIT_FAILURE_PREVENTION_PLAN.

@@ -1,5 +1,6 @@
 import { logger, ptree } from "@oh-my-pi/pi-utils";
 import { OutputSink } from "../session/streaming-output";
+import { getRetainedSpillBudget, resolveToolSpillPolicy, type SpillPolicy } from "../session/spill-policy";
 import { buildRemoteCommand, ensureConnection, ensureHostInfo, type SSHConnectionTarget } from "./connection-manager";
 import { hasSshfs, mountRemote } from "./sshfs-mount";
 
@@ -17,6 +18,7 @@ export interface SSHExecutorOptions {
 	/** Artifact path/URI for full output storage */
 	artifactPath?: string;
 	artifactUri?: string;
+	spillPolicy?: SpillPolicy;
 }
 
 export interface SSHResult {
@@ -76,17 +78,27 @@ export async function executeSSH(
 		}
 	}
 
+	const spillPolicy = options?.spillPolicy ?? resolveToolSpillPolicy({ toolName: "ssh" });
+	const retainedBudget = getRetainedSpillBudget(spillPolicy);
+	const sink = new OutputSink({
+		onChunk: options?.onChunk,
+		artifactPath: options?.artifactPath,
+		artifactUri: options?.artifactUri,
+		spillThresholdBytes: spillPolicy.trigger.maxBytes,
+		spillThresholdLines: spillPolicy.trigger.maxLines,
+		retainMaxBytes: retainedBudget.maxBytes,
+		retainMaxLines: retainedBudget.maxLines,
+	});
+	const dump = async (success: boolean, notice?: string) => {
+		const budget = success ? spillPolicy.success : spillPolicy.failure;
+		return await sink.dump({ notice, maxBytes: budget.maxBytes, maxLines: budget.maxLines });
+	};
+
 	using child = ptree.spawn(["ssh", ...(await buildRemoteCommand(host, resolvedCommand))], {
 		signal: options?.signal,
 		timeout: options?.timeout,
 		stdin: "pipe",
 		stderr: "full",
-	});
-
-	const sink = new OutputSink({
-		onChunk: options?.onChunk,
-		artifactPath: options?.artifactPath,
-		artifactUri: options?.artifactUri,
 	});
 
 	const streams = [child.stdout.pipeTo(sink.createInput())];
@@ -96,10 +108,11 @@ export async function executeSSH(
 	await Promise.allSettled(streams).catch(() => {});
 
 	try {
+		const exitCode = await child.exited;
 		return {
-			exitCode: await child.exited,
+			exitCode,
 			cancelled: false,
-			...(await sink.dump()),
+			...(await dump(exitCode === 0)),
 		};
 	} catch (err) {
 		if (err instanceof ptree.Exception) {
@@ -107,20 +120,20 @@ export async function executeSSH(
 				return {
 					exitCode: undefined,
 					cancelled: true,
-					...(await sink.dump(`SSH: ${err.message}`)),
+					...(await dump(false, `SSH: ${err.message}`)),
 				};
 			}
 			if (err.aborted) {
 				return {
 					exitCode: undefined,
 					cancelled: true,
-					...(await sink.dump(`Command aborted: ${err.message}`)),
+					...(await dump(false, `Command aborted: ${err.message}`)),
 				};
 			}
 			return {
 				exitCode: err.exitCode,
 				cancelled: false,
-				...(await sink.dump(`Unexpected error: ${err.message}`)),
+				...(await dump(false, `Unexpected error: ${err.message}`)),
 			};
 		}
 		throw err;

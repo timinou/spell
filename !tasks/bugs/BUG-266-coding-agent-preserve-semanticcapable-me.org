@@ -1,0 +1,84 @@
+#+TITLE: coding-agent: preserve semanticCapable metadata and complete semantic naming cutover
+#+STATE: ITEM
+#+SESSION_ID: 14bcee07e4b8b89f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-16T13-37-28-466Z_14bcee07e4b8b89f.jsonl]]
+#+CUSTOM_ID: BUG-266-coding-agent-preserve-semanticcapable-me
+#+PRIORITY: #B
+#+EFFORT: 2h
+#+LAYER: coding-agent
+
+* Scope
+- In scope: preserve native `semanticCapable` metadata all the way through `packages/coding-agent/src/tools/code-result.ts` structured result normalization for `open` and `buffers`.
+- In scope: complete the coding-agent naming cutover from misleading `supported` helper names to accurate semantic-capability names in `packages/coding-agent/src/tools/code-supported-files.ts` and all callers.
+- In scope: update result renderers, helper imports, and focused tests so the structured contract — not prose hints — tells callers whether a buffer has semantic support.
+- Out of scope: changing fallback buffer semantics, patch/edit persistence, replay-gate behavior, or adding new file commands.
+
+* Existing Patterns
+- `packages/coding-agent/src/tools/code-result.ts`
+  - `normalizeCodeBufferSuccess(...)`
+  - `normalizeBufferInfos(...)`
+  - `formatBufferInfo(...)`
+  - `CodeBufferInfo` / `CodeOpenDetails` / `CodeToolResultDetails`
+- `packages/coding-agent/src/tools/code-supported-files.ts`
+  - `extractSemanticExtensions(...)`
+  - `getSemanticExtensions()`
+  - `isCodeToolSemanticPath(file)`
+  - `describeCodeToolSemanticFiles()`
+- `packages/coding-agent/src/tools/code.ts`
+  - `#maybeInjectHints(file?)`
+- Test files:
+  - `packages/coding-agent/test/tools/code-result.test.ts`
+  - `packages/coding-agent/test/tools/code.test.ts`
+
+* Tests
+- Workflow 1: `code open` on a semantic-capable file exposes structured `details.data.semanticCapable === true`.
+- Workflow 2: `code open` on a fallback text file exposes structured `details.data.semanticCapable === false`.
+- Workflow 3: `code buffers` preserves `semanticCapable` per buffer entry so downstream code can distinguish semantic vs fallback buffers without scraping text output.
+- Workflow 4: no coding-agent source file imports or exports the misleading `supported` aliases after cutover; semantic-only helpers use semantic naming consistently.
+- Workflow 5: rendered buffer/open summaries remain truthful after the metadata shape change.
+
+* Implementation
+** Define the canonical semantic-capability contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-266-coding-agent-preserve-semanticcapable-me::define-contract
+:END:
+- Files: `packages/coding-agent/src/tools/code-result.ts`, `packages/coding-agent/src/tools/code-supported-files.ts`
+- Canonical field name is `semanticCapable` in TypeScript-facing details.
+- Remove the legacy `supported` terminology aliases instead of keeping compatibility wrappers.
+
+** Write focused result tests first
+:PROPERTIES:
+:CUSTOM_ID: BUG-266-coding-agent-preserve-semanticcapable-me::result-tests
+:DEPENDS: BUG-266-coding-agent-preserve-semanticcapable-me::define-contract
+:END:
+- File: `packages/coding-agent/test/tools/code-result.test.ts`
+- Add/adjust tests for Workflows 1, 2, 3, and 5 with explicit assertions on structured `details`, not only rendered text.
+
+** Cut over helper naming at all call sites
+:PROPERTIES:
+:CUSTOM_ID: BUG-266-coding-agent-preserve-semanticcapable-me::helper-cutover
+:DEPENDS: BUG-266-coding-agent-preserve-semanticcapable-me::result-tests
+:END:
+- Files: `packages/coding-agent/src/tools/code-supported-files.ts`, `packages/coding-agent/src/tools/code.ts`, any other affected callers found by symbol search.
+- Replace legacy `supported` names with semantic-capability names everywhere in coding-agent.
+- Keep one concept / one representation after the edit.
+
+** Implement result normalization updates
+:PROPERTIES:
+:CUSTOM_ID: BUG-266-coding-agent-preserve-semanticcapable-me::implement-normalization
+:DEPENDS: BUG-266-coding-agent-preserve-semanticcapable-me::helper-cutover
+:END:
+- File: `packages/coding-agent/src/tools/code-result.ts`
+- Preserve `semanticCapable` in normalized open/buffer payloads and keep render output truthful.
+- Re-run affected tests until all workflows pass.
+
+* Edge Cases
+- Native open/buffer payloads may omit `semanticCapable`; normalization must default truthfully rather than fabricate certainty.
+- Existing tests may still inspect legacy names; update them in the same change so no stale contract remains.
+- Do not reintroduce “unsupported file type” semantics for text fallback by using imprecise helper names.
+
+* Acceptance Criteria
+- `code open` and `code buffers` structured details expose `semanticCapable` consistently.
+- No misleading `supported` alias remains in coding-agent helper exports/imports after the cutover.
+- Focused tests cover semantic and fallback buffers without relying on injected hint prose.
+- Rendered summaries still match the structured result contract.

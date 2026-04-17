@@ -1,0 +1,83 @@
+#+TITLE: coding-agent: align code-edit prompts, examples, and tool routing
+#+STATE: ITEM
+#+SESSION_ID: 14be2b039951fa47
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T12-42-23-717Z_14be2b039951fa47.jsonl]]
+#+CUSTOM_ID: BUG-271-coding-agent-align-code-edit-prompts-exa
+#+EFFORT: 6h
+#+DEPENDS: BUG-270-coding-agent-harden-code-edit-target-res
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+* Scope
+- In scope: align the agent-facing contract with the actual `code edit` guarantees so the model stops inferring that the tool is a generic text patcher or broadly "unreliable for text manipulation."
+- In scope: fix misleading examples/instructions in the prompt/tool docs, especially the current `insert-after` example that omits an explicit sibling-safe separator and encourages the exact failure shape seen in transcript `14be281c6474c15d`.
+- In scope: reconcile routing/enforcement in `write` / `edit` paths for code-supported files once `BUG-270-coding-agent-harden-code-edit-target-res` lands, so tool precedence is enforced in code rather than only narrated in prompts.
+- Out of scope: native edit semantics and TUI/result rendering. Those belong to sibling items `BUG-270-coding-agent-harden-code-edit-target-res` and `BUG-272-coding-agent-make-malformed-code-edit-pr`.
+
+* Existing Patterns
+- Prompt sources:
+  - `packages/coding-agent/src/prompts/system/system-prompt.md`
+  - `packages/coding-agent/src/prompts/tools/code.md`
+  - `packages/coding-agent/src/prompts/tools/patch.md`
+  - `packages/coding-agent/src/prompts/system/plan-mode-tool-decision-reminder.md`
+  - `packages/coding-agent/src/prompts/tools/code-hint-text-fallback.md`
+- Routing/enforcement points:
+  - `packages/coding-agent/src/tools/write.ts`
+  - `packages/coding-agent/src/patch/index.ts`
+- Prompt/render test patterns:
+  - `packages/coding-agent/test/system-prompt-templates.test.ts`
+  - `packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts`
+  - add focused prompt-doc coverage under `packages/coding-agent/test/prompts/` if existing template tests are too coarse
+
+* Tests
+- Workflow 1: rendered system prompt states that `code` is for structural edits on code-supported files with usable grammar, not arbitrary text splicing, and gives a recovery ladder: re-read → tighten anchor/target → retry narrowly → fall back by file type.
+- Workflow 2: `packages/coding-agent/src/prompts/tools/code.md` examples no longer teach newline-less `insert-after` usage for imports/interface members and instead model safe sibling/declaration-targeted edits.
+- Workflow 3: once `BUG-270-coding-agent-harden-code-edit-target-res` hardens the engine, `write` / `edit` on code-supported files redirect or error consistently instead of silently remaining open because of stale "commented until code edit works well" exceptions.
+- Workflow 4: plan-mode tool-decision guidance repeats the same structural-vs-text boundary and recovery rule so the model does not narrate tool unreliability after a bad edit.
+
+* Implementation
+** Define the canonical tool-boundary language
+:PROPERTIES:
+:CUSTOM_ID: BUG-271-coding-agent-align-code-edit-prompts-exa::define-contract
+:END:
+- Files: `packages/coding-agent/src/prompts/system/system-prompt.md`, `packages/coding-agent/src/prompts/tools/code.md`, `packages/coding-agent/src/prompts/tools/patch.md`, `packages/coding-agent/src/prompts/system/plan-mode-tool-decision-reminder.md`
+- Standardize one message across all prompts: `code edit` is structural, line-target ops are node-boundary operations, and failed edits require re-read/re-anchor before broader fallback.
+
+** Write failing prompt and routing tests first
+:PROPERTIES:
+:CUSTOM_ID: BUG-271-coding-agent-align-code-edit-prompts-exa::write-tests
+:DEPENDS: BUG-271-coding-agent-align-code-edit-prompts-exa::define-contract
+:END:
+- Files: `packages/coding-agent/test/system-prompt-templates.test.ts`, `packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts`, and a focused prompt-doc test file under `packages/coding-agent/test/prompts/` if needed.
+- Encode Workflows 1-4 as initially failing assertions.
+- Add routing tests in `packages/coding-agent/test/tools/code.test.ts` or the nearest write/edit tool suite if enforcement changes there.
+
+** Fix misleading examples and recovery guidance
+:PROPERTIES:
+:CUSTOM_ID: BUG-271-coding-agent-align-code-edit-prompts-exa::update-prompts
+:DEPENDS: BUG-271-coding-agent-align-code-edit-prompts-exa::write-tests
+:END:
+- Files: prompt sources listed above plus `packages/coding-agent/src/prompts/tools/code-hint-text-fallback.md` if fallback hint text needs to match.
+- Remove or rewrite examples that imply `insert-after` behaves like a raw line append.
+- Add explicit guidance that a malformed structural edit usually means the anchor/target shape is wrong, not that the whole tool is unreliable.
+
+** Reconcile routing enforcement with the documented contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-271-coding-agent-align-code-edit-prompts-exa::enforce-routing
+:DEPENDS: BUG-270-coding-agent-harden-code-edit-target-res::surface-errors BUG-271-coding-agent-align-code-edit-prompts-exa::update-prompts
+:END:
+- Files: `packages/coding-agent/src/tools/write.ts`, `packages/coding-agent/src/patch/index.ts`
+- Remove the temporary commented-out bypasses that keep `write` / text `edit` open for code-supported files for historical reliability reasons.
+- Ensure the runtime redirect/error text matches the prompt language exactly.
+
+* Edge Cases
+- Do not overstate support: unsupported extensions or files without usable grammar still need a truthful fallback path.
+- Prompt wording must not encourage broad whole-file replacement as the default recovery path.
+- Plan-mode reminders must remain read-only in tone while still giving actionable recovery guidance.
+- Routing enforcement must distinguish code-supported files from unsupported text-like files so legitimate fallback workflows still work.
+
+* Acceptance Criteria
+- Prompt/tool-doc language, examples, and runtime routing all describe the same structural-edit contract.
+- No shipped example teaches the unsafe `insert-after` pattern that caused the transcript failure.
+- Code-supported file routing no longer depends on stale commented exceptions once engine hardening is in place.
+- Prompt/render tests lock the boundary and recovery ladder so this guidance cannot drift silently.
