@@ -1,0 +1,97 @@
+#+TITLE: packages/coding-agent: audit wrapper and name-resolution parity across non-Typst DSLs
+#+STATE: DONE
+#+SESSION_ID: 14be78ff1026cf64
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T18-23-06-304Z_14be78ff1026cf64.jsonl]]
+#+CUSTOM_ID: BUG-274-packages-coding-agent-audit-wrapper-and
+#+LAYER: core
+#+PRIORITY: #A
+#+EFFORT: 8h
+#+DEPENDS: BUG-273-packages-coding-agent-fix-typst-symbol-t
+
+* Scope
+- In scope:
+  - Audit non-Typst DSLs that use wrapper unwrapping, delegated declaration-name extraction, or graph/native duplication so Typst’s fix does not remain a one-off patch.
+  - Add parity tests that prove native `resolve_symbol()`, graph extraction/query, and missing-symbol diagnostics agree on canonical names for audited languages.
+  - Apply targeted fixes only where the matrix reveals a real mismatch.
+- Out of scope:
+  - Reworking language semantics or introducing new addressable symbol kinds unrelated to resolver parity.
+  - UI redesign of `code symbols`; only adjust presentation if a discovered mismatch makes targeting unclear.
+  - Typst-specific canonicalization mechanics; handled by [[id:BUG-273-packages-coding-agent-fix-typst-symbol-t]].
+
+* Existing Patterns
+- `crates/pi-code-engine/src/resolve.rs`
+  - Source of truth for native symbol-targeted edits and symbol-scoped body replacement/wrap/rename flows.
+- `crates/pi-code-engine/src/outline.rs`
+  - Local declaration-name logic and wrapper unwrapping rules.
+- `crates/pi-code-graph/src/language/generic.rs`
+  - Graph extraction path for languages backed by `pi-code-engine` declaration patterns.
+- `crates/pi-code-graph/src/query.rs`
+  - Exact symbol lookup semantics (`symbol.name` / `symbol.qualified_name`).
+- Existing language coverage already present in tests:
+  - Markdown / Org section resolution in `crates/pi-code-engine/src/resolve.rs`.
+  - Elixir module/member resolution in `crates/pi-code-engine/src/resolve.rs`.
+  - HTML/CSS selector and property resolution in `crates/pi-code-engine/src/resolve.rs` and graph query tests.
+- Reuse the shared canonical-name helper introduced by [[id:BUG-273-packages-coding-agent-fix-typst-symbol-t]] rather than cloning logic again.
+
+* Tests
+- Workflow inventory to cover before implementation:
+  1. Markdown and Org headings remain resolvable by their displayed heading text, and missing-symbol diagnostics remain non-empty when headings exist.
+  2. Elixir module/member resolution still accepts canonical names (`MyApp.Greeter`, `MyApp.Greeter.greet`, etc.) after any shared helper refactor.
+  3. HTML/CSS symbol targeting remains exact for selectors/properties/custom properties and does not regress from shared canonical-name changes.
+  4. Graph exact-symbol queries continue to match the same canonical names the native resolver accepts for audited languages.
+  5. Wrapper-unwrapping behavior stays consistent wherever `sole child` / `candidate child` fallback is used.
+- Concrete test files / suites:
+  - `crates/pi-code-engine/src/resolve.rs`
+  - `crates/pi-code-graph/src/language/generic.rs`
+  - `crates/pi-code-graph/src/query.rs`
+- Enumerate audited workflows first, then add only the highest-value regression cases. Avoid tautological duplication where current tests already fully pin the invariant.
+
+* Implementation
+** Add cross-language parity matrix tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-274-packages-coding-agent-audit-wrapper-and::parity-matrix-tests
+:DEPENDS: BUG-273-packages-coding-agent-fix-typst-symbol-t::code-buffer-regression
+:END:
+- Files:
+  - `crates/pi-code-engine/src/resolve.rs`
+  - `crates/pi-code-graph/src/query.rs`
+- Add a compact matrix of audited languages proving native resolver names and graph exact-match names stay aligned after the Typst fix.
+- Prefer one assertion per invariant: heading text, module/member path, selector text, and wrapper-aware diagnostics.
+
+** Audit wrapper-unwrapping helper reuse
+:PROPERTIES:
+:CUSTOM_ID: BUG-274-packages-coding-agent-audit-wrapper-and::audit-wrapper-helpers
+:DEPENDS: BUG-274-packages-coding-agent-audit-wrapper-and::parity-matrix-tests
+:END:
+- Files:
+  - `crates/pi-code-engine/src/resolve.rs`
+  - `crates/pi-code-engine/src/outline.rs`
+  - `crates/pi-code-graph/src/language/generic.rs`
+- Review every place that unwraps a sole child / wrappered declaration and ensure name collection and name resolution follow the same rules.
+- If a mismatch is found, fix the helper boundary instead of adding another language-local escape hatch.
+
+** Repair only proven mismatches
+:PROPERTIES:
+:CUSTOM_ID: BUG-274-packages-coding-agent-audit-wrapper-and::repair-proven-mismatches
+:DEPENDS: BUG-274-packages-coding-agent-audit-wrapper-and::audit-wrapper-helpers
+:END:
+- Files: exact files depend on the failing audited case(s); keep changes limited to resolver/extractor/query helpers already under test.
+- Apply narrow fixes for real regressions discovered by the parity matrix.
+- Do not churn stable languages merely for stylistic consistency.
+
+* Edge Cases
+- Nested headings / section paths where dotted qualification is meaningful.
+- Ambiguous symbol names and occurrence suffixes (`name[2]`) after shared helper changes.
+- Export wrappers and container/member resolution paths.
+- CSS selectors containing punctuation, commas, or custom-property prefixes.
+- HTML/Markdown/Org nodes whose display label intentionally differs from the raw syntax node type.
+
+* Acceptance Criteria
+- After Typst canonicalization lands, audited non-Typst languages still pass exact symbol resolution and graph parity tests.
+- Any additional mismatches uncovered by the audit are fixed at the shared-helper boundary and covered by regression tests.
+- No audited language regresses in exact symbol lookup, member resolution, or wrapper-aware diagnostics.
+- Verification command(s):
+  - targeted Rust tests for resolver/query parity on touched files.
+  - final package checks only after the audited fixes are complete.
+
+NOTE [2026-04-17]: Executed under PLAN-243. Added audited non-Typst resolver/query parity coverage and fixed exact graph query matching for canonical symbol-path suffixes after file-qualified names.

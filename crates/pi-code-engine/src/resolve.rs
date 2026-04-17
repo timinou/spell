@@ -301,15 +301,34 @@ fn resolve_member(
 
 /// Collect names of all top-level declarations for error messages.
 fn collect_top_level_names(root: Node<'_>, profile: &LanguageProfile, source: &str) -> Vec<String> {
+	fn collect_names(
+		node: Node<'_>,
+		profile: &LanguageProfile,
+		source: &str,
+		names: &mut Vec<String>,
+	) {
+		let inner = unwrap_export(node);
+		if let Some(decl) = declaration_for(profile, inner, source) {
+			if let Some(name) = declaration_name(source, inner, decl) {
+				names.push(name);
+			}
+			return;
+		}
+		let mut cursor = inner.walk();
+		let mut children = inner.named_children(&mut cursor);
+		let Some(child) = children.next() else {
+			return;
+		};
+		if children.next().is_some() {
+			return;
+		}
+		collect_names(child, profile, source, names);
+	}
+
 	let mut names = Vec::new();
 	let mut cursor = root.walk();
 	for child in root.named_children(&mut cursor) {
-		let inner = unwrap_export(child);
-		if let Some(decl) = declaration_for(profile, inner, source) {
-			if let Some(n) = declaration_name(source, inner, decl) {
-				names.push(n);
-			}
-		}
+		collect_names(child, profile, source, &mut names);
 	}
 	names
 }
@@ -385,6 +404,15 @@ mod tests {
 		))
 		.expect("fixture");
 		CodeBuffer::from_str(&source, LanguageId::new("css"), registry()).expect("buffer")
+	}
+
+	fn typst_buffer() -> CodeBuffer {
+		let source = fs::read_to_string(format!(
+			"{}/tests/fixtures/sources/typst_edit_targets.typ",
+			env!("CARGO_MANIFEST_DIR")
+		))
+		.expect("fixture");
+		CodeBuffer::from_str(&source, LanguageId::new("typst"), registry()).expect("buffer")
 	}
 
 	#[test]
@@ -663,6 +691,124 @@ Deep section body.
 			"should say module not found: {msg}"
 		);
 		assert!(msg.contains("MyApp.Greeter"), "should list available module names: {msg}");
+	}
+
+	#[test]
+	fn resolve_audited_non_typst_symbol_paths_and_diagnostics() {
+		let markdown = markdown_buffer();
+		let markdown_profile = registry();
+		let markdown_profile = markdown_profile.get(&LanguageId::new("markdown")).unwrap();
+		assert_eq!(
+			resolve_symbol(&markdown, markdown_profile, "Installation.Prerequisites")
+				.expect("resolve markdown nested section")
+				.name,
+			"Prerequisites"
+		);
+		let markdown_err = resolve_symbol(&markdown, markdown_profile, "Missing").unwrap_err();
+		assert!(markdown_err.to_string().contains("Installation"));
+
+		let org_source = "* OrgTop\n** OrgChild\n";
+		let org =
+			CodeBuffer::from_str(org_source, LanguageId::new("org"), registry()).expect("org buffer");
+		let org_profile = registry();
+		let org_profile = org_profile.get(&LanguageId::new("org")).unwrap();
+		assert_eq!(
+			resolve_symbol(&org, org_profile, "OrgTop.OrgChild")
+				.expect("resolve org nested section")
+				.name,
+			"OrgChild"
+		);
+		let org_err = resolve_symbol(&org, org_profile, "Missing").unwrap_err();
+		assert!(org_err.to_string().contains("OrgTop"));
+
+		let elixir = elixir_buffer();
+		let elixir_profile = registry();
+		let elixir_profile = elixir_profile.get(&LanguageId::new("elixir")).unwrap();
+		assert_eq!(
+			resolve_symbol(&elixir, elixir_profile, "MyApp.Greeter.greet")
+				.expect("resolve elixir member")
+				.name,
+			"greet"
+		);
+
+		let html = html_buffer();
+		let html_profile = registry();
+		let html_profile = html_profile.get(&LanguageId::new("html")).unwrap();
+		assert_eq!(
+			resolve_symbol(&html, html_profile, "html#root.body#main.button#save")
+				.expect("resolve html nested element")
+				.name,
+			"button#save"
+		);
+
+		let css_source = ":root { --accent: red; color: var(--accent); }\n";
+		let css =
+			CodeBuffer::from_str(css_source, LanguageId::new("css"), registry()).expect("css buffer");
+		let css_profile = registry();
+		let css_profile = css_profile.get(&LanguageId::new("css")).unwrap();
+		assert_eq!(
+			resolve_symbol(&css, css_profile, ":root.--accent")
+				.expect("resolve css custom property")
+				.name,
+			"--accent"
+		);
+	}
+
+	#[test]
+	fn resolve_typst_callable_let_by_base_name() {
+		let buffer = typst_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("typst")).unwrap();
+
+		let resolved =
+			resolve_symbol(&buffer, profile, "section-title").expect("resolve section-title");
+		assert_eq!(resolved.name, "section-title");
+		assert_eq!(resolved.kind, "let");
+		assert_eq!(resolved.line, 11);
+		assert!(resolved.body_start_byte.is_some());
+	}
+
+	#[test]
+	fn resolve_typst_simple_and_callable_lets_by_binding_name() {
+		let source = "#let navy = rgb(\"#000080\")\n#let posterior-chart() = [ok]\n#let lbl(txt, \
+		              color: navy) = [#txt]\n";
+		let buffer =
+			CodeBuffer::from_str(source, LanguageId::new("typst"), registry()).expect("buffer");
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("typst")).unwrap();
+
+		assert_eq!(
+			resolve_symbol(&buffer, profile, "navy")
+				.expect("resolve navy")
+				.name,
+			"navy"
+		);
+		assert_eq!(
+			resolve_symbol(&buffer, profile, "posterior-chart")
+				.expect("resolve posterior-chart")
+				.name,
+			"posterior-chart"
+		);
+		assert_eq!(
+			resolve_symbol(&buffer, profile, "lbl")
+				.expect("resolve lbl")
+				.name,
+			"lbl"
+		);
+	}
+
+	#[test]
+	fn resolve_typst_missing_symbol_reports_canonical_available_names() {
+		let buffer = typst_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("typst")).unwrap();
+
+		let err = resolve_symbol(&buffer, profile, "missing").unwrap_err();
+		let msg = err.to_string();
+		assert_eq!(
+			msg,
+			"edit error: Symbol 'missing' not found. Available: [teal-primary, section-title]"
+		);
 	}
 
 	#[test]

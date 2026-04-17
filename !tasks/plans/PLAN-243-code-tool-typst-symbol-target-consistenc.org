@@ -1,0 +1,150 @@
+#+TITLE: CODE_TOOL_TYPST_SYMBOL_TARGET_CONSISTENCY_AND_RESOLVER_PARITY_AUDIT
+#+STATE: DONE
+#+SESSION_ID: 14be78ff1026cf64
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T18-23-06-304Z_14be78ff1026cf64.jsonl]]
+#+CUSTOM_ID: PLAN-243-code-tool-typst-symbol-target-consistenc
+
+* Initial Message
+
+Code
+ GenericFailure, edit error: Symbol 'section-block' not found. Available: []
+
+
+
+ Code
+ ┌─── ✔ Code symbols ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Symbols                                                                                                                                    │
+ │ Query: section-block                                                                                                                       │
+ │ Status: ranked                                                                                                                             │
+ │ - report/naming_survey_client_report.typ::section-block(num, title, body) [variable] report/naming_survey_client_report.typ:88:6           │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Code
+ GenericFailure, edit error: Symbol 'section-block()' not found. Available: []
+
+
+
+ Code
+ GenericFailure, edit error: Ambiguous line target at line 88: raw node 'let' expands to editable scope 'code'. Specify node_type or use symbol
+ targeting.
+
+ ✔ Read report/naming_survey_client_report.typ:85-104
+
+
+ Code
+ ┌─── ✔ Code navigate ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Navigate defun-at report/naming_survey_client_report.typ: let section-block(num, title, body) L88-L103:C1                                  │
+ │ text: let section-block(num, title, body) = block(breakable: false, width: 100%)[                                                          │
+ │ parent: code | scope: code L88-L103:C0 | kind: let                                                                                         │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Code
+ GenericFailure, edit error: Ambiguous line target at line 88: raw node 'let' expands to editable scope 'code'. Specify node_type or use symbol
+ targeting.
+
+
+
+ ┌─── ✔ Bash ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ $ cd /home/user/Documents/ubikom && python3 -c "                                                                                           │
+ │ p = 'report/naming_survey_client_report.typ'                                                                                               │
+ │ s = open(p).read()                                                                                                                         │
+ │ s = s.replace('block(breakable: false, width: 100%)[', 'block(breakable: true, width: 100%)[')                                             │
+ │ # remove the first #pagebreak() after Prudence callout (before Partie II cover)                                                            │
+ │ # and the second #pagebreak() before Partie III cover                                                                                      │
+ │ parts = s.split('#pagebreak()')                                                                                                            │
+ │ print('found', len(parts)-1, 'pagebreaks')                                                                                                 │
+ │ s = parts[0] + parts[1] + parts[2]                                                                                                         │
+ │ open(p, 'w').write(s)                                                                                                                      │
+ │ print('done')                                                                                                                              │
+ │ "                                                                                                                                          │
+ ├─── Output ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+ │ found 2 pagebreaks                                                                                                                         │
+ │ done                                                                                                                                       │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+ Session Info
+
+ File: /home/user/.spell/agent/sessions/-Documents-ubikom/2026-04-17T18-01-24-177Z_14be74077414505b.jsonl
+ ID: 14be74077414505b
+
+
+
+
+Trace back this following of errors, explain where the code tool went wrong, exlpain how to reproduce this in unit test, the root cause, and how to fix it
+
+* Context
+** Incident trace
+- Repro from user session:
+  - `code edit` with `symbol: "section-block"` on `report/naming_survey_client_report.typ` failed with `Symbol 'section-block' not found. Available: []`.
+  - `code symbols { query: "section-block" }` simultaneously returned `report/naming_survey_client_report.typ::section-block(num, title, body) [variable]` at line 88.
+  - Line-target fallback without `node_type` then failed with `Ambiguous line target at line 88: raw node 'let' expands to editable scope 'code'`.
+- Verified code path:
+  - `packages/coding-agent/src/tools/code.ts` routes `symbols` through graph search and `edit` through the native file-buffer path.
+  - `crates/pi-natives/src/code_buffer.rs::resolve_target()` calls `crates/pi-code-engine/src/resolve.rs::resolve_symbol()` for symbol-targeted edits.
+  - Typst let declarations are configured in `crates/pi-code-engine/src/language/mod.rs` with `NameExtractor::Field { name: "pattern" }`.
+  - Local declaration-name extraction in `crates/pi-code-engine/src/outline.rs::declaration_name_resolution()` and graph extraction in `crates/pi-code-graph/src/language/generic.rs::resolve_name_for_extractor()` both treat callable Typst lets as full pattern text when no inner `name` field exists.
+  - `crates/pi-code-engine/src/resolve.rs::collect_top_level_names()` does not unwrap `code` wrappers when building `Available: [...]`, which explains the misleading empty list.
+- Interpreted error sequence:
+  - `section-block` failed because the current canonical name is effectively `section-block(num, title, body)`.
+  - `Available: []` was a diagnostic bug, not proof that the symbol was absent.
+  - The line-target ambiguity was expected conservative behavior once the symbol path had already failed.
+
+** Settled design decisions
+1. Canonical symbol identity for callable Typst `#let` bindings is the base binding name (`section-block`), not the full callable signature.
+2. Full callable signatures remain display/detail material for humans, but not the machine-targeted identity used by `code edit`, exact graph symbol lookup, or missing-symbol suggestions.
+3. The fix should not be Typst-only string trimming in one call path; native resolve and graph extraction must share one canonical declaration-name rule.
+4. The existing line-target refusal for raw `let` vs editable `code` remains unchanged in this plan; users must still specify `node_type` when they line-target Typst code wrappers.
+5. After landing the Typst fix, audit other wrapper/name-resolution paths and repair only proven mismatches with regression tests.
+
+** Child items
+- Wave-driving implementation items:
+  - [[id:BUG-273-packages-coding-agent-fix-typst-symbol-t]]
+  - [[id:BUG-274-packages-coding-agent-audit-wrapper-and]]
+
+* Verification
+- Child-item verification:
+  - [[id:BUG-273-packages-coding-agent-fix-typst-symbol-t]] must add targeted resolver, graph, and NAPI integration coverage for callable Typst lets.
+  - [[id:BUG-274-packages-coding-agent-audit-wrapper-and]] must add parity-matrix coverage for audited non-Typst DSLs and fix only real mismatches.
+- Final implementation verification in the fresh execution session:
+  - Targeted Rust tests for `crates/pi-code-engine` resolve regressions.
+  - Targeted Rust tests for `crates/pi-code-graph` extraction/query parity regressions.
+  - Targeted `packages/natives/test/code-buffer.test.ts` regression covering Typst symbol-targeted edit.
+  - Final package checks appropriate for touched packages after the targeted regressions pass.
+- Manual proof expectations:
+  - `code symbols { query: "section-block" }` and `code edit { symbol: "section-block", ... }` agree on the targetable name.
+  - Missing Typst symbol diagnostics list real available names instead of `[]`.
+
+* Execution Manifest
+** :wave: 1
+- [[id:BUG-273-packages-coding-agent-fix-typst-symbol-t]]
+  - Establish canonical callable-let naming, truthful diagnostics, and end-to-end Typst edit coverage.
+
+** :wave: 2
+- [[id:BUG-274-packages-coding-agent-audit-wrapper-and]]
+  - Audit non-Typst DSL parity after Wave 1 lands; add matrix tests and repair only proven shared-helper mismatches.
+
+** Completion [2026-04-17]
+*** Verification
+- `cargo test -p pi-code-engine resolve_audited_non_typst_symbol_paths_and_diagnostics -- --nocapture` → passed.
+- `cargo test -p pi-code-engine resolve_typst -- --nocapture` → passed.
+- `cargo test -p pi-code-graph generic_typst_extractor_uses_base_names_for_callable_lets -- --nocapture` → passed.
+- `cargo test -p pi-code-graph graph_symbols_match_typst_callable_lets_by_base_name -- --nocapture` → passed.
+- `cargo test -p pi-code-graph graph_symbols_exact_match_native_canonical_paths_for_audited_languages -- --nocapture` → passed.
+- `cargo test -p pi-code-graph queries_symbol_and_file_lookup_distinguish_exact_from_ranked -- --nocapture` → passed.
+- `bun --cwd=packages/natives run dev:native` → rebuilt `packages/natives/native/pi_natives.dev.node` with the Rust changes.
+- `CI=1 bun test packages/natives/test/code-buffer.test.ts` → passed after rebuilding the dev native addon.
+- `bun check:ts && bun check:rs` → passed.
+- Fresh-session proof: `PI_DEV=1 bun -e ...` using `executeCodeGraph({ command: "index" | "symbols" })` plus `executeCodeBuffer({ command: "edit" })` → proved `section-title` exact symbol lookup after graph rebuild, successful symbol-target replace by base binding name, and truthful missing-symbol diagnostics (`Available: [teal-primary, section-title]`).
+*** Artifacts
+- Fresh proof JSON: [[file:!tasks/plans/plan-artifacts/PLAN-243-code-tool-typst-symbol-target-consistenc/fresh-code-tool-proof.json]]
+- Targeted Rust verification log: artifact://14bebf0f19e6cf65/main/bash/17.txt
+- Native rebuild log: artifact://14bebf0f19e6cf65/main/bash/5.txt
+*** Deviations
+- Manual proof used a fresh `PI_DEV=1` Bun process that loaded the rebuilt dev addon directly, rather than the already-running harness process, because the long-lived in-harness code tool kept the pre-rebuild native addon loaded until restart.
+
+NOTE [2026-04-17]: Executed and verified. Child items BUG-273 and BUG-274 closed to DONE; completion report appended with verification evidence and artifacts.

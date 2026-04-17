@@ -107,11 +107,7 @@ pub(crate) fn declaration_for<'a>(
 	})
 }
 
-pub(crate) fn declaration_name(
-	source: &str,
-	node: Node<'_>,
-	decl: &DeclarationPattern,
-) -> Option<String> {
+pub fn declaration_name(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> Option<String> {
 	declaration_name_resolution(source, node, decl).map(|resolution| resolution.text)
 }
 
@@ -138,12 +134,22 @@ pub(crate) fn declaration_name_resolution(
 	match &decl.name {
 		NameExtractor::Field { name } => {
 			if let Some(name_node) = node.child_by_field_name(name) {
-				return resolution_from_node(
-					source,
-					name_node.child_by_field_name("name").unwrap_or(name_node),
-					None,
-					false,
-				);
+				let name_node = if decl.kind == "let" && node.kind() == "let" && name == "pattern" {
+					if name_node.kind() == "call" {
+						name_node.child_by_field_name("callee").unwrap_or_else(|| {
+							let mut cursor = name_node.walk();
+							name_node
+								.named_children(&mut cursor)
+								.next()
+								.unwrap_or(name_node)
+						})
+					} else {
+						name_node.child_by_field_name("name").unwrap_or(name_node)
+					}
+				} else {
+					name_node.child_by_field_name("name").unwrap_or(name_node)
+				};
+				return resolution_from_node(source, name_node, None, false);
 			}
 
 			find_named_descendant(node, "variable_declarator")

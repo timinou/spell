@@ -1,0 +1,135 @@
+#+TITLE: packages/coding-agent: fix Typst symbol-target consistency across code edit and code symbols
+#+STATE: DONE
+#+SESSION_ID: 14be78ff1026cf64
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T18-23-06-304Z_14be78ff1026cf64.jsonl]]
+#+CUSTOM_ID: BUG-273-packages-coding-agent-fix-typst-symbol-t
+#+PRIORITY: #A
+#+LAYER: core
+#+EFFORT: 8h
+
+* Scope
+- In scope:
+  - Fix `code edit` symbol-target resolution for Typst callable `#let` bindings such as `#let section-block(num, title, body) = ...`.
+  - Make missing-symbol diagnostics truthful for Typst code wrappers so `Available: [...]` lists actual top-level names instead of `[]`.
+  - Align the code-graph extractor used by `code symbols` with the native resolver so the canonical target name for callable Typst lets is the base binding name (`section-block`), not the full pattern text.
+  - Keep display/signature context available for humans while making machine-targeted symbol identity stable.
+- Out of scope:
+  - General line-target semantics for Typst `code` wrappers. The current `raw node 'let' expands to editable scope 'code'` refusal is conservative and correct unless a separate design says line edits should auto-pick `let`.
+  - Arbitrary Typst pattern destructuring beyond callable/simple let bindings.
+  - Broad multi-language audits; handled by [[id:BUG-274-packages-coding-agent-audit-wrapper-and]].
+
+* Existing Patterns
+- `packages/coding-agent/src/tools/code.ts`
+  - `GRAPH_COMMANDS` routes `symbols` through graph search, while `edit` goes through native file-buffer execution.
+  - This split is the first source of drift to eliminate or explicitly cover with tests.
+- `crates/pi-natives/src/code_buffer.rs`
+  - `resolve_target()` is the native entry point for symbol-targeted edits.
+  - Any bug visible in `code edit` must be reproduced here, not patched in the TUI layer.
+- `crates/pi-code-engine/src/resolve.rs`
+  - `resolve_symbol()` → `find_symbol_node()` performs exact symbol matching.
+  - `collect_top_level_names()` currently builds the `Available: [...]` list and must use the same wrapper-unwrapping rules as actual resolution.
+- `crates/pi-code-engine/src/outline.rs`
+  - `declaration_name_resolution()` / `resolution_from_node()` currently derive local declaration names.
+  - This logic is duplicated conceptually in graph extraction and is the likely invariant boundary to centralize.
+- `crates/pi-code-engine/src/language/mod.rs`
+  - Typst declarations use `DeclarationPattern { node_types: ["let"], name: NameExtractor::Field { name: "pattern" }, ... }`.
+  - Callable Typst lets currently surface full pattern text (`section-block(num, title, body)`) instead of stable binding names.
+- `crates/pi-code-graph/src/language/generic.rs`
+  - `resolve_name_for_extractor()` mirrors declaration-name extraction for graph indexing.
+  - `collect_symbol_entry()` writes `ExtractedSymbol.name`; this must match the native resolver’s canonical symbol identity.
+- `crates/pi-code-graph/src/query.rs`
+  - `exact_symbol_matches()` matches on `symbol.name` / `symbol.qualified_name`; fixing canonical names here improves `code symbols` exact-match behavior without UI hacks.
+- `packages/coding-agent/src/prompts/tools/code-hint-typst.md`
+  - Update only if needed after behavior is settled; avoid promising syntax the resolver still does not support.
+
+* Tests
+- Workflow inventory to cover before implementation:
+  1. User runs `code symbols { query: "section-block" }` on a Typst file with `#let section-block(num, title, body) = ...` and receives a result whose canonical target is `section-block`.
+  2. User runs `code edit { symbol: "section-block", operation: "replace", ... }` and the callable let resolves without requiring `section-block()` or the full signature.
+  3. User runs `code edit` with an unknown Typst symbol in a wrappered file and receives a truthful `Available: [...]` list containing actual top-level names.
+  4. Existing simple Typst lets (`#let navy = ...`) still resolve exactly.
+  5. Existing zero-arg and default-arg callable lets (`posterior-chart()`, `lbl(txt, color: navy)`) still resolve by base binding name.
+  6. Existing conservative line-target behavior remains unchanged: line 88 without `node_type` still refuses when raw `let` and editable `code` differ.
+- Concrete test files / suites:
+  - `crates/pi-code-engine/src/resolve.rs`
+    - Add focused Typst resolve tests using a report-like fixture or inline source that includes simple lets, callable lets, and unknown-symbol suggestions.
+  - `crates/pi-code-graph/src/query.rs` and/or `crates/pi-code-graph/src/language/generic.rs`
+    - Add graph extraction/query tests proving callable Typst lets index under base binding names and remain searchable by base name.
+  - `packages/natives/test/code-buffer.test.ts`
+    - Add end-to-end native integration coverage for `executeCodeBuffer({ command: "edit", file: "*.typ", symbol: "section-block", operation: "replace", ... })`.
+  - Reuse existing Typst fixtures where possible; add a dedicated callable-let fixture only if inline source obscures the regression.
+
+* Implementation
+** Write failing native resolver regressions
+:PROPERTIES:
+:CUSTOM_ID: BUG-273-packages-coding-agent-fix-typst-symbol-t::resolver-regressions
+:END:
+- Files:
+  - `crates/pi-code-engine/src/resolve.rs`
+- Add initially failing tests for workflows 2, 3, 4, and 5.
+- Assert base-name resolution for callable lets, truthful `Available: [...]` suggestions, and preservation of existing simple-let behavior.
+
+** Write failing graph/search regressions
+:PROPERTIES:
+:CUSTOM_ID: BUG-273-packages-coding-agent-fix-typst-symbol-t::graph-regressions
+:DEPENDS: BUG-273-packages-coding-agent-fix-typst-symbol-t::resolver-regressions
+:END:
+- Files:
+  - `crates/pi-code-graph/src/language/generic.rs`
+  - `crates/pi-code-graph/src/query.rs`
+- Add failing tests for workflow 1 showing graph extraction and exact symbol lookup use the same canonical base name as the native resolver.
+- Prefer one extractor-level test and one query-level test over many tiny assertions.
+
+** Centralize canonical declaration-name extraction
+:PROPERTIES:
+:CUSTOM_ID: BUG-273-packages-coding-agent-fix-typst-symbol-t::centralize-canonical-name
+:DEPENDS: BUG-273-packages-coding-agent-fix-typst-symbol-t::graph-regressions
+:END:
+- Files:
+  - `crates/pi-code-engine/src/outline.rs`
+  - `crates/pi-code-engine/src/resolve.rs`
+  - `crates/pi-code-graph/src/language/generic.rs`
+- Introduce one shared notion of canonical symbol identity for declaration patterns instead of letting outline/resolve/graph extraction drift.
+- For Typst `let` patterns, canonicalize callable bindings to the base identifier (`section-block`, `posterior-chart`, `_beta-samples`) while preserving full signatures separately for human-readable detail/signature output.
+- Do not solve this with ad-hoc string trimming in only one subsystem.
+
+** Fix wrapper-aware Available diagnostics
+:PROPERTIES:
+:CUSTOM_ID: BUG-273-packages-coding-agent-fix-typst-symbol-t::fix-available-list
+:DEPENDS: BUG-273-packages-coding-agent-fix-typst-symbol-t::centralize-canonical-name
+:END:
+- Files:
+  - `crates/pi-code-engine/src/resolve.rs`
+- Make `collect_top_level_names()` follow the same wrapper-unwrapping path used by real resolution so Typst `code` wrappers contribute names to diagnostics.
+- Ensure missing-symbol errors report canonical target names, not empty lists or mismatched display signatures.
+
+** Prove end-to-end code-edit behavior
+:PROPERTIES:
+:CUSTOM_ID: BUG-273-packages-coding-agent-fix-typst-symbol-t::code-buffer-regression
+:DEPENDS: BUG-273-packages-coding-agent-fix-typst-symbol-t::fix-available-list
+:END:
+- Files:
+  - `packages/natives/test/code-buffer.test.ts`
+  - optionally `packages/coding-agent/src/prompts/tools/code-hint-typst.md`
+- Add integration coverage for workflow 2 through the NAPI boundary.
+- Update Typst hint text only if the final behavior changes what users should type; do not document speculative syntax.
+
+* Edge Cases
+- Hyphenated Typst names: `section-block`, `posterior-chart`, `_beta-samples`.
+- Callable lets with empty arg list, positional args, default args, and typed/default-like Typst syntax.
+- Wrappered top-level code nodes whose direct parent is `code` and grandparent is `source_file`.
+- Unknown-symbol errors in files mixing imports, simple lets, callable lets, and comments.
+- Exact search by full qualified name should continue to work if graph queries use `path::name` forms.
+- Display/output should not regress from showing useful signatures even if canonical symbol identity becomes shorter.
+
+* Acceptance Criteria
+- `code edit` can target callable Typst lets by base binding name in the native code-buffer layer.
+- Missing-symbol diagnostics in Typst files no longer emit `Available: []` when declarations are present behind code wrappers.
+- `code symbols` exact/ranked lookup for callable Typst lets uses the same canonical base name that `code edit` accepts.
+- Existing simple Typst let resolution remains intact.
+- Verification command(s):
+  - package-local Rust tests covering new resolve / graph regressions.
+  - `packages/natives/test/code-buffer.test.ts` targeted run for the new Typst edit regression.
+  - final TypeScript/Rust package checks as appropriate for touched packages.
+
+NOTE [2026-04-17]: Executed under PLAN-243. Added Typst callable-let resolver/graph/NAPI regressions, centralized canonical name extraction for Typst let bindings, and fixed wrapper-aware missing-symbol diagnostics.

@@ -3,9 +3,12 @@ use std::{
 	sync::Arc,
 };
 
-use pi_code_engine::language::{
-	ClassBodyExtractor, DeclarationPattern, LanguageProfile, LanguageRegistry as EngineRegistry,
-	NameExtractor, ReferencePattern,
+use pi_code_engine::{
+	language::{
+		ClassBodyExtractor, DeclarationPattern, LanguageProfile, LanguageRegistry as EngineRegistry,
+		NameExtractor, ReferencePattern,
+	},
+	outline::declaration_name,
 };
 use tree_sitter::{Node, Parser};
 
@@ -428,14 +431,18 @@ fn declaration_for<'a>(
 }
 
 fn resolve_name(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> Option<ResolvedName> {
-	if decl.name_from_arg {
+	let text = declaration_name(source, node, decl)?;
+	let mut resolved = if decl.name_from_arg {
 		let args = child_by_field_or_kind(node, "arguments")?;
 		let mut cursor = args.walk();
 		let first = args.named_children(&mut cursor).next()?;
 		let target = first.child_by_field_name("target").unwrap_or(first);
-		return resolved_name_from_node(source, target);
-	}
-	resolve_name_for_extractor(source, node, &decl.name)
+		resolved_name_from_node(source, target)?
+	} else {
+		resolve_name_for_extractor(source, node, &decl.name)?
+	};
+	resolved.text = text;
+	Some(resolved)
 }
 
 fn resolve_name_for_extractor(
@@ -1053,6 +1060,39 @@ mod tests {
 		assert_eq!(file.imports[0].bindings[0].local_name, "run_helper");
 		assert_eq!(file.imports[1].specifier, "pkg.core");
 		assert_eq!(file.imports[1].bindings[0].local_name, "core");
+	}
+
+	#[test]
+	fn generic_typst_extractor_uses_base_names_for_callable_lets() {
+		let extractor =
+			EngineProfileExtractor::new(SupportedLanguage::new("typst"), engine_registry());
+		let file = extractor
+			.extract(
+				Path::new("docs/report.typ"),
+				"#let navy = rgb(\"#000080\")\n#let section-block(num, title) = {\n  [#num \
+				 #title]\n}\n#let posterior-chart() = [ok]\n#let lbl(txt, color: navy) = [#txt]\n",
+			)
+			.expect("typst extraction should succeed");
+
+		let names = file
+			.symbols
+			.iter()
+			.map(|symbol| symbol.name.as_str())
+			.collect::<Vec<_>>();
+		assert_eq!(names, vec!["navy", "section-block", "posterior-chart", "lbl"]);
+		let section = file
+			.symbols
+			.iter()
+			.find(|symbol| symbol.name == "section-block")
+			.expect("section-block should be present");
+		assert_eq!(section.qualified_name, "docs/report.typ::section-block");
+		assert_eq!(section.kind, SymbolKind::Variable);
+		assert!(
+			section
+				.detail
+				.as_deref()
+				.is_some_and(|detail| detail.contains("section-block(num, title)"))
+		);
 	}
 
 	#[test]
