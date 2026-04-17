@@ -1,0 +1,43 @@
+{
+  "command": "PI_DEV=1 bun -e '<proof script>'",
+  "index": {
+    "output": "Code graph status\nRoot: /home/user/code/ora/spell\nCache: fresh\nRebuilt: yes\nFiles: 4719\nSymbols: 54231\nEdges: 86572\nGit HEAD: 78948fafb6ea7866f954c8db41c78fa5c63800f4\nLanguages: css=3, elixir=1, html=11, markdown=401, org=1829, python=11, rust=222, typescript=2227, typst=14",
+    "cacheStatus": "fresh",
+    "rebuilt": true,
+    "fileCount": 4719,
+    "symbolCount": 54231,
+    "edgeCount": 86572
+  },
+  "symbols": {
+    "output": "Symbols\nQuery: section-title\nStatus: exact\n- crates/pi-code-engine/tests/fixtures/sources/typst_edit_targets.typ::section-title [variable] crates/pi-code-engine/tests/fixtures/sources/typst_edit_targets.typ:11:6",
+    "cacheStatus": "fresh",
+    "rebuilt": false,
+    "fileCount": 4719,
+    "symbolCount": 54231,
+    "edgeCount": 86572
+  },
+  "edit": {
+    "output": {
+      "version": 1,
+      "diff": "@@ section-title @@\n@@ -2,3 +2,2 @@\n-#let section-title(num, title) = {\n-  [#num --- #title]\n-}\n+#let section-title(num, title) = [patched]\n+\n",
+      "editCount": 1,
+      "created": false,
+      "operation": "replace",
+      "proof": null
+    },
+    "error": false
+  },
+  "save": {
+    "output": {
+      "success": true,
+      "version": 1
+    },
+    "error": false
+  },
+  "missing": {
+    "output": "GenericFailure, edit error: GenericFailure, edit error: Symbol 'missing' not found. Available: [teal-primary, section-title]",
+    "error": true
+  },
+  "finalText": "#let teal-primary = rgb(\"#008080\")\n#let section-title(num, title) = [patched]\n\n",
+  "tempFile": "/tmp/plan243-proof-kJzAm1/proof.typ"
+}

@@ -200,6 +200,32 @@ describe("executeCodeBuffer NAPI bridge", () => {
 		expect(await Bun.file(file).text()).toBe("export const replaced = 2;\n");
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
+	it("replaces callable Typst lets by base binding name", async () => {
+		const tempDir = await createRepoTempDir("pi-natives-typst-symbol");
+		const file = path.join(tempDir, "report.typ");
+		await Bun.write(
+			file,
+			'#let teal-primary = rgb("#008080")\n#let section-block(num, title) = {\n  [#num --- #title]\n}\n',
+		);
+
+		const edit = executeCodeBuffer({
+			command: "edit",
+			file,
+			symbol: "section-block",
+			operation: "replace",
+			content: "let section-block(num, title) = [patched]\n",
+		});
+		expect(edit.error).toBe(false);
+		expect(edit.output).toEqual(expect.objectContaining({ editCount: 1, created: false }));
+		expect(executeCodeBuffer({ command: "save", file })).toEqual({
+			error: false,
+			output: expect.objectContaining({ success: true }),
+		});
+		expect(await Bun.file(file).text()).toBe(
+			'#let teal-primary = rgb("#008080")\n#let section-block(num, title) = [patched]\n\n',
+		);
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
 
 	it("rejects full-file replace for missing supported files", async () => {
 		const tempDir = path.join(os.tmpdir(), `pi-natives-missing-replace-${Date.now()}`);

@@ -462,7 +462,7 @@ fn resolve_symbol(
 	let exact = graph
 		.node_indices()
 		.find(|&node_index| match graph.node_weight(node_index) {
-			Some(GraphNode::Symbol(symbol)) => symbol.qualified_name == query || symbol.name == query,
+			Some(GraphNode::Symbol(symbol)) => symbol_matches_query(symbol, query),
 			_ => false,
 		});
 	exact.or_else(|| {
@@ -492,6 +492,15 @@ fn resolve_file(
 		})
 }
 
+fn symbol_matches_query(symbol: &crate::model::SymbolNode, query: &str) -> bool {
+	symbol.qualified_name == query
+		|| symbol.name == query
+		|| symbol
+			.qualified_name
+			.split_once("::")
+			.is_some_and(|(_, suffix)| suffix == query)
+}
+
 fn exact_symbol_matches(
 	graph: &petgraph::stable_graph::StableGraph<GraphNode, EdgeKind>,
 	query: &str,
@@ -499,7 +508,7 @@ fn exact_symbol_matches(
 	graph
 		.node_indices()
 		.filter(|&node_index| match graph.node_weight(node_index) {
-			Some(GraphNode::Symbol(symbol)) => symbol.qualified_name == query || symbol.name == query,
+			Some(GraphNode::Symbol(symbol)) => symbol_matches_query(symbol, query),
 			_ => false,
 		})
 		.collect()
@@ -765,7 +774,7 @@ fn queries_context_and_dead_code_treat_styles_as_usage() {
 
 #[cfg(test)]
 mod tests {
-	use std::{path::PathBuf, sync::Arc};
+	use std::{fs, path::PathBuf, sync::Arc};
 
 	use super::*;
 	use crate::{
@@ -1012,6 +1021,101 @@ mod tests {
 		assert_eq!(files.status, "exact");
 		assert_eq!(files.matches.len(), 1);
 		assert_eq!(files.matches[0].label, "caller.query");
+	}
+
+	#[test]
+	fn graph_symbols_match_typst_callable_lets_by_base_name() {
+		let root =
+			std::env::temp_dir().join(format!("pi-code-graph-query-typst-{}", std::process::id()));
+		let cache_dir = root.join("cache");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(root.join("docs")).expect("docs dir");
+		fs::write(
+			root.join("docs/report.typ"),
+			"#let section-block(num, title) = {\n  [#num #title]\n}\n#let posterior-chart() = [ok]\n",
+		)
+		.expect("typst file");
+
+		let graph = CodeGraphBuilder::new(
+			LanguageRegistry::new().with_defaults().expect("registry"),
+			CacheStore::new(&cache_dir),
+		)
+		.build(&BuildGraphOptions::new(&root))
+		.expect("typst workspace should index")
+		.graph;
+
+		let exact = graph.graph_symbols("section-block", 5);
+		assert_eq!(exact.status, "exact");
+		assert_eq!(exact.matches.len(), 1);
+		assert!(
+			exact.matches[0]
+				.label
+				.ends_with("docs/report.typ::section-block")
+		);
+
+		let qualified = graph.graph_symbols("docs/report.typ::section-block", 5);
+		assert_eq!(qualified.status, "exact");
+		assert_eq!(qualified.matches.len(), 1);
+		assert!(
+			qualified.matches[0]
+				.label
+				.ends_with("docs/report.typ::section-block")
+		);
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn graph_symbols_exact_match_native_canonical_paths_for_audited_languages() {
+		let root =
+			std::env::temp_dir().join(format!("pi-code-graph-query-parity-{}", std::process::id()));
+		let cache_dir = root.join("cache");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(root.join("docs")).expect("docs dir");
+		fs::create_dir_all(root.join("lib/my_app")).expect("elixir dir");
+		fs::create_dir_all(root.join("web")).expect("web dir");
+		fs::write(root.join("docs/readme.md"), "# Installation\n\n## Prerequisites\n")
+			.expect("markdown file");
+		fs::write(root.join("docs/plan.org"), "* OrgTop\n** OrgChild\n").expect("org file");
+		fs::write(
+			root.join("lib/my_app/app.ex"),
+			"defmodule MyApp.Greeter do\n  def greet(name) do\n    name\n  end\nend\n",
+		)
+		.expect("elixir file");
+		fs::write(
+			root.join("web/index.html"),
+			"<!doctype html>\n<html id=\"root\">\n  <body id=\"main\">\n    <button \
+			 id=\"save\">Save</button>\n  </body>\n</html>\n",
+		)
+		.expect("html file");
+		fs::write(root.join("web/app.css"), ":root { --accent: red; color: var(--accent); }\n")
+			.expect("css file");
+
+		let graph = CodeGraphBuilder::new(
+			LanguageRegistry::new().with_defaults().expect("registry"),
+			CacheStore::new(&cache_dir),
+		)
+		.build(&BuildGraphOptions::new(&root))
+		.expect("parity workspace should index")
+		.graph;
+
+		let cases = [
+			("Installation.Prerequisites", "docs/readme.md::Installation.Prerequisites"),
+			("OrgTop.OrgChild", "docs/plan.org::OrgTop.OrgChild"),
+			("MyApp.Greeter.greet", "lib/my_app/app.ex::MyApp.Greeter.greet"),
+			("html#root.body#main.button#save", "web/index.html::html#root.body#main.button#save"),
+			(":root.--accent", "web/app.css:::root.--accent"),
+		];
+		for (query, expected_label) in cases {
+			let symbols = graph.graph_symbols(query, 5);
+			assert_eq!(symbols.status, "exact", "{query} should exact-match");
+			assert_eq!(symbols.matches.len(), 1, "{query} should return one match");
+			assert!(
+				symbols.matches[0].label.ends_with(expected_label),
+				"unexpected label for {query}: {}",
+				symbols.matches[0].label
+			);
+		}
+		let _ = fs::remove_dir_all(root);
 	}
 
 	#[test]
