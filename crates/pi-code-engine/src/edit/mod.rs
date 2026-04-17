@@ -7,6 +7,7 @@ mod rename;
 mod replace;
 mod splice;
 mod transpose;
+mod web_refactor;
 mod wrap;
 
 pub use body::replace_body;
@@ -17,6 +18,9 @@ pub use rename::rename_symbol;
 pub use replace::{insert_after, insert_before, kill_node, replace_node};
 pub use splice::{SpliceMode, splice_node};
 pub use transpose::transpose_nodes;
+pub use web_refactor::{
+	delete_resolved_symbol, rename_class_token, rename_custom_property, rename_id_token,
+};
 pub use wrap::wrap_node;
 
 pub use crate::buffer::TextEdit;

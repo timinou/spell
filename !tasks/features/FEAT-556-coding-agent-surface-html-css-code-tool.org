@@ -1,12 +1,12 @@
 #+TITLE: coding-agent: surface HTML/CSS code-tool affordances and conservative refactors
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14be1e420c74b0e5
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T11-46-39-793Z_14be1e420c74b0e5.jsonl]]
 #+CUSTOM_ID: FEAT-556-coding-agent-surface-html-css-code-tool
 #+EFFORT: 20h
 #+LAYER: web-semantics
 #+PRIORITY: #A
-#+DEPENDS: FEAT-553-pi-code-engine-define-html-css-affordanc FEAT-554-pi-code-engine-add-html-embedded-region FEAT-555-pi-code-graph-add-css-selector-cascade-t
+#+DEPENDS: FEAT-553-pi-code-engine-define-html-css-affordanc FEAT-554-pi-code-engine-add-html-embedded-region FEAT-555-pi-code-graph-add-css-selector-cascade-t FEAT-562-pi-code-engine-native-add-provable-html FEAT-563-coding-agent-native-surface-html-css-ref
 
 * Scope
 - In scope: surface HTML/CSS semantic support through `packages/natives` and `packages/coding-agent` so the code tool can read, navigate, graph, and refactor markup/stylesheets truthfully.
@@ -95,3 +95,9 @@
 - Focused coding-agent/native tests lock the user-facing contract and failure modes listed above.
 
 NOTE [2026-04-17]: Partially implemented in PLAN-238: code languages/capability metadata, prompt/docs, result rendering, native/coding-agent tests, and explicit refusal for unsafe HTML/CSS rename/delete are landed. Remaining work: provable success-path refactors for exact class/id/custom-property rename and proof-backed dead-style removal.
+
+NOTE [2026-04-17]: Remaining closure work is now decomposed under [[id:PLAN-242-html-css-refactor-proof-bridge-plan]] via [[id:FEAT-562-pi-code-engine-native-add-provable-html]] and [[id:FEAT-563-coding-agent-native-surface-html-css-ref]]. FEAT-556 remains the parent closure gate and cannot move to DONE until both bridge items land and the acceptance workflows above are re-verified.
+
+NOTE [2026-04-17]: Closure gap resolved by PLAN-242. FEAT-562 and FEAT-563 landed; exact class/id/custom-property rename and proof-backed dead-style removal now surface through native + coding-agent layers with structured proof metadata and refusal reasons. Re-verified with `cargo test -p pi-code-engine`, `cargo test -p pi-code-graph`, `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts`, `bun check:ts`, and `bun check:rs`.
+
+NOTE [2026-04-17]: PLAN-242 closed the remaining HTML/CSS refactor proof gap; parent feature acceptance re-verified and truthful closure reached.

@@ -1,0 +1,104 @@
+#+TITLE: HTML_CSS_REFACTOR_PROOF_BRIDGE_PLAN
+#+STATE: DONE
+#+SESSION_ID: 14be529638e9a132
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T15-35-17-475Z_14be529638e9a132.jsonl]]
+#+CUSTOM_ID: PLAN-242-html-css-refactor-proof-bridge-plan
+#+EFFORT: 20h
+#+LAYER: web-semantics
+#+PRIORITY: #A
+
+* Context
+- Objective: bridge the remaining closure gap for [[id:FEAT-556-coding-agent-surface-html-css-code-tool]] without rescoping that parent feature. FEAT-556 stays open as the truth gate; this plan decomposes the unfinished work into two execution items that must land before FEAT-556 can close.
+- Repo evidence for the remaining gap:
+  - `!tasks/features/FEAT-556-coding-agent-surface-html-css-code-tool.org` NOTE [2026-04-17] says the shipped surface covers capability metadata, prompt/docs, result rendering, and explicit refusal for unsafe rename/delete, while provable success-path refactors and proof-backed dead-style removal remain open.
+  - `!tasks/plans/PLAN-238-html-css-code-graph-engine-plan.org` completion updates [2026-04-17 5] and child reconciliation show FEAT-553/554/555 done, FEAT-556 still DOING because the remaining open work is the success-path HTML/CSS refactor surface.
+  - `crates/pi-code-engine/src/language/mod.rs` still leaves HTML/CSS `procedures: HashMap::new()`; no registered HTML/CSS success-path procedures exist today.
+  - `crates/pi-natives/src/code_buffer.rs` still blanket-refuses HTML/CSS `rename` and `kill` instead of using proof-backed allow/refuse logic.
+- Bridge children created by this plan:
+  - [[id:FEAT-562-pi-code-engine-native-add-provable-html]]
+  - [[id:FEAT-563-coding-agent-native-surface-html-css-ref]]
+
+** Settled Decisions
+1. FEAT-556 remains the parent deliverable and closing gate; this plan does not transfer or shrink its scope.
+2. The bridge splits into two items because the natural seam is Rust proof/execution substrate first, then TS/coding-agent contract + UX surface second.
+3. HTML/CSS stay inside the existing `code` tool. No parallel HTML/CSS-only tool is introduced.
+4. Exact token mutations use explicit operation names for the safe HTML/CSS refactor surface (`rename-class-token`, `rename-id-token`, `rename-custom-property`, `remove-dead-style`), while generic `replace-body` remains the selector-rule body replacement path.
+5. Truthful closure requires both success and refusal coverage across engine, graph, native, and coding-agent layers; refusal-only evidence is insufficient.
+
+** Critical Files
+- Engine/profile/procedure substrate:
+  - `crates/pi-code-engine/src/language/mod.rs`
+  - `crates/pi-code-engine/src/procedure.rs`
+  - `crates/pi-code-engine/src/edit/rename.rs`
+- Graph/proof substrate:
+  - `crates/pi-code-graph/src/query.rs`
+- Rust native bridge:
+  - `crates/pi-natives/src/code_buffer.rs`
+  - `crates/pi-natives/src/code_graph.rs` if proof metadata exposure needs parity
+- TypeScript/native + agent surface:
+  - `packages/natives/src/code-buffer/types.ts`
+  - `packages/coding-agent/src/tools/code.ts`
+  - `packages/coding-agent/src/tools/code-result.ts`
+  - `packages/coding-agent/src/prompts/tools/code.md`
+- Focused tests/fixtures:
+  - `crates/pi-code-engine/tests/fixtures/sources/web/`
+  - `crates/pi-code-graph/src/query.rs`
+  - `packages/natives/test/code-buffer.test.ts`
+  - `packages/coding-agent/test/tools/code.test.ts`
+  - `packages/coding-agent/test/tools/code-result.test.ts`
+
+* Verification
+- Exact commands after implementation:
+  - `cargo test -p pi-code-engine`
+  - `cargo test -p pi-code-graph`
+  - `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts`
+  - `bun check:ts`
+  - `bun check:rs`
+- Required workflow proof before FEAT-556 can close:
+  - exact class-token rename success + refusal
+  - exact id rename success + refusal
+  - exact custom-property rename success + refusal
+  - selector-body replacement via generic `replace-body` on a single resolved CSS rule symbol
+  - proof-backed dead-style removal success + refusal
+  - coding-agent/native result details preserve proof/confidence metadata in machine-readable form
+  - prompt/docs match the actual supported HTML/CSS operation set
+- Manual proof expectations:
+  - a provable HTML/CSS refactor command produces a truthful diff plus proof/confidence context
+  - an ambiguous/dynamic HTML/CSS refactor command refuses with the exact proof gap, not a generic error
+  - FEAT-556 can cite the focused test bundle and the above manual proofs as its final closure evidence
+
+* Execution Manifest
+** Wave 1
+- [[id:FEAT-562-pi-code-engine-native-add-provable-html]]
+- Rationale: the Rust proof/execution substrate must exist before the TS/native contract and coding-agent UX can tell the truth about successful HTML/CSS refactors.
+
+** Wave 2
+- [[id:FEAT-563-coding-agent-native-surface-html-css-ref]]
+- Rationale: once the substrate exists, surface the operations/proof metadata through the native TS contract, `code` tool, result renderer, docs, and end-to-end tests.
+
+** Wave note
+- `org wave` was run while drafting this bridge plan, but the current tool output still returns the global ready-set instead of isolating this session subset cleanly. The waves above mirror the explicit `DEPENDS` DAG of the new child items, matching the only dependency edge in this bridge plan: FEAT-563 depends on FEAT-562.
+
+* Linked prerequisite items
+- Already completed prerequisite children referenced by the bridge dependencies:
+  - [[id:FEAT-553-pi-code-engine-define-html-css-affordanc]]
+  - [[id:FEAT-554-pi-code-engine-add-html-embedded-region]]
+  - [[id:FEAT-555-pi-code-graph-add-css-selector-cascade-t]]
+- These are not execution targets of this bridge plan; they are linked so dependency validation can see the completed prerequisite chain that FEAT-556 and FEAT-562 still reference.
+
+** Completion [2026-04-17]
+*** Verification
+- `cargo test -p pi-code-engine` → passed (`152 passed; 0 failed`).
+- `cargo test -p pi-code-graph` → passed (`42 passed; 0 failed`).
+- `bun --cwd=packages/natives run dev:native` → passed; refreshed `packages/natives/native/pi_natives.dev.node` before the native bridge test bundle.
+- `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts` → passed (`42 pass; 0 fail`).
+- `bun check:ts` → passed (`biome check . && tsgo -p tsconfig.json`).
+- `bun check:rs` → passed (`cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings`).
+- Manual proof via native bridge exercised the new HTML/CSS surface through the focused test bundle: structured generic rename refusal, exact `rename-id-token` success, selector-list refusal for `rename-class-token`, exact `rename-custom-property` success, and `remove-dead-style` success/refusal with graph-backed proof metadata.
+- Parent feature `FEAT-556-coding-agent-surface-html-css-code-tool` was re-verified and moved to `DONE` after the bridge items landed.
+*** Artifacts
+- No additional screenshots or generated binary artifacts were required beyond repository changes and the focused verification commands above.
+*** Deviations
+- None.
+
+NOTE [2026-04-17]: Execution complete. Verification evidence captured in the completion section; FEAT-562, FEAT-563, and FEAT-556 have been reconciled to DONE.

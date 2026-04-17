@@ -202,11 +202,12 @@ const editEntrySchema = Type.Object({
 	column: Type.Optional(Type.Integer({ description: "1-indexed column for transpose" })),
 	operation: Type.String({
 		description:
-			"Edit operation: patch | replace | replace-body | wrap | rename | kill | insert-before | insert-after | splice | drag-up | drag-down | clone | transpose",
+			"Edit operation: patch | replace | replace-body | wrap | rename | kill | insert-before | insert-after | splice | drag-up | drag-down | clone | transpose | rename-class-token | rename-id-token | rename-custom-property | remove-dead-style",
 	}),
 	content: Type.Optional(
 		Type.Union([Type.String(), Type.Array(Type.String())], {
-			description: "Content for replace | replace-body | wrap template | rename new name | insert operations",
+			description:
+				"Content for replace | replace-body | wrap template | rename new name | insert operations; HTML/CSS token operations still pass the proposed token text when applicable",
 		}),
 	),
 	patches: Type.Optional(Type.Array(patchSchema, { description: "Find/replace patches for patch operation" })),
@@ -233,12 +234,13 @@ const codeSchema = Type.Object({
 	operation: Type.Optional(
 		Type.String({
 			description:
-				"Edit operation: create | patch | replace | replace-body | wrap | rename | kill | insert-before | insert-after | splice | drag-up | drag-down | clone | transpose",
+				"Edit operation: create | patch | replace | replace-body | wrap | rename | kill | insert-before | insert-after | splice | drag-up | drag-down | clone | transpose | rename-class-token | rename-id-token | rename-custom-property | remove-dead-style",
 		}),
 	),
 	content: Type.Optional(
 		Type.Union([Type.String(), Type.Array(Type.String())], {
-			description: "Content for replace | replace-body | wrap template | rename new name | insert operations",
+			description:
+				"Content for replace | replace-body | wrap template | rename new name | insert operations; HTML/CSS token operations still pass the proposed token text when applicable",
 		}),
 	),
 	idempotent: Type.Optional(

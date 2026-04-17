@@ -1,0 +1,105 @@
+#+TITLE: coding-agent/native: surface HTML/CSS refactor proofs and contract tests
+#+STATE: DONE
+#+SESSION_ID: 14be529638e9a132
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T15-35-17-475Z_14be529638e9a132.jsonl]]
+#+CUSTOM_ID: FEAT-563-coding-agent-native-surface-html-css-ref
+#+EFFORT: 8h
+#+DEPENDS: FEAT-562-pi-code-engine-native-add-provable-html
+#+LAYER: web-semantics
+#+PRIORITY: #A
+
+* Scope
+- Parent deliverable: [[id:FEAT-556-coding-agent-surface-html-css-code-tool]]. This item owns the TypeScript/native contract and coding-agent UX layer that exposes the FEAT-562 proof-backed HTML/CSS refactor surface truthfully.
+- Prerequisite: [[id:FEAT-562-pi-code-engine-native-add-provable-html]] provides the Rust-side procedure/proof substrate. This item MUST consume that substrate rather than redesigning it.
+- In scope: add TypeScript native bridge types for the new HTML/CSS operations and proof metadata; update `code` tool schema/descriptions/examples; update result normalization/rendering so proof/confidence is preserved structurally and shown in human-readable output; add focused end-to-end tests for success and refusal.
+- In scope: keep HTML/CSS inside the existing `code` tool. No parallel HTML/CSS-only tool may be introduced.
+- Out of scope: Rust proof algorithms, engine procedure registration, or cross-file graph extraction changes except for minimal contract plumbing already defined by FEAT-562.
+- Out of scope: framework/template follow-on work (HEEx full hosts, utilities, SFCs) and any visual/browser verification.
+
+* Existing Patterns
+- `packages/natives/src/code-buffer/types.ts`
+  - canonical TS contract for native code-buffer options/results. Extend this instead of parsing ad-hoc JSON in the agent.
+- `packages/coding-agent/src/tools/code.ts`
+  - schema descriptions, edit normalization, and file/graph command routing. New HTML/CSS operations MUST fit the existing `code edit` surface.
+- `packages/coding-agent/src/tools/code-result.ts`
+  - normalized typed result details and renderer logic; proof/confidence metadata MUST live here structurally rather than existing only in prose strings.
+- `packages/coding-agent/src/prompts/tools/code.md`
+  - public contract for supported operations, examples, and refusal semantics; documentation must match observed runtime behavior exactly.
+- `packages/coding-agent/test/tools/code.test.ts`, `packages/coding-agent/test/tools/code-result.test.ts`, `packages/natives/test/code-buffer.test.ts`
+  - existing focused contract tests already cover HTML/CSS language metadata and conservative refusal messaging; extend them instead of adding distant duplicate tests.
+
+* Tests
+- Workflow 1: `code edit` accepts the FEAT-562 HTML/CSS operation names and forwards them to the native layer with the exact payload shape expected by the bridge.
+- Workflow 2: successful exact class/id/custom-property refactors render truthful diff/results in both native and coding-agent layers, including operation identity and proof/confidence metadata.
+- Workflow 3: successful proof-backed dead-style removal renders why removal was allowed, not just that text changed.
+- Workflow 4: refusal paths remain explicit and machine-readable when FEAT-562 reports ambiguity, unsupported host regions, or insufficient confidence.
+- Workflow 5: `code-result` normalization preserves proof metadata through transcript rebuilds and renderer paths; no important HTML/CSS proof state exists only in formatted prose.
+- Workflow 6: prompt/docs/examples mention the exact supported HTML/CSS operations and continue to warn that ambiguous dynamic cases refuse.
+- Exact test files to extend/add:
+  - `packages/natives/test/code-buffer.test.ts`
+  - `packages/coding-agent/test/tools/code.test.ts`
+  - `packages/coding-agent/test/tools/code-result.test.ts`
+- Required scenarios:
+  - payload forwarding for `rename-class-token`, `rename-id-token`, `rename-custom-property`, `remove-dead-style`, and generic `replace-body` on CSS rule symbols
+  - success rendering with diff counts + proof/confidence
+  - refusal rendering with explicit reason/proof gap
+  - transcript rebuild / detail normalization preservation
+  - prompt/docs examples aligned to the actual supported operation set
+- UI artifact note: no screenshots required; proof is test output plus manual command-level evidence.
+
+* Implementation
+** Define the TS bridge/result contract for FEAT-562 operations
+:PROPERTIES:
+:CUSTOM_ID: FEAT-563-coding-agent-native-surface-html-css-ref::define-contract
+:DEPENDS: FEAT-562-pi-code-engine-native-add-provable-html::native-dispatch
+:END:
+- Files: `packages/natives/src/code-buffer/types.ts`, `packages/coding-agent/src/tools/code-result.ts`
+- Add the TypeScript-side operation/result vocabulary that matches FEAT-562 exactly.
+- Preserve machine-readable proof fields (reason, confidence, proof basis, operation kind) so renderers and future UI work do not need to re-parse prose.
+- This step satisfies Test Workflows 1, 2, 3, and 5.
+
+** Write failing native/agent contract tests before surface changes
+:PROPERTIES:
+:CUSTOM_ID: FEAT-563-coding-agent-native-surface-html-css-ref::write-tests
+:DEPENDS: FEAT-563-coding-agent-native-surface-html-css-ref::define-contract
+:END:
+- Files: `packages/natives/test/code-buffer.test.ts`, `packages/coding-agent/test/tools/code.test.ts`, `packages/coding-agent/test/tools/code-result.test.ts`
+- Add initially failing tests for all success + refusal workflows listed above.
+- Lock both raw result details and human-readable output where downstream behavior depends on exact text.
+- This step satisfies Test Workflows 1-6.
+
+** Surface the new operations through the code tool and result renderer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-563-coding-agent-native-surface-html-css-ref::tool-surface
+:DEPENDS: FEAT-563-coding-agent-native-surface-html-css-ref::write-tests
+:END:
+- Files: `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/tools/code-result.ts`, `packages/natives/src/code-buffer/types.ts`
+- Update schema descriptions, normalization, and render paths so the `code` tool can truthfully expose the new HTML/CSS operations without implying unsafe generic rename/delete support.
+- Ensure success/refusal results keep the proof metadata visible in both `details` and formatted text.
+- This step satisfies Test Workflows 1-5.
+
+** Synchronize public docs with the shipped contract
+:PROPERTIES:
+:CUSTOM_ID: FEAT-563-coding-agent-native-surface-html-css-ref::docs
+:DEPENDS: FEAT-563-coding-agent-native-surface-html-css-ref::tool-surface
+:END:
+- Files: `packages/coding-agent/src/prompts/tools/code.md`
+- Document the exact supported HTML/CSS operation set, reuse of generic `replace-body` for CSS rule-body replacement, and continued conservative refusal for ambiguous dynamic cases.
+- This step satisfies Test Workflow 6.
+
+* Edge Cases
+- The tool must not describe generic `rename`/`kill` as supported for arbitrary HTML/CSS symbols if only the narrower proof-backed operations are safe.
+- Proof/confidence metadata must survive success, refusal, partial preview, and rebuilt transcript paths; losing it in one path would make the contract untruthful.
+- Result rendering must continue to sanitize user-visible content; proof text and diffs are still renderer output.
+- If FEAT-562 returns a stale-graph or unsupported-host refusal, the coding-agent surface must report that exact limitation instead of collapsing everything into a generic failure.
+
+* Acceptance Criteria
+- The TypeScript/native bridge and coding-agent tool surface expose the FEAT-562 HTML/CSS operations and proof metadata without ad-hoc parsing.
+- Successful proof-backed HTML/CSS refactors are visible and understandable in both raw details and formatted result output.
+- Ambiguous/dynamic cases still refuse with explicit reason/confidence output.
+- Focused native + coding-agent tests lock the supported operation set, payload shape, rendered proof metadata, and refusal semantics.
+- FEAT-556 can point to these tests/results as the final user-facing proof that the remaining HTML/CSS refactor gap is closed.
+
+NOTE [2026-04-17]: Completed via PLAN-242. Landed TS/native proof metadata types, code-result normalization/rendering of `operation` + `proof`, schema text updates for exact HTML/CSS operations, and focused coding-agent/native tests. Verified with `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts`, plus final `bun check:ts`.
+
+NOTE [2026-04-17]: PLAN-242 verification complete; coding-agent/native proof surface landed and verified.

@@ -1,0 +1,110 @@
+#+TITLE: pi-code-engine/native: add provable HTML/CSS refactor procedures
+#+STATE: DONE
+#+SESSION_ID: 14be529638e9a132
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T15-35-17-475Z_14be529638e9a132.jsonl]]
+#+CUSTOM_ID: FEAT-562-pi-code-engine-native-add-provable-html
+#+EFFORT: 12h
+#+DEPENDS: FEAT-555-pi-code-graph-add-css-selector-cascade-t
+#+LAYER: web-semantics
+#+PRIORITY: #A
+
+* Scope
+- Parent deliverable: [[id:FEAT-556-coding-agent-surface-html-css-code-tool]]. This item bridges the remaining proof/execution gap that keeps FEAT-556 open.
+- In scope: add the Rust-side proof and edit substrate required for truthful HTML/CSS success-path refactors: exact class-token rename, exact id rename, exact custom-property rename, selector-body replacement against a single resolved CSS rule, and proof-backed dead-style removal.
+- In scope: register HTML/CSS edit procedures in the engine profiles, extend proof/query data where current style edges are insufficient, and route the Rust native code-buffer edit path through those procedures instead of blanket-refusing all HTML/CSS rename/delete operations.
+- In scope: preserve conservative behavior. Dynamic classes, selector lists that cannot be isolated to one exact token, unsupported host-language embeddings, and uncertain dead-style claims must continue to refuse with explicit proof gaps.
+- Out of scope: coding-agent prompt/result rendering, TypeScript bridge ergonomics, and user-facing tool docs except for Rust/native payload changes that FEAT-563 will consume.
+- Out of scope: utility frameworks, CSS Modules/CSS-in-JS adapters, or broader template hosts; those remain blocked behind [[id:FUP-057-web-semantics-add-utility-framework-and]].
+
+* Existing Patterns
+- `crates/pi-code-engine/src/language/mod.rs`
+  - HTML/CSS profiles already exist and currently end in `procedures: HashMap::new()`. This item MUST replace those empty maps with explicit `Procedure::builder()` registrations rather than ad-hoc edit branching.
+- `crates/pi-code-engine/src/procedure.rs`
+  - canonical procedure activation + transform DSL; new HTML/CSS refactors MUST use the existing procedure model.
+- `crates/pi-code-engine/src/edit/rename.rs`
+  - `rename_symbol()` is the closest existing rename foundation. Reuse shared token-edit helpers where possible instead of inventing a second rename pipeline.
+- `crates/pi-code-graph/src/query.rs`
+  - `GraphDeadCodeItem { symbol, reason, confidence }` and style-edge query behavior already express conservative proof language. Extend this substrate instead of encoding proof only in free-form errors.
+- `crates/pi-natives/src/code_buffer.rs`
+  - `single_edit_operation()` already dispatches unknown edit operations through `profile.procedures` via `apply_procedure()` / `apply_procedure_transform()`. The new HTML/CSS success paths MUST plug into this dispatch instead of hard-coding a parallel mutation API.
+
+* Tests
+- Workflow 1: exact class-token rename succeeds when one literal class token is statically proven across linked HTML/CSS files; only the matching selector token and HTML class token change.
+- Workflow 2: exact id rename succeeds when one literal id token is statically proven across linked HTML/CSS files; unrelated ids and substring matches remain untouched.
+- Workflow 3: exact custom-property rename succeeds for declaration and proven CSS usages, including fallback/value references that resolve statically.
+- Workflow 4: selector-body replacement succeeds only when the target resolves to one CSS rule symbol and replaces that rule body without widening to sibling selectors or at-rules.
+- Workflow 5: dead-style removal succeeds only when the static graph proves zero confident consumers; the proof includes a machine-readable reason/confidence basis.
+- Workflow 6: dynamic or ambiguous cases refuse mutation with explicit proof gaps: multi-token class attributes with unknown template expressions, selector lists that cannot be isolated safely, unsupported host-language regions, and borderline dead-style cases.
+- Exact test files to extend/add:
+  - `crates/pi-code-engine/tests/fixtures/sources/web/` for HTML/CSS rename + replacement fixtures
+  - `crates/pi-code-engine/src/edit/rename.rs` and/or focused Rust tests near the procedure implementation files
+  - `crates/pi-code-graph/src/query.rs` for proof/dead-style query coverage
+  - `packages/natives/test/code-buffer.test.ts` for native success/refusal contract coverage
+- Required scenarios:
+  - literal class/id/custom-property success cases
+  - refusal on dynamic class expressions / ambiguous selector lists
+  - selector-body replacement on a single CSS rule symbol
+  - proof-backed dead-style removal success and refusal
+  - no mutation of comments, strings, substring matches, or unsupported embedded regions
+
+* Implementation
+** Define HTML/CSS operation names and proof payload shape
+:PROPERTIES:
+:CUSTOM_ID: FEAT-562-pi-code-engine-native-add-provable-html::define-operations
+:DEPENDS: FEAT-555-pi-code-graph-add-css-selector-cascade-t::query-surface
+:END:
+- Files: `crates/pi-code-engine/src/language/mod.rs`, `crates/pi-code-graph/src/query.rs`, `crates/pi-natives/src/code_buffer.rs`
+- Settle the Rust-side contract for the remaining FEAT-556 surface:
+  - new profile procedure names for exact token renames and dead-style removal (`rename-class-token`, `rename-id-token`, `rename-custom-property`, `remove-dead-style`)
+  - reuse generic `replace-body` for single-rule selector body replacement rather than inventing a parallel operation
+  - machine-readable proof fields for successful/removable vs refused cases (reason, confidence, proof basis)
+- This step satisfies Test Workflows 4-6 by fixing the contract before implementation.
+
+** Write failing engine/graph/native tests for success and refusal paths
+:PROPERTIES:
+:CUSTOM_ID: FEAT-562-pi-code-engine-native-add-provable-html::write-tests
+:DEPENDS: FEAT-562-pi-code-engine-native-add-provable-html::define-operations
+:END:
+- Files: fixture workspace under `crates/pi-code-engine/tests/fixtures/sources/web/`, `crates/pi-code-graph/src/query.rs`, `packages/natives/test/code-buffer.test.ts`
+- Add initially failing coverage for every workflow listed above before landing implementation.
+- This step satisfies Test Workflows 1-6 and is the verification gate for the implementation work.
+
+** Register HTML/CSS procedures and proof extraction in Rust
+:PROPERTIES:
+:CUSTOM_ID: FEAT-562-pi-code-engine-native-add-provable-html::implement-procedures
+:DEPENDS: FEAT-562-pi-code-engine-native-add-provable-html::write-tests
+:END:
+- Files: `crates/pi-code-engine/src/language/mod.rs`, `crates/pi-code-engine/src/procedure.rs`, `crates/pi-code-engine/src/edit/rename.rs`, any new focused helper modules under `crates/pi-code-engine/src/edit/`
+- Implement the exact-token mutation procedures and any helper extraction needed to isolate HTML attribute tokens, CSS selector tokens, and custom-property references without false positives.
+- Ensure selector-body replacement resolves one CSS rule symbol and owns only the rule body span.
+- This step satisfies Test Workflows 1-4 and 6.
+
+** Route native edit execution through proof-backed allow/refuse logic
+:PROPERTIES:
+:CUSTOM_ID: FEAT-562-pi-code-engine-native-add-provable-html::native-dispatch
+:DEPENDS: FEAT-562-pi-code-engine-native-add-provable-html::implement-procedures
+:END:
+- Files: `crates/pi-natives/src/code_buffer.rs`, `crates/pi-natives/src/code_graph.rs` if result/proof exposure needs parity
+- Replace the current blanket HTML/CSS rename/kill refusal path with operation-specific proof-backed dispatch:
+  - allow provable token renames / dead-style removal
+  - keep explicit refusal for ambiguous cases
+  - surface proof metadata alongside success/refusal results so FEAT-563 can render it truthfully
+- This step satisfies Test Workflows 1-6.
+
+* Edge Cases
+- HTML class attributes containing multiple tokens, duplicated tokens, or template/runtime holes must never cause cross-token widening.
+- CSS selector lists such as `.btn, .link` must refuse token rename unless one exact token can be isolated without altering sibling selectors.
+- Custom-property rename must not mutate lookalike identifiers inside comments, strings, or unrelated plain properties.
+- Dead-style removal must account for existing style edges and confidence thresholds; absence of a proven consumer is not enough if the graph is stale or the host language is unsupported.
+- Success-path edits must preserve surrounding formatting/ownership boundaries; a safe refusal is preferable to a plausibly-correct partial rewrite.
+
+* Acceptance Criteria
+- HTML/CSS profiles register explicit proof-backed edit procedures instead of leaving `procedures` empty.
+- Native edit execution can perform provable exact class/id/custom-property renames and proof-backed dead-style removal, while still refusing ambiguous cases.
+- Generic `replace-body` is proven to work for a single resolved CSS rule symbol.
+- Focused Rust/native tests lock both success and refusal paths for all workflows above.
+- FEAT-563 can consume the proof metadata without requiring further Rust-side contract redesign.
+
+NOTE [2026-04-17]: Completed via PLAN-242. Landed executor-backed HTML/CSS procedures (`rename-class-token`, `rename-id-token`, `rename-custom-property`, `remove-dead-style`), native structured proof/refusal payloads, and focused Rust/native coverage. Verified with `cargo test -p pi-code-engine`, `cargo test -p pi-code-graph`, `bun --cwd=packages/natives run dev:native`, and `bun test packages/natives/test/code-buffer.test.ts`.
+
+NOTE [2026-04-17]: PLAN-242 verification complete; Rust/native proof substrate landed and verified.

@@ -6,6 +6,7 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 pub use profile::*;
 
 use crate::{
+	edit::{delete_resolved_symbol, rename_class_token, rename_custom_property, rename_id_token},
 	error::{CodeEngineError, Result},
 	procedure::{Procedure, Transform, types},
 };
@@ -734,11 +735,29 @@ fn markdown_profile() -> LanguageProfile {
 
 fn html_profile() -> LanguageProfile {
 	let gd = generated::html::grammar();
+	let procedures = HashMap::from([
+		(
+			"rename-class-token".into(),
+			Procedure::builder()
+				.name("rename-class-token")
+				.description("Rename exact literal HTML class tokens")
+				.executor(rename_class_token)
+				.build(),
+		),
+		(
+			"rename-id-token".into(),
+			Procedure::builder()
+				.name("rename-id-token")
+				.description("Rename exact literal HTML id tokens")
+				.executor(rename_id_token)
+				.build(),
+		),
+	]);
 	LanguageProfile {
-		id:               LanguageId::new("html"),
-		extensions:       vec!["html".into(), "htm".into()],
-		capabilities:     semantic_capabilities(&["css", "javascript"]),
-		declarations:     vec![
+		id: LanguageId::new("html"),
+		extensions: vec!["html".into(), "htm".into()],
+		capabilities: semantic_capabilities(&["css", "javascript"]),
+		declarations: vec![
 			DeclarationPattern {
 				node_types:    vec!["element".into()],
 				name:          NameExtractor::Attributed {
@@ -808,7 +827,7 @@ fn html_profile() -> LanguageProfile {
 				name_from_arg: false,
 			},
 		],
-		class_like:       vec![ClassLikePattern {
+		class_like: vec![ClassLikePattern {
 			node_type:    "element".into(),
 			body:         ClassBodyExtractor::Direct,
 			filter_field: None,
@@ -820,7 +839,7 @@ fn html_profile() -> LanguageProfile {
 				"script_element".into(),
 			],
 		}],
-		imports:          vec![ImportPattern {
+		imports: vec![ImportPattern {
 			node_type:       "self_closing_tag".into(),
 			specifier_field: None,
 			specifier:       Some(NameExtractor::AttributeValue {
@@ -833,9 +852,9 @@ fn html_profile() -> LanguageProfile {
 			filter_names:    Some(vec!["link".into()]),
 			is_type_only:    false,
 		}],
-		exports:          vec![],
-		references:       vec![],
-		separators:       vec![],
+		exports: vec![],
+		references: vec![],
+		separators: vec![],
 		embedded_regions: vec![
 			EmbeddedRegionPattern {
 				host_node_type:     "style_element".into(),
@@ -848,22 +867,56 @@ fn html_profile() -> LanguageProfile {
 				guest_language:     "javascript".into(),
 			},
 		],
-		procedures:       HashMap::new(),
+		procedures,
 		production_rules: gd.production_rules,
-		inverse_rules:    gd.inverse_rules,
-		all_types:        gd.all_types,
-		supertypes:       gd.supertypes,
-		ts_language:      tree_sitter_html::LANGUAGE.into(),
+		inverse_rules: gd.inverse_rules,
+		all_types: gd.all_types,
+		supertypes: gd.supertypes,
+		ts_language: tree_sitter_html::LANGUAGE.into(),
 	}
 }
 
 fn css_profile() -> LanguageProfile {
 	let gd = generated::css::grammar();
+	let procedures = HashMap::from([
+		(
+			"rename-class-token".into(),
+			Procedure::builder()
+				.name("rename-class-token")
+				.description("Rename exact literal CSS class selector tokens")
+				.executor(rename_class_token)
+				.build(),
+		),
+		(
+			"rename-id-token".into(),
+			Procedure::builder()
+				.name("rename-id-token")
+				.description("Rename exact literal CSS id selector tokens")
+				.executor(rename_id_token)
+				.build(),
+		),
+		(
+			"rename-custom-property".into(),
+			Procedure::builder()
+				.name("rename-custom-property")
+				.description("Rename exact literal CSS custom properties and var() references")
+				.executor(rename_custom_property)
+				.build(),
+		),
+		(
+			"remove-dead-style".into(),
+			Procedure::builder()
+				.name("remove-dead-style")
+				.description("Delete a CSS rule after native proof verifies dead-style status")
+				.executor(delete_resolved_symbol)
+				.build(),
+		),
+	]);
 	LanguageProfile {
-		id:               LanguageId::new("css"),
-		extensions:       vec!["css".into()],
-		capabilities:     semantic_capabilities(&[]),
-		declarations:     vec![
+		id: LanguageId::new("css"),
+		extensions: vec!["css".into()],
+		capabilities: semantic_capabilities(&[]),
+		declarations: vec![
 			DeclarationPattern {
 				node_types:    vec!["rule_set".into()],
 				name:          NameExtractor::ChildText { child_type: "selectors".into() },
@@ -910,7 +963,7 @@ fn css_profile() -> LanguageProfile {
 				name_from_arg: false,
 			},
 		],
-		class_like:       vec![
+		class_like: vec![
 			ClassLikePattern {
 				node_type:    "rule_set".into(),
 				body:         ClassBodyExtractor::Field { name: "block".into() },
@@ -943,7 +996,7 @@ fn css_profile() -> LanguageProfile {
 				],
 			},
 		],
-		imports:          vec![ImportPattern {
+		imports: vec![ImportPattern {
 			node_type:       "import_statement".into(),
 			specifier_field: Some("string_value".into()),
 			specifier:       None,
@@ -951,8 +1004,8 @@ fn css_profile() -> LanguageProfile {
 			filter_names:    None,
 			is_type_only:    false,
 		}],
-		exports:          vec![],
-		references:       vec![
+		exports: vec![],
+		references: vec![
 			ReferencePattern {
 				node_type:            "class_name".into(),
 				exclude_parent_types: vec!["comment".into(), "string_value".into()],
@@ -970,14 +1023,14 @@ fn css_profile() -> LanguageProfile {
 				exclude_parent_types: vec!["comment".into()],
 			},
 		],
-		separators:       vec![",".into()],
+		separators: vec![",".into()],
 		embedded_regions: vec![],
-		procedures:       HashMap::new(),
+		procedures,
 		production_rules: gd.production_rules,
-		inverse_rules:    gd.inverse_rules,
-		all_types:        gd.all_types,
-		supertypes:       gd.supertypes,
-		ts_language:      tree_sitter_css::LANGUAGE.into(),
+		inverse_rules: gd.inverse_rules,
+		all_types: gd.all_types,
+		supertypes: gd.supertypes,
+		ts_language: tree_sitter_css::LANGUAGE.into(),
 	}
 }
 fn typst_profile() -> LanguageProfile {

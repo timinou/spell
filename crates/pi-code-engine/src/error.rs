@@ -30,6 +30,15 @@ pub enum CodeEngineError {
 
 	#[error("edit error: {0}")]
 	Edit(String),
+
+	#[error("{message}")]
+	Refusal {
+		message:    String,
+		reason:     String,
+		confidence: String,
+		basis:      String,
+		matches:    Option<usize>,
+	},
 }
 
 pub type Result<T> = std::result::Result<T, CodeEngineError>;
