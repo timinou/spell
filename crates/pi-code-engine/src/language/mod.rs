@@ -128,6 +128,7 @@ fn typescript_profile() -> LanguageProfile {
 	let gd = generated::typescript::grammar();
 	LanguageProfile {
 		id:               LanguageId::new("typescript"),
+		capabilities:     semantic_capabilities(&[]),
 		extensions:       vec![
 			"ts".into(),
 			"tsx".into(),
@@ -216,7 +217,10 @@ fn typescript_profile() -> LanguageProfile {
 		}],
 		imports:          vec![ImportPattern {
 			node_type:       "import_statement".into(),
-			specifier_field: "source".into(),
+			specifier_field: Some("source".into()),
+			specifier:       None,
+			filter:          None,
+			filter_names:    None,
 			is_type_only:    false,
 		}],
 		exports:          vec![ExportPattern {
@@ -233,6 +237,7 @@ fn typescript_profile() -> LanguageProfile {
 			],
 		}],
 		separators:       vec![",".into(), ";".into()],
+		embedded_regions: vec![],
 		procedures:       HashMap::new(),
 		production_rules: gd.production_rules,
 		inverse_rules:    gd.inverse_rules,
@@ -246,6 +251,7 @@ fn rust_profile() -> LanguageProfile {
 	let gd = generated::rust_lang::grammar();
 	LanguageProfile {
 		id:               LanguageId::new("rust"),
+		capabilities:     semantic_capabilities(&[]),
 		extensions:       vec!["rs".into()],
 		declarations:     vec![
 			DeclarationPattern {
@@ -339,7 +345,10 @@ fn rust_profile() -> LanguageProfile {
 		}],
 		imports:          vec![ImportPattern {
 			node_type:       "use_declaration".into(),
-			specifier_field: "argument".into(),
+			specifier_field: Some("argument".into()),
+			specifier:       None,
+			filter:          None,
+			filter_names:    None,
 			is_type_only:    false,
 		}],
 		exports:          vec![ExportPattern {
@@ -356,6 +365,7 @@ fn rust_profile() -> LanguageProfile {
 			],
 		}],
 		separators:       vec![",".into(), ";".into()],
+		embedded_regions: vec![],
 		procedures:       HashMap::new(),
 		production_rules: gd.production_rules,
 		inverse_rules:    gd.inverse_rules,
@@ -369,6 +379,7 @@ fn python_profile() -> LanguageProfile {
 	let gd = generated::python::grammar();
 	LanguageProfile {
 		id:               LanguageId::new("python"),
+		capabilities:     semantic_capabilities(&[]),
 		extensions:       vec!["py".into(), "pyi".into()],
 		declarations:     vec![
 			DeclarationPattern {
@@ -409,12 +420,18 @@ fn python_profile() -> LanguageProfile {
 		imports:          vec![
 			ImportPattern {
 				node_type:       "import_statement".into(),
-				specifier_field: "name".into(),
+				specifier_field: Some("name".into()),
+				specifier:       None,
+				filter:          None,
+				filter_names:    None,
 				is_type_only:    false,
 			},
 			ImportPattern {
 				node_type:       "import_from_statement".into(),
-				specifier_field: "module_name".into(),
+				specifier_field: Some("module_name".into()),
+				specifier:       None,
+				filter:          None,
+				filter_names:    None,
 				is_type_only:    false,
 			},
 		],
@@ -424,6 +441,7 @@ fn python_profile() -> LanguageProfile {
 			exclude_parent_types: vec!["comment".into(), "string".into()],
 		}],
 		separators:       vec![",".into()],
+		embedded_regions: vec![],
 		procedures:       HashMap::new(),
 		production_rules: gd.production_rules,
 		inverse_rules:    gd.inverse_rules,
@@ -668,6 +686,7 @@ fn markdown_profile() -> LanguageProfile {
 	]);
 	LanguageProfile {
 		id: LanguageId::new("markdown"),
+		capabilities: semantic_capabilities(&[]),
 		extensions: vec!["md".into(), "mdx".into(), "markdown".into()],
 		declarations: vec![
 			DeclarationPattern {
@@ -703,6 +722,7 @@ fn markdown_profile() -> LanguageProfile {
 		exports: vec![],
 		references: vec![],
 		separators: vec![],
+		embedded_regions: vec![],
 		procedures,
 		production_rules: gd.production_rules,
 		inverse_rules: gd.inverse_rules,
@@ -712,6 +732,242 @@ fn markdown_profile() -> LanguageProfile {
 	}
 }
 
+fn html_profile() -> LanguageProfile {
+	let gd = generated::html::grammar();
+	LanguageProfile {
+		id:               LanguageId::new("html"),
+		extensions:       vec!["html".into(), "htm".into()],
+		capabilities:     semantic_capabilities(&["css", "javascript"]),
+		declarations:     vec![
+			DeclarationPattern {
+				node_types:    vec!["element".into()],
+				name:          NameExtractor::Attributed {
+					base:        Box::new(NameExtractor::ChildText { child_type: "tag_name".into() }),
+					enrichments: vec![
+						AttributeEnrichment {
+							within_type:      Some("start_tag".into()),
+							attr_name:        "id".into(),
+							prefix:           "#".into(),
+							take_first_token: false,
+						},
+						AttributeEnrichment {
+							within_type:      Some("start_tag".into()),
+							attr_name:        "class".into(),
+							prefix:           ".".into(),
+							take_first_token: true,
+						},
+					],
+				},
+				kind:          "element".into(),
+				body:          BodyExtractor::AfterChild { child_type: "start_tag".into() },
+				visibility:    None,
+				filter_names:  None,
+				name_from_arg: false,
+			},
+			DeclarationPattern {
+				node_types:    vec!["self_closing_tag".into()],
+				name:          NameExtractor::Attributed {
+					base:        Box::new(NameExtractor::ChildText { child_type: "tag_name".into() }),
+					enrichments: vec![
+						AttributeEnrichment {
+							within_type:      None,
+							attr_name:        "id".into(),
+							prefix:           "#".into(),
+							take_first_token: false,
+						},
+						AttributeEnrichment {
+							within_type:      None,
+							attr_name:        "class".into(),
+							prefix:           ".".into(),
+							take_first_token: true,
+						},
+					],
+				},
+				kind:          "element".into(),
+				body:          BodyExtractor::None,
+				visibility:    None,
+				filter_names:  None,
+				name_from_arg: false,
+			},
+			DeclarationPattern {
+				node_types:    vec!["style_element".into()],
+				name:          NameExtractor::Literal { name: "style".into() },
+				kind:          "style".into(),
+				body:          BodyExtractor::AfterChild { child_type: "start_tag".into() },
+				visibility:    None,
+				filter_names:  None,
+				name_from_arg: false,
+			},
+			DeclarationPattern {
+				node_types:    vec!["script_element".into()],
+				name:          NameExtractor::Literal { name: "script".into() },
+				kind:          "script".into(),
+				body:          BodyExtractor::AfterChild { child_type: "start_tag".into() },
+				visibility:    None,
+				filter_names:  None,
+				name_from_arg: false,
+			},
+		],
+		class_like:       vec![ClassLikePattern {
+			node_type:    "element".into(),
+			body:         ClassBodyExtractor::Direct,
+			filter_field: None,
+			filter_names: None,
+			member_types: vec![
+				"element".into(),
+				"self_closing_tag".into(),
+				"style_element".into(),
+				"script_element".into(),
+			],
+		}],
+		imports:          vec![],
+		exports:          vec![],
+		references:       vec![],
+		separators:       vec![],
+		embedded_regions: vec![
+			EmbeddedRegionPattern {
+				host_node_type:     "style_element".into(),
+				content_child_type: "raw_text".into(),
+				guest_language:     "css".into(),
+			},
+			EmbeddedRegionPattern {
+				host_node_type:     "script_element".into(),
+				content_child_type: "raw_text".into(),
+				guest_language:     "javascript".into(),
+			},
+		],
+		procedures:       HashMap::new(),
+		production_rules: gd.production_rules,
+		inverse_rules:    gd.inverse_rules,
+		all_types:        gd.all_types,
+		supertypes:       gd.supertypes,
+		ts_language:      tree_sitter_html::LANGUAGE.into(),
+	}
+}
+
+fn css_profile() -> LanguageProfile {
+	let gd = generated::css::grammar();
+	LanguageProfile {
+		id:               LanguageId::new("css"),
+		extensions:       vec!["css".into()],
+		capabilities:     semantic_capabilities(&[]),
+		declarations:     vec![
+			DeclarationPattern {
+				node_types:    vec!["rule_set".into()],
+				name:          NameExtractor::ChildText { child_type: "selectors".into() },
+				kind:          "rule".into(),
+				body:          BodyExtractor::AfterChild { child_type: "selectors".into() },
+				visibility:    None,
+				filter_names:  None,
+				name_from_arg: false,
+			},
+			DeclarationPattern {
+				node_types:    vec!["media_statement".into()],
+				name:          NameExtractor::Literal { name: "@media".into() },
+				kind:          "at-rule".into(),
+				body:          BodyExtractor::None,
+				visibility:    None,
+				filter_names:  None,
+				name_from_arg: false,
+			},
+			DeclarationPattern {
+				node_types:    vec!["supports_statement".into()],
+				name:          NameExtractor::Literal { name: "@supports".into() },
+				kind:          "at-rule".into(),
+				body:          BodyExtractor::None,
+				visibility:    None,
+				filter_names:  None,
+				name_from_arg: false,
+			},
+			DeclarationPattern {
+				node_types:    vec!["keyframes_statement".into()],
+				name:          NameExtractor::ChildText { child_type: "keyframes_name".into() },
+				kind:          "keyframes".into(),
+				body:          BodyExtractor::AfterChild { child_type: "keyframes_name".into() },
+				visibility:    None,
+				filter_names:  None,
+				name_from_arg: false,
+			},
+			DeclarationPattern {
+				node_types:    vec!["declaration".into()],
+				name:          NameExtractor::ChildText { child_type: "property_name".into() },
+				kind:          "property".into(),
+				body:          BodyExtractor::AfterChild { child_type: "property_name".into() },
+				visibility:    None,
+				filter_names:  None,
+				name_from_arg: false,
+			},
+		],
+		class_like:       vec![
+			ClassLikePattern {
+				node_type:    "rule_set".into(),
+				body:         ClassBodyExtractor::Direct,
+				filter_field: None,
+				filter_names: None,
+				member_types: vec!["declaration".into()],
+			},
+			ClassLikePattern {
+				node_type:    "media_statement".into(),
+				body:         ClassBodyExtractor::Direct,
+				filter_field: None,
+				filter_names: None,
+				member_types: vec![
+					"rule_set".into(),
+					"media_statement".into(),
+					"supports_statement".into(),
+					"keyframes_statement".into(),
+				],
+			},
+			ClassLikePattern {
+				node_type:    "supports_statement".into(),
+				body:         ClassBodyExtractor::Direct,
+				filter_field: None,
+				filter_names: None,
+				member_types: vec![
+					"rule_set".into(),
+					"media_statement".into(),
+					"supports_statement".into(),
+					"keyframes_statement".into(),
+				],
+			},
+		],
+		imports:          vec![ImportPattern {
+			node_type:       "import_statement".into(),
+			specifier_field: Some("string_value".into()),
+			specifier:       None,
+			filter:          None,
+			filter_names:    None,
+			is_type_only:    false,
+		}],
+		exports:          vec![],
+		references:       vec![
+			ReferencePattern {
+				node_type:            "class_name".into(),
+				exclude_parent_types: vec!["comment".into(), "string_value".into()],
+			},
+			ReferencePattern {
+				node_type:            "id_name".into(),
+				exclude_parent_types: vec!["comment".into(), "string_value".into()],
+			},
+			ReferencePattern {
+				node_type:            "tag_name".into(),
+				exclude_parent_types: vec!["comment".into(), "string_value".into()],
+			},
+			ReferencePattern {
+				node_type:            "property_name".into(),
+				exclude_parent_types: vec!["comment".into()],
+			},
+		],
+		separators:       vec![",".into()],
+		embedded_regions: vec![],
+		procedures:       HashMap::new(),
+		production_rules: gd.production_rules,
+		inverse_rules:    gd.inverse_rules,
+		all_types:        gd.all_types,
+		supertypes:       gd.supertypes,
+		ts_language:      tree_sitter_css::LANGUAGE.into(),
+	}
+}
 fn typst_profile() -> LanguageProfile {
 	let gd = generated::typst::grammar();
 	let procedures = HashMap::from([
@@ -736,6 +992,7 @@ fn typst_profile() -> LanguageProfile {
 	]);
 	LanguageProfile {
 		id: LanguageId::new("typst"),
+		capabilities: semantic_capabilities(&[]),
 		extensions: vec!["typ".into()],
 		declarations: vec![
 			DeclarationPattern {
@@ -778,7 +1035,10 @@ fn typst_profile() -> LanguageProfile {
 		class_like: vec![],
 		imports: vec![ImportPattern {
 			node_type:       "import".into(),
-			specifier_field: "import".into(),
+			specifier_field: Some("import".into()),
+			specifier:       None,
+			filter:          None,
+			filter_names:    None,
 			is_type_only:    false,
 		}],
 		exports: vec![],
@@ -787,6 +1047,7 @@ fn typst_profile() -> LanguageProfile {
 			exclude_parent_types: vec!["comment".into(), "string".into()],
 		}],
 		separators: vec![",".into()],
+		embedded_regions: vec![],
 		procedures,
 		production_rules: gd.production_rules,
 		inverse_rules: gd.inverse_rules,
@@ -800,6 +1061,7 @@ fn elixir_profile() -> LanguageProfile {
 	let gd = generated::elixir::grammar();
 	LanguageProfile {
 		id:               LanguageId::new("elixir"),
+		capabilities:     semantic_capabilities(&[]),
 		extensions:       vec!["ex".into(), "exs".into()],
 		declarations:     vec![
 			DeclarationPattern {
@@ -857,7 +1119,15 @@ fn elixir_profile() -> LanguageProfile {
 		}],
 		imports:          vec![ImportPattern {
 			node_type:       "call".into(),
-			specifier_field: "arguments".into(),
+			specifier_field: Some("arguments".into()),
+			specifier:       None,
+			filter:          Some(NameExtractor::Field { name: "target".into() }),
+			filter_names:    Some(vec![
+				"import".into(),
+				"alias".into(),
+				"require".into(),
+				"use".into(),
+			]),
 			is_type_only:    false,
 		}],
 		exports:          vec![],
@@ -866,6 +1136,7 @@ fn elixir_profile() -> LanguageProfile {
 			exclude_parent_types: vec!["comment".into(), "string".into()],
 		}],
 		separators:       vec![",".into()],
+		embedded_regions: vec![],
 		procedures:       HashMap::new(),
 		production_rules: gd.production_rules,
 		inverse_rules:    gd.inverse_rules,
@@ -878,6 +1149,7 @@ fn elixir_profile() -> LanguageProfile {
 fn text_profile() -> LanguageProfile {
 	LanguageProfile {
 		id:               LanguageId::new("text"),
+		capabilities:     fallback_capabilities(),
 		extensions:       vec![],
 		declarations:     vec![],
 		class_like:       vec![],
@@ -885,6 +1157,7 @@ fn text_profile() -> LanguageProfile {
 		exports:          vec![],
 		references:       vec![],
 		separators:       vec![],
+		embedded_regions: vec![],
 		procedures:       HashMap::new(),
 		production_rules: HashMap::new(),
 		inverse_rules:    HashMap::new(),
@@ -898,6 +1171,7 @@ fn org_profile() -> LanguageProfile {
 	let gd = generated::org::grammar();
 	LanguageProfile {
 		id:               LanguageId::new("org"),
+		capabilities:     semantic_capabilities(&[]),
 		extensions:       vec!["org".into()],
 		declarations:     vec![DeclarationPattern {
 			node_types:    vec!["section".into()],
@@ -925,6 +1199,7 @@ fn org_profile() -> LanguageProfile {
 			exclude_parent_types: vec!["comment".into()],
 		}],
 		separators:       vec![" ".into(), ":".into()],
+		embedded_regions: vec![],
 		procedures:       HashMap::new(),
 		production_rules: gd.production_rules,
 		inverse_rules:    gd.inverse_rules,
@@ -939,11 +1214,13 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn registry_with_builtins_loads_all_seven_languages() {
+	fn registry_with_builtins_loads_all_languages() {
 		let reg = LanguageRegistry::with_builtins().expect("builtins should load");
 		assert!(reg.get(&LanguageId::new("typescript")).is_some());
 		assert!(reg.get(&LanguageId::new("rust")).is_some());
 		assert!(reg.get(&LanguageId::new("python")).is_some());
+		assert!(reg.get(&LanguageId::new("html")).is_some());
+		assert!(reg.get(&LanguageId::new("css")).is_some());
 		assert!(reg.get(&LanguageId::new("typst")).is_some());
 		assert!(reg.get(&LanguageId::new("markdown")).is_some());
 		assert!(reg.get(&LanguageId::new("elixir")).is_some());
@@ -969,6 +1246,13 @@ mod tests {
 		assert_eq!(py.unwrap().id.as_str(), "python");
 		let pyi = reg.match_path(Path::new("types.pyi"));
 		assert_eq!(pyi.unwrap().id.as_str(), "python");
+
+		let html = reg.match_path(Path::new("templates/index.html"));
+		assert_eq!(html.unwrap().id.as_str(), "html");
+		let htm = reg.match_path(Path::new("templates/partial.htm"));
+		assert_eq!(htm.unwrap().id.as_str(), "html");
+		let css = reg.match_path(Path::new("styles/app.css"));
+		assert_eq!(css.unwrap().id.as_str(), "css");
 
 		let md = reg.match_path(Path::new("README.md"));
 		assert_eq!(md.unwrap().id.as_str(), "markdown");

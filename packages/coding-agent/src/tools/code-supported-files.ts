@@ -13,6 +13,9 @@ const FALLBACK_SEMANTIC_EXTENSIONS = new Set([
 	"rs",
 	"py",
 	"pyi",
+	"html",
+	"htm",
+	"css",
 	"typ",
 	"md",
 	"mdx",
@@ -61,7 +64,7 @@ export function isCodeToolSemanticPath(file: string): boolean {
 }
 
 export function describeCodeToolSemanticFiles(): string {
-	return "TypeScript, Rust, Python, Typst, Markdown, Org, and Elixir";
+	return "TypeScript, Rust, Python, HTML, CSS, Typst, Markdown, Org, and Elixir";
 }
 
 export const extractSupportedExtensions = extractSemanticExtensions;

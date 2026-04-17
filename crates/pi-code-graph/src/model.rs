@@ -23,6 +23,9 @@ pub enum SymbolKind {
 	Module,
 	Macro,
 	Template,
+	Element,
+	CssRule,
+	CssProperty,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

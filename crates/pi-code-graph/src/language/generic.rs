@@ -195,13 +195,24 @@ fn generic_import(
 	source: &str,
 	pattern: &pi_code_engine::language::ImportPattern,
 ) -> Option<ExtractedImport> {
-	let specifier = child_by_field_or_kind(node, &pattern.specifier_field)
-		.and_then(|specifier| node_text(source, specifier))?;
-	Some(ExtractedImport {
-		specifier:    trim_delimiters(specifier),
-		bindings:     Vec::new(),
-		is_type_only: pattern.is_type_only,
-	})
+	if let (Some(filter), Some(filter_names)) = (&pattern.filter, &pattern.filter_names) {
+		let resolved_filter = resolve_name_for_extractor(source, node, filter)?;
+		if !filter_names
+			.iter()
+			.any(|candidate| candidate == &resolved_filter.text)
+		{
+			return None;
+		}
+	}
+	let specifier = if let Some(specifier) = &pattern.specifier {
+		resolve_name_for_extractor(source, node, specifier).map(|name| name.text)?
+	} else {
+		let field = pattern.specifier_field.as_deref()?;
+		child_by_field_or_kind(node, field)
+			.and_then(|specifier| node_text(source, specifier))
+			.map(trim_delimiters)?
+	};
+	Some(ExtractedImport { specifier, bindings: Vec::new(), is_type_only: pattern.is_type_only })
 }
 
 fn rust_imports(node: Node<'_>, source: &str) -> Vec<ExtractedImport> {
@@ -423,7 +434,15 @@ fn resolve_name(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> Opti
 		let target = first.child_by_field_name("target").unwrap_or(first);
 		return resolved_name_from_node(source, target);
 	}
-	match &decl.name {
+	resolve_name_for_extractor(source, node, &decl.name)
+}
+
+fn resolve_name_for_extractor(
+	source: &str,
+	node: Node<'_>,
+	extractor: &NameExtractor,
+) -> Option<ResolvedName> {
+	match extractor {
 		NameExtractor::Field { name } => {
 			let name_node = node
 				.child_by_field_name(name)
@@ -445,11 +464,37 @@ fn resolve_name(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> Opti
 			line:   node.start_position().row as u32 + 1,
 			column: node.start_position().column as u32 + 1,
 		}),
+		NameExtractor::AttributeValue { within_type, attr_name, prefix, take_first_token } => {
+			resolve_attribute_name(
+				source,
+				node,
+				within_type.as_deref(),
+				attr_name,
+				prefix.as_deref(),
+				*take_first_token,
+			)
+		},
+		NameExtractor::Attributed { base, enrichments } => {
+			let mut base_name = resolve_name_for_extractor(source, node, base)?;
+			for enrichment in enrichments {
+				if let Some(extra) = resolve_attribute_name(
+					source,
+					node,
+					enrichment.within_type.as_deref(),
+					&enrichment.attr_name,
+					Some(enrichment.prefix.as_str()),
+					enrichment.take_first_token,
+				) {
+					base_name.text.push_str(&extra.text);
+				}
+			}
+			Some(base_name)
+		},
 	}
 }
 
 fn declaration_name_range(
-	_source: &str,
+	source: &str,
 	node: Node<'_>,
 	decl: &DeclarationPattern,
 ) -> Option<(usize, usize)> {
@@ -472,7 +517,86 @@ fn declaration_name_range(
 			.or_else(|| find_named_descendant(node, child_type))
 			.map(|child| (child.start_byte(), child.end_byte())),
 		NameExtractor::Literal { .. } => Some((node.start_byte(), node.start_byte())),
+		NameExtractor::AttributeValue { within_type, attr_name, .. } => {
+			attribute_value_range(source, node, within_type.as_deref(), attr_name)
+		},
+		NameExtractor::Attributed { base, .. } => name_range_for_extractor(source, node, base),
 	}
+}
+
+fn name_range_for_extractor(
+	source: &str,
+	node: Node<'_>,
+	extractor: &NameExtractor,
+) -> Option<(usize, usize)> {
+	match extractor {
+		NameExtractor::Field { name } => node.child_by_field_name(name).map(|name_node| {
+			let name_node = name_node.child_by_field_name("name").unwrap_or(name_node);
+			(name_node.start_byte(), name_node.end_byte())
+		}),
+		NameExtractor::ChildField { child_type, field } => find_named_child(node, child_type)
+			.and_then(|child| child.child_by_field_name(field))
+			.map(|name_node| (name_node.start_byte(), name_node.end_byte())),
+		NameExtractor::ChildText { child_type } => find_named_child(node, child_type)
+			.or_else(|| find_named_descendant(node, child_type))
+			.map(|child| (child.start_byte(), child.end_byte())),
+		NameExtractor::Literal { .. } => Some((node.start_byte(), node.start_byte())),
+		NameExtractor::AttributeValue { within_type, attr_name, .. } => {
+			attribute_value_range(source, node, within_type.as_deref(), attr_name)
+		},
+		NameExtractor::Attributed { base, .. } => name_range_for_extractor(source, node, base),
+	}
+}
+
+fn resolve_attribute_name(
+	source: &str,
+	node: Node<'_>,
+	within_type: Option<&str>,
+	attr_name: &str,
+	prefix: Option<&str>,
+	take_first_token: bool,
+) -> Option<ResolvedName> {
+	let range = attribute_value_range(source, node, within_type, attr_name)?;
+	let value = source
+		.get(range.0..range.1)?
+		.trim()
+		.trim_matches('"')
+		.trim_matches('\'')
+		.trim_matches('`');
+	let token = if take_first_token {
+		value.split_whitespace().next()?
+	} else {
+		value
+	};
+	if token.is_empty() {
+		return None;
+	}
+	Some(ResolvedName {
+		text:   prefix.map_or_else(|| token.to_string(), |prefix| format!("{prefix}{token}")),
+		line:   node.start_position().row as u32 + 1,
+		column: node.start_position().column as u32 + 1,
+	})
+}
+
+fn attribute_value_range(
+	source: &str,
+	node: Node<'_>,
+	within_type: Option<&str>,
+	attr_name: &str,
+) -> Option<(usize, usize)> {
+	let scope = within_type
+		.and_then(|kind| find_named_child(node, kind).or_else(|| find_named_descendant(node, kind)))
+		.unwrap_or(node);
+	let mut cursor = scope.walk();
+	let attribute = scope.named_children(&mut cursor).find(|child| {
+		child.kind() == "attribute"
+			&& find_named_child(*child, "attribute_name")
+				.and_then(|name_node| node_text(source, name_node))
+				.is_some_and(|value| value.trim() == attr_name)
+	})?;
+	let value_node = find_named_child(attribute, "quoted_attribute_value")
+		.or_else(|| find_named_child(attribute, "attribute_value"))?;
+	Some((value_node.start_byte(), value_node.end_byte()))
 }
 
 fn class_member_nodes<'a>(
@@ -663,6 +787,9 @@ fn symbol_kind_for(kind: &str, in_member_scope: bool) -> SymbolKind {
 		"type" => SymbolKind::TypeAlias,
 		"enum" => SymbolKind::Enum,
 		"template" => SymbolKind::Template,
+		"element" | "style" | "script" => SymbolKind::Element,
+		"rule" | "at-rule" | "keyframes" => SymbolKind::CssRule,
+		"property" => SymbolKind::CssProperty,
 		"macro" | "show" | "set" => SymbolKind::Macro,
 		"module" | "mod" | "section" | "impl" | "import" => SymbolKind::Module,
 		_ => SymbolKind::Variable,
@@ -977,11 +1104,14 @@ mod tests {
 			.collect::<Vec<_>>();
 		supported.sort();
 		assert_eq!(supported, vec![
+			"css".to_string(),
 			"elixir".to_string(),
+			"html".to_string(),
 			"markdown".to_string(),
 			"org".to_string(),
 			"python".to_string(),
 			"rust".to_string(),
+			"text".to_string(),
 			"typescript".to_string(),
 			"typst".to_string(),
 		]);

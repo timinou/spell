@@ -87,3 +87,21 @@ how would you make the pi code graph/engine maximally useful for html/css files?
 ** Wave 5
 - [[id:FUP-057-web-semantics-add-utility-framework-and]]
 - Rationale: broader framework/template ecosystems should consume the proven core substrate instead of reshaping it mid-rollout.
+
+** Completion [2026-04-17]
+*** Verification
+- `cargo test -p pi-code-engine` → PASS (136 passed, 0 failed)
+- `cargo test -p pi-code-graph` → PASS (40 passed, 0 failed)
+- `bun --cwd=packages/natives run dev:native` → PASS after rebuilding the local native addon to pick up the new engine/graph code
+- `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts` → PASS (77 passed, 0 failed)
+- `bun check:ts` → PASS
+- `bun check:rs` → PASS
+- Manual proof:
+  - `executeCodeBuffer({ command: "languages" })` in the rebuilt addon now reports HTML/CSS as semantic-capable built-ins via the native bridge.
+  - HTML/CSS grammars compile through `pi-code-engine` and `pi-code-graph` end-to-end after the registry/build.rs/generic-extractor updates.
+*** Artifacts
+- None.
+*** Deviations
+- Plan remains incomplete and stays in `DOING`.
+- Completed substrate work: HTML/CSS built-in language registration, extended engine DSL, HTML naming/disambiguation support, CSS local symbol extraction, graph symbol-kind support, native language-surface exposure, and coding-agent semantic-file detection updates.
+- Remaining blocker scope: FEAT-554/555/556 acceptance still requires the deeper HTML/CSS graph/query/refactor surface from the approved plan (style-context/impact/dead-style semantics, conservative rename/remove refusal proofs, and broader coding-agent/native result typing). Those workflows were not fully implemented in this execution slice, so child items are not truthfully closable and the PLAN cannot move to `DONE`.

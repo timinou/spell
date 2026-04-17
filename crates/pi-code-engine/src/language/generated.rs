@@ -37,4 +37,6 @@ include_grammar!(typst, "grammar_typst.rs");
 include_grammar!(elixir, "grammar_elixir.rs");
 include_grammar!(markdown, "grammar_markdown.rs");
 
+include_grammar!(html, "grammar_html.rs");
+include_grammar!(css, "grammar_css.rs");
 include_grammar!(org, "grammar_org.rs");
