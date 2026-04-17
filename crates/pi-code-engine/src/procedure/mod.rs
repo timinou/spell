@@ -7,9 +7,13 @@ use std::{fmt, sync::Arc};
 pub use activation::{ActivationBuilder, ActivationRule, Position};
 pub use rules::{RuleExpr, exclude, irule, matches_rule_expr, rule, rx, types};
 pub use selector::{ChildFilter, ChildFilterBuilder, Selector, SelectorBuilder, Target};
+use serde::{Deserialize, Serialize};
 use tree_sitter::Node;
 
-use crate::{TextEdit, error::CodeEngineError, language::LanguageProfile};
+use crate::{
+	TextEdit, buffer::CodeBuffer, error::CodeEngineError, language::LanguageProfile,
+	resolve::ResolvedSymbol,
+};
 
 /// Declarative transform applied to each matched node.
 ///
@@ -17,6 +21,9 @@ use crate::{TextEdit, error::CodeEngineError, language::LanguageProfile};
 /// to express this operation declaratively. Treat `Custom` as a flag for
 /// improvement, not a permanent escape hatch.
 type CustomTransform = dyn Fn(&str, &serde_json::Value) -> crate::Result<String> + Send + Sync;
+type CustomExecutor = dyn Fn(&CodeBuffer, &ResolvedSymbol, &serde_json::Value) -> crate::Result<ProcedureExecutionResult>
+	+ Send
+	+ Sync;
 
 #[derive(Clone)]
 pub enum Transform {
@@ -60,17 +67,45 @@ impl fmt::Debug for Transform {
 	}
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Procedure {
 	pub name:             String,
 	pub description:      String,
 	pub activation_rules: Vec<ActivationRule>,
 	pub selector:         Option<Selector>,
 	pub transform:        Transform,
+	pub executor:         Option<Arc<CustomExecutor>>,
+}
+impl fmt::Debug for Procedure {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("Procedure")
+			.field("name", &self.name)
+			.field("description", &self.description)
+			.field("activation_rules", &self.activation_rules)
+			.field("selector", &self.selector)
+			.field("transform", &self.transform)
+			.field("executor", &self.executor.as_ref().map(|_| "CustomExecutor(fn)"))
+			.finish()
+	}
 }
 
 pub struct ProcedureResult {
 	pub matched_nodes: Vec<MatchedNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProcedureProof {
+	pub basis:      String,
+	pub reason:     String,
+	pub confidence: String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub matches:    Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcedureExecutionResult {
+	pub edits: Vec<TextEdit>,
+	pub proof: Option<ProcedureProof>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +126,7 @@ pub struct ProcedureBuilder {
 	activation_rules: Vec<ActivationRule>,
 	selector:         Option<Selector>,
 	transform:        Transform,
+	executor:         Option<Arc<CustomExecutor>>,
 }
 
 impl Procedure {
@@ -101,6 +137,7 @@ impl Procedure {
 			activation_rules: Vec::new(),
 			selector:         None,
 			transform:        Transform::Append { text: String::new() },
+			executor:         None,
 		}
 	}
 }
@@ -178,6 +215,30 @@ pub fn apply_procedure_transform(
 	Ok(edits)
 }
 
+pub fn run_procedure(
+	procedure: &Procedure,
+	buffer: &CodeBuffer,
+	resolved: &ResolvedSymbol,
+	profile: &LanguageProfile,
+	options: &serde_json::Value,
+) -> crate::Result<ProcedureExecutionResult> {
+	if let Some(executor) = &procedure.executor {
+		return executor(buffer, resolved, options);
+	}
+	let node = buffer
+		.tree()
+		.root_node()
+		.descendant_for_byte_range(resolved.start_byte, resolved.end_byte)
+		.ok_or_else(|| CodeEngineError::Edit("Node not found for resolved target".into()))?;
+	let result =
+		apply_procedure(procedure, &node, resolved.start_byte, profile).ok_or_else(|| {
+			CodeEngineError::Edit(format!("Procedure '{}' did not match", procedure.name))
+		})?;
+	let edits =
+		apply_procedure_transform(procedure, &buffer.source(), &result.matched_nodes, options)?;
+	Ok(ProcedureExecutionResult { edits, proof: None })
+}
+
 impl ProcedureBuilder {
 	pub fn name(mut self, name: impl Into<String>) -> Self {
 		self.name = name.into();
@@ -212,6 +273,21 @@ impl ProcedureBuilder {
 		self
 	}
 
+	pub fn executor<F>(mut self, executor: F) -> Self
+	where
+		F: Fn(
+				&CodeBuffer,
+				&ResolvedSymbol,
+				&serde_json::Value,
+			) -> crate::Result<ProcedureExecutionResult>
+			+ Send
+			+ Sync
+			+ 'static,
+	{
+		self.executor = Some(Arc::new(executor));
+		self
+	}
+
 	pub fn build(self) -> Procedure {
 		Procedure {
 			name:             self.name,
@@ -219,6 +295,7 @@ impl ProcedureBuilder {
 			activation_rules: self.activation_rules,
 			selector:         self.selector,
 			transform:        self.transform,
+			executor:         self.executor,
 		}
 	}
 }

@@ -316,6 +316,10 @@ impl CodeGraph {
 	}
 
 	pub fn graph_dead_code(&self) -> Vec<GraphDeadCodeItem> {
+		self.graph_dead_code_with_limit(50)
+	}
+
+	pub fn graph_dead_code_with_limit(&self, limit: usize) -> Vec<GraphDeadCodeItem> {
 		let graph = self.graph();
 		let mut items = graph
 			.node_indices()
@@ -383,7 +387,9 @@ impl CodeGraph {
 				.cmp(&confidence_rank(&left.confidence))
 				.then_with(|| left.symbol.label.cmp(&right.symbol.label))
 		});
-		items.truncate(50);
+		if limit > 0 {
+			items.truncate(limit);
+		}
 		items
 	}
 

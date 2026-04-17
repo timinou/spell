@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use napi::{Error, bindgen_prelude::*};
 use napi_derive::napi;
 use pi_code_engine::{
-	apply_procedure, apply_procedure_transform,
+	CodeEngineError,
 	buffer::CodeBuffer,
 	edit::{
 		DragDirection, Patch, SpliceMode, TextEdit, apply_patches, clone_node, drag_node,
@@ -14,7 +14,12 @@ use pi_code_engine::{
 	line_target::resolve_edit_target,
 	navigate::{NavigateAction, NavigateItem, NavigateResult, navigate as navigate_buffer},
 	outline::{OutlineEntry, outline as outline_buffer, read as read_buffer},
+	procedure::ProcedureProof,
 	resolve::{ResolvedSymbol, resolve_symbol},
+	run_procedure,
+};
+use pi_code_graph::{
+	BuildGraphOptions, CacheStore, CodeGraphBuilder, LanguageRegistry as GraphLanguageRegistry,
 };
 use serde_json::{Value, json};
 
@@ -175,90 +180,203 @@ fn validate_create_request(options: &Value, path: &Path) -> Result<()> {
 	Ok(())
 }
 
-fn resolved_node<'a>(
-	buffer: &'a CodeBuffer,
-	resolved: &ResolvedSymbol,
-) -> Option<tree_sitter::Node<'a>> {
-	let mut node = buffer
-		.tree()
-		.root_node()
-		.named_descendant_for_byte_range(resolved.start_byte, resolved.end_byte)
-		.or_else(|| {
-			buffer
-				.tree()
-				.root_node()
-				.descendant_for_byte_range(resolved.start_byte, resolved.end_byte)
-		})?;
+#[derive(Debug)]
+struct PreparedEditOperation {
+	edits:     Vec<TextEdit>,
+	proof:     Option<ProcedureProof>,
+	operation: String,
+}
 
+fn structured_refusal(operation: &str, error: CodeEngineError) -> Result<Value> {
+	let CodeEngineError::Refusal { message, reason, confidence, basis, matches } = error else {
+		return Err(engine_err(error));
+	};
+	Ok(json_response(
+		json!({
+			"message": message,
+			"operation": operation,
+			"proof": {
+				"basis": basis,
+				"reason": reason,
+				"confidence": confidence,
+				"matches": matches,
+			},
+		}),
+		true,
+	))
+}
+
+fn workspace_root_for(path: &Path) -> PathBuf {
+	let mut current = path.parent().unwrap_or(path);
 	loop {
-		if node.start_byte() == resolved.start_byte && node.end_byte() == resolved.end_byte {
-			return Some(node);
+		if current.join(".git").exists() || current.join(".spell").exists() {
+			return current.to_path_buf();
 		}
-		let parent = node.parent()?;
-		node = parent;
+		let Some(parent) = current.parent() else {
+			return path.parent().unwrap_or(path).to_path_buf();
+		};
+		current = parent;
 	}
 }
 
+fn prove_dead_style(
+	path: &Path,
+	resolved: &ResolvedSymbol,
+) -> std::result::Result<ProcedureProof, CodeEngineError> {
+	let root = workspace_root_for(path);
+	let cache = CacheStore::new(root.join(".spell/graph"));
+	let target_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+	let registry = GraphLanguageRegistry::new()
+		.with_defaults()
+		.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
+	let builder = CodeGraphBuilder::new(registry, cache);
+	let outcome = builder
+		.build(&BuildGraphOptions::new(&root))
+		.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
+	let Some(item) = outcome
+		.graph
+		.graph_dead_code_with_limit(0)
+		.into_iter()
+		.find(|item| {
+			let item_path = if item.symbol.path.is_absolute() {
+				item.symbol.path.clone()
+			} else {
+				root.join(&item.symbol.path)
+			};
+			item_path == target_path
+				&& item.symbol.kind == "cssrule"
+				&& item.symbol.label.ends_with(&format!("::{}", resolved.name))
+		})
+	else {
+		return Err(CodeEngineError::Refusal {
+			message:    "Dead-style removal refused: static graph still sees possible consumers or \
+			             lacks proof of zero consumers"
+				.into(),
+			reason:     "graph_dead_code did not prove this CSS rule unused at the requested location"
+				.into(),
+			confidence: "low".into(),
+			basis:      "graph_dead_code".into(),
+			matches:    None,
+		});
+	};
+	Ok(ProcedureProof {
+		basis:      "graph_dead_code".into(),
+		reason:     item.reason,
+		confidence: item.confidence,
+		matches:    Some(1),
+	})
+}
+
+/// Dispatch a single edit operation (symbol-targeted or line-targeted).
 /// Dispatch a single edit operation (symbol-targeted or line-targeted).
 fn single_edit_operation(
 	buffer: &CodeBuffer,
 	profile: &LanguageProfile,
 	options: &Value,
-) -> Result<Vec<TextEdit>> {
+) -> std::result::Result<PreparedEditOperation, CodeEngineError> {
 	let operation = options
 		.get("operation")
 		.and_then(Value::as_str)
-		.ok_or_else(|| json_err("Missing required field: operation"))?;
+		.ok_or_else(|| CodeEngineError::Edit("Missing required field: operation".into()))?;
 
 	let conservative_web_refactor = matches!(buffer.language().as_str(), "html" | "css");
 
-	match operation {
-		"create" => {
-			let content = required_str(options, "content")?;
-			Ok(vec![TextEdit {
+	let prepared = match operation {
+		"create" => PreparedEditOperation {
+			edits:     vec![TextEdit {
 				start_byte:   0,
 				old_end_byte: buffer.source().len(),
-				new_text:     content.to_string(),
-			}])
+				new_text:     required_str(options, "content")
+					.map_err(|error| CodeEngineError::Edit(error.to_string()))?
+					.to_string(),
+			}],
+			proof:     None,
+			operation: operation.to_string(),
 		},
-		// Symbol-targeted content operations
 		"patch" => {
-			let resolved = resolve_target(buffer, profile, options)?;
-			let patches = parse_patches(options)?;
-			apply_patches(buffer, resolved.start_byte, resolved.end_byte, &patches).map_err(engine_err)
+			let resolved = resolve_target(buffer, profile, options)
+				.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
+			PreparedEditOperation {
+				edits:     apply_patches(
+					buffer,
+					resolved.start_byte,
+					resolved.end_byte,
+					&parse_patches(options).map_err(|error| CodeEngineError::Edit(error.to_string()))?,
+				)?,
+				proof:     None,
+				operation: operation.to_string(),
+			}
 		},
 		"replace-body" => {
-			let resolved = resolve_target(buffer, profile, options)?;
-			let content = required_str(options, "content")?;
-			replace_body(buffer, &resolved, content).map_err(engine_err)
+			let resolved = resolve_target(buffer, profile, options)
+				.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
+			PreparedEditOperation {
+				edits:     replace_body(
+					buffer,
+					&resolved,
+					required_str(options, "content")
+						.map_err(|error| CodeEngineError::Edit(error.to_string()))?,
+				)?,
+				proof:     None,
+				operation: operation.to_string(),
+			}
 		},
 		"wrap" => {
-			let resolved = resolve_target(buffer, profile, options)?;
-			let content = required_str(options, "content")?;
-			wrap_node(buffer, &resolved, content).map_err(engine_err)
+			let resolved = resolve_target(buffer, profile, options)
+				.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
+			PreparedEditOperation {
+				edits:     wrap_node(
+					buffer,
+					&resolved,
+					required_str(options, "content")
+						.map_err(|error| CodeEngineError::Edit(error.to_string()))?,
+				)?,
+				proof:     None,
+				operation: operation.to_string(),
+			}
 		},
 		"rename" => {
 			if conservative_web_refactor {
-				return Err(json_err(
-					"HTML/CSS rename is not yet supported safely. Use read/context/impact to inspect \
-					 proven consumers, then apply a manual patch or replace only after verifying the \
-					 exact static scope.",
-				));
+				return Err(CodeEngineError::Refusal {
+					message:    "HTML/CSS rename is not yet supported safely. Use rename-class-token, \
+					             rename-id-token, or rename-custom-property only when the target is a \
+					             provable literal token."
+						.into(),
+					reason:     "generic rename does not preserve proof for HTML/CSS token semantics"
+						.into(),
+					confidence: "low".into(),
+					basis:      "operation_scope".into(),
+					matches:    None,
+				});
 			}
-			let resolved = resolve_target(buffer, profile, options)?;
-			let new_name = required_str(options, "content")?;
-			rename_symbol(buffer, &resolved, new_name).map_err(engine_err)
+			let resolved = resolve_target(buffer, profile, options)
+				.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
+			PreparedEditOperation {
+				edits:     rename_symbol(
+					buffer,
+					&resolved,
+					required_str(options, "content")
+						.map_err(|error| CodeEngineError::Edit(error.to_string()))?,
+				)?,
+				proof:     None,
+				operation: operation.to_string(),
+			}
 		},
-		// Content operations that accept symbol OR line
 		"replace" => {
-			let content = required_str(options, "content")?;
+			let content = required_str(options, "content")
+				.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
 			if options.get("symbol").is_some() {
-				let resolved = resolve_target(buffer, profile, options)?;
-				Ok(vec![TextEdit {
-					start_byte:   resolved.start_byte,
-					old_end_byte: resolved.end_byte,
-					new_text:     content.to_string(),
-				}])
+				let resolved = resolve_target(buffer, profile, options)
+					.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
+				PreparedEditOperation {
+					edits:     vec![TextEdit {
+						start_byte:   resolved.start_byte,
+						old_end_byte: resolved.end_byte,
+						new_text:     content.to_string(),
+					}],
+					proof:     None,
+					operation: operation.to_string(),
+				}
 			} else if let Some(line) = options
 				.get("line")
 				.and_then(Value::as_u64)
@@ -269,120 +387,179 @@ fn single_edit_operation(
 					.get("node_type")
 					.and_then(Value::as_str)
 					.unwrap_or("");
-				replace_node(buffer, line, node_type, content).map_err(engine_err)
+				PreparedEditOperation {
+					edits:     replace_node(buffer, line, node_type, content)?,
+					proof:     None,
+					operation: operation.to_string(),
+				}
 			} else {
-				Ok(vec![TextEdit {
-					start_byte:   0,
-					old_end_byte: buffer.source().len(),
-					new_text:     content.to_string(),
-				}])
+				PreparedEditOperation {
+					edits:     vec![TextEdit {
+						start_byte:   0,
+						old_end_byte: buffer.source().len(),
+						new_text:     content.to_string(),
+					}],
+					proof:     None,
+					operation: operation.to_string(),
+				}
 			}
 		},
 		"kill" => {
 			if conservative_web_refactor {
-				return Err(json_err(
-					"HTML/CSS delete is not yet supported safely. Dead-style or dead-markup removal \
-					 must be proof-backed; inspect context/impact first and delete manually only when \
-					 the static graph proves the scope.",
-				));
+				return Err(CodeEngineError::Refusal {
+					message:    "HTML/CSS delete is not yet supported safely. Use remove-dead-style \
+					             only after the static graph proves a CSS rule has no consumers."
+						.into(),
+					reason:     "generic delete does not preserve proof for HTML/CSS style or markup \
+					             reachability"
+						.into(),
+					confidence: "low".into(),
+					basis:      "operation_scope".into(),
+					matches:    None,
+				});
 			}
 			if options.get("symbol").is_some() {
-				let resolved = resolve_target(buffer, profile, options)?;
-				Ok(vec![TextEdit {
-					start_byte:   resolved.start_byte,
-					old_end_byte: resolved.end_byte,
-					new_text:     String::new(),
-				}])
+				let resolved = resolve_target(buffer, profile, options)
+					.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
+				PreparedEditOperation {
+					edits:     vec![TextEdit {
+						start_byte:   resolved.start_byte,
+						old_end_byte: resolved.end_byte,
+						new_text:     String::new(),
+					}],
+					proof:     None,
+					operation: operation.to_string(),
+				}
 			} else {
 				let line = value_to_usize(options.get("line"), 0);
 				let node_type = options
 					.get("node_type")
 					.and_then(Value::as_str)
 					.unwrap_or("");
-				kill_node(buffer, line, node_type).map_err(engine_err)
+				PreparedEditOperation {
+					edits:     kill_node(buffer, line, node_type)?,
+					proof:     None,
+					operation: operation.to_string(),
+				}
 			}
 		},
 		"insert-before" => {
-			let content = required_str(options, "content")?;
+			let content = required_str(options, "content")
+				.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
 			if options.get("symbol").is_some() {
-				let resolved = resolve_target(buffer, profile, options)?;
-				Ok(vec![TextEdit {
-					start_byte:   resolved.start_byte,
-					old_end_byte: resolved.start_byte,
-					new_text:     content.to_string(),
-				}])
+				let resolved = resolve_target(buffer, profile, options)
+					.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
+				PreparedEditOperation {
+					edits:     vec![TextEdit {
+						start_byte:   resolved.start_byte,
+						old_end_byte: resolved.start_byte,
+						new_text:     content.to_string(),
+					}],
+					proof:     None,
+					operation: operation.to_string(),
+				}
 			} else {
 				let line = value_to_usize(options.get("line"), 0);
 				let node_type = options
 					.get("node_type")
 					.and_then(Value::as_str)
 					.unwrap_or("");
-				insert_before(buffer, line, node_type, content).map_err(engine_err)
+				PreparedEditOperation {
+					edits:     insert_before(buffer, line, node_type, content)?,
+					proof:     None,
+					operation: operation.to_string(),
+				}
 			}
 		},
 		"insert-after" => {
-			let content = required_str(options, "content")?;
+			let content = required_str(options, "content")
+				.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
 			if options.get("symbol").is_some() {
-				let resolved = resolve_target(buffer, profile, options)?;
-				Ok(vec![TextEdit {
-					start_byte:   resolved.end_byte,
-					old_end_byte: resolved.end_byte,
-					new_text:     content.to_string(),
-				}])
+				let resolved = resolve_target(buffer, profile, options)
+					.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
+				PreparedEditOperation {
+					edits:     vec![TextEdit {
+						start_byte:   resolved.end_byte,
+						old_end_byte: resolved.end_byte,
+						new_text:     content.to_string(),
+					}],
+					proof:     None,
+					operation: operation.to_string(),
+				}
 			} else {
 				let line = value_to_usize(options.get("line"), 0);
 				let node_type = options
 					.get("node_type")
 					.and_then(Value::as_str)
 					.unwrap_or("");
-				insert_after(buffer, line, node_type, content).map_err(engine_err)
+				PreparedEditOperation {
+					edits:     insert_after(buffer, line, node_type, content)?,
+					proof:     None,
+					operation: operation.to_string(),
+				}
 			}
 		},
-		// Positional operations (line-only)
 		"splice" => {
-			let line = value_to_usize(options.get("line"), 0);
-			let mode = match options
-				.get("mode")
-				.and_then(Value::as_str)
-				.unwrap_or("self")
-			{
-				"up" => SpliceMode::Up,
-				"down" => SpliceMode::Down,
-				_ => SpliceMode::Self_,
-			};
-			splice_node(buffer, line, mode).map_err(engine_err)
+			PreparedEditOperation {
+				edits:     splice_node(buffer, value_to_usize(options.get("line"), 0), match options
+					.get("mode")
+					.and_then(Value::as_str)
+					.unwrap_or("self")
+				{
+					"up" => SpliceMode::Up,
+					"down" => SpliceMode::Down,
+					_ => SpliceMode::Self_,
+				})?,
+				proof:     None,
+				operation: operation.to_string(),
+			}
 		},
-		"drag-up" => {
-			let line = value_to_usize(options.get("line"), 0);
-			drag_node(buffer, line, DragDirection::Up).map_err(engine_err)
+		"drag-up" => PreparedEditOperation {
+			edits:     drag_node(buffer, value_to_usize(options.get("line"), 0), DragDirection::Up)?,
+			proof:     None,
+			operation: operation.to_string(),
 		},
-		"drag-down" => {
-			let line = value_to_usize(options.get("line"), 0);
-			drag_node(buffer, line, DragDirection::Down).map_err(engine_err)
+		"drag-down" => PreparedEditOperation {
+			edits:     drag_node(buffer, value_to_usize(options.get("line"), 0), DragDirection::Down)?,
+			proof:     None,
+			operation: operation.to_string(),
 		},
-		"clone" => {
-			let line = value_to_usize(options.get("line"), 0);
-			clone_node(buffer, line).map_err(engine_err)
+		"clone" => PreparedEditOperation {
+			edits:     clone_node(buffer, value_to_usize(options.get("line"), 0))?,
+			proof:     None,
+			operation: operation.to_string(),
 		},
-		"transpose" => {
-			let line = value_to_usize(options.get("line"), 0);
-			let column = value_to_usize(options.get("column"), 0);
-			transpose_nodes(buffer, line, column).map_err(engine_err)
+		"transpose" => PreparedEditOperation {
+			edits:     transpose_nodes(
+				buffer,
+				value_to_usize(options.get("line"), 0),
+				value_to_usize(options.get("column"), 0),
+			)?,
+			proof:     None,
+			operation: operation.to_string(),
 		},
 		other => {
 			let procedure = profile
 				.procedures
 				.get(other)
-				.ok_or_else(|| json_err(format!("Unknown edit operation: {other}")))?;
-			let resolved = resolve_target(buffer, profile, options)?;
-			let node = resolved_node(buffer, &resolved)
-				.ok_or_else(|| json_err("Node not found for resolved target"))?;
-			let result = apply_procedure(procedure, &node, resolved.start_byte, profile)
-				.ok_or_else(|| json_err(format!("Procedure '{other}' did not match")))?;
-			apply_procedure_transform(procedure, &buffer.source(), &result.matched_nodes, options)
-				.map_err(engine_err)
+				.ok_or_else(|| CodeEngineError::Edit(format!("Unknown edit operation: {other}")))?;
+			let resolved = resolve_target(buffer, profile, options)
+				.map_err(|error| CodeEngineError::Edit(error.to_string()))?;
+			let mut result = run_procedure(procedure, buffer, &resolved, profile, options)?;
+			if other == "remove-dead-style" {
+				let path =
+					required_path(options).map_err(|error| CodeEngineError::Edit(error.to_string()))?;
+				result.proof = Some(prove_dead_style(&path, &resolved)?);
+			}
+			PreparedEditOperation {
+				edits:     result.edits,
+				proof:     result.proof,
+				operation: other.to_string(),
+			}
 		},
-	}
+	};
+
+	Ok(prepared)
 }
 fn apply_edit_entries_transactionally(
 	buffer: &mut CodeBuffer,
@@ -403,8 +580,8 @@ fn apply_edit_entries_transactionally(
 	let mut staged = CodeBuffer::from_str(&before, buffer.language().clone(), language_registry())
 		.map_err(engine_err)?;
 	for edit in edits {
-		let text_edits = single_edit_operation(&staged, profile, edit)?;
-		staged.edit_batch(text_edits).map_err(engine_err)?;
+		let prepared = single_edit_operation(&staged, profile, edit).map_err(engine_err)?;
+		staged.edit_batch(prepared.edits).map_err(engine_err)?;
 	}
 	buffer
 		.edit_batch(vec![TextEdit {
@@ -629,6 +806,12 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 				},
 				"edit" => {
 					let before = buffer.source();
+					let mut proof: Option<ProcedureProof> = None;
+					let mut operation = options
+						.get("operation")
+						.and_then(Value::as_str)
+						.unwrap_or("replace")
+						.to_string();
 					if text_fallback {
 						if options
 							.get("edits")
@@ -664,17 +847,29 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 						.filter(|edits| !edits.is_empty())
 					{
 						apply_edit_entries_transactionally(&mut buffer, &profile, edits)?;
+						operation = "batch".into();
 					} else {
-						let text_edits = single_edit_operation(&buffer, &profile, options)?;
-						buffer.edit_batch(text_edits).map_err(engine_err)?;
+						match single_edit_operation(&buffer, &profile, options) {
+							Ok(prepared) => {
+								operation = prepared.operation;
+								proof = prepared.proof;
+								buffer.edit_batch(prepared.edits).map_err(engine_err)?;
+							},
+							Err(error @ CodeEngineError::Refusal { .. }) => {
+								return structured_refusal(&operation, error);
+							},
+							Err(error) => return Err(engine_err(error)),
+						}
 					}
 					let diff = render_annotated_diff(&buffer, &before, &profile);
 					Ok(json_response(
 						json!({
-							 "version": buffer.version(),
+							"version": buffer.version(),
 							"diff": diff,
 							"editCount": 1,
 							"created": created,
+							"operation": operation,
+							"proof": proof,
 						}),
 						false,
 					))

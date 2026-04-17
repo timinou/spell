@@ -65,12 +65,20 @@ export interface CodeNavigateData {
 	items: CodeNavigateItem[];
 	referenceCount: number;
 }
+export interface CodeProofData {
+	basis?: string;
+	reason?: string;
+	confidence?: string;
+	matches?: number;
+}
 
 export interface CodeEditData {
 	version?: number;
 	diff: string;
 	editCount: number;
 	created?: boolean;
+	operation?: string;
+	proof?: CodeProofData;
 	noop?: boolean;
 	idempotent?: boolean;
 	formatting?: "formatted" | "unchanged" | "unavailable";
@@ -196,6 +204,7 @@ export interface CodeToolErrorDetails {
 	failureKind?: string;
 	message: string;
 	error: true;
+	proof?: CodeProofData;
 	output?: unknown;
 	meta?: OutputMeta;
 }
@@ -225,6 +234,7 @@ export function createCodeToolError(input: {
 	cwd?: string;
 	output?: unknown;
 }): CodeToolErrorDetails {
+	const proof = normalizeProof(asRecord(input.output)?.proof);
 	return {
 		kind: "error",
 		command: input.command,
@@ -233,6 +243,7 @@ export function createCodeToolError(input: {
 		failureKind: classifyCodeToolFailure(input.message),
 		message: input.message,
 		error: true,
+		proof,
 		output: input.output,
 	};
 }
@@ -324,6 +335,8 @@ export function normalizeCodeBufferSuccess(input: {
 				diff: asString(record?.diff) ?? "",
 				editCount: asNumber(record?.editCount) ?? 0,
 				created: asBoolean(record?.created) ?? false,
+				operation: asString(record?.operation),
+				proof: normalizeProof(record?.proof),
 				noop: input.noop ?? false,
 				idempotent: input.idempotent ?? false,
 				formatting: input.formatting,
@@ -416,6 +429,9 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		const parts = [
 			`Error${details.failureKind ? ` [${details.failureKind}]` : ""}${details.displayPath ? ` ${details.displayPath}` : ""}: ${details.message}`,
 		];
+		if (details.proof) {
+			parts.push(formatProofLine("Proof", details.proof));
+		}
 		if (details.command === "edit") {
 			parts.push("Recovery: re-read/navigate, tighten the target, then retry narrowly.");
 		}
@@ -510,12 +526,20 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 			return withHint([`Preview discarded${label}`, "No mutation landed."].join("\n"));
 		}
 		const header = `${details.data.created ? "Created" : "Edited"}${label}`;
+		const operationLine = details.data.operation ? `Operation: ${details.data.operation}` : undefined;
+		const proofLine = details.data.proof ? formatProofLine("Proof", details.data.proof) : undefined;
 		if (details.data.diff.trim().length === 0) {
-			return withHint([header, formatting].filter(Boolean).join("\n"));
+			return withHint([header, operationLine, proofLine, formatting].filter(Boolean).join("\n"));
 		}
 		const preview = buildCompactHashlineDiffPreview(details.data.diff);
 		const changes = countDiffChanges(details.data.diff);
-		const lines = [header, formatting, `Changes: +${changes.addedLines} -${changes.removedLines}`].filter(Boolean);
+		const lines = [
+			header,
+			operationLine,
+			proofLine,
+			formatting,
+			`Changes: +${changes.addedLines} -${changes.removedLines}`,
+		].filter(Boolean);
 		if (preview.preview.trim().length > 0) {
 			lines.push("Diff preview:", preview.preview);
 		}
@@ -531,6 +555,12 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		}
 		const via = formatterServer ? ` via ${formatterServer}` : "";
 		return `Formatting: ${formatting}${via}`;
+	}
+
+	function formatProofLine(label: string, proof: CodeProofData): string {
+		const details = [proof.basis, proof.reason, proof.confidence].filter(Boolean).join(" | ");
+		const matches = proof.matches !== undefined ? ` | matches: ${proof.matches}` : "";
+		return `${label}: ${details || "available"}${matches}`;
 	}
 
 	if (details.command === "undo" || details.command === "redo") {
@@ -874,6 +904,17 @@ function truncatePreview(value: string | undefined): string | undefined {
 	const singleLine = value.replace(/\s+/g, " ").trim();
 	if (singleLine.length <= PREVIEW_TEXT_LIMIT) return singleLine;
 	return `${singleLine.slice(0, PREVIEW_TEXT_LIMIT - 1)}…`;
+}
+function normalizeProof(value: unknown): CodeProofData | undefined {
+	const record = asRecord(value);
+	if (!record) return undefined;
+	const proof = {
+		basis: asString(record.basis),
+		reason: asString(record.reason),
+		confidence: asString(record.confidence),
+		matches: asNumber(record.matches),
+	};
+	return Object.values(proof).some(value => value !== undefined) ? proof : undefined;
 }
 
 function pluralize(count: number, noun: string): string {

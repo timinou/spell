@@ -23,6 +23,10 @@ function executeCodeBuffer(options: Record<string, unknown>): { output: unknown;
 	return native.executeCodeBuffer(options);
 }
 
+async function createRepoTempDir(prefix: string): Promise<string> {
+	return fs.mkdtemp(path.join(process.cwd(), `${prefix}-`));
+}
+
 describe("executeCodeBuffer NAPI bridge", () => {
 	it("returns the missing command error envelope", () => {
 		expect(executeCodeBuffer({ file: "/tmp/example.ts" })).toEqual({
@@ -214,10 +218,9 @@ describe("executeCodeBuffer NAPI bridge", () => {
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
 
-	it("refuses unsafe html rename mutations", async () => {
-		const tempDir = path.join(os.tmpdir(), `pi-natives-html-rename-${Date.now()}`);
+	it("refuses generic html/css rename mutations with proof metadata", async () => {
+		const tempDir = await createRepoTempDir("pi-natives-html-rename");
 		const file = path.join(tempDir, "index.html");
-		await fs.mkdir(tempDir, { recursive: true });
 		await Bun.write(file, '<div id="save"></div>\n');
 
 		const result = executeCodeBuffer({
@@ -230,7 +233,136 @@ describe("executeCodeBuffer NAPI bridge", () => {
 
 		expect(result).toEqual({
 			error: true,
-			output: expect.stringContaining("HTML/CSS rename is not yet supported safely"),
+			output: expect.objectContaining({
+				message: expect.stringContaining("HTML/CSS rename is not yet supported safely"),
+				operation: "rename",
+				proof: expect.objectContaining({ basis: "operation_scope", confidence: "low" }),
+			}),
+		});
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("renames exact html id tokens with proof metadata", async () => {
+		const tempDir = await createRepoTempDir("pi-natives-html-id");
+		const file = path.join(tempDir, "index.html");
+		await Bun.write(file, '<button id="save"></button>\n<label for="save"></label>\n');
+
+		const result = executeCodeBuffer({
+			command: "edit",
+			file,
+			symbol: "button#save",
+			operation: "rename-id-token",
+			content: "saveButton",
+		});
+
+		expect(result.error).toBe(false);
+		expect(result.output).toEqual(
+			expect.objectContaining({
+				created: false,
+				operation: "rename-id-token",
+				proof: expect.objectContaining({ basis: "file_local_exact_scan", confidence: "high" }),
+			}),
+		);
+		expect(executeCodeBuffer({ command: "save", file })).toEqual({
+			error: false,
+			output: expect.objectContaining({ success: true }),
+		});
+		expect(await Bun.file(file).text()).toBe('<button id="saveButton"></button>\n<label for="save"></label>\n');
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("refuses css selector-list class renames with proof metadata", async () => {
+		const tempDir = await createRepoTempDir("pi-natives-css-class-refusal");
+		const file = path.join(tempDir, "app.css");
+		await Bun.write(file, ".btn, .link { color: red; }\n");
+
+		const result = executeCodeBuffer({
+			command: "edit",
+			file,
+			symbol: ".btn, .link",
+			operation: "rename-class-token",
+			content: "cta",
+		});
+
+		expect(result).toEqual({
+			error: true,
+			output: expect.objectContaining({
+				message: expect.stringContaining("Selector-list rename refused"),
+				operation: "rename-class-token",
+				proof: expect.objectContaining({ basis: "selector_list_ambiguity", confidence: "low" }),
+			}),
+		});
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("renames css custom properties with proof metadata", async () => {
+		const tempDir = await createRepoTempDir("pi-natives-css-custom-prop");
+		const file = path.join(tempDir, "app.css");
+		await Bun.write(file, ":root { --accent: red; color: var(--accent); background: var(--accent, blue); }\n");
+
+		const result = executeCodeBuffer({
+			command: "edit",
+			file,
+			symbol: ":root.--accent",
+			operation: "rename-custom-property",
+			content: "brand",
+		});
+
+		expect(result.error).toBe(false);
+		expect(result.output).toEqual(
+			expect.objectContaining({
+				operation: "rename-custom-property",
+				proof: expect.objectContaining({ basis: "file_local_exact_scan", confidence: "high" }),
+			}),
+		);
+		expect(executeCodeBuffer({ command: "save", file })).toEqual({
+			error: false,
+			output: expect.objectContaining({ success: true }),
+		});
+		expect(await Bun.file(file).text()).toContain("--brand: red");
+		expect(await Bun.file(file).text()).toContain("var(--brand)");
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("removes dead css rules only when graph proof succeeds", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-natives-dead-style-success-"));
+		const cssFile = path.join(tempDir, "app.css");
+		const htmlFile = path.join(tempDir, "index.html");
+		await Bun.write(cssFile, ".unused { color: red; }\n.used { color: blue; }\n");
+		await Bun.write(htmlFile, '<link rel="stylesheet" href="./app.css">\n<div class="used"></div>\n');
+
+		const success = executeCodeBuffer({
+			command: "edit",
+			file: cssFile,
+			symbol: ".unused",
+			operation: "remove-dead-style",
+		});
+		expect(success.error).toBe(false);
+		expect(success.output).toEqual(
+			expect.objectContaining({
+				operation: "remove-dead-style",
+				proof: expect.objectContaining({ basis: "graph_dead_code" }),
+			}),
+		);
+		expect(executeCodeBuffer({ command: "save", file: cssFile })).toEqual({
+			error: false,
+			output: expect.objectContaining({ success: true }),
+		});
+		expect(await Bun.file(cssFile).text()).not.toContain(".unused");
+
+		const refusal = executeCodeBuffer({
+			command: "edit",
+			file: cssFile,
+			symbol: ".used",
+			operation: "remove-dead-style",
+		});
+		expect(refusal).toEqual({
+			error: true,
+			output: expect.objectContaining({
+				message: expect.stringContaining("Dead-style removal refused"),
+				operation: "remove-dead-style",
+				proof: expect.objectContaining({ basis: "graph_dead_code", confidence: "low" }),
+			}),
 		});
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});

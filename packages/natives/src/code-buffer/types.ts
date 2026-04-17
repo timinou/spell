@@ -13,6 +13,28 @@ export interface EditEntry {
 	mode?: string;
 }
 
+export interface CodeProofData {
+	basis?: string;
+	reason?: string;
+	confidence?: string;
+	matches?: number | null;
+}
+
+export interface CodeEditOutput {
+	version?: number;
+	diff?: string;
+	editCount?: number;
+	created?: boolean;
+	operation?: string;
+	proof?: CodeProofData;
+}
+
+export interface CodeErrorOutput {
+	message?: string;
+	operation?: string;
+	proof?: CodeProofData;
+}
+
 export interface CodeBufferOptions {
 	command: string;
 	file?: string;

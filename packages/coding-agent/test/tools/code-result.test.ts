@@ -1,6 +1,5 @@
 import { describe, expect, it } from "bun:test";
 import {
-	createCodeGraphDetails,
 	createCodeToolError,
 	formatCodeToolContent,
 	normalizeCodeBufferSuccess,
@@ -102,11 +101,7 @@ describe("code tool result contract", () => {
 			command: "edit",
 			file: "/repo/src/main.ts",
 			cwd: "/repo",
-			output: {
-				version: 2,
-				diff: "@@ add @@\n-return a + b;\n+return a * b;",
-				editCount: 1,
-			},
+			output: { version: 2, diff: "@@ add @@\n-return a + b;\n+return a * b;", editCount: 1 },
 			formatting: "formatted",
 			formatterServer: "biome",
 		});
@@ -125,12 +120,7 @@ describe("code tool result contract", () => {
 			command: "edit",
 			file: "/repo/src/new-module.ts",
 			cwd: "/repo",
-			output: {
-				version: 1,
-				diff: "@@ top-level @@\n+export const created = 1;",
-				editCount: 1,
-				created: true,
-			},
+			output: { version: 1, diff: "@@ top-level @@\n+export const created = 1;", editCount: 1, created: true },
 			formatting: "unchanged",
 		});
 
@@ -146,11 +136,7 @@ describe("code tool result contract", () => {
 			command: "edit",
 			file: "/repo/src/main.ts",
 			cwd: "/repo",
-			output: {
-				version: 2,
-				diff: "",
-				editCount: 1,
-			},
+			output: { version: 2, diff: "", editCount: 1 },
 			noop: true,
 			idempotent: true,
 			formatting: "unchanged",
@@ -162,6 +148,7 @@ describe("code tool result contract", () => {
 		expect(content).not.toContain("Edited src/main.ts");
 		expect(content).not.toContain("Changes: +0 -0");
 	});
+
 	it("formats pending preview edits without edited success text", () => {
 		const details = normalizeCodeBufferSuccess({
 			command: "edit",
@@ -227,6 +214,7 @@ describe("code tool result contract", () => {
 		expect(content).toContain("Saved src/main.ts (buffer version 0).");
 		expect(content).not.toContain("Edited src/main.ts");
 	});
+
 	it("summarizes undo history without dropping low-level edit primitives", () => {
 		const details = normalizeCodeBufferSuccess({
 			command: "undo",
@@ -235,12 +223,7 @@ describe("code tool result contract", () => {
 			output: [
 				{
 					version: 4,
-					changedRanges: [
-						{
-							start: { line: 10, column: 2 },
-							end: { line: 12, column: 0 },
-						},
-					],
+					changedRanges: [{ start: { line: 10, column: 2 }, end: { line: 12, column: 0 } }],
 					inputEdit: { startByte: 120, oldEndByte: 145, newText: "return a + b;" },
 				},
 			],
@@ -324,25 +307,52 @@ describe("code tool result contract", () => {
 		expect(content).toBe("Closed src/main.ts");
 	});
 
-	it("keeps graph output compact and error output actionable", () => {
-		const graph = createCodeGraphDetails({
-			command: "status",
-			output: "Code graph status\nCache: fresh\nSemantic: missing",
-			cacheStatus: "fresh",
-			rebuilt: false,
-			semanticStatus: "missing",
-		});
-		expect(formatCodeToolContent(graph)).toBe("Code graph status\nCache: fresh\nSemantic: missing");
-
-		const error = createCodeToolError({
-			command: "outline",
+	it("preserves edit proof metadata and renders proof lines", () => {
+		const details = normalizeCodeBufferSuccess({
+			command: "edit",
 			file: "/repo/src/main.ts",
 			cwd: "/repo",
-			message: "Language profile not found",
-			output: "Language profile not found",
+			output: {
+				version: 3,
+				diff: "@@ add @@\n+return next(value);",
+				editCount: 1,
+				operation: "replace-node",
+				proof: { basis: "hashline", reason: "target narrowed", confidence: "high", matches: 1 },
+			},
 		});
-		expect(error.displayPath).toBe("src/main.ts");
-		expect(error.failureKind).toBe("execution_failure");
-		expect(formatCodeToolContent(error)).toBe("Error [execution_failure] src/main.ts: Language profile not found");
+		if (details.command !== "edit") throw new Error("Expected edit details");
+		expect(details.data.operation).toBe("replace-node");
+		expect(details.data.proof).toEqual({
+			basis: "hashline",
+			reason: "target narrowed",
+			confidence: "high",
+			matches: 1,
+		});
+		expect(formatCodeToolContent(details)).toContain("Proof: hashline | target narrowed | high | matches: 1");
+	});
+
+	it("preserves error proof metadata and renders proof lines", () => {
+		const error = createCodeToolError({
+			command: "edit",
+			file: "/repo/src/main.ts",
+			cwd: "/repo",
+			output: {
+				version: 3,
+				diff: "@@ add @@\n+return next(value);",
+				editCount: 1,
+				operation: "replace-node",
+				proof: { basis: "line-target", reason: "would cross block boundary", confidence: "medium", matches: 2 },
+			},
+			message: "would cross block boundary",
+		});
+		expect(error.proof).toEqual({
+			basis: "line-target",
+			reason: "would cross block boundary",
+			confidence: "medium",
+			matches: 2,
+		});
+		expect(formatCodeToolContent(error)).toContain(
+			"Proof: line-target | would cross block boundary | medium | matches: 2",
+		);
 	});
 });
