@@ -1,5 +1,5 @@
 #+TITLE: pi-code-graph: add CSS selector/cascade/token graph semantics and dead-style analysis
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14be1e420c74b0e5
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T11-46-39-793Z_14be1e420c74b0e5.jsonl]]
 #+CUSTOM_ID: FEAT-555-pi-code-graph-add-css-selector-cascade-t
@@ -99,3 +99,5 @@
 - Style queries answer practical maintenance questions: who uses this selector/token, what breaks if it changes, what appears dead, and where overrides occur.
 - Dead-style analysis is conservative and confidence-annotated rather than optimistic.
 - The CSS/graph test suite covers all workflows and scenarios above, including mixed HTML/CSS/template fixtures.
+
+NOTE [2026-04-17]: Implemented in PLAN-238: CSS is graph-aware with selector/property symbols, HTML stylesheet imports resolve, simple selector-to-element Styles edges index, and query/dead-code flows account for style usage with regression coverage.

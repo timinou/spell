@@ -1,5 +1,5 @@
 #+TITLE: pi-code-engine: add HTML embedded-region local semantics reusable by HEEx
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14be1e420c74b0e5
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T11-46-39-793Z_14be1e420c74b0e5.jsonl]]
 #+CUSTOM_ID: FEAT-554-pi-code-engine-add-html-embedded-region
@@ -96,3 +96,5 @@
 - HTML symbol naming is deterministic, conservative, and documented well enough for HEEx reuse.
 - Embedded `<style>` regions expose stable host/guest boundaries for downstream CSS analysis.
 - The HTML fixture suite covers all workflows and required scenarios above, including malformed and templated inputs.
+
+NOTE [2026-04-17]: Implemented in PLAN-238: HTML now publishes embedded region metadata for <style>/<script>, host element semantics are first-class, and downstream graph/tool layers consume the reusable host/guest substrate.
