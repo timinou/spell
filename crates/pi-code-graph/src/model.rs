@@ -54,6 +54,7 @@ pub enum EdgeKind {
 	References,
 	Inherits,
 	Renders,
+	Styles,
 	TypeImports,
 	TypeParameterOf,
 }

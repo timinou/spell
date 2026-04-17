@@ -110,6 +110,7 @@ impl ImportResolver for EngineProfileImportResolver {
 			"rust" => Ok(resolve_rust_import(request)),
 			"python" => Ok(resolve_python_import(request)),
 			"typst" => Ok(resolve_relative_import(request, &["typ"])),
+			"html" => Ok(resolve_relative_import(request, &["css", "html", "htm"])),
 			"markdown" => Ok(resolve_relative_import(request, &["md", "mdx", "markdown"])),
 			"org" => Ok(resolve_relative_import(request, &["org"])),
 			_ => Ok(None),
