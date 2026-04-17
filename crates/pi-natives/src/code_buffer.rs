@@ -509,9 +509,29 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 				.iter()
 				.filter_map(|id| {
 					let profile = reg.get(id)?;
+					let semantic_capable = profile.capabilities.outline
+						|| profile.capabilities.read
+						|| profile.capabilities.navigate
+						|| profile.capabilities.resolve
+						|| profile.capabilities.edit
+						|| profile.capabilities.graph;
+					let capabilities = vec![
+						profile.capabilities.outline.then_some("outline"),
+						profile.capabilities.read.then_some("read"),
+						profile.capabilities.navigate.then_some("navigate"),
+						profile.capabilities.resolve.then_some("resolve"),
+						profile.capabilities.edit.then_some("edit"),
+						profile.capabilities.graph.then_some("graph"),
+					]
+					.into_iter()
+					.flatten()
+					.collect::<Vec<_>>();
 					(!profile.extensions.is_empty()).then_some(json!({
 						"id": id.to_string(),
 						"extensions": profile.extensions,
+						"semanticCapable": semantic_capable,
+						"capabilities": capabilities,
+						"embeddedLanguages": profile.capabilities.embedded_languages,
 					}))
 				})
 				.collect();
@@ -1103,23 +1123,25 @@ mod tests {
 	#[test]
 	fn find_enclosing_symbol_prefers_nested_child() {
 		let entries = vec![OutlineEntry {
-			name:      "Foo".into(),
-			kind:      "class".into(),
-			line:      1,
-			end_line:  10,
-			column:    0,
-			exported:  false,
-			signature: "class Foo".into(),
-			children:  vec![OutlineEntry {
-				name:      "bar".into(),
-				kind:      "method".into(),
-				line:      3,
-				end_line:  5,
-				column:    2,
-				exported:  false,
-				signature: "bar()".into(),
-				children:  vec![],
+			name:        "Foo".into(),
+			kind:        "class".into(),
+			line:        1,
+			end_line:    10,
+			column:      0,
+			exported:    false,
+			signature:   "class Foo".into(),
+			children:    vec![OutlineEntry {
+				name:        "bar".into(),
+				kind:        "method".into(),
+				line:        3,
+				end_line:    5,
+				column:      2,
+				exported:    false,
+				signature:   "bar()".into(),
+				children:    vec![],
+				deduplicate: false,
 			}],
+			deduplicate: false,
 		}];
 		assert_eq!(find_enclosing_symbol(&entries, 4).as_deref(), Some("Foo.bar"));
 		assert_eq!(find_enclosing_symbol(&entries, 2).as_deref(), Some("Foo"));

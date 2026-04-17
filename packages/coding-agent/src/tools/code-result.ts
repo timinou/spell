@@ -119,6 +119,9 @@ export interface CodeBufferInfo {
 export interface CodeLanguageInfo {
 	id: string;
 	extensions: string[];
+	semanticCapable?: boolean;
+	capabilities?: string[];
+	embeddedLanguages?: string[];
 }
 
 interface CodeFileDetailsBase<TCommand extends CodeFileCommand, TData> {
@@ -565,7 +568,12 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		const lines = [`Built-in languages (${details.data.languages.length})`];
 		for (const language of previewList(details.data.languages, LANGUAGE_PREVIEW_LIMIT)) {
 			const suffix = language.extensions.length > 0 ? ` (${language.extensions.join(", ")})` : "";
-			lines.push(`- ${language.id}${suffix}`);
+			const capabilitySuffix = language.capabilities?.length ? ` [${language.capabilities.join(", ")}]` : "";
+			const embeddedSuffix = language.embeddedLanguages?.length
+				? ` embeds ${language.embeddedLanguages.join(", ")}`
+				: "";
+			const semanticSuffix = language.semanticCapable === false ? " [fallback]" : "";
+			lines.push(`- ${language.id}${suffix}${capabilitySuffix}${embeddedSuffix}${semanticSuffix}`);
 		}
 		const remaining = details.data.languages.length - Math.min(details.data.languages.length, LANGUAGE_PREVIEW_LIMIT);
 		if (remaining > 0) {
@@ -752,6 +760,13 @@ function normalizeLanguages(value: unknown): CodeLanguageInfo[] {
 			id,
 			extensions: Array.isArray(record?.extensions)
 				? record.extensions.filter((entry): entry is string => typeof entry === "string")
+				: [],
+			semanticCapable: asBoolean(record?.semanticCapable),
+			capabilities: Array.isArray(record?.capabilities)
+				? record.capabilities.filter((entry): entry is string => typeof entry === "string")
+				: [],
+			embeddedLanguages: Array.isArray(record?.embeddedLanguages)
+				? record.embeddedLanguages.filter((entry): entry is string => typeof entry === "string")
 				: [],
 		});
 	}
