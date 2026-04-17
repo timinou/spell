@@ -144,3 +144,10 @@ how would you make the pi code graph/engine maximally useful for html/css files?
   - `bun check:ts` → PASS
   - `bun check:rs` → PASS
 - Remaining blocker narrows to FEAT-556 depth: conservative HTML/CSS refactor/refusal flows and richer code-tool/prompt/result surface for style-aware graph semantics are still incomplete, so the PLAN remains `DOING`.
+
+*** Verification update [2026-04-17 4]
+- Updated `packages/coding-agent/src/prompts/tools/code.md` so the public code-tool contract now mentions:
+  - `languages` capability/embedded-language metadata
+  - HTML/CSS local semantic support
+  - conservative handling of dynamic/unsafe HTML/CSS mutations
+- No extra command-specific verification required beyond the already passing `bun check:ts` and focused tool tests because this change is documentation-only and aligned with the observed tool surface.
