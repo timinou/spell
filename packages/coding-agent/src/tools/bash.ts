@@ -22,6 +22,7 @@ import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-intera
 import { checkBashInterception } from "./bash-interceptor";
 import { applyHeadTail } from "./bash-normalize";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
+import { classifyContextPressure } from "./context-pressure-policy";
 
 import { formatOutputNotice, formatStyledTruncationWarning, type OutputMeta, outputMeta } from "./output-meta";
 
@@ -516,8 +517,19 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			lenientSpill: lenientSpill || undefined,
 		};
 		const resultBuilder = toolResult(details).text(finalText).truncationFromSummary(result, { direction: "tail" });
+		const finalResult = resultBuilder.done();
+		const contextPressure = classifyContextPressure({
+			toolName: this.name,
+			params: { command: rawCommand },
+		});
+		if (contextPressure && contextPressure.persistence !== "allow-raw") {
+			return {
+				...finalResult,
+				content: [{ type: "text", text: contextPressure.summary }],
+			};
+		}
 
-		return resultBuilder.done();
+		return finalResult;
 	}
 }
 

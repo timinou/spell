@@ -21,7 +21,7 @@ import type { Theme } from "../modes/theme/theme";
 import { validatePlanItem } from "../plan-mode/plan-validation";
 import { renderStatusLine } from "../tui/status-line";
 import type { ToolSession } from ".";
-import { formatOrgQueryResult, renderItemOrg } from "./org-format";
+import { classifyContextPressure } from "./context-pressure-policy";
 import { replaceTabs, shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "./render-utils";
 
 const orgSchema = Type.Object({
@@ -87,6 +87,7 @@ export class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Them
 	#session: ToolSession;
 	#projectRoot: string;
 	#inner: OrgToolDefinition;
+	#memo = new Map<string, { fingerprint: string; text: string }>();
 
 	constructor(session: ToolSession) {
 		this.#session = session;
@@ -116,7 +117,12 @@ export class OrgTool implements AgentTool<typeof orgSchema, OrgToolDetails, Them
 		try {
 			await this.#ensureInner();
 			const result = await this.#inner.execute(params as Record<string, unknown>);
-			const text = formatOrgResult(result);
+			const contextPressure = classifyContextPressure({ toolName: this.name, params });
+			const formatted = formatOrgResult(result, params);
+			const text =
+				contextPressure?.presentation === "summary-first"
+					? memoizeOrgResult(this.#memo, params, result, formatted)
+					: formatted;
 			const isError =
 				typeof result === "object" &&
 				result !== null &&
@@ -274,7 +280,74 @@ function previewArgValue(value: unknown, width: number = TRUNCATE_LENGTHS.CONTEN
 	return undefined;
 }
 
-export function formatOrgResult(result: unknown): string {
+function buildCompactOrgItemLine(item: OrgItem): string {
+	return `- ${item.id} [${item.state}] ${item.title}`;
+}
+
+function formatCompactOrgItem(item: OrgItem): string {
+	const lines = [
+		`id: ${item.id}`,
+		`state: ${item.state}`,
+		`title: ${item.title}`,
+		`category: ${item.category}`,
+		`file: ${item.file}`,
+		`line: ${item.line}`,
+	];
+	const body = item.body?.trim();
+	if (body) {
+		lines.push(`body_length: ${Buffer.byteLength(body, "utf8")}`);
+		lines.push(`preview: ${truncateToWidth(replaceTabs(body.split(/\r?\n/u)[0] ?? ""), TRUNCATE_LENGTHS.CONTENT)}`);
+	}
+	return lines.join("\n");
+}
+
+function formatCompactOrgQueryResult(items: OrgItem[], total: number): string {
+	if (items.length === 0) return "No items found.";
+	const lines = [`items: ${items.length}/${total}`];
+	for (const item of items) lines.push(buildCompactOrgItemLine(item));
+	if (total > items.length) {
+		lines.push(`[${total - items.length} more items hidden. Narrow with category/state/query filters.]`);
+	}
+	return lines.join("\n");
+}
+
+function formatCompactFileContent(content: string, label: string): string {
+	const normalized = replaceTabs(content).trim();
+	if (!normalized) return `${label}: empty`;
+	const lines = normalized.split(/\r?\n/u);
+	if (lines.length <= 12) return normalized;
+	return `${lines.slice(0, 12).join("\n")}\n[${lines.length - 12} more lines hidden. Re-run with a narrower org request if exact text is required.]`;
+}
+
+export function memoizeOrgResult(
+	cache: Map<string, { fingerprint: string; text: string }>,
+	params: Pick<OrgParams, "command" | "query" | "id" | "dir">,
+	result: unknown,
+	text: string,
+): string {
+	let fingerprint: string;
+	try {
+		fingerprint = JSON.stringify(result);
+	} catch {
+		return text;
+	}
+	const key = JSON.stringify([params.command ?? "", params.query ?? "", params.id ?? "", params.dir ?? ""]);
+	const previous = cache.get(key);
+	cache.set(key, { fingerprint, text });
+	if (!previous || previous.fingerprint !== fingerprint) return text;
+	const label = typeof params.command === "string" ? params.command : "request";
+	const subject =
+		typeof params.query === "string"
+			? params.query
+			: typeof params.id === "string"
+				? params.id
+				: typeof params.dir === "string"
+					? params.dir
+					: undefined;
+	return `Repeat of previous org ${label} result unchanged${subject ? ` (${subject})` : ""}.\nContinue using the prior IDs, states, and next-step guidance.`;
+}
+
+export function formatOrgResult(result: unknown, params?: Pick<OrgParams, "command">): string {
 	const isObjectResult = typeof result === "object" && result !== null;
 	const record = isObjectResult ? (result as Record<string, unknown>) : null;
 	if (record && "wave_number" in record && Array.isArray(record.items)) {
@@ -296,12 +369,15 @@ export function formatOrgResult(result: unknown): string {
 		const firstItem = record.items[0];
 		if (typeof firstItem === "object" && firstItem !== null && "id" in firstItem && "properties" in firstItem) {
 			const r = record as { items: OrgItem[]; total: number };
-			return formatOrgQueryResult(r.items, r.total ?? r.items.length);
+			return formatCompactOrgQueryResult(r.items, r.total ?? r.items.length);
 		}
 	}
-	if (record && "fileContent" in record && typeof record.fileContent === "string") return record.fileContent;
-	if (record && "item" in record && typeof record.item === "object" && record.item !== null)
-		return renderItemOrg(record.item as OrgItem, true, Infinity);
+	if (record && "fileContent" in record && typeof record.fileContent === "string") {
+		return formatCompactFileContent(record.fileContent, params?.command ?? "org");
+	}
+	if (record && "item" in record && typeof record.item === "object" && record.item !== null) {
+		return formatCompactOrgItem(record.item as OrgItem);
+	}
 	if (record && "valid" in record && Array.isArray(record.issues)) {
 		const issues = record.issues as Array<Record<string, unknown>>;
 		const lines = [`valid: ${String(record.valid)}`, `issues: ${issues.length}`];

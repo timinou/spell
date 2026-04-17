@@ -1,5 +1,5 @@
 #+TITLE: Source-aware read routing and transcript-aware read compaction
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14be1383cbba71b9
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T10-59-43-534Z_14be1383cbba71b9.jsonl]]
 #+CUSTOM_ID: FEAT-558-source-aware-read-routing-and-transcript-compaction
@@ -90,3 +90,5 @@ Test files / scenarios:
 
 * Parent Plan
 - [[id:PLAN-240-post-plan239-context-pressure-followup-plan]] POST_PLAN239_CONTEXT_PRESSURE_FOLLOWUP_PLAN
+
+NOTE [2026-04-17]: Read now routes untargeted source/test reads through summary-first policy and keeps explicit ranges precise.

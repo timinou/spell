@@ -3,6 +3,7 @@ import type * as fsNode from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
+import type { ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { completeSimple, Effort, type Model } from "@oh-my-pi/pi-ai";
 import { serializeMemoryFile } from "@oh-my-pi/pi-org";
 import { getAgentDbPath, getMemoriesDir, logger, parseJsonlLenient } from "@oh-my-pi/pi-utils";
@@ -15,6 +16,11 @@ import readPathTemplate from "../prompts/memories/read-path.md" with { type: "te
 import stageOneInputTemplate from "../prompts/memories/stage_one_input.md" with { type: "text" };
 import stageOneSystemTemplate from "../prompts/memories/stage_one_system.md" with { type: "text" };
 import type { AgentSession } from "../session/agent-session";
+import {
+	classifyContextPressure,
+	createMemorySafeToolResult,
+	getToolResultOutputMeta,
+} from "../tools/context-pressure-policy";
 import {
 	claimStage1Jobs,
 	clearMemoryData as clearMemoryDataInDb,
@@ -613,6 +619,46 @@ async function collectThreads(session: AgentSession, currentThreadId?: string): 
 	}
 	return threads;
 }
+function extractAssistantToolCalls(
+	message: AgentMessage,
+): Array<{ toolCallId: string; toolName: string; params: unknown }> {
+	const role = (message as { role?: string }).role;
+	if (role !== "assistant") return [];
+	const content = (message as { content?: unknown }).content;
+	if (!Array.isArray(content)) return [];
+	const calls: Array<{ toolCallId: string; toolName: string; params: unknown }> = [];
+	for (const item of content) {
+		if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+		const record = item as Record<string, unknown>;
+		if (record.type !== "toolCall") continue;
+		if (typeof record.id !== "string" || typeof record.name !== "string") continue;
+		calls.push({ toolCallId: record.id, toolName: record.name, params: record.arguments });
+	}
+	return calls;
+}
+
+function normalizePersistableMessage(
+	message: AgentMessage,
+	toolCallsById: ReadonlyMap<string, { toolName: string; params: unknown }>,
+): AgentMessage | undefined {
+	const role = (message as { role: string }).role;
+	if (role === "system" || role === "developer" || role === "user" || role === "assistant") {
+		return message;
+	}
+	if (role !== "toolResult") return undefined;
+	const toolMessage = message as ToolResultMessage<unknown>;
+	const toolCall = toolCallsById.get(toolMessage.toolCallId);
+	const contextPressure = toolCall
+		? classifyContextPressure({
+				toolName: toolMessage.toolName,
+				params: toolCall.params,
+				detailsMeta: getToolResultOutputMeta(toolMessage.details),
+				text: extractMessageText(toolMessage),
+				isError: toolMessage.isError,
+			})
+		: undefined;
+	return createMemorySafeToolResult(toolMessage, contextPressure) as AgentMessage | undefined;
+}
 
 function shouldPersistResponseItemForMemories(message: AgentMessage): boolean {
 	const role = (message as { role: string }).role;
@@ -620,18 +666,15 @@ function shouldPersistResponseItemForMemories(message: AgentMessage): boolean {
 		return true;
 	}
 	if (role !== "toolResult") return false;
-	const toolName = (message as { toolName?: string }).toolName;
-	if (toolName === "bash" || toolName === "python" || toolName === "read" || toolName === "grep") {
-		const text = extractMessageText(message);
-		return text.length > 0 && text.length <= 32_000;
-	}
-	return false;
+	const text = extractMessageText(message);
+	return text.length > 0 && text.length <= 32_000;
 }
 
 function extractPersistableMessages(payload: string): AgentMessage[] {
 	const rows = parseJsonlLenient(payload);
 	if (!Array.isArray(rows)) return [];
 	const messages: AgentMessage[] = [];
+	const toolCallsById = new Map<string, { toolName: string; params: unknown }>();
 	for (const row of rows) {
 		if (!row || typeof row !== "object") continue;
 		const entry = row as Record<string, unknown>;
@@ -639,8 +682,12 @@ function extractPersistableMessages(payload: string): AgentMessage[] {
 		const maybeMessage = entry.message;
 		if (!maybeMessage || typeof maybeMessage !== "object") continue;
 		const message = maybeMessage as AgentMessage;
-		if (shouldPersistResponseItemForMemories(message)) {
-			messages.push(message);
+		for (const toolCall of extractAssistantToolCalls(message)) {
+			toolCallsById.set(toolCall.toolCallId, { toolName: toolCall.toolName, params: toolCall.params });
+		}
+		const persistable = normalizePersistableMessage(message, toolCallsById);
+		if (persistable && shouldPersistResponseItemForMemories(persistable)) {
+			messages.push(persistable);
 		}
 	}
 	return messages;

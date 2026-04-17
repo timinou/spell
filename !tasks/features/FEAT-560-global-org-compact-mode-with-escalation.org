@@ -1,5 +1,5 @@
 #+TITLE: Global org compact mode with escalation and query-wave memoization
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14be1383cbba71b9
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T10-59-43-534Z_14be1383cbba71b9.jsonl]]
 #+CUSTOM_ID: FEAT-560-global-org-compact-mode-and-query-wave-memoization
@@ -91,3 +91,5 @@ Test files / scenarios:
 
 * Parent Plan
 - [[id:PLAN-240-post-plan239-context-pressure-followup-plan]] POST_PLAN239_CONTEXT_PRESSURE_FOLLOWUP_PLAN
+
+NOTE [2026-04-17]: Org results are compact by default for query/get/fileContent and unchanged repeats are memoized to digest guidance.
