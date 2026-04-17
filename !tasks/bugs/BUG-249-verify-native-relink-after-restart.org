@@ -1,0 +1,11 @@
+#+TITLE: Verify native relink after restart
+#+STATE: ITEM
+#+SESSION_ID: 14b83dd2c9801912
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-12T22-13-41-286Z_14b83dd2c9801912.jsonl]]
+#+CUSTOM_ID: BUG-249-verify-native-relink-after-restart
+
+* Initial Message
+
+specs/PLAN-native-binary-staleness-detection.md <- read and see if the org works or not and implement the plan
+
+Temporary verification item created to confirm the restarted session uses the rebuilt native addon.

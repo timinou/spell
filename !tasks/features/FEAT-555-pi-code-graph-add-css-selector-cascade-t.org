@@ -1,0 +1,101 @@
+#+TITLE: pi-code-graph: add CSS selector/cascade/token graph semantics and dead-style analysis
+#+STATE: ITEM
+#+SESSION_ID: 14be1e420c74b0e5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T11-46-39-793Z_14be1e420c74b0e5.jsonl]]
+#+CUSTOM_ID: FEAT-555-pi-code-graph-add-css-selector-cascade-t
+#+EFFORT: 28h
+#+LAYER: web-semantics
+#+PRIORITY: #A
+#+DEPENDS: FEAT-553-pi-code-engine-define-html-css-affordanc FEAT-554-pi-code-engine-add-html-embedded-region
+
+* Scope
+- In scope: make CSS a first-class semantic language across `pi-code-engine` and `pi-code-graph`, including selectors, at-rules, custom properties, keyframes, and cross-file links from HTML consumers to CSS definitions.
+- In scope: add graph/query semantics for cascade-sensitive reasoning: selector consumers, token definitions/usages, override chains, media/supports contexts, and dead-style analysis with explicit confidence.
+- In scope: keep the model reusable for future HEEx/template hosts by consuming the HTML host/guest contract rather than teaching the graph Phoenix-specific rules.
+- Out of scope: Tailwind/utility-class expansion, CSS-in-JS runtime extraction, and browser layout/render-tree simulation.
+
+* Existing Patterns
+- `crates/pi-code-graph/src/model.rs`
+  - current symbol kinds and edge kinds are code-oriented; extend the canonical graph schema instead of overloading style semantics onto `References` everywhere.
+- `crates/pi-code-graph/src/indexer.rs`
+  - source-of-truth for graph assembly, import binding resolution, and edge creation.
+- `crates/pi-code-graph/src/query.rs`
+  - context/impact/flow/dead_code/clusters/symbol/file/search queries must learn style-aware summarization and confidence.
+- `crates/pi-code-graph/src/language/generic.rs`
+  - reusable engine-profile extractor path; CSS should use this where possible and specialize only where selector/token semantics require it.
+- `crates/pi-code-graph/src/language/elixir.rs`
+  - existing HEEx graph path is intentionally minimal; this item should replace brittle one-off component/tag extraction with HTML/CSS-backed semantics over time.
+- `crates/pi-natives/src/code_graph.rs`
+  - graph command surface and result formatting entrypoint; any new graph semantics must remain consumable from here.
+
+* Tests
+- Workflow 1: CSS outline/read/resolve tests prove selectors, custom properties, keyframes, and at-rule scopes are addressable semantic symbols.
+- Workflow 2: graph indexing links HTML class/id/attribute consumers to matching CSS selector symbols with explicit confidence and provenance.
+- Workflow 3: `code context` on a selector, custom property, or keyframe shows definitions, consumers, override parents/children, and containing media/supports contexts.
+- Workflow 4: `code impact` on a selector or token surfaces affected HTML nodes/templates/files instead of only stylesheet neighbors.
+- Workflow 5: `code dead_code` distinguishes truly orphaned selectors/tokens from dynamic or uncertain cases; uncertain matches must not be mislabeled as dead.
+- Workflow 6: custom property tests cover definition chains, fallback usage, shadowing/override, and cycle-safe reporting.
+- Workflow 7: `code search`, `code symbols`, and `code files` discover CSS nodes by literal selector, token name, and contextual ranking.
+- Workflow 8: mixed HTML + CSS + HEEx-prep fixture workspaces prove the graph contracts survive embedded style regions and template hosts.
+- Exact test files to extend/add:
+  - `crates/pi-code-engine/src/language/mod.rs`
+  - `crates/pi-code-engine/src/outline.rs`
+  - `crates/pi-code-engine/src/resolve.rs`
+  - `crates/pi-code-graph/src/model.rs`
+  - `crates/pi-code-graph/src/indexer.rs`
+  - `crates/pi-code-graph/src/query.rs`
+  - `crates/pi-code-graph/src/language/generic.rs`
+  - new CSS extractor tests if a dedicated `src/language/css.rs` is introduced
+  - fixture workspaces under `crates/pi-code-graph/tests/fixtures/web/`
+- Required scenarios:
+  - simple/compound selectors, descendant/child/sibling combinators, selector lists, attribute selectors, pseudo-classes/pseudo-elements, escaped identifiers, nested `@media`/`@supports`, `@keyframes`, custom property definition/use/fallback/cycle, inline style attributes, uncertain runtime classes, and duplicate selector definitions with later override precedence.
+
+* Implementation
+** Add CSS grammar/profile and failing semantic tests first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-555-pi-code-graph-add-css-selector-cascade-t::css-profile-tests
+:DEPENDS: FEAT-554-pi-code-engine-add-html-embedded-region::embedded-regions
+:END:
+- Files: `crates/pi-code-engine/Cargo.toml`, `crates/pi-code-engine/build.rs`, `crates/pi-code-engine/src/language/mod.rs`, `src/outline.rs`, `src/resolve.rs`, plus CSS fixtures/tests.
+- Add tree-sitter CSS and lock down local CSS semantics with failing tests before graph work begins.
+- Satisfies Tests Workflow 1 and 7.
+
+** Extend the canonical graph model for style semantics
+:PROPERTIES:
+:CUSTOM_ID: FEAT-555-pi-code-graph-add-css-selector-cascade-t::graph-schema
+:DEPENDS: FEAT-555-pi-code-graph-add-css-selector-cascade-t::css-profile-tests
+:END:
+- Files: `crates/pi-code-graph/src/model.rs`, `src/query.rs`, `src/search.rs` if ranking metadata changes.
+- Introduce first-class symbol/edge concepts for selectors, tokens, overrides, and host/consumer links rather than burying them in generic references.
+- Satisfies Tests Workflow 2–7.
+
+** Implement CSS extraction and HTML/CSS linkage
+:PROPERTIES:
+:CUSTOM_ID: FEAT-555-pi-code-graph-add-css-selector-cascade-t::extract-linkage
+:DEPENDS: FEAT-555-pi-code-graph-add-css-selector-cascade-t::graph-schema
+:END:
+- Files: `crates/pi-code-graph/src/language/generic.rs` and/or new `src/language/css.rs`, `src/indexer.rs`, fixture workspaces.
+- Extract CSS symbols/references, resolve HTML consumers against selectors with conservative confidence, and preserve uncertainty when runtime class generation cannot be proven.
+- Satisfies Tests Workflow 2, 5, 6, and 8.
+
+** Teach graph queries to explain style impact and dead-style truthfully
+:PROPERTIES:
+:CUSTOM_ID: FEAT-555-pi-code-graph-add-css-selector-cascade-t::query-surface
+:DEPENDS: FEAT-555-pi-code-graph-add-css-selector-cascade-t::extract-linkage
+:END:
+- Files: `crates/pi-code-graph/src/query.rs`, `crates/pi-natives/src/code_graph.rs`
+- Update context/impact/dead_code/search rendering so style nodes produce usable explanations, confidence notes, and next-step hints.
+- Satisfies Tests Workflow 3–7.
+
+* Edge Cases
+- Dynamic class generation, templated class concatenation, and server-side conditional attributes must lower confidence instead of generating false dead-style claims.
+- Selector matching must be token-aware and combinator-aware; substring matches are invalid.
+- Override/cascade modeling must explain partial confidence when full browser specificity/layer order cannot be reconstructed from static inputs alone.
+- Custom property cycles and fallbacks must be reported without infinite traversal.
+- Inline style attributes should appear as high-specificity consumers, but not masquerade as stylesheet definitions.
+
+* Acceptance Criteria
+- CSS is semantic-capable locally and graph-aware across files.
+- Style queries answer practical maintenance questions: who uses this selector/token, what breaks if it changes, what appears dead, and where overrides occur.
+- Dead-style analysis is conservative and confidence-annotated rather than optimistic.
+- The CSS/graph test suite covers all workflows and scenarios above, including mixed HTML/CSS/template fixtures.

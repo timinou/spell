@@ -1,0 +1,40 @@
+#+TITLE: Audit: implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-070-audit-implementation
+#+EFFORT: 1h
+#+LAYER: coding-agent
+#+PRIORITY: #B
+
+* Source
+Manual audit
+
+* Findings
+- **What**: `semanticCapable` metadata is emitted natively but dropped in coding-agent result typing/normalization
+  - **Where**: `packages/coding-agent/src/tools/code-result.ts` around `CodeBufferInfo` / `CodeOpenDetails` defs (`~111-116`, `~161`) and open/buffer normalization (`~365-375`, `~736-739`)
+  - **Why**: TS-side callers cannot reliably distinguish semantic vs fallback buffers from structured `details`; distinction survives only via injected prose hints/raw output → easy future contract drift
+  - **Effort**: `small`
+
+- **What**: naming drift remains: “supported” aliases now really mean “semantic-capable”
+  - **Where**: `packages/coding-agent/src/tools/code-supported-files.ts` bottom aliases (`extractSupportedExtensions`, `getSupportedExtensions`, `isCodeToolSupportedPath`, `describeCodeToolSupportedFiles`)
+  - **Why**: code tool now supports non-binary text fallback broadly, but legacy names still imply hard support gating; future callers can easily reintroduce false “unsupported file type” behavior
+  - **Effort**: `trivial`
+
+- **What**: patch-mode edits still bypass the shared managed-buffer lifecycle
+  - **Where**: `packages/coding-agent/src/patch/index.ts` patch-mode branch around `~758-830` (`applyPatch(...)` via `LspFileSystem`)
+  - **Why**: migration goal was one persistence/history/stale-detection model; patch mode still appears to write through its own path, so undo/redo/buffer freshness can diverge for a core `edit` mode
+  - **Effort**: `medium`
+
+- **What**: replace/hashline adapter path appears to have dropped LSP writethrough diagnostics
+  - **Where**: `packages/coding-agent/src/patch/index.ts` managed-buffer write branches around hashline final write (`~713-728`) and replace-mode final write (`~934-946`)
+  - **Why**: migrated text writes now call `applyManagedBufferContent(...)` and set diagnostics empty/undefined instead of using `#writethrough`; users lose immediate diagnostics/meta parity vs prior path
+  - **Effort**: `medium`
+
+- **What**: replay gate is fixture-shape validation, not end-to-end replay verification
+  - **Where**: `packages/coding-agent/test/tools/replay-corpus.test.ts`, `packages/coding-agent/test/fixtures/replay-corpus.*`, `packages/coding-agent/package.json` `replay-gate`
+  - **Why**: gives deterministic coverage for corpus structure/classification only; regressions in real transcript parsing/replay plumbing can still pass unnoticed
+  - **Effort**: `medium`
+
+- **What**: full move/delete lifecycle parity is still not in `code`; those flows remain in `edit`
+  - **Where**: `packages/coding-agent/src/tools/code.ts` command surface vs `packages/coding-agent/src/patch/index.ts` move/delete branches around `~573-610`
+  - **Why**: plan/acceptance claimed one lifecycle owning persistence broadly, but move/delete still sit outside managed code buffers; parity claim remains incomplete and future hard-cutover risk stays high
+  - **Effort**: `medium`

@@ -1,0 +1,15 @@
+#+TITLE: Session 14bcb670654ffcc4 Todos
+#+DATE: 2026-04-16
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Research
+
+** DONE Draft spec and org plan
+:PROPERTIES:
+:TASK_ID: draft-spec-and-plan
+:STATUS: completed
+:END:
+
+Done. Deliverables: (1) persistent spec in `specs/plan-mode-prompt-guidance-2026.md`; (2) child org items `PROJ-042-plan-mode-prompt-contract-for-execution`, `PROJ-043-plan-mode-validation-and-tests-for-execu`, `PROJ-044-plan-execution-handoff-orchestration-for`; (3) orchestration PLAN `PLAN-234-plan-mode-execution-first-handoff`; (4) consistency sweep via item review, dependency/property checks, and plan body review. Ready for approval handoff via exit_plan_mode.
+
+Created persistent spec `specs/plan-mode-prompt-guidance-2026.md`; created child items PROJ-042/043/044 and PLAN-234 with explicit balanced context + execution strategy; added ITEM TODO-outline sub-steps and top-level dependencies/properties.

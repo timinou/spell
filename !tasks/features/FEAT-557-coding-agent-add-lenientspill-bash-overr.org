@@ -1,0 +1,97 @@
+#+TITLE: coding-agent: add lenientSpill bash override for artifact spill
+#+STATE: ITEM
+#+SESSION_ID: 14be1f6c92f4c15c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T11-51-45-483Z_14be1f6c92f4c15c.jsonl]]
+#+CUSTOM_ID: FEAT-557-coding-agent-add-lenientspill-bash-overr
+#+LAYER: coding-agent
+#+EFFORT: 5h
+#+DEPENDS: PROJ-046-coding-agent-low-spill-artifact-policy-w
+#+PRIORITY: #A
+
+* Scope
+In scope:
+- Add an explicit per-call bash parameter named `lenientSpill` that reverts that one bash invocation to the legacy lenient spill behavior instead of the new low-spill default.
+- Keep the override off by default, non-sticky, and visible: the tool result and renderer must warn when lenient spill is active so transcript readers know the call intentionally widened inline output.
+- Reuse the existing artifact workflow (`artifact://` references resolved back into subsequent bash commands) rather than inventing a second mechanism for shell follow-up analysis.
+- Update bash tool documentation and tests so agents learn the intended behavior: default to tight spill budgets, opt into `lenientSpill` only when broader inline stderr/stdout is truly necessary.
+
+Out of scope:
+- Adding a session-level or settings-level sticky override.
+- Extending the lenient override to `python`, `ssh`, `fetch`, or other tools in this change.
+- Changing `read`/`grep`/`org` contracts; those are handled by the shared spill-policy project item.
+
+Rationale: the user wants a sharp default that pushes agents toward artifact-based follow-up analysis while still leaving an escape hatch for debugging sessions where a slightly fatter inline tail materially speeds iteration. A per-call parameter is explicit, auditable, and less dangerous than a sticky setting.
+
+* Existing Patterns
+- Bash tool schema / execution / renderer: `packages/coding-agent/src/tools/bash.ts`.
+- Bash prompt contract: `packages/coding-agent/src/prompts/tools/bash.md`.
+- Current artifact-path allocation and internal-URL expansion: `packages/coding-agent/src/tools/bash.ts`, `packages/coding-agent/src/tools/bash-skill-urls.ts`, `packages/coding-agent/src/session/artifacts.ts`.
+- Existing truncation warning renderer: `packages/coding-agent/src/tools/output-meta.ts`, `packages/coding-agent/src/modes/components/bash-execution.ts`.
+- Shared spill policy dependency: `PROJ-046-coding-agent-low-spill-artifact-policy-w`.
+
+* Tests
+Workflows that must be planned first:
+- Workflow 1: default bash calls use the new low-spill shared policy without any opt-in.
+- Workflow 2: `lenientSpill: true` reverts only that bash call to the legacy lenient spill budget and emits a visible warning.
+- Workflow 3: the override works for successful and failing bash calls without hiding exit code, cwd, or artifact references.
+- Workflow 4: docs teach artifact-first follow-up analysis and frame `lenientSpill` as an exception, not the norm.
+- Workflow 5: async / PTY / head-tail normalization paths remain truthful when lenient spill is enabled.
+
+Test files / scenarios:
+- `packages/coding-agent/test/tools/bash-spill-policy.test.ts` (new if cleaner than widening an unrelated suite)
+  - assert default low-spill behavior
+  - assert per-call `lenientSpill` override behavior
+  - assert warning text and preserved artifact references
+- extend adjacent bash tool / task tests as needed
+  - `packages/coding-agent/test/task/bash-exit-code-tracking.test.ts`
+  - `packages/coding-agent/test/tools.test.ts` or a focused bash tool suite if the shared test helper already exists
+- prompt / schema coverage for bash docs if there is an existing prompt or tool-schema assertion point
+
+* Implementation
+** ITEM Define lenientSpill bash contract
+:PROPERTIES:
+:CUSTOM_ID: FEAT-557-coding-agent-add-lenientspill-bash-overr::define-lenientspill-contract
+:END:
+- Files: `packages/coding-agent/src/tools/bash.ts`, `packages/coding-agent/src/prompts/tools/bash.md`.
+- Add the `lenientSpill` parameter to the bash schema and document that it reverts only the current call to the legacy lenient spill budget.
+- Satisfies Workflows 1, 2, and 4.
+
+** ITEM Write bash override tests first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-557-coding-agent-add-lenientspill-bash-overr::bash-override-tests
+:DEPENDS: FEAT-557-coding-agent-add-lenientspill-bash-overr::define-lenientspill-contract
+:END:
+- Files: `packages/coding-agent/test/tools/bash-spill-policy.test.ts`, adjacent bash task/tool suites as needed.
+- Add initially-failing scenarios for default low-spill, per-call lenient override, warning visibility, and preserved exit-code / artifact semantics.
+- Satisfies Workflows 1, 2, 3, and 5.
+
+** ITEM Implement bash-specific lenient override
+:PROPERTIES:
+:CUSTOM_ID: FEAT-557-coding-agent-add-lenientspill-bash-overr::implement-bash-lenient-override
+:DEPENDS: FEAT-557-coding-agent-add-lenientspill-bash-overr::bash-override-tests
+:END:
+- Files: `packages/coding-agent/src/tools/bash.ts`, `packages/coding-agent/src/modes/components/bash-execution.ts` if renderer-specific warning plumbing is needed.
+- Route `lenientSpill` through the shared spill-policy resolver, preserve truthful truncation metadata, and surface an explicit warning in the result UI/text.
+- Ensure the override does not become sticky across calls or subagents.
+- Satisfies Workflows 2, 3, and 5.
+
+** ITEM Refresh bash tool guidance
+:PROPERTIES:
+:CUSTOM_ID: FEAT-557-coding-agent-add-lenientspill-bash-overr::refresh-bash-guidance
+:DEPENDS: FEAT-557-coding-agent-add-lenientspill-bash-overr::bash-override-tests
+:END:
+- File: `packages/coding-agent/src/prompts/tools/bash.md`.
+- Make artifact-first follow-up analysis the default guidance, explicitly mentioning that agents can pass `artifact://...` back into later bash commands and should reserve `lenientSpill` for exceptional debugging cases.
+- Satisfies Workflows 4 and 5.
+
+* Edge Cases
+- `lenientSpill` must not mask non-zero exit codes or convert failing commands into plausible success summaries.
+- The override must interact correctly with `head`, `tail`, `pty`, and `async` paths.
+- Follow-up commands using `artifact://` must keep working whether the original call used default or lenient spill.
+- The warning must be visible enough to discourage silent overuse but not so noisy that every bash result becomes cluttered.
+
+* Acceptance Criteria
+- Bash defaults to the low-spill artifact-first behavior from the shared policy item.
+- `lenientSpill: true` widens only the current bash call back to the legacy lenient budget and emits a warning.
+- Documentation makes the artifact-first workflow explicit and treats `lenientSpill` as an exception.
+- Tests prove default behavior, override behavior, truthful failure semantics, and preserved artifact follow-up workflows.

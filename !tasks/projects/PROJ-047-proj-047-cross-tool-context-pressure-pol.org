@@ -1,0 +1,107 @@
+#+TITLE: Cross-tool context pressure policy framework after low-spill artifacting
+#+STATE: ITEM
+#+SESSION_ID: 14be1383cbba71b9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T10-59-43-534Z_14be1383cbba71b9.jsonl]]
+#+CUSTOM_ID: PROJ-047-cross-tool-context-pressure-policy
+#+DEPENDS: 
+#+EFFORT: 8h
+#+PRIORITY: A
+#+LAYER: coding-agent
+
+* Initial Message
+
+I have an inkling that a lot of token usage comes from the Bash tool during my sessions. PLease look at my recent sessions transcripts using jq and graph in ASCII the token usage, and within the token usage, the commands that led to the most token usage. Or graph in HTML/CSS. Or something else. But basically do a full review kind of thing (as a summary in chat, once you do that and you find the culprits for most of the useless context injecitons, we can start thinking about how to smartly manage context for these situations)
+
+* Scope
+In scope:
+- Define the shared post-`PLAN-239-bash-low-spill-artifact-policy-plan` policy contract for `bash`, `read`, `grep`, and `org` so follow-on work optimizes fresh-input reduction and turn-count reduction first.
+- Centralize category classification for low-value vs precision outputs, including transcript spelunking detection across `bash`, `read`, and `grep`.
+- Replace raw low-value memory persistence with compact semantic summaries / diagnoses only; no raw low-value bodies survive into long-term memory.
+- Define the common summary-first + auto-escalation contract that tool-specific items will reuse: compact first response, artifact / precise follow-up path second, no user confirmation required for the agent to escalate.
+- Provide the shared test harness and policy helpers that tool-specific child items depend on.
+
+Out of scope:
+- Re-solving the low-spill byte/line defaults already owned by `PLAN-239-bash-low-spill-artifact-policy-plan` and `PROJ-046-coding-agent-low-spill-artifact-policy-w`.
+- Tool-specific routing / rendering behavior for `read`, `grep`, `org`, or bash churn suppression; those are separate child items.
+- Broad prompt rewrites unrelated to the new policy surface.
+
+Rationale:
+- `specs/token-usage-pareto-review.md` shows category concentration, not exact-command concentration, dominates the waste profile. The top 10 category buckets account for ~83.3% of sampled tokens; the top 6 already account for ~65.7%.
+- The follow-on work must therefore share a cross-tool policy vocabulary instead of shipping four unrelated heuristics.
+- This project is blocked on `PLAN-239-bash-low-spill-artifact-policy-plan` because artifact-first low-spill behavior is the baseline assumption for all later guardrails.
+
+* Existing Patterns
+- Shared spill / artifact primitives already exist in `packages/coding-agent/src/tools/output-meta.ts` via `OutputMetaBuilder`, `formatFullOutputReference()`, `formatTruncationMetaNotice()`, and related helpers.
+- Streaming executors already report truncation / artifact facts through `packages/coding-agent/src/session/streaming-output.ts` (`OutputSink`, `TruncationResult`, `DEFAULT_MAX_BYTES`, `DEFAULT_MAX_LINES`).
+- Current memory persistence gate lives in `packages/coding-agent/src/memories/index.ts` at `shouldPersistResponseItemForMemories(message: AgentMessage): boolean`; today it admits raw `bash` / `python` / `read` / `grep` outputs up to a flat size threshold.
+- Tool-result reinjection shape is mediated by `packages/coding-agent/src/session/messages.ts`, especially `getPrunedToolResultContent(message)` and the tool-result message forms.
+- The review baseline for this plan is `specs/token-usage-pareto-review.md`; implementation MUST stay aligned with its useful-vs-leaking boundaries per tool.
+- Existing compact-preview patterns already exist in `packages/coding-agent/src/tools/org.ts` (`buildOrgCallPreview`, `previewArgValue`, `formatOrgResult`) and can inform the shared summary contract.
+
+* Tests
+Workflows to enumerate and prove first:
+1. Workflow 1 — a tool result in a denied low-value category persists only a compact semantic summary / diagnosis, never the raw body.
+2. Workflow 2 — a precision category remains eligible for richer persistence or inline follow-up metadata where that precision is the contract.
+3. Workflow 3 — transcript spelunking is recognized consistently across `bash`, `read`, and `grep` so later tool items can share one policy concept.
+4. Workflow 4 — the shared summary-first contract exposes enough structured follow-up information that a tool-specific child item can auto-escalate without inventing a second UX.
+5. Workflow 5 — repeated summary-first behavior does not lie about what was shown, persisted, or artifacted.
+
+Test files / scenarios:
+- New focused policy test file: `packages/coding-agent/test/tools/context-pressure-policy.test.ts`.
+- Extend `packages/coding-agent/test/memories-runtime.test.ts` and/or `packages/coding-agent/test/memories-storage.test.ts` for category-aware persistence decisions.
+- Add focused transcript-spelunking classification coverage near the shared policy tests rather than scattering it into per-tool suites.
+- If message-shape changes are needed, add focused assertions near `packages/coding-agent/test/org-output.test.ts` or adjacent session-message tests so persisted/pruned text remains truthful.
+
+* Implementation
+** Define shared policy types and classifier
+:PROPERTIES:
+:CUSTOM_ID: PROJ-047-cross-tool-context-pressure-policy::define-policy-types-and-classifier
+:END:
+- Files: `packages/coding-agent/src/tools/output-meta.ts`, `packages/coding-agent/src/memories/index.ts`, and a new shared helper module under `packages/coding-agent/src/` chosen during implementation.
+- Define the canonical concepts: tool category, policy action (`inline`, `summary-first`, `persist-summary-only`, `deny-raw-persistence`, etc.), transcript-spelunking detection, and follow-up affordance metadata.
+- Satisfies Workflows 1, 2, 3, and 4.
+
+** Write shared policy tests before behavior changes
+:PROPERTIES:
+:CUSTOM_ID: PROJ-047-cross-tool-context-pressure-policy::write-shared-policy-tests
+:DEPENDS: PROJ-047-cross-tool-context-pressure-policy::define-policy-types-and-classifier
+:END:
+- Files: `packages/coding-agent/test/tools/context-pressure-policy.test.ts`, `packages/coding-agent/test/memories-runtime.test.ts`, `packages/coding-agent/test/memories-storage.test.ts`.
+- Add initially-failing tests for category classification, transcript-spelunking detection, summary-only persistence, and precision-category exemptions.
+- Satisfies Workflows 1, 2, 3, 4, and 5.
+
+** Implement summary-only memory persistence and policy hooks
+:PROPERTIES:
+:CUSTOM_ID: PROJ-047-cross-tool-context-pressure-policy::implement-summary-only-memory-persistence
+:DEPENDS: PROJ-047-cross-tool-context-pressure-policy::write-shared-policy-tests
+:END:
+- Files: `packages/coding-agent/src/memories/index.ts`, `packages/coding-agent/src/session/messages.ts`, and any shared helper module introduced above.
+- Replace the flat raw-text threshold with category-aware logic: low-value categories persist only concise semantic summaries / diagnoses; raw bodies are dropped.
+- Keep truthful metadata so later tool items can still point to artifacts or exact follow-up paths.
+- Satisfies Workflows 1, 2, 4, and 5.
+
+** Thread shared policy metadata to child tool items
+:PROPERTIES:
+:CUSTOM_ID: PROJ-047-cross-tool-context-pressure-policy::thread-policy-metadata-to-tools
+:DEPENDS: PROJ-047-cross-tool-context-pressure-policy::implement-summary-only-memory-persistence
+:END:
+- Files: `packages/coding-agent/src/tools/output-meta.ts` and any common helper(s) chosen during implementation.
+- Expose the minimum shared metadata that child items for `read`, `grep`, `org`, and bash churn suppression need in order to implement summary-first responses consistently.
+- Do not hard-code tool-specific behavior here; provide reusable policy surfaces only.
+- Satisfies Workflows 3, 4, and 5.
+* Edge Cases
+- A category can be low-value for persistence but still high-value for immediate inline debugging; the classifier must allow those distinctions.
+- Transcript spelunking must not accidentally classify legitimate user-facing artifact reads as noise.
+- Category decisions must survive pruned tool-result paths without corrupting the visible transcript.
+- Summary-only persistence must preserve failure truth (`what failed`, `where`, `next follow-up surface`) without sneaking raw dump text into memory.
+- Shared metadata must not force precision tools into low-spill or compact rendering behavior by accident.
+
+* Acceptance Criteria
+- A shared category/policy framework exists and is covered by focused tests.
+- Raw low-value tool outputs no longer persist directly into memory; compact semantic summaries / diagnoses persist instead.
+- Transcript spelunking is recognized as a first-class cross-tool policy category.
+- Child items can reuse one summary-first / auto-escalation contract instead of inventing separate behaviors.
+- The project is explicitly ready to unblock tool-specific follow-on items after `PLAN-239-bash-low-spill-artifact-policy-plan` lands.
+
+* Parent Plan
+- [[id:PLAN-240-post-plan239-context-pressure-followup-plan]] POST_PLAN239_CONTEXT_PRESSURE_FOLLOWUP_PLAN

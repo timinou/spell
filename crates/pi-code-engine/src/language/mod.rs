@@ -49,6 +49,8 @@ impl LanguageRegistry {
 		reg.register(typescript_profile())?;
 		reg.register(rust_profile())?;
 		reg.register(python_profile())?;
+		reg.register(html_profile())?;
+		reg.register(css_profile())?;
 		reg.register(typst_profile())?;
 		reg.register(markdown_profile())?;
 		reg.register(elixir_profile())?;
@@ -104,6 +106,24 @@ impl Default for LanguageRegistry {
 // Built-in profile constructors
 // ---------------------------------------------------------------------------
 
+fn semantic_capabilities(embedded_languages: &[&str]) -> LanguageCapabilities {
+	LanguageCapabilities {
+		outline:            true,
+		read:               true,
+		navigate:           true,
+		resolve:            true,
+		edit:               true,
+		graph:              true,
+		embedded_languages: embedded_languages
+			.iter()
+			.map(|language| (*language).to_string())
+			.collect(),
+	}
+}
+
+fn fallback_capabilities() -> LanguageCapabilities {
+	LanguageCapabilities::default()
+}
 fn typescript_profile() -> LanguageProfile {
 	let gd = generated::typescript::grammar();
 	LanguageProfile {

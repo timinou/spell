@@ -1,0 +1,53 @@
+#+TITLE: Session 14b904e6b7833485 Todos
+#+DATE: 2026-04-13
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Build declarative graph foundation
+:PROPERTIES:
+:TASK_ID: wave1-graph-foundation
+:STATUS: completed
+:GATE_CMD: cargo test -p pi-code-graph && cargo test -p pi-code-engine && cargo test -p pi-natives code_graph -- --nocapture
+:ORG_ITEM_ID: PROJ-040-declarative-code-graph-extraction-and-la
+:END:
+
+Implemented Wave 1 from PLAN-220. Update Rust graph extraction to reuse pi-code-engine LanguageProfile and expand baseline language coverage to TypeScript, Rust, Python, Typst, Markdown, Org, and Elixir. Verified with focused Rust tests before proceeding.
+
+Expanded LanguageRegistry::with_defaults to register engine-profile-backed extractors/resolvers for rust, python, typst, markdown, and org. Added generic extraction/resolution tests and verified pi-code-graph, pi-code-engine, and pi-natives code_graph suites.
+
+** DONE Add structured graph discovery
+:PROPERTIES:
+:TASK_ID: wave2-structured-discovery
+:STATUS: completed
+:GATE_CMD: cargo test -p pi-code-graph && cargo test -p pi-natives code_graph -- --nocapture
+:DEPENDS: wave1-graph-foundation
+:ORG_ITEM_ID: FEAT-533-structured-symbol-and-file-discovery-for
+:END:
+
+Implement Wave 2 from PLAN-220. Add first-class symbol/file discovery commands through pi-code-graph, pi-natives, and coding-agent integration points needed for native code symbols/files lookup. Verified targeted tests before proceeding.
+
+Added graph_symbols/graph_files queries, native code-graph symbols/files commands with structured status output, and code-tool routing/tests for symbols/files lookup commands.
+
+** DONE Wire code tool formatting
+:PROPERTIES:
+:TASK_ID: wave3-code-integration
+:STATUS: completed
+:GATE_CMD: bun test packages/coding-agent/test/tools/code.test.ts && bun test packages/coding-agent/test/tools/code-result.test.ts && bun check:ts
+:DEPENDS: wave2-structured-discovery
+:ORG_ITEM_ID: FEAT-534-wire-code-tool-discovery-and-format-edit
+:END:
+
+Implement Wave 3 from PLAN-220. Update code tool commands/prompts/result formatting and code edit format-on-save reuse through existing LSP formatting seam. Add or update TypeScript tests and verify code-tool behavior before final plan closure.
+
+Reused the LSP/custom-linter formatContent seam through a new formatFileContent helper, added native replace_content syncing for code buffers, surfaced formatting status in code edit results, and updated prompt guidance to prefer symbols/files over broad search.
+
+** DONE Verify artifacts and close plan
+:PROPERTIES:
+:TASK_ID: verify-close-plan
+:STATUS: completed
+:END:
+
+Completed plan closeout for PLAN-220-pi-code-graph-declarative-discovery-and. Verification already passed: cargo test -p pi-code-graph; cargo test -p pi-code-engine; cargo test -p pi-natives code_graph -- --nocapture; cargo test -p pi-natives code_buffer -- --nocapture; bun --cwd=packages/natives run build:native; bun check:rs; bun test packages/coding-agent/test/tools/code.test.ts; bun test packages/coding-agent/test/tools/code-result.test.ts; bun test packages/natives/test/staleness.test.ts; bun check:ts.
+
+Artifacts captured under !tasks/plans/plan-artifacts/PLAN-220-pi-code-graph-declarative-discovery-and/, plan + child org items moved to DONE, and relevant implementation committed as cca1e4e3b.

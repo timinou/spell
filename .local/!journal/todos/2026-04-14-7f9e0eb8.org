@@ -1,0 +1,64 @@
+#+TITLE: Session 14ba4c46e446b0e4 Todos
+#+DATE: 2026-04-14
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Inspect session failures
+:PROPERTIES:
+:TASK_ID: inspect-failures
+:STATUS: completed
+:ORG_ITEM_ID: PLAN-227-code-edit-reliability-hardening-and-org
+:END:
+
+Read plan/child org items, inspected session transcripts 14ba406cf0d96a78 and 14ba42e2c96011f0 with jq filters over code tool results, and mapped target implementation files before delegating edits.
+
+Confirmed transcript evidence: both target sessions contain code tool results with `Edited ... Changes: +0 -0`; second session also shows stale open-buffer state (`Open buffers (1400)` + unsaved diff/reads) while repeated no-op edits kept surfacing as success. Root targets: code mutation contract/result classification, buffer freshness around mutating file commands, preview pending-action policy, org command-surface parity.
+
+** DONE Execute child plan items
+:PROPERTIES:
+:TASK_ID: execute-wave0
+:STATUS: completed
+:DEPENDS: inspect-failures
+:ORG_ITEM_ID: PLAN-227-code-edit-reliability-hardening-and-org
+:END:
+
+Completed source and test changes across packages/coding-agent and packages/org; verification moved to dedicated task.
+
+Implemented BUG-252/253/254 in coding-agent and org: strict no-op mutation failures, idempotent no-op rendering, stale-buffer preflight, preview resolve policy setting with AST auto-apply, reminder suppression in explicit-only mode, org command-surface parity, and focused regression tests.
+
+** DONE Run focused verification
+:PROPERTIES:
+:TASK_ID: run-verification
+:STATUS: completed
+:DEPENDS: execute-wave0
+:ORG_ITEM_ID: PLAN-227-code-edit-reliability-hardening-and-org
+:END:
+
+Ran required bun test commands plus extra session reminder coverage and bun check:ts successfully; ready to update org items and completion report.
+
+Verification passed: code/code-result tests, ast-edit/resolve tests, org tool tests, reminder session test, and final bun check:ts.
+
+** DONE Update org completion
+:PROPERTIES:
+:TASK_ID: close-org-items
+:STATUS: completed
+:DEPENDS: run-verification
+:ORG_ITEM_ID: PLAN-227-code-edit-reliability-hardening-and-org
+:END:
+
+Org lifecycle truthfully closed for the plan and all linked child items.
+
+Appended PLAN-227 completion report, marked BUG-252/253/254 DONE, and moved PLAN-227 from DOING to DONE.
+
+** DONE Commit scoped changes
+:PROPERTIES:
+:TASK_ID: commit-plan
+:STATUS: completed
+:DEPENDS: close-org-items
+:ORG_ITEM_ID: PLAN-227-code-edit-reliability-hardening-and-org
+:END:
+
+Staged only PLAN-227 code, test, and org files, then created the final conventional commit.
+
+Committed PLAN-227 changes as `b9255b582` with message `fix(coding-agent): harden code edit reliability and org parity`. Unrelated workspace modifications remain unstaged.

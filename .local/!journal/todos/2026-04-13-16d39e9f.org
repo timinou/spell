@@ -1,0 +1,29 @@
+#+TITLE: Session 14b97e59a437ee05 Todos
+#+DATE: 2026-04-13
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Tasks
+
+** DONE Find where tool precedence, edit, write, code, task are documented in system prompts
+:PROPERTIES:
+:TASK_ID: task-1
+:STATUS: completed
+:END:
+
+** DONE Find plan mode prompts, item structure, sub-outline format, DEPENDS usage
+:PROPERTIES:
+:TASK_ID: task-2
+:STATUS: completed
+:END:
+
+** DONE Find tool registration code showing ordering and descriptions
+:PROPERTIES:
+:TASK_ID: task-3
+:STATUS: completed
+:END:
+
+** DONE Find how 'task' tool is currently documented and when it's recommended
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

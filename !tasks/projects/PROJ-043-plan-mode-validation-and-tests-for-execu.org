@@ -1,0 +1,98 @@
+#+TITLE: Plan-mode validation and tests for executable TODO outlines
+#+STATE: ITEM
+#+SESSION_ID: 14bcb670654ffcc4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-16T09-34-35-413Z_14bcb670654ffcc4.jsonl]]
+#+CUSTOM_ID: PROJ-043-plan-mode-validation-and-tests-for-execu
+#+EFFORT: 7h
+#+DEPENDS: PROJ-042-plan-mode-prompt-contract-for-execution
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+* Scope
+In scope:
+- Extend validation and test coverage so plan mode enforces execution usability, not only structural completeness.
+- Cover child-item TODO-outline `ITEM` headings, PLAN-level implementation guidance requirements, manifest/heading expectations, and balanced prompt regression checks.
+- Update validation and prompt tests around `exit_plan_mode`, prompt rendering, and wave extraction where needed.
+
+Out of scope:
+- Rewriting the planning prompt contract itself; covered by sibling prompt-contract item.
+- Approved-plan orchestration wording and todo/task execution semantics; covered by sibling orchestration item.
+- Runtime execution behavior changes unrelated to plan validation or prompt tests.
+
+Rationale: the repo already validates many org invariants (`EFFORT`, `PRIORITY`, `LAYER`, `CUSTOM_ID`, `DEPENDS`, acyclic sub-outline graphs), but it still allows plans that are structurally valid while being too thin for direct execution. This item hardens the validator and tests so the new execution-first planning contract remains enforceable.
+
+* Existing Patterns
+- Spec anchor: `specs/plan-mode-prompt-guidance-2026.md`.
+- Validator entry: `packages/coding-agent/src/tools/exit-plan-mode.ts` — parses plan body, child links, sub-outline structure, and wave manifests.
+- Validation coverage: `packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts`, `packages/coding-agent/test/tools/exit-plan-mode.test.ts`, `packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts`.
+- Prompt regression coverage: `packages/coding-agent/test/system-prompt-templates.test.ts`, `packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts`, `packages/coding-agent/test/prompts/plan-mode-tdd.test.ts`.
+- Existing invariant style to reuse: focused contract tests with exact failure-path assertions instead of smoke tests.
+
+* Tests
+Workflows that must be enumerated up front:
+- Workflow 1: `exit_plan_mode` rejects child items whose implementation sub-step headings omit `ITEM` TODO outline keyword.
+- Workflow 2: `exit_plan_mode` rejects PLAN items that keep context and manifest links but omit the new required implementation-oriented PLAN heading(s) or equivalent execution instructions.
+- Workflow 3: prompt rendering tests fail if wording regresses to findings-heavy / execution-thin guidance.
+- Workflow 4: wave extraction and plan parsing still work when new PLAN-level implementation headings are added.
+- Workflow 5: balanced plans with rich rationale plus explicit execution headings are accepted.
+
+Test files / scenarios:
+- `packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts`
+  - add failing fixtures for missing `ITEM` heading keyword and missing PLAN-level implementation guidance
+- `packages/coding-agent/test/tools/exit-plan-mode.test.ts`
+  - add acceptance / rejection cases for the new PLAN body contract
+- `packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts`
+  - ensure new PLAN headings do not break wave parsing
+- `packages/coding-agent/test/system-prompt-templates.test.ts`
+  - assert prompt text now renders the new validation-driving requirements
+- `packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts`
+  - ensure approved-mode execution still references the execution-first contract
+
+* Implementation
+** ITEM Define validator invariants
+:PROPERTIES:
+:CUSTOM_ID: PROJ-043-plan-mode-validation-and-tests-for-execu::define-validator-invariants
+:END:
+- Files: `specs/plan-mode-prompt-guidance-2026.md`, `packages/coding-agent/src/tools/exit-plan-mode.ts`
+- Translate the spec into concrete pass/fail rules for TODO-outline headings and PLAN execution guidance.
+- Satisfies Workflows 1, 2, 4, and 5.
+
+** ITEM Write failing validation tests first
+:PROPERTIES:
+:CUSTOM_ID: PROJ-043-plan-mode-validation-and-tests-for-execu::validation-tests
+:DEPENDS: PROJ-043-plan-mode-validation-and-tests-for-execu::define-validator-invariants
+:END:
+- Files: `packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts`, `packages/coding-agent/test/tools/exit-plan-mode.test.ts`, `packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts`
+- Add initially-failing fixtures for the new contract.
+- Satisfies Workflows 1, 2, 4, and 5.
+
+** ITEM Implement exit-plan-mode checks
+:PROPERTIES:
+:CUSTOM_ID: PROJ-043-plan-mode-validation-and-tests-for-execu::implement-validator-checks
+:DEPENDS: PROJ-043-plan-mode-validation-and-tests-for-execu::validation-tests
+:END:
+- File: `packages/coding-agent/src/tools/exit-plan-mode.ts`
+- Add enforcement for `ITEM` TODO headings and PLAN-level execution guidance without breaking existing wave parsing.
+- Satisfies Workflows 1, 2, 4, and 5.
+
+** ITEM Align prompt regression tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-043-plan-mode-validation-and-tests-for-execu::align-prompt-tests
+:DEPENDS: PROJ-043-plan-mode-validation-and-tests-for-execu::validation-tests
+:END:
+- Files: `packages/coding-agent/test/system-prompt-templates.test.ts`, `packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts`, `packages/coding-agent/test/prompts/plan-mode-tdd.test.ts`
+- Encode prompt-level assertions that drive and protect the validator semantics.
+- Satisfies Workflows 3 and 5.
+
+* Edge Cases
+- Rich plans that add new PLAN headings must still keep `Execution Manifest` parseable and wave extraction stable.
+- Child items may include non-implementation headings; enforcement should target implementation sub-step headings, not unrelated prose headings.
+- Backward-compat flat manifests may still parse, but plan-mode-created artifacts should satisfy the stricter contract.
+- Failure messages must stay explicit enough for plan authors to fix the org artifact quickly.
+
+* Acceptance Criteria
+- `exit_plan_mode` rejects child items missing `ITEM` TODO-outline implementation headings.
+- `exit_plan_mode` rejects PLAN items that remain findings-rich but execution-thin under the new contract.
+- Wave parsing remains stable when new PLAN-level implementation headings are present.
+- Prompt and validation tests fail on regression and pass for balanced execution-first plans.
+- Validation errors remain concrete and actionable, naming the missing invariant rather than failing generically.

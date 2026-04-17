@@ -1,0 +1,82 @@
+#+TITLE: coding-agent: make malformed code-edit previews fail loudly
+#+STATE: ITEM
+#+SESSION_ID: 14be2b039951fa47
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T12-42-23-717Z_14be2b039951fa47.jsonl]]
+#+CUSTOM_ID: BUG-272-coding-agent-make-malformed-code-edit-pr
+#+EFFORT: 6h
+#+DEPENDS: BUG-270-coding-agent-harden-code-edit-target-res
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Scope
+- In scope: make `code` results and previews tell the truth when an edit is malformed, formatter-altered, or rejected by the structural invariants from `BUG-270-coding-agent-harden-code-edit-target-res`.
+- In scope: expose enough before/after context and exact target metadata that a maintainer can see why an edit was unsafe, instead of only seeing a compact diff summary like the malformed previews in transcript `14be281c6474c15d`.
+- In scope: preserve that truthfulness through TUI preview, final tool result rendering, and transcript rebuild paths.
+- Out of scope: changing prompt wording or native target-resolution semantics. Those are handled by sibling items `BUG-271-coding-agent-align-code-edit-prompts-exa` and `BUG-270-coding-agent-harden-code-edit-target-res`.
+
+* Existing Patterns
+- `packages/coding-agent/src/tools/code-result.ts`
+  - `normalizeCodeBufferSuccess(...)`
+  - `formatCodeToolContent(...)`
+  - compact diff preview helpers
+- `packages/coding-agent/src/tools/code.ts`
+  - result/error normalization and save/format flow
+- Preview/render pipeline:
+  - `packages/coding-agent/src/modes/components/tool-execution.ts`
+  - `packages/coding-agent/src/modes/controllers/event-controller.ts`
+- Tests to extend:
+  - `packages/coding-agent/test/tools/code-result.test.ts`
+  - `packages/coding-agent/test/tools/code.test.ts`
+  - add a focused preview/transcript renderer test if existing suites do not cover preview rebuild paths
+
+* Tests
+- Workflow 1: malformed or structurally rejected edits render as errors, not `Edited …`, and clearly state whether the failure happened at payload validation, target resolution, unsafe boundary detection, or post-apply structural validation.
+- Workflow 2: applied edits show exact enough context to reveal token concatenation or formatter-induced cleanup; compact output must not hide the only corrupted line.
+- Workflow 3: result details preserve exact target/path metadata needed for transcript rebuild and TUI preview so live output and rebuilt transcript tell the same story.
+- Workflow 4: no-op, applied, preview-pending, discarded, and failed edit states remain distinct and truthful after formatter activity.
+
+* Implementation
+** Define the result-truthfulness contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-272-coding-agent-make-malformed-code-edit-pr::define-contract
+:END:
+- Files: `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/tools/code-result.ts`
+- Decide what every edit outcome must surface: failure class, target label/path, and enough before/after context to diagnose the mutation without opening the file blindly.
+
+** Write failing result and preview tests first
+:PROPERTIES:
+:CUSTOM_ID: BUG-272-coding-agent-make-malformed-code-edit-pr::write-tests
+:DEPENDS: BUG-272-coding-agent-make-malformed-code-edit-pr::define-contract
+:END:
+- Files: `packages/coding-agent/test/tools/code-result.test.ts`, `packages/coding-agent/test/tools/code.test.ts`, plus a focused preview/transcript test file if needed.
+- Encode Workflows 1-4 as initially failing assertions.
+- Include transcript-shaped cases: concatenated import preview, malformed interface-member insertion, and formatter-cleaned output that still needs honest provenance.
+
+** Enrich code-tool result details and error rendering
+:PROPERTIES:
+:CUSTOM_ID: BUG-272-coding-agent-make-malformed-code-edit-pr::enrich-results
+:DEPENDS: BUG-270-coding-agent-harden-code-edit-target-res::surface-errors BUG-272-coding-agent-make-malformed-code-edit-pr::write-tests
+:END:
+- Files: `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/tools/code-result.ts`
+- Thread through structured failure classes and exact edit-context metadata from the hardened engine/tool path.
+- Make compact output prefer the corruption-revealing lines instead of a misleadingly small diff summary.
+
+** Preserve truthful previews through renderer/rebuild paths
+:PROPERTIES:
+:CUSTOM_ID: BUG-272-coding-agent-make-malformed-code-edit-pr::preview-pipeline
+:DEPENDS: BUG-272-coding-agent-make-malformed-code-edit-pr::enrich-results
+:END:
+- Files: `packages/coding-agent/src/modes/components/tool-execution.ts`, `packages/coding-agent/src/modes/controllers/event-controller.ts`
+- Ensure preview-only fields and failure metadata survive live streaming, partial result assembly, and transcript reconstruction.
+
+* Edge Cases
+- Formatter output can differ from the immediate edit diff; the renderer must not imply that formatter success proved the original mutation was safe.
+- Large diffs may be truncated, but the preserved context must still include the corruption/failure line rather than arbitrary first hunks.
+- A failed edit after preview must not share the same headline/body as a no-op or discarded preview.
+- Truthfulness must survive transcript rebuild, not only the live TUI path.
+
+* Acceptance Criteria
+- Malformed/rejected edits are visibly failures, not successful edits with cryptic diff previews.
+- Applied edit output preserves enough exact context to diagnose boundary-splice problems.
+- Live preview and rebuilt transcript show the same failure/apply story.
+- Focused renderer/tool tests lock the user-visible contract for failed, applied, previewed, and no-op code edits.

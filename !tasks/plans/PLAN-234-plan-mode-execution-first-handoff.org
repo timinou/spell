@@ -1,0 +1,90 @@
+#+TITLE: Plan mode execution first handoff
+#+STATE: ITEM
+#+SESSION_ID: 14bcb670654ffcc4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-16T09-34-35-413Z_14bcb670654ffcc4.jsonl]]
+#+CUSTOM_ID: PLAN-234-plan-mode-execution-first-handoff
+#+EFFORT: 22h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+* Initial Message
+
+look up online for best practices w.r.t plan modes (look at pi extensions in general, and oh my pi, and find plan mode prompting benchmarks). Come back with your full summary, showing the differences with the plan mode prompts as written in the repo currently.
+
+* Context
+Goal: rebalance plan mode so planning artifacts stay high-context and full-resolution, but become materially more useful to fresh execution sessions. The implementation must preserve findings/rationale sections while making execution steps explicit at both child-item and PLAN levels.
+
+Settled decisions:
+1. Preserve full-resolution sections; do not compress or remove rationale-heavy sections.
+2. Every child-item implementation sub-step heading uses TODO-outline form with `ITEM` plus `:CUSTOM_ID:` / `:DEPENDS:`.
+3. PLAN artifacts keep `* Context` and `* Verification`, but also gain explicit PLAN-level implementation guidance so a fresh execution agent does not need to reconstruct the path from findings alone.
+4. Scope includes prompt text, validation/tests, and planner orchestration surfaces (`org`, `exit_plan_mode`, `todo_write`, `task` guidance).
+5. Canonical research/reference artifact: `specs/plan-mode-prompt-guidance-2026.md`.
+
+Bias diagnosis to carry into implementation:
+- Current prompt/validator stack is excellent at structural decomposition, but it under-specifies PLAN-level execution instructions.
+- Recent plans demonstrate context-rich bodies with comparatively thin execution manifests.
+- Validation currently protects org structure more strongly than handoff usability.
+- Approved execution / todo / task prompts must be updated together with planning prompts or the handoff will remain inconsistent.
+
+Child items in this plan:
+- [[id:PROJ-042-plan-mode-prompt-contract-for-execution]] — planning prompt contract rewrite
+- [[id:PROJ-043-plan-mode-validation-and-tests-for-execu]] — validation and regression coverage
+- [[id:PROJ-044-plan-execution-handoff-orchestration-for]] — approved-plan / todo / task orchestration alignment
+
+* Verification
+Implementation is complete only when all of the following hold:
+- Prompt rendering tests prove the new contract:
+  - `packages/coding-agent/test/system-prompt-templates.test.ts`
+  - `packages/coding-agent/test/prompts/plan-mode-tdd.test.ts`
+  - `packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts`
+  - any added planning-subagent / task / eager-todo prompt tests needed by the change
+- Exit-plan-mode validation tests prove the new invariants:
+  - `packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts`
+  - `packages/coding-agent/test/tools/exit-plan-mode.test.ts`
+  - `packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts`
+- Orchestration guidance stays truthful with existing org/todo behavior:
+  - `packages/coding-agent/test/prompts/auto-roster-prompts.test.ts`
+  - `packages/coding-agent/test/tools/todo-write-org-hooks.test.ts`
+  - focused task/todo tests only if required by wording or lifecycle coupling changes
+- Manual proof for plan quality: a reviewer can read the final planning prompt examples and see that findings/rationale are preserved while the first executable steps are unambiguous.
+
+* Implementation Strategy
+** Wave traversal rule
+Execute the child DAG in dependency order. Do not start validator or orchestration rewrites until the prompt contract is explicit enough to test against.
+
+** Contract-first, tests-first
+1. Use `specs/plan-mode-prompt-guidance-2026.md` as the source of truth for wording and invariants.
+2. Update prompt tests before changing prompt text where feasible.
+3. Update validation tests before changing `exit_plan_mode` enforcement.
+4. Update approved-plan / todo / task prompt tests before changing orchestration wording.
+
+** Cross-surface synchronization rule
+Whenever the execution-first contract changes, update all affected representations in the same implementation pass:
+- prompt text
+- prompt tests
+- validator rules
+- validator tests
+- orchestration guidance
+Do not leave a partial migration where prompt examples, validator expectations, and approved-plan execution guidance disagree.
+
+** Handoff quality rule
+The finished system should let a fresh execution agent answer, from the plan artifact alone:
+- what to do first
+- which files/tests belong to each wave
+- when to parallelize vs serialize
+- which verification closes each child item
+If those answers still depend on re-reading findings-only context, the work is incomplete.
+
+* Execution Manifest
+** contract-foundation                              :wave:
+- [[id:PROJ-042-plan-mode-prompt-contract-for-execution]] Plan-mode prompt contract for execution-first org plans (8h)
+  - establishes the planning contract, `ITEM` TODO-outline requirement, and PLAN-level implementation guidance requirement
+
+** validation-hardening                            :wave:
+- [[id:PROJ-043-plan-mode-validation-and-tests-for-execu]] Plan-mode validation and tests for executable TODO outlines (7h, depends PROJ-042-plan-mode-prompt-contract-for-execution)
+  - converts the prompt contract into enforced validator/test invariants
+
+** execution-handoff                               :wave:
+- [[id:PROJ-044-plan-execution-handoff-orchestration-for]] Plan execution handoff orchestration for org todo and task surfaces (7h, depends PROJ-042-plan-mode-prompt-contract-for-execution and PROJ-043-plan-mode-validation-and-tests-for-execu)
+  - aligns approved-plan, todo, and task guidance with the new execution-first plan artifact

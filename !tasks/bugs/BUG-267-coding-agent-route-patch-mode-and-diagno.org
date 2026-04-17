@@ -1,0 +1,95 @@
+#+TITLE: coding-agent: route patch mode and diagnostics through managed code buffers
+#+STATE: ITEM
+#+SESSION_ID: 14bcee07e4b8b89f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-16T13-37-28-466Z_14bcee07e4b8b89f.jsonl]]
+#+CUSTOM_ID: BUG-267-coding-agent-route-patch-mode-and-diagno
+#+PRIORITY: #A
+#+LAYER: coding-agent
+#+EFFORT: 6h
+
+* Scope
+- In scope: remove the remaining persistence-model split inside `packages/coding-agent/src/patch/index.ts` so patch mode, replace mode, and hashline mode all use the managed code-buffer lifecycle for non-binary text writes.
+- In scope: restore immediate diagnostics/meta parity for migrated replace/hashline writes so LSP writethrough diagnostics are not silently dropped after PLAN-235.
+- In scope: preserve stale-buffer detection, preview/resolve correctness, undo/redo interoperability, and native text fallback behavior.
+- Out of scope: adding new `code` move/delete commands. That file-command surface expansion is handled by sibling feature work.
+
+* Existing Patterns
+- `packages/coding-agent/src/patch/index.ts`
+  - `ensureManagedBufferFresh(file)`
+  - `applyManagedBufferContent(file, content, options)`
+  - `invalidateManagedCodeBuffersForPaths(paths)`
+  - `LspFileSystem`
+  - `EditTool.execute(...)`
+- `packages/coding-agent/src/patch/applicator.ts`
+  - `applyPatch(input, fs, options)`
+- `packages/coding-agent/src/tools/pending-action.ts`
+- `packages/coding-agent/src/tools/resolve.ts`
+- `packages/coding-agent/src/tools/code.ts`
+- Tests to extend:
+  - `packages/coding-agent/test/tools/code.test.ts`
+  - `packages/coding-agent/test/tools/resolve.test.ts`
+  - optionally `packages/coding-agent/test/tools/code-result.test.ts` if diagnostics rendering changes
+
+* Tests
+- Workflow 1: patch-mode `edit` on a semantic-capable file writes through the managed code buffer, then `code undo` / `code redo` observe the same history with no stale-buffer false positive.
+- Workflow 2: patch-mode `edit` on fallback text (`.txt`, `.toml`, `.kdl`, etc.) uses the same lifecycle and does not fail with `language not found`.
+- Workflow 3: replace/hashline migrated writes still surface immediate diagnostics/meta when LSP writethrough is enabled.
+- Workflow 4: stale-buffer drift blocks patch-mode mutation before disk changes, matching the replace/hashline managed-buffer contract.
+- Workflow 5: preview/apply/discard flows remain correct after the persistence-path change; no orphaned pending-action state and no hidden buffer invalidation bugs.
+- Workflow 6: semantic-capable patch-mode edits still preserve truthful user-visible result text and diff previews unless the contract is intentionally updated in the same change.
+
+* Implementation
+** Define the shared text-write contract for patch mode
+:PROPERTIES:
+:CUSTOM_ID: BUG-267-coding-agent-route-patch-mode-and-diagno::define-contract
+:END:
+- Files: `packages/coding-agent/src/patch/index.ts`, `packages/coding-agent/src/patch/applicator.ts`
+- Specify exactly where patch mode hands off from diff application to managed-buffer persistence.
+- Preserve one lifecycle for non-binary text writes: freshness check → mutation → diagnostics/save bookkeeping.
+
+** Add failing lifecycle and diagnostics tests first
+:PROPERTIES:
+:CUSTOM_ID: BUG-267-coding-agent-route-patch-mode-and-diagno::write-tests
+:DEPENDS: BUG-267-coding-agent-route-patch-mode-and-diagno::define-contract
+:END:
+- Files: `packages/coding-agent/test/tools/code.test.ts`, `packages/coding-agent/test/tools/resolve.test.ts`
+- Encode Workflows 1–6 as initially failing tests.
+- Include both semantic-capable and fallback-text files.
+
+** Route patch-mode apply through managed buffers
+:PROPERTIES:
+:CUSTOM_ID: BUG-267-coding-agent-route-patch-mode-and-diagno::patch-lifecycle
+:DEPENDS: BUG-267-coding-agent-route-patch-mode-and-diagno::write-tests
+:END:
+- File: `packages/coding-agent/src/patch/index.ts`
+- Ensure patch mode no longer writes text through an isolated FS-only path for normal text updates.
+- Keep preview computation separate from disk mutation, but converge on one persistence path for the actual apply.
+
+** Restore diagnostics and metadata parity
+:PROPERTIES:
+:CUSTOM_ID: BUG-267-coding-agent-route-patch-mode-and-diagno::restore-diagnostics
+:DEPENDS: BUG-267-coding-agent-route-patch-mode-and-diagno::patch-lifecycle
+:END:
+- File: `packages/coding-agent/src/patch/index.ts`
+- Preserve or reintroduce immediate diagnostics/writethrough metadata for replace/hashline/patch mutations after the managed-buffer write succeeds.
+- Do not fabricate diagnostics if unavailable; wire the real existing writethrough path back in.
+
+** Reconcile preview resolve and output contracts
+:PROPERTIES:
+:CUSTOM_ID: BUG-267-coding-agent-route-patch-mode-and-diagno::resolve-contract
+:DEPENDS: BUG-267-coding-agent-route-patch-mode-and-diagno::restore-diagnostics
+:END:
+- Files: `packages/coding-agent/src/tools/pending-action.ts`, `packages/coding-agent/src/tools/resolve.ts`, tests only if required by changed behavior.
+- Verify Workflow 5 and Workflow 6 remain truthful.
+
+* Edge Cases
+- Patch hunks may describe create/delete/update/rename; this item only changes normal non-binary text update persistence, not new file-command surface semantics.
+- Diagnostics may require the existing writethrough batch protocol; do not bypass it with a silent `undefined` result.
+- Fallback text buffers must reject semantic-only ops truthfully but still accept whole-text persistence via the shared lifecycle.
+- Failed patch application must not partially mutate disk and must not leave a stale managed buffer behind.
+
+* Acceptance Criteria
+- Patch mode no longer uses a separate persistence model for normal non-binary text updates.
+- Replace/hashline/patch migrated writes all preserve diagnostics/meta parity and stale-buffer protection.
+- Focused tool tests prove shared undo/redo/freshness behavior across semantic and fallback text files.
+- Preview/resolve remains correct and user-visible output stays truthful.

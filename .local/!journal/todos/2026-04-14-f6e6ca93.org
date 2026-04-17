@@ -1,0 +1,32 @@
+#+TITLE: Session 14ba65d50ae9afba Todos
+#+DATE: 2026-04-14
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* wave-1 contract hardening
+
+** DONE Harden mutation apply contract
+:PROPERTIES:
+:TASK_ID: bug-258-contract-hardening
+:STATUS: completed
+:GATE_CMD: bun test packages/coding-agent/test/tools/ast-edit.test.ts packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code.test.ts
+:ORG_ITEM_ID: BUG-258-applypendingaction-throws-after-persist
+:END:
+
+Changed packages/coding-agent/src/tools/pending-action.ts, packages/coding-agent/src/tools/ast-edit.ts, packages/coding-agent/src/tools/resolve.ts, packages/coding-agent/src/extensibility/custom-tools/loader.ts, packages/coding-agent/test/tools/resolve.test.ts, packages/coding-agent/test/tools/ast-edit.test.ts. Verification completed via focused bun test command.
+
+Verified: bun test packages/coding-agent/test/tools/ast-edit.test.ts packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code.test.ts → 56 pass, 0 fail.
+
+* wave-2 renderer provenance
+
+** DONE Show resolve provenance state
+:PROPERTIES:
+:TASK_ID: bug-259-renderer-provenance
+:STATUS: completed
+:GATE_CMD: bun test packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code-result.test.ts
+:DEPENDS: bug-258-contract-hardening
+:ORG_ITEM_ID: BUG-259-resolve-tui-renderer-hides-mutation-prov
+:END:
+
+Updated packages/coding-agent/src/tools/resolve.ts renderer/status lines and packages/coding-agent/test/tools/resolve.test.ts render coverage. Verification completed via focused bun test command.
+
+Verified: bun test packages/coding-agent/test/tools/resolve.test.ts packages/coding-agent/test/tools/code-result.test.ts → 22 pass, 0 fail.

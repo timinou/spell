@@ -151,7 +151,15 @@ fn find_symbol_node<'a>(
 	source: &str,
 	symbol: &str,
 ) -> Result<Option<Node<'a>>> {
-	let matches = find_top_level_matches(root, profile, source, symbol);
+	let (base_symbol, occurrence) = split_deduplicated_name(symbol);
+	let matches = find_top_level_matches(root, profile, source, base_symbol);
+	if let Some(occurrence) = occurrence {
+		return if occurrence > 0 && occurrence <= matches.len() {
+			Ok(Some(matches[occurrence - 1]))
+		} else {
+			Ok(None)
+		};
+	}
 	if matches.len() == 1 {
 		return Ok(Some(matches[0]));
 	}
@@ -177,6 +185,20 @@ fn find_symbol_node<'a>(
 	}
 
 	Ok(None)
+}
+
+fn split_deduplicated_name(name: &str) -> (&str, Option<usize>) {
+	let Some(open_bracket) = name.rfind('[') else {
+		return (name, None);
+	};
+	if !name.ends_with(']') {
+		return (name, None);
+	}
+	let number = &name[open_bracket + 1..name.len() - 1];
+	if number.is_empty() || !number.chars().all(|ch| ch.is_ascii_digit()) {
+		return (name, None);
+	}
+	(&name[..open_bracket], number.parse::<usize>().ok())
 }
 
 fn resolve_member_node<'a>(
@@ -213,15 +235,30 @@ fn resolve_member_node<'a>(
 		return Err(CodeEngineError::Edit(format!("'{}' has no body", class_name)));
 	}
 
+	let (base_member_name, occurrence) = split_deduplicated_name(member_name);
 	let mut matches: Vec<Node<'_>> = Vec::new();
 	for child in members {
 		if let Some(decl) = declaration_for(profile, child, source) {
-			if let Some(n) = declaration_name(source, child, decl) {
-				if n == member_name {
+			if let Some(name) = declaration_name(source, child, decl) {
+				if name == base_member_name {
 					matches.push(child);
 				}
 			}
 		}
+	}
+
+	if let Some(occurrence) = occurrence {
+		return matches
+			.get(occurrence.saturating_sub(1))
+			.copied()
+			.ok_or_else(|| {
+				CodeEngineError::Edit(format!(
+					"Member '{}' not found in '{}'. Available: [{}]",
+					member_name,
+					class_name,
+					collect_member_names(class_node, profile, source).join(", ")
+				))
+			});
 	}
 
 	if matches.is_empty() {

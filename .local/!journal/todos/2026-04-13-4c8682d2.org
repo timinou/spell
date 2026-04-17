@@ -1,0 +1,29 @@
+#+TITLE: Session 14b982c81852bd7a Todos
+#+DATE: 2026-04-13
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* prompt-rewrite-wave
+
+** ITEM Rewrite default and plan prompts
+:PROPERTIES:
+:TASK_ID: rewrite-default-plan-prompts
+:STATUS: pending
+:GATE_CMD: bun test packages/coding-agent/test/system-prompt-templates.test.ts && bun test packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts
+:VERIFY_CMD: bun test packages/coding-agent/test/system-prompt-templates.test.ts && bun test packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts
+:ORG_ITEM_ID: FEAT-540-compress-notation-voice-in-default-and-p
+:ORG_ITEM_CLOSING_ID: FEAT-540-compress-notation-voice-in-default-and-p
+:END:
+
+Org item [[id:FEAT-540-compress-notation-voice-in-default-and-p]]. Scope: packages/coding-agent/src/prompts/system/system-prompt.md, packages/coding-agent/src/prompts/system/plan-mode-active.md, plus focused tests in packages/coding-agent/test/system-prompt-templates.test.ts and plan-mode/plan-mode-allowed-folders-prompt.test.ts if assertions change. Preserve XML/Handlebars/RFC2119 semantics; apply notation-first compression only.
+
+** ITEM Rewrite approved and audit prompts
+:PROPERTIES:
+:TASK_ID: rewrite-approved-audit-prompts
+:STATUS: pending
+:GATE_CMD: bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts && bun test packages/coding-agent/test/plan-mode/plan-mode-audit-prompt.test.ts
+:VERIFY_CMD: bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts && bun test packages/coding-agent/test/plan-mode/plan-mode-audit-prompt.test.ts
+:ORG_ITEM_ID: FEAT-541-compress-notation-voice-in-execution-and
+:ORG_ITEM_CLOSING_ID: FEAT-541-compress-notation-voice-in-execution-and
+:END:
+
+Org item [[id:FEAT-541-compress-notation-voice-in-execution-and]]. Scope: packages/coding-agent/src/prompts/system/plan-mode-approved.md, packages/coding-agent/src/prompts/system/plan-audit.md, focused tests in packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts, and a new/focused audit prompt test under packages/coding-agent/test/plan-mode/. Preserve literal markers like [AUDIT_CLEAN], artifact URI examples, and protocol order while compressing voice.

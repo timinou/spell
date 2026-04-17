@@ -1,0 +1,103 @@
+#+TITLE: POST_PLAN239_CONTEXT_PRESSURE_FOLLOWUP_PLAN
+#+STATE: ITEM
+#+SESSION_ID: 14be1383cbba71b9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T10-59-43-534Z_14be1383cbba71b9.jsonl]]
+#+CUSTOM_ID: PLAN-240-post-plan239-context-pressure-followup-plan
+#+EFFORT: 18h
+
+* Initial Message
+
+I have an inkling that a lot of token usage comes from the Bash tool during my sessions. PLease look at my recent sessions transcripts using jq and graph in ASCII the token usage, and within the token usage, the commands that led to the most token usage. Or graph in HTML/CSS. Or something else. But basically do a full review kind of thing (as a summary in chat, once you do that and you find the culprits for most of the useless context injecitons, we can start thinking about how to smartly manage context for these situations)
+
+* Context
+** Request
+Plan the post-`PLAN-239-bash-low-spill-artifact-policy-plan` follow-on work that tackles the broader context-pressure problem across `bash`, `read`, `grep`, `org`, memory persistence, and transcript spelunking. The user explicitly wants a challenged, tool-by-tool understanding of what is useful vs what is leaking, and wants the plan to assume `PLAN-239` is already being implemented.
+
+** Review baseline
+- Persistent review artifact: `specs/token-usage-pareto-review.md`
+- Interactive viewer/data used during planning: `.local/token-usage/token-usage-review.html`, `.local/token-usage/token-usage-review.data.js`
+- Key quantitative baseline from the review:
+  - `read` is the largest sampled sink (34.3% token share; 44.3% fresh input)
+  - `bash` is the clearest churn/waste pattern tool (28.9% token share)
+  - `org` is a hidden planning tax (21.5% token share)
+  - `grep` is a broad-search input tax (15.4% token share)
+  - top 10 category buckets account for ~83.3% of sampled tokens
+
+** External prerequisite
+This plan is intentionally dependent on the existing low-spill artifact work identified by `PLAN-239-bash-low-spill-artifact-policy-plan` and `PROJ-046-coding-agent-low-spill-artifact-policy-w`.
+
+This follow-on MUST NOT re-open the already-settled low-spill threshold work except where a child item explicitly builds on its new baseline behavior.
+
+** Settled decisions
+1. Optimize fresh-input reduction and turn-count reduction first; raw total-token reduction is secondary when tradeoffs conflict.
+2. Use soft guardrails, not hard bans: compact / summary-first by default, with agent-driven auto-escalation allowed without user confirmation.
+3. Include category-aware memory persistence and transcript-spelunking controls as first-class scope, not as a deferred extra.
+4. Create a new dependent plan rather than mutating `PLAN-239`; dependency must be explicit in child items.
+5. For source/test files, prefer `code` / `lsp` / summary-first paths before raw `read`, but preserve exact-range raw reads when the agent determines literal lines are required.
+6. Stage only broad or weakly scoped grep by default; already narrow grep should stay direct.
+7. Make compact org results the global default, not only a plan-mode optimization.
+8. Persist only compact semantic summaries / diagnoses for low-value tool outputs; do not persist raw low-value bodies into memory.
+9. Treat transcript/session spelunking as a cross-tool anti-pattern spanning `bash`, `read`, and `grep`.
+
+** Recommended approach
+Use one shared foundation project followed by four tool-specific feature items:
+- Foundation first: shared category/policy contract, memory persistence guardrails, transcript-spelunking detection, shared summary-first / auto-escalation surfaces.
+- Then parallelize by tool surface once the foundation is in place:
+  - `read` routing/compaction
+  - `grep` staged narrowing/reuse
+  - `org` compact mode/memoization
+  - bash post-`PLAN-239` churn suppression
+
+This matches the actual concentration pattern from the review: category behavior is more important than exact-command heuristics, so a shared policy layer must land before per-tool tuning.
+
+** Critical files
+- Shared policy / persistence
+  - `packages/coding-agent/src/tools/output-meta.ts`
+  - `packages/coding-agent/src/session/streaming-output.ts`
+  - `packages/coding-agent/src/memories/index.ts`
+  - `packages/coding-agent/src/session/messages.ts`
+- Tool surfaces
+  - `packages/coding-agent/src/tools/read.ts`
+  - `packages/coding-agent/src/tools/grep.ts`
+  - `packages/coding-agent/src/tools/org.ts`
+  - `packages/coding-agent/src/tools/bash.ts`
+  - `packages/coding-agent/src/exec/bash-executor.ts`
+- Review/spec artifacts
+  - `specs/token-usage-pareto-review.md`
+  - `.local/token-usage/token-usage-review.data.js`
+* Verification
+** Focused test targets
+- Shared policy / memory
+  - `bun test packages/coding-agent/test/tools/context-pressure-policy.test.ts`
+  - `bun test packages/coding-agent/test/memories-runtime.test.ts packages/coding-agent/test/memories-storage.test.ts`
+- Read
+  - `bun test packages/coding-agent/test/tools/read-routing.test.ts`
+- Grep
+  - `bun test packages/coding-agent/test/tools/grep-staging.test.ts packages/coding-agent/test/tools/grep-internal-urls.test.ts`
+- Org
+  - `bun test packages/coding-agent/test/tools/org-format-result.test.ts packages/coding-agent/test/tools/org.test.ts`
+- Bash
+  - `bun test packages/coding-agent/test/bash-executor.test.ts packages/coding-agent/test/tools/bash-churn-policy.test.ts packages/coding-agent/test/task/bash-exit-code-tracking.test.ts`
+- Final integration check
+  - `bun check:ts`
+
+** Manual proof points
+- A source file read without explicit line targeting no longer behaves like a raw repo browser by default.
+- A broad grep search returns staged file-hit guidance first; a narrow grep still returns direct content.
+- Org mutation/query/wave responses are compact by default while preserving exact IDs and next-step guidance.
+- Pure wait/poll bash commands stop consuming ordinary turns, and repeated verification/status loops become digest-first after `PLAN-239`.
+- Low-value tool outputs no longer persist as raw memory bodies; only compact semantic summaries/diagnoses remain.
+- Transcript/session spelunking is visibly treated as a cross-tool noise class rather than ordinary inspection.
+
+** Done condition
+All child items land with focused tests and `bun check:ts` passing; the observable default behavior across `read`, `grep`, `org`, and post-`PLAN-239` bash matches the settled soft-guardrail model; memory persistence no longer re-injects raw low-value tool bodies.
+
+* Execution Manifest
+** wave-1-foundation :wave:
+- [[id:PROJ-047-cross-tool-context-pressure-policy]] Cross-tool context pressure policy framework after low-spill artifacting
+
+** wave-2-tool-policies :wave:
+- [[id:FEAT-558-source-aware-read-routing-and-transcript-compaction]] Source-aware read routing and transcript-aware read compaction
+- [[id:FEAT-559-broad-grep-staging-and-duplicate-query-reuse]] Broad grep staging and duplicate-query reuse
+- [[id:FEAT-560-global-org-compact-mode-and-query-wave-memoization]] Global org compact mode with escalation and query-wave memoization
+- [[id:FEAT-561-post-plan239-bash-churn-suppression-and-digest-first-status]] Post-PLAN-239 bash churn suppression and digest-first status loops

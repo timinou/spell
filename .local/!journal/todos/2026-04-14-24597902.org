@@ -1,0 +1,44 @@
+#+TITLE: Session 14ba49059c39ac10 Todos
+#+DATE: 2026-04-14
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** BLOCKED Implement native replace path
+:PROPERTIES:
+:TASK_ID: native-replace
+:STATUS: failed
+:ORG_ITEM_ID: FEAT-546-add-code-edit-whole-file-replace-ergonom
+:END:
+
+Subagent reported it could not complete verification reliably. Main session will implement and verify the native path directly.
+
+Delegated attempt aborted without trustworthy verification; taking over directly.
+
+** BLOCKED Update wrapper docs tests
+:PROPERTIES:
+:TASK_ID: wrapper-docs
+:STATUS: failed
+:ORG_ITEM_ID: FEAT-546-add-code-edit-whole-file-replace-ergonom
+:END:
+
+Subagent could not truthfully confirm durable edits in the wrapper test/doc files. Main session will implement and verify them directly.
+
+Delegated attempt aborted without confirmed file changes; taking over directly.
+
+** DONE Verify close plan
+:PROPERTIES:
+:TASK_ID: verify-close
+:STATUS: completed
+:GATE_COMMIT: true
+:GATE_ARTIFACT: !tasks/plans/plan-artifacts/PLAN-226-code-edit-whole-file-replace-ergonomics
+:GATE_CMD: bun test packages/coding-agent/test/tools/code.test.ts && bun test packages/natives/test/code-buffer.test.ts && cargo test -p pi-natives code_buffer -- --nocapture
+:GATE_LLM: Verify whole-file replace works on existing supported file while create semantics and symbol/line precedence remain unchanged.
+:VERIFY_CMD: bun test packages/coding-agent/test/tools/code.test.ts && bun test packages/natives/test/code-buffer.test.ts && cargo test -p pi-natives code_buffer -- --nocapture
+:ORG_ITEM_ID: PLAN-226-code-edit-whole-file-replace-ergonomics
+:ORG_ITEM_CLOSING_ID: PLAN-226-code-edit-whole-file-replace-ergonomics
+:END:
+
+Verification: bun test packages/coding-agent/test/tools/code.test.ts; bun test packages/natives/test/code-buffer.test.ts; cargo test -p pi-natives code_buffer -- --nocapture; manual CodeTool proof saved at !tasks/plans/plan-artifacts/PLAN-226-code-edit-whole-file-replace-ergonomics/manual-whole-file-replace-proof.json. Org items FEAT-546 and PLAN-226 moved to DONE. Commit: 17f5448d5 fix(coding-agent): add whole-file code replace ergonomics.
+
+Focused verification passed, manual proof artifact saved, org items closed to DONE, and commit 17f5448d5 created with only plan-related files staged.

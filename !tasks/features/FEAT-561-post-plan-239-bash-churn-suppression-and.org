@@ -1,0 +1,93 @@
+#+TITLE: Post-PLAN-239 bash churn suppression and digest-first status loops
+#+STATE: ITEM
+#+SESSION_ID: 14be1383cbba71b9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T10-59-43-534Z_14be1383cbba71b9.jsonl]]
+#+CUSTOM_ID: FEAT-561-post-plan239-bash-churn-suppression-and-digest-first-status
+#+DEPENDS: PROJ-047-cross-tool-context-pressure-policy
+#+EFFORT: 5h
+#+PRIORITY: A
+#+LAYER: coding-agent
+
+* Initial Message
+
+I have an inkling that a lot of token usage comes from the Bash tool during my sessions. PLease look at my recent sessions transcripts using jq and graph in ASCII the token usage, and within the token usage, the commands that led to the most token usage. Or graph in HTML/CSS. Or something else. But basically do a full review kind of thing (as a summary in chat, once you do that and you find the culprits for most of the useless context injecitons, we can start thinking about how to smartly manage context for these situations)
+
+* Scope
+In scope:
+- Build the post-`PLAN-239-bash-low-spill-artifact-policy-plan` bash follow-on work that low-spill artifacting alone does not solve: sleep/poll churn, repeated verification loops, repeated status/diff inspection, and digest-first handling of success-path shell output.
+- Keep the settled soft-guardrail model: summary/digest first, then agent-driven auto-escalation when exact raw output is still needed.
+- Classify transcript spelunking `jq` patterns, repeated verification commands, and repeated git status/diff/show loops as first-class bash churn categories.
+- Preserve legitimate bash uses where no specialized tool exists and the user explicitly wants the command run.
+
+Out of scope:
+- Re-tuning the low-spill artifact thresholds or `lenientSpill` override work already owned by `PLAN-239-bash-low-spill-artifact-policy-plan` and `FEAT-557-coding-agent-add-lenientspill-bash-overr`.
+- Replacing bash with specialized tools when a specialized tool already exists; that broader discipline is handled elsewhere.
+- Full cross-tool duplicate-call caching beyond bash-specific command loops.
+
+Rationale:
+- After spill reduction lands, the remaining bash waste is about turn count and repetition.
+- The review shows `bash:tests` + `bash:verification/build` already consume ~14.0% of sampled tokens; `bash:git inspection/staging` adds ~4.9%; `bash:sleep/wait` is only ~1.6% token share but is nearly pure zero-signal churn.
+- The most suspicious exact offenders are `sleep 1`, `sleep 3`, repeated test/precommit loops, and repeated `git status --short` / similar inspection commands.
+
+* Existing Patterns
+- Tool surface: `packages/coding-agent/src/tools/bash.ts`, especially `BashTool.execute(...)`, `#formatResultOutput(...)`, and current explicit `head` / `tail` handling.
+- Execution backend: `packages/coding-agent/src/exec/bash-executor.ts` and `packages/coding-agent/src/session/streaming-output.ts`.
+- Existing bash-interception path: `packages/coding-agent/src/tools/bash-interceptor.ts` and related settings/rules if implementation chooses to reuse that mechanism.
+- Existing bash tests: `packages/coding-agent/test/bash-executor.test.ts`, `packages/coding-agent/test/tools/bash-normalize.test.ts`, `packages/coding-agent/test/task/bash-exit-code-tracking.test.ts`, and adjacent bash-focused suites.
+- Shared policy contract from `PROJ-047-cross-tool-context-pressure-policy`.
+- Review baseline: `specs/token-usage-pareto-review.md`.
+
+* Tests
+Workflows to enumerate and defend first:
+1. Workflow 1 — `sleep` / pure wait commands are suppressed or redirected to a better async mechanism instead of consuming fresh turns as ordinary bash output.
+2. Workflow 2 — repeated verification loops (`mix test`, `bun test`, `mix precommit`, `bun check`) default to digest-first results on success while preserving fuller failure evidence.
+3. Workflow 3 — repeated git inspection/status loops return compact deltas / summaries when state is unchanged or minimally changed.
+4. Workflow 4 — transcript-spelunking bash via `jq` over session JSONL is recognized as high-noise and summarized first.
+5. Workflow 5 — the agent can still auto-escalate to fuller raw output or artifact drill-in when the digest is insufficient.
+
+Test files / scenarios:
+- Add focused churn tests near `packages/coding-agent/test/bash-executor.test.ts` and/or a new `packages/coding-agent/test/tools/bash-churn-policy.test.ts`.
+- Extend existing bash tool / executor tests for sleep interception, digest-first success handling, and unchanged-status loop summaries.
+- If git-status delta handling is implemented via bash tool logic rather than executor logic, add tests close to that behavior rather than only backend-level tests.
+
+* Implementation
+** Define bash churn policy contract and tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-561-post-plan239-bash-churn-suppression-and-digest-first-status::define-bash-churn-contract-and-tests
+:END:
+- Files: `packages/coding-agent/src/tools/bash.ts`, relevant interceptor/helper modules, and focused bash tests.
+- Define which bash command classes are summary-first, which are blocked/replaced (`sleep`), and which preserve ordinary behavior.
+- Add initially-failing tests for Workflows 1 through 5.
+
+** Eliminate sleep/poll churn
+:PROPERTIES:
+:CUSTOM_ID: FEAT-561-post-plan239-bash-churn-suppression-and-digest-first-status::eliminate-sleep-poll-churn
+:DEPENDS: FEAT-561-post-plan239-bash-churn-suppression-and-digest-first-status::define-bash-churn-contract-and-tests
+:END:
+- Files: `packages/coding-agent/src/tools/bash.ts` and any interceptor/helper chosen during implementation.
+- Detect trivial wait commands (`sleep N`, similar pure-wait shells) and redirect them to a non-context-bloating path or reject them with truthful guidance to use async/background + `await` patterns.
+
+** Implement digest-first verification and status loops
+:PROPERTIES:
+:CUSTOM_ID: FEAT-561-post-plan239-bash-churn-suppression-and-digest-first-status::implement-digest-first-verification-loops
+:DEPENDS: FEAT-561-post-plan239-bash-churn-suppression-and-digest-first-status::define-bash-churn-contract-and-tests
+:END:
+- Files: `packages/coding-agent/src/tools/bash.ts`, possibly `packages/coding-agent/src/exec/bash-executor.ts`, and any shared helper(s) from `PROJ-047-cross-tool-context-pressure-policy`.
+- For repeated verification/status classes, default to compact success digests and unchanged-state summaries while keeping truthful escalation to raw output or artifacts.
+- Preserve fuller failure evidence so error diagnosis is not hidden.
+* Edge Cases
+- Some commands contain `sleep` as one part of a legitimate composite shell; detection must not blindly break useful scripts.
+- Success digests must not mask warnings that materially change the next action.
+- Unchanged-status summaries must invalidate when repo state, command args, or working directory changes.
+- Transcript-spelunking detection must not suppress legitimate machine-readable data extraction the user explicitly requested.
+- Failure paths must remain more informative than success paths, consistent with the post-PLAN-239 design direction.
+
+* Acceptance Criteria
+- Pure wait/poll bash commands no longer waste ordinary turns.
+- Repeated verification/status loops become digest-first by default after PLAN-239 lands.
+- Transcript-spelunking bash is summarized first instead of dumping raw JSONL-derived bodies.
+- Auto-escalation to fuller output remains available without user confirmation.
+- Focused bash tests cover sleep suppression, verification/status digests, transcript-spelunking handling, and truthful failure behavior.
+
+* Parent Plan
+- [[id:PLAN-240-post-plan239-context-pressure-followup-plan]] POST_PLAN239_CONTEXT_PRESSURE_FOLLOWUP_PLAN

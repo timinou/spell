@@ -1,0 +1,37 @@
+#+TITLE: Session 14be1383cbba71b9 Todos
+#+DATE: 2026-04-17
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DONE Inspect existing plan context
+:PROPERTIES:
+:TASK_ID: inspect-existing-plan
+:STATUS: completed
+:END:
+
+Inspected org query results and confirmed no local exact PLAN-239 item. This follow-on work therefore appears to be a new post-PLAN-239 plan rather than a section edit against an existing local org item, unless the user wants a different lineage strategy.
+
+No existing org item with CUSTOM_ID `PLAN-239-bash-low-spill-artifact-policy-plan` was found via org query, so current assumption is that PLAN-239 exists externally/in-flight but is not yet present in local org state. Related planning context was inspected from the repo and org index.
+
+** DONE Write token review spec
+:PROPERTIES:
+:TASK_ID: write-review-spec
+:STATUS: completed
+:DEPENDS: inspect-existing-plan
+:END:
+
+The spec captures cross-tool Pareto findings, per-tool useful-vs-leaking analysis, and candidate post-PLAN-239 policy bundles.
+
+Created `specs/token-usage-pareto-review.md` as the persistent review baseline for this planning session.
+
+** DONE Ask targeted plan questions
+:PROPERTIES:
+:TASK_ID: ask-clarifying-questions
+:STATUS: completed
+:DEPENDS: write-review-spec
+:END:
+
+Decisions are now sufficiently settled to design and write org items without further ambiguity.
+
+User settled four material decisions: optimize fresh-input + turn-count first; use soft guardrails with automatic escalation; include memory/transcript controls in scope; create a new dependent plan that assumes PLAN-239 lands first.

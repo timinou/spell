@@ -1,0 +1,30 @@
+#+TITLE: Audit: implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-066-audit-implementation
+#+EFFORT: 1h
+#+LAYER: coding-agent
+#+PRIORITY: #B
+
+* Source
+Manual audit
+
+* Findings
+- **What**: `createOrgTool()` help text appears out of sync with the actual command surface; `delete` / `validate-plan` were added in code paths but the inner description string was still observed without them.
+  - **Where**: `packages/org/src/tool.ts`, `createOrgTool()` description block near the command enum/switch
+  - **Why**: `OrgTool.get description()` forwards this inner description; stale docs make the agent/tool prompt under-describe valid commands, which directly hurts discoverability and can recreate the ergonomics problem the plan was fixing.
+  - **Effort**: `trivial`
+
+- **What**: New org-wrapper presentation behavior lacks direct regression coverage.
+  - **Where**: `packages/coding-agent/src/tools/org.ts`, `formatOrgResult()` success branch and `buildOrgCallPreview()` delete/validate-plan handling; no corresponding targeted assertions were added in `packages/coding-agent/test/tools/org-format-result.test.ts` / `packages/coding-agent/test/tools/org.test.ts`
+  - **Why**: `bodyLength` rendering, `delete` preview metadata, and `validate-plan` formatting are now part of the user/agent-facing contract; without focused tests, future prompt/formatter churn can silently regress them while core org package tests still pass.
+  - **Effort**: `trivial`
+
+- **What**: `org create` body echo is produced from the locally rewritten request body, not a read-back of persisted content.
+  - **Where**: `packages/org/src/tool.ts`, `cmdCreate()` success response near `return { success: true, id, file, category, state, body, bodyLength }`
+  - **Why**: the new transparency contract says the response tells the agent what was persisted; if native create-time normalization or category-specific create behavior mutates body content, the echoed `body`/`bodyLength` can drift from disk and reintroduce “must org get to verify” uncertainty in edge cases.
+  - **Effort**: `small`
+
+- **What**: `validate-plan` is exposed as a first-class org command but only works when an external callback is injected.
+  - **Where**: `packages/org/src/tool.ts`, `cmdValidatePlan()` + `CreateOrgToolOptions`; invoked from `packages/coding-agent/src/tools/org.ts`
+  - **Why**: standalone consumers of `createOrgTool()` can successfully discover/call `validate-plan` yet only receive “not available in this org tool context”; that is surface-level contract drift, and it makes the command behave like a partial feature rather than a real org capability.
+  - **Effort**: `small`

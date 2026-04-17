@@ -1,0 +1,62 @@
+#+TITLE: Session 14ba557626d96a82 Todos
+#+DATE: 2026-04-14
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* foundation
+
+** DONE Fix org tool regressions
+:PROPERTIES:
+:TASK_ID: fix-foundation-regressions
+:STATUS: completed
+:VERIFY_CMD: bun test packages/org/test/tool-commands.test.ts && bunx biome check packages/org/src/tool.ts packages/coding-agent/src/tools/org.ts && npx tsgo -p tsconfig.json
+:ORG_ITEM_ID: BUG-257-fix-plan-224-regressions-missing-type-fi
+:END:
+
+Verification: bun test packages/org/test/tool-commands.test.ts passed; bunx biome check packages/org/src/tool.ts packages/coding-agent/src/tools/org.ts passed; npx tsgo -p tsconfig.json reports only unrelated pre-existing error in packages/coding-agent/src/patch/index.ts.
+
+Repaired packages/org/src/tool.ts directly after code-edit corruption: restored validatePlan wiring/surface, fixed missing rewriteSubOutlineIds import source, made get verify file existence before native parse to avoid stale deleted-file reads, aligned mutation body responses enough for package tests, and ran biome.
+
+* coverage
+
+** DONE Add org wrapper tests
+:PROPERTIES:
+:TASK_ID: add-org-wrapper-regression-tests
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/tools/org-format-result.test.ts packages/coding-agent/test/tools/org.test.ts && bunx biome check packages/coding-agent/test/tools/org-format-result.test.ts packages/coding-agent/test/tools/org.test.ts
+:DEPENDS: fix-foundation-regressions
+:ORG_ITEM_ID: FEAT-547-add-regression-tests-for-new-org-formatt
+:END:
+
+Files: packages/coding-agent/test/tools/org-format-result.test.ts, packages/coding-agent/test/tools/org.test.ts. Verification: bun test packages/coding-agent/test/tools/org-format-result.test.ts packages/coding-agent/test/tools/org.test.ts passed; bunx biome check on both files passed.
+
+Added focused regression coverage in coding-agent wrapper tests for bodyLength rendering, validate-plan result formatting, and delete/validate-plan preview metadata.
+
+** DONE Align create body echo
+:PROPERTIES:
+:TASK_ID: align-create-body-readback
+:STATUS: completed
+:VERIFY_CMD: bun test packages/org/test/tool-commands.test.ts && bunx biome check packages/org/src/tool.ts packages/org/test/tool-commands.test.ts && npx tsgo -p tsconfig.json
+:DEPENDS: fix-foundation-regressions
+:ORG_ITEM_ID: FEAT-548-align-cmdcreate-body-echo-with-cmdupdate
+:END:
+
+Files: packages/org/src/tool.ts, packages/org/test/tool-commands.test.ts. Verification: bun test packages/org/test/tool-commands.test.ts passed; bunx biome check packages/org/src/tool.ts packages/org/test/tool-commands.test.ts passed; npx tsgo -p tsconfig.json completed with no output.
+
+cmdCreate now fetches persisted body after create; org package test proves returned body/bodyLength match rewritten content on disk rather than raw request input. tsgo now exits cleanly for current workspace.
+
+* finalize
+
+** DONE Verify close and commit
+:PROPERTIES:
+:TASK_ID: verify-close-and-commit
+:STATUS: completed
+:GATE_COMMIT: true
+:VERIFY_CMD: npx tsgo -p tsconfig.json && bunx biome check packages/org/src/tool.ts packages/coding-agent/src/tools/org.ts packages/org/test/tool-commands.test.ts packages/coding-agent/test/tools/org-format-result.test.ts packages/coding-agent/test/tools/org.test.ts && bun test packages/org/test/ && bun test packages/coding-agent/test/tools/org-format-result.test.ts packages/coding-agent/test/tools/org.test.ts
+:DEPENDS: add-org-wrapper-regression-tests align-create-body-readback
+:ORG_ITEM_ID: PLAN-229-plan-224-audit-fixup-regressions-test-ga
+:ORG_ITEM_CLOSING_ID: PLAN-229-plan-224-audit-fixup-regressions-test-ga
+:END:
+
+Verification: npx tsgo -p tsconfig.json passed; bunx biome check packages/org/src/tool.ts packages/coding-agent/src/tools/org.ts packages/org/test/tool-commands.test.ts packages/coding-agent/test/tools/org-format-result.test.ts packages/coding-agent/test/tools/org.test.ts passed; bun test packages/org/test/ passed (163/0); bun test packages/coding-agent/test/tools/org-format-result.test.ts packages/coding-agent/test/tools/org.test.ts passed (12/0). Updated !tasks/bugs/BUG-257-fix-plan-224-regressions-missing-type-fi.org, !tasks/features/FEAT-547-add-regression-tests-for-new-org-formatt.org, !tasks/features/FEAT-548-align-cmdcreate-body-echo-with-cmdupdate.org, !tasks/plans/PLAN-229-plan-224-audit-fixup-regressions-test-ga.org to DONE/completion state and committed only plan-related files.
+
+Plan verification passed, org child items + plan closed to DONE, and scoped commit created: ff275f983 (fix(org): close PLAN-229 audit regressions).

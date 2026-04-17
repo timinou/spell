@@ -1,0 +1,89 @@
+#+TITLE: HTML_CSS_CODE_GRAPH_ENGINE_PLAN
+#+STATE: DOING
+#+SESSION_ID: 14be1e420c74b0e5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T11-46-39-793Z_14be1e420c74b0e5.jsonl]]
+#+CUSTOM_ID: PLAN-238-html-css-code-graph-engine-plan
+#+EFFORT: 90h
+#+LAYER: web-semantics
+#+PRIORITY: #A
+
+* Initial Message
+
+how would you make the pi code graph/engine maximally useful for html/css files? think deeply about the affordances and the dsl for writing tree sitter-based affordances. make it maximally useful for your needs
+
+* Context
+- Request: make the Pi code graph/engine maximally useful for HTML/CSS files, with the affordance DSL designed for reuse by HEEx rather than a Phoenix-only branch.
+- Repo evidence driving this plan:
+  - `crates/pi-code-engine/src/language/profile.rs` already supplies the core declarative profile/affordance DSL.
+  - `crates/pi-code-engine/build.rs` already generates grammar production/inverse metadata from tree-sitter node types.
+  - `crates/pi-code-graph/src/language/generic.rs` already consumes engine profiles for downstream graph extraction.
+  - `crates/pi-code-graph/src/language/elixir.rs` contains only minimal HEEx graph support today; HTML/CSS need to become the reusable substrate.
+  - `packages/coding-agent/src/tools/code.ts` and related prompt/result files currently assume declaration-centric languages and need capability-based HTML/CSS UX.
+- Child items:
+  - [[id:FEAT-553-pi-code-engine-define-html-css-affordanc]]
+  - [[id:FEAT-554-pi-code-engine-add-html-embedded-region]]
+  - [[id:FEAT-555-pi-code-graph-add-css-selector-cascade-t]]
+  - [[id:FEAT-556-coding-agent-surface-html-css-code-tool]]
+  - [[id:FUP-057-web-semantics-add-utility-framework-and]]
+
+** Settled Decisions
+1. Start with full product-surface HTML + CSS support, not HEEx-first and not broad-SFC-first. HTML/CSS become first-class semantic languages; HEEx reuses the host/guest substrate next.
+2. Extend the existing engine DSL instead of adding parallel HTML/CSS-specific walkers. The design center is: one affordance vocabulary → many languages.
+3. CSS v1 covers plain CSS selectors, custom properties, cascade/override reasoning, `@media`, `@supports`, and `@keyframes`. Utility frameworks are explicit follow-up work.
+4. Graph semantics should gain first-class style nodes/edges and confidence/provenance instead of overloading everything onto generic reference edges.
+5. Refactors stay conservative by default. Provable class/id/custom-property renames and proof-backed dead-style removal may mutate; uncertain selector/cascade cases must explain and refuse.
+6. The test suite must be impeccable: fixture-driven, cross-layer, regression-focused, and explicit about degradation/ambiguity. Every item includes required workflows and edge cases in its body.
+7. `org wave` was run during planning, but the current tool output did not isolate this session’s subset cleanly; the execution waves below mirror the explicit child-item `DEPENDS` DAG for this plan’s items.
+
+** Recommended Approach
+- Phase 1: define the affordance DSL, capability model, and fixture matrix before any HTML/CSS implementation.
+- Phase 2: make HTML locally semantic with reusable embedded-region contracts for downstream CSS and future HEEx.
+- Phase 3: make CSS locally semantic and graph-aware across HTML consumers, with conservative dead-style and token tracing.
+- Phase 4: surface the new capabilities through the code tool, native bridges, prompts, result typing, and conservative refactor flows.
+- Phase 5: only after core verification, expand outward to HEEx-full semantics, utility frameworks, and broader template hosts.
+
+** Critical Files
+- Engine: `crates/pi-code-engine/Cargo.toml`, `crates/pi-code-engine/build.rs`, `crates/pi-code-engine/src/language/{mod.rs,profile.rs,generated.rs}`, `crates/pi-code-engine/src/{outline.rs,resolve.rs,navigate.rs,line_target.rs}`
+- Graph: `crates/pi-code-graph/src/{model.rs,indexer.rs,query.rs,language.rs}`, `crates/pi-code-graph/src/language/{generic.rs,elixir.rs}`
+- Native bridges: `crates/pi-natives/src/{code_buffer.rs,code_graph.rs}`, `packages/natives/src/{code-buffer/types.ts,code-graph/types.ts}`
+- Agent/tool UX: `packages/coding-agent/src/tools/{code.ts,code-result.ts,code-supported-files.ts}`, `packages/coding-agent/src/prompts/tools/code.md`
+- Focused tests/fixtures: `crates/pi-code-engine/tests/fixtures/sources/web/`, `crates/pi-code-graph/tests/fixtures/web/`, `packages/natives/test/code-buffer.test.ts`, `packages/coding-agent/test/tools/{code.test.ts,code-result.test.ts}`
+
+* Verification
+- Required philosophy: every layer proves both success and refusal/degradation behavior. No optimistic tests. No string-grep stand-ins for semantic facts.
+- Exact verification commands after implementation:
+  - `cargo test -p pi-code-engine`
+  - `cargo test -p pi-code-graph`
+  - `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts`
+  - `bun check:ts`
+  - `bun check:rs`
+- Required fixture/workflow coverage:
+  - HTML structure: landmarks, custom elements, repeated siblings, anonymous wrappers, void/self-closing tags, malformed recovery, HEEx-adjacent host nodes.
+  - CSS structure: simple/compound selectors, combinators, selector lists, escaped identifiers, `@media`, `@supports`, `@keyframes`, custom property definition/use/fallback/cycle.
+  - Cross-file graph: HTML consumers ↔ CSS selectors/tokens, inline style attributes, uncertain dynamic classes, override/cascade confidence.
+  - Code-tool UX: semantic-capable support detection, capability-aware prompts, readable render paths, conservative rename/remove success, explicit refusal proofs for ambiguous mutations.
+- Manual proof expectations:
+  - `code outline` / `code read` on HTML and CSS fixtures produce useful semantic structure.
+  - `code context` / `code impact` on selectors and tokens show actual consumers and confidence notes.
+  - ambiguous dead-style or rename attempts refuse mutation and explain why.
+
+* Execution Manifest
+** Wave 1
+- [[id:FEAT-553-pi-code-engine-define-html-css-affordanc]]
+- Rationale: the DSL, capability model, and fixture matrix define the truth surface for everything downstream.
+
+** Wave 2
+- [[id:FEAT-554-pi-code-engine-add-html-embedded-region]]
+- Rationale: HTML host semantics and embedded-region contracts must exist before CSS/graph linkage can be correct.
+
+** Wave 3
+- [[id:FEAT-555-pi-code-graph-add-css-selector-cascade-t]]
+- Rationale: CSS graph semantics depend on the DSL and HTML host substrate.
+
+** Wave 4
+- [[id:FEAT-556-coding-agent-surface-html-css-code-tool]]
+- Rationale: user-facing tool affordances should lock against the final engine/graph behavior rather than an intermediate contract.
+
+** Wave 5
+- [[id:FUP-057-web-semantics-add-utility-framework-and]]
+- Rationale: broader framework/template ecosystems should consume the proven core substrate instead of reshaping it mid-rollout.

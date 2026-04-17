@@ -1,0 +1,98 @@
+#+TITLE: Plan execution handoff orchestration for org todo and task surfaces
+#+STATE: ITEM
+#+SESSION_ID: 14bcb670654ffcc4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-16T09-34-35-413Z_14bcb670654ffcc4.jsonl]]
+#+CUSTOM_ID: PROJ-044-plan-execution-handoff-orchestration-for
+#+EFFORT: 7h
+#+DEPENDS: PROJ-042-plan-mode-prompt-contract-for-execution PROJ-043-plan-mode-validation-and-tests-for-execu
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Scope
+In scope:
+- Align execution-facing prompt and orchestration surfaces so approved plans are consumed as instruction sources, not merely as tracking artifacts.
+- Update `packages/coding-agent/src/prompts/system/plan-mode-approved.md` plus related `todo_write` / `task` guidance and prompt tests so execution follows the new execution-first contract.
+- Ensure wave manifests, child-item sub-outline IDs, blockers, verification gates, and completion handoff remain consistent with the richer planning contract.
+
+Out of scope:
+- Defining the planning prompt contract itself; covered by sibling prompt-contract item.
+- Adding validator invariants or parser logic in `exit_plan_mode`; covered by sibling validation item.
+- Reworking unrelated runtime task execution features or auto-roster behavior beyond prompt/orchestration guidance required by this initiative.
+
+Rationale: even with a better planning contract and stronger validator, the execution agent can still regress if approved-plan, todo, and task prompts treat the plan as a passive artifact. This item makes the execution side consume plan artifacts as direct instructions while preserving truthful orchestration and verification behavior.
+
+* Existing Patterns
+- Spec anchor: `specs/plan-mode-prompt-guidance-2026.md`.
+- Approved execution prompt: `packages/coding-agent/src/prompts/system/plan-mode-approved.md` — current completion protocol, todo/task orchestration guidance, and plan execution instructions.
+- Todo guidance: `packages/coding-agent/src/prompts/tools/todo-write.md`, `packages/coding-agent/src/tools/todo-write.ts`.
+- Task guidance: `packages/coding-agent/src/prompts/tools/task.md`, `packages/coding-agent/src/prompts/system/eager-todo.md`.
+- Prompt / orchestration tests: `packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts`, `packages/coding-agent/test/prompts/auto-roster-prompts.test.ts`, `packages/coding-agent/test/tools/todo-write-org-hooks.test.ts`, `packages/coding-agent/test/task/*.test.ts` where needed.
+- Existing conventions to preserve: `todo_write` remains source of truth, blockers remain explicit, org lifecycle stays truthful, and wave-based execution is the canonical orchestration shape.
+
+* Tests
+Workflows that must be planned first:
+- Workflow 1: approved-plan prompt tells the execution agent to consume PLAN-level implementation guidance before dispatching wave/todo work.
+- Workflow 2: todo/task guidance mirrors plan execution structure using child item IDs, sub-outline IDs, blockers, and verification gates.
+- Workflow 3: execution guidance preserves rich context while prioritizing actionable first edits / first tasks.
+- Workflow 4: auto-roster and todo guidance remain compatible with the richer plan contract and do not force contradictory workflows.
+- Workflow 5: org lifecycle completion remains truthful and aligned with execution-manifest structure.
+
+Test files / scenarios:
+- `packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts`
+  - assert approved prompt references plan artifact as step-by-step instruction source
+  - assert prompt preserves completion protocol and truthful todo/org handling
+- `packages/coding-agent/test/prompts/auto-roster-prompts.test.ts`
+  - assert todo/auto-roster wording remains compatible with richer execution instructions
+- `packages/coding-agent/test/tools/todo-write-org-hooks.test.ts`
+  - preserve existing org lifecycle invariants while updating guidance references if needed
+- add / extend prompt tests around `packages/coding-agent/src/prompts/tools/task.md` and `packages/coding-agent/src/prompts/system/eager-todo.md`
+  - assert delegated work is tied to implementation steps, not only generic wave items
+
+* Implementation
+** ITEM Define execution handoff contract
+:PROPERTIES:
+:CUSTOM_ID: PROJ-044-plan-execution-handoff-orchestration-for::define-execution-handoff
+:END:
+- Files: `specs/plan-mode-prompt-guidance-2026.md`, `packages/coding-agent/src/prompts/system/plan-mode-approved.md`
+- Define how execution agents must read PLAN `Implementation Strategy` / execution headings together with `Execution Manifest`.
+- Satisfies Workflows 1, 3, and 5.
+
+** ITEM Write orchestration prompt tests first
+:PROPERTIES:
+:CUSTOM_ID: PROJ-044-plan-execution-handoff-orchestration-for::orchestration-tests
+:DEPENDS: PROJ-044-plan-execution-handoff-orchestration-for::define-execution-handoff
+:END:
+- Files: `packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts`, `packages/coding-agent/test/prompts/auto-roster-prompts.test.ts`, adjacent task/todo prompt tests.
+- Add initially-failing assertions for instruction-first execution guidance and consistent blocker / org-item wiring.
+- Satisfies Workflows 1, 2, 3, and 4.
+
+** ITEM Rewrite approved plan prompt
+:PROPERTIES:
+:CUSTOM_ID: PROJ-044-plan-execution-handoff-orchestration-for::rewrite-approved-prompt
+:DEPENDS: PROJ-044-plan-execution-handoff-orchestration-for::orchestration-tests
+:END:
+- File: `packages/coding-agent/src/prompts/system/plan-mode-approved.md`
+- Make the plan artifact an explicit instruction source while keeping completion protocol, verification evidence, and truthful closeout intact.
+- Satisfies Workflows 1, 3, and 5.
+
+** ITEM Align todo and task guidance
+:PROPERTIES:
+:CUSTOM_ID: PROJ-044-plan-execution-handoff-orchestration-for::align-todo-task-guidance
+:DEPENDS: PROJ-044-plan-execution-handoff-orchestration-for::orchestration-tests
+:END:
+- Files: `packages/coding-agent/src/prompts/tools/todo-write.md`, `packages/coding-agent/src/prompts/tools/task.md`, `packages/coding-agent/src/prompts/system/eager-todo.md`
+- Ensure delegated work and roster setup reference exact implementation steps / sub-outline IDs where needed, not only abstract item links.
+- Satisfies Workflows 2 and 4.
+
+* Edge Cases
+- Execution guidance must not duplicate lifecycle bookkeeping already owned by `todo_write` / org hooks.
+- Plans with wave manifests but no PLAN-level implementation instructions should be treated as lower quality handoffs, but approved-mode prompts must remain robust while both old and new plans coexist during migration.
+- Auto-roster guidance must not conflict with manual todo seeding when a plan requires explicit gates or org links.
+- Completion protocol must still emphasize truthful blocker reporting rather than forcing artificial closure.
+
+* Acceptance Criteria
+- Approved-plan prompt treats the plan artifact as a direct execution guide, not only as a record to mirror.
+- Todo/task guidance maps execution work to wave + child-item + sub-outline structure clearly enough for fresh execution sessions.
+- Prompt tests prove that execution guidance remains balanced: rationale/context preserved, actionable steps prioritized.
+- Existing truthful lifecycle / completion protocol behavior remains intact.
+- Orchestration wording does not contradict auto-roster, blocker, or org-hook semantics.

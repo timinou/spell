@@ -1,0 +1,112 @@
+#+TITLE: coding-agent: low-spill artifact policy with precision-tool exemptions
+#+STATE: DOING
+#+SESSION_ID: 14be1f6c92f4c15c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T11-51-45-483Z_14be1f6c92f4c15c.jsonl]]
+#+CUSTOM_ID: PROJ-046-coding-agent-low-spill-artifact-policy-w
+#+PRIORITY: #A
+#+LAYER: coding-agent
+#+EFFORT: 10h
+
+* Scope
+In scope:
+- Replace the current effective spill defaults for non-precision tool outputs with an aggressive artifact-first policy: spill when output exceeds 2.5 KB or 50 lines; keep only 1 KB / 50 lines inline on success.
+- Preserve a slightly larger failure budget for non-zero exits and error paths: keep 5 KB / 120 lines inline after spill.
+- Apply the low-spill policy to shell/process-style and broad text-returning tools, while exempting precision inspection/edit/query tools whose main value is exact inline content review.
+- Unify the shared spill policy used by `wrapToolWithMetaNotice()` and streaming executors so `bash`, `python`, `ssh`, and notebook / kernel-style streaming paths stop hard-coding the legacy 50 KB behavior.
+- Keep artifact-based follow-up workflows first-class: truncated results must continue to emit actionable `artifact://` references that agents can feed back into `bash`, `read`, or `grep`.
+
+Out of scope:
+- Changing artifact URI routing or internal URL expansion semantics.
+- Removing existing tool-specific truncation semantics for precision tools such as `read`, `grep`, and `org`.
+- Adding sticky session-level escape hatches for lenient shell output; that is covered by the bash-specific child item.
+
+Rationale: `.local/token-usage/token-usage-review.data.js` shows that bash alone accounts for ~73.9M shared tokens over the sampled sessions, and the target leak classes (`tests`, `git inspection/staging`, `remote logs/status`) account for ~40.8M of those tokens plus ~496k estimated input-leakage tokens. The present 50 KB default is too high to catch most of the noisy-but-not-huge outputs that poison the next turn.
+
+* Existing Patterns
+- Review data source: `.local/token-usage/token-usage-review.data.js`.
+- Current global spill wrapper: `packages/coding-agent/src/tools/output-meta.ts` (`getSpillConfig()`, `spillLargeResultToArtifact()`, `wrapToolWithMetaNotice()`).
+- Current streaming sink + hard-coded defaults: `packages/coding-agent/src/session/streaming-output.ts` (`DEFAULT_MAX_BYTES`, `OutputSink`, `TailBuffer`).
+- Current streaming tool integrations: `packages/coding-agent/src/tools/bash.ts`, `packages/coding-agent/src/tools/python.ts`, `packages/coding-agent/src/tools/ssh.ts`, `packages/coding-agent/src/ipy/executor.ts`.
+- Existing settings / UI definitions: `packages/coding-agent/src/config/settings-schema.ts`, `packages/coding-agent/src/modes/components/settings-defs.ts`.
+- Existing artifact-reference renderer pattern: `formatFullOutputReference()` and `formatTruncationMetaNotice()` in `packages/coding-agent/src/tools/output-meta.ts`.
+- Existing context leak path to preserve / change deliberately: `packages/coding-agent/src/session/messages.ts` passes tool results into LLM context immediately; pruning in `packages/coding-agent/src/session/compaction/pruning.ts` happens later and is not sufficient for the first leak.
+
+Precision-tool exemption set to preserve current inspection UX:
+- `read`, `grep`, `org`, `find`, `code`, `lsp`, `ast_grep`, `ast_edit`.
+- If a tool already has its own precise pagination / structured drill-in semantics, prefer exemption over forcing early artifact spill.
+
+* Tests
+Workflows that must be planned first:
+- Workflow 1: a non-precision successful result larger than 2.5 KB or 50 lines spills immediately and keeps only the tiny tail inline with an artifact reference.
+- Workflow 2: a non-precision failing result uses the same spill trigger but preserves the larger failure inline budget.
+- Workflow 3: precision tools retain their existing inline precision / pagination behavior and are not unexpectedly forced into artifact-first mode by the new shared defaults.
+- Workflow 4: streaming executors (`bash`, `python`, `ssh`, notebook-style outputs) use the same shared spill trigger and no longer leak up to the legacy 50 KB before artifactization.
+- Workflow 5: artifact-backed outputs continue to produce truthful truncation metadata and actionable follow-up references.
+
+Test files / scenarios:
+- `packages/coding-agent/test/streaming-output.test.ts`
+  - add line-count spill trigger coverage
+  - add mixed byte/line threshold boundary coverage
+  - add success vs failure tail-budget coverage
+- `packages/coding-agent/test/tools/output-meta-spill-policy.test.ts` (new or adjacent shared spill-policy test file)
+  - assert hybrid global wrapper behavior for non-precision tools
+  - assert exempt precision tools bypass low-spill wrapper behavior
+  - assert artifact references and truncation metadata remain truthful
+- extend focused tool tests where the shared policy is threaded into executors
+  - `packages/coding-agent/test/bash-executor.test.ts`
+  - `packages/coding-agent/test/python-executor.test.ts`
+  - adjacent ssh / ipy tests if executor-specific behavior needs direct proof
+
+* Implementation
+** ITEM Define shared spill policy contract
+:PROPERTIES:
+:CUSTOM_ID: PROJ-046-coding-agent-low-spill-artifact-policy-w::define-shared-spill-policy
+:END:
+- Files: `packages/coding-agent/src/config/settings-schema.ts`, `packages/coding-agent/src/modes/components/settings-defs.ts`, `packages/coding-agent/src/tools/output-meta.ts`.
+- Define the canonical policy knobs and defaults: 2.5 KB success trigger, 50-line trigger, 1 KB / 50-line success tail, 5 KB / 120-line failure tail, plus the exempt precision-tool set.
+- Prefer a single shared resolver/helper over duplicating threshold logic across wrappers and executors.
+- Satisfies Workflows 1, 2, 3, and 4.
+
+** ITEM Write spill-policy tests first
+:PROPERTIES:
+:CUSTOM_ID: PROJ-046-coding-agent-low-spill-artifact-policy-w::spill-policy-tests
+:DEPENDS: PROJ-046-coding-agent-low-spill-artifact-policy-w::define-shared-spill-policy
+:END:
+- Files: `packages/coding-agent/test/streaming-output.test.ts`, `packages/coding-agent/test/tools/output-meta-spill-policy.test.ts`, executor-specific tests as needed.
+- Add initially-failing scenarios for byte-or-line spill triggers, success vs failure budgets, and exemption behavior.
+- Satisfies Workflows 1, 2, 3, 4, and 5.
+
+** ITEM Implement wrapper-level hybrid spill policy
+:PROPERTIES:
+:CUSTOM_ID: PROJ-046-coding-agent-low-spill-artifact-policy-w::implement-wrapper-policy
+:DEPENDS: PROJ-046-coding-agent-low-spill-artifact-policy-w::spill-policy-tests
+:END:
+- Files: `packages/coding-agent/src/tools/output-meta.ts` and any extracted helper module chosen by implementation.
+- Apply the low-spill policy to non-precision tools, preserve exemptions, and ensure truthful artifact/truncation metadata.
+- Avoid double-spilling or losing existing artifact-backed outputs.
+- Satisfies Workflows 1, 2, 3, and 5.
+
+** ITEM Thread shared spill policy through streaming executors
+:PROPERTIES:
+:CUSTOM_ID: PROJ-046-coding-agent-low-spill-artifact-policy-w::thread-streaming-policy
+:DEPENDS: PROJ-046-coding-agent-low-spill-artifact-policy-w::spill-policy-tests
+:END:
+- Files: `packages/coding-agent/src/session/streaming-output.ts`, `packages/coding-agent/src/tools/bash.ts`, `packages/coding-agent/src/tools/python.ts`, `packages/coding-agent/src/tools/ssh.ts`, `packages/coding-agent/src/ipy/executor.ts`.
+- Remove hard-coded reliance on `DEFAULT_MAX_BYTES = 50 KB` for spill behavior; executors must use the shared low-spill trigger and support the larger failure tail without lying about what was shown.
+- Ensure final inline output can differ for success vs failure without breaking streaming progress updates.
+- Satisfies Workflows 1, 2, and 4.
+
+* Edge Cases
+- Output that exceeds the line threshold but not the byte threshold must still spill.
+- Output that barely crosses a threshold must not lose artifact references or report the wrong shown line range.
+- Existing artifact-backed tools must not get double-truncated into incoherent notices.
+- When artifact allocation fails, the tool must degrade truthfully instead of pretending the full output is still cheaply inline.
+- Exempt precision tools must preserve existing paging / structured rendering contracts.
+- Streaming tools must not keep a tiny success buffer in memory and then falsely claim a larger failure tail they can no longer reconstruct.
+
+* Acceptance Criteria
+- Non-precision tool outputs larger than 2.5 KB or 50 lines spill by default and keep only the agreed tiny inline residue on success.
+- Non-zero-exit / error outputs keep the agreed larger inline residue without reverting the whole system to the old 50 KB default.
+- Precision inspection/edit/query tools keep their current inline-first UX.
+- Shared spill behavior is implemented once and reused by wrapper-level and streaming-output paths.
+- Tests prove truthful truncation metadata, artifact references, exemption behavior, and byte-or-line trigger behavior.

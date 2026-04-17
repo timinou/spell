@@ -1,0 +1,16 @@
+#+TITLE: Session 14ba79466ae8c385 Todos
+#+DATE: 2026-04-14
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Verify K2.6 integration
+:PROPERTIES:
+:TASK_ID: verify-kimi-k26
+:STATUS: completed
+:VERIFY_CMD: bun check:ts
+:END:
+
+Verification: `bun check:ts`; `git diff -- packages/ai/src/models.json packages/ai/src/provider-models/descriptors.ts packages/ai/src/provider-models/openai-compat.ts`; grep for `k2.6-code-preview` in packages/ai packages/coding-agent.
+
+`bun check:ts` passed after fixing descriptor formatting. Final grep confirms k2.6-code-preview is present in bundled models and selected as Kimi Code default.

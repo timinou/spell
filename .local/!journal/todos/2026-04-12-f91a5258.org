@@ -1,0 +1,16 @@
+#+TITLE: Session 14b845ba5c0f2da4 Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Investigation
+
+** DONE Trace org get failure
+:PROPERTIES:
+:TASK_ID: investigate-org-get
+:STATUS: completed
+:VERIFY_CMD: bunx biome check packages/org/src/tool.ts packages/org/src/native-ops.ts packages/org/src/native-errors.ts packages/org/test/tool-commands.test.ts
+:END:
+
+Changed files: packages/org/src/native-errors.ts, packages/org/src/tool.ts, packages/org/src/native-ops.ts, packages/org/test/tool-commands.test.ts. Verification: `bun -e '... tool.execute({ command: "get", id: "BUG-002-tribunal-judge-warnings" }) ...'` now returns {error:true,code:"NOT_FOUND",message:"Item not found: BUG-002-tribunal-judge-warnings"} instead of throwing. Temp-dir repro with index.org + CUSTOM_ID PROJ-777-custom-file now resolves successfully via fallback scan. `bunx biome check packages/org/src/tool.ts packages/org/src/native-ops.ts packages/org/src/native-errors.ts packages/org/test/tool-commands.test.ts` passes. `bun check:ts` still fails on pre-existing unrelated issues in packages/ai (unused imports/vars, import order).
+
+Root cause: packages/org/src/tool.ts cmdGet fast path derives <ID>.org and calls executeOrg(parse) on that path. When the file is absent or named differently, the native binding throws Error{code:"GenericFailure", message:"I/O error: No such file or directory (os error 2)"} instead of returning an ENOENT-style error/result. readOrgFile only handled result.error + ENOENT from Bun.file(), so the throw escaped and org get surfaced the raw I/O error. Fixed by normalizing native missing-file errors in shared helper packages/org/src/native-errors.ts and using it in both tool.ts and native-ops.ts readOrgFile paths. Added regression coverage for missing derived path fallback and NOT_FOUND behavior.

@@ -1,0 +1,15 @@
+#+TITLE: Session 14ba431c79b9ac0e Todos
+#+DATE: 2026-04-14
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Planning
+
+** DOING Remove BUG-251 mentions
+:PROPERTIES:
+:TASK_ID: remove-bug251-mentions
+:STATUS: in_progress
+:END:
+
+Update PLAN-226 and FEAT-546 to remove BUG-251 references, links, and dependency properties; keep plan self-consistent, then re-run exit_plan_mode.
+
+Cleaning current plan + child item before re-exiting plan mode.

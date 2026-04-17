@@ -1,0 +1,37 @@
+#+TITLE: Audit: implementation
+#+STATE: DONE
+#+CUSTOM_ID: AUD-069-audit-implementation
+#+EFFORT: 1h
+#+LAYER: coding-agent
+#+PRIORITY: #B
+
+* Source
+Manual audit
+
+* Findings
+Merged.
+
+Delta confirmed
+- `packages/coding-agent/src/tools/code.ts`
+  - failed native `edit` → `close` invalidation restored
+  - original edit error still surfaced
+  - `close` failure only logs
+
+State now
+- runtime hardening ✓
+- native hardening ✓
+- failed-edit invalidation ✓
+- audit written ✓
+  - `!tasks/audits/AUD-068-audit-implementation.org`
+
+Verified
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts`
+  - `59 pass, 0 fail`
+- `cargo test -p pi-code-engine test_clone_`
+  - pass
+- `cargo test -p pi-code-engine test_dirty_`
+  - pass
+
+∴ all background task results are now fully accounted for in the current workspace state.
+
+NOTE [2026-04-15]: Closed: body was merge confirmation, no actionable recommendations. Open items from AUD-067 will be addressed by PLAN.

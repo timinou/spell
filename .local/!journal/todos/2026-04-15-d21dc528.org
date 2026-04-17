@@ -1,0 +1,45 @@
+#+TITLE: Session 14bbb52f0ddfe8aa Todos
+#+DATE: 2026-04-15
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Execution
+
+** DONE Harden ast-edit auto-apply
+:PROPERTIES:
+:TASK_ID: harden-ast-edit
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/tools/ast-edit.test.ts
+:ORG_ITEM_ID: BUG-264-fix-auto-apply-dropping-buffer-invalidat
+:END:
+
+Implemented BUG-264 in packages/coding-agent/src/tools/ast-edit.ts and packages/coding-agent/test/tools/ast-edit.test.ts. Added bufferInvalidationError details propagation, truthful auto-apply degradation surfacing, renderer warning output, and regression tests.
+
+Implemented BUG-264 via delegated task. ast-edit now preserves bufferInvalidationError through auto-apply text/details and renderer; regression tests added. Verified by delegated run: bun test packages/coding-agent/test/tools/ast-edit.test.ts.
+
+** DONE Verify tests and audit adjacencies
+:PROPERTIES:
+:TASK_ID: verify-and-audit
+:STATUS: completed
+:VERIFY_CMD: bun test packages/coding-agent/test/tools/ast-edit.test.ts && bun test packages/coding-agent/test/tools/resolve.test.ts
+:DEPENDS: harden-ast-edit
+:ORG_ITEM_ID: PLAN-233-preview-pipeline-degradation-hardening
+:END:
+
+Ran focused verification for ast-edit and resolve. Audited adjacent preview/persist degradation paths; no additional truthfulness gaps were found. Captured artifact logs for tests and audit.
+
+Main-session verification passed: ast-edit tests 9/9, resolve tests 14/14. Saved outputs under !tasks/plans/plan-artifacts/PLAN-233-preview-pipeline-degradation-hardening/. Reviewer audit found no additional high-confidence preview/persist truthfulness gaps.
+
+** DONE Close org items and commit
+:PROPERTIES:
+:TASK_ID: close-plan-and-commit
+:STATUS: completed
+:GATE_COMMIT: true
+:VERIFY_CMD: git status --short
+:DEPENDS: verify-and-audit
+:ORG_ITEM_ID: PLAN-233-preview-pipeline-degradation-hardening
+:ORG_ITEM_CLOSING_ID: PLAN-233-preview-pipeline-degradation-hardening
+:END:
+
+Updated AUD-067, BUG-264, FUP-055, and PLAN-233 with truthful completion evidence; moved required org items to DONE; staged only plan-related code/org/artifact files; committed with conventional message referencing preview degradation hardening.
+
+Closed BUG-264, AUD-067, FUP-055, and PLAN-233 truthfully. Saved verification artifacts under !tasks/plans/plan-artifacts/PLAN-233-preview-pipeline-degradation-hardening/. Committed staged plan files as 8ceccefb8 fix(coding-agent): harden ast-edit preview degradation.

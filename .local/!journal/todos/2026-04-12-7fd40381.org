@@ -1,0 +1,14 @@
+#+TITLE: Session 14b84c889d0eb40e Todos
+#+DATE: 2026-04-12
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Verification
+
+** DONE Run cargo test + clippy
+:PROPERTIES:
+:TASK_ID: task-8
+:STATUS: completed
+:GATE_CMD: cd crates/pi-code-engine && cargo test && cargo clippy -- -D warnings
+:END:
+
+All existing tests must pass. New elixir tests must pass. No clippy warnings.

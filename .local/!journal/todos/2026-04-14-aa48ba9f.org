@@ -1,0 +1,11 @@
+#+TITLE: Session 14ba406cf0d96a78 Todos
+#+DATE: 2026-04-14
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Repo
+
+** DONE Check validate-plan standalone behavior
+:PROPERTIES:
+:TASK_ID: task-4
+:STATUS: completed
+:END:

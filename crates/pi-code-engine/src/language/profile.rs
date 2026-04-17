@@ -8,14 +8,16 @@ use crate::language::LanguageId;
 /// structural edits.
 #[derive(Debug, Clone)]
 pub struct LanguageProfile {
-	pub id:           LanguageId,
-	pub extensions:   Vec<String>,
-	pub declarations: Vec<DeclarationPattern>,
-	pub class_like:   Vec<ClassLikePattern>,
-	pub imports:      Vec<ImportPattern>,
-	pub exports:      Vec<ExportPattern>,
-	pub references:   Vec<ReferencePattern>,
-	pub separators:   Vec<String>,
+	pub id:               LanguageId,
+	pub extensions:       Vec<String>,
+	pub capabilities:     LanguageCapabilities,
+	pub declarations:     Vec<DeclarationPattern>,
+	pub class_like:       Vec<ClassLikePattern>,
+	pub imports:          Vec<ImportPattern>,
+	pub exports:          Vec<ExportPattern>,
+	pub references:       Vec<ReferencePattern>,
+	pub separators:       Vec<String>,
+	pub embedded_regions: Vec<EmbeddedRegionPattern>,
 
 	/// Language-specific custom operations registered as named procedures.
 	pub procedures: HashMap<String, crate::procedure::Procedure>,
@@ -31,6 +33,42 @@ pub struct LanguageProfile {
 
 	/// tree-sitter Language for creating parsers.
 	pub ts_language: tree_sitter::Language,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct LanguageCapabilities {
+	#[serde(default)]
+	pub outline:            bool,
+	#[serde(default)]
+	pub read:               bool,
+	#[serde(default)]
+	pub navigate:           bool,
+	#[serde(default)]
+	pub resolve:            bool,
+	#[serde(default)]
+	pub edit:               bool,
+	#[serde(default)]
+	pub graph:              bool,
+	#[serde(default)]
+	pub embedded_languages: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttributeEnrichment {
+	#[serde(default)]
+	pub within_type:      Option<String>,
+	pub attr_name:        String,
+	pub prefix:           String,
+	#[serde(default)]
+	pub take_first_token: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddedRegionPattern {
+	pub host_node_type:     String,
+	pub content_child_type: String,
+	pub guest_language:     String,
 }
 
 // ---------------------------------------------------------------------------
@@ -51,6 +89,20 @@ pub enum NameExtractor {
 	ChildText { child_type: String },
 	/// Fixed literal name regardless of AST content.
 	Literal { name: String },
+	/// Name from an attribute value within the current node or a named
+	/// descendant.
+	AttributeValue {
+		#[serde(default)]
+		within_type:      Option<String>,
+		attr_name:        String,
+		#[serde(default)]
+		prefix:           Option<String>,
+		#[serde(default)]
+		take_first_token: bool,
+	},
+	/// Compose a base extractor with attribute-derived suffixes such as `#id` or
+	/// `.class`.
+	Attributed { base: Box<NameExtractor>, enrichments: Vec<AttributeEnrichment> },
 }
 
 /// How to extract a declaration's body range from the AST.
@@ -234,11 +286,66 @@ impl From<ClassLikePatternSerde> for ClassLikePattern {
 
 /// How to find import declarations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(from = "ImportPatternSerde")]
 pub struct ImportPattern {
 	pub node_type:       String,
-	pub specifier_field: String,
+	#[serde(default)]
+	pub specifier_field: Option<String>,
+	#[serde(default)]
+	pub specifier:       Option<NameExtractor>,
+	#[serde(default)]
+	pub filter:          Option<NameExtractor>,
+	#[serde(default)]
+	pub filter_names:    Option<Vec<String>>,
 	#[serde(default)]
 	pub is_type_only:    bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+enum ImportPatternSerde {
+	Legacy {
+		node_type:       String,
+		specifier_field: String,
+		#[serde(default)]
+		is_type_only:    bool,
+	},
+	Modern {
+		node_type:       String,
+		#[serde(default)]
+		specifier_field: Option<String>,
+		#[serde(default)]
+		specifier:       Option<NameExtractor>,
+		#[serde(default)]
+		filter:          Option<NameExtractor>,
+		#[serde(default)]
+		filter_names:    Option<Vec<String>>,
+		#[serde(default)]
+		is_type_only:    bool,
+	},
+}
+
+impl From<ImportPatternSerde> for ImportPattern {
+	fn from(value: ImportPatternSerde) -> Self {
+		match value {
+			ImportPatternSerde::Legacy { node_type, specifier_field, is_type_only } => Self {
+				node_type,
+				specifier_field: Some(specifier_field),
+				specifier: None,
+				filter: None,
+				filter_names: None,
+				is_type_only,
+			},
+			ImportPatternSerde::Modern {
+				node_type,
+				specifier_field,
+				specifier,
+				filter,
+				filter_names,
+				is_type_only,
+			} => Self { node_type, specifier_field, specifier, filter, filter_names, is_type_only },
+		}
+	}
 }
 
 /// How to identify exported symbols.
@@ -273,23 +380,27 @@ pub struct ProductionRule {
 	pub fields:           HashMap<String, Vec<String>>,
 }
 
-/// YAML-loadable profile (subset — no production rules or `ts_language`).
+/// JSON-loadable profile (subset — no production rules or `ts_language`).
 #[derive(Debug, Deserialize)]
 pub struct ProfileYaml {
-	pub language:     String,
-	pub extensions:   Vec<String>,
+	pub language:         String,
+	pub extensions:       Vec<String>,
 	#[serde(default)]
-	pub declarations: Vec<DeclarationPattern>,
+	pub capabilities:     LanguageCapabilities,
 	#[serde(default)]
-	pub class_like:   Vec<ClassLikePattern>,
+	pub declarations:     Vec<DeclarationPattern>,
 	#[serde(default)]
-	pub imports:      Vec<ImportPattern>,
+	pub class_like:       Vec<ClassLikePattern>,
 	#[serde(default)]
-	pub exports:      Vec<ExportPattern>,
+	pub imports:          Vec<ImportPattern>,
 	#[serde(default)]
-	pub references:   Vec<ReferencePattern>,
+	pub exports:          Vec<ExportPattern>,
 	#[serde(default)]
-	pub separators:   Vec<String>,
+	pub references:       Vec<ReferencePattern>,
+	#[serde(default)]
+	pub separators:       Vec<String>,
+	#[serde(default)]
+	pub embedded_regions: Vec<EmbeddedRegionPattern>,
 }
 
 /// Load a profile from JSON string (`serde_yaml` is deprecated; profiles use

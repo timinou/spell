@@ -1,0 +1,37 @@
+#+TITLE: Session 14ba6e5252564ca7 Todos
+#+DATE: 2026-04-14
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Plan
+
+** DONE Create bug child item
+:PROPERTIES:
+:TASK_ID: create-bug-item
+:STATUS: completed
+:END:
+
+Create a self-contained BUG org item for code-tool create normalization in packages/coding-agent/src/tools/code.ts and packages/coding-agent/test/tools/code.test.ts. Capture settled design, test scenarios, file-level sub-outline IDs, and acceptance criteria.
+
+Created BUG-260 with full body standard, session evidence, TS+native root cause, sub-outline dependencies, and verification commands.
+
+** DONE Create orchestration plan item
+:PROPERTIES:
+:TASK_ID: create-plan-item
+:STATUS: completed
+:DEPENDS: create-bug-item
+:END:
+
+Run org wave on child-item dependencies, then create a self-contained PLAN item in plans with Context, Verification, and Execution Manifest headings using [[id:...]] links.
+
+Created PLAN-231 with Context, Verification, Execution Manifest, and child [[id:...]] links.
+
+** DONE Sweep consistency and exit
+:PROPERTIES:
+:TASK_ID: consistency-and-exit
+:STATUS: completed
+:DEPENDS: create-plan-item
+:END:
+
+Verify item consistency, dependencies, effort metadata, and wave manifest; then call exit_plan_mode with final title and PLAN item id.
+
+Consistency sweep complete: BUG-260 has EFFORT/PRIORITY/LAYER, sub-outline CUSTOM_ID/DEPENDS chain is linear and acyclic, plan/child links are bidirectional, PLAN-231 mirrors a single-wave manifest.

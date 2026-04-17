@@ -1,0 +1,98 @@
+#+TITLE: pi-code-engine: add HTML embedded-region local semantics reusable by HEEx
+#+STATE: ITEM
+#+SESSION_ID: 14be1e420c74b0e5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T11-46-39-793Z_14be1e420c74b0e5.jsonl]]
+#+CUSTOM_ID: FEAT-554-pi-code-engine-add-html-embedded-region
+#+EFFORT: 24h
+#+LAYER: web-semantics
+#+PRIORITY: #A
+#+DEPENDS: FEAT-553-pi-code-engine-define-html-css-affordanc
+
+* Scope
+- In scope: make HTML a first-class `pi-code-engine` language with outline/read/resolve/navigate/edit-target semantics that feel as native as Markdown sections or Elixir modules, while keeping the substrate reusable by HEEx hosts.
+- In scope: define how HTML symbols are named and resolved: semantic elements, component-like custom elements, stable anchors (`id`, named slots/landmarks where appropriate), and embedded `<style>` regions.
+- In scope: expose host/guest region metadata so HEEx can later reuse HTML structural semantics while supplying its own expression/template rules.
+- Out of scope: JavaScript semantics inside `<script>`, browser execution semantics, or framework-specific virtual-DOM abstractions.
+
+* Existing Patterns
+- `crates/pi-code-engine/src/language/mod.rs`
+  - built-in profile registration pattern; HTML should join built-ins instead of piggybacking on text fallback.
+- `crates/pi-code-engine/src/outline.rs`
+  - section/class-like recursion in Markdown/Org is the closest existing precedent for nested DOM structure.
+- `crates/pi-code-engine/src/resolve.rs`
+  - dotted member resolution and ambiguity errors already exist; HTML naming/disambiguation should reuse this contract.
+- `crates/pi-code-engine/src/navigate.rs`
+  - parent/children/siblings/defun/reference navigation needs meaningful markup targets rather than raw nodes.
+- `crates/pi-code-engine/src/line_target.rs`
+  - line-based edits must respect owned node ranges; HTML closing tags/shared boundaries need explicit handling.
+- `crates/pi-code-graph/src/language/elixir.rs`
+  - current HEEx graph extractor is minimal; this item replaces one-off structural assumptions with a reusable HTML host substrate.
+
+* Tests
+- Workflow 1: `code outline` on `.html` returns a meaningful DOM/landmark/component tree instead of a flat node dump.
+- Workflow 2: `code read` resolution 1/2 summarizes document structure, repeated sibling disambiguators, and embedded `<style>` regions without losing host nesting.
+- Workflow 3: `code navigate` with `parent`, `children`, `siblings`, and `defun-at` targets the nearest semantic element/container rather than trivia or closing tags.
+- Workflow 4: `code resolve` supports stable dotted symbols for named anchors and component-like nodes, with explicit ambiguity errors when repeated unnamed siblings cannot be safely addressed.
+- Workflow 5: edit-target and replacement tests prove element ranges own both open/close tags, void/self-closing tags remain single-node targets, and shared boundary lines are never split incorrectly.
+- Workflow 6: embedded-region tests expose `<style>` bodies as guest regions with correct byte/line offsets for downstream CSS analysis.
+- Workflow 7: HEEx-prep fixtures prove the host HTML substrate can survive templating delimiters/comments/holes without baking Phoenix-only naming rules into the core profile.
+- Exact test files to extend/add:
+  - `crates/pi-code-engine/src/language/mod.rs`
+  - `crates/pi-code-engine/src/outline.rs`
+  - `crates/pi-code-engine/src/resolve.rs`
+  - `crates/pi-code-engine/src/navigate.rs`
+  - `crates/pi-code-engine/src/line_target.rs`
+  - `crates/pi-code-engine/src/edit/mod.rs`
+  - HTML/HEEx-oriented fixtures under `crates/pi-code-engine/tests/fixtures/sources/web/`
+- Required scenarios:
+  - document root, `head`/`body`, nested sections/landmarks, custom elements, repeated list items, anonymous wrapper `div`s, void elements, multiline attributes, boolean/data/ARIA attributes, duplicated class tokens, inline style attrs, embedded style blocks, malformed closing tags, comments/doctypes, and host nodes adjacent to HEEx interpolations.
+
+* Implementation
+** Add HTML grammar and built-in profile registration
+:PROPERTIES:
+:CUSTOM_ID: FEAT-554-pi-code-engine-add-html-embedded-region::register-html
+:DEPENDS: FEAT-553-pi-code-engine-define-html-css-affordanc::publish-contract
+:END:
+- Files: `crates/pi-code-engine/Cargo.toml`, `crates/pi-code-engine/build.rs`, `crates/pi-code-engine/src/language/generated.rs`, `crates/pi-code-engine/src/language/mod.rs`
+- Add tree-sitter HTML support through the same generated grammar pipeline and register HTML as a semantic-capable built-in language.
+- Satisfies Tests Workflow 1, 2, and 6.
+
+** Write failing HTML local-semantics tests first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-554-pi-code-engine-add-html-embedded-region::write-tests
+:DEPENDS: FEAT-554-pi-code-engine-add-html-embedded-region::register-html
+:END:
+- Files: test modules listed above plus new fixtures.
+- Encode symbol naming, disambiguation, navigation, edit-target ownership, and malformed-recovery behavior before implementing the walkers/profile.
+- Satisfies Tests Workflow 1–7.
+
+** Implement HTML symbol extraction, naming, and navigation semantics
+:PROPERTIES:
+:CUSTOM_ID: FEAT-554-pi-code-engine-add-html-embedded-region::html-semantics
+:DEPENDS: FEAT-554-pi-code-engine-add-html-embedded-region::write-tests
+:END:
+- Files: `crates/pi-code-engine/src/language/profile.rs`, `src/outline.rs`, `src/resolve.rs`, `src/navigate.rs`, `src/line_target.rs`
+- Define how HTML declarations/class-like containers map to semantic DOM units, including deterministic names for anchors/component-like nodes and truthful ambiguity for indistinguishable wrappers.
+- Satisfies Tests Workflow 1–5.
+
+** Expose embedded guest-region contracts for downstream CSS and future HEEx
+:PROPERTIES:
+:CUSTOM_ID: FEAT-554-pi-code-engine-add-html-embedded-region::embedded-regions
+:DEPENDS: FEAT-554-pi-code-engine-add-html-embedded-region::html-semantics
+:END:
+- Files: `crates/pi-code-engine/src/language/profile.rs`, `src/language/mod.rs`, `src/outline.rs`, fixture annotations if used.
+- Publish embedded `<style>` region metadata plus host-node boundary rules that a future HEEx profile can reuse with templating-aware parsing.
+- Satisfies Tests Workflow 6 and 7.
+
+* Edge Cases
+- Repeated anonymous siblings must either receive deterministic ordinal disambiguators or remain intentionally unresolvable; silent best-effort resolution is forbidden.
+- Void elements and self-closing elements need different owned-range semantics from paired tags.
+- Inline `style` attributes are not equivalent to `<style>` blocks; represent them distinctly so later CSS graph logic can reason about confidence.
+- Malformed HTML recovery must degrade gracefully and preserve truthful navigation/edit warnings.
+- Templating delimiters inside attribute values or text nodes must not corrupt host byte ranges for surrounding HTML nodes.
+
+* Acceptance Criteria
+- `.html` files become semantic-capable in `pi-code-engine` with meaningful outline/read/resolve/navigate/edit-target behavior.
+- HTML symbol naming is deterministic, conservative, and documented well enough for HEEx reuse.
+- Embedded `<style>` regions expose stable host/guest boundaries for downstream CSS analysis.
+- The HTML fixture suite covers all workflows and required scenarios above, including malformed and templated inputs.

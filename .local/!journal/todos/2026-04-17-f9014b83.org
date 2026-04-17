@@ -1,0 +1,16 @@
+#+TITLE: Session 14be0609efc53907 Todos
+#+DATE: 2026-04-17
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Commit
+
+** DONE Commit Opus 4.7 update
+:PROPERTIES:
+:TASK_ID: commit-opus-47
+:STATUS: completed
+:VERIFY_CMD: git status --short
+:END:
+
+Inspect staged/untracked changes, review affected files, then create a git commit for the Claude Opus 4.7 model list update.
+
+Committed as 7f74a1872 after staging .secrets.baseline, which the pre-commit hook refreshed for packages/ai/src/models.json.

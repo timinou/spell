@@ -9,14 +9,17 @@ import { loadCapability } from "../discovery";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import sshDescriptionBase from "../prompts/tools/ssh.md" with { type: "text" };
-import { DEFAULT_MAX_BYTES, TailBuffer } from "../session/streaming-output";
+import { getRetainedSpillBudget, resolveToolSpillPolicy } from "../session/spill-policy";
+import { TailBuffer } from "../session/streaming-output";
 import type { SSHHostInfo } from "../ssh/connection-manager";
 import { ensureHostInfo, getHostInfoForHost } from "../ssh/connection-manager";
 import { executeSSH } from "../ssh/ssh-executor";
 import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import type { ToolSession } from ".";
-import { formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
+
+import { formatOutputNotice, formatStyledTruncationWarning, outputMeta, type OutputMeta } from "./output-meta";
+
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 import { clampTimeout } from "./tool-timeouts";
@@ -158,8 +161,10 @@ export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 		// Clamp to reasonable range: 1s - 3600s (1 hour)
 		const timeoutSec = clampTimeout("ssh", rawTimeout);
 		const timeoutMs = timeoutSec * 1000;
+		const spillPolicy = resolveToolSpillPolicy({ settings: this.session.settings, toolName: this.name });
+		const retainedBudget = getRetainedSpillBudget(spillPolicy);
 
-		const tailBuffer = new TailBuffer(DEFAULT_MAX_BYTES);
+		const tailBuffer = new TailBuffer(retainedBudget.maxBytes);
 		const { path: artifactPath, uri: artifactUri } = (await this.session.allocateOutputArtifact?.("ssh")) ?? {};
 
 		const result = await executeSSH(hostConfig, remoteCommand, {
@@ -168,6 +173,7 @@ export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 			compatEnabled: hostInfo.compatEnabled,
 			artifactPath,
 			artifactUri,
+			spillPolicy,
 			onChunk: chunk => {
 				tailBuffer.append(chunk);
 				if (onUpdate) {
@@ -178,9 +184,13 @@ export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 				}
 			},
 		});
+		const formatErrorOutput = (text: string) => {
+			const meta = outputMeta().truncationFromSummary(result, { direction: "tail" }).get();
+			return meta ? text + formatOutputNotice(meta) : text;
+		};
 
 		if (result.cancelled) {
-			throw new ToolError(result.output || "Command aborted");
+			throw new ToolError(formatErrorOutput(result.output || "Command aborted"));
 		}
 
 		const outputText = result.output || "(no output)";
@@ -188,7 +198,7 @@ export class SshTool implements AgentTool<typeof sshSchema, SSHToolDetails> {
 		const resultBuilder = toolResult(details).text(outputText).truncationFromSummary(result, { direction: "tail" });
 
 		if (result.exitCode !== 0 && result.exitCode !== undefined) {
-			throw new ToolError(`${outputText}\n\nCommand exited with code ${result.exitCode}`);
+			throw new ToolError(formatErrorOutput(`${outputText}\n\nCommand exited with code ${result.exitCode}`));
 		}
 
 		return resultBuilder.done();

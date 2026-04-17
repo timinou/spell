@@ -1,0 +1,102 @@
+#+TITLE: coding-agent: harden code-edit target resolution and batch invariants
+#+STATE: ITEM
+#+SESSION_ID: 14be2b039951fa47
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T12-42-23-717Z_14be2b039951fa47.jsonl]]
+#+CUSTOM_ID: BUG-270-coding-agent-harden-code-edit-target-res
+#+EFFORT: 10h
+#+PRIORITY: #A
+#+LAYER: coding-agent
+
+* Scope
+- In scope: make `code edit` reject ambiguous or structurally unsafe line-target and batch mutations before disk writes, especially the failure class seen in transcript `14be281c6474c15d` where `insert-after` on interface/import lines produced token-concatenated edits.
+- In scope: tighten tool-level payload validation in `packages/coding-agent/src/tools/code.ts` and native edit validation in `crates/pi-code-engine` / `crates/pi-natives` so malformed structural requests fail truthfully instead of landing and relying on formatter cleanup.
+- In scope: preserve atomicity — if any edit entry is invalid, nothing lands, history stays coherent, and the caller gets a specific actionable error.
+- Out of scope: prompt/docs wording, edit/write routing enforcement, and TUI/renderer truthfulness. Those are handled by sibling items `BUG-271-coding-agent-align-code-edit-prompts-exa` and `BUG-272-coding-agent-make-malformed-code-edit-pr`.
+
+* Existing Patterns
+- `packages/coding-agent/src/tools/code.ts`
+  - `validateCreatePayload(...)`
+  - `normalizeEditEntries(...)`
+  - `CodeTool.execute(...)`
+- `crates/pi-natives/src/code_buffer.rs`
+  - `single_edit_operation(...)`
+  - `apply_edit_entries_transactionally(...)`
+- `crates/pi-code-engine/src/line_target.rs`
+  - `resolve_line_target(...)`
+  - `resolve_edit_target(...)`
+  - `editable_scope_for_node(...)`
+- `crates/pi-code-engine/src/edit/replace.rs`
+  - `insert_before(...)`
+  - `insert_after(...)`
+  - `replace_node(...)`
+- `crates/pi-code-engine/src/buffer.rs`
+  - `edit_batch(...)`
+  - `apply_text_mutation(...)`
+- Tests to extend:
+  - `packages/coding-agent/test/tools/code.test.ts`
+  - `packages/natives/test/code-buffer.test.ts`
+  - `crates/pi-code-engine/src/edit/mod.rs`
+  - `crates/pi-code-engine/src/buffer.rs` test module
+
+* Tests
+- Workflow 1: `code edit { operation: "create" }` rejects stray `resolution` / `offset` / `line` / `edits` before any native call.
+- Workflow 2: line-target `insert-after` into a TypeScript import or interface member with multi-line content fails with an explicit error unless the edit targets a safe enclosing declaration/sibling boundary.
+- Workflow 3: symbol/line replacement must not duplicate `export`/modifier text or partially splice declaration tokens when raw-node and editable-scope targets diverge.
+- Workflow 4: mixed edit batches are atomic; one invalid edit entry prevents all mutations and keeps undo history unchanged.
+- Workflow 5: parse-invalid post-edit results fail before save/format, so formatter success cannot mask a structurally bad mutation.
+
+* Implementation
+** Define the structural-edit validation contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-270-coding-agent-harden-code-edit-target-res::define-contract
+:END:
+- Files: `packages/coding-agent/src/tools/code.ts`, `crates/pi-natives/src/code_buffer.rs`
+- Specify per-operation legal field combinations and the exact conditions that must produce a hard failure instead of best-effort mutation.
+- Capture the key invariant: line-target operations are node-boundary edits, not generic line splices.
+
+** Write failing engine and tool tests first
+:PROPERTIES:
+:CUSTOM_ID: BUG-270-coding-agent-harden-code-edit-target-res::write-tests
+:DEPENDS: BUG-270-coding-agent-harden-code-edit-target-res::define-contract
+:END:
+- Files: `packages/coding-agent/test/tools/code.test.ts`, `packages/natives/test/code-buffer.test.ts`, `crates/pi-code-engine/src/edit/mod.rs`, `crates/pi-code-engine/src/buffer.rs`
+- Encode Workflows 1-5 as initially failing coverage.
+- Include the exact transcript-shaped regressions: import insertion without a safe boundary and interface-member insertion that would concatenate tokens.
+
+** Tighten target resolution and boundary guards
+:PROPERTIES:
+:CUSTOM_ID: BUG-270-coding-agent-harden-code-edit-target-res::tighten-targeting
+:DEPENDS: BUG-270-coding-agent-harden-code-edit-target-res::write-tests
+:END:
+- Files: `crates/pi-code-engine/src/line_target.rs`, `crates/pi-code-engine/src/edit/replace.rs`
+- Stop silently choosing whichever raw/editable scope happens to fit.
+- Reject wrapper-boundary insertions/replacements when the resolved span would splice into declaration text rather than a safe sibling boundary.
+
+** Add batch preflight and post-parse invariants
+:PROPERTIES:
+:CUSTOM_ID: BUG-270-coding-agent-harden-code-edit-target-res::batch-invariants
+:DEPENDS: BUG-270-coding-agent-harden-code-edit-target-res::tighten-targeting
+:END:
+- Files: `crates/pi-code-engine/src/buffer.rs`, `crates/pi-natives/src/code_buffer.rs`
+- Validate edit ranges before mutation and fail the full batch if any entry is unsafe.
+- Add post-apply structural checks so invalid output cannot be reported as a successful applied edit.
+
+** Surface truthful actionable failures through the code tool
+:PROPERTIES:
+:CUSTOM_ID: BUG-270-coding-agent-harden-code-edit-target-res::surface-errors
+:DEPENDS: BUG-270-coding-agent-harden-code-edit-target-res::batch-invariants
+:END:
+- File: `packages/coding-agent/src/tools/code.ts`
+- Return specific failure messages that tell callers whether the problem was illegal payload shape, ambiguous target resolution, unsafe boundary insertion, or post-apply structural invalidity.
+
+* Edge Cases
+- Formatter cleanup can make a malformed import insertion look valid after save; validation must happen before formatter success is considered proof.
+- Empty `node_type` line-target edits currently resolve to the editable scope; that fallback must stop being silently permissive when it changes the target shape.
+- Multi-line content arrays joined without a leading newline are valid text but not valid sibling insertions at many node boundaries.
+- `create` remains top-level only; tightening edit validation must not weaken existing `create` restrictions.
+
+* Acceptance Criteria
+- Unsafe line-target edits fail before disk mutation with a truthful, specific error.
+- Raw-node vs editable-scope ambiguity no longer produces silent partial declaration edits.
+- Mixed edit batches are atomic and reject malformed entries before save/format.
+- Focused TypeScript/native/Rust tests cover the transcript-shaped regressions and keep them fixed.

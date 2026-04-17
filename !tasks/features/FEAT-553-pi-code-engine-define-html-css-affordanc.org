@@ -1,0 +1,95 @@
+#+TITLE: pi-code-engine: define HTML/CSS affordance DSL and verification matrix
+#+STATE: DOING
+#+SESSION_ID: 14be1e420c74b0e5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T11-46-39-793Z_14be1e420c74b0e5.jsonl]]
+#+CUSTOM_ID: FEAT-553-pi-code-engine-define-html-css-affordanc
+#+EFFORT: 18h
+#+LAYER: web-semantics
+#+PRIORITY: #A
+
+* Scope
+- In scope: define the canonical tree-sitter affordance DSL extensions required to make HTML and CSS first-class semantic languages in `pi-code-engine`, with contracts intentionally reusable by HEEx and other host/template languages.
+- In scope: add an explicit verification matrix and fixture corpus strategy before implementation so every later item inherits the same semantic truth surface and failure handling rules.
+- In scope: specify capability metadata for outline/read/resolve/navigate/edit/graph extraction so downstream `pi-code-graph` and `coding-agent` layers do not invent parallel language knowledge.
+- Out of scope: utility-framework semantics, CSS-in-JS, Vue/Svelte/Astro single-file components, and JavaScript-in-`<script>` analysis beyond embedded-region placeholders. Those belong to follow-up work once the core substrate is proven.
+
+* Existing Patterns
+- `crates/pi-code-engine/src/language/profile.rs`
+  - existing declaration/class/import/export/reference DSL; this item extends that schema instead of adding HTML/CSS special-case walkers.
+- `crates/pi-code-engine/src/procedure/mod.rs`
+  - activation/selector/transform procedure builder; HTML/CSS affordances must remain declarative here except for tightly-scoped custom transforms.
+- `crates/pi-code-engine/src/procedure/rules.rs`
+  - rule expressions already leverage generated production/inverse metadata; extend this path rather than hard-coding node-kind checks everywhere.
+- `crates/pi-code-engine/build.rs`
+  - build-time node-types ingestion; HTML/CSS grammar metadata must flow through the same generator.
+- `crates/pi-code-engine/src/outline.rs`, `src/resolve.rs`, `src/navigate.rs`, `src/line_target.rs`
+  - current consumers of profile data; the new DSL must serve these paths without language-specific forks except where markup semantics are fundamentally different.
+- `crates/pi-code-graph/src/language/generic.rs`
+  - graph extraction already consumes engine profiles; this item must publish enough structure for downstream graph reuse.
+
+* Tests
+- Workflow 1: `code languages` / registry output lists HTML and CSS with truthful capability descriptors, not just extensions.
+- Workflow 2: fixture-driven parser tests prove the DSL can describe element-like, attribute-like, selector-like, token-like, and embedded-region constructs without falling back to bespoke extraction code.
+- Workflow 3: outline/read/resolve/navigate/edit-target tests fail first for representative HTML, CSS, and HTML-with-embedded-CSS fixtures, then pass once the DSL is complete.
+- Workflow 4: procedure activation tests prove selector-aware and attribute-aware affordances can be expressed through the shared activation + selector + transform DSL.
+- Workflow 5: graph-facing tests prove the published profile contract exposes stable symbol names, reference extractors, and embedded-region metadata needed by `pi-code-graph`.
+- Workflow 6: malformed or partial files still produce truthful degradation signals; no layer may silently pretend semantic support when confidence is insufficient.
+- Exact test files to extend/add:
+  - `crates/pi-code-engine/src/language/mod.rs`
+  - `crates/pi-code-engine/src/procedure/mod.rs`
+  - `crates/pi-code-engine/src/outline.rs`
+  - `crates/pi-code-engine/src/resolve.rs`
+  - `crates/pi-code-engine/src/navigate.rs`
+  - `crates/pi-code-engine/src/line_target.rs`
+  - fixture files under `crates/pi-code-engine/tests/fixtures/sources/web/`
+- Required scenario matrix:
+  - nested semantic containers, repeated siblings, anonymous wrappers, void/self-closing tags, multiline attributes, boolean/data/ARIA attributes, inline `style` attributes, `<style>` blocks, escaped CSS identifiers, grouped selectors, `@media`, `@supports`, `@keyframes`, custom property definitions/usages/fallbacks, malformed recovery, and mixed host/guest byte-range mapping.
+
+* Implementation
+** Define the affordance vocabulary and safety contract
+:PROPERTIES:
+:CUSTOM_ID: FEAT-553-pi-code-engine-define-html-css-affordanc::define-vocabulary
+:END:
+- Files: `crates/pi-code-engine/src/language/profile.rs`, `crates/pi-code-engine/src/procedure/mod.rs`, `src/procedure/activation.rs`, `src/procedure/selector.rs`, `src/procedure/rules.rs`
+- Extend the DSL with the minimum reusable concepts needed for markup/stylesheets: symbol roles, symbol naming/disambiguation, tokenized attributes, selector references, embedded regions, capability descriptors, and confidence/degradation flags.
+- Satisfies Tests Workflow 2 and Workflow 4.
+
+** Write the fixture corpus and initially failing engine tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-553-pi-code-engine-define-html-css-affordanc::write-tests
+:DEPENDS: FEAT-553-pi-code-engine-define-html-css-affordanc::define-vocabulary
+:END:
+- Files: test modules listed above plus `crates/pi-code-engine/tests/fixtures/sources/web/*`
+- Encode every workflow and edge case in stable fixtures first; each fixture should state the intended symbol names, body ranges, navigation targets, and degradation expectations.
+- Satisfies Tests Workflow 1–6.
+
+** Plumb grammar metadata generation for new profile features
+:PROPERTIES:
+:CUSTOM_ID: FEAT-553-pi-code-engine-define-html-css-affordanc::grammar-plumbing
+:DEPENDS: FEAT-553-pi-code-engine-define-html-css-affordanc::write-tests
+:END:
+- Files: `crates/pi-code-engine/build.rs`, `crates/pi-code-engine/src/language/generated.rs`, `crates/pi-code-engine/src/language/mod.rs`
+- Ensure generated production/inverse rules and built-in profile registration can express HTML/CSS without bypassing the existing build pipeline.
+- Satisfies Tests Workflow 1, 2, and 5.
+
+** Publish downstream profile contracts
+:PROPERTIES:
+:CUSTOM_ID: FEAT-553-pi-code-engine-define-html-css-affordanc::publish-contract
+:DEPENDS: FEAT-553-pi-code-engine-define-html-css-affordanc::grammar-plumbing
+:END:
+- Files: `crates/pi-code-engine/src/language/mod.rs`, `crates/pi-code-graph/src/language/generic.rs` (read/update if needed during implementation item), documentation comments adjacent to the DSL structs.
+- Lock the reusable host/guest contract that later HEEx support will consume: host symbol pathing, guest-region byte ranges, and conservative-confidence semantics.
+- Satisfies Tests Workflow 5 and 6.
+
+* Edge Cases
+- Repeated anonymous containers must never collapse onto the same symbol name; deterministic disambiguators are required.
+- DSL additions must preserve existing TypeScript/Rust/Python/Typst/Markdown/Org/Elixir behavior; regression tests are mandatory where shared code changes.
+- Partial parse recovery must surface lowered confidence instead of pretending exact selectors/elements are safe rename targets.
+- Embedded-region contracts must keep host and guest byte ranges stable even when delimiters belong to the host language.
+- Selector/token matching must distinguish exact semantic tokens from raw substrings; `.btn` and `.btn-primary` are not interchangeable.
+
+* Acceptance Criteria
+- One canonical DSL can describe HTML and CSS affordances without introducing a second engine or ad-hoc extractor layer.
+- A documented, fixture-backed verification matrix exists before downstream implementation begins.
+- Engine tests cover the full workflow and edge-case matrix listed above, including truthful degradation behavior.
+- The published contract is explicitly reusable by HEEx rather than Phoenix-specific.

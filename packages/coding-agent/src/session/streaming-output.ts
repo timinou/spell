@@ -31,7 +31,17 @@ export interface OutputSinkOptions {
 	artifactPath?: string;
 	artifactUri?: string;
 	spillThreshold?: number;
+	spillThresholdBytes?: number;
+	spillThresholdLines?: number;
+	retainMaxBytes?: number;
+	retainMaxLines?: number;
 	onChunk?: (chunk: string) => void;
+}
+
+export interface OutputDumpOptions {
+	notice?: string;
+	maxBytes?: number;
+	maxLines?: number;
 }
 
 export interface TruncationResult {
@@ -530,14 +540,29 @@ export class OutputSink {
 
 	readonly #artifactPath?: string;
 	readonly #artifactUri?: string;
-	readonly #spillThreshold: number;
+	readonly #spillThresholdBytes: number;
+	readonly #spillThresholdLines: number;
+	readonly #retainMaxBytes: number;
+	readonly #retainMaxLines: number;
 	readonly #onChunk?: (chunk: string) => void;
 
 	constructor(options?: OutputSinkOptions) {
-		const { artifactPath, artifactUri, spillThreshold = DEFAULT_MAX_BYTES, onChunk } = options ?? {};
+		const {
+			artifactPath,
+			artifactUri,
+			spillThreshold,
+			spillThresholdBytes = spillThreshold ?? DEFAULT_MAX_BYTES,
+			spillThresholdLines = DEFAULT_MAX_LINES,
+			retainMaxBytes = spillThresholdBytes,
+			retainMaxLines = spillThresholdLines,
+			onChunk,
+		} = options ?? {};
 		this.#artifactPath = artifactPath;
 		this.#artifactUri = artifactUri;
-		this.#spillThreshold = spillThreshold;
+		this.#spillThresholdBytes = spillThresholdBytes;
+		this.#spillThresholdLines = spillThresholdLines;
+		this.#retainMaxBytes = retainMaxBytes;
+		this.#retainMaxLines = retainMaxLines;
 		this.#onChunk = onChunk;
 	}
 
@@ -553,10 +578,11 @@ export class OutputSink {
 			this.#totalLines += countNewlines(chunk);
 		}
 
-		const threshold = this.#spillThreshold;
-		const willOverflow = this.#bufferBytes + dataBytes > threshold;
+		const projectedLines = this.#sawData ? this.#totalLines + 1 : 0;
+		const willOverflowBytes = this.#bufferBytes + dataBytes > this.#spillThresholdBytes;
+		const willOverflowLines = projectedLines > this.#spillThresholdLines;
+		const willOverflow = willOverflowBytes || willOverflowLines;
 
-		// Write to file if already spilling or about to overflow
 		if (this.#file != null || willOverflow) {
 			const sink = await this.#ensureFileSink();
 			await sink?.write(chunk);
@@ -568,25 +594,21 @@ export class OutputSink {
 			return;
 		}
 
-		// Overflow: keep only a tail window in memory.
 		this.#truncated = true;
-
-		// Avoid creating a giant intermediate string when chunk alone dominates.
-		if (dataBytes >= threshold) {
-			const { text, bytes } = truncateTailBytes(chunk, threshold);
-			this.#buffer = text;
-			this.#bufferBytes = bytes;
-		} else {
-			// Intermediate size is bounded (<= threshold + dataBytes), safe to concat.
-			this.#buffer += chunk;
-			this.#bufferBytes += dataBytes;
-
-			const { text, bytes } = truncateTailBytes(this.#buffer, threshold);
-			this.#buffer = text;
-			this.#bufferBytes = bytes;
+		const chunkLines = chunk.length > 0 ? countNewlines(chunk) + 1 : 0;
+		if (dataBytes >= this.#retainMaxBytes || chunkLines > this.#retainMaxLines) {
+			const truncated = truncateTail(chunk, {
+				maxBytes: this.#retainMaxBytes,
+				maxLines: this.#retainMaxLines,
+			});
+			this.#buffer = truncated.content;
+			this.#bufferBytes = Buffer.byteLength(truncated.content, "utf-8");
+			return;
 		}
 
-		if (this.#file) this.#truncated = true;
+		this.#buffer += chunk;
+		this.#bufferBytes += dataBytes;
+		this.#trimBuffer();
 	}
 
 	createInput(): WritableStream<Uint8Array | string> {
@@ -603,25 +625,45 @@ export class OutputSink {
 		});
 	}
 
-	async dump(notice?: string): Promise<OutputSummary> {
-		const noticeLine = notice ? `[${notice}]\n` : "";
-		const outputLines = this.#buffer.length > 0 ? countNewlines(this.#buffer) + 1 : 0;
+	async dump(options?: string | OutputDumpOptions): Promise<OutputSummary> {
+		const normalized = typeof options === "string" ? { notice: options } : (options ?? {});
+		const noticeLine = normalized.notice ? `[${normalized.notice}]\n` : "";
 		const totalLines = this.#sawData ? this.#totalLines + 1 : 0;
 
 		if (this.#file) await this.#file.sink.end();
 
+		let output = this.#buffer;
+		if (this.#truncated) {
+			const truncated = truncateTail(output, {
+				maxBytes: normalized.maxBytes ?? this.#retainMaxBytes,
+				maxLines: normalized.maxLines ?? this.#retainMaxLines,
+			});
+			output = truncated.content;
+		}
+
+		const outputLines = output.length > 0 ? countNewlines(output) + 1 : 0;
+		const outputBytes = Buffer.byteLength(output, "utf-8");
 		return {
-			output: `${noticeLine}${this.#buffer}`,
+			output: `${noticeLine}${output}`,
 			truncated: this.#truncated,
 			totalLines,
 			totalBytes: this.#totalBytes,
 			outputLines,
-			outputBytes: this.#bufferBytes,
+			outputBytes,
 			artifactUri: this.#file?.artifactUri,
 		};
 	}
 
 	// -- private ---------------------------------------------------------------
+
+	#trimBuffer(): void {
+		const truncated = truncateTail(this.#buffer, {
+			maxBytes: this.#retainMaxBytes,
+			maxLines: this.#retainMaxLines,
+		});
+		this.#buffer = truncated.content;
+		this.#bufferBytes = Buffer.byteLength(truncated.content, "utf-8");
+	}
 
 	async #ensureFileSink(): Promise<Bun.FileSink | null> {
 		if (!this.#artifactPath) return null;
@@ -631,7 +673,6 @@ export class OutputSink {
 			const sink = Bun.file(this.#artifactPath).writer();
 			this.#file = { path: this.#artifactPath, artifactUri: this.#artifactUri, sink };
 
-			// Flush existing buffer to file BEFORE it gets trimmed further.
 			if (this.#buffer.length > 0) {
 				await sink.write(this.#buffer);
 			}

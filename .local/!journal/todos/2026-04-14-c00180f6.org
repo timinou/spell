@@ -1,0 +1,22 @@
+#+TITLE: Session 14ba7c1500dc5f6a Todos
+#+DATE: 2026-04-14
+#+TODO: ITEM DOING BLOCKED | DONE
+
+* Implementation
+
+** DONE Verify code-tool fixes
+:PROPERTIES:
+:TASK_ID: verify-code-tool-fixes
+:STATUS: completed
+:GATE_CMD: bun check:ts
+:VERIFY_CMD: bun check:ts
+:END:
+
+Verification run:
+- `bun test packages/coding-agent/test/tools/code.test.ts` → 43 pass, 0 fail
+- `bun check:ts` → success (`biome check . && tsgo -p tsconfig.json`)
+Observable contracts confirmed:
+1) missing-file `code edit create` now persists and reads back successfully
+2) failed edit invalidates stale managed buffer so a follow-up edit reopens from disk and succeeds.
+
+Focused regression suite green and broader TS checks pass.
