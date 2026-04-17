@@ -577,8 +577,11 @@ export class EventController {
 					this.ctx.statusContainer.clear();
 				}
 				if (!event.success) {
+					const finalError = event.finalError || "Unknown error";
 					this.ctx.showError(
-						`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`,
+						finalError.startsWith("Final attempt ")
+							? finalError
+							: `Retry failed after ${event.attempt} attempts: ${finalError}`,
 					);
 				}
 				this.ctx.ui.requestRender();

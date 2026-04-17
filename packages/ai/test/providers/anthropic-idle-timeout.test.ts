@@ -150,6 +150,19 @@ function buildToolUseEvents(options: {
 	}
 	return events;
 }
+function buildTextEvents(text: string): MockEvent[] {
+	const usage = {
+		input_tokens: 12,
+		output_tokens: 0,
+		cache_read_input_tokens: 0,
+		cache_creation_input_tokens: 0,
+	};
+	return [
+		{ type: "message_start", message: { usage } },
+		{ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+		{ type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+	];
+}
 
 async function collectEventTypes(response: AsyncIterable<AssistantMessageEvent>): Promise<string[]> {
 	const eventTypes: string[] = [];
@@ -176,12 +189,33 @@ describe("Anthropic provider idle timeout regression", () => {
 		const response = streamAnthropic(model, context, { apiKey: "test-key" });
 		const eventTypes = await collectEventTypes(response);
 		const result = await response.result();
+		const diagnostic = result.streamDiagnostics?.[0];
 
 		expect(eventTypes).toEqual(["start", "error"]);
 		expect(result.stopReason).toBe("error");
-		expect(result.errorMessage).toContain("Anthropic messages stream stalled while waiting for the next event");
+		expect(result.errorMessage).toContain("Assistant response stalled before any response content arrived.");
+		expect(diagnostic?.state).toBe("stalled_before_response_content");
+		expect(diagnostic?.idleTimeoutMs).toBe(10);
 		expect(lastStream?.abortCount).toBe(1);
 		expect(lastStream?.returnCount).toBe(1);
+	});
+
+	it("fails truthfully when Anthropic stalls after text has started", async () => {
+		Bun.env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = "10";
+		configureStream(buildTextEvents("Draft intro"), { stallAfterEvents: true });
+
+		const response = streamAnthropic(model, context, { apiKey: "test-key" });
+		const eventTypes = await collectEventTypes(response);
+		const result = await response.result();
+		const diagnostic = result.streamDiagnostics?.[0];
+		const textBlock = result.content.find(block => block.type === "text");
+
+		expect(eventTypes).toEqual(["start", "text_start", "text_delta", "error"]);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("Assistant response stalled while streaming text content.");
+		expect(diagnostic?.state).toBe("stalled_during_text");
+		expect(textBlock).toEqual({ type: "text", text: "Draft intro" });
+		expect(createdStreams).toHaveLength(1);
 	});
 
 	it("retries an incomplete stalled tool call instead of surfacing a partial write", async () => {
@@ -210,6 +244,7 @@ describe("Anthropic provider idle timeout regression", () => {
 		const eventTypes = await collectEventTypes(response);
 		const result = await response.result();
 		const toolCall = result.content.find(block => block.type === "toolCall");
+		const diagnostics = result.streamDiagnostics ?? [];
 
 		expect(createdStreams).toHaveLength(2);
 		expect(createdStreams[0]?.abortCount).toBe(1);
@@ -218,6 +253,7 @@ describe("Anthropic provider idle timeout regression", () => {
 		expect(eventTypes).toContain("toolcall_end");
 		expect(eventTypes.at(-1)).toBe("done");
 		expect(result.stopReason).toBe("toolUse");
+		expect(diagnostics.map(diagnostic => diagnostic.state)).toContain("stalled_incomplete_tool_args");
 		if (toolCall?.type !== "toolCall") {
 			throw new Error("Expected recovered write tool call after provider retry");
 		}

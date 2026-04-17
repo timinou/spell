@@ -158,8 +158,19 @@ import {
 	type PythonExecutionMessage,
 	pythonExecutionToText,
 } from "./messages";
-import type { BranchSummaryEntry, CompactionEntry, NewSessionOptions, SessionManager } from "./session-manager";
+import type {
+	BranchSummaryEntry,
+	CompactionEntry,
+	NewSessionOptions,
+	SessionManager,
+	SessionMessageEntry,
+} from "./session-manager";
 import { getLatestCompactionEntry } from "./session-manager";
+import {
+	formatAssistantToolCallFailureMessage,
+	formatRetryableAssistantErrorMessage,
+	isRetryableAssistantStreamError,
+} from "./tool-call-diagnostics";
 
 /** Session-specific events that extend the core AgentEvent */
 export type AgentSessionEvent =
@@ -4811,14 +4822,16 @@ export class AgentSession {
 	 * Context overflow errors are NOT retryable (handled by compaction instead).
 	 */
 	#isRetryableError(message: AssistantMessage): boolean {
-		if (message.stopReason !== "error" || !message.errorMessage) return false;
+		if (message.stopReason !== "error") return false;
 
 		// Context overflow is handled by compaction, not retry
 		const contextWindow = this.model?.contextWindow ?? 0;
 		if (isContextOverflow(message, contextWindow)) return false;
 
-		const err = message.errorMessage;
-		return this.#isRetryableErrorMessage(err);
+		if (isRetryableAssistantStreamError(message)) return true;
+
+		const err = formatAssistantToolCallFailureMessage(message) ?? message.errorMessage;
+		return typeof err === "string" ? this.#isRetryableErrorMessage(err) : false;
 	}
 
 	#isRetryableErrorMessage(errorMessage: string): boolean {
@@ -4887,6 +4900,9 @@ export class AgentSession {
 		if (!retrySettings.enabled) return false;
 
 		const generation = this.#promptGeneration;
+		const maxAttempts = retrySettings.maxRetries;
+		const baseErrorMessage =
+			formatAssistantToolCallFailureMessage(message) ?? message.errorMessage ?? "Unknown error";
 		this.#retryAttempt++;
 
 		// Create retry promise on first attempt so waitForRetry() can await it
@@ -4897,26 +4913,48 @@ export class AgentSession {
 			this.#retryResolve = resolve;
 		}
 
-		if (this.#retryAttempt > retrySettings.maxRetries) {
+		if (this.#retryAttempt > maxAttempts) {
 			// Max retries exceeded, emit final failure and reset
+			const finalAttempt = this.#retryAttempt - 1;
+			message.errorMessage = formatRetryableAssistantErrorMessage(message, {
+				attempt: finalAttempt,
+				maxAttempts,
+				final: true,
+			});
+			const persistedFinalAssistant = this.sessionManager
+				.getEntries()
+				.findLast(
+					(entry): entry is SessionMessageEntry & { message: AssistantMessage } =>
+						entry.type === "message" &&
+						entry.message.role === "assistant" &&
+						entry.message.timestamp === message.timestamp,
+				);
+			if (persistedFinalAssistant) {
+				persistedFinalAssistant.message.errorMessage = message.errorMessage;
+			}
 			await this.#emitSessionEvent({
 				type: "auto_retry_end",
 				success: false,
-				attempt: this.#retryAttempt - 1,
-				finalError: message.errorMessage,
+				attempt: finalAttempt,
+				finalError: formatAssistantToolCallFailureMessage(message) ?? message.errorMessage ?? "Unknown error",
 			});
 			this.#retryAttempt = 0;
 			this.#resolveRetry(); // Resolve so waitForRetry() completes
 			return false;
 		}
 
-		const errorMessage = message.errorMessage || "Unknown error";
+		message.errorMessage = formatRetryableAssistantErrorMessage(message, {
+			attempt: this.#retryAttempt,
+			maxAttempts,
+			final: false,
+		});
+		const errorMessage = message.errorMessage;
 		let delayMs = retrySettings.baseDelayMs * 2 ** (this.#retryAttempt - 1);
 
-		if (this.model && this.#isUsageLimitErrorMessage(errorMessage)) {
+		if (this.model && this.#isUsageLimitErrorMessage(baseErrorMessage)) {
 			const retryAfterMs =
-				this.#parseRetryAfterMsFromError(errorMessage) ??
-				calculateRateLimitBackoffMs(parseRateLimitReason(errorMessage));
+				this.#parseRetryAfterMsFromError(baseErrorMessage) ??
+				calculateRateLimitBackoffMs(parseRateLimitReason(baseErrorMessage));
 			const switched = await this.#modelRegistry.authStorage.markUsageLimitReached(
 				this.model.provider,
 				this.sessionId,
@@ -4936,7 +4974,7 @@ export class AgentSession {
 		await this.#emitSessionEvent({
 			type: "auto_retry_start",
 			attempt: this.#retryAttempt,
-			maxAttempts: retrySettings.maxRetries,
+			maxAttempts,
 			delayMs,
 			errorMessage,
 		});

@@ -1,0 +1,112 @@
+#+TITLE: Classify and recover Anthropic idle stream stalls truthfully
+#+STATE: DONE
+#+SESSION_ID: 14be110665c26667
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T10-48-50-839Z_14be110665c26667.jsonl]]
+#+CUSTOM_ID: BUG-268-classify-and-recover-anthropic-idle-stre
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: packages/ai
+
+* Initial Message
+
+Error: Anthropic messages stream stalled while waiting for the next
+ event
+
+ Error: Anthropic messages stream stalled while waiting for the next
+ event
+
+ Session Info
+
+ File:
+ /home/user/.spell/agent/sessions/-code-ora-monorepo-infra-beam/2026-
+ 04-17T10-09-12-579Z_14be07f3e0ede200.jsonl
+ ID: 14be07f3e0ede200
+
+
+Why?
+
+:PROPERTIES:
+:EFFORT: 4h
+:LAYER: packages/ai
+:PRIORITY: #A
+:END:
+
+* Scope
+- In scope: `packages/ai/src/providers/anthropic.ts`, `packages/ai/src/utils/tool-call-diagnostics.ts`, related provider-local helper code, and `packages/ai/test/providers/anthropic-idle-timeout.test.ts`.
+- In scope: Anthropic Messages stream idle-stall classification, recovery, and retry truthfulness for no-token stalls, thinking-start stalls, text stalls, and tool-call stalls.
+- In scope: preserving existing successful recovery for `completed_tool_call_missing_trailing_stop` and existing incomplete tool-argument recovery coverage.
+- Out of scope: OpenAI/Bedrock provider behavior changes, coding-agent TUI/session rendering, and cross-provider retry policy outside provider-owned diagnostics.
+
+* Existing Patterns
+- `packages/ai/src/providers/anthropic.ts` wraps the SDK stream in `iterateWithIdleTimeout(...)` and already distinguishes tool-call stall recovery paths.
+- `packages/ai/src/utils/idle-iterator.ts` defines the provider idle-timeout/watchdog contract via `getAnthropicStreamIdleTimeoutMs()` and `getToolArgumentStreamIdleTimeoutMs(baseIdleTimeoutMs?)`.
+- `packages/ai/src/utils/tool-call-diagnostics.ts` is the existing diagnostic pattern for stream interruption classification; new Anthropic stall truthfulness must extend existing diagnostic/reporting conventions rather than inventing an unrelated error channel.
+- `packages/ai/src/providers/openai-codex-responses.ts` already performs stall classification before recovery and is the closest in-repo pattern for recovering a stalled streaming transport without silently lying about completion.
+
+* Tests
+Enumerate all user-observable/provider-observable workflows first:
+1. Healthy Anthropic stream completes with no stall behavior changes.
+2. Anthropic stream never becomes useful (e.g. no first token / no meaningful content before idle timeout) and fails truthfully with a classified reason instead of an opaque generic stall.
+3. Anthropic starts a thinking/content block, then goes idle before a terminal event; failure/retry behavior remains truthful and does not masquerade as a completed response.
+4. Anthropic stalls while streaming incomplete tool arguments; provider retry/recovery continues to protect callers from partial tool JSON.
+5. Anthropic stalls after a completed tool call but before trailing stop events; provider still recovers to `stopReason = "toolUse"`.
+6. Retry accounting remains externally inspectable so downstream layers can explain repeated Anthropic stalls rather than seeing indistinguishable generic errors.
+
+Concrete test file + scenarios:
+- `packages/ai/test/providers/anthropic-idle-timeout.test.ts`
+  - Add initially-failing regression cases for workflow 2 and workflow 3.
+  - Preserve/extend workflows 4 and 5 so existing recovery paths do not regress.
+  - Keep workflow 1 as the non-regression baseline.
+- If shared diagnostic helpers/types need separate unit coverage, add package-local tests in `packages/ai/test/providers/` adjacent to the existing idle-timeout test rather than creating an unrelated test suite.
+
+* Implementation
+** Define Anthropic stall state contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-268-classify-and-recover-anthropic-idle-stre::define-stall-state-contract
+:END:
+- Files: `packages/ai/src/providers/anthropic.ts`, `packages/ai/src/utils/tool-call-diagnostics.ts`
+- Introduce/extend the minimal diagnostic contract needed to distinguish “no useful content yet”, “started then stalled”, and existing tool-call-specific stall states.
+- This step exists to satisfy workflows 2, 3, and 6.
+
+** Write Anthropic idle-stall regression tests first
+:PROPERTIES:
+:CUSTOM_ID: BUG-268-classify-and-recover-anthropic-idle-stre::anthropic-idle-stall-tests
+:DEPENDS: BUG-268-classify-and-recover-anthropic-idle-stre::define-stall-state-contract
+:END:
+- File: `packages/ai/test/providers/anthropic-idle-timeout.test.ts`
+- Encode workflows 1-6 as concrete assertions over emitted events, stop reason, error/diagnostic shape, and retry attempt accounting.
+- The new tests must fail against current `main` for the newly targeted regressions.
+
+** Implement truthful Anthropic stall recovery/classification
+:PROPERTIES:
+:CUSTOM_ID: BUG-268-classify-and-recover-anthropic-idle-stre::implement-anthropic-stall-recovery
+:DEPENDS: BUG-268-classify-and-recover-anthropic-idle-stre::anthropic-idle-stall-tests
+:END:
+- File: `packages/ai/src/providers/anthropic.ts`
+- Adjust the provider retry/recovery path so Anthropic idle stalls are classified truthfully and only recovered when the partial state is genuinely safe to recover.
+- Preserve current successful behavior for completed-tool-call-missing-trailing-stop and incomplete-tool-args cases.
+- Ensure downstream callers receive enough structured context to distinguish repeated Anthropic stalls from generic connection failures.
+
+** Normalize diagnostic formatting for downstream callers
+:PROPERTIES:
+:CUSTOM_ID: BUG-268-classify-and-recover-anthropic-idle-stre::normalize-diagnostic-output
+:DEPENDS: BUG-268-classify-and-recover-anthropic-idle-stre::implement-anthropic-stall-recovery
+:END:
+- Files: `packages/ai/src/utils/tool-call-diagnostics.ts` and any directly related provider-owned helper updated in the prior step.
+- Keep the outward contract truthful: no fake success, no generic message when richer classified context exists, no loss of retry-attempt metadata.
+- This step satisfies workflows 2, 3, and 6.
+
+* Edge Cases
+- `message_start`/empty thinking-only progress before any text/tool JSON must not be treated as a meaningful completed response.
+- Partial text or partial thinking output must not be promoted to success merely to suppress a stall error.
+- Existing tool-call recovery states must remain intact; do not regress `stalled_incomplete_tool_args` or `completed_tool_call_missing_trailing_stop`.
+- Timeout env knobs (`PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS`, `PI_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS`) must remain the single source of timing truth.
+- If the provider retries internally, retry count surfaced downstream must stay truthful so the session layer can explain repeated failures accurately.
+
+* Acceptance Criteria
+- Anthropic idle-stall failures are classified more precisely than the current single opaque provider message.
+- Provider behavior still recovers completed trailing-stop stalls and incomplete tool-argument stalls without surfacing partial tool JSON to callers.
+- New regression coverage exists for no-useful-content stalls and started-then-stalled Anthropic streams.
+- Verification criteria: `bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts` and `bun check:ts` are the required implementation-time checks.
+
+NOTE [2026-04-17]: Implemented truthful Anthropic idle-stall classification/recovery with focused regression coverage; verified via bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts and bun check:ts.

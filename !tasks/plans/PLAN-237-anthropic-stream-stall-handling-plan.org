@@ -1,0 +1,91 @@
+#+TITLE: ANTHROPIC_STREAM_STALL_HANDLING_PLAN
+#+STATE: DONE
+#+SESSION_ID: 14be110665c26667
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T10-48-50-839Z_14be110665c26667.jsonl]]
+#+CUSTOM_ID: PLAN-237-anthropic-stream-stall-handling-plan
+
+* Initial Message
+
+Error: Anthropic messages stream stalled while waiting for the next
+ event
+
+ Error: Anthropic messages stream stalled while waiting for the next
+ event
+
+ Session Info
+
+ File:
+ /home/user/.spell/agent/sessions/-code-ora-monorepo-infra-beam/2026-
+ 04-17T10-09-12-579Z_14be07f3e0ede200.jsonl
+ ID: 14be07f3e0ede200
+
+
+Why?
+
+* Context
+Goal: fix the repeated `Anthropic messages stream stalled while waiting for the next event` failure mode without pretending the provider succeeded, and make repeated retry/error attempts understandable in the transcript/TUI.
+
+Repo-grounded findings:
+- `packages/ai/src/providers/anthropic.ts` throws the exact idle-stall error via `iterateWithIdleTimeout(...)` after Anthropic stops emitting stream events.
+- Current provider behavior already recovers two safe tool-call cases: incomplete tool arguments and completed tool call missing trailing stop.
+- Current session behavior (`packages/coding-agent/src/session/agent-session.ts`) treats generic `stream stall` messages as retryable and retries the whole turn.
+- Current UI behavior (`packages/coding-agent/src/modes/controllers/event-controller.ts` plus `packages/coding-agent/src/session/tool-call-diagnostics.ts`) keeps retries/errors visible, but repeated stalls can surface as indistinguishable generic failures.
+- The referenced failing session (`/home/user/.spell/agent/sessions/-code-ora-monorepo-infra-beam/2026-04-17T10-09-12-579Z_14be07f3e0ede200.jsonl`) showed exactly that pattern: repeated Anthropic idle stalls with little/no differentiating context.
+
+Settled decisions:
+1. Scope = two-layer fix: Anthropic provider improvements plus generic session/UI retry-context improvements.
+2. Provider work is Anthropic-specific; do not silently change OpenAI/Bedrock behavior in the same change.
+3. Session/UI work is generic across providers, but must consume richer provider diagnostics when available.
+4. Keep every retry/error event visible for debugging; do not collapse them away.
+5. Improve labels/context so repeated attempts are understandable (attempt number, intermediate vs final failure, classified stall context).
+6. Preserve successful Anthropic recovery for `stalled_incomplete_tool_args` and `completed_tool_call_missing_trailing_stop`.
+7. Do not fake success for thinking/text stalls merely to suppress the error.
+
+Recommended approach:
+- First make Anthropic provider stall handling more truthful and classifiable in `packages/ai`, with focused regression coverage.
+- Then wire that context through the coding-agent session/TUI so repeated stall attempts remain visible but no longer read like opaque duplicates.
+
+Critical files:
+- `packages/ai/src/providers/anthropic.ts`
+- `packages/ai/src/utils/idle-iterator.ts`
+- `packages/ai/src/utils/tool-call-diagnostics.ts`
+- `packages/ai/test/providers/anthropic-idle-timeout.test.ts`
+- `packages/coding-agent/src/session/agent-session.ts`
+- `packages/coding-agent/src/session/tool-call-diagnostics.ts`
+- `packages/coding-agent/src/modes/controllers/event-controller.ts`
+- package-local tests under `packages/coding-agent/test/` and/or `packages/coding-agent/test/session-manager/`
+
+* Verification
+Implementation-time verification requirements:
+- `bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts`
+- focused package-local coding-agent tests covering repeated stream-stall retry visibility/persistence in the changed area
+- `bun check:ts`
+
+Manual proof expectations:
+- Repeated Anthropic stall attempts remain visible in the transcript/TUI.
+- Each attempt is understandable from surfaced context rather than appearing as the same opaque error repeated.
+- Final retry exhaustion remains clearly marked as final.
+- Safe Anthropic tool-call recovery paths still behave as before.
+
+* Execution Manifest
+** :wave:1
+- [[id:BUG-268-classify-and-recover-anthropic-idle-stre]]
+
+** :wave:2
+- [[id:BUG-269-make-stream-stall-retries-readable-witho]]
+
+** Completion [2026-04-17]
+*** Verification
+- `bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts` → passed (`5 pass`, `0 fail`).
+- `bun test packages/coding-agent/test/session/tool-call-diagnostics.test.ts packages/coding-agent/test/agent-session-stream-stall-retry.test.ts` → passed (`6 pass`, `0 fail`).
+- `bun check:ts` → passed (`biome check . && tsgo -p tsconfig.json`).
+- Focused regression proof:
+  - Anthropic provider now classifies `stalled_before_response_content`, `stalled_during_text`, and existing tool-call stall states truthfully.
+  - Coding-agent session persists retry-attempt context (`Attempt N/M failed; retrying.` / `Final attempt N/M failed.`) while keeping every assistant error visible.
+  - Final retry status rendering now avoids redundant `Retry failed after ...` wrapping when the failure is already marked final.
+*** Artifacts
+- None. Verification was terminal-only (`bun test` / `bun check:ts`); no browser/UI screenshot artifact applied.
+*** Deviations
+- None.
+
+NOTE [2026-04-17]: Completed execution and verification for Anthropic stream stall handling; child items BUG-268 and BUG-269 moved to DONE.

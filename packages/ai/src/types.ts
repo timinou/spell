@@ -298,6 +298,9 @@ export interface PersistedDebugArtifactRef {
 }
 
 export type ToolCallStreamDiagnosticState =
+	| "stalled_before_response_content"
+	| "stalled_during_thinking"
+	| "stalled_during_text"
 	| "stalled_before_tool_args"
 	| "stalled_incomplete_tool_args"
 	| "completed_tool_call_missing_trailing_stop";
