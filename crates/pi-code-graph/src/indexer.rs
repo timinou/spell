@@ -197,6 +197,9 @@ impl CodeGraphBuilder {
 			}
 		}
 
+		for (from_index, to_index) in collect_style_edges(&graph) {
+			graph.add_edge(from_index, to_index, EdgeKind::Styles);
+		}
 		let stats = build_stats(&graph);
 		let fingerprint =
 			GraphFingerprint { root: root.clone(), git_head: read_git_head(&root), files };
@@ -275,6 +278,67 @@ fn unique_symbol_match_in_file(
 	Some(first)
 }
 
+fn collect_style_edges(
+	graph: &StableGraph<GraphNode, EdgeKind>,
+) -> Vec<(petgraph::stable_graph::NodeIndex, petgraph::stable_graph::NodeIndex)> {
+	let css_rules = graph
+		.node_indices()
+		.filter_map(|index| match graph.node_weight(index) {
+			Some(GraphNode::Symbol(symbol)) if symbol.kind == crate::model::SymbolKind::CssRule => {
+				Some((index, symbol.name.clone()))
+			},
+			_ => None,
+		});
+	let elements = graph
+		.node_indices()
+		.filter_map(|index| match graph.node_weight(index) {
+			Some(GraphNode::Symbol(symbol)) if symbol.kind == crate::model::SymbolKind::Element => {
+				Some((index, symbol.name.clone()))
+			},
+			_ => None,
+		})
+		.collect::<Vec<_>>();
+	let mut edges = std::collections::BTreeSet::new();
+	for (rule_index, selector_text) in css_rules {
+		for (element_index, element_name) in &elements {
+			if selector_matches_element(&selector_text, element_name) {
+				edges.insert((graph.to_index(rule_index), graph.to_index(*element_index)));
+			}
+		}
+	}
+	edges
+		.into_iter()
+		.map(|(from, to)| (graph.from_index(from), graph.from_index(to)))
+		.collect()
+}
+
+fn selector_matches_element(selector_text: &str, element_name: &str) -> bool {
+	let element_name = element_name.trim();
+	let element_name = element_name.split('[').next().unwrap_or(element_name);
+	selector_text
+		.split(',')
+		.map(str::trim)
+		.filter(|selector| !selector.is_empty())
+		.any(|selector| simple_selector_matches(selector, element_name))
+}
+
+fn simple_selector_matches(selector: &str, element_name: &str) -> bool {
+	if selector.contains([' ', '>', '+', '~', '[', ':']) {
+		return false;
+	}
+	if let Some(class_name) = selector.strip_prefix('.') {
+		return element_name.contains(&format!(".{class_name}"));
+	}
+	if let Some(id_name) = selector.strip_prefix('#') {
+		return element_name.contains(&format!("#{id_name}"));
+	}
+	let tag_name = element_name
+		.split(['#', '.'])
+		.next()
+		.unwrap_or(element_name);
+	tag_name == selector
+}
+
 fn build_stats(graph: &StableGraph<GraphNode, EdgeKind>) -> GraphStats {
 	let mut language_counts = BTreeMap::new();
 	let mut file_count = 0_u32;
@@ -303,6 +367,33 @@ fn now_ms() -> u64 {
 		.duration_since(std::time::UNIX_EPOCH)
 		.unwrap_or_default()
 		.as_millis() as u64
+}
+
+#[cfg(test)]
+#[test]
+fn builder_links_css_rules_to_html_elements() {
+	let root = std::env::temp_dir().join(format!("pi-code-graph-styles-{}", std::process::id()));
+	let cache_dir = root.join("cache");
+	let _ = fs::remove_dir_all(&root);
+	fs::create_dir_all(&root).expect("temp dir should be created");
+	fs::write(
+		root.join("index.html"),
+		"<!doctype html><html><head><link href=\"./app.css\" /></head><body><button \
+		 class=\"btn\">Save</button></body></html>",
+	)
+	.expect("html fixture should be written");
+	fs::write(root.join("app.css"), ".btn { color: red; }").expect("css fixture should be written");
+
+	let registry = LanguageRegistry::new()
+		.with_defaults()
+		.expect("defaults should register");
+	let builder = CodeGraphBuilder::new(registry, CacheStore::new(cache_dir));
+	let outcome = builder
+		.build(&BuildGraphOptions::new(&root))
+		.expect("build should succeed");
+	assert_eq!(outcome.graph.count_edges(EdgeKind::Imports), 1);
+	assert_eq!(outcome.graph.count_edges(EdgeKind::Styles), 1);
+	let _ = fs::remove_dir_all(root);
 }
 
 #[cfg(test)]

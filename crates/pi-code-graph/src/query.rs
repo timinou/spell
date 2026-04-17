@@ -262,9 +262,11 @@ impl CodeGraph {
 			]),
 			references:    neighbors_by_kind(graph, node_index, Direction::Outgoing, &[
 				EdgeKind::References,
+				EdgeKind::Styles,
 			]),
 			referenced_by: neighbors_by_kind(graph, node_index, Direction::Incoming, &[
 				EdgeKind::References,
+				EdgeKind::Styles,
 			]),
 			imports:       file_neighbors_for_symbol(graph, node_index, Direction::Outgoing),
 			imported_by:   file_neighbors_for_symbol(graph, node_index, Direction::Incoming),
@@ -284,6 +286,7 @@ impl CodeGraph {
 			[
 				EdgeKind::Calls,
 				EdgeKind::References,
+				EdgeKind::Styles,
 				EdgeKind::Inherits,
 				EdgeKind::Imports,
 				EdgeKind::TypeImports,
@@ -321,10 +324,15 @@ impl CodeGraph {
 					return None;
 				};
 				if symbol.exported
-					|| matches!(symbol.kind, SymbolKind::Module | SymbolKind::Template)
-					|| (symbol.kind == SymbolKind::Method && symbol.name == "constructor")
+					|| matches!(
+						symbol.kind,
+						SymbolKind::Module
+							| SymbolKind::Template
+							| SymbolKind::Element
+							| SymbolKind::CssProperty
+					) || (symbol.kind == SymbolKind::Method && symbol.name == "constructor")
 					|| is_entry_point_symbol(symbol)
-					|| is_test_path(&symbol.file)
+					|| is_test_path(symbol.file.as_path())
 				{
 					return None;
 				}
@@ -340,7 +348,11 @@ impl CodeGraph {
 									| EdgeKind::Renders
 							)
 						});
-				if has_inbound_usage {
+				let has_style_consumers = symbol.kind == SymbolKind::CssRule
+					&& graph
+						.edges_directed(node_index, Direction::Outgoing)
+						.any(|edge| *edge.weight() == EdgeKind::Styles);
+				if has_inbound_usage || has_style_consumers {
 					return None;
 				}
 				let confidence = if symbol
@@ -357,7 +369,11 @@ impl CodeGraph {
 				};
 				Some(GraphDeadCodeItem {
 					symbol:     summary_for_node(graph, node_index)?,
-					reason:     "no inbound semantic references".into(),
+					reason:     if symbol.kind == SymbolKind::CssRule {
+						"no matched styled elements".into()
+					} else {
+						"no inbound semantic references".into()
+					},
 					confidence: confidence.into(),
 				})
 			})
@@ -666,6 +682,79 @@ fn common_path_prefix(files: &[GraphNodeSummary]) -> String {
 		return String::new();
 	}
 	PathBuf::from_iter(parts).to_string_lossy().to_string()
+}
+
+#[cfg(test)]
+fn build_style_graph() -> CodeGraph {
+	let mut graph = petgraph::stable_graph::StableGraph::<GraphNode, EdgeKind>::new();
+	let html_file = graph.add_node(GraphNode::File(crate::model::FileNode {
+		path:     PathBuf::from("index.html"),
+		language: "html".into(),
+	}));
+	let css_file = graph.add_node(GraphNode::File(crate::model::FileNode {
+		path:     PathBuf::from("app.css"),
+		language: "css".into(),
+	}));
+	let selector = graph.add_node(GraphNode::Symbol(crate::model::SymbolNode {
+		name:           ".btn".into(),
+		qualified_name: "app.css::.btn".into(),
+		file:           PathBuf::from("app.css"),
+		kind:           SymbolKind::CssRule,
+		exported:       false,
+		line:           1,
+		column:         1,
+		detail:         None,
+	}));
+	let element = graph.add_node(GraphNode::Symbol(crate::model::SymbolNode {
+		name:           "button.btn".into(),
+		qualified_name: "index.html::button.btn".into(),
+		file:           PathBuf::from("index.html"),
+		kind:           SymbolKind::Element,
+		exported:       false,
+		line:           1,
+		column:         1,
+		detail:         None,
+	}));
+	graph.add_edge(css_file, selector, EdgeKind::Defines);
+	graph.add_edge(html_file, element, EdgeKind::Defines);
+	graph.add_edge(selector, element, EdgeKind::Styles);
+	CodeGraph::from(crate::model::PersistedCodeGraph {
+		root: PathBuf::from("."),
+		graph,
+		stats: crate::model::GraphStats {
+			file_count:      2,
+			symbol_count:    2,
+			edge_count:      3,
+			language_counts: std::collections::BTreeMap::from([("css".into(), 1), ("html".into(), 1)]),
+		},
+		generated_at_ms: 0,
+		git_head: None,
+	})
+}
+
+#[test]
+fn queries_context_and_dead_code_treat_styles_as_usage() {
+	let graph = build_style_graph();
+	let context = graph
+		.graph_context(".btn")
+		.expect("style context should exist");
+	assert!(
+		context
+			.references
+			.iter()
+			.any(|node| node.label.ends_with("index.html::button.btn"))
+	);
+	let dead_code = graph.graph_dead_code();
+	assert!(
+		!dead_code
+			.iter()
+			.any(|item| item.symbol.label.ends_with("app.css::.btn"))
+	);
+	assert!(
+		!dead_code
+			.iter()
+			.any(|item| item.symbol.label.ends_with("index.html::button.btn"))
+	);
 }
 
 #[cfg(test)]
