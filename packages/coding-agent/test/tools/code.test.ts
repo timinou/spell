@@ -70,6 +70,31 @@ describe("coding-agent code tool wiring", () => {
 		_resetSupportedExtensionsForTest();
 	});
 
+	it("surfaces conservative html rename refusals from native edit handling", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: [], error: false })
+			.mockReturnValueOnce({
+				output:
+					"GenericFailure, HTML/CSS rename is not yet supported safely. Use read/context/impact to inspect proven consumers, then apply a manual patch or replace only after verifying the exact static scope.",
+				error: true,
+			});
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", {
+			command: "edit",
+			file: "/tmp/test/index.html",
+			symbol: "div#save",
+			operation: "rename",
+			content: "saveButton",
+		});
+
+		expect(getText(result)).toContain("HTML/CSS rename is not yet supported safely");
+		expect(result.details).toEqual(expect.objectContaining({ kind: "error", error: true }));
+		expect(bufferSpy).toHaveBeenNthCalledWith(
+			2,
+			expect.objectContaining({ operation: "rename", symbol: "div#save" }),
+		);
+	});
+
 	it("enforces mode guard for edit operations", async () => {
 		const tool = new CodeTool(
 			createSession({

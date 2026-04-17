@@ -214,6 +214,27 @@ describe("executeCodeBuffer NAPI bridge", () => {
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
 
+	it("refuses unsafe html rename mutations", async () => {
+		const tempDir = path.join(os.tmpdir(), `pi-natives-html-rename-${Date.now()}`);
+		const file = path.join(tempDir, "index.html");
+		await fs.mkdir(tempDir, { recursive: true });
+		await Bun.write(file, '<div id="save"></div>\n');
+
+		const result = executeCodeBuffer({
+			command: "edit",
+			file,
+			symbol: "div#save",
+			operation: "rename",
+			content: "saveButton",
+		});
+
+		expect(result).toEqual({
+			error: true,
+			output: expect.stringContaining("HTML/CSS rename is not yet supported safely"),
+		});
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
 	it("detects native-extension drift", () => {
 		const result = executeCodeBuffer({
 			command: "languages",

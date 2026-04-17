@@ -151,3 +151,17 @@ how would you make the pi code graph/engine maximally useful for html/css files?
   - HTML/CSS local semantic support
   - conservative handling of dynamic/unsafe HTML/CSS mutations
 - No extra command-specific verification required beyond the already passing `bun check:ts` and focused tool tests because this change is documentation-only and aligned with the observed tool surface.
+
+*** Verification update [2026-04-17 5]
+- Added explicit conservative refusal for unsupported HTML/CSS destructive refactors in the native code-buffer edit path:
+  - `rename` on HTML/CSS now fails with a proof-oriented explanation instead of performing unsafe partial rewrites.
+  - `kill` on HTML/CSS now fails with a proof-oriented explanation instead of pretending dead-style/dead-markup removal is proven.
+- Added focused regression coverage for both surfaces:
+  - `packages/natives/test/code-buffer.test.ts` → direct native refusal
+  - `packages/coding-agent/test/tools/code.test.ts` → coding-agent error rendering of native refusal
+- Rebuilt and re-verified after the refusal path landed:
+  - `bun --cwd=packages/natives run dev:native` → PASS
+  - `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts` → PASS (80 passed, 0 failed)
+  - `bun check:ts` → PASS
+  - `bun check:rs` → PASS
+- Remaining blocker narrows further: the tool now refuses unsafe HTML/CSS rename/delete truthfully, but provable success-path refactors (exact class/id/custom-property rename and proof-backed dead-style removal) are still not implemented, so the PLAN remains `DOING`.

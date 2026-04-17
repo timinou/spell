@@ -210,6 +210,8 @@ fn single_edit_operation(
 		.and_then(Value::as_str)
 		.ok_or_else(|| json_err("Missing required field: operation"))?;
 
+	let conservative_web_refactor = matches!(buffer.language().as_str(), "html" | "css");
+
 	match operation {
 		"create" => {
 			let content = required_str(options, "content")?;
@@ -236,6 +238,13 @@ fn single_edit_operation(
 			wrap_node(buffer, &resolved, content).map_err(engine_err)
 		},
 		"rename" => {
+			if conservative_web_refactor {
+				return Err(json_err(
+					"HTML/CSS rename is not yet supported safely. Use read/context/impact to inspect \
+					 proven consumers, then apply a manual patch or replace only after verifying the \
+					 exact static scope.",
+				));
+			}
 			let resolved = resolve_target(buffer, profile, options)?;
 			let new_name = required_str(options, "content")?;
 			rename_symbol(buffer, &resolved, new_name).map_err(engine_err)
@@ -270,6 +279,13 @@ fn single_edit_operation(
 			}
 		},
 		"kill" => {
+			if conservative_web_refactor {
+				return Err(json_err(
+					"HTML/CSS delete is not yet supported safely. Dead-style or dead-markup removal \
+					 must be proof-backed; inspect context/impact first and delete manually only when \
+					 the static graph proves the scope.",
+				));
+			}
 			if options.get("symbol").is_some() {
 				let resolved = resolve_target(buffer, profile, options)?;
 				Ok(vec![TextEdit {
