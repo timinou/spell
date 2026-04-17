@@ -17,8 +17,8 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 - Unwrap a block → `code edit { file, line: N, operation: "splice" }`
 - Preview unsaved edits → `code diff { file }`
 - See what's around → `code navigate { file, action: "siblings", line }`
-- Inspect children of a class/block → `code navigate { file, action: "children", line }`
-- Find enclosing function → `code navigate { file, action: "defun-at", line }`
+- Inspect children of a class/block/container → `code navigate { file, action: "children", line }`
+- Find enclosing semantic container → `code navigate { file, action: "defun-at", line }`
 - Find in-file references → `code navigate { file, action: "references", line, symbol }`
 - Build or rebuild the project graph → `code index`
 - Check graph cache and semantic index health → `code status`
@@ -40,7 +40,7 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 - `navigate`: In-file navigation helpers
 - `buffers`: Open managed buffers
 - `diff`: Buffer diff vs disk
-- `languages`: Built-in language profiles (TypeScript, Rust, Python, Elixir, Typst, Markdown, Org)
+- `languages`: Built-in language profiles with extensions, semantic capabilities, and embedded guest languages
 - `undo` / `redo`: revert or reapply last edit
 - `save`: Save buffer to disk
 - `index`: Build the native project graph under `.spell/graph/`
@@ -93,6 +93,14 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
     ]
   }
   ```
+- HTML/CSS local semantics:
+  ```json
+  {
+    "command": "outline",
+    "file": "src/site/index.html"
+  }
+  ```
+  → HTML/CSS support is semantic but conservative: element/rule lookup, read, navigate, and graph linkage are supported for provable static structure; ambiguous dynamic template/runtime styling cases must explain limits instead of pretending proof.
 - Batch multiple edits in one call:
   ```json
   {
@@ -121,6 +129,7 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 - `read` returns source text directly
 - `edit` returns a status line (`Created …` or `Edited …`), formatting status, change counts (`Changes: +N -M`), and a compact diff preview
 - `create` is whole-file only and missing-file only; if the path already exists, use `replace` or `replace-body` instead
+- `languages` includes per-language extensions plus semantic capability/embedded-language metadata when available
 - Graph commands return compact text with grouped sections and Next hints
 - Full normalized payload remains available in `details` for TUI rendering
 </output>
@@ -141,6 +150,7 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 - `index` forces a rebuild; other graph commands auto-build when needed
 - Do NOT default to resolution 3 for file reads
 - For markdown files, section headings are declarations: use `symbol: "Heading Text"` to target sections
+- For HTML/CSS, local semantics and style graph linkage are available for static structure; unsafe/dynamic rename or dead-style conclusions must be treated as uncertain rather than silently mutated
 - Language-specific operations (promote, demote, replace-code-block, etc.) are shown on first use of a supported file type
 - For non-code resources, use `read`
 </critical>
