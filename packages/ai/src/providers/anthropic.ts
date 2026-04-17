@@ -34,12 +34,11 @@ import type {
 } from "../types";
 import {
 	appendToolCallStreamDiagnostic,
-	classifyToolCallStreamInterruption,
+	classifyAssistantStreamInterruption,
 	getToolCallStreamMaxRetries,
 	getToolCallStreamRetryDelayMs,
 	hasActiveToolArgumentStreaming,
 	isAnthropicOAuthToken,
-	isRetryableToolCallStreamDiagnostic,
 	normalizeToolCallId,
 	resolveCacheRetention,
 	systemPromptBlocks,
@@ -842,14 +841,15 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					}
 					break; // Stream completed successfully
 				} catch (streamError) {
+					const idleTimeoutMs = hasActiveToolArgumentStreaming(output)
+						? toolArgumentIdleTimeoutMs
+						: streamIdleTimeoutMs;
 					const stallDiagnostic =
 						streamError instanceof Error &&
 						streamError.message.includes("Anthropic messages stream stalled while waiting for the next event")
-							? classifyToolCallStreamInterruption(output, {
+							? classifyAssistantStreamInterruption(output, {
 									firstTokenTimeMs: firstTokenTime ? firstTokenTime - startTime : undefined,
-									idleTimeoutMs: hasActiveToolArgumentStreaming(output)
-										? toolArgumentIdleTimeoutMs
-										: streamIdleTimeoutMs,
+									idleTimeoutMs,
 									providerRetryAttempt,
 								})
 							: undefined;
@@ -864,13 +864,13 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 						? new ToolCallStreamDiagnosticError(stallDiagnostic)
 						: streamError;
 					const isTransient =
-						isTransientStreamParseError(streamError) ||
-						(stallDiagnostic ? isRetryableToolCallStreamDiagnostic(stallDiagnostic) : false);
+						isTransientStreamParseError(streamError) || stallDiagnostic?.state === "stalled_incomplete_tool_args";
 					if (
 						options?.signal?.aborted ||
 						providerRetryAttempt >= getToolCallStreamMaxRetries() ||
-						(!isTransient && firstTokenTime !== undefined) ||
-						(!isTransient && !isProviderRetryableError(streamError))
+						(stallDiagnostic !== undefined && !isTransient) ||
+						(stallDiagnostic === undefined && !isTransient && firstTokenTime !== undefined) ||
+						(stallDiagnostic === undefined && !isTransient && !isProviderRetryableError(streamError))
 					) {
 						throw finalStreamError;
 					}
@@ -895,6 +895,12 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					if ("partialJson" in block) delete block.partialJson;
 				}
 				output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+				if (error instanceof ToolCallStreamDiagnosticError) {
+					const lastDiagnostic = output.streamDiagnostics?.at(-1);
+					if (lastDiagnostic !== error.diagnostic) {
+						output.streamDiagnostics = [...(output.streamDiagnostics ?? []), error.diagnostic];
+					}
+				}
 				output.errorMessage = await finalizeErrorMessage(error, rawRequestDump);
 				output.duration = Date.now() - startTime;
 				if (firstTokenTime) output.ttft = firstTokenTime - startTime;

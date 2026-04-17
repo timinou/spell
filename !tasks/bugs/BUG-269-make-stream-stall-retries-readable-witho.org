@@ -1,0 +1,111 @@
+#+TITLE: Make stream-stall retries readable without hiding failures
+#+STATE: DONE
+#+SESSION_ID: 14be110665c26667
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T10-48-50-839Z_14be110665c26667.jsonl]]
+#+CUSTOM_ID: BUG-269-make-stream-stall-retries-readable-witho
+#+EFFORT: 4h
+#+LAYER: packages/coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+Error: Anthropic messages stream stalled while waiting for the next
+ event
+
+ Error: Anthropic messages stream stalled while waiting for the next
+ event
+
+ Session Info
+
+ File:
+ /home/user/.spell/agent/sessions/-code-ora-monorepo-infra-beam/2026-
+ 04-17T10-09-12-579Z_14be07f3e0ede200.jsonl
+ ID: 14be07f3e0ede200
+
+
+Why?
+
+:PROPERTIES:
+:EFFORT: 4h
+:LAYER: packages/coding-agent
+:PRIORITY: #A
+:DEPENDS: BUG-268-classify-and-recover-anthropic-idle-stre
+:END:
+
+* Scope
+- In scope: `packages/coding-agent/src/session/agent-session.ts`, `packages/coding-agent/src/modes/controllers/event-controller.ts`, `packages/coding-agent/src/session/tool-call-diagnostics.ts`, and package-local tests covering transcript/TUI-visible retry/error behavior.
+- In scope: generic session/UI handling for repeated provider stream stalls across providers, using richer context from provider-owned diagnostics when available.
+- In scope: preserving retry/error visibility in the transcript/TUI while making repeated stall failures understandable instead of indistinguishable duplicates.
+- Out of scope: changing unrelated retry classes (rate limits, overload, auth), changing provider-owned idle timeout constants, or hiding retry/error events from the user.
+
+* Existing Patterns
+- `packages/coding-agent/src/session/agent-session.ts` decides retryability in `#isRetryableErrorMessage(errorMessage)` and schedules retries via `#handleRetryableError(message)`.
+- `packages/coding-agent/src/modes/controllers/event-controller.ts` already renders retry lifecycle separately from assistant message-end rendering; current duplication comes from those two paths being semantically uncoordinated.
+- `packages/coding-agent/src/session/tool-call-diagnostics.ts` is the existing adapter that converts provider diagnostics into a user-facing failure message.
+- Existing retry UX should stay visible; the fix must improve labels/context rather than removing evidence of retries.
+
+* Tests
+Enumerate all user-observable workflows first:
+1. A retryable stream stall still emits retry lifecycle visibility (retry start / retry end where applicable).
+2. Each assistant error bubble remains visible for debugging, but repeated stall failures are contextualized so the user can tell attempt N from attempt N+1.
+3. Tool-call stall diagnostics, when present, continue to render the richer tool-call-specific explanation rather than regressing to a generic provider error.
+4. Non-stall retry classes (e.g. rate limit / connection error) remain behaviorally unchanged.
+5. Final failure after max retries remains visible and truthful, with attempt count and final classified context.
+
+Concrete coverage to add/update:
+- Add or extend package-local tests under `packages/coding-agent/test/session-manager/` or the nearest existing retry/session rendering suite to assert transcript/session persistence for repeated stall attempts.
+- Add or extend package-local tests under `packages/coding-agent/test/` for the session-layer retry path if there is already a focused retry/session harness nearby.
+- Reuse `packages/coding-agent/test/session-manager/signature-persistence.test.ts` patterns if artifact-backed diagnostics or persisted stream metadata need regression assertions.
+
+* Implementation
+** Define retry-visibility contract from session state
+:PROPERTIES:
+:CUSTOM_ID: BUG-269-make-stream-stall-retries-readable-witho::define-retry-visibility-contract
+:END:
+- Files: `packages/coding-agent/src/session/agent-session.ts`, `packages/coding-agent/src/session/tool-call-diagnostics.ts`
+- Specify what metadata distinguishes repeated stall attempts (attempt number, final attempt vs intermediate failure, provider diagnostic context).
+- This step satisfies workflows 1, 2, and 5.
+
+** Write session/TUI regression tests first
+:PROPERTIES:
+:CUSTOM_ID: BUG-269-make-stream-stall-retries-readable-witho::session-stall-retry-tests
+:DEPENDS: BUG-269-make-stream-stall-retries-readable-witho::define-retry-visibility-contract BUG-268-classify-and-recover-anthropic-idle-stre::normalize-diagnostic-output
+:END:
+- Files: package-local tests in `packages/coding-agent/test/` and/or `packages/coding-agent/test/session-manager/`.
+- Encode workflows 1-5 as initially-failing assertions over persisted message state, retry attempt visibility, and rendered failure-message selection.
+- Preserve the requirement that retry/error events remain visible rather than collapsed away.
+
+** Implement retry metadata and transcript truthfulness
+:PROPERTIES:
+:CUSTOM_ID: BUG-269-make-stream-stall-retries-readable-witho::implement-session-retry-context
+:DEPENDS: BUG-269-make-stream-stall-retries-readable-witho::session-stall-retry-tests
+:END:
+- File: `packages/coding-agent/src/session/agent-session.ts`
+- Adjust the generic retry path so repeated stream stalls surface as distinct attempts with contextual metadata rather than identical opaque failures.
+- Preserve retry behavior; do not stop retrying merely to reduce transcript noise.
+- Keep final attempt accounting truthful and stable for downstream renderers/tests.
+
+** Implement UI/rendering context improvements
+:PROPERTIES:
+:CUSTOM_ID: BUG-269-make-stream-stall-retries-readable-witho::implement-ui-retry-context
+:DEPENDS: BUG-269-make-stream-stall-retries-readable-witho::implement-session-retry-context
+:END:
+- Files: `packages/coding-agent/src/modes/controllers/event-controller.ts`, `packages/coding-agent/src/session/tool-call-diagnostics.ts`
+- Ensure message-end rendering and retry-status rendering tell a coherent story: all failures stay visible, but intermediate vs final stall attempts are understandable.
+- Preserve richer tool-call-specific diagnostics when available.
+
+* Edge Cases
+- Intermediate retry attempts must not be mislabeled as final failures.
+- Final retry exhaustion must remain visible even if earlier attempts already produced assistant error entries.
+- Tool-call diagnostics with persisted raw JSON artifacts must continue to render the artifact reference correctly.
+- Provider-specific richer diagnostics should be consumed opportunistically, but generic retry classes must not regress.
+- Removing the last assistant error from `agent.state.messages` for retry continuation must not erase needed session-history context.
+
+* Acceptance Criteria
+- Repeated stream-stall failures remain visible in the transcript/TUI, but each attempt is understandable from its surfaced context.
+- Final retry exhaustion includes truthful attempt count and final classified context.
+- Tool-call stall diagnostics still render their richer explanation and artifact references when present.
+- Non-stall retry behavior remains unchanged.
+- Verification criteria: focused package-local retry/session tests for the changed area, plus `bun check:ts`, are required at implementation time.
+
+NOTE [2026-04-17]: Implemented retry-attempt/final-failure context for persisted assistant stream stalls, preserved richer tool diagnostics, and verified with focused coding-agent tests plus bun check:ts.

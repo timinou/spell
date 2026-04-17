@@ -94,6 +94,13 @@ function getLastToolCall(message: AssistantMessage): ToolCall | undefined {
 	}
 	return undefined;
 }
+function getLastContentBlock(message: AssistantMessage): AssistantMessage["content"][number] | undefined {
+	for (let i = message.content.length - 1; i >= 0; i--) {
+		const block = message.content[i];
+		if (block) return block;
+	}
+	return undefined;
+}
 
 export function createToolCallStreamDiagnostic(
 	options: CreateToolCallStreamDiagnosticOptions,
@@ -159,6 +166,31 @@ export function classifyToolCallStreamInterruption(
 		providerRetryAttempt: options.providerRetryAttempt,
 	});
 }
+export function classifyAssistantStreamInterruption(
+	message: AssistantMessage,
+	options: ClassifyToolCallStreamInterruptionOptions = {},
+): ToolCallStreamDiagnostic {
+	const toolCallDiagnostic = classifyToolCallStreamInterruption(message, options);
+	if (toolCallDiagnostic) return toolCallDiagnostic;
+
+	const lastContentBlock = getLastContentBlock(message);
+	const state: ToolCallStreamDiagnosticState =
+		lastContentBlock?.type === "thinking" || lastContentBlock?.type === "redactedThinking"
+			? "stalled_during_thinking"
+			: lastContentBlock?.type === "text"
+				? "stalled_during_text"
+				: "stalled_before_response_content";
+
+	return createToolCallStreamDiagnostic({
+		state,
+		api: options.api ?? message.api,
+		provider: options.provider ?? message.provider,
+		model: options.model ?? message.model,
+		firstTokenTimeMs: options.firstTokenTimeMs,
+		idleTimeoutMs: options.idleTimeoutMs,
+		providerRetryAttempt: options.providerRetryAttempt,
+	});
+}
 
 export function hasActiveToolArgumentStreaming(message: AssistantMessage): boolean {
 	return message.content.some(
@@ -191,6 +223,12 @@ export function isToolCallStreamDiagnostic(value: unknown): value is ToolCallStr
 
 function describeState(state: ToolCallStreamDiagnosticState): string {
 	switch (state) {
+		case "stalled_before_response_content":
+			return "stalled before any response content arrived";
+		case "stalled_during_thinking":
+			return "stalled while streaming thinking content";
+		case "stalled_during_text":
+			return "stalled while streaming text content";
 		case "stalled_before_tool_args":
 			return "stalled before any tool arguments arrived";
 		case "stalled_incomplete_tool_args":
@@ -201,10 +239,18 @@ function describeState(state: ToolCallStreamDiagnosticState): string {
 }
 
 export function summarizeToolCallStreamDiagnostic(diagnostic: ToolCallStreamDiagnostic): string {
-	const toolLabel = diagnostic.toolName ? ` ${diagnostic.toolName}` : "";
+	const isToolCallState =
+		diagnostic.state === "stalled_before_tool_args" ||
+		diagnostic.state === "stalled_incomplete_tool_args" ||
+		diagnostic.state === "completed_tool_call_missing_trailing_stop";
+	const targetLabel = isToolCallState
+		? `Tool call${diagnostic.toolName ? ` ${diagnostic.toolName}` : ""}`
+		: "Assistant response";
 	const parsedKeys =
-		diagnostic.parsedArgumentKeys.length > 0 ? ` Parsed keys: ${diagnostic.parsedArgumentKeys.join(", ")}.` : "";
-	return `Tool call${toolLabel} ${describeState(diagnostic.state)}.${parsedKeys}`;
+		isToolCallState && diagnostic.parsedArgumentKeys.length > 0
+			? ` Parsed keys: ${diagnostic.parsedArgumentKeys.join(", ")}.`
+			: "";
+	return `${targetLabel} ${describeState(diagnostic.state)}.${parsedKeys}`;
 }
 
 export function formatToolCallStreamDiagnosticMessage(diagnostic: ToolCallStreamDiagnostic): string {
