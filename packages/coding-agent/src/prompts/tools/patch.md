@@ -7,7 +7,7 @@ Applies diff hunks to existing files.
 - Copy anchors and context lines verbatim, including whitespace
 - When editing structured blocks, include opening and closing lines so the edit stays inside the block
 - Do not use anchors as comments, place new lines outside the intended block, retry the same failing diff, or use this tool to reformat or fix indentation
-- This tool is only for unsupported plain-text files or cases where `code edit` cannot express the change safely
+- This tool is only for unsupported plain-text files. If `code edit` fails on a code-supported file, re-read/navigate and tighten the structural target instead of falling back to patch mode
 </instruction>
 
 <parameters>

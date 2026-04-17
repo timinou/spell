@@ -318,11 +318,58 @@ impl CodeBuffer {
 				version:        self.version,
 			});
 		}
+
+		let source_len = self.source().len();
+		if edit.start_byte > edit.old_end_byte || edit.old_end_byte > source_len {
+			return Err(CodeEngineError::Edit(format!(
+				"Edit range {}..{} is out of bounds for buffer length {source_len}",
+				edit.start_byte, edit.old_end_byte,
+			)));
+		}
+
+		let original_rope = self.rope.clone();
+		let original_tree = self.tree.clone();
+		let original_history = self.history.clone();
+		let original_version = self.version;
+		let original_dirty = self.dirty;
+		let original_had_error = self.tree.root_node().has_error();
+		let restore = |buffer: &mut Self| {
+			buffer.rope = original_rope.clone();
+			buffer.tree = original_tree.clone();
+			buffer.history = original_history.clone();
+			buffer.version = original_version;
+			buffer.dirty = original_dirty;
+		};
+
 		let old_text = self
 			.rope
 			.slice(edit.start_byte..edit.old_end_byte)
 			.to_string();
-		let result = self.apply_text_mutation(edit.clone())?;
+		let result = match self.apply_text_mutation(edit.clone()) {
+			Ok(result) => result,
+			Err(error) => {
+				restore(self);
+				return Err(error);
+			},
+		};
+		if !original_had_error && self.tree.root_node().has_error() {
+			self.tree = match Self::parse(&mut self.parser, &self.rope, None) {
+				Ok(tree) => tree,
+				Err(error) => {
+					restore(self);
+					return Err(error);
+				},
+			};
+			if self.tree.root_node().has_error() {
+				restore(self);
+				return Err(CodeEngineError::Edit(
+					"Edit would leave the buffer structurally invalid. Re-anchor the target or include \
+					 an explicit separator."
+						.into(),
+				));
+			}
+		}
+
 		self.history.record(edit.clone(), TextEdit {
 			start_byte:   edit.start_byte,
 			old_end_byte: edit.start_byte + edit.new_text.len(),
@@ -338,6 +385,45 @@ impl CodeBuffer {
 		if edits.is_empty() {
 			return Ok(Vec::new());
 		}
+
+		let source_len = self.source().len();
+		for edit in &edits {
+			if edit.start_byte > edit.old_end_byte || edit.old_end_byte > source_len {
+				return Err(CodeEngineError::Edit(format!(
+					"Edit range {}..{} is out of bounds for buffer length {source_len}",
+					edit.start_byte, edit.old_end_byte,
+				)));
+			}
+		}
+		let mut sorted_ranges = edits
+			.iter()
+			.map(|edit| (edit.start_byte, edit.old_end_byte))
+			.collect::<Vec<_>>();
+		sorted_ranges.sort_unstable_by_key(|(start_byte, _)| *start_byte);
+		for pair in sorted_ranges.windows(2) {
+			if pair[0].1 > pair[1].0 {
+				return Err(CodeEngineError::Edit(
+					"Batch edits overlap in the original buffer. Split them into separate structural \
+					 edits or tighten the target."
+						.into(),
+				));
+			}
+		}
+
+		let original_rope = self.rope.clone();
+		let original_tree = self.tree.clone();
+		let original_history = self.history.clone();
+		let original_version = self.version;
+		let original_dirty = self.dirty;
+		let original_had_error = self.tree.root_node().has_error();
+		let restore = |buffer: &mut Self| {
+			buffer.rope = original_rope.clone();
+			buffer.tree = original_tree.clone();
+			buffer.history = original_history.clone();
+			buffer.version = original_version;
+			buffer.dirty = original_dirty;
+		};
+
 		let mut results = Vec::with_capacity(edits.len());
 		let mut all_forwards = Vec::new();
 		let mut all_inverses = Vec::new();
@@ -359,16 +445,42 @@ impl CodeBuffer {
 				old_end_byte: edit.start_byte + edit.new_text.len(),
 				new_text:     old_text,
 			};
-			let result = self.apply_text_mutation(edit.clone())?;
+			let result = match self.apply_text_mutation(edit.clone()) {
+				Ok(result) => result,
+				Err(error) => {
+					restore(self);
+					return Err(error);
+				},
+			};
 			all_forwards.push(edit);
 			all_inverses.push(inverse);
 			results.push(result);
+		}
+		if !original_had_error && self.tree.root_node().has_error() {
+			self.tree = match Self::parse(&mut self.parser, &self.rope, None) {
+				Ok(tree) => tree,
+				Err(error) => {
+					restore(self);
+					return Err(error);
+				},
+			};
+			if self.tree.root_node().has_error() {
+				restore(self);
+				return Err(CodeEngineError::Edit(
+					"Edit batch would leave the buffer structurally invalid. Re-anchor the target or \
+					 include an explicit separator."
+						.into(),
+				));
+			}
 		}
 		if !all_forwards.is_empty() {
 			all_inverses.reverse();
 			self.history.record_batch(all_forwards, all_inverses);
 			self.version = self.version.saturating_add(1);
 			self.dirty = true;
+			for result in &mut results {
+				result.version = self.version;
+			}
 		}
 		Ok(results)
 	}
@@ -615,22 +727,34 @@ mod tests {
 
 	#[test]
 	fn test_undo_tree_branching() {
-		let source = fs::read_to_string(fixture("hello.ts")).expect("fixture readable");
+		let source = "export const value = 1;\n";
 		let mut buffer =
-			CodeBuffer::from_str(&source, LanguageId::new("typescript"), registry()).expect("buffer");
+			CodeBuffer::from_str(source, LanguageId::new("typescript"), registry()).expect("buffer");
 		buffer
-			.edit(TextEdit { start_byte: 0, old_end_byte: 0, new_text: "A".to_string() })
+			.edit(TextEdit {
+				start_byte:   0,
+				old_end_byte: source.len(),
+				new_text:     "export const value = 2;\n".to_string(),
+			})
 			.expect("edit A");
 		buffer
-			.edit(TextEdit { start_byte: 1, old_end_byte: 1, new_text: "B".to_string() })
+			.edit(TextEdit {
+				start_byte:   0,
+				old_end_byte: "export const value = 2;\n".len(),
+				new_text:     "export const value = 3;\n".to_string(),
+			})
 			.expect("edit B");
 		buffer.undo().expect("undo");
 		buffer
-			.edit(TextEdit { start_byte: 1, old_end_byte: 1, new_text: "C".to_string() })
+			.edit(TextEdit {
+				start_byte:   0,
+				old_end_byte: "export const value = 2;\n".len(),
+				new_text:     "export const value = 4;\n".to_string(),
+			})
 			.expect("edit C");
 		let out = buffer.source();
-		assert!(out.starts_with("AC"));
-		assert!(!out.contains('B'));
+		assert!(out.contains("value = 4"));
+		assert!(!out.contains("value = 3"));
 	}
 
 	#[test]
@@ -922,5 +1046,38 @@ mod tests {
 			fs::read_to_string(&path).expect("read saved file"),
 			"\u{feff}first\r\nupdated\r\n"
 		);
+	}
+
+	#[test]
+	fn test_edit_rejects_structurally_invalid_result() {
+		let source = "export const value = 1;\n";
+		let mut buffer =
+			CodeBuffer::from_str(source, LanguageId::new("typescript"), registry()).expect("buffer");
+
+		let err = buffer
+			.edit(TextEdit {
+				start_byte:   0,
+				old_end_byte: source.len(),
+				new_text:     "export const = ;\n".into(),
+			})
+			.expect_err("reject invalid syntax");
+		assert!(err.to_string().contains("structurally invalid"));
+		assert_eq!(buffer.source(), source);
+		assert_eq!(buffer.version(), 0);
+	}
+
+	#[test]
+	fn test_batch_rejects_overlapping_ranges() {
+		let mut buffer =
+			CodeBuffer::from_str("abcdef", LanguageId::new("typescript"), registry()).expect("buffer");
+		let err = buffer
+			.edit_batch(vec![
+				TextEdit { start_byte: 1, old_end_byte: 3, new_text: "X".into() },
+				TextEdit { start_byte: 2, old_end_byte: 4, new_text: "Y".into() },
+			])
+			.expect_err("reject overlap");
+		assert!(err.to_string().contains("overlap"));
+		assert_eq!(buffer.source(), "abcdef");
+		assert_eq!(buffer.version(), 0);
 	}
 }

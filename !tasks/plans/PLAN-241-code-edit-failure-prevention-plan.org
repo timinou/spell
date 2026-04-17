@@ -1,5 +1,5 @@
 #+TITLE: CODE_EDIT_FAILURE_PREVENTION_PLAN
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14be2b039951fa47
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T12-42-23-717Z_14be2b039951fa47.jsonl]]
 #+CUSTOM_ID: PLAN-241-code-edit-failure-prevention-plan
@@ -88,3 +88,18 @@ Bro this is wrong on so many levels. please explain the gap between the agent's 
 - [[id:BUG-271-coding-agent-align-code-edit-prompts-exa]]
 - [[id:BUG-272-coding-agent-make-malformed-code-edit-pr]]
 - Rationale: once the mutation contract is hard, align the agent/runtime boundary and make user-visible previews/results equally truthful.
+
+** Completion [2026-04-17]
+*** Verification
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts packages/coding-agent/test/system-prompt-templates.test.ts packages/coding-agent/test/plan-mode/plan-mode-allowed-folders-prompt.test.ts packages/coding-agent/test/prompts/code-tool-contracts.test.ts` → 97 pass, 1 skip, 0 fail.
+- `bun test packages/natives/test/code-buffer.test.ts` → 15 pass, 0 fail.
+- `cargo test -p pi-code-engine` → 148 pass, 0 fail.
+- `bun check:ts` → passed.
+- `bun check:rs` → passed.
+- Manual proof: transcript-shaped line-target insert-after cases now fail before save with actionable errors; prompt/runtime routing now both direct code-supported files to `code edit`; code-tool error output now reports failure class plus recovery guidance instead of plain success text.
+*** Artifacts
+- Command verification only; no screenshots or generated media were required.
+*** Deviations
+- None.
+
+NOTE [2026-04-17]: Execution completed with verification evidence recorded under Completion [2026-04-17].

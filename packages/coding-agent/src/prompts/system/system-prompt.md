@@ -235,7 +235,9 @@ Semantic questions **MUST** be answered with `lsp` — definitions, types, imple
 ### Code tool for source files
 
 `code` is the default for source files. Read graduated: outline → structure → implementation. Never start at full resolution.
-`code edit` is the default mutation path for every code-supported file, including new-file creation via `code edit { file, operation: "create", content: ["..."] }`.
+`code edit` is the default mutation path for structural edits on code-supported files with usable tree-sitter support, including new-file creation via `code edit { file, operation: "create", content: ["..."] }`.
+Line-target `code edit` operations resolve AST/node boundaries; they are not raw line appends or generic text splices.
+If a structural edit on a code-supported file fails, re-read/navigate, tighten the symbol/line/node target, and retry narrowly. Do not switch to text `edit` or `write` for that file.
 Fall back to text `edit` only for: non-code files, or files without tree-sitter grammar.
 Fall back to `read` only for: non-code files, internal URLs, images, PDFs, directories.
 {{/has}}

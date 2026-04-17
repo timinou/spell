@@ -109,9 +109,11 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
     "edits": [
       { "symbol": "handleRequest", "operation": "patch", "patches": [{ "find": ["const timeout = 5000;"], "replace": ["const timeout = 30_000;"] }] },
       { "symbol": "processData", "operation": "kill" },
-      { "line": 1, "operation": "insert-after", "content": ["import { x } from './x';"] }
+      { "line": 1, "operation": "insert-after", "content": ["", "import { x } from './x';"] }
     ]
   }
+  ```
+  → Line-target insertions operate at AST/node boundaries. Include an explicit separator newline in `content`, or target a declaration/symbol instead of treating them like raw line appends.
 - Edit a markdown section by heading name:
   ```json
   {
@@ -138,6 +140,8 @@ Structural code intelligence via tree-sitter and cross-file graph queries. What 
 - Use file-scoped commands for local syntax work; use graph commands for cross-file reasoning
 - `operation: "create"` accepts only `file`, `operation`, and `content`; do not combine it with `symbol`, `line`, `patches`, or `edits`
 - Use `symbol` to target declarations; use `line` only for positional operations
+- Line-target edits resolve semantic/node boundaries; they are not generic text splices
+- If a line-target edit fails on a code-supported file, re-read/navigate, tighten the symbol/line/node target, and retry narrowly instead of switching to text `edit` or `write`
 - `operation: "replace"` uses `symbol` for declaration replacement, `line` for positional replacement, and omitting both replaces the entire existing file
 - Whole-file `replace` edits existing supported files only; use `create` for missing files
 - For `patch`, `find` matches only within the targeted symbol scope and is indent-insensitive

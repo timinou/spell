@@ -147,13 +147,14 @@ mod tests {
 	}
 
 	#[test]
-	fn test_kill_typst() {
+	fn test_kill_typst_rejects_partial_wrapper_splice() {
 		let mut buffer = typst_buffer();
-		let edits = kill_node(&buffer, 2, "let").expect("kill typst let");
-		let out = apply_and_get(&mut buffer, edits);
-		assert!(!out.contains("let title = [Spell]"), "let binding should be removed");
-		assert!(out.contains("#show heading.where(level: 1)"), "other code should remain");
-		assert!(out.contains("= #title"), "body content should remain");
+		let edits = kill_node(&buffer, 2, "let").expect("resolve typst let target");
+		let err = buffer
+			.edit_batch(edits)
+			.expect_err("reject partial wrapper splice");
+		assert!(err.to_string().contains("structurally invalid"));
+		assert!(buffer.source().contains("#let title = [Spell]"));
 	}
 
 	// -- replace / insert tests --
@@ -368,5 +369,31 @@ mod tests {
 		assert!(out.contains("const x"), "x should remain after splice self");
 		// Sibling statements should be removed from the parent range
 		// The parent node is replaced with only the kept children
+	}
+
+	#[test]
+	fn test_insert_after_import_requires_explicit_separator() {
+		let buffer = CodeBuffer::from_str(
+			"import { a } from \"./a\";\nexport const value = a;\n",
+			LanguageId::new("typescript"),
+			registry(),
+		)
+		.expect("buffer");
+		let err = insert_after(&buffer, 1, "import_statement", "import { b } from \"./b\";")
+			.expect_err("reject unsafe import insert");
+		assert!(err.to_string().contains("must start with a newline"));
+	}
+
+	#[test]
+	fn test_insert_after_interface_member_requires_explicit_separator() {
+		let buffer = CodeBuffer::from_str(
+			"interface Foo {\n  bar: string;\n}\n",
+			LanguageId::new("typescript"),
+			registry(),
+		)
+		.expect("buffer");
+		let err = insert_after(&buffer, 2, "property_signature", "  baz: number;")
+			.expect_err("reject unsafe interface member insert");
+		assert!(err.to_string().contains("must start with a newline"));
 	}
 }

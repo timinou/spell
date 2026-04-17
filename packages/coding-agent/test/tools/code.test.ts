@@ -877,6 +877,115 @@ describe("coding-agent code tool wiring", () => {
 		);
 		expect(getText(result)).toContain("patch.find matched 0 locations");
 	});
+
+	it("rejects unsafe line-target insert-after payloads before save", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-unsafe-insert-after-"));
+		try {
+			const filePath = path.join(tempDir, "main.ts");
+			await Bun.write(filePath, 'import { a } from "./a";\nexport const value = a;\n');
+			const tool = new CodeTool(
+				createSession({ cwd: tempDir, settings: Settings.isolated({ "lsp.enabled": false }) }),
+			);
+
+			const result = await tool.execute("tool-edit", {
+				command: "edit",
+				file: filePath,
+				line: 1,
+				operation: "insert-after",
+				content: ['import { b } from "./b";'],
+			});
+
+			expect(result.details).toEqual(expect.objectContaining({ kind: "error", error: true }));
+			expect(getText(result)).toContain("must start with a newline");
+			expect(await Bun.file(filePath).text()).toBe('import { a } from "./a";\nexport const value = a;\n');
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects ambiguous line-target edits instead of widening silently", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-ambiguous-line-target-"));
+		try {
+			const filePath = path.join(tempDir, "main.typ");
+			await Bun.write(
+				filePath,
+				'#set document(\n  title: "Doc",\n  author: "Spell",\n)\n\n#let teal-primary = rgb("#008080")\n',
+			);
+			const tool = new CodeTool(
+				createSession({ cwd: tempDir, settings: Settings.isolated({ "lsp.enabled": false }) }),
+			);
+
+			const result = await tool.execute("tool-edit", {
+				command: "edit",
+				file: filePath,
+				line: 6,
+				operation: "replace",
+				content: ['#let teal-primary = rgb("#000000")'],
+			});
+
+			expect(result.details).toEqual(expect.objectContaining({ kind: "error", error: true }));
+			expect(getText(result)).toContain("Ambiguous line target");
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("surfaces structurally invalid edits as errors before save", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-invalid-structure-"));
+		try {
+			const filePath = path.join(tempDir, "main.ts");
+			await Bun.write(filePath, "export const value = 1;\n");
+			const tool = new CodeTool(
+				createSession({ cwd: tempDir, settings: Settings.isolated({ "lsp.enabled": false }) }),
+			);
+
+			const result = await tool.execute("tool-edit", {
+				command: "edit",
+				file: filePath,
+				operation: "replace",
+				content: ["export const = ;"],
+			});
+
+			expect(result.details).toEqual(expect.objectContaining({ kind: "error", error: true }));
+			expect(getText(result)).toContain("structurally invalid");
+			expect(await Bun.file(filePath).text()).toBe("export const value = 1;\n");
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects hashline edits on code files in hashline mode", async () => {
+		_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-hashline-invalidate-"));
+		try {
+			const filePath = path.join(tempDir, "main.ts");
+			await Bun.write(filePath, "export function main() {\n  return oldCall();\n}\n");
+			const tools = await createTools(
+				createSession({
+					cwd: tempDir,
+					settings: Settings.isolated({ "lsp.enabled": false, "edit.mode": "hashline" }),
+				}),
+			);
+			const editTool = tools.find(entry => entry.name === "edit");
+			expect(editTool).toBeDefined();
+
+			await expect(
+				editTool!.execute("hashline-edit", {
+					path: filePath,
+					edits: [
+						{
+							op: "replace",
+							pos: "2#HM",
+							lines: ["  return midCall();"],
+						},
+					],
+				}),
+			).rejects.toThrow("The edit tool is blocked for code-supported files");
+			expect(await Bun.file(filePath).text()).toContain("return oldCall();");
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
 });
 
 it("fails non-idempotent no-op edits before save", async () => {
@@ -1116,7 +1225,7 @@ it("keeps semantic-capable edits on the shared lifecycle", async () => {
 		await fs.rm(tempDir, { recursive: true, force: true });
 	}
 });
-it("invalidates managed buffers after hashline edits on code files", async () => {
+it("rejects hashline edits on code files in hashline mode", async () => {
 	_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
 	const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "code-hashline-invalidate-"));
 	try {
@@ -1128,36 +1237,27 @@ it("invalidates managed buffers after hashline edits on code files", async () =>
 				settings: Settings.isolated({ "lsp.enabled": false, "edit.mode": "hashline" }),
 			}),
 		);
-		const codeTool = tools.find(entry => entry.name === "code");
 		const editTool = tools.find(entry => entry.name === "edit");
-		expect(codeTool).toBeDefined();
 		expect(editTool).toBeDefined();
 
-		await codeTool!.execute("code-read-before", { command: "read", file: filePath, resolution: 3 });
-		await editTool!.execute("hashline-edit", {
-			path: filePath,
-			edits: [
-				{
-					op: "replace",
-					pos: "2#HM",
-					lines: ["  return midCall();"],
-				},
-			],
-		});
-
-		const followUp = await codeTool!.execute("code-edit-after", {
-			command: "edit",
-			file: filePath,
-			symbol: "main",
-			operation: "patch",
-			patches: [{ find: "return midCall();", replace: "return finalCall();" }],
-		});
-		expect(getText(followUp)).not.toContain("Stale code buffer detected");
-		expect(await Bun.file(filePath).text()).toContain("return finalCall();");
+		await expect(
+			editTool!.execute("hashline-edit", {
+				path: filePath,
+				edits: [
+					{
+						op: "replace",
+						pos: "2#HM",
+						lines: ["  return midCall();"],
+					},
+				],
+			}),
+		).rejects.toThrow("The edit tool is blocked for code-supported files");
+		expect(await Bun.file(filePath).text()).toContain("return oldCall();");
 	} finally {
 		await fs.rm(tempDir, { recursive: true, force: true });
 	}
 });
+it.skip("legacy hashline invalidation path removed by code-file routing", async () => {});
 
 it("keeps failed edits and clean saves distinguishable", async () => {
 	_resetSupportedExtensionsForTest(TEST_EXTENSIONS);

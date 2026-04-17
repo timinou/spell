@@ -193,6 +193,7 @@ export interface CodeToolErrorDetails {
 	command: string;
 	file?: string;
 	displayPath?: string;
+	failureKind?: string;
 	message: string;
 	error: true;
 	output?: unknown;
@@ -207,6 +208,15 @@ const BUFFER_PREVIEW_LIMIT = 10;
 const LANGUAGE_PREVIEW_LIMIT = 10;
 const HISTORY_PREVIEW_LIMIT = 5;
 const PREVIEW_TEXT_LIMIT = 120;
+function classifyCodeToolFailure(message: string): string {
+	if (message.includes("operation 'create'")) return "payload_validation";
+	if (message.includes("Stale code buffer detected")) return "buffer_freshness";
+	if (message.includes("Ambiguous line target")) return "ambiguous_target";
+	if (message.includes("Unsafe line-target")) return "unsafe_boundary";
+	if (message.includes("structurally invalid")) return "structural_invalidity";
+	if (message.includes("save to disk failed")) return "save_failure";
+	return "execution_failure";
+}
 
 export function createCodeToolError(input: {
 	command: string;
@@ -220,6 +230,7 @@ export function createCodeToolError(input: {
 		command: input.command,
 		file: input.file,
 		displayPath: toDisplayPath(input.file, input.cwd),
+		failureKind: classifyCodeToolFailure(input.message),
 		message: input.message,
 		error: true,
 		output: input.output,
@@ -402,7 +413,13 @@ export function normalizeCodeBufferSuccess(input: {
 
 export function formatCodeToolContent(details: CodeToolResultDetails): string {
 	if (details.kind === "error") {
-		return `Error: ${details.message}`;
+		const parts = [
+			`Error${details.failureKind ? ` [${details.failureKind}]` : ""}${details.displayPath ? ` ${details.displayPath}` : ""}: ${details.message}`,
+		];
+		if (details.command === "edit") {
+			parts.push("Recovery: re-read/navigate, tighten the target, then retry narrowly.");
+		}
+		return parts.join("\n");
 	}
 
 	if (details.kind === "graph") {

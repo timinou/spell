@@ -1,5 +1,5 @@
 #+TITLE: coding-agent: align code-edit prompts, examples, and tool routing
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14be2b039951fa47
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T12-42-23-717Z_14be2b039951fa47.jsonl]]
 #+CUSTOM_ID: BUG-271-coding-agent-align-code-edit-prompts-exa
@@ -81,3 +81,5 @@
 - No shipped example teaches the unsafe `insert-after` pattern that caused the transcript failure.
 - Code-supported file routing no longer depends on stale commented exceptions once engine hardening is in place.
 - Prompt/render tests lock the boundary and recovery ladder so this guidance cannot drift silently.
+
+NOTE [2026-04-17]: Implemented in PLAN-241 execution; prompts/examples and write/edit routing now agree on the structural code-edit boundary and recovery ladder.
