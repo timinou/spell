@@ -1,0 +1,5 @@
+Manual proof points covered by focused tests:
+- Representative bash run spills after crossing the low default threshold and emits artifact://test-session/main/bash/... follow-up references.
+- Success residue is smaller than failure residue (success cases keep ~50 lines; failure cases keep ~120 lines in the focused tests).
+- Precision tools remain inline-first under wrapper policy tests (read exemption case).
+- lenientSpill widens only a single bash call and emits a visible warning in result text/details.

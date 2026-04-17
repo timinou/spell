@@ -222,9 +222,6 @@ export async function executeBash(command: string, options?: BashExecutorOptions
 		await pendingChunks;
 		if (resetSession) {
 			shellSessions.delete(sessionKey);
-			if (shellSession) {
-				void shellSession.shutdown().catch(() => {});
-			}
 		}
 	}
 }

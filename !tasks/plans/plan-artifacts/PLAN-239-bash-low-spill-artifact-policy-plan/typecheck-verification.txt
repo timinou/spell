@@ -1,0 +1,3 @@
+Command: bun check:ts
+Outcome: PASS
+Summary: biome check . && tsgo -p tsconfig.json completed without errors.

@@ -18,7 +18,7 @@ import { renderStatusLine } from "../tui";
 import { CachedOutputBlock } from "../tui/output-block";
 import type { ToolSession } from ".";
 
-import { formatOutputNotice, formatStyledTruncationWarning, outputMeta, type OutputMeta } from "./output-meta";
+import { formatOutputNotice, formatStyledTruncationWarning, type OutputMeta, outputMeta } from "./output-meta";
 
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";

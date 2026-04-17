@@ -1,0 +1,4 @@
+Command: bun test packages/coding-agent/test/bash-executor.test.ts packages/coding-agent/test/bash-executor-spill.test.ts packages/coding-agent/test/python-executor.test.ts packages/coding-agent/test/task/bash-exit-code-tracking.test.ts
+Outcome: PASS
+Summary: 27 pass, 0 fail, 100 expect() calls, ran 27 tests across 4 files.
+Proof points: representative bash spill at low threshold; failure residue larger than success residue; executor exit-code/cwd tracking preserved.

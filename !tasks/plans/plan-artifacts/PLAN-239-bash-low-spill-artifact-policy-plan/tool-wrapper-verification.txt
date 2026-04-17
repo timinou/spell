@@ -1,0 +1,4 @@
+Command: bun test packages/coding-agent/test/tools/output-meta-spill-policy.test.ts packages/coding-agent/test/tools/bash-spill-policy.test.ts
+Outcome: PASS
+Summary: 6 pass, 0 fail, 30 expect() calls, ran 6 tests across 2 files.
+Proof points: wrapper spill policy respects precision-tool exemptions; bash lenientSpill widens one call only and emits a warning; artifact references remain actionable.
