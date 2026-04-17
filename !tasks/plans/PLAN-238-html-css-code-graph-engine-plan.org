@@ -116,3 +116,14 @@ how would you make the pi code graph/engine maximally useful for html/css files?
 - Re-ran `bun check:ts` → PASS
 - Re-ran `bun check:rs` → PASS
 - Remaining blocker unchanged: the plan still lacks the deeper FEAT-555/556 style-edge/query/refactor surface, so the PLAN and linked items remain open.
+
+*** Verification update [2026-04-17 2]
+- Surfaced capability metadata through the native `languages` payload and coding-agent result formatting:
+  - `crates/pi-natives/src/code_buffer.rs`
+  - `packages/coding-agent/src/tools/code-result.ts`
+  - `packages/coding-agent/test/tools/code-result.test.ts`
+- Rebuilt native addon after bridge changes: `bun --cwd=packages/natives run dev:native` → PASS
+- Re-ran focused TS/native tool tests after capability metadata changes: `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts` → PASS (78 passed, 0 failed)
+- Re-ran `bun check:ts` → PASS
+- Re-ran `bun check:rs` → PASS
+- Remaining blocker still unchanged: selector↔consumer graph edges, style-aware query semantics, and conservative HTML/CSS refactor/refusal flows are not fully implemented, so the PLAN remains `DOING`.

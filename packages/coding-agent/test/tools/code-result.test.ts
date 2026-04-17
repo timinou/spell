@@ -255,6 +255,41 @@ describe("code tool result contract", () => {
 		expect(content).toContain("v4 L10-12 +13 chars");
 	});
 
+	it("formats language payloads with capabilities and embedded guests", () => {
+		const details = normalizeCodeBufferSuccess({
+			command: "languages",
+			output: {
+				languages: [
+					{
+						id: "html",
+						extensions: ["html", "htm"],
+						semanticCapable: true,
+						capabilities: ["outline", "read", "navigate", "resolve", "edit", "graph"],
+						embeddedLanguages: ["css", "javascript"],
+					},
+					{
+						id: "css",
+						extensions: ["css"],
+						semanticCapable: true,
+						capabilities: ["outline", "read", "navigate", "resolve", "edit", "graph"],
+						embeddedLanguages: [],
+					},
+				],
+			},
+		});
+
+		expect(details.command).toBe("languages");
+		if (details.command !== "languages") throw new Error("Expected language details");
+		expect(details.data.languages[0]?.embeddedLanguages).toEqual(["css", "javascript"]);
+
+		const content = formatCodeToolContent(details);
+		expect(content).toContain("Built-in languages (2)");
+		expect(content).toContain(
+			"html (html, htm) [outline, read, navigate, resolve, edit, graph] embeds css, javascript",
+		);
+		expect(content).toContain("css (css) [outline, read, navigate, resolve, edit, graph]");
+	});
+
 	it("formats open results with path, language, and line count", () => {
 		const details = normalizeCodeBufferSuccess({
 			command: "open",
