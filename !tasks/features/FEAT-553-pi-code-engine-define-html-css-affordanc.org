@@ -1,5 +1,5 @@
 #+TITLE: pi-code-engine: define HTML/CSS affordance DSL and verification matrix
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14be1e420c74b0e5
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T11-46-39-793Z_14be1e420c74b0e5.jsonl]]
 #+CUSTOM_ID: FEAT-553-pi-code-engine-define-html-css-affordanc
@@ -93,3 +93,5 @@
 - A documented, fixture-backed verification matrix exists before downstream implementation begins.
 - Engine tests cover the full workflow and edge-case matrix listed above, including truthful degradation behavior.
 - The published contract is explicitly reusable by HEEx rather than Phoenix-specific.
+
+NOTE [2026-04-17]: Implemented in PLAN-238: engine DSL now includes capability metadata, embedded-region contracts, HTML/CSS built-in profiles, grammar plumbing, and fixture-backed outline/read/resolve/navigate coverage for HTML/CSS.

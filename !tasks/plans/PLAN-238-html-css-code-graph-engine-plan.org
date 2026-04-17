@@ -165,3 +165,10 @@ how would you make the pi code graph/engine maximally useful for html/css files?
   - `bun check:ts` → PASS
   - `bun check:rs` → PASS
 - Remaining blocker narrows further: the tool now refuses unsafe HTML/CSS rename/delete truthfully, but provable success-path refactors (exact class/id/custom-property rename and proof-backed dead-style removal) are still not implemented, so the PLAN remains `DOING`.
+
+*** Child state reconciliation [2026-04-17]
+- `FEAT-553` → `DONE`
+- `FEAT-554` → `DONE`
+- `FEAT-555` → `DONE`
+- `FEAT-556` → `DOING`
+- Rationale: engine substrate, embedded-region contract, and style graph/query semantics are complete and verified; the remaining open work is the FEAT-556 success-path HTML/CSS refactor surface.

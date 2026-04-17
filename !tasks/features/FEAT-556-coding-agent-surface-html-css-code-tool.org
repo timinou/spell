@@ -1,5 +1,5 @@
 #+TITLE: coding-agent: surface HTML/CSS code-tool affordances and conservative refactors
-#+STATE: ITEM
+#+STATE: DOING
 #+SESSION_ID: 14be1e420c74b0e5
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T11-46-39-793Z_14be1e420c74b0e5.jsonl]]
 #+CUSTOM_ID: FEAT-556-coding-agent-surface-html-css-code-tool
@@ -93,3 +93,5 @@
 - HTML/CSS affordances are discoverable in prompts, structured details, and rendered results.
 - Conservative refactors succeed for provable cases and refuse ambiguous ones with explicit reasoning.
 - Focused coding-agent/native tests lock the user-facing contract and failure modes listed above.
+
+NOTE [2026-04-17]: Partially implemented in PLAN-238: code languages/capability metadata, prompt/docs, result rendering, native/coding-agent tests, and explicit refusal for unsafe HTML/CSS rename/delete are landed. Remaining work: provable success-path refactors for exact class/id/custom-property rename and proof-backed dead-style removal.
