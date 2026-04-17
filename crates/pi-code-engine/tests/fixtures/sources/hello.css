@@ -1,0 +1,26 @@
+@import "./base.css";
+
+.btn, .link {
+  color: red;
+}
+
+@media (min-width: 600px) {
+  .btn {
+    padding: 1rem;
+  }
+}
+
+@supports (display: grid) {
+  .panel {
+    display: grid;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

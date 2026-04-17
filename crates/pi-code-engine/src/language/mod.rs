@@ -901,14 +901,14 @@ fn css_profile() -> LanguageProfile {
 		class_like:       vec![
 			ClassLikePattern {
 				node_type:    "rule_set".into(),
-				body:         ClassBodyExtractor::Direct,
+				body:         ClassBodyExtractor::Field { name: "block".into() },
 				filter_field: None,
 				filter_names: None,
 				member_types: vec!["declaration".into()],
 			},
 			ClassLikePattern {
 				node_type:    "media_statement".into(),
-				body:         ClassBodyExtractor::Direct,
+				body:         ClassBodyExtractor::Field { name: "block".into() },
 				filter_field: None,
 				filter_names: None,
 				member_types: vec![
@@ -920,7 +920,7 @@ fn css_profile() -> LanguageProfile {
 			},
 			ClassLikePattern {
 				node_type:    "supports_statement".into(),
-				body:         ClassBodyExtractor::Direct,
+				body:         ClassBodyExtractor::Field { name: "block".into() },
 				filter_field: None,
 				filter_names: None,
 				member_types: vec![

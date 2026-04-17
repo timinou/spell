@@ -808,6 +808,73 @@ mod tests {
 	}
 
 	#[test]
+	fn test_outline_html_structure() {
+		let buffer = buffer("hello.html", "html");
+		let profile = profile("html");
+		let entries = outline(&buffer, &profile);
+		assert_eq!(
+			entries
+				.iter()
+				.map(|entry| entry.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["html#root"]
+		);
+		let body = &entries[0].children[0];
+		assert_eq!(body.name, "body#main");
+		assert_eq!(
+			body
+				.children
+				.iter()
+				.map(|entry| entry.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["div.card[1]", "div.card[2]", "button#save", "button.btn", "style"]
+		);
+	}
+
+	#[test]
+	fn test_read_resolution_2_html() {
+		let buffer = buffer("hello.html", "html");
+		let profile = profile("html");
+		let out = read(&buffer, &profile, 2, None, None);
+		assert!(out.contains("html#root (element)"));
+		assert!(out.contains("button#save (element)"));
+		assert!(out.contains("div.card[1] (element)"));
+		assert!(out.contains("style (style)"));
+	}
+
+	#[test]
+	fn test_outline_css_structure() {
+		let buffer = buffer("hello.css", "css");
+		let profile = profile("css");
+		let entries = outline(&buffer, &profile);
+		assert_eq!(
+			entries
+				.iter()
+				.map(|entry| entry.name.as_str())
+				.collect::<Vec<_>>(),
+			vec![".btn, .link", "@media", "@supports", "fade-in"]
+		);
+		assert_eq!(
+			entries[0]
+				.children
+				.iter()
+				.map(|entry| entry.name.as_str())
+				.collect::<Vec<_>>(),
+			vec!["color"]
+		);
+	}
+
+	#[test]
+	fn test_read_resolution_0_css() {
+		let buffer = buffer("hello.css", "css");
+		let profile = profile("css");
+		let out = read(&buffer, &profile, 0, None, None);
+		assert!(out.contains(".btn, .link (rule)"));
+		assert!(out.contains("fade-in (keyframes)"));
+		assert!(out.contains("@media (at-rule)"));
+	}
+
+	#[test]
 	fn test_outline_markdown_sections() {
 		let buffer = buffer("hello.md", "markdown");
 		let profile = profile("markdown");

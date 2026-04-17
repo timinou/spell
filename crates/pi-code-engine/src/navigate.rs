@@ -335,6 +335,24 @@ mod tests {
 	}
 
 	#[test]
+	fn test_navigate_html_defun_at() {
+		let buf = buffer("hello.html", "html");
+		let p = profile("html");
+		let defun = navigate(&buf, &p, NavigateAction::DefunAt, 6, Some(5), None).expect("nav");
+		assert_eq!(defun.name.as_deref(), Some("button#save"));
+		assert_eq!(defun.kind.as_deref(), Some("element"));
+	}
+
+	#[test]
+	fn test_navigate_css_defun_at() {
+		let buf = buffer("hello.css", "css");
+		let p = profile("css");
+		let defun = navigate(&buf, &p, NavigateAction::DefunAt, 3, Some(1), None).expect("nav");
+		assert_eq!(defun.name.as_deref(), Some(".btn, .link"));
+		assert_eq!(defun.kind.as_deref(), Some("rule"));
+	}
+
+	#[test]
 	fn test_navigate_node_at() {
 		let buf = buffer("hello.ts", "typescript");
 		let p = profile("typescript");
