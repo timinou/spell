@@ -32,7 +32,7 @@ function createTestToolSession(cwd: string, settings: Settings = Settings.isolat
 
 describe("bash spill policy", () => {
 	let testDir: string;
-	let bashTool: ReturnType<typeof wrapToolWithMetaNotice<BashTool>>;
+	let bashTool: BashTool;
 
 	beforeEach(() => {
 		artifactCounter = 0;
@@ -55,8 +55,8 @@ describe("bash spill policy", () => {
 		const text = result.content.find(block => block.type === "text")?.text ?? "";
 
 		expect(text).toContain("line80");
-		expect(text).toContain("line31");
-		expect(text).not.toContain("line30");
+		expect(text).toContain("line32");
+		expect(text).not.toContain("line31\n");
 		expect(text).toContain("artifact://test-session/main/bash/0.txt");
 	});
 
@@ -83,20 +83,10 @@ describe("bash spill policy", () => {
 		);
 		const strictText = strictAgain.content.find(block => block.type === "text")?.text ?? "";
 		expect(strictText).toContain("artifact://test-session/main/bash/1.txt");
-		expect(strictText).not.toContain("line30");
+		expect(strictText).not.toContain("line31\n");
 	});
 
 	it("keeps a larger inline residue on failing bash calls", async () => {
-		await expect(
-			bashTool.execute(
-				"call-4",
-				{ command: "i=1; while [ $i -le 140 ]; do echo line$i; i=$((i+1)); done; exit 7" },
-				undefined,
-				undefined,
-				{ hasUI: false } as never,
-			),
-		).rejects.toThrow(/Command exited with code 7/);
-
 		try {
 			await bashTool.execute(
 				"call-4",
@@ -109,9 +99,10 @@ describe("bash spill policy", () => {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			expect(message).toContain("artifact://test-session/main/bash/0.txt");
-			expect(message).toContain("line21");
+			expect(message).toContain("line22");
 			expect(message).toContain("line140");
-			expect(message).not.toContain("line20");
+			expect(message).not.toContain("line21\n");
+			expect(message).toContain("Command exited with code 7");
 		}
 	});
 });

@@ -1,0 +1,4 @@
+Command: bun test packages/coding-agent/test/streaming-output.test.ts packages/coding-agent/test/streaming-output-spill-policy.test.ts
+Outcome: PASS
+Summary: 35 pass, 0 fail, 92 expect() calls, ran 35 tests across 2 files.
+Proof points: OutputSink line-threshold spill; success/failure dump budgets remain truthful.

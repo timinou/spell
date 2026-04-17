@@ -23,7 +23,7 @@ import { checkBashInterception } from "./bash-interceptor";
 import { applyHeadTail } from "./bash-normalize";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
 
-import { formatOutputNotice, formatStyledTruncationWarning, outputMeta, type OutputMeta } from "./output-meta";
+import { formatOutputNotice, formatStyledTruncationWarning, type OutputMeta, outputMeta } from "./output-meta";
 
 import { resolveToCwd } from "./path-utils";
 import { replaceTabs } from "./render-utils";

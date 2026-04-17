@@ -1,13 +1,13 @@
+import { describe, expect, it } from "bun:test";
 import type { AgentTool, AgentToolContext, AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import { Type } from "@sinclair/typebox";
-import { describe, expect, it } from "bun:test";
 import { Settings } from "../../src/config/settings";
 import { wrapToolWithMetaNotice } from "../../src/tools/output-meta";
 import { ToolError } from "../../src/tools/tool-errors";
 
 const testSchema = Type.Object({});
 
-type TestDetails = { meta?: unknown };
+type TestDetails = { meta?: { truncation?: unknown } };
 
 function createContext(settings: Settings = Settings.isolated()) {
 	const saved: Array<{ text: string; toolName: string }> = [];
@@ -53,8 +53,7 @@ describe("wrapToolWithMetaNotice spill policy", () => {
 
 		const result = await tool.execute("call-1", {}, undefined, undefined, context);
 		const text = result.content.find(block => block.type === "text")?.text ?? "";
-		const truncation =
-			result.details?.meta && "truncation" in result.details.meta ? result.details.meta.truncation : undefined;
+		const truncation = result.details?.meta?.truncation;
 
 		expect(saved).toHaveLength(1);
 		expect(text).toContain("line 80");
@@ -85,16 +84,13 @@ describe("wrapToolWithMetaNotice spill policy", () => {
 		});
 		const { context, saved } = createContext();
 
-		await expect(tool.execute("call-3", {}, undefined, undefined, context)).rejects.toThrow(
-			expect.objectContaining({ message: expect.stringContaining("artifact://test-session/main/fetch/0.txt") }),
-		);
-		expect(saved).toHaveLength(1);
-
 		try {
 			await tool.execute("call-3", {}, undefined, undefined, context);
 			throw new Error("expected wrapped tool to fail");
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
+			expect(saved).toHaveLength(1);
+			expect(message).toContain("artifact://test-session/main/fetch/0.txt");
 			expect(message).toContain("line 21");
 			expect(message).toContain("line 140");
 			expect(message).not.toContain("line 20");

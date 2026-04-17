@@ -4,6 +4,8 @@ Executes bash commands for terminal operations like git, bun, cargo, python.
 - Use `async: true` for long-running commands when you do not need immediate output.
 - Use `read jobs://` for background job state; use `await` when you need to block until completion.
 {{/if}}
+- Default spill policy is artifact-first: broad stdout/stderr spills quickly, then follow-up analysis should read or grep the emitted `artifact://...` output.
+- Use `lenientSpill: true` only when one bash call truly needs the legacy wider inline tail; it applies to that call only and emits a warning.
 
 <critical>
 You **MUST** use specialized tools instead of bash for all file operations.
@@ -28,5 +30,5 @@ You **MUST** use specialized tools instead of bash for all file operations.
 </critical>
 
 Returns the output and an exit code from command execution.
-- If output is truncated, full output can be retrieved from a session-scoped artifact URI.
+- If output is truncated, full output can be retrieved from a session-scoped artifact URI and inspected with `read`, `grep`, or a targeted follow-up bash command.
 - Exit codes shown on non-zero exit.
