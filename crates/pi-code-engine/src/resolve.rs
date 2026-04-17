@@ -369,6 +369,24 @@ mod tests {
 		CodeBuffer::from_str(&source, LanguageId::new("elixir"), registry()).expect("buffer")
 	}
 
+	fn html_buffer() -> CodeBuffer {
+		let source = fs::read_to_string(format!(
+			"{}/tests/fixtures/sources/hello.html",
+			env!("CARGO_MANIFEST_DIR")
+		))
+		.expect("fixture");
+		CodeBuffer::from_str(&source, LanguageId::new("html"), registry()).expect("buffer")
+	}
+
+	fn css_buffer() -> CodeBuffer {
+		let source = fs::read_to_string(format!(
+			"{}/tests/fixtures/sources/hello.css",
+			env!("CARGO_MANIFEST_DIR")
+		))
+		.expect("fixture");
+		CodeBuffer::from_str(&source, LanguageId::new("css"), registry()).expect("buffer")
+	}
+
 	#[test]
 	fn resolve_top_level_function() {
 		let buffer = test_buffer();
@@ -563,6 +581,33 @@ Deep section body.
 		assert_eq!(resolved.name, "greet");
 		assert_eq!(resolved.kind, "def");
 		assert_eq!(resolved.line, 8);
+	}
+
+	#[test]
+	fn resolve_html_root_and_nested_button() {
+		let buffer = html_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("html")).unwrap();
+
+		let root = resolve_symbol(&buffer, profile, "html#root").expect("resolve html root");
+		assert_eq!(root.name, "html#root");
+		assert_eq!(root.kind, "element");
+
+		let button = resolve_symbol(&buffer, profile, "html#root.body#main.button#save")
+			.expect("resolve nested button");
+		assert_eq!(button.name, "button#save");
+		assert_eq!(button.kind, "element");
+	}
+
+	#[test]
+	fn resolve_css_keyframes() {
+		let buffer = css_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("css")).unwrap();
+
+		let keyframes = resolve_symbol(&buffer, profile, "fade-in").expect("resolve keyframes");
+		assert_eq!(keyframes.name, "fade-in");
+		assert_eq!(keyframes.kind, "keyframes");
 	}
 
 	#[test]

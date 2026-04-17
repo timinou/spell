@@ -105,3 +105,14 @@ how would you make the pi code graph/engine maximally useful for html/css files?
 - Plan remains incomplete and stays in `DOING`.
 - Completed substrate work: HTML/CSS built-in language registration, extended engine DSL, HTML naming/disambiguation support, CSS local symbol extraction, graph symbol-kind support, native language-surface exposure, and coding-agent semantic-file detection updates.
 - Remaining blocker scope: FEAT-554/555/556 acceptance still requires the deeper HTML/CSS graph/query/refactor surface from the approved plan (style-context/impact/dead-style semantics, conservative rename/remove refusal proofs, and broader coding-agent/native result typing). Those workflows were not fully implemented in this execution slice, so child items are not truthfully closable and the PLAN cannot move to `DONE`.
+
+*** Verification update [2026-04-17]
+- Added fixture-backed engine coverage for HTML/CSS local semantics:
+  - `crates/pi-code-engine/tests/fixtures/sources/hello.html`
+  - `crates/pi-code-engine/tests/fixtures/sources/hello.css`
+- Re-ran `cargo test -p pi-code-engine` after fixture/test additions → PASS (144 passed, 0 failed)
+- Re-ran `cargo test -p pi-code-graph` after substrate/test additions → PASS (40 passed, 0 failed)
+- Re-ran `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts` → PASS (77 passed, 0 failed)
+- Re-ran `bun check:ts` → PASS
+- Re-ran `bun check:rs` → PASS
+- Remaining blocker unchanged: the plan still lacks the deeper FEAT-555/556 style-edge/query/refactor surface, so the PLAN and linked items remain open.
