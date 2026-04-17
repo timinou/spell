@@ -32,6 +32,7 @@ import {
 } from "../utils/image-input";
 import { detectSupportedImageMimeTypeFromFile } from "../utils/mime";
 import { ensureTool } from "../utils/tools-manager";
+import { classifyContextPressure } from "./context-pressure-policy";
 import { applyListLimit } from "./list-limit";
 import { formatFullOutputReference, formatStyledTruncationWarning, type OutputMeta } from "./output-meta";
 import { resolveReadPath } from "./path-utils";
@@ -676,7 +677,19 @@ export class ReadTool implements AgentTool<typeof readSchema, ReadToolDetails> {
 		if (truncationInfo) {
 			resultBuilder.truncation(truncationInfo.result, truncationInfo.options);
 		}
-		return resultBuilder.done();
+		const result = resultBuilder.done();
+		const contextPressure = classifyContextPressure({
+			toolName: this.name,
+			params,
+			detailsMeta: result.details as never,
+		});
+		if (contextPressure && contextPressure.persistence !== "allow-raw") {
+			return {
+				...result,
+				content: [{ type: "text", text: contextPressure.summary }],
+			};
+		}
+		return result;
 	}
 
 	/**

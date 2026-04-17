@@ -16,6 +16,7 @@ import type {
 import { renderPromptTemplate } from "../config/prompt-templates";
 import branchSummaryContextPrompt from "../prompts/compaction/branch-summary-context.md" with { type: "text" };
 import compactionSummaryContextPrompt from "../prompts/compaction/compaction-summary-context.md" with { type: "text" };
+import { getContextPressureSummaryText } from "../tools/context-pressure-policy";
 import type { OutputMeta } from "../tools/output-meta";
 import { formatOutputNotice } from "../tools/output-meta";
 
@@ -34,6 +35,10 @@ export interface SkillPromptDetails {
 function getPrunedToolResultContent(message: ToolResultMessage): (TextContent | ImageContent)[] {
 	if (message.prunedAt === undefined) {
 		return message.content;
+	}
+	const summary = getContextPressureSummaryText(message);
+	if (summary) {
+		return [{ type: "text", text: summary }];
 	}
 	const textBlocks = message.content.filter((content): content is TextContent => content.type === "text");
 	const text = textBlocks.map(block => block.text).join("") || "[Output truncated]";

@@ -1,5 +1,5 @@
 #+TITLE: Post-PLAN-239 bash churn suppression and digest-first status loops
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14be1383cbba71b9
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T10-59-43-534Z_14be1383cbba71b9.jsonl]]
 #+CUSTOM_ID: FEAT-561-post-plan239-bash-churn-suppression-and-digest-first-status
@@ -91,3 +91,5 @@ Test files / scenarios:
 
 * Parent Plan
 - [[id:PLAN-240-post-plan239-context-pressure-followup-plan]] POST_PLAN239_CONTEXT_PRESSURE_FOLLOWUP_PLAN
+
+NOTE [2026-04-17]: Bash success-path wait/git/verification churn is now digest-first while preserving correctness metadata.

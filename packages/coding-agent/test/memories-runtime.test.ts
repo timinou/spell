@@ -223,7 +223,9 @@ describe("memories runtime", () => {
 			).toBe("# Deploy\nUse blue/green.");
 		});
 
-		expect(fx.session.refreshBaseSystemPrompt).toHaveBeenCalledTimes(1);
+		await waitFor(() => {
+			expect(fx.session.refreshBaseSystemPrompt).toHaveBeenCalledTimes(1);
+		});
 		expect(ai.completeSimple).toHaveBeenCalled();
 		expect(ai.completeSimple).toHaveBeenCalledTimes(2);
 	});
@@ -323,6 +325,94 @@ describe("memories runtime", () => {
 				"# Raw Memories\n\nNo raw memories yet.",
 			);
 		});
+	});
+
+	test("phase1 persists compact summaries for low-value tool results while keeping precision outputs raw", async () => {
+		const fx = await createFixture();
+		const rolloutPath = path.join(fx.sessionDir, "thread-policy.jsonl");
+		const longRaw = Array.from({ length: 40 }, (_, index) => `sleep output ${index + 1}`).join("\n");
+		const rolloutRows = [
+			{ type: "session", id: "thread-policy", cwd: fx.agentDir },
+			{
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: { command: "sleep 1" } }],
+				},
+			},
+			{
+				type: "message",
+				message: {
+					role: "toolResult",
+					toolCallId: "call-1",
+					toolName: "bash",
+					content: [{ type: "text", text: longRaw }],
+					isError: false,
+					timestamp: 1,
+				},
+			},
+			{
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [
+						{
+							type: "toolCall",
+							id: "call-2",
+							name: "read",
+							arguments: { path: "packages/coding-agent/src/tools/read.ts", offset: 10, limit: 2 },
+						},
+					],
+				},
+			},
+			{
+				type: "message",
+				message: {
+					role: "toolResult",
+					toolCallId: "call-2",
+					toolName: "read",
+					content: [{ type: "text", text: "10: const read = true;" }],
+					isError: false,
+					timestamp: 2,
+				},
+			},
+		];
+		await fs.writeFile(rolloutPath, `${rolloutRows.map(row => JSON.stringify(row)).join("\n")}\n`);
+
+		const completeSpy = vi.spyOn(ai, "completeSimple").mockResolvedValue({
+			stopReason: "end_turn",
+			content: [
+				{
+					type: "text",
+					text: JSON.stringify({
+						rollout_summary: "",
+						rollout_slug: null,
+						raw_memory: "",
+					}),
+				},
+			],
+			usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 15 },
+		} as any);
+
+		startMemoryStartupTask({
+			session: fx.session,
+			settings: fx.settings,
+			modelRegistry: fx.modelRegistry,
+			agentDir: fx.agentDir,
+			taskDepth: 0,
+		});
+
+		await waitFor(() => {
+			expect(completeSpy).toHaveBeenCalled();
+		});
+
+		const call = completeSpy.mock.calls[0];
+		if (!call) throw new Error("expected stage1 model call");
+		const inputPrompt =
+			(call[1] as { messages: Array<{ content: Array<{ text: string }> }> }).messages[0]?.content[0]?.text ?? "";
+		expect(inputPrompt).toContain("Raw output suppressed as low-signal status churn.");
+		expect(inputPrompt).not.toContain(longRaw);
+		expect(inputPrompt).toContain("10: const read = true;");
 	});
 
 	describe("phase1 cooldown", () => {

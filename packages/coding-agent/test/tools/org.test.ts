@@ -66,6 +66,33 @@ describe("OrgTool", () => {
 		await tool.dispose();
 	});
 
+	it("renders compact wave and graph call labels", async () => {
+		const theme = await getThemeByName("dark");
+		expect(theme).toBeDefined();
+		const uiTheme = theme!;
+		const tool = new OrgTool(createSession());
+
+		const waveComponent = tool.renderCall(
+			{ command: "wave", dir: "/org/waves" },
+			{ expanded: false, isPartial: false },
+			uiTheme,
+		);
+		const waveOutput = sanitizeText(waveComponent.render(120).join("\n")).replace(/\s+/g, " ");
+		expect(waveOutput).toContain("wave");
+		expect(waveOutput).toContain("dir:/org/waves");
+
+		const graphComponent = tool.renderCall(
+			{ command: "graph", dir: "/org/graph" },
+			{ expanded: false, isPartial: false },
+			uiTheme,
+		);
+		const graphOutput = sanitizeText(graphComponent.render(120).join("\n")).replace(/\s+/g, " ");
+		expect(graphOutput).toContain("graph");
+		expect(graphOutput).toContain("dir:/org/graph");
+
+		await tool.dispose();
+	});
+
 	it("renders delete and validate-plan call labels with id details", async () => {
 		const theme = await getThemeByName("dark");
 		expect(theme).toBeDefined();

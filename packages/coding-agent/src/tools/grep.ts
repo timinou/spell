@@ -15,6 +15,7 @@ import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead } from "../sess
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
+import { classifyContextPressure } from "./context-pressure-policy";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
 import {
 	combineSearchGlobs,
@@ -359,6 +360,24 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 			};
 			if (truncation.truncated) details.truncation = truncation;
 			if (linesTruncated) details.linesTruncated = true;
+			const contextPressure = classifyContextPressure({
+				toolName: this.name,
+				params,
+			});
+			if (contextPressure?.presentation === "summary-first") {
+				const stagedFileLines =
+					details.fileMatches?.map(
+						file => `- ${file.path} (${file.count} match${file.count === 1 ? "" : "es"})`,
+					) ?? [];
+				const summaryLines = [
+					contextPressure.summary,
+					`${details.matchCount ?? 0} matches across ${details.fileCount ?? 0} files.`,
+					"File hits:",
+					...stagedFileLines,
+					...contextPressure.followUp.map(line => `Next: ${line}`),
+				];
+				return toolResult(details).text(summaryLines.join("\n")).done();
+			}
 			const resultBuilder = toolResult(details)
 				.text(output)
 				.limits({

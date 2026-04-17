@@ -84,6 +84,7 @@ export * from "./canvas";
 export * from "./canvas-cast";
 export * from "./checkpoint";
 export * from "./code";
+export * from "./context-pressure-policy";
 export * from "./exit-plan-mode";
 export * from "./fetch";
 export * from "./find";
