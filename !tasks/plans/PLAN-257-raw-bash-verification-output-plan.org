@@ -144,3 +144,19 @@ The immediate bash tool result is truthful for verification commands, compact pe
 
 ** Wave note
 - `org wave` was run during planning, but the current output returns the global ready-set for the `bugs` category rather than isolating this session's single new child item cleanly. The execution manifest above mirrors the explicit child-item DAG for this plan subset: one ready bug item with no inter-item blockers.
+
+** Completion [2026-04-18]
+*** Verification
+- `bun test packages/coding-agent/test/tools/bash-churn-policy.test.ts packages/coding-agent/test/tools/context-pressure-policy.test.ts` → PASS (`11 pass`, `0 fail`). Coverage proves:
+  - successful verification-classified bash commands keep raw visible output inline;
+  - failed verification commands preserve raw failure text plus exit-code text;
+  - memory-safe + pruned-history paths still compact verification output via context-pressure summaries.
+- `bunx biome check packages/coding-agent/src/tools/bash.ts` → PASS after the import-order adjustment on the touched file.
+- `bun check:ts` → FAIL outside plan scope. Remaining errors are unrelated import-order failures in `packages/coding-agent/src/task/executor.ts` and `packages/coding-agent/src/task/index.ts`; no failures remain in the files changed for this plan.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-257-raw-bash-verification-output-plan/focused-tool-tests.log]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-257-raw-bash-verification-output-plan/bun-check-ts.log]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-257-raw-bash-verification-output-plan/bash-biome-check.log]]
+*** Deviations
+- `bun check:ts` could not be driven green without touching unrelated task-runtime files already failing import-order checks (`packages/coding-agent/src/task/executor.ts`, `packages/coding-agent/src/task/index.ts`).
+- Linked child item [[id:BUG-286-coding-agent-keep-raw-bash-verification]] is `BLOCKED`, so this PLAN remains `DOING`.
