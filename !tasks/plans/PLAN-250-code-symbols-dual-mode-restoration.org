@@ -1,0 +1,103 @@
+#+TITLE: CODE_SYMBOLS_DUAL_MODE_RESTORATION
+#+STATE: DOING
+#+SESSION_ID: 14bf7538a105e3c5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-45-05-540Z_14bf7538a105e3c5.jsonl]]
+#+CUSTOM_ID: PLAN-250-code-symbols-dual-mode-restoration
+#+EFFORT: 4h
+#+PRIORITY: #A
+#+LAYER: coding-agent pi-natives pi-code-graph
+
+* Initial Message
+
+Code
+ symbols requires `query`
+
+
+^^^^ symbols shouldn't require query!! what is symbols about?
+
+* Context
+
+User feedback identifies a contract breach in the `code` tool:
+- `packages/coding-agent/src/prompts/tools/code-hint-semantic.md` advertises `code symbols { query }`.
+- `packages/coding-agent/src/tools/code.ts` currently rejects `command: "symbols"` via `REMOVED_SEARCH_COMMANDS` and redirects to grep.
+- `crates/pi-natives/src/code_graph.rs` still has a native `"symbols"` branch, but it fails with `symbols requires \`query\``.
+
+Settled design decisions:
+1. Restore a real `code symbols` command on the `code` tool; do not leave it as grep-only.
+2. Contract matches `lsp symbols` structurally:
+   - `file` => file-local symbols.
+   - no `file` + `query` => workspace symbol lookup.
+3. Bare `code symbols` must not error. It returns a concise workspace summary with refinement hints so the command answers “what is symbols about?” truthfully.
+4. File mode uses existing code-buffer outline machinery, not LSP.
+5. Workspace mode remains native graph-backed; non-empty query semantics stay `exact` / `ambiguous` / `ranked` / `none`.
+6. Scope stays narrow: restore `symbols` only. `code files` and `code search` remain removed and continue steering to grep.
+7. If both `file` and `query` are provided, file mode wins.
+
+Recommended approach:
+- TS surface restoration in `packages/coding-agent/src/tools/code.ts` and `code-result.ts`.
+- Native optional-query support for workspace symbols in `crates/pi-code-graph/src/query.rs` and `crates/pi-natives/src/code_graph.rs`.
+- Prompt/test cutover so docs and runtime agree in the same change.
+
+Primary files in scope:
+- `packages/coding-agent/src/tools/code.ts`
+- `packages/coding-agent/src/tools/code-result.ts`
+- `packages/coding-agent/src/prompts/tools/code-hint-semantic.md`
+- `packages/coding-agent/test/tools/code.test.ts`
+- `packages/coding-agent/test/prompts/code-tool-contracts.test.ts`
+- `crates/pi-code-graph/src/query.rs`
+- `crates/pi-natives/src/code_graph.rs`
+
+Child item for execution:
+- [[id:BUG-283-restore-code-symbols-dual-mode-contract][BUG-283 Restore code symbols dual-mode contract]]
+
+* Verification
+
+Targeted verification:
+- `bun test packages/coding-agent/test/tools/code.test.ts`
+- `bun test packages/coding-agent/test/prompts/code-tool-contracts.test.ts`
+- `cargo test -p pi-natives code_graph`
+- `cargo test -p pi-code-graph query`
+
+Final verification gates:
+- `bun check:ts`
+- `bun check:rs`
+
+Observable outcomes required before completion:
+- `code symbols { file: ... }` lists file symbols and does not redirect to grep.
+- `code symbols { query: ... }` performs workspace lookup with preserved native statuses.
+- bare `code symbols` returns a concise workspace summary instead of `symbols requires \`query\``.
+- `code files` and `code search` still redirect to grep.
+
+* Execution Manifest
+
+** Wave 1
+- [[id:BUG-283-restore-code-symbols-dual-mode-contract][BUG-283 Restore code symbols dual-mode contract]]
+  - Covers contract definition, optional-query native summary path, file-mode restoration via outline machinery, TS routing, prompt updates, and regression tests.
+  - Sub-outline dependency chain inside the child item:
+    - `BUG-283-restore-code-symbols-dual-mode-contract::contract`
+    - `BUG-283-restore-code-symbols-dual-mode-contract::rust-summary`
+    - `BUG-283-restore-code-symbols-dual-mode-contract::file-mode`
+    - `BUG-283-restore-code-symbols-dual-mode-contract::ts-routing`
+    - `BUG-283-restore-code-symbols-dual-mode-contract::tests-and-prompts`
+
+* Notes
+
+This plan is intentionally single-item because the requested change is one coherent bug fix with coupled Rust + TS + prompt/test cutover. Splitting it into multiple org children would create artificial coordination overhead without reducing risk.
+
+** Completion [2026-04-18]
+*** Verification
+- `bun test packages/coding-agent/test/tools/code.test.ts` → passed in the current workspace.
+- `bun test packages/coding-agent/test/prompts/code-tool-contracts.test.ts` → passed in the current workspace.
+- `cargo test -p pi-code-graph query` → passed in the current workspace.
+- `cargo test -p pi-natives code_graph` → failed before the target tests ran because `crates/pi-natives/src/code_buffer.rs` references missing helpers (`parse_patches`, `single_edit_operation`, `resolve_target`).
+- `bun check:ts` → failed on unrelated pre-existing issues in `packages/coding-agent/src/loop/persistence/manifest-writer.ts`, `packages/coding-agent/src/plan-mode/plan-validation.ts`, and `packages/org/src/tool.ts`.
+- `bun check:rs` → passed in clean verification worktree `/tmp/plan250-verify` with this patch applied.
+*** Artifacts
+- `cargo test -p pi-natives code_graph` failure log: artifact://14bf7ec8cb85e3cc/main/bash/17.txt
+- `bun check:ts` failure log: artifact://14bf7ec8cb85e3cc/main/bash/32.txt
+*** Deviations
+- `[[id:BUG-283-restore-code-symbols-dual-mode-contract]]` is BLOCKED pending the unrelated verification failures above, so PLAN-250 remains DOING.
+- No plan-artifact files were required; text verification is captured in the org report and session artifacts above.
+
+*** State correction [2026-04-18]
+The plan briefly auto-transitioned to DONE during local todo verification, but that state was incorrect. The plan remains DOING because `[[id:BUG-283-restore-code-symbols-dual-mode-contract]]` is BLOCKED by the verification failures recorded above.

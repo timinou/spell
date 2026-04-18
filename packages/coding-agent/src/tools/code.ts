@@ -46,7 +46,7 @@ import { replaceTabs } from "./render-utils";
 import { toolResult } from "./tool-result";
 
 const GRAPH_COMMANDS = new Set(["index", "status", "context", "impact", "deps", "flow", "dead_code", "clusters"]);
-const REMOVED_SEARCH_COMMANDS = new Set(["symbols", "files", "search"]);
+const REMOVED_SEARCH_COMMANDS = new Set(["files", "search"]);
 
 const MUTATING_COMMANDS = new Set(["edit", "undo", "redo"]);
 
@@ -69,7 +69,19 @@ function languageForFile(file: string): string | undefined {
 	return extension ? LANGUAGE_BY_EXTENSION.get(extension) : undefined;
 }
 
-const FILE_COMMANDS = new Set(["outline", "read", "navigate", "edit", "undo", "redo", "diff", "save", "open", "close"]);
+const FILE_COMMANDS = new Set([
+	"outline",
+	"symbols",
+	"read",
+	"navigate",
+	"edit",
+	"undo",
+	"redo",
+	"diff",
+	"save",
+	"open",
+	"close",
+]);
 
 function timedCodeBuffer(options: CodeBufferOptions): CodeBufferResult {
 	const start = performance.now();
@@ -204,7 +216,7 @@ const codeOperationSchema = Type.Recursive(This =>
 const codeSchema = Type.Object({
 	command: Type.String({
 		description:
-			"Subcommand: read | outline | edit | buffers | diff | navigate | languages | undo | redo | save | index | status | context | impact | deps | flow | dead_code | clusters",
+			"Subcommand: read | outline | symbols | edit | buffers | diff | navigate | languages | undo | redo | save | index | status | context | impact | deps | flow | dead_code | clusters",
 	}),
 	file: Type.Optional(Type.String({ description: "Absolute or project-relative file path" })),
 	symbol: Type.Optional(
@@ -213,7 +225,9 @@ const codeSchema = Type.Object({
 		}),
 	),
 	query: Type.Optional(
-		Type.String({ description: "Legacy repo-local lookup query. Use grep for semantic or raw-text search." }),
+		Type.String({
+			description: "Workspace lookup query for symbols. Use the file field for file-local symbol lists.",
+		}),
 	),
 	resolution: Type.Optional(Type.Integer({ description: "Zoom level 0-3 (default 2)" })),
 	offset: Type.Optional(Type.Integer({ description: "Start line 1-indexed (resolution 3 only)" })),
@@ -380,6 +394,10 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				return toolResult(details).text(formatCodeToolContent(details)).done();
 			}
 
+			if (command === "symbols" && !params.file) {
+				return await this.#executeGraphCommand(params, _signal);
+			}
+
 			if (GRAPH_COMMANDS.has(command)) {
 				return await this.#executeGraphCommand(params, _signal);
 			}
@@ -393,7 +411,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				return toolResult(details).text(formatCodeToolContent(details)).done();
 			}
 
-			const nativeCommand = command === "buffers" ? "list" : command;
+			const nativeCommand = command === "buffers" ? "list" : command === "symbols" ? "outline" : command;
 			const options: CodeBufferOptions = { command: nativeCommand };
 			const resolveFile = (file: string): string => (path.isAbsolute(file) ? file : path.resolve(sessionCwd, file));
 			const activeFile = command === "edit" ? editFile : params.file ? resolveFile(params.file) : undefined;

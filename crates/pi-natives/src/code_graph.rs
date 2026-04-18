@@ -211,10 +211,7 @@ fn run_code_graph(
 			format_clusters(&graph.graph_clusters(), options.limit.unwrap_or(DEFAULT_LIMIT) as usize)
 		},
 		"symbols" => {
-			let query = options
-				.query
-				.as_deref()
-				.ok_or_else(|| Error::from_reason("symbols requires `query`"))?;
+			let query = options.query.as_deref().unwrap_or("");
 			format_symbols(
 				&graph.graph_symbols(query, options.limit.unwrap_or(DEFAULT_LIMIT) as usize),
 			)
@@ -584,14 +581,24 @@ fn format_clusters(clusters: &[GraphCluster], limit: usize) -> String {
 }
 
 fn format_symbols(result: &GraphSymbolsResult) -> String {
-	let mut lines = vec![
-		"Symbols".to_string(),
-		format!("Query: {}", result.query),
-		format!("Status: {}", result.status),
-	];
+	let mut lines = if result.status == "summary" {
+		vec![
+			"Symbols summary".to_string(),
+			"Query: (all symbols)".to_string(),
+			"Status: summary".to_string(),
+		]
+	} else {
+		vec![
+			"Symbols".to_string(),
+			format!("Query: {}", result.query),
+			format!("Status: {}", result.status),
+		]
+	};
 	append_lookup_lines(&mut lines, &result.matches);
 	if result.status == "ambiguous" {
 		lines.push("Next: refine the query with a qualified name or file path".into());
+	} else if result.status == "summary" {
+		lines.push("Next: add a symbol name or qualified path to narrow results".into());
 	}
 	lines.join("\n")
 }
@@ -1050,6 +1057,32 @@ mod tests {
 			result.semantic_status
 		);
 
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn symbols_lookup_reports_bare_summary() {
+		let root = fixture_root("symbols");
+		run_fixture_command(&root, "index", None, None).expect("graph index should succeed");
+		let result = run_fixture_command(&root, "symbols", Some("   "), None)
+			.expect("symbols summary should succeed");
+		assert!(
+			result.output.contains("Symbols summary"),
+			"symbols summary should include a heading: {}",
+			result.output
+		);
+		assert!(
+			result.output.contains("Status: summary"),
+			"symbols summary should report summary status: {}",
+			result.output
+		);
+		assert!(
+			result
+				.output
+				.contains("Next: add a symbol name or qualified path to narrow results"),
+			"symbols summary should include a refinement hint: {}",
+			result.output
+		);
 		let _ = fs::remove_dir_all(root);
 	}
 }

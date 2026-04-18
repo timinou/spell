@@ -160,6 +160,31 @@ impl CodeGraph {
 
 	pub fn graph_symbols(&self, query: &str, limit: usize) -> GraphSymbolsResult {
 		let graph = self.graph();
+		let query = query.trim();
+		let summary_mode = query.is_empty();
+		if summary_mode {
+			let mut summaries = graph
+				.node_indices()
+				.filter_map(|node_index| summary_for_node(graph, node_index))
+				.filter(|summary| summary.kind != "file")
+				.collect::<Vec<_>>();
+			summaries.sort_by(|left, right| {
+				left
+					.label
+					.cmp(&right.label)
+					.then_with(|| left.path.cmp(&right.path))
+			});
+			let matches = dedupe_summaries(summaries, limit);
+			return GraphSymbolsResult {
+				query: String::new(),
+				status: if matches.is_empty() {
+					"none".into()
+				} else {
+					"summary".into()
+				},
+				matches,
+			};
+		}
 		let exact = exact_symbol_matches(graph, query);
 		if exact.len() == 1 {
 			return GraphSymbolsResult {
@@ -1145,5 +1170,15 @@ mod tests {
 		);
 		let clusters = graph.graph_clusters();
 		assert!(!clusters.is_empty());
+	}
+
+	#[test]
+	fn graph_symbols_bare_query_returns_summary() {
+		let graph = build_query_graph();
+		let symbols = graph.graph_symbols("   ", 5);
+		assert_eq!(symbols.status, "summary");
+		assert!(symbols.query.is_empty());
+		assert!(!symbols.matches.is_empty());
+		assert!(symbols.matches.iter().all(|entry| entry.kind != "file"));
 	}
 }

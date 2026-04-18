@@ -248,12 +248,93 @@ describe("coding-agent code tool wiring", () => {
 		);
 	});
 
-	it("redirects removed repo-local search commands to grep", async () => {
+	it("routes file-local symbols through outline machinery even when query is present", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: [
+				{
+					name: "alpha",
+					kind: "function",
+					line: 1,
+					endLine: 3,
+					children: [{ name: "beta", kind: "function", line: 2, endLine: 2, children: [] }],
+				},
+			],
+			error: false,
+		});
+		const graphSpy = spyOn(nativesModule, "executeCodeGraph").mockResolvedValue({
+			output: "unused",
+			cacheStatus: "hit",
+			rebuilt: false,
+			fileCount: 0,
+			symbolCount: 0,
+			edgeCount: 0,
+			semanticStatus: undefined,
+		});
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", {
+			command: "symbols",
+			file: "src/example.ts",
+			query: "ignored",
+		});
+		expect(bufferSpy).toHaveBeenCalledWith(
+			expect.objectContaining({ command: "outline", file: "/tmp/test/src/example.ts" }),
+		);
+		expect(graphSpy).not.toHaveBeenCalled();
+		expect(getText(result)).toContain("Symbols src/example.ts (1 top, 2 total)");
+	});
+
+	it("routes workspace symbols to the native graph backend", async () => {
+		const graphSpy = spyOn(nativesModule, "executeCodeGraph").mockResolvedValue({
+			output: "Symbols\nQuery: rateLimit\nStatus: exact\n- src/rate_limit.ts::rateLimit",
+			cacheStatus: "hit",
+			rebuilt: false,
+			fileCount: 1,
+			symbolCount: 2,
+			edgeCount: 3,
+			semanticStatus: "ready",
+		});
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({ output: [], error: false });
 		const tool = new CodeTool(createSession());
 		const result = await tool.execute("tool", { command: "symbols", query: "rateLimit" });
-		expect(getText(result)).toContain("moved to grep");
-		expect(getText(result)).toContain(`mode: "semantic"`);
-		expect(getText(result)).toContain(`mode: "rawText"`);
+		expect(graphSpy).toHaveBeenCalledWith(
+			expect.objectContaining({ command: "symbols", query: "rateLimit", root: "/tmp/test" }),
+		);
+		expect(bufferSpy).not.toHaveBeenCalled();
+		expect(getText(result)).toContain("Status: exact");
+	});
+
+	it("routes bare symbols to the native graph backend for workspace summary", async () => {
+		const graphSpy = spyOn(nativesModule, "executeCodeGraph").mockResolvedValue({
+			output:
+				"Symbols summary\nQuery: (all symbols)\nStatus: summary\n- src/rate_limit.ts::rateLimit\nNext: add a symbol name or qualified path to narrow results",
+			cacheStatus: "hit",
+			rebuilt: false,
+			fileCount: 1,
+			symbolCount: 2,
+			edgeCount: 3,
+			semanticStatus: undefined,
+		});
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({ output: [], error: false });
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", { command: "symbols" });
+		expect(graphSpy).toHaveBeenCalledWith(
+			expect.objectContaining({ command: "symbols", query: undefined, root: "/tmp/test" }),
+		);
+		expect(bufferSpy).not.toHaveBeenCalled();
+		expect(getText(result)).toContain("Status: summary");
+	});
+
+	it("redirects removed repo-local files and search commands to grep", async () => {
+		const tool = new CodeTool(createSession());
+		const filesResult = await tool.execute("tool", { command: "files", query: "rate_limit.ts" });
+		expect(getText(filesResult)).toContain("Repo-local files moved to grep");
+		expect(getText(filesResult)).toContain(`mode: "semantic"`);
+		expect(getText(filesResult)).toContain(`mode: "rawText"`);
+
+		const searchResult = await tool.execute("tool", { command: "search", query: "rateLimit" });
+		expect(getText(searchResult)).toContain("Repo-local search moved to grep");
+		expect(getText(searchResult)).toContain(`mode: "semantic"`);
+		expect(getText(searchResult)).toContain(`mode: "rawText"`);
 	});
 
 	it("routes graph commands to the native graph backend", async () => {
