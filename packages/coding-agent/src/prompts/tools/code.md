@@ -6,3 +6,6 @@
 - Make nested edits under one root target → `code edit { operations: [{ targetId: "src/server.ts::Server", actions: [{ kind: "wrap", content: ["try {", "  $BODY", "} catch (err) {", "  throw err;", "}"] }], children: [{ targetId: "src/server.ts::Server.handle", actions: [{ kind: "findAndReplace", find: ["legacyCall()"], content: ["modernCall()"] }] }] }] }`
 - Stable target IDs: file root = project-relative path; declaration target = `<file>::Symbol.member`
 - Successful managed edits do not require a fresh `read` before the next edit; if an edit fails, tighten the target/action and retry narrowly instead of switching to text `edit` or `write`.
+- Structural delete may opt into sibling cleanup when safe → add `allowSiblingDelete: true` on delete actions that should remove adjacent empty wrappers.
+- Multi-match edits can choose `occurrence: "first" | "last" | "all" | 1` when the target occurs multiple times; default remains unique-or-fail.
+- Diagnostics: `watcherStatus` reports watcher health/state; `lockStatus` reports lock ownership, queue, and timeout state for live edit contention.

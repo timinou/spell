@@ -50,6 +50,18 @@ function getText(result: Awaited<ReturnType<CodeTool["execute"]>>): string {
 	return result.content.find(content => content.type === "text")?.text ?? "";
 }
 
+afterEach(() => {
+	try {
+		(spyOn(nativesModule, "executeCodeBuffer") as any).mockRestore?.();
+	} catch {}
+	try {
+		(spyOn(nativesModule, "executeCodeGraph") as any).mockRestore?.();
+	} catch {}
+	try {
+		(spyOn(lspModule, "formatFileContent") as any).mockRestore?.();
+	} catch {}
+});
+
 describe("coding-agent code tool wiring", () => {
 	beforeEach(() => {
 		_resetSupportedExtensionsForTest(TEST_EXTENSIONS);
@@ -468,4 +480,82 @@ describe("coding-agent code tool wiring", () => {
 		expect(tools.some(tool => tool.name === "code")).toBe(true);
 		expect(PendingActionStore).toBeDefined();
 	});
+});
+
+it("accepts new structural edit fields in the schema and passes them through", async () => {
+	const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+		.mockReturnValueOnce({ output: [], error: false })
+		.mockReturnValueOnce({
+			output: {
+				version: 1,
+				diff: "@@ file @@\n-a\n+b",
+				editCount: 1,
+				created: false,
+				targets: [{ targetId: "src/example.ts", actions: ["delete"] }],
+			},
+			error: false,
+		})
+		.mockReturnValueOnce({ output: { success: true }, error: false })
+		.mockReturnValue({ output: { success: true }, error: false });
+	const tool = new CodeTool(createSession());
+	const result = await tool.execute("tool", {
+		command: "edit",
+		operations: [
+			{
+				targetId: "src/example.ts",
+				actions: [{ kind: "delete", allowSiblingDelete: true, occurrence: 1 }],
+			},
+		],
+	});
+
+	expect(bufferSpy).toHaveBeenCalledWith(
+		expect.objectContaining({
+			command: "edit",
+			root: "/tmp/test",
+			operations: expect.arrayContaining([
+				expect.objectContaining({
+					targetId: "src/example.ts",
+					actions: expect.arrayContaining([expect.objectContaining({ allowSiblingDelete: true, occurrence: 1 })]),
+				}),
+			]),
+		}),
+	);
+	expect(getText(result)).toContain("Target: src/example.ts");
+});
+
+it("classifies native object payload failures", async () => {
+	const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValueOnce({
+		output: { code: "LOCK_TIMEOUT", message: "Timed out while waiting for lock" },
+		error: true,
+	});
+	const tool = new CodeTool(createSession());
+	const result = await tool.execute("tool", {
+		command: "edit",
+		operations: [{ targetId: "src/example.ts", actions: [{ kind: "write", content: "x" }] }],
+	});
+
+	expect(getText(result)).toContain("Timed out while waiting for lock");
+	expect(getText(result)).toContain("[lock_timeout]");
+	expect(getText(result)).toContain("inspect lockStatus");
+	expect(bufferSpy).toHaveBeenCalled();
+});
+
+it("surfaces new lock and scope failure codes", async () => {
+	const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+		.mockReturnValueOnce({ output: { code: "UNSAFE_SCOPE_WRITE", message: "Outside scope" }, error: true })
+		.mockReturnValueOnce({ output: { code: "LINE_OUT_OF_TARGET_SCOPE", message: "Wrong line" }, error: true })
+		.mockReturnValueOnce({ output: { code: "LOCK_ERROR", message: "Lock failed" }, error: true })
+		.mockReturnValueOnce({
+			output: { code: "EXTERNAL_MODIFICATION", message: "File changed", targetId: "src/example.ts" },
+			error: true,
+		});
+	const tool = new CodeTool(createSession());
+	for (const expected of ["unsafe_scope_write", "line_out_of_target_scope", "lock_error", "external_modification"]) {
+		const result = await tool.execute("tool", {
+			command: "edit",
+			operations: [{ targetId: "src/example.ts", actions: [{ kind: "write", content: "x" }] }],
+		});
+		expect(getText(result)).toContain(`[${expected}]`);
+	}
+	expect(bufferSpy).toHaveBeenCalledTimes(4);
 });

@@ -3,26 +3,80 @@
 #+SESSION_ID: 14bf8519411f65df
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-54-27-716Z_14bf8519411f65df.jsonl]]
 #+CUSTOM_ID: BUG-284-code-edit-occurrence-disambiguation-cont
+#+LAYER: coding-agent
 
-* Initial Message
+* Scope
+In scope: complete the user-facing `code edit` contract for duplicate `findAndReplace` matches by exposing `occurrence` all the way from the TypeScript tool schema to the native bridge and prompt docs. This item covers `packages/coding-agent/src/tools/code.ts`, `packages/natives/src/code-buffer/types.ts`, `packages/coding-agent/src/prompts/tools/code.md`, and regression coverage in `packages/natives/test/code-buffer.test.ts` plus relevant coding-agent prompt/tool tests.
 
-┌──────────────────────────────┬───────────────────────┬─────────────────────────────────────────────────────────────────────────────────────────┐
- │ Action                       │ Target                │ Result                                                                                  │
- ├──────────────────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
- │ write body-scope, multi-line │ symbol                │ ✓ clean                                                                                 │
- ├──────────────────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
- │ insertAfter                  │ symbol                │ ✓ clean (drops leading "")                                                              │
- ├──────────────────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
- │ insertBefore                 │ symbol or line-anchor │ ✗ mangles indentation (over-indents inserted block, strips leading indent of next line) │
- ├──────────────────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
- │ findAndReplace w/ dup find   │ file                  │ ✗ ambiguous-match error, no occurrence selector                                         │
- └──────────────────────────────┴───────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────┘
+Out of scope: redesigning `findAndReplace` into a new DSL, changing patch matching semantics beyond the already-implemented native `Occurrence` model, or adding preview-driven interactive disambiguation. Those are deferred because the current engine already has a sufficient structural model; the bug is that the outer contract fails to expose it.
 
 
+Deferred design work for interactive previews or richer disambiguation UX belongs to [[id:FUP-059-code-edit-api-ergonomics-and-audit-follo]].
+* Existing Patterns
+- Use the native engine’s existing match selector in `crates/pi-code-engine/src/edit/patch.rs`:
+  - `Occurrence::{Unique, First, Last, Index, All}`
+  - `apply_patches(buffer, scope_start, scope_end, patches)`
+- Preserve the native bridge parser already present in `crates/pi-natives/src/code_buffer.rs`:
+  - `action_occurrence(action: &Value) -> Result<Occurrence, CodeEngineError>`
+  - `single_action(... "findAndReplace" ...)` already threads `occurrence: action_occurrence(action)?`
+- Follow existing tool normalization in `packages/coding-agent/src/tools/code.ts`:
+  - `normalizeOperations(operations)`
+  - `codeActionSchema`
+- Keep prompt examples in `packages/coding-agent/src/prompts/tools/code.md` synchronized with schema/tests.
 
-in File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-18T13-49-35-772Z_14bf83fc273dc16d.jsonl
- ID: 14bf83fc273dc16d
+* Tests
+Workflows to cover before implementation:
+- T1 — unique match remains the default: a single scoped match still succeeds without an `occurrence` field.
+- T2 — duplicate scoped matches fail clearly when `occurrence` is omitted.
+- T3 — `occurrence: "first"`, `"last"`, numeric index, and `"all"` each select the intended matches.
+- T4 — out-of-range numeric occurrence fails with an explicit range error.
+- T5 — coding-agent schema/types normalization preserve `occurrence` instead of silently dropping it before the native call.
+- T6 — prompt/tool contract docs mention the supported selector values so the agent can reliably use them.
 
-use jq to find those faulty usages and then reprocuce the bugs here TDD and fix the root cause
+* Implementation
+** Define occurrence contract surface
+:PROPERTIES:
+:CUSTOM_ID: BUG-284-code-edit-occurrence-disambiguation-cont::define-occurrence-contract
+:END:
+- Files:
+  - `packages/natives/src/code-buffer/types.ts`
+  - `packages/coding-agent/src/tools/code.ts`
+- Add `occurrence` to the action contract as the exact public shape supported by the native bridge: string selectors (`first`, `last`, `all`) plus positive integer index.
+- Keep the default behavior as unique-match-required when the field is absent.
+- This step exists first so the tests compile against the intended contract.
 
-Placeholder body; updating immediately with full self-contained plan.
+** Write occurrence regression tests (TDD: before implementation)
+:PROPERTIES:
+:CUSTOM_ID: BUG-284-code-edit-occurrence-disambiguation-cont::write-occurrence-tests
+:DEPENDS: BUG-284-code-edit-occurrence-disambiguation-cont::define-occurrence-contract
+:END:
+- Files:
+  - `packages/natives/test/code-buffer.test.ts`
+  - `packages/coding-agent/test/prompts/code-tool-contracts.test.ts`
+  - `packages/coding-agent/test/tools/code.test.ts` if needed for request normalization coverage
+- Add initially failing tests for T2-T6. Reuse the current transactional edit harness rather than inventing a second test path.
+
+** Complete occurrence cutover (satisfies T1-T6)
+:PROPERTIES:
+:CUSTOM_ID: BUG-284-code-edit-occurrence-disambiguation-cont::implement-occurrence-cutover
+:DEPENDS: BUG-284-code-edit-occurrence-disambiguation-cont::write-occurrence-tests
+:END:
+- Files:
+  - `packages/coding-agent/src/tools/code.ts`
+  - `packages/natives/src/code-buffer/types.ts`
+  - `packages/coding-agent/src/prompts/tools/code.md`
+- Ensure the outer tool forwards `occurrence` unchanged to the native buffer API.
+- Ensure prompt examples show at least one ambiguous `findAndReplace` resolved with `occurrence`.
+- Do not add compatibility shims or duplicate fields.
+
+* Edge Cases
+- Numeric `occurrence` must be positive and 1-indexed; `0`, negatives, and non-integers must not be silently coerced into a different meaning.
+- `occurrence: "all"` must remain scoped to the resolved target span, not the whole file unless the target itself is the file.
+- Ambiguity errors must still list enough information to debug the failure when `occurrence` is omitted.
+- String/array normalization for `find` and `content` must not accidentally erase `occurrence` when actions are rebuilt.
+
+* Acceptance Criteria
+- A duplicate scoped `findAndReplace` can be resolved through the public `code edit` API using `occurrence` without changing native matching semantics.
+- Omitting `occurrence` on duplicate matches still fails explicitly instead of picking an arbitrary match.
+- The TypeScript schema, native TS types, prompt examples, and regression tests all describe the same field and value set.
+- Verification is concrete: `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/prompts/code-tool-contracts.test.ts packages/coding-agent/test/tools/code.test.ts` and the changed assertions demonstrate the cutover.

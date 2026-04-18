@@ -8,6 +8,8 @@ export interface CodeAction {
 	line?: number;
 	column?: number;
 	nodeType?: string;
+	allowSiblingDelete?: boolean;
+	occurrence?: "first" | "last" | "all" | number;
 }
 
 export interface CodeOperation {
@@ -39,10 +41,14 @@ export interface CodeEditOutput {
 }
 
 export interface CodeErrorOutput {
+	code?: string;
 	message?: string;
 	targetId?: string;
 	action?: string;
 	proof?: CodeProofData;
+	lostDecls?: string[];
+	targetSpan?: { start?: number; end?: number };
+	budgetMs?: number;
 }
 
 export interface CodeBufferOptions {
