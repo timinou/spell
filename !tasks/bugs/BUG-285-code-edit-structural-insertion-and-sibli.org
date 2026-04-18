@@ -1,0 +1,91 @@
+#+TITLE: Code edit structural insertion and sibling-boundary hardening
+#+STATE: DONE
+#+SESSION_ID: 14bf8519411f65df
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-54-27-716Z_14bf8519411f65df.jsonl]]
+#+CUSTOM_ID: BUG-285-code-edit-structural-insertion-and-sibli
+#+LAYER: coding-agent
+
+* Scope
+In scope: fix the root cause of `code edit` insertion boundary corruption by unifying safe insertion semantics for symbol-target and line-target `insertBefore` / `insertAfter`, then audit adjacent sibling-structure actions (`splice`, `move`, `clone`, `transpose`) for the same boundary/indentation invariant violations. The implementation area is primarily `crates/pi-natives/src/code_buffer.rs` plus the structural edit modules under `crates/pi-code-engine/src/edit/`.
+
+Required behavior: safe symbol-target insertion should auto-normalize boundary newlines/indentation when the target boundary is unambiguous, but still reject shared-boundary or otherwise unsafe splices. The same conceptual operation must not behave one way for line targets and another way for symbol targets.
+
+Out of scope: broad API redesign, interactive previews, unrelated write-scope/body bugs, or semantic rename/delete behavior outside the insertion/sibling-operation family.
+
+
+Any broader API redesign or usability work discovered during this hardening pass must be captured in [[id:FUP-059-code-edit-api-ergonomics-and-audit-follo]] instead of expanding this bug item.
+* Existing Patterns
+- Reuse the explicit safety discipline already present in `crates/pi-code-engine/src/edit/replace.rs`:
+  - `insert_before(buffer, line, node_type, content, within)`
+  - `insert_after(buffer, line, node_type, content, within)`
+  - separator guards in `ensure_insert_before_separator` / `ensure_insert_after_separator`
+- Reuse indentation helpers instead of ad-hoc spacing logic:
+  - `crates/pi-code-engine/src/edit/indent.rs::{node_indent, adjust_indent}`
+- Follow transactional edit application in `crates/pi-natives/src/code_buffer.rs`:
+  - `single_action(...)`
+  - `apply_operations_transactionally(...)`
+- Use existing sibling-safety precedent from `replace_body_safe` in `crates/pi-code-engine/src/edit/body.rs`: reject unsafe structural changes rather than silently corrupting neighbors.
+
+* Tests
+Workflows to cover before implementation:
+- T1 — symbol-target `insertBefore` at a top-level declaration inserts a clean sibling with correct indentation and no stripping of the following declaration’s leading whitespace.
+- T2 — symbol-target `insertAfter` inserts at the right sibling boundary without producing a leading empty-string artifact, double blank line, or malformed import/declaration adjacency.
+- T3 — unsafe shared-boundary insertions still fail with an explicit refusal/error rather than being auto-corrected into a possibly wrong structure.
+- T4 — equivalent safe symbol-target and line-target insertions produce the same file shape.
+- T5 — adjacent sibling operations (`splice`, `move`, `clone`, `transpose`) either preserve boundaries/indentation or reject unsafe cases under the same invariant family.
+- T6 — failed structural edits remain atomic; a follow-up edit on the same file still succeeds without stale dirty state.
+
+* Implementation
+** Write structural regression tests (TDD: before implementation)
+:PROPERTIES:
+:CUSTOM_ID: BUG-285-code-edit-structural-insertion-and-sibli::write-boundary-tests
+:END:
+- Files:
+  - `packages/natives/test/code-buffer.test.ts`
+  - targeted Rust tests under `crates/pi-code-engine/src/edit/*.rs` where the invariant lives
+- Add initially failing coverage for T1-T6 with exact file-shape assertions, not just “did not throw”.
+- Enumerate representative top-level declarations and declaration-target cases; the tests should prove the bug the user reported.
+
+** Implement shared insertion boundary normalization (satisfies T1-T4)
+:PROPERTIES:
+:CUSTOM_ID: BUG-285-code-edit-structural-insertion-and-sibli::implement-insertion-normalization
+:DEPENDS: BUG-285-code-edit-structural-insertion-and-sibli::write-boundary-tests
+:END:
+- Files:
+  - `crates/pi-natives/src/code_buffer.rs`
+  - `crates/pi-code-engine/src/edit/replace.rs`
+  - supporting helpers if a shared normalization/refusal utility is needed
+- Remove the current split where symbol-target insertion is a raw byte splice while line-target insertion is guarded.
+- Auto-normalize only when the sibling boundary is provably safe; otherwise return a structural error.
+- Keep the invariant centralized so future callers cannot bypass it by choosing a different target form.
+
+** Audit and harden sibling structural actions (satisfies T5-T6)
+:PROPERTIES:
+:CUSTOM_ID: BUG-285-code-edit-structural-insertion-and-sibli::harden-sibling-actions
+:DEPENDS: BUG-285-code-edit-structural-insertion-and-sibli::implement-insertion-normalization
+:END:
+- Files:
+  - `crates/pi-code-engine/src/edit/splice.rs`
+  - `crates/pi-code-engine/src/edit/drag.rs`
+  - `crates/pi-code-engine/src/edit/clone.rs`
+  - `crates/pi-code-engine/src/edit/transpose.rs`
+  - `packages/natives/test/code-buffer.test.ts`
+- Audit each action against the same boundary/indent invariant family.
+- Fix only violations that share the root cause class; document any larger redesign candidates in the follow-up item instead of expanding scope mid-stream.
+
+* Edge Cases
+- Top-level imports, adjacent declarations, and nested declaration targets must not gain or lose indentation on neighboring lines.
+- Auto-normalization must not silently cross shared boundary lines such as `} else {`, `}),`, or similar multi-owner delimiters.
+- Any refusal path must leave the buffer transaction clean so a later valid edit works immediately.
+- Hardening must preserve existing successful operations that already produce stable structure.
+
+* Acceptance Criteria
+- `insertBefore` and `insertAfter` no longer have divergent symbol-target vs line-target semantics for safe sibling insertions.
+- The exact user-reported corruption modes are covered by failing-then-passing regression tests.
+- `splice`, `move`, `clone`, and `transpose` have an explicit audit outcome: either code changes with tests or documented no-change findings tied to the same invariant family.
+- Verification is concrete: run focused Rust/native regression coverage for the touched edit modules and `packages/natives/test/code-buffer.test.ts`; the saved file contents must match the asserted structural shapes exactly.
+
+* Completion [2026-04-18]
+- Completed under [[id:PLAN-253-code-edit-boundary-and-occurrence-repair]].
+- Outcome: symbol-target `insertBefore` / `insertAfter` now route through boundary-aware structural helpers, with sibling-action refusal coverage for shared-boundary cases.
+- Verification: `cargo test -p pi-code-engine edit:: --lib`; `bun --cwd=packages/natives run dev:native`; `bun test packages/natives/test/code-buffer.test.ts`.

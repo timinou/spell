@@ -1,5 +1,5 @@
 #+TITLE: Code edit occurrence disambiguation contract
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bf8519411f65df
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-54-27-716Z_14bf8519411f65df.jsonl]]
 #+CUSTOM_ID: BUG-284-code-edit-occurrence-disambiguation-cont
@@ -80,3 +80,8 @@ Workflows to cover before implementation:
 - Omitting `occurrence` on duplicate matches still fails explicitly instead of picking an arbitrary match.
 - The TypeScript schema, native TS types, prompt examples, and regression tests all describe the same field and value set.
 - Verification is concrete: `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/prompts/code-tool-contracts.test.ts packages/coding-agent/test/tools/code.test.ts` and the changed assertions demonstrate the cutover.
+
+* Completion [2026-04-18]
+- Completed under [[id:PLAN-253-code-edit-boundary-and-occurrence-repair]].
+- Outcome: public `code edit` occurrence contract now has prompt/tool/native regression coverage, including duplicate-match refusal and selector pass-through.
+- Verification: `bun --cwd=packages/natives run dev:native`; `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/prompts/code-tool-contracts.test.ts packages/coding-agent/test/tools/code.test.ts`.

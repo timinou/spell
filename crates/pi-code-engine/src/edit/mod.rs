@@ -15,7 +15,9 @@ pub use clone::clone_node;
 pub use drag::{DragDirection, drag_node};
 pub use patch::{Occurrence, Patch, apply_patches};
 pub use rename::rename_symbol;
-pub use replace::{insert_after, insert_before, kill_node, replace_node};
+pub use replace::{
+	insert_after, insert_after_symbol, insert_before, insert_before_symbol, kill_node, replace_node,
+};
 pub use splice::{SpliceMode, splice_node};
 pub use transpose::transpose_nodes;
 pub use web_refactor::{

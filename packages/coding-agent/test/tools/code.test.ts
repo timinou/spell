@@ -523,6 +523,61 @@ it("accepts new structural edit fields in the schema and passes them through", a
 	expect(getText(result)).toContain("Target: src/example.ts");
 });
 
+it("preserves findAndReplace occurrence through normalization", async () => {
+	const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+		.mockReturnValueOnce({ output: [], error: false })
+		.mockReturnValueOnce({
+			output: {
+				version: 1,
+				diff: "@@ main @@\n-const value = 1;\n+const picked = 2;",
+				editCount: 1,
+				created: false,
+				targets: [{ targetId: "src/example.ts::main", actions: ["findAndReplace"] }],
+			},
+			error: false,
+		})
+		.mockReturnValueOnce({ output: "export function main() {\n  const picked = 2;\n}\n", error: false })
+		.mockReturnValue({ output: { success: true }, error: false });
+	const tool = new CodeTool(createSession());
+	const result = await tool.execute("tool", {
+		command: "edit",
+		operations: [
+			{
+				targetId: "src/example.ts::main",
+				actions: [
+					{
+						kind: "findAndReplace",
+						find: ["const value = 1;"],
+						content: ["const picked = 2;"],
+						occurrence: "last",
+					},
+				],
+			},
+		],
+	});
+
+	expect(bufferSpy).toHaveBeenCalledWith(
+		expect.objectContaining({
+			command: "edit",
+			root: "/tmp/test",
+			operations: expect.arrayContaining([
+				expect.objectContaining({
+					targetId: "src/example.ts::main",
+					actions: expect.arrayContaining([
+						expect.objectContaining({
+							kind: "findAndReplace",
+							find: "const value = 1;",
+							content: "const picked = 2;",
+							occurrence: "last",
+						}),
+					]),
+				}),
+			]),
+		}),
+	);
+	expect(getText(result)).toContain("Target: src/example.ts::main [findAndReplace]");
+});
+
 it("classifies native object payload failures", async () => {
 	const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValueOnce({
 		output: { code: "LOCK_TIMEOUT", message: "Timed out while waiting for lock" },

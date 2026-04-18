@@ -2,6 +2,7 @@ use super::{
 	TextEdit,
 	indent::{adjust_indent, node_indent},
 	node_at_line, node_text,
+	replace::standalone_sibling_boundary,
 };
 use crate::{
 	buffer::CodeBuffer,
@@ -42,6 +43,13 @@ pub fn splice_node(
 			SpliceMode::Down => child.end_byte() <= node.end_byte(),
 		};
 		if keep {
+			standalone_sibling_boundary(
+				&source,
+				child.start_byte(),
+				child.end_byte(),
+				child.start_position().row + 1,
+				"splice",
+			)?;
 			if !first {
 				kept.push('\n');
 			}
@@ -57,4 +65,32 @@ pub fn splice_node(
 		old_end_byte: parent.end_byte(),
 		new_text:     adjusted,
 	}])
+}
+
+#[cfg(test)]
+mod tests {
+	use std::sync::Arc;
+
+	use super::*;
+	use crate::{
+		buffer::CodeBuffer,
+		language::{LanguageId, LanguageRegistry},
+	};
+
+	fn registry() -> Arc<LanguageRegistry> {
+		Arc::new(LanguageRegistry::with_builtins().expect("registry"))
+	}
+
+	fn ts_buffer(source: &str) -> CodeBuffer {
+		CodeBuffer::from_str(source, LanguageId::new("typescript"), registry()).expect("buffer")
+	}
+
+	#[test]
+	fn splice_node_rejects_shared_boundary_siblings() {
+		let source = "const alpha = 1; const beta = 2;\n";
+		let buffer = ts_buffer(source);
+		let err = splice_node(&buffer, 1, SpliceMode::Self_, None)
+			.expect_err("shared boundary should refuse");
+		assert!(err.to_string().contains("Unsafe splice"));
+	}
 }

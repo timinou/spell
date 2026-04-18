@@ -1,5 +1,5 @@
 #+TITLE: Code edit API ergonomics and audit follow-up
-#+STATE: ITEM
+#+STATE: BLOCKED
 #+SESSION_ID: 14bf8519411f65df
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-54-27-716Z_14bf8519411f65df.jsonl]]
 #+CUSTOM_ID: FUP-059-code-edit-api-ergonomics-and-audit-follo
@@ -60,3 +60,6 @@ Future workflows to enumerate when this item is picked up:
 - The deferred space is captured as explicit next-step analysis instead of silently expanding the current bug-fix plan.
 - Future execution can start from this item without relying on the current session history.
 - The item depends on the two structural bug fixes so redesign work does not begin against stale behavior.
+
+* Status [2026-04-18]
+Deferred by [[id:PLAN-253-code-edit-boundary-and-occurrence-repair]]. Structural-now bug items landed; this redesign follow-up remains intentionally blocked for a later execution slice.
