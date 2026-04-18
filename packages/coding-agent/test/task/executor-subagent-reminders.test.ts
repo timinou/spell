@@ -202,7 +202,6 @@ describe("runSubprocess submit_result reminders", () => {
 				type: "tool_execution_end",
 				toolCallId: "tool-bash",
 				toolName: "bash",
-				args: { command: "bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts" },
 				result: {
 					content: [{ type: "text", text: "ok" }],
 					details: { exitCode: 0, cwd: "/tmp" },
@@ -268,7 +267,6 @@ describe("runSubprocess submit_result reminders", () => {
 				type: "tool_execution_end",
 				toolCallId: "tool-bash-after-retry",
 				toolName: "bash",
-				args: { command: "bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts" },
 				result: {
 					content: [{ type: "text", text: "ok" }],
 					details: { exitCode: 0, cwd: "/tmp" },

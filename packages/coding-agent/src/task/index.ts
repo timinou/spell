@@ -37,6 +37,7 @@ import {
 	type TodoDelegation,
 	type TodoDelegationResult,
 	type TodoGroup,
+	type TodoItem,
 	type TodoStatus,
 	TodoWriteTool,
 } from "../tools/todo-write";
@@ -45,7 +46,7 @@ import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import { type BatchGraph, buildBatchGraph, scheduleBatch } from "./batch-scheduler";
 import { discoverAgents, getAgent } from "./discovery";
-import { runSubprocess, type RuntimeVerificationOptions } from "./executor";
+import { type RuntimeVerificationOptions, runSubprocess } from "./executor";
 import {
 	type GateFailure,
 	type GateVerificationResult,
@@ -404,13 +405,72 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		return { agent, sessionId, transcriptPath };
 	}
 
-	#buildTodoResultSummary(result: SingleResult): TodoDelegationResult {
+	#buildTodoResultSummary(
+		result: SingleResult,
+		verification?: TodoDelegationResult["verification"],
+	): TodoDelegationResult {
 		const output = result.output.trim();
 		return {
 			output: output.length > 4_000 ? `${output.slice(0, 4_000)}\n\n[truncated]` : output || undefined,
 			error: result.error,
 			outputPath: result.outputPath,
+			verification,
 		};
+	}
+
+	#findTodoForRef(todoRef: string | undefined): TodoItem | undefined {
+		if (!todoRef) return undefined;
+		const groups = this.session.getTodoGroups?.();
+		if (!groups) return undefined;
+		return findTask(groups, todoRef);
+	}
+
+	async #writeVerificationArtifact(
+		todo: TodoItem,
+		status: TodoStatus,
+		verification: NonNullable<TodoDelegationResult["verification"]>,
+		result: SingleResult,
+		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
+	): Promise<string | undefined> {
+		if (!todo.verificationArtifact) return undefined;
+		const baseDir = isolationContext?.isolationDir ?? this.session.cwd;
+		const artifactPath = path.isAbsolute(todo.verificationArtifact)
+			? todo.verificationArtifact
+			: path.resolve(baseDir, todo.verificationArtifact);
+		await Bun.write(
+			artifactPath,
+			JSON.stringify(
+				{
+					status,
+					verification,
+					outputPath: result.outputPath,
+					error: result.error,
+				},
+				null,
+				2,
+			),
+		);
+		return artifactPath;
+	}
+
+	async #buildDelegatedVerificationSummary(
+		todo: TodoItem | undefined,
+		status: TodoStatus,
+		gateFailures: GateFailure[] | undefined,
+		result: SingleResult,
+		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
+	): Promise<TodoDelegationResult["verification"] | undefined> {
+		if (!todo || (!hasRequiredGate(todo) && !todo.verificationArtifact)) return undefined;
+		const verification: NonNullable<TodoDelegationResult["verification"]> = {
+			status: status === "completed" ? "passed" : "failed",
+			gateCommit: todo.gateCommit,
+			gateArtifact: todo.gateArtifact,
+			gateCmd: todo.gateCmd,
+			failures: gateFailures ? [...gateFailures] : undefined,
+		};
+		const artifactPath = await this.#writeVerificationArtifact(todo, status, verification, result, isolationContext);
+		if (artifactPath) verification.artifactPath = artifactPath;
+		return verification;
 	}
 
 	#buildRuntimeVerificationOptions(
@@ -537,6 +597,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 	): Promise<void> {
 		if (!task.todoRef) return;
 		const delegation = this.#buildTodoDelegation(result.agent, result.sessionId, result.transcriptPath);
+		const todo = this.#findTodoForRef(task.todoRef);
 
 		let status: TodoStatus;
 		let gateFailures: GateFailure[] | undefined;
@@ -563,7 +624,14 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			status = "failed";
 		}
 
-		const resultSummary = this.#buildTodoResultSummary(result);
+		const verificationSummary = await this.#buildDelegatedVerificationSummary(
+			todo,
+			status,
+			gateFailures,
+			result,
+			isolationContext,
+		);
+		const resultSummary = this.#buildTodoResultSummary(result, verificationSummary);
 		if (gateFailures?.length) {
 			resultSummary.gateFailures = gateFailures;
 		}

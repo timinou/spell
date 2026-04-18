@@ -36,8 +36,8 @@ import { EventBus, Priority } from "../utils/event-bus";
 import { buildNamedToolChoice } from "../utils/tool-choice";
 // Import bash subprocess handler for side effects (tracks bash commands for gate verification)
 import "./bash-subprocess-handler";
-import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import { type GateFailure, type TrackedBashExecution, verifyGates } from "./gate-verification";
+import { subprocessToolRegistry } from "./subprocess-tool-registry";
 import {
 	type AgentDefinition,
 	type AgentProgress,
@@ -1492,6 +1492,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					const verificationMessage = buildMissingVerificationProofMessage(missingVerificationFailures);
 					abortReasonText ??= verificationMessage;
 					error = verificationMessage;
+					exitCode = 1;
 				} else if (
 					!submitResultCalled &&
 					(!abortSignal.aborted || abortReason === "terminate") &&

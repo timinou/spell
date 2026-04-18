@@ -1,5 +1,5 @@
 #+TITLE: coding-agent: keep raw bash verification output inline
-#+STATE: BLOCKED
+#+STATE: DONE
 #+SESSION_ID: 14c0023f98a54b3e
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T23-01-14-978Z_14c0023f98a54b3e.jsonl]]
 #+CUSTOM_ID: BUG-286-coding-agent-keep-raw-bash-verification
@@ -191,3 +191,5 @@ Verification commands expected during implementation:
 - [[id:PLAN-257-raw-bash-verification-output-plan]] RAW_BASH_VERIFICATION_OUTPUT_PLAN
 
 NOTE [2026-04-18]: Implemented bash verification visibility fix and focused tests passed. Full `bun check:ts` remains blocked by unrelated import-order failures in packages/coding-agent/src/task/executor.ts and packages/coding-agent/src/task/index.ts outside this bug's scope.
+
+NOTE [2026-04-18]: Verification completed. Focused bash visibility tests pass and full `bun check:ts` is green after clearing the remaining typecheck blockers.
