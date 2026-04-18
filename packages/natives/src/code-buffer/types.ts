@@ -65,6 +65,8 @@ export interface CodeBufferOptions {
 	query?: string;
 	content?: string;
 	depth?: number;
+	enrich?: Array<"signature" | "metrics" | "doc" | "graph">;
+	saveMode?: "auto" | "staged";
 	operations?: CodeOperation[];
 }
 

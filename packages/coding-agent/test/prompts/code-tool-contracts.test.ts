@@ -67,6 +67,8 @@ describe("code-edit contract prompts", () => {
 		expect(codePrompt).toContain('occurrence: "last"');
 		expect(codePrompt).toContain('Multi-match edits can choose `occurrence: "first" | "last" | "all" | 1`');
 		expect(codePrompt).toContain('children: [{ targetId: "src/server.ts::Server.handle"');
+		expect(codePrompt).toContain("Edit multiple files in one request");
+		expect(codePrompt).toContain('targetId: "src/config.ts"');
 		expect(codePrompt).not.toContain('kind: "create"');
 		expect(codePrompt).not.toContain('kind: "patch"');
 		expect(codePrompt).not.toContain('kind: "replace-body"');

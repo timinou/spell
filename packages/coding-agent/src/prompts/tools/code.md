@@ -6,6 +6,7 @@
 - Rename one declaration → `code edit { operations: [{ targetId: "src/server.ts::oldName", actions: [{ kind: "rename", content: "newName" }] }] }`
 
 - Make nested edits under one root target → `code edit { operations: [{ targetId: "src/server.ts::Server", actions: [{ kind: "wrap", content: ["try {", "  $BODY", "} catch (err) {", "  throw err;", "}"] }], children: [{ targetId: "src/server.ts::Server.handle", actions: [{ kind: "findAndReplace", find: ["legacyCall()"], content: ["modernCall()"] }] }] }] }`
+- Edit multiple files in one request → `code edit { operations: [{ targetId: "src/server.ts::handleRequest", actions: [{ kind: "findAndReplace", find: ["legacyCall()"], content: ["modernCall()"] }] }, { targetId: "src/config.ts", actions: [{ kind: "findAndReplace", find: ["const timeout = 5000;"], content: ["const timeout = 30_000;"] }] }] }`
 - Stable target IDs: file root = project-relative path; declaration target = `<file>::Symbol.member`
 - Successful managed edits do not require a fresh `read` before the next edit; if an edit fails, tighten the target/action and retry narrowly instead of switching to text `edit` or `write`.
 - Structural delete may opt into sibling cleanup when safe → add `allowSiblingDelete: true` on delete actions that should remove adjacent empty wrappers.
