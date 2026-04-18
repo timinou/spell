@@ -1,5 +1,5 @@
 #+TITLE: RAW_BASH_VERIFICATION_OUTPUT_PLAN
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14c0023f98a54b3e
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T23-01-14-978Z_14c0023f98a54b3e.jsonl]]
 #+CUSTOM_ID: PLAN-257-raw-bash-verification-output-plan
@@ -160,3 +160,17 @@ The immediate bash tool result is truthful for verification commands, compact pe
 *** Deviations
 - `bun check:ts` could not be driven green without touching unrelated task-runtime files already failing import-order checks (`packages/coding-agent/src/task/executor.ts`, `packages/coding-agent/src/task/index.ts`).
 - Linked child item [[id:BUG-286-coding-agent-keep-raw-bash-verification]] is `BLOCKED`, so this PLAN remains `DOING`.
+
+** Completion [2026-04-18]
+*** Verification
+- `bun test packages/coding-agent/test/tools/bash-churn-policy.test.ts packages/coding-agent/test/tools/context-pressure-policy.test.ts` → PASS (`11 pass`, `0 fail`).
+- `bun check:ts` → PASS after clearing the remaining repo-wide blockers (`packages/coding-agent/src/task/executor.ts`, `packages/coding-agent/src/task/index.ts`, `packages/coding-agent/test/task/executor-subagent-reminders.test.ts`).
+- Result: verification-classified bash commands keep raw visible stdout/stderr inline, while compact persistence/pruned-history behavior remains summary-based.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-257-raw-bash-verification-output-plan/focused-tool-tests.log]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-257-raw-bash-verification-output-plan/bun-check-ts.log]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-257-raw-bash-verification-output-plan/bash-biome-check.log]]
+*** Deviations
+- None.
+
+NOTE [2026-04-18]: All required verification now passes. Focused bash visibility tests and full `bun check:ts` are green; child item BUG-286 is DONE.
