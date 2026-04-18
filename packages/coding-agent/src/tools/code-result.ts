@@ -470,13 +470,25 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 
 	if (details.command === "outline") {
 		const label = details.displayPath ? ` ${details.displayPath}` : "";
-		const lines = [`Outline${label} (${details.data.topLevelCount} top, ${details.data.totalSymbols} total)`];
-		for (const line of previewList(details.data.entries, OUTLINE_PREVIEW_LIMIT).map(formatOutlineEntry)) {
-			lines.push(`- ${line}`);
+		const previewEntries: Array<{ depth: number; entry: CodeOutlineEntry }> = [];
+		let renderedCount = 0;
+		for (const entry of details.data.entries) {
+			if (previewEntries.length >= OUTLINE_PREVIEW_LIMIT) break;
+			previewEntries.push({ depth: 0, entry });
+			renderedCount += 1;
+			for (const child of entry.children) {
+				if (previewEntries.length >= OUTLINE_PREVIEW_LIMIT) break;
+				previewEntries.push({ depth: 1, entry: child });
+				renderedCount += 1;
+			}
 		}
-		const remaining = details.data.entries.length - Math.min(details.data.entries.length, OUTLINE_PREVIEW_LIMIT);
+		const lines = [`Outline${label} (${details.data.topLevelCount} top, ${details.data.totalSymbols} total)`];
+		for (const item of previewEntries) {
+			lines.push(`${"  ".repeat(item.depth)}- ${formatOutlineEntry(item.entry)}`);
+		}
+		const remaining = details.data.totalSymbols - renderedCount;
 		if (remaining > 0) {
-			lines.push(`- … ${remaining} more top-level entries`);
+			lines.push(`- … ${remaining} more ${remaining === 1 ? "symbol" : "symbols"}`);
 		}
 		return withHint(lines.join("\n"));
 	}

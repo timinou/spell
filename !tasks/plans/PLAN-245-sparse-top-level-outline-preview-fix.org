@@ -1,0 +1,59 @@
+#+TITLE: SPARSE_TOP_LEVEL_OUTLINE_PREVIEW_FIX
+#+STATE: DONE
+#+SESSION_ID: 14bf4b2d9739f241
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T09-41-24-188Z_14bf4b2d9739f241.jsonl]]
+#+CUSTOM_ID: PLAN-245-sparse-top-level-outline-preview-fix
+#+EFFORT: 4h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+code outline at the most synthetic level for elixir only shows the defmodule, it's basically usefuless
+
+* Context
+- Request: `code outline` at the most synthetic level is effectively useless for Elixir because a typical file only shows the `defmodule` line even though the underlying outline payload contains useful nested members.
+- Repo evidence: `crates/pi-code-engine/src/outline.rs` already asserts Elixir child entries via `test_outline_elixir_children()`; the loss happens in `packages/coding-agent/src/tools/code-result.ts`, where the synthetic outline preview currently lists only top-level entries.
+- Linked child item: [[id:BUG-275-coding-agent-render-nested-outline-previ]]
+
+** Settled Decisions
+1. The recommended fix is formatter-first inside coding-agent; no native Elixir extraction rewrite is planned because current repo evidence shows child members already exist.
+2. Default synthetic outline rendering should preview a recursive tree only one level deep: top-level entries plus direct children inline under each parent.
+3. The fix should generalize across languages with sparse top-level outlines rather than branching specifically on Elixir.
+4. This change does not add a new depth/verbosity parameter to `code outline`; the default contract itself becomes more informative.
+5. Overflow accounting must stay truthful when omitted lines may be children instead of only hidden top-level entries.
+
+** Recommended Approach
+- Update `packages/coding-agent/src/tools/code-result.ts` so outline previews consume one shared line budget while rendering top-level entries and direct children.
+- Defend the user-reported regression directly in `packages/coding-agent/test/tools/code-result.test.ts` with an explicit Elixir-style outline payload plus generic hierarchical cases.
+- Keep Rust/native files read-only unless implementation uncovers contradictory evidence during the test-first pass.
+
+** Critical Files
+- `packages/coding-agent/src/tools/code-result.ts`
+- `packages/coding-agent/test/tools/code-result.test.ts`
+- `crates/pi-code-engine/src/outline.rs` (evidence / regression reference; no change expected)
+
+* Verification
+- Focused regression test: `bun test packages/coding-agent/test/tools/code-result.test.ts`
+- Package-level type/lint gate: `bun check:ts`
+- Manual proof after implementation:
+  - `code outline crates/pi-code-engine/tests/fixtures/sources/hello.ex`
+  - Expected synthetic summary includes `module MyApp.Greeter` plus direct child entries such as `def start_link`, `def greet`, `defp internal_helper`, and `macro my_macro`.
+
+* Execution Manifest
+** wave-0                                          :wave:
+- [[id:BUG-275-coding-agent-render-nested-outline-previ]] coding-agent: render nested outline preview for sparse top-level files
+- Rationale: the formatter contract, regression tests, and bounded depth-1 preview implementation all live inside one bug item because native extraction is already sufficient.
+
+** Completion [2026-04-18]
+*** Verification
+- `bun test packages/coding-agent/test/tools/code-result.test.ts` → PASS (`16 pass, 0 fail`).
+- `bun check:ts` → PASS (`biome check . && tsgo -p tsconfig.json`).
+- `bun -e 'import { executeCodeBuffer } from "./packages/natives/src/code-buffer"; import { normalizeCodeBufferSuccess, formatCodeToolContent } from "./packages/coding-agent/src/tools/code-result"; const result = executeCodeBuffer({ command: "outline", file: "crates/pi-code-engine/tests/fixtures/sources/hello.ex" }); if (result.error) throw new Error(String((result.output && typeof result.output === "object" && "message" in result.output) ? result.output.message : result.output)); const details = normalizeCodeBufferSuccess({ command: "outline", file: `${process.cwd()}/crates/pi-code-engine/tests/fixtures/sources/hello.ex`, cwd: process.cwd(), output: result.output }); console.log(formatCodeToolContent(details));'` → PASS; output included `module MyApp.Greeter` plus direct child entries `def start_link`, `def greet`, `defp internal_helper`, and `macro my_macro`.
+*** Artifacts
+- [[file:packages/coding-agent/src/tools/code-result.ts]]
+- [[file:packages/coding-agent/test/tools/code-result.test.ts]]
+*** Deviations
+- Current Spell session still runs the pre-change built-in `code` tool formatter; workspace-local manual proof used the updated repo modules directly via `executeCodeBuffer` + `formatCodeToolContent` instead of the session-integrated `code outline` renderer.
+
+NOTE [2026-04-18]: Completed implementation, verification, and report for sparse top-level outline preview rendering.

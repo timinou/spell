@@ -1,0 +1,84 @@
+#+TITLE: coding-agent: render nested outline preview for sparse top-level files
+#+STATE: DONE
+#+SESSION_ID: 14bf4b2d9739f241
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T09-41-24-188Z_14bf4b2d9739f241.jsonl]]
+#+CUSTOM_ID: BUG-275-coding-agent-render-nested-outline-previ
+#+EFFORT: 3h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+code outline at the most synthetic level for elixir only shows the defmodule, it's basically usefuless
+
+* Scope
+- In scope: change default synthetic `code outline` rendering so files with sparse top-level outline entries show direct child declarations inline under each parent.
+- In scope: apply the rendering fix generically across languages when the outline payload is hierarchical; do not special-case Elixir in the formatter.
+- In scope: preserve compact summary behavior, stable line-range formatting, truthful symbol counts, and bounded preview output.
+- In scope: keep the native outline payload unchanged unless current repo evidence disproves the formatter-only diagnosis.
+- Out of scope: new `code outline` arguments or verbosity knobs, deep recursive expansion beyond direct children, and changes to `code read` or unrelated tool output.
+
+* Existing Patterns
+- `packages/coding-agent/src/tools/code-result.ts`
+  - `formatCodeToolContent(details)` currently renders only top-level outline entries.
+  - `normalizeOutlineEntries(value)` and `countOutlineEntries(entries)` already preserve hierarchy and total-symbol accounting.
+  - `formatOutlineEntry(entry)` already exposes child counts for compact summaries.
+- `packages/coding-agent/test/tools/code-result.test.ts`
+  - Extend the existing outline contract test instead of inventing a new snapshot harness.
+- `crates/pi-code-engine/src/outline.rs`
+  - `test_outline_elixir_children()` proves Elixir child members already exist in the outline payload.
+  - This item should reuse that fact rather than rewriting native extraction prematurely.
+
+* Tests
+- Workflow 1: a single-parent hierarchical outline (explicit Elixir-style module example) renders the parent line plus indented direct child lines in the synthetic preview.
+- Workflow 2: multiple top-level entries still preserve ordering and overall `(N top, M total)` counts while child lines consume the preview budget truthfully.
+- Workflow 3: grandchildren are not expanded by default, but child entries with descendants still display child counts so deeper structure is not silently erased.
+- Workflow 4: the output remains a compact semantic summary rather than raw JSON, and existing line/path formatting conventions remain stable.
+
+* Implementation
+** Define the outline preview contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-275-coding-agent-render-nested-outline-previ::define-preview-contract
+:END:
+- Files: `packages/coding-agent/src/tools/code-result.ts`, `packages/coding-agent/test/tools/code-result.test.ts`
+- Freeze the default behavior before coding: depth-1 preview, bounded visible lines, generic language handling, and truthful remaining-count semantics.
+- Tie the contract explicitly to Workflows 1-4.
+
+** Write failing outline rendering tests first
+:PROPERTIES:
+:CUSTOM_ID: BUG-275-coding-agent-render-nested-outline-previ::write-outline-tests
+:DEPENDS: BUG-275-coding-agent-render-nested-outline-previ::define-preview-contract
+:END:
+- File: `packages/coding-agent/test/tools/code-result.test.ts`
+- Encode Workflows 1-4 as initially failing tests.
+- Include an explicit Elixir-style module payload modeled on `crates/pi-code-engine/tests/fixtures/sources/hello.ex` so the reported user failure is defended directly.
+
+** Implement depth-1 tree preview in the formatter
+:PROPERTIES:
+:CUSTOM_ID: BUG-275-coding-agent-render-nested-outline-previ::implement-depth-1-preview
+:DEPENDS: BUG-275-coding-agent-render-nested-outline-previ::write-outline-tests
+:END:
+- File: `packages/coding-agent/src/tools/code-result.ts`
+- Replace the top-level-only preview loop with a helper that emits top-level entries and direct children under one bounded preview budget.
+- Keep the existing summary header and compact entry formatting unless the tests require a contract change.
+
+** Reconcile overflow accounting and compact formatting
+:PROPERTIES:
+:CUSTOM_ID: BUG-275-coding-agent-render-nested-outline-previ::reconcile-overflow-accounting
+:DEPENDS: BUG-275-coding-agent-render-nested-outline-previ::implement-depth-1-preview
+:END:
+- Files: `packages/coding-agent/src/tools/code-result.ts`, `packages/coding-agent/test/tools/code-result.test.ts`
+- Make the hidden-entry summary truthful when omitted lines may be children, not only top-level entries.
+- Preserve `formatLineRange(...)` semantics and child-count suffixes for nodes that still hide deeper descendants.
+
+* Edge Cases
+- A file with one top-level parent and many children must not expand into unbounded output.
+- Hidden children must contribute to truthful remaining-count text; do not misreport hidden work as only top-level entries.
+- Flat outline payloads must continue rendering like the current compact summary.
+- If a child itself has grandchildren, show only the direct child line plus its child count; no deeper default recursion.
+
+* Acceptance Criteria
+- Synthetic `code outline` preview for an Elixir module-style outline lists the module and its direct `def`/`defp`/`macro` children inline.
+- Generic hierarchical outlines across languages show direct children inline without introducing a new tool parameter.
+- `bun test packages/coding-agent/test/tools/code-result.test.ts` covers sparse top-level files, preview budgeting, and compact output semantics.
+- Manual proof after implementation: running `code outline` on an Elixir fixture no longer stops at only the `defmodule` line.

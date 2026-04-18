@@ -355,4 +355,68 @@ describe("code tool result contract", () => {
 			"Proof: line-target | would cross block boundary | medium | matches: 2",
 		);
 	});
+
+	it("renders direct outline children for sparse top-level trees", () => {
+		const details = normalizeCodeBufferSuccess({
+			command: "outline",
+			file: "/repo/crates/pi-code-engine/tests/fixtures/sources/hello.ex",
+			cwd: "/repo",
+			output: [
+				{
+					name: "MyApp.Greeter",
+					kind: "module",
+					line: 1,
+					end_line: 21,
+					column: 0,
+					children: [
+						{ name: "start_link", kind: "def", line: 4, end_line: 6, column: 2, children: [] },
+						{ name: "greet", kind: "def", line: 8, end_line: 10, column: 2, children: [] },
+						{ name: "internal_helper", kind: "defp", line: 12, end_line: 14, column: 2, children: [] },
+						{ name: "my_macro", kind: "macro", line: 16, end_line: 20, column: 2, children: [] },
+					],
+				},
+			],
+		});
+
+		if (details.command !== "outline") throw new Error("Expected outline details");
+		const content = formatCodeToolContent(details);
+		expect(content).toContain("Outline crates/pi-code-engine/tests/fixtures/sources/hello.ex (1 top, 5 total)");
+		expect(content).toContain("- module MyApp.Greeter L1-L21 (4 childs)");
+		expect(content).toContain("  - def start_link L4-L6");
+		expect(content).toContain("  - def greet L8-L10");
+		expect(content).toContain("  - defp internal_helper L12-L14");
+		expect(content).toContain("  - macro my_macro L16-L20");
+	});
+
+	it("counts omitted child symbols in outline overflow summaries", () => {
+		const details = normalizeCodeBufferSuccess({
+			command: "outline",
+			file: "/repo/lib/root.ex",
+			cwd: "/repo",
+			output: [
+				{
+					name: "Root",
+					kind: "module",
+					line: 1,
+					end_line: 40,
+					column: 0,
+					children: Array.from({ length: 13 }, (_, index) => ({
+						name: `child_${index + 1}`,
+						kind: "def",
+						line: index + 2,
+						end_line: index + 2,
+						column: 2,
+						children: [],
+					})),
+				},
+			],
+		});
+
+		if (details.command !== "outline") throw new Error("Expected outline details");
+		const content = formatCodeToolContent(details);
+		expect(content).toContain("Outline lib/root.ex (1 top, 14 total)");
+		expect(content).toContain("  - def child_11 L12");
+		expect(content).not.toContain("child_12");
+		expect(content).toContain("- … 2 more symbols");
+	});
 });
