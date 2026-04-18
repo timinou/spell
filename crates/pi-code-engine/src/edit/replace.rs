@@ -38,8 +38,9 @@ pub fn replace_node(
 	line: usize,
 	node_type: &str,
 	content: &str,
+	within: Option<(usize, usize)>,
 ) -> Result<Vec<TextEdit>> {
-	let target = resolve_edit_target(buffer, line, node_type)?;
+	let target = resolve_edit_target(buffer, line, node_type, within)?;
 	Ok(make_result(target.start_byte(), target.end_byte(), content.to_string()))
 }
 
@@ -48,9 +49,10 @@ pub fn insert_before(
 	line: usize,
 	node_type: &str,
 	content: &str,
+	within: Option<(usize, usize)>,
 ) -> Result<Vec<TextEdit>> {
 	ensure_insert_before_separator(line, content)?;
-	let target = resolve_edit_target(buffer, line, node_type)?;
+	let target = resolve_edit_target(buffer, line, node_type, within)?;
 	Ok(make_result(target.start_byte(), target.start_byte(), content.to_string()))
 }
 
@@ -59,13 +61,19 @@ pub fn insert_after(
 	line: usize,
 	node_type: &str,
 	content: &str,
+	within: Option<(usize, usize)>,
 ) -> Result<Vec<TextEdit>> {
 	ensure_insert_after_separator(line, content)?;
-	let target = resolve_edit_target(buffer, line, node_type)?;
+	let target = resolve_edit_target(buffer, line, node_type, within)?;
 	Ok(make_result(target.end_byte(), target.end_byte(), content.to_string()))
 }
 
-pub fn kill_node(buffer: &CodeBuffer, line: usize, node_type: &str) -> Result<Vec<TextEdit>> {
-	let target = resolve_edit_target(buffer, line, node_type)?;
+pub fn kill_node(
+	buffer: &CodeBuffer,
+	line: usize,
+	node_type: &str,
+	within: Option<(usize, usize)>,
+) -> Result<Vec<TextEdit>> {
+	let target = resolve_edit_target(buffer, line, node_type, within)?;
 	Ok(make_result(target.start_byte(), target.end_byte(), String::new()))
 }

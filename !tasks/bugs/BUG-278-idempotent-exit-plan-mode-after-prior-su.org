@@ -1,0 +1,105 @@
+#+TITLE: Idempotent exit_plan_mode after prior successful exit
+#+STATE: DOING
+#+SESSION_ID: 14bf5fdd01b87f1c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-11-46-694Z_14bf5fdd01b87f1c.jsonl]]
+#+CUSTOM_ID: BUG-278-idempotent-exit-plan-mode-after-prior-su
+#+EFFORT: 1h
+#+LAYER: coding-agent
+#+PRIORITY: #B
+
+* Initial Message
+
+use jq to find the recurring reasons why ExitPlanMode fails then explain what you will improve to the system to prevent these errors from happening
+
+* Scope
+
+In: when `exit_plan_mode` is called a second time in the same session
+(plan mode already deactivated, same PLAN itemId), return a benign
+success instead of `Plan mode is not active.`.
+
+Out: cross-session deduplication; retry logic for failed exits.
+
+* Background
+
+Log scan found 2/46 failures where the agent called `exit_plan_mode` a
+second time after a successful first call (race between the approval UI
+and the next turn). The failure message is misleading because the plan
+*was* approved.
+
+* Existing patterns
+
+- `packages/coding-agent/src/tools/exit-plan-mode.ts: execute` — first
+  branch throws `ToolError("Plan mode is not active.")` when
+  `!state?.enabled`.
+- `packages/coding-agent/src/session/agent-session.ts` — tracks the most
+  recently approved plan (attribute on session). Confirm field name via
+  `rg "lastApprovedPlan|approvedPlan"`.
+
+* Tests (TDD, before impl)
+
+- `packages/coding-agent/test/tools/exit-plan-mode.test.ts` (amend):
+  - After a first successful execute, a second execute on same session
+    with same `itemId` + `title` returns a content "Plan already approved"
+    with `details.planExists: true` (non-error).
+  - Second execute with *different* itemId while plan mode is inactive
+    still throws (protects against accidental no-op masking real
+    authoring mistakes).
+
+* Implementation
+
+** Track last approved plan on session
+:PROPERTIES:
+:CUSTOM_ID: BUG-278-idempotent-exit-plan-mode-after-prior-su::session-state
+:END:
+
+- File: `packages/coding-agent/src/session/agent-session.ts`
+- Confirm/add a field `#lastApprovedPlan?: { itemId?: string; title:
+  string; finalPlanFilePath: string }` (name may already exist — keep the
+  existing one and expose via `getLastApprovedPlan()` if only internal
+  today).
+- Set it inside the approval handler that transitions plan mode off
+  after successful `exit_plan_mode`.
+
+** Make execute idempotent
+:PROPERTIES:
+:CUSTOM_ID: BUG-278-idempotent-exit-plan-mode-after-prior-su::execute-guard
+:DEPENDS: BUG-278-idempotent-exit-plan-mode-after-prior-su::session-state
+:END:
+
+- File: `packages/coding-agent/src/tools/exit-plan-mode.ts`
+- Replace the first-branch throw with: look up last approved plan; if
+  title + itemId match, return a success payload identical in shape to
+  the happy path but with `content: [{type:"text", text:"Plan already
+  approved."}]`; otherwise keep the original throw.
+
+** Wire approval writer
+:PROPERTIES:
+:CUSTOM_ID: BUG-278-idempotent-exit-plan-mode-after-prior-su::wire-approval
+:DEPENDS: BUG-278-idempotent-exit-plan-mode-after-prior-su::execute-guard
+:END:
+
+- Confirm the path: `src/plan-mode/approved-plan.ts` or wherever
+  approval is finalized. After success, call
+  `session.recordLastApprovedPlan({...})` (add the method on
+  AgentSession if missing; small, not a behavior change).
+
+* Edge cases
+
+- Session resumed without the in-memory last-approved-plan: behave as
+  today (throw). Not a regression — matches current behavior.
+- Race where approval UI returns between first call and second call but
+  session state not yet updated: fall through to today's throw; the
+  agent can re-read the plan state on next turn.
+
+* Acceptance criteria
+
+- Second identical `exit_plan_mode` call does not throw.
+- First-call-before-approval still throws.
+- `bun test packages/coding-agent/test/tools/exit-plan-mode.test.ts`
+  passes.
+
+* Verification
+
+- `bun check:ts` clean.
+- Manual repro: approve a plan, call exit_plan_mode again in the same
+  session → no error.

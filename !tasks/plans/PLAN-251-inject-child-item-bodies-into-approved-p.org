@@ -1,0 +1,46 @@
+#+TITLE: Inject child item bodies into approved plan prompt before todo seed
+#+STATE: DOING
+#+SESSION_ID: 14bf746abbc2180e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-41-34-703Z_14bf746abbc2180e.jsonl]]
+#+CUSTOM_ID: PLAN-251-inject-child-item-bodies-into-approved-p
+
+* Context
+
+When a PLAN org item is approved via `exit_plan_mode`, the executing session receives only the PLAN item's own body (via `planContent` in `plan-mode-approved.md`) plus a bare Execution Manifest with `[[id:…]]` links. Every linked FEAT/BUG/FUP body must be re-fetched by the executing agent via `org get` before it can act. When waves auto-seed todos, each `TodoItem.details` is empty so `task … todoRef` auto-derives a one-liner assignment — sniper-pattern fails.
+
+`validatePlanItem` already loads every linked child's `{body, properties}` into `resolvedChildren` for layer resolution, then throws the map away. This plan plumbs that existing data through to the approval prompt render plus todo seeding.
+
+Log-audit findings (30 recent sessions in `~/.spell/agent/sessions/-code-ora-spell/`):
+- `todo_write` ops: 191 `update` / 32 `replace` / 0 `add_group`; `add_group`/`add_phase` is dead surface.
+- Gate adoption: `gateCmd` 55%, `orgItemId` 86%, `layer` 45%, `gateArtifact` 0%.
+- Genuine aborts today (`isError=true, text="Tool execution was aborted"`): 2, both Ctrl-C'd mid-`todo_write` because the assistant lacked child-item context — exactly the gap this plan closes.
+- 59 sessions use `todoRef`; when paired with empty `TodoItem.details`, sniper-pattern degenerates.
+
+Linked execution scope:
+- [[id:FEAT-572-inject-linked-child-org-bodies-into-appr]] handles the prompt injection.
+- [[id:FEAT-573-seed-todos-from-waves-with-owning-child]] handles the todo-seed enrichment using the same data.
+
+Advisory follow-up (not in execution manifest): see `FUP-058-todo-task-prompt-event-bus-improvements` for separable todo/task-prompt + event-bus improvements surfaced during this audit.
+
+Internal sub-outline note: each FEAT body enumerates a TDD-ordered sub-outline graph (s1-types/slicer → s2-settings → s3-tests → s4-template/wire → s5-tool-propagate/thread → s6-thread/verify → s7-verify for FEAT-572 only). The execution manifest below references only top-level FEAT IDs because per-item sub-outline DEPENDS graphs already sequence the work correctly.
+
+* Verification
+
+After implementation:
+1. `bun check:ts` passes.
+2. `bun test packages/coding-agent/test/plan-mode/approved-plan-injection.test.ts` passes (5 renderer scenarios).
+3. `bun test packages/coding-agent/test/tools/exit-plan-mode-propagation.test.ts` passes (integration: `childItems` in details).
+4. `bun test packages/coding-agent/test/orchestrators/fluid/plan-to-todos-details.test.ts` passes (6 slicer scenarios).
+5. Manual smoke: plan a small two-FEAT change, approve it, inspect the fresh session's first synthetic prompt via transcript. Confirm:
+   - `## Child Item Specifications` section with FEAT bodies present BEFORE `## Plan`.
+   - Seeded todos have `details` populated with sub-outline text (via `/todo` command).
+   - No `org get <FEAT-id>` tool call appears before the first `todo_write` in the executing session.
+6. Regression: approve a non-org file-backed plan; confirm flow unchanged.
+
+* Execution Manifest
+
+** plumbing                                        :wave:
+- [[id:FEAT-572-inject-linked-child-org-bodies-into-appr]] Inject linked child org bodies into approved plan prompt (4h). Internal sub-outline chain: s1-types → s2-settings → s3-tests → s4-template → s5-tool-propagate → s6-thread → s7-verify.
+
+** todo-details                                    :wave:
+- [[id:FEAT-573-seed-todos-from-waves-with-owning-child]] Seed todos from waves with owning child body section (3h, depends FEAT-572-inject-linked-child-org-bodies-into-appr). Internal sub-outline chain: s1-slicer → s2-settings → s3-tests → s4-wire → s5-thread → s6-verify.

@@ -87,6 +87,18 @@ export async function approvePlanItem(
 
 const COMPLETABLE_CHILD_STATES = new Set(["ITEM", ...ACTIVE_STATES]);
 
+async function resolveItemLifecycleState(item: {
+	state: string;
+	file: string;
+	properties?: Record<string, string>;
+}): Promise<string> {
+	if (item.state) return item.state;
+	const propertyState = item.properties?.STATE;
+	if (propertyState) return propertyState;
+	const content = await Bun.file(item.file).text();
+	return content.match(/^#\+STATE:\s*(\S+)/m)?.[1] ?? "";
+}
+
 export interface CompletePlanItemOptions {
 	completionReport?: string;
 }
@@ -139,15 +151,16 @@ export async function completePlanItem(
 	const skippedOtherChildIds: string[] = [];
 
 	for (const item of childItems) {
-		if (BLOCKED_STATES.has(item.state)) {
+		const itemState = await resolveItemLifecycleState(item);
+		if (BLOCKED_STATES.has(itemState)) {
 			skippedBlockedChildIds.push(item.id);
 			continue;
 		}
-		if (TERMINAL_STATES.has(item.state)) {
+		if (TERMINAL_STATES.has(itemState)) {
 			skippedDoneChildIds.push(item.id);
 			continue;
 		}
-		if (!COMPLETABLE_CHILD_STATES.has(item.state)) {
+		if (!COMPLETABLE_CHILD_STATES.has(itemState)) {
 			skippedOtherChildIds.push(item.id);
 			continue;
 		}

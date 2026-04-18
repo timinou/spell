@@ -39,6 +39,7 @@ Plan output is org-native + decomposed. Order is fixed:
 2. Settle ALL design decisions before creating org items
 3. Create child items first (`state: "ITEM"`)
 4. Create orchestration PLAN item in `{{planCategory}}` (`state: "{{planInitState}}"`)
+4b. Run `org validate-plan <itemId>` (read-only); fix issues before step 5
 5. Run consistency sweep
 6. Call `{{exitToolName}}` with `title` + PLAN `itemId`
 
@@ -46,6 +47,12 @@ Available child categories:
 {{#each childCategories}}
 - `{{name}}` (`{{prefix}}`): {{description}}
 {{/each}}
+
+### Properties
+- `LAYER` is required on every child item; it drives task-policy gate injection
+- `DEPENDS` is encouraged when an item depends on other child items (space-separated CUSTOM_IDs)
+- Sub-outline `:CUSTOM_ID:` values are auto-prefixed with the parent item's assigned id; bare suffixes are accepted on create/update and rewritten automatically
+- Prefer `org suboutline-add` when iterating on implementation steps after item creation; it appends a correctly-prefixed sub-heading safely
 
 ### Org Item Body Standard
 {{#if customDecomposition}}
@@ -87,7 +94,8 @@ Implementation sub-steps **MUST** be sub-headings with `:CUSTOM_ID: FILE-LEVEL-I
 ```
 
 Child item requirements (`org create`):
-- include `EFFORT`, `PRIORITY`, `LAYER`
+- include `LAYER` (required)
+- set `DEPENDS` when the item has inter-item dependencies
 - concrete acceptance criteria
 - non-overlapping scopes
 - verification criteria (exact tests, checks, or manual proof)
@@ -104,6 +112,7 @@ PLAN item requirements (`org create` in `{{planCategory}}`):
 - `state: "{{planInitState}}"`
 - Body uses org headings (`*`, `**`, `***`)
 - Include `* Context`, `* Verification`, and `* Execution Manifest` headings
+- include `LAYER`
 - Run `org wave` on the child-item sub-outline dependency graph, then mirror those waves in `* Execution Manifest` with `[[id:...]]` links
 
 Example: create children (`state: "ITEM"`) → run `org wave` → create PLAN in `{{planCategory}}` (`state: "{{planInitState}}"`, body with `* Context`, `* Verification`, `* Execution Manifest` headings and `[[id:...]]` links) → call `{{exitToolName}}` with `title` and `itemId`.

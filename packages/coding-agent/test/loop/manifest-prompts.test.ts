@@ -100,7 +100,7 @@ describe("buildManifestPromptContext", () => {
 describe("buildIterationPrompt with manifest context", () => {
 	it("renders ticket table when manifest context is provided", () => {
 		const manifest = makeManifest([
-			makeTicket({ id: "T-001", state: TICKET_STATES.item, priority: "#A" }),
+			makeTicket({ id: "T-001", state: TICKET_STATES.item, layer: "backend" }),
 			makeTicket({ id: "T-002", state: TICKET_STATES.doing }),
 		]);
 		const snapshot = makeSnapshot({ manifest });

@@ -81,7 +81,66 @@ describe("rewriteSubOutlineIds", () => {
 		].join("\n");
 
 		const result = rewriteSubOutlineIds(parentId, input);
-		expect(result.body).toContain(`:DEPENDS: ${parentId}::define-types OTHER-ITEM::step external-id`);
+		expect(result.body).toContain(`:DEPENDS: ${parentId}::define-types OTHER-ITEM::step ${parentId}::external-id`);
+	});
+
+	test("rewrites wrong-prefix CUSTOM_ID values when numeric prefix matches", () => {
+		const assignedParentId = "BUG-123-fix-thing";
+		const input = ["** Define types", ":PROPERTIES:", ":CUSTOM_ID: BUG-123::define-types", ":END:"].join("\n");
+
+		const result = rewriteSubOutlineIds(assignedParentId, input);
+		expect(result.body).toContain(":CUSTOM_ID: BUG-123-fix-thing::define-types");
+		expect(result.rewrites).toEqual(new Map([["BUG-123::define-types", "BUG-123-fix-thing::define-types"]]));
+	});
+
+	test("rewrites wrong-prefix and bare DEPENDS tokens with the assigned parent id", () => {
+		const assignedParentId = "BUG-123-fix-thing";
+		const input = [
+			"** Define types",
+			":PROPERTIES:",
+			":CUSTOM_ID: BUG-123::define-types",
+			":END:",
+			"",
+			"** Wire types",
+			":PROPERTIES:",
+			":CUSTOM_ID: wire-types",
+			":DEPENDS: BUG-123::define-types define-types BUG-123-fix-thing::define-types",
+			":END:",
+		].join("\n");
+
+		const result = rewriteSubOutlineIds(assignedParentId, input);
+		expect(result.body).toContain(
+			":DEPENDS: BUG-123-fix-thing::define-types BUG-123-fix-thing::define-types BUG-123-fix-thing::define-types",
+		);
+	});
+
+	test("does not rewrite different-parent wrong-prefix tokens", () => {
+		const assignedParentId = "BUG-123-fix-thing";
+		const input = [
+			"** Cross reference",
+			":PROPERTIES:",
+			":CUSTOM_ID: cross-reference",
+			":DEPENDS: PROJ-045::step",
+			":END:",
+		].join("\n");
+
+		const result = rewriteSubOutlineIds(assignedParentId, input);
+		expect(result.body).toContain(":DEPENDS: PROJ-045::step");
+	});
+
+	test("leaves invalid suffixes untouched instead of producing invalid ids", () => {
+		const assignedParentId = "BUG-123-fix-thing";
+		const input = [
+			"** Invalid suffix",
+			":PROPERTIES:",
+			":CUSTOM_ID: BUG-123::bad:id",
+			":DEPENDS: BUG-123::bad:id",
+			":END:",
+		].join("\n");
+
+		const result = rewriteSubOutlineIds(assignedParentId, input);
+		expect(result.body).toBe(input);
+		expect(result.rewrites.size).toBe(0);
 	});
 
 	test("returns empty rewrites for empty body", () => {

@@ -20,9 +20,7 @@ export interface MetisInput {
 	};
 	coverageGaps: {
 		itemsWithoutAcceptance: string[];
-		itemsWithoutEffort: string[];
 		itemsWithoutGates: string[];
-		itemsWithoutPriority: string[];
 	};
 }
 
@@ -210,30 +208,20 @@ function buildCoverageGaps(
 	specFiles: ParsedSpecFile[],
 ): MetisInput["coverageGaps"] {
 	const itemsWithoutAcceptance: string[] = [];
-	const itemsWithoutEffort: string[] = [];
 	const itemsWithoutGates: string[] = [];
-	const itemsWithoutPriority: string[] = [];
 
 	for (const dep of dependencies) {
 		if (!hasAcceptanceCriteria(dep.customId, specFiles)) {
 			itemsWithoutAcceptance.push(dep.customId);
 		}
-		if (!dep.effort) {
-			itemsWithoutEffort.push(dep.customId);
-		}
 		if (!dep.gateCmd && !dep.gateArtifact && !dep.gateLlm) {
 			itemsWithoutGates.push(dep.customId);
-		}
-		if (!dep.priority) {
-			itemsWithoutPriority.push(dep.customId);
 		}
 	}
 
 	return {
 		itemsWithoutAcceptance,
-		itemsWithoutEffort,
 		itemsWithoutGates,
-		itemsWithoutPriority,
 	};
 }
 

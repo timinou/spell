@@ -33,19 +33,13 @@ export const STATE_TRANSITIONS: Record<string, readonly string[]> = {
 };
 
 /** Properties required on every task heading (validation ERROR if missing). */
-export const REQUIRED_PROPERTIES = ["CUSTOM_ID", "EFFORT", "PRIORITY"] as const;
+export const REQUIRED_PROPERTIES = ["CUSTOM_ID"] as const;
 
 /** Properties recommended on task headings (validation WARNING if missing). */
 export const RECOMMENDED_PROPERTIES = ["DEPENDS", "BLOCKS", "FILES", "TEST_PLAN", "LAYER"] as const;
 
 /** Optional properties (validation INFO if missing). */
 export const OPTIONAL_PROPERTIES = ["BLAST_RADIUS", "FEATURE_FLAG", "RESEARCH_REF", "AGENT"] as const;
-
-/** Regexp for valid EFFORT format: number + unit (h/m). E.g. "2h", "30m". */
-export const EFFORT_REGEXP = /^[0-9]+[hm]$/;
-
-/** Regexp for valid PRIORITY format: #A, #B, or #C. */
-export const PRIORITY_REGEXP = /^#[ABC]$/;
 
 /** Regexp for valid CUSTOM_ID format: PREFIX-NUM, PREFIX-NUM-slug, or PREFIX-NUM::sub-slug. */
 export const CUSTOM_ID_REGEXP = /^[A-Z]+-\d+(-[a-z0-9-]+)?(::[a-z0-9-]+)?$/;

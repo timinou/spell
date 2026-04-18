@@ -1,16 +1,11 @@
-Creates or overwrites a file.
+Creates or overwrites a file. Works for any file type.
 
 <conditions>
-Use for new files when creation is explicitly required, or when replacing an entire unsupported plain-text file is simpler than editing.
+Use for new files or full-file replacements.
+For incremental edits to an existing file, use `code edit` for structural changes or `edit` for non-code text changes.
 </conditions>
 
-<critical>
-- Use `code edit { operations: [{ targetId: "src/new-file.ts", actions: [{ kind: "write", content: ["..."] }] }] }` for any code-supported file (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`, `.rs`, `.py`, `.pyi`, `.typ`, `.md`, `.mdx`, `.markdown`, `.org`, `.ex`, `.exs`)
-- Prefer Edit for existing non-code files
+<instruction>
 - Do not create documentation files unless explicitly requested
 - Do not use emojis unless requested
-</critical>
-
-<anti-patterns>
-- Do not use Write for incremental source-file edits; if `code edit` supports the file, use `code edit` instead
-</anti-patterns>
+</instruction>

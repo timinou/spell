@@ -1,0 +1,139 @@
+#+TITLE: Exit plan mode prevention renewal plan
+#+STATE: DOING
+#+SESSION_ID: 14bf5fdd01b87f1c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-11-46-694Z_14bf5fdd01b87f1c.jsonl]]
+#+CUSTOM_ID: PLAN-248-exit-plan-mode-prevention-renewal-plan
+#+EFFORT: 14h
+#+LAYER: coding-agent packages/org
+#+PRIORITY: #A
+
+* Context
+
+Empirical failure study of `exit_plan_mode` over 292 recent agent sessions
+(see `/tmp/epm_analysis/`):
+
+- 104 total `exit_plan_mode` tool invocations
+- 70% first-call failure rate
+- 80% of sessions needed 2+ attempts (max observed: 7)
+- 100% eventually succeeded — cost paid in tokens and turns, not outcomes
+
+Top failure categories:
+- invalid-suboutline-namespace (22)
+- broken-suboutline-depends (9)          ← cascade from (1)
+- missing-child-properties (7)
+- missing-suboutline-steps (2)
+- not-in-plan-mode (2)                    ← double-call race
+- broken-child-depends (1)
+
+Two root causes explain 40/46 failures:
+1. Agent cannot know the auto-assigned parent CUSTOM_ID slug at the time it
+   drafts suboutline CUSTOM_IDs, and guesses the bare numeric prefix.
+2. Agent is asked to include EFFORT, PRIORITY, LAYER on every child, but
+   EFFORT and PRIORITY carry no planning value here and are fabricated,
+   causing "missing" errors when they are omitted.
+
+User decision (confirmed): EFFORT and PRIORITY **REMOVED** from the
+required property set and from the codebase; LAYER is the only required
+property; DEPENDS is encouraged. Agents must learn this at item-creation
+time, not at exit time.
+
+The remaining double-call and missing-suboutline-steps cases are handled
+by (a) making exit idempotent and (b) the informative create response +
+new suboutline-add tool that physically prevents wrong prefixes.
+
+A seventh item was discovered during this very planning session: the
+shared `pi-code-engine` `BufferRegistry` caches ropes process-wide with
+no disk-revalidation, and `save()` clobbers external edits. This made
+the plan authoring sequence itself corrupt FEAT-564. Fixing this is a
+prerequisite for any future plan that mixes engine writes with external
+file mutations, so it ships in the same plan.
+
+Seven child items implement the renewal:
+
+- [[id:FEAT-564-org-suboutline-namespace-resilience]] Org suboutline namespace resilience
+- [[id:FEAT-565-simplify-required-org-properties-to-laye]] Simplify required org properties to LAYER only
+- [[id:FEAT-566-informative-org-create-response-with-pre]] Informative org-create response with prefix template and checklist
+- [[id:FEAT-567-front-load-layer-and-depends-guidance-in]] Front-load LAYER and DEPENDS guidance in plan mode prompts
+- [[id:FEAT-568-org-suboutline-add-subcommand]] Org suboutline add subcommand
+- [[id:BUG-278-idempotent-exit-plan-mode-after-prior-su]] Idempotent exit_plan_mode after prior successful exit
+- [[id:BUG-279-bufferregistry-clobbers-external-edits-a]] BufferRegistry clobbers external edits and serves stale ropes
+
+* Approach
+
+Layered defense, cheapest-first:
+1. **Foundation** — fix the BufferRegistry staleness bug (BUG-279) so
+   subsequent work on the org/coding-agent layer can mix engine and
+   external writes safely.
+2. **Structural prevention** — make it impossible or hard to produce the
+   wrong prefix at all (N5 suboutline-add; N3 prefix template echo).
+3. **Input tolerance** — accept the form agents actually produce when
+   they still write bodies by hand (N1 wrong-prefix rewrite + lenient
+   validator + fix-hints).
+4. **Requirement simplification** — stop demanding data that has no
+   value, so agents do not need to guess it (N2 drop EFFORT/PRIORITY).
+5. **Teach up-front** — move the authoring rules into the prompt that
+   precedes authoring, not the error surfaced after (N4).
+6. **Forgive benign races** — idempotent double-call (N6).
+
+* Verification
+
+Each child item has its own Acceptance Criteria + Verification section
+with exact commands. Plan-level global checks after all waves complete:
+
+- `bun check` clean (TypeScript + Rust).
+- `cargo test -p pi-code-engine` passes including new external-write
+  cases.
+- `rg --fixed-strings 'EFFORT' packages/org/src packages/coding-agent/src`
+  returns only thinking-level / discovery-priority constants
+  (`THINKING_EFFORTS`, `Effort`, `EFFORT_LEVELS`).
+- `rg --fixed-strings 'PRIORITY' packages/org/src packages/coding-agent/src`
+  returns only render-label / discovery-priority constants.
+- `packages/coding-agent/src/prompts/system/plan-mode-active.md` no
+  longer mentions EFFORT or PRIORITY; mentions LAYER within the first
+  60 lines.
+- Replay regression fixture (see N1 Acceptance): a synthesized PLAN
+  whose children use `BUG-X::foo` bare-prefix CUSTOM_IDs passes
+  `exit_plan_mode` on first call.
+- Second identical `exit_plan_mode` call in one session does not throw.
+- Mixing `org create` + external `fs.writeFile` + `org note` no longer
+  corrupts data; instead `appendNote` errors with `EXTERNAL_
+  MODIFICATION` until reload.
+- Targeted package tests green:
+  - `bun test packages/org`
+  - `bun test packages/coding-agent/test/plan-mode`
+  - `bun test packages/coding-agent/test/tools/exit-plan-mode.test.ts`
+  - `bun test packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts`
+  - `cargo test -p pi-code-engine`
+  - `cargo test -p pi-natives`
+
+* Execution Manifest
+
+** wave-1 :wave:
+- [[id:BUG-279-bufferregistry-clobbers-external-edits-a]] BufferRegistry clobbers external edits (no deps; foundation)
+- [[id:FEAT-564-org-suboutline-namespace-resilience]] Org suboutline namespace resilience (no deps)
+- [[id:BUG-278-idempotent-exit-plan-mode-after-prior-su]] Idempotent exit_plan_mode (no deps)
+
+** wave-2 :wave:
+- [[id:FEAT-565-simplify-required-org-properties-to-laye]] Simplify required org properties to LAYER only (depends on FEAT-564)
+- [[id:FEAT-568-org-suboutline-add-subcommand]] Org suboutline add subcommand (depends on FEAT-564)
+
+** wave-3 :wave:
+- [[id:FEAT-566-informative-org-create-response-with-pre]] Informative org-create response (depends on FEAT-565)
+- [[id:FEAT-567-front-load-layer-and-depends-guidance-in]] Front-load prompts (depends on FEAT-565 + FEAT-568)
+
+* Notes
+
+- BUG-279 is wave-1 alongside FEAT-564 because it is independent at the
+  source level (Rust crate vs TS package) but must land before any
+  agent attempts to author a follow-on plan that mixes engine writes
+  and external edits.
+- FEAT-565 (simplify required properties) is the most file-intensive
+  item — it touches the org package, the coding-agent loop
+  ingestion/persistence, interactive-mode template, prompts, and tests.
+  Its sub-outline graph sequences those changes so the schema change
+  lands first and downstream cleanups follow.
+- Existing on-disk org items under `!tasks/` retain their EFFORT/
+  PRIORITY properties; they are harmless after the schema change.
+  Migration of those files is explicitly out of scope.
+- The `Effort` enum in `packages/ai` is thinking-level related and
+  **MUST NOT** be touched by N2.

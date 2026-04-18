@@ -27,7 +27,17 @@ fn org_err(message: impl Into<String>) -> napi::Error {
 }
 
 fn engine_err(error: pi_code_engine::error::CodeEngineError) -> napi::Error {
-	org_err(error.to_string())
+	match &error {
+		pi_code_engine::error::CodeEngineError::ExternalModification { path, .. } => org_err(
+			json!({
+				"code": "EXTERNAL_MODIFICATION",
+				"message": error.to_string(),
+				"path": path.display().to_string(),
+			})
+			.to_string(),
+		),
+		_ => org_err(error.to_string()),
+	}
 }
 
 fn json_response(output: Value, error: bool) -> Value {
@@ -236,11 +246,17 @@ fn cmd_create_item(options: &Value) -> Result<Value> {
 	let path = required_path(options)?;
 	ensure_org_file(&path)?;
 	let params = create_params(options)?;
-	let buffer = buffer_registry().open(&path).map_err(engine_err)?;
+	let buffer = if let Some(buffer) = buffer_registry().get(&path) {
+		buffer
+	} else {
+		buffer_registry().open(&path).map_err(engine_err)?
+	};
 	let mut buffer = buffer.lock();
 	let edits = org_edit::create_item(&buffer, &params);
 	buffer.edit_batch(edits).map_err(engine_err)?;
-	buffer.save().map_err(engine_err)?;
+	buffer
+		.save_with_watcher(buffer_registry().watcher())
+		.map_err(engine_err)?;
 	Ok(json_response(
 		json!({ "success": true, "file": path.display().to_string(), "id": params.id }),
 		false,
@@ -251,7 +267,11 @@ fn cmd_update_item(options: &Value) -> Result<Value> {
 	let path = required_path(options)?;
 	let id = required_str(options, "id")?;
 	let keywords = todo_keywords(options);
-	let buffer = buffer_registry().open(&path).map_err(engine_err)?;
+	let buffer = if let Some(buffer) = buffer_registry().get(&path) {
+		buffer
+	} else {
+		buffer_registry().open(&path).map_err(engine_err)?
+	};
 	let mut buffer = buffer.lock();
 	let mut updated = Vec::new();
 
@@ -300,7 +320,9 @@ fn cmd_update_item(options: &Value) -> Result<Value> {
 		updated.push("note");
 	}
 
-	buffer.save().map_err(engine_err)?;
+	buffer
+		.save_with_watcher(buffer_registry().watcher())
+		.map_err(engine_err)?;
 	Ok(json_response(
 		json!({ "success": true, "file": path.display().to_string(), "updated": updated }),
 		false,
@@ -313,13 +335,19 @@ fn cmd_set_property(options: &Value) -> Result<Value> {
 	let property = required_str(options, "property")?;
 	let value = required_str(options, "value")?;
 	let keywords = todo_keywords(options);
-	let buffer = buffer_registry().open(&path).map_err(engine_err)?;
+	let buffer = if let Some(buffer) = buffer_registry().get(&path) {
+		buffer
+	} else {
+		buffer_registry().open(&path).map_err(engine_err)?
+	};
 	let mut buffer = buffer.lock();
 	let Some(edits) = org_edit::set_property(&buffer, id, property, value, &keywords) else {
 		return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{id}' not found")));
 	};
 	buffer.edit_batch(edits).map_err(engine_err)?;
-	buffer.save().map_err(engine_err)?;
+	buffer
+		.save_with_watcher(buffer_registry().watcher())
+		.map_err(engine_err)?;
 	Ok(json_response(json!({ "success": true, "property": property }), false))
 }
 
@@ -328,13 +356,19 @@ fn cmd_append_note(options: &Value) -> Result<Value> {
 	let id = required_str(options, "id")?;
 	let note = required_str(options, "note")?;
 	let keywords = todo_keywords(options);
-	let buffer = buffer_registry().open(&path).map_err(engine_err)?;
+	let buffer = if let Some(buffer) = buffer_registry().get(&path) {
+		buffer
+	} else {
+		buffer_registry().open(&path).map_err(engine_err)?
+	};
 	let mut buffer = buffer.lock();
 	let Some(edits) = org_edit::append_note(&buffer, id, note, &keywords) else {
 		return Ok(not_found("ITEM_NOT_FOUND", format!("Item '{id}' not found")));
 	};
 	buffer.edit_batch(edits).map_err(engine_err)?;
-	buffer.save().map_err(engine_err)?;
+	buffer
+		.save_with_watcher(buffer_registry().watcher())
+		.map_err(engine_err)?;
 	Ok(json_response(json!({ "success": true }), false))
 }
 
@@ -353,14 +387,20 @@ fn cmd_edit_section(options: &Value) -> Result<Value> {
 			_ => SectionEditMode::Replace,
 		};
 		let keywords = todo_keywords(options);
-		let buffer = buffer_registry().open(&path).map_err(engine_err)?;
+		let buffer = if let Some(buffer) = buffer_registry().get(&path) {
+			buffer
+		} else {
+			buffer_registry().open(&path).map_err(engine_err)?
+		};
 		let mut buffer = buffer.lock();
 		let Some(edits) = org_edit::edit_section(&buffer, id, section_name, body, mode, &keywords)
 		else {
 			return Ok(not_found("SECTION_NOT_FOUND", format!("Section '{section_name}' not found")));
 		};
 		buffer.edit_batch(edits).map_err(engine_err)?;
-		buffer.save().map_err(engine_err)?;
+		buffer
+			.save_with_watcher(buffer_registry().watcher())
+			.map_err(engine_err)?;
 		return Ok(json_response(json!({ "success": true }), false));
 	}
 
@@ -451,27 +491,141 @@ fn parse_items_from_options(options: &Value) -> Result<Vec<pi_org_engine::OrgIte
 	.map_err(org_err)
 }
 
-#[napi(js_name = "executeOrg")]
-pub fn execute_org(options: Value) -> Result<Value> {
+#[allow(dead_code)]
+fn execute_org_inner(options: &Value) -> Result<Value> {
 	let command = options
 		.get("command")
 		.and_then(Value::as_str)
 		.ok_or_else(|| org_err("Missing required field: command"))?;
-
 	match command {
-		"parse" => cmd_parse_items(&options),
-		"query" => cmd_query(&options),
-		"graph" => cmd_graph(&options),
-		"computeWaves" => cmd_compute_waves(&options),
-		"nextWave" => cmd_next_wave(&options),
-		"connectedComponents" => cmd_connected_components(&options),
-		"createItem" => cmd_create_item(&options),
-		"updateItem" => cmd_update_item(&options),
-		"setProperty" => cmd_set_property(&options),
-		"appendNote" => cmd_append_note(&options),
-		"editSection" => cmd_edit_section(&options),
-		"toMarkdown" => cmd_to_markdown(&options),
-		"toPlainText" => cmd_to_plain_text(&options),
+		"parse" => cmd_parse_items(options),
+		"query" => cmd_query(options),
+		"graph" => cmd_graph(options),
+		"computeWaves" => cmd_compute_waves(options),
+		"nextWave" => cmd_next_wave(options),
+		"connectedComponents" => cmd_connected_components(options),
+		"createItem" => cmd_create_item(options),
+		"updateItem" => cmd_update_item(options),
+		"setProperty" => cmd_set_property(options),
+		"appendNote" => cmd_append_note(options),
+		"editSection" => cmd_edit_section(options),
+		"toMarkdown" => cmd_to_markdown(options),
+		"toPlainText" => cmd_to_plain_text(options),
 		other => Ok(json_response(Value::String(format!("Unknown command: {other}")), true)),
+	}
+}
+
+#[napi(js_name = "executeOrg")]
+pub fn execute_org(options: Value) -> Result<Value> {
+	match execute_org_inner(&options) {
+		Ok(value) => Ok(value),
+		Err(error) => {
+			let reason = error.to_string();
+			let payload = reason
+				.split_once(", ")
+				.and_then(|(_, candidate)| candidate.starts_with('{').then_some(candidate))
+				.unwrap_or(reason.as_str());
+			let output = serde_json::from_str::<Value>(payload).unwrap_or(Value::String(reason));
+			Ok(json_response(output, true))
+		},
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::fs;
+
+	use filetime::{FileTime, set_file_mtime};
+	use tempfile::tempdir;
+
+	use super::*;
+
+	#[test]
+	fn org_external_write_parse_reloads_overwrite() {
+		let dir = tempdir().expect("tempdir");
+		let file = dir.path().join("external-write.org");
+		let file_path = file.to_str().expect("utf8 path");
+
+		let created = execute_org(json!({
+			"command": "createItem",
+			"file": file_path,
+			"id": "BUG-279",
+			"title": "Original",
+			"state": "ITEM",
+			"todoKeywords": ["ITEM", "DONE"]
+		}))
+		.expect("create item");
+		assert_eq!(created["error"], json!(false));
+
+		fs::write(
+			&file,
+			"* ITEM Replaced\n:PROPERTIES:\n:CUSTOM_ID: BUG-279\n:END:\n\nExternal body.\n",
+		)
+		.expect("external write");
+		let bumped = FileTime::from_system_time(
+			std::time::SystemTime::now() + std::time::Duration::from_secs(1),
+		);
+		set_file_mtime(&file, bumped).expect("bump mtime");
+
+		let parsed = execute_org(json!({
+			"command": "parse",
+			"file": file_path,
+			"todoKeywords": ["ITEM", "DONE"],
+			"includeBody": true,
+			"category": "bugs",
+			"dir": "bugs"
+		}))
+		.expect("parse item");
+		assert_eq!(parsed["error"], json!(false));
+		let items = parsed["output"]["items"].as_array().expect("items array");
+		assert_eq!(items[0]["title"], json!("Replaced"));
+		assert!(
+			items[0]["body"]
+				.as_str()
+				.expect("body")
+				.contains("External body.")
+		);
+	}
+
+	#[test]
+	fn org_external_write_append_note_reports_external_modification() {
+		let dir = tempdir().expect("tempdir");
+		let file = dir.path().join("append-note.org");
+		let file_path = file.to_str().expect("utf8 path");
+
+		let created = execute_org(json!({
+			"command": "createItem",
+			"file": file_path,
+			"id": "BUG-280",
+			"title": "Original",
+			"state": "ITEM",
+			"todoKeywords": ["ITEM", "DONE"]
+		}))
+		.expect("create item");
+		assert_eq!(created["error"], json!(false));
+
+		fs::write(
+			&file,
+			"* ITEM Replaced\n:PROPERTIES:\n:CUSTOM_ID: BUG-280\n:END:\n\nExternal body.\n",
+		)
+		.expect("external write");
+		let bumped = FileTime::from_system_time(
+			std::time::SystemTime::now() + std::time::Duration::from_secs(1),
+		);
+		set_file_mtime(&file, bumped).expect("bump mtime");
+
+		let noted = execute_org(json!({
+			"command": "appendNote",
+			"file": file_path,
+			"id": "BUG-280",
+			"note": "should fail",
+			"todoKeywords": ["ITEM", "DONE"]
+		}))
+		.expect("append note");
+		assert_eq!(noted["error"], json!(true));
+		assert_eq!(noted["output"]["code"], json!("EXTERNAL_MODIFICATION"));
+		let disk = fs::read_to_string(&file).expect("read disk");
+		assert!(disk.contains("External body."));
+		assert!(!disk.contains("should fail"));
 	}
 }

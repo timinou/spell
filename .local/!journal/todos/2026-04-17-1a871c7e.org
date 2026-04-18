@@ -25,7 +25,7 @@ Settled execution delta: extend LanguageProfile with capability + embedded-regio
 
 Execute FEAT-553/554/555/556 in order, verifying each wave before proceeding. Use focused subagents where file sets are independent. Update linked org child items truthfully as each wave completes.
 
-Proceeding with FEAT-553/554/555/556 in sequence. First cut: engine + graph core in Rust, then native/TS tool surface, with focused verification after each wave.
+Landed another plan-scope commit `819cdeb96` to refuse unsafe HTML/CSS rename/delete mutations truthfully through the native buffer path and coding-agent surface. Verification remains green. Remaining blocker is now specifically the missing provable success-path refactors for FEAT-556: exact class/id/custom-property rename propagation and proof-backed dead-style removal are still absent, so the plan cannot close.
 
 ** ITEM Verify and close plan
 :PROPERTIES:

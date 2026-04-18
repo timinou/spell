@@ -1,0 +1,154 @@
+#+TITLE: Org suboutline namespace resilience
+#+STATE: DOING
+#+SESSION_ID: 14bf5fdd01b87f1c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-11-46-694Z_14bf5fdd01b87f1c.jsonl]]
+#+CUSTOM_ID: FEAT-564-org-suboutline-namespace-resilience
+#+EFFORT: 3h
+#+LAYER: packages/org
+#+PRIORITY: #A
+
+* Initial Message
+
+use jq to find the recurring reasons why ExitPlanMode fails then explain what you will improve to the system to prevent these errors from happening
+
+* Scope
+
+In: make org's suboutline handling tolerate the way agents actually write
+CUSTOM_IDs in PLAN children — i.e. accept `<wrong-prefix>::suffix` (bare id
+form) and any already-correct prefix. Emit one-line fix-hints when validation
+still fails.
+
+Out: no new tool subcommand (handled by N5); no prompt changes (handled by N4);
+no removal of EFFORT/PRIORITY (handled by N2).
+
+* Background
+
+Log scan of 292 recent sessions (`/tmp/epm_analysis/`): 104 exit_plan_mode
+attempts, 70% first-call failure rate, avg 2.3 attempts/session. Top
+categories:
+- `invalid-suboutline-namespace` (22) — agent wrote `BUG-264::x` instead of
+  assigned slug `BUG-264-fix-auto-apply-dropping-buffer-invalidat::x`
+- `broken-suboutline-depends` (9) — cascading from the above once DEPENDS
+  references also use the wrong prefix
+- agent cannot know the auto-slug until after `org create` returns, so it
+  guesses the bare numeric prefix every time.
+
+* Existing patterns
+
+- `packages/org/src/sub-outline-rewrite.ts` — `rewriteSubOutlineIds(parentId,
+  body)` already rewrites bare `foo` → `parent::foo` in `:CUSTOM_ID:` and
+  `:DEPENDS:`. Current guard: `if (customId.includes("::")) continue;` blocks
+  the wrong-prefix form.
+- `packages/org/src/tool.ts:326` and `:523` call `rewriteSubOutlineIds` on
+  create + update.
+- `packages/coding-agent/src/plan-mode/plan-validation.ts:
+  validateChildSuboutlineGraph` — asserts suffix starts with `<parentId>::`.
+- `packages/coding-agent/src/plan-mode/plan-validation.ts:
+  formatPlanValidationIssues` — emits issue category + message + items list;
+  no per-category hint line today.
+
+* Tests (TDD, before impl)
+
+- `packages/org/test/sub-outline-rewrite.test.ts`:
+  - wrong-prefix rewrite: input `:CUSTOM_ID: BUG-123::foo` with parentId
+    `BUG-123-fix-thing` → output `:CUSTOM_ID: BUG-123-fix-thing::foo`
+  - DEPENDS with mixed bare + wrong-prefix + correct tokens resolves all to
+    parent-prefixed forms
+  - exact-parent-prefix match untouched (no spurious rewrite)
+  - different-parent cross-reference untouched (only parent-numeric-prefix
+    matches get rewritten, not other `PROJ-045::x` tokens)
+  - suffix charset: reject suffixes outside `[A-Za-z0-9_-]+` (leave line
+    untouched rather than produce invalid id)
+- `packages/coding-agent/test/plan-mode/plan-validation-lenient.test.ts` (new):
+  - child with suboutline id `<numeric-prefix>::foo` passes when numeric
+    prefix matches parent's assigned id prefix
+  - mixed correct + bare suffix forms in one child body both pass
+  - still rejects suffix that does not start with `[A-Z]+-\d+`
+  - DEPENDS across sibling suboutlines: bare + wrong-prefix tokens resolve
+    against the lenient registry
+- `packages/coding-agent/test/plan-mode/plan-validation-hints.test.ts` (new):
+  - `formatPlanValidationIssues` for `invalid-suboutline-namespace` emits a
+    `fix:` line containing the assigned parent id and the suffix to adopt
+  - hint suppressed when category has no per-category hint formatter
+
+* Implementation
+
+** Extend wrong-prefix rewrite
+:PROPERTIES:
+:CUSTOM_ID: FEAT-564-org-suboutline-namespace-resilience::wrong-prefix-rewrite
+:END:
+
+- File: `packages/org/src/sub-outline-rewrite.ts`
+- Replace `if (customId.includes("::")) continue;` with: extract the left side
+  of `::`; if it matches `^[A-Z]+-\d+$` AND equals the numeric prefix of
+  `parentId` (i.e. `parentId.match(/^[A-Z]+-\d+/)`), record rewrite to
+  `parent::suffix`. Leave unrelated `PROJ-x::y` tokens untouched when the
+  numeric prefix differs.
+- DEPENDS rewrite: apply the same logic per token in `rewriteDependsValue`.
+- Preserve: `rewrites: Map<string,string>` return value so callers can audit.
+
+** Lenient validator
+:PROPERTIES:
+:CUSTOM_ID: FEAT-564-org-suboutline-namespace-resilience::lenient-validator
+:DEPENDS: FEAT-564-org-suboutline-namespace-resilience::wrong-prefix-rewrite
+:END:
+
+- File: `packages/coding-agent/src/plan-mode/plan-validation.ts`
+- In `validateChildSuboutlineGraph`, accept suboutline CUSTOM_IDs whose left
+  side equals either the full `childItemId` OR the numeric prefix of it. Use a
+  helper `matchesParent(id, suboutlineLeft)` shared with rewrite.
+- Track the lenient forms in `ownerBySuboutlineId`: always key by the rewritten
+  full-id form so DEPENDS resolution stays consistent.
+- Keep rejection of suffixes that do not satisfy `^[A-Za-z0-9_-]+$`.
+
+** Fix-hint formatter
+:PROPERTIES:
+:CUSTOM_ID: FEAT-564-org-suboutline-namespace-resilience::fix-hints
+:DEPENDS: FEAT-564-org-suboutline-namespace-resilience::lenient-validator
+:END:
+
+- File: `packages/coding-agent/src/plan-mode/plan-validation.ts`
+- Add `HINT_BY_CATEGORY: Record<string, (items: string[]) => string>` with
+  entries for `invalid-suboutline-namespace`, `broken-suboutline-depends`,
+  `missing-suboutline-steps`, `missing-child-properties`,
+  `broken-child-depends`.
+- Each hint generates one line starting `fix:` with a minimal copy-paste
+  suggestion (e.g. `fix: rename CUSTOM_ID to <parent-id>::<suffix>`).
+- Append the hint line after the items list in
+  `formatPlanValidationIssues`.
+
+* Edge cases
+
+- Cross-parent suboutlines: if suboutline left side matches a DIFFERENT
+  sibling child's numeric prefix, do NOT rewrite (ambiguity). Validator should
+  surface `invalid-suboutline-namespace` with a specific hint pointing at the
+  actual owner.
+- Triple `::` (e.g. `BUG-1::a::b`): reject with suffix-charset rule; the rule
+  still excludes `::` from `[A-Za-z0-9_-]+`.
+- Body has no suboutlines: rewrite returns body unchanged, no errors — existing
+  behavior preserved.
+- `:DEPENDS:` lines using comma instead of space: not supported today, not
+  introduced. Add no new syntax.
+
+* Acceptance criteria
+
+- `bun test packages/org/test/sub-outline-rewrite.test.ts` passes including 5
+  new cases above.
+- `bun test packages/coding-agent/test/plan-mode/plan-validation-lenient.test.ts`
+  passes.
+- `bun test packages/coding-agent/test/plan-mode/plan-validation-hints.test.ts`
+  passes.
+- Re-running the regression fixture from log scan: a PLAN that previously
+  failed with `invalid-suboutline-namespace` because of `BUG-264::x` now
+  passes without agent-side edits.
+- `bun check:ts` clean.
+
+* Verification
+
+- Manual: run `org create` with a body containing `:CUSTOM_ID: FEAT-1::foo`
+  before the parent slug is known — after create, the file contains
+  `:CUSTOM_ID: FEAT-1-<slug>::foo`.
+- Manual: call `exit_plan_mode` with a constructed PLAN whose children use
+  numeric-prefix-only CUSTOM_IDs in their body — succeeds on first attempt.
+
+NOTE [2026-04-18]: Cache refresh

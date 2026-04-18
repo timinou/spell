@@ -1,0 +1,106 @@
+#+TITLE: BufferRegistry multi-process advisory file locking around save and revalidation
+#+STATE: ITEM
+#+SESSION_ID: 14bf73993e0afdc4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-38-00-184Z_14bf73993e0afdc4.jsonl]]
+#+CUSTOM_ID: FEAT-570-bufferregistry-multi-process-advisory-fi
+#+DEPENDS: FEAT-569-bufferregistry-proactive-fs-notify-watch
+#+EFFORT: 4h
+#+LAYER: crates/pi-code-engine crates/pi-natives
+#+PRIORITY: #B
+
+* Scope
+
+In: wrap `CodeBuffer::save` and the `BufferRegistry::open` revalidation read in OS-level advisory file locks (`fd-lock` crate) so that concurrent edits from separate Spell processes (CLI, TUI, stats, MCP server, external tools that cooperate) do not interleave half-writes; on lock contention, wait up to N ms then surface `LOCK_TIMEOUT` / `EXTERNAL_MODIFICATION`.
+
+Out: coordinating in-session concurrency (covered by FEAT-571); durable sentinel files; multi-machine coordination.
+
+* Background
+
+User goal: "play well with the other code editing services running by any other spell service". Currently a second Spell process writing the same file races against the first: no coordination. Advisory file locks narrow the race to the moment between stat and write.
+
+We use OS advisory locks (`flock`/`LockFileEx`) so cooperating processes (any Spell-family crate linking `pi-code-engine`) observe the lock. Non-cooperating editors (vim, VS Code) remain uncoordinated — that is the fs-watcher's domain (FEAT-569).
+
+* Existing patterns
+
+- `crates/pi-code-engine/src/buffer.rs:204-221` — `CodeBuffer::open` reads file bytes.
+- `crates/pi-code-engine/src/buffer.rs:571-586` — `CodeBuffer::save` writes.
+- No existing lock infrastructure in this repo (verified by grepping for `fd-lock`, `fs2`, `FileExt`).
+
+* Tests (TDD, before impl)
+
+- `crates/pi-code-engine/tests/buffer_multi_process.rs` (new, integration):
+  - `concurrent_saves_serialize_via_advisory_lock`: spawn two OS threads (simulating two processes via two `BufferRegistry` instances sharing a path). Both call `save` with distinct content; the second blocks until the first releases. Final content is the second writer's, with mtime monotonically advancing.
+  - `save_times_out_on_lock_contention`: hold the lock externally (via `fd_lock::RwLock::write` in the test thread); call `save` with a 250ms budget; expect `Err(CodeEngineError::LockTimeout { path, budget_ms })`.
+  - `open_revalidation_uses_shared_lock`: write-lock held; `open` revalidation sees it and falls back to `EXTERNAL_MODIFICATION` (never returns torn content).
+- `crates/pi-natives/tests/code_buffer_lock_surface.rs`: JSON `{ error: true, code: "LOCK_TIMEOUT" }` shape.
+
+* Implementation
+
+** Add fd-lock dependency and lock helper
+:PROPERTIES:
+:CUSTOM_ID: FEAT-570-bufferregistry-multi-process-advisory-fi::dep-and-helper
+:END:
+
+- File: `crates/pi-code-engine/Cargo.toml` — `fd-lock = "4"`.
+- File: `crates/pi-code-engine/src/file_lock.rs` (new):
+  - `struct AdvisoryLock { inner: fd_lock::RwLock<std::fs::File>, path: PathBuf }`.
+  - `fn acquire_exclusive(path: &Path, budget: Duration) -> Result<ExclusiveGuard>` — tries non-blocking; on `WouldBlock` retries with 10ms backoff up to budget; on timeout returns `LockTimeout`.
+  - `fn acquire_shared(path: &Path, budget: Duration) -> Result<SharedGuard>`.
+  - Guards auto-release on drop (RAII).
+
+** Add error variants
+:PROPERTIES:
+:CUSTOM_ID: FEAT-570-bufferregistry-multi-process-advisory-fi::errors
+:END:
+
+- File: `crates/pi-code-engine/src/error.rs` — add `LockTimeout { path, budget_ms }` and `LockAcquireFailed { path, reason }`.
+
+** Use exclusive lock in save
+:PROPERTIES:
+:CUSTOM_ID: FEAT-570-bufferregistry-multi-process-advisory-fi::save-wrap
+:DEPENDS: FEAT-570-bufferregistry-multi-process-advisory-fi::dep-and-helper FEAT-570-bufferregistry-multi-process-advisory-fi::errors
+:END:
+
+- File: `crates/pi-code-engine/src/buffer.rs` — `CodeBuffer::save`:
+  - Acquire `ExclusiveGuard` (default 500ms budget; configurable via optional param).
+  - After lock: re-stat disk, run BUG-279 mtime guard (so a cooperating writer's update is surfaced as `EXTERNAL_MODIFICATION`).
+  - Write; update `disk_mtime`; release.
+
+** Use shared lock in revalidation read
+:PROPERTIES:
+:CUSTOM_ID: FEAT-570-bufferregistry-multi-process-advisory-fi::revalidate-wrap
+:DEPENDS: FEAT-570-bufferregistry-multi-process-advisory-fi::save-wrap
+:END:
+
+- File: `crates/pi-code-engine/src/buffer.rs` — `BufferRegistry::open` revalidation branch:
+  - When stale → acquire `SharedGuard` (short budget, 100ms) before reading bytes; on timeout, keep cache but return `LockContention` so the caller can retry.
+
+** NAPI surface + TS contract
+:PROPERTIES:
+:CUSTOM_ID: FEAT-570-bufferregistry-multi-process-advisory-fi::napi-surface
+:DEPENDS: FEAT-570-bufferregistry-multi-process-advisory-fi::revalidate-wrap
+:END:
+
+- File: `crates/pi-natives/src/code_buffer.rs` (`engine_err`): map `LockTimeout` → `{ code: "LOCK_TIMEOUT" }`, `LockAcquireFailed` → `{ code: "LOCK_ERROR" }`.
+- File: `packages/coding-agent/src/tools/code-result.ts`: add hint "another process holds the file lock; retry or run code edit with { command: 'lockStatus' }".
+- Add a diagnostic `"lockStatus"` subcommand to `execute_code_buffer_inner` that returns `{ path, exclusive: bool, shared: bool }` using non-blocking try_lock probes.
+
+* Edge cases
+
+- Windows: `fd-lock` uses `LockFileEx`; same semantics.
+- NFS: advisory locks are best-effort; document limitation in `code.md`.
+- Lock held by dead process (Linux): kernel auto-releases on process exit; no stale-lock cleanup needed.
+- Process that never `save`s (pure readers): no lock acquired; no contention.
+- File created via `open_or_create` before first save: lock acquired against the new file.
+
+* Acceptance criteria
+
+- `cargo test -p pi-code-engine --test buffer_multi_process` green.
+- Two `spell` CLI invocations concurrently writing the same file produce a deterministic winner + `EXTERNAL_MODIFICATION` on the loser.
+- `code edit { command: "lockStatus" }` reports correct state.
+- `bun check:rs` clean.
+
+* Verification
+
+- Manual: open two `bun spell` shells; in shell A, invoke `code edit { command: "save", … }` after stubbing a 2s sleep before the write (temporary instrumentation); in shell B, invoke the same during the sleep; confirm B blocks then reports `LOCK_TIMEOUT` under the budget.
+- Remove the instrumentation; confirm the normal single-process path is unchanged.

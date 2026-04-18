@@ -45,11 +45,11 @@ export async function evaluateLoopReadiness(
 				: "Acceptance criteria missing",
 		},
 		{
-			name: "effort-estimates",
-			ok: parsed.some(file => file.content.includes("EFFORT")),
-			message: parsed.some(file => file.content.includes("EFFORT"))
-				? "Effort estimates present"
-				: "Effort estimates missing",
+			name: "layer-annotations",
+			ok: parsed.some(file => file.content.includes("LAYER")),
+			message: parsed.some(file => file.content.includes("LAYER"))
+				? "Layer annotations present"
+				: "Layer annotations missing",
 		},
 		{
 			name: "dependencies",

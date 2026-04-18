@@ -1,0 +1,98 @@
+#+TITLE: Inject linked child org bodies into approved plan prompt
+#+STATE: ITEM
+#+SESSION_ID: 14bf746abbc2180e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-41-34-703Z_14bf746abbc2180e.jsonl]]
+#+CUSTOM_ID: FEAT-572-inject-linked-child-org-bodies-into-appr
+#+EFFORT: 4h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Scope
+
+Inject linked child org bodies into approved plan prompt before todo seed. See sub-outlines below for ordered TDD execution.
+
+* Existing Patterns
+
+Use `validatePlanItem` (returns `resolvedChildren`), `ExitPlanModeDetails` (extend with `childItems`), `#approvePlan` (single render call), `plan-mode-approved.md` (Handlebars template), `Settings`. Do not duplicate org I/O.
+
+* Tests
+
+- File `packages/coding-agent/test/plan-mode/approved-plan-injection.test.ts` covers renderer scenarios 1-5: section presence, truncation marker, properties bullet, omission when empty, global cap.
+- File `packages/coding-agent/test/tools/exit-plan-mode-propagation.test.ts` covers integration: details.childItems length matches link count.
+- TDD: tests precede implementation per sub-outline DEPENDS graph.
+
+* Implementation
+
+** s1
+:PROPERTIES:
+:CUSTOM_ID: FEAT-572-inject-linked-child-org-bodies-into-appr::s1-types
+:END:
+- File: `packages/coding-agent/src/tools/exit-plan-mode.ts`
+- Export `interface ChildItemSpec { id: string; title?: string; body: string; properties: Record<string,string> }`.
+- Extend `ExitPlanModeDetails` with optional `childItems?: ChildItemSpec[]`.
+
+** s2
+:PROPERTIES:
+:CUSTOM_ID: FEAT-572-inject-linked-child-org-bodies-into-appr::s2-settings
+:DEPENDS: FEAT-572-inject-linked-child-org-bodies-into-appr::s1-types
+:END:
+- File: `packages/coding-agent/src/config/settings.ts`
+- Add `plan.injectedChildItemMaxBytes` (default 8192) and `plan.approvedPromptMaxBytes` (default 131072).
+
+** s3
+:PROPERTIES:
+:CUSTOM_ID: FEAT-572-inject-linked-child-org-bodies-into-appr::s3-tests
+:DEPENDS: FEAT-572-inject-linked-child-org-bodies-into-appr::s2-settings
+:END:
+- File: `packages/coding-agent/test/plan-mode/approved-plan-injection.test.ts`
+- Renderer contract tests scenarios 1-5; must fail initially.
+
+** s4
+:PROPERTIES:
+:CUSTOM_ID: FEAT-572-inject-linked-child-org-bodies-into-appr::s4-template
+:DEPENDS: FEAT-572-inject-linked-child-org-bodies-into-appr::s3-tests
+:END:
+- File: `packages/coding-agent/src/prompts/system/plan-mode-approved.md`
+- Insert `## Child Item Specifications` block IMMEDIATELY before `## Plan` heading using `{{#if childItems}} {{#each childItems}} ### {{id}} - Properties: ... {{{body}}} {{/each}} {{/if}}`.
+
+** s5
+:PROPERTIES:
+:CUSTOM_ID: FEAT-572-inject-linked-child-org-bodies-into-appr::s5-tool-propagate
+:DEPENDS: FEAT-572-inject-linked-child-org-bodies-into-appr::s4-template
+:END:
+- File: `packages/coding-agent/src/tools/exit-plan-mode.ts::ExitPlanModeTool.execute`
+- Build `childItems` from `validation.resolvedChildren` ordered by `validation.childItemIds`. Per-child truncation via `plan.injectedChildItemMaxBytes`. Title from first `* ` line.
+
+** s6
+:PROPERTIES:
+:CUSTOM_ID: FEAT-572-inject-linked-child-org-bodies-into-appr::s6-thread
+:DEPENDS: FEAT-572-inject-linked-child-org-bodies-into-appr::s5-tool-propagate
+:END:
+- File: `packages/coding-agent/src/modes/interactive-mode.ts::InteractiveMode.#approvePlan`
+- Thread `childItems` from `handleExitPlanModeTool` to `renderPromptTemplate`. Apply global `plan.approvedPromptMaxBytes` cap.
+
+** s7
+:PROPERTIES:
+:CUSTOM_ID: FEAT-572-inject-linked-child-org-bodies-into-appr::s7-verify
+:DEPENDS: FEAT-572-inject-linked-child-org-bodies-into-appr::s6-thread
+:END:
+- Run `bun check:ts`.
+- Run `bun test` for both new test files.
+- Manual smoke: approve a small two-FEAT plan, inspect synthetic prompt in transcript, confirm `## Child Item Specifications` precedes `## Plan` and contains FEAT bodies.
+
+* Edge Cases
+
+- Missing/broken `[[id:…]]` link: skip silently (validator handles).
+- Empty child body: render with no truncation marker.
+- Non-org plan: section omitted by `{{#if childItems}}` guard.
+- Unicode in body: byte-based truncation.
+- Large plan exceeding `approvedPromptMaxBytes`: truncate trailing children, never mid-child.
+
+* Acceptance Criteria
+
+1. Fresh session after approval shows `## Child Item Specifications` with N `### <id>` subsections (N = number of `[[id:…]]` links in PLAN body).
+2. Truncation marker `…(elided — fetch via \`org get <ID>\`)` appears exactly when child body exceeds `plan.injectedChildItemMaxBytes`.
+3. `bun check:ts` passes.
+4. Both new test files pass.
+5. Non-org file-backed plan flow regression-tested green.
+6. Subsequent execution session emits no `org get <childId>` before first `todo_write`.

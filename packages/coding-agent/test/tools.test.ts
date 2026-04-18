@@ -11,6 +11,7 @@ import { GrepTool } from "@oh-my-pi/pi-coding-agent/tools/grep";
 import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
+import { executeCodeBuffer } from "@oh-my-pi/pi-natives";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
 // Helper to extract text from content blocks
@@ -280,6 +281,30 @@ describe("Coding Agent Tools", () => {
 	});
 
 	describe("write tool", () => {
+		function getManagedBufferPaths(): string[] {
+			const listedBuffers = executeCodeBuffer({ command: "list" });
+			expect(listedBuffers.error).toBe(false);
+			if (!Array.isArray(listedBuffers.output)) return [];
+			return listedBuffers.output.flatMap(buffer => {
+				if (buffer && typeof buffer === "object" && !Array.isArray(buffer)) {
+					const bufferPath = Reflect.get(buffer, "path");
+					return typeof bufferPath === "string" ? [bufferPath] : [];
+				}
+				return [];
+			});
+		}
+
+		function expectManagedBufferFresh(file: string): void {
+			const diff = executeCodeBuffer({ command: "diff", file });
+			expect(diff.error).toBe(false);
+			expect(Array.isArray(diff.output) ? diff.output.length : 0).toBe(0);
+		}
+
+		function closeManagedBuffer(file: string): void {
+			const closeResult = executeCodeBuffer({ command: "close", file });
+			expect(closeResult.error).toBe(false);
+		}
+
 		it("should write file contents", async () => {
 			const testFile = path.join(testDir, "write-test.txt");
 			const content = "Test content";
@@ -298,14 +323,117 @@ describe("Coding Agent Tools", () => {
 
 			expect(getTextOutput(result)).toContain("Successfully wrote");
 		});
-		it("should reject code-supported files and point to code edit", async () => {
+
+		it("routes new TypeScript writes through the managed buffer", async () => {
 			const testFile = path.join(testDir, "write-test.ts");
+			const content = "export const value = 1;\n";
+
+			const result = await writeTool.execute("test-call-4-code", { path: testFile, content });
+
+			expect(getTextOutput(result)).toContain(`Successfully wrote ${content.length} bytes to ${testFile}`);
+			expect(fs.readFileSync(testFile, "utf-8")).toBe(content);
+			expect(result.details?.diagnostics).toBeUndefined();
+			expectManagedBufferFresh(testFile);
+			closeManagedBuffer(testFile);
+		});
+
+		it("overwrites existing TypeScript files through the managed buffer", async () => {
+			const testFile = path.join(testDir, "overwrite-test.ts");
+			fs.writeFileSync(testFile, "export const value = 1;\n");
+			const content = "export const value = 2;\n";
+
+			const result = await writeTool.execute("test-call-4-overwrite", { path: testFile, content });
+
+			expect(getTextOutput(result)).toContain(`Successfully wrote ${content.length} bytes to ${testFile}`);
+			expect(fs.readFileSync(testFile, "utf-8")).toBe(content);
+			expectManagedBufferFresh(testFile);
+			closeManagedBuffer(testFile);
+		});
+
+		it("keeps unsupported writes on the writethrough path", async () => {
+			for (const ext of ["txt", "yaml", "json", "kdl"]) {
+				const testFile = path.join(testDir, `passthrough.${ext}`);
+				const content = `kind: ${ext}\n`;
+				const result = await writeTool.execute(`test-call-4-${ext}`, { path: testFile, content });
+
+				expect(getTextOutput(result)).toContain(`Successfully wrote ${content.length} bytes to ${testFile}`);
+				expect(fs.readFileSync(testFile, "utf-8")).toBe(content);
+				expect(getManagedBufferPaths()).not.toContain(testFile);
+			}
+		});
+
+		it("routes markdown, org, python, and rust writes through the managed buffer", async () => {
+			const cases = [
+				{ name: "markdown", file: "write-test.md", content: "# write\n" },
+				{ name: "org", file: "write-test.org", content: "* write\n" },
+				{ name: "python", file: "write-test.py", content: "value = 1\n" },
+				{ name: "rust", file: "write-test.rs", content: "fn main() {}\n" },
+			];
+
+			for (const testCase of cases) {
+				const testFile = path.join(testDir, testCase.file);
+				const result = await writeTool.execute(`test-call-4-${testCase.name}`, {
+					path: testFile,
+					content: testCase.content,
+				});
+
+				expect(getTextOutput(result)).toContain(
+					`Successfully wrote ${testCase.content.length} bytes to ${testFile}`,
+				);
+				expect(fs.readFileSync(testFile, "utf-8")).toBe(testCase.content);
+				expect(result.details?.diagnostics).toBeUndefined();
+				expectManagedBufferFresh(testFile);
+				closeManagedBuffer(testFile);
+			}
+		});
+
+		it("preserves current ipynb write behavior", async () => {
+			const testFile = path.join(testDir, "write-test.ipynb");
+			const content = '{"cells":[]}\n';
+
+			const result = await writeTool.execute("test-call-4-ipynb", { path: testFile, content });
+
+			expect(getTextOutput(result)).toContain(`Successfully wrote ${content.length} bytes to ${testFile}`);
+			expect(fs.readFileSync(testFile, "utf-8")).toBe(content);
+			expect(getManagedBufferPaths()).not.toContain(testFile);
+		});
+
+		it("preserves mode-guard and sandbox ordering", async () => {
+			const planModeWriteTool = wrapToolWithMetaNotice(
+				new WriteTool({
+					...createTestToolSession(
+						testDir,
+						Settings.isolated({
+							"planMode.allowedFolders": {
+								"./docs/plans": "Architecture notes and plan artifacts",
+							},
+						}),
+					),
+					getPlanModeState: () => ({ type: "plan", enabled: true, planFilePath: "PLAN.md" }),
+					getActiveModeState: () => ({ type: "plan", enabled: true, planFilePath: "PLAN.md" }),
+				}),
+			);
 			await expect(
-				writeTool.execute("test-call-4-code", { path: testFile, content: "export const value = 1;\n" }),
-			).rejects.toThrow(/operations: \[\{ targetId:/);
+				planModeWriteTool.execute("test-call-4-plan-mode", {
+					path: "notes/todo.ts",
+					content: "export const blocked = true;\n",
+				}),
+			).rejects.toThrow(/configured allowed folders|Plan mode/);
+			expect(getManagedBufferPaths()).not.toContain(path.join(testDir, "notes", "todo.ts"));
+
+			const sandboxedWriteTool = wrapToolWithMetaNotice(
+				new WriteTool({
+					...createTestToolSession(testDir),
+					sandboxPolicy: { pathsWrite: ["allowed/"], bashAllow: [], bashDeny: [] },
+				}),
+			);
 			await expect(
-				writeTool.execute("test-call-4-code", { path: testFile, content: "export const value = 1;\n" }),
-			).rejects.toThrow(/re-read or navigate, tighten the target, and retry code edit/);
+				sandboxedWriteTool.execute("test-call-4-sandbox", {
+					path: "blocked/value.ts",
+					content: "export const blocked = true;\n",
+				}),
+			).rejects.toThrow(/Sandbox policy blocks writes to 'blocked\/value.ts'/);
+			expect(getManagedBufferPaths()).not.toContain(path.join(testDir, "blocked", "value.ts"));
 		});
 
 		it("should write to a new local:// path under the session local root", async () => {
@@ -340,16 +468,23 @@ describe("Coding Agent Tools", () => {
 			expect(result.details!.diff).toContain("testing");
 		});
 
-		it("should reject code-supported files and point to code edit", async () => {
+		it("should route code-supported files through the managed buffer", async () => {
 			const testFile = path.join(testDir, "edit-test.ts");
 			fs.writeFileSync(testFile, "export const value = 1;\n");
-			await expect(
-				editTool.execute("test-call-5-code", {
-					path: testFile,
-					old_text: "value = 1",
-					new_text: "value = 2",
-				}),
-			).rejects.toThrow(/The edit tool is blocked for code-supported files/);
+
+			const result = await editTool.execute("test-call-5-code", {
+				path: testFile,
+				old_text: "value = 1",
+				new_text: "value = 2",
+			});
+
+			expect(getTextOutput(result)).toContain("Successfully replaced text in");
+			expect(fs.readFileSync(testFile, "utf-8")).toContain("value = 2");
+			const diff = executeCodeBuffer({ command: "diff", file: testFile });
+			expect(diff.error).toBe(false);
+			expect(Array.isArray(diff.output) ? diff.output.length : 0).toBe(0);
+			const closeResult = executeCodeBuffer({ command: "close", file: testFile });
+			expect(closeResult.error).toBe(false);
 		});
 
 		it("should fail if text not found", async () => {

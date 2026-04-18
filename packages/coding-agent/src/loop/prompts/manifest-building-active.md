@@ -40,8 +40,6 @@ For each work item, create an org ticket with:
 - `:GATE_CMD:` — command to verify completion (e.g., `bun test path/to/test.ts`)
 - `:GATE_ARTIFACT:` — file that must exist on completion
 - `:GATE_LLM:` — criteria for LLM review on completion
-- `:EFFORT:` — estimated effort (e.g., `2h`, `4h`)
-- `:PRIORITY:` — `#A`, `#B`, or `#C`
 - `:LAYER:` — `frontend`, `backend`, `infra`, etc.
 - Acceptance criteria as a checklist under the heading
 
@@ -51,7 +49,7 @@ Ensure:
 - No circular dependencies exist
 - All DEPENDS references point to valid ticket IDs
 - Critical path is reasonable
-- Effort estimates are plausible
+- Layer annotations are present where needed
 
 ### 5. Manifest Validation (Mandatory)
 
@@ -59,7 +57,7 @@ Before signaling readiness, validate the complete manifest:
 - Verify all tickets have acceptance criteria
 - Check dependency graph is acyclic
 - Ensure gate coverage for critical items
-- Review total estimated effort
+- Review layer coverage and dependency clarity
 
 ### 6. Launch Signal
 

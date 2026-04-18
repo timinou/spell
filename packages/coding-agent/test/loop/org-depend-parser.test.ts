@@ -13,8 +13,6 @@ const ORG_CONTENT = `
 :DEPENDS: FEAT-000
 :TRIGGER: FEAT-002(DOING)
 :GATE_CMD: bun test
-:EFFORT: 4h
-:PRIORITY: #A
 :END:
 
 ** Acceptance Criteria
@@ -57,8 +55,6 @@ describe("parseOrgDependProperties", () => {
 		expect(feat001.blockers).toEqual(["FEAT-000"]);
 		expect(feat001.triggers).toEqual([{ targetId: "FEAT-002", keyword: "DOING" }]);
 		expect(feat001.gateCmd).toBe("bun test");
-		expect(feat001.effort).toBe("4h");
-		expect(feat001.priority).toBe("#A");
 	});
 
 	it("handles headings with no properties drawer", () => {

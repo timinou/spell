@@ -65,11 +65,13 @@ describe("tool metadata parity", () => {
 		const tool = makeTool();
 		expect(tool.description).toContain("delete       Delete an item file");
 		expect(tool.description).toContain("validate-plan Validate a plan via injected callback");
+		expect(tool.description).toContain("suboutline-add Append a structured implementation sub-heading");
 		const commands = (
 			(tool.parameters as { properties?: { command?: { enum?: string[] } } }).properties?.command?.enum ?? []
 		).slice();
 		expect(commands).toContain("delete");
 		expect(commands).toContain("validate-plan");
+		expect(commands).toContain("suboutline-add");
 	});
 });
 /** Seed a file-level org item into a category directory. */
@@ -556,6 +558,70 @@ describe("priority queries", () => {
 			total: number;
 		};
 		expect(result.total).toBe(1);
+	});
+});
+
+describe("suboutline-add command", () => {
+	test("appends a structured suboutline block with auto-prefixed CUSTOM_ID", async () => {
+		const filePath = await seedItem("projects", "PROJ-040-parent", "Parent item", {
+			state: "ITEM",
+			body: [
+				"* Scope",
+				"Existing parent body",
+				"",
+				"** Define types",
+				":PROPERTIES:",
+				":CUSTOM_ID: PROJ-040-parent::define-types",
+				":END:",
+			].join("\n"),
+		});
+		const tool = makeTool();
+
+		const result = (await tool.execute({
+			command: "suboutline-add",
+			parentId: "PROJ-040-parent",
+			slug: "wire-types",
+			title: "Wire types",
+			depends: ["PROJ-040-parent::define-types"],
+			layer: "backend",
+			body: "- File: src/types.ts",
+		})) as Record<string, unknown>;
+
+		expect(result.success).toBe(true);
+		expect(result.suboutlineId).toBe("PROJ-040-parent::wire-types");
+		expect(result.file).toBe(filePath);
+		const content = await readFile(filePath);
+		expect(content).toContain("** Wire types");
+		expect(content).toContain(":CUSTOM_ID: PROJ-040-parent::wire-types");
+		expect(content).toContain(":DEPENDS: PROJ-040-parent::define-types");
+		expect(content).toContain(":LAYER: backend");
+	});
+
+	test("rejects invalid slugs", async () => {
+		await seedItem("projects", "PROJ-041-parent", "Parent item", { state: "ITEM", body: "* Scope\nBody" });
+		const tool = makeTool();
+		const result = (await tool.execute({
+			command: "suboutline-add",
+			parentId: "PROJ-041-parent",
+			slug: "bad slug",
+			title: "Bad slug",
+		})) as Record<string, unknown>;
+		expect(result.error).toBe(true);
+		expect(result.code).toBe("INVALID_SUBOUTLINE_SLUG");
+	});
+
+	test("rejects depends that do not reference existing same-parent suboutlines", async () => {
+		await seedItem("projects", "PROJ-042-parent", "Parent item", { state: "ITEM", body: "* Scope\nBody" });
+		const tool = makeTool();
+		const result = (await tool.execute({
+			command: "suboutline-add",
+			parentId: "PROJ-042-parent",
+			slug: "wire-types",
+			title: "Wire types",
+			depends: ["PROJ-042-parent::missing-step"],
+		})) as Record<string, unknown>;
+		expect(result.error).toBe(true);
+		expect(result.code).toBe("INVALID_DEPENDS");
 	});
 });
 

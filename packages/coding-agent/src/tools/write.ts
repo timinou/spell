@@ -17,8 +17,9 @@ import writeDescription from "../prompts/tools/write.md" with { type: "text" };
 import { enforcePathWrite } from "../sandbox";
 import type { ToolSession } from "../sdk";
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
-import { describeCodeToolSupportedFiles, isCodeToolSupportedPath } from "./code-supported-files";
+import { isCodeToolSupportedPath } from "./code-supported-files";
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
+import { applyManagedBufferContent } from "./managed-code-buffer";
 import { enforceModeWrite, resolvePlanPath } from "./mode-guard";
 import { type OutputMeta, outputMeta } from "./output-meta";
 import {
@@ -104,18 +105,20 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			const sandboxError = enforcePathWrite(path, this.session.cwd, this.session.sandboxPolicy);
 			if (sandboxError) throw new Error(sandboxError);
 			const absolutePath = resolvePlanPath(this.session, path);
-			if (isCodeToolSupportedPath(absolutePath)) {
-				throw new Error(
-					`The write tool is blocked for code-supported files (${describeCodeToolSupportedFiles()}). Use code edit { operations: [{ targetId: ${JSON.stringify(path)}, actions: [{ kind: "write", content: ["..."] }] }] } instead. If the structural edit fails, re-read or navigate, tighten the target, and retry code edit.`,
-				);
+			const resultText = `Successfully wrote ${content.length} bytes to ${path}`;
+			if (isCodeToolSupportedPath(absolutePath) && !process.env.SPELL_ALLOW_TEXT_EDIT_ON_CODE) {
+				applyManagedBufferContent(absolutePath, content, { create: true });
+				invalidateFsScanAfterWrite(absolutePath);
+				return {
+					content: [{ type: "text", text: resultText }],
+					details: {},
+				};
 			}
 			const batchRequest = getLspBatchRequest(context?.toolCall);
 			const writethrough = this.#getWritethrough();
 
 			const diagnostics = await writethrough(absolutePath, content, signal, undefined, batchRequest);
 			invalidateFsScanAfterWrite(absolutePath);
-
-			const resultText = `Successfully wrote ${content.length} bytes to ${path}`;
 			if (!diagnostics) {
 				return {
 					content: [{ type: "text", text: resultText }],

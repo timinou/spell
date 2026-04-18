@@ -5,7 +5,7 @@
  * - :DEPENDS: space-separated IDs (legacy: :BLOCKER:)
  * - :TRIGGER: space-separated ID(KEYWORD) expressions
  * - :GATE_CMD:, :GATE_ARTIFACT:, :GATE_LLM: single-value properties
- * - Standard: :CUSTOM_ID:, :EFFORT:, :PRIORITY:, :LAYER:
+ * - Standard: :CUSTOM_ID:, :LAYER:, :DEPENDS:
  */
 
 // -- Types ------------------------------------------------------------------
@@ -24,8 +24,6 @@ export interface OrgDependProperties {
 	gateCmd?: string;
 	gateArtifact?: string;
 	gateLlm?: string;
-	effort?: string;
-	priority?: string;
 	layer?: string;
 }
 
@@ -162,8 +160,6 @@ export function parseOrgDependProperties(content: string): OrgDependProperties[]
 			gateCmd: extractProperty(h.propertiesBlock, "GATE_CMD") ?? undefined,
 			gateArtifact: extractProperty(h.propertiesBlock, "GATE_ARTIFACT") ?? undefined,
 			gateLlm: extractProperty(h.propertiesBlock, "GATE_LLM") ?? undefined,
-			effort: extractProperty(h.propertiesBlock, "EFFORT") ?? undefined,
-			priority: extractProperty(h.propertiesBlock, "PRIORITY") ?? undefined,
 			layer: extractProperty(h.propertiesBlock, "LAYER") ?? undefined,
 		};
 

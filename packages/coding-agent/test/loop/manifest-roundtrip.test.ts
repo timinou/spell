@@ -145,8 +145,6 @@ describe("manifest round-trip", () => {
 				tags: ["core"],
 				acceptanceCriteria: ["passes tests"],
 				gates: [{ id: "g1", type: "command", command: "bun test", trigger: { kind: GATE_TRIGGERS.onCompletion } }],
-				effort: "2h",
-				priority: "A",
 				layer: "backend",
 				orgItemId: "org-full-1",
 				changedFiles: ["x.ts", "y.ts"],
@@ -180,8 +178,6 @@ describe("manifest round-trip", () => {
 		expect(f1.dependencies).toEqual(["FULL-2"]);
 		expect(f1.tags).toEqual(["core"]);
 		expect(f1.acceptanceCriteria).toEqual(["passes tests"]);
-		expect(f1.effort).toBe("2h");
-		expect(f1.priority).toBe("A");
 		expect(f1.layer).toBe("backend");
 		expect(f1.orgItemId).toBe("org-full-1");
 		expect(f1.changedFiles).toEqual(["x.ts", "y.ts"]);

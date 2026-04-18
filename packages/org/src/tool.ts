@@ -10,7 +10,7 @@ import { findCategory, findCategoryForId, resolveCategories } from "./categories
 import { generateId } from "./id-generator";
 import { parseSubOutlineId } from "./id-links";
 import { KeyedMutex } from "./mutex";
-import { DEFAULT_ORG_CONFIG, EFFORT_REGEXP, PRIORITY_REGEXP, REQUIRED_PROPERTIES } from "./schema/defaults";
+import { DEFAULT_ORG_CONFIG, REQUIRED_PROPERTIES } from "./schema/defaults";
 import { rewriteSubOutlineIds } from "./sub-outline-rewrite";
 import type {
 	CategoryMetrics,
@@ -23,6 +23,36 @@ import type {
 } from "./types";
 
 const createCategoryMutex = new KeyedMutex<string>();
+const SUBOUTLINE_SLUG_RE = /^[A-Za-z0-9_-]+$/;
+const TOP_LEVEL_HEADING_RE = /^\*\s+/m;
+const CUSTOM_ID_IN_BODY_RE = /^\s*:CUSTOM_ID:\s+(\S+)\s*$/gm;
+
+function collectSameParentSuboutlineIds(parentId: string, body: string): Set<string> {
+	const ids = new Set<string>();
+	for (const match of body.matchAll(CUSTOM_ID_IN_BODY_RE)) {
+		const customId = match[1];
+		if (!customId) continue;
+		const parsed = parseSubOutlineId(customId);
+		if (parsed?.parentId === parentId) ids.add(customId);
+	}
+	return ids;
+}
+
+function buildSuboutlineBlock(args: {
+	parentId: string;
+	slug: string;
+	title: string;
+	body?: string;
+	depends?: string[];
+	layer?: string;
+}): string {
+	const lines = [`** ${args.title}`, ":PROPERTIES:", `:CUSTOM_ID: ${args.parentId}::${args.slug}`];
+	if ((args.depends?.length ?? 0) > 0) lines.push(`:DEPENDS: ${args.depends!.join(" ")}`);
+	if (args.layer) lines.push(`:LAYER: ${args.layer}`);
+	lines.push(":END:");
+	if (args.body) lines.push(args.body);
+	return lines.join("\n");
+}
 
 interface OrgContext {
 	config: OrgConfig;
@@ -319,11 +349,12 @@ async function cmdCreate(
 	}
 	await fs.mkdir(cat.absPath, { recursive: true });
 	const session = cat.writeInitialPrompt ? (ctx.getSessionContext?.() as OrgSessionContext | undefined) : undefined;
-	const { id, filePath } = await createCategoryMutex.withLock(cat.absPath, async () => {
+	const { id, filePath, suboutlineRewrites } = await createCategoryMutex.withLock(cat.absPath, async () => {
 		const id = await generateId(cat.absPath, cat.prefix, args.title);
 		const fileName = args.file ? (args.file.endsWith(".org") ? args.file : `${args.file}.org`) : `${id}.org`;
 		const filePath = path.join(cat.absPath, fileName);
-		const rewrittenBody = args.body === undefined ? undefined : rewriteSubOutlineIds(id, args.body).body;
+		const rewriteResult = args.body === undefined ? undefined : rewriteSubOutlineIds(id, args.body);
+		const rewrittenBody = rewriteResult?.body;
 		const result = executeOrg({
 			command: "createItem",
 			file: filePath,
@@ -337,9 +368,15 @@ async function cmdCreate(
 			initialMessage: session?.initialMessage,
 		});
 		if (result.error) throw new Error(String(result.output));
-		return { id, filePath };
+		return {
+			id,
+			filePath,
+			suboutlineRewrites: rewriteResult ? Object.fromEntries(rewriteResult.rewrites) : undefined,
+		};
 	});
 	const createdItem = args.body === undefined ? undefined : await fetchItem(ctx, id);
+	const missingRequired = args.properties?.LAYER ? [] : ["LAYER"];
+	const recommended = { DEPENDS: args.properties?.DEPENDS ? "set" : "unset" };
 	logger.debug("org:create", { id, filePath, category: cat.name });
 	return {
 		success: true,
@@ -349,6 +386,10 @@ async function cmdCreate(
 		state,
 		body: createdItem?.body,
 		bodyLength: createdItem ? (createdItem.body ?? "").length : undefined,
+		suboutlinePrefix: `${id}::`,
+		missingRequired,
+		recommended,
+		suboutlineRewrites,
 	};
 }
 
@@ -673,7 +714,14 @@ async function cmdNote(
 		} catch {
 			return null;
 		}
-		if (result.error) return null;
+		if (result.error) {
+			if (result.output && typeof result.output === "object" && !Array.isArray(result.output)) {
+				const output = result.output as Record<string, unknown>;
+				if (output.code === "ITEM_NOT_FOUND") return null;
+				return { error: true, ...output };
+			}
+			return { error: true, message: String(result.output) };
+		}
 		return await buildMutationResponse(args.id, ["note"], filePath, args.includeBody, ctx);
 	};
 	if (args.file) {
@@ -767,6 +815,68 @@ async function cmdDashboard(ctx: OrgContext): Promise<unknown> {
 	};
 }
 
+async function cmdSuboutlineAdd(
+	ctx: OrgContext,
+	args: {
+		parentId: string;
+		slug: string;
+		title: string;
+		body?: string;
+		depends?: string[];
+		layer?: string;
+		replace?: boolean;
+	},
+): Promise<unknown> {
+	if (!SUBOUTLINE_SLUG_RE.test(args.slug)) {
+		return { error: true, code: "INVALID_SUBOUTLINE_SLUG", message: `Invalid slug: ${args.slug}` };
+	}
+	if (args.body && TOP_LEVEL_HEADING_RE.test(args.body)) {
+		return {
+			error: true,
+			code: "INVALID_SUBOUTLINE_BODY",
+			message: "body must not start a top-level heading; use N-star headings only",
+		};
+	}
+	if (args.replace) {
+		return { error: true, code: "UNSUPPORTED", message: "replace=true is not supported for suboutline-add" };
+	}
+
+	const parentItem = await fetchItem(ctx, args.parentId);
+	if (!parentItem) {
+		return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.parentId}` };
+	}
+	const parentBody = parentItem.body ?? "";
+	const existingIds = collectSameParentSuboutlineIds(parentItem.id, parentBody);
+	const suboutlineId = `${parentItem.id}::${args.slug}`;
+	if (existingIds.has(suboutlineId)) {
+		return { error: true, code: "ALREADY_EXISTS", message: `Suboutline already exists: ${suboutlineId}` };
+	}
+	for (const depId of args.depends ?? []) {
+		if (!existingIds.has(depId)) {
+			return {
+				error: true,
+				code: "INVALID_DEPENDS",
+				message: `DEPENDS must reference an existing same-parent suboutline: ${depId}`,
+			};
+		}
+	}
+	const block = buildSuboutlineBlock(args);
+	const append = `${parentBody.trim().length > 0 ? "\n\n" : ""}${block}`;
+	const result = await createCategoryMutex.withLock(parentItem.file, async () =>
+		executeOrg({
+			command: "updateItem",
+			file: parentItem.file,
+			id: parentItem.id,
+			append,
+			todoKeywords: ctx.config.todoKeywords,
+		}),
+	);
+	if (result.error) {
+		return { error: true, message: String(result.output) };
+	}
+	return { success: true, suboutlineId, file: parentItem.file, updated: ["append"] };
+}
+
 async function cmdValidate(ctx: OrgContext, args: { category?: string; file?: string }): Promise<unknown> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 	const targets = args.category ? categories.filter(c => c.name === args.category) : categories;
@@ -784,24 +894,6 @@ async function cmdValidate(ctx: OrgContext, args: { category?: string; file?: st
 						file: item.file,
 						line: item.line,
 					});
-			if (item.properties.EFFORT && !EFFORT_REGEXP.test(item.properties.EFFORT))
-				issues.push({
-					severity: "warning",
-					rule: "effort-format",
-					message: `Invalid EFFORT format: ${item.properties.EFFORT}`,
-					hint: "Use format Xh or Xm (e.g. 2h, 30m)",
-					file: item.file,
-					line: item.line,
-				});
-			if (item.properties.PRIORITY && !PRIORITY_REGEXP.test(item.properties.PRIORITY))
-				issues.push({
-					severity: "warning",
-					rule: "priority-format",
-					message: `Invalid PRIORITY: ${item.properties.PRIORITY}`,
-					hint: "Use #A, #B, or #C",
-					file: item.file,
-					line: item.line,
-				});
 		}
 	}
 	return {
@@ -910,7 +1002,7 @@ export function createOrgTool(
 	};
 	return {
 		name: "org",
-		description: `Org-mode project management. Subcommands:\n  init        Initialize org directories and category subdirs\n  create      Create a new task item (ID auto-generated)\n  query       List/filter items (state, category, priority, layer, or keyword query)\n  get         Get single item by ID with full body\n  update      Change state, body, title, or append text (any combo in one call)\n  note        Append a dated NOTE entry to an item (no state change)\n  set         Set a single PROPERTIES drawer value\n  validate    Validate items\n  delete       Delete an item file\n  validate-plan Validate a plan via injected callback\n  dashboard   Project metrics and in-progress/blocked summary\n  wave        Next wave of ready items by priority\n  graph       Dependency graph\n  archive     Archive DONE items\n`,
+		description: `Org-mode project management. Subcommands:\n  init        Initialize org directories and category subdirs\n  create      Create a new task item (ID auto-generated)\n  query       List/filter items (state, category, priority, layer, or keyword query)\n  get         Get single item by ID with full body\n  update      Change state, body, title, or append text (any combo in one call)\n  note        Append a dated NOTE entry to an item (no state change)\n  set         Set a single PROPERTIES drawer value\n  validate    Validate items\n  delete       Delete an item file\n  validate-plan Validate a plan via injected callback\n  dashboard   Project metrics and in-progress/blocked summary\n  wave        Next wave of ready items by priority\n  graph       Dependency graph\n  archive     Archive DONE items\n  suboutline-add Append a structured implementation sub-heading to an existing item with auto-prefixed CUSTOM_ID.\n`,
 		parameters: {
 			type: "object",
 			properties: {
@@ -931,6 +1023,7 @@ export function createOrgTool(
 						"wave",
 						"graph",
 						"archive",
+						"suboutline-add",
 					],
 				},
 			},
@@ -1024,6 +1117,16 @@ export function createOrgTool(
 				case "archive":
 					return cmdArchive(ctx, {
 						category: args.category as string | undefined,
+					});
+				case "suboutline-add":
+					return cmdSuboutlineAdd(ctx, {
+						parentId: args.parentId as string,
+						slug: args.slug as string,
+						title: args.title as string,
+						body: normalizeOrgBody(args.body as string | undefined),
+						depends: Array.isArray(args.depends) ? (args.depends as string[]) : undefined,
+						layer: args.layer as string | undefined,
+						replace: args.replace as boolean | undefined,
 					});
 				default:
 					return { error: true, message: `Unknown command: ${command}` };

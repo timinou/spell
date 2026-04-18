@@ -56,15 +56,6 @@ describe("ManifestTicket round-trip", () => {
 		expect(parsed!.acceptanceCriteria).toEqual(ticket.acceptanceCriteria);
 	});
 
-	it("preserves effort and priority through render+parse", () => {
-		const ticket = makeTicket({ effort: "2h", priority: "#A" });
-		const org = renderTicketOrg(ticket);
-		const parsed = parseTicketOrg(org);
-
-		expect(parsed!.effort).toBe("2h");
-		expect(parsed!.priority).toBe("#A");
-	});
-
 	it("returns undefined for content without a valid heading", () => {
 		const parsed = parseTicketOrg("just some random text\nno heading here");
 		expect(parsed).toBeUndefined();

@@ -1,0 +1,83 @@
+#+TITLE: BufferRegistry sharded concurrency-friendly map for parallel in-session opens
+#+STATE: ITEM
+#+SESSION_ID: 14bf73993e0afdc4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-38-00-184Z_14bf73993e0afdc4.jsonl]]
+#+CUSTOM_ID: FEAT-571-bufferregistry-sharded-concurrency-frien
+#+EFFORT: 2h
+#+LAYER: crates/pi-code-engine
+#+PRIORITY: #B
+
+* Scope
+
+In: replace `BufferRegistry::buffers: RwLock<HashMap<PathBuf, Arc<Mutex<CodeBuffer>>>>` with `DashMap<PathBuf, Arc<Mutex<CodeBuffer>>>`. Shared-lock reads never block each other; map mutations are shard-local. Per-buffer mutation still serialises via `Arc<Mutex<CodeBuffer>>` (unchanged).
+
+Out: introducing async locks (tokio); changing the public API; per-buffer lock granularity.
+
+* Background
+
+User goal: "super good with being concurrency-friendly within the session". Today a write-lock on the map blocks all opens while one new buffer is inserted; a thundering herd of parallel tool calls (task subagents doing `code read` on 50 files in parallel) serialises unnecessarily.
+
+Sharding the map removes this false contention. Per-file edits remain serialised on the inner mutex (correct).
+
+* Existing patterns
+
+- `crates/pi-code-engine/src/buffer.rs:140-201` — `BufferRegistry` impl.
+- `parking_lot = …` is already a transitive dep; `dashmap` likely not yet direct. Check `cargo tree` then add.
+
+* Tests (TDD, before impl)
+
+- `crates/pi-code-engine/src/buffer.rs` `#[cfg(test)]`:
+  - `concurrent_opens_distinct_paths_do_not_block`: 16 threads each open a unique path (write temp files); measure that wall time < 16 × per-open latency with a generous factor. Smoke-style — see testing guidance note below.
+  - `concurrent_opens_same_path_return_same_arc`: 16 threads open the same path; assert all receive an `Arc::ptr_eq` Arc.
+  - `concurrent_close_and_open_is_consistent`: close a path while another thread opens it; final state is a valid buffer.
+
+NB (testing guidance): the timing test is intentionally a "contention smoke" — narrower tests would not catch the false-serialisation regression. Document this in the test body.
+
+* Implementation
+
+** Adopt DashMap
+:PROPERTIES:
+:CUSTOM_ID: FEAT-571-bufferregistry-sharded-concurrency-frien::dashmap-swap
+:END:
+
+- File: `crates/pi-code-engine/Cargo.toml` — `dashmap = "6"` (pin current major).
+- File: `crates/pi-code-engine/src/buffer.rs`:
+  - `pub struct BufferRegistry { buffers: DashMap<PathBuf, Arc<Mutex<CodeBuffer>>>, registry: Arc<LanguageRegistry>, watcher: Option<FileWatcher> }` (post-FEAT-569 the watcher field exists; if FEAT-569 lands later, just DashMap for now).
+  - `open`: use `DashMap::entry(path).or_try_insert_with(|| CodeBuffer::open(path, …).map(|b| Arc::new(Mutex::new(b))))` pattern via DashMap's `entry` API (holds only the shard lock).
+  - `get` unchanged in signature but reads via DashMap's lock-free `get`.
+  - `list` iterates DashMap's iterator.
+  - `close` calls `DashMap::remove`.
+
+** Ensure thread-safety of new code paths
+:PROPERTIES:
+:CUSTOM_ID: FEAT-571-bufferregistry-sharded-concurrency-frien::thread-safety-audit
+:DEPENDS: FEAT-571-bufferregistry-sharded-concurrency-frien::dashmap-swap
+:END:
+
+- Audit: BUG-279 revalidation uses write-lock; re-express as a DashMap `entry` with `remove_if` in a single shard-local critical section.
+- FEAT-569 watcher dirty set remains independent (read-locked HashSet behind RwLock is fine for now).
+
+** Bench smoke
+:PROPERTIES:
+:CUSTOM_ID: FEAT-571-bufferregistry-sharded-concurrency-frien::bench-smoke
+:DEPENDS: FEAT-571-bufferregistry-sharded-concurrency-frien::thread-safety-audit
+:END:
+
+- File: `crates/pi-code-engine/src/buffer.rs` `#[cfg(test)] #[ignore]` microbenchmark: 64 threads × 1024 opens distinct paths; report wall time. Not run in CI; executed manually with `cargo test -- --ignored`.
+
+* Edge cases
+
+- `DashMap::entry` + inner `Arc<Mutex<CodeBuffer>>`: never hold a DashMap shard guard across a `CodeBuffer::open` disk I/O — measure byte reads FIRST, then insert inside the entry closure.
+- Deadlock avoidance: do NOT acquire a `CodeBuffer` mutex while holding a DashMap shard lock; release the shard lock before locking the inner mutex.
+- Iterator invalidation: `list()` clones snapshots (already the case today).
+
+* Acceptance criteria
+
+- `cargo test -p pi-code-engine buffer::tests::concurrent_opens_distinct_paths_do_not_block` green.
+- `cargo test -p pi-code-engine` fully green.
+- `bun check:rs` clean.
+- Manual: dispatching 20 `task` subagents that each `code read` a distinct file no longer shows registry-lock contention under `RUST_LOG=pi_code_engine=debug`.
+
+* Verification
+
+- Manual: `cargo test -p pi-code-engine -- --ignored concurrent_opens_bench_smoke` shows throughput > 2× the previous RwLock-based baseline.

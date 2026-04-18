@@ -35,8 +35,9 @@ pub fn drag_node(
 	buffer: &CodeBuffer,
 	line: usize,
 	direction: DragDirection,
+	within: Option<(usize, usize)>,
 ) -> Result<Vec<TextEdit>> {
-	let node = node_at_line(buffer, line)?;
+	let node = node_at_line(buffer, line, within)?;
 	let parent = node
 		.parent()
 		.ok_or_else(|| CodeEngineError::Edit(format!("No node found at line {line}")))?;

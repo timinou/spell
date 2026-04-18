@@ -15,25 +15,6 @@ function countByState(tickets: ManifestTicket[]): Map<string, number> {
 	return counts;
 }
 
-function countByPriority(tickets: ManifestTicket[]): Map<string, number> {
-	const counts = new Map<string, number>();
-	for (const t of tickets) {
-		const p = t.priority ?? "none";
-		counts.set(p, (counts.get(p) ?? 0) + 1);
-	}
-	return counts;
-}
-
-function sumEffortHours(tickets: ManifestTicket[]): number {
-	let total = 0;
-	for (const t of tickets) {
-		if (!t.effort) continue;
-		const match = /^(\d+(?:\.\d+)?)\s*h$/i.exec(t.effort.trim());
-		if (match) total += Number.parseFloat(match[1]);
-	}
-	return total;
-}
-
 function computeMaxDepth(edges: Array<{ from: string; to: string }>): number {
 	if (edges.length === 0) return 0;
 
@@ -84,24 +65,12 @@ export function renderManifestSummary(manifest: ManifestSnapshot): string {
 	const hold = states.get("HOLD") ?? 0;
 	const remaining = tickets.length - done - active - blocked - hold;
 
-	const priorities = countByPriority(tickets);
-	const prioEntries: string[] = [];
-	for (const p of ["#A", "#B", "#C"]) {
-		const c = priorities.get(p);
-		if (c) prioEntries.push(`${p}(${c})`);
-	}
-	const noPrio = priorities.get("none");
-	if (noPrio) prioEntries.push(`unset(${noPrio})`);
-
-	const effort = sumEffortHours(tickets);
-	const effortStr = effort > 0 ? `~${effort}h` : "unestimated";
-
 	const edgeCount = manifest.dependencyEdges.length;
 	const maxDepth = computeMaxDepth(manifest.dependencyEdges);
 
 	const lines = [
 		`Manifest v${manifest.version} | ${tickets.length} tickets | ${done} done | ${active} active | ${blocked} blocked | ${remaining} remaining`,
-		`Priority: ${prioEntries.length > 0 ? prioEntries.join(" ") : "none set"} | Effort: ${effortStr}`,
+		`Layers: ${new Set(tickets.map(ticket => ticket.layer).filter(Boolean)).size || 0} annotated`,
 		`Dependencies: ${edgeCount} edges, max depth ${maxDepth}`,
 	];
 	return lines.join("\n");
@@ -221,7 +190,6 @@ export function renderManifestDiff(previous: ManifestSnapshot, current: Manifest
 
 		const changes: string[] = [];
 		if (prev.state !== t.state) changes.push(`state ${prev.state} -> ${t.state}`);
-		if (prev.priority !== t.priority) changes.push(`priority ${prev.priority ?? "none"} -> ${t.priority ?? "none"}`);
 
 		if (changes.length > 0) {
 			lines.push(`  ~ ${truncateId(t.id)}: ${changes.join(", ")}`);
@@ -233,7 +201,7 @@ export function renderManifestDiff(previous: ManifestSnapshot, current: Manifest
 	for (const t of current.tickets) {
 		const prev = prevMap.get(t.id);
 		if (!prev) continue;
-		if (prev.state === t.state && prev.priority === t.priority) {
+		if (prev.state === t.state) {
 			lines.push(`  = ${truncateId(t.id)} [${t.state}] (preserved)`);
 		}
 	}

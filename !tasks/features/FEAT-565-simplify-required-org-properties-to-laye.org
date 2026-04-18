@@ -1,0 +1,215 @@
+#+TITLE: Simplify required org properties to LAYER only
+#+STATE: DOING
+#+SESSION_ID: 14bf5fdd01b87f1c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-11-46-694Z_14bf5fdd01b87f1c.jsonl]]
+#+CUSTOM_ID: FEAT-565-simplify-required-org-properties-to-laye
+#+DEPENDS: FEAT-564-org-suboutline-namespace-resilience
+#+EFFORT: 4h
+#+LAYER: packages/org
+#+PRIORITY: #A
+
+* Initial Message
+
+use jq to find the recurring reasons why ExitPlanMode fails then explain what you will improve to the system to prevent these errors from happening
+
+* Scope
+
+In: purge EFFORT and PRIORITY from the required-property set; make LAYER the
+only hard requirement on tasks-category items (features/bugs/projects/
+followups/audits); keep DEPENDS as recommended; update all schema,
+validation, writers, tests, prompts, and fixtures that currently require
+EFFORT or PRIORITY.
+
+Out: mass-editing of existing on-disk `.org` task files under `!tasks/`
+(they already have EFFORT/PRIORITY; both become valid-but-ignored and are
+not stripped by this change). Do NOT remove the `Effort` enum from
+`packages/ai` — that is thinking-level, unrelated.
+
+* Background
+
+User decision: EFFORT and PRIORITY carry no planning value in this repo
+anymore; they forced agents to fabricate values and account for 7/46
+exit_plan_mode failures (`missing-child-properties`). LAYER is semantically
+meaningful (drives task-policy gate injection) and must stay required.
+DEPENDS is the real scheduling primitive and is encouraged but not forced.
+
+* Existing patterns
+
+- `packages/org/src/schema/defaults.ts` — `REQUIRED_PROPERTIES`,
+  `EFFORT_REGEXP`, `PRIORITY_REGEXP`.
+- `packages/org/src/tool.ts` — `cmdValidate` enforces EFFORT/PRIORITY
+  formats.
+- `packages/coding-agent/src/plan-mode/plan-validation.ts:198-200` —
+  `missing-child-properties` issue pushes EFFORT/PRIORITY/LAYER.
+- `packages/coding-agent/src/loop/ingestion/org-depend.ts:165` — reads
+  `EFFORT` into ticket shape.
+- `packages/coding-agent/src/loop/persistence/manifest-reader.ts:82-83`,
+  `manifest-writer.ts:11-12` — read/write EFFORT/PRIORITY on tickets.
+- `packages/coding-agent/src/loop/persistence/org-sync.ts:28-29` — stamps
+  `#+EFFORT: 1h` `#+PRIORITY: #B` on generated loop files.
+- `packages/coding-agent/src/modes/interactive-mode.ts:855` — default
+  plan-item template includes EFFORT/PRIORITY.
+- `packages/coding-agent/src/prompts/system/plan-mode-active.md:90` —
+  `- include EFFORT, PRIORITY, LAYER` — agent-facing required list.
+- `packages/coding-agent/src/loop/prompts/manifest-building-active.md:43-44`
+  — mentions `:EFFORT:` `:PRIORITY:` in manifest-building prompt.
+- `packages/coding-agent/!tasks/reference.org:26-27` — doc with EFFORT/
+  PRIORITY.
+
+* Tests (TDD, before impl)
+
+- `packages/org/test/schema-defaults.test.ts` (new):
+  - `REQUIRED_PROPERTIES` contains only `CUSTOM_ID`.
+  - `RECOMMENDED_PROPERTIES` contains `LAYER`, `DEPENDS` and no longer
+    duplicates them under required.
+- `packages/org/test/tool-validate.test.ts` (new or amend existing
+  `tool-commands.test.ts`):
+  - Validation passes on a task item that has `CUSTOM_ID` and `LAYER` but
+    no `EFFORT` / `PRIORITY`.
+  - Validation still errors on missing `CUSTOM_ID`.
+  - Malformed EFFORT or PRIORITY no longer produces warnings (those checks
+    are removed from `cmdValidate`).
+- `packages/coding-agent/test/plan-mode/plan-validation-layer-only.test.ts`
+  (new):
+  - PLAN with children missing EFFORT/PRIORITY but having LAYER validates
+    clean.
+  - PLAN with any child missing LAYER emits `missing-child-properties` with
+    only `LAYER` in `missing:` list.
+- `packages/coding-agent/test/tools/exit-plan-mode.test.ts`: update fixtures
+  to drop EFFORT/PRIORITY; keep LAYER; assert still passes.
+- `packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts`:
+  remove `/EFFORT.*PRIORITY.*LAYER/` regex, replace with `/LAYER/`.
+- `packages/coding-agent/test/loop/persistence.test.ts`: drop EFFORT/
+  PRIORITY from written org snapshot; add LAYER retention test.
+- `packages/coding-agent/test/org-output.test.ts`: drop EFFORT/PRIORITY
+  expectations.
+
+* Implementation
+
+** Update schema defaults
+:PROPERTIES:
+:CUSTOM_ID: FEAT-565-simplify-required-org-properties-to-laye::schema-defaults
+:END:
+
+- File: `packages/org/src/schema/defaults.ts`
+- `REQUIRED_PROPERTIES = ["CUSTOM_ID"] as const`
+- Move `LAYER` and `DEPENDS` to `RECOMMENDED_PROPERTIES` (LAYER already
+  there; ensure DEPENDS present).
+- Delete `EFFORT_REGEXP`, `PRIORITY_REGEXP` exports AND their imports.
+- If any downstream code still imports them, see
+  FEAT-565-simplify-required-org-properties-to-laye::strip-validation.
+
+** Strip EFFORT/PRIORITY validation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-565-simplify-required-org-properties-to-laye::strip-validation
+:DEPENDS: FEAT-565-simplify-required-org-properties-to-laye::schema-defaults
+:END:
+
+- File: `packages/org/src/tool.ts`
+- Remove `EFFORT_REGEXP`, `PRIORITY_REGEXP` imports + the two `if`
+  validation blocks inside `cmdValidate`.
+- Keep the required-property loop (now just CUSTOM_ID).
+
+** Update plan-validation to require LAYER only
+:PROPERTIES:
+:CUSTOM_ID: FEAT-565-simplify-required-org-properties-to-laye::plan-validation
+:DEPENDS: FEAT-565-simplify-required-org-properties-to-laye::strip-validation
+:END:
+
+- File: `packages/coding-agent/src/plan-mode/plan-validation.ts`
+- In the `missing-child-properties` check, remove EFFORT and PRIORITY
+  lines. Keep LAYER.
+- Update the issue `message` from "Set EFFORT, PRIORITY, and LAYER on all
+  child items before exiting." to "Set LAYER on all child items before
+  exiting. DEPENDS is recommended for dependency-linked items."
+
+** Purge loop/ingestion + persistence
+:PROPERTIES:
+:CUSTOM_ID: FEAT-565-simplify-required-org-properties-to-laye::loop-purge
+:DEPENDS: FEAT-565-simplify-required-org-properties-to-laye::strip-validation
+:END:
+
+- File: `packages/coding-agent/src/loop/ingestion/org-depend.ts`
+- Drop the EFFORT field from the parsed ticket type and the
+  `extractProperty("EFFORT")` call (and PRIORITY equivalent if present).
+- File: `packages/coding-agent/src/loop/persistence/manifest-reader.ts` —
+  remove `effort: props.EFFORT` + `priority: props.PRIORITY`.
+- File: `packages/coding-agent/src/loop/persistence/manifest-writer.ts` —
+  remove the two `:EFFORT:` / `:PRIORITY:` push lines.
+- File: `packages/coding-agent/src/loop/persistence/org-sync.ts` — remove
+  `"#+EFFORT: 1h"` and `"#+PRIORITY: #B"` from stamped header lines.
+- Search: `rg '\b(effort|priority)\b' packages/coding-agent/src/loop` and
+  remove every reference that is org-property-related. Update any Ticket
+  interface in `packages/coding-agent/src/loop/persistence/types.ts`.
+
+** Purge interactive-mode template
+:PROPERTIES:
+:CUSTOM_ID: FEAT-565-simplify-required-org-properties-to-laye::interactive-template
+:DEPENDS: FEAT-565-simplify-required-org-properties-to-laye::plan-validation
+:END:
+
+- File: `packages/coding-agent/src/modes/interactive-mode.ts:855`
+- Default plan template `properties: { EFFORT: "1h", PRIORITY: "#B", LAYER:
+  "coding-agent" }` → `properties: { LAYER: "coding-agent" }`.
+
+** Update prompts (header mention only; full rewrite in N4)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-565-simplify-required-org-properties-to-laye::prompt-patch
+:DEPENDS: FEAT-565-simplify-required-org-properties-to-laye::plan-validation
+:END:
+
+- File: `packages/coding-agent/src/prompts/system/plan-mode-active.md:90`
+- `- include EFFORT, PRIORITY, LAYER` →
+  `- include LAYER (required); set DEPENDS when the item has inter-item
+    dependencies`
+- File: `packages/coding-agent/src/loop/prompts/manifest-building-active.md:
+  43-44` — remove `:EFFORT:` / `:PRIORITY:` bullets.
+- File: `packages/coding-agent/!tasks/reference.org:26-27` — drop EFFORT/
+  PRIORITY rows.
+
+** Test cleanup
+:PROPERTIES:
+:CUSTOM_ID: FEAT-565-simplify-required-org-properties-to-laye::test-cleanup
+:DEPENDS: FEAT-565-simplify-required-org-properties-to-laye::interactive-template
+:END:
+
+- Files: `packages/coding-agent/test/tools/exit-plan-mode.test.ts`,
+  `exit-plan-mode-validation.test.ts`,
+  `packages/coding-agent/test/plan-mode/org-plan.test.ts`,
+  `packages/coding-agent/test/org-output.test.ts`,
+  `packages/coding-agent/test/loop/persistence.test.ts`,
+  `manifest-model.test.ts`, `manifest-prompts.test.ts`,
+  `org-depend-parser.test.ts`.
+- Strip EFFORT/PRIORITY from fixture strings. Where tests were asserting
+  `:EFFORT:` / `:PRIORITY:` output, delete those assertions.
+
+* Edge cases
+
+- Existing on-disk org items with EFFORT/PRIORITY: still parse fine (no
+  schema-side rejection), values pass through readers as `undefined` on
+  the ticket. No migration required.
+- `.spell/config.yml` repos that explicitly set
+  `requiredProperties: [..., EFFORT, PRIORITY]`: honor their override
+  (since `requiredProperties` is per-config). No auto-downgrade.
+- Category-specific required-property overrides (e.g. `audits` require
+  CUSTOM_ID + EFFORT): inspect
+  `packages/org/test/categories.test.ts:23` — this fixture explicitly
+  overrides. Leave the override-mechanism intact; only default changes.
+
+* Acceptance criteria
+
+- `rg --fixed-strings 'EFFORT' packages/org/src packages/coding-agent/src`
+  returns only unrelated-thinking-level `EFFORT`-named constants
+  (`THINKING_EFFORTS`, `Effort` enum, `EFFORT_LEVELS`).
+- Same for `PRIORITY` (only render-label or enum-level `PRIORITY_INFO`,
+  `PRIORITY_LABELS`, `PRIORITY` discovery-priority constants remain).
+- All listed tests pass.
+- `bun check` clean.
+
+* Verification
+
+- `bun check:ts` then `bun test packages/org packages/coding-agent/test/
+  plan-mode packages/coding-agent/test/tools/exit-plan-mode-validation.test
+  .ts` green.
+- Manual: create a FEAT with only `LAYER` — `org validate` emits no
+  errors, no warnings.

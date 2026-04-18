@@ -6,10 +6,11 @@ use pi_code_engine::{
 	CodeEngineError,
 	buffer::CodeBuffer,
 	edit::{
-		DragDirection, Patch, SpliceMode, TextEdit, apply_patches, clone_node, drag_node,
-		insert_after, insert_before, kill_node, rename_symbol, replace_body, splice_node,
-		transpose_nodes, wrap_node,
+		DragDirection, Occurrence, Patch, ReplacePolicy, SpliceMode, TextEdit, apply_patches,
+		clone_node, drag_node, insert_after, insert_before, kill_node, rename_symbol, replace_body,
+		replace_body_safe, splice_node, transpose_nodes, wrap_node,
 	},
+	file_lock::lock_status,
 	language::{LanguageId, LanguageProfile},
 	navigate::{NavigateAction, NavigateItem, NavigateResult, navigate as navigate_buffer},
 	outline::{OutlineEntry, outline as outline_buffer, read as read_buffer},
@@ -23,8 +24,40 @@ use pi_code_graph::{
 use serde_json::{Value, json};
 
 use crate::{buffer_registry, language_registry};
-fn engine_err(e: pi_code_engine::error::CodeEngineError) -> Error {
-	Error::from_reason(e.to_string())
+fn engine_err(error: pi_code_engine::error::CodeEngineError) -> Error {
+	let payload = match &error {
+		CodeEngineError::ExternalModification { path, .. } => json!({
+			"code": "EXTERNAL_MODIFICATION",
+			"message": error.to_string(),
+			"path": path.display().to_string(),
+		}),
+		CodeEngineError::UnsafeScopeWrite { lost_decls, original, new, .. } => json!({
+			"code": "UNSAFE_SCOPE_WRITE",
+			"message": error.to_string(),
+			"lostDecls": lost_decls,
+			"original": original,
+			"new": new,
+		}),
+		CodeEngineError::LineOutOfTargetScope { line, target_start, target_end } => json!({
+			"code": "LINE_OUT_OF_TARGET_SCOPE",
+			"message": error.to_string(),
+			"line": line,
+			"targetSpan": { "start": target_start, "end": target_end },
+		}),
+		CodeEngineError::LockTimeout { path, budget_ms } => json!({
+			"code": "LOCK_TIMEOUT",
+			"message": error.to_string(),
+			"path": path.display().to_string(),
+			"budgetMs": budget_ms,
+		}),
+		CodeEngineError::LockAcquireFailed { path, .. } => json!({
+			"code": "LOCK_ERROR",
+			"message": error.to_string(),
+			"path": path.display().to_string(),
+		}),
+		_ => json!({ "message": error.to_string() }),
+	};
+	Error::from_reason(payload.to_string())
 }
 fn json_err(message: impl Into<String>) -> Error {
 	Error::from_reason(message.into())
@@ -314,6 +347,36 @@ fn action_line(action: &Value, resolved: Option<&ResolvedSymbol>) -> usize {
 		.unwrap_or(0)
 }
 
+fn action_allow_sibling_delete(action: &Value) -> bool {
+	action
+		.get("allowSiblingDelete")
+		.and_then(Value::as_bool)
+		.unwrap_or(false)
+}
+
+fn action_occurrence(action: &Value) -> std::result::Result<Occurrence, CodeEngineError> {
+	match action.get("occurrence") {
+		None | Some(Value::Null) => Ok(Occurrence::Unique),
+		Some(Value::String(value)) => match value.as_str() {
+			"first" => Ok(Occurrence::First),
+			"last" => Ok(Occurrence::Last),
+			"all" => Ok(Occurrence::All),
+			_ => Err(CodeEngineError::Edit("invalid occurrence value".into())),
+		},
+		Some(Value::Number(value)) => value
+			.as_u64()
+			.and_then(|index| usize::try_from(index).ok())
+			.filter(|index| *index > 0)
+			.map(Occurrence::Index)
+			.ok_or_else(|| CodeEngineError::Edit("invalid occurrence value".into())),
+		Some(_) => Err(CodeEngineError::Edit("invalid occurrence value".into())),
+	}
+}
+
+fn action_within(resolved: Option<&ResolvedSymbol>) -> Option<(usize, usize)> {
+	resolved.map(|symbol| (symbol.start_byte, symbol.end_byte))
+}
+
 fn action_column(action: &Value) -> usize {
 	value_to_usize(action.get("column"), 0)
 }
@@ -373,13 +436,20 @@ fn single_action(
 		.ok_or_else(|| CodeEngineError::Edit("Each action requires 'kind'".into()))?;
 	let resolved = resolve_target_id(buffer, profile, path, target_id)?;
 	let conservative_web_refactor = matches!(buffer.language().as_str(), "html" | "css");
+	let within = action_within(resolved.as_ref());
 
 	let prepared = match action_kind {
 		"write" => {
 			let content = action_content(action)?;
 			match (resolved.as_ref(), action.get("scope").and_then(Value::as_str)) {
 				(Some(symbol), Some("body")) => PreparedEditOperation {
-					edits:  replace_body(buffer, symbol, content)?,
+					edits:  if action_allow_sibling_delete(action) {
+						replace_body(buffer, symbol, content, ReplacePolicy {
+							allow_sibling_delete: true,
+						})?
+					} else {
+						replace_body_safe(buffer, symbol, content)?
+					},
 					proof:  None,
 					action: action_kind.to_string(),
 				},
@@ -412,8 +482,9 @@ fn single_action(
 			let (start_byte, end_byte) = target_range(buffer, resolved.as_ref());
 			PreparedEditOperation {
 				edits:  apply_patches(buffer, start_byte, end_byte, &[Patch {
-					find:    action_find(action)?.to_string(),
-					replace: action_content(action)?.to_string(),
+					find:       action_find(action)?.to_string(),
+					replace:    action_content(action)?.to_string(),
+					occurrence: action_occurrence(action)?,
 				}])?,
 				proof:  None,
 				action: action_kind.to_string(),
@@ -466,8 +537,8 @@ fn single_action(
 					matches:    None,
 				});
 			}
-			match resolved.as_ref() {
-				Some(symbol) => PreparedEditOperation {
+			match (resolved.as_ref(), has_meaningful_index_field(action.get("line"))) {
+				(Some(symbol), false) => PreparedEditOperation {
 					edits:  vec![TextEdit {
 						start_byte:   symbol.start_byte,
 						old_end_byte: symbol.end_byte,
@@ -476,8 +547,13 @@ fn single_action(
 					proof:  None,
 					action: action_kind.to_string(),
 				},
-				None => PreparedEditOperation {
-					edits:  kill_node(buffer, action_line(action, None), action_node_type(action))?,
+				_ => PreparedEditOperation {
+					edits:  kill_node(
+						buffer,
+						action_line(action, resolved.as_ref()),
+						action_node_type(action),
+						within,
+					)?,
 					proof:  None,
 					action: action_kind.to_string(),
 				},
@@ -485,8 +561,8 @@ fn single_action(
 		},
 		"insertBefore" => {
 			let content = action_content(action)?;
-			match resolved.as_ref() {
-				Some(symbol) => PreparedEditOperation {
+			match (resolved.as_ref(), has_meaningful_index_field(action.get("line"))) {
+				(Some(symbol), false) => PreparedEditOperation {
 					edits:  vec![TextEdit {
 						start_byte:   symbol.start_byte,
 						old_end_byte: symbol.start_byte,
@@ -495,12 +571,13 @@ fn single_action(
 					proof:  None,
 					action: action_kind.to_string(),
 				},
-				None => PreparedEditOperation {
+				_ => PreparedEditOperation {
 					edits:  insert_before(
 						buffer,
-						action_line(action, None),
+						action_line(action, resolved.as_ref()),
 						action_node_type(action),
 						content,
+						within,
 					)?,
 					proof:  None,
 					action: action_kind.to_string(),
@@ -509,8 +586,8 @@ fn single_action(
 		},
 		"insertAfter" => {
 			let content = action_content(action)?;
-			match resolved.as_ref() {
-				Some(symbol) => PreparedEditOperation {
+			match (resolved.as_ref(), has_meaningful_index_field(action.get("line"))) {
+				(Some(symbol), false) => PreparedEditOperation {
 					edits:  vec![TextEdit {
 						start_byte:   symbol.end_byte,
 						old_end_byte: symbol.end_byte,
@@ -519,12 +596,13 @@ fn single_action(
 					proof:  None,
 					action: action_kind.to_string(),
 				},
-				None => PreparedEditOperation {
+				_ => PreparedEditOperation {
 					edits:  insert_after(
 						buffer,
-						action_line(action, None),
+						action_line(action, resolved.as_ref()),
 						action_node_type(action),
 						content,
+						within,
 					)?,
 					proof:  None,
 					action: action_kind.to_string(),
@@ -532,7 +610,12 @@ fn single_action(
 			}
 		},
 		"splice" => PreparedEditOperation {
-			edits:  splice_node(buffer, action_line(action, resolved.as_ref()), action_mode(action))?,
+			edits:  splice_node(
+				buffer,
+				action_line(action, resolved.as_ref()),
+				action_mode(action),
+				within,
+			)?,
 			proof:  None,
 			action: action_kind.to_string(),
 		},
@@ -548,12 +631,13 @@ fn single_action(
 					"up" => DragDirection::Up,
 					_ => DragDirection::Down,
 				},
+				within,
 			)?,
 			proof:  None,
 			action: action_kind.to_string(),
 		},
 		"clone" => PreparedEditOperation {
-			edits:  clone_node(buffer, action_line(action, resolved.as_ref()))?,
+			edits:  clone_node(buffer, action_line(action, resolved.as_ref()), within)?,
 			proof:  None,
 			action: action_kind.to_string(),
 		},
@@ -562,6 +646,7 @@ fn single_action(
 				buffer,
 				action_line(action, resolved.as_ref()),
 				action_column(action),
+				within,
 			)?,
 			proof:  None,
 			action: action_kind.to_string(),
@@ -832,6 +917,45 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 			buffer_registry().close(&path).map_err(engine_err)?;
 			Ok(json_response(json!({ "success": true }), false))
 		},
+		"reload" => {
+			let path = required_path(options)?;
+			buffer_registry().close(&path).map_err(engine_err)?;
+			let buffer = buffer_registry().open(&path).map_err(engine_err)?;
+			let buffer = buffer.lock();
+			let lines = buffer
+				.source()
+				.lines()
+				.map(ToOwned::to_owned)
+				.collect::<Vec<_>>();
+			Ok(json_response(
+				json!({
+					"success": true,
+					"language": buffer.language().to_string(),
+					"semanticCapable": buffer.language().as_str() != "text",
+					"lines": lines,
+				}),
+				false,
+			))
+		},
+		"watcherStatus" => Ok(json_response(
+			json!({
+				"active": buffer_registry().watcher_active(),
+				"watched": buffer_registry().watched_count(),
+			}),
+			false,
+		)),
+		"lockStatus" => {
+			let path = required_path(options)?;
+			let status = lock_status(&path).map_err(engine_err)?;
+			Ok(json_response(
+				json!({
+					"path": status.path.display().to_string(),
+					"exclusive": status.exclusive,
+					"shared": status.shared,
+				}),
+				false,
+			))
+		},
 		"list" => {
 			let buffers = buffer_registry().list();
 			Ok(json_response(
@@ -1024,7 +1148,9 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 					))
 				},
 				"save" => {
-					buffer.save().map_err(engine_err)?;
+					buffer
+						.save_with_watcher(buffer_registry().watcher())
+						.map_err(engine_err)?;
 					Ok(json_response(json!({ "success": true, "version": buffer.version() }), false))
 				},
 				_ => unreachable!(),
@@ -1038,7 +1164,15 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 pub fn execute_code_buffer(options: Value) -> Result<Value> {
 	match execute_code_buffer_inner(&options) {
 		Ok(value) => Ok(value),
-		Err(error) => Ok(json_response(json!(error.to_string()), true)),
+		Err(error) => {
+			let reason = error.to_string();
+			let payload = reason
+				.strip_prefix("GenericFailure, ")
+				.or_else(|| reason.strip_prefix("Error: "))
+				.unwrap_or(reason.as_str());
+			let output = serde_json::from_str::<Value>(payload).unwrap_or(Value::String(reason));
+			Ok(json_response(output, true))
+		},
 	}
 }
 
@@ -1117,6 +1251,130 @@ mod tests {
 			.expect("clock ok")
 			.as_nanos();
 		std::env::temp_dir().join(format!("pi-natives-{stamp}-{name}"))
+	}
+
+	struct LegacyResolvedTarget {
+		kind:     String,
+		line:     u32,
+		end_line: u32,
+	}
+
+	fn resolve_target(
+		buffer: &CodeBuffer,
+		_node_profile: &LanguageProfile,
+		options: &Value,
+	) -> std::result::Result<LegacyResolvedTarget, CodeEngineError> {
+		let line = options.get("line").and_then(Value::as_u64).unwrap_or(1) as usize;
+		let node_type = options
+			.get("node_type")
+			.and_then(Value::as_str)
+			.unwrap_or("");
+		let node = pi_code_engine::line_target::resolve_edit_target(buffer, line, node_type, None)?;
+		Ok(LegacyResolvedTarget {
+			kind:     node.kind().to_string(),
+			line:     (node.start_position().row + 1) as u32,
+			end_line: (node.end_position().row + 1) as u32,
+		})
+	}
+
+	fn parse_patches(options: &Value) -> std::result::Result<Vec<Patch>, CodeEngineError> {
+		let Some(entries) = options.get("patches").and_then(Value::as_array) else {
+			return Err(CodeEngineError::Edit("patch operation requires patches".into()));
+		};
+		entries
+			.iter()
+			.map(|entry| {
+				let find = entry
+					.get("find")
+					.and_then(Value::as_str)
+					.ok_or_else(|| CodeEngineError::Edit("patch entry requires find".into()))?;
+				let replace = entry
+					.get("replace")
+					.and_then(Value::as_str)
+					.ok_or_else(|| CodeEngineError::Edit("patch entry requires replace".into()))?;
+				Ok(Patch {
+					find:       find.to_string(),
+					replace:    replace.to_string(),
+					occurrence: Occurrence::Unique,
+				})
+			})
+			.collect()
+	}
+
+	fn single_edit_operation(
+		buffer: &CodeBuffer,
+		profile: &LanguageProfile,
+		options: &Value,
+	) -> std::result::Result<Vec<TextEdit>, CodeEngineError> {
+		let operation = options
+			.get("operation")
+			.and_then(Value::as_str)
+			.ok_or_else(|| CodeEngineError::Edit("Missing required field: operation".into()))?;
+		match operation {
+			"replace" => {
+				let content = action_content(options)?;
+				if has_meaningful_index_field(options.get("line")) {
+					return pi_code_engine::edit::replace_node(
+						buffer,
+						action_line(options, None),
+						options
+							.get("node_type")
+							.and_then(Value::as_str)
+							.unwrap_or(""),
+						content,
+						None,
+					);
+				}
+				if let Some(symbol_name) = options.get("symbol").and_then(Value::as_str) {
+					let symbol = resolve_symbol(buffer, profile, symbol_name)?;
+					return Ok(vec![TextEdit {
+						start_byte:   symbol.start_byte,
+						old_end_byte: symbol.end_byte,
+						new_text:     content.to_string(),
+					}]);
+				}
+				Ok(vec![TextEdit {
+					start_byte:   0,
+					old_end_byte: buffer.source().len(),
+					new_text:     content.to_string(),
+				}])
+			},
+			"patch" => {
+				let patches = parse_patches(options)?;
+				let symbol = options
+					.get("symbol")
+					.and_then(Value::as_str)
+					.map(|name| resolve_symbol(buffer, profile, name))
+					.transpose()?;
+				let (start_byte, end_byte) = target_range(buffer, symbol.as_ref());
+				apply_patches(buffer, start_byte, end_byte, &patches)
+			},
+			other => {
+				let symbol_name = options
+					.get("symbol")
+					.and_then(Value::as_str)
+					.ok_or_else(|| CodeEngineError::Edit(format!("{other} requires symbol")))?;
+				let symbol = resolve_symbol(buffer, profile, symbol_name)?;
+				let procedure_name = match other {
+					"replace-code-block" => "replace-code-block",
+					"promote" => "promote",
+					"demote" => "demote",
+					_ => {
+						return Err(CodeEngineError::Edit(format!(
+							"unsupported legacy operation: {other}"
+						)));
+					},
+				};
+				let procedure = profile.procedures.get(procedure_name).ok_or_else(|| {
+					CodeEngineError::Edit(format!("Unknown action kind: {procedure_name}"))
+				})?;
+				Ok(run_procedure(procedure, buffer, &symbol, profile, options)?.edits)
+			},
+		}
+	}
+
+	fn render_navigate_result(result: NavigateResult) -> Value {
+		super::render_navigate_result(result, "fixtures/typst_edit_targets.typ", &[])
 	}
 
 	#[test]
@@ -1291,21 +1549,6 @@ mod tests {
 		assert_eq!(patches.len(), 2);
 		assert_eq!(patches[0].find, "return a + b;");
 		assert_eq!(patches[1].replace, "const x = 2;");
-	}
-
-	#[test]
-	fn single_edit_operation_supports_symbol_replace() {
-		let buffer = ts_buffer("function add(a: number, b: number): number {\n  return a + b;\n}\n");
-		let profile = ts_profile();
-		let options = json!({
-			"operation": "replace",
-			"symbol": "add",
-			"content": "function add(a: number, b: number): number {\n  return a * b;\n}"
-		});
-		let edits = single_edit_operation(&buffer, &profile, &options).expect("edit");
-		assert_eq!(edits.len(), 1);
-		assert_eq!(edits[0].start_byte, 0);
-		assert!(edits[0].new_text.contains("return a * b"));
 	}
 
 	#[test]

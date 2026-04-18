@@ -1,0 +1,131 @@
+#+TITLE: CODE_EDIT_ROBUSTNESS_AND_CONCURRENCY
+#+STATE: DOING
+#+SESSION_ID: 14bf73993e0afdc4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-38-00-184Z_14bf73993e0afdc4.jsonl]]
+#+CUSTOM_ID: PLAN-249-code-edit-robustness-and-concurrency
+#+EFFORT: 20h
+#+LAYER: crates/pi-code-engine crates/pi-natives coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+this is user feedback:
+
+"""
+so is the code edit tool working reliably?
+
+
+ Mixed. My direct calls work — findAndReplace with explicit multi-line find/content arrays and file-scope write actions land cleanly. But the
+ tool has concrete pitfalls and the subagents hit harder failures than I have:
+
+ - Subagent failures (real)
+     - 2 of 4 wave-1 subagents aborted citing "buffer freshness I/O errors" on ast_edit / code edit for Elixir
+     - BUG-130 subagent's write-scope action silently truncated collections_section.ex at line 72 (lost 213 lines of template). I had to
+ reconstruct from git.
+     - FEAT-212 subagent gave up entirely before attempting edits
+ - Direct-use pitfalls I tripped over
+     - insertBefore { line: 52 } anchored to file line 52 but placed the block outside the module at file-top → compile error, required cleanup
+     - findAndReplace with a duplicated snippet (two VectorRetriever.search(…, visibility: visibility) lines) returns ambiguous-match error, no
+ fallback
+     - First search_single rewrite needed multi-pass because I couldn't replace within a single targeted function node; had to pivot to
+ whole-module findAndReplace
+ - What does work reliably for me
+     - Whole-file {kind: "write"} on a targeted path (used for collections_section.ex and vector_retriever.ex rewrite)
+     - findAndReplace when find is unique in scope
+     - outline for navigation
+
+ Net: usable for focused edits but not robust enough to hand a subagent an open-ended "implement this 100-line feature" assignment without it
+ either aborting or silently destroying content. That's why I pulled FEAT-214 back in-house and am running the subagents only for scoped,
+"""
+
+
+Will @!tasks/bugs/BUG-279-bufferregistry-clobbers-external-edits-a.org fix it?
+
+* Context
+
+PLAN-248 wave-1 surfaced multiple classes of `code edit` failures that caused subagents to abort or silently destroy content. BUG-279 (already ITEM) addresses the cache-staleness class (BufferRegistry serves stale ropes and `save()` clobbers external writes). It does NOT address:
+
+- Silent truncation when `write{scope:"body"}` targets an outer declaration whose body contains many sibling decls (PLAN-248: collections_section.ex lost 213 lines).
+- Positional `insertBefore{line}` escaping the `targetId` declaration to land at file-top (PLAN-248: inserted outside the Elixir module).
+- `findAndReplace` hard-failing on >1 match with no selector fallback (PLAN-248: duplicate `VectorRetriever.search(...)` lines).
+
+Beyond bug repair the user's stated direction is:
+1. auto-discover external edits (supersede reactive mtime with a proactive watcher).
+2. play well with other Spell services / processes via OS advisory locks.
+3. be concurrency-friendly within a single session so parallel tool calls do not falsely serialise on the registry map.
+
+This plan orchestrates five new child items plus the pre-existing BUG-279 into four execution waves. Completion gate: a medium-scoped Elixir refactor (~100 lines, real collections_section.ex fixture) dispatched via `task { agent: "quick_task" }` must succeed end-to-end without abort, truncation, or escaped inserts.
+
+Key files the implementation crosses:
+- `crates/pi-code-engine/src/buffer.rs` (registry, CodeBuffer)
+- `crates/pi-code-engine/src/edit/body.rs` (replace_body)
+- `crates/pi-code-engine/src/edit/patch.rs` (apply_patches)
+- `crates/pi-code-engine/src/edit/replace.rs` (insert_before/insert_after)
+- `crates/pi-code-engine/src/line_target.rs` (positional resolution)
+- `crates/pi-code-engine/src/resolve.rs` (ResolvedSymbol, decl counting helper)
+- `crates/pi-code-engine/src/error.rs` (new variants)
+- `crates/pi-code-engine/src/watcher.rs` (new)
+- `crates/pi-code-engine/src/file_lock.rs` (new)
+- `crates/pi-natives/src/code_buffer.rs` (NAPI dispatch)
+- `crates/pi-natives/src/org_buffer.rs` (callers of buffer_registry)
+- `packages/coding-agent/src/tools/code.ts`, `code-result.ts`, `prompts/tools/code.md`
+
+Non-goals (this plan):
+- Restructuring the action schema beyond the targeted additions (`allowSiblingDelete`, `occurrence`).
+- Replacing `Arc<Mutex<CodeBuffer>>` with async locks.
+- Cross-machine coordination.
+- Pushing fs-watcher events to JS/TS clients (future FUP).
+
+Decisions settled during planning:
+1. Size-delta guard is `lost_decls >= 1 AND original_count >= 2`, not raw line count. Rationale: line-count is a proxy for a structural loss; structural count is the truthful signal.
+2. Default `findAndReplace` behavior stays unique-or-fail. `occurrence` is explicit opt-in; matches caller intent and keeps safe-by-default.
+3. `notify`-rs `RecommendedWatcher` with per-path watches, not recursive. Matches the "watch only what is open" principle and avoids inotify quota blowups.
+4. Advisory lock uses `fd-lock` (cross-platform RAII) with 500ms budget on `save`, 100ms on revalidation. Cooperating Spell processes share the contract; non-cooperating external editors continue to rely on the fs-watcher path.
+5. `DashMap` over manual sharded RwLock. Same major-version pin policy as `notify`/`fd-lock`.
+6. Subagent re-enablement is gated behind all five new items + BUG-279 via a live repro fixture.
+
+* Verification
+
+- `cargo test -p pi-code-engine` green including:
+  - `edit::body::tests::replace_body_refuses_large_sibling_deletion_without_opt_in`
+  - `edit::patch::tests::apply_patches_occurrence_*` family
+  - `line_target::tests::resolve_edit_target_respects_ancestor_constraint`
+  - `buffer::tests::concurrent_opens_distinct_paths_do_not_block`
+  - `buffer_watcher` integration
+  - `buffer_multi_process` integration
+- `cargo test -p pi-natives` green including `code_buffer_write_scope_guard`, `code_buffer_positional_scope`, `code_buffer_lock_surface`.
+- `bun test packages/coding-agent/test/tools/code.test.ts` green including contract tests for the new action schema fields and the new error codes (`UNSAFE_SCOPE_WRITE`, `LINE_OUT_OF_TARGET_SCOPE`, `LOCK_TIMEOUT`).
+- `bun check:rs` and `bun check:ts` clean.
+- Live repro gate: re-run the PLAN-248 wave-1 Elixir refactor against `collections_section.ex` (or an equivalent new fixture `tests/fixtures/elixir/big_module.ex`) via `task { agent: "quick_task", todoRef: ... }`; assistant confirms no subagent abort, no truncation, no out-of-module insert, no clobber.
+
+* Execution Manifest
+
+** Wave 1: defect repair + non-blocking concurrency
+- [[id:BUG-279-bufferregistry-clobbers-external-edits-a][BUG-279 BufferRegistry cache staleness and save clobber]]
+- [[id:BUG-280-code-edit-writescopebody-silently-trunca][BUG-280 write{scope:"body"} silent truncation]]
+- [[id:BUG-281-code-edit-insertbefore-insertafter-escap][BUG-281 positional actions escape targetId container]]
+- [[id:BUG-282-code-edit-findandreplace-has-no-fallback][BUG-282 findAndReplace ambiguous-match no fallback]]
+- [[id:FEAT-571-bufferregistry-sharded-concurrency-frien][FEAT-571 sharded concurrency-friendly registry]]
+
+** Wave 2: proactive auto-discovery
+- [[id:FEAT-569-bufferregistry-proactive-fs-notify-watch][FEAT-569 BufferRegistry fs-notify watcher]] (depends on BUG-279 mtime + reload API)
+
+** Wave 3: cross-process cooperation
+- [[id:FEAT-570-bufferregistry-multi-process-advisory-fi][FEAT-570 advisory file locking]] (depends on FEAT-569 for shared path canonicalisation)
+
+** Wave 4: re-enable subagent dispatch + final acceptance
+
+Gate: no subagent is to be dispatched for open-ended multi-file assignments until all of Wave 1-3 lands and the live repro gate (see Verification) passes. Until then, continue to hand subagents only scoped, single-file tasks.
+
+Verification steps:
+1. Rebuild native via `bun --cwd=packages/natives run build:release`.
+2. Restart the session (native bindings are stale otherwise — per memory://root note).
+3. Dispatch a `task { agent: "quick_task" }` with a 100-line Elixir refactor assignment pointing at the fixture.
+4. Inspect the result: no abort, no truncation, final file content matches the assignment's acceptance.
+5. Re-enable subagent dispatch as the default mode for wave-style plans.
+
+* Notes
+
+Found during PLAN-248 authoring. User-supplied failure list compiled at `2026-04-18` includes three direct-use pitfalls and three subagent failures; Wave 1 fixes the direct-use pitfalls; Wave 2-3 addresses the underlying cache and cross-process concerns that drive the subagent abort class.
+
+Subagent re-enablement after this plan is a one-way door: treat the live repro gate as blocking. If it fails, file a new BUG against the concrete mechanism, do not defer.

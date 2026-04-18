@@ -31,6 +31,7 @@ describe("ExitPlanModeTool", () => {
 			getArtifactsDir: () => artifactsDir,
 			getSessionId: () => "session-a",
 			getPlanModeState: () => ({ type: "plan" as const, enabled: true, planFilePath: "local://PLAN.md" }),
+			getLastApprovedPlan: () => undefined,
 			...overrides,
 		};
 	}
@@ -42,17 +43,9 @@ describe("ExitPlanModeTool", () => {
 	): Promise<void> {
 		const categoryDir = path.join(tmpDir, "!tasks", category);
 		await fs.mkdir(categoryDir, { recursive: true });
-		const content = [
-			`#+TITLE: ${id}`,
-			`#+CUSTOM_ID: ${id}`,
-			"#+STATE: ITEM",
-			"#+EFFORT: 1h",
-			"#+PRIORITY: #A",
-			"#+LAYER: backend",
-			"",
-			body,
-			"",
-		].join("\n");
+		const content = [`#+TITLE: ${id}`, `#+CUSTOM_ID: ${id}`, "#+STATE: ITEM", "#+LAYER: backend", "", body, ""].join(
+			"\n",
+		);
 		await Bun.write(path.join(categoryDir, `${id}.org`), content);
 	}
 
@@ -93,6 +86,54 @@ describe("ExitPlanModeTool", () => {
 		await expect(tool.execute("call-missing", { title: "WP_MIGRATION_PLAN" })).rejects.toThrow(
 			"Plan file not found at local://PLAN.md. Write the finalized plan to local://PLAN.md before calling exit_plan_mode.",
 		);
+	});
+
+	it("returns benign success when the same plan was already approved in this session", async () => {
+		const tool = new ExitPlanModeTool(
+			createSession({
+				getPlanModeState: () => undefined,
+				getLastApprovedPlan: () => ({
+					itemId: "PLAN-123-approved",
+					title: "WP_MIGRATION_PLAN",
+					finalPlanFilePath: "local://WP_MIGRATION_PLAN.md",
+				}),
+				settings: Settings.isolated({ "org.enabled": true }),
+			}),
+		);
+
+		const result = await tool.execute("call-approved", {
+			title: "WP_MIGRATION_PLAN",
+			itemId: "PLAN-123-approved",
+		});
+
+		expect(result.content[0]).toEqual({ type: "text", text: "Plan already approved." });
+		expect(result.details).toMatchObject({
+			planExists: true,
+			title: "WP_MIGRATION_PLAN",
+			finalPlanFilePath: "local://WP_MIGRATION_PLAN.md",
+			itemId: "PLAN-123-approved",
+		});
+	});
+
+	it("still throws when plan mode is inactive for a different plan", async () => {
+		const tool = new ExitPlanModeTool(
+			createSession({
+				getPlanModeState: () => undefined,
+				getLastApprovedPlan: () => ({
+					itemId: "PLAN-123-approved",
+					title: "WP_MIGRATION_PLAN",
+					finalPlanFilePath: "local://WP_MIGRATION_PLAN.md",
+				}),
+				settings: Settings.isolated({ "org.enabled": true }),
+			}),
+		);
+
+		await expect(
+			tool.execute("call-inactive", {
+				title: "WP_MIGRATION_PLAN",
+				itemId: "PLAN-999-other",
+			}),
+		).rejects.toThrow("Plan mode is not active.");
 	});
 
 	it("rejects invalid title characters", async () => {
