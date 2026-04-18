@@ -1,0 +1,19 @@
+PLAN-249 verification summary
+
+Commands observed passing in this session:
+- cargo test -p pi-code-engine
+- cargo test -p pi-natives
+- bun test packages/coding-agent/test/tools/code.test.ts
+- bun check:ts
+- bun check:rs
+- bun --cwd=packages/natives run build:native
+
+Live repro:
+- Fresh Bun subprocess executed with PI_COMPILED=1 so the release addon was loaded instead of stale dev.node.
+- See live-repro-release.log for outline targetIds, edit payloads, save payload, and final Elixir file contents.
+
+Outcome:
+- alpha body write landed without truncating sibling functions.
+- gamma positional insert landed inside the function body.
+- beta findAndReplace occurrence=2 changed only the second duplicate line.
+- save succeeded with version 3.

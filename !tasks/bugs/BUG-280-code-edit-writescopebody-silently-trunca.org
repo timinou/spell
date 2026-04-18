@@ -1,5 +1,5 @@
 #+TITLE: code edit write{scope:"body"} silently truncates siblings on macro-heavy languages
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bf73993e0afdc4
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-38-00-184Z_14bf73993e0afdc4.jsonl]]
 #+CUSTOM_ID: BUG-280-code-edit-writescopebody-silently-trunca
@@ -122,3 +122,5 @@ Impact: silent data loss. Worse than the staleness class (BUG-279) because even 
 
 - Manual: checkout a 250-line module, run the repro payload, inspect JSON response and unchanged disk content.
 - Follow-up manual: reissue with `allowSiblingDelete: true`, confirm success and that the response includes a `warnings` array naming the dropped decls.
+
+NOTE [2026-04-18]: Completed under PLAN-249 verification on 2026-04-18.
