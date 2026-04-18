@@ -1,0 +1,46 @@
+#+TITLE: Code tool stale-module error handling and integrity tests
+#+STATE: DOING
+#+SESSION_ID: 14c003268c584457
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T23-05-11-473Z_14c003268c584457.jsonl]]
+#+CUSTOM_ID: PLAN-258-code-tool-stale-module-error-handling-an
+#+LAYER: coding-agent
+
+* Initial Message
+
+Code tool edits still erroring (editFile is not defined) — a tool-side bug
+
+what could cause this?
+
+* Context
+
+When the spell agent edits its own source code (=code.ts=) via sequential =code edit= calls,
+intermediate saves leave the file in states where variables are referenced but not declared.
+New spell sessions starting during this window load broken source and surface opaque
+ReferenceError messages like "editFile is not defined" or "editHasManagedMissingBuffer is not defined".
+
+Root cause: the spell binary symlinks directly to source (=packages/coding-agent/src/cli.ts=,
+no build step). Bun transpiles on first import. Multi-step refactoring creates transient
+broken states on disk.
+
+This plan adds:
+1. A runtime guard that catches ReferenceError/TypeError in the code tool catch block and
+   produces a clear diagnostic ("stale module — restart session") instead of an opaque error
+2. A module integrity test that verifies code.ts imports and transpiles cleanly, catching
+   broken variable references at test time
+
+Key files:
+- =packages/coding-agent/src/tools/code.ts= (catch block at lines 820-831)
+- =packages/coding-agent/test/tools/code.test.ts= (existing test file)
+- =packages/coding-agent/test/tools/code-module-integrity.test.ts= (new test file)
+
+* Verification
+- =bun test packages/coding-agent/test/tools/code.test.ts= — all pass including new ReferenceError guard tests
+- =bun test packages/coding-agent/test/tools/code-module-integrity.test.ts= — module integrity smoke test passes
+- =bun check:ts= — no type errors
+
+* Execution Manifest
+** Wave 1 (parallel)
+Both items are independent and can execute concurrently.
+
+- [[id:BUG-287-runtime-referenceerror-guard-in-codetool]] — Runtime ReferenceError guard in CodeTool.execute catch block
+- [[id:FEAT-584-static-analysis-test-for-codetool-variab]] — Static analysis test for CodeTool variable scoping integrity

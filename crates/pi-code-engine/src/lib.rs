@@ -1,4 +1,5 @@
 pub mod buffer;
+pub mod coord;
 pub mod diff;
 pub mod edit;
 pub mod error;
@@ -11,7 +12,15 @@ pub mod procedure;
 pub mod resolve;
 pub mod watcher;
 
-pub use buffer::{BufferInfo, BufferRegistry, BufferSnapshot, CodeBuffer, EditResult, TextEdit};
+pub use buffer::{
+	BufferInfo, BufferRegistry, BufferSnapshot, CodeBuffer, EditResult, RevisionSummary,
+	ScopedUndoResult, TextEdit,
+};
+pub use coord::{
+	CommitResult, CoordClient, IntentResult, JournalEntry, JournalReader, JournalWriter,
+	NullCoordClient, PeerEdit, PeerInfo, PeerState, SessionId, default_journal_root,
+	derive_code_paths, journal_path_for,
+};
 pub use diff::{DiffHunk, DiffKind, diff_lines};
 pub use edit::{DragDirection, SpliceMode};
 pub use error::{CodeEngineError, Result};

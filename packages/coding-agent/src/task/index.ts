@@ -45,7 +45,7 @@ import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
 import { type BatchGraph, buildBatchGraph, scheduleBatch } from "./batch-scheduler";
 import { discoverAgents, getAgent } from "./discovery";
-import { runSubprocess } from "./executor";
+import { runSubprocess, type RuntimeVerificationOptions } from "./executor";
 import {
 	type GateFailure,
 	type GateVerificationResult,
@@ -410,6 +410,23 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			output: output.length > 4_000 ? `${output.slice(0, 4_000)}\n\n[truncated]` : output || undefined,
 			error: result.error,
 			outputPath: result.outputPath,
+		};
+	}
+
+	#buildRuntimeVerificationOptions(
+		todoRef: string | undefined,
+		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
+	): RuntimeVerificationOptions | undefined {
+		if (!todoRef) return undefined;
+		const groups = this.session.getTodoGroups?.();
+		if (!groups) return undefined;
+		const todo = findTask(groups, todoRef);
+		if (!todo || !hasRequiredGate(todo)) return undefined;
+		return {
+			gateCmd: todo.gateCmd,
+			gateCommit: todo.gateCommit,
+			gateArtifact: todo.gateArtifact,
+			baselineHeadCommit: isolationContext?.baselineHeadCommit,
 		};
 	}
 
@@ -1374,6 +1391,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						modelOverride,
 						thinkingLevel: thinkingLevelOverride,
 						outputSchema: effectiveOutputSchema,
+						runtimeVerification: this.#buildRuntimeVerificationOptions(originalTask.todoRef),
 						sessionFile,
 						persistArtifacts: !!artifactsDir,
 						artifactsDir: effectiveArtifactsDir,
@@ -1425,6 +1443,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						modelOverride,
 						thinkingLevel: thinkingLevelOverride,
 						outputSchema: effectiveOutputSchema,
+						runtimeVerification: this.#buildRuntimeVerificationOptions(originalTask.todoRef, isolationContext),
 						sessionFile,
 						persistArtifacts: !!artifactsDir,
 						artifactsDir: effectiveArtifactsDir,

@@ -10,6 +10,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/tools";
 import { PendingActionStore } from "@oh-my-pi/pi-coding-agent/tools/pending-action";
 import * as nativesModule from "@oh-my-pi/pi-natives";
+import { logger } from "@oh-my-pi/pi-utils";
 
 const TEST_EXTENSIONS = new Set([
 	"ts",
@@ -613,4 +614,51 @@ it("surfaces new lock and scope failure codes", async () => {
 		expect(getText(result)).toContain(`[${expected}]`);
 	}
 	expect(bufferSpy).toHaveBeenCalledTimes(4);
+});
+
+it("surfaces a stale-module diagnostic when execute() throws ReferenceError", async () => {
+	spyOn(nativesModule, "executeCodeBuffer").mockImplementation(() => {
+		throw new ReferenceError("editFile is not defined");
+	});
+	const warnSpy = spyOn(logger, "warn");
+	const tool = new CodeTool(createSession());
+	const result = await tool.execute("tool", { command: "languages" });
+	const text = getText(result);
+	expect(text).toContain("Stale module detected");
+	expect(text).toContain("Restart the session");
+	expect(text).toContain("editFile is not defined");
+	expect(text).toContain("ReferenceError");
+	expect(result.details).toEqual(expect.objectContaining({ kind: "error", error: true }));
+	expect(warnSpy).toHaveBeenCalledWith(
+		"code tool stale module",
+		expect.objectContaining({ errorName: "ReferenceError", command: "languages" }),
+	);
+});
+
+it("treats TypeError 'is not a function' as stale module", async () => {
+	spyOn(nativesModule, "executeCodeBuffer").mockImplementation(() => {
+		throw new TypeError("editHasManagedMissingBuffer is not a function");
+	});
+	const warnSpy = spyOn(logger, "warn");
+	const tool = new CodeTool(createSession());
+	const result = await tool.execute("tool", { command: "languages" });
+	expect(getText(result)).toContain("Stale module detected");
+	expect(warnSpy).toHaveBeenCalledWith(
+		"code tool stale module",
+		expect.objectContaining({ errorName: "TypeError", command: "languages" }),
+	);
+});
+
+it("leaves non-stale Error messages unchanged (regression guard)", async () => {
+	spyOn(nativesModule, "executeCodeBuffer").mockImplementation(() => {
+		throw new Error("boom: native failure");
+	});
+	const warnSpy = spyOn(logger, "warn");
+	const tool = new CodeTool(createSession());
+	const result = await tool.execute("tool", { command: "languages" });
+	const text = getText(result);
+	expect(text).toContain("boom: native failure");
+	expect(text).not.toContain("Stale module detected");
+	const staleWarns = warnSpy.mock.calls.filter(([msg]) => msg === "code tool stale module");
+	expect(staleWarns).toHaveLength(0);
 });

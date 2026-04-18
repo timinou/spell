@@ -104,6 +104,31 @@ describe("context-pressure policy", () => {
 		).toBe("state-polling");
 	});
 
+	it("compacts verification results for memory persistence while keeping metadata", () => {
+		const contextPressure = classifyContextPressure({
+			toolName: "bash",
+			params: { command: "bun test packages/coding-agent/test/tools/read-routing.test.ts" },
+		});
+		if (!contextPressure) throw new Error("expected context pressure classification");
+
+		const raw = createToolResult({
+			toolName: "bash",
+			content: [{ type: "text", text: "ok 1 test" }],
+		});
+		const safe = createMemorySafeToolResult(raw, contextPressure);
+		if (!safe) throw new Error("expected memory-safe tool result");
+
+		expect(safe.content).toEqual([{ type: "text", text: contextPressure.summary }]);
+		expect(
+			(safe.details as { meta?: { contextPressure?: { category?: string; persistence?: string } } } | undefined)
+				?.meta?.contextPressure?.category,
+		).toBe("verification");
+		expect(
+			(safe.details as { meta?: { contextPressure?: { category?: string; persistence?: string } } } | undefined)
+				?.meta?.contextPressure?.persistence,
+		).toBe("summary-only");
+	});
+
 	it("preserves raw precision tool results while attaching policy metadata", () => {
 		const contextPressure = classifyContextPressure({
 			toolName: "read",
@@ -125,16 +150,16 @@ describe("context-pressure policy", () => {
 		).toBe("allow-raw");
 	});
 
-	it("uses compact context-pressure summaries when pruned tool results re-enter LLM history", () => {
+	it("uses compact verification summaries when pruned tool results re-enter LLM history", () => {
 		const contextPressure = classifyContextPressure({
-			toolName: "grep",
-			params: { pattern: "TODO", path: "." },
+			toolName: "bash",
+			params: { command: "bun test packages/coding-agent/test/tools/read-routing.test.ts" },
 		});
-		if (!contextPressure) throw new Error("expected grep classification");
+		if (!contextPressure) throw new Error("expected bash verification classification");
 
 		const message = createToolResult({
-			toolName: "grep",
-			content: [{ type: "text", text: "raw grep body" }],
+			toolName: "bash",
+			content: [{ type: "text", text: "ok 1 test" }],
 			details: { meta: { contextPressure } },
 			prunedAt: 1,
 		});

@@ -1,0 +1,74 @@
+#+TITLE: Static analysis test for CodeTool variable scoping integrity
+#+STATE: ITEM
+#+SESSION_ID: 14c003268c584457
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T23-05-11-473Z_14c003268c584457.jsonl]]
+#+CUSTOM_ID: FEAT-584-static-analysis-test-for-codetool-variab
+#+EFFORT: 45m
+#+LAYER: coding-agent
+
+* Initial Message
+
+Code tool edits still erroring (editFile is not defined) — a tool-side bug
+
+what could cause this?
+
+* Scope
+** In scope
+- A test that statically verifies code.ts catch blocks don't reference undeclared variables
+- Detect the specific class of bug where multi-step refactoring leaves stale variable references
+- Guard against future regressions when renaming variables in code.ts
+
+** Out of scope
+- Full AST linting of all source files (this is targeted at code.ts only)
+- Runtime error detection (handled by BUG-287)
+- Preventing the self-editing race itself
+
+* Existing Patterns
+- File: =packages/coding-agent/test/prompts/code-tool-contracts.test.ts= — existing contract tests for the code tool
+- Bun test with =bun:test= imports
+- The codebase uses tree-sitter natively via =@oh-my-pi/pi-natives= (=executeCodeBuffer= with =command: "outline"= / =command: "read"=)
+- Alternative: use =Bun.Transpiler= to parse and verify, or simply import the module and verify no throw
+
+* Approach
+Use a module-import smoke test: dynamically construct a function body that references every
+identifier used in the catch blocks of =code.ts=, and verify no ReferenceError is thrown at
+parse time. This is simpler and more maintainable than full AST walking.
+
+Concrete approach:
+1. Import =code.ts= module — if the import itself throws ReferenceError, the test fails
+2. Instantiate CodeTool with a mock session
+3. Call =execute()= with a command that exercises the main code path (e.g., =command: "languages"= which is non-mutating)
+4. Verify no ReferenceError — the call should succeed or return a structured error, not throw
+
+This is a smoke test that catches the exact failure mode: stale modules where variable references
+are broken. If code.ts has a broken variable reference ANYWHERE in execute(), even in a branch
+not taken, Bun's transpiler will throw at module load time (strict mode TDZ).
+
+Additionally: use =Bun.Transpiler= to transpile code.ts and verify no errors.
+
+* Tests
+- File: =packages/coding-agent/test/tools/code-module-integrity.test.ts=
+- Scenario 1: CodeTool module imports without ReferenceError
+- Scenario 2: CodeTool.execute() with "languages" command completes without ReferenceError
+- Scenario 3: =Bun.Transpiler= can transpile code.ts without errors
+
+* Edge Cases
+- Test must not depend on native binary being available for the smoke call (mock executeCodeBuffer)
+- Test must not write files or modify state
+- Test must work even if code.ts has been locally modified (reads from disk, not from import cache)
+
+* Acceptance Criteria
+- Test file exists at =packages/coding-agent/test/tools/code-module-integrity.test.ts=
+- Tests pass: =bun test packages/coding-agent/test/tools/code-module-integrity.test.ts=
+- If a variable is renamed in code.ts without updating all references, Bun's transpiler catches it at import time → test fails
+
+** Write module integrity test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-584-static-analysis-test-for-codetool-variab::integrity-test
+:END:
+- File: =packages/coding-agent/test/tools/code-module-integrity.test.ts=
+- Import CodeTool from =@oh-my-pi/pi-coding-agent/tools=
+- Verify import succeeds (no ReferenceError at module load)
+- Instantiate with mock session, call execute with "languages" command
+- Verify the result is a structured AgentToolResult, not a thrown error
+- Use =Bun.Transpiler= to independently verify code.ts transpiles cleanly

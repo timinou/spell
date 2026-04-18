@@ -1,5 +1,5 @@
 #+TITLE: Edit coordination foundation: journal + node ref + history attribution
-#+STATE: ITEM
+#+STATE: DOING
 #+SESSION_ID: 14bfce727e583e3c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
 #+CUSTOM_ID: FEAT-575-edit-coordination-foundation-journal-nod
@@ -149,3 +149,7 @@ Order:
 - `cargo clippy -p pi-code-engine --all-targets --all-features -- -D warnings` clean.
 - `rustfmt` formatted.
 - No NAPI changes; `bun check:ts` is unaffected.
+
+NOTE [2026-04-18]: Started implementation: reading design/spec and repo patterns, then dispatching crate-scoped work for coord module, history attribution, and tests. Next: land buffer attribution + scoped undo/redo foundation, then run fmt/clippy/test verification.
+
+NOTE [2026-04-18]: Delegated crate-scoped implementation; subagents reported repo state mismatches and pre-existing clippy failures. Proceeding to inspect/land the missing coord modules and buffer/history wiring directly, then rerun fmt/clippy/test.

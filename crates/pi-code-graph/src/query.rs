@@ -118,6 +118,25 @@ pub struct ReachSummary {
 	pub capped: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphClusterRef {
+	pub id:   usize,
+	pub name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphOutlineEnrichment {
+	pub refs_in:        u32,
+	pub refs_out:       u32,
+	pub callers:        u32,
+	pub callees:        u32,
+	pub imported_by:    u32,
+	pub exported_reach: ReachSummary,
+	pub cluster:        Option<GraphClusterRef>,
+	pub dead:           bool,
+	pub inherits:       Vec<String>,
+}
+
 impl CodeGraph {
 	pub fn graph_status(&self) -> GraphStatus {
 		GraphStatus {
@@ -414,6 +433,61 @@ impl CodeGraph {
 		)
 	}
 
+	pub fn graph_outline_enrichment(&self, query: &str) -> Option<GraphOutlineEnrichment> {
+		let node_index = self.resolve_symbol_index(query)?;
+		Some(self.graph_outline_enrichment_for_node(node_index))
+	}
+
+	pub fn graph_outline_enrichment_for_node(
+		&self,
+		node_index: NodeIndex,
+	) -> GraphOutlineEnrichment {
+		let refs =
+			self.graph_degree_counts(node_index, &[EdgeKind::References, EdgeKind::Styles], &[
+				EdgeKind::References,
+				EdgeKind::Styles,
+			]);
+		let calls = self.graph_degree_counts(node_index, &[EdgeKind::Calls], &[EdgeKind::Calls]);
+		let imported_by = self.graph_file_import_degree_for_symbol(node_index, Direction::Incoming);
+		let exported_reach = self.graph_exported_reach_summary(node_index, 2, 64);
+		let cluster = self.graph_cluster_for_symbol(node_index);
+		let dead = self.graph_dead_code_item_for_node(node_index).is_some();
+		let inherits = self
+			.graph_inherits_for_symbol(node_index)
+			.into_iter()
+			.map(|summary| summary.label)
+			.collect();
+		GraphOutlineEnrichment {
+			refs_in: refs.incoming,
+			refs_out: refs.outgoing,
+			callers: calls.incoming,
+			callees: calls.outgoing,
+			imported_by,
+			exported_reach,
+			cluster,
+			dead,
+			inherits,
+		}
+	}
+
+	pub fn graph_cluster_for_symbol(&self, node_index: NodeIndex) -> Option<GraphClusterRef> {
+		let graph = self.graph();
+		let GraphNode::Symbol(symbol) = graph.node_weight(node_index)? else {
+			return None;
+		};
+		self.graph_clusters().into_iter().find_map(|cluster| {
+			cluster
+				.files
+				.iter()
+				.any(|file| file.path == symbol.file)
+				.then_some(GraphClusterRef { id: cluster.id, name: cluster.name })
+		})
+	}
+
+	pub fn graph_dead_code_item_for_node(&self, node_index: NodeIndex) -> Option<GraphDeadCodeItem> {
+		dead_code_item_for_node(self.graph(), node_index)
+	}
+
 	pub fn graph_dead_code(&self) -> Vec<GraphDeadCodeItem> {
 		self.graph_dead_code_with_limit(50)
 	}
@@ -422,7 +496,7 @@ impl CodeGraph {
 		let graph = self.graph();
 		let mut items = graph
 			.node_indices()
-			.filter_map(|node_index| dead_code_item_for_node(graph, node_index))
+			.filter_map(|node_index| self.graph_dead_code_item_for_node(node_index))
 			.collect::<Vec<_>>();
 		items.sort_by(|left, right| {
 			confidence_rank(&right.confidence)
@@ -1351,6 +1425,29 @@ mod tests {
 			ReachSummary { count: 0, capped: false },
 			"non-exported orphan should not report exported reach"
 		);
+	}
+
+	#[test]
+	fn graph_outline_enrichment_reports_counts_and_flags() {
+		let graph = build_query_graph();
+		let callee = graph
+			.graph_outline_enrichment("callee")
+			.expect("callee enrichment should exist");
+		assert_eq!(callee.callers, 1);
+		assert_eq!(callee.callees, 0);
+		assert_eq!(callee.imported_by, 1);
+		assert!(callee.exported_reach.count >= 1);
+		assert!(!callee.dead);
+		assert!(callee.inherits.is_empty());
+		assert!(callee.cluster.is_some());
+
+		let orphan = graph
+			.graph_outline_enrichment("orphan")
+			.expect("orphan enrichment should exist");
+		assert!(orphan.dead);
+		assert_eq!(orphan.callers, 0);
+		assert_eq!(orphan.imported_by, 0);
+		assert_eq!(orphan.exported_reach, ReachSummary { count: 0, capped: false });
 	}
 
 	#[test]

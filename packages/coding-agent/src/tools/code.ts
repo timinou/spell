@@ -819,13 +819,22 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			return toolResult(details).text(text).done();
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
+			const errorName = err instanceof Error ? err.name : typeof err;
+			const isStaleModule =
+				err instanceof ReferenceError || (err instanceof TypeError && /\bis not a function\b/.test(message));
+			if (isStaleModule) {
+				logger.warn("code tool stale module", { error: message, errorName, command });
+			}
 			logger.error("code tool error", { error: message, command });
+			const diagnosticMessage = isStaleModule
+				? `Stale module detected: code.ts source was modified while this session was running. Restart the session to pick up changes. Original error: ${errorName}: ${message}`
+				: message;
 			const details = createCodeToolError({
 				command,
 				file: primaryEditFile ?? (params.file ? path.resolve(sessionCwd, params.file) : undefined),
 				cwd: sessionCwd,
-				output: err,
-				message,
+				output: isStaleModule ? undefined : err,
+				message: diagnosticMessage,
 			});
 			return toolResult(details).text(formatCodeToolContent(details)).done();
 		}

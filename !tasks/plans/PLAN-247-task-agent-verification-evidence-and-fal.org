@@ -1,0 +1,97 @@
+#+TITLE: Task-agent verification evidence and false completion hardening
+#+STATE: DOING
+#+SESSION_ID: 14bfdda2f7d5493e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell_kdl-config/2026-04-18T20-21-17-407Z_14bfdda2f7d5493e.jsonl]]
+#+CUSTOM_ID: PLAN-247-task-agent-verification-evidence-and-fal
+#+LAYER: agent-runtime
+
+* Initial Message
+
+look at this sessions:
+
+* Context
+
+** Problem
+The investigated session showed three distinct failure modes, but the plan scope is intentionally narrow:
+- a real `code edit` ambiguity in `profile.rs`;
+- agent-side misuse/retry corruption in `query.rs`;
+- and, most importantly for this plan, false delegated verification / false delegated completion in the task runtime.
+
+This plan addresses only the third class. The system currently allows a delegated task to surface as successfully completed without durable proof that required gates were observed at runtime, and it lacks an explicit first-class audit-trail field for persisted verification evidence.
+
+** Settled Decisions
+1. Scope is limited to task-agent reliability plus durable verification evidence / audit trail. Code-tool ambiguity work is explicitly out of scope for this plan.
+2. Runtime ownership is authoritative: when proof is missing, the delegated subagent runtime gets exactly one retry opportunity before success is rejected.
+3. There is no parent-side second retry in this plan. The parent may consume runtime outputs, but it must not own the retry loop.
+4. Durable evidence has two layers:
+   - always-on structured verification summary in delegated `delegation.result`;
+   - optional dedicated evidence artifact only when a task explicitly opts in.
+5. The opt-in path is a new explicit field, not reuse of `gateArtifact` or `verifyCmd`.
+6. Recommended naming is `verificationArtifact` in TypeScript-facing task/todo data and `VERIFICATION_ARTIFACT` in org properties.
+7. `gateArtifact` remains the deliverable gate and must stay semantically distinct from verification evidence.
+8. The implementation order is strict: first make delegated success truthful, then add audit-trail persistence on top of that trusted contract.
+
+** Recommended Approach
+Implement two child items with a hard dependency edge:
+- First, fix the delegated runtime contract so success cannot be accepted without observed proof and the runtime owns a single retry.
+- Second, thread an explicit optional `verificationArtifact` field through org/task/todo surfaces and persist durable verification summaries / artifacts.
+
+This split keeps scopes non-overlapping:
+- `BUG-277...` owns truthfulness of delegated completion.
+- `FEAT-568...` owns storage, transport, and audit-trail persistence.
+
+** Critical Files
+- `packages/coding-agent/src/task/executor.ts`
+- `packages/coding-agent/src/tools/submit-result.ts`
+- `packages/coding-agent/src/task/gate-verification.ts`
+- `packages/coding-agent/src/task/template.ts`
+- `packages/coding-agent/src/task/index.ts`
+- `packages/coding-agent/src/tools/todo-write.ts`
+- `packages/coding-agent/src/tools/todo-dashboard-bridge.ts`
+- `packages/coding-agent/src/loop/ingestion/org-depend.ts`
+- `packages/coding-agent/test/task/executor-subagent-reminders.test.ts`
+- `packages/coding-agent/test/tools/submit-result.test.ts`
+- `packages/coding-agent/test/task/gate-enforcement.test.ts`
+- `packages/coding-agent/test/task/todo-ref-lifecycle.test.ts`
+- `packages/coding-agent/test/tools/todo-write-serialization.test.ts`
+- `packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts`
+- `packages/coding-agent/test/tools/todo-write-delegation.test.ts`
+
+** Child Items
+- [[id:BUG-277-reject-delegated-success-without-observe]]
+- [[id:FEAT-568-add-delegated-verification-evidence-fiel]]
+
+* Verification
+
+** Focused automated checks
+- `bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts`
+- `bun test packages/coding-agent/test/tools/submit-result.test.ts`
+- Focused `gate-verification` test file if helper behavior changes
+- `bun test packages/coding-agent/test/tools/todo-write-serialization.test.ts`
+- `bun test packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts`
+- `bun test packages/coding-agent/test/task/todo-ref-lifecycle.test.ts`
+- `bun test packages/coding-agent/test/task/gate-enforcement.test.ts`
+- `bun test packages/coding-agent/test/tools/todo-write-delegation.test.ts`
+- `bun check:ts`
+
+** Manual / scenario proof
+- Reproduce a delegated task with required gates that calls `submit_result` success before proof exists; verify runtime rejects the first success and allows exactly one retry.
+- Reproduce the same scenario with proof added on retry; verify truthful completion.
+- Reproduce missing proof after retry; verify the task is not surfaced as completed.
+- Verify delegated `delegation.result` stores structured verification evidence even without `verificationArtifact` configured.
+- Verify a task with explicit `verificationArtifact` writes the dedicated evidence artifact and that its content matches the delegated result summary / terminal status.
+
+* Execution Manifest
+
+** Wave note
+- `org wave` was run during planning.
+- File-scoped wave execution returned ready items per file, while the generic multi-item query path still returned the global ready set instead of isolating this session subset cleanly.
+- The waves below therefore mirror the explicit child-item `DEPENDS` DAG for this plan’s two child items, which is the only truthful execution order for this scoped plan: `FEAT-568...` depends on `BUG-277...`.
+
+** Wave 1 — runtime truthfulness fix                                  :wave:
+- [[id:BUG-277-reject-delegated-success-without-observe]] — enforce proof-aware delegated success and single runtime retry
+
+** Wave 2 — evidence plumbing and audit trail                         :wave:
+- [[id:FEAT-568-add-delegated-verification-evidence-fiel]] — add explicit verification evidence field, delegated result summaries, and optional persisted evidence artifact
+
+NOTE [2026-04-18]: Reset to ITEM before activation so the plan matches current plan-mode requirements.

@@ -148,6 +148,82 @@ describe("executeCodeBuffer NAPI bridge", () => {
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
 
+	it("keeps outline output byte-identical for enrich empty array", async () => {
+		const tempDir = await createRepoTempDir("pi-natives-outline-parity");
+		const file = path.join(tempDir, "sample.ts");
+		await Bun.write(file, "export function greet(name: string) {\n  return name;\n}\n");
+
+		const legacy = executeCodeBuffer({ command: "outline", file, root: tempDir });
+		const explicitEmpty = executeCodeBuffer({ command: "outline", file, root: tempDir, enrich: [] });
+
+		expect(JSON.stringify(explicitEmpty)).toBe(JSON.stringify(legacy));
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("returns enriched signature and metrics outline fields", async () => {
+		const tempDir = await createRepoTempDir("pi-natives-outline-enrich");
+		const file = path.join(tempDir, "sample.ts");
+		await Bun.write(
+			file,
+			"/**\n * Greets a user.\n */\nexport function greet<T>(name: string) {\n  if (name) {\n    return format(name);\n  }\n  return name;\n}\n",
+		);
+
+		const result = executeCodeBuffer({
+			command: "outline",
+			file,
+			root: tempDir,
+			enrich: ["signature", "metrics", "doc"],
+		});
+		expect(result.error).toBe(false);
+		expect(result.output).toEqual(
+			expect.objectContaining({
+				entries: expect.arrayContaining([
+					expect.objectContaining({
+						generics: ["T"],
+						params: expect.arrayContaining([expect.objectContaining({ name: "name", ty: "string" })]),
+						branchPoints: 1,
+						callSites: 1,
+						docSummary: "Greets a user.",
+					}),
+				]),
+			}),
+		);
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("reports graph rebuild status then warm index status", async () => {
+		const tempDir = await createRepoTempDir("pi-natives-outline-graph");
+		const callee = path.join(tempDir, "callee.ts");
+		const caller = path.join(tempDir, "caller.ts");
+		await Bun.write(callee, "export function callee(name: string) {\n  return name;\n}\n");
+		await Bun.write(
+			caller,
+			"import { callee } from './callee';\nexport function caller(name: string) {\n  return callee(name);\n}\n",
+		);
+
+		const startedAt = performance.now();
+		const rebuilt = executeCodeBuffer({ command: "outline", file: callee, root: tempDir, enrich: ["graph"] });
+		const rebuiltMs = performance.now() - startedAt;
+		expect(rebuilt.error).toBe(false);
+		expect(rebuilt.output).toEqual(
+			expect.objectContaining({
+				graphStatus: "rebuilt",
+				entries: expect.arrayContaining([expect.objectContaining({ callers: 1, importedBy: 1 })]),
+			}),
+		);
+		expect(rebuiltMs).toBeLessThan(2000);
+
+		const warm = executeCodeBuffer({ command: "outline", file: callee, root: tempDir, enrich: ["graph"] });
+		expect(warm.error).toBe(false);
+		expect(warm.output).toEqual(
+			expect.objectContaining({
+				graphStatus: "indexed (warm)",
+				entries: expect.arrayContaining([expect.objectContaining({ callers: 1, importedBy: 1 })]),
+			}),
+		);
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
 	it("rejects binary files explicitly", async () => {
 		const tempDir = path.join(os.tmpdir(), `pi-natives-binary-${Date.now()}`);
 		const file = path.join(tempDir, "blob.bin");

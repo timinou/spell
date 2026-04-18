@@ -6,7 +6,7 @@ use crate::{
 	buffer::CodeBuffer,
 	language::{
 		BodyExtractor, ClassBodyExtractor, DeclarationOutlineEnrichment, DeclarationPattern,
-		LanguageProfile, NameExtractor,
+		LanguageProfile, NameExtractor, PresenceExtractor, TextListExtractor,
 	},
 	resolve::resolve_symbol,
 };
@@ -178,7 +178,30 @@ fn entry_for_node(
 	let start = node.start_position();
 	let end = node.end_position();
 	let children = class_children(source, profile, node, enrich);
-	let _ = enrich;
+	let modifiers = extract_l0_modifiers(source, node, decl);
+	let decorators = extract_l0_decorators(source, node, decl);
+	let deprecated = extract_l0_deprecated(source, node, decl, &modifiers, &decorators);
+	let (params, return_type, generics, throws) = if enrich.signature {
+		(
+			extract_l1_params(source, node, decl),
+			extract_l1_return_type(source, node, decl),
+			extract_l1_generics(source, node, decl),
+			extract_l1_throws(source, node, decl),
+		)
+	} else {
+		(Vec::new(), None, Vec::new(), Vec::new())
+	};
+	let (statements, branch_points, nesting_depth, call_sites, has_side_effects) = if enrich.metrics
+	{
+		extract_l2_metrics(source, node, decl)
+	} else {
+		(None, None, None, None, None)
+	};
+	let (doc_summary, doc_tags) = if enrich.doc {
+		extract_l3_doc(source, node, decl)
+	} else {
+		(None, Vec::new())
+	};
 	Some(OutlineEntry {
 		name,
 		kind: decl.kind.clone(),
@@ -189,21 +212,21 @@ fn entry_for_node(
 		signature,
 		children,
 		deduplicate: should_deduplicate_entry(profile, decl),
-		loc: 0,
-		modifiers: Vec::new(),
-		decorators: Vec::new(),
-		deprecated: false,
-		params: Vec::new(),
-		return_type: None,
-		generics: Vec::new(),
-		throws: Vec::new(),
-		statements: None,
-		branch_points: None,
-		nesting_depth: None,
-		call_sites: None,
-		has_side_effects: None,
-		doc_summary: None,
-		doc_tags: Vec::new(),
+		loc: (end.row.saturating_sub(start.row) + 1) as u32,
+		modifiers,
+		decorators,
+		deprecated,
+		params,
+		return_type,
+		generics,
+		throws,
+		statements,
+		branch_points,
+		nesting_depth,
+		call_sites,
+		has_side_effects,
+		doc_summary,
+		doc_tags,
 		refs_in: None,
 		refs_out: None,
 		callers: None,
@@ -237,6 +260,604 @@ fn class_children(
 	children
 }
 
+fn extract_l0_modifiers(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> Vec<String> {
+	let configured = extract_text_lists(source, node, &decl.outline_enrichment.modifiers);
+	if !configured.is_empty() {
+		return configured;
+	}
+	let mut modifiers = Vec::new();
+	if let Some(parent) = node.parent()
+		&& parent.kind() == "export_statement"
+		&& let Some(parent_text) = text(source, parent)
+	{
+		for keyword in ["export", "default"] {
+			if contains_word(parent_text, keyword) {
+				modifiers.push(keyword.to_string());
+			}
+		}
+	}
+	let header = signature_text(source, node, decl);
+	for keyword in [
+		"async",
+		"static",
+		"readonly",
+		"abstract",
+		"override",
+		"private",
+		"protected",
+		"public",
+		"pub",
+		"unsafe",
+		"const",
+		"extern",
+	] {
+		if contains_word(&header, keyword) {
+			modifiers.push(keyword.to_string());
+		}
+	}
+	dedupe_texts(modifiers)
+}
+
+fn extract_l0_decorators(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> Vec<String> {
+	let configured = extract_text_lists(source, node, &decl.outline_enrichment.decorators);
+	if !configured.is_empty() {
+		return configured;
+	}
+	let mut decorators = Vec::new();
+	let mut cursor = node.walk();
+	decorators.extend(
+		node
+			.named_children(&mut cursor)
+			.filter(|child| matches!(child.kind(), "decorator" | "attribute_item"))
+			.filter_map(|child| text(source, child).map(|value| value.trim().to_string()))
+			.filter(|value| !value.is_empty())
+			.collect::<Vec<_>>(),
+	);
+	let mut sibling = node.prev_named_sibling();
+	let mut leading = Vec::new();
+	while let Some(current) = sibling {
+		if !matches!(current.kind(), "decorator" | "attribute_item") {
+			break;
+		}
+		if let Some(value) = text(source, current) {
+			leading.push(value.trim().to_string());
+		}
+		sibling = current.prev_named_sibling();
+	}
+	leading.reverse();
+	decorators.splice(0..0, leading);
+	dedupe_texts(decorators)
+}
+
+fn extract_l0_deprecated(
+	source: &str,
+	node: Node<'_>,
+	decl: &DeclarationPattern,
+	modifiers: &[String],
+	decorators: &[String],
+) -> bool {
+	if !decl.outline_enrichment.deprecated.is_empty() {
+		return decl
+			.outline_enrichment
+			.deprecated
+			.iter()
+			.any(|extractor| extract_presence(source, node, extractor));
+	}
+	modifiers
+		.iter()
+		.any(|value| contains_word(value, "deprecated"))
+		|| decorators
+			.iter()
+			.any(|value| contains_word(value, "deprecated"))
+		|| text(source, node.parent().unwrap_or(node))
+			.is_some_and(|value| contains_word(value, "deprecated"))
+}
+
+fn extract_text_lists(
+	source: &str,
+	node: Node<'_>,
+	extractors: &[TextListExtractor],
+) -> Vec<String> {
+	let mut values = Vec::new();
+	for extractor in extractors {
+		match extractor {
+			TextListExtractor::Field { name } => {
+				if let Some(child) = node.child_by_field_name(name)
+					&& let Some(value) = text(source, child)
+				{
+					values.push(value.trim().to_string());
+				}
+			},
+			TextListExtractor::FieldChildren { field, child_types } => {
+				if let Some(parent) = node.child_by_field_name(field) {
+					let mut cursor = parent.walk();
+					for child in parent.named_children(&mut cursor) {
+						if !child_types.is_empty() && !child_types.iter().any(|kind| kind == child.kind())
+						{
+							continue;
+						}
+						if let Some(value) = text(source, child) {
+							values.push(value.trim().to_string());
+						}
+					}
+				}
+			},
+			TextListExtractor::NamedChildren { child_types } => {
+				let mut cursor = node.walk();
+				for child in node.named_children(&mut cursor) {
+					if !child_types.is_empty() && !child_types.iter().any(|kind| kind == child.kind()) {
+						continue;
+					}
+					if let Some(value) = text(source, child) {
+						values.push(value.trim().to_string());
+					}
+				}
+			},
+			TextListExtractor::Descendants { node_types } => {
+				collect_named_descendant_texts(source, node, node_types, &mut values);
+			},
+		}
+	}
+	dedupe_texts(values)
+}
+
+fn extract_presence(source: &str, node: Node<'_>, extractor: &PresenceExtractor) -> bool {
+	match extractor {
+		PresenceExtractor::Field { name } => node.child_by_field_name(name).is_some(),
+		PresenceExtractor::ChildKind { child_type } => {
+			let mut cursor = node.walk();
+			node
+				.named_children(&mut cursor)
+				.any(|child| child.kind() == child_type)
+		},
+		PresenceExtractor::NodeKind { node_types } => {
+			node_types.iter().any(|kind| kind == node.kind())
+		},
+		PresenceExtractor::TextEquals { extractor, value } => {
+			name_resolution(source, node, extractor).is_some_and(|resolved| resolved.text == *value)
+		},
+	}
+}
+
+fn collect_named_descendant_texts(
+	source: &str,
+	node: Node<'_>,
+	node_types: &[String],
+	out: &mut Vec<String>,
+) {
+	let mut cursor = node.walk();
+	for child in node.named_children(&mut cursor) {
+		if node_types.is_empty() || node_types.iter().any(|kind| kind == child.kind()) {
+			if let Some(value) = text(source, child) {
+				out.push(value.trim().to_string());
+			}
+		}
+		collect_named_descendant_texts(source, child, node_types, out);
+	}
+}
+
+fn contains_word(text: &str, word: &str) -> bool {
+	text.match_indices(word).any(|(idx, _)| {
+		let prev = text[..idx].chars().next_back();
+		let next = text[idx + word.len()..].chars().next();
+		is_word_boundary(prev) && is_word_boundary(next)
+	})
+}
+
+fn is_word_boundary(ch: Option<char>) -> bool {
+	ch.is_none_or(|value| !value.is_alphanumeric() && value != '_')
+}
+
+fn dedupe_texts(values: Vec<String>) -> Vec<String> {
+	let mut seen = std::collections::BTreeSet::new();
+	values
+		.into_iter()
+		.map(|value| value.trim().to_string())
+		.filter(|value| !value.is_empty())
+		.filter(|value| seen.insert(value.clone()))
+		.collect()
+}
+fn extract_l1_params(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> Vec<ParamInfo> {
+	for extractor in &decl.outline_enrichment.signature.parameters {
+		if let Some(params_node) = node.child_by_field_name(&extractor.field) {
+			let params = extract_params_from_node(source, params_node, Some(extractor));
+			if !params.is_empty() {
+				return params;
+			}
+		}
+	}
+	node
+		.child_by_field_name("parameters")
+		.map(|params_node| extract_params_from_node(source, params_node, None))
+		.unwrap_or_default()
+}
+
+fn extract_params_from_node(
+	source: &str,
+	params_node: Node<'_>,
+	extractor: Option<&crate::language::ParameterListExtractor>,
+) -> Vec<ParamInfo> {
+	let mut cursor = params_node.walk();
+	params_node
+		.named_children(&mut cursor)
+		.filter(|child| {
+			extractor.is_none_or(|config| {
+				config.item_types.is_empty()
+					|| config.item_types.iter().any(|kind| kind == child.kind())
+			})
+		})
+		.filter_map(|param| build_param_info(source, param, extractor))
+		.collect()
+}
+
+fn build_param_info(
+	source: &str,
+	param: Node<'_>,
+	extractor: Option<&crate::language::ParameterListExtractor>,
+) -> Option<ParamInfo> {
+	let raw = text(source, param)?.trim();
+	let name = extractor
+		.and_then(|config| config.name.as_ref())
+		.and_then(|name_extractor| name_resolution(source, param, name_extractor))
+		.map(|resolved| resolved.text)
+		.or_else(|| fallback_param_name(source, param))?;
+	let ty = extractor
+		.and_then(|config| config.ty.as_ref())
+		.and_then(|type_extractor| name_resolution(source, param, type_extractor))
+		.map(|resolved| normalize_type_text(&resolved.text))
+		.or_else(|| fallback_param_type(source, param));
+	let optional = extractor.is_some_and(|config| {
+		config
+			.optional_when_node_types
+			.iter()
+			.any(|kind| kind == param.kind())
+	}) || raw
+		.split(':')
+		.next()
+		.is_some_and(|segment| segment.contains('?'));
+	let rest = extractor.is_some_and(|config| {
+		config
+			.rest_when_node_types
+			.iter()
+			.any(|kind| kind == param.kind())
+	}) || raw.trim_start().starts_with("...");
+	Some(ParamInfo { name, ty, optional, rest })
+}
+
+fn fallback_param_name(source: &str, param: Node<'_>) -> Option<String> {
+	for field in ["pattern", "name", "parameter", "left"] {
+		if let Some(child) = param.child_by_field_name(field)
+			&& let Some(value) = text(source, child)
+		{
+			let normalized = normalize_param_name(value);
+			if !normalized.is_empty() {
+				return Some(normalized);
+			}
+		}
+	}
+	if param.kind() == "self_parameter" {
+		return Some("self".into());
+	}
+	text(source, param)
+		.map(normalize_param_name)
+		.filter(|value| !value.is_empty())
+}
+
+fn fallback_param_type(source: &str, param: Node<'_>) -> Option<String> {
+	for field in ["type", "type_annotation"] {
+		if let Some(child) = param.child_by_field_name(field)
+			&& let Some(value) = text(source, child)
+		{
+			let normalized = normalize_type_text(value);
+			if !normalized.is_empty() {
+				return Some(normalized);
+			}
+		}
+	}
+	text(source, param)
+		.and_then(|value| value.split_once(':').map(|(_, ty)| normalize_type_text(ty)))
+}
+
+fn extract_l1_return_type(
+	source: &str,
+	node: Node<'_>,
+	decl: &DeclarationPattern,
+) -> Option<String> {
+	if let Some(extractor) = decl.outline_enrichment.signature.return_type.as_ref()
+		&& let Some(resolved) = name_resolution(source, node, extractor)
+	{
+		let normalized = normalize_type_text(&resolved.text);
+		if !normalized.is_empty() {
+			return Some(normalized);
+		}
+	}
+	node
+		.child_by_field_name("return_type")
+		.and_then(|child| text(source, child))
+		.map(normalize_type_text)
+		.filter(|value| !value.is_empty())
+}
+
+fn extract_l1_generics(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> Vec<String> {
+	let configured = extract_text_lists(source, node, &decl.outline_enrichment.signature.generics);
+	if !configured.is_empty() {
+		return configured;
+	}
+	let Some(type_params) = node.child_by_field_name("type_parameters") else {
+		return Vec::new();
+	};
+	text(source, type_params)
+		.map(parse_generic_list)
+		.unwrap_or_default()
+}
+
+fn extract_l1_throws(source: &str, node: Node<'_>, decl: &DeclarationPattern) -> Vec<String> {
+	let configured = extract_text_lists(source, node, &decl.outline_enrichment.signature.throws);
+	if !configured.is_empty() {
+		return configured;
+	}
+	let header = signature_text(source, node, decl);
+	header
+		.split_once("throws ")
+		.map(|(_, rest)| {
+			rest
+				.split(',')
+				.map(normalize_type_text)
+				.filter(|value| !value.is_empty())
+				.collect()
+		})
+		.unwrap_or_default()
+}
+
+fn parse_generic_list(text: &str) -> Vec<String> {
+	text
+		.trim()
+		.trim_start_matches('<')
+		.trim_end_matches('>')
+		.split(',')
+		.map(normalize_type_text)
+		.filter(|value| !value.is_empty())
+		.collect()
+}
+
+fn normalize_param_name(raw: &str) -> String {
+	raw.trim()
+		.trim_start_matches("...")
+		.trim_start_matches("mut ")
+		.split(':')
+		.next()
+		.unwrap_or(raw)
+		.split('=')
+		.next()
+		.unwrap_or(raw)
+		.trim_end_matches('?')
+		.trim()
+		.to_string()
+}
+
+fn normalize_type_text(raw: &str) -> String {
+	raw.trim()
+		.trim_start_matches(':')
+		.trim_start_matches("->")
+		.trim()
+		.to_string()
+}
+fn extract_l2_metrics(
+	source: &str,
+	node: Node<'_>,
+	decl: &DeclarationPattern,
+) -> (Option<u32>, Option<u32>, Option<u32>, Option<u32>, Option<bool>) {
+	let Some(body) = declaration_body_node(node, decl) else {
+		return (None, None, None, None, None);
+	};
+	let mut stats = MetricStats::default();
+	collect_metric_stats(source, body, 0, &mut stats);
+	(
+		Some(stats.statements),
+		Some(stats.branch_points),
+		Some(stats.nesting_depth),
+		Some(stats.call_sites),
+		Some(stats.has_side_effects),
+	)
+}
+
+#[derive(Default)]
+struct MetricStats {
+	statements:       u32,
+	branch_points:    u32,
+	nesting_depth:    u32,
+	call_sites:       u32,
+	has_side_effects: bool,
+}
+
+fn collect_metric_stats(source: &str, node: Node<'_>, depth: u32, stats: &mut MetricStats) {
+	let kind = node.kind();
+	if is_statement_like(kind) {
+		stats.statements += 1;
+	}
+	let branch = is_branch_point(kind);
+	let next_depth = if branch {
+		stats.branch_points += 1;
+		(depth + 1).max(stats.nesting_depth)
+	} else {
+		depth
+	};
+	stats.nesting_depth = stats.nesting_depth.max(next_depth);
+	if is_call_like(kind) {
+		stats.call_sites += 1;
+	}
+	if is_side_effecting(kind, source, node) {
+		stats.has_side_effects = true;
+	}
+	let mut cursor = node.walk();
+	for child in node.named_children(&mut cursor) {
+		collect_metric_stats(source, child, next_depth, stats);
+	}
+}
+
+fn declaration_body_node<'a>(node: Node<'a>, decl: &DeclarationPattern) -> Option<Node<'a>> {
+	match &decl.body {
+		BodyExtractor::None => None,
+		BodyExtractor::Field { name } => child_by_field_or_kind(node, name),
+		BodyExtractor::AfterChild { child_type } => {
+			find_named_child(node, child_type).and_then(|child| {
+				let mut sibling = child.next_named_sibling();
+				while let Some(current) = sibling {
+					if current.start_byte() >= child.end_byte() {
+						return Some(current);
+					}
+					sibling = current.next_named_sibling();
+				}
+				None
+			})
+		},
+	}
+}
+
+fn is_statement_like(kind: &str) -> bool {
+	kind.ends_with("_statement")
+		|| kind.ends_with("_declaration")
+		|| matches!(kind, "statement" | "parameter" | "self_parameter" | "assignment")
+}
+
+fn is_branch_point(kind: &str) -> bool {
+	matches!(
+		kind,
+		"if_statement"
+			| "for_statement"
+			| "for_in_statement"
+			| "while_statement"
+			| "loop_expression"
+			| "match_expression"
+			| "switch_statement"
+			| "conditional_expression"
+			| "case_clause"
+			| "catch_clause"
+	)
+}
+
+fn is_call_like(kind: &str) -> bool {
+	matches!(kind, "call_expression" | "call" | "function_call_expression" | "macro_invocation")
+}
+
+fn is_side_effecting(kind: &str, source: &str, node: Node<'_>) -> bool {
+	if is_call_like(kind) {
+		return true;
+	}
+	if matches!(
+		kind,
+		"assignment_expression"
+			| "augmented_assignment_expression"
+			| "assignment"
+			| "update_expression"
+			| "return_statement"
+			| "throw_statement"
+			| "yield_expression"
+			| "break_statement"
+			| "continue_statement"
+	) {
+		return true;
+	}
+	text(source, node).is_some_and(|value| value.contains("=") && !value.contains("=="))
+}
+fn extract_l3_doc(
+	source: &str,
+	node: Node<'_>,
+	decl: &DeclarationPattern,
+) -> (Option<String>, Vec<String>) {
+	let anchor = node
+		.parent()
+		.filter(|parent| parent.kind() == "export_statement")
+		.unwrap_or(node);
+	let lines = leading_comment_block(source, anchor.start_position().row as usize);
+	if lines.is_empty() {
+		return (None, Vec::new());
+	}
+	let tag_prefixes = if decl.outline_enrichment.doc.tag_prefixes.is_empty() {
+		vec!["@".to_string()]
+	} else {
+		decl.outline_enrichment.doc.tag_prefixes.clone()
+	};
+	let cleaned = lines
+		.into_iter()
+		.map(|line| clean_doc_line(&line))
+		.filter(|line| !line.is_empty())
+		.collect::<Vec<_>>();
+	let summary = cleaned
+		.iter()
+		.filter(|line| !tag_prefixes.iter().any(|prefix| line.starts_with(prefix)))
+		.next()
+		.cloned();
+	let tags = cleaned
+		.iter()
+		.filter_map(|line| parse_doc_tag(line, &tag_prefixes))
+		.collect::<Vec<_>>();
+	(summary, tags)
+}
+
+fn leading_comment_block(source: &str, start_row: usize) -> Vec<String> {
+	let lines = source.lines().collect::<Vec<_>>();
+	if start_row == 0 || start_row > lines.len() {
+		return Vec::new();
+	}
+	let mut row = start_row.saturating_sub(1);
+	let mut collected = Vec::new();
+	loop {
+		let Some(line) = lines.get(row) else {
+			break;
+		};
+		let trimmed = line.trim();
+		if trimmed.is_empty() {
+			break;
+		}
+		if !is_commentish_line(trimmed) {
+			break;
+		}
+		collected.push((*line).to_string());
+		if row == 0 {
+			break;
+		}
+		row -= 1;
+	}
+	collected.reverse();
+	collected
+}
+
+fn is_commentish_line(line: &str) -> bool {
+	line.starts_with("///")
+		|| line.starts_with("//!")
+		|| line.starts_with("//")
+		|| line.starts_with("/**")
+		|| line.starts_with("/*")
+		|| line.starts_with('*')
+		|| line.starts_with("*/")
+}
+
+fn clean_doc_line(line: &str) -> String {
+	line
+		.trim()
+		.trim_start_matches("/**")
+		.trim_start_matches("/*")
+		.trim_start_matches("///")
+		.trim_start_matches("//!")
+		.trim_start_matches("//")
+		.trim_start_matches('*')
+		.trim_start_matches("*/")
+		.trim()
+		.to_string()
+}
+
+fn parse_doc_tag(line: &str, tag_prefixes: &[String]) -> Option<String> {
+	for prefix in tag_prefixes {
+		if let Some(rest) = line.strip_prefix(prefix) {
+			let tag = rest.split_whitespace().next()?.trim();
+			if !tag.is_empty() {
+				return Some(tag.to_string());
+			}
+		}
+	}
+	None
+}
 pub(crate) fn declaration_for<'a>(
 	profile: &'a LanguageProfile,
 	node: Node<'_>,
@@ -900,6 +1521,10 @@ mod tests {
 		.expect("buffer")
 	}
 
+	fn inline_buffer(source: &str, language: &str) -> CodeBuffer {
+		CodeBuffer::from_str(source, LanguageId::new(language), registry()).expect("buffer")
+	}
+
 	#[test]
 	fn test_outline_typescript() {
 		let buffer = buffer("hello.ts", "typescript");
@@ -1120,6 +1745,111 @@ mod tests {
 		let profile = profile("elixir");
 		let out = read(&buffer, &profile, 0, None, None);
 		assert!(out.contains("MyApp.Greeter (module)"), "got: {out}");
+	}
+
+	#[test]
+	fn test_outline_l0_typescript_modifiers_and_loc() {
+		let buffer = inline_buffer(
+			"export async function greet(name: string) {\n  return name;\n}\n",
+			"typescript",
+		);
+		let profile = profile("typescript");
+		let entries = outline(&buffer, &profile, EnrichFlags::L0_ONLY);
+		assert_eq!(entries.len(), 1);
+		assert_eq!(entries[0].loc, 3);
+		assert_eq!(entries[0].modifiers, vec!["export", "async"]);
+		assert!(entries[0].decorators.is_empty());
+		assert!(!entries[0].deprecated);
+	}
+
+	#[test]
+	fn test_outline_l0_rust_decorators_and_deprecated() {
+		let buffer = inline_buffer(
+			"#[deprecated(note = \"use new\")]\npub fn old_name() {\n  let value = 1;\n}\n",
+			"rust",
+		);
+		let profile = profile("rust");
+		let entries = outline(&buffer, &profile, EnrichFlags::L0_ONLY);
+		assert_eq!(entries.len(), 1);
+		assert_eq!(entries[0].loc, 3);
+		assert_eq!(entries[0].modifiers, vec!["pub"]);
+		assert_eq!(entries[0].decorators.len(), 1);
+		assert!(entries[0].decorators[0].contains("deprecated"));
+		assert!(entries[0].deprecated);
+	}
+
+	#[test]
+	fn test_outline_l1_typescript_signature_fields() {
+		let buffer = inline_buffer(
+			"export async function greet<T>(name?: string, ...rest: number[]): Promise<string> {\n  \
+			 return name ?? rest.join(\",\");\n}\n",
+			"typescript",
+		);
+		let profile = profile("typescript");
+		let entries =
+			outline(&buffer, &profile, EnrichFlags { signature: true, ..EnrichFlags::L0_ONLY });
+		assert_eq!(entries.len(), 1);
+		assert_eq!(entries[0].generics, vec!["T"]);
+		assert_eq!(entries[0].return_type.as_deref(), Some("Promise<string>"));
+		assert_eq!(entries[0].params.len(), 2);
+		assert_eq!(entries[0].params[0].name, "name");
+		assert_eq!(entries[0].params[0].ty.as_deref(), Some("string"));
+		assert!(entries[0].params[0].optional);
+		assert!(!entries[0].params[0].rest);
+		assert_eq!(entries[0].params[1].name, "rest");
+		assert_eq!(entries[0].params[1].ty.as_deref(), Some("number[]"));
+		assert!(!entries[0].params[1].optional);
+		assert!(entries[0].params[1].rest);
+	}
+
+	#[test]
+	fn test_outline_l1_rust_signature_fields() {
+		let buffer = inline_buffer(
+			"pub fn greet<T>(value: usize) -> Result<T, Error> {\n  todo!()\n}\n",
+			"rust",
+		);
+		let profile = profile("rust");
+		let entries =
+			outline(&buffer, &profile, EnrichFlags { signature: true, ..EnrichFlags::L0_ONLY });
+		assert_eq!(entries.len(), 1);
+		assert_eq!(entries[0].generics, vec!["T"]);
+		assert_eq!(entries[0].return_type.as_deref(), Some("Result<T, Error>"));
+		assert_eq!(entries[0].params.len(), 1);
+		assert_eq!(entries[0].params[0].name, "value");
+		assert_eq!(entries[0].params[0].ty.as_deref(), Some("usize"));
+	}
+
+	#[test]
+	fn test_outline_l2_metrics_fields() {
+		let buffer = inline_buffer(
+			"function score(items: string[]) {\n  let total = 0;\n  for (const item of items) {\n    \
+			 if (check(item)) {\n      total += format(item).length;\n    }\n  }\n  return \
+			 total;\n}\n",
+			"typescript",
+		);
+		let profile = profile("typescript");
+		let entries =
+			outline(&buffer, &profile, EnrichFlags { metrics: true, ..EnrichFlags::L0_ONLY });
+		assert_eq!(entries.len(), 1);
+		assert!(entries[0].statements.is_some_and(|value| value >= 4));
+		assert_eq!(entries[0].branch_points, Some(2));
+		assert_eq!(entries[0].nesting_depth, Some(2));
+		assert_eq!(entries[0].call_sites, Some(2));
+		assert_eq!(entries[0].has_side_effects, Some(true));
+	}
+
+	#[test]
+	fn test_outline_l3_doc_fields() {
+		let buffer = inline_buffer(
+			"/**\n * Greets a user.\n * @deprecated use greet2\n * @param name human-readable name\n \
+			 */\nexport function greet(name: string) {\n  return name;\n}\n",
+			"typescript",
+		);
+		let profile = profile("typescript");
+		let entries = outline(&buffer, &profile, EnrichFlags { doc: true, ..EnrichFlags::L0_ONLY });
+		assert_eq!(entries.len(), 1);
+		assert_eq!(entries[0].doc_summary.as_deref(), Some("Greets a user."));
+		assert_eq!(entries[0].doc_tags, vec!["deprecated", "param"]);
 	}
 
 	#[test]

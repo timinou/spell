@@ -5,7 +5,11 @@ import type { LoadExtensionsResult } from "../../src/extensibility/extensions/ty
 import * as sdkModule from "../../src/sdk";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "../../src/session/agent-session";
 import type { AuthStorage } from "../../src/session/auth-storage";
-import { runSubprocess, SUBAGENT_WARNING_MISSING_SUBMIT_RESULT } from "../../src/task/executor";
+import {
+	runSubprocess,
+	SUBAGENT_WARNING_MISSING_SUBMIT_RESULT,
+	SUBAGENT_WARNING_MISSING_VERIFICATION_PROOF,
+} from "../../src/task/executor";
 import type { AgentDefinition, AgentProgress } from "../../src/task/types";
 
 vi.mock("../../src/sdk", () => ({
@@ -186,6 +190,160 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(prompts[1]).toContain("You stopped without calling submit_result");
 		expect(result.output).toContain('"done": true');
 		expect(result.output.includes("SYSTEM WARNING")).toBe(false);
+	});
+
+	it("accepts gated submit_result success when proof is already observed", async () => {
+		const prompts: string[] = [];
+		const promptOptions: Array<PromptOptions | undefined> = [];
+		const session = createMockSession(({ text, options, emit }) => {
+			prompts.push(text);
+			promptOptions.push(options);
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-bash",
+				toolName: "bash",
+				args: { command: "bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts" },
+				result: {
+					content: [{ type: "text", text: "ok" }],
+					details: { exitCode: 0, cwd: "/tmp" },
+				},
+				isError: false,
+			});
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-submit-result-proof",
+				toolName: "submit_result",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-gated-proof-first",
+			runtimeVerification: {
+				gateCmd: "bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts",
+			},
+		});
+		expect(prompts).toHaveLength(1);
+		expect(promptOptions[0]?.toolChoice).toBeUndefined();
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain('"ok": true');
+	});
+
+	it("retries exactly once when gated success arrives before proof and then accepts verified success", async () => {
+		const prompts: string[] = [];
+		const promptOptions: Array<PromptOptions | undefined> = [];
+		const session = createMockSession(({ text, options, promptIndex, emit, state }) => {
+			prompts.push(text);
+			promptOptions.push(options);
+			if (promptIndex === 1) {
+				const assistant = createAssistantStopMessage("submitted too early");
+				state.messages.push(assistant);
+				emit({ type: "message_end", message: assistant });
+				emit({
+					type: "tool_execution_end",
+					toolCallId: "tool-submit-result-too-early",
+					toolName: "submit_result",
+					result: {
+						content: [{ type: "text", text: "Result submitted." }],
+						details: { status: "success", data: { ok: true } },
+					},
+					isError: false,
+				});
+				return;
+			}
+			expect(text).toContain("required verification proof");
+			expect(options?.toolChoice).toBeUndefined();
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-bash-after-retry",
+				toolName: "bash",
+				args: { command: "bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts" },
+				result: {
+					content: [{ type: "text", text: "ok" }],
+					details: { exitCode: 0, cwd: "/tmp" },
+				},
+				isError: false,
+			});
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-submit-result-after-proof",
+				toolName: "submit_result",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true, retried: true } },
+				},
+				isError: false,
+			});
+		});
+
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-gated-retry-once",
+			runtimeVerification: {
+				gateCmd: "bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts",
+			},
+		});
+		expect(prompts).toHaveLength(2);
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toContain('"retried": true');
+	});
+
+	it("fails honestly when proof is still missing after the single runtime retry", async () => {
+		const prompts: string[] = [];
+		const session = createMockSession(({ text, promptIndex, emit, state }) => {
+			prompts.push(text);
+			const assistant = createAssistantStopMessage(`attempt ${promptIndex}`);
+			state.messages.push(assistant);
+			emit({ type: "message_end", message: assistant });
+			emit({
+				type: "tool_execution_end",
+				toolCallId: `tool-submit-result-${promptIndex}`,
+				toolName: "submit_result",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { attempt: promptIndex } },
+				},
+				isError: false,
+			});
+			if (promptIndex > 1) {
+				expect(text).toContain("required verification proof");
+			}
+		});
+
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		const result = await runSubprocess({
+			...baseOptions,
+			id: "subagent-gated-proof-still-missing",
+			runtimeVerification: {
+				gateCmd: "bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts",
+			},
+		});
+		expect(prompts).toHaveLength(2);
+		expect(result.exitCode).toBe(1);
+		expect(result.error).toContain(SUBAGENT_WARNING_MISSING_VERIFICATION_PROOF);
+		expect(result.output).not.toContain('"attempt": 2');
 	});
 
 	it("keeps null submit_result warning when subagent submits success without data", async () => {
