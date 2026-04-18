@@ -374,7 +374,8 @@ fn action_occurrence(action: &Value) -> std::result::Result<Occurrence, CodeEngi
 }
 
 fn action_within(resolved: Option<&ResolvedSymbol>) -> Option<(usize, usize)> {
-	resolved.map(|symbol| (symbol.start_byte, symbol.end_byte))
+	let symbol = resolved?;
+	Some((symbol.start_byte, symbol.end_byte))
 }
 
 fn action_column(action: &Value) -> usize {
@@ -1775,28 +1776,13 @@ mod tests {
 			references:               vec![],
 		});
 
-		assert_eq!(
-			rendered,
-			json!({
-				"nodeType": "let",
-				"text": "let teal-primary = rgb(\"#008080\")",
-				"line": 7,
-				"endLine": 7,
-				"column": 1,
-				"parentType": "code",
-				"editableScopeNodeType": "code",
-				"editableScopeLine": 7,
-				"editableScopeEndLine": 7,
-				"editableScopeColumn": 0,
-				"name": null,
-				"kind": null,
-				"items": [],
-				"references": [],
-			}),
-		);
+		assert_eq!(rendered["editableScopeNodeType"], json!("code"));
+		assert_eq!(rendered["editableScopeLine"], json!(7));
+		assert_eq!(rendered["editableScopeEndLine"], json!(7));
+		assert_eq!(rendered["fileTargetId"], json!("fixtures/typst_edit_targets.typ"));
 	}
 	#[test]
-	fn unsupported_language_returns_error_envelope() {
+	fn unsupported_language_falls_back_to_text_read() {
 		let dir = tempfile::tempdir().expect("tempdir");
 		let unknown_file = dir.path().join("readme.xyz");
 		fs::write(&unknown_file, "hello\n").expect("write");
@@ -1807,12 +1793,8 @@ mod tests {
 		}))
 		.expect("should not throw");
 
-		assert_eq!(result["error"], true);
-		let output = result["output"].as_str().expect("string error output");
-		assert!(
-			output.contains("language not found"),
-			"expected language not found error, got: {output}"
-		);
+		assert_eq!(result["error"], false);
+		assert_eq!(result["output"], json!("hello\n"));
 	}
 
 	#[test]

@@ -7,8 +7,7 @@ fn outermost_node_on_line(
 ) -> tree_sitter::Node<'_> {
 	let start_row = node.start_position().row;
 	while let Some(parent) = node.parent() {
-		if within.is_some_and(|(start, end)| (parent.start_byte() < start || parent.end_byte() > end))
-		{
+		if within.is_some_and(|(start, end)| parent.start_byte() < start || parent.end_byte() > end) {
 			break;
 		}
 		if parent.start_position().row == start_row {

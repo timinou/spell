@@ -1,5 +1,5 @@
 #+TITLE: Exit plan mode prevention renewal plan
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14bf5fdd01b87f1c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-11-46-694Z_14bf5fdd01b87f1c.jsonl]]
 #+CUSTOM_ID: PLAN-248-exit-plan-mode-prevention-renewal-plan
@@ -137,3 +137,18 @@ with exact commands. Plan-level global checks after all waves complete:
   Migration of those files is explicitly out of scope.
 - The `Effort` enum in `packages/ai` is thinking-level related and
   **MUST NOT** be touched by N2.
+
+** Completion [2026-04-18]
+*** Verification
+- `bun check && cargo test -p pi-code-engine && cargo test -p pi-natives && bun test packages/org && bun test packages/coding-agent/test/plan-mode && bun test packages/coding-agent/test/tools/exit-plan-mode.test.ts && bun test packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts` → passed (`VERIFIED_PLAN248`).
+- `grep(pattern="EFFORT", path="packages/org/src packages/coding-agent/src", glob="*.ts,*.md")` → only thinking-level `EFFORT` symbols remain in `packages/coding-agent/src/thinking.ts`.
+- `grep(pattern="PRIORITY", path="packages/org/src packages/coding-agent/src", glob="*.ts,*.md")` → only org query/filter support remains in `packages/org/src/tool.ts` / `packages/org/src/types.ts`.
+- `grep(pattern="EFFORT|PRIORITY", path="packages/coding-agent/src/prompts", glob="*.md")` → no matches.
+- Manual repro: external overwrite followed by `org note` returned `EXTERNAL_MODIFICATION` without clobbering disk content.
+- Manual repro: second identical `exit_plan_mode` call returned `Plan already approved.` with `planExists: true`.
+*** Artifacts
+- Final integration bundle: artifact://14bf73c0e7b87f1e/main/bash/153.txt
+*** Deviations
+- None.
+
+NOTE [2026-04-18]: PLAN-248 execution completed after verification bundle passed and linked child items were reconciled to DONE.

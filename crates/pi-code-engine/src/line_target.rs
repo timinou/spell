@@ -48,7 +48,11 @@ pub fn resolve_edit_target<'a>(
 		.ok_or_else(|| CodeEngineError::Edit(format!("No node found at line {line}")))
 }
 
-fn ensure_within_target_scope(line: usize, byte: usize, within: Option<TargetSpan>) -> Result<()> {
+const fn ensure_within_target_scope(
+	line: usize,
+	byte: usize,
+	within: Option<TargetSpan>,
+) -> Result<()> {
 	let Some((target_start, target_end)) = within else {
 		return Ok(());
 	};

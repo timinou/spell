@@ -1,5 +1,5 @@
 #+TITLE: Informative org-create response with prefix template and checklist
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14bf5fdd01b87f1c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-11-46-694Z_14bf5fdd01b87f1c.jsonl]]
 #+CUSTOM_ID: FEAT-566-informative-org-create-response-with-pre
@@ -102,3 +102,5 @@ is fine.
 
 - `bun check:ts` clean.
 - `bun test packages/org` green.
+
+NOTE [2026-04-18]: Completed in PLAN-248. Verified org create response returns prefix, missingRequired, recommended, and rewrite guidance.
