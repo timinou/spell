@@ -1,5 +1,5 @@
 #+TITLE: Idempotent exit_plan_mode after prior successful exit
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14bf5fdd01b87f1c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-11-46-694Z_14bf5fdd01b87f1c.jsonl]]
 #+CUSTOM_ID: BUG-278-idempotent-exit-plan-mode-after-prior-su
@@ -103,3 +103,5 @@ and the next turn). The failure message is misleading because the plan
 - `bun check:ts` clean.
 - Manual repro: approve a plan, call exit_plan_mode again in the same
   session → no error.
+
+NOTE [2026-04-18]: Completed in PLAN-248. Verified second identical exit_plan_mode call returns benign success while different inactive-plan calls still error.

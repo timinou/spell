@@ -491,7 +491,7 @@ fn parse_items_from_options(options: &Value) -> Result<Vec<pi_org_engine::OrgIte
 	.map_err(org_err)
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "helper used through execute_org wrapper")]
 fn execute_org_inner(options: &Value) -> Result<Value> {
 	let command = options
 		.get("command")
@@ -563,7 +563,7 @@ mod tests {
 		)
 		.expect("external write");
 		let bumped = FileTime::from_system_time(
-			std::time::SystemTime::now() + std::time::Duration::from_secs(1),
+			std::time::SystemTime::now() + std::time::Duration::from_secs(5),
 		);
 		set_file_mtime(&file, bumped).expect("bump mtime");
 
@@ -610,7 +610,7 @@ mod tests {
 		)
 		.expect("external write");
 		let bumped = FileTime::from_system_time(
-			std::time::SystemTime::now() + std::time::Duration::from_secs(1),
+			std::time::SystemTime::now() + std::time::Duration::from_secs(5),
 		);
 		set_file_mtime(&file, bumped).expect("bump mtime");
 

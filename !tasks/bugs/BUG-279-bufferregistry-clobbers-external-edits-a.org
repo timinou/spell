@@ -1,5 +1,5 @@
 #+TITLE: BufferRegistry clobbers external edits and serves stale ropes
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14bf5fdd01b87f1c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-11-46-694Z_14bf5fdd01b87f1c.jsonl]]
 #+CUSTOM_ID: BUG-279-bufferregistry-clobbers-external-edits-a
@@ -189,3 +189,5 @@ Impact:
   actively — deferred to a separate FUP.
 </parameter>
 </invoke>
+
+NOTE [2026-04-18]: Completed in PLAN-248. Verified BufferRegistry stale-disk detection, EXTERNAL_MODIFICATION save guard, and reload behavior via cargo tests and manual repros.

@@ -1,5 +1,5 @@
 #+TITLE: Org suboutline add subcommand
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bf5fdd01b87f1c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-11-46-694Z_14bf5fdd01b87f1c.jsonl]]
 #+CUSTOM_ID: FEAT-568-org-suboutline-add-subcommand
@@ -147,3 +147,5 @@ other content. A dedicated append operation removes that footgun.
 
 - `bun check:ts` clean.
 - `bun test packages/org` green.
+
+NOTE [2026-04-18]: Completed in PLAN-248. Verified suboutline-add command metadata, validation, and append behavior via focused org command tests.

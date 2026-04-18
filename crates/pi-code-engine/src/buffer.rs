@@ -174,7 +174,7 @@ impl BufferRegistry {
 		Self { buffers: DashMap::new(), registry, watcher }
 	}
 
-	pub fn watcher(&self) -> Option<&FileWatcher> {
+	pub const fn watcher(&self) -> Option<&FileWatcher> {
 		self.watcher.as_ref()
 	}
 
@@ -669,7 +669,9 @@ impl CodeBuffer {
 		}
 		let source = self.source();
 		let disk_mtime = with_exclusive_lock(&path, SAVE_LOCK_BUDGET, || {
-			if let Ok(metadata) = fs::metadata(&path) {
+			if self.disk_mtime.is_some()
+				&& let Ok(metadata) = fs::metadata(&path)
+			{
 				let disk_mtime = metadata_modified(&metadata);
 				if is_newer_mtime(disk_mtime, self.disk_mtime) {
 					return Err(CodeEngineError::ExternalModification {
@@ -705,7 +707,7 @@ impl CodeBuffer {
 		&self.tree
 	}
 
-	pub fn registry(&self) -> &Arc<LanguageRegistry> {
+	pub const fn registry(&self) -> &Arc<LanguageRegistry> {
 		&self.registry
 	}
 
@@ -1199,7 +1201,7 @@ mod tests {
 	fn buffer_external_write_reuses_cached_buffer_when_disk_unchanged() {
 		let path = temp_path("registry-stable.ts");
 		fs::write(&path, "export const value = 1;\n").expect("write fixture");
-		let reg = BufferRegistry::new(registry());
+		let reg = BufferRegistry::new_with_watcher(registry(), None);
 		let first = reg.open(&path).expect("open first");
 		let second = reg.open(&path).expect("open second");
 		assert!(Arc::ptr_eq(&first, &second));
@@ -1209,13 +1211,13 @@ mod tests {
 	fn buffer_external_write_reloads_after_disk_change() {
 		let path = temp_path("registry-external-write.ts");
 		fs::write(&path, "export const value = 1;\n").expect("write fixture");
-		let reg = BufferRegistry::new(registry());
+		let reg = BufferRegistry::new_with_watcher(registry(), None);
 		let first = reg.open(&path).expect("open first");
 		assert_eq!(first.lock().source(), "export const value = 1;\n");
 
 		fs::write(&path, "export const value = 2;\n").expect("external write");
 		let bumped =
-			FileTime::from_system_time(SystemTime::now() + std::time::Duration::from_secs(1));
+			FileTime::from_system_time(SystemTime::now() + std::time::Duration::from_secs(5));
 		set_file_mtime(&path, bumped).expect("bump mtime");
 
 		let second = reg.open(&path).expect("open second");
@@ -1239,7 +1241,7 @@ mod tests {
 
 		fs::write(&path, "export const value = 99;\n").expect("external write");
 		let bumped =
-			FileTime::from_system_time(SystemTime::now() + std::time::Duration::from_secs(1));
+			FileTime::from_system_time(SystemTime::now() + std::time::Duration::from_secs(5));
 		set_file_mtime(&path, bumped).expect("bump mtime");
 
 		let err = buffer.save().expect_err("reject external modification");
@@ -1250,5 +1252,87 @@ mod tests {
 			other => panic!("expected external modification, got {other:?}"),
 		}
 		assert_eq!(fs::read_to_string(&path).expect("read disk"), "export const value = 99;\n");
+	}
+
+	#[test]
+	fn concurrent_opens_same_path_return_same_arc() {
+		use std::thread;
+
+		let path = temp_path("same-path.ts");
+		fs::write(&path, "export const value = 1;\n").expect("write fixture");
+		let registry = Arc::new(BufferRegistry::new_with_watcher(registry(), None));
+		let handles: Vec<_> = (0..8)
+			.map(|_| {
+				let registry = Arc::clone(&registry);
+				let path = path.clone();
+				thread::spawn(move || registry.open(&path).expect("open"))
+			})
+			.collect();
+		let buffers: Vec<_> = handles
+			.into_iter()
+			.map(|handle| handle.join().expect("thread join"))
+			.collect();
+		for buffer in buffers.iter().skip(1) {
+			assert!(Arc::ptr_eq(&buffers[0], buffer));
+		}
+	}
+
+	#[test]
+	fn buffer_watcher_marks_stale_after_external_write() {
+		use std::{thread, time::Duration};
+
+		let path = temp_path("watcher-stale.ts");
+		fs::write(&path, "export const value = 1;\n").expect("write fixture");
+		let registry = BufferRegistry::new(registry());
+		if !registry.watcher_active() {
+			return;
+		}
+		registry.open(&path).expect("open");
+		fs::write(&path, "export const value = 2;\n").expect("external write");
+		let mut stale = false;
+		for _ in 0..20 {
+			if registry.is_stale(&path) {
+				stale = true;
+				break;
+			}
+			thread::sleep(Duration::from_millis(10));
+		}
+		assert!(stale, "watcher should mark path stale after external write");
+	}
+
+	#[test]
+	fn buffer_save_times_out_on_lock_contention() {
+		use std::{thread, time::Duration};
+
+		let path = temp_path("lock-timeout.ts");
+		fs::write(&path, "export const value = 1;\n").expect("write fixture");
+		let mut buffer = CodeBuffer::open(&path, registry()).expect("open");
+		let end = buffer.source().len();
+		buffer
+			.edit(TextEdit {
+				start_byte:   end,
+				old_end_byte: end,
+				new_text:     "export const local = 2;\n".into(),
+			})
+			.expect("edit");
+
+		let held_path = path.clone();
+		let lock_thread = thread::spawn(move || {
+			crate::file_lock::with_exclusive_lock(&held_path, Duration::from_millis(50), || {
+				thread::sleep(Duration::from_millis(750));
+				Ok(())
+			})
+			.expect("hold exclusive lock");
+		});
+		thread::sleep(Duration::from_millis(50));
+
+		let err = buffer
+			.save()
+			.expect_err("save should time out behind held lock");
+		match err {
+			CodeEngineError::LockTimeout { path: error_path, .. } => assert_eq!(error_path, path),
+			other => panic!("expected lock timeout, got {other:?}"),
+		}
+		lock_thread.join().expect("lock thread join");
 	}
 }

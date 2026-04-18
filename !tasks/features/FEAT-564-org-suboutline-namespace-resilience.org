@@ -1,5 +1,5 @@
 #+TITLE: Org suboutline namespace resilience
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14bf5fdd01b87f1c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-11-46-694Z_14bf5fdd01b87f1c.jsonl]]
 #+CUSTOM_ID: FEAT-564-org-suboutline-namespace-resilience
@@ -152,3 +152,5 @@ categories:
   numeric-prefix-only CUSTOM_IDs in their body — succeeds on first attempt.
 
 NOTE [2026-04-18]: Cache refresh
+
+NOTE [2026-04-18]: Completed in PLAN-248. Verified numeric-prefix sub-outline rewrite/validation and fix hints via focused tests and manual validation repro.

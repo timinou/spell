@@ -1,5 +1,5 @@
 #+TITLE: Simplify required org properties to LAYER only
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14bf5fdd01b87f1c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-11-46-694Z_14bf5fdd01b87f1c.jsonl]]
 #+CUSTOM_ID: FEAT-565-simplify-required-org-properties-to-laye
@@ -213,3 +213,5 @@ DEPENDS is the real scheduling primitive and is encouraged but not forced.
   .ts` green.
 - Manual: create a FEAT with only `LAYER` — `org validate` emits no
   errors, no warnings.
+
+NOTE [2026-04-18]: Completed in PLAN-248. Verified LAYER-only required property model, loop/prompt cleanup, and updated tests via wave-two verification bundle.
