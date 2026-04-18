@@ -1,16 +1,19 @@
-export interface Patch {
-	find: string;
-	replace: string;
-}
-
-export interface EditEntry {
-	symbol?: string;
+export interface CodeAction {
+	kind: string;
+	scope?: "target" | "body";
+	content?: string;
+	find?: string;
+	mode?: string;
+	direction?: "up" | "down";
 	line?: number;
 	column?: number;
-	operation: string;
-	content?: string;
-	patches?: Patch[];
-	mode?: string;
+	nodeType?: string;
+}
+
+export interface CodeOperation {
+	targetId: string;
+	actions: CodeAction[];
+	children?: CodeOperation[];
 }
 
 export interface CodeProofData {
@@ -20,23 +23,31 @@ export interface CodeProofData {
 	matches?: number | null;
 }
 
+export interface CodeEditTargetSummary {
+	targetId: string;
+	actions: string[];
+	children?: CodeEditTargetSummary[];
+}
+
 export interface CodeEditOutput {
 	version?: number;
 	diff?: string;
 	editCount?: number;
 	created?: boolean;
-	operation?: string;
+	targets?: CodeEditTargetSummary[];
 	proof?: CodeProofData;
 }
 
 export interface CodeErrorOutput {
 	message?: string;
-	operation?: string;
+	targetId?: string;
+	action?: string;
 	proof?: CodeProofData;
 }
 
 export interface CodeBufferOptions {
 	command: string;
+	root?: string;
 	file?: string;
 	resolution?: number;
 	offset?: number;
@@ -45,12 +56,10 @@ export interface CodeBufferOptions {
 	line?: number;
 	column?: number;
 	symbol?: string;
-	operation?: string;
+	query?: string;
 	content?: string;
-	mode?: string;
 	depth?: number;
-	patches?: Patch[];
-	edits?: EditEntry[];
+	operations?: CodeOperation[];
 }
 
 export interface CodeBufferResult {

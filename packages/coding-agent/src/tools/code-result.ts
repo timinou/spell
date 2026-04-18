@@ -38,6 +38,7 @@ export interface CodeOutlineEntry {
 	column?: number;
 	exported?: boolean;
 	signature?: string;
+	targetId?: string;
 	children: CodeOutlineEntry[];
 }
 
@@ -60,6 +61,9 @@ export interface CodeNavigateData {
 	editableScopeLine?: number;
 	editableScopeEndLine?: number;
 	editableScopeColumn?: number;
+	editableScopeTargetId?: string;
+	fileTargetId?: string;
+	targetId?: string;
 	name?: string;
 	kind?: string;
 	items: CodeNavigateItem[];
@@ -72,12 +76,18 @@ export interface CodeProofData {
 	matches?: number;
 }
 
+export interface CodeEditTargetSummary {
+	targetId: string;
+	actions: string[];
+	children?: CodeEditTargetSummary[];
+}
+
 export interface CodeEditData {
 	version?: number;
 	diff: string;
 	editCount: number;
 	created?: boolean;
-	operation?: string;
+	targets: CodeEditTargetSummary[];
 	proof?: CodeProofData;
 	noop?: boolean;
 	idempotent?: boolean;
@@ -205,6 +215,8 @@ export interface CodeToolErrorDetails {
 	message: string;
 	error: true;
 	proof?: CodeProofData;
+	targetId?: string;
+	action?: string;
 	output?: unknown;
 	meta?: OutputMeta;
 }
@@ -234,7 +246,8 @@ export function createCodeToolError(input: {
 	cwd?: string;
 	output?: unknown;
 }): CodeToolErrorDetails {
-	const proof = normalizeProof(asRecord(input.output)?.proof);
+	const record = asRecord(input.output);
+	const proof = normalizeProof(record?.proof);
 	return {
 		kind: "error",
 		command: input.command,
@@ -244,6 +257,8 @@ export function createCodeToolError(input: {
 		message: input.message,
 		error: true,
 		proof,
+		targetId: asString(record?.targetId),
+		action: asString(record?.action),
 		output: input.output,
 	};
 }
@@ -335,7 +350,7 @@ export function normalizeCodeBufferSuccess(input: {
 				diff: asString(record?.diff) ?? "",
 				editCount: asNumber(record?.editCount) ?? 0,
 				created: asBoolean(record?.created) ?? false,
-				operation: asString(record?.operation),
+				targets: normalizeEditTargets(record?.targets),
 				proof: normalizeProof(record?.proof),
 				noop: input.noop ?? false,
 				idempotent: input.idempotent ?? false,
@@ -433,7 +448,11 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 			parts.push(formatProofLine("Proof", details.proof));
 		}
 		if (details.command === "edit") {
-			parts.push("Recovery: re-read/navigate, tighten the target, then retry narrowly.");
+			if (details.targetId) parts.push(`Target: ${details.targetId}`);
+			if (details.action) parts.push(`Action: ${details.action}`);
+			parts.push(
+				"Recovery: tighten the target/action and retry narrowly; a fresh code read is not required after a successful managed edit.",
+			);
 		}
 		return parts.join("\n");
 	}
@@ -482,6 +501,8 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 			metadata.push(`scope: ${details.data.editableScopeNodeType}${scopeLocation ? ` ${scopeLocation}` : ""}`);
 		}
 		if (details.data.kind) metadata.push(`kind: ${details.data.kind}`);
+		if (details.data.targetId) metadata.push(`target: ${details.data.targetId}`);
+		if (details.data.editableScopeTargetId) metadata.push(`scopeTarget: ${details.data.editableScopeTargetId}`);
 		if (metadata.length > 0) lines.push(metadata.join(" | "));
 		const summary: string[] = [];
 		if (details.data.items.length > 0) summary.push(pluralize(details.data.items.length, "item"));
@@ -525,17 +546,17 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		if (details.data.mutationState === "discarded") {
 			return withHint([`Preview discarded${label}`, "No mutation landed."].join("\n"));
 		}
-		const header = `${details.data.created ? "Created" : "Edited"}${label}`;
-		const operationLine = details.data.operation ? `Operation: ${details.data.operation}` : undefined;
+		const header = `${details.data.created ? "Created" : "Edited"}${label}${formatEditTargetSummary(details.data)}`;
+		const targetLine = formatTargetLine(details.data.targets);
 		const proofLine = details.data.proof ? formatProofLine("Proof", details.data.proof) : undefined;
 		if (details.data.diff.trim().length === 0) {
-			return withHint([header, operationLine, proofLine, formatting].filter(Boolean).join("\n"));
+			return withHint([header, targetLine, proofLine, formatting].filter(Boolean).join("\n"));
 		}
 		const preview = buildCompactHashlineDiffPreview(details.data.diff);
 		const changes = countDiffChanges(details.data.diff);
 		const lines = [
 			header,
-			operationLine,
+			targetLine,
 			proofLine,
 			formatting,
 			`Changes: +${changes.addedLines} -${changes.removedLines}`,
@@ -663,6 +684,7 @@ function normalizeOutlineEntries(value: unknown): CodeOutlineEntry[] {
 			column: asNumber(record.column),
 			exported: asBoolean(record.exported),
 			signature: asString(record.signature),
+			targetId: asString(record.targetId),
 			children: normalizeOutlineEntries(record.children),
 		});
 	}
@@ -695,6 +717,9 @@ function normalizeNavigateData(value: unknown, action?: string): CodeNavigateDat
 		editableScopeLine: asNumber(record?.editableScopeLine ?? record?.editable_scope_line),
 		editableScopeEndLine: asNumber(record?.editableScopeEndLine ?? record?.editable_scope_end_line),
 		editableScopeColumn: asNumber(record?.editableScopeColumn ?? record?.editable_scope_column),
+		editableScopeTargetId: asString(record?.editableScopeTargetId ?? record?.editable_scope_target_id),
+		fileTargetId: asString(record?.fileTargetId ?? record?.file_target_id),
+		targetId: asString(record?.targetId ?? record?.target_id),
 		name: asString(record?.name),
 		kind: asString(record?.kind),
 		items,
@@ -820,6 +845,46 @@ function normalizeLanguages(value: unknown): CodeLanguageInfo[] {
 	return languages;
 }
 
+function normalizeEditTargets(value: unknown): CodeEditTargetSummary[] {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap(item => {
+		const record = asRecord(item);
+		const targetId = asString(record?.targetId);
+		if (!targetId) return [];
+		const actions = Array.isArray(record?.actions)
+			? record.actions.filter((entry): entry is string => typeof entry === "string")
+			: [];
+		return [
+			{
+				targetId,
+				actions,
+				children: normalizeEditTargets(record?.children),
+			},
+		];
+	});
+}
+
+function countTargetActions(targets: CodeEditTargetSummary[]): number {
+	return targets.reduce((sum, target) => sum + target.actions.length + countTargetActions(target.children ?? []), 0);
+}
+
+function formatEditTargetSummary(data: CodeEditData): string {
+	const targetCount = data.targets.length;
+	const actionCount = countTargetActions(data.targets);
+	const targetPart = targetCount > 0 ? `${targetCount} ${targetCount === 1 ? "target" : "targets"}` : undefined;
+	const actionPart = actionCount > 0 ? `${actionCount} ${actionCount === 1 ? "action" : "actions"}` : undefined;
+	const versionPart = data.version !== undefined ? `buffer version ${data.version}` : undefined;
+	const parts = [targetPart, actionPart, versionPart].filter(Boolean);
+	return parts.length > 0 ? ` (${parts.join(", ")})` : "";
+}
+
+function formatTargetLine(targets: CodeEditTargetSummary[]): string | undefined {
+	if (targets.length === 0) return undefined;
+	const target = targets[0];
+	const actionSuffix = target.actions.length > 0 ? ` [${target.actions.join(", ")}]` : "";
+	const childSuffix = target.children?.length ? ` (+${target.children.length} child targets)` : "";
+	return `Target: ${target.targetId}${actionSuffix}${childSuffix}`;
+}
 function formatOutlineEntry(entry: CodeOutlineEntry): string {
 	const childCount = entry.children.length;
 	const childSuffix = childCount > 0 ? ` (${pluralize(childCount, "child")})` : "";

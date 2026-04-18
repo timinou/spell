@@ -14,12 +14,13 @@ use crate::model::{CodeGraph, EdgeKind, GraphNode, SymbolKind};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GraphNodeSummary {
-	pub label:    String,
-	pub path:     PathBuf,
-	pub kind:     String,
-	pub exported: bool,
-	pub line:     u32,
-	pub column:   u32,
+	pub label:     String,
+	pub target_id: String,
+	pub path:      PathBuf,
+	pub kind:      String,
+	pub exported:  bool,
+	pub line:      u32,
+	pub column:    u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -635,20 +636,22 @@ fn summary_for_node(
 ) -> Option<GraphNodeSummary> {
 	match graph.node_weight(node_index)? {
 		GraphNode::File(file) => Some(GraphNodeSummary {
-			label:    file.path.to_string_lossy().to_string(),
-			path:     file.path.clone(),
-			kind:     "file".into(),
-			exported: false,
-			line:     0,
-			column:   0,
+			label:     file.path.to_string_lossy().to_string(),
+			target_id: file.target_id(),
+			path:      file.path.clone(),
+			kind:      "file".into(),
+			exported:  false,
+			line:      0,
+			column:    0,
 		}),
 		GraphNode::Symbol(symbol) => Some(GraphNodeSummary {
-			label:    symbol.qualified_name.clone(),
-			path:     symbol.file.clone(),
-			kind:     format!("{:?}", symbol.kind).to_ascii_lowercase(),
-			exported: symbol.exported,
-			line:     symbol.line,
-			column:   symbol.column,
+			label:     symbol.qualified_name.clone(),
+			target_id: symbol.target_id().to_string(),
+			path:      symbol.file.clone(),
+			kind:      format!("{:?}", symbol.kind).to_ascii_lowercase(),
+			exported:  symbol.exported,
+			line:      symbol.line,
+			column:    symbol.column,
 		}),
 	}
 }

@@ -128,7 +128,11 @@ function ensureManagedBufferFresh(file: string): void {
 
 function applyManagedBufferContent(file: string, content: string, options: { create: boolean }): void {
 	const result = options.create
-		? executeCodeBuffer({ command: "edit", file, operation: "create", content })
+		? executeCodeBuffer({
+				command: "edit",
+				root: process.cwd(),
+				operations: [{ targetId: file, actions: [{ kind: "write", content }] }],
+			})
 		: executeCodeBuffer({ command: "replace_content", file, content });
 	if (result.error) {
 		throw new Error(`Managed code buffer update failed for ${file}: ${extractCodeToolErrorMessage(result.output)}`);

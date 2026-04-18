@@ -1,0 +1,198 @@
+#+TITLE: UNIFIED_TARGET_ID_RECURSIVE_CODE_EDIT_PLAN
+#+STATE: DONE
+#+SESSION_ID: 14bebe3e2a10411e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T23-25-38-856Z_14bebe3e2a10411e.jsonl]]
+#+CUSTOM_ID: PLAN-244-unified-target-id-recursive-code-edit-pl
+#+EFFORT: 30h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+A: root cause ≠ repo code. It’s a task-subagent tool-call bug.
+
+ Observed facts
+ - Task 0 aborted with:
+     - operation create does not accept resolution
+ - Task 1 aborted with:
+     - code-edit tool for Elixir mutations is not available in this session path
+ - Main session then successfully created:
+     - ../../packages/djinn/test/djinn/machine_draft_overlay_test.exs
+     - via code edit
+ ∴ Elixir mutation support exists here. Path is valid. The failure is in how the delegated agent called
+ the tool.
+
+ Exact incompatibility
+ - code edit has a special rule for operation: "create":
+     - only file
+     - operation
+     - content
+ - The subagent appears to be sending a normalized payload that still includes read-oriented/default
+ fields like:
+     - resolution
+     - possibly offset, limit, symbol, query, etc.
+ - Native validator rejects that shape for create:
+     - operation 'create' does not accept resolution
+
+ ∴ The problem is not “Elixir code edit unavailable”.
+ ∴ The real problem is “subagent emitted an invalid create payload”.
+
+ Why task 1 misdiagnosed it
+ - After repeated code edit rejections, the subagent generalized the symptom into:
+     - “code-edit tool for Elixir mutations is not available”
+ - That’s false at session level.
+ - We have direct proof the same file class/path works from the main agent.
+
+ What to tell the agent
+ Use this verbatim:
+
+ ```text
+   For `code edit` with `operation: "create"`, send a minimal payload only:
+   - file
+   - operation: "create"
+   - content
+
+   Do NOT send any of:
+   - resolution
+   - offset
+   - limit
+   - symbol
+   - query
+   - semantic
+   - depth
+   - patches
+   - edits
+   - line
+   - column
+   - action
+   - mode
+
+   Example:
+
+   {
+     "command": "edit",
+     "file": "../../packages/djinn/test/djinn/machine_draft_overlay_test.exs",
+     "operation": "create",
+     "content": ["defmodule ...", "..."]
+   }
+
+   This is a tool-payload issue, not a repo/path/language-support issue.
+   If editing an existing Elixir file, use `code edit` with `patch`/`replace-body`/`replace` on the target
+ symbol, or `ast_edit` where structural rewrite is cleaner.
+   Do not report “Elixir code edit unavailable” unless the minimal create payload above also fails.
+ ```
+
+ Short diagnosis
+ - Q: what is broken?
+ - A: delegated agent → malformed code edit create payload
+ - ✗ not Djinn
+ - ✗ not ../../packages/djinn
+ - ✗ not Elixir support
+ - ✓ tool-call shape for create
+
+ Clean fix
+ 1. In subagent behavior/prompt:
+     - special-case code edit create
+     - omit all non-create fields
+ 2. In harness/tool wrapper:
+     - when operation == "create", strip read/default fields before dispatch
+ 3. Optional better error handling:
+     - if validator says create does not accept resolution, retry automatically with minimal payload
+
+ Best instruction to give the agent
+ - “When creating source files with code edit, use the minimal create shape only. Do not include
+ resolution or any read/edit metadata. Existing-file edits are separate operations.”
+
+ NB
+ - This same failure pattern was already seen in another Spell transcript:
+     - operation 'create' does not accept resolution
+ ∴ likely harness/tool normalization bug, not one-off agent confusion.
+
+ If you want, next I can:
+ - continue implementation myself, or
+ - give you a tighter subagent prompt that avoids this exact failure mode.
+
+
+
+basically, the ACTUAL solution is to have ONE code edit version with no duplicaiton of intents on target symbols. It makes no sense to have 'patch', 'replace-body', 'replace', and 'create', they all mean the same thing in the symbol world
+
+* Context
+- Request: replace the current duplicated `code edit` write surface with a schema that is deduplicated by default: one stable target reference type, one recursive operation tree, one content-writing format, and one hard cutover.
+- Root-cause evidence already verified in repo code:
+  - `packages/coding-agent/src/prompts/tools/code.md` publicly documents separate top-level write shapes (`create`, `patch`, `replace-body`, `replace`) and therefore teaches callers a duplicated contract.
+  - `packages/coding-agent/src/tools/code.ts::validateCreatePayload(...)` hard-rejects mixed create + read/edit metadata, proving the current surface is structurally fragile.
+  - `crates/pi-natives/src/code_buffer.rs::validate_create_request(...)` duplicates the same create-only guard in the native bridge.
+  - `crates/pi-natives/src/code_buffer.rs` still dispatches write behavior by legacy operation strings rather than one normalized target/action model.
+  - `crates/pi-code-engine/src/resolve.rs::{ResolvedSymbol, resolve_symbol}` and `crates/pi-code-graph/src/model.rs::{SymbolNode, GraphNode}` are the right substrate for stable target IDs, but they do not yet expose one cross-surface edit ID model.
+- Child items:
+  - [[id:PROJ-048-unified-graph-backed-targetid-recursive]]
+
+** Settled Decisions
+1. The plan uses one deduplicated recursive request shape: `code edit { operations: [{ targetId, actions: [...], children?: [...] }] }`.
+2. `targetId` is graph/code-engine backed, stable across tool surfaces, and includes file roots in the same namespace as semantic symbols.
+3. `content` remains the canonical replacement payload; patch semantics move into an action kind such as `findAndReplace` instead of remaining a separate top-level operation family.
+4. Operations may contain nested child symbol work; target references appear once per node, and ordered actions execute sequentially inside that node.
+5. Hard cutover only: remove old `create` / `patch` / `replace-body` / `replace` shapes from prompts, validation, callers, and results in the same change. No aliases.
+6. Plan/output truth matters too: if org wave/manifests cannot truthfully represent the new dependency DAG, the implementation may remediate that tooling gap in-scope rather than leaving planning inconsistent.
+
+** Brief Tradeoff Analysis
+- Recursive node schema vs flat normalized graph:
+  - Recursive nodes preserve deduplication while remaining legible to agents and humans.
+  - Flat normalized records are easier for generic tooling but duplicate coordination data in practice and are harder to author by hand.
+- Recursive node schema vs full entity tables:
+  - Entity tables maximize normalization but impose unnecessary ceremony for a tool call payload.
+  - The tool contract should be deduplicated by default, not database-shaped.
+- ∴ Recommended approach: recursive node schema with stable `targetId` references.
+
+** Recommended Approach
+- Phase 1 — lock the canonical targetId/action schema and failing contract tests before any bridge changes.
+- Phase 2 — add stable file-root + symbol target IDs in the code engine / code graph so every subsequent tool surface can speak one reference language.
+- Phase 3 — replace legacy native edit dispatch with recursive targetId-based operation execution.
+- Phase 4 — cut over coding-agent prompts, code-tool validation, result rendering, and task/subagent emission to the canonical schema.
+- Phase 5 — verify execution/planning truth; if org-wave output still collapses the DAG misleadingly, fix that tooling gap in the same implementation stream.
+
+** Critical Files
+- Public contract and tool wrapper: `packages/coding-agent/src/prompts/tools/code.md`, `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/tools/code-result.ts`
+- Task/subagent emission path: `packages/coding-agent/src/task/executor.ts` and focused task tests under `packages/coding-agent/test/task/`
+- Native TS bridge: `packages/natives/src/code-buffer/types.ts`, `packages/natives/src/code-buffer/index.ts`
+- Native Rust bridge: `crates/pi-natives/src/code_buffer.rs`
+- Engine / target resolution: `crates/pi-code-engine/src/resolve.rs`, `crates/pi-code-engine/src/line_target.rs`, `crates/pi-code-engine/src/edit/`
+- Graph / stable symbol identity: `crates/pi-code-graph/src/model.rs` and any query/index plumbing required to surface IDs
+- Focused tests: `packages/coding-agent/test/tools/code.test.ts`, `packages/coding-agent/test/tools/code-result.test.ts`, `packages/coding-agent/test/task/task-payload-validation.test.ts`, `packages/natives/test/code-buffer.test.ts`
+
+* Verification
+- Required verification commands after implementation:
+  - `cargo test -p pi-code-engine`
+  - `cargo test -p pi-code-graph`
+  - `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts packages/coding-agent/test/task/task-payload-validation.test.ts`
+  - `bun check:ts`
+  - `bun check:rs`
+- Required manual proof:
+  - `code read` / `code outline` / `code navigate` expose stable target IDs for file roots and symbols used by later edits.
+  - One canonical `code edit { operations: [...] }` payload can express missing-file create, whole-file replace, declaration replace, body replace, and scoped find/replace without switching top-level operation families.
+  - Task/subagent execution no longer emits malformed create payloads or legacy mixed-field shapes.
+  - Error messages and result renderers refer to targetId/action semantics rather than removed legacy operations.
+  - If org-wave tooling was touched, the plan execution manifest path is now truthful for the intended dependency graph.
+
+* Execution Manifest
+** wave-0
+- [[id:PROJ-048-unified-graph-backed-targetid-recursive]] Unified graph-backed targetId recursive code edit schema cutover
+
+** Completion [2026-04-18]
+*** Verification
+- `cargo test -p pi-code-engine` → passed (`artifact://14bec6786710411f/main/bash/21.txt`).
+- `cargo test -p pi-code-graph` → passed (`artifact://14bec6786710411f/main/bash/22.txt`).
+- `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts packages/coding-agent/test/task/task-payload-validation.test.ts` → passed as part of the final verification bundle (`artifact://14bec6786710411f/main/bash/47.txt`).
+- `bun test packages/coding-agent/test/agent-session-message-pipeline.test.ts packages/coding-agent/test/modes/components/subagent-viewer/event-handler.test.ts packages/coding-agent/test/prompts/code-tool-contracts.test.ts` → passed as part of the final verification bundle (`artifact://14bec6786710411f/main/bash/47.txt`).
+- `bun check:ts` → passed (`artifact://14bec6786710411f/main/bash/47.txt`).
+- `bun check:rs` → passed with upstream tree-sitter-org C warnings only; no Rust fmt/clippy failures (`artifact://14bec6786710411f/main/bash/47.txt`).
+- Manual native proof: direct `executeCodeBuffer` runtime check showed outline + navigate exposing stable `targetId` / `fileTargetId` values and one canonical `command: "edit", operations: [...]` payload applying `findAndReplace` successfully (`artifact://14bec6786710411f/main/bash/43.txt`).
+*** Artifacts
+- Runtime targetId proof: `artifact://14bec6786710411f/main/bash/43.txt`
+- Final combined verification log: `artifact://14bec6786710411f/main/bash/47.txt`
+- Engine test log: `artifact://14bec6786710411f/main/bash/21.txt`
+- Graph test log: `artifact://14bec6786710411f/main/bash/22.txt`
+*** Deviations
+- None.
+
+NOTE [2026-04-18]: Execution complete. Verification evidence appended under the Completion heading; code/tests/docs committed together with linked org items.
