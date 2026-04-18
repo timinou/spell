@@ -76,7 +76,7 @@ describe("GrepTool staged output", () => {
 			const text = getResultText(result);
 
 			expect(text.startsWith(">>")).toBe(true);
-			expect(text).not.toContain("focused.ts");
+			expect(text).toContain("targetId: focused.ts::two");
 			expect(text).toContain("two");
 			expect(text).toContain("three");
 			expect(text).not.toContain("one");

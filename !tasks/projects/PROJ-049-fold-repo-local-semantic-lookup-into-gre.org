@@ -1,0 +1,102 @@
+#+TITLE: Fold repo-local semantic lookup into grep with targetId-aware results
+#+STATE: DONE
+#+SESSION_ID: 14bf4c0612d578c7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T09-45-05-867Z_14bf4c0612d578c7.jsonl]]
+#+CUSTOM_ID: PROJ-049-fold-repo-local-semantic-lookup-into-gre
+#+PRIORITY: #A
+#+LAYER: coding-agent
+#+EFFORT: 16h
+
+* Initial Message
+I want to fold the code symbol search tool into the grep tool, with maybe a 'rawText' search, but basically enable the output to the LLM to provide the targetId so that it's more efficient overall.
+
+Do a review and surface all the improvements that would let this be more ergonomic. Find the occurences of usage of grep tool after usage of the code tool in recent sessions (using jq) and let me know what you find
+
+* Scope
+In scope:
+- Fold repo-local semantic code lookup into `grep` so the agent-facing search surface for repository discovery is one tool, not a `code`→`grep` chain.
+- Keep external provider-backed `code_search` separate; this item only covers repo-local lookup inside the current workspace.
+- Add a grep contract that supports both semantic-local lookup and explicit raw-text lookup, while preserving existing staged/noise policies from `FEAT-559-broad-grep-staging-and-duplicate-query-reuse`.
+- Surface `targetId` directly in model-visible grep output for exact declaration hits, and surface an enclosing `scopeTarget` / `scopeTargetId` for arbitrary raw-text hits in supported source files.
+- Cut over prompts, tool docs, and agent-facing guidance so repo-local discovery/search is taught through `grep`, while `code` stays focused on outline/read/navigate/edit and other structural operations.
+
+Out of scope:
+- Folding external `code_search` (Exa / grep.app) into `grep`; keep that tool separate.
+- Replacing `ast_grep`, `lsp`, or structural `code` mutations.
+- Reworking FEAT-559 broad-grep staging heuristics except where needed to keep semantic/raw-text modes truthful.
+- Adding a second parallel repo-search tool or a compatibility alias surface.
+
+Rationale:
+- Recent-session jq review found repeated `code`→`grep` chaining in the exact area this change targets. Concrete occurrences:
+  - `2026-04-18T00-01-35-645Z_14bec6786710411f/3-UpdateResultAndSessionTests.jsonl`: `code read` on edited test files, then `grep` for legacy strings / remaining semantics.
+  - `2026-04-17T17-43-14-603Z_14be6fdf6ae9a13b/8-AddCodeResultProofTests.jsonl`: `code symbols` on `code-result.test.ts`, then `grep` to narrow the contract block and imports.
+  - `2026-04-17T17-43-14-603Z_14be6fdf6ae9a13b/11-RepairCodeTestFinal.jsonl`: `code outline` on `code.test.ts`, then `grep` for mock APIs.
+  - `2026-04-18T00-01-35-645Z_14bec6786710411f/2-UpdateDocsAndContracts.jsonl`: `code edit`, then `grep` to verify stale prompt shapes remain.
+- The recurring pattern is not “semantic search first, answer done”; it is “locate semantic scope, then immediately need exact text + target follow-up.” One grep surface that can return both textual matches and follow-up-ready target IDs removes that churn.
+
+* Existing Patterns
+- Current grep implementation and staged/noise behavior: `packages/coding-agent/src/tools/grep.ts`, `packages/coding-agent/test/tools/grep-staging.test.ts`, and transcript/noise policy helpers in `packages/coding-agent/src/tools/context-pressure-policy.ts`.
+- Current repo-local semantic discovery surface that should be folded into grep instead of duplicated: `packages/coding-agent/src/tools/code.ts` (`symbols`, `files`, `search` command surface) plus result formatting in `packages/coding-agent/src/tools/code-result.ts`.
+- Stable target-ID substrate that grep must reuse instead of inventing a parallel ID model: `PROJ-048-unified-graph-backed-targetid-recursive`, especially `packages/coding-agent/src/prompts/tools/code.md`, `packages/coding-agent/src/tools/code-result.ts`, and `crates/pi-natives/src/code_buffer.rs::{file_target_id_for_path,target_id_for_line,symbol_target_id}`.
+- Native bridge types already available for internal code-buffer lookups: `packages/natives/src/code-buffer/types.ts` and `packages/natives/src/index.ts`.
+- Prompt/tool-contract coverage that must be updated in the same change: `packages/coding-agent/src/prompts/tools/grep.md`, `packages/coding-agent/src/prompts/system/system-prompt.md`, and `packages/coding-agent/test/prompts/code-tool-contracts.test.ts`.
+
+* Tests
+Workflows to enumerate and defend first:
+1. Workflow 1 — repo-local semantic lookup through `grep` returns declaration-level hits with exact `targetId`, file path, kind/signature, and enough model-visible content to jump directly into `code edit` / `code read`.
+2. Workflow 2 — explicit raw-text grep on supported code files returns existing textual matches but enriches each result with exact declaration `targetId` when the match is on the declaration line, otherwise an enclosing `scopeTarget` / `scopeTargetId`.
+3. Workflow 3 — non-code files, unsupported grammars, transcript/log spelunking, and FEAT-559 broad-grep staging all remain truthful; semantic folding must not destroy the existing narrow/broad/noise split.
+4. Workflow 4 — agent-facing prompts and tool contracts no longer teach repo-local discovery via `code symbols` / `code search` / `code files`; `grep` becomes the single search surface and `code` remains the structural follow-up surface.
+5. Workflow 5 — the recent-session code→grep patterns above can be represented as one grep call each in regression coverage: semantic lookup when finding declarations/files, explicit raw-text lookup when exact text is the contract.
+
+Test files / scenarios:
+- New focused grep contract coverage: `packages/coding-agent/test/tools/grep-semantic.test.ts`.
+- Extend `packages/coding-agent/test/tools/grep-staging.test.ts` for semantic-vs-rawText routing and targetId/scopeTarget text shape.
+- Extend `packages/coding-agent/test/prompts/code-tool-contracts.test.ts` and any focused `packages/coding-agent/test/tools/code*.test.ts` coverage needed to prove the code-tool search surface is removed from the agent-facing contract.
+- If grep internally needs new native helper behavior beyond existing code-buffer commands, extend `packages/natives/test/code-buffer.test.ts` for the exact helper contract instead of leaving the bridge untested.
+
+* Implementation
+** Lock the unified grep search contract and failing tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-049-fold-repo-local-semantic-lookup-into-gre::define-grep-search-contract-and-tests
+:END:
+- Files: `packages/coding-agent/src/tools/grep.ts`, `packages/coding-agent/test/tools/grep-semantic.test.ts`, `packages/coding-agent/test/tools/grep-staging.test.ts`.
+- Settle the public grep shape before implementation: semantic-local lookup mode, explicit `rawText` escape hatch, model-visible targetId/scopeTarget formatting, and compatibility rules for current raw regex usage.
+- Add initially-failing tests for Workflows 1 through 5, including the jq-derived code→grep regressions.
+
+** Implement targetId-aware raw-text grep enrichment
+:PROPERTIES:
+:CUSTOM_ID: PROJ-049-fold-repo-local-semantic-lookup-into-gre::implement-targetid-aware-rawtext-grep
+:DEPENDS: PROJ-049-fold-repo-local-semantic-lookup-into-gre::define-grep-search-contract-and-tests
+:END:
+- Files: `packages/coding-agent/src/tools/grep.ts`, plus `packages/natives/test/code-buffer.test.ts` only if existing code-buffer primitives are insufficient.
+- Reuse existing stable target-ID infrastructure from PROJ-048 to enrich selected raw-text grep hits on supported source files.
+- Exact declaration-line matches must surface exact `targetId`; in-body matches must surface nearest enclosing `scopeTarget` / `scopeTargetId` without lying about ownership.
+- Preserve FEAT-559 staged/noise behavior and keep unsupported/non-code paths raw-text only.
+
+** Implement semantic-local grep mode and remove code-search duplication
+:PROPERTIES:
+:CUSTOM_ID: PROJ-049-fold-repo-local-semantic-lookup-into-gre::implement-semantic-grep-and-cut-over-code-search-surface
+:DEPENDS: PROJ-049-fold-repo-local-semantic-lookup-into-gre::implement-targetid-aware-rawtext-grep
+:END:
+- Files: `packages/coding-agent/src/tools/grep.ts`, `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/tools/code-result.ts`, `packages/coding-agent/src/prompts/tools/grep.md`, `packages/coding-agent/src/prompts/system/system-prompt.md`, `packages/coding-agent/test/prompts/code-tool-contracts.test.ts`, and focused `packages/coding-agent/test/tools/code*.test.ts` updates as needed.
+- Add repo-local semantic grep mode backed by the existing code-buffer/search substrate; share path/glob/type/limit scope controls with grep rather than teaching a parallel search API.
+- Remove or hard-cutover the agent-facing `code` discovery/search commands that overlap with grep (`symbols`, `files`, `search`) so grep is the single repo-search surface.
+- Update prompts/result text so follow-up flows are: `grep` to discover, `code` / `lsp` / `ast_grep` to inspect or mutate.
+
+* Edge Cases
+- Regex-heavy patterns, multiline searches, explicit context-before/after requests, or transcript/log spelunking must stay raw-text; semantic auto-routing must not reinterpret a true regex request silently.
+- Declaration-level target IDs must remain stable across nested members, exported wrappers, and language-specific declaration forms already supported by PROJ-048.
+- Arbitrary text matches may map only to an enclosing scope; the output must distinguish exact declaration `targetId` from approximate enclosing `scopeTarget` so the agent does not over-trust it.
+- Broad grep staging from FEAT-559 still matters after semantic folding; semantic mode must not re-introduce large-content dumps that bypass staged summaries.
+- Non-code files and unsupported grammars must not get fake target IDs or fake semantic hits.
+- If the public `code` contract loses search commands, all docs/tests/prompts that mention them must change in the same cutover.
+
+* Acceptance Criteria
+- `grep` becomes the sole agent-facing tool for repo-local search/discovery; no parallel `code` search surface remains in prompts or tool contracts.
+- Semantic grep returns exact declaration hits with stable `targetId`; raw-text grep on supported code files returns truthful `targetId` or `scopeTarget` metadata where available.
+- Existing FEAT-559 broad/narrow/noise behavior still passes focused verification.
+- The recent-session code→grep investigation patterns are covered by regression tests as single-hop grep workflows.
+- Focused tests cover semantic mode, raw-text enrichment, prompt/tool-contract cutover, and any bridge/native helper changes touched by the implementation.
+
+NOTE [2026-04-18]: Completed in PLAN-246: grep now owns repo-local semantic/rawText search, targetId/scopeTarget are surfaced in model-visible output, and code search commands redirect to grep.

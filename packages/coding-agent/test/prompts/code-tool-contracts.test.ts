@@ -7,6 +7,7 @@ import planModeReminder from "@oh-my-pi/pi-coding-agent/prompts/system/plan-mode
 };
 import codePrompt from "@oh-my-pi/pi-coding-agent/prompts/tools/code.md" with { type: "text" };
 import fallbackHint from "@oh-my-pi/pi-coding-agent/prompts/tools/code-hint-text-fallback.md" with { type: "text" };
+import grepPrompt from "@oh-my-pi/pi-coding-agent/prompts/tools/grep.md" with { type: "text" };
 import patchPrompt from "@oh-my-pi/pi-coding-agent/prompts/tools/patch.md" with { type: "text" };
 
 const systemPromptsDir = path.resolve(import.meta.dir, "../../src/prompts/system");
@@ -71,6 +72,14 @@ describe("code-edit contract prompts", () => {
 	it("keeps patch mode off code-supported fallback paths", () => {
 		expect(patchPrompt).toContain("only for unsupported plain-text files");
 		expect(patchPrompt).toContain("tighten the structural target instead of falling back to patch mode");
+	});
+
+	it("describes grep semantic and raw-text repo search modes", () => {
+		expect(grepPrompt).toContain(`mode: "auto"`);
+		expect(grepPrompt).toContain(`mode: "rawText"`);
+		expect(grepPrompt).toContain(`mode: "semantic"`);
+		expect(grepPrompt).toContain("targetId");
+		expect(grepPrompt).toContain("scopeTargetId");
 	});
 
 	it("states managed edits do not require reread after success", () => {

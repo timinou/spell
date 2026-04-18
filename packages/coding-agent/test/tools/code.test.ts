@@ -247,6 +247,14 @@ describe("coding-agent code tool wiring", () => {
 		);
 	});
 
+	it("redirects removed repo-local search commands to grep", async () => {
+		const tool = new CodeTool(createSession());
+		const result = await tool.execute("tool", { command: "symbols", query: "rateLimit" });
+		expect(getText(result)).toContain("moved to grep");
+		expect(getText(result)).toContain(`mode: "semantic"`);
+		expect(getText(result)).toContain(`mode: "rawText"`);
+	});
+
 	it("routes graph commands to the native graph backend", async () => {
 		const graphSpy = spyOn(nativesModule, "executeCodeGraph").mockResolvedValue({
 			output: "graph output",

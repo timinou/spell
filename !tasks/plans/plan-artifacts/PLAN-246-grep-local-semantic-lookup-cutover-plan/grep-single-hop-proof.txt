@@ -1,0 +1,7 @@
+## Single-hop grep on existing repo files
+
+$ grep { pattern: "generic rename does not preserve proof for HTML/CSS token semantics", path: "packages/coding-agent/test/tools/code.test.ts", mode: "rawText" }
+>>81#YY:						reason: "generic rename does not preserve proof for HTML/CSS token semantics",
+
+$ grep { pattern: "normalizes outline payloads into compact semantic summaries", path: "packages/coding-agent/test/tools/code-result.test.ts", mode: "rawText" }
+>>9#JZ:	it("normalizes outline payloads into compact semantic summaries", () => {
