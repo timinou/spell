@@ -1,0 +1,96 @@
+#+TITLE: coding-agent: align structural edit refusal copy with strict targetId contract
+#+STATE: DONE
+#+SESSION_ID: 14bf5f22962510d4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-08-35-800Z_14bf5f22962510d4.jsonl]]
+#+CUSTOM_ID: BUG-277-coding-agent-align-structural-edit-refus
+#+DEPENDS: BUG-276-coding-agent-make-code-edit-honor-target
+#+EFFORT: 3h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Scope
+- In scope: align every refusal/redirect/example still touched by this failure class with the strict structural-edit contract settled for this plan: callers must stay on ={ command: "edit", file?, root?, operations: [{ targetId, actions }] }= for code-supported files.
+- In scope: remove any runtime or test guidance that still suggests legacy =operation: "create"= / =content= edit payloads or otherwise tells callers to reach for unsupported shapes after a =code edit= failure.
+- In scope: lock the refusal-copy and example surface with focused regression coverage so the contract cannot silently drift back after =BUG-276= restores runtime behavior.
+- Out of scope: native edit semantics, freshness gating, or file-resolution mechanics. Those belong to [[id:BUG-276-coding-agent-make-code-edit-honor-target]].
+- Out of scope: speculative auto-recovery, fallback-to-text logic for code-supported files, or downstream Djinn repair work.
+
+* Existing Patterns
+- Runtime redirect/refusal points:
+  - =packages/coding-agent/src/tools/write.ts=
+  - =packages/coding-agent/src/patch/index.ts=
+- Structural-edit contract sources already aligned by prior work and to reuse, not fork:
+  - [[id:BUG-271-coding-agent-align-code-edit-prompts-exa]]
+  - =packages/coding-agent/src/prompts/tools/code.md=
+  - =packages/coding-agent/src/prompts/system/system-prompt.md=
+  - =packages/coding-agent/src/prompts/system/plan-mode-tool-decision-reminder.md=
+- Tests/examples currently proving or embedding the contract:
+  - =packages/coding-agent/test/tools.test.ts=
+  - =packages/coding-agent/test/tools/code.test.ts=
+  - =packages/natives/test/code-buffer.test.ts=
+- Concrete current drift already verified in repo state:
+  - =packages/coding-agent/src/tools/write.ts= still tells callers to use =code edit { file, operation: "create", content: [...] }=.
+  - =packages/natives/test/code-buffer.test.ts= still contains legacy create-shape edit examples (=operation: "create"=) that no longer match the documented strict contract.
+
+* Tests
+Enumerate end-user workflows first. Every scenario below must be written as failing coverage before implementation:
+1. Write-tool refusal on a code-supported file tells the caller to stay on the strict targetId-based =code edit= contract and does not mention legacy =operation: "create"= payloads.
+2. Text-edit refusal on a code-supported file tells the caller to re-read/navigate and retry narrowly on =code edit= rather than implying structural edits are unavailable or that a text fallback is acceptable for supported files.
+3. Code-tool examples and tests that demonstrate create-on-missing-path use the current =operations[{ targetId, actions }] = shape, so the test suite itself no longer teaches a dead contract.
+4. After =BUG-276= lands, the refusal-copy/tests and the actual runtime behavior agree: a caller following the refusal guidance can succeed using the documented structural path.
+5. No remaining focused test or runtime string in the changed area contains =operation: "create"= for =code edit=.
+- Verification targets:
+  - =packages/coding-agent/test/tools.test.ts=
+  - =packages/coding-agent/test/tools/code.test.ts=
+  - =packages/natives/test/code-buffer.test.ts=
+- Required verification command after implementation:
+  - =bun test packages/coding-agent/test/tools.test.ts packages/coding-agent/test/tools/code.test.ts packages/natives/test/code-buffer.test.ts=
+
+* Implementation
+** Define the authoritative refusal/redirect language
+:PROPERTIES:
+:CUSTOM_ID: BUG-277-coding-agent-align-structural-edit-refus::define-contract
+:DEPENDS: BUG-276-coding-agent-make-code-edit-honor-target::fix-wrapper-dispatch
+:END:
+- Files: =packages/coding-agent/src/tools/write.ts=, =packages/coding-agent/src/patch/index.ts=
+- Standardize one runtime message across write/edit refusals for code-supported files:
+  - stay on =code edit=
+  - use the documented =operations[{ targetId, actions }] = contract
+  - if a structural edit fails, re-read/navigate and tighten the target instead of switching to text edit
+- Do not mention legacy =operation: "create"= or any other deprecated edit shape.
+- Satisfies test scenarios: 1, 2, 4, 5.
+
+** Write failing refusal-copy and example regressions first
+:PROPERTIES:
+:CUSTOM_ID: BUG-277-coding-agent-align-structural-edit-refus::write-tests
+:DEPENDS: BUG-277-coding-agent-align-structural-edit-refus::define-contract
+:END:
+- Files: =packages/coding-agent/test/tools.test.ts=, =packages/coding-agent/test/tools/code.test.ts=, =packages/natives/test/code-buffer.test.ts=
+- Add focused assertions that refusal text references only the strict targetId contract.
+- Replace or augment legacy native test fixtures so create-on-missing-path coverage itself uses the current =operations= schema instead of =operation: "create"=.
+- Add one end-to-end tool-layer regression that proves the guidance emitted by write/edit refusals matches the shape used by successful =code edit= callers.
+- Satisfies test scenarios: 1, 2, 3, 4, 5.
+
+** Cut over runtime copy and stale examples
+:PROPERTIES:
+:CUSTOM_ID: BUG-277-coding-agent-align-structural-edit-refus::cutover-copy
+:DEPENDS: BUG-277-coding-agent-align-structural-edit-refus::write-tests
+:END:
+- Files: =packages/coding-agent/src/tools/write.ts=, =packages/coding-agent/src/patch/index.ts=, =packages/natives/test/code-buffer.test.ts=, plus =packages/coding-agent/src/prompts/tools/code.md= only if execution uncovers any remaining contract drift there.
+- Replace legacy create-shape strings with the strict structural-edit contract.
+- Keep the guidance minimal and truthful: tell callers what to do next, not that the toolchain is unreliable.
+- Preserve the structural-vs-text boundary established by [[id:BUG-271-coding-agent-align-code-edit-prompts-exa]].
+- Satisfies test scenarios: 1, 2, 3, 5.
+
+* Edge Cases
+- Refusal text must remain concise enough for transcripts/TUI renderers; do not dump full JSON schemas into every error.
+- Copy must not overstate support for unsupported file types or files without usable grammar.
+- Tests converted from legacy examples must still prove real runtime behavior, not only string matching.
+- If =BUG-276= changes the exact successful create payload example slightly, this item must mirror that final contract everywhere it appears.
+
+* Acceptance Criteria
+- No changed runtime refusal or focused regression test in this area still teaches =code edit { file, operation: "create", content: ... }=.
+- Write/edit refusals for code-supported files point callers back to the strict targetId-based =code edit= path and the re-read/navigate retry ladder.
+- Native/tool-layer tests use the same documented structural create/edit shape that runtime guidance advertises.
+- Verification: =bun test packages/coding-agent/test/tools.test.ts packages/coding-agent/test/tools/code.test.ts packages/natives/test/code-buffer.test.ts=.
+- Manual proof after approval/execution: capture one refusal message and one succeeding =code edit= payload showing the guidance and the working contract now match.

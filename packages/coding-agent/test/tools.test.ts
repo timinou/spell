@@ -302,7 +302,10 @@ describe("Coding Agent Tools", () => {
 			const testFile = path.join(testDir, "write-test.ts");
 			await expect(
 				writeTool.execute("test-call-4-code", { path: testFile, content: "export const value = 1;\n" }),
-			).rejects.toThrow(/The write tool is blocked for code-supported files/);
+			).rejects.toThrow(/operations: \[\{ targetId:/);
+			await expect(
+				writeTool.execute("test-call-4-code", { path: testFile, content: "export const value = 1;\n" }),
+			).rejects.toThrow(/re-read or navigate, tighten the target, and retry code edit/);
 		});
 
 		it("should write to a new local:// path under the session local root", async () => {
@@ -745,6 +748,7 @@ function b() {
 			const result = await grepTool.execute("test-call-15-gitignore-default", {
 				pattern: "needle",
 				path: scenarioDir,
+				mode: "rawText",
 			});
 
 			const output = getTextOutput(result);
@@ -764,6 +768,7 @@ function b() {
 				pattern: "needle",
 				path: scenarioDir,
 				gitignore: false,
+				mode: "rawText",
 			});
 
 			const output = getTextOutput(result);
@@ -778,6 +783,7 @@ function b() {
 			const result = await grepTool.execute("test-call-14-default-limit", {
 				pattern: "needle",
 				path: testDir,
+				mode: "rawText",
 			});
 
 			const output = getTextOutput(result);

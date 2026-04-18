@@ -1,0 +1,79 @@
+#+TITLE: CODE_EDIT_TARGETID_FILE_RESOLUTION_AND_CONTRACT_SYNC_PLAN
+#+STATE: DONE
+#+SESSION_ID: 14bf5f22962510d4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-08-35-800Z_14bf5f22962510d4.jsonl]]
+#+CUSTOM_ID: PLAN-247-code-edit-targetid-file-resolution-and-c
+#+EFFORT: 9h
+
+* Initial Message
+Planning input condensed into the org sections below.
+
+- Observed failure: documented =code edit= targetId payloads failed with =Missing required field: file= or missing-file freshness I/O errors.
+- Verified root cause: coding-agent/pi-natives structural-edit contract drift, not an Elixir-only editing limitation.
+- Plan scope: restore strict targetId edit execution first, then align refusal/example/test copy with that working contract.
+
+* Context
+- User-reported failure cluster came from session =14bf5f22962510d4=. The visible symptom was Elixir structural-edit failure while trying to repair FEAT-214, but repository inspection showed the root cause sits in the coding-agent/pi-natives =code edit= contract rather than in Elixir AST support itself.
+- Critical repo evidence already verified during planning:
+  - =packages/coding-agent/src/tools/code.ts= computes =primaryFileForOperations(...)= for =command: "edit"= and performs freshness checks against an active file path derived from operations.
+  - =crates/pi-natives/src/code_buffer.rs= resolves edit paths via =resolve_edit_path(...)=, but current end-to-end behavior still produces =Missing required field: file= and missing-file freshness failures for documented targetId-based calls.
+  - =packages/coding-agent/src/tools/write.ts= still emits legacy guidance telling callers to use =code edit { file, operation: "create", content: [...] }=, which contradicts the current strict targetId contract.
+  - =packages/natives/test/code-buffer.test.ts= still contains legacy create-shape coverage, so the test suite itself teaches a dead API shape.
+- Settled design decisions:
+  1. Fix the tooling contract only. Do not include downstream Djinn/Agentmaker recovery in this plan.
+  2. Preserve strict cutover: the only supported structural mutation shape is ={ command: "edit", file?, root?, operations: [{ targetId, actions }] }=.
+  3. Restore runtime correctness first: existing-file target resolution and missing-file create must work before touching refusal/docs/test copy.
+  4. After runtime semantics are fixed, cut over refusal text and focused tests/examples so guidance matches the now-working contract everywhere.
+- Child items:
+  - [[id:BUG-276-coding-agent-make-code-edit-honor-target]]
+  - [[id:BUG-277-coding-agent-align-structural-edit-refus]]
+- Fresh-session execution note: successful managed edits are expected to permit immediate follow-up edits without an intervening =read=. This invariant must survive the fix.
+
+* Verification
+- Execute child-item verification commands at the item level:
+  - =bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts=
+  - =bun test packages/coding-agent/test/tools.test.ts packages/coding-agent/test/tools/code.test.ts packages/natives/test/code-buffer.test.ts=
+- Final sweep after both child items land:
+  - =bun check:ts=
+  - =bun check:rs=
+- Manual proof required in the execution session:
+  - one successful existing-file =code edit= payload using the documented targetId contract on a code-supported Elixir file
+  - one successful create-on-missing-path =code edit= payload using the documented targetId contract
+  - one refusal message from =write= or text =edit= on a code-supported file showing the updated strict guidance
+- Truth constraints:
+  - no legacy =operation: "create"= compatibility may be added
+  - no refusal text may suggest text fallback for code-supported files with usable grammar
+  - stale-buffer protections for genuinely stale existing managed buffers must remain intact
+
+* Execution Manifest
+** :wave: 1 — restore the runtime structural-edit contract
+- [[id:BUG-276-coding-agent-make-code-edit-honor-target]] [6h]
+  - Reproduce and lock the failing caller permutations.
+  - Fix authoritative file resolution across TS/native layers.
+  - Make missing-file create use the documented structural path without false freshness I/O failure.
+
+** :wave: 2 — synchronize refusal text, examples, and focused regressions
+- [[id:BUG-277-coding-agent-align-structural-edit-refus]] [3h]
+  - Replace legacy create-shape guidance with the strict targetId contract.
+  - Update focused tests/examples so runtime guidance and successful payloads match.
+  - Keep callers on =code edit= plus the re-read/navigate retry ladder instead of suggesting unsupported fallbacks.
+
+** Completion [2026-04-18]
+*** Verification
+- `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts` → 32 pass, 0 fail.
+- `bun test packages/coding-agent/test/tools.test.ts packages/coding-agent/test/prompts/code-tool-contracts.test.ts packages/coding-agent/test/tools/code.test.ts` → 73 pass, 1 skip, 0 fail.
+- `bun test packages/coding-agent/test/tools.test.ts packages/coding-agent/test/tools/code.test.ts packages/natives/test/code-buffer.test.ts` → 87 pass, 1 skip, 0 fail.
+- `bun check:ts` → pass.
+- `bun check:rs` → pass.
+- Manual proof: strict targetId edit succeeded on an existing Elixir file and persisted `def greet, do: :updated`.
+- Manual proof: strict targetId edit created a missing TypeScript file and persisted `export const created = 1;`.
+- Manual proof: `write` refusal now directs callers to `code edit { operations: [{ targetId, actions }] }` and the re-read/navigate retry ladder.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-247-code-edit-targetid-file-resolution-and-c/verification-summary.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-247-code-edit-targetid-file-resolution-and-c/manual-code-edit-existing-elixir.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-247-code-edit-targetid-file-resolution-and-c/manual-code-edit-create-missing.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-247-code-edit-targetid-file-resolution-and-c/manual-write-refusal-guidance.txt]]
+*** Deviations
+- None.
+
+NOTE [2026-04-18]: Completed after runtime contract restore, guidance cutover, manual proofs, and passing verification.

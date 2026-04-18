@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as lspModule from "@oh-my-pi/pi-coding-agent/lsp";
 import {
@@ -272,17 +273,112 @@ describe("coding-agent code tool wiring", () => {
 		expect(graphSpy).toHaveBeenCalled();
 	});
 
-	it("routes edit operations to native buffer backend", async () => {
-		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
-			output: { success: true },
-			error: false,
-		});
-		const tool = new CodeTool(createSession());
+	it("routes existing-file edit through freshness diff before save", async () => {
+		const targetFile = path.join(process.cwd(), "packages/coding-agent/test/tools/code.test.ts");
+		const operations = [
+			{
+				targetId: "packages/coding-agent/test/tools/code.test.ts",
+				actions: [{ kind: "write", content: "export const touched = true;\n" }],
+			},
+		];
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: [], error: false })
+			.mockReturnValueOnce({
+				output: {
+					version: 1,
+					diff: "@@ file @@\n-old\n+new",
+					editCount: 1,
+					created: false,
+					targets: [{ targetId: "packages/coding-agent/test/tools/code.test.ts", actions: ["write"] }],
+				},
+				error: false,
+			})
+			.mockReturnValueOnce({ output: { success: true }, error: false });
+		const tool = new CodeTool(
+			createSession({
+				cwd: process.cwd(),
+				settings: Settings.isolated({ "lsp.enabled": false }),
+			}),
+		);
+
 		await tool.execute("tool", {
 			command: "edit",
-			operations: [{ targetId: "main.ts::main", actions: [{ kind: "write", scope: "body", content: "return 1;" }] }],
+			operations,
 		});
-		expect(bufferSpy).toHaveBeenCalled();
+
+		expect(bufferSpy.mock.calls.map(([call]) => call.command)).toEqual(["diff", "edit", "save"]);
+		expect(bufferSpy.mock.calls[0]?.[0]).toEqual({ command: "diff", file: targetFile });
+		expect(bufferSpy.mock.calls[1]?.[0]).toEqual(
+			expect.objectContaining({
+				command: "edit",
+				root: process.cwd(),
+				operations,
+			}),
+		);
+		expect(bufferSpy.mock.calls[2]?.[0]).toEqual({ command: "save", file: targetFile });
+	});
+
+	it("routes strict-target create through list then save without diff", async () => {
+		const operations = [
+			{ targetId: "definitely-missing.ts", actions: [{ kind: "write", content: "export const created = true;\n" }] },
+		];
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer")
+			.mockReturnValueOnce({ output: [], error: false })
+			.mockReturnValueOnce({
+				output: {
+					version: 1,
+					diff: "@@ file @@\n+export const created = true;",
+					editCount: 1,
+					created: true,
+					targets: [{ targetId: "definitely-missing.ts", actions: ["write"] }],
+				},
+				error: false,
+			})
+			.mockReturnValueOnce({ output: { success: true }, error: false });
+		const tool = new CodeTool(
+			createSession({
+				settings: Settings.isolated({ "lsp.enabled": false }),
+			}),
+		);
+
+		await tool.execute("tool", {
+			command: "edit",
+			operations,
+		});
+
+		expect(bufferSpy.mock.calls.map(([call]) => call.command)).toEqual(["list", "edit", "save"]);
+		expect(bufferSpy.mock.calls[1]?.[0]).toEqual(
+			expect.objectContaining({
+				command: "edit",
+				root: "/tmp/test",
+				operations,
+			}),
+		);
+		expect(bufferSpy.mock.calls.some(([call]) => call.command === "diff")).toBe(false);
+	});
+
+	it("refuses stale managed-missing buffers before edit", async () => {
+		const stalePath = path.join("/tmp/test", "missing.ts");
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockImplementation(({ command }) => {
+			if (command === "list") {
+				return { output: [{ path: stalePath, dirty: true, version: 1 }], error: false } as any;
+			}
+			return { output: { success: true }, error: false } as any;
+		});
+		const tool = new CodeTool(
+			createSession({
+				settings: Settings.isolated({ "lsp.enabled": false }),
+			}),
+		);
+		const result = await tool.execute("tool", {
+			command: "edit",
+			operations: [
+				{ targetId: "missing.ts", actions: [{ kind: "write", content: "export const touched = true;\n" }] },
+			],
+		});
+
+		expect(getText(result)).toContain("managed buffer exists for a file that is now missing on disk");
+		expect(bufferSpy.mock.calls.map(([call]) => call.command)).toEqual(["list"]);
 	});
 
 	it("routes other tool commands intact", async () => {

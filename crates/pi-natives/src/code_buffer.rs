@@ -1122,12 +1122,13 @@ mod tests {
 	#[test]
 	fn execute_code_buffer_inner_creates_missing_file_buffers() {
 		let path = temp_path("create-buffer.ts");
-		let path_str = path.display().to_string();
+		let target_id = path.display().to_string();
 		let edit = execute_code_buffer_inner(&json!({
 			"command": "edit",
-			"file": path_str,
-			"operation": "create",
-			"content": "export const created = 1;\n"
+			"operations": [{
+				"targetId": target_id,
+				"actions": [{ "kind": "write", "content": "export const created = 1;\n" }]
+			}]
 		}))
 		.expect("create edit");
 		assert_eq!(edit["error"], json!(false));
@@ -1146,9 +1147,10 @@ mod tests {
 		let path = temp_path("create-buffer-transport.ts");
 		let edit = execute_code_buffer_inner(&json!({
 			"command": "edit",
-			"file": path.display().to_string(),
-			"operation": "create",
-			"content": "export const created = 1;\n",
+			"operations": [{
+				"targetId": path.display().to_string(),
+				"actions": [{ "kind": "write", "content": "export const created = 1;\n" }]
+			}],
 			"symbol": "",
 			"patches": [],
 			"edits": [],
@@ -1172,9 +1174,10 @@ mod tests {
 		fs::write(&path, "export const original = 1;\n").expect("seed file");
 		let edit = execute_code_buffer_inner(&json!({
 			"command": "edit",
-			"file": path.display().to_string(),
-			"operation": "replace",
-			"content": "export const replaced = 2;\n",
+			"operations": [{
+				"targetId": path.display().to_string(),
+				"actions": [{ "kind": "write", "content": "export const replaced = 2;\n" }]
+			}],
 			"edits": []
 		}))
 		.expect("replace edit");
@@ -1197,19 +1200,22 @@ mod tests {
 
 		let failed = execute_code_buffer_inner(&json!({
 			"command": "edit",
-			"file": path.display().to_string(),
-			"edits": [
-				{
-					"symbol": "main",
-					"operation": "patch",
-					"patches": [{ "find": "return oldCall();", "replace": "return newCall();" }]
-				},
-				{
-					"symbol": "missing",
-					"operation": "patch",
-					"patches": [{ "find": "return oldCall();", "replace": "return shouldNotApply();" }]
-				}
-			]
+			"operations": [{
+				"targetId": format!("{}::main", path.display()),
+				"actions": [{
+					"kind": "findAndReplace",
+					"find": "return oldCall();",
+					"content": "return newCall();"
+				}],
+				"children": [{
+					"targetId": format!("{}::missing", path.display()),
+					"actions": [{
+						"kind": "findAndReplace",
+						"find": "return oldCall();",
+						"content": "return shouldNotApply();"
+					}]
+				}]
+			}]
 		}))
 		.expect_err("failed multi edit");
 		assert!(failed.to_string().contains("Symbol 'missing' not found"));
@@ -1223,18 +1229,22 @@ mod tests {
 			.find(|buffer| buffer["path"] == json!(path.display().to_string()));
 		assert!(
 			retained.is_none()
-				|| (retained.is_some_and(
+				|| retained.is_some_and(
 					|buffer| buffer["dirty"] == json!(false) && buffer["version"] == json!(0)
-				)),
+				),
 			"failed multi-edit should not leave a dirty staged buffer behind: {listed}",
 		);
 
 		let follow_up = execute_code_buffer_inner(&json!({
 			"command": "edit",
-			"file": path.display().to_string(),
-			"symbol": "main",
-			"operation": "patch",
-			"patches": [{ "find": "return oldCall();", "replace": "return finalCall();" }]
+			"operations": [{
+				"targetId": format!("{}::main", path.display()),
+				"actions": [{
+					"kind": "findAndReplace",
+					"find": "return oldCall();",
+					"content": "return finalCall();"
+				}]
+			}]
 		}))
 		.expect("follow-up edit");
 		assert_eq!(follow_up["error"], json!(false));
@@ -1264,11 +1274,8 @@ mod tests {
 		.expect_err("create rejection");
 		assert_eq!(
 			result.to_string(),
-			format!(
-				"GenericFailure, operation 'create' only works for missing files. {} already exists; \
-				 use 'replace' or 'replace-body' instead.",
-				path.display()
-			)
+			"GenericFailure, Legacy code edit fields are not accepted for command 'edit': file, \
+			 operation, content. Use only 'operations' with targetId/action nodes.",
 		);
 	}
 

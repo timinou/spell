@@ -106,7 +106,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			const absolutePath = resolvePlanPath(this.session, path);
 			if (isCodeToolSupportedPath(absolutePath)) {
 				throw new Error(
-					`The write tool is blocked for code-supported files (${describeCodeToolSupportedFiles()}). Use code edit { file: ${JSON.stringify(path)}, operation: "create", content: ["..."] } instead.`,
+					`The write tool is blocked for code-supported files (${describeCodeToolSupportedFiles()}). Use code edit { operations: [{ targetId: ${JSON.stringify(path)}, actions: [{ kind: "write", content: ["..."] }] }] } instead. If the structural edit fails, re-read or navigate, tighten the target, and retry code edit.`,
 				);
 			}
 			const batchRequest = getLspBatchRequest(context?.toolCall);

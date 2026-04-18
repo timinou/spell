@@ -1,0 +1,117 @@
+#+TITLE: coding-agent: make code edit honor targetId file resolution and missing-file create
+#+STATE: DONE
+#+SESSION_ID: 14bf5f22962510d4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-08-35-800Z_14bf5f22962510d4.jsonl]]
+#+CUSTOM_ID: BUG-276-coding-agent-make-code-edit-honor-target
+#+EFFORT: 6h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Scope
+- In scope: restore the documented =code edit= contract for code-supported files using =operations: [{ targetId, actions }] = so existing-file edits and missing-file creates work through the same structural path for Elixir and every other supported grammar.
+- In scope: fix the wrapper/native disagreement exposed in session =14bf5f22962510d4=: top-level =file=, =root= + relative =targetId=, and absolute =targetId= permutations must all resolve one authoritative file path instead of tripping =Missing required field: file=.
+- In scope: fix create-on-missing-path behavior so a documented structural write to a new code-supported file does not fail early with =Unable to verify buffer freshness before edit: ... os error 2=.
+- In scope: preserve the strict cutover decision. The only supported mutation contract remains ={ command: "edit", file?, root?, operations: [{ targetId, actions }] }=. Do not add legacy =operation: "create"= compatibility.
+- Out of scope: refusal-copy/doc drift, write/edit redirect wording, and stale examples. Those belong to [[id:BUG-277-coding-agent-align-structural-edit-refus]].
+- Out of scope: AST matcher semantics, Elixir-specific search patterns, or downstream recovery in =packages/djinn/= and =apps/agentmaker/=. This item fixes the coding-agent/tooling contract that blocked those edits.
+
+* Existing Patterns
+- TypeScript wrapper + edit-path derivation: =packages/coding-agent/src/tools/code.ts=
+  - =primaryFileForOperations(...)=
+  - =normalizeOperations(...)=
+  - =shouldCheckBufferFreshness(...)=
+  - =CodeTool.execute(...)=
+- Native NAPI option shape: =packages/natives/src/code-buffer/types.ts=
+  - =CodeBufferOptions=
+  - =CodeOperation=
+- Native edit-path resolution + dispatch: =crates/pi-natives/src/code_buffer.rs=
+  - =validate_edit_request(...)=
+  - =resolve_edit_path(...)=
+  - =required_path(...)=
+  - =execute_code_buffer_inner(...)=
+  - =apply_operations_transactionally(...)=
+- Focused regression suites to extend:
+  - =packages/natives/test/code-buffer.test.ts=
+  - =packages/coding-agent/test/tools/code.test.ts=
+- Adjacent completed items whose invariants must remain true:
+  - [[id:BUG-270-coding-agent-harden-code-edit-target-res]] — keep one-file batch invariants and truthful failures.
+  - [[id:BUG-272-coding-agent-make-malformed-code-edit-pr]] — malformed edit previews/failures must still surface loudly.
+  - [[id:BUG-271-coding-agent-align-code-edit-prompts-exa]] — prompt/routing contract already says structural edits stay on =code edit=; this item makes runtime behavior match that contract again.
+
+* Tests
+Enumerate end-user workflows first. Every scenario below must land as initially failing coverage before implementation:
+1. Existing file, explicit =file=, relative =targetId=: a request shaped like ={ command: "edit", file: "packages/djinn/lib/djinn/tools/knowledge_search.ex", operations: [{ targetId: "packages/djinn/lib/djinn/tools/knowledge_search.ex::Djinn.Tools.KnowledgeSearch.search_single", actions: [...] }] }= resolves and executes without =Missing required field: file=.
+2. Existing file, =root= + relative =targetId= only: a request shaped like ={ command: "edit", root: "/repo", operations: [{ targetId: "packages/djinn/lib/djinn/tools/knowledge_search.ex::...", actions: [...] }] }= resolves the same authoritative file path and executes without requiring a redundant top-level =file=.
+3. Existing file, absolute =targetId= only: a request shaped like ={ command: "edit", operations: [{ targetId: "/repo/packages/djinn/lib/djinn/tools/knowledge_search.ex::...", actions: [...] }] }= succeeds and does not regress relative-path callers.
+4. Missing file create: a request shaped like ={ command: "edit", operations: [{ targetId: "/tmp/new_file.ex", actions: [{ kind: "write", content: ... }] }] }= creates the file through the structural path instead of failing freshness before bootstrap.
+5. Immediate follow-up mutation after create: after workflow 4, a second =code edit= against the same newly created file succeeds without requiring a fresh =read= in between and without leaving managed-buffer state stale.
+6. One-file invariant remains true: if =operations= span two file roots, the tool still hard-fails truthfully instead of guessing one path or partially applying edits.
+7. Existing-file freshness protections remain truthful: missing-file create should bypass the pre-create freshness trap, but existing files with real stale managed buffers must still fail with the current actionable freshness guidance.
+- Verification targets:
+  - =packages/natives/test/code-buffer.test.ts=
+  - =packages/coding-agent/test/tools/code.test.ts=
+- Required verification command after implementation:
+  - =bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts=
+
+* Implementation
+** Define authoritative edit-path and create semantics
+:PROPERTIES:
+:CUSTOM_ID: BUG-276-coding-agent-make-code-edit-honor-target::define-contract
+:END:
+- Files: =packages/coding-agent/src/tools/code.ts=, =crates/pi-natives/src/code_buffer.rs=
+- Specify the authoritative resolution order for =command: "edit"=:
+  1. If top-level =file= is present, it must agree with the file root derived from =operations=.
+  2. If top-level =file= is absent, derive the file path from =operations[].targetId= using =root= when needed.
+  3. Native follow-up behavior (=open_or_create=, save/close/freshness checks, etc.) must use that resolved path rather than requiring an extra undocumented caller field.
+- Specify the freshness rule explicitly: existing paths keep the stale-buffer guard; missing target paths skip pre-create freshness and enter the create path directly.
+- Satisfies test scenarios: 1, 2, 3, 4, 7.
+
+** Write failing native and wrapper regressions first
+:PROPERTIES:
+:CUSTOM_ID: BUG-276-coding-agent-make-code-edit-honor-target::write-tests
+:DEPENDS: BUG-276-coding-agent-make-code-edit-honor-target::define-contract
+:END:
+- Files: =packages/natives/test/code-buffer.test.ts=, =packages/coding-agent/test/tools/code.test.ts=
+- Encode workflows 1-7 as initially failing tests using the exact caller shapes that failed in session =14bf5f22962510d4=.
+- Include both relative and absolute =targetId= permutations so the contract is locked from both sides of the TS/native boundary.
+- Include a create-then-edit regression proving successful managed edits do not require a fresh =read= before the next edit.
+- Satisfies test scenarios: 1, 2, 3, 4, 5, 6, 7.
+
+** Fix native edit dispatch and create bootstrap
+:PROPERTIES:
+:CUSTOM_ID: BUG-276-coding-agent-make-code-edit-honor-target::fix-native-dispatch
+:DEPENDS: BUG-276-coding-agent-make-code-edit-honor-target::write-tests
+:END:
+- File: =crates/pi-natives/src/code_buffer.rs=
+- Make =execute_code_buffer_inner(...)= treat the path returned by =resolve_edit_path(...)= as authoritative for the entire =edit= command lifecycle.
+- Remove any residual dependence on =required_path(...)= for structural edit flows that already provided resolvable =operations=.
+- Ensure missing-file creates use the native create/open path without diff freshness attempting to inspect a non-existent on-disk file first.
+- Preserve one-file edit validation and current truthful hard failures when callers actually violate the contract.
+- Satisfies test scenarios: 1, 2, 3, 4, 6, 7.
+
+** Fix wrapper dispatch and managed follow-up behavior
+:PROPERTIES:
+:CUSTOM_ID: BUG-276-coding-agent-make-code-edit-honor-target::fix-wrapper-dispatch
+:DEPENDS: BUG-276-coding-agent-make-code-edit-honor-target::fix-native-dispatch
+:END:
+- Files: =packages/coding-agent/src/tools/code.ts=, =packages/natives/src/code-buffer/types.ts= if typings need tightening to match the native contract exactly.
+- Ensure the TS wrapper consistently computes the primary file path for freshness/save/result bookkeeping from the same authoritative source as the native layer.
+- When the caller supplies top-level =file=, keep it aligned with the file root derived from =operations=; when the caller omits =file=, do not synthesize contradictory paths.
+- Preserve the post-success invariant already documented in the repo: successful managed edits do not require a fresh =read= before the next edit.
+- Satisfies test scenarios: 1, 2, 3, 5, 7.
+
+* Edge Cases
+- Top-level =file= disagrees with the file root implied by =operations[].targetId=: hard-fail truthfully; do not silently pick one.
+- Relative =targetId= with =root= must resolve identically in TS and Rust; no double-rooting and no cwd-relative drift.
+- Absolute =targetId= must not be re-rooted.
+- Missing parent directories for create should still fail truthfully if the native engine cannot materialize them; this item only fixes false freshness failures on the documented create path.
+- Multi-file =operations= must remain rejected atomically.
+- Existing stale managed buffers must still report the current actionable freshness guidance; the missing-file fix must not weaken that guard.
+
+* Acceptance Criteria
+- The documented structural =code edit= shape works for existing-file edits whether the caller identifies the file via top-level =file=, =root= + relative =targetId=, or absolute =targetId=.
+- Missing-file structural writes succeed through =code edit= instead of failing with =Unable to verify buffer freshness before edit: ... os error 2=.
+- A successful create can be followed by a second structural edit on the same file without an intervening =read=.
+- The one-file invariant and existing stale-buffer protections remain intact.
+- Verification: =bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts=.
+- Manual proof after approval/execution: capture one successful existing-file Elixir edit payload and one successful create-on-missing-path payload that previously failed in session =14bf5f22962510d4=.

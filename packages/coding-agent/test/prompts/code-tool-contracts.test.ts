@@ -9,6 +9,7 @@ import codePrompt from "@oh-my-pi/pi-coding-agent/prompts/tools/code.md" with { 
 import fallbackHint from "@oh-my-pi/pi-coding-agent/prompts/tools/code-hint-text-fallback.md" with { type: "text" };
 import grepPrompt from "@oh-my-pi/pi-coding-agent/prompts/tools/grep.md" with { type: "text" };
 import patchPrompt from "@oh-my-pi/pi-coding-agent/prompts/tools/patch.md" with { type: "text" };
+import writePrompt from "@oh-my-pi/pi-coding-agent/prompts/tools/write.md" with { type: "text" };
 
 const systemPromptsDir = path.resolve(import.meta.dir, "../../src/prompts/system");
 
@@ -87,6 +88,13 @@ describe("code-edit contract prompts", () => {
 		expect(planModeReminder).toContain("tighten the target/action");
 		expect(fallbackHint).toContain("`code edit { operations: [{ targetId, actions }] }`");
 		expect(fallbackHint).not.toContain('code read, code diff, code edit { operation: "replace" }');
+	});
+
+	it("keeps write prompt aligned with strict code edit create guidance", () => {
+		expect(writePrompt).toContain(
+			'code edit { operations: [{ targetId: "src/new-file.ts", actions: [{ kind: "write", content: ["..."] }] }] }',
+		);
+		expect(writePrompt).not.toContain('code edit { file, operation: "create", content: ["..."] }');
 	});
 
 	it("renders the system prompt with the structural code-edit recovery contract", async () => {

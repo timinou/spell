@@ -452,7 +452,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 							lineParts.push(match.path);
 						}
 						if (match.score !== undefined) {
-							lineParts.push("score:" + match.score.toFixed(2));
+							lineParts.push(`score:${match.score.toFixed(2)}`);
 						}
 						lines.push(lineParts.join(" "));
 					}
@@ -613,10 +613,10 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 					outputLines.push(formatLine(match.lineNumber, match.line, true));
 					const lineMetadata = lineMetadataForMatch(match);
 					if (lineMetadata?.targetId) {
-						outputLines.push("   targetId: " + lineMetadata.targetId);
+						outputLines.push(`   targetId: ${lineMetadata.targetId}`);
 					} else if (lineMetadata?.scopeTargetId) {
-						outputLines.push("   scopeTarget: " + (lineMetadata.scopeTarget ?? lineMetadata.scopeTargetId));
-						outputLines.push("   scopeTargetId: " + lineMetadata.scopeTargetId);
+						outputLines.push(`   scopeTarget: ${lineMetadata.scopeTarget ?? lineMetadata.scopeTargetId}`);
+						outputLines.push(`   scopeTargetId: ${lineMetadata.scopeTargetId}`);
 					}
 					if (match.truncated) {
 						linesTruncated = true;
