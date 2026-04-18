@@ -64,6 +64,8 @@ describe("code-edit contract prompts", () => {
 	it("describes canonical code edit operations payloads", () => {
 		expect(codePrompt).toContain('operations: [{ targetId: "src/new-module.ts", actions: [{ kind: "write"');
 		expect(codePrompt).toContain('actions: [{ kind: "findAndReplace"');
+		expect(codePrompt).toContain('occurrence: "last"');
+		expect(codePrompt).toContain('Multi-match edits can choose `occurrence: "first" | "last" | "all" | 1`');
 		expect(codePrompt).toContain('children: [{ targetId: "src/server.ts::Server.handle"');
 		expect(codePrompt).not.toContain('kind: "create"');
 		expect(codePrompt).not.toContain('kind: "patch"');

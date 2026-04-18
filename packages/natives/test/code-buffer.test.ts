@@ -157,7 +157,7 @@ describe("executeCodeBuffer NAPI bridge", () => {
 		const result = executeCodeBuffer({ command: "read", file });
 		expect(result).toEqual({
 			error: true,
-			output: expect.stringContaining("binary file rejected"),
+			output: expect.objectContaining({ message: expect.stringContaining("binary file rejected") }),
 		});
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
@@ -411,9 +411,115 @@ describe("executeCodeBuffer NAPI bridge", () => {
 		});
 		expect(result).toEqual({
 			error: true,
-			output: expect.stringContaining("must start with a newline"),
+			output: expect.objectContaining({ message: expect.stringContaining("must start with a newline") }),
 		});
 		expect(await Bun.file(file).text()).toBe('import { a } from "./a";\nexport const value = a;\n');
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("normalizes symbol-target insertBefore like safe line-target insertion", async () => {
+		const source = 'export function beta() {\n  return "beta";\n}\n';
+		const insert = 'export function alpha() {\n  return "alpha";\n}';
+		const tempDir = path.join(os.tmpdir(), `pi-natives-symbol-before-${Date.now()}`);
+		const symbolFile = path.join(tempDir, "symbol.ts");
+		const lineFile = path.join(tempDir, "line.ts");
+		await fs.mkdir(tempDir, { recursive: true });
+		await Bun.write(symbolFile, source);
+		await Bun.write(lineFile, source);
+
+		const symbolResult = executeCodeBuffer({
+			command: "edit",
+			operations: [{ targetId: `${symbolFile}::beta`, actions: [{ kind: "insertBefore", content: insert }] }],
+		});
+		expect(symbolResult.error).toBe(false);
+		const lineResult = executeCodeBuffer({
+			command: "edit",
+			operations: [
+				{
+					targetId: lineFile,
+					actions: [{ kind: "insertBefore", line: 1, nodeType: "export_statement", content: `${insert}\n` }],
+				},
+			],
+		});
+		expect(lineResult.error).toBe(false);
+		expect(executeCodeBuffer({ command: "save", file: symbolFile })).toEqual({
+			error: false,
+			output: expect.objectContaining({ success: true }),
+		});
+		expect(executeCodeBuffer({ command: "save", file: lineFile })).toEqual({
+			error: false,
+			output: expect.objectContaining({ success: true }),
+		});
+		const symbolText = await Bun.file(symbolFile).text();
+		const lineText = await Bun.file(lineFile).text();
+		expect(symbolText).toBe(lineText);
+		expect(symbolText).toBe(
+			'export function alpha() {\n  return "alpha";\n}\nexport function beta() {\n  return "beta";\n}\n',
+		);
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("normalizes symbol-target insertAfter like safe line-target insertion", async () => {
+		const source =
+			'export function alpha() {\n  return "alpha";\n}\nexport function gamma() {\n  return "gamma";\n}\n';
+		const insert = 'export function beta() {\n  return "beta";\n}';
+		const tempDir = path.join(os.tmpdir(), `pi-natives-symbol-after-${Date.now()}`);
+		const symbolFile = path.join(tempDir, "symbol.ts");
+		const lineFile = path.join(tempDir, "line.ts");
+		await fs.mkdir(tempDir, { recursive: true });
+		await Bun.write(symbolFile, source);
+		await Bun.write(lineFile, source);
+
+		const symbolResult = executeCodeBuffer({
+			command: "edit",
+			operations: [{ targetId: `${symbolFile}::alpha`, actions: [{ kind: "insertAfter", content: insert }] }],
+		});
+		expect(symbolResult.error).toBe(false);
+		const lineResult = executeCodeBuffer({
+			command: "edit",
+			operations: [
+				{
+					targetId: lineFile,
+					actions: [{ kind: "insertAfter", line: 1, nodeType: "export_statement", content: `\n${insert}` }],
+				},
+			],
+		});
+		expect(lineResult.error).toBe(false);
+		expect(executeCodeBuffer({ command: "save", file: symbolFile })).toEqual({
+			error: false,
+			output: expect.objectContaining({ success: true }),
+		});
+		expect(executeCodeBuffer({ command: "save", file: lineFile })).toEqual({
+			error: false,
+			output: expect.objectContaining({ success: true }),
+		});
+		const symbolText = await Bun.file(symbolFile).text();
+		const lineText = await Bun.file(lineFile).text();
+		expect(symbolText).toBe(lineText);
+		expect(symbolText).toBe(
+			'export function alpha() {\n  return "alpha";\n}\nexport function beta() {\n  return "beta";\n}\nexport function gamma() {\n  return "gamma";\n}\n',
+		);
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("refuses shared-boundary symbol-target insertion without mutating the file", async () => {
+		const tempDir = path.join(os.tmpdir(), `pi-natives-symbol-shared-boundary-${Date.now()}`);
+		const file = path.join(tempDir, "inline.ts");
+		const source = "class Foo { bar() { return 1; } baz() { return 2; } }\n";
+		await fs.mkdir(tempDir, { recursive: true });
+		await Bun.write(file, source);
+
+		const result = executeCodeBuffer({
+			command: "edit",
+			operations: [
+				{ targetId: `${file}::Foo.bar`, actions: [{ kind: "insertAfter", content: "qux() { return 3; }" }] },
+			],
+		});
+		expect(result).toEqual({
+			error: true,
+			output: expect.objectContaining({ message: expect.stringContaining("Unsafe symbol-target insert-after") }),
+		});
+		expect(await Bun.file(file).text()).toBe(source);
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
 
@@ -429,9 +535,122 @@ describe("executeCodeBuffer NAPI bridge", () => {
 		});
 		expect(result).toEqual({
 			error: true,
-			output: expect.stringContaining("structurally invalid"),
+			output: expect.objectContaining({ message: expect.stringContaining("structurally invalid") }),
 		});
 		expect(await Bun.file(file).text()).toBe("export const value = 1;\n");
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("requires occurrence for duplicate scoped findAndReplace matches", async () => {
+		const tempDir = path.join(os.tmpdir(), `pi-natives-occurrence-ambiguous-${Date.now()}`);
+		const file = path.join(tempDir, "main.ts");
+		const source = "export function main() {\n  const value = 1;\n  const value = 1;\n  return value;\n}\n";
+		await fs.mkdir(tempDir, { recursive: true });
+		await Bun.write(file, source);
+
+		const result = executeCodeBuffer({
+			command: "edit",
+			operations: [
+				{
+					targetId: `${file}::main`,
+					actions: [{ kind: "findAndReplace", find: "const value = 1;", content: "const picked = 2;" }],
+				},
+			],
+		});
+		expect(result).toEqual({
+			error: true,
+			output: expect.objectContaining({ message: expect.stringContaining("multiple matches; pass occurrence") }),
+		});
+		expect(await Bun.file(file).text()).toBe(source);
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("applies public occurrence selectors for scoped findAndReplace", async () => {
+		const source =
+			"export function main() {\n  const value = 1;\n  const value = 1;\n  const value = 1;\n  return value;\n}\n";
+		const cases = [
+			{
+				label: "first",
+				occurrence: "first",
+				expected:
+					"export function main() {\n  const picked = 2;\n  const value = 1;\n  const value = 1;\n  return value;\n}\n",
+			},
+			{
+				label: "last",
+				occurrence: "last",
+				expected:
+					"export function main() {\n  const value = 1;\n  const value = 1;\n  const picked = 2;\n  return value;\n}\n",
+			},
+			{
+				label: "second",
+				occurrence: 2,
+				expected:
+					"export function main() {\n  const value = 1;\n  const picked = 2;\n  const value = 1;\n  return value;\n}\n",
+			},
+			{
+				label: "all",
+				occurrence: "all",
+				expected:
+					"export function main() {\n  const picked = 2;\n  const picked = 2;\n  const picked = 2;\n  return value;\n}\n",
+			},
+		] satisfies Array<{ label: string; occurrence: "first" | "last" | "all" | number; expected: string }>;
+
+		for (const testCase of cases) {
+			const tempDir = path.join(os.tmpdir(), `pi-natives-occurrence-${testCase.label}-${Date.now()}`);
+			const file = path.join(tempDir, "main.ts");
+			await fs.mkdir(tempDir, { recursive: true });
+			await Bun.write(file, source);
+
+			const result = executeCodeBuffer({
+				command: "edit",
+				operations: [
+					{
+						targetId: `${file}::main`,
+						actions: [
+							{
+								kind: "findAndReplace",
+								find: "const value = 1;",
+								content: "const picked = 2;",
+								occurrence: testCase.occurrence,
+							},
+						],
+					},
+				],
+			});
+			expect(result.error).toBe(false);
+			expect(executeCodeBuffer({ command: "save", file })).toEqual({
+				error: false,
+				output: expect.objectContaining({ success: true }),
+			});
+			expect(await Bun.file(file).text()).toBe(testCase.expected);
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects out-of-range scoped findAndReplace occurrence", async () => {
+		const tempDir = path.join(os.tmpdir(), `pi-natives-occurrence-range-${Date.now()}`);
+		const file = path.join(tempDir, "main.ts");
+		const source =
+			"export function main() {\n  const value = 1;\n  const value = 1;\n  const value = 1;\n  return value;\n}\n";
+		await fs.mkdir(tempDir, { recursive: true });
+		await Bun.write(file, source);
+
+		const result = executeCodeBuffer({
+			command: "edit",
+			operations: [
+				{
+					targetId: `${file}::main`,
+					actions: [
+						{ kind: "findAndReplace", find: "const value = 1;", content: "const picked = 2;", occurrence: 5 },
+					],
+				},
+			],
+		});
+		expect(result).toEqual({
+			error: true,
+			output: expect.objectContaining({ message: expect.stringContaining("occurrence 5 out of range 1..=3") }),
+		});
+		expect(await Bun.file(file).text()).toBe(source);
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
 

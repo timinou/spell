@@ -1,0 +1,67 @@
+#+TITLE: CODE_EDIT_BOUNDARY_AND_OCCURRENCE_REPAIR_PLAN
+#+STATE: DONE
+#+SESSION_ID: 14bf8519411f65df
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-54-27-716Z_14bf8519411f65df.jsonl]]
+#+CUSTOM_ID: PLAN-253-code-edit-boundary-and-occurrence-repair
+#+LAYER: coding-agent
+
+* Context
+User request: audit the broader `code edit` scope behind the reported behavior table and session transcript, separate structural-now work from follow-up work, then produce an execution handoff that a fresh session can implement without prior context.
+
+Settled design decisions:
+1. Full-cutover `findAndReplace.occurrence` is structural-now work, not follow-up. The native engine already supports `Occurrence::{Unique, First, Last, Index, All}` in `crates/pi-code-engine/src/edit/patch.rs`, and the native bridge already parses it in `crates/pi-natives/src/code_buffer.rs`; the missing layer is the public TypeScript code-tool contract and prompt/docs.
+2. `insertBefore` / `insertAfter` must stop having split semantics. Today line-target insertion is guarded in `crates/pi-code-engine/src/edit/replace.rs`, while symbol-target insertion in `crates/pi-natives/src/code_buffer.rs` is a raw byte splice. The plan adopts auto-normalization for safe symbol-target cases, with rejection of shared-boundary or otherwise unsafe insertions.
+3. The current execution slice includes adjacent hardening for `splice`, `move`, `clone`, and `transpose`, but only for violations in the same boundary/indentation invariant family. Larger API redesign remains deferred.
+4. Broader UX/API redesign, preview-driven disambiguation, and transcript/debug ergonomics are follow-up work only after the structural fixes land.
+
+Critical evidence from the repo:
+- `crates/pi-code-engine/src/edit/patch.rs` already implements ambiguity selection and errors that mention `occurrence`.
+- `packages/natives/src/code-buffer/types.ts` and `packages/coding-agent/src/tools/code.ts` do not currently expose `occurrence`.
+- `crates/pi-natives/src/code_buffer.rs::single_action` currently routes symbol-target `insertBefore` / `insertAfter` through raw `TextEdit` insertion instead of the guarded helpers used by line targets.
+- `crates/pi-code-engine/src/edit/splice.rs`, `drag.rs`, `clone.rs`, and `transpose.rs` are the adjacent structural action family that must be audited under the same invariant.
+
+Child items in this plan:
+- [[id:BUG-284-code-edit-occurrence-disambiguation-cont]]
+- [[id:BUG-285-code-edit-structural-insertion-and-sibli]]
+- [[id:FUP-059-code-edit-api-ergonomics-and-audit-follo]]
+
+* Verification
+Execution session must verify behavior externally, not by inspection only.
+
+Structural-now verification:
+- `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/prompts/code-tool-contracts.test.ts packages/coding-agent/test/tools/code.test.ts`
+- Focused Rust regression coverage for touched edit modules in `crates/pi-code-engine/src/edit/` proving insertion/sibling invariants and refusal paths.
+- `bun check:ts`
+- `bun check:rs`
+
+Manual proof expectations:
+- ambiguous `findAndReplace` is resolvable through the public `code edit` API using `occurrence`
+- omitting `occurrence` on duplicate matches still errors explicitly
+- symbol-target and line-target safe insertions produce equivalent clean structure
+- failed structural edits remain atomic and do not poison follow-up edits
+
+Deferred verification for the follow-up item must not start until both bug items are complete.
+
+* Execution Manifest
+The induced child-item DAG is simple: BUG-284 and BUG-285 have no inter-item blockers; FUP-059 depends on both. `org wave` over this slice therefore yields one structural-now wave followed by the deferred follow-up wave.
+
+** :wave: 1
+These two items are the structural-now slice and can run in parallel because they address different design decisions within the same code-edit stack.
+- [[id:BUG-284-code-edit-occurrence-disambiguation-cont]]
+- [[id:BUG-285-code-edit-structural-insertion-and-sibli]]
+
+** :wave: 2
+This wave is intentionally deferred and depends on the final behavior from both structural bug fixes.
+- [[id:FUP-059-code-edit-api-ergonomics-and-audit-follo]]
+
+** Completion [2026-04-18]
+*** Verification
+- `bun --cwd=packages/natives run dev:native` → passed; rebuilt `packages/natives/native/pi_natives.dev.node` after the Rust/native edits.
+- `cargo test -p pi-code-engine edit:: --lib` → passed (40 edit-module regression tests).
+- `bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/prompts/code-tool-contracts.test.ts packages/coding-agent/test/tools/code.test.ts` → passed.
+- `bun check:ts` → passed.
+- `bun check:rs` → passed.
+*** Artifacts
+- Focused Rust edit regression log: [[file:!tasks/plans/plan-artifacts/PLAN-253-code-edit-boundary-and-occurrence-repair/cargo-test-pi-code-engine-edit.txt]]
+*** Deviations
+- [[id:FUP-059-code-edit-api-ergonomics-and-audit-follo]] remains BLOCKED intentionally; the execution manifest deferred that redesign wave until after the structural-now fixes landed. No follow-up redesign work was started in this plan execution.

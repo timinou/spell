@@ -2,7 +2,9 @@
 - Replace an existing whole file → `code edit { operations: [{ targetId: "src/server.ts", actions: [{ kind: "write", content: ["export function handleRequest() {", "  return new Response(\"ok\");", "}"] }] }] }`
 - Replace one declaration body → `code edit { operations: [{ targetId: "src/server.ts::handleRequest", actions: [{ kind: "write", scope: "body", content: ["{", "  return new Response(\"ok\");", "}"] }] }] }`
 - Scoped find/replace inside one declaration → `code edit { operations: [{ targetId: "src/server.ts::handleRequest", actions: [{ kind: "findAndReplace", find: ["const timeout = 5000;"], content: ["const timeout = 30_000;"] }] }] }`
+- Disambiguate duplicate scoped matches → `code edit { operations: [{ targetId: "src/server.ts::handleRequest", actions: [{ kind: "findAndReplace", find: ["log(\"done\")"], content: ["log(\"handled\")"], occurrence: "last" }] }] }`
 - Rename one declaration → `code edit { operations: [{ targetId: "src/server.ts::oldName", actions: [{ kind: "rename", content: "newName" }] }] }`
+
 - Make nested edits under one root target → `code edit { operations: [{ targetId: "src/server.ts::Server", actions: [{ kind: "wrap", content: ["try {", "  $BODY", "} catch (err) {", "  throw err;", "}"] }], children: [{ targetId: "src/server.ts::Server.handle", actions: [{ kind: "findAndReplace", find: ["legacyCall()"], content: ["modernCall()"] }] }] }] }`
 - Stable target IDs: file root = project-relative path; declaration target = `<file>::Symbol.member`
 - Successful managed edits do not require a fresh `read` before the next edit; if an edit fails, tighten the target/action and retry narrowly instead of switching to text `edit` or `write`.

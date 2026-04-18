@@ -7,8 +7,9 @@ use pi_code_engine::{
 	buffer::CodeBuffer,
 	edit::{
 		DragDirection, Occurrence, Patch, ReplacePolicy, SpliceMode, TextEdit, apply_patches,
-		clone_node, drag_node, insert_after, insert_before, kill_node, rename_symbol, replace_body,
-		replace_body_safe, splice_node, transpose_nodes, wrap_node,
+		clone_node, drag_node, insert_after, insert_after_symbol, insert_before,
+		insert_before_symbol, kill_node, rename_symbol, replace_body, replace_body_safe, splice_node,
+		transpose_nodes, wrap_node,
 	},
 	file_lock::lock_status,
 	language::{LanguageId, LanguageProfile},
@@ -564,11 +565,7 @@ fn single_action(
 			let content = action_content(action)?;
 			match (resolved.as_ref(), has_meaningful_index_field(action.get("line"))) {
 				(Some(symbol), false) => PreparedEditOperation {
-					edits:  vec![TextEdit {
-						start_byte:   symbol.start_byte,
-						old_end_byte: symbol.start_byte,
-						new_text:     content.to_string(),
-					}],
+					edits:  insert_before_symbol(buffer, symbol, content)?,
 					proof:  None,
 					action: action_kind.to_string(),
 				},
@@ -589,11 +586,7 @@ fn single_action(
 			let content = action_content(action)?;
 			match (resolved.as_ref(), has_meaningful_index_field(action.get("line"))) {
 				(Some(symbol), false) => PreparedEditOperation {
-					edits:  vec![TextEdit {
-						start_byte:   symbol.end_byte,
-						old_end_byte: symbol.end_byte,
-						new_text:     content.to_string(),
-					}],
+					edits:  insert_after_symbol(buffer, symbol, content)?,
 					proof:  None,
 					action: action_kind.to_string(),
 				},

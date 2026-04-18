@@ -1,0 +1,65 @@
+warning: tree-sitter-org@13.12.8: src/scanner.c: In function 'serialize':
+warning: tree-sitter-org@13.12.8: src/scanner.c:84:17: warning: comparison of integer expressions of different signedness: 'int' and 'uint32_t' {aka 'unsigned int'} [-Wsign-compare]
+warning: tree-sitter-org@13.12.8:    84 |     for (; iter < scanner->indent_length_stack->len &&
+warning: tree-sitter-org@13.12.8:       |                 ^
+warning: tree-sitter-org@13.12.8: src/scanner.c:91:17: warning: comparison of integer expressions of different signedness: 'int' and 'uint32_t' {aka 'unsigned int'} [-Wsign-compare]
+warning: tree-sitter-org@13.12.8:    91 |     for (; iter < scanner->bullet_stack->len &&
+warning: tree-sitter-org@13.12.8:       |                 ^
+warning: tree-sitter-org@13.12.8: src/scanner.c:98:17: warning: comparison of integer expressions of different signedness: 'int' and 'uint32_t' {aka 'unsigned int'} [-Wsign-compare]
+warning: tree-sitter-org@13.12.8:    98 |     for (; iter < scanner->section_stack->len &&
+warning: tree-sitter-org@13.12.8:       |                 ^
+warning: tree-sitter-org@13.12.8: src/scanner.c: In function 'scan':
+warning: tree-sitter-org@13.12.8: src/scanner.c:252:34: warning: comparison of integer expressions of different signedness: 'Bullet' and 'int16_t' {aka 'short int'} [-Wsign-compare]
+warning: tree-sitter-org@13.12.8:   252 |             if (getbullet(lexer) == VEC_BACK(scanner->bullet_stack)) {
+warning: tree-sitter-org@13.12.8:       |                                  ^~
+warning: tree-sitter-org@13.12.8: src/scanner.c:288:20: warning: comparison of integer expressions of different signedness: 'Bullet' and 'int16_t' {aka 'short int'} [-Wsign-compare]
+warning: tree-sitter-org@13.12.8:   288 |             bullet == VEC_BACK(scanner->bullet_stack) &&
+warning: tree-sitter-org@13.12.8:       |                    ^~
+   Compiling pi-code-engine v13.12.8 (/home/user/code/ora/spell/crates/pi-code-engine)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.14s
+     Running unittests src/lib.rs (target/debug/deps/pi_code_engine-42b7b9c46bd1d2a2)
+
+running 40 tests
+test edit::patch::tests::apply_patches_occurrence_first ... ok
+test edit::patch::tests::apply_patches_occurrence_index_out_of_range ... ok
+test edit::patch::tests::apply_patches_unique_default ... ok
+test edit::patch::tests::apply_patches_occurrence_all ... ok
+test edit::body::tests::replace_body_allows_large_delete_with_force ... ok
+test edit::patch::tests::apply_patches_occurrence_index_2 ... ok
+test edit::body::tests::replace_body_simple ... ok
+test edit::body::tests::replace_body_refuses_large_sibling_deletion_without_opt_in ... ok
+test edit::replace::tests::insert_after_symbol_preserves_trailing_closer_boundary ... ok
+test edit::body::tests::replace_body_no_body_errors ... ok
+test edit::replace::tests::insert_after_symbol_rejects_shared_boundary_lines ... ok
+test edit::patch::tests::apply_patches_occurrence_last ... ok
+test edit::drag::tests::drag_node_rejects_shared_boundary_siblings ... ok
+test edit::splice::tests::splice_node_rejects_shared_boundary_siblings ... ok
+test edit::tests::test_clone_function ... ok
+test edit::body::tests::replace_body_class_method ... ok
+test edit::tests::test_kill_function ... ok
+test edit::tests::test_drag_down_top_level ... ok
+test edit::tests::test_clone_preserves_indentation ... ok
+test edit::replace::tests::insert_before_symbol_auto_normalizes_multiline_content ... ok
+test edit::tests::test_drag_up_first_is_error ... ok
+test edit::rename::tests::rename_invalid_chars_errors ... ok
+test edit::body::tests::replace_body_allows_proportional_shrink ... ok
+test edit::transpose::tests::transpose_nodes_rejects_shared_boundary_siblings ... ok
+test edit::body::tests::replace_body_multiline_indent ... ok
+test edit::rename::tests::rename_skips_strings ... ok
+test edit::rename::tests::rename_function_and_calls ... ok
+test edit::rename::tests::rename_class ... ok
+test edit::web_refactor::tests::rename_id_token_updates_literal_html_ids_only ... ok
+test edit::tests::test_replace_typst ... ok
+test edit::web_refactor::tests::rename_custom_property_updates_declaration_and_var_references ... ok
+test edit::rename::tests::rename_empty_name_errors ... ok
+test edit::web_refactor::tests::rename_class_token_refuses_selector_lists ... ok
+test edit::wrap::tests::wrap_function_with_try_catch ... ok
+test edit::wrap::tests::wrap_no_body_placeholder_errors ... ok
+test edit::web_refactor::tests::rename_class_token_updates_literal_html_classes ... ok
+test edit::tests::test_kill_typst_rejects_partial_wrapper_splice ... ok
+test edit::tests::test_replace_node ... ok
+test edit::tests::test_replace_typst_set_accepts_raw_and_editable_scope_targets ... ok
+test edit::wrap::tests::wrap_preserves_indent ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 120 filtered out; finished in 0.04s
+
