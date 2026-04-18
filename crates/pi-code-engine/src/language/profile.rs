@@ -41,6 +41,8 @@ pub struct LanguageCapabilities {
 	#[serde(default)]
 	pub outline:            bool,
 	#[serde(default)]
+	pub outline_enrichment: bool,
+	#[serde(default)]
 	pub read:               bool,
 	#[serde(default)]
 	pub navigate:           bool,
@@ -127,57 +129,130 @@ pub enum ClassBodyExtractor {
 	Direct,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "strategy", rename_all = "snake_case")]
+pub enum TextListExtractor {
+	Field { name: String },
+	FieldChildren { field: String, child_types: Vec<String> },
+	NamedChildren { child_types: Vec<String> },
+	Descendants { node_types: Vec<String> },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "strategy", rename_all = "snake_case")]
+pub enum PresenceExtractor {
+	Field { name: String },
+	ChildKind { child_type: String },
+	NodeKind { node_types: Vec<String> },
+	TextEquals { extractor: NameExtractor, value: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ParameterListExtractor {
+	pub field: String,
+	#[serde(default)]
+	pub item_types: Vec<String>,
+	#[serde(default)]
+	pub name: Option<NameExtractor>,
+	#[serde(default)]
+	pub ty: Option<NameExtractor>,
+	#[serde(default)]
+	pub optional_when_node_types: Vec<String>,
+	#[serde(default)]
+	pub rest_when_node_types: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DeclarationSignatureEnrichment {
+	#[serde(default)]
+	pub parameters:  Vec<ParameterListExtractor>,
+	#[serde(default)]
+	pub return_type: Option<NameExtractor>,
+	#[serde(default)]
+	pub generics:    Vec<TextListExtractor>,
+	#[serde(default)]
+	pub throws:      Vec<TextListExtractor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DeclarationDocEnrichment {
+	#[serde(default)]
+	pub comment_node_types: Vec<String>,
+	#[serde(default)]
+	pub tag_prefixes:       Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DeclarationOutlineEnrichment {
+	#[serde(default)]
+	pub modifiers:  Vec<TextListExtractor>,
+	#[serde(default)]
+	pub decorators: Vec<TextListExtractor>,
+	#[serde(default)]
+	pub deprecated: Vec<PresenceExtractor>,
+	#[serde(default)]
+	pub signature:  DeclarationSignatureEnrichment,
+	#[serde(default)]
+	pub doc:        DeclarationDocEnrichment,
+}
+
 /// A declaration pattern: how to find named declarations in the parse tree.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(from = "DeclarationPatternSerde")]
 pub struct DeclarationPattern {
-	pub node_types:    Vec<String>,
-	pub name:          NameExtractor,
-	pub kind:          String,
+	pub node_types:         Vec<String>,
+	pub name:               NameExtractor,
+	pub kind:               String,
 	#[serde(default = "default_body_none")]
-	pub body:          BodyExtractor,
+	pub body:               BodyExtractor,
 	/// Optional visibility field (e.g., "pub" keyword presence in Rust).
 	#[serde(default)]
-	pub visibility:    Option<String>,
+	pub visibility:         Option<String>,
 	/// When set, only match nodes whose name-field text is in this list.
 	/// Used to disambiguate uniform node types (e.g. all Elixir constructs are
 	/// `call`).
 	#[serde(default)]
-	pub filter_names:  Option<Vec<String>>,
+	pub filter_names:       Option<Vec<String>>,
 	/// When true, extract the display name from the first argument child
 	/// instead of the name extractor field.
 	#[serde(default)]
-	pub name_from_arg: bool,
+	pub name_from_arg:      bool,
+	#[serde(default)]
+	pub outline_enrichment: DeclarationOutlineEnrichment,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 enum DeclarationPatternSerde {
 	Legacy {
-		node_types:    Vec<String>,
-		name_field:    String,
-		kind:          String,
+		node_types:         Vec<String>,
+		name_field:         String,
+		kind:               String,
 		#[serde(default)]
-		body_field:    Option<String>,
+		body_field:         Option<String>,
 		#[serde(default)]
-		visibility:    Option<String>,
+		visibility:         Option<String>,
 		#[serde(default)]
-		filter_names:  Option<Vec<String>>,
+		filter_names:       Option<Vec<String>>,
 		#[serde(default)]
-		name_from_arg: bool,
+		name_from_arg:      bool,
+		#[serde(default)]
+		outline_enrichment: DeclarationOutlineEnrichment,
 	},
 	Modern {
-		node_types:    Vec<String>,
-		name:          NameExtractor,
-		kind:          String,
+		node_types:         Vec<String>,
+		name:               NameExtractor,
+		kind:               String,
 		#[serde(default = "default_body_none")]
-		body:          BodyExtractor,
+		body:               BodyExtractor,
 		#[serde(default)]
-		visibility:    Option<String>,
+		visibility:         Option<String>,
 		#[serde(default)]
-		filter_names:  Option<Vec<String>>,
+		filter_names:       Option<Vec<String>>,
 		#[serde(default)]
-		name_from_arg: bool,
+		name_from_arg:      bool,
+		#[serde(default)]
+		outline_enrichment: DeclarationOutlineEnrichment,
 	},
 }
 
@@ -192,6 +267,7 @@ impl From<DeclarationPatternSerde> for DeclarationPattern {
 				visibility,
 				filter_names,
 				name_from_arg,
+				outline_enrichment,
 			} => Self {
 				node_types,
 				name: NameExtractor::Field { name: name_field },
@@ -200,6 +276,7 @@ impl From<DeclarationPatternSerde> for DeclarationPattern {
 				visibility,
 				filter_names,
 				name_from_arg,
+				outline_enrichment,
 			},
 			DeclarationPatternSerde::Modern {
 				node_types,
@@ -209,7 +286,17 @@ impl From<DeclarationPatternSerde> for DeclarationPattern {
 				visibility,
 				filter_names,
 				name_from_arg,
-			} => Self { node_types, name, kind, body, visibility, filter_names, name_from_arg },
+				outline_enrichment,
+			} => Self {
+				node_types,
+				name,
+				kind,
+				body,
+				visibility,
+				filter_names,
+				name_from_arg,
+				outline_enrichment,
+			},
 		}
 	}
 }

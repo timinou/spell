@@ -1,0 +1,57 @@
+#+TITLE: Add code tool 3-command model addendum to code-path.md
+#+STATE: ITEM
+#+SESSION_ID: 14bf80b7760fbaa2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-35-19-000Z_14bf80b7760fbaa2.jsonl]]
+#+CUSTOM_ID: FEAT-582-add-code-tool-3-command-model-addendum-t
+#+DEPENDS: FEAT-581-update-code-path-md-to-use-revised-sigil
+#+EFFORT: S
+#+LAYER: specs
+#+PRIORITY: #B
+
+* Initial Message
+
+you should also think about how you will change the surfaces of the other code subcommands in light of the code path
+
+* Scope
+
+Add a new section to =specs/code-graph/code-path.md= documenting how the CodePath v3 algebra maps to the code tool's 3-command surface (=code get=, =code edit=, =code manage=).
+
+** In scope
+- New §11: "Tool surface mapping" documenting the collapse from 20+ commands to 3
+- Table mapping old commands → new forms
+- Examples of =code get= with various targets (file, symbol, edge axis, special targets)
+- Examples of =code edit= with CodePath targets (including qualifier-based body targeting)
+- Examples of =code manage= for buffer lifecycle
+- Document how =scope: "body"= is replaced by =#body= qualifier
+- Document special targets (=:dead_code=, =:clusters=, =:status=, =:index=)
+
+** Out of scope
+- Implementation (covered by PROJ-055)
+
+** Implementation
+
+** Write §11 tool surface mapping
+:PROPERTIES:
+:CUSTOM_ID: FEAT-582-add-code-tool-3-command-model-addendum-t::FEAT-tool-surface-mapping
+:END:
+- Append new section to =specs/code-graph/code-path.md=
+- Include migration table:
+  | Old | New |
+  | =code read { file }= | =code get { target: "file.ts" }= |
+  | =code read { file, symbol }= | =code get { target: "file.ts :: Symbol" }= |
+  | =code outline { file }= | =code get { target: "file.ts", resolution: 0 }= |
+  | =code symbols { query }= | =code get { target: "**::query" }= |
+  | =code context { symbol }= | =code get { target: "file.ts :: Symbol", edges: true }= or =code get { target: "file.ts :: Symbol/ref→ | file.ts :: Symbol/def→" }= |
+  | =code impact { symbol }= | =code get { target: "**::Symbol/def→", depth: 3 }= |
+  | =code flow { symbol }= | =code get { target: "**::Symbol/call→", depth: 3 }= |
+  | =code deps { file }= | =code get { target: "file.ts/import→" }= |
+  | =code navigate { defun-at, line }= | =code get { target: "file.ts", line: 42 }= |
+  | =code edit { operations: [{targetId, actions}] }= | =code edit { target: "file.ts :: Symbol", actions: [...] }= |
+  | =code dead_code= | =code get { target: ":dead_code" }= |
+  | =code clusters= | =code get { target: ":clusters" }= |
+  | =code save/undo/redo/diff/buffers/...= | =code manage { command: "save", file: "..." }= |
+
+** Acceptance Criteria
+- [ ] §11 added to code-path.md
+- [ ] All old commands have documented new equivalents
+- [ ] Examples are syntactically valid CodePath expressions

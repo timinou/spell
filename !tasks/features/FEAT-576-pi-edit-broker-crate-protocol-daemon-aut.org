@@ -1,0 +1,164 @@
+#+TITLE: pi-edit-broker crate: protocol, daemon, auto-spawn
+#+STATE: ITEM
+#+SESSION_ID: 14bfce727e583e3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
+#+CUSTOM_ID: FEAT-576-pi-edit-broker-crate-protocol-daemon-aut
+#+DEPENDS: PROJ-050-cross-session-edit-coordination-broker-j
+#+EFFORT: M
+#+LAYER: pi-edit-broker
+#+PRIORITY: #A
+
+* Initial Message
+
+show me how the pi code engine can be used to keep track of which session edited what file across code edit instances. some sort of auto-find and socket communication for editing processes. I don't want any more errors happening because another agent edited something. maybe it's time for loro crdt? think about this also within the scope of making undo/redo smarter and only undoing/redoing the actions of the agents/sessions but also knowing what the other agents/sessions modified.
+
+* Scope
+Ship a new crate =crates/pi-edit-broker/= producing a standalone Rust binary `pi-edit-broker`. The binary self-daemonizes, listens on `~/.spell/edit-broker.sock`, accepts the protocol defined in the design spec, tracks session/intent/commit state in memory, reaps dead sessions via `kill(pid, 0)`, and exits 30s after last client disconnects. Independent of `pi-code-engine` — parallel-safe with FEAT-*A.
+
+Out of scope: engine integration (FEAT-*C), NAPI glue (FEAT-*D), TS surface (FEAT-*E), TUI (FEAT-*F).
+
+* Design reference
+[[file:specs/edit-coordination/design.md]] §1 "pi-edit-broker", §"Failure modes", and the Messages tables.
+
+* Existing patterns
+- Socket server style in =packages/spell-server/src/socket/server.ts= (framing, register/deregister, heartbeat cadence) — mirror in Rust.
+- Cargo workspace layout: each crate under `crates/` has its own `Cargo.toml` listed in root `Cargo.toml` workspace members.
+- Error handling: `thiserror` (already a workspace dep in =pi-code-engine/Cargo.toml=).
+- JSON: `serde` + `serde_json` (workspace deps).
+- Socket I/O: `tokio` single-threaded runtime with `UnixListener` / `UnixStream`. Add to workspace deps if not already present; otherwise use `mio` directly — prefer `tokio` for readability.
+- `daemonize` crate for self-daemonization (MIT-licensed, small).
+- `nix` crate (workspace dep check) for `kill(pid, 0)`.
+
+* Tests (write before implementation)
+Test file: =crates/pi-edit-broker/tests/lifecycle.rs= and =protocol.rs=.
+
+Scenarios:
+
+1. `auto_spawn_by_first_client`
+   Given no running broker (socket absent, pid file absent), a helper `spawn_broker_if_absent()` `execvp`s the binary with `--daemonize`, then a test client connects within 2s. Broker receives `hello`, replies `welcome`. Test kills broker at teardown.
+
+2. `second_client_sees_first_in_peers`
+   Client A connects with sessionId `s1`, sends `hello`. Client B connects with sessionId `s2`. B's `welcome.peers` contains exactly one entry with `sessionId == "s1"`.
+
+3. `peer_joined_broadcast`
+   A connected. B connects and sends `hello`. A receives `{type: "peer_joined", sessionId: "s2"}` within 500ms.
+
+4. `intent_grant_on_unclaimed_node`
+   A: `{type:"intent", file:"/tmp/a.ts", codePaths:["::Foo.bar#body"], baseRevision: 41, ttlMs: 5000}`. Broker replies `{type:"intent_ack", granted:true}`.
+
+5. `intent_conflict_when_peer_holds`
+   A intents `::Foo.bar#body`. Within 100ms B intents the same. B receives `{type:"intent_conflict", conflictingSession:"s1", peerIntentTs: <a's ts>}`.
+
+6. `intent_auto_expires_after_ttl`
+   A intents with `ttlMs: 200`. After 300ms, B intents same path and receives `granted:true`.
+
+7. `commit_broadcasts_to_subscribers`
+   A: `subscribe {files:["/tmp/a.ts"]}`. B commits `/tmp/a.ts` revision 42. A receives `{type:"peer_committed", sessionId:"s2", revision:42, codePaths:[...], ts:...}` within 500ms.
+
+8. `commit_conflict_when_parent_outdated`
+   A commits r42 with parentRevision 41. B tries to commit with parentRevision 41 (also). Broker replies `{type:"commit_conflict", peerSession:"s1", peerRevision:42}`. (Broker tracks latest committed revision per file.)
+
+9. `session_reaping_by_dead_pid`
+   A registers with its real pid. Test kills A's process. Within 6s (one reap cycle + heartbeat), B receives `{type:"peer_left", sessionId: <A>}`.
+
+10. `last_client_disconnect_exits_broker_after_grace`
+    Single client connects, then `bye`s. Broker stays alive for 30s grace period (configurable via env `PI_EDIT_BROKER_GRACE_MS` for tests; use 500ms in test). After grace, broker process exits; socket file removed.
+
+11. `protocol_rejects_unknown_message_type`
+    Send `{"type":"bogus"}`. Broker replies `{"type":"error","code":"UNKNOWN_TYPE"}` and does not drop connection.
+
+12. `heartbeat_keeps_session_alive`
+    Connect, do not send further messages, send heartbeat every 3s. After 10s, session remains in peer list and is not reaped (simulate a long-lived tool call).
+
+13. `socket_file_cleaned_on_graceful_exit`
+    Send SIGTERM to broker with no clients connected. Broker removes `~/.spell/edit-broker.sock`. Retry start succeeds.
+
+* Implementation
+Order:
+
+** Cargo package skeleton
+:PROPERTIES:
+:CUSTOM_ID: cargo-skeleton
+:END:
+- Files: =crates/pi-edit-broker/Cargo.toml=, =src/main.rs=, =src/lib.rs=.
+- Add to workspace =Cargo.toml= members.
+- Binary name: =pi-edit-broker=. Deps: =tokio= (rt + net + macros + time + sync), =serde=, =serde_json=, =thiserror=, =nix=, =daemonize=, =clap= (derive).
+- CLI: =pi-edit-broker [--daemonize] [--socket <path>] [--pid-file <path>] [--grace-ms <n>]=.
+- Defaults: socket =~/.spell/edit-broker.sock=, pid =~/.spell/edit-broker.pid=, grace 30_000ms. Env overrides: =PI_EDIT_BROKER_SOCKET=, =PI_EDIT_BROKER_PID_FILE=, =PI_EDIT_BROKER_GRACE_MS=.
+
+** Protocol types
+:PROPERTIES:
+:CUSTOM_ID: protocol-types
+:DEPENDS: cargo-skeleton
+:END:
+- File: =crates/pi-edit-broker/src/protocol.rs=.
+- =#[derive(Serialize, Deserialize)] #[serde(tag = "type", rename_all = "snake_case")] pub enum ClientMessage { Hello { ... }, Subscribe { ... }, Intent { ... }, Commit { ... }, ReleaseIntent { ... }, Heartbeat, Bye }=.
+- =pub enum ServerMessage { Welcome { ... }, IntentAck { ... }, IntentConflict { ... }, CommitAck { ... }, CommitConflict { ... }, PeerCommitted { ... }, PeerJoined { ... }, PeerLeft { ... }, Error { code: String, message: String } }=.
+- Public so FEAT-577 can reuse by depending on =pi-edit-broker= as a library (crate is bin+lib).
+
+** State store
+:PROPERTIES:
+:CUSTOM_ID: state-store
+:DEPENDS: protocol-types
+:END:
+- File: =crates/pi-edit-broker/src/state.rs=.
+- =BrokerState= inside =tokio::sync::RwLock=. Fields per design spec §1.
+- Methods: =register=, =deregister=, =record_intent=, =record_commit=, =check_intent_conflict=, =check_commit_conflict=, =subscribe=, =peers_for_file=, =recent_commits_for(file, limit)=.
+- =RingBuffer= of last 64 commits per file (=VecDeque=).
+
+** Connection handler
+:PROPERTIES:
+:CUSTOM_ID: connection-handler
+:DEPENDS: state-store
+:END:
+- File: =crates/pi-edit-broker/src/conn.rs=.
+- Per-client task: reads newline-delimited JSON via =BufReader::read_line=, parses =ClientMessage=, dispatches to state, writes =ServerMessage= back.
+- Broadcast channel: =tokio::sync::broadcast::Sender<Event>= for =peer_joined=, =peer_left=, =peer_committed=. Each connection task filters events by its subscription set.
+- On disconnect: =state.deregister(sessionId)=, broadcast =peer_left=.
+
+** Reaper loop
+:PROPERTIES:
+:CUSTOM_ID: reaper
+:DEPENDS: state-store
+:END:
+- File: =crates/pi-edit-broker/src/reaper.rs=.
+- Every 5s: iterate sessions, =nix::sys::signal::kill(Pid::from_raw(pid), None)=; on =ESRCH=, deregister.
+- Every 1s: expire intents past their =ttl=.
+
+** Daemon main
+:PROPERTIES:
+:CUSTOM_ID: daemon-main
+:DEPENDS: connection-handler reaper
+:END:
+- File: =crates/pi-edit-broker/src/main.rs=.
+- If =--daemonize=: use =daemonize= crate to fork into background, write pid file, redirect stdio to =~/.spell/logs/edit-broker.YYYY-MM-DD.log=.
+- Bind Unix socket at configured path; =accept= loop spawns connection tasks.
+- Graceful shutdown: SIGTERM/SIGINT → stop accept, wait for in-flight tasks, remove socket file, exit.
+- Grace-period exit: track active connection count; when it drops to 0, start =sleep(grace_ms)= task; if new connection arrives, cancel timer. Timer completion → graceful shutdown.
+
+** Auto-spawn helper (in the lib)
+:PROPERTIES:
+:CUSTOM_ID: auto-spawn-helper
+:DEPENDS: daemon-main
+:END:
+- File: =crates/pi-edit-broker/src/spawn.rs=.
+- =pub fn spawn_broker_if_absent(socket: &Path, binary: Option<&Path>) -> Result<()>=.
+- Check if socket exists and accepts a test connection within 150ms. If yes, return Ok.
+- If no, =execvp= the binary with =--daemonize --socket <path>=. Default binary resolution: env =PI_EDIT_BROKER_BIN=, else same dir as current exe, else =PATH=.
+- Wait up to 2s for socket to appear; return =BrokerSpawnTimeout= otherwise.
+- Expose as =pub use spawn::spawn_broker_if_absent= so FEAT-577 can call it from the engine.
+* Edge cases
+- Broker already running, new broker spawn attempt — detect via pid file + `kill(pid, 0)`; exit silently if a healthy instance exists.
+- Socket file stale (previous broker crashed): if `connect()` fails, unlink the stale socket before binding.
+- Two spell processes race to auto-spawn: `flock`-style exclusive lock on pid file during spawn — loser waits for socket to appear.
+- JSON line longer than 1 MiB: reject with `MESSAGE_TOO_LARGE` error and close connection.
+- Client sends `hello` twice with same sessionId: replace prior connection (mirror `SocketSessionRegistry::register` in spell-server — close old connection).
+- Client sends `commit` before `hello`: reply `{type:"error", code:"NOT_REGISTERED"}` and close.
+- `daemonize` fork fails on platforms without setsid support: log, run in foreground.
+
+* Acceptance
+- `cargo test -p pi-edit-broker` all scenarios green on Linux.
+- `cargo build -p pi-edit-broker --release` produces a binary under 5 MB stripped.
+- Manual: `spell` launches, broker auto-spawns, `ls ~/.spell/edit-broker.sock` present, `ss -lx | grep edit-broker` shows listening; second `spell` process connects.
+- `cargo clippy -p pi-edit-broker --all-targets --all-features -- -D warnings` clean.
+- Binary installed to `target/release/` is discoverable by the client lib (FEAT-*C will consume `spawn_broker_if_absent`).

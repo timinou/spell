@@ -1,0 +1,118 @@
+#+TITLE: Cross-session edit coordination
+#+STATE: DOING
+#+SESSION_ID: 14bfce727e583e3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
+#+CUSTOM_ID: PLAN-254-cross-session-edit-coordination
+#+EFFORT: 3d
+#+LAYER: pi-code-engine pi-edit-broker pi-natives coding-agent ui
+#+PRIORITY: #A
+
+* Initial Message
+
+show me how the pi code engine can be used to keep track of which session edited what file across code edit instances. some sort of auto-find and socket communication for editing processes. I don't want any more errors happening because another agent edited something. maybe it's time for loro crdt? think about this also within the scope of making undo/redo smarter and only undoing/redoing the actions of the agents/sessions but also knowing what the other agents/sessions modified.
+
+* Context
+
+Two or more =spell= processes editing the same repo currently share no buffer state. Each process owns a per-dylib =BufferRegistry=; the =FileWatcher= detects external writes asynchronously; =History= has no session attribution. This produces =ExternalModification= errors, stale targetIds, and undo that can clobber a peer's work.
+
+This plan removes the class of stale-buffer problems by making every mutating =code edit= a short read-lock-write-release transaction against disk, broadcasting commits through a dedicated Unix-socket broker, and recording CodePath-level attribution in a persistent journal. No CRDT in Phase 1; journal format is forward-compatible with Loro.
+
+Operator directive (axiom): "Equate an edit with a file change. Lock time per edit = literally lock-write-release. Asynchronous across agents and within sessions. Gets updated if the file got updated. Reload and save MUST be standardized; undo/redo are best-effort."
+
+Full design (every implementer MUST read): [[file:specs/edit-coordination/design.md]]
+
+Parent container: [[id:PROJ-050-cross-session-edit-coordination-broker-j][PROJ-050]]
+
+Settled decisions (carried across session boundary):
+1. No CRDT in Phase 1. Journal + socket broker + peer-aware reload. Loro as Phase-2 upgrade.
+2. Dedicated =pi-edit-broker= daemon. Auto-spawned by first client. Socket at =~/.spell/edit-broker.sock=. Exits 30s after last client disconnects.
+3. Attribution granularity = CodePath (per rich tree-sitter node). Falls back to whole-file marker =::*= when no named ancestor encloses the edit.
+4. Conflict policy = block + structured error ={conflictingSession, codePath, peerRevision, peerCommitTs}=. Never silent.
+5. Stateless edit transaction model. No persistent dirty buffer for mutating paths. Every =edit_transaction= re-reads disk under lock, re-resolves CodePath, applies, writes, commits, broadcasts.
+6. Undo/redo per-session, best-effort. =undo_scoped(sessionId)= skips peer revisions and reports them.
+
+* Verification
+
+** Per-FEAT gates
+Each FEAT carries its own test file + =cargo test= / =bun test= invocation. See FEAT bodies for specifics. All must be green before the FEAT is marked complete.
+
+** Cross-cutting acceptance (after all FEATs land)
+- =cargo test --workspace= passes.
+- =bun check= (TypeScript + Rust) passes.
+- =cargo clippy --workspace --all-targets --all-features -- -D warnings= clean.
+
+** Manual two-session repro
+1. Build: =bun --cwd=packages/natives run dev:native= + =cargo build -p pi-edit-broker --release=.
+2. Launch two =spell= sessions in the same cwd.
+3. Session A: =code edit= method =Server.handle= in =src/server.ts=.
+4. Session B (in parallel): =code edit= method =Server.dispatch= in the same file.
+5. Both succeed. Status-line of each shows =coord: 1 peer=. Tool output footer on B's next edit shows A's recent activity.
+6. Inspect journal: =cat ~/.spell/edit-journal/<repo-hash>/<file-hash>.jsonl= shows two entries, one per session, with correct =codePaths= and =parentRevision= chain.
+
+** Manual conflict repro
+1. Two =spell= sessions as above.
+2. Both ask their agent to edit =Server.handle= concurrently.
+3. One wins, one receives =PEER_CONFLICT= in structured form; agent auto-retries; retry resolves against fresh tree and succeeds.
+4. Journal shows two consecutive revisions with correct parent chain.
+
+** Broker lifecycle manual
+1. Launch one =spell=. Verify =~/.spell/edit-broker.sock= exists and =~/.spell/edit-broker.pid= contains a live pid.
+2. =SIGKILL= the spell process without =bye=.
+3. Within ~5s, the broker's reap loop removes the dead session from its in-memory state.
+4. Exit the last spell. Within 30s, broker exits; socket file removed.
+5. Next spell launch spawns a fresh broker.
+
+* Execution Manifest
+
+** Wave 1 — Foundation (parallel)
+Two independent FEATs unblock the critical path. No inter-dependency; ship in parallel subagents.
+
+- [[id:FEAT-575-edit-coordination-foundation-journal-nod][FEAT-575 — Edit coordination foundation: journal + node ref + history attribution]]
+- [[id:FEAT-576-pi-edit-broker-crate-protocol-daemon-aut][FEAT-576 — pi-edit-broker crate: protocol, daemon, auto-spawn]]
+
+** Wave 2 — Engine integration
+Serialized on both foundations landing.
+
+- [[id:FEAT-577-socketcoordclient-stateless-edit-transac][FEAT-577 — SocketCoordClient + stateless edit_transaction in BufferRegistry]]
+
+** Wave 3 — NAPI surface
+Depends on engine integration.
+
+- [[id:FEAT-578-napi-surface-sessionid-propagation-coord][FEAT-578 — NAPI surface: sessionId propagation + coord_* commands]]
+
+** Wave 4 — coding-agent integration
+Depends on NAPI surface.
+
+- [[id:FEAT-580-coding-agent-integration-code-tool-sessi][FEAT-580 — coding-agent integration: code tool sessionId injection + PeerConflict handling]]
+
+** Wave 5 — TUI surface
+Depends on coding-agent integration.
+
+- [[id:FEAT-579-tui-surface-coord-status-line-segment-pe][FEAT-579 — TUI surface: coord status-line segment + peer-activity preview footer]]
+
+* Risks and mitigations
+
+- **Broker binary distribution.** =pi-edit-broker= must be found by =spawn_broker_if_absent=. Mitigation: default to =target/release/pi-edit-broker= in dev; in release artifacts, bundle alongside =pi-natives= in the same directory resolved by =getNativesDir()=.
+- **Broker fallback.** Every RPC has a 150 ms budget; on timeout or socket error, degrade silently to =NullCoordClient= for that call and log a single warning per process. The journal still writes locally.
+- **Atomicity of disk write.** Replace =fs::write= with temp-file + =rename= in the critical section. Ensure temp file sits on same filesystem as target.
+- **Peer commit races inside critical section.** Broker grants intent, but between grant and commit another session could commit. Mitigation: one retry inside the critical section that re-reads disk and re-resolves CodePath; second conflict returns =PeerConflict= to caller.
+- **Stale socket file after broker crash.** Auto-spawn path tests =connect()= first; on failure, =unlink()= stale socket before binding.
+- **CodePath dep not yet landed.** FEAT-575 references the CodePath dialect interface. If CodePath ships later, FEAT-575's =node_ref.rs= falls back to the existing =line_target= byte-range path plus =LanguageId= name heuristics; the journal entries gracefully degrade to file-level markers until CodePath ships.
+- **Subagent session collision.** Each subagent has a distinct =sessionId= via =sessionManager.getSessionId()=. Verify in FEAT-580 that subagent edits attribute to the subagent, not the parent.
+
+* Non-goals (Phase 1)
+
+- CRDT-backed concurrent merge (Loro). Journal format accepts future =op: [...]= payloads.
+- Cross-host coordination (broker is local Unix-socket only).
+- Semantic conflict resolution (e.g., "peer deleted function, my edit added a call").
+- Windows named-pipe support.
+
+* Rollout
+
+Phase 1 — Waves 1–2 (foundation + engine): not yet user-visible; passing tests are the only signal.
+
+Phase 2 — Wave 3 (NAPI): =code edit= starts requiring =sessionId= for mutating commands; coding-agent updates in Wave 4 keep the surface green.
+
+Phase 3 — Waves 4–5 (tool + TUI): user sees =coord: N peers= status-line segment and peer-activity footers. Graceful for single-session users: segment renders empty when no peers.
+
+Phase 4 (future, out of this plan) — Loro adoption for concurrent character-level merge. Journal schema carries the hooks (=op[]= union field).

@@ -1,0 +1,222 @@
+#+TITLE: NameLexer implementations for all 8 CodePath dialects
+#+STATE: ITEM
+#+SESSION_ID: 14bf80b7760fbaa2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-35-19-000Z_14bf80b7760fbaa2.jsonl]]
+#+CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code
+#+DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as
+#+EFFORT: XL
+#+LAYER: pi-code-path pi-code-engine
+#+PRIORITY: #A
+
+* Initial Message
+
+you should also think about how you will change the surfaces of the other code subcommands in light of the code path
+
+* Scope
+
+Implement =NameLexer= + =LanguageDialect= (anchors, qualifiers, edge_kinds) for all 8 language dialects specified in =specs/code-graph/code-path-dialects/=. Each dialect registers into its =LanguageProfile= in =crates/pi-code-engine/src/language/mod.rs=.
+
+** In scope
+- TypeScript NameLexer: dotted identifiers (=Foo.bar.baz=), JSX elements, private fields (=#field=), computed properties, overload signatures
+- Rust NameLexer: =::=-separated paths (=crate::module::item=), turbofish (=parse::<i32>=), impl-for (=impl_Trait_for_Type=), macro invocations
+- Python NameLexer: dotted identifiers (=module.Class.method=), decorators as =[decorator=...]= attribute
+- Go NameLexer: dotted identifiers (=Package.Function=), receiver methods (=(Type).Method=)
+- Haskell NameLexer: module-qualified (=Data.Map.lookup=), operators in parens (=(<$>)=), typeclass instances
+- HTML NameLexer: CSS-selector-like (=#id.class tag=), text-content based (heading by quoted text), XPath attribute semantics for =@=
+- CSS NameLexer: selector strings (=.class-name #id tag=), property names, at-rule payloads (=@media (...)=)
+- Markdown/Org NameLexer: heading text (quoted or unquoted), code block language, list position
+- Per-dialect anchor, qualifier, and edge_kind registries per dialect spec
+- Extend =LanguageProfile= with optional =LanguageDialect= field
+- Each NameLexer backed by winnow sub-parser, composable with kernel grammar
+
+** Out of scope
+- Kernel parser (done in [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as]])
+- NAPI bridge and code tool changes
+
+** Existing Patterns
+
+*** Dialect spec files (authoritative)
+- =specs/code-graph/code-path-dialects/01-typescript.md= (218 lines, 10 edge cases, 30 tests)
+- =specs/code-graph/code-path-dialects/02-rust.md= (222 lines, 12 edge cases, 32 tests)
+- =specs/code-graph/code-path-dialects/03-python.md= (230 lines, 12 edge cases, 32 tests)
+- =specs/code-graph/code-path-dialects/04-go.md= (232 lines, 13 edge cases, 34 tests)
+- =specs/code-graph/code-path-dialects/05-haskell.md= (253 lines, 13 edge cases, 34 tests)
+- =specs/code-graph/code-path-dialects/06-html.md= (246 lines, 13 edge cases, 32 tests)
+- =specs/code-graph/code-path-dialects/07-css.md= (239 lines, 13 edge cases, 31 tests)
+- =specs/code-graph/code-path-dialects/08-markdown-org.md= (247 lines, 14 edge cases, 33 tests)
+
+*** NameExtractor patterns per language profile
+- TypeScript: =Field{name: "name"}= for functions/classes, =ChildText= for some
+- Rust: =Field{name: "name"}= with =visibility: Some("pub")= for pub items
+- Python: =Field{name: "name"}= for functions/classes, =ChildField= for decorated defs
+- HTML: =Attributed{base: ChildText{tag_name}, enrichments: [id, class]}=
+- CSS: =ChildText{selectors}= for rule_set, =ChildText{keyframes_name}= for keyframes
+- Markdown: =ChildField{child_type: "atx_heading", field: "heading_content"}=
+
+*** LanguageProfile extension point
+- File: =crates/pi-code-engine/src/language/profile.rs=
+- Add =pub dialect: Option<LanguageDialect>= field after =supertypes= (line ~32)
+- Default to =None= for backward compat
+- Each profile constructor in =mod.rs= sets =dialect: Some(...)= with the lang's NameLexer
+
+** Tests
+
+*** Per-dialect test suites (from spec files)
+Each dialect spec defines a test suite in section E. Implement as Rust integration tests:
+- =crates/pi-code-path/tests/dialects/typescript.rs= — 30 test cases from spec
+- =crates/pi-code-path/tests/dialects/rust.rs= — 32 test cases
+- =crates/pi-code-path/tests/dialects/python.rs= — 32 test cases
+- =crates/pi-code-path/tests/dialects/go.rs= — 34 test cases
+- =crates/pi-code-path/tests/dialects/haskell.rs= — 34 test cases
+- =crates/pi-code-path/tests/dialects/html.rs= — 32 test cases
+- =crates/pi-code-path/tests/dialects/css.rs= — 31 test cases
+- =crates/pi-code-path/tests/dialects/markdown_org.rs= — 33 test cases
+
+*** Cross-dialect smoke test (from README §4)
+- Query: "every definition whose body contains the literal TODO"
+- Same operator skeleton, different payload predicates per dialect
+- Assert: identical cardinality and semantic role across languages
+
+*** Round-trip corpus per dialect (R-5 from README)
+- 100+ real CodePath strings per language
+- parse -> render -> parse AST equality
+
+*** Negative corpus per dialect (R-7 from README)
+- Malformed paths, ambiguous names, unreachable targets
+- Each mapped to expected diagnostic variant
+
+** Implementation
+
+** Extend LanguageProfile with dialect field
+:PROPERTIES:
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:END:
+- File: =crates/pi-code-engine/src/language/profile.rs=
+- Add =pub dialect: Option<pi_code_path::LanguageDialect>= field to =LanguageProfile=
+- Add =pi-code-path= as dependency in =crates/pi-code-engine/Cargo.toml=
+- Default all existing profile constructors to =dialect: None= initially
+
+** Implement TypeScript NameLexer
+:PROPERTIES:
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-ts-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:END:
+- File: =crates/pi-code-path/src/dialects/typescript.rs=
+- NamePayload: =TsName { segments: Vec<TsSegment> }= where =TsSegment= is =Ident(String) | PrivateField(String) | ComputedKey(String)=
+- Parse: dotted identifiers =Foo.bar.baz=, private fields =#field=, JSX elements =<Component>=
+- Match: compare against DeclarationPattern name output + AttributeEnrichment
+- Render: join with =.=, prefix =#= for private fields
+- Qualifiers: =#body=, =#sig=, =#name=
+- Anchors: =¶return=, =¶guard=, =¶hook-deps=, =¶export=, =¶default=
+- Edge kinds: ref, def, call, import (full set)
+
+** Implement Rust NameLexer
+:PROPERTIES:
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-rust-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:END:
+- File: =crates/pi-code-path/src/dialects/rust.rs=
+- NamePayload: =RustName { segments: Vec<String>, turbofish: Option<Vec<String>> }=
+- Parse: =::=-separated paths, =crate::= prefix, turbofish =::<T>=, =impl_Trait_for_Type=
+- Qualifiers: =#body=, =#sig=, =#name=, =#attr[name]=
+- Anchors: =¶test=, =¶derive=, =¶unsafe=, =¶async=, =¶pub=
+
+** Implement Python NameLexer
+:PROPERTIES:
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-python-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:END:
+- File: =crates/pi-code-path/src/dialects/python.rs=
+- NamePayload: =PythonName { segments: Vec<String> }=
+- Parse: dotted identifiers, decorator attribute =[decorator=name]=
+- Qualifiers: =#body=, =#sig=, =#name=, =#docstring=
+- Anchors: =¶async=, =¶classmethod=, =¶staticmethod=, =¶property=, =¶abstractmethod=
+
+** Implement Go NameLexer
+:PROPERTIES:
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-go-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:END:
+- File: =crates/pi-code-path/src/dialects/go.rs=
+- NamePayload: =GoName { package: Option<String>, name: String, receiver: Option<String> }=
+- Parse: =Package.Function=, =(Type).Method=, exported vs unexported
+- Qualifiers: =#body=, =#sig=, =#name=
+- Anchors: =¶test=, =¶bench=, =¶exported=, =¶interface=
+
+** Implement Haskell NameLexer
+:PROPERTIES:
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-haskell-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:END:
+- File: =crates/pi-code-path/src/dialects/haskell.rs=
+- NamePayload: =HaskellName { segments: Vec<String>, operator: bool }=
+- Parse: module-qualified =Data.Map.lookup=, operators in parens =(<$>)=, typeclass instances
+- Qualifiers: =#body=, =#sig=, =#name=, =#where=
+- Anchors: =¶deriving=, =¶pragma=, =¶typeclass=, =¶instance=
+
+** Implement HTML NameLexer
+:PROPERTIES:
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-html-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:END:
+- File: =crates/pi-code-path/src/dialects/html.rs=
+- NamePayload: =HtmlName { tag: Option<String>, id: Option<String>, classes: Vec<String>, text: Option<String> }=
+- Parse: CSS-selector-like =#id.class tag=, text content ="quoted text"=
+- =@= rebound to XPath attribute axis inside HTML dialect (documented overload in README)
+- Qualifiers: =#attr[name]=, =#text=, =#innerHTML=
+- Anchors: =¶data-*= (data attributes), =¶on*= (event handlers), =¶aria-*= (ARIA attributes)
+
+** Implement CSS NameLexer
+:PROPERTIES:
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-css-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:END:
+- File: =crates/pi-code-path/src/dialects/css.rs=
+- NamePayload: =CssName { selector: Option<String>, property: Option<String>, at_rule: Option<AtRulePayload> }=
+- Parse: selector strings =.class #id tag=, property names, at-rule payloads =@media (...)=
+- At-rule separator: canonicalize to =/= for nested at-rules
+- Qualifiers: =#value=, =#name=, =#block=
+- Anchors: =¶important=, =¶variable=, =¶vendor-prefix=
+
+** Implement Markdown/Org NameLexer
+:PROPERTIES:
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-mdorg-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:END:
+- File: =crates/pi-code-path/src/dialects/markdown_org.rs=
+- NamePayload: =MdOrgName { heading_text: Option<String>, code_lang: Option<String>, level: Option<u8> }=
+- Parse: heading text (quoted ="Quick start"= or unquoted =Installation=), code block language
+- Qualifiers: =#intro=, =#body=, =#name=
+- Anchors: =¶tag=, =¶property=, =¶todo-state=, =¶code-block=, =¶frontmatter=
+
+** Wire all dialects into language profiles
+:PROPERTIES:
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-wire-dialects
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-ts-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::PROJ-rust-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::PROJ-python-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::PROJ-go-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::PROJ-haskell-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::PROJ-html-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::PROJ-css-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::PROJ-mdorg-name-lexer
+:END:
+- File: =crates/pi-code-engine/src/language/mod.rs=
+- Set =dialect: Some(typescript_dialect())= in =typescript_profile()=
+- Set =dialect: Some(rust_dialect())= in =rust_profile()=
+- Same for Python, HTML, CSS, Markdown
+- Go and Haskell: create minimal profiles if tree-sitter grammars available, or register as external dialects
+- Note: Go and Haskell may not have =LanguageProfile= entries today; create stub profiles or register dialects externally
+
+** Edge Cases
+
+- Go and Haskell have dialect specs but may not have tree-sitter profiles in pi-code-engine yet — need to verify and potentially add stub profiles
+- HTML =@= rebinding: must be clearly scoped to HTML dialect only, no leakage to other dialects
+- CSS =@media= payload containing parens: winnow parser must handle nested parentheses
+- Haskell =(<$>)=: operators with special chars must be quoted in payload parser
+- Markdown heading levels: =#= conflicts with qualifier sigil — heading level is part of NamePayload, not a qualifier
+- Cross-dialect ambiguity: =.class= is a CSS selector vs TS member access — locator determines dialect
+
+** Acceptance Criteria
+
+- [ ] All 8 dialect test suites pass (258+ tests total from specs)
+- [ ] Cross-dialect smoke test passes
+- [ ] 100+ round-trip corpus per dialect passes
+- [ ] All negative corpus cases produce correct diagnostics
+- [ ] =LanguageProfile.dialect= is populated for TS, Rust, Python, HTML, CSS, Markdown
+- [ ] Go and Haskell dialects compile and pass tests (may use stub profiles)
+- [ ] =cargo check -p pi-code-path= clean
+- [ ] =cargo clippy -p pi-code-path= clean

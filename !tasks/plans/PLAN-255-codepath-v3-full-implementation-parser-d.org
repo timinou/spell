@@ -1,0 +1,100 @@
+#+TITLE: CodePath v3 full implementation: parser, dialects, NAPI, code tool cutover
+#+STATE: ITEM
+#+SESSION_ID: 14bf80b7760fbaa2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-35-19-000Z_14bf80b7760fbaa2.jsonl]]
+#+CUSTOM_ID: PLAN-255-codepath-v3-full-implementation-parser-d
+#+LAYER: pi-code-path pi-code-engine pi-code-graph pi-natives coding-agent
+
+* Initial Message
+
+you should also think about how you will change the surfaces of the other code subcommands in light of the code path
+
+* Context
+
+CodePath v3 is a unified query algebra for addressing code structures across languages. It replaces the current =targetId= (=file::Symbol.member=) addressing with a full path algebra supporting combinators, predicates, qualifiers, edge axis, and set operations — all with language-pluggable NameLexer payloads.
+
+** Settled Design Decisions
+
+1. *3-command surface*: =code get= (reads/queries/nav/graph) + =code edit= (mutations) + =code manage= (lifecycle). Replaces 20+ current subcommands.
+2. *targetId → target*: Structured =target= field with CodePath expression. Full cutover, no backward compat shim. Old =file::Symbol.member= is valid CodePath syntax naturally (=Locator :: NamePayload=).
+3. *scope field removed*: =#body= qualifier in CodePath target replaces =scope: "body" | "target"=. Complete removal.
+4. *Graph commands replaced*: =context=, =impact=, =deps=, =flow= become =code get= with edge axis (=ref→=, =def→=, =call→=, =import→=). =dead_code= and =clusters= accessed via =code get { target: ":dead_code" }=.
+5. *Parser*: winnow (not chumsky) in new =crates/pi-code-path= crate.
+6. *NAPI*: New =executeCodePath= function alongside existing NAPI exports.
+7. *Sigils*: =§= (node-kind), =¶= (anchor), =→= (edge), =:= (field), =#= (qualifier). Update =code-path.md= to match dialect files.
+8. *Full v3 scope*: Parser + resolver + all 8 NameLexers + edge axis + set ops + qualifiers + predicates.
+9. *Prompts*: Full rewrite of all code tool prompt files for 3-command model.
+
+** Key File Paths
+
+*** Specs
+- =specs/code-graph/code-path.md= — v3 spec (needs sigil update)
+- =specs/code-graph/code-path-dialects/README.md= — dialect overview + sigil table
+- =specs/code-graph/code-path-dialects/01..08-*.md= — per-language dialect specs
+
+*** New Crate
+- =crates/pi-code-path/= — new crate for parser, AST, resolver, NameLexer trait
+
+*** Existing Rust (to extend)
+- =crates/pi-code-engine/src/language/profile.rs= — add =dialect: Option<LanguageDialect>= field
+- =crates/pi-code-engine/src/language/mod.rs= — wire dialects into profile constructors
+- =crates/pi-code-engine/src/procedure/rules.rs= — =RuleExpr= reused by predicates
+- =crates/pi-code-engine/src/resolve.rs= — =resolve_symbol()= pattern for name resolution
+- =crates/pi-code-graph/src/query.rs= — =neighbors_by_kind()=, =bfs_levels()= for edge axis
+- =crates/pi-code-graph/src/model.rs= — =EdgeKind=, =SymbolNode=, =GraphNode=
+
+*** NAPI Bridge
+- =crates/pi-natives/src/code_path.rs= — new NAPI module
+- =packages/natives/src/code-path/types.ts= — TypeScript types
+
+*** Code Tool (full cutover)
+- =packages/coding-agent/src/tools/code.ts= — 3-command schema + dispatcher
+- =packages/coding-agent/src/tools/code-result.ts= — result types for get/edit/manage
+- =packages/coding-agent/src/prompts/tools/code.md= — rewrite
+- =packages/coding-agent/src/prompts/tools/code-hint-*.md= — rewrite all 4
+
+*** System Prompts
+- =AGENTS.md= — update code tool references
+
+** Inventory Findings (from exploration)
+
+*** Current addressing: =parse_target_id()= in =code_buffer.rs= (L143-156) splits on =::=
+*** Current graph: =CodeGraphOptions= takes command/symbol/query — no unified query language
+*** Current resolution: =resolve_symbol()= splits dotted names, walks declarations
+*** Current predicates: =RuleExpr= enum + =matches_rule_expr()= — reusable for =§= axis
+*** Current edge traversal: =neighbors_by_kind()= + =bfs_levels()= in =query.rs= — reusable for =→= axis
+*** 9 EdgeKind variants: Defines, Imports, Calls, References, Inherits, Renders, Styles, TypeImports, TypeParameterOf
+*** 14 SymbolKind variants: Function, Class, Method, Variable, Interface, TypeAlias, Enum, Module, Macro, Template, Element, CssRule, CssProperty
+*** Language profiles: TS(7 decl), Rust(9), Python(3), HTML(4), CSS(5), Markdown(2)
+
+* Verification
+
+- =cargo test -p pi-code-path= — parser round-trip, resolver, predicates, edge axis, set ops
+- =cargo check -p pi-code-path -p pi-code-engine -p pi-code-graph -p pi-natives= — clean
+- =cargo clippy -p pi-code-path= — clean
+- =bun check:ts= — TypeScript type checking
+- =bun lint:ts= — Biome lint
+- All 8 dialect test suites pass (258+ tests from specs)
+- Cross-dialect smoke test passes
+- =code get=, =code edit=, =code manage= are the only accepted code commands
+- No stale references to old command names in prompts or AGENTS.md
+- Legacy =file::Symbol.member= syntax works as valid CodePath
+
+* Execution Manifest
+
+** :wave: 1 — Foundation (specs + crate skeleton)
+- [[id:FEAT-581-update-code-path-md-to-use-revised-sigil]] — sigil + winnow update in code-path.md
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as]] — start: crate setup, AST types, NameLexer trait, winnow parser
+
+** :wave: 2 — Kernel completion
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as]] — complete: resolver, edge axis, set ops, full test suite
+- [[id:FEAT-582-add-code-tool-3-command-model-addendum-t]] — spec addendum for 3-command model
+
+** :wave: 3 — Dialects (parallelizable)
+- [[id:PROJ-053-namelexer-implementations-for-all-8-code]] — all 8 NameLexers + profile wiring
+
+** :wave: 4 — NAPI bridge
+- [[id:PROJ-054-napi-bridge-executecodepath-function-in]] — executeCodePath NAPI function
+
+** :wave: 5 — Code tool cutover
+- [[id:PROJ-055-code-tool-surface-cutover-3-command-mode]] — 3-command model, prompt rewrites, AGENTS.md

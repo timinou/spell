@@ -106,6 +106,18 @@ pub struct GraphFilesResult {
 	pub matches: Vec<GraphNodeSummary>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct GraphDegree {
+	pub incoming: u32,
+	pub outgoing: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReachSummary {
+	pub count:  u32,
+	pub capped: bool,
+}
+
 impl CodeGraph {
 	pub fn graph_status(&self) -> GraphStatus {
 		GraphStatus {
@@ -341,6 +353,67 @@ impl CodeGraph {
 		Some(GraphFlowResult { target: summary_for_node(graph, start)?, levels })
 	}
 
+	pub fn resolve_symbol_index(&self, query: &str) -> Option<NodeIndex> {
+		resolve_symbol(self.graph(), self, query)
+	}
+
+	pub fn graph_degree_counts(
+		&self,
+		node_index: NodeIndex,
+		incoming_kinds: &[EdgeKind],
+		outgoing_kinds: &[EdgeKind],
+	) -> GraphDegree {
+		let graph = self.graph();
+		GraphDegree {
+			incoming: neighbor_count_by_kind(graph, node_index, Direction::Incoming, incoming_kinds),
+			outgoing: neighbor_count_by_kind(graph, node_index, Direction::Outgoing, outgoing_kinds),
+		}
+	}
+
+	pub fn graph_file_import_degree_for_symbol(
+		&self,
+		node_index: NodeIndex,
+		direction: Direction,
+	) -> u32 {
+		file_neighbor_count_for_symbol(self.graph(), node_index, direction)
+	}
+
+	pub fn graph_inherits_for_symbol(&self, node_index: NodeIndex) -> Vec<GraphNodeSummary> {
+		neighbors_by_kind(self.graph(), node_index, Direction::Outgoing, &[EdgeKind::Inherits])
+	}
+
+	pub fn graph_exported_reach_summary(
+		&self,
+		node_index: NodeIndex,
+		max_depth: usize,
+		fanout_limit: usize,
+	) -> ReachSummary {
+		let graph = self.graph();
+		let Some(GraphNode::Symbol(symbol)) = graph.node_weight(node_index) else {
+			return ReachSummary { count: 0, capped: false };
+		};
+		if !symbol.exported {
+			return ReachSummary { count: 0, capped: false };
+		}
+		bounded_reach_summary(
+			graph,
+			node_index,
+			Direction::Incoming,
+			[
+				EdgeKind::Calls,
+				EdgeKind::References,
+				EdgeKind::Styles,
+				EdgeKind::Inherits,
+				EdgeKind::Imports,
+				EdgeKind::TypeImports,
+				EdgeKind::TypeParameterOf,
+			]
+			.as_slice(),
+			max_depth.min(2),
+			fanout_limit.min(64),
+		)
+	}
+
 	pub fn graph_dead_code(&self) -> Vec<GraphDeadCodeItem> {
 		self.graph_dead_code_with_limit(50)
 	}
@@ -349,64 +422,7 @@ impl CodeGraph {
 		let graph = self.graph();
 		let mut items = graph
 			.node_indices()
-			.filter_map(|node_index| {
-				let GraphNode::Symbol(symbol) = graph.node_weight(node_index)? else {
-					return None;
-				};
-				if symbol.exported
-					|| matches!(
-						symbol.kind,
-						SymbolKind::Module
-							| SymbolKind::Template
-							| SymbolKind::Element
-							| SymbolKind::CssProperty
-					) || (symbol.kind == SymbolKind::Method && symbol.name == "constructor")
-					|| is_entry_point_symbol(symbol)
-					|| is_test_path(symbol.file.as_path())
-				{
-					return None;
-				}
-				let has_inbound_usage =
-					graph
-						.edges_directed(node_index, Direction::Incoming)
-						.any(|edge| {
-							matches!(
-								edge.weight(),
-								EdgeKind::Calls
-									| EdgeKind::References
-									| EdgeKind::Inherits
-									| EdgeKind::Renders
-							)
-						});
-				let has_style_consumers = symbol.kind == SymbolKind::CssRule
-					&& graph
-						.edges_directed(node_index, Direction::Outgoing)
-						.any(|edge| *edge.weight() == EdgeKind::Styles);
-				if has_inbound_usage || has_style_consumers {
-					return None;
-				}
-				let confidence = if symbol
-					.file
-					.file_name()
-					.and_then(|name| name.to_str())
-					.is_some_and(|name| matches!(name, "index.ts" | "index.js" | "mod.rs" | "lib.rs"))
-				{
-					"low"
-				} else if symbol.kind == SymbolKind::Function || symbol.kind == SymbolKind::Class {
-					"high"
-				} else {
-					"medium"
-				};
-				Some(GraphDeadCodeItem {
-					symbol:     summary_for_node(graph, node_index)?,
-					reason:     if symbol.kind == SymbolKind::CssRule {
-						"no matched styled elements".into()
-					} else {
-						"no inbound semantic references".into()
-					},
-					confidence: confidence.into(),
-				})
-			})
+			.filter_map(|node_index| dead_code_item_for_node(graph, node_index))
 			.collect::<Vec<_>>();
 		items.sort_by(|left, right| {
 			confidence_rank(&right.confidence)
@@ -615,6 +631,136 @@ fn file_neighbors_for_symbol(
 		return Vec::new();
 	};
 	neighbors_by_kind(graph, file_index, direction, &[EdgeKind::Imports])
+}
+
+fn neighbor_count_by_kind(
+	graph: &petgraph::stable_graph::StableGraph<GraphNode, EdgeKind>,
+	node_index: NodeIndex,
+	direction: Direction,
+	kinds: &[EdgeKind],
+) -> u32 {
+	let mut seen = BTreeSet::new();
+	for edge in graph.edges_directed(node_index, direction) {
+		if !kinds.contains(edge.weight()) {
+			continue;
+		}
+		let other = if direction == Direction::Incoming {
+			edge.source()
+		} else {
+			edge.target()
+		};
+		seen.insert(other.index());
+	}
+	seen.len() as u32
+}
+
+fn file_neighbor_count_for_symbol(
+	graph: &petgraph::stable_graph::StableGraph<GraphNode, EdgeKind>,
+	symbol_index: NodeIndex,
+	direction: Direction,
+) -> u32 {
+	let Some(GraphNode::Symbol(symbol)) = graph.node_weight(symbol_index) else {
+		return 0;
+	};
+	let Some(file_index) = resolve_file(graph, &symbol.file.to_string_lossy()) else {
+		return 0;
+	};
+	neighbor_count_by_kind(graph, file_index, direction, &[EdgeKind::Imports])
+}
+
+fn bounded_reach_summary(
+	graph: &petgraph::stable_graph::StableGraph<GraphNode, EdgeKind>,
+	start: NodeIndex,
+	direction: Direction,
+	kinds: &[EdgeKind],
+	max_depth: usize,
+	fanout_limit: usize,
+) -> ReachSummary {
+	if max_depth == 0 || fanout_limit == 0 {
+		return ReachSummary { count: 0, capped: false };
+	}
+	let mut visited = BTreeSet::from([start.index()]);
+	let mut queue = VecDeque::from([(start, 0_usize)]);
+	let mut count = 0_u32;
+	while let Some((node_index, depth)) = queue.pop_front() {
+		if depth >= max_depth {
+			continue;
+		}
+		for edge in graph.edges_directed(node_index, direction) {
+			if !kinds.contains(edge.weight()) {
+				continue;
+			}
+			let next = if direction == Direction::Incoming {
+				edge.source()
+			} else {
+				edge.target()
+			};
+			if !visited.insert(next.index()) {
+				continue;
+			}
+			count += 1;
+			if count >= fanout_limit as u32 {
+				return ReachSummary { count, capped: true };
+			}
+			queue.push_back((next, depth + 1));
+		}
+	}
+	ReachSummary { count, capped: false }
+}
+
+fn dead_code_item_for_node(
+	graph: &petgraph::stable_graph::StableGraph<GraphNode, EdgeKind>,
+	node_index: NodeIndex,
+) -> Option<GraphDeadCodeItem> {
+	let GraphNode::Symbol(symbol) = graph.node_weight(node_index)? else {
+		return None;
+	};
+	if symbol.exported
+		|| matches!(
+			symbol.kind,
+			SymbolKind::Module | SymbolKind::Template | SymbolKind::Element | SymbolKind::CssProperty
+		) || (symbol.kind == SymbolKind::Method && symbol.name == "constructor")
+		|| is_entry_point_symbol(symbol)
+		|| is_test_path(symbol.file.as_path())
+	{
+		return None;
+	}
+	let has_inbound_usage = graph
+		.edges_directed(node_index, Direction::Incoming)
+		.any(|edge| {
+			matches!(
+				edge.weight(),
+				EdgeKind::Calls | EdgeKind::References | EdgeKind::Inherits | EdgeKind::Renders
+			)
+		});
+	let has_style_consumers = symbol.kind == SymbolKind::CssRule
+		&& graph
+			.edges_directed(node_index, Direction::Outgoing)
+			.any(|edge| *edge.weight() == EdgeKind::Styles);
+	if has_inbound_usage || has_style_consumers {
+		return None;
+	}
+	let confidence = if symbol
+		.file
+		.file_name()
+		.and_then(|name| name.to_str())
+		.is_some_and(|name| matches!(name, "index.ts" | "index.js" | "mod.rs" | "lib.rs"))
+	{
+		"low"
+	} else if symbol.kind == SymbolKind::Function || symbol.kind == SymbolKind::Class {
+		"high"
+	} else {
+		"medium"
+	};
+	Some(GraphDeadCodeItem {
+		symbol:     summary_for_node(graph, node_index)?,
+		reason:     if symbol.kind == SymbolKind::CssRule {
+			"no matched styled elements".into()
+		} else {
+			"no inbound semantic references".into()
+		},
+		confidence: confidence.into(),
+	})
 }
 
 fn bfs_levels(
@@ -1170,6 +1316,41 @@ mod tests {
 		);
 		let clusters = graph.graph_clusters();
 		assert!(!clusters.is_empty());
+	}
+
+	#[test]
+	fn graph_enrichment_accessors_report_degree_and_file_imports() {
+		let graph = build_query_graph();
+		let callee = graph
+			.resolve_symbol_index("callee")
+			.expect("callee node should resolve");
+		let degree = graph.graph_degree_counts(callee, &[EdgeKind::Calls], &[EdgeKind::Calls]);
+		assert_eq!(degree.incoming, 1);
+		assert_eq!(degree.outgoing, 0);
+		assert_eq!(
+			graph.graph_file_import_degree_for_symbol(callee, Direction::Incoming),
+			1,
+			"callee file should be imported by caller.query"
+		);
+		assert!(graph.graph_inherits_for_symbol(callee).is_empty());
+	}
+
+	#[test]
+	fn graph_exported_reach_summary_is_bounded() {
+		let graph = build_query_graph();
+		let callee = graph
+			.resolve_symbol_index("callee")
+			.expect("callee node should resolve");
+		let reach = graph.graph_exported_reach_summary(callee, 4, 64);
+		assert!(reach.count >= 1, "exported callee should reach at least one consumer");
+		let orphan = graph
+			.resolve_symbol_index("orphan")
+			.expect("orphan node should resolve");
+		assert_eq!(
+			graph.graph_exported_reach_summary(orphan, 4, 64),
+			ReachSummary { count: 0, capped: false },
+			"non-exported orphan should not report exported reach"
+		);
 	}
 
 	#[test]

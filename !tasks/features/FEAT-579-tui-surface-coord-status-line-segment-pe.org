@@ -1,0 +1,100 @@
+#+TITLE: TUI surface: coord status-line segment + peer-activity preview footer
+#+STATE: ITEM
+#+SESSION_ID: 14bfce727e583e3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
+#+CUSTOM_ID: FEAT-579-tui-surface-coord-status-line-segment-pe
+#+DEPENDS: FEAT-580-coding-agent-integration-code-tool-sessi
+#+EFFORT: S
+#+LAYER: ui
+#+PRIORITY: #B
+
+* Initial Message
+
+show me how the pi code engine can be used to keep track of which session edited what file across code edit instances. some sort of auto-find and socket communication for editing processes. I don't want any more errors happening because another agent edited something. maybe it's time for loro crdt? think about this also within the scope of making undo/redo smarter and only undoing/redoing the actions of the agents/sessions but also knowing what the other agents/sessions modified.
+
+* Scope
+Make peer awareness visible in the TUI: a status-line segment showing peer count and last activity, and an inline preview footer in the `code edit` tool render when peer activity exists.
+
+* Design reference
+[[file:specs/edit-coordination/design.md]] §7 "TUI surface".
+
+* Existing patterns
+- Status-line segments live in =packages/coding-agent/src/modes/components/status-line/segments.ts= (see `sessionSegment` at L345).
+- Tool execution renders are in =packages/coding-agent/src/modes/components/tool-execution/= (and see the pattern in =packages/coding-agent/src/tools/code.ts= where output text is composed).
+- Sanitization helpers (mandatory per AGENTS.md): `replaceTabs`, `truncateToWidth`, `shortenPath`, `PREVIEW_LIMITS`, `TRUNCATE_LENGTHS`.
+
+* Tests (write before implementation)
+Test file: =packages/coding-agent/test/modes/components/status-line/coord-segment.test.ts=.
+
+Scenarios:
+
+1. `coord_segment_renders_zero_peers_silently`
+   With `coord_status` returning `peers: []`, the segment renders an empty string (no visual noise for single-session users).
+
+2. `coord_segment_renders_peer_count`
+   With `peers: [s1, s2, s3]` (3 entries, one being self), segment renders `coord: 2 peers`.
+
+3. `coord_segment_renders_last_activity`
+   With recent peer edit 12s ago on file `src/foo.ts`, segment includes `· src/foo.ts 12s ago`. File path passed through `shortenPath`.
+
+4. `coord_segment_truncates_long_paths`
+   Peer activity on a 200-char path → segment truncates via `truncateToWidth` to fit status-line budget.
+
+5. `tool_render_includes_peer_activity_block_when_present`
+   Stub `code edit` output with `peerActivity: [...]` non-empty. Render output contains the formatted block under "Peer activity:".
+
+6. `tool_render_omits_peer_activity_block_when_empty`
+   Same with empty `peerActivity`. No block rendered.
+
+* Implementation
+Order:
+
+** coordSegment in status-line
+:PROPERTIES:
+:CUSTOM_ID: coord-segment
+:END:
+- File: =packages/coding-agent/src/modes/components/status-line/segments.ts=.
+- Add =coordSegment(ctx)= returning =''= when fewer than 1 peer (excluding self), else =coord: N peers · {short(file)} {agoStr}=.
+- Cache =coord_status= result with 1s TTL to avoid hammering NAPI on every render.
+- Register the segment in the status-line layout adjacent to =sessionSegment=.
+
+** Peer-activity render block in code tool output
+:PROPERTIES:
+:CUSTOM_ID: peer-activity-block
+:DEPENDS: coord-segment
+:END:
+- File: =packages/coding-agent/src/tools/code.ts= (or the render helper FEAT-580 added).
+- Block format:
+  #+begin_example
+  Peer activity:
+    [s2:14b…] src/server.ts::Server.dispatch  12s ago
+    [s3:14c…] src/server.ts::Server.handle    34s ago
+  #+end_example
+- Limit to last 5 entries; sort newest first; sanitize all displayed text.
+
+** Conflict error panel
+:PROPERTIES:
+:CUSTOM_ID: conflict-panel
+:DEPENDS: peer-activity-block
+:END:
+- File: =packages/coding-agent/src/modes/components/tool-execution/= (existing renderer for tool errors).
+- When error is =PeerConflictToolError=, render a structured panel:
+  #+begin_example
+  ⚠ Peer conflict
+    session: 14bc…79e8
+    target:  src/server.ts::Server.handle#body
+    peer revision: 43 · 1s ago
+    Retrying with fresh tree…
+  #+end_example
+- The "Retrying" line is informational; the agent's retry handler does the actual retry.
+* Edge cases
+- Status-line segment must not block render: if NAPI call exceeds 50ms, return cached value or empty string. Use existing async-render pattern from `sessionSegment`.
+- Render path must survive NAPI failures (broker down): swallow errors, return empty string.
+- Long sessionId display: shorten to first 8 chars + ellipsis.
+- File paths from peers may be absolute or relative — always normalize to project-relative via `shortenPath`.
+
+* Acceptance
+- All 6 test scenarios pass.
+- `bun check:ts` clean.
+- Manual: two `spell` sessions in same dir; status-line of each shows `coord: 1 peer`. After one edits a file, the other's status-line shows the file path and elapsed time within 1s.
+- Manual conflict repro: agent triggers a peer conflict; TUI panel renders with structured fields; agent's retry message follows.

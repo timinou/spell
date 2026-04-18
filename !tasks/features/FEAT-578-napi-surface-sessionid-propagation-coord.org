@@ -1,0 +1,112 @@
+#+TITLE: NAPI surface: sessionId propagation + coord_* commands
+#+STATE: ITEM
+#+SESSION_ID: 14bfce727e583e3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
+#+CUSTOM_ID: FEAT-578-napi-surface-sessionid-propagation-coord
+#+DEPENDS: FEAT-577-socketcoordclient-stateless-edit-transac
+#+EFFORT: M
+#+LAYER: pi-natives
+#+PRIORITY: #A
+
+* Initial Message
+
+show me how the pi code engine can be used to keep track of which session edited what file across code edit instances. some sort of auto-find and socket communication for editing processes. I don't want any more errors happening because another agent edited something. maybe it's time for loro crdt? think about this also within the scope of making undo/redo smarter and only undoing/redoing the actions of the agents/sessions but also knowing what the other agents/sessions modified.
+
+* Scope
+Expose the new engine surface across the NAPI boundary in =crates/pi-natives/= and =packages/natives/src/code-buffer/=: add `sessionId` to mutating commands, surface `PeerConflict` in the error output, and add new read-only diagnostic commands.
+
+Out of scope: coding-agent tool integration (FEAT-*E), TUI (FEAT-*F).
+
+* Design reference
+[[file:specs/edit-coordination/design.md]] §5 "NAPI bridge".
+
+* Existing patterns
+- Current NAPI dispatch: =crates/pi-natives/src/code_buffer.rs= (bridge) and =packages/natives/src/code-buffer/types.ts= (TS types).
+- Error output shape: =CodeErrorOutput= at =packages/natives/src/code-buffer/types.ts= L43-L52.
+- Version bump via napi-rs standard deps; rebuild via `bun --cwd=packages/natives run dev:native`.
+
+* Tests (write before implementation)
+Test file: =packages/natives/test/code-buffer-coord.test.ts=.
+
+Scenarios:
+
+1. `session_id_required_on_mutating_edit`
+   `executeCodeBuffer({ command: "edit", file, operations: [...] })` without `sessionId` returns `{ error: true, output: { code: "MISSING_SESSION_ID", ... } }`.
+
+2. `session_id_accepted_on_mutating_edit`
+   Same call with `sessionId: "test-s1"` succeeds; output carries `version` matching the new revision number.
+
+3. `read_only_commands_do_not_require_session_id`
+   `outline`, `read`, `navigate`, `symbols` work without `sessionId`.
+
+4. `peer_conflict_surfaces_structured_error`
+   Simulate a peer-commit via broker (use a broker test harness or a stubbed `CoordClient`). Mutation returns `{ error: true, output: { code: "PEER_CONFLICT", peerConflict: { sessionId: "peer", codePath: "...", peerRevision: 43, peerCommitTs: <n> } } }`.
+
+5. `coord_status_returns_broker_state`
+   `executeCodeBuffer({ command: "coord_status" })` → `{ brokerUp: boolean, peers: [...], socketPath: "..." }`. When broker up, contains at least the caller's own session entry.
+
+6. `coord_peer_activity_returns_recent_edits_for_file`
+   After a peer commit on file X, `executeCodeBuffer({ command: "coord_peer_activity", file: X })` returns `{ file, edits: [{ sessionId, revision, codePaths, ts }] }` with at least 1 entry.
+
+7. `coord_journal_tail_returns_last_n_entries`
+   After N commits, `executeCodeBuffer({ command: "coord_journal_tail", file: X, limit: 3 })` returns the most recent 3 entries in reverse chronological order.
+
+* Implementation
+Order:
+
+** Extend CodeBufferOptions TS interface
+:PROPERTIES:
+:CUSTOM_ID: ts-types
+:END:
+- File: =packages/natives/src/code-buffer/types.ts=.
+- Add =sessionId?: string;= to =CodeBufferOptions=.
+- Add =peerConflict?: { sessionId: string; codePath: string; peerRevision: number; peerCommitTs: number }= to =CodeErrorOutput=.
+- Add new types:
+  #+begin_src ts
+  export interface CoordPeer { sessionId: string; pid: number; cwd: string; projectName: string; startedAt: number; openFiles: string[] }
+  export interface CoordStatus { brokerUp: boolean; peers: CoordPeer[]; socketPath: string }
+  export interface PeerEdit { sessionId: string; revision: number; codePaths: string[]; diffHash: string; ts: number }
+  export interface CoordPeerActivity { file: string; edits: PeerEdit[] }
+  export interface JournalEntry { ts: number; sessionId: string; pid: number; kind: string; revision: number; parentRevision?: number; codePaths: string[]; diffHash: string; byteLen: number }
+  export interface CoordJournalTail { file: string; entries: JournalEntry[] }
+  #+end_src
+
+** Rust NAPI glue
+:PROPERTIES:
+:CUSTOM_ID: rust-glue
+:DEPENDS: ts-types
+:END:
+- File: =crates/pi-natives/src/code_buffer.rs= (or wherever current =execute_code_buffer= lives).
+- Propagate =session_id: Option<String>= from JS options into the engine call.
+- For mutating commands (=edit=, =findAndReplace=, =wrap=, =rename=, =delete=, =insertBefore=, =insertAfter=, =splice=, =move=, =clone=, =transpose=, =renameClassToken=, =renameIdToken=, =renameCustomProperty=, =removeDeadStyle=, =promote=, =demote=, =replaceCodeBlock=): require =session_id=; missing → =CodeErrorOutput { code: "MISSING_SESSION_ID", ... }=.
+- For read-only commands (=outline=, =read=, =navigate=, =symbols=, =diff=, =close=, =buffers=, =languages=, =status=, =context=, =impact=, =deps=, =flow=, =dead_code=, =clusters=, =watcherStatus=, =lockStatus=): sessionId optional (ignored if omitted).
+- Map =CodeEngineError::PeerConflict= to =CodeErrorOutput { code: "PEER_CONFLICT", peerConflict: Some(...) }=.
+- Add dispatch arms for new commands: =coord_status=, =coord_peer_activity=, =coord_journal_tail=.
+
+** Shared BufferRegistry singleton initialization
+:PROPERTIES:
+:CUSTOM_ID: registry-singleton
+:DEPENDS: rust-glue
+:END:
+- File: =crates/pi-natives/src/code_buffer.rs= (wherever the global =Lazy<BufferRegistry>= lives).
+- Replace =Lazy::new(|| BufferRegistry::new(...))= with =new_with_coord(registry, watcher, SocketCoordClient::new())=.
+- =SocketCoordClient::new()= is lazy-connect, so no overhead if never used.
+
+** TS tests + harness
+:PROPERTIES:
+:CUSTOM_ID: tests
+:DEPENDS: registry-singleton
+:END:
+- File: =packages/natives/test/code-buffer-coord.test.ts=.
+- Helper: spawn a real =pi-edit-broker= binary in a tempdir with test socket path; set env for the NAPI bridge to use that socket.
+- Scenarios 1-7 above.
+* Edge cases
+- `sessionId` empty string: treat as missing; return `MISSING_SESSION_ID`.
+- Broker binary not yet built in test env: tests skip scenarios 4-6 with a clear message instead of failing (CI builds the binary as a prereq step).
+- Backwards compat: existing `code` tool callers without `sessionId` will break on mutating commands — documented in FEAT-*E which updates all callers.
+
+* Acceptance
+- All 7 scenarios in `code-buffer-coord.test.ts` pass.
+- `bun check:ts` clean (new types compile; existing callers of `executeCodeBuffer` may surface type errors — those are resolved in FEAT-*E).
+- Sanity: `bun --cwd=packages/natives run build` succeeds.
+- No regression in existing `packages/natives/test/` suite for read-only commands.

@@ -1,0 +1,157 @@
+#+TITLE: SocketCoordClient + stateless edit_transaction in BufferRegistry
+#+STATE: ITEM
+#+SESSION_ID: 14bfce727e583e3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
+#+CUSTOM_ID: FEAT-577-socketcoordclient-stateless-edit-transac
+#+DEPENDS: FEAT-575-edit-coordination-foundation-journal-nod FEAT-576-pi-edit-broker-crate-protocol-daemon-aut
+#+EFFORT: L
+#+LAYER: pi-code-engine
+#+PRIORITY: #A
+
+* Initial Message
+
+show me how the pi code engine can be used to keep track of which session edited what file across code edit instances. some sort of auto-find and socket communication for editing processes. I don't want any more errors happening because another agent edited something. maybe it's time for loro crdt? think about this also within the scope of making undo/redo smarter and only undoing/redoing the actions of the agents/sessions but also knowing what the other agents/sessions modified.
+
+* Scope
+Make every mutating edit in =pi-code-engine= go through a short read-lock-write-release transaction that consults the broker for peer intent and broadcasts commits. Implements the operator directive: "equate an edit with a file change; lock time per edit = literally lock-write-release; get updated if the file got updated."
+
+Lands:
+- =SocketCoordClient= connecting to the broker via the protocol crate from FEAT-*B.
+- New =BufferRegistry::edit_transaction= as the only supported mutation entry point.
+- Existing =CodeBuffer::edit= and =save= flagged as internal test-only helpers (kept for tests, deprecated for external consumers).
+- Proactive cache invalidation: `SocketCoordClient` subscribes to open files and, on `peer_committed`, marks the `BufferRegistry` entry stale so the next read-only access reloads.
+
+Out of scope: NAPI surface (FEAT-*D), tool integration (FEAT-*E).
+
+* Design reference
+[[file:specs/edit-coordination/design.md]] §"Design principle", §3 "buffer.rs changes", §"Failure modes".
+
+* Existing patterns
+- Current save path in =crates/pi-code-engine/src/buffer.rs::CodeBuffer::save_with_watcher= (L658-L696) — critical section structure to preserve.
+- `file_lock::with_exclusive_lock` budget is the single-writer gate we reuse; the peer awareness wraps *around* the lock, not inside.
+- `FileWatcher::mark_self_write` — still needed to suppress own-write notify events after a transaction.
+- Protocol types from =pi-edit-broker= (lib target).
+
+* Tests (write before implementation)
+Test file: =crates/pi-code-engine/tests/coord_transaction.rs= (integration tests against a real spawned broker in a tempdir socket).
+
+Test helper: =crates/pi-code-engine/tests/common/mod.rs= launches a broker on a tempdir socket path, returns handle with Drop-cleanup.
+
+Scenarios:
+
+1. `edit_transaction_reloads_when_peer_committed_between_reads`
+   Session A and B both opened file r0. B commits r1 externally (write bytes + broker commit). A calls `edit_transaction` with `base_revision: 0`. Transaction detects `parent_revision` mismatch via broker `peer_committed` event, re-reads disk, re-resolves target CodePath, applies edit against fresh tree. Succeeds without `ExternalModification`.
+
+2. `edit_transaction_surfaces_peer_conflict_on_overlapping_intent`
+   A intents `::Foo.bar#body` (broker grants). B calls `edit_transaction` targeting `::Foo.bar#body`. B's intent phase returns conflict → `edit_transaction` returns `CodeEngineError::PeerConflict` with `session == A.sessionId`, `code_path == "::Foo.bar#body"`, `peer_revision` set to A's latest commit.
+
+3. `edit_transaction_succeeds_when_peer_touched_different_node`
+   A commits `::Foo.bar`. B's `edit_transaction` targets `::Foo.baz`. No conflict; B's edit lands with parent_revision = A's committed revision.
+
+4. `edit_transaction_emits_journal_entry_on_success`
+   After successful commit, `JournalReader::tail` for that file returns the new entry with matching sessionId, revision, codePaths, diffHash.
+
+5. `edit_transaction_broadcasts_to_subscribers`
+   A subscribes to file X. B's `edit_transaction` on X succeeds. A receives `peer_committed` message within 500ms.
+
+6. `cached_buffer_invalidated_on_peer_commit`
+   A opens buffer for file X (read-only, outline call). B's `edit_transaction` on X lands. A's next `get(X)` returns a reloaded buffer whose rope matches the new disk bytes.
+
+7. `edit_transaction_handles_broker_down_gracefully`
+   Kill broker mid-session. A's `edit_transaction` still completes (downgrades to journal-only; no peer awareness). Returns Ok with a warning in the `TransactionOutcome` diagnostic field.
+
+8. `edit_transaction_lock_timeout_returns_structured_error`
+   External process holds `fd_lock` on file. A's `edit_transaction` returns `LockTimeout` within 500ms.
+
+9. `edit_transaction_is_idempotent_on_retry_after_conflict`
+   B receives `PeerConflict`. B retries immediately. If A has already committed (now visible in peer state), B's retry resolves target against fresh tree. If A's intent has expired without commit, B's retry succeeds.
+
+10. `batch_edit_transaction_attributes_all_nodes`
+    A single `edit_transaction` spanning 3 structural edits across 3 different methods produces one journal entry with 3 CodePaths in `codePaths`.
+
+11. `edit_transaction_records_parent_revision_from_last_own_commit`
+    Two sequential A commits: `parent_revision` of commit 2 equals commit 1's revision.
+
+* Implementation
+Order:
+
+** SocketCoordClient
+:PROPERTIES:
+:CUSTOM_ID: socket-client
+:END:
+- File: =crates/pi-code-engine/src/coord/socket.rs= (new).
+- Depends on =pi-edit-broker= (lib target) for =ClientMessage= / =ServerMessage= types.
+- Connection is lazy: first call that needs peer state connects. If socket is missing, call =pi_edit_broker::spawn_broker_if_absent= once.
+- Single background thread per client reads from the socket and routes messages:
+  - Responses to synchronous calls matched via request-id map.
+  - =peer_committed= / =peer_joined= / =peer_left= pushed to =Arc<Mutex<PeerStateStore>>= and to an optional =Sender<PeerEvent>= for the registry to subscribe to.
+- All synchronous methods (=intent=, =commit=) have a 150ms timeout; on timeout or disconnect, degrade to =NullCoordClient=-equivalent behavior with a logged warning.
+
+** PeerStateStore
+:PROPERTIES:
+:CUSTOM_ID: peer-state-store
+:DEPENDS: socket-client
+:END:
+- File: =crates/pi-code-engine/src/coord/peer_state.rs= (new).
+- Mirrors the broker's per-file ring buffer locally (last 64 commits). Also caches peer list.
+- Published via =CoordClient::recent_peer_edits= and =peer_state=.
+
+** edit_transaction in BufferRegistry
+:PROPERTIES:
+:CUSTOM_ID: edit-transaction
+:DEPENDS: peer-state-store
+:END:
+- File: =crates/pi-code-engine/src/buffer.rs=.
+- Signature: =pub fn edit_transaction(&self, session_id: &str, path: &Path, plan: &EditPlan) -> Result<TransactionOutcome>=.
+- =EditPlan= carries the resolved structural edit (post-CodePath resolution by higher layers). New companion type =EditPlanEntry { target_code_path: String, text_edits: Vec<TextEdit> }=.
+- Critical section:
+  1. =coord.intent(session_id, path, code_paths, base_revision)= — request intent. On conflict, return =PeerConflict=.
+  2. =with_exclusive_lock(path, SAVE_LOCK_BUDGET, || { ... })=:
+     - Read fresh bytes from disk.
+     - Build rope + tree (reusing existing parse helpers).
+     - Re-resolve each =target_code_path= against the fresh tree. If any fails, return =TargetVanished= error.
+     - Apply =text_edits= in reverse byte order (existing pattern from =edit_batch=).
+     - Serialize source, write atomically via temp file + rename (replace current =fs::write=).
+     - Compute =diff_hash = blake3_short(new_source)=. Capture =byte_len=.
+     - =watcher.mark_self_write= with the new mtime.
+  3. =coord.commit(...)= — broadcast. On conflict (rare, broker already granted intent), return =PeerConflict=.
+  4. =journal.append(...)= — entry with =kind = "commit"=, full attribution.
+  5. Invalidate any cached buffer for this path so next =get=/=open= reparses.
+  6. Return =TransactionOutcome { revision, parent_revision, code_paths, diff_hash, byte_len, peer_edits_since_base, warnings }=.
+
+** Registry cache invalidation on peer_committed
+:PROPERTIES:
+:CUSTOM_ID: cache-invalidation
+:DEPENDS: edit-transaction
+:END:
+- =BufferRegistry::new_with_coord= spawns a task/thread that subscribes to =CoordClient= peer events. On =peer_committed= for a tracked path, =self.close(path)= so next read reloads from disk.
+
+** Wire coord into pi-code-engine entrypoints used by NAPI
+:PROPERTIES:
+:CUSTOM_ID: engine-entrypoints
+:DEPENDS: cache-invalidation
+:END:
+- File: =crates/pi-code-engine/src/edit/mod.rs= (existing) — add optional session_id plumb-through on edit dispatch. NAPI layer (FEAT-578) passes it.
+- Do NOT yet change the public NAPI surface in this FEAT; keep the changes internal.
+
+** Deprecate non-transactional mutation on public API
+:PROPERTIES:
+:CUSTOM_ID: deprecate-old-save
+:DEPENDS: engine-entrypoints
+:END:
+- Mark =CodeBuffer::save= and =save_with_watcher= as =#[deprecated]= with a note pointing at =edit_transaction=. Internal tests still use them.
+- Existing =CodeBuffer::edit= / =edit_batch= remain — they mutate in-memory rope only; they do not write to disk. The writing path is now solely =edit_transaction=.
+* Edge cases
+- `TargetVanished`: CodePath resolves in baseline tree but not in fresh tree (peer deleted the node). Return structured error with `peer_revision` that removed it.
+- Multiple edits target the same CodePath within one transaction: supported — all go into one revision, one journal entry, one commit.
+- `EditPlan` with 0 entries: no-op; returns `TransactionOutcome` with `revision == parent_revision` and `code_paths = []`.
+- Socket spawn failure on first call: retry once after 500ms; then downgrade to `NullCoordClient` for this process lifetime (logged).
+- Broker says `commit_conflict` (race between intent-grant and commit): rare — re-read disk, re-resolve target, attempt one retry inside the critical section before returning conflict.
+- Lock held > 500ms: existing `LockTimeout` error; transaction does not commit or journal.
+- Write via temp+rename: ensure temp file is in same dir as target (same filesystem) so rename is atomic; clean up on error.
+
+* Acceptance
+- All 11 test scenarios in `tests/coord_transaction.rs` pass.
+- Existing `tests/buffer.rs` tests remain green; any referencing `save()` directly are updated to call `edit_transaction` or kept as unit tests on `CodeBuffer::edit`.
+- `cargo clippy -p pi-code-engine --all-targets --all-features -- -D warnings` clean.
+- Manual: run the broker, spawn two `spell`s in the same dir, have each agent edit different methods of the same class; both commits land; journal shows both attributed entries.

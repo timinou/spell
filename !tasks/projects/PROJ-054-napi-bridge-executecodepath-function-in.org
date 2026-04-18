@@ -1,0 +1,144 @@
+#+TITLE: NAPI bridge: executeCodePath function in pi-natives
+#+STATE: ITEM
+#+SESSION_ID: 14bf80b7760fbaa2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-35-19-000Z_14bf80b7760fbaa2.jsonl]]
+#+CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in
+#+DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as PROJ-053-namelexer-implementations-for-all-8-code
+#+EFFORT: L
+#+LAYER: pi-natives pi-code-path
+#+PRIORITY: #A
+
+* Initial Message
+
+you should also think about how you will change the surfaces of the other code subcommands in light of the code path
+
+* Scope
+
+New NAPI function =executeCodePath= in =crates/pi-natives= that exposes the CodePath v3 query engine to TypeScript. Sits alongside existing =executeCodeBuffer= and =executeCodeGraph=.
+
+** In scope
+- New NAPI function =executeCodePath= accepting CodePath expression + command (get/edit)
+- Input schema: ={ command: "get" | "edit", target: string, resolution?: number, offset?: number, limit?: number, actions?: Action[], root?: string }=
+- For =get=: parse target as CodePath, resolve against tree-sitter AST + code graph, return result set
+- For =edit=: parse target as CodePath, resolve to target node(s), apply actions
+- Special targets: =:dead_code=, =:clusters=, =:status=, =:index= for manage-class commands
+- Legacy targetId compatibility: =/file::Symbol.member/ is valid CodePath syntax (=Locator :: NamePayload=) — no shim needed
+- =LegacyNameLexer= that accepts today's =Foo.bar= dotted format for all languages as fallback
+- TypeScript types in =packages/natives/src/code-path/types.ts=
+- Result types: =CodePathResult= with =nodes: ResolvedNode[]=, =content?: string=, =diff?: string=
+
+** Out of scope
+- Code tool surface changes (separate PROJ)
+- The kernel parser and resolver (done in [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as]])
+- NameLexer implementations (done in [[id:PROJ-053-namelexer-implementations-for-all-8-code]])
+
+** Existing Patterns
+
+*** executeCodeBuffer (pattern for file-scoped NAPI)
+- File: =crates/pi-natives/src/code_buffer.rs= (L1157-1171)
+- Input: =serde_json::Value= with command dispatch
+- Output: =json_response(output, error)= envelope
+- Uses =buffer_registry()= global for file management
+- =parse_target_id()= (L143-156): splits on =::= for file + optional symbol
+
+*** executeCodeGraph (pattern for graph NAPI)
+- File: =crates/pi-natives/src/code_graph.rs= (L113-120)
+- Input: =CodeGraphOptions= struct with NAPI derive
+- Output: =CodeGraphResult= struct with output + cache metadata
+- Uses =CancelToken= for timeout/cancellation
+- Spawns via =task::blocking()=
+
+*** TypeScript types for code buffer
+- File: =packages/natives/src/code-buffer/types.ts= (L54-74)
+- =CodeBufferOptions= interface: command, file, symbol, operations, resolution, etc.
+- =CodeBufferResult= interface: output, error
+
+** Tests
+
+*** T1: NAPI get command
+- Parse CodePath target, resolve, return node content
+- Test: ={ command: "get", target: "src/api.ts :: Foo" }= → returns function source
+- Test: ={ command: "get", target: "src/api.ts :: Foo#body" }= → returns body only
+- Test: ={ command: "get", target: "src/api.ts :: Foo/bar" }= → returns method in class
+
+*** T2: NAPI edit command
+- Parse CodePath target, resolve, apply action, return diff
+- Test: ={ command: "edit", target: "src/api.ts :: Foo.bar", actions: [{kind: "write", scope: "body", content: "..."}] }=
+- Verify: diff shows expected changes, file saved
+
+*** T3: Special targets
+- =:dead_code= → delegates to =graph.graph_dead_code()=
+- =:clusters= → delegates to =graph.graph_clusters()=
+- =:status= → delegates to =graph.graph_status()=
+- =:index= → triggers graph rebuild
+
+*** T4: Edge axis through NAPI
+- ={ command: "get", target: "src/api.ts :: parseConfig/def→" }= → returns all references
+- Verify: cross-file results included
+
+*** T5: Legacy targetId compatibility
+- ={ command: "get", target: "src/api.ts::Foo.bar" }= (no spaces around ::) → works
+- ={ command: "get", target: "src/api.ts" }= (file only) → works like code read
+
+** Implementation
+
+** Create NAPI function skeleton
+:PROPERTIES:
+:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::PROJ-napi-skeleton
+:END:
+- File: =crates/pi-natives/src/code_path.rs=
+- Define =CodePathOptions= NAPI struct: command, target, resolution, offset, limit, actions, root, signal, timeout_ms
+- Define =CodePathResult= NAPI struct: output, error, nodes_count, resolved_paths
+- =#[napi(js_name = "executeCodePath")]= function
+- Add module to =crates/pi-natives/src/lib.rs=
+
+** Implement get command dispatcher
+:PROPERTIES:
+:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::PROJ-napi-get
+:DEPENDS: PROJ-054-napi-bridge-executecodepath-function-in::PROJ-napi-skeleton
+:END:
+- Parse =target= as CodePath using dialect from file extension
+- If target starts with =:= → special command dispatch (:dead_code, :clusters, :status, :index)
+- Otherwise → resolve CodePath against buffer + graph
+- Format result based on resolution level (0=outline, 1=summary, 2=structure, 3=full content)
+- Return content string for single node, structured result for node set
+
+** Implement edit command dispatcher
+:PROPERTIES:
+:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::PROJ-napi-edit
+:DEPENDS: PROJ-054-napi-bridge-executecodepath-function-in::PROJ-napi-get
+:END:
+- Parse =target= as CodePath, resolve to target node
+- Validate: exactly one node for non-set operations
+- Apply actions using existing =single_action()= from code_buffer.rs
+- Reuse transactional edit logic from =apply_operations_transactionally()=
+- Return diff + mutation state
+
+** Create TypeScript types
+:PROPERTIES:
+:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::PROJ-napi-ts-types
+:DEPENDS: PROJ-054-napi-bridge-executecodepath-function-in::PROJ-napi-skeleton
+:END:
+- File: =packages/natives/src/code-path/types.ts=
+- =CodePathOptions= interface matching Rust struct
+- =CodePathResult= interface matching Rust struct
+- Export from =packages/natives/src/index.ts=
+
+** Edge Cases
+
+- Malformed CodePath target: return structured parse error with span info
+- Target resolves to zero nodes: return empty result with "no matches" message, not error
+- Target resolves to multiple nodes for edit: return error "ambiguous target, N matches"
+- File in locator not on disk: open as code buffer (may create), or error for get
+- Graph not indexed: auto-index for edge axis commands, return cache_status
+- Timeout during edge resolution (large graph): respect CancelToken
+
+** Acceptance Criteria
+
+- [ ] =executeCodePath= callable from TypeScript via =@oh-my-pi/pi-natives=
+- [ ] Get command returns correct content for file, symbol, qualified, and edge targets
+- [ ] Edit command applies mutations and returns diff
+- [ ] Special targets (:dead_code, :clusters, :status, :index) work
+- [ ] Legacy targetId format (=file::Symbol.member=) works unchanged
+- [ ] Parse errors return structured diagnostics with span info
+- [ ] =cargo check -p pi-natives= clean
