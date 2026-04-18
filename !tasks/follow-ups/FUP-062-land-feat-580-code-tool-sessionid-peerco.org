@@ -1,0 +1,19 @@
+#+TITLE: Land FEAT-580 code tool sessionId + PeerConflict handling
+#+STATE: ITEM
+#+SESSION_ID: 14bfe497b90853e7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T20-51-40-901Z_14bfe497b90853e7.jsonl]]
+#+CUSTOM_ID: FUP-062-land-feat-580-code-tool-sessionid-peerco
+#+LAYER: coding-agent
+
+* Initial Message
+
+the code tool has been made more sturdy. continue your work
+
+Blocked on FUP-061 (FEAT-578 NAPI surface).
+
+Per FEAT-580 spec:
+- callCodeBuffer(ctx, opts) helper that injects sessionId from
+  ctx.session.sessionManager.getSessionId().
+- Map PeerConflict NAPI error to structured ToolError with retry copy.
+- "peer activity" footer in tool output renderer fed by coord_peer_activity.
+- Tests covering happy path + retry on conflict + footer rendering.

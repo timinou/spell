@@ -2,6 +2,7 @@ pub mod client;
 pub mod journal;
 pub mod node_ref;
 pub mod null;
+pub mod socket;
 
 pub use client::{
 	CommitResult, CoordClient, IntentResult, PeerEdit, PeerInfo, PeerState, SessionId,
@@ -11,6 +12,7 @@ pub use journal::{
 };
 pub use node_ref::derive_code_paths;
 pub use null::NullCoordClient;
+pub use socket::{BrokerEndpoint, SocketCoordClient};
 
 /// Short blake3 digest (first 16 hex chars). Used for stable journal path
 /// keys; NOT a security primitive.

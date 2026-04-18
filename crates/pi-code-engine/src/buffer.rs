@@ -154,7 +154,7 @@ impl History {
 			inverses,
 			session_id,
 			code_paths,
-			number: number,
+			number,
 			parent_num,
 		});
 		self.revisions[self.current].last_child = Some(next);
@@ -204,7 +204,7 @@ impl History {
 	/// When no matching revision exists in the chain, `applied` is `None` and
 	/// the chain up to the root is returned as `skipped`. Current is rolled
 	/// back to the root in that case.
-	fn undo_scoped(&mut self, session_id: &str) -> ScopedUndoResult {
+	fn undo_scoped(&self, session_id: &str) -> ScopedUndoResult {
 		let mut skipped = Vec::new();
 		let mut cursor = self.current;
 		loop {
@@ -232,7 +232,7 @@ impl History {
 	/// Walk forward via `last_child`, skipping peer revisions. The first
 	/// matching revision becomes `applied`; peer revisions are recorded in
 	/// `skipped`.
-	fn redo_scoped(&mut self, session_id: &str) -> ScopedUndoResult {
+	fn redo_scoped(&self, session_id: &str) -> ScopedUndoResult {
 		let mut skipped = Vec::new();
 		let mut cursor = self.current;
 		loop {
@@ -1319,21 +1319,15 @@ mod tests {
 		let buf1 = reg.open(&path1).expect("open a");
 		let buf2 = reg.open(&path2).expect("open b");
 
-		let handle1 = {
-			let buf1 = buf1.clone();
-			thread::spawn(move || {
-				let _guard = buf1.lock();
-				thread::sleep(Duration::from_millis(200));
-			})
-		};
-		let handle2 = {
-			let buf2 = buf2.clone();
-			thread::spawn(move || {
-				let start = Instant::now();
-				let _guard = buf2.lock();
-				start.elapsed()
-			})
-		};
+		let handle1 = thread::spawn(move || {
+			let _guard = buf1.lock();
+			thread::sleep(Duration::from_millis(200));
+		});
+		let handle2 = thread::spawn(move || {
+			let start = Instant::now();
+			let _guard = buf2.lock();
+			start.elapsed()
+		});
 
 		handle1.join().expect("thread a");
 		let elapsed = handle2.join().expect("thread b");
@@ -1559,7 +1553,7 @@ mod tests {
 			buffer.save_with_watcher(reg.watcher()).expect("save");
 		}
 		let reopened = reg.open(&path).expect("reopen");
-		assert!(Arc::ptr_eq(&first, &reopened), "self-saved buffer should remain open for undo/redo",);
+		assert!(Arc::ptr_eq(&first, &reopened), "self-saved buffer should remain open for undo/redo");
 		let mut reopened = reopened.lock();
 		reopened.undo().expect("undo");
 		assert_eq!(reopened.source(), "export const value = 1;\n");
@@ -1621,6 +1615,7 @@ mod tests {
 		let path = temp_path("same-path.ts");
 		fs::write(&path, "export const value = 1;\n").expect("write fixture");
 		let registry = Arc::new(BufferRegistry::new_with_watcher(registry(), None));
+		#[allow(clippy::needless_collect, reason = "spawn threads eagerly before joining")]
 		let handles: Vec<_> = (0..8)
 			.map(|_| {
 				let registry = Arc::clone(&registry);

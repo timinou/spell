@@ -133,6 +133,11 @@ pub struct OutlineEntry {
 	pub inherits:       Vec<String>,
 }
 
+#[allow(
+	clippy::trivially_copy_pass_by_ref,
+	clippy::missing_const_for_fn,
+	reason = "serde skip_serializing_if requires fn(&T)"
+)]
 fn is_zero_u32(value: &u32) -> bool {
 	*value == 0
 }
@@ -310,8 +315,7 @@ fn extract_l0_decorators(source: &str, node: Node<'_>, decl: &DeclarationPattern
 			.named_children(&mut cursor)
 			.filter(|child| matches!(child.kind(), "decorator" | "attribute_item"))
 			.filter_map(|child| text(source, child).map(|value| value.trim().to_string()))
-			.filter(|value| !value.is_empty())
-			.collect::<Vec<_>>(),
+			.filter(|value| !value.is_empty()),
 	);
 	let mut sibling = node.prev_named_sibling();
 	let mut leading = Vec::new();
@@ -427,10 +431,10 @@ fn collect_named_descendant_texts(
 ) {
 	let mut cursor = node.walk();
 	for child in node.named_children(&mut cursor) {
-		if node_types.is_empty() || node_types.iter().any(|kind| kind == child.kind()) {
-			if let Some(value) = text(source, child) {
-				out.push(value.trim().to_string());
-			}
+		if (node_types.is_empty() || node_types.iter().any(|kind| kind == child.kind()))
+			&& let Some(value) = text(source, child)
+		{
+			out.push(value.trim().to_string());
 		}
 		collect_named_descendant_texts(source, child, node_types, out);
 	}
@@ -642,6 +646,7 @@ fn normalize_type_text(raw: &str) -> String {
 		.trim()
 		.to_string()
 }
+#[allow(clippy::type_complexity, reason = "returns a flattened L2 metrics tuple")]
 fn extract_l2_metrics(
 	source: &str,
 	node: Node<'_>,
@@ -758,7 +763,7 @@ fn is_side_effecting(kind: &str, source: &str, node: Node<'_>) -> bool {
 	) {
 		return true;
 	}
-	text(source, node).is_some_and(|value| value.contains("=") && !value.contains("=="))
+	text(source, node).is_some_and(|value| value.contains('=') && !value.contains("=="))
 }
 fn extract_l3_doc(
 	source: &str,
@@ -769,7 +774,7 @@ fn extract_l3_doc(
 		.parent()
 		.filter(|parent| parent.kind() == "export_statement")
 		.unwrap_or(node);
-	let lines = leading_comment_block(source, anchor.start_position().row as usize);
+	let lines = leading_comment_block(source, anchor.start_position().row);
 	if lines.is_empty() {
 		return (None, Vec::new());
 	}
@@ -785,8 +790,7 @@ fn extract_l3_doc(
 		.collect::<Vec<_>>();
 	let summary = cleaned
 		.iter()
-		.filter(|line| !tag_prefixes.iter().any(|prefix| line.starts_with(prefix)))
-		.next()
+		.find(|line| !tag_prefixes.iter().any(|prefix| line.starts_with(prefix)))
 		.cloned();
 	let tags = cleaned
 		.iter()
@@ -802,15 +806,9 @@ fn leading_comment_block(source: &str, start_row: usize) -> Vec<String> {
 	}
 	let mut row = start_row.saturating_sub(1);
 	let mut collected = Vec::new();
-	loop {
-		let Some(line) = lines.get(row) else {
-			break;
-		};
+	while let Some(line) = lines.get(row) {
 		let trimmed = line.trim();
-		if trimmed.is_empty() {
-			break;
-		}
-		if !is_commentish_line(trimmed) {
+		if trimmed.is_empty() || !is_commentish_line(trimmed) {
 			break;
 		}
 		collected.push((*line).to_string());

@@ -1,5 +1,5 @@
 #+TITLE: Edit coordination foundation: journal + node ref + history attribution
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14bfce727e583e3c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
 #+CUSTOM_ID: FEAT-575-edit-coordination-foundation-journal-nod

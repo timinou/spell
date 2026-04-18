@@ -1,0 +1,37 @@
+#+TITLE: Complete FEAT-577 engine edit_transaction + 11 integration tests
+#+STATE: ITEM
+#+SESSION_ID: 14bfe497b90853e7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T20-51-40-901Z_14bfe497b90853e7.jsonl]]
+#+CUSTOM_ID: FUP-060-complete-feat-577-engine-edit-transactio
+#+LAYER: pi-code-engine
+
+* Initial Message
+
+the code tool has been made more sturdy. continue your work
+
+Context: PLAN-254 Wave 2 was partially landed. SocketCoordClient is in place
+(crates/pi-code-engine/src/coord/socket.rs, per-call blocking protocol,
+degrades to no-op on broker-absence, clippy-clean, linked into lib.rs via
+`pub use coord::{BrokerEndpoint, SocketCoordClient}`). The NullCoordClient
+path remains the default on BufferRegistry.
+
+Still to land for FEAT-577 acceptance:
+
+1. PeerStateStore (crates/pi-code-engine/src/coord/peer_state.rs) - local
+   mirror of broker per-file ring buffer + peer list; subscribe to background
+   event thread once the socket client streams events.
+2. BufferRegistry::edit_transaction - stateless lock+read+re-resolve+write+
+   journal+commit critical section. EditPlan/EditPlanEntry types, returns
+   TransactionOutcome. Failure paths: PeerConflict, TargetVanished, LockTimeout.
+3. Atomic write via temp+rename in the same directory.
+4. Cache invalidation: background task subscribes to CoordClient events and
+   drops BufferRegistry entries on peer_committed.
+5. Engine entrypoint wiring in crates/pi-code-engine/src/edit/mod.rs for
+   session_id plumb-through.
+6. Deprecate CodeBuffer::save / save_with_watcher with #[deprecated].
+7. 11 integration tests in tests/coord_transaction.rs (launch real broker via
+   pi-edit-broker helper, exercise intent/commit/conflict/retry paths).
+
+Verification gate:
+- cargo test -p pi-code-engine --test coord_transaction
+- cargo clippy -p pi-code-engine --all-targets --all-features -- -D warnings clean

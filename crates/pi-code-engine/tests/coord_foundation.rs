@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc};
 
 use pi_code_engine::{
 	CodeBuffer, CoordClient, IntentResult, JournalEntry, JournalReader, JournalWriter, LanguageId,
@@ -134,7 +134,7 @@ fn derive_code_paths_empty_rope_is_whole_file() {
 fn derive_code_paths_nested_declaration() {
 	let source = "class Outer {\n  method() {\n    const y = 1;\n  }\n}\n";
 	let buffer = ts_buffer(source);
-	let pos = source.find("1").unwrap();
+	let pos = source.find('1').unwrap();
 	let edit = TextEdit { start_byte: pos, old_end_byte: pos + 1, new_text: "42".into() };
 	let paths =
 		derive_code_paths(&edit, buffer.tree(), buffer.rope(), buffer.language(), buffer.registry());
@@ -142,7 +142,7 @@ fn derive_code_paths_nested_declaration() {
 	let path = &paths[0];
 	assert!(path.starts_with("::"), "got {path}");
 	assert!(path.contains("Outer"), "got {path}");
-	assert!(path.contains("y") || path.contains("method"), "got {path}");
+	assert!(path.contains('y') || path.contains("method"), "got {path}");
 }
 
 /// FEAT-575: journal write then tail roundtrips.
@@ -201,8 +201,8 @@ fn null_coord_client_is_granting() {
 	let _: Vec<PeerEdit> = edits;
 }
 
-/// FEAT-575: default_journal_root produces a reasonable path even when HOME
-/// is unset.
+/// FEAT-575: `default_journal_root` produces a reasonable path even when
+/// `HOME` is unset.
 #[test]
 fn default_journal_root_is_stable() {
 	let root = default_journal_root();
@@ -237,7 +237,3 @@ fn new_edit_after_undo_truncates_future_revisions() {
 	let redo = buffer.redo_scoped_apply("s1").unwrap();
 	assert!(redo.applied.is_none());
 }
-
-// `Duration` import silences an unused warning when all paths succeed.
-#[allow(dead_code)]
-const _: Duration = Duration::from_millis(0);

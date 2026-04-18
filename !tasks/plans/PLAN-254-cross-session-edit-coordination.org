@@ -116,3 +116,16 @@ Phase 2 — Wave 3 (NAPI): =code edit= starts requiring =sessionId= for mutating
 Phase 3 — Waves 4–5 (tool + TUI): user sees =coord: N peers= status-line segment and peer-activity footers. Graceful for single-session users: segment renders empty when no peers.
 
 Phase 4 (future, out of this plan) — Loro adoption for concurrent character-level merge. Journal schema carries the hooks (=op[]= union field).
+
+NOTE [2026-04-18]: Wave 1 (FEAT-575, FEAT-576) landed and verified:
+- crates/pi-code-engine: coord module, journal, node_ref, history attribution, scoped undo/redo, PeerConflict error, BufferRegistry::new_with_coord. 179 tests green (167 lib + 12 coord_foundation). cargo clippy -p pi-code-engine --all-targets -- -D warnings clean.
+- crates/pi-edit-broker: Unix-socket broker with protocol, state, connection handler, reaper, auto-spawn helper, grace-period exit. 13 integration tests green (7 lifecycle + 5 protocol + 1 spawn). cargo clippy -p pi-edit-broker --all-targets -- -D warnings clean.
+
+Wave 2 partial: SocketCoordClient scaffold landed in crates/pi-code-engine/src/coord/socket.rs (per-call blocking protocol, degrades to no-op on broker absence). Deferred to FUP-060: PeerStateStore, edit_transaction critical section, atomic temp+rename writes, cache invalidation on peer_committed, deprecate save/save_with_watcher, 11 integration tests.
+
+Waves 3-5 deferred untouched:
+- FEAT-578 -> FUP-061
+- FEAT-580 -> FUP-062
+- FEAT-579 -> FUP-063
+
+Resume path: FUP-060 -> FUP-061 -> FUP-062 -> FUP-063.
