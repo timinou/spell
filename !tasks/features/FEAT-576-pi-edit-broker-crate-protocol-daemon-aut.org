@@ -1,5 +1,5 @@
 #+TITLE: pi-edit-broker crate: protocol, daemon, auto-spawn
-#+STATE: ITEM
+#+STATE: DOING
 #+SESSION_ID: 14bfce727e583e3c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
 #+CUSTOM_ID: FEAT-576-pi-edit-broker-crate-protocol-daemon-aut
@@ -162,3 +162,7 @@ Order:
 - Manual: `spell` launches, broker auto-spawns, `ls ~/.spell/edit-broker.sock` present, `ss -lx | grep edit-broker` shows listening; second `spell` process connects.
 - `cargo clippy -p pi-edit-broker --all-targets --all-features -- -D warnings` clean.
 - Binary installed to `target/release/` is discoverable by the client lib (FEAT-*C will consume `spawn_broker_if_absent`).
+
+NOTE: Started Wave 1 broker crate scaffolding; reading design + setting up crate manifest and module plan.
+
+NOTE: Manifest written. Next: scaffold src modules, then implement protocol/state/conn/reaper/spawn and integration tests.

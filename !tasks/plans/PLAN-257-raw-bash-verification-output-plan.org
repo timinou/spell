@@ -1,0 +1,146 @@
+#+TITLE: RAW_BASH_VERIFICATION_OUTPUT_PLAN
+#+STATE: DOING
+#+SESSION_ID: 14c0023f98a54b3e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T23-01-14-978Z_14c0023f98a54b3e.jsonl]]
+#+CUSTOM_ID: PLAN-257-raw-bash-verification-output-plan
+
+* Initial Message
+
+┌─── ✔ Bash ───────────────────────────────────────────────────────┐
+ │ $ mix test                                                       │
+ │ test/agentmaker/agent_config/test_chat_session_test.exs          │
+ ├─── Output ───────────────────────────────────────────────────────┤
+ │ Ran verification/build command "mix test                         │
+ │ test/agentmaker/agent_config/test_chat_session_test.exs". Persist│
+ │ pass/fail and top diagnostics; keep raw logs in artifacts or     │
+ │ targeted follow-ups.                                             │
+ │ ⟦Timeout: 1200s⟧                                                 │
+ └──────────────────────────────────────────────────────────────────┘
+
+
+
+ ┌─── ✔ Bash ───────────────────────────────────────────────────────┐
+ │ $ mix test                                                       │
+ │ test/agentmaker_web/live/admin/test_chat_component_test.exs      │
+ ├─── Output ───────────────────────────────────────────────────────┤
+ │ Ran verification/build command "mix test                         │
+ │ test/agentmaker_web/live/admin/test_chat_component_test.exs".    │
+ │ Persist pass/fail and top diagnostics; keep raw logs in artifacts│
+ │ or                                                               │
+ │ targeted follow-ups.                                             │
+ │ ⟦Timeout: 1200s⟧                                                 │
+ └──────────────────────────────────────────────────────────────────┘
+
+
+
+ ┌─── ✔ Bash ───────────────────────────────────────────────────────┐
+ │ $ mix test                                                       │
+ │ test/agentmaker/agent_config/test_chat_session_test.exs          │
+ ├─── Output ───────────────────────────────────────────────────────┤
+ │ Ran verification/build command "mix test                         │
+ │ test/agentmaker/agent_config/test_chat_session_test.exs". Persist│
+ │ pass/fail and top diagnostics; keep raw logs in artifacts or     │
+ │ targeted follow-ups.                                             │
+ │ ⟦Timeout: 1200s⟧                                                 │
+ └──────────────────────────────────────────────────────────────────┘
+
+
+
+ ┌─── ✔ Bash ───────────────────────────────────────────────────────┐
+ │ $ sh -lc 'mix test                                               │
+ │ test/agentmaker/agent_config/test_chat_session_test.exs; printf  │
+ │ "__EXIT__:%s\n" "$?"'                                            │
+ ├─── Output ───────────────────────────────────────────────────────┤
+ │ Ran verification/build command "sh -lc 'mix test                 │
+ │ test/agentmaker/agent_config/test_chat_session_test.exs; printf  │
+ │ \"__EXIT__:%s...". Persist pass/fail and top diagnostics; keep   │
+ │ raw                                                              │
+ │ logs in artifacts or targeted follow-ups.                        │
+ │ ⟦Timeout: 1200s⟧                                                 │
+ └──────────────────────────────────────────────────────────────────┘
+
+
+ Exploring bash commands
+
+ I’m wondering if bash might be suppressing mix commands. Maybe I
+ should check the mcp_tidewave_get_logs for test output since I
+ haven't seen any logs. It could be easier to use bash with the
+ command script -q -c 'mix test ...' /dev/null. Also, I might
+ consider using read to pull known numbers by testing, perhaps
+ starting with 1? I think I'll inspect the artifact directory listing
+ and try read path="artifact://14bffec375dbbbf4/main/bash/" to see if
+ it’s a directory. Let’s give it a shot!
+ ✘ Read artifact://14bffec375dbbbf4/main/bash/:1-50
+
+ Searching for exact numbers
+
+ I need to find the
+
+Why is this showing instead of the result of mix test?
+
+* Context
+** Request
+Plan the Spell-only fix for the bash tool behavior that currently hides real `mix test` / `bun test` / other verification-command output behind the synthetic wrapper sentence `Ran verification/build command ...`. The operator-visible result must show raw stdout/stderr inline for all commands matched by the existing verification classifier.
+
+** Verified code reality
+- `packages/coding-agent/src/tools/context-pressure-policy.ts`
+  - `VERIFICATION_COMMAND_PATTERN` classifies `mix|bun|cargo|npm|pnpm|yarn` + `test|check|lint|fmt|build|precommit` as the bash verification category.
+  - Verification currently uses `presentation: "summary-first"` and `persistence: "summary-only"`.
+- `packages/coding-agent/src/tools/bash.ts`
+  - `BashTool.execute()` already computes the truthful raw bash result text and truncation metadata.
+  - After building the result, it currently replaces visible `content` with `contextPressure.summary` whenever persistence is not `allow-raw`.
+- `packages/coding-agent/src/tools/context-pressure-policy.ts`, `packages/coding-agent/src/session/messages.ts`, and `packages/coding-agent/src/memories/index.ts`
+  - The repo already has separate downstream paths for compact persistence and pruned-message reinjection (`createMemorySafeToolResult()` and `getPrunedToolResultContent()`), so visible-result replacement is not required to keep memory compact.
+- `packages/coding-agent/test/tools/bash-churn-policy.test.ts`
+  - Current regression coverage codifies the wrong visible behavior by asserting that verification commands render the synthetic summary instead of raw output.
+
+** Settled decisions
+1. Scope = all verification/build commands matched by the current bash verification classifier; no one-off `mix test` special case.
+2. Visible bash tool results must show raw stdout/stderr inline for verification commands.
+3. Compact persistence still matters, but it belongs in memory/pruned-history handling rather than immediate user-visible result replacement.
+4. Keep the existing classifier and metadata surface; do not delete context-pressure plumbing.
+5. Do not widen raw output for wait/poll churn, git-inspection churn, or transcript/log spelunking.
+6. Preserve current spill/truncation/artifact behavior; the fix is about truthfulness of the visible result, not about changing output-size policy.
+
+** Recommended approach
+Implement a category-aware split at the `bash.ts` result boundary:
+- verification category → keep raw visible output, still attach context-pressure metadata;
+- wait/poll, transcript spelunking, git-inspection (and any truly compact-first categories) → keep existing summary-first visible behavior;
+- memory/pruned-history compaction → continue using the existing downstream helpers.
+
+This is the lowest-risk cut:
+- ✓ restores truthful operator-visible output;
+- ✓ preserves compact persistence;
+- ✓ avoids re-architecting the shared policy layer;
+- ✓ minimizes blast radius to `bash.ts` + focused tests.
+
+** Critical files
+- `packages/coding-agent/src/tools/bash.ts`
+- `packages/coding-agent/src/tools/context-pressure-policy.ts`
+- `packages/coding-agent/src/session/messages.ts`
+- `packages/coding-agent/src/memories/index.ts`
+- `packages/coding-agent/test/tools/bash-churn-policy.test.ts`
+- `packages/coding-agent/test/tools/context-pressure-policy.test.ts`
+- `packages/coding-agent/test/tools/bash-spill-policy.test.ts` (only if spill truthfulness coverage needs adjustment)
+
+* Verification
+** Focused test targets
+- `bun test packages/coding-agent/test/tools/bash-churn-policy.test.ts packages/coding-agent/test/tools/context-pressure-policy.test.ts`
+- `bun test packages/coding-agent/test/tools/bash-spill-policy.test.ts` (run if verification-command spill/truncation expectations are modified)
+- `bun check:ts`
+
+** Manual proof required during execution
+- A successful verification command run through `bash` shows real inline output instead of the synthetic `verification/build command` wrapper.
+- A failed verification command preserves real failure text plus exit-code metadata.
+- After the visible fix, pruned-history and/or memory-safe paths still collapse verification output to compact summaries where policy requires it.
+- Wait/poll churn and transcript/log spelunking remain summary-first.
+
+** Done condition
+The immediate bash tool result is truthful for verification commands, compact persistence remains intact, unrelated bash churn categories do not regress, focused tests pass, and `bun check:ts` passes.
+
+* Execution Manifest
+** wave-0-bash-verification-visibility :wave:
+- [[id:BUG-286-coding-agent-keep-raw-bash-verification]] coding-agent: keep raw bash verification output inline
+
+** Wave note
+- `org wave` was run during planning, but the current output returns the global ready-set for the `bugs` category rather than isolating this session's single new child item cleanly. The execution manifest above mirrors the explicit child-item DAG for this plan subset: one ready bug item with no inter-item blockers.

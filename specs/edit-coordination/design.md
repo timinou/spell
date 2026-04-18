@@ -173,7 +173,7 @@ Each line:
 ```jsonc
 {
   "ts": 1745030400000,
-  "sessionId": "14bfce727e583e3c",
+  "sessionId": "14bfce727e583e3c", # pragma: allowlist secret
   "pid": 12345,
   "kind": "commit",
   "revision": 42,

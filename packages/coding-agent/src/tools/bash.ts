@@ -22,7 +22,7 @@ import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-intera
 import { checkBashInterception } from "./bash-interceptor";
 import { applyHeadTail } from "./bash-normalize";
 import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
-import { classifyContextPressure } from "./context-pressure-policy";
+import { classifyContextPressure, type ContextPressureMeta } from "./context-pressure-policy";
 
 import { formatOutputNotice, formatStyledTruncationWarning, type OutputMeta, outputMeta } from "./output-meta";
 
@@ -84,8 +84,10 @@ export interface BashToolInput {
 	lenientSpill?: boolean;
 }
 
+type BashOutputMeta = OutputMeta & { contextPressure?: ContextPressureMeta };
+
 export interface BashToolDetails {
-	meta?: OutputMeta;
+	meta?: BashOutputMeta;
 	exitCode?: number;
 	cwd?: string;
 	lenientSpill?: boolean;
@@ -522,14 +524,30 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			toolName: this.name,
 			params: { command: rawCommand },
 		});
-		if (contextPressure && contextPressure.persistence !== "allow-raw") {
+		const resultWithContextPressure = contextPressure
+			? {
+					...finalResult,
+					details: {
+						...(finalResult.details ?? {}),
+						meta: {
+							...(finalResult.details?.meta ?? {}),
+							contextPressure,
+						},
+					},
+				}
+			: finalResult;
+		if (
+			contextPressure &&
+			contextPressure.category !== "verification" &&
+			contextPressure.presentation === "summary-first"
+		) {
 			return {
-				...finalResult,
+				...resultWithContextPressure,
 				content: [{ type: "text", text: contextPressure.summary }],
 			};
 		}
 
-		return finalResult;
+		return resultWithContextPressure;
 	}
 }
 

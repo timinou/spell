@@ -37,6 +37,7 @@ import { buildNamedToolChoice } from "../utils/tool-choice";
 // Import bash subprocess handler for side effects (tracks bash commands for gate verification)
 import "./bash-subprocess-handler";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
+import { type GateFailure, type TrackedBashExecution, verifyGates } from "./gate-verification";
 import {
 	type AgentDefinition,
 	type AgentProgress,
@@ -158,6 +159,13 @@ function getReportFindingKey(value: unknown): string | null {
 	return `${filePath}:${lineStart}:${lineEnd}:${priority ?? ""}:${title}`;
 }
 
+export interface RuntimeVerificationOptions {
+	gateCmd?: string;
+	gateCommit?: boolean;
+	gateArtifact?: string;
+	baselineHeadCommit?: string;
+}
+
 /** Options for subagent execution */
 export interface ExecutorOptions {
 	cwd: string;
@@ -189,6 +197,7 @@ export interface ExecutorOptions {
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
+	runtimeVerification?: RuntimeVerificationOptions;
 	/** Additional custom tools injected by the caller (e.g., orchestrator escalate). */
 	customTools?: CustomTool[];
 	/** Swarm runtime context; when absent, swarm tools stay unavailable. */
@@ -313,9 +322,28 @@ interface FinalizeSubprocessOutputResult {
 export const SUBAGENT_WARNING_NULL_SUBMIT_RESULT = "SYSTEM WARNING: Subagent called submit_result with null data.";
 export const SUBAGENT_WARNING_MISSING_SUBMIT_RESULT =
 	"SYSTEM WARNING: Subagent exited without calling submit_result tool after 3 reminders.";
+export const SUBAGENT_WARNING_MISSING_VERIFICATION_PROOF =
+	"SYSTEM WARNING: Subagent called submit_result success before runtime observed required verification proof.";
 
 function prependSubagentWarning(rawOutput: string, warning: string): string {
 	return rawOutput ? `${warning}\n\n${rawOutput}` : warning;
+}
+
+function hasRuntimeVerification(opts: RuntimeVerificationOptions | undefined): boolean {
+	return Boolean(opts?.gateCmd || opts?.gateCommit || opts?.gateArtifact);
+}
+
+function formatGateFailures(failures: GateFailure[]): string[] {
+	return failures.map(
+		failure => `- ${failure.gate} not satisfied: expected \`${failure.expected}\`; ${failure.detail}`,
+	);
+}
+
+function buildMissingVerificationProofMessage(failures: GateFailure[]): string {
+	const details = formatGateFailures(failures).join("\n");
+	return details.length > 0
+		? `${SUBAGENT_WARNING_MISSING_VERIFICATION_PROOF}\n${details}`
+		: SUBAGENT_WARNING_MISSING_VERIFICATION_PROOF;
 }
 
 export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): FinalizeSubprocessOutputResult {
@@ -628,6 +656,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	let activeSession: AgentSession | null = null;
 	let unsubscribe: (() => void) | null = null;
 	let submitResultCalled = false;
+	let pendingEventProcessing = Promise.resolve();
+	let missingVerificationFailures: GateFailure[] | undefined;
 
 	// Accumulate usage incrementally from message_end events (no memory for streaming events)
 	const accumulatedUsage = {
@@ -774,7 +804,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		progress.recentOutput = [];
 	};
 
-	const processEvent = (event: AgentEvent) => {
+	const processEvent = async (event: AgentEvent) => {
 		if (resolved) return;
 
 		if (options.eventBus) {
@@ -835,47 +865,79 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				// Check for registered subagent tool handler
 				const handler = subprocessToolRegistry.getHandler(event.toolName);
 				const eventArgs = (event as { args?: Record<string, unknown> }).args ?? {};
+				let shouldTerminate = false;
 				if (handler) {
-					// Extract data using handler
+					let extractedData: unknown;
+					let acceptExtractedData = true;
+					let acceptSubmitResult = false;
 					if (handler.extractData) {
-						const data = handler.extractData({
+						extractedData = handler.extractData({
 							toolName: event.toolName,
 							toolCallId: event.toolCallId,
 							args: eventArgs,
 							result: event.result,
 							isError: event.isError,
 						});
-						if (data !== undefined) {
+						if (event.toolName === "submit_result" && extractedData !== undefined && !event.isError) {
+							const submitResult = extractedData as SubmitResultItem;
+							if (submitResult.status === "success" && hasRuntimeVerification(options.runtimeVerification)) {
+								const executions =
+									(progress.extractedToolData?.bash as TrackedBashExecution[] | undefined) ?? [];
+								const gateResult = await verifyGates({
+									gateCmd: options.runtimeVerification?.gateCmd,
+									gateCommit: options.runtimeVerification?.gateCommit,
+									gateArtifact: options.runtimeVerification?.gateArtifact,
+									executions,
+									cwd,
+									worktreeDir: worktree,
+									baselineHeadCommit: options.runtimeVerification?.baselineHeadCommit,
+								});
+								if (!gateResult.passed) {
+									acceptExtractedData = false;
+									missingVerificationFailures = gateResult.failures;
+								} else {
+									missingVerificationFailures = undefined;
+									acceptSubmitResult = true;
+								}
+							} else {
+								missingVerificationFailures = undefined;
+								acceptSubmitResult = submitResult.status === "success" || submitResult.status === "aborted";
+							}
+						}
+						if (extractedData !== undefined && acceptExtractedData) {
 							progress.extractedToolData = progress.extractedToolData || {};
 							const existing = progress.extractedToolData[event.toolName] || [];
-							const findingKey = event.toolName === "report_finding" ? getReportFindingKey(data) : null;
+							const findingKey = event.toolName === "report_finding" ? getReportFindingKey(extractedData) : null;
 							if (findingKey) {
 								const existingIndex = existing.findIndex(item => getReportFindingKey(item) === findingKey);
 								if (existingIndex >= 0) {
-									existing[existingIndex] = data;
+									existing[existingIndex] = extractedData;
 								} else {
-									existing.push(data);
+									existing.push(extractedData);
 								}
 							} else {
-								existing.push(data);
+								existing.push(extractedData);
 							}
 							progress.extractedToolData[event.toolName] = existing;
 							if (event.toolName === "submit_result") {
-								submitResultCalled = true;
+								submitResultCalled = acceptSubmitResult;
 							}
 						}
 					}
 
-					// Check if handler wants to terminate the session
-					if (
+					shouldTerminate = Boolean(
 						handler.shouldTerminate?.({
 							toolName: event.toolName,
 							toolCallId: event.toolCallId,
 							args: eventArgs,
 							result: event.result,
 							isError: event.isError,
-						})
-					) {
+						}),
+					);
+					if (event.toolName === "submit_result" && !submitResultCalled) {
+						shouldTerminate = false;
+					}
+					if (shouldTerminate) {
 						requestAbort("terminate");
 					}
 				}
@@ -1261,22 +1323,25 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						}
 
 						unsubscribe = session.subscribe(event => {
-							try {
-								if (isAgentEvent(event)) {
-									processEvent(event);
-									return;
-								}
-								processSessionEvent(event);
-							} catch (err) {
-								logger.error("Subagent event processing failed", {
-									error: err instanceof Error ? err.message : String(err),
+							pendingEventProcessing = pendingEventProcessing
+								.then(async () => {
+									if (isAgentEvent(event)) {
+										await processEvent(event);
+										return;
+									}
+									processSessionEvent(event);
+								})
+								.catch(err => {
+									logger.error("Subagent event processing failed", {
+										error: err instanceof Error ? err.message : String(err),
+									});
+									requestAbort("terminate");
 								});
-								requestAbort("terminate");
-							}
 						});
 
 						await session.prompt(task, { attribution: "agent" });
 						await session.waitForIdle();
+						await pendingEventProcessing;
 						const startupAssistant = session.getLastAssistantMessage();
 						if (!submitResultCalled && progress.toolCount === 0 && startupAssistant?.stopReason === "error") {
 							startupErrorMessage = startupAssistant.errorMessage || "Subagent failed";
@@ -1345,9 +1410,32 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 
 				const reminderToolChoice = buildNamedToolChoice("submit_result", session.model);
+				if (
+					!submitResultCalled &&
+					missingVerificationFailures &&
+					(!abortSignal.aborted || abortReason === "terminate")
+				) {
+					try {
+						const reminder = renderPromptTemplate(submitReminderTemplate, {
+							retryCount: 1,
+							maxRetries: 1,
+							isLastRetry: true,
+							missingVerificationProof: true,
+							verificationFailures: formatGateFailures(missingVerificationFailures),
+						});
+						await session.prompt(reminder, { attribution: "agent" });
+						await session.waitForIdle();
+						await pendingEventProcessing;
+					} catch (err) {
+						logger.error("Subagent prompt failed", {
+							error: err instanceof Error ? err.message : String(err),
+						});
+					}
+				}
 				let retryCount = 0;
 				while (
 					!submitResultCalled &&
+					!missingVerificationFailures &&
 					retryCount < MAX_SUBMIT_RESULT_RETRIES &&
 					(!abortSignal.aborted || abortReason === "terminate")
 				) {
@@ -1358,6 +1446,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							retryCount,
 							maxRetries: MAX_SUBMIT_RESULT_RETRIES,
 							isLastRetry,
+							missingVerificationProof: false,
+							verificationFailures: [],
 						});
 
 						// Give models that reject forced tool choice one last plain-text recovery attempt.
@@ -1369,6 +1459,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 								: {}),
 						});
 						await session.waitForIdle();
+						await pendingEventProcessing;
 					} catch (err) {
 						logger.error("Subagent prompt failed", {
 							error: err instanceof Error ? err.message : String(err),
@@ -1377,6 +1468,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				}
 
 				await session.waitForIdle();
+				await pendingEventProcessing;
 				const lastAssistant = session.getLastAssistantMessage();
 				if (lastAssistant) {
 					if (lastAssistant.stopReason === "aborted") {
@@ -1390,7 +1482,22 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						error ??= lastAssistant.errorMessage || "Subagent failed";
 					}
 				}
-				if (!submitResultCalled && (!abortSignal.aborted || abortReason === "terminate") && !aborted && !error) {
+				if (
+					!submitResultCalled &&
+					missingVerificationFailures &&
+					(!abortSignal.aborted || abortReason === "terminate") &&
+					!aborted &&
+					!error
+				) {
+					const verificationMessage = buildMissingVerificationProofMessage(missingVerificationFailures);
+					abortReasonText ??= verificationMessage;
+					error = verificationMessage;
+				} else if (
+					!submitResultCalled &&
+					(!abortSignal.aborted || abortReason === "terminate") &&
+					!aborted &&
+					!error
+				) {
 					abortReasonText ??= SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
 					error = SUBAGENT_WARNING_MISSING_SUBMIT_RESULT;
 				}
@@ -1439,6 +1546,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	};
 
 	const done = await runSubagent();
+	await pendingEventProcessing;
 	resolved = true;
 	listenerController.abort();
 

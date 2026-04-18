@@ -59,6 +59,17 @@ pub enum CodeEngineError {
 		basis:      String,
 		matches:    Option<usize>,
 	},
+	#[error(
+		"peer session {session} committed {code_path} at {peer_commit_ts} (revision {peer_revision}) in {}",
+		path.display()
+	)]
+	PeerConflict {
+		session:        String,
+		path:           PathBuf,
+		code_path:      String,
+		peer_revision:  u64,
+		peer_commit_ts: u64,
+	},
 }
 
 pub type Result<T> = std::result::Result<T, CodeEngineError>;

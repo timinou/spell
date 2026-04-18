@@ -1,0 +1,110 @@
+#+TITLE: Reject delegated success without observed verification proof
+#+STATE: DOING
+#+SESSION_ID: 14bfdda2f7d5493e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell_kdl-config/2026-04-18T20-21-17-407Z_14bfdda2f7d5493e.jsonl]]
+#+CUSTOM_ID: BUG-277-reject-delegated-success-without-observe
+#+LAYER: agent-runtime
+
+* Scope
+
+In scope:
+- Delegated task execution in `packages/coding-agent/src/task/executor.ts`, specifically the path that currently accepts `submit_result` success without proving required gates from observed runtime evidence.
+- Runtime ownership of a single retry when proof is missing. The delegated subagent, not the parent finalizer, must be the component that gets one forced opportunity to repair missing proof before success is accepted.
+- Reuse of canonical verification logic from `packages/coding-agent/src/task/gate-verification.ts` rather than inventing a parallel proof matcher.
+- Honest failure semantics when proof is still missing after the single retry. The task must not be surfaced as completed.
+- Preservation of existing behavior for ungated delegated tasks and for explicit aborted/error `submit_result` payloads.
+
+Out of scope:
+- Code-tool target ambiguity, structural-edit ergonomics, or any change to the `code` tool.
+- Direct `todo_write` completion behavior for non-delegated work.
+- Adding a parent-side second retry. The parent may consume runtime results, but it must not own the retry loop for this item.
+- Redefining what `gateArtifact` or `verifyCmd` means.
+
+Rationale: the observed failure was not just missing UI polish; it was a truthfulness bug. A subagent claimed verified completion without observed proof. The fix belongs in the delegated execution contract itself.
+
+* Existing Patterns
+
+- `packages/coding-agent/src/task/executor.ts::runSubprocess` already owns the delegated session lifecycle, reminder loop, `submit_result` extraction, and forced tool-choice recovery.
+- `packages/coding-agent/src/tools/submit-result.ts::SubmitResultTool.execute` already distinguishes success vs aborted payloads and is the natural contract gate for accepting terminal success.
+- `packages/coding-agent/src/task/gate-verification.ts::{matchesGateCmd, verifyGates}` is the canonical verifier for gate command / commit / artifact proof. This item MUST extend or reuse this path, not duplicate command matching logic elsewhere.
+- `packages/coding-agent/src/task/template.ts::resolveVerificationContext` already injects verification requirements into delegated tasks. Any new runtime retry message MUST stay aligned with this contract.
+- Existing focused tests live in `packages/coding-agent/test/task/executor-subagent-reminders.test.ts`, `packages/coding-agent/test/task/executor-warnings.test.ts`, `packages/coding-agent/test/tools/submit-result.test.ts`, and `packages/coding-agent/test/task/gate-verification.test.ts`.
+- Related prior fix: `!tasks/bugs/BUG-001-subagent-status-shows-aborted-when-submi.org` removed false-aborted status when `submit_result` is missing. This item MUST preserve that improvement while closing the remaining false-success hole.
+
+* Tests
+
+Workflows to enumerate first:
+1. Gated delegated task runs a matching verification command, then calls `submit_result` success once -> runtime accepts success without extra retry.
+2. Gated delegated task calls `submit_result` success before any matching proof exists -> runtime rejects that success, emits a targeted retry/reminder, the agent runs the required verification, then calls `submit_result` success again -> runtime accepts the second success.
+3. Gated delegated task still lacks proof after the single retry -> runtime reports failure truthfully and the delegated todo is not marked completed.
+4. Ungated delegated task behavior is unchanged: normal success without extra proof enforcement.
+5. Explicit aborted/error `submit_result` payloads keep their current semantics.
+6. Wrapper commands (`cd foo && bun test`, `env X=1 bun test`, shell wrappers) still match the configured gate command via the existing normalizer.
+
+Concrete test files / scenarios:
+- `packages/coding-agent/test/task/executor-subagent-reminders.test.ts`
+  - Add failing-first coverage for workflows 1-4.
+  - Assert reminder count, forced tool choice behavior, and final status/output truth.
+- `packages/coding-agent/test/tools/submit-result.test.ts`
+  - Add contract tests for success acceptance vs proof rejection when runtime verification context is present.
+- `packages/coding-agent/test/task/gate-verification.test.ts`
+  - Add/adjust focused matching coverage only if the runtime path needs a helper contract change.
+
+* Implementation
+
+** Define delegated runtime proof contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-277-reject-delegated-success-without-observe::define-runtime-proof-contract
+:END:
+- Files: `packages/coding-agent/src/task/executor.ts`, `packages/coding-agent/src/tools/submit-result.ts`
+- Define the exact rule: if delegated work has required gates, runtime success is accepted only when observed evidence satisfies those gates.
+- Explicitly preserve ungated success and explicit aborted/error flows.
+
+** Add reminder / rejection regression tests before implementation
+:PROPERTIES:
+:CUSTOM_ID: BUG-277-reject-delegated-success-without-observe::runtime-proof-tests
+:DEPENDS: BUG-277-reject-delegated-success-without-observe::define-runtime-proof-contract
+:END:
+- Files: `packages/coding-agent/test/task/executor-subagent-reminders.test.ts`, `packages/coding-agent/test/tools/submit-result.test.ts`
+- Add initially-failing tests for workflows 1-5.
+- The tests must assert observable truth, not incidental internal state.
+
+** Implement proof-aware submit_result acceptance and single retry
+:PROPERTIES:
+:CUSTOM_ID: BUG-277-reject-delegated-success-without-observe::implement-proof-aware-submit-result
+:DEPENDS: BUG-277-reject-delegated-success-without-observe::runtime-proof-tests
+:END:
+- Files: `packages/coding-agent/src/task/executor.ts`, `packages/coding-agent/src/tools/submit-result.ts`, `packages/coding-agent/src/task/gate-verification.ts`
+- Reuse `verifyGates` / command normalization helpers.
+- When proof is missing, reject success, emit one targeted retry, then fail honestly if proof is still absent.
+- Do not silently downgrade to completed.
+
+** Align delegated prompt / reminder language with enforced contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-277-reject-delegated-success-without-observe::align-retry-messaging
+:DEPENDS: BUG-277-reject-delegated-success-without-observe::implement-proof-aware-submit-result
+:END:
+- Files: `packages/coding-agent/src/task/template.ts`, any reminder prompt template referenced by executor
+- Ensure the delegated agent sees the same contract the runtime enforces.
+- Keep wording specific enough that the model knows it must run the gate and re-submit success.
+
+* Edge Cases
+
+- Gate command evidence may appear through normalized wrappers (`cd`, `env`, `bash -lc`). Matching must continue to use canonical normalization, not raw string equality.
+- A delegated task may call `submit_result` success, then later run the gate. Runtime must only accept the terminal success after evidence exists; ordering matters.
+- A delegated task may emit multiple `submit_result` attempts. The runtime must treat the last accepted success attempt as authoritative, not the first malformed one.
+- Missing proof after the single retry must produce an honest failure path, not a misleading completed state with a warning.
+- Explicit `submit_result` aborted/error payloads must still terminate immediately without proof retry.
+- If gate verification helper APIs need extra context (for example worktree/baseline data), extend the shared contract once rather than adding ad hoc executor-only checks.
+
+* Acceptance Criteria
+
+- A delegated task with required gates cannot finish as successful unless the runtime has observed matching proof.
+- Exactly one runtime retry occurs when proof is missing; there is no parent-side second retry in this item.
+- When proof appears on retry, the task completes successfully.
+- When proof is still absent after retry, the task is surfaced as failed / not completed, with an explicit diagnostic about missing verification proof.
+- Ungated delegated tasks and explicit aborted/error `submit_result` paths behave as before.
+- Focused verification passes: `bun test packages/coding-agent/test/task/executor-subagent-reminders.test.ts`, `bun test packages/coding-agent/test/tools/submit-result.test.ts`, and any focused `gate-verification` test file updated for helper changes.
+- `bun check:ts` passes after the implementation wave that lands this item.
+
+NOTE [2026-04-18]: Activating Wave 1 per PLAN-247 execution.

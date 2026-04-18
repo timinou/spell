@@ -72,15 +72,16 @@ pub struct BufferInfo {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code, reason = "parent_num read by broker after FEAT-577")]
 struct Revision {
-	parent:          Option<usize>,
-	last_child:      Option<usize>,
-	forwards:        Vec<TextEdit>,
-	inverses:        Vec<TextEdit>,
-	session_id:      String,
-	code_paths:      Vec<String>,
-	revision_num:    u64,
-	parent_revision: Option<u64>,
+	parent:     Option<usize>,
+	last_child: Option<usize>,
+	forwards:   Vec<TextEdit>,
+	inverses:   Vec<TextEdit>,
+	session_id: String,
+	code_paths: Vec<String>,
+	number:     u64,
+	parent_num: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -95,22 +96,22 @@ impl History {
 	fn new() -> Self {
 		Self {
 			revisions:         vec![Revision {
-				parent:          None,
-				last_child:      None,
-				forwards:        vec![TextEdit {
+				parent:     None,
+				last_child: None,
+				forwards:   vec![TextEdit {
 					start_byte:   0,
 					old_end_byte: 0,
 					new_text:     String::new(),
 				}],
-				inverses:        vec![TextEdit {
+				inverses:   vec![TextEdit {
 					start_byte:   0,
 					old_end_byte: 0,
 					new_text:     String::new(),
 				}],
-				session_id:      String::new(),
-				code_paths:      Vec::new(),
-				revision_num:    0,
-				parent_revision: None,
+				session_id: String::new(),
+				code_paths: Vec::new(),
+				number:     0,
+				parent_num: None,
 			}],
 			current:           0,
 			saved_revision:    Some(0),
@@ -143,8 +144,8 @@ impl History {
 			self.saved_revision = None;
 		}
 		let next = self.revisions.len();
-		let parent_revision = Some(self.revisions[self.current].revision_num);
-		let revision_num = self.next_revision_num;
+		let parent_num = Some(self.revisions[self.current].number);
+		let number = self.next_revision_num;
 		self.next_revision_num += 1;
 		self.revisions.push(Revision {
 			parent: Some(self.current),
@@ -153,8 +154,8 @@ impl History {
 			inverses,
 			session_id,
 			code_paths,
-			revision_num,
-			parent_revision,
+			number: number,
+			parent_num,
 		});
 		self.revisions[self.current].last_child = Some(next);
 		self.current = next;
@@ -162,13 +163,13 @@ impl History {
 
 	fn current_summary(&self) -> Option<RevisionSummary> {
 		let rev = self.revisions.get(self.current)?;
-		if rev.revision_num == 0 && rev.session_id.is_empty() {
+		if rev.number == 0 && rev.session_id.is_empty() {
 			return None;
 		}
 		Some(RevisionSummary {
 			session_id: rev.session_id.clone(),
 			code_paths: rev.code_paths.clone(),
-			revision:   rev.revision_num,
+			revision:   rev.number,
 		})
 	}
 
@@ -215,14 +216,14 @@ impl History {
 				let applied = RevisionSummary {
 					session_id: rev.session_id.clone(),
 					code_paths: rev.code_paths.clone(),
-					revision:   rev.revision_num,
+					revision:   rev.number,
 				};
 				return ScopedUndoResult { applied: Some(applied), skipped };
 			}
 			skipped.push(RevisionSummary {
 				session_id: rev.session_id.clone(),
 				code_paths: rev.code_paths.clone(),
-				revision:   rev.revision_num,
+				revision:   rev.number,
 			});
 			cursor = parent_idx;
 		}
@@ -243,14 +244,14 @@ impl History {
 				let applied = RevisionSummary {
 					session_id: next.session_id.clone(),
 					code_paths: next.code_paths.clone(),
-					revision:   next.revision_num,
+					revision:   next.number,
 				};
 				return ScopedUndoResult { applied: Some(applied), skipped };
 			}
 			skipped.push(RevisionSummary {
 				session_id: next.session_id.clone(),
 				code_paths: next.code_paths.clone(),
-				revision:   next.revision_num,
+				revision:   next.number,
 			});
 			cursor = next_idx;
 		}
@@ -274,6 +275,7 @@ pub struct BufferRegistry {
 	buffers:  DashMap<PathBuf, Arc<Mutex<CodeBuffer>>>,
 	registry: Arc<LanguageRegistry>,
 	watcher:  Option<FileWatcher>,
+	coord:    Arc<dyn crate::coord::CoordClient>,
 }
 
 fn registry_key(path: &Path) -> PathBuf {
@@ -286,7 +288,25 @@ impl BufferRegistry {
 	}
 
 	pub fn new_with_watcher(registry: Arc<LanguageRegistry>, watcher: Option<FileWatcher>) -> Self {
-		Self { buffers: DashMap::new(), registry, watcher }
+		Self::new_with_coord(registry, watcher, Arc::new(crate::coord::NullCoordClient))
+	}
+
+	/// Construct with an explicit coordination client. The client is consulted
+	/// by future engine integrations (FEAT-577) to attribute commits and stream
+	/// peer activity. With `NullCoordClient` the engine behaves exactly as it
+	/// did before this hook landed.
+	pub fn new_with_coord(
+		registry: Arc<LanguageRegistry>,
+		watcher: Option<FileWatcher>,
+		coord: Arc<dyn crate::coord::CoordClient>,
+	) -> Self {
+		Self { buffers: DashMap::new(), registry, watcher, coord }
+	}
+
+	/// Borrow the coordination client. `Arc<dyn CoordClient>` so callers can
+	/// clone and hand it to background tasks.
+	pub fn coord(&self) -> &Arc<dyn crate::coord::CoordClient> {
+		&self.coord
 	}
 
 	pub const fn watcher(&self) -> Option<&FileWatcher> {
@@ -739,6 +759,167 @@ impl CodeBuffer {
 		self.history.current = next;
 		self.dirty = !self.history.is_clean();
 		Ok(last_result)
+	}
+
+	/// Structural edit with explicit session attribution. Mirrors `edit()` but
+	/// records `session_id` + `code_paths` on the new revision so the history
+	/// graph can be queried per-session and the journal can attribute the
+	/// change.
+	pub fn edit_with_attribution(
+		&mut self,
+		edit: TextEdit,
+		session_id: &str,
+		code_paths: Vec<String>,
+	) -> Result<EditResult> {
+		let mut results = self.edit_batch_with_attribution(vec![edit], session_id, code_paths)?;
+		results.pop().ok_or_else(|| {
+			CodeEngineError::Edit(
+				"edit_batch_with_attribution returned no result for single edit".into(),
+			)
+		})
+	}
+
+	/// Batch variant. Single history entry carrying all forward/inverse edits
+	/// plus one attribution tuple `(session_id, code_paths)`.
+	pub fn edit_batch_with_attribution(
+		&mut self,
+		mut edits: Vec<TextEdit>,
+		session_id: &str,
+		code_paths: Vec<String>,
+	) -> Result<Vec<EditResult>> {
+		edits.sort_by_key(|e| std::cmp::Reverse(e.start_byte));
+		if edits.is_empty() {
+			return Ok(Vec::new());
+		}
+		let source_len = self.source().len();
+		for edit in &edits {
+			if edit.start_byte > edit.old_end_byte || edit.old_end_byte > source_len {
+				return Err(CodeEngineError::Edit(format!(
+					"Edit range {}..{} is out of bounds for buffer length {source_len}",
+					edit.start_byte, edit.old_end_byte,
+				)));
+			}
+		}
+
+		let original_rope = self.rope.clone();
+		let original_tree = self.tree.clone();
+		let original_history = self.history.clone();
+		let original_version = self.version;
+		let original_dirty = self.dirty;
+		let original_had_error = self.tree.root_node().has_error();
+
+		let mut results = Vec::with_capacity(edits.len());
+		let mut all_forwards = Vec::new();
+		let mut all_inverses = Vec::new();
+		for edit in edits {
+			if edit.start_byte == edit.old_end_byte && edit.new_text.is_empty() {
+				results.push(EditResult {
+					input_edit:     edit,
+					changed_ranges: Vec::new(),
+					version:        self.version,
+				});
+				continue;
+			}
+			let old_text = self
+				.rope
+				.slice(edit.start_byte..edit.old_end_byte)
+				.to_string();
+			let inverse = TextEdit {
+				start_byte:   edit.start_byte,
+				old_end_byte: edit.start_byte + edit.new_text.len(),
+				new_text:     old_text,
+			};
+			let result = match self.apply_text_mutation(edit.clone()) {
+				Ok(result) => result,
+				Err(error) => {
+					self.rope = original_rope;
+					self.tree = original_tree;
+					self.history = original_history;
+					self.version = original_version;
+					self.dirty = original_dirty;
+					return Err(error);
+				},
+			};
+			all_forwards.push(edit);
+			all_inverses.push(inverse);
+			results.push(result);
+		}
+		if !original_had_error && self.tree.root_node().has_error() {
+			self.rope = original_rope;
+			self.tree = original_tree;
+			self.history = original_history;
+			self.version = original_version;
+			self.dirty = original_dirty;
+			return Err(CodeEngineError::Edit(
+				"Attributed edit batch would leave the buffer structurally invalid.".into(),
+			));
+		}
+		if !all_forwards.is_empty() {
+			all_inverses.reverse();
+			self.history.record_batch_attributed(
+				all_forwards,
+				all_inverses,
+				session_id.to_string(),
+				code_paths,
+			);
+			self.version = self.version.saturating_add(1);
+			self.dirty = true;
+			for result in &mut results {
+				result.version = self.version;
+			}
+		}
+		Ok(results)
+	}
+
+	/// Return a summary of the current revision's attribution, or `None` at
+	/// the synthetic root revision.
+	pub fn last_revision_summary(&self) -> Option<RevisionSummary> {
+		self.history.current_summary()
+	}
+
+	/// Scoped undo. Walks back the revision chain skipping revisions whose
+	/// `session_id` does not match. On success, applies the target revision's
+	/// inverses and returns `(applied, skipped)`.
+	pub fn undo_scoped_apply(&mut self, session_id: &str) -> Result<ScopedUndoResult> {
+		let walked = self.history.undo_scoped(session_id);
+		let Some(applied) = walked.applied.clone() else {
+			return Ok(walked);
+		};
+		let target_idx = self
+			.history
+			.revisions
+			.iter()
+			.position(|r| r.number == applied.revision)
+			.ok_or_else(|| CodeEngineError::Edit("undo target revision missing".into()))?;
+		let inverses = self.history.revisions[target_idx].inverses.clone();
+		let parent_idx = self.history.revisions[target_idx].parent.unwrap_or(0);
+		for inv in &inverses {
+			self.apply_text_mutation(inv.clone())?;
+		}
+		self.history.current = parent_idx;
+		self.dirty = !self.history.is_clean();
+		Ok(walked)
+	}
+
+	/// Scoped redo. Symmetric.
+	pub fn redo_scoped_apply(&mut self, session_id: &str) -> Result<ScopedUndoResult> {
+		let walked = self.history.redo_scoped(session_id);
+		let Some(applied) = walked.applied.clone() else {
+			return Ok(walked);
+		};
+		let target_idx = self
+			.history
+			.revisions
+			.iter()
+			.position(|r| r.number == applied.revision)
+			.ok_or_else(|| CodeEngineError::Edit("redo target revision missing".into()))?;
+		let forwards = self.history.revisions[target_idx].forwards.clone();
+		for fwd in &forwards {
+			self.apply_text_mutation(fwd.clone())?;
+		}
+		self.history.current = target_idx;
+		self.dirty = !self.history.is_clean();
+		Ok(walked)
 	}
 
 	fn apply_text_mutation(&mut self, edit: TextEdit) -> Result<EditResult> {

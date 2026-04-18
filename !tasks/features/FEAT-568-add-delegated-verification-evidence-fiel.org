@@ -1,0 +1,109 @@
+#+TITLE: Add delegated verification evidence field and audit trail
+#+STATE: ITEM
+#+SESSION_ID: 14bfdda2f7d5493e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell_kdl-config/2026-04-18T20-21-17-407Z_14bfdda2f7d5493e.jsonl]]
+#+CUSTOM_ID: FEAT-568-add-delegated-verification-evidence-fiel
+#+DEPENDS: BUG-277-reject-delegated-success-without-observe
+#+LAYER: agent-runtime
+
+* Scope
+
+In scope:
+- Add a new explicit task/org field for optional delegated verification evidence artifacts. Recommended naming for implementation: `verificationArtifact` in TypeScript-facing task/todo structures and `VERIFICATION_ARTIFACT` for org properties.
+- Preserve structured verification evidence in delegated todo results even when no dedicated artifact is requested.
+- When a task explicitly opts in, persist a durable evidence artifact that captures the verification summary for later inspection.
+- Thread the new field through the todo/task lifecycle, dashboard/serialization surfaces, and delegated result persistence without overloading `gateArtifact`.
+- Keep the evidence model compatible with the runtime proof contract from sibling item `BUG-277-reject-delegated-success-without-observe`.
+
+Out of scope:
+- Making evidence artifacts mandatory for every delegated task.
+- Reusing `gateArtifact` as a proxy for verification evidence. `gateArtifact` remains the deliverable artifact gate; this item adds a distinct proof trail.
+- Changing the core meaning of `verifyCmd`, `gateCmd`, or `gateLlm`.
+- Implementing screenshots/manual QA capture for unrelated UI tasks.
+
+Rationale: the user asked for durable verification evidence and an audit trail, but only optionally depending on task. The system needs one canonical place for structured proof (`delegation.result`) and one explicit opt-in path for a persisted evidence file.
+
+* Existing Patterns
+
+- `packages/coding-agent/src/tools/todo-write.ts` is the canonical task/todo schema and already persists gate fields, delegation metadata, result summaries, and gate failures.
+- `packages/coding-agent/src/task/index.ts::{#finalizeTodoRef,#verifyTaskGates,#verifyChildTodoGates}` already computes delegated completion status and merges `delegation.result` into todo state.
+- `packages/coding-agent/src/tools/todo-dashboard-bridge.ts` controls which task fields round-trip through the dashboard bridge; new explicit task fields must be added there intentionally.
+- `packages/coding-agent/src/loop/ingestion/org-depend.ts` is the org-property ingestion path for task metadata; org-facing field support belongs there.
+- Existing serialization / lifecycle tests already cover adjacent behavior in `packages/coding-agent/test/tools/todo-write-serialization.test.ts`, `packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts`, `packages/coding-agent/test/task/todo-ref-lifecycle.test.ts`, `packages/coding-agent/test/task/gate-enforcement.test.ts`, and `packages/coding-agent/test/tools/todo-write-delegation.test.ts`.
+- Prior art for durable verification artifacts exists in plan items and notes across `!tasks/plans/`, but delegated task evidence today is not modeled as an explicit first-class field.
+
+* Tests
+
+Workflows to enumerate first:
+1. Delegated task with no `verificationArtifact` configured still stores structured verification evidence in `delegation.result` and completes/fails truthfully.
+2. Delegated task with `verificationArtifact` configured stores the same structured evidence in `delegation.result` and also writes the requested artifact file.
+3. Delegated task that ends `gate_failed` or `failed` still captures enough evidence to explain why, and the optional artifact reflects that terminal state honestly.
+4. Todo serialization, dashboard bridge snapshots, and org-property ingestion round-trip the new field without dropping it.
+5. Child delegated todo results continue to aggregate into parent summaries without regressing existing gate-failure propagation.
+
+Concrete test files / scenarios:
+- `packages/coding-agent/test/tools/todo-write-serialization.test.ts`
+  - Round-trip `verificationArtifact` across input/output/task snapshot paths.
+- `packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts`
+  - Ensure the dashboard bridge preserves and exposes the new field.
+- `packages/coding-agent/test/task/todo-ref-lifecycle.test.ts`
+  - Verify delegated result summaries include structured verification evidence and optional artifact paths.
+- `packages/coding-agent/test/task/gate-enforcement.test.ts`
+  - Verify failed/gate_failed delegated outcomes still carry honest evidence.
+- `packages/coding-agent/test/tools/todo-write-delegation.test.ts`
+  - Verify delegated child results and parent summaries do not lose evidence metadata.
+
+* Implementation
+
+** Define explicit field contract and org property mapping
+:PROPERTIES:
+:CUSTOM_ID: FEAT-568-add-delegated-verification-evidence-fiel::define-evidence-field
+:END:
+- Files: `packages/coding-agent/src/tools/todo-write.ts`, `packages/coding-agent/src/loop/ingestion/org-depend.ts`, `packages/coding-agent/src/tools/todo-dashboard-bridge.ts`
+- Recommended mapping: TypeScript field `verificationArtifact`; org property `VERIFICATION_ARTIFACT`.
+- Keep this distinct from `gateArtifact`.
+
+** Add serialization and lifecycle tests before plumbing
+:PROPERTIES:
+:CUSTOM_ID: FEAT-568-add-delegated-verification-evidence-fiel::evidence-tests
+:DEPENDS: FEAT-568-add-delegated-verification-evidence-fiel::define-evidence-field
+:END:
+- Files: `packages/coding-agent/test/tools/todo-write-serialization.test.ts`, `packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts`, `packages/coding-agent/test/task/todo-ref-lifecycle.test.ts`, `packages/coding-agent/test/task/gate-enforcement.test.ts`
+- Add initially-failing tests for workflows 1-5.
+
+** Implement schema plumbing and delegated result summary storage
+:PROPERTIES:
+:CUSTOM_ID: FEAT-568-add-delegated-verification-evidence-fiel::plumb-evidence-field
+:DEPENDS: FEAT-568-add-delegated-verification-evidence-fiel::evidence-tests
+:END:
+- Files: `packages/coding-agent/src/tools/todo-write.ts`, `packages/coding-agent/src/tools/todo-dashboard-bridge.ts`, `packages/coding-agent/src/task/index.ts`, `packages/coding-agent/src/task/template.ts`
+- Ensure `delegation.result` always contains structured verification evidence summary when delegated verification is in play.
+- Preserve backward compatibility for tasks that do not opt in.
+
+** Implement optional evidence artifact persistence
+:PROPERTIES:
+:CUSTOM_ID: FEAT-568-add-delegated-verification-evidence-fiel::write-evidence-artifact
+:DEPENDS: FEAT-568-add-delegated-verification-evidence-fiel::plumb-evidence-field
+:END:
+- Files: `packages/coding-agent/src/task/index.ts` and any small helper module extracted for artifact writing
+- When `verificationArtifact` is configured, write a durable artifact containing the same structured evidence summary plus terminal status and any gate failures.
+- The artifact must be honest for success, failed, and gate_failed outcomes.
+
+* Edge Cases
+
+- Tasks without `verificationArtifact` must not fail just because no extra artifact file was written.
+- The new field must not collide semantically with `gateArtifact`; one is deliverable evidence, the other is verification audit evidence.
+- Delegated failure paths (`failed`, `gate_failed`) must record evidence honestly rather than only on success.
+- Parent delegated summaries must not lose child evidence metadata when child groups are merged into `delegation.result`.
+- If org ingestion sees `VERIFICATION_ARTIFACT` on a child/sub-outline item, the field must survive through task creation the same way other explicit task metadata does.
+- Optional artifact paths must resolve relative to the same cwd/worktree rules already used for delegated task artifacts; do not invent a parallel path base.
+
+* Acceptance Criteria
+
+- A new explicit optional field exists for delegated verification evidence artifacts and round-trips through org/task/todo/dashboard surfaces.
+- Structured verification evidence summary is stored in delegated `delegation.result` even when no dedicated artifact is configured.
+- When `verificationArtifact` is configured, the delegated task writes the evidence artifact and the summary links/reference data remain durable.
+- Failed and gate_failed delegated outcomes preserve honest evidence summaries and, when configured, honest evidence artifacts.
+- Existing gate propagation and delegated todo lifecycle behavior remain intact.
+- Focused verification passes: `bun test packages/coding-agent/test/tools/todo-write-serialization.test.ts`, `bun test packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts`, `bun test packages/coding-agent/test/task/todo-ref-lifecycle.test.ts`, and `bun test packages/coding-agent/test/task/gate-enforcement.test.ts`.
+- `bun check:ts` passes after the implementation wave that lands this item.

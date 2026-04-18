@@ -66,13 +66,34 @@ describe("bash churn policy", () => {
 		expect(text).not.toContain("?? tracked.txt");
 	});
 
-	it("digests successful verification commands to compact summaries", async () => {
-		const result = await bashTool.execute("call-3", { command: "bun test --help >/dev/null" }, undefined, undefined, {
-			hasUI: false,
-		} as never);
+	it("keeps truthful raw output for successful verification commands", async () => {
+		const result = await bashTool.execute(
+			"call-3",
+			{ command: "bun test --help >/dev/null; printf 'verification-ok\n'" },
+			undefined,
+			undefined,
+			{ hasUI: false } as never,
+		);
 		const text = result.content.find(block => block.type === "text")?.text ?? "";
+		const details = result.details as
+			| { meta?: { contextPressure?: { category?: string; persistence?: string } } }
+			| undefined;
 
-		expect(text).toContain("verification/build command");
-		expect(text).not.toContain("Usage:");
+		expect(text).toContain("verification-ok");
+		expect(text).not.toContain("verification/build command");
+		expect(details?.meta?.contextPressure?.category).toBe("verification");
+		expect(details?.meta?.contextPressure?.persistence).toBe("summary-only");
+	});
+
+	it("keeps raw failure text for verification command errors", async () => {
+		await expect(
+			bashTool.execute(
+				"call-4",
+				{ command: "bun test --help >/dev/null; printf 'verification-failed\n' >&2; exit 1" },
+				undefined,
+				undefined,
+				{ hasUI: false } as never,
+			),
+		).rejects.toThrow(/verification-failed[\s\S]*Command exited with code 1/u);
 	});
 });
