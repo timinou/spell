@@ -14,7 +14,7 @@ use pi_code_engine::{
 	file_lock::lock_status,
 	language::{LanguageId, LanguageProfile},
 	navigate::{NavigateAction, NavigateItem, NavigateResult, navigate as navigate_buffer},
-	outline::{OutlineEntry, outline as outline_buffer, read as read_buffer},
+	outline::{EnrichFlags, OutlineEntry, outline as outline_buffer, read as read_buffer},
 	procedure::ProcedureProof,
 	resolve::{ResolvedSymbol, resolve_symbol},
 	run_procedure,
@@ -777,7 +777,7 @@ fn render_annotated_diff(
 	if hunks.is_empty() {
 		return "(no changes)".into();
 	}
-	let outline = outline_buffer(buffer, profile);
+	let outline = outline_buffer(buffer, profile, EnrichFlags::default());
 	let mut out = String::new();
 	for hunk in &hunks {
 		let symbol = find_enclosing_symbol(&outline, hunk.new_start);
@@ -1021,7 +1021,7 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 						));
 					}
 					let file_target_id = file_target_id_for_path(&path, options);
-					let outline = outline_buffer(&buffer, &profile);
+					let outline = outline_buffer(&buffer, &profile, EnrichFlags::default());
 					Ok(json_response(render_outline_result(&outline, &file_target_id), false))
 				},
 				"navigate" => {
@@ -1041,7 +1041,7 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 					let result = navigate_buffer(&buffer, &profile, action, line, column, symbol)
 						.map_err(engine_err)?;
 					let file_target_id = file_target_id_for_path(&path, options);
-					let outline = outline_buffer(&buffer, &profile);
+					let outline = outline_buffer(&buffer, &profile, EnrichFlags::default());
 					Ok(json_response(render_navigate_result(result, &file_target_id, &outline), false))
 				},
 				"read" => {

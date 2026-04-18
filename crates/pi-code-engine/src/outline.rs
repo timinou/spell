@@ -5,10 +5,65 @@ use tree_sitter::Node;
 use crate::{
 	buffer::CodeBuffer,
 	language::{
-		BodyExtractor, ClassBodyExtractor, DeclarationPattern, LanguageProfile, NameExtractor,
+		BodyExtractor, ClassBodyExtractor, DeclarationOutlineEnrichment, DeclarationPattern,
+		LanguageProfile, NameExtractor,
 	},
 	resolve::resolve_symbol,
 };
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EnrichFlags {
+	pub signature: bool,
+	pub metrics:   bool,
+	pub doc:       bool,
+	pub graph:     bool,
+}
+
+impl EnrichFlags {
+	pub const L0_ONLY: Self =
+		Self { signature: false, metrics: false, doc: false, graph: false };
+
+	pub fn from_tokens<I, S>(tokens: I) -> Self
+	where
+		I: IntoIterator<Item = S>,
+		S: AsRef<str>,
+	{
+		let mut flags = Self::default();
+		for token in tokens {
+			match token.as_ref() {
+				"signature" => flags.signature = true,
+				"metrics" => flags.metrics = true,
+				"doc" => flags.doc = true,
+				"graph" => flags.graph = true,
+				_ => {},
+			}
+		}
+		flags
+	}
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ParamInfo {
+	pub name:     String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub ty:       Option<String>,
+	#[serde(skip_serializing_if = "std::ops::Not::not", default)]
+	pub optional: bool,
+	#[serde(skip_serializing_if = "std::ops::Not::not", default)]
+	pub rest:     bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ReachSummary {
+	pub count:  u32,
+	pub capped: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ClusterRef {
+	pub id:   usize,
+	pub name: String,
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct OutlineEntry {
@@ -23,25 +78,91 @@ pub struct OutlineEntry {
 	pub children:    Vec<Self>,
 	#[serde(skip)]
 	pub deduplicate: bool,
+
+	#[serde(skip_serializing_if = "is_zero_u32", default)]
+	pub loc:        u32,
+	#[serde(skip_serializing_if = "Vec::is_empty", default)]
+	pub modifiers:  Vec<String>,
+	#[serde(skip_serializing_if = "Vec::is_empty", default)]
+	pub decorators: Vec<String>,
+	#[serde(skip_serializing_if = "std::ops::Not::not", default)]
+	pub deprecated: bool,
+
+	#[serde(skip_serializing_if = "Vec::is_empty", default)]
+	pub params:      Vec<ParamInfo>,
+	#[serde(skip_serializing_if = "Option::is_none", default)]
+	pub return_type: Option<String>,
+	#[serde(skip_serializing_if = "Vec::is_empty", default)]
+	pub generics:    Vec<String>,
+	#[serde(skip_serializing_if = "Vec::is_empty", default)]
+	pub throws:      Vec<String>,
+
+	#[serde(skip_serializing_if = "Option::is_none", default)]
+	pub statements:       Option<u32>,
+	#[serde(skip_serializing_if = "Option::is_none", default)]
+	pub branch_points:    Option<u32>,
+	#[serde(skip_serializing_if = "Option::is_none", default)]
+	pub nesting_depth:    Option<u32>,
+	#[serde(skip_serializing_if = "Option::is_none", default)]
+	pub call_sites:       Option<u32>,
+	#[serde(skip_serializing_if = "Option::is_none", default)]
+	pub has_side_effects: Option<bool>,
+
+	#[serde(skip_serializing_if = "Option::is_none", default)]
+	pub doc_summary: Option<String>,
+	#[serde(skip_serializing_if = "Vec::is_empty", default)]
+	pub doc_tags:    Vec<String>,
+
+	#[serde(skip_serializing_if = "Option::is_none", default)]
+	pub refs_in:        Option<u32>,
+	#[serde(skip_serializing_if = "Option::is_none", default)]
+	pub refs_out:       Option<u32>,
+	#[serde(skip_serializing_if = "Option::is_none", default)]
+	pub callers:        Option<u32>,
+	#[serde(skip_serializing_if = "Option::is_none", default)]
+	pub callees:        Option<u32>,
+	#[serde(skip_serializing_if = "Option::is_none", default)]
+	pub imported_by:    Option<u32>,
+	#[serde(skip_serializing_if = "Option::is_none", default)]
+	pub exported_reach: Option<ReachSummary>,
+	#[serde(skip_serializing_if = "Option::is_none", default)]
+	pub cluster:        Option<ClusterRef>,
+	#[serde(skip_serializing_if = "Option::is_none", default)]
+	pub dead:           Option<bool>,
+	#[serde(skip_serializing_if = "Vec::is_empty", default)]
+	pub inherits:       Vec<String>,
 }
 
-pub fn outline(buffer: &CodeBuffer, profile: &LanguageProfile) -> Vec<OutlineEntry> {
+fn is_zero_u32(value: &u32) -> bool {
+	*value == 0
+}
+
+pub fn outline(
+	buffer: &CodeBuffer,
+	profile: &LanguageProfile,
+	enrich: EnrichFlags,
+) -> Vec<OutlineEntry> {
 	let source = buffer.source();
 	let root = buffer.tree().root_node();
 	let mut cursor = root.walk();
 	let mut entries = root
 		.named_children(&mut cursor)
-		.filter_map(|node| entry_for_node(&source, profile, node))
+		.filter_map(|node| entry_for_node(&source, profile, node, enrich))
 		.collect::<Vec<_>>();
 	deduplicate_entries(&mut entries);
 	entries
 }
 
-fn entry_for_node(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Option<OutlineEntry> {
+fn entry_for_node(
+	source: &str,
+	profile: &LanguageProfile,
+	node: Node<'_>,
+	enrich: EnrichFlags,
+) -> Option<OutlineEntry> {
 	if node.kind() == "export_statement" {
 		let mut cursor = node.walk();
 		for child in node.named_children(&mut cursor) {
-			if let Some(entry) = entry_for_node(source, profile, child) {
+			if let Some(entry) = entry_for_node(source, profile, child, enrich) {
 				return Some(OutlineEntry { exported: true, ..entry });
 			}
 		}
@@ -49,13 +170,15 @@ fn entry_for_node(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Op
 	}
 
 	let Some(decl) = declaration_for(profile, node, source) else {
-		return sole_named_child(node).and_then(|child| entry_for_node(source, profile, child));
+		return sole_named_child(node)
+			.and_then(|child| entry_for_node(source, profile, child, enrich));
 	};
 	let name = declaration_name(source, node, decl)?;
 	let signature = semantic_signature(&name, source, node, decl);
 	let start = node.start_position();
 	let end = node.end_position();
-	let children = class_children(source, profile, node);
+	let children = class_children(source, profile, node, enrich);
+	let _ = enrich;
 	Some(OutlineEntry {
 		name,
 		kind: decl.kind.clone(),
@@ -66,6 +189,30 @@ fn entry_for_node(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Op
 		signature,
 		children,
 		deduplicate: should_deduplicate_entry(profile, decl),
+		loc: 0,
+		modifiers: Vec::new(),
+		decorators: Vec::new(),
+		deprecated: false,
+		params: Vec::new(),
+		return_type: None,
+		generics: Vec::new(),
+		throws: Vec::new(),
+		statements: None,
+		branch_points: None,
+		nesting_depth: None,
+		call_sites: None,
+		has_side_effects: None,
+		doc_summary: None,
+		doc_tags: Vec::new(),
+		refs_in: None,
+		refs_out: None,
+		callers: None,
+		callees: None,
+		imported_by: None,
+		exported_reach: None,
+		cluster: None,
+		dead: None,
+		inherits: Vec::new(),
 	})
 }
 
@@ -76,10 +223,15 @@ fn sole_named_child(node: Node<'_>) -> Option<Node<'_>> {
 	(children.next().is_none()).then_some(child)
 }
 
-fn class_children(source: &str, profile: &LanguageProfile, node: Node<'_>) -> Vec<OutlineEntry> {
+fn class_children(
+	source: &str,
+	profile: &LanguageProfile,
+	node: Node<'_>,
+	enrich: EnrichFlags,
+) -> Vec<OutlineEntry> {
 	let mut children = class_member_nodes(profile, node, source)
 		.into_iter()
-		.filter_map(|child| entry_for_node(source, profile, child))
+		.filter_map(|child| entry_for_node(source, profile, child, enrich))
 		.collect::<Vec<_>>();
 	deduplicate_entries(&mut children);
 	children
@@ -198,13 +350,14 @@ fn name_resolution(
 	extractor: &NameExtractor,
 ) -> Option<NameResolution> {
 	let decl = DeclarationPattern {
-		node_types:    Vec::new(),
-		name:          extractor.clone(),
-		kind:          String::new(),
-		body:          BodyExtractor::None,
-		visibility:    None,
-		filter_names:  None,
-		name_from_arg: false,
+		node_types:         Vec::new(),
+		name:               extractor.clone(),
+		kind:               String::new(),
+		body:               BodyExtractor::None,
+		visibility:         None,
+		filter_names:       None,
+		name_from_arg:      false,
+		outline_enrichment: DeclarationOutlineEnrichment::default(),
 	};
 	declaration_name_resolution(source, node, &decl)
 }
@@ -476,14 +629,15 @@ pub fn read(
 	if profile.id.as_str() == "markdown" && resolution <= 2 {
 		return read_markdown(buffer, profile, resolution);
 	}
+	let enrich = EnrichFlags::L0_ONLY;
 	match resolution {
-		0 => outline(buffer, profile)
+		0 => outline(buffer, profile, enrich)
 			.into_iter()
 			.map(|entry| format!("{} ({})", entry.name, entry.kind))
 			.collect::<Vec<_>>()
 			.join("\n"),
-		1 => render_outline(&outline(buffer, profile), false, 0),
-		2 => render_outline(&outline(buffer, profile), true, 0),
+		1 => render_outline(&outline(buffer, profile, enrich), false, 0),
+		2 => render_outline(&outline(buffer, profile, enrich), true, 0),
 		_ => slice_source(&source, offset, limit),
 	}
 }
@@ -612,7 +766,7 @@ fn markdown_annotation(source: &str, node: Node<'_>, has_children: bool) -> Stri
 }
 
 fn read_markdown(buffer: &CodeBuffer, profile: &LanguageProfile, resolution: u8) -> String {
-	let entries = outline(buffer, profile);
+	let entries = outline(buffer, profile, EnrichFlags::L0_ONLY);
 	match resolution {
 		0 => entries
 			.into_iter()
@@ -750,7 +904,7 @@ mod tests {
 	fn test_outline_typescript() {
 		let buffer = buffer("hello.ts", "typescript");
 		let profile = profile("typescript");
-		let entries = outline(&buffer, &profile);
+		let entries = outline(&buffer, &profile, EnrichFlags::L0_ONLY);
 		assert_eq!(entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), vec![
 			"greet", "Greeter"
 		]);
@@ -762,7 +916,7 @@ mod tests {
 	fn test_outline_typst_code_wrappers() {
 		let buffer = buffer("hello.typ", "typst");
 		let profile = profile("typst");
-		let entries = outline(&buffer, &profile);
+		let entries = outline(&buffer, &profile, EnrichFlags::L0_ONLY);
 		assert_eq!(
 			entries
 				.iter()
@@ -783,7 +937,7 @@ mod tests {
 	fn test_outline_children() {
 		let buffer = buffer("hello.ts", "typescript");
 		let profile = profile("typescript");
-		let entries = outline(&buffer, &profile);
+		let entries = outline(&buffer, &profile, EnrichFlags::L0_ONLY);
 		assert_eq!(
 			entries[1]
 				.children
@@ -817,7 +971,7 @@ mod tests {
 	fn test_outline_html_structure() {
 		let buffer = buffer("hello.html", "html");
 		let profile = profile("html");
-		let entries = outline(&buffer, &profile);
+		let entries = outline(&buffer, &profile, EnrichFlags::L0_ONLY);
 		assert_eq!(
 			entries
 				.iter()
@@ -852,7 +1006,7 @@ mod tests {
 	fn test_outline_css_structure() {
 		let buffer = buffer("hello.css", "css");
 		let profile = profile("css");
-		let entries = outline(&buffer, &profile);
+		let entries = outline(&buffer, &profile, EnrichFlags::L0_ONLY);
 		assert_eq!(
 			entries
 				.iter()
@@ -884,7 +1038,7 @@ mod tests {
 	fn test_outline_markdown_sections() {
 		let buffer = buffer("hello.md", "markdown");
 		let profile = profile("markdown");
-		let entries = outline(&buffer, &profile);
+		let entries = outline(&buffer, &profile, EnrichFlags::L0_ONLY);
 		assert_eq!(
 			entries
 				.iter()
@@ -936,7 +1090,7 @@ mod tests {
 	fn test_outline_elixir() {
 		let buffer = buffer("hello.ex", "elixir");
 		let profile = profile("elixir");
-		let entries = outline(&buffer, &profile);
+		let entries = outline(&buffer, &profile, EnrichFlags::L0_ONLY);
 		// Only defmodule should appear as top-level
 		assert_eq!(entries.len(), 1);
 		assert_eq!(entries[0].name, "MyApp.Greeter");
@@ -947,7 +1101,7 @@ mod tests {
 	fn test_outline_elixir_children() {
 		let buffer = buffer("hello.ex", "elixir");
 		let profile = profile("elixir");
-		let entries = outline(&buffer, &profile);
+		let entries = outline(&buffer, &profile, EnrichFlags::L0_ONLY);
 		let children = &entries[0].children;
 		assert_eq!(children.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), vec![
 			"start_link",

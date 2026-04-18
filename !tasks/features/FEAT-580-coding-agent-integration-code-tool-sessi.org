@@ -1,0 +1,120 @@
+#+TITLE: coding-agent integration: code tool sessionId injection + PeerConflict handling
+#+STATE: ITEM
+#+SESSION_ID: 14bfce727e583e3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
+#+CUSTOM_ID: FEAT-580-coding-agent-integration-code-tool-sessi
+#+DEPENDS: FEAT-578-napi-surface-sessionid-propagation-coord
+#+EFFORT: M
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+show me how the pi code engine can be used to keep track of which session edited what file across code edit instances. some sort of auto-find and socket communication for editing processes. I don't want any more errors happening because another agent edited something. maybe it's time for loro crdt? think about this also within the scope of making undo/redo smarter and only undoing/redoing the actions of the agents/sessions but also knowing what the other agents/sessions modified.
+
+* Scope
+Wire the coding-agent runtime to pass `sessionId` on every mutating `executeCodeBuffer` call, surface `PEER_CONFLICT` errors with structured remediation, and expose a thin coordinator helper. No TUI changes here (FEAT-*F).
+
+* Design reference
+[[file:specs/edit-coordination/design.md]] §6 "coding-agent integration".
+
+* Existing patterns
+- `executeCodeBuffer` callers currently in: =packages/coding-agent/src/tools/code.ts=, =packages/coding-agent/src/tools/grep.ts= (read-only outline), =packages/coding-agent/src/tools/managed-code-buffer.ts=, =packages/coding-agent/src/tools/pending-action.ts=, =packages/coding-agent/src/tools/code-supported-files.ts= (read-only languages).
+- Session id source: `ctx.session.sessionManager.getSessionId()` (see =packages/coding-agent/src/session/agent-session.ts= L2033).
+- Tool error pattern: =packages/coding-agent/src/tools/tool-errors.ts::ToolError= subclasses with structured `details`.
+- Tool result rendering: =packages/coding-agent/src/tools/code.ts= currently formats output via `formatCodeOutput`; mirror for peer-activity footer.
+
+* Tests (write before implementation)
+Test file: =packages/coding-agent/test/tools/code-coord.test.ts= and =packages/coding-agent/test/session/edit-coordinator.test.ts=.
+
+Scenarios:
+
+1. `every_mutating_code_call_includes_session_id`
+   Stub `executeCodeBuffer`. Invoke `code edit { operations: [...] }` through the tool registry with a session whose id is `"abc"`. Stub assertion: received options `.sessionId === "abc"`.
+
+2. `read_only_code_call_does_not_require_session_id`
+   `code outline` through tool registry without breaking when sessionId is empty (TS type allows undefined; runtime allows it).
+
+3. `peer_conflict_surfaces_as_recoverable_tool_error`
+   Stub `executeCodeBuffer` to return `{ error: true, output: { code: "PEER_CONFLICT", peerConflict: { sessionId: "peerB", codePath: "src/a.ts::Foo.bar#body", peerRevision: 43, peerCommitTs: 17450... } } }`. Tool result is `AgentToolResult.error` with text containing `peerB`, `Foo.bar#body`, and the recommendation to retry. The error is marked `retryable: true` so the agent surface treats it as soft failure.
+
+4. `peer_activity_footer_renders_when_present`
+   Stub `coord_peer_activity` returning 2 recent peer edits. Output formatter for `code edit` includes a "Peer activity (last 60s)" section listing those edits with sessionId-shortened, codePath, and humanized timestamp.
+
+5. `coord_status_command_returns_peer_summary`
+   Add a tool surface (CLI subcommand or settings panel) that calls `coord_status`. Test asserts the parsed return shape.
+
+* Implementation
+Order:
+
+** Helper: callCodeBuffer with session injection
+:PROPERTIES:
+:CUSTOM_ID: coord-helper
+:END:
+- File: =packages/coding-agent/src/session/edit-coordinator.ts= (new).
+- Exports:
+  #+begin_src ts
+  export interface CallCodeBufferContext { session: AgentSession }
+  export function callCodeBuffer(ctx: CallCodeBufferContext, opts: CodeBufferOptions): CodeBufferResult
+  export function isMutatingCommand(command: string): boolean
+  export function recentPeerActivity(file: string): CoordPeerActivity
+  export function coordStatus(): CoordStatus
+  #+end_src
+- =callCodeBuffer= adds =sessionId= from =ctx.session.sessionManager.getSessionId()= if =isMutatingCommand(opts.command)=.
+- =isMutatingCommand= is the canonical list — single source of truth, same set as the Rust dispatch in FEAT-578.
+
+** Update existing executeCodeBuffer call sites
+:PROPERTIES:
+:CUSTOM_ID: call-site-update
+:DEPENDS: coord-helper
+:END:
+- =packages/coding-agent/src/tools/code.ts::timedCodeBuffer= — route through =callCodeBuffer(ctx, opts)=.
+- =packages/coding-agent/src/tools/managed-code-buffer.ts= — read-only =diff=/=close= calls do not need sessionId; document this.
+- =packages/coding-agent/src/tools/pending-action.ts::invalidateCodeBuffers= — read-only =close=; no change.
+- =packages/coding-agent/src/tools/grep.ts::readOutlineEntries= — read-only =outline=; no change.
+- =packages/coding-agent/src/tools/code-supported-files.ts::getSemanticExtensions= — =languages= command; no change.
+
+** PeerConflict error mapping
+:PROPERTIES:
+:CUSTOM_ID: peer-conflict-error
+:DEPENDS: call-site-update
+:END:
+- File: =packages/coding-agent/src/tools/code.ts=.
+- After =executeCodeBuffer= returns with =error: true=, inspect =output.code=. If =PEER_CONFLICT=, throw a new =PeerConflictToolError= (subclass of =ToolError=) carrying the =peerConflict= payload, =retryable: true=, and remediation message:
+  "Peer session {short(sessionId)} committed =${codePath}= at {humanTime}. Re-running this edit will resolve against the fresh tree."
+- The agent's tool-error handler already retries soft failures; this slots in.
+
+** Output formatter: peer-activity footer
+:PROPERTIES:
+:CUSTOM_ID: peer-activity-footer
+:DEPENDS: peer-conflict-error
+:END:
+- File: =packages/coding-agent/src/tools/code.ts= (or its render helper).
+- After a successful =code edit=, call =recentPeerActivity(file)= for each touched file (limit 3 files, last 60s).
+- If non-empty, append a section to the tool output text:
+  #+begin_example
+  Peer activity (last 60s):
+    [s2:14b…] src/server.ts::Server.dispatch  12s ago
+    [s3:14c…] src/server.ts::Server.handle    34s ago
+  #+end_example
+- Sanitize via =replaceTabs= + =truncateToWidth= per AGENTS.md TUI rules.
+
+** SessionManager exposes sessionId early
+:PROPERTIES:
+:CUSTOM_ID: session-id-availability
+:DEPENDS: peer-activity-footer
+:END:
+- Verify =getSessionId()= is non-null at every point a mutating tool can fire. If a path exists where it's null (e.g., very early init before session id assigned), fall back to =tui-${process.pid}= (matching the pattern at =main.ts:129=).
+- Add a runtime assertion in =callCodeBuffer=: throw if mutating command is requested and resolved sessionId is empty/null.
+* Edge cases
+- Subagent sessions: each subagent has its own sessionId via `sessionManager.getSessionId()`. Verify subagent edits attribute correctly (visible to parent via journal).
+- `code edit` on a fresh file (not yet on disk) — `edit_transaction` creates the file; broker-commit still happens; sessionId still required.
+- A single `code edit` with multiple `operations` targeting the same file: one `edit_transaction` call → one journal entry → one peer broadcast.
+- A single `code edit` spanning multiple files: one `executeCodeBuffer` call but multiple transactions (one per file). Each file gets its own commit and journal entry.
+- Tool retry budget: ensure `PeerConflictToolError` does not consume the agent's retry budget aggressively. Cap retries at 2 per call.
+
+* Acceptance
+- All 5 test scenarios pass.
+- `bun check:ts` and `bun lint:ts` clean.
+- Manual two-session repro: launch two `spell`s in same cwd; have each edit different methods of the same file; verify both succeed and the second sees the first's commit in the peer-activity footer.
+- Manual conflict repro: two sessions try to edit the same method within ~1s; second receives a PeerConflict with structured remediation; agent's automatic retry succeeds because the broker now has the fresh state.

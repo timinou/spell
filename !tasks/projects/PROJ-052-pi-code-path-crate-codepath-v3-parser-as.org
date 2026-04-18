@@ -1,0 +1,263 @@
+#+TITLE: pi-code-path crate: CodePath v3 parser, AST, resolver, and query engine
+#+STATE: ITEM
+#+SESSION_ID: 14bf80b7760fbaa2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-35-19-000Z_14bf80b7760fbaa2.jsonl]]
+#+CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as
+#+EFFORT: XL
+#+LAYER: pi-code-path pi-code-engine pi-code-graph
+#+PRIORITY: #A
+
+* Initial Message
+
+you should also think about how you will change the surfaces of the other code subcommands in light of the code path
+
+* Scope
+
+New Rust crate =crates/pi-code-path= implementing the CodePath v3 shared query algebra as specified in =specs/code-graph/code-path.md= and =specs/code-graph/code-path-dialects/README.md=.
+
+** In scope
+- Winnow parser for the full CodePath grammar (locator, query, combinators, axes, predicates, qualifiers, set ops, edge axis)
+- CodePath AST types: =CodePath=, =Query=, =Step=, =Combinator=, =Axis=, =Predicate=, =Qualifier=, =EdgeKind=
+- =NameLexer= trait definition (parse/render/matches)
+- =LanguageDialect= struct (name_lexer, anchors, qualifiers, edge_kinds)
+- =QualifierSpec= struct with =QualifierResolver= trait
+- =AnchorPattern= struct
+- Resolver engine that walks tree-sitter AST using CodePath queries
+- Edge axis resolver that delegates to =pi-code-graph= for cross-file traversal
+- Set operations on =NodeSet= (union, intersect, difference)
+- Subquery predicates (has-descendant, has-ancestor)
+- Round-trip: parse -> render -> parse identity
+- Error envelope with span-aware diagnostics
+- Sigil scheme: =§= (node-kind), =¶= (anchor), =→= (edge), =:= (field), =#= (qualifier)
+
+** Out of scope
+- Per-language NameLexer implementations (separate PROJ)
+- NAPI bridge (separate PROJ)
+- Code tool surface changes (separate PROJ)
+- LegacyNameLexer for backward compat (handled in NAPI bridge)
+
+** Existing Patterns
+
+*** RuleExpr (reuse for predicates)
+- File: =crates/pi-code-engine/src/procedure/rules.rs=
+- Types: =RuleExpr= enum (Types, Rule, InverseRule, Regex, Exclude, All)
+- Function: =matches_rule_expr(expr: &RuleExpr, node: &Node, profile: &LanguageProfile) -> bool=
+- CodePath predicates like =[§if_statement]= compile to =RuleExpr::Types(vec!["if_statement"])=
+
+*** LanguageProfile (source of truth for language metadata)
+- File: =crates/pi-code-engine/src/language/profile.rs=
+- Struct: =LanguageProfile= with =declarations=, =class_like=, =imports=, =exports=, =references=, =production_rules=, =inverse_rules=
+- =NameExtractor= enum for how declarations extract names from AST
+- =BodyExtractor= enum for how declarations extract body ranges
+
+*** resolve_symbol (pattern for tree walk)
+- File: =crates/pi-code-engine/src/resolve.rs=
+- =resolve_symbol(buffer, profile, symbol) -> Result<ResolvedSymbol>=
+- Splits dotted names on =.= for member resolution
+- =ResolvedSymbol= has name, kind, byte range, optional body range
+
+*** pi-code-graph query API (pattern for edge resolution)
+- File: =crates/pi-code-graph/src/query.rs=
+- =graph_context(query) -> Option<GraphContextResult>=: callers/callees/refs via =neighbors_by_kind()=
+- =graph_impact(query, depth) -> Option<GraphImpactResult>=: BFS with EdgeKind filtering
+- =bfs_levels()=: breadth-first traversal with direction + edge kind filter
+- =EdgeKind= enum: Defines, Imports, Calls, References, Inherits, Renders, Styles, TypeImports, TypeParameterOf
+
+*** petgraph (graph backing store)
+- =StableGraph<GraphNode, EdgeKind, Directed>= in pi-code-graph
+- =GraphNode= enum: File(FileNode) | Symbol(SymbolNode)
+- =SymbolNode=: name, qualified_name, file, kind, exported, line, column
+
+** Tests
+
+*** T1: Parser round-trip corpus
+- Parse 200+ valid CodePath strings across all 8 dialects
+- Assert: parse -> render -> parse produces identical AST
+- Fixture file: =crates/pi-code-path/tests/fixtures/round-trip.txt=
+
+*** T2: Parser negative corpus
+- 50+ malformed paths with expected diagnostic variant
+- Assert: each produces specific error type with correct span
+- Include: missing locator, unclosed predicate, invalid sigil, ambiguous name
+
+*** T3: Combinator semantics
+- Test each combinator (=/, //, ^, ^^, <<, >>, §, :, ¶, →, |, &, -=) against fixture ASTs
+- Assert: correct node set selection for each
+- Use tree-sitter parsed TypeScript fixtures for concrete AST shapes
+
+*** T4: Predicate evaluation
+- Ordinal =[0]=, =[last]=, =[-1]=
+- Kind filter =[§class_declaration]=
+- Anchor filter =[¶return]=
+- Has-descendant =[.§call_expression]=
+- Attribute =[name=foo]=, =[text~="TODO"]=
+- Assert: each predicate filters correctly against fixture nodes
+
+*** T5: Qualifier resolution
+- =#body=, =#name=, =#sig= against TS function, Rust fn, Python def
+- Assert: returns correct byte range within declaration
+
+*** T6: Edge axis resolution
+- =ref→=: from reference to definition (cross-file)
+- =def→=: from declaration to all references (set-valued)
+- =call→=: from call site to callee
+- =import→=: from import to source module declaration
+- Assert: correct NodeSet with cross-file paths
+- Requires pi-code-graph fixture graph
+
+*** T7: Set operations
+- =A | B= (union), =A & B= (intersect), =A - B= (difference)
+- Assert: correct cardinality and membership
+- Test with overlapping and disjoint sets
+
+** Implementation
+
+** Define CodePath AST types
+:PROPERTIES:
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-ast-types
+:END:
+- File: =crates/pi-code-path/src/ast.rs=
+- Types: =CodePath=, =Locator=, =Query=, =Step=, =Combinator=, =Axis=, =Head=, =Predicate=, =Qualifier=, =EdgeKind=, =NamePayload=, =NodeSet=
+- All types derive =Debug, Clone, PartialEq=
+- =Locator= holds file glob pattern (=PathBuf= or glob)
+- =Step= holds =Axis?=, =Head=, =Vec<Predicate>=
+- =Combinator= enum: Child, Descendant, Parent, Ancestor, PrevSibling, NextSibling, Edge(EdgeKind), Union, Intersect, Except
+- =Axis= enum: Structural(§), Field(:), Anchor(¶), Semantic(default)
+- =EdgeKind= for code-path: Ref, Def, Call, Bind, Import (maps to pi-code-graph EdgeKind)
+- =NamePayload= is opaque to the kernel; dialect provides parser
+- =NodeSet= wraps =Vec<ResolvedNode>= with set operations
+
+** Define NameLexer trait and LanguageDialect struct
+:PROPERTIES:
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-name-lexer-trait
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-ast-types
+:END:
+- File: =crates/pi-code-path/src/dialect.rs=
+- =NameLexer= trait: =parse=, =render=, =matches= methods
+- =parse= uses winnow's =Parser= trait for composability
+- =render= produces canonical text
+- =matches= takes =Node<'_>=, =LanguageProfile=, =&str= (source)
+- =LanguageDialect= struct: =name_lexer: Arc<dyn NameLexer>=, =anchors: Vec<AnchorPattern>=, =qualifiers: Vec<QualifierSpec>=, =edge_kinds: EdgeKindSet=
+- =AnchorPattern= struct: =name: &'static str=, =matcher: fn(Node, &LanguageProfile, &str) -> bool=
+- =QualifierSpec= struct: =name: &'static str=, =applies_to: RuleExpr=, =resolve: Arc<dyn QualifierResolver>=
+- =QualifierResolver= trait: =resolve(node: Node, profile: &LanguageProfile, src: &str) -> Option<Range<usize>>=
+- =EdgeKindSet= newtype over =HashSet<EdgeKind>=
+
+** Implement winnow parser for kernel grammar
+:PROPERTIES:
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-winnow-parser
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-ast-types PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-name-lexer-trait
+:END:
+- File: =crates/pi-code-path/src/parser.rs=
+- Add =winnow= dependency to =Cargo.toml=
+- Parse =CodePath := Locator "::" Query Qualifier?=
+- Locator parser: consume until ="::"= (file path chars, allow spaces if quoted)
+- Query parser: =Step (Combinator Step)*= with recursive descent
+- Combinator parser: =/=, =//=, =^=, =^^=, =<<=, =>>=, =|=, =&=, =-=, plus edge prefix (=ref→=, =def→=, =call→=, =bind→=, =import→=)
+- Step parser: optional Axis (=§=, =:=, =¶=) + Head + zero-or-more Predicates
+- Head parser: delegates to dialect NameLexer for semantic axis, parses NodeKind/FieldName/AnchorName for structural/field/anchor axes, handles =()= grouping
+- Predicate parser: =[]= delimited, dispatch on first token (integer, range, =§=, =¶=, =.=, ident=value, text~=regex)
+- Qualifier parser: =#= + identifier + optional =[args]=
+- Error recovery: span-aware diagnostics using winnow's =ErrMode=
+- The parser is generic over NameLexer: =fn parse_code_path<N: NameLexer>(input: &str, name_lexer: &N) -> Result<CodePath, ParseError>=
+
+** Implement renderer (AST -> canonical text)
+:PROPERTIES:
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-renderer
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-ast-types PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-name-lexer-trait
+:END:
+- File: =crates/pi-code-path/src/render.rs=
+- =fn render(path: &CodePath, dialect: &LanguageDialect) -> String=
+- Canonical form: normalized whitespace, consistent quoting
+- NamePayload rendering delegates to dialect's =NameLexer::render()=
+- Used for round-trip testing and diagnostic output
+
+** Implement tree-sitter resolver
+:PROPERTIES:
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-resolver
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-winnow-parser PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-name-lexer-trait
+:END:
+- File: =crates/pi-code-path/src/resolve.rs=
+- =fn resolve(path: &CodePath, ctx: &ResolveContext) -> Result<NodeSet, ResolveError>=
+- =ResolveContext= holds: =CodeBuffer=, =LanguageProfile=, =LanguageDialect=, optional =&CodeGraph=
+- Resolver walks the =Query= AST:
+  - For each =Step=: dispatch on axis type
+    - Semantic: use dialect =NameLexer::matches()= against children
+    - Structural (§): use =matches_rule_expr()= with =RuleExpr::Types=
+    - Field (:): use =Node::child_by_field_name()=
+    - Anchor (¶): use dialect's =AnchorPattern::matcher=
+  - For each =Combinator=: apply tree walk
+    - =/=: filter visible children
+    - =//=: recursive descent
+    - =^=: parent
+    - =^^=: walk ancestors until predicate matches
+    - =<<=, =>>=: previous/next sibling
+  - For each =Predicate=: filter current node set
+  - For =Qualifier=: narrow to sub-range via =QualifierResolver=
+- Result: =NodeSet= with =ResolvedNode= (path, byte range, node reference)
+
+** Implement edge axis resolver
+:PROPERTIES:
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-edge-resolver
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-resolver
+:END:
+- File: =crates/pi-code-path/src/edge.rs=
+- When resolver encounters =Edge(kind)= combinator:
+  - Look up current node in =CodeGraph= via file path + byte position
+  - Use =neighbors_by_kind()= with appropriate direction:
+    - =ref→=: Outgoing References/Styles edges
+    - =def→=: Incoming References/Calls edges (set-valued)
+    - =call→=: Outgoing Calls edges
+    - =import→=: Outgoing Imports edges
+    - =bind→=: scope-local binding (requires pi-code-engine resolve)
+  - Convert graph nodes back to =ResolvedNode= with file + byte range
+  - Open target files as CodeBuffers to continue resolution if query continues after edge
+
+** Implement set operations on NodeSet
+:PROPERTIES:
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-set-ops
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-resolver
+:END:
+- File: =crates/pi-code-path/src/node_set.rs=
+- =NodeSet= wraps =Vec<ResolvedNode>=, sorted by (file, start_byte)
+- =union(a: NodeSet, b: NodeSet) -> NodeSet=: merge sorted, dedup
+- =intersect(a: NodeSet, b: NodeSet) -> NodeSet=: set intersection by identity
+- =difference(a: NodeSet, b: NodeSet) -> NodeSet=: set difference
+- =ResolvedNode= identity: same file + same start_byte + same end_byte
+- Set combinator evaluation in resolver: split query at =|=, =&=, =-=; resolve each side; apply set op
+
+** Crate setup and Cargo.toml
+:PROPERTIES:
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-crate-setup
+:END:
+- Create =crates/pi-code-path/Cargo.toml= with dependencies:
+  - =winnow= (parser)
+  - =pi-code-engine= (LanguageProfile, RuleExpr, CodeBuffer, resolve)
+  - =pi-code-graph= (CodeGraph, EdgeKind, neighbors_by_kind)
+  - =tree-sitter= (Node type)
+  - =serde=, =serde_json= (AST serialization)
+- Create =crates/pi-code-path/src/lib.rs= re-exporting all public types
+- Add to workspace =Cargo.toml= members list
+
+** Edge Cases
+
+- Empty locator (=:: Foo=): resolve against current buffer context
+- Glob locator (=src/**/*.ts :: Foo=): resolve across multiple files
+- Ambiguous NamePayload: return =AmbiguousName= diagnostic with candidate list
+- Cyclic edge traversal (=ref→= -> =def→= -> =ref→=): cycle detection with visited set
+- Zero-match NodeSet: distinguish "valid query, no results" from "invalid query"
+- Unicode in NamePayload: delegated to dialect NameLexer
+- Escaped special chars in locator path: handle spaces, parens in file names
+- Nested predicates: =[.§call[name=foo]]=  — predicate within predicate
+- Set ops with cross-file NodeSets: maintain file context per node
+
+** Acceptance Criteria
+
+- [ ] =cargo test -p pi-code-path= passes with 200+ test cases
+- [ ] Round-trip corpus: parse -> render -> parse is identity for all valid paths
+- [ ] Negative corpus: all malformed paths produce correct error variant with span
+- [ ] Resolver correctly handles all 9 combinators against TS fixture AST
+- [ ] Edge axis correctly traverses pi-code-graph edges
+- [ ] Set operations produce correct cardinality
+- [ ] =cargo check -p pi-code-path= clean (no warnings)
+- [ ] =cargo clippy -p pi-code-path= clean

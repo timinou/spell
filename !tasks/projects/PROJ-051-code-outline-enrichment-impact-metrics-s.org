@@ -1,0 +1,37 @@
+#+TITLE: Code outline enrichment (impact, metrics, signature)
+#+STATE: ITEM
+#+SESSION_ID: 14bfd98654b2c800
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T20-03-19-506Z_14bfd98654b2c800.jsonl]]
+#+CUSTOM_ID: PROJ-051-code-outline-enrichment-impact-metrics-s
+#+LAYER: feature
+
+* Initial Message
+
+propose your changes to the outline code tool. i especially want to know what you can put in the outline level of funcitons and stuff sugh as the impact and whatnot
+
+Extend `code outline` with structured per-symbol enrichment so the tool surfaces signal that today forces a `code read resolution=3`.
+
+## Scope
+
+Layer additions over existing `OutlineEntry` (`crates/pi-code-engine/src/outline.rs:14`) without breaking the default output. Four tiers, additive via a new `enrich: ("signature" | "metrics" | "doc" | "graph")[]` parameter. Tier L0 (`loc`, `modifiers`, `decorators`, `deprecated`) is on unconditionally at resolution >= 1. Graph tier reuses `GraphContextResult` / `graph_impact` from `crates/pi-code-graph/src/query.rs`; when the index is missing or stale the natives layer blocks on a synchronous rebuild before returning.
+
+## Non-goals
+
+- No per-symbol BFS outside `exported_reach` (hard caps: depth <= 2, fanout <= 64).
+- No git blame, no TODO tallies, no aggregated complexity score.
+- No schema change when `enrich` is omitted -- byte-identical output on existing fixtures.
+
+## Decisions (from design review)
+
+- L0 auto-on at resolution >= 1.
+- Graph gating: synchronous index on demand; header reports `graph: indexed (warm)` vs `graph: rebuilt`.
+- `exported_reach` ships day 1 with depth <= 2, fanout <= 64, displayed as exact integer or `N+` on cap.
+
+## Acceptance
+
+- `bun check` clean.
+- New fixtures in `crates/pi-code-engine/tests/fixtures/` cover TS, Rust, Python, Markdown for each tier.
+- Contract test: `enrich: []` produces byte-identical output to pre-change snapshots.
+- NAPI round-trip test in `packages/natives/test/code-buffer.test.ts` exercises `enrich` permutations and the graph-missing branch.
+- Rendered preview matches the design spec:
+  `- fn outline(buffer,profile) -> Vec<OutlineEntry> L28-L38 (11 loc, 8 refs_in, cluster:outline) [exported]`

@@ -1,0 +1,78 @@
+#+TITLE: Cross-session edit coordination (broker + journal)
+#+STATE: ITEM
+#+SESSION_ID: 14bfce727e583e3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
+#+CUSTOM_ID: PROJ-050-cross-session-edit-coordination-broker-j
+#+EFFORT: 3d
+#+LAYER: pi-code-engine pi-edit-broker pi-natives coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+show me how the pi code engine can be used to keep track of which session edited what file across code edit instances. some sort of auto-find and socket communication for editing processes. I don't want any more errors happening because another agent edited something. maybe it's time for loro crdt? think about this also within the scope of making undo/redo smarter and only undoing/redoing the actions of the agents/sessions but also knowing what the other agents/sessions modified.
+
+* Scope
+Eliminate the class of "another agent edited something" errors by (1) making every mutating edit a short read-lock-write-release transaction against disk, (2) broadcasting commits via a dedicated Unix-socket broker so peers can subscribe and invalidate caches, (3) recording CodePath-granular attribution in a persistent journal, and (4) making per-session undo/redo best-effort aware of which revisions belong to whom.
+
+Out of scope for this PROJ: character-level CRDT merge (Loro), cross-host coordination, semantic conflict resolution (e.g. deleted-fn-vs-new-call), Windows support. See specs/edit-coordination/design.md §"Non-goals".
+
+* Design reference
+Full architecture: [[file:specs/edit-coordination/design.md]]
+CodePath addressing grammar (dependency, assumed landed): [[file:specs/code-graph/code-path.md]]
+
+* Operator directive (load-bearing)
+"Equate an edit with a file change. Lock time per edit = literally lock-write-release. Asynchronous across agents and within sessions. Get updated if the file got updated. Reload and save MUST be standardized; undo/redo are best-effort; remove the class of stale-management problems."
+
+This is the axiom. Every FEAT decision flows from it.
+
+* Existing patterns reused
+- =fd_lock= advisory locking in =crates/pi-code-engine/src/file_lock.rs=
+- =notify-rs= watcher pattern in =crates/pi-code-engine/src/watcher.rs=
+- Unix-socket protocol shape in =packages/spell-server/src/socket/= (register / blocking_event / heartbeat cadence)
+- Session id plumbing in =packages/coding-agent/src/session/session-manager.ts=
+- NAPI dispatch style in =packages/natives/src/code-buffer/=
+- Status-line segment pattern in =packages/coding-agent/src/modes/components/status-line/segments.ts=
+- CodePath resolution in =crates/pi-code-engine/src/resolve.rs= (when CodePath lands)
+
+* Children
+- FEAT-*A: Journal + CodePath extractor + History attribution (no broker dep)
+- FEAT-*B: pi-edit-broker crate + protocol + auto-spawn
+- FEAT-*C: CoordClient + edit_transaction + BufferRegistry stateless mutation
+- FEAT-*D: NAPI surface + sessionId propagation + coord_* commands
+- FEAT-*E: coding-agent tool integration + structured PeerConflict handling
+- FEAT-*F: TUI surface + peer-activity footer + status-line segment
+
+Dependency DAG: A ∥ B → C → D → E → F
+
+* Acceptance criteria
+- Two spell processes editing the same repo on the same file serialize correctly; no =ExternalModification= error surfaces under normal operation.
+- A pre-edit probe to the broker returns peer intents; overlapping intents produce a structured =PeerConflict= error carrying conflicting =sessionId=, =codePath=, =peerCommitTs=.
+- Journal at =~/.spell/edit-journal/<repo-hash>/<file-hash>.jsonl= contains one entry per committed edit with CodePath-level attribution.
+- `undo_scoped(sessionId)` walks history skipping peer revisions and reports skipped summaries in the returned payload.
+- TUI status-line shows peer count when >0; tool output footer shows recent peer edits on the target file.
+- Broker auto-spawns on first client; auto-exits 30s after last disconnect; reaps sessions whose pids die.
+- All existing `code edit` tests continue to pass; new coord tests land green.
+
+* Verification
+- `cargo test -p pi-code-engine` passes including new coord integration tests.
+- `cargo test -p pi-edit-broker` passes including lifecycle tests.
+- `bun test packages/natives/test/code-buffer-coord.test.ts` green.
+- `bun test packages/coding-agent/test/tools/code-coord.test.ts` green.
+- Manual two-session repro: launch two spell processes in same cwd, have each edit different methods of the same class, verify both commits land and journal shows attribution.
+- Manual conflict repro: two sessions intent the same CodePath within 5ms; second receives structured PeerConflict; retry after reload succeeds.
+
+* Orchestrate wave-based delivery per PLAN-254
+:PROPERTIES:
+:CUSTOM_ID: orchestrate-waves
+:END:
+
+This PROJ is the container for the edit-coordination work. Actual implementation steps live in the child FEAT items, grouped into waves by [[id:PLAN-254-cross-session-edit-coordination][PLAN-254]]'s Execution Manifest.
+
+Dependency graph (enforced via each FEAT's =:DEPENDS:= property):
+- Wave 1: FEAT-575, FEAT-576 (parallel)
+- Wave 2: FEAT-577 (after 575 + 576)
+- Wave 3: FEAT-578 (after 577)
+- Wave 4: FEAT-580 (after 578)
+- Wave 5: FEAT-579 (after 580)
+
+Closing criteria: every child FEAT transitions to DONE with its gate tests green, the two manual repro scenarios in PLAN-254 succeed, and =specs/edit-coordination/design.md= is reviewed against final implementation.

@@ -1,0 +1,151 @@
+#+TITLE: Edit coordination foundation: journal + node ref + history attribution
+#+STATE: ITEM
+#+SESSION_ID: 14bfce727e583e3c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
+#+CUSTOM_ID: FEAT-575-edit-coordination-foundation-journal-nod
+#+DEPENDS: PROJ-050-cross-session-edit-coordination-broker-j
+#+EFFORT: M
+#+LAYER: pi-code-engine
+#+PRIORITY: #A
+
+* Initial Message
+
+show me how the pi code engine can be used to keep track of which session edited what file across code edit instances. some sort of auto-find and socket communication for editing processes. I don't want any more errors happening because another agent edited something. maybe it's time for loro crdt? think about this also within the scope of making undo/redo smarter and only undoing/redoing the actions of the agents/sessions but also knowing what the other agents/sessions modified.
+
+* Scope
+Land the pure-local foundations for session-aware editing in =crates/pi-code-engine/=: a `CoordClient` trait with a Null implementation, a journal writer, a CodePath extractor for tree-sitter nodes at edit sites, and session/CodePath fields on =History::Revision=. No broker, no socket, no NAPI changes in this FEAT. Unblocks FEAT-*C.
+
+Out of scope: broker crate (FEAT-*B), socket client (FEAT-*C), NAPI surface (FEAT-*D), tool integration (FEAT-*E), TUI (FEAT-*F).
+
+* Design reference
+[[file:specs/edit-coordination/design.md]] sections §2 "coord/ module", §3 "buffer.rs changes", §"Journal format".
+
+* Existing patterns
+- =crates/pi-code-engine/src/buffer.rs=, struct =History= L83-L143, =Revision= L75-L80 — extend in place, do not fork.
+- =crates/pi-code-engine/src/file_lock.rs::with_exclusive_lock= — pattern for short critical sections; reuse style.
+- =crates/pi-code-engine/src/resolve.rs= and =crates/pi-code-engine/src/line_target.rs= — how the engine currently converts targetId → byte range; the CodePath extractor lands adjacent.
+- CodePath addressing grammar: [[file:specs/code-graph/code-path.md]] (assumed landed). Use its `NamePayload` renderer to canonicalize the CodePath string for the touched node.
+- Blake3 hashing is already a workspace dep via =pi-org-engine=; add to =pi-code-engine/Cargo.toml= and reuse.
+
+* Tests (write before implementation)
+Test file: =crates/pi-code-engine/tests/coord_foundation.rs=
+
+Scenarios (all must initially fail against `main`):
+
+1. `history_records_session_id_and_code_paths`
+   Given a buffer with session id `"s1"`, after one `edit_with_attribution(edit, vec!["src/a.ts::Foo.bar#body"])`, the recorded `Revision` has `session_id == "s1"` and `code_paths == ["src/a.ts::Foo.bar#body"]`.
+
+2. `undo_scoped_skips_peer_revisions`
+   History has revisions from s1, s2, s1, s2 in order. `undo_scoped("s1")` walks back to the nearest revision belonging to s1, records 1 skipped s2 revision in the returned summary, and applies only s1's inverse. Redo is symmetric.
+
+3. `undo_scoped_own_chain_only_succeeds_when_no_peer_present`
+   Same as today's `undo()` behavior when every revision has the same session id. Regression guard.
+
+4. `journal_writer_appends_jsonl_atomically`
+   Given a tmpdir journal root, `JournalWriter::append(entry)` produces one newline-terminated JSON line. Two concurrent appends from different threads produce two complete lines (use fs advisory lock); no torn line, no interleave.
+
+5. `journal_replay_last_n_returns_recent_entries_in_reverse`
+   Given 10 appended entries, `JournalReader::tail(path, 5)` returns the last 5 in reverse chronological order, parsed.
+
+6. `journal_path_derivation_is_stable_per_repo_and_file`
+   `journal_path_for(repo_root, file_path)` returns `~/.spell/edit-journal/<blake3[0..16] of canonicalize(repo_root)>/<blake3[0..16] of canonicalize(file_path)>.jsonl`. Verify hash is stable across calls.
+
+7. `null_coord_client_is_silent_no_op`
+   `NullCoordClient::intent / commit / recent_peer_edits / peer_state / on_open / on_close` all return immediately with `Granted` / `Ok` / empty vecs / empty state. No side effects.
+
+8. `node_ref_extracts_code_path_from_named_ts_method`
+   Parse `class Server { handle() {} }`, derive CodePath for the method node's byte range, assert it equals `"::Server.handle"` (file prefix supplied by caller).
+
+9. `node_ref_falls_back_to_whole_file_for_unnamed_edit`
+   An edit spanning two top-level functions has no single named ancestor; `derive_code_paths(edit, tree)` returns `vec!["::*"]` whole-file marker.
+
+10. `revision_parent_revision_is_recorded`
+    On edit, `Revision::parent_revision` equals the previous revision's numeric revision id (monotonic u64 within one buffer's history).
+
+* Implementation
+Order:
+
+** Add blake3 dep and hash helpers
+:PROPERTIES:
+:CUSTOM_ID: blake3-deps
+:END:
+- File: =crates/pi-code-engine/Cargo.toml= — add =blake3= workspace dep.
+- File: =crates/pi-code-engine/src/coord/mod.rs= (new) — `pub(crate) fn blake3_short(bytes: &[u8]) -> String` returning first 16 hex chars.
+
+** Add error variant
+:PROPERTIES:
+:CUSTOM_ID: error-variant
+:DEPENDS: blake3-deps
+:END:
+- File: =crates/pi-code-engine/src/error.rs=
+- Add a =PeerConflict= variant carrying ={ session: String, path: PathBuf, code_path: String, peer_revision: u64, peer_commit_ts: u64 }= with a thiserror format that displays the peer session + CodePath + path.
+
+** Implement CoordClient trait + NullCoordClient
+:PROPERTIES:
+:CUSTOM_ID: coord-trait
+:DEPENDS: error-variant
+:END:
+- File: =crates/pi-code-engine/src/coord/client.rs= (new) — trait + =IntentResult=, =CommitResult=, =PeerEdit=, =PeerState=, =SessionId= typedef (=String=).
+- File: =crates/pi-code-engine/src/coord/null.rs= (new) — =NullCoordClient=.
+- Re-export via =crates/pi-code-engine/src/coord/mod.rs=.
+- File: =crates/pi-code-engine/src/lib.rs= — add =pub mod coord;=.
+
+** CodePath extractor for a tree-sitter node
+:PROPERTIES:
+:CUSTOM_ID: node-ref
+:DEPENDS: coord-trait
+:END:
+- File: =crates/pi-code-engine/src/coord/node_ref.rs= (new).
+- =pub fn derive_code_paths(edit: &TextEdit, tree: &Tree, rope: &Rope, language: &LanguageId, registry: &LanguageRegistry) -> Vec<String>=.
+- Strategy: find the smallest named ancestor whose byte range encloses =edit.start_byte..edit.old_end_byte=. If found, render its CodePath using the language's =NamePayload= from the CodePath crate. If not, return =vec!["::*"]= whole-file marker.
+- Caller prepends the relative file path to produce a fully qualified CodePath.
+
+** History attribution
+:PROPERTIES:
+:CUSTOM_ID: history-attribution
+:DEPENDS: node-ref
+:END:
+- File: =crates/pi-code-engine/src/buffer.rs=
+- Modify =Revision= (L75-L80): add =session_id: String=, =code_paths: Vec<String>=, =revision_num: u64=, =parent_revision: Option<u64>=. =parent= stays as existing parent *index*; =parent_revision= is the monotonic revision number.
+- Modify =History::new= to initialize root with empty session id + empty code_paths.
+- Modify =History::record_batch= to accept =session_id: &str, code_paths: Vec<String>=.
+- Add =pub fn undo_scoped(&mut self, session_id: &str) -> ScopedUndoResult= with =skipped: Vec<RevisionSummary>=.
+- Add symmetric =redo_scoped=.
+- Keep existing =record=, =record_batch=, =undo=, =redo= as thin wrappers passing an empty session id (for in-process callers that don't care — tests and legacy callers).
+
+** Journal writer + reader
+:PROPERTIES:
+:CUSTOM_ID: journal
+:DEPENDS: history-attribution
+:END:
+- File: =crates/pi-code-engine/src/coord/journal.rs= (new).
+- =JournalEntry { ts, session_id, pid, kind, revision, parent_revision, code_paths, diff_hash, byte_len }=. =kind: "commit" | "open" | "close"=.
+- =JournalWriter::append(root: &Path, repo_root: &Path, file: &Path, entry: &JournalEntry) -> Result<()>=
+  - Derives path via =journal_path_for(repo_root, file)=.
+  - Opens with =O_APPEND | O_CREAT=.
+  - =with_exclusive_lock= on the journal file during write (budget 100ms).
+  - Serializes via =serde_json=, appends newline.
+- =JournalReader::tail(path: &Path, n: usize) -> Result<Vec<JournalEntry>>=.
+
+** Integrate CoordClient into BufferRegistry (prep only)
+:PROPERTIES:
+:CUSTOM_ID: registry-hook
+:DEPENDS: journal
+:END:
+- File: =crates/pi-code-engine/src/buffer.rs=
+- Add =coord: Arc<dyn CoordClient>= (default =Arc::new(NullCoordClient)=) to =BufferRegistry=.
+- Add =pub fn new_with_coord(registry, watcher, coord)= constructor.
+- This FEAT stops here — full =edit_transaction= lands in FEAT-577 after the broker exists.
+* Edge cases
+- History truncation on divergent edit path: the existing `record_batch` truncates forward revisions past `current`. `undo_scoped` must handle a history where every revision after root is peer-authored — returns `ScopedUndoResult { applied: None, skipped: [...] }` gracefully.
+- CodePath extractor must not panic on `edit.start_byte == edit.old_end_byte == 0` (insertion at start of empty buffer) — return whole-file marker.
+- Journal append: if `~/.spell/edit-journal/` is unwritable, log once via the engine's existing error path and continue silently; tests assert no panic.
+- Blake3 hash is not cryptographic for our purposes — used only as a short stable key. Do not expose as a security primitive.
+- Concurrent `JournalWriter::append` from two threads in one process: `with_exclusive_lock` on the journal file path (same `fd_lock` helper) serializes them.
+
+* Acceptance
+- All 10 test scenarios in `tests/coord_foundation.rs` pass.
+- `cargo test -p pi-code-engine` still passes all pre-existing tests.
+- `cargo clippy -p pi-code-engine --all-targets --all-features -- -D warnings` clean.
+- `rustfmt` formatted.
+- No NAPI changes; `bun check:ts` is unaffected.

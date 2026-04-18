@@ -1,0 +1,86 @@
+#+TITLE: Update code-path.md to use revised sigils and winnow references
+#+STATE: ITEM
+#+SESSION_ID: 14bf80b7760fbaa2
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-35-19-000Z_14bf80b7760fbaa2.jsonl]]
+#+CUSTOM_ID: FEAT-581-update-code-path-md-to-use-revised-sigil
+#+EFFORT: S
+#+LAYER: specs
+#+PRIORITY: #A
+
+* Initial Message
+
+you should also think about how you will change the surfaces of the other code subcommands in light of the code path
+
+* Scope
+
+Update =specs/code-graph/code-path.md= to use the revised sigil scheme from =specs/code-graph/code-path-dialects/README.md= and replace chumsky references with winnow.
+
+** In scope
+- Replace all =@= axis references with =§= (node-kind axis)
+- Replace all =~= axis references with =¶= (anchor axis)
+- Replace all =~>= / =~>>= edge axis references with =→= (edge axis)
+- Update predicate examples: =[@ NodeKind]= → =[§ NodeKind]=, =[~ AnchorName]= → =[¶ AnchorName]=
+- Replace =chumsky= references with =winnow= in §1 title and body
+- Update grammar specification block in §1
+- Update all examples in §§2-10
+- Verify consistency with dialect README sigil table
+
+** Out of scope
+- Dialect files (already use new sigils)
+- Implementation changes
+
+** Existing Patterns
+- Dialect README sigil table: =specs/code-graph/code-path-dialects/README.md= §0
+- Old sigils in =code-path.md=: =@= (axis), =~= (anchor axis), =~>= / =~>>= (edge axis)
+
+** Tests
+- Manual review: grep for =@= in non-attribute contexts (should be =§=)
+- Grep for =~= in non-text contexts (should be =¶=)
+- Grep for =~>= or =~>>= (should be =→=)
+- Grep for =chumsky= (should be =winnow=)
+- Cross-check: every example in code-path.md should parse under the new sigil scheme
+
+** Implementation
+
+** Replace sigils in grammar spec (§1)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-581-update-code-path-md-to-use-revised-sigil::FEAT-sigil-grammar
+:END:
+- Update the formal grammar block to use =§=, =¶=, =→=
+- Update =Axis := "@"= → =Axis := "§"=
+- Update =Axis := "~"= → =Axis := "¶"=
+- Update =Combinator := "~>>"= → =Combinator := EdgeKind "→"= (=ref→=, =def→=, =call→=, =bind→=, =import→=)
+- Update predicate examples in grammar block
+
+** Replace sigils in all examples (§§1-10)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-581-update-code-path-md-to-use-revised-sigil::FEAT-sigil-examples
+:DEPENDS: FEAT-581-update-code-path-md-to-use-revised-sigil::FEAT-sigil-grammar
+:END:
+- Every code block and inline example using =@= as axis → =§=
+- Every =~= as anchor → =¶=
+- Every =~>= / =ref~>= / =def~>= / =call~>= → =→= / =ref→= / =def→= / =call→=
+- Update the shared operator table (=ref~> def~> call~> bind~>=) → =ref→ def→ call→ bind→=
+
+** Replace chumsky with winnow
+:PROPERTIES:
+:CUSTOM_ID: FEAT-581-update-code-path-md-to-use-revised-sigil::FEAT-winnow-refs
+:DEPENDS: FEAT-581-update-code-path-md-to-use-revised-sigil::FEAT-sigil-grammar
+:END:
+- §1 title: "one DSL, chumsky-built once" → "one DSL, winnow-built once"
+- §2 trait: update NameLexer parse signature from =IResult= (nom/chumsky style) to winnow's =Parser= trait reference
+- §6 body: "kernel ships one chumsky parser" → "kernel ships one winnow parser"
+- §9 step 1: "chumsky grammar" → "winnow grammar"
+- §6: "~80-150 lines of chumsky" → "~80-150 lines of winnow"
+
+** Edge Cases
+- =@= appears in text like "XPath @attribute" — don't change those (context-dependent)
+- =~= appears in =text~== regex predicate syntax — this is the regex operator, not the anchor axis, don't change
+- The shared operator table in §0 lists =ref~> def~>= etc. — these all become =ref→ def→=
+
+** Acceptance Criteria
+- [ ] Zero instances of =@= used as axis operator in code-path.md (=§= everywhere)
+- [ ] Zero instances of =~= used as anchor axis (=¶= everywhere)
+- [ ] Zero instances of =~>= or =~>>= as edge axis (=→= everywhere)
+- [ ] Zero instances of =chumsky= (=winnow= everywhere)
+- [ ] All examples consistent with dialect README sigil table
