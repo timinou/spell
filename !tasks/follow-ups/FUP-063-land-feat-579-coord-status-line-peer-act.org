@@ -1,0 +1,19 @@
+#+TITLE: Land FEAT-579 coord status-line + peer-activity footer
+#+STATE: ITEM
+#+SESSION_ID: 14bfe497b90853e7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T20-51-40-901Z_14bfe497b90853e7.jsonl]]
+#+CUSTOM_ID: FUP-063-land-feat-579-coord-status-line-peer-act
+#+LAYER: tui
+
+* Initial Message
+
+the code tool has been made more sturdy. continue your work
+
+Blocked on FUP-062 (FEAT-580 tool integration).
+
+Per FEAT-579 spec:
+- New status-line segment in
+  packages/coding-agent/src/modes/components/status-line/segments.ts:
+  "coord: N peers * last touched <file> <age>".
+- Peer-activity footer wired into tool output renderer via coord_peer_activity.
+- TUI tests covering the segment + footer.

@@ -3298,6 +3298,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pi-edit-broker"
+version = "13.12.8"
+dependencies = [
+ "clap",
+ "nix 0.29.0",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "pi-embedding-worker"
 version = "13.12.8"
 dependencies = [

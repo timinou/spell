@@ -400,7 +400,7 @@ mod tests {
 		(tree, profile)
 	}
 
-	fn node_at_byte<'a>(tree: &'a tree_sitter::Tree, byte: usize) -> Node<'a> {
+	fn node_at_byte(tree: &tree_sitter::Tree, byte: usize) -> Node<'_> {
 		tree
 			.root_node()
 			.named_descendant_for_byte_range(byte, byte)

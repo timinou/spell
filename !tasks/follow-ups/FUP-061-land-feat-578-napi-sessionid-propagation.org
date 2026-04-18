@@ -1,0 +1,19 @@
+#+TITLE: Land FEAT-578 NAPI sessionId propagation + coord_* commands
+#+STATE: ITEM
+#+SESSION_ID: 14bfe497b90853e7
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T20-51-40-901Z_14bfe497b90853e7.jsonl]]
+#+CUSTOM_ID: FUP-061-land-feat-578-napi-sessionid-propagation
+#+LAYER: pi-natives
+
+* Initial Message
+
+the code tool has been made more sturdy. continue your work
+
+Blocked on FUP-060 (complete FEAT-577 engine). Lands after edit_transaction
+surface is stable.
+
+Per FEAT-578 spec:
+- CodeBufferOptions gains sessionId?: string (required for mutating commands)
+- coord_status, coord_peer_activity, coord_journal_tail NAPI commands
+- CodeErrorOutput.peerConflict?: structured payload
+- TS types + bindings in packages/natives/src/code-buffer/
