@@ -1,0 +1,124 @@
+#+TITLE: code edit write{scope:"body"} silently truncates siblings on macro-heavy languages
+#+STATE: ITEM
+#+SESSION_ID: 14bf73993e0afdc4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-38-00-184Z_14bf73993e0afdc4.jsonl]]
+#+CUSTOM_ID: BUG-280-code-edit-writescopebody-silently-trunca
+#+EFFORT: 4h
+#+LAYER: crates/pi-code-engine crates/pi-natives
+#+PRIORITY: #A
+
+* Scope
+
+In: detect and refuse `write{scope:"body"}` executions that would silently delete sibling declarations; add a structural-loss safety guard and a clear error variant in `pi_code_engine::edit::body::replace_body` and the single_action dispatcher in `crates/pi-natives/src/code_buffer.rs`.
+
+Out: fixing tree-sitter Elixir grammar itself; changing the declarative API of other actions (findAndReplace, wrap, rename).
+
+* Background
+
+Observed failure (PLAN-248 wave-1 subagent): a `quick_task` subagent invoked `code edit { targetId: "lib/collections_section.ex::Foo.bar", actions: [{ kind: "write", scope: "body", content: [...] }] }` on `collections_section.ex`. The action silently truncated the file at line 72, deleting 213 lines of EEx-template content inside the surrounding module. Recovery required `git checkout`.
+
+Likely mechanism (to confirm during implementation):
+- `build_resolved` (`crates/pi-code-engine/src/resolve.rs:95-120`) returns `body_start_byte`/`body_end_byte` from tree-sitter's `body` field of the decl node. For Elixir `defmodule Mod do ... end`, the `do_block` body includes ALL sibling `def`s. If the caller targeted `Mod` (the module) with `scope:"body"` but intended an inner `def`, `replace_body` happily replaces the entire block with the short content.
+- The current dispatcher (`single_action` at `crates/pi-natives/src/code_buffer.rs:380-409`) has no structural check.
+
+Impact: silent data loss. Worse than the staleness class (BUG-279) because even with a fresh cache, the edit destroys content deterministically.
+
+* Existing patterns
+
+- `crates/pi-code-engine/src/edit/body.rs:13-37` — `replace_body(&CodeBuffer, &ResolvedSymbol, &str)`.
+- `crates/pi-code-engine/src/resolve.rs:95-120` — `build_resolved` sets `body_start_byte`/`body_end_byte`.
+- `crates/pi-natives/src/code_buffer.rs:376-410` — dispatcher branch for `"write"` action.
+- `crates/pi-code-engine/src/buffer.rs:23-34` — `TextEdit` shape `{start_byte, old_end_byte, new_text}`.
+- `crates/pi-code-engine/tests/fixtures/sources/hello.ex` — existing Elixir fixture (confirmed via resolve.rs tests).
+- `crates/pi-code-engine/src/edit/patch.rs:82-88` — existing "overlap guard" precedent for edit-safety invariants.
+
+* Tests (TDD, before impl)
+
+- `crates/pi-code-engine/src/edit/body.rs` `#[cfg(test)]` block (extend):
+  - `replace_body_refuses_large_sibling_deletion_without_opt_in`: Elixir module with 4 `def`s totalling 200 lines; resolve the module name; call `replace_body` with a 5-line replacement. Assert `Err(CodeEngineError::UnsafeScopeWrite)` whose `lost_decls` enumerates the dropped `def` names.
+  - `replace_body_allows_large_delete_with_force`: same setup with `ReplacePolicy { allow_sibling_delete: true }` — succeeds, returns the `TextEdit`.
+  - `replace_body_allows_proportional_shrink`: 4-line body → 2-line body (same decl, no sibling loss). Succeeds.
+  - `replace_body_size_delta_threshold_tunable`: guard triggers on lost-decl count, not raw line count.
+- `crates/pi-natives/src/code_buffer.rs` `mod tests` (add):
+  - `write_body_scope_refuses_silent_truncation_json`: integration through `execute_code_buffer` with the real fixture; returns JSON `{ error: true, code: "UNSAFE_SCOPE_WRITE", lostDecls: [...] }`.
+  - `write_body_scope_allows_force_flag`: re-issue with `{ allowSiblingDelete: true }` and confirm success plus warning captured in response.
+- `crates/pi-code-engine/tests/fixtures/sources/big_module.ex` (new): 250+-line Elixir module modelling collections_section.ex.
+
+* Implementation
+
+** Decl count snapshot helper
+:PROPERTIES:
+:CUSTOM_ID: BUG-280-code-edit-writescopebody-silently-trunca::decl-count
+:END:
+
+- File: `crates/pi-code-engine/src/resolve.rs`
+- Add `pub fn collect_top_level_decls_in_range(buffer: &CodeBuffer, start: usize, end: usize) -> Vec<String>` using tree-sitter query on the language profile's declaration capture; returns symbol names in source order.
+- Return `vec![]` when the profile has no declaration capture (e.g. plain text), in which case the guard does not fire.
+
+** New error variant
+:PROPERTIES:
+:CUSTOM_ID: BUG-280-code-edit-writescopebody-silently-trunca::error-variant
+:END:
+
+- File: `crates/pi-code-engine/src/error.rs`
+- Add `CodeEngineError::UnsafeScopeWrite { action: String, lost_decls: Vec<String>, original: usize, new: usize }`.
+- `Display` impl: `"write{{scope:'body'}} refused: replacement drops {n} sibling declarations ({names}); pass allowSiblingDelete:true to force"`.
+
+** Structural-loss guard in replace_body
+:PROPERTIES:
+:CUSTOM_ID: BUG-280-code-edit-writescopebody-silently-trunca::size-guard
+:DEPENDS: BUG-280-code-edit-writescopebody-silently-trunca::decl-count BUG-280-code-edit-writescopebody-silently-trunca::error-variant
+:END:
+
+- File: `crates/pi-code-engine/src/edit/body.rs`
+- Extend signature: `pub fn replace_body(buffer, resolved, content, policy: ReplacePolicy)` where `ReplacePolicy { allow_sibling_delete: bool }`.
+- Before returning the `TextEdit`:
+  - `original_decls = collect_top_level_decls_in_range(buffer, body_start, body_end)`.
+  - Parse `adjusted` into a temporary tree-sitter tree of the same language; collect `new_decls` analogously.
+  - If `original_decls.len() >= 2 AND new_decls.len() < original_decls.len() AND !policy.allow_sibling_delete`, compute `lost_decls = original_decls - new_decls (set diff)` and return `Err(CodeEngineError::UnsafeScopeWrite { ... })`.
+- Keep a non-policy convenience wrapper `replace_body_safe(buffer, resolved, content) = replace_body(buffer, resolved, content, ReplacePolicy::default())` for the >90% call path.
+
+** Wire policy flag through action schema
+:PROPERTIES:
+:CUSTOM_ID: BUG-280-code-edit-writescopebody-silently-trunca::wire-flag
+:DEPENDS: BUG-280-code-edit-writescopebody-silently-trunca::size-guard
+:END:
+
+- File: `crates/pi-natives/src/code_buffer.rs` (`single_action`, branch `"write"` at lines 380-409).
+- Read `action.get("allowSiblingDelete").and_then(Value::as_bool).unwrap_or(false)` and build `ReplacePolicy`.
+- On `CodeEngineError::UnsafeScopeWrite`, `engine_err` maps to `{ code: "UNSAFE_SCOPE_WRITE", message, lostDecls, path, original, new }`.
+- File: `packages/coding-agent/src/tools/code.ts` + `packages/coding-agent/src/tools/code-result.ts`.
+- Extend the TypeBox schema for the `write` action with `allowSiblingDelete?: boolean` and document in `packages/coding-agent/src/prompts/tools/code.md` with a banner: "Default behavior refuses sibling deletion; set allowSiblingDelete only when intentional."
+
+** Integration fixture + repro test
+:PROPERTIES:
+:CUSTOM_ID: BUG-280-code-edit-writescopebody-silently-trunca::fixture
+:DEPENDS: BUG-280-code-edit-writescopebody-silently-trunca::wire-flag
+:END:
+
+- File: `crates/pi-code-engine/tests/fixtures/sources/big_module.ex` — new 250-line Elixir module with 4 `def`s.
+- File: `crates/pi-natives/tests/code_buffer_write_scope_guard.rs` — integration test invoking `execute_code_buffer` with `{ kind: "write", scope: "body" }` on the module target; assert refusal; then force-mode succeeds.
+- File: `packages/coding-agent/test/tools/code.test.ts` — contract test: unsafe refusal surfaces hint mentioning `allowSiblingDelete` and lists lost decls.
+
+* Edge cases
+
+- Languages without `declaration` queries (plain text, Typst prose): guard does not fire; preserve current behavior.
+- Single-decl body (e.g., one-line TS function): `original_decls.len() == 1` → guard does not fire; matches the common case.
+- Nested classes: counts direct-child top-level decls only; nested methods removed intentionally are not triggered.
+- Parse failure on replacement content: if tree-sitter rejects `adjusted`, return `Err(CodeEngineError::Edit("content does not parse"))` BEFORE applying — no silent acceptance.
+- Tree-sitter timeout: replacement re-parse uses `PARSE_TIMEOUT_MICROS` (already 200ms); on timeout, accept the edit but include a warning in the returned `EditResult.warnings` vector.
+- Whole-file `write` (no `scope`, no `targetId`): unchanged; guard explicitly scoped to `scope:"body"` branch.
+- Renamed-only-but-otherwise-equivalent decls: if the agent's replacement renames a `def` while keeping its body, the lost-decls set diff would mark the old name as lost. Acceptable: the agent must opt in via `allowSiblingDelete` for renames inside bodies — surfaces the rename intent explicitly.
+
+* Acceptance criteria
+
+- `cargo test -p pi-code-engine edit::body::tests` passes (all new cases).
+- `cargo test -p pi-natives code_buffer_write_scope_guard` passes.
+- `bun test packages/coding-agent/test/tools/code.test.ts --grep="write.*scope.*body.*refuses"` passes.
+- Reproducing the PLAN-248 wave-1 failure (`{ kind: "write", scope: "body" }` on the big Elixir module) returns `{ error: true, code: "UNSAFE_SCOPE_WRITE" }` without mutating the file.
+- `bun check:rs` and `bun check:ts` clean.
+
+* Verification
+
+- Manual: checkout a 250-line module, run the repro payload, inspect JSON response and unchanged disk content.
+- Follow-up manual: reissue with `allowSiblingDelete: true`, confirm success and that the response includes a `warnings` array naming the dropped decls.

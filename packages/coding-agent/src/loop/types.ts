@@ -41,8 +41,6 @@ export interface LoopPromptContext extends Record<string, unknown> {
 		state: string;
 		dependencies: string[];
 		hasGates: boolean;
-		effort?: string;
-		priority?: string;
 	}>;
 	manifestProgress?: string;
 	readyTickets?: string[];
@@ -151,8 +149,6 @@ export interface ManifestTicket {
 	dependencies: string[];
 	triggers: string[];
 	gates: LoopGateConfig[];
-	effort?: string;
-	priority?: string;
 	layer?: string;
 	tags: string[];
 	changedFiles: string[];

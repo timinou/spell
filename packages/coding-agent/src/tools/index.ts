@@ -180,6 +180,8 @@ export interface ToolSession {
 	settings: Settings;
 	/** Plan mode state (if active) @deprecated Use getActiveModeState */
 	getPlanModeState?: () => PlanModeState | undefined;
+	/** Last plan approved in this session, if any. */
+	getLastApprovedPlan?: () => { itemId?: string; title: string; finalPlanFilePath: string } | undefined;
 	/** Active mode state (plan, audit, or user-defined) */
 	getActiveModeState?: () => ActiveModeState | undefined;
 	/** Whether the agent is currently idle (not streaming a turn). */

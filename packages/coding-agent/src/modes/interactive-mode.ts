@@ -852,7 +852,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					category: "audits",
 					state: "DOING",
 					id,
-					properties: { EFFORT: "1h", PRIORITY: "#B", LAYER: "coding-agent" },
+					properties: { LAYER: "coding-agent" },
 					body,
 				},
 				"DOING",
@@ -1329,6 +1329,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			await this.session.setActiveToolsByName(previousTools);
 		}
 		this.session.setPlanReferencePath(planReferencePath);
+		this.session.recordLastApprovedPlan?.({
+			itemId: orgPlanItem?.id,
+			title: path.basename(options.finalPlanFilePath).replace(/\.[^.]+$/, ""),
+			finalPlanFilePath: options.finalPlanFilePath,
+		});
 		this.session.markPlanReferenceSent();
 		// Set audit state: auto for ultraplan, suggest for regular plan
 		if (!this.#isAuditEscalation || this.#auditDepth < this.#auditMaxDepth) {

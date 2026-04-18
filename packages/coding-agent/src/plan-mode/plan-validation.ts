@@ -46,38 +46,53 @@ function validateChildSuboutlineGraph(resolvedChildren: Map<string, ResolvedPlan
 	const allSuboutlines: ReturnType<typeof parseOrgDependProperties> = [];
 	const ownerBySuboutlineId = new Map<string, string>();
 	const suboutlineIdSet = new Set<string>();
+	const normalizeSuboutlineId = (childItemId: string, candidate: string): string | null => {
+		const expectedPrefix = `${childItemId}::`;
+		if (candidate.startsWith(expectedPrefix)) {
+			const suffix = candidate.slice(expectedPrefix.length);
+			return /^[A-Za-z0-9_-]+$/.test(suffix) ? candidate : null;
+		}
+		if (!candidate.includes("::")) {
+			return /^[A-Za-z0-9_-]+$/.test(candidate) ? `${childItemId}::${candidate}` : null;
+		}
+		const numericPrefix = childItemId.match(/^[A-Z]+-\d+/)?.[0] ?? null;
+		const [left, suffix] = candidate.split("::", 2);
+		if (!numericPrefix || left !== numericPrefix) return null;
+		return /^[A-Za-z0-9_-]+$/.test(suffix) ? `${childItemId}::${suffix}` : null;
+	};
 
 	for (const [childItemId, childItem] of resolvedChildren) {
 		const parsed = parseOrgDependProperties(childItem.body);
-		parsedByChildId.set(childItemId, parsed);
 		if (parsed.length === 0) {
+			parsedByChildId.set(childItemId, parsed);
 			missingStructuredBodies.push(childItemId);
 			continue;
 		}
 
-		for (const suboutline of parsed) {
-			allSuboutlines.push(suboutline);
-			const expectedPrefix = `${childItemId}::`;
-			const suffix = suboutline.customId.startsWith(expectedPrefix)
-				? suboutline.customId.slice(expectedPrefix.length)
-				: "";
-			if (
-				!suboutline.customId.startsWith(expectedPrefix) ||
-				suffix.length === 0 ||
-				!/^[A-Za-z0-9_-]+$/.test(suffix)
-			) {
+		const normalizedParsed = parsed.flatMap(suboutline => {
+			const normalizedCustomId = normalizeSuboutlineId(childItemId, suboutline.customId);
+			if (!normalizedCustomId) {
 				namespaceViolations.push(
 					`${childItemId} sub-outline CUSTOM_ID must match ${childItemId}::suboutline-id (got ${suboutline.customId})`,
 				);
+				return [];
 			}
-			const existingOwner = ownerBySuboutlineId.get(suboutline.customId);
+			const normalizedSuboutline = {
+				...suboutline,
+				customId: normalizedCustomId,
+				blockers: suboutline.blockers.map(depId => normalizeSuboutlineId(childItemId, depId) ?? depId),
+			};
+			allSuboutlines.push(normalizedSuboutline);
+			const existingOwner = ownerBySuboutlineId.get(normalizedCustomId);
 			if (existingOwner) {
-				duplicateSuboutlineIds.push(`${suboutline.customId} declared in both ${existingOwner} and ${childItemId}`);
-				continue;
+				duplicateSuboutlineIds.push(`${normalizedCustomId} declared in both ${existingOwner} and ${childItemId}`);
+				return [normalizedSuboutline];
 			}
-			ownerBySuboutlineId.set(suboutline.customId, childItemId);
-			suboutlineIdSet.add(suboutline.customId);
-		}
+			ownerBySuboutlineId.set(normalizedCustomId, childItemId);
+			suboutlineIdSet.add(normalizedCustomId);
+			return [normalizedSuboutline];
+		});
+		parsedByChildId.set(childItemId, normalizedParsed);
 	}
 
 	const issues: PlanValidationIssue[] = [];
@@ -195,8 +210,7 @@ export async function validatePlanItem(
 		}
 
 		const missing: string[] = [];
-		if (!childItem.properties.EFFORT) missing.push("EFFORT");
-		if (!childItem.properties.PRIORITY) missing.push("PRIORITY");
+
 		if (!childItem.properties.LAYER) missing.push("LAYER");
 		if (missing.length > 0) {
 			missingProps.push(`${childItemId} missing: ${missing.join(", ")}`);
@@ -224,7 +238,7 @@ export async function validatePlanItem(
 		issues.push(
 			createIssue(
 				"missing-child-properties",
-				"Set EFFORT, PRIORITY, and LAYER on all child items before exiting.",
+				"Set LAYER on all child items before exiting. DEPENDS is recommended for dependency-linked items.",
 				missingProps,
 			),
 		);
@@ -255,6 +269,28 @@ export function formatPlanValidationIssues(planItemId: string, issues: PlanValid
 		return `PLAN item "${planItemId}" is valid.`;
 	}
 
+	const hintByCategory: Record<string, (items: string[]) => string | null> = {
+		"invalid-suboutline-namespace": items => {
+			const first = items[0];
+			if (!first) return null;
+			const match = /^(\S+) sub-outline CUSTOM_ID.*\(got (.+)\)$/.exec(first);
+			if (!match) return "fix: rename CUSTOM_ID to <child-item-id>::<suboutline-id>";
+			const [, childItemId, got] = match;
+			const suffix = got.includes("::") ? got.split("::").slice(1).join("::") : got;
+			if (!/^[A-Za-z0-9_-]+$/.test(suffix)) {
+				return `fix: rename CUSTOM_ID to ${childItemId}::<suboutline-id> using only letters, digits, _ or -`;
+			}
+			return `fix: rename CUSTOM_ID to ${childItemId}::${suffix}`;
+		},
+		"broken-suboutline-depends": () =>
+			"fix: update :DEPENDS: to declared sub-outline CUSTOM_IDs from linked child items.",
+		"missing-suboutline-steps": items =>
+			`fix: add structured sub-headings to ${items[0] ?? "each child item"} with :CUSTOM_ID: ${items[0] ?? "CHILD-ID"}::<slug>`,
+		"missing-child-properties": () =>
+			"fix: add LAYER to each child item before exiting; add DEPENDS when the item depends on other child items.",
+		"broken-child-depends": () => "fix: change top-level DEPENDS values to linked child item CUSTOM_IDs only.",
+	};
+
 	const lines = [`PLAN item "${planItemId}" has ${issues.length} validation issue(s):`];
 	for (const issue of issues) {
 		lines.push("");
@@ -263,6 +299,8 @@ export function formatPlanValidationIssues(planItemId: string, issues: PlanValid
 		for (const item of issue.items) {
 			lines.push(`- ${item}`);
 		}
+		const hint = hintByCategory[issue.category]?.(issue.items);
+		if (hint) lines.push(hint);
 	}
 	return lines.join("\n");
 }

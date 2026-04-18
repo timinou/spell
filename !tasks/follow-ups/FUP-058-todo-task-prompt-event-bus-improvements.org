@@ -1,0 +1,76 @@
+#+TITLE: todo/task prompt + event-bus improvements surfaced from log audit
+#+STATE: ITEM
+#+SESSION_ID: 14bf746abbc2180e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-41-34-703Z_14bf746abbc2180e.jsonl]]
+#+CUSTOM_ID: FUP-058-todo-task-prompt-event-bus-improvements
+#+EFFORT: 4h
+#+LAYER: coding-agent
+#+PRIORITY: #B
+
+* Initial Message
+
+force plan mode approval to inject all the plan files and all its dependencies before the todo is written. also, review the todo/task features and prompts and tell me if you see any improvemetns to be done (compare with recent logs from the sessions using jq to see when tools were aborted and how todo is used vs. what its potential could be as an event bus manager)
+
+* Scope
+
+Follow-up bucket for todo/task-system improvements surfaced while planning FEAT-572/573. Each sub-item is independent and can be picked up in isolation; none blocks FEAT-572/573. Not part of the PLAN-250 execution manifest.
+
+* Observations (context for any implementer)
+
+Measured on 30 recent spell session transcripts (`~/.spell/agent/sessions/-code-ora-spell/*.jsonl`):
+- `todo_write` op mix: 191 `update` / 32 `replace` / 3 `add_task` / 0 `add_group` / 0 `add_phase`.
+- Gate field adoption (22-task sample): gateCmd 55%, gateLlm 59%, blockers 50%, orgItemId 86%, layer 45%, gateCommit 9%, gateArtifact 0%.
+- `todoRef` used in 59 sessions (good adoption).
+- Real aborts (`isError=true, text="Tool execution was aborted"`): 2 today, both user-initiated right before a `todo_write` call that lacked child-item context. Total across 3 weeks: ~30 genuine aborts (vs raw regex false-positives of 100+ from sessions inspecting other sessions).
+
+* Candidate improvements
+
+** Remove or demote `add_phase` legacy alias
+:PROPERTIES:
+:CUSTOM_ID: FUP-todo-01::drop-add-phase
+:END:
+- `add_phase` is documented as a legacy alias for `add_group`. Neither is used in 30 sessions. Either remove from schema or hide from prompt surface.
+- Files: `packages/coding-agent/src/tools/todo-write.ts`, `packages/coding-agent/src/prompts/tools/todo-write.md`.
+
+** Add "first action" rule to plan-mode-approved
+:PROPERTIES:
+:CUSTOM_ID: FUP-todo-01::first-action-rule
+:END:
+- Add directive to `plan-mode-approved.md`: "You MUST emit `todo_write` (or confirm auto-seeded) BEFORE any write-enabled tool call."
+- Today's 2 aborts were triggered by users Ctrl-C-ing agents that skipped this.
+- File: `packages/coding-agent/src/prompts/system/plan-mode-approved.md`.
+
+** Surface gateArtifact in examples (0% usage)
+:PROPERTIES:
+:CUSTOM_ID: FUP-todo-01::gate-artifact-example
+:END:
+- `gateArtifact` is never used. Either it's redundant or the sniper-pattern examples don't illustrate when it adds value.
+- Add one `gated-task` example using `gateArtifact` for a "must produce test output file" task.
+- File: `packages/coding-agent/src/prompts/tools/todo-write.md`.
+
+** Expose `todo:task:status` as extension hook
+:PROPERTIES:
+:CUSTOM_ID: FUP-todo-01::event-hook
+:END:
+- `todo-write.ts::emitTodoGraphEvents` emits `todo:task:status {from,to,taskUri}` on every status change.
+- No extension hook surface consumes it. Add a `post_todo_status` hook to `packages/coding-agent/src/modes/components/hook-*` so `.spell/extensions/*` can react (e.g. auto-run migrations when `orgItemId: SCHEMA-*` completes).
+- Keep backwards-compat: default no-op when no hook registered.
+- Files: `packages/coding-agent/src/tools/todo-write.ts`, `packages/coding-agent/src/modes/components/hook-input.ts` (or equivalent).
+
+** Gate verification as subscriber
+:PROPERTIES:
+:CUSTOM_ID: FUP-todo-01::gate-as-subscriber
+:END:
+- Gate verification currently runs imperatively in `todo-write.ts::execute` on the `update → completed` path. Move to a dedicated subscriber on `todo:task:status` with `pending→completed` transition, keeping the veto via `AbortSignal`. Decouples gate logic from the mutator and allows custom gate plugins.
+- Deferred — only valuable if/when plugin API stabilizes.
+
+** Structured DAG stream for external consumers
+:PROPERTIES:
+:CUSTOM_ID: FUP-todo-01::dag-stream
+:END:
+- `LoopDAG.qml` and `todo-dashboard-bridge.ts` each reconstruct DAG state from `todo:change { groups }`. A `todo:dag:snapshot` event emitted alongside `todo:change` with `{nodes, edges, readyFrontier}` would remove duplicated graph math on the consumer side.
+- File: `packages/coding-agent/src/tools/todo-write.ts::emitTodoGraphEvents`.
+
+* Acceptance Criteria
+
+Each sub-outline is picked up individually. No global acceptance for this FUP container.

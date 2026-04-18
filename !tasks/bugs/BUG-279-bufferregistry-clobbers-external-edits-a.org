@@ -1,0 +1,191 @@
+#+TITLE: BufferRegistry clobbers external edits and serves stale ropes
+#+STATE: DOING
+#+SESSION_ID: 14bf5fdd01b87f1c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-11-46-694Z_14bf5fdd01b87f1c.jsonl]]
+#+CUSTOM_ID: BUG-279-bufferregistry-clobbers-external-edits-a
+#+EFFORT: 3h
+#+LAYER: crates/pi-code-engine
+#+PRIORITY: #A
+
+* Initial Message
+
+use jq to find the recurring reasons why ExitPlanMode fails then explain what you will improve to the system to prevent these errors from happening
+
+* Scope
+
+In: make `pi_code_engine::buffer::BufferRegistry` detect external file
+modifications and (a) reload the rope before serving `open()` when disk is
+newer, (b) refuse `save()` when disk was mutated externally between open
+and save.
+
+Out: file-watcher infrastructure; multi-process coordination; content-hash
+based invalidation (stick with mtime for v1).
+
+* Background
+
+Process-wide singleton `buffer_registry()` caches a `HashMap<PathBuf,
+Arc<Mutex<CodeBuffer>>>`. `BufferRegistry::open()` returns the cached
+`Arc` on hit with no disk check. Every subsequent `executeOrg` /
+`executeCodeBuffer` command operates on the cached rope. `CodeBuffer::
+save()` overwrites disk with the cached rope.
+
+Consequence (demonstrated during planning of PLAN-248):
+
+1. `org create FEAT-564 …` — engine caches rope v1.
+2. External `fs.writeFile(path, fixed)` changes the disk contents.
+3. `org note FEAT-564 "x"` — operates on cached rope v1, `save()`
+   re-writes v1+note to disk, clobbering the external edit.
+4. Every subsequent `executeOrg("parse" | "query" | "validate")` returns
+   results based on rope v1 forever, regardless of actual disk state.
+
+Impact:
+- Any tool that mixes engine writes with non-engine writes silently loses
+  data.
+- `validatePlanItem` sees stale bodies; users cannot recover except by
+  re-opening the whole process.
+
+* Existing patterns
+
+- `crates/pi-code-engine/src/buffer.rs:140-201` — `BufferRegistry`.
+- `crates/pi-code-engine/src/buffer.rs:204-221` — `CodeBuffer::open(path,
+  registry)` reads `fs::metadata(path)` then `fs::read(path)` but does
+  not retain mtime.
+- `crates/pi-code-engine/src/buffer.rs:571-586` — `CodeBuffer::save()`
+  writes `self.source()` unconditionally.
+- `crates/pi-natives/src/lib.rs:36-39` — process-wide `OnceLock<Buffer
+  Registry>`.
+- `crates/pi-natives/src/org_buffer.rs` — 6 call sites using
+  `buffer_registry().open(&path)` (cmd_parse_items, cmd_query,
+  cmd_create_item, cmd_update_item, cmd_append_note, cmd_edit_section).
+- `crates/pi-natives/src/code_buffer.rs:811` — `"open"` command in
+  `execute_code_buffer_inner` uses the same registry.
+
+* Tests (TDD, before impl)
+
+- `crates/pi-code-engine/tests/buffer_external_write.rs` (new):
+  - `open` after `fs::write(path, "v1")` caches "v1".
+  - External `fs::write(path, "v2")` AND `filetime::set_file_mtime` to
+    bump. Next `open` returns rope == "v2", not "v1".
+  - `save` on a buffer whose on-disk mtime advanced beyond last-load
+    mtime returns `Err(CodeEngineError::ExternalModification)`.
+  - Unchanged mtime on reopen returns cached buffer (fast path).
+- `crates/pi-natives/tests/org_external_write.rs` (new, integration):
+  - `executeOrg({command:"createItem", …})` then external overwrite
+    then `executeOrg({command:"parse", …})` returns the overwritten
+    content.
+  - `executeOrg({command:"appendNote", …})` on a file that was
+    externally modified since the last engine-managed save returns
+    an error (does not clobber).
+
+* Implementation
+
+** Track mtime on CodeBuffer
+:PROPERTIES:
+:CUSTOM_ID: BUG-279-bufferregistry-clobbers-external-edits-a::mtime-field
+:END:
+
+- File: `crates/pi-code-engine/src/buffer.rs`
+- Add `disk_mtime: Option<std::time::SystemTime>` to `CodeBuffer`.
+- Populate in `CodeBuffer::open` from `metadata.modified()?`.
+- On `save()`, stat the file first; record the new mtime post-write.
+
+** Revalidate in BufferRegistry::open
+:PROPERTIES:
+:CUSTOM_ID: BUG-279-bufferregistry-clobbers-external-edits-a::registry-revalidate
+:DEPENDS: BUG-279-bufferregistry-clobbers-external-edits-a::mtime-field
+:END:
+
+- File: `crates/pi-code-engine/src/buffer.rs`
+- In `BufferRegistry::open`, after `self.get(path)` hit:
+  - Stat path. If `err.kind() == NotFound` → drop cache entry, fall
+    through to normal open (which will error).
+  - If `metadata.modified()? > buffer.lock().disk_mtime.unwrap_or(
+    UNIX_EPOCH)`, drop the cache entry (write-lock map) and fall
+    through to `CodeBuffer::open`, re-insert, return.
+  - Else return cached Arc.
+- Add `BufferRegistry::reload_if_stale(path)` helper surfaced publicly.
+
+** save() fails on external mutation
+:PROPERTIES:
+:CUSTOM_ID: BUG-279-bufferregistry-clobbers-external-edits-a::save-guard
+:DEPENDS: BUG-279-bufferregistry-clobbers-external-edits-a::mtime-field
+:END:
+
+- File: `crates/pi-code-engine/src/buffer.rs`
+- Before `fs::write`:
+  - Stat the file; if mtime > `self.disk_mtime`, return new error
+    variant `CodeEngineError::ExternalModification { path, disk_mtime,
+    buffer_mtime }`.
+- Callers either handle the error (surface to tool result) or opt into
+  `save_force()` (new method, explicit overwrite for rare cases).
+- Update all in-tree callers: `crates/pi-natives/src/org_buffer.rs`
+  wraps engine errors via `engine_err`, already surfaces as JSON
+  errors; add a specific `code: "EXTERNAL_MODIFICATION"` in
+  `engine_err` for clarity.
+
+** Expose reload command
+:PROPERTIES:
+:CUSTOM_ID: BUG-279-bufferregistry-clobbers-external-edits-a::reload-command
+:DEPENDS: BUG-279-bufferregistry-clobbers-external-edits-a::registry-revalidate
+:END:
+
+- File: `crates/pi-natives/src/code_buffer.rs`
+- Add `"reload"` subcommand that drops and re-opens the buffer for a
+  given path.
+- File: `crates/pi-natives/src/org_buffer.rs`
+- Not needed here because every org command re-opens — the
+  registry-revalidate path covers it.
+
+** Update BufferRegistry tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-279-bufferregistry-clobbers-external-edits-a::unit-tests
+:DEPENDS: BUG-279-bufferregistry-clobbers-external-edits-a::save-guard BUG-279-bufferregistry-clobbers-external-edits-a::registry-revalidate
+:END:
+
+- File: `crates/pi-code-engine/src/buffer.rs` (existing #[cfg(test)]
+  section around L640).
+- Add scenarios enumerated in Tests section above.
+
+* Edge cases
+
+- Filesystems with 1s mtime granularity (ext4 without extended
+  timestamps): two writes in the same second look identical. Guard:
+  on save(), after write, explicitly stamp mtime via
+  `filetime::set_file_mtime(now + 1ns)` OR stash a content hash
+  alongside mtime. For v1 accept the 1s race — document in the error
+  path.
+- Concurrent engine writes to the same path from two threads: already
+  serialized by `Arc<Mutex<CodeBuffer>>`. No change.
+- File deleted externally: `open()` stat fails → drop cache entry →
+  caller receives the underlying IO error (NotFound). Matches fresh
+  open behavior.
+- Very large files: revalidate path must NOT re-read until we confirm
+  mtime bumped. Stat is cheap; read is only on stale.
+
+* Acceptance criteria
+
+- `cargo test -p pi-code-engine buffer_external_write` passes (4 new
+  cases).
+- `cargo test -p pi-natives org_external_write` passes.
+- Reproducing the PLAN-248 authoring sequence (create, external write,
+  note) no longer clobbers external edits; note fails with
+  `EXTERNAL_MODIFICATION`; agent can reload via the new command and
+  retry.
+- `bun check:rs` clean.
+
+* Verification
+
+- Manual: trigger the repro; `executeOrg({command:"appendNote"})` after
+  external write returns `{ error: true, code: "EXTERNAL_
+  MODIFICATION" }`.
+- Running the full PLAN-248 plan after this bug fix lands: `org create`
+  followed by external edits by agent scripts no longer corrupt data.
+
+* Notes
+
+- Found during PLAN-248 authoring (FEAT-564 overwrite repro documented
+  in the PLAN-248 context section).
+- Preferred follow-up: add a fs-notify watcher to invalidate pro-
+  actively — deferred to a separate FUP.
+</parameter>
+</invoke>

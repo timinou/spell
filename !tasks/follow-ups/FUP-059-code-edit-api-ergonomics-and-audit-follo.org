@@ -1,0 +1,28 @@
+#+TITLE: Code edit API ergonomics and audit follow-up
+#+STATE: ITEM
+#+SESSION_ID: 14bf8519411f65df
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-54-27-716Z_14bf8519411f65df.jsonl]]
+#+CUSTOM_ID: FUP-059-code-edit-api-ergonomics-and-audit-follo
+
+* Initial Message
+
+┌──────────────────────────────┬───────────────────────┬─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Action                       │ Target                │ Result                                                                                  │
+ ├──────────────────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+ │ write body-scope, multi-line │ symbol                │ ✓ clean                                                                                 │
+ ├──────────────────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+ │ insertAfter                  │ symbol                │ ✓ clean (drops leading "")                                                              │
+ ├──────────────────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+ │ insertBefore                 │ symbol or line-anchor │ ✗ mangles indentation (over-indents inserted block, strips leading indent of next line) │
+ ├──────────────────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
+ │ findAndReplace w/ dup find   │ file                  │ ✗ ambiguous-match error, no occurrence selector                                         │
+ └──────────────────────────────┴───────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+in File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-18T13-49-35-772Z_14bf83fc273dc16d.jsonl
+ ID: 14bf83fc273dc16d
+
+use jq to find those faulty usages and then reprocuce the bugs here TDD and fix the root cause
+
+Placeholder body; updating immediately with full self-contained plan.

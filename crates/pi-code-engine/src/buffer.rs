@@ -1,23 +1,40 @@
 use std::{
-	collections::HashMap,
 	fs,
 	path::{Path, PathBuf},
 	sync::Arc,
+	time::{Duration, SystemTime},
 };
 
-use parking_lot::{Mutex, RwLock};
+use dashmap::{DashMap, mapref::entry::Entry};
+use parking_lot::Mutex;
 use ropey::{LineType, Rope};
 use tree_sitter::{InputEdit, Parser, Point, Range, Tree};
 
 use crate::{
 	diff::{DiffHunk, diff_lines},
 	error::{CodeEngineError, Result},
+	file_lock::{with_exclusive_lock, with_shared_lock},
 	language::{LanguageId, LanguageRegistry},
+	watcher::FileWatcher,
 };
 
 const MAX_FILE_BYTES: u64 = 100 * 1024 * 1024;
 const BINARY_SAMPLE_BYTES: usize = 8192;
 const PARSE_TIMEOUT_MICROS: u64 = 5_000_000;
+const SAVE_LOCK_BUDGET: Duration = Duration::from_millis(500);
+const REVALIDATE_LOCK_BUDGET: Duration = Duration::from_millis(100);
+
+fn metadata_modified(metadata: &fs::Metadata) -> Option<SystemTime> {
+	metadata.modified().ok()
+}
+
+fn is_newer_mtime(disk_mtime: Option<SystemTime>, buffer_mtime: Option<SystemTime>) -> bool {
+	match (disk_mtime, buffer_mtime) {
+		(Some(disk_mtime), Some(buffer_mtime)) => disk_mtime > buffer_mtime,
+		(Some(_), None) => true,
+		_ => false,
+	}
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextEdit {
@@ -126,77 +143,139 @@ impl History {
 }
 
 pub struct CodeBuffer {
-	rope:     Rope,
-	tree:     Tree,
-	parser:   Parser,
-	language: LanguageId,
-	path:     Option<PathBuf>,
-
-	history: History,
-	version: u64,
-	dirty:   bool,
+	rope:       Rope,
+	tree:       Tree,
+	parser:     Parser,
+	language:   LanguageId,
+	registry:   Arc<LanguageRegistry>,
+	path:       Option<PathBuf>,
+	history:    History,
+	version:    u64,
+	dirty:      bool,
+	disk_mtime: Option<SystemTime>,
 }
 
 pub struct BufferRegistry {
-	buffers:  RwLock<HashMap<PathBuf, Arc<Mutex<CodeBuffer>>>>,
+	buffers:  DashMap<PathBuf, Arc<Mutex<CodeBuffer>>>,
 	registry: Arc<LanguageRegistry>,
+	watcher:  Option<FileWatcher>,
+}
+
+fn registry_key(path: &Path) -> PathBuf {
+	fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
 impl BufferRegistry {
 	pub fn new(registry: Arc<LanguageRegistry>) -> Self {
-		Self { buffers: RwLock::new(HashMap::new()), registry }
+		Self::new_with_watcher(registry, FileWatcher::new().ok())
+	}
+
+	pub fn new_with_watcher(registry: Arc<LanguageRegistry>, watcher: Option<FileWatcher>) -> Self {
+		Self { buffers: DashMap::new(), registry, watcher }
+	}
+
+	pub fn watcher(&self) -> Option<&FileWatcher> {
+		self.watcher.as_ref()
+	}
+
+	pub fn watcher_active(&self) -> bool {
+		self.watcher().is_some_and(FileWatcher::active)
+	}
+
+	pub fn watched_count(&self) -> usize {
+		self.watcher().map_or(0, FileWatcher::watched_count)
+	}
+
+	pub fn is_stale(&self, path: &Path) -> bool {
+		self.watcher().is_some_and(|watcher| watcher.is_stale(path))
 	}
 
 	pub fn open(&self, path: &Path) -> Result<Arc<Mutex<CodeBuffer>>> {
-		if let Some(buffer) = self.get(path) {
-			return Ok(buffer);
-		}
-
-		let mut buffers = self.buffers.write();
-		if let Some(buffer) = buffers.get(path) {
-			return Ok(buffer.clone());
-		}
-
-		let buffer = Arc::new(Mutex::new(CodeBuffer::open(path, self.registry.clone())?));
-		buffers.insert(path.to_path_buf(), buffer.clone());
-		Ok(buffer)
+		self.open_inner(path, false)
 	}
 
 	pub fn open_or_create(&self, path: &Path) -> Result<Arc<Mutex<CodeBuffer>>> {
-		if let Some(buffer) = self.get(path) {
+		self.open_inner(path, true)
+	}
+
+	fn open_inner(&self, path: &Path, allow_create: bool) -> Result<Arc<Mutex<CodeBuffer>>> {
+		let key = registry_key(path);
+		if self
+			.watcher()
+			.is_some_and(|watcher| !watcher.is_stale(&key))
+			&& let Some(buffer) = self.get(&key)
+		{
 			return Ok(buffer);
 		}
-
-		let mut buffers = self.buffers.write();
-		if let Some(buffer) = buffers.get(path) {
-			return Ok(buffer.clone());
+		self.reload_if_stale(&key)?;
+		if let Some(buffer) = self.get(&key) {
+			return Ok(buffer);
 		}
-
-		let buffer = Arc::new(Mutex::new(if path.exists() {
-			CodeBuffer::open(path, self.registry.clone())?
+		let candidate = Arc::new(Mutex::new(if allow_create && !key.exists() {
+			CodeBuffer::create(&key, self.registry.clone())?
 		} else {
-			CodeBuffer::create(path, self.registry.clone())?
+			CodeBuffer::open(&key, self.registry.clone())?
 		}));
-		buffers.insert(path.to_path_buf(), buffer.clone());
-		Ok(buffer)
+		match self.buffers.entry(key.clone()) {
+			Entry::Occupied(entry) => Ok(entry.get().clone()),
+			Entry::Vacant(entry) => {
+				if let Some(watcher) = self.watcher() {
+					let _ = watcher.watch(&key);
+					watcher.clear_stale(&key);
+				}
+				entry.insert(candidate.clone());
+				Ok(candidate)
+			},
+		}
+	}
+
+	pub fn reload_if_stale(&self, path: &Path) -> Result<()> {
+		let key = registry_key(path);
+		if self.watcher().is_some_and(|watcher| watcher.is_stale(&key)) {
+			self.close(&key)?;
+			if let Some(watcher) = self.watcher() {
+				watcher.clear_stale(&key);
+			}
+			return Ok(());
+		}
+		let Some(buffer) = self.get(&key) else {
+			return Ok(());
+		};
+		let should_close = with_shared_lock(&key, REVALIDATE_LOCK_BUDGET, || {
+			let disk_mtime = match fs::metadata(&key) {
+				Ok(metadata) => metadata_modified(&metadata),
+				Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+				Err(error) => return Err(error.into()),
+			};
+			let guard = buffer.lock();
+			Ok(!guard.dirty && is_newer_mtime(disk_mtime, guard.disk_mtime))
+		})?;
+		if should_close {
+			self.close(&key)?;
+		}
+		Ok(())
 	}
 
 	pub fn close(&self, path: &Path) -> Result<()> {
-		self.buffers.write().remove(path);
+		let key = registry_key(path);
+		self.buffers.remove(&key);
+		if let Some(watcher) = self.watcher() {
+			let _ = watcher.unwatch(&key);
+		}
 		Ok(())
 	}
 
 	pub fn list(&self) -> Vec<BufferInfo> {
 		self
 			.buffers
-			.read()
-			.values()
-			.map(|buffer| buffer.lock().info())
+			.iter()
+			.map(|entry| entry.value().lock().info())
 			.collect()
 	}
 
 	pub fn get(&self, path: &Path) -> Option<Arc<Mutex<CodeBuffer>>> {
-		self.buffers.read().get(path).cloned()
+		let key = registry_key(path);
+		self.buffers.get(&key).map(|entry| entry.value().clone())
 	}
 }
 
@@ -206,6 +285,7 @@ impl CodeBuffer {
 		if metadata.len() > MAX_FILE_BYTES {
 			return Err(CodeEngineError::Buffer(format!("file too large: {} bytes", metadata.len())));
 		}
+		let disk_mtime = metadata_modified(&metadata);
 		let bytes = fs::read(path)?;
 		if bytes
 			.iter()
@@ -217,12 +297,12 @@ impl CodeBuffer {
 		let source = String::from_utf8(bytes)
 			.map_err(|err| CodeEngineError::Buffer(format!("invalid utf-8: {err}")))?;
 		let language = Self::language_for_path(path, registry.as_ref())?;
-		Self::from_str_with_path(source, language, registry, Some(path.to_path_buf()))
+		Self::from_str_with_path(source, language, registry, Some(path.to_path_buf()), disk_mtime)
 	}
 
 	pub fn create(path: &Path, registry: Arc<LanguageRegistry>) -> Result<Self> {
 		let language = Self::language_for_create_path(path, registry.as_ref());
-		Self::from_str_with_path(String::new(), language, registry, Some(path.to_path_buf()))
+		Self::from_str_with_path(String::new(), language, registry, Some(path.to_path_buf()), None)
 	}
 
 	fn language_for_path(path: &Path, registry: &LanguageRegistry) -> Result<LanguageId> {
@@ -253,7 +333,7 @@ impl CodeBuffer {
 		language_id: LanguageId,
 		registry: Arc<LanguageRegistry>,
 	) -> Result<Self> {
-		Self::from_str_with_path(source.to_string(), language_id, registry, None)
+		Self::from_str_with_path(source.to_string(), language_id, registry, None, None)
 	}
 
 	#[allow(
@@ -266,6 +346,7 @@ impl CodeBuffer {
 		language_id: LanguageId,
 		registry: Arc<LanguageRegistry>,
 		path: Option<PathBuf>,
+		disk_mtime: Option<SystemTime>,
 	) -> Result<Self> {
 		let profile = registry
 			.get(&language_id)
@@ -283,10 +364,12 @@ impl CodeBuffer {
 			tree,
 			parser,
 			language: language_id,
+			registry,
 			path,
 			history: History::new(),
 			version: 0,
 			dirty: false,
+			disk_mtime,
 		})
 	}
 
@@ -569,17 +652,42 @@ impl CodeBuffer {
 	}
 
 	pub fn save(&mut self) -> Result<()> {
+		self.save_with_watcher(None)
+	}
+
+	pub fn save_with_watcher(&mut self, watcher: Option<&FileWatcher>) -> Result<()> {
 		let path = self
 			.path
 			.as_ref()
-			.ok_or_else(|| CodeEngineError::Buffer("buffer has no path".to_string()))?;
+			.ok_or_else(|| CodeEngineError::Buffer("buffer has no path".to_string()))?
+			.clone();
 		if let Some(parent) = path
 			.parent()
 			.filter(|parent| !parent.as_os_str().is_empty())
 		{
 			fs::create_dir_all(parent)?;
 		}
-		fs::write(path, self.source())?;
+		let source = self.source();
+		let disk_mtime = with_exclusive_lock(&path, SAVE_LOCK_BUDGET, || {
+			if let Ok(metadata) = fs::metadata(&path) {
+				let disk_mtime = metadata_modified(&metadata);
+				if is_newer_mtime(disk_mtime, self.disk_mtime) {
+					return Err(CodeEngineError::ExternalModification {
+						path: path.clone(),
+						disk_mtime,
+						buffer_mtime: self.disk_mtime,
+					});
+				}
+			}
+			fs::write(&path, &source)?;
+			Ok(fs::metadata(&path)
+				.ok()
+				.and_then(|metadata| metadata_modified(&metadata)))
+		})?;
+		if let Some(watcher) = watcher {
+			watcher.mark_self_write(&path, disk_mtime);
+		}
+		self.disk_mtime = disk_mtime;
 		self.history.mark_saved();
 		self.dirty = false;
 		Ok(())
@@ -595,6 +703,10 @@ impl CodeBuffer {
 
 	pub const fn tree(&self) -> &Tree {
 		&self.tree
+	}
+
+	pub fn registry(&self) -> &Arc<LanguageRegistry> {
+		&self.registry
 	}
 
 	pub const fn version(&self) -> u64 {
@@ -639,6 +751,8 @@ mod tests {
 		sync::Arc,
 		time::{SystemTime, UNIX_EPOCH},
 	};
+
+	use filetime::{FileTime, set_file_mtime};
 
 	use super::*;
 
@@ -1079,5 +1193,62 @@ mod tests {
 		assert!(err.to_string().contains("overlap"));
 		assert_eq!(buffer.source(), "abcdef");
 		assert_eq!(buffer.version(), 0);
+	}
+
+	#[test]
+	fn buffer_external_write_reuses_cached_buffer_when_disk_unchanged() {
+		let path = temp_path("registry-stable.ts");
+		fs::write(&path, "export const value = 1;\n").expect("write fixture");
+		let reg = BufferRegistry::new(registry());
+		let first = reg.open(&path).expect("open first");
+		let second = reg.open(&path).expect("open second");
+		assert!(Arc::ptr_eq(&first, &second));
+	}
+
+	#[test]
+	fn buffer_external_write_reloads_after_disk_change() {
+		let path = temp_path("registry-external-write.ts");
+		fs::write(&path, "export const value = 1;\n").expect("write fixture");
+		let reg = BufferRegistry::new(registry());
+		let first = reg.open(&path).expect("open first");
+		assert_eq!(first.lock().source(), "export const value = 1;\n");
+
+		fs::write(&path, "export const value = 2;\n").expect("external write");
+		let bumped =
+			FileTime::from_system_time(SystemTime::now() + std::time::Duration::from_secs(1));
+		set_file_mtime(&path, bumped).expect("bump mtime");
+
+		let second = reg.open(&path).expect("open second");
+		assert!(!Arc::ptr_eq(&first, &second));
+		assert_eq!(second.lock().source(), "export const value = 2;\n");
+	}
+
+	#[test]
+	fn buffer_external_write_save_reports_external_modification() {
+		let path = temp_path("save-external-write.ts");
+		fs::write(&path, "export const value = 1;\n").expect("write fixture");
+		let mut buffer = CodeBuffer::open(&path, registry()).expect("open");
+		let end = buffer.source().len();
+		buffer
+			.edit(TextEdit {
+				start_byte:   end,
+				old_end_byte: end,
+				new_text:     "export const local = 2;\n".into(),
+			})
+			.expect("edit");
+
+		fs::write(&path, "export const value = 99;\n").expect("external write");
+		let bumped =
+			FileTime::from_system_time(SystemTime::now() + std::time::Duration::from_secs(1));
+		set_file_mtime(&path, bumped).expect("bump mtime");
+
+		let err = buffer.save().expect_err("reject external modification");
+		match err {
+			CodeEngineError::ExternalModification { path: error_path, .. } => {
+				assert_eq!(error_path, path);
+			},
+			other => panic!("expected external modification, got {other:?}"),
+		}
+		assert_eq!(fs::read_to_string(&path).expect("read disk"), "export const value = 99;\n");
 	}
 }

@@ -86,7 +86,7 @@ Note any dimension that was not explicitly resolved.
 ## OBSERVATIONS
 - What the DAG looks like: critical path, parallelism opportunities
 - Category distribution, effort balance
-- Per-item notes tagged with relevant dimension: [CATEGORY], [SCOPE], [DEPENDENCY], [EFFORT], [ACCEPTANCE], [COLD-START], [DAG]
+- Per-item notes tagged with relevant dimension: [CATEGORY], [SCOPE], [DEPENDENCY], [ESTIMATE], [ACCEPTANCE], [COLD-START], [DAG]
 
 ## SUGGESTIONS
 - Specific improvements: scope overlap, missing deps, effort imbalance

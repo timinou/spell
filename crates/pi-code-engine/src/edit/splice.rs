@@ -15,9 +15,14 @@ pub enum SpliceMode {
 	Down,
 }
 
-pub fn splice_node(buffer: &CodeBuffer, line: usize, mode: SpliceMode) -> Result<Vec<TextEdit>> {
+pub fn splice_node(
+	buffer: &CodeBuffer,
+	line: usize,
+	mode: SpliceMode,
+	within: Option<(usize, usize)>,
+) -> Result<Vec<TextEdit>> {
 	let source = buffer.source();
-	let node = node_at_line(buffer, line)?;
+	let node = node_at_line(buffer, line, within)?;
 	let parent = node
 		.parent()
 		.ok_or_else(|| CodeEngineError::Edit(format!("No parent node at line {line}")))?;
@@ -45,7 +50,6 @@ pub fn splice_node(buffer: &CodeBuffer, line: usize, mode: SpliceMode) -> Result
 		}
 	}
 
-	// Adjust indentation from node level to parent level
 	let adjusted = adjust_indent(&kept, node_indent_col, parent_indent);
 
 	Ok(vec![TextEdit {

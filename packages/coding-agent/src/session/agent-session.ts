@@ -419,6 +419,7 @@ export class AgentSession {
 	#planModeState: PlanModeState | undefined;
 	#planReferenceSent = false;
 	#planReferencePath = "local://PLAN.md";
+	#lastApprovedPlan: { itemId?: string; title: string; finalPlanFilePath: string } | undefined;
 
 	// Audit state
 	#auditState: AuditState = { type: "audit", pending: false, active: false };
@@ -2071,6 +2072,14 @@ export class AgentSession {
 			this.#planReferenceSent = false;
 			this.#planReferencePath = state.planFilePath;
 		}
+	}
+
+	recordLastApprovedPlan(plan: { itemId?: string; title: string; finalPlanFilePath: string }): void {
+		this.#lastApprovedPlan = plan;
+	}
+
+	getLastApprovedPlan(): { itemId?: string; title: string; finalPlanFilePath: string } | undefined {
+		return this.#lastApprovedPlan;
 	}
 
 	markPlanReferenceSent(): void {

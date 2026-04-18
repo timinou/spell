@@ -1,0 +1,151 @@
+#+TITLE: Route Write tool through managed code buffer for supported files
+#+STATE: ITEM
+#+SESSION_ID: 14bf802b83dfefdd
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-32-55-695Z_14bf802b83dfefdd.jsonl]]
+#+CUSTOM_ID: FEAT-574-route-write-tool-through-managed-code-bu
+#+DEPENDS: 
+#+EFFORT: 4h
+#+LAYER: tools
+#+PRIORITY: #B
+
+* Initial Message
+
+✘ Write: 📝 specs/code-graph/code-path.md
+ ✘ Error: The write tool is blocked for code-supported files (TypeScript, Rust, Python, HTML, CSS, Typst, Markdown, Org, and Elixir). Use code
+ edit { operations: [{ targetId: "specs/code-graph/code-path.md", actions: [{ kind: "write", content: ["..."] }] }] } instead. If the
+ structural edit fails, re-read or navigate, tighten the target, and retry code edit.
+
+
+
+ then write another file for the dialects in step 6. give me a summary of each in chat before so that I validate the approach before writing
+ the full files
+
+
+
+^^^^^ make the Write tool like a file-wide edit or remove it entirely
+
+* Scope
+- In scope: change =packages/coding-agent/src/tools/write.ts= so that when the target path is code-supported (per =isCodeToolSupportedPath=), the Write tool auto-routes through the managed code buffer (=applyManagedBufferContent(abs, content, { create: true })= + =invalidateFsScanAfterWrite=) instead of hard-failing. Unsupported files keep the current =createLspWritethrough= path untouched.
+- In scope: extract =applyManagedBufferContent=, =ensureManagedBufferFresh=, =invalidateManagedCodeBuffersForPaths= from =packages/coding-agent/src/patch/index.ts= into a shared module =packages/coding-agent/src/tools/managed-code-buffer.ts=; update =patch/index.ts= to import from there. Zero behavior change for the edit path.
+- In scope: rewrite =packages/coding-agent/src/prompts/tools/write.md= so the prompt no longer instructs the agent to redirect to =code edit= for supported files; the tool becomes file-type-agnostic from the agent's point of view.
+- In scope: add =CHANGELOG.md= entry under =[Unreleased]= =### Changed= in =packages/coding-agent/CHANGELOG.md=.
+- In scope: test coverage in =packages/coding-agent/test/tools.test.ts= (new-file code write, overwrite code write, non-code passthrough unchanged, managed buffer freshness after write).
+- Out of scope: removing the Write tool, removing its extensibility exports (=WriteToolInput=, =WriteToolCallEvent=, =WriteToolResultEvent=), touching QML canvas =_tool: "write"= surfaces, or changing =bash-interceptor= rules. Those remain untouched.
+- Out of scope: changing =edit= behavior, touching notebook handling (=.ipynb= still blocked), altering =enforceModeWrite=/sandbox gating, or broadening the supported-extension set.
+- Out of scope: environment-gated behavior (=SPELL_ALLOW_TEXT_EDIT_ON_CODE=) — leave as-is.
+- Rationale: unblocks the common workflow where Write on markdown/org spec files fails with a redirect error. Mirrors =BUG-265= pattern that already transparently routes =edit= through the managed buffer for text files. Satisfies FEAT-539's "one persistence lifecycle" principle by finally extending it to Write.
+
+* Existing Patterns
+- =BUG-265= established pattern: =edit= on text/code files routes through =applyManagedBufferContent= to share the =code= tool's persistence lifecycle (managed buffer + save). Apply the identical pattern to =write=.
+- =packages/coding-agent/src/patch/index.ts:129-144= — =applyManagedBufferContent(file, content, { create })=: calls =executeCodeBuffer({ command: "edit", root: process.cwd(), operations: [{ targetId: file, actions: [{ kind: "write", content }] }] })= when =create= is true, else =executeCodeBuffer({ command: "replace_content", file, content })=; then =executeCodeBuffer({ command: "save", file })=. Throws with actionable messages on NAPI error.
+- =packages/coding-agent/src/patch/index.ts:102-112= — =invalidateManagedCodeBuffersForPaths(paths)=: closes managed buffers after out-of-band writes.
+- =packages/coding-agent/src/patch/index.ts:114-127= — =ensureManagedBufferFresh(file)=: asserts no stale hunks before mutation.
+- =packages/coding-agent/src/tools/fs-cache-invalidation.ts= — =invalidateFsScanAfterWrite(abs)= signature already used by the current Write tool.
+- =packages/coding-agent/src/tools/code-supported-files.ts:72= — =isCodeToolSupportedPath(file)=: single source of truth for the supported extension set.
+- =packages/coding-agent/src/tools/mode-guard.ts= — =enforceModeWrite(session, path, { op: "create" })= and =resolvePlanPath(session, path)=: keep using these unchanged.
+- =packages/coding-agent/src/sandbox.ts= — =enforcePathWrite(path, cwd, policy)=: keep unchanged.
+- =packages/coding-agent/src/lsp.ts= — =createLspWritethrough(cwd, { enableFormat, enableDiagnostics })= + =writethroughNoop=: retain for the non-code-supported branch.
+- Extensibility: =packages/coding-agent/src/extensibility/extensions/types.ts= (=WriteToolInput=, =WriteToolCallEvent=, =WriteToolResultEvent=) and =packages/coding-agent/src/extensibility/hooks/types.ts= — keep exported; no API change.
+- Renderer/tests: =writeToolRenderer= (=packages/coding-agent/src/tools/write.ts:222=), =packages/coding-agent/test/tools/write-renderer.test.ts=, =packages/coding-agent/test/tools/tool-cwd-move-integration.test.ts= — untouched.
+- Prompt: =packages/coding-agent/src/prompts/tools/write.md= — rewrite.
+
+* Tests
+All tests live in =packages/coding-agent/test/tools.test.ts= (existing file, existing =createTestToolSession= + =wrapToolWithMetaNotice(new WriteTool(session))= fixtures; add a new =describe= block).
+
+- W1 (new-file code write): Write on a non-existent =.ts= path in the test cwd → result =content[0].text= starts with ="Successfully wrote"=, the file exists on disk with the exact bytes written, and =executeCodeBuffer({ command: "diff", file })= reports zero stale hunks (buffer matches disk). Replaces any prior expectation that Write returns a redirect error.
+- W2 (overwrite code write): Pre-create a =.ts= file on disk, then Write new content to the same path → success; =Bun.file(abs).text()= returns the new content; managed-buffer diff zero hunks.
+- W3 (non-code passthrough): Write on =.txt=, =.yaml=, =.json=, =.kdl= → success, file written via existing =createLspWritethrough= path, no call to =executeCodeBuffer= for content persistence (asserted via a spy/mock or by checking that =executeCodeBuffer= is not invoked with =command: "edit"= for that path).
+- W4 (prompt-write alignment): Write on =.md= (the original failure case that motivated this refactor) succeeds and writes the content byte-for-byte to disk.
+- W5 (no extraneous diagnostics on create path): When writing through the managed buffer, =result.details=.diagnostics=== is =undefined= (matches existing edit-tool in-place =applyManagedBufferContent= behavior; diagnostics are not collected on this path). No assertion on =details.meta= beyond its presence.
+- W6 (Jupyter still blocked): Write on =.ipynb= → error still thrown (notebook tool required). This keeps the single-purpose gating that already exists in the codebase — =.ipynb= is not in =isCodeToolSupportedPath=; today it falls into the writethrough path; preserve current behavior (do not introduce new =.ipynb= handling in Write). If current behavior is "write succeeds", retain it; if it errors, retain it. No regression.
+- W7 (sandbox + mode-guard ordering): Write on a plan-mode-disallowed path → throws from =enforceModeWrite= before any buffer logic runs. Write with a =sandbox= violation → throws from =enforcePathWrite=. Both unchanged from today.
+- W8 (cwd refresh): =packages/coding-agent/test/tools/tool-cwd-move-integration.test.ts= continues to pass; Write on =.txt= under a moved session cwd still writes to the moved cwd. No edit needed here; verify only.
+
+Acceptance check: all workflows that previously failed with the "Use =code edit=" message now succeed for code-supported text files (ts/tsx/js/jsx/mjs/cjs/mts/cts/rs/py/pyi/html/htm/css/typ/md/mdx/markdown/org/ex/exs), exercised via at least one parameterized case spanning =.ts=, =.md=, =.org=, =.py=, =.rs=.
+
+* Implementation
+** Extract managed-buffer helpers into a shared module
+:PROPERTIES:
+:CUSTOM_ID: FEAT-574-route-write-tool-through-managed-code-bu::extract-helpers
+:END:
+- New file: =packages/coding-agent/src/tools/managed-code-buffer.ts=.
+- Move (verbatim, zero behavior change) these three functions and their small collaborators from =packages/coding-agent/src/patch/index.ts=:
+  - =invalidateManagedCodeBuffersForPaths(paths: string[]): void=
+  - =ensureManagedBufferFresh(file: string): void=
+  - =applyManagedBufferContent(file: string, content: string, options: { create: boolean }): void=
+- Also move the private helpers they use from =patch/index.ts=: =extractCodeToolErrorMessage=, =countBufferDiffHunks=. Export them from =managed-code-buffer.ts=.
+- Update =patch/index.ts= to =import { applyManagedBufferContent, ensureManagedBufferFresh, invalidateManagedCodeBuffersForPaths, extractCodeToolErrorMessage } from "../tools/managed-code-buffer"=. Remove the local definitions. Do not change any call sites in =patch/index.ts=.
+- =managed-code-buffer.ts= imports =executeCodeBuffer= from =@oh-my-pi/pi-natives= and =isAbsolute= from =node:path=.
+- Keep the exact error messages verbatim ("Edit succeeded on disk, but failed to invalidate…", "Unable to verify buffer freshness…", "Stale code buffer detected…", "Managed code buffer update failed…", "Managed code buffer save failed…") — these appear in user-visible error strings and may be asserted by hook/extension consumers or tests.
+
+** Write failing tests (before touching =write.ts=)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-574-route-write-tool-through-managed-code-bu::write-tests
+:DEPENDS: FEAT-574-route-write-tool-through-managed-code-bu::extract-helpers
+:END:
+- Extend =packages/coding-agent/test/tools.test.ts= with a new =describe("WriteTool code-supported routing", …)= block covering W1–W7 from the Tests section above. Reuse existing =createTestToolSession=, =readTool=, =writeTool= fixtures.
+- For W3, assert the non-code path by checking that a =.txt= file is written via =Bun.file(abs).text()= and the managed-buffer diff query for a =.ts= file is still populated only after a code-supported Write (contrasting the two paths). Alternatively (simpler): after writing =.txt=, call =executeCodeBuffer({ command: "list" })= and assert the =.txt= path does not appear among managed buffers; after writing =.ts=, it does.
+- Run =bun test packages/coding-agent/test/tools.test.ts=; confirm W1/W2/W4/W5 fail with the current =codeToolRedirectMessage=.
+
+** Update =WriteTool.execute= to branch on code-supported path
+:PROPERTIES:
+:CUSTOM_ID: FEAT-574-route-write-tool-through-managed-code-bu::route-supported
+:DEPENDS: FEAT-574-route-write-tool-through-managed-code-bu::write-tests
+:END:
+- File: =packages/coding-agent/src/tools/write.ts=.
+- Delete lines ~107–111 (the =isCodeToolSupportedPath= hard-fail branch and its =describeCodeToolSupportedFiles= redirect message).
+- Import: add =import { applyManagedBufferContent } from "./managed-code-buffer"=.
+- Within =execute=, after =enforceModeWrite= + =enforcePathWrite= + =resolvePlanPath=:
+  - If =isCodeToolSupportedPath(absolutePath) && !process.env.SPELL_ALLOW_TEXT_EDIT_ON_CODE=:
+    - Call =applyManagedBufferContent(absolutePath, content, { create: true })=. =create: true= is the correct flag for Write's "overwrite-or-create whole file" semantic; the underlying =code edit kind:"write"= action is idempotent regardless of prior existence.
+    - Call =invalidateFsScanAfterWrite(absolutePath)=.
+    - Return ={ content: [{ type: "text", text: resultText }], details: {} }= where =resultText === `Successfully wrote ${content.length} bytes to ${path}`= to preserve today's success-line format.
+  - Else (unsupported): keep today's =this.#getWritethrough()= + =writethrough(absolutePath, content, signal, undefined, batchRequest)= + =invalidateFsScanAfterWrite= + diagnostics-populated details. No change to that branch.
+- Remove the =describeCodeToolSupportedFiles= import if it becomes unused. Keep =isCodeToolSupportedPath=.
+- =LSP_BATCH_TOOLS= and =getLspBatchRequest= remain relevant for the unsupported branch; leave them.
+- =nonAbortable = true= and =concurrency = "exclusive"= remain.
+- Do not change =WriteTool='s constructor, =#createWritethrough=, =#getWritethrough=, or the =writeToolRenderer=.
+
+** Rewrite =prompts/tools/write.md=
+:PROPERTIES:
+:CUSTOM_ID: FEAT-574-route-write-tool-through-managed-code-bu::prompt
+:DEPENDS: FEAT-574-route-write-tool-through-managed-code-bu::route-supported
+:END:
+- File: =packages/coding-agent/src/prompts/tools/write.md=.
+- Remove the =<critical>= bullet that instructs agents to use =code edit= for code-supported files. Remove the =<anti-patterns>= block that disallows Write for incremental source edits (unchanged guidance — still true — but belongs on =code.md= not here).
+- New content shape (terse, matches existing prompt style):
+  - Opening line: "Creates or overwrites a file. Works for any file type."
+  - =<conditions>=: "Use for new files or full-file replacements. For incremental edits to an existing file, use =code edit= (structural) or =edit= (textual)."
+  - =<instruction>=: "Do not create documentation files unless explicitly requested. Do not use emojis unless requested."
+  - Remove the file-extension enumeration; the tool now handles every path =isCodeToolSupportedPath= would accept plus any other text file.
+- Keep the prompt under ~15 lines.
+- Do not modify other prompts (=patch.md=, =replace.md=, =hashline.md=, =code.md=) — their guidance remains accurate for their tools.
+
+** CHANGELOG entry
+:PROPERTIES:
+:CUSTOM_ID: FEAT-574-route-write-tool-through-managed-code-bu::changelog
+:DEPENDS: FEAT-574-route-write-tool-through-managed-code-bu::route-supported
+:END:
+- File: =packages/coding-agent/CHANGELOG.md=.
+- Under =## [Unreleased]=, add to =### Changed=: "Write tool now routes code-supported files through the managed code buffer (same lifecycle as =code edit=), removing the redirect-to-=code edit= error. Non-code files continue to use the LSP writethrough path." Link to the originating session/issue only if the user supplies one; otherwise no attribution.
+- Do not create a release; =bun run release= is forbidden during plan execution.
+* Edge Cases
+- =.ipynb= is not in =isCodeToolSupportedPath=; the file currently flows through =createLspWritethrough=. Preserve that behavior. Add a W6 test pinning it.
+- Concurrent writes: =concurrency = "exclusive"= on =WriteTool= already serializes; no new race surface.
+- Managed buffer was opened read-only earlier in the session and then Written: =applyManagedBufferContent= with =create: true= calls =executeCodeBuffer { command: "edit", ... kind: "write" }= which overwrites the managed buffer's content unconditionally, then saves. If the buffer had pending unsaved edits, they are clobbered — this matches today's Write semantic ("overwrite the file") and does not regress =edit='s BUG-265 invariant.
+- NAPI error from =applyManagedBufferContent=: propagates the existing error messages ("Managed code buffer update failed…", "Managed code buffer save failed…"). These are actionable and already appear elsewhere from =edit=; do not re-wrap.
+- =SPELL_ALLOW_TEXT_EDIT_ON_CODE=: when set, code-supported path falls through to the LSP writethrough branch exactly as today. Preserve.
+- =resolvePlanPath= may translate a relative path under plan mode; continue to pass the resolved absolute path to =applyManagedBufferContent=.
+- =enforceModeWrite= already runs before any buffer logic; plan-mode file gating remains authoritative.
+- Sandbox policy rejections still fire first; no change in error ordering.
+- If =applyManagedBufferContent= throws after a partial on-disk write, the error bubbles verbatim; we rely on the existing =patch/index.ts= semantics (it throws "Edit succeeded on disk, but failed to invalidate…" — the exact same class of partial-failure the =edit= tool tolerates).
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/tools.test.ts packages/coding-agent/test/tools/write-renderer.test.ts packages/coding-agent/test/tools/tool-cwd-move-integration.test.ts= passes, including the new W1–W7 cases.
+- =bun check:ts= clean.
+- =bun lint:ts= clean.
+- Manual: invoking Write on =specs/code-graph/code-path.md= (the scenario that motivated this work) from an agent succeeds and the file lands on disk with the exact content.
+- =code read= on the written code-supported file immediately reflects the new content (managed buffer fresh).
+- No changes to extensibility types, hooks types, QML panels, canvas prompt, bash-interceptor, renderer, or the tool registration in =packages/coding-agent/src/tools/index.ts=.
+- =packages/coding-agent/src/patch/index.ts= imports the three helpers from the new =managed-code-buffer= module; edit tool behavior unchanged (spot-check by running the edit-related tests already in =tools.test.ts=).
+- =CHANGELOG.md= has an entry under =[Unreleased] ### Changed=.

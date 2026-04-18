@@ -54,7 +54,7 @@ pub fn navigate(
 	column: Option<u32>,
 	symbol: Option<&str>,
 ) -> Result<NavigateResult> {
-	let target = resolve_line_target(buffer, line, column)?;
+	let target = resolve_line_target(buffer, line, column, None)?;
 	let node = target.raw;
 	match action {
 		NavigateAction::NodeAt => Ok(node_result(buffer, node)),
@@ -78,7 +78,7 @@ fn result_for_node(
 	name: Option<String>,
 	kind: Option<String>,
 ) -> NavigateResult {
-	let editable_scope = editable_scope_for_node(node);
+	let editable_scope = editable_scope_for_node(node, None);
 	NavigateResult {
 		node_type: node.kind().to_string(),
 		text: first_line(&node_text(buffer, node), 80),

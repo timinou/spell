@@ -1,20 +1,16 @@
-import type { ManifestSnapshot, ManifestTicket } from "../types";
+import type { ManifestSnapshot } from "../types";
 import type { DependencyGraph } from "./org-depend";
 
 export interface MomusInput {
 	manifestSummary: {
 		version: number;
 		ticketCount: number;
-		totalEffort: string;
-		priorityDistribution: Record<string, number>;
 		layerDistribution: Record<string, number>;
 	};
 	tickets: Array<{
 		id: string;
 		title: string;
 		state: string;
-		effort?: string;
-		priority?: string;
 		dependencyCount: number;
 		gateCount: number;
 		hasAcceptanceCriteria: boolean;
@@ -30,65 +26,6 @@ export interface MomusInput {
 		gateTypeDistribution: Record<string, number>;
 	};
 	warnings: string[];
-}
-
-/** Sum org duration strings like "2h", "30min", "1d". Returns concatenated form for mixed units. */
-function sumEffort(tickets: ManifestTicket[]): string {
-	let totalMinutes = 0;
-	let hasUnparseable = false;
-
-	for (const t of tickets) {
-		if (!t.effort) continue;
-		const parsed = parseEffortToMinutes(t.effort);
-		if (parsed === undefined) {
-			hasUnparseable = true;
-		} else {
-			totalMinutes += parsed;
-		}
-	}
-
-	if (totalMinutes === 0 && !hasUnparseable) return "0";
-	if (hasUnparseable) {
-		// Fall back to concatenation when we can't parse everything
-		const parts = tickets.filter(t => t.effort).map(t => t.effort!);
-		return parts.join(" + ");
-	}
-
-	// Format back to human-readable
-	const hours = Math.floor(totalMinutes / 60);
-	const mins = totalMinutes % 60;
-	if (hours === 0) return `${mins}min`;
-	if (mins === 0) return `${hours}h`;
-	return `${hours}h${mins}min`;
-}
-
-function parseEffortToMinutes(effort: string): number | undefined {
-	// Match patterns like "2h", "30min", "1d", "1h30min", "2:30"
-	let total = 0;
-	let matched = false;
-
-	// "Xd" days
-	const dayMatch = /(\d+)d/i.exec(effort);
-	if (dayMatch) {
-		total += Number.parseInt(dayMatch[1], 10) * 480; // 8h workday
-		matched = true;
-	}
-
-	// "Xh" hours
-	const hourMatch = /(\d+)h/i.exec(effort);
-	if (hourMatch) {
-		total += Number.parseInt(hourMatch[1], 10) * 60;
-		matched = true;
-	}
-
-	// "Xmin" minutes
-	const minMatch = /(\d+)min/i.exec(effort);
-	if (minMatch) {
-		total += Number.parseInt(minMatch[1], 10);
-		matched = true;
-	}
-
-	return matched ? total : undefined;
 }
 
 /**
@@ -166,13 +103,9 @@ export function buildMomusInput(manifest: ManifestSnapshot, graph: DependencyGra
 	const { tickets } = manifest;
 
 	// -- manifestSummary --
-	const priorityDistribution: Record<string, number> = {};
 	const layerDistribution: Record<string, number> = {};
 
 	for (const t of tickets) {
-		if (t.priority) {
-			priorityDistribution[t.priority] = (priorityDistribution[t.priority] ?? 0) + 1;
-		}
 		if (t.layer) {
 			layerDistribution[t.layer] = (layerDistribution[t.layer] ?? 0) + 1;
 		}
@@ -181,8 +114,6 @@ export function buildMomusInput(manifest: ManifestSnapshot, graph: DependencyGra
 	const manifestSummary = {
 		version: manifest.version,
 		ticketCount: tickets.length,
-		totalEffort: sumEffort(tickets),
-		priorityDistribution,
 		layerDistribution,
 	};
 
@@ -191,8 +122,6 @@ export function buildMomusInput(manifest: ManifestSnapshot, graph: DependencyGra
 		id: t.id,
 		title: t.title,
 		state: t.state,
-		effort: t.effort,
-		priority: t.priority,
 		dependencyCount: t.dependencies.length,
 		gateCount: t.gates.length,
 		hasAcceptanceCriteria: t.acceptanceCriteria.length > 0,
@@ -240,24 +169,6 @@ export function buildMomusInput(manifest: ManifestSnapshot, graph: DependencyGra
 		}
 		if (t.gates.length === 0) {
 			warnings.push(`Ticket ${t.id} has no gates defined`);
-		}
-		if (!t.priority) {
-			warnings.push(`Ticket ${t.id} has no priority assigned`);
-		}
-	}
-
-	// High-effort tickets without decomposition (no child dependencies)
-	const highEffortThreshold = 480; // 8h / 1d
-	for (const t of tickets) {
-		if (!t.effort) continue;
-		const mins = parseEffortToMinutes(t.effort);
-		if (mins !== undefined && mins >= highEffortThreshold) {
-			const hasChildren = edges.some(e => e.from === t.id);
-			if (!hasChildren) {
-				warnings.push(
-					`Ticket ${t.id} has high effort (${t.effort}) but no sub-tasks depend on it — consider decomposition`,
-				);
-			}
 		}
 	}
 

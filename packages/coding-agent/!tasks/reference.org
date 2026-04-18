@@ -23,8 +23,6 @@ Example: PROJ-001-implement-feature
 
 Every task heading MUST have:
 - CUSTOM_ID: Unique task ID (e.g. PROJ-001-example)
-- EFFORT: Time estimate (e.g. 2h, 30m)
-- PRIORITY: #A (high), #B (medium), #C (low)
 
 ** Recommended Properties
 
@@ -46,8 +44,6 @@ Every task heading MUST have:
 * ITEM PROJ-001-example-task
 :PROPERTIES:
 :CUSTOM_ID: PROJ-001-example-task
-:EFFORT: 2h
-:PRIORITY: #B
 :LAYER: backend
 :END:
 

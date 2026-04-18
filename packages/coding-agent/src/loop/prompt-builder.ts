@@ -25,8 +25,6 @@ export function buildManifestPromptContext(snapshot: LoopSnapshot): Partial<Loop
 			state: t.state,
 			dependencies: t.dependencies,
 			hasGates: t.gates.length > 0,
-			effort: t.effort,
-			priority: t.priority,
 		})),
 		manifestProgress: `${doneCount}/${tickets.length} done, ${doingCount} active, ${blockedCount} blocked`,
 		readyTickets: tickets

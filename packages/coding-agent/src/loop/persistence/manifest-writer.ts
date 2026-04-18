@@ -8,8 +8,6 @@ function getManifestDir(cwd: string, loopId: string): string {
 function renderTicketOrg(ticket: ManifestTicket): string {
 	const lines: string[] = [`* ${ticket.state} ${ticket.title}`, ":PROPERTIES:", `:CUSTOM_ID: ${ticket.id}`];
 	if (ticket.specPath) lines.push(`:SPEC_PATH: ${ticket.specPath}`);
-	if (ticket.effort) lines.push(`:EFFORT: ${ticket.effort}`);
-	if (ticket.priority) lines.push(`:PRIORITY: ${ticket.priority}`);
 	if (ticket.layer) lines.push(`:LAYER: ${ticket.layer}`);
 	if (ticket.dependencies.length > 0) lines.push(`:DEPENDS: ${ticket.dependencies.join(" ")}`);
 	if (ticket.triggers.length > 0) lines.push(`:TRIGGER: ${ticket.triggers.join(" ")}`);

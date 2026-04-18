@@ -47,10 +47,10 @@ describe("renderItemOrg", () => {
 	});
 
 	test("renders all item properties in drawer", () => {
-		const item = makeItem({ properties: { EFFORT: "2h", PRIORITY: "#A" } });
+		const item = makeItem({ properties: { LAYER: "backend", OWNER: "platform" } });
 		const out = renderItemOrg(item, false, 0);
-		expect(out).toContain(":EFFORT: 2h");
-		expect(out).toContain(":PRIORITY: #A");
+		expect(out).toContain(":LAYER: backend");
+		expect(out).toContain(":OWNER: platform");
 	});
 
 	test("filters duplicate and internal properties from drawer", () => {
@@ -60,8 +60,8 @@ describe("renderItemOrg", () => {
 				CUSTOM_ID: "PROJ-099-clean-drawer",
 				SESSION_ID: "sess-123",
 				TRANSCRIPT_PATH: "/tmp/transcript.org",
-				EFFORT: "2h",
-				PRIORITY: "#A",
+				LAYER: "backend",
+				OWNER: "platform",
 				TAGS: "backend:auth",
 			},
 		});
@@ -70,8 +70,8 @@ describe("renderItemOrg", () => {
 		expect(out.match(/^:CUSTOM_ID:/gm)).toHaveLength(1);
 		expect(out).not.toContain(":SESSION_ID:");
 		expect(out).not.toContain(":TRANSCRIPT_PATH:");
-		expect(out).toContain(":EFFORT: 2h");
-		expect(out).toContain(":PRIORITY: #A");
+		expect(out).toContain(":LAYER: backend");
+		expect(out).toContain(":OWNER: platform");
 		expect(out).toMatch(/^\* ITEM Test item\s+:backend:auth:/m);
 	});
 

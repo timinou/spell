@@ -20,17 +20,9 @@ describe("approvePlanItem", () => {
 		const plansDir = path.join(tmpDir, "!tasks", "plans");
 		await fs.mkdir(plansDir, { recursive: true });
 		const filePath = path.join(plansDir, `${id}.org`);
-		const content = [
-			`#+TITLE: ${id}`,
-			`#+CUSTOM_ID: ${id}`,
-			"#+STATE: INIT",
-			"#+EFFORT: 2h",
-			"#+PRIORITY: #A",
-			"#+LAYER: backend",
-			"",
-			body,
-			"",
-		].join("\n");
+		const content = [`#+TITLE: ${id}`, `#+CUSTOM_ID: ${id}`, "#+STATE: INIT", "#+LAYER: backend", "", body, ""].join(
+			"\n",
+		);
 		await Bun.write(filePath, content);
 		return filePath;
 	}
@@ -111,8 +103,6 @@ describe("completePlanItem", () => {
 			`#+TITLE: ${id}`,
 			`#+CUSTOM_ID: ${id}`,
 			`#+STATE: ${state}`,
-			"#+EFFORT: 2h",
-			"#+PRIORITY: #A",
 			"#+LAYER: backend",
 			"",
 			body,

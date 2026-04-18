@@ -1,9 +1,16 @@
 use super::{TextEdit, node_at_line, node_text};
 use crate::{buffer::CodeBuffer, error::Result};
 
-fn outermost_node_on_line(mut node: tree_sitter::Node<'_>) -> tree_sitter::Node<'_> {
+fn outermost_node_on_line(
+	mut node: tree_sitter::Node<'_>,
+	within: Option<(usize, usize)>,
+) -> tree_sitter::Node<'_> {
 	let start_row = node.start_position().row;
 	while let Some(parent) = node.parent() {
+		if within.is_some_and(|(start, end)| (parent.start_byte() < start || parent.end_byte() > end))
+		{
+			break;
+		}
 		if parent.start_position().row == start_row {
 			node = parent;
 		} else {
@@ -13,9 +20,13 @@ fn outermost_node_on_line(mut node: tree_sitter::Node<'_>) -> tree_sitter::Node<
 	node
 }
 
-pub fn clone_node(buffer: &CodeBuffer, line: usize) -> Result<Vec<TextEdit>> {
-	let node = node_at_line(buffer, line)?;
-	let node = outermost_node_on_line(node);
+pub fn clone_node(
+	buffer: &CodeBuffer,
+	line: usize,
+	within: Option<(usize, usize)>,
+) -> Result<Vec<TextEdit>> {
+	let node = node_at_line(buffer, line, within)?;
+	let node = outermost_node_on_line(node, within);
 	let text = node_text(buffer, node);
 	let indent = super::indent::node_indent(&buffer.source(), node);
 	let indent_str = " ".repeat(indent);

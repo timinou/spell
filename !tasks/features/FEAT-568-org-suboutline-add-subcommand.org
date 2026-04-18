@@ -1,0 +1,149 @@
+#+TITLE: Org suboutline add subcommand
+#+STATE: ITEM
+#+SESSION_ID: 14bf5fdd01b87f1c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-11-46-694Z_14bf5fdd01b87f1c.jsonl]]
+#+CUSTOM_ID: FEAT-568-org-suboutline-add-subcommand
+#+DEPENDS: FEAT-564-org-suboutline-namespace-resilience
+#+EFFORT: 3h
+#+LAYER: packages/org
+#+PRIORITY: #B
+
+* Initial Message
+
+use jq to find the recurring reasons why ExitPlanMode fails then explain what you will improve to the system to prevent these errors from happening
+
+* Scope
+
+In: new `org` subcommand that appends a structured implementation
+sub-heading to an existing child item, with auto-prefixed `:CUSTOM_ID:` and
+validated `:DEPENDS:` — eliminates the namespace-guessing failure class by
+making the agent physically unable to produce a wrong prefix.
+
+Out: UI/rendering changes; retroactive rewrite of existing bodies (N1
+already handles wrong prefixes at rewrite time).
+
+* Background
+
+Even with N1's lenient rewrite, we want a first-class tool path. When the
+agent writes the entire body at `org create` time and then iterates,
+editing via `org update` with full body replacement is fragile and loses
+other content. A dedicated append operation removes that footgun.
+
+* Existing patterns
+
+- `packages/org/src/tool.ts: cmdUpdate` (L523) — existing structured edit
+  path; uses `executeOrg({ command: "editSection" })`.
+- `packages/natives/src/org` / `pi-org-engine` `editSection` native
+  operation.
+- N1's shared `matchesParent` + rewrite helpers.
+
+* Tests (TDD, before impl)
+
+- `packages/org/test/suboutline-add.test.ts` (new):
+  - Appends a new `** <heading>` section with proper PROPERTIES drawer
+    (`:CUSTOM_ID: <parent-id>::<slug>`, `:DEPENDS: <list>`).
+  - Rejects slug with invalid charset (`^[A-Za-z0-9_-]+$`).
+  - Rejects DEPENDS pointing at suboutline ids not already present in the
+    parent's body (structural check).
+  - Idempotent re-add: calling with the same slug returns an error or
+    no-op (explicit flag `replace: false` default).
+  - Preserves existing body content (other sub-headings, drawers,
+    property lines) verbatim.
+- `packages/org/test/tool-commands.test.ts`: route the new subcommand
+  through the public `cmdDispatch` and assert wiring.
+
+* Implementation
+
+** Define args + dispatcher entry
+:PROPERTIES:
+:CUSTOM_ID: FEAT-568-org-suboutline-add-subcommand::dispatcher
+:END:
+
+- File: `packages/org/src/tool.ts`
+- Add `case "suboutline-add":` in the dispatcher (around L946).
+- Args schema: `{ parentId: string; slug: string; title: string; body?:
+  string; depends?: string[]; layer?: string; replace?: boolean }`.
+- Route to new `cmdSuboutlineAdd(ctx, args)`.
+
+** Implement cmdSuboutlineAdd
+:PROPERTIES:
+:CUSTOM_ID: FEAT-568-org-suboutline-add-subcommand::impl
+:DEPENDS: FEAT-568-org-suboutline-add-subcommand::dispatcher
+:END:
+
+- File: `packages/org/src/tool.ts` (new function).
+- Resolve parent via `findItemById`; return error if not found.
+- Build heading text with proper PROPERTIES drawer:
+  - `** {{title}}`
+  - `:PROPERTIES:`
+  - `:CUSTOM_ID: {{parentId}}::{{slug}}`
+  - optional `:DEPENDS:` line
+  - optional `:LAYER:` line
+  - `:END:`
+  - body content
+- Validate slug charset (`^[A-Za-z0-9_-]+$`).
+- Validate each DEPENDS token references an existing suboutline in the
+  parent body (parse via existing `parseOrgDependProperties`).
+- Call `executeOrg({ command: "editSection", file: parent.file, appendTo:
+  "body", content: heading })`.
+- Return `{ success, suboutlineId: "<parentId>::<slug>", file, line }`.
+
+  ** {{title}}
+  :PROPERTIES:
+  :CUSTOM_ID: {{parentId}}::{{slug}}
+  [:DEPENDS: ...]
+  [:LAYER: ...]
+  :END:
+  {{body}}
+  ```
+- Validate slug charset.
+- Validate each DEPENDS token either references an existing suboutline in
+  the parent body (parse via existing `parseOrgDependProperties`) or
+  another sibling child's suboutline (optional; lean strict at first —
+  require same-parent references only; cross-parent DEPENDS remains
+  manual).
+- Call `executeOrg({ command: "editSection", file: parent.file, appendTo:
+  "body", content: heading })`.
+- Return `{ success, suboutlineId: "<parentId>::<slug>", file, line }`.
+
+** Expose through proxy_org MCP surface
+:PROPERTIES:
+:CUSTOM_ID: FEAT-568-org-suboutline-add-subcommand::proxy-surface
+:DEPENDS: FEAT-568-org-suboutline-add-subcommand::impl
+:END:
+
+- Grep for how other subcommands register in the MCP/proxy layer
+  (`packages/coding-agent/src/commands/org-tool.ts` or similar).
+- Add the new subcommand to the tool schema and argument coercion.
+- Tool-doc snippet: single sentence in the `proxy_org` description:
+  `suboutline-add  Append a structured implementation sub-heading to an
+   existing item with auto-prefixed CUSTOM_ID.`
+
+* Edge cases
+
+- Parent has no PROPERTIES drawer yet: still works (we append a `**`
+  section; existing parser requires per-heading PROPERTIES — we provide
+  one).
+- `body` contains a top-level `* heading` (breaks out of parent): reject
+  with "body must not start a top-level heading; use N-star headings only"
+  error.
+- Concurrent add of the same slug: the `createCategoryMutex` primitive
+  exists for file-level locking; reuse it (`withLock(parent.absPath,
+  async () => {...})`).
+- `depends` references a slug that will be added in a later call: strict
+  mode rejects; `--defer-deps` could relax (not in this scope — document
+  as a future FUP if needed).
+
+* Acceptance criteria
+
+- `bun test packages/org/test/suboutline-add.test.ts` green.
+- Manual: `org create` a FEAT with empty body, then
+  `org suboutline-add --parent FEAT-X --slug define-types --title "Define
+   types"` — file ends with the expected heading block; `org get FEAT-X`
+  returns body containing it; `parseOrgDependProperties` sees the new
+  suboutline.
+
+* Verification
+
+- `bun check:ts` clean.
+- `bun test packages/org` green.

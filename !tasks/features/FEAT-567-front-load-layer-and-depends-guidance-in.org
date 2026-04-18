@@ -1,0 +1,122 @@
+#+TITLE: Front-load LAYER and DEPENDS guidance in plan mode prompts
+#+STATE: ITEM
+#+SESSION_ID: 14bf5fdd01b87f1c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-11-46-694Z_14bf5fdd01b87f1c.jsonl]]
+#+CUSTOM_ID: FEAT-567-front-load-layer-and-depends-guidance-in
+#+DEPENDS: FEAT-565-simplify-required-org-properties-to-laye FEAT-568-org-suboutline-add-subcommand
+#+EFFORT: 1h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+use jq to find the recurring reasons why ExitPlanMode fails then explain what you will improve to the system to prevent these errors from happening
+
+* Scope
+
+In: restructure plan-mode agent-facing prompts so LAYER (required) and
+DEPENDS (encouraged) are visible *before* the agent reaches the
+exit-plan-mode step; surface the new `org suboutline add` tool (N5) and the
+`org validate-plan` preflight; delete EFFORT/PRIORITY references.
+
+Out: no code changes outside `.md` prompt files; no tool dispatch
+modifications.
+
+* Background
+
+70% first-call failure rate on exit_plan_mode is downstream of agents
+learning the rules *after* exit. Prompts must teach the rules at
+item-creation time.
+
+* Existing patterns
+
+- `packages/coding-agent/src/prompts/system/plan-mode-active.md` — the
+  authoritative plan-mode prompt (307 lines). Section "Plan" covers child
+  item requirements near L60-L100.
+- `packages/coding-agent/src/prompts/tools/exit-plan-mode.md` — 27-line
+  tool doc that states `<instruction>` and `<avoid>` lists.
+
+* Tests (no runtime tests; prompts are static)
+
+- `packages/coding-agent/test/prompts/plan-mode-prompt-snapshot.test.ts` or
+  an existing snapshot test: update to expect the new wording. If no such
+  test exists, do not create one — prompt diffs are reviewed manually.
+- `bun run format-prompts` (covered by `bun fix`) to rewrap/normalize the
+  edited `.md`.
+
+* Implementation
+
+** Rewrite Org Item Body Standard + Child item requirements
+:PROPERTIES:
+:CUSTOM_ID: FEAT-567-front-load-layer-and-depends-guidance-in::rewrite-body-standard
+:END:
+
+- File: `packages/coding-agent/src/prompts/system/plan-mode-active.md`
+- Replace the `- include EFFORT, PRIORITY, LAYER` line (L90) with:
+  - `- include LAYER (required; drives task-policy gate injection)`
+  - `- set DEPENDS when item has inter-item dependencies (space-separated
+    CUSTOM_IDs) — encouraged, not required`
+- Promote a new subsection **Properties** above **Org Item Body Standard**
+  so LAYER + DEPENDS are the *first* child-item rule the agent reads.
+- In the suboutline example block (L65-L87), add a one-line callout:
+  `# Suboutline CUSTOM_IDs are auto-prefixed with the parent's assigned id;
+   you MAY write the bare suffix and org rewrites it on create/update.`
+- Add a Preflight bullet before "5. Run consistency sweep":
+  `4b. Run "org validate-plan <itemId>" (read-only); fix issues before step 5.`
+
+** Update exit-plan-mode tool doc
+:PROPERTIES:
+:CUSTOM_ID: FEAT-567-front-load-layer-and-depends-guidance-in::update-tool-doc
+:DEPENDS: FEAT-567-front-load-layer-and-depends-guidance-in::rewrite-body-standard
+:END:
+
+- File: `packages/coding-agent/src/prompts/tools/exit-plan-mode.md`
+- Add to `<instruction>` list:
+  - `Call "org validate-plan <itemId>" first; resolve all issues before
+     invoking this tool.`
+- Update `<avoid>` to include:
+  - `Do not call more than once per plan; the first successful call closes
+     plan mode and a second call is a no-op.`
+
+** Update manifest-building prompt
+:PROPERTIES:
+:CUSTOM_ID: FEAT-567-front-load-layer-and-depends-guidance-in::manifest-building
+:DEPENDS: FEAT-567-front-load-layer-and-depends-guidance-in::rewrite-body-standard
+:END:
+
+- File: `packages/coding-agent/src/loop/prompts/manifest-building-active.md`
+- Remove `:EFFORT:` / `:PRIORITY:` bullets (already done by N2; keep this
+  step to repair if N2 missed a reference). Retain `:LAYER:` and
+  `:DEPENDS:` bullets.
+
+** Format
+:PROPERTIES:
+:CUSTOM_ID: FEAT-567-front-load-layer-and-depends-guidance-in::format
+:DEPENDS: FEAT-567-front-load-layer-and-depends-guidance-in::manifest-building
+:END:
+
+- Run `bun fix:ts` (which invokes `format-prompts`) to normalize line
+  wrapping.
+
+* Edge cases
+
+- Handlebars conditionals (`{{#if orgEnabled}}`): keep existing branches;
+  only swap the bullet contents.
+- Template variable surfaces (`{{planCategory}}`, `{{exitToolName}}`):
+  leave in place; none are affected by this change.
+
+* Acceptance criteria
+
+- `packages/coding-agent/src/prompts/system/plan-mode-active.md` no
+  longer contains tokens `EFFORT` or `PRIORITY` (case-sensitive
+  `rg --fixed-strings`).
+- `packages/coding-agent/src/prompts/tools/exit-plan-mode.md` references
+  `org validate-plan`.
+- Manual read: the first mention of LAYER in plan-mode-active.md occurs
+  within the first 60 lines (before the Body Standard section).
+
+* Verification
+
+- `bun check:ts` clean.
+- `rg 'EFFORT|PRIORITY' packages/coding-agent/src/prompts` returns no
+  hits.

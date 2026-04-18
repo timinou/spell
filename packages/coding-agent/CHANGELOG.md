@@ -10,6 +10,7 @@
 
 - Renamed `emacs_code` tool to `code` (display name: "Code")
 - Promoted `code` to premiere source file tool; demoted `read`, `edit`, `write` from core to standard tier (fallback tools)
+- Write tool now routes code-supported files through the managed code buffer (same lifecycle as `code edit`), removing the redirect-to-`code edit` error. Non-code files continue to use the LSP writethrough path.
 
 ### Added
 

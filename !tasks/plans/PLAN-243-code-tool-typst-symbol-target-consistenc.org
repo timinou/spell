@@ -148,3 +148,5 @@ Trace back this following of errors, explain where the code tool went wrong, exl
 - Manual proof used a fresh `PI_DEV=1` Bun process that loaded the rebuilt dev addon directly, rather than the already-running harness process, because the long-lived in-harness code tool kept the pre-rebuild native addon loaded until restart.
 
 NOTE [2026-04-17]: Executed and verified. Child items BUG-273 and BUG-274 closed to DONE; completion report appended with verification evidence and artifacts.
+
+NOTE [2026-04-17]: Post-close note: delegated verification task 0-FreshCodeToolProof later reported stale-session failure (`section-title` edit on temp Typst file still saw `Available: []`). This matches the recorded deviation: the long-lived in-harness session kept the pre-rebuild addon loaded. Fresh `PI_DEV=1` proof artifact remains the authoritative post-rebuild verification.

@@ -115,6 +115,11 @@ function isAnthropicApiBaseUrl(baseUrl?: string): boolean {
 		return false;
 	}
 }
+
+export function isAnthropicAdaptiveOnlyModel(model: Model<"anthropic-messages">): boolean {
+	return model.id === "claude-opus-4-7";
+}
+
 export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<string, string> {
 	const oauthToken = options.isOAuth ?? isAnthropicOAuthToken(options.apiKey);
 	const extraBetas = options.extraBetas ?? [];
@@ -1345,11 +1350,15 @@ function buildParams(
 		params.tools = convertTools(context.tools, isOAuthToken);
 	}
 
-	if (options?.thinkingEnabled && model.reasoning) {
+	const adaptiveOnlyThinking = isAnthropicAdaptiveOnlyModel(model);
+	const resolvedOptions = options ?? {};
+	if ((resolvedOptions.thinkingEnabled || adaptiveOnlyThinking) && model.reasoning) {
 		const mode = model.thinking?.mode;
-		const requestedEffort = options.reasoning;
-		const effort =
-			options.effort ?? (requestedEffort ? mapEffortToAnthropicAdaptiveEffort(model, requestedEffort) : undefined);
+		const requestedEffort = adaptiveOnlyThinking ? undefined : resolvedOptions.reasoning;
+		const effort = adaptiveOnlyThinking
+			? undefined
+			: (resolvedOptions.effort ??
+				(requestedEffort ? mapEffortToAnthropicAdaptiveEffort(model, requestedEffort) : undefined));
 
 		if (mode === "anthropic-adaptive") {
 			params.thinking = { type: "adaptive" };
@@ -1359,7 +1368,7 @@ function buildParams(
 		} else {
 			params.thinking = {
 				type: "enabled",
-				budget_tokens: options.thinkingBudgetTokens || 1024,
+				budget_tokens: resolvedOptions.thinkingBudgetTokens || 1024,
 			};
 			if (mode === "anthropic-budget-effort" && effort) {
 				params.output_config = { effort };

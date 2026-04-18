@@ -1,0 +1,110 @@
+#+TITLE: code edit insertBefore/insertAfter escape parent targetId container on positional line mode
+#+STATE: ITEM
+#+SESSION_ID: 14bf73993e0afdc4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-38-00-184Z_14bf73993e0afdc4.jsonl]]
+#+CUSTOM_ID: BUG-281-code-edit-insertbefore-insertafter-escap
+#+EFFORT: 3h
+#+LAYER: crates/pi-code-engine crates/pi-natives
+#+PRIORITY: #B
+
+* Scope
+
+In: enforce that positional `insertBefore`/`insertAfter`/`delete`/`splice`/`move`/`clone`/`transpose` actions with a `line:` anchor resolve inside the span of the `targetId` declaration when one is specified, and that they fail with a clear error instead of silently landing at file top.
+
+Out: generalised sibling-aware movement heuristics beyond the declaration span; changes to symbol-mode (resolved) dispatch branches.
+
+* Background
+
+Observed failure (planner self-report, PLAN-248 authoring): `code edit { targetId: "src/file.ex::Module.fn", actions: [{ kind: "insertBefore", line: 52, content: "...
+" }] }` inserted the block at file-top (outside the module) because tree-sitter's `descendant_for_byte_range` found the outermost sibling at the given raw byte. Resulted in a compile error; required manual cleanup.
+
+Mechanism: `single_action` (`crates/pi-natives/src/code_buffer.rs:486-508`) branches on `resolved: Option<ResolvedSymbol>`. When the action has both a declaration `targetId` AND a positional `line:`, the dispatcher takes the symbol branch — fine. But when the caller passes a positional `line:` expecting it to be scoped to the targetId container, the line-resolution path in `crates/pi-code-engine/src/line_target.rs:33` walks from the raw byte with no ancestor constraint, so the chosen node may sit outside the `targetId` span entirely.
+
+Failure mode: caller believes line-target is scoped to the targetId container; engine treats positional line as file-global; content lands outside the intended ancestor.
+
+* Existing patterns
+
+- `crates/pi-code-engine/src/line_target.rs:15-44` — `resolve_line_target`, `resolve_edit_target`.
+- `crates/pi-code-engine/src/line_target.rs:66-94` — `editable_scope_for_node` ancestor walk.
+- `crates/pi-natives/src/code_buffer.rs:486-533` — `insertBefore`/`insertAfter` dispatchers.
+- `crates/pi-code-engine/src/resolve.rs:20-34` — `ResolvedSymbol { start_byte, end_byte, ... }`.
+- Existing sibling-safety precedent in `crates/pi-code-engine/src/edit/replace.rs:12-34` — separator checks that refuse unsafe positional inserts.
+
+* Tests (TDD, before impl)
+
+- `crates/pi-code-engine/src/line_target.rs` `#[cfg(test)]` (new tests):
+  - `resolve_edit_target_respects_ancestor_constraint`: Elixir module with inner `def foo/0`; request `line: 2` (module header) but `within: Some((foo_start, foo_end))`. Returns `Err("line out of declaration span")`.
+  - `resolve_edit_target_within_ancestor_succeeds`: line points inside `foo`'s body; returns the expected node.
+- `crates/pi-natives/tests/code_buffer_positional_scope.rs` (new integration):
+  - `insert_before_with_declaration_targetid_refuses_out_of_span_line`: invoke `execute_code_buffer` with `{ targetId: "file.ex::Mod.foo", actions: [{ kind: "insertBefore", line: 2, content: "x
+" }] }`. Assert JSON error `{ code: "LINE_OUT_OF_TARGET_SCOPE" }`.
+  - `insert_before_with_declaration_targetid_succeeds_in_span`: line inside the function body → success; inserted content sits inside the function.
+  - `insert_before_file_scoped_targetid_unchanged`: `targetId: "file.ex"` + `line: 10` still works as file-global.
+- `packages/coding-agent/test/tools/code.test.ts`: contract test that the returned error includes a hint "positional actions under a declaration targetId must anchor a line inside that declaration".
+
+* Implementation
+
+** Add ancestor constraint to line_target API
+:PROPERTIES:
+:CUSTOM_ID: BUG-281-code-edit-insertbefore-insertafter-escap::api-constraint
+:END:
+
+- File: `crates/pi-code-engine/src/line_target.rs`
+- Extend: `pub fn resolve_edit_target<'a>(buffer, line, node_type, within: Option<(usize, usize)>)`; when `Some((start, end))`, compute byte, and if `byte < start || byte >= end`, return `Err(CodeEngineError::LineOutOfTargetScope { line, target_start, target_end })`.
+- Add error variant `CodeEngineError::LineOutOfTargetScope { line: usize, target_start: usize, target_end: usize }` in `crates/pi-code-engine/src/error.rs`.
+- Adjust `raw_node_at_byte` and `editable_scope_for_node` to never walk above a supplied ancestor.
+
+** Plumb ancestor span through dispatcher
+:PROPERTIES:
+:CUSTOM_ID: BUG-281-code-edit-insertbefore-insertafter-escap::dispatcher-plumb
+:DEPENDS: BUG-281-code-edit-insertbefore-insertafter-escap::api-constraint
+:END:
+
+- File: `crates/pi-natives/src/code_buffer.rs` (`single_action`).
+- For `insertBefore`/`insertAfter`/`delete`/`splice`/`move`/`clone`/`transpose`, compute `within = resolved.as_ref().map(|s| (s.start_byte, s.end_byte))` and forward to `resolve_edit_target` / replace helpers.
+- Update `crates/pi-code-engine/src/edit/replace.rs` `insert_before`, `insert_after`, `kill_node`, `replace_node` signatures to accept and forward the ancestor span.
+- Same for `crates/pi-code-engine/src/edit/splice.rs`, `drag.rs`, `clone.rs`, `transpose.rs` (whichever files exist; update in one sweep).
+
+** Surface LINE_OUT_OF_TARGET_SCOPE via NAPI
+:PROPERTIES:
+:CUSTOM_ID: BUG-281-code-edit-insertbefore-insertafter-escap::napi-surface
+:DEPENDS: BUG-281-code-edit-insertbefore-insertafter-escap::dispatcher-plumb
+:END:
+
+- File: `crates/pi-natives/src/code_buffer.rs` (`engine_err`).
+- Map `CodeEngineError::LineOutOfTargetScope` to JSON `{ code: "LINE_OUT_OF_TARGET_SCOPE", message, line, targetSpan: { start, end } }`.
+- File: `packages/coding-agent/src/tools/code-result.ts` — surface hint: "positional actions under a declaration targetId must anchor a line inside that declaration (lines X..Y)".
+- File: `packages/coding-agent/src/prompts/tools/code.md` — add section explaining positional+targetId semantics and the refusal.
+
+** Contract tests in coding-agent
+:PROPERTIES:
+:CUSTOM_ID: BUG-281-code-edit-insertbefore-insertafter-escap::contract-tests
+:DEPENDS: BUG-281-code-edit-insertbefore-insertafter-escap::napi-surface
+:END:
+
+- File: `packages/coding-agent/test/tools/code.test.ts`.
+- Scenarios from Tests section above; asserts error `code`, hint string, and the unchanged buffer source.
+
+* Edge cases
+
+- Symbol target is a single-line declaration: ancestor span may be < 1 line; line anchoring should still succeed when line is the declaration's line. Compute span inclusively.
+- `targetId: "file.ext"` (file-scope, no symbol): no ancestor constraint; positional ops resolve against file as today.
+- `line` exactly equal to the decl header line: treated as inside (boundary at `target_start` inclusive).
+- Markdown / non-AST languages where tree-sitter's parse-tree is sparse: ancestor span still enforced; resolution may fall back to file-global with a warning if `within` span is zero-length.
+- Unicode-heavy lines: byte boundaries vs codepoints already handled by `ropey::LineType::LF_CR`.
+
+* Acceptance criteria
+
+- `cargo test -p pi-code-engine line_target::tests` green.
+- `cargo test -p pi-natives code_buffer_positional_scope` green.
+- `bun test packages/coding-agent/test/tools/code.test.ts --grep="positional.*targetid"` green.
+- Manual repro of the failure pattern now returns `LINE_OUT_OF_TARGET_SCOPE` without mutating the buffer.
+- `bun check:rs` + `bun check:ts` clean.
+
+* Verification
+
+- Manual repro: create `lib/mod.ex` with `defmodule Mod do
+  def foo, do: 1
+end` (3 lines); invoke `{ targetId: "lib/mod.ex::Mod.foo", actions: [{ kind: "insertBefore", line: 1, content: "# x
+" }] }`. Assert refusal.
+- Then set `line: 2` and confirm insertion occurs inside the module, not above `defmodule`.

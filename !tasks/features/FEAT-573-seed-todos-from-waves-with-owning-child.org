@@ -1,0 +1,90 @@
+#+TITLE: Seed todos from waves with owning child body section
+#+STATE: ITEM
+#+SESSION_ID: 14bf746abbc2180e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-41-34-703Z_14bf746abbc2180e.jsonl]]
+#+CUSTOM_ID: FEAT-573-seed-todos-from-waves-with-owning-child
+#+DEPENDS: FEAT-572-inject-linked-child-org-bodies-into-appr
+#+EFFORT: 3h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Scope
+
+Seed todos from waves with owning child body section so `task ... todoRef` auto-derives a sniper assignment with concrete file paths, test scenarios, and acceptance criteria.
+
+* Existing Patterns
+
+Use `materializePlanWaves` (central materializer), `parseOrgDependProperties` (reuse for sub-outline parsing), `FEAT-572-inject-linked-child-org-bodies-into-appr::s5-tool-propagate` (supplies `childItems`).
+
+* Tests
+
+- File `packages/coding-agent/test/orchestrators/fluid/plan-to-todos-details.test.ts` covers slicer scenarios 1-6: sub-outline match, top-level preamble, missing match, details merge order, backcompat, byte truncation.
+- File `packages/coding-agent/test/modes/interactive-mode-approve-plan.test.ts` covers integration: approved PLAN seeds todo with correct details.
+
+* Implementation
+
+** s1
+:PROPERTIES:
+:CUSTOM_ID: FEAT-573-seed-todos-from-waves-with-owning-child::s1-slicer
+:DEPENDS: FEAT-572-inject-linked-child-org-bodies-into-appr::s5-tool-propagate
+:END:
+- File: `packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts`
+- Export `extractSubOutlineDetails(orgItemId, childBodiesById, maxBytes): string | undefined`.
+- If `orgItemId` contains `::`, use `parseOrgDependProperties` on parent body and find matching customId.
+- Else (top-level) return preamble between first `*` heading and first `**` sub-heading.
+- Byte-based truncation.
+
+** s2
+:PROPERTIES:
+:CUSTOM_ID: FEAT-573-seed-todos-from-waves-with-owning-child::s2-settings
+:DEPENDS: FEAT-573-seed-todos-from-waves-with-owning-child::s1-slicer
+:END:
+- File: `packages/coding-agent/src/config/settings.ts`
+- Add `plan.injectedTodoDetailsMaxBytes` (default 4096).
+
+** s3
+:PROPERTIES:
+:CUSTOM_ID: FEAT-573-seed-todos-from-waves-with-owning-child::s3-tests
+:DEPENDS: FEAT-573-seed-todos-from-waves-with-owning-child::s2-settings
+:END:
+- File: `packages/coding-agent/test/orchestrators/fluid/plan-to-todos-details.test.ts`
+- Scenarios 1-6; must fail initially.
+
+** s4
+:PROPERTIES:
+:CUSTOM_ID: FEAT-573-seed-todos-from-waves-with-owning-child::s4-wire
+:DEPENDS: FEAT-573-seed-todos-from-waves-with-owning-child::s3-tests
+:END:
+- Extend `materializePlanWaves(waves, childBodiesById?)` and `planWavesToTodoGroups(waves, childBodiesById?)`. Compute sliced details per task; merge with existing details (existing on top, blank line, slice below).
+
+** s5
+:PROPERTIES:
+:CUSTOM_ID: FEAT-573-seed-todos-from-waves-with-owning-child::s5-thread
+:DEPENDS: FEAT-573-seed-todos-from-waves-with-owning-child::s4-wire FEAT-572-inject-linked-child-org-bodies-into-appr::s6-thread
+:END:
+- File: `packages/coding-agent/src/modes/interactive-mode.ts::InteractiveMode.#approvePlan`
+- Build `childBodiesById = new Map(options.childItems?.map(c => [c.id, c.body]) ?? [])` and pass to `planWavesToTodoGroups`.
+
+** s6
+:PROPERTIES:
+:CUSTOM_ID: FEAT-573-seed-todos-from-waves-with-owning-child::s6-verify
+:DEPENDS: FEAT-573-seed-todos-from-waves-with-owning-child::s5-thread
+:END:
+- Run `bun check:ts`.
+- Run `bun test` for both test files.
+
+* Edge Cases
+
+- `orgItemId` empty string: return undefined.
+- No matching sub-outline and no preamble: undefined.
+- Multiple wave entries pointing to same sub-outline: each gets a copy.
+- `:PROPERTIES:` drawer inside sub-outline body: preserved.
+- Fluid mode (`materializeFluidPlanToTodos(plan)`) unaffected: has its own `agent.body`.
+
+* Acceptance Criteria
+
+1. `bun test` passes for both test files.
+2. `bun check:ts` passes.
+3. After approving a PLAN with sub-outline waves, seeded todo list has `details` populated (observable via `/todo` command).
+4. Subagent launched via `todoRef` sees the sub-outline implementation text in its `context` field (verified in transcript).
+5. When `childItems` empty, todo seeding identical to current main-branch behavior.

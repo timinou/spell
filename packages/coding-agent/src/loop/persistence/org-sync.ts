@@ -25,8 +25,6 @@ function renderLoopBody(loop: LoopSnapshot): string {
 		`#+TITLE: Loop ${loop.name}`,
 		`#+STATE: ${mapLoopStateToOrgState(loop.state)}`,
 		`#+CUSTOM_ID: ${loop.orgItemId}`,
-		"#+EFFORT: 1h",
-		"#+PRIORITY: #B",
 		"#+LAYER: backend",
 		`#+LOOP_STATE: ${loop.state}`,
 		`#+ITERATION: ${loop.iteration}`,

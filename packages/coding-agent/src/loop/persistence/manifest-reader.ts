@@ -79,8 +79,6 @@ export function parseTicketOrg(content: string): ManifestTicket | undefined {
 		dependencies: (props.DEPENDS ?? props.BLOCKER)?.split(/\s+/).filter(Boolean) ?? [],
 		triggers: props.TRIGGER?.split(/\s+/).filter(Boolean) ?? [],
 		gates: parseGatesFromProperties(props, customId),
-		effort: props.EFFORT,
-		priority: props.PRIORITY,
 		layer: props.LAYER,
 		tags: tagMatch?.[1]?.split(/\s+/).filter(Boolean) ?? [],
 		changedFiles: props.CHANGED_FILES ? props.CHANGED_FILES.split("|").filter(Boolean) : [],

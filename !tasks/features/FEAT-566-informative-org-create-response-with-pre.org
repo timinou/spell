@@ -1,0 +1,104 @@
+#+TITLE: Informative org-create response with prefix template and checklist
+#+STATE: DOING
+#+SESSION_ID: 14bf5fdd01b87f1c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T11-11-46-694Z_14bf5fdd01b87f1c.jsonl]]
+#+CUSTOM_ID: FEAT-566-informative-org-create-response-with-pre
+#+DEPENDS: FEAT-565-simplify-required-org-properties-to-laye
+#+EFFORT: 2h
+#+LAYER: packages/org
+#+PRIORITY: #A
+
+* Initial Message
+
+use jq to find the recurring reasons why ExitPlanMode fails then explain what you will improve to the system to prevent these errors from happening
+
+* Scope
+
+In: extend the response payload of `org create` so the agent immediately
+learns (a) the exact assigned CUSTOM_ID prefix to use in suboutlines, (b)
+which required properties are still missing, (c) which recommended
+properties (DEPENDS) are empty. Stays read-only w.r.t. the created file.
+
+Out: no changes to file content; no changes to `org update` (a separate FUP
+if we want the same guidance on updates).
+
+* Background
+
+Today `cmdCreate` returns `{ success, id, file, category, state, body,
+bodyLength }`. The agent has to infer the prefix for suboutline CUSTOM_IDs
+from the `id` field, which is a late post-hoc correction and fails in ~50%
+of cases because the prompt guidance earlier in the turn said `BUG-264::x`
+is fine.
+
+* Existing patterns
+
+- `packages/org/src/tool.ts:344` — the response object.
+- `packages/coding-agent/src/plan-mode/plan-validation.ts:
+  validateChildSuboutlineGraph` — the rules N3 pre-announces.
+- N2 makes LAYER the sole required property; N3 piggybacks on its
+  signal.
+
+* Tests (TDD, before impl)
+
+- `packages/org/test/tool-create-response.test.ts` (new):
+  - Response includes `suboutlinePrefix: "<id>::"`.
+  - Response includes `missingRequired: []` when LAYER present (after N2)
+    and `missingRequired: ["LAYER"]` when absent.
+  - Response includes `recommended: { DEPENDS: "unset" | "set" }` reflecting
+    whether DEPENDS was supplied.
+  - When body is supplied: response also includes
+    `suboutlineRewrites: { "<bare>": "<id>::<bare>" }` mirroring what
+    `rewriteSubOutlineIds` produced (feeds directly into agent's mental
+    model).
+
+* Implementation
+
+** Extend cmdCreate return shape
+:PROPERTIES:
+:CUSTOM_ID: FEAT-566-informative-org-create-response-with-pre::extend-shape
+:END:
+
+- File: `packages/org/src/tool.ts`
+- After the `rewriteSubOutlineIds` call, capture its `rewrites` map.
+- Compute `missingRequired` using the *final* required list from N2 via
+  a category-resolved helper (if category overrides requiredProperties,
+  use its list; fall back to `ctx.config.requiredProperties`).
+- Compute `recommended` as `{ LAYER: "set"|"missing", DEPENDS: "set"|
+  "unset" }` — only include keys that matter; suppress "set" entries when
+  everything is fine to keep the payload compact.
+- Return fields: `suboutlinePrefix`, `missingRequired`, `recommended`,
+  `suboutlineRewrites` (only when non-empty).
+
+** Downstream consumer audit
+:PROPERTIES:
+:CUSTOM_ID: FEAT-566-informative-org-create-response-with-pre::consumer-audit
+:DEPENDS: FEAT-566-informative-org-create-response-with-pre::extend-shape
+:END:
+
+- Search: `rg '\b(cmdCreate|org.*create)\b' packages/coding-agent/src`.
+- Confirm no downstream consumer asserts a closed shape on the response
+  (typed structurally via `unknown` in the tool dispatch path).
+- If a typed shape exists (e.g. org-tool adapter), widen it with the new
+  optional fields.
+
+* Edge cases
+
+- `body === undefined` (common for the bare `org create` form): skip
+  `suboutlineRewrites` (no body to rewrite). `missingRequired` still
+  computes.
+- Category has no required properties configured: `missingRequired: []`.
+- `args.properties` includes unknown keys: include them in the stored
+  file (existing behavior) and do not surface a warning.
+
+* Acceptance criteria
+
+- `bun test packages/org/test/tool-create-response.test.ts` passes.
+- Manually invoking `org create` in a fresh session on an item missing
+  LAYER returns `missingRequired: ["LAYER"]` in the response.
+- Agent can use `suboutlinePrefix` verbatim as the prefix for later
+  `org update`/`org suboutline add` calls (N5).
+
+* Verification
+
+- `bun check:ts` clean.
+- `bun test packages/org` green.

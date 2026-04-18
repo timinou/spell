@@ -1,0 +1,116 @@
+#+TITLE: code edit findAndReplace has no fallback when find is ambiguous within scope
+#+STATE: ITEM
+#+SESSION_ID: 14bf73993e0afdc4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-38-00-184Z_14bf73993e0afdc4.jsonl]]
+#+CUSTOM_ID: BUG-282-code-edit-findandreplace-has-no-fallback
+#+EFFORT: 2h
+#+LAYER: crates/pi-code-engine crates/pi-natives
+#+PRIORITY: #B
+
+* Scope
+
+In: extend the `findAndReplace` action schema with an explicit `occurrence` selector (`"first" | "last" | "all" | <1-indexed number>`). Preserve the current unique-or-fail default. Route selection through `pi_code_engine::edit::patch::apply_patches`.
+
+Out: introducing regex/capture-group semantics; multi-find batch matching across distinct patches.
+
+* Background
+
+Observed failure (planner self-report, PLAN-248): `findAndReplace` with a snippet that appeared twice in scope (two adjacent `VectorRetriever.search(..., visibility: visibility)` lines) returns `Err("Patch 1: find text is ambiguous, found at 2 locations (lines 71, 73)")` with no way to select the intended occurrence. Forces the caller to pivot to much larger edits.
+
+Current native impl (`crates/pi-code-engine/src/edit/patch.rs:46-61`) hard-errors on `matches.len() > 1`. The N positions are already computed; selection is a 5-line addition. This is a contract gap, not a semantic bug.
+
+* Existing patterns
+
+- `crates/pi-code-engine/src/edit/patch.rs:22-92` — `apply_patches` + `Patch { find, replace }`.
+- `crates/pi-code-engine/src/edit/patch.rs:95-154` — `find_indent_insensitive` returns all matches with offsets.
+- `crates/pi-natives/src/code_buffer.rs:411-421` — `findAndReplace` dispatcher.
+- `packages/coding-agent/src/tools/code.ts` — TypeBox schema for actions (see top 120 lines).
+- LSP rename `occurrence` parameter — keep the same `"first"|"last"|"all"|number` vocabulary for consistency.
+
+* Tests (TDD, before impl)
+
+- `crates/pi-code-engine/src/edit/patch.rs` `#[cfg(test)]` (add module if missing):
+  - `apply_patches_unique_default`: no `occurrence` → unique match required; multi-match returns error.
+  - `apply_patches_occurrence_first`: two matches; `occurrence: First` → only line 71 rewritten.
+  - `apply_patches_occurrence_last`: two matches; `occurrence: Last` → only line 73 rewritten.
+  - `apply_patches_occurrence_index_2`: three matches; `occurrence: Index(2)` → second match rewritten.
+  - `apply_patches_occurrence_all`: three matches; `occurrence: All` → three disjoint edits returned; overlap guard still protects.
+  - `apply_patches_occurrence_index_out_of_range`: three matches; `occurrence: Index(5)` → `Err("occurrence 5 out of range 1..=3")`.
+- `crates/pi-natives/src/code_buffer.rs` `mod tests`:
+  - JSON contract: `{ kind: "findAndReplace", find, content, occurrence: 2 }` produces the correct single-location edit.
+  - JSON contract: `{ occurrence: "all" }` path.
+- `packages/coding-agent/test/tools/code.test.ts`:
+  - Schema acceptance of `occurrence: number | "first" | "last" | "all"`.
+  - Error message when `occurrence` is missing and match is ambiguous now includes: "multiple matches; pass occurrence: 'first' | 'last' | 'all' | <n>".
+
+* Implementation
+
+** Add Occurrence enum and plumbing
+:PROPERTIES:
+:CUSTOM_ID: BUG-282-code-edit-findandreplace-has-no-fallback::enum
+:END:
+
+- File: `crates/pi-code-engine/src/edit/patch.rs`
+- `pub enum Occurrence { Unique, First, Last, Index(usize), All }`
+- Extend `Patch` → `Patch { find, replace, occurrence: Occurrence }` (default `Unique`).
+- `impl Default for Occurrence { fn default() -> Self { Occurrence::Unique } }`.
+
+** Rewrite apply_patches selection logic
+:PROPERTIES:
+:CUSTOM_ID: BUG-282-code-edit-findandreplace-has-no-fallback::selector
+:DEPENDS: BUG-282-code-edit-findandreplace-has-no-fallback::enum
+:END:
+
+- File: `crates/pi-code-engine/src/edit/patch.rs`
+- In the match-loop:
+  - `matches.is_empty()` → existing error.
+  - Select:
+    - `Unique`: keep current ambiguous error, with hint text updated.
+    - `First`: take `matches[0]`.
+    - `Last`: take `matches[matches.len() - 1]`.
+    - `Index(n)`: 1-indexed; out-of-range error.
+    - `All`: iterate all matches, emit N edits; the existing overlap guard already protects.
+- Error message for ambiguous `Unique` case updated to hint about the selector.
+
+** Wire selector through JSON
+:PROPERTIES:
+:CUSTOM_ID: BUG-282-code-edit-findandreplace-has-no-fallback::json-wire
+:DEPENDS: BUG-282-code-edit-findandreplace-has-no-fallback::selector
+:END:
+
+- File: `crates/pi-natives/src/code_buffer.rs` (`findAndReplace` dispatcher).
+- Parse `action.get("occurrence")`:
+  - `Value::Null | None` → `Occurrence::Unique`.
+  - `Value::String("first"|"last"|"all")` → corresponding variant.
+  - `Value::Number(n)` → `Occurrence::Index(n as usize)`.
+  - Anything else → `Err(CodeEngineError::Edit("invalid occurrence value"))`.
+
+** TypeScript schema + prompt
+:PROPERTIES:
+:CUSTOM_ID: BUG-282-code-edit-findandreplace-has-no-fallback::ts-schema
+:DEPENDS: BUG-282-code-edit-findandreplace-has-no-fallback::json-wire
+:END:
+
+- File: `packages/coding-agent/src/tools/code.ts`
+- Extend the action TypeBox schema to include `occurrence?: Type.Union([Type.Literal("first"), Type.Literal("last"), Type.Literal("all"), Type.Integer({ minimum: 1 })])`.
+- File: `packages/coding-agent/src/prompts/tools/code.md`: add one paragraph documenting the selector. Default is unique-or-fail.
+
+* Edge cases
+
+- `All` with overlapping replacements: caught by the existing overlap guard (`apply_patches` lines 82-88).
+- `Index(0)`: reject as out-of-range (1-indexed).
+- Empty `find` string: existing `needle_lines.is_empty()` short-circuit → no-op; keep behavior.
+- Multi-patch action array: each patch carries its own `occurrence`.
+- Scope-zero matches under `All`: returns success with zero edits (no-op); document as idempotent.
+
+* Acceptance criteria
+
+- `cargo test -p pi-code-engine edit::patch` all new cases pass.
+- `cargo test -p pi-natives --test code_buffer` ambiguous hint path passes.
+- `bun test packages/coding-agent/test/tools/code.test.ts --grep="findAndReplace.*occurrence"` passes.
+- `bun check:ts` and `bun check:rs` clean.
+
+* Verification
+
+- Manual: craft a file with two identical lines; call `{ kind: "findAndReplace", find, content, occurrence: 2 }`; confirm only the second line is rewritten.
+- Manual: call with `occurrence: "all"`; confirm both lines rewritten and overlap guard not triggered.

@@ -1,0 +1,109 @@
+#+TITLE: BufferRegistry proactive fs-notify watcher for external-edit auto-discovery
+#+STATE: ITEM
+#+SESSION_ID: 14bf73993e0afdc4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-38-00-184Z_14bf73993e0afdc4.jsonl]]
+#+CUSTOM_ID: FEAT-569-bufferregistry-proactive-fs-notify-watch
+#+DEPENDS: BUG-279-bufferregistry-clobbers-external-edits-a
+#+EFFORT: 5h
+#+LAYER: crates/pi-code-engine crates/pi-natives
+#+PRIORITY: #B
+
+* Scope
+
+In: add a cross-platform `notify`-rs watcher owned by `BufferRegistry` that asynchronously marks cached buffers dirty when their source files change on disk. Supersedes BUG-279's reactive mtime-check as the primary invalidation mechanism; the reactive check remains as fallback for filesystems without usable watch (some network mounts).
+
+Out: recursive workspace watching; content-diff replay; pushing invalidations to TS clients (later FUP).
+
+* Background
+
+BUG-279 adds `disk_mtime` and stat-on-every-`open`. That re-stat is O(number of opens). A watcher reduces this to O(number of changes) and makes the cache self-healing between tool calls without per-open stats.
+
+Secondary benefit: the user's stated goal — "auto-discover and play well with the other code editing services running by any other spell service". A shared fs-watcher receives events from any writer (TUI, stats, external editors, git checkout, other spell subprocesses) uniformly.
+
+* Existing patterns
+
+- `crates/pi-code-engine/src/buffer.rs:140-201` — `BufferRegistry` (post-BUG-279 exposes `reload_if_stale`).
+- `crates/pi-natives/src/lib.rs:36-39` — `OnceLock<BufferRegistry>`.
+- `notify = "6"` — add to `crates/pi-code-engine/Cargo.toml`.
+- Channel/thread precedent: search `crates/pi-code-engine` for `std::sync::mpsc` to match style.
+
+* Tests (TDD, before impl)
+
+- `crates/pi-code-engine/tests/buffer_watcher.rs` (new integration test; serial):
+  - `external_edit_marks_stale_within_100ms`: open a buffer; `fs::write` the file externally; wait up to 100ms; assert `registry.is_stale(path) == true`.
+  - `next_open_returns_fresh_content_without_stat_fast_path`: with the watcher hot, `open` after the event returns the new content and does NOT call `fs::metadata` (instrument via a counter hook in test-only config).
+  - `watcher_tolerates_deleted_then_recreated`: delete, recreate → final `open` returns recreated content.
+  - `watcher_does_not_mark_stale_on_engine_save`: `save()` through the engine must NOT trigger a stale-mark (engine suppresses its own events via a short-lived debounce keyed on `(path, expected_mtime)`).
+  - `fallback_to_mtime_when_watcher_unavailable`: force the watcher to fail init; assert registry falls back to the BUG-279 mtime-on-open path.
+- `crates/pi-code-engine/src/buffer.rs` `#[cfg(test)]`: unit test for the dirty-flag set.
+
+* Implementation
+
+** Add notify dependency and watcher wrapper
+:PROPERTIES:
+:CUSTOM_ID: FEAT-569-bufferregistry-proactive-fs-notify-watch::dep-and-wrapper
+:END:
+
+- File: `crates/pi-code-engine/Cargo.toml` — `notify = { version = "6", default-features = false, features = ["macos_kqueue"] }` (default recommended watcher on Linux/macOS; kqueue avoids macOS FSEvents latency).
+- File: `crates/pi-code-engine/src/watcher.rs` (new):
+  - `struct FileWatcher { inner: notify::RecommendedWatcher, _join: JoinHandle<()>, dirty: Arc<RwLock<HashSet<PathBuf>>>, self_writes: Arc<Mutex<HashMap<PathBuf, SystemTime>>> }`.
+  - `FileWatcher::new(callback: impl Fn(&Path) + Send + Sync + 'static) -> Result<Self>` spawns a background thread that drains the event channel and invokes the callback.
+  - `fn mark_self_write(&self, path, expected_mtime)` used by `CodeBuffer::save` to suppress its own events for ≤ 1s.
+  - `fn is_stale(&self, path) -> bool`.
+  - `fn clear_stale(&self, path)`.
+  - `fn watch(&self, path)` / `fn unwatch(&self, path)`.
+
+** Integrate into BufferRegistry
+:PROPERTIES:
+:CUSTOM_ID: FEAT-569-bufferregistry-proactive-fs-notify-watch::registry-integration
+:DEPENDS: FEAT-569-bufferregistry-proactive-fs-notify-watch::dep-and-wrapper BUG-279-bufferregistry-clobbers-external-edits-a::registry-revalidate
+:END:
+
+- File: `crates/pi-code-engine/src/buffer.rs`
+- `BufferRegistry` owns `Option<FileWatcher>`. `new()` attempts init; on failure logs and sets `None` (fallback to BUG-279 reactive path).
+- `open(path)`:
+  - If watcher is present AND `!watcher.is_stale(path)` AND cache hit → return cached Arc (no stat).
+  - If watcher marks stale → drop cache, fall through to `CodeBuffer::open`, re-watch.
+  - If watcher is absent → run BUG-279 mtime revalidation.
+- `close(path)` unwatches.
+- `save()` in `CodeBuffer` calls `registry.watcher.mark_self_write(path, new_mtime)` after write.
+
+** NAPI surface: suppress self-write events end-to-end
+:PROPERTIES:
+:CUSTOM_ID: FEAT-569-bufferregistry-proactive-fs-notify-watch::self-write-suppression
+:DEPENDS: FEAT-569-bufferregistry-proactive-fs-notify-watch::registry-integration
+:END:
+
+- File: `crates/pi-natives/src/lib.rs` — expose `buffer_registry()` unchanged; optionally `fn buffer_registry_watcher_present() -> bool` for diagnostic use.
+- File: `crates/pi-natives/src/code_buffer.rs` — add a `"watcherStatus"` subcommand returning `{ active: bool, watched: usize }` for observability.
+
+** Fallback behavior tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-569-bufferregistry-proactive-fs-notify-watch::fallback-tests
+:DEPENDS: FEAT-569-bufferregistry-proactive-fs-notify-watch::self-write-suppression
+:END:
+
+- File: `crates/pi-code-engine/tests/buffer_watcher.rs` — include the fallback scenario from Tests section.
+- File: `packages/coding-agent/test/tools/code.test.ts` — smoke test of `{ command: "watcherStatus" }` returns expected shape.
+
+* Edge cases
+
+- Network / virtualised FS without native event support: `notify::RecommendedWatcher::new` may return `Unsupported`. Catch and continue in fallback mode.
+- Watcher event batching: debounce bursts to 50ms windows to avoid storms during large git operations.
+- Self-write suppression keyed on `(path, expected_mtime)` with 1s TTL; if external write happens within the same millisecond, the mtime comparison in BUG-279 catches it.
+- Symlinks: watch the canonicalised path (`fs::canonicalize(path)`) so reopening via different aliases converges.
+- macOS case-insensitive HFS+: canonicalise case as above; document limitation.
+- Very high file-count sessions (>10k buffers): each open registers a watch; on Linux this hits `fs.inotify.max_user_watches`. Document and add a soft cap (5000) with a warning log when exceeded.
+
+* Acceptance criteria
+
+- `cargo test -p pi-code-engine --test buffer_watcher` green (all scenarios, including fallback).
+- `cargo test -p pi-code-engine` green overall.
+- `code edit { command: "watcherStatus" }` reports `{ active: true, watched: N }` in a live session.
+- Reproducer: external `Bun.write` inside a running spell session is observed by the next `code read` without manual `reload`.
+- `bun check:rs` clean.
+
+* Verification
+
+- Manual: open a file via `code read`, externally `Bun.write` it from another terminal, invoke another `code read` and confirm fresh content without a `reload` call.
+- Manual: delete the file externally and confirm `code read` returns a NotFound error on the next call.

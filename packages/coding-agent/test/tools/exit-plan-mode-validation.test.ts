@@ -38,15 +38,11 @@ describe("ExitPlanModeTool validation", () => {
 		category: "plans" | "features" | "bugs",
 		id: string,
 		body: string,
-		props?: { effort?: string; priority?: string; layer?: string; depends?: string },
+		props?: { layer?: string; depends?: string },
 	): Promise<void> {
 		const categoryDir = path.join(tmpDir, "!tasks", category);
 		await fs.mkdir(categoryDir, { recursive: true });
 		const lines = [`#+TITLE: ${id}`, `#+CUSTOM_ID: ${id}`, "#+STATE: ITEM"];
-		if (props?.effort !== undefined) lines.push(`#+EFFORT: ${props.effort}`);
-		else lines.push("#+EFFORT: 1h");
-		if (props?.priority !== undefined) lines.push(`#+PRIORITY: ${props.priority}`);
-		else lines.push("#+PRIORITY: #A");
 		if (props?.layer !== undefined) lines.push(`#+LAYER: ${props.layer}`);
 		else lines.push("#+LAYER: backend");
 		if (props?.depends !== undefined) lines.push(`#+DEPENDS: ${props.depends}`);
@@ -160,15 +156,13 @@ describe("ExitPlanModeTool validation", () => {
 
 	it("reports all missing top-level properties in one error", async () => {
 		await writeOrgItem("features", "FEAT-102-bare", buildValidBody("FEAT-102-bare"), {
-			effort: "",
-			priority: "",
 			layer: "",
 		});
 		await writeOrgItem("plans", "PLAN-102-test", buildPlanBody("FEAT-102-bare"));
 
 		const tool = new ExitPlanModeTool(createSession());
 		await expect(tool.execute("call-all-missing", { title: "TEST_PLAN", itemId: "PLAN-102-test" })).rejects.toThrow(
-			/EFFORT.*PRIORITY.*LAYER/,
+			/LAYER/,
 		);
 	});
 
@@ -256,8 +250,6 @@ describe("ExitPlanModeTool validation", () => {
 
 	it("reports thin bodies and missing properties together", async () => {
 		await writeOrgItem("features", "FEAT-110-combined", THIN_BODY, {
-			effort: "",
-			priority: "",
 			layer: "",
 		});
 		await writeOrgItem("plans", "PLAN-110-test", buildPlanBody("FEAT-110-combined"));
@@ -265,7 +257,7 @@ describe("ExitPlanModeTool validation", () => {
 		const tool = new ExitPlanModeTool(createSession());
 		await expect(
 			tool.execute("call-combined-thin-props", { title: "TEST_PLAN", itemId: "PLAN-110-test" }),
-		).rejects.toThrow(/empty or minimal bodies|thin child body[\s\S]*EFFORT.*PRIORITY.*LAYER/);
+		).rejects.toThrow(/empty or minimal bodies|thin child body[\s\S]*LAYER/);
 	});
 
 	it("reports broken top-level deps and bad sub-outline namespaces together", async () => {

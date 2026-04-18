@@ -28,6 +28,69 @@ pub struct ResolvedSymbol {
 	pub body_end_byte:   Option<usize>,
 }
 
+fn declaration_name_for_node(
+	node: Node<'_>,
+	profile: &LanguageProfile,
+	source: &str,
+) -> Option<String> {
+	let inner = unwrap_export(node);
+	let decl = declaration_for(profile, inner, source)?;
+	declaration_name(source, inner, decl)
+}
+
+fn declaration_ancestor_within(
+	mut node: Node<'_>,
+	profile: &LanguageProfile,
+	source: &str,
+	start: usize,
+	end: usize,
+) -> bool {
+	while let Some(parent) = node.parent() {
+		if parent.start_byte() < start || parent.end_byte() > end {
+			return false;
+		}
+		if declaration_name_for_node(parent, profile, source).is_some() {
+			return true;
+		}
+		node = parent;
+	}
+	false
+}
+
+pub fn collect_top_level_decls_in_range(
+	buffer: &CodeBuffer,
+	start: usize,
+	end: usize,
+) -> Vec<String> {
+	let source = buffer.source();
+	let Some(profile) = buffer.registry().get(buffer.language()) else {
+		return Vec::new();
+	};
+	let root = buffer.tree().root_node();
+	let Some(container) = root.named_descendant_for_byte_range(start, end.saturating_sub(1)) else {
+		return Vec::new();
+	};
+	let mut names = Vec::new();
+	let mut stack = vec![container];
+	while let Some(node) = stack.pop() {
+		if node.start_byte() < start || node.end_byte() > end {
+			continue;
+		}
+		if let Some(name) = declaration_name_for_node(node, profile, &source)
+			&& !declaration_ancestor_within(node, profile, &source, start, end)
+		{
+			names.push(name);
+			continue;
+		}
+		let mut cursor = node.walk();
+		for child in node.named_children(&mut cursor) {
+			stack.push(child);
+		}
+	}
+	names.reverse();
+	names
+}
+
 /// Resolve a symbol by name within a buffer.
 ///
 /// Supports dotted names by first matching the full string, then resolving the

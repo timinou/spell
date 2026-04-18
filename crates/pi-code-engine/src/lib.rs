@@ -2,12 +2,14 @@ pub mod buffer;
 pub mod diff;
 pub mod edit;
 pub mod error;
+pub mod file_lock;
 pub mod language;
 pub mod line_target;
 pub mod navigate;
 pub mod outline;
 pub mod procedure;
 pub mod resolve;
+pub mod watcher;
 
 pub use buffer::{BufferInfo, BufferRegistry, BufferSnapshot, CodeBuffer, EditResult, TextEdit};
 pub use diff::{DiffHunk, DiffKind, diff_lines};

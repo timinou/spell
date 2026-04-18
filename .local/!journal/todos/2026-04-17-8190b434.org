@@ -4,43 +4,15 @@
 
 * Execution
 
-** DOING Implement shared low-spill policy
-:PROPERTIES:
-:TASK_ID: shared-low-spill-policy
-:STATUS: in_progress
-:ORG_ITEM_ID: PROJ-046-coding-agent-low-spill-artifact-policy-w
-:END:
-
-Update shared spill policy + streaming cutover for PLAN-239. Touch packages/coding-agent/src/tools/output-meta.ts, packages/coding-agent/src/session/streaming-output.ts, packages/coding-agent/src/config/settings-schema.ts, packages/coding-agent/src/modes/components/settings-defs.ts, plus focused tests proving low-spill/exemption behavior.
-
-** ITEM Apply low-spill executor defaults
-:PROPERTIES:
-:TASK_ID: apply-low-spill-to-executors
-:STATUS: pending
-:DEPENDS: task://plan239/shared-low-spill-policy
-:ORG_ITEM_ID: PROJ-046-coding-agent-low-spill-artifact-policy-w
-:END:
-
-Cut over executors to shared low-spill policy. Touch packages/coding-agent/src/tools/bash.ts, packages/coding-agent/src/tools/python.ts, packages/coding-agent/src/tools/ssh.ts, packages/coding-agent/src/ipy/executor.ts, plus executor/task tests proving spill behavior.
-
-** ITEM Add bash lenient spill override
-:PROPERTIES:
-:TASK_ID: add-bash-lenient-override
-:STATUS: pending
-:DEPENDS: task://plan239/apply-low-spill-to-executors
-:ORG_ITEM_ID: FEAT-557-coding-agent-add-lenientspill-bash-overr
-:END:
-
-Add per-call bash lenientSpill override + warning + prompt/settings/test updates. Touch packages/coding-agent/src/tools/bash.ts, packages/coding-agent/src/prompts/tools/bash.md, plus focused spill-policy tests proving warning and per-call widening only.
-
-** ITEM Verify plan close and commit
+** DONE Verify plan close and commit
 :PROPERTIES:
 :TASK_ID: verify-close-and-commit
-:STATUS: pending
-:GATE_CMD: bun test packages/coding-agent/test/streaming-output.test.ts && bun test packages/coding-agent/test/bash-executor.test.ts packages/coding-agent/test/python-executor.test.ts packages/coding-agent/test/task/bash-exit-code-tracking.test.ts && bun test packages/coding-agent/test/tools/output-meta-spill-policy.test.ts packages/coding-agent/test/tools/bash-spill-policy.test.ts && bun check:ts
-:DEPENDS: task://plan239/add-bash-lenient-override
+:STATUS: completed
+:GATE_CMD: bun test packages/coding-agent/test/streaming-output.test.ts packages/coding-agent/test/streaming-output-spill-policy.test.ts && bun test packages/coding-agent/test/bash-executor.test.ts packages/coding-agent/test/bash-executor-spill.test.ts packages/coding-agent/test/python-executor.test.ts packages/coding-agent/test/task/bash-exit-code-tracking.test.ts && bun test packages/coding-agent/test/tools/output-meta-spill-policy.test.ts packages/coding-agent/test/tools/bash-spill-policy.test.ts && bun check:ts
 :ORG_ITEM_ID: PLAN-239-bash-low-spill-artifact-policy-plan
 :ORG_ITEM_CLOSING_ID: PLAN-239-bash-low-spill-artifact-policy-plan
 :END:
 
 Run required tests/checks, gather artifact evidence, update org completion report, reconcile child org states, mark PLAN-239 done if truthful, and create a scoped commit containing code + matching org files only.
+
+Verification artifacts written under !tasks/plans/plan-artifacts/PLAN-239-bash-low-spill-artifact-policy-plan/. Child org items and PLAN-239 set to DONE. Commit created: 0c98f98ad. Exact gate command rerun successfully after commit.

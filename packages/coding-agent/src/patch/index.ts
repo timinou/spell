@@ -12,7 +12,6 @@ import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { StringEnum } from "@oh-my-pi/pi-ai";
-import { executeCodeBuffer } from "@oh-my-pi/pi-natives";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import {
@@ -33,6 +32,11 @@ import {
 	invalidateFsScanAfterRename,
 	invalidateFsScanAfterWrite,
 } from "../tools/fs-cache-invalidation";
+import {
+	applyManagedBufferContent,
+	ensureManagedBufferFresh,
+	invalidateManagedCodeBuffersForPaths,
+} from "../tools/managed-code-buffer";
 import { enforceModeWrite, resolvePlanPath } from "../tools/mode-guard";
 import { outputMeta } from "../tools/output-meta";
 import { applyPatch } from "./applicator";
@@ -81,67 +85,6 @@ export type { EditRenderContext, EditToolDetails } from "./shared";
 // Rendering
 export { editToolRenderer, getLspBatchRequest } from "./shared";
 export * from "./types";
-
-function extractCodeToolErrorMessage(output: unknown): string {
-	if (typeof output === "string") return output;
-	if (typeof output === "number" || typeof output === "boolean") return String(output);
-	if (output && typeof output === "object" && !Array.isArray(output)) {
-		const message = Reflect.get(output, "message");
-		if (typeof message === "string" && message.trim().length > 0) {
-			return message;
-		}
-	}
-	const serialized = JSON.stringify(output);
-	return typeof serialized === "string" && serialized.length > 0 ? serialized : "Code command failed";
-}
-
-function countBufferDiffHunks(output: unknown): number {
-	return Array.isArray(output) ? output.length : 0;
-}
-
-function invalidateManagedCodeBuffersForPaths(paths: string[]): void {
-	const uniquePaths = [...new Set(paths.filter(file => file.length > 0 && nodePath.isAbsolute(file)))];
-	for (const file of uniquePaths) {
-		const closeResult = executeCodeBuffer({ command: "close", file });
-		if (closeResult.error) {
-			throw new Error(
-				`Edit succeeded on disk, but failed to invalidate the managed code buffer for ${file}: ${String(closeResult.output ?? "unknown error")}`,
-			);
-		}
-	}
-}
-
-function ensureManagedBufferFresh(file: string): void {
-	const freshness = executeCodeBuffer({ command: "diff", file });
-	if (freshness.error) {
-		throw new Error(
-			`Unable to verify buffer freshness before edit: ${extractCodeToolErrorMessage(freshness.output)}`,
-		);
-	}
-	const staleHunks = countBufferDiffHunks(freshness.output);
-	if (staleHunks > 0) {
-		throw new Error(
-			`Stale code buffer detected (${staleHunks} ${staleHunks === 1 ? "hunk" : "hunks"} differ from disk). Run code diff to inspect, then reconcile the on-disk file before retrying this mutation.`,
-		);
-	}
-}
-
-function applyManagedBufferContent(file: string, content: string, options: { create: boolean }): void {
-	const result = options.create
-		? executeCodeBuffer({
-				command: "edit",
-				root: process.cwd(),
-				operations: [{ targetId: file, actions: [{ kind: "write", content }] }],
-			})
-		: executeCodeBuffer({ command: "replace_content", file, content });
-	if (result.error) {
-		throw new Error(`Managed code buffer update failed for ${file}: ${extractCodeToolErrorMessage(result.output)}`);
-	}
-	const saveResult = executeCodeBuffer({ command: "save", file });
-	if (saveResult.error) {
-		throw new Error(`Managed code buffer save failed for ${file}: ${extractCodeToolErrorMessage(saveResult.output)}`);
-	}
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Schemas
@@ -565,7 +508,7 @@ export class EditTool implements AgentTool<TInput> {
 			}
 
 			const absolutePath = resolvePlanPath(this.session, path);
-			if (isCodeToolSupportedPath(absolutePath)) {
+			if (isCodeToolSupportedPath(absolutePath) && !process.env.SPELL_ALLOW_TEXT_EDIT_ON_CODE) {
 				throw new Error(codeToolRedirectMessage(path));
 			}
 			const resolvedMove = move ? resolvePlanPath(this.session, move) : undefined;
@@ -779,7 +722,7 @@ export class EditTool implements AgentTool<TInput> {
 				if (sandboxRenameError) throw new Error(sandboxRenameError);
 			}
 			const resolvedPath = resolvePlanPath(this.session, path);
-			if (isCodeToolSupportedPath(resolvedPath)) {
+			if (isCodeToolSupportedPath(resolvedPath) && !process.env.SPELL_ALLOW_TEXT_EDIT_ON_CODE) {
 				throw new Error(codeToolRedirectMessage(path));
 			}
 			const resolvedRename = rename ? resolvePlanPath(this.session, rename) : undefined;
@@ -886,7 +829,7 @@ export class EditTool implements AgentTool<TInput> {
 		}
 
 		const absolutePath = resolvePlanPath(this.session, path);
-		if (isCodeToolSupportedPath(absolutePath)) {
+		if (isCodeToolSupportedPath(absolutePath) && !process.env.SPELL_ALLOW_TEXT_EDIT_ON_CODE) {
 			throw new Error(codeToolRedirectMessage(path));
 		}
 

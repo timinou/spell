@@ -115,12 +115,28 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<ExitPlanModeDetails>> {
 		const state = this.session.getPlanModeState?.();
-		if (!state?.enabled) {
-			throw new ToolError("Plan mode is not active.");
-		}
-
 		const normalized = normalizePlanTitle(params.title);
 		const finalPlanFilePath = `local://${normalized.fileName}`;
+		if (!state?.enabled) {
+			const lastApprovedPlan = this.session.getLastApprovedPlan?.();
+			if (
+				lastApprovedPlan &&
+				lastApprovedPlan.itemId === params.itemId &&
+				lastApprovedPlan.finalPlanFilePath === finalPlanFilePath
+			) {
+				return {
+					content: [{ type: "text", text: "Plan already approved." }],
+					details: {
+						planFilePath: lastApprovedPlan.finalPlanFilePath,
+						planExists: true,
+						title: lastApprovedPlan.title,
+						finalPlanFilePath: lastApprovedPlan.finalPlanFilePath,
+						itemId: lastApprovedPlan.itemId,
+					},
+				};
+			}
+			throw new ToolError("Plan mode is not active.");
+		}
 		const resolvedPlanPath = resolvePlanPath(this.session, state.planFilePath);
 		resolvePlanPath(this.session, finalPlanFilePath);
 		const orgEnabled = (this.session.settings.get("org.enabled") as boolean | undefined) ?? false;
