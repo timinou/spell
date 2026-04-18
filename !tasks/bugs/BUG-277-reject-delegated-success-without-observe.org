@@ -1,5 +1,5 @@
 #+TITLE: Reject delegated success without observed verification proof
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14bfdda2f7d5493e
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell_kdl-config/2026-04-18T20-21-17-407Z_14bfdda2f7d5493e.jsonl]]
 #+CUSTOM_ID: BUG-277-reject-delegated-success-without-observe
@@ -108,3 +108,5 @@ Concrete test files / scenarios:
 - `bun check:ts` passes after the implementation wave that lands this item.
 
 NOTE [2026-04-18]: Activating Wave 1 per PLAN-247 execution.
+
+NOTE [2026-04-18]: Implemented proof-aware delegated submit_result acceptance with one runtime retry, aligned reminder copy, and focused regression coverage in executor-subagent-reminders + submit-result tests.

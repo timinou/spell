@@ -53,6 +53,9 @@ export function resolveVerificationContext(
 	const lines: string[] = [];
 	if (task.gateCmd) lines.push(`You MUST run: \`${task.gateCmd}\` and verify it passes.`);
 	if (task.gateArtifact) lines.push(`You MUST produce artifact at: ${task.gateArtifact}`);
+	if (task.verificationArtifact) {
+		lines.push(`Verification evidence will be persisted at: ${task.verificationArtifact}`);
+	}
 	if (task.gateCommit) lines.push("You MUST commit changes before yielding.");
 	if (task.gateLlm) lines.push(`You MUST self-review against: ${task.gateLlm}`);
 	if (task.verifyCmd) lines.push(`You SHOULD run: \`${task.verifyCmd}\` to verify.`);

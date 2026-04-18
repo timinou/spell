@@ -23,6 +23,7 @@ export interface OrgDependProperties {
 	triggers: TriggerRule[];
 	gateCmd?: string;
 	gateArtifact?: string;
+	verificationArtifact?: string;
 	gateLlm?: string;
 	layer?: string;
 }
@@ -159,6 +160,7 @@ export function parseOrgDependProperties(content: string): OrgDependProperties[]
 			triggers,
 			gateCmd: extractProperty(h.propertiesBlock, "GATE_CMD") ?? undefined,
 			gateArtifact: extractProperty(h.propertiesBlock, "GATE_ARTIFACT") ?? undefined,
+			verificationArtifact: extractProperty(h.propertiesBlock, "VERIFICATION_ARTIFACT") ?? undefined,
 			gateLlm: extractProperty(h.propertiesBlock, "GATE_LLM") ?? undefined,
 			layer: extractProperty(h.propertiesBlock, "LAYER") ?? undefined,
 		};

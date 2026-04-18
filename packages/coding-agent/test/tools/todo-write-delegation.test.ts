@@ -58,16 +58,25 @@ describe("Todo delegation model", () => {
 					id: "task-1",
 					content: "Delegate review",
 					status: "in_progress",
-					delegation: makeDelegation(),
+					delegation: makeDelegation({
+						result: {
+							verification: {
+								status: "failed",
+								failures: [{ gate: "gateCmd", expected: "bun test", detail: "missing", taskId: "child-1" }],
+							},
+						},
+					}),
 				}),
 			]),
 		];
 
 		const cloned = cloneTodoGroups(original);
 		cloned[0].tasks[0].delegation!.sessionId = "subagent-session-2";
+		cloned[0].tasks[0].delegation!.result!.verification!.failures![0]!.detail = "updated";
 
 		expect(original[0].tasks[0].delegation?.sessionId).toBe("subagent-session-1");
 		expect(cloned[0].tasks[0].delegation?.sessionId).toBe("subagent-session-2");
+		expect(original[0].tasks[0].delegation?.result?.verification?.failures?.[0]?.detail).toBe("missing");
 	});
 
 	test("normalization keeps delegated work running while demoting extra direct in_progress tasks", async () => {

@@ -22,6 +22,7 @@ export interface TodoDashboardTask {
 	blocked: boolean;
 	gateCommit?: boolean;
 	gateArtifact?: string;
+	verificationArtifact?: string;
 	gateCmd?: string;
 	gateLlm?: string;
 	verifyCmd?: string;
@@ -92,6 +93,7 @@ export class TodoDashboardBridge {
 				blocked: isTaskBlocked(task, allTasks),
 				gateCommit: task.gateCommit,
 				gateArtifact: task.gateArtifact,
+				verificationArtifact: task.verificationArtifact,
 				gateCmd: task.gateCmd,
 				gateLlm: task.gateLlm,
 				verifyCmd: task.verifyCmd,

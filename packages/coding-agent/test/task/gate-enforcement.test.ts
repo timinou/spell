@@ -203,6 +203,57 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		expect(finalTask?.delegation?.result?.gateFailures).toBeDefined();
 		expect(finalTask?.delegation?.result?.gateFailures?.length).toBe(1);
 		expect(finalTask?.delegation?.result?.gateFailures?.[0]?.gate).toBe("gateCmd");
+		expect(finalTask?.delegation?.result?.verification?.status).toBe("failed");
+		expect(finalTask?.delegation?.result?.verification?.failures?.[0]?.gate).toBe("gateCmd");
+	});
+
+	it("writes verificationArtifact for a successful delegated verification summary", async () => {
+		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
+		const session = createSession(tempDir, settings, [
+			{
+				id: "phase-1",
+				name: "Work",
+				tasks: [
+					{
+						id: "task-1",
+						content: "Build feature",
+						status: "pending",
+						gateCmd: "bun test",
+						verificationArtifact: "artifacts/delegated-verification.json",
+					},
+				],
+			},
+		]);
+		const transcriptPath = path.join(tempDir, "artifacts", "sub-success.jsonl");
+		mockRunSubprocess(transcriptPath, {
+			extractedToolData: { bash: [{ command: "bun test", exitCode: 0, cwd: tempDir }] },
+			outputPath: path.join(tempDir, "artifacts", "sub-success.md"),
+		});
+
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(session);
+		await tool.execute("call-success-artifact", {
+			agent: "task",
+			tasks: [
+				{
+					id: "sub-success",
+					description: "Build feature",
+					assignment: "## Target\n- File: foo.ts",
+					todoRef: "task-1",
+				},
+			],
+		});
+
+		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		expect(finalTask?.delegation?.result?.verification?.status).toBe("passed");
+		expect(finalTask?.delegation?.result?.verification?.artifactPath).toBe(
+			path.join(tempDir, "artifacts", "delegated-verification.json"),
+		);
+		const artifact = JSON.parse(
+			await fs.readFile(path.join(tempDir, "artifacts", "delegated-verification.json"), "utf8"),
+		) as Record<string, unknown>;
+		expect(artifact.status).toBe("completed");
+		expect((artifact.verification as Record<string, unknown>).status).toBe("passed");
 	});
 
 	it("marks todo gate_failed when gateCommit is required but no git commit in bash history", async () => {
@@ -233,6 +284,54 @@ describe("Gate enforcement in finalizeTodoRef", () => {
 		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
 		expect(finalTask?.status).toBe("gate_failed");
 		expect(finalTask?.delegation?.result?.gateFailures?.[0]?.gate).toBe("gateCommit");
+	});
+
+	it("writes verificationArtifact for a gate_failed delegated verification summary", async () => {
+		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
+		const session = createSession(tempDir, settings, [
+			{
+				id: "phase-1",
+				name: "Work",
+				tasks: [
+					{
+						id: "task-1",
+						content: "Build feature",
+						status: "pending",
+						gateCmd: "bun test",
+						verificationArtifact: "artifacts/delegated-verification-failed.json",
+					},
+				],
+			},
+		]);
+		const transcriptPath = path.join(tempDir, "artifacts", "sub-gate-failed.jsonl");
+		mockRunSubprocess(transcriptPath, {
+			extractedToolData: { bash: [{ command: "bun check", exitCode: 0, cwd: tempDir }] },
+		});
+
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(session);
+		await tool.execute("call-gate-failed-artifact", {
+			agent: "task",
+			tasks: [
+				{
+					id: "sub-gate-failed",
+					description: "Build feature",
+					assignment: "## Target\n- File: foo.ts",
+					todoRef: "task-1",
+				},
+			],
+		});
+
+		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		expect(finalTask?.status).toBe("gate_failed");
+		expect(finalTask?.delegation?.result?.verification?.artifactPath).toBe(
+			path.join(tempDir, "artifacts", "delegated-verification-failed.json"),
+		);
+		const artifact = JSON.parse(
+			await fs.readFile(path.join(tempDir, "artifacts", "delegated-verification-failed.json"), "utf8"),
+		) as Record<string, unknown>;
+		expect(artifact.status).toBe("gate_failed");
+		expect((artifact.verification as Record<string, unknown>).status).toBe("failed");
 	});
 
 	it("marks todo gate_failed when gateArtifact is required but file doesn't exist", async () => {
