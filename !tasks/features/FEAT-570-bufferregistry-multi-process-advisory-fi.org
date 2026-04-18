@@ -1,5 +1,5 @@
 #+TITLE: BufferRegistry multi-process advisory file locking around save and revalidation
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bf73993e0afdc4
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-38-00-184Z_14bf73993e0afdc4.jsonl]]
 #+CUSTOM_ID: FEAT-570-bufferregistry-multi-process-advisory-fi
@@ -104,3 +104,5 @@ We use OS advisory locks (`flock`/`LockFileEx`) so cooperating processes (any Sp
 
 - Manual: open two `bun spell` shells; in shell A, invoke `code edit { command: "save", … }` after stubbing a 2s sleep before the write (temporary instrumentation); in shell B, invoke the same during the sleep; confirm B blocks then reports `LOCK_TIMEOUT` under the budget.
 - Remove the instrumentation; confirm the normal single-process path is unchanged.
+
+NOTE [2026-04-18]: Completed under PLAN-249 verification on 2026-04-18.

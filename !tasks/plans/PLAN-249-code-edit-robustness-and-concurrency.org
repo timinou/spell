@@ -1,5 +1,5 @@
 #+TITLE: CODE_EDIT_ROBUSTNESS_AND_CONCURRENCY
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14bf73993e0afdc4
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-38-00-184Z_14bf73993e0afdc4.jsonl]]
 #+CUSTOM_ID: PLAN-249-code-edit-robustness-and-concurrency
@@ -129,3 +129,26 @@ Verification steps:
 Found during PLAN-248 authoring. User-supplied failure list compiled at `2026-04-18` includes three direct-use pitfalls and three subagent failures; Wave 1 fixes the direct-use pitfalls; Wave 2-3 addresses the underlying cache and cross-process concerns that drive the subagent abort class.
 
 Subagent re-enablement after this plan is a one-way door: treat the live repro gate as blocking. If it fails, file a new BUG against the concrete mechanism, do not defer.
+
+** Completion [2026-04-18]
+*** Verification
+- `cargo test -p pi-code-engine` → passed (`154 passed; 0 failed`).
+- `cargo test -p pi-natives` → passed (`72 passed; 0 failed`).
+- `bun test packages/coding-agent/test/tools/code.test.ts` → passed.
+- `bun check:ts` → passed.
+- `bun check:rs` → passed.
+- `bun --cwd=packages/natives run build:native` → passed; installed `packages/natives/native/pi_natives.linux-x64-modern.node`.
+- Fresh-process live repro (release addon forced via `PI_COMPILED=1`) → passed. Sequence: outline targetIds, `write { scope:"body" }` on `alpha`, positional insert on `gamma`, `findAndReplace { occurrence: 2 }` on `beta`, then `save`. Final file preserved sibling functions, rewrote only the second duplicate line, and kept the positional insert inside the target function body.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-249-code-edit-robustness-and-concurrency/build-native.log]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-249-code-edit-robustness-and-concurrency/cargo-test-pi-code-engine.log]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-249-code-edit-robustness-and-concurrency/cargo-test-pi-natives.log]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-249-code-edit-robustness-and-concurrency/live-repro-release.log]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-249-code-edit-robustness-and-concurrency/verification-summary.txt]]
+*** Deviations
+- Plan text referenced `build:release`; repo script is `build:native`, so verification used `bun --cwd=packages/natives run build:native`.
+- `code edit` new-file creation for `crates/pi-code-engine/src/watcher.rs` and `crates/pi-code-engine/src/file_lock.rs` repeatedly failed with save-time I/O errors after retries; those two new files were written directly instead.
+- Fresh Bun repro initially loaded stale `pi_natives.dev.node`; final verification forced the newly built release addon with `PI_COMPILED=1`.
+- Quick-task repro transcripts were malformed/incomplete, so the final acceptance verdict was recorded from the direct fresh Bun subprocess whose full output is saved in `live-repro-release.log`.
+
+NOTE [2026-04-18]: Verification captured and child items closed on 2026-04-18.

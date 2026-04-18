@@ -1,5 +1,5 @@
 #+TITLE: BufferRegistry proactive fs-notify watcher for external-edit auto-discovery
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bf73993e0afdc4
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-38-00-184Z_14bf73993e0afdc4.jsonl]]
 #+CUSTOM_ID: FEAT-569-bufferregistry-proactive-fs-notify-watch
@@ -107,3 +107,5 @@ Secondary benefit: the user's stated goal — "auto-discover and play well with 
 
 - Manual: open a file via `code read`, externally `Bun.write` it from another terminal, invoke another `code read` and confirm fresh content without a `reload` call.
 - Manual: delete the file externally and confirm `code read` returns a NotFound error on the next call.
+
+NOTE [2026-04-18]: Completed under PLAN-249 verification on 2026-04-18.

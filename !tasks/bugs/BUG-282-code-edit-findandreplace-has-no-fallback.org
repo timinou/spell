@@ -1,5 +1,5 @@
 #+TITLE: code edit findAndReplace has no fallback when find is ambiguous within scope
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bf73993e0afdc4
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-38-00-184Z_14bf73993e0afdc4.jsonl]]
 #+CUSTOM_ID: BUG-282-code-edit-findandreplace-has-no-fallback
@@ -114,3 +114,5 @@ Current native impl (`crates/pi-code-engine/src/edit/patch.rs:46-61`) hard-error
 
 - Manual: craft a file with two identical lines; call `{ kind: "findAndReplace", find, content, occurrence: 2 }`; confirm only the second line is rewritten.
 - Manual: call with `occurrence: "all"`; confirm both lines rewritten and overlap guard not triggered.
+
+NOTE [2026-04-18]: Completed under PLAN-249 verification on 2026-04-18.

@@ -1,5 +1,5 @@
 #+TITLE: BufferRegistry sharded concurrency-friendly map for parallel in-session opens
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bf73993e0afdc4
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-38-00-184Z_14bf73993e0afdc4.jsonl]]
 #+CUSTOM_ID: FEAT-571-bufferregistry-sharded-concurrency-frien
@@ -81,3 +81,5 @@ NB (testing guidance): the timing test is intentionally a "contention smoke" —
 * Verification
 
 - Manual: `cargo test -p pi-code-engine -- --ignored concurrent_opens_bench_smoke` shows throughput > 2× the previous RwLock-based baseline.
+
+NOTE [2026-04-18]: Completed under PLAN-249 verification on 2026-04-18.

@@ -1,5 +1,5 @@
 #+TITLE: code edit insertBefore/insertAfter escape parent targetId container on positional line mode
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bf73993e0afdc4
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-38-00-184Z_14bf73993e0afdc4.jsonl]]
 #+CUSTOM_ID: BUG-281-code-edit-insertbefore-insertafter-escap
@@ -108,3 +108,5 @@ Failure mode: caller believes line-target is scoped to the targetId container; e
 end` (3 lines); invoke `{ targetId: "lib/mod.ex::Mod.foo", actions: [{ kind: "insertBefore", line: 1, content: "# x
 " }] }`. Assert refusal.
 - Then set `line: 2` and confirm insertion occurs inside the module, not above `defmodule`.
+
+NOTE [2026-04-18]: Completed under PLAN-249 verification on 2026-04-18.
