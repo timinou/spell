@@ -3,26 +3,60 @@
 #+SESSION_ID: 14bf8519411f65df
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-54-27-716Z_14bf8519411f65df.jsonl]]
 #+CUSTOM_ID: FUP-059-code-edit-api-ergonomics-and-audit-follo
+#+LAYER: coding-agent
+#+DEPENDS: BUG-284-code-edit-occurrence-disambiguation-cont BUG-285-code-edit-structural-insertion-and-sibli
 
-* Initial Message
+* Scope
+This follow-up captures broader work intentionally deferred out of the current structural fix plan. It starts only after the occurrence cutover and insertion/sibling-boundary hardening land. In scope: evaluating whether `code edit` needs a richer disambiguation UX than `occurrence`, whether the operation DSL should expose safer boundary-aware insertion primitives, and whether transcript/session tooling should better surface structural edit failures.
 
-┌──────────────────────────────┬───────────────────────┬─────────────────────────────────────────────────────────────────────────────────────────┐
- │ Action                       │ Target                │ Result                                                                                  │
- ├──────────────────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
- │ write body-scope, multi-line │ symbol                │ ✓ clean                                                                                 │
- ├──────────────────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
- │ insertAfter                  │ symbol                │ ✓ clean (drops leading "")                                                              │
- ├──────────────────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
- │ insertBefore                 │ symbol or line-anchor │ ✗ mangles indentation (over-indents inserted block, strips leading indent of next line) │
- ├──────────────────────────────┼───────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────┤
- │ findAndReplace w/ dup find   │ file                  │ ✗ ambiguous-match error, no occurrence selector                                         │
- └──────────────────────────────┴───────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────┘
+Out of scope for the structural-now work: changing the underlying matching engine again, reworking the entire code-edit API, or folding exploratory UX/design work into the current bug-fix execution.
 
+* Existing Patterns
+- Compare against ambiguity handling already used in text patching under `packages/coding-agent/src/patch/` where duplicate matches produce previews and explicit disambiguation errors.
+- Reuse the finalized public contract from:
+  - `packages/coding-agent/src/tools/code.ts`
+  - `packages/coding-agent/src/prompts/tools/code.md`
+  - `packages/natives/src/code-buffer/types.ts`
+- Treat `crates/pi-natives/src/code_buffer.rs::single_action` and the edit modules under `crates/pi-code-engine/src/edit/` as the canonical implementation surface to audit before proposing new API shapes.
 
+* Tests
+Future workflows to enumerate when this item is picked up:
+- T1 — previewable disambiguation for duplicate structural matches without forcing the caller to count occurrences manually.
+- T2 — boundary-aware insertion UX that communicates what was auto-normalized vs rejected.
+- T3 — transcript/session tooling that makes failed structural edits and their exact operation payloads easier to audit.
+- T4 — broader consistency review across less-used code-edit operations not covered by BUG-285.
 
-in File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-18T13-49-35-772Z_14bf83fc273dc16d.jsonl
- ID: 14bf83fc273dc16d
+* Implementation
+** Inventory remaining API/UX gaps
+:PROPERTIES:
+:CUSTOM_ID: FUP-059-code-edit-api-ergonomics-and-audit-follo::inventory-gaps
+:END:
+- Inputs:
+  - final diffs and tests from `BUG-284-code-edit-occurrence-disambiguation-cont`
+  - final diffs and tests from `BUG-285-code-edit-structural-insertion-and-sibli`
+- Produce a precise gap list: what still feels error-prone after the structural fixes, and which gaps are contract, renderer, or transcript problems.
 
-use jq to find those faulty usages and then reprocuce the bugs here TDD and fix the root cause
+** Prototype deferred design options
+:PROPERTIES:
+:CUSTOM_ID: FUP-059-code-edit-api-ergonomics-and-audit-follo::prototype-options
+:DEPENDS: FUP-059-code-edit-api-ergonomics-and-audit-follo::inventory-gaps
+:END:
+- Evaluate at least three options: richer `occurrence`/preview selection, new boundary-aware insertion forms, and transcript/debug visibility improvements.
+- Keep proposals tied to concrete failure modes rather than aesthetic API preferences.
 
-Placeholder body; updating immediately with full self-contained plan.
+** Decide next execution slice
+:PROPERTIES:
+:CUSTOM_ID: FUP-059-code-edit-api-ergonomics-and-audit-follo::decide-next-slice
+:DEPENDS: FUP-059-code-edit-api-ergonomics-and-audit-follo::prototype-options
+:END:
+- Split future work into independently shippable items rather than one open-ended “audit everything” effort.
+- If execution is justified, spawn new child items with exact tests and non-overlapping scopes.
+
+* Edge Cases
+- Do not regress the simpler structural contract fixed in BUG-284/BUG-285 by layering new UX on top without deleting old ambiguity.
+- Keep transcript/debug improvements separate from matching-engine redesign unless the evidence shows a single invariant violation causing both.
+
+* Acceptance Criteria
+- The deferred space is captured as explicit next-step analysis instead of silently expanding the current bug-fix plan.
+- Future execution can start from this item without relying on the current session history.
+- The item depends on the two structural bug fixes so redesign work does not begin against stale behavior.

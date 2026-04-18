@@ -196,9 +196,17 @@ const codeActionSchema = Type.Object({
 	),
 	mode: Type.Optional(Type.String({ description: "Splice mode: self | up | down (default: self)" })),
 	direction: Type.Optional(Type.String({ description: "Move direction: up | down" })),
-	line: Type.Optional(Type.Integer({ description: "1-indexed line for positional actions when needed" })),
+	line: Type.Optional(Type.Integer({ description: "1-indexed line for positional actions when needed", minimum: 1 })),
 	column: Type.Optional(Type.Integer({ description: "1-indexed column for transpose actions when needed" })),
 	nodeType: Type.Optional(Type.String({ description: "Optional node type hint for positional actions" })),
+	allowSiblingDelete: Type.Optional(
+		Type.Boolean({ description: "Allow sibling deletion when structural matching proves it safe" }),
+	),
+	occurrence: Type.Optional(
+		Type.Union([Type.Literal("first"), Type.Literal("last"), Type.Literal("all"), Type.Integer({ minimum: 1 })], {
+			description: "Match occurrence selector: first | last | all | 1-indexed number",
+		}),
+	),
 });
 
 const codeOperationSchema = Type.Recursive(This =>
@@ -216,7 +224,7 @@ const codeOperationSchema = Type.Recursive(This =>
 const codeSchema = Type.Object({
 	command: Type.String({
 		description:
-			"Subcommand: read | outline | symbols | edit | buffers | diff | navigate | languages | undo | redo | save | index | status | context | impact | deps | flow | dead_code | clusters",
+			"Subcommand: read | outline | symbols | edit | buffers | diff | navigate | languages | undo | redo | save | index | status | context | impact | deps | flow | dead_code | clusters | watcherStatus | lockStatus",
 	}),
 	file: Type.Optional(Type.String({ description: "Absolute or project-relative file path" })),
 	symbol: Type.Optional(
@@ -250,7 +258,7 @@ const codeSchema = Type.Object({
 			description: "Navigate action: defun-at | parent | references | node-at | siblings | children",
 		}),
 	),
-	line: Type.Optional(Type.Integer({ description: "1-indexed line for navigation" })),
+	line: Type.Optional(Type.Integer({ description: "1-indexed line for navigation", minimum: 1 })),
 	column: Type.Optional(Type.Integer({ description: "1-indexed column for navigation" })),
 });
 
@@ -275,6 +283,8 @@ function normalizeOperations(operations: CodeParams["operations"]): CodeBufferOp
 			line: isMeaningfulIndex(action.line) ? action.line : undefined,
 			column: isMeaningfulIndex(action.column) ? action.column : undefined,
 			nodeType: action.nodeType,
+			allowSiblingDelete: action.allowSiblingDelete === true ? true : undefined,
+			occurrence: action.occurrence,
 		})),
 		children: normalizeOperations(operation.children),
 	}));

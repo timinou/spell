@@ -234,6 +234,11 @@ function classifyCodeToolFailure(message: string): string {
 	if (message.includes("Stale code buffer detected")) return "buffer_freshness";
 	if (message.includes("Ambiguous line target")) return "ambiguous_target";
 	if (message.includes("Unsafe line-target")) return "unsafe_boundary";
+	if (message.includes("UNSAFE_SCOPE_WRITE")) return "unsafe_scope_write";
+	if (message.includes("LINE_OUT_OF_TARGET_SCOPE")) return "line_out_of_target_scope";
+	if (message.includes("LOCK_TIMEOUT")) return "lock_timeout";
+	if (message.includes("LOCK_ERROR")) return "lock_error";
+	if (message.includes("EXTERNAL_MODIFICATION")) return "external_modification";
 	if (message.includes("structurally invalid")) return "structural_invalidity";
 	if (message.includes("save to disk failed")) return "save_failure";
 	return "execution_failure";
@@ -248,13 +253,16 @@ export function createCodeToolError(input: {
 }): CodeToolErrorDetails {
 	const record = asRecord(input.output);
 	const proof = normalizeProof(record?.proof);
+	const extractedMessage = asString(record?.message) ?? input.message;
+	const errorCode = asString(record?.code);
+	const failureKind = classifyCodeToolFailure(errorCode ? `${errorCode}: ${extractedMessage}` : extractedMessage);
 	return {
 		kind: "error",
 		command: input.command,
 		file: input.file,
 		displayPath: toDisplayPath(input.file, input.cwd),
-		failureKind: classifyCodeToolFailure(input.message),
-		message: input.message,
+		failureKind,
+		message: extractedMessage,
 		error: true,
 		proof,
 		targetId: asString(record?.targetId),
@@ -446,6 +454,21 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		];
 		if (details.proof) {
 			parts.push(formatProofLine("Proof", details.proof));
+		}
+		if (details.failureKind === "unsafe_scope_write") {
+			parts.push(
+				"Hint: body-scope writes that would drop sibling declarations are refused by default; set allowSiblingDelete: true only when the deletion is intentional.",
+			);
+		}
+		if (details.failureKind === "line_out_of_target_scope") {
+			parts.push(
+				"Hint: positional actions under a declaration targetId must anchor a line inside that declaration.",
+			);
+		}
+		if (details.failureKind === "lock_timeout") {
+			parts.push(
+				"Hint: another process holds the advisory file lock; retry after it releases or inspect lockStatus for the target file.",
+			);
 		}
 		if (details.command === "edit") {
 			if (details.targetId) parts.push(`Target: ${details.targetId}`);
