@@ -1,0 +1,16 @@
+Focused verification results
+
+1. bun test packages/natives/test/code-buffer.test.ts packages/coding-agent/test/tools/code.test.ts
+   Result: 32 pass, 0 fail.
+
+2. bun test packages/coding-agent/test/tools.test.ts packages/coding-agent/test/prompts/code-tool-contracts.test.ts packages/coding-agent/test/tools/code.test.ts
+   Result: 73 pass, 1 skip, 0 fail.
+
+3. bun test packages/coding-agent/test/tools.test.ts packages/coding-agent/test/tools/code.test.ts packages/natives/test/code-buffer.test.ts
+   Result: 87 pass, 1 skip, 0 fail.
+
+4. bun check:ts
+   Result: pass (biome check + tsgo).
+
+5. bun check:rs
+   Result: pass (cargo fmt --check + clippy via bun check:rs).

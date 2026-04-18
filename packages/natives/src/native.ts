@@ -66,7 +66,11 @@ const compiledCandidates = addonFilenames.flatMap(filename => [
 	path.join(userDataDir, filename),
 ]);
 const releaseCandidates = isCompiledBinary ? [...compiledCandidates, ...baseReleaseCandidates] : baseReleaseCandidates;
-const candidates = $env.PI_DEV ? [...debugCandidates, ...releaseCandidates] : releaseCandidates;
+const candidates = !isCompiledBinary
+	? [...debugCandidates, ...releaseCandidates]
+	: $env.PI_DEV
+		? [...debugCandidates, ...releaseCandidates]
+		: releaseCandidates;
 const dedupedCandidates = [...new Set(candidates)];
 
 function runCommand(command: string, args: string[]): string | null {

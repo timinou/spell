@@ -5,7 +5,7 @@ Use for new files when creation is explicitly required, or when replacing an ent
 </conditions>
 
 <critical>
-- Use `code edit { file, operation: "create", content: ["..."] }` for any code-supported file (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`, `.rs`, `.py`, `.pyi`, `.typ`, `.md`, `.mdx`, `.markdown`, `.org`, `.ex`, `.exs`)
+- Use `code edit { operations: [{ targetId: "src/new-file.ts", actions: [{ kind: "write", content: ["..."] }] }] }` for any code-supported file (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`, `.rs`, `.py`, `.pyi`, `.typ`, `.md`, `.mdx`, `.markdown`, `.org`, `.ex`, `.exs`)
 - Prefer Edit for existing non-code files
 - Do not create documentation files unless explicitly requested
 - Do not use emojis unless requested

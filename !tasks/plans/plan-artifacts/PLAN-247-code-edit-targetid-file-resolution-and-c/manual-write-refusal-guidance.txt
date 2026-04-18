@@ -1,0 +1,5 @@
+Command:
+bun -e 'import { Settings } from "./packages/coding-agent/src/config/settings"; import { WriteTool } from "./packages/coding-agent/src/tools/write"; const dir = (await Bun.$`mktemp -d`.text()).trim(); const tool = new WriteTool({ cwd: dir, hasUI: false, getSessionFile: () => null, getSessionSpawns: () => "*", settings: Settings.isolated() }); try { await tool.execute("proof-write", { path: "blocked.ts", content: "export const value = 1;\n" }); } catch (error) { console.log(String(error)); }'
+
+Observed output:
+Error: The write tool is blocked for code-supported files (TypeScript, Rust, Python, HTML, CSS, Typst, Markdown, Org, and Elixir). Use code edit { operations: [{ targetId: "blocked.ts", actions: [{ kind: "write", content: ["..."] }] }] } instead. If the structural edit fails, re-read or navigate, tighten the target, and retry code edit.

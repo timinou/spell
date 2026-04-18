@@ -366,7 +366,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			if (REMOVED_SEARCH_COMMANDS.has(command)) {
 				const queryHint =
 					typeof params.query === "string" && params.query.trim().length > 0
-						? ' pattern: "' + params.query.trim() + '"'
+						? ` pattern: "${params.query.trim()}"`
 						: ' pattern: "..."';
 				const details = createCodeToolError({
 					command,
@@ -397,6 +397,32 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			const options: CodeBufferOptions = { command: nativeCommand };
 			const resolveFile = (file: string): string => (path.isAbsolute(file) ? file : path.resolve(sessionCwd, file));
 			const activeFile = command === "edit" ? editFile : params.file ? resolveFile(params.file) : undefined;
+			let editCreatesMissingFile = false;
+			let editHasManagedMissingBuffer = false;
+
+			if (command === "edit" && activeFile && !(await Bun.file(activeFile).exists())) {
+				const listedBuffers = timedCodeBuffer({ command: "list" });
+				if (listedBuffers.error) {
+					const details = createCodeToolError({
+						command,
+						file: activeFile,
+						cwd: sessionCwd,
+						output: listedBuffers.output,
+						message: `Unable to inspect managed buffers for missing edit target: ${extractCodeToolErrorMessage(listedBuffers.output)}`,
+					});
+					return toolResult(details).text(formatCodeToolContent(details)).done();
+				}
+				if (Array.isArray(listedBuffers.output)) {
+					editHasManagedMissingBuffer = listedBuffers.output.some(
+						buffer =>
+							buffer !== null &&
+							typeof buffer === "object" &&
+							!Array.isArray(buffer) &&
+							Reflect.get(buffer, "path") === activeFile,
+					);
+				}
+				editCreatesMissingFile = !editHasManagedMissingBuffer;
+			}
 
 			if (command === "edit") {
 				options.root = params.root ? resolveFile(params.root) : sessionCwd;
@@ -420,7 +446,18 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				options.action = params.action === "references-local" ? "references" : params.action;
 			}
 
-			if (activeFile && shouldCheckBufferFreshness(command, false)) {
+			if (editHasManagedMissingBuffer && activeFile) {
+				const details = createCodeToolError({
+					command,
+					file: activeFile,
+					cwd: sessionCwd,
+					message:
+						"Stale code buffer detected: a managed buffer exists for a file that is now missing on disk. Reconcile the on-disk file or close the stale buffer before retrying this mutation.",
+				});
+				return toolResult(details).text(formatCodeToolContent(details)).done();
+			}
+
+			if (activeFile && shouldCheckBufferFreshness(command, editCreatesMissingFile)) {
 				const freshness = timedCodeBuffer({ command: "diff", file: activeFile });
 				if (freshness.error) {
 					const details = createCodeToolError({
