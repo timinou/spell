@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 
-import { type GrepMatch, type GrepResult, grep } from "@oh-my-pi/pi-natives";
+import { executeCodeBuffer, executeCodeGraph, type GrepMatch, type GrepResult, grep } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { untilAborted } from "@oh-my-pi/pi-utils";
@@ -15,6 +15,7 @@ import { DEFAULT_MAX_COLUMN, type TruncationResult, truncateHead } from "../sess
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../tui";
 import { resolveFileDisplayMode } from "../utils/file-display-mode";
 import type { ToolSession } from ".";
+import { isCodeToolSupportedPath } from "./code-supported-files";
 import { classifyContextPressure } from "./context-pressure-policy";
 import { formatFullOutputReference, type OutputMeta } from "./output-meta";
 import {
@@ -41,6 +42,7 @@ const grepSchema = Type.Object({
 	gitignore: Type.Optional(Type.Boolean({ description: "Respect .gitignore files during search (default: true)" })),
 	limit: Type.Optional(Type.Number({ description: "Limit output to first N matches (default: 20)" })),
 	offset: Type.Optional(Type.Number({ description: "Skip first N entries before applying limit (default: 0)" })),
+	mode: Type.Optional(Type.String({ description: "Search mode: auto | rawText | semantic" })),
 });
 
 export type GrepToolInput = Static<typeof grepSchema>;
@@ -60,9 +62,233 @@ export interface GrepToolDetails {
 	fileMatches?: Array<{ path: string; count: number }>;
 	truncated?: boolean;
 	error?: string;
+	mode?: "auto" | "rawText" | "semantic";
 }
 
 type GrepParams = Static<typeof grepSchema>;
+
+type GrepMode = "auto" | "rawText" | "semantic";
+
+interface OutlineEntryLike {
+	name?: string;
+	kind?: string;
+	line: number;
+	endLine: number;
+	targetId?: string;
+	children?: OutlineEntryLike[];
+}
+
+interface SemanticLookupMatch {
+	targetId: string;
+	path: string;
+	kind: string;
+	line?: number;
+	column?: number;
+	score?: number;
+}
+
+interface SemanticLookupResult {
+	command: "symbols" | "files" | "search";
+	status?: string;
+	matches: SemanticLookupMatch[];
+	semanticStatus?: string;
+}
+
+interface GrepLineMetadata {
+	targetId?: string;
+	scopeTarget?: string;
+	scopeTargetId?: string;
+}
+
+function isRegexHeavyPattern(pattern: string): boolean {
+	return /\\[AbBdDsSwWZztrnvf0]|[\^$*+?()[\]{}|]/.test(pattern);
+}
+
+function looksPathLikeQuery(pattern: string): boolean {
+	return /^[\w./-]+$/.test(pattern) && (pattern.includes("/") || /\.[a-z0-9]+$/i.test(pattern));
+}
+
+function looksSymbolLikeQuery(pattern: string): boolean {
+	return /^[A-Za-z_][A-Za-z0-9_./:]*$/.test(pattern);
+}
+
+function chooseAutoMode(input: {
+	pattern: string;
+	multiline: boolean;
+	pre?: number;
+	post?: number;
+	glob?: string;
+	type?: string;
+	internalUrl: boolean;
+	explicitPath: boolean;
+	limit?: number;
+	offset: number;
+	searchPath: string;
+	cwd: string;
+}): GrepMode {
+	if (input.internalUrl) return "rawText";
+	if (input.explicitPath || input.limit !== undefined || input.offset > 0) return "rawText";
+	if (input.multiline || (input.pre ?? 0) > 0 || (input.post ?? 0) > 0) return "rawText";
+	if (input.glob || input.type) return "rawText";
+	const relative = path.relative(input.cwd, input.searchPath);
+	if (relative.startsWith("..")) return "rawText";
+	if (input.pattern.includes(" ") || isRegexHeavyPattern(input.pattern)) return "rawText";
+	return looksPathLikeQuery(input.pattern) || looksSymbolLikeQuery(input.pattern) ? "semantic" : "rawText";
+}
+
+function flattenOutlineEntries(
+	entries: OutlineEntryLike[],
+	depth = 0,
+): Array<{ entry: OutlineEntryLike; depth: number }> {
+	const flattened: Array<{ entry: OutlineEntryLike; depth: number }> = [];
+	for (const entry of entries) {
+		flattened.push({ entry, depth });
+		if (entry.children) {
+			flattened.push(...flattenOutlineEntries(entry.children, depth + 1));
+		}
+	}
+	return flattened;
+}
+
+function normalizeOutlineEntries(value: unknown, fileTargetId: string, parents: string[] = []): OutlineEntryLike[] {
+	if (!Array.isArray(value)) return [];
+	const entries: OutlineEntryLike[] = [];
+	for (const item of value) {
+		if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+		const record = item as Record<string, unknown>;
+		const name = typeof record.name === "string" ? record.name : undefined;
+		if (!name) continue;
+		const nextParents = [...parents, name];
+		entries.push({
+			name,
+			kind: typeof record.kind === "string" ? record.kind : undefined,
+			line: typeof record.line === "number" ? record.line : 0,
+			endLine:
+				typeof record.endLine === "number"
+					? record.endLine
+					: typeof record.end_line === "number"
+						? record.end_line
+						: typeof record.line === "number"
+							? record.line
+							: 0,
+			targetId: `${fileTargetId}::${nextParents.join(".")}`,
+			children: normalizeOutlineEntries(record.children, fileTargetId, nextParents),
+		});
+	}
+	return entries;
+}
+
+function readOutlineEntries(filePath: string, cwd: string): OutlineEntryLike[] | undefined {
+	if (!isCodeToolSupportedPath(filePath)) return undefined;
+	const result = executeCodeBuffer({ command: "outline", file: filePath });
+	if (result.error || !Array.isArray(result.output)) return undefined;
+	const relativePath = path.relative(cwd, filePath).replace(/\\/g, "/");
+	const fileTargetId =
+		relativePath.length === 0 || relativePath.startsWith("..") ? path.basename(filePath) : relativePath;
+	return normalizeOutlineEntries(result.output, fileTargetId);
+}
+
+function lastTargetSegment(targetId: string): string {
+	return targetId.split("::").at(-1) ?? targetId;
+}
+
+function findLineMetadata(entries: OutlineEntryLike[], line: number): GrepLineMetadata | undefined {
+	const flattened = flattenOutlineEntries(entries).filter(item => typeof item.entry.targetId === "string");
+	const exact = flattened
+		.filter(item => item.entry.line === line && item.entry.targetId)
+		.sort((left, right) => right.depth - left.depth)[0]?.entry;
+	if (exact?.targetId) {
+		return { targetId: exact.targetId };
+	}
+	const scope = flattened
+		.filter(item => item.entry.line <= line && item.entry.endLine >= line && item.entry.targetId)
+		.sort((left, right) => right.depth - left.depth)[0]?.entry;
+	if (!scope?.targetId) return undefined;
+	return {
+		scopeTarget: scope.name ?? scope.kind ?? lastTargetSegment(scope.targetId),
+		scopeTargetId: scope.targetId,
+	};
+}
+
+function parseSymbolLookupOutput(output: string): { status?: string; matches: SemanticLookupMatch[] } {
+	const matches: SemanticLookupMatch[] = [];
+	let status: string | undefined;
+	for (const line of output.split("\n")) {
+		if (line.startsWith("Status: ")) {
+			status = line.slice("Status: ".length).trim();
+			continue;
+		}
+		const match = line.match(/^- (.+) \[([^\]]+)\] (.+):(\d+):(\d+)$/);
+		if (!match) continue;
+		matches.push({
+			targetId: match[1],
+			kind: match[2],
+			path: match[3].replace(/\\/g, "/"),
+			line: Number(match[4]),
+			column: Number(match[5]),
+		});
+	}
+	return { status, matches };
+}
+
+function parseFileLookupOutput(output: string): { status?: string; matches: SemanticLookupMatch[] } {
+	const matches: SemanticLookupMatch[] = [];
+	let status: string | undefined;
+	for (const line of output.split("\n")) {
+		if (line.startsWith("Status: ")) {
+			status = line.slice("Status: ".length).trim();
+			continue;
+		}
+		if (!line.startsWith("- ")) continue;
+		const targetId = line.slice(2).trim();
+		if (!targetId) continue;
+		matches.push({
+			targetId,
+			path: targetId.replace(/\\/g, "/"),
+			kind: "file",
+		});
+	}
+	return { status, matches };
+}
+
+function parseSearchOutput(output: string): SemanticLookupMatch[] {
+	const matches: SemanticLookupMatch[] = [];
+	for (const line of output.split("\n")) {
+		const match = line.match(/^- ([0-9]+(?:\.[0-9]+)?) (.+)$/);
+		if (!match) continue;
+		const targetId = match[2].trim();
+		if (!targetId) continue;
+		const targetPath = targetId.includes("::") ? targetId.split("::", 1)[0] : targetId;
+		matches.push({
+			targetId,
+			path: targetPath.replace(/\\/g, "/"),
+			kind: targetId.includes("::") ? "symbol" : "file",
+			score: Number(match[1]),
+		});
+	}
+	return matches;
+}
+
+async function runSemanticLookup(cwd: string, query: string): Promise<SemanticLookupResult> {
+	const command = looksPathLikeQuery(query) ? "files" : "symbols";
+	const primary = await executeCodeGraph({ command, root: cwd, query, limit: DEFAULT_MATCH_LIMIT });
+	const parsedPrimary =
+		command === "files" ? parseFileLookupOutput(primary.output) : parseSymbolLookupOutput(primary.output);
+	if (parsedPrimary.matches.length > 0) {
+		return {
+			command,
+			status: parsedPrimary.status,
+			matches: parsedPrimary.matches,
+			semanticStatus: primary.semanticStatus,
+		};
+	}
+	const fallback = await executeCodeGraph({ command: "search", root: cwd, query, limit: DEFAULT_MATCH_LIMIT });
+	return {
+		command: "search",
+		matches: parseSearchOutput(fallback.output),
+		semanticStatus: fallback.semanticStatus,
+	};
+}
 
 export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 	readonly name = "grep";
@@ -86,7 +312,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 		_onUpdate?: AgentToolUpdateCallback<GrepToolDetails>,
 		_toolContext?: AgentToolContext,
 	): Promise<AgentToolResult<GrepToolDetails>> {
-		const { pattern, path: searchDir, glob, type, i, gitignore, pre, post, multiline, limit, offset } = params;
+		const { pattern, path: searchDir, glob, type, i, gitignore, pre, post, multiline, limit, offset, mode } = params;
 
 		return untilAborted(signal, async () => {
 			const normalizedPattern = pattern.trim();
@@ -123,6 +349,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 			let scopePath: string;
 			let globFilter = glob ? normalizePathLikeInput(glob) || undefined : undefined;
 			const internalRouter = this.session.internalRouter;
+			let usedInternalUrl = false;
 			if (searchDir?.trim()) {
 				const rawPath = normalizePathLikeInput(searchDir);
 				if (internalRouter?.canHandle(rawPath)) {
@@ -133,6 +360,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 					if (!resource.sourcePath) {
 						throw new ToolError(`Cannot grep internal URL without a backing file: ${rawPath}`);
 					}
+					usedInternalUrl = true;
 					searchPath = resource.sourcePath;
 					scopePath = formatScopePath(searchPath);
 				} else {
@@ -161,6 +389,75 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 				isDirectory = stat.isDirectory();
 			} catch {
 				throw new ToolError(`Path not found: ${scopePath}`);
+			}
+
+			const requestedMode: GrepMode = mode === "rawText" || mode === "semantic" ? mode : "auto";
+			const resolvedMode =
+				requestedMode === "auto"
+					? chooseAutoMode({
+							pattern: normalizedPattern,
+							multiline: effectiveMultiline,
+							pre,
+							post,
+							glob: globFilter,
+							type,
+							internalUrl: usedInternalUrl,
+							explicitPath: Boolean(searchDir?.trim()) && !isDirectory,
+							limit: normalizedLimit,
+							offset: normalizedOffset,
+							searchPath,
+							cwd: this.session.cwd,
+						})
+					: requestedMode;
+
+			if (resolvedMode === "semantic") {
+				const relativeScope = path.relative(this.session.cwd, searchPath).replace(/\\/g, "/");
+				if (usedInternalUrl || relativeScope.startsWith("..")) {
+					if (requestedMode === "semantic") {
+						throw new ToolError("Semantic grep only supports repo-local workspace files and directories.");
+					}
+				} else {
+					const lookup = await runSemanticLookup(this.session.cwd, normalizedPattern);
+					const filteredMatches =
+						searchDir?.trim() && scopePath !== "."
+							? lookup.matches.filter(match => {
+									const normalizedPath = match.path.replace(/\\/g, "/");
+									return isDirectory
+										? normalizedPath === relativeScope || normalizedPath.startsWith(`${relativeScope}/`)
+										: normalizedPath === relativeScope;
+								})
+							: lookup.matches;
+					const semanticFiles = Array.from(new Set(filteredMatches.map(match => match.path)));
+					const semanticDetails: GrepToolDetails = {
+						mode: resolvedMode,
+						scopePath,
+						matchCount: filteredMatches.length,
+						fileCount: semanticFiles.length,
+						files: semanticFiles,
+						truncated: false,
+					};
+					const lines = [`Semantic grep (${lookup.command})`, `Query: ${normalizedPattern}`];
+					if (lookup.status) lines.push(`Status: ${lookup.status}`);
+					if (lookup.semanticStatus) lines.push(`Semantic: ${lookup.semanticStatus}`);
+					if (filteredMatches.length === 0) {
+						lines.push("No semantic matches found.");
+						return toolResult(semanticDetails).text(lines.join("\n")).done();
+					}
+					for (const match of filteredMatches) {
+						const lineParts = [`- targetId: ${match.targetId}`];
+						if (match.kind) lineParts.push(`[${match.kind}]`);
+						if (match.line && match.line > 0) {
+							lineParts.push(`${match.path}:${match.line}:${match.column ?? 0}`);
+						} else {
+							lineParts.push(match.path);
+						}
+						if (match.score !== undefined) {
+							lineParts.push("score:" + match.score.toFixed(2));
+						}
+						lines.push(lineParts.join(" "));
+					}
+					return toolResult(semanticDetails).text(lines.join("\n")).done();
+				}
 			}
 
 			const effectiveOutputMode = "content";
@@ -248,6 +545,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 			};
 			if (selectedMatches.length === 0) {
 				const details: GrepToolDetails = {
+					mode: resolvedMode,
 					scopePath,
 					matchCount: 0,
 					fileCount: 0,
@@ -258,7 +556,24 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 			}
 			const outputLines: string[] = [];
 			let linesTruncated = false;
+			const outlineCache = new Map<string, OutlineEntryLike[] | null>();
 			const matchesByFile = new Map<string, GrepMatch[]>();
+			const resolveMatchPath = (match: GrepMatch): string => {
+				if (!isDirectory) return searchPath;
+				if (path.isAbsolute(match.path)) return match.path;
+				const cleanPath = match.path.startsWith("/") ? match.path.slice(1) : match.path;
+				return path.resolve(searchPath, cleanPath);
+			};
+			const lineMetadataForMatch = (match: GrepMatch): GrepLineMetadata | undefined => {
+				const absolutePath = resolveMatchPath(match);
+				if (!isCodeToolSupportedPath(absolutePath)) return undefined;
+				if (!outlineCache.has(absolutePath)) {
+					outlineCache.set(absolutePath, readOutlineEntries(absolutePath, this.session.cwd) ?? null);
+				}
+				const entries = outlineCache.get(absolutePath);
+				if (!entries) return undefined;
+				return findLineMetadata(entries, match.lineNumber);
+			};
 			for (const match of selectedMatches) {
 				const relativePath = formatPath(match.path);
 				recordFile(relativePath);
@@ -296,6 +611,13 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 						}
 					}
 					outputLines.push(formatLine(match.lineNumber, match.line, true));
+					const lineMetadata = lineMetadataForMatch(match);
+					if (lineMetadata?.targetId) {
+						outputLines.push("   targetId: " + lineMetadata.targetId);
+					} else if (lineMetadata?.scopeTargetId) {
+						outputLines.push("   scopeTarget: " + (lineMetadata.scopeTarget ?? lineMetadata.scopeTargetId));
+						outputLines.push("   scopeTargetId: " + lineMetadata.scopeTargetId);
+					}
 					if (match.truncated) {
 						linesTruncated = true;
 					}
@@ -346,6 +668,7 @@ export class GrepTool implements AgentTool<typeof grepSchema, GrepToolDetails> {
 			const output = truncation.content;
 			const truncated = Boolean(matchLimitReached || result.limitReached || truncation.truncated || linesTruncated);
 			const details: GrepToolDetails = {
+				mode: resolvedMode,
 				scopePath,
 				matchCount: selectedMatches.length,
 				fileCount: fileList.length,
@@ -409,6 +732,7 @@ interface GrepRenderArgs {
 	multiline?: boolean;
 	limit?: number;
 	offset?: number;
+	mode?: string;
 }
 
 const COLLAPSED_TEXT_LIMIT = PREVIEW_LIMITS.COLLAPSED_LINES * 2;
@@ -431,6 +755,7 @@ export const grepToolRenderer = {
 		if (args.multiline) meta.push("multiline");
 		if (args.limit !== undefined && args.limit > 0) meta.push(`limit:${args.limit}`);
 		if (args.offset !== undefined && args.offset > 0) meta.push(`offset:${args.offset}`);
+		if (args.mode && args.mode !== "auto") meta.push(`mode:${args.mode}`);
 
 		const text = renderStatusLine(
 			{ icon: "pending", title: "Grep", description: args.pattern || "?", meta },

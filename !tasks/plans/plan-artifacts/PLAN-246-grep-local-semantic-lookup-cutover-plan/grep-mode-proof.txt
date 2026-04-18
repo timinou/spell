@@ -1,0 +1,28 @@
+## Semantic grep declaration proof
+
+$ grep { pattern: "rateLimit", mode: "semantic" }
+Semantic grep (symbols)
+Query: rateLimit
+Status: exact
+- targetId: rate.ts::rateLimit [function] rate.ts:1:17
+
+## Raw-text grep target enrichment proof
+
+$ grep { pattern: "delay", path: "rate.ts", mode: "rawText" }
+>>2#QY:  const delay = 1;
+   scopeTarget: rateLimit
+   scopeTargetId: rate.ts::rateLimit
+>>3#YY:  return delay;
+   scopeTarget: rateLimit
+   scopeTargetId: rate.ts::rateLimit
+
+## Broad grep staging proof
+
+$ grep { pattern: "broad-hit", path: "." }
+Ran broad grep for "broad-hit" in .. Stage file hits before reading content. Stage file hits first, then narrow path/glob/type before reading content.
+4 matches across 3 files.
+File hits:
+- .spell/agent/sessions/recent.jsonl (2 matches)
+- alpha.ts (1 match)
+- beta.ts (1 match)
+Next: Stage file hits first, then narrow path/glob/type before reading content.

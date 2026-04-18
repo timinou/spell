@@ -45,19 +45,8 @@ import { enforceModeWrite } from "./mode-guard";
 import { replaceTabs } from "./render-utils";
 import { toolResult } from "./tool-result";
 
-const GRAPH_COMMANDS = new Set([
-	"index",
-	"status",
-	"context",
-	"impact",
-	"deps",
-	"flow",
-	"dead_code",
-	"clusters",
-	"symbols",
-	"files",
-	"search",
-]);
+const GRAPH_COMMANDS = new Set(["index", "status", "context", "impact", "deps", "flow", "dead_code", "clusters"]);
+const REMOVED_SEARCH_COMMANDS = new Set(["symbols", "files", "search"]);
 
 const MUTATING_COMMANDS = new Set(["edit", "undo", "redo"]);
 
@@ -215,7 +204,7 @@ const codeOperationSchema = Type.Recursive(This =>
 const codeSchema = Type.Object({
 	command: Type.String({
 		description:
-			"Subcommand: read | outline | edit | buffers | diff | navigate | languages | undo | redo | save | index | status | context | impact | deps | flow | dead_code | clusters | symbols | files | search",
+			"Subcommand: read | outline | edit | buffers | diff | navigate | languages | undo | redo | save | index | status | context | impact | deps | flow | dead_code | clusters",
 	}),
 	file: Type.Optional(Type.String({ description: "Absolute or project-relative file path" })),
 	symbol: Type.Optional(
@@ -223,7 +212,9 @@ const codeSchema = Type.Object({
 			description: "Symbol name for graph commands like context | impact | flow, or navigate references",
 		}),
 	),
-	query: Type.Optional(Type.String({ description: "Search or lookup query for graph search, symbols, or files" })),
+	query: Type.Optional(
+		Type.String({ description: "Legacy repo-local lookup query. Use grep for semantic or raw-text search." }),
+	),
 	resolution: Type.Optional(Type.Integer({ description: "Zoom level 0-3 (default 2)" })),
 	offset: Type.Optional(Type.Integer({ description: "Start line 1-indexed (resolution 3 only)" })),
 	limit: Type.Optional(Type.Integer({ description: "Max results or lines" })),
@@ -372,6 +363,23 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 		}
 
 		try {
+			if (REMOVED_SEARCH_COMMANDS.has(command)) {
+				const queryHint =
+					typeof params.query === "string" && params.query.trim().length > 0
+						? ' pattern: "' + params.query.trim() + '"'
+						: ' pattern: "..."';
+				const details = createCodeToolError({
+					command,
+					message:
+						"Repo-local " +
+						command +
+						" moved to grep. Use grep with" +
+						queryHint +
+						' and mode: "semantic" for symbol/file lookup, or mode: "rawText" for regex content search.',
+				});
+				return toolResult(details).text(formatCodeToolContent(details)).done();
+			}
+
 			if (GRAPH_COMMANDS.has(command)) {
 				return await this.#executeGraphCommand(params, _signal);
 			}

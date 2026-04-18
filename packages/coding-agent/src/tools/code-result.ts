@@ -3,18 +3,7 @@ import { buildCompactHashlineDiffPreview } from "../patch/hashline";
 import type { OutputMeta } from "./output-meta";
 import type { MutationState } from "./pending-action";
 
-export type CodeGraphCommand =
-	| "index"
-	| "status"
-	| "context"
-	| "impact"
-	| "deps"
-	| "flow"
-	| "dead_code"
-	| "clusters"
-	| "symbols"
-	| "files"
-	| "search";
+export type CodeGraphCommand = "index" | "status" | "context" | "impact" | "deps" | "flow" | "dead_code" | "clusters";
 
 export type CodeFileCommand =
 	| "outline"
