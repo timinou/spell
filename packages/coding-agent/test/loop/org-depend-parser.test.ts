@@ -57,6 +57,19 @@ describe("parseOrgDependProperties", () => {
 		expect(feat001.gateCmd).toBe("bun test");
 	});
 
+	it("extracts VERIFICATION_ARTIFACT when present", () => {
+		const props = parseOrgDependProperties(
+			[
+				"* ITEM Capture audit trail",
+				":PROPERTIES:",
+				":CUSTOM_ID: FEAT-099",
+				":VERIFICATION_ARTIFACT: artifacts/verification.json",
+				":END:",
+			].join("\n"),
+		);
+		expect(props[0]?.verificationArtifact).toBe("artifacts/verification.json");
+	});
+
 	it("handles headings with no properties drawer", () => {
 		const content = `
 * TODO Some heading without properties

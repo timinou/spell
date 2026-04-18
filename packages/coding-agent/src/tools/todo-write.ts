@@ -36,11 +36,21 @@ import { PREVIEW_LIMITS } from "./render-utils";
 export type TodoStatus = "pending" | "in_progress" | "completed" | "abandoned" | "failed" | "gate_failed";
 export type TodoKind = "work" | "data";
 
+export interface TodoDelegationVerification {
+	status: "passed" | "failed";
+	gateCommit?: boolean;
+	gateArtifact?: string;
+	gateCmd?: string;
+	failures?: Array<{ taskId?: string; gate: string; expected: string; detail: string }>;
+	artifactPath?: string;
+}
+
 export interface TodoDelegationResult {
 	output?: string;
 	error?: string;
 	outputPath?: string;
 	gateFailures?: Array<{ taskId?: string; gate: string; expected: string; detail: string }>;
+	verification?: TodoDelegationVerification;
 }
 
 export interface TodoDelegation {
@@ -65,6 +75,7 @@ export interface TodoItem {
 	children?: TodoItem[];
 	gateCommit?: boolean;
 	gateArtifact?: string;
+	verificationArtifact?: string;
 	gateCmd?: string;
 	gateLlm?: string;
 	verifyCmd?: string;
@@ -134,6 +145,9 @@ const InputTask = Type.Object({
 	artifactPath: Type.Optional(Type.String({ description: "Artifact path that satisfies a data node" })),
 	gateCommit: Type.Optional(Type.Boolean({ description: "Require commit after completing this task" })),
 	gateArtifact: Type.Optional(Type.String({ description: "Path to artifact that must exist after completion" })),
+	verificationArtifact: Type.Optional(
+		Type.String({ description: "Path to a durable delegated verification evidence artifact" }),
+	),
 	gateCmd: Type.Optional(Type.String({ description: "Command to run for verification" })),
 	gateLlm: Type.Optional(Type.String({ description: "LLM review criteria" })),
 	verifyCmd: Type.Optional(Type.String({ description: "Recommended verification command" })),
@@ -184,6 +198,7 @@ const todoWriteSchema = Type.Object({
 				artifactPath: Type.Optional(Type.String()),
 				gateCommit: Type.Optional(Type.Boolean()),
 				gateArtifact: Type.Optional(Type.String()),
+				verificationArtifact: Type.Optional(Type.String()),
 				gateCmd: Type.Optional(Type.String()),
 				gateLlm: Type.Optional(Type.String()),
 				verifyCmd: Type.Optional(Type.String()),
@@ -205,6 +220,7 @@ const todoWriteSchema = Type.Object({
 				artifactPath: Type.Optional(Type.String()),
 				gateCommit: Type.Optional(Type.Boolean()),
 				gateArtifact: Type.Optional(Type.String()),
+				verificationArtifact: Type.Optional(Type.String()),
 				gateCmd: Type.Optional(Type.String()),
 				gateLlm: Type.Optional(Type.String()),
 				verifyCmd: Type.Optional(Type.String()),
@@ -334,6 +350,7 @@ function buildGroupFromInput(
 				artifactPath: t.artifactPath,
 				gateCommit: t.gateCommit,
 				gateArtifact: t.gateArtifact,
+				verificationArtifact: t.verificationArtifact,
 				gateCmd: t.gateCmd,
 				gateLlm: t.gateLlm,
 				verifyCmd: t.verifyCmd,
@@ -383,7 +400,22 @@ function cloneTodoDelegation(delegation: TodoDelegation | undefined): TodoDelega
 	return {
 		...delegation,
 		childGroups: delegation.childGroups ? cloneTodoGroups(delegation.childGroups) : undefined,
-		result: delegation.result ? { ...delegation.result } : undefined,
+		result: delegation.result
+			? {
+					...delegation.result,
+					gateFailures: delegation.result.gateFailures
+						? delegation.result.gateFailures.map(failure => ({ ...failure }))
+						: undefined,
+					verification: delegation.result.verification
+						? {
+								...delegation.result.verification,
+								failures: delegation.result.verification.failures
+									? delegation.result.verification.failures.map(failure => ({ ...failure }))
+									: undefined,
+							}
+						: undefined,
+				}
+			: undefined,
 	};
 }
 
@@ -886,6 +918,7 @@ export function applyOps(
 						artifactPath: op.artifactPath,
 						gateCommit: op.gateCommit,
 						gateArtifact: op.gateArtifact,
+						verificationArtifact: op.verificationArtifact,
 						gateCmd: op.gateCmd,
 						gateLlm: op.gateLlm,
 						verifyCmd: op.verifyCmd,
@@ -915,6 +948,7 @@ export function applyOps(
 				if (op.artifactPath !== undefined) task.artifactPath = op.artifactPath;
 				if (op.gateCommit !== undefined) task.gateCommit = op.gateCommit;
 				if (op.gateArtifact !== undefined) task.gateArtifact = op.gateArtifact;
+				if (op.verificationArtifact !== undefined) task.verificationArtifact = op.verificationArtifact;
 				if (op.gateCmd !== undefined) task.gateCmd = op.gateCmd;
 				if (op.gateLlm !== undefined) task.gateLlm = op.gateLlm;
 				if (op.verifyCmd !== undefined) task.verifyCmd = op.verifyCmd;

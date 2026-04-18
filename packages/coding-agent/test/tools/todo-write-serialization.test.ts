@@ -1,9 +1,27 @@
 import { describe, expect, it } from "bun:test";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ToolSession } from "../../src/tools";
-import { queueTodoMutation } from "../../src/tools/todo-write";
+import type { TodoGroup } from "../../src/tools/todo-write";
+import { queueTodoMutation, TodoWriteTool } from "../../src/tools/todo-write";
 
 function createMockSession(): ToolSession {
 	return {} as ToolSession;
+}
+
+function createTodoWriteSession() {
+	let groups: TodoGroup[] = [];
+	const session = {
+		cwd: "/tmp/test",
+		hasUI: false,
+		getSessionFile: () => null,
+		getSessionSpawns: () => "*",
+		settings: Settings.isolated(),
+		getTodoGroups: () => groups,
+		setTodoGroups: (next: TodoGroup[]) => {
+			groups = next;
+		},
+	} as unknown as ToolSession;
+	return { session, getGroups: () => groups };
 }
 
 describe("queueTodoMutation serialization", () => {
@@ -107,5 +125,33 @@ describe("queueTodoMutation serialization", () => {
 		await expect(first).rejects.toBe(error);
 		await expect(second).resolves.toBe("ok");
 		expect(order).toEqual(["first", "second"]);
+	});
+});
+
+describe("TodoWriteTool verificationArtifact serialization", () => {
+	it("round-trips verificationArtifact through add and update operations", async () => {
+		const { session, getGroups } = createTodoWriteSession();
+		const tool = new TodoWriteTool(session);
+
+		await tool.execute("call-add", {
+			ops: [
+				{
+					op: "add_group",
+					name: "Work",
+					tasks: [
+						{
+							content: "Delegate verification",
+							verificationArtifact: "artifacts/verification.json",
+						},
+					],
+				},
+			],
+		});
+		expect(getGroups()[0]?.tasks[0]?.verificationArtifact).toBe("artifacts/verification.json");
+
+		const updated = await tool.execute("call-update", {
+			ops: [{ op: "update", id: "task-1", verificationArtifact: "artifacts/verification-final.json" }],
+		});
+		expect(updated.details?.groups[0]?.tasks[0]?.verificationArtifact).toBe("artifacts/verification-final.json");
 	});
 });

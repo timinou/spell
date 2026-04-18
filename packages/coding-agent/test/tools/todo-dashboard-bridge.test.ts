@@ -20,6 +20,7 @@ function makeGroups(
 		content: string;
 		status?: string;
 		gateCommit?: boolean;
+		verificationArtifact?: string;
 		blockers?: string[];
 		orgItemId?: string;
 		orgItemClosingId?: string;
@@ -34,6 +35,7 @@ function makeGroups(
 				content: item.content,
 				status: (item.status ?? "pending") as any,
 				gateCommit: item.gateCommit,
+				verificationArtifact: item.verificationArtifact,
 				blockers: item.blockers,
 				orgItemId: item.orgItemId,
 				orgItemClosingId: item.orgItemClosingId,
@@ -207,6 +209,15 @@ describe("TodoDashboardBridge", () => {
 
 		bridge.dispose();
 		expect(bridge.panelRegistered).toBe(false);
+	});
+
+	test("buildSnapshot includes verificationArtifact", () => {
+		const session = makeSession(
+			makeGroups({ id: "task-1", content: "Auth task", verificationArtifact: "artifacts/verify.json" }),
+		);
+		const snap = new TodoDashboardBridge(session).buildSnapshot();
+
+		expect(snap.groups[0].tasks[0]?.verificationArtifact).toBe("artifacts/verify.json");
 	});
 
 	test("buildSnapshot includes orgItemId and orgItemClosingId", () => {

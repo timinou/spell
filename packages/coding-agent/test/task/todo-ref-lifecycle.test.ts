@@ -158,6 +158,65 @@ describe("TaskTool todoRef lifecycle", () => {
 		});
 	});
 
+	it("stores delegated verification summary even without a dedicated verification artifact", async () => {
+		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
+		const session = createSession(tempDir, settings, [
+			{
+				id: "phase-1",
+				name: "Work",
+				tasks: [{ id: "task-1", content: "Inspect file", status: "pending", gateCmd: "bun test lifecycle" }],
+			},
+		]);
+		const transcriptPath = path.join(tempDir, "artifacts", "subtask-verify.jsonl");
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			options.onProgress?.({
+				index: 0,
+				id: options.id,
+				agent: "task",
+				agentSource: "bundled",
+				status: "running",
+				task: options.task,
+				assignment: options.assignment,
+				description: options.description,
+				recentTools: [],
+				recentOutput: [],
+				toolCount: 1,
+				tokens: 0,
+				durationMs: 0,
+				sessionId: "child-session",
+				transcriptPath,
+			});
+			return createResult(options.id, transcriptPath, {
+				extractedToolData: { bash: [{ command: "bun test lifecycle", exitCode: 0, cwd: tempDir }] },
+			});
+		});
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(session);
+
+		await tool.execute("call-verify", {
+			agent: "task",
+			tasks: [
+				{
+					id: "subtask-verify",
+					description: "Inspect file",
+					assignment: "## Target\n- File: foo.ts",
+					todoRef: "task-1",
+				},
+			],
+		});
+
+		const finalTask = session.snapshots.at(-1)?.[0]?.tasks[0];
+		expect(finalTask?.status).toBe("completed");
+		expect(finalTask?.delegation?.result?.verification).toEqual({
+			status: "passed",
+			gateCmd: "bun test lifecycle",
+			gateCommit: undefined,
+			gateArtifact: undefined,
+			failures: undefined,
+			artifactPath: undefined,
+		});
+	});
+
 	it("marks linked parent todo failed when delegated subagent errors", async () => {
 		const settings = Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" });
 		const session = createSession(tempDir, settings, [

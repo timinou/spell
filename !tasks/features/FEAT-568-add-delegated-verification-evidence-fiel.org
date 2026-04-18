@@ -1,5 +1,5 @@
 #+TITLE: Add delegated verification evidence field and audit trail
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bfdda2f7d5493e
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell_kdl-config/2026-04-18T20-21-17-407Z_14bfdda2f7d5493e.jsonl]]
 #+CUSTOM_ID: FEAT-568-add-delegated-verification-evidence-fiel
@@ -107,3 +107,7 @@ Concrete test files / scenarios:
 - Existing gate propagation and delegated todo lifecycle behavior remain intact.
 - Focused verification passes: `bun test packages/coding-agent/test/tools/todo-write-serialization.test.ts`, `bun test packages/coding-agent/test/tools/todo-dashboard-bridge.test.ts`, `bun test packages/coding-agent/test/task/todo-ref-lifecycle.test.ts`, and `bun test packages/coding-agent/test/task/gate-enforcement.test.ts`.
 - `bun check:ts` passes after the implementation wave that lands this item.
+
+NOTE [2026-04-18]: Activating Wave 2 per PLAN-247 after BUG-277 runtime truthfulness changes landed locally.
+
+NOTE [2026-04-18]: Added verificationArtifact / VERIFICATION_ARTIFACT plumbing, delegated verification summaries, optional durable evidence artifact writes, and focused lifecycle/serialization/dashboard/org parser coverage.
