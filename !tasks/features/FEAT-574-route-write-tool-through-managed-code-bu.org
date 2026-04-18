@@ -1,5 +1,5 @@
 #+TITLE: Route Write tool through managed code buffer for supported files
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bf802b83dfefdd
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-32-55-695Z_14bf802b83dfefdd.jsonl]]
 #+CUSTOM_ID: FEAT-574-route-write-tool-through-managed-code-bu
@@ -149,3 +149,5 @@ Acceptance check: all workflows that previously failed with the "Use =code edit=
 - No changes to extensibility types, hooks types, QML panels, canvas prompt, bash-interceptor, renderer, or the tool registration in =packages/coding-agent/src/tools/index.ts=.
 - =packages/coding-agent/src/patch/index.ts= imports the three helpers from the new =managed-code-buffer= module; edit tool behavior unchanged (spot-check by running the edit-related tests already in =tools.test.ts=).
 - =CHANGELOG.md= has an entry under =[Unreleased] ### Changed=.
+
+NOTE [2026-04-18]: Completed under PLAN-252 on 2026-04-18. Write now routes code-supported files through the managed code buffer; prompt, changelog, and regression coverage updated.
