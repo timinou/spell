@@ -73,38 +73,48 @@ pub struct BufferInfo {
 
 #[derive(Debug, Clone)]
 struct Revision {
-	parent:     Option<usize>,
-	last_child: Option<usize>,
-	forwards:   Vec<TextEdit>,
-	inverses:   Vec<TextEdit>,
+	parent:          Option<usize>,
+	last_child:      Option<usize>,
+	forwards:        Vec<TextEdit>,
+	inverses:        Vec<TextEdit>,
+	session_id:      String,
+	code_paths:      Vec<String>,
+	revision_num:    u64,
+	parent_revision: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
 struct History {
-	revisions:      Vec<Revision>,
-	current:        usize,
-	saved_revision: Option<usize>,
+	revisions:         Vec<Revision>,
+	current:           usize,
+	saved_revision:    Option<usize>,
+	next_revision_num: u64,
 }
 
 impl History {
 	fn new() -> Self {
 		Self {
-			revisions:      vec![Revision {
-				parent:     None,
-				last_child: None,
-				forwards:   vec![TextEdit {
+			revisions:         vec![Revision {
+				parent:          None,
+				last_child:      None,
+				forwards:        vec![TextEdit {
 					start_byte:   0,
 					old_end_byte: 0,
 					new_text:     String::new(),
 				}],
-				inverses:   vec![TextEdit {
+				inverses:        vec![TextEdit {
 					start_byte:   0,
 					old_end_byte: 0,
 					new_text:     String::new(),
 				}],
+				session_id:      String::new(),
+				code_paths:      Vec::new(),
+				revision_num:    0,
+				parent_revision: None,
 			}],
-			current:        0,
-			saved_revision: Some(0),
+			current:           0,
+			saved_revision:    Some(0),
+			next_revision_num: 1,
 		}
 	}
 
@@ -113,6 +123,16 @@ impl History {
 	}
 
 	fn record_batch(&mut self, forwards: Vec<TextEdit>, inverses: Vec<TextEdit>) {
+		self.record_batch_attributed(forwards, inverses, String::new(), Vec::new());
+	}
+
+	fn record_batch_attributed(
+		&mut self,
+		forwards: Vec<TextEdit>,
+		inverses: Vec<TextEdit>,
+		session_id: String,
+		code_paths: Vec<String>,
+	) {
 		if self.current + 1 < self.revisions.len() {
 			self.revisions.truncate(self.current + 1);
 		}
@@ -123,14 +143,33 @@ impl History {
 			self.saved_revision = None;
 		}
 		let next = self.revisions.len();
+		let parent_revision = Some(self.revisions[self.current].revision_num);
+		let revision_num = self.next_revision_num;
+		self.next_revision_num += 1;
 		self.revisions.push(Revision {
 			parent: Some(self.current),
 			last_child: None,
 			forwards,
 			inverses,
+			session_id,
+			code_paths,
+			revision_num,
+			parent_revision,
 		});
 		self.revisions[self.current].last_child = Some(next);
 		self.current = next;
+	}
+
+	fn current_summary(&self) -> Option<RevisionSummary> {
+		let rev = self.revisions.get(self.current)?;
+		if rev.revision_num == 0 && rev.session_id.is_empty() {
+			return None;
+		}
+		Some(RevisionSummary {
+			session_id: rev.session_id.clone(),
+			code_paths: rev.code_paths.clone(),
+			revision:   rev.revision_num,
+		})
 	}
 
 	fn is_clean(&self) -> bool {
@@ -139,6 +178,82 @@ impl History {
 
 	const fn mark_saved(&mut self) {
 		self.saved_revision = Some(self.current);
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RevisionSummary {
+	pub session_id: String,
+	pub code_paths: Vec<String>,
+	pub revision:   u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ScopedUndoResult {
+	pub applied: Option<RevisionSummary>,
+	pub skipped: Vec<RevisionSummary>,
+}
+
+impl History {
+	/// Walk back from `current`, skipping revisions whose `session_id` differs
+	/// from `session_id`. The first matching revision is recorded as `applied`;
+	/// peer revisions encountered are recorded in `skipped`. Current is moved
+	/// to the target revision's parent so the caller can apply its inverses.
+	///
+	/// When no matching revision exists in the chain, `applied` is `None` and
+	/// the chain up to the root is returned as `skipped`. Current is rolled
+	/// back to the root in that case.
+	fn undo_scoped(&mut self, session_id: &str) -> ScopedUndoResult {
+		let mut skipped = Vec::new();
+		let mut cursor = self.current;
+		loop {
+			let rev = &self.revisions[cursor];
+			let Some(parent_idx) = rev.parent else {
+				return ScopedUndoResult { applied: None, skipped };
+			};
+			if rev.session_id == session_id {
+				let applied = RevisionSummary {
+					session_id: rev.session_id.clone(),
+					code_paths: rev.code_paths.clone(),
+					revision:   rev.revision_num,
+				};
+				return ScopedUndoResult { applied: Some(applied), skipped };
+			}
+			skipped.push(RevisionSummary {
+				session_id: rev.session_id.clone(),
+				code_paths: rev.code_paths.clone(),
+				revision:   rev.revision_num,
+			});
+			cursor = parent_idx;
+		}
+	}
+
+	/// Walk forward via `last_child`, skipping peer revisions. The first
+	/// matching revision becomes `applied`; peer revisions are recorded in
+	/// `skipped`.
+	fn redo_scoped(&mut self, session_id: &str) -> ScopedUndoResult {
+		let mut skipped = Vec::new();
+		let mut cursor = self.current;
+		loop {
+			let Some(next_idx) = self.revisions[cursor].last_child else {
+				return ScopedUndoResult { applied: None, skipped };
+			};
+			let next = &self.revisions[next_idx];
+			if next.session_id == session_id {
+				let applied = RevisionSummary {
+					session_id: next.session_id.clone(),
+					code_paths: next.code_paths.clone(),
+					revision:   next.revision_num,
+				};
+				return ScopedUndoResult { applied: Some(applied), skipped };
+			}
+			skipped.push(RevisionSummary {
+				session_id: next.session_id.clone(),
+				code_paths: next.code_paths.clone(),
+				revision:   next.revision_num,
+			});
+			cursor = next_idx;
+		}
 	}
 }
 
@@ -231,11 +346,32 @@ impl BufferRegistry {
 
 	pub fn reload_if_stale(&self, path: &Path) -> Result<()> {
 		let key = registry_key(path);
-		if self.watcher().is_some_and(|watcher| watcher.is_stale(&key)) {
-			self.close(&key)?;
-			if let Some(watcher) = self.watcher() {
-				watcher.clear_stale(&key);
+		if let Some(watcher) = self.watcher()
+			&& watcher.is_stale(&key)
+		{
+			if let Some(buffer) = self.get(&key) {
+				let disk_source = match fs::read_to_string(&key) {
+					Ok(source) => Some(source),
+					Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+					Err(error) => return Err(error.into()),
+				};
+				let disk_mtime = match fs::metadata(&key) {
+					Ok(metadata) => metadata_modified(&metadata),
+					Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+					Err(error) => return Err(error.into()),
+				};
+				let mut guard = buffer.lock();
+				if disk_source
+					.as_deref()
+					.is_some_and(|source| source == guard.source())
+				{
+					guard.disk_mtime = disk_mtime;
+					watcher.clear_stale(&key);
+					return Ok(());
+				}
 			}
+			self.close(&key)?;
+			watcher.clear_stale(&key);
 			return Ok(());
 		}
 		let Some(buffer) = self.get(&key) else {
@@ -247,8 +383,16 @@ impl BufferRegistry {
 				Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
 				Err(error) => return Err(error.into()),
 			};
-			let guard = buffer.lock();
-			Ok(!guard.dirty && is_newer_mtime(disk_mtime, guard.disk_mtime))
+			let mut guard = buffer.lock();
+			if guard.dirty || !is_newer_mtime(disk_mtime, guard.disk_mtime) {
+				return Ok(false);
+			}
+			let disk_source = fs::read_to_string(&key)?;
+			if disk_source == guard.source() {
+				guard.disk_mtime = disk_mtime;
+				return Ok(false);
+			}
+			Ok(true)
 		})?;
 		if should_close {
 			self.close(&key)?;
@@ -668,6 +812,10 @@ impl CodeBuffer {
 			fs::create_dir_all(parent)?;
 		}
 		let source = self.source();
+		if let Some(watcher) = watcher {
+			watcher.mark_self_write(&path, None);
+			watcher.clear_stale(&path);
+		}
 		let disk_mtime = with_exclusive_lock(&path, SAVE_LOCK_BUDGET, || {
 			if self.disk_mtime.is_some()
 				&& let Ok(metadata) = fs::metadata(&path)
@@ -688,6 +836,7 @@ impl CodeBuffer {
 		})?;
 		if let Some(watcher) = watcher {
 			watcher.mark_self_write(&path, disk_mtime);
+			watcher.clear_stale(&path);
 		}
 		self.disk_mtime = disk_mtime;
 		self.history.mark_saved();
@@ -1205,6 +1354,36 @@ mod tests {
 		let first = reg.open(&path).expect("open first");
 		let second = reg.open(&path).expect("open second");
 		assert!(Arc::ptr_eq(&first, &second));
+	}
+
+	#[test]
+	fn saved_buffer_keeps_history_across_registry_reopen() {
+		let path = temp_path("registry-save-history.ts");
+		fs::write(&path, "export const value = 1;\n").expect("write fixture");
+		let reg = BufferRegistry::new(registry());
+		if !reg.watcher_active() {
+			return;
+		}
+		let first = reg.open(&path).expect("open first");
+		{
+			let mut buffer = first.lock();
+			let end = buffer.source().len();
+			buffer
+				.edit_batch(vec![TextEdit {
+					start_byte:   0,
+					old_end_byte: end,
+					new_text:     "export const value = 2;\n".into(),
+				}])
+				.expect("edit batch");
+			buffer.save_with_watcher(reg.watcher()).expect("save");
+		}
+		let reopened = reg.open(&path).expect("reopen");
+		assert!(Arc::ptr_eq(&first, &reopened), "self-saved buffer should remain open for undo/redo",);
+		let mut reopened = reopened.lock();
+		reopened.undo().expect("undo");
+		assert_eq!(reopened.source(), "export const value = 1;\n");
+		reopened.redo().expect("redo");
+		assert_eq!(reopened.source(), "export const value = 2;\n");
 	}
 
 	#[test]

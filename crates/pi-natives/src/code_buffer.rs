@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+	collections::BTreeMap,
+	path::{Path, PathBuf},
+};
 
 use napi::{Error, bindgen_prelude::*};
 use napi_derive::napi;
@@ -20,7 +23,8 @@ use pi_code_engine::{
 	run_procedure,
 };
 use pi_code_graph::{
-	BuildGraphOptions, CacheStore, CodeGraphBuilder, LanguageRegistry as GraphLanguageRegistry,
+	BuildGraphOptions, CacheStatus, CacheStore, CodeGraphBuilder,
+	LanguageRegistry as GraphLanguageRegistry, query::GraphOutlineEnrichment,
 };
 use serde_json::{Value, json};
 
@@ -125,6 +129,20 @@ fn has_meaningful_index_field(value: Option<&Value>) -> bool {
 	value.and_then(Value::as_u64).is_some_and(|n| n > 0)
 }
 
+fn parse_outline_enrich(options: &Value) -> EnrichFlags {
+	let tokens = options
+		.get("enrich")
+		.and_then(Value::as_array)
+		.into_iter()
+		.flatten()
+		.filter_map(Value::as_str)
+		.collect::<Vec<_>>();
+	EnrichFlags::from_tokens(tokens)
+}
+
+fn has_outline_enrich(flags: EnrichFlags) -> bool {
+	flags.signature || flags.metrics || flags.doc || flags.graph
+}
 fn root_hint(options: &Value) -> Option<PathBuf> {
 	options
 		.get("root")
@@ -169,6 +187,60 @@ struct PreparedEditOperation {
 	edits:  Vec<TextEdit>,
 	proof:  Option<ProcedureProof>,
 	action: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditSaveMode {
+	Auto,
+	Staged,
+}
+
+impl EditSaveMode {
+	const fn as_str(self) -> &'static str {
+		match self {
+			Self::Auto => "auto",
+			Self::Staged => "staged",
+		}
+	}
+
+	const fn success_status(self) -> &'static str {
+		match self {
+			Self::Auto => "applied",
+			Self::Staged => "staged",
+		}
+	}
+
+	const fn persisted(self) -> bool {
+		matches!(self, Self::Auto)
+	}
+}
+
+#[derive(Debug, Clone)]
+struct EditFileRequest {
+	path:       PathBuf,
+	operations: Vec<Value>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EditFileResult {
+	file:       String,
+	status:     String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	version:    Option<u64>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	diff:       Option<String>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	edit_count: Option<usize>,
+	created:    bool,
+	#[serde(skip_serializing_if = "Vec::is_empty", default)]
+	targets:    Vec<TargetSummary>,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	proof:      Option<ProcedureProof>,
+	persisted:  bool,
+	dirty:      bool,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	error:      Option<Value>,
 }
 
 fn validate_edit_request(options: &Value) -> Result<&[Value]> {
@@ -230,41 +302,85 @@ fn collect_operation_file_targets(node: &Value, targets: &mut Vec<String>) -> Re
 	Ok(())
 }
 
-fn resolve_edit_path(options: &Value) -> Result<PathBuf> {
-	let operations = validate_edit_request(options)?;
-	let mut targets = Vec::new();
-	for operation in operations {
-		collect_operation_file_targets(operation, &mut targets)?;
+fn edit_save_mode(options: &Value) -> Result<EditSaveMode> {
+	match options
+		.get("saveMode")
+		.and_then(Value::as_str)
+		.unwrap_or("auto")
+	{
+		"auto" => Ok(EditSaveMode::Auto),
+		"staged" => Ok(EditSaveMode::Staged),
+		other => Err(json_err(format!("Invalid saveMode '{other}'. Use 'auto' or 'staged'.",))),
 	}
-	targets.sort();
-	targets.dedup();
-	if targets.len() != 1 {
-		return Err(json_err(format!(
-			"command 'edit' currently supports one file per request. Found file roots: {}",
-			targets.join(", "),
-		)));
-	}
-	Ok(path_for_file_target(&targets[0], options))
 }
 
-fn structured_refusal(action: &str, target_id: &str, error: CodeEngineError) -> Result<Value> {
+fn group_edit_requests(options: &Value) -> Result<Vec<EditFileRequest>> {
+	let operations = validate_edit_request(options)?;
+	let mut requests = Vec::<EditFileRequest>::new();
+	for operation in operations {
+		let operation_target_id = required_str(operation, "targetId")?;
+		let mut targets = Vec::new();
+		collect_operation_file_targets(operation, &mut targets)?;
+		targets.sort();
+		targets.dedup();
+		if targets.len() != 1 {
+			return Err(json_err(format!(
+				"Top-level edit operation '{operation_target_id}' must stay within one file root. \
+				 Found: {}",
+				targets.join(", "),
+			)));
+		}
+		let path = path_for_file_target(&targets[0], options);
+		if let Some(existing) = requests.iter_mut().find(|request| request.path == path) {
+			existing.operations.push(operation.clone());
+		} else {
+			requests.push(EditFileRequest { path, operations: vec![operation.clone()] });
+		}
+	}
+	Ok(requests)
+}
+
+fn first_operation_target_id(operations: &[Value]) -> &str {
+	operations
+		.first()
+		.and_then(|operation| operation.get("targetId"))
+		.and_then(Value::as_str)
+		.unwrap_or("unknown")
+}
+
+fn napi_error_payload(error: Error) -> Value {
+	let reason = error.to_string();
+	let payload = reason
+		.strip_prefix("GenericFailure, ")
+		.or_else(|| reason.strip_prefix("Error: "))
+		.unwrap_or(reason.as_str());
+	serde_json::from_str(payload).unwrap_or(Value::String(reason))
+}
+
+fn structured_refusal_payload(action: &str, target_id: &str, error: CodeEngineError) -> Value {
 	let CodeEngineError::Refusal { message, reason, confidence, basis, matches } = error else {
-		return Err(engine_err(error));
+		return napi_error_payload(engine_err(error));
 	};
-	Ok(json_response(
-		json!({
-			"message": message,
-			"action": action,
-			"targetId": target_id,
-			"proof": {
-				"basis": basis,
-				"reason": reason,
-				"confidence": confidence,
-				"matches": matches,
-			},
-		}),
-		true,
-	))
+	json!({
+		"message": message,
+		"action": action,
+		"targetId": target_id,
+		"proof": {
+			"basis": basis,
+			"reason": reason,
+			"confidence": confidence,
+			"matches": matches,
+		},
+	})
+}
+
+fn edit_error_payload(target_id: &str, error: CodeEngineError) -> Value {
+	match error {
+		refusal @ CodeEngineError::Refusal { .. } => {
+			structured_refusal_payload("edit", target_id, refusal)
+		},
+		other => napi_error_payload(engine_err(other)),
+	}
 }
 
 fn workspace_root_for(path: &Path) -> PathBuf {
@@ -726,10 +842,8 @@ fn apply_operations_transactionally(
 	buffer: &mut CodeBuffer,
 	profile: &LanguageProfile,
 	path: &Path,
-	options: &Value,
+	operations: &[Value],
 ) -> std::result::Result<(Vec<TargetSummary>, usize, Option<ProcedureProof>), CodeEngineError> {
-	let operations =
-		validate_edit_request(options).map_err(|error| CodeEngineError::Edit(error.to_string()))?;
 	let before = buffer.source();
 	let mut staged = CodeBuffer::from_str(&before, buffer.language().clone(), language_registry())?;
 	let mut summaries = Vec::new();
@@ -809,37 +923,213 @@ fn render_optional_edit_result(result: Option<pi_code_engine::buffer::EditResult
 fn render_navigate_item(item: NavigateItem) -> Value {
 	json!({ "nodeType": item.node_type, "text": item.text, "line": item.line, "endLine": item.end_line })
 }
+
+struct OutlineGraphContext {
+	status:    String,
+	by_target: BTreeMap<String, GraphOutlineEnrichment>,
+}
+
+fn build_outline_graph_context(
+	path: &Path,
+	entries: &[OutlineEntry],
+	file_target_id: &str,
+	options: &Value,
+) -> OutlineGraphContext {
+	let root = root_hint(options).unwrap_or_else(|| workspace_root_for(path));
+	let cache = CacheStore::new(root.join(".spell/graph"));
+	let registry = match GraphLanguageRegistry::new().with_defaults() {
+		Ok(registry) => registry,
+		Err(_) => {
+			return OutlineGraphContext {
+				status:    "unavailable".into(),
+				by_target: BTreeMap::new(),
+			};
+		},
+	};
+	let builder = CodeGraphBuilder::new(registry, cache);
+	let status = match builder.cache_status(&root) {
+		Ok(CacheStatus::Fresh) => "indexed (warm)",
+		Ok(CacheStatus::Missing | CacheStatus::Stale { .. }) => "rebuilt",
+		Err(_) => "rebuilt",
+	};
+	let outcome = match builder.build(&BuildGraphOptions::new(&root)) {
+		Ok(outcome) => outcome,
+		Err(_) => {
+			return OutlineGraphContext {
+				status:    "unavailable".into(),
+				by_target: BTreeMap::new(),
+			};
+		},
+	};
+	let graph = outcome.graph;
+	let mut targets = Vec::new();
+	collect_outline_target_ids(entries, file_target_id, None, &mut targets);
+	let mut by_target = BTreeMap::new();
+	for target in targets {
+		if let Some(enrichment) = graph.graph_outline_enrichment(&target) {
+			by_target.insert(target, enrichment);
+		}
+	}
+	OutlineGraphContext { status: status.into(), by_target }
+}
+
+fn collect_outline_target_ids(
+	entries: &[OutlineEntry],
+	file_target_id: &str,
+	parent_path: Option<&str>,
+	out: &mut Vec<String>,
+) {
+	for entry in entries {
+		let symbol_path = parent_path
+			.map_or_else(|| entry.name.clone(), |parent| format!("{parent}.{}", entry.name));
+		out.push(symbol_target_id(file_target_id, &symbol_path));
+		collect_outline_target_ids(&entry.children, file_target_id, Some(&symbol_path), out);
+	}
+}
+
 fn render_outline_entry(
 	entry: &OutlineEntry,
 	file_target_id: &str,
 	parent_path: Option<&str>,
+	enrich: EnrichFlags,
+	graph: Option<&OutlineGraphContext>,
 ) -> Value {
 	let symbol_path =
 		parent_path.map_or_else(|| entry.name.clone(), |parent| format!("{parent}.{}", entry.name));
-	json!({
-		"name": entry.name,
-		"kind": entry.kind,
-		"line": entry.line,
-		"endLine": entry.end_line,
-		"column": entry.column,
-		"exported": entry.exported,
-		"signature": entry.signature,
-		"targetId": symbol_target_id(file_target_id, &symbol_path),
-		"children": entry
-			.children
-			.iter()
-			.map(|child| render_outline_entry(child, file_target_id, Some(&symbol_path)))
-			.collect::<Vec<_>>()
-	})
+	let target_id = symbol_target_id(file_target_id, &symbol_path);
+	let mut object = serde_json::Map::new();
+	object.insert("name".into(), Value::String(entry.name.clone()));
+	object.insert("kind".into(), Value::String(entry.kind.clone()));
+	object.insert("line".into(), Value::from(entry.line));
+	object.insert("endLine".into(), Value::from(entry.end_line));
+	object.insert("column".into(), Value::from(entry.column));
+	object.insert("exported".into(), Value::Bool(entry.exported));
+	object.insert("signature".into(), Value::String(entry.signature.clone()));
+	object.insert("targetId".into(), Value::String(target_id.clone()));
+	if enrich.signature {
+		object.insert(
+			"params".into(),
+			Value::Array(
+				entry
+					.params
+					.iter()
+					.map(|param| json!({ "name": param.name, "ty": param.ty, "optional": param.optional, "rest": param.rest }))
+					.collect(),
+			),
+		);
+		if let Some(return_type) = &entry.return_type {
+			object.insert("returnType".into(), Value::String(return_type.clone()));
+		}
+		if !entry.generics.is_empty() {
+			object.insert(
+				"generics".into(),
+				Value::Array(entry.generics.iter().cloned().map(Value::String).collect()),
+			);
+		}
+		if !entry.throws.is_empty() {
+			object.insert(
+				"throws".into(),
+				Value::Array(entry.throws.iter().cloned().map(Value::String).collect()),
+			);
+		}
+	}
+	if enrich.metrics {
+		if let Some(value) = entry.statements {
+			object.insert("statements".into(), Value::from(value));
+		}
+		if let Some(value) = entry.branch_points {
+			object.insert("branchPoints".into(), Value::from(value));
+		}
+		if let Some(value) = entry.nesting_depth {
+			object.insert("nestingDepth".into(), Value::from(value));
+		}
+		if let Some(value) = entry.call_sites {
+			object.insert("callSites".into(), Value::from(value));
+		}
+		if let Some(value) = entry.has_side_effects {
+			object.insert("hasSideEffects".into(), Value::Bool(value));
+		}
+	}
+	if enrich.doc {
+		if let Some(summary) = &entry.doc_summary {
+			object.insert("docSummary".into(), Value::String(summary.clone()));
+		}
+		if !entry.doc_tags.is_empty() {
+			object.insert(
+				"docTags".into(),
+				Value::Array(entry.doc_tags.iter().cloned().map(Value::String).collect()),
+			);
+		}
+	}
+	if enrich.graph
+		&& let Some(graph_entry) = graph.and_then(|ctx| ctx.by_target.get(&target_id))
+	{
+		object.insert("refsIn".into(), Value::from(graph_entry.refs_in));
+		object.insert("refsOut".into(), Value::from(graph_entry.refs_out));
+		object.insert("callers".into(), Value::from(graph_entry.callers));
+		object.insert("callees".into(), Value::from(graph_entry.callees));
+		object.insert("importedBy".into(), Value::from(graph_entry.imported_by));
+		object.insert(
+			"exportedReach".into(),
+			json!({ "count": graph_entry.exported_reach.count, "capped": graph_entry.exported_reach.capped }),
+		);
+		if let Some(cluster) = &graph_entry.cluster {
+			object.insert("cluster".into(), json!({ "id": cluster.id, "name": cluster.name }));
+		}
+		object.insert("dead".into(), Value::Bool(graph_entry.dead));
+		if !graph_entry.inherits.is_empty() {
+			object.insert(
+				"inherits".into(),
+				Value::Array(
+					graph_entry
+						.inherits
+						.iter()
+						.cloned()
+						.map(Value::String)
+						.collect(),
+				),
+			);
+		}
+	}
+	object.insert(
+		"children".into(),
+		Value::Array(
+			entry
+				.children
+				.iter()
+				.map(|child| {
+					render_outline_entry(child, file_target_id, Some(&symbol_path), enrich, graph)
+				})
+				.collect(),
+		),
+	);
+	Value::Object(object)
 }
 
-fn render_outline_result(entries: &[OutlineEntry], file_target_id: &str) -> Value {
-	Value::Array(
+fn render_outline_result(
+	entries: &[OutlineEntry],
+	file_target_id: &str,
+	enrich: EnrichFlags,
+	graph: Option<&OutlineGraphContext>,
+) -> Value {
+	let entries_value = Value::Array(
 		entries
 			.iter()
-			.map(|entry| render_outline_entry(entry, file_target_id, None))
+			.map(|entry| render_outline_entry(entry, file_target_id, None, enrich, graph))
 			.collect(),
-	)
+	);
+	if !has_outline_enrich(enrich) {
+		return entries_value;
+	}
+	let mut object = serde_json::Map::new();
+	object.insert("entries".into(), entries_value);
+	if enrich.graph {
+		object.insert(
+			"graphStatus".into(),
+			Value::String(graph.map_or_else(|| "unavailable".to_string(), |ctx| ctx.status.clone())),
+		);
+	}
+	Value::Object(object)
 }
 
 fn target_id_for_line(entries: &[OutlineEntry], file_target_id: &str, line: u32) -> Option<String> {
@@ -880,11 +1170,189 @@ fn render_diff_hunk(hunk: pi_code_engine::diff::DiffHunk) -> Value {
 	json!({ "oldStart": hunk.old_start, "oldCount": hunk.old_count, "newStart": hunk.new_start, "newCount": hunk.new_count, "kind": format!("{:?}", hunk.kind), "content": hunk.content })
 }
 
+fn execute_edit_command(options: &Value) -> Result<Value> {
+	let save_mode = edit_save_mode(options)?;
+	let requests = group_edit_requests(options)?;
+	let mut file_results = Vec::<EditFileResult>::new();
+	let mut success_count = 0_usize;
+	let mut failure_count = 0_usize;
+	let mut total_edit_count = 0_usize;
+
+	for request in requests {
+		let file = request.path.display().to_string();
+		let created = !request.path.exists();
+		let target_id = first_operation_target_id(&request.operations).to_string();
+		let buffer = match buffer_registry().open_or_create(&request.path) {
+			Ok(buffer) => buffer,
+			Err(error) => {
+				failure_count += 1;
+				file_results.push(EditFileResult {
+					file,
+					status: "failed".into(),
+					version: None,
+					diff: None,
+					edit_count: None,
+					created,
+					targets: Vec::new(),
+					proof: None,
+					persisted: false,
+					dirty: false,
+					error: Some(napi_error_payload(engine_err(error))),
+				});
+				continue;
+			},
+		};
+		let mut buffer = buffer.lock();
+		let profile = match get_profile(&request.path, buffer.language()) {
+			Ok(profile) => profile,
+			Err(error) => {
+				failure_count += 1;
+				file_results.push(EditFileResult {
+					file,
+					status: "failed".into(),
+					version: None,
+					diff: None,
+					edit_count: None,
+					created,
+					targets: Vec::new(),
+					proof: None,
+					persisted: false,
+					dirty: buffer.is_dirty(),
+					error: Some(napi_error_payload(error)),
+				});
+				continue;
+			},
+		};
+		if buffer.language().as_str() == "text" {
+			failure_count += 1;
+			file_results.push(EditFileResult {
+				file,
+				status: "failed".into(),
+				version: None,
+				diff: None,
+				edit_count: None,
+				created,
+				targets: Vec::new(),
+				proof: None,
+				persisted: false,
+				dirty: buffer.is_dirty(),
+				error: Some(json!({
+					"message": "Fallback text buffers do not support structured code edit operations. Use replace_content for whole-buffer writes.",
+				})),
+			});
+			continue;
+		}
+
+		let before = buffer.source();
+		match apply_operations_transactionally(
+			&mut buffer,
+			&profile,
+			&request.path,
+			&request.operations,
+		) {
+			Ok((targets, edit_count, proof)) => {
+				let diff = render_annotated_diff(&buffer, &before, &profile);
+				if save_mode.persisted() {
+					match buffer.save_with_watcher(buffer_registry().watcher()) {
+						Ok(()) => {
+							success_count += 1;
+							total_edit_count += edit_count;
+							file_results.push(EditFileResult {
+								file,
+								status: save_mode.success_status().into(),
+								version: Some(buffer.version()),
+								diff: Some(diff),
+								edit_count: Some(edit_count),
+								created,
+								targets,
+								proof,
+								persisted: true,
+								dirty: buffer.is_dirty(),
+								error: None,
+							});
+						},
+						Err(error) => {
+							failure_count += 1;
+							file_results.push(EditFileResult {
+								file,
+								status: "failed".into(),
+								version: Some(buffer.version()),
+								diff: Some(diff),
+								edit_count: Some(edit_count),
+								created,
+								targets,
+								proof,
+								persisted: false,
+								dirty: buffer.is_dirty(),
+								error: Some(napi_error_payload(engine_err(error))),
+							});
+						},
+					}
+				} else {
+					success_count += 1;
+					total_edit_count += edit_count;
+					file_results.push(EditFileResult {
+						file,
+						status: save_mode.success_status().into(),
+						version: Some(buffer.version()),
+						diff: Some(diff),
+						edit_count: Some(edit_count),
+						created,
+						targets,
+						proof,
+						persisted: false,
+						dirty: buffer.is_dirty(),
+						error: None,
+					});
+				}
+			},
+			Err(error) => {
+				failure_count += 1;
+				file_results.push(EditFileResult {
+					file,
+					status: "failed".into(),
+					version: None,
+					diff: None,
+					edit_count: None,
+					created,
+					targets: Vec::new(),
+					proof: None,
+					persisted: false,
+					dirty: buffer.is_dirty(),
+					error: Some(edit_error_payload(&target_id, error)),
+				});
+			},
+		}
+	}
+
+	let status = if failure_count == 0 {
+		save_mode.success_status()
+	} else if success_count == 0 {
+		"failed"
+	} else {
+		"partial"
+	};
+
+	Ok(json_response(
+		json!({
+			"status": status,
+			"saveMode": save_mode.as_str(),
+			"editCount": total_edit_count,
+			"successCount": success_count,
+			"failureCount": failure_count,
+			"fileResults": file_results,
+		}),
+		false,
+	))
+}
 fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 	let command = options
 		.get("command")
 		.and_then(Value::as_str)
 		.ok_or_else(|| json_err("Missing required field: command"))?;
+	if command == "edit" {
+		return execute_edit_command(options);
+	}
 
 	match command {
 		"open" => {
@@ -992,15 +1460,9 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 				.collect();
 			Ok(json_response(json!({ "languages": langs }), false))
 		},
-		"outline" | "navigate" | "read" | "edit" | "undo" | "redo" | "diff" | "replace_content"
-		| "save" => {
-			let path = if command == "edit" {
-				resolve_edit_path(options)?
-			} else {
-				required_path(options)?
-			};
-			let allow_missing = command == "edit" || command == "replace_content";
-			let created = command == "edit" && !path.exists();
+		"outline" | "navigate" | "read" | "undo" | "redo" | "diff" | "replace_content" | "save" => {
+			let path = required_path(options)?;
+			let allow_missing = command == "replace_content";
 			let buffer = if allow_missing {
 				buffer_registry()
 					.open_or_create(&path)
@@ -1021,8 +1483,15 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 						));
 					}
 					let file_target_id = file_target_id_for_path(&path, options);
-					let outline = outline_buffer(&buffer, &profile, EnrichFlags::default());
-					Ok(json_response(render_outline_result(&outline, &file_target_id), false))
+					let enrich = parse_outline_enrich(options);
+					let outline = outline_buffer(&buffer, &profile, enrich);
+					let graph_context = enrich
+						.graph
+						.then(|| build_outline_graph_context(&path, &outline, &file_target_id, options));
+					Ok(json_response(
+						render_outline_result(&outline, &file_target_id, enrich, graph_context.as_ref()),
+						false,
+					))
 				},
 				"navigate" => {
 					if text_fallback {
@@ -1067,42 +1536,7 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 						))
 					}
 				},
-				"edit" => {
-					let before = buffer.source();
-					if text_fallback {
-						return Err(json_err(
-							"Fallback text buffers do not support structured code edit operations. Use \
-							 replace_content for whole-buffer writes.",
-						));
-					}
-					match apply_operations_transactionally(&mut buffer, &profile, &path, options) {
-						Ok((targets, edit_count, proof)) => {
-							let diff = render_annotated_diff(&buffer, &before, &profile);
-							Ok(json_response(
-								json!({
-									"version": buffer.version(),
-									"diff": diff,
-									"editCount": edit_count,
-									"created": created,
-									"targets": targets,
-									"proof": proof,
-								}),
-								false,
-							))
-						},
-						Err(error @ CodeEngineError::Refusal { .. }) => {
-							let target_id = options
-								.get("operations")
-								.and_then(Value::as_array)
-								.and_then(|operations| operations.first())
-								.and_then(|operation| operation.get("targetId"))
-								.and_then(Value::as_str)
-								.unwrap_or("unknown");
-							structured_refusal("edit", target_id, error)
-						},
-						Err(error) => Err(engine_err(error)),
-					}
-				},
+
 				"undo" => Ok(json_response(
 					render_optional_edit_result(buffer.undo().map_err(engine_err)?),
 					false,
@@ -1247,6 +1681,12 @@ mod tests {
 		std::env::temp_dir().join(format!("pi-natives-{stamp}-{name}"))
 	}
 
+	fn temp_workspace(name: &str) -> PathBuf {
+		let root = temp_path(name);
+		fs::create_dir_all(&root).expect("workspace dir");
+		root
+	}
+
 	struct LegacyResolvedTarget {
 		kind:     String,
 		line:     u32,
@@ -1371,26 +1811,81 @@ mod tests {
 		super::render_navigate_result(result, "fixtures/typst_edit_targets.typ", &[])
 	}
 
+	fn find_file_result<'a>(response: &'a Value, path: &Path) -> &'a Value {
+		response["output"]["fileResults"]
+			.as_array()
+			.expect("file results")
+			.iter()
+			.find(|result| result["file"] == json!(path.display().to_string()))
+			.expect("file result")
+	}
+
+	fn outline_entry(
+		name: &str,
+		kind: &str,
+		line: u32,
+		end_line: u32,
+		column: u32,
+		signature: &str,
+		children: Vec<OutlineEntry>,
+	) -> OutlineEntry {
+		OutlineEntry {
+			name: name.into(),
+			kind: kind.into(),
+			line,
+			end_line,
+			column,
+			exported: false,
+			signature: signature.into(),
+			children,
+			deduplicate: false,
+			loc: 0,
+			modifiers: vec![],
+			decorators: vec![],
+			deprecated: false,
+			params: vec![],
+			return_type: None,
+			generics: vec![],
+			throws: vec![],
+			statements: None,
+			branch_points: None,
+			nesting_depth: None,
+			call_sites: None,
+			has_side_effects: None,
+			doc_summary: None,
+			doc_tags: vec![],
+			refs_in: None,
+			refs_out: None,
+			callers: None,
+			callees: None,
+			imported_by: None,
+			exported_reach: None,
+			cluster: None,
+			dead: None,
+			inherits: vec![],
+		}
+	}
+
 	#[test]
 	fn execute_code_buffer_inner_creates_missing_file_buffers() {
 		let path = temp_path("create-buffer.ts");
-		let target_id = path.display().to_string();
 		let edit = execute_code_buffer_inner(&json!({
 			"command": "edit",
 			"operations": [{
-				"targetId": target_id,
+				"targetId": path.display().to_string(),
 				"actions": [{ "kind": "write", "content": "export const created = 1;\n" }]
 			}]
 		}))
 		.expect("create edit");
 		assert_eq!(edit["error"], json!(false));
-		assert_eq!(edit["output"]["created"], json!(true));
-		let save = execute_code_buffer_inner(&json!({
-			"command": "save",
-			"file": path.display().to_string(),
-		}))
-		.expect("save");
-		assert_eq!(save["error"], json!(false));
+		assert_eq!(edit["output"]["status"], json!("applied"));
+		assert_eq!(edit["output"]["successCount"], json!(1));
+		assert_eq!(edit["output"]["failureCount"], json!(0));
+		let file_result = find_file_result(&edit, &path);
+		assert_eq!(file_result["status"], json!("applied"));
+		assert_eq!(file_result["created"], json!(true));
+		assert_eq!(file_result["persisted"], json!(true));
+		assert_eq!(file_result["dirty"], json!(false));
 		assert_eq!(fs::read_to_string(&path).expect("saved file"), "export const created = 1;\n");
 	}
 
@@ -1417,7 +1912,9 @@ mod tests {
 		}))
 		.expect("create edit with defaults");
 		assert_eq!(edit["error"], json!(false));
-		assert_eq!(edit["output"]["created"], json!(true));
+		assert_eq!(edit["output"]["status"], json!("applied"));
+		assert_eq!(find_file_result(&edit, &path)["created"], json!(true));
+		assert_eq!(fs::read_to_string(&path).expect("saved file"), "export const created = 1;\n");
 	}
 
 	#[test]
@@ -1426,52 +1923,111 @@ mod tests {
 		fs::write(&path, "export const original = 1;\n").expect("seed file");
 		let edit = execute_code_buffer_inner(&json!({
 			"command": "edit",
+			"saveMode": "staged",
 			"operations": [{
 				"targetId": path.display().to_string(),
 				"actions": [{ "kind": "write", "content": "export const replaced = 2;\n" }]
 			}],
 			"edits": []
 		}))
-		.expect("replace edit");
+		.expect("staged edit");
 		assert_eq!(edit["error"], json!(false));
-		assert_eq!(edit["output"]["editCount"], json!(1));
-		assert_ne!(edit["output"]["diff"], json!("(no changes)"));
+		assert_eq!(edit["output"]["status"], json!("staged"));
+		let file_result = find_file_result(&edit, &path);
+		assert_eq!(file_result["status"], json!("staged"));
+		assert_eq!(file_result["persisted"], json!(false));
+		assert_eq!(file_result["dirty"], json!(true));
+		assert_eq!(
+			fs::read_to_string(&path).expect("unchanged file"),
+			"export const original = 1;\n"
+		);
 		let save = execute_code_buffer_inner(&json!({
 			"command": "save",
 			"file": path.display().to_string(),
 		}))
-		.expect("save");
+		.expect("save staged edit");
 		assert_eq!(save["error"], json!(false));
 		assert_eq!(fs::read_to_string(&path).expect("saved file"), "export const replaced = 2;\n");
+	}
+
+	#[test]
+	fn execute_code_buffer_inner_applies_multiple_files_per_request() {
+		let first = temp_path("multi-file-first.ts");
+		let second = temp_path("multi-file-second.ts");
+		fs::write(&first, "export const first = 1;\n").expect("seed first");
+		fs::write(&second, "export const second = 2;\n").expect("seed second");
+		let edit = execute_code_buffer_inner(&json!({
+			"command": "edit",
+			"operations": [
+				{ "targetId": first.display().to_string(), "actions": [{ "kind": "write", "content": "export const first = 10;\n" }] },
+				{ "targetId": second.display().to_string(), "actions": [{ "kind": "write", "content": "export const second = 20;\n" }] }
+			]
+		}))
+		.expect("multi-file edit");
+		assert_eq!(edit["error"], json!(false));
+		assert_eq!(edit["output"]["status"], json!("applied"));
+		assert_eq!(edit["output"]["successCount"], json!(2));
+		assert_eq!(edit["output"]["failureCount"], json!(0));
+		assert_eq!(find_file_result(&edit, &first)["status"], json!("applied"));
+		assert_eq!(find_file_result(&edit, &second)["status"], json!("applied"));
+		assert_eq!(fs::read_to_string(&first).expect("first saved"), "export const first = 10;\n");
+		assert_eq!(fs::read_to_string(&second).expect("second saved"), "export const second = 20;\n");
+	}
+
+	#[test]
+	fn execute_code_buffer_inner_reports_partial_multi_file_results() {
+		let first = temp_path("partial-first.ts");
+		let second = temp_path("partial-second.ts");
+		fs::write(&first, "export const first = 1;\n").expect("seed first");
+		fs::write(&second, "export function main() {\n  return oldCall();\n}\n")
+			.expect("seed second");
+		let edit = execute_code_buffer_inner(&json!({
+			"command": "edit",
+			"operations": [
+				{ "targetId": first.display().to_string(), "actions": [{ "kind": "write", "content": "export const first = 3;\n" }] },
+				{ "targetId": format!("{}::missing", second.display()), "actions": [{ "kind": "findAndReplace", "find": "return oldCall();", "content": "return never();" }] }
+			]
+		}))
+		.expect("partial edit");
+		assert_eq!(edit["error"], json!(false));
+		assert_eq!(edit["output"]["status"], json!("partial"));
+		assert_eq!(edit["output"]["successCount"], json!(1));
+		assert_eq!(edit["output"]["failureCount"], json!(1));
+		assert_eq!(find_file_result(&edit, &first)["status"], json!("applied"));
+		let second_result = find_file_result(&edit, &second);
+		assert_eq!(second_result["status"], json!("failed"));
+		assert!(
+			second_result["error"]["message"]
+				.as_str()
+				.expect("error message")
+				.contains("Symbol 'missing' not found")
+		);
+		assert_eq!(fs::read_to_string(&first).expect("first saved"), "export const first = 3;\n");
+		assert_eq!(
+			fs::read_to_string(&second).expect("second unchanged"),
+			"export function main() {\n  return oldCall();\n}\n"
+		);
 	}
 
 	#[test]
 	fn execute_code_buffer_inner_clears_failed_multi_edit_state() {
 		let path = temp_path("failed-multi-edit.ts");
 		fs::write(&path, "export function main() {\n  return oldCall();\n}\n").expect("seed file");
-
 		let failed = execute_code_buffer_inner(&json!({
 			"command": "edit",
 			"operations": [{
 				"targetId": format!("{}::main", path.display()),
-				"actions": [{
-					"kind": "findAndReplace",
-					"find": "return oldCall();",
-					"content": "return newCall();"
-				}],
+				"actions": [{ "kind": "findAndReplace", "find": "return oldCall();", "content": "return newCall();" }],
 				"children": [{
 					"targetId": format!("{}::missing", path.display()),
-					"actions": [{
-						"kind": "findAndReplace",
-						"find": "return oldCall();",
-						"content": "return shouldNotApply();"
-					}]
+					"actions": [{ "kind": "findAndReplace", "find": "return oldCall();", "content": "return shouldNotApply();" }]
 				}]
 			}]
 		}))
-		.expect_err("failed multi edit");
-		assert!(failed.to_string().contains("Symbol 'missing' not found"));
-
+		.expect("failed multi edit result");
+		assert_eq!(failed["error"], json!(false));
+		assert_eq!(failed["output"]["status"], json!("failed"));
+		assert_eq!(failed["output"]["failureCount"], json!(1));
 		let listed =
 			execute_code_buffer_inner(&json!({ "command": "list" })).expect("list after fail");
 		let retained = listed["output"]
@@ -1486,31 +2042,69 @@ mod tests {
 				),
 			"failed multi-edit should not leave a dirty staged buffer behind: {listed}",
 		);
-
 		let follow_up = execute_code_buffer_inner(&json!({
 			"command": "edit",
 			"operations": [{
 				"targetId": format!("{}::main", path.display()),
-				"actions": [{
-					"kind": "findAndReplace",
-					"find": "return oldCall();",
-					"content": "return finalCall();"
-				}]
+				"actions": [{ "kind": "findAndReplace", "find": "return oldCall();", "content": "return finalCall();" }]
 			}]
 		}))
 		.expect("follow-up edit");
 		assert_eq!(follow_up["error"], json!(false));
-		let save = execute_code_buffer_inner(&json!({
-			"command": "save",
+		assert_eq!(
+			fs::read_to_string(&path).expect("saved file"),
+			"export function main() {\n  return finalCall();\n}\n"
+		);
+	}
+
+	#[test]
+	fn execute_code_buffer_inner_keeps_undo_redo_after_persisted_edit() {
+		let path = temp_path("undo-redo-persisted.ts");
+		fs::write(&path, "export const value = 1;\n").expect("seed file");
+		let edit = execute_code_buffer_inner(&json!({
+			"command": "edit",
+			"operations": [{
+				"targetId": path.display().to_string(),
+				"actions": [{ "kind": "write", "content": "export const value = 2;\n" }]
+			}]
+		}))
+		.expect("persisted edit");
+		assert_eq!(edit["error"], json!(false));
+		let before_undo = buffer_registry().get(&path).expect("buffer after edit");
+		assert_eq!(fs::read_to_string(&path).expect("saved edit"), "export const value = 2;\n");
+		let undo = execute_code_buffer_inner(&json!({
+			"command": "undo",
 			"file": path.display().to_string(),
 		}))
-		.expect("save follow-up");
-		assert_eq!(save["error"], json!(false));
+		.expect("undo");
+		assert_eq!(undo["error"], json!(false));
+		assert_ne!(undo["output"], Value::Null);
+		let after_undo_buffer = buffer_registry().get(&path).expect("buffer after undo");
 		assert!(
-			fs::read_to_string(&path)
-				.expect("saved file")
-				.contains("return finalCall();")
+			Arc::ptr_eq(&before_undo, &after_undo_buffer),
+			"undo should reuse the persisted buffer and keep history open",
 		);
+		assert_eq!(after_undo_buffer.lock().source(), "export const value = 1;\n");
+		let after_undo = execute_code_buffer_inner(&json!({
+			"command": "read",
+			"file": path.display().to_string(),
+			"resolution": 3
+		}))
+		.expect("read after undo");
+		assert_eq!(after_undo["output"], json!("export const value = 1;"));
+		let redo = execute_code_buffer_inner(&json!({
+			"command": "redo",
+			"file": path.display().to_string(),
+		}))
+		.expect("redo");
+		assert_eq!(redo["error"], json!(false));
+		let after_redo = execute_code_buffer_inner(&json!({
+			"command": "read",
+			"file": path.display().to_string(),
+			"resolution": 3
+		}))
+		.expect("read after redo");
+		assert_eq!(after_redo["output"], json!("export const value = 2;"));
 	}
 
 	#[test]
@@ -1688,27 +2282,16 @@ mod tests {
 
 	#[test]
 	fn find_enclosing_symbol_prefers_nested_child() {
-		let entries = vec![OutlineEntry {
-			name:        "Foo".into(),
-			kind:        "class".into(),
-			line:        1,
-			end_line:    10,
-			column:      0,
-			exported:    false,
-			signature:   "class Foo".into(),
-			children:    vec![OutlineEntry {
-				name:        "bar".into(),
-				kind:        "method".into(),
-				line:        3,
-				end_line:    5,
-				column:      2,
-				exported:    false,
-				signature:   "bar()".into(),
-				children:    vec![],
-				deduplicate: false,
-			}],
-			deduplicate: false,
-		}];
+		let entries =
+			vec![outline_entry("Foo", "class", 1, 10, 0, "class Foo", vec![outline_entry(
+				"bar",
+				"method",
+				3,
+				5,
+				2,
+				"bar()",
+				vec![],
+			)])];
 		assert_eq!(find_enclosing_symbol(&entries, 4).as_deref(), Some("Foo.bar"));
 		assert_eq!(find_enclosing_symbol(&entries, 2).as_deref(), Some("Foo"));
 	}
@@ -1788,6 +2371,75 @@ mod tests {
 
 		assert_eq!(result["error"], false);
 		assert_eq!(result["output"], json!("hello\n"));
+	}
+
+	#[test]
+	fn outline_command_preserves_legacy_array_without_enrich() {
+		let root = temp_workspace("outline-legacy");
+		let file = root.join("sample.ts");
+		fs::write(&file, "export function greet(name: string) {\n  return name;\n}\n")
+			.expect("write file");
+		let result = execute_code_buffer_inner(&json!({
+			"command": "outline",
+			"file": file.display().to_string(),
+			"root": root.display().to_string(),
+		}))
+		.expect("outline");
+		assert_eq!(result["error"], json!(false));
+		assert!(
+			result["output"].is_array(),
+			"legacy outline output should stay array without enrich"
+		);
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn outline_command_returns_enriched_envelope_for_signature_metrics_and_doc() {
+		let root = temp_workspace("outline-enrich");
+		let file = root.join("sample.ts");
+		fs::write(
+			&file,
+			"/**\n * Greets a user.\n * @param name friendly name\n */\nexport function \
+			 greet<T>(name: string) {\n  if (name) {\n    return format(name);\n  }\n  return \
+			 name;\n}\n",
+		)
+		.expect("write file");
+
+		let signature = execute_code_buffer_inner(&json!({
+			"command": "outline",
+			"file": file.display().to_string(),
+			"root": root.display().to_string(),
+			"enrich": ["signature"],
+		}))
+		.expect("signature outline");
+		assert!(signature["output"]["entries"].is_array());
+		assert_eq!(signature["output"]["entries"][0]["generics"], json!(["T"]));
+		assert_eq!(signature["output"]["entries"][0]["params"][0]["name"], json!("name"));
+
+		let metrics = execute_code_buffer_inner(&json!({
+			"command": "outline",
+			"file": file.display().to_string(),
+			"root": root.display().to_string(),
+			"enrich": ["metrics"],
+		}))
+		.expect("metrics outline");
+		assert!(
+			metrics["output"]["entries"][0]["branchPoints"]
+				.as_u64()
+				.is_some()
+		);
+		assert_eq!(metrics["output"]["entries"][0]["callSites"], json!(1));
+
+		let doc = execute_code_buffer_inner(&json!({
+			"command": "outline",
+			"file": file.display().to_string(),
+			"root": root.display().to_string(),
+			"enrich": ["doc"],
+		}))
+		.expect("doc outline");
+		assert_eq!(doc["output"]["entries"][0]["docSummary"], json!("Greets a user."));
+		assert_eq!(doc["output"]["entries"][0]["docTags"], json!(["param"]));
+		let _ = fs::remove_dir_all(root);
 	}
 
 	#[test]

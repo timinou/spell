@@ -144,8 +144,14 @@ fn should_suppress(
 	let disk_mtime = fs::metadata(path)
 		.ok()
 		.and_then(|metadata| metadata.modified().ok());
-	let suppress = marker.expected_mtime.is_some() && marker.expected_mtime == disk_mtime;
-	if suppress {
+	let suppress = match (marker.expected_mtime, disk_mtime) {
+		(None, _) => true,
+		(Some(expected), Some(current)) => current <= expected,
+		(Some(_), None) => true,
+	};
+	if let Some(expected) = marker.expected_mtime
+		&& (suppress || disk_mtime.is_some_and(|current| current > expected))
+	{
 		self_writes.remove(path);
 	}
 	suppress

@@ -1,0 +1,130 @@
+#+TITLE: coding-agent multi-file code edit cutover
+#+STATE: DONE
+#+SESSION_ID: 14bfe582ca16dbc0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T20-55-41-608Z_14bfe582ca16dbc0.jsonl]]
+#+CUSTOM_ID: FEAT-583-coding-agent-multi-file-code-edit-cutove
+#+DEPENDS: PROJ-056-native-multi-file-code-edit-persistence
+#+LAYER: coding-agent
+#+EFFORT: 6h
+#+PRIORITY: #A
+
+* Initial Message
+
+Code
+ GenericFailure, command 'edit' currently supports one file per request. Found
+ file roots: crates/pi-code-engine/src/language/mod.rs,
+ crates/pi-code-engine/src/outline.rs
+
+
+^^^ what???
+
+* Scope
+
+In scope:
+- Cut the public `code` tool over from first-operation/single-file assumptions to full multi-root edit support.
+- Preserve the public managed-edit contract: successful `code edit` persists to disk, formats when LSP formatting is available, and leaves managed buffers usable for subsequent `undo` / `redo`.
+- Consume the new native aggregate edit result contract and surface truthful per-file outcomes in tool results, previews, and errors.
+- Update prompt/docs/examples/tests so the agent learns the multi-file contract instead of re-triggering the old failure mode.
+
+Out of scope:
+- Designing a second mutation verb or compatibility shim. `code edit` remains the one representation.
+- Reverting to text `edit` for code-supported files.
+- Cross-file atomic persistence; the user selected best-effort persistence.
+
+This item depends on the native aggregate edit contract because the current TypeScript layer derives `activeFile` from only `operations[0].targetId`, checks freshness for one file, and renders one diff string.
+
+* Existing Patterns
+
+Re-use the existing managed-edit pipeline:
+- `packages/coding-agent/src/tools/code.ts`
+  - `primaryFileForOperations(...)` currently proves the hidden single-file assumption.
+  - `normalizeOperations(...)` already preserves recursive children and should remain the transport shape.
+  - `CodeTool.#prepareEditedFileForSave(...)` is the formatting hook the public tool must keep using.
+  - `execute()` already auto-saves mutating commands and handles stale-buffer cleanup.
+- `packages/coding-agent/src/tools/code-result.ts`
+  - `CodeEditData`, `normalizeCodeBufferSuccess(...)`, and `formatCodeToolContent(...)` own result normalization/rendering.
+- `packages/coding-agent/src/modes/components/tool-execution.ts`
+  - edit preview state currently caches a single diff blob and must become per-file aware.
+- Prompt contracts:
+  - `packages/coding-agent/src/prompts/tools/code.md`
+  - `packages/coding-agent/src/prompts/system/system-prompt.md`
+  - `packages/coding-agent/src/prompts/system/plan-mode-tool-decision-reminder.md`
+
+Recommended design:
+1. Replace first-file helpers with recursive file-root collection.
+2. For public `code edit`, call native multi-file edit in staged mode so the tool can still run per-file formatting before persistence.
+3. Format + save each touched file best-effort, aggregate truth into one result, and render grouped per-file diffs/outcomes.
+
+* Tests
+
+Enumerate all user workflows first; write these before implementation:
+1. A single `code edit` request touching two files succeeds and the final tool result names both files.
+2. The public tool formats and persists each successfully edited file; files that cannot be formatted still save with a truthful formatting status.
+3. Mixed outcome: one file succeeds while another file fails edit validation or save; the tool output makes the partial success obvious.
+4. Stale-buffer and write-mode guardrails check every touched file, not only the first operation’s file.
+5. Multi-file previews/rendering show grouped per-file diffs instead of collapsing everything into one misleading diff string.
+6. Existing single-file `code edit` flows still render and persist correctly after the cutover.
+7. Prompt examples and contract tests teach recursive multi-root operations explicitly.
+
+Concrete test files / suites:
+- `packages/coding-agent/test/prompts/code-tool-contracts.test.ts`
+- `packages/coding-agent/test/tools/code-result.test.ts`
+- Add or extend `packages/coding-agent` tool tests covering multi-file edit execution/result normalization/rendering.
+
+* Implementation
+
+** Define multi-file public result contract
+:PROPERTIES:
+:CUSTOM_ID: FEAT-583-coding-agent-multi-file-code-edit-cutove::define-code-tool-edit-contract
+:END:
+- Files: `packages/coding-agent/src/tools/code.ts`; `packages/coding-agent/src/tools/code-result.ts`
+- Replace single-file result assumptions with aggregate/per-file details that still read cleanly for one-file edits.
+- Ensure the normalized result preserves persisted state, formatting state, per-file errors, and per-file target summaries.
+
+** Write code tool + renderer tests first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-583-coding-agent-multi-file-code-edit-cutove::code-tool-multifile-tests
+:DEPENDS: FEAT-583-coding-agent-multi-file-code-edit-cutove::define-code-tool-edit-contract
+:END:
+- Files: `packages/coding-agent/test/prompts/code-tool-contracts.test.ts`; `packages/coding-agent/test/tools/code-result.test.ts`; package-local code tool execution tests.
+- Add initially-failing coverage for all seven workflows in the Tests section.
+- Assert exact text only where downstream rendering or prompt contracts depend on exact bytes.
+
+** Implement multi-file edit orchestration and per-file guardrails
+:PROPERTIES:
+:CUSTOM_ID: FEAT-583-coding-agent-multi-file-code-edit-cutove::implement-code-tool-multifile
+:DEPENDS: FEAT-583-coding-agent-multi-file-code-edit-cutove::code-tool-multifile-tests
+:END:
+- Files: `packages/coding-agent/src/tools/code.ts`; `packages/coding-agent/src/tools/code-result.ts`; `packages/coding-agent/src/modes/components/tool-execution.ts`
+- Replace `primaryFileForOperations(...)` with recursive collection of all touched files.
+- Run mode-write enforcement, managed-buffer freshness checks, formatting, save, and cleanup across all touched files.
+- Consume native staged aggregate results and then persist per file best-effort from the tool layer.
+
+** Update prompts and examples for multi-root edits
+:PROPERTIES:
+:CUSTOM_ID: FEAT-583-coding-agent-multi-file-code-edit-cutove::update-code-tool-prompts
+:DEPENDS: FEAT-583-coding-agent-multi-file-code-edit-cutove::implement-code-tool-multifile
+:END:
+- Files: `packages/coding-agent/src/prompts/tools/code.md`; `packages/coding-agent/src/prompts/system/system-prompt.md`; `packages/coding-agent/src/prompts/system/plan-mode-tool-decision-reminder.md`
+- Add canonical examples showing one `code edit` request touching multiple root files.
+- Remove language that implies only one file root is valid.
+
+* Edge Cases
+
+- One request may touch the same file multiple times at different nesting levels; the displayed summary must not duplicate or reorder that file unpredictably.
+- Per-file formatting availability may differ across touched files; do not collapse that into one global formatting flag.
+- If a later file fails, earlier successful files must remain truthfully reported as persisted, not downgraded to a generic error.
+- Error rendering and preview rebuild paths must keep per-file preview-only fields alive during streaming and transcript rebuilds.
+- Plan mode write enforcement must validate every touched file path before mutation.
+
+* Acceptance Criteria
+
+- Public `code edit` accepts recursive operations spanning multiple files.
+- Public `code edit` preserves single-file behavior while also surfacing grouped multi-file results.
+- Tool output, preview UI, and prompt docs all teach/report the multi-file contract truthfully.
+- Mixed-success requests are visibly partial, not silently flattened into success or failure.
+- `bun check:ts` passes.
+- Package-local coding-agent tests for code tool contracts/results pass.
+- Manual proof path: a `code edit` request touching two files returns both file paths and shows per-file persisted/failed status.
+
+NOTE [2026-04-18]: Completed under PLAN-256. Public code tool now stages multi-file native edits, finalizes save/format per file best-effort, and renders grouped per-file edit results. Verified with bun check:ts and targeted coding-agent code tool/prompt/result tests.

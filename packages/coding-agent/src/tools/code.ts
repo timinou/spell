@@ -136,18 +136,75 @@ function parseTargetId(targetId: string): { fileTargetId: string; symbolTargetId
 	return { fileTargetId, symbolTargetId };
 }
 
-function primaryFileForOperations(
-	operations: CodeParams["operations"] | undefined,
-	sessionCwd: string,
-	root?: string,
-): string | undefined {
-	const targetId = operations?.[0]?.targetId;
-	if (!targetId) return undefined;
-	const { fileTargetId } = parseTargetId(targetId);
+function resolveFileTargetPath(fileTargetId: string, sessionCwd: string, root?: string): string {
 	if (path.isAbsolute(fileTargetId)) return fileTargetId;
 	const base = root ? path.resolve(sessionCwd, root) : sessionCwd;
 	return path.resolve(base, fileTargetId);
 }
+
+function collectOperationFiles(
+	operations: CodeParams["operations"] | undefined,
+	sessionCwd: string,
+	root?: string,
+): string[] {
+	if (!hasEntries(operations)) return [];
+	const files = new Set<string>();
+	const visit = (items: CodeParams["operations"] | undefined): void => {
+		if (!hasEntries(items)) return;
+		for (const operation of items) {
+			const { fileTargetId } = parseTargetId(operation.targetId);
+			files.add(resolveFileTargetPath(fileTargetId, sessionCwd, root));
+			visit(operation.children);
+		}
+	};
+	visit(operations);
+	return [...files];
+}
+type NativeEditFileResult = {
+	file: string;
+	status: string;
+	version?: number;
+	diff?: string;
+	editCount?: number;
+	created?: boolean;
+	targets?: unknown;
+	proof?: unknown;
+	persisted?: boolean;
+	dirty?: boolean;
+	error?: unknown;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	return value as Record<string, unknown>;
+}
+
+function normalizeNativeEditFileResults(output: unknown): NativeEditFileResult[] {
+	const record = asRecord(output);
+	const fileResults = record?.fileResults;
+	if (!Array.isArray(fileResults)) return [];
+	return fileResults.flatMap(item => {
+		const entry = asRecord(item);
+		const file = typeof entry?.file === "string" ? entry.file : undefined;
+		if (!entry || !file) return [];
+		return [
+			{
+				file,
+				status: typeof entry.status === "string" ? entry.status : "applied",
+				version: typeof entry.version === "number" ? entry.version : undefined,
+				diff: typeof entry.diff === "string" ? entry.diff : undefined,
+				editCount: typeof entry.editCount === "number" ? entry.editCount : undefined,
+				created: entry.created === true ? true : undefined,
+				targets: entry.targets,
+				proof: entry.proof,
+				persisted: entry.persisted === true ? true : entry.persisted === false ? false : undefined,
+				dirty: entry.dirty === true ? true : entry.dirty === false ? false : undefined,
+				error: entry.error,
+			} satisfies NativeEditFileResult,
+		];
+	});
+}
+
 function countDiffChanges(diff: string): { addedLines: number; removedLines: number } {
 	let addedLines = 0;
 	let removedLines = 0;
@@ -242,6 +299,12 @@ const codeSchema = Type.Object({
 	limit: Type.Optional(Type.Integer({ description: "Max results or lines" })),
 	semantic: Type.Optional(Type.Boolean({ description: "Require or suppress semantic graph search when supported" })),
 	depth: Type.Optional(Type.Integer({ description: "Max nesting or traversal depth" })),
+	enrich: Type.Optional(
+		Type.Array(
+			Type.Union([Type.Literal("signature"), Type.Literal("metrics"), Type.Literal("doc"), Type.Literal("graph")]),
+			{ description: "Optional outline enrichment tiers to include in command 'outline' output" },
+		),
+	),
 	root: Type.Optional(
 		Type.String({ description: "Optional project-relative or absolute root for targetId file resolution" }),
 	),
@@ -367,6 +430,173 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 		};
 	}
 
+	async #finalizeEditExecution(
+		result: CodeBufferResult,
+		editFiles: string[],
+		sessionCwd: string,
+		params: CodeParams,
+		signal?: AbortSignal,
+	): Promise<AgentToolResult> {
+		const legacyRecord = asRecord(result.output);
+		const fileResults = normalizeNativeEditFileResults(result.output);
+		const normalizedFileResults =
+			fileResults.length > 0
+				? fileResults
+				: editFiles.length === 1
+					? [
+							{
+								file: editFiles[0],
+								status: "staged",
+								version: typeof legacyRecord?.version === "number" ? legacyRecord.version : undefined,
+								diff: typeof legacyRecord?.diff === "string" ? legacyRecord.diff : undefined,
+								editCount: typeof legacyRecord?.editCount === "number" ? legacyRecord.editCount : undefined,
+								created: legacyRecord?.created === true ? true : undefined,
+								targets: legacyRecord?.targets,
+								proof: legacyRecord?.proof,
+								persisted: false,
+							} satisfies NativeEditFileResult,
+						]
+					: [];
+		if (normalizedFileResults.length === 0) {
+			const details = createCodeToolError({
+				command: "edit",
+				file: editFiles[0],
+				cwd: sessionCwd,
+				output: result.output,
+				message: "Native edit completed without per-file results.",
+			});
+			return toolResult(details).text(formatCodeToolContent(details)).done();
+		}
+
+		const completedResults: Array<Record<string, unknown>> = [];
+		let successCount = 0;
+		let failureCount = 0;
+		let totalEditCount = 0;
+		let changedFileCount = 0;
+		let noopFileCount = 0;
+
+		for (const fileResult of normalizedFileResults) {
+			if (fileResult.status === "failed") {
+				failureCount += 1;
+				completedResults.push({
+					...fileResult,
+					mutationState: "discarded",
+					persisted: false,
+				});
+				continue;
+			}
+
+			const diff = fileResult.diff ?? "";
+			const changeSummary = countDiffChanges(diff);
+			const noop = changeSummary.addedLines === 0 && changeSummary.removedLines === 0;
+			if (noop) {
+				noopFileCount += 1;
+				const closeResult = timedCodeBuffer({ command: "close", file: fileResult.file });
+				if (closeResult.error) {
+					logger.warn("failed to invalidate noop edit buffer", {
+						file: fileResult.file,
+						error: extractCodeToolErrorMessage(closeResult.output),
+					});
+				}
+				completedResults.push({
+					...fileResult,
+					status: "noop",
+					noop: true,
+					idempotent: params.idempotent === true,
+					mutationState: "noop",
+					persisted: false,
+					dirty: false,
+				});
+				continue;
+			}
+
+			changedFileCount += 1;
+			const formatResult = await this.#prepareEditedFileForSave(fileResult.file, sessionCwd, signal);
+			const saveResult = timedCodeBuffer({ command: "save", file: fileResult.file });
+			if (saveResult.error) {
+				failureCount += 1;
+				completedResults.push({
+					...fileResult,
+					status: "failed",
+					formatting: formatResult.formatting,
+					formatterServer: formatResult.formatterServer,
+					mutationState: "discarded",
+					persisted: false,
+					error: {
+						message: `Edit succeeded but save to disk failed: ${extractCodeToolErrorMessage(saveResult.output)}`,
+					},
+				});
+				continue;
+			}
+
+			successCount += 1;
+			totalEditCount += fileResult.editCount ?? 0;
+			completedResults.push({
+				...fileResult,
+				status: "applied",
+				formatting: formatResult.formatting,
+				formatterServer: formatResult.formatterServer,
+				mutationState: "applied",
+				persisted: true,
+				dirty: false,
+			});
+		}
+
+		if (changedFileCount === 0 && noopFileCount > 0 && params.idempotent !== true) {
+			const details = createCodeToolError({
+				command: "edit",
+				file: editFiles[0],
+				cwd: sessionCwd,
+				output: result.output,
+				message:
+					"Edit produced no semantic changes. Non-idempotent mutations must change the file. Retry with idempotent: true only when an intentional no-op is acceptable.",
+			});
+			return toolResult(details).text(formatCodeToolContent(details)).done();
+		}
+
+		if (completedResults.length === 1 && failureCount === 1 && successCount === 0) {
+			const failedResult = completedResults[0];
+			const details = createCodeToolError({
+				command: "edit",
+				file: editFiles[0],
+				cwd: sessionCwd,
+				output: failedResult.error ?? failedResult,
+				message: extractCodeToolErrorMessage(failedResult.error ?? failedResult),
+			});
+			return toolResult(details).text(formatCodeToolContent(details)).done();
+		}
+
+		const aggregateStatus =
+			failureCount > 0
+				? successCount > 0 || noopFileCount > 0
+					? "partial"
+					: "failed"
+				: changedFileCount > 0
+					? "applied"
+					: "noop";
+		const details = normalizeCodeBufferSuccess({
+			command: "edit",
+			output: {
+				status: aggregateStatus,
+				saveMode: "staged",
+				editCount: totalEditCount,
+				successCount,
+				failureCount,
+				fileResults: completedResults,
+			},
+			file: editFiles.length === 1 ? editFiles[0] : undefined,
+			cwd: sessionCwd,
+			idempotent: params.idempotent === true,
+			mutationState: aggregateStatus === "noop" ? "noop" : "applied",
+			persisted: failureCount === 0 && changedFileCount > 0,
+		});
+		const injectedHint = editFiles.length === 1 ? this.#maybeInjectHints(editFiles[0]) : undefined;
+		if (injectedHint) {
+			(details as CodeToolResultDetails & { injectedHint?: string }).injectedHint = injectedHint;
+		}
+		const text = formatCodeToolContent(details);
+		return toolResult(details).text(text).done();
+	}
 	async execute(
 		_toolCallId: string,
 		params: CodeParams,
@@ -376,12 +606,13 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 	): Promise<AgentToolResult> {
 		const command = params.command ?? "";
 		const sessionCwd = this.#session.cwd ?? getProjectDir();
-		const editFile =
-			command === "edit" ? primaryFileForOperations(params.operations, sessionCwd, params.root) : undefined;
+		const resolveFile = (file: string): string => (path.isAbsolute(file) ? file : path.resolve(sessionCwd, file));
+		const editFiles = command === "edit" ? collectOperationFiles(params.operations, sessionCwd, params.root) : [];
+		const primaryEditFile = editFiles[0];
 
 		if (MUTATING_COMMANDS.has(command) || command === "save") {
-			const targetFile = command === "edit" ? (editFile ?? params.file) : params.file;
-			if (targetFile) {
+			const targetFiles = command === "edit" ? editFiles : params.file ? [resolveFile(params.file)] : [];
+			for (const targetFile of targetFiles) {
 				enforceModeWrite(this.#session, targetFile, { op: "update" });
 			}
 		}
@@ -423,50 +654,63 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 
 			const nativeCommand = command === "buffers" ? "list" : command === "symbols" ? "outline" : command;
 			const options: CodeBufferOptions = { command: nativeCommand };
-			const resolveFile = (file: string): string => (path.isAbsolute(file) ? file : path.resolve(sessionCwd, file));
-			const activeFile = command === "edit" ? editFile : params.file ? resolveFile(params.file) : undefined;
-			let editCreatesMissingFile = false;
-			let editHasManagedMissingBuffer = false;
-
-			if (command === "edit" && activeFile && !(await Bun.file(activeFile).exists())) {
-				const listedBuffers = timedCodeBuffer({ command: "list" });
-				if (listedBuffers.error) {
-					const details = createCodeToolError({
-						command,
-						file: activeFile,
-						cwd: sessionCwd,
-						output: listedBuffers.output,
-						message: `Unable to inspect managed buffers for missing edit target: ${extractCodeToolErrorMessage(listedBuffers.output)}`,
-					});
-					return toolResult(details).text(formatCodeToolContent(details)).done();
-				}
-				if (Array.isArray(listedBuffers.output)) {
-					editHasManagedMissingBuffer = listedBuffers.output.some(
-						buffer =>
-							buffer !== null &&
-							typeof buffer === "object" &&
-							!Array.isArray(buffer) &&
-							Reflect.get(buffer, "path") === activeFile,
-					);
-				}
-				editCreatesMissingFile = !editHasManagedMissingBuffer;
-			}
+			const activeFile = command === "edit" ? primaryEditFile : params.file ? resolveFile(params.file) : undefined;
+			const editFileStates = new Map<string, { createsMissingFile: boolean }>();
 
 			if (command === "edit") {
+				const missingFiles = [];
+				for (const file of editFiles) {
+					if (!(await Bun.file(file).exists())) missingFiles.push(file);
+				}
+				let managedBufferPaths = new Set<string>();
+				if (missingFiles.length > 0) {
+					const listedBuffers = timedCodeBuffer({ command: "list" });
+					if (listedBuffers.error) {
+						const details = createCodeToolError({
+							command,
+							file: missingFiles[0],
+							cwd: sessionCwd,
+							output: listedBuffers.output,
+							message: `Unable to inspect managed buffers for missing edit target: ${extractCodeToolErrorMessage(listedBuffers.output)}`,
+						});
+						return toolResult(details).text(formatCodeToolContent(details)).done();
+					}
+					if (Array.isArray(listedBuffers.output)) {
+						managedBufferPaths = new Set(
+							listedBuffers.output.flatMap(buffer => {
+								if (!buffer || typeof buffer !== "object" || Array.isArray(buffer)) return [];
+								const file = Reflect.get(buffer, "path");
+								return typeof file === "string" ? [file] : [];
+							}),
+						);
+					}
+				}
+				for (const file of editFiles) {
+					const existsOnDisk = await Bun.file(file).exists();
+					if (!existsOnDisk && managedBufferPaths.has(file)) {
+						const details = createCodeToolError({
+							command,
+							file,
+							cwd: sessionCwd,
+							message:
+								"Stale code buffer detected: a managed buffer exists for a file that is now missing on disk. Reconcile the on-disk file or close the stale buffer before retrying this mutation.",
+						});
+						return toolResult(details).text(formatCodeToolContent(details)).done();
+					}
+					editFileStates.set(file, { createsMissingFile: !existsOnDisk });
+				}
 				options.root = params.root ? resolveFile(params.root) : sessionCwd;
+				options.saveMode = "staged";
 				if (hasEntries(params.operations)) options.operations = normalizeOperations(params.operations);
 			} else if (params.file) {
 				options.file = resolveFile(params.file);
 			}
-			if (params.resolution !== undefined && isMeaningfulOptionalNumber(params.resolution)) {
+
+			if (params.resolution !== undefined && isMeaningfulOptionalNumber(params.resolution))
 				options.resolution = params.resolution;
-			}
-			if (params.offset !== undefined && isMeaningfulOptionalNumber(params.offset)) {
-				options.offset = params.offset;
-			}
-			if (params.limit !== undefined && isMeaningfulOptionalNumber(params.limit)) {
-				options.limit = params.limit;
-			}
+			if (params.offset !== undefined && isMeaningfulOptionalNumber(params.offset)) options.offset = params.offset;
+			if (params.limit !== undefined && isMeaningfulOptionalNumber(params.limit)) options.limit = params.limit;
+			if (Array.isArray(params.enrich) && params.enrich.length > 0) options.enrich = params.enrich;
 			if (isMeaningfulIndex(params.line)) options.line = params.line;
 			if (isMeaningfulIndex(params.column)) options.column = params.column;
 			if (isMeaningfulString(params.symbol)) options.symbol = params.symbol;
@@ -474,18 +718,34 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				options.action = params.action === "references-local" ? "references" : params.action;
 			}
 
-			if (editHasManagedMissingBuffer && activeFile) {
-				const details = createCodeToolError({
-					command,
-					file: activeFile,
-					cwd: sessionCwd,
-					message:
-						"Stale code buffer detected: a managed buffer exists for a file that is now missing on disk. Reconcile the on-disk file or close the stale buffer before retrying this mutation.",
-				});
-				return toolResult(details).text(formatCodeToolContent(details)).done();
-			}
-
-			if (activeFile && shouldCheckBufferFreshness(command, editCreatesMissingFile)) {
+			if (command === "edit") {
+				for (const file of editFiles) {
+					const fileState = editFileStates.get(file);
+					if (!shouldCheckBufferFreshness(command, fileState?.createsMissingFile === true)) continue;
+					const freshness = timedCodeBuffer({ command: "diff", file });
+					if (freshness.error) {
+						const details = createCodeToolError({
+							command,
+							file,
+							cwd: sessionCwd,
+							output: freshness.output,
+							message: `Unable to verify buffer freshness before ${command}: ${extractCodeToolErrorMessage(freshness.output)}`,
+						});
+						return toolResult(details).text(formatCodeToolContent(details)).done();
+					}
+					const staleHunks = countBufferDiffHunks(freshness.output);
+					if (staleHunks > 0) {
+						const details = createCodeToolError({
+							command,
+							file,
+							cwd: sessionCwd,
+							output: freshness.output,
+							message: `Stale code buffer detected (${staleHunks} ${staleHunks === 1 ? "hunk" : "hunks"} differ from disk). Run code diff to inspect, then reconcile the on-disk file before retrying this mutation.`,
+						});
+						return toolResult(details).text(formatCodeToolContent(details)).done();
+					}
+				}
+			} else if (activeFile && shouldCheckBufferFreshness(command, false)) {
 				const freshness = timedCodeBuffer({ command: "diff", file: activeFile });
 				if (freshness.error) {
 					const details = createCodeToolError({
@@ -512,13 +772,15 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 
 			const result = timedCodeBuffer(options);
 			if (result.error) {
-				if (command === "edit" && activeFile) {
-					const closeResult = timedCodeBuffer({ command: "close", file: activeFile });
-					if (closeResult.error) {
-						logger.warn("failed to invalidate buffer after edit error", {
-							file: activeFile,
-							error: extractCodeToolErrorMessage(closeResult.output),
-						});
+				if (command === "edit") {
+					for (const file of editFiles) {
+						const closeResult = timedCodeBuffer({ command: "close", file });
+						if (closeResult.error) {
+							logger.warn("failed to invalidate buffer after edit error", {
+								file,
+								error: extractCodeToolErrorMessage(closeResult.output),
+							});
+						}
 					}
 				}
 				const details = createCodeToolError({
@@ -531,71 +793,8 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				return toolResult(details).text(formatCodeToolContent(details)).done();
 			}
 
-			let formatting: "formatted" | "unchanged" | "unavailable" | undefined;
-			let formatterServer: string | undefined;
-			const editDiff =
-				command === "edit" && result.output && typeof result.output === "object" && !Array.isArray(result.output)
-					? Reflect.get(result.output, "diff")
-					: undefined;
-			const editChangeSummary = typeof editDiff === "string" ? countDiffChanges(editDiff) : undefined;
-			const isNoopEdit =
-				command === "edit" &&
-				editChangeSummary !== undefined &&
-				editChangeSummary.addedLines === 0 &&
-				editChangeSummary.removedLines === 0;
-
-			if (isNoopEdit) {
-				if (params.idempotent !== true) {
-					const details = createCodeToolError({
-						command,
-						file: activeFile,
-						cwd: sessionCwd,
-						output: result.output,
-						message:
-							"Edit produced no semantic changes. Non-idempotent mutations must change the file. Retry with idempotent: true only when an intentional no-op is acceptable.",
-					});
-					return toolResult(details).text(formatCodeToolContent(details)).done();
-				}
-
-				const details = normalizeCodeBufferSuccess({
-					command: command as CodeFileCommand,
-					output: result.output,
-					file: activeFile,
-					cwd: sessionCwd,
-					action: options.action,
-					resolution: params.resolution,
-					offset: params.offset,
-					limit: params.limit,
-					noop: true,
-					idempotent: true,
-					mutationState: "noop",
-					persisted: false,
-				});
-				const injectedHint = FILE_COMMANDS.has(nativeCommand) ? this.#maybeInjectHints(activeFile) : undefined;
-				if (injectedHint) {
-					(details as CodeToolResultDetails & { injectedHint?: string }).injectedHint = injectedHint;
-				}
-				const text = formatCodeToolContent(details);
-				return toolResult(details).text(text).done();
-			}
-
-			if (command === "edit" && activeFile) {
-				const formatResult = await this.#prepareEditedFileForSave(activeFile, sessionCwd, _signal);
-				formatting = formatResult.formatting;
-				formatterServer = formatResult.formatterServer;
-			}
-
-			if (MUTATING_COMMANDS.has(command) && activeFile) {
-				const saveResult = timedCodeBuffer({ command: "save", file: activeFile });
-				if (saveResult.error) {
-					const details = createCodeToolError({
-						command,
-						file: activeFile,
-						cwd: sessionCwd,
-						message: `Edit succeeded but save to disk failed: ${extractCodeToolErrorMessage(saveResult.output)}`,
-					});
-					return toolResult(details).text(formatCodeToolContent(details)).done();
-				}
+			if (command === "edit") {
+				return await this.#finalizeEditExecution(result, editFiles, sessionCwd, params, _signal);
 			}
 
 			const details = normalizeCodeBufferSuccess({
@@ -607,12 +806,10 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				resolution: params.resolution,
 				offset: params.offset,
 				limit: params.limit,
-				formatting,
-				formatterServer,
 				noop: false,
 				idempotent: params.idempotent === true,
-				mutationState: command === "edit" ? "applied" : undefined,
-				persisted: command === "edit",
+				mutationState: undefined,
+				persisted: false,
 			});
 			const injectedHint = FILE_COMMANDS.has(nativeCommand) ? this.#maybeInjectHints(activeFile) : undefined;
 			if (injectedHint) {
@@ -625,7 +822,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			logger.error("code tool error", { error: message, command });
 			const details = createCodeToolError({
 				command,
-				file: editFile ?? (params.file ? path.resolve(sessionCwd, params.file) : undefined),
+				file: primaryEditFile ?? (params.file ? path.resolve(sessionCwd, params.file) : undefined),
 				cwd: sessionCwd,
 				output: err,
 				message,

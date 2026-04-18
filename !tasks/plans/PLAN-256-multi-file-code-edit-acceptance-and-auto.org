@@ -1,0 +1,98 @@
+#+TITLE: Multi-file code edit acceptance and autosave
+#+STATE: DONE
+#+SESSION_ID: 14bfe582ca16dbc0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T20-55-41-608Z_14bfe582ca16dbc0.jsonl]]
+#+CUSTOM_ID: PLAN-256-multi-file-code-edit-acceptance-and-auto
+#+LAYER: coding-agent pi-natives pi-code-engine
+#+EFFORT: 14h
+#+PRIORITY: #A
+
+* Initial Message
+
+Code
+ GenericFailure, command 'edit' currently supports one file per request. Found
+ file roots: crates/pi-code-engine/src/language/mod.rs,
+ crates/pi-code-engine/src/outline.rs
+
+
+^^^ what???
+
+* Context
+
+The current failure came from the native structured edit path rejecting more than one unique file root in a single `edit` request:
+- `crates/pi-natives/src/code_buffer.rs::resolve_edit_path(...)` collects every recursive `targetId` file root and hard-errors unless there is exactly one.
+- `packages/coding-agent/src/tools/code.ts::primaryFileForOperations(...)` also bakes in the same hidden assumption by looking only at `operations[0].targetId`.
+
+Settled decisions for implementation:
+1. Keep one mutation representation: extend existing `code edit` / native `executeCodeBuffer { command: "edit" }` instead of adding a parallel multi-file command.
+2. Both the public `code` tool and the direct native API must accept requests spanning multiple root files.
+3. Persistence semantics are best-effort, not atomic across files. Each file remains transactionally edited within itself, but a later file may fail after earlier files have persisted successfully.
+4. Direct native `edit` auto-saves by default, even though only the public `code` tool performs LSP-based formatting.
+5. The public `code` tool must preserve its current formatting-before-save behavior by using the native multi-file contract in staged mode, then formatting/saving per file best-effort.
+6. Successful persisted edits must still leave buffers usable for `undo` / `redo` while the buffers remain open.
+7. Result normalization, preview UI, docs, and examples must cut over to grouped per-file outcomes/diffs so callers see the truth.
+
+Recommended approach:
+- Native layer (`pi-natives`) grows grouped multi-file edit execution with aggregate per-file results and default auto-save + staged opt-out.
+- Public `code` tool consumes that aggregate contract, performs per-file formatting and persistence, and renders grouped per-file previews/results.
+- No shim, no second command, no silent single-file fallback.
+
+Critical files verified during planning:
+- `crates/pi-natives/src/code_buffer.rs`
+- `crates/pi-code-engine/src/buffer.rs`
+- `packages/coding-agent/src/tools/code.ts`
+- `packages/coding-agent/src/tools/code-result.ts`
+- `packages/coding-agent/src/modes/components/tool-execution.ts`
+- `packages/coding-agent/src/prompts/tools/code.md`
+- `packages/coding-agent/src/prompts/system/system-prompt.md`
+- `packages/coding-agent/src/prompts/system/plan-mode-tool-decision-reminder.md`
+- `packages/coding-agent/test/prompts/code-tool-contracts.test.ts`
+- `packages/coding-agent/test/tools/code-result.test.ts`
+
+Child items:
+- [[id:PROJ-056-native-multi-file-code-edit-persistence]]
+- [[id:FEAT-583-coding-agent-multi-file-code-edit-cutove]]
+
+* Verification
+
+** Build / test verification
+- `cargo test -p pi-natives`
+- `cargo test -p pi-code-engine` if buffer/history code changes
+- `bun check:ts`
+- Package-local coding-agent tests covering code-tool execution, prompt contracts, and result formatting
+
+** Functional verification
+- One direct native `executeCodeBuffer { command: "edit" }` request updates two files in one call and reports both files separately.
+- One public `code edit` request updates two files in one call, formats when available, persists both successful files, and reports any failed file truthfully.
+- Mixed-success request proves best-effort semantics: one file persists, one file fails, output clearly marks the request as partial.
+- After a persisted edit, `undo` / `redo` still works for an affected buffer that remains open.
+- Tool preview / rebuilt transcript paths show grouped per-file diffs instead of one misleading merged diff blob.
+
+** Regression verification
+- Existing single-file `code edit` workflows still work after the cutover.
+- Prompt examples no longer teach the old single-root limitation.
+- Mode write enforcement and stale-buffer checks run for every touched file path.
+
+* Execution Manifest
+
+** Wave 1 — Native aggregate contract
+- [[id:PROJ-056-native-multi-file-code-edit-persistence]] — grouped native edit execution, default auto-save, staged opt-out, per-file aggregate results, undo/redo preservation
+
+** Wave 2 — Public code tool cutover
+- [[id:FEAT-583-coding-agent-multi-file-code-edit-cutove]] — multi-file guardrails, staged native integration, per-file formatting/save aggregation, grouped preview/rendering, prompt/test updates
+
+** Completion [2026-04-18]
+*** Verification
+- `cargo test -p pi-natives` → passed (`77 passed, 0 failed` in crate tests).
+- `cargo test -p pi-code-engine` → passed (`167 passed, 0 failed` unit tests; `coord_foundation` placeholder passed).
+- `bun check:ts` → passed.
+- `bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-result.test.ts packages/coding-agent/test/prompts/code-tool-contracts.test.ts` → passed.
+- Focused native regression checks also passed during execution: `cargo test -p pi-natives execute_code_buffer_inner_ -- --nocapture`, `cargo test -p pi-code-engine saved_buffer_keeps_history_across_registry_reopen -- --nocapture`, and `cargo test -p pi-code-engine test_dirty_tracking_with_save -- --nocapture`.
+*** Artifacts
+- Native verification log: artifact://14bfed1aa7d6dbc6/main/bash/49.txt
+- Code-engine verification log: artifact://14bfed1aa7d6dbc6/main/bash/50.txt
+- TypeScript check and Bun test commands completed successfully in-session; no additional persisted artifact path was emitted by the harness for those successful runs.
+*** Deviations
+- None.
+
+NOTE [2026-04-18]: Execution completed with verification evidence recorded in the completion section. Child items PROJ-056 and FEAT-583 are DONE.

@@ -58,6 +58,46 @@ describe("code tool result contract", () => {
 		expect(content).not.toContain('"end_line"');
 	});
 
+	it("normalizes enriched outline envelopes and surfaces graph metadata", () => {
+		const details = normalizeCodeBufferSuccess({
+			command: "outline",
+			file: "/repo/src/sample.ts",
+			cwd: "/repo",
+			output: {
+				graphStatus: "rebuilt",
+				entries: [
+					{
+						name: "greet",
+						kind: "function",
+						line: 4,
+						endLine: 9,
+						column: 7,
+						exported: true,
+						signature: "function greet<T>(name: string)",
+						targetId: "src/sample.ts::greet",
+						loc: 6,
+						params: [{ name: "name", ty: "string" }],
+						generics: ["T"],
+						branchPoints: 1,
+						callSites: 1,
+						docSummary: "Greets a user.",
+						refsIn: 3,
+						callers: 1,
+						cluster: { id: 2, name: "src" },
+						children: [],
+					},
+				],
+			},
+		});
+		if (details.command !== "outline") throw new Error("Expected outline details");
+		expect(details.data.graphStatus).toBe("rebuilt");
+		expect(details.data.entries[0]?.generics).toEqual(["T"]);
+		expect(details.data.entries[0]?.refsIn).toBe(3);
+		const content = formatCodeToolContent(details);
+		expect(content).toContain("Outline src/sample.ts (1 top, 1 total) [graph: rebuilt]");
+		expect(content).toContain("function greet L4-L9 (6 loc, 3 refs_in, 1 callers, cluster:src)");
+	});
+
 	it("preserves raw navigate metadata while presenting a compact summary", () => {
 		const rawOutput = {
 			nodeType: "let",
@@ -147,6 +187,53 @@ describe("code tool result contract", () => {
 		expect(content).toContain("No semantic changes applied.");
 		expect(content).not.toContain("Edited src/main.ts");
 		expect(content).not.toContain("Changes: +0 -0");
+	});
+
+	it("formats grouped multi-file edit payloads truthfully", () => {
+		const details = normalizeCodeBufferSuccess({
+			command: "edit",
+			cwd: "/repo",
+			output: {
+				status: "partial",
+				saveMode: "staged",
+				editCount: 2,
+				successCount: 1,
+				failureCount: 1,
+				fileResults: [
+					{
+						file: "/repo/src/main.ts",
+						status: "applied",
+						version: 3,
+						diff: "@@ add @@\n-return a + b;\n+return a * b;",
+						editCount: 1,
+						targets: [{ targetId: "src/main.ts::main", actions: ["findAndReplace"] }],
+						persisted: true,
+						formatting: "formatted",
+						formatterServer: "biome",
+						mutationState: "applied",
+					},
+					{
+						file: "/repo/src/config.ts",
+						status: "failed",
+						persisted: false,
+						error: { message: "Symbol 'missing' not found", targetId: "src/config.ts::missing" },
+						mutationState: "discarded",
+					},
+				],
+			},
+		});
+
+		if (details.command !== "edit") throw new Error("Expected edit details");
+		expect(details.data.files).toHaveLength(2);
+		expect(details.data.failureCount).toBe(1);
+		expect(details.data.files[1]?.error?.targetId).toBe("src/config.ts::missing");
+
+		const content = formatCodeToolContent(details);
+		expect(content).toContain("Partial edit (2 files, 1 ok, 1 failed)");
+		expect(content).toContain("- Applied src/main.ts");
+		expect(content).toContain("Formatting: formatted via biome");
+		expect(content).toContain("- Failed src/config.ts: Symbol 'missing' not found");
+		expect(content).toContain("Target: src/config.ts::missing");
 	});
 
 	it("formats pending preview edits without edited success text", () => {

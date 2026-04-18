@@ -1,0 +1,125 @@
+#+TITLE: Native multi-file code edit persistence contract
+#+STATE: DONE
+#+SESSION_ID: 14bfe582ca16dbc0
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T20-55-41-608Z_14bfe582ca16dbc0.jsonl]]
+#+CUSTOM_ID: PROJ-056-native-multi-file-code-edit-persistence
+#+LAYER: pi-natives pi-code-engine
+#+EFFORT: 8h
+#+PRIORITY: #A
+
+* Initial Message
+
+Code
+ GenericFailure, command 'edit' currently supports one file per request. Found
+ file roots: crates/pi-code-engine/src/language/mod.rs,
+ crates/pi-code-engine/src/outline.rs
+
+
+^^^ what???
+
+* Scope
+
+In scope:
+- Extend direct `executeCodeBuffer { command: "edit" }` to accept operations whose `targetId` roots span multiple files.
+- Preserve the existing per-file transactional guarantee: each touched file edits against a fresh staged buffer and either applies that file’s operation set or reports failure for that file.
+- Add direct-native auto-save semantics for `edit` by default, including multi-file best-effort persistence and per-file persisted/error reporting.
+- Preserve `undo` / `redo` history for buffers that remain open after an auto-saved edit.
+- Return an aggregated result shape that represents all touched files deterministically.
+
+Out of scope:
+- Cross-file atomic rollback. The user selected best-effort persistence, so partial success is allowed.
+- LSP formatting. Native edit may auto-save raw structural output; formatting remains a higher-layer concern.
+- Prompt / renderer changes in `packages/coding-agent`.
+
+Rationale: the current native edit path hard-errors as soon as more than one unique file root is discovered, which blocks both direct native callers and any higher-level orchestration that wants one request to cover multiple files.
+
+* Existing Patterns
+
+Use the current native edit pipeline instead of inventing a parallel API:
+- `crates/pi-natives/src/code_buffer.rs`
+  - `resolve_edit_path(options: &Value) -> Result<PathBuf>` currently enforces the single-root invariant.
+  - `collect_operation_file_targets(node: &Value, targets: &mut Vec<String>) -> Result<()>` already walks recursive children.
+  - `apply_operations_transactionally(&mut buffer, &profile, &path, options)` is the per-file transaction primitive.
+  - `execute_code_buffer_inner(&options)` owns command dispatch, response shaping, and save behavior.
+  - `render_annotated_diff(&buffer, &before, &profile)` is the existing diff primitive.
+- `crates/pi-code-engine/src/buffer.rs`
+  - `CodeBuffer::save_with_watcher(...)` is the persistence path whose history behavior must remain compatible with undo/redo.
+
+Recommended design:
+1. Group recursive edit operations by file root while preserving request order.
+2. Add a native edit persistence option whose default is persisted/best-effort, and allow higher layers to opt out when they need staged buffers before formatting.
+3. Return one aggregate payload with per-file entries (`file`, `diff`, `editCount`, `created`, `persisted`, `targets`, `proof?`, `error?`) plus totals/summary.
+
+* Tests
+
+Enumerate all user-visible workflows first; write these before implementation:
+1. Single-file direct native edit auto-saves to disk and leaves undo history available in the open buffer.
+2. Multi-file request edits two existing files in one call and returns deterministic per-file results in request order.
+3. Mixed outcome: one file edits/saves successfully while another file fails symbol resolution or save; successful file stays persisted and failed file reports the truth.
+4. Mixed create + update: a missing file can be created in the same request as edits to an existing file.
+5. Recursive children may target a different root file than their parent operation; grouping still applies the correct operations to the correct file.
+6. One file may be a semantic no-op while another file changes; the overall request still reports the changed file correctly.
+7. A failed file must not leave a dirty phantom buffer behind, and a subsequent edit to that same file must still succeed.
+
+Concrete test files / suites:
+- `crates/pi-natives/src/code_buffer.rs` native edit tests for request grouping, per-file result shape, best-effort persistence, create flows, and buffer cleanup.
+- `crates/pi-code-engine/src/buffer.rs` tests only if explicit save/history behavior must change to preserve undo/redo after auto-save.
+
+* Implementation
+
+** Define aggregate native edit result contract
+:PROPERTIES:
+:CUSTOM_ID: PROJ-056-native-multi-file-code-edit-persistence::define-native-edit-result
+:END:
+- File: `crates/pi-natives/src/code_buffer.rs`
+- Introduce typed helpers/structs for aggregate edit summary and per-file results.
+- Make the default direct-native edit path persisted/best-effort, with an explicit opt-out for staged-only callers.
+- This step satisfies Tests 1-7 by giving one stable response shape for both single-file and multi-file edits.
+
+** Write native multi-file edit tests first
+:PROPERTIES:
+:CUSTOM_ID: PROJ-056-native-multi-file-code-edit-persistence::native-multifile-edit-tests
+:DEPENDS: PROJ-056-native-multi-file-code-edit-persistence::define-native-edit-result
+:END:
+- File: `crates/pi-natives/src/code_buffer.rs`
+- Add initially-failing tests for all seven workflows listed in the Tests section.
+- Assert exact persisted-vs-failed outcomes and disk state where downstream callers depend on those bytes.
+
+** Implement grouped edit execution and best-effort persistence
+:PROPERTIES:
+:CUSTOM_ID: PROJ-056-native-multi-file-code-edit-persistence::implement-grouped-native-edit
+:DEPENDS: PROJ-056-native-multi-file-code-edit-persistence::native-multifile-edit-tests
+:END:
+- Files: `crates/pi-natives/src/code_buffer.rs`; `crates/pi-code-engine/src/buffer.rs` only if required for history preservation.
+- Replace the single-root resolver with grouped operation extraction.
+- For each file group: open/create the buffer, apply that file’s operations transactionally, optionally save, collect result/error, and keep later groups running.
+- Preserve deterministic ordering and per-file proof/target summaries.
+
+** Preserve undo and cleanup invariants after persisted edits
+:PROPERTIES:
+:CUSTOM_ID: PROJ-056-native-multi-file-code-edit-persistence::preserve-native-history-invariants
+:DEPENDS: PROJ-056-native-multi-file-code-edit-persistence::implement-grouped-native-edit
+:END:
+- Files: `crates/pi-natives/src/code_buffer.rs`; `crates/pi-code-engine/src/buffer.rs` if needed.
+- Verify auto-save does not destroy undo/redo history for touched buffers.
+- Ensure failed groups do not leak dirty state or stale managed buffers.
+
+* Edge Cases
+
+- Multiple top-level operations and nested children may target the same file root; merge them into one file group while preserving operation order.
+- Relative and absolute `targetId` roots must normalize consistently under the provided `root`.
+- Per-file save failures after a successful in-memory edit must report persisted=false + error for that file, not a misleading success.
+- Proof output is currently singular in many paths; aggregate payloads must not drop proof for successful files.
+- Existing single-file callers must still work without changing request syntax.
+
+* Acceptance Criteria
+
+- Direct native `edit` accepts requests spanning at least two file roots.
+- Direct native `edit` auto-saves by default and reports per-file success/failure truthfully.
+- A successful persisted edit still supports `undo` and `redo` while the buffer remains open.
+- Mixed-success requests persist successful files without pretending failed files succeeded.
+- `cargo test -p pi-natives` passes with the new coverage.
+- `cargo test -p pi-code-engine` passes if buffer/history code changes.
+- Manual proof path: one direct native multi-file edit request can update two files in one call and the result names both files.
+
+NOTE [2026-04-18]: Completed under PLAN-256. Native edit now groups per-file outcomes across multiple roots, supports saveMode auto/staged, and preserves persisted undo/redo via buffer reload/self-write handling. Verified with cargo test -p pi-natives and cargo test -p pi-code-engine.

@@ -29,6 +29,23 @@ export type CodeFileCommand =
 	| "buffers"
 	| "languages";
 
+export interface CodeParamInfo {
+	name: string;
+	ty?: string;
+	optional?: boolean;
+	rest?: boolean;
+}
+
+export interface CodeReachSummary {
+	count: number;
+	capped?: boolean;
+}
+
+export interface CodeClusterRef {
+	id: number;
+	name: string;
+}
+
 export interface CodeOutlineEntry {
 	name: string;
 	kind: string;
@@ -38,6 +55,30 @@ export interface CodeOutlineEntry {
 	exported?: boolean;
 	signature?: string;
 	targetId?: string;
+	loc?: number;
+	modifiers?: string[];
+	decorators?: string[];
+	deprecated?: boolean;
+	params?: CodeParamInfo[];
+	returnType?: string;
+	generics?: string[];
+	throws?: string[];
+	statements?: number;
+	branchPoints?: number;
+	nestingDepth?: number;
+	callSites?: number;
+	hasSideEffects?: boolean;
+	docSummary?: string;
+	docTags?: string[];
+	refsIn?: number;
+	refsOut?: number;
+	callers?: number;
+	callees?: number;
+	importedBy?: number;
+	exportedReach?: CodeReachSummary;
+	cluster?: CodeClusterRef;
+	dead?: boolean;
+	inherits?: string[];
 	children: CodeOutlineEntry[];
 }
 
@@ -81,7 +122,40 @@ export interface CodeEditTargetSummary {
 	children?: CodeEditTargetSummary[];
 }
 
+export interface CodeEditFileErrorData {
+	message?: string;
+	code?: string;
+	targetId?: string;
+	action?: string;
+	proof?: CodeProofData;
+}
+
+export interface CodeEditFileData {
+	file?: string;
+	displayPath?: string;
+	status: string;
+	version?: number;
+	diff?: string;
+	editCount?: number;
+	created?: boolean;
+	targets: CodeEditTargetSummary[];
+	proof?: CodeProofData;
+	noop?: boolean;
+	idempotent?: boolean;
+	formatting?: "formatted" | "unchanged" | "unavailable";
+	formatterServer?: string;
+	mutationState: MutationState;
+	persisted: boolean;
+	dirty?: boolean;
+	error?: CodeEditFileErrorData;
+}
+
 export interface CodeEditData {
+	status?: string;
+	saveMode?: string;
+	successCount?: number;
+	failureCount?: number;
+	files: CodeEditFileData[];
 	version?: number;
 	diff: string;
 	editCount: number;
@@ -156,6 +230,7 @@ type CodeOutlineData = {
 	entries: CodeOutlineEntry[];
 	topLevelCount: number;
 	totalSymbols: number;
+	graphStatus?: string;
 };
 
 export type CodeOutlineDetails = CodeFileDetailsBase<"outline", CodeOutlineData>;
@@ -315,14 +390,15 @@ export function normalizeCodeBufferSuccess(input: {
 	};
 
 	if (input.command === "outline" || input.command === "symbols") {
-		const entries = normalizeOutlineEntries(input.output);
+		const outline = normalizeOutlineData(input.output);
 		return {
 			...base,
 			command: input.command,
 			data: {
-				entries,
-				topLevelCount: entries.length,
-				totalSymbols: countOutlineEntries(entries),
+				entries: outline.entries,
+				topLevelCount: outline.entries.length,
+				totalSymbols: countOutlineEntries(outline.entries),
+				graphStatus: outline.graphStatus,
 			},
 		};
 	}
@@ -350,10 +426,11 @@ export function normalizeCodeBufferSuccess(input: {
 
 	if (input.command === "edit") {
 		const record = asRecord(input.output);
-		return {
-			...base,
-			command: "edit",
-			data: {
+		const files = normalizeEditFiles(record?.fileResults, input.cwd);
+		const primary =
+			files[0] ??
+			({
+				status: input.noop ? "noop" : "applied",
 				version: asNumber(record?.version),
 				diff: asString(record?.diff) ?? "",
 				editCount: asNumber(record?.editCount) ?? 0,
@@ -368,6 +445,38 @@ export function normalizeCodeBufferSuccess(input: {
 				persisted:
 					input.persisted ??
 					(input.mutationState !== "pending_preview" && input.mutationState !== "discarded" && !input.noop),
+			} satisfies Omit<CodeEditFileData, "file" | "displayPath" | "error" | "dirty">);
+		const resolvedFiles =
+			files.length > 0
+				? files
+				: [
+						{
+							file: input.file,
+							displayPath,
+							...primary,
+						},
+					];
+		return {
+			...base,
+			command: "edit",
+			data: {
+				status: asString(record?.status),
+				saveMode: asString(record?.saveMode ?? record?.save_mode),
+				successCount: asNumber(record?.successCount ?? record?.success_count),
+				failureCount: asNumber(record?.failureCount ?? record?.failure_count),
+				files: resolvedFiles,
+				version: primary.version,
+				diff: primary.diff ?? "",
+				editCount: primary.editCount ?? 0,
+				created: primary.created ?? false,
+				targets: primary.targets,
+				proof: primary.proof,
+				noop: primary.noop ?? false,
+				idempotent: primary.idempotent ?? false,
+				formatting: primary.formatting,
+				formatterServer: primary.formatterServer,
+				mutationState: primary.mutationState,
+				persisted: primary.persisted,
 			},
 		};
 	}
@@ -506,7 +615,10 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 			}
 		}
 		const heading = details.command === "symbols" ? "Symbols" : "Outline";
-		const lines = [`${heading}${label} (${details.data.topLevelCount} top, ${details.data.totalSymbols} total)`];
+		const graphSuffix = details.data.graphStatus ? ` [graph: ${details.data.graphStatus}]` : "";
+		const lines = [
+			`${heading}${label} (${details.data.topLevelCount} top, ${details.data.totalSymbols} total)${graphSuffix}`,
+		];
 		for (const item of previewEntries) {
 			lines.push(`${"  ".repeat(item.depth)}- ${formatOutlineEntry(item.entry)}`);
 		}
@@ -558,60 +670,13 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 	}
 
 	if (details.command === "edit") {
-		const label = details.displayPath ? ` ${details.displayPath}` : "";
-		const formatting = details.data.formatting
-			? formatEditFormatting(details.data.formatting, details.data.formatterServer)
-			: undefined;
-		if (details.data.noop) {
-			const noopHeader = `${details.data.created ? "No-op create" : "No-op edit"}${label}${details.data.idempotent ? " (idempotent)" : ""}`;
-			return withHint([noopHeader, formatting, "No semantic changes applied."].filter(Boolean).join("\n"));
+		const files = getEditFiles(details.data, details.file, details.displayPath);
+		if (files.length > 1 || files.some(file => file.status === "failed" || file.error)) {
+			return withHint(formatGroupedEditContent(details.data, files));
 		}
-		if (details.data.mutationState === "pending_preview") {
-			const preview = buildCompactHashlineDiffPreview(details.data.diff);
-			const changes = countDiffChanges(details.data.diff);
-			const lines = [
-				`Preview queued${label}`,
-				"Resolve required before disk changes.",
-				`Changes: +${changes.addedLines} -${changes.removedLines}`,
-			].filter(Boolean);
-			if (preview.preview.trim().length > 0) {
-				lines.push("Diff preview:", preview.preview);
-			}
-			return withHint(lines.join("\n"));
-		}
-		if (details.data.mutationState === "discarded") {
-			return withHint([`Preview discarded${label}`, "No mutation landed."].join("\n"));
-		}
-		const header = `${details.data.created ? "Created" : "Edited"}${label}${formatEditTargetSummary(details.data)}`;
-		const targetLine = formatTargetLine(details.data.targets);
-		const proofLine = details.data.proof ? formatProofLine("Proof", details.data.proof) : undefined;
-		if (details.data.diff.trim().length === 0) {
-			return withHint([header, targetLine, proofLine, formatting].filter(Boolean).join("\n"));
-		}
-		const preview = buildCompactHashlineDiffPreview(details.data.diff);
-		const changes = countDiffChanges(details.data.diff);
-		const lines = [
-			header,
-			targetLine,
-			proofLine,
-			formatting,
-			`Changes: +${changes.addedLines} -${changes.removedLines}`,
-		].filter(Boolean);
-		if (preview.preview.trim().length > 0) {
-			lines.push("Diff preview:", preview.preview);
-		}
-		return withHint(lines.join("\n"));
-	}
-
-	function formatEditFormatting(
-		formatting: NonNullable<CodeEditData["formatting"]>,
-		formatterServer?: string,
-	): string {
-		if (formatting === "unavailable") {
-			return "Formatting: unavailable (saved without formatter)";
-		}
-		const via = formatterServer ? ` via ${formatterServer}` : "";
-		return `Formatting: ${formatting}${via}`;
+		const primary = files[0];
+		if (!primary) return withHint("");
+		return withHint(formatSingleEditContent(primary, details.displayPath));
 	}
 
 	function formatProofLine(label: string, proof: CodeProofData): string {
@@ -701,6 +766,158 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 	return "";
 }
 
+function formatEditFormattingLine(
+	formatting: NonNullable<CodeEditData["formatting"]>,
+	formatterServer?: string,
+): string {
+	if (formatting === "unavailable") {
+		return "Formatting: unavailable (saved without formatter)";
+	}
+	const via = formatterServer ? ` via ${formatterServer}` : "";
+	return `Formatting: ${formatting}${via}`;
+}
+
+function formatProofLineText(label: string, proof: CodeProofData): string {
+	const details = [proof.basis, proof.reason, proof.confidence].filter(Boolean).join(" | ");
+	const matches = proof.matches !== undefined ? ` | matches: ${proof.matches}` : "";
+	return `${label}: ${details || "available"}${matches}`;
+}
+
+function getEditFiles(data: CodeEditData, file?: string, displayPath?: string): CodeEditFileData[] {
+	if (data.files.length > 0) return data.files;
+	return [
+		{
+			file,
+			displayPath,
+			status: data.noop ? "noop" : "applied",
+			version: data.version,
+			diff: data.diff,
+			editCount: data.editCount,
+			created: data.created,
+			targets: data.targets,
+			proof: data.proof,
+			noop: data.noop,
+			idempotent: data.idempotent,
+			formatting: data.formatting,
+			formatterServer: data.formatterServer,
+			mutationState: data.mutationState,
+			persisted: data.persisted,
+		},
+	];
+}
+
+function formatSingleEditContent(file: CodeEditFileData, fallbackDisplayPath?: string): string {
+	const resolvedDisplayPath = file.displayPath ?? fallbackDisplayPath;
+	const label = resolvedDisplayPath ? ` ${resolvedDisplayPath}` : "";
+	const formatting = file.formatting ? formatEditFormattingLine(file.formatting, file.formatterServer) : undefined;
+	if (file.noop) {
+		const noopHeader = `${file.created ? "No-op create" : "No-op edit"}${label}${file.idempotent ? " (idempotent)" : ""}`;
+		return [noopHeader, formatting, "No semantic changes applied."].filter(Boolean).join("\n");
+	}
+	if (file.mutationState === "pending_preview") {
+		const preview = buildCompactHashlineDiffPreview(file.diff ?? "");
+		const changes = countDiffChanges(file.diff ?? "");
+		const lines = [
+			`Preview queued${label}`,
+			"Resolve required before disk changes.",
+			`Changes: +${changes.addedLines} -${changes.removedLines}`,
+		].filter(Boolean);
+		if (preview.preview.trim().length > 0) lines.push("Diff preview:", preview.preview);
+		return lines.join("\n");
+	}
+	if (file.mutationState === "discarded") {
+		return [`Preview discarded${label}`, "No mutation landed."].join("\n");
+	}
+	const summaryData: CodeEditData = {
+		status: file.status,
+		saveMode: undefined,
+		successCount: undefined,
+		failureCount: undefined,
+		files: [],
+		version: file.version,
+		diff: file.diff ?? "",
+		editCount: file.editCount ?? 0,
+		created: file.created,
+		targets: file.targets,
+		proof: file.proof,
+		noop: file.noop,
+		idempotent: file.idempotent,
+		formatting: file.formatting,
+		formatterServer: file.formatterServer,
+		mutationState: file.mutationState,
+		persisted: file.persisted,
+	};
+	const header = `${file.created ? "Created" : "Edited"}${label}${formatEditTargetSummary(summaryData)}`;
+	const targetLine = formatTargetLine(file.targets);
+	const proofLine = file.proof ? formatProofLineText("Proof", file.proof) : undefined;
+	if ((file.diff ?? "").trim().length === 0) {
+		return [header, targetLine, proofLine, formatting].filter(Boolean).join("\n");
+	}
+	const preview = buildCompactHashlineDiffPreview(file.diff ?? "");
+	const changes = countDiffChanges(file.diff ?? "");
+	const lines = [
+		header,
+		targetLine,
+		proofLine,
+		formatting,
+		`Changes: +${changes.addedLines} -${changes.removedLines}`,
+	].filter(Boolean);
+	if (preview.preview.trim().length > 0) lines.push("Diff preview:", preview.preview);
+	return lines.join("\n");
+}
+
+function formatGroupedEditContent(data: CodeEditData, files: CodeEditFileData[]): string {
+	const successCount = data.successCount ?? files.filter(file => file.status !== "failed").length;
+	const failureCount = data.failureCount ?? files.filter(file => file.status === "failed").length;
+	const summary = [
+		successCount > 0 ? `${successCount} ok` : undefined,
+		failureCount > 0 ? `${failureCount} failed` : undefined,
+	]
+		.filter(Boolean)
+		.join(", ");
+	const heading = `${capitalize(data.status ?? (failureCount > 0 ? "partial" : "applied"))} edit (${pluralize(files.length, "file")}${summary ? `, ${summary}` : ""})`;
+	const lines = [heading];
+	for (const file of files) {
+		const display = file.displayPath ?? file.file ?? "unknown";
+		if (file.status === "failed" || file.error) {
+			lines.push(`- Failed ${display}: ${file.error?.message ?? "edit failed"}`);
+			if (file.error?.targetId) lines.push(`  Target: ${file.error.targetId}`);
+			if (file.error?.proof) lines.push(`  ${formatProofLineText("Proof", file.error.proof)}`);
+			continue;
+		}
+		lines.push(`- ${capitalize(file.status)} ${display}${file.created ? " (created)" : ""}`);
+		const formatting = file.formatting ? formatEditFormattingLine(file.formatting, file.formatterServer) : undefined;
+		if (formatting) lines.push(`  ${formatting}`);
+		const targetLine = formatTargetLine(file.targets);
+		if (targetLine) lines.push(`  ${targetLine}`);
+		if (file.proof) lines.push(`  ${formatProofLineText("Proof", file.proof)}`);
+		const diff = file.diff ?? "";
+		if (diff.trim().length > 0) {
+			const changes = countDiffChanges(diff);
+			lines.push(`  Changes: +${changes.addedLines} -${changes.removedLines}`);
+			const preview = buildCompactHashlineDiffPreview(diff).preview;
+			if (preview.trim().length > 0) {
+				lines.push("  Diff preview:");
+				for (const line of preview.split("\n")) {
+					lines.push(`    ${line}`);
+				}
+			}
+		}
+	}
+	return lines.join("\n");
+}
+function normalizeOutlineData(value: unknown): { entries: CodeOutlineEntry[]; graphStatus?: string } {
+	if (Array.isArray(value)) {
+		return { entries: normalizeOutlineEntries(value) };
+	}
+	const record = asRecord(value);
+	if (!record) return { entries: [] };
+	return {
+		entries: normalizeOutlineEntries(record.entries),
+		graphStatus: asString(record.graphStatus ?? record.graph_status),
+	};
+}
+
 function normalizeOutlineEntries(value: unknown): CodeOutlineEntry[] {
 	if (!Array.isArray(value)) return [];
 	const entries: CodeOutlineEntry[] = [];
@@ -721,6 +938,30 @@ function normalizeOutlineEntries(value: unknown): CodeOutlineEntry[] {
 			exported: asBoolean(record.exported),
 			signature: asString(record.signature),
 			targetId: asString(record.targetId),
+			loc: asNumber(record.loc),
+			modifiers: asStringArray(record.modifiers),
+			decorators: asStringArray(record.decorators),
+			deprecated: asBoolean(record.deprecated),
+			params: normalizeOutlineParams(record.params),
+			returnType: asString(record.returnType ?? record.return_type),
+			generics: asStringArray(record.generics),
+			throws: asStringArray(record.throws),
+			statements: asNumber(record.statements),
+			branchPoints: asNumber(record.branchPoints ?? record.branch_points),
+			nestingDepth: asNumber(record.nestingDepth ?? record.nesting_depth),
+			callSites: asNumber(record.callSites ?? record.call_sites),
+			hasSideEffects: asBoolean(record.hasSideEffects ?? record.has_side_effects),
+			docSummary: asString(record.docSummary ?? record.doc_summary),
+			docTags: asStringArray(record.docTags ?? record.doc_tags),
+			refsIn: asNumber(record.refsIn ?? record.refs_in),
+			refsOut: asNumber(record.refsOut ?? record.refs_out),
+			callers: asNumber(record.callers),
+			callees: asNumber(record.callees),
+			importedBy: asNumber(record.importedBy ?? record.imported_by),
+			exportedReach: normalizeReachSummary(record.exportedReach ?? record.exported_reach),
+			cluster: normalizeClusterRef(record.cluster),
+			dead: asBoolean(record.dead),
+			inherits: asStringArray(record.inherits),
 			children: normalizeOutlineEntries(record.children),
 		});
 	}
@@ -900,6 +1141,57 @@ function normalizeEditTargets(value: unknown): CodeEditTargetSummary[] {
 	});
 }
 
+function normalizeEditFileError(value: unknown): CodeEditFileErrorData | undefined {
+	const record = asRecord(value);
+	if (!record) return undefined;
+	return {
+		message: asString(record.message),
+		code: asString(record.code),
+		targetId: asString(record.targetId ?? record.target_id),
+		action: asString(record.action),
+		proof: normalizeProof(record.proof),
+	};
+}
+
+function normalizeEditFiles(value: unknown, cwd?: string): CodeEditFileData[] {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap(item => {
+		const record = asRecord(item);
+		if (!record) return [];
+		const file = asString(record.file);
+		const diff = asString(record.diff);
+		const editCount = asNumber(record.editCount ?? record.edit_count);
+		const created = asBoolean(record.created);
+		const targets = normalizeEditTargets(record.targets);
+		const proof = normalizeProof(record.proof);
+		const persisted = asBoolean(record.persisted) ?? false;
+		const mutationState =
+			(asString(record.mutationState ?? record.mutation_state) as MutationState | undefined) ??
+			((asString(record.status) === "failed" ? "discarded" : "applied") as MutationState);
+		return [
+			{
+				file,
+				displayPath: toDisplayPath(file, cwd),
+				status: asString(record.status) ?? "applied",
+				version: asNumber(record.version),
+				diff,
+				editCount,
+				created,
+				targets,
+				proof,
+				noop: asBoolean(record.noop),
+				idempotent: asBoolean(record.idempotent),
+				formatting: asString(record.formatting) as CodeEditData["formatting"] | undefined,
+				formatterServer: asString(record.formatterServer ?? record.formatter_server),
+				mutationState,
+				persisted,
+				dirty: asBoolean(record.dirty),
+				error: normalizeEditFileError(record.error),
+			},
+		];
+	});
+}
+
 function countTargetActions(targets: CodeEditTargetSummary[]): number {
 	return targets.reduce((sum, target) => sum + target.actions.length + countTargetActions(target.children ?? []), 0);
 }
@@ -923,8 +1215,15 @@ function formatTargetLine(targets: CodeEditTargetSummary[]): string | undefined 
 }
 function formatOutlineEntry(entry: CodeOutlineEntry): string {
 	const childCount = entry.children.length;
-	const childSuffix = childCount > 0 ? ` (${pluralize(childCount, "child")})` : "";
-	return `${entry.kind} ${entry.name} ${formatLineRange(entry.line, entry.endLine)}${childSuffix}`;
+	const extras: string[] = [];
+	if (childCount > 0) extras.push(pluralize(childCount, "child"));
+	if (entry.loc !== undefined) extras.push(`${entry.loc} loc`);
+	if (entry.refsIn !== undefined) extras.push(`${entry.refsIn} refs_in`);
+	if (entry.callers !== undefined) extras.push(`${entry.callers} callers`);
+	if (entry.cluster?.name) extras.push(`cluster:${entry.cluster.name}`);
+	if (entry.deprecated) extras.push("deprecated");
+	const extraSuffix = extras.length > 0 ? ` (${extras.join(", ")})` : "";
+	return `${entry.kind} ${entry.name} ${formatLineRange(entry.line, entry.endLine)}${extraSuffix}`;
 }
 
 function formatLineRange(start?: number, end?: number, column?: number): string {
@@ -1042,4 +1341,45 @@ function asNumber(value: unknown): number | undefined {
 
 function asBoolean(value: unknown): boolean | undefined {
 	return typeof value === "boolean" ? value : undefined;
+}
+
+function asStringArray(value: unknown): string[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const items = value.map(asString).filter((item): item is string => item !== undefined);
+	return items.length > 0 ? items : undefined;
+}
+
+function normalizeOutlineParams(value: unknown): CodeParamInfo[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const params: CodeParamInfo[] = [];
+	for (const item of value) {
+		const record = asRecord(item);
+		if (!record) continue;
+		const name = asString(record.name);
+		if (!name) continue;
+		params.push({
+			name,
+			ty: asString(record.ty),
+			optional: asBoolean(record.optional),
+			rest: asBoolean(record.rest),
+		});
+	}
+	return params.length > 0 ? params : undefined;
+}
+
+function normalizeReachSummary(value: unknown): CodeReachSummary | undefined {
+	const record = asRecord(value);
+	if (!record) return undefined;
+	const count = asNumber(record.count);
+	if (count === undefined) return undefined;
+	return { count, capped: asBoolean(record.capped) };
+}
+
+function normalizeClusterRef(value: unknown): CodeClusterRef | undefined {
+	const record = asRecord(value);
+	if (!record) return undefined;
+	const id = asNumber(record.id);
+	const name = asString(record.name);
+	if (id === undefined || !name) return undefined;
+	return { id, name };
 }
