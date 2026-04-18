@@ -6,6 +6,7 @@ import planModeReminder from "@oh-my-pi/pi-coding-agent/prompts/system/plan-mode
 	type: "text",
 };
 import codePrompt from "@oh-my-pi/pi-coding-agent/prompts/tools/code.md" with { type: "text" };
+import semanticHint from "@oh-my-pi/pi-coding-agent/prompts/tools/code-hint-semantic.md" with { type: "text" };
 import fallbackHint from "@oh-my-pi/pi-coding-agent/prompts/tools/code-hint-text-fallback.md" with { type: "text" };
 import grepPrompt from "@oh-my-pi/pi-coding-agent/prompts/tools/grep.md" with { type: "text" };
 import patchPrompt from "@oh-my-pi/pi-coding-agent/prompts/tools/patch.md" with { type: "text" };
@@ -81,6 +82,13 @@ describe("code-edit contract prompts", () => {
 		expect(grepPrompt).toContain(`mode: "semantic"`);
 		expect(grepPrompt).toContain("targetId");
 		expect(grepPrompt).toContain("scopeTargetId");
+	});
+
+	it("describes code symbols file and workspace modes", () => {
+		expect(semanticHint).toContain("`code symbols { file }`");
+		expect(semanticHint).toContain("`code symbols { query }`");
+		expect(semanticHint).toContain("`code symbols` with neither file nor query");
+		expect(semanticHint).toContain("file mode wins");
 	});
 
 	it("states managed edits do not require reread after success", () => {

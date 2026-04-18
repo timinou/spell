@@ -3,10 +3,20 @@ import { buildCompactHashlineDiffPreview } from "../patch/hashline";
 import type { OutputMeta } from "./output-meta";
 import type { MutationState } from "./pending-action";
 
-export type CodeGraphCommand = "index" | "status" | "context" | "impact" | "deps" | "flow" | "dead_code" | "clusters";
+export type CodeGraphCommand =
+	| "index"
+	| "status"
+	| "symbols"
+	| "context"
+	| "impact"
+	| "deps"
+	| "flow"
+	| "dead_code"
+	| "clusters";
 
 export type CodeFileCommand =
 	| "outline"
+	| "symbols"
 	| "read"
 	| "navigate"
 	| "edit"
@@ -142,14 +152,14 @@ interface CodeFileDetailsBase<TCommand extends CodeFileCommand, TData> {
 	meta?: OutputMeta;
 }
 
-export type CodeOutlineDetails = CodeFileDetailsBase<
-	"outline",
-	{
-		entries: CodeOutlineEntry[];
-		topLevelCount: number;
-		totalSymbols: number;
-	}
->;
+type CodeOutlineData = {
+	entries: CodeOutlineEntry[];
+	topLevelCount: number;
+	totalSymbols: number;
+};
+
+export type CodeOutlineDetails = CodeFileDetailsBase<"outline", CodeOutlineData>;
+export type CodeSymbolsDetails = CodeFileDetailsBase<"symbols", CodeOutlineData>;
 
 export type CodeReadDetails = CodeFileDetailsBase<
 	"read",
@@ -173,6 +183,7 @@ export type CodeCloseDetails = CodeFileDetailsBase<"close", { success: boolean }
 
 export type CodeFileDetails =
 	| CodeOutlineDetails
+	| CodeSymbolsDetails
 	| CodeReadDetails
 	| CodeNavigateDetails
 	| CodeEditDetails
@@ -295,11 +306,11 @@ export function normalizeCodeBufferSuccess(input: {
 		rawOutput: input.output,
 	};
 
-	if (input.command === "outline") {
+	if (input.command === "outline" || input.command === "symbols") {
 		const entries = normalizeOutlineEntries(input.output);
 		return {
 			...base,
-			command: "outline",
+			command: input.command,
 			data: {
 				entries,
 				topLevelCount: entries.length,
@@ -457,7 +468,7 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 		return withHint(details.data.text);
 	}
 
-	if (details.command === "outline") {
+	if (details.command === "outline" || details.command === "symbols") {
 		const label = details.displayPath ? ` ${details.displayPath}` : "";
 		const previewEntries: Array<{ depth: number; entry: CodeOutlineEntry }> = [];
 		let renderedCount = 0;
@@ -471,7 +482,8 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 				renderedCount += 1;
 			}
 		}
-		const lines = [`Outline${label} (${details.data.topLevelCount} top, ${details.data.totalSymbols} total)`];
+		const heading = details.command === "symbols" ? "Symbols" : "Outline";
+		const lines = [`${heading}${label} (${details.data.topLevelCount} top, ${details.data.totalSymbols} total)`];
 		for (const item of previewEntries) {
 			lines.push(`${"  ".repeat(item.depth)}- ${formatOutlineEntry(item.entry)}`);
 		}

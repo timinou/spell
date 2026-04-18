@@ -1,0 +1,221 @@
+#+TITLE: Restore code symbols dual-mode contract
+#+STATE: BLOCKED
+#+SESSION_ID: 14bf7538a105e3c5
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-45-05-540Z_14bf7538a105e3c5.jsonl]]
+#+CUSTOM_ID: BUG-283-restore-code-symbols-dual-mode-contract
+#+LAYER: coding-agent pi-natives pi-code-graph
+#+EFFORT: 4h
+#+PRIORITY: #A
+
+* Initial Message
+
+Code
+ symbols requires `query`
+
+
+^^^^ symbols shouldn't require query!! what is symbols about?
+
+* Scope
+
+In:
+- Restore a real `code symbols` command on the `code` tool.
+- Match the settled dual-mode contract:
+  - `code symbols { file }` lists symbols for that file.
+  - `code symbols { query }` searches workspace symbols.
+  - `code symbols` with neither `file` nor `query` returns a concise workspace-symbol summary with refinement hints instead of an error.
+- Remove the stale contradiction where `code-hint-semantic.md` advertises `code symbols` while `code.ts` rejects it and redirects to grep.
+- Keep `files` and `search` behavior unchanged unless required only as implementation collateral; do not expand scope beyond `symbols`.
+- Preserve existing graph query semantics for non-empty workspace symbol queries: `exact`, `ambiguous`, `ranked`, `none`.
+
+Out:
+- Reintroducing `code files` or `code search` as user-facing commands.
+- Changing `lsp symbols` behavior.
+- Reworking the native outline format beyond what is needed for `code symbols { file }` parity.
+- Broad UX redesign of all semantic follow-up hints.
+
+Rationale: user intent is explicit — `code symbols` must exist again, must not require `query` in all cases, and must have a truthful contract instead of a stale hint plus runtime rejection.
+
+
+
+Plan parent: [[id:PLAN-250-code-symbols-dual-mode-restoration][PLAN-250 CODE_SYMBOLS_DUAL_MODE_RESTORATION]].
+* Existing Patterns
+
+- `packages/coding-agent/src/tools/code.ts`
+  - `GRAPH_COMMANDS` / `REMOVED_SEARCH_COMMANDS` command gating.
+  - `#executeGraphCommand()` routes graph-native operations.
+  - `FILE_COMMANDS` controls hint injection for file-oriented commands.
+- `packages/coding-agent/src/tools/code-result.ts`
+  - `CodeOutlineDetails`, `normalizeCodeBufferSuccess`, and `formatCodeToolContent` already format hierarchical symbol-like data for file outlines.
+  - Reuse existing outline/result conventions instead of inventing a parallel symbol payload shape without need.
+- `packages/coding-agent/src/prompts/tools/code-hint-semantic.md`
+  - Currently mentions ``code symbols { query }``; this must be made truthful relative to the restored implementation.
+- `packages/coding-agent/src/lsp/index.ts`
+  - Existing `lsp symbols` contract is the parity reference: file => document symbols; no file + query => workspace symbol search.
+- `packages/coding-agent/src/lsp/utils.ts`
+  - `formatDocumentSymbol`, `filterWorkspaceSymbols`, `dedupeWorkspaceSymbols`, `symbolKindToIcon` provide mature symbol formatting/filtering patterns to copy rather than re-derive.
+- `crates/pi-natives/src/code_graph.rs`
+  - Existing graph command dispatcher already has a `"symbols"` branch, but it hard-errors with `symbols requires \`query\``.
+  - `format_symbols()` already renders query-based workspace results.
+- `crates/pi-code-graph/src/query.rs`
+  - `graph_symbols()` already implements exact/ambiguous/ranked/none semantics for non-empty queries.
+  - `graph_status()` and `summary_for_node()` are the native primitives most likely to support the no-query workspace summary.
+- `crates/pi-code-engine/src/outline.rs`
+  - Existing file-outline extraction is the correct source for `code symbols { file }` rather than LSP or a new native graph file-symbol path.
+
+* Tests
+
+Workflows to cover first:
+1. File symbols workflow: user passes `file`; tool returns declaration list for that file; no query required.
+2. Workspace exact symbol lookup: user passes `query`; tool returns exact symbol result(s) via native graph.
+3. Workspace ranked/ambiguous lookup: non-exact query still returns stable native symbol lookup semantics.
+4. Workspace empty call: user passes neither `file` nor `query`; tool returns concise symbol inventory / summary plus guidance to refine with `query` or narrow with `file`.
+5. Contract truthfulness workflow: prompts/tests no longer claim behavior different from runtime.
+6. Scope guard workflow: `code files` and `code search` remain removed; only `symbols` is restored.
+
+Concrete test files and scenarios:
+- `packages/coding-agent/test/tools/code.test.ts`
+  - Replace the current redirect regression for `command: "symbols"` with:
+    - `symbols` + `file` routes through file-symbol path and does not redirect to grep.
+    - `symbols` + `query` routes to `executeCodeGraph`.
+    - bare `symbols` returns summary text rather than a query-required error.
+    - `files` and `search` still redirect to grep.
+- `packages/coding-agent/test/prompts/code-tool-contracts.test.ts`
+  - Add/assert prompt contract text for restored `code symbols` semantics.
+- `packages/coding-agent/test/tools/lsp-regressions.test.ts`
+  - If shared TS symbol-format/filter helpers are extracted or reused, add/adjust focused regression coverage only for the reused helper behavior; do not duplicate LSP integration tests wholesale.
+- `crates/pi-natives/src/code_graph.rs` tests
+  - Preserve existing exact-match tests.
+  - Add `symbols_without_query_returns_summary`.
+  - Add `symbols_with_query_preserves_exact_or_ranked_behavior` if refactor shape changes enough to warrant explicit lock-in.
+- `crates/pi-code-graph/src/query.rs` tests
+  - Add coverage for optional-query / summary behavior at the graph layer if the summary is implemented there.
+  - Preserve existing exact-match and canonical-path tests.
+
+Test ordering:
+- For Rust graph/query changes: new graph/query tests precede implementation changes in dependency order.
+- For TS tool-surface changes: command-routing and prompt-contract tests should be updated before final runtime wiring is considered done.
+
+* Implementation
+
+** Define restored `code symbols` contract boundary
+:PROPERTIES:
+:CUSTOM_ID: BUG-283-restore-code-symbols-dual-mode-contract::contract
+:END:
+
+- Files:
+  - `packages/coding-agent/src/tools/code.ts`
+  - `packages/coding-agent/src/prompts/tools/code-hint-semantic.md`
+  - `packages/coding-agent/src/prompts/tools/code.md` if command examples/help text need explicit mention.
+- Update command descriptions and internal routing contract so `symbols` is once again a supported `code` command.
+- Keep the decision explicit in code comments / prompt wording:
+  - file mode = file-local symbol listing.
+  - workspace mode = graph-based symbol lookup.
+  - empty workspace mode = summary, not error.
+- Explicitly document that `files` and `search` remain moved to grep.
+- Satisfies test workflows: 1, 2, 4, 5, 6.
+
+** Add Rust summary path for queryless workspace symbols
+:PROPERTIES:
+:CUSTOM_ID: BUG-283-restore-code-symbols-dual-mode-contract::rust-summary
+:DEPENDS: BUG-283-restore-code-symbols-dual-mode-contract::contract
+:END:
+
+- Files:
+  - `crates/pi-code-graph/src/query.rs`
+  - `crates/pi-natives/src/code_graph.rs`
+- Change the native `symbols` graph path to accept optional query.
+- For non-empty query:
+  - preserve current `exact` / `ambiguous` / `ranked` / `none` semantics.
+- For empty query:
+  - return concise workspace-symbol summary text, driven from native graph truth.
+  - Summary should include enough intelligence to answer “what is symbols about?” without dumping the whole repo.
+  - Recommended contents:
+    - total symbol/file counts from `graph_status()`.
+    - a small stable sample of exported or top-level symbols grouped by kind and/or file.
+    - refinement hints like `Next: pass query for lookup or file for file-local symbols`.
+- Keep output deterministic and limited; do not emit an unbounded all-symbol dump.
+- Satisfies test workflows: 2, 3, 4.
+
+** Wire file mode through existing outline machinery
+:PROPERTIES:
+:CUSTOM_ID: BUG-283-restore-code-symbols-dual-mode-contract::file-mode
+:DEPENDS: BUG-283-restore-code-symbols-dual-mode-contract::contract
+:END:
+
+- Files:
+  - `packages/coding-agent/src/tools/code.ts`
+  - `packages/coding-agent/src/tools/code-result.ts`
+- Implement `code symbols { file }` via existing code-buffer outline/native file structure, not via LSP.
+- Reuse `CodeOutlineEntry`-style data and existing formatting where possible.
+- Required behavioral decisions:
+  - `file` wins over `query`; if both are provided, behave as file mode and ignore `query` rather than producing contradictory mixed semantics.
+  - Include `symbols` in `FILE_COMMANDS` so the same semantic hint behavior applies to supported files.
+  - Return symbol-oriented output labeling; do not surface it as an unrelated “redirect” or unsupported-command error.
+- If a dedicated `CodeSymbolsDetails` type is unnecessary because outline data already matches, prefer one representation over a duplicate parallel type.
+- Satisfies test workflows: 1, 5.
+
+** Restore TS routing and keep removed-command boundaries honest
+:PROPERTIES:
+:CUSTOM_ID: BUG-283-restore-code-symbols-dual-mode-contract::ts-routing
+:DEPENDS: BUG-283-restore-code-symbols-dual-mode-contract::rust-summary BUG-283-restore-code-symbols-dual-mode-contract::file-mode
+:END:
+
+- Files:
+  - `packages/coding-agent/src/tools/code.ts`
+  - `packages/coding-agent/src/tools/code-result.ts`
+- Remove `symbols` from the removed-command rejection path while leaving `files` / `search` rejected.
+- Add `symbols` to the appropriate command unions / schema strings / graph-command dispatch lists.
+- Ensure `#executeGraphCommand()` is used only for workspace mode; file mode should remain file-native.
+- Keep result rendering truthful and concise for all three modes.
+- Satisfies test workflows: 1, 2, 3, 4, 6.
+
+** Update prompt contracts and regression tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-283-restore-code-symbols-dual-mode-contract::tests-and-prompts
+:DEPENDS: BUG-283-restore-code-symbols-dual-mode-contract::ts-routing
+:END:
+
+- Files:
+  - `packages/coding-agent/src/prompts/tools/code-hint-semantic.md`
+  - `packages/coding-agent/test/tools/code.test.ts`
+  - `packages/coding-agent/test/prompts/code-tool-contracts.test.ts`
+  - Rust tests in `crates/pi-natives/src/code_graph.rs` and `crates/pi-code-graph/src/query.rs`
+- Replace the stale redirect expectation with the restored contract.
+- Add prompt assertions so future prompt drift cannot reintroduce the contradiction.
+- Keep tests narrow: one contract per scenario, no placeholder assertions.
+- Satisfies all workflows.
+
+* Edge Cases
+
+- `code symbols { file, query }`: file mode wins; query is ignored to avoid mixed-mode ambiguity.
+- Unsupported / non-semantic-capable file extensions: preserve current code-tool fallback behavior; do not invent fake symbols.
+- Empty workspace summary must be bounded and deterministic; no full-repo dump, no unstable ordering based on hash-map iteration.
+- Queryless summary must not require semantic vector search or embeddings.
+- Existing `files` and `search` command behavior must remain unchanged and still steer users to grep.
+- Query-based symbol lookup must not regress exact/ambiguous/ranked statuses or existing canonical-path behavior validated in Rust tests.
+- Prompt text must not promise `query` as universally required for `symbols`; it must describe the three real modes.
+- If native summary logic and TS file-mode formatting diverge stylistically, prefer truthful behavior over forced identical text; contract parity matters more than byte-identical output.
+
+* Acceptance Criteria
+
+- `code symbols { file: "packages/coding-agent/src/tools/code.ts" }` returns a symbol listing for that file and does not redirect to grep.
+- `code symbols { query: "rateLimit" }` routes through native graph lookup and preserves exact/ranked/ambiguous semantics.
+- Bare `code symbols` returns a concise workspace summary with refinement guidance instead of `symbols requires \`query\``.
+- `code files` and `code search` still redirect to grep.
+- `packages/coding-agent/test/tools/code.test.ts` passes with restored `symbols` expectations.
+- Rust tests covering optional-query symbols behavior pass.
+- `bun check:ts` and `bun check:rs` are the final verification gates for implementation.
+
+* Verification
+
+- TS: `bun test packages/coding-agent/test/tools/code.test.ts`
+- Prompt contracts: `bun test packages/coding-agent/test/prompts/code-tool-contracts.test.ts`
+- Rust targeted: `cargo test -p pi-natives code_graph`
+- Rust graph/query targeted: `cargo test -p pi-code-graph query`
+- Final package checks: `bun check:ts` and `bun check:rs`
+
+** Blocked [2026-04-18]
+Verification blocked outside BUG-283 scope.
+- `cargo test -p pi-natives code_graph` fails before the target tests run because `crates/pi-natives/src/code_buffer.rs` references missing helpers (`parse_patches`, `single_edit_operation`, `resolve_target`). See artifact://14bf7ec8cb85e3cc/main/bash/17.txt.
+- `bun check:ts` fails on unrelated files: `packages/coding-agent/src/loop/persistence/manifest-writer.ts`, `packages/coding-agent/src/plan-mode/plan-validation.ts`, and `packages/org/src/tool.ts`. See artifact://14bf7ec8cb85e3cc/main/bash/32.txt.
+Implemented BUG-283 code and focused tests are in place; waiting on repo-wide verification blockers to clear.
