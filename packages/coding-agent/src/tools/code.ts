@@ -130,25 +130,22 @@ function hasEntries<T>(value: T[] | undefined): value is T[] {
 	return value !== undefined && value.length > 0;
 }
 
-function validateCreatePayload(params: CodeParams, resolvedFile?: string): string | undefined {
-	if (params.command !== "edit" || params.operation !== "create") return undefined;
-	if (!resolvedFile) return "operation 'create' requires 'file'.";
-	if (params.content === undefined) return "operation 'create' requires 'content'.";
-	const invalidFields = [
-		isMeaningfulString(params.symbol) ? "symbol" : undefined,
-		isMeaningfulIndex(params.line) ? "line" : undefined,
-		isMeaningfulIndex(params.column) ? "column" : undefined,
-		hasEntries(params.patches) ? "patches" : undefined,
-		hasEntries(params.edits) ? "edits" : undefined,
-		isMeaningfulString(params.mode) ? "mode" : undefined,
-		isMeaningfulString(params.action) ? "action" : undefined,
-		isMeaningfulOptionalNumber(params.resolution) ? "resolution" : undefined,
-		isMeaningfulOptionalNumber(params.offset) ? "offset" : undefined,
-		isMeaningfulOptionalNumber(params.limit) ? "limit" : undefined,
-		isMeaningfulOptionalNumber(params.depth) ? "depth" : undefined,
-	].filter((field): field is string => field !== undefined);
-	if (invalidFields.length === 0) return undefined;
-	return `operation 'create' does not accept ${invalidFields.join(", ")}. Use only 'file', 'operation', and 'content'.`;
+function parseTargetId(targetId: string): { fileTargetId: string; symbolTargetId?: string } {
+	const [fileTargetId, symbolTargetId] = targetId.split(/::(.+)/, 2);
+	return { fileTargetId, symbolTargetId };
+}
+
+function primaryFileForOperations(
+	operations: CodeParams["operations"] | undefined,
+	sessionCwd: string,
+	root?: string,
+): string | undefined {
+	const targetId = operations?.[0]?.targetId;
+	if (!targetId) return undefined;
+	const { fileTargetId } = parseTargetId(targetId);
+	if (path.isAbsolute(fileTargetId)) return fileTargetId;
+	const base = root ? path.resolve(sessionCwd, root) : sessionCwd;
+	return path.resolve(base, fileTargetId);
 }
 function countDiffChanges(diff: string): { addedLines: number; removedLines: number } {
 	let addedLines = 0;
@@ -181,38 +178,39 @@ function shouldCheckBufferFreshness(command: string, isCreate: boolean): boolean
 // Schema
 // =============================================================================
 
-const patchSchema = Type.Object({
-	find: Type.Union([Type.String(), Type.Array(Type.String())], {
-		description: "Text to find within the symbol scope (indent-insensitive)",
+const codeActionSchema = Type.Object({
+	kind: Type.String({
+		description: `			Action kind: write | findAndReplace | wrap | rename | delete | insertBefore | insertAfter | splice | move | clone | transpose | renameClassToken | renameIdToken | renameCustomProperty | removeDeadStyle | promote | demote | replaceCodeBlock`,
 	}),
-	replace: Type.Union([Type.String(), Type.Array(Type.String())], { description: "Replacement text" }),
-});
-
-const editEntrySchema = Type.Object({
-	symbol: Type.Optional(
-		Type.String({
-			description: "Symbol name to target (for example 'handleRequest' or 'MyClass.method')",
-		}),
-	),
-	line: Type.Optional(
-		Type.Integer({
-			description: "1-indexed line number for positional operations (drag, splice, clone, transpose)",
-		}),
-	),
-	column: Type.Optional(Type.Integer({ description: "1-indexed column for transpose" })),
-	operation: Type.String({
-		description:
-			"Edit operation: patch | replace | replace-body | wrap | rename | kill | insert-before | insert-after | splice | drag-up | drag-down | clone | transpose | rename-class-token | rename-id-token | rename-custom-property | remove-dead-style",
-	}),
+	scope: Type.Optional(Type.String({ description: "Write scope: target | body" })),
 	content: Type.Optional(
 		Type.Union([Type.String(), Type.Array(Type.String())], {
-			description:
-				"Content for replace | replace-body | wrap template | rename new name | insert operations; HTML/CSS token operations still pass the proposed token text when applicable",
+			description: "Canonical content payload for write-like actions",
 		}),
 	),
-	patches: Type.Optional(Type.Array(patchSchema, { description: "Find/replace patches for patch operation" })),
+	find: Type.Optional(
+		Type.Union([Type.String(), Type.Array(Type.String())], {
+			description: "Find text for findAndReplace within the resolved target scope",
+		}),
+	),
 	mode: Type.Optional(Type.String({ description: "Splice mode: self | up | down (default: self)" })),
+	direction: Type.Optional(Type.String({ description: "Move direction: up | down" })),
+	line: Type.Optional(Type.Integer({ description: "1-indexed line for positional actions when needed" })),
+	column: Type.Optional(Type.Integer({ description: "1-indexed column for transpose actions when needed" })),
+	nodeType: Type.Optional(Type.String({ description: "Optional node type hint for positional actions" })),
 });
+
+const codeOperationSchema = Type.Recursive(This =>
+	Type.Object({
+		targetId: Type.String({
+			description: "Stable edit target ID: '<file>' for file roots or '<file>::Symbol.member' for declarations",
+		}),
+		actions: Type.Array(codeActionSchema, { description: "Ordered actions to execute within this target" }),
+		children: Type.Optional(
+			Type.Array(This, { description: "Nested child target operations under the same file tree" }),
+		),
+	}),
+);
 
 const codeSchema = Type.Object({
 	command: Type.String({
@@ -222,7 +220,7 @@ const codeSchema = Type.Object({
 	file: Type.Optional(Type.String({ description: "Absolute or project-relative file path" })),
 	symbol: Type.Optional(
 		Type.String({
-			description: "Symbol name for edit targeting or graph commands like context | impact | flow",
+			description: "Symbol name for graph commands like context | impact | flow, or navigate references",
 		}),
 	),
 	query: Type.Optional(Type.String({ description: "Search or lookup query for graph search, symbols, or files" })),
@@ -231,68 +229,50 @@ const codeSchema = Type.Object({
 	limit: Type.Optional(Type.Integer({ description: "Max results or lines" })),
 	semantic: Type.Optional(Type.Boolean({ description: "Require or suppress semantic graph search when supported" })),
 	depth: Type.Optional(Type.Integer({ description: "Max nesting or traversal depth" })),
-	operation: Type.Optional(
-		Type.String({
-			description:
-				"Edit operation: create | patch | replace | replace-body | wrap | rename | kill | insert-before | insert-after | splice | drag-up | drag-down | clone | transpose | rename-class-token | rename-id-token | rename-custom-property | remove-dead-style",
-		}),
+	root: Type.Optional(
+		Type.String({ description: "Optional project-relative or absolute root for targetId file resolution" }),
 	),
-	content: Type.Optional(
-		Type.Union([Type.String(), Type.Array(Type.String())], {
-			description:
-				"Content for replace | replace-body | wrap template | rename new name | insert operations; HTML/CSS token operations still pass the proposed token text when applicable",
-		}),
+	operations: Type.Optional(
+		Type.Array(codeOperationSchema, { description: "Recursive targetId-based edit operations" }),
 	),
 	idempotent: Type.Optional(
 		Type.Boolean({
 			description: "Allow mutating edit commands to succeed when they intentionally make no semantic change",
 		}),
 	),
-	patches: Type.Optional(Type.Array(patchSchema, { description: "Find/replace patches for patch operation" })),
-	edits: Type.Optional(Type.Array(editEntrySchema, { description: "Array of edits to apply in sequence" })),
-	mode: Type.Optional(Type.String({ description: "Splice mode: self | up | down (default: self)" })),
 	action: Type.Optional(
 		Type.String({
 			description: "Navigate action: defun-at | parent | references | node-at | siblings | children",
 		}),
 	),
-	line: Type.Optional(
-		Type.Integer({
-			description: "1-indexed line for navigation or positional edit operations",
-		}),
-	),
-	column: Type.Optional(Type.Integer({ description: "1-indexed column for navigation or transpose" })),
+	line: Type.Optional(Type.Integer({ description: "1-indexed line for navigation" })),
+	column: Type.Optional(Type.Integer({ description: "1-indexed column for navigation" })),
 });
 
 type CodeParams = Static<typeof codeSchema>;
 
-type NormalizedCodeEdit = NonNullable<CodeBufferOptions["edits"]>[number];
-
-function normalizeLines(value: CodeParams["content"]): string | undefined {
+function normalizeLines(value: string | string[] | undefined): string | undefined {
 	if (value === undefined) return undefined;
 	return typeof value === "string" ? value : value.join("\n");
 }
 
-function normalizePatches(patches: CodeParams["patches"]): CodeBufferOptions["patches"] | undefined {
-	if (!hasEntries(patches)) return undefined;
-	return patches.map(patch => ({
-		find: normalizeLines(patch.find) ?? "",
-		replace: normalizeLines(patch.replace) ?? "",
+function normalizeOperations(operations: CodeParams["operations"]): CodeBufferOptions["operations"] | undefined {
+	if (!hasEntries(operations)) return undefined;
+	return operations.map(operation => ({
+		targetId: operation.targetId,
+		actions: operation.actions.map(action => ({
+			kind: action.kind,
+			scope: action.scope === "target" || action.scope === "body" ? action.scope : undefined,
+			content: normalizeLines(action.content),
+			find: normalizeLines(action.find),
+			mode: action.mode,
+			direction: action.direction === "up" || action.direction === "down" ? action.direction : undefined,
+			line: isMeaningfulIndex(action.line) ? action.line : undefined,
+			column: isMeaningfulIndex(action.column) ? action.column : undefined,
+			nodeType: action.nodeType,
+		})),
+		children: normalizeOperations(operation.children),
 	}));
-}
-
-function normalizeEditEntries(edits: CodeParams["edits"]): CodeBufferOptions["edits"] | undefined {
-	if (!hasEntries(edits)) return undefined;
-	return edits.map(edit => {
-		const normalizedEdit: NormalizedCodeEdit = { operation: edit.operation };
-		if (isMeaningfulString(edit.symbol)) normalizedEdit.symbol = edit.symbol;
-		if (isMeaningfulIndex(edit.line)) normalizedEdit.line = edit.line;
-		if (isMeaningfulIndex(edit.column)) normalizedEdit.column = edit.column;
-		if (edit.content !== undefined) normalizedEdit.content = normalizeLines(edit.content);
-		if (hasEntries(edit.patches)) normalizedEdit.patches = normalizePatches(edit.patches);
-		if (isMeaningfulString(edit.mode)) normalizedEdit.mode = edit.mode;
-		return normalizedEdit;
-	});
 }
 
 // =============================================================================
@@ -381,10 +361,13 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 	): Promise<AgentToolResult> {
 		const command = params.command ?? "";
 		const sessionCwd = this.#session.cwd ?? getProjectDir();
+		const editFile =
+			command === "edit" ? primaryFileForOperations(params.operations, sessionCwd, params.root) : undefined;
 
 		if (MUTATING_COMMANDS.has(command) || command === "save") {
-			if (params.file) {
-				enforceModeWrite(this.#session, params.file, { op: params.operation === "create" ? "create" : "update" });
+			const targetFile = command === "edit" ? (editFile ?? params.file) : params.file;
+			if (targetFile) {
+				enforceModeWrite(this.#session, targetFile, { op: "update" });
 			}
 		}
 
@@ -403,49 +386,38 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			}
 
 			const nativeCommand = command === "buffers" ? "list" : command;
-			const isCreate = command === "edit" && params.operation === "create";
 			const options: CodeBufferOptions = { command: nativeCommand };
 			const resolveFile = (file: string): string => (path.isAbsolute(file) ? file : path.resolve(sessionCwd, file));
+			const activeFile = command === "edit" ? editFile : params.file ? resolveFile(params.file) : undefined;
 
-			if (params.file) options.file = resolveFile(params.file);
-			if (params.resolution !== undefined && (!isCreate || isMeaningfulOptionalNumber(params.resolution))) {
+			if (command === "edit") {
+				options.root = params.root ? resolveFile(params.root) : sessionCwd;
+				if (hasEntries(params.operations)) options.operations = normalizeOperations(params.operations);
+			} else if (params.file) {
+				options.file = resolveFile(params.file);
+			}
+			if (params.resolution !== undefined && isMeaningfulOptionalNumber(params.resolution)) {
 				options.resolution = params.resolution;
 			}
-			if (params.offset !== undefined && (!isCreate || isMeaningfulOptionalNumber(params.offset))) {
+			if (params.offset !== undefined && isMeaningfulOptionalNumber(params.offset)) {
 				options.offset = params.offset;
 			}
-			if (params.limit !== undefined && (!isCreate || isMeaningfulOptionalNumber(params.limit))) {
+			if (params.limit !== undefined && isMeaningfulOptionalNumber(params.limit)) {
 				options.limit = params.limit;
 			}
 			if (isMeaningfulIndex(params.line)) options.line = params.line;
 			if (isMeaningfulIndex(params.column)) options.column = params.column;
 			if (isMeaningfulString(params.symbol)) options.symbol = params.symbol;
-			if (params.operation) options.operation = params.operation;
-			if (params.content !== undefined) options.content = normalizeLines(params.content);
-			if (hasEntries(params.patches)) options.patches = normalizePatches(params.patches);
-			if (hasEntries(params.edits)) options.edits = normalizeEditEntries(params.edits);
-			if (isMeaningfulString(params.mode)) options.mode = params.mode;
 			if (command === "navigate" && isMeaningfulString(params.action)) {
 				options.action = params.action === "references-local" ? "references" : params.action;
 			}
 
-			const createPayloadError = validateCreatePayload(params, options.file);
-			if (createPayloadError) {
-				const details = createCodeToolError({
-					command,
-					file: options.file,
-					cwd: sessionCwd,
-					message: createPayloadError,
-				});
-				return toolResult(details).text(formatCodeToolContent(details)).done();
-			}
-
-			if (options.file && shouldCheckBufferFreshness(command, isCreate)) {
-				const freshness = timedCodeBuffer({ command: "diff", file: options.file });
+			if (activeFile && shouldCheckBufferFreshness(command, false)) {
+				const freshness = timedCodeBuffer({ command: "diff", file: activeFile });
 				if (freshness.error) {
 					const details = createCodeToolError({
 						command,
-						file: options.file,
+						file: activeFile,
 						cwd: sessionCwd,
 						output: freshness.output,
 						message: `Unable to verify buffer freshness before ${command}: ${extractCodeToolErrorMessage(freshness.output)}`,
@@ -456,7 +428,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				if (staleHunks > 0) {
 					const details = createCodeToolError({
 						command,
-						file: options.file,
+						file: activeFile,
 						cwd: sessionCwd,
 						output: freshness.output,
 						message: `Stale code buffer detected (${staleHunks} ${staleHunks === 1 ? "hunk" : "hunks"} differ from disk). Run code diff to inspect, then reconcile the on-disk file before retrying this mutation.`,
@@ -467,18 +439,18 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 
 			const result = timedCodeBuffer(options);
 			if (result.error) {
-				if (command === "edit" && options.file) {
-					const closeResult = timedCodeBuffer({ command: "close", file: options.file });
+				if (command === "edit" && activeFile) {
+					const closeResult = timedCodeBuffer({ command: "close", file: activeFile });
 					if (closeResult.error) {
 						logger.warn("failed to invalidate buffer after edit error", {
-							file: options.file,
+							file: activeFile,
 							error: extractCodeToolErrorMessage(closeResult.output),
 						});
 					}
 				}
 				const details = createCodeToolError({
 					command,
-					file: options.file,
+					file: activeFile,
 					cwd: sessionCwd,
 					output: result.output,
 					message: extractCodeToolErrorMessage(result.output),
@@ -503,7 +475,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				if (params.idempotent !== true) {
 					const details = createCodeToolError({
 						command,
-						file: options.file,
+						file: activeFile,
 						cwd: sessionCwd,
 						output: result.output,
 						message:
@@ -515,7 +487,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				const details = normalizeCodeBufferSuccess({
 					command: command as CodeFileCommand,
 					output: result.output,
-					file: options.file,
+					file: activeFile,
 					cwd: sessionCwd,
 					action: options.action,
 					resolution: params.resolution,
@@ -526,7 +498,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 					mutationState: "noop",
 					persisted: false,
 				});
-				const injectedHint = FILE_COMMANDS.has(nativeCommand) ? this.#maybeInjectHints(options.file) : undefined;
+				const injectedHint = FILE_COMMANDS.has(nativeCommand) ? this.#maybeInjectHints(activeFile) : undefined;
 				if (injectedHint) {
 					(details as CodeToolResultDetails & { injectedHint?: string }).injectedHint = injectedHint;
 				}
@@ -534,18 +506,18 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				return toolResult(details).text(text).done();
 			}
 
-			if (command === "edit" && options.file) {
-				const formatResult = await this.#prepareEditedFileForSave(options.file, sessionCwd, _signal);
+			if (command === "edit" && activeFile) {
+				const formatResult = await this.#prepareEditedFileForSave(activeFile, sessionCwd, _signal);
 				formatting = formatResult.formatting;
 				formatterServer = formatResult.formatterServer;
 			}
 
-			if (MUTATING_COMMANDS.has(command) && options.file) {
-				const saveResult = timedCodeBuffer({ command: "save", file: options.file });
+			if (MUTATING_COMMANDS.has(command) && activeFile) {
+				const saveResult = timedCodeBuffer({ command: "save", file: activeFile });
 				if (saveResult.error) {
 					const details = createCodeToolError({
 						command,
-						file: options.file,
+						file: activeFile,
 						cwd: sessionCwd,
 						message: `Edit succeeded but save to disk failed: ${extractCodeToolErrorMessage(saveResult.output)}`,
 					});
@@ -556,7 +528,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			const details = normalizeCodeBufferSuccess({
 				command: command as CodeFileCommand,
 				output: result.output,
-				file: options.file,
+				file: activeFile,
 				cwd: sessionCwd,
 				action: options.action,
 				resolution: params.resolution,
@@ -569,7 +541,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				mutationState: command === "edit" ? "applied" : undefined,
 				persisted: command === "edit",
 			});
-			const injectedHint = FILE_COMMANDS.has(nativeCommand) ? this.#maybeInjectHints(options.file) : undefined;
+			const injectedHint = FILE_COMMANDS.has(nativeCommand) ? this.#maybeInjectHints(activeFile) : undefined;
 			if (injectedHint) {
 				(details as CodeToolResultDetails & { injectedHint?: string }).injectedHint = injectedHint;
 			}
@@ -580,7 +552,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			logger.error("code tool error", { error: message, command });
 			const details = createCodeToolError({
 				command,
-				file: params.file ? path.resolve(sessionCwd, params.file) : undefined,
+				file: editFile ?? (params.file ? path.resolve(sessionCwd, params.file) : undefined),
 				cwd: sessionCwd,
 				output: err,
 				message,

@@ -58,10 +58,14 @@ const renderContext: TemplateContext = {
 };
 
 describe("code-edit contract prompts", () => {
-	it("teaches line-target edits as node-boundary operations with explicit separators", () => {
-		expect(codePrompt).toContain("Line-target insertions operate at AST/node boundaries");
-		expect(codePrompt).toContain('"content": ["", "import { x } from \'./x\';"]');
-		expect(codePrompt).toContain("retry narrowly instead of switching to text `edit` or `write`");
+	it("describes canonical code edit operations payloads", () => {
+		expect(codePrompt).toContain('operations: [{ targetId: "src/new-module.ts", actions: [{ kind: "write"');
+		expect(codePrompt).toContain('actions: [{ kind: "findAndReplace"');
+		expect(codePrompt).toContain('children: [{ targetId: "src/server.ts::Server.handle"');
+		expect(codePrompt).not.toContain('kind: "create"');
+		expect(codePrompt).not.toContain('kind: "patch"');
+		expect(codePrompt).not.toContain('kind: "replace-body"');
+		expect(codePrompt).not.toContain('kind: "replace"');
 	});
 
 	it("keeps patch mode off code-supported fallback paths", () => {
@@ -69,10 +73,11 @@ describe("code-edit contract prompts", () => {
 		expect(patchPrompt).toContain("tighten the structural target instead of falling back to patch mode");
 	});
 
-	it("repeats the same recovery ladder in plan-mode reminders and fallback hints", () => {
-		expect(planModeReminder).toContain("Line-target `code edit` operations are node-boundary edits");
-		expect(planModeReminder).toContain("tighten the target instead of switching to text `edit` or `write`");
-		expect(fallbackHint).toContain("failed structural edit on a semantic file means re-read and tighten the target");
+	it("states managed edits do not require reread after success", () => {
+		expect(planModeReminder).toContain("Successful managed edits do not require a fresh `read` before the next edit");
+		expect(planModeReminder).toContain("tighten the target/action");
+		expect(fallbackHint).toContain("`code edit { operations: [{ targetId, actions }] }`");
+		expect(fallbackHint).not.toContain('code read, code diff, code edit { operation: "replace" }');
 	});
 
 	it("renders the system prompt with the structural code-edit recovery contract", async () => {
@@ -81,6 +86,7 @@ describe("code-edit contract prompts", () => {
 		const rendered = renderPromptTemplate(template, renderContext);
 
 		expect(rendered).toContain("structural edits on code-supported files with usable tree-sitter support");
+		expect(rendered).toContain("code edit { operations: [{ targetId, actions }] }");
 		expect(rendered).toContain("Line-target `code edit` operations resolve AST/node boundaries");
 		expect(rendered).toContain("Do not switch to text `edit` or `write` for that file");
 	});

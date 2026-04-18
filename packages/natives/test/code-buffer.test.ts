@@ -64,9 +64,7 @@ describe("executeCodeBuffer NAPI bridge", () => {
 		const file = path.join(tempDir, "new-module.ts");
 		const edit = executeCodeBuffer({
 			command: "edit",
-			file,
-			operation: "create",
-			content: "export const created = 1;\n",
+			operations: [{ targetId: file, actions: [{ kind: "write", content: "export const created = 1;\n" }] }],
 		});
 		expect(edit.error).toBe(false);
 		expect(edit.output).toEqual(expect.objectContaining({ created: true, editCount: 1 }));
@@ -177,7 +175,8 @@ describe("executeCodeBuffer NAPI bridge", () => {
 		});
 		expect(result).toEqual({
 			error: true,
-			output: `GenericFailure, operation 'create' only works for missing files. ${file} already exists; use 'replace' or 'replace-body' instead.`,
+			output:
+				"GenericFailure, Legacy code edit fields are not accepted for command 'edit': file, operation, content. Use only 'operations' with targetId/action nodes.",
 		});
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
@@ -189,9 +188,7 @@ describe("executeCodeBuffer NAPI bridge", () => {
 		await Bun.write(file, "export const original = 1;\n");
 		const edit = executeCodeBuffer({
 			command: "edit",
-			file,
-			operation: "replace",
-			content: "export const replaced = 2;\n",
+			operations: [{ targetId: file, actions: [{ kind: "write", content: "export const replaced = 2;\n" }] }],
 		});
 		expect(edit.error).toBe(false);
 		expect(edit.output).toEqual(expect.objectContaining({ editCount: 1, created: false }));
@@ -210,10 +207,12 @@ describe("executeCodeBuffer NAPI bridge", () => {
 
 		const edit = executeCodeBuffer({
 			command: "edit",
-			file,
-			symbol: "section-block",
-			operation: "replace",
-			content: "let section-block(num, title) = [patched]\n",
+			operations: [
+				{
+					targetId: `${file}::section-block`,
+					actions: [{ kind: "write", content: "let section-block(num, title) = [patched]\n" }],
+				},
+			],
 		});
 		expect(edit.error).toBe(false);
 		expect(edit.output).toEqual(expect.objectContaining({ editCount: 1, created: false }));
@@ -239,7 +238,7 @@ describe("executeCodeBuffer NAPI bridge", () => {
 		});
 		expect(result).toEqual({
 			error: true,
-			output: expect.stringContaining("No such file or directory"),
+			output: expect.stringContaining("Legacy code edit fields are not accepted"),
 		});
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
@@ -251,17 +250,14 @@ describe("executeCodeBuffer NAPI bridge", () => {
 
 		const result = executeCodeBuffer({
 			command: "edit",
-			file,
-			symbol: "div#save",
-			operation: "rename",
-			content: "saveButton",
+			operations: [{ targetId: `${file}::div#save`, actions: [{ kind: "rename", content: "saveButton" }] }],
 		});
 
 		expect(result).toEqual({
 			error: true,
 			output: expect.objectContaining({
 				message: expect.stringContaining("HTML/CSS rename is not yet supported safely"),
-				operation: "rename",
+				action: "edit",
 				proof: expect.objectContaining({ basis: "operation_scope", confidence: "low" }),
 			}),
 		});
@@ -275,17 +271,16 @@ describe("executeCodeBuffer NAPI bridge", () => {
 
 		const result = executeCodeBuffer({
 			command: "edit",
-			file,
-			symbol: "button#save",
-			operation: "rename-id-token",
-			content: "saveButton",
+			operations: [
+				{ targetId: `${file}::button#save`, actions: [{ kind: "renameIdToken", content: "saveButton" }] },
+			],
 		});
 
 		expect(result.error).toBe(false);
 		expect(result.output).toEqual(
 			expect.objectContaining({
 				created: false,
-				operation: "rename-id-token",
+				targets: [{ targetId: `${file}::button#save`, actions: ["renameIdToken"] }],
 				proof: expect.objectContaining({ basis: "file_local_exact_scan", confidence: "high" }),
 			}),
 		);
@@ -304,17 +299,14 @@ describe("executeCodeBuffer NAPI bridge", () => {
 
 		const result = executeCodeBuffer({
 			command: "edit",
-			file,
-			symbol: ".btn, .link",
-			operation: "rename-class-token",
-			content: "cta",
+			operations: [{ targetId: `${file}::.btn, .link`, actions: [{ kind: "renameClassToken", content: "cta" }] }],
 		});
 
 		expect(result).toEqual({
 			error: true,
 			output: expect.objectContaining({
 				message: expect.stringContaining("Selector-list rename refused"),
-				operation: "rename-class-token",
+				action: "edit",
 				proof: expect.objectContaining({ basis: "selector_list_ambiguity", confidence: "low" }),
 			}),
 		});
@@ -328,16 +320,15 @@ describe("executeCodeBuffer NAPI bridge", () => {
 
 		const result = executeCodeBuffer({
 			command: "edit",
-			file,
-			symbol: ":root.--accent",
-			operation: "rename-custom-property",
-			content: "brand",
+			operations: [
+				{ targetId: `${file}:::root.--accent`, actions: [{ kind: "renameCustomProperty", content: "brand" }] },
+			],
 		});
 
 		expect(result.error).toBe(false);
 		expect(result.output).toEqual(
 			expect.objectContaining({
-				operation: "rename-custom-property",
+				targets: [{ targetId: `${file}:::root.--accent`, actions: ["renameCustomProperty"] }],
 				proof: expect.objectContaining({ basis: "file_local_exact_scan", confidence: "high" }),
 			}),
 		);
@@ -359,14 +350,12 @@ describe("executeCodeBuffer NAPI bridge", () => {
 
 		const success = executeCodeBuffer({
 			command: "edit",
-			file: cssFile,
-			symbol: ".unused",
-			operation: "remove-dead-style",
+			operations: [{ targetId: `${cssFile}::.unused`, actions: [{ kind: "removeDeadStyle" }] }],
 		});
 		expect(success.error).toBe(false);
 		expect(success.output).toEqual(
 			expect.objectContaining({
-				operation: "remove-dead-style",
+				targets: [{ targetId: `${cssFile}::.unused`, actions: ["removeDeadStyle"] }],
 				proof: expect.objectContaining({ basis: "graph_dead_code" }),
 			}),
 		);
@@ -378,15 +367,13 @@ describe("executeCodeBuffer NAPI bridge", () => {
 
 		const refusal = executeCodeBuffer({
 			command: "edit",
-			file: cssFile,
-			symbol: ".used",
-			operation: "remove-dead-style",
+			operations: [{ targetId: `${cssFile}::.used`, actions: [{ kind: "removeDeadStyle" }] }],
 		});
 		expect(refusal).toEqual({
 			error: true,
 			output: expect.objectContaining({
 				message: expect.stringContaining("Dead-style removal refused"),
-				operation: "remove-dead-style",
+				action: "edit",
 				proof: expect.objectContaining({ basis: "graph_dead_code", confidence: "low" }),
 			}),
 		});
@@ -413,11 +400,14 @@ describe("executeCodeBuffer NAPI bridge", () => {
 
 		const result = executeCodeBuffer({
 			command: "edit",
-			file,
-			line: 1,
-			node_type: "import_statement",
-			operation: "insert-after",
-			content: 'import { b } from "./b";',
+			operations: [
+				{
+					targetId: file,
+					actions: [
+						{ kind: "insertAfter", line: 1, nodeType: "import_statement", content: 'import { b } from "./b";' },
+					],
+				},
+			],
 		});
 		expect(result).toEqual({
 			error: true,
@@ -435,9 +425,7 @@ describe("executeCodeBuffer NAPI bridge", () => {
 
 		const result = executeCodeBuffer({
 			command: "edit",
-			file,
-			operation: "replace",
-			content: "export const = ;\n",
+			operations: [{ targetId: file, actions: [{ kind: "write", content: "export const = ;\n" }] }],
 		});
 		expect(result).toEqual({
 			error: true,
@@ -455,17 +443,18 @@ describe("executeCodeBuffer NAPI bridge", () => {
 
 		const failed = executeCodeBuffer({
 			command: "edit",
-			file,
-			edits: [
+			operations: [
 				{
-					symbol: "main",
-					operation: "patch",
-					patches: [{ find: "return oldCall();", replace: "return newCall();" }],
-				},
-				{
-					symbol: "missing",
-					operation: "patch",
-					patches: [{ find: "return oldCall();", replace: "return shouldNotApply();" }],
+					targetId: `${file}::main`,
+					actions: [{ kind: "findAndReplace", find: "return oldCall();", content: "return newCall();" }],
+					children: [
+						{
+							targetId: `${file}::missing`,
+							actions: [
+								{ kind: "findAndReplace", find: "return oldCall();", content: "return shouldNotApply();" },
+							],
+						},
+					],
 				},
 			],
 		});
@@ -473,10 +462,12 @@ describe("executeCodeBuffer NAPI bridge", () => {
 
 		const followUp = executeCodeBuffer({
 			command: "edit",
-			file,
-			symbol: "main",
-			operation: "patch",
-			patches: [{ find: "return oldCall();", replace: "return finalCall();" }],
+			operations: [
+				{
+					targetId: `${file}::main`,
+					actions: [{ kind: "findAndReplace", find: "return oldCall();", content: "return finalCall();" }],
+				},
+			],
 		});
 		expect(followUp.error).toBe(false);
 		expect(executeCodeBuffer({ command: "save", file })).toEqual({

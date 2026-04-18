@@ -11,6 +11,12 @@ pub struct FileNode {
 	pub language: String,
 }
 
+impl FileNode {
+	pub fn target_id(&self) -> String {
+		self.path.to_string_lossy().to_string()
+	}
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SymbolKind {
 	Function,
@@ -38,6 +44,12 @@ pub struct SymbolNode {
 	pub line:           u32,
 	pub column:         u32,
 	pub detail:         Option<String>,
+}
+
+impl SymbolNode {
+	pub fn target_id(&self) -> &str {
+		&self.qualified_name
+	}
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

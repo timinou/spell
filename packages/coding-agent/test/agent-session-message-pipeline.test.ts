@@ -115,16 +115,23 @@ describe("AgentSession message pipeline", () => {
 
 	it("passes compact code tool context through the session pipeline without serializing details", async () => {
 		spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
-			output: { version: 2, diff: "@@ add @@\n-return a + b;\n+return a * b;", editCount: 1 },
+			output: {
+				version: 2,
+				diff: "@@ add @@\n-return a + b;\n+return a * b;",
+				editCount: 1,
+				targets: [{ targetId: "src/main.ts::add", actions: ["findAndReplace"] }],
+			},
 			error: false,
 		});
 		const codeTool = new CodeTool(createToolSession());
 		const toolResult = await codeTool.execute("call-1", {
 			command: "edit",
-			file: "/tmp/test/src/main.ts",
-			symbol: "add",
-			operation: "patch",
-			patches: [{ find: "return a + b;", replace: "return a * b;" }],
+			operations: [
+				{
+					targetId: "src/main.ts::add",
+					actions: [{ kind: "findAndReplace", find: "return a + b;", content: "return a * b;" }],
+				},
+			],
 		});
 
 		const session = new AgentSession({
@@ -150,8 +157,8 @@ describe("AgentSession message pipeline", () => {
 		expect(converted).toHaveLength(1);
 		expect(converted[0]?.role).toBe("toolResult");
 		const text = getText(converted[0]);
-		expect(text).toContain("Edited src/main.ts (1 operation, buffer version 2)");
-		expect(text).toContain("@@ add @@");
+		expect(text).toContain("Edited src/main.ts (1 target, 1 action, buffer version 2)");
+		expect(text).toContain("Target: src/main.ts::add [findAndReplace]");
 		expect(text).not.toContain('"editCount"');
 		expect(text).not.toContain('"version"');
 	});

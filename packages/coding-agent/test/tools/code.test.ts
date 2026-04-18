@@ -86,10 +86,7 @@ describe("coding-agent code tool wiring", () => {
 		const tool = new CodeTool(createSession());
 		const result = await tool.execute("tool", {
 			command: "edit",
-			file: "/tmp/test/index.html",
-			symbol: "div#save",
-			operation: "rename",
-			content: "saveButton",
+			operations: [{ targetId: "index.html::div#save", actions: [{ kind: "rename", content: "saveButton" }] }],
 		});
 
 		expect(getText(result)).toContain("HTML/CSS rename is not yet supported safely");
@@ -103,7 +100,15 @@ describe("coding-agent code tool wiring", () => {
 		);
 		expect(bufferSpy).toHaveBeenNthCalledWith(
 			2,
-			expect.objectContaining({ operation: "rename", symbol: "div#save" }),
+			expect.objectContaining({
+				root: "/tmp/test",
+				operations: expect.arrayContaining([
+					expect.objectContaining({
+						targetId: "index.html::div#save",
+						actions: expect.arrayContaining([expect.objectContaining({ kind: "rename", content: "saveButton" })]),
+					}),
+				]),
+			}),
 		);
 	});
 
@@ -116,7 +121,7 @@ describe("coding-agent code tool wiring", () => {
 					diff: '@@ button#save @@\n-<button id="save"></button>\n+<button id="saveButton"></button>',
 					editCount: 1,
 					created: false,
-					operation: "rename-id-token",
+					targets: [{ targetId: "index.html::button#save", actions: ["renameIdToken"] }],
 					proof: {
 						basis: "file_local_exact_scan",
 						confidence: "high",
@@ -131,28 +136,40 @@ describe("coding-agent code tool wiring", () => {
 		const tool = new CodeTool(createSession());
 		const result = await tool.execute("tool", {
 			command: "edit",
-			file: "/tmp/test/index.html",
-			symbol: "button#save",
-			operation: "rename-id-token",
-			content: "saveButton",
+			operations: [
+				{ targetId: "index.html::button#save", actions: [{ kind: "renameIdToken", content: "saveButton" }] },
+			],
 		});
 
-		expect(getText(result)).toContain("Operation: rename-id-token");
+		expect(getText(result)).toContain("Target: index.html::button#save [renameIdToken]");
 		expect(getText(result)).toContain("Proof: file_local_exact_scan");
 		expect(result.details).toEqual(
 			expect.objectContaining({
 				kind: "file",
 				command: "edit",
 				data: expect.objectContaining({
-					operation: "rename-id-token",
+					targets: expect.arrayContaining([
+						expect.objectContaining({ targetId: "index.html::button#save", actions: ["renameIdToken"] }),
+					]),
 					proof: expect.objectContaining({ basis: "file_local_exact_scan", confidence: "high", matches: 1 }),
 				}),
 			}),
 		);
 		expect(bufferSpy).toHaveBeenNthCalledWith(
 			2,
-			expect.objectContaining({ operation: "rename-id-token", symbol: "button#save" }),
+			expect.objectContaining({
+				root: "/tmp/test",
+				operations: expect.arrayContaining([
+					expect.objectContaining({
+						targetId: "index.html::button#save",
+						actions: expect.arrayContaining([
+							expect.objectContaining({ kind: "renameIdToken", content: "saveButton" }),
+						]),
+					}),
+				]),
+			}),
 		);
+		void bufferSpy;
 	});
 
 	it("enforces mode guard for edit operations", async () => {
@@ -168,9 +185,12 @@ describe("coding-agent code tool wiring", () => {
 			}),
 		);
 
-		await expect(tool.execute("tool", { command: "edit", file: "test.txt" })).rejects.toThrow(
-			'Read-only mode "readonly": file modifications are not allowed.',
-		);
+		await expect(
+			tool.execute("tool", {
+				command: "edit",
+				operations: [{ targetId: "test.txt", actions: [{ kind: "write", content: "x" }] }],
+			}),
+		).rejects.toThrow('Read-only mode "readonly": file modifications are not allowed.');
 	});
 
 	it("enforces mode guard for save operations", async () => {
@@ -250,7 +270,10 @@ describe("coding-agent code tool wiring", () => {
 			error: false,
 		});
 		const tool = new CodeTool(createSession());
-		await tool.execute("tool", { command: "edit", file: "/tmp/test/main.ts", operation: "replace-body" });
+		await tool.execute("tool", {
+			command: "edit",
+			operations: [{ targetId: "main.ts::main", actions: [{ kind: "write", scope: "body", content: "return 1;" }] }],
+		});
 		expect(bufferSpy).toHaveBeenCalled();
 	});
 

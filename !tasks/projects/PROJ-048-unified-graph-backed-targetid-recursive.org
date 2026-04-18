@@ -1,0 +1,248 @@
+#+TITLE: Unified graph-backed targetId recursive code edit schema cutover
+#+STATE: DONE
+#+SESSION_ID: 14bebe3e2a10411e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-17T23-25-38-856Z_14bebe3e2a10411e.jsonl]]
+#+CUSTOM_ID: PROJ-048-unified-graph-backed-targetid-recursive
+#+DEPENDS: 
+#+EFFORT: 28h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+A: root cause ≠ repo code. It’s a task-subagent tool-call bug.
+
+ Observed facts
+ - Task 0 aborted with:
+     - operation create does not accept resolution
+ - Task 1 aborted with:
+     - code-edit tool for Elixir mutations is not available in this session path
+ - Main session then successfully created:
+     - ../../packages/djinn/test/djinn/machine_draft_overlay_test.exs
+     - via code edit
+ ∴ Elixir mutation support exists here. Path is valid. The failure is in how the delegated agent called
+ the tool.
+
+ Exact incompatibility
+ - code edit has a special rule for operation: "create":
+     - only file
+     - operation
+     - content
+ - The subagent appears to be sending a normalized payload that still includes read-oriented/default
+ fields like:
+     - resolution
+     - possibly offset, limit, symbol, query, etc.
+ - Native validator rejects that shape for create:
+     - operation 'create' does not accept resolution
+
+ ∴ The problem is not “Elixir code edit unavailable”.
+ ∴ The real problem is “subagent emitted an invalid create payload”.
+
+ Why task 1 misdiagnosed it
+ - After repeated code edit rejections, the subagent generalized the symptom into:
+     - “code-edit tool for Elixir mutations is not available”
+ - That’s false at session level.
+ - We have direct proof the same file class/path works from the main agent.
+
+ What to tell the agent
+ Use this verbatim:
+
+ ```text
+   For `code edit` with `operation: "create"`, send a minimal payload only:
+   - file
+   - operation: "create"
+   - content
+
+   Do NOT send any of:
+   - resolution
+   - offset
+   - limit
+   - symbol
+   - query
+   - semantic
+   - depth
+   - patches
+   - edits
+   - line
+   - column
+   - action
+   - mode
+
+   Example:
+
+   {
+     "command": "edit",
+     "file": "../../packages/djinn/test/djinn/machine_draft_overlay_test.exs",
+     "operation": "create",
+     "content": ["defmodule ...", "..."]
+   }
+
+   This is a tool-payload issue, not a repo/path/language-support issue.
+   If editing an existing Elixir file, use `code edit` with `patch`/`replace-body`/`replace` on the target
+ symbol, or `ast_edit` where structural rewrite is cleaner.
+   Do not report “Elixir code edit unavailable” unless the minimal create payload above also fails.
+ ```
+
+ Short diagnosis
+ - Q: what is broken?
+ - A: delegated agent → malformed code edit create payload
+ - ✗ not Djinn
+ - ✗ not ../../packages/djinn
+ - ✗ not Elixir support
+ - ✓ tool-call shape for create
+
+ Clean fix
+ 1. In subagent behavior/prompt:
+     - special-case code edit create
+     - omit all non-create fields
+ 2. In harness/tool wrapper:
+     - when operation == "create", strip read/default fields before dispatch
+ 3. Optional better error handling:
+     - if validator says create does not accept resolution, retry automatically with minimal payload
+
+ Best instruction to give the agent
+ - “When creating source files with code edit, use the minimal create shape only. Do not include
+ resolution or any read/edit metadata. Existing-file edits are separate operations.”
+
+ NB
+ - This same failure pattern was already seen in another Spell transcript:
+     - operation 'create' does not accept resolution
+ ∴ likely harness/tool normalization bug, not one-off agent confusion.
+
+ If you want, next I can:
+ - continue implementation myself, or
+ - give you a tighter subagent prompt that avoids this exact failure mode.
+
+
+
+basically, the ACTUAL solution is to have ONE code edit version with no duplicaiton of intents on target symbols. It makes no sense to have 'patch', 'replace-body', 'replace', and 'create', they all mean the same thing in the symbol world
+
+* Scope
+In scope:
+- Replace the current top-level `code edit` mutation fanout (`create`, `patch`, `replace-body`, `replace`, plus duplicated `file`/`symbol`/`line` targeting) with one deduplicated recursive schema centered on stable graph/code-engine target IDs.
+- Make `code edit` accept one canonical top-level request shape: `operations: [...]`, where each node names one `targetId`, one ordered `actions: [...]` list, and optional nested `children: [...]` for sub-symbol work.
+- Treat file roots as first-class targets in the same ID namespace as semantic symbols so whole-file create/replace and symbol-level edits share one reference model.
+- Keep `content` as the canonical replacement payload and move current patch semantics into a dedicated action kind (for example `findAndReplace`) instead of a separate top-level operation family.
+- Preserve only truly distinct semantic transforms as action kinds (`rename`, `wrap`, `kill`, `move`, `clone`, token renames, etc.), not as duplicated target-selection APIs.
+- Cut over internal callers, prompts, result typing, diagnostics, task/subagent emission, native bridge types, and focused tests in the same change. Hard cutover only: no aliases, shims, or mixed-mode contracts.
+- If required to make plan execution truthful, remediate the org tooling gap around sub-outline wave/manifests as part of the implementation sequence rather than hand-waving around it.
+
+Out of scope:
+- Broad code-graph feature expansion unrelated to stable edit target IDs.
+- Adding new edit semantics not already represented by the current code tool family.
+- Preserving external backward compatibility for the removed `create` / `patch` / `replace-body` / `replace` shapes.
+- General AST rewrite redesign outside the `code` tool contract.
+
+Rationale:
+- The observed task-subagent bug is a schema smell, not an Elixir/path support problem: duplicated top-level operation shapes let callers emit invalid combinations like `operation: "create"` plus read defaults such as `resolution`.
+- The settled design direction is deduplication by default: one target reference type, one recursive operation tree, one content-writing surface, one cutover.
+- Stable graph-backed target IDs are required so nested operations can reference symbols uniformly across read/navigation/edit flows instead of oscillating between `file`, `symbol`, and `line` entry points.
+
+* Existing Patterns
+- Current code-tool contract and duplicated operation surface: `packages/coding-agent/src/prompts/tools/code.md` and `packages/coding-agent/src/tools/code.ts`, especially `validateCreatePayload(...)`, `normalizeEditEntries(...)`, and `CodeTool.execute(...)`.
+- Current result typing / user-visible edit summaries: `packages/coding-agent/src/tools/code-result.ts`, especially `normalizeCodeBufferSuccess(...)`, `formatCodeToolContent(...)`, and the `CodeEditData` shape.
+- Native bridge option typing: `packages/natives/src/code-buffer/types.ts::{CodeBufferOptions, EditEntry}` and `packages/natives/src/code-buffer/index.ts::executeCodeBuffer(...)`.
+- Native edit dispatch and create validation: `crates/pi-natives/src/code_buffer.rs`, especially `resolve_target(...)`, `validate_create_request(...)`, the edit-operation dispatcher, and `PreparedEditOperation`.
+- Current semantic target resolution: `crates/pi-code-engine/src/resolve.rs::{ResolvedSymbol, resolve_symbol}` and `crates/pi-code-engine/src/line_target.rs::resolve_edit_target(...)`.
+- Current graph symbol model that must grow stable edit IDs: `crates/pi-code-graph/src/model.rs::{SymbolNode, GraphNode}` plus any query/index plumbing needed to surface IDs through graph/code-tool reads.
+- Existing tests already covering tool wiring and payload validation patterns: `packages/coding-agent/test/tools/code.test.ts`, `packages/coding-agent/test/tools/code-result.test.ts`, `packages/coding-agent/test/task/task-payload-validation.test.ts`, and `packages/natives/test/code-buffer.test.ts`.
+
+* Tests
+Workflows to enumerate and defend first:
+1. Workflow 1 — every editable target, including file roots and semantic symbols, exposes one stable `targetId` representation that survives read/outline/navigate/edit handoff.
+2. Workflow 2 — missing-file create, whole-file replace, declaration replace, body replace, and scoped find/replace all use the same recursive `operations: [...]` envelope instead of separate top-level operation families.
+3. Workflow 3 — nested child operations against sub-symbols execute deterministically, preserve order, and fail truthfully when a child `targetId` is stale, ambiguous, or no longer owned by the parent target.
+4. Workflow 4 — task/subagent callers emit only the canonical schema; no leaked `resolution`, `offset`, `limit`, `symbol`, or legacy operation-specific fields survive into create/edit payloads.
+5. Workflow 5 — result formatting, diagnostics, and prompt docs speak in `targetId`/`actions` terms and never suggest removed legacy shapes.
+6. Workflow 6 — hard-cutover validation rejects legacy top-level `create` / `patch` / `replace-body` / `replace` payloads clearly enough that agents repair the call instead of misdiagnosing language support.
+7. Workflow 7 — if org-wave support is touched, plan-mode wave/manifests can truthfully reflect the intended sub-outline dependency graph instead of collapsing to the file node.
+
+Test files / scenarios:
+- Extend `packages/coding-agent/test/tools/code.test.ts` for canonical request acceptance, legacy-shape rejection, and tool-surface truthfulness.
+- Extend `packages/coding-agent/test/tools/code-result.test.ts` for targetId/action-oriented edit summaries and failure classification.
+- Add focused task/subagent regression coverage near `packages/coding-agent/test/task/` for canonical payload emission and the original malformed-create failure mode.
+- Extend `packages/natives/test/code-buffer.test.ts` for recursive operation dispatch, stable target resolution, create/replace unification, and legacy-shape rejection.
+- Add focused engine/graph tests under `crates/pi-code-engine` / `crates/pi-code-graph` for stable target IDs, file-root IDs, and nested symbol resolution.
+- If org-wave remediation is required, add focused coverage in `packages/org/test/tool-commands.test.ts` or adjacent org-tool tests.
+
+* Implementation
+** Define canonical targetId + action schema
+:PROPERTIES:
+:CUSTOM_ID: PROJ-048-unified-graph-backed-targetid-recursive::define-targetid-action-schema
+:END:
+- Files: `packages/coding-agent/src/prompts/tools/code.md`, `packages/natives/src/code-buffer/types.ts`, `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/tools/code-result.ts`.
+- Lock the canonical recursive request shape: `code edit { operations: [{ targetId, actions: [...], children?: [...] }] }`.
+- Define the allowed action kinds, required payload keys, ordering semantics, and legacy-shape rejection rules.
+- Satisfies Workflows 1, 2, 5, and 6.
+
+** Write contract-first tests and fixtures
+:PROPERTIES:
+:CUSTOM_ID: PROJ-048-unified-graph-backed-targetid-recursive::write-contract-first-tests
+:DEPENDS: PROJ-048-unified-graph-backed-targetid-recursive::define-targetid-action-schema
+:END:
+- Files: `packages/coding-agent/test/tools/code.test.ts`, `packages/coding-agent/test/tools/code-result.test.ts`, `packages/natives/test/code-buffer.test.ts`, focused task tests under `packages/coding-agent/test/task/`, and engine/graph tests chosen during implementation.
+- Add initially-failing coverage for Workflows 1 through 7 before changing dispatch behavior.
+- For integration-heavy engine/graph work, define the fixture matrix first, then land the failing expectations before the implementation code.
+- Satisfies Workflows 1 through 7.
+
+** Implement stable target IDs in code engine and graph
+:PROPERTIES:
+:CUSTOM_ID: PROJ-048-unified-graph-backed-targetid-recursive::implement-stable-target-ids
+:DEPENDS: PROJ-048-unified-graph-backed-targetid-recursive::write-contract-first-tests
+:END:
+- Files: `crates/pi-code-engine/src/resolve.rs`, `crates/pi-code-engine/src/line_target.rs`, `crates/pi-code-graph/src/model.rs`, and any query/index surfaces needed to expose target IDs through native/code-tool reads.
+- Introduce one stable ID form for file roots and semantic symbols; ensure nested members and file roots can both be addressed by `targetId`.
+- Keep ownership and ambiguity checks truthful so nested child operations cannot silently drift.
+- Satisfies Workflows 1, 3, and 7.
+
+** Implement recursive native edit dispatcher
+:PROPERTIES:
+:CUSTOM_ID: PROJ-048-unified-graph-backed-targetid-recursive::implement-recursive-native-edit-dispatcher
+:DEPENDS: PROJ-048-unified-graph-backed-targetid-recursive::implement-stable-target-ids
+:END:
+- Files: `crates/pi-natives/src/code_buffer.rs`, `packages/natives/src/code-buffer/types.ts`, and any helper code needed in `crates/pi-code-engine/src/edit/`.
+- Replace the legacy top-level operation dispatcher with recursive operation-tree execution keyed by `targetId`.
+- Collapse create/replace/body-replace/find-replace into the canonical `actions` model; keep only truly distinct transforms as action kinds.
+- Enforce deterministic ordering, parent/child ownership validation, and truthful legacy-shape rejection.
+- Satisfies Workflows 2, 3, 4, and 6.
+
+** Cut over coding-agent callers, prompts, and diagnostics
+:PROPERTIES:
+:CUSTOM_ID: PROJ-048-unified-graph-backed-targetid-recursive::cut-over-coding-agent-callers-and-prompts
+:DEPENDS: PROJ-048-unified-graph-backed-targetid-recursive::implement-recursive-native-edit-dispatcher
+:END:
+- Files: `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/tools/code-result.ts`, `packages/coding-agent/src/prompts/tools/code.md`, `packages/coding-agent/src/task/executor.ts`, and any task/prompt wiring that serializes code-tool calls.
+- Remove legacy examples and recovery hints that teach `create` / `patch` / `replace-body` / `replace`.
+- Update diagnostics so malformed requests are reported as canonical-schema violations, not language-support failures.
+- Satisfies Workflows 4, 5, and 6.
+
+** Verify wave tooling truth if still required
+:PROPERTIES:
+:CUSTOM_ID: PROJ-048-unified-graph-backed-targetid-recursive::verify-wave-tooling-truth
+:DEPENDS: PROJ-048-unified-graph-backed-targetid-recursive::cut-over-coding-agent-callers-and-prompts
+:END:
+- Files: `packages/org/src/tool.ts` and focused org tests only if the implementation still needs plan-wave remediation to represent sub-outline DAGs truthfully.
+- If untouched, prove the existing org workflow is sufficient for the new execution shape; if insufficient, fix the gap in the same change rather than leaving planning/tooling inconsistent.
+- Satisfies Workflow 7.
+
+* Edge Cases
+- File-root target IDs must remain stable for missing-file create without requiring a pre-existing symbol record.
+- Nested child operations must fail truthfully when a parent replacement invalidates child byte ranges or ownership assumptions.
+- Legacy payloads may appear partially normalized by wrappers; rejection logic must detect mixed old/new fields and explain the canonical repair path.
+- `findAndReplace` / patch-like actions must stay scoped to the resolved target and reject ambiguous matches rather than broadening silently.
+- Result renderers and failure classifiers must not leak stale references to removed operations such as `create` or `replace-body`.
+- Stable target IDs must survive language-specific declaration forms (nested methods, exported wrappers, markdown sections, HTML/CSS tokens where supported) without collapsing unrelated symbols together.
+- If org-wave support is touched, the change must not corrupt existing category-wide wave behavior while adding truthful item/sub-outline planning support.
+
+* Acceptance Criteria
+- One canonical recursive `code edit` schema exists and is used across prompts, tool validation, native bridge types, and internal callers.
+- File roots and semantic symbols share one stable `targetId` namespace that supports whole-file and nested symbol edits.
+- The old top-level `create` / `patch` / `replace-body` / `replace` shapes are removed from the public contract and rejected truthfully when used.
+- Task/subagent emission no longer produces malformed create payloads or duplicated target fields.
+- Focused verification passes for the touched layers, at minimum the exact package/crate tests selected above plus `bun check:ts` and `bun check:rs` if the implementation crosses both TypeScript and Rust.
+- If org-wave remediation is needed, execution manifests can truthfully reflect the intended dependency DAG instead of collapsing to a misleading file-level stub.
+
+* Parent Plan
+- [[id:PLAN-244-unified-target-id-recursive-code-edit-pl]] UNIFIED_TARGET_ID_RECURSIVE_CODE_EDIT_PLAN
+
+NOTE [2026-04-18]: Completed under PLAN-244 with unified targetId/action cutover, focused verification, and runtime targetId proof captured in PLAN completion report.

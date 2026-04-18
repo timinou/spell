@@ -316,12 +316,12 @@ describe("code tool result contract", () => {
 				version: 3,
 				diff: "@@ add @@\n+return next(value);",
 				editCount: 1,
-				operation: "replace-node",
+				targets: [{ targetId: "src/main.ts::main", actions: ["replaceNode"] }],
 				proof: { basis: "hashline", reason: "target narrowed", confidence: "high", matches: 1 },
 			},
 		});
 		if (details.command !== "edit") throw new Error("Expected edit details");
-		expect(details.data.operation).toBe("replace-node");
+		expect(details.data.targets).toEqual([{ targetId: "src/main.ts::main", actions: ["replaceNode"], children: [] }]);
 		expect(details.data.proof).toEqual({
 			basis: "hashline",
 			reason: "target narrowed",
@@ -340,7 +340,7 @@ describe("code tool result contract", () => {
 				version: 3,
 				diff: "@@ add @@\n+return next(value);",
 				editCount: 1,
-				operation: "replace-node",
+				targets: [{ targetId: "src/main.ts::main", actions: ["replaceNode"] }],
 				proof: { basis: "line-target", reason: "would cross block boundary", confidence: "medium", matches: 2 },
 			},
 			message: "would cross block boundary",

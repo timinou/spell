@@ -204,16 +204,23 @@ describe("SubagentViewerEventHandler", () => {
 
 	test("renders compact code tool results in rebuilt viewer flow", async () => {
 		spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
-			output: { version: 2, diff: "@@ add @@\n-return a + b;\n+return a * b;", editCount: 1 },
+			output: {
+				version: 2,
+				diff: "@@ add @@\n-return a + b;\n+return a * b;",
+				editCount: 1,
+				targets: [{ targetId: "src/main.ts::add", actions: ["findAndReplace"] }],
+			},
 			error: false,
 		});
 		const codeTool = new CodeTool(createToolSession());
 		const result = await codeTool.execute("call-1", {
 			command: "edit",
-			file: "/test/src/main.ts",
-			symbol: "add",
-			operation: "patch",
-			patches: [{ find: "return a + b;", replace: "return a * b;" }],
+			operations: [
+				{
+					targetId: "src/main.ts::add",
+					actions: [{ kind: "findAndReplace", find: "return a + b;", content: "return a * b;" }],
+				},
+			],
 		});
 
 		handler.handleEvent(
@@ -224,8 +231,8 @@ describe("SubagentViewerEventHandler", () => {
 		);
 
 		const rendered = chatContainer.render(100).join("\n");
-		expect(rendered).toContain("Edited src/main.ts (1 operation, buffer version 2)");
-		expect(rendered).toContain("@@ add @@");
+		expect(rendered).toContain("Edited src/main.ts (1 target, 1 action, buffer version 2)");
+		expect(rendered).toContain("Target: src/main.ts::add [findAndReplace]");
 		expect(rendered).not.toContain('"editCount"');
 		expect(rendered).not.toContain('"version"');
 	});

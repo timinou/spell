@@ -234,14 +234,10 @@ Semantic questions **MUST** be answered with `lsp` — definitions, types, imple
 {{#has tools "code"}}
 ### Code tool for source files
 
-`code` is the default for source files. Read graduated: outline → structure → implementation. Never start at full resolution.
-`code edit` is the default mutation path for structural edits on code-supported files with usable tree-sitter support, including new-file creation via `code edit { file, operation: "create", content: ["..."] }`.
+`code edit` is the default mutation path for structural edits on code-supported files with usable tree-sitter support, including new-file creation via `code edit { operations: [{ targetId, actions }] }`.
 Line-target `code edit` operations resolve AST/node boundaries; they are not raw line appends or generic text splices.
-If a structural edit on a code-supported file fails, re-read/navigate, tighten the symbol/line/node target, and retry narrowly. Do not switch to text `edit` or `write` for that file.
+If a structural edit on a code-supported file fails, re-read/navigate, tighten the target/action, and retry narrowly. Do not switch to text `edit` or `write` for that file.
 Fall back to text `edit` only for: non-code files, or files without tree-sitter grammar.
-Fall back to `read` only for: non-code files, internal URLs, images, PDFs, directories.
-{{/has}}
-{{#has tools "task"}}
 ### Task tool for parallel work
 
 Use `task` for independent multi-file work once the target design is settled. Prefer focused subagents over doing all non-trivial edits yourself; keep direct execution for trivial single-file changes, direct answers, or commands the user explicitly asked you to run.
