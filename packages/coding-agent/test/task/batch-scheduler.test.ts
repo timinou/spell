@@ -91,10 +91,10 @@ describe("batch scheduler", () => {
 
 		await scheduleBatch(
 			[
-				{ id: "A", run: async () => track("A", 5) },
-				{ id: "B", blockers: ["A"], run: async () => track("B", 20) },
-				{ id: "C", blockers: ["A"], run: async () => track("C", 20) },
-				{ id: "D", blockers: ["B", "C"], run: async () => track("D", 1) },
+				{ id: "A", filesDeps: ["a.ts"], run: async () => track("A", 5) },
+				{ id: "B", blockers: ["A"], filesDeps: ["b.ts"], run: async () => track("B", 20) },
+				{ id: "C", blockers: ["A"], filesDeps: ["c.ts"], run: async () => track("C", 20) },
+				{ id: "D", blockers: ["B", "C"], filesDeps: ["d.ts"], run: async () => track("D", 1) },
 			],
 			{ maxConcurrency: 2 },
 		);
@@ -193,6 +193,7 @@ describe("batch scheduler", () => {
 				(gate, index) =>
 					({
 						id: `T${index + 1}`,
+						filesDeps: [`t${index + 1}.ts`],
 						run: async () => {
 							active++;
 							maxActive = Math.max(maxActive, active);
@@ -270,5 +271,30 @@ describe("batch scheduler", () => {
 
 		expect(graph.order[0]).toBe("A");
 		expect(graph.order.at(-1)).toBe("D");
+	});
+
+	test("serializes batch tasks that declare overlapping filesDeps (file-level lock, independent of isolation)", async () => {
+		let active = 0;
+		let maxActive = 0;
+		const gates = [deferred(), deferred()];
+		const results = scheduleBatch(
+			gates.map((gate, index) => ({
+				id: `T${index + 1}`,
+				filesDeps: ["shared.ts"],
+				run: async () => {
+					active++;
+					maxActive = Math.max(maxActive, active);
+					await gate.promise;
+					active--;
+					return index;
+				},
+			})),
+			{ maxConcurrency: 4 },
+		);
+		// Let the scheduler try to admit both.
+		await Bun.sleep(20);
+		expect(maxActive).toBe(1);
+		for (const gate of gates) gate.resolve();
+		await results;
 	});
 });
