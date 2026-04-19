@@ -1,0 +1,185 @@
+#+TITLE: Streaming bubble-up: pass eventBus to nested runSubprocess for grandchild progress
+#+STATE: ITEM
+#+SESSION_ID: 14c0a83e5a690b0f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-06-29-609Z_14c0a83e5a690b0f.jsonl]]
+#+CUSTOM_ID: FEAT-599-streaming-bubble-up-pass-eventbus-to-nes
+#+DEPENDS: FEAT-595-envelope-v2-types-foundation-subagentout
+#+LAYER: backend, frontend
+
+* Initial Message
+
+Ran actual runtime probes, not just tests.
+
+ Result:
+ - fake task sets → ✓ work to completion
+ - tasks that spawn subtasks → ✓ work, within spawn policy
+ - nested task → oracle → ✗ blocked by allowed-spawns policy, exact runtime error below
+
+ 1. fake task batch
+ - launched task(agent=oracle) with 2 read-only tasks
+ - batch completed 2/2 succeeded
+ - child results:
+     - inspectAgents → found bundled task, quick_task, oracle
+     - inspectSnapshots → confirmed warning string:
+           - No active plan snapshots for this session.
+ - runtime note:
+     - Task isolation was requested but task.isolation.mode="none"; running non-isolated. Set task.isolation.mode to worktree, fuse-overlay, or
+ fuse-projfs to enable.
+
+ 2. nested subtask batch, first try
+ - launched task(agent=task) with one parent task instructed to spawn subtasks via task(agent=oracle)
+ - parent task ran, but nested dispatch was rejected by policy
+ - exact runtime error:
+     - Nested task dispatch failed: agent=oracle is not allowed. Runtime error text: Cannot spawn 'oracle'. Allowed: explore,quick_task
+
+ ∴ this is not a crash; it's enforced spawn restriction.
+
+ 3. nested subtask batch, allowed path
+ - retried with task(agent=task) parent spawning task(agent=quick_task) children
+ - supplied required filesDeps
+ - batch completed end-to-end successfully
+
+ Exact nested success summary:
+
+ ```json
+   {
+     "success": true,
+     "nestedDispatch": "succeeded end-to-end",
+     "children": [
+       {
+         "id": "ChildA",
+         "agent": "quick_task",
+         "status": "completed",
+         "filesDeps": ["packages/coding-agent/src/task/agents.ts"],
+         "result": {
+           "confirmed": true,
+           "statement": "quick_task is bundled."
+         }
+       },
+       {
+         "id": "ChildB",
+         "agent": "quick_task",
+         "status": "completed",
+         "filesDeps": ["packages/coding-agent/src/task/index.ts"],
+         "result": {
+           "confirmed": true,
+           "evidence": "TaskTool.#validateTaskBatch rejects tasks lacking both assignment and todoRef."
+         }
+       }
+     ],
+     "runtimeNotes": []
+   }
+ ```
+
+ Repo evidence for expected behavior:
+ - child todo groups preserved: packages/coding-agent/src/tools/todo-write.ts:464
+ - nested delegated child rendering exists: packages/coding-agent/src/modes/interactive-mode.ts:886
+ - nested-depth isolation behavior covered: packages/coding-agent/test/task/nested-isolation-default.test.ts:79
+
+ Bottom line:
+ - normal fake task sets → ✓
+ - nested subtasks via task → ✓
+ - nested subtasks can spawn only allowed agents from parent agent policy
+ - for bundled task agent, current allowed nested spawns are:
+     - explore
+     - quick_task
+
+
+
+
+WHERE is the restriction on task type for subagent?
+
+* Scope
+In-scope:
+- Pass ~options.eventBus~ into nested ~runSubprocess~ calls at:
+  - ~packages/coding-agent/src/task/index.ts:1504-1505~ (non-isolated path).
+  - ~packages/coding-agent/src/task/index.ts:1558-1559~ (isolated/worktree path).
+- Confirm ~SubagentTracker~, ~SubagentViewerComponent~, ~CanvasTaskManager~ subscribers tolerate grandchild events without crashing.
+- Optional: surface depth indicator in ~SubagentTracker~ status line (e.g., ~task (d=2) running~).
+
+Out of scope:
+- New throttling logic (trust 100ms debounce per spec ADR \u00a73.6).
+- Pipeline 1 (LLM conversation) changes \u2014 root LLM still sees only direct-children progress.
+- Depth-budget streaming (deferred to follow-up if flood observed).
+
+* Existing Patterns
+- EventBus channel: ~TASK_SUBAGENT_PROGRESS_CHANNEL~ in ~packages/coding-agent/src/task/types.ts:33~.
+- Producer: ~packages/coding-agent/src/task/executor.ts:927-976~ (~emitProgressNow~). When ~options.eventBus~ provided, enqueues to channel.
+- Subscribers:
+  - ~packages/coding-agent/src/task/subagent-tracker.ts:61-63~ (~SubagentTracker~).
+  - ~packages/coding-agent/src/modes/components/subagent-viewer/viewer-component.ts:84-86~.
+  - ~packages/coding-agent/src/orchestrators/canvas-task-manager.ts:119-121~.
+- Throttle: ~SubagentTracker~ debounces at 100ms (~CHANGE_DEBOUNCE_MS~ ~subagent-tracker.ts:37~).
+
+* Tests
+Workflow coverage:
+- Grandchild progress event reaches subscriber when ~eventBus~ is wired through.
+- Multiple grandchildren: each event arrives with correct ~index~, ~agent~, ~progress.depth~ (or equivalent identifier).
+- 100ms debounce coalesces high-frequency events.
+- Cancellation: when root aborts, propagation stops and final ~aborted~ outcome emits.
+
+Test files:
+- New: ~packages/coding-agent/test/task/nested-progress.test.ts~
+
+* Implementation
+
+** Pass eventBus to nested calls
+:PROPERTIES:
+:CUSTOM_ID: FEAT-599-streaming-bubble-up-pass-eventbus-to-nes::wire-eventbus
+:DEPENDS: FEAT-595-envelope-v2-types-foundation-subagentout::rewrite-singleresult
+:END:
+- File: ~packages/coding-agent/src/task/index.ts~
+- Lines 1504-1505: change ~eventBus: undefined~ to ~eventBus: this.session.eventBus~ (or whichever member is the live bus reference; verify).
+- Lines 1558-1559: same change for the isolated-path call.
+- If ~this.session~ doesn't expose an EventBus, thread it through ~ToolSession~ at construction and reference here.
+
+** Surface depth in event payload
+:PROPERTIES:
+:CUSTOM_ID: FEAT-599-streaming-bubble-up-pass-eventbus-to-nes::depth-payload
+:DEPENDS: FEAT-599-streaming-bubble-up-pass-eventbus-to-nes::wire-eventbus
+:END:
+- File: ~packages/coding-agent/src/task/executor.ts~ (~emitProgressNow~ ~931-948~).
+- Add ~depth: childDepth~ to enqueued payload alongside ~index, agent, agentSource, task, assignment, progress~.
+- Update consumer types (~SubagentProgressPayload~ in ~subagent-tracker.ts:4-15~ and ~viewer-component.ts:30-46~) to accept optional ~depth~.
+
+** Subscribers handle grandchild events
+:PROPERTIES:
+:CUSTOM_ID: FEAT-599-streaming-bubble-up-pass-eventbus-to-nes::subscribers
+:DEPENDS: FEAT-599-streaming-bubble-up-pass-eventbus-to-nes::depth-payload
+:END:
+- File: ~packages/coding-agent/src/task/subagent-tracker.ts~
+- Use ~depth~ field: include in ~getInfo()~ output line so status bar displays ~"task (d=2)"~.
+- File: ~packages/coding-agent/src/modes/components/subagent-viewer/viewer-component.ts~
+- Render depth indicator next to agent name in viewer.
+- File: ~packages/coding-agent/src/orchestrators/canvas-task-manager.ts~
+- Forward depth in panel state for canvas mode.
+
+** Add nested-progress test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-599-streaming-bubble-up-pass-eventbus-to-nes::nested-progress-test
+:DEPENDS: FEAT-599-streaming-bubble-up-pass-eventbus-to-nes::subscribers
+:END:
+- File: ~packages/coding-agent/test/task/nested-progress.test.ts~
+- Mock subprocess that emits 3 progress events at depth=2.
+- Subscribe to ~TASK_SUBAGENT_PROGRESS_CHANNEL~; assert receipt.
+- Assert ~depth~ field present.
+- Cancellation case: abort signal halts events.
+
+* Edge Cases
+- TUI flood at fan-out: 3-deep \u00d7 3 leaves \u2192 ~20-30 events/sec. 100ms debounce should suffice; if observed flood, follow-up adds depth-aware throttle.
+- Subscriber ordering: tracker, viewer, canvas all receive same event; ordering not guaranteed; each subscriber independent.
+- Isolated mode: same path; eventBus piped identically.
+- Cancellation: AbortSignal already propagates via ~SwarmScheduler.pump~; no change needed.
+- Existing tests that subscribe to ~TASK_SUBAGENT_PROGRESS_CHANNEL~ may now receive grandchild events; widen their assertions.
+
+* Acceptance Criteria
+- ~bun check:ts~ green.
+- ~bun test packages/coding-agent/test/task/nested-progress.test.ts~ passes.
+- Manual: run a 3-deep delegation; observe SubagentTracker status line transitioning through ~(d=1)~, ~(d=2)~, ~(d=3)~ as work moves down.
+- Subagent viewer (Ctrl+Tab) shows depth indicator on each agent.
+- No regressions in existing ~packages/coding-agent/test/task/~ suite.
+
+* Verification
+- Run nested probe (depth-3 delegation chain) post-FEAT-E; observe depth transitions in TUI.
+- ~rg "eventBus: undefined" packages/coding-agent/src/task~ returns zero matches.
+- ~bun test~ green.

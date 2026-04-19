@@ -1,0 +1,126 @@
+#+TITLE: Fill coord test gaps: two-session integration, subagent attribution, peer-activity footer, broker lifecycle
+#+STATE: ITEM
+#+SESSION_ID: 14c0b265a752cb07
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-50-51-293Z_14c0b265a752cb07.jsonl]]
+#+CUSTOM_ID: FEAT-593-fill-coord-test-gaps-two-session-integra
+#+DEPENDS: BUG-303-applymanagedbuffercontent-bypasses-callc
+#+EFFORT: 4h
+#+LAYER: pi-code-engine coding-agent
+#+PRIORITY: #A
+
+* Scope
+
+In scope:
+- Add four focused test scenarios to close coverage gaps against PLAN-254 and PLAN-259 manual acceptance criteria that the unit suite does not currently encode.
+- Scenarios:
+  1. Two real =BufferRegistry= instances sharing one real =pi-edit-broker= instance; concurrent =edit_transaction= calls on disjoint =CodePath= targets in the same file both succeed, journal records both entries in order, each with the originating =sessionId=.
+  2. Subagent sessionId attribution: parent session and subagent session each call =callCodeBuffer= with distinct =sessionId=; the journal entries recorded for the subagent edit carry the subagent =sessionId=, never the parent's.
+  3. Peer-activity footer rendering: =appendPeerActivityFooter= in =packages/coding-agent/src/tools/code-result.ts= produces a stable truncated footer for a =CodeEditData= payload carrying up to 5 peer-activity entries across up to 3 files.
+  4. Broker stale-socket recovery: =spawn_broker_if_absent= detects a stale socket file (no peer at the other end, e.g. =connect()= refused) and =unlink()=s + rebinds instead of failing.
+
+Out of scope:
+- Modifying production code for the covered scenarios except where a test uncovers a real bug (record as a NOTE; do not widen scope without returning to planning).
+- End-to-end spawning two real =spell= CLI processes (tested at the engine/tool boundary, not the full CLI shell).
+- Test-harness for BUG-267 patch-mode lifecycle; that is separate work.
+
+* Existing Patterns
+
+- Engine-level integration tests: =crates/pi-code-engine/tests/coord_transaction.rs= uses =tokio::test(flavor = "multi_thread")= with a single =BufferRegistry= + broker pair. Extend this style for two-registry tests.
+- Broker lifecycle tests: =crates/pi-edit-broker/tests/spawn.rs= already exercises idempotent auto-spawn. Add stale-socket case alongside.
+- Coding-agent tool tests: =packages/coding-agent/test/tools/= conventions; see =edit-coordinator.test.ts= and =coord-segment.test.ts= for spy-on patterns of =executeCodeBuffer=.
+- Code-result rendering tests: =packages/coding-agent/test/tools/code-result.test.ts= renders =CodeEditData= via =buildCodeToolOutput=. Reuse that entry point for footer-rendering coverage.
+- Subagent sessionId origin: =packages/coding-agent/src/session/= (search for =sessionManager.getSessionId=). Subagent gets a distinct id via =task= tool dispatch path.
+
+* Tests
+
+File map with one test per scenario. Each test **MUST** encode the falsifiable contract, not merely call the code.
+
+** test/coord/two-session-disjoint.rs (new; engine-level)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-593-fill-coord-test-gaps-two-session-integra::test-two-session
+:END:
+- File: =crates/pi-code-engine/tests/coord_two_session.rs=
+- Scenario: spawn one broker; build two =BufferRegistry= instances with distinct =sessionId= (=sess-a=, =sess-b=); both call =edit_transaction= on the same file, disjoint CodePath targets; assert both return =TransactionOutcome::Success=; read the journal file and assert two entries with correct =sessionId= and strictly monotonic =revision=.
+
+** test/session/edit-coordinator-subagent.test.ts (extension)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-593-fill-coord-test-gaps-two-session-integra::test-subagent-attribution
+:END:
+- File: =packages/coding-agent/test/session/edit-coordinator.test.ts= (extend existing file)
+- Scenario: stub two =SessionIdSource= objects returning =parent-session= and =subagent-session= respectively; call =callCodeBuffer= with each; assert =executeCodeBuffer= received the matching =sessionId= for each call; verify fallback path remains =tui-${pid}= for a source returning =undefined=.
+
+** test/tools/code-result-peer-footer.test.ts (new)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-593-fill-coord-test-gaps-two-session-integra::test-peer-footer
+:END:
+- File: =packages/coding-agent/test/tools/code-result-peer-footer.test.ts=
+- Scenario: build a =CodeEditData= with =peerActivity=: 3 files, each with 2 recent peer edits (6 entries total); call =buildCodeToolOutput= and assert the rendered content ends with a footer block that lists all 3 files, limits to 5 entries total as documented, and includes each entry's =sessionId= + CodePath + relative time. Snapshot the exact footer format; another test asserts empty =peerActivity= produces no footer.
+
+** crates/pi-edit-broker/tests/spawn.rs (extension)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-593-fill-coord-test-gaps-two-session-integra::test-stale-socket
+:END:
+- File: =crates/pi-edit-broker/tests/spawn.rs= (extend existing file)
+- Scenario: write a stale file at the socket path (no listener); call =spawn_broker_if_absent=; assert it succeeds (unlinks + rebinds); assert the new broker responds to a hello ping.
+
+* Implementation
+
+** Add two-session integration test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-593-fill-coord-test-gaps-two-session-integra::impl-two-session
+:DEPENDS: FEAT-593-fill-coord-test-gaps-two-session-integra::test-two-session
+:END:
+- File: =crates/pi-code-engine/tests/coord_two_session.rs= (new)
+- Use =pi_edit_broker::testing= helpers if present, else =std::process::Command= on =target/debug/pi-edit-broker= + a unique socket path per test via =tempfile::tempdir=.
+- Both registries must point at the same broker socket + same journal dir.
+- Read journal via =std::fs::read_to_string= and parse newline-JSON; assert ordering and sessionId per line.
+
+** Add subagent attribution test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-593-fill-coord-test-gaps-two-session-integra::impl-subagent
+:DEPENDS: FEAT-593-fill-coord-test-gaps-two-session-integra::test-subagent-attribution
+:END:
+- Extend =packages/coding-agent/test/session/edit-coordinator.test.ts=.
+- Cover three branches: explicit parent sessionId, explicit subagent sessionId, =undefined= with =tui-${pid}= fallback.
+
+** Add peer-footer render test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-593-fill-coord-test-gaps-two-session-integra::impl-peer-footer
+:DEPENDS: FEAT-593-fill-coord-test-gaps-two-session-integra::test-peer-footer
+:END:
+- Use =buildCodeToolOutput= as the public entry.
+- If the current footer format is not frozen, freeze it by snapshot + inline comment explaining the stability contract.
+
+** Add stale-socket broker test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-593-fill-coord-test-gaps-two-session-integra::impl-stale-socket
+:DEPENDS: FEAT-593-fill-coord-test-gaps-two-session-integra::test-stale-socket
+:END:
+- Extend =crates/pi-edit-broker/tests/spawn.rs=.
+- Use =std::os::unix::net::UnixListener::bind= then drop, then touch a plain file at the same path, then call =spawn_broker_if_absent=.
+- If =spawn_broker_if_absent= does not currently handle this (investigation required), land the fix in =pi-edit-broker/src/spawn.rs= in the same change, referenced as a NOTE on this item. This is the one narrow widening allowed by scope.
+
+** Verify green
+:PROPERTIES:
+:CUSTOM_ID: FEAT-593-fill-coord-test-gaps-two-session-integra::verify-green
+:DEPENDS: FEAT-593-fill-coord-test-gaps-two-session-integra::impl-two-session FEAT-593-fill-coord-test-gaps-two-session-integra::impl-subagent FEAT-593-fill-coord-test-gaps-two-session-integra::impl-peer-footer FEAT-593-fill-coord-test-gaps-two-session-integra::impl-stale-socket
+:END:
+- Commands:
+  - =cargo test -p pi-code-engine --test coord_two_session=
+  - =cargo test -p pi-edit-broker --test spawn=
+  - =bun test packages/coding-agent/test/session/edit-coordinator.test.ts packages/coding-agent/test/tools/code-result-peer-footer.test.ts=
+  - =cargo clippy --workspace --all-targets --all-features -- -D warnings=
+- Expect: all four new/extended tests green; no regression elsewhere.
+
+* Edge Cases
+- Broker socket path collisions across parallel cargo tests: use =tempfile::tempdir()= for isolation.
+- Journal file race: assert ordering by =revision=, not by reading file timestamps.
+- Subagent fallback: if neither parent nor subagent passes a sessionId, =tui-${pid}= fallback still applies; the test must not assert parent-vs-subagent distinction in that degenerate case.
+- Peer-footer stability: TRUNCATE_LENGTHS constants may change; the test must reference the constant, not a hardcoded width, to prevent spurious failures when the constant is tuned.
+- Stale-socket detection must not race a legitimate broker starting at the same moment; the test asserts the binary decision post-fact, not timing.
+
+* Acceptance Criteria
+- Four new tests (or test extensions) exist in the listed files.
+- Each test fails in the absence of the production behavior it encodes (falsifiability verified by temporarily mutating the code under test).
+- =cargo test --workspace= and =bun test packages/coding-agent/= pass.
+- If the stale-socket test reveals a real bug in =spawn_broker_if_absent=, the fix lands in the same change and the FEAT body is updated with a NOTE describing the fix.

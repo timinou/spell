@@ -1,0 +1,48 @@
+#+TITLE: Remove filesDeps branch from SwarmScheduler.canRun
+#+STATE: ITEM
+#+SESSION_ID: 14c0a54ed68d3bdc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-53-40-058Z_14c0a54ed68d3bdc.jsonl]]
+#+CUSTOM_ID: FEAT-591-remove-filesdeps-branch-from-swarmschedu
+#+LAYER: coding-agent
+
+* Initial Message
+
+I want you to think a bit deeper than the fileDeps vs. lock. I don't want a global lock for all tasks, the pi-code-engine file locks should be enough in theory. Blocking subtask execution has often been my bane... Ask me a lot of questions and challenge me a lot
+
+* Target
+- packages/coding-agent/src/task/swarm-scheduler.ts
+  - SwarmScheduler.pump.canRun
+  - SwarmNodeLike: keep filesDeps field (still consumed upstream by buildBatchGraph), but remove runtime overlap logic
+- packages/coding-agent/src/task/batch-scheduler.ts
+  - scheduleBatch: stop passing filesDeps into SwarmNodeLike when it is no longer used at runtime (audit whether the field is still needed there; keep only if consumed elsewhere)
+
+* Change
+- Clean cutover. Depends on FEAT-590.
+- In SwarmScheduler.pump.canRun:
+  - Delete the entire filesDeps overlap loop.
+  - canRun becomes: return running.size < maxConcurrency AND standard DAG-ready predicate already handled by getReadyNodeIds.
+  - The `running` set and the `candidate`/`active` fetches go away.
+  - Update the comment block that claimed "File-level mutual exclusion always runs..." to say overlap is pre-materialized into blockers at graph build time.
+- Audit call sites that rely on SwarmScheduler seeing filesDeps at runtime. Per repo inspection: only BatchTask flows and todo-write dispatch; todo-write dispatch already serializes via blockers, not filesDeps runtime check.
+
+* Edge Cases
+- Tests that assert runtime canRun serialization on filesDeps must be moved to buildBatchGraph tests OR deleted if superseded.
+- No shims, no feature flag. If a caller constructed SwarmScheduler directly with overlapping filesDeps without going through buildBatchGraph, they WILL get concurrent admission. This is the intended contract change.
+
+* Acceptance
+- rg "hasFileOverlap" packages/coding-agent/src returns only call sites under buildBatchGraph / MutableDag (no hits in swarm-scheduler.ts).
+- rg "filesDeps" packages/coding-agent/src/task/swarm-scheduler.ts returns at most the field declaration (no runtime branch).
+- New/updated tests in packages/coding-agent/test/task/swarm-scheduler.test.ts:
+  - canRun no longer checks filesDeps: two direct-to-scheduler nodes with overlapping filesDeps both start when maxConcurrency permits (explicit regression of old behavior, to anchor the cutover).
+- Removed: packages/coding-agent/test/task/filesdeps-lock-repro.test.ts entirely, or rewritten to point at buildBatchGraph.
+- bun test packages/coding-agent/test/task/ passes.
+
+* Implementation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-591-remove-filesdeps-branch-from-swarmschedu::implementation
+:END:
+1. Delete the canRun closure's filesDeps overlap loop in swarm-scheduler.ts; canRun reduces to the maxConcurrency + ready-node predicate.
+2. Drop the `running`/`candidate`/`active` bookkeeping that only supported the overlap check; update the comment block to state overlap is materialized into blockers at graph-build time.
+3. Keep SwarmNodeLike.filesDeps field declaration because upstream buildBatchGraph still threads it for hashing / logs, but audit that no production code still reads it at runtime.
+4. Delete packages/coding-agent/test/task/filesdeps-lock-repro.test.ts; its scenarios migrate to wave 5.
+5. Add a minimal swarm-scheduler.test.ts case asserting that two direct-to-scheduler nodes with overlapping filesDeps are both admitted concurrently (regression anchor for the cutover).

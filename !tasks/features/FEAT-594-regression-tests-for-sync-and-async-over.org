@@ -1,0 +1,47 @@
+#+TITLE: Regression tests for sync and async overlap serialization
+#+STATE: ITEM
+#+SESSION_ID: 14c0a54ed68d3bdc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-53-40-058Z_14c0a54ed68d3bdc.jsonl]]
+#+CUSTOM_ID: FEAT-594-regression-tests-for-sync-and-async-over
+#+LAYER: coding-agent
+
+* Initial Message
+
+I want you to think a bit deeper than the fileDeps vs. lock. I don't want a global lock for all tasks, the pi-code-engine file locks should be enough in theory. Blocking subtask execution has often been my bane... Ask me a lot of questions and challenge me a lot
+
+* Target
+- packages/coding-agent/test/task/ (new test file: overlap-autodag.test.ts)
+- packages/coding-agent/test/task/filesdeps-lock-repro.test.ts (delete or rewrite; its assertions encode the OLD runtime mutex semantic)
+- packages/coding-agent/test/task/batch-scheduler.test.ts (extend)
+
+* Change
+- Depends on FEAT-589, FEAT-590, FEAT-591, FEAT-592. This wave lands after cutover and anchors the new contract.
+- New overlap-autodag.test.ts covers the end-to-end surface:
+  1. Sync path: scheduleBatch with 2 tasks, same filesDeps, verifies tasks run sequentially (T2 starts only after T1 completes) AND implicitBlockers contains the T2<-T1 record.
+  2. Sync path: subtree overlap (src/ vs src/foo.ts) also serializes.
+  3. Sync path: non-overlapping siblings run concurrently.
+  4. Sync path: empty filesDeps runs concurrently (policy flip anchor).
+  5. Async/background path: two tasks registered via the async manager with overlapping filesDeps do not admit concurrently. This is the direct regression test for the bug observed in PLAN-268's motivation; it exercises task/index.ts scheduleReadyTasks through the public TaskTool surface.
+  6. quick_task with missing filesDeps still surfaces QUICK_TASK_MISSING_FILESDEPS (unchanged policy).
+- Delete filesdeps-lock-repro.test.ts; its scenarios are now subsumed by overlap-autodag.test.ts.
+
+* Edge Cases
+- Time-based ordering assertions should use a promise-gated sentinel (await on a deferred inside the first task) rather than wall-clock sleeps to avoid flakes.
+- The async-path test needs to exercise the real task registration loop; prefer a lightweight stub of the inner subagent executor so the test stays fast and deterministic.
+
+* Acceptance
+- bun test packages/coding-agent/test/task/ passes, including the new overlap-autodag.test.ts.
+- filesdeps-lock-repro.test.ts no longer exists (or is empty / redirects to new suite with an explanatory comment).
+- CI-relevant: `rg "hasFileOverlap" packages/coding-agent/test/` returns only references under overlap-autodag / mutable-dag tests.
+- bun check passes.
+
+* Implementation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-594-regression-tests-for-sync-and-async-over::implementation
+:END:
+1. Delete packages/coding-agent/test/task/filesdeps-lock-repro.test.ts (superseded).
+2. Create packages/coding-agent/test/task/overlap-autodag.test.ts with: sync-path identical-filesDeps serialization with deferred gate, sync-path subtree overlap, sync-path non-overlap parallel, sync-path empty-filesDeps parallel (policy flip), async-path same-file serialization through the TaskTool public surface, quick_task missing filesDeps still rejects with QUICK_TASK_MISSING_FILESDEPS.
+3. Use promise-gated sentinels for ordering assertions; avoid wall-clock sleeps.
+4. Stub the inner subagent executor for the async-path test so it stays fast and deterministic.
+5. Verify `rg hasFileOverlap packages/coding-agent/test/` returns only overlap-autodag and mutable-dag test references.
+6. Run bun check + bun test packages/coding-agent/test/task/ as the closing gate.

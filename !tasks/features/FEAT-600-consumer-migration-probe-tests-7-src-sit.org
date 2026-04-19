@@ -1,0 +1,222 @@
+#+TITLE: Consumer migration + probe tests: 7 src sites, 14 fixtures, 8 new tests
+#+STATE: ITEM
+#+SESSION_ID: 14c0a83e5a690b0f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-06-29-609Z_14c0a83e5a690b0f.jsonl]]
+#+CUSTOM_ID: FEAT-600-consumer-migration-probe-tests-7-src-sit
+#+DEPENDS: FEAT-595-envelope-v2-types-foundation-subagentout FEAT-596-subagentoutcome-enum-cutover-across-40-m FEAT-597-executor-tree-propagation-populate-struc FEAT-598-envelope-rendering-structured-inlineuri FEAT-599-streaming-bubble-up-pass-eventbus-to-nes
+#+LAYER: backend, test
+
+* Initial Message
+
+Ran actual runtime probes, not just tests.
+
+ Result:
+ - fake task sets → ✓ work to completion
+ - tasks that spawn subtasks → ✓ work, within spawn policy
+ - nested task → oracle → ✗ blocked by allowed-spawns policy, exact runtime error below
+
+ 1. fake task batch
+ - launched task(agent=oracle) with 2 read-only tasks
+ - batch completed 2/2 succeeded
+ - child results:
+     - inspectAgents → found bundled task, quick_task, oracle
+     - inspectSnapshots → confirmed warning string:
+           - No active plan snapshots for this session.
+ - runtime note:
+     - Task isolation was requested but task.isolation.mode="none"; running non-isolated. Set task.isolation.mode to worktree, fuse-overlay, or
+ fuse-projfs to enable.
+
+ 2. nested subtask batch, first try
+ - launched task(agent=task) with one parent task instructed to spawn subtasks via task(agent=oracle)
+ - parent task ran, but nested dispatch was rejected by policy
+ - exact runtime error:
+     - Nested task dispatch failed: agent=oracle is not allowed. Runtime error text: Cannot spawn 'oracle'. Allowed: explore,quick_task
+
+ ∴ this is not a crash; it's enforced spawn restriction.
+
+ 3. nested subtask batch, allowed path
+ - retried with task(agent=task) parent spawning task(agent=quick_task) children
+ - supplied required filesDeps
+ - batch completed end-to-end successfully
+
+ Exact nested success summary:
+
+ ```json
+   {
+     "success": true,
+     "nestedDispatch": "succeeded end-to-end",
+     "children": [
+       {
+         "id": "ChildA",
+         "agent": "quick_task",
+         "status": "completed",
+         "filesDeps": ["packages/coding-agent/src/task/agents.ts"],
+         "result": {
+           "confirmed": true,
+           "statement": "quick_task is bundled."
+         }
+       },
+       {
+         "id": "ChildB",
+         "agent": "quick_task",
+         "status": "completed",
+         "filesDeps": ["packages/coding-agent/src/task/index.ts"],
+         "result": {
+           "confirmed": true,
+           "evidence": "TaskTool.#validateTaskBatch rejects tasks lacking both assignment and todoRef."
+         }
+       }
+     ],
+     "runtimeNotes": []
+   }
+ ```
+
+ Repo evidence for expected behavior:
+ - child todo groups preserved: packages/coding-agent/src/tools/todo-write.ts:464
+ - nested delegated child rendering exists: packages/coding-agent/src/modes/interactive-mode.ts:886
+ - nested-depth isolation behavior covered: packages/coding-agent/test/task/nested-isolation-default.test.ts:79
+
+ Bottom line:
+ - normal fake task sets → ✓
+ - nested subtasks via task → ✓
+ - nested subtasks can spawn only allowed agents from parent agent policy
+ - for bundled task agent, current allowed nested spawns are:
+     - explore
+     - quick_task
+
+
+
+
+WHERE is the restriction on task type for subagent?
+
+* Scope
+In-scope:
+- Migrate 7 src consumers of ~SingleResult.output~ (see spec \u00a74.1) to the new shape.
+- Migrate 14 test fixture constructors (see spec \u00a74.2).
+- Add 8 new test files from spec \u00a76.1 (probe tests folded in here; no separate FEAT-G).
+
+Out of scope:
+- Any remaining TUI/rendering changes (FEAT-D covers those).
+- Streaming wiring (FEAT-E covers).
+
+* Existing Patterns
+- Consumer list: ~specs/subagent-envelope-v2.md~ section 4.1.
+- Fixture list: section 4.2.
+- New test scenarios: section 6.1.
+
+* Tests
+Full enumeration in sub-items below. Each probe test uses executor mocks to avoid live subprocess spawning.
+
+* Implementation
+
+** Migrate src consumers of SingleResult.output
+:PROPERTIES:
+:CUSTOM_ID: FEAT-600-consumer-migration-probe-tests-7-src-sit::migrate-src
+:DEPENDS: FEAT-597-executor-tree-propagation-populate-struc::executor-populate FEAT-598-envelope-rendering-structured-inlineuri::summary-builder
+:END:
+- File: ~packages/coding-agent/src/task/index.ts:413~ (~#buildTodoResultSummary~). Replace ~result.output.trim()~ with preference for ~result.structuredResult~ (stringified) falling back to ~result.textPreview ?? \"\"~.
+- File: ~packages/coding-agent/src/task/index.ts:1876~ (envelope preview). Replace ~r.output.trim() || r.stderr.trim()~ with ~r.textPreview ?? r.stderr.trim() ?? \"(no output)\"~.
+- File: ~packages/coding-agent/src/task/render.ts:431~ (~renderOutputSection(result.output, ...)~). Replace with ~renderOutputSection(result.textPreview ?? formatStructured(result.structuredResult), ...)~ where ~formatStructured~ is a small helper in ~render.ts~ that JSON-stringifies if object else returns empty string.
+- File: ~packages/coding-agent/src/orchestrators/canvas-orchestrator.ts:149~. Replace ~result.output || \"No output.\"~ with ~result.textPreview ?? JSON.stringify(result.structuredResult ?? null) ?? \"No output.\"~.
+- File: ~packages/coding-agent/src/task/template.ts:98~ (~resolvePredecessorResultsContext~). Replace ~output: blocker.delegation?.result?.output~ with structured-preferred mapping: ~output: blocker.delegation?.result?.textPreview ?? JSON.stringify(blocker.delegation?.result?.structuredResult ?? \"\")~.
+- File: ~packages/coding-agent/src/task/subagent-tracker.ts~ (~#resultSignature~). Hash over ~{id, outcome, textPreview}~ instead of including ~output~. Verify existing deduplication test still passes.
+- File: ~packages/coding-agent/src/task/index.ts:1902~ (~outputIds~). Remove the conditional emission; ~resultUri~ is now on every result, so callers iterate ~results.map(r => r.resultUri)~ directly. Delete the ~outputIds~ field from ~TaskToolDetails~ (already scheduled by FEAT-A; verify here).
+
+** Migrate test fixtures
+:PROPERTIES:
+:CUSTOM_ID: FEAT-600-consumer-migration-probe-tests-7-src-sit::migrate-fixtures
+:DEPENDS: FEAT-600-consumer-migration-probe-tests-7-src-sit::migrate-src
+:END:
+- For each file in spec \u00a74.2 (15 files; 14 helpers + 1 inline):
+  - Remove ~output: \"\u2026\"~ and ~truncated: false~ fields.
+  - Add ~outcome: \"completed\"~ (or test-appropriate outcome).
+  - Add ~resultUri: \`agent://${id}\`~ (use test id).
+  - Optionally add ~textPreview: \"\u2026\"~ or ~structuredResult: {\u2026}~ where relevant.
+- Preserve any test-specific assertions; only migrate field shape.
+
+** Add outcome-mapping test (from spec \u00a76.1)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-600-consumer-migration-probe-tests-7-src-sit::test-outcome-mapping
+:DEPENDS: FEAT-600-consumer-migration-probe-tests-7-src-sit::migrate-fixtures
+:END:
+- File: ~packages/coding-agent/test/task/outcome-mapping.test.ts~ (shared with FEAT-B if already created there; else add).
+- Already covered in FEAT-B. This item only verifies it still passes after consumer migration.
+
+** Add spawn-rejection envelope test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-600-consumer-migration-probe-tests-7-src-sit::test-spawn-rejection
+:DEPENDS: FEAT-600-consumer-migration-probe-tests-7-src-sit::migrate-fixtures
+:END:
+- File: ~packages/coding-agent/test/task/spawn-rejection.test.ts~
+- Scenario: parent task-tool call with ~agent=oracle~ but ~session.getSessionSpawns()~ returns ~\"explore\"~.
+- Assert: result.outcome === \"policy-rejected\"; spawnAudit populated with ~granted: false~, ~allowedAgents: [\"explore\"]~, ~reason: \"policy-rejected\"~; template renders ~<spawn-audit>~ block.
+
+** Add fan-out tree-shape test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-600-consumer-migration-probe-tests-7-src-sit::test-fanout-tree
+:DEPENDS: FEAT-600-consumer-migration-probe-tests-7-src-sit::migrate-fixtures
+:END:
+- File: ~packages/coding-agent/test/task/fanout-tree.test.ts~
+- Scenario: mock a batch of 3 task children; each child's simulated run exposes ~extractedToolData.task~ with 2 nested results.
+- Assert: ~TaskToolDetails.results.length === 3~; ~results[0].children?.length === 2~; every leaf has ~outcome~ + ~resultUri~.
+
+** Add mid-chain abort test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-600-consumer-migration-probe-tests-7-src-sit::test-abort
+:DEPENDS: FEAT-600-consumer-migration-probe-tests-7-src-sit::migrate-fixtures
+:END:
+- File: ~packages/coding-agent/test/task/abort-propagation.test.ts~
+- Scenario: dispatch 2-deep chain via mocked executor; abort root signal after grandchild starts.
+- Assert: root result ~outcome: \"aborted\"~; child also reports ~aborted~; partial ~children~ tree captured (grandchild may be ~aborted~ or ~completed~ depending on timing; accept either).
+
+** Add missing-submit-result test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-600-consumer-migration-probe-tests-7-src-sit::test-missing-submit
+:DEPENDS: FEAT-600-consumer-migration-probe-tests-7-src-sit::migrate-fixtures
+:END:
+- File: ~packages/coding-agent/test/task/missing-submit.test.ts~
+- Scenario: mock a subagent exit where ~hasSubmitResult === false~ and no ~submit_result~ data captured.
+- Assert: ~outcome === \"submit-result-missing\"~; envelope includes warning; ~textPreview~ may be present from stdout.
+
+** Add large-payload URI fallback test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-600-consumer-migration-probe-tests-7-src-sit::test-large-payload
+:DEPENDS: FEAT-600-consumer-migration-probe-tests-7-src-sit::migrate-fixtures
+:END:
+- File: ~packages/coding-agent/test/task/large-payload-uri.test.ts~
+- Scenario: mock ~submit_result~ returning a 10KB JSON.
+- Assert: envelope emits ~<structured-ref>{resultUri}</structured-ref>~; no inline ~<structured>~; ~structuredResult~ still present on the SingleResult object.
+
+** Add depth-cap outcome test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-600-consumer-migration-probe-tests-7-src-sit::test-depth-cap
+:DEPENDS: FEAT-600-consumer-migration-probe-tests-7-src-sit::migrate-fixtures
+:END:
+- File: ~packages/coding-agent/test/task/depth-cap.test.ts~
+- Scenario: run executor at depth where ~atMaxDepth === true~; ~task~ tool is stripped. Have the simulated agent attempt to dispatch a nested batch.
+- Assert: the leaf agent's result has ~outcome === \"depth-capped\"~; ~spawnAudit.reason === \"depth-capped\"~.
+
+** Add nested-progress streaming test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-600-consumer-migration-probe-tests-7-src-sit::test-nested-progress
+:DEPENDS: FEAT-600-consumer-migration-probe-tests-7-src-sit::migrate-fixtures
+:END:
+- File: ~packages/coding-agent/test/task/nested-progress.test.ts~ (shared with FEAT-E if pre-created; else add).
+- Scenario: already covered in FEAT-E. Verify still passes with new shapes.
+
+* Edge Cases
+- Tests that previously asserted ~output~ string contents: migrate to ~textPreview~ or ~structuredResult~ depending on semantics.
+- Canvas-task-tier test uses inline stub: update alongside.
+- PLAN-267 tests may still be broken \u2014 do not fix them here; just do not worsen their count.
+- Probe tests use mocks (~vi.spyOn(executorModule, \"runSubprocess\")~) rather than live subprocess; matches existing test style.
+
+* Acceptance Criteria
+- ~bun check:ts~ green across all migrated files.
+- ~bun test packages/coding-agent/test/~ runs; new tests pass; pre-existing tests do not regress beyond PLAN-267 baseline.
+- No remaining references to ~.output~ on SingleResult anywhere except the 1 exempt ~BashResult.output~ case noted in spec.
+- ~outputIds~ field removed from ~TaskToolDetails~; consumers iterate ~results.map(r => r.resultUri)~.
+
+* Verification
+- ~rg \"\\.output\\b\" packages/coding-agent/src/task/ packages/coding-agent/src/orchestrators/ packages/coding-agent/src/modes/~ returns only BashResult-related hits (~result.output~ on bash), not SingleResult.
+- ~rg \"outputIds\" packages/coding-agent~ returns zero matches.
+- ~bun test packages/coding-agent/test/task/~ green for new 8 files.

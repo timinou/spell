@@ -1,0 +1,172 @@
+#+TITLE: Subagent Envelope v2: structured result tree for nested delegation
+#+STATE: ITEM
+#+SESSION_ID: 14c0a83e5a690b0f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-06-29-609Z_14c0a83e5a690b0f.jsonl]]
+#+CUSTOM_ID: PLAN-270-subagent-envelope-v2-structured-result-t
+#+LAYER: backend, frontend, test
+
+* Initial Message
+
+Ran actual runtime probes, not just tests.
+
+ Result:
+ - fake task sets → ✓ work to completion
+ - tasks that spawn subtasks → ✓ work, within spawn policy
+ - nested task → oracle → ✗ blocked by allowed-spawns policy, exact runtime error below
+
+ 1. fake task batch
+ - launched task(agent=oracle) with 2 read-only tasks
+ - batch completed 2/2 succeeded
+ - child results:
+     - inspectAgents → found bundled task, quick_task, oracle
+     - inspectSnapshots → confirmed warning string:
+           - No active plan snapshots for this session.
+ - runtime note:
+     - Task isolation was requested but task.isolation.mode="none"; running non-isolated. Set task.isolation.mode to worktree, fuse-overlay, or
+ fuse-projfs to enable.
+
+ 2. nested subtask batch, first try
+ - launched task(agent=task) with one parent task instructed to spawn subtasks via task(agent=oracle)
+ - parent task ran, but nested dispatch was rejected by policy
+ - exact runtime error:
+     - Nested task dispatch failed: agent=oracle is not allowed. Runtime error text: Cannot spawn 'oracle'. Allowed: explore,quick_task
+
+ ∴ this is not a crash; it's enforced spawn restriction.
+
+ 3. nested subtask batch, allowed path
+ - retried with task(agent=task) parent spawning task(agent=quick_task) children
+ - supplied required filesDeps
+ - batch completed end-to-end successfully
+
+ Exact nested success summary:
+
+ ```json
+   {
+     "success": true,
+     "nestedDispatch": "succeeded end-to-end",
+     "children": [
+       {
+         "id": "ChildA",
+         "agent": "quick_task",
+         "status": "completed",
+         "filesDeps": ["packages/coding-agent/src/task/agents.ts"],
+         "result": {
+           "confirmed": true,
+           "statement": "quick_task is bundled."
+         }
+       },
+       {
+         "id": "ChildB",
+         "agent": "quick_task",
+         "status": "completed",
+         "filesDeps": ["packages/coding-agent/src/task/index.ts"],
+         "result": {
+           "confirmed": true,
+           "evidence": "TaskTool.#validateTaskBatch rejects tasks lacking both assignment and todoRef."
+         }
+       }
+     ],
+     "runtimeNotes": []
+   }
+ ```
+
+ Repo evidence for expected behavior:
+ - child todo groups preserved: packages/coding-agent/src/tools/todo-write.ts:464
+ - nested delegated child rendering exists: packages/coding-agent/src/modes/interactive-mode.ts:886
+ - nested-depth isolation behavior covered: packages/coding-agent/test/task/nested-isolation-default.test.ts:79
+
+ Bottom line:
+ - normal fake task sets → ✓
+ - nested subtasks via task → ✓
+ - nested subtasks can spawn only allowed agents from parent agent policy
+ - for bundled task agent, current allowed nested spawns are:
+     - explore
+     - quick_task
+
+
+
+
+WHERE is the restriction on task type for subagent?
+
+* Context
+
+Nested subagent delegation works end-to-end up to depth=3 (task.maxRecursionDepth=3 landed in P0). Empirical probes confirmed: task -> task -> oracle chain returns verbatim markers in ~18s. The remaining defect is envelope fidelity: grandchild ~submit_result~ payloads collapse into truncated text by the time they reach root. Three fragmented status enums (~AgentProgress.status~, ~AsyncJob.status~, ~SwarmNodeStatus~) plus a composed display string obscure outcome semantics across 40+ match sites.
+
+This plan replaces the flat ~SingleResult[]~ envelope with a structured tree:
+- Canonical ~SubagentOutcome~ enum (17 values) supplants 3 fragmented enums.
+- ~structuredResult~ preserves ~submit_result~ JSON; ~children~ recursively carries grandchild results.
+- ~agent://~ URI on every result; inline JSON under 5KB, URI-only beyond.
+- Streaming bubble-up via ~TASK_SUBAGENT_PROGRESS_CHANNEL~ to TUI subscribers (root LLM unchanged).
+- ~spawnAudit~ populated always, rendered only on non-trivial outcomes.
+- Complete cutover of ~output: string~ to ~textPreview + structuredResult~ (no shims).
+
+Full design spec with ADR rationale: ~specs/subagent-envelope-v2.md~ (committed in this session; authoritative for implementation).
+
+Settled decisions (from interactive planning):
+1. Scope: full envelope v2 shift, not minimum viable.
+2. Status enum: large unification across all three (40+ sites).
+3. Consume model: inline JSON <5KB; agent:// URI always present.
+4. Output cutover: complete removal of ~output~ field (21 call-sites migrate).
+5. Streaming: Pipeline 2 (TUI) only; Pipeline 1 (LLM) unchanged.
+6. Spawn audit: always populated; rendering filters trivial cases.
+7. Throttling: trust existing 100ms debounce; revisit if flooded.
+8. Decomposition: 6 FEAT items (medium granularity).
+9. Tests allowed to touch existing fixtures; PLAN-267 stays deferred.
+10. Spec stored at ~specs/subagent-envelope-v2.md~ (cross-session resumability).
+
+* Verification
+
+- ~bun check:ts~ returns zero errors across ~packages/coding-agent/~.
+- ~bun test packages/coding-agent/test/task/~ green for new 8 probe tests.
+- ~rg "\\.output\\b" packages/coding-agent/src/task/~ returns zero matches on ~SingleResult~ (only ~BashResult.output~ remains).
+- ~rg '"completed" \\| "failed" \\| "aborted"' packages/coding-agent/src~ returns only the ~SubagentOutcome~ definition.
+- ~rg "eventBus: undefined" packages/coding-agent/src/task~ returns zero matches.
+- ~rg "outputIds" packages/coding-agent~ returns zero matches (field removed).
+- Post-implementation live probe script (from spec \u00a76.3): 6 scenarios yield pass/fail table with expected outcomes.
+
+* Execution Manifest
+
+** Wave 1 :wave:
+:PROPERTIES:
+:CUSTOM_ID: PLAN-270-subagent-envelope-v2-structured-result-t::wave-1
+:END:
+
+Types foundation \u2014 blocks every downstream wave.
+
+- [[id:FEAT-595-envelope-v2-types-foundation-subagentout]] \u2014 Envelope v2 types foundation: SubagentOutcome + tree-shaped SingleResult.
+
+** Wave 2 :wave:
+:PROPERTIES:
+:CUSTOM_ID: PLAN-270-subagent-envelope-v2-structured-result-t::wave-2
+:END:
+
+Parallel: enum cutover + executor propagation + streaming. Each is independent of the others given the Wave 1 types; all three merge cleanly once their own tests pass.
+
+- [[id:FEAT-596-subagentoutcome-enum-cutover-across-40-m]] \u2014 SubagentOutcome enum cutover across ~40 match sites.
+- [[id:FEAT-597-executor-tree-propagation-populate-struc]] \u2014 Executor tree propagation: populate structuredResult, children, resultUri, spawnAudit.
+- [[id:FEAT-599-streaming-bubble-up-pass-eventbus-to-nes]] \u2014 Streaming bubble-up: pass eventBus to nested runSubprocess for grandchild progress.
+
+** Wave 3 :wave:
+:PROPERTIES:
+:CUSTOM_ID: PLAN-270-subagent-envelope-v2-structured-result-t::wave-3
+:END:
+
+Rendering \u2014 depends on propagated fields from Wave 2.
+
+- [[id:FEAT-598-envelope-rendering-structured-inlineuri]] \u2014 Envelope rendering: structured inline+URI, outcome badges, spawn audit, children tree.
+
+** Wave 4 :wave:
+:PROPERTIES:
+:CUSTOM_ID: PLAN-270-subagent-envelope-v2-structured-result-t::wave-4
+:END:
+
+Consumer migration + probe tests \u2014 validates the whole stack.
+
+- [[id:FEAT-600-consumer-migration-probe-tests-7-src-sit]] \u2014 Consumer migration + probe tests: 7 src sites, 14 fixtures, 8 new tests.
+
+* References
+
+- Design spec: ~specs/subagent-envelope-v2.md~.
+- Exploration artifacts (this session): ~agent://5-MapSingleResult~, ~agent://6-MapProgressStreaming~, ~agent://7-MapStatusComposition~, ~agent://8-MapArtifactUris~.
+- Prior P0: ~task.maxRecursionDepth~ default unified to 3 across ~config/settings-schema.ts~, ~task/executor.ts~, ~tools/index.ts~; ~task~ agent ~spawns~ widened to ~"*"~ in ~task/agents.ts~.
+- Deferred: per-node cost/latency telemetry tree; ~inspect_agent~ navigation tool; depth-budget streaming throttle (added if flood observed).

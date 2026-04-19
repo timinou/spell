@@ -1,0 +1,182 @@
+#+TITLE: Envelope v2 types foundation: SubagentOutcome + tree-shaped SingleResult
+#+STATE: ITEM
+#+SESSION_ID: 14c0a83e5a690b0f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-06-29-609Z_14c0a83e5a690b0f.jsonl]]
+#+CUSTOM_ID: FEAT-595-envelope-v2-types-foundation-subagentout
+#+LAYER: backend
+
+* Initial Message
+
+Ran actual runtime probes, not just tests.
+
+ Result:
+ - fake task sets → ✓ work to completion
+ - tasks that spawn subtasks → ✓ work, within spawn policy
+ - nested task → oracle → ✗ blocked by allowed-spawns policy, exact runtime error below
+
+ 1. fake task batch
+ - launched task(agent=oracle) with 2 read-only tasks
+ - batch completed 2/2 succeeded
+ - child results:
+     - inspectAgents → found bundled task, quick_task, oracle
+     - inspectSnapshots → confirmed warning string:
+           - No active plan snapshots for this session.
+ - runtime note:
+     - Task isolation was requested but task.isolation.mode="none"; running non-isolated. Set task.isolation.mode to worktree, fuse-overlay, or
+ fuse-projfs to enable.
+
+ 2. nested subtask batch, first try
+ - launched task(agent=task) with one parent task instructed to spawn subtasks via task(agent=oracle)
+ - parent task ran, but nested dispatch was rejected by policy
+ - exact runtime error:
+     - Nested task dispatch failed: agent=oracle is not allowed. Runtime error text: Cannot spawn 'oracle'. Allowed: explore,quick_task
+
+ ∴ this is not a crash; it's enforced spawn restriction.
+
+ 3. nested subtask batch, allowed path
+ - retried with task(agent=task) parent spawning task(agent=quick_task) children
+ - supplied required filesDeps
+ - batch completed end-to-end successfully
+
+ Exact nested success summary:
+
+ ```json
+   {
+     "success": true,
+     "nestedDispatch": "succeeded end-to-end",
+     "children": [
+       {
+         "id": "ChildA",
+         "agent": "quick_task",
+         "status": "completed",
+         "filesDeps": ["packages/coding-agent/src/task/agents.ts"],
+         "result": {
+           "confirmed": true,
+           "statement": "quick_task is bundled."
+         }
+       },
+       {
+         "id": "ChildB",
+         "agent": "quick_task",
+         "status": "completed",
+         "filesDeps": ["packages/coding-agent/src/task/index.ts"],
+         "result": {
+           "confirmed": true,
+           "evidence": "TaskTool.#validateTaskBatch rejects tasks lacking both assignment and todoRef."
+         }
+       }
+     ],
+     "runtimeNotes": []
+   }
+ ```
+
+ Repo evidence for expected behavior:
+ - child todo groups preserved: packages/coding-agent/src/tools/todo-write.ts:464
+ - nested delegated child rendering exists: packages/coding-agent/src/modes/interactive-mode.ts:886
+ - nested-depth isolation behavior covered: packages/coding-agent/test/task/nested-isolation-default.test.ts:79
+
+ Bottom line:
+ - normal fake task sets → ✓
+ - nested subtasks via task → ✓
+ - nested subtasks can spawn only allowed agents from parent agent policy
+ - for bundled task agent, current allowed nested spawns are:
+     - explore
+     - quick_task
+
+
+
+
+WHERE is the restriction on task type for subagent?
+
+* Scope
+In-scope:
+- Introduce canonical ~SubagentOutcome~ string-union enum in ~packages/coding-agent/src/task/types.ts~.
+- Introduce ~SpawnAuditEntry~ interface in the same file.
+- Rewrite ~SingleResult~: remove ~output: string~, ~truncated: boolean~, ~transcriptPath?: string~; add ~outcome: SubagentOutcome~, ~structuredResult?: unknown~, ~textPreview?: string~, ~children?: SingleResult[]~, ~resultUri: string~, ~transcriptUri?: string~, ~spawnAudit?: SpawnAuditEntry~.
+- Widen ~AgentProgress.status~ union to ~SubagentOutcome~.
+- Update ~TaskToolDetails.async.state~ to ~SubagentOutcome~; remove ~outputPaths?: string[]~.
+- Build will fail at all 21 consumer sites + 40 enum-match sites (intentional signal; the wave's downstream items resolve them).
+
+Out of scope:
+- Populating new fields at runtime (FEAT-C).
+- Migrating consumers (FEAT-F) or rendering (FEAT-D).
+- Enum cutover across fragmented enums (FEAT-B).
+
+Rationale: a single PR that lands the type change first keeps the later waves' blast radius predictable.
+
+* Existing Patterns
+- Canonical types file: ~packages/coding-agent/src/task/types.ts~
+  - Current ~SingleResult~ at line 207; ~AgentProgress~ at 177; ~TaskToolDetails~ at 246.
+- Exact previous definitions captured in spec: ~specs/subagent-envelope-v2.md~ section 1.1, 3.1-3.4.
+- Hierarchical IDs: ~AgentOutputManager.allocate(id, {parentPrefix})~ in ~packages/coding-agent/src/task/output-manager.ts:74~.
+- URI scheme: ~agent://{id}~ resolves via ~AgentProtocolHandler~ at ~packages/coding-agent/src/internal-urls/agent-protocol.ts:38~.
+- Existing ~extractedToolData.submit_result[]~ is kept intact; new ~structuredResult~ is the tree-propagated form sourced from it.
+
+* Tests
+Workflow coverage:
+- Enum shape: all 17 SubagentOutcome values compile and are exported.
+- Type defaults: new required field ~resultUri~ forces callers to populate it; removal of ~output~ is enforced by TS.
+- Backwards compatibility check: existing ~status: "completed"~ string literal still matches the widened union.
+- Shape completeness: ~SingleResult~ compiles without ~output~, ~truncated~, ~transcriptPath~; ~children~ is recursive ~SingleResult[]~.
+
+Test files:
+- New: ~packages/coding-agent/test/task/types-envelope-v2.test.ts~
+  - Asserts SubagentOutcome union admits exactly the 17 values (type-level + a runtime const table for parity).
+  - Asserts ~SingleResult~ requires ~resultUri~ (type-level failure if omitted; uses ~tsd~/~expect-type~-style or a dedicated type test).
+  - Asserts ~SpawnAuditEntry~ fields present.
+  - Round-trips a minimal valid ~SingleResult~ and checks structural-typed assignability of ~children~.
+
+* Implementation
+
+** Define SubagentOutcome + SpawnAuditEntry
+:PROPERTIES:
+:CUSTOM_ID: FEAT-595-envelope-v2-types-foundation-subagentout::define-enum
+:END:
+- File: ~packages/coding-agent/src/task/types.ts~
+- Add ~SubagentOutcome~ string-union exactly as in ~specs/subagent-envelope-v2.md~ section 3.1.
+- Add ~SpawnAuditEntry~ interface.
+- Export both from the file.
+
+** Write type-level tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-595-envelope-v2-types-foundation-subagentout::type-tests
+:DEPENDS: FEAT-A::define-enum
+:END:
+- File: ~packages/coding-agent/test/task/types-envelope-v2.test.ts~
+- Use ~expectTypeOf~ (bun test + expect-type pattern) or structural assertion with ~satisfies~.
+- Scenarios:
+  - All 17 values assignable to ~SubagentOutcome~.
+  - Constructing ~SingleResult~ without ~resultUri~ is a type error.
+  - Constructing ~SingleResult~ without ~output~ compiles (new shape).
+  - ~SpawnAuditEntry~ ~granted: boolean~ required.
+
+** Rewrite SingleResult + AgentProgress + TaskToolDetails
+:PROPERTIES:
+:CUSTOM_ID: FEAT-595-envelope-v2-types-foundation-subagentout::rewrite-singleresult
+:DEPENDS: FEAT-A::type-tests
+:END:
+- File: ~packages/coding-agent/src/task/types.ts~
+- Apply shape from spec section 3.2-3.4.
+- Remove ~output~, ~truncated~, ~transcriptPath~; add new fields.
+- Widen ~AgentProgress.status~.
+- Update ~TaskToolDetails.async.state~ type; remove ~outputPaths~.
+- Expect ~bun check:ts~ to fail at downstream sites; this is the intentional signal for FEAT-B/C/D/F.
+
+* Edge Cases
+- ~resultUri~ required vs optional: defined as required ~string~. If the runtime path cannot allocate an ID (rare), the call must fail before a ~SingleResult~ is created. No ~""~ or optional fallback.
+- Union widening must not break exhaustiveness checks in ~render.ts:39~ ~getStatusIcon~; FEAT-D covers that. This item only widens the union and acknowledges that check becomes non-exhaustive (added default in FEAT-D).
+- ~extractedToolData~ is retained structurally for tool-extraction feeders; don't remove.
+- ~stderr~ stays as string (non-structured).
+- ~truncated~ removed: ~textPreview~ is self-bounded.
+
+* Acceptance Criteria
+- ~bun check:ts~ passes for ~packages/coding-agent/src/task/types.ts~ in isolation.
+- ~bun check:ts~ predictably fails at known downstream sites (list in spec section 4.1) with messages referencing the removed fields.
+- ~packages/coding-agent/test/task/types-envelope-v2.test.ts~ passes.
+- No behavior changes (this item does not touch runtime).
+- ~specs/subagent-envelope-v2.md~ section 3.1-3.4 is the authoritative source; this item matches it exactly.
+
+* Verification
+- Run: ~bun check:ts~ (expect failures in FEAT-B/C/D/F target files; no failures in ~types.ts~ itself).
+- Run: ~bun test packages/coding-agent/test/task/types-envelope-v2.test.ts~ passes.
+- Manual inspection: diff of ~types.ts~ matches spec section 3.1-3.4 verbatim.

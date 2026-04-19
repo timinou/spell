@@ -1,0 +1,228 @@
+#+TITLE: Executor tree propagation: populate structuredResult, children, resultUri, spawnAudit
+#+STATE: ITEM
+#+SESSION_ID: 14c0a83e5a690b0f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-06-29-609Z_14c0a83e5a690b0f.jsonl]]
+#+CUSTOM_ID: FEAT-597-executor-tree-propagation-populate-struc
+#+DEPENDS: FEAT-595-envelope-v2-types-foundation-subagentout
+#+LAYER: backend
+
+* Initial Message
+
+Ran actual runtime probes, not just tests.
+
+ Result:
+ - fake task sets → ✓ work to completion
+ - tasks that spawn subtasks → ✓ work, within spawn policy
+ - nested task → oracle → ✗ blocked by allowed-spawns policy, exact runtime error below
+
+ 1. fake task batch
+ - launched task(agent=oracle) with 2 read-only tasks
+ - batch completed 2/2 succeeded
+ - child results:
+     - inspectAgents → found bundled task, quick_task, oracle
+     - inspectSnapshots → confirmed warning string:
+           - No active plan snapshots for this session.
+ - runtime note:
+     - Task isolation was requested but task.isolation.mode="none"; running non-isolated. Set task.isolation.mode to worktree, fuse-overlay, or
+ fuse-projfs to enable.
+
+ 2. nested subtask batch, first try
+ - launched task(agent=task) with one parent task instructed to spawn subtasks via task(agent=oracle)
+ - parent task ran, but nested dispatch was rejected by policy
+ - exact runtime error:
+     - Nested task dispatch failed: agent=oracle is not allowed. Runtime error text: Cannot spawn 'oracle'. Allowed: explore,quick_task
+
+ ∴ this is not a crash; it's enforced spawn restriction.
+
+ 3. nested subtask batch, allowed path
+ - retried with task(agent=task) parent spawning task(agent=quick_task) children
+ - supplied required filesDeps
+ - batch completed end-to-end successfully
+
+ Exact nested success summary:
+
+ ```json
+   {
+     "success": true,
+     "nestedDispatch": "succeeded end-to-end",
+     "children": [
+       {
+         "id": "ChildA",
+         "agent": "quick_task",
+         "status": "completed",
+         "filesDeps": ["packages/coding-agent/src/task/agents.ts"],
+         "result": {
+           "confirmed": true,
+           "statement": "quick_task is bundled."
+         }
+       },
+       {
+         "id": "ChildB",
+         "agent": "quick_task",
+         "status": "completed",
+         "filesDeps": ["packages/coding-agent/src/task/index.ts"],
+         "result": {
+           "confirmed": true,
+           "evidence": "TaskTool.#validateTaskBatch rejects tasks lacking both assignment and todoRef."
+         }
+       }
+     ],
+     "runtimeNotes": []
+   }
+ ```
+
+ Repo evidence for expected behavior:
+ - child todo groups preserved: packages/coding-agent/src/tools/todo-write.ts:464
+ - nested delegated child rendering exists: packages/coding-agent/src/modes/interactive-mode.ts:886
+ - nested-depth isolation behavior covered: packages/coding-agent/test/task/nested-isolation-default.test.ts:79
+
+ Bottom line:
+ - normal fake task sets → ✓
+ - nested subtasks via task → ✓
+ - nested subtasks can spawn only allowed agents from parent agent policy
+ - for bundled task agent, current allowed nested spawns are:
+     - explore
+     - quick_task
+
+
+
+
+WHERE is the restriction on task type for subagent?
+
+* Scope
+In-scope:
+- At the point ~SingleResult~ is constructed (executor.ts + index.ts), populate the new fields from existing data:
+  - ~outcome~: derived from (exitCode, aborted, error, hasSubmitResult, depth-cap flag, policy-rejection flag, submit_result validity).
+  - ~structuredResult~: copy from ~extractedToolData.submit_result~ last entry (or null if none).
+  - ~textPreview~: derive from rawOutput tail, bounded to 2000 chars.
+  - ~children~: rebuild tree by linking nested ~runSubprocess~ results up through the parent task tool's result array.
+  - ~resultUri~: always populate as ~agent://{id}~ once ID is allocated (allocation already happens).
+  - ~transcriptUri~: ~artifact://{sessionId}/{agent}/{tool}/{N}.{ext}~ when sessionFile present; else omit.
+  - ~spawnAudit~: populate at the TaskTool policy gate with (requestedAgent, parentSpawnPolicy, allowedAgents, granted, reason). Emit on granted results too (renderer filters trivial cases).
+- Introduce the new terminal outcomes (~policy-rejected~, ~depth-capped~, ~submit-result-missing~, ~schema-invalid~, ~crashed~, ~timeout~, ~completed-empty~) at the right points in the executor/tool flow.
+
+Out of scope:
+- Rendering (FEAT-D).
+- Streaming (FEAT-E).
+- Consumer text-output migration (FEAT-F).
+
+* Existing Patterns
+- ~extractedToolData.submit_result~ population: ~packages/coding-agent/src/task/executor.ts:1907-1910~.
+- ID allocation: ~AgentOutputManager.allocate(...)~ at ~packages/coding-agent/src/task/output-manager.ts:74~.
+- Output file: ~{artifactsDir}/{id}.md~ at ~packages/coding-agent/src/task/executor.ts:1941-1952~.
+- SingleResult construction: ~packages/coding-agent/src/task/executor.ts:1990-2012~.
+- TaskTool children batch collection: ~packages/coding-agent/src/task/index.ts:1474-1505~ (progress map), ~1715-1900~ (results finalization).
+- Spawn policy gate: ~packages/coding-agent/src/task/index.ts:1386-1405~.
+- Existing MISSING_SUBMIT_RESULT detection: ~packages/coding-agent/src/task/executor.ts:365-370, 396-477~.
+- Depth-cap detection: ~packages/coding-agent/src/task/executor.ts:802-830~ (atMaxDepth gate).
+
+* Tests
+Workflow coverage:
+- Every outcome variant arises from a reproducible executor state.
+- Spawn audit populated at the gate regardless of grant/deny.
+- Tree shape: parent's ~children~ contains each direct grandchild result (not flattened).
+- Large rawOutput truncates to 2000-char ~textPreview~ without losing structuredResult.
+- Missing ~submit_result~ produces ~submit-result-missing~ outcome, not composed warning string.
+
+Test files:
+- New: ~packages/coding-agent/test/task/outcome-propagation.test.ts~
+- New: ~packages/coding-agent/test/task/tree-shape-propagation.test.ts~
+- New: ~packages/coding-agent/test/task/spawn-audit-population.test.ts~
+- Update: existing executor tests that construct SingleResult from subprocess simulation.
+
+* Implementation
+
+** Add derive-outcome helper
+:PROPERTIES:
+:CUSTOM_ID: FEAT-597-executor-tree-propagation-populate-struc::derive-outcome
+:DEPENDS: FEAT-595-envelope-v2-types-foundation-subagentout::rewrite-singleresult
+:END:
+- File: ~packages/coding-agent/src/task/executor.ts~ (internal helper) or new ~packages/coding-agent/src/task/outcome.ts~.
+- Signature:
+  ~function deriveOutcome(input: { exitCode: number; aborted: boolean; abortReason?: string; error?: string; hasSubmitResult: boolean; submitResultData: unknown; depthCapped: boolean; policyRejected: boolean; crashed: boolean; timedOut: boolean; schemaInvalid: boolean; gateFailed?: boolean; abandoned?: boolean; asyncCancelled?: boolean; }): SubagentOutcome~
+- Decision tree (mirrors spec \u00a75 edge cases):
+  1. ~policyRejected~ \u2192 ~policy-rejected~.
+  2. ~depthCapped~ \u2192 ~depth-capped~.
+  3. ~abandoned~ \u2192 ~abandoned~.
+  4. ~gateFailed~ \u2192 ~gate_failed~.
+  5. ~asyncCancelled~ \u2192 ~cancelled~.
+  6. ~aborted~ \u2192 ~aborted~.
+  7. ~timedOut~ \u2192 ~timeout~.
+  8. ~crashed~ \u2192 ~crashed~.
+  9. ~schemaInvalid~ \u2192 ~schema-invalid~.
+  10. ~exitCode !== 0~ or ~error~ \u2192 ~failed~.
+  11. ~hasSubmitResult === false && submitResultData === undefined~ \u2192 ~submit-result-missing~.
+  12. ~hasSubmitResult === true && submitResultData == null~ \u2192 ~completed-empty~.
+  13. \u2192 ~completed~.
+
+** Unit-test derive-outcome
+:PROPERTIES:
+:CUSTOM_ID: FEAT-597-executor-tree-propagation-populate-struc::derive-outcome-test
+:DEPENDS: FEAT-597-executor-tree-propagation-populate-struc::derive-outcome
+:END:
+- File: ~packages/coding-agent/test/task/outcome-propagation.test.ts~
+- One case per outcome enumerated above. Assert exact return.
+
+** Populate SingleResult new fields in executor
+:PROPERTIES:
+:CUSTOM_ID: FEAT-597-executor-tree-propagation-populate-struc::executor-populate
+:DEPENDS: FEAT-597-executor-tree-propagation-populate-struc::derive-outcome-test
+:END:
+- File: ~packages/coding-agent/src/task/executor.ts~ (SingleResult construction at ~1990-2012~).
+- Populate ~outcome~ via ~deriveOutcome~.
+- Populate ~resultUri = \`agent://${id}\`~ (required; fail fast if id empty).
+- Populate ~transcriptUri~ from sessionFile as ~artifact://...~. (~artifact-protocol.ts~ knows the shape.)
+- Populate ~structuredResult~ from ~extractedToolData?.submit_result?.at(-1)?.data~ (or equivalent access path; confirm exact field while implementing).
+- Populate ~textPreview~: take the tail 2000 chars of ~rawOutput~ (use ~outputMeta.charCount~ to gauge); prefer lines containing non-whitespace.
+- Leave ~extractedToolData~ intact.
+- Remove population of ~output~, ~truncated~, ~transcriptPath~.
+
+** Populate spawnAudit at policy gate
+:PROPERTIES:
+:CUSTOM_ID: FEAT-597-executor-tree-propagation-populate-struc::spawn-audit
+:DEPENDS: FEAT-597-executor-tree-propagation-populate-struc::executor-populate
+:END:
+- File: ~packages/coding-agent/src/task/index.ts~ around lines 1386-1405 (policy gate).
+- Construct ~SpawnAuditEntry~ with ~(requestedAgent, parentSpawnPolicy, allowedAgents, granted, reason)~ at every gate decision \u2014 grant or deny.
+- Thread the audit into the ~SingleResult~ built for both the rejected case (direct synthetic result; outcome=~policy-rejected~) and the granted case (attach after subprocess finishes via a side-channel in ~RunSubprocessOptions~ or a per-task override).
+- For ~depth-capped~ leaf results (child runs with task tool stripped): populate audit with ~reason: \"depth-capped\"~.
+
+** Populate children tree on batch finalization
+:PROPERTIES:
+:CUSTOM_ID: FEAT-597-executor-tree-propagation-populate-struc::children-tree
+:DEPENDS: FEAT-597-executor-tree-propagation-populate-struc::executor-populate
+:END:
+- File: ~packages/coding-agent/src/task/index.ts~ around batch finalization (~1715-1900~).
+- Change: when a subtask itself dispatches a ~task~ tool call, that nested batch's ~TaskToolDetails.results~ becomes the outer result's ~children~.
+- Transport: the child subprocess's final ~submit_result~ / transcript carries nested batch results in ~extractedToolData.task~ (the subprocess tool registry already tracks nested task invocations). Confirm registry capture; populate ~children~ from the deepest ~extractedToolData.task~ entry.
+- Flat ~progressMap~ still used for display; ~children~ only materializes at end-of-batch.
+
+** Detect + emit new structural outcomes
+:PROPERTIES:
+:CUSTOM_ID: FEAT-597-executor-tree-propagation-populate-struc::new-outcomes
+:DEPENDS: FEAT-597-executor-tree-propagation-populate-struc::executor-populate
+:END:
+- ~schema-invalid~: at ~submit_result~ tool processing, wrap schema validation in try/catch; on failure set ~schemaInvalid=true~, carry invalid payload into ~structuredResult~, record ~error~.
+- ~crashed~: catch uncaught subprocess errors at executor's outer try/catch; set ~crashed=true~, ~error~.
+- ~timeout~: if the subprocess exceeds ~subprocess-level timeout~ (if one exists; else follow-up to add), set ~timedOut=true~.
+- ~completed-empty~ vs ~submit-result-missing~: distinguish on whether ~submit_result~ was called at all (existing ~hasSubmitResult~) vs whether it was called with null/empty data.
+
+* Edge Cases
+- Nested task tool extractor: confirm ~extractedToolData.task~ captures nested results; if not, add a capture in ~subprocess-tool-registry~ that stores nested ~TaskToolDetails~ snapshots per call.
+- ~resultUri~ required: if ~id~ is empty at subprocess construction, throw \u2014 do not silently emit stub URI.
+- Spawn audit for the "no children" root case: the root (depth=0) session has no audit; only task-tool batch children do.
+- ~structuredResult~ precedence: if multiple ~submit_result~ calls happen (anti-pattern), take the last; log a warning.
+- ~textPreview~ never leaks secrets beyond what rawOutput already contained.
+- Isolation path: same SingleResult construction, branch-mode unchanged.
+
+* Acceptance Criteria
+- ~deriveOutcome~ covers all 17 outcomes; 100% branch coverage in its unit test.
+- Every ~SingleResult~ produced by the executor has: valid ~outcome~, non-empty ~resultUri~, ~spawnAudit~ (when produced by task-tool batch), either ~structuredResult~ or ~textPreview~ populated.
+- When a task subagent dispatches a nested batch, the outer result's ~children~ contains each nested result.
+- ~bun check:ts~ green across ~packages/coding-agent/src/task/executor.ts~ and ~index.ts~.
+- ~bun test packages/coding-agent/test/task/outcome-propagation.test.ts~ and ~tree-shape-propagation.test.ts~ and ~spawn-audit-population.test.ts~ all pass.
+
+* Verification
+- ~bun check:ts~ zero errors.
+- Spot-audit: add temporary ~logger.debug("envelope-v2-result", { id, outcome, hasStructured: !!structuredResult, childrenCount: children?.length ?? 0 })~ after ~SingleResult~ construction; remove after verification.
+- Run ~bun test packages/coding-agent/test/task/~ green.

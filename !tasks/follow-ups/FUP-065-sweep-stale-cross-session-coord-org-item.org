@@ -1,0 +1,82 @@
+#+TITLE: Sweep stale cross-session coord org items: mark FEATs/FUPs DONE first, then PLANs after BUG-303 green
+#+STATE: ITEM
+#+SESSION_ID: 14c0b265a752cb07
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-50-51-293Z_14c0b265a752cb07.jsonl]]
+#+CUSTOM_ID: FUP-065-sweep-stale-cross-session-coord-org-item
+#+DEPENDS: BUG-303-applymanagedbuffercontent-bypasses-callc FEAT-593-fill-coord-test-gaps-two-session-integra
+#+EFFORT: 30m
+#+LAYER: pi-code-engine coding-agent
+#+PRIORITY: #B
+
+* Scope
+
+In scope:
+- Reconcile org state with tree reality: plan state currently lies. FEATs 577, 578, 579, 580 are =DOING= or =ITEM= despite landed commits; FUPs 60-63 are =ITEM= despite the work in them being either landed or superseded; PLAN-254 and PLAN-259 are =DOING= despite functional completion.
+- Append dated =NOTE= entries citing landing evidence (commit sha, test output, file paths) before transitioning to =DONE=.
+- Two-phase execution:
+  - Phase A (immediate, no dependency): FEATs + FUPs that were already landed by commit =ac06f7ae0= and follow-up work in the tree.
+  - Phase B (blocked on coord closeout): PLAN-254 + PLAN-259 after BUG-303 and FEAT-593 land green.
+- Update =specs/edit-coordination/design.md= with a =Phase 1 landed= section summarizing what actually shipped.
+
+Out of scope:
+- Closing items for other workstreams.
+- Editing the =Initial Message= sections of swept items (historical).
+- Archiving via =org archive= (separate cadence).
+
+* Existing Patterns
+
+- =org note= appends dated notes; use this to record evidence before transition.
+- =org update= with =state= changes the TODO keyword. Pair with a short =append= or =note= to record the transition rationale.
+- Existing precedent for NOTE lines: =!tasks/plans/PLAN-254-cross-session-edit-coordination.org= already has =NOTE [2026-04-18]= entries for Wave 1 landing.
+- Never modify historical body content; additions only.
+
+* Tests
+
+No code tests. Verification is structural: post-sweep =org query todo:DOING,ITEM category:features LAYER:pi-code-engine= should not return 577, 578, 579, 580; =org query todo:DOING category:plans= should not return PLAN-254 or PLAN-259.
+
+** Phase A sweep (immediate)
+:PROPERTIES:
+:CUSTOM_ID: FUP-065-sweep-stale-cross-session-coord-org-item::phase-a
+:END:
+Items to transition to =DONE= with evidence notes citing commit =ac06f7ae0= and the files listed:
+- =FEAT-577-socketcoordclient-stateless-edit-transac= — evidence: =crates/pi-code-engine/src/coord/=, =crates/pi-code-engine/src/buffer.rs=:397/552/1232, =crates/pi-code-engine/tests/coord_transaction.rs= (11/11 green).
+- =FEAT-578-napi-surface-sessionid-propagation-coord= — evidence: =crates/pi-natives/src/lib.rs=:26/39-46, =crates/pi-natives/src/code_buffer.rs=:172/216/1613, =packages/natives/src/code-buffer/types.ts=:4/15/21/84/91.
+- =FEAT-580-coding-agent-integration-code-tool-sessi= — evidence: =packages/coding-agent/src/session/edit-coordinator.ts=, =packages/coding-agent/src/tools/code.ts=:23/87/180/817/867, =packages/coding-agent/src/tools/tool-errors.ts=:26/33, =packages/coding-agent/src/tools/code-result.ts=:299/318/355.
+- =FEAT-579-tui-surface-coord-status-line-segment-pe= — evidence: =packages/coding-agent/src/modes/components/status-line/segments.ts=:46/396/501, =packages/coding-agent/test/coord-segment.test.ts=.
+- =FUP-060-complete-feat-577-engine-edit-transactio= — superseded by FEAT-577 landing; transition to =DONE= with note pointing at FEAT-577 evidence.
+- =FUP-061-land-feat-578-napi-sessionid-propagation= — same (→ FEAT-578).
+- =FUP-062-land-feat-580-code-tool-sessionid-peerco= — same (→ FEAT-580).
+- =FUP-063-land-feat-579-coord-status-line-peer-act= — same (→ FEAT-579).
+
+** Phase B sweep (after BUG-303 + FEAT-593 green)
+:PROPERTIES:
+:CUSTOM_ID: FUP-065-sweep-stale-cross-session-coord-org-item::phase-b
+:DEPENDS: FUP-065-sweep-stale-cross-session-coord-org-item::phase-a
+:END:
+Items to transition to =DONE= with evidence:
+- =PLAN-254-cross-session-edit-coordination= — evidence: all four FEATs DONE; BUG-303 green; FEAT-593 green; two-session integration test passing.
+- =PLAN-259-finish-cross-session-edit-coordination= — evidence: same; additionally note that this PLAN was itself a documentation drift artifact and that most of its scope was already landed when written.
+
+** Update design.md
+:PROPERTIES:
+:CUSTOM_ID: FUP-065-sweep-stale-cross-session-coord-org-item::update-design
+:DEPENDS: FUP-065-sweep-stale-cross-session-coord-org-item::phase-b
+:END:
+- File: =specs/edit-coordination/design.md=
+- Add section =## Phase 1 landed (2026-04-19)= summarizing: coord module, broker crate, stateless edit_transaction, NAPI surface, coding-agent wiring, status-line + peer footer.
+- Do not rewrite prior design sections.
+
+* Edge Cases
+
+- If =org update state=DONE= requires a completion timestamp, rely on the default behavior; do not fabricate dates.
+- If an item has open sub-outline DEPENDS that never resolved, leave a NOTE explaining why the sub-outline is effectively no-op before transitioning.
+- If any swept item's body references files that no longer exist (refactored away since landing), leave a NOTE rather than editing the body.
+- BUG-303 is in this plan but not in this sweep item; its own state transition is handled by its own lifecycle when its acceptance lands.
+
+* Acceptance Criteria
+
+- After Phase A: =org query todo:DOING,ITEM category:features query:577 OR 578 OR 579 OR 580= returns empty for the coord FEATs.
+- After Phase A: FUP-060 through FUP-063 all =DONE=.
+- After Phase B: PLAN-254 and PLAN-259 both =DONE=.
+- =specs/edit-coordination/design.md= carries the Phase-1-landed section.
+- Each transitioned item has a dated NOTE citing evidence (commit sha + file paths + test run).

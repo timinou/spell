@@ -1,0 +1,46 @@
+#+TITLE: Surface implicit blockers in task tool result
+#+STATE: ITEM
+#+SESSION_ID: 14c0a54ed68d3bdc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-53-40-058Z_14c0a54ed68d3bdc.jsonl]]
+#+CUSTOM_ID: FEAT-592-surface-implicit-blockers-in-task-tool-r
+#+LAYER: coding-agent
+
+* Initial Message
+
+I want you to think a bit deeper than the fileDeps vs. lock. I don't want a global lock for all tasks, the pi-code-engine file locks should be enough in theory. Blocking subtask execution has often been my bane... Ask me a lot of questions and challenge me a lot
+
+* Target
+- packages/coding-agent/src/task/batch-scheduler.ts
+  - scheduleBatch return shape (or caller aggregator): pass implicitBlockers through
+- packages/coding-agent/src/task/index.ts
+  - TaskTool.execute (and #executeSync / async completion path): include implicit_blockers in the tool-call result details AND prepend a human-readable note to the result text when non-empty
+
+* Change
+- Depends on FEAT-590. Clean cutover.
+- When implicitBlockers.length > 0, prepend to the tool-call textual output:
+  "Note: scheduler added implicit blockers due to filesDeps overlap: [T2<-T1 (src/a.ts), T3<-T2 (src/)]. Partition tasks with non-overlapping filesDeps for parallelism."
+- Add implicit_blockers to the structured details section returned from TaskTool so caller agents parse it deterministically.
+- Both the sync batch flow and the async/background flow must surface this; confirm via unified aggregator rather than duplicating the formatting in two places.
+
+* Edge Cases
+- implicitBlockers empty: no note, no field populated (or empty array; pick one convention and stick to it).
+- Only implicit-blocker edges exist for tasks that were ultimately aborted: still report; the caller should learn from declared overlap regardless of outcome.
+- Rendering tabs / long paths: reuse replaceTabs and shortenPath helpers from tools/render-utils when emitting the note.
+
+* Acceptance
+- Unit test in packages/coding-agent/test/task/batch-scheduler.test.ts: scheduleBatch returns implicitBlockers alongside per-task results.
+- Integration test in packages/coding-agent/test/task/: TaskTool result text contains the "Note: scheduler added implicit blockers" line when overlap triggers auto-DAG.
+- TaskTool structured details include implicit_blockers; confirmed via test snapshot or field probe.
+- bun test packages/coding-agent/test/task/ passes.
+- Manual TUI render check: note is sanitized (tabs replaced, paths shortened).
+
+* Implementation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-592-surface-implicit-blockers-in-task-tool-r::implementation
+:END:
+1. Thread implicitBlockers from BatchGraph through scheduleBatch's return shape into TaskTool's aggregated result.
+2. In TaskTool result formatter, when implicitBlockers.length > 0, prepend one textual note: `Note: scheduler added implicit blockers due to filesDeps overlap: [T2<-T1 (path/a), T3<-T2 (path/b)]. Partition tasks with non-overlapping filesDeps for parallelism.`
+3. Add structured `implicit_blockers` field to TaskTool's details (array of { to, from, reason }).
+4. Apply replaceTabs + shortenPath to paths embedded in the note so the TUI render path stays sanitized.
+5. Verify both sync (#executeSync) and async/background completion paths converge on the same formatter; extract a helper rather than duplicating.
+6. Tests: extend batch-scheduler.test.ts for implicitBlockers passthrough; extend a TaskTool test file to assert the note text + structured field appear when overlap is declared.

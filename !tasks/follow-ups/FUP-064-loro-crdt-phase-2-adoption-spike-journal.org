@@ -1,0 +1,95 @@
+#+TITLE: Loro CRDT phase-2 adoption spike: journal op[] to LoroText API mapping writeup
+#+STATE: ITEM
+#+SESSION_ID: 14c0b265a752cb07
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-50-51-293Z_14c0b265a752cb07.jsonl]]
+#+CUSTOM_ID: FUP-064-loro-crdt-phase-2-adoption-spike-journal
+#+EFFORT: 6h
+#+LAYER: pi-code-engine
+#+PRIORITY: #B
+
+* Scope
+
+In scope:
+- Read-only investigation producing =specs/edit-coordination/loro-phase2-spike.md= (3-5 pages) that validates whether Loro's text CRDT fits the existing journal =op[]= hook left behind by PLAN-254, with explicit tradeoffs and a GO/NO-GO recommendation for a Phase-2 plan.
+- Prototype code permitted only as inline fragments inside the writeup (Rust pseudo or real snippets); no production changes, no new crates added to =Cargo.toml=.
+
+Out of scope:
+- Adding Loro to the workspace.
+- Implementing concurrent merge.
+- Replacing the PeerConflict block-on-conflict policy.
+- Cross-host or network-level CRDT.
+
+* Existing Patterns
+
+- Journal format lives at =crates/pi-code-engine/src/coord/journal.rs=; entries serialize as newline-JSON on disk at =~/.spell/edit-journal/<repo-hash>/<file-hash>.jsonl=.
+- The journal schema was designed forward-compatible with future =op[]= payloads (see =specs/edit-coordination/design.md=, section on Phase-2 hooks).
+- Broker protocol: =crates/pi-edit-broker/src/protocol.rs=; intent/commit/peer_committed messages.
+- Current mutation path: =BufferRegistry::edit_transaction= re-reads disk under lock, applies a structural diff, writes atomically, commits to broker. This is block-on-conflict.
+
+* Tests
+
+Writeup artifact (=specs/edit-coordination/loro-phase2-spike.md=) is itself the deliverable; no code tests.
+
+** Writeup must answer these questions
+:PROPERTIES:
+:CUSTOM_ID: FUP-064-loro-crdt-phase-2-adoption-spike-journal::writeup-coverage
+:END:
+1. Does Loro's =LoroText= expose the =op[]= granularity our journal already assumes (insert/delete at byte offsets, encoded as a compact op sequence)?
+2. What is Loro's document identity model? Does it fit per-file repo-scoped coordination, or does it require a single root doc?
+3. What is the serialized op size for typical edits (a method rename, a 100-line insertion) versus our current structural-diff size? Include concrete measurements from Loro docs or a quick =cargo add= scratch crate outside the workspace.
+4. What is Loro's conflict model for overlapping concurrent edits on the same byte range? Is block-on-conflict still possible, or does Loro force merge-always semantics?
+5. How does Loro integrate with tree-sitter boundaries? Can we still attribute edits to CodePath nodes after merge, or does character-level concurrent merge dissolve that attribution?
+6. What is Loro's GC/snapshot story? Does it handle long-lived repos with millions of historical ops?
+7. What is the Rust API stability commitment? Version pinning risk.
+8. Licensing: is Loro's license compatible with ours (check workspace =LICENSE=).
+9. What is the minimal shim to make the existing journal forward-compatible without breaking existing readers?
+
+* Implementation
+
+** Investigate Loro Rust crate
+:PROPERTIES:
+:CUSTOM_ID: FUP-064-loro-crdt-phase-2-adoption-spike-journal::investigate
+:END:
+- Read =loro-crdt= documentation at https://loro.dev and the Rust crate README.
+- Review =LoroDoc=, =LoroText=, op encoding, versioning, and snapshot APIs.
+- If needed, create a scratch crate outside this workspace (=/tmp/loro-spike/=) to measure op sizes and API ergonomics.
+
+** Map journal schema to Loro ops
+:PROPERTIES:
+:CUSTOM_ID: FUP-064-loro-crdt-phase-2-adoption-spike-journal::map-schema
+:DEPENDS: FUP-064-loro-crdt-phase-2-adoption-spike-journal::investigate
+:END:
+- For each journal entry field, document which Loro construct satisfies it and which do not.
+- Identify fields we would have to drop, add, or reshape.
+- Propose a migration-safe extension to the current JSONL schema that carries =op[]= without breaking readers.
+
+** Tradeoff analysis
+:PROPERTIES:
+:CUSTOM_ID: FUP-064-loro-crdt-phase-2-adoption-spike-journal::tradeoffs
+:DEPENDS: FUP-064-loro-crdt-phase-2-adoption-spike-journal::map-schema
+:END:
+- Block-on-conflict (current) vs merge-always (Loro): when is each correct for interactive code editing?
+- CodePath-level attribution survivability after character-level merge.
+- Performance: per-edit overhead, memory, journal compaction.
+- Operational: snapshot size, GC, replay complexity.
+- Team experience: who else uses Loro in production for code editors?
+
+** Write the spike
+:PROPERTIES:
+:CUSTOM_ID: FUP-064-loro-crdt-phase-2-adoption-spike-journal::write-spec
+:DEPENDS: FUP-064-loro-crdt-phase-2-adoption-spike-journal::tradeoffs
+:END:
+- File: =specs/edit-coordination/loro-phase2-spike.md=
+- Structure: Summary → API Mapping → Tradeoffs → Migration Path → Recommendation (GO/NO-GO with conditions) → Open Questions.
+- Length: 3-5 pages (rough).
+
+* Edge Cases
+- Loro may have moved since PLAN-254 was written; treat old assumptions as unverified.
+- If Loro's license changed to non-permissive, GO becomes NO-GO regardless of API fit.
+- If the crate is abandoned (no release in 6 months), recommend NO-GO and document alternatives (Yjs via wasm-bindgen, Automerge, custom CRDT).
+
+* Acceptance Criteria
+- =specs/edit-coordination/loro-phase2-spike.md= exists and answers the 9 writeup questions.
+- Recommendation is clearly stated: GO, NO-GO, or GO-WITH-CONDITIONS.
+- If GO, a skeleton follow-on plan outline is included (no item creation yet).
+- No production code changes; no new workspace dependencies.

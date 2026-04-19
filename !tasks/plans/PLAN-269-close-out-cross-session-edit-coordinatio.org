@@ -1,0 +1,101 @@
+#+TITLE: Close out cross-session edit coordination
+#+STATE: DOING
+#+SESSION_ID: 14c0b265a752cb07
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-50-51-293Z_14c0b265a752cb07.jsonl]]
+#+CUSTOM_ID: PLAN-269-close-out-cross-session-edit-coordinatio
+#+EFFORT: 1d
+#+LAYER: pi-code-engine pi-edit-broker coding-agent ui
+#+PRIORITY: #A
+
+* Initial Message
+
+please review the completion of @!tasks/plans/PLAN-254-cross-session-edit-coordination.org and @!tasks/plans/PLAN-259-finish-cross-session-edit-coordination.org and tell me the FEATs and the FUPs that you should take on next. You are free to take this in any ditrection you deem fit as long as you challenge yourself, challenge me, ask me before settling a decision, and ask me a lot in general
+
+* Context
+
+Continuation closeout for PLAN-254 and PLAN-259 (cross-session edit coordination). Investigation (session =14c0b265a752cb07=) found that most of the work described as "remaining" in PLAN-259 is already landed in the tree through commit =ac06f7ae0= and follow-up commits. The org state lies: FEATs 577 and 578 are =DOING=, FEATs 579 and 580 are =ITEM=, FUPs 060-063 are =ITEM=, yet all their acceptance code is in the tree with passing unit tests (=coord_transaction= 11/11 green; 13 broker tests green; coord-segment and edit-coordinator TypeScript tests passing).
+
+Evidence of landed work (verified in-tree 2026-04-19):
+- Engine: =crates/pi-code-engine/src/coord/= (client, journal, node_ref, null, peer_state, socket), =BufferRegistry::edit_transaction= (=src/buffer.rs=:552), atomic temp+rename write, deprecated =save=/=save_with_watcher=, 11/11 integration tests.
+- Broker: =crates/pi-edit-broker/= (protocol, state, reaper, spawn), 13/13 tests including idempotent auto-spawn.
+- NAPI: =crates/pi-natives/src/lib.rs=:39-46 wires =BrokerEndpoint::default_for("napi")= + =SocketCoordClient= into the singleton =BufferRegistry=; =crates/pi-natives/src/code_buffer.rs= exposes =coord_status= RPC; =packages/natives/src/code-buffer/types.ts= carries =sessionId= + =peerConflict= types.
+- coding-agent: =packages/coding-agent/src/session/edit-coordinator.ts=, =tools/tool-errors.ts::PeerConflictToolError=, =tools/code.ts= uses =callCodeBuffer= with PeerConflict retry, =tools/code-result.ts::appendPeerActivityFooter= renders peer activity.
+- UI: =packages/coding-agent/src/modes/components/status-line/segments.ts::coordSegment= (1s TTL cache); =packages/coding-agent/test/coord-segment.test.ts= covers multi-peer rendering.
+
+Real remaining work, this plan:
+1. =BUG-303= — sessionId cutover is incomplete: four call sites in =packages/coding-agent/src/patch/index.ts= (593, 697, 915) and =packages/coding-agent/src/tools/write.ts= (142) call =executeCodeBuffer= directly, bypassing =callCodeBuffer=, causing 2 failing tests in =test/tools/managed-code-buffer-errors.test.ts= because the native now enforces sessionId.
+2. =BUG-305= — two tests in =test/tools/code.test.ts= assert exactly three native calls but the edit pipeline now emits a fourth trailing =coord_peer_activity=. Production is correct; tests must widen.
+3. =FEAT-593= — four gaps in unit coverage against PLAN-254/259 manual acceptance criteria: two-session disjoint-node integration, subagent sessionId attribution, peer-activity footer rendering, broker stale-socket recovery. User directive: "yes [two-session] works but if unit tests are lacking add them."
+4. =FUP-064= — Loro CRDT phase-2 adoption spike. Read-only investigation producing =specs/edit-coordination/loro-phase2-spike.md= (3-5 pages) with API mapping and GO/NO-GO recommendation. No production changes.
+5. =FUP-065= — Sweep stale org items: FEAT-577/578/579/580, FUP-060/061/062/063 to DONE immediately (Phase A); PLAN-254 + PLAN-259 to DONE after BUG-303 and FEAT-593 land (Phase B); update =specs/edit-coordination/design.md= with =Phase 1 landed= section.
+
+Explicitly out of scope (separate plans):
+- =BUG-267= — patch-mode lifecycle convergence + diagnostics parity. Overlaps files but is a distinct invariant (managed-buffer lifecycle, not sessionId plumbing). Tracked separately.
+- Remaining ten BUGs in PLAN-267 test cluster. Only BUG-303 and BUG-305 touch managed-buffer/code-tool paths; the rest are orthogonal test failures handled by PLAN-267 directly.
+- Loro implementation. FUP-064 is spike-only; actual adoption would be a new PLAN conditional on the spike recommendation.
+
+Settled decisions (this plan):
+- BUG-267 is OUT. Coord closeout stays tight.
+- FEAT-593 covers ALL four test gaps (two-session, subagent attribution, peer footer, broker stale-socket).
+- Loro spike depth: API mapping (3-5 page spec), not a working prototype.
+- Sweep timing: split. FEATs/FUPs swept immediately in Wave 1 (FUP-065 Phase A); PLANs deferred to Wave 3 (FUP-065 Phase B) after BUG-303 + FEAT-593 green.
+- Authority granted: sweep agent MAY transition listed items to DONE once evidence is cited in a dated NOTE.
+
+Design reference (implementers MUST read): [[file:specs/edit-coordination/design.md]]
+
+* Verification
+
+** Per-item gates
+Each child item carries its own verification command in its body's Acceptance section. All must pass before the item transitions to DONE.
+
+- =BUG-303=: =bun test packages/coding-agent/test/tools/managed-code-buffer-errors.test.ts= + =bun test packages/coding-agent/test/tools/= regression sweep.
+- =BUG-305=: =bun test packages/coding-agent/test/tools/code.test.ts= — the two previously failing wiring tests pass.
+- =FEAT-593=: =cargo test -p pi-code-engine --test coord_two_session= + =cargo test -p pi-edit-broker --test spawn= + =bun test packages/coding-agent/test/session/edit-coordinator.test.ts packages/coding-agent/test/tools/code-result-peer-footer.test.ts= + =cargo clippy --workspace --all-targets --all-features -- -D warnings=.
+- =FUP-064=: =specs/edit-coordination/loro-phase2-spike.md= exists and answers the 9 writeup questions with explicit GO/NO-GO.
+- =FUP-065 Phase A=: =org query category:features state:DONE query:FEAT-577 OR FEAT-578 OR FEAT-579 OR FEAT-580= matches all four; =org query category:followups state:DONE query:FUP-060 OR FUP-061 OR FUP-062 OR FUP-063= matches all four.
+- =FUP-065 Phase B=: =PLAN-254= and =PLAN-259= both =DONE=; =specs/edit-coordination/design.md= carries =## Phase 1 landed= section.
+
+** Cross-cutting acceptance
+- =cargo test --workspace= passes (no regression from baseline).
+- =bun check= (TypeScript + Rust) passes.
+- =cargo clippy --workspace --all-targets --all-features -- -D warnings= clean.
+- =bun --cwd=packages/natives run dev:native= produces a working NAPI dylib.
+
+** Manual acceptance (deferred to follow-on verification, not gating this plan)
+The live two-session repro documented in PLAN-254 is confirmed working per user attestation (session =14c0b265a752cb07= dialogue). FEAT-593's two-session integration test encodes the unit-level equivalent of that repro. No separate manual acceptance gate for this plan.
+
+* Execution Manifest
+
+** :wave: Wave 1 — independent work (parallel)
+Three items with no inter-dependency; dispatch three delegated subagents.
+
+- [[id:BUG-303-applymanagedbuffercontent-bypasses-callc][BUG-303 — applyManagedBufferContent bypasses callCodeBuffer so sessionId is missing]]
+- [[id:BUG-305-code-tool-wiring-tests-miss-the-post-sav][BUG-305 — Code tool wiring tests miss the post-save coord_peer_activity call]]
+- [[id:FUP-064-loro-crdt-phase-2-adoption-spike-journal][FUP-064 — Loro CRDT phase-2 adoption spike: journal op[] to LoroText API mapping writeup]]
+
+** :wave: Wave 2 — coverage gaps (serialized on BUG-303)
+=FEAT-593= depends on BUG-303 because the subagent-attribution test exercises =callCodeBuffer= post-cutover. Starting before BUG-303 lands would bake the pre-cutover sessionId routing into new tests.
+
+- [[id:FEAT-593-fill-coord-test-gaps-two-session-integra][FEAT-593 — Fill coord test gaps: two-session integration, subagent attribution, peer-activity footer, broker lifecycle]]
+
+** :wave: Wave 3 — sweep (serialized on BUG-303 + FEAT-593)
+=FUP-065= has a two-phase sub-outline. Phase A (FEATs + FUPs) has no code dependency and could run earlier, but is held until Wave 3 so that a single sweep agent can execute both phases in order and issue one comprehensive closeout commit.
+
+- [[id:FUP-065-sweep-stale-cross-session-coord-org-item][FUP-065 — Sweep stale cross-session coord org items: mark FEATs/FUPs DONE first, then PLANs after BUG-303 green]]
+
+* Risks and mitigations
+
+- **Stale-socket sub-test may uncover real bug in =spawn_broker_if_absent=.** FEAT-593 scope permits landing a narrow fix in =pi-edit-broker/src/spawn.rs= in the same change, flagged as a NOTE. If the fix is larger than a few lines, split into its own BUG and rescope FEAT-593 to stub the behavior.
+- **BUG-303 cutover breaks test callers that were passing undefined sessionId.** Mitigation: BUG-303 body requires all three test-file call sites in =test/tools/managed-code-buffer-errors.test.ts= to be updated to pass a =SessionIdSource= stub; subagent must not miss them.
+- **PLAN-267 test cluster overlaps.** BUG-303 and BUG-305 are both listed in PLAN-267 Wave 1. The subagents landing them here MUST update PLAN-267 cross-references (note-append, no removal) so PLAN-267 is not left with ghost dependencies.
+- **Loro spike returns NO-GO.** Acceptable outcome; the writeup is still the deliverable. Do not pivot to Automerge or Yjs in the same FUP — that is a separate investigation.
+- **Sweep agent marks an item DONE whose acceptance actually regressed since landing.** Mitigation: Phase A sweep must cite a specific commit sha (=ac06f7ae0= or later) and a specific test run output in the NOTE; do not sweep on trust.
+
+* Non-goals
+
+- CRDT implementation (Phase 2). FUP-064 is spike-only.
+- Cross-host coordination. Local Unix socket only.
+- Semantic conflict resolution.
+- Windows named-pipe support.
+- Patch-mode lifecycle convergence (BUG-267, separate plan).
+- The remaining ten PLAN-267 test cluster BUGs (those are orthogonal).

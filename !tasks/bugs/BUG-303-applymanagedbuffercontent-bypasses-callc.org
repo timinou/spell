@@ -1,5 +1,5 @@
 #+TITLE: applyManagedBufferContent bypasses callCodeBuffer so sessionId is missing
-#+STATE: ITEM
+#+STATE: DOING
 #+SESSION_ID: 14c0a2c7e0b0df60
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-42-37-570Z_14c0a2c7e0b0df60.jsonl]]
 #+CUSTOM_ID: BUG-303-applymanagedbuffercontent-bypasses-callc

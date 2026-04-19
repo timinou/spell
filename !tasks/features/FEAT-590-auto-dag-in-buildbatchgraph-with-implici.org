@@ -1,0 +1,52 @@
+#+TITLE: Auto-DAG in buildBatchGraph with implicit blocker metadata
+#+STATE: ITEM
+#+SESSION_ID: 14c0a54ed68d3bdc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-53-40-058Z_14c0a54ed68d3bdc.jsonl]]
+#+CUSTOM_ID: FEAT-590-auto-dag-in-buildbatchgraph-with-implici
+#+LAYER: coding-agent
+
+* Initial Message
+
+I want you to think a bit deeper than the fileDeps vs. lock. I don't want a global lock for all tasks, the pi-code-engine file locks should be enough in theory. Blocking subtask execution has often been my bane... Ask me a lot of questions and challenge me a lot
+
+* Target
+- packages/coding-agent/src/task/batch-scheduler.ts
+  - BatchGraph interface: add implicitBlockers: ImplicitBlocker[]
+  - buildBatchGraph: after normalizing explicit blockers, detect overlap pairs and inject implicit edges in declaration order
+  - New exported type: export interface ImplicitBlocker { to: string; from: string; reason: string }
+
+* Change
+- Depends on FEAT-589-subtree-aware-hasfileoverlap-with-path-n (subtree predicate shipping first).
+- New pass in buildBatchGraph:
+  1. Build a temporary MutableDag-like structure keyed by task id with filesDeps to invoke hasFileOverlap.
+  2. For each (i, j) pair with i<j in declaration order where filesDeps overlap:
+     - If j does not already list i in blockers: add an implicit edge i -> j.
+     - Record { to: j.id, from: i.id, reason: first overlapping path or "filesDeps overlap" }.
+  3. Merge implicit edges into blockersById; update dependentsById; re-run topological sort + cycle check.
+- Return implicitBlockers as part of BatchGraph.
+- scheduleBatch: forward implicitBlockers into the final result shape (see FEAT for result surface; this wave only extends the graph API).
+
+* Edge Cases
+- Explicit blocker already covers the overlap: do not duplicate; do not record as implicit.
+- Overlap makes a cycle with an explicit blocker: report as scheduler error ("filesDeps overlap implies cycle"); this is a caller bug.
+- Empty filesDeps on both sides: no implicit edge (policy flip).
+- Transitive implicit edges: record only direct pairs; topological sort handles chains naturally.
+
+* Acceptance
+- buildBatchGraph unit tests in packages/coding-agent/test/task/batch-scheduler.test.ts:
+  - Two tasks with identical filesDeps -> implicit blocker T2<-T1, order [T1,T2].
+  - Three tasks with transitive overlap (A[x], B[x,y], C[y]) -> A<-B<-C chain recorded correctly.
+  - Explicit blocker already present: no duplicate implicit record.
+  - Non-overlapping siblings: implicitBlockers is empty array.
+  - Cycle via overlap + explicit blocker throws.
+- bun test packages/coding-agent/test/task/batch-scheduler.test.ts passes.
+
+* Implementation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-590-auto-dag-in-buildbatchgraph-with-implici::implementation
+:END:
+1. Declare ImplicitBlocker type in batch-scheduler.ts and extend BatchGraph with implicitBlockers: ImplicitBlocker[].
+2. In buildBatchGraph after explicit-blocker normalization, walk the task list and for each pair (i<j) call the MutableDag-backed hasFileOverlap; when true and j does not already list i as explicit blocker, append i to j.blockers and record { to: j.id, from: i.id, reason }.
+3. Re-run the topological sort + cycle check on the augmented graph so overlap-induced cycles surface as explicit scheduler errors.
+4. Extend scheduleBatch to thread implicitBlockers through to callers without changing concurrency semantics.
+5. Unit tests in packages/coding-agent/test/task/batch-scheduler.test.ts: identical filesDeps produce implicit blocker; transitive chain A[x] B[x,y] C[y] yields A<-B<-C; explicit blocker present prevents duplicate; non-overlap gives empty implicitBlockers; cycle-via-overlap throws.
