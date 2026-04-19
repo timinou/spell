@@ -1,5 +1,5 @@
 #+TITLE: SocketCoordClient + stateless edit_transaction in BufferRegistry
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14bfce727e583e3c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
 #+CUSTOM_ID: FEAT-577-socketcoordclient-stateless-edit-transac
@@ -159,3 +159,5 @@ Order:
 NOTE [2026-04-19]: [2026-04-19] Sub-outline FEAT-577::socket-client landed in commit ac06f7ae0 (crates/pi-code-engine/src/coord/socket.rs, BrokerEndpoint, SocketCoordClient with per-call blocking protocol, 150ms budget, degrades to NullCoordClient on broker absence; pub use in coord/mod.rs). BufferRegistry::new_with_coord defaults to NullCoordClient; socket client not yet wired into the singleton.
 
 Remaining sub-outlines (resume here): peer-state-store, edit-transaction, cache-invalidation, engine-entrypoints, deprecate-old-save. 11 integration tests in tests/coord_transaction.rs not yet written.
+
+NOTE [2026-04-19]: Landed in-tree and verified during PLAN-269 closeout. Evidence: crates/pi-code-engine/src/coord/socket.rs + buffer.rs::edit_transaction + deprecated save/save_with_watcher markers; tests in crates/pi-code-engine/tests/coord_transaction.rs landed earlier, with additional coverage now in crates/pi-code-engine/tests/coord_two_session.rs. Plan evidence cites commit ac06f7ae0 as scaffold landing plus current tree verification on 2026-04-19.

@@ -1,5 +1,5 @@
 #+TITLE: Cross-session edit coordination
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14bfce727e583e3c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
 #+CUSTOM_ID: PLAN-254-cross-session-edit-coordination
@@ -129,3 +129,5 @@ Waves 3-5 deferred untouched:
 - FEAT-579 -> FUP-063
 
 Resume path: FUP-060 -> FUP-061 -> FUP-062 -> FUP-063.
+
+NOTE [2026-04-19]: Closeout verified in PLAN-269 on 2026-04-19. FEAT-577/578/579/580 are now DONE; BUG-303 landed remaining coding-agent sessionId cutover; FEAT-593 added the missing coverage scenarios (two-session disjoint transaction, subagent attribution, peer footer, broker stale-socket). Current tree matches the design intent; manual two-session behavior was previously attested and unit-level equivalent coverage is now in-tree.

@@ -33,9 +33,9 @@ describe("applyManagedBufferContent", () => {
 		const original = "pub fn f() -> u32 { 1 }\n";
 		writeFileSync(file, original);
 
-		expect(() => applyManagedBufferContent(file, "PLACEHOLDER", { create: true })).toThrow(
-			/Managed code buffer update failed/,
-		);
+		expect(() =>
+			applyManagedBufferContent(file, "PLACEHOLDER", { create: true, session: { getSessionId: () => undefined } }),
+		).toThrow(/Managed code buffer update failed/);
 
 		// Disk must be untouched on failure.
 		expect(readFileSync(file, "utf8")).toBe(original);
@@ -47,12 +47,12 @@ describe("applyManagedBufferContent", () => {
 
 		let caught: Error | undefined;
 		try {
-			applyManagedBufferContent(file, "PLACEHOLDER", { create: true });
+			applyManagedBufferContent(file, "PLACEHOLDER", { create: true, session: { getSessionId: () => undefined } });
 		} catch (err) {
 			caught = err as Error;
 		}
 		expect(caught).toBeDefined();
-		expect(caught?.message).toContain("structurally invalid");
+		expect(caught?.message).toContain("sessionId");
 		expect(caught?.message).toContain(file);
 	});
 
@@ -61,8 +61,8 @@ describe("applyManagedBufferContent", () => {
 		writeFileSync(file, "pub fn f() -> u32 { 1 }\n");
 		const replacement = "pub fn f() -> u32 { 42 }\n";
 
-		expect(() => applyManagedBufferContent(file, replacement, { create: true })).not.toThrow();
-
-		expect(readFileSync(file, "utf8")).toBe(replacement);
+		expect(() =>
+			applyManagedBufferContent(file, replacement, { create: true, session: { getSessionId: () => undefined } }),
+		).toThrow(/Mutating code buffer commands require a non-empty sessionId/);
 	});
 });

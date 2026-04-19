@@ -3,31 +3,41 @@ import { callCodeBuffer, coordStatus, isMutatingCommand } from "@oh-my-pi/pi-cod
 import * as nativesModule from "@oh-my-pi/pi-natives";
 
 describe("edit coordinator", () => {
-	it("injects sessionId for mutating calls", () => {
+	it("injects parent sessionId for mutating calls", () => {
 		const executeSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
 			output: { success: true },
 			error: false,
 		});
-		callCodeBuffer({ session: { getSessionId: () => "abc" } }, { command: "save", file: "/tmp/example.ts" });
-		expect(executeSpy).toHaveBeenCalledWith({ command: "save", file: "/tmp/example.ts", sessionId: "abc" });
+		callCodeBuffer({ session: { getSessionId: () => "parent-123" } }, { command: "save", file: "/tmp/example.ts" });
+		expect(executeSpy).toHaveBeenCalledWith({ command: "save", file: "/tmp/example.ts", sessionId: "parent-123" });
 		executeSpy.mockRestore();
 	});
 
-	it("falls back to tui pid when mutating call has no session id", () => {
+	it("injects subagent sessionId when available", () => {
 		const executeSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
 			output: { success: true },
 			error: false,
 		});
 		callCodeBuffer(
-			{ session: { getSessionId: () => "" } },
+			{ session: { getSessionId: () => "sub-456" } },
 			{ command: "replace_content", file: "/tmp/example.ts", content: "x" },
 		);
 		expect(executeSpy).toHaveBeenCalledWith({
 			command: "replace_content",
 			file: "/tmp/example.ts",
 			content: "x",
-			sessionId: `tui-${process.pid}`,
+			sessionId: "sub-456",
 		});
+		executeSpy.mockRestore();
+	});
+
+	it("omits sessionId when no session is available", () => {
+		const executeSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: { success: true },
+			error: false,
+		});
+		callCodeBuffer({ session: {} }, { command: "replace_content", file: "/tmp/example.ts", content: "x" });
+		expect(executeSpy).toHaveBeenCalledWith({ command: "replace_content", file: "/tmp/example.ts", content: "x" });
 		executeSpy.mockRestore();
 	});
 

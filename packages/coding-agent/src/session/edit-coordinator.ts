@@ -9,7 +9,7 @@ import {
 const MUTATING_CODE_BUFFER_COMMANDS = new Set(["edit", "replace_content", "save"]);
 
 export interface SessionIdSource {
-	getSessionId?: () => string | null;
+	getSessionId?: () => string | null | undefined;
 }
 
 export interface CallCodeBufferContext {
@@ -20,9 +20,8 @@ export function isMutatingCommand(command: string): boolean {
 	return MUTATING_CODE_BUFFER_COMMANDS.has(command);
 }
 
-function resolveSessionId(ctx: CallCodeBufferContext): string {
-	const sessionId = ctx.session.getSessionId?.()?.trim();
-	return sessionId && sessionId.length > 0 ? sessionId : `tui-${process.pid}`;
+function resolveSessionId(ctx: CallCodeBufferContext): string | undefined {
+	return ctx.session.getSessionId?.()?.trim() || undefined;
 }
 
 export function callCodeBuffer(ctx: CallCodeBufferContext, opts: CodeBufferOptions): CodeBufferResult {
@@ -30,10 +29,10 @@ export function callCodeBuffer(ctx: CallCodeBufferContext, opts: CodeBufferOptio
 		return executeCodeBuffer(opts);
 	}
 	const sessionId = resolveSessionId(ctx);
-	if (!sessionId) {
-		throw new Error("Mutating code buffer commands require a non-empty sessionId");
+	if (sessionId) {
+		return executeCodeBuffer({ ...opts, sessionId });
 	}
-	return executeCodeBuffer({ ...opts, sessionId });
+	return executeCodeBuffer(opts);
 }
 
 export function recentPeerActivity(

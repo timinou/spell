@@ -26,3 +26,16 @@ fn auto_spawn_by_first_client() {
 	// Give broker time to enter grace-period and clean up.
 	std::thread::sleep(Duration::from_millis(700));
 }
+
+#[test]
+fn stale_socket_is_removed_and_replaced() {
+	let temp = tempfile::tempdir().expect("tempdir");
+	let socket = temp.path().join("stale.sock");
+	std::fs::write(&socket, b"stale").expect("stale socket file");
+	let binary = std::env::var_os("CARGO_BIN_EXE_pi-edit-broker")
+		.map(PathBuf::from)
+		.expect("CARGO_BIN_EXE_pi-edit-broker provided by cargo test");
+
+	spawn_broker_if_absent(&socket, Some(&binary)).expect("spawn through stale socket");
+	assert!(socket.exists(), "socket should be recreated after stale cleanup");
+}
