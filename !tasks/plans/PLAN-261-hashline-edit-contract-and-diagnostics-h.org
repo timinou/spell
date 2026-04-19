@@ -1,5 +1,5 @@
 #+TITLE: HASHLINE_EDIT_CONTRACT_AND_DIAGNOSTICS_HARDENING_PLAN
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14c077b77b8aac32
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-34-28-590Z_14c077b77b8aac32.jsonl]]
 #+CUSTOM_ID: PLAN-261-hashline-edit-contract-and-diagnostics-h
@@ -83,3 +83,17 @@ Required manual proof:
 - No child-item overlap with PLAN-254 broker/journal work.
 - Shared-surface overlap with PLAN-254 is explicitly limited to edit-render/result presentation and must reuse existing hint/reporting patterns.
 - No auto-recovery or whole-file fallback is permitted by this plan.
+
+** Completion [2026-04-19]
+*** Verification
+- `bun test packages/coding-agent/test/tools.test.ts packages/coding-agent/test/core/hashline.test.ts` → PASS (`173 pass`, `1 skip`, `0 fail`)
+- `bun check:ts` → PASS (`biome check . && tsgo -p tsconfig.json`)
+- `bun !tasks/plans/plan-artifacts/PLAN-261-hashline-edit-contract-and-diagnostics-h/manual-hashline-verification.ts !tasks/plans/plan-artifacts/PLAN-261-hashline-edit-contract-and-diagnostics-h/hashline-manual-verification.txt` → PASS; manual proof covers missing-anchor, malformed-anchor, stale-hash remap, and valid hashline edit success on `Cargo.toml`
+- Reviewer subagent `ReviewHashlineRuntime` returned `overall_correctness: correct` with no high-confidence issues in the runtime changes.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-261-hashline-edit-contract-and-diagnostics-h/hashline-manual-verification.txt]] — manual proof log with exact surfaced messages and final successful edit output
+- [[file:!tasks/plans/plan-artifacts/PLAN-261-hashline-edit-contract-and-diagnostics-h/manual-hashline-verification.ts]] — Bun script used to generate the manual proof log
+*** Deviations
+- None.
+
+NOTE [2026-04-19]: Completed after BUG-289 closure. Verification evidence captured in the completion report and plan artifacts directory.

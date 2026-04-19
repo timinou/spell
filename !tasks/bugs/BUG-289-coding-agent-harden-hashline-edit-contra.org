@@ -1,5 +1,5 @@
 #+TITLE: coding-agent: harden hashline edit contract and diagnostics
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14c077b77b8aac32
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-34-28-590Z_14c077b77b8aac32.jsonl]]
 #+CUSTOM_ID: BUG-289-coding-agent-harden-hashline-edit-contra
@@ -155,3 +155,5 @@ Verification targets:
 - Hashline prompt/schema guidance explicitly tells the model to read first and to include =LINE#ID= anchors for =replace=.
 - Focused tests for the changed contract pass, and =bun check:ts= is the final verification gate.
 - The item remains separate from PLAN-254 execution, but any touched shared renderer/output surfaces remain compatible with PLAN-254 follow-up work.
+
+NOTE [2026-04-19]: Implemented via PLAN-261. Verification: bun test packages/coding-agent/test/tools.test.ts packages/coding-agent/test/core/hashline.test.ts; bun check:ts; manual proof artifact at !tasks/plans/plan-artifacts/PLAN-261-hashline-edit-contract-and-diagnostics-h/hashline-manual-verification.txt.
