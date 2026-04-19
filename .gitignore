@@ -55,9 +55,8 @@ pi-*.html
 # Generated files
 packages/coding-agent/src/internal-urls/docs-index.generated.ts
 
-# Org-mode agent scratch space (keep !journal)
 .local/*
-!.local/!journal
+.local/!journal
 !.local/!tracks
 !.local/!space
 \!tasks/drafts

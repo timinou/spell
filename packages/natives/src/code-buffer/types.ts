@@ -92,6 +92,7 @@ export interface CodeBufferOptions {
 	resolution?: number;
 	offset?: number;
 	limit?: number;
+	sinceMs?: number;
 	action?: string;
 	line?: number;
 	column?: number;

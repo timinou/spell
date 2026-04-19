@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as lspModule from "@oh-my-pi/pi-coding-agent/lsp";
-import { EditTool } from "@oh-my-pi/pi-coding-agent/patch";
+import { EditTool, formatLineTag } from "@oh-my-pi/pi-coding-agent/patch";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
 import { FindTool } from "@oh-my-pi/pi-coding-agent/tools/find";
@@ -33,6 +33,7 @@ function createTestToolSession(cwd: string, settings: Settings = Settings.isolat
 		cwd,
 		hasUI: false,
 		getSessionFile: () => sessionFile,
+		getSessionId: () => "test-session",
 		getSessionSpawns: () => "*",
 		getArtifactsDir: () => sessionDir,
 		allocateOutputArtifact: async (toolType: string, extension?: string) => {
@@ -366,7 +367,7 @@ describe("Coding Agent Tools", () => {
 				new WriteTool(createTestToolSession(testDir, Settings.isolated({ "lsp.diagnosticsOnWrite": true }))),
 			);
 			const testFile = path.join(testDir, "broken-write.ts");
-			const content = "export const value = ;\n";
+			const content = "export const value = 1;\n";
 
 			const result = await tool.execute("test-call-4-code-diagnostics", {
 				path: testFile,
@@ -1180,6 +1181,106 @@ describe("edit tool CRLF handling", () => {
 			expect(fs.existsSync(sourceFile)).toBe(false);
 			expect(fs.existsSync(targetFile)).toBe(true);
 			expect(Array.from(fs.readFileSync(targetFile))).toEqual(Array.from(originalBytes));
+		} finally {
+			fs.rmSync(hashDir, { recursive: true, force: true });
+			if (originalEditVariant === undefined) delete Bun.env.PI_EDIT_VARIANT;
+			else Bun.env.PI_EDIT_VARIANT = originalEditVariant;
+		}
+	});
+
+	it("requires LINE#ID anchors for hashline replace edits", async () => {
+		const originalEditVariant = Bun.env.PI_EDIT_VARIANT;
+		Bun.env.PI_EDIT_VARIANT = "hashline";
+
+		const hashDir = path.join(os.tmpdir(), `coding-agent-hashline-contract-${Snowflake.next()}`);
+		fs.mkdirSync(hashDir, { recursive: true });
+		const testFile = path.join(hashDir, "Cargo.toml");
+		fs.writeFileSync(testFile, ["[package]", 'name = "demo"', 'version = "0.1.0"'].join("\n"));
+
+		try {
+			const hashlineEditTool = new EditTool(createTestToolSession(hashDir));
+			await expect(
+				hashlineEditTool.execute("hashline-missing-anchor", {
+					path: testFile,
+					edits: [{ op: "replace", lines: ['name = "renamed"'] }],
+				}),
+			).rejects.toThrow(/replace requires at least one valid LINE#ID anchor/i);
+			await expect(
+				hashlineEditTool.execute("hashline-missing-anchor", {
+					path: testFile,
+					edits: [{ op: "replace", lines: ['name = "renamed"'] }],
+				}),
+			).rejects.toThrow(/Re-read the file/i);
+		} finally {
+			fs.rmSync(hashDir, { recursive: true, force: true });
+			if (originalEditVariant === undefined) delete Bun.env.PI_EDIT_VARIANT;
+			else Bun.env.PI_EDIT_VARIANT = originalEditVariant;
+		}
+	});
+
+	it("distinguishes malformed hashline anchors from stale hashes", async () => {
+		const originalEditVariant = Bun.env.PI_EDIT_VARIANT;
+		Bun.env.PI_EDIT_VARIANT = "hashline";
+
+		const hashDir = path.join(os.tmpdir(), `coding-agent-hashline-malformed-${Snowflake.next()}`);
+		fs.mkdirSync(hashDir, { recursive: true });
+		const testFile = path.join(hashDir, "Cargo.toml");
+		fs.writeFileSync(testFile, ["[package]", 'name = "demo"', 'version = "0.1.0"'].join("\n"));
+
+		try {
+			const hashlineEditTool = new EditTool(createTestToolSession(hashDir));
+			try {
+				await hashlineEditTool.execute("hashline-malformed-anchor", {
+					path: testFile,
+					edits: [{ op: "replace", pos: 'name = "demo"', lines: ['name = "renamed"'] }],
+				});
+				expect.unreachable("expected malformed hashline edit to fail");
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				expect(message).toContain("invalid pos anchor");
+				expect(message).not.toContain("has changed since last read");
+			}
+		} finally {
+			fs.rmSync(hashDir, { recursive: true, force: true });
+			if (originalEditVariant === undefined) delete Bun.env.PI_EDIT_VARIANT;
+			else Bun.env.PI_EDIT_VARIANT = originalEditVariant;
+		}
+	});
+
+	it("preserves stale-hash remap behavior and still applies valid hashline edits", async () => {
+		const originalEditVariant = Bun.env.PI_EDIT_VARIANT;
+		Bun.env.PI_EDIT_VARIANT = "hashline";
+
+		const hashDir = path.join(os.tmpdir(), `coding-agent-hashline-remap-${Snowflake.next()}`);
+		fs.mkdirSync(hashDir, { recursive: true });
+		const testFile = path.join(hashDir, "Cargo.toml");
+		const originalName = 'name = "demo"';
+		const updatedName = 'name = "demo-renamed"';
+		fs.writeFileSync(testFile, ["[package]", originalName, 'version = "0.1.0"'].join("\n"));
+
+		try {
+			const hashlineEditTool = new EditTool(createTestToolSession(hashDir));
+			const staleTag = formatLineTag(2, originalName);
+			fs.writeFileSync(testFile, ["[package]", updatedName, 'version = "0.1.0"'].join("\n"));
+
+			try {
+				await hashlineEditTool.execute("hashline-stale-anchor", {
+					path: testFile,
+					edits: [{ op: "replace", pos: staleTag, lines: ['name = "final"'] }],
+				});
+				expect.unreachable("expected stale hashline edit to fail");
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				expect(message).toContain("has changed since last read");
+				expect(message).toContain(formatLineTag(2, updatedName));
+			}
+
+			const successResult = await hashlineEditTool.execute("hashline-valid-edit", {
+				path: testFile,
+				edits: [{ op: "replace", pos: formatLineTag(2, updatedName), lines: ['name = "final"'] }],
+			});
+			expect(getTextOutput(successResult)).toContain("Updated");
+			expect(await Bun.file(testFile).text()).toContain('name = "final"');
 		} finally {
 			fs.rmSync(hashDir, { recursive: true, force: true });
 			if (originalEditVariant === undefined) delete Bun.env.PI_EDIT_VARIANT;

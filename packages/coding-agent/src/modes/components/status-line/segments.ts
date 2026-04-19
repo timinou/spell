@@ -4,6 +4,7 @@ import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { TERMINAL, truncateToWidth } from "@oh-my-pi/pi-tui";
 import { formatCost, formatDuration, formatNumber, getProjectDir, relativePathWithinRoot } from "@oh-my-pi/pi-utils";
 import { theme } from "../../../modes/theme/theme";
+import { coordStatus, openCodeBufferPaths, recentPeerActivity } from "../../../session/edit-coordinator";
 import { replaceTabs, shortenPath } from "../../../tools/render-utils";
 import { getContextUsageLevel, getContextUsageThemeColor } from "./context-thresholds";
 import type { RenderedSegment, SegmentContext, StatusLineSegment, StatusLineSegmentId } from "./types";
@@ -28,6 +29,49 @@ function stripDisplayRoot(pwd: string): string {
 
 function normalizePremiumRequests(value: number): number {
 	return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+interface CoordActivitySummary {
+	file: string;
+	ageSeconds: number;
+}
+
+interface CoordSegmentCache {
+	sessionId: string;
+	expiresAt: number;
+	rendered: RenderedSegment;
+}
+
+const COORD_CACHE_TTL_MS = 1_000;
+let coordSegmentCache: CoordSegmentCache | undefined;
+
+function formatCoordAge(ageSeconds: number): string {
+	if (ageSeconds < 60) return `${ageSeconds}s ago`;
+	if (ageSeconds < 3_600) return `${Math.floor(ageSeconds / 60)}m ago`;
+	return `${Math.floor(ageSeconds / 3_600)}h ago`;
+}
+
+function displayCoordPath(file: string): string {
+	const projectDir = getProjectDir();
+	const resolved = path.isAbsolute(file) ? file : path.resolve(projectDir, file);
+	const relative = path.relative(projectDir, resolved).replaceAll("\\", "/");
+	return shortenPath(relative && !relative.startsWith("..") ? relative : resolved);
+}
+
+function latestCoordActivity(currentSessionId: string): CoordActivitySummary | undefined {
+	const buffers = openCodeBufferPaths();
+	let latest: CoordActivitySummary | undefined;
+	for (const file of buffers) {
+		const activity = recentPeerActivity(file, Date.now() - 60_000, 5);
+		for (const edit of activity.edits ?? []) {
+			if (!edit || edit.sessionId === currentSessionId || typeof edit.ts !== "number") continue;
+			const ageSeconds = Math.max(0, Math.floor((Date.now() - edit.ts) / 1_000));
+			if (!latest || ageSeconds < latest.ageSeconds) {
+				latest = { file, ageSeconds };
+			}
+		}
+	}
+	return latest;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -349,6 +393,46 @@ const sessionSegment: StatusLineSegment = {
 	},
 };
 
+const coordSegment: StatusLineSegment = {
+	id: "coord",
+	render(ctx) {
+		const sessionId = ctx.session.sessionManager?.getSessionId?.() ?? "";
+		const now = Date.now();
+		if (coordSegmentCache && coordSegmentCache.sessionId === sessionId && coordSegmentCache.expiresAt > now) {
+			return coordSegmentCache.rendered;
+		}
+		const fallback =
+			coordSegmentCache?.sessionId === sessionId ? coordSegmentCache.rendered : { content: "", visible: false };
+		try {
+			const status = coordStatus();
+			const peers = (status.peers ?? []).filter(peer => peer.sessionId && peer.sessionId !== sessionId);
+			if (peers.length === 0) {
+				const rendered = { content: "", visible: false } satisfies RenderedSegment;
+				coordSegmentCache = { sessionId, expiresAt: now + COORD_CACHE_TTL_MS, rendered };
+				return rendered;
+			}
+			const parts = [`coord: ${peers.length} ${peers.length === 1 ? "peer" : "peers"}`];
+			const latest = latestCoordActivity(sessionId);
+			if (latest) {
+				parts.push(
+					truncateToWidth(
+						replaceTabs(`${displayCoordPath(latest.file)} ${formatCoordAge(latest.ageSeconds)}`),
+						28,
+					),
+				);
+			}
+			const rendered = {
+				content: theme.fg("statusLineSubagents", parts.join(theme.sep.dot)),
+				visible: true,
+			} satisfies RenderedSegment;
+			coordSegmentCache = { sessionId, expiresAt: now + COORD_CACHE_TTL_MS, rendered };
+			return rendered;
+		} catch {
+			return fallback;
+		}
+	},
+};
+
 const hostnameSegment: StatusLineSegment = {
 	id: "hostname",
 	render(_ctx) {
@@ -414,6 +498,7 @@ export const SEGMENTS: Record<StatusLineSegmentId, StatusLineSegment> = {
 	time_spent: timeSpentSegment,
 	time: timeSegment,
 	session: sessionSegment,
+	coord: coordSegment,
 	hostname: hostnameSegment,
 	cache_read: cacheReadSegment,
 	cache_write: cacheWriteSegment,

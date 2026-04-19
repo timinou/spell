@@ -1,0 +1,114 @@
+#+TITLE: Nested task isolation default when parent is itself a subagent
+#+STATE: ITEM
+#+SESSION_ID: 14c07eaaa046a608
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T08-04-50-433Z_14c07eaaa046a608.jsonl]]
+#+CUSTOM_ID: FEAT-587-nested-task-isolation-default-when-paren
+#+EFFORT: 3h
+#+LAYER: coding-agent
+#+PRIORITY: #B
+
+* Scope
+
+In-scope:
+- `packages/coding-agent/src/task/index.ts::TaskTool.#executeSync` — coerce `isolated: true` when heuristic matches.
+- `packages/coding-agent/src/task/types.ts::createTaskSchema` — document new auto-isolation behavior.
+- Diagnostic surface: render.ts isolation indicator for auto-coerced calls.
+
+Out-of-scope:
+- Changing what "isolated" means (worktree vs fuse-overlay vs fuse-projfs — existing settings stand).
+- Changes to `task.isolation.mode` default.
+- Any change to top-level (depth=0) task dispatch; main-session `task` calls stay explicit-opt-in.
+
+Rationale: the incident session had no isolation because:
+1. `task.isolation.mode` is non-default per workstation settings.
+2. Main session dispatched `agent: task`; that task agent then delegated to `agent: quick_task` without `isolated: true`.
+3. Children's destructive edits landed directly on the live workspace.
+
+Isolation-on-nested-dispatch is a cheap safety net: the parent task agent is already a contained execution; its children's patches should go through the parent before merging into the real tree.
+
+* Existing Patterns
+
+- `TaskTool.#executeSync` reads `isolationMode = session.settings.get("task.isolation.mode")` at line 1137 and `taskDepth = session.taskDepth ?? 0` at line 1144.
+- `isolationRequested = "isolated" in params ? params.isolated === true : false` at line 1138 — do not break this explicit-opt-in path.
+- When `isolationMode === "none"` but `isolated: true` was requested, current code errors with "Task isolation is disabled". Preserve that error; the new auto-coerce applies only when mode is configured.
+- `packages/coding-agent/src/task/worktree.ts::applyNestedPatches` already handles patch merge for nested isolated tasks. Reuse as-is.
+- `packages/coding-agent/src/task/render.ts` shows an `[isolated]` badge at line 465 when `isolated: true` is explicit. Extend to show `[isolated:auto]` for coerced cases so users see it happened.
+
+* Tests
+
+File: `packages/coding-agent/test/task/nested-isolation-default.test.ts` (new).
+
+Scenarios:
+
+1. *depth=0 no auto-coerce* — top-level task dispatch with `isolated` absent → isolation not engaged regardless of agent or file scope.
+
+2. *depth=1, task.isolation.mode="none"* — no auto-coerce; existing "Task isolation is disabled" path unreachable because no coercion happened.
+
+3. *depth=1, mode=worktree, single non-code file* — batch of one task mutating `docs/README.md` only → no auto-coerce (threshold not met).
+
+4. *depth=1, mode=worktree, batch>1* — two tasks → auto-coerce to `isolated: true` even if each task is single-file.
+
+5. *depth=1, mode=worktree, any code-supported file* — one task with `filesDeps: ["src/foo.ts"]` → auto-coerce triggered by code-file heuristic.
+
+6. *depth=1, mode=worktree, explicit isolated:false* — caller passed `isolated: false` → respected; no auto-coerce override.
+
+7. *depth=1, mode=worktree, explicit isolated:true* — behaves like today; auto-coerce is a no-op.
+
+8. *render surface* — auto-coerced call shows `[isolated:auto]` indicator in task render output.
+
+* Implementation
+
+** Coercion logic
+:PROPERTIES:
+:CUSTOM_ID: FEAT-587-nested-task-isolation-default-when-paren::coerce-logic
+:END:
+- File: `packages/coding-agent/src/task/index.ts::TaskTool.#executeSync`
+- After reading `isolationMode`, `isolationRequested`, and `taskDepth`, add:
+  - `shouldAutoCoerce = taskDepth >= 1 && isolationMode !== "none" && !("isolated" in params)`.
+  - If `shouldAutoCoerce`: compute `autoReason` by scanning `params.tasks[]`:
+    - If tasks.length > 1 → reason = "batch size".
+    - Else if any `filesDeps` entry matches `isCodeToolSupportedPath` → reason = "code-supported file scope".
+    - Else → skip (do not coerce).
+  - If reason matched: set local `isIsolated = true` and tag `autoIsolatedReason` for logging + render.
+- Preserve the existing "explicit isolated:true but mode=none" error path.
+
+** Render tag
+:PROPERTIES:
+:CUSTOM_ID: FEAT-587-nested-task-isolation-default-when-paren::render-tag
+:DEPENDS: FEAT-587-nested-task-isolation-default-when-paren::coerce-logic
+:END:
+- File: `packages/coding-agent/src/task/render.ts`
+- Around line 465, when `autoIsolated === true`, render `[isolated:auto – <reason>]` instead of `[isolated]`. Pass the reason through the task state object.
+
+** Schema doc update
+:PROPERTIES:
+:CUSTOM_ID: FEAT-587-nested-task-isolation-default-when-paren::schema-doc
+:DEPENDS: FEAT-587-nested-task-isolation-default-when-paren::coerce-logic
+:END:
+- File: `packages/coding-agent/src/task/types.ts::createTaskSchema`
+- Update the `isolated` field description to note: "At depth >= 1 with a configured isolation mode, auto-coerced to true when the batch spans >1 task or any task touches a code-supported file; set explicitly to false to opt out."
+
+** Write tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-587-nested-task-isolation-default-when-paren::isolation-tests
+:DEPENDS: FEAT-587-nested-task-isolation-default-when-paren::coerce-logic FEAT-587-nested-task-isolation-default-when-paren::render-tag
+:END:
+- File: `packages/coding-agent/test/task/nested-isolation-default.test.ts`
+- Use task test harness pattern from `packages/coding-agent/test/task/executor.test.ts`.
+- Stub `session.taskDepth` to 1 for depth-1 cases. Set `task.isolation.mode` via settings fixture.
+
+* Edge Cases
+
+- *Auto-coerce with no isolation infra* — if `isolationMode === "none"` we never coerce; users must opt in by configuring the mode.
+- *Performance overhead* — worktree/fuse-overlay modes add startup cost. At depth >= 1 the extra cost is bounded and small vs. risk of destructive edits.
+- *Subagent wants to run a shell command that affects state* — isolation only protects files; processes spawned by subagent still run on host. Acceptable for this FEAT; future work can sandbox exec.
+- *Nested nested tasks* — depth=2 inherits the same rule. Coercion is cheap and idempotent.
+- *Merge conflicts on patch apply* — existing worktree merge already handles; no new failure modes.
+- *Settings drift* — if user changed `task.isolation.mode` to `"none"` deliberately, we respect that. No error, just no coercion.
+
+* Acceptance Criteria
+
+- `bun test packages/coding-agent/test/task/nested-isolation-default.test.ts` passes all 8 scenarios.
+- `bun check:ts` clean.
+- Manual repro of original incident shape: from a depth-1 `task` subagent, dispatch a 3-task `quick_task` batch with no explicit `isolated` → dispatch coerces isolation on; worktree patch is produced; merge applies only on clean reconcile. Simulate a destructive write in one child → isolated path rejects or at least isolates the damage.
+- Grep audit: `isolated` remains opt-in at depth 0; only the `taskDepth >= 1` branch added.

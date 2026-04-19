@@ -242,6 +242,8 @@ export interface TaskToolDetails {
 	usage?: Usage;
 	outputPaths?: string[];
 	progress?: AgentProgress[];
+	/** True when caller requested isolated execution but task.isolation.mode="none"; batch ran non-isolated. */
+	isolationDowngraded?: boolean;
 	async?: {
 		state: "running" | "completed" | "failed";
 		jobId: string;

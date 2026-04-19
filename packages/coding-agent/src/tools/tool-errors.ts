@@ -23,7 +23,26 @@ export class ToolError extends Error {
 		return this.message;
 	}
 }
+export interface PeerConflictPayload {
+	sessionId: string;
+	codePath: string;
+	peerRevision: number;
+	peerCommitTs: number;
+}
 
+export class PeerConflictToolError extends ToolError {
+	constructor(readonly peerConflict: PeerConflictPayload) {
+		super(
+			`Peer session ${peerConflict.sessionId} committed ${peerConflict.codePath} at ${new Date(peerConflict.peerCommitTs).toISOString()}. Re-run the edit; the engine will resolve against the fresh tree.`,
+			{ retryable: true, peerConflict },
+		);
+		this.name = "PeerConflictToolError";
+	}
+
+	override render(): string {
+		return this.message;
+	}
+}
 /**
  * Error thrown when a tool operation is aborted (e.g., via AbortSignal).
  */

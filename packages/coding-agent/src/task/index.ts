@@ -1137,27 +1137,15 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const isolationMode = this.session.settings.get("task.isolation.mode");
 		const isolationRequested = "isolated" in params ? params.isolated === true : false;
 		const isIsolated = isolationMode !== "none" && isolationRequested;
+		const isolationDowngraded = isolationMode === "none" && isolationRequested;
+		const isolationDowngradeNotice = isolationDowngraded
+			? 'Task isolation was requested but task.isolation.mode="none"; running non-isolated. Set task.isolation.mode to worktree, fuse-overlay, or fuse-projfs to enable.'
+			: "";
 		const mergeMode = this.session.settings.get("task.isolation.merge");
 		const commitStyle = this.session.settings.get("task.isolation.commits");
 		const maxConcurrency = this.session.settings.get("task.maxConcurrency");
 		const cacheStaggerMs = this.session.settings.get("task.cacheStaggerMs") ?? 800;
 		const taskDepth = this.session.taskDepth ?? 0;
-
-		if (isolationMode === "none" && "isolated" in params) {
-			return {
-				content: [
-					{
-						type: "text",
-						text: "Task isolation is disabled. Remove the isolated argument or set task.isolation.mode to 'worktree', 'fuse-overlay', or 'fuse-projfs'.",
-					},
-				],
-				details: {
-					projectAgentsDir,
-					results: [],
-					totalDurationMs: 0,
-				},
-			};
-		}
 
 		// Validate agent exists
 		const agent = getAgent(agents, agentName);
@@ -1861,6 +1849,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 			const outputIds = results.filter(r => !r.aborted || r.output.trim()).map(r => `agent://${r.id}`);
 			const backendSummaryPrefix = isolationBackendWarning ? `\n\n${isolationBackendWarning}` : "";
+			const downgradeSummaryPrefix = isolationDowngradeNotice ? `\n\n${isolationDowngradeNotice}` : "";
 			const summary = renderPromptTemplate(taskSummaryTemplate, {
 				successCount,
 				totalCount: results.length,
@@ -1870,7 +1859,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				summaries,
 				outputIds,
 				agentName,
-				mergeSummary: `${backendSummaryPrefix}${mergeSummary}`,
+				mergeSummary: `${backendSummaryPrefix}${downgradeSummaryPrefix}${mergeSummary}`,
 			});
 
 			// Cleanup temp directory if used
@@ -1888,6 +1877,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					totalDurationMs: totalDuration,
 					usage: hasAggregatedUsage ? aggregatedUsage : undefined,
 					outputPaths,
+					isolationDowngraded: isolationDowngraded || undefined,
 				},
 			};
 		} catch (err) {

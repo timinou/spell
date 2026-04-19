@@ -6,6 +6,8 @@ import {
 	formatHashLines,
 	HashlineMismatchError,
 	hashlineParseText,
+	MalformedHashlineAnchorError,
+	MissingHashlineAnchorError,
 	parseTag,
 	resolveEditAnchors,
 	streamHashLinesFromLines,
@@ -882,7 +884,14 @@ describe("buildCompactHashlineDiffPreview", () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe("resolveEditAnchors", () => {
-	it("throws when prepend receives an unparseable raw anchor string", () => {
+	it("throws MissingHashlineAnchorError when replace omits both anchors", () => {
+		expect(() => resolveEditAnchors([{ op: "replace", lines: ["tail"] }])).toThrow(MissingHashlineAnchorError);
+		expect(() => resolveEditAnchors([{ op: "replace", lines: ["tail"] }])).toThrow(
+			/replace requires at least one valid LINE#ID anchor/i,
+		);
+	});
+
+	it("throws MalformedHashlineAnchorError for invalid pos anchor", () => {
 		expect(() =>
 			resolveEditAnchors([
 				{
@@ -891,19 +900,39 @@ describe("resolveEditAnchors", () => {
 					lines: ["export interface CodeCoordInput {}"],
 				},
 			]),
-		).toThrow("Anchor strings must be valid hashline tags. Use `read` output for pos/end.");
-	});
-
-	it("throws when append receives an unparseable raw end anchor string", () => {
+		).toThrow(MalformedHashlineAnchorError);
 		expect(() =>
 			resolveEditAnchors([
 				{
-					op: "append",
-					end: "export interface CodeBufferResult { output: unknown; error: boolean; }",
-					lines: ["export interface CodeCoordPosition {}"],
+					op: "prepend",
+					pos: "export interface CodeBufferResult { output: unknown; error: boolean; }",
+					lines: ["export interface CodeCoordInput {}"],
 				},
 			]),
-		).toThrow("Anchor strings must be valid hashline tags. Use `read` output for pos/end.");
+		).toThrow(/invalid pos anchor/i);
+	});
+
+	it("throws MalformedHashlineAnchorError for invalid end anchor even when pos is valid", () => {
+		expect(() =>
+			resolveEditAnchors([
+				{
+					op: "replace",
+					pos: formatLineTag(1, "aaa"),
+					end: "not-a-tag",
+					lines: ["BBB"],
+				},
+			]),
+		).toThrow(MalformedHashlineAnchorError);
+		expect(() =>
+			resolveEditAnchors([
+				{
+					op: "replace",
+					pos: formatLineTag(1, "aaa"),
+					end: "not-a-tag",
+					lines: ["BBB"],
+				},
+			]),
+		).toThrow(/invalid end anchor/i);
 	});
 
 	it("preserves intentional anchorless append and prepend edits", () => {

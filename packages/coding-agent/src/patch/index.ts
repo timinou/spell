@@ -49,6 +49,8 @@ import {
 	buildCompactHashlineDiffPreview,
 	computeLineHash,
 	type HashlineEdit,
+	MalformedHashlineAnchorError,
+	MissingHashlineAnchorError,
 	parseTag,
 } from "./hashline";
 import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "./normalize";
@@ -168,13 +170,25 @@ export function hashlineParseText(edit: string[] | string | null): string[] {
 
 const hashlineEditSchema = Type.Object(
 	{
-		op: StringEnum(["replace", "append", "prepend"]),
-		pos: Type.Optional(Type.String({ description: "anchor" })),
-		end: Type.Optional(Type.String({ description: "limit position" })),
+		op: StringEnum(["replace", "append", "prepend"], {
+			description: "Edit operation: replace, append, or prepend",
+		}),
+		pos: Type.Optional(
+			Type.String({
+				description:
+					"Start anchor in LINE#ID format copied from read output (required for replace unless end is set)",
+			}),
+		),
+		end: Type.Optional(
+			Type.String({
+				description:
+					"End anchor in LINE#ID format copied from read output (optional range end; replace may use end instead of pos)",
+			}),
+		),
 		lines: Type.Union([
-			Type.Array(Type.String(), { description: "content (preferred format)" }),
-			Type.String(),
-			Type.Null(),
+			Type.Array(Type.String(), { description: "Replacement content (preferred format)" }),
+			Type.String({ description: "Replacement content as a newline-delimited string" }),
+			Type.Null({ description: "Delete the targeted content" }),
 		]),
 	},
 	{ additionalProperties: false },
@@ -182,8 +196,11 @@ const hashlineEditSchema = Type.Object(
 
 const hashlineEditParamsSchema = Type.Object(
 	{
-		path: Type.String({ description: "path" }),
-		edits: Type.Array(hashlineEditSchema, { description: "edits over $path" }),
+		path: Type.String({ description: "File path (relative or absolute)" }),
+		edits: Type.Array(hashlineEditSchema, {
+			description:
+				"Ordered hashline edits over $path. replace must include pos or end; anchorless append/prepend insert at file start/end.",
+		}),
 		delete: Type.Optional(Type.Boolean({ description: "If true, delete $path" })),
 		move: Type.Optional(Type.String({ description: "If set, move $path to $move" })),
 	},
@@ -194,52 +211,46 @@ export type HashlineToolEdit = Static<typeof hashlineEditSchema>;
 export type HashlineParams = Static<typeof hashlineEditParamsSchema>;
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Resilient anchor resolution
+// Strict anchor resolution
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Map flat tool-schema edits (tag/end) into typed HashlineEdit objects.
+ * Map flat tool-schema edits (pos/end) into typed HashlineEdit objects.
  *
- * Resilient: as long as at least one anchor exists, we execute.
- * - replace + tag only → single-line replace
- * - replace + tag + end → range replace
- * - append + tag or end → append after that anchor
- * - prepend + tag or end → prepend before that anchor
- * - no anchors → file-level append/prepend (only for those ops)
+ * Strict: supplied anchors must parse exactly as LINE#ID tags from read output.
+ * - replace requires at least one anchor
+ * - append/prepend may omit anchors for file-level insertions
+ * - invalid pos/end never fall back to the other anchor
  *
  * Unknown ops default to "replace".
  */
 export function resolveEditAnchors(edits: HashlineToolEdit[]): HashlineEdit[] {
 	const result: HashlineEdit[] = [];
-	for (const edit of edits) {
+	for (const [index, edit] of edits.entries()) {
+		const editIndex = index + 1;
 		const lines = hashlineParseText(edit.lines);
-		const tag = edit.pos !== undefined ? tryParseTag(edit.pos) : undefined;
-		const end = edit.end !== undefined ? tryParseTag(edit.end) : undefined;
-		const hasRawAnchors = edit.pos !== undefined || edit.end !== undefined;
-
-		if (hasRawAnchors && tag === undefined && end === undefined) {
-			throw new Error("Anchor strings must be valid hashline tags. Use `read` output for pos/end.");
-		}
-
 		// Normalize op — default unknown values to "replace"
 		const op = edit.op === "append" || edit.op === "prepend" ? edit.op : "replace";
+		const pos = edit.pos !== undefined ? parseHashlineAnchor(edit.pos, "pos", editIndex) : undefined;
+		const end = edit.end !== undefined ? parseHashlineAnchor(edit.end, "end", editIndex) : undefined;
+
 		switch (op) {
 			case "replace": {
-				if (tag && end) {
-					result.push({ op: "replace", pos: tag, end, lines });
-				} else if (tag || end) {
-					result.push({ op: "replace", pos: tag || end!, lines });
+				if (pos && end) {
+					result.push({ op: "replace", pos, end, lines });
+				} else if (pos || end) {
+					result.push({ op: "replace", pos: pos || end!, lines });
 				} else {
-					throw new Error("Replace requires at least one anchor (tag or end).");
+					throw new MissingHashlineAnchorError(editIndex);
 				}
 				break;
 			}
 			case "append": {
-				result.push({ op: "append", pos: tag ?? end, lines });
+				result.push({ op: "append", pos: pos ?? end, lines });
 				break;
 			}
 			case "prepend": {
-				result.push({ op: "prepend", pos: end ?? tag, lines });
+				result.push({ op: "prepend", pos: end ?? pos, lines });
 				break;
 			}
 		}
@@ -247,12 +258,16 @@ export function resolveEditAnchors(edits: HashlineToolEdit[]): HashlineEdit[] {
 	return result;
 }
 
-/** Parse a tag, returning undefined instead of throwing on garbage. */
-function tryParseTag(raw: string): Anchor | undefined {
+function parseHashlineAnchor(raw: string, field: "pos" | "end", editIndex: number): Anchor {
 	try {
 		return parseTag(raw);
-	} catch {
-		return undefined;
+	} catch (error) {
+		throw new MalformedHashlineAnchorError(
+			editIndex,
+			field,
+			raw,
+			error instanceof Error ? error.message : String(error),
+		);
 	}
 }
 
@@ -577,6 +592,7 @@ export class EditTool implements AgentTool<TInput> {
 				}
 				applyManagedBufferContent(absolutePath, lines.join("\n"), {
 					create: true,
+					sessionId: this.session.getSessionId?.() ?? undefined,
 				});
 				invalidateFsScanAfterWrite(absolutePath);
 				const resultText = `Created ${path}`;
@@ -678,7 +694,10 @@ export class EditTool implements AgentTool<TInput> {
 			const writePath = resolvedMove ?? absolutePath;
 			let diagnostics: FileDiagnosticsResult | undefined;
 			if (!resolvedMove || resolvedMove === absolutePath) {
-				applyManagedBufferContent(writePath, finalContent, { create: false });
+				applyManagedBufferContent(writePath, finalContent, {
+					create: false,
+					sessionId: this.session.getSessionId?.() ?? undefined,
+				});
 				invalidateFsScanAfterWrite(absolutePath);
 			} else {
 				invalidateManagedCodeBuffersForPaths(touchedPaths);
@@ -893,7 +912,10 @@ export class EditTool implements AgentTool<TInput> {
 		}
 
 		const finalContent = bom + restoreLineEndings(result.content, originalEnding);
-		applyManagedBufferContent(absolutePath, finalContent, { create: false });
+		applyManagedBufferContent(absolutePath, finalContent, {
+			create: false,
+			sessionId: this.session.getSessionId?.() ?? undefined,
+		});
 		let diagnostics: FileDiagnosticsResult | undefined;
 		invalidateFsScanAfterWrite(absolutePath);
 		const diffResult = generateDiffString(normalizedContent, result.content);

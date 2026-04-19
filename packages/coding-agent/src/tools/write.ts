@@ -115,7 +115,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			const resultText = `Successfully wrote ${content.length} bytes to ${path}`;
 
 			if (isCodeToolSupportedPath(absolutePath)) {
-				applyManagedBufferContent(absolutePath, content, { create: true });
+				applyManagedBufferContent(absolutePath, content, {
+					create: true,
+					sessionId: this.session.getSessionId?.() ?? undefined,
+				});
 				invalidateFsScanAfterWrite(absolutePath);
 				const diagnostics = await this.#getManagedBufferDiagnostics(absolutePath, content, signal);
 				const compatibilityNotice = formatCodeTextCompatibilityNotice("write");

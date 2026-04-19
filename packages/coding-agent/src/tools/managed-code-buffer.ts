@@ -78,14 +78,19 @@ function extractEditFailureMessage(output: unknown): string | undefined {
 	}
 	return failures.join("; ");
 }
-export function applyManagedBufferContent(file: string, content: string, options: { create: boolean }): void {
+export function applyManagedBufferContent(
+	file: string,
+	content: string,
+	options: { create: boolean; sessionId?: string },
+): void {
 	const result = options.create
 		? executeCodeBuffer({
 				command: "edit",
 				root: process.cwd(),
 				operations: [{ targetId: file, actions: [{ kind: "write", content }] }],
+				sessionId: options.sessionId,
 			})
-		: executeCodeBuffer({ command: "replace_content", file, content });
+		: executeCodeBuffer({ command: "replace_content", file, content, sessionId: options.sessionId });
 	if (result.error) {
 		throw new Error(`Managed code buffer update failed for ${file}: ${extractCodeToolErrorMessage(result.output)}`);
 	}
@@ -93,7 +98,7 @@ export function applyManagedBufferContent(file: string, content: string, options
 	if (perFileFailure) {
 		throw new Error(`Managed code buffer update failed for ${file}: ${perFileFailure}`);
 	}
-	const saveResult = executeCodeBuffer({ command: "save", file });
+	const saveResult = executeCodeBuffer({ command: "save", file, sessionId: options.sessionId });
 	if (saveResult.error) {
 		throw new Error(`Managed code buffer save failed for ${file}: ${extractCodeToolErrorMessage(saveResult.output)}`);
 	}

@@ -1,6 +1,29 @@
-- When changing existing code near a block tail or closing delimiter, default to `replace` over the owned span
-- When adding a sibling declaration, default to `prepend` on the next sibling declaration
-- **Block boundaries travel together.** For a block `{ header / body / closer }`, there are exactly two valid replace shapes: body-only (`pos` first body line, `end` last body line) or whole block (`pos` header, `end` closer, re-emit all three). Never split them; this applies to every block terminator: `}`, `continue`, `break`, `return`, `throw`.
-- **Never target shared boundary lines.** Do not use `replace` spans that start, end, or pivot on a line that closes one construct and opens/separates another, such as `},{`, `}),`, `} else {`, or `} catch (err) {`. Move inward to body-only lines, or widen to consume one whole owned construct including its true trailing delimiter.
-- **`lines` must not extend past `end`.** Content after `end` survives. If you re-emit lines beyond `end`, they will duplicate.
-- If a local region is already malformed or a prior patch partially landed, replace the full owned block from a stable boundary
+Performs strict LINE#ID-based edits in existing files using anchors copied from `read` output.
+
+<instruction>
+- Use when editing unsupported plain-text files and you need line-addressed safety instead of fuzzy text matching
+- Copy `pos` / `end` exactly from `read` output in `LINE#ID` format
+- `replace` edits require at least one valid anchor in `pos` or `end`
+- `append` / `prepend` may omit anchors only for file-level inserts at EOF / BOF
+- Prefer the smallest edit span that fully owns the construct you are changing
+- If the file changed since you last read it, re-read and retry with the fresh LINE#ID values
+</instruction>
+
+<output>
+- Returns success with an edit summary and diff preview
+- Fails distinctly for missing anchors, malformed anchors, and stale hashes
+- Stale-hash failures show updated `LINE#ID` values so you can retry against the current file
+</output>
+
+<critical>
+- Read the file before editing; do not invent anchors
+- `LINE#ID` means the exact `NUMBER#HASH` token from `read` output, not raw line text or a bare line number
+- Do not guess, widen, or fall back to whole-file replacement when anchors fail
+- If `pos` / `end` are malformed or stale, stop, re-read, and retry with exact anchors
+</critical>
+
+<examples>
+- Single-line replace: `{ "path": "Cargo.toml", "edits": [{ "op": "replace", "pos": "2#QW", "lines": ["version = \"0.2.0\""] }] }`
+- Range replace: `{ "path": "notes.txt", "edits": [{ "op": "replace", "pos": "10#QW", "end": "12#MH", "lines": ["new line 1", "new line 2"] }] }`
+- File-level append: `{ "path": "todo.txt", "edits": [{ "op": "append", "lines": ["- new item"] }] }`
+</examples>

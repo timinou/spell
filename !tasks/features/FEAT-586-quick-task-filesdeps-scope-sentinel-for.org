@@ -1,0 +1,112 @@
+#+TITLE: Quick_task filesDeps scope sentinel for mutating tool calls
+#+STATE: ITEM
+#+SESSION_ID: 14c07eaaa046a608
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T08-04-50-433Z_14c07eaaa046a608.jsonl]]
+#+CUSTOM_ID: FEAT-586-quick-task-filesdeps-scope-sentinel-for
+#+EFFORT: 4h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Scope
+
+In-scope:
+- `packages/coding-agent/src/task/agents.ts` — mark `quick_task` as scope-restricted.
+- `packages/coding-agent/src/task/index.ts::TaskTool.#executeSync` — enforce `filesDeps` presence when spawning scope-restricted agents.
+- `packages/coding-agent/src/task/executor.ts` — wrap the subagent tool registry so `write`, `edit`, and `code` mutating operations reject out-of-scope paths.
+- Agent prompt template for quick_task: `packages/coding-agent/src/task/templates/quick_task.md` (or wherever `quickTaskMd` is sourced).
+
+Out-of-scope:
+- Changing the `task` (general-purpose) agent tool list or scope rules.
+- Non-mutating tools (`read`, `grep`, `find`, `bash`) — these stay unrestricted.
+- New allowlist language beyond `filesDeps` (do not invent `mutableFiles` field; reuse existing `filesDeps` from todo + task DAG).
+
+Rationale: session `14c0744312762edc` retry delegated to three `quick_task` subagents. One wrote literal `PLACEHOLDER` to `crates/pi-code-engine/src/buffer.rs`, a path that was never in its assignment (`CoordBridgeTests` was meant to add `packages/natives/test/code-buffer-coord.test.ts`). The subagent tool surface had no allowlist tying writes to declared scope.
+
+* Existing Patterns
+
+- `filesDeps?: string[]` already lives on todo items (`packages/coding-agent/src/tools/todo-write.ts`) and flows through `task/mutable-dag.ts::MutableDag` and `task/swarm-scheduler.ts::SwarmScheduler.pump` for overlap detection.
+- Task tool already accepts `filesDeps` on task entries; see `packages/coding-agent/src/task/types.ts::createTaskSchema`.
+- `packages/coding-agent/src/task/agents.ts` defines `quick_task` with explicit `tools: ['read','grep','find','edit','write','bash']`. Extend with a new frontmatter flag `scopeRestricted: true`.
+- Subagent tool calls flow through `packages/coding-agent/src/task/executor.ts::runSubprocess` which wires tools via `createSubagentSettings`. Hook the wrapping there.
+- `enforcePathWrite(path, cwd, sandboxPolicy)` is the model for a path-gating check; mirror its shape.
+
+* Tests
+
+File: `packages/coding-agent/test/task/quick-task-scope.test.ts` (new).
+
+Scenarios:
+
+1. *task dispatch rejects quick_task without filesDeps* — call task tool with `agent: "quick_task"` and a batch where any task omits `filesDeps` → tool returns structured error `code: "QUICK_TASK_MISSING_FILESDEPS"` before spawning; no subagent started.
+
+2. *empty filesDeps rejected* — `filesDeps: []` on a quick_task entry → same rejection.
+
+3. *write inside scope allowed* — quick_task with `filesDeps: ["src/foo.ts"]` issues `write` to `src/foo.ts` → success.
+
+4. *write outside scope blocked* — same agent issues `write` to `src/bar.ts` → tool returns `code: "OUT_OF_SCOPE_MUTATION"` naming the offending path and the declared scope.
+
+5. *edit outside scope blocked* — text `edit` on non-allowlisted path → blocked.
+
+6. *code edit outside scope blocked* — structural `code edit` (create/write/findAndReplace kinds) on non-allowlisted path → blocked.
+
+7. *read outside scope allowed* — `read`, `grep`, `find` on any path → succeed. Scope is mutation-side only.
+
+8. *directory-prefix scope* — `filesDeps: ["packages/natives/test/"]` (trailing slash) → any mutation under that prefix succeeds; sibling path blocked. Without trailing slash, `filesDeps` entry matches exact file only.
+
+9. *task (full agent) unaffected* — same scenario as (4) but with `agent: "task"` → write succeeds (no scope enforcement on non-restricted agents).
+
+* Implementation
+
+** Mark quick_task as scope-restricted
+:PROPERTIES:
+:CUSTOM_ID: FEAT-586-quick-task-filesdeps-scope-sentinel-for::mark-quick-task
+:END:
+- File: `packages/coding-agent/src/task/agents.ts`
+- Add `scopeRestricted: true` to quick_task frontmatter object.
+- Update `parseAgentFields` / agent loader in the same file to propagate the flag into the `AgentDef` type used by executor.
+- Update `packages/coding-agent/src/task/templates/quick_task.md` with a prompt section listing the behavior: "You MUST NOT mutate any file outside the filesDeps declared for your assignment."
+
+** Enforce filesDeps at dispatch
+:PROPERTIES:
+:CUSTOM_ID: FEAT-586-quick-task-filesdeps-scope-sentinel-for::dispatch-enforce
+:DEPENDS: FEAT-586-quick-task-filesdeps-scope-sentinel-for::mark-quick-task
+:END:
+- File: `packages/coding-agent/src/task/index.ts::TaskTool.#executeSync`
+- After resolving `agent` and before spawning, if `agent.scopeRestricted`: iterate `params.tasks[]`. Each entry must have non-empty `filesDeps: string[]`. Otherwise return structured error `QUICK_TASK_MISSING_FILESDEPS` naming every offending task id.
+- Coerce `filesDeps` entries by resolving against `session.cwd` to absolute paths for downstream comparison.
+
+** Subagent tool wrapper
+:PROPERTIES:
+:CUSTOM_ID: FEAT-586-quick-task-filesdeps-scope-sentinel-for::subagent-wrapper
+:DEPENDS: FEAT-586-quick-task-filesdeps-scope-sentinel-for::dispatch-enforce
+:END:
+- File: `packages/coding-agent/src/task/executor.ts`
+- In `runSubprocess`, when `agent.scopeRestricted`, build a path-allowlist predicate from `options.filesDeps` (thread it through `ExecutorOptions`).
+- Wrap the subagent's tool registry: intercept calls to `write`, `edit`, and `code` (only when the `code` action is mutating — `edit`, `insertBefore`, etc., per `packages/coding-agent/src/tools/code-edit.ts`). Before invoking the underlying tool, resolve the target path and check against the allowlist. On miss, return a typed error `OUT_OF_SCOPE_MUTATION` including the declared scope array.
+- Ensure error is returned to the subagent as a normal tool error so the agent can react rather than crash.
+
+** Write test suite
+:PROPERTIES:
+:CUSTOM_ID: FEAT-586-quick-task-filesdeps-scope-sentinel-for::scope-tests
+:DEPENDS: FEAT-586-quick-task-filesdeps-scope-sentinel-for::subagent-wrapper
+:END:
+- File: `packages/coding-agent/test/task/quick-task-scope.test.ts`
+- Spawn real TaskTool with a mock AgentSession (follow pattern in `packages/coding-agent/test/task/executor.test.ts`).
+- Use in-memory fs or tmpdir; prefer the existing test harness conventions.
+
+* Edge Cases
+
+- *Path normalization* — compare on resolved absolute paths; handle `./foo` vs `foo` vs `packages/coding-agent/./foo`.
+- *Symlinks in filesDeps* — resolve both sides; treat matching real path as in-scope.
+- *Newly created files inside allowed directory* — when `filesDeps` contains a directory (trailing slash), any descendant is allowed even if not yet existent at dispatch time.
+- *Renames/moves* — if a mutating tool supports rename (e.g. edit tool `move`), both source and target must be in scope; else block.
+- *Plan artifact paths* — `!tasks/plans/plan-artifacts/.../` is a valid write target; parent plan-mode enforcement already allows it. Do not conflict: scope enforcement runs AFTER plan-mode path check; both must pass.
+- *Non-existent tool* — if a subagent has no access to a given mutating tool already, the wrapper noops for that tool.
+- *Scope override via env / setting* — none. No escape hatch for quick_task; scope is a hard contract. If broader scope is needed, caller must use `agent: "task"` instead.
+
+* Acceptance Criteria
+
+- `bun test packages/coding-agent/test/task/quick-task-scope.test.ts` passes all 9 scenarios.
+- `bun check:ts` clean for touched files.
+- Manual repro: dispatch a `quick_task` batch without `filesDeps` → tool error at dispatch time, no subagent spawned, no wasted API calls.
+- Manual repro (reproduce the original failure): dispatch quick_task with `filesDeps: ["packages/natives/src/code-buffer/types.ts"]` and an assignment that the subagent might misinterpret as "rewrite buffer.rs" → its attempted `write` to `crates/pi-code-engine/src/buffer.rs` is returned as `OUT_OF_SCOPE_MUTATION`.
+- Grep audit: zero occurrences of `write` / `edit` without scope enforcement in quick_task tool path.

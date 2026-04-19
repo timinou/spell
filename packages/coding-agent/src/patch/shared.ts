@@ -12,6 +12,7 @@ import type { OutputMeta } from "../tools/output-meta";
 import {
 	formatDiagnostics,
 	formatDiffStats,
+	formatErrorMessage,
 	formatExpandHint,
 	formatStatusIcon,
 	formatTitle,
@@ -330,7 +331,7 @@ export const editToolRenderer = {
 
 				if (result.isError) {
 					if (errorText) {
-						text += `\n\n${uiTheme.fg("error", replaceTabs(errorText))}`;
+						text += `\n\n${formatErrorMessage(replaceTabs(errorText), uiTheme)}`;
 					}
 				} else if (result.details?.diff) {
 					text += renderDiffSection(result.details.diff, rawPath, expanded, uiTheme, renderDiffFn);
