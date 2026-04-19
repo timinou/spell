@@ -1,0 +1,116 @@
+#+TITLE: ExitPlanModeTool validation tests never enable org so validator short-circuits
+#+STATE: ITEM
+#+SESSION_ID: 14c0a2c7e0b0df60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-42-37-570Z_14c0a2c7e0b0df60.jsonl]]
+#+CUSTOM_ID: BUG-296-exitplanmodetool-validation-tests-never
+#+EFFORT: S
+#+LAYER: packages/coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+these tests are failing:
+
+✗ taskToolRenderer report_finding safety > renders abort reason inline for aborted subagent results [1.00ms]
+✗ taskToolRenderer report_finding safety > renders efficiency summaries for completed multi-task batches
+✗ TaskTool blocker integration > async execution schedules dependents only after predecessors finish [817.00ms]
+✗ runSubprocess tool call budget > aborts when tool count exceeds budget and still accepts submit_result reminder recovery [3.00ms]
+✗ runSubprocess tool call budget > does not abort when subagent completes within budget
+✗ runSubprocess tool call budget > disables enforcement when task.maxToolCalls is set to 0 [1.00ms]
+✗ runSubprocess tool call budget > does not abort when tool count is exactly at maxToolCalls
+✗ runSubprocess tool call budget > uses default maxToolCalls=200 when not explicitly configured [1.00ms]
+✗ runSubprocess delegated model fallback > falls back to the next allowed candidate after startup auth failure [2.00ms]
+✗ runSubprocess delegated model fallback > keeps the root auth error when no alternate candidate exists [1.00ms]
+✗ python tool docs template > renders dynamic helper docs [1.00ms]
+✗ ExitPlanModeTool validation > rejects child items with empty body [5.00ms]
+✗ ExitPlanModeTool validation > rejects child items with body under 100 characters
+✗ ExitPlanModeTool validation > reports all missing top-level properties in one error [19.00ms]
+✗ ExitPlanModeTool validation > rejects broken top-level DEPENDS references [2.00ms]
+✗ ExitPlanModeTool validation > rejects child items missing structured sub-outline CUSTOM_IDs [1.00ms]
+✗ ExitPlanModeTool validation > rejects sub-outline CUSTOM_IDs outside the owning child namespace
+✗ ExitPlanModeTool validation > rejects broken sub-outline DEPENDS references [1.00ms]
+✗ ExitPlanModeTool validation > rejects duplicate sub-outline CUSTOM_IDs within a child item
+✗ ExitPlanModeTool validation > rejects cyclic sub-outline DEPENDS graphs [1.00ms]
+✗ ExitPlanModeTool validation > reports thin bodies and missing properties together
+✗ ExitPlanModeTool validation > reports broken top-level deps and bad sub-outline namespaces together [1.00ms]
+✗ ExitPlanModeTool validation > reports issues across multiple child items in one response
+✗ ExitPlanModeTool validation > accepts valid top-level and sub-outline dependencies within the plan [1.00ms]
+✗ code.ts transpiles cleanly under Bun.Transpiler [1.00ms]
+✗ coding-agent code tool wiring > routes existing-file edit through freshness diff before save [3.00ms]
+✗ coding-agent code tool wiring > routes strict-target create through list then save without diff [1.00ms]
+✗ applyManagedBufferContent > includes the native per-file error message in the thrown error [1.00ms]
+✗ applyManagedBufferContent > does not throw on successful writes (parseable replacement)
+✗ evaluateWriteGuards contract > allows writes that grow a file [175.00ms]
+✗ parseArgs --canvas > defaults to fluid when --canvas has no value [4.00ms]
+✗ parseArgs --canvas > uses fluid when next arg is another flag
+✗ canvas CLI messages > unknown canvas message includes supported modes and usage syntax
+✗ SwarmBlackboard > does not emit artifact events without DATA_URI and preserves metadata in reads [13.00ms]
+✗ SubagentViewerComponent > forwards tool events to event handler [1.00ms]
+
+
+
+Please find the root causes and present them to me. Explain the TDD way of fixing them by cluster. DO not implement yet, just explore
+
+* Scope
+All 12 tests in test/tools/exit-plan-mode-validation.test.ts fail with the same message:
+#+BEGIN_EXAMPLE
+Org PLAN item "PLAN-100-test" not found. Make sure you created it via `org create` before calling this tool.
+#+END_EXAMPLE
+
+Root cause: `src/plan-mode/org-plan.ts::resolvePlanItem` (line 217-232) returns `null` immediately when `settings.get("org.enabled")` is falsy. The test's `createSession()` (line 24-35) uses `Settings.isolated()` without enabling org. `validatePlanItem` calls `resolvePlanItem`, sees `null`, and `ExitPlanModeTool.execute` throws the "not found" error before any actual validation runs.
+
+The test writes org files correctly to `tmpDir/!tasks/plans/` and `tmpDir/!tasks/features/`, matching the default org layout. Only the settings flag is missing.
+
+In scope: `createSession()` helper only.
+Out of scope: changing `resolvePlanItem` semantics; other tests that intentionally disable org still require the short-circuit.
+
+* Existing Patterns
+- `Settings.isolated(overrides)` accepts a settings map. Pattern used widely, e.g. `test/task/tool-budget.test.ts` passes `{ "task.maxToolCalls": 3 }`.
+- Org config resolution: `src/plan-mode/org-plan.ts::resolvePlanItem` calls `buildOrgConfig(settings)` then `resolveCategories(config, projectRoot)` which reads `org.dirs.*.path` from settings and maps category directory names.
+- Default org dirs wired from bundled config \u2014 check `buildOrgConfig` for the default `!tasks/plans`, `!tasks/bugs`, `!tasks/features`, `!tasks/follow-ups` layout that the test already writes to. If defaults are sufficient, only `org.enabled` needs toggling.
+
+* Tests
+All 12 tests must flip from the "not found" error to the error each test currently asserts. No new tests added.
+
+Current failures (from test/tools/exit-plan-mode-validation.test.ts):
+- rejects child items with empty body \u2192 expects "empty or minimal bodies (< 100 chars)"
+- rejects child items with body under 100 characters \u2192 expects "FEAT-101-thin"
+- reports all missing top-level properties in one error \u2192 expects /LAYER/
+- rejects broken top-level DEPENDS references \u2192 expects "FEAT-999-nonexistent"
+- rejects child items missing structured sub-outline CUSTOM_IDs \u2192 expects "FILE-LEVEL-ID::suboutline-id"
+- rejects sub-outline CUSTOM_IDs outside the owning child namespace \u2192 expects "WRONG::define-types"
+- rejects broken sub-outline DEPENDS references \u2192 expects "FEAT-999::missing-step"
+- rejects duplicate sub-outline CUSTOM_IDs within a child item \u2192 expects /duplicate suboutline id|globally unique/
+- rejects cyclic sub-outline DEPENDS graphs \u2192 expects /acyclic|cyclic suboutline depends/
+- reports thin bodies and missing properties together \u2192 expects /empty or minimal bodies|thin child body[\\s\\S]*LAYER/
+- reports broken top-level deps and bad sub-outline namespaces together \u2192 expects pattern including both
+- reports issues across multiple child items in one response \u2192 expects both child IDs in one error
+- accepts valid top-level and sub-outline dependencies within the plan \u2192 must not throw
+
+* Implementation
+** Enable org.enabled in the test session factory
+:PROPERTIES:
+:CUSTOM_ID: BUG-296-exitplanmodetool-validation-tests-never::enable-org
+:END:
+- File: packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts
+- Target: `createSession()` at line 24-35.
+- Change `settings: Settings.isolated()` \u2192 `settings: Settings.isolated({ "org.enabled": true })`.
+- If `buildOrgConfig` requires explicit `org.dirs` paths in addition to the flag, add the minimum: `"org.dirs.tasks.path": "!tasks"` plus any category path keys that default resolution reads. Verify by running one test first \u2014 if the "not found" error persists, inspect `buildOrgConfig` and `resolveCategories` for required keys.
+
+** Verify green (satisfies enable-org)
+:PROPERTIES:
+:CUSTOM_ID: BUG-296-exitplanmodetool-validation-tests-never::verify-green
+:DEPENDS: BUG-296-exitplanmodetool-validation-tests-never::enable-org
+:END:
+- Command: `bun test packages/coding-agent/test/tools/exit-plan-mode-validation.test.ts`
+- Expect: all 12 tests pass.
+- If any test still fails, the required settings keys are incomplete \u2014 inspect `src/plan-mode/org-plan.ts::buildOrgConfig` and extend the isolated settings map accordingly.
+
+* Edge Cases
+- `resolvePlanItem` also checks `config.todoKeywords`. Default keywords ("ITEM", "DOING", "DONE", etc.) must match the `#+STATE: ITEM` the test writer emits. The test writes `#+STATE: ITEM` \u2014 confirm this is in the default keyword set.
+- The test writes files with `#+TITLE:`, `#+CUSTOM_ID:`, `#+STATE:` and optional `#+LAYER:`/`#+DEPENDS:`. These are file-level drawer keys parsed by the native org engine. Ensure `resolveCategories` scans the `tmpDir/!tasks/plans` + `tmpDir/!tasks/features` + `tmpDir/!tasks/bugs` dirs given only `tmpDir` as `projectRoot`.
+
+* Acceptance Criteria
+- All 12 listed tests pass.
+- No production file modified.
+- No other test-file regression in `packages/coding-agent/test/tools/`.

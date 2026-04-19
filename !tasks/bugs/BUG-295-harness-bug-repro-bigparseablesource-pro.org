@@ -1,0 +1,131 @@
+#+TITLE: harness-bug-repro bigParseableSource produces invalid TypeScript
+#+STATE: ITEM
+#+SESSION_ID: 14c0a2c7e0b0df60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-42-37-570Z_14c0a2c7e0b0df60.jsonl]]
+#+CUSTOM_ID: BUG-295-harness-bug-repro-bigparseablesource-pro
+#+EFFORT: XS
+#+LAYER: packages/coding-agent
+#+PRIORITY: #B
+
+* Initial Message
+
+these tests are failing:
+
+✗ taskToolRenderer report_finding safety > renders abort reason inline for aborted subagent results [1.00ms]
+✗ taskToolRenderer report_finding safety > renders efficiency summaries for completed multi-task batches
+✗ TaskTool blocker integration > async execution schedules dependents only after predecessors finish [817.00ms]
+✗ runSubprocess tool call budget > aborts when tool count exceeds budget and still accepts submit_result reminder recovery [3.00ms]
+✗ runSubprocess tool call budget > does not abort when subagent completes within budget
+✗ runSubprocess tool call budget > disables enforcement when task.maxToolCalls is set to 0 [1.00ms]
+✗ runSubprocess tool call budget > does not abort when tool count is exactly at maxToolCalls
+✗ runSubprocess tool call budget > uses default maxToolCalls=200 when not explicitly configured [1.00ms]
+✗ runSubprocess delegated model fallback > falls back to the next allowed candidate after startup auth failure [2.00ms]
+✗ runSubprocess delegated model fallback > keeps the root auth error when no alternate candidate exists [1.00ms]
+✗ python tool docs template > renders dynamic helper docs [1.00ms]
+✗ ExitPlanModeTool validation > rejects child items with empty body [5.00ms]
+✗ ExitPlanModeTool validation > rejects child items with body under 100 characters
+✗ ExitPlanModeTool validation > reports all missing top-level properties in one error [19.00ms]
+✗ ExitPlanModeTool validation > rejects broken top-level DEPENDS references [2.00ms]
+✗ ExitPlanModeTool validation > rejects child items missing structured sub-outline CUSTOM_IDs [1.00ms]
+✗ ExitPlanModeTool validation > rejects sub-outline CUSTOM_IDs outside the owning child namespace
+✗ ExitPlanModeTool validation > rejects broken sub-outline DEPENDS references [1.00ms]
+✗ ExitPlanModeTool validation > rejects duplicate sub-outline CUSTOM_IDs within a child item
+✗ ExitPlanModeTool validation > rejects cyclic sub-outline DEPENDS graphs [1.00ms]
+✗ ExitPlanModeTool validation > reports thin bodies and missing properties together
+✗ ExitPlanModeTool validation > reports broken top-level deps and bad sub-outline namespaces together [1.00ms]
+✗ ExitPlanModeTool validation > reports issues across multiple child items in one response
+✗ ExitPlanModeTool validation > accepts valid top-level and sub-outline dependencies within the plan [1.00ms]
+✗ code.ts transpiles cleanly under Bun.Transpiler [1.00ms]
+✗ coding-agent code tool wiring > routes existing-file edit through freshness diff before save [3.00ms]
+✗ coding-agent code tool wiring > routes strict-target create through list then save without diff [1.00ms]
+✗ applyManagedBufferContent > includes the native per-file error message in the thrown error [1.00ms]
+✗ applyManagedBufferContent > does not throw on successful writes (parseable replacement)
+✗ evaluateWriteGuards contract > allows writes that grow a file [175.00ms]
+✗ parseArgs --canvas > defaults to fluid when --canvas has no value [4.00ms]
+✗ parseArgs --canvas > uses fluid when next arg is another flag
+✗ canvas CLI messages > unknown canvas message includes supported modes and usage syntax
+✗ SwarmBlackboard > does not emit artifact events without DATA_URI and preserves metadata in reads [13.00ms]
+✗ SubagentViewerComponent > forwards tool events to event handler [1.00ms]
+
+
+
+Please find the root causes and present them to me. Explain the TDD way of fixing them by cluster. DO not implement yet, just explore
+
+* Scope
+Test: test/tools/harness-bug-repro.test.ts "allows writes that grow a file" fails with `guard.ok === false`.
+
+Root cause: the helper `bigParseableSource()` (line 22-24) returns:
+#+BEGIN_SRC typescript
+export const keep_xxxxxxxxxx = 1;
+ = 1;
+ = 1;
+...  (4000x " = 1;
+")
+#+END_SRC
+
+Only the first line is a valid TS declaration. The remaining 3999 lines are `= 1;
+` with a leading space \u2014 syntactically invalid.
+
+`evaluateWriteGuards` (`src/tools/managed-buffer-guards.ts:79`) runs `probesAsStructurallyValid` on the new content. The probe calls `executeCodeBuffer({ command: "replace_content" })` then `{ command: "save" }` on a temp file. The save rejects the structurally invalid source, and the gate correctly returns `WRITE_PARSE_REGRESSION`. Production behavior is correct; the test helper is wrong.
+
+Two neighboring tests in the same file pass `bigParseableSource()` as the **original** (pre-write) content:
+- "blocks ~97% shrink of an existing code-supported file on disk" \u2014 writes big source, then attempts to shrink it. Currently passes because the shrink check fires before the parse check.
+- "ignores non-code-supported paths" \u2014 writes big source to `.txt`, then writes `PARSEABLE_STUB`. Currently passes because the file is non-code-supported.
+
+Both will continue to work with a valid TS fix because the content will still be >~89KB (above the 256B shrink-guard floor) and parseable.
+
+In scope: change `bigParseableSource()` to produce valid TypeScript at roughly the same byte size.
+Out of scope: change the parse-regression gate; change the shrink-guard thresholds.
+
+* Existing Patterns
+- `test/tools/harness-bug-repro.test.ts` \u2014 the file itself. Pattern: helpers at top, describe block below.
+- Valid many-declaration TS at scale: `Array.from({length:4000},(_,i)=>\`export const x${i} = ${i};\`).join("\
+")`.
+
+* Tests
+All 5 tests in `test/tools/harness-bug-repro.test.ts` must continue to encode their original contract:
+- "blocks ~97% shrink of an existing code-supported file on disk" \u2014 original must be >256B parseable; stub (2 imports) triggers WRITE_SHRINK_BLOCKED.
+- "allows writes that grow a file" \u2014 new 20B file grows to large valid TS \u2014 guard returns ok:true.
+- "allows new-file writes (no original on disk)" \u2014 no disk state \u2014 ok:true.
+- "allows writes to originals below the 256 B floor" \u2014 tiny file to tiny file \u2014 ok:true.
+- "ignores non-code-supported paths" \u2014 .txt file \u2014 ok:true regardless of content.
+
+No new tests.
+
+* Implementation
+** Replace bigParseableSource with valid TS emitter
+:PROPERTIES:
+:CUSTOM_ID: BUG-295-harness-bug-repro-bigparseablesource-pro::fix-helper
+:END:
+- File: packages/coding-agent/test/tools/harness-bug-repro.test.ts
+- Target: `bigParseableSource` function (line 22-24).
+- Replace with:
+  #+BEGIN_SRC typescript
+  function bigParseableSource() {
+      const lines = Array.from({ length: 4000 }, (_, i) => `export const x${i} = ${i};`);
+      return `${lines.join("\
+")}\
+`;
+  }
+  #+END_SRC
+- Size: ~89KB for 4000 declarations, well above the 256B shrink-guard floor.
+- Validity: each line is a standalone `export const xN = N;`.
+
+** Verify green (satisfies fix-helper)
+:PROPERTIES:
+:CUSTOM_ID: BUG-295-harness-bug-repro-bigparseablesource-pro::verify-green
+:DEPENDS: BUG-295-harness-bug-repro-bigparseablesource-pro::fix-helper
+:END:
+- Command: `bun test packages/coding-agent/test/tools/harness-bug-repro.test.ts`
+- Expect: all 5 tests pass.
+- Manual check: the shrink-guard test now exercises a parseable source, which is closer to the real regression scenario the test file documents.
+
+* Edge Cases
+- Duplicate identifiers across declarations \u2014 `x0`, `x1`, ... are distinct; no collision.
+- Save performance: probe writes + saves 89KB parseable TS; within test-time budget (existing test already passes when the file is valid).
+- If the probe becomes slow for very large sources, the test setup is unchanged by design.
+
+* Acceptance Criteria
+- All 5 tests in `test/tools/harness-bug-repro.test.ts` pass.
+- No production file modified.
+- Helper produces ~89KB of valid TS (sanity check: `bun -e 'import { readFileSync } from "node:fs"' ...` not required; count lines).

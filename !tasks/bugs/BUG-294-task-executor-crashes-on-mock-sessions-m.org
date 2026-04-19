@@ -1,0 +1,127 @@
+#+TITLE: Task executor crashes on mock sessions missing refreshBaseSystemPrompt
+#+STATE: ITEM
+#+SESSION_ID: 14c0a2c7e0b0df60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-42-37-570Z_14c0a2c7e0b0df60.jsonl]]
+#+CUSTOM_ID: BUG-294-task-executor-crashes-on-mock-sessions-m
+#+EFFORT: S
+#+LAYER: packages/coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+these tests are failing:
+
+✗ taskToolRenderer report_finding safety > renders abort reason inline for aborted subagent results [1.00ms]
+✗ taskToolRenderer report_finding safety > renders efficiency summaries for completed multi-task batches
+✗ TaskTool blocker integration > async execution schedules dependents only after predecessors finish [817.00ms]
+✗ runSubprocess tool call budget > aborts when tool count exceeds budget and still accepts submit_result reminder recovery [3.00ms]
+✗ runSubprocess tool call budget > does not abort when subagent completes within budget
+✗ runSubprocess tool call budget > disables enforcement when task.maxToolCalls is set to 0 [1.00ms]
+✗ runSubprocess tool call budget > does not abort when tool count is exactly at maxToolCalls
+✗ runSubprocess tool call budget > uses default maxToolCalls=200 when not explicitly configured [1.00ms]
+✗ runSubprocess delegated model fallback > falls back to the next allowed candidate after startup auth failure [2.00ms]
+✗ runSubprocess delegated model fallback > keeps the root auth error when no alternate candidate exists [1.00ms]
+✗ python tool docs template > renders dynamic helper docs [1.00ms]
+✗ ExitPlanModeTool validation > rejects child items with empty body [5.00ms]
+✗ ExitPlanModeTool validation > rejects child items with body under 100 characters
+✗ ExitPlanModeTool validation > reports all missing top-level properties in one error [19.00ms]
+✗ ExitPlanModeTool validation > rejects broken top-level DEPENDS references [2.00ms]
+✗ ExitPlanModeTool validation > rejects child items missing structured sub-outline CUSTOM_IDs [1.00ms]
+✗ ExitPlanModeTool validation > rejects sub-outline CUSTOM_IDs outside the owning child namespace
+✗ ExitPlanModeTool validation > rejects broken sub-outline DEPENDS references [1.00ms]
+✗ ExitPlanModeTool validation > rejects duplicate sub-outline CUSTOM_IDs within a child item
+✗ ExitPlanModeTool validation > rejects cyclic sub-outline DEPENDS graphs [1.00ms]
+✗ ExitPlanModeTool validation > reports thin bodies and missing properties together
+✗ ExitPlanModeTool validation > reports broken top-level deps and bad sub-outline namespaces together [1.00ms]
+✗ ExitPlanModeTool validation > reports issues across multiple child items in one response
+✗ ExitPlanModeTool validation > accepts valid top-level and sub-outline dependencies within the plan [1.00ms]
+✗ code.ts transpiles cleanly under Bun.Transpiler [1.00ms]
+✗ coding-agent code tool wiring > routes existing-file edit through freshness diff before save [3.00ms]
+✗ coding-agent code tool wiring > routes strict-target create through list then save without diff [1.00ms]
+✗ applyManagedBufferContent > includes the native per-file error message in the thrown error [1.00ms]
+✗ applyManagedBufferContent > does not throw on successful writes (parseable replacement)
+✗ evaluateWriteGuards contract > allows writes that grow a file [175.00ms]
+✗ parseArgs --canvas > defaults to fluid when --canvas has no value [4.00ms]
+✗ parseArgs --canvas > uses fluid when next arg is another flag
+✗ canvas CLI messages > unknown canvas message includes supported modes and usage syntax
+✗ SwarmBlackboard > does not emit artifact events without DATA_URI and preserves metadata in reads [13.00ms]
+✗ SubagentViewerComponent > forwards tool events to event handler [1.00ms]
+
+
+
+Please find the root causes and present them to me. Explain the TDD way of fixing them by cluster. DO not implement yet, just explore
+
+* Scope
+Seven task/executor tests crash when the subagent mock session lacks `refreshBaseSystemPrompt`:
+- test/task/tool-budget.test.ts (5 tests)
+- test/task/model-fallback.test.ts (2 tests)
+
+Root cause is in `src/task/executor.ts:1329-1333`:
+#+BEGIN_SRC typescript
+const actualTodoWrite = session.getActiveToolNames().includes("todo_write");
+if (actualTodoWrite !== todoWriteAvailable) {
+    todoWriteAvailable = actualTodoWrite;
+    await session.refreshBaseSystemPrompt();
+}
+#+END_SRC
+
+`todoWriteAvailable` initializes to `subagentSettings.get("todo.enabled") && (toolNames === undefined || toolNames.includes("todo_write"))`. Tests use `baseAgent` without a `tools` field, so `toolNames === undefined` and `todoWriteAvailable` becomes `true`. The mock session's `getActiveToolNames` returns `["read","submit_result"]`, so `actualTodoWrite === false`. The mismatch triggers `refreshBaseSystemPrompt()`, which does not exist on the mocks.
+
+In tool-budget this throws synchronously before `prompt()` runs, so `prompts.length === 0` and every assertion about prompt content or `result.output` fails. In model-fallback it replaces the expected "401 Invalid bearer token" with a TypeError.
+
+In scope: test-mock changes only. No production change.
+Out of scope: hardening `executor.ts` with optional chaining; real sessions have the method, so relaxing the call would hide genuine future regressions.
+
+* Existing Patterns
+- `test/task/tool-budget.test.ts::createMockSession` (line 37-84) returns a minimal `AgentSession` shape. Pattern to follow for adding methods.
+- `test/task/model-fallback.test.ts` uses the same mock-session style.
+- Real implementation: `src/session/agent-session.ts::AgentSession.refreshBaseSystemPrompt` (line 1932) \u2014 async, returns void.
+- Reference call site: `src/task/executor.ts:1332`.
+
+* Tests
+All tests below currently fail. After the fix they **MUST** pass with no other changes.
+
+- test/task/tool-budget.test.ts:
+  - "aborts when tool count exceeds budget and still accepts submit_result reminder recovery" \u2014 asserts `prompts.length === 2` and budget-exceeded reminder content.
+  - "does not abort when subagent completes within budget" \u2014 asserts `result.output` contains `"withinBudget": true`.
+  - "disables enforcement when task.maxToolCalls is set to 0" \u2014 asserts `"enforcementDisabled": true`.
+  - "does not abort when tool count is exactly at maxToolCalls" \u2014 asserts `"exactLimit": true`.
+  - "uses default maxToolCalls=200 when not explicitly configured" \u2014 asserts `prompts.length === 2` after default budget exceeded.
+- test/task/model-fallback.test.ts:
+  - "falls back to the next allowed candidate after startup auth failure" \u2014 asserts `result.exitCode === 0`.
+  - "keeps the root auth error when no alternate candidate exists" \u2014 asserts `result.error === "401 Invalid bearer token"`.
+
+* Implementation
+** Add refreshBaseSystemPrompt to tool-budget mock session
+:PROPERTIES:
+:CUSTOM_ID: BUG-294-task-executor-crashes-on-mock-sessions-m::add-tool-budget-mock
+:END:
+- File: packages/coding-agent/test/task/tool-budget.test.ts
+- Target: `createMockSession` factory (around line 37-84)
+- Change: add `refreshBaseSystemPrompt: async () => {}` to the session object.
+
+** Add refreshBaseSystemPrompt to model-fallback mock session
+:PROPERTIES:
+:CUSTOM_ID: BUG-294-task-executor-crashes-on-mock-sessions-m::add-model-fallback-mock
+:END:
+- File: packages/coding-agent/test/task/model-fallback.test.ts
+- Target: the analogous mock-session factory in this file.
+- Change: same addition as tool-budget.
+
+** Verify green (satisfies both mock additions)
+:PROPERTIES:
+:CUSTOM_ID: BUG-294-task-executor-crashes-on-mock-sessions-m::verify-green
+:DEPENDS: BUG-294-task-executor-crashes-on-mock-sessions-m::add-tool-budget-mock BUG-294-task-executor-crashes-on-mock-sessions-m::add-model-fallback-mock
+:END:
+- Command: `bun test packages/coding-agent/test/task/tool-budget.test.ts packages/coding-agent/test/task/model-fallback.test.ts`
+- Expect: all 7 listed tests pass.
+- No production file **MAY** change.
+
+* Edge Cases
+- `todoWriteAvailable` init uses a settings lookup. If other tests mock settings to return `todo.enabled = false` AND pass `toolNames` containing `todo_write`, the mismatch inverts. Fix covers both mismatch directions because the new method is a no-op.
+- Mock must remain async (returning `Promise<void>`) so `await` does not throw on a non-thenable.
+
+* Acceptance Criteria
+- All 7 listed tests pass.
+- No file outside `packages/coding-agent/test/task/` is modified.
+- Running `bun test packages/coding-agent/test/task/` produces no new failures.

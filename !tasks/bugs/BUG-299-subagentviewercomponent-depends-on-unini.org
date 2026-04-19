@@ -1,0 +1,143 @@
+#+TITLE: SubagentViewerComponent depends on uninitialized module theme singleton
+#+STATE: ITEM
+#+SESSION_ID: 14c0a2c7e0b0df60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-42-37-570Z_14c0a2c7e0b0df60.jsonl]]
+#+CUSTOM_ID: BUG-299-subagentviewercomponent-depends-on-unini
+#+EFFORT: M
+#+LAYER: packages/coding-agent
+#+PRIORITY: #B
+
+* Initial Message
+
+these tests are failing:
+
+✗ taskToolRenderer report_finding safety > renders abort reason inline for aborted subagent results [1.00ms]
+✗ taskToolRenderer report_finding safety > renders efficiency summaries for completed multi-task batches
+✗ TaskTool blocker integration > async execution schedules dependents only after predecessors finish [817.00ms]
+✗ runSubprocess tool call budget > aborts when tool count exceeds budget and still accepts submit_result reminder recovery [3.00ms]
+✗ runSubprocess tool call budget > does not abort when subagent completes within budget
+✗ runSubprocess tool call budget > disables enforcement when task.maxToolCalls is set to 0 [1.00ms]
+✗ runSubprocess tool call budget > does not abort when tool count is exactly at maxToolCalls
+✗ runSubprocess tool call budget > uses default maxToolCalls=200 when not explicitly configured [1.00ms]
+✗ runSubprocess delegated model fallback > falls back to the next allowed candidate after startup auth failure [2.00ms]
+✗ runSubprocess delegated model fallback > keeps the root auth error when no alternate candidate exists [1.00ms]
+✗ python tool docs template > renders dynamic helper docs [1.00ms]
+✗ ExitPlanModeTool validation > rejects child items with empty body [5.00ms]
+✗ ExitPlanModeTool validation > rejects child items with body under 100 characters
+✗ ExitPlanModeTool validation > reports all missing top-level properties in one error [19.00ms]
+✗ ExitPlanModeTool validation > rejects broken top-level DEPENDS references [2.00ms]
+✗ ExitPlanModeTool validation > rejects child items missing structured sub-outline CUSTOM_IDs [1.00ms]
+✗ ExitPlanModeTool validation > rejects sub-outline CUSTOM_IDs outside the owning child namespace
+✗ ExitPlanModeTool validation > rejects broken sub-outline DEPENDS references [1.00ms]
+✗ ExitPlanModeTool validation > rejects duplicate sub-outline CUSTOM_IDs within a child item
+✗ ExitPlanModeTool validation > rejects cyclic sub-outline DEPENDS graphs [1.00ms]
+✗ ExitPlanModeTool validation > reports thin bodies and missing properties together
+✗ ExitPlanModeTool validation > reports broken top-level deps and bad sub-outline namespaces together [1.00ms]
+✗ ExitPlanModeTool validation > reports issues across multiple child items in one response
+✗ ExitPlanModeTool validation > accepts valid top-level and sub-outline dependencies within the plan [1.00ms]
+✗ code.ts transpiles cleanly under Bun.Transpiler [1.00ms]
+✗ coding-agent code tool wiring > routes existing-file edit through freshness diff before save [3.00ms]
+✗ coding-agent code tool wiring > routes strict-target create through list then save without diff [1.00ms]
+✗ applyManagedBufferContent > includes the native per-file error message in the thrown error [1.00ms]
+✗ applyManagedBufferContent > does not throw on successful writes (parseable replacement)
+✗ evaluateWriteGuards contract > allows writes that grow a file [175.00ms]
+✗ parseArgs --canvas > defaults to fluid when --canvas has no value [4.00ms]
+✗ parseArgs --canvas > uses fluid when next arg is another flag
+✗ canvas CLI messages > unknown canvas message includes supported modes and usage syntax
+✗ SwarmBlackboard > does not emit artifact events without DATA_URI and preserves metadata in reads [13.00ms]
+✗ SubagentViewerComponent > forwards tool events to event handler [1.00ms]
+
+
+
+Please find the root causes and present them to me. Explain the TDD way of fixing them by cluster. DO not implement yet, just explore
+
+* Scope
+Test: test/modes/components/subagent-viewer/viewer-component.test.ts "forwards tool events to event handler" (and related tests in the file) crash with:
+#+BEGIN_EXAMPLE
+TypeError: undefined is not an object (evaluating 'theme.bold')
+#+END_EXAMPLE
+
+Root cause: `src/modes/theme/theme.ts:1689` declares `export var theme: Theme;` without assignment. It is populated only by `initTheme()` / `setThemeInstance()` during app startup. `src/modes/components/subagent-viewer/viewer-component.ts:15` imports that bare binding. Tests never call `initTheme()`, so `theme` is `undefined` at render time.
+
+Settled design: remove the module-level import and inject theme through the component's existing `SubagentViewerContext` DI seam. This eliminates the bug class, not just the symptom.
+
+In scope:
+- Add `theme: Theme` to `SubagentViewerContext` in `src/modes/components/subagent-viewer/types.ts`.
+- Remove `import { theme } from "../../theme/theme"` from `viewer-component.ts`; use `this.#ctx.theme` instead.
+- Update the sole production caller of `SubagentViewerComponent` to pass the current theme.
+- Update the test to pass a theme (e.g. via `getThemeByName("dark")`).
+
+Out of scope: remove `export var theme` from `theme.ts` \u2014 many other components still depend on it; converting them is a larger refactor.
+
+* Existing Patterns
+- `SubagentViewerContext` already a DI seam (see `src/modes/components/subagent-viewer/types.ts`).
+- `test/task/render-report-finding.test.ts` uses `await getThemeByName("dark")` pattern. Reuse.
+- Theme type: `src/modes/theme/theme.ts::Theme` class (line 1147).
+- Callers of `SubagentViewerComponent` \u2014 grep for `new SubagentViewerComponent(`; update each.
+
+* Tests
+Failing tests in test/modes/components/subagent-viewer/viewer-component.test.ts:
+- "forwards tool events to event handler" \u2014 visible in the user's failing list.
+- "agent switching clears chat and resubscribes" \u2014 also failing per `theme.bold` traceback.
+- Likely more tests in the same file will turn green once theme is injected.
+
+Update: each test's `beforeEach` must construct the viewer with a theme in the context.
+
+No new tests. The DI refactor is behavior-preserving.
+
+* Implementation
+** Add theme to SubagentViewerContext type
+:PROPERTIES:
+:CUSTOM_ID: BUG-299-subagentviewercomponent-depends-on-unini::context-type
+:END:
+- File: packages/coding-agent/src/modes/components/subagent-viewer/types.ts
+- Change: add `theme: Theme` to `SubagentViewerContext`.
+- Import `Theme` from `../../theme/theme`.
+
+** Replace module-level theme import with ctx.theme in viewer-component
+:PROPERTIES:
+:CUSTOM_ID: BUG-299-subagentviewercomponent-depends-on-unini::use-ctx-theme
+:DEPENDS: BUG-299-subagentviewercomponent-depends-on-unini::context-type
+:END:
+- File: packages/coding-agent/src/modes/components/subagent-viewer/viewer-component.ts
+- Remove line 15 `import { theme } from "../../theme/theme";`.
+- All references to the bare `theme` inside methods \u2192 `this.#ctx.theme` (ensure `#ctx` holds the context; it already should; if not, store the theme on a private field during construction).
+- Touch: `#renderHeader` (line 276), any other bare `theme.` reference in the file.
+
+** Update production callers to supply theme in context
+:PROPERTIES:
+:CUSTOM_ID: BUG-299-subagentviewercomponent-depends-on-unini::update-callers
+:DEPENDS: BUG-299-subagentviewercomponent-depends-on-unini::use-ctx-theme
+:END:
+- Grep for `new SubagentViewerComponent(` to find call sites.
+- At each caller (likely in modes/controllers or a canvas mode entry point), add `theme: currentTheme` to the context object.
+- `currentTheme` is typically the module-level `theme` variable at that point (which is initialized during app startup). Safe.
+
+** Update test to supply theme
+:PROPERTIES:
+:CUSTOM_ID: BUG-299-subagentviewercomponent-depends-on-unini::update-test
+:DEPENDS: BUG-299-subagentviewercomponent-depends-on-unini::context-type
+:END:
+- File: packages/coding-agent/test/modes/components/subagent-viewer/viewer-component.test.ts
+- In `beforeEach`, await `getThemeByName("dark")` and pass it into the viewer's context.
+- Import: `import { getThemeByName } from "../../../../src/modes/theme/theme";`.
+
+** Verify green
+:PROPERTIES:
+:CUSTOM_ID: BUG-299-subagentviewercomponent-depends-on-unini::verify-green
+:DEPENDS: BUG-299-subagentviewercomponent-depends-on-unini::update-callers BUG-299-subagentviewercomponent-depends-on-unini::update-test
+:END:
+- Command: `bun test packages/coding-agent/test/modes/components/subagent-viewer/`
+- Expect: all tests in the viewer-component test file pass.
+- Manual: run the canvas mode once to smoke-test that the viewer renders (optional; tests cover the contract).
+
+* Edge Cases
+- `getThemeByName` may return `undefined` for unknown names. Tests already guard with `expect(theme).toBeDefined()`; keep the pattern.
+- Production callers that synchronously construct the viewer before `initTheme` resolves: verify startup order. If any caller runs pre-init, either await init or add a lazy getter. Read session startup code in modes/controllers.
+- Type-only import for `Theme` keeps circular-import risk low.
+
+* Acceptance Criteria
+- All failing viewer-component tests pass.
+- No bare `theme.` reference remains in `viewer-component.ts`.
+- No production call site crashes because of missing theme on context.
+- No other test in `packages/coding-agent/test/modes/components/` regresses.

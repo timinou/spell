@@ -1,0 +1,146 @@
+#+TITLE: applyManagedBufferContent bypasses callCodeBuffer so sessionId is missing
+#+STATE: ITEM
+#+SESSION_ID: 14c0a2c7e0b0df60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-42-37-570Z_14c0a2c7e0b0df60.jsonl]]
+#+CUSTOM_ID: BUG-303-applymanagedbuffercontent-bypasses-callc
+#+EFFORT: M
+#+LAYER: packages/coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+these tests are failing:
+
+✗ taskToolRenderer report_finding safety > renders abort reason inline for aborted subagent results [1.00ms]
+✗ taskToolRenderer report_finding safety > renders efficiency summaries for completed multi-task batches
+✗ TaskTool blocker integration > async execution schedules dependents only after predecessors finish [817.00ms]
+✗ runSubprocess tool call budget > aborts when tool count exceeds budget and still accepts submit_result reminder recovery [3.00ms]
+✗ runSubprocess tool call budget > does not abort when subagent completes within budget
+✗ runSubprocess tool call budget > disables enforcement when task.maxToolCalls is set to 0 [1.00ms]
+✗ runSubprocess tool call budget > does not abort when tool count is exactly at maxToolCalls
+✗ runSubprocess tool call budget > uses default maxToolCalls=200 when not explicitly configured [1.00ms]
+✗ runSubprocess delegated model fallback > falls back to the next allowed candidate after startup auth failure [2.00ms]
+✗ runSubprocess delegated model fallback > keeps the root auth error when no alternate candidate exists [1.00ms]
+✗ python tool docs template > renders dynamic helper docs [1.00ms]
+✗ ExitPlanModeTool validation > rejects child items with empty body [5.00ms]
+✗ ExitPlanModeTool validation > rejects child items with body under 100 characters
+✗ ExitPlanModeTool validation > reports all missing top-level properties in one error [19.00ms]
+✗ ExitPlanModeTool validation > rejects broken top-level DEPENDS references [2.00ms]
+✗ ExitPlanModeTool validation > rejects child items missing structured sub-outline CUSTOM_IDs [1.00ms]
+✗ ExitPlanModeTool validation > rejects sub-outline CUSTOM_IDs outside the owning child namespace
+✗ ExitPlanModeTool validation > rejects broken sub-outline DEPENDS references [1.00ms]
+✗ ExitPlanModeTool validation > rejects duplicate sub-outline CUSTOM_IDs within a child item
+✗ ExitPlanModeTool validation > rejects cyclic sub-outline DEPENDS graphs [1.00ms]
+✗ ExitPlanModeTool validation > reports thin bodies and missing properties together
+✗ ExitPlanModeTool validation > reports broken top-level deps and bad sub-outline namespaces together [1.00ms]
+✗ ExitPlanModeTool validation > reports issues across multiple child items in one response
+✗ ExitPlanModeTool validation > accepts valid top-level and sub-outline dependencies within the plan [1.00ms]
+✗ code.ts transpiles cleanly under Bun.Transpiler [1.00ms]
+✗ coding-agent code tool wiring > routes existing-file edit through freshness diff before save [3.00ms]
+✗ coding-agent code tool wiring > routes strict-target create through list then save without diff [1.00ms]
+✗ applyManagedBufferContent > includes the native per-file error message in the thrown error [1.00ms]
+✗ applyManagedBufferContent > does not throw on successful writes (parseable replacement)
+✗ evaluateWriteGuards contract > allows writes that grow a file [175.00ms]
+✗ parseArgs --canvas > defaults to fluid when --canvas has no value [4.00ms]
+✗ parseArgs --canvas > uses fluid when next arg is another flag
+✗ canvas CLI messages > unknown canvas message includes supported modes and usage syntax
+✗ SwarmBlackboard > does not emit artifact events without DATA_URI and preserves metadata in reads [13.00ms]
+✗ SubagentViewerComponent > forwards tool events to event handler [1.00ms]
+
+
+
+Please find the root causes and present them to me. Explain the TDD way of fixing them by cluster. DO not implement yet, just explore
+
+* Scope
+Two tests in test/tools/managed-code-buffer-errors.test.ts fail with:
+#+BEGIN_EXAMPLE
+Managed code buffer update failed for .../lib.rs: Mutating code buffer commands require a non-empty sessionId
+#+END_EXAMPLE
+
+- "includes the native per-file error message in the thrown error" \u2014 expects "structurally invalid" in the error. The sessionId guard fires first.
+- "does not throw on successful writes (parseable replacement)" \u2014 expects no throw.
+
+Root cause: `src/session/edit-coordinator.ts::callCodeBuffer` (line 28-37) enforces non-empty sessionId on mutating commands, with a fallback (`tui-${process.pid}`) when the session's `getSessionId` returns empty. `src/tools/managed-code-buffer.ts::applyManagedBufferContent` (line 81-105) calls `executeCodeBuffer` **directly** from `@oh-my-pi/pi-natives`, not through `callCodeBuffer`. The native now enforces the sessionId requirement, so this path fails when `options.sessionId` is undefined.
+
+Three call sites feed `applyManagedBufferContent`:
+- `src/patch/index.ts:593` (EditTool.execute)
+- `src/patch/index.ts:697`
+- `src/patch/index.ts:915`
+- `src/tools/write.ts:142` (WriteTool.execute)
+
+All of them have `this.session` (a `ToolSession`) available.
+
+In scope: route `applyManagedBufferContent` through `callCodeBuffer` using a `SessionIdSource`; update 4 call sites to pass `session`.
+Out of scope: changing native sessionId policy; introducing new session storage. One concept, one representation (Principle 2).
+
+* Existing Patterns
+- `src/session/edit-coordinator.ts`:
+  - `SessionIdSource` interface: `{ getSessionId?: () => string | null }`.
+  - `callCodeBuffer(ctx, opts)` wraps `executeCodeBuffer` for mutating commands.
+  - `resolveSessionId(ctx)` returns `ctx.session.getSessionId?.()?.trim()` or `tui-${process.pid}` fallback.
+- `src/tools/code.ts::timedCodeBuffer` (line 85-87) already uses `callCodeBuffer({ session }, options)`. Pattern to follow.
+- `ToolSession` type (`src/tools/index.ts`) has `getSessionId: () => string | null`.
+
+* Tests
+Existing failing tests encode the contract:
+- test/tools/managed-code-buffer-errors.test.ts:
+  - "throws when the native edit reports a per-file failure (unparseable Rust)" \u2014 already passes (throws for other reason).
+  - "includes the native per-file error message in the thrown error" \u2014 must see "structurally invalid" in the thrown message.
+  - "does not throw on successful writes (parseable replacement)" \u2014 must not throw; disk content must match replacement.
+
+Tests do not pass a sessionId. The fallback (`tui-${pid}`) must kick in so calls reach the native with a valid sessionId.
+
+No new tests required. Add a focused regression test only if the cutover introduces a new seam.
+
+* Implementation
+** Thread SessionIdSource into applyManagedBufferContent
+:PROPERTIES:
+:CUSTOM_ID: BUG-303-applymanagedbuffercontent-bypasses-callc::thread-session-source
+:END:
+- File: packages/coding-agent/src/tools/managed-code-buffer.ts
+- Signature change: replace `options: { create: boolean; sessionId?: string }` with `options: { create: boolean; session: SessionIdSource }`.
+  - `session` is required. Callers already have it.
+  - For test callers that do not construct a session, provide a tiny adapter `{ getSessionId: () => undefined }` \u2014 `callCodeBuffer` falls back to `tui-${pid}`.
+- Replace both `executeCodeBuffer({...})` calls with `callCodeBuffer({ session: options.session }, {...})` (drop the explicit `sessionId` field from the opts object; `callCodeBuffer` injects it).
+
+** Update call sites to pass session
+:PROPERTIES:
+:CUSTOM_ID: BUG-303-applymanagedbuffercontent-bypasses-callc::update-call-sites
+:DEPENDS: BUG-303-applymanagedbuffercontent-bypasses-callc::thread-session-source
+:END:
+- Files:
+  - packages/coding-agent/src/patch/index.ts:593, 697, 915
+  - packages/coding-agent/src/tools/write.ts:142
+- For each call: replace `{ create: true, sessionId: ... }` with `{ create: ..., session: this.session }`.
+- Remove now-unused `sessionId` pass-through logic if any remains.
+
+** Update failing test to use the new shape
+:PROPERTIES:
+:CUSTOM_ID: BUG-303-applymanagedbuffercontent-bypasses-callc::update-tests
+:DEPENDS: BUG-303-applymanagedbuffercontent-bypasses-callc::thread-session-source
+:END:
+- File: packages/coding-agent/test/tools/managed-code-buffer-errors.test.ts
+- For all 3 `applyManagedBufferContent(file, content, { create: true })` calls, change to `applyManagedBufferContent(file, content, { create: true, session: { getSessionId: () => undefined } })`.
+- The `undefined` return triggers the `tui-${pid}` fallback in `callCodeBuffer`. This is the canonical pattern for tool-local fallback sessions.
+
+** Verify green (satisfies all 3)
+:PROPERTIES:
+:CUSTOM_ID: BUG-303-applymanagedbuffercontent-bypasses-callc::verify-green
+:DEPENDS: BUG-303-applymanagedbuffercontent-bypasses-callc::update-call-sites BUG-303-applymanagedbuffercontent-bypasses-callc::update-tests
+:END:
+- Command: `bun test packages/coding-agent/test/tools/managed-code-buffer-errors.test.ts`
+- Expect: all 3 tests pass.
+- Command: `bun test packages/coding-agent/test/tools/` (regression sweep for patch, write, code tool paths).
+- Expect: no new failures.
+
+* Edge Cases
+- `tui-${process.pid}` collides across parallel test processes. `bun test` runs tests in-process, so pid is stable for the run; fallback is safe.
+- If a call site legitimately already has a sessionId, `session.getSessionId` returns it; fallback is bypassed.
+- `CodeBufferOptions` type \u2014 ensure the `sessionId` field remains accepted by the native and is set exactly once (inside `callCodeBuffer`).
+- The `save` command is also mutating; `applyManagedBufferContent` also calls save (line 101) \u2014 it must also go through `callCodeBuffer`. Do not miss this.
+
+* Acceptance Criteria
+- All 3 managed-buffer-errors tests pass.
+- No direct `executeCodeBuffer` call remains in `applyManagedBufferContent` for mutating commands.
+- All 4 call sites pass `session`.
+- No other test regresses in `packages/coding-agent/test/tools/` or `packages/coding-agent/test/patch/`.
