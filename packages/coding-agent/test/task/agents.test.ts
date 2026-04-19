@@ -29,6 +29,19 @@ describe("bundled agent tool grants", () => {
 		expect(quickTask?.tools).toContain("submit_result");
 	});
 
+	test("quick_task prompt stays narrow and omits todo_write planning", () => {
+		const quickTask = loadBundledAgents().find(a => a.name === "quick_task");
+		expect(quickTask?.systemPrompt).toContain("intentionally narrow and mechanical");
+		expect(quickTask?.systemPrompt).not.toContain("FULL access to all tools");
+		expect(quickTask?.systemPrompt).not.toContain("todo_write");
+		expect(quickTask?.systemPrompt).not.toContain("Delegate");
+	});
+
+	test("task prompt keeps todo_write planning guidance", () => {
+		const task = loadBundledAgents().find(a => a.name === "task");
+		expect(task?.systemPrompt).toContain("create sniper todos via `todo_write`");
+	});
+
 	test("quick_task roster is false", () => {
 		const quickTask = loadBundledAgents().find(a => a.name === "quick_task");
 		expect(quickTask?.roster).toBe(false);

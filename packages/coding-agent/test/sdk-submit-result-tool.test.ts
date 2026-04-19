@@ -22,7 +22,7 @@ describe("createAgentSession submit_result activation", () => {
 		}
 	});
 
-	it("activates submit_result when explicit toolNames narrow the session", async () => {
+	it("preserves todo_write when submit_result is injected into an explicit child tool list", async () => {
 		const { session } = await createAgentSession({
 			cwd: tempDir,
 			agentDir: tempDir,
@@ -36,12 +36,12 @@ describe("createAgentSession submit_result activation", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			toolNames: ["read", "org"],
+			toolNames: ["read", "todo_write"],
 			requireSubmitResultTool: true,
 		});
 
 		try {
-			expect(session.getActiveToolNames()).toEqual(expect.arrayContaining(["read", "org", "submit_result"]));
+			expect(session.getActiveToolNames()).toEqual(expect.arrayContaining(["read", "todo_write", "submit_result"]));
 		} finally {
 			await session.dispose();
 		}

@@ -66,7 +66,7 @@
 - `subtask` model role for subagent sessions (configurable via `modelRoles.subtask`, defaults to `smol`)
 - Per-subagent cost display in TUI progress, results, batch summary, and subagent viewer footer
 - `task.cacheStaggerMs` setting (default 800ms) for prompt cache warming between sibling launches
-- `todo_write` tool now available to all subagents for self-organizing complex work
+- `todo_write` tool now available to delegated task subagents for self-organizing complex work while `quick_task` stays narrow
 
 ### Changed
 
@@ -82,6 +82,7 @@
 
 ### Fixed
 
+- Fixed delegated child sessions to preserve `todo_write` when `submit_result` is injected, and updated subagent/`quick_task` prompts so delegated agents are only instructed to use tools they actually have.
 - Fixed (BUG-191) `applyOps` blocker validation now scoped to tasks whose blockers were set in the current ops batch; pre-existing stale blocker refs are silently pruned rather than surfaced as errors.
 - Fixed fluid canvas stuck states by consolidating plan error routing and returning to input after cancellation.
 - Fixed fluid agent state propagation to include failure error text plus start/completion timestamps for accurate UI status.

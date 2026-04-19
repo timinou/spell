@@ -1,0 +1,79 @@
+#+TITLE: Relax code-text compatibility notices and add write diagnostics
+#+STATE: DOING
+#+SESSION_ID: 14c079ab1753dbc3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-43-00-189Z_14c079ab1753dbc3.jsonl]]
+#+CUSTOM_ID: BUG-290-relax-code-text-compatibility-notices-an
+#+DEPENDS: 
+#+LAYER: tools
+
+* Scope
+- In scope: replace the lingering =SPELL_ALLOW_TEXT_EDIT_ON_CODE=-style strict/escape-hatch design with a default lenient compatibility path for text-based =edit= and =write= on code-supported files.
+- In scope: when a code-supported file is mutated through the text-tool compatibility path, surface a non-blocking user-visible notice/TODO instead of throwing or silently succeeding.
+- In scope: add post-save LSP diagnostics to the managed-buffer =write= path, gated by the existing =lsp.diagnosticsOnWrite= setting.
+- In scope: remove stale comments/TODOs and stale org references that still describe =SPELL_ALLOW_TEXT_EDIT_ON_CODE= as an active behavior switch.
+- Out of scope: changing =code edit= semantics, adding LSP formatting to managed-buffer writes, changing notebook handling, changing sandbox/plan-mode guards, or adding diagnostics to =edit= in this change.
+
+* Existing Patterns
+- =packages/coding-agent/src/patch/index.ts= already routes text-based edit mutations through =applyManagedBufferContent(...)= for managed-buffer persistence; the old code-supported redirect guard is now commented out in hashline/patch/replace paths.
+- =packages/coding-agent/src/tools/write.ts= already has =WriteToolDetails.diagnostics=, =outputMeta().diagnostics(...)= plumbing, and a commented code-supported managed-buffer branch with TODOs asking how to add diagnostics.
+- =packages/coding-agent/src/lsp/index.ts= already defines =FileDiagnosticsResult= and the write-through pipeline. Diagnostics are gathered in =runLspWritethrough(...)= via =getDiagnosticsForFile(...)= after save when =enableDiagnostics= is true.
+- =packages/coding-agent/src/config/settings-schema.ts= defines =lsp.diagnosticsOnWrite=. Reuse this as the only gate for managed-buffer write diagnostics.
+- Historical context: =[[id:BUG-265-coding-agent-route-edit-through-code-fal]]= made =edit= lenient through the managed buffer; =[[id:FEAT-574-route-write-tool-through-managed-code-bu]]= mirrored that for =write= but left stale =SPELL_ALLOW_TEXT_EDIT_ON_CODE= references and skipped diagnostics on the managed-buffer branch.
+
+* Tests
+User workflows to cover first:
+- W1: =edit= on a code-supported file succeeds and clearly tells the user it used a compatibility path / follow-up TODO, instead of throwing a redirect/block error.
+- W2: =write= on a code-supported file succeeds through the managed buffer and shows the same non-blocking notice.
+- W3: when =lsp.diagnosticsOnWrite=true= and the written code has diagnostics, =write= returns populated =details.diagnostics= plus a meta notice; when the setting is false, managed-buffer writes do not run diagnostics.
+- W4: non-code writes keep current behavior and do not receive the compatibility notice.
+- W5: sandbox and plan-mode rejections still fire before any compatibility-path logic.
+
+Concrete test files:
+- =packages/coding-agent/test/tools.test.ts=: add/adjust focused cases for W1-W5 across at least one code-supported text file (for example =.ts=) and one unsupported text file (for example =.txt=).
+- If renderer output changes materially, extend =packages/coding-agent/test/tools/write-renderer.test.ts= only when needed to pin the notice/diagnostic rendering contract.
+
+* Implementation
+** Write failing compatibility + diagnostics tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-290-relax-code-text-compatibility-notices-an::tests
+:END:
+- File: =packages/coding-agent/test/tools.test.ts=.
+- Add failing tests for W1-W5 before implementation.
+- Assert observable contract, not internals: success vs block, notice visibility, =details.diagnostics= presence/absence under the setting, and unchanged non-code behavior.
+
+** Remove stale =SPELL_ALLOW_TEXT_EDIT_ON_CODE= design and surface notice
+:PROPERTIES:
+:CUSTOM_ID: BUG-290-relax-code-text-compatibility-notices-an::compat-notice
+:DEPENDS: BUG-290-relax-code-text-compatibility-notices-an::tests
+:END:
+- Files: =packages/coding-agent/src/patch/index.ts=, =packages/coding-agent/src/tools/write.ts=, relevant prompt/org references only if user-visible guidance still claims the old behavior.
+- Delete stale commented redirect branches / TODOs tied to =SPELL_ALLOW_TEXT_EDIT_ON_CODE=.
+- Make the compatibility behavior unconditional for code-supported text edits/writes.
+- Surface a concise non-blocking notice in the returned tool text so the user sees that a compatibility path was used and that =code edit= remains the preferred long-term path.
+- Do not introduce a second configuration flag unless unavoidable.
+
+** Add managed-buffer write diagnostics behind existing setting
+:PROPERTIES:
+:CUSTOM_ID: BUG-290-relax-code-text-compatibility-notices-an::write-diagnostics
+:DEPENDS: BUG-290-relax-code-text-compatibility-notices-an::compat-notice
+:END:
+- Files: =packages/coding-agent/src/lsp/index.ts=, =packages/coding-agent/src/tools/write.ts=.
+- Expose/reuse a saved-file diagnostics helper so managed-buffer writes can query diagnostics after =applyManagedBufferContent(...)= saves to disk.
+- Gate the diagnostic pass strictly on =lsp.diagnosticsOnWrite=.
+- Populate both =details.diagnostics= and =details.meta.diagnostics= on the managed-buffer write branch.
+- Keep =lsp.formatOnWrite= behavior unchanged for this path.
+
+* Edge Cases
+- A managed-buffer write may succeed even when diagnostics are present; diagnostics must be surfaced as information, not converted into a failure.
+- If the post-save diagnostic query times out or no server exists, preserve write success and omit diagnostics rather than fabricating an error.
+- Compatibility notices must not appear for non-code files.
+- The content notice must remain concise enough not to drown out diff/summary text on =edit= results.
+- Remove stale references to =SPELL_ALLOW_TEXT_EDIT_ON_CODE= from planning/docs touched by this work so the plan does not encode dead behavior.
+
+* Acceptance Criteria
+- No active runtime branch depends on =SPELL_ALLOW_TEXT_EDIT_ON_CODE= for edit/write code-file leniency.
+- Code-supported =edit= and =write= succeed without redirect errors and include a visible compatibility notice.
+- Managed-buffer =write= returns LSP diagnostics when =lsp.diagnosticsOnWrite=true= and omits them when false.
+- Non-code write behavior remains unchanged.
+- =bun test packages/coding-agent/test/tools.test.ts= passes.
+- =bun check:ts= passes.

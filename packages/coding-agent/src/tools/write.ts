@@ -11,13 +11,20 @@ import { untilAborted } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
-import { createLspWritethrough, type FileDiagnosticsResult, type WritethroughCallback, writethroughNoop } from "../lsp";
+import {
+	createLspWritethrough,
+	type FileDiagnosticsResult,
+	getSavedFileDiagnostics,
+	type WritethroughCallback,
+	writethroughNoop,
+} from "../lsp";
 import { getLanguageFromPath, type Theme } from "../modes/theme/theme";
 import writeDescription from "../prompts/tools/write.md" with { type: "text" };
 import { enforcePathWrite } from "../sandbox";
 import type { ToolSession } from "../sdk";
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, truncateToWidth } from "../tui";
 import { isCodeToolSupportedPath } from "./code-supported-files";
+import { formatCodeTextCompatibilityNotice } from "./code-text-compatibility";
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import { applyManagedBufferContent } from "./managed-code-buffer";
 import { enforceModeWrite, resolvePlanPath } from "./mode-guard";
@@ -106,17 +113,32 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			if (sandboxError) throw new Error(sandboxError);
 			const absolutePath = resolvePlanPath(this.session, path);
 			const resultText = `Successfully wrote ${content.length} bytes to ${path}`;
-			if (isCodeToolSupportedPath(absolutePath) && !process.env.SPELL_ALLOW_TEXT_EDIT_ON_CODE) {
+
+			if (isCodeToolSupportedPath(absolutePath)) {
 				applyManagedBufferContent(absolutePath, content, { create: true });
 				invalidateFsScanAfterWrite(absolutePath);
+				const diagnostics = await this.#getManagedBufferDiagnostics(absolutePath, content, signal);
+				const compatibilityNotice = formatCodeTextCompatibilityNotice("write");
 				return {
-					content: [{ type: "text", text: resultText }],
-					details: {},
+					content: [
+						{
+							type: "text",
+							text: `${resultText}\n${compatibilityNotice}`,
+						},
+					],
+					details: diagnostics
+						? {
+								diagnostics,
+								meta: outputMeta()
+									.diagnostics(diagnostics.summary, diagnostics.messages ?? [])
+									.get(),
+							}
+						: {},
 				};
 			}
+
 			const batchRequest = getLspBatchRequest(context?.toolCall);
 			const writethrough = this.#getWritethrough();
-
 			const diagnostics = await writethrough(absolutePath, content, signal, undefined, batchRequest);
 			invalidateFsScanAfterWrite(absolutePath);
 			if (!diagnostics) {
@@ -137,7 +159,22 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			};
 		});
 	}
-
+	async #getManagedBufferDiagnostics(
+		absolutePath: string,
+		content: string,
+		signal?: AbortSignal,
+	): Promise<FileDiagnosticsResult | undefined> {
+		const enableLsp = this.session.enableLsp ?? true;
+		const enableDiagnostics = enableLsp && this.session.settings.get("lsp.diagnosticsOnWrite");
+		if (!enableDiagnostics) {
+			return undefined;
+		}
+		try {
+			return await getSavedFileDiagnostics(absolutePath, content, this.session.cwd, signal);
+		} catch {
+			return undefined;
+		}
+	}
 	#createWritethrough(cwd: string): WritethroughCallback {
 		const enableLsp = this.session.enableLsp ?? true;
 		const enableFormat = enableLsp && this.session.settings.get("lsp.formatOnWrite");

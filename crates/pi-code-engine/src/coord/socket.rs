@@ -1,34 +1,27 @@
 //! `SocketCoordClient` — talks to a running `pi-edit-broker` via its Unix
 //! socket protocol.
-//!
-//! This FEAT-577 scaffold provides the connection-establishment helpers and
-//! the blocking protocol wrapper; the full wiring into `edit_transaction`
-//! lands with the `BufferRegistry` surface in a follow-up iteration.
-//!
-//! **Degraded-no-op policy.** Every broker call has a short budget (150ms by
-//! default). On timeout or disconnect the client downgrades to the
-//! [`super::NullCoordClient`] semantics for the remainder of the call so the
-//! edit path never blocks on an unreachable broker.
 
 use std::{
 	io::{BufRead, BufReader, Write},
 	os::unix::net::UnixStream,
 	path::{Path, PathBuf},
 	sync::{Mutex, MutexGuard},
-	time::Duration,
+	time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use serde::{Deserialize, Serialize};
+use parking_lot::Mutex as ParkingMutex;
+use pi_edit_broker::{ClientMessage, PeerSummary, ServerMessage, spawn_broker_if_absent};
 
-use super::client::{CommitResult, CoordClient, IntentResult, PeerEdit, PeerState, SessionId};
+use super::{
+	client::{CommitResult, CoordClient, IntentResult, PeerEdit, PeerInfo, PeerState, SessionId},
+	default_journal_root,
+	journal::{JournalEntry, JournalReader, journal_path_for},
+	peer_state::PeerStateStore,
+};
 
 const DEFAULT_BUDGET: Duration = Duration::from_millis(150);
+const JOURNAL_TAIL_LIMIT: usize = 64;
 
-/// Lightweight line-based client for the broker protocol.
-///
-/// The wire format is duplicated as plain JSON rather than depending on the
-/// broker crate so this module is unit-testable without tokio and without the
-/// broker binary.
 #[derive(Debug, Clone)]
 pub struct BrokerEndpoint {
 	pub socket:     PathBuf,
@@ -41,125 +34,114 @@ impl BrokerEndpoint {
 	pub const fn new(socket: PathBuf, session_id: SessionId) -> Self {
 		Self { socket, session_id, budget: DEFAULT_BUDGET }
 	}
+
+	#[must_use]
+	pub fn default_for(session_id: SessionId) -> Self {
+		let socket = std::env::var_os("PI_EDIT_BROKER_SOCKET").map_or_else(
+			|| {
+				std::env::var_os("HOME").map_or_else(
+					|| PathBuf::from(".spell/edit-broker.sock"),
+					|home| PathBuf::from(home).join(".spell/edit-broker.sock"),
+				)
+			},
+			PathBuf::from,
+		);
+		Self::new(socket, session_id)
+	}
 }
 
-#[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum OutboundMessage<'a> {
-	Hello {
-		#[serde(rename = "sessionId")]
-		session_id: &'a str,
-		pid:        u32,
-		cwd:        &'a Path,
-		#[serde(rename = "startedAt")]
-		started_at: u64,
-		#[serde(rename = "openFiles")]
-		open_files: Vec<&'a Path>,
-	},
-	Intent {
-		file:          &'a Path,
-		#[serde(rename = "codePaths")]
-		code_paths:    &'a [String],
-		#[serde(rename = "baseRevision")]
-		base_revision: u64,
-		#[serde(rename = "ttlMs")]
-		ttl_ms:        u64,
-	},
-	Commit {
-		file:            &'a Path,
-		revision:        u64,
-		#[serde(rename = "parentRevision")]
-		parent_revision: u64,
-		#[serde(rename = "codePaths")]
-		code_paths:      &'a [String],
-		#[serde(rename = "diffHash")]
-		diff_hash:       &'a str,
-		#[serde(rename = "byteLen")]
-		byte_len:        u64,
-	},
-	Bye,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum InboundMessage {
-	Welcome,
-	IntentAck {
-		granted: bool,
-	},
-	IntentConflict {
-		#[serde(rename = "codePath")]
-		code_path:           String,
-		#[serde(rename = "conflictingSession")]
-		conflicting_session: SessionId,
-		#[serde(rename = "peerIntentTs")]
-		peer_intent_ts:      u64,
-	},
-	CommitAck,
-	CommitConflict {
-		#[serde(rename = "codePath")]
-		code_path:           String,
-		#[serde(rename = "conflictingSession")]
-		conflicting_session: SessionId,
-		#[serde(rename = "peerRevision")]
-		peer_revision:       u64,
-		#[serde(rename = "peerCommitTs")]
-		peer_commit_ts:      u64,
-	},
-	PeerJoined,
-	PeerLeft,
-	PeerCommitted,
-	Error {
-		#[allow(dead_code, reason = "retained for future logging")]
-		code:    String,
-		#[allow(dead_code, reason = "retained for future logging")]
-		message: String,
-	},
-}
-
-/// Blocking client that runs its own per-call connect/send/recv cycle to the
-/// broker.
-///
-/// Connections are not pooled in this FEAT — each request opens a new
-/// socket. The broker handles this cheaply; pooling lands in a follow-up if
-/// the per-call latency profile justifies it.
 #[derive(Debug)]
 pub struct SocketCoordClient {
 	endpoint: BrokerEndpoint,
-	#[allow(dead_code, reason = "reserved for future pooled-connection work")]
 	lock:     Mutex<()>,
+	state:    PeerStateStore,
+	warnings: ParkingMutex<Vec<String>>,
 }
 
 impl SocketCoordClient {
 	#[must_use]
-	pub const fn new(endpoint: BrokerEndpoint) -> Self {
-		Self { endpoint, lock: Mutex::new(()) }
+	pub fn new(endpoint: BrokerEndpoint) -> Self {
+		Self {
+			endpoint,
+			lock: Mutex::new(()),
+			state: PeerStateStore::default(),
+			warnings: ParkingMutex::new(Vec::new()),
+		}
+	}
+
+	fn resolve_session<'a>(&'a self, session: &'a str) -> &'a str {
+		if session.trim().is_empty() {
+			&self.endpoint.session_id
+		} else {
+			session
+		}
+	}
+
+	fn warn_once(&self, message: impl Into<String>) {
+		let message = message.into();
+		let mut warnings = self.warnings.lock();
+		if !warnings.iter().any(|existing| existing == &message) {
+			warnings.push(message);
+		}
 	}
 
 	fn open(&self) -> Option<(UnixStream, BufReader<UnixStream>)> {
-		let stream = UnixStream::connect(&self.endpoint.socket).ok()?;
-		stream.set_read_timeout(Some(self.endpoint.budget)).ok()?;
-		stream.set_write_timeout(Some(self.endpoint.budget)).ok()?;
-		let reader = BufReader::new(stream.try_clone().ok()?);
-		Some((stream, reader))
+		let connect = || -> Option<(UnixStream, BufReader<UnixStream>)> {
+			let stream = UnixStream::connect(&self.endpoint.socket).ok()?;
+			stream.set_read_timeout(Some(self.endpoint.budget)).ok()?;
+			stream.set_write_timeout(Some(self.endpoint.budget)).ok()?;
+			let reader = BufReader::new(stream.try_clone().ok()?);
+			Some((stream, reader))
+		};
+		if let Some(pair) = connect() {
+			return Some(pair);
+		}
+		if let Err(error) = spawn_broker_if_absent(&self.endpoint.socket, None) {
+			self.warn_once(format!("coord broker unavailable: {error}"));
+			return None;
+		}
+		let pair = connect();
+		if pair.is_none() {
+			self.warn_once(format!(
+				"coord broker socket did not accept connections at {}",
+				self.endpoint.socket.display()
+			));
+		}
+		pair
 	}
 
-	fn handshake(&self, stream: &mut UnixStream, reader: &mut BufReader<UnixStream>) -> Option<()> {
-		let hello = OutboundMessage::Hello {
-			session_id: &self.endpoint.session_id,
-			pid:        std::process::id(),
-			cwd:        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),
-			started_at: super::blake3_short(self.endpoint.session_id.as_bytes())
-				.chars()
-				.map(|c| c as u32 as u64)
-				.sum(),
+	fn handshake(
+		&self,
+		stream: &mut UnixStream,
+		reader: &mut BufReader<UnixStream>,
+		session: &str,
+	) -> Option<()> {
+		let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+		let project_name = cwd
+			.file_name()
+			.and_then(|name| name.to_str())
+			.map(ToOwned::to_owned);
+		write_json(stream, &ClientMessage::Hello {
+			session_id: session.to_string(),
+			pid: std::process::id(),
+			cwd,
+			project_name,
+			started_at: now_ms(),
 			open_files: Vec::new(),
-		};
-		write_json(stream, &hello).ok()?;
+		})
+		.ok()?;
 		loop {
 			match read_message(reader)? {
-				InboundMessage::Welcome => return Some(()),
-				InboundMessage::Error { .. } => return None,
+				ServerMessage::Welcome { peers, .. } => {
+					self
+						.state
+						.replace_peers(peers.into_iter().map(peer_info_from_summary).collect());
+					return Some(());
+				},
+				ServerMessage::Error { code, message } => {
+					self.warn_once(format!("coord hello failed {code}: {message}"));
+					return None;
+				},
 				_ => {},
 			}
 		}
@@ -167,24 +149,90 @@ impl SocketCoordClient {
 
 	fn with_session<T>(
 		&self,
+		session: &str,
 		operation: impl FnOnce(&mut UnixStream, &mut BufReader<UnixStream>) -> Option<T>,
 	) -> Option<T> {
 		let _guard: MutexGuard<'_, ()> = self.lock.lock().ok()?;
 		let (mut stream, mut reader) = self.open()?;
-		self.handshake(&mut stream, &mut reader)?;
+		let session = self.resolve_session(session).to_string();
+		self.handshake(&mut stream, &mut reader, &session)?;
 		let out = operation(&mut stream, &mut reader);
-		let _ = write_json(&mut stream, &OutboundMessage::Bye);
+		let _ = write_json(&mut stream, &ClientMessage::Bye);
 		out
+	}
+
+	fn workspace_root_for(path: &Path) -> PathBuf {
+		let mut current = path.parent().unwrap_or(path);
+		let mut last_non_root = current.to_path_buf();
+		loop {
+			if current.join(".git").exists() || current.join(".spell").exists() {
+				return current.to_path_buf();
+			}
+			let Some(parent) = current.parent() else {
+				return last_non_root;
+			};
+			last_non_root = current.to_path_buf();
+			current = parent;
+		}
+	}
+
+	fn read_journal_entries(&self, file: &Path, limit: usize) -> Vec<JournalEntry> {
+		let journal_path =
+			journal_path_for(&default_journal_root(), &Self::workspace_root_for(file), file);
+		match JournalReader::tail(&journal_path, limit) {
+			Ok(entries) => entries,
+			Err(crate::error::CodeEngineError::Io(error))
+				if error.kind() == std::io::ErrorKind::NotFound =>
+			{
+				Vec::new()
+			},
+			Err(error) => {
+				self.warn_once(format!("coord journal read failed for {}: {error}", file.display()));
+				Vec::new()
+			},
+		}
+	}
+
+	fn sync_recent_from_journal(&self, file: &Path) -> Vec<JournalEntry> {
+		let entries = self.read_journal_entries(file, JOURNAL_TAIL_LIMIT);
+		let edits = entries
+			.iter()
+			.filter(|entry| entry.session_id != self.endpoint.session_id)
+			.map(peer_edit_from_entry)
+			.collect();
+		self.state.replace_recent(file, edits);
+		entries
 	}
 }
 
-fn write_json<T: Serialize>(stream: &mut UnixStream, msg: &T) -> std::io::Result<()> {
+fn peer_info_from_summary(summary: PeerSummary) -> PeerInfo {
+	PeerInfo {
+		session_id:   summary.session_id,
+		pid:          0,
+		cwd:          summary.cwd,
+		project_name: summary.project_name.unwrap_or_default(),
+		started_at:   0,
+		open_files:   summary.open_files,
+	}
+}
+
+fn peer_edit_from_entry(entry: &JournalEntry) -> PeerEdit {
+	PeerEdit {
+		session_id: entry.session_id.clone(),
+		revision:   entry.revision,
+		code_paths: entry.code_paths.clone(),
+		diff_hash:  entry.diff_hash.clone(),
+		ts:         entry.ts,
+	}
+}
+
+fn write_json<T: serde::Serialize>(stream: &mut UnixStream, msg: &T) -> std::io::Result<()> {
 	let mut bytes = serde_json::to_vec(msg).map_err(std::io::Error::other)?;
 	bytes.push(b'\n');
 	stream.write_all(&bytes)
 }
 
-fn read_message(reader: &mut BufReader<UnixStream>) -> Option<InboundMessage> {
+fn read_message(reader: &mut BufReader<UnixStream>) -> Option<ServerMessage> {
 	let mut line = String::new();
 	match reader.read_line(&mut line) {
 		Ok(0) | Err(_) => None,
@@ -192,43 +240,53 @@ fn read_message(reader: &mut BufReader<UnixStream>) -> Option<InboundMessage> {
 	}
 }
 
+fn now_ms() -> u64 {
+	SystemTime::now()
+		.duration_since(UNIX_EPOCH)
+		.unwrap_or_default()
+		.as_millis()
+		.try_into()
+		.unwrap_or(u64::MAX)
+}
+
 impl CoordClient for SocketCoordClient {
-	fn on_open(&self, _session: &str, _file: &Path, _revision: u64) {
-		// No-op: subscription is implicit; the broker learns about open files
-		// on the next `hello` cycle. Refined in a follow-up.
+	fn on_open(&self, session: &str, file: &Path, _revision: u64) {
+		let _ = self.with_session(session, |_stream, _reader| Some(()));
+		self.sync_recent_from_journal(file);
 	}
 
 	fn intent(
 		&self,
-		_session: &str,
+		session: &str,
 		file: &Path,
 		code_paths: &[String],
 		base_revision: u64,
 	) -> IntentResult {
-		let result: Option<IntentResult> = self.with_session(|stream, reader| {
-			write_json(stream, &OutboundMessage::Intent {
-				file,
-				code_paths,
+		let result = self.with_session(session, |stream, reader| {
+			write_json(stream, &ClientMessage::Intent {
+				file: file.to_path_buf(),
+				code_paths: code_paths.to_vec(),
 				base_revision,
 				ttl_ms: 5_000,
 			})
 			.ok()?;
 			loop {
 				match read_message(reader)? {
-					InboundMessage::IntentAck { granted: true } => {
+					ServerMessage::IntentAck { granted: true, .. } => {
 						return Some(IntentResult::Granted);
 					},
-					InboundMessage::IntentAck { granted: false } => {
+					ServerMessage::IntentAck { granted: false, .. } => {
 						return Some(IntentResult::Conflict {
 							peer_session:   String::new(),
 							code_path:      code_paths.first().cloned().unwrap_or_default(),
 							peer_intent_ts: 0,
 						});
 					},
-					InboundMessage::IntentConflict {
+					ServerMessage::IntentConflict {
 						code_path,
 						conflicting_session,
 						peer_intent_ts,
+						..
 					} => {
 						return Some(IntentResult::Conflict {
 							peer_session: conflicting_session,
@@ -236,17 +294,23 @@ impl CoordClient for SocketCoordClient {
 							peer_intent_ts,
 						});
 					},
-					InboundMessage::Error { .. } => return None,
+					ServerMessage::Error { code, message } => {
+						self.warn_once(format!("coord intent failed {code}: {message}"));
+						return None;
+					},
 					_ => {},
 				}
 			}
 		});
+		if result.is_none() {
+			self.warn_once(format!("coord intent degraded for {}", file.display()));
+		}
 		result.unwrap_or(IntentResult::Granted)
 	}
 
 	fn commit(
 		&self,
-		_session: &str,
+		session: &str,
 		file: &Path,
 		revision: u64,
 		parent_revision: u64,
@@ -254,24 +318,25 @@ impl CoordClient for SocketCoordClient {
 		diff_hash: &str,
 		byte_len: u64,
 	) -> CommitResult {
-		let result: Option<CommitResult> = self.with_session(|stream, reader| {
-			write_json(stream, &OutboundMessage::Commit {
-				file,
+		let result = self.with_session(session, |stream, reader| {
+			write_json(stream, &ClientMessage::Commit {
+				file: file.to_path_buf(),
 				revision,
 				parent_revision,
-				code_paths,
-				diff_hash,
+				code_paths: code_paths.to_vec(),
+				diff_hash: diff_hash.to_string(),
 				byte_len,
 			})
 			.ok()?;
 			loop {
 				match read_message(reader)? {
-					InboundMessage::CommitAck => return Some(CommitResult::Ok),
-					InboundMessage::CommitConflict {
+					ServerMessage::CommitAck { .. } => return Some(CommitResult::Ok),
+					ServerMessage::CommitConflict {
 						code_path,
 						conflicting_session,
 						peer_revision,
 						peer_commit_ts,
+						..
 					} => {
 						return Some(CommitResult::Conflict {
 							peer_session: conflicting_session,
@@ -280,26 +345,36 @@ impl CoordClient for SocketCoordClient {
 							peer_commit_ts,
 						});
 					},
-					InboundMessage::Error { .. } => return None,
+					ServerMessage::Error { code, message } => {
+						self.warn_once(format!("coord commit failed {code}: {message}"));
+						return None;
+					},
 					_ => {},
 				}
 			}
 		});
+		if result.is_none() {
+			self.warn_once(format!("coord commit degraded for {}", file.display()));
+		}
 		result.unwrap_or(CommitResult::Ok)
 	}
 
-	fn recent_peer_edits(&self, _file: &Path, _since_ms: u64, _limit: usize) -> Vec<PeerEdit> {
-		// Broker currently replies to these only in `welcome.recent_commits`;
-		// a dedicated query message lands with FEAT-578. Until then return
-		// empty.
-		Vec::new()
+	fn recent_peer_edits(&self, file: &Path, since_ms: u64, limit: usize) -> Vec<PeerEdit> {
+		self.sync_recent_from_journal(file);
+		self.state.recent_peer_edits(file, since_ms, limit)
 	}
 
-	fn peer_state(&self, _file: &Path) -> PeerState {
-		PeerState { peers: Vec::new(), recent_commits: Vec::new(), latest_revision: None }
+	fn peer_state(&self, file: &Path) -> PeerState {
+		let _ = self.with_session("", |_stream, _reader| Some(()));
+		let entries = self.sync_recent_from_journal(file);
+		let mut state = self.state.peer_state(file);
+		state.latest_revision = entries.first().map(|entry| entry.revision);
+		state
 	}
 
-	fn on_close(&self, _session: &str, _file: &Path) {
-		// Deregistration happens implicitly when the per-call session closes.
+	fn on_close(&self, _session: &str, _file: &Path) {}
+
+	fn drain_warnings(&self) -> Vec<String> {
+		std::mem::take(&mut *self.warnings.lock())
 	}
 }

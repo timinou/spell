@@ -37,12 +37,19 @@ notify = { version = "6", default-features = false, features = [
 ] }
 fd-lock = "4"
 blake3 = "1"
+pi-edit-broker = { path = "../pi-edit-broker" }
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-
 [dev-dependencies]
 filetime = "0.2"
 tempfile = "3"
+tokio = { version = "1", features = [
+   "rt-multi-thread",
+   "macros",
+   "net",
+   "io-util",
+   "time",
+] }

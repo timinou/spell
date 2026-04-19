@@ -1,0 +1,82 @@
+#+TITLE: Task subagent todo_write contract repair
+#+STATE: BLOCKED
+#+SESSION_ID: 14c07612b75b7446
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-27-17-726Z_14c07612b75b7446.jsonl]]
+#+CUSTOM_ID: PLAN-260-task-subagent-todo-write-contract-repair
+#+LAYER: coding-agent
+
+* Initial Message
+
+File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-19T07-15-41-512Z_14c0736ad20ef8d4.jsonl
+ ID: 14c0736ad20ef8d4
+
+
+^^^ look at this session's tasks and explain why they failed, look at recent plans and trace back the root cause. how can you reproduce this in tests and fix it once and for all?
+
+* Context
+- User request: inspect session `14c0736ad20ef8d4`, explain why delegated tasks failed, trace the root cause through recent plans, then propose a permanent test-backed fix in Spell.
+- Failure chain established from current evidence:
+  1. `PLAN-095-kb-end-to-end-readiness-closure-cite-kb.org` delegated FEAT-236/237/238 to bundled `task` subagents for multi-file work.
+  2. The FEAT-236 retry transcript shows the delegated `task` agent cancelled with `Blocked before implementation ... required todo_write facility is not accessible in the toolset.`
+  3. In Spell, `parseAgentFields` and existing tests already promise `todo_write` to non-`quick_task` subagents, and the bundled `task` prompt / subagent overlay both require `todo_write` planning for 3+ step work.
+  4. But `createTools(...)` strips `todo_write` whenever `requireSubmitResultTool` is enabled, and `runSubprocess(...)` always enables `requireSubmitResultTool` for child sessions.
+  5. Result: delegated task sessions receive an impossible contract — prompts say MUST use `todo_write`, runtime removes `todo_write`, agent aborts before touching code, parent todo gate records failure.
+- Recent-plan trace:
+  - `PLAN-094-kb-end-to-end-readiness-completion.org` already recorded repeated delegated aborts (`FEAT-221 ... 3 subagent aborts`).
+  - `PLAN-095` repeated the same orchestration shape: delegate large feature work to `task` agents. That surfaced the same underlying Spell bug more explicitly.
+- Direct local repro from the Spell repo is already available without touching app code: creating a delegated session with `toolNames: ["read", "todo_write"]` and `requireSubmitResultTool: true` currently yields active tools containing `submit_result` but not `todo_write`.
+
+Settled design decisions:
+1. `submit_result` and `todo_write` are not mutually exclusive. Child sessions must be able to hold both when the agent definition requests both.
+2. Bundled `task` agents should keep `todo_write`; current code/comments/tests already point to that intended contract.
+3. `quick_task` remains intentionally narrow and should not gain `todo_write` or recursive planning/delegation behavior.
+4. Prompt text must become capability-truthful: no delegated agent may be told it has tools it does not actually have.
+5. Fix scope includes runtime, prompts, tests, and docs/changelog in one cutover so the contract is represented once.
+
+Recommended approach:
+- Repair the child-session tool filter so `requireSubmitResultTool` adds `submit_result` without deleting `todo_write`.
+- Split or specialize quick_task prompt content so the narrow worker stays mechanical.
+- Make the subagent system overlay conditional on actual tool availability.
+- Add regression tests covering the exact impossible-contract failure chain before patching runtime code.
+
+Child item for execution:
+- [[id:BUG-288-coding-agent-restore-truthful-todo-write][BUG-288 coding-agent: restore truthful todo_write contract in delegated subagents]]
+
+* Verification
+- Reproduction before fix:
+  - focused delegated-session repro asserting `todo_write` disappears when `requireSubmitResultTool: true`
+- Post-fix focused verification:
+  - `bun test packages/coding-agent/test/sdk-submit-result-tool.test.ts`
+  - focused delegated-task tests under `packages/coding-agent/test/task/`
+- Broader package verification:
+  - `bun check:ts`
+- Manual regression proof to record in execution notes:
+  - delegated `task` agent can now enter sniper-todo planning instead of aborting on missing `todo_write`
+  - `quick_task` prompt no longer claims full tool access / todo planning behavior
+
+* Execution Manifest
+** Wave 1 — delegated tool-contract repair
+:PROPERTIES:
+:wave: 1
+:END:
+- [[id:BUG-288-coding-agent-restore-truthful-todo-write][BUG-288 coding-agent: restore truthful todo_write contract in delegated subagents]]
+  - Implement runtime + prompt + test + docs cutover together.
+  - No sibling child-item dependencies; this is the only plan child and is ready immediately.
+
+** Completion [2026-04-19]
+*** Verification
+- PASS: `bun test packages/coding-agent/test/sdk-submit-result-tool.test.ts packages/coding-agent/test/task/agents.test.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts`
+- PASS: `bun --cwd=packages/coding-agent run check && echo __OK__`
+- PASS: manual delegated-session repro via `bun -e '...createAgentSession({ toolNames: ["read", "todo_write"], requireSubmitResultTool: true })...'` returned `["read","todo_write","submit_result"]`
+- PASS: manual quick_task prompt inspection via `bun -e '...loadBundledAgents()...'` confirmed `containsTodoWrite: false` and `containsFullAccessClaim: false`
+- FAIL (unrelated workspace blocker): `bun test packages/coding-agent/test/task` currently fails in dirty workspace (`task-blockers.test.ts` / `TaskTool` init path) outside this change set.
+- FAIL (unrelated workspace blocker): `bun check:ts` currently fails on pre-existing/unrelated dirty-tree issues in `packages/coding-agent/src/patch/index.ts` and `packages/coding-agent/src/tools/write.ts`; see artifact below.
+- FAIL (clean-worktree isolation blocker): clean worktree + `bun install --frozen-lockfile` still cannot complete broad verification because `packages/natives` addon is absent there and existing HEAD initialization issues fire before this patch’s files load; see artifact below.
+*** Artifacts
+- Workspace `bun check:ts` failure log: artifact://14c07a46891b7447/main/bash/7.txt
+- Clean-worktree verification log: artifact://14c07a46891b7447/main/bash/17.txt
+- Narrow quick_task prompt file: [[file:packages/coding-agent/src/prompts/agents/quick_task.md]]
+- Child-session contract fix docs: [[file:packages/coding-agent/DEVELOPMENT.md]] and [[file:packages/coding-agent/CHANGELOG.md]]
+*** Deviations
+- Broader workspace verification required by the plan could not be completed inside this plan because unrelated workspace / environment failures remain red.
+- No commit created. Staging and commit are deferred until broad verification is green.

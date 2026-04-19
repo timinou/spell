@@ -11,6 +11,9 @@ use ropey::{LineType, Rope};
 use tree_sitter::{InputEdit, Parser, Point, Range, Tree};
 
 use crate::{
+	coord::{
+		JournalEntry, JournalReader, JournalWriter, PeerEdit, default_journal_root, journal_path_for,
+	},
 	diff::{DiffHunk, diff_lines},
 	error::{CodeEngineError, Result},
 	file_lock::{with_exclusive_lock, with_shared_lock},
@@ -69,6 +72,17 @@ pub struct BufferInfo {
 	pub version:          u64,
 	pub dirty:            bool,
 	pub line_count:       usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionOutcome {
+	pub revision:              u64,
+	pub parent_revision:       u64,
+	pub code_paths:            Vec<String>,
+	pub diff_hash:             String,
+	pub byte_len:              u64,
+	pub peer_edits_since_base: Vec<PeerEdit>,
+	pub warnings:              Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -259,16 +273,17 @@ impl History {
 }
 
 pub struct CodeBuffer {
-	rope:       Rope,
-	tree:       Tree,
-	parser:     Parser,
-	language:   LanguageId,
-	registry:   Arc<LanguageRegistry>,
-	path:       Option<PathBuf>,
-	history:    History,
-	version:    u64,
-	dirty:      bool,
-	disk_mtime: Option<SystemTime>,
+	rope:           Rope,
+	tree:           Tree,
+	parser:         Parser,
+	language:       LanguageId,
+	registry:       Arc<LanguageRegistry>,
+	path:           Option<PathBuf>,
+	history:        History,
+	version:        u64,
+	dirty:          bool,
+	disk_mtime:     Option<SystemTime>,
+	coord_revision: u64,
 }
 
 pub struct BufferRegistry {
@@ -280,6 +295,90 @@ pub struct BufferRegistry {
 
 fn registry_key(path: &Path) -> PathBuf {
 	fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn workspace_root_for(path: &Path) -> PathBuf {
+	let mut current = path.parent().unwrap_or(path);
+	let mut last_non_root = current.to_path_buf();
+	loop {
+		if current.join(".git").exists() || current.join(".spell").exists() {
+			return current.to_path_buf();
+		}
+		let Some(parent) = current.parent() else {
+			return last_non_root;
+		};
+		last_non_root = current.to_path_buf();
+		current = parent;
+	}
+}
+
+fn journal_entries_for(path: &Path, limit: usize) -> Result<Vec<JournalEntry>> {
+	let journal_path = journal_path_for(&default_journal_root(), &workspace_root_for(path), path);
+	match JournalReader::tail(&journal_path, limit) {
+		Ok(entries) => Ok(entries),
+		Err(CodeEngineError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+			Ok(Vec::new())
+		},
+		Err(error) => Err(error),
+	}
+}
+
+fn latest_coord_revision_for(path: &Path) -> Result<u64> {
+	Ok(journal_entries_for(path, 1)?
+		.first()
+		.map_or(0, |entry| entry.revision))
+}
+
+fn peer_edit_from_entry(entry: &JournalEntry) -> PeerEdit {
+	PeerEdit {
+		session_id: entry.session_id.clone(),
+		revision:   entry.revision,
+		code_paths: entry.code_paths.clone(),
+		diff_hash:  entry.diff_hash.clone(),
+		ts:         entry.ts,
+	}
+}
+
+fn peer_edits_since_revision(
+	path: &Path,
+	session_id: &str,
+	base_revision: u64,
+) -> Result<Vec<PeerEdit>> {
+	Ok(journal_entries_for(path, 64)?
+		.into_iter()
+		.filter(|entry| entry.revision > base_revision && entry.session_id != session_id)
+		.map(|entry| peer_edit_from_entry(&entry))
+		.collect())
+}
+
+fn write_file_atomically(path: &Path, source: &str) -> Result<Option<SystemTime>> {
+	if let Some(parent) = path
+		.parent()
+		.filter(|parent| !parent.as_os_str().is_empty())
+	{
+		fs::create_dir_all(parent)?;
+	}
+	let parent = path.parent().unwrap_or_else(|| Path::new("."));
+	let file_name = path
+		.file_name()
+		.and_then(|name| name.to_str())
+		.unwrap_or("buffer");
+	let unique = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.unwrap_or_default()
+		.as_nanos();
+	let temp_path = parent.join(format!(".{file_name}.spell-tmp-{}-{unique}", std::process::id()));
+	let write_result = (|| -> Result<Option<SystemTime>> {
+		fs::write(&temp_path, source)?;
+		fs::rename(&temp_path, path)?;
+		Ok(fs::metadata(path)
+			.ok()
+			.and_then(|metadata| metadata_modified(&metadata)))
+	})();
+	if write_result.is_err() {
+		let _ = fs::remove_file(&temp_path);
+	}
+	write_result
 }
 
 impl BufferRegistry {
@@ -335,15 +434,22 @@ impl BufferRegistry {
 
 	fn open_inner(&self, path: &Path, allow_create: bool) -> Result<Arc<Mutex<CodeBuffer>>> {
 		let key = registry_key(path);
-		if self
-			.watcher()
-			.is_some_and(|watcher| !watcher.is_stale(&key))
-			&& let Some(buffer) = self.get(&key)
-		{
-			return Ok(buffer);
+		let latest_coord_revision = latest_coord_revision_for(&key)?;
+		if let Some(buffer) = self.get(&key) {
+			let cached_revision = buffer.lock().coord_revision;
+			if latest_coord_revision > cached_revision {
+				drop(buffer);
+				self.close(&key)?;
+			} else if self
+				.watcher()
+				.is_some_and(|watcher| !watcher.is_stale(&key))
+			{
+				return Ok(buffer);
+			}
 		}
 		self.reload_if_stale(&key)?;
 		if let Some(buffer) = self.get(&key) {
+			buffer.lock().coord_revision = latest_coord_revision;
 			return Ok(buffer);
 		}
 		let candidate = Arc::new(Mutex::new(if allow_create && !key.exists() {
@@ -351,6 +457,7 @@ impl BufferRegistry {
 		} else {
 			CodeBuffer::open(&key, self.registry.clone())?
 		}));
+		candidate.lock().coord_revision = latest_coord_revision;
 		match self.buffers.entry(key.clone()) {
 			Entry::Occupied(entry) => Ok(entry.get().clone()),
 			Entry::Vacant(entry) => {
@@ -440,6 +547,150 @@ impl BufferRegistry {
 	pub fn get(&self, path: &Path) -> Option<Arc<Mutex<CodeBuffer>>> {
 		let key = registry_key(path);
 		self.buffers.get(&key).map(|entry| entry.value().clone())
+	}
+
+	pub fn edit_transaction<T>(
+		&self,
+		session_id: &str,
+		path: &Path,
+		target_code_paths: &[String],
+		mut apply: impl FnMut(&mut CodeBuffer) -> Result<T>,
+	) -> Result<(TransactionOutcome, T)> {
+		let key = registry_key(path);
+		let mut last_conflict: Option<CodeEngineError> = None;
+		for _attempt in 0..2 {
+			let base_revision = latest_coord_revision_for(&key)?;
+			if !target_code_paths.is_empty() {
+				match self
+					.coord
+					.intent(session_id, &key, target_code_paths, base_revision)
+				{
+					crate::coord::IntentResult::Granted => {},
+					crate::coord::IntentResult::Conflict { peer_session, code_path, peer_intent_ts } => {
+						return Err(CodeEngineError::PeerConflict {
+							session: peer_session,
+							path: key.clone(),
+							code_path,
+							peer_revision: base_revision,
+							peer_commit_ts: peer_intent_ts,
+						});
+					},
+				}
+			}
+			let attempt = with_exclusive_lock(&key, SAVE_LOCK_BUDGET, || {
+				let parent_revision = latest_coord_revision_for(&key)?;
+				let peer_edits_since_base = peer_edits_since_revision(&key, session_id, base_revision)?;
+				let mut warnings = self.coord.drain_warnings();
+				let mut fresh = if key.exists() {
+					CodeBuffer::open(&key, self.registry.clone())?
+				} else {
+					CodeBuffer::create(&key, self.registry.clone())?
+				};
+				fresh.coord_revision = parent_revision;
+				let result = apply(&mut fresh)?;
+				let source = fresh.source();
+				if !fresh.dirty {
+					warnings.extend(self.coord.drain_warnings());
+					return Ok(Ok((
+						TransactionOutcome {
+							revision: parent_revision,
+							parent_revision,
+							code_paths: target_code_paths.to_vec(),
+							diff_hash: String::new(),
+							byte_len: source.len() as u64,
+							peer_edits_since_base,
+							warnings,
+						},
+						result,
+					)));
+				}
+				if let Some(watcher) = self.watcher() {
+					watcher.mark_self_write(&key, None);
+					watcher.clear_stale(&key);
+				}
+				let diff_hash = crate::coord::blake3_short(source.as_bytes());
+				let byte_len = source.len() as u64;
+				let revision = parent_revision.saturating_add(1);
+				match self.coord.commit(
+					session_id,
+					&key,
+					revision,
+					parent_revision,
+					target_code_paths,
+					&diff_hash,
+					byte_len,
+				) {
+					crate::coord::CommitResult::Ok => {
+						let disk_mtime = write_file_atomically(&key, &source)?;
+						if let Some(watcher) = self.watcher() {
+							watcher.mark_self_write(&key, disk_mtime);
+							watcher.clear_stale(&key);
+						}
+						let entry = JournalEntry {
+							ts: SystemTime::now()
+								.duration_since(SystemTime::UNIX_EPOCH)
+								.unwrap_or_default()
+								.as_millis()
+								.try_into()
+								.unwrap_or(u64::MAX),
+							session_id: session_id.to_string(),
+							pid: std::process::id(),
+							kind: "commit".into(),
+							revision,
+							parent_revision: Some(parent_revision),
+							code_paths: target_code_paths.to_vec(),
+							diff_hash: diff_hash.clone(),
+							byte_len,
+						};
+						if let Err(error) = JournalWriter::append(
+							&default_journal_root(),
+							&workspace_root_for(&key),
+							&key,
+							&entry,
+						) {
+							warnings.push(format!("journal append failed: {error}"));
+						}
+						warnings.extend(self.coord.drain_warnings());
+						self.close(&key)?;
+						Ok(Ok((
+							TransactionOutcome {
+								revision,
+								parent_revision,
+								code_paths: target_code_paths.to_vec(),
+								diff_hash,
+								byte_len,
+								peer_edits_since_base,
+								warnings,
+							},
+							result,
+						)))
+					},
+					crate::coord::CommitResult::Conflict {
+						peer_session,
+						code_path,
+						peer_revision,
+						peer_commit_ts,
+					} => Ok(Err(CodeEngineError::PeerConflict {
+						session: peer_session,
+						path: key.clone(),
+						code_path,
+						peer_revision,
+						peer_commit_ts,
+					})),
+				}
+			})?;
+			match attempt {
+				Ok(success) => return Ok(success),
+				Err(error @ CodeEngineError::PeerConflict { .. }) => {
+					last_conflict = Some(error);
+				},
+				Err(error) => return Err(error),
+			}
+		}
+		Err(
+			last_conflict
+				.unwrap_or_else(|| CodeEngineError::Edit("transaction retry exhausted".into())),
+		)
 	}
 }
 
@@ -534,6 +785,7 @@ impl CodeBuffer {
 			version: 0,
 			dirty: false,
 			disk_mtime,
+			coord_revision: 0,
 		})
 	}
 
@@ -976,10 +1228,13 @@ impl CodeBuffer {
 		Ok(diff_lines(&disk, &self.source()))
 	}
 
+	#[allow(deprecated, reason = "save delegates to deprecated save_with_watcher")]
+	#[deprecated(note = "Use BufferRegistry::edit_transaction for persisted writes")]
 	pub fn save(&mut self) -> Result<()> {
 		self.save_with_watcher(None)
 	}
 
+	#[deprecated(note = "Use BufferRegistry::edit_transaction for persisted writes")]
 	pub fn save_with_watcher(&mut self, watcher: Option<&FileWatcher>) -> Result<()> {
 		let path = self
 			.path
@@ -1076,6 +1331,7 @@ fn byte_to_point(rope: &Rope, byte_offset: usize) -> Point {
 }
 
 #[cfg(test)]
+#[allow(deprecated, reason = "legacy save path remains covered by unit tests")]
 mod tests {
 	use std::{
 		fs,

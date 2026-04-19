@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import * as lspModule from "@oh-my-pi/pi-coding-agent/lsp";
 import { EditTool } from "@oh-my-pi/pi-coding-agent/patch";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
@@ -77,6 +78,7 @@ describe("Coding Agent Tools", () => {
 	});
 
 	afterEach(() => {
+		vi.restoreAllMocks();
 		// Clean up test directory
 		fs.rmSync(testDir, { recursive: true, force: true });
 
@@ -331,6 +333,7 @@ describe("Coding Agent Tools", () => {
 			const result = await writeTool.execute("test-call-4-code", { path: testFile, content });
 
 			expect(getTextOutput(result)).toContain(`Successfully wrote ${content.length} bytes to ${testFile}`);
+			expect(getTextOutput(result)).toContain("Compatibility TODO");
 			expect(fs.readFileSync(testFile, "utf-8")).toBe(content);
 			expect(result.details?.diagnostics).toBeUndefined();
 			expectManagedBufferFresh(testFile);
@@ -345,7 +348,37 @@ describe("Coding Agent Tools", () => {
 			const result = await writeTool.execute("test-call-4-overwrite", { path: testFile, content });
 
 			expect(getTextOutput(result)).toContain(`Successfully wrote ${content.length} bytes to ${testFile}`);
+			expect(getTextOutput(result)).toContain("Compatibility TODO");
 			expect(fs.readFileSync(testFile, "utf-8")).toBe(content);
+			expectManagedBufferFresh(testFile);
+			closeManagedBuffer(testFile);
+		});
+
+		it("reports managed-buffer diagnostics for code-supported writes when enabled", async () => {
+			const diagnostics = {
+				server: "tsserver",
+				messages: ["broken-write.ts:1:22 [error] Expression expected"],
+				summary: "1 error(s)",
+				errored: true,
+			} satisfies lspModule.FileDiagnosticsResult;
+			const diagnosticsSpy = vi.spyOn(lspModule, "getSavedFileDiagnostics").mockResolvedValue(diagnostics);
+			const tool = wrapToolWithMetaNotice(
+				new WriteTool(createTestToolSession(testDir, Settings.isolated({ "lsp.diagnosticsOnWrite": true }))),
+			);
+			const testFile = path.join(testDir, "broken-write.ts");
+			const content = "export const value = ;\n";
+
+			const result = await tool.execute("test-call-4-code-diagnostics", {
+				path: testFile,
+				content,
+			});
+
+			expect(getTextOutput(result)).toContain(`Successfully wrote ${content.length} bytes to ${testFile}`);
+			expect(getTextOutput(result)).toContain("Compatibility TODO");
+			expect(getTextOutput(result)).toContain("LSP Diagnostics (1 error(s))");
+			expect(getTextOutput(result)).toContain("Expression expected");
+			expect(result.details?.diagnostics).toEqual(diagnostics);
+			expect(diagnosticsSpy).toHaveBeenCalledWith(testFile, content, testDir, undefined);
 			expectManagedBufferFresh(testFile);
 			closeManagedBuffer(testFile);
 		});
@@ -380,6 +413,7 @@ describe("Coding Agent Tools", () => {
 				expect(getTextOutput(result)).toContain(
 					`Successfully wrote ${testCase.content.length} bytes to ${testFile}`,
 				);
+				expect(getTextOutput(result)).toContain("Compatibility TODO");
 				expect(fs.readFileSync(testFile, "utf-8")).toBe(testCase.content);
 				expect(result.details?.diagnostics).toBeUndefined();
 				expectManagedBufferFresh(testFile);
@@ -479,6 +513,7 @@ describe("Coding Agent Tools", () => {
 			});
 
 			expect(getTextOutput(result)).toContain("Successfully replaced text in");
+			expect(getTextOutput(result)).toContain("Compatibility TODO");
 			expect(fs.readFileSync(testFile, "utf-8")).toContain("value = 2");
 			const diff = executeCodeBuffer({ command: "diff", file: testFile });
 			expect(diff.error).toBe(false);
