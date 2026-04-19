@@ -102,7 +102,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 
 	async execute(
 		_toolCallId: string,
-		{ path, content }: WriteParams,
+		{ path, content, force = false }: WriteParams,
 		signal?: AbortSignal,
 		_onUpdate?: AgentToolUpdateCallback<WriteToolDetails>,
 		context?: AgentToolContext,
@@ -113,31 +113,28 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			if (sandboxError) throw new Error(sandboxError);
 			const absolutePath = resolvePlanPath(this.session, path);
 			const resultText = `Successfully wrote ${content.length} bytes to ${path}`;
-
+			const compatibilityNotice = formatCodeTextCompatibilityNotice("write");
+			let bypassNotice = "";
 			if (isCodeToolSupportedPath(absolutePath)) {
+				if (!force) {
+					const { evaluateWriteGuards } = await import("./managed-buffer-guards");
+					const guardResult = await evaluateWriteGuards(absolutePath, content);
+					if (!guardResult.ok) {
+						throw new Error(`Managed code buffer update blocked for ${path}: ${guardResult.code}: ${guardResult.detail}. Use code edit or force: true to bypass.`);
+					}
+				} else {
+					bypassNotice = `\nBypassed WRITE_SHRINK_BLOCKED and WRITE_PARSE_REGRESSION.`;
+				}
 				applyManagedBufferContent(absolutePath, content, {
 					create: true,
 					sessionId: this.session.getSessionId?.() ?? undefined,
 				});
 				invalidateFsScanAfterWrite(absolutePath);
 				const diagnostics = await this.#getManagedBufferDiagnostics(absolutePath, content, signal);
-				const compatibilityNotice = formatCodeTextCompatibilityNotice("write");
-				return {
-					content: [
-						{
-							type: "text",
-							text: `${resultText}\n${compatibilityNotice}`,
-						},
-					],
-					details: diagnostics
-						? {
-								diagnostics,
-								meta: outputMeta()
-									.diagnostics(diagnostics.summary, diagnostics.messages ?? [])
-									.get(),
-							}
-						: {},
-				};
+				if (!diagnostics) {
+					return { content: [{ type: "text", text: `${resultText}\n${compatibilityNotice}${bypassNotice}` }], details: {} };
+				}
+				return { content: [{ type: "text", text: `${resultText}\n${compatibilityNotice}${bypassNotice}` }], details: { diagnostics, meta: outputMeta().diagnostics(diagnostics.summary, diagnostics.messages ?? []).get() } };
 			}
 
 			const batchRequest = getLspBatchRequest(context?.toolCall);
