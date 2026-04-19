@@ -1,0 +1,155 @@
+#+TITLE: validatePlanItem requires dual-link manifest and resolves sub-outline targets
+#+STATE: DONE
+#+SESSION_ID: 14c12170379e95ac
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T19-56-00-095Z_14c12170379e95ac.jsonl]]
+#+CUSTOM_ID: FEAT-606-validateplanitem-requires-dual-link-mani
+#+DEPENDS: FEAT-605-org-wave-planitemid-mode-writes-executio
+#+LAYER: tools
+
+* Initial Message
+
+you need to show me how you will make the wave creation in plan/ultraplan to be about the subtasks of the files you wrote.
+
+That means you need that subtask-level CUSTOM_IDs (FEAT-XXX-long-title::task-slug) to be the basis of generating the wave. I would also like you to make sure that files are written with subtasks that have ITEM prefix and be fully representative of the work. That way, the plan actaully refers to in-task files and the wave planning is complete from the plan level.
+
+* Scope
+
+In-scope:
+- Split extractIdLinks output inside validatePlanItem into two sets: topLevelChildIds (IDs without the "::" separator) and subOutlineChildIds (IDs with "::" separator).
+- Require BOTH top-level and sub-outline links to be present for every child item that declares sub-outlines. Per settled decision 5.
+- For each sub-outline link, verify:
+  1. Its parent (derived via parseSubOutlineId) is among the top-level child links.
+  2. A sub-outline with the exact CUSTOM_ID exists in that parent's body.
+- For each top-level child link that has sub-outlines, verify that at least one of its sub-outlines is linked in the PLAN body (no orphan top-level without manifest coverage).
+- Extend exit-plan-mode.ts extractPlanWaves / downstream handling to resolve a sub-outline entry's layer by reading the parent's LAYER when the sub-outline does not declare its own.
+- Add new validation issue categories: missing-top-level-link, missing-suboutline-link, missing-suboutline-declaration, manifest-missing-suboutlines.
+- Preserve existing issue categories (thin-child-body, missing-child-properties, broken-child-depends, etc.) unchanged.
+
+Out-of-scope:
+- Running org wave (separate FEAT).
+- Writing the manifest (separate FEAT).
+- Prompt copy (separate FEAT).
+
+Rationale: current validator assumes every [[id:...]] link resolves to a top-level item. When the manifest contains sub-outline links (FEAT-X::slug), resolvePlanItem returns null and the validator flags missing-linked-items falsely. Also, nothing today enforces that every listed sub-outline is real — the PLAN can reference phantom sub-outlines. Per settled decision 5, dual-link is required: PLAN body must contain both [[id:FEAT-X]] (for discovery) AND [[id:FEAT-X::slug]] entries.
+
+* Existing Patterns
+
+- packages/coding-agent/src/plan-mode/plan-validation.ts:
+  - validateChildSuboutlineGraph lines 40-161 parses every child body via parseOrgDependProperties and enforces CUSTOM_ID namespace and DEPENDS resolution. Already operates at sub-outline granularity within each child.
+  - validatePlanItem lines 163-265 extracts PLAN-level links, resolves each as a child item, then calls validateChildSuboutlineGraph.
+  - formatPlanValidationIssues lines 267-306 renders issues with category-specific hints.
+- packages/org/src/id-links.ts:
+  - extractIdLinks(body) accepts both formats and returns first-seen order.
+  - parseSubOutlineId(id) returns { parentId, subSlug } or null.
+- packages/coding-agent/src/tools/exit-plan-mode.ts:
+  - extractPlanWaves lines 65-100 already reads the manifest headings and entries; each entry's orgItemId is a raw link target that can be a sub-outline ID.
+  - Lines 188-193 already pass the sub-outline parent into resolveLayerFromProperties via the "::" split.
+- packages/coding-agent/src/loop/ingestion/org-depend.ts:
+  - parseOrgDependProperties(content) emits sub-outline OrgDependProperties objects for every heading with CUSTOM_ID in the child body. Reused by the validator.
+
+* Tests
+
+File: packages/coding-agent/test/plan-mode/plan-validation-suboutline.test.ts (new).
+
+Scenarios:
+1. validator_accepts_dual_link_manifest — PLAN body containing [[id:FEAT-A]] [[id:FEAT-B]] at the top and [[id:FEAT-A::x]] [[id:FEAT-A::y]] [[id:FEAT-B::z]] inside the manifest passes validation.
+2. validator_rejects_sub_outline_link_without_top_level — PLAN body has [[id:FEAT-A::x]] but no [[id:FEAT-A]] → issue missing-top-level-link with items containing "FEAT-A (required by sub-outline FEAT-A::x)".
+3. validator_rejects_top_level_without_manifest_coverage — FEAT-A has sub-outlines a, b, c declared in its body; PLAN links [[id:FEAT-A]] but no [[id:FEAT-A::*]] → issue manifest-missing-suboutlines with "FEAT-A declares sub-outlines but none linked in PLAN body".
+4. validator_rejects_phantom_sub_outline_link — PLAN references [[id:FEAT-A::bogus]] but FEAT-A body does not declare that CUSTOM_ID → issue missing-suboutline-declaration.
+5. validator_accepts_top_level_link_when_child_has_no_sub_outlines — a child item without any sub-outlines only needs the top-level link, not any ::slug entries.
+6. validator_allows_multiple_sub_outlines_under_same_parent_with_single_top_level_link — verifies parent link is not required per sub-outline.
+7. validator_preserves_existing_issue_categories — thin-child-body, missing-child-properties, broken-child-depends continue to fire under their original conditions; new categories co-exist.
+8. validator_reports_all_new_categories_in_formatPlanValidationIssues — hint strings surface for missing-top-level-link, missing-suboutline-link, missing-suboutline-declaration, manifest-missing-suboutlines.
+
+File: packages/coding-agent/test/plan-mode/exit-plan-layer-resolution.test.ts (new):
+9. layer_resolution_uses_parent_layer_when_sub_outline_has_no_own — exit-plan-mode's extractPlanWaves plus loadProperties flow resolves the parent's LAYER for a sub-outline entry when the sub-outline does not declare its own.
+
+* Implementation
+
+** ITEM Write dual-link validator tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-606-validateplanitem-requires-dual-link-mani::validator-tests
+:END:
+- File: packages/coding-agent/test/plan-mode/plan-validation-suboutline.test.ts (new).
+- Add scenarios 1-8.
+- Use tmpdir with plans and features categories; seed fixture org files with varying link and sub-outline shapes.
+- Must initially fail (current validator returns missing-linked-items when sub-outline links are present).
+
+** ITEM Write exit-plan layer-resolution test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-606-validateplanitem-requires-dual-link-mani::layer-test
+:DEPENDS: FEAT-606-validateplanitem-requires-dual-link-mani::validator-tests
+:END:
+- File: packages/coding-agent/test/plan-mode/exit-plan-layer-resolution.test.ts (new).
+- Add scenario 9.
+- Must initially pass if the existing logic in exit-plan-mode.ts already handles parent-LAYER inheritance for sub-outlines (it does — lines 188-193); this test is a regression guard for the dual-link world.
+
+** ITEM Split top-level and sub-outline link processing
+:PROPERTIES:
+:CUSTOM_ID: FEAT-606-validateplanitem-requires-dual-link-mani::split-links
+:DEPENDS: FEAT-606-validateplanitem-requires-dual-link-mani::layer-test
+:END:
+- File: packages/coding-agent/src/plan-mode/plan-validation.ts
+- In validatePlanItem (lines 171-201):
+  - Replace the single childItemIds loop with two sets built from extractIdLinks.
+  - topLevelChildIds: filter(id => parseSubOutlineId(id) === null).
+  - subOutlineChildIds: filter(id => parseSubOutlineId(id) !== null).
+  - For each topLevelChildId, call resolvePlanItem and collect into resolvedChildren map (current flow).
+  - For each subOutlineChildId, derive parent via parseSubOutlineId; collect parents into a set; union with topLevelChildIds set for discovery; but keep resolvedChildren keyed by top-level ID only.
+
+** ITEM Enforce dual-link requirement
+:PROPERTIES:
+:CUSTOM_ID: FEAT-606-validateplanitem-requires-dual-link-mani::dual-link-enforce
+:DEPENDS: FEAT-606-validateplanitem-requires-dual-link-mani::split-links
+:END:
+- File: packages/coding-agent/src/plan-mode/plan-validation.ts
+- After collecting resolvedChildren:
+  - For each subOutlineChildId parent, if that parent is not in topLevelChildIds, push into missing-top-level-link issue with item "<parent> (required by sub-outline <id>)".
+- For each resolved child:
+  - Parse its body via parseOrgDependProperties.
+  - Collect that child's declared sub-outline CUSTOM_IDs (normalized via existing normalizeSuboutlineId).
+  - If declaredSuboutlines.size > 0:
+    - Compute intersection with subOutlineChildIds.
+    - If intersection is empty, push issue manifest-missing-suboutlines with item "<childId> declares sub-outlines but none linked in PLAN".
+- For each subOutlineChildId:
+  - Look up its parent's declared suboutlines; if the exact ID is not declared, push missing-suboutline-declaration with item "<subOutlineChildId> not declared in <parent>".
+
+** ITEM Add hints for new categories in formatPlanValidationIssues
+:PROPERTIES:
+:CUSTOM_ID: FEAT-606-validateplanitem-requires-dual-link-mani::format-hints
+:DEPENDS: FEAT-606-validateplanitem-requires-dual-link-mani::dual-link-enforce
+:END:
+- File: packages/coding-agent/src/plan-mode/plan-validation.ts
+- Extend hintByCategory map with entries for missing-top-level-link, missing-suboutline-link, missing-suboutline-declaration, manifest-missing-suboutlines.
+- Each hint string concretely directs the fix (e.g. "fix: add [[id:FEAT-A]] top-level link alongside the sub-outline entry").
+
+** ITEM Update exit-plan-mode extractPlanWaves tolerance
+:PROPERTIES:
+:CUSTOM_ID: FEAT-606-validateplanitem-requires-dual-link-mani::exit-tolerance
+:DEPENDS: FEAT-606-validateplanitem-requires-dual-link-mani::format-hints
+:END:
+- File: packages/coding-agent/src/tools/exit-plan-mode.ts
+- No structural change if extractPlanWaves already accepts sub-outline link targets; verify. If the current regex at line 68 is too strict, relax it to match [[id:X::y]] via the shared extractIdLinks regex pattern.
+- Keep the existing loadProperties + resolveLayerFromProperties flow; add a short fallback chain: when layer is undefined, explicitly derive the parent ID via "::" split and re-query propertiesByItemId.get(parentId).LAYER.
+
+* Edge Cases
+
+- A PLAN linking a top-level child that has NO sub-outlines: validator must not flag missing-suboutline-link. Scenario 5.
+- A PLAN linking only sub-outline IDs (forgetting top-level links entirely): validator reports missing-top-level-link for every inferred parent. Scenario 2.
+- A PLAN listing a sub-outline that does not actually exist in the parent's body: missing-suboutline-declaration. Scenario 4.
+- A PLAN linking a top-level child that DECLARES sub-outlines but the PLAN only cites the top-level link (zero sub-outline entries): manifest-missing-suboutlines. Scenario 3. Rationale: waves must be expressed at sub-outline granularity; a top-level-only link defeats the purpose.
+- A sub-outline whose own LAYER differs from its parent's: exit-plan-mode's resolveLayerFromProperties must prefer the sub-outline's own LAYER when present, fall back to parent's. Existing logic in lines 188-193 already does this via the properties-by-id lookup; verify with scenario 9.
+- Validator error ordering: categories are accumulated in fixed order (structural errors first, then namespace, then dependency). New categories slot in next to missing-linked-items. formatPlanValidationIssues already handles arbitrary categories via the map lookup.
+- Backward compat: a PLAN that passes validation today (all top-level links, no sub-outlines) continues to pass if the linked children have no sub-outlines. If any linked child has sub-outlines, the PLAN now fails validation until the manifest is extended — intentional per decision 5.
+
+* Acceptance Criteria
+
+1. bun test packages/coding-agent green, including scenarios 1-9.
+2. Manual: running org validate-plan on an existing PLAN with sub-outline manifest returns valid: true instead of the current false.
+3. Manual: creating a PLAN that links only top-level IDs against children that carry sub-outlines returns a manifest-missing-suboutlines issue; fixing by adding sub-outline links passes validation.
+4. bun check:ts green; no any types introduced.
+5. No regression in existing plan-validation tests.
+
+NOTE [2026-04-19]: Executing PLAN-274 wave 4: dual-link PLAN validation and sub-outline-aware manifest checks.
+
+NOTE [2026-04-19]: PLAN validation now distinguishes top-level vs sub-outline links, enforces dual-link coverage, validates declared sub-outlines, and keeps parent-layer fallback for exit-plan wave entries. Verified with targeted coding-agent plan-mode tests and `bun check:ts`.

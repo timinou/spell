@@ -1,0 +1,100 @@
+#+TITLE: org wave loses all edges: engine reads :BLOCKERS: but repo writes :DEPENDS:
+#+STATE: DONE
+#+SESSION_ID: 14c12170379e95ac
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T19-56-00-095Z_14c12170379e95ac.jsonl]]
+#+CUSTOM_ID: BUG-309-org-wave-loses-all-edges-engine-reads-bl
+#+LAYER: backend
+
+* Initial Message
+
+you need to show me how you will make the wave creation in plan/ultraplan to be about the subtasks of the files you wrote.
+
+That means you need that subtask-level CUSTOM_IDs (FEAT-XXX-long-title::task-slug) to be the basis of generating the wave. I would also like you to make sure that files are written with subtasks that have ITEM prefix and be fully representative of the work. That way, the plan actaully refers to in-task files and the wave planning is complete from the plan level.
+
+* Scope
+
+In-scope:
+- `pi-org-engine` `OrgItem::blockers()` must read the dependency property that this repo actually writes (`:DEPENDS:`) and accept both space-separated and comma-separated token lists.
+- Fallback to `:BLOCKERS:` preserves compatibility for any external org corpus using the native-org convention.
+- Unit tests covering: space-separated DEPENDS, comma-separated DEPENDS, BLOCKERS fallback, DEPENDS wins when both set, empty/whitespace tolerated.
+
+Out-of-scope:
+- Flattening sub-outlines into the engine item list (handled by sibling FEAT).
+- TypeScript side rewriting or prompt changes.
+- Wave ordering semantics beyond "edges are detected and obeyed".
+
+Rationale: the current `org wave` output shows every item in wave 0 regardless of declared DEPENDS, confirmed via user transcript. Root cause: `crates/pi-org-engine/src/item.rs` `blockers()` only reads `self.properties.get("BLOCKERS")` with comma-split. Repo files use space-separated `:DEPENDS:`.
+
+* Existing Patterns
+
+- `crates/pi-org-engine/src/item.rs` — `OrgItem::blockers(&self) -> Vec<&str>` lines 72-84. Property access via `self.property("KEY")` helper at line 50.
+- `crates/pi-org-engine/src/graph.rs` — `compute_waves(items, parent_id_fn)` consumes `item.blockers()` output at line 206.
+- Existing tests live inline with `#[cfg(test)] mod tests` in the same file; see `item.rs` tail for the pattern.
+
+* Tests
+
+File: `crates/pi-org-engine/src/item.rs` (extend existing `tests` module).
+
+Scenarios:
+1. `blockers_reads_depends_space_separated` — OrgItem with `DEPENDS: A B C` returns `["A","B","C"]`.
+2. `blockers_reads_depends_comma_separated` — OrgItem with `DEPENDS: A, B, C` returns `["A","B","C"]`.
+3. `blockers_reads_depends_mixed_whitespace` — `DEPENDS: A,B  C` returns `["A","B","C"]`.
+4. `blockers_falls_back_to_blockers_property` — no DEPENDS, `BLOCKERS: X,Y` returns `["X","Y"]`.
+5. `blockers_prefers_depends_over_blockers` — when both are set, DEPENDS wins; BLOCKERS ignored (no duplicates, no merge).
+6. `blockers_empty_when_neither_set` — returns empty Vec.
+7. `blockers_trims_and_drops_empty_tokens` — `DEPENDS:  A ,, B ` returns `["A","B"]`.
+
+`crates/pi-org-engine/src/graph.rs` regression test:
+8. `compute_waves_respects_depends_property` — 3 items A(no deps), B(DEPENDS: A), C(DEPENDS: B) produces waves [[A],[B],[C]] (not all in wave 0).
+
+* Implementation
+
+** ITEM Add regression test for wave edge detection
+:PROPERTIES:
+:CUSTOM_ID: BUG-309-org-wave-loses-all-edges-engine-reads-bl::wave-depends-regression-test
+:END:
+- File: `crates/pi-org-engine/src/graph.rs`
+- Add test `compute_waves_respects_depends_property` in `#[cfg(test)] mod tests` covering scenario 8.
+- Must initially FAIL with current code (all in wave 0), proving the bug is real.
+- Update `make_item` helper to optionally accept a property map so DEPENDS can be set.
+
+** ITEM Write blockers() unit tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: BUG-309-org-wave-loses-all-edges-engine-reads-bl::blockers-unit-tests
+:DEPENDS: BUG-309-org-wave-loses-all-edges-engine-reads-bl::wave-depends-regression-test
+:END:
+- File: `crates/pi-org-engine/src/item.rs`
+- Add test cases 1-7 in `#[cfg(test)] mod tests`.
+- Tests 1,2,3,4,5 must initially FAIL (current code only reads BLOCKERS,comma).
+
+** ITEM Update blockers() to read DEPENDS first with multi-delimiter split
+:PROPERTIES:
+:CUSTOM_ID: BUG-309-org-wave-loses-all-edges-engine-reads-bl::blockers-impl
+:DEPENDS: BUG-309-org-wave-loses-all-edges-engine-reads-bl::blockers-unit-tests
+:END:
+- File: `crates/pi-org-engine/src/item.rs`
+- Replace `blockers()` body:
+  - Read `DEPENDS` via `self.property("DEPENDS")`.
+  - Fallback to `BLOCKERS` when DEPENDS is None.
+  - Split the source string on `char::is_whitespace` OR `,` using `split(|c: char| c == ',' || c.is_whitespace())`.
+  - Filter empty tokens and trim.
+- All 8 tests must pass.
+
+* Edge Cases
+
+- Property key casing: `:DEPENDS:` vs `:depends:` — PROPERTIES drawer keys are canonicalized to uppercase in `extract_single_property` (`buffer.rs:352`) so case is not a concern.
+- Tokens containing `::` (sub-outline form `FEAT-001::slug`): must survive the split since neither `:` nor `::` nor alnum is a delimiter. Verified by constructing a test item with `DEPENDS: FEAT-001::slug-a FEAT-001::slug-b`.
+- Very long DEPENDS lists: `split().filter(|s| !s.is_empty())` handles arbitrary whitespace runs.
+- DEPENDS with trailing whitespace / newline artifacts from drawer parsing: already trimmed upstream in `extract_single_property`.
+- Mixed separators (`DEPENDS: A,B C,D`): all four returned.
+
+* Acceptance Criteria
+
+1. `cargo test -p pi-org-engine` passes all new tests (8 scenarios above).
+2. `cargo clippy -p pi-org-engine --all-targets` clean.
+3. Manual: in a repo where a FEAT item has `:DEPENDS: OTHER-ID` between sub-outlines, running `org wave` produces non-wave-0 assignments for the dependent item.
+4. No other engine tests regress: `cargo test --all` green.
+
+NOTE [2026-04-19]: Executing PLAN-274 wave 1: adding DEPENDS-aware blocker parsing and wave regression coverage.
+
+NOTE [2026-04-19]: Implemented DEPENDS-first blocker parsing with multi-delimiter tokenization and graph regression coverage. Verified with `cargo test -p pi-org-engine` and `cargo clippy -p pi-org-engine --all-targets`.

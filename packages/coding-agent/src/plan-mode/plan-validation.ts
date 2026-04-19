@@ -1,4 +1,4 @@
-import { extractIdLinks } from "@oh-my-pi/pi-org";
+import { extractIdLinks, parseSubOutlineId } from "@oh-my-pi/pi-org";
 import type { Settings } from "../config/settings";
 import { buildDependencyGraph, parseOrgDependProperties } from "../loop/ingestion/org-depend";
 import { resolvePlanItem } from "./org-plan";
@@ -39,7 +39,6 @@ function humanizeCategory(category: string): string {
 
 function validateChildSuboutlineGraph(resolvedChildren: Map<string, ResolvedPlanChildItem>): PlanValidationIssue[] {
 	const parsedByChildId = new Map<string, ReturnType<typeof parseOrgDependProperties>>();
-	const missingStructuredBodies: string[] = [];
 	const namespaceViolations: string[] = [];
 	const duplicateSuboutlineIds: string[] = [];
 	const brokenSuboutlineDeps: string[] = [];
@@ -65,7 +64,6 @@ function validateChildSuboutlineGraph(resolvedChildren: Map<string, ResolvedPlan
 		const parsed = parseOrgDependProperties(childItem.body);
 		if (parsed.length === 0) {
 			parsedByChildId.set(childItemId, parsed);
-			missingStructuredBodies.push(childItemId);
 			continue;
 		}
 
@@ -96,15 +94,7 @@ function validateChildSuboutlineGraph(resolvedChildren: Map<string, ResolvedPlan
 	}
 
 	const issues: PlanValidationIssue[] = [];
-	if (missingStructuredBodies.length > 0) {
-		issues.push(
-			createIssue(
-				"missing-suboutline-steps",
-				"Add structured implementation sub-headings with :CUSTOM_ID: FILE-LEVEL-ID::suboutline-id properties before exiting.",
-				missingStructuredBodies,
-			),
-		);
-	}
+
 	if (namespaceViolations.length > 0) {
 		issues.push(
 			createIssue(
@@ -168,11 +158,13 @@ export async function validatePlanItem(
 	const planItem = await resolvePlanItem(settings, projectRoot, planItemId);
 	if (!planItem) return null;
 
-	const childItemIds = extractIdLinks(planItem.body);
+	const linkedIds = extractIdLinks(planItem.body);
+	const topLevelChildIds = linkedIds.filter(id => parseSubOutlineId(id) === null);
+	const subOutlineChildIds = linkedIds.filter(id => parseSubOutlineId(id) !== null);
 	const resolvedChildren = new Map<string, ResolvedPlanChildItem>();
 	const issues: PlanValidationIssue[] = [];
 
-	if (childItemIds.length === 0) {
+	if (linkedIds.length === 0) {
 		issues.push(
 			createIssue(
 				"missing-child-links",
@@ -181,8 +173,14 @@ export async function validatePlanItem(
 		);
 	}
 
+	const discoveryChildIds = new Set(topLevelChildIds);
+	for (const subOutlineChildId of subOutlineChildIds) {
+		const parsed = parseSubOutlineId(subOutlineChildId);
+		if (parsed) discoveryChildIds.add(parsed.parentId);
+	}
+
 	const missingChildIds: string[] = [];
-	for (const childItemId of childItemIds) {
+	for (const childItemId of discoveryChildIds) {
 		const childItem = await resolvePlanItem(settings, projectRoot, childItemId);
 		if (!childItem) {
 			missingChildIds.push(childItemId);
@@ -202,26 +200,77 @@ export async function validatePlanItem(
 
 	const thinChildIds: string[] = [];
 	const missingProps: string[] = [];
-	const childIdSet = new Set(childItemIds);
+	const childIdSet = new Set(topLevelChildIds);
 	const brokenDeps: string[] = [];
+	const topLevelChildIdSet = new Set(topLevelChildIds);
+	const subOutlineChildIdSet = new Set(subOutlineChildIds);
+	const missingTopLevelLinks: string[] = [];
+	const missingSuboutlineLinks: string[] = [];
+	const missingSuboutlineDeclarations: string[] = [];
+	const manifestMissingSuboutlines: string[] = [];
+	const normalizeSuboutlineId = (childItemId: string, candidate: string): string | null => {
+		const expectedPrefix = `${childItemId}::`;
+		if (candidate.startsWith(expectedPrefix)) {
+			const suffix = candidate.slice(expectedPrefix.length);
+			return /^[A-Za-z0-9_-]+$/.test(suffix) ? candidate : null;
+		}
+		if (!candidate.includes("::")) {
+			return /^[A-Za-z0-9_-]+$/.test(candidate) ? `${childItemId}::${candidate}` : null;
+		}
+		const numericPrefix = childItemId.match(/^[A-Z]+-\d+/)?.[0] ?? null;
+		const [left, suffix] = candidate.split("::", 2);
+		if (!numericPrefix || left !== numericPrefix) return null;
+		return /^[A-Za-z0-9_-]+$/.test(suffix) ? `${childItemId}::${suffix}` : null;
+	};
+	const declaredSuboutlinesByChildId = new Map<string, Set<string>>();
 	for (const [childItemId, childItem] of resolvedChildren) {
 		if (!childItem.body || childItem.body.trim().length < 100) {
 			thinChildIds.push(childItemId);
 		}
 
 		const missing: string[] = [];
-
 		if (!childItem.properties.LAYER) missing.push("LAYER");
 		if (missing.length > 0) {
 			missingProps.push(`${childItemId} missing: ${missing.join(", ")}`);
 		}
 
 		const depends = childItem.properties.DEPENDS;
-		if (!depends) continue;
-		for (const depId of depends.split(/\s+/).filter(Boolean)) {
-			if (!childIdSet.has(depId)) {
-				brokenDeps.push(`${childItemId} depends on ${depId} which is not in this plan`);
+		if (depends) {
+			for (const depId of depends.split(/\s+/).filter(Boolean)) {
+				if (!childIdSet.has(depId)) {
+					brokenDeps.push(`${childItemId} depends on ${depId} which is not in this plan`);
+				}
 			}
+		}
+
+		const declaredSuboutlines = new Set(
+			parseOrgDependProperties(childItem.body)
+				.map(suboutline => normalizeSuboutlineId(childItemId, suboutline.customId))
+				.filter((id): id is string => Boolean(id)),
+		);
+		declaredSuboutlinesByChildId.set(childItemId, declaredSuboutlines);
+		if (declaredSuboutlines.size === 0) continue;
+		const linkedSuboutlines = subOutlineChildIds.filter(id => parseSubOutlineId(id)?.parentId === childItemId);
+		if (linkedSuboutlines.length === 0) {
+			manifestMissingSuboutlines.push(`${childItemId} declares sub-outlines but none linked in PLAN body`);
+			continue;
+		}
+		for (const declaredId of declaredSuboutlines) {
+			if (!subOutlineChildIdSet.has(declaredId)) {
+				missingSuboutlineLinks.push(declaredId);
+			}
+		}
+	}
+
+	for (const subOutlineChildId of subOutlineChildIds) {
+		const parsed = parseSubOutlineId(subOutlineChildId);
+		if (!parsed) continue;
+		if (!topLevelChildIdSet.has(parsed.parentId)) {
+			missingTopLevelLinks.push(`${parsed.parentId} (required by sub-outline ${subOutlineChildId})`);
+		}
+		const declared = declaredSuboutlinesByChildId.get(parsed.parentId);
+		if (declared && !declared.has(subOutlineChildId)) {
+			missingSuboutlineDeclarations.push(`${subOutlineChildId} not declared in ${parsed.parentId}`);
 		}
 	}
 
@@ -252,6 +301,42 @@ export async function validatePlanItem(
 			),
 		);
 	}
+	if (missingTopLevelLinks.length > 0) {
+		issues.push(
+			createIssue(
+				"missing-top-level-link",
+				"Every sub-outline link in the PLAN body must be paired with its top-level [[id:CHILD]] link.",
+				missingTopLevelLinks,
+			),
+		);
+	}
+	if (missingSuboutlineLinks.length > 0) {
+		issues.push(
+			createIssue(
+				"missing-suboutline-link",
+				"Link every declared sub-outline CUSTOM_ID in the PLAN body's Execution Manifest.",
+				missingSuboutlineLinks,
+			),
+		);
+	}
+	if (missingSuboutlineDeclarations.length > 0) {
+		issues.push(
+			createIssue(
+				"missing-suboutline-declaration",
+				"Every PLAN sub-outline link must resolve to a declared child-item sub-outline CUSTOM_ID.",
+				missingSuboutlineDeclarations,
+			),
+		);
+	}
+	if (manifestMissingSuboutlines.length > 0) {
+		issues.push(
+			createIssue(
+				"manifest-missing-suboutlines",
+				"Every linked child that declares sub-outlines must also contribute sub-outline links to the PLAN manifest.",
+				manifestMissingSuboutlines,
+			),
+		);
+	}
 
 	issues.push(...validateChildSuboutlineGraph(resolvedChildren));
 
@@ -259,7 +344,7 @@ export async function validatePlanItem(
 		valid: issues.length === 0,
 		issues,
 		planItem,
-		childItemIds,
+		childItemIds: topLevelChildIds,
 		resolvedChildren,
 	};
 }
@@ -289,6 +374,13 @@ export function formatPlanValidationIssues(planItemId: string, issues: PlanValid
 		"missing-child-properties": () =>
 			"fix: add LAYER to each child item before exiting; add DEPENDS when the item depends on other child items.",
 		"broken-child-depends": () => "fix: change top-level DEPENDS values to linked child item CUSTOM_IDs only.",
+		"missing-top-level-link": items =>
+			`fix: add [[id:${items[0]?.split(" (")[0] ?? "CHILD-ID"}]] alongside the sub-outline entry.`,
+		"missing-suboutline-link": () => "fix: add the missing [[id:CHILD::slug]] entries to the Execution Manifest.",
+		"missing-suboutline-declaration": () =>
+			"fix: declare the linked sub-outline in the child item body or remove the broken PLAN manifest link.",
+		"manifest-missing-suboutlines": () =>
+			"fix: add at least one [[id:CHILD::slug]] entry for each linked child that declares sub-outlines.",
 	};
 
 	const lines = [`PLAN item "${planItemId}" has ${issues.length} validation issue(s):`];

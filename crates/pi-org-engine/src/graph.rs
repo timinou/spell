@@ -418,6 +418,31 @@ mod tests {
 		}
 	}
 
+	fn make_item_with_properties(
+		id: &str,
+		properties: std::collections::HashMap<String, String>,
+	) -> OrgItem {
+		let mut properties = properties;
+		properties
+			.entry("CUSTOM_ID".to_string())
+			.or_insert_with(|| id.to_string());
+		OrgItem {
+			id: id.to_string(),
+			title: format!("Task {id}"),
+			state: "ITEM".to_string(),
+			category: "test".to_string(),
+			dir: "tasks".to_string(),
+			file: "/test.org".to_string(),
+			line: 1,
+			level: 2,
+			properties,
+			body: None,
+			clocks: Vec::new(),
+			byte_range: (0, 0),
+			children: Vec::new(),
+		}
+	}
+
 	#[test]
 	fn build_graph_simple() {
 		let items = vec![make_item("A", ""), make_item("B", "A"), make_item("C", "A, B")];
@@ -435,26 +460,58 @@ mod tests {
 	}
 
 	#[test]
-	fn compute_waves_linear() {
-		let items = vec![make_item("A", ""), make_item("B", "A"), make_item("C", "B")];
-		let result = compute_waves(&items, |_| String::new());
-		assert_eq!(result.waves.len(), 3);
-		assert_eq!(result.waves[0].number, 0);
-		assert_eq!(result.waves[0].items[0].custom_id, "A");
-		assert_eq!(result.waves[1].number, 1);
-		assert_eq!(result.waves[1].items[0].custom_id, "B");
-		assert_eq!(result.waves[2].number, 2);
-		assert_eq!(result.waves[2].items[0].custom_id, "C");
+	fn compute_waves_depends_edges_respect_parent_tokens() {
+		let items = vec![
+			make_item("PARENT", ""),
+			make_item("CHILD", "PARENT"),
+			make_item("GRANDCHILD", "FEAT-001::slug PARENT"),
+			make_item("ALONE", ""),
+		];
+		let result = compute_waves(&items, |id| match id {
+			"PARENT" => String::new(),
+			"CHILD" => "PARENT".to_string(),
+			"GRANDCHILD" => "CHILD".to_string(),
+			"ALONE" => String::new(),
+			other => panic!("unexpected id: {other}"),
+		});
+		assert_eq!(
+			result.waves[0]
+				.items
+				.iter()
+				.map(|w| w.custom_id.as_str())
+				.collect::<Vec<_>>(),
+			vec!["PARENT", "ALONE"]
+		);
+		assert_eq!(
+			result.waves[1]
+				.items
+				.iter()
+				.map(|w| w.custom_id.as_str())
+				.collect::<Vec<_>>(),
+			vec!["CHILD", "GRANDCHILD"]
+		);
+		assert!(result.warnings.is_empty());
 	}
 
 	#[test]
-	fn compute_waves_diamond() {
-		let items =
-			vec![make_item("A", ""), make_item("B", "A"), make_item("C", "A"), make_item("D", "B, C")];
-		let result = compute_waves(&items, |_| String::new());
+	fn compute_waves_with_sub_outline_nodes_across_files() {
+		let items = vec![
+			make_item_with_properties("FEAT-002-root", std::collections::HashMap::new()),
+			make_item_with_properties(
+				"FEAT-001::b",
+				std::collections::HashMap::from([("DEPENDS".to_string(), "FEAT-002-root".to_string())]),
+			),
+			make_item_with_properties(
+				"FEAT-001::a",
+				std::collections::HashMap::from([("DEPENDS".to_string(), "FEAT-001::b".to_string())]),
+			),
+		];
+		let result = compute_waves(&items, |id| id.split("::").next().unwrap_or(id).to_string());
 		assert_eq!(result.waves.len(), 3);
-		// Wave 0: A, Wave 1: B+C, Wave 2: D
-		assert_eq!(result.waves[1].items.len(), 2);
+		assert_eq!(result.waves[0].items[0].custom_id, "FEAT-002-root");
+		assert_eq!(result.waves[1].items[0].custom_id, "FEAT-001::b");
+		assert_eq!(result.waves[1].items[0].parent_id, "FEAT-001");
+		assert_eq!(result.waves[2].items[0].custom_id, "FEAT-001::a");
 	}
 
 	#[test]

@@ -51,7 +51,10 @@ Available child categories:
 ### Properties
 - `LAYER` is required on every child item; it drives task-policy gate injection
 - `DEPENDS` is encouraged when an item depends on other child items (space-separated CUSTOM_IDs)
-- Sub-outline `:CUSTOM_ID:` values are auto-prefixed with the parent item's assigned id; bare suffixes are accepted on create/update and rewritten automatically
+- Sub-outline `:CUSTOM_ID:` values normalize to the parent item's assigned id in all three accepted shapes: fully-qualified: `FEAT-001::define-types`
+- Sub-outline `:CUSTOM_ID:` values also accept a bare slug: `define-types`
+- Sub-outline `:CUSTOM_ID:` values also accept an empty-left suffix: `::define-types`
+- Sub-outline headings automatically gain the ITEM keyword when missing at write time
 - Prefer `org suboutline-add` when iterating on implementation steps after item creation; it appends a correctly-prefixed sub-heading safely
 
 ### Org Item Body Standard
@@ -69,15 +72,15 @@ Every child org item body **MUST** include these sections:
 - **Acceptance Criteria** — falsifiable, manually checkable outcomes
 {{/if}}
 
-Implementation sub-steps **MUST** be sub-headings with `:CUSTOM_ID: FILE-LEVEL-ID::suboutline-id` and `:DEPENDS:` properties. Each step references the test scenarios it satisfies. Example:
+Implementation sub-steps **MUST** be sub-headings with `:CUSTOM_ID:` values that may be fully-qualified, bare, or empty-left; the tool normalizes all three to `FILE-LEVEL-ID::suboutline-id`. Each step references the test scenarios it satisfies. Example:
 ```
-** Define TypeScript interfaces
+** ITEM Define TypeScript interfaces
 :PROPERTIES:
 :CUSTOM_ID: FEAT-001::define-types
 :END:
 - File: src/types/foo.ts
 
-** Write parser tests (TDD: before implementation)
+** ITEM Write parser tests (TDD: before implementation)
 :PROPERTIES:
 :CUSTOM_ID: FEAT-001::parser-tests
 :DEPENDS: FEAT-001::define-types
@@ -85,7 +88,7 @@ Implementation sub-steps **MUST** be sub-headings with `:CUSTOM_ID: FILE-LEVEL-I
 - File: test/parser.test.ts
 - Scenarios from Tests section as initially-failing tests
 
-** Implement core parser (satisfies parser-tests)
+** ITEM Implement core parser (satisfies parser-tests)
 :PROPERTIES:
 :CUSTOM_ID: FEAT-001::implement-parser
 :DEPENDS: FEAT-001::parser-tests
@@ -113,9 +116,11 @@ PLAN item requirements (`org create` in `{{planCategory}}`):
 - Body uses org headings (`*`, `**`, `***`)
 - Include `* Context`, `* Verification`, and `* Execution Manifest` headings
 - include `LAYER`
-- Run `org wave` on the child-item sub-outline dependency graph, then mirror those waves in `* Execution Manifest` with `[[id:...]]` links
+- Run `org wave --manifest=true --planItemId=<PLAN-ID>` so the Execution Manifest is written directly into the PLAN body and returned to the caller
+- PLAN body MUST list every linked child both as `[[id:<child-id>]]` at the top (for discovery) AND as `[[id:<child-id>::<slug>]]` bullets inside the manifest section
+- Validator issue categories to avoid: `missing-top-level-link`, `missing-suboutline-link`, `missing-suboutline-declaration`, `manifest-missing-suboutlines`
 
-Example: create children (`state: "ITEM"`) → run `org wave` → create PLAN in `{{planCategory}}` (`state: "{{planInitState}}"`, body with `* Context`, `* Verification`, `* Execution Manifest` headings and `[[id:...]]` links) → call `{{exitToolName}}` with `title` and `itemId`.
+Example: create children (`state: "ITEM"`) → run `org wave --manifest=true --planItemId=<PLAN-ID>` → create/update PLAN in `{{planCategory}}` (`state: "{{planInitState}}"`, body with `* Context`, `* Verification`, `* Execution Manifest`, top-level `[[id:...]]` links, and sub-outline `[[id:...::...]]` links) → call `{{exitToolName}}` with `title` and `itemId`.
 {{else}}
 Plan file: {{#if planExists}}`{{planFilePath}}` exists; you **MUST** read + update incrementally.{{else}}you **MUST** create a plan at `{{planFilePath}}`.{{/if}}
 
@@ -266,10 +271,11 @@ Address Metis gaps with further user questions where needed.
 
 ### Phase 3: Create Org Items Directly
 1. Create children (`state: "ITEM"`) using the Org Item Body Standard above
-2. Run `org wave` to compute wave structure from the sub-outline dependency graph
-3. Create PLAN (`state: "{{planInitState}}"`) with `[[id:…]]` manifest links using wave headings (`:wave:` tag):
+2. Run `org wave --manifest=true --planItemId=<PLAN-ID>` to compute wave structure from the sub-outline dependency graph and write the Execution Manifest into the PLAN body
+3. Create PLAN (`state: "{{planInitState}}"`) with required top-level `[[id:…]]` links plus sub-outline manifest links using wave headings (`:wave:` tag):
 
 ```
+- [[id:FEAT-001]]
 * Execution Manifest
 ** foundation                                      :wave:
 - [[id:FEAT-001::define-types]] Define TypeScript interfaces (1h)

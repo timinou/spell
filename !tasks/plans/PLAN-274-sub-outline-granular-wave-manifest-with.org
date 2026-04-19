@@ -1,0 +1,109 @@
+#+TITLE: Sub-outline-granular wave manifest with dual-link PLAN bodies
+#+STATE: DOING
+#+SESSION_ID: 14c12170379e95ac
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T19-56-00-095Z_14c12170379e95ac.jsonl]]
+#+CUSTOM_ID: PLAN-274-sub-outline-granular-wave-manifest-with
+#+LAYER: backend
+
+* Context
+
+The user's recent plan-mode transcript revealed three concrete defects in the org orchestration layer that must be fixed together because they share a contract:
+
+1. The native engine's wave computation reads the :BLOCKERS: property (comma-split), but the repo writes :DEPENDS: (space-separated). Result: every running of "org wave" puts every item in wave 0, completely ignoring declared dependencies. The user's transcript above shows this directly.
+2. Sub-outline CUSTOM_ID auto-prefixing is incomplete. The rewriter rejects the empty-left "colon colon suffix" form, and the cmdUpdate paths for section= and append= bypass the rewriter entirely. The user had to use bash + sed to repair files left in a broken state ("CUSTOM_ID: ::slug"). That manual cleanup is the antipattern they called out.
+3. Sub-outline headings are not first-class: they nest inside OrgItem.children in the engine and never reach the wave graph; they also lack the ITEM TODO keyword so they cannot participate in state tracking. The user's stated requirement: waves must be about sub-outlines (FEAT-XXX::task-slug), and sub-outlines must carry the ITEM prefix, "fully representative of the work".
+
+The settled design decisions (recorded via the planning ask):
+
+1. Engine-side: extract_items_from_buffer flattens sub-outlines into the returned Vec — one source of truth, every consumer benefits.
+2. Engine-side: OrgItem.blockers() reads :DEPENDS: first (space or comma), falls back to :BLOCKERS: — fixes top-level waves AND new sub-outline waves in one stroke.
+3. Auto-inject ITEM keyword on sub-outline headings at create/update time, parallel to the existing CUSTOM_ID auto-prefix.
+4. org wave with manifest=true AND planItemId=<PLAN-ID> walks linked children, emits the formatted Execution Manifest, AND writes it directly into the PLAN body via editSection. The text is also returned to the LLM caller so it can confirm the write.
+5. PLAN body MUST carry both top-level [[id:FEAT-X]] links (for discovery and lifecycle tracking) AND sub-outline [[id:FEAT-X::slug]] entries inside the manifest.
+
+This PLAN orchestrates six child items in five waves to deliver these decisions end-to-end.
+
+Chicken-and-egg note: decision 5 is not enforceable by the CURRENT validator (validatePlanItem cannot resolve sub-outline [[id:]] links). FEAT-606 is the child item that teaches the validator to accept both link shapes. The initial PLAN body uses top-level links only; as part of FEAT-605's acceptance, "org wave --manifest=true --planItemId=<this-PLAN>" regenerates the Execution Manifest at sub-outline granularity and writes it back in place. This is the first PLAN that will exercise the new manifest flow end-to-end.
+
+
+Linked child items:
+- [[id:BUG-309-org-wave-loses-all-edges-engine-reads-bl]]
+- [[id:FEAT-603-sub-outline-prefix-rewrite-covers-every]]
+- [[id:FEAT-604-engine-flattens-sub-outlines-into-extrac]]
+- [[id:FEAT-605-org-wave-planitemid-mode-writes-executio]]
+- [[id:FEAT-606-validateplanitem-requires-dual-link-mani]]
+- [[id:FEAT-607-plan-mode-prompt-teaches-sub-outline-wav]]
+* Verification
+
+Global acceptance after every child completes:
+
+1. cargo test --all green; cargo clippy --all-targets clean.
+2. bun check green across the workspace (bun test plus type-check plus lint).
+3. Manual replay of the user's broken transcript: run "org create" with a body containing bare empty-left sub-outline CUSTOM_IDs and the resulting on-disk file shows ITEM-prefixed headings AND fully-qualified CUSTOM_IDs with no "::slug" artifacts. No bash post-fix needed.
+4. Manual: invoke "org wave --manifest=true --planItemId=PLAN-274-sub-outline-granular-wave-manifest-with" against this PLAN; the PLAN body's "* Execution Manifest" section is regenerated in place with sub-outline-granular entries; returned text matches written content; waves contain sub-outline IDs in correct topological order.
+5. Manual: org validate-plan against the regenerated PLAN returns valid: true under FEAT-606's dual-link rules.
+6. Regression: legacy "org wave" call shape (no planItemId) still returns the pre-existing JSON shape; "org query" still returns top-level items only by default.
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:BUG-309-org-wave-loses-all-edges-engine-reads-bl::wave-depends-regression-test]] Add regression test for wave edge detection
+- [[id:FEAT-603-sub-outline-prefix-rewrite-covers-every::rewriter-empty-left-tests]] Add rewriter unit tests for empty-left suffix
+- [[id:FEAT-604-engine-flattens-sub-outlines-into-extrac::flatten-tests]] Add engine flatten tests
+- [[id:FEAT-605-org-wave-planitemid-mode-writes-executio::manifest-tests]] Add integration tests for planItemId manifest flow
+- [[id:FEAT-606-validateplanitem-requires-dual-link-mani::validator-tests]] Write dual-link validator tests
+- [[id:FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::prompt-tests]] Write prompt content tests
+** wave-2 :wave:
+- [[id:BUG-309-org-wave-loses-all-edges-engine-reads-bl::blockers-unit-tests]] Write blockers() unit tests (TDD)
+- [[id:FEAT-603-sub-outline-prefix-rewrite-covers-every::item-inject-tests]] Add ITEM-injection unit tests
+- [[id:FEAT-604-engine-flattens-sub-outlines-into-extrac::wave-sub-outline-test]] Add wave-level integration test for sub-outlines
+- [[id:FEAT-605-org-wave-planitemid-mode-writes-executio::schema-extend]] Extend orgSchema and cmdWave signature
+- [[id:FEAT-606-validateplanitem-requires-dual-link-mani::layer-test]] Write exit-plan layer-resolution test
+- [[id:FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::properties-section]] Update Properties section
+** wave-3 :wave:
+- [[id:BUG-309-org-wave-loses-all-edges-engine-reads-bl::blockers-impl]] Update blockers() to read DEPENDS first with multi-delimiter split
+- [[id:FEAT-603-sub-outline-prefix-rewrite-covers-every::integration-tests]] Add integration tests for cmdUpdate cmdCreate suboutline-add rewriting
+- [[id:FEAT-604-engine-flattens-sub-outlines-into-extrac::consumer-guards]] Add consumer-side flatten guards
+- [[id:FEAT-605-org-wave-planitemid-mode-writes-executio::plan-resolve]] Implement planItemId resolution and sub-outline collection
+- [[id:FEAT-606-validateplanitem-requires-dual-link-mani::split-links]] Split top-level and sub-outline link processing
+- [[id:FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::example-update]] Update example sub-outline block to use ITEM keyword
+** wave-4 :wave:
+- [[id:FEAT-603-sub-outline-prefix-rewrite-covers-every::rewriter-impl]] Extend rewriter to accept empty-left suffix and inject ITEM state
+- [[id:FEAT-604-engine-flattens-sub-outlines-into-extrac::flatten-impl]] Implement extract_items flatten via post-order walk
+- [[id:FEAT-605-org-wave-planitemid-mode-writes-executio::write-manifest]] Write the Execution Manifest section via editSection
+- [[id:FEAT-606-validateplanitem-requires-dual-link-mani::dual-link-enforce]] Enforce dual-link requirement
+- [[id:FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::plan-item-req]] Update PLAN item requirements with dual-link rule
+** wave-5 :wave:
+- [[id:FEAT-603-sub-outline-prefix-rewrite-covers-every::route-rewrite]] Route rewrite through every cmdUpdate branch
+- [[id:FEAT-604-engine-flattens-sub-outlines-into-extrac::ts-consumer-adjust]] Adjust TS consumers that assume top-level-only
+- [[id:FEAT-605-org-wave-planitemid-mode-writes-executio::legacy-behavior]] Preserve non-plan call behavior
+- [[id:FEAT-606-validateplanitem-requires-dual-link-mani::format-hints]] Add hints for new categories in formatPlanValidationIssues
+- [[id:FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::ultraplan-update]] Update ultraplan example
+** wave-6 :wave:
+- [[id:FEAT-603-sub-outline-prefix-rewrite-covers-every::buildblock-item]] Update buildSuboutlineBlock to emit ITEM state keyword
+- [[id:FEAT-606-validateplanitem-requires-dual-link-mani::exit-tolerance]] Update exit-plan-mode extractPlanWaves tolerance
+- [[id:FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::handlebars-regression]] Verify Handlebars substitutions untouched
+** wave-7 :wave:
+- [[id:FEAT-603-sub-outline-prefix-rewrite-covers-every::create-confirm]] Confirm cmdCreate path yields injected state end-to-end
+
+** Completion [2026-04-19]
+*** Verification
+- `cargo test -p pi-org-engine` → passed after BUG-309 + FEAT-604 engine changes.
+- `cargo clippy -p pi-org-engine --all-targets` → passed (tree-sitter-org upstream compiler warnings only).
+- `bun test packages/org` → passed (191 tests, including new rewrite / flatten / planItemId manifest coverage).
+- `bun test packages/coding-agent/test/plan-mode/plan-validation-suboutline.test.ts packages/coding-agent/test/plan-mode/exit-plan-layer-resolution.test.ts` → passed.
+- `bun test packages/coding-agent/test/prompts/plan-mode-active-suboutline.test.ts` → passed.
+- `bun check:ts` → passed.
+- `bun check` → passed.
+- `bun run dev:native` → rebuilt `packages/natives/native/pi_natives.dev.node` so org package tests exercised the updated Rust engine.
+- Manual replay: temp `org create` with empty-left / bare sub-outline IDs produced ITEM-prefixed headings and fully-qualified `CUSTOM_ID` / `DEPENDS` values with no `::slug` residue.
+- Manual replay: `org wave --manifest=true --planItemId=PLAN-274-sub-outline-granular-wave-manifest-with` rewrote this PLAN's `* Execution Manifest` section with sub-outline-granular `:wave:` groups.
+- Manual replay: repo-local `validatePlanItem(Settings.isolated(), process.cwd(), "PLAN-274-sub-outline-granular-wave-manifest-with")` returned `valid: true` after adding the required top-level child links to `* Context`.
+- Global verification: `cargo test --all` still fails in unrelated crate `pi-code-engine` at `edit_transaction_lock_timeout_returns_structured_error`; see Deviations.
+*** Artifacts
+- Manifest rewrite result: artifact://14c133dfeade95ad/main/bash/76.txt
+- Repo-local PLAN validation output: artifact://14c133dfeade95ad/main/bash/78.txt
+- Manual `org create` replay output + emitted file content: artifact://14c133dfeade95ad/main/bash/80.txt
+- Full-workspace `cargo test --all` failure log: artifact://14c133dfeade95ad/main/bash/70.txt
+*** Deviations
+- `cargo test --all` remains red because `crates/pi-code-engine/tests/coord_transaction.rs::edit_transaction_lock_timeout_returns_structured_error` returned a successful transaction instead of `CodeEngineError::LockTimeout`. This crate/test was outside PLAN-274 scope and remained failing after all plan changes were complete.
+- Because the required global verification is not fully green, PLAN-274 remains `DOING` and is not truthfully closable yet.

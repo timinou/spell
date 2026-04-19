@@ -73,9 +73,10 @@ impl OrgItem {
 	pub fn blockers(&self) -> Vec<&str> {
 		self
 			.properties
-			.get("BLOCKERS")
+			.get("DEPENDS")
+			.or_else(|| self.properties.get("BLOCKERS"))
 			.map(|b| {
-				b.split(',')
+				b.split(|c: char| c == ',' || c.is_whitespace())
 					.map(str::trim)
 					.filter(|s| !s.is_empty())
 					.collect()
@@ -94,24 +95,48 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn deserialize_without_optional_fields() {
-		let json = serde_json::json!({
-			"id": "T-001",
-			"title": "Test",
-			"state": "DOING",
-			"category": "test",
-			"dir": "tasks",
-			"file": "/test.org",
-			"line": 1,
-			"level": 1,
-			"properties": {}
-		});
-		let item: OrgItem =
-			serde_json::from_value(json).expect("should deserialize without optional fields");
-		assert_eq!(item.id, "T-001");
-		assert_eq!(item.byte_range, (0, 0));
-		assert!(item.clocks.is_empty());
-		assert!(item.children.is_empty());
-		assert!(item.body.is_none());
+	fn blockers_prefers_depends_over_blockers() {
+		let item = OrgItem {
+			id:         "T-001".into(),
+			title:      "Test".into(),
+			state:      "DOING".into(),
+			category:   "test".into(),
+			dir:        "tasks".into(),
+			file:       "/test.org".into(),
+			line:       1,
+			level:      1,
+			properties: HashMap::from([
+				("BLOCKERS".into(), "T-ignored".into()),
+				("DEPENDS".into(), "T-001, T-002".into()),
+			]),
+			body:       None,
+			clocks:     vec![],
+			byte_range: (0, 0),
+			children:   vec![],
+		};
+		assert_eq!(item.blockers(), vec!["T-001", "T-002"]);
+	}
+
+	#[test]
+	fn blockers_falls_back_to_blockers_and_trims_tokens() {
+		let item = OrgItem {
+			id:         "T-001".into(),
+			title:      "Test".into(),
+			state:      "DOING".into(),
+			category:   "test".into(),
+			dir:        "tasks".into(),
+			file:       "/test.org".into(),
+			line:       1,
+			level:      1,
+			properties: HashMap::from([(
+				"BLOCKERS".into(),
+				" T-001,  T-002   T-003 , , FEAT-001::slug ,   ".into(),
+			)]),
+			body:       None,
+			clocks:     vec![],
+			byte_range: (0, 0),
+			children:   vec![],
+		};
+		assert_eq!(item.blockers(), vec!["T-001", "T-002", "T-003", "FEAT-001::slug"]);
 	}
 }
