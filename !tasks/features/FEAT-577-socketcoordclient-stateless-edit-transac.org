@@ -3,7 +3,7 @@
 #+SESSION_ID: 14bfce727e583e3c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
 #+CUSTOM_ID: FEAT-577-socketcoordclient-stateless-edit-transac
-#+DEPENDS: FEAT-575-edit-coordination-foundation-journal-nod FEAT-576-pi-edit-broker-crate-protocol-daemon-aut
+#+DEPENDS: 
 #+EFFORT: L
 #+LAYER: pi-code-engine
 #+PRIORITY: #A
@@ -155,3 +155,7 @@ Order:
 - Existing `tests/buffer.rs` tests remain green; any referencing `save()` directly are updated to call `edit_transaction` or kept as unit tests on `CodeBuffer::edit`.
 - `cargo clippy -p pi-code-engine --all-targets --all-features -- -D warnings` clean.
 - Manual: run the broker, spawn two `spell`s in the same dir, have each agent edit different methods of the same class; both commits land; journal shows both attributed entries.
+
+NOTE [2026-04-19]: [2026-04-19] Sub-outline FEAT-577::socket-client landed in commit ac06f7ae0 (crates/pi-code-engine/src/coord/socket.rs, BrokerEndpoint, SocketCoordClient with per-call blocking protocol, 150ms budget, degrades to NullCoordClient on broker absence; pub use in coord/mod.rs). BufferRegistry::new_with_coord defaults to NullCoordClient; socket client not yet wired into the singleton.
+
+Remaining sub-outlines (resume here): peer-state-store, edit-transaction, cache-invalidation, engine-entrypoints, deprecate-old-save. 11 integration tests in tests/coord_transaction.rs not yet written.

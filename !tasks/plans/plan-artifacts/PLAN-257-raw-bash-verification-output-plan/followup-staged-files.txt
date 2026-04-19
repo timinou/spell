@@ -1,0 +1,5 @@
+!tasks/bugs/BUG-286-coding-agent-keep-raw-bash-verification.org
+!tasks/plans/PLAN-257-raw-bash-verification-output-plan.org
+packages/coding-agent/src/task/executor.ts
+packages/coding-agent/src/task/index.ts
+packages/coding-agent/test/task/executor-subagent-reminders.test.ts

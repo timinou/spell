@@ -1,0 +1,111 @@
+#+TITLE: Finish cross-session edit coordination
+#+STATE: DOING
+#+SESSION_ID: 14c06a0deef62edb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T06-34-47-099Z_14c06a0deef62edb.jsonl]]
+#+CUSTOM_ID: PLAN-259-finish-cross-session-edit-coordination
+#+DEPENDS: 
+#+EFFORT: 2d
+#+LAYER: pi-code-engine pi-natives coding-agent ui
+
+* Context
+
+Continuation of PLAN-254 (file [[file:!tasks/plans/PLAN-254-cross-session-edit-coordination.org][PLAN-254-cross-session-edit-coordination.org]]). Wave 1 (FEAT-575, FEAT-576) and the Wave-2 SocketCoordClient scaffold are landed in commit =ac06f7ae0=. This plan orchestrates the remaining four FEATs to close out the cross-session edit coordination workstream. FEAT bodies are the source of truth; this plan only sequences them.
+
+Design reference (implementers MUST read): [[file:specs/edit-coordination/design.md]]
+
+Continuation breadcrumbs from the prior session (per-FEAT spec mirrors, retained for fresh-session use):
+- =!tasks/follow-ups/FUP-060-complete-feat-577-engine-edit-transactio.org= — FEAT-577 continuation
+- =!tasks/follow-ups/FUP-061-land-feat-578-napi-sessionid-propagation.org= — FEAT-578 continuation
+- =!tasks/follow-ups/FUP-062-land-feat-580-code-tool-sessionid-peerco.org= — FEAT-580 continuation
+- =!tasks/follow-ups/FUP-063-land-feat-579-coord-status-line-peer-act.org= — FEAT-579 continuation
+
+** Landed (do not redo)
+- crates/pi-code-engine: coord module (client, journal, node_ref, null, socket), History session attribution, scoped undo/redo, PeerConflict variant, BufferRegistry::new_with_coord, blake3_short helper. 179 tests pass.
+- crates/pi-edit-broker: Unix-socket broker, newline-JSON protocol, state store with intent TTL + commit ring, tokio broadcast bus, pid reaper, 30s grace-period exit, fork+setsid daemon, spawn_broker_if_absent. 13 tests pass.
+- crates/pi-code-engine/src/coord/socket.rs: BrokerEndpoint + SocketCoordClient scaffold (per-call blocking protocol, 150 ms budget, downgrades to no-op on broker absence). Exposed via =pub use coord::{BrokerEndpoint, SocketCoordClient}=. Not yet wired into the NAPI BufferRegistry singleton.
+
+** Remaining (this plan)
+1. FEAT-577 engine critical section and cache invalidation: PeerStateStore, BufferRegistry::edit_transaction, atomic temp+rename write, peer_committed cache invalidation, engine entrypoint sessionId plumb, deprecate save/save_with_watcher, 11 integration tests in tests/coord_transaction.rs.
+2. FEAT-578 NAPI surface: CodeBufferOptions.sessionId (required for mutating commands), coord_status / coord_peer_activity / coord_journal_tail commands, CodeErrorOutput.peerConflict payload, TS types, 7 tests in packages/natives/test/code-buffer-coord.test.ts.
+3. FEAT-580 coding-agent wiring: packages/coding-agent/src/session/edit-coordinator.ts with callCodeBuffer + isMutatingCommand + recentPeerActivity + coordStatus, update every executeCodeBuffer call site, PeerConflictToolError subclass with retryable:true, peer-activity footer in code tool output, 5 tests across packages/coding-agent/test/tools/code-coord.test.ts and packages/coding-agent/test/session/edit-coordinator.test.ts.
+4. FEAT-579 TUI surface: coordSegment in status-line (1s TTL cache), peer-activity render block in tool output (top 5, newest first), PeerConflict structured error panel, 6 tests in packages/coding-agent/test/modes/components/status-line/coord-segment.test.ts.
+
+** Settled decisions (inherited)
+- No CRDT in Phase 1. Journal + socket broker + peer-aware reload.
+- Dedicated pi-edit-broker daemon at =~/.spell/edit-broker.sock=, auto-spawned by first client, exits 30s after last disconnect.
+- Attribution granularity = CodePath; falls back to =::*= when no named ancestor.
+- Conflict policy = block + structured =PeerConflict{sessionId, codePath, peerRevision, peerCommitTs}=. Never silent.
+- Stateless edit_transaction: every mutating call re-reads disk under lock, re-resolves CodePath, applies, writes atomically via temp+rename, commits to broker, journals.
+- sessionId is REQUIRED on mutating NAPI commands; missing → structured =MISSING_SESSION_ID= error. Read-only commands ignore sessionId.
+- Fallback when =getSessionId()= null: =tui-${process.pid}= (matches =packages/coding-agent/src/main.ts=:129).
+- Undo/redo per-session, best-effort; =undo_scoped(sessionId)= skips peer revisions and reports them.
+- Broker binary discovery: =target/release/pi-edit-broker= in dev; bundled alongside =pi-natives= via =getNativesDir()= in release.
+
+* Verification
+
+** Per-FEAT gates
+Each FEAT carries its own gate command in its body's Acceptance section. All must pass before the FEAT is marked DONE.
+
+- FEAT-577: =cargo test -p pi-code-engine --test coord_transaction= + =cargo clippy -p pi-code-engine --all-targets --all-features -- -D warnings=
+- FEAT-578: =bun test packages/natives/test/code-buffer-coord.test.ts= + =bun check:ts= + =bun --cwd=packages/natives run build=
+- FEAT-580: =bun test packages/coding-agent/test/tools/code-coord.test.ts packages/coding-agent/test/session/edit-coordinator.test.ts= + =bun check:ts= + =bun lint:ts=
+- FEAT-579: =bun test packages/coding-agent/test/modes/components/status-line/coord-segment.test.ts= + =bun check:ts=
+
+** Cross-cutting acceptance (after all four FEATs land)
+- =cargo test --workspace= passes.
+- =bun check= (TypeScript + Rust) passes.
+- =cargo clippy --workspace --all-targets --all-features -- -D warnings= clean.
+- =bun --cwd=packages/natives run dev:native= produces a working NAPI dylib.
+
+** Manual two-session repro
+1. Build: =bun --cwd=packages/natives run dev:native= + =cargo build -p pi-edit-broker --release=.
+2. Launch two =spell= sessions in the same cwd.
+3. Session A edits =Server.handle= in =src/server.ts=; Session B in parallel edits =Server.dispatch=. Both succeed.
+4. Each status-line shows =coord: 1 peer=. B's next edit shows A's activity in the peer-activity footer.
+5. Journal =~/.spell/edit-journal/<repo-hash>/<file-hash>.jsonl= shows both entries with correct =codePaths= and =parentRevision= chain.
+
+** Manual conflict repro
+1. Two sessions both try to edit =Server.handle= within ~1s.
+2. One wins; one receives =PEER_CONFLICT=; agent auto-retries; retry resolves against fresh tree and succeeds.
+3. Journal shows two consecutive revisions with a correct parent chain.
+
+* Execution Manifest
+
+Linear chain via FEAT =DEPENDS=: =FEAT-577= → =FEAT-578= → =FEAT-580= → =FEAT-579=. One FEAT per wave; dispatch one delegated subagent per wave. Each FEAT already carries full sub-outline with =:CUSTOM_ID:= + =:DEPENDS:= (test-first ordering enforced at sub-step level).
+
+** Wave 1 — Engine critical section and journal (pi-code-engine)
+- [[id:FEAT-577-socketcoordclient-stateless-edit-transac][FEAT-577 — SocketCoordClient + stateless edit_transaction in BufferRegistry]]
+  - Sub-outline FEAT-577::socket-client is already landed (see item note [2026-04-19]). Remaining sub-outlines: peer-state-store, edit-transaction, cache-invalidation, engine-entrypoints, deprecate-old-save, plus tests/coord_transaction.rs (11 scenarios).
+
+** Wave 2 — NAPI surface (pi-natives)
+- [[id:FEAT-578-napi-surface-sessionid-propagation-coord][FEAT-578 — NAPI surface: sessionId propagation + coord_* commands]]
+  - Depends on Wave 1 closing.
+
+** Wave 3 — coding-agent wiring (coding-agent)
+- [[id:FEAT-580-coding-agent-integration-code-tool-sessi][FEAT-580 — coding-agent integration: code tool sessionId injection + PeerConflict handling]]
+  - Depends on Wave 2 closing.
+
+** Wave 4 — TUI surface (ui)
+- [[id:FEAT-579-tui-surface-coord-status-line-segment-pe][FEAT-579 — TUI surface: coord status-line segment + peer-activity preview footer]]
+  - Depends on Wave 3 closing.
+
+* Risks and mitigations (inherited)
+
+- Broker binary distribution: =spawn_broker_if_absent= resolves =pi-edit-broker=. Dev uses =target/release/pi-edit-broker=; release bundle co-locates with =pi-natives= via =getNativesDir()=.
+- Broker fallback: every RPC has 150 ms budget; on timeout / socket error, degrade silently to =NullCoordClient= for that call, log one warning per process. Journal still writes locally.
+- Atomicity of disk write: temp file + =rename= on the same filesystem as target; cleanup on error.
+- Peer commit race inside critical section: broker grants intent but a peer could commit between grant and local commit. Mitigation: one retry inside the critical section that re-reads disk and re-resolves CodePath; second conflict returns =PeerConflict= to caller.
+- Stale socket file after broker crash: auto-spawn path tests =connect()= first; on failure, =unlink()= stale socket before binding.
+- Subagent session collision: each subagent has a distinct sessionId via =sessionManager.getSessionId()=. FEAT-580 verification must cover subagent attribution.
+
+* Non-goals
+- CRDT-backed concurrent merge (Loro) — Phase 2, journal format already carries the =op[]= hook.
+- Cross-host coordination — local Unix-socket only.
+- Semantic conflict resolution (e.g. "peer deleted function, my edit added a call").
+- Windows named-pipe support.
+
+* Rollout
+- Wave 1 lands: not user-visible; tests green = signal.
+- Wave 2 lands: =code edit= starts requiring =sessionId= for mutating commands. coding-agent callers still unmigrated briefly — keep Wave-3 subagent ready to land same session.
+- Wave 3 lands: callers migrated; PeerConflict surfaces as structured retryable ToolError.
+- Wave 4 lands: user sees =coord: N peers= status-line segment and peer-activity footers. Single-session users see an empty segment (zero visual noise).
