@@ -1,0 +1,131 @@
+#+TITLE: Bundled quick_task default must stop forcing scope aborts
+#+STATE: DONE
+#+SESSION_ID: 14c0fcc47359b853
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T17-15-47-021Z_14c0fcc47359b853.jsonl]]
+#+CUSTOM_ID: BUG-307-bundled-quick-task-default-must-stop-for
+#+LAYER: backend, test
+
+* Initial Message
+
+The 4 subagents aborted with different "scope" failures. Reading their actual messages:
+
+ FEAT-243 + FEAT-241 (djinn work):
+
+ ▏ "session root is /home/user/code/ora/monorepo/apps/agentmaker, but FEAT-241 targets /home/user/code/ora/monorepo/packages/djinn"
+
+ → Task subagents are rooted at the app dir and can't write to sibling packages (packages/djinn is outside apps/agentmaker).
+
+ FEAT-240 (agentmaker-only, should have worked):
+
+ ▏ "Delegated quick_task agents also cannot write outside the sandboxed root"
+
+ → The task agent tried to subdelegate to quick_task agents per-file, and those quick_task subagents had narrower per-file sandboxes that
+ couldn't do the coordinated multi-file edit.
+
+ ∴ Two problems:
+ 1. Monorepo-cross-package scope — subagents can't reach packages/djinn from the agentmaker root.
+ 2. Nested delegation pattern — the task agent chose to fan out to quick_task agents instead of editing directly, and those inherited a
+ stricter sandbox.
+
+
+
+Please tell me if this type of scoping still exists, and if so, remove it by default
+
+* Scope
+In scope:
+- Remove the bundled ~quick_task~ agent’s default ~scopeRestricted: true~ behavior so mechanical subagents do not hard-fail solely because ~filesDeps~ was omitted or too narrow.
+- Remove the bundled ~task~ agent prompt’s default “investigate → create sniper todos → delegate each slice to quick_task” workflow. The default should become: execute directly unless explicit constraints or caller instructions justify delegation.
+- Preserve narrow-scope execution as an explicit opt-in path via existing ~scopeRestricted~ agent metadata, not as the bundled default.
+- Update package-local tests so the new default and the opt-in narrow path are both covered.
+
+Out of scope:
+- Removing the ~quick_task~ agent entirely.
+- Changing general spawn policy semantics or recursion-depth policy.
+- Changing session cwd / worktree root behavior. That is handled separately.
+
+Rationale: current defaults create false-negative task aborts in normal multi-file work. The failure is policy/default driven, not an intentional user safety choice.
+
+* Existing Patterns
+- Bundled agent defaults live in ~packages/coding-agent/src/task/agents.ts~ (~EMBEDDED_AGENT_DEFS~).
+- Explicit agent-frontmatter flags are parsed in ~packages/coding-agent/src/discovery/helpers.ts::parseAgentFields~; this already preserves an explicit ~scopeRestricted~ opt-in.
+- Runtime enforcement for scope-restricted agents lives in ~packages/coding-agent/src/task/index.ts:731-755~ (~QUICK_TASK_MISSING_FILESDEPS~ preflight) and ~packages/coding-agent/src/task/executor.ts::buildScopeRestrictedSandboxPolicy~.
+- Current bundled behavior is guarded by ~packages/coding-agent/test/task/quick-task-scope.test.ts~.
+- Default delegation guidance is encoded in prompt files, not code, under ~packages/coding-agent/src/prompts/agents/task.md~ and ~packages/coding-agent/src/prompts/agents/quick_task.md~.
+- Existing prompt-content tests already import prompt markdown directly in ~packages/coding-agent/test/prompts/auto-roster-prompts.test.ts~; if prompt bytes matter downstream, text-import tests are acceptable here.
+
+* Tests
+User workflows to defend:
+1. A delegated ~task~ worker touching 3-5 files executes directly by default; it is not instructed to fan out into ~quick_task~ children unless the assignment explicitly warrants that.
+2. A bundled ~quick_task~ dispatch no longer hard-fails when ~filesDeps~ is omitted; default bundled behavior is broad enough for mechanical edits.
+3. A caller that explicitly opts into ~scopeRestricted: true~ still gets the old hard boundary: missing ~filesDeps~ is rejected and out-of-scope writes fail.
+4. Prompt defaults match runtime defaults: bundled ~task~ prompt no longer prescribes automatic ~quick_task~ fan-out, and bundled ~quick_task~ prompt no longer claims it is the sole scope-restricted path.
+
+Concrete test files / scenarios:
+- ~packages/coding-agent/test/task/quick-task-scope.test.ts~
+  - bundled ~quick_task~ is not scope-restricted by default
+  - explicit parsed ~scopeRestricted: true~ still survives frontmatter parsing
+  - bundled ~quick_task~ dispatch without ~filesDeps~ no longer returns ~QUICK_TASK_MISSING_FILESDEPS~
+  - explicit custom scope-restricted agent still rejects missing ~filesDeps~ and still enforces ~OUT_OF_SCOPE_MUTATION~
+- ~packages/coding-agent/test/prompts/task-subagent-defaults.test.ts~ (new, or equivalent prompt-focused file)
+  - ~task.md~ no longer contains the default quick-task fan-out workflow
+  - ~quick_task.md~ describes narrow execution as optional/configured, not as the universal default
+
+* Implementation
+** Write default-behavior regression tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-307-bundled-quick-task-default-must-stop-for::default-behavior-tests
+:END:
+- Add/update the tests listed above before changing bundled agent defaults.
+- The tests must distinguish bundled-default behavior from explicit opt-in ~scopeRestricted: true~ behavior.
+- Satisfies workflows 1-4.
+
+** Remove bundled quick_task scope restriction default
+:PROPERTIES:
+:CUSTOM_ID: BUG-307-bundled-quick-task-default-must-stop-for::remove-bundled-scope-default
+:DEPENDS: BUG-307-bundled-quick-task-default-must-stop-for::default-behavior-tests
+:END:
+- File: ~packages/coding-agent/src/task/agents.ts~
+- Delete ~scopeRestricted: true~ from the bundled ~quick_task~ definition.
+- Keep the underlying ~scopeRestricted~ feature and enforcement code intact for explicit opt-in agents.
+- Update any comments that currently describe bundled ~quick_task~ as inherently narrow.
+- Satisfies workflows 2-3.
+
+** Cut default nested quick_task delegation from the task prompt
+:PROPERTIES:
+:CUSTOM_ID: BUG-307-bundled-quick-task-default-must-stop-for::remove-default-fanout-guidance
+:DEPENDS: BUG-307-bundled-quick-task-default-must-stop-for::default-behavior-tests
+:END:
+- File: ~packages/coding-agent/src/prompts/agents/task.md~
+- Replace the current “Plan-Then-Delegate” default with direct-execution-first guidance.
+- Delegation may remain as an explicit tool, but only when clearly justified by file independence / user instruction, not as the default for 3+ files.
+- Update ~packages/coding-agent/src/prompts/agents/quick_task.md~ so its scope section reflects opt-in narrow mode rather than a hardcoded bundled default.
+- Satisfies workflows 1 and 4.
+
+** Clean up runtime text and bundled-agent assertions
+:PROPERTIES:
+:CUSTOM_ID: BUG-307-bundled-quick-task-default-must-stop-for::clean-up-runtime-text
+:DEPENDS: BUG-307-bundled-quick-task-default-must-stop-for::remove-bundled-scope-default BUG-307-bundled-quick-task-default-must-stop-for::remove-default-fanout-guidance
+:END:
+- File: ~packages/coding-agent/src/task/index.ts~ if any user-facing quick-task-only error strings or assumptions remain coupled to the old default.
+- File: relevant tests under ~packages/coding-agent/test/task/~ and ~packages/coding-agent/test/prompts/~.
+- Ensure the only remaining narrow behavior is the explicit ~scopeRestricted~ opt-in path.
+- Satisfies workflows 2-4.
+
+* Edge Cases
+- Custom/project agents that explicitly set ~scopeRestricted: true~ must remain unchanged.
+- Do not accidentally widen unrelated policy mechanisms (~spawns~, recursion depth, bash sandbox, or isolation mode).
+- Prompt edits should avoid over-correcting into “never delegate”; the requirement is “not by default,” not “forbid delegation.”
+- Old tests that encoded bundled ~quick_task~ as special/default-narrow must be rewritten rather than deleted.
+
+* Acceptance Criteria
+- Bundled ~quick_task~ no longer requires ~filesDeps~ by default.
+- Explicit ~scopeRestricted: true~ agents still require ~filesDeps~ and still enforce write scope.
+- Bundled ~task~ prompt no longer recommends automatic quick-task fan-out as the standard path for 3+ file work.
+- Package-local tests cover both the broadened bundled default and the preserved opt-in narrow mode.
+
+* Verification
+- ~bun test packages/coding-agent/test/task/quick-task-scope.test.ts~
+- ~bun test packages/coding-agent/test/prompts/task-subagent-defaults.test.ts~ (or the exact prompt test file chosen during implementation)
+- ~bun check:ts~
+
+NOTE [2026-04-19]: Implemented bundled quick_task default widening + prompt default update. Verified with bun test packages/coding-agent/test/task/quick-task-scope.test.ts and bun test packages/coding-agent/test/prompts/task-subagent-defaults.test.ts.

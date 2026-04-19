@@ -97,10 +97,10 @@ describe("quick_task scope guardrails", () => {
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
 
-	it("quick_task is the only scopeRestricted bundled agent", () => {
+	it("bundled quick_task is not scopeRestricted by default", () => {
 		const agents = loadBundledAgents();
 		const scoped = agents.filter(agent => agent.scopeRestricted === true).map(agent => agent.name);
-		expect(scoped).toEqual(["quick_task"]);
+		expect(scoped).not.toContain("quick_task");
 	});
 
 	it("parseAgentFields preserves explicit scopeRestricted flag", () => {

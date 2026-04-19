@@ -40,6 +40,7 @@ import {
 	getSupportedExtensions,
 } from "./code-supported-files";
 import { enforceModeWrite } from "./mode-guard";
+import { findCommonBasePath } from "./path-utils";
 import { replaceTabs } from "./render-utils";
 import { PeerConflictToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
@@ -139,6 +140,29 @@ function resolveFileTargetPath(fileTargetId: string, sessionCwd: string, root?: 
 	if (path.isAbsolute(fileTargetId)) return fileTargetId;
 	const base = root ? path.resolve(sessionCwd, root) : sessionCwd;
 	return path.resolve(base, fileTargetId);
+}
+
+function isWithinBasePath(targetPath: string, basePath: string): boolean {
+	const relative = path.relative(basePath, targetPath);
+	return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+function deriveEditRoot(
+	sessionCwd: string,
+	editFiles: string[],
+	explicitRoot?: string,
+): { root?: string; validationMessage?: string } {
+	if (explicitRoot) return { root: path.resolve(sessionCwd, explicitRoot) };
+	if (editFiles.length === 0) return { root: sessionCwd };
+	if (editFiles.every(file => isWithinBasePath(file, sessionCwd))) return { root: sessionCwd };
+	const commonBase = findCommonBasePath([sessionCwd, ...editFiles]);
+	if (commonBase === path.parse(commonBase).root) {
+		return {
+			validationMessage:
+				"Edit targets span multiple unrelated roots. Split the edit into separate calls or pass an explicit root.",
+		};
+	}
+	return { root: commonBase };
 }
 
 function collectOperationFiles(
@@ -741,7 +765,18 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 					}
 					editFileStates.set(file, { createsMissingFile: !existsOnDisk });
 				}
-				options.root = params.root ? resolveFile(params.root) : sessionCwd;
+				const { root: editRoot, validationMessage } = deriveEditRoot(sessionCwd, editFiles, params.root);
+				if (validationMessage) {
+					const details = createCodeToolError({
+						command,
+						file: primaryEditFile,
+						cwd: sessionCwd,
+						output: { code: "VALIDATION_ERROR", message: validationMessage },
+						message: validationMessage,
+					});
+					return toolResult(details).text(formatCodeToolContent(details)).done();
+				}
+				options.root = editRoot;
 				options.saveMode = "staged";
 				if (hasEntries(params.operations)) options.operations = normalizeOperations(params.operations);
 			} else if (params.file) {

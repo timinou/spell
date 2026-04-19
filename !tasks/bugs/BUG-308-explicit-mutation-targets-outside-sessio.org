@@ -1,0 +1,139 @@
+#+TITLE: Explicit mutation targets outside session cwd must not abort
+#+STATE: DONE
+#+SESSION_ID: 14c0fcc47359b853
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T17-15-47-021Z_14c0fcc47359b853.jsonl]]
+#+CUSTOM_ID: BUG-308-explicit-mutation-targets-outside-sessio
+#+LAYER: backend, test
+
+* Initial Message
+
+The 4 subagents aborted with different "scope" failures. Reading their actual messages:
+
+ FEAT-243 + FEAT-241 (djinn work):
+
+ ▏ "session root is /home/user/code/ora/monorepo/apps/agentmaker, but FEAT-241 targets /home/user/code/ora/monorepo/packages/djinn"
+
+ → Task subagents are rooted at the app dir and can't write to sibling packages (packages/djinn is outside apps/agentmaker).
+
+ FEAT-240 (agentmaker-only, should have worked):
+
+ ▏ "Delegated quick_task agents also cannot write outside the sandboxed root"
+
+ → The task agent tried to subdelegate to quick_task agents per-file, and those quick_task subagents had narrower per-file sandboxes that
+ couldn't do the coordinated multi-file edit.
+
+ ∴ Two problems:
+ 1. Monorepo-cross-package scope — subagents can't reach packages/djinn from the agentmaker root.
+ 2. Nested delegation pattern — the task agent chose to fan out to quick_task agents instead of editing directly, and those inherited a
+ stricter sandbox.
+
+
+
+Please tell me if this type of scoping still exists, and if so, remove it by default
+
+* Scope
+In scope:
+- Preserve the parent session cwd / subagent cwd default exactly as-is.
+- Remove the failure mode where a delegated agent aborts solely because an explicitly targeted mutation path sits outside that cwd (for example, session cwd rooted at ~apps/agentmaker~ while the requested file lives in a sibling ~packages/djinn~ tree).
+- Fix the problem at the mutation boundary, not by re-rooting the whole session: code-edit root derivation, path normalization, and any task-level preflight assumptions that still treat outside-cwd explicit targets as invalid.
+- Add regression coverage for monorepo sibling-package targets.
+
+Out of scope:
+- Changing ~runSubprocess()~ / ~createAgentSession()~ to start subagents at repo root by default.
+- Broadening semantic grep / workspace-wide indexing rules for read-only tools.
+- Relaxing sandbox policy for implicit or unspecified paths.
+- Solving unrelated isolation/worktree behavior beyond what is necessary for explicit file-targeted mutations.
+
+Rationale: the user explicitly wants to keep parent-session context, but an explicit file target outside that cwd must still be writable when the assignment asks for it.
+
+* Existing Patterns
+- Task-level file scope is resolved relative to ~session.cwd~ in ~packages/coding-agent/src/task/index.ts:748-755~ and ~1170-1175~. This is correct for relative path resolution and should remain the parent-context basis.
+- Nested isolation already discovers repo root separately via ~packages/coding-agent/src/task/worktree.ts::getRepoRoot~; do not conflate that with subagent session cwd.
+- Code edit currently hardcodes ~options.root = params.root ? resolveFile(params.root) : sessionCwd~ in ~packages/coding-agent/src/tools/code.ts:702-745~. This is the most likely root-scoping choke point when explicit edit targets escape ~sessionCwd~.
+- The code tool already resolves absolute file targets, collects all edit files up front, and routes through a single native edit call. Existing tests live in ~packages/coding-agent/test/tools/code.test.ts~.
+- ~packages/coding-agent/src/tools/path-utils.ts::findCommonBasePath~ already computes a minimal common ancestor for multiple paths. Reuse an existing helper or an equivalent local helper; do not invent a second incompatible base-path algorithm.
+- Existing task isolation tests in ~packages/coding-agent/test/task/nested-isolation-default.test.ts~ show where task/root decisions are already covered.
+
+* Tests
+User workflows to defend:
+1. From a parent session rooted at a subdirectory of a monorepo, an explicit code edit targeting a sibling package file succeeds without requiring the session cwd to change.
+2. Relative explicit targets that traverse upward (for example ~../packages/djinn/src/foo.ts~) resolve correctly and do not trigger root-scope aborts.
+3. In-cwd edits still use the narrow session cwd root; the fix must not widen every code edit to repo root unnecessarily.
+4. Task-level delegation preserves parent-session context while still allowing explicit outside-cwd mutation targets to flow through successfully.
+5. If explicit targets span unrelated roots such that no meaningful shared workspace root exists, the tool should fail truthfully with a precise instruction (for example: split the edit or pass explicit ~root~), not with a misleading scope abort.
+
+Concrete test files / scenarios:
+- ~packages/coding-agent/test/tools/code.test.ts~
+  - when all edit targets are under ~session.cwd~, native ~root~ remains ~session.cwd~
+  - when an edit target is outside ~session.cwd~ but inside the same monorepo, native ~root~ widens to the minimal shared base needed for those explicit targets
+  - explicit ~params.root~ still wins over auto-derived widening
+  - if auto-derived common base collapses to an unusably broad root, return a truthful validation error instead of a native scope abort
+- ~packages/coding-agent/test/task/outside-session-cwd-targets.test.ts~ (new, or equivalent task-focused file)
+  - parent session cwd = monorepo app dir, child task references sibling package file in ~filesDeps~ and/or assignment
+  - dispatch reaches execution without quick preflight rejection
+  - code-edit path/root handling for the sibling-package target succeeds under the preserved parent-session cwd model
+
+* Implementation
+** Write cross-package regression tests first
+:PROPERTIES:
+:CUSTOM_ID: BUG-308-explicit-mutation-targets-outside-sessio::cross-package-regression-tests
+:END:
+- Add the code-tool and task-level regressions listed above before changing root derivation logic.
+- Use a temp monorepo fixture shaped like:
+  - ~repo/apps/agentmaker/~ (session cwd)
+  - ~repo/packages/djinn/src/...~ (explicit mutation target)
+- Satisfies workflows 1-5.
+
+** Derive code-edit root from explicit targets when needed
+:PROPERTIES:
+:CUSTOM_ID: BUG-308-explicit-mutation-targets-outside-sessio::derive-edit-root-from-targets
+:DEPENDS: BUG-308-explicit-mutation-targets-outside-sessio::cross-package-regression-tests
+:END:
+- File: ~packages/coding-agent/src/tools/code.ts~
+- Introduce a helper that selects the effective edit root:
+  1. explicit ~params.root~ wins
+  2. otherwise, if every edit target stays within ~session.cwd~, keep ~session.cwd~
+  3. otherwise derive the minimal meaningful common base for ~session.cwd + editFiles~ (reuse ~findCommonBasePath~ logic or equivalent)
+  4. if that base is too broad / ambiguous to be safe, fail with a clear validation error instructing the caller to split the edit or pass ~root~ explicitly
+- Keep file resolution itself unchanged; this is about native ~root~ scoping, not changing the requested target paths.
+- Satisfies workflows 1-3 and 5.
+
+** Preserve task-level parent-context behavior while allowing explicit outside-cwd targets
+:PROPERTIES:
+:CUSTOM_ID: BUG-308-explicit-mutation-targets-outside-sessio::preserve-parent-context
+:DEPENDS: BUG-308-explicit-mutation-targets-outside-sessio::derive-edit-root-from-targets
+:END:
+- Files: ~packages/coding-agent/src/task/index.ts~ and any touched task tests.
+- Do not change the default subagent/session cwd.
+- Verify any task-level validation, filesDeps propagation, and isolation-path plumbing continue to use parent-session context while no longer causing explicit sibling-package targets to abort downstream.
+- If a tiny helper or error-path cleanup is needed here, keep it minimal and tied to the regression tests.
+- Satisfies workflow 4.
+
+** Normalize user-facing failure reporting
+:PROPERTIES:
+:CUSTOM_ID: BUG-308-explicit-mutation-targets-outside-sessio::normalize-failure-reporting
+:DEPENDS: BUG-308-explicit-mutation-targets-outside-sessio::derive-edit-root-from-targets BUG-308-explicit-mutation-targets-outside-sessio::preserve-parent-context
+:END:
+- Files: ~packages/coding-agent/src/tools/code.ts~ and ~packages/coding-agent/src/tools/code-result.ts~ if needed.
+- Ensure impossible cross-root edits produce an honest, actionable message instead of a misleading “outside session root” / generic scope failure.
+- Satisfies workflow 5.
+
+* Edge Cases
+- Multi-file edits may mix in-cwd and outside-cwd files; derive one root that covers the explicit target set without gratuitously widening unrelated cases.
+- Explicit ~params.root~ must remain authoritative so advanced callers can still control scope themselves.
+- Display paths for outside-cwd files should stay truthful; avoid rewriting them into misleading pseudo-relative paths.
+- Do not accidentally broaden read-only semantic tools that intentionally reject outside-cwd workspace scope.
+- Isolation/worktree execution already has separate repo-root logic; do not duplicate or override it unless the regression tests prove a real dependency.
+
+* Acceptance Criteria
+- A delegated/code-driven edit of an explicit sibling-package file no longer aborts solely because the parent session cwd is narrower.
+- In-cwd edits retain the current narrow-root behavior.
+- Explicit ~root~ overrides still work.
+- Cross-root failures, when they still must fail, report the real reason and the recovery path.
+
+* Verification
+- ~bun test packages/coding-agent/test/tools/code.test.ts~
+- ~bun test packages/coding-agent/test/task/outside-session-cwd-targets.test.ts~ (or the exact task regression file chosen during implementation)
+- ~bun check:ts~
+
+NOTE [2026-04-19]: Implemented explicit outside-cwd edit root derivation without re-rooting sessions. Verified with bun test packages/coding-agent/test/task/outside-session-cwd-targets.test.ts and bun test packages/coding-agent/test/tools/code.test.ts.

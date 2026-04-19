@@ -1,0 +1,113 @@
+#+TITLE: SUBAGENT_SCOPE_DEFAULTS_REMOVAL_PLAN
+#+STATE: DONE
+#+SESSION_ID: 14c0fcc47359b853
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T17-15-47-021Z_14c0fcc47359b853.jsonl]]
+#+CUSTOM_ID: PLAN-273-subagent-scope-defaults-removal-plan
+#+LAYER: backend, test
+
+* Initial Message
+
+The 4 subagents aborted with different "scope" failures. Reading their actual messages:
+
+ FEAT-243 + FEAT-241 (djinn work):
+
+ ▏ "session root is /home/user/code/ora/monorepo/apps/agentmaker, but FEAT-241 targets /home/user/code/ora/monorepo/packages/djinn"
+
+ → Task subagents are rooted at the app dir and can't write to sibling packages (packages/djinn is outside apps/agentmaker).
+
+ FEAT-240 (agentmaker-only, should have worked):
+
+ ▏ "Delegated quick_task agents also cannot write outside the sandboxed root"
+
+ → The task agent tried to subdelegate to quick_task agents per-file, and those quick_task subagents had narrower per-file sandboxes that
+ couldn't do the coordinated multi-file edit.
+
+ ∴ Two problems:
+ 1. Monorepo-cross-package scope — subagents can't reach packages/djinn from the agentmaker root.
+ 2. Nested delegation pattern — the task agent chose to fan out to quick_task agents instead of editing directly, and those inherited a
+ stricter sandbox.
+
+
+
+Please tell me if this type of scoping still exists, and if so, remove it by default
+
+* Context
+
+User-reported failures split into 2 distinct default-policy defects:
+1. Bundled ~quick_task~ is still scope-restricted by default, and ~task~ still nudges workers toward nested ~quick_task~ fan-out. Repo evidence: ~packages/coding-agent/src/task/agents.ts:65-76~, ~packages/coding-agent/src/task/index.ts:731-746~, ~packages/coding-agent/src/prompts/agents/task.md:19-27~, ~packages/coding-agent/test/task/quick-task-scope.test.ts:100-200~.
+2. Explicit mutation targets outside ~session.cwd~ can still abort even when the parent session root must remain unchanged. Repo evidence: ~packages/coding-agent/src/task/index.ts:748-755,1170-1175~ and ~packages/coding-agent/src/tools/code.ts:702-745~.
+
+Settled decisions:
+1. Keep parent-session / subagent cwd default unchanged.
+2. Remove bundled ~quick_task~ scope restriction by default.
+3. Remove bundled ~task~ prompt’s default task→quick_task fan-out guidance.
+4. Preserve narrow scope as an explicit opt-in via ~scopeRestricted: true~, not as a bundled default.
+5. Fix outside-cwd aborts at the mutation boundary by deriving a truthful effective edit root from explicit targets, not by re-rooting sessions.
+6. Add regression tests at both task/prompt and code/task boundary levels before implementation.
+
+Recommended approach:
+- Execute [[id:BUG-307-bundled-quick-task-default-must-stop-for]] and [[id:BUG-308-explicit-mutation-targets-outside-sessio]].
+- Keep them parallel at the child-item level: one changes bundled agent defaults + prompts; the other changes explicit mutation-root derivation and outside-cwd task regressions.
+- Do full cutover: no compatibility shim that keeps bundled ~quick_task~ secretly narrow by default.
+
+Critical files:
+- ~packages/coding-agent/src/task/agents.ts~
+- ~packages/coding-agent/src/prompts/agents/task.md~
+- ~packages/coding-agent/src/prompts/agents/quick_task.md~
+- ~packages/coding-agent/src/task/index.ts~
+- ~packages/coding-agent/src/tools/code.ts~
+- ~packages/coding-agent/src/tools/code-result.ts~ (only if truthful outside-cwd errors need renderer/result cleanup)
+- ~packages/coding-agent/test/task/quick-task-scope.test.ts~
+- ~packages/coding-agent/test/task/outside-session-cwd-targets.test.ts~ (planned new regression)
+- ~packages/coding-agent/test/tools/code.test.ts~
+- ~packages/coding-agent/test/prompts/task-subagent-defaults.test.ts~ (planned new prompt regression)
+
+* Verification
+
+Plan-level proof required after execution:
+- ~bun test packages/coding-agent/test/task/quick-task-scope.test.ts~
+- ~bun test packages/coding-agent/test/task/outside-session-cwd-targets.test.ts~ (or exact equivalent regression file)
+- ~bun test packages/coding-agent/test/tools/code.test.ts~
+- ~bun test packages/coding-agent/test/prompts/task-subagent-defaults.test.ts~ (or exact equivalent prompt regression file)
+- ~bun check:ts~
+
+Manual/runtime proof:
+- From a session rooted at a monorepo app dir, dispatch a subagent that edits a sibling package file; it must no longer abort purely due to root/scope defaults.
+- Dispatch bundled ~quick_task~ without ~filesDeps~ in a mechanical edit scenario; it must no longer fail solely because the bundled default is narrow.
+- Dispatch an explicitly custom ~scopeRestricted: true~ agent without ~filesDeps~; it must still fail truthfully.
+
+* Execution Manifest
+
+** Wave 1 :wave:
+:PROPERTIES:
+:CUSTOM_ID: PLAN-273-subagent-scope-defaults-removal-plan::wave-1
+:END:
+
+No inter-item ~DEPENDS~ link exists between the 2 child items, so they execute in parallel.
+
+- [[id:BUG-307-bundled-quick-task-default-must-stop-for]] — remove bundled quick_task narrow-default + cut default nested quick_task fan-out guidance while preserving explicit opt-in scope restriction.
+- [[id:BUG-308-explicit-mutation-targets-outside-sessio]] — preserve parent-session cwd but stop explicit outside-cwd mutation targets from aborting by fixing code/task mutation-root derivation.
+
+** Completion [2026-04-19]
+*** Verification
+- `bun test packages/coding-agent/test/task/quick-task-scope.test.ts` → pass (8 tests)
+- `bun test packages/coding-agent/test/prompts/task-subagent-defaults.test.ts` → pass (3 tests)
+- `bun test packages/coding-agent/test/task/outside-session-cwd-targets.test.ts` → pass (2 tests)
+- `bun test packages/coding-agent/test/tools/code.test.ts` → pass (24 tests)
+- `bun check:ts` → pass (`biome check . && tsgo -p tsconfig.json`)
+
+*** Artifacts
+- [[file:packages/coding-agent/src/task/agents.ts]]
+- [[file:packages/coding-agent/src/prompts/agents/task.md]]
+- [[file:packages/coding-agent/src/prompts/agents/quick_task.md]]
+- [[file:packages/coding-agent/src/tools/code.ts]]
+- [[file:packages/coding-agent/src/tools/path-utils.ts]]
+- [[file:packages/coding-agent/test/task/quick-task-scope.test.ts]]
+- [[file:packages/coding-agent/test/prompts/task-subagent-defaults.test.ts]]
+- [[file:packages/coding-agent/test/task/outside-session-cwd-targets.test.ts]]
+- [[file:packages/coding-agent/test/tools/code.test.ts]]
+
+*** Deviations
+- None.
+
+NOTE [2026-04-19]: Executed BUG-307 and BUG-308; verification complete and completion report appended.
