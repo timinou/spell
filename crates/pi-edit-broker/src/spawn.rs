@@ -16,8 +16,6 @@ const CONNECT_PROBE: Duration = Duration::from_millis(150);
 const SPAWN_WAIT: Duration = Duration::from_secs(2);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 
-/// Return true when `socket` exists and accepts a connection within the probe
-/// budget.
 #[must_use]
 pub fn probe(socket: &Path) -> bool {
 	let _ = CONNECT_PROBE;
@@ -33,10 +31,6 @@ pub fn probe(socket: &Path) -> bool {
 	}
 }
 
-/// Resolve the broker binary, in precedence order:
-/// 1. env `PI_EDIT_BROKER_BIN`
-/// 2. sibling of the current executable
-/// 3. first `pi-edit-broker` on `PATH`
 #[must_use]
 pub fn resolve_binary() -> Option<PathBuf> {
 	if let Some(bin) = env::var_os("PI_EDIT_BROKER_BIN") {
@@ -64,8 +58,6 @@ pub fn resolve_binary() -> Option<PathBuf> {
 	None
 }
 
-/// Spawn the broker if `socket` is not already live. Waits up to 2s for the
-/// new broker's socket to appear. No-op when a broker is already running.
 pub fn spawn_broker_if_absent(socket: &Path, binary: Option<&Path>) -> Result<()> {
 	if probe(socket) {
 		return Ok(());
