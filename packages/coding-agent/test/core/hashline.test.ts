@@ -7,6 +7,7 @@ import {
 	HashlineMismatchError,
 	hashlineParseText,
 	parseTag,
+	resolveEditAnchors,
 	streamHashLinesFromLines,
 	streamHashLinesFromUtf8,
 	stripNewLinePrefixes,
@@ -873,6 +874,45 @@ describe("buildCompactHashlineDiffPreview", () => {
 		expect(preview.preview).toContain(` 3#${computeLineHash(3, "bravo")}|bravo`);
 		expect(preview.preview).toContain(` 4#${computeLineHash(4, "charlie")}|charlie`);
 		expect(preview.preview).not.toContain(` 2#${computeLineHash(2, "bravo")}|bravo`);
+	});
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// resolveEditAnchors
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("resolveEditAnchors", () => {
+	it("throws when prepend receives an unparseable raw anchor string", () => {
+		expect(() =>
+			resolveEditAnchors([
+				{
+					op: "prepend",
+					pos: "export interface CodeBufferResult { output: unknown; error: boolean; }",
+					lines: ["export interface CodeCoordInput {}"],
+				},
+			]),
+		).toThrow("Anchor strings must be valid hashline tags. Use `read` output for pos/end.");
+	});
+
+	it("throws when append receives an unparseable raw end anchor string", () => {
+		expect(() =>
+			resolveEditAnchors([
+				{
+					op: "append",
+					end: "export interface CodeBufferResult { output: unknown; error: boolean; }",
+					lines: ["export interface CodeCoordPosition {}"],
+				},
+			]),
+		).toThrow("Anchor strings must be valid hashline tags. Use `read` output for pos/end.");
+	});
+
+	it("preserves intentional anchorless append and prepend edits", () => {
+		expect(resolveEditAnchors([{ op: "append", lines: ["tail"] }])).toEqual([
+			{ op: "append", pos: undefined, lines: ["tail"] },
+		]);
+		expect(resolveEditAnchors([{ op: "prepend", lines: ["head"] }])).toEqual([
+			{ op: "prepend", pos: undefined, lines: ["head"] },
+		]);
 	});
 });
 

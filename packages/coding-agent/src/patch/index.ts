@@ -209,12 +209,17 @@ export type HashlineParams = Static<typeof hashlineEditParamsSchema>;
  *
  * Unknown ops default to "replace".
  */
-function resolveEditAnchors(edits: HashlineToolEdit[]): HashlineEdit[] {
+export function resolveEditAnchors(edits: HashlineToolEdit[]): HashlineEdit[] {
 	const result: HashlineEdit[] = [];
 	for (const edit of edits) {
 		const lines = hashlineParseText(edit.lines);
-		const tag = edit.pos ? tryParseTag(edit.pos) : undefined;
-		const end = edit.end ? tryParseTag(edit.end) : undefined;
+		const tag = edit.pos !== undefined ? tryParseTag(edit.pos) : undefined;
+		const end = edit.end !== undefined ? tryParseTag(edit.end) : undefined;
+		const hasRawAnchors = edit.pos !== undefined || edit.end !== undefined;
+
+		if (hasRawAnchors && tag === undefined && end === undefined) {
+			throw new Error("Anchor strings must be valid hashline tags. Use `read` output for pos/end.");
+		}
 
 		// Normalize op — default unknown values to "replace"
 		const op = edit.op === "append" || edit.op === "prepend" ? edit.op : "replace";
