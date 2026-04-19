@@ -22,7 +22,10 @@
 #![allow(clippy::trivially_copy_pass_by_ref, reason = "napi env idiom")]
 use std::sync::{Arc, OnceLock};
 
-use pi_code_engine::{buffer::BufferRegistry, language::LanguageRegistry};
+use pi_code_engine::{
+	BrokerEndpoint, SocketCoordClient, buffer::BufferRegistry, language::LanguageRegistry,
+	watcher::FileWatcher,
+};
 
 pub(crate) fn language_registry() -> Arc<LanguageRegistry> {
 	static LANGUAGE_REGISTRY: OnceLock<Arc<LanguageRegistry>> = OnceLock::new();
@@ -35,7 +38,14 @@ pub(crate) fn language_registry() -> Arc<LanguageRegistry> {
 
 pub(crate) fn buffer_registry() -> &'static BufferRegistry {
 	static BUFFER_REGISTRY: OnceLock<BufferRegistry> = OnceLock::new();
-	BUFFER_REGISTRY.get_or_init(|| BufferRegistry::new(language_registry()))
+	BUFFER_REGISTRY.get_or_init(|| {
+		let endpoint = BrokerEndpoint::default_for("napi".into());
+		BufferRegistry::new_with_coord(
+			language_registry(),
+			FileWatcher::new().ok(),
+			Arc::new(SocketCoordClient::new(endpoint)),
+		)
+	})
 }
 
 pub mod appearance;

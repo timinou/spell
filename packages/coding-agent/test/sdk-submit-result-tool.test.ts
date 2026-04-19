@@ -46,4 +46,28 @@ describe("createAgentSession submit_result activation", () => {
 			await session.dispose();
 		}
 	});
+
+	it("preserves todo_write in unrestricted sessions when submit_result is required", async () => {
+		const { session } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			sessionManager: SessionManager.inMemory(),
+			settings: Settings.isolated(),
+			model: getBundledModel("openai", "gpt-4o-mini"),
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			promptTemplates: [],
+			slashCommands: [],
+			enableMCP: false,
+			enableLsp: false,
+			requireSubmitResultTool: true,
+		});
+
+		try {
+			expect(session.getActiveToolNames()).toEqual(expect.arrayContaining(["todo_write", "submit_result"]));
+		} finally {
+			await session.dispose();
+		}
+	});
 });

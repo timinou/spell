@@ -1,0 +1,23 @@
+#+TITLE: Audit: implementation
+#+STATE: DOING
+#+CUSTOM_ID: AUD-071-audit-implementation
+#+LAYER: coding-agent
+
+* Source
+Manual audit
+
+* Findings
+- **What**: `task` prompt still hard-codes example tool names instead of describing only the session’s actual tool surface.
+  - **Where**: `packages/coding-agent/src/prompts/agents/task.md`, top intro (`Use the tools available in this session (edit, write, bash, grep, read, etc.)...`)
+  - **Why**: constrained `task` sessions can still receive mildly false capability guidance after this fix. It is the same prompt/runtime drift class that caused the original failure, just less severe.
+  - **Effort**: `trivial`
+
+- **What**: `todo_write` overlay gating is derived from requested child tools, not the child session’s final active tools.
+  - **Where**: `packages/coding-agent/src/task/executor.ts`, around `const todoWriteAvailable = ...` before `createAgentSession(...)`
+  - **Why**: if any later filter/path strips `todo_write` after this precheck, the overlay can become untruthful again and reintroduce an impossible contract. The current fix closes today’s path but leaves the invariant fragile.
+  - **Effort**: `small`
+
+- **What**: Regression tests do not cover the exact bundled-`task` failure path (`agent.tools === undefined` + `requireSubmitResultTool: true`).
+  - **Where**: `packages/coding-agent/test/sdk-submit-result-tool.test.ts` and `packages/coding-agent/test/task/executor-subagent-reminders.test.ts`
+  - **Why**: current coverage proves explicit-tool sessions and overlay branches, but not the original production path: bundled `task` → `runSubprocess()` → default child tool assembly. A future regression in default-tool construction could slip through while existing tests stay green.
+  - **Effort**: `small`

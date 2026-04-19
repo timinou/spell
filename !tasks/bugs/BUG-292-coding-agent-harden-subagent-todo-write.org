@@ -1,0 +1,123 @@
+#+TITLE: coding-agent: harden subagent todo_write overlay truthfulness and cover bundled-task default-tool path
+#+STATE: BLOCKED
+#+SESSION_ID: 14c07a46891b7447
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-45-39-364Z_14c07a46891b7447.jsonl]]
+#+CUSTOM_ID: BUG-292-coding-agent-harden-subagent-todo-write
+#+EFFORT: S
+#+LAYER: packages/coding-agent
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-071-audit-implementation:
+
+- **What**: `task` prompt still hard-codes example tool names instead of describing only the session’s actual tool surface.
+  - **Where**: `packages/coding-agent/src/prompts/agents/task.md`, top intro (`Use the tools available in this session (edit, write, bash, grep, read, etc.)...`)
+  - **Why**: constrained `task` sessions can still receive mildly false capability guidance after this fix. It is the same prompt/runtime drift class that caused the original failure, just less severe.
+  - **Effort**: `trivial`
+
+- **What**: `todo_write` overlay gating is derived from requested child tools, not the child session’s final active tools.
+  - **Where**: `packages/coding-agent/src/task/executor.ts`, around `const todoWriteAvailable = ...` before `createAgentSession(...)`
+  - **Why**: if any later filter/path strips `todo_write` after this precheck, the overlay can become untruthful again and reintroduce an impossible contract. The current fix closes today’s path but leaves the invariant fragile.
+  - **Effort**: `small`
+
+- **What**: Regression tests do not cover the exact bundled-`task` failure path (`agent.tools === undefined` + `requireSubmitResultTool: true`).
+  - **Where**: `packages/coding-agent/test/sdk-submit-result-tool.test.ts` and `packages/coding-agent/test/task/executor-subagent-reminders.test.ts`
+  - **Why**: current coverage proves explicit-tool sessions and overlay branches, but not the original production path: bundled `task` → `runSubprocess()` → default child tool assembly. A future regression in default-tool construction could slip through while existing tests stay green.
+  - **Effort**: `small`
+
+* Scope
+- In scope: three audit findings from AUD-071 that harden the PLAN-260 fix.
+  1. =task.md= line 3 still hard-codes example tool names parenthetically — same class of prompt/runtime drift that caused the original failure.
+  2. =executor.ts= computes =todoWriteAvailable= from requested =toolNames= before =createAgentSession()=, not from the session's final active tools — fragile invariant.
+  3. Regression tests only cover explicit-tool sessions but not the original production path: bundled =task= agent with =agent.tools === undefined= + =requireSubmitResultTool: true=.
+- Out of scope: changing quick_task prompt, changing createTools gating, altering plan-mode overlay, or any other PLAN-260 repair work (already done).
+- Boundary: strictly the three audit items and no other behavioral changes.
+
+* Existing Patterns
+- =packages/coding-agent/src/prompts/agents/task.md= line 3: ="Use the tools available in this session (edit, write, bash, grep, read, etc.) as needed to complete your task."=
+- =packages/coding-agent/src/task/executor.ts= around line 1162:
+  #+begin_src typescript
+  const todoWriteAvailable =
+      subagentSettings.get("todo.enabled") && (toolNames === undefined || toolNames.includes("todo_write"));
+  #+end_src
+  This is computed before =createAgentSession()=. The =systemPrompt= callback at line 1199 closes over this binding. After =createAgentSession= returns, =session.getActiveToolNames()= reflects the final resolved tool set. =session.refreshBaseSystemPrompt()= is available (line 1931 of =agent-session.ts=) and re-invokes the same callback, so updating a =let= binding and calling refresh is sufficient.
+- =packages/coding-agent/test/sdk-submit-result-tool.test.ts=: single test uses =toolNames: ["read", "todo_write"]= — covers explicit child tools but not the unrestricted/default path.
+- =packages/coding-agent/test/task/executor-subagent-reminders.test.ts=: overlay tests use =agent: { ...baseAgent, tools: ["read"] }= and =agent: { ...baseAgent, tools: ["read", "todo_write"] }= — explicit tool lists, never =tools: undefined=.
+
+* Tests
+- File: =packages/coding-agent/test/sdk-submit-result-tool.test.ts=
+  - Scenario: unrestricted session (no =toolNames=) with =requireSubmitResultTool: true= → active tools include =todo_write= and =submit_result=
+- File: =packages/coding-agent/test/task/executor-subagent-reminders.test.ts=
+  - Scenario: agent with undefined tools (=agent: { ...baseAgent }=) → overlay includes =todo_write= planning guidance (="You **MUST** use `todo_write` to plan tasks with 3+ steps."=)
+
+* Implementation
+** Remove tool-name examples from task.md
+:PROPERTIES:
+:CUSTOM_ID: BUG-292-coding-agent-harden-subagent-todo-write::remove-tool-examples
+:END:
+- File: =packages/coding-agent/src/prompts/agents/task.md=, line 3
+- Change: ="Use the tools available in this session (edit, write, bash, grep, read, etc.) as needed to complete your task."= → ="Use the tools available in this session as needed to complete your task."=
+- This eliminates the last false-capability prompt text in task agent prompts.
+- Satisfies: no test needed — existing =agents.test.ts= already asserts =task prompt keeps todo_write planning guidance= which is unaffected. Could optionally add negative assertion against hardcoded tool list.
+
+** Add unrestricted-session SDK test
+:PROPERTIES:
+:CUSTOM_ID: BUG-292-coding-agent-harden-subagent-todo-write::unrestricted-sdk-test
+:DEPENDS: BUG-292-coding-agent-harden-subagent-todo-write::remove-tool-examples
+:END:
+- File: =packages/coding-agent/test/sdk-submit-result-tool.test.ts=
+- Add test: ="preserves todo_write in unrestricted sessions with submit_result"=
+  - Session options: NO =toolNames= parameter, =requireSubmitResultTool: true=, other options same as existing test
+  - Assert: =session.getActiveToolNames()= includes =todo_write= AND =submit_result=
+  - This covers the exact bundled-task production path where =toolNames === undefined= and =submit_result= is injected.
+
+** Reconcile todoWriteAvailable after session creation
+:PROPERTIES:
+:CUSTOM_ID: BUG-292-coding-agent-harden-subagent-todo-write::reconcile-overlay
+:DEPENDS: BUG-292-coding-agent-harden-subagent-todo-write::unrestricted-sdk-test
+:END:
+- File: =packages/coding-agent/src/task/executor.ts=
+- Change =const todoWriteAvailable= → =let todoWriteAvailable=
+- After =const { session } = await createAgentSession(...)= returns (around line 1242), add:
+  #+begin_src typescript
+  const actualTodoWrite = session.getActiveToolNames().includes("todo_write");
+  if (actualTodoWrite !== todoWriteAvailable) {
+      todoWriteAvailable = actualTodoWrite;
+      await session.refreshBaseSystemPrompt();
+  }
+  #+end_src
+- This ensures the overlay is truthful even if =createTools= gating diverges from the precomputation.
+- Satisfies: existing overlay tests, plus the new default-tool-path test below.
+
+** Add unrestricted-agent overlay test
+:PROPERTIES:
+:CUSTOM_ID: BUG-292-coding-agent-harden-subagent-todo-write::unrestricted-overlay-test
+:DEPENDS: BUG-292-coding-agent-harden-subagent-todo-write::reconcile-overlay
+:END:
+- File: =packages/coding-agent/test/task/executor-subagent-reminders.test.ts=
+- Add test: ="includes todo_write overlay when agent has unrestricted tools"=
+  - Agent: =baseAgent= with NO =tools= field (=tools: undefined=)
+  - Assert: overlay text contains ="You **MUST** use `todo_write` to plan tasks with 3+ steps."= and does NOT contain ="`todo_write` is not available"=
+  - This covers the exact production path (bundled =task= → =runSubprocess= → =toolNames === undefined=).
+* Edge Cases
+- =todoWriteAvailable= reconciliation only triggers =refreshBaseSystemPrompt= when the pre/post values differ — zero cost in the common case.
+- When =toolNames === undefined= (unrestricted), =createTools= returns all allowed tools, so =todo_write= is present if =todo.enabled= is true in settings. The precomputed check already handles =toolNames === undefined= → =true=, so the reconciliation should not fire in the common case. It exists as a safety net for future filter additions.
+- If =todo.enabled= is false in settings AND =toolNames= includes =todo_write=, =createTools= strips it. The precomputed check already handles this since it checks =subagentSettings.get("todo.enabled")=. The reconciliation provides defense-in-depth.
+
+* Acceptance Criteria
+- =task.md= line 3 contains no parenthetical tool examples.
+- =bun test packages/coding-agent/test/sdk-submit-result-tool.test.ts= passes with both existing and new tests.
+- =bun test packages/coding-agent/test/task/agents.test.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts= passes with both existing and new tests.
+- =bun --cwd=packages/coding-agent run check= passes.
+
+** Execution Note [2026-04-19]
+- Implemented in working tree:
+  - Removed hard-coded task prompt tool examples from =packages/coding-agent/src/prompts/agents/task.md=.
+  - Reconciled =todoWriteAvailable= against =session.getActiveToolNames()= in =packages/coding-agent/src/task/executor.ts= and refresh the subagent base system prompt when the final tool surface differs.
+  - Added unrestricted-session coverage in =packages/coding-agent/test/sdk-submit-result-tool.test.ts=.
+  - Added unrestricted-tool overlay coverage in =packages/coding-agent/test/task/executor-subagent-reminders.test.ts= and updated the mock session helper to model final active tools.
+- Verification blocker:
+  - =bun test packages/coding-agent/test/sdk-submit-result-tool.test.ts= aborts with =SyntaxError: Export named 'getContextPressureSummaryText' not found in module '/home/user/code/ora/spell/packages/coding-agent/src/tools/context-pressure-policy.ts'.=
+  - =bun test packages/coding-agent/test/task/agents.test.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts= aborts on the same unrelated workspace error.
+  - =bun --cwd=packages/coding-agent run check= fails on pre-existing bash/context-pressure-policy/pi-natives export/type errors outside BUG-292 scope.
+- Local diagnostics on the changed executor/test files report no LSP diagnostics.

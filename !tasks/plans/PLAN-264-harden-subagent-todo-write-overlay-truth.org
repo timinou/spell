@@ -1,0 +1,63 @@
+#+TITLE: Harden subagent todo_write overlay truthfulness (AUD-071)
+#+STATE: BLOCKED
+#+SESSION_ID: 14c07a46891b7447
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-45-39-364Z_14c07a46891b7447.jsonl]]
+#+CUSTOM_ID: PLAN-264-harden-subagent-todo-write-overlay-truth
+#+LAYER: packages/coding-agent
+
+* Initial Message
+
+Implement these audit recommendations from org://AUD-071-audit-implementation:
+
+- **What**: `task` prompt still hard-codes example tool names instead of describing only the session’s actual tool surface.
+  - **Where**: `packages/coding-agent/src/prompts/agents/task.md`, top intro (`Use the tools available in this session (edit, write, bash, grep, read, etc.)...`)
+  - **Why**: constrained `task` sessions can still receive mildly false capability guidance after this fix. It is the same prompt/runtime drift class that caused the original failure, just less severe.
+  - **Effort**: `trivial`
+
+- **What**: `todo_write` overlay gating is derived from requested child tools, not the child session’s final active tools.
+  - **Where**: `packages/coding-agent/src/task/executor.ts`, around `const todoWriteAvailable = ...` before `createAgentSession(...)`
+  - **Why**: if any later filter/path strips `todo_write` after this precheck, the overlay can become untruthful again and reintroduce an impossible contract. The current fix closes today’s path but leaves the invariant fragile.
+  - **Effort**: `small`
+
+- **What**: Regression tests do not cover the exact bundled-`task` failure path (`agent.tools === undefined` + `requireSubmitResultTool: true`).
+  - **Where**: `packages/coding-agent/test/sdk-submit-result-tool.test.ts` and `packages/coding-agent/test/task/executor-subagent-reminders.test.ts`
+  - **Why**: current coverage proves explicit-tool sessions and overlay branches, but not the original production path: bundled `task` → `runSubprocess()` → default child tool assembly. A future regression in default-tool construction could slip through while existing tests stay green.
+  - **Effort**: `small`
+
+* Context
+- Source: audit findings from =AUD-071-audit-implementation= after PLAN-260 implementation.
+- Three remaining gaps in the subagent =todo_write= contract repair:
+  1. =task.md= line 3 still hard-codes example tool names parenthetically, same class of prompt/runtime drift that caused the original FEAT-236 abort.
+  2. =executor.ts= computes =todoWriteAvailable= from requested =toolNames= before =createAgentSession()=, not from the session's final resolved tools — fragile invariant if future filter paths strip =todo_write=.
+  3. Regression tests only cover explicit-tool sessions; the original production failure path (bundled =task= → =agent.tools === undefined= → =requireSubmitResultTool: true=) is uncovered.
+- All three are small/trivial fixes in a single child item.
+- Parent plan =PLAN-260-task-subagent-todo-write-contract-repair= is currently BLOCKED on unrelated workspace verification issues; this plan addresses only the audit gaps.
+* Verification
+- =bun test packages/coding-agent/test/sdk-submit-result-tool.test.ts= — passes with new unrestricted-session test.
+- =bun test packages/coding-agent/test/task/agents.test.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts= — passes with new overlay test.
+- =bun --cwd=packages/coding-agent run check= — clean TypeScript check.
+
+* Execution Manifest
+** Wave 1 — hardening                                                 :wave:
+- [[id:BUG-292-coding-agent-harden-subagent-todo-write]] — Remove prompt tool examples, reconcile overlay with final active tools, add default-tool-path regression tests. [S effort, no dependencies]
+
+** Completion [2026-04-19]
+*** Verification
+- =bun test packages/coding-agent/test/sdk-submit-result-tool.test.ts=
+  - Failed before the file's tests could run.
+  - Error: =SyntaxError: Export named 'getContextPressureSummaryText' not found in module '/home/user/code/ora/spell/packages/coding-agent/src/tools/context-pressure-policy.ts'.=
+- =bun test packages/coding-agent/test/task/agents.test.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts=
+  - Failed on the same unrelated workspace import error before full suite completion.
+  - Bun summary: =8 pass, 1 fail, 1 error=.
+- =bun --cwd=packages/coding-agent run check=
+  - Failed on pre-existing workspace export/type errors in bash/context-pressure-policy/pi-natives files outside this plan's scope.
+- LSP diagnostics
+  - =packages/coding-agent/src/task/executor.ts= → No diagnostics.
+  - =packages/coding-agent/test/sdk-submit-result-tool.test.ts= → No diagnostics.
+  - =packages/coding-agent/test/task/executor-subagent-reminders.test.ts= → No diagnostics.
+*** Artifacts
+- =artifact://14c0826d329b7448/main/bash/2.txt= — full output for =bun test packages/coding-agent/test/task/agents.test.ts packages/coding-agent/test/task/executor-subagent-reminders.test.ts=.
+- =artifact://14c0826d329b7448/main/bash/3.txt= — full output for =bun --cwd=packages/coding-agent run check=.
+*** Deviations
+- [[id:BUG-292-coding-agent-harden-subagent-todo-write]] remains BLOCKED because package-level verification is currently broken by unrelated workspace failures in pre-existing bash/context-pressure-policy/pi-natives changes.
+- No commit created. The implementation is present in the working tree, but the completion protocol forbids truthful closure without passing verification evidence.

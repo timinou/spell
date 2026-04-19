@@ -33,6 +33,8 @@ describe("bash churn policy", () => {
 
 	beforeEach(() => {
 		testDir = fs.mkdtempSync(path.join(os.tmpdir(), "bash-churn-policy-"));
+		fs.mkdirSync(path.join(testDir, ".spell/agent/sessions"), { recursive: true });
+		fs.writeFileSync(path.join(testDir, ".spell/agent/sessions/recent.jsonl"), "one\ntwo\nthree\n");
 		bashTool = wrapToolWithMetaNotice(new BashTool(createTestToolSession(testDir)));
 	});
 
@@ -85,10 +87,31 @@ describe("bash churn policy", () => {
 		expect(details?.meta?.contextPressure?.persistence).toBe("summary-only");
 	});
 
+	it("bypasses summary suppression for transcript spelunking with head opt-in", async () => {
+		const result = await bashTool.execute(
+			"call-4",
+			{ command: "cat ./.spell/agent/sessions/recent.jsonl", head: 2 },
+			undefined,
+			undefined,
+			{ hasUI: false } as never,
+		);
+		const text = result.content.find(block => block.type === "text")?.text ?? "";
+		const details = result.details as
+			| { meta?: { contextPressure?: { category?: string; persistence?: string } } }
+			| undefined;
+
+		expect(text).toContain("one");
+		expect(text).toContain("two");
+		expect(text).not.toContain("Raw output suppressed");
+		expect(text).not.toContain("low-signal status churn");
+		expect(details?.meta?.contextPressure?.category).toBe("transcript-spelunking");
+		expect(details?.meta?.contextPressure?.persistence).toBe("allow-raw");
+	});
+
 	it("keeps raw failure text for verification command errors", async () => {
 		await expect(
 			bashTool.execute(
-				"call-4",
+				"call-5",
 				{ command: "bun test --help >/dev/null; printf 'verification-failed\n' >&2; exit 1" },
 				undefined,
 				undefined,

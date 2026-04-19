@@ -523,6 +523,8 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const contextPressure = classifyContextPressure({
 			toolName: this.name,
 			params: { command: rawCommand },
+			head: headLines,
+			tail: tailLines,
 		});
 		const resultWithContextPressure = contextPressure
 			? {

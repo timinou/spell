@@ -1,28 +1,80 @@
 #+TITLE: PLAN remove bash transcript suppression
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c07d3b3e20db77
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-58-34-232Z_14c07d3b3e20db77.jsonl]]
 #+CUSTOM_ID: PLAN-263-plan-remove-bash-transcript-suppression
+#+LAYER: tool-runtime
 
-* Initial Message
+* Context
+The user reports that transcript-analysis bash calls are summarized as:
+- "Ran transcript-spelunking bash command ..."
+- "Raw output suppressed."
 
-┌─── ✔ Bash ────────────────────────────────────────────────────────────────────────────────────────────┐
- │ $ F=/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-19-22-953Z_14c0744312762edc.jsonl  │
- │ OUT=/tmp/msg_shape.txt                                                                                │
- │ {                                                                                                     │
- │   echo "--- message.role frequency ---"                                                               │
- │   jq -r 'select(.type=="message") | .message.role // "NONE"' "$F" | sort | uniq -c | sort -rn         │
- │   echo "--- content types per role ---"                                                               │
- │   jq -r 'select(.type=="message") | "\(.message.role)\t\((.message.content // []) | map(.type) |      │
- │ join(","))"' "$F" | sort | uniq -c | sort -rn | head -40                                              │
- │ } > "$OUT" 2>&1                                                                                       │
- │ echo DONE                                                                                             │
- ├─── Output ────────────────────────────────────────────────────────────────────────────────────────────┤
- │ Ran transcript-spelunking bash command                                                                │
- │ "F=/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-19-22-953Z_14c0744312762edc....".   │
- │ Raw                                                                                                   │
- │ output suppressed. Prefer compact transcript summaries; escalate to exact lines only when needed.     │
+Requested behavior:
+- Remove the explicit "Raw output suppressed" experience for this case.
+- Return a bounded raw chunk when the caller already chose chunk controls via bash tool options.
+- Keep the result customizable by normal tool-call options instead of forcing a summary-only transcript path.
 
+Verified code reality:
+- `packages/coding-agent/src/tools/context-pressure-policy.ts`
+  - `classifyBash()` marks transcript-spelunking commands as `presentation: "summary-first"`, `persistence: "deny-raw"`.
+  - Current summary sentence is `Ran transcript-spelunking bash command ... Raw output suppressed.`
+- `packages/coding-agent/src/tools/bash.ts`
+  - `applyHeadTail()` already supports bounded output chunks.
+  - `classifyContextPressure()` is currently called with only `{ command: rawCommand }`, so policy cannot see `head`/`tail` intent.
+  - Bash replaces final content with the policy summary only when `presentation === "summary-first"`.
+- `packages/coding-agent/src/prompts/tools/bash.md`
+  - Existing guidance already instructs callers to use `head`/`tail` instead of shell piping.
 
+Settled decisions:
+1. Keep default transcript-spelunking behavior compact-first when no explicit chunk options are provided.
+2. Treat explicit bash `head` or `tail` as user intent to receive a bounded raw chunk for transcript-spelunking commands.
+3. Implement the opt-in at the context-pressure classifier boundary, not by special-casing output formatting later.
+4. Preserve existing `applyHeadTail()` semantics; do not invent a second chunking path.
+5. `head: 0` and `tail: 0` do not count as chunk opt-in.
+6. Update tool guidance so future callers know that transcript/log spelunking can return bounded raw output when `head`/`tail` are set.
 
-this is stupid as fuck. please remove the 'Raw output suppressed' and just give a chunk that is customisable by the tool call options
+Recommended approach:
+- Wire `head` and `tail` into `classifyContextPressure()` from `BashTool.execute()`.
+- In `classifyBash()`, keep transcript-spelunking summary-first by default, but switch to `presentation: "inline"` + `persistence: "allow-raw"` when explicit non-zero chunk options are present.
+- Ensure the chunk-enabled path no longer emits the phrase `Raw output suppressed`.
+- Verify both policy-level classification and end-to-end bash tool output.
+
+Child work item:
+- [[id:BUG-291-bug-test-temporary]] — single bug item covering tests, classifier change, bash wiring, and prompt guidance.
+
+* Verification
+- Code-level verification:
+  - `packages/coding-agent/test/tools/context-pressure-policy.test.ts`
+    - Transcript command without chunk options stays `summary-first` / `deny-raw`.
+    - Transcript command with `head` or `tail` becomes `inline` / `allow-raw`.
+  - `packages/coding-agent/test/tools/bash-churn-policy.test.ts`
+    - End-to-end bash execution with transcript-spelunking + `head` returns bounded raw content instead of summary replacement.
+- Documentation verification:
+  - `packages/coding-agent/src/prompts/tools/bash.md` explicitly states that transcript/log spelunking can return bounded raw chunks when `head`/`tail` are set.
+- Manual proof after implementation:
+  - Re-run the reported transcript-analysis bash pattern with `head` or `tail` and confirm the tool result shows a bounded chunk rather than `Raw output suppressed`.
+
+* Execution Manifest
+** Wave 1 :wave:
+1. [[id:BUG-291-bug-test-temporary]] (depends: none, effort: 30-45m)
+   - Internal execution order from sub-outline dependencies:
+     1. `BUG-291-bug-test-temporary::tests-first`
+     2. `BUG-291-bug-test-temporary::policy-rule`
+     3. `BUG-291-bug-test-temporary::bash-pass`
+     4. `BUG-291-bug-test-temporary::doc-update`
+   - Reasoning:
+     - Tests first establish the opt-in contract before changing behavior.
+     - Policy change must land before bash execution can observe chunk intent.
+     - Prompt/docs update follows the behavioral contract so guidance matches shipped behavior.
+
+** Completion [2026-04-19]
+*** Verification
+- `bun test packages/coding-agent/test/tools/context-pressure-policy.test.ts packages/coding-agent/test/tools/bash-churn-policy.test.ts` → 14 pass, 0 fail.
+- Prompt guidance verified in `packages/coding-agent/src/prompts/tools/bash.md`: transcript/log spelunking stays summary-first by default, and explicit non-zero `head`/`tail` opts into bounded raw output while `head: 0` / `tail: 0` do not.
+- Manual proof: ran `bun /tmp/plan263-manual-proof.mjs`, then inspected `/tmp/plan263-manual-proof.json`; observed tool result text `one
+two` with context-pressure meta `category: transcript-spelunking`, `presentation: inline`, `persistence: allow-raw`, and no `Raw output suppressed` text.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-263-plan-remove-bash-transcript-suppression/manual-proof-transcript-head.json]]
+*** Deviations
+- None.

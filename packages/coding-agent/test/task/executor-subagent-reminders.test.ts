@@ -54,6 +54,7 @@ function createMockSession(
 		state: { messages: AssistantMessage[] };
 	}) => void,
 	model?: Model<Api>,
+	activeToolNames: string[] = ["read", "submit_result"],
 ): AgentSession {
 	const listeners: Array<(event: AgentSessionEvent) => void> = [];
 	const state = { messages: [] as AssistantMessage[] };
@@ -72,8 +73,9 @@ function createMockSession(
 		sessionManager: {
 			appendSessionInit: () => {},
 		},
-		getActiveToolNames: () => ["read", "submit_result"],
+		getActiveToolNames: () => activeToolNames,
 		setActiveToolsByName: async (_toolNames: string[]) => {},
+		refreshBaseSystemPrompt: async () => {},
 		subscribe: (listener: (event: AgentSessionEvent) => void) => {
 			listeners.push(listener);
 			return () => {
@@ -203,18 +205,22 @@ describe("runSubprocess submit_result reminders", () => {
 	});
 
 	it("keeps todo_write overlay guidance when the delegated toolset includes todo_write", async () => {
-		const session = createMockSession(({ emit }) => {
-			emit({
-				type: "tool_execution_end",
-				toolCallId: "tool-submit-result",
-				toolName: "submit_result",
-				result: {
-					content: [{ type: "text", text: "Result submitted." }],
-					details: { status: "success", data: { ok: true } },
-				},
-				isError: false,
-			});
-		});
+		const session = createMockSession(
+			({ emit }) => {
+				emit({
+					type: "tool_execution_end",
+					toolCallId: "tool-submit-result",
+					toolName: "submit_result",
+					result: {
+						content: [{ type: "text", text: "Result submitted." }],
+						details: { status: "success", data: { ok: true } },
+					},
+					isError: false,
+				});
+			},
+			undefined,
+			["read", "todo_write", "submit_result"],
+		);
 
 		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
 			session,
@@ -235,6 +241,47 @@ describe("runSubprocess submit_result reminders", () => {
 			| ((defaultBlocks: unknown[]) => unknown)
 			| undefined;
 		const overlay = renderPromptText(promptFactory?.([]));
+		expect(overlay).toContain("You **MUST** use `todo_write` to plan tasks with 3+ steps.");
+		expect(overlay).not.toContain("`todo_write` is not available in this delegated session.");
+	});
+
+	it("includes todo_write overlay when the agent has unrestricted tools", async () => {
+		const session = createMockSession(
+			({ emit }) => {
+				emit({
+					type: "tool_execution_end",
+					toolCallId: "tool-submit-result",
+					toolName: "submit_result",
+					result: {
+						content: [{ type: "text", text: "Result submitted." }],
+						details: { status: "success", data: { ok: true } },
+					},
+					isError: false,
+				});
+			},
+			undefined,
+			["read", "todo_write", "submit_result"],
+		);
+
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		await runSubprocess({
+			...baseOptions,
+			id: "subagent-overlay-unrestricted-tools",
+		});
+
+		const createAgentSessionMock = sdkModule.createAgentSession as unknown as {
+			mock: { calls: Array<[Record<string, unknown>]> };
+		};
+		const promptFactory = createAgentSessionMock.mock.calls.at(-1)?.[0]?.systemPrompt as
+			| ((defaultBlocks: unknown[]) => unknown)
+			| undefined;
+		const overlay = renderPromptText(promptFactory?.([]));
+		expect(createAgentSessionMock.mock.calls.at(-1)?.[0]?.toolNames).toBeUndefined();
 		expect(overlay).toContain("You **MUST** use `todo_write` to plan tasks with 3+ steps.");
 		expect(overlay).not.toContain("`todo_write` is not available in this delegated session.");
 	});

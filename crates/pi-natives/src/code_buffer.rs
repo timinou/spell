@@ -6,8 +6,9 @@ use std::{
 use napi::{Error, bindgen_prelude::*};
 use napi_derive::napi;
 use pi_code_engine::{
-	CodeEngineError,
+	CodeEngineError, JournalEntry, JournalReader, PeerEdit, PeerInfo, PeerState,
 	buffer::CodeBuffer,
+	default_journal_root,
 	edit::{
 		DragDirection, Occurrence, Patch, ReplacePolicy, SpliceMode, TextEdit, apply_patches,
 		clone_node, drag_node, insert_after, insert_after_symbol, insert_before,
@@ -15,6 +16,7 @@ use pi_code_engine::{
 		transpose_nodes, wrap_node,
 	},
 	file_lock::lock_status,
+	journal_path_for,
 	language::{LanguageId, LanguageProfile},
 	navigate::{NavigateAction, NavigateItem, NavigateResult, navigate as navigate_buffer},
 	outline::{EnrichFlags, OutlineEntry, outline as outline_buffer, read as read_buffer},
@@ -60,9 +62,21 @@ fn engine_err(error: pi_code_engine::error::CodeEngineError) -> Error {
 			"message": error.to_string(),
 			"path": path.display().to_string(),
 		}),
+		CodeEngineError::PeerConflict {
+			session, code_path, peer_revision, peer_commit_ts, ..
+		} => json!({
+			"code": "PEER_CONFLICT",
+			"message": error.to_string(),
+			"peerConflict": {
+				"sessionId": session,
+				"codePath": code_path,
+				"peerRevision": peer_revision,
+				"peerCommitTs": peer_commit_ts,
+			},
+		}),
 		_ => json!({ "message": error.to_string() }),
 	};
-	Error::from_reason(payload.to_string())
+	structured_err(payload)
 }
 fn json_err(message: impl Into<String>) -> Error {
 	Error::from_reason(message.into())
@@ -116,7 +130,113 @@ fn required_str<'a>(options: &'a Value, field: &str) -> Result<&'a str> {
 		.and_then(Value::as_str)
 		.ok_or_else(|| json_err(format!("Missing required field: {field}")))
 }
+fn session_id(options: &Value) -> Option<&str> {
+	options
+		.get("sessionId")
+		.and_then(Value::as_str)
+		.map(str::trim)
+		.filter(|session_id| !session_id.is_empty())
+}
 
+fn structured_err(payload: Value) -> Error {
+	Error::from_reason(payload.to_string())
+}
+
+fn missing_session_id_err() -> Error {
+	structured_err(json!({
+		"code": "MISSING_SESSION_ID",
+		"message": "Mutating code buffer commands require a non-empty sessionId",
+	}))
+}
+
+fn required_session_id<'a>(options: &'a Value) -> Result<&'a str> {
+	session_id(options).ok_or_else(missing_session_id_err)
+}
+
+fn command_requires_session(command: &str) -> bool {
+	matches!(command, "edit" | "replace_content" | "save")
+}
+
+fn coord_socket_path() -> PathBuf {
+	std::env::var_os("PI_EDIT_BROKER_SOCKET").map_or_else(
+		|| {
+			std::env::var_os("HOME").map_or_else(
+				|| PathBuf::from(".spell/edit-broker.sock"),
+				|home| PathBuf::from(home).join(".spell/edit-broker.sock"),
+			)
+		},
+		PathBuf::from,
+	)
+}
+
+fn coord_status_probe_path(options: &Value) -> PathBuf {
+	options
+		.get("file")
+		.or_else(|| options.get("path"))
+		.and_then(Value::as_str)
+		.map(PathBuf::from)
+		.or_else(|| std::env::current_dir().ok())
+		.unwrap_or_else(|| PathBuf::from("."))
+}
+
+fn render_coord_peer(peer: PeerInfo) -> Value {
+	json!({
+		"sessionId": peer.session_id,
+		"pid": peer.pid,
+		"cwd": peer.cwd.display().to_string(),
+		"projectName": peer.project_name,
+		"startedAt": peer.started_at,
+		"openFiles": peer.open_files.into_iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
+	})
+}
+
+fn render_coord_edit(edit: PeerEdit) -> Value {
+	json!({
+		"sessionId": edit.session_id,
+		"revision": edit.revision,
+		"codePaths": edit.code_paths,
+		"ts": edit.ts,
+	})
+}
+
+fn render_coord_journal_entry(entry: JournalEntry) -> Value {
+	json!({
+		"ts": entry.ts,
+		"sessionId": entry.session_id,
+		"pid": entry.pid,
+		"kind": entry.kind,
+		"revision": entry.revision,
+		"parentRevision": entry.parent_revision,
+		"codePaths": entry.code_paths,
+		"diffHash": entry.diff_hash,
+		"byteLen": entry.byte_len,
+	})
+}
+
+fn coord_status_output(path: &Path) -> Value {
+	let coord = buffer_registry().coord().clone();
+	let state: PeerState = coord.peer_state(path);
+	let warnings = coord.drain_warnings();
+	json!({
+		"brokerUp": warnings.is_empty(),
+		"peers": state.peers.into_iter().map(render_coord_peer).collect::<Vec<_>>(),
+		"socketPath": coord_socket_path().display().to_string(),
+	})
+}
+
+fn journal_entries_for(
+	path: &Path,
+	limit: usize,
+) -> std::result::Result<Vec<JournalEntry>, CodeEngineError> {
+	let journal_path = journal_path_for(&default_journal_root(), &workspace_root_for(path), path);
+	match JournalReader::tail(&journal_path, limit) {
+		Ok(entries) => Ok(entries),
+		Err(CodeEngineError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+			Ok(Vec::new())
+		},
+		Err(error) => Err(error),
+	}
+}
 fn has_meaningful_string(value: Option<&Value>) -> bool {
 	matches!(value.and_then(Value::as_str), Some(text) if !text.is_empty())
 }
@@ -347,7 +467,26 @@ fn first_operation_target_id(operations: &[Value]) -> &str {
 		.and_then(Value::as_str)
 		.unwrap_or("unknown")
 }
+fn collect_operation_code_paths(operation: &Value, paths: &mut BTreeMap<String, ()>) {
+	if let Some(target_id) = operation.get("targetId").and_then(Value::as_str) {
+		if let Ok((_, Some(symbol_path))) = parse_target_id(target_id) {
+			paths.insert(symbol_path, ());
+		}
+	}
+	if let Some(children) = operation.get("children").and_then(Value::as_array) {
+		for child in children {
+			collect_operation_code_paths(child, paths);
+		}
+	}
+}
 
+fn operation_code_paths(operations: &[Value]) -> Vec<String> {
+	let mut paths = BTreeMap::new();
+	for operation in operations {
+		collect_operation_code_paths(operation, &mut paths);
+	}
+	paths.into_keys().collect()
+}
 fn napi_error_payload(error: Error) -> Value {
 	let reason = error.to_string();
 	let payload = reason
@@ -1170,7 +1309,7 @@ fn render_diff_hunk(hunk: pi_code_engine::diff::DiffHunk) -> Value {
 	json!({ "oldStart": hunk.old_start, "oldCount": hunk.old_count, "newStart": hunk.new_start, "newCount": hunk.new_count, "kind": format!("{:?}", hunk.kind), "content": hunk.content })
 }
 
-fn execute_edit_command(options: &Value) -> Result<Value> {
+fn execute_edit_command(options: &Value, session_id: &str) -> Result<Value> {
 	let save_mode = edit_save_mode(options)?;
 	let requests = group_edit_requests(options)?;
 	let mut file_results = Vec::<EditFileResult>::new();
@@ -1182,7 +1321,7 @@ fn execute_edit_command(options: &Value) -> Result<Value> {
 		let file = request.path.display().to_string();
 		let created = !request.path.exists();
 		let target_id = first_operation_target_id(&request.operations).to_string();
-		let buffer = match buffer_registry().open_or_create(&request.path) {
+		let buffer_handle = match buffer_registry().open_or_create(&request.path) {
 			Ok(buffer) => buffer,
 			Err(error) => {
 				failure_count += 1;
@@ -1202,28 +1341,30 @@ fn execute_edit_command(options: &Value) -> Result<Value> {
 				continue;
 			},
 		};
-		let mut buffer = buffer.lock();
-		let profile = match get_profile(&request.path, buffer.language()) {
-			Ok(profile) => profile,
-			Err(error) => {
-				failure_count += 1;
-				file_results.push(EditFileResult {
-					file,
-					status: "failed".into(),
-					version: None,
-					diff: None,
-					edit_count: None,
-					created,
-					targets: Vec::new(),
-					proof: None,
-					persisted: false,
-					dirty: buffer.is_dirty(),
-					error: Some(napi_error_payload(error)),
-				});
-				continue;
-			},
+		let profile = {
+			let buffer = buffer_handle.lock();
+			match get_profile(&request.path, buffer.language()) {
+				Ok(profile) => profile,
+				Err(error) => {
+					failure_count += 1;
+					file_results.push(EditFileResult {
+						file,
+						status: "failed".into(),
+						version: None,
+						diff: None,
+						edit_count: None,
+						created,
+						targets: Vec::new(),
+						proof: None,
+						persisted: false,
+						dirty: buffer.is_dirty(),
+						error: Some(napi_error_payload(error)),
+					});
+					continue;
+				},
+			}
 		};
-		if buffer.language().as_str() == "text" {
+		if buffer_handle.lock().language().as_str() == "text" {
 			failure_count += 1;
 			file_results.push(EditFileResult {
 				file,
@@ -1235,7 +1376,7 @@ fn execute_edit_command(options: &Value) -> Result<Value> {
 				targets: Vec::new(),
 				proof: None,
 				persisted: false,
-				dirty: buffer.is_dirty(),
+				dirty: buffer_handle.lock().is_dirty(),
 				error: Some(json!({
 					"message": "Fallback text buffers do not support structured code edit operations. Use replace_content for whole-buffer writes.",
 				})),
@@ -1243,6 +1384,62 @@ fn execute_edit_command(options: &Value) -> Result<Value> {
 			continue;
 		}
 
+		if save_mode.persisted() {
+			let code_paths = operation_code_paths(&request.operations);
+			match buffer_registry().edit_transaction(
+				session_id,
+				&request.path,
+				&code_paths,
+				|buffer| {
+					let before = buffer.source();
+					let (targets, edit_count, proof) = apply_operations_transactionally(
+						buffer,
+						&profile,
+						&request.path,
+						&request.operations,
+					)?;
+					let diff = render_annotated_diff(buffer, &before, &profile);
+					Ok((targets, edit_count, proof, diff))
+				},
+			) {
+				Ok((transaction, (targets, edit_count, proof, diff))) => {
+					success_count += 1;
+					total_edit_count += edit_count;
+					file_results.push(EditFileResult {
+						file,
+						status: save_mode.success_status().into(),
+						version: Some(transaction.revision),
+						diff: Some(diff),
+						edit_count: Some(edit_count),
+						created,
+						targets,
+						proof,
+						persisted: true,
+						dirty: false,
+						error: None,
+					});
+				},
+				Err(error) => {
+					failure_count += 1;
+					file_results.push(EditFileResult {
+						file,
+						status: "failed".into(),
+						version: None,
+						diff: None,
+						edit_count: None,
+						created,
+						targets: Vec::new(),
+						proof: None,
+						persisted: false,
+						dirty: false,
+						error: Some(edit_error_payload(&target_id, error)),
+					});
+				},
+			}
+			continue;
+		}
+
+		let mut buffer = buffer_handle.lock();
 		let before = buffer.source();
 		match apply_operations_transactionally(
 			&mut buffer,
@@ -1252,59 +1449,21 @@ fn execute_edit_command(options: &Value) -> Result<Value> {
 		) {
 			Ok((targets, edit_count, proof)) => {
 				let diff = render_annotated_diff(&buffer, &before, &profile);
-				if save_mode.persisted() {
-					match buffer.save_with_watcher(buffer_registry().watcher()) {
-						Ok(()) => {
-							success_count += 1;
-							total_edit_count += edit_count;
-							file_results.push(EditFileResult {
-								file,
-								status: save_mode.success_status().into(),
-								version: Some(buffer.version()),
-								diff: Some(diff),
-								edit_count: Some(edit_count),
-								created,
-								targets,
-								proof,
-								persisted: true,
-								dirty: buffer.is_dirty(),
-								error: None,
-							});
-						},
-						Err(error) => {
-							failure_count += 1;
-							file_results.push(EditFileResult {
-								file,
-								status: "failed".into(),
-								version: Some(buffer.version()),
-								diff: Some(diff),
-								edit_count: Some(edit_count),
-								created,
-								targets,
-								proof,
-								persisted: false,
-								dirty: buffer.is_dirty(),
-								error: Some(napi_error_payload(engine_err(error))),
-							});
-						},
-					}
-				} else {
-					success_count += 1;
-					total_edit_count += edit_count;
-					file_results.push(EditFileResult {
-						file,
-						status: save_mode.success_status().into(),
-						version: Some(buffer.version()),
-						diff: Some(diff),
-						edit_count: Some(edit_count),
-						created,
-						targets,
-						proof,
-						persisted: false,
-						dirty: buffer.is_dirty(),
-						error: None,
-					});
-				}
+				success_count += 1;
+				total_edit_count += edit_count;
+				file_results.push(EditFileResult {
+					file,
+					status: save_mode.success_status().into(),
+					version: Some(buffer.version()),
+					diff: Some(diff),
+					edit_count: Some(edit_count),
+					created,
+					targets,
+					proof,
+					persisted: false,
+					dirty: buffer.is_dirty(),
+					error: None,
+				});
 			},
 			Err(error) => {
 				failure_count += 1;
@@ -1350,8 +1509,11 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 		.get("command")
 		.and_then(Value::as_str)
 		.ok_or_else(|| json_err("Missing required field: command"))?;
+	if command_requires_session(command) {
+		required_session_id(options)?;
+	}
 	if command == "edit" {
-		return execute_edit_command(options);
+		return execute_edit_command(options, required_session_id(options)?);
 	}
 
 	match command {
@@ -1460,6 +1622,37 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 				.collect();
 			Ok(json_response(json!({ "languages": langs }), false))
 		},
+		"coord_status" => {
+			let path = coord_status_probe_path(options);
+			Ok(json_response(coord_status_output(&path), false))
+		},
+		"coord_peer_activity" => {
+			let path = required_path(options)?;
+			let since_ms = options.get("sinceMs").and_then(Value::as_u64).unwrap_or(0);
+			let limit = value_to_usize(options.get("limit"), 16);
+			let edits = buffer_registry()
+				.coord()
+				.recent_peer_edits(&path, since_ms, limit);
+			Ok(json_response(
+				json!({
+					"file": path.display().to_string(),
+					"edits": edits.into_iter().map(render_coord_edit).collect::<Vec<_>>(),
+				}),
+				false,
+			))
+		},
+		"coord_journal_tail" => {
+			let path = required_path(options)?;
+			let limit = value_to_usize(options.get("limit"), 16);
+			let entries = journal_entries_for(&path, limit).map_err(engine_err)?;
+			Ok(json_response(
+				json!({
+					"file": path.display().to_string(),
+					"entries": entries.into_iter().map(render_coord_journal_entry).collect::<Vec<_>>(),
+				}),
+				false,
+			))
+		},
 		"outline" | "navigate" | "read" | "undo" | "redo" | "diff" | "replace_content" | "save" => {
 			let path = required_path(options)?;
 			let allow_missing = command == "replace_content";
@@ -1536,7 +1729,6 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 						))
 					}
 				},
-
 				"undo" => Ok(json_response(
 					render_optional_edit_result(buffer.undo().map_err(engine_err)?),
 					false,
@@ -1576,10 +1768,30 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 					))
 				},
 				"save" => {
-					buffer
-						.save_with_watcher(buffer_registry().watcher())
+					let session_id = required_session_id(options)?;
+					let source = buffer.source();
+					let code_paths = buffer
+						.last_revision_summary()
+						.map(|summary| summary.code_paths)
+						.unwrap_or_default();
+					drop(buffer);
+					let (transaction, ()) = buffer_registry()
+						.edit_transaction(session_id, &path, &code_paths, |fresh| {
+							let before = fresh.source();
+							if before == source {
+								return Ok(());
+							}
+							fresh
+								.edit_batch(vec![TextEdit {
+									start_byte:   0,
+									old_end_byte: before.len(),
+									new_text:     source.clone(),
+								}])
+								.map_err(|error| error)?;
+							Ok(())
+						})
 						.map_err(engine_err)?;
-					Ok(json_response(json!({ "success": true, "version": buffer.version() }), false))
+					Ok(json_response(json!({ "success": true, "version": transaction.revision }), false))
 				},
 				_ => unreachable!(),
 			}

@@ -1159,7 +1159,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const allCustomTools = [...mcpProxyTools, ...swarmTools, ...(options.customTools ?? [])];
 			const enableMCP = !options.mcpManager;
 			const { normalized: normalizedOutputSchema } = normalizeOutputSchema(outputSchema);
-			const todoWriteAvailable =
+			let todoWriteAvailable =
 				subagentSettings.get("todo.enabled") && (toolNames === undefined || toolNames.includes("todo_write"));
 			const MAX_SUBMIT_RESULT_RETRIES = 3;
 			const fallbackAttempts: StartupFallbackAttempt[] = [];
@@ -1243,6 +1243,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						activeSession = session;
 						progress.sessionId = session.sessionId;
 						progress.transcriptPath = sessionFile ?? undefined;
+						const actualTodoWrite = session.getActiveToolNames().includes("todo_write");
+						if (actualTodoWrite !== todoWriteAvailable) {
+							todoWriteAvailable = actualTodoWrite;
+							await session.refreshBaseSystemPrompt();
+						}
 
 						session.sessionManager.appendSessionInit({
 							systemPrompt: systemPromptText(session.agent.state.systemPrompt) ?? "",
