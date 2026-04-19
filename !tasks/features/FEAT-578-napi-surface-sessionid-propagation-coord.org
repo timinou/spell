@@ -1,5 +1,5 @@
 #+TITLE: NAPI surface: sessionId propagation + coord_* commands
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14bfce727e583e3c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
 #+CUSTOM_ID: FEAT-578-napi-surface-sessionid-propagation-coord
@@ -110,3 +110,5 @@ Order:
 - `bun check:ts` clean (new types compile; existing callers of `executeCodeBuffer` may surface type errors — those are resolved in FEAT-*E).
 - Sanity: `bun --cwd=packages/natives run build` succeeds.
 - No regression in existing `packages/natives/test/` suite for read-only commands.
+
+NOTE [2026-04-19]: Landed in-tree and verified during PLAN-269 closeout. Evidence: crates/pi-natives/src/lib.rs wires SocketCoordClient into the singleton BufferRegistry; crates/pi-natives/src/code_buffer.rs exposes coord_status / coord_peer_activity / coord_journal_tail and edit_transaction sessionId handling; packages/natives/src/code-buffer/types.ts carries sessionId + peerConflict types. Current tree verification 2026-04-19.

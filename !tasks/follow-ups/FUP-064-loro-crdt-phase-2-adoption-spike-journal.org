@@ -1,5 +1,5 @@
 #+TITLE: Loro CRDT phase-2 adoption spike: journal op[] to LoroText API mapping writeup
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c0b265a752cb07
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-50-51-293Z_14c0b265a752cb07.jsonl]]
 #+CUSTOM_ID: FUP-064-loro-crdt-phase-2-adoption-spike-journal
@@ -93,3 +93,5 @@ Writeup artifact (=specs/edit-coordination/loro-phase2-spike.md=) is itself the 
 - Recommendation is clearly stated: GO, NO-GO, or GO-WITH-CONDITIONS.
 - If GO, a skeleton follow-on plan outline is included (no item creation yet).
 - No production code changes; no new workspace dependencies.
+#+NOTE: 2026-04-19 verified `specs/edit-coordination/loro-phase2-spike.md` exists and covers the 9 required questions; outcome recorded as GO-WITH-CONDITIONS.
+#+NOTE: verification command(s): `read(path="specs/edit-coordination/loro-phase2-spike.md", offset=1, limit=260)` and `read(path="!tasks/follow-ups/FUP-064-loro-crdt-phase-2-adoption-spike-journal.org", offset=1, limit=220)`; outcome: writeup present, org item updated to DONE.

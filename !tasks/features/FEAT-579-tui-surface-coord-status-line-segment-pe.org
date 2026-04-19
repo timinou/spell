@@ -1,5 +1,5 @@
 #+TITLE: TUI surface: coord status-line segment + peer-activity preview footer
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bfce727e583e3c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
 #+CUSTOM_ID: FEAT-579-tui-surface-coord-status-line-segment-pe
@@ -98,3 +98,5 @@ Order:
 - `bun check:ts` clean.
 - Manual: two `spell` sessions in same dir; status-line of each shows `coord: 1 peer`. After one edits a file, the other's status-line shows the file path and elapsed time within 1s.
 - Manual conflict repro: agent triggers a peer conflict; TUI panel renders with structured fields; agent's retry message follows.
+
+NOTE [2026-04-19]: Landed in-tree and verified during PLAN-269 closeout. Evidence: packages/coding-agent/src/modes/components/status-line/segments.ts coordSegment with TTL cache + registration, packages/coding-agent/test/coord-segment.test.ts, and peer-activity footer rendering in packages/coding-agent/src/tools/code-result.ts. Current tree verification 2026-04-19.

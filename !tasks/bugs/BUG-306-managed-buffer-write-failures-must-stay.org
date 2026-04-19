@@ -1,10 +1,10 @@
 #+TITLE: Managed-buffer write failures must stay atomic before save and truthful after save
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c0b494b244d6d1
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T12-00-23-753Z_14c0b494b244d6d1.jsonl]]
 #+CUSTOM_ID: BUG-306-managed-buffer-write-failures-must-stay
 #+LAYER: packages/coding-agent,native
-#+DEPENDS: BUG-303-applymanagedbuffercontent-bypasses-callc
+#+DEPENDS: 
 
 * Initial Message
 
@@ -149,3 +149,14 @@ Concrete verification targets:
 - Any surfaced failure from `write` / migrated patch persistence implies no disk mutation.
 - Persisted writes with post-save invalidation problems surface as success plus warning/meta note.
 - Native + coding-agent regression tests above pass without weakening FEAT-585 shrink/parse guards.
+
+** Resolution [2026-04-19]
+- Fixed native file locking to use temp sidecar lock files so failed managed-buffer creates no longer materialize blank target files.
+- Managed-buffer whole-file persistence now returns success with `bufferInvalidationError` when bytes land and only the post-save close/invalidation step fails.
+- Updated write/edit caller rendering + regression coverage for truthful success-with-warning behavior and pre-save atomicity.
+- Verified with:
+  - `bun test packages/coding-agent/test/tools/managed-code-buffer-errors.test.ts`
+  - `bun test packages/coding-agent/test/tools/write-shrink-guard.test.ts`
+  - `bun test packages/coding-agent/test/tools.test.ts`
+  - `bun test packages/natives/test/code-buffer.test.ts`
+  - `bun check:ts`

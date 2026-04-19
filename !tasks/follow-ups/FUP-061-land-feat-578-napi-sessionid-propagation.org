@@ -1,5 +1,5 @@
 #+TITLE: Land FEAT-578 NAPI sessionId propagation + coord_* commands
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bfe497b90853e7
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T20-51-40-901Z_14bfe497b90853e7.jsonl]]
 #+CUSTOM_ID: FUP-061-land-feat-578-napi-sessionid-propagation
@@ -17,3 +17,5 @@ Per FEAT-578 spec:
 - coord_status, coord_peer_activity, coord_journal_tail NAPI commands
 - CodeErrorOutput.peerConflict?: structured payload
 - TS types + bindings in packages/natives/src/code-buffer/
+
+NOTE [2026-04-19]: Superseded by FEAT-578 landing already present in-tree during PLAN-269 closeout. Evidence follows FEAT-578 note: NAPI singleton wiring, coord_* commands, sessionId propagation, peerConflict types. Current tree verification 2026-04-19.
