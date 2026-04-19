@@ -71,7 +71,6 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			tools: ["read", "grep", "find", "edit", "write", "bash"],
 			model: "pi/subtask",
 			thinkingLevel: Effort.Minimal,
-			scopeRestricted: true,
 			roster: false,
 		},
 		template: quickTaskMd,

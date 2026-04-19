@@ -316,7 +316,7 @@ function buildBraceUnion(patterns: string[]): string | undefined {
 	return `{${uniquePatterns.join(",")}}`;
 }
 
-function findCommonBasePath(paths: string[]): string {
+export function findCommonBasePath(paths: string[]): string {
 	if (paths.length === 0) return ".";
 	let commonParts = path.resolve(paths[0]).split(path.sep);
 	for (const candidatePath of paths.slice(1)) {

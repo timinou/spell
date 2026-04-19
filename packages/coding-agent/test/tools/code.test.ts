@@ -680,3 +680,80 @@ it("leaves non-stale Error messages unchanged (regression guard)", async () => {
 	const staleWarns = warnSpy.mock.calls.filter(([msg]) => msg === "code tool stale module");
 	expect(staleWarns).toHaveLength(0);
 });
+
+it("derives edit roots from explicit params and cross-package targets", async () => {
+	const tool = new CodeTool(createSession({ cwd: "/repo/apps/agentmaker" }));
+
+	const explicitRootSpy = spyOn(nativesModule, "executeCodeBuffer").mockImplementation(options => {
+		if (options.command === "list") return { output: [], error: false };
+		return { output: { success: true }, error: false };
+	});
+	await tool.execute("tool", {
+		command: "edit",
+		root: "../../packages/djinn",
+		operations: [{ targetId: "src/foo.ts", actions: [{ kind: "write", content: "export const foo = 1;\n" }] }],
+	});
+	expect(explicitRootSpy.mock.calls.find(([call]) => call.command === "edit")?.[0]).toEqual(
+		expect.objectContaining({ root: "/repo/packages/djinn" }),
+	);
+	explicitRootSpy.mockRestore();
+
+	const inCwdSpy = spyOn(nativesModule, "executeCodeBuffer").mockImplementation(options => {
+		if (options.command === "list") return { output: [], error: false };
+		return { output: { success: true }, error: false };
+	});
+	await tool.execute("tool", {
+		command: "edit",
+		operations: [{ targetId: "src/local.ts", actions: [{ kind: "write", content: "export const local = true;\n" }] }],
+	});
+	expect(inCwdSpy.mock.calls.find(([call]) => call.command === "edit")?.[0]).toEqual(
+		expect.objectContaining({ root: "/repo/apps/agentmaker" }),
+	);
+	inCwdSpy.mockRestore();
+
+	const siblingSpy = spyOn(nativesModule, "executeCodeBuffer").mockImplementation(options => {
+		if (options.command === "list") return { output: [], error: false };
+		return { output: { success: true }, error: false };
+	});
+	await tool.execute("tool", {
+		command: "edit",
+		operations: [
+			{
+				targetId: "../../packages/djinn/src/foo.ts",
+				actions: [{ kind: "write", content: "export const foo = 1;\n" }],
+			},
+		],
+	});
+	expect(siblingSpy.mock.calls.find(([call]) => call.command === "edit")?.[0]).toEqual(
+		expect.objectContaining({
+			root: "/repo",
+			operations: expect.arrayContaining([expect.objectContaining({ targetId: "../../packages/djinn/src/foo.ts" })]),
+		}),
+	);
+	siblingSpy.mockRestore();
+});
+
+it("returns precise validation text for impossible cross-root edits", async () => {
+	const tool = new CodeTool(createSession({ cwd: "/repo/apps/agentmaker" }));
+	const executeSpy = spyOn(nativesModule, "executeCodeBuffer").mockImplementation(options => {
+		if (options.command === "list") return { output: [], error: false };
+		return { output: { success: true }, error: false };
+	});
+
+	const result = await tool.execute("tool", {
+		command: "edit",
+		operations: [
+			{ targetId: "src/local.ts", actions: [{ kind: "write", content: "export const local = true;\n" }] },
+			{
+				targetId: "/outside-repo/outside.ts",
+				actions: [{ kind: "write", content: "export const outside = true;\n" }],
+			},
+		],
+	});
+
+	const text = getText(result);
+	expect(text).toContain("Edit targets span multiple unrelated roots.");
+	expect(text).toContain("Split the edit into separate calls or pass an explicit root.");
+	expect(executeSpy.mock.calls.some(([call]) => call.command === "edit")).toBe(false);
+	executeSpy.mockRestore();
+});
