@@ -1,5 +1,5 @@
 #+TITLE: RELAX_TEXT_EDIT_COMPATIBILITY_AND_ADD_WRITE_DIAGNOSTICS
-#+STATE: DOING
+#+STATE: BLOCKED
 #+SESSION_ID: 14c079ab1753dbc3
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-43-00-189Z_14c079ab1753dbc3.jsonl]]
 #+CUSTOM_ID: PLAN-262-relax-text-edit-compatibility-and-add-wr
@@ -44,3 +44,19 @@ Recommended approach:
 ** Wave 1
 - [[id:BUG-290-relax-code-text-compatibility-notices-an]]
 - Outcome: remove stale =SPELL_ALLOW_TEXT_EDIT_ON_CODE= design, surface compatibility notices on text-tool code mutations, and add managed-buffer write diagnostics behind the existing setting.
+
+** Completion [2026-04-19]
+*** Verification
+- `bun test packages/coding-agent/test/tools.test.ts` -> PASS (61 pass, 1 skip).
+- `bun test packages/coding-agent/test/tools.test.ts -t "routes new TypeScript writes through the managed buffer|reports managed-buffer diagnostics for code-supported writes when enabled|should route code-supported files through the managed buffer"` -> PASS (3 pass, 59 filtered out).
+- `bun check:ts` -> FAIL due pre-existing Biome formatting issues in unrelated files `packages/natives/src/code-buffer/index.ts` and `packages/natives/src/code-buffer/types.ts`.
+- Clean detached worktree repro (`git worktree add --detach <tmp> HEAD && bun check:ts`) -> same FAIL at HEAD, proving the check failure is baseline drift outside this plan's file set.
+- `grep pattern="SPELL_ALLOW_TEXT_EDIT_ON_CODE" path="packages/coding-agent/src,packages/coding-agent/test,!tasks"` -> no matches.
+*** Artifacts
+- `artifact://14c07cb7be13dbc4/main/bash/2.txt` - full `bun check:ts` output from the active workspace.
+- `artifact://14c07cb7be13dbc4/main/bash/5.txt` - clean-worktree `bun check:ts` reproduction showing the same unrelated baseline failure.
+- `[[file:packages/coding-agent/src/tools/code-text-compatibility.ts]]` - shared compatibility notice helper used by edit/write success paths.
+*** Deviations
+- `bun check:ts` could not be made green inside this plan because HEAD already fails Biome formatting in unrelated `packages/natives/src/code-buffer/index.ts` and `packages/natives/src/code-buffer/types.ts`. Plan remains blocked on repository-baseline verification outside this plan's file set.
+
+NOTE [2026-04-19]: Implementation and focused tests are complete, but repository-wide bun check:ts is currently failing at HEAD because of unrelated packages/natives formatting drift. Plan remains blocked pending baseline verification recovery.

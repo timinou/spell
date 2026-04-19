@@ -1,5 +1,5 @@
 #+TITLE: Relax code-text compatibility notices and add write diagnostics
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14c079ab1753dbc3
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-43-00-189Z_14c079ab1753dbc3.jsonl]]
 #+CUSTOM_ID: BUG-290-relax-code-text-compatibility-notices-an
@@ -77,3 +77,5 @@ Concrete test files:
 - Non-code write behavior remains unchanged.
 - =bun test packages/coding-agent/test/tools.test.ts= passes.
 - =bun check:ts= passes.
+
+NOTE [2026-04-19]: Implemented code-supported edit/write compatibility notices, added managed-buffer write diagnostics helper behind lsp.diagnosticsOnWrite, and removed stale SPELL_ALLOW_TEXT_EDIT_ON_CODE references.
