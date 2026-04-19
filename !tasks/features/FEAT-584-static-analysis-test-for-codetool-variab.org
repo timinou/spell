@@ -1,5 +1,5 @@
 #+TITLE: Static analysis test for CodeTool variable scoping integrity
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c003268c584457
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T23-05-11-473Z_14c003268c584457.jsonl]]
 #+CUSTOM_ID: FEAT-584-static-analysis-test-for-codetool-variab
@@ -72,3 +72,17 @@ Additionally: use =Bun.Transpiler= to transpile code.ts and verify no errors.
 - Instantiate with mock session, call execute with "languages" command
 - Verify the result is a structured AgentToolResult, not a thrown error
 - Use =Bun.Transpiler= to independently verify code.ts transpiles cleanly
+
+** Completion [2026-04-18]
+*** Verification
+- Created =packages/coding-agent/test/tools/code-module-integrity.test.ts= with three scenarios:
+  - Module import: =CodeTool= and =CodeTool.prototype.execute= are defined (guards against ReferenceError at module load).
+  - Runtime smoke: =tool.execute("tool", { command: "languages" })= returns a structured =AgentToolResult= (mocks =executeCodeBuffer=); does not throw.
+  - Static transpile: =new Bun.Transpiler({ loader: "ts", target: "bun" })= transpiles =packages/coding-agent/src/tools/code.ts= source read from disk; =transformSync= returns a non-empty string and =scan()= yields import/export arrays.
+- Command: =bun test packages/coding-agent/test/tools/code-module-integrity.test.ts= → 3 pass / 0 fail.
+
+*** Artifacts
+- Test: =packages/coding-agent/test/tools/code-module-integrity.test.ts=
+
+*** Deviations
+- None.

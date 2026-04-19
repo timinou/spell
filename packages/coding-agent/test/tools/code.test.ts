@@ -654,6 +654,7 @@ it("leaves non-stale Error messages unchanged (regression guard)", async () => {
 		throw new Error("boom: native failure");
 	});
 	const warnSpy = spyOn(logger, "warn");
+	warnSpy.mockClear();
 	const tool = new CodeTool(createSession());
 	const result = await tool.execute("tool", { command: "languages" });
 	const text = getText(result);

@@ -1,5 +1,5 @@
 #+TITLE: Code tool stale-module error handling and integrity tests
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14c003268c584457
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T23-05-11-473Z_14c003268c584457.jsonl]]
 #+CUSTOM_ID: PLAN-258-code-tool-stale-module-error-handling-an
@@ -44,3 +44,20 @@ Both items are independent and can execute concurrently.
 
 - [[id:BUG-287-runtime-referenceerror-guard-in-codetool]] — Runtime ReferenceError guard in CodeTool.execute catch block
 - [[id:FEAT-584-static-analysis-test-for-codetool-variab]] — Static analysis test for CodeTool variable scoping integrity
+
+** Completion [2026-04-18]
+*** Verification
+- =bun test packages/coding-agent/test/tools/code.test.ts= → 22 pass / 0 fail (64 expect calls).
+- =bun test packages/coding-agent/test/tools/code-module-integrity.test.ts= → 3 pass / 0 fail (10 expect calls).
+- =bun test packages/coding-agent/test/tools/code.test.ts packages/coding-agent/test/tools/code-module-integrity.test.ts= (combined) → 25 pass / 0 fail.
+- =bun check:ts= → 2 pre-existing biome =assist/source/organizeImports= errors in =packages/coding-agent/src/task/executor.ts= and =packages/coding-agent/src/task/index.ts=. Both files are outside this plan's scope (not modified by BUG-287 or FEAT-584). No errors in =packages/coding-agent/src/tools/code.ts=, =packages/coding-agent/test/tools/code.test.ts=, or =packages/coding-agent/test/tools/code-module-integrity.test.ts=.
+
+*** Artifacts
+- Source guard: =packages/coding-agent/src/tools/code.ts= (=CodeTool.execute= catch block)
+- Runtime tests: =packages/coding-agent/test/tools/code.test.ts= (3 new =it= blocks at tail)
+- Integrity test: =packages/coding-agent/test/tools/code-module-integrity.test.ts=
+- Child reports: [[id:BUG-287-runtime-referenceerror-guard-in-codetool]], [[id:FEAT-584-static-analysis-test-for-codetool-variab]]
+
+*** Deviations
+- Pre-existing =bun check:ts= failures in =packages/coding-agent/src/task/executor.ts= and =packages/coding-agent/src/task/index.ts= were present at HEAD (commit 98005035d) before this plan's execution and are out of scope.
+- Most of the source and test changes were already captured by HEAD commit 98005035d =chore: committing just in case=. This execution finalized the plan by adding =packages/coding-agent/test/tools/code-module-integrity.test.ts=, a =warnSpy.mockClear()= in the non-stale regression test (isolates the assertion from accumulated Bun =spyOn= state), and the completion reports.
