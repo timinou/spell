@@ -782,6 +782,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			logicalId: taskItem.id,
 			executionId: uniqueIds[index] ?? taskItem.id,
 			blockers: taskItem.blockers,
+			filesDeps: taskItem.filesDeps,
 			...renderTemplate(params.context, taskItem),
 		}));
 		let batchGraph: BatchGraph;
@@ -1156,6 +1157,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const explicitIsolation = "isolated" in params ? params.isolated : undefined;
 		const isolationRequested = explicitIsolation === true;
 		const taskDepth = this.session.taskDepth ?? 0;
+		const resolvedTaskFilesDeps = params.tasks?.map(task => ({
+			...task,
+			filesDeps: task.filesDeps?.map(file => path.resolve(this.session.cwd, file)),
+		}));
 		const autoIsolationReason = (() => {
 			if (taskDepth < 1 || isolationMode === "none" || explicitIsolation !== undefined) return undefined;
 			if ((params.tasks?.length ?? 0) > 1) return "batch size";
@@ -1164,16 +1169,16 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			}
 			return undefined;
 		})();
-		const resolvedTaskFilesDeps = params.tasks?.map(task => ({
-			...task,
-			filesDeps: task.filesDeps?.map(file => path.resolve(this.session.cwd, file)),
-		}));
 		const isAutoIsolated = autoIsolationReason !== undefined;
 		const isIsolated = isolationMode !== "none" && (isolationRequested || isAutoIsolated);
 		const isolationDowngraded = isolationMode === "none" && isolationRequested;
 		const isolationDowngradeNotice = isolationDowngraded
 			? 'Task isolation was requested but task.isolation.mode="none"; running non-isolated. Set task.isolation.mode to worktree, fuse-overlay, or fuse-projfs to enable.'
 			: "";
+		const mergeMode = this.session.settings.get("task.isolation.merge");
+		const commitStyle = this.session.settings.get("task.isolation.commits");
+		const maxConcurrency = this.session.settings.get("task.maxConcurrency");
+		const cacheStaggerMs = this.session.settings.get("task.cacheStaggerMs") ?? 800;
 
 		// Validate agent exists
 		const agent = getAgent(agents, agentName);
@@ -1409,6 +1414,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				executionId: uniqueIds[index] ?? task.id,
 				blockers: task.blockers,
 				todoRef: task.todoRef,
+				filesDeps: task.filesDeps,
 				...renderTemplate(context, task),
 			}));
 			const availableSkills = [...(this.session.skills ?? [])];
@@ -1635,6 +1641,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				taskExecutions.map((taskExecution, index) => ({
 					id: taskExecution.logicalId,
 					blockers: taskExecution.blockers,
+					filesDeps: taskExecution.filesDeps,
 					run: runSignal => runTask(taskExecution, index, runSignal),
 				})),
 				{ maxConcurrency, signal, staggerMs: cacheStaggerMs },

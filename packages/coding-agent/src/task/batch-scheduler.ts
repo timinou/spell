@@ -3,6 +3,14 @@ import { SwarmScheduler } from "./swarm-scheduler";
 export interface BatchTask<T> {
 	id: string;
 	blockers?: string[];
+	/**
+	 * Absolute or cwd-relative paths this task may mutate. Two batch tasks
+	 * that declare overlapping filesDeps will not be in-flight concurrently,
+	 * independent of isolationMode. Tasks that declare no filesDeps are
+	 * treated as touching everything and serialize against all running
+	 * neighbors.
+	 */
+	filesDeps?: string[];
 	run: (signal: AbortSignal) => Promise<T>;
 }
 export interface BatchTaskResult<T> {
@@ -80,9 +88,9 @@ export async function scheduleBatch<T>(
 	const scheduler = new SwarmScheduler(
 		tasks.map(
 			task =>
-				[task.id, { kind: "work", status: "pending" } as const, task.blockers] as [
+				[task.id, { kind: "work", status: "pending", filesDeps: task.filesDeps } as const, task.blockers] as [
 					string,
-					{ kind: "work"; status: "pending" },
+					{ kind: "work"; status: "pending"; filesDeps?: string[] },
 					string[]?,
 				],
 		),
