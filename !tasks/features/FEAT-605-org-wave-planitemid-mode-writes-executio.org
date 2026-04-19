@@ -1,0 +1,150 @@
+#+TITLE: org wave planItemId mode writes Execution Manifest into PLAN body
+#+STATE: DONE
+#+SESSION_ID: 14c12170379e95ac
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T19-56-00-095Z_14c12170379e95ac.jsonl]]
+#+CUSTOM_ID: FEAT-605-org-wave-planitemid-mode-writes-executio
+#+DEPENDS: BUG-309-org-wave-loses-all-edges-engine-reads-bl FEAT-603-sub-outline-prefix-rewrite-covers-every FEAT-604-engine-flattens-sub-outlines-into-extrac
+#+LAYER: backend
+
+* Initial Message
+
+you need to show me how you will make the wave creation in plan/ultraplan to be about the subtasks of the files you wrote.
+
+That means you need that subtask-level CUSTOM_IDs (FEAT-XXX-long-title::task-slug) to be the basis of generating the wave. I would also like you to make sure that files are written with subtasks that have ITEM prefix and be fully representative of the work. That way, the plan actaully refers to in-task files and the wave planning is complete from the plan level.
+
+* Scope
+
+In-scope:
+- Extend org wave to accept a new planItemId argument.
+- When planItemId is provided AND manifest=true:
+  - Resolve the PLAN item.
+  - Extract the set of linked child item IDs from the PLAN body via extractIdLinks.
+  - Collect all linked children, read their sub-outline headings (now flattened by FEAT-604), and feed them to computeWaves.
+  - Emit a formatted "* Execution Manifest" section as ready-to-read org text.
+  - Atomically write this section into the PLAN body via the existing editSection native path: if "* Execution Manifest" already exists it is replaced; otherwise it is appended.
+  - Return the manifest text AND metadata: waves with items, warnings, wrote_to_plan boolean, plan file path.
+- Without planItemId (existing call shape): unchanged behavior.
+
+Out-of-scope:
+- Validator rules for PLAN body (separate FEAT).
+- exit_plan_mode wave handling (separate FEAT).
+- Prompt updates (separate FEAT).
+- Write paths other than Execution Manifest section.
+
+Rationale: the user requires the LLM to compose the manifest AND the tool to persist it directly. Per settled decision 4: "LLM composes; writes the formal sub-outline directly to the plan and outputs it to the LLM". Combining retrieval + persistence inside one tool call removes the manual copy-paste step and eliminates drift between computed and written manifest.
+
+* Existing Patterns
+
+- packages/org/src/tool.ts:
+  - cmdWave lines 948-973: collects items via collectItems(args), calls executeOrg({ command: "computeWaves" | "nextWave", items }), formats output.
+  - formatWaveManifest lines 937-946: formats Vec<ComputedWave> into org text with "** wave-N" headings and "- [[id:X]] title" bullets.
+  - collectItems lines 916-935: reads items from file or category via readOrgFile/readCategory.
+  - cmdUpdate section branch lines 495-557: already uses executeOrg editSection mode with replace or append modes to rewrite a heading's section.
+- packages/org/src/id-links.ts:
+  - extractIdLinks(body) returns unique IDs in first-seen order, accepts both top-level and sub-outline link formats.
+- packages/coding-agent/src/plan-mode/plan-validation.ts:
+  - resolvePlanItem(settings, projectRoot, id) resolves an item across categories. cmdWave cannot call this directly (different package); instead reuse the OrgContext + fetchItem helper pattern already present in packages/org/src/tool.ts.
+- packages/org/src/tool.ts fetchItem lines 283-294 is available.
+- crates/pi-natives/src/org_buffer.rs cmd_edit_section exists (executeOrg command "editSection") and supports mode "replace" / "append" with a section heading.
+
+Settled decision 4 constraint: LLM pastes full body, exit_plan_mode re-verifies — BUT here the user explicitly asked wave to WRITE the manifest into the plan directly AND output it to the LLM. Final interpretation: org wave mutates the PLAN's "* Execution Manifest" section in place, then returns the formatted text so the LLM confirms the write succeeded. exit_plan_mode later verifies the section content matches the recomputed graph (the user will own that verification via FEAT for validator).
+
+* Tests
+
+File: packages/org/test/cmd-wave-manifest-plan.test.ts (new).
+
+Integration scenarios (Bun tempdir fixtures):
+1. wave_plan_item_id_walks_linked_children — given a PLAN body with [[id:FEAT-A]] [[id:FEAT-B]] links and children that declare sub-outlines A::x, A::y, B::z, running org wave with manifest=true planItemId=PLAN-X computes waves with 3 sub-outline items. Return value waves key matches expected shape.
+2. wave_plan_item_writes_manifest_section — after the call, the PLAN file on disk contains a "* Execution Manifest" section with "** wave-1 :wave:" headings and bullets of the form "- [[id:FEAT-A::x]] title".
+3. wave_plan_item_replaces_existing_manifest — if the PLAN already has a stale "* Execution Manifest" section, it is replaced (not duplicated).
+4. wave_plan_item_appends_when_missing — if the PLAN has no existing "* Execution Manifest" section, it is appended to the end of the body.
+5. wave_plan_item_preserves_other_plan_sections — "* Context" and "* Verification" sections are untouched.
+6. wave_plan_item_returns_text_to_caller — the tool call's return value contains a manifest text field matching what was written to disk byte-for-byte (trailing newline tolerated).
+7. wave_plan_item_handles_plan_without_children — if the PLAN body has no [[id:...]] links, the tool returns a warning and does not write an empty manifest.
+8. wave_plan_item_sorts_waves_topologically — when child sub-outlines declare DEPENDS across children (FEAT-A::impl DEPENDS FEAT-B::types), the resulting waves put FEAT-B::types before FEAT-A::impl.
+9. wave_plan_item_renders_wave_tag — each "** wave-N" heading carries the ":wave:" tag on the same line, matching the existing extractPlanWaves parser in exit-plan-mode.ts lines 65-100.
+10. wave_without_plan_item_id_preserves_existing_behavior — legacy call with only category or file argument returns the pre-existing output shape (regression guard).
+
+Return-shape snapshot:
+11. wave_plan_item_return_envelope_shape — returned object contains keys: manifest (string), waves (array), warnings (array), total_sub_outlines (number), wrote_to_plan (boolean), plan_file (string), plan_item_id (string).
+
+* Implementation
+
+** ITEM Add integration tests for planItemId manifest flow
+:PROPERTIES:
+:CUSTOM_ID: FEAT-605-org-wave-planitemid-mode-writes-executio::manifest-tests
+:END:
+- File: packages/org/test/cmd-wave-manifest-plan.test.ts (new).
+- Add scenarios 1-11.
+- Use tempdir fixtures with fully-populated categories (plans, features) and a stub PLAN body with [[id:...]] links.
+- Must initially fail.
+
+** ITEM Extend orgSchema and cmdWave signature
+:PROPERTIES:
+:CUSTOM_ID: FEAT-605-org-wave-planitemid-mode-writes-executio::schema-extend
+:DEPENDS: FEAT-605-org-wave-planitemid-mode-writes-executio::manifest-tests
+:END:
+- File: packages/org/src/tool.ts (cmdWave signature and args plumbing)
+- File: packages/coding-agent/src/tools/org.ts (orgSchema Type.Object) — add planItemId: Type.Optional(Type.String({ description: "PLAN item CUSTOM_ID; when set with manifest=true, the tool writes Execution Manifest into the PLAN body and returns the text" })) and manifest: Type.Optional(Type.Boolean({ description: "Return the manifest text; when planItemId is set, also write into the PLAN body" })).
+- The coding-agent/src/tools/org.ts tool already passes params verbatim to the inner tool definition, so no further plumbing needed.
+- cmdWave now receives args: { file?: string; category?: string; manifest?: boolean; planItemId?: string }.
+
+** ITEM Implement planItemId resolution and sub-outline collection
+:PROPERTIES:
+:CUSTOM_ID: FEAT-605-org-wave-planitemid-mode-writes-executio::plan-resolve
+:DEPENDS: FEAT-605-org-wave-planitemid-mode-writes-executio::schema-extend
+:END:
+- File: packages/org/src/tool.ts
+- In cmdWave, add branch: if args.planItemId is set:
+  - Resolve the PLAN item via fetchItem(ctx, args.planItemId). If not found, return { error: true, code: "NOT_FOUND" }.
+  - Read the PLAN body, extract linked child IDs via extractIdLinks(planBody).
+  - For each child ID that is a top-level ID (parseSubOutlineId returns null), resolve via fetchItem and collect its items (all levels, now flattened per FEAT-604). Items list should include sub-outlines but NOT the top-level parent and NOT the file-level item.
+  - For each child ID that is a sub-outline ID, resolve its parent top-level item; include that sub-outline in the collected list (no duplicates).
+  - The aggregated items list feeds into executeOrg({ command: "computeWaves", items, doneStates: ["DONE"] }).
+- If the aggregated list is empty, return a warning and early exit without writing.
+
+** ITEM Write the Execution Manifest section via editSection
+:PROPERTIES:
+:CUSTOM_ID: FEAT-605-org-wave-planitemid-mode-writes-executio::write-manifest
+:DEPENDS: FEAT-605-org-wave-planitemid-mode-writes-executio::plan-resolve
+:END:
+- File: packages/org/src/tool.ts
+- After computing waves, call formatWaveManifest(waves) to produce the manifest text.
+- Annotate each "** wave-N" line to include the ":wave:" tag (existing formatWaveManifest does not add it — update formatter).
+- Call executeOrg({ command: "editSection", file: planItem.file, id: args.planItemId, section: "Execution Manifest", body: manifestText, mode: "replace", todoKeywords: ctx.config.todoKeywords }).
+- If the result reports section not found, retry with mode: "append".
+- Return structured envelope matching scenario 11's shape.
+
+** ITEM Preserve non-plan call behavior
+:PROPERTIES:
+:CUSTOM_ID: FEAT-605-org-wave-planitemid-mode-writes-executio::legacy-behavior
+:DEPENDS: FEAT-605-org-wave-planitemid-mode-writes-executio::write-manifest
+:END:
+- File: packages/org/src/tool.ts
+- If args.planItemId is undefined, the existing path (lines 948-973) remains; no changes.
+- Scenario 10 passes.
+
+* Edge Cases
+
+- PLAN body has no [[id:...]] links → return warning "no linked child items; manifest not written" and wrote_to_plan=false. Scenario 7.
+- PLAN has both top-level and sub-outline links mixed: both are accepted; sub-outline links imply their parent but the parent is not required to be linked separately (the manifest only needs to list sub-outline items). However, for discovery the validator (separate FEAT) will require parent links too — here we simply do not fail on missing top-level links.
+- Linked child file not found: the offending ID is added to warnings; other children proceed. wrote_to_plan still true if any waves computed.
+- editSection mode replace fails when the section does not exist: catch the NOT_FOUND error and fall through to mode: append. Scenarios 3 and 4.
+- Concurrent mutation of the PLAN file: editSection is atomic at the native layer (single edit_batch). No explicit locking needed beyond the existing createCategoryMutex which is not required here because editSection already serializes through the buffer.
+- Circular DEPENDS across sub-outlines: engine already reports cycles in warnings; manifest is still written with items excluded from waves. Scenario 8 variant: add warning assertion.
+- A DEPENDS value that references an ID not in the aggregated set: engine emits a warning; manifest still writes. Scenario: verify warning surfaces in the returned envelope.
+- Pathological huge wave counts: no hard limit; manifest text can grow. Acceptable — PLAN body should not be truncated.
+- doneStates=["DONE"] is fixed here; no support for custom lifecycle yet. Future extension.
+
+* Acceptance Criteria
+
+1. bun test packages/org green, including scenarios 1-11.
+2. Manual: in the repo, create a PLAN with two linked features each carrying two sub-outlines; run "org wave --manifest=true --planItemId=PLAN-XXX"; verify the PLAN file gains a "* Execution Manifest" section with four bullets across the correct waves.
+3. Manual: re-run the command with stale manifest present; verify replacement (no duplication, no cross-wave bleed).
+4. Return value includes manifest, waves, warnings, wrote_to_plan, plan_file, plan_item_id keys.
+5. bun check green across the workspace.
+6. No regression in existing org wave consumers: legacy call shape returns the same JSON shape as before.
+
+NOTE [2026-04-19]: Executing PLAN-274 wave 3: adding planItemId manifest generation/writing flow to org wave.
+
+NOTE [2026-04-19]: org wave now accepts planItemId + manifest mode, computes sub-outline waves from linked child items, writes/replaces the PLAN Execution Manifest, and preserves legacy behavior without planItemId. Verified with `bun test packages/org` and `bun check:ts`.

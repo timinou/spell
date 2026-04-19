@@ -591,7 +591,7 @@ describe("suboutline-add command", () => {
 		expect(result.suboutlineId).toBe("PROJ-040-parent::wire-types");
 		expect(result.file).toBe(filePath);
 		const content = await readFile(filePath);
-		expect(content).toContain("** Wire types");
+		expect(content).toContain("** ITEM Wire types");
 		expect(content).toContain(":CUSTOM_ID: PROJ-040-parent::wire-types");
 		expect(content).toContain(":DEPENDS: PROJ-040-parent::define-types");
 		expect(content).toContain(":LAYER: backend");
@@ -751,9 +751,10 @@ describe("mutation body responses", () => {
 			body: inputBody,
 		})) as Record<string, unknown>;
 
-		const expectedBody = `* Scope\n** Step\n:PROPERTIES:\n:CUSTOM_ID: ${String(result.id)}::define-types\n:END:`;
+		const expectedBody = `* Scope\n** ITEM Step\n:PROPERTIES:\n:CUSTOM_ID: ${String(result.id)}::define-types\n:END:`;
 		expect(result.body).toBe(expectedBody);
 		expect(result.bodyLength).toBe(expectedBody.length);
+		expect(result.suboutlineRewrites).toEqual({ "define-types": `${String(result.id)}::define-types` });
 		expect(await readFile(String(result.file))).toContain(expectedBody);
 	});
 

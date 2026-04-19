@@ -8,7 +8,7 @@ import { executeOrg } from "@oh-my-pi/pi-natives";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { findCategory, findCategoryForId, resolveCategories } from "./categories";
 import { generateId } from "./id-generator";
-import { parseSubOutlineId } from "./id-links";
+import { extractIdLinks, parseSubOutlineId } from "./id-links";
 import { KeyedMutex } from "./mutex";
 import { DEFAULT_ORG_CONFIG, REQUIRED_PROPERTIES } from "./schema/defaults";
 import { rewriteSubOutlineIds } from "./sub-outline-rewrite";
@@ -46,7 +46,13 @@ function buildSuboutlineBlock(args: {
 	depends?: string[];
 	layer?: string;
 }): string {
-	const lines = [`** ${args.title}`, ":PROPERTIES:", `:CUSTOM_ID: ${args.parentId}::${args.slug}`];
+	const heading =
+		args.title.match(/^(?:(?:TODO|ITEM|DOING|REVIEW|DONE|BLOCKED|CANCELLED)\b\s+)?(.*)$/)?.[1]?.trim() ?? args.title;
+	const lines = [
+		`** ${args.title.match(/^(?:TODO|ITEM|DOING|REVIEW|DONE|BLOCKED|CANCELLED)\b/) ? args.title : `ITEM ${heading}`}`,
+		":PROPERTIES:",
+		`:CUSTOM_ID: ${args.parentId}::${args.slug}`,
+	];
 	if ((args.depends?.length ?? 0) > 0) lines.push(`:DEPENDS: ${args.depends!.join(" ")}`);
 	if (args.layer) lines.push(`:LAYER: ${args.layer}`);
 	lines.push(":END:");
@@ -507,6 +513,7 @@ async function cmdUpdate(
 		}
 		const mode = args.body !== undefined ? "replace" : "append";
 		const body = args.body ?? args.append ?? "";
+		const rewrittenBody = rewriteSubOutlineIds(args.id, body).body;
 		const trySectionUpdate = async (filePath: string): Promise<Record<string, unknown> | null> => {
 			let result: ReturnType<typeof executeOrg>;
 			try {
@@ -515,7 +522,7 @@ async function cmdUpdate(
 					file: filePath,
 					id: args.id,
 					section: args.section,
-					body,
+					body: rewrittenBody,
 					mode,
 					todoKeywords: ctx.config.todoKeywords,
 				});
@@ -562,6 +569,7 @@ async function cmdUpdate(
 		};
 	}
 	const rewrittenBody = args.body === undefined ? undefined : rewriteSubOutlineIds(args.id, args.body).body;
+	const rewrittenAppend = args.append === undefined ? undefined : rewriteSubOutlineIds(args.id, args.append).body;
 	const tryUpdate = async (filePath: string): Promise<Record<string, unknown> | null> => {
 		let result: ReturnType<typeof executeOrg>;
 		try {
@@ -572,7 +580,7 @@ async function cmdUpdate(
 				state: args.state,
 				title: args.title,
 				body: rewrittenBody,
-				append: args.append,
+				append: rewrittenAppend,
 				note: args.note,
 				todoKeywords: ctx.config.todoKeywords,
 			});
@@ -934,11 +942,120 @@ async function collectItems(ctx: OrgContext, args: { file?: string; category?: s
 	return items;
 }
 
+async function collectPlanWaveItems(
+	ctx: OrgContext,
+	planItemId: string,
+): Promise<{ planItem?: OrgItem; items: OrgItem[]; warnings: string[]; notFound?: boolean }> {
+	const planItem = await fetchItem(ctx, planItemId);
+	if (!planItem) return { items: [], warnings: [], notFound: true };
+	const linkedIds = extractIdLinks(planItem.body ?? "");
+	if (linkedIds.length === 0) {
+		return { planItem, items: [], warnings: ["no linked child items; manifest not written"] };
+	}
+
+	const itemsById = new Map<string, OrgItem>();
+	const warnings: string[] = [];
+	for (const linkedId of linkedIds) {
+		const subOutline = parseSubOutlineId(linkedId);
+		if (subOutline) {
+			const parentItem = await fetchItem(ctx, subOutline.parentId);
+			if (!parentItem) {
+				warnings.push(`linked child not found: ${subOutline.parentId}`);
+				continue;
+			}
+			const parentItems = await readOrgFile({
+				filePath: parentItem.file,
+				category: parentItem.category,
+				dir: parentItem.dir,
+				todoKeywords: ctx.config.todoKeywords,
+				includeBody: false,
+			});
+			const target = parentItems.find(item => item.id === linkedId);
+			if (target) itemsById.set(target.id, target);
+			else warnings.push(`linked sub-outline not found: ${linkedId}`);
+			continue;
+		}
+
+		const childItem = await fetchItem(ctx, linkedId);
+		if (!childItem) {
+			warnings.push(`linked child not found: ${linkedId}`);
+			continue;
+		}
+		const childItems = await readOrgFile({
+			filePath: childItem.file,
+			category: childItem.category,
+			dir: childItem.dir,
+			todoKeywords: ctx.config.todoKeywords,
+			includeBody: false,
+		});
+		for (const item of childItems) {
+			if (item.level < 2) continue;
+			if (!item.id.startsWith(`${linkedId}::`)) continue;
+			itemsById.set(item.id, item);
+		}
+	}
+
+	return { planItem, items: [...itemsById.values()], warnings };
+}
+
+function manifestSectionBody(manifest: string): string {
+	const [heading, ...rest] = manifest.split("\n");
+	return heading === "* Execution Manifest" ? rest.join("\n") : manifest;
+}
+
+async function writeManifestSection(
+	ctx: OrgContext,
+	planItem: OrgItem,
+	planItemId: string,
+	manifest: string,
+): Promise<{ success: true } | { error: true; message: string }> {
+	const body = manifestSectionBody(manifest);
+	try {
+		const replaceResult = executeOrg({
+			command: "editSection",
+			file: planItem.file,
+			id: planItemId,
+			section: "Execution Manifest",
+			body,
+			mode: "replace",
+			todoKeywords: ctx.config.todoKeywords,
+		});
+		if (!replaceResult.error) return { success: true };
+		const replaceOutput = replaceResult.output as { code?: string; message?: string } | string;
+		if (typeof replaceOutput === "object" && replaceOutput?.code !== "SECTION_NOT_FOUND") {
+			return { error: true, message: replaceOutput.message ?? String(replaceResult.output) };
+		}
+	} catch (error) {
+		return { error: true, message: error instanceof Error ? error.message : String(error) };
+	}
+
+	try {
+		const appendResult = executeOrg({
+			command: "updateItem",
+			file: planItem.file,
+			id: planItemId,
+			append: `\n\n${manifest}`,
+			todoKeywords: ctx.config.todoKeywords,
+		});
+		if (!appendResult.error) return { success: true };
+		const appendOutput = appendResult.output as { message?: string } | string;
+		return {
+			error: true,
+			message:
+				typeof appendOutput === "object"
+					? (appendOutput.message ?? String(appendResult.output))
+					: String(appendOutput),
+		};
+	} catch (error) {
+		return { error: true, message: error instanceof Error ? error.message : String(error) };
+	}
+}
+
 function formatWaveManifest(waves: ComputedWave[]): string {
 	if (waves.length === 0) return "* Execution Manifest\n(No sub-outlines with dependencies found.)\n";
 	const lines: string[] = ["* Execution Manifest"];
 	for (const wave of waves) {
-		lines.push(`** wave-${wave.number}`);
+		lines.push(`** wave-${wave.number + 1} :wave:`);
 		for (const item of wave.items) lines.push(`- [[id:${item.custom_id}]] ${item.title}`);
 	}
 	lines.push("");
@@ -947,8 +1064,48 @@ function formatWaveManifest(waves: ComputedWave[]): string {
 
 async function cmdWave(
 	ctx: OrgContext,
-	args: { file?: string; category?: string; manifest?: boolean },
+	args: { file?: string; category?: string; manifest?: boolean; planItemId?: string },
 ): Promise<unknown> {
+	if (args.planItemId) {
+		const collected = await collectPlanWaveItems(ctx, args.planItemId);
+		if (collected.notFound || !collected.planItem) {
+			return { error: true, code: "NOT_FOUND", message: `Item not found: ${args.planItemId}` };
+		}
+		if (!args.manifest) {
+			return { error: true, code: "MANIFEST_REQUIRED", message: "planItemId requires manifest=true" };
+		}
+		if (collected.items.length === 0) {
+			return {
+				manifest: "",
+				waves: [],
+				warnings: collected.warnings,
+				total_sub_outlines: 0,
+				wrote_to_plan: false,
+				plan_file: collected.planItem.file,
+				plan_item_id: args.planItemId,
+			};
+		}
+		const raw = executeOrg({ command: "computeWaves", items: collected.items, doneStates: ["DONE"] });
+		if (raw.error) return raw.output;
+		const output = raw.output as {
+			waves?: ComputedWave[];
+			warnings?: string[];
+			total_sub_outlines?: number;
+		};
+		const manifest = formatWaveManifest(output.waves ?? []);
+		const writeResult = await writeManifestSection(ctx, collected.planItem, args.planItemId, manifest);
+		if ("error" in writeResult) return writeResult;
+		return {
+			manifest,
+			waves: output.waves ?? [],
+			warnings: [...collected.warnings, ...(output.warnings ?? [])],
+			total_sub_outlines: output.total_sub_outlines ?? collected.items.length,
+			wrote_to_plan: true,
+			plan_file: collected.planItem.file,
+			plan_item_id: args.planItemId,
+		};
+	}
+
 	const items = await collectItems(ctx, args);
 	const raw = executeOrg({
 		command: args.manifest ? "computeWaves" : "nextWave",
@@ -1108,6 +1265,7 @@ export function createOrgTool(
 						file: args.file as string | undefined,
 						category: args.category as string | undefined,
 						manifest: (args.manifest as boolean | undefined) ?? false,
+						planItemId: args.planItemId as string | undefined,
 					});
 				case "graph":
 					return cmdGraph(ctx, {

@@ -188,10 +188,96 @@ fn extract_headings(
 
 	loop {
 		let child = cursor.node();
-		if child.kind() == "section"
-			&& let Some(item) = extract_section_item(source, child, options)
-		{
-			items.push(item);
+		if child.kind() == "section" {
+			let mut descendants = Vec::new();
+			if let Some(item) = extract_section_item(source, child, options, &mut descendants) {
+				items.push(item);
+				items.extend(descendants);
+			} else {
+				items.extend(extract_descendant_items_from_section(source, child, options));
+			}
+		}
+		if !cursor.goto_next_sibling() {
+			break;
+		}
+	}
+}
+
+fn first_descendant_section_start(node: Node<'_>) -> Option<usize> {
+	let mut cursor = node.walk();
+	if !cursor.goto_first_child() {
+		return None;
+	}
+
+	let mut first = None;
+	loop {
+		let child = cursor.node();
+		let candidate = if child.kind() == "section" {
+			Some(child.start_byte())
+		} else {
+			first_descendant_section_start(child)
+		};
+		if let Some(start) = candidate {
+			first = Some(first.map_or(start, |current: usize| current.min(start)));
+		}
+		if !cursor.goto_next_sibling() {
+			break;
+		}
+	}
+	first
+}
+
+fn nested_body_text(source: &str, node: Node<'_>) -> String {
+	let end = first_descendant_section_start(node).unwrap_or_else(|| node.end_byte());
+	if end <= node.start_byte() {
+		String::new()
+	} else {
+		source[node.start_byte()..end].trim().to_string()
+	}
+}
+
+fn section_level(source: &str, section: Node<'_>, todo_keywords: &[&str]) -> Option<usize> {
+	let mut cursor = section.walk();
+	if !cursor.goto_first_child() {
+		return None;
+	}
+	let headline = cursor.node();
+	if headline.kind() != "headline" {
+		return None;
+	}
+	Some(parse_headline(source, headline, todo_keywords).0)
+}
+
+fn push_child_section_items(
+	source: &str,
+	node: Node<'_>,
+	options: &ExtractOptions<'_>,
+	parent_level: usize,
+	descendants: &mut Vec<OrgItem>,
+	children: &mut Vec<OrgItem>,
+) {
+	let mut cursor = node.walk();
+	if !cursor.goto_first_child() {
+		return;
+	}
+
+	loop {
+		let child = cursor.node();
+		if child.kind() == "section" {
+			if section_level(source, child, options.todo_keywords) == Some(parent_level + 1) {
+				let mut child_descendants = Vec::new();
+				if let Some(child_item) =
+					extract_section_item(source, child, options, &mut child_descendants)
+				{
+					descendants.push(child_item.clone());
+					descendants.extend(child_descendants);
+					children.push(child_item);
+				}
+			} else {
+				push_child_section_items(source, child, options, parent_level, descendants, children);
+			}
+		} else {
+			push_child_section_items(source, child, options, parent_level, descendants, children);
 		}
 		if !cursor.goto_next_sibling() {
 			break;
@@ -203,6 +289,7 @@ fn extract_section_item(
 	source: &str,
 	section: Node<'_>,
 	options: &ExtractOptions<'_>,
+	descendants: &mut Vec<OrgItem>,
 ) -> Option<OrgItem> {
 	let mut cursor = section.walk();
 	if !cursor.goto_first_child() {
@@ -225,22 +312,19 @@ fn extract_section_item(
 		match child.kind() {
 			"property_drawer" => extract_properties(source, child, &mut properties),
 			"body" => {
-				if options.include_body {
-					let text = node_text(source, child).trim().to_string();
-					if !text.is_empty() {
-						body_parts.push(text);
-					}
+				let text = nested_body_text(source, child);
+				if options.include_body && !text.is_empty() {
+					body_parts.push(text.clone());
 				}
-				for line in node_text(source, child).lines() {
+				for line in text.lines() {
 					if let Some(entry) = clock::parse_clock_line(line) {
 						clocks.push(entry);
 					}
 				}
+				push_child_section_items(source, child, options, level, descendants, &mut children);
 			},
 			"section" => {
-				if let Some(child_item) = extract_section_item(source, child, options) {
-					children.push(child_item);
-				}
+				push_child_section_items(source, child, options, level, descendants, &mut children);
 			},
 			_ => {
 				if options.include_body {
@@ -269,6 +353,18 @@ fn extract_section_item(
 	} else {
 		None
 	};
+	let (nested_children, nested_descendants) = extract_nested_items_from_text(
+		source,
+		section.start_byte(),
+		section.end_byte(),
+		headline.start_position().row + 1,
+		level,
+		options,
+	);
+	if !nested_children.is_empty() {
+		children = nested_children;
+		descendants.extend(nested_descendants);
+	}
 
 	Some(OrgItem {
 		id,
@@ -369,11 +465,276 @@ fn node_text<'a>(source: &'a str, node: Node<'_>) -> &'a str {
 	&source[node.byte_range()]
 }
 
+#[derive(Clone)]
+struct NestedItemNode {
+	item:          OrgItem,
+	child_indices: Vec<usize>,
+}
+
+fn parse_heading_line(line: &str, todo_keywords: &[&str]) -> Option<(usize, String, String)> {
+	let stars = line.chars().take_while(|ch| *ch == '*').count();
+	if stars == 0 || !line.get(stars..)?.starts_with(' ') {
+		return None;
+	}
+	let rest = line[stars..].trim();
+	let mut parts = rest.split_whitespace();
+	let first = parts.next().unwrap_or("");
+	if todo_keywords.contains(&first) {
+		let title = rest[first.len()..].trim().to_string();
+		Some((stars, first.to_string(), title))
+	} else {
+		Some((stars, String::new(), rest.to_string()))
+	}
+}
+
+fn parse_nested_properties(line: &str, properties: &mut HashMap<String, String>) {
+	if let Some(rest) = line.trim().strip_prefix(':')
+		&& let Some((key, value)) = rest.split_once(':')
+	{
+		let key = key.trim().to_string();
+		let value = value.trim().to_string();
+		if !key.is_empty() {
+			properties.insert(key, value);
+		}
+	}
+}
+
+fn extract_descendant_items_from_section(
+	source: &str,
+	section: Node<'_>,
+	options: &ExtractOptions<'_>,
+) -> Vec<OrgItem> {
+	let Some(parent_level) = section_level(source, section, options.todo_keywords) else {
+		return Vec::new();
+	};
+	let mut cursor = section.walk();
+	if !cursor.goto_first_child() {
+		return Vec::new();
+	}
+	let headline = cursor.node();
+	let (_, flat) = extract_nested_items_from_text(
+		source,
+		section.start_byte(),
+		section.end_byte(),
+		headline.start_position().row + 1,
+		parent_level,
+		options,
+	);
+	flat
+}
+
+fn extract_nested_items_from_text(
+	source: &str,
+	section_start: usize,
+	section_end: usize,
+	section_line: usize,
+	parent_level: usize,
+	options: &ExtractOptions<'_>,
+) -> (Vec<OrgItem>, Vec<OrgItem>) {
+	let section_text = &source[section_start..section_end];
+	let mut headings: Vec<(usize, usize, usize)> = Vec::new();
+	let mut byte_offset = 0usize;
+	for (line_no, segment) in (section_line..).zip(section_text.split_inclusive('\n')) {
+		let line = segment.trim_end_matches('\n');
+		if let Some((level, ..)) = parse_heading_line(line, options.todo_keywords)
+			&& level > parent_level
+		{
+			headings.push((level, section_start + byte_offset, line_no));
+		}
+		byte_offset += segment.len();
+	}
+	if headings.is_empty() {
+		return (Vec::new(), Vec::new());
+	}
+
+	let mut nodes = Vec::new();
+	for (index, (level, start_byte, start_line)) in headings.iter().enumerate() {
+		let end_byte = headings
+			.iter()
+			.skip(index + 1)
+			.find(|(next_level, ..)| *next_level <= *level)
+			.map_or(section_end, |(_, next_start, _)| *next_start);
+		let item_text = &source[*start_byte..end_byte];
+		let mut lines = item_text.split_inclusive('\n');
+		let Some(heading_line) = lines.next().map(|line| line.trim_end_matches('\n')) else {
+			continue;
+		};
+		let Some((item_level, state, title)) =
+			parse_heading_line(heading_line, options.todo_keywords)
+		else {
+			continue;
+		};
+		let mut properties = HashMap::new();
+		let mut body_lines = Vec::new();
+		let mut clocks = Vec::new();
+		let mut in_properties = false;
+		for raw_line in lines {
+			let line = raw_line.trim_end_matches('\n');
+			if let Some((next_level, ..)) = parse_heading_line(line, options.todo_keywords)
+				&& next_level > item_level
+			{
+				break;
+			}
+			if line.trim() == ":PROPERTIES:" {
+				in_properties = true;
+				continue;
+			}
+			if line.trim() == ":END:" {
+				in_properties = false;
+				continue;
+			}
+			if in_properties {
+				parse_nested_properties(line, &mut properties);
+				continue;
+			}
+			if options.include_body {
+				body_lines.push(line.to_string());
+			}
+			if let Some(entry) = clock::parse_clock_line(line) {
+				clocks.push(entry);
+			}
+		}
+		let custom_id = properties.get("CUSTOM_ID").cloned();
+		if state.is_empty() && custom_id.is_none() {
+			continue;
+		}
+		let body = if options.include_body {
+			let body = body_lines.join("\n").trim().to_string();
+			if body.is_empty() { None } else { Some(body) }
+		} else {
+			None
+		};
+		nodes.push(NestedItemNode {
+			item:          OrgItem {
+				id: custom_id.unwrap_or_default(),
+				title,
+				state,
+				category: options.category.to_string(),
+				dir: options.dir.to_string(),
+				file: options.file_path.to_string(),
+				line: *start_line,
+				level: item_level,
+				properties,
+				body,
+				clocks,
+				byte_range: (*start_byte, end_byte),
+				children: Vec::new(),
+			},
+			child_indices: Vec::new(),
+		});
+	}
+	if nodes.is_empty() {
+		return (Vec::new(), Vec::new());
+	}
+
+	let mut root_indices = Vec::new();
+	let mut stack: Vec<usize> = Vec::new();
+	for idx in 0..nodes.len() {
+		while let Some(last) = stack.last().copied() {
+			if nodes[last].item.level >= nodes[idx].item.level {
+				stack.pop();
+			} else {
+				break;
+			}
+		}
+		if let Some(parent_idx) = stack.last().copied() {
+			nodes[parent_idx].child_indices.push(idx);
+		} else {
+			root_indices.push(idx);
+		}
+		stack.push(idx);
+	}
+
+	fn build_nested_tree(
+		index: usize,
+		nodes: &[NestedItemNode],
+		flat: &mut Vec<OrgItem>,
+	) -> OrgItem {
+		let flat_index = flat.len();
+		flat.push(nodes[index].item.clone());
+		let mut item = nodes[index].item.clone();
+		item.children = nodes[index]
+			.child_indices
+			.iter()
+			.map(|child| build_nested_tree(*child, nodes, flat))
+			.collect();
+		flat[flat_index] = item.clone();
+		item
+	}
+
+	let mut flat = Vec::new();
+	let roots = root_indices
+		.iter()
+		.map(|index| build_nested_tree(*index, &nodes, &mut flat))
+		.collect();
+	(roots, flat)
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
 
 	const TODO_KEYWORDS: &[&str] = &["ITEM", "INIT", "DOING", "REVIEW", "BLOCKED", "DONE"];
+
+	fn extract_test_items(source: &str, include_body: bool) -> Vec<OrgItem> {
+		OrgBuffer::parse(source).unwrap().extract_items(
+			TODO_KEYWORDS,
+			"features",
+			"tasks",
+			"/feature.org",
+			include_body,
+		)
+	}
+
+	fn source_with_two_sub_outlines() -> &'static str {
+		concat!(
+			"#+TITLE: Parent file\n",
+			"#+CUSTOM_ID: FEAT-100\n",
+			"#+STATE: ITEM\n",
+			"\n",
+			"* ITEM Parent task\n",
+			":PROPERTIES:\n",
+			":CUSTOM_ID: FEAT-100-root\n",
+			":END:\n",
+			"Parent body.\n",
+			"** ITEM First child\n",
+			":PROPERTIES:\n",
+			":CUSTOM_ID: FEAT-100-root::first\n",
+			":END:\n",
+			"First child body.\n",
+			"** ITEM Second child\n",
+			":PROPERTIES:\n",
+			":CUSTOM_ID: FEAT-100-root::second\n",
+			":END:\n",
+			"Second child body.\n",
+		)
+	}
+
+	fn source_with_deep_sub_outline() -> &'static str {
+		concat!(
+			"#+TITLE: Parent file\n",
+			"#+CUSTOM_ID: FEAT-200\n",
+			"#+STATE: ITEM\n",
+			"\n",
+			"* ITEM Parent task\n",
+			":PROPERTIES:\n",
+			":CUSTOM_ID: FEAT-200-root\n",
+			":END:\n",
+			"Parent body.\n",
+			"** ITEM Child task\n",
+			":PROPERTIES:\n",
+			":CUSTOM_ID: FEAT-200-root::child\n",
+			":END:\n",
+			"Child task body.\n",
+			"*** ITEM Grand child\n",
+			":PROPERTIES:\n",
+			":CUSTOM_ID: FEAT-200-root::grand\n",
+			":END:\n",
+			"Grand child body.\n",
+			"** Plain note\n",
+			"No custom id here.\n",
+		)
+	}
 
 	#[test]
 	fn extract_heading_item() {
@@ -452,5 +813,89 @@ mod tests {
 		assert_eq!(from_wrapper[0].id, from_buffer[0].id);
 		assert_eq!(from_wrapper[0].title, from_buffer[0].title);
 		assert_eq!(from_wrapper[0].body, from_buffer[0].body);
+	}
+
+	#[test]
+	fn flatten_extracts_two_star_sub_outlines() {
+		let items = extract_test_items(source_with_two_sub_outlines(), false);
+		let ids: Vec<&str> = items.iter().map(|item| item.id.as_str()).collect();
+		assert_eq!(ids, vec![
+			"FEAT-100",
+			"FEAT-100-root",
+			"FEAT-100-root::first",
+			"FEAT-100-root::second"
+		]);
+	}
+
+	#[test]
+	fn flatten_preserves_level_and_deep_nodes() {
+		let items = extract_test_items(source_with_deep_sub_outline(), false);
+		assert_eq!(
+			items
+				.iter()
+				.find(|item| item.id == "FEAT-200-root")
+				.unwrap()
+				.level,
+			1
+		);
+		assert_eq!(
+			items
+				.iter()
+				.find(|item| item.id == "FEAT-200-root::child")
+				.unwrap()
+				.level,
+			2
+		);
+		assert_eq!(
+			items
+				.iter()
+				.find(|item| item.id == "FEAT-200-root::grand")
+				.unwrap()
+				.level,
+			3
+		);
+	}
+
+	#[test]
+	fn flatten_preserves_byte_ranges_and_children() {
+		let source = source_with_deep_sub_outline();
+		let items = extract_test_items(source, true);
+		let parent = items
+			.iter()
+			.find(|item| item.id == "FEAT-200-root")
+			.unwrap();
+		let grand_child = items
+			.iter()
+			.find(|item| item.id == "FEAT-200-root::grand")
+			.unwrap();
+		assert_eq!(parent.children.len(), 1);
+		assert_eq!(parent.children[0].children.len(), 1);
+		assert!(
+			source[grand_child.byte_range.0..grand_child.byte_range.1]
+				.starts_with("*** ITEM Grand child")
+		);
+	}
+
+	#[test]
+	fn flatten_skips_plain_notes_and_propagates_metadata() {
+		let items = extract_test_items(source_with_deep_sub_outline(), false);
+		assert!(!items.iter().any(|item| item.title == "Plain note"));
+		let child = items
+			.iter()
+			.find(|item| item.id == "FEAT-200-root::child")
+			.unwrap();
+		assert_eq!(child.category, "features");
+		assert_eq!(child.dir, "tasks");
+		assert_eq!(child.file, "/feature.org");
+	}
+
+	#[test]
+	fn flatten_body_populated_when_requested() {
+		let items = extract_test_items(source_with_deep_sub_outline(), true);
+		let child = items
+			.iter()
+			.find(|item| item.id == "FEAT-200-root::child")
+			.unwrap();
+		assert_eq!(child.body.as_deref(), Some("Child task body."));
 	}
 }

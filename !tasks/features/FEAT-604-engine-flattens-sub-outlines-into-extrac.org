@@ -1,0 +1,151 @@
+#+TITLE: Engine flattens sub-outlines into extract_items_from_buffer output
+#+STATE: DONE
+#+SESSION_ID: 14c12170379e95ac
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T19-56-00-095Z_14c12170379e95ac.jsonl]]
+#+CUSTOM_ID: FEAT-604-engine-flattens-sub-outlines-into-extrac
+#+DEPENDS: BUG-309-org-wave-loses-all-edges-engine-reads-bl
+#+LAYER: backend
+
+* Initial Message
+
+you need to show me how you will make the wave creation in plan/ultraplan to be about the subtasks of the files you wrote.
+
+That means you need that subtask-level CUSTOM_IDs (FEAT-XXX-long-title::task-slug) to be the basis of generating the wave. I would also like you to make sure that files are written with subtasks that have ITEM prefix and be fully representative of the work. That way, the plan actaully refers to in-task files and the wave planning is complete from the plan level.
+
+* Scope
+
+In-scope:
+- extract_items_from_buffer walks the full heading tree and emits every heading that has a CUSTOM_ID as a top-level entry in the returned Vec.
+- Preserve the existing level field so callers can distinguish file-level (0), top-level (1), and sub-outline (2+).
+- The parent-child relationship for drill-down display is still accessible via OrgItem.children; the flattened list is additive, not replacement.
+- Every consumer (cmdQuery, cmdWave, cmdGraph, cmdGet, cmdDashboard) continues to receive the semantics it expects. cmdQuery applies the existing level=0 filter so its output does not change. cmdWave/cmdGraph/cmdDashboard will see all headings and must filter explicitly where appropriate.
+- Rust unit tests covering flatten output, level preservation, children still populated, byte_range still accurate for sub-outlines.
+- TS-side adjustments in cmdQuery and cmdDashboard to preserve pre-flatten output shape via explicit level filters.
+
+Out-of-scope:
+- Wave manifest generation logic (separate FEAT depends on this).
+- Sub-outline write-path or rewrite semantics (separate FEAT).
+- Prompt updates.
+
+Rationale: user requires waves to be generated at sub-outline granularity. Today, extract_items_from_buffer returns file-level + top-level items only; sub-outlines are nested inside OrgItem.children (see buffer.rs lines 241-243, extract_section_item recurses and pushes into children Vec rather than the outer items Vec). Graph algorithms operate on the outer Vec and never see sub-outlines. Flattening at the engine is the canonical place because every NAPI consumer goes through this function. Per settled decision 1.
+
+* Existing Patterns
+
+- crates/pi-org-engine/src/buffer.rs:
+  - extract_items_from_buffer(buffer, todo_keywords, category, dir, file_path, include_body) returns Vec<OrgItem>. Lines 86-107.
+  - extract_file_level_item constructs the level-0 item. Lines 109-176.
+  - extract_headings walks root-level sections and calls extract_section_item for each. Lines 178-200.
+  - extract_section_item recurses: for each child "section" node, it calls extract_section_item again and pushes into children Vec on the current item. Lines 202-288. Sub-outlines never bubble up to the outer caller.
+- crates/pi-org-engine/src/item.rs:
+  - OrgItem has level field (0 for file, 1+ for headings) and children Vec<Self> field.
+- crates/pi-natives/src/org_buffer.rs:
+  - parse_items_from_options delegates to extract_items_from_source; return value is handed to cmdGraph, cmdComputeWaves, cmdNextWave, cmdConnectedComponents verbatim.
+- packages/org/src/tool.ts:
+  - cmdQuery at line 435 applies applyFilter with level=0 forced: filter.level === undefined falls through to the { level: 0, ...merged } default at applyFilter call site. Relies on top-level-only semantics.
+  - cmdDashboard (around line 770+) iterates items and counts by state; expects one item per file (top-level).
+  - cmdGet (around line 440) resolves by id; already supports sub-outline id lookup via parseSubOutlineId and scans within the parent's items.
+
+Settled decision 1: flatten engine-side — one source of truth, fixes every consumer.
+
+* Tests
+
+File: crates/pi-org-engine/src/buffer.rs (#[cfg(test)] mod tests — add if missing).
+
+Rust scenarios:
+1. flatten_extracts_two_star_sub_outlines — parse a source with one top-level heading containing two sub-outline headings with CUSTOM_ID properties; result Vec contains file-level + top-level + two sub-outlines (4 items).
+2. flatten_preserves_level — each flattened item reports its heading-level correctly (1 for top, 2 for sub, 3 for grand-child).
+3. flatten_preserves_byte_range — each sub-outline's byte_range points at its own section bytes, not its parent's.
+4. flatten_preserves_children_vec — the top-level item still has its children populated (non-breaking backward compat).
+5. flatten_skips_headings_without_custom_id_and_without_state — matches existing top-level rule (return None when no id and no state).
+6. flatten_includes_three_level_deep_sub_outline — grand-child (level 3) also appears in the flat Vec.
+7. flatten_category_dir_file_propagation — category/dir/file fields propagate to sub-outline items identically to the top-level.
+8. flatten_body_populated_when_requested — include_body=true produces a body per sub-outline from only that section's bytes, not its parent.
+
+File: crates/pi-org-engine/src/graph.rs — wave integration test already covered by BUG-309's regression test (compute_waves_respects_depends_property). Add one additional:
+9. compute_waves_with_sub_outline_nodes_across_files — supply a mixed list of file-level and sub-outline items with DEPENDS across them (FEAT-001::a depends FEAT-001::b depends FEAT-002::root) — resulting waves contain the correct sub-outline IDs in topological order.
+
+File: packages/org/test/cmd-query-flatten.test.ts (new):
+10. query_still_returns_top_level_only_by_default — org query (no level filter) returns one entry per file, matching pre-flatten behavior. Guards against consumer regressions.
+
+File: packages/org/test/cmd-wave-flatten.test.ts (new):
+11. wave_returns_sub_outline_items — org wave --manifest=true on a corpus where two files each have two sub-outlines produces waves whose items array contains sub-outline CUSTOM_IDs (4 items total visible) with correct parent_id.
+
+* Implementation
+
+** ITEM Add engine flatten tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-604-engine-flattens-sub-outlines-into-extrac::flatten-tests
+:END:
+- File: crates/pi-org-engine/src/buffer.rs (tests module)
+- Add scenarios 1-8.
+- Must initially fail: current Vec length is 3 (file + 1 top) instead of 4 (file + 1 top + 2 sub) for scenario 1.
+
+** ITEM Add wave-level integration test for sub-outlines
+:PROPERTIES:
+:CUSTOM_ID: FEAT-604-engine-flattens-sub-outlines-into-extrac::wave-sub-outline-test
+:DEPENDS: FEAT-604-engine-flattens-sub-outlines-into-extrac::flatten-tests
+:END:
+- File: crates/pi-org-engine/src/graph.rs (tests module)
+- Add scenario 9. Note: item construction in tests should set properties via HashMap::from([("DEPENDS", "...")]) since blockers() is being updated by BUG-309 to read DEPENDS.
+- This test depends on BUG-309's blockers() fix to interpret DEPENDS correctly.
+
+** ITEM Add consumer-side flatten guards
+:PROPERTIES:
+:CUSTOM_ID: FEAT-604-engine-flattens-sub-outlines-into-extrac::consumer-guards
+:DEPENDS: FEAT-604-engine-flattens-sub-outlines-into-extrac::wave-sub-outline-test
+:END:
+- File: packages/org/test/cmd-query-flatten.test.ts (new)
+- File: packages/org/test/cmd-wave-flatten.test.ts (new)
+- Add scenarios 10-11.
+- Use Bun temp dirs; create minimal fixture files with sub-outlines.
+- Scenario 10 must pass POST-implementation (verifies query is unaffected); scenario 11 must fail initially (wave returns 2 items instead of 4).
+
+** ITEM Implement extract_items flatten via post-order walk
+:PROPERTIES:
+:CUSTOM_ID: FEAT-604-engine-flattens-sub-outlines-into-extrac::flatten-impl
+:DEPENDS: FEAT-604-engine-flattens-sub-outlines-into-extrac::consumer-guards
+:END:
+- File: crates/pi-org-engine/src/buffer.rs
+- In extract_section_item (around line 202):
+  - Keep the existing children Vec population as-is.
+  - After constructing the top-level item at line 273 and before returning, spawn a helper that walks children recursively and appends them to a parallel Vec that the caller receives.
+  - Simplest shape: change extract_section_item return type to Option<(OrgItem, Vec<OrgItem>)> where the second element is the flattened descendants of this item in document order. Caller in extract_headings then extends the outer items Vec with both the top-level item and its flattened descendants.
+  - Alternative: pass &mut Vec<OrgItem> descend_into into extract_section_item so descendants are appended as they are produced. Keeps return type unchanged.
+- Pick the &mut Vec approach to minimize signature churn; add a small wrapper so extract_section_item still returns the primary Option<OrgItem> and writes its descendants into a provided accumulator.
+- Ensure: (a) level is preserved (no reset); (b) byte_range is each sub-outline's own section; (c) children Vec on the parent is still populated (so consumers reading nested structure continue to work).
+- Run Rust tests 1-9; all pass.
+
+** ITEM Adjust TS consumers that assume top-level-only
+:PROPERTIES:
+:CUSTOM_ID: FEAT-604-engine-flattens-sub-outlines-into-extrac::ts-consumer-adjust
+:DEPENDS: FEAT-604-engine-flattens-sub-outlines-into-extrac::flatten-impl
+:END:
+- File: packages/org/src/tool.ts
+- cmdQuery (line 435): applyFilter is called with { level: 0, ...merged }. If merged.level is explicitly undefined this still enforces top-level. Verify and, if necessary, make the default explicit (level: 0) when caller did not set it. Scenario 10 passes.
+- cmdDashboard (around line 770+): the block that counts byState expects one item per file; since iteration now sees sub-outlines too, filter items.iter().filter(i => i.level === 1) before counting to preserve existing metrics. Add a separate sub_outline count field to the returned structure for diagnostics (optional).
+- cmdGraph (around line 975): leave unfiltered so sub-outlines enter the returned graph (desired for the new wave flow).
+- cmdWave: leave unfiltered; flattened items go directly into computeWaves (this is the win).
+
+* Edge Cases
+
+- A sub-outline with no CUSTOM_ID and no TODO keyword returns None from extract_section_item → correctly omitted from the flat list (pre-existing behavior preserved).
+- Deep nesting (level 3+): all descendants flattened. Confirmed by scenario 6.
+- Cycles in the filesystem are impossible (headings are a tree); no cycle protection needed for the flatten walk.
+- include_body=true on flattened sub-outlines: each sub-outline's body is its own section bytes. Parent still reports its own body which includes the sub-outline bytes (pre-existing behavior — do not change parent body computation). Documented in scenario 8.
+- byte_range for a sub-outline must be (sub_section.start_byte, sub_section.end_byte), independent of the parent. Confirmed by scenario 3.
+- cmdQuery level=0 default must survive: this is the most-touched consumer and regressions here would break every query. Scenario 10 is the guard.
+- Memory: flattening does not deep-clone children; we push the same OrgItem into the flat Vec and leave children empty on that copy if memory matters. Simpler: clone once. Cost is bounded by total heading count per file; acceptable.
+- Serialization size: flattened items include all properties; not a concern because NAPI returns JSON once per call.
+
+* Acceptance Criteria
+
+1. cargo test -p pi-org-engine green, including scenarios 1-9.
+2. bun test packages/org green, including scenarios 10-11.
+3. Manual: org wave --manifest=true on a repo with sub-outlined child items produces waves whose items contain sub-outline CUSTOM_IDs (not just file-level IDs).
+4. Manual: org query (any filter) returns one entry per file as before; no regression.
+5. No other engine tests regress: cargo test --all green.
+6. bun check green across the workspace.
+
+NOTE [2026-04-19]: Executing PLAN-274 wave 2: flattening sub-outline extraction and preserving top-level consumer behavior.
+
+NOTE [2026-04-19]: Engine now flattens nested sub-outlines into parse output while preserving level/byte range/children, and org query/wave regression tests cover the new behavior. Verified with `cargo test -p pi-org-engine`, `bun run dev:native`, `bun test packages/org`, and `bun check:ts`.

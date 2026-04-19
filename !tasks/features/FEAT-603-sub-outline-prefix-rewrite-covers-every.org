@@ -1,0 +1,175 @@
+#+TITLE: Sub-outline prefix rewrite covers every write path and auto-injects ITEM state
+#+STATE: DONE
+#+SESSION_ID: 14c12170379e95ac
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T19-56-00-095Z_14c12170379e95ac.jsonl]]
+#+CUSTOM_ID: FEAT-603-sub-outline-prefix-rewrite-covers-every
+#+LAYER: backend
+
+* Initial Message
+
+you need to show me how you will make the wave creation in plan/ultraplan to be about the subtasks of the files you wrote.
+
+That means you need that subtask-level CUSTOM_IDs (FEAT-XXX-long-title::task-slug) to be the basis of generating the wave. I would also like you to make sure that files are written with subtasks that have ITEM prefix and be fully representative of the work. That way, the plan actaully refers to in-task files and the wave planning is complete from the plan level.
+
+* Scope
+
+In-scope:
+- Expand rewriteSubOutlineIds to recognize the empty-left form (bare "colon colon" prefix with no parent literal) and normalize it to PARENT-ID plus slug.
+- Invoke rewriteSubOutlineIds from every org update write path: currently only full-body replacement goes through the rewriter. The append branch and section branch must also be routed through it.
+- Auto-inject the ITEM TODO keyword on sub-outline headings that declare a same-parent :CUSTOM_ID: but lack any TODO keyword, at create/update time (body, append, section).
+- Update buildSuboutlineBlock to emit "double-star ITEM title" instead of bare title.
+- Full unit coverage (TDD) for every branch.
+
+Out-of-scope:
+- Engine-side flattening of sub-outlines (separate FEAT).
+- Wave computation changes (separate BUG + FEAT).
+- Prompt updates (separate FEAT).
+- Validator updates (separate FEAT).
+
+Rationale: the user's bash+sed rescue demonstrated three independent failure modes:
+1. The empty-left "colon colon suffix" form is the obvious shape an LLM emits for "bare suffix" and the current rewriter rejects it.
+2. Sub-outlines appended via update with append=... never hit the rewriter.
+3. Sub-outlines patched via update with section=... body=... or append=... never hit the rewriter.
+All three produced the broken state that required manual bash cleanup.
+
+Additionally, sub-outline headings must carry the ITEM TODO keyword so they participate in state tracking and so generated waves can flag DONE vs ITEM on per-sub-outline granularity downstream.
+
+* Existing Patterns
+
+- packages/org/src/sub-outline-rewrite.ts:
+  - rewriteSubOutlineIds(parentId, body) returns { body, rewrites }. Entry point.
+  - collectRewriteMap(parentId, body) scans body for CUSTOM_ID lines and produces normalization map. Lines 13-39.
+  - normalizeLocalSuboutlineId closure at lines 17-28 gates acceptance. Current branches: fully-prefixed, bare (no separator), numeric-prefix matching. Empty-left "colon colon suffix" is not matched because left equals parentNumericPrefix check is "empty vs FEAT-603" which is false.
+  - CUSTOM_ID_LINE_RE at line 6 captures the value token. Accepts empty-left form as non-whitespace.
+  - DEPENDS_LINE_RE at line 7 handles DEPENDS values the same way.
+- packages/org/src/tool.ts:
+  - cmdCreate line 356: rewriteSubOutlineIds(id, args.body) already in use.
+  - cmdUpdate line 564: rewriteSubOutlineIds(args.id, args.body).body only covers full-body replacement.
+  - cmdUpdate section branch lines 495-557: builds body from args.body or args.append and passes directly to editSection — NO rewrite.
+  - cmdUpdate append branch: args.append bypasses rewrite.
+  - buildSuboutlineBlock in tool.ts lines 41-55: constructs the heading line with bare title — no TODO keyword.
+  - cmdSuboutlineAdd lines 818-878: uses buildSuboutlineBlock.
+- packages/org/src/schema/defaults.ts: DEFAULT_ORG_CONFIG.todoKeywords must contain ITEM as a keyword for the engine to recognize it.
+- Test infrastructure: packages/org/test uses describe/test from Bun. Target files will be sub-outline-rewrite.test.ts (expand) and cmd-update-rewrite.test.ts (new).
+
+* Tests
+
+File: packages/org/test/sub-outline-rewrite.test.ts (expand existing).
+
+Rewrite scenarios:
+1. rewrite_accepts_empty_left_colon_colon_suffix — input CUSTOM_ID value "::slug" with parent FEAT-603 becomes FEAT-603::slug.
+2. rewrite_depends_accepts_empty_left_colon_colon — DEPENDS value "::a ::b" under FEAT-603 becomes "FEAT-603::a FEAT-603::b".
+3. rewrite_mixes_empty_left_with_bare_and_fully_qualified — DEPENDS value mixing "::a" "raw-b" "FEAT-603::c" — all three become fully qualified.
+4. rewrite_rejects_empty_left_with_invalid_suffix — "::$bad" remains unchanged (preserves existing strict-slug guarantee).
+
+ITEM-injection scenarios:
+5. inject_item_on_bare_heading_with_local_custom_id — input block with bare-title heading followed by CUSTOM_ID empty-left slug yields ITEM-prefixed heading (CUSTOM_ID also rewritten).
+6. inject_does_not_touch_heading_that_already_has_state — headings with ITEM / DOING / DONE keywords pass through unchanged.
+7. inject_does_not_touch_heading_without_sub_outline_custom_id — a plain-note heading with no PROPERTIES drawer is untouched.
+8. inject_does_not_touch_top_level_heading — single-star top-level heading is not modified even if followed by CUSTOM_ID.
+9. inject_handles_multiple_sub_outline_headings_in_one_body — three bare sub-outlines all missing state become three ITEM-injected sub-outlines.
+10. inject_respects_foreign_parent_custom_id — heading whose CUSTOM_ID belongs to a different parent (FEAT-999::slug inside FEAT-603 body) is left alone with no state injection; the ID is also not rewritten (pre-existing behavior).
+
+Integration scenarios — file: packages/org/test/cmd-update-rewrite.test.ts (new):
+11. update_section_rewrites_sub_outline_ids_in_body — org update with section body writes correctly-prefixed CUSTOM_ID and ITEM-prefixed heading into the file.
+12. update_section_rewrites_sub_outline_ids_in_append — same with append instead of body.
+13. update_append_rewrites_sub_outline_ids — org update with a top-level append containing a sub-outline writes normalized output.
+14. create_rewrites_and_injects_in_initial_body — org create with initial body containing a bare sub-outline produces both rewritten CUSTOM_ID and ITEM-prefixed heading on disk.
+15. suboutline_add_emits_item_state_heading — org suboutline-add appends an ITEM-prefixed heading (not a bare heading).
+
+* Implementation
+
+** ITEM Add rewriter unit tests for empty-left suffix
+:PROPERTIES:
+:CUSTOM_ID: FEAT-603-sub-outline-prefix-rewrite-covers-every::rewriter-empty-left-tests
+:END:
+- File: packages/org/test/sub-outline-rewrite.test.ts
+- Add scenarios 1-4.
+- Must initially fail.
+
+** ITEM Add ITEM-injection unit tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-603-sub-outline-prefix-rewrite-covers-every::item-inject-tests
+:DEPENDS: FEAT-603-sub-outline-prefix-rewrite-covers-every::rewriter-empty-left-tests
+:END:
+- File: packages/org/test/sub-outline-rewrite.test.ts (same file to keep the rewrite concern cohesive).
+- Add scenarios 5-10.
+- Must initially fail.
+
+** ITEM Add integration tests for cmdUpdate cmdCreate suboutline-add rewriting
+:PROPERTIES:
+:CUSTOM_ID: FEAT-603-sub-outline-prefix-rewrite-covers-every::integration-tests
+:DEPENDS: FEAT-603-sub-outline-prefix-rewrite-covers-every::item-inject-tests
+:END:
+- File: packages/org/test/cmd-update-rewrite.test.ts (new).
+- Add scenarios 11-15.
+- Use Bun.file with tmpdir fixtures; mirror the pattern from existing packages/org/test/tool.test.ts.
+- Must initially fail.
+
+** ITEM Extend rewriter to accept empty-left suffix and inject ITEM state
+:PROPERTIES:
+:CUSTOM_ID: FEAT-603-sub-outline-prefix-rewrite-covers-every::rewriter-impl
+:DEPENDS: FEAT-603-sub-outline-prefix-rewrite-covers-every::integration-tests
+:END:
+- File: packages/org/src/sub-outline-rewrite.ts
+- In normalizeLocalSuboutlineId (declared twice — also in rewriteDependsValue), add a short-circuit: if candidate startsWith "colon colon" AND the suffix after the two colons is a valid slug, return buildPrefixedId(parentId, suffix).
+- Extract a small helper injectItemStateInBody(parentId, body, todoKeywords) string co-located in the same file:
+  - Parse each line; detect double-star bare-title heading (exactly two stars, no TODO keyword).
+  - Look ahead within a small fixed window (until next non-blank, non-property line, or next heading) to find a CUSTOM_ID that resolves to PARENT-ID plus slug under the same rewrite rules.
+  - If found AND the heading text does not start with any TODO keyword from DEFAULT_ORG_CONFIG.todoKeywords (pass in as arg), rewrite the heading line to prepend " ITEM" after the stars.
+  - Preserve original indentation/whitespace.
+- Export rewriteSubOutlineIds so it now performs the injection after CUSTOM_ID/DEPENDS normalization, in one pass over lines.
+- Signature stays the same; callers do not change.
+- Unit tests 1-10 pass.
+
+** ITEM Route rewrite through every cmdUpdate branch
+:PROPERTIES:
+:CUSTOM_ID: FEAT-603-sub-outline-prefix-rewrite-covers-every::route-rewrite
+:DEPENDS: FEAT-603-sub-outline-prefix-rewrite-covers-every::rewriter-impl
+:END:
+- File: packages/org/src/tool.ts
+- In cmdUpdate section branch around line 508:
+  - Before building body from args.body or args.append, normalize each variant via rewriteSubOutlineIds(args.id, variant).body when non-empty.
+- In cmdUpdate main path around line 564:
+  - Already normalizes args.body. Add a parallel line for args.append: rewriteSubOutlineIds(args.id, args.append).body and pass it to executeOrg instead of raw args.append.
+- Integration tests 11-13 pass.
+
+** ITEM Update buildSuboutlineBlock to emit ITEM state keyword
+:PROPERTIES:
+:CUSTOM_ID: FEAT-603-sub-outline-prefix-rewrite-covers-every::buildblock-item
+:DEPENDS: FEAT-603-sub-outline-prefix-rewrite-covers-every::route-rewrite
+:END:
+- File: packages/org/src/tool.ts
+- In buildSuboutlineBlock, change the first heading line to include the ITEM keyword between the stars and the title.
+- Integration test 15 passes.
+
+** ITEM Confirm cmdCreate path yields injected state end-to-end
+:PROPERTIES:
+:CUSTOM_ID: FEAT-603-sub-outline-prefix-rewrite-covers-every::create-confirm
+:DEPENDS: FEAT-603-sub-outline-prefix-rewrite-covers-every::buildblock-item
+:END:
+- File: packages/org/src/tool.ts (no code change expected — cmdCreate already routes through rewriteSubOutlineIds which now also injects; verify).
+- Integration test 14 passes.
+
+* Edge Cases
+
+- Heading lines that contain CUSTOM_ID inside a code block or quoted text: not an issue because the rewrite pass scans line-by-line, not AST-aware. Documentation prose that mentions CUSTOM_ID values inside body paragraphs would be rewritten too; guarded by the regex requiring leading whitespace plus exact property shape. Prose won't match.
+- Triple-star grand-child sub-outlines: out-of-scope for ITEM injection. Only two-star sub-outlines are injected. Matches the Body Standard's "second-level" model.
+- Multi-line headings are not an org concept; single-line guarantee.
+- A bare-title heading followed immediately by another heading (no PROPERTIES drawer): no CUSTOM_ID found so no injection. Safe default.
+- Whitespace before stars tolerated.
+- Existing ITEM-prefixed heading passed through rewrite: the keyword check sees ITEM as first word, skips injection. Idempotent.
+- Empty body passed to update: skip all work, return empty string.
+- rewriteSubOutlineIds callers that destructure rewrites: the returned map still reflects CUSTOM_ID changes; ITEM injection is silent (no entry added).
+
+* Acceptance Criteria
+
+1. bun test packages/org green, including 15 new scenarios.
+2. Manual: org create category=features title=Demo body containing a bare sub-outline produces an on-disk file with ITEM-prefixed heading and correctly-prefixed CUSTOM_ID — no further editing needed.
+3. Manual: repeating the user's original transcript scenario (write FEAT body with empty-left slug sub-outlines) no longer leaves bare "::slug" artifacts in the file.
+4. bun check:ts clean, no any regressions, no console.* usage in the org package.
+5. org suboutline-add appends ITEM-prefixed headings.
+
+NOTE [2026-04-19]: Executing PLAN-274 wave 1: extending sub-outline rewrite coverage and ITEM injection across write paths.
+
+NOTE [2026-04-19]: Implemented empty-left sub-outline normalization, ITEM injection, cmdUpdate append/section rewrite routing, and ITEM-emitting suboutline blocks. Verified with `bun test packages/org` and `bun check:ts`.

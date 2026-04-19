@@ -1,0 +1,135 @@
+#+TITLE: Plan-mode prompt teaches sub-outline wave manifest and ITEM auto-injection
+#+STATE: DONE
+#+SESSION_ID: 14c12170379e95ac
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T19-56-00-095Z_14c12170379e95ac.jsonl]]
+#+CUSTOM_ID: FEAT-607-plan-mode-prompt-teaches-sub-outline-wav
+#+DEPENDS: FEAT-606-validateplanitem-requires-dual-link-mani
+#+LAYER: prompt
+
+* Initial Message
+
+you need to show me how you will make the wave creation in plan/ultraplan to be about the subtasks of the files you wrote.
+
+That means you need that subtask-level CUSTOM_IDs (FEAT-XXX-long-title::task-slug) to be the basis of generating the wave. I would also like you to make sure that files are written with subtasks that have ITEM prefix and be fully representative of the work. That way, the plan actaully refers to in-task files and the wave planning is complete from the plan level.
+
+* Scope
+
+In-scope:
+- Rewrite the plan-mode-active.md sections that describe sub-outline writing, wave generation, and PLAN body requirements to match the new contract:
+  - Sub-outline CUSTOM_IDs accept bare slugs, empty-left "colon colon slug", fully qualified — all three normalize to PARENT::slug.
+  - Sub-outline headings auto-gain the ITEM keyword when missing at write time.
+  - The org wave command with manifest=true AND planItemId writes the Execution Manifest section directly into the PLAN body.
+  - PLAN body MUST contain both top-level [[id:FEAT-X]] links (for discovery and state-tracking) AND sub-outline [[id:FEAT-X::slug]] bullets inside the manifest.
+  - Validator enforces the dual-link rule; list the new issue categories and their remedies.
+- Update the example at plan-mode-active.md showing three-sub-outline example to use ITEM keywords and realistic dual-link manifest.
+- Update the ultraplan-mode section similarly.
+- Update body standard section to explicitly say: "sub-outline headings declare :CUSTOM_ID: bare or empty-left; the tool normalizes".
+
+Out-of-scope:
+- Any TypeScript / Rust code change (handled by earlier FEATs).
+- Validator logic (FEAT-606).
+- Runtime test changes.
+
+Rationale: the LLM follows the plan-mode-active prompt verbatim when producing org items. After the previous FEATs ship, the prompt is stale: it tells the LLM "sub-outlines are auto-prefixed" without clarifying that the auto-prefix covers three input shapes, without mentioning ITEM injection, without explaining the manifest persistence flow, and without showing the dual-link requirement. The user saw the LLM produce broken output in part because the prompt did not prevent it. Correcting the prompt closes the loop.
+
+* Existing Patterns
+
+- packages/coding-agent/src/prompts/system/plan-mode-active.md:
+  - Lines 46-56 (Properties section) currently mention CUSTOM_ID auto-prefix and the suboutline-add helper.
+  - Lines 72-94 (Implementation sub-steps example) show three sub-outlines with fully-qualified CUSTOM_IDs but no ITEM keyword.
+  - Lines 111-118 (PLAN item requirements) mention Execution Manifest and [[id:...]] links but do not specify dual-link rule.
+  - Lines 267-284 (ultraplan example) show "** foundation :wave:" bullets with fully-qualified sub-outline IDs but no top-level link requirement alongside.
+- packages/coding-agent/src/prompts/system/plan-mode-active.md is rendered via Handlebars; preserves {{#if}} blocks and {{variable}} substitutions. All substitutions must remain intact.
+- Handlebars test harness: packages/coding-agent/test/prompts/ has existing tests that render the prompt under a set of contexts; add a snapshot test for new content if a snapshot framework is already present.
+
+* Tests
+
+File: packages/coding-agent/test/prompts/plan-mode-active-suboutline.test.ts (new, or extend existing plan-mode prompt test if it already exists).
+
+Content scenarios (string contains assertions):
+1. prompt_mentions_item_auto_injection — rendered prompt (org-enabled context) contains the phrase "sub-outline headings automatically gain the ITEM keyword when missing" (or equivalent exact phrase added by this item).
+2. prompt_documents_three_custom_id_shapes — rendered prompt contains all three accepted shapes: fully-qualified, bare slug, empty-left "colon colon suffix". Each shape is shown in an illustrative bullet.
+3. prompt_shows_dual_link_example — rendered prompt contains a block that shows both [[id:FEAT-001]] and [[id:FEAT-001::define-types]] in the same example manifest.
+4. prompt_mentions_planitemid_write_flow — rendered prompt contains a sentence directing the LLM to invoke "org wave" with manifest=true AND planItemId so the Execution Manifest is written directly into the PLAN body.
+5. prompt_lists_new_validator_categories — rendered prompt enumerates missing-top-level-link, missing-suboutline-declaration, manifest-missing-suboutlines so the LLM understands the failure modes.
+6. prompt_example_uses_item_keyword_in_sub_outline — the three-sub-outline example at lines ~74-93 (current location) shows "ITEM Define TypeScript interfaces" rather than bare "Define TypeScript interfaces".
+7. prompt_ultraplan_example_shows_dual_links — ultraplan block shows BOTH a header bullet listing [[id:FEAT-001]] and the sub-outline entries [[id:FEAT-001::define-types]] etc.
+8. prompt_still_renders_under_non_org_context — non-org-enabled context still renders without errors and without the new content (gated behind {{#if orgEnabled}}).
+
+* Implementation
+
+** ITEM Write prompt content tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::prompt-tests
+:END:
+- File: packages/coding-agent/test/prompts/plan-mode-active-suboutline.test.ts (new).
+- Add scenarios 1-8 using the existing renderPromptTemplate helper; pass a representative context with orgEnabled=true, planCategory="plans", planInitState="ITEM", childCategories=[{ name:"features", prefix:"FEAT", description:"Single feature additions" }], and no taskPolicies.
+- Scenarios 1-7 must initially fail; scenario 8 is a regression guard.
+
+** ITEM Update Properties section
+:PROPERTIES:
+:CUSTOM_ID: FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::properties-section
+:DEPENDS: FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::prompt-tests
+:END:
+- File: packages/coding-agent/src/prompts/system/plan-mode-active.md (lines 46-56 area).
+- Replace the single CUSTOM_ID auto-prefix bullet with three bullets describing the three accepted shapes and one bullet stating ITEM auto-injection.
+- Keep the suboutline-add preference bullet (still valid).
+
+** ITEM Update example sub-outline block to use ITEM keyword
+:PROPERTIES:
+:CUSTOM_ID: FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::example-update
+:DEPENDS: FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::properties-section
+:END:
+- File: packages/coding-agent/src/prompts/system/plan-mode-active.md (lines 72-94 area).
+- Change each "** <Title>" heading in the example to "** ITEM <Title>".
+- Keep :CUSTOM_ID: lines as fully-qualified to show the canonical form (LLM may write bare or empty-left; normalization handles it — add a one-line comment above the example saying so).
+
+** ITEM Update PLAN item requirements with dual-link rule
+:PROPERTIES:
+:CUSTOM_ID: FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::plan-item-req
+:DEPENDS: FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::example-update
+:END:
+- File: packages/coding-agent/src/prompts/system/plan-mode-active.md (lines 111-118 area).
+- Replace the bullet "Run org wave on the child-item sub-outline dependency graph..." with:
+  - A bullet describing the invocation "org wave --manifest=true --planItemId=<PLAN-ID>" and its dual effect (writes manifest, returns text).
+  - A bullet stating dual-link requirement: "PLAN body MUST list every linked child both as [[id:<child-id>]] at the top (for discovery) AND as [[id:<child-id>::<slug>]] bullets inside the manifest section".
+  - A bullet listing the validator issue categories for quick reference: missing-top-level-link, missing-suboutline-declaration, manifest-missing-suboutlines.
+
+** ITEM Update ultraplan example
+:PROPERTIES:
+:CUSTOM_ID: FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::ultraplan-update
+:DEPENDS: FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::plan-item-req
+:END:
+- File: packages/coding-agent/src/prompts/system/plan-mode-active.md (lines 267-284 area, inside the ultraplan block).
+- Prepend a line showing the required top-level links list: "- [[id:FEAT-001]]" before the "** foundation :wave:" block.
+- Keep the wave-grouped bullets with sub-outline IDs.
+- Scenario 7 passes.
+
+** ITEM Verify Handlebars substitutions untouched
+:PROPERTIES:
+:CUSTOM_ID: FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::handlebars-regression
+:DEPENDS: FEAT-607-plan-mode-prompt-teaches-sub-outline-wav::ultraplan-update
+:END:
+- File: packages/coding-agent/src/prompts/system/plan-mode-active.md
+- Re-run the prompt snapshot tests for the non-org context; confirm the new content sits behind the orgEnabled guard.
+- Scenario 8 passes.
+- Run bun run --cwd=packages/coding-agent format-prompts to re-normalize the file if Biome/prettier rules apply.
+
+* Edge Cases
+
+- Non-English terminology drift: keep terms "sub-outline", "CUSTOM_ID", "manifest", "dual-link" consistent across the prompt.
+- Existing downstream prompts (plan-mode-approved.md, daedalus.md, metis.md) may also reference waves — check-only, do NOT modify in this item (out of scope). Flag in Follow-ups if drift is observed.
+- Prompt length: adding content grows the token budget. Current file is ~317 lines; adding ~30 lines stays well inside the 40K-token context; no truncation concern.
+- format-prompts script may reflow long lines; keep the example blocks on their own paragraphs so wrapping does not break the org syntax inside the backtick fences.
+
+* Acceptance Criteria
+
+1. bun test packages/coding-agent (prompt tests subset) green, including scenarios 1-8.
+2. Manual: running the full prompt-render pipeline (render plan-mode-active with org-enabled context) and grepping the output shows all new keywords.
+3. bun check:ts green.
+4. Manual review: the example blocks remain valid-looking org syntax (tree-sitter-org test against the fenced example, optional).
+5. No user-visible regression when plan mode runs without org enabled (non-org context still renders).
+
+NOTE [2026-04-19]: Executing PLAN-274 wave 5: prompt updates for sub-outline normalization, ITEM injection, dual-link manifests, and org wave planItemId flow.
+
+NOTE [2026-04-19]: Updated plan-mode-active prompt to describe normalized sub-outline CUSTOM_ID shapes, ITEM auto-injection, planItemId manifest writes, dual-link PLAN requirements, and ultraplan examples. Verified with targeted prompt rendering tests and `bun check:ts`.

@@ -37,6 +37,15 @@ const orgSchema = Type.Object({
 	properties: Type.Optional(Type.Record(Type.String(), Type.String(), { description: "Properties map" })),
 	body: Type.Optional(Type.String({ description: "Body text -- create: initial body; update: full replacement" })),
 	append: Type.Optional(Type.String({ description: "Text to append to item body (update)" })),
+	manifest: Type.Optional(
+		Type.Boolean({ description: "Return the manifest text; when planItemId is set, also write into the PLAN body" }),
+	),
+	planItemId: Type.Optional(
+		Type.String({
+			description:
+				"PLAN item CUSTOM_ID; when set with manifest=true, the tool writes Execution Manifest into the PLAN body and returns the text",
+		}),
+	),
 	section: Type.Optional(
 		Type.String({ description: "Target heading (:raw-value) for section-scoped update (requires body or append)" }),
 	),
