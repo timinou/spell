@@ -1,5 +1,5 @@
 #+TITLE: coding-agent integration: code tool sessionId injection + PeerConflict handling
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bfce727e583e3c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T19-14-55-610Z_14bfce727e583e3c.jsonl]]
 #+CUSTOM_ID: FEAT-580-coding-agent-integration-code-tool-sessi
@@ -118,3 +118,5 @@ Order:
 - `bun check:ts` and `bun lint:ts` clean.
 - Manual two-session repro: launch two `spell`s in same cwd; have each edit different methods of the same file; verify both succeed and the second sees the first's commit in the peer-activity footer.
 - Manual conflict repro: two sessions try to edit the same method within ~1s; second receives a PeerConflict with structured remediation; agent's automatic retry succeeds because the broker now has the fresh state.
+
+NOTE [2026-04-19]: Landed in-tree and verified during PLAN-269 closeout. Evidence: packages/coding-agent/src/session/edit-coordinator.ts, tools/code.ts PeerConflict handling, tools/tool-errors.ts PeerConflictToolError, tools/code-result.ts peer-activity footer rendering, plus 2026-04-19 BUG-303 cutover completed remaining bypass call sites. Current tree verification 2026-04-19.

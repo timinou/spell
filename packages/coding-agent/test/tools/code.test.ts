@@ -387,7 +387,12 @@ describe("coding-agent code tool wiring", () => {
 				},
 				error: false,
 			})
-			.mockReturnValueOnce({ output: { success: true }, error: false });
+			.mockReturnValueOnce({ output: { success: true }, error: false })
+			.mockReturnValueOnce({
+				output: { file: "packages/coding-agent/test/tools/code.test.ts", edits: [] },
+				error: false,
+			})
+			.mockReturnValueOnce({ output: { edits: [] }, error: false });
 		const tool = new CodeTool(
 			createSession({
 				cwd: process.cwd(),
@@ -400,7 +405,12 @@ describe("coding-agent code tool wiring", () => {
 			operations,
 		});
 
-		expect(bufferSpy.mock.calls.map(([call]) => call.command)).toEqual(["diff", "edit", "save"]);
+		expect(bufferSpy.mock.calls.map(([call]) => call.command)).toEqual([
+			"diff",
+			"edit",
+			"save",
+			"coord_peer_activity",
+		]);
 		expect(bufferSpy.mock.calls[0]?.[0]).toEqual({ command: "diff", file: targetFile });
 		expect(bufferSpy.mock.calls[1]?.[0]).toEqual(
 			expect.objectContaining({
@@ -428,7 +438,9 @@ describe("coding-agent code tool wiring", () => {
 				},
 				error: false,
 			})
-			.mockReturnValueOnce({ output: { success: true }, error: false });
+			.mockReturnValueOnce({ output: { success: true }, error: false })
+			.mockReturnValueOnce({ output: { file: "definitely-missing.ts", edits: [] }, error: false })
+			.mockReturnValueOnce({ output: { edits: [] }, error: false });
 		const tool = new CodeTool(
 			createSession({
 				settings: Settings.isolated({ "lsp.enabled": false }),
@@ -440,7 +452,12 @@ describe("coding-agent code tool wiring", () => {
 			operations,
 		});
 
-		expect(bufferSpy.mock.calls.map(([call]) => call.command)).toEqual(["list", "edit", "save"]);
+		expect(bufferSpy.mock.calls.map(([call]) => call.command)).toEqual([
+			"list",
+			"edit",
+			"save",
+			"coord_peer_activity",
+		]);
 		expect(bufferSpy.mock.calls[1]?.[0]).toEqual(
 			expect.objectContaining({
 				command: "edit",

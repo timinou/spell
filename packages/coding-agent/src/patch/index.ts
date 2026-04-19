@@ -592,7 +592,7 @@ export class EditTool implements AgentTool<TInput> {
 				}
 				applyManagedBufferContent(absolutePath, lines.join("\n"), {
 					create: true,
-					sessionId: this.session.getSessionId?.() ?? undefined,
+					session: this.session,
 				});
 				invalidateFsScanAfterWrite(absolutePath);
 				const resultText = `Created ${path}`;
@@ -696,7 +696,7 @@ export class EditTool implements AgentTool<TInput> {
 			if (!resolvedMove || resolvedMove === absolutePath) {
 				applyManagedBufferContent(writePath, finalContent, {
 					create: false,
-					sessionId: this.session.getSessionId?.() ?? undefined,
+					session: this.session,
 				});
 				invalidateFsScanAfterWrite(absolutePath);
 			} else {
@@ -914,7 +914,7 @@ export class EditTool implements AgentTool<TInput> {
 		const finalContent = bom + restoreLineEndings(result.content, originalEnding);
 		applyManagedBufferContent(absolutePath, finalContent, {
 			create: false,
-			sessionId: this.session.getSessionId?.() ?? undefined,
+			session: this.session,
 		});
 		let diagnostics: FileDiagnosticsResult | undefined;
 		invalidateFsScanAfterWrite(absolutePath);

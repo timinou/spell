@@ -1,5 +1,5 @@
 #+TITLE: Fill coord test gaps: two-session integration, subagent attribution, peer-activity footer, broker lifecycle
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c0b265a752cb07
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-50-51-293Z_14c0b265a752cb07.jsonl]]
 #+CUSTOM_ID: FEAT-593-fill-coord-test-gaps-two-session-integra
@@ -124,3 +124,5 @@ File map with one test per scenario. Each test **MUST** encode the falsifiable c
 - Each test fails in the absence of the production behavior it encodes (falsifiability verified by temporarily mutating the code under test).
 - =cargo test --workspace= and =bun test packages/coding-agent/= pass.
 - If the stale-socket test reveals a real bug in =spawn_broker_if_absent=, the fix lands in the same change and the FEAT body is updated with a NOTE describing the fix.
+
+NOTE [2026-04-19]: 2026-04-19: Added two-session engine integration test, edit-coordinator attribution coverage, peer-footer rendering coverage, and broker stale-socket recovery test. Stale-socket production fix was not required; spawn helper already replaced stale socket files and passed the new test. Verification: cargo test -p pi-code-engine --test coord_two_session; cargo test -p pi-edit-broker --test spawn; bun test packages/coding-agent/test/session/edit-coordinator.test.ts packages/coding-agent/test/tools/code-result-peer-footer.test.ts. cargo clippy --workspace --all-targets --all-features -- -D warnings failed on pre-existing crate issues in crates/pi-code-graph (needless_raw_string_hashes, format_push_string) and did not involve FEAT-593 changes.

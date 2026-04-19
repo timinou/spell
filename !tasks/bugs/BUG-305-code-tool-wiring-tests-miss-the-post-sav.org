@@ -1,5 +1,5 @@
 #+TITLE: Code tool wiring tests miss the post-save coord_peer_activity call
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c0a2c7e0b0df60
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-42-37-570Z_14c0a2c7e0b0df60.jsonl]]
 #+CUSTOM_ID: BUG-305-code-tool-wiring-tests-miss-the-post-sav
@@ -123,3 +123,5 @@ For each test:
 - Both listed tests pass.
 - No production file modified.
 - The mock chain matches the observed production call order.
+
+NOTE [2026-04-19]: 2026-04-19: widened code-tool wiring tests to include trailing coord_peer_activity call/return in packages/coding-agent/test/tools/code.test.ts. Verified with `bun test packages/coding-agent/test/tools/code.test.ts` (22 pass, 0 fail).

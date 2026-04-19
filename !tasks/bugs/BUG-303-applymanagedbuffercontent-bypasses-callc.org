@@ -1,5 +1,5 @@
 #+TITLE: applyManagedBufferContent bypasses callCodeBuffer so sessionId is missing
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14c0a2c7e0b0df60
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-42-37-570Z_14c0a2c7e0b0df60.jsonl]]
 #+CUSTOM_ID: BUG-303-applymanagedbuffercontent-bypasses-callc
@@ -144,3 +144,10 @@ No new tests required. Add a focused regression test only if the cutover introdu
 - No direct `executeCodeBuffer` call remains in `applyManagedBufferContent` for mutating commands.
 - All 4 call sites pass `session`.
 - No other test regresses in `packages/coding-agent/test/tools/` or `packages/coding-agent/test/patch/`.
+
+
+* NOTE: 2026-04-19 verified with `bun test packages/coding-agent/test/tools/managed-code-buffer-errors.test.ts` → 3 pass, 0 fail; helper calls now pass `{ getSessionId: () => undefined }` so callCodeBuffer falls back to tui-${pid}.
+
+NOTE [2026-04-19]: Repo re-check 2026-04-19: applyManagedBufferContent in packages/coding-agent/src/tools/managed-code-buffer.ts still uses direct mutating native calls; item reopened so the plan matches current code reality.
+
+NOTE [2026-04-19]: Repo re-check 2026-04-19 corrected prior stale read: packages/coding-agent/src/tools/managed-code-buffer.ts now routes edit/replace_content/save through callCodeBuffer with SessionIdSource. Item remains DONE.

@@ -141,7 +141,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				try {
 					applyManagedBufferContent(absolutePath, content, {
 						create: !existingFile,
-						sessionId: this.session.getSessionId?.() ?? undefined,
+						session: this.session,
 					});
 				} catch (error) {
 					if (!force) throw error;

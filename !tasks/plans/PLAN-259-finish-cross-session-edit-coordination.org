@@ -1,5 +1,5 @@
 #+TITLE: Finish cross-session edit coordination
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14c06a0deef62edb
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T06-34-47-099Z_14c06a0deef62edb.jsonl]]
 #+CUSTOM_ID: PLAN-259-finish-cross-session-edit-coordination
@@ -109,3 +109,5 @@ Linear chain via FEAT =DEPENDS=: =FEAT-577= → =FEAT-578= → =FEAT-580= → =F
 - Wave 2 lands: =code edit= starts requiring =sessionId= for mutating commands. coding-agent callers still unmigrated briefly — keep Wave-3 subagent ready to land same session.
 - Wave 3 lands: callers migrated; PeerConflict surfaces as structured retryable ToolError.
 - Wave 4 lands: user sees =coord: N peers= status-line segment and peer-activity footers. Single-session users see an empty segment (zero visual noise).
+
+NOTE [2026-04-19]: Closeout verified in PLAN-269 on 2026-04-19. This plan's documented 'remaining' work was already largely landed in-tree; PLAN-269 reconciled the residual BUG-303/BUG-305 gaps, added FEAT-593 coverage, and updated stale item state. Current tree now matches the completion intent described here.
