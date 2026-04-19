@@ -1,0 +1,11 @@
+8bd5cc44275391afa98dde87d66b380be2672ba8 fix(coding-agent): detect stale-module errors in code tool and add integrity test
+!tasks/bugs/BUG-286-coding-agent-keep-raw-bash-verification.org
+!tasks/bugs/BUG-287-runtime-referenceerror-guard-in-codetool.org
+!tasks/features/FEAT-584-static-analysis-test-for-codetool-variab.org
+!tasks/plans/PLAN-257-raw-bash-verification-output-plan.org
+!tasks/plans/PLAN-258-code-tool-stale-module-error-handling-an.org
+packages/coding-agent/src/task/executor.ts
+packages/coding-agent/src/task/index.ts
+packages/coding-agent/test/task/executor-subagent-reminders.test.ts
+packages/coding-agent/test/tools/code-module-integrity.test.ts
+packages/coding-agent/test/tools/code.test.ts

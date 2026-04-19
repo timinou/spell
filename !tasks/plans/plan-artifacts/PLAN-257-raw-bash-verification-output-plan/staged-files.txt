@@ -1,0 +1,3 @@
+!tasks/bugs/BUG-286-coding-agent-keep-raw-bash-verification.org
+!tasks/plans/PLAN-257-raw-bash-verification-output-plan.org
+packages/coding-agent/src/tools/bash.ts

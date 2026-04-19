@@ -1,0 +1,5 @@
+8bd5cc442 fix(coding-agent): detect stale-module errors in code tool and add integrity test
+0182f0722 fix(coding-agent): keep raw bash verification output inline
+98005035d chore: committing just in case
+0d64d00af feat(coding-agent): support multi-file code edit execution
+3a084ca84 chore: added more files just in case

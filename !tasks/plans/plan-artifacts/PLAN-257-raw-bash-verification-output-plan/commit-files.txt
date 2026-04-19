@@ -1,0 +1,8 @@
+!tasks/bugs/BUG-286-coding-agent-keep-raw-bash-verification.org
+!tasks/bugs/BUG-287-runtime-referenceerror-guard-in-codetool.org
+!tasks/features/FEAT-584-static-analysis-test-for-codetool-variab.org
+!tasks/plans/PLAN-257-raw-bash-verification-output-plan.org
+!tasks/plans/PLAN-258-code-tool-stale-module-error-handling-an.org
+packages/coding-agent/src/tools/bash.ts
+packages/coding-agent/test/tools/code-module-integrity.test.ts
+packages/coding-agent/test/tools/code.test.ts

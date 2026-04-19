@@ -1,0 +1,4 @@
+0182f0722e5fd540406e0cb5048f3f4dabea2512 fix(coding-agent): keep raw bash verification output inline
+!tasks/bugs/BUG-286-coding-agent-keep-raw-bash-verification.org
+!tasks/plans/PLAN-257-raw-bash-verification-output-plan.org
+packages/coding-agent/src/tools/bash.ts

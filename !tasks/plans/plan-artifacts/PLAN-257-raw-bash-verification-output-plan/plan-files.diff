@@ -1,0 +1,13 @@
+diff --git a/packages/coding-agent/src/tools/bash.ts b/packages/coding-agent/src/tools/bash.ts
+index f5ee1759a..3f908c4a1 100644
+--- a/packages/coding-agent/src/tools/bash.ts
++++ b/packages/coding-agent/src/tools/bash.ts
+@@ -22,7 +22,7 @@ import { type BashInteractiveResult, runInteractiveBashPty } from "./bash-intera
+ import { checkBashInterception } from "./bash-interceptor";
+ import { applyHeadTail } from "./bash-normalize";
+ import { expandInternalUrls, type InternalUrlExpansionOptions } from "./bash-skill-urls";
+-import { classifyContextPressure, type ContextPressureMeta } from "./context-pressure-policy";
++import { type ContextPressureMeta, classifyContextPressure } from "./context-pressure-policy";
+ 
+ import { formatOutputNotice, formatStyledTruncationWarning, type OutputMeta, outputMeta } from "./output-meta";
+ 

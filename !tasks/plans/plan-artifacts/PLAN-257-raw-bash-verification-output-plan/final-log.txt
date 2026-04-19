@@ -1,0 +1,3 @@
+4071958fa chore(coding-agent): clear plan-257 verification blockers
+0182f0722 fix(coding-agent): keep raw bash verification output inline
+98005035d chore: committing just in case

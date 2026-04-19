@@ -1,0 +1,6 @@
+4071958fa67b3f06f6a2fe90a91e3b5ea98b34d8 chore(coding-agent): clear plan-257 verification blockers
+!tasks/bugs/BUG-286-coding-agent-keep-raw-bash-verification.org
+!tasks/plans/PLAN-257-raw-bash-verification-output-plan.org
+packages/coding-agent/src/task/executor.ts
+packages/coding-agent/src/task/index.ts
+packages/coding-agent/test/task/executor-subagent-reminders.test.ts
