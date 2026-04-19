@@ -86,6 +86,7 @@ fn read_org_source(options: &Value) -> Result<String> {
 		return Ok(source.to_string());
 	}
 	let path = required_path(options)?;
+	let _ = buffer_registry().close(&path);
 	let buffer = buffer_registry().open(&path).map_err(engine_err)?;
 	Ok(buffer.lock().source())
 }
@@ -242,6 +243,7 @@ fn cmd_connected_components(options: &Value) -> Result<Value> {
 	Ok(json_response(json!({ "components": components }), false))
 }
 
+#[allow(deprecated, reason = "org buffer still persists through save_with_watcher")]
 fn cmd_create_item(options: &Value) -> Result<Value> {
 	let path = required_path(options)?;
 	ensure_org_file(&path)?;
@@ -263,6 +265,7 @@ fn cmd_create_item(options: &Value) -> Result<Value> {
 	))
 }
 
+#[allow(deprecated, reason = "org buffer still persists through save_with_watcher")]
 fn cmd_update_item(options: &Value) -> Result<Value> {
 	let path = required_path(options)?;
 	let id = required_str(options, "id")?;
@@ -329,6 +332,7 @@ fn cmd_update_item(options: &Value) -> Result<Value> {
 	))
 }
 
+#[allow(deprecated, reason = "org buffer still persists through save_with_watcher")]
 fn cmd_set_property(options: &Value) -> Result<Value> {
 	let path = required_path(options)?;
 	let id = required_str(options, "id")?;
@@ -351,6 +355,7 @@ fn cmd_set_property(options: &Value) -> Result<Value> {
 	Ok(json_response(json!({ "success": true, "property": property }), false))
 }
 
+#[allow(deprecated, reason = "org buffer still persists through save_with_watcher")]
 fn cmd_append_note(options: &Value) -> Result<Value> {
 	let path = required_path(options)?;
 	let id = required_str(options, "id")?;
@@ -372,6 +377,7 @@ fn cmd_append_note(options: &Value) -> Result<Value> {
 	Ok(json_response(json!({ "success": true }), false))
 }
 
+#[allow(deprecated, reason = "org buffer still persists through save_with_watcher")]
 fn cmd_edit_section(options: &Value) -> Result<Value> {
 	if options.get("file").is_some() && options.get("id").is_some() {
 		let path = required_path(options)?;

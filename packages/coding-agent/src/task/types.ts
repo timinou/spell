@@ -99,7 +99,7 @@ const createTaskSchema = (options: { isolationEnabled: boolean }) => {
 			...properties,
 			isolated: Type.Optional(
 				Type.Boolean({
-					description: "Run in isolated environment; returns patches. Use when tasks edit overlapping files.",
+					description: "Run in isolated environment; explicit opt-in. Nested tasks may be auto-coerced to isolated by heuristics when needed. Returns patches. Use when tasks edit overlapping files.",
 				}),
 			),
 		});
@@ -150,6 +150,8 @@ export interface AgentDefinition {
 	thinkingLevel?: ThinkingLevel;
 	output?: unknown;
 	blocking?: boolean;
+	/** Whether the agent should reject broad-scope delegation. */
+	scopeRestricted?: boolean;
 	/** Whether task dispatches using this agent auto-create todo roster entries. Default: true. */
 	roster?: boolean;
 	source: AgentSource;
@@ -244,6 +246,8 @@ export interface TaskToolDetails {
 	progress?: AgentProgress[];
 	/** True when caller requested isolated execution but task.isolation.mode="none"; batch ran non-isolated. */
 	isolationDowngraded?: boolean;
+	/** True when isolation was auto-coerced from nested task heuristics. */
+	isolationAutoCoerced?: boolean;
 	async?: {
 		state: "running" | "completed" | "failed";
 		jobId: string;

@@ -101,24 +101,18 @@ function materializePlanWaves(waves: PlanWave[]): MaterializedPlanWaves {
 	for (const entry of visibleEntries) {
 		if (!entry.orgItemId) continue;
 		const taskId = taskIdByEntryId.get(entry.id);
-		if (taskId) {
-			closingTaskIdByOrgItemId.set(entry.orgItemId, taskId);
-		}
+		if (taskId) closingTaskIdByOrgItemId.set(entry.orgItemId, taskId);
 	}
 
 	const groups: TodoGroup[] = [];
 	let nextGroupNumber = 1;
-	for (const wave of waves) {
+	for (const [waveIndex, wave] of waves.entries()) {
 		const visibleWaveEntries = wave.entries.filter(entry => !entry.deferred);
-		if (visibleWaveEntries.length === 0) {
-			continue;
-		}
+		if (visibleWaveEntries.length === 0) continue;
 
 		const tasks: TodoItem[] = visibleWaveEntries.map(entry => {
 			const taskId = taskIdByEntryId.get(entry.id);
-			if (!taskId) {
-				throw new Error(`Missing generated task ID for wave entry ${entry.id}`);
-			}
+			if (!taskId) throw new Error(`Missing generated task ID for wave entry ${entry.id}`);
 			const blockers = (entry.dependsOn ?? [])
 				.map(depId => taskIdByEntryId.get(depId))
 				.filter((blockerId): blockerId is string => blockerId !== undefined);
@@ -137,9 +131,12 @@ function materializePlanWaves(waves: PlanWave[]): MaterializedPlanWaves {
 			return item;
 		});
 
+		const firstVisibleEntry = visibleWaveEntries[0];
 		groups.push({
 			id: `group-${nextGroupNumber++}`,
 			name: wave.name,
+			planItemId: firstVisibleEntry?.orgItemId,
+			waveIndex,
 			tasks,
 		});
 	}
