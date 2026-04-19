@@ -1,4 +1,5 @@
 import { promoteReadyTasks, type TodoGroup, type TodoItem } from "../../tools/todo-write";
+import { safeTruncateUtf8 } from "../../utils/safe-truncate-utf8";
 import { splitIntoComponents, topologicalOrder } from "./dag";
 import type { FluidAgentNode, FluidPlan } from "./types";
 
@@ -20,6 +21,12 @@ export interface PlanWave {
 export interface FluidTodoPlan {
 	groups: TodoGroup[];
 	taskIdByAgentId: Map<string, string>;
+}
+
+export interface PlanWaveMaterializeOpts {
+	planItemId?: string;
+	childBodiesById?: Map<string, string>;
+	todoDetailsMaxBytes?: number;
 }
 
 interface MaterializedPlanWaves {
@@ -90,7 +97,77 @@ export function computeWaveLayers(plan: FluidPlan): PlanWave[] {
 	);
 }
 
-function materializePlanWaves(waves: PlanWave[], planItemId?: string): MaterializedPlanWaves {
+function trimBlankLines(lines: string[]): string[] {
+	let start = 0;
+	let end = lines.length;
+	while (start < end && lines[start]?.trim() === "") start++;
+	while (end > start && lines[end - 1]?.trim() === "") end--;
+	return lines.slice(start, end);
+}
+
+export function extractChildBodySection(
+	orgItemId: string,
+	childBodiesById: Map<string, string>,
+	maxBytes: number,
+): string | undefined {
+	const separatorIndex = orgItemId.indexOf("::");
+	const parentId = separatorIndex === -1 ? orgItemId : orgItemId.slice(0, separatorIndex);
+	const suboutlineCustomId = separatorIndex === -1 ? null : orgItemId;
+	const body = childBodiesById.get(parentId);
+	if (!body) return undefined;
+
+	const lines = body.split("\n");
+	let capturedLines: string[] = [];
+
+	if (suboutlineCustomId) {
+		for (let i = 0; i < lines.length; i++) {
+			const headingMatch = /^(\*+)\s+/.exec(lines[i] ?? "");
+			if (!headingMatch || headingMatch[1].length < 2) continue;
+
+			let j = i + 1;
+			while (j < lines.length && lines[j]?.trim() === "") j++;
+			if (lines[j]?.trim() !== ":PROPERTIES:") continue;
+
+			let customId: string | undefined;
+			j++;
+			for (; j < lines.length; j++) {
+				const trimmed = lines[j]?.trim() ?? "";
+				const customIdMatch = /^:CUSTOM_ID:\s*(.+?)\s*$/u.exec(trimmed);
+				if (customIdMatch) {
+					customId = customIdMatch[1];
+				}
+				if (trimmed === ":END:") {
+					j++;
+					break;
+				}
+			}
+
+			if (customId !== suboutlineCustomId) continue;
+
+			let end = j;
+			while (end < lines.length && !/^\*+\s+/u.test(lines[end] ?? "")) {
+				end++;
+			}
+			capturedLines = trimBlankLines(lines.slice(j, end));
+			break;
+		}
+	} else {
+		const firstHeadingIndex = lines.findIndex(line => /^\*\s+/u.test(line));
+		if (firstHeadingIndex === -1) return undefined;
+		const nextHeadingIndex = lines.findIndex((line, index) => index > firstHeadingIndex && /^\*+\s+/u.test(line));
+		const endIndex = nextHeadingIndex === -1 ? lines.length : nextHeadingIndex;
+		capturedLines = trimBlankLines(lines.slice(firstHeadingIndex + 1, endIndex));
+	}
+
+	const captured = capturedLines.join("\n").trim();
+	if (!captured) return undefined;
+
+	const truncated = safeTruncateUtf8(captured, maxBytes);
+	if (!truncated.truncated) return truncated.text;
+	return `${truncated.text}\n…(elided — fetch via \`org get ${parentId}\`)`;
+}
+
+function materializePlanWaves(waves: PlanWave[], opts: PlanWaveMaterializeOpts = {}): MaterializedPlanWaves {
 	const visibleEntries = waves.flatMap(wave => wave.entries.filter(entry => !entry.deferred));
 	const taskIdByEntryId = new Map<string, string>();
 	for (const [index, entry] of visibleEntries.entries()) {
@@ -116,11 +193,16 @@ function materializePlanWaves(waves: PlanWave[], planItemId?: string): Materiali
 			const blockers = (entry.dependsOn ?? [])
 				.map(depId => taskIdByEntryId.get(depId))
 				.filter((blockerId): blockerId is string => blockerId !== undefined);
+			const slice =
+				entry.orgItemId && opts.childBodiesById
+					? extractChildBodySection(entry.orgItemId, opts.childBodiesById, opts.todoDetailsMaxBytes ?? 4096)
+					: undefined;
+			const details = entry.details && slice ? `${entry.details}\n\n${slice}` : (entry.details ?? slice);
 			const item: TodoItem = {
 				id: taskId,
 				content: entry.step,
 				status: "pending",
-				details: entry.details,
+				details,
 				blockers: blockers.length > 0 ? blockers : undefined,
 				orgItemId: entry.orgItemId,
 				layer: entry.layer,
@@ -134,7 +216,7 @@ function materializePlanWaves(waves: PlanWave[], planItemId?: string): Materiali
 		groups.push({
 			id: `group-${nextGroupNumber++}`,
 			name: wave.name,
-			planItemId,
+			planItemId: opts.planItemId,
 			waveIndex: waveIndex + 1,
 			tasks,
 		});
@@ -144,8 +226,8 @@ function materializePlanWaves(waves: PlanWave[], planItemId?: string): Materiali
 	return { groups, taskIdByEntryId };
 }
 
-export function planWavesToTodoGroups(waves: PlanWave[], planItemId?: string): TodoGroup[] {
-	return materializePlanWaves(waves, planItemId).groups;
+export function planWavesToTodoGroups(waves: PlanWave[], opts: PlanWaveMaterializeOpts = {}): TodoGroup[] {
+	return materializePlanWaves(waves, opts).groups;
 }
 
 export function materializeFluidPlanToTodos(plan: FluidPlan): FluidTodoPlan {

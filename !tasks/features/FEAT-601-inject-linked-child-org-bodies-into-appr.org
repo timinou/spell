@@ -1,0 +1,203 @@
+#+TITLE: Inject linked child org bodies into approved plan prompt
+#+STATE: DONE
+#+SESSION_ID: 14c0eebddf28ec77
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T16-14-30-268Z_14c0eebddf28ec77.jsonl]]
+#+CUSTOM_ID: FEAT-601-inject-linked-child-org-bodies-into-appr
+#+EFFORT: 5h
+#+LAYER: coding-agent
+
+* Initial Message
+
+@!tasks/plans/PLAN-251-inject-child-item-bodies-into-approved-p.org <- assess how well this is done
+
+* Scope
+
+Thread every linked child item's `{id, body, properties}` from `validatePlanItem` through `ExitPlanModeDetails` into the approved-plan prompt template via a new `## Child Item Specifications` block. Consolidate the Momus review path (`interactive-mode.ts:1534-1547`) onto the same helper so the "stitch child bodies" logic lives in one place.
+
+In-scope: `exit-plan-mode.ts`, `plan-mode-approved.md`, `interactive-mode.ts` (approvePlan thread + Momus path), settings schema, new `child-item-spec.ts` helper, new `safe-truncate-utf8.ts` helper.
+Out of scope: todo-details injection (separate feature), non-org file-backed plans (they have no child graph).
+
+* Existing Patterns
+
+- `validatePlanItem` at `packages/coding-agent/src/plan-mode/plan-validation.ts:163` already returns `resolvedChildren: Map<string, ResolvedPlanChildItem>` with `{id, file, body, properties}`. `PlanValidationResult` is exported from the same file.
+- `ExitPlanModeDetails` at `packages/coding-agent/src/tools/exit-plan-mode.ts:44` is the single source of truth for details threaded into `InteractiveMode.handleExitPlanModeTool`.
+- `InteractiveMode.#approvePlan` at `packages/coding-agent/src/modes/interactive-mode.ts:1259` renders `plan-mode-approved.md` via `renderPromptTemplate`.
+- Momus review path at `interactive-mode.ts:1534-1547` stitches child bodies via `extractIdLinks` + `resolvePlanItem`. This is the consolidation target.
+- Handlebars conventions: template already uses `{{{this.body}}}` for coordinator `executionItems` (`plan-mode-approved.md:18`). Reuse the triple-brace pattern.
+- Settings schema lives at `packages/coding-agent/src/config/settings-schema.ts::SETTINGS_SCHEMA`. Existing `plan*`/`planMode.*` keys (lines 1741-1757) are the insertion neighborhood.
+- UTF-8-safe truncation: project standard is code-point-boundary truncation, never raw byte slicing (yields invalid UTF-8 mid-emoji).
+
+* Tests
+
+- File: `packages/coding-agent/test/plan-mode/approved-plan-injection.test.ts` — renderer contract; seven scenarios.
+- File: `packages/coding-agent/test/tools/exit-plan-mode-propagation.test.ts` — integration on `ExitPlanModeTool.execute`; two scenarios.
+- File: `packages/coding-agent/test/utils/safe-truncate-utf8.test.ts` — three scenarios.
+
+Renderer scenarios (`approved-plan-injection.test.ts`):
+1. Present: `childItems = [{id:"FEAT-A", title:"Foo", body:"body-a", properties:{LAYER:"core"}}, {id:"FEAT-B", title:"Bar", body:"body-b", properties:{LAYER:"ui"}}]` → output contains `## Child Item Specifications`, `### FEAT-A - Foo`, `### FEAT-B - Bar`, `body-a`, `body-b`, in this order, and the section header precedes `## Plan`.
+2. Properties bullet: output contains `- Properties: LAYER=core` for FEAT-A and `- Properties: LAYER=ui` for FEAT-B — one bullet per child, keys sorted alphabetically, values rendered verbatim.
+3. Per-child truncation marker: given a 12000-byte body and `injectedChildItemMaxBytes=8192`, rendered body ends with `
+…(elided — fetch via \`org get <ID>\`)` with `<ID>` substituted, and body byte length (excluding marker) ≤ 8192.
+4. Empty/absent: `childItems=undefined` → no section header; `childItems=[]` → no section header (guarded by `{{#if childItems}}`).
+5. UTF-8 safety: body contains a 4-byte emoji positioned so the byte cap lands inside it — truncation ends on a valid code-point boundary, no `U+FFFD` in output.
+6. Global cap: three children of 6000 bytes each with `approvedPromptMaxBytes=10000` → only the first N that fit whole are emitted; trailing child dropped whole; final line `…(N of 3 child specifications omitted — fetch via \`org get\`)` appended inside the section.
+7. Empty body: child with `body=""` renders heading + properties bullet; no body, no truncation marker.
+
+Integration scenarios (`exit-plan-mode-propagation.test.ts`):
+- IP-1: Two-child PLAN fixture → `details.childItems.length === 2`, order matches `validation.childItemIds`, each entry has populated body.
+- IP-2: File-backed plan (no `itemId`) → `details.childItems === undefined`.
+
+Safe-truncate scenarios (`safe-truncate-utf8.test.ts`):
+- T-1: ASCII below cap → returned unchanged, `truncated=false`.
+- T-2: ASCII above cap → exactly `cap` bytes returned, `truncated=true`.
+- T-3: Cap inside multibyte code point → returned string decodes without `U+FFFD`; byte length ≤ cap; `truncated=true`.
+
+TDD ordering: s3 (unit tests) + s3a (integration test) precede implementation (s4-s7). Integration test is authored at s3a and becomes green at s7.
+
+* Implementation
+
+** s1
+:PROPERTIES:
+:CUSTOM_ID: FEAT-601-inject-linked-child-org-bodies-into-appr::s1-types
+:END:
+- File: `packages/coding-agent/src/tools/exit-plan-mode.ts`
+- Export `interface ChildItemSpec { id: string; title?: string; body: string; properties: Record<string,string> }`.
+- Extend `ExitPlanModeDetails` with optional `childItems?: ChildItemSpec[]` and `childItemsOmittedCount?: number`.
+- File: `packages/coding-agent/src/utils/safe-truncate-utf8.ts` (new).
+- Export `function safeTruncateUtf8(text: string, maxBytes: number): { text: string; truncated: boolean }`.
+- Impl: short-circuit when `Buffer.byteLength(text, "utf8") <= maxBytes`. Otherwise encode via `TextEncoder`, slice to `maxBytes`, decode via `new TextDecoder("utf-8", { fatal: false, ignoreBOM: true })` with `{ stream: false }`, and strip any trailing `\uFFFD` introduced at the cut boundary.
+- Re-export from `packages/coding-agent/src/utils/index.ts`.
+
+** s2
+:PROPERTIES:
+:CUSTOM_ID: FEAT-601-inject-linked-child-org-bodies-into-appr::s2-settings
+:DEPENDS: FEAT-601-inject-linked-child-org-bodies-into-appr::s1-types
+:END:
+- File: `packages/coding-agent/src/config/settings-schema.ts::SETTINGS_SCHEMA`
+- Insert adjacent to `planMode.allowedFolders` (around line 1757):
+  - `"plan.injectedChildItemMaxBytes": { type: "number", default: 8192 }`
+  - `"plan.approvedPromptMaxBytes": { type: "number", default: 131072 }`
+- The `as const` suffix on `SETTINGS_SCHEMA` auto-extends `SettingPath`. Keep `plan.*` distinct from existing `planMode.*`; do not collapse them.
+
+** s3
+:PROPERTIES:
+:CUSTOM_ID: FEAT-601-inject-linked-child-org-bodies-into-appr::s3-tests
+:DEPENDS: FEAT-601-inject-linked-child-org-bodies-into-appr::s2-settings
+:END:
+- File: `packages/coding-agent/test/plan-mode/approved-plan-injection.test.ts`. Implement renderer scenarios 1-7 with concrete inputs per Tests section. Drive the real `renderPromptTemplate` + `plan-mode-approved.md` text import.
+- File: `packages/coding-agent/test/utils/safe-truncate-utf8.test.ts`. Implement T-1, T-2, T-3.
+- Both must fail initially.
+
+** s3a
+:PROPERTIES:
+:CUSTOM_ID: FEAT-601-inject-linked-child-org-bodies-into-appr::s3a-integration-test
+:DEPENDS: FEAT-601-inject-linked-child-org-bodies-into-appr::s3-tests
+:END:
+- File: `packages/coding-agent/test/tools/exit-plan-mode-propagation.test.ts`. Implement IP-1 and IP-2 using a stubbed `ToolSession` and fixture org files. Assert on `ExitPlanModeDetails.childItems` shape and `ExitPlanModeDetails.childItemIds`. Must fail initially until s6.
+
+** s4
+:PROPERTIES:
+:CUSTOM_ID: FEAT-601-inject-linked-child-org-bodies-into-appr::s4-template
+:DEPENDS: FEAT-601-inject-linked-child-org-bodies-into-appr::s3a-integration-test
+:END:
+- File: `packages/coding-agent/src/prompts/system/plan-mode-approved.md`.
+- Insert this block IMMEDIATELY before the `## Plan` heading (line 74, inside the `{{else}}` branch). Do NOT add to the `{{#if executionItems}}` coordinator branch — coordinator already surfaces child context via `executionItems.body`.
+
+```
+{{#if childItems}}
+## Child Item Specifications
+{{#each childItems}}
+### {{id}}{{#if title}} - {{title}}{{/if}}
+- Properties: {{propertiesLine}}
+
+{{{body}}}
+{{#if truncated}}
+…(elided — fetch via `org get {{id}}`)
+{{/if}}
+
+{{/each}}
+{{#if omittedCount}}…({{omittedCount}} of {{totalCount}} child specifications omitted — fetch via `org get`)
+{{/if}}
+{{/if}}
+```
+
+- Template expects each rendered item to carry `propertiesLine` (comma-joined `KEY=VALUE`, keys sorted) and `truncated: boolean`. These shape decisions happen at render-prep time (s7), keeping the template logic-free.
+
+** s5-consolidate
+:PROPERTIES:
+:CUSTOM_ID: FEAT-601-inject-linked-child-org-bodies-into-appr::s5-consolidate
+:DEPENDS: FEAT-601-inject-linked-child-org-bodies-into-appr::s4-template
+:END:
+- File: `packages/coding-agent/src/plan-mode/child-item-spec.ts` (new).
+- Export `function buildChildItemSpecs(resolvedChildren: Map<string, ResolvedPlanChildItem>, orderedIds: string[], opts: { perChildMaxBytes: number; globalMaxBytes: number }): { items: ChildItemSpec[]; omittedCount: number; totalCount: number }`.
+  - For each id in `orderedIds`, look up `resolvedChildren`; skip missing (validator already surfaced the issue).
+  - Derive `title` from the first `* ` heading line of `body` when present; strip leading `*` and whitespace; may be `undefined`.
+  - Truncate `body` via `safeTruncateUtf8` against `perChildMaxBytes`; set internal `truncated=true` when cut.
+  - Track a running byte budget computed over `JSON.stringify({id,title,body,properties})`; when next child overflows `globalMaxBytes`, stop. Report `omittedCount = totalCount - items.length`, `totalCount = orderedIds.length` (resolved subset).
+- Export `function renderChildItemSpec(spec: ChildItemSpec & { truncated?: boolean }): ChildItemSpec & { propertiesLine: string; truncated: boolean }`.
+  - `propertiesLine`: sorted keys joined as `K1=V1, K2=V2`; values verbatim.
+- Replace inline Momus logic at `interactive-mode.ts:1534-1547`:
+  - Before: `extractIdLinks(planContent)` loop + `resolvePlanItem` + concat `## ${id}
+
+${childItem.body}`.
+  - After: call `validatePlanItem(this.settings, this.sessionManager.getCwd(), planContent-derived id)`; when validation returns a non-null result, call `buildChildItemSpecs(validation.resolvedChildren, validation.childItemIds, { perChildMaxBytes: Number.MAX_SAFE_INTEGER, globalMaxBytes: Number.MAX_SAFE_INTEGER })`, then format `items` as `## ${id}${title ? " - " + title : ""}
+
+${body}`.
+  - Non-org path: `validatePlanItem` returns null; keep existing behavior (no child dump).
+  - Momus only runs after approval, which requires `validation.valid`; the consolidation is a strict superset.
+
+** s6-tool-propagate
+:PROPERTIES:
+:CUSTOM_ID: FEAT-601-inject-linked-child-org-bodies-into-appr::s6-tool-propagate
+:DEPENDS: FEAT-601-inject-linked-child-org-bodies-into-appr::s5-consolidate
+:END:
+- File: `packages/coding-agent/src/tools/exit-plan-mode.ts::ExitPlanModeTool.execute`.
+- Inside the `params.itemId` branch (lines 147-208), after the `validation.valid` check, call `buildChildItemSpecs(validation.resolvedChildren, validation.childItemIds, { perChildMaxBytes: settings.get("plan.injectedChildItemMaxBytes"), globalMaxBytes: settings.get("plan.approvedPromptMaxBytes") })`. Include `childItems: items` and `childItemsOmittedCount: omittedCount` on the returned `details`.
+- Do NOT populate these on the non-org file-backed path.
+
+** s7-thread
+:PROPERTIES:
+:CUSTOM_ID: FEAT-601-inject-linked-child-org-bodies-into-appr::s7-thread
+:DEPENDS: FEAT-601-inject-linked-child-org-bodies-into-appr::s6-tool-propagate
+:END:
+- File: `packages/coding-agent/src/modes/interactive-mode.ts::InteractiveMode.#approvePlan`.
+- Extend `options` with `childItems?: ChildItemSpec[]` and `childItemsOmittedCount?: number`.
+- In `handleExitPlanModeTool` (around line 1519) forward `details.childItems` and `details.childItemsOmittedCount` into `#approvePlan`.
+- At `renderPromptTemplate` (line 1372), prepare view-model:
+  - `const preparedChildItems = (options.childItems ?? []).map(renderChildItemSpec);`
+  - pass `childItems: preparedChildItems.length > 0 ? preparedChildItems : undefined`
+  - pass `omittedCount: options.childItemsOmittedCount ?? 0`
+  - pass `totalCount: preparedChildItems.length + (options.childItemsOmittedCount ?? 0)`
+
+** s8-verify
+:PROPERTIES:
+:CUSTOM_ID: FEAT-601-inject-linked-child-org-bodies-into-appr::s8-verify
+:DEPENDS: FEAT-601-inject-linked-child-org-bodies-into-appr::s7-thread
+:END:
+- Run `bun check:ts`.
+- Run `bun test packages/coding-agent/test/plan-mode/approved-plan-injection.test.ts packages/coding-agent/test/tools/exit-plan-mode-propagation.test.ts packages/coding-agent/test/utils/safe-truncate-utf8.test.ts`.
+- Manual smoke: approve a small two-FEAT plan; inspect the fresh executing session's first synthetic prompt in the transcript jsonl; confirm `## Child Item Specifications` precedes `## Plan` and each `### FEAT-xxx` carries the child body.
+
+* Edge Cases
+
+- Broken `[[id:…]]` link: `validatePlanItem` raises an issue before `ExitPlanModeTool` returns success; never reaches the prompt path.
+- Empty child body: heading + properties bullet only, no body, no truncation marker (scenario 7).
+- Non-org plan (no `itemId`): `childItems === undefined`; `{{#if childItems}}` omits the section.
+- UTF-8 boundary: `safeTruncateUtf8` guarantees code-point-boundary truncation; tested via scenario 5 and T-3.
+- Global cap exceeded: trailing children dropped whole; omission summary emitted (scenario 6).
+- Duplicate `[[id:X]]` in PLAN body: validator dedupes via `Map`; child appears once.
+- Momus regression: s5 switches Momus from `extractIdLinks` to `validatePlanItem`. Only invoked post-approval, which guarantees `validation.valid`. Strict superset for valid plans.
+- Settings ≤ 0 or missing: clamp `perChildMaxBytes` and `globalMaxBytes` to `1` inside `buildChildItemSpecs`.
+
+* Acceptance Criteria
+
+1. Fresh executing session shows `## Child Item Specifications` with one `### <id>` subsection per `[[id:…]]` link in the PLAN body, ordered by `validation.childItemIds`.
+2. Per-child truncation marker appears when a child body exceeds `plan.injectedChildItemMaxBytes`.
+3. Global omission summary appears when the `globalMaxBytes` budget is exceeded; no child is truncated mid-body at the global layer.
+4. `bun check:ts` passes.
+5. All three new test files pass.
+6. Non-org file-backed plan approval renders no `## Child Item Specifications` section.
+7. Momus review renders every linked child body via `buildChildItemSpecs`; the inline stitching code at `interactive-mode.ts:1534-1547` is removed.
+8. Subsequent execution session emits no `org get <childId>` before its first `todo_write` (manual smoke).
+
+NOTE [2026-04-19]: Implemented child item spec injection, UTF-8 truncation, and Momus consolidation; verified with focused FEAT-601 tests plus bun check:ts.

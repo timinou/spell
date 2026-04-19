@@ -1,0 +1,80 @@
+#+TITLE: Inject child item bodies into approved plan prompt and seeded todos
+#+STATE: DONE
+#+SESSION_ID: 14c0eebddf28ec77
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T16-14-30-268Z_14c0eebddf28ec77.jsonl]]
+#+CUSTOM_ID: PLAN-272-inject-child-item-bodies-into-approved-p
+#+EFFORT: 9h
+#+LAYER: coding-agent
+
+* Initial Message
+
+@!tasks/plans/PLAN-251-inject-child-item-bodies-into-approved-p.org <- assess how well this is done
+
+* Context
+
+When a PLAN item is approved via `exit_plan_mode`, the fresh executing session receives only the PLAN's own body (via `planContent` in `plan-mode-approved.md`) and a bare Execution Manifest with `[[id:…]]` links. Every linked FEAT/BUG/FUP body must be re-fetched by the executing agent via `org get` before it can act; when waves auto-seed todos, each `TodoItem.details` is empty so `task … todoRef` auto-derives a one-liner assignment — sniper-pattern fails.
+
+`validatePlanItem` (at `packages/coding-agent/src/plan-mode/plan-validation.ts:163`) already loads every linked child's `{id, file, body, properties}` into `resolvedChildren: Map<string, ResolvedPlanChildItem>` for layer resolution, then discards the map. This plan plumbs that existing data through to:
+1. The approved-plan prompt template via a new `## Child Item Specifications` section (FEAT-601-inject-linked-child-org-bodies-into-appr).
+2. The `TodoItem.details` of each wave-seeded todo via a new sub-outline slicer (FEAT-602-seed-todos-from-waves-with-owning-child).
+
+Log-audit findings (30 recent sessions in `~/.spell/agent/sessions/-code-ora-spell/`):
+- `todo_write` ops: 191 `update` / 32 `replace` / 0 `add_group`; `add_group`/`add_phase` is dead surface.
+- Gate adoption: `gateCmd` 55%, `orgItemId` 86%, `layer` 45%, `gateArtifact` 0%.
+- 2 genuine aborts (`isError=true, text="Tool execution was aborted"`) — both Ctrl-C'd mid-`todo_write` because the assistant lacked child-item context. This plan closes that gap.
+- 59 sessions use `todoRef`; when paired with empty `TodoItem.details`, sniper-pattern degenerates.
+
+Corrections from predecessor plan (PLAN-251) assessment:
+- The FEAT-573 signature change silently dropped `TodoGroup.planItemId`. Fixed by moving to an options-object signature `materializePlanWaves(waves, opts?)` that preserves `planItemId`.
+- FEAT-573::s1 claimed `parseOrgDependProperties` could be reused to slice sub-outline body text; it returns only `{customId, title, ...}` from `:PROPERTIES:` drawers — no body. Fixed with a dedicated `extractChildBodySection` slicer in FEAT-602-seed-todos-from-waves-with-owning-child::s3-slicer.
+- FEAT-572 added a parallel path to the existing Momus review stitcher at `interactive-mode.ts:1534-1547`. Fixed by consolidating both call sites onto `buildChildItemSpecs` in FEAT-601-inject-linked-child-org-bodies-into-appr::s5-consolidate.
+- Byte-truncation left UTF-8 safety unspecified. Fixed with `safeTruncateUtf8` helper (FEAT-601-inject-linked-child-org-bodies-into-appr::s1-types).
+- Test scenarios enumerated with concrete inputs/outputs, not named-only.
+
+Advisory follow-up (not in execution manifest): see `FUP-058-todo-task-prompt-event-bus-improvements` for separable todo/task-prompt + event-bus improvements surfaced during this audit.
+
+* Verification
+
+1. `bun check:ts` passes.
+2. `bun test packages/coding-agent/test/plan-mode/approved-plan-injection.test.ts` passes (seven renderer scenarios).
+3. `bun test packages/coding-agent/test/tools/exit-plan-mode-propagation.test.ts` passes (two integration scenarios).
+4. `bun test packages/coding-agent/test/utils/safe-truncate-utf8.test.ts` passes (three scenarios).
+5. `bun test packages/coding-agent/test/orchestrators/fluid/plan-to-todos-details.test.ts` passes (six slicer + materializer scenarios).
+6. `bun test packages/coding-agent/test/modes/interactive-mode-approve-plan.test.ts` passes (one integration scenario).
+7. Manual smoke: plan a small two-FEAT change, approve it, inspect the fresh session's first synthetic prompt via transcript jsonl:
+   - `## Child Item Specifications` section with FEAT bodies present, ordered by `validation.childItemIds`, appearing BEFORE `## Plan`.
+   - Seeded todos have `details` populated with sub-outline text (verified via `/todo` command).
+   - No `org get <FEAT-id>` tool call appears before the first `todo_write`.
+8. Regression: approve a non-org file-backed plan; confirm flow unchanged and no `## Child Item Specifications` section emitted.
+9. Regression: Momus review renders every linked child body via the consolidated helper; inline stitching at `interactive-mode.ts:1534-1547` is removed.
+
+* Execution Manifest
+
+** plumbing                                        :wave:
+
+- [[id:FEAT-601-inject-linked-child-org-bodies-into-appr]] Inject linked child org bodies into approved plan prompt + consolidate Momus stitcher (5h). Internal sub-outline chain: s1-types → s2-settings → s3-tests + s3a-integration-test → s4-template → s5-consolidate → s6-tool-propagate → s7-thread → s8-verify.
+
+** todo-details                                    :wave:
+
+- [[id:FEAT-602-seed-todos-from-waves-with-owning-child]] Seed todos from waves with owning child body section (4h, depends FEAT-601-inject-linked-child-org-bodies-into-appr). Internal sub-outline chain: s1-settings → s2-tests → s3-slicer → s4-materializer → s5-thread → s6-integration → s7-verify.
+
+** Completion [2026-04-19]
+
+*** Verification
+- `bun test packages/coding-agent/test/plan-mode/approved-plan-injection.test.ts packages/coding-agent/test/tools/exit-plan-mode-propagation.test.ts packages/coding-agent/test/utils/safe-truncate-utf8.test.ts packages/coding-agent/test/orchestrators/fluid/plan-to-todos-details.test.ts packages/coding-agent/test/modes/interactive-mode-approve-plan.test.ts` → passed (19 tests, 0 failures).
+- `bun test packages/coding-agent/test/plan-mode/plan-mode-approved-prompt.test.ts packages/coding-agent/test/tools/exit-plan-mode.test.ts packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts packages/coding-agent/test/orchestrators/fluid-plan-to-todos.test.ts` → passed (29 tests, 0 failures).
+- `bun check:ts` → passed.
+- `grep '## Child Item Specifications|## Plan' packages/coding-agent/src/prompts/system/plan-mode-approved.md` → child item section present before `## Plan` (lines 75 and 90).
+- `grep 'buildChildItemSpecs|validatePlanItem|extractIdLinks|resolvePlanItem' packages/coding-agent/src/modes/interactive-mode.ts` → Momus branch now uses `validatePlanItem` + `buildChildItemSpecs`; prior inline `extractIdLinks` / `resolvePlanItem` stitcher is absent.
+
+*** Artifacts
+- Source: [[file:packages/coding-agent/src/plan-mode/child-item-spec.ts]]
+- Source: [[file:packages/coding-agent/src/utils/safe-truncate-utf8.ts]]
+- Source: [[file:packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts]]
+- Source: [[file:packages/coding-agent/src/tools/exit-plan-mode.ts]]
+- Source: [[file:packages/coding-agent/src/modes/interactive-mode.ts]]
+- Prompt template: [[file:packages/coding-agent/src/prompts/system/plan-mode-approved.md]]
+- Tests: [[file:packages/coding-agent/test/plan-mode/approved-plan-injection.test.ts]], [[file:packages/coding-agent/test/tools/exit-plan-mode-propagation.test.ts]], [[file:packages/coding-agent/test/utils/safe-truncate-utf8.test.ts]], [[file:packages/coding-agent/test/orchestrators/fluid/plan-to-todos-details.test.ts]], [[file:packages/coding-agent/test/modes/interactive-mode-approve-plan.test.ts]]
+
+*** Deviations
+- Live transcript/manual smoke for a fresh executing session was not run end-to-end in this execution session. Replaced with focused integration coverage of the synthetic approved-plan prompt (`interactive-mode-approve-plan.test.ts`), tool detail propagation (`exit-plan-mode-propagation.test.ts`), and prompt/template ordering via grep. No blocker observed.
