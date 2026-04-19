@@ -140,7 +140,7 @@ Test files:
 ** Write type-level tests (TDD)
 :PROPERTIES:
 :CUSTOM_ID: FEAT-595-envelope-v2-types-foundation-subagentout::type-tests
-:DEPENDS: FEAT-A::define-enum
+:DEPENDS: FEAT-595-envelope-v2-types-foundation-subagentout::define-enum
 :END:
 - File: ~packages/coding-agent/test/task/types-envelope-v2.test.ts~
 - Use ~expectTypeOf~ (bun test + expect-type pattern) or structural assertion with ~satisfies~.
@@ -153,7 +153,7 @@ Test files:
 ** Rewrite SingleResult + AgentProgress + TaskToolDetails
 :PROPERTIES:
 :CUSTOM_ID: FEAT-595-envelope-v2-types-foundation-subagentout::rewrite-singleresult
-:DEPENDS: FEAT-A::type-tests
+:DEPENDS: FEAT-595-envelope-v2-types-foundation-subagentout::type-tests
 :END:
 - File: ~packages/coding-agent/src/task/types.ts~
 - Apply shape from spec section 3.2-3.4.
