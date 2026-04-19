@@ -9,8 +9,9 @@ import type { SandboxPolicy } from "./types";
  */
 export function enforcePathWrite(targetPath: string, cwd: string, policy: SandboxPolicy | undefined): string | null {
 	if (!policy) return null;
+	const prefix = policy.writeErrorPrefix ?? "";
 	if (policy.pathsWrite.length === 0) {
-		return "Sandbox policy blocks all file writes";
+		return `${prefix}Sandbox policy blocks all file writes`;
 	}
 
 	const resolved = path.resolve(cwd, targetPath);
@@ -22,5 +23,5 @@ export function enforcePathWrite(targetPath: string, cwd: string, policy: Sandbo
 		}
 	}
 
-	return `Sandbox policy blocks writes to '${targetPath}'. Allowed paths: ${policy.pathsWrite.join(", ")}`;
+	return `${prefix}Sandbox policy blocks writes to '${targetPath}'. Allowed paths: ${policy.pathsWrite.join(", ")}`;
 }

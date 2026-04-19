@@ -1,0 +1,7 @@
+$ bun test packages/coding-agent/test/orchestrators/wave-snapshot.test.ts
+bun test v1.3.10 (30e609e0)
+
+ 4 pass
+ 0 fail
+ 18 expect() calls
+Ran 4 tests across 1 file. [190.00ms]

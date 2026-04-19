@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import type {
 	AgentTool,
 	AgentToolContext,
@@ -26,7 +27,7 @@ import { Ellipsis, Hasher, type RenderCache, renderStatusLine, truncateToWidth }
 import { isCodeToolSupportedPath } from "./code-supported-files";
 import { formatCodeTextCompatibilityNotice } from "./code-text-compatibility";
 import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
-import { applyManagedBufferContent } from "./managed-code-buffer";
+import { applyManagedBufferContent, invalidateManagedCodeBuffersForPaths } from "./managed-code-buffer";
 import { enforceModeWrite, resolvePlanPath } from "./mode-guard";
 import { type OutputMeta, outputMeta } from "./output-meta";
 import {
@@ -45,6 +46,12 @@ const writeSchema = Type.Object({
 		description: "Path to the file to write (relative or absolute)",
 	}),
 	content: Type.String({ description: "Content to write to the file" }),
+	force: Type.Optional(
+		Type.Boolean({
+			description:
+				"Bypass write-shrink and parse-regression guards. Use only when deliberately replacing a file wholesale.",
+		}),
+	),
 });
 
 export type WriteToolInput = Static<typeof writeSchema>;
@@ -112,6 +119,10 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			const sandboxError = enforcePathWrite(path, this.session.cwd, this.session.sandboxPolicy);
 			if (sandboxError) throw new Error(sandboxError);
 			const absolutePath = resolvePlanPath(this.session, path);
+			const existingFile = await fs
+				.stat(absolutePath)
+				.then(() => true)
+				.catch(() => false);
 			const resultText = `Successfully wrote ${content.length} bytes to ${path}`;
 			const compatibilityNotice = formatCodeTextCompatibilityNotice("write");
 			let bypassNotice = "";
@@ -127,10 +138,16 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				} else {
 					bypassNotice = `\nBypassed WRITE_SHRINK_BLOCKED and WRITE_PARSE_REGRESSION.`;
 				}
-				applyManagedBufferContent(absolutePath, content, {
-					create: true,
-					sessionId: this.session.getSessionId?.() ?? undefined,
-				});
+				try {
+					applyManagedBufferContent(absolutePath, content, {
+						create: !existingFile,
+						sessionId: this.session.getSessionId?.() ?? undefined,
+					});
+				} catch (error) {
+					if (!force) throw error;
+					invalidateManagedCodeBuffersForPaths([absolutePath]);
+					await Bun.write(absolutePath, content);
+				}
 				invalidateFsScanAfterWrite(absolutePath);
 				const diagnostics = await this.#getManagedBufferDiagnostics(absolutePath, content, signal);
 				if (!diagnostics) {

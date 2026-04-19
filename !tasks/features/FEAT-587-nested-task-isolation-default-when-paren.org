@@ -1,5 +1,5 @@
 #+TITLE: Nested task isolation default when parent is itself a subagent
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c07eaaa046a608
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T08-04-50-433Z_14c07eaaa046a608.jsonl]]
 #+CUSTOM_ID: FEAT-587-nested-task-isolation-default-when-paren
@@ -112,3 +112,5 @@ Scenarios:
 - `bun check:ts` clean.
 - Manual repro of original incident shape: from a depth-1 `task` subagent, dispatch a 3-task `quick_task` batch with no explicit `isolated` → dispatch coerces isolation on; worktree patch is produced; merge applies only on clean reconcile. Simulate a destructive write in one child → isolated path rejects or at least isolates the damage.
 - Grep audit: `isolated` remains opt-in at depth 0; only the `taskDepth >= 1` branch added.
+
+NOTE [2026-04-19]: Implemented nested auto-isolation heuristics, preserved isolation downgrade notice behavior, rendered isolated:auto state, repaired task launch locals, and added focused regression tests.

@@ -1,5 +1,5 @@
 #+TITLE: Subagent guardrails to prevent destructive cascade after PLAN-259 incident
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14c07eaaa046a608
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T08-04-50-433Z_14c07eaaa046a608.jsonl]]
 #+CUSTOM_ID: PLAN-265-subagent-guardrails-to-prevent-destructi
@@ -93,3 +93,29 @@ Verification artifacts to capture in completion report (saved under =!tasks/plan
 - After Wave 1 lands, the next plan-mode handoff exercises auto-isolation + wave snapshots end-to-end.
 - =quick_task= dispatches in existing skills/templates that omit =filesDeps= will fail loudly until updated; expected breakage radius is small (=quick_task= is rarely used outside parent =task= agents).
 - =force: true= compatibility notices on write will appear in transcripts whenever a wholesale rewrite is intentional; review for unexpected hits.
+
+** Completion [2026-04-19]
+*** Verification
+- `bun test packages/coding-agent/test/tools/write-shrink-guard.test.ts` → pass (8 tests).
+- `bun test packages/coding-agent/test/task/quick-task-scope.test.ts` → pass (8 tests).
+- `bun test packages/coding-agent/test/task/nested-isolation-default.test.ts` → pass (5 tests).
+- `bun test packages/coding-agent/test/orchestrators/wave-snapshot.test.ts` → pass (4 tests).
+- `bun lint:ts` → pass.
+- `bun check:ts` → pass.
+- `bun check` → pass after fixing existing clippy diagnostics in `crates/pi-natives/src/code_buffer.rs`.
+- Manual/fresh-process repro script confirmed: wave snapshot ref creation, `OUT_OF_SCOPE_MUTATION`, and `WRITE_SHRINK_BLOCKED`; `git show refs/spell/plan/PLAN-265-REPRO/wave-1:src/wave.txt` returned `wave-1` from the snapshot ref.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-265-subagent-guardrails-to-prevent-destructi/feat585-write-guard-test.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-265-subagent-guardrails-to-prevent-destructi/feat586-quick-task-scope-test.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-265-subagent-guardrails-to-prevent-destructi/feat587-nested-isolation-test.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-265-subagent-guardrails-to-prevent-destructi/feat588-wave-snapshot-test.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-265-subagent-guardrails-to-prevent-destructi/lint-ts.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-265-subagent-guardrails-to-prevent-destructi/check-ts.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-265-subagent-guardrails-to-prevent-destructi/check-full.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-265-subagent-guardrails-to-prevent-destructi/repro-guardrails.json]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-265-subagent-guardrails-to-prevent-destructi/snapshot-refs.txt]]
+*** Deviations
+- Did not run `git restore --source=refs/spell/plan/<id>/wave-1 -- <path>` during repro because the user explicitly prohibited `git restore`; used `git show refs/spell/plan/PLAN-265-REPRO/wave-1:src/wave.txt` to verify recoverable snapshot contents instead.
+- The live parent session's already-loaded `task` tool remained stale while on-disk source was being repaired; verification used fresh Bun test/process loads of the updated code rather than the current in-memory task tool instance.
+
+NOTE [2026-04-19]: Wave 1 guardrails landed with verification artifacts recorded under !tasks/plans/plan-artifacts/PLAN-265-subagent-guardrails-to-prevent-destructi/.

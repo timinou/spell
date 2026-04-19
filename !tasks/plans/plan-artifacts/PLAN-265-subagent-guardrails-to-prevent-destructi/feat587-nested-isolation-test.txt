@@ -1,0 +1,7 @@
+$ bun test packages/coding-agent/test/task/nested-isolation-default.test.ts
+bun test v1.3.10 (30e609e0)
+
+ 5 pass
+ 0 fail
+ 11 expect() calls
+Ran 5 tests across 1 file. [4.31s]

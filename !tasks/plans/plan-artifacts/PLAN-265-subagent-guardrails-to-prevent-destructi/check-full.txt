@@ -1,0 +1,7 @@
+$ bun check
+$ bun run --parallel check:ts check:rs
+check:ts | Checked 1930 files in 2s. No fixes applied.
+check:ts | Done in 6.23s
+check:rs | Checking pi-natives v13.12.8 (/home/user/code/ora/spell/crates/pi-natives)
+check:rs | Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.30s
+check:rs | Done in 15.14s

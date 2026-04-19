@@ -1,5 +1,5 @@
 #+TITLE: Write-shrink and parse-fail guard on managed-buffer writes
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c07eaaa046a608
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T08-04-50-433Z_14c07eaaa046a608.jsonl]]
 #+CUSTOM_ID: FEAT-585-write-shrink-and-parse-fail-guard-on-man
@@ -100,3 +100,5 @@ Scenarios (each asserts exact error shape or exact success payload):
 - Manual repro (force): same call with `force: true` → write succeeds, compatibility notice includes "bypassed WRITE_SHRINK_BLOCKED".
 - Grep audit: `grep "applyManagedBufferContent(" packages/coding-agent/src` shows every caller passes `force` through (or omits and accepts default false).
 - Regression: existing `packages/coding-agent/test/tools/tools.test.ts` "routes new TypeScript writes through the managed buffer" still passes.
+
+NOTE [2026-04-19]: Implemented write.force schema, shrink + parse-regression write guards, force fallback for intentional wholesale rewrites, and end-to-end write guard tests.

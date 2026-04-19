@@ -90,7 +90,7 @@ export function computeWaveLayers(plan: FluidPlan): PlanWave[] {
 	);
 }
 
-function materializePlanWaves(waves: PlanWave[]): MaterializedPlanWaves {
+function materializePlanWaves(waves: PlanWave[], planItemId?: string): MaterializedPlanWaves {
 	const visibleEntries = waves.flatMap(wave => wave.entries.filter(entry => !entry.deferred));
 	const taskIdByEntryId = new Map<string, string>();
 	for (const [index, entry] of visibleEntries.entries()) {
@@ -131,12 +131,11 @@ function materializePlanWaves(waves: PlanWave[]): MaterializedPlanWaves {
 			return item;
 		});
 
-		const firstVisibleEntry = visibleWaveEntries[0];
 		groups.push({
 			id: `group-${nextGroupNumber++}`,
 			name: wave.name,
-			planItemId: firstVisibleEntry?.orgItemId,
-			waveIndex,
+			planItemId,
+			waveIndex: waveIndex + 1,
 			tasks,
 		});
 	}
@@ -145,8 +144,8 @@ function materializePlanWaves(waves: PlanWave[]): MaterializedPlanWaves {
 	return { groups, taskIdByEntryId };
 }
 
-export function planWavesToTodoGroups(waves: PlanWave[]): TodoGroup[] {
-	return materializePlanWaves(waves).groups;
+export function planWavesToTodoGroups(waves: PlanWave[], planItemId?: string): TodoGroup[] {
+	return materializePlanWaves(waves, planItemId).groups;
 }
 
 export function materializeFluidPlanToTodos(plan: FluidPlan): FluidTodoPlan {

@@ -1,0 +1,2 @@
+$ git -C /tmp/plan265-repro-2D5C8I for-each-ref refs/spell/ --format='%(refname) %(objectname)'
+refs/spell/plan/PLAN-265-REPRO/wave-1 <commit-omitted-in-artifact>

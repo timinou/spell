@@ -149,7 +149,7 @@ fn missing_session_id_err() -> Error {
 	}))
 }
 
-fn required_session_id<'a>(options: &'a Value) -> Result<&'a str> {
+fn required_session_id(options: &Value) -> Result<&str> {
 	session_id(options).ok_or_else(missing_session_id_err)
 }
 
@@ -260,7 +260,7 @@ fn parse_outline_enrich(options: &Value) -> EnrichFlags {
 	EnrichFlags::from_tokens(tokens)
 }
 
-fn has_outline_enrich(flags: EnrichFlags) -> bool {
+const fn has_outline_enrich(flags: EnrichFlags) -> bool {
 	flags.signature || flags.metrics || flags.doc || flags.graph
 }
 fn root_hint(options: &Value) -> Option<PathBuf> {
@@ -430,7 +430,7 @@ fn edit_save_mode(options: &Value) -> Result<EditSaveMode> {
 	{
 		"auto" => Ok(EditSaveMode::Auto),
 		"staged" => Ok(EditSaveMode::Staged),
-		other => Err(json_err(format!("Invalid saveMode '{other}'. Use 'auto' or 'staged'.",))),
+		other => Err(json_err(format!("Invalid saveMode '{other}'. Use 'auto' or 'staged'."))),
 	}
 }
 

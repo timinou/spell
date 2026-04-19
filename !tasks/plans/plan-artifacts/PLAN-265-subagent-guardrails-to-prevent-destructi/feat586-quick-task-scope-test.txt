@@ -1,0 +1,7 @@
+$ bun test packages/coding-agent/test/task/quick-task-scope.test.ts
+bun test v1.3.10 (30e609e0)
+
+ 8 pass
+ 0 fail
+ 12 expect() calls
+Ran 8 tests across 1 file. [1.68s]

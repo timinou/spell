@@ -21,6 +21,7 @@ import type { MCPManager } from "../mcp/manager";
 import submitReminderTemplate from "../prompts/system/subagent-submit-reminder.md" with { type: "text" };
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
 import swarmAgentSystemPromptTemplate from "../prompts/system/swarm-agent-system-prompt.md" with { type: "text" };
+import type { SandboxPolicy } from "../sandbox";
 import { createAgentSession, discoverAuthStorage } from "../sdk";
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import type { AuthStorage } from "../session/auth-storage";
@@ -197,6 +198,8 @@ export interface ExecutorOptions {
 	authStorage?: AuthStorage;
 	modelRegistry?: ModelRegistry;
 	settings?: Settings;
+	sandboxPolicy?: SandboxPolicy;
+	filesDeps?: string[];
 	runtimeVerification?: RuntimeVerificationOptions;
 	/** Additional custom tools injected by the caller (e.g., orchestrator escalate). */
 	customTools?: CustomTool[];
@@ -518,6 +521,76 @@ function createSubagentSettings(baseSettings: Settings): Settings {
 	});
 }
 
+function normalizeScopedPath(targetPath: string, cwd: string): { resolved: string; directory: boolean } {
+	const directory = targetPath.endsWith("/") || targetPath.endsWith(path.sep);
+	const trimmed = directory ? targetPath.slice(0, -1) : targetPath;
+	return {
+		resolved: path.resolve(cwd, trimmed),
+		directory,
+	};
+}
+
+function formatScopedPath(entry: { resolved: string; directory: boolean }): string {
+	return entry.directory ? `${entry.resolved}${path.sep}` : entry.resolved;
+}
+
+function intersectScopedPaths(basePaths: string[], scopePaths: string[], cwd: string): string[] {
+	if (basePaths.length === 0 || scopePaths.length === 0) return [];
+	const results = new Set<string>();
+	const normalizedBase = basePaths.map(entry => normalizeScopedPath(entry, cwd));
+	const normalizedScope = scopePaths.map(entry => normalizeScopedPath(entry, cwd));
+	for (const scopeEntry of normalizedScope) {
+		for (const baseEntry of normalizedBase) {
+			if (scopeEntry.resolved === baseEntry.resolved) {
+				results.add(formatScopedPath(scopeEntry.directory && !baseEntry.directory ? baseEntry : scopeEntry));
+				continue;
+			}
+			const basePrefix = `${baseEntry.resolved}${path.sep}`;
+			const scopePrefix = `${scopeEntry.resolved}${path.sep}`;
+			if (baseEntry.directory && scopeEntry.resolved.startsWith(basePrefix)) {
+				results.add(formatScopedPath(scopeEntry));
+				continue;
+			}
+			if (scopeEntry.directory && baseEntry.resolved.startsWith(scopePrefix)) {
+				results.add(formatScopedPath(baseEntry));
+			}
+		}
+	}
+	return [...results];
+}
+
+export function buildScopeRestrictedSandboxPolicy(options: {
+	basePolicy?: SandboxPolicy;
+	parentCwd: string;
+	sessionCwd: string;
+	filesDeps?: string[];
+}): SandboxPolicy | undefined {
+	const scopePaths = (options.filesDeps ?? []).map(entry => {
+		const normalized = normalizeScopedPath(entry, options.parentCwd);
+		const relative = path.relative(options.parentCwd, normalized.resolved);
+		const rebased = path.resolve(options.sessionCwd, relative);
+		return formatScopedPath({ resolved: rebased, directory: normalized.directory });
+	});
+	if (scopePaths.length === 0) return options.basePolicy;
+	if (!options.basePolicy) {
+		return {
+			pathsWrite: scopePaths,
+			bashAllow: [],
+			bashDeny: [],
+			writeErrorPrefix: "OUT_OF_SCOPE_MUTATION: ",
+		};
+	}
+	return {
+		pathsWrite:
+			options.basePolicy.pathsWrite.length === 0
+				? []
+				: intersectScopedPaths(options.basePolicy.pathsWrite, scopePaths, options.sessionCwd),
+		bashAllow: [...options.basePolicy.bashAllow],
+		bashDeny: [...options.basePolicy.bashDeny],
+		writeErrorPrefix: "OUT_OF_SCOPE_MUTATION: ",
+	};
+}
+
 /**
  * Run a single agent in-process.
  */
@@ -538,6 +611,15 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		onProgress,
 	} = options;
 	const startTime = Date.now();
+	const sessionCwd = worktree ?? cwd;
+	const effectiveSandboxPolicy = agent.scopeRestricted
+		? buildScopeRestrictedSandboxPolicy({
+				basePolicy: options.sandboxPolicy,
+				parentCwd: cwd,
+				sessionCwd,
+				filesDeps: options.filesDeps,
+			})
+		: options.sandboxPolicy;
 
 	// Initialize progress
 	const progress: AgentProgress = {
@@ -1182,7 +1264,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					let startupErrorMessage: string | undefined;
 					try {
 						const { session } = await createAgentSession({
-							cwd: worktree ?? cwd,
+							cwd: sessionCwd,
 							authStorage,
 							modelRegistry,
 							settings: subagentSettings,
@@ -1235,6 +1317,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							taskDepth: childDepth,
 							parentTaskPrefix: id,
 							enableLsp: lspEnabled,
+							sandboxPolicy: effectiveSandboxPolicy,
 							skipPythonPreflight,
 							enableMCP,
 							customTools: allCustomTools.length > 0 ? allCustomTools : undefined,

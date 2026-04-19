@@ -1,0 +1,7 @@
+$ bun test packages/coding-agent/test/tools/write-shrink-guard.test.ts
+bun test v1.3.10 (30e609e0)
+
+ 8 pass
+ 0 fail
+ 17 expect() calls
+Ran 8 tests across 1 file. [762.00ms]

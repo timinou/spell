@@ -5,7 +5,9 @@ import * as path from "node:path";
 import { Settings } from "../../src/config/settings";
 import * as discoveryModule from "../../src/task/discovery";
 import * as executorModule from "../../src/task/executor";
+import * as isolationBackendModule from "../../src/task/isolation-backend";
 import type { AgentDefinition, SingleResult, TaskParams } from "../../src/task/types";
+import * as worktreeModule from "../../src/task/worktree";
 import type { ToolSession } from "../../src/tools";
 
 const baseAgent: AgentDefinition = {
@@ -84,6 +86,19 @@ describe("TaskTool nested isolation defaults", () => {
 			agents: [baseAgent],
 			projectAgentsDir: null,
 		});
+		vi.spyOn(isolationBackendModule, "resolveIsolationBackendForTaskExecution").mockResolvedValue({
+			effectiveIsolationMode: "worktree",
+			warning: "",
+		});
+		vi.spyOn(worktreeModule, "getRepoRoot").mockResolvedValue(tempDir);
+		vi.spyOn(worktreeModule, "captureBaseline").mockResolvedValue({
+			root: { repoRoot: tempDir, headCommit: "HEAD", staged: "", unstaged: "", untracked: [] },
+			nested: [],
+		});
+		vi.spyOn(worktreeModule, "ensureWorktree").mockResolvedValue(tempDir);
+		vi.spyOn(worktreeModule, "applyBaseline").mockResolvedValue();
+		vi.spyOn(worktreeModule, "captureDeltaPatch").mockResolvedValue({ rootPatch: "", nestedPatches: [] });
+		vi.spyOn(worktreeModule, "cleanupWorktree").mockResolvedValue();
 	});
 
 	afterEach(async () => {
@@ -92,55 +107,81 @@ describe("TaskTool nested isolation defaults", () => {
 	});
 
 	it("keeps depth=0 opt-in only", async () => {
-		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => createResult(options.id, options.description ?? "task"));
+		const runSpy = vi
+			.spyOn(executorModule, "runSubprocess")
+			.mockImplementation(async options => createResult(options.id, options.description ?? "task"));
 		const { TaskTool } = await import("../../src/task/index");
-		const tool = await TaskTool.create(createSession(tempDir, 0, Settings.isolated({ "async.enabled": false, "task.isolation.mode": "worktree" })));
+		const tool = await TaskTool.create(
+			createSession(tempDir, 0, Settings.isolated({ "async.enabled": false, "task.isolation.mode": "worktree" })),
+		);
 
 		await tool.execute("depth-zero-batch", buildParams(undefined, [{ id: "A" }, { id: "B" }]));
 
 		expect(runSpy).toHaveBeenCalledTimes(2);
-		expect(runSpy.mock.calls.every(call => call[0].isolation === true)).toBeFalse();
+		expect(runSpy.mock.calls.every(call => call[0].worktree === tempDir)).toBeFalse();
 	});
 
 	it("auto-coerces depth>=1 for batch size", async () => {
-		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => createResult(options.id, options.description ?? "task"));
+		const runSpy = vi
+			.spyOn(executorModule, "runSubprocess")
+			.mockImplementation(async options => createResult(options.id, options.description ?? "task"));
 		const { TaskTool } = await import("../../src/task/index");
-		const tool = await TaskTool.create(createSession(tempDir, 1, Settings.isolated({ "async.enabled": false, "task.isolation.mode": "worktree" })));
+		const tool = await TaskTool.create(
+			createSession(tempDir, 1, Settings.isolated({ "async.enabled": false, "task.isolation.mode": "worktree" })),
+		);
 
 		await tool.execute("depth-one-batch", buildParams(undefined, [{ id: "A" }, { id: "B" }]));
 
 		expect(runSpy).toHaveBeenCalledTimes(2);
-		expect(runSpy.mock.calls.every(call => call[0].isolation === true)).toBeTrue();
+		expect(runSpy.mock.calls.every(call => call[0].worktree === tempDir)).toBeTrue();
 	});
 
 	it("auto-coerces depth>=1 for code-supported file scope", async () => {
-		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => createResult(options.id, options.description ?? "task"));
+		const runSpy = vi
+			.spyOn(executorModule, "runSubprocess")
+			.mockImplementation(async options => createResult(options.id, options.description ?? "task"));
 		const { TaskTool } = await import("../../src/task/index");
-		const tool = await TaskTool.create(createSession(tempDir, 1, Settings.isolated({ "async.enabled": false, "task.isolation.mode": "worktree" })));
+		const tool = await TaskTool.create(
+			createSession(tempDir, 1, Settings.isolated({ "async.enabled": false, "task.isolation.mode": "worktree" })),
+		);
 
 		await tool.execute("depth-one-code-scope", buildParams(undefined, [{ id: "A", filesDeps: ["src/example.ts"] }]));
 
 		expect(runSpy).toHaveBeenCalledTimes(1);
-		expect(runSpy.mock.calls[0]?.[0].isolation).toBeTrue();
+		expect(runSpy.mock.calls[0]?.[0].worktree).toBe(tempDir);
 	});
 
 	it("respects explicit isolated:false opt-out", async () => {
-		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => createResult(options.id, options.description ?? "task"));
+		const runSpy = vi
+			.spyOn(executorModule, "runSubprocess")
+			.mockImplementation(async options => createResult(options.id, options.description ?? "task"));
 		const { TaskTool } = await import("../../src/task/index");
-		const tool = await TaskTool.create(createSession(tempDir, 1, Settings.isolated({ "async.enabled": false, "task.isolation.mode": "worktree" })));
+		const tool = await TaskTool.create(
+			createSession(tempDir, 1, Settings.isolated({ "async.enabled": false, "task.isolation.mode": "worktree" })),
+		);
 
-		await tool.execute("depth-one-explicit-false", buildParams(false, [{ id: "A" }, { id: "B", filesDeps: ["src/example.ts"] }]));
+		await tool.execute(
+			"depth-one-explicit-false",
+			buildParams(false, [{ id: "A" }, { id: "B", filesDeps: ["src/example.ts"] }]),
+		);
 
 		expect(runSpy).toHaveBeenCalledTimes(2);
-		expect(runSpy.mock.calls.every(call => call[0].isolation === true)).toBeFalse();
+		expect(runSpy.mock.calls.every(call => call[0].worktree === tempDir)).toBeFalse();
 	});
 
 	it("preserves downgrade behavior when isolationMode=none", async () => {
-		const runSpy = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => createResult(options.id, options.description ?? "task"));
+		const runSpy = vi
+			.spyOn(executorModule, "runSubprocess")
+			.mockImplementation(async options => createResult(options.id, options.description ?? "task"));
 		const { TaskTool } = await import("../../src/task/index");
-		const tool = await TaskTool.create(createSession(tempDir, 1, Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" })));
+		const tool = await TaskTool.create(
+			createSession(tempDir, 1, Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" })),
+		);
 
-		const result = await tool.execute("depth-one-mode-none", buildParams(true, [{ id: "A" }, { id: "B", filesDeps: ["src/example.ts"] }]));
+		const result = await tool.execute(
+			"depth-one-mode-none",
+			buildParams(true, [{ id: "A" }, { id: "B", filesDeps: ["src/example.ts"] }]),
+		);
 		const text = result.content.find(part => part.type === "text")?.text ?? "";
 		const details = result.details as { isolationDowngraded?: boolean };
 

@@ -448,6 +448,7 @@ export class AgentSession {
 	// Todo completion reminder state
 	#todoReminderCount = 0;
 	#todoGroups: TodoGroup[] = [];
+	#waveSnapshots = new Set<string>();
 	#todoClearTimers = new Map<string, Timer>();
 	/** Tracks how many completed tasks have been auto-cleared per group. */
 	#clearedCompletedCounts = new Map<string, { name: string; count: number }>();
@@ -2982,8 +2983,17 @@ export class AgentSession {
 		this.#todoGroups = this.#cloneTodoGroups(groups);
 		if (options?.reset) {
 			this.#clearedCompletedCounts.clear();
+			this.#waveSnapshots.clear();
 		}
 		this.#scheduleTodoAutoClear(groups);
+	}
+
+	hasWaveSnapshot(ref: string): boolean {
+		return this.#waveSnapshots.has(ref);
+	}
+
+	recordWaveSnapshot(ref: string): void {
+		this.#waveSnapshots.add(ref);
 	}
 
 	#syncTodoGroupsFromBranch(): void {

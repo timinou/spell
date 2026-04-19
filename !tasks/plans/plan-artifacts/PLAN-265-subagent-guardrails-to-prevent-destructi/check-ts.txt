@@ -1,0 +1,3 @@
+$ bun check:ts
+$ biome check . && tsgo -p tsconfig.json
+Checked 1930 files in 2s. No fixes applied.
