@@ -1,0 +1,154 @@
+#+TITLE: edit tool: prepend/append with unparseable anchor silently inserts at BOF/EOF causing duplication
+#+STATE: DONE
+#+SESSION_ID: 14c082b2fe1522ff
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T08-22-27-577Z_14c082b2fe1522ff.jsonl]]
+#+CUSTOM_ID: BUG-293-edit-tool-prepend-append-with-unparseabl
+#+EFFORT: S
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-19-22-953Z_14c0744312762edc.jsonl
+ ID: 14c0744312762edc
+
+
+
+Can you reproduce the duplicate editing issue that the last subagent in that session did and tell me what is wrong in the code edit code that led to duplication?
+
+* Scope
+
+Fix the silent anchor degradation in =resolveEditAnchors()= that allows =prepend= / =append= edits with user-supplied but unparseable anchor strings to silently become anchorless BOF/EOF operations. This causes content duplication when the caller intends to insert relative to a specific line but the anchor string is raw source text (not a hashline tag).
+
+In scope:
+- Validate parsed anchors in =resolveEditAnchors()= for =prepend= / =append= ops
+- Add test coverage for the failing case
+- Ensure =replace= path (already validates) is not regressed
+
+Out of scope:
+- =tryParseTag()= itself (correctly returns undefined for garbage)
+- =applyHashlineEdits()= engine (correctly supports intentional anchorless BOF/EOF use)
+- Changes to the =code= tool — this bug is in the =edit= tool's hashline path only
+
+* Root Cause
+
+=resolveEditAnchors()= in =packages/coding-agent/src/patch/index.ts= L212-243 resolves user-supplied =pos= / =end= strings into =Anchor= objects via =tryParseTag()=. When the string is not a valid hashline tag (e.g. raw source text like ="export interface CodeBufferResult { ... }"=), =tryParseTag()= returns =undefined=.
+
+For =replace= (L222-230), this correctly throws: ="Replace requires at least one anchor"=.
+
+For =append= (L232-234) and =prepend= (L236-238), undefined is silently accepted:
+#+begin_src typescript
+case "append": {
+    result.push({ op: "append", pos: tag ?? end, lines });
+    // pos becomes undefined → append at EOF
+    break;
+}
+case "prepend": {
+    result.push({ op: "prepend", pos: end ?? tag, lines });
+    // pos becomes undefined → prepend at BOF
+    break;
+}
+#+end_src
+
+Downstream in =applyHashlineEdits()= (=packages/coding-agent/src/patch/hashline.ts= L694-716):
+- =prepend= with no =pos= → =fileLines.splice(0, 0, ...inserted)= → BOF insert
+- =append= with no =pos= → =fileLines.splice(fileLines.length, 0, ...inserted)= → EOF insert
+
+The original content at the intended anchor location is untouched → duplication.
+
+* Existing Patterns
+
+- =packages/coding-agent/src/patch/index.ts= — =resolveEditAnchors()= at L212, =tryParseTag()= at L246
+- =packages/coding-agent/src/patch/hashline.ts= — =applyHashlineEdits()= at L482, prepend case at L694
+- =packages/coding-agent/test/core/hashline.test.ts= — existing =applyHashlineEdits — prepend= suite at L413, existing =applyHashlineEdits — append= suite at L346
+- Error pattern: =throw new Error("Replace requires at least one anchor (tag or end).")= at L228
+
+* Tests
+
+File: =packages/coding-agent/test/core/hashline.test.ts=
+
+The bug is in =resolveEditAnchors()= which is not directly exported but is called by =EditTool.execute()=. Two testing approaches:
+
+1. Unit test =resolveEditAnchors()= directly if it gets exported, or
+2. Integration test via =EditTool.execute()= (matches the tools.test.ts pattern for hashline edits)
+
+Since =resolveEditAnchors()= is a private function, the cleanest path is to add integration tests via =EditTool= or export the function for unit testing.
+
+Recommended: export =resolveEditAnchors()= and add unit tests in =hashline.test.ts=.
+
+Scenarios:
+1. =prepend_with_invalid_anchor_throws= — =op: "prepend"= with =pos= set to garbage string → must throw, not silently prepend at BOF
+2. =append_with_invalid_anchor_throws= — =op: "append"= with =pos= set to garbage string → must throw, not silently append at EOF
+3. =prepend_with_valid_anchor_still_works= — existing behavior preserved
+4. =append_with_valid_anchor_still_works= — existing behavior preserved
+5. =prepend_without_any_anchor_still_works= — intentional anchorless BOF prepend must remain functional
+6. =append_without_any_anchor_still_works= — intentional anchorless EOF append must remain functional
+
+* Implementation
+
+** Export resolveEditAnchors for testing
+:PROPERTIES:
+:CUSTOM_ID: BUG-293-edit-tool-prepend-append-with-unparseabl::export-resolver
+:END:
+- File: =packages/coding-agent/src/patch/index.ts=
+- Export =resolveEditAnchors= (or add a thin wrapper) so tests can exercise it directly
+
+** Add anchor validation to prepend/append
+:PROPERTIES:
+:CUSTOM_ID: BUG-293-edit-tool-prepend-append-with-unparseabl::fix-validation
+:DEPENDS: BUG-293-edit-tool-prepend-append-with-unparseabl::export-resolver
+:END:
+- File: =packages/coding-agent/src/patch/index.ts=, =resolveEditAnchors()= L232-238
+- Add validation: if user supplied =edit.pos= or =edit.end= (non-nullish string), but =tryParseTag()= returned =undefined= for ALL supplied anchors, throw an error
+- Error message: ="Append/Prepend anchor could not be parsed. Supply a valid hashline tag (e.g. '5#XY') or omit the anchor for file-level operation."=
+- Keep intentional anchorless use (no =pos= / =end= supplied at all) working
+
+Concrete change:
+#+begin_src typescript
+case "append": {
+    const pos = tag ?? end;
+    if (!pos && (edit.pos || edit.end)) {
+        throw new Error(
+            "Append anchor could not be parsed. Supply a valid hashline tag or omit the anchor for file-level append."
+        );
+    }
+    result.push({ op: "append", pos, lines });
+    break;
+}
+case "prepend": {
+    const pos = end ?? tag;
+    if (!pos && (edit.pos || edit.end)) {
+        throw new Error(
+            "Prepend anchor could not be parsed. Supply a valid hashline tag or omit the anchor for file-level prepend."
+        );
+    }
+    result.push({ op: "prepend", pos, lines });
+    break;
+}
+#+end_src
+
+** Write tests for anchor validation
+:PROPERTIES:
+:CUSTOM_ID: BUG-293-edit-tool-prepend-append-with-unparseabl::write-tests
+:DEPENDS: BUG-293-edit-tool-prepend-append-with-unparseabl::fix-validation
+:END:
+- File: =packages/coding-agent/test/core/hashline.test.ts=
+- Add new describe block: =resolveEditAnchors — anchor validation=
+- Cover scenarios 1-6 from Tests section
+- Verify that valid anchors, no anchors, and invalid anchors all behave correctly
+
+* Edge Cases
+
+- =pos= is empty string: =tryParseTag("")= throws → returns undefined → treated as "user supplied anchor but it failed" → error. ✓ correct.
+- =pos= is valid hashline tag but hash doesn't match file content: =tryParseTag()= succeeds (returns Anchor), =applyHashlineEdits= later reports hash mismatch. Not affected by this change.
+- Both =pos= and =end= supplied, one valid one invalid: =tag ?? end= / =end ?? tag= would still resolve to the valid one. Acceptable — at least one anchor parsed.
+- Anchorless prepend/append (=pos= and =end= both absent): =edit.pos= / =edit.end= are both undefined/absent → no validation triggered → BOF/EOF behavior preserved.
+
+* Acceptance Criteria
+
+1. =bun test packages/coding-agent/test/core/hashline.test.ts= passes with new scenarios
+2. =bun check:ts= clean
+3. Existing hashline tests pass without modification (no regression)
+4. Calling =edit= with =op: "prepend", pos: "export interface Foo { }"= (raw source, not a hashline tag) now throws an error instead of silently prepending at BOF
+
+NOTE [2026-04-19]: Implemented resolver-level anchor validation, exported resolveEditAnchors for unit coverage, and added regression tests reproducing the raw-source prepend/append failure path.

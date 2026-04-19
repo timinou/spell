@@ -1,0 +1,56 @@
+#+TITLE: Fix edit tool silent anchor degradation causing content duplication
+#+STATE: DONE
+#+SESSION_ID: 14c082b2fe1522ff
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T08-22-27-577Z_14c082b2fe1522ff.jsonl]]
+#+CUSTOM_ID: PLAN-266-fix-edit-tool-silent-anchor-degradation
+#+EFFORT: S
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-19-22-953Z_14c0744312762edc.jsonl
+ ID: 14c0744312762edc
+
+
+
+Can you reproduce the duplicate editing issue that the last subagent in that session did and tell me what is wrong in the code edit code that led to duplication?
+
+* Context
+
+Session =14c0744312762edc= (2026-04-19) investigated a content duplication bug in =packages/natives/src/code-buffer/types.ts=. Three =CodeCoord*= interfaces appeared twice in the file — once at the top (lines 1-3) and once near =CodeBufferResult= (lines 50-54).
+
+Root cause: a =quick_task= subagent used the =edit= tool with =op: "prepend"= and =pos= set to raw source text (="export interface CodeBufferResult { output: unknown; error: boolean; }"=). The hashline anchor parser (=tryParseTag()=) could not parse this raw text, returned =undefined=, and =resolveEditAnchors()= silently accepted it as an anchorless prepend — inserting at BOF instead of before the intended line. The original declarations remained in place → duplication.
+
+The =replace= op already validates anchors and throws on parse failure. =append= / =prepend= do not. This plan adds the same validation.
+
+** Settled Decisions
+
+1. Fix in =resolveEditAnchors()= only — do not change =tryParseTag()= or =applyHashlineEdits()=
+2. When user supplies =pos= / =end= string but all parsed anchors are =undefined=, throw an error
+3. Intentional anchorless use (no =pos= / =end= supplied) remains functional
+4. Test via exported =resolveEditAnchors()= or integration through =EditTool=
+5. Single BUG item, effort S
+
+* Verification
+
+- =bun test packages/coding-agent/test/core/hashline.test.ts= — new scenarios pass
+- =bun check:ts= — clean
+- Regression: all existing hashline tests pass without modification
+
+* Execution Manifest
+
+** Wave 1
+- [[id:BUG-293-edit-tool-prepend-append-with-unparseabl]] — Fix anchor validation + add tests
+
+** Completion [2026-04-19]
+*** Verification
+- =bun test packages/coding-agent/test/core/hashline.test.ts= → PASS (108 pass, 0 fail)
+- =bun check:ts= → PASS (=biome check .= and =tsgo -p tsconfig.json= clean)
+- Reproduced the prior failure mode at the resolver boundary with raw source text anchor strings matching the session bug report (=\"export interface CodeBufferResult { output: unknown; error: boolean; }\"=). The new =resolveEditAnchors()= tests now prove those inputs throw instead of silently degrading into anchorless BOF/EOF edits.
+*** Artifacts
+- None.
+*** Deviations
+- None.
+
+NOTE [2026-04-19]: Completed implementation, verification, and completion report for the hashline anchor-validation fix.
