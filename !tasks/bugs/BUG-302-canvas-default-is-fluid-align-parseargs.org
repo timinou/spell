@@ -1,0 +1,120 @@
+#+TITLE: Canvas default is fluid: align parseArgs default and usage-syntax order
+#+STATE: ITEM
+#+SESSION_ID: 14c0a2c7e0b0df60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-42-37-570Z_14c0a2c7e0b0df60.jsonl]]
+#+CUSTOM_ID: BUG-302-canvas-default-is-fluid-align-parseargs
+#+EFFORT: XS
+#+LAYER: packages/coding-agent
+#+PRIORITY: #B
+
+* Initial Message
+
+these tests are failing:
+
+✗ taskToolRenderer report_finding safety > renders abort reason inline for aborted subagent results [1.00ms]
+✗ taskToolRenderer report_finding safety > renders efficiency summaries for completed multi-task batches
+✗ TaskTool blocker integration > async execution schedules dependents only after predecessors finish [817.00ms]
+✗ runSubprocess tool call budget > aborts when tool count exceeds budget and still accepts submit_result reminder recovery [3.00ms]
+✗ runSubprocess tool call budget > does not abort when subagent completes within budget
+✗ runSubprocess tool call budget > disables enforcement when task.maxToolCalls is set to 0 [1.00ms]
+✗ runSubprocess tool call budget > does not abort when tool count is exactly at maxToolCalls
+✗ runSubprocess tool call budget > uses default maxToolCalls=200 when not explicitly configured [1.00ms]
+✗ runSubprocess delegated model fallback > falls back to the next allowed candidate after startup auth failure [2.00ms]
+✗ runSubprocess delegated model fallback > keeps the root auth error when no alternate candidate exists [1.00ms]
+✗ python tool docs template > renders dynamic helper docs [1.00ms]
+✗ ExitPlanModeTool validation > rejects child items with empty body [5.00ms]
+✗ ExitPlanModeTool validation > rejects child items with body under 100 characters
+✗ ExitPlanModeTool validation > reports all missing top-level properties in one error [19.00ms]
+✗ ExitPlanModeTool validation > rejects broken top-level DEPENDS references [2.00ms]
+✗ ExitPlanModeTool validation > rejects child items missing structured sub-outline CUSTOM_IDs [1.00ms]
+✗ ExitPlanModeTool validation > rejects sub-outline CUSTOM_IDs outside the owning child namespace
+✗ ExitPlanModeTool validation > rejects broken sub-outline DEPENDS references [1.00ms]
+✗ ExitPlanModeTool validation > rejects duplicate sub-outline CUSTOM_IDs within a child item
+✗ ExitPlanModeTool validation > rejects cyclic sub-outline DEPENDS graphs [1.00ms]
+✗ ExitPlanModeTool validation > reports thin bodies and missing properties together
+✗ ExitPlanModeTool validation > reports broken top-level deps and bad sub-outline namespaces together [1.00ms]
+✗ ExitPlanModeTool validation > reports issues across multiple child items in one response
+✗ ExitPlanModeTool validation > accepts valid top-level and sub-outline dependencies within the plan [1.00ms]
+✗ code.ts transpiles cleanly under Bun.Transpiler [1.00ms]
+✗ coding-agent code tool wiring > routes existing-file edit through freshness diff before save [3.00ms]
+✗ coding-agent code tool wiring > routes strict-target create through list then save without diff [1.00ms]
+✗ applyManagedBufferContent > includes the native per-file error message in the thrown error [1.00ms]
+✗ applyManagedBufferContent > does not throw on successful writes (parseable replacement)
+✗ evaluateWriteGuards contract > allows writes that grow a file [175.00ms]
+✗ parseArgs --canvas > defaults to fluid when --canvas has no value [4.00ms]
+✗ parseArgs --canvas > uses fluid when next arg is another flag
+✗ canvas CLI messages > unknown canvas message includes supported modes and usage syntax
+✗ SwarmBlackboard > does not emit artifact events without DATA_URI and preserves metadata in reads [13.00ms]
+✗ SubagentViewerComponent > forwards tool events to event handler [1.00ms]
+
+
+
+Please find the root causes and present them to me. Explain the TDD way of fixing them by cluster. DO not implement yet, just explore
+
+* Scope
+Three tests fail because the canvas CLI contract is inconsistent:
+
+1. test/cli/canvas-args.test.ts "defaults to fluid when --canvas has no value" \u2014 `parseArgs(["--canvas"]).canvas` returns `""`, expected `"fluid"`.
+2. test/cli/canvas-args.test.ts "uses fluid when next arg is another flag" \u2014 `parseArgs(["--canvas","--print"]).canvas` returns `""`, expected `"fluid"`.
+3. test/cli/canvas-messages.test.ts "unknown canvas message includes supported modes and usage syntax" \u2014 current output `"Use: spell --canvas [chat|fluid|browse]"`, expected `"Use: spell --canvas [fluid|chat|browse]"`.
+
+Settled design decision: **fluid is the default canvas**. Both the parse default and the user-facing usage string must reflect this ordering (fluid first).
+
+Root causes:
+- `src/cli/args.ts:195` \u2014 falls back to `result.canvas = ""`.
+- `src/main.ts::formatUnknownCanvasMessage` \u2014 usage literal has `[chat|fluid|browse]`.
+
+In scope: change the two literals.
+Out of scope: introduce new canvas mode; rename existing modes; change canvas dispatch downstream.
+
+* Existing Patterns
+- Memory: fluid mode is the reactive queue-based orchestrator; positioned as the flagship canvas. Confirm by reading `src/main.ts` usage text for other places that order modes.
+- `parseArgs` returns `ParsedArgs` shape; canvas field typed as string.
+
+* Tests
+Both test files already encode the contract. No new tests.
+
+- test/cli/canvas-args.test.ts (2 tests + 5 passing).
+- test/cli/canvas-messages.test.ts (1 test + 1 passing).
+
+Run both files after fix; expect all 7 tests + 3 tests to pass.
+
+* Implementation
+** parseArgs --canvas defaults to "fluid"
+:PROPERTIES:
+:CUSTOM_ID: BUG-302-canvas-default-is-fluid-align-parseargs::args-default
+:END:
+- File: packages/coding-agent/src/cli/args.ts
+- Target: line 190-196, the `--canvas` branch.
+- Change `result.canvas = "";` \u2192 `result.canvas = "fluid";`.
+
+** formatUnknownCanvasMessage lists fluid first
+:PROPERTIES:
+:CUSTOM_ID: BUG-302-canvas-default-is-fluid-align-parseargs::usage-order
+:DEPENDS: BUG-302-canvas-default-is-fluid-align-parseargs::args-default
+:END:
+- File: packages/coding-agent/src/main.ts
+- Target: `formatUnknownCanvasMessage` (line 83).
+- Change usage string from `[chat|fluid|browse]` to `[fluid|chat|browse]`.
+- Also verify the "Available: chat, fluid, browse." sentence \u2014 tests only check substring, so order of Available list does not strictly need to change, but prefer `"Available: fluid, chat, browse."` for internal consistency (single design decision). Re-check the test's `toContain` assertions before changing that part.
+- Do not remove the `Unknown canvas: X.` prefix; tests rely on it.
+
+** Verify green (satisfies both string edits)
+:PROPERTIES:
+:CUSTOM_ID: BUG-302-canvas-default-is-fluid-align-parseargs::verify-green
+:DEPENDS: BUG-302-canvas-default-is-fluid-align-parseargs::usage-order
+:END:
+- Command: `bun test packages/coding-agent/test/cli/canvas-args.test.ts packages/coding-agent/test/cli/canvas-messages.test.ts`
+- Expect: all tests in both files pass.
+- Command: `bun test packages/coding-agent/test/cli/` (broader sweep).
+- Expect: no regression.
+
+* Edge Cases
+- Downstream consumers read `result.canvas`. `""` previously meant "flag present, no value"; now `"fluid"`. Check `src/main.ts::runRootCommand` and any `parseArgs` consumers to confirm `""` was not a distinct sentinel from `"fluid"`.
+- Canvas validation: if `"fluid"` passes canvas validity check, no further change needed. Existing test "defaults to fluid when --canvas has no value" implies production already treats `"fluid"` as the canonical default name.
+- Help text / README \u2014 out of scope unless a test asserts it.
+
+* Acceptance Criteria
+- 3 failing tests pass.
+- No regression in `packages/coding-agent/test/cli/`.
+- `result.canvas` never returns `""` for the `--canvas` with-no-value case.

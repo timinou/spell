@@ -1,0 +1,125 @@
+#+TITLE: Code tool wiring tests miss the post-save coord_peer_activity call
+#+STATE: ITEM
+#+SESSION_ID: 14c0a2c7e0b0df60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-42-37-570Z_14c0a2c7e0b0df60.jsonl]]
+#+CUSTOM_ID: BUG-305-code-tool-wiring-tests-miss-the-post-sav
+#+EFFORT: XS
+#+LAYER: packages/coding-agent
+#+PRIORITY: #C
+
+* Initial Message
+
+these tests are failing:
+
+✗ taskToolRenderer report_finding safety > renders abort reason inline for aborted subagent results [1.00ms]
+✗ taskToolRenderer report_finding safety > renders efficiency summaries for completed multi-task batches
+✗ TaskTool blocker integration > async execution schedules dependents only after predecessors finish [817.00ms]
+✗ runSubprocess tool call budget > aborts when tool count exceeds budget and still accepts submit_result reminder recovery [3.00ms]
+✗ runSubprocess tool call budget > does not abort when subagent completes within budget
+✗ runSubprocess tool call budget > disables enforcement when task.maxToolCalls is set to 0 [1.00ms]
+✗ runSubprocess tool call budget > does not abort when tool count is exactly at maxToolCalls
+✗ runSubprocess tool call budget > uses default maxToolCalls=200 when not explicitly configured [1.00ms]
+✗ runSubprocess delegated model fallback > falls back to the next allowed candidate after startup auth failure [2.00ms]
+✗ runSubprocess delegated model fallback > keeps the root auth error when no alternate candidate exists [1.00ms]
+✗ python tool docs template > renders dynamic helper docs [1.00ms]
+✗ ExitPlanModeTool validation > rejects child items with empty body [5.00ms]
+✗ ExitPlanModeTool validation > rejects child items with body under 100 characters
+✗ ExitPlanModeTool validation > reports all missing top-level properties in one error [19.00ms]
+✗ ExitPlanModeTool validation > rejects broken top-level DEPENDS references [2.00ms]
+✗ ExitPlanModeTool validation > rejects child items missing structured sub-outline CUSTOM_IDs [1.00ms]
+✗ ExitPlanModeTool validation > rejects sub-outline CUSTOM_IDs outside the owning child namespace
+✗ ExitPlanModeTool validation > rejects broken sub-outline DEPENDS references [1.00ms]
+✗ ExitPlanModeTool validation > rejects duplicate sub-outline CUSTOM_IDs within a child item
+✗ ExitPlanModeTool validation > rejects cyclic sub-outline DEPENDS graphs [1.00ms]
+✗ ExitPlanModeTool validation > reports thin bodies and missing properties together
+✗ ExitPlanModeTool validation > reports broken top-level deps and bad sub-outline namespaces together [1.00ms]
+✗ ExitPlanModeTool validation > reports issues across multiple child items in one response
+✗ ExitPlanModeTool validation > accepts valid top-level and sub-outline dependencies within the plan [1.00ms]
+✗ code.ts transpiles cleanly under Bun.Transpiler [1.00ms]
+✗ coding-agent code tool wiring > routes existing-file edit through freshness diff before save [3.00ms]
+✗ coding-agent code tool wiring > routes strict-target create through list then save without diff [1.00ms]
+✗ applyManagedBufferContent > includes the native per-file error message in the thrown error [1.00ms]
+✗ applyManagedBufferContent > does not throw on successful writes (parseable replacement)
+✗ evaluateWriteGuards contract > allows writes that grow a file [175.00ms]
+✗ parseArgs --canvas > defaults to fluid when --canvas has no value [4.00ms]
+✗ parseArgs --canvas > uses fluid when next arg is another flag
+✗ canvas CLI messages > unknown canvas message includes supported modes and usage syntax
+✗ SwarmBlackboard > does not emit artifact events without DATA_URI and preserves metadata in reads [13.00ms]
+✗ SubagentViewerComponent > forwards tool events to event handler [1.00ms]
+
+
+
+Please find the root causes and present them to me. Explain the TDD way of fixing them by cluster. DO not implement yet, just explore
+
+* Scope
+Two tests in test/tools/code.test.ts fail because the code tool's edit pipeline now emits a fourth native call (`coord_peer_activity`) after `save`, and the tests assert exactly three calls:
+
+- "routes existing-file edit through freshness diff before save" \u2014 expected `["diff","edit","save"]`, got `["list","edit","save","coord_peer_activity"]`.
+- "routes strict-target create through list then save without diff" \u2014 expected `["list","edit","save"]`, got `["list","edit","save","coord_peer_activity"]`.
+
+Settled design: **peer activity is part of the edit flow's observable side effects**. Production code stays; tests widen to include the trailing call and stub a return value for it.
+
+Root: `src/tools/code.ts::#finalizeEditExecution` (line 614-617) calls `collectPeerActivity` on successful edits, which issues `executeCodeBuffer({command:"coord_peer_activity", ...})`.
+
+In scope: update the two tests' `bufferSpy` chains and expected call arrays.
+Out of scope: any production change.
+
+Note: the first test's expected `["diff","edit","save"]` already differs from the received `["list","edit","save","coord_peer_activity"]`. The extra `"list"` appears because the existing-file path now preflights via list; align the test to current production behavior. Confirm by reading the current code path at lines 708-745: when `missingFiles.length > 0`, `list` runs; otherwise the diff-before-save path runs. The first test targets an existing file, so if `list` is also being called, the missing-files check must be re-examined.
+
+Actually, from the received output `["list","edit","save","coord_peer_activity"]`: this suggests the test's file path (`packages/coding-agent/test/tools/code.test.ts`) was treated as "missing" by `Bun.file(file).exists()` during the test environment. That would trigger `list`. Worth verifying during the fix: if the test is genuinely pointing at an existing file, `list` should not appear. If it does, there is a second issue; if not, the test's targetFile must actually exist on disk in the test environment.
+
+In scope: reconcile both expected arrays with actual production behavior for the scenarios they test.
+
+* Existing Patterns
+- `test/tools/code.test.ts` uses `spyOn(nativesModule, "executeCodeBuffer").mockReturnValueOnce(...)` chains. Each `mockReturnValueOnce` handles one call; after the chain is exhausted subsequent calls return undefined unless further chained.
+- Current mock chain in the failing tests: 3 entries (list/diff, edit-result, save success).
+- `collectPeerActivity` returns `undefined` when the native errors or returns empty edits. A mocked `{ output: { edits: [] }, error: false }` result is safe.
+
+* Tests
+Both failing tests already target the right scenarios; only expectations need widening.
+
+For each test:
+- Add a fourth `mockReturnValueOnce({ output: { edits: [] }, error: false })` for the `coord_peer_activity` call.
+- Update the expected call command array to include the trailing `"coord_peer_activity"`.
+- Confirm the **first** command in each test:
+  - "existing-file edit" \u2014 if in practice the file is treated as missing by the test harness, expected first is `"list"` (as observed). Either make the target file exist on disk in the test (it does: `packages/coding-agent/test/tools/code.test.ts`), or accept the `list` preflight.
+  - "strict-target create" \u2014 expected first is `"list"` (already matches).
+- The second test already gives exact ordering that matches real code (`["list","edit","save"]` plus new trailing). Only the coord call needs to be appended.
+
+* Implementation
+** Update existing-file-edit test expectations
+:PROPERTIES:
+:CUSTOM_ID: BUG-305-code-tool-wiring-tests-miss-the-post-sav::fix-existing-file-test
+:END:
+- File: packages/coding-agent/test/tools/code.test.ts (test at line 370-413).
+- Extend the `bufferSpy` chain: append `.mockReturnValueOnce({ output: { edits: [] }, error: false })` for the coord_peer_activity call.
+- Update the assertion on line 403: expected array includes the trailing `"coord_peer_activity"`.
+- If the received ordering is genuinely `["list","edit","save","coord_peer_activity"]` for an existing file, first verify the test's file is indeed treated as existing by investigating `Bun.file(file).exists()` during the test. If it returns `false` in the test harness (possible due to the cwd/path mismatch), align the expected array to match \u2014 `["list","edit","save","coord_peer_activity"]` \u2014 and remove the `diff` assertion. Prefer real production behavior (`diff,edit,save,coord_peer_activity`) by making the file exist.
+
+** Update strict-target-create test expectations
+:PROPERTIES:
+:CUSTOM_ID: BUG-305-code-tool-wiring-tests-miss-the-post-sav::fix-strict-target-test
+:DEPENDS: BUG-305-code-tool-wiring-tests-miss-the-post-sav::fix-existing-file-test
+:END:
+- File: packages/coding-agent/test/tools/code.test.ts (test at line 415-450).
+- Extend `bufferSpy` chain with the 4th return.
+- Update assertion line 443 to `["list","edit","save","coord_peer_activity"]`.
+
+** Verify green
+:PROPERTIES:
+:CUSTOM_ID: BUG-305-code-tool-wiring-tests-miss-the-post-sav::verify-green
+:DEPENDS: BUG-305-code-tool-wiring-tests-miss-the-post-sav::fix-strict-target-test
+:END:
+- Command: `bun test packages/coding-agent/test/tools/code.test.ts`
+- Expect: both updated tests pass.
+- Expect: no other test in the file regresses.
+
+* Edge Cases
+- `collectPeerActivity` returns undefined when `activity.edits` is empty; no exception. The mocked empty edits list is safe.
+- Future changes that add a 5th native call will require another mock chain extension; document the pattern by keeping the mock chain declarative.
+- If `getSessionId` returns null on the test session, `recentPeerActivity` is still called (`collectPeerActivity` filters by session afterwards). Mock must still return a value.
+
+* Acceptance Criteria
+- Both listed tests pass.
+- No production file modified.
+- The mock chain matches the observed production call order.

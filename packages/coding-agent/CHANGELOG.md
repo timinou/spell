@@ -77,7 +77,7 @@
 - Updated fluid agent panels to show dependency status and support expandable/collapsible details.
 - Unified wave orchestration: replaced `FluidOrchestrator`, `QueueScheduler`, and `coordinator-runner` with agent-session-driven execution using `todo_write` state and `FluidEvent` translation
 - `normalizeInProgressTask` allows multiple `in_progress` tasks when guarded by delegation metadata
-- `task` agent spawns restricted from `*` to `explore, quick_task`
+- `task` agent spawns reopened to `*` (any agent) after a prior narrowing to `explore, quick_task` proved too restrictive for nested delegation.
 - Compaction and context promotion disabled for all subagent sessions
 - Both `task` and `quick_task` agents now use `pi/subtask` model role
 

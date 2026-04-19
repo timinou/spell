@@ -1,0 +1,126 @@
+#+TITLE: Async task blocker scheduling stalls after first task completes
+#+STATE: ITEM
+#+SESSION_ID: 14c0a2c7e0b0df60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-42-37-570Z_14c0a2c7e0b0df60.jsonl]]
+#+CUSTOM_ID: BUG-298-async-task-blocker-scheduling-stalls-aft
+#+EFFORT: L
+#+LAYER: packages/coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+these tests are failing:
+
+✗ taskToolRenderer report_finding safety > renders abort reason inline for aborted subagent results [1.00ms]
+✗ taskToolRenderer report_finding safety > renders efficiency summaries for completed multi-task batches
+✗ TaskTool blocker integration > async execution schedules dependents only after predecessors finish [817.00ms]
+✗ runSubprocess tool call budget > aborts when tool count exceeds budget and still accepts submit_result reminder recovery [3.00ms]
+✗ runSubprocess tool call budget > does not abort when subagent completes within budget
+✗ runSubprocess tool call budget > disables enforcement when task.maxToolCalls is set to 0 [1.00ms]
+✗ runSubprocess tool call budget > does not abort when tool count is exactly at maxToolCalls
+✗ runSubprocess tool call budget > uses default maxToolCalls=200 when not explicitly configured [1.00ms]
+✗ runSubprocess delegated model fallback > falls back to the next allowed candidate after startup auth failure [2.00ms]
+✗ runSubprocess delegated model fallback > keeps the root auth error when no alternate candidate exists [1.00ms]
+✗ python tool docs template > renders dynamic helper docs [1.00ms]
+✗ ExitPlanModeTool validation > rejects child items with empty body [5.00ms]
+✗ ExitPlanModeTool validation > rejects child items with body under 100 characters
+✗ ExitPlanModeTool validation > reports all missing top-level properties in one error [19.00ms]
+✗ ExitPlanModeTool validation > rejects broken top-level DEPENDS references [2.00ms]
+✗ ExitPlanModeTool validation > rejects child items missing structured sub-outline CUSTOM_IDs [1.00ms]
+✗ ExitPlanModeTool validation > rejects sub-outline CUSTOM_IDs outside the owning child namespace
+✗ ExitPlanModeTool validation > rejects broken sub-outline DEPENDS references [1.00ms]
+✗ ExitPlanModeTool validation > rejects duplicate sub-outline CUSTOM_IDs within a child item
+✗ ExitPlanModeTool validation > rejects cyclic sub-outline DEPENDS graphs [1.00ms]
+✗ ExitPlanModeTool validation > reports thin bodies and missing properties together
+✗ ExitPlanModeTool validation > reports broken top-level deps and bad sub-outline namespaces together [1.00ms]
+✗ ExitPlanModeTool validation > reports issues across multiple child items in one response
+✗ ExitPlanModeTool validation > accepts valid top-level and sub-outline dependencies within the plan [1.00ms]
+✗ code.ts transpiles cleanly under Bun.Transpiler [1.00ms]
+✗ coding-agent code tool wiring > routes existing-file edit through freshness diff before save [3.00ms]
+✗ coding-agent code tool wiring > routes strict-target create through list then save without diff [1.00ms]
+✗ applyManagedBufferContent > includes the native per-file error message in the thrown error [1.00ms]
+✗ applyManagedBufferContent > does not throw on successful writes (parseable replacement)
+✗ evaluateWriteGuards contract > allows writes that grow a file [175.00ms]
+✗ parseArgs --canvas > defaults to fluid when --canvas has no value [4.00ms]
+✗ parseArgs --canvas > uses fluid when next arg is another flag
+✗ canvas CLI messages > unknown canvas message includes supported modes and usage syntax
+✗ SwarmBlackboard > does not emit artifact events without DATA_URI and preserves metadata in reads [13.00ms]
+✗ SubagentViewerComponent > forwards tool events to event handler [1.00ms]
+
+
+
+Please find the root causes and present them to me. Explain the TDD way of fixing them by cluster. DO not implement yet, just explore
+
+* Scope
+Test: test/task/task-blockers.test.ts "async execution schedules dependents only after predecessors finish".
+
+Batch: `[A, B(blockers:[A]), C(blockers:[B])]` with `async.enabled=true`, `task.maxConcurrency=2`. Expected event order: `start:A, end:A, start:B, end:B, start:C, end:C`. Observed: only `start:A, end:A`. B and C never execute.
+
+Sync variant (same batch, `async.enabled=false`) passes, so `buildBatchGraph` + wave computation works. Divergence is in the async dispatch path.
+
+In scope: fix the invariant that dependents are released once their predecessors complete in async mode.
+Out of scope: change blocker schema, change concurrency model, introduce a new scheduler. Fix where the invariant is violated (Principle 6), not where the symptom appears.
+
+* Existing Patterns
+- `src/task/batch-scheduler.ts::buildBatchGraph` (line 43) produces `blockersById` map used by both sync and async paths.
+- Sync path: `src/task/index.ts::TaskTool.execute` builds waves from `buildBatchGraph` and awaits each wave before starting the next. Works.
+- Async path: `src/task/index.ts` \u2014 see references around line 794-803 where `blockers` is threaded into the execution record. Dispatches through `AsyncJobManager` (`src/async/job-manager.ts`).
+- `AsyncJobManager` has an `onJobComplete` callback (line 33, 63, 71, 446). That is the only hook that fires when a job finishes.
+- Test deadline is 500ms with polling every 10ms. AsyncJobManager `dispose({timeoutMs: 1000})` finalizes at the end.
+- `AsyncJobManager.#runDeliveryLoop` (line ~446) invokes `onJobComplete(jobId, text, job)`. Any scheduling hook **MUST** tie into this loop.
+
+* Tests
+Failing test already encodes the contract.
+
+Additional coverage existing in same file:
+- "sync execution respects blocker order" \u2014 currently passes; regression guard.
+
+No new tests required. If the fix introduces a new seam (e.g. a scheduler method), add one focused unit test exercising the release-on-complete transition.
+
+* Implementation
+** Map the async dispatch and identify the missing release hook
+:PROPERTIES:
+:CUSTOM_ID: BUG-298-async-task-blocker-scheduling-stalls-aft::diagnose-async-path
+:END:
+- Read `src/task/index.ts` around the lines that handle `async.enabled === true` and `task.isolation.mode`.
+- Confirm whether wave-0 tasks are enqueued correctly. Add temporary logger output if needed to verify whether B/C are ever enqueued at all.
+- Two hypotheses:
+  a. Dispatcher enqueues only initial ready wave and never re-evaluates readiness on completion.
+  b. Dispatcher enqueues all tasks but blocks on predecessor artifacts; when A completes, the artifact handoff never releases B.
+- Output from this diagnosis determines the fix location.
+
+** Route blocker release through AsyncJobManager.onJobComplete (satisfies async-blocker-test)
+:PROPERTIES:
+:CUSTOM_ID: BUG-298-async-task-blocker-scheduling-stalls-aft::hook-onjobcomplete
+:DEPENDS: BUG-298-async-task-blocker-scheduling-stalls-aft::diagnose-async-path
+:END:
+- File: packages/coding-agent/src/task/index.ts
+- Approach: subscribe task dispatcher to `AsyncJobManager.onJobComplete`. When a job completes, call a `scheduleReady()` function that:
+  1. Marks the finished task as completed in a shared batch state.
+  2. Scans pending tasks for any whose blockers are all completed.
+  3. Enqueues them into AsyncJobManager respecting `task.maxConcurrency`.
+- The sync path already computes waves up-front; the async path must do this incrementally.
+- Share the readiness check with sync path via a helper in `src/task/batch-scheduler.ts` (e.g. `readyTaskIds(graph, completedIds)`) so both paths call the same function (Principle 2).
+
+** Verify green (satisfies async-blocker-test)
+:PROPERTIES:
+:CUSTOM_ID: BUG-298-async-task-blocker-scheduling-stalls-aft::verify-green
+:DEPENDS: BUG-298-async-task-blocker-scheduling-stalls-aft::hook-onjobcomplete
+:END:
+- Command: `bun test packages/coding-agent/test/task/task-blockers.test.ts`
+- Expect: both sync and async tests pass.
+- Expect: `bun test packages/coding-agent/test/task/` full directory green.
+- Manual: inspect that `events` array is produced in the exact order `["start:A","end:A","start:B","end:B","start:C","end:C"]`; if ordering differs by scheduler timing, the contract the test encodes is broken and the fix missed.
+
+* Edge Cases
+- Concurrency: with `maxConcurrency=2`, when A completes both B and C are candidates (C depends on B, so only B is actually ready). `readyTaskIds` must treat completion as transitively relevant.
+- Cycle detection: `buildBatchGraph` rejects cycles; downstream code does not need to re-check.
+- Dispose race: `AsyncJobManager.dispose({ timeoutMs: 1000 })` may fire while `scheduleReady` is running. Ensure scheduling holds no locks across await boundaries that dispose cannot unwind.
+- Error propagation: a predecessor that fails (exitCode !== 0) must NOT release dependents. The readiness helper must treat "completed successfully" distinctly from "finished". Confirm with sync path contract (which the passing sync test exercises).
+
+* Acceptance Criteria
+- Failing test produces the exact expected event sequence.
+- Sync test does not regress.
+- No change to blocker schema, agent definition schema, or task tool JSON contract.
+- Readiness logic lives in one place used by both sync and async paths.
+- `bun test packages/coding-agent/test/task/` passes with no new failures.

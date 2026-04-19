@@ -1,0 +1,118 @@
+#+TITLE: Python tool docs binding defeats vi.spyOn in test
+#+STATE: ITEM
+#+SESSION_ID: 14c0a2c7e0b0df60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-42-37-570Z_14c0a2c7e0b0df60.jsonl]]
+#+CUSTOM_ID: BUG-304-python-tool-docs-binding-defeats-vi-spyo
+#+EFFORT: XS
+#+LAYER: packages/coding-agent
+#+PRIORITY: #B
+
+* Initial Message
+
+these tests are failing:
+
+✗ taskToolRenderer report_finding safety > renders abort reason inline for aborted subagent results [1.00ms]
+✗ taskToolRenderer report_finding safety > renders efficiency summaries for completed multi-task batches
+✗ TaskTool blocker integration > async execution schedules dependents only after predecessors finish [817.00ms]
+✗ runSubprocess tool call budget > aborts when tool count exceeds budget and still accepts submit_result reminder recovery [3.00ms]
+✗ runSubprocess tool call budget > does not abort when subagent completes within budget
+✗ runSubprocess tool call budget > disables enforcement when task.maxToolCalls is set to 0 [1.00ms]
+✗ runSubprocess tool call budget > does not abort when tool count is exactly at maxToolCalls
+✗ runSubprocess tool call budget > uses default maxToolCalls=200 when not explicitly configured [1.00ms]
+✗ runSubprocess delegated model fallback > falls back to the next allowed candidate after startup auth failure [2.00ms]
+✗ runSubprocess delegated model fallback > keeps the root auth error when no alternate candidate exists [1.00ms]
+✗ python tool docs template > renders dynamic helper docs [1.00ms]
+✗ ExitPlanModeTool validation > rejects child items with empty body [5.00ms]
+✗ ExitPlanModeTool validation > rejects child items with body under 100 characters
+✗ ExitPlanModeTool validation > reports all missing top-level properties in one error [19.00ms]
+✗ ExitPlanModeTool validation > rejects broken top-level DEPENDS references [2.00ms]
+✗ ExitPlanModeTool validation > rejects child items missing structured sub-outline CUSTOM_IDs [1.00ms]
+✗ ExitPlanModeTool validation > rejects sub-outline CUSTOM_IDs outside the owning child namespace
+✗ ExitPlanModeTool validation > rejects broken sub-outline DEPENDS references [1.00ms]
+✗ ExitPlanModeTool validation > rejects duplicate sub-outline CUSTOM_IDs within a child item
+✗ ExitPlanModeTool validation > rejects cyclic sub-outline DEPENDS graphs [1.00ms]
+✗ ExitPlanModeTool validation > reports thin bodies and missing properties together
+✗ ExitPlanModeTool validation > reports broken top-level deps and bad sub-outline namespaces together [1.00ms]
+✗ ExitPlanModeTool validation > reports issues across multiple child items in one response
+✗ ExitPlanModeTool validation > accepts valid top-level and sub-outline dependencies within the plan [1.00ms]
+✗ code.ts transpiles cleanly under Bun.Transpiler [1.00ms]
+✗ coding-agent code tool wiring > routes existing-file edit through freshness diff before save [3.00ms]
+✗ coding-agent code tool wiring > routes strict-target create through list then save without diff [1.00ms]
+✗ applyManagedBufferContent > includes the native per-file error message in the thrown error [1.00ms]
+✗ applyManagedBufferContent > does not throw on successful writes (parseable replacement)
+✗ evaluateWriteGuards contract > allows writes that grow a file [175.00ms]
+✗ parseArgs --canvas > defaults to fluid when --canvas has no value [4.00ms]
+✗ parseArgs --canvas > uses fluid when next arg is another flag
+✗ canvas CLI messages > unknown canvas message includes supported modes and usage syntax
+✗ SwarmBlackboard > does not emit artifact events without DATA_URI and preserves metadata in reads [13.00ms]
+✗ SubagentViewerComponent > forwards tool events to event handler [1.00ms]
+
+
+
+Please find the root causes and present them to me. Explain the TDD way of fixing them by cluster. DO not implement yet, just explore
+
+* Scope
+Test: test/tools/python.test.ts "renders dynamic helper docs" fails because the tool description does not reflect the mocked prelude docs.
+
+Root cause: `src/tools/python.ts:11` uses a destructured named import:
+#+BEGIN_SRC typescript
+import { executePython, getPreludeDocs, type PythonExecutorOptions } from "../ipy/executor";
+#+END_SRC
+
+`getPythonToolDescription` calls the directly bound `getPreludeDocs` reference. The test does:
+#+BEGIN_SRC typescript
+vi.spyOn(pythonExecutor, "getPreludeDocs").mockReturnValue(docs);
+#+END_SRC
+`spyOn` rewrites the property on the module namespace, but `python.ts` already holds the original reference via the destructured import. The mock never takes effect.
+
+Settled design: switch to namespace import in `python.ts` so `spyOn` works. Memory note already records this pattern: "Bun module mocks leak \u2014 use spyOn/injection".
+
+In scope: change the import form; update the one call site.
+Out of scope: introduce DI for doc providers (considered and declined).
+
+* Existing Patterns
+- `import * as pythonExecutor from "../ipy/executor"` works with `spyOn(pythonExecutor, "getPreludeDocs")`.
+- Reference: any other module in this repo using `import * as X` + spyOn test. Grep yields patterns.
+
+* Tests
+- test/tools/python.test.ts "renders dynamic helper docs" \u2014 mocks `getPreludeDocs` to return a docs array and asserts the description contains `"### File I/O"`, `"read(path)"`, `"Read file contents."`.
+- test/tools/python.test.ts "renders fallback when docs are unavailable" \u2014 currently passes (mocks empty array, expects no `<prelude>`). Must continue to pass.
+
+No new tests.
+
+* Implementation
+** Use namespace import for executor module
+:PROPERTIES:
+:CUSTOM_ID: BUG-304-python-tool-docs-binding-defeats-vi-spyo::namespace-import
+:END:
+- File: packages/coding-agent/src/tools/python.ts
+- Replace line 11 import with:
+  #+BEGIN_SRC typescript
+  import * as executor from "../ipy/executor";
+  import type { PythonExecutorOptions } from "../ipy/executor";
+  #+END_SRC
+- Replace each use of the bare names with `executor.*`:
+  - `executePython(...)` \u2192 `executor.executePython(...)`
+  - `getPreludeDocs()` \u2192 `executor.getPreludeDocs()`
+- Type import stays standalone for type-only usage.
+- Sanity: ensure no other identifier from the module is used unreferenced.
+
+** Verify green
+:PROPERTIES:
+:CUSTOM_ID: BUG-304-python-tool-docs-binding-defeats-vi-spyo::verify-green
+:DEPENDS: BUG-304-python-tool-docs-binding-defeats-vi-spyo::namespace-import
+:END:
+- Command: `bun test packages/coding-agent/test/tools/python.test.ts`
+- Expect: both docs tests pass.
+- Command: `bun test packages/coding-agent/test/tools/` (broader regression).
+- Expect: no new failure.
+
+* Edge Cases
+- Tree-shaking differences: namespace imports can be slightly less shaken by bundlers. Bun handles this correctly; no size concern for internal code.
+- Type-only import kept separate to avoid runtime cost.
+- Other consumers of `../ipy/executor` may also suffer from the same pattern. Out of scope; fix only python.ts in this BUG.
+
+* Acceptance Criteria
+- Both python docs tests pass.
+- No other test in `packages/coding-agent/test/tools/python.test.ts` regresses.
+- No destructured named binding remains for `getPreludeDocs` in `python.ts`.

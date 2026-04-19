@@ -1,0 +1,126 @@
+#+TITLE: SwarmBlackboard.read returns only the last entry written to the run file
+#+STATE: ITEM
+#+SESSION_ID: 14c0a2c7e0b0df60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-42-37-570Z_14c0a2c7e0b0df60.jsonl]]
+#+CUSTOM_ID: BUG-297-swarmblackboard-read-returns-only-the-la
+#+EFFORT: M
+#+LAYER: packages/coding-agent
+#+PRIORITY: #B
+
+* Initial Message
+
+these tests are failing:
+
+✗ taskToolRenderer report_finding safety > renders abort reason inline for aborted subagent results [1.00ms]
+✗ taskToolRenderer report_finding safety > renders efficiency summaries for completed multi-task batches
+✗ TaskTool blocker integration > async execution schedules dependents only after predecessors finish [817.00ms]
+✗ runSubprocess tool call budget > aborts when tool count exceeds budget and still accepts submit_result reminder recovery [3.00ms]
+✗ runSubprocess tool call budget > does not abort when subagent completes within budget
+✗ runSubprocess tool call budget > disables enforcement when task.maxToolCalls is set to 0 [1.00ms]
+✗ runSubprocess tool call budget > does not abort when tool count is exactly at maxToolCalls
+✗ runSubprocess tool call budget > uses default maxToolCalls=200 when not explicitly configured [1.00ms]
+✗ runSubprocess delegated model fallback > falls back to the next allowed candidate after startup auth failure [2.00ms]
+✗ runSubprocess delegated model fallback > keeps the root auth error when no alternate candidate exists [1.00ms]
+✗ python tool docs template > renders dynamic helper docs [1.00ms]
+✗ ExitPlanModeTool validation > rejects child items with empty body [5.00ms]
+✗ ExitPlanModeTool validation > rejects child items with body under 100 characters
+✗ ExitPlanModeTool validation > reports all missing top-level properties in one error [19.00ms]
+✗ ExitPlanModeTool validation > rejects broken top-level DEPENDS references [2.00ms]
+✗ ExitPlanModeTool validation > rejects child items missing structured sub-outline CUSTOM_IDs [1.00ms]
+✗ ExitPlanModeTool validation > rejects sub-outline CUSTOM_IDs outside the owning child namespace
+✗ ExitPlanModeTool validation > rejects broken sub-outline DEPENDS references [1.00ms]
+✗ ExitPlanModeTool validation > rejects duplicate sub-outline CUSTOM_IDs within a child item
+✗ ExitPlanModeTool validation > rejects cyclic sub-outline DEPENDS graphs [1.00ms]
+✗ ExitPlanModeTool validation > reports thin bodies and missing properties together
+✗ ExitPlanModeTool validation > reports broken top-level deps and bad sub-outline namespaces together [1.00ms]
+✗ ExitPlanModeTool validation > reports issues across multiple child items in one response
+✗ ExitPlanModeTool validation > accepts valid top-level and sub-outline dependencies within the plan [1.00ms]
+✗ code.ts transpiles cleanly under Bun.Transpiler [1.00ms]
+✗ coding-agent code tool wiring > routes existing-file edit through freshness diff before save [3.00ms]
+✗ coding-agent code tool wiring > routes strict-target create through list then save without diff [1.00ms]
+✗ applyManagedBufferContent > includes the native per-file error message in the thrown error [1.00ms]
+✗ applyManagedBufferContent > does not throw on successful writes (parseable replacement)
+✗ evaluateWriteGuards contract > allows writes that grow a file [175.00ms]
+✗ parseArgs --canvas > defaults to fluid when --canvas has no value [4.00ms]
+✗ parseArgs --canvas > uses fluid when next arg is another flag
+✗ canvas CLI messages > unknown canvas message includes supported modes and usage syntax
+✗ SwarmBlackboard > does not emit artifact events without DATA_URI and preserves metadata in reads [13.00ms]
+✗ SubagentViewerComponent > forwards tool events to event handler [1.00ms]
+
+
+
+Please find the root causes and present them to me. Explain the TDD way of fixing them by cluster. DO not implement yet, just explore
+
+* Scope
+Test: test/swarm/blackboard.test.ts "does not emit artifact events without DATA_URI and preserves metadata in reads".
+
+Sequence:
+1. `blackboard.open({sessionId:"sess-2", agent:"main", title:"Swarm Run"})` \u2014 writes lifecycle item `SWARM-sess-2`.
+2. `blackboard.write({type:"finding", agent:"alpha", ...})` \u2014 writes `SWARM-sess-2-001`.
+3. `blackboard.write({type:"progress", agent:"beta", ...})` \u2014 writes `SWARM-sess-2-002`.
+
+Expected `read()` result: 3 entries in order. Observed: only the `beta/progress` entry.
+
+Root cause (hypothesis, needs confirmation): `src/swarm/blackboard.ts::open/write` both call `appendItemToFile` from `@oh-my-pi/pi-org`, which dispatches `executeOrg({command:"createItem", id, ...})`. The native `createItem` may be replacing an existing file or not appending a new heading when the file already exists. Alternatively, `readCategory` may be deduping by filename.
+
+The filter `.filter(item => item.id.startsWith(this.#runId ?? ""))` is correct (all three IDs start with `SWARM-sess-2`), so the issue is upstream of the filter.
+
+In scope: restore "each write appends a distinct item heading" invariant so `read()` returns all three.
+Out of scope: change the swarm data model; move to a different backing store.
+
+* Existing Patterns
+- `packages/org/src/native-ops.ts::appendItemToFile` (line 77-97) \u2014 calls `executeOrg({command:"createItem"})`. Returns the file path on success.
+- `packages/org/src/native-ops.ts::readCategory` \u2014 iterates category directory, parsing org items via native.
+- Reference: `src/swarm/blackboard.ts::open` (line 41-70), `::write` (line 72-95), `::read` (line 113-135).
+- Native org engine: `crates/pi-natives` \u2014 `executeOrg` dispatch. Need to check `createItem` semantics when the target file already contains an item with a different id.
+
+* Tests
+The failing test already encodes the contract. Two sibling tests in the same file pass:
+- "bridges data URIs to swarm:artifact after a successful write" \u2014 single-write path.
+- "surfaces org write failures before any artifact emission" \u2014 error path.
+
+Regression coverage: add (or reuse) a multi-write + read assertion that survives future scheduler changes. The failing test already provides it.
+
+Optional new test: a focused unit test verifying that `appendItemToFile` called twice on the same file produces two headings in the file (pure native-behavior contract). Useful if the bug turns out to be in `createItem`.
+
+* Implementation
+** Diagnose where the third-item state is lost
+:PROPERTIES:
+:CUSTOM_ID: BUG-297-swarmblackboard-read-returns-only-the-la::diagnose-loss
+:END:
+- After `open + 2 writes` in the failing test scenario, inspect the produced `.org` file contents on disk (via a temporary logger call or a scratch node script in a REPL). Determine one of:
+  a. File contains 3 distinct headings \u2192 bug is in `readCategory` or its filter.
+  b. File contains 1 heading (the last) \u2192 bug is in native `createItem` (overwriting).
+  c. File contains 3 headings but IDs collide \u2192 bug is in ID generation or filename collision (e.g. two items produce the same file).
+- The branch determines the fix.
+
+** Fix at the invariant site (Principle 6)
+:PROPERTIES:
+:CUSTOM_ID: BUG-297-swarmblackboard-read-returns-only-the-la::fix-invariant
+:DEPENDS: BUG-297-swarmblackboard-read-returns-only-the-la::diagnose-loss
+:END:
+- If (a) `readCategory`: fix the reader to return all headings. File: `packages/org/src/native-ops.ts` or the underlying native.
+- If (b) `createItem` overwrites: either the native must append, or `appendItemToFile` must use a different command (e.g. an explicit append command) or generate a unique file per item. Prefer: one file per run, multiple headings (matches how the filter uses `startsWith(runId)`).
+- If (c) ID or filename collision: fix `#nextEntryIndex` or filename derivation in `src/swarm/blackboard.ts`.
+- Make the change in one place; do not add a bandaid in `read()`.
+
+** Verify green (satisfies failing test)
+:PROPERTIES:
+:CUSTOM_ID: BUG-297-swarmblackboard-read-returns-only-the-la::verify-green
+:DEPENDS: BUG-297-swarmblackboard-read-returns-only-the-la::fix-invariant
+:END:
+- Command: `bun test packages/coding-agent/test/swarm/blackboard.test.ts`
+- Expect: all 3 tests pass.
+- Expect: `bun test packages/coding-agent/test/swarm/` directory green.
+- Manual: inspect the resulting `.org` file under the tmp dir in the failing test to visually confirm 3 headings.
+
+* Edge Cases
+- Concurrent writes from multiple agents to the same run file \u2014 the native must serialize; if not, races can drop entries. Out of scope of this fix unless the diagnosis shows serialization is missing.
+- Empty agent/type properties \u2014 `read()` maps `item.properties.TYPE ?? "progress"`. Keep this fallback.
+- `filter.agent` / `filter.type` \u2014 already correct once the underlying items are present.
+
+* Acceptance Criteria
+- The failing multi-write read test passes.
+- Other blackboard tests unchanged.
+- A written run's `.org` file contains one heading per `open/write/close` call.
+- Fix location documented in the PR description (which layer: swarm code, ts-org wrapper, or native engine).

@@ -1,0 +1,103 @@
+#+TITLE: code-module-integrity test resolves code.ts path from wrong cwd
+#+STATE: ITEM
+#+SESSION_ID: 14c0a2c7e0b0df60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-42-37-570Z_14c0a2c7e0b0df60.jsonl]]
+#+CUSTOM_ID: BUG-301-code-module-integrity-test-resolves-code
+#+EFFORT: XS
+#+LAYER: packages/coding-agent
+#+PRIORITY: #C
+
+* Initial Message
+
+these tests are failing:
+
+✗ taskToolRenderer report_finding safety > renders abort reason inline for aborted subagent results [1.00ms]
+✗ taskToolRenderer report_finding safety > renders efficiency summaries for completed multi-task batches
+✗ TaskTool blocker integration > async execution schedules dependents only after predecessors finish [817.00ms]
+✗ runSubprocess tool call budget > aborts when tool count exceeds budget and still accepts submit_result reminder recovery [3.00ms]
+✗ runSubprocess tool call budget > does not abort when subagent completes within budget
+✗ runSubprocess tool call budget > disables enforcement when task.maxToolCalls is set to 0 [1.00ms]
+✗ runSubprocess tool call budget > does not abort when tool count is exactly at maxToolCalls
+✗ runSubprocess tool call budget > uses default maxToolCalls=200 when not explicitly configured [1.00ms]
+✗ runSubprocess delegated model fallback > falls back to the next allowed candidate after startup auth failure [2.00ms]
+✗ runSubprocess delegated model fallback > keeps the root auth error when no alternate candidate exists [1.00ms]
+✗ python tool docs template > renders dynamic helper docs [1.00ms]
+✗ ExitPlanModeTool validation > rejects child items with empty body [5.00ms]
+✗ ExitPlanModeTool validation > rejects child items with body under 100 characters
+✗ ExitPlanModeTool validation > reports all missing top-level properties in one error [19.00ms]
+✗ ExitPlanModeTool validation > rejects broken top-level DEPENDS references [2.00ms]
+✗ ExitPlanModeTool validation > rejects child items missing structured sub-outline CUSTOM_IDs [1.00ms]
+✗ ExitPlanModeTool validation > rejects sub-outline CUSTOM_IDs outside the owning child namespace
+✗ ExitPlanModeTool validation > rejects broken sub-outline DEPENDS references [1.00ms]
+✗ ExitPlanModeTool validation > rejects duplicate sub-outline CUSTOM_IDs within a child item
+✗ ExitPlanModeTool validation > rejects cyclic sub-outline DEPENDS graphs [1.00ms]
+✗ ExitPlanModeTool validation > reports thin bodies and missing properties together
+✗ ExitPlanModeTool validation > reports broken top-level deps and bad sub-outline namespaces together [1.00ms]
+✗ ExitPlanModeTool validation > reports issues across multiple child items in one response
+✗ ExitPlanModeTool validation > accepts valid top-level and sub-outline dependencies within the plan [1.00ms]
+✗ code.ts transpiles cleanly under Bun.Transpiler [1.00ms]
+✗ coding-agent code tool wiring > routes existing-file edit through freshness diff before save [3.00ms]
+✗ coding-agent code tool wiring > routes strict-target create through list then save without diff [1.00ms]
+✗ applyManagedBufferContent > includes the native per-file error message in the thrown error [1.00ms]
+✗ applyManagedBufferContent > does not throw on successful writes (parseable replacement)
+✗ evaluateWriteGuards contract > allows writes that grow a file [175.00ms]
+✗ parseArgs --canvas > defaults to fluid when --canvas has no value [4.00ms]
+✗ parseArgs --canvas > uses fluid when next arg is another flag
+✗ canvas CLI messages > unknown canvas message includes supported modes and usage syntax
+✗ SwarmBlackboard > does not emit artifact events without DATA_URI and preserves metadata in reads [13.00ms]
+✗ SubagentViewerComponent > forwards tool events to event handler [1.00ms]
+
+
+
+Please find the root causes and present them to me. Explain the TDD way of fixing them by cluster. DO not implement yet, just explore
+
+* Scope
+Test: test/tools/code-module-integrity.test.ts "code.ts transpiles cleanly under Bun.Transpiler" fails with:
+#+BEGIN_EXAMPLE
+ENOENT: no such file or directory, open '/home/user/code/ora/spell/packages/coding-agent/packages/coding-agent/src/tools/code.ts'
+#+END_EXAMPLE
+
+Root cause: test uses `path.resolve(process.cwd(), "packages/coding-agent/src/tools/code.ts")`. `bun test` runs with `cwd=packages/coding-agent`, so the resolve doubles the package prefix.
+
+In scope: change the path derivation to be cwd-independent.
+Out of scope: change how tests are invoked or what `bun test` sets cwd to.
+
+* Existing Patterns
+- `import.meta.dir` gives the directory of the current test file. Pattern used elsewhere in the repo.
+- Test file location: `packages/coding-agent/test/tools/code-module-integrity.test.ts`.
+- Target file: `packages/coding-agent/src/tools/code.ts` \u2014 relative to the test file: `../../src/tools/code.ts`.
+
+* Tests
+No new tests; fix the one that exists.
+
+* Implementation
+** Replace cwd-relative path with import.meta.dir
+:PROPERTIES:
+:CUSTOM_ID: BUG-301-code-module-integrity-test-resolves-code::fix-path
+:END:
+- File: packages/coding-agent/test/tools/code-module-integrity.test.ts
+- Change:
+  #+BEGIN_SRC typescript
+  const codeTsPath = path.resolve(process.cwd(), "packages/coding-agent/src/tools/code.ts");
+  #+END_SRC
+  to:
+  #+BEGIN_SRC typescript
+  const codeTsPath = path.resolve(import.meta.dir, "../../src/tools/code.ts");
+  #+END_SRC
+
+** Verify green
+:PROPERTIES:
+:CUSTOM_ID: BUG-301-code-module-integrity-test-resolves-code::verify-green
+:DEPENDS: BUG-301-code-module-integrity-test-resolves-code::fix-path
+:END:
+- Command: `bun test packages/coding-agent/test/tools/code-module-integrity.test.ts`
+- Expect: all tests pass (including the one that was already passing next to the broken one).
+
+* Edge Cases
+- Running the test from a workspace where cwd happens to be the repo root still resolves correctly because `import.meta.dir` is absolute.
+- Symlinked checkouts: `import.meta.dir` follows symlinks consistently with `Bun.file`; no breakage.
+
+* Acceptance Criteria
+- Failing test passes.
+- No other test in `packages/coding-agent/test/tools/` regresses.
+- No dependency on `process.cwd()` remains in this test file for file resolution.

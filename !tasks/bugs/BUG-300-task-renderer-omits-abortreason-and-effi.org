@@ -1,0 +1,139 @@
+#+TITLE: Task renderer omits abortReason and efficiency breakdown
+#+STATE: ITEM
+#+SESSION_ID: 14c0a2c7e0b0df60
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-42-37-570Z_14c0a2c7e0b0df60.jsonl]]
+#+CUSTOM_ID: BUG-300-task-renderer-omits-abortreason-and-effi
+#+EFFORT: M
+#+LAYER: packages/coding-agent
+#+PRIORITY: #B
+
+* Initial Message
+
+these tests are failing:
+
+✗ taskToolRenderer report_finding safety > renders abort reason inline for aborted subagent results [1.00ms]
+✗ taskToolRenderer report_finding safety > renders efficiency summaries for completed multi-task batches
+✗ TaskTool blocker integration > async execution schedules dependents only after predecessors finish [817.00ms]
+✗ runSubprocess tool call budget > aborts when tool count exceeds budget and still accepts submit_result reminder recovery [3.00ms]
+✗ runSubprocess tool call budget > does not abort when subagent completes within budget
+✗ runSubprocess tool call budget > disables enforcement when task.maxToolCalls is set to 0 [1.00ms]
+✗ runSubprocess tool call budget > does not abort when tool count is exactly at maxToolCalls
+✗ runSubprocess tool call budget > uses default maxToolCalls=200 when not explicitly configured [1.00ms]
+✗ runSubprocess delegated model fallback > falls back to the next allowed candidate after startup auth failure [2.00ms]
+✗ runSubprocess delegated model fallback > keeps the root auth error when no alternate candidate exists [1.00ms]
+✗ python tool docs template > renders dynamic helper docs [1.00ms]
+✗ ExitPlanModeTool validation > rejects child items with empty body [5.00ms]
+✗ ExitPlanModeTool validation > rejects child items with body under 100 characters
+✗ ExitPlanModeTool validation > reports all missing top-level properties in one error [19.00ms]
+✗ ExitPlanModeTool validation > rejects broken top-level DEPENDS references [2.00ms]
+✗ ExitPlanModeTool validation > rejects child items missing structured sub-outline CUSTOM_IDs [1.00ms]
+✗ ExitPlanModeTool validation > rejects sub-outline CUSTOM_IDs outside the owning child namespace
+✗ ExitPlanModeTool validation > rejects broken sub-outline DEPENDS references [1.00ms]
+✗ ExitPlanModeTool validation > rejects duplicate sub-outline CUSTOM_IDs within a child item
+✗ ExitPlanModeTool validation > rejects cyclic sub-outline DEPENDS graphs [1.00ms]
+✗ ExitPlanModeTool validation > reports thin bodies and missing properties together
+✗ ExitPlanModeTool validation > reports broken top-level deps and bad sub-outline namespaces together [1.00ms]
+✗ ExitPlanModeTool validation > reports issues across multiple child items in one response
+✗ ExitPlanModeTool validation > accepts valid top-level and sub-outline dependencies within the plan [1.00ms]
+✗ code.ts transpiles cleanly under Bun.Transpiler [1.00ms]
+✗ coding-agent code tool wiring > routes existing-file edit through freshness diff before save [3.00ms]
+✗ coding-agent code tool wiring > routes strict-target create through list then save without diff [1.00ms]
+✗ applyManagedBufferContent > includes the native per-file error message in the thrown error [1.00ms]
+✗ applyManagedBufferContent > does not throw on successful writes (parseable replacement)
+✗ evaluateWriteGuards contract > allows writes that grow a file [175.00ms]
+✗ parseArgs --canvas > defaults to fluid when --canvas has no value [4.00ms]
+✗ parseArgs --canvas > uses fluid when next arg is another flag
+✗ canvas CLI messages > unknown canvas message includes supported modes and usage syntax
+✗ SwarmBlackboard > does not emit artifact events without DATA_URI and preserves metadata in reads [13.00ms]
+✗ SubagentViewerComponent > forwards tool events to event handler [1.00ms]
+
+
+
+Please find the root causes and present them to me. Explain the TDD way of fixing them by cluster. DO not implement yet, just explore
+
+* Scope
+Two renderer tests in test/task/render-report-finding.test.ts fail:
+
+1. "renders abort reason inline for aborted subagent results" \u2014 asserts rendered text contains `"blocked by permissions"` (value of `result.abortReason`). `renderAgentResult` currently emits status line and output sections but never emits `abortReason`.
+
+2. "renders efficiency summaries for completed multi-task batches" \u2014 asserts rendered text contains `"90 avg/task"`, `"50% cache"`, `"4.0x parallel"`, `"$0.100 avg"`. `formatEfficiencyLine` currently emits only `"Efficiency: {totalTokens} tokens \u00b7 {cost} \u00b7 {duration}"` (see `src/task/render.ts:445-448`).
+
+In scope: additive rendering of `abortReason` and 4 new efficiency metrics.
+Out of scope: renaming or removing existing fields; changing the summary "Total:" line (its tests still assert current form); renderer for progress/in-flight states.
+
+* Existing Patterns
+- `src/task/render.ts::renderAgentResult` (line 409-433) builds per-agent status line with optional suffixes joined by `theme.sep.dot`. Pattern: `if (cond) statusLine += ${theme.sep.dot}${theme.fg("dim", ...)}`.
+- `src/task/render.ts::formatEfficiencyLine` (line 435-449) joins parts with `theme.sep.dot`. Pattern: `parts.push(theme.fg("dim", value))`.
+- `replaceTabs` + `truncateToWidth` used upstream in `renderResult` (line 556-558) for indentation + width clamping. Already applied to the aggregate line array; new lines from `renderAgentResult` inherit the same treatment.
+- `formatNumber`, `formatCost`, `formatDuration` from `@oh-my-pi/pi-utils` already imported.
+- `SingleResult.aborted` + `SingleResult.abortReason` fields already defined in `src/task/types.ts`.
+- `TaskToolDetails.usage` shape: `{ input, output, cacheRead, cacheWrite, totalTokens, cost: { input, output, cacheRead, cacheWrite, total } }`.
+
+* Tests
+Both failing tests already encode the contract. No new tests required.
+
+Abort reason test (line 51-89):
+- Single aborted result with `abortReason: "blocked by permissions"`.
+- Expected: `lines.join("\
+")` contains `"blocked by permissions"`.
+
+Efficiency summary test (line 160-223):
+- Two completed results: 100 tokens/120ms and 80 tokens/80ms.
+- `totalDurationMs: 50`.
+- `usage`: input 120, output 60, cacheRead 120, cacheWrite 0, totalTokens 300, cost.total 0.2.
+- Expected (all required):
+  - `"Efficiency:"` \u2014 already present.
+  - `"90 avg/task"` \u2014 180 total tokens / 2 tasks = 90 avg.
+  - `"50% cache"` \u2014 cacheRead 120 / (cacheRead 120 + input 120) = 50%.
+  - `"4.0x parallel"` \u2014 (120 + 80) / 50 = 4.0.
+  - `"$0.100 avg"` \u2014 $0.2 / 2 = $0.10.
+
+Cache ratio formula confirmed from test: `cacheRead / (cacheRead + input)`. Parallel formula: `sum(result.durationMs) / totalDurationMs`.
+
+* Implementation
+** Render abortReason inline in renderAgentResult (satisfies abort-test)
+:PROPERTIES:
+:CUSTOM_ID: BUG-300-task-renderer-omits-abortreason-and-effi::render-abort-reason
+:END:
+- File: packages/coding-agent/src/task/render.ts
+- Target: `renderAgentResult` (line 409-433).
+- After pushing `statusLine` (line 426) and before `renderTaskSection` (line 427), when `result.aborted && result.abortReason` push one new line using `continuePrefix`:
+  - Format: `${continuePrefix}${theme.fg("warning", truncateToWidth(replaceTabs(result.abortReason), 100))}`.
+  - Apply `replaceTabs` + `truncateToWidth` consistent with the existing error-line pattern (line 428-430).
+
+** Extend formatEfficiencyLine with avg/cache/parallel/cost-avg (satisfies efficiency-test)
+:PROPERTIES:
+:CUSTOM_ID: BUG-300-task-renderer-omits-abortreason-and-effi::extend-efficiency
+:DEPENDS: BUG-300-task-renderer-omits-abortreason-and-effi::render-abort-reason
+:END:
+- File: packages/coding-agent/src/task/render.ts
+- Target: `formatEfficiencyLine` (line 435-449).
+- Compute after existing guard (`totalTokens === 0 && !cost`):
+  - `avgTokensPerTask = Math.round(totalTokens / results.length)` \u2014 append `"${avg} avg/task"`.
+  - `cachePct = Math.round(cacheRead / (cacheRead + inputTokens) * 100)` where `inputTokens = usage.input ?? 0` and `cacheRead = usage.cacheRead ?? 0`. Skip part when denominator is 0. Append `"${cachePct}% cache"`.
+  - `parallel = sum(results.durationMs) / totalDurationMs`. Skip when denominator is 0. Append `"${parallel.toFixed(1)}x parallel"`.
+  - `avgCost = usage.cost.total / results.length`. Skip when no usage.cost.total. Append `"${formatCost(avgCost)} avg"`.
+- Each part added via `parts.push(theme.fg("dim", value))`.
+- Preserve existing order: `Efficiency:` then `{totalTokens} tokens` then `{cost}` then `{duration}` then (new) `{avg/task}` then `{cache}` then `{parallel}` then `{cost avg}`. Tests only use `toContain`, so insertion point flexible, but prefer stable order: tokens, duration, cost, avg/task, cache, parallel, cost-avg.
+
+** Verify green (satisfies both renderer changes)
+:PROPERTIES:
+:CUSTOM_ID: BUG-300-task-renderer-omits-abortreason-and-effi::verify-green
+:DEPENDS: BUG-300-task-renderer-omits-abortreason-and-effi::extend-efficiency
+:END:
+- Command: `bun test packages/coding-agent/test/task/render-report-finding.test.ts`
+- Expect: all tests in the file pass. Confirm no other test in `packages/coding-agent/test/task/` regresses (run directory).
+- Manually read rendered output for the efficiency test to verify no ANSI/truncation corruption in new parts.
+
+* Edge Cases
+- Results with zero duration (`durationMs === 0`) must not produce NaN in parallel ratio \u2014 compute over sum; if `totalDurationMs === 0`, `formatEfficiencyLine` already returns undefined.
+- Missing `usage.input` (e.g. old results) \u2014 cache part skipped.
+- Cost part skipped when `usage?.cost?.total` is 0 or missing; preserves existing behavior.
+- Single-result batches \u2014 parallel ratio is 1.0; skip only if misleading. Tests cover only 2-result case; keep formula honest rather than suppressing trivial ratios.
+- `replaceTabs` on `abortReason` guards against TUI corruption (AGENTS.md sanitization rule).
+
+* Acceptance Criteria
+- Both listed tests pass.
+- No existing test in `packages/coding-agent/test/task/` regresses.
+- `renderAgentResult` emits abortReason line only when both `aborted` and `abortReason` are truthy.
+- `formatEfficiencyLine` emits parts in stable order; each part applies `theme.fg("dim", ...)`.
