@@ -63,6 +63,8 @@ export interface EditToolDetails {
 	move?: string;
 	/** Structured output metadata */
 	meta?: OutputMeta;
+	/** Warning when bytes persisted but managed buffer invalidation failed */
+	bufferInvalidationError?: string;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -348,6 +350,9 @@ export const editToolRenderer = {
 					text += formatDiagnostics(result.details.diagnostics, expanded, uiTheme, (fp: string) =>
 						uiTheme.getLangIcon(getLanguageFromPath(fp)),
 					);
+				}
+				if (result.details?.bufferInvalidationError) {
+					text += `\n${uiTheme.fg("warning", replaceTabs(result.details.bufferInvalidationError))}`;
 				}
 
 				const lines =

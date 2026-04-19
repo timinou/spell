@@ -1,0 +1,26 @@
+{
+  "command": "bun -e <native overwrite atomicity proof>",
+  "result": {
+    "output": {
+      "status": "failed",
+      "saveMode": "auto",
+      "editCount": 0,
+      "successCount": 0,
+      "failureCount": 1,
+      "fileResults": [
+        {
+          "file": "/tmp/plan271-native-overwrite-zNzgDD/module.ts",
+          "status": "failed",
+          "created": false,
+          "persisted": false,
+          "dirty": false,
+          "error": {
+            "message": "edit error: Edit batch would leave the buffer structurally invalid. Re-anchor the target or include an explicit separator."
+          }
+        }
+      ]
+    },
+    "error": false
+  },
+  "finalContent": "export const value = 1;\n"
+}

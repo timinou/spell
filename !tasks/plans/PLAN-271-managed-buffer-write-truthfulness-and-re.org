@@ -1,0 +1,85 @@
+#+TITLE: Managed-buffer write truthfulness and recovery cutover
+#+STATE: DONE
+#+SESSION_ID: 14c0b494b244d6d1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T12-00-23-753Z_14c0b494b244d6d1.jsonl]]
+#+CUSTOM_ID: PLAN-271-managed-buffer-write-truthfulness-and-re
+#+LAYER: packages/coding-agent,native
+
+* Initial Message
+
+✘ Write: 📝 specs/subagent-envelope-v2.md
+ ✘ Error: Managed code buffer update failed for /home/user/code/ora/spell/specs/subagent-envelope-v2.md:
+ /home/user/code/ora/spell/specs/subagent-envelope-v2.md: edit error: Edit batch would leave the buffer structurally invalid. Re-anchor the
+ target or include an explicit separator.
+
+^^^ what does this mean? could that have been saved?
+
+* Context
+The current managed-buffer persistence stack still has one live truth problem: `packages/coding-agent/src/tools/managed-code-buffer.ts` can surface a failed mutation *after* bytes already landed on disk via `invalidateManagedCodeBuffersForPaths(...)` (`Edit succeeded on disk, but failed to invalidate the managed code buffer ...`). That violates the user-selected contract for this plan: surfaced failures must imply no disk mutation; if bytes already persisted, the result must be success with warning.
+
+Motivating repro: the user hit a failing Write on `specs/subagent-envelope-v2.md` with `Edit batch would leave the buffer structurally invalid...` and then had to ask whether that failure could still have saved. Current repo evidence shows existing-file invalid edits are rolled back before save, but missing-file invalid-create coverage and post-save invalidation truthfulness are not pinned yet.
+
+Critical repo evidence:
+- `packages/coding-agent/src/tools/managed-code-buffer.ts` now routes `edit`, `replace_content`, and `save` through `callCodeBuffer(...)`; the earlier sessionId bug captured by [[id:BUG-303-applymanagedbuffercontent-bypasses-callc]] is already landed and should be preserved, not replanned.
+- The same file still throws on post-save buffer invalidation failure.
+- `packages/coding-agent/src/tools/write.ts` routes supported-file writes through `applyManagedBufferContent(...)` and therefore inherits that truth contract.
+- `packages/coding-agent/src/patch/index.ts` also reuses the same helper path for migrated text/edit persistence.
+- `packages/natives/test/code-buffer.test.ts` already proves existing-file invalid edit rejection before save and successful missing-file create through `edit` + `save`.
+- `crates/pi-code-engine/src/buffer.rs::test_buffer_registry_open_or_create_missing_file` proves missing-file create begins as an in-memory empty buffer, which is the lower-layer contract to preserve when later persistence fails.
+
+Settled decisions:
+1. Do not create a new sessionId/plumbing item. BUG-303 is DONE in repo and serves only as an existing-pattern guardrail.
+2. Use one new child item, [[id:BUG-306-managed-buffer-write-failures-must-stay]], for missing-file/existing-file atomicity plus post-save truthfulness.
+3. Fix the invariant where it actually breaks:
+   - if missing-file invalid-create leaks a file, fix the violating native layer first
+   - if bytes persist and only close/invalidation fails afterward, do not report a failed write; surface persisted success with warning instead
+4. Keep one mutation representation. No new parallel helper or second sessionId path.
+5. Preserve FEAT-585 shrink/parse guards; this plan changes failure truth classification and recovery semantics, not guard policy.
+
+Recommended approach
+- Land BUG-306 directly. Its test-first steps pin the missing-file/existing-file contract across native + coding-agent helper/tool paths and then remove the post-save false-failure classification.
+
+Linked child items:
+- [[id:BUG-306-managed-buffer-write-failures-must-stay]]
+
+Wave note:
+- `org wave` was executed during planning.
+- File-scoped `org wave manifest` for `BUG-306-managed-buffer-write-failures-must-stay.org` returns a single internal wave for that child file.
+- Category-scoped `org wave` over `bugs` returns the global ready set instead of isolating this plan subset cleanly.
+- The execution manifest below therefore mirrors the explicit child DAG for this scoped plan: one ready bug item with no inter-item blockers.
+
+* Verification
+Focused verification after implementation:
+- `bun test packages/coding-agent/test/tools/managed-code-buffer-errors.test.ts`
+- `bun test packages/coding-agent/test/tools/write-shrink-guard.test.ts`
+- `bun test packages/coding-agent/test/tools.test.ts`
+- `bun test packages/natives/test/code-buffer.test.ts`
+- `bun check:ts`
+
+Manual proof:
+- Reproduce a missing-file Markdown write failure of the `specs/subagent-envelope-v2.md` class and confirm the failed attempt leaves no file behind.
+- Reproduce a persisted-success cleanup warning path and confirm the tool reports success with warning/meta rather than failure.
+- Reproduce an existing-file invalid overwrite and confirm the exact prior bytes remain on disk.
+
+* Execution Manifest
+** Wave 1 :wave:
+- [[id:BUG-306-managed-buffer-write-failures-must-stay]] — pin missing-file/existing-file atomicity and convert post-save invalidation errors into persisted success with warning. Outcome: any surfaced failure from managed-buffer-backed write/patch persistence implies no disk mutation; any write that already persisted bytes is reported truthfully as success plus warning/meta while preserving the already-landed BUG-303 session plumbing cutover.
+
+** Completion [2026-04-19]
+*** Verification
+- `bun --cwd=packages/natives run dev:native` → pass; rebuilt the native addon after the Rust lock-file change so JS verification exercised the current binary.
+- `bun test packages/coding-agent/test/tools/managed-code-buffer-errors.test.ts` → pass (3 tests).
+- `bun test packages/coding-agent/test/tools/write-shrink-guard.test.ts` → pass (8 tests).
+- `bun test packages/coding-agent/test/tools.test.ts` → pass (67 pass, 1 skip).
+- `bun test packages/natives/test/code-buffer.test.ts` → pass (30 tests).
+- `bun check:ts` → pass.
+- Manual proof: `bun -e <WriteTool markdown invalid create proof>` → surfaced `Managed code buffer update failed... structurally invalid` and left no file behind.
+- Manual proof: `bun -e <WriteTool persisted warning proof with vi.spyOn(piNatives.executeCodeBuffer)>` → returned success text plus `bufferInvalidationError` instead of throwing.
+- Manual proof: `bun -e <native overwrite atomicity proof>` → returned `status: failed`, `persisted: false`, and preserved the exact prior bytes on disk.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-271-managed-buffer-write-truthfulness-and-re/manual-proof-missing-markdown-failure.json]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-271-managed-buffer-write-truthfulness-and-re/manual-proof-persisted-warning.json]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-271-managed-buffer-write-truthfulness-and-re/manual-proof-persisted-warning.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-271-managed-buffer-write-truthfulness-and-re/manual-proof-existing-overwrite-atomicity.json]]
+*** Deviations
+- None.

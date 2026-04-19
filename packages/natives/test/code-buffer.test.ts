@@ -20,7 +20,67 @@ const native = require_(addonPath) as {
 };
 
 function executeCodeBuffer(options: Record<string, unknown>): { output: unknown; error: boolean } {
-	return native.executeCodeBuffer(options);
+	const command = typeof options.command === "string" ? options.command : undefined;
+	const needsSession = command === "edit" || command === "replace_content" || command === "save";
+	return native.executeCodeBuffer(needsSession ? { sessionId: "test-session", ...options } : options);
+}
+
+function expectAppliedEditResult(
+	result: { output: unknown; error: boolean },
+	file: string,
+	options: {
+		created: boolean;
+		action?: string;
+		targetId?: string;
+		proof?: Record<string, unknown>;
+		editCount?: number;
+	},
+): void {
+	expect(result.error).toBe(false);
+	expect(result.output).toEqual(
+		expect.objectContaining({
+			status: "applied",
+			successCount: 1,
+			failureCount: 0,
+			editCount: options.editCount ?? 1,
+			fileResults: expect.arrayContaining([
+				expect.objectContaining({
+					file,
+					status: "applied",
+					created: options.created,
+					persisted: true,
+					...(options.targetId
+						? { targets: [{ targetId: options.targetId, actions: [options.action ?? "write"] }] }
+						: {}),
+					...(options.proof ? { proof: expect.objectContaining(options.proof) } : {}),
+				}),
+			]),
+		}),
+	);
+}
+
+function expectFailedEditResult(
+	result: { output: unknown; error: boolean },
+	file: string,
+	message: string,
+	extraError: Record<string, unknown> = {},
+): void {
+	expect(result.error).toBe(false);
+	expect(result.output).toEqual(
+		expect.objectContaining({
+			status: "failed",
+			successCount: 0,
+			failureCount: 1,
+			fileResults: expect.arrayContaining([
+				expect.objectContaining({
+					file,
+					status: "failed",
+					persisted: false,
+					error: expect.objectContaining({ message: expect.stringContaining(message), ...extraError }),
+				}),
+			]),
+		}),
+	);
 }
 
 async function createRepoTempDir(prefix: string): Promise<string> {
@@ -66,11 +126,40 @@ describe("executeCodeBuffer NAPI bridge", () => {
 			command: "edit",
 			operations: [{ targetId: file, actions: [{ kind: "write", content: "export const created = 1;\n" }] }],
 		});
-		expect(edit.error).toBe(false);
-		expect(edit.output).toEqual(expect.objectContaining({ created: true, editCount: 1 }));
+		expectAppliedEditResult(edit, file, { created: true, targetId: file });
 		const save = executeCodeBuffer({ command: "save", file });
 		expect(save.error).toBe(false);
 		expect(await Bun.file(file).text()).toBe("export const created = 1;\n");
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("leaves no file behind when a missing markdown create is structurally invalid", async () => {
+		const tempDir = path.join(os.tmpdir(), `pi-natives-invalid-markdown-create-${Date.now()}`);
+		const file = path.join(tempDir, "subagent-envelope-v2.md");
+		await fs.mkdir(tempDir, { recursive: true });
+
+		const result = executeCodeBuffer({
+			command: "edit",
+			sessionId: "test-session",
+			operations: [{ targetId: file, actions: [{ kind: "write", content: "# broken\u0000markdown\n" }] }],
+		});
+
+		expect(result.error).toBe(false);
+		expect(result.output).toEqual(
+			expect.objectContaining({
+				status: "failed",
+				failureCount: 1,
+				fileResults: expect.arrayContaining([
+					expect.objectContaining({
+						file,
+						status: "failed",
+						persisted: false,
+						error: expect.objectContaining({ message: expect.stringContaining("structurally invalid") }),
+					}),
+				]),
+			}),
+		);
+		expect(nodeFs.existsSync(file)).toBe(false);
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
 
@@ -266,8 +355,7 @@ describe("executeCodeBuffer NAPI bridge", () => {
 			command: "edit",
 			operations: [{ targetId: file, actions: [{ kind: "write", content: "export const replaced = 2;\n" }] }],
 		});
-		expect(edit.error).toBe(false);
-		expect(edit.output).toEqual(expect.objectContaining({ editCount: 1, created: false }));
+		expectAppliedEditResult(edit, file, { created: false, targetId: file });
 		const save = executeCodeBuffer({ command: "save", file });
 		expect(save.error).toBe(false);
 		expect(await Bun.file(file).text()).toBe("export const replaced = 2;\n");
@@ -290,8 +378,10 @@ describe("executeCodeBuffer NAPI bridge", () => {
 				},
 			],
 		});
-		expect(edit.error).toBe(false);
-		expect(edit.output).toEqual(expect.objectContaining({ editCount: 1, created: false }));
+		expectAppliedEditResult(edit, file, {
+			created: false,
+			targetId: `${file}::section-block`,
+		});
 		expect(executeCodeBuffer({ command: "save", file })).toEqual({
 			error: false,
 			output: expect.objectContaining({ success: true }),
@@ -329,13 +419,9 @@ describe("executeCodeBuffer NAPI bridge", () => {
 			operations: [{ targetId: `${file}::div#save`, actions: [{ kind: "rename", content: "saveButton" }] }],
 		});
 
-		expect(result).toEqual({
-			error: true,
-			output: expect.objectContaining({
-				message: expect.stringContaining("HTML/CSS rename is not yet supported safely"),
-				action: "edit",
-				proof: expect.objectContaining({ basis: "operation_scope", confidence: "low" }),
-			}),
+		expectFailedEditResult(result, file, "HTML/CSS rename is not yet supported safely", {
+			action: "edit",
+			proof: expect.objectContaining({ basis: "operation_scope", confidence: "low" }),
 		});
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
@@ -352,14 +438,12 @@ describe("executeCodeBuffer NAPI bridge", () => {
 			],
 		});
 
-		expect(result.error).toBe(false);
-		expect(result.output).toEqual(
-			expect.objectContaining({
-				created: false,
-				targets: [{ targetId: `${file}::button#save`, actions: ["renameIdToken"] }],
-				proof: expect.objectContaining({ basis: "file_local_exact_scan", confidence: "high" }),
-			}),
-		);
+		expectAppliedEditResult(result, file, {
+			created: false,
+			action: "renameIdToken",
+			targetId: `${file}::button#save`,
+			proof: { basis: "file_local_exact_scan", confidence: "high" },
+		});
 		expect(executeCodeBuffer({ command: "save", file })).toEqual({
 			error: false,
 			output: expect.objectContaining({ success: true }),
@@ -378,13 +462,9 @@ describe("executeCodeBuffer NAPI bridge", () => {
 			operations: [{ targetId: `${file}::.btn, .link`, actions: [{ kind: "renameClassToken", content: "cta" }] }],
 		});
 
-		expect(result).toEqual({
-			error: true,
-			output: expect.objectContaining({
-				message: expect.stringContaining("Selector-list rename refused"),
-				action: "edit",
-				proof: expect.objectContaining({ basis: "selector_list_ambiguity", confidence: "low" }),
-			}),
+		expectFailedEditResult(result, file, "Selector-list rename refused", {
+			action: "edit",
+			proof: expect.objectContaining({ basis: "selector_list_ambiguity", confidence: "low" }),
 		});
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
@@ -401,13 +481,12 @@ describe("executeCodeBuffer NAPI bridge", () => {
 			],
 		});
 
-		expect(result.error).toBe(false);
-		expect(result.output).toEqual(
-			expect.objectContaining({
-				targets: [{ targetId: `${file}:::root.--accent`, actions: ["renameCustomProperty"] }],
-				proof: expect.objectContaining({ basis: "file_local_exact_scan", confidence: "high" }),
-			}),
-		);
+		expectAppliedEditResult(result, file, {
+			created: false,
+			action: "renameCustomProperty",
+			targetId: `${file}:::root.--accent`,
+			proof: { basis: "file_local_exact_scan", confidence: "high" },
+		});
 		expect(executeCodeBuffer({ command: "save", file })).toEqual({
 			error: false,
 			output: expect.objectContaining({ success: true }),
@@ -428,13 +507,12 @@ describe("executeCodeBuffer NAPI bridge", () => {
 			command: "edit",
 			operations: [{ targetId: `${cssFile}::.unused`, actions: [{ kind: "removeDeadStyle" }] }],
 		});
-		expect(success.error).toBe(false);
-		expect(success.output).toEqual(
-			expect.objectContaining({
-				targets: [{ targetId: `${cssFile}::.unused`, actions: ["removeDeadStyle"] }],
-				proof: expect.objectContaining({ basis: "graph_dead_code" }),
-			}),
-		);
+		expectAppliedEditResult(success, cssFile, {
+			created: false,
+			action: "removeDeadStyle",
+			targetId: `${cssFile}::.unused`,
+			proof: { basis: "graph_dead_code" },
+		});
 		expect(executeCodeBuffer({ command: "save", file: cssFile })).toEqual({
 			error: false,
 			output: expect.objectContaining({ success: true }),
@@ -445,13 +523,9 @@ describe("executeCodeBuffer NAPI bridge", () => {
 			command: "edit",
 			operations: [{ targetId: `${cssFile}::.used`, actions: [{ kind: "removeDeadStyle" }] }],
 		});
-		expect(refusal).toEqual({
-			error: true,
-			output: expect.objectContaining({
-				message: expect.stringContaining("Dead-style removal refused"),
-				action: "edit",
-				proof: expect.objectContaining({ basis: "graph_dead_code", confidence: "low" }),
-			}),
+		expectFailedEditResult(refusal, cssFile, "Dead-style removal refused", {
+			action: "edit",
+			proof: expect.objectContaining({ basis: "graph_dead_code", confidence: "low" }),
 		});
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
@@ -485,10 +559,7 @@ describe("executeCodeBuffer NAPI bridge", () => {
 				},
 			],
 		});
-		expect(result).toEqual({
-			error: true,
-			output: expect.objectContaining({ message: expect.stringContaining("must start with a newline") }),
-		});
+		expectFailedEditResult(result, file, "must start with a newline");
 		expect(await Bun.file(file).text()).toBe('import { a } from "./a";\nexport const value = a;\n');
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
@@ -591,15 +662,12 @@ describe("executeCodeBuffer NAPI bridge", () => {
 				{ targetId: `${file}::Foo.bar`, actions: [{ kind: "insertAfter", content: "qux() { return 3; }" }] },
 			],
 		});
-		expect(result).toEqual({
-			error: true,
-			output: expect.objectContaining({ message: expect.stringContaining("Unsafe symbol-target insert-after") }),
-		});
+		expectFailedEditResult(result, file, "Unsafe symbol-target insert-after");
 		expect(await Bun.file(file).text()).toBe(source);
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
 
-	it("rejects structurally invalid supported-file edits before save", async () => {
+	it("leaves exact prior bytes when an existing supported-file overwrite is structurally invalid", async () => {
 		const tempDir = path.join(os.tmpdir(), `pi-natives-invalid-structure-${Date.now()}`);
 		const file = path.join(tempDir, "module.ts");
 		await fs.mkdir(tempDir, { recursive: true });
@@ -609,10 +677,7 @@ describe("executeCodeBuffer NAPI bridge", () => {
 			command: "edit",
 			operations: [{ targetId: file, actions: [{ kind: "write", content: "export const = ;\n" }] }],
 		});
-		expect(result).toEqual({
-			error: true,
-			output: expect.objectContaining({ message: expect.stringContaining("structurally invalid") }),
-		});
+		expectFailedEditResult(result, file, "structurally invalid");
 		expect(await Bun.file(file).text()).toBe("export const value = 1;\n");
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
@@ -633,10 +698,7 @@ describe("executeCodeBuffer NAPI bridge", () => {
 				},
 			],
 		});
-		expect(result).toEqual({
-			error: true,
-			output: expect.objectContaining({ message: expect.stringContaining("multiple matches; pass occurrence") }),
-		});
+		expectFailedEditResult(result, file, "multiple matches; pass occurrence");
 		expect(await Bun.file(file).text()).toBe(source);
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
@@ -722,10 +784,7 @@ describe("executeCodeBuffer NAPI bridge", () => {
 				},
 			],
 		});
-		expect(result).toEqual({
-			error: true,
-			output: expect.objectContaining({ message: expect.stringContaining("occurrence 5 out of range 1..=3") }),
-		});
+		expectFailedEditResult(result, file, "occurrence 5 out of range 1..=3");
 		expect(await Bun.file(file).text()).toBe(source);
 		await fs.rm(tempDir, { recursive: true, force: true });
 	});
@@ -753,7 +812,7 @@ describe("executeCodeBuffer NAPI bridge", () => {
 				},
 			],
 		});
-		expect(failed.error).toBe(true);
+		expect((failed.output as { status?: unknown }).status).toBe("failed");
 
 		const followUp = executeCodeBuffer({
 			command: "edit",
