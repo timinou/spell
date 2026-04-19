@@ -46,6 +46,8 @@ import {
 	MAX_OUTPUT_LINES,
 	type ReviewFinding,
 	type SingleResult,
+	type SpawnAuditEntry,
+	type SubagentOutcome,
 	TASK_SUBAGENT_EVENT_CHANNEL,
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "./types";
@@ -326,6 +328,57 @@ interface FinalizeSubprocessOutputResult {
 	stderr: string;
 	abortedViaSubmitResult: boolean;
 	hasSubmitResult: boolean;
+}
+
+function stringifyStructuredResult(value: unknown): string | undefined {
+	if (value === undefined) return undefined;
+	try {
+		return JSON.stringify(value, null, 2);
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+}
+
+function buildTextPreview(value: string | undefined, maxChars = 2000): string | undefined {
+	const trimmed = value?.trim();
+	if (!trimmed) return undefined;
+	if (trimmed.length <= maxChars) return trimmed;
+	const slice = trimmed.slice(0, maxChars);
+	const lastNewline = slice.lastIndexOf("\n");
+	return (lastNewline >= 0 ? slice.slice(0, lastNewline) : slice).trimEnd();
+}
+
+function parseSpawnAudit(value: string | undefined): SpawnAuditEntry | undefined {
+	const text = value?.trim();
+	if (!text) return undefined;
+	const match = text.match(/Cannot spawn '([^']+)'\. Allowed: (.+)$/u);
+	if (!match) return undefined;
+	const requestedAgent = match[1]?.trim();
+	const parentSpawnPolicy = match[2]?.trim() ?? "";
+	const allowedAgents =
+		parentSpawnPolicy === "*"
+			? ["*"]
+			: parentSpawnPolicy.startsWith("none")
+				? []
+				: parentSpawnPolicy
+						.split(",")
+						.map(entry => entry.trim())
+						.filter(Boolean);
+	if (!requestedAgent) return undefined;
+	return {
+		requestedAgent,
+		parentSpawnPolicy,
+		allowedAgents,
+		granted: false,
+		reason: "policy-rejected",
+	};
+}
+
+function extractNestedTaskResults(value: unknown): SingleResult[] | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const details = value as { results?: unknown };
+	if (!Array.isArray(details.results)) return undefined;
+	return structuredClone(details.results as SingleResult[]);
 }
 
 export const SUBAGENT_WARNING_NULL_SUBMIT_RESULT = "SYSTEM WARNING: Subagent called submit_result with null data.";
@@ -666,9 +719,10 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			assignment,
 			description: options.description,
 			exitCode: 1,
-			output: "",
+			outcome: "aborted",
 			stderr: "Cancelled before start",
-			truncated: false,
+			resultUri: `agent://${id}`,
+			textPreview: "Cancelled before start",
 			durationMs: 0,
 			tokens: 0,
 			modelOverride,
@@ -741,6 +795,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const finalOutputChunks: string[] = [];
 	const RECENT_OUTPUT_TAIL_BYTES = 8 * 1024;
 	let recentOutputTail = "";
+	let nestedTaskResults: SingleResult[] = [];
 	let stderr = "";
 	let resolved = false;
 	type AbortReason = "signal" | "terminate";
@@ -1046,6 +1101,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					const todoGroups = todoResult?.details?.groups ?? todoResult?.details?.phases;
 					if (Array.isArray(todoGroups)) {
 						progress.todoGroups = cloneTodoGroups(todoGroups as TodoGroup[]);
+					}
+				}
+				if (event.toolName === "task") {
+					const taskResults = extractNestedTaskResults(event.result?.details);
+					if (taskResults) {
+						nestedTaskResults = nestedTaskResults.concat(taskResults);
 					}
 				}
 				flushProgress = true;
@@ -1354,7 +1415,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 						const actualTodoWrite = session.getActiveToolNames().includes("todo_write");
 						if (actualTodoWrite !== todoWriteAvailable) {
 							todoWriteAvailable = actualTodoWrite;
-							await session.refreshBaseSystemPrompt();
+							if (typeof session.refreshBaseSystemPrompt === "function") {
+								await session.refreshBaseSystemPrompt();
+							}
 						}
 
 						session.sessionManager.appendSessionInit({
@@ -1704,7 +1767,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	const submitResultAbortReason =
 		lastSubmitResult?.status === "aborted" ? lastSubmitResult.error || "Subagent aborted task" : undefined;
 	const { abortedViaSubmitResult, hasSubmitResult } = finalized;
-	const { content: truncatedOutput, truncated } = truncateTail(rawOutput, {
+	const { content: truncatedOutput } = truncateTail(rawOutput, {
 		maxBytes: MAX_OUTPUT_BYTES,
 		maxLines: MAX_OUTPUT_LINES,
 	});
@@ -1739,13 +1802,37 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			? submitResultAbortReason
 			: (done.abortReason ?? (signal?.aborted ? resolveSignalAbortReason() : "Subagent aborted task"))
 		: undefined;
-	progress.status = wasAborted
+	const structuredResult = (() => {
+		if (
+			lastSubmitResult?.status === "success" &&
+			lastSubmitResult.data !== undefined &&
+			lastSubmitResult.data !== null
+		) {
+			return normalizeCompleteData(lastSubmitResult.data, reportFindings);
+		}
+		if (exitCode === 0 && !wasAborted) {
+			return resolveFallbackCompletion(rawOutput, outputSchema)?.data;
+		}
+		return undefined;
+	})();
+	const structuredText = stringifyStructuredResult(structuredResult);
+	const textPreview =
+		buildTextPreview(truncatedOutput) ?? buildTextPreview(structuredText) ?? buildTextPreview(stderr);
+	const spawnAudit = parseSpawnAudit(textPreview) ?? parseSpawnAudit(stderr);
+	const outcome: SubagentOutcome = wasAborted
 		? "aborted"
-		: missingSubmitResultFailed
-			? "failed"
-			: exitCode === 0
-				? "completed"
-				: "failed";
+		: spawnAudit?.reason === "policy-rejected"
+			? "policy-rejected"
+			: missingSubmitResultWarning
+				? "submit-result-missing"
+				: exitCode === 0
+					? structuredResult !== undefined || textPreview
+						? "completed"
+						: "completed-empty"
+					: stderr.includes("Output does not match schema")
+						? "schema-invalid"
+						: "failed";
+	progress.status = outcome;
 	scheduleProgress(true);
 
 	return {
@@ -1758,9 +1845,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		description: options.description,
 		lastIntent: progress.lastIntent,
 		exitCode,
-		output: truncatedOutput,
+		outcome,
 		stderr,
-		truncated: Boolean(truncated),
+		resultUri: `agent://${id}`,
+		structuredResult,
+		textPreview,
+		children: nestedTaskResults.length > 0 ? nestedTaskResults : undefined,
 		durationMs: Date.now() - startTime,
 		tokens: progress.tokens,
 		modelOverride,
@@ -1768,11 +1858,12 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 		aborted: wasAborted,
 		abortReason: finalAbortReason,
 		sessionId: progress.sessionId,
-		transcriptPath: progress.transcriptPath,
+		transcriptUri: progress.transcriptPath,
 		todoGroups: progress.todoGroups ? cloneTodoGroups(progress.todoGroups) : undefined,
 		usage: hasUsage ? accumulatedUsage : undefined,
 		outputPath,
 		extractedToolData: progress.extractedToolData,
 		outputMeta,
+		spawnAudit,
 	};
 }

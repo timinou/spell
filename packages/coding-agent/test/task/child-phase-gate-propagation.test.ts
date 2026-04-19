@@ -28,13 +28,14 @@ function createResult(id: string, transcriptPath: string, overrides: Partial<Sin
 		assignment: "## Target\n- File: foo.ts",
 		description: "Build feature",
 		exitCode: 0,
-		output: "{}",
+		outcome: "completed",
 		stderr: "",
-		truncated: false,
+		resultUri: `agent://${id}`,
+		structuredResult: {},
 		durationMs: 1,
 		tokens: 0,
 		sessionId: "child-session",
-		transcriptPath,
+		transcriptUri: transcriptPath,
 		...overrides,
 	};
 }

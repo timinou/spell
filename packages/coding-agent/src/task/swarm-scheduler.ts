@@ -1,14 +1,8 @@
 import { MutableDag, type MutableDagRemovalMode } from "./mutable-dag";
+import type { SubagentOutcome } from "./types";
 
 export type SwarmNodeKind = "work" | "data";
-export type SwarmNodeStatus =
-	| "pending"
-	| "in_progress"
-	| "completed"
-	| "failed"
-	| "aborted"
-	| "gate_failed"
-	| "abandoned";
+export type SwarmNodeStatus = SubagentOutcome;
 
 export interface SwarmNodeLike {
 	kind?: SwarmNodeKind;
@@ -31,18 +25,13 @@ export interface SwarmSchedulerPumpResult {
 }
 
 function isTerminal(status: SwarmNodeStatus | undefined): boolean {
-	return (
-		status === "completed" ||
-		status === "failed" ||
-		status === "aborted" ||
-		status === "gate_failed" ||
-		status === "abandoned"
-	);
+	return status !== undefined && status !== "pending" && status !== "running";
 }
 
 function isSatisfiedDataNode(node: SwarmNodeLike): boolean {
 	return (
-		(node.kind ?? "work") === "data" && Boolean(node.dataContent || node.artifactPath || node.status === "completed")
+		(node.kind ?? "work") === "data" &&
+		Boolean(node.dataContent || node.artifactPath || node.status === "completed" || node.status === "completed-empty")
 	);
 }
 
@@ -103,11 +92,17 @@ export class SwarmScheduler<T extends SwarmNodeLike> {
 		for (const id of this.#dag.topologicalOrder()) {
 			const node = this.#dag.getNode(id);
 			if (!node) continue;
-			if (node.status === "completed" || node.status === "abandoned" || isSatisfiedDataNode(node)) completed.add(id);
+			if (
+				node.status === "completed" ||
+				node.status === "completed-empty" ||
+				node.status === "abandoned" ||
+				isSatisfiedDataNode(node)
+			)
+				completed.add(id);
 		}
 		return this.#dag.getReadyNodeIds(completed).filter(id => {
 			const node = this.#dag.getNode(id);
-			return node ? node.status === undefined || node.status === "pending" || node.status === "in_progress" : false;
+			return node ? node.status === undefined || node.status === "pending" || node.status === "running" : false;
 		});
 	}
 

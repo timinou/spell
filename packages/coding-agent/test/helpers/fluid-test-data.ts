@@ -25,9 +25,10 @@ export function mockResult(id: string, output = ""): SingleResult {
 		agentSource: "bundled",
 		task: "test",
 		exitCode: 0,
-		output,
+		outcome: "completed",
 		stderr: "",
-		truncated: false,
+		resultUri: `agent://${id}`,
+		textPreview: output,
 		durationMs: 100,
 		tokens: 10,
 	};

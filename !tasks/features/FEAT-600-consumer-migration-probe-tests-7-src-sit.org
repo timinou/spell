@@ -1,5 +1,5 @@
 #+TITLE: Consumer migration + probe tests: 7 src sites, 14 fixtures, 8 new tests
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c0a83e5a690b0f
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-06-29-609Z_14c0a83e5a690b0f.jsonl]]
 #+CUSTOM_ID: FEAT-600-consumer-migration-probe-tests-7-src-sit
@@ -220,3 +220,5 @@ Full enumeration in sub-items below. Each probe test uses executor mocks to avoi
 - ~rg \"\\.output\\b\" packages/coding-agent/src/task/ packages/coding-agent/src/orchestrators/ packages/coding-agent/src/modes/~ returns only BashResult-related hits (~result.output~ on bash), not SingleResult.
 - ~rg \"outputIds\" packages/coding-agent~ returns zero matches.
 - ~bun test packages/coding-agent/test/task/~ green for new 8 files.
+
+NOTE [2026-04-19]: Implemented under PLAN-270. Verification covered by `bun check:ts` and `bun test packages/coding-agent/test/task/` on 2026-04-19.

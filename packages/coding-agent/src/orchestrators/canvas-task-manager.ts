@@ -31,6 +31,15 @@ const DEFAULT_MODEL = "pi/sniper";
 const DEFAULT_TOOLS = ["read", "grep", "find", "edit", "lsp", "bash", "ast_grep", "ast_edit"];
 const DEFAULT_TASK_TIMEOUT_MS = 120_000;
 
+function stringifyTaskResult(value: unknown): string | undefined {
+	if (value === undefined) return undefined;
+	try {
+		return JSON.stringify(value, null, 2);
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+}
+
 /** Minimal executor contract — same shape as runSubprocess from task/executor. */
 export type CanvasTaskExecutor = (options: {
 	cwd: string;
@@ -217,7 +226,8 @@ export class CanvasTaskManager {
 
 			const bridge = this.#bridge;
 			if (bridge) {
-				const output = result.output || "Task completed with no output.";
+				const output =
+					result.textPreview || stringifyTaskResult(result.structuredResult) || "Task completed with no output.";
 				bridge.sendMessage(windowId, {
 					action: "task_result",
 					ok: true,

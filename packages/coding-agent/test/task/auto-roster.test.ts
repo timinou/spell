@@ -33,13 +33,14 @@ function createResult(
 		assignment: `## Target\n- Task: ${description}`,
 		description,
 		exitCode: 0,
-		output: description,
+		outcome: "completed",
 		stderr: "",
-		truncated: false,
+		resultUri: `agent://${id}`,
+		textPreview: description,
 		durationMs: 1,
 		tokens: 0,
 		sessionId: "child-session",
-		transcriptPath,
+		transcriptUri: transcriptPath,
 		...overrides,
 	};
 }

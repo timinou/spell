@@ -1,5 +1,5 @@
 #+TITLE: Streaming bubble-up: pass eventBus to nested runSubprocess for grandchild progress
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c0a83e5a690b0f
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-06-29-609Z_14c0a83e5a690b0f.jsonl]]
 #+CUSTOM_ID: FEAT-599-streaming-bubble-up-pass-eventbus-to-nes
@@ -183,3 +183,5 @@ Test files:
 - Run nested probe (depth-3 delegation chain) post-FEAT-E; observe depth transitions in TUI.
 - ~rg "eventBus: undefined" packages/coding-agent/src/task~ returns zero matches.
 - ~bun test~ green.
+
+NOTE [2026-04-19]: Implemented under PLAN-270. Verification covered by `bun check:ts` and `bun test packages/coding-agent/test/task/` on 2026-04-19.
