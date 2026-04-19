@@ -175,12 +175,37 @@ export interface AgentRetryState {
 }
 
 /** Progress tracking for a single agent */
+export type SubagentOutcome =
+	| "pending"
+	| "running"
+	| "completed"
+	| "completed-empty"
+	| "failed"
+	| "crashed"
+	| "timeout"
+	| "aborted"
+	| "cancelled"
+	| "policy-rejected"
+	| "depth-capped"
+	| "submit-result-missing"
+	| "schema-invalid"
+	| "gate_failed"
+	| "abandoned";
+
+export interface SpawnAuditEntry {
+	requestedAgent: string;
+	parentSpawnPolicy: string;
+	allowedAgents: string[];
+	granted: boolean;
+	reason?: string;
+}
+
 export interface AgentProgress {
 	index: number;
 	id: string;
 	agent: string;
 	agentSource: AgentSource;
-	status: "pending" | "running" | "completed" | "failed" | "aborted";
+	status: SubagentOutcome;
 	task: string;
 	assignment?: string;
 	description?: string;
@@ -215,9 +240,12 @@ export interface SingleResult {
 	description?: string;
 	lastIntent?: string;
 	exitCode: number;
-	output: string;
+	outcome: SubagentOutcome;
 	stderr: string;
-	truncated: boolean;
+	resultUri: string;
+	structuredResult?: unknown;
+	textPreview?: string;
+	children?: SingleResult[];
 	durationMs: number;
 	tokens: number;
 	modelOverride?: string | string[];
@@ -225,7 +253,7 @@ export interface SingleResult {
 	aborted?: boolean;
 	abortReason?: string;
 	sessionId?: string;
-	transcriptPath?: string;
+	transcriptUri?: string;
 	todoGroups?: TodoGroup[];
 	/** Aggregated usage from the subprocess, accumulated incrementally from message_end events. */
 	usage?: Usage;
@@ -241,6 +269,7 @@ export interface SingleResult {
 	extractedToolData?: Record<string, unknown[]>;
 	/** Output metadata for agent:// URL integration */
 	outputMeta?: { lineCount: number; charCount: number };
+	spawnAudit?: SpawnAuditEntry;
 }
 
 /** Tool details for TUI rendering */
@@ -250,7 +279,6 @@ export interface TaskToolDetails {
 	totalDurationMs: number;
 	/** Aggregated usage across all subagents. */
 	usage?: Usage;
-	outputPaths?: string[];
 	progress?: AgentProgress[];
 	implicit_blockers?: BatchImplicitBlocker[];
 	/** True when caller requested isolated execution but task.isolation.mode="none"; batch ran non-isolated. */
@@ -258,7 +286,7 @@ export interface TaskToolDetails {
 	/** True when isolation was auto-coerced from nested task heuristics. */
 	isolationAutoCoerced?: boolean;
 	async?: {
-		state: "running" | "completed" | "failed";
+		state: SubagentOutcome;
 		jobId: string;
 		type: "task";
 	};

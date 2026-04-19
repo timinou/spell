@@ -63,6 +63,7 @@ import {
 	type AgentDefinition,
 	type AgentProgress,
 	type SingleResult,
+	type SubagentOutcome,
 	type TaskItem,
 	type TaskParams,
 	type TaskSchema,
@@ -127,6 +128,52 @@ function addUsageTotals(target: Usage, usage: Partial<Usage>): void {
 	target.cost.cacheRead += cost.cacheRead;
 	target.cost.cacheWrite += cost.cacheWrite;
 	target.cost.total += cost.total;
+}
+
+const RESULT_INLINE_JSON_LIMIT = 5_000;
+
+function stringifyStructuredResult(value: unknown): string | undefined {
+	if (value === undefined) return undefined;
+	try {
+		return JSON.stringify(value, null, 2);
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+}
+
+function getResultSummaryText(
+	result: Pick<SingleResult, "structuredResult" | "textPreview">,
+	maxChars = 4_000,
+): string | undefined {
+	const text = result.textPreview?.trim() || stringifyStructuredResult(result.structuredResult);
+	if (!text) return undefined;
+	return text.length > maxChars ? `${text.slice(0, maxChars)}\n\n[truncated]` : text;
+}
+
+function getResultPreviewText(result: SingleResult): string {
+	return (
+		result.textPreview?.trim() ||
+		stringifyStructuredResult(result.structuredResult) ||
+		result.stderr.trim() ||
+		"(no output)"
+	);
+}
+
+function getResultInlineStructured(result: SingleResult): string | undefined {
+	const text = stringifyStructuredResult(result.structuredResult);
+	if (!text || text.length >= RESULT_INLINE_JSON_LIMIT) return undefined;
+	return text;
+}
+
+function isSuccessfulOutcome(outcome: SubagentOutcome): boolean {
+	return outcome === "completed" || outcome === "completed-empty";
+}
+
+function formatOutcomeLabel(result: SingleResult): string {
+	if (result.outcome === "failed" && result.exitCode > 0) {
+		return `failed (exit ${result.exitCode})`;
+	}
+	return result.outcome;
 }
 
 /**
@@ -432,9 +479,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		result: SingleResult,
 		verification?: TodoDelegationResult["verification"],
 	): TodoDelegationResult {
-		const output = result.output.trim();
 		return {
-			output: output.length > 4_000 ? `${output.slice(0, 4_000)}\n\n[truncated]` : output || undefined,
+			output: getResultSummaryText(result),
 			error: result.error,
 			outputPath: result.outputPath,
 			verification,
@@ -544,9 +590,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			assignment: task.assignment,
 			description: task.description,
 			exitCode: 1,
-			output: "",
+			outcome: aborted ? "aborted" : "failed",
 			stderr: errorMessage,
-			truncated: false,
+			resultUri: `agent://${task.id}`,
+			textPreview: errorMessage,
 			durationMs: 0,
 			tokens: 0,
 			error: errorMessage,
@@ -619,7 +666,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
 	): Promise<void> {
 		if (!task.todoRef) return;
-		const delegation = this.#buildTodoDelegation(result.agent, result.sessionId, result.transcriptPath);
+		const delegation = this.#buildTodoDelegation(result.agent, result.sessionId, result.transcriptUri);
 		const todo = this.#findTodoForRef(task.todoRef);
 
 		let status: TodoStatus;
@@ -627,7 +674,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		// Track whether gate verification ran and passed, so we can bypass two-phase verification
 		let gatesVerified = false;
 
-		if (result.exitCode === 0 && !(result.aborted ?? false)) {
+		if (isSuccessfulOutcome(result.outcome) && result.exitCode === 0 && !result.error) {
 			const gateResult = await this.#verifyTaskGates(task.todoRef, result, isolationContext);
 			const childGateFailures = result.todoGroups
 				? await this.#verifyChildTodoGates(result.todoGroups, result, isolationContext)
@@ -1543,7 +1590,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						contextFile: contextFilePath,
 						enableLsp: false,
 						signal: runSignal,
-						eventBus: undefined,
+						eventBus: this.session.eventBus,
 						onProgress: updateProgress,
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
@@ -1597,7 +1644,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						contextFile: contextFilePath,
 						enableLsp: false,
 						signal: runSignal,
-						eventBus: undefined,
+						eventBus: this.session.eventBus,
 						onProgress: updateProgress,
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
@@ -1675,9 +1722,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						assignment: taskExecution.assignment,
 						description: taskExecution.description,
 						exitCode: 1,
-						output: "",
+						outcome: "failed",
 						stderr: message,
-						truncated: false,
+						resultUri: `agent://${taskExecution.executionId}`,
+						textPreview: message,
 						durationMs: Date.now() - taskStart,
 						tokens: 0,
 						modelOverride,
@@ -1721,9 +1769,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					assignment: taskExecution.assignment,
 					description: taskExecution.description,
 					exitCode: 1,
-					output: "",
+					outcome: aborted ? "aborted" : "failed",
 					stderr: errorMessage,
-					truncated: false,
+					resultUri: `agent://${taskExecution.executionId}`,
+					textPreview: errorMessage,
 					durationMs: 0,
 					tokens: 0,
 					modelOverride,
@@ -1732,7 +1781,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					abortReason: aborted ? errorMessage : undefined,
 				};
 			});
-			const aborted = batchResults.some(batchResult => batchResult.status === "aborted");
+
 			for (let index = 0; index < batchResults.length; index++) {
 				const batchResult = batchResults[index]!;
 				if (batchResult.status === "completed") continue;
@@ -1755,13 +1804,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				}
 			}
 
-			// Collect output paths (artifacts already written by executor in real-time)
-			const outputPaths: string[] = [];
+			// Collect patch paths (artifacts already written by executor in real-time)
 			const patchPaths: string[] = [];
 			for (const result of results) {
-				if (result.outputPath) {
-					outputPaths.push(result.outputPath);
-				}
 				if (result.patchPath) {
 					patchPaths.push(result.patchPath);
 				}
@@ -1903,35 +1948,39 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			}
 
 			// Build final output - match plugin format
-			const successCount = results.filter(r => r.exitCode === 0 && !r.error).length;
-			const cancelledCount = results.filter(r => r.aborted).length;
+			const successCount = results.filter(r => isSuccessfulOutcome(r.outcome)).length;
+			const outcomeCounts = new Map<SubagentOutcome, number>();
+			for (const result of results) {
+				outcomeCounts.set(result.outcome, (outcomeCounts.get(result.outcome) ?? 0) + 1);
+			}
+			const outcomeBreakdown = Array.from(outcomeCounts.entries())
+				.sort((left, right) => left[0].localeCompare(right[0]))
+				.map(([outcome, count]) => `${outcome}:${count}`)
+				.join(", ");
 			const totalDuration = Date.now() - startTime;
 
 			const summaries = results.map(r => {
-				const status = r.aborted
-					? "cancelled"
-					: r.exitCode === 0 && r.error
-						? "merge failed"
-						: r.exitCode === 0
-							? "completed"
-							: `failed (exit ${r.exitCode})`;
-				const output = r.output.trim() || r.stderr.trim() || "(no output)";
-				const outputCharCount = r.outputMeta?.charCount ?? output.length;
-				const fullOutputThreshold = 5000;
-				let preview = output;
-				let truncated = false;
-				if (outputCharCount > fullOutputThreshold) {
-					const slice = output.slice(0, fullOutputThreshold);
-					const lastNewline = slice.lastIndexOf("\n");
-					preview = lastNewline >= 0 ? slice.slice(0, lastNewline) : slice;
-					truncated = true;
-				}
+				const structuredInline = getResultInlineStructured(r);
+				const preview = r.textPreview?.trim() || (!structuredInline ? getResultPreviewText(r) : undefined);
+				const children = (r.children ?? []).map(child => ({
+					id: child.id,
+					outcome: child.outcome,
+					resultUri: child.resultUri,
+				}));
 				return {
 					agent: r.agent,
-					status,
+					outcome: r.outcome,
+					status: formatOutcomeLabel(r),
 					id: r.id,
 					preview,
-					truncated,
+					structuredInline,
+					resultUri: r.resultUri,
+					children,
+					hasChildren: children.length > 0,
+					spawnAudit:
+						r.spawnAudit && (!r.spawnAudit.granted || r.spawnAudit.reason === "depth-capped")
+							? r.spawnAudit
+							: undefined,
 					meta: r.outputMeta
 						? {
 								lineCount: r.outputMeta.lineCount,
@@ -1941,7 +1990,6 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				};
 			});
 
-			const outputIds = results.filter(r => !r.aborted || r.output.trim()).map(r => `agent://${r.id}`);
 			const backendSummaryPrefix = isolationBackendWarning ? `\n\n${isolationBackendWarning}` : "";
 			const downgradeSummaryPrefix = isolationDowngradeNotice ? `\n\n${isolationDowngradeNotice}` : "";
 			const autoIsolationSummaryPrefix = isAutoIsolated
@@ -1950,11 +1998,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			const summary = `${implicitBlockerNote}${renderPromptTemplate(taskSummaryTemplate, {
 				successCount,
 				totalCount: results.length,
-				cancelledCount,
-				hasCancelledNote: aborted && cancelledCount > 0,
+				outcomeBreakdown: outcomeBreakdown ? `(${outcomeBreakdown})` : undefined,
 				duration: formatDuration(totalDuration),
 				summaries,
-				outputIds,
 				agentName,
 				mergeSummary: `${backendSummaryPrefix}${downgradeSummaryPrefix}${autoIsolationSummaryPrefix}${mergeSummary}`,
 			})}`;
@@ -1974,7 +2020,6 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						results: results,
 						totalDurationMs: totalDuration,
 						usage: hasAggregatedUsage ? aggregatedUsage : undefined,
-						outputPaths,
 						isolationDowngraded: isolationDowngraded || undefined,
 						isolationAutoCoerced: isAutoIsolated || undefined,
 					},

@@ -1,5 +1,5 @@
 #+TITLE: Envelope rendering: structured inline+URI, outcome badges, spawn audit, children tree
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c0a83e5a690b0f
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-06-29-609Z_14c0a83e5a690b0f.jsonl]]
 #+CUSTOM_ID: FEAT-598-envelope-rendering-structured-inlineuri
@@ -204,3 +204,5 @@ Test files:
 - Snapshot: capture envelope text from a recorded fixture, diff vs golden file in repo.
 - Visual: subagent viewer shows new outcome glyphs distinctly.
 - Header: ~outcomeBreakdown~ formatting matches spec section 3.5.
+
+NOTE [2026-04-19]: Implemented under PLAN-270. Verification covered by `bun check:ts` and `bun test packages/coding-agent/test/task/` on 2026-04-19.

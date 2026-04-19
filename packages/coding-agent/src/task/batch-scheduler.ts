@@ -1,5 +1,6 @@
 import { findOverlappingFilesDep, MutableDag } from "./mutable-dag";
 import { SwarmScheduler } from "./swarm-scheduler";
+import type { SubagentOutcome } from "./types";
 
 type BatchGraphNode = {
 	filesDeps?: string[];
@@ -18,7 +19,7 @@ export interface BatchTask<T> {
 }
 export interface BatchTaskResult<T> {
 	id: string;
-	status: "completed" | "failed" | "aborted";
+	status: Extract<SubagentOutcome, "completed" | "failed" | "aborted">;
 	result?: T;
 	error?: string;
 }

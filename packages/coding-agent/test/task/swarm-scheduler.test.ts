@@ -4,7 +4,20 @@ import { SwarmScheduler } from "../../src/task/swarm-scheduler";
 
 interface NodeLike {
 	kind?: "work" | "data";
-	status?: "pending" | "in_progress" | "completed" | "failed" | "aborted" | "gate_failed" | "abandoned";
+	status?:
+		| "pending"
+		| "running"
+		| "completed"
+		| "completed-empty"
+		| "failed"
+		| "aborted"
+		| "cancelled"
+		| "gate_failed"
+		| "abandoned"
+		| "policy-rejected"
+		| "depth-capped"
+		| "submit-result-missing"
+		| "schema-invalid";
 	filesDeps?: string[];
 	dataContent?: string;
 	artifactPath?: string;

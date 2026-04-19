@@ -178,7 +178,7 @@ describe("runSubprocess tool call budget", () => {
 		expect(prompts[1]).toContain("You stopped without calling submit_result");
 		expect(abortSpy).toHaveBeenCalled();
 		expect(getBudgetWarningCount(warnSpy)).toBe(1);
-		expect(result.output).toContain('"recovered": true');
+		expect(result.structuredResult).toEqual({ recovered: true });
 	});
 
 	it("does not abort when subagent completes within budget", async () => {
@@ -198,7 +198,7 @@ describe("runSubprocess tool call budget", () => {
 		});
 
 		expect(getBudgetWarningCount(warnSpy)).toBe(0);
-		expect(result.output).toContain('"withinBudget": true');
+		expect(result.structuredResult).toEqual({ withinBudget: true });
 	});
 
 	it("disables enforcement when task.maxToolCalls is set to 0", async () => {
@@ -218,7 +218,7 @@ describe("runSubprocess tool call budget", () => {
 		});
 
 		expect(getBudgetWarningCount(warnSpy)).toBe(0);
-		expect(result.output).toContain('"enforcementDisabled": true');
+		expect(result.structuredResult).toEqual({ enforcementDisabled: true });
 	});
 
 	it("does not abort when tool count is exactly at maxToolCalls", async () => {
@@ -238,7 +238,7 @@ describe("runSubprocess tool call budget", () => {
 		});
 
 		expect(getBudgetWarningCount(warnSpy)).toBe(0);
-		expect(result.output).toContain('"exactLimit": true');
+		expect(result.structuredResult).toEqual({ exactLimit: true });
 	});
 	it("uses default maxToolCalls=200 when not explicitly configured", async () => {
 		const prompts: string[] = [];
@@ -266,6 +266,6 @@ describe("runSubprocess tool call budget", () => {
 
 		expect(prompts).toHaveLength(2);
 		expect(getBudgetWarningCount(warnSpy)).toBe(1);
-		expect(result.output).toContain('"defaultBudgetApplied": true');
+		expect(result.structuredResult).toEqual({ defaultBudgetApplied: true });
 	});
 });

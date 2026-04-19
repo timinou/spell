@@ -1,4 +1,5 @@
 import type { AsyncJobManager } from "../async";
+import type { SubagentOutcome } from "../task/types";
 import { formatDuration } from "../tools/render-utils";
 import type { InternalResource, InternalUrl, ProtocolHandler } from "./types";
 
@@ -20,6 +21,14 @@ function normalizeJobId(url: InternalUrl): string {
 	if (host && pathname) return `${host}/${pathname}`;
 	if (host) return host;
 	return pathname;
+}
+
+function isCompletedJob(status: SubagentOutcome): boolean {
+	return status === "completed" || status === "completed-empty";
+}
+
+function isFailedJob(status: SubagentOutcome): boolean {
+	return !["pending", "running", "completed", "completed-empty", "aborted", "cancelled"].includes(status);
 }
 
 export class JobsProtocolHandler implements ProtocolHandler {
@@ -97,13 +106,13 @@ export class JobsProtocolHandler implements ProtocolHandler {
 			`- duration: ${formatJobDuration(job.startTime)}`,
 		];
 
-		if (job.status === "completed" && job.resultText) {
+		if (isCompletedJob(job.status) && job.resultText) {
 			sections.push("", "## Result", "", "```", job.resultText, "```");
 		}
-		if (job.status === "failed" && job.errorText) {
+		if (isFailedJob(job.status) && job.errorText) {
 			sections.push("", "## Error", "", "```", job.errorText, "```");
 		}
-		if (job.status === "cancelled" && job.errorText) {
+		if ((job.status === "cancelled" || job.status === "aborted") && job.errorText) {
 			sections.push("", "## Cancellation", "", "```", job.errorText, "```");
 		}
 

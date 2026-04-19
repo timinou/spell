@@ -33,7 +33,21 @@ export interface SubagentLifetimeStats {
 	byAgentType: Map<string, { count: number; tokens: number; cost: number }>;
 }
 
-const TERMINAL_STATUSES: ReadonlySet<AgentProgress["status"]> = new Set(["completed", "failed", "aborted"]);
+const TERMINAL_STATUSES: ReadonlySet<AgentProgress["status"]> = new Set([
+	"completed",
+	"completed-empty",
+	"failed",
+	"crashed",
+	"timeout",
+	"aborted",
+	"cancelled",
+	"policy-rejected",
+	"depth-capped",
+	"submit-result-missing",
+	"schema-invalid",
+	"gate_failed",
+	"abandoned",
+]);
 const CHANGE_DEBOUNCE_MS = 100;
 
 export class SubagentTracker {
@@ -80,12 +94,12 @@ export class SubagentTracker {
 		this.#activeAgents.delete(key);
 		this.#deleteSessionKey(result.sessionId, key);
 
-		if (result.aborted) {
+		if (result.outcome === "aborted" || result.outcome === "cancelled") {
 			this.#totalAborted += 1;
-		} else if (result.exitCode !== 0 || result.error) {
-			this.#totalFailed += 1;
-		} else {
+		} else if (result.outcome === "completed" || result.outcome === "completed-empty") {
 			this.#totalCompleted += 1;
+		} else {
+			this.#totalFailed += 1;
 		}
 
 		const usage = result.usage;
@@ -212,7 +226,15 @@ export class SubagentTracker {
 	}
 
 	#resultSignature(result: SingleResult): string {
-		return [result.agent, String(result.index), result.id, result.task, result.assignment ?? ""].join("::");
+		return [
+			result.agent,
+			String(result.index),
+			result.id,
+			result.task,
+			result.assignment ?? "",
+			result.outcome,
+			result.textPreview ?? "",
+		].join("::");
 	}
 
 	#resolveProgressKey(progress: AgentProgress, existingKey?: string): string {
@@ -227,7 +249,7 @@ export class SubagentTracker {
 	#resolveResultKey(result: SingleResult, existingKey?: string): string {
 		return (
 			this.#normalizeSessionId(result.sessionId) ??
-			result.transcriptPath ??
+			result.transcriptUri ??
 			existingKey ??
 			this.#resultSignature(result)
 		);

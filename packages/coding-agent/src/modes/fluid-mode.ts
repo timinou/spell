@@ -101,7 +101,7 @@ function buildFluidScheduler(
 				taskText: agent.task,
 				assignment: agent.body?.trim() || agent.task,
 				kind: "work",
-				status: task.status,
+				status: task.status === "in_progress" ? "running" : task.status,
 			},
 			deps.length > 0 ? deps : undefined,
 		]);
@@ -125,19 +125,14 @@ function syncGroupsFromScheduler(
 			if (!taskUri) continue;
 			const node = scheduler.dag.getNode(taskUri);
 			if (!node) continue;
-			if (node.status === "completed") {
+			if (node.status === "completed" || node.status === "completed-empty") {
 				task.status = "completed";
-			} else if (
-				node.status === "failed" ||
-				node.status === "gate_failed" ||
-				node.status === "abandoned" ||
-				node.status === "aborted"
-			) {
-				task.status = "failed";
-			} else if (node.status === "in_progress") {
+			} else if (node.status === "running") {
 				task.status = "in_progress";
 			} else if (node.status === "pending") {
 				task.status = "pending";
+			} else if (node.status !== undefined) {
+				task.status = "failed";
 			}
 		}
 	}
@@ -521,7 +516,7 @@ async function executeFluidPlan(
 		await scheduler.pump(async (taskUri, node, runSignal) => {
 			const currentNode = scheduler.dag.getNode(taskUri);
 			if (currentNode) {
-				scheduler.setNode(taskUri, { ...currentNode, status: "in_progress" });
+				scheduler.setNode(taskUri, { ...currentNode, status: "running" });
 			}
 			publishGroups();
 			let lastIntent = "";
@@ -565,7 +560,7 @@ async function executeFluidPlan(
 					error: result.error,
 				});
 			}
-			if (result.exitCode === 0 && !(result.aborted ?? false)) {
+			if (result.outcome === "completed" || result.outcome === "completed-empty") {
 				scheduler.markCompleted(taskUri);
 				publishGroups();
 				return;
@@ -660,7 +655,7 @@ async function runPlanningAgent(
 		if (result.aborted || signal?.aborted) {
 			return undefined;
 		}
-		if (result.exitCode !== 0 || !result.output) {
+		if (result.exitCode !== 0 || !result.structuredResult) {
 			logger.error("Planning agent failed", { exitCode: result.exitCode, error: result.error });
 			eventBus.enqueue(
 				FLUID_EVENT_CHANNEL,
@@ -670,7 +665,7 @@ async function runPlanningAgent(
 			return undefined;
 		}
 
-		const parsed = JSON.parse(result.output) as FluidPlan;
+		const parsed = result.structuredResult as FluidPlan;
 		return parsed;
 	} catch (err) {
 		if (signal?.aborted) {
