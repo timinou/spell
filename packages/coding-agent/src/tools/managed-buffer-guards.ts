@@ -1,4 +1,6 @@
+import { existsSync, statSync } from "node:fs";
 import { executeCodeBuffer } from "@oh-my-pi/pi-natives";
+import { isCodeToolSupportedPath } from "./code-supported-files";
 
 export type WriteGuardCode = "WRITE_SHRINK_BLOCKED" | "WRITE_PARSE_REGRESSION";
 
@@ -12,35 +14,80 @@ export interface WriteGuardBlocked {
 	detail: string;
 }
 
-function getBufferParseOk(file: string, content?: string): boolean {
-	const result = content === undefined
-		? executeCodeBuffer({ command: "status", file })
-		: executeCodeBuffer({ command: "status", file, content });
-	return !result.error;
-}
+/** Minimum file size (bytes) before the shrink guard engages. Matches FEAT-585. */
+const SHRINK_GUARD_MIN_BYTES = 256;
+/** Floor for the allowed new size when the guard is active. Matches FEAT-585. */
+const SHRINK_GUARD_FLOOR_BYTES = 64;
+/** Ratio floor: the new size must not drop below this fraction of the old size. */
+const SHRINK_GUARD_RATIO = 0.1;
 
-export async function evaluateWriteGuards(absolutePath: string, newContent: string): Promise<WriteGuardResult | WriteGuardBlocked> {
+/**
+ * Gate catastrophic overwrites of existing code-supported source files.
+ *
+ * Prior implementation probed the managed buffer via
+ * `executeCodeBuffer({command:"status"})`. That command does not exist in
+ * pi-natives: the native responds with `{error:true, output:"Unknown command:
+ * status"}`, which the guard interpreted as "file is not tracked" and skipped
+ * every check. This made the guard a silent no-op — the exact regression path
+ * that let a subagent replace todo-write.ts (58_563 B parseable TS) with a
+ * 1_691 B parseable stub in session 2026-04-19T08-55-28-607Z_14c08a4197c6a60b.
+ *
+ * The implementation here uses `fs.statSync` for existence + size. It does not
+ * depend on the managed buffer at all, so the guard works identically for
+ * files the managed buffer has seen and files it has not.
+ *
+ * Parse-regression guarding is advisory only at this layer: pi-natives
+ * currently has no side-effect-free parse probe. The structural-validity
+ * check inside `applyManagedBufferContent` (via
+ * `executeCodeBuffer({command:"edit", actions:[{kind:"write"}]})`) rejects
+ * writes that the native engine considers structurally invalid, which is the
+ * real backstop. A `WRITE_PARSE_REGRESSION` gate can be added here once
+ * pi-natives exposes a read-only parse command.
+ */
+export function evaluateWriteGuards(absolutePath: string, newContent: string): WriteGuardResult | WriteGuardBlocked {
+	if (!isCodeToolSupportedPath(absolutePath)) {
+		return { ok: true };
+	}
+
+	const oldExists = existsSync(absolutePath);
+	if (!oldExists) {
+		return { ok: true };
+	}
+
+	let oldSize = 0;
 	try {
-		const oldResult = executeCodeBuffer({ command: "status", file: absolutePath });
-		const oldExists = !oldResult.error;
-		const oldContentLength = oldResult.error ? 0 : Number((oldResult.output as { contentLength?: number } | undefined)?.contentLength ?? 0);
-		const newSize = Buffer.byteLength(newContent, "utf8");
-		if (oldExists && oldContentLength >= 256 && newSize < Math.max(64, Math.floor(oldContentLength * 0.1))) {
+		oldSize = statSync(absolutePath).size;
+	} catch {
+		// Existence raced with removal — treat as new file, let the write
+		// proceed and the kernel surface any real failure.
+		return { ok: true };
+	}
+
+	const newSize = Buffer.byteLength(newContent, "utf8");
+
+	if (oldSize >= SHRINK_GUARD_MIN_BYTES) {
+		const floor = Math.max(SHRINK_GUARD_FLOOR_BYTES, Math.floor(oldSize * SHRINK_GUARD_RATIO));
+		if (newSize < floor) {
 			return {
 				ok: false,
 				code: "WRITE_SHRINK_BLOCKED",
-				detail: `write would shrink ${absolutePath} from ${oldContentLength} bytes to ${newSize} bytes`,
+				detail: `write would shrink ${absolutePath} from ${oldSize} bytes to ${newSize} bytes (floor ${floor})`,
 			};
 		}
-		if (oldExists && getBufferParseOk(absolutePath) && !getBufferParseOk(absolutePath, newContent)) {
-			return {
-				ok: false,
-				code: "WRITE_PARSE_REGRESSION",
-				detail: `write would regress parsing for ${absolutePath}`,
-			};
-		}
-		return { ok: true };
-	} catch {
-		return { ok: true };
 	}
+
+	return { ok: true };
+}
+
+/**
+ * Diagnostic probe exported for tests: confirms the dependency the prior
+ * implementation relied on is still absent, so the fix above remains
+ * necessary rather than cosmetic.
+ */
+export function probeCodeBufferStatusCommand(): { available: boolean; output: string } {
+	const result = executeCodeBuffer({ command: "status", file: "/tmp/__probe__" });
+	return {
+		available: result.error !== true,
+		output: typeof result.output === "string" ? result.output : JSON.stringify(result.output ?? null),
+	};
 }
