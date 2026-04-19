@@ -1,8 +1,9 @@
 #+TITLE: BUG remove transcript bash output suppression when chunk options are set
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c07d3b3e20db77
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-58-34-232Z_14c07d3b3e20db77.jsonl]]
 #+CUSTOM_ID: BUG-291-bug-test-temporary
+#+LAYER: tool-runtime
 
 :PROPERTIES:
 :LAYER: tool-runtime
@@ -77,3 +78,5 @@ c
 - `classifyContextPressure` for transcript command with chunk options has `persistence='allow-raw'` and the summary no longer includes `Raw output suppressed`.
 - Bash execution with chunk option returns bounded raw output instead of summary replacement.
 - `bun test packages/coding-agent/test/tools/context-pressure-policy.test.ts packages/coding-agent/test/tools/bash-churn-policy.test.ts` passes.
+
+NOTE [2026-04-19]: Completed via PLAN-263. Verification: `bun test packages/coding-agent/test/tools/context-pressure-policy.test.ts packages/coding-agent/test/tools/bash-churn-policy.test.ts` → 14 pass, 0 fail; manual proof artifact `[[file:!tasks/plans/plan-artifacts/PLAN-263-plan-remove-bash-transcript-suppression/manual-proof-transcript-head.json]]` shows transcript bash with `head: 2` returned bounded raw text (`one\ntwo`) and context pressure `transcript-spelunking` / `inline` / `allow-raw`.

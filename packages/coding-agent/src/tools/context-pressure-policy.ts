@@ -47,6 +47,8 @@ export interface ContextPressureInput {
 	detailsMeta?: ContextPressureOutputMetaLike;
 	text?: string;
 	isError?: boolean;
+	head?: number;
+	tail?: number;
 }
 
 const SOURCE_FILE_EXTENSIONS = new Set([
@@ -315,14 +317,19 @@ function classifyBash(input: ContextPressureInput): ContextPressureMeta | undefi
 		});
 	}
 	if (TRANSCRIPT_BASH_PATTERN.test(command) && bashCommandTargetsTranscript(command)) {
-		const followUp = ["Prefer compact transcript summaries; escalate to exact lines only when needed."];
+		const boundedOutputRequested = Number(input.head) > 0 || Number(input.tail) > 0;
+		const followUp = boundedOutputRequested
+			? ["Bounded raw chunk requested via bash head/tail options."]
+			: ["Prefer compact transcript summaries; escalate to exact lines only when needed."];
 		return buildMeta({
 			category: "transcript-spelunking",
-			presentation: "summary-first",
-			persistence: "deny-raw",
+			presentation: boundedOutputRequested ? "inline" : "summary-first",
+			persistence: boundedOutputRequested ? "allow-raw" : "deny-raw",
 			reason: "Transcript jq/grep spelunking is a known high-noise bash anti-pattern.",
 			summary: buildSummary({
-				sentence: `Ran transcript-spelunking bash command ${JSON.stringify(summaryCommand)}. Raw output suppressed.`,
+				sentence: boundedOutputRequested
+					? `Ran transcript-spelunking bash command ${JSON.stringify(summaryCommand)} with bounded raw output.`
+					: `Ran transcript-spelunking bash command ${JSON.stringify(summaryCommand)}. Raw output suppressed.`,
 				followUp,
 				artifactUri,
 			}),

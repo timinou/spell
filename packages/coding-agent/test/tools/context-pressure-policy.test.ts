@@ -45,6 +45,44 @@ describe("context-pressure policy", () => {
 		expect(bashMeta?.presentation).toBe("summary-first");
 	});
 
+	it("treats explicit non-zero head/tail as inline raw transcript access", () => {
+		const headMeta = classifyContextPressure({
+			toolName: "bash",
+			params: { command: "jq '.messages[]' /repo/.spell/agent/sessions/recent.jsonl" },
+			head: 20,
+		});
+		const tailMeta = classifyContextPressure({
+			toolName: "bash",
+			params: { command: "jq '.messages[]' /repo/.spell/agent/sessions/recent.jsonl" },
+			tail: 20,
+		});
+
+		expect(headMeta?.category).toBe("transcript-spelunking");
+		expect(tailMeta?.category).toBe("transcript-spelunking");
+		expect(headMeta?.presentation).toBe("inline");
+		expect(tailMeta?.presentation).toBe("inline");
+		expect(headMeta?.persistence).toBe("allow-raw");
+		expect(tailMeta?.persistence).toBe("allow-raw");
+	});
+
+	it("does not opt in on zero-length head or tail", () => {
+		const headMeta = classifyContextPressure({
+			toolName: "bash",
+			params: { command: "jq '.messages[]' /repo/.spell/agent/sessions/recent.jsonl" },
+			head: 0,
+		});
+		const tailMeta = classifyContextPressure({
+			toolName: "bash",
+			params: { command: "jq '.messages[]' /repo/.spell/agent/sessions/recent.jsonl" },
+			tail: 0,
+		});
+
+		expect(headMeta?.presentation).not.toBe("inline");
+		expect(tailMeta?.presentation).not.toBe("inline");
+		expect(headMeta?.persistence).not.toBe("allow-raw");
+		expect(tailMeta?.persistence).not.toBe("allow-raw");
+	});
+
 	it("keeps explicit read ranges and narrow grep scopes in precision mode", () => {
 		const readMeta = classifyContextPressure({
 			toolName: "read",

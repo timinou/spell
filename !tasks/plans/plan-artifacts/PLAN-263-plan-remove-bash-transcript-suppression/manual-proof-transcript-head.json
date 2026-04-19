@@ -1,0 +1,14 @@
+{
+  "text": "one\ntwo",
+  "meta": {
+    "category": "transcript-spelunking",
+    "presentation": "inline",
+    "persistence": "allow-raw",
+    "autoEscalate": false,
+    "reason": "Transcript jq/grep spelunking is a known high-noise bash anti-pattern.",
+    "summary": "Ran transcript-spelunking bash command \"cat ./.spell/agent/sessions/recent.jsonl\" with bounded raw output. Bounded raw chunk requested via bash head/tail options.",
+    "followUp": [
+      "Bounded raw chunk requested via bash head/tail options."
+    ]
+  }
+}
