@@ -71,6 +71,22 @@ Before your final turn, you **MUST**:
 6. If verification fails or required evidence is missing, do **NOT** mark the plan `DONE`; keep org state truthful and report the blocker.
 {{/if}}
 
+{{#if childItems}}
+## Child Item Specifications
+{{#each childItems}}
+### {{id}}{{#if title}} - {{title}}{{/if}}
+- Properties: {{propertiesLine}}
+
+{{{body}}}
+{{#if truncated}}
+…(elided — fetch via `org get {{id}}`)
+{{/if}}
+
+{{/each}}
+{{#if omittedCount}}…({{omittedCount}} of {{totalCount}} child specifications omitted — fetch via `org get`)
+{{/if}}
+{{/if}}
+
 ## Plan
 {{planContent}}
 {{#if planningTranscriptPath}}The planning transcript is at `{{planningTranscriptPath}}`; use `jq` to inspect decisions if needed.

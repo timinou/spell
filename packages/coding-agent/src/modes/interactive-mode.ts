@@ -7,7 +7,7 @@ import * as path from "node:path";
 import { type Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
 import { NiriOverviewController } from "@oh-my-pi/pi-niri";
-import { appendItemToFile, extractIdLinks, generateId, orgToMarkdown, resolveCategories } from "@oh-my-pi/pi-org";
+import { appendItemToFile, generateId, orgToMarkdown, resolveCategories } from "@oh-my-pi/pi-org";
 import type { Component, OverlayHandle, SlashCommand } from "@oh-my-pi/pi-tui";
 import {
 	Container,
@@ -33,7 +33,9 @@ import { BUILTIN_SLASH_COMMANDS, loadSlashCommands } from "../extensibility/slas
 import { resolveLocalUrlToPath } from "../internal-urls";
 import { type PlanWave, planWavesToTodoGroups } from "../orchestrators/fluid";
 import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
-import { approvePlanItem, buildOrgConfig, type OrgPlanRef, resolvePlanItem } from "../plan-mode/org-plan";
+import { buildChildItemSpecs, type ChildItemSpec, renderChildItemSpec } from "../plan-mode/child-item-spec";
+import { approvePlanItem, buildOrgConfig, type OrgPlanRef } from "../plan-mode/org-plan";
+import { validatePlanItem } from "../plan-mode/plan-validation";
 import type { UserModeState } from "../plan-mode/state";
 import planAuditPrompt from "../prompts/system/plan-audit.md" with { type: "text" };
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
@@ -1263,6 +1265,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			finalPlanFilePath: string;
 			orgItem?: { id: string; file: string };
 			waves?: PlanWave[];
+			childItems?: ChildItemSpec[];
+			childItemsOmittedCount?: number;
 		},
 	): Promise<void> {
 		const orgPlanItem: OrgPlanRef | null = options.orgItem ?? null;
@@ -1362,14 +1366,23 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		let autoInitialized = false;
 		if ((options.waves?.length ?? 0) > 0) {
-			const groups = planWavesToTodoGroups(options.waves ?? [], approvedOrgItemId || undefined);
+			const childBodiesById = new Map((options.childItems ?? []).map(childItem => [childItem.id, childItem.body]));
+			const groups = planWavesToTodoGroups(options.waves ?? [], {
+				planItemId: approvedOrgItemId || undefined,
+				childBodiesById,
+				todoDetailsMaxBytes: this.settings.get("plan.injectedTodoDetailsMaxBytes") as number,
+			});
 			if (groups.length > 0) {
 				this.session.setTodoGroups(groups, { reset: true });
 				autoInitialized = true;
 			}
 		}
 
+		const preparedChildItems = (options.childItems ?? []).map(renderChildItemSpec);
 		const prompt = renderPromptTemplate(planModeApprovedPrompt, {
+			childItems: preparedChildItems.length > 0 ? preparedChildItems : undefined,
+			omittedCount: options.childItemsOmittedCount ?? 0,
+			totalCount: preparedChildItems.length + (options.childItemsOmittedCount ?? 0),
 			planContent: orgToMarkdown(planContent),
 			finalPlanFilePath: planReferencePath,
 			orgItemId: approvedOrgItemId,
@@ -1521,6 +1534,8 @@ export class InteractiveMode implements InteractiveModeContext {
 					finalPlanFilePath,
 					orgItem,
 					waves: details.waves,
+					childItems: details.childItems,
+					childItemsOmittedCount: details.childItemsOmittedCount,
 				});
 			} catch (error) {
 				this.showError(
@@ -1531,20 +1546,23 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (choice === "Review with Momus") {
 			await this.#enterPlanMode({ ultraplan: true });
-			const childItemIds = extractIdLinks(planContent);
-			const childBodies: string[] = [];
-			for (const childItemId of childItemIds) {
-				const childItem = await resolvePlanItem(this.settings, this.sessionManager.getCwd(), childItemId);
-				if (!childItem) {
-					this.showWarning(`Skipping unresolved child item ${childItemId} during Momus review.`);
-					continue;
+			let combinedPlanContent = planContent;
+			if (details.itemId) {
+				const validation = await validatePlanItem(this.settings, this.sessionManager.getCwd(), details.itemId);
+				if (validation) {
+					const { items } = buildChildItemSpecs(validation.resolvedChildren, validation.childItemIds, {
+						perChildMaxBytes: Number.MAX_SAFE_INTEGER,
+						globalMaxBytes: Number.MAX_SAFE_INTEGER,
+					});
+					const childBodies = items.map(childItem => {
+						const titleSuffix = childItem.title ? ` - ${childItem.title}` : "";
+						return `## ${childItem.id}${titleSuffix}\n\n${childItem.body}`;
+					});
+					if (childBodies.length > 0) {
+						combinedPlanContent = `${planContent}\n\n---\n\n# Linked Child Items\n\n${childBodies.join("\n\n")}`;
+					}
 				}
-				childBodies.push(`## ${childItemId}\n\n${childItem.body}`);
 			}
-			const combinedPlanContent =
-				childBodies.length > 0
-					? `${planContent}\n\n---\n\n# Linked Child Items\n\n${childBodies.join("\n\n")}`
-					: planContent;
 			await this.session.prompt(`Run Momus review on this plan and address any issues:\n\n${combinedPlanContent}`, {
 				synthetic: true,
 			});

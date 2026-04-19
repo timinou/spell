@@ -1754,6 +1754,9 @@ export const SETTINGS_SCHEMA = {
 		type: "string",
 		default: "DOING",
 	},
+	"plan.injectedChildItemMaxBytes": { type: "number", default: 8192 },
+	"plan.approvedPromptMaxBytes": { type: "number", default: 131072 },
+	"plan.injectedTodoDetailsMaxBytes": { type: "number", default: 4096 },
 	"planMode.allowedFolders": { type: "record", default: EMPTY_STRING_RECORD },
 
 	"thinkingBudgets.low": { type: "number", default: 2048 },

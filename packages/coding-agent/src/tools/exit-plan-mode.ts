@@ -5,6 +5,7 @@ import { type Static, Type } from "@sinclair/typebox";
 import { renderPromptTemplate } from "../config/prompt-templates";
 import { resolveLayerFromProperties } from "../config/task-policies";
 import type { PlanWave } from "../orchestrators/fluid";
+import { buildChildItemSpecs, type ChildItemSpec } from "../plan-mode/child-item-spec";
 import { resolvePlanItem } from "../plan-mode/org-plan";
 import { formatPlanValidationIssues, validatePlanItem } from "../plan-mode/plan-validation";
 import exitPlanModeDescription from "../prompts/tools/exit-plan-mode.md" with { type: "text" };
@@ -50,6 +51,8 @@ export interface ExitPlanModeDetails {
 	orgItemFile?: string;
 	planContent?: string;
 	childItemIds?: string[];
+	childItems?: ChildItemSpec[];
+	childItemsOmittedCount?: number;
 	waves?: PlanWave[];
 }
 
@@ -157,6 +160,10 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 
 			const item = validation.planItem;
 			const childItemIds = validation.childItemIds;
+			const childItemSpecs = buildChildItemSpecs(validation.resolvedChildren, validation.childItemIds, {
+				perChildMaxBytes: this.session.settings.get("plan.injectedChildItemMaxBytes") as number,
+				globalMaxBytes: this.session.settings.get("plan.approvedPromptMaxBytes") as number,
+			});
 			const waves = extractPlanWaves(item.body);
 			if (waves) {
 				const propertiesByItemId = new Map<string, Record<string, string>>(
@@ -202,6 +209,8 @@ export class ExitPlanModeTool implements AgentTool<typeof exitPlanModeSchema, Ex
 					orgItemFile: item.file,
 					planContent: item.body,
 					childItemIds,
+					childItems: childItemSpecs.items,
+					childItemsOmittedCount: childItemSpecs.omittedCount,
 					waves,
 				},
 			};

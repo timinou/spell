@@ -1,0 +1,174 @@
+#+TITLE: Seed todos from waves with owning child body section
+#+STATE: DONE
+#+SESSION_ID: 14c0eebddf28ec77
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T16-14-30-268Z_14c0eebddf28ec77.jsonl]]
+#+CUSTOM_ID: FEAT-602-seed-todos-from-waves-with-owning-child
+#+DEPENDS: FEAT-601-inject-linked-child-org-bodies-into-appr
+#+EFFORT: 4h
+#+LAYER: coding-agent
+
+* Initial Message
+
+@!tasks/plans/PLAN-251-inject-child-item-bodies-into-approved-p.org <- assess how well this is done
+
+* Scope
+
+When a PLAN with waves is approved, enrich each seeded `TodoItem.details` with the owning child item's sub-outline section (or top-level preamble when the wave entry references a bare top-level id). This makes `task … todoRef` auto-derive a sniper-pattern assignment with concrete file paths, test scenarios, and acceptance criteria.
+
+In-scope: new slicer `extractChildBodySection`, extended `materializePlanWaves`/`planWavesToTodoGroups` signature, thread through `InteractiveMode.#approvePlan`, new settings key `plan.injectedTodoDetailsMaxBytes`.
+Out of scope: file-backed plans without child graph; fluid-mode todo seeding (unaffected — uses `agent.body` directly).
+
+* Existing Patterns
+
+- `planWavesToTodoGroups(waves, planItemId?)` at `packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts:147`. Current caller at `interactive-mode.ts:1365` passes `approvedOrgItemId` as `planItemId` — threading that into `TodoGroup.planItemId` for org lineage. The new signature MUST preserve this.
+- `materializePlanWaves(waves, planItemId?)` at `plan-to-todos.ts:93`. Called by both `planWavesToTodoGroups` (interactive) and `materializeFluidPlanToTodos` (fluid — no `planItemId`).
+- `TodoItem.details` semantics at `packages/coding-agent/src/tools/todo-write.ts`. Sub-agents launched via `task … todoRef` auto-derive `assignment` from `content + details`.
+- `ChildItemSpec` produced by FEAT-601-inject-linked-child-org-bodies-into-appr::s6-tool-propagate — supplies `{id, body, properties}` for each linked child.
+- `extractHeadings` at `packages/coding-agent/src/loop/ingestion/org-depend.ts` (around line 70) walks org headings and returns `{level, state, title, propertiesBlock}`. `parseOrgDependProperties` at line 134 returns `{customId, ...}` extracted from `:PROPERTIES:` drawers but does NOT return body text — the slicer needs a new helper.
+- `safeTruncateUtf8` helper from FEAT-601::s1-types. Reuse for byte-safe truncation.
+
+* Tests
+
+- File: `packages/coding-agent/test/orchestrators/fluid/plan-to-todos-details.test.ts` — slicer + materializer; six scenarios.
+- File: `packages/coding-agent/test/modes/interactive-mode-approve-plan.test.ts` — integration; one scenario.
+
+Slicer + materializer scenarios:
+1. Sub-outline match: given `orgItemId="FEAT-601::s4-template"` and a child body containing `** s4
+:PROPERTIES:
+:CUSTOM_ID: FEAT-601::s4-template
+:DEPENDS: FEAT-601::s3-tests
+:END:
+- File: src/prompts/system/plan-mode-approved.md
+- Insert block
+
+** s5
+...` → returned details contain `- File: src/prompts/system/plan-mode-approved.md
+- Insert block` (the lines between the `:END:` drawer and the next `**` heading) and exclude the `:PROPERTIES:` drawer.
+2. Top-level preamble: given `orgItemId="FEAT-601-inject-linked-child-org-bodies-into-appr"` (bare id, no `::`) and a child body starting with `* Scope
+
+Thread every linked child...
+
+* Existing Patterns
+
+` → returned details contain the preamble under `* Scope` (lines between the first `*` heading and the first `**` subheading, stripped of leading/trailing blank lines).
+3. No match: `orgItemId="FEAT-601::s99-nonexistent"` → returns `undefined`.
+4. Details merge order: a wave entry already carrying `details="Effort: 3h
+Priority: #A"` and a slicer result of `- File: foo.ts` → merged details reads `Effort: 3h
+Priority: #A
+
+- File: foo.ts` (existing on top, blank-line separator, slice below).
+5. Backcompat (no childBodies): `planWavesToTodoGroups(waves, { planItemId: "PLAN-1" })` with no `childBodiesById` returns identical output to today's `planWavesToTodoGroups(waves, "PLAN-1")`. `TodoGroup.planItemId` populated.
+6. Byte-truncation: a sub-outline body of 8000 bytes with `injectedTodoDetailsMaxBytes=4096` → sliced details is ≤ 4096 bytes, ends on UTF-8 code-point boundary, followed by the marker `
+…(elided — fetch via \`org get FEAT-601-inject-linked-child-org-bodies-into-appr\`)`.
+
+Integration scenario (`interactive-mode-approve-plan.test.ts`):
+- Approve a PLAN whose first wave entry references a sub-outline id → the seeded `TodoGroup.tasks[0].details` matches the slicer's expected output (scenario 1). Verified by snapshotting the resulting todo groups after `#approvePlan`.
+
+TDD ordering: s2 (tests) precedes s3 (slicer) precedes s4 (materializer signature change) precedes s5 (integration test + thread).
+
+* Implementation
+
+** s1-settings
+:PROPERTIES:
+:CUSTOM_ID: FEAT-602-seed-todos-from-waves-with-owning-child::s1-settings
+:END:
+- File: `packages/coding-agent/src/config/settings-schema.ts::SETTINGS_SCHEMA`
+- Add `"plan.injectedTodoDetailsMaxBytes": { type: "number", default: 4096 }` adjacent to the two `plan.*` keys added by FEAT-601-inject-linked-child-org-bodies-into-appr::s2-settings.
+
+** s2-tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-602-seed-todos-from-waves-with-owning-child::s2-tests
+:DEPENDS: FEAT-602-seed-todos-from-waves-with-owning-child::s1-settings
+:END:
+- File: `packages/coding-agent/test/orchestrators/fluid/plan-to-todos-details.test.ts`. Implement slicer + materializer scenarios 1-6 with concrete fixture bodies (embed the org snippets directly in the test file; no external fixtures).
+- Must fail initially.
+
+** s3-slicer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-602-seed-todos-from-waves-with-owning-child::s3-slicer
+:DEPENDS: FEAT-602-seed-todos-from-waves-with-owning-child::s2-tests
+:END:
+- File: `packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts`
+- Export `function extractChildBodySection(orgItemId: string, childBodiesById: Map<string, string>, maxBytes: number): string | undefined`.
+- Resolve `parentId` and `suboutlineSuffix`:
+  - If `orgItemId.includes("::")`: split on first `::` → `[parentId, suboutlineCustomId]` where `suboutlineCustomId = orgItemId` (the full form used in `:CUSTOM_ID:` drawers).
+  - Else: `parentId = orgItemId`, `suboutlineCustomId = null`.
+- `const body = childBodiesById.get(parentId)`; if absent → `undefined`.
+- If `suboutlineCustomId`:
+  - Line-scan `body`. Detect headings via `/^\*+\s+/`. For each `**` heading, read the following `:PROPERTIES:`/`:END:` block; extract `:CUSTOM_ID:` via the same regex used in `parseOrgDependProperties` (`/^\s*:CUSTOM_ID:\s*(.+?)\s*$/`). When match === `suboutlineCustomId`, capture lines from after `:END:` until the next `*+` heading. Strip leading/trailing blank lines.
+  - No match → `undefined`.
+- Else (top-level):
+  - Capture lines after the first `* ` heading until the first `**` subheading; strip leading/trailing blank lines.
+  - If no content between them → `undefined`.
+- If captured text is empty or whitespace-only → `undefined`.
+- Otherwise truncate via `safeTruncateUtf8(text, maxBytes)`; when truncated, append `
+…(elided — fetch via \`org get ${parentId}\`)`; return the final string.
+
+** s4-materializer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-602-seed-todos-from-waves-with-owning-child::s4-materializer
+:DEPENDS: FEAT-602-seed-todos-from-waves-with-owning-child::s3-slicer
+:END:
+- File: `packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts`
+- Introduce options object to preserve the existing `planItemId` contract AND add `childBodiesById`:
+  - `interface PlanWaveMaterializeOpts { planItemId?: string; childBodiesById?: Map<string, string>; todoDetailsMaxBytes?: number }`
+  - Change `materializePlanWaves(waves: PlanWave[], opts?: PlanWaveMaterializeOpts): MaterializedPlanWaves`.
+  - Change `planWavesToTodoGroups(waves: PlanWave[], opts?: PlanWaveMaterializeOpts): TodoGroup[]`.
+- Inside `materializePlanWaves`, for each `entry` with `entry.orgItemId`, when `opts.childBodiesById` is provided, compute `const slice = extractChildBodySection(entry.orgItemId, opts.childBodiesById, opts.todoDetailsMaxBytes ?? 4096)`. Merge into `TodoItem.details`:
+  - If `entry.details` empty AND `slice` defined → `details = slice`.
+  - If `entry.details` defined AND `slice` defined → `details = entry.details + "
+
+" + slice`.
+  - If `slice` undefined → leave `entry.details` as is.
+- `TodoGroup.planItemId` remains populated from `opts.planItemId` (no behavior regression).
+- Update the one caller `materializeFluidPlanToTodos` at line 152: `materializePlanWaves(computeWaveLayers(plan))` still compiles — opts is optional.
+
+** s5-thread
+:PROPERTIES:
+:CUSTOM_ID: FEAT-602-seed-todos-from-waves-with-owning-child::s5-thread
+:DEPENDS: FEAT-602-seed-todos-from-waves-with-owning-child::s4-materializer
+:END:
+- File: `packages/coding-agent/src/modes/interactive-mode.ts::InteractiveMode.#approvePlan`
+- At the auto-init site (line 1365), before calling `planWavesToTodoGroups`, build `const childBodiesById = new Map((options.childItems ?? []).map(c => [c.id, c.body]))`.
+- Read `const todoDetailsMaxBytes = this.settings.get("plan.injectedTodoDetailsMaxBytes")`.
+- Call `planWavesToTodoGroups(options.waves ?? [], { planItemId: approvedOrgItemId || undefined, childBodiesById, todoDetailsMaxBytes })`.
+- `options.childItems` is threaded from FEAT-601-inject-linked-child-org-bodies-into-appr::s7-thread; ensure that FEAT's changes are merged before this step.
+
+** s6-integration
+:PROPERTIES:
+:CUSTOM_ID: FEAT-602-seed-todos-from-waves-with-owning-child::s6-integration
+:DEPENDS: FEAT-602-seed-todos-from-waves-with-owning-child::s5-thread
+:END:
+- File: `packages/coding-agent/test/modes/interactive-mode-approve-plan.test.ts`. Implement the integration scenario described in Tests. Use a stubbed `ToolSession` with a pre-seeded plan fixture; snapshot the resulting `TodoGroup` list; assert `tasks[0].details` contains the slicer output.
+
+** s7-verify
+:PROPERTIES:
+:CUSTOM_ID: FEAT-602-seed-todos-from-waves-with-owning-child::s7-verify
+:DEPENDS: FEAT-602-seed-todos-from-waves-with-owning-child::s6-integration
+:END:
+- Run `bun check:ts`.
+- Run `bun test packages/coding-agent/test/orchestrators/fluid/plan-to-todos-details.test.ts packages/coding-agent/test/modes/interactive-mode-approve-plan.test.ts`.
+- Manual smoke: approve a waved PLAN; use the `/todo` command in the executing session; confirm seeded tasks have non-empty `details` populated from sub-outline text.
+
+* Edge Cases
+
+- `orgItemId` empty or missing parent in map → slicer returns `undefined`; materializer leaves existing details untouched.
+- Sub-outline exists but body is empty (just properties + next heading) → slicer returns `undefined`; wave entry keeps original `entry.details`.
+- Multiple wave entries point to the same sub-outline id → each gets its own copy (slicer is pure).
+- `:PROPERTIES:` drawer inside the sub-outline body (nested drawer) → outer drawer ends at first `:END:`; inner-only drawers inside the sub-outline body are preserved as part of the sliced text.
+- Fluid mode (`materializeFluidPlanToTodos(plan)`) → no opts passed; `childBodiesById` is undefined; slicer is not invoked; unchanged output.
+- Byte cap lands mid-emoji → `safeTruncateUtf8` guarantees code-point boundary (tested by FEAT-601-inject-linked-child-org-bodies-into-appr::s3-tests T-3 and scenario 6 here).
+- Details merge when slicer result equals existing details → still concatenated with separator; the duplicate is acceptable and visible to the agent. (Deduplication is not in scope.)
+- `planItemId` absent → `TodoGroup.planItemId` is undefined; downstream behavior unchanged (matches current backcompat behavior).
+
+* Acceptance Criteria
+
+1. `bun test` passes for both new test files.
+2. `bun check:ts` passes.
+3. After approving a PLAN with sub-outline waves, seeded todo list has populated `details` observable via `/todo` command.
+4. A sub-agent launched via `todoRef` receives the sub-outline implementation text in its `context` field (verified by transcript inspection).
+5. When `childItems` is empty/undefined, todo seeding output byte-identical to main-branch behavior (scenario 5).
+6. `TodoGroup.planItemId` remains populated from `approvedOrgItemId` (no org lineage regression).
+7. Fluid-mode todo materialization unchanged.
+
+NOTE [2026-04-19]: Implemented child body section slicing + waved todo detail seeding; verified with focused FEAT-602 tests plus bun check:ts.
