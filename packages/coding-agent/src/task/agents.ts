@@ -27,6 +27,7 @@ interface AgentFrontmatter {
 	model?: string | string[];
 	thinkingLevel?: string;
 	blocking?: boolean;
+	scopeRestricted?: boolean;
 	roster?: boolean;
 }
 
@@ -70,6 +71,7 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 			tools: ["read", "grep", "find", "edit", "write", "bash"],
 			model: "pi/subtask",
 			thinkingLevel: Effort.Minimal,
+			scopeRestricted: true,
 			roster: false,
 		},
 		template: quickTaskMd,

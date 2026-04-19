@@ -27,6 +27,7 @@ import { listPlanModeAllowedFolders } from "../plan-mode/allowed-folders";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
 import taskDescriptionTemplate from "../prompts/tools/task.md" with { type: "text" };
 import taskSummaryTemplate from "../prompts/tools/task-summary.md" with { type: "text" };
+import { isCodeToolSupportedPath } from "../tools/code-supported-files";
 import { formatBytes, formatDuration } from "../tools/render-utils";
 import {
 	cloneTodoGroups,
@@ -728,6 +729,20 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			};
 		}
 		const selectedAgent = this.#discoveredAgents.find(agent => agent.name === params.agent);
+		if (selectedAgent?.scopeRestricted) {
+			const taskFilesDeps = rawTasks.flatMap(task => task.filesDeps ?? []);
+			if (taskFilesDeps.length === 0) {
+				return {
+					content: [{ type: "text", text: "QUICK_TASK_MISSING_FILESDEPS" }],
+					details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
+				};
+			}
+		}
+		const resolvedFilesDeps = rawTasks.map(task => ({
+			...task,
+			filesDeps: task.filesDeps?.map(file => path.resolve(this.session.cwd, file)),
+		}));
+		const rawTasksForDispatch = resolvedFilesDeps;
 		const taskValidationError = this.#validateTaskBatch(rawTasks);
 		if (taskValidationError) {
 			return {
@@ -741,9 +756,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
 			};
 		}
-		const preparedTasks = signal?.aborted ? rawTasks : await this.#autoCreateTodoRefs(resolvedParams, selectedAgent);
+		const preDispatchParams = { ...resolvedParams, tasks: rawTasksForDispatch };
+		const preparedTasks = signal?.aborted
+			? rawTasksForDispatch
+			: await this.#autoCreateTodoRefs(preDispatchParams, selectedAgent);
 		const dispatchParams =
-			preparedTasks === resolvedParams.tasks ? resolvedParams : { ...resolvedParams, tasks: preparedTasks };
+			preparedTasks === preDispatchParams.tasks ? preDispatchParams : { ...preDispatchParams, tasks: preparedTasks };
 		if (!asyncEnabled || selectedAgent?.blocking === true) {
 			return this.#executeSync(_toolCallId, dispatchParams, signal, onUpdate);
 		}
@@ -1135,17 +1153,27 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const { agents, projectAgentsDir } = await discoverAgents(this.session.cwd);
 		const { agent: agentName, context, schema: outputSchema } = params;
 		const isolationMode = this.session.settings.get("task.isolation.mode");
-		const isolationRequested = "isolated" in params ? params.isolated === true : false;
-		const isIsolated = isolationMode !== "none" && isolationRequested;
+		const explicitIsolation = "isolated" in params ? params.isolated : undefined;
+		const isolationRequested = explicitIsolation === true;
+		const taskDepth = this.session.taskDepth ?? 0;
+		const autoIsolationReason = (() => {
+			if (taskDepth < 1 || isolationMode === "none" || explicitIsolation !== undefined) return undefined;
+			if ((params.tasks?.length ?? 0) > 1) return "batch size";
+			if (resolvedTaskFilesDeps?.some(task => task.filesDeps?.some(file => isCodeToolSupportedPath(file)))) {
+				return "code-supported file scope";
+			}
+			return undefined;
+		})();
+		const resolvedTaskFilesDeps = params.tasks?.map(task => ({
+			...task,
+			filesDeps: task.filesDeps?.map(file => path.resolve(this.session.cwd, file)),
+		}));
+		const isAutoIsolated = autoIsolationReason !== undefined;
+		const isIsolated = isolationMode !== "none" && (isolationRequested || isAutoIsolated);
 		const isolationDowngraded = isolationMode === "none" && isolationRequested;
 		const isolationDowngradeNotice = isolationDowngraded
 			? 'Task isolation was requested but task.isolation.mode="none"; running non-isolated. Set task.isolation.mode to worktree, fuse-overlay, or fuse-projfs to enable.'
 			: "";
-		const mergeMode = this.session.settings.get("task.isolation.merge");
-		const commitStyle = this.session.settings.get("task.isolation.commits");
-		const maxConcurrency = this.session.settings.get("task.maxConcurrency");
-		const cacheStaggerMs = this.session.settings.get("task.cacheStaggerMs") ?? 800;
-		const taskDepth = this.session.taskDepth ?? 0;
 
 		// Validate agent exists
 		const agent = getAgent(agents, agentName);
@@ -1850,6 +1878,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			const outputIds = results.filter(r => !r.aborted || r.output.trim()).map(r => `agent://${r.id}`);
 			const backendSummaryPrefix = isolationBackendWarning ? `\n\n${isolationBackendWarning}` : "";
 			const downgradeSummaryPrefix = isolationDowngradeNotice ? `\n\n${isolationDowngradeNotice}` : "";
+			const autoIsolationSummaryPrefix = isAutoIsolated
+				? `\n\nTask isolation auto-coerced (${autoIsolationReason}); running isolated.`
+				: "";
 			const summary = renderPromptTemplate(taskSummaryTemplate, {
 				successCount,
 				totalCount: results.length,
@@ -1859,7 +1890,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				summaries,
 				outputIds,
 				agentName,
-				mergeSummary: `${backendSummaryPrefix}${downgradeSummaryPrefix}${mergeSummary}`,
+				mergeSummary: `${backendSummaryPrefix}${downgradeSummaryPrefix}${autoIsolationSummaryPrefix}${mergeSummary}`,
 			});
 
 			// Cleanup temp directory if used
@@ -1878,6 +1909,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					usage: hasAggregatedUsage ? aggregatedUsage : undefined,
 					outputPaths,
 					isolationDowngraded: isolationDowngraded || undefined,
+					isolationAutoCoerced: isAutoIsolated || undefined,
 				},
 			};
 		} catch (err) {

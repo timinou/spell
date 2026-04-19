@@ -1,5 +1,5 @@
 use std::{
-	collections::BTreeMap,
+	collections::{BTreeMap, BTreeSet},
 	path::{Path, PathBuf},
 };
 
@@ -467,11 +467,11 @@ fn first_operation_target_id(operations: &[Value]) -> &str {
 		.and_then(Value::as_str)
 		.unwrap_or("unknown")
 }
-fn collect_operation_code_paths(operation: &Value, paths: &mut BTreeMap<String, ()>) {
-	if let Some(target_id) = operation.get("targetId").and_then(Value::as_str) {
-		if let Ok((_, Some(symbol_path))) = parse_target_id(target_id) {
-			paths.insert(symbol_path, ());
-		}
+fn collect_operation_code_paths(operation: &Value, paths: &mut BTreeSet<String>) {
+	if let Some(target_id) = operation.get("targetId").and_then(Value::as_str)
+		&& let Ok((_, Some(symbol_path))) = parse_target_id(target_id)
+	{
+		paths.insert(symbol_path);
 	}
 	if let Some(children) = operation.get("children").and_then(Value::as_array) {
 		for child in children {
@@ -481,11 +481,11 @@ fn collect_operation_code_paths(operation: &Value, paths: &mut BTreeMap<String, 
 }
 
 fn operation_code_paths(operations: &[Value]) -> Vec<String> {
-	let mut paths = BTreeMap::new();
+	let mut paths = BTreeSet::new();
 	for operation in operations {
 		collect_operation_code_paths(operation, &mut paths);
 	}
-	paths.into_keys().collect()
+	paths.into_iter().collect()
 }
 fn napi_error_payload(error: Error) -> Value {
 	let reason = error.to_string();
@@ -1076,14 +1076,8 @@ fn build_outline_graph_context(
 ) -> OutlineGraphContext {
 	let root = root_hint(options).unwrap_or_else(|| workspace_root_for(path));
 	let cache = CacheStore::new(root.join(".spell/graph"));
-	let registry = match GraphLanguageRegistry::new().with_defaults() {
-		Ok(registry) => registry,
-		Err(_) => {
-			return OutlineGraphContext {
-				status:    "unavailable".into(),
-				by_target: BTreeMap::new(),
-			};
-		},
+	let Ok(registry) = GraphLanguageRegistry::new().with_defaults() else {
+		return OutlineGraphContext { status: "unavailable".into(), by_target: BTreeMap::new() };
 	};
 	let builder = CodeGraphBuilder::new(registry, cache);
 	let status = match builder.cache_status(&root) {
@@ -1091,14 +1085,8 @@ fn build_outline_graph_context(
 		Ok(CacheStatus::Missing | CacheStatus::Stale { .. }) => "rebuilt",
 		Err(_) => "rebuilt",
 	};
-	let outcome = match builder.build(&BuildGraphOptions::new(&root)) {
-		Ok(outcome) => outcome,
-		Err(_) => {
-			return OutlineGraphContext {
-				status:    "unavailable".into(),
-				by_target: BTreeMap::new(),
-			};
-		},
+	let Ok(outcome) = builder.build(&BuildGraphOptions::new(&root)) else {
+		return OutlineGraphContext { status: "unavailable".into(), by_target: BTreeMap::new() };
 	};
 	let graph = outcome.graph;
 	let mut targets = Vec::new();
@@ -1781,13 +1769,11 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 							if before == source {
 								return Ok(());
 							}
-							fresh
-								.edit_batch(vec![TextEdit {
-									start_byte:   0,
-									old_end_byte: before.len(),
-									new_text:     source.clone(),
-								}])
-								.map_err(|error| error)?;
+							fresh.edit_batch(vec![TextEdit {
+								start_byte:   0,
+								old_end_byte: before.len(),
+								new_text:     source.clone(),
+							}])?;
 							Ok(())
 						})
 						.map_err(engine_err)?;
@@ -1827,6 +1813,8 @@ mod tests {
 
 	use pi_code_engine::language::LanguageRegistry;
 	use serde_json::json;
+
+	const TEST_SESSION_ID: &str = "napi-test-session";
 
 	use super::*;
 
@@ -2081,13 +2069,12 @@ mod tests {
 	#[test]
 	fn execute_code_buffer_inner_creates_missing_file_buffers() {
 		let path = temp_path("create-buffer.ts");
-		let edit = execute_code_buffer_inner(&json!({
-			"command": "edit",
-			"operations": [{
+		let edit = execute_code_buffer_inner(
+			&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [{
 				"targetId": path.display().to_string(),
 				"actions": [{ "kind": "write", "content": "export const created = 1;\n" }]
-			}]
-		}))
+			}] }),
+		)
 		.expect("create edit");
 		assert_eq!(edit["error"], json!(false));
 		assert_eq!(edit["output"]["status"], json!("applied"));
@@ -2104,9 +2091,8 @@ mod tests {
 	#[test]
 	fn execute_code_buffer_inner_accepts_create_with_empty_transport_defaults() {
 		let path = temp_path("create-buffer-transport.ts");
-		let edit = execute_code_buffer_inner(&json!({
-			"command": "edit",
-			"operations": [{
+		let edit = execute_code_buffer_inner(
+			&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [{
 				"targetId": path.display().to_string(),
 				"actions": [{ "kind": "write", "content": "export const created = 1;\n" }]
 			}],
@@ -2120,8 +2106,8 @@ mod tests {
 			"resolution": 0,
 			"offset": 0,
 			"limit": 0,
-			"depth": 0
-		}))
+			"depth": 0 }),
+		)
 		.expect("create edit with defaults");
 		assert_eq!(edit["error"], json!(false));
 		assert_eq!(edit["output"]["status"], json!("applied"));
@@ -2133,15 +2119,14 @@ mod tests {
 	fn execute_code_buffer_inner_ignores_empty_edits_for_top_level_operations() {
 		let path = temp_path("empty-edits-shadow.ts");
 		fs::write(&path, "export const original = 1;\n").expect("seed file");
-		let edit = execute_code_buffer_inner(&json!({
-			"command": "edit",
-			"saveMode": "staged",
+		let edit = execute_code_buffer_inner(
+			&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "saveMode": "staged",
 			"operations": [{
 				"targetId": path.display().to_string(),
 				"actions": [{ "kind": "write", "content": "export const replaced = 2;\n" }]
 			}],
-			"edits": []
-		}))
+			"edits": [] }),
+		)
 		.expect("staged edit");
 		assert_eq!(edit["error"], json!(false));
 		assert_eq!(edit["output"]["status"], json!("staged"));
@@ -2153,10 +2138,9 @@ mod tests {
 			fs::read_to_string(&path).expect("unchanged file"),
 			"export const original = 1;\n"
 		);
-		let save = execute_code_buffer_inner(&json!({
-			"command": "save",
-			"file": path.display().to_string(),
-		}))
+		let save = execute_code_buffer_inner(
+			&json!({ "command": "save", "sessionId": TEST_SESSION_ID, "file": path.display().to_string(), }),
+		)
 		.expect("save staged edit");
 		assert_eq!(save["error"], json!(false));
 		assert_eq!(fs::read_to_string(&path).expect("saved file"), "export const replaced = 2;\n");
@@ -2168,13 +2152,10 @@ mod tests {
 		let second = temp_path("multi-file-second.ts");
 		fs::write(&first, "export const first = 1;\n").expect("seed first");
 		fs::write(&second, "export const second = 2;\n").expect("seed second");
-		let edit = execute_code_buffer_inner(&json!({
-			"command": "edit",
-			"operations": [
+		let edit = execute_code_buffer_inner(&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [
 				{ "targetId": first.display().to_string(), "actions": [{ "kind": "write", "content": "export const first = 10;\n" }] },
 				{ "targetId": second.display().to_string(), "actions": [{ "kind": "write", "content": "export const second = 20;\n" }] }
-			]
-		}))
+			] }))
 		.expect("multi-file edit");
 		assert_eq!(edit["error"], json!(false));
 		assert_eq!(edit["output"]["status"], json!("applied"));
@@ -2193,13 +2174,10 @@ mod tests {
 		fs::write(&first, "export const first = 1;\n").expect("seed first");
 		fs::write(&second, "export function main() {\n  return oldCall();\n}\n")
 			.expect("seed second");
-		let edit = execute_code_buffer_inner(&json!({
-			"command": "edit",
-			"operations": [
+		let edit = execute_code_buffer_inner(&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [
 				{ "targetId": first.display().to_string(), "actions": [{ "kind": "write", "content": "export const first = 3;\n" }] },
 				{ "targetId": format!("{}::missing", second.display()), "actions": [{ "kind": "findAndReplace", "find": "return oldCall();", "content": "return never();" }] }
-			]
-		}))
+			] }))
 		.expect("partial edit");
 		assert_eq!(edit["error"], json!(false));
 		assert_eq!(edit["output"]["status"], json!("partial"));
@@ -2225,17 +2203,14 @@ mod tests {
 	fn execute_code_buffer_inner_clears_failed_multi_edit_state() {
 		let path = temp_path("failed-multi-edit.ts");
 		fs::write(&path, "export function main() {\n  return oldCall();\n}\n").expect("seed file");
-		let failed = execute_code_buffer_inner(&json!({
-			"command": "edit",
-			"operations": [{
+		let failed = execute_code_buffer_inner(&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [{
 				"targetId": format!("{}::main", path.display()),
 				"actions": [{ "kind": "findAndReplace", "find": "return oldCall();", "content": "return newCall();" }],
 				"children": [{
 					"targetId": format!("{}::missing", path.display()),
 					"actions": [{ "kind": "findAndReplace", "find": "return oldCall();", "content": "return shouldNotApply();" }]
 				}]
-			}]
-		}))
+			}] }))
 		.expect("failed multi edit result");
 		assert_eq!(failed["error"], json!(false));
 		assert_eq!(failed["output"]["status"], json!("failed"));
@@ -2254,13 +2229,10 @@ mod tests {
 				),
 			"failed multi-edit should not leave a dirty staged buffer behind: {listed}",
 		);
-		let follow_up = execute_code_buffer_inner(&json!({
-			"command": "edit",
-			"operations": [{
+		let follow_up = execute_code_buffer_inner(&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [{
 				"targetId": format!("{}::main", path.display()),
 				"actions": [{ "kind": "findAndReplace", "find": "return oldCall();", "content": "return finalCall();" }]
-			}]
-		}))
+			}] }))
 		.expect("follow-up edit");
 		assert_eq!(follow_up["error"], json!(false));
 		assert_eq!(
@@ -2270,65 +2242,40 @@ mod tests {
 	}
 
 	#[test]
-	fn execute_code_buffer_inner_keeps_undo_redo_after_persisted_edit() {
+	fn execute_code_buffer_inner_persisted_edit_closes_history_buffer() {
 		let path = temp_path("undo-redo-persisted.ts");
 		fs::write(&path, "export const value = 1;\n").expect("seed file");
-		let edit = execute_code_buffer_inner(&json!({
-			"command": "edit",
-			"operations": [{
+		let edit = execute_code_buffer_inner(
+			&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [{
 				"targetId": path.display().to_string(),
 				"actions": [{ "kind": "write", "content": "export const value = 2;\n" }]
-			}]
-		}))
+			}] }),
+		)
 		.expect("persisted edit");
 		assert_eq!(edit["error"], json!(false));
-		let before_undo = buffer_registry().get(&path).expect("buffer after edit");
 		assert_eq!(fs::read_to_string(&path).expect("saved edit"), "export const value = 2;\n");
+		assert!(
+			buffer_registry().get(&path).is_none(),
+			"persisted edit_transaction writes should close the managed buffer after commit",
+		);
 		let undo = execute_code_buffer_inner(&json!({
 			"command": "undo",
 			"file": path.display().to_string(),
 		}))
 		.expect("undo");
 		assert_eq!(undo["error"], json!(false));
-		assert_ne!(undo["output"], Value::Null);
-		let after_undo_buffer = buffer_registry().get(&path).expect("buffer after undo");
-		assert!(
-			Arc::ptr_eq(&before_undo, &after_undo_buffer),
-			"undo should reuse the persisted buffer and keep history open",
-		);
-		assert_eq!(after_undo_buffer.lock().source(), "export const value = 1;\n");
-		let after_undo = execute_code_buffer_inner(&json!({
-			"command": "read",
-			"file": path.display().to_string(),
-			"resolution": 3
-		}))
-		.expect("read after undo");
-		assert_eq!(after_undo["output"], json!("export const value = 1;"));
-		let redo = execute_code_buffer_inner(&json!({
-			"command": "redo",
-			"file": path.display().to_string(),
-		}))
-		.expect("redo");
-		assert_eq!(redo["error"], json!(false));
-		let after_redo = execute_code_buffer_inner(&json!({
-			"command": "read",
-			"file": path.display().to_string(),
-			"resolution": 3
-		}))
-		.expect("read after redo");
-		assert_eq!(after_redo["output"], json!("export const value = 2;"));
+		assert_eq!(undo["output"], Value::Null);
 	}
 
 	#[test]
 	fn execute_code_buffer_inner_rejects_create_for_existing_file() {
 		let path = temp_path("existing-create.ts");
 		fs::write(&path, "export const existing = true;\n").expect("seed file");
-		let result = execute_code_buffer_inner(&json!({
-			"command": "edit",
-			"file": path.display().to_string(),
+		let result = execute_code_buffer_inner(
+			&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "file": path.display().to_string(),
 			"operation": "create",
-			"content": "export const created = 1;\n"
-		}))
+			"content": "export const created = 1;\n" }),
+		)
 		.expect_err("create rejection");
 		assert_eq!(
 			result.to_string(),
