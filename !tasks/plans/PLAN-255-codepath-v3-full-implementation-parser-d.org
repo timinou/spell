@@ -1,5 +1,5 @@
 #+TITLE: CodePath v3 full implementation: parser, dialects, NAPI, code tool cutover
-#+STATE: ITEM
+#+STATE: DOING
 #+SESSION_ID: 14bf80b7760fbaa2
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-35-19-000Z_14bf80b7760fbaa2.jsonl]]
 #+CUSTOM_ID: PLAN-255-codepath-v3-full-implementation-parser-d

@@ -1,5 +1,5 @@
 #+TITLE: Runtime ReferenceError guard in CodeTool.execute catch block
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14c003268c584457
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T23-05-11-473Z_14c003268c584457.jsonl]]
 #+CUSTOM_ID: BUG-287-runtime-referenceerror-guard-in-codetool
@@ -78,3 +78,23 @@ Both occurred during the transition from commit 004f68eb3 to 0d64d00af.
 - Include original error message in the diagnostic for debuggability
 - Log with =logger.warn= and a distinct tag ="code tool stale module"= in addition to the existing =logger.error=
 - Return via the same =createCodeToolError= path so TUI rendering is unchanged
+
+** Completion [2026-04-18]
+*** Verification
+- Modified =packages/coding-agent/src/tools/code.ts= catch block (lines 820-840) to detect =ReferenceError= and =TypeError= "is not a function" as stale-module errors.
+- Emits =logger.warn("code tool stale module", { error, errorName, command })= on detection; =logger.error("code tool error", ...)= retained for all failures.
+- Builds a diagnostic =Stale module detected: code.ts source was modified while this session was running. Restart the session to pick up changes. Original error: <name>: <message>= and routes through =createCodeToolError= unchanged for TUI rendering.
+- Also sets =output: undefined= in the stale case so =createCodeToolError= does not override the diagnostic with the raw =Error.message=.
+- Added 3 tests in =packages/coding-agent/test/tools/code.test.ts=:
+  - ReferenceError → diagnostic contains "Stale module detected", "Restart the session", original name and message; logger.warn called with "code tool stale module".
+  - TypeError "is not a function" → same diagnostic path.
+  - Plain Error → message unchanged, no stale warning emitted.
+- Command: =bun test packages/coding-agent/test/tools/code.test.ts= → 22 pass / 0 fail.
+
+*** Artifacts
+- Source: =packages/coding-agent/src/tools/code.ts= (CodeTool.execute catch block)
+- Tests: =packages/coding-agent/test/tools/code.test.ts= (3 new top-level =it= blocks at tail)
+
+*** Deviations
+- TypeError detection narrowed to messages matching =\bis not a function\b= (plan edge case accepted literally would over-match validation TypeErrors from native code).
+- Passed =output: undefined= to =createCodeToolError= in the stale case because =createCodeToolError= prefers =record?.message= over =input.message=; preserving =output: err= would have suppressed the diagnostic.
