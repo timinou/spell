@@ -395,7 +395,7 @@ A `ToolFactory` is `(session: ToolSession) => Tool | null | Promise<Tool | null>
 4. Computes effective gating (`isToolAllowed`) from settings and runtime state:
    - feature toggles (`find.enabled`, `grep.enabled`, etc.)
    - recursion guard for `task` (`task.maxRecursionDepth` vs `session.taskDepth`)
-   - submit-result mode (`requireSubmitResultTool`) and `todo_write` suppression
+   - submit-result mode (`requireSubmitResultTool`) while preserving requested tools such as `todo_write`
 5. Instantiates selected tools in parallel with `Promise.all`, records slow factory timings when `PI_TIMING=1`, and wraps results with `wrapToolWithMetaNotice`.
 6. Includes `resolve` only when at least one instantiated tool has `deferrable: true` (deferred preview/apply workflows).
 
@@ -925,7 +925,7 @@ What _is_ isolated is execution context and artifacts, not process memory:
 - Removes `task` when max recursion depth is reached (`task.maxRecursionDepth`).
 - Expands legacy `exec` alias into `python` and/or `bash` based on `python.toolMode`.
 - Forces `requireSubmitResultTool: true` in `createAgentSession(...)`.
-- Filters parent-owned tools out of child tools (`todo_write` is removed).
+- Preserves child-requested tools (including `todo_write` for bundled `task`) while injecting `submit_result`.
 
 If parent MCP connections exist, executor creates in-process MCP proxy tools with `createMCPProxyTools(...)` so children reuse parent MCP connectivity rather than creating independent MCP sessions.
 

@@ -1,0 +1,119 @@
+#+TITLE: coding-agent: restore truthful todo_write contract in delegated subagents
+#+STATE: BLOCKED
+#+SESSION_ID: 14c07612b75b7446
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-27-17-726Z_14c07612b75b7446.jsonl]]
+#+CUSTOM_ID: BUG-288-coding-agent-restore-truthful-todo-write
+#+LAYER: coding-agent
+
+* Scope
+- In scope: reproduce and eliminate the delegated-subagent failure seen in session `14c0736ad20ef8d4`, where FEAT-236 cancelled before implementation because the task agent prompt required `todo_write` but the child session toolset did not expose it.
+- In scope: align the delegated runtime contract across agent-definition parsing, child-session tool filtering, bundled task/quick_task prompts, and subagent overlay prompts so no subagent is instructed to use tools it cannot call.
+- In scope: preserve `submit_result` injection, existing task-depth limits, auto-roster behavior, and quick_task narrowness.
+- In scope: add focused regression tests that fail on the current mismatch and would have caught the PLAN-094 / PLAN-095 execution regressions before release.
+- Out of scope: changing org-plan semantics, changing parent todo lifecycle rules, or redesigning task auto-roster itself.
+- Out of scope: fixing agentmaker plan content; the repo bug is in Spell’s delegated-tool contract.
+
+- Parent plan: [[id:PLAN-260-task-subagent-todo-write-contract-repair][PLAN-260 task subagent todo_write contract repair]].
+
+* Existing Patterns
+- Failure evidence:
+  - Session `14c0736ad20ef8d4` retried FEAT-236 and aborted with: `Blocked before implementation ... required todo_write facility is not accessible in the toolset.`
+  - `PLAN-095-kb-end-to-end-readiness-closure-cite-kb.org` delegated FEAT-236/237/238 to bundled `task` subagents for multi-file feature work.
+  - `PLAN-094-kb-end-to-end-readiness-completion.org` already recorded multiple delegated aborts (`FEAT-221 ... 3 subagent aborts`), so the failure mode was already recurring before the current session.
+- Runtime / prompt chain to preserve or repair:
+  - `packages/coding-agent/src/discovery/helpers.ts::parseAgentFields` auto-adds `todo_write` to non-`quick_task` agents with explicit tool lists. `packages/coding-agent/test/discovery/agent-fields.test.ts` already codifies that expectation.
+  - `packages/coding-agent/src/task/agents.ts` defines bundled `task` and `quick_task` agents. `quick_task` intentionally excludes `todo_write`, but it currently reuses the same `task.md` body prompt as the full `task` agent.
+  - `packages/coding-agent/src/task/executor.ts::runSubprocess` always creates child sessions with `requireSubmitResultTool: true` and injects `subagent-system-prompt.md` into every delegated agent.
+  - `packages/coding-agent/src/tools/index.ts::createTools` currently drops `todo_write` whenever `requireSubmitResultTool` is true (`includeSubmitResult` path), which makes child sessions violate the contract promised by `parseAgentFields`, the changelog, and the task prompt.
+  - `packages/coding-agent/src/prompts/system/subagent-system-prompt.md` unconditionally says delegated subagents MUST use `todo_write` for 3+ step work.
+  - `packages/coding-agent/src/prompts/agents/task.md` says worker agents have “FULL access to all tools” and instructs `todo_write` + `task` delegation for 3+ file work. This is truthful for `task` only if the runtime actually preserves `todo_write`; it is not truthful for `quick_task`.
+- Existing verification hooks to extend:
+  - `packages/coding-agent/test/sdk-submit-result-tool.test.ts`
+  - `packages/coding-agent/test/discovery/agent-fields.test.ts`
+  - `packages/coding-agent/test/task/executor-subagent-reminders.test.ts` and/or a new focused delegated-tool-contract test under `packages/coding-agent/test/task/`
+  - `packages/coding-agent/CHANGELOG.md`
+
+* Tests
+Workflow 1 — child-session repro:
+- Create a child `AgentSession` with `toolNames: ["read", "todo_write"]` and `requireSubmitResultTool: true`.
+- Assert active tools include both `todo_write` and `submit_result`.
+- This is the current regression: today the session drops `todo_write`. A direct ad-hoc repro from the Spell repo currently returns `[`read`, `submit_result`, ...]` and omits `todo_write`.
+
+Workflow 2 — task-agent contract:
+- Run the delegated-session creation path used by `runSubprocess` for the bundled `task` agent.
+- Assert the created child session preserves `todo_write`, so the agent can satisfy the sniper-todo planning protocol its prompt requires.
+
+Workflow 3 — quick_task truthfulness:
+- Verify `quick_task` does NOT advertise `todo_write`, `task`, or “FULL access to all tools” if its actual tool list stays narrow.
+- Ensure a quick_task prompt remains mechanical: execute assigned work directly, no internal re-planning / re-delegation contract.
+
+Workflow 4 — overlay truthfulness:
+- Verify the injected subagent system overlay requires `todo_write` only when the child toolset actually contains it.
+- If a future narrow child agent lacks `todo_write`, the overlay must instruct direct execution + `submit_result`, not impossible planner behavior.
+
+Workflow 5 — transcript-shaped regression:
+- Encode the real failure chain from session `14c0736ad20ef8d4`: delegated `task` agent + multi-file assignment + `submit_result` enabled must not be able to reach a state where the prompt mandates `todo_write` but the tool registry suppresses it.
+
+* Implementation
+** Define the delegated tool contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-288-coding-agent-restore-truthful-todo-write::define-contract
+:END:
+- Files: `packages/coding-agent/src/tools/index.ts`, `packages/coding-agent/src/task/executor.ts`, `packages/coding-agent/src/task/agents.ts`
+- Settle one invariant: when a delegated agent is promised `todo_write`, `requireSubmitResultTool` must not silently strip it. Quick_task remains the intentional exception.
+- Preserve `submit_result` injection and existing task-depth / spawn gating.
+
+** Add failing regression tests first
+:PROPERTIES:
+:CUSTOM_ID: BUG-288-coding-agent-restore-truthful-todo-write::write-tests
+:DEPENDS: BUG-288-coding-agent-restore-truthful-todo-write::define-contract
+:END:
+- Files: `packages/coding-agent/test/sdk-submit-result-tool.test.ts`, `packages/coding-agent/test/task/*.test.ts`, and bundled-agent prompt tests if a new file is needed.
+- Encode Workflows 1–5 as initially failing tests.
+- Prefer one focused assertion per invariant instead of broad snapshot churn.
+
+** Preserve todo_write in delegated task sessions
+:PROPERTIES:
+:CUSTOM_ID: BUG-288-coding-agent-restore-truthful-todo-write::fix-tool-filter
+:DEPENDS: BUG-288-coding-agent-restore-truthful-todo-write::write-tests
+:END:
+- File: `packages/coding-agent/src/tools/index.ts`
+- Remove the `includeSubmitResult`-driven exclusion that strips `todo_write` from child sessions.
+- Keep `submit_result` additive, not mutually exclusive with `todo_write`.
+
+** Split or specialize quick_task prompt behavior
+:PROPERTIES:
+:CUSTOM_ID: BUG-288-coding-agent-restore-truthful-todo-write::fix-prompts
+:DEPENDS: BUG-288-coding-agent-restore-truthful-todo-write::fix-tool-filter
+:END:
+- Files: `packages/coding-agent/src/task/agents.ts`, `packages/coding-agent/src/prompts/agents/task.md`, plus a new `quick_task` prompt file if that is the cleanest cut.
+- Make prompt text truthful by capability: full `task` agent may self-organize with `todo_write`; `quick_task` must stay single-pass/mechanical.
+- Update `packages/coding-agent/src/prompts/system/subagent-system-prompt.md` so `todo_write` planning is conditional on actual tool availability.
+
+** Reconcile docs and shipped contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-288-coding-agent-restore-truthful-todo-write::reconcile-docs
+:DEPENDS: BUG-288-coding-agent-restore-truthful-todo-write::fix-prompts
+:END:
+- Files: `packages/coding-agent/DEVELOPMENT.md`, `packages/coding-agent/CHANGELOG.md`
+- Remove stale guidance that child sessions strip `todo_write` if runtime behavior is now corrected.
+- Record the user-visible regression and fix under `[Unreleased]` in the coding-agent changelog.
+
+* Edge Cases
+- `submit_result` MUST remain available in every delegated session; this fix must not trade one missing tool for another.
+- `todo.enabled = false` or future intentionally narrow agents must produce truthful prompts; never require `todo_write` when the tool is absent by design.
+- `quick_task` must remain narrow and non-recursive; the fix must not accidentally grant it planner/delegator behavior.
+- Plan-mode child sessions with restricted write folders still need prompt/tool alignment; the delegated tool contract must stay truthful under plan-mode tool filtering too.
+- Existing parent todo lifecycle and `todoRef` verification injection must remain unchanged; local child-session `todo_write` is for subagent organization, not parent-roster mutation.
+
+* Acceptance Criteria
+- A focused session-level regression test proves delegated sessions can expose both `todo_write` and `submit_result` together.
+- Bundled `task` agents no longer receive an impossible prompt/tool combination; the FEAT-236-style abort path is closed.
+- Bundled `quick_task` prompts no longer claim full tool access or instruct `todo_write` usage.
+- `packages/coding-agent/DEVELOPMENT.md` and `[Unreleased]` changelog text match the actual shipped delegated-tool contract.
+- Verification command set:
+  - `bun test packages/coding-agent/test/sdk-submit-result-tool.test.ts`
+  - focused delegated-task tests under `packages/coding-agent/test/task/`
+  - `bun check:ts`
+
+NOTE [2026-04-19]: Verification blocked outside BUG-288 scope. Focused delegated-session regressions and package-local coding-agent check passed, but broader workspace verification remains red because of unrelated dirty-tree failures (`packages/coding-agent/src/patch/index.ts`, `packages/coding-agent/src/tools/write.ts`) and clean-worktree isolation fails on missing native addon / existing initialization issues. See PLAN-260 completion report for exact commands and artifacts.

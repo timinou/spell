@@ -70,4 +70,7 @@ pub trait CoordClient: Send + Sync {
 	fn recent_peer_edits(&self, file: &Path, since_ms: u64, limit: usize) -> Vec<PeerEdit>;
 	fn peer_state(&self, file: &Path) -> PeerState;
 	fn on_close(&self, session: &str, file: &Path);
+	fn drain_warnings(&self) -> Vec<String> {
+		Vec::new()
+	}
 }

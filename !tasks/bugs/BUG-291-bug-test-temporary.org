@@ -1,0 +1,79 @@
+#+TITLE: BUG remove transcript bash output suppression when chunk options are set
+#+STATE: ITEM
+#+SESSION_ID: 14c07d3b3e20db77
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-58-34-232Z_14c07d3b3e20db77.jsonl]]
+#+CUSTOM_ID: BUG-291-bug-test-temporary
+
+:PROPERTIES:
+:LAYER: tool-runtime
+:END:
+
+* Scope
+- In-scope: Bash transcript-spelunking output from `transcript-spelunking`-matched commands (e.g. `jq`, `sed`, `head`, `tail`, `cat`, `awk`, `python3`, `ruby`) executed via `bash`.
+- In-scope: keep context-pressure policy but allow call-site opt-in to return a bounded output chunk instead of a forced summary when the caller sets chunk controls.
+- Out-of-scope: changing suppression behavior for non-transcript read/grep commands and changing default `read`/`grep` context-pressure rules.
+
+* Existing Patterns
+- `packages/coding-agent/src/tools/context-pressure-policy.ts`: central `classifyContextPressure` drives high-noise policy, with `ContextPressureMeta` fields `{category,presentation,persistence,summary}`.
+- `packages/coding-agent/src/tools/bash.ts`: `head` and `tail` already exist as tool arguments and are applied post-exec via `applyHeadTail`.
+- `packages/coding-agent/test/tools/bash-churn-policy.test.ts`: existing regression suite for high-noise bash output contract.
+- `packages/coding-agent/test/tools/context-pressure-policy.test.ts`: policy fixture suite validating presentation/persistence combinations.
+- `packages/coding-agent/src/prompts/tools/bash.md`: tool-call guidance surfaced to models.
+
+* Tests
+- Contract T1: Transcript bash commands without chunk options remain compact (existing behavior).
+  - File: `packages/coding-agent/test/tools/context-pressure-policy.test.ts`
+  - Scenario: `classifyContextPressure({toolName:'bash', params:{command:'jq "." /tmp/sess.jsonl'}})` returns `category='transcript-spelunking'`, `presentation='summary-first'`, `persistence='deny-raw'`.
+- Contract T2: Transcript bash commands with explicit chunk options are allowed to return raw chunk payloads.
+  - File: `packages/coding-agent/test/tools/context-pressure-policy.test.ts`
+  - Scenario: same command with `{head: 25}` returns `persistence='allow-raw'` and `presentation='inline'`.
+- Contract T3: Tool execution applies chunk options to suppress summary-first replacement.
+  - File: `packages/coding-agent/test/tools/bash-churn-policy.test.ts`
+  - Scenario: command `printf 'a
+b
+c
+' | sed -n '1,10p'` with `head: 2`; assert output is chunked and not summary text.
+
+** Implementation
+:PROPERTIES:
+:CUSTOM_ID: BUG-291-bug-test-temporary::tests-first
+:END:
+- Add/update tests in `packages/coding-agent/test/tools/context-pressure-policy.test.ts` for opt-in chunk policy behavior.
+- Add/update tests in `packages/coding-agent/test/tools/bash-churn-policy.test.ts` for raw chunked execution output.
+
+** Implement opt-in chunk rule in context-pressure classification
+:PROPERTIES:
+:CUSTOM_ID: BUG-291-bug-test-temporary::policy-rule
+:DEPENDS: BUG-291-bug-test-temporary::tests-first
+:END:
+- File: `packages/coding-agent/src/tools/context-pressure-policy.ts`
+- If transcript-spelunking command has `head`/`tail` in params, return `persistence: 'allow-raw'`, `presentation: 'inline'`, and a summary that does not include phrase `Raw output suppressed`.
+- Keep no-chunk default as `persistence='deny-raw'`, `presentation='summary-first'`.
+
+** Pass chunk options through classifyContextPressure in bash execution
+:PROPERTIES:
+:CUSTOM_ID: BUG-291-bug-test-temporary::bash-pass
+:DEPENDS: BUG-291-bug-test-temporary::policy-rule
+:END:
+- File: `packages/coding-agent/src/tools/bash.ts`
+- Update context-pressure call to pass chunk params: `{ command: rawCommand, head: headLines, tail: tailLines }`.
+- Confirm existing guard still suppresses summary only when presentation is `summary-first`; allow-raw paths return full final tool result text.
+
+** Update tool guidance for chunk opt-in
+:PROPERTIES:
+:CUSTOM_ID: BUG-291-bug-test-temporary::doc-update
+:DEPENDS: BUG-291-bug-test-temporary::bash-pass
+:END:
+- File: `packages/coding-agent/src/prompts/tools/bash.md`
+- Document that transcript/log spelunking can return bounded raw chunks when `head`/`tail` are set.
+
+* Edge Cases
+- `head: 0` or `tail: 0` are treated as no explicit chunk and stay in summary-first mode.
+- Combined `head` + `tail`: rely on existing `applyHeadTail` order semantics.
+- Failures/exit codes remain unchanged (summary-only or summary+truncation behavior for errors remains as-is).
+- Memory persistence semantics remain bounded by existing persistence pipeline.
+
+* Acceptance Criteria
+- `classifyContextPressure` for transcript command with chunk options has `persistence='allow-raw'` and the summary no longer includes `Raw output suppressed`.
+- Bash execution with chunk option returns bounded raw output instead of summary replacement.
+- `bun test packages/coding-agent/test/tools/context-pressure-policy.test.ts packages/coding-agent/test/tools/bash-churn-policy.test.ts` passes.

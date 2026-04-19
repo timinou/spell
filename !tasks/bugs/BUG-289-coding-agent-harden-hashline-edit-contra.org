@@ -1,0 +1,157 @@
+#+TITLE: coding-agent: harden hashline edit contract and diagnostics
+#+STATE: ITEM
+#+SESSION_ID: 14c077b77b8aac32
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-34-28-590Z_14c077b77b8aac32.jsonl]]
+#+CUSTOM_ID: BUG-289-coding-agent-harden-hashline-edit-contra
+#+LAYER: coding-agent ui
+
+* Initial Message
+
+✘ Edit: 🧾 crates/pi-code-engine/Cargo.toml
+ 🧾 0 lines
+
+ Replace requires at least one anchor (tag or end).
+
+
+File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-19-22-953Z_14c0744312762edc.jsonl
+ ID: 14c0744312762edc
+
+
+What is the problem?
+
+* Scope
+
+In scope:
+- Prevent malformed hashline =edit= requests from failing opaquely in =packages/coding-agent/=, with focus on anchorless or unparseable =replace= requests.
+- Preserve the strict safety policy already encoded in =packages/coding-agent/src/patch/index.ts::resolveEditAnchors=: never guess anchors, never silently widen a replace, never fall back to whole-file replacement.
+- Improve the end-to-end contract across prompt guidance, request validation, runtime errors, and user-visible render/reporting so an agent can recover by re-reading and retrying with valid =LINE#ID= anchors.
+- Add targeted regression coverage for the edit contract and the hashline failure paths.
+- Reference overlap with [[id:PLAN-254-cross-session-edit-coordination]] only where shared edit/TUI surfaces exist, especially =packages/coding-agent/src/patch/shared.ts= and adjacent edit-result rendering paths that PLAN-254 follow-up work will touch.
+
+Out of scope:
+- Broker, journal, socket, undo/redo attribution, or any other core coordination work from PLAN-254.
+- Auto-recovery that invents anchors or rewrites the request into a whole-file replace.
+- CRDT/Loro, peer conflict policy, or CodePath transaction changes.
+
+Rationale:
+The observed failure mode is a coding-agent edit-contract bug: the file exists, but the edit request reaches hashline =replace= without any valid anchor, producing the generic message =Replace requires at least one anchor (tag or end).= The system needs stricter, more actionable guidance before and at failure time, while keeping the existing safety boundary intact.
+
+* Existing Patterns
+
+The implementation MUST reuse and stay consistent with these existing code paths and conventions:
+- =packages/coding-agent/src/patch/index.ts=
+  - =resolveEditAnchors(edits: HashlineToolEdit[]): HashlineEdit[]= is the canonical strict gate for hashline anchor resolution.
+  - =hashlineEditSchema= / =hashlineEditParamsSchema= define the public edit-tool contract in hashline mode.
+  - =EditTool.execute(...)= already contains high-signal diagnostics for identical-content no-ops and redirect behavior for code-supported files.
+- =packages/coding-agent/src/patch/hashline.ts=
+  - =parseTag(ref)= already distinguishes malformed =LINE#ID= references.
+  - =HashlineMismatchError= already provides rich stale-hash diagnostics; this behavior MUST remain intact and distinct from missing-anchor failures.
+- =packages/coding-agent/src/patch/shared.ts=
+  - Shared edit renderer and preview pipeline; any new diagnostic or preview shape MUST preserve compatibility with PLAN-254 follow-up TUI work.
+- =packages/coding-agent/src/prompts/tools/hashline.md=
+  - Current hashline prompt is much thinner than =packages/coding-agent/src/prompts/tools/replace.md=. Reuse the stronger contract style from =replace.md=: explicit prerequisites, failure recovery guidance, and concrete valid request shapes.
+- =packages/coding-agent/src/tools/code-result.ts=
+  - Existing pattern for classified failures + appended =Hint:= lines. Reuse this style instead of inventing a new free-form error reporting pattern.
+- Existing tests:
+  - =packages/coding-agent/test/core/hashline.test.ts=
+  - =packages/coding-agent/test/tools.test.ts=
+  - =packages/coding-agent/test/streaming-edit-abort.test.ts=
+
+
+- Plan container: [[id:PLAN-261-hashline-edit-contract-and-diagnostics-h][PLAN-261]]. This item executes under PLAN-261 and stays separate from PLAN-254 except for explicitly shared edit/TUI surfaces.
+
+* Tests
+
+User / agent workflows that MUST be covered:
+1. Agent reads a hashline-rendered text file, then submits a valid single-line =replace= with =pos= → succeeds unchanged from today.
+2. Agent submits =replace= with neither =pos= nor =end= → strict failure, but the surfaced error explicitly tells the caller that =replace= requires at least one valid anchor and that the recovery path is to re-read and retry with =LINE#ID= references.
+3. Agent submits =replace= with a malformed anchor string that cannot parse as =LINE#ID= → strict failure that distinguishes malformed references from missing references.
+4. Agent submits =replace= with a stale hash → existing =HashlineMismatchError= mapping and remap guidance still works; the new work MUST NOT collapse stale-hash failures into the new missing-anchor diagnostic.
+5. Streaming / rendered edit output still shows enough context for the operator to understand what failed, and future PLAN-254 peer-activity/footer work in the shared renderer is not boxed into a conflicting format.
+6. Code-supported file redirect behavior still wins before text-hashline mutation where applicable; this work is for unsupported/text-file hashline flows such as =Cargo.toml=, not a rollback of the =code edit= preference.
+
+Verification targets:
+- Add or extend precise automated tests in =packages/coding-agent/test/tools.test.ts= for the edit-tool failure contract.
+- Add or extend unit coverage in =packages/coding-agent/test/core/hashline.test.ts= only where pure hashline parsing/validation behavior changes.
+- Run focused package verification for the changed area first, then =bun check:ts= as the final package-level gate.
+
+* Implementation
+
+** Define failure contract and PLAN-254 overlap boundary
+:PROPERTIES:
+:CUSTOM_ID: BUG-289-coding-agent-harden-hashline-edit-contra::define-failure-contract
+:END:
+- Files: =packages/coding-agent/src/patch/index.ts=, =packages/coding-agent/src/patch/shared.ts=, =packages/coding-agent/src/tools/code-result.ts=
+- Specify the error taxonomy for three distinct cases:
+  1. missing anchor (=replace= without any parsed =pos= / =end=)
+  2. malformed anchor string (present but not parseable as =LINE#ID=)
+  3. stale hash mismatch (existing behavior)
+- Reuse the existing classified-hint pattern where possible.
+- Explicitly note which renderer/result surfaces overlap with PLAN-254 future peer-edit UI work so this item does not create a parallel error-display convention.
+
+** Write failing edit-contract tests before behavior changes
+:PROPERTIES:
+:CUSTOM_ID: BUG-289-coding-agent-harden-hashline-edit-contra::edit-contract-tests
+:DEPENDS: BUG-289-coding-agent-harden-hashline-edit-contra::define-failure-contract
+:END:
+- Files: =packages/coding-agent/test/tools.test.ts=, optionally =packages/coding-agent/test/core/hashline.test.ts=
+- Add initially failing tests for workflows 2-6 from the Tests section.
+- Assert the externally visible contract: exact recovery guidance where downstream behavior depends on the wording; distinct messages for missing vs malformed vs stale anchors.
+- Keep tests focused on observable tool behavior, not internal helper call counts.
+
+** Harden runtime validation and reporting
+:PROPERTIES:
+:CUSTOM_ID: BUG-289-coding-agent-harden-hashline-edit-contra::implement-runtime-contract
+:DEPENDS: BUG-289-coding-agent-harden-hashline-edit-contra::edit-contract-tests
+:END:
+- Files: =packages/coding-agent/src/patch/index.ts=, =packages/coding-agent/src/patch/hashline.ts=, =packages/coding-agent/src/patch/shared.ts=, =packages/coding-agent/src/tools/code-result.ts= if needed
+- Preserve strict fail semantics.
+- Improve the missing-anchor and malformed-anchor errors so they teach the retry path:
+  - read first
+  - supply =pos= and optionally =end=
+  - use real =LINE#ID= refs from current file output
+- Ensure stale-hash diagnostics keep their richer remap behavior.
+- If streaming preview/result rendering needs a lightweight failure classification to show a hint cleanly, add it in the shared edit-result path rather than inventing one-off strings in multiple places.
+
+** Strengthen prompt/schema guidance
+:PROPERTIES:
+:CUSTOM_ID: BUG-289-coding-agent-harden-hashline-edit-contra::prompt-and-schema-guidance
+:DEPENDS: BUG-289-coding-agent-harden-hashline-edit-contra::edit-contract-tests
+:END:
+- Files: =packages/coding-agent/src/prompts/tools/hashline.md=, and =packages/coding-agent/src/patch/index.ts= schema descriptions if useful
+- Make the contract explicit in the same spirit as =replace.md=:
+  - read before editing
+  - =replace= requires anchor(s)
+  - anchor format is =LINE#ID=
+  - anchorless file-level writes are only valid for create-time =append= / =prepend= flows where already supported
+- Include concrete correct and incorrect request shapes so the model is less likely to emit anchorless =replace= operations.
+
+** Verify end-to-end behavior
+:PROPERTIES:
+:CUSTOM_ID: BUG-289-coding-agent-harden-hashline-edit-contra::verify-end-to-end
+:DEPENDS: BUG-289-coding-agent-harden-hashline-edit-contra::implement-runtime-contract BUG-289-coding-agent-harden-hashline-edit-contra::prompt-and-schema-guidance
+:END:
+- Verification commands:
+  - =bun test packages/coding-agent/test/tools.test.ts packages/coding-agent/test/core/hashline.test.ts=
+  - =bun check:ts=
+- Manual proof to record in implementation notes:
+  - reproduce the prior failure shape against a text file such as =crates/pi-code-engine/Cargo.toml=
+  - confirm the new surfaced error tells the truth and provides the retry path without guessing anchors
+  - confirm valid hashline edits still apply normally
+
+* Edge Cases
+
+- The caller may provide =pos= or =end= fields that exist syntactically but are empty, whitespace-only, or copied with polluted display prefixes. Distinguish parse failure from absence cleanly.
+- Preserve current heuristic cleanup of copied hashline display content where safe, but do not let that mutate a malformed anchor into a silently accepted different target.
+- Do not regress create-file behavior where anchorless =append= / =prepend= is already intentionally allowed for missing files.
+- Do not degrade code-supported-file redirect behavior. If the path is code-supported, =code edit= guidance remains the correct answer.
+- Any new UI hinting in shared edit renderers must not block or conflict with PLAN-254 peer-activity footer/status work.
+
+* Acceptance Criteria
+
+- An anchorless hashline =replace= no longer fails as a bare generic message; it fails with an actionable, truthful diagnostic that explains why the request is invalid and how to recover.
+- Malformed anchor strings are reported distinctly from both missing anchors and stale hashes.
+- Stale-hash mismatch diagnostics remain rich and regression-tested.
+- Hashline prompt/schema guidance explicitly tells the model to read first and to include =LINE#ID= anchors for =replace=.
+- Focused tests for the changed contract pass, and =bun check:ts= is the final verification gate.
+- The item remains separate from PLAN-254 execution, but any touched shared renderer/output surfaces remain compatible with PLAN-254 follow-up work.

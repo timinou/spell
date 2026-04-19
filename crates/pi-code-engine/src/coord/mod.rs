@@ -2,6 +2,7 @@ pub mod client;
 pub mod journal;
 pub mod node_ref;
 pub mod null;
+pub mod peer_state;
 pub mod socket;
 
 pub use client::{
@@ -14,9 +15,6 @@ pub use node_ref::derive_code_paths;
 pub use null::NullCoordClient;
 pub use socket::{BrokerEndpoint, SocketCoordClient};
 
-/// Short blake3 digest (first 16 hex chars). Used for stable journal path
-/// keys; NOT a security primitive.
 pub(crate) fn blake3_short(bytes: &[u8]) -> String {
-	let hash = blake3::hash(bytes);
-	hash.to_hex().as_str()[..16].to_string()
+	blake3::hash(bytes).to_hex()[..16].to_string()
 }

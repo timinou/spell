@@ -1,0 +1,46 @@
+#+TITLE: RELAX_TEXT_EDIT_COMPATIBILITY_AND_ADD_WRITE_DIAGNOSTICS
+#+STATE: DOING
+#+SESSION_ID: 14c079ab1753dbc3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-43-00-189Z_14c079ab1753dbc3.jsonl]]
+#+CUSTOM_ID: PLAN-262-relax-text-edit-compatibility-and-add-wr
+#+LAYER: tools
+
+* Initial Message
+
+find all instances of SPELL_ALLOW_TEXT_EDIT_ON_CODE and look at the todo. I want to make the edit more lenient (too many bugs, but still show to the user for later bugfixing), and tell me how I can have diagnostics added to write tools.
+
+* Context
+This plan responds to a follow-up on the lingering =SPELL_ALLOW_TEXT_EDIT_ON_CODE= references.
+
+Repository findings verified before planning:
+- Runtime/source refs exist in =packages/coding-agent/src/patch/index.ts= (three commented redirect guards) and =packages/coding-agent/src/tools/write.ts= (one commented managed-buffer branch with TODOs asking what the branch is for and how to add diagnostics).
+- Historical plan refs exist in =!tasks/features/FEAT-574-route-write-tool-through-managed-code-bu.org= and =!tasks/plans/PLAN-252-make-write-tool-route-through-managed-co.org=; both describe =SPELL_ALLOW_TEXT_EDIT_ON_CODE= as a preserved escape hatch and explicitly leave managed-buffer write diagnostics undefined.
+- Current write-tool diagnostics only exist on the LSP writethrough path: =packages/coding-agent/src/tools/write.ts= calls =createLspWritethrough(...)= and forwards any =FileDiagnosticsResult= into =details.diagnostics= and =details.meta.diagnostics=. The managed-buffer branch does not currently populate diagnostics.
+- The existing diagnostic gate is =lsp.diagnosticsOnWrite= in =packages/coding-agent/src/config/settings-schema.ts=.
+
+Settled decisions:
+1. Default behavior becomes lenient: code-supported text =edit= and =write= paths no longer rely on =SPELL_ALLOW_TEXT_EDIT_ON_CODE= for permissive behavior.
+2. Successful compatibility-path edits/writes must surface a concise non-blocking notice/TODO to the user so the bug-prone path remains visible for later cleanup.
+3. Managed-buffer =write= gains a post-save LSP diagnostic pass, but only when =lsp.diagnosticsOnWrite= is enabled.
+4. Diagnostics are informational only; write success must not be downgraded to failure because the saved file has warnings/errors.
+5. =lsp.formatOnWrite= remains unchanged for the managed-buffer path in this plan.
+
+Recommended approach:
+- Implement the entire change under [[id:BUG-290-relax-code-text-compatibility-notices-an]].
+- Reuse the existing managed-buffer persistence path for compatibility writes.
+- Add one reusable saved-file diagnostics helper in the LSP layer rather than inventing a second write pipeline.
+- Remove stale =SPELL_ALLOW_TEXT_EDIT_ON_CODE= comments/docs that would otherwise mislead future maintainers.
+
+* Verification
+- Targeted tests: =bun test packages/coding-agent/test/tools.test.ts=
+- Typecheck: =bun check:ts=
+- Manual proof during implementation handoff:
+  - code-supported =edit= shows success + compatibility notice rather than redirect/blocking text
+  - code-supported =write= shows success + compatibility notice
+  - with =lsp.diagnosticsOnWrite=true=, a managed-buffer write on invalid code returns =details.diagnostics= and emits the grouped diagnostics notice
+  - non-code =write= behavior remains unchanged
+
+* Execution Manifest
+** Wave 1
+- [[id:BUG-290-relax-code-text-compatibility-notices-an]]
+- Outcome: remove stale =SPELL_ALLOW_TEXT_EDIT_ON_CODE= design, surface compatibility notices on text-tool code mutations, and add managed-buffer write diagnostics behind the existing setting.

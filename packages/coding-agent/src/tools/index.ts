@@ -474,11 +474,11 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		// regardless of settings toggles so the instructions are satisfiable.
 		if (name === "org" && inPlanMode) return true;
 		if (name === "org") return !!session.settings.get("org.enabled");
-		if (name === "todo_write" && inPlanMode) return !includeSubmitResult;
+		if (name === "todo_write" && inPlanMode) return true;
 		if (name === "lsp") return enableLsp;
 		if (name === "bash") return allowBash;
 		if (name === "python") return allowPython;
-		if (name === "todo_write") return !includeSubmitResult && session.settings.get("todo.enabled");
+		if (name === "todo_write") return session.settings.get("todo.enabled");
 		if (name === "find") return session.settings.get("find.enabled");
 		if (name === "grep") return session.settings.get("grep.enabled");
 		if (name === "ast_grep") return session.settings.get("astGrep.enabled");

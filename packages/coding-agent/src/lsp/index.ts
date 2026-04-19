@@ -538,7 +538,24 @@ async function getDiagnosticsForFile(
 		errored: hasErrors,
 	};
 }
+export async function getSavedFileDiagnostics(
+	absolutePath: string,
+	content: string,
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<FileDiagnosticsResult | undefined> {
+	const config = getConfig(cwd);
+	const servers = getServersForFile(config, absolutePath);
+	if (servers.length === 0) {
+		return undefined;
+	}
 
+	const { lspServers } = splitServers(servers);
+	const minVersions = await captureDiagnosticVersions(cwd, servers);
+	await syncFileContent(absolutePath, content, cwd, lspServers, signal);
+	await notifyFileSaved(absolutePath, cwd, lspServers, signal);
+	return getDiagnosticsForFile(absolutePath, cwd, servers, signal, minVersions);
+}
 export enum FileFormatResult {
 	UNCHANGED = "unchanged",
 	FORMATTED = "formatted",

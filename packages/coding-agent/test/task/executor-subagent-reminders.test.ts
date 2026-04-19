@@ -94,6 +94,19 @@ function createMockSession(
 	return session as unknown as AgentSession;
 }
 
+function renderPromptText(prompt: unknown): string {
+	if (typeof prompt === "string") return prompt;
+	if (!Array.isArray(prompt)) return "";
+	return prompt
+		.map(block => {
+			if (typeof block === "string") return block;
+			if (!block || typeof block !== "object") return "";
+			return "text" in block && typeof block.text === "string" ? block.text : "";
+		})
+		.filter(Boolean)
+		.join("\n");
+}
+
 describe("runSubprocess submit_result reminders", () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
@@ -112,7 +125,7 @@ describe("runSubprocess submit_result reminders", () => {
 		task: "do work",
 		index: 0,
 		id: "subagent-1",
-		settings: Settings.isolated(),
+		settings: Settings.isolated({ "todo.enabled": true }),
 		authStorage: {} as unknown as AuthStorage,
 		modelRegistry: { refresh: async () => {} } as unknown as import("../../src/config/model-registry").ModelRegistry,
 		enableLsp: false,
@@ -150,6 +163,80 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(createAgentSessionMock.mock.calls).toHaveLength(1);
 		expect(createAgentSessionMock.mock.calls[0]?.[0]?.toolNames).toEqual(["read"]);
 		expect(createAgentSessionMock.mock.calls[0]?.[0]?.requireSubmitResultTool).toBe(true);
+	});
+
+	it("suppresses todo_write-only overlay instructions when the delegated toolset cannot call todo_write", async () => {
+		const session = createMockSession(({ emit }) => {
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-submit-result",
+				toolName: "submit_result",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		await runSubprocess({
+			...baseOptions,
+			id: "subagent-overlay-without-todo",
+			agent: { ...baseAgent, tools: ["read"] },
+		});
+
+		const createAgentSessionMock = sdkModule.createAgentSession as unknown as {
+			mock: { calls: Array<[Record<string, unknown>]> };
+		};
+		const promptFactory = createAgentSessionMock.mock.calls.at(-1)?.[0]?.systemPrompt as
+			| ((defaultBlocks: unknown[]) => unknown)
+			| undefined;
+		const overlay = renderPromptText(promptFactory?.([]));
+		expect(overlay).not.toContain("You **MUST** use `todo_write` to plan tasks with 3+ steps.");
+		expect(overlay).toContain("`todo_write` is not available in this delegated session.");
+	});
+
+	it("keeps todo_write overlay guidance when the delegated toolset includes todo_write", async () => {
+		const session = createMockSession(({ emit }) => {
+			emit({
+				type: "tool_execution_end",
+				toolCallId: "tool-submit-result",
+				toolName: "submit_result",
+				result: {
+					content: [{ type: "text", text: "Result submitted." }],
+					details: { status: "success", data: { ok: true } },
+				},
+				isError: false,
+			});
+		});
+
+		(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+			session,
+			extensionsResult: {} as unknown as LoadExtensionsResult,
+			setToolUIContext: () => {},
+		});
+
+		await runSubprocess({
+			...baseOptions,
+			id: "subagent-overlay-with-todo",
+			agent: { ...baseAgent, tools: ["read", "todo_write"] },
+		});
+
+		const createAgentSessionMock = sdkModule.createAgentSession as unknown as {
+			mock: { calls: Array<[Record<string, unknown>]> };
+		};
+		const promptFactory = createAgentSessionMock.mock.calls.at(-1)?.[0]?.systemPrompt as
+			| ((defaultBlocks: unknown[]) => unknown)
+			| undefined;
+		const overlay = renderPromptText(promptFactory?.([]));
+		expect(overlay).toContain("You **MUST** use `todo_write` to plan tasks with 3+ steps.");
+		expect(overlay).not.toContain("`todo_write` is not available in this delegated session.");
 	});
 
 	it("sends reminder prompt when subagent stops without submit_result", async () => {

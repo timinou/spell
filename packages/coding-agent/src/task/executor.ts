@@ -1159,6 +1159,8 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			const allCustomTools = [...mcpProxyTools, ...swarmTools, ...(options.customTools ?? [])];
 			const enableMCP = !options.mcpManager;
 			const { normalized: normalizedOutputSchema } = normalizeOutputSchema(outputSchema);
+			const todoWriteAvailable =
+				subagentSettings.get("todo.enabled") && (toolNames === undefined || toolNames.includes("todo_write"));
 			const MAX_SUBMIT_RESULT_RETRIES = 3;
 			const fallbackAttempts: StartupFallbackAttempt[] = [];
 
@@ -1199,6 +1201,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 									worktree: worktree ?? "",
 									outputSchema: normalizedOutputSchema,
 									contextFile: options.contextFile,
+									todoWriteAvailable,
 								});
 								overlayParts.push(subagentOverlay);
 								if (

@@ -26,7 +26,8 @@ import patchDescription from "../prompts/tools/patch.md" with { type: "text" };
 import replaceDescription from "../prompts/tools/replace.md" with { type: "text" };
 import { enforcePathWrite } from "../sandbox";
 import type { ToolSession } from "../tools";
-import { describeCodeToolSupportedFiles, isCodeToolSupportedPath } from "../tools/code-supported-files";
+import { isCodeToolSupportedPath } from "../tools/code-supported-files";
+import { formatCodeTextCompatibilityNotice } from "../tools/code-text-compatibility";
 import {
 	invalidateFsScanAfterDelete,
 	invalidateFsScanAfterRename,
@@ -55,10 +56,6 @@ import { type EditToolDetails, getLspBatchRequest } from "./shared";
 // Internal imports
 import type { FileSystem, Operation, PatchInput } from "./types";
 import { EditMatchError } from "./types";
-
-function codeToolRedirectMessage(path: string): string {
-	return `The edit tool is blocked for code-supported files (${describeCodeToolSupportedFiles()}). Use code edit for structural edits on ${JSON.stringify(path)}; if the structural edit fails, re-read/navigate and tighten the target instead of switching to text edit.`;
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Re-exports
@@ -508,9 +505,9 @@ export class EditTool implements AgentTool<TInput> {
 			}
 
 			const absolutePath = resolvePlanPath(this.session, path);
-			if (isCodeToolSupportedPath(absolutePath) && !process.env.SPELL_ALLOW_TEXT_EDIT_ON_CODE) {
-				throw new Error(codeToolRedirectMessage(path));
-			}
+			// if (isCodeToolSupportedPath(absolutePath) && !process.env.SPELL_ALLOW_TEXT_EDIT_ON_CODE) {
+			// 	throw new Error(codeToolRedirectMessage(path));
+			// }
 			const resolvedMove = move ? resolvePlanPath(this.session, move) : undefined;
 			if (resolvedMove === absolutePath) {
 				throw new Error("move path is the same as source path");
@@ -573,10 +570,21 @@ export class EditTool implements AgentTool<TInput> {
 						throw new Error(`File not found: ${path}`);
 					}
 				}
-				applyManagedBufferContent(absolutePath, lines.join("\n"), { create: true });
+				applyManagedBufferContent(absolutePath, lines.join("\n"), {
+					create: true,
+				});
 				invalidateFsScanAfterWrite(absolutePath);
+				const resultText = `Created ${path}`;
+				const compatibilityNotice = isCodeToolSupportedPath(absolutePath)
+					? formatCodeTextCompatibilityNotice("edit")
+					: undefined;
 				return {
-					content: [{ type: "text", text: `Created ${path}` }],
+					content: [
+						{
+							type: "text",
+							text: compatibilityNotice ? `${resultText}\n${compatibilityNotice}` : resultText,
+						},
+					],
 					details: {
 						diff: "",
 						op: "create",
@@ -680,15 +688,20 @@ export class EditTool implements AgentTool<TInput> {
 				.get();
 
 			const resultText = move ? `Moved ${path} to ${move}` : `Updated ${path}`;
+			const compatibilityNotice =
+				(!resolvedMove || resolvedMove === absolutePath) && isCodeToolSupportedPath(writePath)
+					? formatCodeTextCompatibilityNotice("edit")
+					: undefined;
 			const preview = buildCompactHashlineDiffPreview(diffResult.diff);
 			const summaryLine = `Changes: +${preview.addedLines} -${preview.removedLines}${preview.preview ? "" : " (no textual diff preview)"}`;
 			const warningsBlock = result.warnings?.length ? `\n\nWarnings:\n${result.warnings.join("\n")}` : "";
 			const previewBlock = preview.preview ? `\n\nDiff preview:\n${preview.preview}` : "";
+			const compatibilityBlock = compatibilityNotice ? `\n\n${compatibilityNotice}` : "";
 			return {
 				content: [
 					{
 						type: "text",
-						text: `${resultText}\n${summaryLine}${previewBlock}${warningsBlock}`,
+						text: `${resultText}\n${summaryLine}${previewBlock}${warningsBlock}${compatibilityBlock}`,
 					},
 				],
 				details: {
@@ -722,9 +735,6 @@ export class EditTool implements AgentTool<TInput> {
 				if (sandboxRenameError) throw new Error(sandboxRenameError);
 			}
 			const resolvedPath = resolvePlanPath(this.session, path);
-			if (isCodeToolSupportedPath(resolvedPath) && !process.env.SPELL_ALLOW_TEXT_EDIT_ON_CODE) {
-				throw new Error(codeToolRedirectMessage(path));
-			}
 			const resolvedRename = rename ? resolvePlanPath(this.session, rename) : undefined;
 
 			if (path.endsWith(".ipynb")) {
@@ -829,9 +839,6 @@ export class EditTool implements AgentTool<TInput> {
 		}
 
 		const absolutePath = resolvePlanPath(this.session, path);
-		if (isCodeToolSupportedPath(absolutePath) && !process.env.SPELL_ALLOW_TEXT_EDIT_ON_CODE) {
-			throw new Error(codeToolRedirectMessage(path));
-		}
 
 		if (!(await fs.exists(absolutePath))) {
 			throw new Error(`File not found: ${path}`);
@@ -890,13 +897,21 @@ export class EditTool implements AgentTool<TInput> {
 			result.count > 1
 				? `Successfully replaced ${result.count} occurrences in ${path}.`
 				: `Successfully replaced text in ${path}.`;
+		const compatibilityNotice = isCodeToolSupportedPath(absolutePath)
+			? formatCodeTextCompatibilityNotice("edit")
+			: undefined;
 
 		const meta = outputMeta()
 			.diagnostics(diagnostics?.summary ?? "", diagnostics?.messages ?? [])
 			.get();
 
 		return {
-			content: [{ type: "text", text: resultText }],
+			content: [
+				{
+					type: "text",
+					text: compatibilityNotice ? `${resultText}\n${compatibilityNotice}` : resultText,
+				},
+			],
 			details: {
 				diff: diffResult.diff,
 				firstChangedLine: diffResult.firstChangedLine,
