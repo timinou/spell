@@ -1,6 +1,8 @@
 mod common;
 
 use std::{
+	collections::hash_map::DefaultHasher,
+	hash::{Hash, Hasher},
 	path::{Path, PathBuf},
 	sync::Arc,
 	time::Duration,
@@ -54,6 +56,14 @@ fn journal_tail_for(path: &Path) -> Vec<JournalEntry> {
 		.unwrap_or_else(|| path.parent().expect("repo root"));
 	let journal_path = journal_path_for(&default_journal_root(), repo_root, path);
 	JournalReader::tail(&journal_path, 16).expect("journal tail")
+}
+
+fn advisory_lock_path(path: &Path) -> PathBuf {
+	let mut hasher = DefaultHasher::new();
+	path.hash(&mut hasher);
+	std::env::temp_dir()
+		.join("pi-code-engine-locks")
+		.join(format!("{:016x}.lock", hasher.finish()))
 }
 
 const HANDLE_PATH: &str = "::Server.handle#body";
@@ -259,12 +269,14 @@ async fn edit_transaction_lock_timeout_returns_structured_error() {
 	let path = write_source(broker.workspace_root(), "src/server.ts", SAMPLE_SOURCE);
 	let reg = registry_with_socket(&broker.socket_path, "s1");
 
+	let lock_path = advisory_lock_path(&path);
+	std::fs::create_dir_all(lock_path.parent().expect("lock dir")).expect("mkdir lock dir");
 	let file = std::fs::OpenOptions::new()
 		.read(true)
 		.write(true)
 		.create(true)
 		.truncate(false)
-		.open(&path)
+		.open(&lock_path)
 		.expect("open lock file");
 	let mut lock = fd_lock::RwLock::new(file);
 	let _guard = lock.try_write().expect("hold exclusive lock");

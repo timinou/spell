@@ -1,5 +1,5 @@
 #+TITLE: Sub-outline-granular wave manifest with dual-link PLAN bodies
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14c12170379e95ac
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T19-56-00-095Z_14c12170379e95ac.jsonl]]
 #+CUSTOM_ID: PLAN-274-sub-outline-granular-wave-manifest-with
@@ -94,16 +94,20 @@ Global acceptance after every child completes:
 - `bun test packages/coding-agent/test/prompts/plan-mode-active-suboutline.test.ts` → passed.
 - `bun check:ts` → passed.
 - `bun check` → passed.
+- `cargo test -p pi-code-engine --test coord_transaction edit_transaction_lock_timeout_returns_structured_error` → passed after aligning the test with the advisory lock path used by `BufferRegistry::edit_transaction`.
+- `cargo test --all` → passed.
+- `cargo clippy --all-targets` → passed (existing upstream warnings from `pi-natives` / tree-sitter-org remained warnings only).
 - `bun run dev:native` → rebuilt `packages/natives/native/pi_natives.dev.node` so org package tests exercised the updated Rust engine.
 - Manual replay: temp `org create` with empty-left / bare sub-outline IDs produced ITEM-prefixed headings and fully-qualified `CUSTOM_ID` / `DEPENDS` values with no `::slug` residue.
 - Manual replay: `org wave --manifest=true --planItemId=PLAN-274-sub-outline-granular-wave-manifest-with` rewrote this PLAN's `* Execution Manifest` section with sub-outline-granular `:wave:` groups.
 - Manual replay: repo-local `validatePlanItem(Settings.isolated(), process.cwd(), "PLAN-274-sub-outline-granular-wave-manifest-with")` returned `valid: true` after adding the required top-level child links to `* Context`.
-- Global verification: `cargo test --all` still fails in unrelated crate `pi-code-engine` at `edit_transaction_lock_timeout_returns_structured_error`; see Deviations.
 *** Artifacts
 - Manifest rewrite result: artifact://14c133dfeade95ad/main/bash/76.txt
 - Repo-local PLAN validation output: artifact://14c133dfeade95ad/main/bash/78.txt
 - Manual `org create` replay output + emitted file content: artifact://14c133dfeade95ad/main/bash/80.txt
-- Full-workspace `cargo test --all` failure log: artifact://14c133dfeade95ad/main/bash/70.txt
+- Full-workspace `cargo test --all` pass transcript: artifact://14c133dfeade95ad/main/bash/92.txt
+- Targeted `pi-code-engine` lock-timeout regression pass transcript: artifact://14c133dfeade95ad/main/bash/90.txt
 *** Deviations
-- `cargo test --all` remains red because `crates/pi-code-engine/tests/coord_transaction.rs::edit_transaction_lock_timeout_returns_structured_error` returned a successful transaction instead of `CodeEngineError::LockTimeout`. This crate/test was outside PLAN-274 scope and remained failing after all plan changes were complete.
-- Because the required global verification is not fully green, PLAN-274 remains `DOING` and is not truthfully closable yet.
+- None.
+
+NOTE [2026-04-19]: All PLAN-274 execution steps finished. Global verification now passes after aligning the unrelated advisory-lock timeout test, and the completion report has been refreshed with final evidence.
