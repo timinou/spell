@@ -1,0 +1,206 @@
+#+TITLE: Envelope rendering: structured inline+URI, outcome badges, spawn audit, children tree
+#+STATE: ITEM
+#+SESSION_ID: 14c0a83e5a690b0f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-06-29-609Z_14c0a83e5a690b0f.jsonl]]
+#+CUSTOM_ID: FEAT-598-envelope-rendering-structured-inlineuri
+#+DEPENDS: FEAT-595-envelope-v2-types-foundation-subagentout FEAT-597-executor-tree-propagation-populate-struc
+#+LAYER: frontend
+
+* Initial Message
+
+Ran actual runtime probes, not just tests.
+
+ Result:
+ - fake task sets → ✓ work to completion
+ - tasks that spawn subtasks → ✓ work, within spawn policy
+ - nested task → oracle → ✗ blocked by allowed-spawns policy, exact runtime error below
+
+ 1. fake task batch
+ - launched task(agent=oracle) with 2 read-only tasks
+ - batch completed 2/2 succeeded
+ - child results:
+     - inspectAgents → found bundled task, quick_task, oracle
+     - inspectSnapshots → confirmed warning string:
+           - No active plan snapshots for this session.
+ - runtime note:
+     - Task isolation was requested but task.isolation.mode="none"; running non-isolated. Set task.isolation.mode to worktree, fuse-overlay, or
+ fuse-projfs to enable.
+
+ 2. nested subtask batch, first try
+ - launched task(agent=task) with one parent task instructed to spawn subtasks via task(agent=oracle)
+ - parent task ran, but nested dispatch was rejected by policy
+ - exact runtime error:
+     - Nested task dispatch failed: agent=oracle is not allowed. Runtime error text: Cannot spawn 'oracle'. Allowed: explore,quick_task
+
+ ∴ this is not a crash; it's enforced spawn restriction.
+
+ 3. nested subtask batch, allowed path
+ - retried with task(agent=task) parent spawning task(agent=quick_task) children
+ - supplied required filesDeps
+ - batch completed end-to-end successfully
+
+ Exact nested success summary:
+
+ ```json
+   {
+     "success": true,
+     "nestedDispatch": "succeeded end-to-end",
+     "children": [
+       {
+         "id": "ChildA",
+         "agent": "quick_task",
+         "status": "completed",
+         "filesDeps": ["packages/coding-agent/src/task/agents.ts"],
+         "result": {
+           "confirmed": true,
+           "statement": "quick_task is bundled."
+         }
+       },
+       {
+         "id": "ChildB",
+         "agent": "quick_task",
+         "status": "completed",
+         "filesDeps": ["packages/coding-agent/src/task/index.ts"],
+         "result": {
+           "confirmed": true,
+           "evidence": "TaskTool.#validateTaskBatch rejects tasks lacking both assignment and todoRef."
+         }
+       }
+     ],
+     "runtimeNotes": []
+   }
+ ```
+
+ Repo evidence for expected behavior:
+ - child todo groups preserved: packages/coding-agent/src/tools/todo-write.ts:464
+ - nested delegated child rendering exists: packages/coding-agent/src/modes/interactive-mode.ts:886
+ - nested-depth isolation behavior covered: packages/coding-agent/test/task/nested-isolation-default.test.ts:79
+
+ Bottom line:
+ - normal fake task sets → ✓
+ - nested subtasks via task → ✓
+ - nested subtasks can spawn only allowed agents from parent agent policy
+ - for bundled task agent, current allowed nested spawns are:
+     - explore
+     - quick_task
+
+
+
+
+WHERE is the restriction on task type for subagent?
+
+* Scope
+In-scope:
+- Update ~packages/coding-agent/src/prompts/tools/task-summary.md~ to render the new envelope shape (per ~specs/subagent-envelope-v2.md~ section 3.5).
+- Update ~packages/coding-agent/src/task/render.ts~: ~renderAgentResult~, ~renderAgentProgress~, ~getStatusIcon~ to render new outcomes + tree.
+- Update ~packages/coding-agent/src/task/index.ts~ summary builder (around lines 1868-1900) to:
+  - Inline ~structuredResult~ as JSON when serialized length < 5000 chars; else emit ~<structured-ref agent://...>~.
+  - Render ~textPreview~ section if present.
+  - Render ~spawnAudit~ block only when audit is non-trivial (per spec \u00a73.7).
+  - Render ~children~ as compact ~<child .../>~ refs (no recursive expansion at the parent envelope; root LLM follows ~resultUri~ for deeper inspection).
+- Recalibrate ~outcomeBreakdown~ summary header (e.g., ~3/5 completed, 1 policy-rejected, 1 depth-capped~).
+
+Out of scope:
+- Streaming pipeline (FEAT-E).
+- Consumer migration (FEAT-F).
+
+* Existing Patterns
+- Template: ~packages/coding-agent/src/prompts/tools/task-summary.md~ (current shape captured in spec section 1).
+- Renderer: ~packages/coding-agent/src/task/render.ts~ (~getStatusIcon~ at 39, ~renderAgentProgress~ at 196, ~renderAgentResult~ at 409).
+- Summary builder: ~packages/coding-agent/src/task/index.ts:1868-1918~.
+- Subagent viewer: ~packages/coding-agent/src/modes/components/subagent-viewer/viewer-component.ts~.
+- Theme + status icons: ~packages/coding-agent/src/modes/theme/theme.ts~.
+
+* Tests
+Workflow coverage:
+- Inline JSON < 5KB: assert ~<structured>~ block contains parsed JSON.
+- Large JSON >= 5KB: assert ~<structured-ref>~ contains the resultUri; no inline.
+- ~spawnAudit~ trivial-success case: not rendered.
+- ~spawnAudit~ rejection or depth-cap: rendered with audit fields.
+- ~children~ tree: each direct child appears as a compact ref; no recursive expansion.
+- New outcome badges visible (e.g., ~policy-rejected~ has distinct badge).
+
+Test files:
+- New: ~packages/coding-agent/test/task/envelope-render.test.ts~
+- Update: existing ~packages/coding-agent/test/task/render-report-finding.test.ts~ if rendering shape changes.
+
+* Implementation
+
+** Update task-summary.md template
+:PROPERTIES:
+:CUSTOM_ID: FEAT-598-envelope-rendering-structured-inlineuri::template
+:DEPENDS: FEAT-595-envelope-v2-types-foundation-subagentout::rewrite-singleresult FEAT-597-executor-tree-propagation-populate-struc::executor-populate
+:END:
+- File: ~packages/coding-agent/src/prompts/tools/task-summary.md~
+- Replace current ~<meta>~ + ~<preview>~/~<result>~ pattern with:
+  - ~<agent id agent outcome>~
+  - Conditional ~<spawn-audit>~ when ~spawnAuditRelevant~.
+  - Conditional ~<structured>~ inline when ~structuredInline~; else ~<structured-ref>{resultUri}</structured-ref>~.
+  - Conditional ~<preview>~ when ~textPreview~ truthy.
+  - Conditional ~<children count>~ enumerating refs only.
+- Header: ~{successCount}/{totalCount} outcomes{outcomeBreakdown} [{duration}]~ where ~outcomeBreakdown~ summarizes non-completed outcomes.
+
+** Compute structuredInline + outcomeBreakdown in summary builder
+:PROPERTIES:
+:CUSTOM_ID: FEAT-598-envelope-rendering-structured-inlineuri::summary-builder
+:DEPENDS: FEAT-598-envelope-rendering-structured-inlineuri::template
+:END:
+- File: ~packages/coding-agent/src/task/index.ts~ (lines 1868-1918 today).
+- For each result:
+  - ~structuredJson = result.structuredResult ? JSON.stringify(result.structuredResult, null, 2) : undefined~.
+  - ~structuredInline = structuredJson && structuredJson.length < 5_000~.
+  - ~spawnAuditRelevant = result.spawnAudit && (!result.spawnAudit.granted || result.outcome === "depth-capped")~.
+  - Render textPreview only when present (don't fabricate).
+- Compute ~outcomeBreakdown~: count non-completed outcomes; format ", N policy-rejected, N depth-capped, ..." (omit zero-count).
+
+** Update getStatusIcon + renderAgentProgress + renderAgentResult
+:PROPERTIES:
+:CUSTOM_ID: FEAT-598-envelope-rendering-structured-inlineuri::tui-render
+:DEPENDS: FEAT-595-envelope-v2-types-foundation-subagentout::rewrite-singleresult FEAT-596-subagentoutcome-enum-cutover-across-40-m::viewers
+:END:
+- File: ~packages/coding-agent/src/task/render.ts~.
+- Extend ~getStatusIcon~ with glyphs for: ~completed-empty~, ~crashed~, ~timeout~, ~cancelled~, ~policy-rejected~, ~depth-capped~, ~submit-result-missing~, ~schema-invalid~, ~gate_failed~, ~abandoned~. Pick distinct, accessible glyphs.
+- ~renderAgentProgress~: thread new outcomes through color/badge logic (success vs failure vs muted partition from FEAT-B).
+- ~renderAgentResult~: replace ~result.output~ usage (already replaced by FEAT-F) with ~result.textPreview~; render structured inline if present; show child count; show resultUri ref when ~textPreview~ omitted.
+
+** Render children compactly in TUI
+:PROPERTIES:
+:CUSTOM_ID: FEAT-598-envelope-rendering-structured-inlineuri::tui-children
+:DEPENDS: FEAT-598-envelope-rendering-structured-inlineuri::tui-render
+:END:
+- File: ~packages/coding-agent/src/task/render.ts~ (in ~renderAgentResult~).
+- After main result, append a compact "children: N (link agent://X)" line per child.
+- Do not recurse: parent renderer shows direct refs only; user expands via Ctrl+Tab subagent viewer.
+
+** Add envelope-render unit tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-598-envelope-rendering-structured-inlineuri::envelope-render-test
+:DEPENDS: FEAT-598-envelope-rendering-structured-inlineuri::summary-builder FEAT-598-envelope-rendering-structured-inlineuri::tui-children
+:END:
+- File: ~packages/coding-agent/test/task/envelope-render.test.ts~
+- Cases:
+  - Inline JSON renders inside ~<structured>~ when small.
+  - 6KB JSON renders only ~<structured-ref>~.
+  - ~spawnAudit~ trivial success: omitted.
+  - ~spawnAudit~ policy-rejected: visible with all fields.
+  - ~children~ refs render with id+outcome+uri.
+  - ~outcomeBreakdown~ header shows ~"3/5 outcomes, 1 policy-rejected, 1 aborted"~ etc.
+  - TUI: ~getStatusIcon~ returns distinct glyph per outcome.
+
+* Edge Cases
+- ~structuredResult~ that's a circular ref or BigInt: ~JSON.stringify~ fails; fall back to ~<structured-ref>~ with a warn marker.
+- ~textPreview~ contains newlines: keep them; preview-section renderer handles wrapping.
+- Header ~outcomeBreakdown~ when all completed: render simply ~"5/5 completed [duration]"~; no breakdown.
+- Subagent viewer (Ctrl+Tab) needs to surface ~children~ navigation. Initial scope: viewer shows child IDs; future PR adds in-viewer drill-down.
+- ~textPreview~ + ~structuredResult~ both present: render both, structured first (signal-rich), preview second (human-friendly tail).
+
+* Acceptance Criteria
+- ~bun check:ts~ green.
+- ~bun test packages/coding-agent/test/task/envelope-render.test.ts~ passes (8+ cases).
+- Manual: run a 2-deep delegation, observe envelope contains structured JSON for the leaf, refs for children.
+- Manual: induce a policy rejection; observe envelope shows ~spawnAudit~ block.
+
+* Verification
+- Snapshot: capture envelope text from a recorded fixture, diff vs golden file in repo.
+- Visual: subagent viewer shows new outcome glyphs distinctly.
+- Header: ~outcomeBreakdown~ formatting matches spec section 3.5.

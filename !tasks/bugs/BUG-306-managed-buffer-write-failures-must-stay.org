@@ -1,0 +1,151 @@
+#+TITLE: Managed-buffer write failures must stay atomic before save and truthful after save
+#+STATE: ITEM
+#+SESSION_ID: 14c0b494b244d6d1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T12-00-23-753Z_14c0b494b244d6d1.jsonl]]
+#+CUSTOM_ID: BUG-306-managed-buffer-write-failures-must-stay
+#+LAYER: packages/coding-agent,native
+#+DEPENDS: BUG-303-applymanagedbuffercontent-bypasses-callc
+
+* Initial Message
+
+✘ Write: 📝 specs/subagent-envelope-v2.md
+ ✘ Error: Managed code buffer update failed for /home/user/code/ora/spell/specs/subagent-envelope-v2.md:
+ /home/user/code/ora/spell/specs/subagent-envelope-v2.md: edit error: Edit batch would leave the buffer structurally invalid. Re-anchor the
+ target or include an explicit separator.
+
+
+^^^ what does this mean? could that have been saved?
+
+* Scope
+This item hardens the managed-buffer-backed create/write lifecycle used by `write` and the migrated text/edit patch flows.
+
+In scope:
+- Failed managed-buffer-backed create/write on supported files (`.ts`, `.rs`, `.py`, `.md`, `.org`, etc.) must preserve the disk contract:
+  - if the target file did not exist before the attempt, an error leaves no file behind
+  - if the target file existed before the attempt, an error leaves the exact prior bytes on disk
+- Distinguish pre-save failure from post-save cleanup failure. If bytes are already persisted and only managed-buffer invalidation/close fails afterward, the tool must report persisted success plus a warning, not a failed write.
+- Cover all callers that reuse `packages/coding-agent/src/tools/managed-code-buffer.ts`: `packages/coding-agent/src/tools/write.ts` and `packages/coding-agent/src/patch/index.ts`.
+- Add/extend native contract tests in `packages/natives/test/code-buffer.test.ts` for missing-file invalid-create and existing-file invalid-overwrite behavior.
+- Add/extend coding-agent regression tests for helper + tool behavior, including the motivating `specs/subagent-envelope-v2.md` style missing-file Markdown write case.
+
+Out of scope:
+- Multi-file atomicity.
+- Non-managed non-code writethrough paths.
+- Changing `force: true` semantics beyond keeping result classification truthful.
+- Reworking `code edit` public API shape.
+
+Rationale: current code explicitly allows a surfaced error after disk persistence (`"Edit succeeded on disk, but failed to invalidate the managed code buffer ..."` in `packages/coding-agent/src/tools/managed-code-buffer.ts`). The user-selected contract is stricter: errors mean no disk mutation; persisted writes must be reported as success with warning. Existing tests pin existing-file invalid-edit rollback, but missing-file invalid-create and post-save invalidation truthfulness are not yet covered.
+
+* Existing Patterns
+- `packages/coding-agent/src/tools/managed-code-buffer.ts`
+  - `applyManagedBufferContent(file, content, options)` is the single choke point for managed-buffer-backed whole-file persistence.
+  - `invalidateManagedCodeBuffersForPaths(paths)` currently throws after persistence if `close` fails; this is the truthfulness bug to remove.
+- `packages/coding-agent/src/tools/write.ts::WriteTool.execute(...)`
+  - current managed-buffer branch already routes supported-file writes through `applyManagedBufferContent(...)` and adds compatibility notices/diagnostics.
+  - current `force: true` path falls back to `Bun.write(...)` after invalidation and must keep truthful result classification.
+- `packages/coding-agent/src/patch/index.ts::EditTool.execute(...)`
+  - replace/hashline/final-write paths also call `applyManagedBufferContent(...)`; the same persistence contract must hold there.
+- `packages/natives/test/code-buffer.test.ts`
+  - already proves existing-file invalid edit is rejected before save and existing bytes remain unchanged.
+  - already proves missing supported files can be created through `edit` + `save`.
+  - extend this file rather than inventing a new native test style.
+- `crates/pi-code-engine/src/buffer.rs::BufferRegistry.open_or_create(...)`
+  - existing test `test_buffer_registry_open_or_create_missing_file` shows missing-file create starts as an in-memory empty buffer; this is the lowest-layer contract to preserve when a create attempt later fails.
+- `packages/coding-agent/src/session/edit-coordinator.ts::callCodeBuffer(...)`
+  - BUG-303 is the prerequisite sessionId fix for mutating helper calls. Reuse its session plumbing rather than introducing a second mutation path.
+
+* Tests
+User workflows to cover first:
+1. Missing-file Markdown create with structurally invalid content (the motivating `specs/subagent-envelope-v2.md` class): tool/helper errors, and the path does not exist after failure.
+2. Existing-file supported-source overwrite with structurally invalid content: tool/helper errors, and disk bytes match the exact pre-write content.
+3. Existing-file supported-source overwrite blocked by `WRITE_PARSE_REGRESSION` or `WRITE_SHRINK_BLOCKED`: disk bytes remain unchanged and no orphan temp/blank file appears.
+4. Successful missing-file create on supported files still persists exact bytes and does not require any cleanup shim.
+5. Post-save managed-buffer close/invalidation failure is surfaced as persisted success with an explicit warning/meta note, not as a failed write.
+6. The shared helper contract holds for both `write.ts` and `patch/index.ts` callers.
+
+Concrete verification targets:
+- `packages/natives/test/code-buffer.test.ts`
+- `packages/coding-agent/test/tools/managed-code-buffer-errors.test.ts`
+- `packages/coding-agent/test/tools/write-shrink-guard.test.ts`
+- `packages/coding-agent/test/tools.test.ts` and/or a new focused helper/write regression file if that is narrower.
+
+* Implementation
+** Add native regression coverage for missing-file failure atomicity
+:PROPERTIES:
+:CUSTOM_ID: BUG-306-managed-buffer-write-failures-must-stay::atomic-native-tests
+:END:
+- File: `packages/natives/test/code-buffer.test.ts`
+- Add failing tests before implementation for:
+  - missing-file supported create with structurally invalid content -> no file after failed edit/save path
+  - existing-file supported overwrite with invalid content -> unchanged bytes (keep existing coverage if already equivalent, but make the contract explicit)
+- If native behavior violates the contract, fix the violating Rust layer rather than papering over it in TypeScript.
+- Satisfies workflows 1, 2, 4.
+
+** Add coding-agent regression coverage for truthful helper/tool outcomes
+:PROPERTIES:
+:CUSTOM_ID: BUG-306-managed-buffer-write-failures-must-stay::atomic-agent-tests
+:DEPENDS: BUG-306-managed-buffer-write-failures-must-stay::atomic-native-tests
+:END:
+- Files:
+  - `packages/coding-agent/test/tools/managed-code-buffer-errors.test.ts`
+  - `packages/coding-agent/test/tools/write-shrink-guard.test.ts`
+  - `packages/coding-agent/test/tools.test.ts` or a narrower new test file if isolation is cleaner
+- Add failing tests for:
+  - missing-file `.md` helper/tool failure leaves no file
+  - post-save invalidation/close failure yields success + warning, not thrown failure
+  - shared helper behavior across `write.ts` and migrated patch paths remains truthful
+- Reuse real fs + real native buffer calls; avoid mocking away the persistence path.
+- Satisfies workflows 1, 3, 5, 6.
+
+** Remove post-save false-failure classification in managed-buffer helpers
+:PROPERTIES:
+:CUSTOM_ID: BUG-306-managed-buffer-write-failures-must-stay::truthful-post-save
+:DEPENDS: BUG-306-managed-buffer-write-failures-must-stay::atomic-agent-tests
+:END:
+- File: `packages/coding-agent/src/tools/managed-code-buffer.ts`
+- Change helper/result flow so errors are reserved for pre-persistence failures (`edit`, `replace_content`, guard rejection, save failure before bytes land, etc.).
+- If persistence succeeded and only `close`/invalidation fails afterward, return/surface warning metadata instead of throwing a failed-write error.
+- Preserve actionable wording: the user must still learn that managed-buffer invalidation failed and may need a reconcile/close step.
+- Keep one representation: no parallel “maybe-failed-but-persisted” error class.
+- Satisfies workflows 5, 6.
+
+** Apply the truthful contract to write + patch callers
+:PROPERTIES:
+:CUSTOM_ID: BUG-306-managed-buffer-write-failures-must-stay::propagate-truthful-results
+:DEPENDS: BUG-306-managed-buffer-write-failures-must-stay::truthful-post-save
+:END:
+- Files:
+  - `packages/coding-agent/src/tools/write.ts`
+  - `packages/coding-agent/src/patch/index.ts`
+- Update callers/result plumbing so persisted-success-with-warning is rendered as success plus meta/warning, not exception-driven failure.
+- Preserve existing compatibility notice + diagnostics behavior where bytes persist.
+- Ensure missing-file failure still leaves no file and existing-file failure still restores exact bytes.
+- Satisfies workflows 1-6.
+
+** Verify focused atomicity + truthfulness contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-306-managed-buffer-write-failures-must-stay::verify-atomicity-truthfulness
+:DEPENDS: BUG-306-managed-buffer-write-failures-must-stay::propagate-truthful-results
+:END:
+- Commands:
+  - `bun test packages/natives/test/code-buffer.test.ts`
+  - `bun test packages/coding-agent/test/tools/managed-code-buffer-errors.test.ts packages/coding-agent/test/tools/write-shrink-guard.test.ts`
+  - `bun test packages/coding-agent/test/tools.test.ts`
+  - `bun check:ts`
+- Manual proof:
+  - reproduce a missing-file Markdown write failure of the `specs/subagent-envelope-v2.md` class and confirm the failed attempt leaves no file behind
+  - reproduce a persisted-success cleanup warning path and confirm the tool reports success with warning, not failure
+
+* Edge Cases
+- Existing broken files: `WRITE_PARSE_REGRESSION` guard already skips when original content is broken; preserve that behavior while keeping byte-restoration truth.
+- Session plumbing: do not add a second sessionId path; BUG-303 remains the only session-propagation fix.
+- Force fallback: if `force: true` intentionally bypasses guards and bytes persist, any later cleanup failure is still success-with-warning, not failure.
+- Missing-parent-directory create failure must remain truthful if the underlying engine/kernel cannot materialize the path.
+- No blank/orphan artifact should remain after any surfaced failure on the managed-buffer create path.
+
+* Acceptance Criteria
+- Missing-file managed-buffer-backed failure leaves no file on disk.
+- Existing-file managed-buffer-backed failure leaves exact prior bytes on disk.
+- Any surfaced failure from `write` / migrated patch persistence implies no disk mutation.
+- Persisted writes with post-save invalidation problems surface as success plus warning/meta note.
+- Native + coding-agent regression tests above pass without weakening FEAT-585 shrink/parse guards.

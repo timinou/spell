@@ -1,0 +1,223 @@
+#+TITLE: SubagentOutcome enum cutover across ~40 match sites (AgentProgress, AsyncJob, Swarm, display string)
+#+STATE: ITEM
+#+SESSION_ID: 14c0a83e5a690b0f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-06-29-609Z_14c0a83e5a690b0f.jsonl]]
+#+CUSTOM_ID: FEAT-596-subagentoutcome-enum-cutover-across-40-m
+#+DEPENDS: FEAT-595-envelope-v2-types-foundation-subagentout
+#+LAYER: backend
+
+* Initial Message
+
+Ran actual runtime probes, not just tests.
+
+ Result:
+ - fake task sets → ✓ work to completion
+ - tasks that spawn subtasks → ✓ work, within spawn policy
+ - nested task → oracle → ✗ blocked by allowed-spawns policy, exact runtime error below
+
+ 1. fake task batch
+ - launched task(agent=oracle) with 2 read-only tasks
+ - batch completed 2/2 succeeded
+ - child results:
+     - inspectAgents → found bundled task, quick_task, oracle
+     - inspectSnapshots → confirmed warning string:
+           - No active plan snapshots for this session.
+ - runtime note:
+     - Task isolation was requested but task.isolation.mode="none"; running non-isolated. Set task.isolation.mode to worktree, fuse-overlay, or
+ fuse-projfs to enable.
+
+ 2. nested subtask batch, first try
+ - launched task(agent=task) with one parent task instructed to spawn subtasks via task(agent=oracle)
+ - parent task ran, but nested dispatch was rejected by policy
+ - exact runtime error:
+     - Nested task dispatch failed: agent=oracle is not allowed. Runtime error text: Cannot spawn 'oracle'. Allowed: explore,quick_task
+
+ ∴ this is not a crash; it's enforced spawn restriction.
+
+ 3. nested subtask batch, allowed path
+ - retried with task(agent=task) parent spawning task(agent=quick_task) children
+ - supplied required filesDeps
+ - batch completed end-to-end successfully
+
+ Exact nested success summary:
+
+ ```json
+   {
+     "success": true,
+     "nestedDispatch": "succeeded end-to-end",
+     "children": [
+       {
+         "id": "ChildA",
+         "agent": "quick_task",
+         "status": "completed",
+         "filesDeps": ["packages/coding-agent/src/task/agents.ts"],
+         "result": {
+           "confirmed": true,
+           "statement": "quick_task is bundled."
+         }
+       },
+       {
+         "id": "ChildB",
+         "agent": "quick_task",
+         "status": "completed",
+         "filesDeps": ["packages/coding-agent/src/task/index.ts"],
+         "result": {
+           "confirmed": true,
+           "evidence": "TaskTool.#validateTaskBatch rejects tasks lacking both assignment and todoRef."
+         }
+       }
+     ],
+     "runtimeNotes": []
+   }
+ ```
+
+ Repo evidence for expected behavior:
+ - child todo groups preserved: packages/coding-agent/src/tools/todo-write.ts:464
+ - nested delegated child rendering exists: packages/coding-agent/src/modes/interactive-mode.ts:886
+ - nested-depth isolation behavior covered: packages/coding-agent/test/task/nested-isolation-default.test.ts:79
+
+ Bottom line:
+ - normal fake task sets → ✓
+ - nested subtasks via task → ✓
+ - nested subtasks can spawn only allowed agents from parent agent policy
+ - for bundled task agent, current allowed nested spawns are:
+     - explore
+     - quick_task
+
+
+
+
+WHERE is the restriction on task type for subagent?
+
+* Scope
+In-scope:
+- Mechanical migration of the three fragmented enums and the composed display string to ~SubagentOutcome~.
+- Affected: ~AsyncJob.status~, ~SwarmNodeStatus~, the display-string composition at ~task/index.ts:1868-1875~, and every ~status === "..."~ matcher across the 40+ sites cataloged in ~specs/subagent-envelope-v2.md~ section 1.2 and 4.3.
+- Does NOT populate the richer new outcomes (~policy-rejected~, ~depth-capped~, ~submit-result-missing~, ~schema-invalid~, ~completed-empty~, ~crashed~, ~timeout~) at runtime; FEAT-C owns population.
+
+Out of scope:
+- New runtime outcomes (FEAT-C).
+- Envelope rendering (FEAT-D).
+- Streaming (FEAT-E).
+- Consumer migration for text/output field (FEAT-F).
+
+* Existing Patterns
+- Canonical enum lives in ~packages/coding-agent/src/task/types.ts~ (FEAT-A).
+- Status match sites catalog at ~specs/subagent-envelope-v2.md~ section 1.2.
+- Cutover reference files:
+  - ~packages/coding-agent/src/async/job-manager.ts~ lines 17-30, 100-150.
+  - ~packages/coding-agent/src/task/swarm-scheduler.ts~ lines 33-47, 88-99.
+  - ~packages/coding-agent/src/task/render.ts~ lines 39-52, 200-240, 409-433.
+  - ~packages/coding-agent/src/internal-urls/jobs-protocol.ts~ lines 100-108.
+  - ~packages/coding-agent/src/modes/components/subagent-viewer/viewer-component.ts~ lines 280-283.
+  - ~packages/coding-agent/src/modes/fluid-mode.ts~ lines 128-141.
+  - ~packages/coding-agent/src/task/index.ts~ lines 1868-1875 (display-string composition).
+
+* Tests
+Workflow coverage:
+- Each terminal outcome maps through every renderer without runtime error.
+- ~swarm-scheduler.isTerminal~ still returns true for every terminal outcome under ~SubagentOutcome~.
+- ~AsyncJobManager~ produces ~cancelled~ vs ~aborted~ correctly based on cause (distinct handling per ADR-5).
+- ~fluid-mode.syncGroupsFromScheduler~ mapping becomes identity (scheduler status is already ~SubagentOutcome~).
+
+Test files:
+- New: ~packages/coding-agent/test/task/outcome-mapping.test.ts~
+  - Table-driven: ~(exitCode, aborted, error, hasSubmitResult)~ \u2192 ~SubagentOutcome~ decision tree (mirrors spec section 3.1 + edge cases 5.1-5.7).
+- Update existing: ~packages/coding-agent/test/task/*.test.ts~ whose status assertions previously used the narrow enum \u2014 widen to ~SubagentOutcome~ where needed (no semantic change).
+
+* Implementation
+
+** Rewrite AsyncJob.status to SubagentOutcome
+:PROPERTIES:
+:CUSTOM_ID: FEAT-596-subagentoutcome-enum-cutover-across-40-m::asyncjob-status
+:DEPENDS: FEAT-595-envelope-v2-types-foundation-subagentout::rewrite-singleresult
+:END:
+- File: ~packages/coding-agent/src/async/job-manager.ts~
+- Replace ~status: "running" | "completed" | "failed" | "cancelled"~ with ~status: SubagentOutcome~.
+- In ~AsyncJobManager.register~: continue emitting ~cancelled~ where today's code does; emit ~aborted~ when cause is an AbortSignal (new distinction per ADR-5).
+- Fix any downstream checks that compare to literal strings (~=== "cancelled"~ remains valid under widened union).
+
+** Widen SwarmNodeStatus
+:PROPERTIES:
+:CUSTOM_ID: FEAT-596-subagentoutcome-enum-cutover-across-40-m::swarm-status
+:DEPENDS: FEAT-595-envelope-v2-types-foundation-subagentout::rewrite-singleresult
+:END:
+- File: ~packages/coding-agent/src/task/swarm-scheduler.ts~
+- Replace ~SwarmNodeStatus~ literal union with ~SubagentOutcome~ (re-export or type alias).
+- ~isTerminal(status)~: widen switch to include every terminal outcome (completed, completed-empty, failed, crashed, timeout, aborted, cancelled, policy-rejected, depth-capped, submit-result-missing, schema-invalid, gate_failed, abandoned).
+- ~markCompleted~/~markFailed~ unchanged (they set literals directly; still valid).
+
+** Rewrite envelope display-string composition
+:PROPERTIES:
+:CUSTOM_ID: FEAT-596-subagentoutcome-enum-cutover-across-40-m::envelope-status-string
+:DEPENDS: FEAT-595-envelope-v2-types-foundation-subagentout::rewrite-singleresult FEAT-596-subagentoutcome-enum-cutover-across-40-m::asyncjob-status FEAT-596-subagentoutcome-enum-cutover-across-40-m::swarm-status
+:END:
+- File: ~packages/coding-agent/src/task/index.ts~ lines 1868-1875.
+- Replace composed string (~"completed" | "failed (exit N)" | "cancelled" | "merge failed"~) with ~result.outcome~ pass-through.
+- Remove: the ternary chain that derives a display name from exitCode/aborted/error. Callers downstream now read ~outcome~ directly.
+
+** Rewrite jobs-protocol handler matching
+:PROPERTIES:
+:CUSTOM_ID: FEAT-596-subagentoutcome-enum-cutover-across-40-m::jobs-protocol
+:DEPENDS: FEAT-596-subagentoutcome-enum-cutover-across-40-m::asyncjob-status
+:END:
+- File: ~packages/coding-agent/src/internal-urls/jobs-protocol.ts~ lines 100-108.
+- Replace ~status === "completed" | "failed" | "cancelled"~ with full SubagentOutcome match.
+- Collapse failure-family outcomes (~failed~, ~crashed~, ~timeout~, ~policy-rejected~, ~depth-capped~, ~submit-result-missing~, ~schema-invalid~, ~gate_failed~, ~abandoned~) into the ~errorText~ path. Preserve ~aborted~/~cancelled~/~completed~ distinctions.
+
+** Rewrite fluid-mode group sync
+:PROPERTIES:
+:CUSTOM_ID: FEAT-596-subagentoutcome-enum-cutover-across-40-m::fluid-mode
+:DEPENDS: FEAT-596-subagentoutcome-enum-cutover-across-40-m::swarm-status
+:END:
+- File: ~packages/coding-agent/src/modes/fluid-mode.ts~ lines 128-141.
+- Delete the status mapping (was: ~completed stays completed; failed/gate_failed/abandoned/aborted -> failed~).
+- Replace with identity assignment \u2014 scheduler already emits ~SubagentOutcome~.
+
+** Widen subagent-viewer + render.ts matchers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-596-subagentoutcome-enum-cutover-across-40-m::viewers
+:DEPENDS: FEAT-595-envelope-v2-types-foundation-subagentout::rewrite-singleresult
+:END:
+- Files:
+  - ~packages/coding-agent/src/modes/components/subagent-viewer/viewer-component.ts~ lines 280-283.
+  - ~packages/coding-agent/src/task/render.ts~ lines 39-52 (~getStatusIcon~), 200-240 (~renderAgentProgress~), 409-433 (~renderAgentResult~).
+- ~getStatusIcon~: extend exhaustive switch; add glyphs for new outcomes. ~policy-rejected~, ~depth-capped~ use distinct badges per spec \u00a73.7 rendering policy (render.ts defines actual glyphs).
+- Viewer and progress rendering: widen the "success | failure | muted" tri-partition to route each new outcome appropriately:
+  - success group: ~completed~, ~completed-empty~.
+  - failure group: ~failed~, ~crashed~, ~timeout~, ~policy-rejected~, ~depth-capped~, ~submit-result-missing~, ~schema-invalid~, ~gate_failed~, ~abandoned~.
+  - muted/active: ~pending~, ~running~, ~aborted~, ~cancelled~.
+
+** Add outcome-mapping regression test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-596-subagentoutcome-enum-cutover-across-40-m::outcome-mapping-test
+:DEPENDS: FEAT-596-subagentoutcome-enum-cutover-across-40-m::envelope-status-string
+:END:
+- File: ~packages/coding-agent/test/task/outcome-mapping.test.ts~
+- Table-driven cases:
+  - ~(exitCode=0, aborted=false, error=undefined, hasSubmitResult=true)~ \u2192 ~completed~.
+  - ~(exitCode=0, hasSubmitResult=false)~ \u2192 ~submit-result-missing~.
+  - ~(exitCode=!=0, aborted=false, error="..."))~ \u2192 ~failed~.
+  - ~(aborted=true, abortReason="signal")~ \u2192 ~aborted~.
+  - ~(AsyncJob cancelled by user)~ \u2192 ~cancelled~.
+  - Swarm ~gate_failed~, ~abandoned~ remain distinct.
+- NOTE: full ~policy-rejected~, ~depth-capped~, ~schema-invalid~, ~crashed~, ~timeout~ require FEAT-C to populate; tests for those live in FEAT-F.
+
+* Edge Cases
+- ~aborted~ vs ~cancelled~: keep distinct per ADR-5. ~aborted~ emitted when AbortSignal path fires; ~cancelled~ when AsyncJob user action cancels.
+- ~fluid-mode.ts~ used to remap scheduler statuses; deletion must not break panel color rendering downstream. Verify fluid panel rendering after cutover.
+- Older call sites that accept only a subset of outcomes (e.g., viewer's success/failure/muted tri-partition): extend exhaustively per listing above.
+- Tests that assert display-string literals (~"completed"~, ~"failed (exit N)"~, etc.) must update to read ~outcome~ directly.
+
+* Acceptance Criteria
+- ~bun check:ts~ passes across ~packages/coding-agent/src~ after all sub-items land.
+- ~bun test packages/coding-agent/test/task/outcome-mapping.test.ts~ passes.
+- ~bun test packages/coding-agent/test/task/~ passes (modulo pre-existing PLAN-267 failures; do not worsen).
+- No occurrence of the narrow unions (~"pending" | "running" | "completed" | "failed" | "aborted"~) remains outside ~SubagentOutcome~ definition in ~types.ts~.
+- No display-string composition in ~task/index.ts:1868~; ~outcome~ passed through.
+
+* Verification
+- ~bun check:ts~ returns zero errors.
+- ~rg '"cancelled"\s*\|\s*"completed"' packages/coding-agent/src~ returns only the enum definition line.
+- ~bun test packages/coding-agent/test/task/outcome-mapping.test.ts~ green.
+- Manual: navigate subagent viewer; every outcome renders with a distinct color/badge.

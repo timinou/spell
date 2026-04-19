@@ -1,0 +1,96 @@
+#+TITLE: Auto-DAG on filesDeps overlap clean cutover
+#+STATE: ITEM
+#+SESSION_ID: 14c0a54ed68d3bdc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-53-40-058Z_14c0a54ed68d3bdc.jsonl]]
+#+CUSTOM_ID: PLAN-268-auto-dag-on-filesdeps-overlap-clean-cuto
+
+* Initial Message
+
+I want you to think a bit deeper than the fileDeps vs. lock. I don't want a global lock for all tasks, the pi-code-engine file locks should be enough in theory. Blocking subtask execution has often been my bane... Ask me a lot of questions and challenge me a lot
+
+* Goal
+
+Converge the sync and async task-scheduling paths by moving filesDeps
+mutual exclusion from runtime admission control (SwarmScheduler.canRun)
+into pre-run graph transformation (buildBatchGraph). Sibling subagents
+that declare overlapping filesDeps become an explicit DAG via implicit
+blockers, visible to the calling agent. Clean cutover: remove the old
+runtime overlap branch, no shims, no parallel APIs.
+
+* Motivation
+
+Observed divergence: sync path (SwarmScheduler.pump) honors filesDeps
+overlap; async/background path (task/index.ts scheduleReadyTasks)
+admits tasks by maxConcurrency + blockers only. A race reproducible
+with sibling quick_task subagents writing to the same file via bash is
+actually diagnosis of a deeper asymmetry. Fixing it at the admission
+layer would duplicate logic; fixing it at graph-build time unifies both
+paths for free and teaches the caller agent what the scheduler did.
+
+* Contract changes
+
+** Caller-visible
+- Task tool result text prepends a note when implicit blockers were
+  added: "Note: reorganized N tasks into dependency chains due to
+  filesDeps overlap. Implicit blockers: [T2<-T1 (src/a.ts), T3<-T2 (src/)]."
+- Structured result gains implicit_blockers array: [{ to, from, reason }].
+- quick_task continues to require filesDeps (unchanged policy).
+- General task with empty filesDeps: treated as declaring nothing;
+  runs in parallel; caller accepts responsibility (flipped from the
+  prior "touches everything" runtime semantic).
+
+** Internal
+- MutableDag.hasFileOverlap becomes subtree-aware and path-normalized.
+- buildBatchGraph emits implicitBlockers and injects implicit edges.
+- SwarmScheduler.canRun loses its filesDeps branch entirely.
+- task/index.ts async path unchanged in code; gains correct behavior
+  because its readyQueue is now derived from a graph that already
+  materializes overlap as blockers.
+
+* Overlap semantics
+
+- paths normalized to absolute, trailing slashes stripped
+- overlap(Ai, Aj) := for any p in Ai.filesDeps, any q in Aj.filesDeps:
+    p == q
+  OR p is an ancestor directory of q
+  OR q is an ancestor directory of p
+- empty filesDeps: NO overlap contribution; the task runs unconstrained
+  (policy flip; old code treated empty as "touches everything")
+- overlap ordering: pair (i,j) with i<j in declaration order => i blocks j
+- implicit edges deduplicated against explicit blockers
+
+* Non-goals
+
+- Routing write tool's non-code path through coord (future)
+- Forcing bash through coord (never)
+- Mtime/hash-based optimistic concurrency (not needed when scheduler
+  guarantees no same-file concurrency for declared filesDeps)
+
+* Risk
+
+- Behavioral change for callers that relied on empty-filesDeps runtime
+  serialization as a safety net. Mitigation: quick_task already
+  validates filesDeps; task tool has no existing callers relying on
+  this, per repo grep.
+- Over-serialization when directory entries are declared conservatively.
+  Mitigation: subtree overlap is exactly what directory entries ask
+  for semantically; callers that want parallelism must declare file-
+  level filesDeps.
+
+* Execution waves
+- [[id:FEAT-589-subtree-aware-hasfileoverlap-with-path-n]] Wave 1: Subtree-aware hasFileOverlap
+- [[id:FEAT-590-auto-dag-in-buildbatchgraph-with-implici]] Wave 2: Auto-DAG in buildBatchGraph + implicit blocker metadata (depends on Wave 1)
+- [[id:FEAT-591-remove-filesdeps-branch-from-swarmschedu]] Wave 3: Remove filesDeps branch from SwarmScheduler.canRun (depends on Wave 2)
+- [[id:FEAT-592-surface-implicit-blockers-in-task-tool-r]] Wave 4: Surface implicit blockers in TaskTool result (depends on Wave 2)
+- [[id:FEAT-594-regression-tests-for-sync-and-async-over]] Wave 5: Regression tests for sync and async overlap (depends on Waves 1-4)
+* Acceptance
+
+- bun check passes
+- bun test packages/coding-agent/test/task/ passes
+- New test: two sibling quick_task with same filesDeps run serially
+  regardless of sync vs async path
+- New test: directory filesDeps (src/) blocks file filesDeps (src/foo.ts)
+- New test: empty filesDeps runs unserialized
+- Removed: old filesdeps-lock-repro assertions that encoded runtime mutex
+- Grep confirms SwarmScheduler.canRun no longer mentions hasFileOverlap
+  or filesDeps

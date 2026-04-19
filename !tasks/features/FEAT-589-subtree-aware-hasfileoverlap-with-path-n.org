@@ -1,0 +1,44 @@
+#+TITLE: Subtree-aware hasFileOverlap with path normalization
+#+STATE: ITEM
+#+SESSION_ID: 14c0a54ed68d3bdc
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-53-40-058Z_14c0a54ed68d3bdc.jsonl]]
+#+CUSTOM_ID: FEAT-589-subtree-aware-hasfileoverlap-with-path-n
+#+LAYER: coding-agent
+
+* Initial Message
+
+I want you to think a bit deeper than the fileDeps vs. lock. I don't want a global lock for all tasks, the pi-code-engine file locks should be enough in theory. Blocking subtask execution has often been my bane... Ask me a lot of questions and challenge me a lot
+
+* Target
+- packages/coding-agent/src/task/mutable-dag.ts
+  - MutableDag.hasFileOverlap
+  - Helper: normalizeOverlapPath (new, non-exported)
+
+* Change
+- Rewrite hasFileOverlap(leftId, rightId) to be subtree-aware:
+  - Normalize each path: resolve to absolute (treat cwd-relative as absolute from process.cwd()), strip trailing slash.
+  - Overlap(P, Q) := P == Q OR P is ancestor-dir of Q OR Q is ancestor-dir of P
+  - Empty filesDeps on either side: return false (no overlap contribution). This is the policy flip; old "empty = touches everything" goes away here.
+- Pair check: any p in left.filesDeps and any q in right.filesDeps overlap by the predicate above.
+
+* Edge Cases
+- Windows-style paths are not a current concern; stay POSIX.
+- Symlinks: do not resolve; use path-string semantics. Overlap is a best-effort hint, not a filesystem promise.
+- Duplicate entries: already deduped by caller; do not dedupe here.
+
+* Acceptance
+- New unit tests in packages/coding-agent/test/task/mutable-dag.test.ts (or new file mutable-dag-overlap.test.ts) covering:
+  - exact same path overlap
+  - directory ancestor overlap (/a/src vs /a/src/foo.ts)
+  - sibling directories do not overlap (/a/src vs /a/lib)
+  - trailing-slash normalization (/a/src/ vs /a/src)
+  - empty filesDeps on either side returns false
+- bun test packages/coding-agent/test/task/ passes.
+
+* Implementation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-589-subtree-aware-hasfileoverlap-with-path-n::implementation
+:END:
+1. Add normalizeOverlapPath helper in mutable-dag.ts: resolve cwd-relative to absolute via path.resolve, strip trailing slash via replace, return the canonical string.
+2. Rewrite MutableDag.hasFileOverlap to apply normalizeOverlapPath to every entry, then check the subtree predicate (P == Q OR P startsWith Q + sep OR Q startsWith P + sep). Empty filesDeps on either side returns false.
+3. Add unit tests in packages/coding-agent/test/task/mutable-dag.test.ts covering identical paths, directory-ancestor overlap, sibling directories (no overlap), trailing-slash normalization, and empty-deps returning false.

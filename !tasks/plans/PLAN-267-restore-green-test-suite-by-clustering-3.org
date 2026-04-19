@@ -123,3 +123,8 @@ Five BUGs. Each carries a structural production change or an invariant investiga
 - [[id:BUG-299-subagentviewercomponent-depends-on-unini]] \u2014 theme DI refactor
 - [[id:BUG-298-async-task-blocker-scheduling-stalls-aft]] \u2014 scheduler bug fix
 - [[id:BUG-297-swarmblackboard-read-returns-only-the-la]] \u2014 diagnose + fix at invariant site
+
+
+* NOTE: 2026-04-19 BUG-305 landed under PLAN-269, so PLAN-267 is not stale.
+
+* NOTE: 2026-04-19 BUG-303 landed under PLAN-269, so dependency tracking is not stale.
