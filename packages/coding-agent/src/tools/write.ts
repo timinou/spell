@@ -118,9 +118,11 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			if (isCodeToolSupportedPath(absolutePath)) {
 				if (!force) {
 					const { evaluateWriteGuards } = await import("./managed-buffer-guards");
-					const guardResult = await evaluateWriteGuards(absolutePath, content);
+					const guardResult = evaluateWriteGuards(absolutePath, content);
 					if (!guardResult.ok) {
-						throw new Error(`Managed code buffer update blocked for ${path}: ${guardResult.code}: ${guardResult.detail}. Use code edit or force: true to bypass.`);
+						throw new Error(
+							`Managed code buffer update blocked for ${path}: ${guardResult.code}: ${guardResult.detail}. Use code edit or force: true to bypass.`,
+						);
 					}
 				} else {
 					bypassNotice = `\nBypassed WRITE_SHRINK_BLOCKED and WRITE_PARSE_REGRESSION.`;
@@ -132,9 +134,20 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				invalidateFsScanAfterWrite(absolutePath);
 				const diagnostics = await this.#getManagedBufferDiagnostics(absolutePath, content, signal);
 				if (!diagnostics) {
-					return { content: [{ type: "text", text: `${resultText}\n${compatibilityNotice}${bypassNotice}` }], details: {} };
+					return {
+						content: [{ type: "text", text: `${resultText}\n${compatibilityNotice}${bypassNotice}` }],
+						details: {},
+					};
 				}
-				return { content: [{ type: "text", text: `${resultText}\n${compatibilityNotice}${bypassNotice}` }], details: { diagnostics, meta: outputMeta().diagnostics(diagnostics.summary, diagnostics.messages ?? []).get() } };
+				return {
+					content: [{ type: "text", text: `${resultText}\n${compatibilityNotice}${bypassNotice}` }],
+					details: {
+						diagnostics,
+						meta: outputMeta()
+							.diagnostics(diagnostics.summary, diagnostics.messages ?? [])
+							.get(),
+					},
+				};
 			}
 
 			const batchRequest = getLspBatchRequest(context?.toolCall);

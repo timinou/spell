@@ -140,7 +140,11 @@ export class SwarmScheduler<T extends SwarmNodeLike> {
 		};
 
 		const canRun = (id: string): boolean => {
-			if (!this.#isolationMode) return true;
+			// File-level mutual exclusion always runs, independent of isolationMode.
+			// isolationMode controls tree-isolation (worktree/fuse-overlay); it
+			// does NOT gate whether two subagents touching the same file may
+			// run concurrently. A node that declares no filesDeps is treated as
+			// touching everything and must serialize against any running neighbor.
 			const candidate = this.#dag.getNode(id);
 			if (!candidate) return false;
 			const candidateFiles = normalizeFiles(candidate.filesDeps);
