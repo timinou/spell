@@ -1,5 +1,5 @@
 #+TITLE: Close out cross-session edit coordination
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14c0b265a752cb07
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-50-51-293Z_14c0b265a752cb07.jsonl]]
 #+CUSTOM_ID: PLAN-269-close-out-cross-session-edit-coordinatio
@@ -99,3 +99,22 @@ Three items with no inter-dependency; dispatch three delegated subagents.
 - Windows named-pipe support.
 - Patch-mode lifecycle convergence (BUG-267, separate plan).
 - The remaining ten PLAN-267 test cluster BUGs (those are orthogonal).
+
+** Completion [2026-04-19]
+*** Verification
+- `bun test packages/coding-agent/test/tools/managed-code-buffer-errors.test.ts` → passed (3 tests).
+- `bun test packages/coding-agent/test/tools/code.test.ts` → passed (22 tests).
+- `bun test packages/coding-agent/test/session/edit-coordinator.test.ts packages/coding-agent/test/tools/code-result-peer-footer.test.ts` → passed (7 tests).
+- `cargo test -p pi-code-engine --test coord_two_session` → passed.
+- `cargo test -p pi-edit-broker --test spawn` → passed.
+- `cargo test --workspace` → passed.
+- `bun check` → passed after formatting/follow-up type fix (`SessionIdSource` widened to allow undefined in test stubs; managed-buffer retained explicit read-only native calls via `piNatives.executeCodeBuffer`).
+- `bun --cwd=packages/natives run dev:native` → passed; rebuilt `packages/natives/native/pi_natives.dev.node`.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` → failed on pre-existing unrelated warnings-as-errors outside this plan scope (`crates/pi-code-graph/src/language/{elixir,typescript}.rs`, `crates/pi-code-graph/src/chunking.rs`, plus test-only clippy findings in `crates/pi-natives/src/code_graph.rs` / `embedding_worker.rs`). FEAT-593 noted the same blocker truthfully.
+*** Artifacts
+- Docs artifact: `specs/edit-coordination/loro-phase2-spike.md`.
+- Docs artifact: `specs/edit-coordination/design.md` (`## Phase 1 landed (2026-04-19)`).
+- Org evidence recorded directly in child items: `BUG-303`, `BUG-305`, `FEAT-577`, `FEAT-578`, `FEAT-579`, `FEAT-580`, `FEAT-593`, `FUP-060`, `FUP-061`, `FUP-062`, `FUP-063`, `FUP-064`, `FUP-065`, `PLAN-254`, `PLAN-259`.
+- Git commit: `59403addd` (`fix(coding-agent): close out cross-session edit coordination`).
+*** Deviations
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` remains red for pre-existing unrelated issues outside the touched coord closeout files. Plan state kept truthful by documenting the blocker in this report and in `FEAT-593`; no scoped coord regression remained.
