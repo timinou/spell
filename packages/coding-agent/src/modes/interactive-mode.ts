@@ -1362,7 +1362,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		let autoInitialized = false;
 		if ((options.waves?.length ?? 0) > 0) {
-			const groups = planWavesToTodoGroups(options.waves ?? []);
+			const groups = planWavesToTodoGroups(options.waves ?? [], approvedOrgItemId || undefined);
 			if (groups.length > 0) {
 				this.session.setTodoGroups(groups, { reset: true });
 				autoInitialized = true;
@@ -1837,6 +1837,10 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleJobsCommand(): Promise<void> {
 		return this.#commandController.handleJobsCommand();
+	}
+
+	handleSnapshotsCommand(): Promise<void> {
+		return this.#commandController.handleSnapshotsCommand();
 	}
 
 	handleUsageCommand(reports?: UsageReport[] | null): Promise<void> {

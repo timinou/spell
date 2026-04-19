@@ -20,15 +20,19 @@ import { join } from "node:path";
 import { evaluateWriteGuards } from "@oh-my-pi/pi-coding-agent/tools/managed-buffer-guards";
 
 function bigParseableSource() {
-	return "export const keep_" + "x".repeat(10) + " = 1;\n".repeat(4000);
+	return `export const keep_${"x".repeat(10)}${" = 1;\n".repeat(4000)}`;
 }
 
 const PARSEABLE_STUB = `import * as x from "node:fs";\nimport * as y from "node:path";\n`;
 
 describe("evaluateWriteGuards contract", () => {
 	let dir: string;
-	beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "guard-contract-")); });
-	afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "guard-contract-"));
+	});
+	afterEach(() => {
+		rmSync(dir, { recursive: true, force: true });
+	});
 
 	it("blocks ~97% shrink of an existing code-supported file on disk", () => {
 		const file = join(dir, "big.ts");

@@ -25,6 +25,7 @@ import { PythonExecutionComponent } from "../../modes/components/python-executio
 import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import { buildHotkeysMarkdown } from "../../modes/utils/hotkeys-markdown";
+import { listPlanSnapshots } from "../../orchestrators/fluid/wave-snapshot";
 import type { AsyncJobSnapshotItem } from "../../session/agent-session";
 import type { AuthStorage } from "../../session/auth-storage";
 import { outputMeta } from "../../tools/output-meta";
@@ -445,6 +446,28 @@ export class CommandController {
 			}
 		}
 
+		this.ctx.chatContainer.addChild(new Spacer(1));
+		this.ctx.chatContainer.addChild(new Text(info.trimEnd(), 1, 0));
+		this.ctx.ui.requestRender();
+	}
+
+	async handleSnapshotsCommand(): Promise<void> {
+		const planId = this.ctx.session.getTodoGroups().find(group => group.planItemId)?.planItemId;
+		if (!planId) {
+			this.ctx.showWarning("No active plan snapshots for this session.");
+			return;
+		}
+		const snapshots = await listPlanSnapshots(this.ctx.sessionManager.getCwd(), planId);
+		if (snapshots.length === 0) {
+			this.ctx.showWarning(`No snapshots found for ${planId}.`);
+			return;
+		}
+		let info = `${theme.bold("Plan Snapshots")}\n\n`;
+		for (const snapshot of snapshots) {
+			info += `${theme.fg("dim", `wave-${snapshot.waveNumber}`)} ${snapshot.ref}\n`;
+			info += `  ${theme.fg("dim", `git restore --source=${snapshot.ref} -- <path>`)}\n`;
+		}
+		info += `\n${theme.fg("dim", "Cleanup: git update-ref -d <ref>")}`;
 		this.ctx.chatContainer.addChild(new Spacer(1));
 		this.ctx.chatContainer.addChild(new Text(info.trimEnd(), 1, 0));
 		this.ctx.ui.requestRender();

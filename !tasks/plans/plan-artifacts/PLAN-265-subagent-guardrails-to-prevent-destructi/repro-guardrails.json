@@ -1,0 +1,11 @@
+{
+  "snapshot": {
+    "created": true,
+    "ref": "refs/spell/plan/PLAN-265-REPRO/wave-1",
+    "commit": "omitted-in-artifact"
+  },
+  "refCommit": "omitted-in-artifact",
+  "refContent": "wave-1",
+  "outOfScope": "OUT_OF_SCOPE_MUTATION: Sandbox policy blocks writes to '/tmp/plan265-repro-2D5C8I/src/other.ts'. Allowed paths: /tmp/plan265-repro-2D5C8I/src/allowed.ts",
+  "shrinkBlocked": "Managed code buffer update blocked for /tmp/plan265-repro-2D5C8I/src/buffer.rs: WRITE_SHRINK_BLOCKED: write would shrink /tmp/plan265-repro-2D5C8I/src/buffer.rs from 2160 bytes to 11 bytes (floor 216). Use code edit or force: true to bypass."
+}

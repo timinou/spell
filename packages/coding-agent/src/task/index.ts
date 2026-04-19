@@ -730,17 +730,27 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		}
 		const selectedAgent = this.#discoveredAgents.find(agent => agent.name === params.agent);
 		if (selectedAgent?.scopeRestricted) {
-			const taskFilesDeps = rawTasks.flatMap(task => task.filesDeps ?? []);
-			if (taskFilesDeps.length === 0) {
+			const missingFilesDeps = rawTasks
+				.filter(task => !task.filesDeps || task.filesDeps.length === 0)
+				.map(task => task.id);
+			if (missingFilesDeps.length > 0) {
 				return {
-					content: [{ type: "text", text: "QUICK_TASK_MISSING_FILESDEPS" }],
+					content: [
+						{
+							type: "text",
+							text: `QUICK_TASK_MISSING_FILESDEPS: ${missingFilesDeps.join(", ")}`,
+						},
+					],
 					details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
 				};
 			}
 		}
 		const resolvedFilesDeps = rawTasks.map(task => ({
 			...task,
-			filesDeps: task.filesDeps?.map(file => path.resolve(this.session.cwd, file)),
+			filesDeps: task.filesDeps?.map(file => {
+				const resolved = path.resolve(this.session.cwd, file);
+				return file.endsWith("/") || file.endsWith(path.sep) ? `${resolved}${path.sep}` : resolved;
+			}),
 		}));
 		const rawTasksForDispatch = resolvedFilesDeps;
 		const taskValidationError = this.#validateTaskBatch(rawTasks);
@@ -1159,7 +1169,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const taskDepth = this.session.taskDepth ?? 0;
 		const resolvedTaskFilesDeps = params.tasks?.map(task => ({
 			...task,
-			filesDeps: task.filesDeps?.map(file => path.resolve(this.session.cwd, file)),
+			filesDeps: task.filesDeps?.map(file => {
+				const resolved = path.resolve(this.session.cwd, file);
+				return file.endsWith("/") || file.endsWith(path.sep) ? `${resolved}${path.sep}` : resolved;
+			}),
 		}));
 		const autoIsolationReason = (() => {
 			if (taskDepth < 1 || isolationMode === "none" || explicitIsolation !== undefined) return undefined;
@@ -1493,6 +1506,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
 						settings: this.session.settings,
+						sandboxPolicy: this.session.sandboxPolicy,
+						filesDeps: taskExecution.filesDeps,
 						mcpManager: this.session.mcpManager,
 						contextFiles,
 						skills: availableSkills,
@@ -1545,6 +1560,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
 						settings: this.session.settings,
+						sandboxPolicy: this.session.sandboxPolicy,
+						filesDeps: taskExecution.filesDeps,
 						mcpManager: this.session.mcpManager,
 						contextFiles,
 						skills: availableSkills,

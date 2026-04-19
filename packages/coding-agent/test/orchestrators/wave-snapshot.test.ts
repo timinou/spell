@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
-import { $ } from "bun";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { $ } from "bun";
 
 import { createWaveSnapshot, listPlanSnapshots } from "../../src/orchestrators/fluid/wave-snapshot";
 
@@ -51,7 +51,8 @@ describe("wave snapshot", () => {
 			expect(headAfter).toBe(headBefore);
 
 			const ref = (await $`git rev-parse refs/spell/plan/PLAN-2/wave-2`.cwd(repo).quiet().text()).trim();
-			expect(ref).toBe(result.commit);
+			expect(result.commit).toBeDefined();
+			expect(ref).toBe(result.commit!);
 			expect(ref).not.toBe(headBefore);
 		} finally {
 			await rm(repo, { recursive: true, force: true });

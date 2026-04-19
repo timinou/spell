@@ -1,5 +1,5 @@
 #+TITLE: Quick_task filesDeps scope sentinel for mutating tool calls
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c07eaaa046a608
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T08-04-50-433Z_14c07eaaa046a608.jsonl]]
 #+CUSTOM_ID: FEAT-586-quick-task-filesdeps-scope-sentinel-for
@@ -110,3 +110,5 @@ Scenarios:
 - Manual repro: dispatch a `quick_task` batch without `filesDeps` → tool error at dispatch time, no subagent spawned, no wasted API calls.
 - Manual repro (reproduce the original failure): dispatch quick_task with `filesDeps: ["packages/natives/src/code-buffer/types.ts"]` and an assignment that the subagent might misinterpret as "rewrite buffer.rs" → its attempted `write` to `crates/pi-code-engine/src/buffer.rs` is returned as `OUT_OF_SCOPE_MUTATION`.
 - Grep audit: zero occurrences of `write` / `edit` without scope enforcement in quick_task tool path.
+
+NOTE [2026-04-19]: Implemented quick_task scopeRestricted frontmatter/parsing, filesDeps-required dispatch validation, scope-restricted sandbox policy for subagent writes, and regression tests.

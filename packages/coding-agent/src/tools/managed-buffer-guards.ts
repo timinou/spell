@@ -1,4 +1,6 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { executeCodeBuffer } from "@oh-my-pi/pi-natives";
 import { isCodeToolSupportedPath } from "./code-supported-files";
 
@@ -20,6 +22,36 @@ const SHRINK_GUARD_MIN_BYTES = 256;
 const SHRINK_GUARD_FLOOR_BYTES = 64;
 /** Ratio floor: the new size must not drop below this fraction of the old size. */
 const SHRINK_GUARD_RATIO = 0.1;
+const PARSE_PROBE_SESSION_ID = "write-guard-parse-probe";
+
+function extractEditFailure(output: unknown): boolean {
+	if (!output || typeof output !== "object" || Array.isArray(output)) return false;
+	const status = Reflect.get(output, "status");
+	if (status !== "failed" && status !== "partial") return false;
+	const fileResults = Reflect.get(output, "fileResults");
+	if (!Array.isArray(fileResults)) return true;
+	return fileResults.some(entry => entry && typeof entry === "object" && Reflect.get(entry, "status") === "failed");
+}
+
+function probesAsStructurallyValid(sourcePath: string, initialContent: string, nextContent: string): boolean {
+	const tempDir = mkdtempSync(path.join(tmpdir(), "write-guard-parse-"));
+	const probePath = path.join(tempDir, path.basename(sourcePath));
+	writeFileSync(probePath, initialContent);
+	try {
+		const result = executeCodeBuffer({
+			command: "replace_content",
+			file: probePath,
+			content: nextContent,
+			sessionId: PARSE_PROBE_SESSION_ID,
+		});
+		if (result.error || extractEditFailure(result.output)) return false;
+		const save = executeCodeBuffer({ command: "save", file: probePath, sessionId: PARSE_PROBE_SESSION_ID });
+		return save.error !== true;
+	} finally {
+		executeCodeBuffer({ command: "close", file: probePath });
+		rmSync(tempDir, { recursive: true, force: true });
+	}
+}
 
 /**
  * Gate catastrophic overwrites of existing code-supported source files.
@@ -74,6 +106,16 @@ export function evaluateWriteGuards(absolutePath: string, newContent: string): W
 				detail: `write would shrink ${absolutePath} from ${oldSize} bytes to ${newSize} bytes (floor ${floor})`,
 			};
 		}
+	}
+
+	const oldContent = readFileSync(absolutePath, "utf8");
+	const oldParses = probesAsStructurallyValid(absolutePath, "", oldContent);
+	if (oldParses && !probesAsStructurallyValid(absolutePath, oldContent, newContent)) {
+		return {
+			ok: false,
+			code: "WRITE_PARSE_REGRESSION",
+			detail: `write would introduce structural parse failures for ${absolutePath}`,
+		};
 	}
 
 	return { ok: true };

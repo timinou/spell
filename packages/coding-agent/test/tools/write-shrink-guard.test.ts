@@ -32,9 +32,9 @@ describe("WriteTool managed-buffer guards", () => {
 		const original = "pub fn keep() -> u32 { 1 }\n".repeat(80);
 		writeFileSync(file, original);
 		const tool = new WriteTool(createSession(dir) as never);
-		const result = await tool.execute("call-1", { path: file, content: "PLACEHOLDER" } as never);
-		expect(result.content[0]?.type).toBe("text");
-		expect((result.content[0] as { type: "text"; text: string }).text).toContain("WRITE_SHRINK_BLOCKED");
+		await expect(tool.execute("call-1", { path: file, content: "PLACEHOLDER" } as never)).rejects.toThrow(
+			"WRITE_SHRINK_BLOCKED",
+		);
 		expect(readFileSync(file, "utf8")).toBe(original);
 	});
 
@@ -76,9 +76,9 @@ describe("WriteTool managed-buffer guards", () => {
 		const original = "pub fn keep() -> u32 { 1 }\n";
 		writeFileSync(file, original);
 		const tool = new WriteTool(createSession(dir) as never);
-		const result = await tool.execute("call-1", { path: file, content: "pub fn broken() {\n" } as never);
-		expect(result.content[0]?.type).toBe("text");
-		expect((result.content[0] as { type: "text"; text: string }).text).toContain("WRITE_PARSE_REGRESSION");
+		await expect(tool.execute("call-1", { path: file, content: "pub fn broken() {\n" } as never)).rejects.toThrow(
+			"WRITE_PARSE_REGRESSION",
+		);
 		expect(readFileSync(file, "utf8")).toBe(original);
 	});
 
@@ -102,7 +102,9 @@ describe("WriteTool managed-buffer guards", () => {
 
 		const result = await tool.execute("call-1", { path: file, content: "PLACEHOLDER", force: true } as never);
 		expect(result.content[0]?.type).toBe("text");
-		expect((result.content[0] as { type: "text"; text: string }).text).toContain("Bypassed WRITE_SHRINK_BLOCKED and WRITE_PARSE_REGRESSION.");
+		expect((result.content[0] as { type: "text"; text: string }).text).toContain(
+			"Bypassed WRITE_SHRINK_BLOCKED and WRITE_PARSE_REGRESSION.",
+		);
 		expect(readFileSync(file, "utf8")).toBe("PLACEHOLDER");
 	});
 

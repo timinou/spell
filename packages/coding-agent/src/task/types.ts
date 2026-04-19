@@ -41,6 +41,12 @@ export const taskItemSchema = Type.Object({
 	description: Type.String({
 		description: "Short one-liner for UI display only — not seen by the subagent",
 	}),
+	filesDeps: Type.Optional(
+		Type.Array(Type.String(), {
+			description:
+				"Files this task may mutate. Required for scope-restricted agents; trailing slash grants directory-prefix scope.",
+		}),
+	),
 	assignment: Type.Optional(
 		Type.String({
 			description:
@@ -99,7 +105,8 @@ const createTaskSchema = (options: { isolationEnabled: boolean }) => {
 			...properties,
 			isolated: Type.Optional(
 				Type.Boolean({
-					description: "Run in isolated environment; explicit opt-in. Nested tasks may be auto-coerced to isolated by heuristics when needed. Returns patches. Use when tasks edit overlapping files.",
+					description:
+						"Run in isolated environment; explicit opt-in. Nested tasks may be auto-coerced to isolated by heuristics when needed. Returns patches. Use when tasks edit overlapping files.",
 				}),
 			),
 		});

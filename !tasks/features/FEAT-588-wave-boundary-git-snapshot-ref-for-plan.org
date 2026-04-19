@@ -1,5 +1,5 @@
 #+TITLE: Wave-boundary git snapshot ref for plan orchestration
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c07eaaa046a608
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T08-04-50-433Z_14c07eaaa046a608.jsonl]]
 #+CUSTOM_ID: FEAT-588-wave-boundary-git-snapshot-ref-for-plan
@@ -124,3 +124,5 @@ Scenarios:
 - Manual destructive repro: after wave-1 snapshot, have a subagent clobber `foo.txt`. Run `git restore --source=refs/spell/plan/<id>/wave-1 -- foo.txt` -> wave-1 content restored.
 - `/snapshots` command inside an active session shows the refs.
 - Grep audit: no new global mutable state outside `session.waveSnapshots`.
+
+NOTE [2026-04-19]: Implemented plan wave metadata, non-HEAD-moving wave snapshot refs, todo-write promotion hook integration, session snapshot tracking, /snapshots command surface, and snapshot tests.

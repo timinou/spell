@@ -318,6 +318,14 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 		},
 	},
 	{
+		name: "snapshots",
+		description: "Show plan wave snapshot refs",
+		handle: async (_command, runtime) => {
+			await runtime.ctx.handleSnapshotsCommand();
+			runtime.ctx.editor.setText("");
+		},
+	},
+	{
 		name: "usage",
 		description: "Show provider usage and limits",
 		handle: async (_command, runtime) => {

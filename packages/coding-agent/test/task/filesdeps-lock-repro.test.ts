@@ -66,16 +66,19 @@ function instrumentedRunner(maxSeen: { value: number }) {
 
 describe("filesDeps lock (RED while scheduler ignores overlap without isolationMode)", () => {
 	test("two nodes with overlapping filesDeps must not be in-flight simultaneously", async () => {
-		const scheduler = new SwarmScheduler<NodeLike>([
-			["A", node(["packages/coding-agent/src/tools/todo-write.ts"])],
-			["B", node(["packages/coding-agent/src/tools/todo-write.ts"])],
-		], { maxConcurrency: 4, isolationMode: false });
+		const scheduler = new SwarmScheduler<NodeLike>(
+			[
+				["A", node(["packages/coding-agent/src/tools/todo-write.ts"])],
+				["B", node(["packages/coding-agent/src/tools/todo-write.ts"])],
+			],
+			{ maxConcurrency: 4, isolationMode: false },
+		);
 
 		const maxSeen = { value: 0 };
 		const { runner, hasEntered, release } = instrumentedRunner(maxSeen);
 
 		// Drive pump concurrently with gate control.
-		const pumped = scheduler.pump(async (id) => {
+		const pumped = scheduler.pump(async id => {
 			await runner(id);
 			scheduler.markCompleted(id);
 		});
@@ -97,15 +100,18 @@ describe("filesDeps lock (RED while scheduler ignores overlap without isolationM
 	});
 
 	test("two nodes with disjoint filesDeps may run in parallel", async () => {
-		const scheduler = new SwarmScheduler<NodeLike>([
-			["A", node(["packages/coding-agent/src/tools/todo-write.ts"])],
-			["B", node(["packages/coding-agent/src/tools/write.ts"])],
-		], { maxConcurrency: 4, isolationMode: false });
+		const scheduler = new SwarmScheduler<NodeLike>(
+			[
+				["A", node(["packages/coding-agent/src/tools/todo-write.ts"])],
+				["B", node(["packages/coding-agent/src/tools/write.ts"])],
+			],
+			{ maxConcurrency: 4, isolationMode: false },
+		);
 
 		const maxSeen = { value: 0 };
 		const { runner, hasEntered, release } = instrumentedRunner(maxSeen);
 
-		const pumped = scheduler.pump(async (id) => {
+		const pumped = scheduler.pump(async id => {
 			await runner(id);
 			scheduler.markCompleted(id);
 		});
@@ -122,15 +128,18 @@ describe("filesDeps lock (RED while scheduler ignores overlap without isolationM
 	});
 
 	test("a node without filesDeps is conservative — serializes against anything in flight", async () => {
-		const scheduler = new SwarmScheduler<NodeLike>([
-			["A", node(["packages/coding-agent/src/tools/todo-write.ts"])],
-			["B", node()], // unscoped — must not race against scoped writers
-		], { maxConcurrency: 4, isolationMode: false });
+		const scheduler = new SwarmScheduler<NodeLike>(
+			[
+				["A", node(["packages/coding-agent/src/tools/todo-write.ts"])],
+				["B", node()], // unscoped — must not race against scoped writers
+			],
+			{ maxConcurrency: 4, isolationMode: false },
+		);
 
 		const maxSeen = { value: 0 };
 		const { runner, hasEntered, release } = instrumentedRunner(maxSeen);
 
-		const pumped = scheduler.pump(async (id) => {
+		const pumped = scheduler.pump(async id => {
 			await runner(id);
 			scheduler.markCompleted(id);
 		});
