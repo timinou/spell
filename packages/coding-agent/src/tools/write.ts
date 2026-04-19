@@ -60,6 +60,7 @@ export type WriteToolInput = Static<typeof writeSchema>;
 export interface WriteToolDetails {
 	diagnostics?: FileDiagnosticsResult;
 	meta?: OutputMeta;
+	bufferInvalidationError?: string;
 }
 
 const LSP_BATCH_TOOLS = new Set(["edit", "write"]);
@@ -126,6 +127,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 			const resultText = `Successfully wrote ${content.length} bytes to ${path}`;
 			const compatibilityNotice = formatCodeTextCompatibilityNotice("write");
 			let bypassNotice = "";
+			let bufferInvalidationError: string | undefined;
 			if (isCodeToolSupportedPath(absolutePath)) {
 				if (!force) {
 					const { evaluateWriteGuards } = await import("./managed-buffer-guards");
@@ -139,10 +141,11 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					bypassNotice = `\nBypassed WRITE_SHRINK_BLOCKED and WRITE_PARSE_REGRESSION.`;
 				}
 				try {
-					applyManagedBufferContent(absolutePath, content, {
+					const managedBufferResult = applyManagedBufferContent(absolutePath, content, {
 						create: !existingFile,
-						sessionId: this.session.getSessionId?.() ?? undefined,
+						session: this.session,
 					});
+					bufferInvalidationError = managedBufferResult.bufferInvalidationError;
 				} catch (error) {
 					if (!force) throw error;
 					invalidateManagedCodeBuffersForPaths([absolutePath]);
@@ -150,19 +153,23 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				}
 				invalidateFsScanAfterWrite(absolutePath);
 				const diagnostics = await this.#getManagedBufferDiagnostics(absolutePath, content, signal);
+				const warningText = bufferInvalidationError ? `\n${bufferInvalidationError}` : "";
 				if (!diagnostics) {
 					return {
-						content: [{ type: "text", text: `${resultText}\n${compatibilityNotice}${bypassNotice}` }],
-						details: {},
+						content: [
+							{ type: "text", text: `${resultText}\n${compatibilityNotice}${bypassNotice}${warningText}` },
+						],
+						details: bufferInvalidationError ? { bufferInvalidationError } : {},
 					};
 				}
 				return {
-					content: [{ type: "text", text: `${resultText}\n${compatibilityNotice}${bypassNotice}` }],
+					content: [{ type: "text", text: `${resultText}\n${compatibilityNotice}${bypassNotice}${warningText}` }],
 					details: {
 						diagnostics,
 						meta: outputMeta()
 							.diagnostics(diagnostics.summary, diagnostics.messages ?? [])
 							.get(),
+						bufferInvalidationError,
 					},
 				};
 			}
@@ -330,6 +337,7 @@ export const writeToolRenderer = {
 		const lineCount = typeof args?.content === "string" ? countLines(fileContent) : null;
 		const textContent = result.content.find(content => content.type === "text")?.text ?? "";
 		const diagnostics = result.details?.diagnostics;
+		const bufferInvalidationError = result.details?.bufferInvalidationError;
 		if (result.isError) {
 			const header = renderStatusLine(
 				{
@@ -345,7 +353,7 @@ export const writeToolRenderer = {
 		// Build header with status icon
 		const header = renderStatusLine(
 			{
-				icon: "success",
+				icon: bufferInvalidationError ? "warning" : "success",
 				title: "Write",
 				description: `${langIcon} ${pathDisplay}`,
 			},
@@ -376,6 +384,9 @@ export const writeToolRenderer = {
 							text += `\n${diagLines.slice(firstNonEmpty).join("\n")}`;
 						}
 					}
+				}
+				if (bufferInvalidationError) {
+					text += `\n${uiTheme.fg("warning", replaceTabs(bufferInvalidationError))}`;
 				}
 
 				const lines = text.split("\n").map(l => truncateToWidth(l, width, Ellipsis.Omit));

@@ -244,6 +244,18 @@ or ordering guarantee — explicitly best-effort per directive.
 - Windows support. Current `pi-code-engine` is Unix-first; broker uses Unix
   socket. Windows named-pipe support is a future deliverable.
 
+## Phase 1 landed (2026-04-19)
+
+Phase 1 is now in the tree end-to-end.
+
+- Engine: `crates/pi-code-engine/src/coord/` plus `BufferRegistry::edit_transaction` in `src/buffer.rs`, atomic persisted writes, deprecated non-transactional save entrypoints, and journal-backed attribution.
+- Broker: `crates/pi-edit-broker/` protocol, daemon lifecycle, auto-spawn, and stale-socket handling tests.
+- NAPI: `crates/pi-natives/src/lib.rs` wires `SocketCoordClient` into the shared registry; `crates/pi-natives/src/code_buffer.rs` exposes `coord_status`, `coord_peer_activity`, and `coord_journal_tail` with mutating-command `sessionId` enforcement.
+- coding-agent: `packages/coding-agent/src/session/edit-coordinator.ts`, `tools/code.ts`, `tools/tool-errors.ts`, and `tools/code-result.ts` inject session ids, surface `PeerConflict`, and render peer activity.
+- UI/tests: `packages/coding-agent/src/modes/components/status-line/segments.ts` renders the coord segment; focused tests cover two-session engine flow, subagent session attribution, peer-activity footer formatting, broker spawn/stale-socket behavior, and status-line rendering.
+
+Residual closeout completed on 2026-04-19: BUG-303 finished the remaining direct managed-buffer mutating call sites; BUG-305 widened code-tool wiring expectations for the trailing `coord_peer_activity` call; FEAT-593 encoded the missing coverage scenarios; FUP-064 recorded the Loro Phase-2 recommendation.
+
 ## Rollout
 
 Phase 1 — foundation (Wave 1):

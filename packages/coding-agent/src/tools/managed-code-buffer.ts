@@ -1,5 +1,10 @@
 import * as nodePath from "node:path";
-import { executeCodeBuffer } from "@oh-my-pi/pi-natives";
+import * as piNatives from "@oh-my-pi/pi-natives";
+import { callCodeBuffer, type SessionIdSource } from "../session/edit-coordinator";
+
+export interface ManagedBufferMutationResult {
+	bufferInvalidationError?: string;
+}
 
 export function extractCodeToolErrorMessage(output: unknown): string {
 	if (typeof output === "string") return output;
@@ -18,20 +23,33 @@ export function countBufferDiffHunks(output: unknown): number {
 	return Array.isArray(output) ? output.length : 0;
 }
 
-export function invalidateManagedCodeBuffersForPaths(paths: string[]): void {
+function formatManagedBufferInvalidationError(file: string, output: unknown, persisted: boolean): string {
+	const prefix = persisted
+		? "Write persisted to disk, but failed to invalidate the managed code buffer"
+		: "Failed to invalidate the managed code buffer";
+	return `${prefix} for ${file}: ${extractCodeToolErrorMessage(output)}`;
+}
+
+function collectManagedCodeBufferInvalidationError(paths: string[], persisted: boolean): string | undefined {
 	const uniquePaths = [...new Set(paths.filter(file => file.length > 0 && nodePath.isAbsolute(file)))];
 	for (const file of uniquePaths) {
-		const closeResult = executeCodeBuffer({ command: "close", file });
+		const closeResult = piNatives.executeCodeBuffer({ command: "close", file });
 		if (closeResult.error) {
-			throw new Error(
-				`Edit succeeded on disk, but failed to invalidate the managed code buffer for ${file}: ${String(closeResult.output ?? "unknown error")}`,
-			);
+			return formatManagedBufferInvalidationError(file, closeResult.output, persisted);
 		}
+	}
+	return undefined;
+}
+
+export function invalidateManagedCodeBuffersForPaths(paths: string[]): void {
+	const bufferInvalidationError = collectManagedCodeBufferInvalidationError(paths, false);
+	if (bufferInvalidationError) {
+		throw new Error(bufferInvalidationError);
 	}
 }
 
 export function ensureManagedBufferFresh(file: string): void {
-	const freshness = executeCodeBuffer({ command: "diff", file });
+	const freshness = piNatives.executeCodeBuffer({ command: "diff", file });
 	if (freshness.error) {
 		throw new Error(
 			`Unable to verify buffer freshness before edit: ${extractCodeToolErrorMessage(freshness.output)}`,
@@ -78,19 +96,22 @@ function extractEditFailureMessage(output: unknown): string | undefined {
 	}
 	return failures.join("; ");
 }
+
 export function applyManagedBufferContent(
 	file: string,
 	content: string,
-	options: { create: boolean; sessionId?: string },
-): void {
+	options: { create: boolean; session: SessionIdSource },
+): ManagedBufferMutationResult {
 	const result = options.create
-		? executeCodeBuffer({
-				command: "edit",
-				root: process.cwd(),
-				operations: [{ targetId: file, actions: [{ kind: "write", content }] }],
-				sessionId: options.sessionId,
-			})
-		: executeCodeBuffer({ command: "replace_content", file, content, sessionId: options.sessionId });
+		? callCodeBuffer(
+				{ session: options.session },
+				{
+					command: "edit",
+					root: process.cwd(),
+					operations: [{ targetId: file, actions: [{ kind: "write", content }] }],
+				},
+			)
+		: callCodeBuffer({ session: options.session }, { command: "replace_content", file, content });
 	if (result.error) {
 		throw new Error(`Managed code buffer update failed for ${file}: ${extractCodeToolErrorMessage(result.output)}`);
 	}
@@ -98,8 +119,10 @@ export function applyManagedBufferContent(
 	if (perFileFailure) {
 		throw new Error(`Managed code buffer update failed for ${file}: ${perFileFailure}`);
 	}
-	const saveResult = executeCodeBuffer({ command: "save", file, sessionId: options.sessionId });
+	const saveResult = callCodeBuffer({ session: options.session }, { command: "save", file });
 	if (saveResult.error) {
 		throw new Error(`Managed code buffer save failed for ${file}: ${extractCodeToolErrorMessage(saveResult.output)}`);
 	}
+	const bufferInvalidationError = collectManagedCodeBufferInvalidationError([file], true);
+	return bufferInvalidationError ? { bufferInvalidationError } : {};
 }

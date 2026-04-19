@@ -1,0 +1,11 @@
+Command:
+bun test packages/coding-agent/test/tools.test.ts -t "reports persisted write success with a managed-buffer warning"
+
+Output:
+bun test v1.3.10 (30e609e0)
+
+ 1 pass
+ 67 filtered out
+ 0 fail
+ 4 expect() calls
+Ran 1 test across 1 file. [1294.00ms]

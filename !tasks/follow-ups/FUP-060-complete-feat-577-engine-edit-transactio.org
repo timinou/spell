@@ -1,5 +1,5 @@
 #+TITLE: Complete FEAT-577 engine edit_transaction + 11 integration tests
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bfe497b90853e7
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T20-51-40-901Z_14bfe497b90853e7.jsonl]]
 #+CUSTOM_ID: FUP-060-complete-feat-577-engine-edit-transactio
@@ -35,3 +35,5 @@ Still to land for FEAT-577 acceptance:
 Verification gate:
 - cargo test -p pi-code-engine --test coord_transaction
 - cargo clippy -p pi-code-engine --all-targets --all-features -- -D warnings clean
+
+NOTE [2026-04-19]: Superseded by FEAT-577 landing already present in-tree during PLAN-269 closeout. Evidence follows FEAT-577 note: BufferRegistry::edit_transaction, coord socket client, deprecated save/save_with_watcher, and coord tests present in current tree on 2026-04-19.

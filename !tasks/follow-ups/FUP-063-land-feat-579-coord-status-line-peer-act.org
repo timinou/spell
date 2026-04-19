@@ -1,5 +1,5 @@
 #+TITLE: Land FEAT-579 coord status-line + peer-activity footer
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bfe497b90853e7
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T20-51-40-901Z_14bfe497b90853e7.jsonl]]
 #+CUSTOM_ID: FUP-063-land-feat-579-coord-status-line-peer-act
@@ -17,3 +17,5 @@ Per FEAT-579 spec:
   "coord: N peers * last touched <file> <age>".
 - Peer-activity footer wired into tool output renderer via coord_peer_activity.
 - TUI tests covering the segment + footer.
+
+NOTE [2026-04-19]: Superseded by FEAT-579 landing already present in-tree during PLAN-269 closeout. Evidence follows FEAT-579 note: coord status-line segment, peer footer rendering, coord segment tests in current tree on 2026-04-19.
