@@ -45,7 +45,7 @@ import {
 // Import review tools for side effects (registers subagent tool handlers)
 import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
-import { type BatchGraph, buildBatchGraph, scheduleBatch } from "./batch-scheduler";
+import { type BatchGraph, type BatchImplicitBlocker, buildBatchGraph, scheduleBatch } from "./batch-scheduler";
 import { discoverAgents, getAgent } from "./discovery";
 import { type RuntimeVerificationOptions, runSubprocess } from "./executor";
 import {
@@ -141,6 +141,28 @@ function buildSniperAssignment(todo: { content: string; details?: string }): str
 		parts.push(todo.details);
 	}
 	return parts.join("\n");
+}
+
+function formatImplicitBlockerReason(reason: string, cwd: string): string {
+	const relative = path.isAbsolute(reason) ? path.relative(cwd, reason) || path.basename(reason) : reason;
+	return relative.split(path.sep).join("/");
+}
+
+function buildImplicitBlockerNote(implicitBlockers: BatchImplicitBlocker[], cwd: string): string {
+	if (implicitBlockers.length === 0) return "";
+	const reorganizedTaskCount = new Set(implicitBlockers.flatMap(({ from, to }) => [from, to])).size;
+	const taskLabel = reorganizedTaskCount === 1 ? "task" : "tasks";
+	const blockers = implicitBlockers.map(
+		({ to, from, reason }) => `${to}<-${from} (${formatImplicitBlockerReason(reason, cwd)})`,
+	);
+	return `Note: reorganized ${reorganizedTaskCount} ${taskLabel} into dependency chains due to filesDeps overlap. Implicit blockers: [${blockers.join(", ")}].\n\n`;
+}
+
+function withImplicitBlockers(details: TaskToolDetails, implicitBlockers: BatchImplicitBlocker[]): TaskToolDetails {
+	return {
+		...details,
+		implicit_blockers: implicitBlockers.length > 0 ? implicitBlockers.map(blocker => ({ ...blocker })) : undefined,
+	};
 }
 
 // Re-export types and utilities
@@ -297,7 +319,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		}
 		if (problems.length > 0) return problems.join(". ");
 		try {
-			buildBatchGraph(tasks.map(task => ({ id: task.id, blockers: task.blockers })));
+			buildBatchGraph(tasks.map(task => ({ id: task.id, blockers: task.blockers, filesDeps: task.filesDeps })));
 		} catch (error) {
 			problems.push(error instanceof Error ? error.message : String(error));
 		}
@@ -801,6 +823,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				taskExecutions.map(taskExecution => ({
 					id: taskExecution.logicalId,
 					blockers: taskExecution.blockers,
+					filesDeps: taskExecution.filesDeps,
 				})),
 			);
 		} catch (error) {
@@ -810,6 +833,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
 			};
 		}
+		const implicitBlockerNote = buildImplicitBlockerNote(batchGraph.implicitBlockers, this.session.cwd);
 		const progressByTaskId = new Map<string, AgentProgress>();
 		for (let index = 0; index < taskExecutions.length; index++) {
 			const taskExecution = taskExecutions[index];
@@ -851,13 +875,17 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				.map(progress => structuredClone(progress));
 		};
 
-		const buildAsyncDetails = (state: "running" | "completed" | "failed", jobId: string): TaskToolDetails => ({
-			projectAgentsDir: null,
-			results: [],
-			totalDurationMs: 0,
-			progress: getProgressSnapshot(),
-			async: { state, jobId, type: "task" },
-		});
+		const buildAsyncDetails = (state: "running" | "completed" | "failed", jobId: string): TaskToolDetails =>
+			withImplicitBlockers(
+				{
+					projectAgentsDir: null,
+					results: [],
+					totalDurationMs: 0,
+					progress: getProgressSnapshot(),
+					async: { state, jobId, type: "task" },
+				},
+				batchGraph.implicitBlockers,
+			);
 
 		const syncAsyncProgress = (target: AgentProgress, source: AgentProgress): void => {
 			const index = target.index;
@@ -868,7 +896,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const emitAsyncUpdate = (state: "running" | "completed" | "failed", text: string): void => {
 			const primaryJobId = startedJobs[0]?.jobId ?? "task";
 			onUpdate?.({
-				content: [{ type: "text", text }],
+				content: [{ type: "text", text: `${implicitBlockerNote}${text}` }],
 				details: buildAsyncDetails(state, primaryJobId),
 			});
 		};
@@ -1121,8 +1149,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							: "No background task jobs were started."
 					: `Failed to start background task jobs: ${failedSchedules.join("; ")}`;
 			return {
-				content: [{ type: "text", text: failureText }],
-				details: { projectAgentsDir: null, results: [], totalDurationMs: 0, progress: getProgressSnapshot() },
+				content: [{ type: "text", text: `${implicitBlockerNote}${failureText}` }],
+				details: withImplicitBlockers(
+					{ projectAgentsDir: null, results: [], totalDurationMs: 0, progress: getProgressSnapshot() },
+					batchGraph.implicitBlockers,
+				),
 			};
 		}
 
@@ -1140,16 +1171,19 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			content: [
 				{
 					type: "text",
-					text: `Started ${startedJobs.length} background task job${startedJobs.length === 1 ? "" : "s"} using ${params.agent}.${scheduleFailureSummary} Results will be delivered when complete.`,
+					text: `${implicitBlockerNote}Started ${startedJobs.length} background task job${startedJobs.length === 1 ? "" : "s"} using ${params.agent}.${scheduleFailureSummary} Results will be delivered when complete.`,
 				},
 			],
-			details: {
-				projectAgentsDir: null,
-				results: [],
-				totalDurationMs: 0,
-				progress: getProgressSnapshot(),
-				async: { state: "running", jobId: startedJobs[0].jobId, type: "task" },
-			},
+			details: withImplicitBlockers(
+				{
+					projectAgentsDir: null,
+					results: [],
+					totalDurationMs: 0,
+					progress: getProgressSnapshot(),
+					async: { state: "running", jobId: startedJobs[0].jobId, type: "task" },
+				},
+				batchGraph.implicitBlockers,
+			),
 		};
 	}
 
@@ -1430,6 +1464,14 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				filesDeps: task.filesDeps,
 				...renderTemplate(context, task),
 			}));
+			const syncBatchGraph = buildBatchGraph(
+				taskExecutions.map(taskExecution => ({
+					id: taskExecution.logicalId,
+					blockers: taskExecution.blockers,
+					filesDeps: taskExecution.filesDeps,
+				})),
+			);
+			const implicitBlockerNote = buildImplicitBlockerNote(syncBatchGraph.implicitBlockers, this.session.cwd);
 			const availableSkills = [...(this.session.skills ?? [])];
 			const contextFiles = this.session.contextFiles?.filter(
 				file => path.basename(file.path).toLowerCase() !== "agents.md",
@@ -1905,7 +1947,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			const autoIsolationSummaryPrefix = isAutoIsolated
 				? `\n\nTask isolation auto-coerced (${autoIsolationReason}); running isolated.`
 				: "";
-			const summary = renderPromptTemplate(taskSummaryTemplate, {
+			const summary = `${implicitBlockerNote}${renderPromptTemplate(taskSummaryTemplate, {
 				successCount,
 				totalCount: results.length,
 				cancelledCount,
@@ -1915,7 +1957,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				outputIds,
 				agentName,
 				mergeSummary: `${backendSummaryPrefix}${downgradeSummaryPrefix}${autoIsolationSummaryPrefix}${mergeSummary}`,
-			});
+			})}`;
 
 			// Cleanup temp directory if used
 			const shouldCleanupTempArtifacts =
@@ -1926,15 +1968,18 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 			return {
 				content: [{ type: "text", text: summary }],
-				details: {
-					projectAgentsDir,
-					results: results,
-					totalDurationMs: totalDuration,
-					usage: hasAggregatedUsage ? aggregatedUsage : undefined,
-					outputPaths,
-					isolationDowngraded: isolationDowngraded || undefined,
-					isolationAutoCoerced: isAutoIsolated || undefined,
-				},
+				details: withImplicitBlockers(
+					{
+						projectAgentsDir,
+						results: results,
+						totalDurationMs: totalDuration,
+						usage: hasAggregatedUsage ? aggregatedUsage : undefined,
+						outputPaths,
+						isolationDowngraded: isolationDowngraded || undefined,
+						isolationAutoCoerced: isAutoIsolated || undefined,
+					},
+					syncBatchGraph.implicitBlockers,
+				),
 			};
 		} catch (err) {
 			return {

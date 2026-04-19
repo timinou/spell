@@ -1,5 +1,5 @@
 #+TITLE: Auto-DAG on filesDeps overlap clean cutover
-#+STATE: ITEM
+#+STATE: DOING
 #+SESSION_ID: 14c0a54ed68d3bdc
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-53-40-058Z_14c0a54ed68d3bdc.jsonl]]
 #+CUSTOM_ID: PLAN-268-auto-dag-on-filesdeps-overlap-clean-cuto
@@ -94,3 +94,22 @@ paths for free and teaches the caller agent what the scheduler did.
 - Removed: old filesdeps-lock-repro assertions that encoded runtime mutex
 - Grep confirms SwarmScheduler.canRun no longer mentions hasFileOverlap
   or filesDeps
+
+** Completion [2026-04-19]
+*** Verification
+- Passed: `bun test ./test/task/mutable-dag.test.ts`
+- Passed: `bun test ./test/task/batch-scheduler.test.ts`
+- Passed: `bun test ./test/task/swarm-scheduler.test.ts`
+- Passed: `bun test packages/coding-agent/test/task/task-blockers.test.ts`
+- Passed: `bun test packages/coding-agent/test/task/filesdeps-lock-repro.test.ts`
+- Failed: `bun test packages/coding-agent/test/task/` → unrelated failures remained in `packages/coding-agent/test/task/tool-budget.test.ts` and `packages/coding-agent/test/task/render-report-finding.test.ts` after the scheduling work landed.
+- Failed: `bun check` → unrelated formatter drift reported in `packages/coding-agent/src/config/settings-schema.ts`, `packages/coding-agent/src/task/executor.ts`, and `packages/coding-agent/src/tools/index.ts`.
+*** Artifacts
+- Task suite failure log: artifact://14c0ba028d29f78f/main/bash/20.txt
+- Task suite stderr tail: artifact://14c0ba028d29f78f/main/bash/21.txt
+- `bun check` log: artifact://14c0ba028d29f78f/main/bash/24.txt
+- `bun check` stderr tail: artifact://14c0ba028d29f78f/main/bash/25.txt
+*** Deviations
+- Planned code/test changes completed, but final verification could not be closed because unrelated pre-existing task-suite and formatting failures remain outside the filesDeps scheduling surface.
+- Child item [[id:FEAT-594-regression-tests-for-sync-and-async-over]] is BLOCKED pending those unrelated failures.
+- No commit created because the plan did not reach a truthfully verifiable DONE state.

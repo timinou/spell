@@ -1,3 +1,5 @@
+import * as path from "node:path";
+
 export type MutableDagRemovalMode = "cascade" | "orphan";
 
 export interface MutableDagNode<T> {
@@ -92,6 +94,53 @@ function topologicalOrderFromState<T>(state: MutableDagState<T>): string[] {
 		throw new Error("MutableDag contains dependency cycles");
 	}
 	return ordered;
+}
+
+function hasTrailingSeparator(value: string): boolean {
+	return value.endsWith("/") || value.endsWith("\\");
+}
+
+function normalizeFilesDepPath(filePath: string): string {
+	const resolved = path.resolve(filePath);
+	const root = path.parse(resolved).root;
+	let normalized = resolved;
+	while (normalized.length > root.length && hasTrailingSeparator(normalized)) {
+		normalized = normalized.slice(0, -1);
+	}
+	return normalized;
+}
+
+function isSubtreePath(ancestorPath: string, descendantPath: string): boolean {
+	const relative = path.relative(ancestorPath, descendantPath);
+	return (
+		relative.length > 0 &&
+		relative !== "." &&
+		!relative.startsWith(`..${path.sep}`) &&
+		relative !== ".." &&
+		!path.isAbsolute(relative)
+	);
+}
+
+export function findOverlappingFilesDep(left: string[] | undefined, right: string[] | undefined): string | null {
+	const normalizedLeft = (left ?? [])
+		.filter(Boolean)
+		.map(filePath => ({ original: filePath, normalized: normalizeFilesDepPath(filePath) }));
+	const normalizedRight = (right ?? [])
+		.filter(Boolean)
+		.map(filePath => ({ original: filePath, normalized: normalizeFilesDepPath(filePath) }));
+	if (normalizedLeft.length === 0 || normalizedRight.length === 0) return null;
+	for (const leftPath of normalizedLeft) {
+		for (const rightPath of normalizedRight) {
+			if (leftPath.normalized === rightPath.normalized) return rightPath.original || leftPath.original;
+			if (isSubtreePath(leftPath.normalized, rightPath.normalized)) return rightPath.original;
+			if (isSubtreePath(rightPath.normalized, leftPath.normalized)) return leftPath.original;
+		}
+	}
+	return null;
+}
+
+function filesDepsOverlap(left: string[] | undefined, right: string[] | undefined): boolean {
+	return findOverlappingFilesDep(left, right) !== null;
 }
 
 export class MutableDag<T extends { filesDeps?: string[] }> {
@@ -281,20 +330,14 @@ export class MutableDag<T extends { filesDeps?: string[] }> {
 	getOverlappingNodeIds(id: string): string[] {
 		const filesDeps = this.#state.nodesById.get(id)?.filesDeps;
 		if (!filesDeps?.length) return [];
-		return this.#state.order.filter(otherId => {
-			if (otherId === id) return false;
-			const otherFilesDeps = this.#state.nodesById.get(otherId)?.filesDeps;
-			if (!otherFilesDeps?.length) return false;
-			return otherFilesDeps.some(file => filesDeps.includes(file));
-		});
+		return this.#state.order.filter(otherId => otherId !== id && this.hasFileOverlap(id, otherId));
 	}
 
 	hasFileOverlap(leftId: string, rightId: string): boolean {
-		const left = this.#state.nodesById.get(leftId)?.filesDeps;
-		const right = this.#state.nodesById.get(rightId)?.filesDeps;
-		if (!left?.length || !right?.length) return false;
-		const rightFiles = new Set(right);
-		return left.some(file => rightFiles.has(file));
+		return filesDepsOverlap(
+			this.#state.nodesById.get(leftId)?.filesDeps,
+			this.#state.nodesById.get(rightId)?.filesDeps,
+		);
 	}
 
 	clone(): MutableDag<T> {

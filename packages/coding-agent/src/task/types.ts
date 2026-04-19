@@ -3,6 +3,7 @@ import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
 import type { TodoGroup } from "../tools/todo-write";
+import type { BatchImplicitBlocker } from "./batch-scheduler";
 import type { NestedRepoPatch } from "./worktree";
 
 /** Source of an agent definition */
@@ -251,6 +252,7 @@ export interface TaskToolDetails {
 	usage?: Usage;
 	outputPaths?: string[];
 	progress?: AgentProgress[];
+	implicit_blockers?: BatchImplicitBlocker[];
 	/** True when caller requested isolated execution but task.isolation.mode="none"; batch ran non-isolated. */
 	isolationDowngraded?: boolean;
 	/** True when isolation was auto-coerced from nested task heuristics. */

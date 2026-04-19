@@ -1,5 +1,5 @@
 #+TITLE: Remove filesDeps branch from SwarmScheduler.canRun
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c0a54ed68d3bdc
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-53-40-058Z_14c0a54ed68d3bdc.jsonl]]
 #+CUSTOM_ID: FEAT-591-remove-filesdeps-branch-from-swarmschedu
@@ -46,3 +46,5 @@ I want you to think a bit deeper than the fileDeps vs. lock. I don't want a glob
 3. Keep SwarmNodeLike.filesDeps field declaration because upstream buildBatchGraph still threads it for hashing / logs, but audit that no production code still reads it at runtime.
 4. Delete packages/coding-agent/test/task/filesdeps-lock-repro.test.ts; its scenarios migrate to wave 5.
 5. Add a minimal swarm-scheduler.test.ts case asserting that two direct-to-scheduler nodes with overlapping filesDeps are both admitted concurrently (regression anchor for the cutover).
+
+NOTE [2026-04-19]: Removed runtime filesDeps admission logic from packages/coding-agent/src/task/swarm-scheduler.ts and updated scheduler tests. Verified by bun test ./test/task/swarm-scheduler.test.ts and grep confirming no hasFileOverlap/canRun overlap branch remains.
