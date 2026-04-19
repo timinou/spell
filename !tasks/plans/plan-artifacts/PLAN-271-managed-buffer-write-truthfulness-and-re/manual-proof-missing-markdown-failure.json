@@ -1,0 +1,6 @@
+{
+  "command": "bun -e <WriteTool markdown invalid create proof>",
+  "file": "/tmp/plan271-md-fail-2QbUht/subagent-envelope-v2.md",
+  "existsAfter": false,
+  "errorMessage": "Managed code buffer update failed for /tmp/plan271-md-fail-2QbUht/subagent-envelope-v2.md: /tmp/plan271-md-fail-2QbUht/subagent-envelope-v2.md: edit error: Edit batch would leave the buffer structurally invalid. Re-anchor the target or include an explicit separator."
+}

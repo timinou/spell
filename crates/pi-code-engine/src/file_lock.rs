@@ -1,5 +1,7 @@
 use std::{
+	collections::hash_map::DefaultHasher,
 	fs::{File, OpenOptions},
+	hash::{Hash, Hasher},
 	io,
 	path::{Path, PathBuf},
 	thread,
@@ -17,13 +19,26 @@ pub struct LockStatus {
 	pub shared:    bool,
 }
 
+fn lock_file_path(path: &Path) -> PathBuf {
+	let mut hasher = DefaultHasher::new();
+	path.hash(&mut hasher);
+	let digest = hasher.finish();
+	std::env::temp_dir()
+		.join("pi-code-engine-locks")
+		.join(format!("{digest:016x}.lock"))
+}
+
 fn open_lock_file(path: &Path) -> Result<File> {
+	let lock_path = lock_file_path(path);
+	if let Some(parent) = lock_path.parent() {
+		std::fs::create_dir_all(parent)?;
+	}
 	OpenOptions::new()
 		.read(true)
 		.write(true)
 		.create(true)
 		.truncate(false)
-		.open(path)
+		.open(lock_path)
 		.map_err(CodeEngineError::from)
 }
 

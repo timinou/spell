@@ -1,0 +1,12 @@
+{
+  "command": "bun -e <WriteTool persisted warning proof with vi.spyOn(piNatives.executeCodeBuffer)>",
+  "content": [
+    {
+      "type": "text",
+      "text": "Successfully wrote 24 bytes to /tmp/plan271-warning-gMbd6V/warning.ts\nCompatibility TODO: code-supported text write used the managed-buffer compatibility path. Keep this visible for later bugfixing; prefer code edit when possible.\nWrite persisted to disk, but failed to invalidate the managed code buffer for /tmp/plan271-warning-gMbd6V/warning.ts: close exploded"
+    }
+  ],
+  "details": {
+    "bufferInvalidationError": "Write persisted to disk, but failed to invalidate the managed code buffer for /tmp/plan271-warning-gMbd6V/warning.ts: close exploded"
+  }
+}

@@ -590,7 +590,7 @@ export class EditTool implements AgentTool<TInput> {
 						throw new Error(`File not found: ${path}`);
 					}
 				}
-				applyManagedBufferContent(absolutePath, lines.join("\n"), {
+				const managedBufferResult = applyManagedBufferContent(absolutePath, lines.join("\n"), {
 					create: true,
 					session: this.session,
 				});
@@ -599,17 +599,22 @@ export class EditTool implements AgentTool<TInput> {
 				const compatibilityNotice = isCodeToolSupportedPath(absolutePath)
 					? formatCodeTextCompatibilityNotice("edit")
 					: undefined;
+				const bufferInvalidationError = managedBufferResult.bufferInvalidationError;
+				const warningBlock = bufferInvalidationError ? `\n\n${bufferInvalidationError}` : "";
 				return {
 					content: [
 						{
 							type: "text",
-							text: compatibilityNotice ? `${resultText}\n${compatibilityNotice}` : resultText,
+							text: compatibilityNotice
+								? `${resultText}\n${compatibilityNotice}${warningBlock}`
+								: `${resultText}${warningBlock}`,
 						},
 					],
 					details: {
 						diff: "",
 						op: "create",
 						meta: outputMeta().get(),
+						bufferInvalidationError,
 					},
 				};
 			}
@@ -693,11 +698,13 @@ export class EditTool implements AgentTool<TInput> {
 			const finalContent = bom + restoreLineEndings(result.text, originalEnding);
 			const writePath = resolvedMove ?? absolutePath;
 			let diagnostics: FileDiagnosticsResult | undefined;
+			let bufferInvalidationError: string | undefined;
 			if (!resolvedMove || resolvedMove === absolutePath) {
-				applyManagedBufferContent(writePath, finalContent, {
+				const managedBufferResult = applyManagedBufferContent(writePath, finalContent, {
 					create: false,
 					session: this.session,
 				});
+				bufferInvalidationError = managedBufferResult.bufferInvalidationError;
 				invalidateFsScanAfterWrite(absolutePath);
 			} else {
 				invalidateManagedCodeBuffersForPaths(touchedPaths);
@@ -721,11 +728,12 @@ export class EditTool implements AgentTool<TInput> {
 			const warningsBlock = result.warnings?.length ? `\n\nWarnings:\n${result.warnings.join("\n")}` : "";
 			const previewBlock = preview.preview ? `\n\nDiff preview:\n${preview.preview}` : "";
 			const compatibilityBlock = compatibilityNotice ? `\n\n${compatibilityNotice}` : "";
+			const bufferInvalidationBlock = bufferInvalidationError ? `\n\n${bufferInvalidationError}` : "";
 			return {
 				content: [
 					{
 						type: "text",
-						text: `${resultText}\n${summaryLine}${previewBlock}${warningsBlock}${compatibilityBlock}`,
+						text: `${resultText}\n${summaryLine}${previewBlock}${warningsBlock}${compatibilityBlock}${bufferInvalidationBlock}`,
 					},
 				],
 				details: {
@@ -735,6 +743,7 @@ export class EditTool implements AgentTool<TInput> {
 					op: "update",
 					move,
 					meta,
+					bufferInvalidationError,
 				},
 			};
 		}
@@ -912,10 +921,11 @@ export class EditTool implements AgentTool<TInput> {
 		}
 
 		const finalContent = bom + restoreLineEndings(result.content, originalEnding);
-		applyManagedBufferContent(absolutePath, finalContent, {
+		const managedBufferResult = applyManagedBufferContent(absolutePath, finalContent, {
 			create: false,
 			session: this.session,
 		});
+		const bufferInvalidationError = managedBufferResult.bufferInvalidationError;
 		let diagnostics: FileDiagnosticsResult | undefined;
 		invalidateFsScanAfterWrite(absolutePath);
 		const diffResult = generateDiffString(normalizedContent, result.content);
@@ -932,11 +942,14 @@ export class EditTool implements AgentTool<TInput> {
 			.diagnostics(diagnostics?.summary ?? "", diagnostics?.messages ?? [])
 			.get();
 
+		const warningBlock = bufferInvalidationError ? `\n${bufferInvalidationError}` : "";
 		return {
 			content: [
 				{
 					type: "text",
-					text: compatibilityNotice ? `${resultText}\n${compatibilityNotice}` : resultText,
+					text: compatibilityNotice
+						? `${resultText}\n${compatibilityNotice}${warningBlock}`
+						: `${resultText}${warningBlock}`,
 				},
 			],
 			details: {
@@ -944,6 +957,7 @@ export class EditTool implements AgentTool<TInput> {
 				firstChangedLine: diffResult.firstChangedLine,
 				diagnostics,
 				meta,
+				bufferInvalidationError,
 			},
 		};
 	}

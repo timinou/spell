@@ -1,22 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyManagedBufferContent } from "@oh-my-pi/pi-coding-agent/tools/managed-code-buffer";
+import * as piNatives from "@oh-my-pi/pi-natives";
 
-/**
- * Contract: when the underlying `executeCodeBuffer({ command: "edit", … })`
- * call returns `output.status === "failed"` (or "partial") with at least one
- * failed `fileResults[]` entry, `applyManagedBufferContent` MUST throw — and
- * the on-disk file MUST remain unchanged.
- *
- * Regression: prior to the fix the wrapper only inspected the top-level
- * `error: boolean` flag, which the native edit command keeps `false` even when
- * every per-file operation failed. This caused the `write` tool to report
- * "Successfully wrote N bytes" while silently rolling the buffer back, leaving
- * subsequent edits operating on a buffer state that diverges from the agent's
- * mental model.
- */
+type ExecuteCodeBufferOptions = Parameters<typeof piNatives.executeCodeBuffer>[0];
+type ExecuteCodeBufferResult = ReturnType<typeof piNatives.executeCodeBuffer>;
+
+const testSession = { getSessionId: () => "test-session" };
+
 describe("applyManagedBufferContent", () => {
 	let dir: string;
 
@@ -25,44 +18,57 @@ describe("applyManagedBufferContent", () => {
 	});
 
 	afterEach(() => {
+		vi.restoreAllMocks();
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("throws when the native edit reports a per-file failure (unparseable Rust)", () => {
-		const file = join(dir, "lib.rs");
-		const original = "pub fn f() -> u32 { 1 }\n";
+	it("leaves no file behind when a missing markdown create is structurally invalid", () => {
+		const file = join(dir, "subagent-envelope-v2.md");
+
+		expect(() =>
+			applyManagedBufferContent(file, "# broken\u0000markdown\n", {
+				create: true,
+				session: testSession,
+			}),
+		).toThrow(/Managed code buffer update failed/);
+		expect(existsSync(file)).toBe(false);
+	});
+
+	it("restores the exact prior bytes when an existing overwrite is structurally invalid", () => {
+		const file = join(dir, "module.ts");
+		const original = "export const value = 1;\n";
 		writeFileSync(file, original);
 
 		expect(() =>
-			applyManagedBufferContent(file, "PLACEHOLDER", { create: true, session: { getSessionId: () => undefined } }),
+			applyManagedBufferContent(file, "export const = ;\n", {
+				create: false,
+				session: testSession,
+			}),
 		).toThrow(/Managed code buffer update failed/);
-
-		// Disk must be untouched on failure.
 		expect(readFileSync(file, "utf8")).toBe(original);
 	});
 
-	it("includes the native per-file error message in the thrown error", () => {
-		const file = join(dir, "lib.rs");
-		writeFileSync(file, "pub fn f() -> u32 { 1 }\n");
+	it("returns a warning when bytes persist but managed-buffer invalidation fails", () => {
+		const file = join(dir, "module.ts");
+		const replacement = "export const value = 42;\n";
+		writeFileSync(file, "export const value = 1;\n");
 
-		let caught: Error | undefined;
-		try {
-			applyManagedBufferContent(file, "PLACEHOLDER", { create: true, session: { getSessionId: () => undefined } });
-		} catch (err) {
-			caught = err as Error;
-		}
-		expect(caught).toBeDefined();
-		expect(caught?.message).toContain("sessionId");
-		expect(caught?.message).toContain(file);
-	});
+		const executeCodeBuffer = piNatives.executeCodeBuffer;
+		vi.spyOn(piNatives, "executeCodeBuffer").mockImplementation((options: ExecuteCodeBufferOptions) => {
+			if (options.command === "close") {
+				return { error: true, output: "close exploded" } satisfies ExecuteCodeBufferResult;
+			}
+			return executeCodeBuffer(options);
+		});
 
-	it("does not throw on successful writes (parseable replacement)", () => {
-		const file = join(dir, "lib.rs");
-		writeFileSync(file, "pub fn f() -> u32 { 1 }\n");
-		const replacement = "pub fn f() -> u32 { 42 }\n";
+		const result = applyManagedBufferContent(file, replacement, {
+			create: false,
+			session: testSession,
+		});
 
-		expect(() =>
-			applyManagedBufferContent(file, replacement, { create: true, session: { getSessionId: () => undefined } }),
-		).toThrow(/Mutating code buffer commands require a non-empty sessionId/);
+		expect(readFileSync(file, "utf8")).toBe(replacement);
+		expect(result.bufferInvalidationError).toContain("Write persisted to disk");
+		expect(result.bufferInvalidationError).toContain(file);
+		expect(result.bufferInvalidationError).toContain("close exploded");
 	});
 });

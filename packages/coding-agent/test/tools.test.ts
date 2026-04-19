@@ -12,6 +12,7 @@ import { GrepTool } from "@oh-my-pi/pi-coding-agent/tools/grep";
 import { wrapToolWithMetaNotice } from "@oh-my-pi/pi-coding-agent/tools/output-meta";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
+import * as piNatives from "@oh-my-pi/pi-natives";
 import { executeCodeBuffer } from "@oh-my-pi/pi-natives";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 
@@ -23,6 +24,19 @@ function getTextOutput(result: any): string {
 			.map((c: any) => c.text)
 			.join("\n") || ""
 	);
+}
+
+type ExecuteCodeBufferOptions = Parameters<typeof piNatives.executeCodeBuffer>[0];
+type ExecuteCodeBufferResult = ReturnType<typeof piNatives.executeCodeBuffer>;
+
+function mockManagedBufferCloseFailure(message = "close exploded") {
+	const nativeExecuteCodeBuffer = piNatives.executeCodeBuffer;
+	return vi.spyOn(piNatives, "executeCodeBuffer").mockImplementation((options: ExecuteCodeBufferOptions) => {
+		if (options.command === "close") {
+			return { error: true, output: message } satisfies ExecuteCodeBufferResult;
+		}
+		return nativeExecuteCodeBuffer(options);
+	});
 }
 
 let artifactCounter = 0;
@@ -422,6 +436,32 @@ describe("Coding Agent Tools", () => {
 			}
 		});
 
+		it("leaves no file behind when a new markdown write is structurally invalid", async () => {
+			const testFile = path.join(testDir, "subagent-envelope-v2.md");
+
+			await expect(
+				writeTool.execute("test-call-4-md-invalid", {
+					path: testFile,
+					content: "# broken\u0000markdown\n",
+				}),
+			).rejects.toThrow(/Managed code buffer update failed/);
+			expect(fs.existsSync(testFile)).toBe(false);
+		});
+
+		it("reports persisted write success with a managed-buffer warning", async () => {
+			mockManagedBufferCloseFailure();
+			const testFile = path.join(testDir, "write-warning.ts");
+			const content = "export const value = 2;\n";
+			fs.writeFileSync(testFile, "export const value = 1;\n");
+
+			const result = await writeTool.execute("test-call-4-warning", { path: testFile, content });
+
+			expect(getTextOutput(result)).toContain(`Successfully wrote ${content.length} bytes to ${testFile}`);
+			expect(getTextOutput(result)).toContain("Write persisted to disk");
+			expect(fs.readFileSync(testFile, "utf-8")).toBe(content);
+			expect(result.details?.bufferInvalidationError).toContain(testFile);
+		});
+
 		it("preserves current ipynb write behavior", async () => {
 			const testFile = path.join(testDir, "write-test.ipynb");
 			const content = '{"cells":[]}\n';
@@ -521,6 +561,23 @@ describe("Coding Agent Tools", () => {
 			expect(Array.isArray(diff.output) ? diff.output.length : 0).toBe(0);
 			const closeResult = executeCodeBuffer({ command: "close", file: testFile });
 			expect(closeResult.error).toBe(false);
+		});
+
+		it("reports persisted edit success with a managed-buffer warning", async () => {
+			mockManagedBufferCloseFailure();
+			const testFile = path.join(testDir, "edit-warning.ts");
+			fs.writeFileSync(testFile, "export const value = 1;\n");
+
+			const result = await editTool.execute("test-call-5-warning", {
+				path: testFile,
+				old_text: "value = 1",
+				new_text: "value = 2",
+			});
+
+			expect(getTextOutput(result)).toContain("Successfully replaced text in");
+			expect(getTextOutput(result)).toContain("Write persisted to disk");
+			expect(fs.readFileSync(testFile, "utf-8")).toContain("value = 2");
+			expect(result.details?.bufferInvalidationError).toContain(testFile);
 		});
 
 		it("should fail if text not found", async () => {
