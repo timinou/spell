@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { buildCompactHashlineDiffPreview } from "../patch/hashline";
 import type { OutputMeta } from "./output-meta";
 import type { MutationState } from "./pending-action";
+import { formatAge, replaceTabs } from "./render-utils";
 
 export type CodeGraphCommand =
 	| "index"
@@ -150,6 +151,19 @@ export interface CodeEditFileData {
 	error?: CodeEditFileErrorData;
 }
 
+export interface CodePeerActivityEdit {
+	sessionId?: string;
+	codePath?: string;
+	ts?: number;
+	ageSeconds?: number;
+}
+
+export interface CodePeerActivityFile {
+	file: string;
+	displayPath?: string;
+	edits: CodePeerActivityEdit[];
+}
+
 export interface CodeEditData {
 	status?: string;
 	saveMode?: string;
@@ -168,6 +182,7 @@ export interface CodeEditData {
 	formatterServer?: string;
 	mutationState: MutationState;
 	persisted: boolean;
+	peerActivity?: CodePeerActivityFile[];
 }
 
 export interface CodeHistoryRange {
@@ -281,6 +296,13 @@ export interface CodeGraphDetails {
 	meta?: OutputMeta;
 }
 
+export interface CodePeerConflictData {
+	sessionId: string;
+	codePath: string;
+	peerRevision: number;
+	peerCommitTs: number;
+}
+
 export interface CodeToolErrorDetails {
 	kind: "error";
 	command: string;
@@ -289,9 +311,11 @@ export interface CodeToolErrorDetails {
 	failureKind?: string;
 	message: string;
 	error: true;
+	retryable?: boolean;
 	proof?: CodeProofData;
 	targetId?: string;
 	action?: string;
+	peerConflict?: CodePeerConflictData;
 	output?: unknown;
 	meta?: OutputMeta;
 }
@@ -305,6 +329,8 @@ const LANGUAGE_PREVIEW_LIMIT = 10;
 const HISTORY_PREVIEW_LIMIT = 5;
 const PREVIEW_TEXT_LIMIT = 120;
 function classifyCodeToolFailure(message: string): string {
+	if (message.includes("PEER_CONFLICT")) return "peer_conflict";
+	if (message.includes("MISSING_SESSION_ID")) return "missing_session_id";
 	if (message.includes("operation 'create'")) return "payload_validation";
 	if (message.includes("Stale code buffer detected")) return "buffer_freshness";
 	if (message.includes("Ambiguous line target")) return "ambiguous_target";
@@ -325,11 +351,24 @@ export function createCodeToolError(input: {
 	file?: string;
 	cwd?: string;
 	output?: unknown;
+	retryable?: boolean;
+	peerConflict?: CodePeerConflictData;
 }): CodeToolErrorDetails {
 	const record = asRecord(input.output);
 	const proof = normalizeProof(record?.proof);
 	const extractedMessage = asString(record?.message) ?? input.message;
 	const errorCode = asString(record?.code);
+	const peerConflictRecord = asRecord(record?.peerConflict);
+	const peerConflict =
+		input.peerConflict ??
+		(peerConflictRecord
+			? {
+					sessionId: asString(peerConflictRecord.sessionId) ?? "",
+					codePath: asString(peerConflictRecord.codePath) ?? "",
+					peerRevision: asNumber(peerConflictRecord.peerRevision) ?? 0,
+					peerCommitTs: asNumber(peerConflictRecord.peerCommitTs) ?? 0,
+				}
+			: undefined);
 	const failureKind = classifyCodeToolFailure(errorCode ? `${errorCode}: ${extractedMessage}` : extractedMessage);
 	return {
 		kind: "error",
@@ -339,9 +378,11 @@ export function createCodeToolError(input: {
 		failureKind,
 		message: extractedMessage,
 		error: true,
+		retryable: input.retryable === true || errorCode === "PEER_CONFLICT" ? true : undefined,
 		proof,
 		targetId: asString(record?.targetId),
 		action: asString(record?.action),
+		peerConflict,
 		output: input.output,
 	};
 }
@@ -379,6 +420,7 @@ export function normalizeCodeBufferSuccess(input: {
 	idempotent?: boolean;
 	mutationState?: CodeEditData["mutationState"];
 	persisted?: boolean;
+	peerActivity?: CodeEditData["peerActivity"];
 }): CodeFileDetails {
 	const displayPath = toDisplayPath(input.file, input.cwd);
 	const base = {
@@ -477,6 +519,7 @@ export function normalizeCodeBufferSuccess(input: {
 				formatterServer: primary.formatterServer,
 				mutationState: primary.mutationState,
 				persisted: primary.persisted,
+				peerActivity: input.peerActivity,
 			},
 		};
 	}
@@ -586,6 +629,9 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 				"Recovery: tighten the target/action and retry narrowly; a fresh code read is not required after a successful managed edit.",
 			);
 		}
+		if (details.retryable) {
+			parts.push("Retryable: yes");
+		}
 		return parts.join("\n");
 	}
 
@@ -671,12 +717,14 @@ export function formatCodeToolContent(details: CodeToolResultDetails): string {
 
 	if (details.command === "edit") {
 		const files = getEditFiles(details.data, details.file, details.displayPath);
-		if (files.length > 1 || files.some(file => file.status === "failed" || file.error)) {
-			return withHint(formatGroupedEditContent(details.data, files));
-		}
-		const primary = files[0];
-		if (!primary) return withHint("");
-		return withHint(formatSingleEditContent(primary, details.displayPath));
+		const content =
+			files.length > 1 || files.some(file => file.status === "failed" || file.error)
+				? formatGroupedEditContent(details.data, files)
+				: (() => {
+						const primary = files[0];
+						return primary ? formatSingleEditContent(primary, details.displayPath) : "";
+					})();
+		return withHint(appendPeerActivityFooter(content, details.data.peerActivity));
 	}
 
 	function formatProofLine(label: string, proof: CodeProofData): string {
@@ -906,6 +954,30 @@ function formatGroupedEditContent(data: CodeEditData, files: CodeEditFileData[])
 	}
 	return lines.join("\n");
 }
+
+function appendPeerActivityFooter(content: string, peerActivity: CodeEditData["peerActivity"]): string {
+	if (!peerActivity || peerActivity.length === 0) return content;
+	const lines = [content, "", "Peer activity:"];
+	for (const file of peerActivity) {
+		for (const edit of file.edits.slice(0, 5)) {
+			const label = edit.sessionId ? `[${truncatePreview(edit.sessionId, 8)}]` : "[peer]";
+			const codePath =
+				(edit.codePath ? truncatePreview(edit.codePath, PREVIEW_TEXT_LIMIT) : (file.displayPath ?? file.file)) ??
+				file.file;
+			const age = formatPeerActivityAge(edit.ageSeconds);
+			lines.push(`  ${replaceTabs(label)} ${replaceTabs(codePath)}  ${age}`);
+		}
+	}
+	return lines.join("\n");
+}
+
+function formatPeerActivityAge(ageSeconds: number | undefined): string {
+	if (ageSeconds === undefined) return "just now";
+	if (ageSeconds < 60) return `${Math.max(0, ageSeconds)}s ago`;
+	const age = formatAge(ageSeconds);
+	return age.endsWith("ago") ? age : `${age} ago`;
+}
+
 function normalizeOutlineData(value: unknown): { entries: CodeOutlineEntry[]; graphStatus?: string } {
 	if (Array.isArray(value)) {
 		return { entries: normalizeOutlineEntries(value) };
@@ -1299,11 +1371,11 @@ function previewList<T>(items: T[], limit: number): T[] {
 	return items.slice(0, limit);
 }
 
-function truncatePreview(value: string | undefined): string | undefined {
+function truncatePreview(value: string | undefined, maxLen: number = PREVIEW_TEXT_LIMIT): string | undefined {
 	if (!value) return value;
 	const singleLine = value.replace(/\s+/g, " ").trim();
-	if (singleLine.length <= PREVIEW_TEXT_LIMIT) return singleLine;
-	return `${singleLine.slice(0, PREVIEW_TEXT_LIMIT - 1)}…`;
+	if (singleLine.length <= maxLen) return singleLine;
+	return `${singleLine.slice(0, Math.max(0, maxLen - 1))}…`;
 }
 function normalizeProof(value: unknown): CodeProofData | undefined {
 	const record = asRecord(value);

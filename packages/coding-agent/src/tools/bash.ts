@@ -523,33 +523,19 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 		const contextPressure = classifyContextPressure({
 			toolName: this.name,
 			params: { command: rawCommand },
-			head: headLines,
-			tail: tailLines,
+			detailsMeta: finalResult.details?.meta,
 		});
-		const resultWithContextPressure = contextPressure
-			? {
-					...finalResult,
-					details: {
-						...(finalResult.details ?? {}),
-						meta: {
-							...(finalResult.details?.meta ?? {}),
-							contextPressure,
-						},
-					},
-				}
-			: finalResult;
-		if (
-			contextPressure &&
-			contextPressure.category !== "verification" &&
-			contextPressure.presentation === "summary-first"
-		) {
-			return {
-				...resultWithContextPressure,
-				content: [{ type: "text", text: contextPressure.summary }],
-			};
-		}
-
-		return resultWithContextPressure;
+		if (!contextPressure) return finalResult;
+		return {
+			...finalResult,
+			details: {
+				...(finalResult.details ?? {}),
+				meta: {
+					...(finalResult.details?.meta ?? {}),
+					contextPressure,
+				},
+			},
+		};
 	}
 }
 

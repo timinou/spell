@@ -73,6 +73,7 @@ export type StatusLineSegmentId =
 	| "time_spent"
 	| "time"
 	| "session"
+	| "coord"
 	| "hostname"
 	| "cache_read"
 	| "cache_write"

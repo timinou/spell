@@ -11,6 +11,7 @@
 - Renamed `emacs_code` tool to `code` (display name: "Code")
 - Promoted `code` to premiere source file tool; demoted `read`, `edit`, `write` from core to standard tier (fallback tools)
 - Write tool now routes code-supported files through the managed code buffer (same lifecycle as `code edit`), removing the redirect-to-`code edit` error. Non-code files continue to use the LSP writethrough path.
+- Task tool no longer hard-rejects a batch when `isolated:true` is requested but `task.isolation.mode="none"`; the batch runs non-isolated and the aggregate summary surfaces a one-line downgrade notice. `TaskToolDetails.isolationDowngraded` exposes the flag. Motivated by the PLAN-265 cascade where the strict reject compounded with an uncommitted Wave 1 and blocked the guardrail plan from spawning any subagents.
 
 ### Added
 

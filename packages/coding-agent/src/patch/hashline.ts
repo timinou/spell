@@ -9,7 +9,7 @@
  * before any mutation occurs.
  *
  * Displayed format: `LINENUM#HASH:TEXT`
- * Reference format: `"LINENUM#HASH"` (e.g. `"5#aa"`)
+ * Reference format: `"LINENUM#HASH"` (e.g. `"5#QW"`)
  */
 
 import type { HashMismatch } from "./types";
@@ -293,7 +293,7 @@ export async function* streamHashLinesFromLines(
 }
 
 /**
- * Parse a line reference string like `"5#abcd"` into structured form.
+ * Parse a line reference string like `"5#QW"` into structured form.
  *
  * @throws Error if the format is invalid (not `NUMBER#HEXHASH`)
  */
@@ -306,13 +306,44 @@ export function parseTag(ref: string): { line: number; hash: string } {
 	//  5. optional trailing display suffix (":..." or "  ...")
 	const match = ref.match(/^\s*[>+-]*\s*(\d+)\s*#\s*([ZPMQVRWSNKTXJBYH]{2})/);
 	if (!match) {
-		throw new Error(`Invalid line reference "${ref}". Expected format "LINE#ID" (e.g. "5#aa").`);
+		throw new Error(`Invalid line reference "${ref}". Expected format "LINE#ID" (e.g. "5#QW").`);
 	}
 	const line = Number.parseInt(match[1], 10);
 	if (line < 1) {
 		throw new Error(`Line number must be >= 1, got ${line} in "${ref}".`);
 	}
 	return { line, hash: match[2] };
+}
+
+export const HASHLINE_RETRY_GUIDANCE =
+	"Re-read the file to get fresh LINE#ID anchors, then retry the smallest valid edit.";
+
+export class HashlineAnchorError extends Error {
+	constructor(
+		public readonly code: "missing_anchor" | "malformed_anchor",
+		message: string,
+	) {
+		super(message);
+		this.name = new.target.name;
+	}
+}
+
+export class MissingHashlineAnchorError extends HashlineAnchorError {
+	constructor(editIndex: number) {
+		super(
+			"missing_anchor",
+			`Edit ${editIndex}: replace requires at least one valid LINE#ID anchor in "pos" or "end". ${HASHLINE_RETRY_GUIDANCE}`,
+		);
+	}
+}
+
+export class MalformedHashlineAnchorError extends HashlineAnchorError {
+	constructor(editIndex: number, field: "pos" | "end", raw: string, causeMessage: string) {
+		super(
+			"malformed_anchor",
+			`Edit ${editIndex}: invalid ${field} anchor "${raw}". Expected LINE#ID from read output (e.g. "12#QW"). Cause: ${causeMessage} ${HASHLINE_RETRY_GUIDANCE}`,
+		);
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

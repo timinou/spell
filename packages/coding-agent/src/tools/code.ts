@@ -7,12 +7,7 @@
 
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import {
-	type CodeBufferOptions,
-	type CodeBufferResult,
-	executeCodeBuffer,
-	executeCodeGraph,
-} from "@oh-my-pi/pi-natives";
+import { type CodeBufferOptions, type CodeBufferResult, executeCodeGraph } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import { Text } from "@oh-my-pi/pi-tui";
 import { getProjectDir, logger } from "@oh-my-pi/pi-utils";
@@ -25,11 +20,14 @@ import markdownHint from "../prompts/tools/code-hint-markdown.md" with { type: "
 import semanticHint from "../prompts/tools/code-hint-semantic.md" with { type: "text" };
 import textFallbackHint from "../prompts/tools/code-hint-text-fallback.md" with { type: "text" };
 import typstHint from "../prompts/tools/code-hint-typst.md" with { type: "text" };
+import { callCodeBuffer, recentPeerActivity } from "../session/edit-coordinator";
 import { renderCodeCell } from "../tui";
 import type { ToolSession } from ".";
 import {
 	type CodeFileCommand,
 	type CodeGraphCommand,
+	type CodePeerActivityFile,
+	type CodePeerConflictData,
 	type CodeToolResultDetails,
 	createCodeGraphDetails,
 	createCodeToolError,
@@ -43,6 +41,7 @@ import {
 } from "./code-supported-files";
 import { enforceModeWrite } from "./mode-guard";
 import { replaceTabs } from "./render-utils";
+import { PeerConflictToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const GRAPH_COMMANDS = new Set(["index", "status", "context", "impact", "deps", "flow", "dead_code", "clusters"]);
@@ -83,9 +82,9 @@ const FILE_COMMANDS = new Set([
 	"close",
 ]);
 
-function timedCodeBuffer(options: CodeBufferOptions): CodeBufferResult {
+function timedCodeBuffer(session: ToolSession, options: CodeBufferOptions): CodeBufferResult {
 	const start = performance.now();
-	const result = executeCodeBuffer(options);
+	const result = callCodeBuffer({ session }, options);
 	const durationMs = Math.round(performance.now() - start);
 	const file = options.file ? path.basename(options.file) : undefined;
 	logger.debug("code buffer operation", { command: options.command, file, durationMs });
@@ -178,7 +177,41 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 	return value as Record<string, unknown>;
 }
+function normalizePeerConflict(output: unknown): CodePeerConflictData | undefined {
+	const record = asRecord(output);
+	const peerConflict = asRecord(record?.peerConflict);
+	if (!peerConflict) return undefined;
+	const sessionId = typeof peerConflict.sessionId === "string" ? peerConflict.sessionId : undefined;
+	const codePath = typeof peerConflict.codePath === "string" ? peerConflict.codePath : undefined;
+	const peerRevision = typeof peerConflict.peerRevision === "number" ? peerConflict.peerRevision : undefined;
+	const peerCommitTs = typeof peerConflict.peerCommitTs === "number" ? peerConflict.peerCommitTs : undefined;
+	if (!sessionId || !codePath || peerRevision === undefined || peerCommitTs === undefined) return undefined;
+	return { sessionId, codePath, peerRevision, peerCommitTs };
+}
 
+function collectPeerActivity(
+	file: string,
+	sessionCwd: string,
+	currentSessionId?: string | null,
+): CodePeerActivityFile | undefined {
+	const activity = recentPeerActivity(file, Date.now() - 60_000, 5);
+	const edits = (activity.edits ?? [])
+		.filter(edit => !currentSessionId || edit.sessionId !== currentSessionId)
+		.flatMap(edit => {
+			const codePaths = Array.isArray(edit.codePaths) && edit.codePaths.length > 0 ? edit.codePaths : [undefined];
+			return codePaths.map(codePath => ({
+				sessionId: edit.sessionId,
+				codePath,
+				ts: edit.ts,
+				ageSeconds:
+					typeof edit.ts === "number" ? Math.max(0, Math.floor((Date.now() - edit.ts) / 1000)) : undefined,
+			}));
+		})
+		.sort((left, right) => (right.ts ?? 0) - (left.ts ?? 0));
+	if (edits.length === 0) return undefined;
+	const relativePath = path.relative(sessionCwd, file).replaceAll("\\", "/");
+	return { file, displayPath: relativePath || path.basename(file), edits };
+}
 function normalizeNativeEditFileResults(output: unknown): NativeEditFileResult[] {
 	const record = asRecord(output);
 	const fileResults = record?.fileResults;
@@ -374,6 +407,10 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 		this.description = codeDescription;
 	}
 
+	#timedCodeBuffer(options: CodeBufferOptions): CodeBufferResult {
+		return timedCodeBuffer(this.#session, options);
+	}
+
 	#maybeInjectHints(file?: string): string | undefined {
 		if (!file) return undefined;
 		const extension = path.extname(file).slice(1).toLowerCase();
@@ -409,13 +446,13 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 		if (!this.#session.settings.get("lsp.enabled")) {
 			return { formatting: "unavailable" };
 		}
-		const readResult = timedCodeBuffer({ command: "read", file, resolution: 3 });
+		const readResult = this.#timedCodeBuffer({ command: "read", file, resolution: 3 });
 		if (readResult.error || typeof readResult.output !== "string") {
 			return { formatting: "unavailable" };
 		}
 		const formatted = await formatFileContent(file, readResult.output, cwd, signal);
 		if (formatted.formatter === FileFormatResult.FORMATTED) {
-			const replaceResult = timedCodeBuffer({
+			const replaceResult = this.#timedCodeBuffer({
 				command: "replace_content",
 				file,
 				content: formatted.content,
@@ -491,7 +528,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			const noop = changeSummary.addedLines === 0 && changeSummary.removedLines === 0;
 			if (noop) {
 				noopFileCount += 1;
-				const closeResult = timedCodeBuffer({ command: "close", file: fileResult.file });
+				const closeResult = this.#timedCodeBuffer({ command: "close", file: fileResult.file });
 				if (closeResult.error) {
 					logger.warn("failed to invalidate noop edit buffer", {
 						file: fileResult.file,
@@ -512,7 +549,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 
 			changedFileCount += 1;
 			const formatResult = await this.#prepareEditedFileForSave(fileResult.file, sessionCwd, signal);
-			const saveResult = timedCodeBuffer({ command: "save", file: fileResult.file });
+			const saveResult = this.#timedCodeBuffer({ command: "save", file: fileResult.file });
 			if (saveResult.error) {
 				failureCount += 1;
 				completedResults.push({
@@ -574,6 +611,10 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				: changedFileCount > 0
 					? "applied"
 					: "noop";
+		const peerActivity = editFiles.slice(0, 3).flatMap(file => {
+			const activity = collectPeerActivity(file, sessionCwd, this.#session.getSessionId?.());
+			return activity ? [activity] : [];
+		});
 		const details = normalizeCodeBufferSuccess({
 			command: "edit",
 			output: {
@@ -589,6 +630,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			idempotent: params.idempotent === true,
 			mutationState: aggregateStatus === "noop" ? "noop" : "applied",
 			persisted: failureCount === 0 && changedFileCount > 0,
+			peerActivity,
 		});
 		const injectedHint = editFiles.length === 1 ? this.#maybeInjectHints(editFiles[0]) : undefined;
 		if (injectedHint) {
@@ -664,7 +706,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				}
 				let managedBufferPaths = new Set<string>();
 				if (missingFiles.length > 0) {
-					const listedBuffers = timedCodeBuffer({ command: "list" });
+					const listedBuffers = this.#timedCodeBuffer({ command: "list" });
 					if (listedBuffers.error) {
 						const details = createCodeToolError({
 							command,
@@ -722,7 +764,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				for (const file of editFiles) {
 					const fileState = editFileStates.get(file);
 					if (!shouldCheckBufferFreshness(command, fileState?.createsMissingFile === true)) continue;
-					const freshness = timedCodeBuffer({ command: "diff", file });
+					const freshness = this.#timedCodeBuffer({ command: "diff", file });
 					if (freshness.error) {
 						const details = createCodeToolError({
 							command,
@@ -746,7 +788,7 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 					}
 				}
 			} else if (activeFile && shouldCheckBufferFreshness(command, false)) {
-				const freshness = timedCodeBuffer({ command: "diff", file: activeFile });
+				const freshness = this.#timedCodeBuffer({ command: "diff", file: activeFile });
 				if (freshness.error) {
 					const details = createCodeToolError({
 						command,
@@ -770,11 +812,15 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 				}
 			}
 
-			const result = timedCodeBuffer(options);
+			const result = this.#timedCodeBuffer(options);
 			if (result.error) {
+				const peerConflict = normalizePeerConflict(result.output);
+				if (peerConflict) {
+					throw new PeerConflictToolError(peerConflict);
+				}
 				if (command === "edit") {
 					for (const file of editFiles) {
-						const closeResult = timedCodeBuffer({ command: "close", file });
+						const closeResult = this.#timedCodeBuffer({ command: "close", file });
 						if (closeResult.error) {
 							logger.warn("failed to invalidate buffer after edit error", {
 								file,
@@ -818,6 +864,18 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			const text = formatCodeToolContent(details);
 			return toolResult(details).text(text).done();
 		} catch (err) {
+			if (err instanceof PeerConflictToolError) {
+				const details = createCodeToolError({
+					command,
+					file: primaryEditFile ?? (params.file ? path.resolve(sessionCwd, params.file) : undefined),
+					cwd: sessionCwd,
+					output: { code: "PEER_CONFLICT", peerConflict: err.peerConflict, message: err.message },
+					message: err.message,
+					retryable: true,
+					peerConflict: err.peerConflict,
+				});
+				return toolResult(details).text(formatCodeToolContent(details)).done();
+			}
 			const message = err instanceof Error ? err.message : String(err);
 			const errorName = err instanceof Error ? err.name : typeof err;
 			const isStaleModule =
@@ -879,6 +937,17 @@ export class CodeTool implements AgentTool<typeof codeSchema> {
 			return sanitized.length > maxChars ? `${sanitized.slice(0, maxChars)}\n...truncated` : sanitized;
 		};
 		const isError = "isError" in result && result.isError === true;
+		if (details?.kind === "error" && details.peerConflict) {
+			const ageSeconds = Math.max(0, Math.floor((Date.now() - details.peerConflict.peerCommitTs) / 1_000));
+			const panel = [
+				"Peer conflict",
+				`  session: ${details.peerConflict.sessionId.slice(0, 8)}…`,
+				`  target:  ${details.peerConflict.codePath}`,
+				`  peer revision: ${details.peerConflict.peerRevision} · ${ageSeconds}s ago`,
+				"  Retrying with fresh tree…",
+			].join("\n");
+			return new Text(toRender(panel), 0, 0);
+		}
 		if (isError || details?.kind === "error") {
 			return new Text(toRender(details?.kind === "error" ? details.message : text), 0, 0);
 		}

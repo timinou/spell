@@ -1,0 +1,126 @@
+#+TITLE: Wave-boundary git snapshot ref for plan orchestration
+#+STATE: ITEM
+#+SESSION_ID: 14c07eaaa046a608
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T08-04-50-433Z_14c07eaaa046a608.jsonl]]
+#+CUSTOM_ID: FEAT-588-wave-boundary-git-snapshot-ref-for-plan
+#+EFFORT: 4h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Scope
+
+In-scope:
+- New module `packages/coding-agent/src/orchestrators/fluid/wave-snapshot.ts` (snapshot create + lookup).
+- Hook in `packages/coding-agent/src/tools/todo-write.ts::promoteReadyTasks` (or the applyOps promotion path) to invoke the snapshot at group-boundary transitions for plan-materialized todo groups.
+- New git-refs namespace: `refs/spell/plan/<PLAN-ID>/wave-<N>`.
+- Surface a `/snapshots` command or agent-facing description in `packages/coding-agent/src/commands/` enumerating active snapshots for the current plan.
+
+Out-of-scope:
+- Non-plan-materialized todo groups (free-form user todos not tied to a PLAN item).
+- Cross-repo or non-git workspaces.
+- Automatic rollback. Snapshot is a restore point; the agent or user decides to use it.
+- Replacing the existing `loop/git/checkpoint.ts` mechanism (that is loop-specific; stays orthogonal).
+
+Rationale: in the incident session, Wave 1 (FEAT-577 engine work) completed with passing tests but was not committed. Wave 2 dispatched destructive `quick_task` subagents. When recovery needed `git restore`, HEAD predated Wave 1, so recovery reverted Wave 1 work. A wave-boundary ref would have preserved the working tree as `refs/spell/plan/PLAN-259/wave-1` before Wave 2 started, making `git restore --source=refs/spell/plan/PLAN-259/wave-1` a lossless recovery.
+
+* Existing Patterns
+
+- `packages/coding-agent/src/loop/git/checkpoint.ts::createLoopCheckpoint` uses `$` `git add ${files}` `$` + `$` `git commit` `$` on a side branch. Model the wave snapshot after this but emit to a ref rather than a branch.
+- `packages/coding-agent/src/commit/git/index.ts::ControlledGit` wraps git with error-surfaced Bun `$` calls; reuse for ref writes.
+- `packages/coding-agent/src/tools/todo-write.ts::promoteReadyTasks` is the single place where pending tasks become runnable. When the freshly-promoted tasks belong to a new group (i.e. all tasks in the prior group are `completed` | `abandoned`), that is the wave boundary.
+- `materializePlanWaves` in `packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts` tags groups with `name` (e.g. "Wave 1 — Engine critical section"). Extend `TodoGroup` to carry the plan item id + wave index so the snapshot can be named deterministically.
+- `interactive-mode.ts` calls `session.setTodoGroups(groups, { reset: true })` after approving a plan — the handoff point where snapshot state can be initialized.
+
+* Tests
+
+File: `packages/coding-agent/test/orchestrators/wave-snapshot.test.ts` (new).
+
+Scenarios:
+
+1. *initial-wave snapshot not created prematurely* — plan materialized with 2 waves; no tasks completed yet → no ref written.
+
+2. *wave-1 complete creates wave-1 ref before wave-2 promotion* — all group-1 tasks move to completed; first group-2 task promoted to in_progress → ref `refs/spell/plan/<id>/wave-1` points at current working-tree commit.
+
+3. *dirty tree snapshot includes working changes* — wave-1 completes with uncommitted changes → snapshot commit includes those changes (tree-id distinct from HEAD).
+
+4. *clean tree snapshot points at HEAD* — wave-1 completes with zero uncommitted changes → ref points at HEAD; no new commit object created.
+
+5. *wave-2 completes creates wave-2 ref* — subsequent wave transition writes its own ref without disturbing wave-1.
+
+6. *non-plan groups skipped* — todo group without plan-id metadata → no snapshot.
+
+7. *non-git workspace graceful skip* — working dir is not a git repo → snapshot path noops with a single logger warning, no throw.
+
+8. *ref lookup utility* — `listPlanSnapshots(planId)` returns an array of `{ wave, ref, tree, timestamp }` sorted by wave ascending.
+
+* Implementation
+
+** TodoGroup plan metadata
+:PROPERTIES:
+:CUSTOM_ID: FEAT-588-wave-boundary-git-snapshot-ref-for-plan::todogroup-meta
+:END:
+- File: `packages/coding-agent/src/tools/todo-write.ts` (TodoGroup type) + `packages/coding-agent/src/orchestrators/fluid/plan-to-todos.ts::materializePlanWaves`.
+- Extend `TodoGroup` with optional `planItemId?: string` and `waveIndex?: number` (1-based).
+- Populate from `PlanWave` entries during `materializePlanWaves`.
+- Thread through persistence in `session/agent-session.ts::setTodoGroups` so reload preserves metadata.
+
+** Snapshot module
+:PROPERTIES:
+:CUSTOM_ID: FEAT-588-wave-boundary-git-snapshot-ref-for-plan::snapshot-module
+:DEPENDS: FEAT-588-wave-boundary-git-snapshot-ref-for-plan::todogroup-meta
+:END:
+- File: `packages/coding-agent/src/orchestrators/fluid/wave-snapshot.ts`
+- Exports:
+  - `createWaveSnapshot({ cwd, planItemId, waveIndex, logger }): Promise<WaveSnapshotResult>`.
+  - `listPlanSnapshots(cwd, planItemId): Promise<WaveSnapshotEntry[]>`.
+- `createWaveSnapshot`:
+  - Check `git rev-parse --is-inside-work-tree`. If not a repo → warn once and return `{ skipped: "non-git" }`.
+  - If working tree clean vs HEAD → `git update-ref refs/spell/plan/<planItemId>/wave-<N> HEAD` → return `{ ref, tree, fromHead: true }`.
+  - Else → create a tree snapshot via `git stash create` or `git write-tree` against a temp index built from `git add -A --intent-to-add` (no real commit on HEAD). Then `git commit-tree <tree> -p HEAD -m "spell wave boundary ..."` and `git update-ref refs/spell/plan/<planItemId>/wave-<N> <commit>`. Do NOT advance HEAD.
+  - Atomicity: if any step fails, clean up the temp index/tree without leaving dangling refs.
+
+** Promotion hook
+:PROPERTIES:
+:CUSTOM_ID: FEAT-588-wave-boundary-git-snapshot-ref-for-plan::promotion-hook
+:DEPENDS: FEAT-588-wave-boundary-git-snapshot-ref-for-plan::snapshot-module
+:END:
+- File: `packages/coding-agent/src/tools/todo-write.ts::applyOps` (or `promoteReadyTasks`).
+- After `promoteReadyTasks` determines the set of tasks transitioning pending -> in_progress, check: if any promoted task belongs to group-K and every task in all groups with index < K is completed/abandoned, and the prior wave transition has not been snapshotted yet (track via `session.waveSnapshots: Set<string>`), call `createWaveSnapshot` for wave K-1.
+- The hook is best-effort: on error, log and continue; do not block promotion.
+
+** Command surface
+:PROPERTIES:
+:CUSTOM_ID: FEAT-588-wave-boundary-git-snapshot-ref-for-plan::command-surface
+:DEPENDS: FEAT-588-wave-boundary-git-snapshot-ref-for-plan::snapshot-module
+:END:
+- File: new `packages/coding-agent/src/commands/snapshots.ts`.
+- Register a `/snapshots` slash command in `packages/coding-agent/src/modes/controllers/command-controller.ts` that lists snapshots for the active plan item and shows restore examples (`git restore --source=refs/spell/plan/<id>/wave-<N> -- <path>`).
+
+** Write tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-588-wave-boundary-git-snapshot-ref-for-plan::snapshot-tests
+:DEPENDS: FEAT-588-wave-boundary-git-snapshot-ref-for-plan::promotion-hook
+:END:
+- File: `packages/coding-agent/test/orchestrators/wave-snapshot.test.ts`
+- Each test uses `git init` on a tmpdir, seeds files, runs the promotion hook directly via a synthesized TodoGroup set, then asserts ref presence via `git rev-parse refs/spell/plan/<id>/wave-<N>`.
+- Use Bun `$` with `cwd`; no external fs helpers beyond `node:fs/promises`.
+
+* Edge Cases
+
+- *Concurrent wave transitions* — two children complete simultaneously and both trigger promotion. Guard via `session.waveSnapshots` set; one call wins, others noop.
+- *Plan rewrite mid-execution* — if the user calls `todo_write` `replace` to swap groups, snapshot tracker may see waves skipped. Defensive: if a wave-K promotion fires but wave-(K-1) was never completed, skip the snapshot rather than error.
+- *HEAD is a tag / detached* — refs under `refs/spell/` are independent of HEAD; no conflict.
+- *Ref collisions across plans* — namespace includes `planItemId`; two active plans get distinct refs.
+- *Submodules* — ignore submodule content; snapshot only the superproject tree (existing git default).
+- *Shallow clones* — commit-tree requires full parent chain; fall back to orphan commit if needed. Refs still usable via `git restore --source`.
+- *Merge / rebase rewrites HEAD* — snapshot refs remain valid (pointing at the recorded commit object) until GC. Add a garbage-collection config suggestion in the `/snapshots` output ("refs persist; run `git update-ref -d` to remove").
+- *Non-gitignored junk in working dir* — snapshot `--intent-to-add` path captures untracked files too; users who want to exclude should rely on `.gitignore`.
+
+* Acceptance Criteria
+
+- `bun test packages/coding-agent/test/orchestrators/wave-snapshot.test.ts` passes all 8 scenarios.
+- `bun check:ts` clean.
+- Manual repro: run a plan with two trivial waves mutating `foo.txt`. After wave-1 tasks complete and wave-2 begins, `git show refs/spell/plan/<id>/wave-1 -- foo.txt` reproduces wave-1 state.
+- Manual destructive repro: after wave-1 snapshot, have a subagent clobber `foo.txt`. Run `git restore --source=refs/spell/plan/<id>/wave-1 -- foo.txt` -> wave-1 content restored.
+- `/snapshots` command inside an active session shows the refs.
+- Grep audit: no new global mutable state outside `session.waveSnapshots`.

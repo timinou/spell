@@ -1,0 +1,102 @@
+#+TITLE: Write-shrink and parse-fail guard on managed-buffer writes
+#+STATE: ITEM
+#+SESSION_ID: 14c07eaaa046a608
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T08-04-50-433Z_14c07eaaa046a608.jsonl]]
+#+CUSTOM_ID: FEAT-585-write-shrink-and-parse-fail-guard-on-man
+#+EFFORT: 3h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Scope
+
+In-scope:
+- `packages/coding-agent/src/tools/write.ts::WriteTool.execute` code-supported branch.
+- `packages/coding-agent/src/tools/managed-code-buffer.ts::applyManagedBufferContent`.
+- `packages/coding-agent/src/tools/code-text-compatibility.ts` (reuse compatibility-notice helper introduced by PLAN-262).
+- Optional `force: boolean` parameter on Write schema (default false).
+
+Out-of-scope:
+- Re-enabling the commented-out `edit` tool redirect. PLAN-262 deliberately made text `edit` + `write` lenient with a compatibility notice; this FEAT does not reverse that policy. It only adds a content-quality gate on the path that is already lenient.
+- Changes to non-code-supported `write` path (LSP writethrough stays untouched).
+- Any change to `code edit` tool.
+
+Rationale: session `14c0744312762edc` lost `crates/pi-code-engine/src/buffer.rs` when a `quick_task` subagent ran `write` with 11 bytes of literal `PLACEHOLDER` over a 25 KB existing file. The managed-buffer write succeeded silently because tree-sitter parses `PLACEHOLDER` as a valid Rust identifier. Need a shrink-ratio gate plus a parse-regression gate.
+
+* Existing Patterns
+
+- `isCodeToolSupportedPath(absolutePath)` at `packages/coding-agent/src/tools/write.ts:117` already routes code-supported files.
+- `applyManagedBufferContent(absolutePath, content, { create })` wraps `executeCodeBuffer` with `edit` (replace) semantics. Extend here — this is the single choke point for write-to-code paths.
+- `formatCodeTextCompatibilityNotice("write")` in `packages/coding-agent/src/tools/code-text-compatibility.ts` is the PLAN-262 notice. Reuse its tone and error-envelope shape.
+- Tree-sitter parse status is available via `executeCodeBuffer` command `status` or `outline`; use whichever is cheapest. If a dedicated parse-probe command exists in pi-natives (via `describeCodeToolSupportedFiles`), use that.
+- Existing `WriteToolParams` schema lives in `packages/coding-agent/src/tools/write.ts` near top; add `force?: boolean` with a description pointing to this guard.
+
+* Tests
+
+File: `packages/coding-agent/test/tools/write-shrink-guard.test.ts` (new).
+
+Scenarios (each asserts exact error shape or exact success payload):
+
+1. *shrink-guard rejects PLACEHOLDER-style clobber* — existing code-supported file with 2 048 bytes of valid Rust; `write` with 11 bytes of `PLACEHOLDER` → tool returns error with `code: "WRITE_SHRINK_BLOCKED"` and no disk mutation. Read back shows original bytes intact.
+
+2. *shrink-guard allows same-size replacement* — existing 2 048 B file; `write` 2 048 B of new valid Rust → success.
+
+3. *shrink-guard allows small file replacement* — existing 200 B file (below 256 B threshold); `write` 20 B → success (small files are not gated).
+
+4. *new file allowed* — non-existent target path; `write` 50 B → success (new-file path is always allowed regardless of size).
+
+5. *parse-regression guard rejects broken replacement* — existing valid Rust file; `write` content that fails tree-sitter parse (mismatched braces) while original parsed cleanly → error `code: "WRITE_PARSE_REGRESSION"`, no mutation.
+
+6. *parse-guard skipped when original already broken* — existing file with parse errors; `write` of equally broken content → success (do not gate authors who are repairing a file in multiple passes).
+
+7. *force=true bypasses both guards* — same as (1) but with `force: true` → success + output includes compatibility notice from `formatCodeTextCompatibilityNotice` plus an extra line naming the bypassed guard.
+
+8. *guard does not fire on non-code-supported paths* — write PLACEHOLDER to `README.txt` → success (text writethrough path untouched).
+
+* Implementation
+
+** Add force to schema
+:PROPERTIES:
+:CUSTOM_ID: FEAT-585-write-shrink-and-parse-fail-guard-on-man::add-force-param
+:END:
+- File: `packages/coding-agent/src/tools/write.ts`
+- Extend the Type params: `force: Type.Optional(Type.Boolean({ description: "Bypass write-shrink and parse-regression guards. Use only when deliberately replacing a file wholesale." }))`.
+- Plumb `force` through to the managed-buffer branch.
+- No behavior change in non-code branch.
+
+** Implement guard helper
+:PROPERTIES:
+:CUSTOM_ID: FEAT-585-write-shrink-and-parse-fail-guard-on-man::guard-helper
+:DEPENDS: FEAT-585-write-shrink-and-parse-fail-guard-on-man::add-force-param
+:END:
+- File: `packages/coding-agent/src/tools/managed-code-buffer.ts` (or new sibling `managed-buffer-guards.ts`).
+- `evaluateWriteGuards(absolutePath, newContent): Promise<WriteGuardResult>` returning `{ ok: true } | { ok: false, code: "WRITE_SHRINK_BLOCKED" | "WRITE_PARSE_REGRESSION", detail: string }`.
+- Shrink check: if file exists and `oldSize >= 256` and `newSize < max(64, oldSize * 0.1)` → block.
+- Parse check: invoke native parse-status on both old and new content; block when old parses clean and new does not.
+- `applyManagedBufferContent(absolutePath, content, { create, force })` calls the guard before the native `edit`; on block throws a typed error with the code + a human-readable message referencing `code edit` or `force: true`.
+
+** Write test suite
+:PROPERTIES:
+:CUSTOM_ID: FEAT-585-write-shrink-and-parse-fail-guard-on-man::write-tests
+:DEPENDS: FEAT-585-write-shrink-and-parse-fail-guard-on-man::guard-helper
+:END:
+- File: `packages/coding-agent/test/tools/write-shrink-guard.test.ts`
+- All 8 scenarios above, using real fs tempdirs + real native code buffer. Follow existing patterns in `packages/coding-agent/test/tools/write.test.ts` and `packages/coding-agent/test/tools/tools.test.ts` for setup boilerplate.
+- No mocks of pi-natives; guard logic must be exercised end-to-end.
+
+* Edge Cases
+
+- *Symlinks* — resolve to real path before running shrink check; do not follow into areas outside `session.cwd` sandbox (enforced by existing `enforcePathWrite`).
+- *Concurrent writes* — guard reads old size, then native edit replaces. If another session writes between probe and replace, worst case is a false-positive shrink block. Acceptable; retry with `force` on user request.
+- *Generated files* — large auto-generated `.d.ts` files may shrink legitimately. Still blocked. Exit via `force: true`; guard is advisory-with-teeth, not security-grade.
+- *Binary or UTF-16 content* — managed buffers only apply to code-supported extensions, which are UTF-8; non-issue.
+- *File-creation race* — when `create: true` and file now exists because a peer created it post-probe, guard still evaluates on the found content. Acceptable.
+- *pi-code-engine reload coordination* — after block, do not call native `edit`; the engine state must be identical to pre-call. Ensure test #1 asserts buffer version unchanged.
+
+* Acceptance Criteria
+
+- Running the full write-shrink test file passes locally: `bun test packages/coding-agent/test/tools/write-shrink-guard.test.ts`.
+- `bun check:ts` stays clean for files in this FEAT's scope.
+- Manual repro: attempt to `write` 11 bytes to the current `crates/pi-code-engine/src/buffer.rs` → tool errors with `WRITE_SHRINK_BLOCKED`; bytes on disk unchanged.
+- Manual repro (force): same call with `force: true` → write succeeds, compatibility notice includes "bypassed WRITE_SHRINK_BLOCKED".
+- Grep audit: `grep "applyManagedBufferContent(" packages/coding-agent/src` shows every caller passes `force` through (or omits and accepts default false).
+- Regression: existing `packages/coding-agent/test/tools/tools.test.ts` "routes new TypeScript writes through the managed buffer" still passes.

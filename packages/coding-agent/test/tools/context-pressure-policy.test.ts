@@ -20,7 +20,7 @@ function createToolResult(
 }
 
 describe("context-pressure policy", () => {
-	it("classifies transcript spelunking consistently across read, grep, and bash", () => {
+	it("classifies transcript spelunking for read and grep", () => {
 		const readMeta = classifyContextPressure({
 			toolName: "read",
 			params: { path: "/repo/.spell/agent/sessions/recent.jsonl" },
@@ -29,58 +29,48 @@ describe("context-pressure policy", () => {
 			toolName: "grep",
 			params: { pattern: "toolResult", path: "/repo/.spell/agent/sessions/recent.jsonl" },
 		});
-		const bashMeta = classifyContextPressure({
-			toolName: "bash",
-			params: { command: "jq '.messages[]' /repo/.spell/agent/sessions/recent.jsonl" },
-		});
 
 		expect(readMeta?.category).toBe("transcript-spelunking");
 		expect(grepMeta?.category).toBe("transcript-spelunking");
-		expect(bashMeta?.category).toBe("transcript-spelunking");
 		expect(readMeta?.persistence).toBe("deny-raw");
 		expect(grepMeta?.persistence).toBe("deny-raw");
-		expect(bashMeta?.persistence).toBe("deny-raw");
 		expect(readMeta?.presentation).toBe("summary-first");
 		expect(grepMeta?.presentation).toBe("summary-first");
-		expect(bashMeta?.presentation).toBe("summary-first");
 	});
 
-	it("treats explicit non-zero head/tail as inline raw transcript access", () => {
-		const headMeta = classifyContextPressure({
+	it("keeps bash output inline when it fit the inline budget", () => {
+		const meta = classifyContextPressure({
 			toolName: "bash",
-			params: { command: "jq '.messages[]' /repo/.spell/agent/sessions/recent.jsonl" },
-			head: 20,
-		});
-		const tailMeta = classifyContextPressure({
-			toolName: "bash",
-			params: { command: "jq '.messages[]' /repo/.spell/agent/sessions/recent.jsonl" },
-			tail: 20,
+			params: { command: "git status --short" },
 		});
 
-		expect(headMeta?.category).toBe("transcript-spelunking");
-		expect(tailMeta?.category).toBe("transcript-spelunking");
-		expect(headMeta?.presentation).toBe("inline");
-		expect(tailMeta?.presentation).toBe("inline");
-		expect(headMeta?.persistence).toBe("allow-raw");
-		expect(tailMeta?.persistence).toBe("allow-raw");
+		expect(meta?.category).toBe("other");
+		expect(meta?.presentation).toBe("inline");
+		expect(meta?.persistence).toBe("allow-raw");
 	});
 
-	it("does not opt in on zero-length head or tail", () => {
-		const headMeta = classifyContextPressure({
+	it("marks bash summary-first only when output spilled to an artifact", () => {
+		const spilled = classifyContextPressure({
 			toolName: "bash",
-			params: { command: "jq '.messages[]' /repo/.spell/agent/sessions/recent.jsonl" },
-			head: 0,
-		});
-		const tailMeta = classifyContextPressure({
-			toolName: "bash",
-			params: { command: "jq '.messages[]' /repo/.spell/agent/sessions/recent.jsonl" },
-			tail: 0,
+			params: { command: "cat ./large-log.txt" },
+			detailsMeta: { truncation: { artifactUri: "artifact://session/main/bash/0.txt" } },
 		});
 
-		expect(headMeta?.presentation).not.toBe("inline");
-		expect(tailMeta?.presentation).not.toBe("inline");
-		expect(headMeta?.persistence).not.toBe("allow-raw");
-		expect(tailMeta?.persistence).not.toBe("allow-raw");
+		expect(spilled?.category).toBe("other");
+		expect(spilled?.presentation).toBe("summary-first");
+		expect(spilled?.persistence).toBe("summary-only");
+		expect(spilled?.summary).toContain("artifact://session/main/bash/0.txt");
+	});
+
+	it("downgrades bash errors to summary-only even when output fit inline", () => {
+		const meta = classifyContextPressure({
+			toolName: "bash",
+			params: { command: "false" },
+			isError: true,
+		});
+
+		expect(meta?.presentation).toBe("inline");
+		expect(meta?.persistence).toBe("summary-only");
 	});
 
 	it("keeps explicit read ranges and narrow grep scopes in precision mode", () => {
@@ -99,38 +89,17 @@ describe("context-pressure policy", () => {
 		expect(grepMeta?.persistence).toBe("allow-raw");
 	});
 
-	it("classifies wait, verification, and git-inspection bash churn separately", () => {
-		const waitMeta = classifyContextPressure({
-			toolName: "bash",
-			params: { command: "sleep 3" },
-		});
-		const verificationMeta = classifyContextPressure({
-			toolName: "bash",
-			params: { command: "bun test packages/coding-agent/test/tools/read-routing.test.ts" },
-		});
-		const gitMeta = classifyContextPressure({
-			toolName: "bash",
-			params: { command: "git diff --stat" },
-		});
-
-		expect(waitMeta?.category).toBe("state-polling");
-		expect(waitMeta?.persistence).toBe("deny-raw");
-		expect(verificationMeta?.category).toBe("verification");
-		expect(verificationMeta?.persistence).toBe("summary-only");
-		expect(gitMeta?.category).toBe("git-inspection");
-		expect(gitMeta?.persistence).toBe("summary-only");
-	});
-
-	it("replaces low-value tool results with compact summaries for memory persistence", () => {
+	it("replaces spilled bash results with compact summaries for memory persistence", () => {
 		const contextPressure = classifyContextPressure({
 			toolName: "bash",
-			params: { command: "sleep 1" },
+			params: { command: "cat ./large-log.txt" },
+			detailsMeta: { truncation: { artifactUri: "artifact://session/main/bash/0.txt" } },
 		});
 		if (!contextPressure) throw new Error("expected context pressure classification");
 
 		const raw = createToolResult({
 			toolName: "bash",
-			content: [{ type: "text", text: "slept for 1 second\nno useful output" }],
+			content: [{ type: "text", text: "a very long log body ..." }],
 		});
 		const safe = createMemorySafeToolResult(raw, contextPressure);
 		if (!safe) throw new Error("expected memory-safe tool result");
@@ -139,32 +108,7 @@ describe("context-pressure policy", () => {
 		expect(
 			(safe.details as { meta?: { contextPressure?: { category?: string } } } | undefined)?.meta?.contextPressure
 				?.category,
-		).toBe("state-polling");
-	});
-
-	it("compacts verification results for memory persistence while keeping metadata", () => {
-		const contextPressure = classifyContextPressure({
-			toolName: "bash",
-			params: { command: "bun test packages/coding-agent/test/tools/read-routing.test.ts" },
-		});
-		if (!contextPressure) throw new Error("expected context pressure classification");
-
-		const raw = createToolResult({
-			toolName: "bash",
-			content: [{ type: "text", text: "ok 1 test" }],
-		});
-		const safe = createMemorySafeToolResult(raw, contextPressure);
-		if (!safe) throw new Error("expected memory-safe tool result");
-
-		expect(safe.content).toEqual([{ type: "text", text: contextPressure.summary }]);
-		expect(
-			(safe.details as { meta?: { contextPressure?: { category?: string; persistence?: string } } } | undefined)
-				?.meta?.contextPressure?.category,
-		).toBe("verification");
-		expect(
-			(safe.details as { meta?: { contextPressure?: { category?: string; persistence?: string } } } | undefined)
-				?.meta?.contextPressure?.persistence,
-		).toBe("summary-only");
+		).toBe("other");
 	});
 
 	it("preserves raw precision tool results while attaching policy metadata", () => {
@@ -188,16 +132,17 @@ describe("context-pressure policy", () => {
 		).toBe("allow-raw");
 	});
 
-	it("uses compact verification summaries when pruned tool results re-enter LLM history", () => {
+	it("uses compact summaries when pruned spilled bash results re-enter LLM history", () => {
 		const contextPressure = classifyContextPressure({
 			toolName: "bash",
-			params: { command: "bun test packages/coding-agent/test/tools/read-routing.test.ts" },
+			params: { command: "cat ./large-log.txt" },
+			detailsMeta: { truncation: { artifactUri: "artifact://session/main/bash/0.txt" } },
 		});
-		if (!contextPressure) throw new Error("expected bash verification classification");
+		if (!contextPressure) throw new Error("expected bash classification");
 
 		const message = createToolResult({
 			toolName: "bash",
-			content: [{ type: "text", text: "ok 1 test" }],
+			content: [{ type: "text", text: "a very long log body ..." }],
 			details: { meta: { contextPressure } },
 			prunedAt: 1,
 		});

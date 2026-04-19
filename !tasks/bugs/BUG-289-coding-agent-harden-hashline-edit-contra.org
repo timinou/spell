@@ -1,5 +1,5 @@
 #+TITLE: coding-agent: harden hashline edit contract and diagnostics
-#+STATE: ITEM
+#+STATE: DOING
 #+SESSION_ID: 14c077b77b8aac32
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T07-34-28-590Z_14c077b77b8aac32.jsonl]]
 #+CUSTOM_ID: BUG-289-coding-agent-harden-hashline-edit-contra

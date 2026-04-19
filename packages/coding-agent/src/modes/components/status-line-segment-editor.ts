@@ -33,6 +33,7 @@ const SEGMENT_INFO: Record<StatusLineSegmentId, { label: string; short: string }
 	time_spent: { label: "Elapsed", short: "session time" },
 	time: { label: "Clock", short: "current time" },
 	session: { label: "Session", short: "session ID" },
+	coord: { label: "Coord", short: "peer awareness" },
 	hostname: { label: "Host", short: "hostname" },
 	cache_read: { label: "Cache ↓", short: "cache read" },
 	cache_write: { label: "Cache \u2191", short: "cache write" },

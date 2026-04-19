@@ -1,0 +1,95 @@
+#+TITLE: Subagent guardrails to prevent destructive cascade after PLAN-259 incident
+#+STATE: DOING
+#+SESSION_ID: 14c07eaaa046a608
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T08-04-50-433Z_14c07eaaa046a608.jsonl]]
+#+CUSTOM_ID: PLAN-265-subagent-guardrails-to-prevent-destructi
+#+EFFORT: 14h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Context
+
+This plan responds to the destructive subagent cascade observed in session =14c0744312762edc= during PLAN-259 execution. Trace summary:
+
+1. Wave 1 (FEAT-577 in =crates/pi-code-engine/src/buffer.rs=) completed, tests green, but was *not committed* before Wave 2 dispatched.
+2. Wave 2 dispatched =task= subagent =1-feat578Napi= which, after =code edit= calls failed structural anchors, fell back to text =edit= on a Rust file. Harness blocked it (this guard has since been deliberately relaxed by PLAN-262-relax-text-edit-compatibility-and-add-wr).
+3. User retried. The retry =task= agent further delegated to three =quick_task= children (=0-SessionIdTypes=, =1-NapiCoordRouting=, =2-CoordBridgeTests=) without =isolated:true= and without scope allowlists.
+4. =quick_task= =1-NapiCoordRouting= did =write= 28 KB of fresh stub content over =crates/pi-natives/src/code_buffer.rs= (wholesale replacement, original implementation lost).
+5. =quick_task= =2-CoordBridgeTests= did =write= 11 bytes (literal =PLACEHOLDER=) over =crates/pi-code-engine/src/buffer.rs= (entire FEAT-577 wave-1 work clobbered).
+6. =git restore --source=HEAD= recovered to pre-Wave-1 commit =ac06f7ae0=, losing the FEAT-577 work that was tested but uncommitted. Main agent had to manually re-apply FEAT-577 buffer.rs edits from in-context memory.
+
+Root causes (each addressed by a child item below):
+
+- *Write tool has no content-quality gate* on code-supported files. Tree-sitter parses =PLACEHOLDER= as a valid Rust identifier so the managed-buffer path accepts it. PLAN-262 deliberately relaxed the redirect guards on text =edit= and =write= for code-supported files; it did not add a shrink/parse-regression gate. Addressed by [[id:FEAT-585-write-shrink-and-parse-fail-guard-on-man]].
+- *quick_task agents have no scope sentinel*. The =CoordBridgeTests= subagent's assignment never named =buffer.rs=, but its tool surface allowed mutation of any file. Addressed by [[id:FEAT-586-quick-task-filesdeps-scope-sentinel-for]].
+- *Nested task delegation runs without isolation by default*. A =task= subagent's =task= calls inherit no isolation; children's edits land directly on the live tree. Addressed by [[id:FEAT-587-nested-task-isolation-default-when-paren]].
+- *No wave-boundary snapshot in plan orchestration*. When wave-2 destruction was discovered, =git restore HEAD= was a destructive recovery because HEAD predated wave-1's uncommitted work. Addressed by [[id:FEAT-588-wave-boundary-git-snapshot-ref-for-plan]].
+
+Settled decisions:
+
+1. Do NOT reverse PLAN-262 (relax-text-edit-compatibility-and-add-wr). Text =edit= and =write= remain lenient for code-supported paths with the existing compatibility-notice surface. New guards are additive content-quality gates, not path blocks.
+2. Reuse existing primitives wherever possible: =filesDeps= for scope sentinel (already in TodoItem + task DAG), =isCodeToolSupportedPath= for code detection (single source of truth), the loop-checkpoint git pattern for wave snapshots (=loop/git/checkpoint.ts=).
+3. =force: true= is the universal escape hatch for the new write guard; matches the PLAN-262 compatibility-notice tone (advisory-with-teeth, not security-grade).
+4. =quick_task= becomes the only =scopeRestricted= agent in this plan. The general =task= agent stays unrestricted because its assignments are typically broader.
+5. Auto-isolation triggers only at =taskDepth >= 1= AND when =task.isolation.mode != "none"=. Top-level task dispatch is unchanged.
+6. Wave snapshots use git refs under =refs/spell/plan/<PLAN-ID>/wave-<N>=, not branches. They never advance HEAD.
+
+Recommended approach:
+
+- Land the four FEATs in parallel within a single wave; they have no inter-dependencies.
+- Each FEAT carries its own test file + acceptance gate; no cross-FEAT shared infrastructure beyond reuse of existing primitives.
+- After landing, regression repro: re-execute the conditions from session =14c0744312762edc= (force a quick_task to attempt =write= 11 bytes to buffer.rs) and confirm all four guards engage.
+
+* Verification
+
+Per-FEAT gates (each runs locally before its FEAT moves to DONE):
+
+- FEAT-585: =bun test packages/coding-agent/test/tools/write-shrink-guard.test.ts= + =bun check:ts=
+- FEAT-586: =bun test packages/coding-agent/test/task/quick-task-scope.test.ts= + =bun check:ts=
+- FEAT-587: =bun test packages/coding-agent/test/task/nested-isolation-default.test.ts= + =bun check:ts=
+- FEAT-588: =bun test packages/coding-agent/test/orchestrators/wave-snapshot.test.ts= + =bun check:ts=
+
+Cross-cutting verification (after all four FEATs land):
+
+- =bun check= clean.
+- =bun lint:ts= clean.
+- *Manual cascade repro*: launch a synthetic plan with two waves. Wave 1 mutates a code file; verify a wave-1 snapshot ref appears before Wave 2 dispatch. Wave 2 dispatches a depth-1 =task= that further delegates to =quick_task= without =filesDeps=. Verify dispatch errors with =QUICK_TASK_MISSING_FILESDEPS=. Add =filesDeps= and have the quick_task attempt a destructive =write= of an 11-byte =PLACEHOLDER= over a 25 KB Rust file outside its scope. Verify the write is blocked by both =OUT_OF_SCOPE_MUTATION= and =WRITE_SHRINK_BLOCKED= (only the first gate fires; the second is exercised by a separate in-scope clobber attempt). Verify that even if the second gate were bypassed, =git restore --source=refs/spell/plan/<id>/wave-1 -- crates/pi-code-engine/src/buffer.rs= would recover the wave-1 state.
+- *Audit*: =grep "applyManagedBufferContent(" packages/coding-agent/src= shows every call site participates in the new guard.
+- *Audit*: =grep "scopeRestricted" packages/coding-agent/src/task= shows quick_task is the only restricted agent.
+
+Verification artifacts to capture in completion report (saved under =!tasks/plans/plan-artifacts/<this-plan-id>/=):
+
+- Test outputs for each FEAT.
+- Snapshot ref listing (=git for-each-ref refs/spell/=) showing wave refs created during repro.
+- Repro transcript demonstrating both =OUT_OF_SCOPE_MUTATION= and =WRITE_SHRINK_BLOCKED= rejections.
+
+* Execution Manifest
+
+** Wave 1 :wave:
+- [[id:FEAT-585-write-shrink-and-parse-fail-guard-on-man][FEAT-585 - Write-shrink and parse-fail guard on managed-buffer writes]]
+- [[id:FEAT-586-quick-task-filesdeps-scope-sentinel-for][FEAT-586 - Quick_task filesDeps scope sentinel for mutating tool calls]]
+- [[id:FEAT-587-nested-task-isolation-default-when-paren][FEAT-587 - Nested task isolation default when parent is itself a subagent]]
+- [[id:FEAT-588-wave-boundary-git-snapshot-ref-for-plan][FEAT-588 - Wave-boundary git snapshot ref for plan orchestration]]
+
+* Risks and mitigations
+
+- *False positives in shrink guard*: legitimate large-file truncation rejected. Mitigation: =force: true= escape hatch; compatibility notice when force is used keeps the path visible.
+- *Parse-regression false positives*: a half-applied refactor that cycles through a broken state. Mitigation: guard skips when the *original* file already had parse errors, so iterative repair is unaffected.
+- *quick_task scope friction*: requiring =filesDeps= forces the parent to enumerate scope. Mitigation: =task= (general) agent stays unrestricted; use it when scope is broad. Documented in quick_task prompt template.
+- *Auto-isolation cost*: worktree mode adds startup time per nested batch. Mitigation: only triggers at depth >= 1; top-level remains explicit-opt-in.
+- *Snapshot ref clutter*: refs accumulate across plans. Mitigation: =/snapshots= command surfaces them with cleanup hints; refs are in a dedicated namespace =refs/spell/plan/=.
+- *PLAN-262 reversal pressure*: future maintainers may misread the new shrink/parse guards as a sign that path-level blocks should return. Mitigation: each guard's error message and the FEAT body explicitly call out PLAN-262 as the deliberate prior decision.
+
+* Non-goals
+
+- Re-enabling path-level blocks on text =edit= or =write= for code-supported files (PLAN-262 stands).
+- Sandboxing subagent shell processes; isolation only protects file mutations.
+- Cross-host or cross-repo coordination.
+- Replacing or extending the loop-checkpoint mechanism (=loop/git/checkpoint.ts=); wave snapshots are a sibling concept for plan-mode execution.
+- New telemetry beyond logger output.
+
+* Rollout
+
+- After Wave 1 lands, the next plan-mode handoff exercises auto-isolation + wave snapshots end-to-end.
+- =quick_task= dispatches in existing skills/templates that omit =filesDeps= will fail loudly until updated; expected breakage radius is small (=quick_task= is rarely used outside parent =task= agents).
+- =force: true= compatibility notices on write will appear in transcripts whenever a wholesale rewrite is intentional; review for unexpected hits.

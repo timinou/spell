@@ -6,9 +6,6 @@ export type ContextPressureCategory =
 	| "source-exploration"
 	| "source-search"
 	| "transcript-spelunking"
-	| "state-polling"
-	| "verification"
-	| "git-inspection"
 	| "planning-churn"
 	| "other";
 
@@ -47,8 +44,6 @@ export interface ContextPressureInput {
 	detailsMeta?: ContextPressureOutputMetaLike;
 	text?: string;
 	isError?: boolean;
-	head?: number;
-	tail?: number;
 }
 
 const SOURCE_FILE_EXTENSIONS = new Set([
@@ -81,11 +76,6 @@ const SOURCE_FILE_EXTENSIONS = new Set([
 	".mdx",
 	".org",
 ]);
-
-const VERIFICATION_COMMAND_PATTERN = /\b(?:bun|cargo|mix|npm|pnpm|yarn)\s+(?:test|check|lint|fmt|build|precommit)\b/u;
-const GIT_INSPECTION_PATTERN = /\bgit\s+(?:status|diff|show|log|stash\s+list)\b/u;
-const WAIT_OR_POLL_PATTERN = /^(?:sleep\b|watch\b)|\b(?:sleep\s+\d+|while\b.*\bsleep\b|until\b.*\bsleep\b)\b/u;
-const TRANSCRIPT_BASH_PATTERN = /\b(?:jq|cat|less|head|tail|sed|awk|perl|python3?|ruby)\b/u;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -130,15 +120,6 @@ export function isTranscriptOrLogPath(rawPath: string): boolean {
 	if (normalized.includes("/.spell/logs/")) return true;
 	if (normalized.includes("/.spell/graph/")) return true;
 	return normalized.endsWith(".jsonl") && normalized.includes(".spell");
-}
-
-function bashCommandTargetsTranscript(command: string): boolean {
-	const normalized = normalizePathLike(command);
-	return (
-		normalized.includes("/.spell/agent/sessions/") ||
-		normalized.includes("/.spell/logs/") ||
-		normalized.includes("jobs://")
-	);
 }
 
 function isSourceLikePath(rawPath: string): boolean {
@@ -299,80 +280,30 @@ function classifyBash(input: ContextPressureInput): ContextPressureMeta | undefi
 	const params = asRecord(input.params);
 	const command = typeof params?.command === "string" ? params.command.trim() : undefined;
 	if (!command) return undefined;
-	const artifactUri = input.detailsMeta?.truncation?.artifactUri;
 	const summaryCommand = describeCommand(command);
-	if (WAIT_OR_POLL_PATTERN.test(command)) {
-		const followUp = ["Use async jobs plus await instead of emitting wait turns."];
+	const artifactUri = input.detailsMeta?.truncation?.artifactUri;
+	if (!artifactUri) {
 		return buildMeta({
-			category: "state-polling",
-			presentation: "summary-first",
-			persistence: "deny-raw",
-			reason: "Wait/poll commands add turn count with near-zero information gain.",
-			summary: buildSummary({
-				sentence: `Ran bash wait/poll command ${JSON.stringify(summaryCommand)}. Raw output suppressed as low-signal status churn.`,
-				followUp,
-				artifactUri,
-			}),
-			followUp,
+			category: "other",
+			presentation: "inline",
+			persistence: input.isError ? "summary-only" : "allow-raw",
+			reason: "Bash output fit the inline budget; raw bytes kept.",
+			summary: `Ran bash command ${JSON.stringify(summaryCommand)}.`,
+			followUp: [],
 		});
 	}
-	if (TRANSCRIPT_BASH_PATTERN.test(command) && bashCommandTargetsTranscript(command)) {
-		const boundedOutputRequested = Number(input.head) > 0 || Number(input.tail) > 0;
-		const followUp = boundedOutputRequested
-			? ["Bounded raw chunk requested via bash head/tail options."]
-			: ["Prefer compact transcript summaries; escalate to exact lines only when needed."];
-		return buildMeta({
-			category: "transcript-spelunking",
-			presentation: boundedOutputRequested ? "inline" : "summary-first",
-			persistence: boundedOutputRequested ? "allow-raw" : "deny-raw",
-			reason: "Transcript jq/grep spelunking is a known high-noise bash anti-pattern.",
-			summary: buildSummary({
-				sentence: boundedOutputRequested
-					? `Ran transcript-spelunking bash command ${JSON.stringify(summaryCommand)} with bounded raw output.`
-					: `Ran transcript-spelunking bash command ${JSON.stringify(summaryCommand)}. Raw output suppressed.`,
-				followUp,
-				artifactUri,
-			}),
-			followUp,
-		});
-	}
-	if (GIT_INSPECTION_PATTERN.test(command)) {
-		const followUp = ["Digest git status/diff/show first; escalate only when exact output is required."];
-		return buildMeta({
-			category: "git-inspection",
-			presentation: "summary-first",
-			persistence: "summary-only",
-			reason: "Repeated git inspection commands are churn-heavy and rarely need full raw output in memory.",
-			summary: buildSummary({
-				sentence: `Ran git inspection command ${JSON.stringify(summaryCommand)}. Treat the result as digest-first status output.`,
-				followUp,
-				artifactUri,
-			}),
-			followUp,
-		});
-	}
-	if (VERIFICATION_COMMAND_PATTERN.test(command)) {
-		const followUp = ["Persist pass/fail and top diagnostics; keep raw logs in artifacts or targeted follow-ups."];
-		return buildMeta({
-			category: "verification",
-			presentation: "summary-first",
-			persistence: "summary-only",
-			reason: "Verification/build commands are useful, but raw success-path logs are usually wasteful to persist.",
-			summary: buildSummary({
-				sentence: `Ran verification/build command ${JSON.stringify(summaryCommand)}.`,
-				followUp,
-				artifactUri,
-			}),
-			followUp,
-		});
-	}
+	const followUp = [`Read ${artifactUri} for exact bytes when needed.`];
 	return buildMeta({
 		category: "other",
-		presentation: "inline",
-		persistence: input.isError ? "summary-only" : "allow-raw",
-		reason: "No shared context-pressure downgrade applies.",
-		summary: `Ran bash command ${JSON.stringify(summaryCommand)}.`,
-		followUp: [],
+		presentation: "summary-first",
+		persistence: "summary-only",
+		reason: "Bash output exceeded the inline budget and was spilled to an artifact.",
+		summary: buildSummary({
+			sentence: `Ran bash command ${JSON.stringify(summaryCommand)}; output spilled to artifact.`,
+			followUp,
+			artifactUri,
+		}),
+		followUp,
 	});
 }
 
