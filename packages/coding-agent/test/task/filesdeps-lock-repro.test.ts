@@ -1,157 +1,156 @@
-// Repro for table row A ("No file-level lock between concurrent subagents").
-//
-// Session 2026-04-19T08-55-28-607Z_14c08a4197c6a60b ran 4 top-level task
-// subagents concurrently with `isolated:false` (tree isolation disabled
-// because task.isolation.mode was "none"). All 4 shared a live working
-// tree. Feat588's HookPlanBoundarySnapshot subagent issued a `write` on
-// packages/coding-agent/src/tools/todo-write.ts at 09:22:47Z while
-// Feat587's subagent was verifying changes to the same area.
-//
-// `filesDeps` was present on every task but the scheduler only consulted
-// it under `isolationMode=true`. With isolation disabled, the scheduler's
-// `canRun()` returns true unconditionally and overlapping filesDeps do
-// not serialize — which is how Feat588 wrote todo-write.ts while Feat587
-// was mid-verify.
-//
-// Contract asserted here: two task-level nodes that declare overlapping
-// `filesDeps` MUST NOT be in-flight at the same time, regardless of
-// whether tree-level isolation is on. File-level mutual exclusion is
-// independent of worktree/overlay isolation.
-import { describe, expect, test } from "bun:test";
-import { SwarmScheduler } from "@oh-my-pi/pi-coding-agent/task/swarm-scheduler";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { AsyncJobManager } from "../../src/async/job-manager";
+import { Settings } from "../../src/config/settings";
+import * as discoveryModule from "../../src/task/discovery";
+import * as executorModule from "../../src/task/executor";
+import type { AgentDefinition, SingleResult, TaskParams } from "../../src/task/types";
+import type { ToolSession } from "../../src/tools";
 
-interface NodeLike {
-	kind?: "work";
-	status?: "pending" | "in_progress" | "completed" | "failed" | "aborted" | "gate_failed" | "abandoned";
-	filesDeps?: string[];
+const quickTaskAgent: AgentDefinition = {
+	name: "quick_task",
+	description: "test quick task",
+	systemPrompt: "Quick",
+	tools: ["read", "grep", "find", "edit", "write", "bash"],
+	source: "bundled",
+	scopeRestricted: true,
+};
+
+function createResult(id: string, description: string): SingleResult {
+	return {
+		index: 0,
+		id,
+		agent: "quick_task",
+		agentSource: "bundled",
+		task: description,
+		assignment: `## Target\n- Task: ${description}`,
+		description,
+		exitCode: 0,
+		output: description,
+		stderr: "",
+		truncated: false,
+		durationMs: 1,
+		tokens: 0,
+	};
 }
 
-function node(filesDeps?: string[]): NodeLike {
-	return { kind: "work", status: "pending", filesDeps };
+function createSession(
+	tempDir: string,
+	settings: Settings,
+	asyncJobManager?: AsyncJobManager,
+): ToolSession & { asyncJobManager?: AsyncJobManager } {
+	return {
+		cwd: tempDir,
+		hasUI: false,
+		enableLsp: false,
+		getSessionFile: () => path.join(tempDir, "session.jsonl"),
+		getSessionSpawns: () => "*",
+		getCompactContext: () => undefined,
+		getPlanModeState: () => undefined,
+		getActiveModelString: () => undefined,
+		getModelString: () => undefined,
+		getArtifactsDir: () => path.join(tempDir, "artifacts"),
+		getSessionId: () => "filesdeps-overlap-session",
+		settings,
+		agentOutputManager: { allocateBatch: async (ids: string[]) => ids },
+		authStorage: {} as never,
+		modelRegistry: { refresh: async () => {} } as never,
+		skills: [],
+		contextFiles: [],
+		promptTemplates: [],
+		asyncJobManager,
+	} as unknown as ToolSession & { asyncJobManager?: AsyncJobManager };
 }
 
-// Helper that returns a runner + a way to step tasks through (gate,release).
-// Runner increments inFlight on entry, waits for release, decrements on exit.
-function instrumentedRunner(maxSeen: { value: number }) {
-	let inFlight = 0;
-	const gates = new Map<string, { enter: Promise<void>; release: () => void; done: () => void }>();
-	const ensure = (id: string) => {
-		let g = gates.get(id);
-		if (!g) {
-			const enter = Promise.withResolvers<void>();
-			const release = Promise.withResolvers<void>();
-			g = {
-				enter: enter.promise,
-				release: () => release.resolve(),
-				done: () => enter.resolve(),
-			};
-			// keep release promise awaitable inside runner
-			(g as typeof g & { _releasePromise: Promise<void> })._releasePromise = release.promise;
-			gates.set(id, g);
+function buildParams(taskDefs: Array<{ id: string; filesDeps: string[] }>): TaskParams {
+	return {
+		agent: "quick_task",
+		tasks: taskDefs.map(task => ({
+			id: task.id,
+			description: task.id,
+			assignment: `## Target\n- Task: ${task.id}`,
+			filesDeps: task.filesDeps,
+		})),
+	} as TaskParams;
+}
+
+describe("quick_task filesDeps overlap scheduling", () => {
+	let tempDir: string;
+
+	beforeEach(async () => {
+		tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "filesdeps-overlap-"));
+		await fs.mkdir(path.join(tempDir, "artifacts"), { recursive: true });
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [quickTaskAgent],
+			projectAgentsDir: null,
+		});
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		await fs.rm(tempDir, { recursive: true, force: true });
+	});
+
+	it("serializes sync quick_task siblings with identical filesDeps", async () => {
+		const events: string[] = [];
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			events.push(`start:${options.description}`);
+			await Bun.sleep(20);
+			events.push(`end:${options.description}`);
+			return createResult(options.id, options.description ?? "task");
+		});
+
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(
+			createSession(tempDir, Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" })),
+		);
+		await tool.execute(
+			"filesdeps-sync-serial",
+			buildParams([
+				{ id: "A", filesDeps: ["src/foo.ts"] },
+				{ id: "B", filesDeps: ["src/foo.ts"] },
+			]),
+		);
+
+		expect(events).toEqual(["start:A", "end:A", "start:B", "end:B"]);
+	});
+
+	it("serializes async quick_task siblings with identical filesDeps", async () => {
+		const events: string[] = [];
+		const asyncJobManager = new AsyncJobManager({
+			onJobComplete: async () => {},
+		});
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			events.push(`start:${options.description}`);
+			await Bun.sleep(20);
+			events.push(`end:${options.description}`);
+			return createResult(options.id, options.description ?? "task");
+		});
+
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(
+			createSession(
+				tempDir,
+				Settings.isolated({ "async.enabled": true, "task.isolation.mode": "none", "task.maxConcurrency": 2 }),
+				asyncJobManager,
+			),
+		);
+		await tool.execute(
+			"filesdeps-async-serial",
+			buildParams([
+				{ id: "A", filesDeps: ["src/foo.ts"] },
+				{ id: "B", filesDeps: ["src/foo.ts"] },
+			]),
+		);
+
+		const deadline = Date.now() + 5_000;
+		while (events.length < 4 && Date.now() < deadline) {
+			await Bun.sleep(25);
 		}
-		return g;
-	};
-	const runner = async (id: string) => {
-		const g = ensure(id);
-		inFlight++;
-		maxSeen.value = Math.max(maxSeen.value, inFlight);
-		g.done();
-		await (g as typeof g & { _releasePromise: Promise<void> })._releasePromise;
-		inFlight--;
-	};
-	const hasEntered = (id: string) => ensure(id).enter;
-	const release = (id: string) => ensure(id).release();
-	return { runner, hasEntered, release };
-}
+		await asyncJobManager.dispose({ timeoutMs: 1_000 });
 
-describe("filesDeps lock (RED while scheduler ignores overlap without isolationMode)", () => {
-	test("two nodes with overlapping filesDeps must not be in-flight simultaneously", async () => {
-		const scheduler = new SwarmScheduler<NodeLike>(
-			[
-				["A", node(["packages/coding-agent/src/tools/todo-write.ts"])],
-				["B", node(["packages/coding-agent/src/tools/todo-write.ts"])],
-			],
-			{ maxConcurrency: 4, isolationMode: false },
-		);
-
-		const maxSeen = { value: 0 };
-		const { runner, hasEntered, release } = instrumentedRunner(maxSeen);
-
-		// Drive pump concurrently with gate control.
-		const pumped = scheduler.pump(async id => {
-			await runner(id);
-			scheduler.markCompleted(id);
-		});
-
-		// Wait a tick — if both enter, we'd see both gates resolve.
-		// Wait for A to enter the runner.
-		await hasEntered("A");
-		// Give scheduler an extra tick to (potentially incorrectly) admit B.
-		await Bun.sleep(30);
-		// Release A; then B should enter.
-		release("A");
-		await hasEntered("B");
-		release("B");
-
-		await pumped;
-
-		// Contract: overlapping filesDeps ⇒ serial.
-		expect(maxSeen.value).toBe(1);
-	});
-
-	test("two nodes with disjoint filesDeps may run in parallel", async () => {
-		const scheduler = new SwarmScheduler<NodeLike>(
-			[
-				["A", node(["packages/coding-agent/src/tools/todo-write.ts"])],
-				["B", node(["packages/coding-agent/src/tools/write.ts"])],
-			],
-			{ maxConcurrency: 4, isolationMode: false },
-		);
-
-		const maxSeen = { value: 0 };
-		const { runner, hasEntered, release } = instrumentedRunner(maxSeen);
-
-		const pumped = scheduler.pump(async id => {
-			await runner(id);
-			scheduler.markCompleted(id);
-		});
-
-		await hasEntered("A");
-		await hasEntered("B");
-		// Both are running simultaneously now.
-		release("A");
-		release("B");
-
-		await pumped;
-
-		expect(maxSeen.value).toBe(2);
-	});
-
-	test("a node without filesDeps is conservative — serializes against anything in flight", async () => {
-		const scheduler = new SwarmScheduler<NodeLike>(
-			[
-				["A", node(["packages/coding-agent/src/tools/todo-write.ts"])],
-				["B", node()], // unscoped — must not race against scoped writers
-			],
-			{ maxConcurrency: 4, isolationMode: false },
-		);
-
-		const maxSeen = { value: 0 };
-		const { runner, hasEntered, release } = instrumentedRunner(maxSeen);
-
-		const pumped = scheduler.pump(async id => {
-			await runner(id);
-			scheduler.markCompleted(id);
-		});
-
-		await hasEntered("A");
-		await Bun.sleep(30);
-		release("A");
-		await hasEntered("B");
-		release("B");
-
-		await pumped;
-
-		expect(maxSeen.value).toBe(1);
+		expect(events).toEqual(["start:A", "end:A", "start:B", "end:B"]);
 	});
 });

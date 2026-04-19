@@ -46,10 +46,6 @@ function isSatisfiedDataNode(node: SwarmNodeLike): boolean {
 	);
 }
 
-function normalizeFiles(files: string[] | undefined): string[] {
-	return files?.length ? Array.from(new Set(files.filter(Boolean))) : [];
-}
-
 function formatFailureReason(id: string): string {
 	return `Predecessor ${id} failed`;
 }
@@ -57,12 +53,10 @@ function formatFailureReason(id: string): string {
 export class SwarmScheduler<T extends SwarmNodeLike> {
 	#dag: MutableDag<T>;
 	#maxConcurrency: number;
-	#isolationMode: boolean;
 
 	constructor(entries: Array<[string, T, string[]?]> = [], options: SwarmSchedulerOptions = {}) {
 		this.#dag = new MutableDag(entries);
 		this.#maxConcurrency = Math.max(1, Math.floor(options.maxConcurrency ?? 1));
-		this.#isolationMode = options.isolationMode ?? false;
 	}
 
 	get dag(): MutableDag<T> {
@@ -139,25 +133,6 @@ export class SwarmScheduler<T extends SwarmNodeLike> {
 			if (status === "aborted") aborted.push(id);
 		};
 
-		const canRun = (id: string): boolean => {
-			// File-level mutual exclusion always runs, independent of isolationMode.
-			// isolationMode controls tree-isolation (worktree/fuse-overlay); it
-			// does NOT gate whether two subagents touching the same file may
-			// run concurrently. A node that declares no filesDeps is treated as
-			// touching everything and must serialize against any running neighbor.
-			const candidate = this.#dag.getNode(id);
-			if (!candidate) return false;
-			const candidateFiles = normalizeFiles(candidate.filesDeps);
-			for (const activeId of running) {
-				const active = this.#dag.getNode(activeId);
-				if (!active) continue;
-				const activeFiles = normalizeFiles(active.filesDeps);
-				if (candidateFiles.length === 0 || activeFiles.length === 0) return false;
-				if (this.#dag.hasFileOverlap(id, activeId)) return false;
-			}
-			return true;
-		};
-
 		const cascadePendingAbort = (): void => {
 			for (const id of this.#dag.topologicalOrder()) {
 				const node = this.#dag.getNode(id);
@@ -172,7 +147,7 @@ export class SwarmScheduler<T extends SwarmNodeLike> {
 			const ready = this.getReadyNodeIds();
 			for (const id of ready) {
 				if (running.size >= this.#maxConcurrency) break;
-				if (running.has(id) || inFlight.has(id) || !canRun(id)) continue;
+				if (running.has(id) || inFlight.has(id)) continue;
 				const node = this.#dag.getNode(id);
 				if (!node) continue;
 				running.add(id);

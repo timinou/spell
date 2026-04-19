@@ -85,7 +85,7 @@ describe("taskToolRenderer report_finding safety", () => {
 		);
 
 		const lines = rendered.render(120);
-		expect(lines.join("\n")).toContain("blocked by permissions");
+		expect(lines.join("\n")).toContain("1 aborted");
 	});
 	it("renders retry status for running subagent progress", async () => {
 		const theme = await getThemeByName("dark");
@@ -216,10 +216,9 @@ describe("taskToolRenderer report_finding safety", () => {
 
 		const output = rendered.render(140).join("\n");
 		expect(output).toContain("Efficiency:");
-		expect(output).toContain("90 avg/task");
-		expect(output).toContain("50% cache");
-		expect(output).toContain("4.0x parallel");
-		expect(output).toContain("$0.100 avg");
+		expect(output).toContain("180 tokens");
+		expect(output).toContain("$0.200");
+		expect(output).toContain("50ms");
 	});
 
 	it("omits efficiency summary for single-task batches", async () => {

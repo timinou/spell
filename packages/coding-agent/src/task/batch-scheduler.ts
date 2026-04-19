@@ -1,14 +1,17 @@
+import { findOverlappingFilesDep, MutableDag } from "./mutable-dag";
 import { SwarmScheduler } from "./swarm-scheduler";
+
+type BatchGraphNode = {
+	filesDeps?: string[];
+};
 
 export interface BatchTask<T> {
 	id: string;
 	blockers?: string[];
 	/**
-	 * Absolute or cwd-relative paths this task may mutate. Two batch tasks
-	 * that declare overlapping filesDeps will not be in-flight concurrently,
-	 * independent of isolationMode. Tasks that declare no filesDeps are
-	 * treated as touching everything and serialize against all running
-	 * neighbors.
+	 * Absolute or cwd-relative paths this task may mutate. Overlapping filesDeps
+	 * are rewritten into declaration-ordered blocker edges before execution.
+	 * Tasks that declare no filesDeps contribute no overlap constraints.
 	 */
 	filesDeps?: string[];
 	run: (signal: AbortSignal) => Promise<T>;
@@ -24,11 +27,17 @@ export interface BatchSchedulerOptions {
 	signal?: AbortSignal;
 	staggerMs?: number;
 }
+export interface BatchImplicitBlocker {
+	to: string;
+	from: string;
+	reason: string;
+}
 export interface BatchGraph {
 	order: string[];
 	indexById: Map<string, number>;
 	blockersById: Map<string, string[]>;
 	dependentsById: Map<string, string[]>;
+	implicitBlockers: BatchImplicitBlocker[];
 }
 function normalizeBlockers(blockers: string[] | undefined): string[] {
 	return blockers?.length ? Array.from(new Set(blockers.filter(Boolean))) : [];
@@ -40,44 +49,76 @@ function clampConcurrency(maxConcurrency: number, taskCount: number): number {
 function formatSchedulerErrors(errors: string[]): Error {
 	return new Error(errors.join("; "));
 }
-export function buildBatchGraph(tasks: Array<Pick<BatchTask<unknown>, "id" | "blockers">>): BatchGraph {
+function normalizeBatchGraphError(error: unknown, context?: string): Error {
+	const message = error instanceof Error ? error.message : String(error);
+	if (message.includes("contains dependency cycles")) {
+		return new Error(
+			context ? `Task batch contains dependency cycles: ${context}` : "Task batch contains dependency cycles",
+		);
+	}
+	return new Error(context ? `${context}: ${message}` : message);
+}
+function buildDag(tasks: Array<Pick<BatchTask<unknown>, "id" | "blockers" | "filesDeps">>): MutableDag<BatchGraphNode> {
+	try {
+		const dag = new MutableDag(
+			tasks.map(task => [task.id, { filesDeps: task.filesDeps }] as [string, BatchGraphNode]),
+		);
+		for (const task of tasks) {
+			dag.setDependencies(task.id, normalizeBlockers(task.blockers));
+		}
+		return dag;
+	} catch (error) {
+		throw normalizeBatchGraphError(error);
+	}
+}
+function buildDependencyMaps(
+	tasks: Array<Pick<BatchTask<unknown>, "id">>,
+	dag: MutableDag<BatchGraphNode>,
+): Pick<BatchGraph, "blockersById" | "dependentsById"> {
+	return {
+		blockersById: new Map(tasks.map(task => [task.id, dag.getDependencies(task.id)])),
+		dependentsById: new Map(tasks.map(task => [task.id, dag.getDependents(task.id)])),
+	};
+}
+export function buildBatchGraph(tasks: Array<Pick<BatchTask<unknown>, "id" | "blockers" | "filesDeps">>): BatchGraph {
 	const indexById = new Map<string, number>();
-	const blockersById = new Map<string, string[]>();
-	const dependentsById = new Map<string, string[]>();
 	const errors: string[] = [];
 	for (const [index, task] of tasks.entries()) {
 		indexById.set(task.id, index);
-		dependentsById.set(task.id, []);
 	}
 	for (const task of tasks) {
-		const blockers = normalizeBlockers(task.blockers);
-		blockersById.set(task.id, blockers);
-		for (const blockerId of blockers) {
+		for (const blockerId of normalizeBlockers(task.blockers)) {
 			if (!indexById.has(blockerId)) errors.push(`Task ${task.id} depends on missing blocker ${blockerId}`);
 			else if (blockerId === task.id) errors.push(`Task ${task.id} cannot block on itself`);
-			else dependentsById.get(blockerId)?.push(task.id);
 		}
 	}
 	if (errors.length > 0) throw formatSchedulerErrors(errors);
-	const remaining = new Map<string, number>();
-	const queue: string[] = [];
-	for (const task of tasks) {
-		const blockers = blockersById.get(task.id) ?? [];
-		remaining.set(task.id, blockers.length);
-		if (blockers.length === 0) queue.push(task.id);
-	}
-	const order: string[] = [];
-	for (let index = 0; index < queue.length; index++) {
-		const current = queue[index];
-		order.push(current);
-		for (const dependentId of dependentsById.get(current) ?? []) {
-			const next = (remaining.get(dependentId) ?? 0) - 1;
-			remaining.set(dependentId, next);
-			if (next === 0) queue.push(dependentId);
+	const dag = buildDag(tasks);
+	const implicitBlockers: BatchImplicitBlocker[] = [];
+	for (let leftIndex = 0; leftIndex < tasks.length; leftIndex++) {
+		const leftTask = tasks[leftIndex];
+		for (let rightIndex = leftIndex + 1; rightIndex < tasks.length; rightIndex++) {
+			const rightTask = tasks[rightIndex];
+			if (!dag.hasFileOverlap(leftTask.id, rightTask.id)) continue;
+			if (dag.getDependencies(rightTask.id).includes(leftTask.id)) continue;
+			const reason =
+				findOverlappingFilesDep(leftTask.filesDeps, rightTask.filesDeps) ??
+				rightTask.filesDeps?.[0] ??
+				leftTask.filesDeps?.[0] ??
+				leftTask.id;
+			try {
+				dag.addEdge(leftTask.id, rightTask.id);
+			} catch (error) {
+				throw normalizeBatchGraphError(
+					error,
+					`Task ${rightTask.id} cannot add implicit blocker ${leftTask.id} for filesDeps overlap (${reason})`,
+				);
+			}
+			implicitBlockers.push({ to: rightTask.id, from: leftTask.id, reason });
 		}
 	}
-	if (order.length !== tasks.length) throw new Error("Task batch contains dependency cycles");
-	return { order, indexById, blockersById, dependentsById };
+	const { blockersById, dependentsById } = buildDependencyMaps(tasks, dag);
+	return { order: dag.topologicalOrder(), indexById, blockersById, dependentsById, implicitBlockers };
 }
 export async function scheduleBatch<T>(
 	tasks: BatchTask<T>[],
@@ -88,11 +129,11 @@ export async function scheduleBatch<T>(
 	const scheduler = new SwarmScheduler(
 		tasks.map(
 			task =>
-				[task.id, { kind: "work", status: "pending", filesDeps: task.filesDeps } as const, task.blockers] as [
-					string,
-					{ kind: "work"; status: "pending"; filesDeps?: string[] },
-					string[]?,
-				],
+				[
+					task.id,
+					{ kind: "work", status: "pending", filesDeps: task.filesDeps } as const,
+					graph.blockersById.get(task.id),
+				] as [string, { kind: "work"; status: "pending"; filesDeps?: string[] }, string[]?],
 		),
 		{ maxConcurrency: clampConcurrency(options.maxConcurrency, tasks.length) },
 	);

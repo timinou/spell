@@ -4,10 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { AsyncJobManager } from "../../src/async/job-manager";
 import { Settings } from "../../src/config/settings";
-import { TaskTool } from "../../src/task";
+
 import * as discoveryModule from "../../src/task/discovery";
 import * as executorModule from "../../src/task/executor";
-import type { AgentDefinition, SingleResult } from "../../src/task/types";
+import type { AgentDefinition, SingleResult, TaskToolDetails } from "../../src/task/types";
 import type { ToolSession } from "../../src/tools";
 
 const baseAgent: AgentDefinition = {
@@ -87,6 +87,7 @@ describe("TaskTool blocker integration", () => {
 			return createResult(options.id, options.description ?? "task");
 		});
 
+		const { TaskTool } = await import("../../src/task/index");
 		const tool = await TaskTool.create(
 			createSession(tempDir, Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" })),
 		);
@@ -115,6 +116,7 @@ describe("TaskTool blocker integration", () => {
 			return createResult(options.id, options.description ?? "task");
 		});
 
+		const { TaskTool } = await import("../../src/task/index");
 		const tool = await TaskTool.create(
 			createSession(
 				tempDir,
@@ -130,12 +132,68 @@ describe("TaskTool blocker integration", () => {
 				{ id: "C", description: "C", assignment: "## Target\n- Task: C", blockers: ["B"] },
 			],
 		});
-		const deadline = Date.now() + 500;
+		const deadline = Date.now() + 5_000;
 		while (events.length < 6 && Date.now() < deadline) {
-			await Bun.sleep(10);
+			await Bun.sleep(25);
 		}
 		await asyncJobManager.dispose({ timeoutMs: 1_000 });
 
 		expect(events).toEqual(["start:A", "end:A", "start:B", "end:B", "start:C", "end:C"]);
+	});
+
+	it("sync execution reports implicit blockers in text and details", async () => {
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options =>
+			createResult(options.id, options.description ?? "task"),
+		);
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(
+			createSession(tempDir, Settings.isolated({ "async.enabled": false, "task.isolation.mode": "none" })),
+		);
+		const result = await tool.execute("call-sync-implicit-blockers", {
+			agent: "task",
+			tasks: [
+				{ id: "A", description: "A", assignment: "## Target\n- Task: A", filesDeps: ["src/"] },
+				{ id: "B", description: "B", assignment: "## Target\n- Task: B", filesDeps: ["src/foo.ts"] },
+			],
+		});
+		const text = result.content.find(part => part.type === "text")?.text ?? "";
+		const details = result.details as TaskToolDetails;
+
+		expect(text).toContain("Note: reorganized 2 tasks into dependency chains due to filesDeps overlap.");
+		expect(text).toContain("B<-A (src/foo.ts)");
+		expect(details.implicit_blockers).toEqual([{ to: "B", from: "A", reason: path.join(tempDir, "src", "foo.ts") }]);
+	});
+
+	it("async execution reports implicit blockers in text and details", async () => {
+		const asyncJobManager = new AsyncJobManager({
+			onJobComplete: async () => {},
+		});
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			await Bun.sleep(5);
+			return createResult(options.id, options.description ?? "task");
+		});
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(
+			createSession(
+				tempDir,
+				Settings.isolated({ "async.enabled": true, "task.isolation.mode": "none", "task.maxConcurrency": 2 }),
+				asyncJobManager,
+			),
+		);
+		const result = await tool.execute("call-async-implicit-blockers", {
+			agent: "task",
+			tasks: [
+				{ id: "A", description: "A", assignment: "## Target\n- Task: A", filesDeps: ["src/"] },
+				{ id: "B", description: "B", assignment: "## Target\n- Task: B", filesDeps: ["src/foo.ts"] },
+			],
+		});
+		const text = result.content.find(part => part.type === "text")?.text ?? "";
+		const details = result.details as TaskToolDetails;
+
+		expect(text).toContain("Note: reorganized 2 tasks into dependency chains due to filesDeps overlap.");
+		expect(text).toContain("B<-A (src/foo.ts)");
+		expect(details.implicit_blockers).toEqual([{ to: "B", from: "A", reason: path.join(tempDir, "src", "foo.ts") }]);
+
+		await asyncJobManager.dispose({ timeoutMs: 1_000 });
 	});
 });

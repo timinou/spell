@@ -1,5 +1,5 @@
 #+TITLE: Auto-DAG in buildBatchGraph with implicit blocker metadata
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c0a54ed68d3bdc
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-53-40-058Z_14c0a54ed68d3bdc.jsonl]]
 #+CUSTOM_ID: FEAT-590-auto-dag-in-buildbatchgraph-with-implici
@@ -50,3 +50,5 @@ I want you to think a bit deeper than the fileDeps vs. lock. I don't want a glob
 3. Re-run the topological sort + cycle check on the augmented graph so overlap-induced cycles surface as explicit scheduler errors.
 4. Extend scheduleBatch to thread implicitBlockers through to callers without changing concurrency semantics.
 5. Unit tests in packages/coding-agent/test/task/batch-scheduler.test.ts: identical filesDeps produce implicit blocker; transitive chain A[x] B[x,y] C[y] yields A<-B<-C; explicit blocker present prevents duplicate; non-overlap gives empty implicitBlockers; cycle-via-overlap throws.
+
+NOTE [2026-04-19]: Implemented in packages/coding-agent/src/task/batch-scheduler.ts + mutable-dag.ts. buildBatchGraph now injects implicit blockers and scheduleBatch consumes graph.blockersById. Verified by bun test ./test/task/batch-scheduler.test.ts.

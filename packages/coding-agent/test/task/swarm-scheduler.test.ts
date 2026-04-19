@@ -131,7 +131,8 @@ describe("SwarmScheduler", () => {
 		expect(scheduler.dag.getNode("C")?.status).toBe("failed");
 	});
 
-	test("serializes overlapping files under isolation", async () => {
+	test("admits ready siblings up to maxConcurrency regardless of filesDeps", async () => {
+		const gate = Promise.withResolvers<void>();
 		const scheduler = new SwarmScheduler<NodeLike>(
 			[
 				["A", node({ filesDeps: ["one.ts"] })],
@@ -140,35 +141,15 @@ describe("SwarmScheduler", () => {
 			{ maxConcurrency: 2, isolationMode: true },
 		);
 		const started: string[] = [];
-		await scheduler.pump(async id => {
-			started.push(id);
-			scheduler.markCompleted(id);
-		});
-		expect(started).toEqual(["A", "B"]);
-	});
-
-	test("does not parallelize opaque work under isolation when filesDeps are missing", async () => {
-		const gate = Promise.withResolvers<void>();
-		const scheduler = new SwarmScheduler<NodeLike>(
-			[
-				["A", node()],
-				["B", node({ filesDeps: ["two.ts"] })],
-			],
-			{ maxConcurrency: 2, isolationMode: true },
-		);
-		const started: string[] = [];
 		const pump = scheduler.pump(async id => {
 			started.push(id);
-			if (id === "A") {
-				await gate.promise;
-			}
+			await gate.promise;
 			scheduler.markCompleted(id);
 		});
 		await Bun.sleep(10);
-		expect(started).toEqual(["A"]);
+		expect(started).toEqual(["A", "B"]);
 		gate.resolve();
 		await pump;
-		expect(started).toEqual(["A", "B"]);
 	});
 
 	test("aborts pending work", async () => {
