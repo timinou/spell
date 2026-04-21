@@ -258,17 +258,34 @@ function sortItems(items: OrgItem[], sort?: string): OrgItem[] {
 	});
 }
 
+function compareOrgItemLocation(a: OrgItem, b: OrgItem): number {
+	const fileCmp = a.file.localeCompare(b.file);
+	if (fileCmp !== 0) return fileCmp;
+	const lineCmp = a.line - b.line;
+	if (lineCmp !== 0) return lineCmp;
+	return a.id.localeCompare(b.id);
+}
+
+async function findItemsById(
+	categoryDirs: Array<{ absPath: string; name: string; dir: string }>,
+	customId: string,
+	todoKeywords: string[],
+	includeBody = true,
+): Promise<OrgItem[]> {
+	const matches: OrgItem[] = [];
+	for (const category of categoryDirs) {
+		const items = await readCategory(category.absPath, category.name, category.dir, todoKeywords, includeBody);
+		matches.push(...items.filter(item => item.id === customId));
+	}
+	return matches.sort(compareOrgItemLocation);
+}
+
 async function findItemById(
 	categoryDirs: Array<{ absPath: string; name: string; dir: string }>,
 	customId: string,
 	todoKeywords: string[],
 ): Promise<OrgItem | undefined> {
-	for (const category of categoryDirs) {
-		const items = await readCategory(category.absPath, category.name, category.dir, todoKeywords, true);
-		const found = items.find(item => item.id === customId);
-		if (found) return found;
-	}
-	return undefined;
+	return (await findItemsById(categoryDirs, customId, todoKeywords))[0];
 }
 
 function buildReferenceOrg(prefix: string, todoKeywords: string[]): string {
@@ -286,9 +303,9 @@ async function initCategoryDir(categoryAbsPath: string, prefix: string, todoKeyw
 	}
 }
 
-async function fetchItem(ctx: OrgContext, id: string): Promise<OrgItem | undefined> {
+async function fetchItems(ctx: OrgContext, id: string, includeBody = true): Promise<OrgItem[]> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
-	return findItemById(
+	return findItemsById(
 		categories.map(c => ({
 			absPath: c.absPath,
 			name: c.name,
@@ -296,7 +313,12 @@ async function fetchItem(ctx: OrgContext, id: string): Promise<OrgItem | undefin
 		})),
 		id,
 		ctx.config.todoKeywords,
+		includeBody,
 	);
+}
+
+async function fetchItem(ctx: OrgContext, id: string): Promise<OrgItem | undefined> {
+	return (await fetchItems(ctx, id))[0];
 }
 
 async function cmdInit(ctx: OrgContext, args: { category?: string }): Promise<unknown> {
@@ -953,49 +975,64 @@ async function collectPlanWaveItems(
 		return { planItem, items: [], warnings: ["no linked child items; manifest not written"] };
 	}
 
-	const itemsById = new Map<string, OrgItem>();
+	const items: OrgItem[] = [];
+	const seenItems = new Set<string>();
 	const warnings: string[] = [];
+	const addItem = (item: OrgItem): void => {
+		const key = `${item.file}:${item.line}:${item.id}`;
+		if (seenItems.has(key)) return;
+		seenItems.add(key);
+		items.push(item);
+	};
 	for (const linkedId of linkedIds) {
 		const subOutline = parseSubOutlineId(linkedId);
 		if (subOutline) {
-			const parentItem = await fetchItem(ctx, subOutline.parentId);
-			if (!parentItem) {
+			const parentItems = await fetchItems(ctx, subOutline.parentId, false);
+			if (parentItems.length === 0) {
 				warnings.push(`linked child not found: ${subOutline.parentId}`);
 				continue;
 			}
-			const parentItems = await readOrgFile({
-				filePath: parentItem.file,
-				category: parentItem.category,
-				dir: parentItem.dir,
-				todoKeywords: ctx.config.todoKeywords,
-				includeBody: false,
-			});
-			const target = parentItems.find(item => item.id === linkedId);
-			if (target) itemsById.set(target.id, target);
-			else warnings.push(`linked sub-outline not found: ${linkedId}`);
+			let found = false;
+			for (const parentItem of parentItems) {
+				const fileItems = await readOrgFile({
+					filePath: parentItem.file,
+					category: parentItem.category,
+					dir: parentItem.dir,
+					todoKeywords: ctx.config.todoKeywords,
+					includeBody: false,
+				});
+				for (const item of fileItems) {
+					if (item.id !== linkedId) continue;
+					addItem(item);
+					found = true;
+				}
+			}
+			if (!found) warnings.push(`linked sub-outline not found: ${linkedId}`);
 			continue;
 		}
 
-		const childItem = await fetchItem(ctx, linkedId);
-		if (!childItem) {
+		const childItems = await fetchItems(ctx, linkedId, false);
+		if (childItems.length === 0) {
 			warnings.push(`linked child not found: ${linkedId}`);
 			continue;
 		}
-		const childItems = await readOrgFile({
-			filePath: childItem.file,
-			category: childItem.category,
-			dir: childItem.dir,
-			todoKeywords: ctx.config.todoKeywords,
-			includeBody: false,
-		});
-		for (const item of childItems) {
-			if (item.level < 2) continue;
-			if (!item.id.startsWith(`${linkedId}::`)) continue;
-			itemsById.set(item.id, item);
+		for (const childItem of childItems) {
+			const fileItems = await readOrgFile({
+				filePath: childItem.file,
+				category: childItem.category,
+				dir: childItem.dir,
+				todoKeywords: ctx.config.todoKeywords,
+				includeBody: false,
+			});
+			for (const item of fileItems) {
+				if (item.level < 2) continue;
+				if (!item.id.startsWith(`${linkedId}::`)) continue;
+				addItem(item);
+			}
 		}
 	}
 
-	return { planItem, items: [...itemsById.values()], warnings };
+	return { planItem, items: items.sort(compareOrgItemLocation), warnings };
 }
 
 function manifestSectionBody(manifest: string): string {

@@ -5,7 +5,7 @@
 //! - Wave computation (Kahn's algorithm for topological layers)
 //! - Connected components (union-find)
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use serde::Serialize;
 
@@ -68,6 +68,76 @@ pub struct WaveResult {
 pub struct NextWaveResult {
 	pub wave:  usize,
 	pub items: Vec<WaveItem>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DuplicateIdError {
+	pub code:            String,
+	pub message:         String,
+	pub duplicate_ids:   Vec<String>,
+	pub duplicate_count: usize,
+}
+
+const DUPLICATE_ID_PREVIEW_LIMIT: usize = 10;
+
+type WaveGraphResult<T> = Result<T, DuplicateIdError>;
+
+fn canonical_wave_items(items: &[OrgItem]) -> Vec<&OrgItem> {
+	let heading_ids: HashSet<(&str, &str)> = items
+		.iter()
+		.filter(|item| item.level == 1)
+		.map(|item| (item.file.as_str(), item.id.as_str()))
+		.collect();
+	items
+		.iter()
+		.filter(|item| {
+			!(item.level == 0 && heading_ids.contains(&(item.file.as_str(), item.id.as_str())))
+		})
+		.collect()
+}
+
+fn duplicate_id_error(items: &[&OrgItem]) -> Option<DuplicateIdError> {
+	let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+	for item in items {
+		*counts.entry(item.id.as_str()).or_insert(0) += 1;
+	}
+	let duplicate_ids: Vec<String> = counts
+		.into_iter()
+		.filter(|(_, count)| *count > 1)
+		.map(|(id, _)| id.to_string())
+		.collect();
+	if duplicate_ids.is_empty() {
+		return None;
+	}
+	let shown = duplicate_ids
+		.iter()
+		.take(DUPLICATE_ID_PREVIEW_LIMIT)
+		.cloned()
+		.collect::<Vec<_>>();
+	let remaining = duplicate_ids.len().saturating_sub(shown.len());
+	let message = if remaining == 0 {
+		format!("duplicate CUSTOM_ID values in wave input: {}", shown.join(", "))
+	} else {
+		format!(
+			"duplicate CUSTOM_ID values in wave input: {} (+{} more)",
+			shown.join(", "),
+			remaining,
+		)
+	};
+	Some(DuplicateIdError {
+		code: "DUPLICATE_CUSTOM_ID".to_string(),
+		message,
+		duplicate_ids: shown,
+		duplicate_count: duplicate_ids.len(),
+	})
+}
+
+fn ensure_unique_wave_ids(items: &[OrgItem]) -> WaveGraphResult<Vec<&OrgItem>> {
+	let canonical_items = canonical_wave_items(items);
+	if let Some(error) = duplicate_id_error(&canonical_items) {
+		return Err(error);
+	}
+	Ok(canonical_items)
 }
 
 /// Build a dependency graph from a set of items.
@@ -193,7 +263,18 @@ fn detect_cycles(items: &[OrgItem]) -> Vec<Cycle> {
 ///
 /// `items`: the items to wave-sort.
 /// `parent_id_fn`: maps item ID to `parent_id` for sub-outline grouping.
-pub fn compute_waves(items: &[OrgItem], parent_id_fn: impl Fn(&str) -> String) -> WaveResult {
+pub fn compute_waves(
+	items: &[OrgItem],
+	parent_id_fn: impl Fn(&str) -> String,
+) -> WaveGraphResult<WaveResult> {
+	let items = ensure_unique_wave_ids(items)?;
+	Ok(compute_waves_from_items(&items, parent_id_fn))
+}
+
+fn compute_waves_from_items(
+	items: &[&OrgItem],
+	parent_id_fn: impl Fn(&str) -> String,
+) -> WaveResult {
 	let id_set: HashSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
 	let mut warnings = Vec::new();
 
@@ -274,7 +355,8 @@ pub fn compute_waves(items: &[OrgItem], parent_id_fn: impl Fn(&str) -> String) -
 }
 
 /// Get the next wave of eligible items (not DONE, all blockers DONE).
-pub fn next_wave(items: &[OrgItem], done_states: &[&str]) -> NextWaveResult {
+pub fn next_wave(items: &[OrgItem], done_states: &[&str]) -> WaveGraphResult<NextWaveResult> {
+	let items = ensure_unique_wave_ids(items)?;
 	let done_ids: HashSet<&str> = items
 		.iter()
 		.filter(|i| done_states.contains(&i.state.as_str()))
@@ -288,7 +370,7 @@ pub fn next_wave(items: &[OrgItem], done_states: &[&str]) -> NextWaveResult {
 	let mut wave_num = 0usize;
 
 	// Items with no blockers (or all blockers done) and not done themselves
-	for item in items {
+	for item in &items {
 		if done_ids.contains(item.id.as_str()) {
 			continue;
 		}
@@ -307,7 +389,7 @@ pub fn next_wave(items: &[OrgItem], done_states: &[&str]) -> NextWaveResult {
 
 	// Determine wave number based on completed waves
 	// Simple heuristic: count how many "layers" of done items exist
-	let waves_result = compute_waves(items, |_| String::new());
+	let waves_result = compute_waves_from_items(&items, |_| String::new());
 	for wave in &waves_result.waves {
 		if wave
 			.items
@@ -320,7 +402,7 @@ pub fn next_wave(items: &[OrgItem], done_states: &[&str]) -> NextWaveResult {
 		}
 	}
 
-	NextWaveResult { wave: wave_num, items: eligible }
+	Ok(NextWaveResult { wave: wave_num, items: eligible })
 }
 
 /// Union-Find for connected components.
@@ -473,7 +555,8 @@ mod tests {
 			"GRANDCHILD" => "CHILD".to_string(),
 			"ALONE" => String::new(),
 			other => panic!("unexpected id: {other}"),
-		});
+		})
+		.expect("wave computation");
 		assert_eq!(
 			result.waves[0]
 				.items
@@ -506,7 +589,8 @@ mod tests {
 				std::collections::HashMap::from([("DEPENDS".to_string(), "FEAT-001::b".to_string())]),
 			),
 		];
-		let result = compute_waves(&items, |id| id.split("::").next().unwrap_or(id).to_string());
+		let result = compute_waves(&items, |id| id.split("::").next().unwrap_or(id).to_string())
+			.expect("wave computation");
 		assert_eq!(result.waves.len(), 3);
 		assert_eq!(result.waves[0].items[0].custom_id, "FEAT-002-root");
 		assert_eq!(result.waves[1].items[0].custom_id, "FEAT-001::b");
@@ -526,8 +610,52 @@ mod tests {
 	fn next_wave_basic() {
 		let mut items = vec![make_item("A", ""), make_item("B", "A")];
 		items[0].state = "DONE".to_string();
-		let result = next_wave(&items, &["DONE"]);
+		let result = next_wave(&items, &["DONE"]).expect("next wave");
 		assert_eq!(result.items.len(), 1);
 		assert_eq!(result.items[0].custom_id, "B");
+	}
+
+	#[test]
+	fn compute_waves_unique_ids_preserve_wave_numbers() {
+		let items = vec![make_item("A", ""), make_item("B", "A"), make_item("C", "B")];
+		let result = compute_waves(&items, |_| String::new()).expect("unique ids should succeed");
+		assert_eq!(result.waves.len(), 3);
+		assert_eq!(result.waves[0].number, 0);
+		assert_eq!(result.waves[0].items[0].custom_id, "A");
+		assert_eq!(result.waves[1].number, 1);
+		assert_eq!(result.waves[1].items[0].custom_id, "B");
+		assert_eq!(result.waves[2].number, 2);
+		assert_eq!(result.waves[2].items[0].custom_id, "C");
+	}
+
+	#[test]
+	fn compute_waves_duplicate_ids_return_duplicate_id_error() {
+		let items = vec![
+			make_item("TASK-002", ""),
+			make_item("TASK-001", ""),
+			make_item("TASK-001", "TASK-002"),
+			make_item("TASK-003", "TASK-001"),
+			make_item("TASK-003", ""),
+		];
+		let error = compute_waves(&items, |_| String::new()).expect_err("duplicate ids should fail");
+		assert_eq!(error.code, "DUPLICATE_CUSTOM_ID");
+		assert_eq!(error.duplicate_ids, vec!["TASK-001", "TASK-003"]);
+		assert_eq!(error.duplicate_count, 2);
+		assert_eq!(error.message, "duplicate CUSTOM_ID values in wave input: TASK-001, TASK-003");
+	}
+
+	#[test]
+	fn next_wave_duplicate_ids_return_duplicate_id_error() {
+		let mut items = vec![
+			make_item("TASK-002", ""),
+			make_item("TASK-001", "TASK-002"),
+			make_item("TASK-001", ""),
+		];
+		items[0].state = "DONE".to_string();
+		let error = next_wave(&items, &["DONE"]).expect_err("duplicate ids should fail");
+		assert_eq!(error.code, "DUPLICATE_CUSTOM_ID");
+		assert_eq!(error.duplicate_ids, vec!["TASK-001"]);
+		assert_eq!(error.duplicate_count, 1);
+		assert_eq!(error.message, "duplicate CUSTOM_ID values in wave input: TASK-001");
 	}
 }

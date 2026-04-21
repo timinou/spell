@@ -215,14 +215,16 @@ fn cmd_graph(options: &Value) -> Result<Value> {
 /// Compute waves using Kahn's algorithm.
 fn cmd_compute_waves(options: &Value) -> Result<Value> {
 	let items = parse_items_from_options(options)?;
-	let result = graph::compute_waves(&items, |id| {
+	match graph::compute_waves(&items, |id| {
 		if let Some(pos) = id.find("::") {
 			id[..pos].to_string()
 		} else {
 			String::new()
 		}
-	});
-	Ok(json_response(serde_json::to_value(&result).unwrap_or(Value::Null), false))
+	}) {
+		Ok(result) => Ok(json_response(serde_json::to_value(&result).unwrap_or(Value::Null), false)),
+		Err(error) => Ok(json_response(serde_json::to_value(&error).unwrap_or(Value::Null), true)),
+	}
 }
 
 /// Get next wave of eligible items.
@@ -232,8 +234,10 @@ fn cmd_next_wave(options: &Value) -> Result<Value> {
 		.get("doneStates")
 		.and_then(Value::as_array)
 		.map_or_else(|| vec!["DONE"], |arr| arr.iter().filter_map(Value::as_str).collect());
-	let result = graph::next_wave(&items, &done_states);
-	Ok(json_response(serde_json::to_value(&result).unwrap_or(Value::Null), false))
+	match graph::next_wave(&items, &done_states) {
+		Ok(result) => Ok(json_response(serde_json::to_value(&result).unwrap_or(Value::Null), false)),
+		Err(error) => Ok(json_response(serde_json::to_value(&error).unwrap_or(Value::Null), true)),
+	}
 }
 
 /// Find connected components.
@@ -633,5 +637,68 @@ mod tests {
 		let disk = fs::read_to_string(&file).expect("read disk");
 		assert!(disk.contains("External body."));
 		assert!(!disk.contains("should fail"));
+	}
+
+	#[test]
+	fn compute_waves_duplicate_ids_return_error_payload() {
+		let source = [
+			"* ITEM Alpha",
+			":PROPERTIES:",
+			":CUSTOM_ID: DUP-001",
+			":END:",
+			"* ITEM Beta",
+			":PROPERTIES:",
+			":CUSTOM_ID: DUP-001",
+			":END:",
+		]
+		.join("\n");
+		let result = execute_org(json!({
+			"command": "computeWaves",
+			"source": source,
+			"todoKeywords": ["ITEM", "DONE"],
+			"category": "bugs",
+			"dir": "bugs"
+		}))
+		.expect("compute waves");
+		assert_eq!(result["error"], json!(true));
+		assert_eq!(result["output"]["code"], json!("DUPLICATE_CUSTOM_ID"));
+		assert_eq!(result["output"]["duplicate_ids"], json!(["DUP-001"]));
+		assert_eq!(result["output"]["duplicate_count"], json!(1));
+		assert_eq!(
+			result["output"]["message"],
+			json!("duplicate CUSTOM_ID values in wave input: DUP-001"),
+		);
+	}
+
+	#[test]
+	fn next_wave_duplicate_ids_return_error_payload() {
+		let source = [
+			"* DONE Alpha",
+			":PROPERTIES:",
+			":CUSTOM_ID: DUP-010",
+			":END:",
+			"* ITEM Beta",
+			":PROPERTIES:",
+			":CUSTOM_ID: DUP-010",
+			":END:",
+		]
+		.join("\n");
+		let result = execute_org(json!({
+			"command": "nextWave",
+			"source": source,
+			"todoKeywords": ["ITEM", "DONE"],
+			"doneStates": ["DONE"],
+			"category": "bugs",
+			"dir": "bugs"
+		}))
+		.expect("next wave");
+		assert_eq!(result["error"], json!(true));
+		assert_eq!(result["output"]["code"], json!("DUPLICATE_CUSTOM_ID"));
+		assert_eq!(result["output"]["duplicate_ids"], json!(["DUP-010"]));
+		assert_eq!(result["output"]["duplicate_count"], json!(1));
+		assert_eq!(
+			result["output"]["message"],
+			json!("duplicate CUSTOM_ID values in wave input: DUP-010"),
+		);
 	}
 }
