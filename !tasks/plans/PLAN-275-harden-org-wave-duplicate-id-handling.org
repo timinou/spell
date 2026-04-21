@@ -1,0 +1,99 @@
+#+TITLE: HARDEN_ORG_WAVE_DUPLICATE_ID_HANDLING
+#+STATE: DONE
+#+SESSION_ID: 14c309f59dcac055
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-21T07-30-22-967Z_14c309f59dcac055.jsonl]]
+#+CUSTOM_ID: PLAN-275-harden-org-wave-duplicate-id-handling
+#+LAYER: packages/org pi-natives pi-org-engine
+
+* Initial Message
+
+⏳ Org: wave
+
+
+ ⠹ Compute wave manifest (esc to interrupt)
+
+   Todos
+   └ wave-11.4 manual verify + commit
+   └ ☐ Puppeteer smoke on live server
+     ☑ Commit and write wave-11 handoff
+
+╭── ✦  > ⬢ Opus 4.7 · ◉ xhi > 🗺 Plotting > 📁 ~/code/ora/monorepo/apps/agentmaker > ⑂ main *4 ?25 > ◫ 19.3%/1.0M ⟲ > 🪙 441M > $270.25 ▶─────────────────────────────────────────────────────────────────────────────────╮
+╰─                                                                                                                                                                                                                      ─╯
+thread '<unnamed>' (2556031) panicked at crates/pi-org-engine/src/graph.rs:234:17:
+attempt to subtract with overflow
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+fatal runtime error: failed to initiate panic, error 5, aborting
+fish: Job 1, 'spell' terminated by signal SIGABRT (Abort) ????
+
+* Context
+
+Top-level child links:
+- [[id:BUG-310-harden-org-wave-duplicate-id-handling-an]]
+
+Observed failure:
+- User supplied a native panic from `org wave` with backtrace:
+  - `pi_natives::org_buffer::cmd_next_wave`
+  - `pi_org_engine::graph::next_wave`
+  - `pi_org_engine::graph::compute_waves`
+  - panic at `crates/pi-org-engine/src/graph.rs:234` on `attempt to subtract with overflow`
+- This indicates wave computation received malformed input that violated the Kahn in-degree invariant.
+
+Settled design decisions:
+1. Scope = recommended cut: native fix + explicit duplicate-ID detection + surfaced org error/warning.
+2. Fix both wave paths, not only the reproduced one:
+   - `nextWave` (`org wave` readiness)
+   - `computeWaves` (`org wave --manifest=true`, plan manifest generation)
+3. Duplicate identity is invalid input, not a case to silently coerce into a plausible wave result.
+4. The native graph layer owns the safety invariant; TypeScript/org tooling owns truthful surfacing.
+5. Regression coverage must exist at both layers so future malformed inputs cannot reintroduce process aborts.
+
+Why one child item:
+- All work is one bug class with a single invariant boundary (`duplicate CUSTOM_ID` entering wave computation).
+- Splitting into multiple children would create artificial boundaries and duplicate context; the implementation is better represented as one self-contained BUG item with test-first sub-steps.
+
+Critical files:
+- `crates/pi-org-engine/src/graph.rs`
+- `crates/pi-org-engine/src/item.rs`
+- `crates/pi-natives/src/org_buffer.rs`
+- `packages/org/src/tool.ts`
+- `packages/coding-agent/src/tools/org.ts`
+- associated Rust / TS test files for org wave behavior
+
+* Verification
+
+Required proof before truthful closure in implementation session:
+- Rust targeted graph tests covering duplicate-ID wave behavior.
+- Rust/native targeted tests if command/result shape changes at `pi-natives`.
+- TS targeted org-tool/package tests covering duplicate diagnostic surfacing.
+- Final checks: `bun check:ts` and `bun check:rs`.
+
+Manual proof expectations:
+- Reproduce malformed duplicate-ID input without crashing.
+- Confirm user-visible error names duplicate CUSTOM_ID(s).
+- Confirm valid unique-ID graphs still produce the same next-wave / manifest behavior.
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:BUG-310-harden-org-wave-duplicate-id-handling-an::native-tests]] Add native duplicate-ID regression tests
+** wave-2 :wave:
+- [[id:BUG-310-harden-org-wave-duplicate-id-handling-an::tool-tests]] Add org-tool duplicate-diagnostic tests
+** wave-3 :wave:
+- [[id:BUG-310-harden-org-wave-duplicate-id-handling-an::native-impl]] Harden native wave graph against duplicate IDs
+** wave-4 :wave:
+- [[id:BUG-310-harden-org-wave-duplicate-id-handling-an::ts-surface]] Surface duplicate-ID diagnostics through org wave
+
+** Completion [2026-04-21]
+*** Verification
+- `cargo test -p pi-org-engine graph::tests` → passed (9 tests).
+- `cargo test -p pi-natives duplicate_ids` → passed (2 tests).
+- `bun run dev:native` → rebuilt `packages/natives/native/pi_natives.dev.node` after the Rust graph change.
+- `bun test packages/org/test/cmd-wave-duplicate-id.test.ts packages/org/test/cmd-wave-manifest-plan.test.ts packages/org/test/cmd-wave-flatten.test.ts` → passed (9 tests).
+- Manual repro via `bun -e '…createOrgTool…'` → duplicate input returned `{"code":"DUPLICATE_CUSTOM_ID","message":"duplicate CUSTOM_ID values in wave input: DUP-A","duplicate_ids":["DUP-A"],"duplicate_count":1}`; unique input returned a manifest containing `FEAT-140` and `FEAT-140::ship` without error.
+- `bun check:ts` → passed.
+- `bun check:rs` → passed.
+*** Artifacts
+- Final verification transcript: artifact://14c30cea644ac056/main/bash/28.txt
+*** Deviations
+- None.
+
+NOTE [2026-04-21]: Closed after verification evidence captured and child BUG-310 marked DONE.

@@ -1,0 +1,175 @@
+#+TITLE: Harden org wave duplicate-ID handling and diagnostics
+#+STATE: DONE
+#+SESSION_ID: 14c309f59dcac055
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-21T07-30-22-967Z_14c309f59dcac055.jsonl]]
+#+CUSTOM_ID: BUG-310-harden-org-wave-duplicate-id-handling-an
+#+LAYER: packages/org pi-natives pi-org-engine
+
+* Initial Message
+
+⏳ Org: wave
+
+
+ ⠹ Compute wave manifest (esc to interrupt)
+
+   Todos
+   └ wave-11.4 manual verify + commit
+   └ ☐ Puppeteer smoke on live server
+     ☑ Commit and write wave-11 handoff
+
+╭── ✦  > ⬢ Opus 4.7 · ◉ xhi > 🗺 Plotting > 📁 ~/code/ora/monorepo/apps/agentmaker > ⑂ main *4 ?25 > ◫ 19.3%/1.0M ⟲ > 🪙 441M > $270.25 ▶─────────────────────────────────────────────────────────────────────────────────╮
+╰─                                                                                                                                                                                                                      ─╯
+thread '<unnamed>' (2556031) panicked at crates/pi-org-engine/src/graph.rs:234:17:
+attempt to subtract with overflow
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+fatal runtime error: failed to initiate panic, error 5, aborting
+fish: Job 1, 'spell' terminated by signal SIGABRT (Abort) ????
+
+* Scope
+
+In:
+- Stop `org wave` native graph operations from panicking when the item set contains malformed duplicate identity data.
+- Cover both code paths that currently share the same decrement logic:
+  - `nextWave` (`org wave` readiness / next actionable items)
+  - `computeWaves` (`org wave --manifest=true`, including plan manifest generation)
+- Make duplicate-ID failures observable and truthful instead of aborting the process with `SIGABRT`.
+- Add regression coverage at the native graph layer and the TypeScript org-tool surface.
+
+Out:
+- Reworking general org parsing beyond what is needed to reject or safely tolerate duplicate IDs.
+- Changing valid wave ordering semantics for well-formed graphs.
+- Broad redesign of plan-mode UX unrelated to duplicate-ID safety.
+- Fixing every possible malformed org property; focus this item on duplicate CUSTOM_ID / duplicate item-row invariants that reach wave computation.
+
+Rationale:
+- The observed crash is a native panic at `crates/pi-org-engine/src/graph.rs:234` inside `compute_waves()` during `*deg -= 1`.
+- Backtrace confirms the user-visible path is `org wave` → `pi_natives::org_buffer::cmd_next_wave` → `pi_org_engine::graph::next_wave` → `compute_waves()`.
+- Current graph code keys `in_degree` / `dependents` / `wave_assignment` by `item.id`, while queue initialization still iterates raw `items`. Duplicate IDs therefore violate graph invariants and can cause the same logical node to be processed multiple times.
+
+* Existing Patterns
+
+- `crates/pi-org-engine/src/graph.rs`
+  - `compute_waves(items, parent_id_fn)` is the invariant boundary for topological wave assignment.
+  - `next_wave(items, done_states)` already delegates wave-depth calculation through `compute_waves`; hardening must preserve this relationship.
+- `crates/pi-org-engine/src/item.rs`
+  - `OrgItem::blockers()` is the canonical source for dependency tokens. Reuse it; do not create a parallel dependency parser.
+- `packages/org/src/tool.ts`
+  - `collectItems()` and `cmdWave()` are the TS-side org aggregation / dispatch entry points.
+  - `cmdWave()` already distinguishes `manifest ? computeWaves : nextWave`; duplicate detection must be wired so both branches get truthful behavior.
+- `packages/coding-agent/src/plan-mode/plan-validation.ts`
+  - Existing plan validation already detects duplicate sub-outline IDs inside a PLAN context. Reuse its notion that duplicate identifiers are invalid data; do not invent a contradictory tolerance model.
+- `packages/coding-agent/src/tools/org.ts`
+  - Tool result formatting is the user-facing contract for surfacing org failures. Preserve concise error reporting, but ensure duplicate-ID diagnostics survive to the user.
+
+* Tests
+
+User/workflow coverage to enumerate first:
+1. Non-plan `org wave` on well-formed items still returns the next eligible wave unchanged.
+2. `org wave` on duplicate CUSTOM_ID input no longer crashes the process.
+3. `org wave` duplicate-ID input returns a truthful error or explicit warning payload naming the offending ID(s).
+4. `org wave --manifest=true` / compute-waves path is also protected from the same malformed duplicate-ID input.
+5. Valid plan-mode sub-outline manifests still compute waves correctly after hardening.
+6. If duplicates are detected before native execution, the surfaced message remains bounded and deterministic.
+
+Concrete test files / scenarios:
+- `crates/pi-org-engine/src/graph.rs`
+  - Add regression tests proving duplicate IDs do not produce underflow/panic in either `compute_waves()` or `next_wave()`.
+  - Add a lock-in test showing valid unique-ID graphs preserve existing wave numbering.
+- `crates/pi-natives/src/org_buffer.rs` tests or closest native binding coverage
+  - If command-level behavior changes, add a targeted test that `nextWave` / `computeWaves` return structured duplicate-ID failure instead of aborting.
+- `packages/org/test` or `packages/coding-agent/test/tools/org*.test.ts`
+  - Add focused org-tool regression coverage for duplicate-ID wave requests so user-visible output is truthful.
+  - Add one manifest-mode regression proving `manifest=true` path surfaces the same duplicate diagnostic.
+
+Test ordering:
+- Native graph / binding regression tests first.
+- TS org-tool error-surface tests next.
+- Implementation closes the failures after the contracts are locked.
+
+* Implementation
+
+** ITEM Add native duplicate-ID regression tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-310-harden-org-wave-duplicate-id-handling-an::native-tests
+:LAYER: test
+:END:
+- Files:
+  - `crates/pi-org-engine/src/graph.rs`
+  - native binding test file if command-level assertions are needed
+- Encode the exact crash class: duplicate logical IDs reaching wave computation must not cause decrement underflow or double-processing.
+- Include both direct `compute_waves()` coverage and `next_wave()` coverage because the observed backtrace travels through `next_wave()`.
+- Satisfies workflows: 2, 4, 5.
+
+** ITEM Add org-tool duplicate-diagnostic tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-310-harden-org-wave-duplicate-id-handling-an::tool-tests
+:DEPENDS: BUG-310-harden-org-wave-duplicate-id-handling-an::native-tests
+:LAYER: test
+:END:
+- Files:
+  - `packages/org/test/...` and/or `packages/coding-agent/test/tools/org*.test.ts`
+- Assert the surfaced contract at the user boundary:
+  - no crash
+  - duplicate IDs are named
+  - message is deterministic / bounded
+  - manifest-mode path uses the same diagnostic semantics
+- Satisfies workflows: 2, 3, 4, 6.
+
+** ITEM Harden native wave graph against duplicate IDs
+:PROPERTIES:
+:CUSTOM_ID: BUG-310-harden-org-wave-duplicate-id-handling-an::native-impl
+:DEPENDS: BUG-310-harden-org-wave-duplicate-id-handling-an::tool-tests
+:LAYER: infra
+:END:
+- Files:
+  - `crates/pi-org-engine/src/graph.rs`
+  - `crates/pi-org-engine/src/item.rs` only if helper support is strictly needed
+- Recommended implementation direction:
+  - detect duplicate `item.id` values before Kahn queue construction,
+  - return structured failure/warning data or a deterministic early exit instead of entering invalid graph state,
+  - keep valid unique-ID behavior byte-for-byte stable where practical.
+- If the engine continues after detecting duplicates, it must deduplicate deterministically and never silently produce a misleading wave answer.
+- Prefer one truth source for duplicate detection shared by `compute_waves()` and `next_wave()` rather than two parallel checks.
+- Satisfies workflows: 1, 2, 4, 5.
+
+** ITEM Surface duplicate-ID diagnostics through org wave
+:PROPERTIES:
+:CUSTOM_ID: BUG-310-harden-org-wave-duplicate-id-handling-an::ts-surface
+:DEPENDS: BUG-310-harden-org-wave-duplicate-id-handling-an::native-impl
+:LAYER: infra
+:END:
+- Files:
+  - `packages/org/src/tool.ts`
+  - `packages/coding-agent/src/tools/org.ts` if formatting needs adjustment
+  - `crates/pi-natives/src/org_buffer.rs` if error/result shape must cross the binding cleanly
+- Ensure both `nextWave` and `computeWaves` callers surface the duplicate-ID failure truthfully.
+- Preserve existing success payloads for valid graphs.
+- Do not let malformed duplicate-ID input collapse into an empty wave result that looks like success.
+- Satisfies workflows: 2, 3, 4, 6.
+
+* Edge Cases
+
+- Duplicate top-level items across separate org files collected by `collectItems()`.
+- Duplicate sub-outline IDs that escape plan validation and reach general org wave commands.
+- Mixtures of valid IDs and one duplicate pair: error must still identify the duplicate rather than hiding behind unrelated blockers.
+- Duplicate IDs combined with repeated dependency tokens; fix the identity invariant first, not incidental symptom suppression.
+- `doneStates` filtering in `next_wave()` must not accidentally treat one duplicate row as done and another as not-done while still producing a plausible answer.
+- Diagnostics must be deterministic even if duplicate rows arrive in different file ordering.
+- If malformed data is rejected, the caller must learn the truth (`duplicate CUSTOM_ID`) rather than a generic native failure.
+
+* Acceptance Criteria
+
+- `org wave` no longer aborts the process when duplicate IDs are present.
+- Duplicate-ID input yields a truthful, user-visible diagnostic that identifies the offending CUSTOM_ID(s).
+- `nextWave` and `computeWaves` are both covered by regression tests for the duplicate-ID failure class.
+- Valid unique-ID wave calculations remain unchanged.
+- Plan manifest generation (`manifest=true`) is protected by the same invariant handling.
+
+* Verification
+
+- Rust targeted: command covering the new `pi-org-engine` duplicate-ID wave tests.
+- Rust/native targeted: command covering any `pi-natives` org-buffer regression tests added for wave commands.
+- TS targeted: command covering org tool / org package duplicate-diagnostic regression tests.
+- Final checks: `bun check:ts` and `bun check:rs`.
+
+NOTE [2026-04-21]: Completed in PLAN-275: duplicate CUSTOM_ID inputs now return structured org wave errors instead of panicking; native and org-tool regressions added.
