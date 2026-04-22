@@ -1,0 +1,25 @@
+PLAN-280 verification summary
+Date: 2026-04-22
+
+Focused tests
+- cargo test -p pi-code-graph typescript_ -- --nocapture
+  Result: PASS (6 tests)
+  Notes: includes direct resolver regression tests, builder regression test, and existing TypeScript graph surface coverage.
+
+Package checks
+- cargo check -p pi-code-graph
+  Result: PASS
+- cargo check -p pi-natives
+  Result: PASS
+
+Workspace Rust check
+- bun check:rs
+  Result: PASS in clean verification worktree at /tmp/spell-plan280-check after copying plan files only.
+  Notes: main workspace contains unrelated tracked modifications outside PLAN-280, so clean-worktree verification was used to isolate this patch truthfully.
+
+Native rebuild + runtime repro
+- bun run dev:native
+  Result: PASS; rebuilt pi_natives.dev.node and pi-embedding-worker.
+- bun --eval 'import { executeCodeGraph } from "./packages/natives/src/code-graph/index.ts"; ... SERVER_DOMAIN / CodeTool ...'
+  Result: PASS; process exited 0, no SIGABRT, code-graph output returned normally.
+  Observed graph stats: fileCount=4581, symbolCount=55280, edgeCount=88635.

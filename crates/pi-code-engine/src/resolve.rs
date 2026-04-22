@@ -107,6 +107,21 @@ pub fn resolve_symbol(
 	}
 
 	let available = collect_top_level_names(root, profile, &source);
+	if available.is_empty() {
+		let hints = collect_top_level_hints(root, &source);
+		if hints.is_empty() {
+			return Err(CodeEngineError::Edit(format!(
+				"Symbol '{}' not found. No recognized declarations in file.",
+				symbol
+			)));
+		}
+		return Err(CodeEngineError::Edit(format!(
+			"Symbol '{}' not found. File contains top-level nodes but no recognized declarations \
+			 (observed: [{}]).",
+			symbol,
+			hints.join(", ")
+		)));
+	}
 	Err(CodeEngineError::Edit(format!(
 		"Symbol '{}' not found. Available: [{}]",
 		symbol,
@@ -395,7 +410,25 @@ fn collect_top_level_names(root: Node<'_>, profile: &LanguageProfile, source: &s
 	}
 	names
 }
-
+/// Collect observed top-level node kinds / call targets for diagnostic hints
+/// when a file has named children but no recognized declarations.
+fn collect_top_level_hints(root: Node<'_>, source: &str) -> Vec<String> {
+	let mut hints = Vec::new();
+	let mut cursor = root.walk();
+	for child in root.named_children(&mut cursor) {
+		let kind = child.kind();
+		if kind == "call" {
+			if let Some(target) = child.child_by_field_name("target") {
+				if let Some(text) = source.get(target.start_byte()..target.end_byte()) {
+					hints.push(format!("{} (call: {})", kind, text));
+					continue;
+				}
+			}
+		}
+		hints.push(kind.to_string());
+	}
+	hints
+}
 /// Collect names of members within a class-like body for error messages.
 fn collect_member_names(
 	class_node: Node<'_>,
@@ -872,6 +905,114 @@ Deep section body.
 			msg,
 			"edit error: Symbol 'missing' not found. Available: [teal-primary, section-title]"
 		);
+	}
+
+	#[test]
+	fn resolve_elixir_deep_three_segment_module() {
+		let buffer = deep_elixir_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("elixir")).unwrap();
+
+		let resolved = resolve_symbol(&buffer, profile, "MyApp.Web.Greeter").expect("resolve module");
+		assert_eq!(resolved.name, "MyApp.Web.Greeter");
+		assert_eq!(resolved.kind, "module");
+		assert_eq!(resolved.line, 1);
+	}
+
+	#[test]
+	fn resolve_elixir_deep_three_segment_member() {
+		let buffer = deep_elixir_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("elixir")).unwrap();
+
+		let resolved =
+			resolve_symbol(&buffer, profile, "MyApp.Web.Greeter.greet").expect("resolve greet");
+		assert_eq!(resolved.name, "greet");
+		assert_eq!(resolved.kind, "def");
+	}
+
+	#[test]
+	fn resolve_elixir_four_segment_module() {
+		let buffer = four_segment_elixir_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("elixir")).unwrap();
+
+		let resolved =
+			resolve_symbol(&buffer, profile, "MyApp.Web.Api.V1.Controller").expect("resolve module");
+		assert_eq!(resolved.name, "MyApp.Web.Api.V1.Controller");
+		assert_eq!(resolved.kind, "module");
+	}
+
+	#[test]
+	fn resolve_elixir_four_segment_member() {
+		let buffer = four_segment_elixir_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("elixir")).unwrap();
+
+		let resolved = resolve_symbol(&buffer, profile, "MyApp.Web.Api.V1.Controller.index")
+			.expect("resolve index");
+		assert_eq!(resolved.name, "index");
+		assert_eq!(resolved.kind, "def");
+	}
+
+	#[test]
+	fn resolve_elixir_missing_deep_member() {
+		let buffer = deep_elixir_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("elixir")).unwrap();
+
+		let err = resolve_symbol(&buffer, profile, "MyApp.Web.Greeter.nonexistent").unwrap_err();
+		let msg = err.to_string();
+		assert!(
+			msg.contains("not found in 'MyApp.Web.Greeter'"),
+			"should say not found in MyApp.Web.Greeter: {msg}"
+		);
+		assert!(msg.contains("start_link"), "should list available member: {msg}");
+	}
+
+	#[test]
+	fn resolve_elixir_empty_candidates_diagnostic() {
+		let buffer = empty_candidates_elixir_buffer();
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("elixir")).unwrap();
+
+		let err = resolve_symbol(&buffer, profile, "anything").unwrap_err();
+		let msg = err.to_string();
+		assert!(
+			msg.contains("observed:"),
+			"should report observed top-level nodes when no declarations found: {msg}"
+		);
+		assert!(
+			msg.contains("call: use") || msg.contains("call"),
+			"should mention call nodes: {msg}"
+		);
+	}
+
+	fn deep_elixir_buffer() -> CodeBuffer {
+		let source = fs::read_to_string(format!(
+			"{}/tests/fixtures/sources/deep_module.ex",
+			env!("CARGO_MANIFEST_DIR")
+		))
+		.expect("fixture");
+		CodeBuffer::from_str(&source, LanguageId::new("elixir"), registry()).expect("buffer")
+	}
+
+	fn four_segment_elixir_buffer() -> CodeBuffer {
+		let source = fs::read_to_string(format!(
+			"{}/tests/fixtures/sources/four_segment_module.ex",
+			env!("CARGO_MANIFEST_DIR")
+		))
+		.expect("fixture");
+		CodeBuffer::from_str(&source, LanguageId::new("elixir"), registry()).expect("buffer")
+	}
+
+	fn empty_candidates_elixir_buffer() -> CodeBuffer {
+		let source = fs::read_to_string(format!(
+			"{}/tests/fixtures/sources/empty_candidates.ex",
+			env!("CARGO_MANIFEST_DIR")
+		))
+		.expect("fixture");
+		CodeBuffer::from_str(&source, LanguageId::new("elixir"), registry()).expect("buffer")
 	}
 
 	#[test]

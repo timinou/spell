@@ -320,7 +320,7 @@ export const HASHLINE_RETRY_GUIDANCE =
 
 export class HashlineAnchorError extends Error {
 	constructor(
-		public readonly code: "missing_anchor" | "malformed_anchor",
+		public readonly code: "missing_anchor" | "malformed_anchor" | "span_mismatch",
 		message: string,
 	) {
 		super(message);
@@ -345,7 +345,14 @@ export class MalformedHashlineAnchorError extends HashlineAnchorError {
 		);
 	}
 }
-
+export class SpanMismatchHashlineAnchorError extends HashlineAnchorError {
+	constructor(editIndex: number, field: "pos" | "end", lineCount: number) {
+		super(
+			"span_mismatch",
+			`Edit ${editIndex}: ${field}-only replace with ${lineCount} lines is not allowed. A single anchor replaces exactly one line. To replace a range, supply both pos and end. To replace one line, trim lines to length 1. ${HASHLINE_RETRY_GUIDANCE}`,
+		);
+	}
+}
 // ═══════════════════════════════════════════════════════════════════════════
 // Hash Mismatch Error
 // ═══════════════════════════════════════════════════════════════════════════

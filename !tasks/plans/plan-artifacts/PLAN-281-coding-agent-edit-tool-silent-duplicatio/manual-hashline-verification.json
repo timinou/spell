@@ -1,0 +1,25 @@
+{
+  "spanMismatch": {
+    "ok": true,
+    "message": "Edit 1: pos-only replace with 2 lines is not allowed. A single anchor replaces exactly one line. To replace a range, supply both pos and end. To replace one line, trim lines to length 1. Re-read the file to get fresh LINE#ID anchors, then retry the smallest valid edit.",
+    "unchanged": true
+  },
+  "rangeReplace": {
+    "content": "alpha\nBETA\nGAMMA\ndelta\n"
+  },
+  "singleLineReplace": {
+    "content": "alpha\nBETA\nGAMMA\nDELTA\n"
+  },
+  "anchorless": {
+    "ok": true,
+    "message": "Edit 1: replace requires at least one valid LINE#ID anchor in \"pos\" or \"end\". Re-read the file to get fresh LINE#ID anchors, then retry the smallest valid edit."
+  },
+  "malformed": {
+    "ok": true,
+    "message": "Edit 1: invalid pos anchor \"not-a-tag\". Expected LINE#ID from read output (e.g. \"12#QW\"). Cause: Invalid line reference \"not-a-tag\". Expected format \"LINE#ID\" (e.g. \"5#QW\"). Re-read the file to get fresh LINE#ID anchors, then retry the smallest valid edit."
+  },
+  "stale": {
+    "ok": true,
+    "message": "1 line has changed since last read. Use the updated LINE#ID references shown below (>>> marks changed lines).\n\n    1#JN:alpha\n>>> 2#YH:BETA-UPDATED\n    3#KW:GAMMA\n    4#NJ:DELTA"
+  }
+}

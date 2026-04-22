@@ -1,0 +1,18 @@
+{
+  "original": {
+    "cacheStatus": "fresh",
+    "rebuilt": false,
+    "fileCount": 4581,
+    "symbolCount": 55280,
+    "edgeCount": 88635,
+    "output": "Search\n- 6.68 docs/mcp-server-tool-authoring.md::MCP server and tool authoring.4) Tool bridge: MCP -> agent-callable tools.Naming and collision domain\n- 5.67 crates/pi-edit-broker/src/server.rs\n- 5.67 packages/qml-remote/src/server.ts\n- 5.67 packages/spell-server/src/server.ts\n- 5.67 packages/stats/src/server.ts\n- 5.38 crates/pi-edit-broker/src/lib.rs::server\n- 5.38 docs/spell-server/architecture.md::Spell Server Architecture\n- 5.38 packages/coding-agent/src/commands/server.ts\n- 5.38 packages/coding-agent/src/commands/server.ts::Server\n- 5.38 packages/coding-agent/test/browser-reconnect/server.ts\n- 5.38 packages/spell-server/src/http/server.ts\n- 5.38 packages/spell-server/src/socket/server.ts\n- 5.22 domain/coding/manifest.ts\n- 5.22 domain/coding/manifest.ts::manifest\n- 5.22 domain/growth/manifest.ts\n- 5.12 !tasks/features/FEAT-327-kdl-config-extensions-for-session-bridge.org::server.kdl Changes\n- 5.12 crates/pi-edit-broker/src/server.rs::run_server\n- 5.12 docs/spell-server/architecture.md::Spell Server Architecture.Hooks\n- 5.12 docs/spell-server/architecture.md::Spell Server Architecture.Overview\n- 5.12 docs/spell-server/architecture.md::Spell Server Architecture.Scheduler"
+  },
+  "control": {
+    "cacheStatus": "fresh",
+    "rebuilt": false,
+    "fileCount": 4581,
+    "symbolCount": 55280,
+    "edgeCount": 88635,
+    "output": "Search\n- 171.16 packages/coding-agent/src/tools/code.ts::CodeTool\n- 163.62 packages/coding-agent/src/tools/code.ts::CodeTool.constructor\n- 163.62 packages/coding-agent/src/tools/code.ts::CodeTool.execute\n- 150.38 !tasks/projects/PROJ-055-code-tool-surface-cutover-3-command-mode.org::Scope.Rewrite CodeTool.execute() dispatcher\n- 150.38 packages/coding-agent/src/tools/code.ts::CodeTool.#timedCodeBuffer\n- 150.38 packages/coding-agent/src/tools/code.ts::CodeTool.renderResult\n- 144.54 packages/coding-agent/src/tools/code.ts::CodeTool.#executeGraphCommand\n- 144.54 packages/coding-agent/src/tools/code.ts::CodeTool.#finalizeEditExecution\n- 144.54 packages/coding-agent/src/tools/code.ts::CodeTool.#maybeInjectHints\n- 134.11 packages/coding-agent/src/tools/code.ts::CodeTool.#prepareEditedFileForSave\n- 129.44 !tasks/features/FEAT-401-napi-bridge-and-code-tool-integration.org::TDD Sub-Outline.4. Command routing in CodeTool\n- 125.08 !tasks/features/FEAT-447-rewire-codetool-to-native-engine.org::Implementation.Modify =packages/coding-agent/src/tools/code.ts=.Rewrite CodeTool class:\n- 64.87 packages/coding-agent/src/tools/code-result.ts::CodeToolErrorDetails\n- 64.87 packages/coding-agent/src/tools/code-result.ts::CodeToolResultDetails\n- 64.87 packages/coding-agent/src/tools/code-result.ts::classifyCodeToolFailure\n- 64.87 packages/coding-agent/src/tools/code-result.ts::createCodeToolError\n- 64.87 packages/coding-agent/src/tools/code-result.ts::formatCodeToolContent\n- 64.87 packages/coding-agent/src/tools/code.ts::extractCodeToolErrorMessage\n- 62.35 packages/coding-agent/src/tools/code-supported-files.ts::describeCodeToolSemanticFiles\n- 62.35 packages/coding-agent/src/tools/code-supported-files.ts::describeCodeToolSupportedFiles"
+  }
+}

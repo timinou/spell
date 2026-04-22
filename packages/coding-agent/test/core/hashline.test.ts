@@ -10,6 +10,7 @@ import {
 	MissingHashlineAnchorError,
 	parseTag,
 	resolveEditAnchors,
+	SpanMismatchHashlineAnchorError,
 	streamHashLinesFromLines,
 	streamHashLinesFromUtf8,
 	stripNewLinePrefixes,
@@ -942,6 +943,94 @@ describe("resolveEditAnchors", () => {
 		expect(resolveEditAnchors([{ op: "prepend", lines: ["head"] }])).toEqual([
 			{ op: "prepend", pos: undefined, lines: ["head"] },
 		]);
+	});
+
+	it("throws SpanMismatchHashlineAnchorError for pos-only replace with multi-line content", () => {
+		expect(() =>
+			resolveEditAnchors([
+				{
+					op: "replace",
+					pos: formatLineTag(1, "aaa"),
+					lines: ["line1", "line2"],
+				},
+			]),
+		).toThrow(SpanMismatchHashlineAnchorError);
+		expect(() =>
+			resolveEditAnchors([
+				{
+					op: "replace",
+					pos: formatLineTag(1, "aaa"),
+					lines: ["line1", "line2"],
+				},
+			]),
+		).toThrow(/pos-only replace with 2 lines is not allowed/i);
+	});
+
+	it("throws SpanMismatchHashlineAnchorError for end-only replace with multi-line content", () => {
+		expect(() =>
+			resolveEditAnchors([
+				{
+					op: "replace",
+					end: formatLineTag(3, "bbb"),
+					lines: ["a", "b", "c"],
+				},
+			]),
+		).toThrow(SpanMismatchHashlineAnchorError);
+		expect(() =>
+			resolveEditAnchors([
+				{
+					op: "replace",
+					end: formatLineTag(3, "bbb"),
+					lines: ["a", "b", "c"],
+				},
+			]),
+		).toThrow(/end-only replace with 3 lines is not allowed/i);
+	});
+
+	it("accepts pos-only replace with 0 lines (delete idiom)", () => {
+		expect(resolveEditAnchors([{ op: "replace", pos: formatLineTag(2, "bbb"), lines: [] }])).toEqual([
+			{ op: "replace", pos: { line: 2, hash: parseTag(formatLineTag(2, "bbb")).hash }, lines: [] },
+		]);
+	});
+
+	it("accepts pos-only replace with 1 line", () => {
+		expect(resolveEditAnchors([{ op: "replace", pos: formatLineTag(2, "bbb"), lines: ["single"] }])).toEqual([
+			{ op: "replace", pos: { line: 2, hash: parseTag(formatLineTag(2, "bbb")).hash }, lines: ["single"] },
+		]);
+	});
+
+	it("accepts end-only replace with 1 line", () => {
+		expect(resolveEditAnchors([{ op: "replace", end: formatLineTag(2, "bbb"), lines: ["single"] }])).toEqual([
+			{ op: "replace", pos: { line: 2, hash: parseTag(formatLineTag(2, "bbb")).hash }, lines: ["single"] },
+		]);
+	});
+
+	it("still throws MissingHashlineAnchorError when both anchors are missing", () => {
+		expect(() => resolveEditAnchors([{ op: "replace", lines: ["a", "b"] }])).toThrow(MissingHashlineAnchorError);
+		expect(() => resolveEditAnchors([{ op: "replace", lines: ["a", "b"] }])).toThrow(
+			/replace requires at least one valid LINE#ID anchor/i,
+		);
+	});
+
+	it("still throws MalformedHashlineAnchorError before span check", () => {
+		expect(() =>
+			resolveEditAnchors([
+				{
+					op: "replace",
+					pos: "not-a-tag",
+					lines: ["a", "b"],
+				},
+			]),
+		).toThrow(MalformedHashlineAnchorError);
+		expect(() =>
+			resolveEditAnchors([
+				{
+					op: "replace",
+					pos: "not-a-tag",
+					lines: ["a", "b"],
+				},
+			]),
+		).toThrow(/invalid pos anchor/i);
 	});
 });
 
