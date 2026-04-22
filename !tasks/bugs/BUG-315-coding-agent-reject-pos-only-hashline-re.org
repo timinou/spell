@@ -191,3 +191,7 @@ Verification ordering:
 - Manual proof: one transcript snippet showing the rejected request with the new classified error, and one showing a valid multi-line range replace still succeeding.
 
 NOTE [2026-04-22]: Implemented and verified under PLAN-281. Runtime now rejects single-anchor multi-line hashline replace requests before mutation; prompt/schema/tests updated accordingly.
+
+NOTE [2026-04-22]: Reopened: delegated implementation result was not actually present in the main working tree. Applying BUG-315 changes directly now.
+
+NOTE [2026-04-22]: Closed truthfully under PLAN-281 after confirming the tracked hashline runtime/schema/prompt/test changes exist in the main working tree and pass focused TS verification.

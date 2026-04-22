@@ -1345,6 +1345,45 @@ describe("edit tool CRLF handling", () => {
 		}
 	});
 
+	it("rejects pos-only multi-line hashline replace and leaves file untouched", async () => {
+		const originalEditVariant = Bun.env.PI_EDIT_VARIANT;
+		Bun.env.PI_EDIT_VARIANT = "hashline";
+
+		const hashDir = path.join(os.tmpdir(), `coding-agent-hashline-span-${Snowflake.next()}`);
+		fs.mkdirSync(hashDir, { recursive: true });
+		const testFile = path.join(hashDir, "Cargo.toml");
+		const originalContent = ["[package]", 'name = "demo"', 'version = "0.1.0"'].join("\n");
+		fs.writeFileSync(testFile, originalContent);
+
+		try {
+			const hashlineEditTool = new EditTool(createTestToolSession(hashDir));
+			await expect(
+				hashlineEditTool.execute("hashline-span-mismatch", {
+					path: testFile,
+					edits: [{ op: "replace", pos: formatLineTag(2, 'name = "demo"'), lines: ['name = "a"', 'name = "b"'] }],
+				}),
+			).rejects.toThrow(/pos-only replace with 2 lines is not allowed/i);
+			expect(await Bun.file(testFile).text()).toBe(originalContent);
+		} finally {
+			fs.rmSync(hashDir, { recursive: true, force: true });
+			if (originalEditVariant === undefined) delete Bun.env.PI_EDIT_VARIANT;
+			else Bun.env.PI_EDIT_VARIANT = originalEditVariant;
+		}
+	});
+
+	it("hashline tool description mentions single-anchor single-line rule", () => {
+		const originalEditVariant = Bun.env.PI_EDIT_VARIANT;
+		Bun.env.PI_EDIT_VARIANT = "hashline";
+		try {
+			const hashlineEditTool = new EditTool(createTestToolSession(os.tmpdir()));
+			expect(hashlineEditTool.description).toContain("single anchor");
+			expect(hashlineEditTool.description).toContain("exactly one line");
+		} finally {
+			if (originalEditVariant === undefined) delete Bun.env.PI_EDIT_VARIANT;
+			else Bun.env.PI_EDIT_VARIANT = originalEditVariant;
+		}
+	});
+
 	// TODO: CRLF preservation broken by LSP formatting - fix later
 	it.skip("should preserve UTF-8 BOM after edit", async () => {
 		const testFile = path.join(testDir, "bom-test.txt");

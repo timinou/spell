@@ -1,9 +1,12 @@
 use std::{
 	collections::BTreeSet,
+	panic::{self, AssertUnwindSafe},
 	path::{Path, PathBuf},
 };
 
-use oxc_resolver::{ResolveOptions, Resolver, TsconfigOptions, TsconfigReferences};
+use oxc_resolver::{
+	ResolveOptions, Resolver, TsconfigDiscovery, TsconfigOptions, TsconfigReferences,
+};
 use tree_sitter::{Node, Parser};
 
 use crate::{
@@ -106,50 +109,68 @@ impl ImportResolver for TypeScriptImportResolver {
 		reason = "Resolver options are assembled in stages to keep the defaults obvious"
 	)]
 	fn resolve(&self, request: ResolveRequest<'_>) -> Result<Option<PathBuf>> {
-		let absolute_from = request.project_root.join(request.from_file);
-		let Some(from_dir) = absolute_from.parent() else {
-			return Ok(None);
-		};
-		let mut options = ResolveOptions::default();
-		options.extensions = vec![
-			".ts".into(),
-			".tsx".into(),
-			".mts".into(),
-			".cts".into(),
-			".js".into(),
-			".jsx".into(),
-			".mjs".into(),
-			".cjs".into(),
-			".json".into(),
-		];
-		options.main_fields = vec!["module".into(), "main".into()];
-		options.condition_names = vec!["import".into(), "module".into(), "default".into()];
-		options.extension_alias = vec![
-			(".js".into(), vec![".ts".into(), ".tsx".into(), ".js".into()]),
-			(".mjs".into(), vec![".mts".into(), ".mjs".into()]),
-			(".cjs".into(), vec![".cts".into(), ".cjs".into()]),
-		];
-		let tsconfig_path = request.project_root.join("tsconfig.json");
-		if tsconfig_path.is_file() {
-			options.tsconfig = Some(TsconfigOptions {
-				config_file: tsconfig_path,
-				references:  TsconfigReferences::Auto,
-			});
-		}
-		let resolver = Resolver::new(options);
-		let resolution = resolver.resolve(from_dir, request.specifier).ok();
-		let resolved_path = resolution
-			.map(|resolved| resolved.into_path_buf())
-			.or_else(|| {
-				fallback_relative_path(request.project_root, request.from_file, request.specifier)
-			});
-		Ok(resolved_path.and_then(|path| {
-			path
-				.strip_prefix(request.project_root)
+		Ok(resolve_import_path(request, |options, from_dir, specifier| {
+			let resolver = Resolver::new(options);
+			resolver
+				.resolve(from_dir, specifier)
 				.ok()
-				.map(Path::to_path_buf)
+				.map(|resolved| resolved.into_path_buf())
 		}))
 	}
+}
+
+fn resolve_import_path(
+	request: ResolveRequest<'_>,
+	resolve_with: impl FnOnce(ResolveOptions, &Path, &str) -> Option<PathBuf>,
+) -> Option<PathBuf> {
+	let absolute_from = request.project_root.join(request.from_file);
+	let from_dir = absolute_from.parent()?;
+	let resolved_path = panic::catch_unwind(AssertUnwindSafe(|| {
+		resolve_with(build_resolve_options(request.project_root), from_dir, request.specifier)
+	}))
+	.ok()
+	.flatten()
+	.or_else(|| fallback_relative_path(request.project_root, request.from_file, request.specifier));
+	resolved_path.and_then(|path| {
+		path
+			.strip_prefix(request.project_root)
+			.ok()
+			.map(Path::to_path_buf)
+	})
+}
+
+#[allow(
+	clippy::field_reassign_with_default,
+	reason = "Resolver options are assembled in stages to keep the defaults obvious"
+)]
+fn build_resolve_options(project_root: &Path) -> ResolveOptions {
+	let mut options = ResolveOptions::default();
+	options.extensions = vec![
+		".ts".into(),
+		".tsx".into(),
+		".mts".into(),
+		".cts".into(),
+		".js".into(),
+		".jsx".into(),
+		".mjs".into(),
+		".cjs".into(),
+		".json".into(),
+	];
+	options.main_fields = vec!["module".into(), "main".into()];
+	options.condition_names = vec!["import".into(), "module".into(), "default".into()];
+	options.extension_alias = vec![
+		(".js".into(), vec![".ts".into(), ".tsx".into(), ".js".into()]),
+		(".mjs".into(), vec![".mts".into(), ".mjs".into()]),
+		(".cjs".into(), vec![".cts".into(), ".cjs".into()]),
+	];
+	let tsconfig_path = project_root.join("tsconfig.json");
+	if tsconfig_path.is_file() {
+		options.tsconfig = Some(TsconfigDiscovery::Manual(TsconfigOptions {
+			config_file: tsconfig_path,
+			references:  TsconfigReferences::Auto,
+		}));
+	}
+	options
 }
 
 fn parse_export_statement(
@@ -727,12 +748,18 @@ fn resolve_candidate(path: PathBuf) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+	use std::fs;
+
 	use super::*;
 	use crate::{
 		cache::CacheStore,
 		indexer::{BuildGraphOptions, CodeGraphBuilder},
 		language::LanguageRegistry,
 	};
+
+	fn new_temp_project(prefix: &str) -> PathBuf {
+		std::env::temp_dir().join(format!("{prefix}-{}", std::process::id()))
+	}
 
 	#[test]
 	fn typescript_extractor_collects_named_imports_and_calls() {
@@ -907,6 +934,96 @@ export class Runner implements AgentTool<typeof schema> {
 		assert!(run.references.iter().any(|reference| {
 			reference.target_name == "Runner.constructor" && reference.edge_kind == EdgeKind::Calls
 		}));
+	}
+
+	#[test]
+	fn typescript_resolver_resolves_relative_imports() {
+		let root = new_temp_project("pi-code-graph-ts-resolve");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(&root).expect("temp dir should be created");
+		fs::write(
+			root.join("caller.ts"),
+			"import { dep } from './dep';\nexport const caller = dep;\n",
+		)
+		.expect("caller file should be written");
+		fs::write(root.join("dep.ts"), "export const dep = 1;\n")
+			.expect("dep file should be written");
+
+		let resolved = TypeScriptImportResolver
+			.resolve(ResolveRequest {
+				project_root: &root,
+				from_file:    Path::new("caller.ts"),
+				specifier:    "./dep",
+			})
+			.expect("resolver should succeed");
+		assert_eq!(resolved, Some(PathBuf::from("dep.ts")));
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn typescript_resolver_falls_back_when_resolver_panics() {
+		let root = new_temp_project("pi-code-graph-ts-panic-fallback");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(&root).expect("temp dir should be created");
+		fs::write(
+			root.join("caller.ts"),
+			"import { dep } from './dep';\nexport const caller = dep;\n",
+		)
+		.expect("caller file should be written");
+		fs::write(root.join("dep.ts"), "export const dep = 1;\n")
+			.expect("dep file should be written");
+
+		let resolved = resolve_import_path(
+			ResolveRequest {
+				project_root: &root,
+				from_file:    Path::new("caller.ts"),
+				specifier:    "./dep",
+			},
+			|_, _, _| panic!("resolver panic"),
+		);
+		assert_eq!(resolved, Some(PathBuf::from("dep.ts")));
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn typescript_builder_resolves_relative_import_edges() {
+		let root = new_temp_project("pi-code-graph-ts-builder-imports");
+		let cache_dir = root.join("cache");
+		let _ = fs::remove_dir_all(&root);
+		fs::create_dir_all(&root).expect("temp dir should be created");
+		fs::write(
+			root.join("caller.ts"),
+			"import { callee } from './callee';\nexport function caller() {\n  return callee();\n}\n",
+		)
+		.expect("caller file should be written");
+		fs::write(root.join("callee.ts"), "export function callee() {\n  return 'ok';\n}\n")
+			.expect("callee file should be written");
+
+		let registry = LanguageRegistry::new()
+			.with_typescript()
+			.expect("registry should build");
+		let builder = CodeGraphBuilder::new(registry, CacheStore::new(&cache_dir));
+		let outcome = builder
+			.build(&BuildGraphOptions::new(&root))
+			.expect("typescript graph should build");
+
+		assert_eq!(outcome.graph.count_edges(EdgeKind::Imports), 1);
+		assert_eq!(outcome.graph.count_edges(EdgeKind::Calls), 1);
+		assert!(
+			outcome
+				.graph
+				.symbol_names()
+				.iter()
+				.any(|name| name.ends_with("caller.ts::caller"))
+		);
+		assert!(
+			outcome
+				.graph
+				.symbol_names()
+				.iter()
+				.any(|name| name.ends_with("callee.ts::callee"))
+		);
+		let _ = fs::remove_dir_all(root);
 	}
 
 	#[test]

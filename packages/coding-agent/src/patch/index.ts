@@ -52,6 +52,7 @@ import {
 	MalformedHashlineAnchorError,
 	MissingHashlineAnchorError,
 	parseTag,
+	SpanMismatchHashlineAnchorError,
 } from "./hashline";
 import { detectLineEnding, normalizeToLF, restoreLineEndings, stripBom } from "./normalize";
 import { type EditToolDetails, getLspBatchRequest } from "./shared";
@@ -176,17 +177,20 @@ const hashlineEditSchema = Type.Object(
 		pos: Type.Optional(
 			Type.String({
 				description:
-					"Start anchor in LINE#ID format copied from read output (required for replace unless end is set)",
+					"Start anchor in LINE#ID format copied from read output. A single anchor (pos or end, but not both) replaces exactly one line; lines.length does not control span.",
 			}),
 		),
 		end: Type.Optional(
 			Type.String({
 				description:
-					"End anchor in LINE#ID format copied from read output (optional range end; replace may use end instead of pos)",
+					"End anchor in LINE#ID format copied from read output (optional range end; when both pos and end are set they define a multi-line range).",
 			}),
 		),
 		lines: Type.Union([
-			Type.Array(Type.String(), { description: "Replacement content (preferred format)" }),
+			Type.Array(Type.String(), {
+				description:
+					"Replacement content. Must be length 1 when only one anchor is supplied, since a single anchor replaces exactly one line.",
+			}),
 			Type.String({ description: "Replacement content as a newline-delimited string" }),
 			Type.Null({ description: "Delete the targeted content" }),
 		]),
@@ -239,7 +243,12 @@ export function resolveEditAnchors(edits: HashlineToolEdit[]): HashlineEdit[] {
 				if (pos && end) {
 					result.push({ op: "replace", pos, end, lines });
 				} else if (pos || end) {
-					result.push({ op: "replace", pos: pos || end!, lines });
+					const singleAnchor = pos || end!;
+					const field = pos ? "pos" : "end";
+					if (lines.length > 1) {
+						throw new SpanMismatchHashlineAnchorError(editIndex, field, lines.length);
+					}
+					result.push({ op: "replace", pos: singleAnchor, lines });
 				} else {
 					throw new MissingHashlineAnchorError(editIndex);
 				}

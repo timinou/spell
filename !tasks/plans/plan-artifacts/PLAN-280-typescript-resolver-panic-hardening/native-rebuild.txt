@@ -1,0 +1,10 @@
+Command: bun run dev:native
+
+Observed output:
+- Building pi-natives for linux-x64-modern (debug)…
+- Finished `dev` profile [unoptimized + debuginfo] target(s) successfully
+- Found addon: /home/user/code/ora/spell/target/debug/libpi_natives.so
+- Installing addon: /home/user/code/ora/spell/packages/natives/native/pi_natives.dev.node
+- Building pi-embedding-worker for linux-x64 (debug)…
+- Installing worker: /home/user/code/ora/spell/packages/natives/native/pi-embedding-worker
+- Build complete.
