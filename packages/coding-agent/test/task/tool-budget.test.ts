@@ -3,16 +3,11 @@ import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../src/config/settings";
 import type { LoadExtensionsResult } from "../../src/extensibility/extensions/types";
-import * as sdkModule from "../../src/sdk";
+
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "../../src/session/agent-session";
 import type { AuthStorage } from "../../src/session/auth-storage";
-import { runSubprocess } from "../../src/task/executor";
-import type { AgentDefinition } from "../../src/task/types";
 
-vi.mock("../../src/sdk", () => ({
-	createAgentSession: vi.fn(),
-	discoverAuthStorage: vi.fn(async () => ({})),
-}));
+import type { AgentDefinition } from "../../src/task/types";
 
 function createAssistantStopMessage(text: string): AssistantMessage {
 	return {
@@ -118,12 +113,14 @@ function emitSubmitResult(
 	});
 }
 
-function mockCreateAgentSession(session: AgentSession): void {
-	(sdkModule.createAgentSession as unknown as { mockResolvedValue: (value: unknown) => void }).mockResolvedValue({
+async function mockCreateAgentSession(session: AgentSession): Promise<void> {
+	const sdkModule = await import("../../src/sdk");
+	vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue({
 		session,
 		extensionsResult: {} as unknown as LoadExtensionsResult,
 		setToolUIContext: () => {},
-	});
+	} as never);
+	vi.spyOn(sdkModule, "discoverAuthStorage").mockResolvedValue({} as never);
 }
 
 function getBudgetWarningCount(warnSpy: { mock: { calls: unknown[][] } }): number {
@@ -168,8 +165,9 @@ describe("runSubprocess tool call budget", () => {
 			}
 			emitSubmitResult(emit, { recovered: true });
 		}, abortSpy);
-		mockCreateAgentSession(session);
+		await mockCreateAgentSession(session);
 
+		const { runSubprocess } = await import("../../src/task/executor");
 		const result = await runSubprocess({
 			...baseOptions,
 			id: "subagent-budget-exceeded",
@@ -180,7 +178,7 @@ describe("runSubprocess tool call budget", () => {
 		expect(prompts[1]).toContain("You stopped without calling submit_result");
 		expect(abortSpy).toHaveBeenCalled();
 		expect(getBudgetWarningCount(warnSpy)).toBe(1);
-		expect(result.output).toContain('"recovered": true');
+		expect(result.structuredResult).toEqual({ recovered: true });
 	});
 
 	it("does not abort when subagent completes within budget", async () => {
@@ -190,8 +188,9 @@ describe("runSubprocess tool call budget", () => {
 			emitReadToolExecutions(emit, 5);
 			emitSubmitResult(emit, { withinBudget: true });
 		}, abortSpy);
-		mockCreateAgentSession(session);
+		await mockCreateAgentSession(session);
 
+		const { runSubprocess } = await import("../../src/task/executor");
 		const result = await runSubprocess({
 			...baseOptions,
 			id: "subagent-budget-within-limit",
@@ -199,7 +198,7 @@ describe("runSubprocess tool call budget", () => {
 		});
 
 		expect(getBudgetWarningCount(warnSpy)).toBe(0);
-		expect(result.output).toContain('"withinBudget": true');
+		expect(result.structuredResult).toEqual({ withinBudget: true });
 	});
 
 	it("disables enforcement when task.maxToolCalls is set to 0", async () => {
@@ -209,8 +208,9 @@ describe("runSubprocess tool call budget", () => {
 			emitReadToolExecutions(emit, 300);
 			emitSubmitResult(emit, { enforcementDisabled: true });
 		}, abortSpy);
-		mockCreateAgentSession(session);
+		await mockCreateAgentSession(session);
 
+		const { runSubprocess } = await import("../../src/task/executor");
 		const result = await runSubprocess({
 			...baseOptions,
 			id: "subagent-budget-disabled",
@@ -218,7 +218,7 @@ describe("runSubprocess tool call budget", () => {
 		});
 
 		expect(getBudgetWarningCount(warnSpy)).toBe(0);
-		expect(result.output).toContain('"enforcementDisabled": true');
+		expect(result.structuredResult).toEqual({ enforcementDisabled: true });
 	});
 
 	it("does not abort when tool count is exactly at maxToolCalls", async () => {
@@ -228,8 +228,9 @@ describe("runSubprocess tool call budget", () => {
 			emitReadToolExecutions(emit, 5);
 			emitSubmitResult(emit, { exactLimit: true });
 		}, abortSpy);
-		mockCreateAgentSession(session);
+		await mockCreateAgentSession(session);
 
+		const { runSubprocess } = await import("../../src/task/executor");
 		const result = await runSubprocess({
 			...baseOptions,
 			id: "subagent-budget-at-limit",
@@ -237,7 +238,7 @@ describe("runSubprocess tool call budget", () => {
 		});
 
 		expect(getBudgetWarningCount(warnSpy)).toBe(0);
-		expect(result.output).toContain('"exactLimit": true');
+		expect(result.structuredResult).toEqual({ exactLimit: true });
 	});
 	it("uses default maxToolCalls=200 when not explicitly configured", async () => {
 		const prompts: string[] = [];
@@ -254,8 +255,9 @@ describe("runSubprocess tool call budget", () => {
 			}
 			emitSubmitResult(emit, { defaultBudgetApplied: true });
 		}, abortSpy);
-		mockCreateAgentSession(session);
+		await mockCreateAgentSession(session);
 
+		const { runSubprocess } = await import("../../src/task/executor");
 		const result = await runSubprocess({
 			...baseOptions,
 			id: "subagent-budget-default",
@@ -264,6 +266,6 @@ describe("runSubprocess tool call budget", () => {
 
 		expect(prompts).toHaveLength(2);
 		expect(getBudgetWarningCount(warnSpy)).toBe(1);
-		expect(result.output).toContain('"defaultBudgetApplied": true');
+		expect(result.structuredResult).toEqual({ defaultBudgetApplied: true });
 	});
 });

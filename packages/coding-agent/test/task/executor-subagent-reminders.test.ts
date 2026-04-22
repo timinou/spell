@@ -322,8 +322,8 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(promptOptions[0]?.attribution).toBe("agent");
 		expect(promptOptions[1]?.attribution).toBe("agent");
 		expect(prompts[1]).toContain("You stopped without calling submit_result");
-		expect(result.output).toContain('"done": true');
-		expect(result.output.includes("SYSTEM WARNING")).toBe(false);
+		expect(result.structuredResult).toEqual({ done: true });
+		expect(result.textPreview?.includes("SYSTEM WARNING") ?? false).toBe(false);
 	});
 
 	it("accepts gated submit_result success when proof is already observed", async () => {
@@ -371,7 +371,7 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(prompts).toHaveLength(1);
 		expect(promptOptions[0]?.toolChoice).toBeUndefined();
 		expect(result.exitCode).toBe(0);
-		expect(result.output).toContain('"ok": true');
+		expect(result.structuredResult).toMatchObject({ ok: true });
 	});
 
 	it("retries exactly once when gated success arrives before proof and then accepts verified success", async () => {
@@ -436,7 +436,7 @@ describe("runSubprocess submit_result reminders", () => {
 		});
 		expect(prompts).toHaveLength(2);
 		expect(result.exitCode).toBe(0);
-		expect(result.output).toContain('"retried": true');
+		expect(result.structuredResult).toMatchObject({ ok: true, retried: true });
 	});
 
 	it("fails honestly when proof is still missing after the single runtime retry", async () => {
@@ -477,7 +477,7 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(prompts).toHaveLength(2);
 		expect(result.exitCode).toBe(1);
 		expect(result.error).toContain(SUBAGENT_WARNING_MISSING_VERIFICATION_PROOF);
-		expect(result.output).not.toContain('"attempt": 2');
+		expect(result.structuredResult).toBeUndefined();
 	});
 
 	it("keeps null submit_result warning when subagent submits success without data", async () => {
@@ -507,7 +507,7 @@ describe("runSubprocess submit_result reminders", () => {
 		});
 
 		const result = await runSubprocess({ ...baseOptions, id: "subagent-2" });
-		expect(result.output).toContain("SYSTEM WARNING: Subagent called submit_result with null data.");
+		expect(result.textPreview).toContain("SYSTEM WARNING: Subagent called submit_result with null data.");
 	});
 
 	it("retries when submit_result tool returns an error before succeeding", async () => {
@@ -551,7 +551,7 @@ describe("runSubprocess submit_result reminders", () => {
 		const result = await runSubprocess({ ...baseOptions, id: "subagent-err-then-success" });
 		expect(prompts).toHaveLength(2);
 		expect(result.exitCode).toBe(0);
-		expect(result.output).toContain('"ok": true');
+		expect(result.structuredResult).toMatchObject({ ok: true });
 	});
 	it("drops forced tool choice on the final reminder attempt", async () => {
 		const promptOptions: Array<PromptOptions | undefined> = [];
@@ -590,7 +590,7 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(promptOptions[2]?.toolChoice).toEqual({ type: "function", name: "submit_result" });
 		expect(promptOptions[3]?.toolChoice).toBeUndefined();
 		expect(result.exitCode).toBe(0);
-		expect(result.output).toContain('"ok": true');
+		expect(result.structuredResult).toMatchObject({ ok: true });
 	});
 
 	it("uses provided thinking level when model override has no explicit suffix", async () => {
@@ -725,8 +725,8 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(result.stderr).toBe("");
 		expect(result.error).toBeUndefined();
 		expect(result.abortReason).toBeUndefined();
-		expect(result.output).toContain(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
-		expect(result.output).toContain("did work");
+		expect(result.textPreview).toContain(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+		expect(result.textPreview).toContain("did work");
 	});
 
 	it("fails after 3 reminders when submit_result is never called and no tools run", async () => {
@@ -754,8 +754,8 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(result.stderr).toBe(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
 		expect(result.error).toBe(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
 		expect(result.abortReason).toBeUndefined();
-		expect(result.output).toContain(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
-		expect(result.output).toContain("never used a tool");
+		expect(result.textPreview).toContain(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+		expect(result.textPreview).toContain("never used a tool");
 	});
 
 	it("surfaces abort reason when submit_result reports aborted status", async () => {
@@ -855,9 +855,9 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(result.aborted).toBe(false);
 		expect(result.stderr).toBe("401 Invalid bearer token");
 		expect(result.error).toBe("401 Invalid bearer token");
-		expect(result.output).not.toContain(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+		expect(result.textPreview?.includes(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT) ?? false).toBe(false);
 		expect(result.sessionId).toBe("mock-subagent-session");
-		expect(result.transcriptPath).toBe("/tmp/subagent-auth-failure-before-submit-result.jsonl");
+		expect(result.transcriptUri).toBe("/tmp/subagent-auth-failure-before-submit-result.jsonl");
 	});
 
 	it("marks pre-aborted subprocess with a concrete reason", async () => {

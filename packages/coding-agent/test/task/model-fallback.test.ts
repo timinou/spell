@@ -187,7 +187,7 @@ describe("runSubprocess delegated model fallback", () => {
 		});
 
 		expect(result.exitCode).toBe(0);
-		expect(result.output).toContain('"ok": true');
+		expect(result.structuredResult).toMatchObject({ ok: true });
 		expect(result.error).toBeUndefined();
 		expect(result.sessionId).toBe("session-openai");
 		expect((authStorage.markAuthFailure as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(1);
@@ -229,7 +229,7 @@ describe("runSubprocess delegated model fallback", () => {
 		expect(result.exitCode).toBe(1);
 		expect(result.error).toBe("401 Invalid bearer token");
 		expect(result.stderr).toBe("401 Invalid bearer token");
-		expect(result.output).not.toContain(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT);
+		expect(result.textPreview?.includes(SUBAGENT_WARNING_MISSING_SUBMIT_RESULT) ?? false).toBe(false);
 		expect((authStorage.markAuthFailure as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(1);
 	});
 });

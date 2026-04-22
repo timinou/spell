@@ -51,9 +51,10 @@ function createResult(): SingleResult {
 		assignment: "## Target\n- File: foo.ts",
 		description: "Inspect file",
 		exitCode: 0,
-		output: "{}",
+		outcome: "completed",
 		stderr: "",
-		truncated: false,
+		resultUri: "agent://subtask-1",
+		structuredResult: {},
 		durationMs: 1,
 		tokens: 0,
 	};

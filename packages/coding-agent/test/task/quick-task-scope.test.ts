@@ -40,9 +40,10 @@ function createResult(id: string, description: string): SingleResult {
 		assignment: `## Target\n- Task: ${description}`,
 		description,
 		exitCode: 0,
-		output: description,
+		outcome: "completed",
 		stderr: "",
-		truncated: false,
+		resultUri: `agent://${id}`,
+		textPreview: description,
 		durationMs: 1,
 		tokens: 0,
 	};

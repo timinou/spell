@@ -279,7 +279,15 @@ export class SubagentViewerComponent implements Component {
 		if (selectedAgent) {
 			const idx = `${this.#selectedIndex + 1}/${this.#agents.length}`;
 			const statusColor =
-				selectedAgent.status === "running" ? "success" : selectedAgent.status === "failed" ? "error" : "muted";
+				selectedAgent.status === "running"
+					? "success"
+					: ["completed", "completed-empty"].includes(selectedAgent.status)
+						? "success"
+						: ["aborted", "cancelled"].includes(selectedAgent.status)
+							? "warning"
+							: selectedAgent.status === "pending"
+								? "muted"
+								: "error";
 			const statusBadge = theme.fg(statusColor, selectedAgent.status);
 			agentPart = ` ${theme.fg("dim", idx)} ${theme.fg("accent", selectedAgent.id)} (${statusBadge})`;
 		}

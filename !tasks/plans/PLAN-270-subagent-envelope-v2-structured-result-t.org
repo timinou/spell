@@ -1,5 +1,5 @@
 #+TITLE: Subagent Envelope v2: structured result tree for nested delegation
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c0a83e5a690b0f
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-06-29-609Z_14c0a83e5a690b0f.jsonl]]
 #+CUSTOM_ID: PLAN-270-subagent-envelope-v2-structured-result-t
@@ -170,3 +170,17 @@ Consumer migration + probe tests \u2014 validates the whole stack.
 - Exploration artifacts (this session): ~agent://5-MapSingleResult~, ~agent://6-MapProgressStreaming~, ~agent://7-MapStatusComposition~, ~agent://8-MapArtifactUris~.
 - Prior P0: ~task.maxRecursionDepth~ default unified to 3 across ~config/settings-schema.ts~, ~task/executor.ts~, ~tools/index.ts~; ~task~ agent ~spawns~ widened to ~"*"~ in ~task/agents.ts~.
 - Deferred: per-node cost/latency telemetry tree; ~inspect_agent~ navigation tool; depth-budget streaming throttle (added if flood observed).
+
+** Completion [2026-04-19]
+*** Verification
+- `bun check:ts` → passed.
+- `bun test packages/coding-agent/test/task/` → passed (`261 pass`, `0 fail`).
+- `grep(pattern="result\\.output|r\\.output|\\.truncated\\b", path="packages/coding-agent/src/task", type="ts")` → no matches.
+- `grep(pattern="outputIds", path="packages/coding-agent", type="ts")` → no matches.
+- `grep(pattern="eventBus: undefined", path="packages/coding-agent/src/task", type="ts")` → no matches.
+*** Artifacts
+- None.
+*** Deviations
+- None.
+
+NOTE [2026-04-19]: Completed implementation + verification for PLAN-270 on 2026-04-19.

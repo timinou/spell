@@ -45,7 +45,7 @@ import {
 // Import review tools for side effects (registers subagent tool handlers)
 import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
-import { type BatchGraph, buildBatchGraph, scheduleBatch } from "./batch-scheduler";
+import { type BatchGraph, type BatchImplicitBlocker, buildBatchGraph, scheduleBatch } from "./batch-scheduler";
 import { discoverAgents, getAgent } from "./discovery";
 import { type RuntimeVerificationOptions, runSubprocess } from "./executor";
 import {
@@ -63,6 +63,7 @@ import {
 	type AgentDefinition,
 	type AgentProgress,
 	type SingleResult,
+	type SubagentOutcome,
 	type TaskItem,
 	type TaskParams,
 	type TaskSchema,
@@ -129,6 +130,52 @@ function addUsageTotals(target: Usage, usage: Partial<Usage>): void {
 	target.cost.total += cost.total;
 }
 
+const RESULT_INLINE_JSON_LIMIT = 5_000;
+
+function stringifyStructuredResult(value: unknown): string | undefined {
+	if (value === undefined) return undefined;
+	try {
+		return JSON.stringify(value, null, 2);
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+}
+
+function getResultSummaryText(
+	result: Pick<SingleResult, "structuredResult" | "textPreview">,
+	maxChars = 4_000,
+): string | undefined {
+	const text = result.textPreview?.trim() || stringifyStructuredResult(result.structuredResult);
+	if (!text) return undefined;
+	return text.length > maxChars ? `${text.slice(0, maxChars)}\n\n[truncated]` : text;
+}
+
+function getResultPreviewText(result: SingleResult): string {
+	return (
+		result.textPreview?.trim() ||
+		stringifyStructuredResult(result.structuredResult) ||
+		result.stderr.trim() ||
+		"(no output)"
+	);
+}
+
+function getResultInlineStructured(result: SingleResult): string | undefined {
+	const text = stringifyStructuredResult(result.structuredResult);
+	if (!text || text.length >= RESULT_INLINE_JSON_LIMIT) return undefined;
+	return text;
+}
+
+function isSuccessfulOutcome(outcome: SubagentOutcome): boolean {
+	return outcome === "completed" || outcome === "completed-empty";
+}
+
+function formatOutcomeLabel(result: SingleResult): string {
+	if (result.outcome === "failed" && result.exitCode > 0) {
+		return `failed (exit ${result.exitCode})`;
+	}
+	return result.outcome;
+}
+
 /**
  * Build assignment text from a sniper todo's content and details.
  * Returns undefined if the todo has neither content nor details.
@@ -141,6 +188,28 @@ function buildSniperAssignment(todo: { content: string; details?: string }): str
 		parts.push(todo.details);
 	}
 	return parts.join("\n");
+}
+
+function formatImplicitBlockerReason(reason: string, cwd: string): string {
+	const relative = path.isAbsolute(reason) ? path.relative(cwd, reason) || path.basename(reason) : reason;
+	return relative.split(path.sep).join("/");
+}
+
+function buildImplicitBlockerNote(implicitBlockers: BatchImplicitBlocker[], cwd: string): string {
+	if (implicitBlockers.length === 0) return "";
+	const reorganizedTaskCount = new Set(implicitBlockers.flatMap(({ from, to }) => [from, to])).size;
+	const taskLabel = reorganizedTaskCount === 1 ? "task" : "tasks";
+	const blockers = implicitBlockers.map(
+		({ to, from, reason }) => `${to}<-${from} (${formatImplicitBlockerReason(reason, cwd)})`,
+	);
+	return `Note: reorganized ${reorganizedTaskCount} ${taskLabel} into dependency chains due to filesDeps overlap. Implicit blockers: [${blockers.join(", ")}].\n\n`;
+}
+
+function withImplicitBlockers(details: TaskToolDetails, implicitBlockers: BatchImplicitBlocker[]): TaskToolDetails {
+	return {
+		...details,
+		implicit_blockers: implicitBlockers.length > 0 ? implicitBlockers.map(blocker => ({ ...blocker })) : undefined,
+	};
 }
 
 // Re-export types and utilities
@@ -297,7 +366,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		}
 		if (problems.length > 0) return problems.join(". ");
 		try {
-			buildBatchGraph(tasks.map(task => ({ id: task.id, blockers: task.blockers })));
+			buildBatchGraph(tasks.map(task => ({ id: task.id, blockers: task.blockers, filesDeps: task.filesDeps })));
 		} catch (error) {
 			problems.push(error instanceof Error ? error.message : String(error));
 		}
@@ -410,9 +479,8 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		result: SingleResult,
 		verification?: TodoDelegationResult["verification"],
 	): TodoDelegationResult {
-		const output = result.output.trim();
 		return {
-			output: output.length > 4_000 ? `${output.slice(0, 4_000)}\n\n[truncated]` : output || undefined,
+			output: getResultSummaryText(result),
 			error: result.error,
 			outputPath: result.outputPath,
 			verification,
@@ -522,9 +590,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			assignment: task.assignment,
 			description: task.description,
 			exitCode: 1,
-			output: "",
+			outcome: aborted ? "aborted" : "failed",
 			stderr: errorMessage,
-			truncated: false,
+			resultUri: `agent://${task.id}`,
+			textPreview: errorMessage,
 			durationMs: 0,
 			tokens: 0,
 			error: errorMessage,
@@ -597,7 +666,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		isolationContext?: { isolationDir: string; baselineHeadCommit: string },
 	): Promise<void> {
 		if (!task.todoRef) return;
-		const delegation = this.#buildTodoDelegation(result.agent, result.sessionId, result.transcriptPath);
+		const delegation = this.#buildTodoDelegation(result.agent, result.sessionId, result.transcriptUri);
 		const todo = this.#findTodoForRef(task.todoRef);
 
 		let status: TodoStatus;
@@ -605,7 +674,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		// Track whether gate verification ran and passed, so we can bypass two-phase verification
 		let gatesVerified = false;
 
-		if (result.exitCode === 0 && !(result.aborted ?? false)) {
+		if (isSuccessfulOutcome(result.outcome) && result.exitCode === 0 && !result.error) {
 			const gateResult = await this.#verifyTaskGates(task.todoRef, result, isolationContext);
 			const childGateFailures = result.todoGroups
 				? await this.#verifyChildTodoGates(result.todoGroups, result, isolationContext)
@@ -801,6 +870,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				taskExecutions.map(taskExecution => ({
 					id: taskExecution.logicalId,
 					blockers: taskExecution.blockers,
+					filesDeps: taskExecution.filesDeps,
 				})),
 			);
 		} catch (error) {
@@ -810,6 +880,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				details: { projectAgentsDir: null, results: [], totalDurationMs: 0 },
 			};
 		}
+		const implicitBlockerNote = buildImplicitBlockerNote(batchGraph.implicitBlockers, this.session.cwd);
 		const progressByTaskId = new Map<string, AgentProgress>();
 		for (let index = 0; index < taskExecutions.length; index++) {
 			const taskExecution = taskExecutions[index];
@@ -851,13 +922,17 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				.map(progress => structuredClone(progress));
 		};
 
-		const buildAsyncDetails = (state: "running" | "completed" | "failed", jobId: string): TaskToolDetails => ({
-			projectAgentsDir: null,
-			results: [],
-			totalDurationMs: 0,
-			progress: getProgressSnapshot(),
-			async: { state, jobId, type: "task" },
-		});
+		const buildAsyncDetails = (state: "running" | "completed" | "failed", jobId: string): TaskToolDetails =>
+			withImplicitBlockers(
+				{
+					projectAgentsDir: null,
+					results: [],
+					totalDurationMs: 0,
+					progress: getProgressSnapshot(),
+					async: { state, jobId, type: "task" },
+				},
+				batchGraph.implicitBlockers,
+			);
 
 		const syncAsyncProgress = (target: AgentProgress, source: AgentProgress): void => {
 			const index = target.index;
@@ -868,7 +943,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const emitAsyncUpdate = (state: "running" | "completed" | "failed", text: string): void => {
 			const primaryJobId = startedJobs[0]?.jobId ?? "task";
 			onUpdate?.({
-				content: [{ type: "text", text }],
+				content: [{ type: "text", text: `${implicitBlockerNote}${text}` }],
 				details: buildAsyncDetails(state, primaryJobId),
 			});
 		};
@@ -1121,8 +1196,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 							: "No background task jobs were started."
 					: `Failed to start background task jobs: ${failedSchedules.join("; ")}`;
 			return {
-				content: [{ type: "text", text: failureText }],
-				details: { projectAgentsDir: null, results: [], totalDurationMs: 0, progress: getProgressSnapshot() },
+				content: [{ type: "text", text: `${implicitBlockerNote}${failureText}` }],
+				details: withImplicitBlockers(
+					{ projectAgentsDir: null, results: [], totalDurationMs: 0, progress: getProgressSnapshot() },
+					batchGraph.implicitBlockers,
+				),
 			};
 		}
 
@@ -1140,16 +1218,19 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			content: [
 				{
 					type: "text",
-					text: `Started ${startedJobs.length} background task job${startedJobs.length === 1 ? "" : "s"} using ${params.agent}.${scheduleFailureSummary} Results will be delivered when complete.`,
+					text: `${implicitBlockerNote}Started ${startedJobs.length} background task job${startedJobs.length === 1 ? "" : "s"} using ${params.agent}.${scheduleFailureSummary} Results will be delivered when complete.`,
 				},
 			],
-			details: {
-				projectAgentsDir: null,
-				results: [],
-				totalDurationMs: 0,
-				progress: getProgressSnapshot(),
-				async: { state: "running", jobId: startedJobs[0].jobId, type: "task" },
-			},
+			details: withImplicitBlockers(
+				{
+					projectAgentsDir: null,
+					results: [],
+					totalDurationMs: 0,
+					progress: getProgressSnapshot(),
+					async: { state: "running", jobId: startedJobs[0].jobId, type: "task" },
+				},
+				batchGraph.implicitBlockers,
+			),
 		};
 	}
 
@@ -1430,6 +1511,14 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				filesDeps: task.filesDeps,
 				...renderTemplate(context, task),
 			}));
+			const syncBatchGraph = buildBatchGraph(
+				taskExecutions.map(taskExecution => ({
+					id: taskExecution.logicalId,
+					blockers: taskExecution.blockers,
+					filesDeps: taskExecution.filesDeps,
+				})),
+			);
+			const implicitBlockerNote = buildImplicitBlockerNote(syncBatchGraph.implicitBlockers, this.session.cwd);
 			const availableSkills = [...(this.session.skills ?? [])];
 			const contextFiles = this.session.contextFiles?.filter(
 				file => path.basename(file.path).toLowerCase() !== "agents.md",
@@ -1501,7 +1590,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						contextFile: contextFilePath,
 						enableLsp: false,
 						signal: runSignal,
-						eventBus: undefined,
+						eventBus: this.session.eventBus,
 						onProgress: updateProgress,
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
@@ -1555,7 +1644,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						contextFile: contextFilePath,
 						enableLsp: false,
 						signal: runSignal,
-						eventBus: undefined,
+						eventBus: this.session.eventBus,
 						onProgress: updateProgress,
 						authStorage: this.session.authStorage,
 						modelRegistry: this.session.modelRegistry,
@@ -1633,9 +1722,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 						assignment: taskExecution.assignment,
 						description: taskExecution.description,
 						exitCode: 1,
-						output: "",
+						outcome: "failed",
 						stderr: message,
-						truncated: false,
+						resultUri: `agent://${taskExecution.executionId}`,
+						textPreview: message,
 						durationMs: Date.now() - taskStart,
 						tokens: 0,
 						modelOverride,
@@ -1679,9 +1769,10 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					assignment: taskExecution.assignment,
 					description: taskExecution.description,
 					exitCode: 1,
-					output: "",
+					outcome: aborted ? "aborted" : "failed",
 					stderr: errorMessage,
-					truncated: false,
+					resultUri: `agent://${taskExecution.executionId}`,
+					textPreview: errorMessage,
 					durationMs: 0,
 					tokens: 0,
 					modelOverride,
@@ -1690,7 +1781,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 					abortReason: aborted ? errorMessage : undefined,
 				};
 			});
-			const aborted = batchResults.some(batchResult => batchResult.status === "aborted");
+
 			for (let index = 0; index < batchResults.length; index++) {
 				const batchResult = batchResults[index]!;
 				if (batchResult.status === "completed") continue;
@@ -1713,13 +1804,9 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				}
 			}
 
-			// Collect output paths (artifacts already written by executor in real-time)
-			const outputPaths: string[] = [];
+			// Collect patch paths (artifacts already written by executor in real-time)
 			const patchPaths: string[] = [];
 			for (const result of results) {
-				if (result.outputPath) {
-					outputPaths.push(result.outputPath);
-				}
 				if (result.patchPath) {
 					patchPaths.push(result.patchPath);
 				}
@@ -1861,35 +1948,39 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			}
 
 			// Build final output - match plugin format
-			const successCount = results.filter(r => r.exitCode === 0 && !r.error).length;
-			const cancelledCount = results.filter(r => r.aborted).length;
+			const successCount = results.filter(r => isSuccessfulOutcome(r.outcome)).length;
+			const outcomeCounts = new Map<SubagentOutcome, number>();
+			for (const result of results) {
+				outcomeCounts.set(result.outcome, (outcomeCounts.get(result.outcome) ?? 0) + 1);
+			}
+			const outcomeBreakdown = Array.from(outcomeCounts.entries())
+				.sort((left, right) => left[0].localeCompare(right[0]))
+				.map(([outcome, count]) => `${outcome}:${count}`)
+				.join(", ");
 			const totalDuration = Date.now() - startTime;
 
 			const summaries = results.map(r => {
-				const status = r.aborted
-					? "cancelled"
-					: r.exitCode === 0 && r.error
-						? "merge failed"
-						: r.exitCode === 0
-							? "completed"
-							: `failed (exit ${r.exitCode})`;
-				const output = r.output.trim() || r.stderr.trim() || "(no output)";
-				const outputCharCount = r.outputMeta?.charCount ?? output.length;
-				const fullOutputThreshold = 5000;
-				let preview = output;
-				let truncated = false;
-				if (outputCharCount > fullOutputThreshold) {
-					const slice = output.slice(0, fullOutputThreshold);
-					const lastNewline = slice.lastIndexOf("\n");
-					preview = lastNewline >= 0 ? slice.slice(0, lastNewline) : slice;
-					truncated = true;
-				}
+				const structuredInline = getResultInlineStructured(r);
+				const preview = r.textPreview?.trim() || (!structuredInline ? getResultPreviewText(r) : undefined);
+				const children = (r.children ?? []).map(child => ({
+					id: child.id,
+					outcome: child.outcome,
+					resultUri: child.resultUri,
+				}));
 				return {
 					agent: r.agent,
-					status,
+					outcome: r.outcome,
+					status: formatOutcomeLabel(r),
 					id: r.id,
 					preview,
-					truncated,
+					structuredInline,
+					resultUri: r.resultUri,
+					children,
+					hasChildren: children.length > 0,
+					spawnAudit:
+						r.spawnAudit && (!r.spawnAudit.granted || r.spawnAudit.reason === "depth-capped")
+							? r.spawnAudit
+							: undefined,
 					meta: r.outputMeta
 						? {
 								lineCount: r.outputMeta.lineCount,
@@ -1899,23 +1990,20 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				};
 			});
 
-			const outputIds = results.filter(r => !r.aborted || r.output.trim()).map(r => `agent://${r.id}`);
 			const backendSummaryPrefix = isolationBackendWarning ? `\n\n${isolationBackendWarning}` : "";
 			const downgradeSummaryPrefix = isolationDowngradeNotice ? `\n\n${isolationDowngradeNotice}` : "";
 			const autoIsolationSummaryPrefix = isAutoIsolated
 				? `\n\nTask isolation auto-coerced (${autoIsolationReason}); running isolated.`
 				: "";
-			const summary = renderPromptTemplate(taskSummaryTemplate, {
+			const summary = `${implicitBlockerNote}${renderPromptTemplate(taskSummaryTemplate, {
 				successCount,
 				totalCount: results.length,
-				cancelledCount,
-				hasCancelledNote: aborted && cancelledCount > 0,
+				outcomeBreakdown: outcomeBreakdown ? `(${outcomeBreakdown})` : undefined,
 				duration: formatDuration(totalDuration),
 				summaries,
-				outputIds,
 				agentName,
 				mergeSummary: `${backendSummaryPrefix}${downgradeSummaryPrefix}${autoIsolationSummaryPrefix}${mergeSummary}`,
-			});
+			})}`;
 
 			// Cleanup temp directory if used
 			const shouldCleanupTempArtifacts =
@@ -1926,15 +2014,17 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 
 			return {
 				content: [{ type: "text", text: summary }],
-				details: {
-					projectAgentsDir,
-					results: results,
-					totalDurationMs: totalDuration,
-					usage: hasAggregatedUsage ? aggregatedUsage : undefined,
-					outputPaths,
-					isolationDowngraded: isolationDowngraded || undefined,
-					isolationAutoCoerced: isAutoIsolated || undefined,
-				},
+				details: withImplicitBlockers(
+					{
+						projectAgentsDir,
+						results: results,
+						totalDurationMs: totalDuration,
+						usage: hasAggregatedUsage ? aggregatedUsage : undefined,
+						isolationDowngraded: isolationDowngraded || undefined,
+						isolationAutoCoerced: isAutoIsolated || undefined,
+					},
+					syncBatchGraph.implicitBlockers,
+				),
 			};
 		} catch (err) {
 			return {
