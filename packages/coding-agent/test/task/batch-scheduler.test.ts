@@ -271,6 +271,20 @@ describe("batch scheduler", () => {
 
 		expect(graph.order[0]).toBe("A");
 		expect(graph.order.at(-1)).toBe("D");
+		expect(graph.implicitBlockers).toEqual([]);
+	});
+
+	test("buildBatchGraph injects implicit blockers for overlapping filesDeps in declaration order", () => {
+		const graph = buildBatchGraph([
+			{ id: "T1", filesDeps: ["src/"] },
+			{ id: "T2", filesDeps: ["src/a.ts"] },
+			{ id: "T3", blockers: ["T2"], filesDeps: ["other.ts"] },
+			{ id: "T4", filesDeps: ["another.ts"] },
+		]);
+
+		expect(graph.blockersById.get("T2")).toEqual(["T1"]);
+		expect(graph.blockersById.get("T3")).toEqual(["T2"]);
+		expect(graph.implicitBlockers).toEqual([{ to: "T2", from: "T1", reason: "src/a.ts" }]);
 	});
 
 	test("serializes batch tasks that declare overlapping filesDeps (file-level lock, independent of isolation)", async () => {
@@ -291,9 +305,82 @@ describe("batch scheduler", () => {
 			})),
 			{ maxConcurrency: 4 },
 		);
-		// Let the scheduler try to admit both.
 		await Bun.sleep(20);
 		expect(maxActive).toBe(1);
+		for (const gate of gates) gate.resolve();
+		await results;
+	});
+
+	test("serializes batch tasks when directory filesDeps overlaps a nested file", async () => {
+		let active = 0;
+		let maxActive = 0;
+		const gates = [deferred(), deferred()];
+		const results = scheduleBatch(
+			[
+				{
+					id: "T1",
+					filesDeps: ["src/"],
+					run: async () => {
+						active++;
+						maxActive = Math.max(maxActive, active);
+						await gates[0].promise;
+						active--;
+						return "T1";
+					},
+				},
+				{
+					id: "T2",
+					filesDeps: ["src/foo.ts"],
+					run: async () => {
+						active++;
+						maxActive = Math.max(maxActive, active);
+						await gates[1].promise;
+						active--;
+						return "T2";
+					},
+				},
+			],
+			{ maxConcurrency: 4 },
+		);
+		await Bun.sleep(20);
+		expect(maxActive).toBe(1);
+		for (const gate of gates) gate.resolve();
+		await results;
+	});
+
+	test("does not serialize tasks with empty filesDeps", async () => {
+		let active = 0;
+		let maxActive = 0;
+		const gates = [deferred(), deferred()];
+		const results = scheduleBatch(
+			[
+				{
+					id: "T1",
+					filesDeps: [],
+					run: async () => {
+						active++;
+						maxActive = Math.max(maxActive, active);
+						await gates[0].promise;
+						active--;
+						return "T1";
+					},
+				},
+				{
+					id: "T2",
+					filesDeps: ["shared.ts"],
+					run: async () => {
+						active++;
+						maxActive = Math.max(maxActive, active);
+						await gates[1].promise;
+						active--;
+						return "T2";
+					},
+				},
+			],
+			{ maxConcurrency: 4 },
+		);
+		await Bun.sleep(20);
+		expect(maxActive).toBe(2);
 		for (const gate of gates) gate.resolve();
 		await results;
 	});

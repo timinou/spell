@@ -1,5 +1,5 @@
 #+TITLE: Regression tests for sync and async overlap serialization
-#+STATE: ITEM
+#+STATE: BLOCKED
 #+SESSION_ID: 14c0a54ed68d3bdc
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-53-40-058Z_14c0a54ed68d3bdc.jsonl]]
 #+CUSTOM_ID: FEAT-594-regression-tests-for-sync-and-async-over
@@ -45,3 +45,5 @@ I want you to think a bit deeper than the fileDeps vs. lock. I don't want a glob
 4. Stub the inner subagent executor for the async-path test so it stays fast and deterministic.
 5. Verify `rg hasFileOverlap packages/coding-agent/test/` returns only overlap-autodag and mutable-dag test references.
 6. Run bun check + bun test packages/coding-agent/test/task/ as the closing gate.
+
+NOTE [2026-04-19]: Implemented scheduling regressions in packages/coding-agent/test/task/batch-scheduler.test.ts, filesdeps-lock-repro.test.ts, and task-blockers.test.ts. Targeted overlap tests pass, but final gate remains blocked by unrelated existing failures in packages/coding-agent/test/task/tool-budget.test.ts and render-report-finding.test.ts plus unrelated formatting drift reported by bun check.

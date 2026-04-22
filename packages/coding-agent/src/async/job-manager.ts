@@ -1,4 +1,5 @@
 import { logger, Snowflake } from "@oh-my-pi/pi-utils";
+import type { SubagentOutcome } from "../task/types";
 
 const DELIVERY_RETRY_BASE_MS = 500;
 const DELIVERY_RETRY_MAX_MS = 30_000;
@@ -17,7 +18,7 @@ export interface AsyncJobProgress {
 export interface AsyncJob {
 	id: string;
 	type: "bash" | "task";
-	status: "running" | "completed" | "failed" | "cancelled";
+	status: SubagentOutcome;
 	startTime: number;
 	label: string;
 	abortController: AbortController;

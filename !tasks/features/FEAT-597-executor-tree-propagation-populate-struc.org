@@ -1,5 +1,5 @@
 #+TITLE: Executor tree propagation: populate structuredResult, children, resultUri, spawnAudit
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c0a83e5a690b0f
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-06-29-609Z_14c0a83e5a690b0f.jsonl]]
 #+CUSTOM_ID: FEAT-597-executor-tree-propagation-populate-struc
@@ -226,3 +226,5 @@ Test files:
 - ~bun check:ts~ zero errors.
 - Spot-audit: add temporary ~logger.debug("envelope-v2-result", { id, outcome, hasStructured: !!structuredResult, childrenCount: children?.length ?? 0 })~ after ~SingleResult~ construction; remove after verification.
 - Run ~bun test packages/coding-agent/test/task/~ green.
+
+NOTE [2026-04-19]: Implemented under PLAN-270. Verification covered by `bun check:ts` and `bun test packages/coding-agent/test/task/` on 2026-04-19.

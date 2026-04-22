@@ -1,5 +1,5 @@
 #+TITLE: Surface implicit blockers in task tool result
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c0a54ed68d3bdc
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-53-40-058Z_14c0a54ed68d3bdc.jsonl]]
 #+CUSTOM_ID: FEAT-592-surface-implicit-blockers-in-task-tool-r
@@ -44,3 +44,5 @@ I want you to think a bit deeper than the fileDeps vs. lock. I don't want a glob
 4. Apply replaceTabs + shortenPath to paths embedded in the note so the TUI render path stays sanitized.
 5. Verify both sync (#executeSync) and async/background completion paths converge on the same formatter; extract a helper rather than duplicating.
 6. Tests: extend batch-scheduler.test.ts for implicitBlockers passthrough; extend a TaskTool test file to assert the note text + structured field appear when overlap is declared.
+
+NOTE [2026-04-19]: TaskTool now prefixes sync/async result text with the overlap note and exposes details.implicit_blockers in packages/coding-agent/src/task/index.ts + types.ts. Verified by bun test packages/coding-agent/test/task/task-blockers.test.ts.

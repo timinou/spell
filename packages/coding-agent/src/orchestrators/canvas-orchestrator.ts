@@ -24,6 +24,15 @@ import {
 import { escalateSchema } from "../tools/escalate";
 import type { EventBus } from "../utils/event-bus";
 
+function stringifyResult(value: unknown): string | undefined {
+	if (value === undefined) return undefined;
+	try {
+		return JSON.stringify(value, null, 2);
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+}
+
 interface OrchestratorEntry {
 	windowId: string;
 	scope: string;
@@ -145,8 +154,10 @@ export class CanvasOrchestratorManager {
 						signal: ac.signal,
 						eventBus: managerOptions.eventBus,
 					});
+					const resultText =
+						result.textPreview || JSON.stringify(result.structuredResult ?? null, null, 2) || "No output.";
 					return {
-						content: [{ type: "text", text: `Escalation completed.\n\n${result.output || "No output."}` }],
+						content: [{ type: "text", text: `Escalation completed.\n\n${resultText}` }],
 					};
 				} catch (err) {
 					if (ac.signal.aborted) {
@@ -189,7 +200,10 @@ export class CanvasOrchestratorManager {
 			// Send result back to canvas window.
 			const bridge = this.#bridge;
 			if (bridge) {
-				const resultText = result.output || "Orchestrator completed with no output.";
+				const resultText =
+					result.textPreview ||
+					stringifyResult(result.structuredResult) ||
+					"Orchestrator completed with no output.";
 
 				bridge.sendMessage(windowId, {
 					action: "append",

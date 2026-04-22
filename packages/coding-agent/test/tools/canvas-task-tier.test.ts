@@ -62,9 +62,10 @@ function createFakeExecutor(): FakeExecutorState {
 			task: options.task,
 			assignment: options.assignment,
 			exitCode: 0,
-			output,
+			outcome: "completed",
 			stderr: "",
-			truncated: false,
+			resultUri: `agent://${options.id}`,
+			textPreview: output,
 			durationMs: 0,
 			tokens: 0,
 		});

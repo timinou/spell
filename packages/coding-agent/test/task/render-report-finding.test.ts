@@ -63,9 +63,9 @@ describe("taskToolRenderer report_finding safety", () => {
 					agentSource: "bundled",
 					task: "Review patch",
 					exitCode: 1,
-					output: "",
+					outcome: "aborted",
 					stderr: "",
-					truncated: false,
+					resultUri: "agent://1-Reviewer",
 					durationMs: 42,
 					tokens: 0,
 					aborted: true,
@@ -85,7 +85,7 @@ describe("taskToolRenderer report_finding safety", () => {
 		);
 
 		const lines = rendered.render(120);
-		expect(lines.join("\n")).toContain("blocked by permissions");
+		expect(lines.join("\n")).toContain("1 aborted");
 	});
 	it("renders retry status for running subagent progress", async () => {
 		const theme = await getThemeByName("dark");
@@ -177,9 +177,9 @@ describe("taskToolRenderer report_finding safety", () => {
 					agentSource: "bundled",
 					task: "Inspect A",
 					exitCode: 0,
-					output: "",
+					outcome: "completed",
 					stderr: "",
-					truncated: false,
+					resultUri: "agent://task-a",
 					durationMs: 120,
 					tokens: 100,
 				},
@@ -190,9 +190,9 @@ describe("taskToolRenderer report_finding safety", () => {
 					agentSource: "bundled",
 					task: "Inspect B",
 					exitCode: 0,
-					output: "",
+					outcome: "completed",
 					stderr: "",
-					truncated: false,
+					resultUri: "agent://task-b",
 					durationMs: 80,
 					tokens: 80,
 				},
@@ -216,10 +216,9 @@ describe("taskToolRenderer report_finding safety", () => {
 
 		const output = rendered.render(140).join("\n");
 		expect(output).toContain("Efficiency:");
-		expect(output).toContain("90 avg/task");
-		expect(output).toContain("50% cache");
-		expect(output).toContain("4.0x parallel");
-		expect(output).toContain("$0.100 avg");
+		expect(output).toContain("180 tokens");
+		expect(output).toContain("$0.200");
+		expect(output).toContain("50ms");
 	});
 
 	it("omits efficiency summary for single-task batches", async () => {
@@ -237,9 +236,9 @@ describe("taskToolRenderer report_finding safety", () => {
 					agentSource: "bundled",
 					task: "Inspect A",
 					exitCode: 0,
-					output: "",
+					outcome: "completed",
 					stderr: "",
-					truncated: false,
+					resultUri: "agent://task-a",
 					durationMs: 120,
 					tokens: 100,
 				},

@@ -1,5 +1,5 @@
 #+TITLE: SubagentOutcome enum cutover across ~40 match sites (AgentProgress, AsyncJob, Swarm, display string)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c0a83e5a690b0f
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T11-06-29-609Z_14c0a83e5a690b0f.jsonl]]
 #+CUSTOM_ID: FEAT-596-subagentoutcome-enum-cutover-across-40-m
@@ -221,3 +221,5 @@ Test files:
 - ~rg '"cancelled"\s*\|\s*"completed"' packages/coding-agent/src~ returns only the enum definition line.
 - ~bun test packages/coding-agent/test/task/outcome-mapping.test.ts~ green.
 - Manual: navigate subagent viewer; every outcome renders with a distinct color/badge.
+
+NOTE [2026-04-19]: Implemented under PLAN-270. Verification covered by `bun check:ts` and `bun test packages/coding-agent/test/task/` on 2026-04-19.

@@ -88,15 +88,19 @@ describe("MutableDag", () => {
 		expect(components[1].topologicalOrder()).toEqual(["A", "B"]);
 	});
 
-	test("detects file overlap helpers using filesDeps", () => {
+	test("detects normalized subtree overlap helpers using filesDeps", () => {
 		const dag = new MutableDag<TestNode>([
-			["A", node("A", ["one.ts", "two.ts"])],
-			["B", node("B", ["two.ts"]), ["A"]],
-			["C", node("C", ["three.ts"])],
+			["A", node("A", ["src/", "./two.ts"])],
+			["B", node("B", ["src/nested/file.ts"]), ["A"]],
+			["C", node("C", ["two.ts"])],
+			["D", node("D", ["three.ts"])],
+			["E", node("E")],
 		]);
 
 		expect(dag.hasFileOverlap("A", "B")).toBe(true);
-		expect(dag.hasFileOverlap("A", "C")).toBe(false);
-		expect(dag.getOverlappingNodeIds("A")).toEqual(["B"]);
+		expect(dag.hasFileOverlap("A", "C")).toBe(true);
+		expect(dag.hasFileOverlap("A", "D")).toBe(false);
+		expect(dag.hasFileOverlap("A", "E")).toBe(false);
+		expect(dag.getOverlappingNodeIds("A")).toEqual(["B", "C"]);
 	});
 });

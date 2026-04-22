@@ -1,5 +1,5 @@
 #+TITLE: Subtree-aware hasFileOverlap with path normalization
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14c0a54ed68d3bdc
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-19T10-53-40-058Z_14c0a54ed68d3bdc.jsonl]]
 #+CUSTOM_ID: FEAT-589-subtree-aware-hasfileoverlap-with-path-n
@@ -42,3 +42,5 @@ I want you to think a bit deeper than the fileDeps vs. lock. I don't want a glob
 1. Add normalizeOverlapPath helper in mutable-dag.ts: resolve cwd-relative to absolute via path.resolve, strip trailing slash via replace, return the canonical string.
 2. Rewrite MutableDag.hasFileOverlap to apply normalizeOverlapPath to every entry, then check the subtree predicate (P == Q OR P startsWith Q + sep OR Q startsWith P + sep). Empty filesDeps on either side returns false.
 3. Add unit tests in packages/coding-agent/test/task/mutable-dag.test.ts covering identical paths, directory-ancestor overlap, sibling directories (no overlap), trailing-slash normalization, and empty-deps returning false.
+
+NOTE [2026-04-19]: Implemented in packages/coding-agent/src/task/mutable-dag.ts with normalized absolute path overlap + subtree detection. Verified by bun test ./test/task/mutable-dag.test.ts.

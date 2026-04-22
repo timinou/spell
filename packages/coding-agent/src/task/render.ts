@@ -29,13 +29,21 @@ import {
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine } from "../tui";
 import { formatRetryStatus } from "./retry-state";
 import { subprocessToolRegistry } from "./subprocess-tool-registry";
-import type { AgentProgress, SingleResult, TaskParams, TaskToolDetails } from "./types";
+import type { AgentProgress, SingleResult, SubagentOutcome, TaskParams, TaskToolDetails } from "./types";
 
 /**
  * Get status icon for agent state.
  * For running status, uses animated spinner if spinnerFrame is provided.
  * Maps AgentProgress status to styled icon format.
  */
+function isSuccessfulOutcome(outcome: SubagentOutcome): boolean {
+	return outcome === "completed" || outcome === "completed-empty";
+}
+
+function isFailureOutcome(outcome: SubagentOutcome): boolean {
+	return !["pending", "running", "completed", "completed-empty", "aborted", "cancelled"].includes(outcome);
+}
+
 function getStatusIcon(status: AgentProgress["status"], theme: Theme, spinnerFrame?: number): string {
 	switch (status) {
 		case "pending":
@@ -43,11 +51,22 @@ function getStatusIcon(status: AgentProgress["status"], theme: Theme, spinnerFra
 		case "running":
 			return formatStatusIcon("running", theme, spinnerFrame);
 		case "completed":
+		case "completed-empty":
 			return formatStatusIcon("success", theme);
-		case "failed":
-			return formatStatusIcon("error", theme);
 		case "aborted":
+		case "cancelled":
 			return formatStatusIcon("aborted", theme);
+		default:
+			return formatStatusIcon("error", theme);
+	}
+}
+
+function stringifyStructuredResult(value: unknown): string | undefined {
+	if (value === undefined) return undefined;
+	try {
+		return JSON.stringify(value, null, 2);
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
 	}
 }
 
@@ -205,11 +224,12 @@ function renderAgentProgress(
 	const continuePrefix = isLast ? "   " : `${theme.fg("dim", theme.tree.vertical)}  `;
 
 	const icon = getStatusIcon(progress.status, theme, spinnerFrame);
-	const iconColor =
-		progress.status === "completed"
-			? "success"
-			: progress.status === "failed" || progress.status === "aborted"
-				? "error"
+	const iconColor = isSuccessfulOutcome(progress.status)
+		? "success"
+		: isFailureOutcome(progress.status)
+			? "error"
+			: progress.status === "aborted" || progress.status === "cancelled"
+				? "warning"
 				: "accent";
 
 	// Main status line: id: description [status] · stats · ⟨agent⟩
@@ -219,9 +239,8 @@ function renderAgentProgress(
 	let statusLine = `${prefix} ${theme.fg(iconColor, icon)} ${theme.fg("accent", titlePart)}`;
 
 	// Only show badge for non-running states (spinner already indicates running)
-	if (progress.status === "failed" || progress.status === "aborted") {
-		const statusLabel = progress.status === "failed" ? "failed" : "aborted";
-		statusLine += ` ${formatBadge(statusLabel, iconColor, theme)}`;
+	if (progress.status !== "running" && progress.status !== "pending" && progress.status !== "completed") {
+		statusLine += ` ${formatBadge(progress.status, iconColor, theme)}`;
 	}
 
 	if (progress.status === "running") {
@@ -238,7 +257,7 @@ function renderAgentProgress(
 		if (progress.usage && progress.usage.cost > 0) {
 			statusLine += `${theme.sep.dot}${theme.fg("dim", formatCost(progress.usage.cost))}`;
 		}
-	} else if (progress.status === "completed") {
+	} else if (isSuccessfulOutcome(progress.status)) {
 		if (progress.toolCount > 0) {
 			statusLine += `${theme.sep.dot}${theme.fg("dim", `${progress.toolCount} tools`)}`;
 		}
@@ -292,7 +311,7 @@ function renderAgentProgress(
 	// Render extracted tool data inline (e.g., review findings)
 	if (progress.extractedToolData) {
 		// For completed tasks, check for review verdict from submit_result tool
-		if (progress.status === "completed") {
+		if (isSuccessfulOutcome(progress.status)) {
 			const completeData = progress.extractedToolData.submit_result as Array<{ data: unknown }> | undefined;
 			const reportFindingData = normalizeReportFindings(progress.extractedToolData.report_finding);
 			const reviewData = completeData
@@ -410,14 +429,23 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 	const lines: string[] = [];
 	const prefix = isLast ? theme.fg("dim", theme.tree.last) : theme.fg("dim", theme.tree.branch);
 	const continuePrefix = isLast ? "   " : `${theme.fg("dim", theme.tree.vertical)}  `;
-	const status = result.aborted ? "aborted" : result.exitCode === 0 && !result.error ? "completed" : "failed";
+	const status = result.outcome;
 	const icon = getStatusIcon(status, theme);
-	const color = status === "completed" ? "success" : status === "aborted" ? "warning" : "error";
+	const color = isSuccessfulOutcome(status)
+		? "success"
+		: isFailureOutcome(status)
+			? "error"
+			: status === "aborted" || status === "cancelled"
+				? "warning"
+				: "accent";
 	const description = result.description?.trim();
 	const titlePart = description
 		? `${theme.bold(formatTaskId(result.id))}: ${description}`
 		: theme.bold(formatTaskId(result.id));
 	let statusLine = `${prefix} ${theme.fg(color, icon)} ${theme.fg("accent", titlePart)}`;
+	if (status !== "pending" && status !== "running" && status !== "completed") {
+		statusLine += ` ${formatBadge(status, color, theme)}`;
+	}
 	if (result.tokens > 0) statusLine += `${theme.sep.dot}${theme.fg("dim", `${formatNumber(result.tokens)} tokens`)}`;
 	if (result.durationMs > 0) statusLine += `${theme.sep.dot}${theme.fg("dim", formatDuration(result.durationMs))}`;
 	if (result.usage?.cost?.total && result.usage.cost.total > 0) {
@@ -425,10 +453,32 @@ function renderAgentResult(result: SingleResult, isLast: boolean, expanded: bool
 	}
 	lines.push(statusLine);
 	lines.push(...renderTaskSection(result.assignment ?? result.task, continuePrefix, expanded, theme));
+	if (result.spawnAudit && (!result.spawnAudit.granted || result.spawnAudit.reason === "depth-capped")) {
+		lines.push(
+			`${continuePrefix}${theme.fg("warning", `spawn ${result.spawnAudit.requestedAgent} → ${result.spawnAudit.reason ?? "denied"}`)}`,
+		);
+	}
 	if (result.error) {
 		lines.push(`${continuePrefix}${theme.fg("error", truncateToWidth(replaceTabs(result.error), 100))}`);
 	}
-	lines.push(...renderOutputSection(result.output, continuePrefix, expanded, theme));
+	const structuredText = stringifyStructuredResult(result.structuredResult);
+	if (structuredText && structuredText.length < 5000) {
+		lines.push(...renderOutputSection(structuredText, continuePrefix, expanded, theme));
+	} else if (result.resultUri) {
+		lines.push(`${continuePrefix}${theme.fg("dim", result.resultUri)}`);
+	}
+	if (result.textPreview?.trim()) {
+		lines.push(...renderOutputSection(result.textPreview, continuePrefix, expanded, theme));
+	}
+	if (result.children && result.children.length > 0) {
+		lines.push(`${continuePrefix}${theme.fg("dim", `Children (${result.children.length})`)}`);
+		result.children.forEach((child, index) => {
+			const childLines = renderAgentResult(child, index === result.children!.length - 1, expanded, theme);
+			for (const line of childLines) {
+				lines.push(`${continuePrefix}${line}`);
+			}
+		});
+	}
 	return lines;
 }
 

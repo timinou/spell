@@ -880,9 +880,15 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	recordSubagentResults(results: SingleResult[]): void {
-		for (const result of results) {
-			this.#subagentTracker?.recordCompletion(result);
-		}
+		const visit = (items: SingleResult[]): void => {
+			for (const result of items) {
+				this.#subagentTracker?.recordCompletion(result);
+				if (result.children && result.children.length > 0) {
+					visit(result.children);
+				}
+			}
+		};
+		visit(results);
 	}
 
 	#renderChildTodoGroups(todo: TodoItem, prefix: string): string[] {
