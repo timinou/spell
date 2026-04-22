@@ -1,0 +1,193 @@
+#+TITLE: coding-agent: reject pos-only hashline replace with multi-line payload
+#+STATE: DONE
+#+SESSION_ID: 14c46945bb97a5c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-22T09-05-17-550Z_14c46945bb97a5c9.jsonl]]
+#+CUSTOM_ID: BUG-315-coding-agent-reject-pos-only-hashline-re
+#+LAYER: coding-agent
+
+* Initial Message
+
+Observed failure from session =14c459bc4bdbb31d= (`/home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-22T07-57-24-655Z_14c459bc4bdbb31d.jsonl`):
+
+Three `edit` calls on `lib/agentmaker_web/live/admin/workbench/workbench_live.ex` used `op: "replace"` with `pos` only (no `end`) and multi-line `lines` arrays intending to re-author ~7-line and ~40-line regions. The runtime replaced only the single line at `pos`, then spliced the multi-line payload in its place. Result: the surviving tail of the intended region (attrs of `<LeftPaneComponent …/>`, the entire original `<Surface>…</Surface>` subtree, function definitions, etc.) remained in the file, directly below the newly inserted content, producing visually duplicated content and an HEEx syntax error (`</main>` without matching `</div>`).
+
+The agent self-diagnosed and issued follow-up range `replace` calls + anchorless deletes (`pos=997 end=1030 lines=[]`) to clean up, but the original failure was never caught by the tool — no warning, no rejection — so another subsequent `pos`-only multi-line replace on `activation_data.ex` and `pipeline_data.ex` recurred later in the same session.
+
+* Scope
+In scope:
+- Runtime contract: `op: "replace"` with exactly one of {`pos`, `end`} set AND `lines.length !== 1` MUST be rejected before any mutation, as a distinct failure classification alongside `missing_anchor`, `malformed_anchor`, and `stale_hash`.
+- Rejection happens in `resolveEditAnchors(...)` (pre-apply gate), mirroring `MissingHashlineAnchorError` / `MalformedHashlineAnchorError`. No partial mutation, no autocorrect, no silent promotion to range replace.
+- Failure message MUST teach the recovery path: either supply `end` to form a range replace, or reduce `lines` to exactly one entry for a single-line replace.
+- Prompt/schema guidance: rewrite `pos` and `end` descriptions in `hashlineEditSchema` and the instruction/critical sections of `packages/coding-agent/src/prompts/tools/hashline.md` to state explicitly that `pos` alone replaces exactly one line, `lines` length has no effect on span, and multi-line ranges require `end`. Add one worked counterexample to the examples section.
+- Focused regression tests at the runtime layer (`test/core/hashline.test.ts`) and the tool contract layer (`test/tools.test.ts`).
+
+Out of scope:
+- Renaming the schema fields (`pos`/`end` remain).
+- Any change to append/prepend semantics (they already accept variadic `lines` and do not have a span contract).
+- The elixir `code edit` symbol resolver failure that drove the agent to fall back to the text `edit` tool. That is tracked as sibling item [[id:BUG-317-coding-agent-elixir-code-edit-symbol-res]].
+- Broker/journal/PLAN-254 peer-activity work; this item MUST NOT alter shared edit-coordination surfaces beyond what is required to surface the new failure classification in the existing hint pipeline.
+- Any rewrite of the autocorrect range-edge heuristics in `applyHashlineEdits` (trailing/leading duplicate line fixups for range replaces remain unchanged).
+
+Rationale:
+The failure is a silent-corruption class bug in the edit contract: a structurally malformed request is accepted, the tool mutates bytes, and the caller must visually inspect the diff to discover the corruption. The failure taxonomy introduced by PLAN-261 (BUG-289) already covers missing/malformed anchors and stale hashes with strict rejection + actionable recovery guidance; this item extends the same contract to span-shape mismatches.
+* Existing Patterns
+The implementation MUST reuse the following conventions already established for the hashline edit contract:
+
+- =packages/coding-agent/src/patch/hashline.ts=
+  - =HashlineAnchorError= base class with `code: "missing_anchor" | "malformed_anchor"`; extend the union to include a new span-mismatch variant.
+  - =MissingHashlineAnchorError= / =MalformedHashlineAnchorError= show the pattern for a per-edit-index error message that ends with =HASHLINE_RETRY_GUIDANCE=.
+  - =HashlineMismatchError= remains the canonical stale-hash path; this item MUST NOT conflate span-mismatch errors with it.
+  - The `replace` case inside =applyHashlineEdits= at hashline.ts:653-700 already branches on `edit.end`; the single-line branch splices `fileLines.splice(edit.pos.line - 1, 1, ...newLines)` with no span warning. Do not patch this branch — the fix lives earlier in =resolveEditAnchors=.
+- =packages/coding-agent/src/patch/index.ts=
+  - =resolveEditAnchors(edits: HashlineToolEdit[]): HashlineEdit[]= at index.ts:227 is the canonical strict gate. New rejection lives here, per-edit, with `editIndex = index + 1`.
+  - =hashlineEditSchema= (index.ts:171) carries the public `pos`/`end`/`lines` description strings that the model sees; rewrite both anchor descriptions and the enum `lines` description to remove the implicit "lines length sets the span" misread.
+- =packages/coding-agent/src/prompts/tools/hashline.md=
+  - Existing shape: `<instruction>` + `<output>` + `<critical>` + `<examples>` sections. Follow the same structure. The existing "Range replace" example already shows `pos` + `end` + multi-line `lines`; add a sibling counterexample showing the failure case explicitly.
+- =packages/coding-agent/test/core/hashline.test.ts=
+  - `describe("applyHashlineEdits — errors", …)` block already exercises stale hashes, missing-anchor recovery messages, and rejection of anchorless `replace`. Add cases there for the new rejection.
+- =packages/coding-agent/test/tools.test.ts=
+  - Existing `PI_EDIT_VARIANT = "hashline"` tests (L1160+, L1187+, L1217+) show the end-to-end EditTool flow. Add one hashline-mode test that drives the new failure classification through the real tool surface and asserts the surfaced message.
+- =packages/coding-agent/CHANGELOG.md=
+  - New entry under `## [Unreleased] > ### Fixed`, referencing this BUG.
+
+Plan container: [[id:PLAN-281-coding-agent-edit-tool-silent-duplicatio]]. Sibling item is [[id:BUG-317-coding-agent-elixir-code-edit-symbol-res]].
+* Tests
+
+Workflows the contract MUST defend:
+
+1. Valid single-line replace: `op:"replace", pos:"<line#id>", lines:["new"]` → applies unchanged from today.
+2. Valid range replace: `op:"replace", pos:"<a#id>", end:"<b#id>", lines:["x","y"]` → applies unchanged from today.
+3. Valid pos-only replace with exactly one line: `op:"replace", pos:"<line#id>", lines:["new"]` → applies unchanged from today.
+4. NEW contract rejection: `op:"replace", pos:"<line#id>", lines:["x","y","z"]` (no `end`) → hard reject pre-mutation with a distinct message that (a) names the edit index, (b) says pos-only replaces exactly one line, (c) tells the caller to add `end` to form a range or trim `lines` to length 1. File on disk MUST NOT change.
+5. Symmetric rejection: `op:"replace", end:"<line#id>", lines:["x","y"]` (only `end` supplied, no `pos`) with `lines.length > 1` → hard reject with the same classification. (Schema currently allows end-only to promote to single-line replace via `pos: pos || end!`; the span check applies to whichever single anchor is supplied.)
+6. Empty-lines replace: `op:"replace", pos:"<line#id>", lines:[]` (delete) → still accepted; `lines.length === 0` is the existing single-line delete idiom and MUST NOT be rejected.
+7. Anchorless `replace` (neither `pos` nor `end`) → still raises `MissingHashlineAnchorError` exactly as today. The new span-mismatch error MUST NOT subsume or reorder the missing-anchor error.
+8. Malformed anchor with multi-line lines → `MalformedHashlineAnchorError` still wins; span check runs only on well-formed anchors.
+9. Stale hash with multi-line lines → `HashlineMismatchError` still wins; span check runs after anchor validation.
+10. Tool-surface end-to-end: through =EditTool.execute= in hashline mode, the rejection surfaces as a non-retryable `isError: true` result with a classified message; the file on disk is untouched.
+11. Schema descriptions for `pos` and `end` each contain an unambiguous statement that `lines.length` does not set the span; the public description strings are asserted in a focused test (or implicitly by a snapshot/compare of the rendered tool schema).
+12. Prompt contract: `hashline.md` includes one concrete counterexample showing a rejected pos-only multi-line replace next to the existing valid range-replace example.
+
+Concrete test files:
+- =packages/coding-agent/test/core/hashline.test.ts= — add a new `describe("applyHashlineEdits — span mismatch", …)` block or extend the existing errors block with workflows 4, 5, 6, 7, 8, 9.
+- =packages/coding-agent/test/tools.test.ts= — one new `it(...)` under the hashline group covering workflow 10.
+- If any focused prompt/schema snapshot test is added, colocate it near existing prompt-content tests (e.g. alongside `packages/coding-agent/test/prompts/*` style).
+
+Verification ordering:
+- Test-first is REQUIRED here; failure mode is a pure-function contract violation and workflows 1-9 are pure-function tests on `applyHashlineEdits` / `resolveEditAnchors`. Impl MUST depend on failing tests.
+- Workflow 10 is an integration test that depends on the runtime change; still test-first is recommended with explicit sequencing note in the implementation sub-outline.
+
+* Implementation
+
+** ITEM Define span-mismatch failure classification
+:PROPERTIES:
+:CUSTOM_ID: BUG-315-coding-agent-reject-pos-only-hashline-re::define-span-mismatch-classification
+:END:
+
+- Files (design only, no code yet): =packages/coding-agent/src/patch/hashline.ts=
+- Extend the `HashlineAnchorError.code` union with `"span_mismatch"`.
+- Sketch a new subclass `HashlineSpanMismatchError extends HashlineAnchorError` with constructor `(editIndex: number, suppliedAnchor: "pos" | "end", linesLength: number)`. Message shape MUST include:
+  - the edit index (1-indexed),
+  - which single anchor was supplied,
+  - the supplied `lines.length`,
+  - the recovery path: "Provide `end` to form a range, or reduce `lines` to a single entry for a single-line replace",
+  - the existing `HASHLINE_RETRY_GUIDANCE` suffix.
+- Wire the new class into the `packages/coding-agent/src/patch/hashline.ts` public re-exports if sibling errors are already re-exported (confirm via grep: `MissingHashlineAnchorError` export pattern).
+- No behavior change yet; this step lands only the type/class and its export surface.
+
+** ITEM Write failing span-mismatch tests (TDD: before runtime change)
+:PROPERTIES:
+:CUSTOM_ID: BUG-315-coding-agent-reject-pos-only-hashline-re::span-mismatch-tests
+:DEPENDS: BUG-315-coding-agent-reject-pos-only-hashline-re::define-span-mismatch-classification
+:END:
+
+- Files: =packages/coding-agent/test/core/hashline.test.ts=, =packages/coding-agent/test/tools.test.ts=
+- Add failing tests for workflows 4-11 from the Tests section:
+  1. pos-only + multi-line `lines` on `resolveEditAnchors` (asserts thrown `HashlineSpanMismatchError`).
+  2. end-only + multi-line `lines` on `resolveEditAnchors` (same class, `suppliedAnchor = "end"`).
+  3. pos-only + empty `lines: []` (delete) still accepted: `applyHashlineEdits` result matches expected delete.
+  4. Anchorless `replace` still raises `MissingHashlineAnchorError` (regression guard).
+  5. Malformed anchor + multi-line `lines` still raises `MalformedHashlineAnchorError` (regression guard).
+  6. Stale-hash + multi-line pos-only still raises `HashlineMismatchError` (regression guard): stale anchor validation happens first, so the span check must not shadow it. Implementation MUST order checks as: malformed parse → missing anchor → span mismatch → hash validation.
+  7. End-to-end EditTool run (hashline mode) surfaces the span-mismatch message without writing bytes to disk; use the existing `PI_EDIT_VARIANT = "hashline"` setup pattern at `packages/coding-agent/test/tools.test.ts` L1160+ as a template.
+  8. Schema description string contains the explicit clarifying phrase for both `pos` and `end` (assert substring match).
+- All tests MUST be red against the current `main` before proceeding.
+- Run focused: `bun test packages/coding-agent/test/core/hashline.test.ts packages/coding-agent/test/tools.test.ts`.
+
+** ITEM Reject span mismatch in resolveEditAnchors
+:PROPERTIES:
+:CUSTOM_ID: BUG-315-coding-agent-reject-pos-only-hashline-re::reject-in-anchor-resolver
+:DEPENDS: BUG-315-coding-agent-reject-pos-only-hashline-re::span-mismatch-tests
+:END:
+
+- File: =packages/coding-agent/src/patch/index.ts= (function `resolveEditAnchors`, currently index.ts:227-258).
+- In the `case "replace"` branch, after the existing `pos && end` / `pos || end` / missing branch, and BEFORE pushing the resolved edit:
+  - If exactly one of `pos`/`end` is set (i.e. the existing `pos || end` branch) AND `hashlineParseText(edit.lines).length !== 1` AND the parsed lines array is not empty (length 0 = delete, still allowed), throw `new HashlineSpanMismatchError(editIndex, pos ? "pos" : "end", parsedLines.length)`.
+  - Empty `lines: []` (single-line delete) remains accepted.
+- Preserve the strict-fail semantics already established by BUG-289: no guessing, no promotion.
+- Ordering inside `resolveEditAnchors` iteration: parse errors (already raised earlier via `parseHashlineAnchor`) → missing anchor (existing) → span mismatch (NEW) → push typed edit.
+- Ordering in the overall pipeline (per workflow 6 regression guard): `resolveEditAnchors` runs before `applyHashlineEdits`, so span mismatch precedes stale-hash detection. This is already how errors layer today; the only new step is adding the span check at the right spot.
+- No autocorrect, no warning-based acceptance, no "try to derive `end`". Hard reject.
+- Run focused: `bun test packages/coding-agent/test/core/hashline.test.ts packages/coding-agent/test/tools.test.ts` — workflows 4, 5, 6, 10 flip to green.
+
+** ITEM Strengthen hashline prompt and schema descriptions
+:PROPERTIES:
+:CUSTOM_ID: BUG-315-coding-agent-reject-pos-only-hashline-re::prompt-and-schema-guidance
+:DEPENDS: BUG-315-coding-agent-reject-pos-only-hashline-re::span-mismatch-tests
+:END:
+
+- Files:
+  - =packages/coding-agent/src/prompts/tools/hashline.md=
+  - =packages/coding-agent/src/patch/index.ts= (description strings inside `hashlineEditSchema`)
+- In `hashlineEditSchema`:
+  - `pos` description MUST explicitly state: "pos alone replaces exactly one line. lines.length has no effect on the span. To replace a multi-line range supply end as well."
+  - `end` description MUST mirror the above from the end-anchor perspective.
+- In `hashline.md`:
+  - Keep the existing `<instruction>` / `<output>` / `<critical>` / `<examples>` structure.
+  - Add one new bullet to `<instruction>` stating: "replace with only pos (or only end) replaces exactly one line. To replace more than one line, supply both pos and end. lines.length never sets the span."
+  - Add an explicit counterexample to `<examples>` labeled "Invalid pos-only multi-line replace" showing `{ op:"replace", pos:"10#QW", lines:["x","y"] }` and a one-line explanation that this is rejected and that the correct shape is either `end: "11#MH"` or `lines: ["x"]`.
+- No content changes beyond this contract; MUST NOT rewrite the whole prompt or collapse the `<critical>` section.
+- After edit, the prompt-substring test from workflow 8 (the schema description assertion) flips green.
+
+** ITEM Verify end-to-end and changelog
+:PROPERTIES:
+:CUSTOM_ID: BUG-315-coding-agent-reject-pos-only-hashline-re::verify-end-to-end
+:DEPENDS: BUG-315-coding-agent-reject-pos-only-hashline-re::reject-in-anchor-resolver BUG-315-coding-agent-reject-pos-only-hashline-re::prompt-and-schema-guidance
+:END:
+
+- Verification commands (manual in implementation session):
+  - `bun test packages/coding-agent/test/core/hashline.test.ts packages/coding-agent/test/tools.test.ts`
+  - `bun check:ts`
+- Manual proof to record:
+  - Run the edit tool in hashline mode against a text fixture with an anchorless multi-line replacement request; observe the new `HashlineSpanMismatchError` message with the explicit recovery path, and confirm the file on disk is untouched.
+  - Run the edit tool with the correct range-replace shape against the same fixture; observe success with diff preview unchanged from prior behavior.
+- Add CHANGELOG entry under `packages/coding-agent/CHANGELOG.md` `## [Unreleased] > ### Fixed`, referencing this BUG and one-line summary: "Edit tool hashline replace now rejects pos-only (or end-only) requests with multi-line lines payloads before mutating; prior behavior silently replaced a single line and left the rest of the intended region in place, producing duplicated content."
+
+* Edge Cases
+
+- `op: "replace"` with both `pos` and `end` supplied but identical (same `LINE#ID`): unchanged existing behavior — range collapses to single-line replace, `lines` may be any length. The new span check does NOT apply when both anchors are present.
+- `op: "replace"` with `pos` only and `lines: []`: existing delete-one-line idiom, still accepted. Span check skips the empty case explicitly.
+- `op: "replace"` with `pos` only and `lines: [""]`: length 1, still accepted (inserts a blank line in place of the source line). Span check only triggers for `length > 1`.
+- `op: "append"` / `op: "prepend"` with any `lines.length`: unchanged. Span check MUST NOT run on append/prepend; `hashlineEditSchema.op` is the discriminator.
+- Malformed `pos` that parses but the hash is stale AND `lines.length > 1`: span mismatch fires in `resolveEditAnchors` first (because it only depends on structural shape), before stale-hash detection in `applyHashlineEdits`. Test workflow 6 pins this ordering.
+- Autocorrect interactions: =shouldAutocorrect= range-edge heuristics (trailing/leading duplicate surviving line) live inside the `edit.end != null` branch of `applyHashlineEdits` and are untouched.
+- `lines` supplied as a newline-delimited string (hashlineParseText shape): call `hashlineParseText(edit.lines)` once and use `.length` for the span check. Do not branch on the raw input type.
+- Schema description text is model-visible; when changing descriptions, keep under 240 chars per field to avoid bloating the rendered tool spec.
+
+* Acceptance Criteria
+
+- `resolveEditAnchors` throws `HashlineSpanMismatchError` for pos-only or end-only `replace` with `lines.length !== 1` AND `lines.length !== 0`.
+- The error message names the edit index, the supplied anchor, and the recovery path (add `end`, or trim `lines` to one entry).
+- Bytes on disk are not modified when the error fires. Verified by the tool-surface test.
+- `MissingHashlineAnchorError`, `MalformedHashlineAnchorError`, and `HashlineMismatchError` all still fire in their existing scenarios; no error-class conflation.
+- Prompt `hashline.md` and schema `pos`/`end` descriptions explicitly tell the model that `lines.length` does not set the span; one counterexample exists in the examples section.
+- All existing hashline tests continue to pass; new workflows 4-11 are green.
+- `bun check:ts` is the final verification gate.
+
+* Verification
+
+- `bun test packages/coding-agent/test/core/hashline.test.ts packages/coding-agent/test/tools.test.ts`
+- `bun check:ts`
+- Manual proof: one transcript snippet showing the rejected request with the new classified error, and one showing a valid multi-line range replace still succeeding.
+
+NOTE [2026-04-22]: Implemented and verified under PLAN-281. Runtime now rejects single-anchor multi-line hashline replace requests before mutation; prompt/schema/tests updated accordingly.
