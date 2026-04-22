@@ -1,0 +1,159 @@
+#+TITLE: coding-agent: elixir code edit symbol resolver returns empty candidate list on deeply nested defmodule
+#+STATE: DONE
+#+SESSION_ID: 14c46945bb97a5c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-22T09-05-17-550Z_14c46945bb97a5c9.jsonl]]
+#+CUSTOM_ID: BUG-317-coding-agent-elixir-code-edit-symbol-res
+#+DEPENDS: 
+#+LAYER: coding-agent pi-code-engine
+
+* Initial Message
+
+Observed failure from session =14c459bc4bdbb31d= on 2026-04-22 inside the agentmaker repo (`cwd=/home/user/code/ora/monorepo/apps/agentmaker`):
+
+Agent attempted `code edit` on an Elixir Phoenix LiveComponent with `targetId="lib/agentmaker_web/live/admin/workbench/left_pane_component.ex::AgentmakerWeb.Admin.Workbench.LeftPaneComponent"`. The native code engine returned:
+
+#+begin_src text
+edit error: Symbol 'AgentmakerWeb.Admin.Workbench.LeftPaneComponent' not found. Available: []
+#+end_src
+
+The file contains exactly one top-level `defmodule` at line 1 of the shape `defmodule AgentmakerWeb.Admin.Workbench.LeftPaneComponent do`. The Elixir profile in `crates/pi-code-engine/src/language/mod.rs::elixir_profile` declares `defmodule` as a module declaration and registers a class-like pattern for it. The fixture `crates/pi-code-engine/tests/fixtures/sources/hello.ex` (`defmodule MyApp.Greeter do`) resolves correctly as `MyApp.Greeter`. The failing agentmaker file has a 4-segment dotted alias instead of 2.
+
+Concrete consequence: because the structural path failed, the agent fell back to the text `edit` tool on code-supported `.ex` files, where it then hit the `pos`-only multi-line `replace` contract gap tracked in [[id:BUG-315-coding-agent-reject-pos-only-hashline-re]]. Restoring the structural path for deeply-nested module names removes a significant source of text-edit fallback on Phoenix/Elixir codebases.
+
+* Scope
+
+In scope:
+- Diagnose why `resolve_symbol` returns `Available: []` for an Elixir file whose top-level declaration is `defmodule Foo.Bar.Baz.Qux do`. Candidate hypotheses to validate, in order:
+  1. The declaration resolver's recursive dotted-name descent (`resolve.rs` `find_symbol_node`, container = symbol up to last `.`) bottoms out at the 1-segment container `AgentmakerWeb` and fails; but if `collect_top_level_names` also returns `[]` that suggests the top-level `defmodule` node is not being recognized by `declaration_for` at all on this file. Confirm by loading the file through the Rust test harness (bypassing NAPI / native binary staleness) and inspecting both paths.
+  2. Native binary staleness at the agentmaker working copy: the session may have loaded a `pi_natives` binary that predates the Elixir profile's `filter_names`/`name_from_arg`/`do_block` wiring (see =specs/elixir-outline-support.md=). If that is the root cause, the fix is explicit staleness detection and a truthful error, not a new resolver feature.
+  3. Phoenix-specific structural quirks in the file (attributes, embedded HEEx sigils, anonymous function tuples at top level) that push the `defmodule` node out of the root's named children into an unexpected nesting, causing `find_top_level_matches`'s single-level walk to miss it.
+- Add targeted Rust tests covering dotted module names with 3+ segments and the concrete Phoenix LiveComponent shape.
+- Surface a more truthful diagnostic when the candidate list is empty for an Elixir file: the current `Available: []` is indistinguishable from "file genuinely has no declarations" vs "profile is wrong". Emit a distinct message when the file parses as Elixir and the root has named children but none matched any declaration pattern; include the top-level child node kinds to aid debugging.
+- If the root cause turns out to be native binary staleness at runtime, extend the existing staleness detection surface (see =specs/PLAN-native-binary-staleness-detection.md=) to cover the Elixir profile fingerprint; do not silently swallow.
+
+Out of scope:
+- Any change to the Elixir outline / class_like / body_extractor shape itself beyond what the resolver needs to find dotted module names. Elixir outline behavior is tracked in =specs/elixir-outline-support.md= and its follow-up items.
+- Broadening the failure-taxonomy work in [[id:BUG-315-coding-agent-reject-pos-only-hashline-re]]; this item is strictly about the structural-edit fallback trigger, not about the text-edit corruption failure.
+- New tree-sitter grammar work, HEEx-embedded region changes, or any change that ships a different grammar artifact.
+- Cross-language resolver refactors; fix lives inside Elixir-specific paths when possible.
+
+Rationale:
+Every `code edit` failure on a code-supported file forces the agent to the text `edit` fallback, where the span-shape failure mode exists. Closing the Elixir fallback reduces the attack surface of the primary bug and restores the structural path that the tool chain is designed around.
+
+* Existing Patterns
+- =crates/pi-code-engine/src/resolve.rs=
+  - =resolve_symbol= at resolve.rs:97 is the entry point.
+  - =find_symbol_node= at resolve.rs:211 does the recursive dotted-name descent: if direct match fails and symbol contains `.`, recurse on container name and then resolve the trailing member against that container.
+  - =find_top_level_matches= at resolve.rs:183 walks only `root.named_children(...)` — one level. This is the level at which a `defmodule` call should appear.
+  - =collect_top_level_names= at resolve.rs:366 has the same single-level walk plus a `sole_named_child` descent for nodes that do not match a declaration pattern themselves but contain exactly one child. That branch is a likely culprit when the tree-sitter-elixir AST wraps the `defmodule` inside an unexpected wrapper.
+- =crates/pi-code-engine/src/language/mod.rs::elixir_profile=
+  - Defines five `DeclarationPattern` entries (module, def, defp, macro, macrop) all with `node_types: ["call"]`, `filter_names` on the target field, and `name_from_arg: true` so the declaration name comes from the first argument child's `target` field (which for `defmodule Foo.Bar.Baz do` should produce the full dotted alias).
+  - Class-like pattern for `defmodule` with `filter_field: "target"`, `filter_names: ["defmodule"]`, `member_types: ["call"]`.
+- =crates/pi-code-engine/src/outline.rs::declaration_name_resolution=
+  - Implements the `name_from_arg` path: reads first argument child, extracts target-field text, unmodified. This is where the 4-segment dotted alias is assembled from the tree-sitter `alias` node.
+- =crates/pi-code-engine/tests/fixtures/sources/hello.ex=
+  - Existing fixture with 2-segment `MyApp.Greeter`. Add or extend a fixture for deeper nesting.
+- =crates/pi-code-engine/src/resolve.rs::tests=
+  - Existing `resolve_elixir_module` / `resolve_elixir_member_greet` / `resolve_elixir_missing_module` tests at lines 652, 665, 745 show the pattern.
+- =specs/elixir-outline-support.md= documents the Elixir profile wiring. Keep this spec in sync if the resolver fix requires profile changes.
+- =specs/PLAN-native-binary-staleness-detection.md= documents the staleness surface. Reuse if the fix is a staleness-detection extension rather than a resolver fix.
+- =packages/coding-agent/src/tools/code.ts= hosts the model-visible edit error surface; any reworded diagnostic from the native layer MUST flow through the existing `createCodeToolError` path, not a new bespoke surface.
+
+Plan container: [[id:PLAN-281-coding-agent-edit-tool-silent-duplicatio]]. Sibling item is [[id:BUG-315-coding-agent-reject-pos-only-hashline-re]].
+* Tests
+
+Workflows to defend:
+
+1. `resolve_symbol(&buffer, elixir_profile, "MyApp.Greeter")` on the existing 2-segment fixture still resolves to the module (regression guard for the currently-passing `resolve_elixir_module` test).
+2. `resolve_symbol(&buffer, elixir_profile, "Alpha.Beta.Gamma")` on a new 3-segment fixture resolves to the single top-level module. Fails today if (1) below is the root cause.
+3. `resolve_symbol(&buffer, elixir_profile, "AgentmakerWeb.Admin.Workbench.LeftPaneComponent")` on a new 4-segment fixture mirroring the failing real file resolves to the module.
+4. `resolve_symbol(&buffer, elixir_profile, "Alpha.Beta.Gamma.nonexistent")` returns an informative `not found` that names `Alpha.Beta.Gamma` as the resolved container and lists available members — confirming the dotted-member fallback still works after the fix.
+5. `collect_top_level_names` on the failing 4-segment fixture returns `["Alpha.Beta.Gamma"]` (or the full dotted name), not `[]`.
+6. An Elixir file whose root literally has zero top-level declarations (e.g. only whitespace and comments) returns `Available: []` with the NEW diagnostic that names it as "no declarations recognized in this file" (not indistinguishable from profile-mismatch). Regression guard that the improved diagnostic does not false-positive on truly empty files.
+7. NAPI-level test: calling `executeCodeBuffer({ command: "edit", ... })` on the new 4-segment fixture from TypeScript surfaces the success path; and when the symbol is intentionally wrong, surfaces the new diagnostic via =packages/coding-agent/src/tools/code-result.ts= unchanged.
+8. If the investigation identifies native binary staleness as the root cause: staleness detection fires on an old binary that lacks the Elixir fix, with an actionable message telling the operator to run `bun run dev:native` and restart. Existing fresh-binary cases continue to succeed.
+
+Concrete test files:
+- =crates/pi-code-engine/tests/fixtures/sources/elixir_nested.ex= (new fixture, 4-segment dotted module name) — MAY be added, path is illustrative.
+- =crates/pi-code-engine/src/resolve.rs::tests= — new `resolve_elixir_deep_nested_module` and `resolve_elixir_deep_nested_member` tests.
+- =crates/pi-code-engine/src/outline.rs::tests= — if the resolver fix requires outline changes, add parity tests there (otherwise skip to keep scope tight).
+- =packages/natives/test/**= — if a NAPI-surface test exists for code buffer resolve on Elixir, extend it; otherwise skip the TS-side regression since the native test covers the contract.
+
+* Implementation
+
+** ITEM Reproduce failure in Rust test harness against the real file shape
+:PROPERTIES:
+:CUSTOM_ID: BUG-317-coding-agent-elixir-code-edit-symbol-res::reproduce-deep-elixir-resolver-failure
+:END:
+
+- File: =crates/pi-code-engine/src/resolve.rs= (tests module) + new fixture under =crates/pi-code-engine/tests/fixtures/sources/=.
+- Author a red Rust test that constructs a `CodeBuffer` from a fixture whose content is `defmodule A.B.C.D do
+  def hello, do: :ok
+end
+` and asserts `resolve_symbol(&buffer, elixir_profile, "A.B.C.D")` succeeds, naming the resolved kind `module`.
+- If the test passes against current code, pivot the investigation to the NAPI / native binary layer: confirm the runtime binary at `packages/natives/native/pi_natives.linux-x64-modern.node` in the agentmaker checkout was stale relative to source at the time of the session. Either way, record observed vs. expected in the sub-outline notes.
+- No fix yet; this sub-outline only makes the failure observable in-repo.
+
+** ITEM Fix resolver path for deeply-nested Elixir module names OR surface staleness
+:PROPERTIES:
+:CUSTOM_ID: BUG-317-coding-agent-elixir-code-edit-symbol-res::fix-or-surface-staleness
+:DEPENDS: BUG-317-coding-agent-elixir-code-edit-symbol-res::reproduce-deep-elixir-resolver-failure
+:END:
+
+- If the reproduction test from the previous step is red against source: fix `resolve.rs` so `resolve_symbol("A.B.C.D")` succeeds on the new fixture. The fix MUST live in the Elixir resolution path or, if the root cause is shared with other dotted-name languages (TypeScript nested namespaces, HTML id paths), in the common `find_symbol_node` recursion. Prefer the smallest change. Do NOT widen `name_from_arg` semantics beyond what is required.
+- If the reproduction test is green against source but the session failed at runtime: the root cause is native binary staleness. Extend the staleness detection path documented in =specs/PLAN-native-binary-staleness-detection.md= so the Elixir profile fingerprint is tracked, and the runtime emits a distinct message naming the required rebuild step. This sub-outline stays narrow; it does NOT redesign staleness detection overall.
+- Either way: keep the existing `MyApp.Greeter` path green.
+- Run focused: `cargo test -p pi-code-engine resolve` (native) and whichever `packages/coding-agent/test/**` path covers the code-tool edit error surface.
+
+** ITEM Improve empty-candidate diagnostic on Elixir files
+:PROPERTIES:
+:CUSTOM_ID: BUG-317-coding-agent-elixir-code-edit-symbol-res::improve-empty-candidate-diagnostic
+:DEPENDS: BUG-317-coding-agent-elixir-code-edit-symbol-res::reproduce-deep-elixir-resolver-failure
+:END:
+
+- File: =crates/pi-code-engine/src/resolve.rs=
+- When `resolve_symbol` is about to emit `Available: []` for a file that is recognized as Elixir (profile id `elixir`) AND the root node has at least one named child whose kind is `call`, replace the bare `Available: []` tail with a sentence naming the kinds of the top-level nodes actually observed. Example: `Available: [] — observed top-level call targets: [defmodule AgentmakerWeb.Admin.Workbench.LeftPaneComponent]`. This is a diagnostic improvement; it MUST NOT try to "fix" the resolution by inventing matches.
+- Scope this improvement to the Elixir path to avoid destabilizing other languages; other profiles may benefit later under a separate item.
+- Run focused: `cargo test -p pi-code-engine` and one TS-surface spot check through the existing `code-result` render path.
+
+** ITEM Verify end-to-end from TypeScript surface
+:PROPERTIES:
+:CUSTOM_ID: BUG-317-coding-agent-elixir-code-edit-symbol-res::verify-end-to-end
+:DEPENDS: BUG-317-coding-agent-elixir-code-edit-symbol-res::fix-or-surface-staleness BUG-317-coding-agent-elixir-code-edit-symbol-res::improve-empty-candidate-diagnostic
+:END:
+
+- Verification commands:
+  - `cargo test -p pi-code-engine`
+  - `bun run dev:native` (to rebuild the runtime binary so the NAPI path picks up any Rust change)
+  - `bun check:rs`
+  - `bun check:ts`
+- Manual proof to record:
+  - Run `code edit { targetId: "<path>::Foo.Bar.Baz.Qux", actions: [{ kind: "write", scope: "body", content: ... }] }` against the fixture and observe success.
+  - Run with an intentionally wrong symbol and observe the improved diagnostic.
+- CHANGELOG entry under `packages/coding-agent/CHANGELOG.md` `## [Unreleased] > ### Fixed` describing the Elixir resolver fix (or, if staleness was the cause, under `### Changed` describing the staleness-detection surface extension).
+
+* Edge Cases
+
+- An Elixir file whose root has a single `defmodule` whose first argument is a non-alias expression (e.g. `defmodule __MODULE__ do` or `defmodule :"elixir_compound_module" do`). The resolver MUST NOT crash; it MAY return `Available: []` with the improved diagnostic. No code change is required unless such files surface in test corpora.
+- Multiple top-level `defmodule` declarations in one file (the tree-sitter-elixir AST permits this). Dotted-name resolution MUST still pick the correct module by its full name; ambiguity detection already handled by `ambiguous_symbol_error` (resolve.rs:199). Add a regression test if not already covered.
+- A `defmodule` nested inside a `quote do ... end` block (e.g. inside a macro body). Not a top-level declaration; MUST NOT resolve as one. The existing single-level root walk already enforces this; preserve that behavior.
+- Tree-sitter-elixir version drift: if the grammar changes node type or field names across versions, the resolver fix MUST NOT hard-code version-specific quirks beyond what `language/mod.rs` already encodes. Profile-level config first; code changes second.
+- If the fix requires a rebuild of the native binary, implementation session MUST rebuild (`bun run dev:native`) and then re-run the NAPI-level tests, per the memory summary's "Pin native binary rebuild" pitfall.
+
+* Acceptance Criteria
+
+- `cargo test -p pi-code-engine` passes including new `resolve_elixir_deep_nested_module` and `resolve_elixir_deep_nested_member` tests.
+- `resolve_symbol` on a 4-segment dotted `defmodule` returns the full dotted name with `kind = "module"`.
+- When candidate list is empty on an Elixir file that does contain top-level calls, the surfaced diagnostic names the observed top-level call targets rather than returning bare `Available: []`.
+- If the root cause is binary staleness: staleness detection surface covers the Elixir profile fingerprint, and a stale binary produces an actionable rebuild instruction.
+- `code edit` on the real agentmaker `left_pane_component.ex` (or equivalent fixture) resolves and applies successfully.
+- `bun check:rs` and `bun check:ts` both green.
+
+* Verification
+
+- `cargo test -p pi-code-engine resolve`
+- `bun run dev:native`
+- `bun check:rs && bun check:ts`
+- Manual: one transcript snippet showing `code edit` against a deeply-nested Elixir module succeeding end-to-end after the fix.
+
+NOTE [2026-04-22]: Implemented and verified under PLAN-281. Deep dotted Elixir module resolution remains covered; empty-candidate diagnostics now explain observed top-level nodes, with TypeScript-surface verification after a clean native rebuild.

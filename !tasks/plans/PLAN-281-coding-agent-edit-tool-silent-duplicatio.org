@@ -1,0 +1,128 @@
+#+TITLE: Coding-agent edit tool silent duplication hardening
+#+STATE: DONE
+#+SESSION_ID: 14c46945bb97a5c9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-22T09-05-17-550Z_14c46945bb97a5c9.jsonl]]
+#+CUSTOM_ID: PLAN-281-coding-agent-edit-tool-silent-duplicatio
+#+LAYER: coding-agent pi-code-engine
+
+* Initial Message
+
+User question from session =14c46945bb97a5c9= referencing target session file =/home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-22T07-57-24-655Z_14c459bc4bdbb31d.jsonl= (id: 14c459bc4bdbb31d):
+
+#+begin_quote
+Analyse the usages of the edit tool there. Why does it duplicate written content?
+#+end_quote
+
+Root-cause analysis (verified against transcript + source):
+
+The `edit` tool in hashline mode accepts `op:"replace"` with only `pos` (or only `end`) and a multi-line `lines` array. The contract treats pos-only replace as exactly one-line replace — the multi-line payload gets spliced in place of the single anchor line, and the rest of the originally-intended region survives directly below the inserted payload. Visual effect: duplicated content. The session shows three such calls on `workbench_live.ex`, producing a ~33-line duplicated `<Surface>…</Surface>` subtree and a broken HEEx tree. The agent self-diagnosed only after inspecting the resulting diff; the tool itself never warned.
+
+Contributing factor on the same session: the agent tried `code edit` first with `targetId="...left_pane_component.ex::AgentmakerWeb.Admin.Workbench.LeftPaneComponent"` (a valid deeply-nested Elixir `defmodule`), got `Symbol '…' not found. Available: []`, and fell back to the text `edit` tool. Restoring the structural edit path on deeply-nested Elixir modules removes the fallback that exposes the text-edit contract gap.
+
+* Context
+
+Top-level child links:
+- [[id:BUG-315-coding-agent-reject-pos-only-hashline-re]]
+- [[id:BUG-317-coding-agent-elixir-code-edit-symbol-res]]
+
+Observed behavior chain:
+- Session ran on 2026-04-22 inside the agentmaker repo; three `edit` tool calls on `workbench_live.ex` and follow-up calls on `activation_data.ex` and `pipeline_data.ex` used `op:"replace"` with only `pos` supplied and multi-line `lines` payloads.
+- The runtime path (`resolveEditAnchors` at `packages/coding-agent/src/patch/index.ts:227-258` + `applyHashlineEdits` at `packages/coding-agent/src/patch/hashline.ts:653-700`) treated each as a single-line replace that pushed the original tail down, preserving the surviving region and producing visible duplicated content.
+- Existing taxonomy covers `missing_anchor`, `malformed_anchor`, and `stale_hash` (prior work: BUG-289 under PLAN-261 — `!tasks/bugs/BUG-289-coding-agent-harden-hashline-edit-contra.org` and `!tasks/plans/PLAN-261-hashline-edit-contract-and-diagnostics-h.org`). This plan extends the taxonomy with a new `span_mismatch` variant so the pos-only-with-multi-line failure mode cannot mutate bytes silently.
+- The agent reached the text `edit` tool fallback because `code edit` returned `Available: []` for a valid 4-segment dotted `defmodule`. The resolver layer (`crates/pi-code-engine/src/resolve.rs::find_symbol_node`, `find_top_level_matches`, `collect_top_level_names`) already succeeds for the 2-segment fixture `MyApp.Greeter`; the failure mode on the real agentmaker file is either a resolver gap, a native binary staleness issue, or a Phoenix-specific AST nesting quirk. The sibling item triages all three hypotheses.
+
+Settled design decisions:
+1. Safety policy = strict fail. pos-only or end-only `replace` with `lines.length !== 1 && lines.length !== 0` MUST be rejected pre-mutation. No autocorrect, no span promotion, no warning-then-apply. Matches the precedent set by PLAN-261 / BUG-289.
+2. Failure classification lives in the existing `HashlineAnchorError` taxonomy with a new `"span_mismatch"` variant and `HashlineSpanMismatchError` subclass — not a generic `Error`, not mixed into `HashlineMismatchError`.
+3. Rejection happens in `resolveEditAnchors` (pre-apply), not inside `applyHashlineEdits`, so the rejection mirrors `MissingHashlineAnchorError`/`MalformedHashlineAnchorError` placement and keeps the apply path free of shape validation.
+4. Field names stay: `pos` and `end` remain. The fix is description clarity, not a rename. Schema description strings and `hashline.md` both state explicitly that `lines.length` does not set the span and that `pos` alone means single-line replace.
+5. Prompt update ships one counterexample in the `<examples>` section next to the existing range-replace example, so the model sees the failure shape inline rather than only after triggering it at runtime.
+6. Elixir resolver failure is a separate child item (not a new scope creep into the hashline bug). It carries the structural-edit-path restoration that closes the fallback route to the text-edit failure mode.
+7. Full cutover: once the runtime gate lands, no compatibility escape hatch remains. The taxonomy is invariant across hashline-mode edit calls.
+8. Native binary staleness hypothesis for the Elixir resolver failure is explicitly in scope for investigation (per memory summary "Pin native binary rebuild" pitfall); if it is the root cause, fix extends the staleness detection surface rather than inventing a new resolver path.
+
+Critical files expected to change:
+- =packages/coding-agent/src/patch/hashline.ts= (new `HashlineSpanMismatchError` class, `HashlineAnchorError.code` union extension)
+- =packages/coding-agent/src/patch/index.ts= (`resolveEditAnchors` new rejection branch, `hashlineEditSchema` field descriptions)
+- =packages/coding-agent/src/prompts/tools/hashline.md= (new instruction bullet + counterexample)
+- =packages/coding-agent/test/core/hashline.test.ts= (span-mismatch describe block, regression guards for adjacent errors)
+- =packages/coding-agent/test/tools.test.ts= (tool-surface hashline-mode integration test)
+- =packages/coding-agent/CHANGELOG.md= (Unreleased Fixed entry)
+- =crates/pi-code-engine/src/resolve.rs= (Elixir deeply-nested module resolution + improved empty-candidate diagnostic)
+- =crates/pi-code-engine/tests/fixtures/sources/= (new Elixir fixture with 4-segment dotted module name)
+- =specs/PLAN-native-binary-staleness-detection.md= (only if investigation identifies staleness as the root cause)
+
+Non-goals:
+- Renaming schema fields `pos`/`end`.
+- Changing autocorrect heuristics for range replaces.
+- Broker/journal/PLAN-254 peer-activity UI changes.
+- Rewriting the Elixir outline / class_like / body_extractor wiring beyond what the resolver needs.
+- Changing append/prepend semantics.
+
+* Verification
+
+Item-level verification is owned by:
+- [[id:BUG-315-coding-agent-reject-pos-only-hashline-re]]
+- [[id:BUG-317-coding-agent-elixir-code-edit-symbol-res]]
+
+Required automated verification before plan completion (both sides):
+- =bun test packages/coding-agent/test/core/hashline.test.ts packages/coding-agent/test/tools.test.ts=
+- =cargo test -p pi-code-engine resolve=
+- =bun check:ts=
+- =bun check:rs=
+
+Required manual proof captured in the implementation session:
+1. Reproduce the pos-only multi-line `replace` request against a text fixture; observe the new `HashlineSpanMismatchError` with the explicit recovery path and confirm the file on disk is untouched.
+2. Run a valid range replace (pos + end + multi-line lines) against the same fixture; observe unchanged success behavior and diff preview.
+3. Run a valid single-line replace (pos only + lines=["..."]) against the fixture; observe unchanged success.
+4. Anchorless `replace`, malformed anchor, and stale-hash regressions each still surface their distinct error class.
+5. `code edit` against an Elixir file whose top-level `defmodule` has a 4-segment dotted alias resolves and applies successfully end-to-end.
+6. `code edit` with an intentionally wrong Elixir symbol surfaces the improved diagnostic that names the observed top-level call targets.
+7. If native binary staleness is identified as the root cause of the Elixir resolver failure: confirm staleness detection fires on a pre-fix binary with an actionable rebuild message.
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:BUG-315-coding-agent-reject-pos-only-hashline-re::define-span-mismatch-classification]] Define span-mismatch failure classification
+- [[id:BUG-317-coding-agent-elixir-code-edit-symbol-res::reproduce-deep-elixir-resolver-failure]] Reproduce Elixir deep-nested resolver failure in Rust test harness
+
+** wave-2 :wave:
+- [[id:BUG-315-coding-agent-reject-pos-only-hashline-re::span-mismatch-tests]] Write failing span-mismatch tests (TDD)
+
+** wave-3 :wave:
+- [[id:BUG-315-coding-agent-reject-pos-only-hashline-re::reject-in-anchor-resolver]] Reject span mismatch in resolveEditAnchors
+- [[id:BUG-315-coding-agent-reject-pos-only-hashline-re::prompt-and-schema-guidance]] Strengthen hashline prompt and schema descriptions
+- [[id:BUG-317-coding-agent-elixir-code-edit-symbol-res::fix-or-surface-staleness]] Fix resolver path for deeply-nested Elixir modules OR surface staleness
+- [[id:BUG-317-coding-agent-elixir-code-edit-symbol-res::improve-empty-candidate-diagnostic]] Improve empty-candidate diagnostic on Elixir files
+
+** wave-4 :wave:
+- [[id:BUG-315-coding-agent-reject-pos-only-hashline-re::verify-end-to-end]] Verify end-to-end and changelog (hashline)
+- [[id:BUG-317-coding-agent-elixir-code-edit-symbol-res::verify-end-to-end]] Verify end-to-end from TypeScript surface (Elixir resolver)
+
+* Consistency Notes
+
+- No child-item overlap with PLAN-254 broker/journal work.
+- No child-item overlap with PLAN-276 org lookup cutover.
+- Shared-surface overlap with PLAN-261 (`HashlineAnchorError` taxonomy) is deliberate: this plan extends that taxonomy with one new variant. Existing taxonomy members MUST remain unchanged in shape, message, and behavior.
+- Shared-surface overlap with =specs/elixir-outline-support.md= is minimal; the Elixir sibling item does not change outline shape unless the root cause requires it.
+- No auto-recovery or whole-file fallback is permitted by this plan.
+- The plan MUST NOT introduce a text-edit compatibility notice path distinct from the one PLAN-262 already ships.
+
+** Completion [2026-04-22]
+*** Verification
+- `bun test packages/coding-agent/test/core/hashline.test.ts packages/coding-agent/test/tools.test.ts` ✓ `176 pass, 1 skip, 0 fail`.
+- `cargo test -p pi-code-engine resolve` ✓ `28 passed, 0 failed`.
+- `bun check:ts` ✓ passed (`biome check . && tsgo -p tsconfig.json`).
+- `bun check:rs` ✓ passed after fixing an unrelated clippy failure in `crates/pi-code-graph/src/language/typescript.rs` (`let...else` → `?`).
+- `bun run build:native` then `cargo clean && bun run build:native` ✓ rebuilt the native addon for end-to-end Elixir verification; the clean rebuild was required before the TypeScript `CodeTool` surface picked up the updated empty-candidate diagnostic.
+- Manual hashline runtime verification via one-off Bun script instantiating `EditTool` in hashline mode against a text fixture ✓ confirmed: span-mismatch rejection before mutation, valid range replace, valid single-line replace, and preserved anchorless/malformed/stale error surfaces.
+- Manual code-edit verification via one-off Bun script instantiating `CodeTool` ✓ confirmed: `findAndReplace` succeeded on `MyApp.Web.Api.V1.Controller.index`, and a missing symbol on an Elixir file with top-level calls surfaced `File contains top-level nodes but no recognized declarations (observed: [call (call: use), call (call: IO.puts)])`.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-281-coding-agent-edit-tool-silent-duplicatio/manual-hashline-verification.json]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-281-coding-agent-edit-tool-silent-duplicatio/manual-code-edit-verification.json]]
+*** Deviations
+- To satisfy the plan-required `bun check:rs`, I fixed an unrelated pre-existing clippy violation in `crates/pi-code-graph/src/language/typescript.rs` by replacing a `let...else` early return with `?`.
+- No plan work was deferred.
+
+NOTE [2026-04-22]: Execution completed with focused TS/Rust verification, clean native rebuild for TypeScript-surface Elixir proof, and plan completion report appended.
+
+- The `crates/pi-code-graph/src/language/typescript.rs` workspace fix was left unstaged because that file already contained unrelated pre-existing edits; staging it would have violated the plan instruction to avoid unrelated workspace changes.
