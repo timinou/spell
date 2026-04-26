@@ -1,3 +1,4 @@
+mod clojure;
 mod elixir;
 mod generic;
 mod typescript;
@@ -8,6 +9,7 @@ use std::{
 	sync::Arc,
 };
 
+pub use clojure::{ClojureExtractor, ClojureImportResolver};
 pub use elixir::{ElixirExtractor, ElixirImportResolver};
 pub use generic::{EngineProfileExtractor, EngineProfileImportResolver};
 use pi_code_engine::language::LanguageRegistry as EngineRegistry;
@@ -125,8 +127,13 @@ impl LanguageRegistry {
 		Ok(self)
 	}
 
+	pub fn with_clojure(mut self) -> Result<Self> {
+		self.register(Arc::new(ClojureExtractor), Arc::new(ClojureImportResolver))?;
+		Ok(self)
+	}
+
 	pub fn with_defaults(mut self) -> Result<Self> {
-		self = self.with_typescript()?.with_elixir()?;
+		self = self.with_typescript()?.with_elixir()?.with_clojure()?;
 		let engine = Arc::new(engine_registry()?);
 		let mut languages = engine
 			.languages()
@@ -135,7 +142,7 @@ impl LanguageRegistry {
 			.collect::<Vec<_>>();
 		languages.sort();
 		for language in languages {
-			if matches!(language.as_str(), "typescript" | "elixir") {
+			if matches!(language.as_str(), "typescript" | "elixir" | "clojure" | "edn") {
 				continue;
 			}
 			self.register(

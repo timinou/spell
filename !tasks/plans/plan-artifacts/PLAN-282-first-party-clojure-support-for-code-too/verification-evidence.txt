@@ -1,0 +1,23 @@
+PLAN-282 verification evidence (2026-04-26)
+
+Focused tests:
+- cargo test -p pi-code-engine clojure --no-default-features: PASS (3 tests)
+- cargo test -p pi-code-graph clojure --no-default-features: PASS (3 tests)
+- cargo test -p pi-code-graph clojure_symbol --no-default-features: PASS (1 test)
+- cargo test -p pi-natives clojure --no-default-features: PASS (2 tests)
+- bun test packages/coding-agent/test/tools/code.test.ts: PASS (26 tests)
+
+Global checks:
+- bun check:rs: PASS
+- bun check:ts: PASS
+
+Native rebuilds:
+- bun run dev:native: PASS; installed packages/natives/native/pi_natives.dev.node
+- bun run build:native: PASS; installed packages/natives/native/pi_natives.linux-x64-modern.node
+
+Manual native proof:
+- executeCodeBuffer({command:"languages"}) includes clojure (.clj/.cljs/.cljc/.bb) with outline/read/navigate/resolve/edit/graph and edn (.edn) with outline/read/navigate/edit only.
+- executeCodeBuffer read/navigate on tmp/plan-282-clojure-fixture/src/app/core.clj succeeds with target src/app/core.clj::app.core.
+- executeCodeBuffer node-at/children on tmp/plan-282-clojure-fixture/resources/config.edn succeeds on EDN forms without graph semantics.
+- executeCodeGraph index/deps/context on tmp/plan-282-clojure-fixture indexes clojure=2, excludes EDN, resolves src/app/core.clj -> src/app/db.clj, and context normalize-name shows app.db/connect! plus keyword references.
+- astGrep({lang:"clojure", pattern:"(defn µNAME [µARG] µµµBODY)"}) matches normalize-name and captures NAME/ARG/BODY.

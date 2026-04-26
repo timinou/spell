@@ -1,0 +1,106 @@
+#+TITLE: Clojure code tool UX and form-safe procedures
+#+STATE: DONE
+#+SESSION_ID: 14c9cf860f4ccac8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-26T13-44-26-429Z_14c9cf860f4ccac8.jsonl]]
+#+CUSTOM_ID: FEAT-613-clojure-code-tool-ux-and-form-safe-proce
+#+DEPENDS: FEAT-611-clojure-and-edn-native-grammar-foundatio FEAT-612-clojure-namespace-graph-and-semantic-mod
+#+LAYER: coding-agent
+
+* Scope
+In scope: expose first-party Clojure and EDN support through the user-facing `code` tool and implement Clojure-specific form-safe editing procedures once native foundation and graph semantics exist. This item covers TypeScript tool routing/hints, LSP extension completion, user-facing renderer wording for Clojure graph certainty, and structural edit procedures that make Clojure feel like a Lisp rather than a generic syntax tree.
+
+Out of scope: parser registration and graph extraction internals, which are handled by `[[id:FEAT-611-clojure-and-edn-native-grammar-foundatio]]` and `[[id:FEAT-612-clojure-namespace-graph-and-semantic-mod]]`. Runtime/nREPL execution remains out of scope and is captured as a deferred follow-up outside this execution plan.
+
+Rationale: first-party support means agents learn the right behavior at the tool boundary. Clojure editing should privilege balanced forms, namespace requires, and fully-qualified vars. Without a Clojure-specific hint and procedures, agents will fall back to text-style edits that risk broken parens, stale requires, or cross-file rename mistakes.
+
+* Existing Patterns
+- `packages/coding-agent/src/tools/code.ts`: routes file commands to native `CodeBuffer`, graph commands to `executeCodeGraph`, injects language-specific hints via `LANGUAGE_BY_EXTENSION` and `LANGUAGE_INJECTIONS`.
+- `packages/coding-agent/src/prompts/tools/code-hint-markdown.md` and `code-hint-typst.md`: static prompt-hint pattern using Bun text imports.
+- `packages/coding-agent/src/tools/code-supported-files.ts`: fallback extension discovery and supported-language description.
+- `packages/coding-agent/src/lsp/utils.ts`: extension-to-language mapping for LSP formatting/reference support; `.clj` currently exists but `.cljs`, `.cljc`, and `.bb` must be verified/added.
+- `crates/pi-code-engine/src/procedure/` and `LanguageProfile.procedures`: existing mechanism for language-specific structural procedures.
+- `crates/pi-code-engine/src/edit/`: structural edit primitives such as write, wrap, splice, move, clone, transpose, delete, insert before/after.
+- Reference spec: `specs/clojure-code-tool-first-party-integration.md`.
+
+* Tests
+User workflows to cover first:
+1. Opening a `.clj` file through `code read` injects a Clojure-specific hint once per session, teaching form-safe editing and macro uncertainty.
+2. Opening `.cljs`, `.cljc`, `.bb`, and `.edn` files routes to the correct language labels and does not show text-fallback warnings.
+3. A user asks to rename `app.core/normalize-name`; the tool prompt/hint directs use of graph context and fully-qualified target IDs before mutation.
+4. A user runs `code edit` with a Clojure procedure such as `sortNsRequires`; output preserves comments, reader conditionals, aliases, and refer lists.
+5. A user runs form-safe transformations (`threadFirst`, `threadLast`, `unthread`, `wrapLet`, `raiseForm`, `slurpForward`, `barfForward`) and no paren imbalance is introduced.
+6. A user runs keyword-oriented search/impact; renderers distinguish keyword references from callable vars.
+7. A graph query encounters macro uncertainty; the user-visible result indicates static uncertainty instead of silently implying complete analysis.
+
+Concrete tests:
+- Add or update TypeScript tests for `code-supported-files.ts` fallback extensions and `languageForFile()` behavior if exported/testable.
+- Add code tool tests verifying `code-hint-clojure.md` is injected once for Clojure semantic files and not for EDN unless an EDN-specific hint is deliberately added.
+- Add Rust procedure tests under `crates/pi-code-engine` with fixtures containing comments, metadata, reader conditionals, threading forms, requires, `:refer`, `:as`, and multiline forms.
+- Add renderer/formatting tests if graph result formatting must show new Clojure edge/symbol kinds or uncertainty fields.
+- Verification commands: `bun check:ts`, `bun check:rs`, and package-local focused tests for changed procedure modules if available.
+
+* Implementation
+** ITEM Write code-tool Clojure hint tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-613-clojure-code-tool-ux-and-form-safe-proce::code-hint-tests
+:END:
+- Files: existing `packages/coding-agent` tool tests or new focused test file following nearby conventions.
+- Assert Clojure extensions are semantic-capable in fallback and native-discovery cases.
+- Assert hint injection content appears once for `.clj/.cljs/.cljc/.bb` files and does not appear for unrelated languages.
+- Satisfies Tests scenarios 1-3.
+
+** ITEM Implement code-tool Clojure surface
+:PROPERTIES:
+:CUSTOM_ID: FEAT-613-clojure-code-tool-ux-and-form-safe-proce::implement-code-tool-surface
+:DEPENDS: FEAT-613-clojure-code-tool-ux-and-form-safe-proce::code-hint-tests
+:END:
+- Files: `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/tools/code-supported-files.ts`, `packages/coding-agent/src/prompts/tools/code-hint-clojure.md`, `packages/coding-agent/src/lsp/utils.ts` if needed.
+- Add Clojure extension mapping and language hint import. Add `.cljs`, `.cljc`, `.bb`, and `.edn` LSP/semantic fallback handling as appropriate.
+- Hint content must teach: target IDs use fully-qualified vars (`src/app/core.clj::app.core/foo`), prefer form-level code edits, use graph context before cross-file rename, treat macro-generated code as statically incomplete, and do not use text edits for balanced form mutations unless native code edit cannot support the file.
+- Satisfies Tests scenarios 1-3.
+
+** ITEM Write Clojure procedure tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-613-clojure-code-tool-ux-and-form-safe-proce::procedure-tests
+:END:
+- Files: `crates/pi-code-engine` procedure tests and fixtures.
+- Initially failing tests for `sortNsRequires`, `threadFirst`, `threadLast`, `unthread`, `wrapLet`, `raiseForm`, `slurpForward`, `barfForward`.
+- Test exact output, comment preservation, metadata preservation, reader conditionals, aliases, refer lists, and no paren imbalance.
+- Satisfies Tests scenarios 4-5.
+
+** ITEM Implement form-safe Clojure procedures
+:PROPERTIES:
+:CUSTOM_ID: FEAT-613-clojure-code-tool-ux-and-form-safe-proce::implement-procedures
+:DEPENDS: FEAT-613-clojure-code-tool-ux-and-form-safe-proce::procedure-tests
+:END:
+- Files: `crates/pi-code-engine/src/procedure/` and `crates/pi-code-engine/src/language/mod.rs` Clojure profile procedure registration.
+- Implement procedures as tree-sitter/form-aware transforms. Do not implement by regex or line edits.
+- `sortNsRequires` must preserve comments and reader conditionals; if safe canonical ordering cannot be proven, return a structured no-op/error rather than corrupting namespace form.
+- Threading/unthreading and paredit-style operations must operate on balanced form nodes and maintain syntactic validity.
+- Satisfies Tests scenarios 4-5.
+
+** ITEM Update Clojure graph result rendering
+:PROPERTIES:
+:CUSTOM_ID: FEAT-613-clojure-code-tool-ux-and-form-safe-proce::render-clojure-graph
+:END:
+- Files: `packages/coding-agent/src/tools/code-result.ts` and graph formatting helpers, if current renderers collapse unknown enum variants poorly.
+- Render Clojure-specific symbol/edge kinds with readable names: namespace, var, protocol, record, multimethod, test, keyword, requires, aliases, refers, implements, dispatches, tests, uses keyword.
+- Render uncertainty/macro notes if graph backend exposes them; otherwise render unresolved macro-generated refs conservatively.
+- Satisfies Tests scenarios 6-7.
+
+* Edge Cases
+- Hint injection must not spam users. Existing once-per-language/session pattern should be preserved.
+- EDN is a data-language; do not show Clojure code-edit hint for EDN if it implies namespace/var semantics.
+- Form procedures must fail safely when cursor/target is not a valid form or when comments/reader conditionals make transformation ambiguous.
+- `sortNsRequires` must not alter semantic grouping, reader conditional branches, or require metadata.
+- Cross-file `renameVar` should depend on graph support and must not rename keywords or local bindings accidentally.
+- LSP formatting may be unavailable. Code tool should degrade to unformatted save as existing behavior does.
+
+* Acceptance Criteria
+- Clojure/EDN files are described as semantic built-ins in fallback and native paths.
+- Agents receive a Clojure-specific hint before attempting unsafe edits.
+- Clojure structural procedures pass fixtures preserving comments, metadata, reader conditionals, and balanced delimiters.
+- Graph renderers show Clojure-specific kinds/edges clearly.
+- `bun check:ts` and `bun check:rs` pass.
+
+NOTE [2026-04-26]: Implemented and verified under PLAN-282 completion.

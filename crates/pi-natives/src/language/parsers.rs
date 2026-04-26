@@ -17,6 +17,9 @@ pub fn language_c_sharp() -> TSLanguage {
 pub fn language_css() -> TSLanguage {
 	tree_sitter_css::LANGUAGE.into()
 }
+pub fn language_clojure() -> TSLanguage {
+	tree_sitter_clojure::LANGUAGE.into()
+}
 pub fn language_diff() -> TSLanguage {
 	tree_sitter_diff::LANGUAGE.into()
 }

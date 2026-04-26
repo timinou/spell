@@ -467,6 +467,11 @@ fn resolve_name_for_extractor(
 		NameExtractor::ChildText { child_type } => find_named_child(node, child_type)
 			.or_else(|| find_named_descendant(node, child_type))
 			.and_then(|child| resolved_name_from_node(source, child)),
+		NameExtractor::ListFormArg { head, index } => list_form_value_node(node, *index)
+			.filter(|_| {
+				list_form_value_text(source, node, 0).is_some_and(|value| value == head.as_str())
+			})
+			.and_then(|child| resolved_name_from_node(source, child)),
 		NameExtractor::Literal { name } => Some(ResolvedName {
 			text:   name.clone(),
 			line:   node.start_position().row as u32 + 1,
@@ -524,6 +529,9 @@ fn declaration_name_range(
 		NameExtractor::ChildText { child_type } => find_named_child(node, child_type)
 			.or_else(|| find_named_descendant(node, child_type))
 			.map(|child| (child.start_byte(), child.end_byte())),
+		NameExtractor::ListFormArg { index, .. } => {
+			list_form_value_node(node, *index).map(|child| (child.start_byte(), child.end_byte()))
+		},
 		NameExtractor::Literal { .. } => Some((node.start_byte(), node.start_byte())),
 		NameExtractor::AttributeValue { within_type, attr_name, .. } => {
 			attribute_value_range(source, node, within_type.as_deref(), attr_name)
@@ -548,12 +556,32 @@ fn name_range_for_extractor(
 		NameExtractor::ChildText { child_type } => find_named_child(node, child_type)
 			.or_else(|| find_named_descendant(node, child_type))
 			.map(|child| (child.start_byte(), child.end_byte())),
+		NameExtractor::ListFormArg { index, .. } => {
+			list_form_value_node(node, *index).map(|child| (child.start_byte(), child.end_byte()))
+		},
 		NameExtractor::Literal { .. } => Some((node.start_byte(), node.start_byte())),
 		NameExtractor::AttributeValue { within_type, attr_name, .. } => {
 			attribute_value_range(source, node, within_type.as_deref(), attr_name)
 		},
 		NameExtractor::Attributed { base, .. } => name_range_for_extractor(source, node, base),
 	}
+}
+
+fn list_form_value_node(node: Node<'_>, index: usize) -> Option<Node<'_>> {
+	let mut cursor = node.walk();
+	node
+		.children_by_field_name("value", &mut cursor)
+		.filter(|child| child.is_named() && child.kind() != "comment")
+		.nth(index)
+}
+
+fn list_form_value_text<'source>(
+	source: &'source str,
+	node: Node<'_>,
+	index: usize,
+) -> Option<&'source str> {
+	let value = list_form_value_node(node, index)?;
+	source.get(value.start_byte()..value.end_byte())
 }
 
 fn resolve_attribute_name(
@@ -794,6 +822,14 @@ fn symbol_kind_for(kind: &str, in_member_scope: bool) -> SymbolKind {
 		"interface" | "trait" => SymbolKind::Interface,
 		"type" => SymbolKind::TypeAlias,
 		"enum" => SymbolKind::Enum,
+		"namespace" => SymbolKind::Namespace,
+		"var" => SymbolKind::Var,
+		"protocol" => SymbolKind::Protocol,
+		"record" => SymbolKind::Record,
+		"multimethod" => SymbolKind::Multimethod,
+		"test" => SymbolKind::Test,
+		"spec" => SymbolKind::Spec,
+		"keyword" => SymbolKind::Keyword,
 		"template" => SymbolKind::Template,
 		"element" | "style" | "script" => SymbolKind::Element,
 		"rule" | "at-rule" | "keyframes" => SymbolKind::CssRule,

@@ -1,0 +1,117 @@
+#+TITLE: Clojure namespace graph and semantic model
+#+STATE: DONE
+#+SESSION_ID: 14c9cf860f4ccac8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-26T13-44-26-429Z_14c9cf860f4ccac8.jsonl]]
+#+CUSTOM_ID: FEAT-612-clojure-namespace-graph-and-semantic-mod
+#+DEPENDS: FEAT-611-clojure-and-edn-native-grammar-foundatio
+#+LAYER: code-graph
+
+* Scope
+In scope: implement first-party static Clojure semantic indexing in `pi-code-graph`, including dedicated namespace/var extraction, dependency-root discovery from `deps.edn` and `project.clj`, source-root-aware namespace resolution, aliases, `:refer`, protocols, records/types, multimethods, tests, macro uncertainty markers, and keyword indexing/search. This item depends on `[[id:FEAT-611-clojure-and-edn-native-grammar-foundatio]]` because it needs the native parser/profile foundation and stable language IDs.
+
+Out of scope: EDN graph semantics, runtime/nREPL execution, full macro expansion, JAR/classpath indexing, and editor UX hints. Runtime and external analyzer enrichment are deferred to a follow-up item. EDN is intentionally excluded from graph-capable semantics because EDN is data rather than code.
+
+Rationale: Clojure graph correctness is mostly namespace correctness. A generic declaration extractor can find `defn`, but it cannot faithfully model `(ns ... (:require [foo.bar :as fb :refer [x]]))`, Clojure file path conventions, `.cljc` source roots, tests, or qualified keywords. First-party support should prefer truthful partial static analysis over plausible false certainty.
+
+* Existing Patterns
+- `crates/pi-code-graph/src/language.rs`: implement `LanguageExtractor` and `ImportResolver`; `ExtractedFile` returns `symbols` and `imports`; registry pairs extractor/resolver.
+- `crates/pi-code-graph/src/language/typescript.rs`: example of dedicated parser-backed extractor and resolver.
+- `crates/pi-code-graph/src/language/elixir.rs`: pragmatic extractor/resolver reference for macro-heavy language and module-name-to-path resolution.
+- `crates/pi-code-graph/src/language/generic.rs`: generic engine-profile extraction; use as fallback/reference, but Clojure graph should be dedicated due namespace alias/refer complexity.
+- `crates/pi-code-graph/src/indexer.rs`: `CodeGraphBuilder` walks project files, calls `registered.extractor.extract()`, resolves imports, and adds `GraphNode` + `EdgeKind` edges.
+- `crates/pi-code-graph/src/model.rs`: extend `SymbolKind` and `EdgeKind` to preserve Clojure-specific distinctions requested for first-party support.
+- Reference spec: `specs/clojure-code-tool-first-party-integration.md` captures decisions and desired user-facing semantics.
+
+* Tests
+User workflows to cover first:
+1. `code index` on a deps.edn project indexes `src` and `test` Clojure files but excludes unrelated directories.
+2. `code deps src/app/core.clj` shows required namespaces and files that require `app.core`.
+3. `code context app.core/normalize-name` shows the defining file, callers, aliases, tests, and keyword references.
+4. `(require '[clojure.string :as str])` resolves `str/trim` as an alias-qualified reference.
+5. `(require '[app.db :refer [connect!]])` resolves unqualified `connect!` to `app.db/connect!`.
+6. Namespace `foo.bar-baz` resolves to file path `foo/bar_baz.clj`, `.cljc`, or `.cljs` under discovered source roots.
+7. `defprotocol`, `defrecord`, and `deftype` produce protocol/record/type symbols and implementation edges.
+8. `defmulti` and `defmethod` produce multimethod and dispatch edges.
+9. `deftest` in `test/app/core_test.clj` is linked to `app.core` where statically inferable.
+10. Keywords such as `:user/id`, `::user/id`, and `::id` are indexed for search/impact but are not exposed as structural edit targets.
+11. Macro declarations and known macro call sites are marked; macro-generated internals remain unresolved/uncertain rather than guessed.
+12. `.cljc` reader conditionals parse without panics and produce conservative edges when platform is ambiguous.
+
+Concrete tests:
+- Add fixtures under existing `crates/pi-code-graph` test fixture conventions or create `crates/pi-code-graph/tests/fixtures/clojure-basic/` with `deps.edn`, `src/app/core.clj`, `src/app/db.clj`, `src/app/protocols.clj`, `test/app/core_test.clj`.
+- Add tests for `ClojureImportResolver` namespace-to-path mapping, including hyphen-to-underscore file segment conversion.
+- Add tests for minimal `deps.edn` parsing: `:paths ["src" "test"]` and aliases with `:extra-paths` when present.
+- Add tests for minimal `project.clj` parsing: `:source-paths` and `:test-paths` when present.
+- Add graph assertion tests for new `SymbolKind` and `EdgeKind` variants.
+- Verification command: `bun check:rs` plus any package-local Rust test command used by existing `pi-code-graph` tests.
+
+* Implementation
+** ITEM Extend graph model tests for Clojure semantics
+:PROPERTIES:
+:CUSTOM_ID: FEAT-612-clojure-namespace-graph-and-semantic-mod::graph-model-tests
+:END:
+- File: `crates/pi-code-graph/src/model.rs` tests or existing graph model tests.
+- Add initially failing tests/serialization assertions for requested Clojure-specific `SymbolKind` values: `Namespace`, `Var`, `Protocol`, `Record`, `Multimethod`, `Test`, `Spec`, `Keyword`.
+- Add initially failing tests/serialization assertions for requested Clojure-specific `EdgeKind` values: `Requires`, `Refers`, `Aliases`, `Implements`, `Dispatches`, `Tests`, `UsesKeyword`.
+- Satisfies Tests scenarios 3, 7-10.
+
+** ITEM Implement graph model Clojure variants
+:PROPERTIES:
+:CUSTOM_ID: FEAT-612-clojure-namespace-graph-and-semantic-mod::implement-graph-model
+:DEPENDS: FEAT-612-clojure-namespace-graph-and-semantic-mod::graph-model-tests
+:END:
+- File: `crates/pi-code-graph/src/model.rs`.
+- Add variants without breaking existing serialization. Update formatting/query renderers if they assume a closed display list.
+- Ensure old graph cache behavior is handled: cache invalidation or version bump if serialized enum compatibility requires it.
+- Satisfies Tests scenarios 3, 7-10.
+
+** ITEM Write Clojure extractor and resolver tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-612-clojure-namespace-graph-and-semantic-mod::extractor-resolver-tests
+:DEPENDS: FEAT-612-clojure-namespace-graph-and-semantic-mod::implement-graph-model
+:END:
+- Files: new `crates/pi-code-graph/src/language/clojure.rs` tests or integration tests plus fixture files.
+- Test namespace extraction, var declarations, aliases, `:refer`, protocols/records, multimethods, tests, keywords, `.cljc` reader conditionals, and macro uncertainty markers as initially failing tests.
+- Test source-root discovery from `deps.edn` and `project.clj` at minimal supported fidelity: paths, source-paths, test-paths, and aliases extra-paths.
+- Satisfies Tests scenarios 1-12.
+
+** ITEM Implement ClojureExtractor and ClojureImportResolver
+:PROPERTIES:
+:CUSTOM_ID: FEAT-612-clojure-namespace-graph-and-semantic-mod::implement-extractor-resolver
+:DEPENDS: FEAT-612-clojure-namespace-graph-and-semantic-mod::extractor-resolver-tests
+:END:
+- Files: `crates/pi-code-graph/src/language/clojure.rs`, `crates/pi-code-graph/src/language.rs`, optionally helper modules for source-root parsing.
+- Use tree-sitter Clojure parser from foundation. Avoid executing Clojure code.
+- Extract symbols with fully-qualified names: `app.core/normalize-name`, `app.core/Store.fetch`, `app.core/MemoryStore`, etc.
+- Parse `(ns ...)` require/import/use clauses with `:as`, `:refer`, `:rename`, `:exclude` as far as static syntax allows. Store alias/refer metadata in `ExtractedImportBinding` or extend internal structures if needed.
+- Resolve namespace names to root-relative files using discovered source roots and Clojure hyphen/underscore file convention.
+- Index keywords as search/graph nodes when namespaced or auto-resolved; do not make them structural edit target IDs unless a later item explicitly designs keyword edits.
+- Satisfies Tests scenarios 1-12.
+
+** ITEM Register Clojure graph language and cache behavior
+:PROPERTIES:
+:CUSTOM_ID: FEAT-612-clojure-namespace-graph-and-semantic-mod::register-graph-language
+:DEPENDS: FEAT-612-clojure-namespace-graph-and-semantic-mod::implement-extractor-resolver
+:END:
+- Files: `crates/pi-code-graph/src/language.rs`, `crates/pi-code-graph/src/indexer.rs`, cache/version code if needed.
+- Register dedicated `ClojureExtractor` + `ClojureImportResolver` ahead of generic engine fallback.
+- Ensure `.edn` remains excluded from graph registry despite engine EDN support.
+- Ensure graph cache invalidates if new symbol/edge enum variants or extractor version changes make old caches unsafe.
+- Satisfies Tests scenarios 1-3 and EDN exclusion constraint.
+
+* Edge Cases
+- Reader conditionals in `.cljc` may produce platform-specific requires. Static graph should include conservative edges and mark ambiguity where renderers can show it.
+- Clojure macros can define vars and generate calls. Static extractor must not invent generated symbols; it should index macro declarations and known call sites only.
+- `:refer :all` cannot be fully resolved statically without loading target namespace or complete source indexing. Represent as namespace-level `Refers` or unresolved wildcard rather than linking every possible symbol.
+- External dependencies in Maven/JAR classpath are out of scope. Show them as unresolved external namespace imports rather than errors.
+- Namespace aliases and auto-resolved keywords may conflict. Resolution must prefer explicit alias data from current namespace.
+- `deps.edn`/`project.clj` parser is intentionally shallow. If parsing fails, degrade to conventional roots `src`, `test`, `dev`, `resources` with a warning/diagnostic in tests if exposed.
+
+* Acceptance Criteria
+- `code index` includes Clojure files from discovered `deps.edn`/`project.clj` roots and excludes EDN from graph indexing.
+- Graph queries distinguish Clojure namespaces, vars, protocols, records, multimethods, tests, aliases, refers, and keywords via explicit symbol/edge kinds.
+- Alias-qualified and `:refer` references resolve for local source files.
+- Macro-generated refs are not fabricated; uncertainty is represented or conservatively omitted.
+- `bun check:rs` passes and Clojure graph fixture tests pass.
+
+NOTE [2026-04-26]: Implemented and verified under PLAN-282 completion.

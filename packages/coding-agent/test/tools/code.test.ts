@@ -8,6 +8,10 @@ import {
 	createTools,
 	type ToolSession,
 } from "@oh-my-pi/pi-coding-agent/tools";
+import {
+	describeCodeToolSupportedFiles,
+	isCodeToolSupportedPath,
+} from "@oh-my-pi/pi-coding-agent/tools/code-supported-files";
 import { PendingActionStore } from "@oh-my-pi/pi-coding-agent/tools/pending-action";
 import * as nativesModule from "@oh-my-pi/pi-natives";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -34,6 +38,11 @@ const TEST_EXTENSIONS = new Set([
 	"org",
 	"ex",
 	"exs",
+	"clj",
+	"cljs",
+	"cljc",
+	"bb",
+	"edn",
 ]);
 
 function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
@@ -259,6 +268,33 @@ describe("coding-agent code tool wiring", () => {
 		await expect(tool.execute("tool", { command: "redo", file: "test.txt" })).rejects.toThrow(
 			'Read-only mode "readonly": file modifications are not allowed.',
 		);
+	});
+
+	it("includes Clojure and EDN in semantic fallback support", () => {
+		expect(isCodeToolSupportedPath("src/app/core.clj")).toBe(true);
+		expect(isCodeToolSupportedPath("src/app/core.cljs")).toBe(true);
+		expect(isCodeToolSupportedPath("src/app/core.cljc")).toBe(true);
+		expect(isCodeToolSupportedPath("script.bb")).toBe(true);
+		expect(isCodeToolSupportedPath("resources/config.edn")).toBe(true);
+		expect(describeCodeToolSupportedFiles()).toContain("Clojure");
+		expect(describeCodeToolSupportedFiles()).toContain("EDN");
+	});
+
+	it("injects Clojure guidance once for Clojure semantic files but not EDN", async () => {
+		const bufferSpy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: { text: "(ns app.core)\n", resolution: 2 },
+			error: false,
+		});
+		const tool = new CodeTool(createSession());
+		const first = await tool.execute("tool", { command: "read", file: "src/app/core.clj" });
+		const second = await tool.execute("tool", { command: "read", file: "src/app/other.cljs" });
+		const edn = await tool.execute("tool", { command: "read", file: "resources/config.edn" });
+
+		expect(getText(first)).toContain("Clojure code tool guidance");
+		expect(getText(first)).toContain("app.core/normalize-name");
+		expect(getText(second)).not.toContain("Clojure code tool guidance");
+		expect(getText(edn)).not.toContain("Clojure code tool guidance");
+		expect(bufferSpy).toHaveBeenCalledWith(expect.objectContaining({ file: "/tmp/test/src/app/core.clj" }));
 	});
 
 	it("routes file-local symbols through outline machinery even when query is present", async () => {

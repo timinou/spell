@@ -61,6 +61,10 @@ const LANGUAGE_MAP: Record<string, string> = {
 	".scala": "scala",
 	".groovy": "groovy",
 	".clj": "clojure",
+	".cljs": "clojure",
+	".cljc": "clojure",
+	".bb": "clojure",
+	".edn": "edn",
 
 	// .NET languages
 	".cs": "csharp",

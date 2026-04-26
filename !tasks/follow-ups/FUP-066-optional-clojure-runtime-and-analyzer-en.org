@@ -1,0 +1,67 @@
+#+TITLE: Optional Clojure runtime and analyzer enrichment
+#+STATE: ITEM
+#+SESSION_ID: 14c9cf860f4ccac8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-26T13-44-26-429Z_14c9cf860f4ccac8.jsonl]]
+#+CUSTOM_ID: FUP-066-optional-clojure-runtime-and-analyzer-en
+#+DEPENDS: FEAT-613-clojure-code-tool-ux-and-form-safe-proce
+
+* Initial Message
+
+Look at the rust crates in this repo. What would a first-party integration with Clojure look like? Take your time to deeply provide Clojure's strengths and philosophy to the code tool
+
+* Scope
+In scope: define and defer optional post-plan enrichment for Clojure static support using external/runtime sources: clj-kondo analysis cache, clojure-lsp metadata, and opt-in nREPL macroexpand/doc lookup. This follow-up must not be implemented in the first-party static integration plan. It exists to preserve extension seams and keep runtime execution out of normal `code index` behavior.
+
+Out of scope for the current implementation plan: executing Clojure project code, connecting to nREPL, macroexpanding user code, indexing Maven/JAR dependencies, or requiring clj-kondo/clojure-lsp as mandatory dependencies. The current plan must complete with static parser/graph/procedure support only.
+
+Rationale: Clojure is REPL-first and macro-rich, but this repo's code tool must be truthful and safe by default. Runtime enrichment can improve precision later, but automatic execution during indexing would violate user trust and introduce project side effects. This item documents the future direction without blocking static support.
+
+* Existing Patterns
+- `packages/coding-agent/src/lsp/`: existing LSP utilities and formatting integration; future clojure-lsp enrichment should reuse these paths.
+- `packages/coding-agent/src/tools/code.ts`: graph/file commands already separate native static analysis from LSP formatting. Runtime features should remain opt-in and not alter ordinary `code index`.
+- `crates/pi-code-graph`: static graph is pure file analysis. Future analyzer metadata should layer on as enrichment, not replace static extraction.
+- Reference spec: `specs/clojure-code-tool-first-party-integration.md`, especially macro honesty and REPL-first workflow sections.
+
+* Tests
+User workflows to cover if this follow-up is later implemented:
+1. With no external tools installed, Clojure code support behaves exactly like static support and produces no warnings requiring clj-kondo/clojure-lsp/nREPL.
+2. With clj-kondo analysis cache present, symbol arities/docs/usages are enriched without executing project code.
+3. With clojure-lsp available, LSP references/rename remain accessible through the existing `lsp` tool path.
+4. With explicit nREPL opt-in, macroexpand/doc lookup can be requested by the user and is clearly marked runtime-derived.
+5. Runtime connection failure produces an explicit non-fatal diagnostic and never blocks static code graph operations.
+
+* Implementation
+** ITEM Document enrichment boundaries
+:PROPERTIES:
+:CUSTOM_ID: FUP-066-optional-clojure-runtime-and-analyzer-en::document-runtime-boundaries
+:END:
+- File: `specs/clojure-code-tool-first-party-integration.md` or a follow-up spec if the direction expands.
+- Preserve the invariant: normal `code index` must not execute project code.
+- Define proposed data provenance labels: static, analyzer, lsp, runtime, unresolved.
+
+** ITEM Prototype clj-kondo cache ingestion tests
+:PROPERTIES:
+:CUSTOM_ID: FUP-066-optional-clojure-runtime-and-analyzer-en::clj-kondo-cache-tests
+:DEPENDS: FUP-066-optional-clojure-runtime-and-analyzer-en::document-runtime-boundaries
+:END:
+- Future-only. Add fixtures for clj-kondo analysis cache shape and expected enrichment output.
+- No implementation in current plan.
+
+** ITEM Prototype explicit nREPL enrichment tests
+:PROPERTIES:
+:CUSTOM_ID: FUP-066-optional-clojure-runtime-and-analyzer-en::nrepl-enrichment-tests
+:DEPENDS: FUP-066-optional-clojure-runtime-and-analyzer-en::document-runtime-boundaries
+:END:
+- Future-only. Tests must prove no automatic connection/execution occurs.
+- No implementation in current plan.
+
+* Edge Cases
+- External analyzer output can be stale relative to source files; enrichment must carry provenance and freshness.
+- nREPL macroexpand can execute arbitrary project code; it must remain explicit opt-in and never run during indexing.
+- Runtime-derived data may conflict with static parse data; UI must show provenance instead of silently overriding.
+- Missing tools must not degrade static functionality.
+
+* Acceptance Criteria
+- This follow-up remains non-blocking for the current static Clojure plan.
+- Future implementation has clear safety boundaries and test scenarios before any runtime execution is added.
+- Static support continues to work with no Clojure external tools installed.

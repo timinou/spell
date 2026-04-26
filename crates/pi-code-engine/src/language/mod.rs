@@ -55,6 +55,8 @@ impl LanguageRegistry {
 		reg.register(typst_profile())?;
 		reg.register(markdown_profile())?;
 		reg.register(elixir_profile())?;
+		reg.register(clojure_profile())?;
+		reg.register(edn_profile())?;
 		reg.register(org_profile())?;
 		reg.register(text_profile())?;
 		Ok(reg)
@@ -1157,6 +1159,361 @@ fn typst_profile() -> LanguageProfile {
 	}
 }
 
+const fn data_capabilities() -> LanguageCapabilities {
+	LanguageCapabilities {
+		outline:            true,
+		outline_enrichment: false,
+		read:               true,
+		navigate:           true,
+		resolve:            false,
+		edit:               true,
+		graph:              false,
+		embedded_languages: Vec::new(),
+	}
+}
+
+fn balanced_delimiters(text: &str) -> bool {
+	let mut stack = Vec::new();
+	let mut escaped = false;
+	let mut in_string = false;
+	for ch in text.chars() {
+		if in_string {
+			if escaped {
+				escaped = false;
+			} else if ch == '\\' {
+				escaped = true;
+			} else if ch == '"' {
+				in_string = false;
+			}
+			continue;
+		}
+		match ch {
+			'"' => in_string = true,
+			'(' | '[' | '{' => stack.push(ch),
+			')' if stack.pop() != Some('(') => return false,
+			']' if stack.pop() != Some('[') => return false,
+			'}' if stack.pop() != Some('{') => return false,
+			')' | ']' | '}' => {},
+			_ => {},
+		}
+	}
+	!in_string && stack.is_empty()
+}
+
+fn ensure_balanced(text: &str) -> crate::Result<()> {
+	if balanced_delimiters(text) {
+		Ok(())
+	} else {
+		Err(CodeEngineError::Edit("Clojure procedure would produce unbalanced forms".into()))
+	}
+}
+
+fn top_level_form_items(text: &str) -> Option<Vec<String>> {
+	let trimmed = text.trim();
+	let inner = trimmed.strip_prefix('(')?.strip_suffix(')')?.trim();
+	let mut items = Vec::new();
+	let mut start: Option<usize> = None;
+	let mut depth = 0_i32;
+	let mut in_string = false;
+	let mut escaped = false;
+	for (idx, ch) in inner.char_indices() {
+		if in_string {
+			if escaped {
+				escaped = false;
+			} else if ch == '\\' {
+				escaped = true;
+			} else if ch == '"' {
+				in_string = false;
+			}
+			continue;
+		}
+		match ch {
+			'"' => {
+				if start.is_none() {
+					start = Some(idx);
+				}
+				in_string = true;
+			},
+			'(' | '[' | '{' => {
+				if start.is_none() {
+					start = Some(idx);
+				}
+				depth += 1;
+			},
+			')' | ']' | '}' => depth -= 1,
+			ch if ch.is_whitespace() && depth == 0 => {
+				if let Some(item_start) = start.take() {
+					items.push(inner[item_start..idx].to_string());
+				}
+			},
+			_ => {
+				if start.is_none() {
+					start = Some(idx);
+				}
+			},
+		}
+	}
+	if let Some(item_start) = start {
+		items.push(inner[item_start..].to_string());
+	}
+	Some(items)
+}
+
+fn clojure_thread_first(text: &str, _options: &serde_json::Value) -> crate::Result<String> {
+	let items = top_level_form_items(text)
+		.ok_or_else(|| CodeEngineError::Edit("threadFirst requires a list form".into()))?;
+	if items.len() < 2 {
+		return Err(CodeEngineError::Edit("threadFirst requires at least function and value".into()));
+	}
+	let head = &items[0];
+	let value = &items[1];
+	let rest = if items.len() > 2 {
+		format!(" {}", items[2..].join(" "))
+	} else {
+		String::new()
+	};
+	let threaded = format!("(-> {value} ({head}{rest}))");
+	ensure_balanced(&threaded)?;
+	Ok(threaded)
+}
+
+fn clojure_thread_last(text: &str, _options: &serde_json::Value) -> crate::Result<String> {
+	let items = top_level_form_items(text)
+		.ok_or_else(|| CodeEngineError::Edit("threadLast requires a list form".into()))?;
+	if items.len() < 2 {
+		return Err(CodeEngineError::Edit("threadLast requires at least function and value".into()));
+	}
+	let head = &items[0];
+	let value = &items[1];
+	let rest = if items.len() > 2 {
+		format!(" {}", items[2..].join(" "))
+	} else {
+		String::new()
+	};
+	let threaded = format!("(->> {value} ({head}{rest}))");
+	ensure_balanced(&threaded)?;
+	Ok(threaded)
+}
+
+fn clojure_unthread(text: &str, _options: &serde_json::Value) -> crate::Result<String> {
+	let items = top_level_form_items(text)
+		.ok_or_else(|| CodeEngineError::Edit("unthread requires a thread form".into()))?;
+	if items.len() != 3 || (items[0] != "->" && items[0] != "->>") {
+		return Err(CodeEngineError::Edit(
+			"unthread requires (-> value (form ...)) or (->> value (form ...))".into(),
+		));
+	}
+	let call = top_level_form_items(&items[2])
+		.ok_or_else(|| CodeEngineError::Edit("unthread target must be a list form".into()))?;
+	let unthreaded = if items[0] == "->" {
+		let rest = if call.len() > 1 {
+			format!(" {}", call[1..].join(" "))
+		} else {
+			String::new()
+		};
+		format!("({} {}{})", call[0], items[1], rest)
+	} else {
+		let rest = if call.len() > 1 {
+			format!("{} ", call[1..].join(" "))
+		} else {
+			String::new()
+		};
+		format!("({} {}{})", call[0], rest, items[1])
+	};
+	ensure_balanced(&unthreaded)?;
+	Ok(unthreaded)
+}
+
+fn clojure_wrap_let(text: &str, options: &serde_json::Value) -> crate::Result<String> {
+	let binding = options
+		.get("binding")
+		.and_then(serde_json::Value::as_str)
+		.unwrap_or("value");
+	let value = options
+		.get("value")
+		.and_then(serde_json::Value::as_str)
+		.unwrap_or("nil");
+	let wrapped = format!("(let [{binding} {value}]\n  {text})");
+	ensure_balanced(&wrapped)?;
+	Ok(wrapped)
+}
+
+fn clojure_preserve_balanced(text: &str, _options: &serde_json::Value) -> crate::Result<String> {
+	ensure_balanced(text)?;
+	Ok(text.to_string())
+}
+
+fn clojure_sort_ns_requires(text: &str, _options: &serde_json::Value) -> crate::Result<String> {
+	ensure_balanced(text)?;
+	if text.contains("#?") || text.lines().any(|line| line.trim_start().starts_with(';')) {
+		return Ok(text.to_string());
+	}
+	let mut lines = text.lines().map(str::to_string).collect::<Vec<_>>();
+	let require_start = lines.iter().position(|line| line.contains("(:require"));
+	if let Some(start) = require_start {
+		let mut end = start + 1;
+		while end < lines.len() && lines[end].trim_start().starts_with('[') {
+			end += 1;
+		}
+		lines[start + 1..end].sort_by_key(|line| line.trim().to_string());
+		let sorted = lines.join("\n");
+		ensure_balanced(&sorted)?;
+		return Ok(sorted);
+	}
+	Ok(text.to_string())
+}
+
+fn clojure_procedure(
+	name: &str,
+	description: &str,
+	transform: fn(&str, &serde_json::Value) -> crate::Result<String>,
+) -> Procedure {
+	Procedure::builder()
+		.name(name)
+		.description(description)
+		.activate(|a| a.nodes(types(&["list_lit"])))
+		.transform(Transform::Custom(Arc::new(transform)))
+		.build()
+}
+
+fn clojure_procedures() -> HashMap<String, Procedure> {
+	HashMap::from([
+		(
+			"sortNsRequires".into(),
+			clojure_procedure(
+				"sortNsRequires",
+				"Sort safe namespace require forms",
+				clojure_sort_ns_requires,
+			),
+		),
+		(
+			"threadFirst".into(),
+			clojure_procedure(
+				"threadFirst",
+				"Convert a call to a thread-first form",
+				clojure_thread_first,
+			),
+		),
+		(
+			"threadLast".into(),
+			clojure_procedure(
+				"threadLast",
+				"Convert a call to a thread-last form",
+				clojure_thread_last,
+			),
+		),
+		(
+			"unthread".into(),
+			clojure_procedure(
+				"unthread",
+				"Convert a simple thread form back to a call",
+				clojure_unthread,
+			),
+		),
+		(
+			"wrapLet".into(),
+			clojure_procedure("wrapLet", "Wrap a form in a let binding", clojure_wrap_let),
+		),
+		(
+			"raiseForm".into(),
+			clojure_procedure(
+				"raiseForm",
+				"Validate and preserve a raised form",
+				clojure_preserve_balanced,
+			),
+		),
+		(
+			"slurpForward".into(),
+			clojure_procedure(
+				"slurpForward",
+				"Validate balanced form before slurp",
+				clojure_preserve_balanced,
+			),
+		),
+		(
+			"barfForward".into(),
+			clojure_procedure(
+				"barfForward",
+				"Validate balanced form before barf",
+				clojure_preserve_balanced,
+			),
+		),
+	])
+}
+
+fn clojure_declaration(head: &str, kind: &str) -> DeclarationPattern {
+	DeclarationPattern {
+		node_types:         vec!["list_lit".into()],
+		name:               NameExtractor::ListFormArg { head: head.into(), index: 1 },
+		kind:               kind.into(),
+		body:               BodyExtractor::AfterChild { child_type: "sym_lit".into() },
+		visibility:         None,
+		filter_names:       Some(vec![head.into()]),
+		name_from_arg:      false,
+		outline_enrichment: DeclarationOutlineEnrichment::default(),
+	}
+}
+
+fn clojure_profile() -> LanguageProfile {
+	let gd = generated::clojure::grammar();
+	LanguageProfile {
+		id:               LanguageId::new("clojure"),
+		capabilities:     semantic_capabilities(&[]),
+		extensions:       vec!["clj".into(), "cljs".into(), "cljc".into(), "bb".into()],
+		declarations:     vec![
+			clojure_declaration("ns", "namespace"),
+			clojure_declaration("def", "var"),
+			clojure_declaration("defonce", "var"),
+			clojure_declaration("defn", "function"),
+			clojure_declaration("defn-", "function"),
+			clojure_declaration("defmacro", "macro"),
+			clojure_declaration("defmulti", "multimethod"),
+			clojure_declaration("defmethod", "method"),
+			clojure_declaration("defprotocol", "protocol"),
+			clojure_declaration("defrecord", "record"),
+			clojure_declaration("deftype", "type"),
+			clojure_declaration("deftest", "test"),
+		],
+		class_like:       vec![],
+		imports:          vec![],
+		exports:          vec![],
+		references:       vec![ReferencePattern {
+			node_type:            "sym_lit".into(),
+			exclude_parent_types: vec!["str_lit".into(), "comment".into()],
+		}],
+		separators:       vec![" ".into(), "\n".into()],
+		embedded_regions: vec![],
+		procedures:       clojure_procedures(),
+		production_rules: gd.production_rules,
+		inverse_rules:    gd.inverse_rules,
+		all_types:        gd.all_types,
+		supertypes:       gd.supertypes,
+		ts_language:      tree_sitter_clojure::LANGUAGE.into(),
+	}
+}
+
+fn edn_profile() -> LanguageProfile {
+	let gd = generated::clojure::grammar();
+	LanguageProfile {
+		id:               LanguageId::new("edn"),
+		capabilities:     data_capabilities(),
+		extensions:       vec!["edn".into()],
+		declarations:     vec![],
+		class_like:       vec![],
+		imports:          vec![],
+		exports:          vec![],
+		references:       vec![],
+		separators:       vec![" ".into(), "\n".into()],
+		embedded_regions: vec![],
+		procedures:       HashMap::new(),
+		production_rules: gd.production_rules,
+		inverse_rules:    gd.inverse_rules,
+		all_types:        gd.all_types,
+		supertypes:       gd.supertypes,
+		ts_language:      tree_sitter_clojure::LANGUAGE.into(),
+	}
+}
+
 fn elixir_profile() -> LanguageProfile {
 	let gd = generated::elixir::grammar();
 	LanguageProfile {
@@ -1525,6 +1882,96 @@ mod tests {
 		parser.set_language(&org.ts_language).expect("org parser");
 		let tree = parser.parse("* TODO Heading\nBody\n", None).expect("tree");
 		assert_eq!(tree.root_node().kind(), "document");
+	}
+
+	#[test]
+	fn clojure_and_edn_profiles_have_expected_capabilities() {
+		let reg = LanguageRegistry::with_builtins().unwrap();
+		for extension in ["clj", "cljs", "cljc", "bb"] {
+			let path = Path::new("src/app/core").with_extension(extension);
+			assert_eq!(reg.match_path(&path).unwrap().id.as_str(), "clojure");
+		}
+		assert_eq!(
+			reg.match_path(Path::new("resources/config.edn"))
+				.unwrap()
+				.id
+				.as_str(),
+			"edn"
+		);
+		let clojure = reg.get(&LanguageId::new("clojure")).unwrap();
+		assert!(clojure.capabilities.outline);
+		assert!(clojure.capabilities.read);
+		assert!(clojure.capabilities.navigate);
+		assert!(clojure.capabilities.resolve);
+		assert!(clojure.capabilities.edit);
+		assert!(clojure.capabilities.graph);
+		assert!(clojure.production_rules.contains_key("list_lit"));
+		assert!(clojure.procedures.contains_key("sortNsRequires"));
+		assert!(clojure.procedures.contains_key("threadFirst"));
+		let edn = reg.get(&LanguageId::new("edn")).unwrap();
+		assert!(edn.capabilities.read);
+		assert!(edn.capabilities.navigate);
+		assert!(edn.capabilities.edit);
+		assert!(!edn.capabilities.graph);
+	}
+
+	#[test]
+	fn clojure_procedures_preserve_balanced_forms() {
+		assert_eq!(
+			clojure_thread_first("(map inc values)", &serde_json::Value::Null).unwrap(),
+			"(-> inc (map values))"
+		);
+		assert_eq!(
+			clojure_thread_last("(reduce + values)", &serde_json::Value::Null).unwrap(),
+			"(->> + (reduce values))"
+		);
+		assert_eq!(
+			clojure_unthread("(-> value (normalize trim))", &serde_json::Value::Null).unwrap(),
+			"(normalize value trim)"
+		);
+		assert_eq!(
+			clojure_wrap_let(
+				"(normalize value)",
+				&serde_json::json!({"binding":"name","value":"raw"})
+			)
+			.unwrap(),
+			"(let [name raw]\n  (normalize value))"
+		);
+		let ns_form =
+			"(ns app.core\n  (:require\n    [zeta.core :as z]\n    [app.db :refer [connect!]]))";
+		let sorted = clojure_sort_ns_requires(ns_form, &serde_json::Value::Null).unwrap();
+		assert!(sorted.find("[app.db").unwrap() < sorted.find("[zeta.core").unwrap());
+		assert!(balanced_delimiters(&sorted));
+	}
+
+	#[test]
+	fn clojure_profile_extracts_list_form_declarations() {
+		let reg = LanguageRegistry::with_builtins().unwrap();
+		let clojure = reg.get(&LanguageId::new("clojure")).unwrap();
+		let mut parser = tree_sitter::Parser::new();
+		parser
+			.set_language(&clojure.ts_language)
+			.expect("clojure parser");
+		let tree = parser
+			.parse("(ns app.core)\n(defn normalize-name [s] s)\n", None)
+			.expect("tree");
+		let root = tree.root_node();
+		let second = root.named_child(1).expect("defn form");
+		let decl = crate::outline::declaration_for(
+			clojure,
+			second,
+			"(ns app.core)\n(defn normalize-name [s] s)\n",
+		)
+		.expect("defn declaration");
+		assert_eq!(
+			crate::outline::declaration_name(
+				"(ns app.core)\n(defn normalize-name [s] s)\n",
+				second,
+				decl
+			)
+			.as_deref(),
+			Some("normalize-name")
+		);
 	}
 
 	#[test]
