@@ -36,6 +36,31 @@ pub fn apply_patches(
 	scope_end: usize,
 	patches: &[Patch],
 ) -> Result<Vec<TextEdit>> {
+	apply_patches_with_matcher(buffer, scope_start, scope_end, patches, MatchMode::IndentInsensitive)
+}
+
+pub fn apply_raw_text_patches(
+	buffer: &CodeBuffer,
+	scope_start: usize,
+	scope_end: usize,
+	patches: &[Patch],
+) -> Result<Vec<TextEdit>> {
+	apply_patches_with_matcher(buffer, scope_start, scope_end, patches, MatchMode::RawText)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MatchMode {
+	IndentInsensitive,
+	RawText,
+}
+
+fn apply_patches_with_matcher(
+	buffer: &CodeBuffer,
+	scope_start: usize,
+	scope_end: usize,
+	patches: &[Patch],
+	mode: MatchMode,
+) -> Result<Vec<TextEdit>> {
 	let source = buffer.source();
 	let scope_text = source
 		.get(scope_start..scope_end)
@@ -44,7 +69,10 @@ pub fn apply_patches(
 	let mut edits: Vec<TextEdit> = Vec::new();
 
 	for (idx, patch) in patches.iter().enumerate() {
-		let matches = find_indent_insensitive(scope_text, &patch.find);
+		let matches = match mode {
+			MatchMode::IndentInsensitive => find_indent_insensitive(scope_text, &patch.find),
+			MatchMode::RawText => find_raw_text(scope_text, &patch.find),
+		};
 		if matches.is_empty() {
 			let preview = scope_preview(scope_text, 20);
 			return Err(CodeEngineError::Edit(format!(
@@ -58,9 +86,14 @@ pub fn apply_patches(
 		for matched in selected {
 			let abs_start = scope_start + matched.offset;
 			let abs_end = scope_start + matched.offset + matched.length;
-			let matched_indent = first_line_indent(&source[abs_start..abs_end]);
-			let find_indent = first_line_indent(&patch.find);
-			let replacement = adjust_all_lines(&patch.replace, find_indent, matched_indent);
+			let replacement = match mode {
+				MatchMode::IndentInsensitive => {
+					let matched_indent = first_line_indent(&source[abs_start..abs_end]);
+					let find_indent = first_line_indent(&patch.find);
+					adjust_all_lines(&patch.replace, find_indent, matched_indent)
+				},
+				MatchMode::RawText => patch.replace.clone(),
+			};
 			edits.push(TextEdit {
 				start_byte:   abs_start,
 				old_end_byte: abs_end,
@@ -80,6 +113,15 @@ pub fn apply_patches(
 	Ok(edits)
 }
 
+fn find_raw_text(haystack: &str, needle: &str) -> Vec<Match> {
+	if needle.is_empty() {
+		return Vec::new();
+	}
+	haystack
+		.match_indices(needle)
+		.map(|(offset, text)| Match { offset, length: text.len() })
+		.collect()
+}
 fn select_matches<'a>(
 	patch_index: usize,
 	matches: &'a [Match],
@@ -176,6 +218,10 @@ fn find_indent_insensitive(haystack: &str, needle: &str) -> Vec<Match> {
 		let last_line_idx = start + needle_lines.len() - 1;
 		let match_end = line_starts[last_line_idx] + haystack_lines[last_line_idx].len();
 		results.push(Match { offset: match_start, length: match_end - match_start });
+	}
+
+	if results.is_empty() && needle_lines.len() == 1 {
+		return find_raw_text(haystack, needle);
 	}
 
 	results
@@ -321,5 +367,33 @@ mod tests {
 		}])
 		.expect_err("out of range occurrence");
 		assert!(err.to_string().contains("occurrence 5 out of range 1..=3"));
+	}
+
+	#[test]
+	fn apply_patches_falls_back_to_single_line_substring() {
+		let source = "(reject candidate \"live effects are prohibited\")\n";
+		let buffer = ts_buffer(source);
+		let edits = apply_patches(&buffer, 0, source.len(), &[Patch {
+			find:       "live effects are prohibited".into(),
+			replace:    "side effects are prohibited".into(),
+			occurrence: Occurrence::Unique,
+		}])
+		.expect("substring patch");
+		assert_eq!(edits.len(), 1);
+		assert_eq!(edits[0].new_text, "side effects are prohibited");
+	}
+
+	#[test]
+	fn apply_raw_text_patches_preserves_replacement_bytes() {
+		let source = "  alpha beta\n";
+		let buffer = ts_buffer(source);
+		let edits = apply_raw_text_patches(&buffer, 0, source.len(), &[Patch {
+			find:       "alpha".into(),
+			replace:    "x\ny".into(),
+			occurrence: Occurrence::Unique,
+		}])
+		.expect("raw patch");
+		assert_eq!(edits.len(), 1);
+		assert_eq!(edits[0].new_text, "x\ny");
 	}
 }

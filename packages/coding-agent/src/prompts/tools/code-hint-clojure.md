@@ -1,6 +1,7 @@
 Clojure code tool guidance:
-- Treat Clojure target IDs as fully-qualified vars: `src/app/core.clj::app.core/normalize-name`.
+- Clojure edit accepts both local target IDs (`src/app/core.clj::normalize-name`) and copied workspace/graph FQ vars (`src/app/core.clj::app.core/normalize-name`).
 - Prefer graph context before cross-file rename or impact work; aliases and `:refer` affect resolution.
-- Prefer form-level `code edit` operations and Clojure procedures for balanced forms; avoid text edits for paren-sensitive mutations unless native code edit cannot support the file.
-- Macro-generated code is statically incomplete. Report uncertainty instead of inventing generated vars or call edges.
-- EDN is data, not Clojure code: do not assume namespaces, vars, runtime evaluation, or graph semantics for `.edn` files.
+- Prefer semantic form navigation (`children`/`siblings`) over token-level node spelunking; let bindings, branch forms, map entries, and defn body forms are the useful units.
+- For scoped literal string changes, use `findAndReplace` for normal text or `rawTextReplace` for exact byte replacement inside a form.
+- Graph context keeps keyword refs but reports them separately as `Data keywords`; treat them as data coupling, not function calls.
+- EDN is data, not Clojure code: use data paths like `file.edn::[:books 0 :title]`; do not assume namespaces, vars, runtime evaluation, or graph semantics for `.edn` files.

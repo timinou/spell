@@ -1,0 +1,214 @@
+#+TITLE: [coding-agent] Make code undo diff work after auto-save
+#+STATE: DONE
+#+SESSION_ID: 14ca07298709faed
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-26T17-47-31-740Z_14ca07298709faed.jsonl]]
+#+CUSTOM_ID: BUG-319-coding-agent-make-code-undo-diff-work-af
+#+LAYER: code-tool
+
+* Initial Message
+
+this is in ~/code/ora/clojend's spell agent trying out the new clojure code tool affordances:
+
+ Q: does code work well + ergonomically for Clojure files?
+
+ A: mostly ✓, with sharp edges.
+
+ Tested against:
+ - src/clojend/ga/admission.clj
+ - test/fixtures/golden_books.edn
+
+ Ops exercised:
+ - code languages
+ - code outline
+ - code read
+ - code symbols
+ - code navigate
+ - code context
+ - code impact
+ - code edit
+ - code diff
+ - code undo
+ - code status
+
+ Findings:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Area                   │ Result                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Clojure support        │ ✓ clojure (clj, cljs, cljc, bb) supports                                     │
+ │ advertised             │ outline/read/navigate/resolve/edit/graph                                     │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Outline                │ ✓ good: found namespace + defns with line ranges                             │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ File-local symbols     │ ✓ good: lists namespace + functions                                          │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Workspace symbol       │ ✓ good: admit-candidate resolved to                                          │
+ │ lookup                 │ src/clojend/ga/admission.clj::clojend.ga.admission/admit-candidate           │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Function read          │ ✓ good at resolution:3; returns exact balanced form                          │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Graph context/impact   │ ✓ useful: found callers/callees/imported-by across tests + MCP tools         │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Edit                   │ ✓ works, but ergonomics mixed                                                │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Revert/undo            │ ✗ code undo had no effect after saved edit                                   │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Diff                   │ ? code diff showed 0 hunks despite the file being changed by code edit       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ EDN                    │ weak: outline on fixture returned 0 top; not much ergonomic value            │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Generated artifacts    │ ? graph ops created .spell/graph/workspace.bin; I removed it                 │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ Important friction:
+
+ 1. Target-ID inconsistency
+ code symbols reported:
+   ```text
+     src/clojend/ga/admission.clj::clojend.ga.admission/admit-candidate
+   ```
+   But code edit rejected that:
+   ```text
+     Symbol 'clojend.ga.admission/admit-candidate' not found.
+     Available: [clojend.ga.admission, render-candidate-source, readability-score, reject,
+ admit-candidate]
+   ```
+   Working target was:
+   ```text
+     src/clojend/ga/admission.clj::admit-candidate
+   ```
+   ∴ discoverability mismatch. The tool tells you to use FQ vars, then edit wants local names.
+ 2. findAndReplace needs exact scoped text
+ Replacing just:
+   ```clojure
+     "live effects are prohibited"
+   ```
+   failed, even though it existed in the scope. Full-line replacement worked.
+   ∴ substring replacement inside Clojure forms is not ergonomic.
+ 3. Navigation child/sibling behavior is not very useful
+ navigate children / siblings around a defn mostly surfaced defn token-level nodes, not semantically
+ useful form children.
+ 4. Context is powerful but noisy
+ code context returned real callers/callees, but also treated many local keywords as references:
+   ```text
+     :fitness
+     :readability
+     :analysis
+     :source
+     :accepted
+     ...
+   ```
+   ∴ useful for call graph, noisy for semantic references.
+
+ Verification:
+ - Temporary Clojure edit applied via code edit, then reverted via inverse code edit.
+ - git diff -- src/clojend/ga/admission.clj → empty.
+ - clojure -M:test:
+
+ ```text
+   Ran 27 tests containing 108 assertions.
+   0 failures, 0 errors.
+ ```
+
+ Repo status after test:
+ - No tracked source changes from this exercise.
+ - Existing unrelated untracked files remain:
+     - !tasks/...
+     - .cpcache/
+     - design/80-workbench-alpha.org
+     - specs/80-workbench-alpha.org
+
+ ∴ Verdict:
+
+ code is viable for Clojure structure-aware reading, symbol lookup, scoped edits, and graph exploration.
+ Not yet “smooth”: edit target IDs, substring replacement, undo/diff, and EDN ergonomics need work before
+ I’d call it reliably pleasant for daily Clojure refactors.
+
+
+please design together (ask me questions) to make this more ergonomic
+
+* Scope
+In scope: make `code undo`, `code redo`, and `code diff` observable and useful after the `CodeTool` auto-saves edits to disk. User contract: `code diff` shows unsaved buffer-vs-disk hunks when dirty plus uncommitted git working-tree diff for code-tool-edited files from journal/history, tagged by the editing agent/session. `code undo`/`code redo` must work after auto-save within the live managed buffer session.
+
+Out of scope: cross-restart persistent undo/redo containing full source contents. The existing journal stores attribution metadata, not full inverse patches; this plan must not silently introduce a source-content journal without an explicit privacy/security design. Cross-session attribution for diff labels is in scope via existing journal metadata.
+
+* Existing Patterns
+- TypeScript finalization: `packages/coding-agent/src/tools/code.ts`; `#finalizeEditExecution()` performs staged native edit, optional formatter, then `save`.
+- Native buffer save/edit: `crates/pi-natives/src/code_buffer.rs`; `execute_edit_command()` supports `saveMode: staged|auto`; `save` currently persists through `BufferRegistry::edit_transaction`.
+- Engine history: `crates/pi-code-engine/src/buffer.rs`; `History` tracks forwards/inverses, `saved_revision`, and session attribution; `CodeBuffer::save_with_watcher()` preserves history and marks saved, while `BufferRegistry::edit_transaction()` commits and closes the buffer.
+- Journal attribution: `crates/pi-code-engine/src/coord/journal.rs`; `JournalEntry` has `session_id`, `revision`, `parent_revision`, `code_paths`, `diff_hash`, `byte_len`.
+- Result formatting: `packages/coding-agent/src/tools/code-result.ts`; diff currently renders only “Unsaved diff ... (N hunks)” and undo/redo renders “had no effect” when native returns no entries.
+
+* Tests
+User workflows to cover first:
+1. `code edit` auto-saves a file; immediate `code undo` on that file changes the file back and reports applied entries.
+2. Immediate `code redo` reapplies the auto-saved edit and reports applied entries.
+3. `code diff` after auto-save no longer misleadingly says only `0 hunks`; it reports clean unsaved state and, when git working tree differs, shows persisted working-tree diff tagged with the last journal agent/session.
+4. If buffer is dirty from an unsaved operation, `code diff` shows unsaved hunks first and still includes persisted journal/git attribution separately.
+5. Undo/redo remain session-scoped: revisions from peer sessions are skipped according to existing `undo_scoped` design.
+6. If git is unavailable, diff still reports unsaved state and journal attribution without failing the command.
+
+Test files:
+- `packages/natives/test/code-buffer.test.ts`: native save/undo/redo after save preserves history and marks clean/dirty correctly.
+- `packages/coding-agent/test/tools/code.test.ts`: CodeTool-level auto-save edit → undo/redo/diff formatting with mocked native/journal/git payloads.
+- `crates/pi-code-engine/src/buffer.rs` unit tests for save preserving history if new engine method is added.
+
+** ITEM Write autosave history contract tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-319-coding-agent-make-code-undo-diff-work-af::autosave-history-tests
+:END:
+- Files: `packages/natives/test/code-buffer.test.ts`, `crates/pi-code-engine/src/buffer.rs`
+- Scenarios: workflows 1, 2, and 5. Tests must fail under current close-on-save behavior.
+
+** ITEM Preserve managed buffer history across save
+:PROPERTIES:
+:CUSTOM_ID: BUG-319-coding-agent-make-code-undo-diff-work-af::preserve-save-history
+:DEPENDS: BUG-319-coding-agent-make-code-undo-diff-work-af::autosave-history-tests
+:END:
+- Files: `crates/pi-code-engine/src/buffer.rs`, `crates/pi-natives/src/code_buffer.rs`
+- Implement a save path for managed buffers that persists current source, commits attribution/journal metadata, updates disk mtime, marks history saved, and does not discard forwards/inverses.
+- Keep peer conflict/external modification checks equivalent to current `edit_transaction` path.
+
+** ITEM Write diff attribution tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-319-coding-agent-make-code-undo-diff-work-af::diff-attribution-tests
+:DEPENDS: BUG-319-coding-agent-make-code-undo-diff-work-af::preserve-save-history
+:END:
+- Files: `packages/coding-agent/test/tools/code.test.ts`, optionally `packages/natives/test/code-buffer.test.ts`
+- Scenarios: workflows 3, 4, and 6. Mock or fixture git diff must prove persisted changes are visible after auto-save and tagged with session/revision/code paths.
+
+** ITEM Implement combined diff output
+:PROPERTIES:
+:CUSTOM_ID: BUG-319-coding-agent-make-code-undo-diff-work-af::combined-diff-output
+:DEPENDS: BUG-319-coding-agent-make-code-undo-diff-work-af::diff-attribution-tests
+:END:
+- Files: `packages/coding-agent/src/tools/code.ts`, `packages/coding-agent/src/tools/code-result.ts`, native journal access in `crates/pi-natives/src/code_buffer.rs` if needed.
+- `code diff` contract: section A = unsaved buffer-vs-disk hunks; section B = uncommitted git diff for the file when present; section C = latest code-tool journal entries with session IDs/code paths.
+- Use existing Bun `$`/git helper conventions in TS if git diff is implemented at the tool layer; avoid shelling from Rust unless no direct pattern exists.
+
+** ITEM Improve undo redo messaging
+:PROPERTIES:
+:CUSTOM_ID: BUG-319-coding-agent-make-code-undo-diff-work-af::undo-redo-messaging
+:DEPENDS: BUG-319-coding-agent-make-code-undo-diff-work-af::preserve-save-history
+:END:
+- Files: `packages/coding-agent/src/tools/code-result.ts`
+- Distinguish “no history for this session”, “peer revisions skipped”, and “nothing to redo” when native data allows it.
+
+* Implementation
+1. First fix native/engine save semantics so undo/redo after CodeTool auto-save has real state to operate on.
+2. Add journal-aware diff attribution without storing source contents in journal.
+3. Update result formatting to avoid plausible lies: `0 unsaved hunks` is acceptable only when persisted diff/attribution is shown separately.
+
+* Edge Cases
+- Save failure after staged edit must still surface as failure and leave mutation state truthful.
+- Formatting before save may add an extra revision; undo should revert the whole user-visible code edit transaction or clearly show multiple entries.
+- Peer session edits must not be undone by the current session.
+- Deleted or newly-created files need diff/undo behavior defined in tests.
+
+* Acceptance Criteria
+- The Clojure trial sequence `code edit` → `code undo` visibly reverts the saved change.
+- `code redo` reapplies it.
+- `code diff` after auto-save shows persisted working-tree diff and agent/session attribution when git has uncommitted changes.
+- No source-content journal is introduced without explicit design.
+
+NOTE [2026-04-26]: Implemented and verified by PLAN-283 completion.

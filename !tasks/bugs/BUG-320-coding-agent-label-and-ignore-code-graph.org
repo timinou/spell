@@ -1,0 +1,204 @@
+#+TITLE: [coding-agent] Label and ignore code graph cache artifacts
+#+STATE: DONE
+#+SESSION_ID: 14ca07298709faed
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-26T17-47-31-740Z_14ca07298709faed.jsonl]]
+#+CUSTOM_ID: BUG-320-coding-agent-label-and-ignore-code-graph
+#+LAYER: code-tool
+
+* Initial Message
+
+this is in ~/code/ora/clojend's spell agent trying out the new clojure code tool affordances:
+
+ Q: does code work well + ergonomically for Clojure files?
+
+ A: mostly ✓, with sharp edges.
+
+ Tested against:
+ - src/clojend/ga/admission.clj
+ - test/fixtures/golden_books.edn
+
+ Ops exercised:
+ - code languages
+ - code outline
+ - code read
+ - code symbols
+ - code navigate
+ - code context
+ - code impact
+ - code edit
+ - code diff
+ - code undo
+ - code status
+
+ Findings:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Area                   │ Result                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Clojure support        │ ✓ clojure (clj, cljs, cljc, bb) supports                                     │
+ │ advertised             │ outline/read/navigate/resolve/edit/graph                                     │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Outline                │ ✓ good: found namespace + defns with line ranges                             │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ File-local symbols     │ ✓ good: lists namespace + functions                                          │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Workspace symbol       │ ✓ good: admit-candidate resolved to                                          │
+ │ lookup                 │ src/clojend/ga/admission.clj::clojend.ga.admission/admit-candidate           │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Function read          │ ✓ good at resolution:3; returns exact balanced form                          │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Graph context/impact   │ ✓ useful: found callers/callees/imported-by across tests + MCP tools         │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Edit                   │ ✓ works, but ergonomics mixed                                                │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Revert/undo            │ ✗ code undo had no effect after saved edit                                   │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Diff                   │ ? code diff showed 0 hunks despite the file being changed by code edit       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ EDN                    │ weak: outline on fixture returned 0 top; not much ergonomic value            │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Generated artifacts    │ ? graph ops created .spell/graph/workspace.bin; I removed it                 │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ Important friction:
+
+ 1. Target-ID inconsistency
+ code symbols reported:
+   ```text
+     src/clojend/ga/admission.clj::clojend.ga.admission/admit-candidate
+   ```
+   But code edit rejected that:
+   ```text
+     Symbol 'clojend.ga.admission/admit-candidate' not found.
+     Available: [clojend.ga.admission, render-candidate-source, readability-score, reject,
+ admit-candidate]
+   ```
+   Working target was:
+   ```text
+     src/clojend/ga/admission.clj::admit-candidate
+   ```
+   ∴ discoverability mismatch. The tool tells you to use FQ vars, then edit wants local names.
+ 2. findAndReplace needs exact scoped text
+ Replacing just:
+   ```clojure
+     "live effects are prohibited"
+   ```
+   failed, even though it existed in the scope. Full-line replacement worked.
+   ∴ substring replacement inside Clojure forms is not ergonomic.
+ 3. Navigation child/sibling behavior is not very useful
+ navigate children / siblings around a defn mostly surfaced defn token-level nodes, not semantically
+ useful form children.
+ 4. Context is powerful but noisy
+ code context returned real callers/callees, but also treated many local keywords as references:
+   ```text
+     :fitness
+     :readability
+     :analysis
+     :source
+     :accepted
+     ...
+   ```
+   ∴ useful for call graph, noisy for semantic references.
+
+ Verification:
+ - Temporary Clojure edit applied via code edit, then reverted via inverse code edit.
+ - git diff -- src/clojend/ga/admission.clj → empty.
+ - clojure -M:test:
+
+ ```text
+   Ran 27 tests containing 108 assertions.
+   0 failures, 0 errors.
+ ```
+
+ Repo status after test:
+ - No tracked source changes from this exercise.
+ - Existing unrelated untracked files remain:
+     - !tasks/...
+     - .cpcache/
+     - design/80-workbench-alpha.org
+     - specs/80-workbench-alpha.org
+
+ ∴ Verdict:
+
+ code is viable for Clojure structure-aware reading, symbol lookup, scoped edits, and graph exploration.
+ Not yet “smooth”: edit target IDs, substring replacement, undo/diff, and EDN ergonomics need work before
+ I’d call it reliably pleasant for daily Clojure refactors.
+
+
+please design together (ask me questions) to make this more ergonomic
+
+* Scope
+In scope: make `.spell/graph` generated artifacts unsurprising. Keep project-local graph artifacts, but ensure they are ignored, status-labeled, and documented in code-tool output. Primary observation: graph ops created `.spell/graph/workspace.bin`; vector cache `.spell/graph/workspace-vectors.bin` is also possible and currently not fully surfaced.
+
+Out of scope: moving graph artifacts out of the repo, making graph indexing ephemeral, or changing org cache behavior except where shared cache status helpers make it unavoidable.
+
+* Existing Patterns
+- Graph cache creation: `crates/pi-natives/src/code_graph.rs`; `run_code_graph()` creates `CacheStore::new(root.join(".spell/graph"))` with `CACHE_NAME = "workspace"` and `VECTORS_CACHE_NAME = "workspace-vectors"`.
+- Cache abstraction: `crates/pi-workspace-cache/src/lib.rs`; `CacheStore::entry_path(name)` persists `<name>.bin`.
+- Status output: `crates/pi-natives/src/code_graph.rs`; `render_status()` computes graph `cache_status`, vector `semantic_status`, and `format_status()` prints graph status. Current output does not clearly identify artifact paths or gitignore expectation.
+- TS formatting: `packages/coding-agent/src/tools/code-result.ts`; `CodeGraphDetails` stores `cacheStatus`, `rebuilt`, `semanticStatus`, but graph content mostly returns native `details.output`.
+- `.gitignore` already contains an entry for graph `workspace.bin`; `workspace-vectors.bin` must be added if missing.
+
+* Tests
+User workflows to cover first:
+1. Running `code status` after graph indexing tells the user graph cache path, cache freshness, vector cache status, and whether rebuild happened.
+2. `.spell/graph/workspace.bin` and `.spell/graph/workspace-vectors.bin` are ignored by default.
+3. If vector cache is missing/stale/corrupt, status labels it without failing graph status.
+4. Graph context/impact output can include a concise cache status hint when rebuild occurs, but should not bury semantic results.
+5. No tracked source changes appear solely because graph cache was created.
+
+Test files:
+- `crates/pi-natives/src/code_graph.rs`: status formatting tests for artifact labels and vector states.
+- `packages/coding-agent/test/tools/code.test.ts`: if TS formatter adds status labels around graph output.
+- `.gitignore`: static verification by test or checklist.
+
+** ITEM Write graph artifact status tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-320-coding-agent-label-and-ignore-code-graph::graph-artifact-tests
+:END:
+- Files: `crates/pi-natives/src/code_graph.rs`, optionally `packages/coding-agent/test/tools/code.test.ts`
+- Scenarios: workflows 1, 3, and 4. Tests assert artifact path/status labels.
+
+** ITEM Add vector cache ignore entry
+:PROPERTIES:
+:CUSTOM_ID: BUG-320-coding-agent-label-and-ignore-code-graph::graph-gitignore
+:DEPENDS: BUG-320-coding-agent-label-and-ignore-code-graph::graph-artifact-tests
+:END:
+- File: `.gitignore`
+- Add `.spell/graph/workspace-vectors.bin` and temporary vector cache if needed (`workspace-vectors.bin.tmp`) without removing existing ignores.
+
+** ITEM Surface cache artifact labels
+:PROPERTIES:
+:CUSTOM_ID: BUG-320-coding-agent-label-and-ignore-code-graph::graph-status-labels
+:DEPENDS: BUG-320-coding-agent-label-and-ignore-code-graph::graph-artifact-tests
+:END:
+- Files: `crates/pi-natives/src/code_graph.rs`, `packages/coding-agent/src/tools/code-result.ts` only if native result metadata is insufficient.
+- `status` output should include `Artifacts: .spell/graph/workspace.bin, .spell/graph/workspace-vectors.bin` and semantic vector state.
+- Graph commands that rebuild should expose `Cache: stale|missing|fresh`, `Rebuilt: yes|no`, and semantic status either in details or concise footer.
+
+** ITEM Update code graph guidance
+:PROPERTIES:
+:CUSTOM_ID: BUG-320-coding-agent-label-and-ignore-code-graph::graph-artifact-docs
+:DEPENDS: BUG-320-coding-agent-label-and-ignore-code-graph::graph-status-labels BUG-320-coding-agent-label-and-ignore-code-graph::graph-gitignore
+:END:
+- Files: `packages/coding-agent/src/prompts/tools/code.md` or a focused code graph hint if one exists.
+- Explain `.spell/graph` artifacts are generated cache files, ignored, safe to remove, and rebuilt automatically.
+
+* Implementation
+1. Add tests around status output and gitignore expectation.
+2. Add missing ignore entries.
+3. Update native status formatting and optional TS graph formatter.
+4. Keep graph artifacts project-local per user decision.
+
+* Edge Cases
+- Missing `.spell/graph` dir should render clear `missing` status.
+- Corrupt vector cache must report corrupt state without crashing status.
+- Rebuild failures must still return the true error.
+- Do not hide actual graph output behind artifact metadata.
+
+* Acceptance Criteria
+- Users understand why `.spell/graph/workspace*.bin` exists.
+- Both graph cache binaries are ignored.
+- `code status` labels graph/vector cache state and artifact path.
+
+NOTE [2026-04-26]: Implemented and verified by PLAN-283 completion.

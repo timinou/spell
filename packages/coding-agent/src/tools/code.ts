@@ -302,7 +302,7 @@ function shouldCheckBufferFreshness(command: string, isCreate: boolean): boolean
 
 const codeActionSchema = Type.Object({
 	kind: Type.String({
-		description: `			Action kind: write | findAndReplace | wrap | rename | delete | insertBefore | insertAfter | splice | move | clone | transpose | renameClassToken | renameIdToken | renameCustomProperty | removeDeadStyle | promote | demote | replaceCodeBlock`,
+		description: `			Action kind: write | findAndReplace | rawTextReplace | wrap | rename | delete | insertBefore | insertAfter | splice | move | clone | transpose | renameClassToken | renameIdToken | renameCustomProperty | removeDeadStyle | promote | demote | replaceCodeBlock`,
 	}),
 	scope: Type.Optional(Type.String({ description: "Write scope: target | body" })),
 	content: Type.Optional(

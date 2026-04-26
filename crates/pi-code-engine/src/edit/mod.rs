@@ -13,7 +13,7 @@ mod wrap;
 pub use body::{ReplacePolicy, replace_body, replace_body_safe};
 pub use clone::clone_node;
 pub use drag::{DragDirection, drag_node};
-pub use patch::{Occurrence, Patch, apply_patches};
+pub use patch::{Occurrence, Patch, apply_patches, apply_raw_text_patches};
 pub use rename::rename_symbol;
 pub use replace::{
 	insert_after, insert_after_symbol, insert_before, insert_before_symbol, kill_node, replace_node,

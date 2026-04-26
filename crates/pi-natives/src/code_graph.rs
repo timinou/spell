@@ -483,8 +483,9 @@ fn format_status(status: &GraphStatus, cache_status: &str, rebuilt: bool) -> Str
 		.join(", ");
 	let rebuild_line = if rebuilt { "yes" } else { "no" };
 	format!(
-		"Code graph status\nRoot: {}\nCache: {cache_status}\nRebuilt: {rebuild_line}\nFiles: \
-		 {}\nSymbols: {}\nEdges: {}\nGit HEAD: {}\nLanguages: {}",
+		"Code graph status\nRoot: {}\nCache: {cache_status} (generated \
+		 .spell/graph/*.bin)\nRebuilt: {rebuild_line}\nFiles: {}\nSymbols: {}\nEdges: {}\nGit HEAD: \
+		 {}\nLanguages: {}",
 		status.root.display(),
 		status.file_count,
 		status.symbol_count,
@@ -507,10 +508,10 @@ fn format_context(result: &GraphContextResult, limit: usize) -> String {
 		result.target.line,
 		result.target.column
 	)];
-	append_section(&mut sections, "Callers", &result.callers, limit);
+	append_context_section(&mut sections, "Callers", &result.callers, limit);
 	append_section(&mut sections, "Callees", &result.callees, limit);
-	append_section(&mut sections, "References", &result.references, limit);
-	append_section(&mut sections, "Referenced by", &result.referenced_by, limit);
+	append_context_section(&mut sections, "References", &result.references, limit);
+	append_context_section(&mut sections, "Referenced by", &result.referenced_by, limit);
 	append_section(&mut sections, "Imports", &result.imports, limit);
 	append_section(&mut sections, "Imported by", &result.imported_by, limit);
 	append_section(&mut sections, "Inherits", &result.inherits, limit);
@@ -653,6 +654,25 @@ fn format_search_with_reason(mut output: String, reason: &str) -> String {
 	output
 }
 
+fn append_context_section(
+	sections: &mut Vec<String>,
+	title: &str,
+	items: &[GraphNodeSummary],
+	limit: usize,
+) {
+	let semantic = items
+		.iter()
+		.filter(|item| !item.kind.eq_ignore_ascii_case("keyword"))
+		.cloned()
+		.collect::<Vec<_>>();
+	let keywords = items
+		.iter()
+		.filter(|item| item.kind.eq_ignore_ascii_case("keyword"))
+		.cloned()
+		.collect::<Vec<_>>();
+	append_section(sections, title, &semantic, limit);
+	append_section(sections, "Data keywords", &keywords, limit);
+}
 fn append_section(
 	sections: &mut Vec<String>,
 	title: &str,
@@ -855,6 +875,54 @@ mod tests {
 		let _ = fs::remove_dir_all(root);
 	}
 
+	#[test]
+	fn status_labels_graph_cache_as_generated_artifact() {
+		let root = fixture_root("status-cache-label");
+		run_fixture_command(&root, "index", None, None).expect("graph index should succeed");
+		let result = run_fixture_command(&root, "status", None, None).expect("status should succeed");
+		assert!(
+			result.output.contains("generated .spell/graph/*.bin"),
+			"status should label graph cache artifacts: {}",
+			result.output
+		);
+		assert!(
+			root.join(".spell/graph/workspace.bin").exists(),
+			"graph index should persist generated workspace cache"
+		);
+		let _ = fs::remove_dir_all(root);
+	}
+
+	#[test]
+	fn context_sections_clojure_keywords_as_data_keywords() {
+		let root = fixture_root("clojure-keywords");
+		fs::write(
+			root.join("src/events.clj"),
+			"(ns app.events)\n(defn accept [candidate]\n  {:accepted true :source (:source \
+			 candidate)})\n",
+		)
+		.expect("clojure fixture");
+		run_fixture_command(&root, "index", None, None).expect("graph index should succeed");
+		let result = run_code_graph(
+			CodeGraphTaskOptions {
+				command:  "context".into(),
+				root:     Some(root.to_string_lossy().into_owned()),
+				file:     None,
+				symbol:   Some("accept".into()),
+				query:    None,
+				depth:    None,
+				limit:    None,
+				semantic: None,
+			},
+			CancelToken::default(),
+		)
+		.expect("context should succeed");
+		assert!(
+			result.output.contains("Data keywords"),
+			"context should section keyword references: {}",
+			result.output
+		);
+		let _ = fs::remove_dir_all(root);
+	}
 	#[test]
 	fn index_without_semantic_leaves_vector_cache_absent() {
 		let root = fixture_root("plain-index");

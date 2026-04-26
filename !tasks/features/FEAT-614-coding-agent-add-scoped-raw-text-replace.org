@@ -1,0 +1,207 @@
+#+TITLE: [coding-agent] Add scoped raw text replacement ergonomics
+#+STATE: DONE
+#+SESSION_ID: 14ca07298709faed
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-26T17-47-31-740Z_14ca07298709faed.jsonl]]
+#+CUSTOM_ID: FEAT-614-coding-agent-add-scoped-raw-text-replace
+#+LAYER: code-tool
+
+* Initial Message
+
+this is in ~/code/ora/clojend's spell agent trying out the new clojure code tool affordances:
+
+ Q: does code work well + ergonomically for Clojure files?
+
+ A: mostly ✓, with sharp edges.
+
+ Tested against:
+ - src/clojend/ga/admission.clj
+ - test/fixtures/golden_books.edn
+
+ Ops exercised:
+ - code languages
+ - code outline
+ - code read
+ - code symbols
+ - code navigate
+ - code context
+ - code impact
+ - code edit
+ - code diff
+ - code undo
+ - code status
+
+ Findings:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Area                   │ Result                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Clojure support        │ ✓ clojure (clj, cljs, cljc, bb) supports                                     │
+ │ advertised             │ outline/read/navigate/resolve/edit/graph                                     │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Outline                │ ✓ good: found namespace + defns with line ranges                             │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ File-local symbols     │ ✓ good: lists namespace + functions                                          │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Workspace symbol       │ ✓ good: admit-candidate resolved to                                          │
+ │ lookup                 │ src/clojend/ga/admission.clj::clojend.ga.admission/admit-candidate           │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Function read          │ ✓ good at resolution:3; returns exact balanced form                          │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Graph context/impact   │ ✓ useful: found callers/callees/imported-by across tests + MCP tools         │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Edit                   │ ✓ works, but ergonomics mixed                                                │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Revert/undo            │ ✗ code undo had no effect after saved edit                                   │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Diff                   │ ? code diff showed 0 hunks despite the file being changed by code edit       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ EDN                    │ weak: outline on fixture returned 0 top; not much ergonomic value            │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Generated artifacts    │ ? graph ops created .spell/graph/workspace.bin; I removed it                 │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ Important friction:
+
+ 1. Target-ID inconsistency
+ code symbols reported:
+   ```text
+     src/clojend/ga/admission.clj::clojend.ga.admission/admit-candidate
+   ```
+   But code edit rejected that:
+   ```text
+     Symbol 'clojend.ga.admission/admit-candidate' not found.
+     Available: [clojend.ga.admission, render-candidate-source, readability-score, reject,
+ admit-candidate]
+   ```
+   Working target was:
+   ```text
+     src/clojend/ga/admission.clj::admit-candidate
+   ```
+   ∴ discoverability mismatch. The tool tells you to use FQ vars, then edit wants local names.
+ 2. findAndReplace needs exact scoped text
+ Replacing just:
+   ```clojure
+     "live effects are prohibited"
+   ```
+   failed, even though it existed in the scope. Full-line replacement worked.
+   ∴ substring replacement inside Clojure forms is not ergonomic.
+ 3. Navigation child/sibling behavior is not very useful
+ navigate children / siblings around a defn mostly surfaced defn token-level nodes, not semantically
+ useful form children.
+ 4. Context is powerful but noisy
+ code context returned real callers/callees, but also treated many local keywords as references:
+   ```text
+     :fitness
+     :readability
+     :analysis
+     :source
+     :accepted
+     ...
+   ```
+   ∴ useful for call graph, noisy for semantic references.
+
+ Verification:
+ - Temporary Clojure edit applied via code edit, then reverted via inverse code edit.
+ - git diff -- src/clojend/ga/admission.clj → empty.
+ - clojure -M:test:
+
+ ```text
+   Ran 27 tests containing 108 assertions.
+   0 failures, 0 errors.
+ ```
+
+ Repo status after test:
+ - No tracked source changes from this exercise.
+ - Existing unrelated untracked files remain:
+     - !tasks/...
+     - .cpcache/
+     - design/80-workbench-alpha.org
+     - specs/80-workbench-alpha.org
+
+ ∴ Verdict:
+
+ code is viable for Clojure structure-aware reading, symbol lookup, scoped edits, and graph exploration.
+ Not yet “smooth”: edit target IDs, substring replacement, undo/diff, and EDN ergonomics need work before
+ I’d call it reliably pleasant for daily Clojure refactors.
+
+
+please design together (ask me questions) to make this more ergonomic
+
+* Scope
+In scope: improve scoped edit ergonomics for code files by supporting explicit `rawTextReplace` and a safe `findAndReplace` fallback for literal substring replacement inside a resolved target range. Primary regression: in Clojure, replacing only the string literal text `"live effects are prohibited"` inside a function scope failed even though full-line replacement worked.
+
+Out of scope: unbounded whole-repo text replacement, regex replacement, semantic Clojure refactors beyond existing form-safe procedures, or making raw text edits bypass structural validation. Raw replacement must remain scoped to resolved target ranges and must preserve parser validity where the file has a semantic profile.
+
+* Existing Patterns
+- Tool schema/normalization: `packages/coding-agent/src/tools/code.ts`; `codeActionSchema` lists action kinds and `normalizeOperations()` sends `kind`, `find`, `content`, `occurrence` to native.
+- Native action dispatch: `crates/pi-natives/src/code_buffer.rs`; `single_action()` dispatches `findAndReplace` to `apply_patches(buffer, start_byte, end_byte, &[Patch { ... }])` using `target_range()`.
+- Patch safety: native patch application is already range-bounded and supports public occurrence selectors (`first`, `last`, `all`, numeric, unique). Tests exist around duplicate scoped `findAndReplace` matches in `packages/natives/test/code-buffer.test.ts`.
+- Failure classification: `packages/coding-agent/src/tools/code-result.ts` classifies scope and execution errors. Do not hide real native failures.
+
+* Tests
+User workflows to cover first:
+1. Agent replaces a string literal substring inside a Clojure `defn` with `findAndReplace`; it succeeds without requiring the full source line.
+2. Agent explicitly uses `rawTextReplace` inside a Clojure function target; it succeeds and target summary shows `[rawTextReplace]`.
+3. Duplicate substring matches require `occurrence` exactly as `findAndReplace` does.
+4. `rawTextReplace` cannot edit outside the target declaration span.
+5. Replacement that makes a semantic file structurally invalid is rejected and leaves disk unchanged.
+6. TS action normalization forwards `rawTextReplace` correctly, preserving array-to-string normalization for `find`/`content`.
+
+Test files:
+- `packages/natives/test/code-buffer.test.ts`: native Clojure fixture tests for substring, raw action, duplicates, out-of-scope, invalid syntax rollback.
+- `packages/coding-agent/test/tools/code.test.ts`: schema/normalization/formatting test for `rawTextReplace`.
+- Add a focused Rust unit test if `apply_patches` is refactored into a helper.
+
+** ITEM Write scoped text replacement tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-614-coding-agent-add-scoped-raw-text-replace::raw-text-tests
+:END:
+- Files: `packages/natives/test/code-buffer.test.ts`, `packages/coding-agent/test/tools/code.test.ts`
+- Scenarios: workflows 1-6 above. Tests must prove substring behavior inside Clojure target scope, not only TypeScript.
+
+** ITEM Implement rawTextReplace action
+:PROPERTIES:
+:CUSTOM_ID: FEAT-614-coding-agent-add-scoped-raw-text-replace::raw-text-action
+:DEPENDS: FEAT-614-coding-agent-add-scoped-raw-text-replace::raw-text-tests
+:END:
+- Files: `packages/coding-agent/src/tools/code.ts`, `packages/natives/src/code-buffer/types.ts`, `crates/pi-natives/src/code_buffer.rs`
+- Add action kind `rawTextReplace` with same `find`, `content`, `occurrence` inputs as `findAndReplace`.
+- Implementation should use target range + patch application, but label action as raw text for result summaries.
+
+** ITEM Add findAndReplace literal fallback
+:PROPERTIES:
+:CUSTOM_ID: FEAT-614-coding-agent-add-scoped-raw-text-replace::find-replace-fallback
+:DEPENDS: FEAT-614-coding-agent-add-scoped-raw-text-replace::raw-text-action
+:END:
+- Files: `crates/pi-natives/src/code_buffer.rs` and any helper module where patching lives.
+- If structural/path-sensitive matching fails but the literal `find` exists inside the resolved byte range, retry as scoped raw text replacement.
+- Fallback must not cross target boundaries and must still run structural validity checks after applying edits.
+- Error output should explain whether no literal match exists or replacement would invalidate syntax.
+
+** ITEM Update tool docs and hints
+:PROPERTIES:
+:CUSTOM_ID: FEAT-614-coding-agent-add-scoped-raw-text-replace::raw-text-docs
+:DEPENDS: FEAT-614-coding-agent-add-scoped-raw-text-replace::find-replace-fallback
+:END:
+- Files: `packages/coding-agent/src/prompts/tools/code.md`, `packages/coding-agent/src/prompts/tools/code-hint-clojure.md`
+- Guidance: use form-safe actions for paren-sensitive changes; use `rawTextReplace` for safe literal edits inside a known scope.
+
+* Implementation
+1. Add failing tests for raw action + substring fallback.
+2. Extend TypeScript schema/types.
+3. Implement native action handling once, using existing occurrence semantics.
+4. Ensure edit result target summaries list the action actually requested.
+5. Keep validation/rollback behavior identical to other native edit batches.
+
+* Edge Cases
+- Empty `find` remains invalid.
+- Replacement text containing unmatched parens in Clojure fails structurally unless the file already has parse errors and existing policy allows it.
+- `occurrence: all` can create multiple edits; order must avoid byte-offset drift.
+- Raw text fallback must not trigger for action kinds other than `findAndReplace`.
+
+* Acceptance Criteria
+- Clojure string literal scoped replacement succeeds ergonomically.
+- `rawTextReplace` is discoverable in schema/docs and result summaries.
+- Duplicate, out-of-scope, and invalid replacements fail truthfully with no partial disk writes.
+
+NOTE [2026-04-26]: Implemented and verified by PLAN-283 completion.

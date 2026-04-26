@@ -1,0 +1,197 @@
+#+TITLE: [coding-agent] Accept qualified code target IDs everywhere
+#+STATE: DONE
+#+SESSION_ID: 14ca07298709faed
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-26T17-47-31-740Z_14ca07298709faed.jsonl]]
+#+CUSTOM_ID: BUG-318-coding-agent-accept-qualified-code-targe
+#+LAYER: code-tool
+
+* Initial Message
+
+this is in ~/code/ora/clojend's spell agent trying out the new clojure code tool affordances:
+
+ Q: does code work well + ergonomically for Clojure files?
+
+ A: mostly ✓, with sharp edges.
+
+ Tested against:
+ - src/clojend/ga/admission.clj
+ - test/fixtures/golden_books.edn
+
+ Ops exercised:
+ - code languages
+ - code outline
+ - code read
+ - code symbols
+ - code navigate
+ - code context
+ - code impact
+ - code edit
+ - code diff
+ - code undo
+ - code status
+
+ Findings:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Area                   │ Result                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Clojure support        │ ✓ clojure (clj, cljs, cljc, bb) supports                                     │
+ │ advertised             │ outline/read/navigate/resolve/edit/graph                                     │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Outline                │ ✓ good: found namespace + defns with line ranges                             │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ File-local symbols     │ ✓ good: lists namespace + functions                                          │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Workspace symbol       │ ✓ good: admit-candidate resolved to                                          │
+ │ lookup                 │ src/clojend/ga/admission.clj::clojend.ga.admission/admit-candidate           │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Function read          │ ✓ good at resolution:3; returns exact balanced form                          │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Graph context/impact   │ ✓ useful: found callers/callees/imported-by across tests + MCP tools         │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Edit                   │ ✓ works, but ergonomics mixed                                                │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Revert/undo            │ ✗ code undo had no effect after saved edit                                   │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Diff                   │ ? code diff showed 0 hunks despite the file being changed by code edit       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ EDN                    │ weak: outline on fixture returned 0 top; not much ergonomic value            │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Generated artifacts    │ ? graph ops created .spell/graph/workspace.bin; I removed it                 │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ Important friction:
+
+ 1. Target-ID inconsistency
+ code symbols reported:
+   ```text
+     src/clojend/ga/admission.clj::clojend.ga.admission/admit-candidate
+   ```
+   But code edit rejected that:
+   ```text
+     Symbol 'clojend.ga.admission/admit-candidate' not found.
+     Available: [clojend.ga.admission, render-candidate-source, readability-score, reject,
+ admit-candidate]
+   ```
+   Working target was:
+   ```text
+     src/clojend/ga/admission.clj::admit-candidate
+   ```
+   ∴ discoverability mismatch. The tool tells you to use FQ vars, then edit wants local names.
+ 2. findAndReplace needs exact scoped text
+ Replacing just:
+   ```clojure
+     "live effects are prohibited"
+   ```
+   failed, even though it existed in the scope. Full-line replacement worked.
+   ∴ substring replacement inside Clojure forms is not ergonomic.
+ 3. Navigation child/sibling behavior is not very useful
+ navigate children / siblings around a defn mostly surfaced defn token-level nodes, not semantically
+ useful form children.
+ 4. Context is powerful but noisy
+ code context returned real callers/callees, but also treated many local keywords as references:
+   ```text
+     :fitness
+     :readability
+     :analysis
+     :source
+     :accepted
+     ...
+   ```
+   ∴ useful for call graph, noisy for semantic references.
+
+ Verification:
+ - Temporary Clojure edit applied via code edit, then reverted via inverse code edit.
+ - git diff -- src/clojend/ga/admission.clj → empty.
+ - clojure -M:test:
+
+ ```text
+   Ran 27 tests containing 108 assertions.
+   0 failures, 0 errors.
+ ```
+
+ Repo status after test:
+ - No tracked source changes from this exercise.
+ - Existing unrelated untracked files remain:
+     - !tasks/...
+     - .cpcache/
+     - design/80-workbench-alpha.org
+     - specs/80-workbench-alpha.org
+
+ ∴ Verdict:
+
+ code is viable for Clojure structure-aware reading, symbol lookup, scoped edits, and graph exploration.
+ Not yet “smooth”: edit target IDs, substring replacement, undo/diff, and EDN ergonomics need work before
+ I’d call it reliably pleasant for daily Clojure refactors.
+
+
+please design together (ask me questions) to make this more ergonomic
+
+* Scope
+In scope: make file-scoped `code` commands accept both local declaration IDs and graph/workspace fully-qualified IDs while continuing to display local IDs in file-local output. Primary regression: Clojure workspace lookup can return `src/clojend/ga/admission.clj::clojend.ga.admission/admit-candidate`, but `code edit` currently resolves only `src/clojend/ga/admission.clj::admit-candidate` and reports `Symbol 'clojend.ga.admission/admit-candidate' not found. Available: [...]`.
+
+Out of scope: changing graph target IDs, changing user-visible outline IDs to fully-qualified forms, adding compatibility shims that preserve two canonical representations. The chosen representation remains local display + permissive command input.
+
+* Existing Patterns
+- TypeScript tool entry: `packages/coding-agent/src/tools/code.ts`; `parseTargetId(targetId)` splits `<file>::<symbol>`, `normalizeOperations()` forwards target IDs to native buffer, file commands route through `executeCodeBuffer`.
+- Native file commands: `crates/pi-natives/src/code_buffer.rs`; `parse_target_id()`, `resolve_target_id()`, `file_target_id_for_path()`, `symbol_target_id()`.
+- Symbol resolver: `crates/pi-code-engine/src/resolve.rs`; `resolve_symbol(buffer, profile, symbol)` currently matches declaration names and dotted members, then errors with available local names.
+- Clojure profile: `crates/pi-code-engine/src/language/mod.rs`; Clojure declarations are local names extracted from list forms (`defn`, `ns`, etc.). Graph qualified names are produced separately in `crates/pi-code-graph/src/language/clojure.rs`.
+
+* Tests
+User workflows to cover first:
+1. Agent copies a workspace symbol result `src/app/core.clj::app.core/normalize-name` into `code edit`; edit succeeds and target summary displays local `src/app/core.clj::normalize-name` or otherwise makes accepted alias obvious.
+2. Agent uses local `src/app/core.clj::normalize-name`; edit still succeeds.
+3. Agent uses namespace target `src/app/core.clj::app.core`; namespace declaration resolves when local `app.core` exists.
+4. Non-Clojure dotted member target IDs continue to resolve unchanged (`Class.method`, Typst names, Markdown headings).
+5. Invalid qualified symbols still fail truthfully with available local names plus an alias hint, not a silent fallback.
+
+Test files:
+- `packages/natives/test/code-buffer.test.ts`: add native acceptance tests for Clojure fully-qualified var and namespace target IDs.
+- `packages/coding-agent/test/tools/code.test.ts`: add normalization/formatting tests proving the TS tool accepts FQ target IDs without changing display defaults.
+- Existing Rust resolver tests in `crates/pi-code-engine/src/resolve.rs` must remain passing.
+
+** ITEM Add qualified target fixtures and failing tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-318-coding-agent-accept-qualified-code-targe::target-id-tests
+:END:
+- Files: `packages/natives/test/code-buffer.test.ts`, `packages/coding-agent/test/tools/code.test.ts`
+- Scenarios: workflows 1-5 above. Tests must initially fail on current resolver behavior for Clojure FQ IDs.
+
+** ITEM Implement language-aware target alias resolution
+:PROPERTIES:
+:CUSTOM_ID: BUG-318-coding-agent-accept-qualified-code-targe::target-id-aliases
+:DEPENDS: BUG-318-coding-agent-accept-qualified-code-targe::target-id-tests
+:END:
+- Files: `crates/pi-natives/src/code_buffer.rs`, optionally `crates/pi-code-engine/src/resolve.rs` if aliasing belongs closer to invariant.
+- Add a single canonicalization path used by edit/navigate/reference symbol resolution, not ad hoc Clojure-only patches in every command.
+- For Clojure: accept `<namespace>/<var>` by trying direct symbol first, then local segment after `/`; accept namespace FQ when it equals a local namespace declaration.
+- Preserve dotted member semantics for existing languages.
+
+** ITEM Update code tool prompt guidance
+:PROPERTIES:
+:CUSTOM_ID: BUG-318-coding-agent-accept-qualified-code-targe::target-id-guidance
+:DEPENDS: BUG-318-coding-agent-accept-qualified-code-targe::target-id-aliases
+:END:
+- Files: `packages/coding-agent/src/prompts/tools/code.md`, `packages/coding-agent/src/prompts/tools/code-hint-clojure.md`
+- State contract: file-local output is concise/local; commands accept either local or FQ target IDs copied from workspace lookup.
+
+* Implementation
+1. Add tests before implementation.
+2. Implement resolver aliasing at native/code-engine boundary so all file-scoped command paths benefit.
+3. Keep result formatting local-first; do not make graph output local-only.
+4. Improve not-found diagnostics with `Tried aliases: [...]` only when aliases were considered.
+
+* Edge Cases
+- Clojure names containing `/` that are not namespace-qualified must not misresolve silently.
+- Multiple local declarations with same name still produce ambiguity errors.
+- `::` remains the file/symbol separator; EDN target paths introduced separately must not conflict.
+- Relative roots passed through `root` must still resolve file paths before aliasing symbols.
+
+* Acceptance Criteria
+- Copy-pasting a Clojure workspace target ID into `code edit` works.
+- Local target IDs continue to work.
+- Existing TS/Rust/Markdown/Typst target tests pass.
+- Error messages disclose tried aliases when FQ input fails.
+
+NOTE [2026-04-26]: Implemented and verified by PLAN-283 completion.
