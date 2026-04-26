@@ -28,6 +28,14 @@ pub enum SymbolKind {
 	Enum,
 	Module,
 	Macro,
+	Namespace,
+	Var,
+	Protocol,
+	Record,
+	Multimethod,
+	Test,
+	Spec,
+	Keyword,
 	Template,
 	Element,
 	CssRule,
@@ -67,6 +75,13 @@ pub enum EdgeKind {
 	Inherits,
 	Renders,
 	Styles,
+	Requires,
+	Refers,
+	Aliases,
+	Implements,
+	Dispatches,
+	Tests,
+	UsesKeyword,
 	TypeImports,
 	TypeParameterOf,
 }
@@ -172,5 +187,61 @@ impl CodeGraph {
 impl From<PersistedCodeGraph> for CodeGraph {
 	fn from(value: PersistedCodeGraph) -> Self {
 		Self::new(value)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn clojure_symbol_and_edge_kinds_serialize_stably() {
+		let symbol_kinds = [
+			SymbolKind::Namespace,
+			SymbolKind::Var,
+			SymbolKind::Protocol,
+			SymbolKind::Record,
+			SymbolKind::Multimethod,
+			SymbolKind::Test,
+			SymbolKind::Spec,
+			SymbolKind::Keyword,
+		];
+		let encoded = serde_json::to_value(symbol_kinds).expect("symbol kinds serialize");
+		assert_eq!(
+			encoded,
+			serde_json::json!([
+				"Namespace",
+				"Var",
+				"Protocol",
+				"Record",
+				"Multimethod",
+				"Test",
+				"Spec",
+				"Keyword"
+			])
+		);
+
+		let edge_kinds = [
+			EdgeKind::Requires,
+			EdgeKind::Refers,
+			EdgeKind::Aliases,
+			EdgeKind::Implements,
+			EdgeKind::Dispatches,
+			EdgeKind::Tests,
+			EdgeKind::UsesKeyword,
+		];
+		let encoded = serde_json::to_value(edge_kinds).expect("edge kinds serialize");
+		assert_eq!(
+			encoded,
+			serde_json::json!([
+				"Requires",
+				"Refers",
+				"Aliases",
+				"Implements",
+				"Dispatches",
+				"Tests",
+				"UsesKeyword"
+			])
+		);
 	}
 }

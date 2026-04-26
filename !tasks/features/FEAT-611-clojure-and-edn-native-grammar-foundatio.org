@@ -1,0 +1,101 @@
+#+TITLE: Clojure and EDN native grammar foundation
+#+STATE: DONE
+#+SESSION_ID: 14c9cf860f4ccac8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-26T13-44-26-429Z_14c9cf860f4ccac8.jsonl]]
+#+CUSTOM_ID: FEAT-611-clojure-and-edn-native-grammar-foundatio
+#+LAYER: code-engine
+
+* Initial Message
+
+Look at the rust crates in this repo. What would a first-party integration with Clojure look like? Take your time to deeply provide Clojure's strengths and philosophy to the code tool
+
+* Scope
+In scope: add native parser and language-registry foundations required for first-party Clojure and EDN support in Spell's code tooling. This item covers `pi-code-engine` grammar generation/profile registration, `pi-natives` ast-grep language registration, and minimal TypeScript extension discovery fallback for semantic path detection. It establishes Clojure code extensions `.clj`, `.cljs`, `.cljc`, `.bb` and a separate EDN language identity for `.edn`.
+
+Out of scope: Clojure namespace graph extraction, deps.edn/project.clj source-root discovery, code-tool UX hints, runtime/nREPL integration, and clj-kondo/clojure-lsp enrichment. Those are handled by dependent items. EDN graph support is explicitly out of scope; EDN is data, not code.
+
+Rationale: current repo already has partial Clojure surface area in syntax highlighting and LSP detection, but native semantic support is missing from `pi-code-engine`, `pi-code-graph`, and `pi-natives` ast-grep. The foundation must be landed first so downstream code can query `code languages` and receive stable `clojure`/`edn` capabilities.
+
+* Existing Patterns
+- `crates/pi-code-engine/src/language/profile.rs`: `LanguageProfile` drives outline/read/navigate/resolve/edit/graph via `id`, `extensions`, `capabilities`, `declarations`, `imports`, `exports`, `references`, `separators`, `embedded_regions`, `procedures`, generated grammar rules, and `ts_language`.
+- `crates/pi-code-engine/src/language/mod.rs`: `LanguageRegistry::with_builtins()` registers built-in profiles. Follow existing profile constructors and keep registration immutable after construction.
+- `crates/pi-code-engine/build.rs`: grammar metadata generation pattern. Add `tree-sitter-clojure` to the grammar list so `generated::clojure::grammar()` is produced.
+- `crates/pi-natives/src/language/parsers.rs`: parser factory pattern using `tree_sitter_LANG::LANGUAGE.into()`.
+- `crates/pi-natives/src/language/mod.rs`: `impl_lang!` / `impl_lang_expando!`, `SupportLang`, `canonical_name()`, dispatch macro, and extension mapping for ast-grep support.
+- `packages/coding-agent/src/tools/code-supported-files.ts`: fallback semantic extensions and `describeCodeToolSemanticFiles()` when native language discovery is unavailable.
+- Repo rule: use Rust crate dependencies and generated metadata consistently; do not create shims or legacy aliases.
+
+* Tests
+User workflows to cover first:
+1. A user opens `src/app/core.clj`; `code languages` lists `clojure`; `code read` works semantically instead of falling back to text.
+2. A user opens `src/app/core.cljc`; the same Clojure semantic profile is selected.
+3. A user opens `bb/tasks.clj` or `script.bb`; Babashka scripts are recognized as Clojure code.
+4. A user opens `resources/config.edn`; `code read` and form navigation work, but graph capabilities are absent.
+5. A user runs ast-grep with Clojure syntax; structural patterns parse without text fallback.
+6. A user runs `code-supported-files` tests with native discovery unavailable; fallback extensions include Clojure and EDN.
+
+Concrete test files/scenarios:
+- Add Rust tests under `crates/pi-code-engine/tests/` or an existing language-registry test module verifying `LanguageRegistry::with_builtins().match_path()` returns `clojure` for `.clj`, `.cljs`, `.cljc`, `.bb` and `edn` for `.edn`.
+- Add Rust tests verifying `clojure` capabilities include outline/read/navigate/resolve/edit/graph and `edn` capabilities include read/navigate/edit but not graph.
+- Add Rust tests under `crates/pi-natives` or existing ast language tests verifying `SupportLang::from_path()` recognizes Clojure and EDN extensions and `canonical_name()` returns stable names.
+- Add TypeScript tests for `packages/coding-agent/src/tools/code-supported-files.ts` fallback extension extraction if an existing test suite covers it.
+- Verification commands: `bun check:rs` for Rust type/lint/fmt coverage; `bun check:ts` for TypeScript fallback surface.
+
+* Implementation
+** ITEM Add grammar dependencies and generated metadata tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-611-clojure-and-edn-native-grammar-foundatio::grammar-deps-tests
+:END:
+- Files: `crates/pi-code-engine/Cargo.toml`, `crates/pi-code-engine/build.rs`, generated grammar output via build script, and registry tests.
+- Add `tree-sitter-clojure` matching the repo's `tree-sitter = 0.25` API. Confirm crate exposes `LANGUAGE` and `NODE_TYPES`.
+- Add failing tests before implementation for Clojure/EDN path matching and generated grammar availability.
+- Satisfies Tests scenarios 1-4.
+
+** ITEM Implement Clojure and EDN language profiles
+:PROPERTIES:
+:CUSTOM_ID: FEAT-611-clojure-and-edn-native-grammar-foundatio::implement-engine-profiles
+:DEPENDS: FEAT-611-clojure-and-edn-native-grammar-foundatio::grammar-deps-tests
+:END:
+- File: `crates/pi-code-engine/src/language/mod.rs`.
+- Register `clojure_profile()` and `edn_profile()` in `LanguageRegistry::with_builtins()`.
+- Clojure profile: id `clojure`, extensions `clj cljs cljc bb`, full semantic capabilities, declarations for at least `ns`, `def`, `defonce`, `defn`, `defn-`, `defmacro`, `defmulti`, `defmethod`, `defprotocol`, `defrecord`, `deftype`, `deftest` where tree-sitter node structure allows.
+- EDN profile: id `edn`, extension `edn`, data/form capabilities only; graph false.
+- If existing `NameExtractor` cannot express list-form argument extraction, add a generic extractor with tests rather than hard-coding fragile Clojure-only behavior into outline code.
+- Satisfies Tests scenarios 1-4.
+
+** ITEM Add ast-grep Clojure and EDN support
+:PROPERTIES:
+:CUSTOM_ID: FEAT-611-clojure-and-edn-native-grammar-foundatio::implement-ast-grep-support
+:DEPENDS: FEAT-611-clojure-and-edn-native-grammar-foundatio::grammar-deps-tests
+:END:
+- Files: `crates/pi-natives/Cargo.toml`, `crates/pi-natives/src/language/parsers.rs`, `crates/pi-natives/src/language/mod.rs`.
+- Add parser factory for Clojure. Add `SupportLang::Clojure` and, if EDN uses the same grammar safely, `SupportLang::Edn`; otherwise document EDN ast-grep as out of scope for this item.
+- Add extension mapping for `clj cljs cljc bb` and `edn` as appropriate.
+- Test metavariable preprocessing for common Clojure symbols because `$` and punctuation can be legal in symbols; choose an expando char that does not collide with idiomatic code.
+- Satisfies Tests scenario 5.
+
+** ITEM Update fallback semantic extension surface
+:PROPERTIES:
+:CUSTOM_ID: FEAT-611-clojure-and-edn-native-grammar-foundatio::implement-ts-extension-fallback
+:DEPENDS: FEAT-611-clojure-and-edn-native-grammar-foundatio::implement-engine-profiles
+:END:
+- File: `packages/coding-agent/src/tools/code-supported-files.ts`.
+- Add Clojure/EDN extensions to fallback path detection and update user-facing supported-language description.
+- Keep native discovery as source of truth; fallback changes only protect stale/native-load-failure cases.
+- Satisfies Tests scenario 6.
+
+* Edge Cases
+- Tree-sitter Clojure grammar may expose list forms without stable named fields. If so, profile extraction must be extended generically and tested against real parse trees, not guessed.
+- `.cljc` reader conditionals are platform-dependent. Foundation only parses forms; semantic graph item decides platform-specific resolution.
+- `.edn` must not be reported as graph-capable. EDN data lacks namespaces/vars and graph support would produce plausible but false code semantics.
+- Ast-grep metavars must not collide with valid Clojure symbol syntax. Test `$foo`, symbols containing `?`, `!`, `*`, `-`, `/`.
+- Native language registry must stay immutable and duplicate extension conflicts must fail clearly.
+
+* Acceptance Criteria
+- `code languages` includes `clojure` with `.clj/.cljs/.cljc/.bb` and `edn` with `.edn` after native rebuild.
+- Clojure files no longer use fallback text buffers for `read`, `outline`, and `navigate`.
+- EDN files support read/form navigation/edit semantics but do not appear as graph-capable.
+- Ast-grep language inference recognizes Clojure extensions.
+- `bun check:rs` and `bun check:ts` pass.
+
+NOTE [2026-04-26]: Implemented and verified under PLAN-282 completion.

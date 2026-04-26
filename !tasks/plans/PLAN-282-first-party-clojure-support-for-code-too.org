@@ -1,0 +1,93 @@
+#+TITLE: First-party Clojure support for code tool
+#+STATE: DONE
+#+SESSION_ID: 14c9cf860f4ccac8
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-26T13-44-26-429Z_14c9cf860f4ccac8.jsonl]]
+#+CUSTOM_ID: PLAN-282-first-party-clojure-support-for-code-too
+#+LAYER: planning
+
+* Initial Message
+
+Look at the rust crates in this repo. What would a first-party integration with Clojure look like? Take your time to deeply provide Clojure's strengths and philosophy to the code tool
+
+[[id:FEAT-611-clojure-and-edn-native-grammar-foundatio][Clojure and EDN native grammar foundation]]
+[[id:FEAT-612-clojure-namespace-graph-and-semantic-mod][Clojure namespace graph and semantic model]]
+[[id:FEAT-613-clojure-code-tool-ux-and-form-safe-proce][Clojure code tool UX and form-safe procedures]]
+
+* Context
+User requested a deep implementation approach for first-party Clojure integration in Spell's Rust-backed code tool. Settled decisions:
+1. Scope: first-party semantic support, not parser-only. Include MVP native support plus dedicated namespace graph, aliases, `:refer`, tests, protocols, and keyword indexing.
+2. Runtime: no runtime execution in this plan. Leave seams for optional future nREPL/clj-kondo/clojure-lsp enrichment; normal `code index` remains pure/static. Deferred follow-up item created but intentionally not linked into this execution plan: FUP-066-optional-clojure-runtime-and-analyzer-en.
+3. EDN: add EDN as a separate data-language profile with read/form navigation/edit semantics and no graph capability.
+4. Graph model: add Clojure-specific symbol and edge kinds for namespaces, vars, protocols, tests, aliases, and keywords instead of collapsing them into generic class/method/import concepts.
+5. Dependency-root detection: parse `deps.edn` and `project.clj` enough to discover source/test paths; degrade to conventional roots when parsing fails.
+
+Key current-repo findings:
+- `crates/pi-code-engine/src/language/mod.rs` registers built-in profiles for TypeScript, Rust, Python, HTML, CSS, Typst, Markdown, Elixir, Org, and text; Clojure is absent.
+- `crates/pi-code-engine/src/language/profile.rs` defines `LanguageProfile`, the central abstraction for outline/read/navigate/resolve/edit/graph behavior.
+- `crates/pi-code-engine/build.rs` generates grammar metadata from tree-sitter node-types; Clojure must be added there.
+- `crates/pi-code-graph/src/language.rs` defines `LanguageExtractor` and `ImportResolver`; Clojure should use a dedicated extractor/resolver.
+- `crates/pi-code-graph/src/model.rs` currently lacks Clojure-specific symbol/edge kinds.
+- `crates/pi-natives/src/language/mod.rs` implements ast-grep language support; Clojure must be added to `SupportLang` and extension dispatch.
+- `packages/coding-agent/src/tools/code.ts` can inject language-specific hints; Clojure should add one to guide agents toward form-safe edits and macro honesty.
+- `packages/coding-agent/src/lsp/utils.ts` already maps `.clj` to `clojure`; `.cljs`, `.cljc`, and `.bb` must be verified/added.
+- Verbatim design report saved at `specs/clojure-code-tool-first-party-integration.md` for cross-session reference.
+
+Non-goals:
+- Full macro expansion.
+- Runtime nREPL execution during indexing.
+- JAR/classpath indexing.
+- Perfect dynamic var/eval resolution.
+- Treating EDN as graph-capable Clojure code.
+
+* Verification
+Global verification after implementation:
+- `bun check:rs` must pass for Rust grammar/profile/graph/procedure changes.
+- `bun check:ts` must pass for TypeScript code tool/LSP/hint changes.
+- Focused Rust tests must cover Clojure/EDN language registry path matching, generated grammar availability, ast-grep extension support, Clojure namespace graph extraction/resolution, graph model variants, source-root parsing, and Clojure procedures.
+- Focused TypeScript tests must cover fallback semantic extensions, Clojure hint injection, and user-facing graph rendering if modified.
+- Manual proof: `code languages` shows `clojure` and `edn` with correct capabilities; `code outline/read/navigate` on `.clj` and `.edn` do not fall back to text; `code index/context/deps` on fixture Clojure project shows namespace/var/alias/refer/test/keyword semantics; no runtime execution occurs.
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:FEAT-611-clojure-and-edn-native-grammar-foundatio::grammar-deps-tests]] Add grammar dependencies and generated metadata tests
+- [[id:FEAT-612-clojure-namespace-graph-and-semantic-mod::graph-model-tests]] Extend graph model tests for Clojure semantics
+- [[id:FEAT-613-clojure-code-tool-ux-and-form-safe-proce::code-hint-tests]] Write code-tool Clojure hint tests
+- [[id:FEAT-613-clojure-code-tool-ux-and-form-safe-proce::procedure-tests]] Write Clojure procedure tests
+** wave-2 :wave:
+- [[id:FEAT-611-clojure-and-edn-native-grammar-foundatio::implement-engine-profiles]] Implement Clojure and EDN language profiles
+- [[id:FEAT-611-clojure-and-edn-native-grammar-foundatio::implement-ast-grep-support]] Add ast-grep Clojure and EDN support
+- [[id:FEAT-612-clojure-namespace-graph-and-semantic-mod::implement-graph-model]] Implement graph model Clojure variants
+- [[id:FEAT-613-clojure-code-tool-ux-and-form-safe-proce::implement-code-tool-surface]] Implement code-tool Clojure surface
+- [[id:FEAT-613-clojure-code-tool-ux-and-form-safe-proce::implement-procedures]] Implement form-safe Clojure procedures
+** wave-3 :wave:
+- [[id:FEAT-611-clojure-and-edn-native-grammar-foundatio::implement-ts-extension-fallback]] Update fallback semantic extension surface
+- [[id:FEAT-612-clojure-namespace-graph-and-semantic-mod::extractor-resolver-tests]] Write Clojure extractor and resolver tests
+** wave-4 :wave:
+- [[id:FEAT-612-clojure-namespace-graph-and-semantic-mod::implement-extractor-resolver]] Implement ClojureExtractor and ClojureImportResolver
+** wave-5 :wave:
+- [[id:FEAT-612-clojure-namespace-graph-and-semantic-mod::register-graph-language]] Register Clojure graph language and cache behavior
+- [[id:FEAT-613-clojure-code-tool-ux-and-form-safe-proce::render-clojure-graph]] Update Clojure graph result rendering
+
+** Completion [2026-04-26]
+*** Verification
+- `cargo test -p pi-code-engine clojure --no-default-features` → PASS (3 tests).
+- `cargo test -p pi-code-graph clojure --no-default-features` → PASS (3 tests).
+- `cargo test -p pi-code-graph clojure_symbol --no-default-features` → PASS (1 serialization/model test).
+- `cargo test -p pi-natives clojure --no-default-features` → PASS (2 tests).
+- `bun test packages/coding-agent/test/tools/code.test.ts` → PASS (26 tests).
+- `bun check:rs` → PASS.
+- `bun check:ts` → PASS.
+- `bun run dev:native` → PASS; rebuilt `packages/natives/native/pi_natives.dev.node` for local/manual verification.
+- `bun run build:native` → PASS; rebuilt `packages/natives/native/pi_natives.linux-x64-modern.node`.
+- Manual native `executeCodeBuffer({command:"languages"})` proof: `clojure` appears with `.clj/.cljs/.cljc/.bb` and outline/read/navigate/resolve/edit/graph; `edn` appears with `.edn` and outline/read/navigate/edit only.
+- Manual native read/navigation proof: `src/app/core.clj` reads/navigates semantically with target `src/app/core.clj::app.core`; `resources/config.edn` supports form navigation via `node-at`/`children`.
+- Manual native graph proof: fixture graph indexes `clojure=2`, excludes EDN, resolves `src/app/core.clj` dependency to `src/app/db.clj`, and `context normalize-name` shows `app.db/connect!` plus keyword references.
+- Manual native ast-grep proof: Clojure pattern `(defn µNAME [µARG] µµµBODY)` matches `normalize-name` and captures `NAME`, `ARG`, and `BODY`.
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-282-first-party-clojure-support-for-code-too/verification-evidence.txt][verification-evidence.txt]]
+- Org plan record: [[id:PLAN-282-first-party-clojure-support-for-code-too]]
+- Linked child records: [[id:FEAT-611-clojure-and-edn-native-grammar-foundatio]], [[id:FEAT-612-clojure-namespace-graph-and-semantic-mod]], [[id:FEAT-613-clojure-code-tool-ux-and-form-safe-proce]]
+*** Deviations
+None.
+
+NOTE [2026-04-26]: PLAN-282 implemented, verified, and completion report appended.

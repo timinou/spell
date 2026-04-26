@@ -870,6 +870,9 @@ pub(crate) fn declaration_for<'a>(
 				NameExtractor::Field { name } => node
 					.child_by_field_name(name)
 					.and_then(|n| source.get(n.start_byte()..n.end_byte())),
+				NameExtractor::ListFormArg { head, .. } => {
+					list_form_value_text(source, node, 0).filter(|value| *value == head.as_str())
+				},
 				_ => None,
 			};
 			return name_text.is_some_and(|t| filter_names.iter().any(|f| f == t));
@@ -932,6 +935,11 @@ pub(crate) fn declaration_name_resolution(
 			.and_then(|name_node| resolution_from_node(source, name_node, None, false)),
 		NameExtractor::ChildText { child_type } => find_named_child(node, child_type)
 			.or_else(|| find_named_descendant(node, child_type))
+			.and_then(|child| resolution_from_node(source, child, None, false)),
+		NameExtractor::ListFormArg { head, index } => list_form_value_node(node, *index)
+			.filter(|_| {
+				list_form_value_text(source, node, 0).is_some_and(|value| value == head.as_str())
+			})
 			.and_then(|child| resolution_from_node(source, child, None, false)),
 		NameExtractor::Literal { name } => Some(NameResolution { text: name.clone() }),
 		NameExtractor::AttributeValue { within_type, attr_name, prefix, take_first_token } => {
@@ -1137,6 +1145,23 @@ pub(crate) fn class_member_nodes<'a>(
 				.collect()
 		},
 	}
+}
+
+fn list_form_value_node(node: Node<'_>, index: usize) -> Option<Node<'_>> {
+	let mut cursor = node.walk();
+	node
+		.children_by_field_name("value", &mut cursor)
+		.filter(|child| child.is_named() && child.kind() != "comment")
+		.nth(index)
+}
+
+fn list_form_value_text<'source>(
+	source: &'source str,
+	node: Node<'_>,
+	index: usize,
+) -> Option<&'source str> {
+	let value = list_form_value_node(node, index)?;
+	source.get(value.start_byte()..value.end_byte())
 }
 
 fn find_named_descendant<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {

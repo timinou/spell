@@ -313,22 +313,31 @@ impl CodeGraph {
 			target:        summary_for_node(graph, node_index)?,
 			callers:       neighbors_by_kind(graph, node_index, Direction::Incoming, &[
 				EdgeKind::Calls,
+				EdgeKind::Dispatches,
 			]),
 			callees:       neighbors_by_kind(graph, node_index, Direction::Outgoing, &[
 				EdgeKind::Calls,
+				EdgeKind::Dispatches,
 			]),
 			references:    neighbors_by_kind(graph, node_index, Direction::Outgoing, &[
 				EdgeKind::References,
 				EdgeKind::Styles,
+				EdgeKind::Refers,
+				EdgeKind::Aliases,
+				EdgeKind::UsesKeyword,
 			]),
 			referenced_by: neighbors_by_kind(graph, node_index, Direction::Incoming, &[
 				EdgeKind::References,
 				EdgeKind::Styles,
+				EdgeKind::Refers,
+				EdgeKind::Aliases,
+				EdgeKind::UsesKeyword,
 			]),
 			imports:       file_neighbors_for_symbol(graph, node_index, Direction::Outgoing),
 			imported_by:   file_neighbors_for_symbol(graph, node_index, Direction::Incoming),
 			inherits:      neighbors_by_kind(graph, node_index, Direction::Outgoing, &[
 				EdgeKind::Inherits,
+				EdgeKind::Implements,
 			]),
 		})
 	}
@@ -346,6 +355,10 @@ impl CodeGraph {
 				EdgeKind::Styles,
 				EdgeKind::Inherits,
 				EdgeKind::Imports,
+				EdgeKind::Requires,
+				EdgeKind::Refers,
+				EdgeKind::Aliases,
+				EdgeKind::UsesKeyword,
 				EdgeKind::TypeImports,
 				EdgeKind::TypeParameterOf,
 			]
@@ -360,15 +373,27 @@ impl CodeGraph {
 		let file = resolve_file(graph, query)?;
 		Some(GraphDepsResult {
 			target:   summary_for_node(graph, file)?,
-			outgoing: neighbors_by_kind(graph, file, Direction::Outgoing, &[EdgeKind::Imports]),
-			incoming: neighbors_by_kind(graph, file, Direction::Incoming, &[EdgeKind::Imports]),
+			outgoing: neighbors_by_kind(graph, file, Direction::Outgoing, &[
+				EdgeKind::Imports,
+				EdgeKind::Requires,
+			]),
+			incoming: neighbors_by_kind(graph, file, Direction::Incoming, &[
+				EdgeKind::Imports,
+				EdgeKind::Requires,
+			]),
 		})
 	}
 
 	pub fn graph_flow(&self, query: &str, max_depth: usize) -> Option<GraphFlowResult> {
 		let graph = self.graph();
 		let start = resolve_symbol(graph, self, query)?;
-		let levels = bfs_levels(graph, start, Direction::Outgoing, &[EdgeKind::Calls], max_depth);
+		let levels = bfs_levels(
+			graph,
+			start,
+			Direction::Outgoing,
+			&[EdgeKind::Calls, EdgeKind::Dispatches],
+			max_depth,
+		);
 		Some(GraphFlowResult { target: summary_for_node(graph, start)?, levels })
 	}
 
@@ -424,6 +449,10 @@ impl CodeGraph {
 				EdgeKind::Styles,
 				EdgeKind::Inherits,
 				EdgeKind::Imports,
+				EdgeKind::Requires,
+				EdgeKind::Refers,
+				EdgeKind::Aliases,
+				EdgeKind::UsesKeyword,
 				EdgeKind::TypeImports,
 				EdgeKind::TypeParameterOf,
 			]
@@ -442,12 +471,28 @@ impl CodeGraph {
 		&self,
 		node_index: NodeIndex,
 	) -> GraphOutlineEnrichment {
-		let refs =
-			self.graph_degree_counts(node_index, &[EdgeKind::References, EdgeKind::Styles], &[
+		let refs = self.graph_degree_counts(
+			node_index,
+			&[
 				EdgeKind::References,
 				EdgeKind::Styles,
+				EdgeKind::Refers,
+				EdgeKind::Aliases,
+				EdgeKind::UsesKeyword,
+			],
+			&[
+				EdgeKind::References,
+				EdgeKind::Styles,
+				EdgeKind::Refers,
+				EdgeKind::Aliases,
+				EdgeKind::UsesKeyword,
+			],
+		);
+		let calls =
+			self.graph_degree_counts(node_index, &[EdgeKind::Calls, EdgeKind::Dispatches], &[
+				EdgeKind::Calls,
+				EdgeKind::Dispatches,
 			]);
-		let calls = self.graph_degree_counts(node_index, &[EdgeKind::Calls], &[EdgeKind::Calls]);
 		let imported_by = self.graph_file_import_degree_for_symbol(node_index, Direction::Incoming);
 		let exported_reach = self.graph_exported_reach_summary(node_index, 2, 64);
 		let cluster = self.graph_cluster_for_symbol(node_index);
@@ -704,7 +749,7 @@ fn file_neighbors_for_symbol(
 	let Some(file_index) = resolve_file(graph, &symbol.file.to_string_lossy()) else {
 		return Vec::new();
 	};
-	neighbors_by_kind(graph, file_index, direction, &[EdgeKind::Imports])
+	neighbors_by_kind(graph, file_index, direction, &[EdgeKind::Imports, EdgeKind::Requires])
 }
 
 fn neighbor_count_by_kind(
@@ -739,7 +784,7 @@ fn file_neighbor_count_for_symbol(
 	let Some(file_index) = resolve_file(graph, &symbol.file.to_string_lossy()) else {
 		return 0;
 	};
-	neighbor_count_by_kind(graph, file_index, direction, &[EdgeKind::Imports])
+	neighbor_count_by_kind(graph, file_index, direction, &[EdgeKind::Imports, EdgeKind::Requires])
 }
 
 fn bounded_reach_summary(
@@ -804,7 +849,13 @@ fn dead_code_item_for_node(
 		.any(|edge| {
 			matches!(
 				edge.weight(),
-				EdgeKind::Calls | EdgeKind::References | EdgeKind::Inherits | EdgeKind::Renders
+				EdgeKind::Calls
+					| EdgeKind::References
+					| EdgeKind::Refers
+					| EdgeKind::Aliases
+					| EdgeKind::UsesKeyword
+					| EdgeKind::Inherits
+					| EdgeKind::Renders
 			)
 		});
 	let has_style_consumers = symbol.kind == SymbolKind::CssRule

@@ -97,6 +97,12 @@ const GRAMMARS: &[GrammarSource] = &[
 		json_subpath:    "src/node-types.json",
 	},
 	GrammarSource {
+		name:            "clojure",
+		dependency_name: Some("tree-sitter-clojure"),
+		package_prefix:  "tree-sitter-clojure-",
+		json_subpath:    "grammar-src/src/node-types.json",
+	},
+	GrammarSource {
 		name:            "markdown",
 		dependency_name: Some("tree-sitter-md"),
 		package_prefix:  "tree-sitter-md-",

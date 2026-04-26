@@ -118,7 +118,15 @@ fn graph_rerank(hits: &mut [HybridSearchHit], graph: &CodeGraph) {
 
 	// Build neighbor set: nodes reachable via Calls, References, Imports edges.
 	let mut neighbor_set: BTreeSet<usize> = BTreeSet::new();
-	let boost_edges = [EdgeKind::Calls, EdgeKind::References, EdgeKind::Imports];
+	let boost_edges = [
+		EdgeKind::Calls,
+		EdgeKind::References,
+		EdgeKind::Imports,
+		EdgeKind::Requires,
+		EdgeKind::Refers,
+		EdgeKind::Aliases,
+		EdgeKind::UsesKeyword,
+	];
 
 	for (anchor_idx, _) in &anchors {
 		for direction in [Direction::Outgoing, Direction::Incoming] {

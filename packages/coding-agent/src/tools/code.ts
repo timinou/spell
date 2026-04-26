@@ -16,6 +16,7 @@ import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import { FileFormatResult, formatFileContent } from "../lsp";
 import type { Theme } from "../modes/theme/theme";
 import codeDescription from "../prompts/tools/code.md" with { type: "text" };
+import clojureHint from "../prompts/tools/code-hint-clojure.md" with { type: "text" };
 import markdownHint from "../prompts/tools/code-hint-markdown.md" with { type: "text" };
 import semanticHint from "../prompts/tools/code-hint-semantic.md" with { type: "text" };
 import textFallbackHint from "../prompts/tools/code-hint-text-fallback.md" with { type: "text" };
@@ -51,6 +52,11 @@ const REMOVED_SEARCH_COMMANDS = new Set(["files", "search"]);
 const MUTATING_COMMANDS = new Set(["edit", "undo", "redo"]);
 
 const LANGUAGE_BY_EXTENSION = new Map<string, string>([
+	["clj", "clojure"],
+	["cljs", "clojure"],
+	["cljc", "clojure"],
+	["bb", "clojure"],
+	["edn", "edn"],
 	["typ", "typst"],
 	["md", "markdown"],
 	["mdx", "markdown"],
@@ -58,13 +64,14 @@ const LANGUAGE_BY_EXTENSION = new Map<string, string>([
 ]);
 
 const LANGUAGE_INJECTIONS = new Map<string, string>([
+	["clojure", clojureHint.trim()],
 	["markdown", markdownHint.trim()],
 	["typst", typstHint.trim()],
 ]);
 
 export { _resetSupportedExtensionsForTest };
 
-function languageForFile(file: string): string | undefined {
+export function languageForFile(file: string): string | undefined {
 	const extension = path.extname(file).slice(1).toLowerCase();
 	return extension ? LANGUAGE_BY_EXTENSION.get(extension) : undefined;
 }

@@ -107,6 +107,8 @@ impl_lang_expando!(C, language_c, '𐀀');
 impl_lang_expando!(Cpp, language_cpp, '𐀀');
 impl_lang_expando!(CSharp, language_c_sharp, 'µ');
 impl_lang_expando!(Css, language_css, '_');
+impl_lang_expando!(Clojure, language_clojure, 'µ');
+impl_lang_expando!(Edn, language_clojure, 'µ');
 impl_lang_expando!(Elixir, language_elixir, 'µ');
 impl_lang_expando!(Go, language_go, 'µ');
 impl_lang_expando!(Haskell, language_haskell, 'µ');
@@ -253,7 +255,9 @@ pub enum SupportLang {
 	Cpp,
 	CSharp,
 	Css,
+	Clojure,
 	Diff,
+	Edn,
 	Elixir,
 	Go,
 	Haskell,
@@ -292,9 +296,10 @@ impl SupportLang {
 	pub const fn all_langs() -> &'static [Self] {
 		use SupportLang::*;
 		&[
-			Bash, C, Cpp, CSharp, Css, Diff, Elixir, Go, Haskell, Hcl, Html, Java, JavaScript, Json,
-			Julia, Kotlin, Lua, Make, Markdown, Nix, ObjC, Odin, Php, Python, Regex, Ruby, Rust,
-			Scala, Solidity, Starlark, Swift, Toml, Tsx, TypeScript, Verilog, Xml, Yaml, Zig,
+			Bash, C, Cpp, CSharp, Css, Clojure, Diff, Edn, Elixir, Go, Haskell, Hcl, Html, Java,
+			JavaScript, Json, Julia, Kotlin, Lua, Make, Markdown, Nix, ObjC, Odin, Php, Python, Regex,
+			Ruby, Rust, Scala, Solidity, Starlark, Swift, Toml, Tsx, TypeScript, Verilog, Xml, Yaml,
+			Zig,
 		]
 	}
 
@@ -307,7 +312,9 @@ impl SupportLang {
 			Self::Cpp => "cpp",
 			Self::CSharp => "csharp",
 			Self::Css => "css",
+			Self::Clojure => "clojure",
 			Self::Diff => "diff",
+			Self::Edn => "edn",
 			Self::Elixir => "elixir",
 			Self::Go => "go",
 			Self::Haskell => "haskell",
@@ -361,7 +368,9 @@ macro_rules! execute_lang_method {
 			S::Cpp => Cpp.$method($($pname,)*),
 			S::CSharp => CSharp.$method($($pname,)*),
 			S::Css => Css.$method($($pname,)*),
+			S::Clojure => Clojure.$method($($pname,)*),
 			S::Diff => Diff.$method($($pname,)*),
+			S::Edn => Edn.$method($($pname,)*),
 			S::Elixir => Elixir.$method($($pname,)*),
 			S::Go => Go.$method($($pname,)*),
 			S::Haskell => Haskell.$method($($pname,)*),
@@ -457,7 +466,9 @@ const fn extensions(lang: SupportLang) -> &'static [&'static str] {
 		Cpp => &["cc", "hpp", "cpp", "c++", "hh", "cxx", "cu", "ino"],
 		CSharp => &["cs"],
 		Css => &["css", "scss"],
+		Clojure => &["clj", "cljs", "cljc", "bb"],
 		Diff => &["diff", "patch"],
+		Edn => &["edn"],
 		Elixir => &["ex", "exs"],
 		Go => &["go"],
 		Haskell => &["hs"],
@@ -504,8 +515,37 @@ fn from_extension(path: &Path) -> Option<SupportLang> {
 			_ => None,
 		};
 	}
+
 	SupportLang::all_langs()
 		.iter()
 		.copied()
 		.find(|&l| extensions(l).contains(&ext))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn clojure_and_edn_paths_have_stable_language_ids() {
+		for extension in ["clj", "cljs", "cljc", "bb"] {
+			let path = format!("src/app/core.{extension}");
+			let lang = SupportLang::from_path(path).expect("clojure extension");
+			assert_eq!(lang, SupportLang::Clojure);
+			assert_eq!(lang.canonical_name(), "clojure");
+		}
+		let edn = SupportLang::from_path("resources/config.edn").expect("edn extension");
+		assert_eq!(edn, SupportLang::Edn);
+		assert_eq!(edn.canonical_name(), "edn");
+	}
+
+	#[test]
+	fn clojure_patterns_use_non_dollar_expando() {
+		let lang = SupportLang::Clojure;
+		assert_eq!(lang.expando_char(), 'µ');
+		assert_eq!(
+			lang.pre_process_pattern("(defn $NAME [$ARG] $$$BODY)"),
+			"(defn µNAME [µARG] µµµBODY)"
+		);
+	}
 }

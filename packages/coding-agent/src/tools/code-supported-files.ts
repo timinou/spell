@@ -23,6 +23,11 @@ const FALLBACK_SEMANTIC_EXTENSIONS = new Set([
 	"org",
 	"ex",
 	"exs",
+	"clj",
+	"cljs",
+	"cljc",
+	"bb",
+	"edn",
 ]);
 
 let semanticExtensionsCache: Set<string> | undefined;
@@ -64,7 +69,7 @@ export function isCodeToolSemanticPath(file: string): boolean {
 }
 
 export function describeCodeToolSemanticFiles(): string {
-	return "TypeScript, Rust, Python, HTML, CSS, Typst, Markdown, Org, and Elixir";
+	return "TypeScript, Rust, Python, HTML, CSS, Typst, Markdown, Org, Elixir, Clojure, and EDN";
 }
 
 export const extractSupportedExtensions = extractSemanticExtensions;

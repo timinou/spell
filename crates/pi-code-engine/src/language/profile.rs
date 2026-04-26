@@ -89,6 +89,9 @@ pub enum NameExtractor {
 	ChildField { child_type: String, field: String },
 	/// Name from the full text of a specific child node type.
 	ChildText { child_type: String },
+	/// Name from the Nth value child of a Lisp-style list whose first value is a
+	/// fixed symbol.
+	ListFormArg { head: String, index: usize },
 	/// Fixed literal name regardless of AST content.
 	Literal { name: String },
 	/// Name from an attribute value within the current node or a named
