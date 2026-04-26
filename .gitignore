@@ -71,3 +71,6 @@ packages/qml/native/
 
 
 .ancillary/
+.env
+
+.spell/graph/workspace.bin
