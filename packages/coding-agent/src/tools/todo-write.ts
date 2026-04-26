@@ -568,6 +568,8 @@ async function transitionOrgItemIfNeeded(
 		absPath: category.absPath,
 		name: category.name,
 		dir: category.dirName,
+		prefix: category.prefix,
+		root: projectRoot,
 	}));
 	const item = await findItemById(catDirs, orgItemId, todoKeywords);
 	if (!item) {

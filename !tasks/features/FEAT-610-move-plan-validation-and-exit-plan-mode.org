@@ -1,0 +1,90 @@
+#+TITLE: Move plan validation and exit-plan-mode onto the native org index
+#+STATE: DONE
+#+SESSION_ID: 14c1d9a329a1f873
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-20T09-20-46-758Z_14c1d9a329a1f873.jsonl]]
+#+CUSTOM_ID: FEAT-610-move-plan-validation-and-exit-plan-mode
+#+LAYER: packages/coding-agent packages/org pi-natives
+#+DEPENDS: FEAT-609-cut-the-full-org-read-surface-onto-index
+
+* Initial Message
+
+continue, what were you asking? what's your design so far?
+
+* Scope
+
+In scope:
+- Move the expensive plan-validation and plan-item resolution work from repeated TypeScript category rescans into native org-index-backed commands.
+- Cut over `validatePlanItem`, `resolvePlanItem`, `approvePlanItem`, `completePlanItem`, and `exit_plan_mode` child/property hydration to consume native indexed results.
+- Preserve existing validation categories and dual-link/sub-outline semantics unless a documented truthfulness bug requires a change.
+- Keep TypeScript responsible only for formatting user-facing validation hints and plan-approval payload assembly.
+
+Out of scope:
+- General org read-surface cutover for `query` / `dashboard` / `archive` (handled by FEAT-609).
+- Shared cache extraction and mutation freshness foundations (handled by PROJ-057 and FEAT-608).
+- Rewriting wave computation itself; this item targets lookup/validation/orchestration cost, not the graph algorithm.
+
+Rationale:
+- `packages/coding-agent/src/plan-mode/plan-validation.ts` and `packages/coding-agent/src/tools/exit-plan-mode.ts` currently repeat the same expensive lookup/parsing work across validation, approval payload building, and child-layer hydration. The Rust org index should become the single source of truth for plan resolution and validation structure.
+
+* Existing Patterns
+
+- `packages/coding-agent/src/plan-mode/plan-validation.ts` — current validation issue categories, sub-outline normalization, and resolved-children contract are the behavior to preserve while moving computation native.
+- `packages/coding-agent/src/plan-mode/org-plan.ts` — `resolvePlanItem`, `approvePlanItem`, and `completePlanItem` show every plan-mode lookup path that currently depends on `findItemById` rescans.
+- `packages/coding-agent/src/tools/exit-plan-mode.ts` — validation gate + child item injection + wave layer hydration identify the exact approval-time hot path to cut over.
+- `packages/coding-agent/src/loop/ingestion/org-depend.ts` — `parseOrgDependProperties(...)` documents the current sub-outline dependency extraction behavior that native validation must match or subsume.
+- Existing regression tests: `packages/coding-agent/test/plan-mode/plan-validation-suboutline.test.ts`, `packages/coding-agent/test/plan-mode/exit-plan-layer-resolution.test.ts`, and `packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts`.
+
+* Tests
+
+User workflows to defend first:
+1. Workflow 1 — `org validate-plan <PLAN-ID>` on a dual-link manifest returns the same valid/invalid outcomes and issue categories as today, but through native indexed validation.
+2. Workflow 2 — `exit_plan_mode` approval payload loads linked child items and wave layers without repeated per-child rescans.
+3. Workflow 3 — `approvePlanItem` and `completePlanItem` resolve plan/child items through the index and remain truthful after recent writes.
+4. Workflow 4 — missing linked items, phantom sub-outline links, broken DEPENDS, and manifest-missing-suboutlines still surface with the same semantics.
+
+Concrete test files / scenarios:
+- Preserve and extend `packages/coding-agent/test/plan-mode/plan-validation-suboutline.test.ts` so the public contract stays constant during native migration.
+- Add focused tests for `org-plan.ts` resolution/approval/completion flows against tempdir org fixtures using the indexed path.
+- Add a targeted `exit-plan-mode` integration test proving child property hydration does not require repeated `resolvePlanItem(...)` scans to compute layer ownership.
+
+* Implementation
+** ITEM Write failing native-validation parity tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-610-move-plan-validation-and-exit-plan-mode::native-validation-tests
+:DEPENDS: FEAT-609-cut-the-full-org-read-surface-onto-index::ts-read-cutover
+:END:
+- Files: existing plan-mode tests plus new focused tests for `org-plan.ts` lookup flows.
+- Lock Workflows 1-4 as regression tests before moving logic native.
+
+** ITEM Implement native indexed plan-validation command
+:PROPERTIES:
+:CUSTOM_ID: FEAT-610-move-plan-validation-and-exit-plan-mode::native-validate-plan
+:DEPENDS: FEAT-610-move-plan-validation-and-exit-plan-mode::native-validation-tests
+:END:
+- Files: org-index Rust modules and `crates/pi-natives/src/org_buffer.rs` command router.
+- Add a native command that resolves the PLAN item, linked children, declared sub-outlines, dependency edges, and validation issues directly from indexed/native data.
+- Return structured validation output so TS does not need to reconstruct child maps or reparse bodies just to validate the plan.
+
+** ITEM Cut over coding-agent plan-mode lookup/orchestration paths
+:PROPERTIES:
+:CUSTOM_ID: FEAT-610-move-plan-validation-and-exit-plan-mode::plan-mode-cutover
+:DEPENDS: FEAT-610-move-plan-validation-and-exit-plan-mode::native-validate-plan
+:END:
+- Files: `packages/coding-agent/src/plan-mode/plan-validation.ts`, `packages/coding-agent/src/plan-mode/org-plan.ts`, `packages/coding-agent/src/tools/exit-plan-mode.ts`.
+- Replace `resolvePlanItem` / repeated child resolution with native indexed calls.
+- Keep `formatPlanValidationIssues(...)` and `extractPlanWaves(...)` only where they are presentation/text helpers; remove duplicated lookup/parsing logic that native output can already supply.
+
+* Edge Cases
+
+- Duplicate CUSTOM_ID conflicts must surface truthfully; native validation must not silently pick one child and proceed as though the plan were unambiguous.
+- Sub-outline IDs that inherit parent LAYER must still resolve correctly in `exit_plan_mode` payloads.
+- Recent in-session mutations must be visible to validation and approval flows without manual cache rebuilds.
+- Very large plans with many linked children must avoid N×category rescans and N×body reparse loops.
+- Validation output ordering should stay deterministic so existing tests and human diagnostics remain stable.
+
+* Acceptance Criteria
+
+- `validatePlanItem` / `org validate-plan` / `exit_plan_mode` rely on native indexed validation/lookup for their steady-state path.
+- Existing dual-link validation semantics and issue categories are preserved.
+- `packages/coding-agent/src/plan-mode/{plan-validation.ts,org-plan.ts}` no longer perform whole-category rescans as the normal way to resolve plan/child items.
+- Focused coding-agent tests prove parity for validation issues, approval payloads, and child-layer resolution.

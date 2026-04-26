@@ -1,0 +1,123 @@
+#+TITLE: ORG_LOOKUP_VALIDATION_INDEX_CUTOVER
+#+STATE: DONE
+#+SESSION_ID: 14c1d9a329a1f873
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-20T09-20-46-758Z_14c1d9a329a1f873.jsonl]]
+#+CUSTOM_ID: PLAN-276-org-lookup-validation-index-cutover
+#+LAYER: packages/coding-agent packages/org pi-natives pi-org-engine pi-code-graph
+
+* Initial Message
+
+continue, what were you asking? what's your design so far?
+
+[[id:PROJ-057-extract-shared-workspace-cache-substrate]]
+[[id:FEAT-608-keep-org-index-truthful-across-all-org-m]]
+[[id:FEAT-609-cut-the-full-org-read-surface-onto-index]]
+[[id:FEAT-610-move-plan-validation-and-exit-plan-mode]]
+
+* Context
+
+Request:
+- Fix broader org lookup/validation performance across plan mode and the org tool.
+- Lower approval/validation latency through architectural cleanup.
+- Rust is the source of truth; remove duplicate TypeScript work when it is better suited to Rust.
+- The user explicitly selected a hybrid design: shared low-level cache/index substrate reused by org + code-graph, but separate org-native commands/data model.
+- The user explicitly selected full org read-surface cutover in the first implementation wave, not just the plan hot path.
+
+Observed bottlenecks verified in the current repo:
+- `packages/org/src/native-ops.ts` reparses category files in `readCategory(...)` and linearly scans them in `findItemById(...)`.
+- `packages/org/src/tool.ts` layers more repeated scans through `fetchItems`, `fetchItem`, `collectItems`, and `collectPlanWaveItems`.
+- `packages/coding-agent/src/plan-mode/plan-validation.ts` repeatedly resolves child items and reparses sub-outline bodies while validating.
+- `packages/coding-agent/src/plan-mode/org-plan.ts` and `packages/coding-agent/src/tools/exit-plan-mode.ts` re-enter the same lookup path during approval/completion payload building.
+- `crates/pi-natives/src/org_buffer.rs` currently exposes parse/query/graph primitives, but does not own a persistent org lookup index analogous to code-graph’s warm-cache model.
+
+Settled design decisions:
+1. Extract a shared Rust workspace-cache substrate from the current code-graph cache pattern instead of coupling org indexing directly to the `pi-code-graph` crate.
+2. Build a separate persisted org-native index/model on top of that substrate; org semantics stay separate from code-graph semantics.
+3. Rust becomes the source of truth for CUSTOM_ID resolution, sub-outline resolution, plan-validation inputs, and warm-cache freshness.
+4. The first implementation cut includes the full org read surface: ID-based lookups plus query/dashboard/archive/wave/graph item collection.
+5. TypeScript keeps orchestration and presentation only; it must stop doing steady-state repeated category rescans and repeated child-body reparses.
+6. Mutation coherence is mandatory in the same cut: after writes, indexed reads must be truthful without manual rebuild steps.
+7. Full cutover applies: do not leave the current repeated-scan TypeScript path as a silent warm-path compatibility layer.
+
+Recommended approach:
+- Foundation first: shared cache substrate + org index builder/status commands.
+- Then truthfulness: all write paths keep the index fresh.
+- Then full org read-surface cutover.
+- Then coding-agent plan-validation / exit-plan-mode cutover on top of the same native truth path.
+
+Critical files / modules expected to change:
+- `crates/pi-code-graph/src/cache.rs`
+- new shared cache crate/module extracted from that file
+- `crates/pi-natives/src/org_buffer.rs`
+- org-index Rust modules under `crates/pi-natives` and/or `crates/pi-org-engine`
+- `packages/org/src/native-ops.ts`
+- `packages/org/src/tool.ts`
+- `packages/coding-agent/src/plan-mode/plan-validation.ts`
+- `packages/coding-agent/src/plan-mode/org-plan.ts`
+- `packages/coding-agent/src/tools/exit-plan-mode.ts`
+- focused Rust/native/TS test files for org query, mutation coherence, and plan validation
+
+* Verification
+
+Required proof in the implementation session:
+- Shared-cache Rust tests proving missing/fresh/stale behavior and persisted round-trip integrity.
+- Native org-index tests proving indexed top-level + sub-outline lookup, stale detection, and duplicate-id truthfulness.
+- `packages/org` tests covering get/query/dashboard/archive/wave/graph parity on indexed reads.
+- `packages/coding-agent` tests covering dual-link/native validation parity, child-layer resolution, and exit-plan payload truthfulness.
+- Final verification commands: `bun check:ts` and `bun check:rs`.
+
+Manual proof expectations:
+- Re-run `org validate-plan` against a plan with linked children and sub-outlines; confirm parity of issue categories with the prior contract and lower warm-path latency.
+- Re-run `exit_plan_mode` on a populated PLAN item; confirm approval payload still contains linked child items and wave layers without the old repeated lookup path.
+- Exercise `org get`, `org query`, `org dashboard`, and `org archive` after in-session org mutations; confirm indexed reads see the new state immediately and truthfully.
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:PROJ-057-extract-shared-workspace-cache-substrate::define-shared-cache-schema]] Define shared workspace-cache schema and boundaries
+** wave-2 :wave:
+- [[id:PROJ-057-extract-shared-workspace-cache-substrate::builder-tests]] Write failing shared-cache and org-index builder tests
+** wave-3 :wave:
+- [[id:PROJ-057-extract-shared-workspace-cache-substrate::implement-org-index-builder]] Implement persisted org index model and builder
+** wave-4 :wave:
+- [[id:PROJ-057-extract-shared-workspace-cache-substrate::native-status-and-index]] Expose native org index status and rebuild commands
+** wave-5 :wave:
+- [[id:FEAT-608-keep-org-index-truthful-across-all-org-m::mutation-tests]] Define failing mutation-coherence tests first
+** wave-6 :wave:
+- [[id:FEAT-608-keep-org-index-truthful-across-all-org-m::native-refresh-strategy]] Implement native cache refresh / invalidation strategy for all writes
+** wave-7 :wave:
+- [[id:FEAT-608-keep-org-index-truthful-across-all-org-m::ts-postwrite-cutover]] Wire TypeScript org commands onto the post-write indexed truth path
+** wave-8 :wave:
+- [[id:FEAT-609-cut-the-full-org-read-surface-onto-index::read-parity-tests]] Write failing read-surface parity tests
+** wave-9 :wave:
+- [[id:FEAT-609-cut-the-full-org-read-surface-onto-index::native-read-commands]] Implement native resolve and query commands over the org index
+** wave-10 :wave:
+- [[id:FEAT-609-cut-the-full-org-read-surface-onto-index::ts-read-cutover]] Cut over packages/org read paths and remove steady-state rescans
+** wave-11 :wave:
+- [[id:FEAT-610-move-plan-validation-and-exit-plan-mode::native-validation-tests]] Write failing native-validation parity tests
+** wave-12 :wave:
+- [[id:FEAT-610-move-plan-validation-and-exit-plan-mode::native-validate-plan]] Implement native indexed plan-validation command
+** wave-13 :wave:
+- [[id:FEAT-610-move-plan-validation-and-exit-plan-mode::plan-mode-cutover]] Cut over coding-agent plan-mode lookup/orchestration paths
+
+** Completion [2026-04-26]
+*** Verification
+- `cargo test -p pi-workspace-cache -p pi-code-graph cache --lib` → PASS; shared cache round-trip/freshness and code-graph cache wrapper tests passed.
+- `cargo test -p pi-natives org_index --lib` → PASS; native org index rebuild/status/stale/duplicate and write-refresh tests passed.
+- `bun test packages/org/test` → PASS; 194 tests, 0 failures; get/query/dashboard/archive/wave/graph command parity on indexed read surface.
+- `bun test packages/coding-agent/test/plan-mode/plan-validation-suboutline.test.ts packages/coding-agent/test/plan-mode/exit-plan-layer-resolution.test.ts packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts` → PASS; 17 tests, 0 failures; plan validation and exit-plan payload/layer regressions preserved.
+- `bun check:ts` → PASS; Biome + tsgo clean.
+- `bun check:rs` → PASS; cargo fmt --check + clippy --workspace -D warnings clean.
+- Manual `org validate-plan PLAN-276-org-lookup-validation-index-cutover` → PASS (`valid: true`, `issues: 0`).
+- Manual `org get PLAN-276-org-lookup-validation-index-cutover` → PASS; item resolved from org tool.
+- Manual `org dashboard` / `org archive category=plans` → PASS; indexed read aggregate commands returned results.
+*** Artifacts
+- Code: [[file:crates/pi-workspace-cache/src/lib.rs]] shared cache substrate.
+- Code: [[file:crates/pi-natives/src/org_index.rs]] persisted org index model/read/validation commands.
+- Code: [[file:crates/pi-natives/src/org_buffer.rs]] executeOrg command routing and mutation refresh hooks.
+- Code: [[file:packages/org/src/tool.ts]] indexed org read/mutation cutover.
+- Code: [[file:packages/org/src/native-ops.ts]] indexed findItemById bridge.
+- Code: [[file:packages/coding-agent/src/plan-mode/org-plan.ts]] project-root-aware indexed plan item resolution.
+*** Deviations
+None.
+
+NOTE [2026-04-26]: PLAN-276 implementation verified and completion report appended.

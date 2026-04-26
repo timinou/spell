@@ -1,0 +1,97 @@
+#+TITLE: Extract shared workspace cache substrate for org index and code-graph
+#+STATE: DONE
+#+SESSION_ID: 14c1d9a329a1f873
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-20T09-20-46-758Z_14c1d9a329a1f873.jsonl]]
+#+CUSTOM_ID: PROJ-057-extract-shared-workspace-cache-substrate
+#+LAYER: pi-org-engine pi-code-graph pi-natives
+
+* Initial Message
+
+continue, what were you asking? what's your design so far?
+
+* Scope
+
+In scope:
+- Extract the generic persistent-cache and workspace-fingerprint primitives currently embedded in `crates/pi-code-graph/src/cache.rs` into a shared Rust substrate consumed by both code-graph and the new org index.
+- Define the persisted org index model for top-level items, sub-outline CUSTOM_IDs, file/category metadata, ordering metadata, lightweight properties, and dependency metadata needed by lookup, validation, wave collection, query, dashboard, and archive flows.
+- Add native org index lifecycle commands with code-graph-like ergonomics: missing/fresh/stale status, explicit index/rebuild path, and warm-load path.
+- Keep Rust as the source of truth for workspace freshness and index validity.
+
+Out of scope:
+- TypeScript tool cutover to the new index-backed commands.
+- Rewriting validation formatting/hints in the coding-agent layer.
+- Any compatibility shim that preserves repeated category rescans as a normal steady-state path.
+
+Rationale:
+- The current hot path repeatedly reparses whole org categories in TypeScript (`packages/org/src/native-ops.ts`, `packages/org/src/tool.ts`, `packages/coding-agent/src/plan-mode/org-plan.ts`). The shared design decision is to move the repeated lookup/indexing work to Rust and make TypeScript orchestration-only.
+
+* Existing Patterns
+
+- `crates/pi-code-graph/src/cache.rs` — `CacheStore::{new,load,save,fingerprint_root,status}` and `CacheStatus::{Missing,Fresh,Stale}` are the exact ergonomics to reuse at the substrate layer.
+- `crates/pi-code-graph/src/indexer.rs` — `CodeGraphBuilder::build(...)` and cache-status checks define the warm-cache lifecycle to mirror.
+- `crates/pi-natives/src/code_graph.rs` — `ensure_graph(...)` shows the desired native-side status/build/load split and `.spell/graph` cache ownership model.
+- `crates/pi-natives/src/org_buffer.rs` — current `executeOrg` command router and parse/query/graph commands are the native integration point to extend.
+- `packages/org/src/native-ops.ts` — current `readOrgFile`, `readCategory`, and `findItemById` identify exactly which repeated scans the new index must obsolete.
+
+* Tests
+
+User workflows to defend first:
+1. Workflow 1 — a warm workspace with unchanged org files reports `fresh` and serves indexed metadata without reparsing every category file.
+2. Workflow 2 — editing an org file, adding/removing a file, or changing git HEAD reports `stale` truthfully and forces a rebuild before indexed reads proceed.
+3. Workflow 3 — the persisted org index round-trips top-level items and sub-outline CUSTOM_IDs with stable file/category/order metadata.
+4. Workflow 4 — status/index commands are truthful when the cache is missing, fresh, or stale.
+
+Concrete test files / scenarios:
+- New Rust unit/integration coverage for the shared cache crate, including fingerprint drift and round-trip persistence.
+- Native org-index tests under `crates/pi-natives` or `crates/pi-org-engine` proving index build/load/status behavior against tempdir org fixtures.
+- Snapshot-style assertions for indexed entries covering: top-level item id, sub-outline id, parent id, file path, category, line/order metadata, and LAYER/DEPENDS visibility where relevant.
+
+* Implementation
+** ITEM Define shared workspace-cache schema and boundaries
+:PROPERTIES:
+:CUSTOM_ID: PROJ-057-extract-shared-workspace-cache-substrate::define-shared-cache-schema
+:END:
+- Files: extract generic primitives from `crates/pi-code-graph/src/cache.rs` into a shared Rust crate/module (recommended target: `crates/pi-workspace-cache/`), then update `crates/pi-code-graph` to consume it.
+- Lock the public types first: cache store, file fingerprint, workspace fingerprint, cache status, and binary entry persistence API.
+- This step exists so org indexing does not couple semantically to the code-graph crate itself.
+
+** ITEM Write failing shared-cache and org-index builder tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-057-extract-shared-workspace-cache-substrate::builder-tests
+:DEPENDS: PROJ-057-extract-shared-workspace-cache-substrate::define-shared-cache-schema
+:END:
+- Add failing tests for Workflows 1-4 before implementing the shared substrate and org index builder.
+- Cover missing/fresh/stale transitions, file add/remove, git-head drift, and persisted entry round-trip.
+
+** ITEM Implement persisted org index model and builder
+:PROPERTIES:
+:CUSTOM_ID: PROJ-057-extract-shared-workspace-cache-substrate::implement-org-index-builder
+:DEPENDS: PROJ-057-extract-shared-workspace-cache-substrate::builder-tests
+:END:
+- Files: new org-index Rust modules under `crates/pi-natives` and/or `crates/pi-org-engine`, plus the shared cache crate.
+- Persist the org index under its own namespace/path (for example `.spell/org`) while reusing the shared cache substrate.
+- Index entries must cover both top-level and sub-outline IDs; do not require a second parse pass in TypeScript to reconstruct parent/child relationships.
+
+** ITEM Expose native org index status and rebuild commands
+:PROPERTIES:
+:CUSTOM_ID: PROJ-057-extract-shared-workspace-cache-substrate::native-status-and-index
+:DEPENDS: PROJ-057-extract-shared-workspace-cache-substrate::implement-org-index-builder
+:END:
+- Files: `crates/pi-natives/src/org_buffer.rs`, native TS bindings if needed.
+- Add native commands for org-index status/load/rebuild with truthful missing/fresh/stale reporting.
+- Keep output structured so downstream TS layers can use it without reparsing human-readable strings.
+
+* Edge Cases
+
+- Git worktrees or repos without a readable `.git/HEAD` still need deterministic freshness behavior.
+- Hidden/temp org files and `.spell/*` contents must not pollute the org index fingerprint set.
+- Duplicate CUSTOM_IDs must remain representable as conflicts/diagnostics in the index; do not silently drop later entries.
+- Very large org trees must avoid quadratic merges or repeated reparses during one build.
+- The shared cache extraction must not regress existing code-graph cache semantics.
+
+* Acceptance Criteria
+
+- A shared Rust cache substrate exists and is consumed by both code-graph and the org index path.
+- Native org index status reports missing/fresh/stale truthfully against real workspace mutations.
+- The persisted org index can round-trip top-level + sub-outline metadata needed by later cutover items.
+- Code-graph behavior remains intact after the cache extraction.

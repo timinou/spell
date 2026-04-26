@@ -1,0 +1,91 @@
+#+TITLE: Cut the full org read surface onto indexed native lookups
+#+STATE: DONE
+#+SESSION_ID: 14c1d9a329a1f873
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-20T09-20-46-758Z_14c1d9a329a1f873.jsonl]]
+#+CUSTOM_ID: FEAT-609-cut-the-full-org-read-surface-onto-index
+#+DEPENDS: PROJ-057-extract-shared-workspace-cache-substrate FEAT-608-keep-org-index-truthful-across-all-org-m
+#+LAYER: packages/org pi-natives
+
+* Initial Message
+
+continue, what were you asking? what's your design so far?
+
+* Scope
+
+In scope:
+- Replace repeated TypeScript category rescans for the org read surface with native index-backed lookup/query commands.
+- Cut over ID-based reads (`findItemById`, `fetchItem`, `fetchItems`) and broad category readers used by `get`, `query`, `dashboard`, `archive`, `wave`, and `graph` item collection.
+- Preserve existing output contracts, ordering, filtering, and sort semantics unless a truthful bug requires a documented change.
+- Keep the org tool as the public surface; Rust supplies the data, TypeScript formats/tool-routes it.
+
+Out of scope:
+- Coding-agent-specific plan validation / exit-plan-mode orchestration.
+- Mutation freshness mechanics themselves (handled by FEAT-608).
+- Any slow compatibility branch that silently falls back to parsing every category as the steady-state read path.
+
+Rationale:
+- The user explicitly selected full org read-surface cutover in the first implementation wave, not a narrow hot-path optimization. That means query/dashboard/archive must move too, not just `findItemById` and exit-plan-mode.
+
+* Existing Patterns
+
+- `packages/org/src/tool.ts` — `fetchItems`, `fetchItem`, `collectItems`, `collectPlanWaveItems`, `cmdGet`, `cmdQuery`, `cmdDashboard`, `cmdArchive`, `cmdWave`, and `cmdGraph` define the exact read paths to replace.
+- `packages/org/src/native-ops.ts` — `readCategory` / `findItemById` show the current repeated scan boundary that must disappear from warm reads.
+- `crates/pi-natives/src/org_buffer.rs` — current org command router is the native place to add resolve/query/list commands over the persisted org index.
+- `packages/org/src/id-links.ts` — plan/body link extraction remains a text concern, but linked item resolution should move to indexed reads.
+- `crates/pi-code-graph/src/query.rs` and `crates/pi-natives/src/code_graph.rs` show the desired split: native query primitives + TS formatting/routing.
+
+* Tests
+
+User workflows to defend first:
+1. Workflow 1 — `org get` resolves an item by CUSTOM_ID through the index and preserves existing body/includeBody behavior.
+2. Workflow 2 — `org query` over category/all-categories returns the same filtered items and sort order as before, but without reparsing every file on warm reads.
+3. Workflow 3 — `org dashboard` and `org archive` compute counts/items from indexed data and remain truthful after writes.
+4. Workflow 4 — `org wave` / `org graph` item collection preserves current results for file/category/planItemId inputs while using indexed reads to collect the underlying items.
+5. Workflow 5 — duplicate CUSTOM_IDs or missing linked items remain surfaced truthfully; the index must not invent uniqueness or silently hide conflicts.
+
+Concrete test files / scenarios:
+- Extend `packages/org/test` coverage for `get`, `query`, `wave`, `dashboard`, and `archive` to run against tempdir workspaces with multiple categories and sub-outlines.
+- Add regression tests for ordering parity: file order, line order, and id tie-breaks must match the existing `compareOrgItemLocation` semantics unless explicitly replaced with a native equivalent.
+- Add focused native tests for query/filter behavior: category scoping, state filters, keyword queries, includeBody toggles, and duplicate-id reporting.
+
+* Implementation
+** ITEM Write failing read-surface parity tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-609-cut-the-full-org-read-surface-onto-index::read-parity-tests
+:DEPENDS: FEAT-608-keep-org-index-truthful-across-all-org-m::ts-postwrite-cutover
+:END:
+- Files: `packages/org/test/*` coverage for get/query/wave/dashboard/archive/graph paths.
+- Encode Workflows 1-5 as initially-failing parity tests.
+
+** ITEM Implement native resolve and query commands over the org index
+:PROPERTIES:
+:CUSTOM_ID: FEAT-609-cut-the-full-org-read-surface-onto-index::native-read-commands
+:DEPENDS: FEAT-609-cut-the-full-org-read-surface-onto-index::read-parity-tests
+:END:
+- Files: org-index Rust modules and `crates/pi-natives/src/org_buffer.rs` command router.
+- Add structured native commands for: resolve-by-id, list/query by category or all categories, dashboard/archive aggregates, and item collection helpers needed by wave/graph.
+- Preserve enough metadata for TypeScript to keep current response envelopes without re-reading files.
+
+** ITEM Cut over packages/org read paths and remove steady-state rescans
+:PROPERTIES:
+:CUSTOM_ID: FEAT-609-cut-the-full-org-read-surface-onto-index::ts-read-cutover
+:DEPENDS: FEAT-609-cut-the-full-org-read-surface-onto-index::native-read-commands
+:END:
+- Files: `packages/org/src/tool.ts`, `packages/org/src/native-ops.ts`.
+- Replace warm-path uses of `readCategory`/`findItemById`/manual item collection with native indexed commands.
+- Keep any fallback branch exceptional and explicit (for example missing index before initial build), not the default code path.
+
+* Edge Cases
+
+- Duplicate IDs across categories must remain discoverable; `get` may still need deterministic first-match behavior plus conflict diagnostics instead of silent random selection.
+- `includeBody=false` queries must not accidentally force whole-body hydration or file rereads.
+- Category filters and mixed category/all-category queries must preserve existing inclusion semantics.
+- `wave` / `graph` commands still depend on the org engine’s item graph logic; only item collection moves, not the wave algorithm itself.
+- `archive` must not miss DONE items after in-session writes.
+
+* Acceptance Criteria
+
+- `packages/org` read commands (`get`, `query`, `dashboard`, `archive`, `wave`, `graph`) use indexed native reads on the warm path.
+- Output parity is preserved for sorting, filtering, includeBody behavior, and linked-item discovery.
+- Whole-category reparsing is no longer the normal warm-read mechanism in `packages/org/src/tool.ts` and `packages/org/src/native-ops.ts`.
+- Focused org tests prove parity and truthfulness across multi-category fixtures and duplicate-id cases.

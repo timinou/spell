@@ -4,6 +4,7 @@ use std::{fmt, io, path::PathBuf};
 pub enum CodeGraphError {
 	Io(io::Error),
 	Serialize(bincode::Error),
+	WorkspaceCache(pi_workspace_cache::WorkspaceCacheError),
 	UnsupportedLanguage(PathBuf),
 	DuplicateLanguage(String),
 	MissingLanguage(String),
@@ -16,6 +17,7 @@ impl fmt::Display for CodeGraphError {
 		match self {
 			Self::Io(err) => write!(f, "I/O error: {err}"),
 			Self::Serialize(err) => write!(f, "serialization error: {err}"),
+			Self::WorkspaceCache(err) => write!(f, "workspace cache error: {err}"),
 			Self::UnsupportedLanguage(path) => {
 				write!(f, "unsupported language for path {}", path.display())
 			},
@@ -42,6 +44,12 @@ impl From<io::Error> for CodeGraphError {
 impl From<bincode::Error> for CodeGraphError {
 	fn from(value: bincode::Error) -> Self {
 		Self::Serialize(value)
+	}
+}
+
+impl From<pi_workspace_cache::WorkspaceCacheError> for CodeGraphError {
+	fn from(value: pi_workspace_cache::WorkspaceCacheError) -> Self {
+		Self::WorkspaceCache(value)
 	}
 }
 

@@ -1,0 +1,127 @@
+#+TITLE: HARDEN_TYPESCRIPT_CODE_GRAPH_RESOLVER_ABORTS
+#+STATE: BLOCKED
+#+SESSION_ID: 14c4624a6c7ea808
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-22T08-34-47-346Z_14c4624a6c7ea808.jsonl]]
+#+CUSTOM_ID: PLAN-277-harden-typescript-code-graph-resolver-ab
+
+* Initial Message
+
+⏳ Grep: SERVER_DOMAIN
+
+
+ ⠦ Searching for SERVER_DOMAIN (esc to interrupt)
+
+╭── ✦  ▶──────────────────────────────────────────────────────────────────────────────────────────────────╮
+╰─                                                                                                       ─╯
+thread '<unnamed>' (1012358) panicked at /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/oxc_resolver-1.12.0/src/lib.rs:238:13:
+assertion failed: path.starts_with(package_json.directory())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread '<unnamed>' (1012358) panicked at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/core/src/p ⠼ Searching for SERVER_DOMAIN (esc to interrupt)
+panic in a function that cannot unwind
+stack backtrace:
+      0:     0x7fe4c7b6afea - std[8df389e468092df2]::backtrace_rs::backtrace::libunwind::trace
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/std/src/../../backtrace/src/backtrace/libunwind.rs:117:9
+   1:     0x7fe4c7b6afea - std[8df389e468092df2]::backtrace_rs::backtrace::trace_unsynchronized::<std[8df389e468092df2]::sys::backtrace::_print_fmt::{closure#1}>
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/std/src/../../backtrace/src/backtrace/mod.rs:66:14
+   2:     0x7fe4c7b6afea - std[8df389e468092df2]::sys::backtrace::_print_fmt
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/std/src/sys/backtrace.rs:74:9
+   3:     0x7fe4c7b6afea - <<std[8df389e468092df2]::sys::backtrace::BacktraceLock>::print::DisplayBacktrace as core[8d30425dc6831f26]::fmt::Display>::fmt
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/std/src/sys/backtrace.rs:44:26
+   4:     0x7fe4c7b85b4a - <core[8d30425dc6831f26]::fmt::rt::Argument>::fmt
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/core/src/fmt/rt.rs:152:76
+   5:     0x7fe4c7b85b4a - core[8d30425dc6831f26]::fmt::write
+   6:     0x7fe4c7b71e92 - std[8df389e468092df2]::io::default_write_fmt::<std[8df389e468092df2]::sys::stdio::unix::Stderr>
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/std/src/io/mod.rs:639:11
+   7:     0x7fe4c7b71e92 - <std[8df389e468092df2]::sys::stdio::unix::Stderr as std[8df389e468092df2]::io::Write>::write_fmt
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/std/src/io/mod.rs:1994:13
+   8:     0x7fe4c7b467cf - <std[8df389e468092df2]::sys::backtrace::BacktraceLock>::print
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/std/src/sys/backtrace.rs:47:9
+   9:     0x7fe4c7b467cf - std[8df389e468092df2]::panicking::default_hook::{closure#0}
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/std/src/panicking.rs:292:27
+  10:     0x7fe4c7b622f1 - std[8df389e468092df2]::panicking::default_hook
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/std/src/panicking.rs:319:9
+  11:     0x7fe4c7b6256b - std[8df389e468092df2]::panicking::panic_with_hook
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/std/src/panicking.rs:825:13
+  12:     0x7fe4c7b468ba - std[8df389e468092df2]::panicking::panic_handler::{closure#0}
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/std/src/panicking.rs:691:13
+  13:     0x7fe4c7b3dcb9 - std[8df389e468092df2]::sys::backtrace::__rust_end_short_backtrace::<std[8df389e468092df2]::panicking::panic_handler::{closure#0}, !>
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/std/src/sys/backtrace.rs:182:18
+  14:     0x7fe4c7b47a2d - __rustc[96991768433d27a8]::rust_begin_unwind
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/std/src/panicking.rs:689:5
+  15:     0x7fe4c7b862cd - core[8d30425dc6831f26]::panicking::panic_nounwind_fmt::runtime
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/core/src/panicking.rs:122:22
+  16:     0x7fe4c7b862cd - core[8d30425dc6831f26]::panicking::panic_nounwind_fmt
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/core/src/intrinsics/mod.rs:2447:9
+  17:     0x7fe4c7b8624b - core[8d30425dc6831f26]::panicking::panic_nounwind
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/core/src/panicking.rs:225:5
+  18:     0x7fe4c7b863d7 - core[8d30425dc6831f26]::panicking::panic_cannot_unwind
+                               at /rustc/3645249d79dfb136b5d8de3ce153d19d6698d92d/library/core/src/panicking.rs:337:5
+  19:     0x7fe4c4454e13 - napi[8e29f9197e91c078]::async_work::execute::<pi_natives[f9f283231afbe5d4]::task::Blocking<pi_natives[f9f283231afbe5d4]::code_graph::CodeGraphResult>>
+                               at /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/napi-3.8.3/src/async_work.rs:109:1
+  20:          0x2feb8db - <unknown>
+thread caused non-unwinding panic. aborting.
+fish: Job 1, 'spell' terminated by signal SIGABRT (Abort)
+
+
+
+What happened?
+
+* Context
+
+Top-level child links:
+- [[id:BUG-311-harden-typescript-code-graph-resolver-ag]]
+
+Observed failure:
+- User reported a Spell crash while searching `SERVER_DOMAIN`.
+- Native backtrace identified a panic inside `oxc_resolver 1.12.0`:
+  - assertion `path.starts_with(package_json.directory())`
+  - unwound through `pi_natives` async work and aborted the host process.
+- Repo evidence:
+  - `crates/pi-code-graph/Cargo.toml` pins `oxc_resolver = "1.12"`.
+  - `crates/pi-code-graph/src/language/typescript.rs` calls `resolver.resolve(...)` directly inside `TypeScriptImportResolver.resolve()`.
+  - `crates/pi-code-graph/src/indexer.rs` invokes that resolver inside `CodeGraphBuilder.build()`.
+  - `crates/pi-natives/src/code_graph.rs` and `crates/pi-natives/src/code_buffer.rs` build graphs through `CodeGraphBuilder`, so the panic escapes into the NAPI runtime path used by semantic grep / code graph commands.
+
+Settled design decisions:
+1. One child BUG item is sufficient. This is one bug class at one invariant boundary: a third-party TypeScript resolver panic escaping native code-graph indexing.
+2. Recommended approach only: upgrade `oxc_resolver` to current stable `11.x` and add a narrow local panic guard around `TypeScriptImportResolver.resolve()`.
+3. The guard must preserve current resolver semantics for valid inputs and reuse existing degraded behavior (`fallback_relative_path()` / unresolved import) instead of inventing a new success payload or broad error surface.
+4. Scope stays narrow: no broad dependency refresh, no semantic grep UX redesign, no path-canonicalization work unless the upgraded resolver + guard still leave a proven gap.
+5. Verification is Rust-first and package-scoped before final repo checks. This follows `memory://root/memory_summary.md` guidance to prefer package-scoped verification first, paired with repo evidence that the touched surface is confined to `crates/pi-code-graph` and its direct native consumer `crates/pi-natives/src/code_graph.rs`.
+6. If implementation needs a live repro in the fresh execution session, rebuild the native addon after Rust changes before manual Spell validation; this is also guided by `memory://root/memory_summary.md` and grounded by repo evidence that the crashing path is the `pi-natives` NAPI code-graph surface.
+
+Recommended approach:
+- Add failing resolver/builder regressions in `crates/pi-code-graph/src/language/typescript.rs`.
+- Bump the upstream dependency in `crates/pi-code-graph/Cargo.toml` / `Cargo.lock`.
+- Wrap the direct `resolver.resolve(...)` call in a narrow local `catch_unwind(AssertUnwindSafe(...))` guard using the existing repo precedent from `crates/pi-embedding-worker/src/main.rs`.
+- Keep `CodeGraphBuilder.build()` and `pi-natives` consumers unchanged unless helper extraction or compatibility plumbing is strictly required.
+
+Critical files:
+- `crates/pi-code-graph/Cargo.toml`
+- `Cargo.lock`
+- `crates/pi-code-graph/src/language/typescript.rs`
+- `crates/pi-code-graph/src/indexer.rs`
+- `crates/pi-natives/src/code_graph.rs`
+- `crates/pi-embedding-worker/src/main.rs`
+
+Why one child item:
+- Splitting the dependency bump, panic guard, and resolver regressions across multiple children would duplicate context and create artificial coordination for one tightly coupled fix boundary.
+- The change is best represented as one self-contained BUG item with test-first sub-outline sequencing.
+
+* Verification
+
+Required proof before truthful closure in the implementation session:
+- Rust targeted resolver/builder regression tests in `crates/pi-code-graph/src/language/typescript.rs`.
+- `cargo check -p pi-code-graph`.
+- `cargo check -p pi-natives` because `crates/pi-natives/src/code_graph.rs` consumes `CodeGraphBuilder`.
+- Final repo check: `bun check:rs`.
+
+Manual proof expectations:
+- Re-run the original semantic-search/code-graph path on a workspace that previously crashed or an equivalent reproduction; confirm Spell no longer aborts.
+- Confirm valid TypeScript import resolution still produces import edges for a known-good workspace.
+- Confirm a guarded resolver failure degrades to unresolved/fallback behavior instead of crashing the host.
+
+* Execution Manifest
+
+NOTE [2026-04-22]: Superseded during plan authoring by [[id:PLAN-280-typescript-resolver-panic-hardening]]. This draft should not be executed.

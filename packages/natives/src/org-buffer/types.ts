@@ -26,6 +26,8 @@ export interface OrgBufferOptions {
 	note?: string;
 	property?: string;
 	value?: string;
+	root?: string;
+	categories?: Array<{ absPath: string; name: string; dir: string; prefix?: string }>;
 }
 
 export interface OrgBufferResult {

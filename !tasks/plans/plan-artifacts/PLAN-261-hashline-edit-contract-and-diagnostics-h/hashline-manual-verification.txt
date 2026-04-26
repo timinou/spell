@@ -1,0 +1,48 @@
+PLAN-261 manual hashline verification
+
+Overall: PASS
+
+Workspace temp: /tmp/plan-261-hashline-proof-q979am
+
+
+
+## Missing anchor replace
+Message: Edit 1: replace requires at least one valid LINE#ID anchor in "pos" or "end". Re-read the file to get fresh LINE#ID anchors, then retry the smallest valid edit.
+Checks: true, true, true
+
+## Malformed anchor replace
+Message: Edit 1: invalid pos anchor "name = "demo"". Expected LINE#ID from read output (e.g. "12#QW"). Cause: Invalid line reference "name = "demo"". Expected format "LINE#ID" (e.g. "5#QW"). Re-read the file to get fresh LINE#ID anchors, then retry the smallest valid edit.
+Checks: true, true, true
+
+## Stale hash replace
+Message:
+1 line has changed since last read. Use the updated LINE#ID references shown below (>>> marks changed lines).
+
+    1#JZ:[package]
+>>> 2#NH:name = "demo-renamed"
+    3#NQ:version = "0.1.0"
+    4#RW:
+Expected remap: 2#NH
+Checks: true, true, true
+
+## Valid hashline replace
+Result: Updated /tmp/plan-261-hashline-proof-q979am/Cargo.toml
+Changes: +1 -1
+
+Diff preview:
+ 1#JZ|[package]
+-2   |name = "demo-renamed"
++2#YM|name = "final"
+ 3#NQ|version = "0.1.0"
+Final file:
+[package]
+name = "final"
+version = "0.1.0"
+
+Checks: true, true
+
+
+
+## Renderer note
+
+Shared edit renderer now routes edit errors through formatErrorMessage() in packages/coding-agent/src/patch/shared.ts; no additional runtime failures occurred while exercising the edit tool outputs above.

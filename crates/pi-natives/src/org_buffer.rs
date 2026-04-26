@@ -20,7 +20,7 @@ use pi_org_engine::{
 };
 use serde_json::{Value, json};
 
-use crate::buffer_registry;
+use crate::{buffer_registry, org_index};
 
 fn org_err(message: impl Into<String>) -> napi::Error {
 	napi::Error::from_reason(message.into())
@@ -79,6 +79,13 @@ fn dir(options: &Value) -> &str {
 		.get("dir")
 		.and_then(Value::as_str)
 		.unwrap_or("tasks")
+}
+fn required_root(options: &Value) -> Result<PathBuf> {
+	let root = options
+		.get("root")
+		.and_then(Value::as_str)
+		.ok_or_else(|| org_err("Missing required field: root"))?;
+	Ok(PathBuf::from(root))
 }
 
 fn read_org_source(options: &Value) -> Result<String> {
@@ -263,6 +270,7 @@ fn cmd_create_item(options: &Value) -> Result<Value> {
 	buffer
 		.save_with_watcher(buffer_registry().watcher())
 		.map_err(engine_err)?;
+	refresh_org_index_after_write(options)?;
 	Ok(json_response(
 		json!({ "success": true, "file": path.display().to_string(), "id": params.id }),
 		false,
@@ -330,6 +338,7 @@ fn cmd_update_item(options: &Value) -> Result<Value> {
 	buffer
 		.save_with_watcher(buffer_registry().watcher())
 		.map_err(engine_err)?;
+	refresh_org_index_after_write(options)?;
 	Ok(json_response(
 		json!({ "success": true, "file": path.display().to_string(), "updated": updated }),
 		false,
@@ -356,6 +365,7 @@ fn cmd_set_property(options: &Value) -> Result<Value> {
 	buffer
 		.save_with_watcher(buffer_registry().watcher())
 		.map_err(engine_err)?;
+	refresh_org_index_after_write(options)?;
 	Ok(json_response(json!({ "success": true, "property": property }), false))
 }
 
@@ -378,6 +388,7 @@ fn cmd_append_note(options: &Value) -> Result<Value> {
 	buffer
 		.save_with_watcher(buffer_registry().watcher())
 		.map_err(engine_err)?;
+	refresh_org_index_after_write(options)?;
 	Ok(json_response(json!({ "success": true }), false))
 }
 
@@ -411,6 +422,7 @@ fn cmd_edit_section(options: &Value) -> Result<Value> {
 		buffer
 			.save_with_watcher(buffer_registry().watcher())
 			.map_err(engine_err)?;
+		refresh_org_index_after_write(options)?;
 		return Ok(json_response(json!({ "success": true }), false));
 	}
 
@@ -500,6 +512,139 @@ fn parse_items_from_options(options: &Value) -> Result<Vec<pi_org_engine::OrgIte
 	)
 	.map_err(org_err)
 }
+fn refresh_org_index_after_write(options: &Value) -> Result<()> {
+	let Some(root) = options
+		.get("root")
+		.and_then(Value::as_str)
+		.map(PathBuf::from)
+	else {
+		return Ok(());
+	};
+	let Some(_) = options.get("categories") else {
+		return Ok(());
+	};
+	let categories = org_index::parse_categories(options).map_err(org_err)?;
+	let keywords = todo_keywords(options);
+	org_index::ensure_fresh(&root, &categories, &keywords, true).map_err(org_err)?;
+	Ok(())
+}
+
+fn cmd_org_index_status(options: &Value) -> Result<Value> {
+	let root = required_root(options)?;
+	Ok(json_response(org_index::status_json(&root), false))
+}
+
+fn cmd_org_index_rebuild(options: &Value) -> Result<Value> {
+	let root = required_root(options)?;
+	let categories = org_index::parse_categories(options).map_err(org_err)?;
+	let keywords = todo_keywords(options);
+	let (entry, previous_status, rebuilt) =
+		org_index::ensure_fresh(&root, &categories, &keywords, true).map_err(org_err)?;
+	Ok(json_response(
+		json!({
+			"status": cache_status_json(previous_status),
+			"rebuilt": rebuilt,
+			"itemCount": entry.index.items.len(),
+			"duplicateIds": entry.index.duplicate_ids,
+			"fingerprintHash": org_index::fingerprint_hash(&entry),
+		}),
+		false,
+	))
+}
+
+fn cmd_org_index_resolve(options: &Value) -> Result<Value> {
+	let root = required_root(options)?;
+	let id = required_str(options, "id")?;
+	let categories = org_index::parse_categories(options).map_err(org_err)?;
+	let keywords = todo_keywords(options);
+	let include_body = options
+		.get("includeBody")
+		.and_then(Value::as_bool)
+		.unwrap_or(true);
+	let (entry, status, rebuilt) =
+		org_index::ensure_fresh(&root, &categories, &keywords, false).map_err(org_err)?;
+	let items = org_index::resolve(&entry, id, include_body);
+	Ok(json_response(
+		json!({
+			"items": items,
+			"item": items.first(),
+			"cacheStatus": cache_status_json(status),
+			"rebuilt": rebuilt,
+			"duplicates": entry.index.duplicate_ids.get(id),
+		}),
+		false,
+	))
+}
+
+fn cmd_org_index_list(options: &Value) -> Result<Value> {
+	let root = required_root(options)?;
+	let categories = org_index::parse_categories(options).map_err(org_err)?;
+	let keywords = todo_keywords(options);
+	let include_body = options
+		.get("includeBody")
+		.and_then(Value::as_bool)
+		.unwrap_or(false);
+	let filter = if let Some(query_str) = options.get("query").and_then(Value::as_str) {
+		query::parse_keyword_query(query_str)
+	} else if let Some(filter_obj) = options.get("filter") {
+		serde_json::from_value::<QueryFilter>(filter_obj.clone()).unwrap_or_default()
+	} else {
+		QueryFilter::default()
+	};
+	let (entry, status, rebuilt) =
+		org_index::ensure_fresh(&root, &categories, &keywords, false).map_err(org_err)?;
+	let (items, total) = org_index::list(&entry, &filter, include_body);
+	Ok(json_response(
+		json!({
+			"items": items,
+			"total": total,
+			"cacheStatus": cache_status_json(status),
+			"rebuilt": rebuilt,
+			"duplicateIds": entry.index.duplicate_ids,
+		}),
+		false,
+	))
+}
+
+fn cmd_org_index_dashboard(options: &Value) -> Result<Value> {
+	let root = required_root(options)?;
+	let categories = org_index::parse_categories(options).map_err(org_err)?;
+	let keywords = todo_keywords(options);
+	let (entry, ..) =
+		org_index::ensure_fresh(&root, &categories, &keywords, false).map_err(org_err)?;
+	Ok(json_response(org_index::dashboard(&entry, &categories, &keywords), false))
+}
+
+fn cmd_org_index_archive(options: &Value) -> Result<Value> {
+	let root = required_root(options)?;
+	let categories = org_index::parse_categories(options).map_err(org_err)?;
+	let keywords = todo_keywords(options);
+	let category = options.get("category").and_then(Value::as_str);
+	let (entry, ..) =
+		org_index::ensure_fresh(&root, &categories, &keywords, false).map_err(org_err)?;
+	let items = org_index::archive_items(&entry, category);
+	Ok(json_response(json!({ "archived": items.len(), "items": items }), false))
+}
+
+fn cmd_org_index_validate_plan(options: &Value) -> Result<Value> {
+	let root = required_root(options)?;
+	let id = required_str(options, "id")?;
+	let categories = org_index::parse_categories(options).map_err(org_err)?;
+	let keywords = todo_keywords(options);
+	let (entry, ..) =
+		org_index::ensure_fresh(&root, &categories, &keywords, false).map_err(org_err)?;
+	Ok(json_response(org_index::validate_plan(&entry, id), false))
+}
+
+fn cache_status_json(status: pi_workspace_cache::CacheStatus) -> Value {
+	match status {
+		pi_workspace_cache::CacheStatus::Missing => json!({ "status": "missing" }),
+		pi_workspace_cache::CacheStatus::Fresh => json!({ "status": "fresh" }),
+		pi_workspace_cache::CacheStatus::Stale { reason } => {
+			json!({ "status": "stale", "reason": reason })
+		},
+	}
+}
 
 #[allow(dead_code, reason = "helper used through execute_org wrapper")]
 fn execute_org_inner(options: &Value) -> Result<Value> {
@@ -521,6 +666,13 @@ fn execute_org_inner(options: &Value) -> Result<Value> {
 		"editSection" => cmd_edit_section(options),
 		"toMarkdown" => cmd_to_markdown(options),
 		"toPlainText" => cmd_to_plain_text(options),
+		"orgIndexStatus" => cmd_org_index_status(options),
+		"orgIndexRebuild" => cmd_org_index_rebuild(options),
+		"orgIndexResolve" => cmd_org_index_resolve(options),
+		"orgIndexList" => cmd_org_index_list(options),
+		"orgIndexDashboard" => cmd_org_index_dashboard(options),
+		"orgIndexArchive" => cmd_org_index_archive(options),
+		"orgIndexValidatePlan" => cmd_org_index_validate_plan(options),
 		other => Ok(json_response(Value::String(format!("Unknown command: {other}")), true)),
 	}
 }
@@ -637,6 +789,139 @@ mod tests {
 		let disk = fs::read_to_string(&file).expect("read disk");
 		assert!(disk.contains("External body."));
 		assert!(!disk.contains("should fail"));
+	}
+
+	fn category_json(dir: &std::path::Path) -> Value {
+		json!([{ "absPath": dir.display().to_string(), "name": "features", "dir": "tasks" }])
+	}
+
+	#[test]
+	fn org_index_rebuild_resolves_top_level_and_suboutline() {
+		let dir = tempdir().expect("tempdir");
+		let root = dir.path();
+		let category = root.join("features");
+		fs::create_dir_all(&category).expect("category");
+		fs::write(
+			category.join("FEAT-001.org"),
+			"* ITEM Feature\n:PROPERTIES:\n:CUSTOM_ID: FEAT-001\n:LAYER: core\n:END:\n\n** ITEM \
+			 Child\n:PROPERTIES:\n:CUSTOM_ID: FEAT-001::child\n:DEPENDS: FEAT-001::other\n:END:\n",
+		)
+		.expect("org file");
+		let rebuilt = execute_org(json!({
+			"command": "orgIndexRebuild",
+			"root": root.display().to_string(),
+			"categories": category_json(&category),
+			"todoKeywords": ["ITEM", "DONE"]
+		}))
+		.expect("rebuild");
+		assert_eq!(rebuilt["error"], json!(false));
+		assert_eq!(rebuilt["output"]["itemCount"], json!(2));
+		let resolved = execute_org(json!({
+			"command": "orgIndexResolve",
+			"root": root.display().to_string(),
+			"categories": category_json(&category),
+			"todoKeywords": ["ITEM", "DONE"],
+			"id": "FEAT-001::child",
+			"includeBody": true
+		}))
+		.expect("resolve");
+		assert_eq!(resolved["error"], json!(false));
+		assert_eq!(resolved["output"]["item"]["id"], json!("FEAT-001::child"));
+		assert_eq!(resolved["output"]["item"]["properties"]["DEPENDS"], json!("FEAT-001::other"));
+	}
+
+	#[test]
+	fn org_index_status_tracks_workspace_file_drift_and_duplicates() {
+		let dir = tempdir().expect("tempdir");
+		let root = dir.path();
+		let category = root.join("features");
+		fs::create_dir_all(&category).expect("category");
+		fs::write(category.join("a.org"), "* ITEM A\n:PROPERTIES:\n:CUSTOM_ID: DUP-001\n:END:\n")
+			.expect("first org file");
+		fs::write(category.join("b.org"), "* ITEM B\n:PROPERTIES:\n:CUSTOM_ID: DUP-001\n:END:\n")
+			.expect("second org file");
+		let missing = execute_org(json!({
+			"command": "orgIndexStatus",
+			"root": root.display().to_string(),
+		}))
+		.expect("status");
+		assert_eq!(missing["output"]["cache"]["status"], json!("missing"));
+		let rebuilt = execute_org(json!({
+			"command": "orgIndexRebuild",
+			"root": root.display().to_string(),
+			"categories": category_json(&category),
+			"todoKeywords": ["ITEM", "DONE"]
+		}))
+		.expect("rebuild");
+		assert_eq!(rebuilt["error"], json!(false));
+		assert!(rebuilt["output"]["duplicateIds"]["DUP-001"].is_array());
+		let fresh = execute_org(json!({
+			"command": "orgIndexStatus",
+			"root": root.display().to_string(),
+		}))
+		.expect("fresh status");
+		assert_eq!(fresh["output"]["cache"]["status"], json!("fresh"));
+		fs::write(category.join("c.org"), "* ITEM C\n:PROPERTIES:\n:CUSTOM_ID: FEAT-003\n:END:\n")
+			.expect("third org file");
+		let stale = execute_org(json!({
+			"command": "orgIndexStatus",
+			"root": root.display().to_string(),
+		}))
+		.expect("stale status");
+		assert_eq!(stale["output"]["cache"]["status"], json!("stale"));
+	}
+
+	#[test]
+	fn org_index_write_refreshes_same_session_reads() {
+		let dir = tempdir().expect("tempdir");
+		let root = dir.path();
+		let category = root.join("features");
+		fs::create_dir_all(&category).expect("category");
+		let file = category.join("created.org");
+		let created = execute_org(json!({
+			"command": "createItem",
+			"file": file.display().to_string(),
+			"id": "FEAT-010",
+			"title": "Created",
+			"state": "ITEM",
+			"todoKeywords": ["ITEM", "DONE"],
+			"root": root.display().to_string(),
+			"categories": category_json(&category)
+		}))
+		.expect("create item");
+		assert_eq!(created["error"], json!(false));
+		let resolved = execute_org(json!({
+			"command": "orgIndexResolve",
+			"root": root.display().to_string(),
+			"categories": category_json(&category),
+			"todoKeywords": ["ITEM", "DONE"],
+			"id": "FEAT-010",
+			"includeBody": true
+		}))
+		.expect("resolve");
+		assert_eq!(resolved["output"]["item"]["title"], json!("Created"));
+		let updated = execute_org(json!({
+			"command": "setProperty",
+			"file": file.display().to_string(),
+			"id": "FEAT-010",
+			"property": "LAYER",
+			"value": "native",
+			"todoKeywords": ["ITEM", "DONE"],
+			"root": root.display().to_string(),
+			"categories": category_json(&category)
+		}))
+		.expect("set property");
+		assert_eq!(updated["error"], json!(false));
+		let resolved = execute_org(json!({
+			"command": "orgIndexResolve",
+			"root": root.display().to_string(),
+			"categories": category_json(&category),
+			"todoKeywords": ["ITEM", "DONE"],
+			"id": "FEAT-010",
+			"includeBody": true
+		}))
+		.expect("resolve updated");
+		assert_eq!(resolved["output"]["item"]["properties"]["LAYER"], json!("native"));
 	}
 
 	#[test]

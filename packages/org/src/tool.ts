@@ -6,21 +6,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { executeOrg } from "@oh-my-pi/pi-natives";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { findCategory, findCategoryForId, resolveCategories } from "./categories";
+import { findCategory, resolveCategories } from "./categories";
 import { generateId } from "./id-generator";
 import { extractIdLinks, parseSubOutlineId } from "./id-links";
 import { KeyedMutex } from "./mutex";
 import { DEFAULT_ORG_CONFIG, REQUIRED_PROPERTIES } from "./schema/defaults";
 import { rewriteSubOutlineIds } from "./sub-outline-rewrite";
-import type {
-	CategoryMetrics,
-	ComputedWave,
-	OrgConfig,
-	OrgItem,
-	OrgQueryFilter,
-	OrgSessionContext,
-	ValidationIssue,
-} from "./types";
+import type { ComputedWave, OrgConfig, OrgItem, OrgQueryFilter, OrgSessionContext, ValidationIssue } from "./types";
 
 const createCategoryMutex = new KeyedMutex<string>();
 const SUBOUTLINE_SLUG_RE = /^[A-Za-z0-9_-]+$/;
@@ -178,35 +170,6 @@ async function readOrgFile(opts: ReadOrgFileOptions): Promise<OrgItem[]> {
 	return ((result.output as { items?: OrgItem[] }).items ?? []) as OrgItem[];
 }
 
-async function readCategory(
-	categoryAbsPath: string,
-	category: string,
-	dir: string,
-	todoKeywords: string[],
-	includeBody = false,
-): Promise<OrgItem[]> {
-	let entries: string[];
-	try {
-		entries = await fs.readdir(categoryAbsPath);
-	} catch (err) {
-		if (isEnoent(err)) return [];
-		throw err;
-	}
-	const orgFiles = entries.filter(entry => entry.endsWith(".org") && entry !== "reference.org");
-	const results = await Promise.all(
-		orgFiles.map(file =>
-			readOrgFile({
-				filePath: path.join(categoryAbsPath, file),
-				category,
-				dir,
-				todoKeywords,
-				includeBody,
-			}),
-		),
-	);
-	return results.flat();
-}
-
 function applyFilter(items: OrgItem[], filter: OrgQueryFilter): OrgItem[] {
 	return items.filter(item => {
 		if (filter.level !== undefined && item.level !== filter.level) return false;
@@ -266,28 +229,6 @@ function compareOrgItemLocation(a: OrgItem, b: OrgItem): number {
 	return a.id.localeCompare(b.id);
 }
 
-async function findItemsById(
-	categoryDirs: Array<{ absPath: string; name: string; dir: string }>,
-	customId: string,
-	todoKeywords: string[],
-	includeBody = true,
-): Promise<OrgItem[]> {
-	const matches: OrgItem[] = [];
-	for (const category of categoryDirs) {
-		const items = await readCategory(category.absPath, category.name, category.dir, todoKeywords, includeBody);
-		matches.push(...items.filter(item => item.id === customId));
-	}
-	return matches.sort(compareOrgItemLocation);
-}
-
-async function findItemById(
-	categoryDirs: Array<{ absPath: string; name: string; dir: string }>,
-	customId: string,
-	todoKeywords: string[],
-): Promise<OrgItem | undefined> {
-	return (await findItemsById(categoryDirs, customId, todoKeywords))[0];
-}
-
 function buildReferenceOrg(prefix: string, todoKeywords: string[]): string {
 	const keywords = todoKeywords.join(" | ");
 	return `#+TITLE: Reference\n#+DESCRIPTION: Schema contract for this org directory.\n#+TODO: ${keywords}\n\n* Schema\n\n** Task ID Format\n\nTask IDs follow the pattern: ${prefix}-NNN-kebab-title\nExample: ${prefix}-001-implement-feature\n\n** TODO Keywords\n\n| Keyword | Meaning                            |\n|---------+------------------------------------|\n| ITEM    | Not started                        |\n| DOING   | Actively being worked on           |\n| REVIEW  | Work done, awaiting review         |\n| DONE    | Complete                           |\n| BLOCKED | Waiting on external dependency     |\n`;
@@ -304,21 +245,51 @@ async function initCategoryDir(categoryAbsPath: string, prefix: string, todoKeyw
 }
 
 async function fetchItems(ctx: OrgContext, id: string, includeBody = true): Promise<OrgItem[]> {
-	const categories = resolveCategories(ctx.config, ctx.projectRoot);
-	return findItemsById(
-		categories.map(c => ({
-			absPath: c.absPath,
-			name: c.name,
-			dir: c.dirName,
-		})),
+	const result = executeOrg({
+		command: "orgIndexResolve",
+		root: ctx.projectRoot,
+		categories: indexCategories(ctx),
+		todoKeywords: ctx.config.todoKeywords,
 		id,
-		ctx.config.todoKeywords,
 		includeBody,
-	);
+	});
+	if (result.error) throw new Error(String(result.output));
+	return ((result.output as { items?: OrgItem[] }).items ?? []) as OrgItem[];
 }
 
 async function fetchItem(ctx: OrgContext, id: string): Promise<OrgItem | undefined> {
 	return (await fetchItems(ctx, id))[0];
+}
+function indexCategories(ctx: OrgContext): Array<{ absPath: string; name: string; dir: string; prefix: string }> {
+	return resolveCategories(ctx.config, ctx.projectRoot).map(category => ({
+		absPath: category.absPath,
+		name: category.name,
+		dir: category.dirName,
+		prefix: category.prefix,
+	}));
+}
+
+function indexedList(
+	ctx: OrgContext,
+	args: { includeBody?: boolean; category?: string | string[]; level?: number },
+): OrgItem[] {
+	const categories = indexCategories(ctx);
+	const categoryFilter =
+		args.category === undefined ? undefined : Array.isArray(args.category) ? args.category : [args.category];
+	const nativeFilter = {
+		category: categoryFilter,
+		level: args.level,
+	};
+	const result = executeOrg({
+		command: "orgIndexList",
+		root: ctx.projectRoot,
+		categories,
+		todoKeywords: ctx.config.todoKeywords,
+		includeBody: args.includeBody ?? false,
+		filter: nativeFilter,
+	});
+	if (result.error) throw new Error(String(result.output));
+	return ((result.output as { items?: OrgItem[] }).items ?? []) as OrgItem[];
 }
 
 async function cmdInit(ctx: OrgContext, args: { category?: string }): Promise<unknown> {
@@ -394,6 +365,9 @@ async function cmdCreate(
 			sessionId: session?.sessionId,
 			transcriptPath: session?.transcriptPath,
 			initialMessage: session?.initialMessage,
+			root: ctx.projectRoot,
+			categories: indexCategories(ctx),
+			todoKeywords: ctx.config.todoKeywords,
 		});
 		if (result.error) throw new Error(String(result.output));
 		return {
@@ -446,56 +420,18 @@ async function cmdQuery(
 	if (parsed.priority && !filter.priority) merged.priority = parsed.priority;
 	if (parsed.layer && !filter.layer) merged.layer = parsed.layer;
 	if (parsed.agent && !filter.agent) merged.agent = parsed.agent;
-	const allItems: OrgItem[] = [];
-	await Promise.all(
-		targetCats.map(async cat =>
-			allItems.push(
-				...(await readCategory(
-					cat.absPath,
-					cat.name,
-					cat.dirName,
-					ctx.config.todoKeywords,
-					filter.includeBody ?? false,
-				)),
-			),
-		),
-	);
+	const allItems = indexedList(ctx, {
+		includeBody: filter.includeBody ?? false,
+		category: targetCats.map(cat => cat.name),
+		level: 0,
+	});
 	const filtered = applyFilter(allItems, { level: 0, ...merged });
 	sortItems(filtered, filter.sort);
 	return paginateResult(filtered, filtered.length, filter.limit, filter.offset);
 }
 
 async function cmdGet(ctx: OrgContext, args: { id: string }): Promise<unknown> {
-	const categories = resolveCategories(ctx.config, ctx.projectRoot);
-	const category = findCategoryForId(categories, args.id);
-	if (category) {
-		const subOutline = parseSubOutlineId(args.id);
-		const fileBaseName = subOutline ? subOutline.parentId : args.id;
-		const filePath = path.join(category.absPath, `${fileBaseName}.org`);
-		try {
-			await fs.stat(filePath);
-			const items = await readOrgFile({
-				filePath,
-				category: category.name,
-				dir: category.dirName,
-				todoKeywords: ctx.config.todoKeywords,
-				includeBody: true,
-			});
-			const found = items.find(item => item.id === args.id);
-			if (found) return { item: found };
-		} catch (err) {
-			if (!isEnoent(err)) throw err;
-		}
-	}
-	const item = await findItemById(
-		categories.map(c => ({
-			absPath: c.absPath,
-			name: c.name,
-			dir: c.dirName,
-		})),
-		args.id,
-		ctx.config.todoKeywords,
-	);
+	const item = await fetchItem(ctx, args.id);
 	return item ? { item } : { error: true, code: "NOT_FOUND", message: `Item not found: ${args.id}` };
 }
 
@@ -513,7 +449,6 @@ async function cmdUpdate(
 		includeBody?: boolean;
 	},
 ): Promise<unknown> {
-	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 	if (args.state && !ctx.config.todoKeywords.includes(args.state)) {
 		return {
 			error: true,
@@ -547,6 +482,8 @@ async function cmdUpdate(
 					body: rewrittenBody,
 					mode,
 					todoKeywords: ctx.config.todoKeywords,
+					root: ctx.projectRoot,
+					categories: indexCategories(ctx),
 				});
 			} catch {
 				return null;
@@ -605,6 +542,8 @@ async function cmdUpdate(
 				append: rewrittenAppend,
 				note: args.note,
 				todoKeywords: ctx.config.todoKeywords,
+				root: ctx.projectRoot,
+				categories: indexCategories(ctx),
 			});
 		} catch {
 			return null;
@@ -624,18 +563,10 @@ async function cmdUpdate(
 		const direct = await tryUpdate(args.file);
 		if (direct) return direct;
 	}
-	for (const cat of categories) {
-		let entries: string[];
-		try {
-			entries = await fs.readdir(cat.absPath);
-		} catch {
-			continue;
-		}
-		for (const file of entries.filter(entry => entry.endsWith(".org"))) {
-			const filePath = path.join(cat.absPath, file);
-			const response = await tryUpdate(filePath);
-			if (response) return response;
-		}
+	const item = await fetchItem(ctx, args.id);
+	if (item && item.file !== args.file) {
+		const response = await tryUpdate(item.file);
+		if (response) return response;
 	}
 	return {
 		error: true,
@@ -677,7 +608,6 @@ async function cmdSet(
 		includeBody?: boolean;
 	},
 ): Promise<unknown> {
-	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 	const trySet = async (filePath: string): Promise<Record<string, unknown> | null> => {
 		let result: ReturnType<typeof executeOrg>;
 		try {
@@ -688,6 +618,8 @@ async function cmdSet(
 				property: args.property,
 				value: args.value,
 				todoKeywords: ctx.config.todoKeywords,
+				root: ctx.projectRoot,
+				categories: indexCategories(ctx),
 			});
 		} catch {
 			return null;
@@ -706,18 +638,10 @@ async function cmdSet(
 		const direct = await trySet(args.file);
 		if (direct) return direct;
 	}
-	for (const cat of categories) {
-		let entries: string[];
-		try {
-			entries = await fs.readdir(cat.absPath);
-		} catch {
-			continue;
-		}
-		for (const file of entries.filter(entry => entry.endsWith(".org"))) {
-			const filePath = path.join(cat.absPath, file);
-			const response = await trySet(filePath);
-			if (response) return response;
-		}
+	const item = await fetchItem(ctx, args.id);
+	if (item && item.file !== args.file) {
+		const response = await trySet(item.file);
+		if (response) return response;
 	}
 	return {
 		error: true,
@@ -730,7 +654,6 @@ async function cmdNote(
 	ctx: OrgContext,
 	args: { id: string; note: string; file?: string; includeBody?: boolean },
 ): Promise<unknown> {
-	const categories = resolveCategories(ctx.config, ctx.projectRoot);
 	const tryNote = async (filePath: string): Promise<Record<string, unknown> | null> => {
 		let result: ReturnType<typeof executeOrg>;
 		try {
@@ -740,6 +663,8 @@ async function cmdNote(
 				id: args.id,
 				note: args.note,
 				todoKeywords: ctx.config.todoKeywords,
+				root: ctx.projectRoot,
+				categories: indexCategories(ctx),
 			});
 		} catch {
 			return null;
@@ -758,18 +683,10 @@ async function cmdNote(
 		const direct = await tryNote(args.file);
 		if (direct) return direct;
 	}
-	for (const cat of categories) {
-		let entries: string[];
-		try {
-			entries = await fs.readdir(cat.absPath);
-		} catch {
-			continue;
-		}
-		for (const file of entries.filter(entry => entry.endsWith(".org"))) {
-			const filePath = path.join(cat.absPath, file);
-			const response = await tryNote(filePath);
-			if (response) return response;
-		}
+	const item = await fetchItem(ctx, args.id);
+	if (item && item.file !== args.file) {
+		const response = await tryNote(item.file);
+		if (response) return response;
 	}
 	return {
 		error: true,
@@ -813,36 +730,14 @@ async function cmdDelete(ctx: OrgContext, args: { id: string; file?: string }): 
 	return { success: true, id: item.id, file: item.file, deleted: true };
 }
 async function cmdDashboard(ctx: OrgContext): Promise<unknown> {
-	const categories = resolveCategories(ctx.config, ctx.projectRoot);
-	const catMetrics: CategoryMetrics[] = [];
-	const totals: Record<string, number> = {};
-	for (const kw of ctx.config.todoKeywords) totals[kw] = 0;
-	const inProgress: OrgItem[] = [];
-	const blocked: OrgItem[] = [];
-	for (const cat of categories) {
-		const allItems = await readCategory(cat.absPath, cat.name, cat.dirName, ctx.config.todoKeywords);
-		const topLevelItems = allItems.filter(item => item.level === 0);
-		const byState: Record<string, number> = {};
-		for (const item of topLevelItems) {
-			byState[item.state] = (byState[item.state] ?? 0) + 1;
-			totals[item.state] = (totals[item.state] ?? 0) + 1;
-			if (item.state === "DOING" || item.state === "REVIEW") inProgress.push(item);
-			if (item.state === "BLOCKED") blocked.push(item);
-		}
-		catMetrics.push({
-			category: cat.name,
-			prefix: cat.prefix,
-			total: topLevelItems.length,
-			byState,
-		});
-	}
-	return {
+	const result = executeOrg({
+		command: "orgIndexDashboard",
 		root: ctx.projectRoot,
-		categories: catMetrics,
-		totals,
-		inProgress,
-		blocked,
-	};
+		categories: indexCategories(ctx),
+		todoKeywords: ctx.config.todoKeywords,
+	});
+	if (result.error) throw new Error(String(result.output));
+	return result.output;
 }
 
 async function cmdSuboutlineAdd(
@@ -899,6 +794,8 @@ async function cmdSuboutlineAdd(
 			id: parentItem.id,
 			append,
 			todoKeywords: ctx.config.todoKeywords,
+			root: ctx.projectRoot,
+			categories: indexCategories(ctx),
 		}),
 	);
 	if (result.error) {
@@ -912,7 +809,7 @@ async function cmdValidate(ctx: OrgContext, args: { category?: string; file?: st
 	const targets = args.category ? categories.filter(c => c.name === args.category) : categories;
 	const issues: ValidationIssue[] = [];
 	for (const cat of targets) {
-		const items = await readCategory(cat.absPath, cat.name, cat.dirName, ctx.config.todoKeywords);
+		const items = indexedList(ctx, { category: cat.name, includeBody: false });
 		for (const item of items) {
 			for (const prop of REQUIRED_PROPERTIES)
 				if (!item.properties[prop])
@@ -945,23 +842,11 @@ async function cmdValidatePlan(ctx: OrgContext, args: { id: string }): Promise<u
 }
 async function collectItems(ctx: OrgContext, args: { file?: string; category?: string }): Promise<OrgItem[]> {
 	const categories = resolveCategories(ctx.config, ctx.projectRoot);
-	if (args.file) {
-		const item = await readOrgFile({
-			filePath: args.file,
-			category: path.basename(path.dirname(args.file)),
-			dir: path.basename(path.dirname(args.file)),
-			todoKeywords: ctx.config.todoKeywords,
-			includeBody: false,
-		});
-		return item;
-	}
 	const targets = args.category
-		? categories.filter(cat => cat.name === args.category || cat.prefix === args.category)
-		: categories;
-	const items: OrgItem[] = [];
-	for (const cat of targets)
-		items.push(...(await readCategory(cat.absPath, cat.name, cat.dirName, ctx.config.todoKeywords)));
-	return items;
+		? categories.filter(cat => cat.name === args.category || cat.prefix === args.category).map(cat => cat.name)
+		: undefined;
+	const items = indexedList(ctx, { category: targets, includeBody: false });
+	return args.file ? items.filter(item => item.file === args.file) : items;
 }
 
 async function collectPlanWaveItems(
@@ -984,51 +869,31 @@ async function collectPlanWaveItems(
 		seenItems.add(key);
 		items.push(item);
 	};
+	const indexedItems = indexedList(ctx, { includeBody: false });
 	for (const linkedId of linkedIds) {
 		const subOutline = parseSubOutlineId(linkedId);
 		if (subOutline) {
-			const parentItems = await fetchItems(ctx, subOutline.parentId, false);
-			if (parentItems.length === 0) {
-				warnings.push(`linked child not found: ${subOutline.parentId}`);
+			const found = indexedItems.filter(item => item.id === linkedId);
+			if (found.length === 0) {
+				const parentExists = indexedItems.some(item => item.id === subOutline.parentId);
+				warnings.push(
+					`linked ${parentExists ? "sub-outline" : "child"} not found: ${parentExists ? linkedId : subOutline.parentId}`,
+				);
 				continue;
 			}
-			let found = false;
-			for (const parentItem of parentItems) {
-				const fileItems = await readOrgFile({
-					filePath: parentItem.file,
-					category: parentItem.category,
-					dir: parentItem.dir,
-					todoKeywords: ctx.config.todoKeywords,
-					includeBody: false,
-				});
-				for (const item of fileItems) {
-					if (item.id !== linkedId) continue;
-					addItem(item);
-					found = true;
-				}
-			}
-			if (!found) warnings.push(`linked sub-outline not found: ${linkedId}`);
+			for (const item of found) addItem(item);
 			continue;
 		}
 
-		const childItems = await fetchItems(ctx, linkedId, false);
+		const childItems = indexedItems.filter(item => item.id === linkedId);
 		if (childItems.length === 0) {
 			warnings.push(`linked child not found: ${linkedId}`);
 			continue;
 		}
-		for (const childItem of childItems) {
-			const fileItems = await readOrgFile({
-				filePath: childItem.file,
-				category: childItem.category,
-				dir: childItem.dir,
-				todoKeywords: ctx.config.todoKeywords,
-				includeBody: false,
-			});
-			for (const item of fileItems) {
-				if (item.level < 2) continue;
-				if (!item.id.startsWith(`${linkedId}::`)) continue;
-				addItem(item);
-			}
+		for (const item of indexedItems) {
+			if (item.level < 2) continue;
+			if (!item.id.startsWith(`${linkedId}::`)) continue;
+			addItem(item);
 		}
 	}
 
@@ -1056,6 +921,8 @@ async function writeManifestSection(
 			body,
 			mode: "replace",
 			todoKeywords: ctx.config.todoKeywords,
+			root: ctx.projectRoot,
+			categories: indexCategories(ctx),
 		});
 		if (!replaceResult.error) return { success: true };
 		const replaceOutput = replaceResult.output as { code?: string; message?: string } | string;
@@ -1073,6 +940,8 @@ async function writeManifestSection(
 			id: planItemId,
 			append: `\n\n${manifest}`,
 			todoKeywords: ctx.config.todoKeywords,
+			root: ctx.projectRoot,
+			categories: indexCategories(ctx),
 		});
 		if (!appendResult.error) return { success: true };
 		const appendOutput = appendResult.output as { message?: string } | string;
@@ -1173,14 +1042,15 @@ async function cmdGraph(ctx: OrgContext, args: { file?: string; category?: strin
 }
 
 async function cmdArchive(ctx: OrgContext, args: { category?: string }): Promise<unknown> {
-	const categories = resolveCategories(ctx.config, ctx.projectRoot);
-	const targets = args.category ? categories.filter(c => c.name === args.category) : categories;
-	const archived: Array<{ id: string; file: string }> = [];
-	for (const cat of targets) {
-		const items = await readCategory(cat.absPath, cat.name, cat.dirName, ctx.config.todoKeywords);
-		for (const item of items.filter(i => i.state === "DONE")) archived.push({ id: item.id, file: item.file });
-	}
-	return { archived: archived.length, items: archived };
+	const result = executeOrg({
+		command: "orgIndexArchive",
+		root: ctx.projectRoot,
+		categories: indexCategories(ctx),
+		todoKeywords: ctx.config.todoKeywords,
+		category: args.category,
+	});
+	if (result.error) throw new Error(String(result.output));
+	return result.output;
 }
 
 export function createOrgTool(

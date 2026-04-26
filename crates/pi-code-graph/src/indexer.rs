@@ -59,9 +59,11 @@ impl CodeGraphBuilder {
 		if !root.is_dir() {
 			return Err(CodeGraphError::InvalidRoot(root));
 		}
-		self
+		Ok(self
 			.cache
-			.status("workspace", &root, &|path| self.registry.match_path(path).is_some())
+			.status::<GraphCacheEntry>("workspace", &root, &|path| {
+				self.registry.match_path(path).is_some()
+			})?)
 	}
 
 	pub fn build(&self, options: &BuildGraphOptions) -> Result<GraphBuildOutcome> {
@@ -153,11 +155,15 @@ impl CodeGraphBuilder {
 				};
 				let file_edge = if import.is_type_only {
 					EdgeKind::TypeImports
+				} else if language.as_str() == "clojure" {
+					EdgeKind::Requires
 				} else {
 					EdgeKind::Imports
 				};
 				let symbol_edge = if import.is_type_only {
 					EdgeKind::TypeImports
+				} else if language.as_str() == "clojure" {
+					EdgeKind::Refers
 				} else {
 					EdgeKind::References
 				};
@@ -239,7 +245,9 @@ fn resolve_reference_target(
 	{
 		return Some(target_index);
 	}
-	if let Some((namespace, member)) = target_name.split_once('.')
+	if let Some((namespace, member)) = target_name
+		.split_once('.')
+		.or_else(|| target_name.split_once('/'))
 		&& let Some((target_file, _imported_name)) = import_bindings
 			.get(from_file)
 			.and_then(|bindings| bindings.get(namespace))
