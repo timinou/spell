@@ -41,6 +41,20 @@ function detailedFeatureBody(id: string, suboutlines: string[]): string {
 }
 
 describe("validatePlanItem dual-link manifest", () => {
+	test("validator_handles_frontmatter_only_plan_without_final_newline", async () => {
+		await Bun.write(
+			path.join(tmpDir, "!tasks", "plans", "PLAN-EOF.org"),
+			["#+TITLE: EOF Plan", "#+STATE: ITEM", "#+CUSTOM_ID: PLAN-EOF", "#+LAYER: org"].join("\n"),
+		);
+
+		const result = await validatePlanItem(settings, tmpDir, "PLAN-EOF");
+
+		expect(result).not.toBeNull();
+		expect(result?.valid).toBe(false);
+		expect(result?.planItem.body).toBe("");
+		expect(result?.issues.map(issue => issue.category)).toEqual(["missing-child-links"]);
+	});
+
 	test("validator_accepts_dual_link_manifest", async () => {
 		await seedFeature(
 			"FEAT-100",

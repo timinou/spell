@@ -68,3 +68,528 @@ The Phoenix Inspector's "Quick Fix" button in `~/code/ora/hotelcomm/ecosystem/ag
 * Verification
 ** Add or update a unit test covering the launch props and a dispatch test covering success/error reply handling.
 ** Manual repro note required: launch the inspector from `.spell/extensions/phoenix-inspector`, select an element, click Quick Fix, confirm the request leaves the window and the result text updates.
+* CANCELLED [coding-agent] Fix native org frontmatter EOF panic
+:PROPERTIES:
+:CUSTOM_ID: BUG-321-coding-agent-fix-native-org-frontmatter
+:LAYER: org
+:END:
+
+Superseded during planning by [[id:BUG-324-coding-agent-repair-org-parser-eof-byte]] after discovering this draft item was created with incorrect heading nesting. Do not execute.* Scope
+In scope: fix the native org parser boundary bug that can panic when extracting a file-level org item whose source contains only `#+` frontmatter lines and no trailing newline/body. This covers `crates/pi-org-engine/src/buffer.rs`, native bridge parse/index tests in `crates/pi-natives/src/org_buffer.rs`, and focused Rust verification. Out of scope: changing org syntax, changing plan-mode workflow requirements, migrating existing task files, or deleting/recreating any org items.
+
+* Existing Patterns
+- Native entrypoint: `crates/pi-natives/src/org_buffer.rs::execute_org` exposes `executeOrg` NAPI and returns JSON `{ output, error }` instead of throwing for ordinary engine errors.
+- Parser boundary: `crates/pi-org-engine/src/buffer.rs::extract_file_level_item` reads file-level `#+TITLE`, `#+STATE`, `#+CUSTOM_ID`, and other keyword properties before extracting body with `include_body`.
+- Current bug: `frontmatter_end += line.len() + 1` assumes every `source.lines()` item ended with `
+`. That is false for the final line when the file has no trailing newline. The subsequent `source[frontmatter_end..]` slice can panic with `start byte index ... is out of bounds`.
+- Current tests live inline under `#[cfg(test)] mod tests` in `crates/pi-org-engine/src/buffer.rs` and `crates/pi-natives/src/org_buffer.rs`; follow those fixtures and assertion style.
+
+* Tests
+Workflows to cover first:
+1. Parse a source string exactly like `#+TITLE: Crash
+#+STATE: ITEM
+#+CUSTOM_ID: PLAN-EOF
+#+LAYER: org` with no trailing newline and `include_body=true`; expected: one file-level item, id `PLAN-EOF`, `body == None`, no panic.
+2. Same source with `include_body=false`; expected: one file-level item, no body extraction, no panic.
+3. Same source through native `execute_org({ command: "parse", source, includeBody: true, ... })`; expected `{ error: false }` and item metadata.
+4. Same content written to an org category file, then `orgIndexRebuild` and `orgIndexResolve` with `includeBody: true`; expected rebuild succeeds and resolve returns the item without body.
+5. Control case: frontmatter followed by body and/or trailing newline still preserves existing body extraction.
+
+* Implementation
+** ITEM Add parser EOF regression tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-321-coding-agent-fix-native-org-frontmatter::parser-eof-tests
+:END:
+- File: `crates/pi-org-engine/src/buffer.rs` test module.
+- Add focused tests for Tests workflows 1, 2, and 5.
+- Tests must fail on the current implementation by reproducing the panic or incorrect boundary, then pass after the parser fix.
+
+** ITEM Fix frontmatter range calculation
+:PROPERTIES:
+:CUSTOM_ID: BUG-321-coding-agent-fix-native-org-frontmatter::fix-frontmatter-range
+:DEPENDS: BUG-321-coding-agent-fix-native-org-frontmatter::parser-eof-tests
+:END:
+- File: `crates/pi-org-engine/src/buffer.rs`.
+- Replace the `line.len() + 1` frontmatter boundary accounting with byte-accurate logic that never exceeds `source.len()`.
+- Acceptable approaches: iterate with `split_inclusive('
+')` while stripping the line ending for keyword parsing, or use `line_indices()` plus computed next-line starts. Clamp-only is insufficient unless paired with correct parsing semantics for body start.
+- Preserve current handling of blank line after frontmatter, body trimming, clocks, title/state/property extraction, and heading extraction.
+
+** ITEM Add native parse and index regressions
+:PROPERTIES:
+:CUSTOM_ID: BUG-321-coding-agent-fix-native-org-frontmatter::native-index-tests
+:DEPENDS: BUG-321-coding-agent-fix-native-org-frontmatter::fix-frontmatter-range
+:END:
+- File: `crates/pi-natives/src/org_buffer.rs` test module.
+- Add tests for Tests workflows 3 and 4.
+- Use `tempdir`, category JSON helpers already present in this file, and `execute_org(json!(...))` style.
+- Assert no panic by normal test completion plus `error == false`; assert returned `item.body` is absent/null rather than an empty misleading body string.
+
+** ITEM Verify native org parser fix
+:PROPERTIES:
+:CUSTOM_ID: BUG-321-coding-agent-fix-native-org-frontmatter::parser-verification
+:DEPENDS: BUG-321-coding-agent-fix-native-org-frontmatter::native-index-tests
+:END:
+- Run `cargo test -p pi-org-engine frontmatter` or the exact focused test names added in `crates/pi-org-engine`.
+- Run `cargo test -p pi-natives org_frontmatter` or the exact focused test names added in `crates/pi-natives`.
+- Run `bun check:rs` after the Rust changes.
+
+* Edge Cases
+- Source with only frontmatter and no final newline.
+- Source with only frontmatter and a final newline.
+- Source with frontmatter, blank separator, and body.
+- Source with CRLF should not regress; existing `lines()` behavior includes `\r` in line text, so the new boundary code must account for actual byte ranges.
+- Non-ASCII title/property values must remain byte-safe; never calculate slice offsets from character counts.
+
+* Acceptance Criteria
+- Native org parser no longer panics for frontmatter-only file-level org items without trailing newline.
+- Native org index rebuild/resolve succeeds for a category containing such a file.
+- Existing org parser tests continue to pass.
+- Verification commands listed above pass without suppressing tests or weakening assertions.
+* CANCELLED [coding-agent] Fix native org file-level EOF panic
+:PROPERTIES:
+:CUSTOM_ID: BUG-322-coding-agent-fix-native-org-file-level-e
+:LAYER: org
+:END:
+
+This child item fixes the root native parser invariant behind the reported SIGABRT. Implementing agents must start from the failing EOF boundary tests, then change byte-range accounting in `crates/pi-org-engine/src/buffer.rs`, then prove native parse/index paths no longer panic.
+
+Superseded during planning by [[id:BUG-324-coding-agent-repair-org-parser-eof-byte]] after duplicate suboutline IDs were created by body replacement. Do not execute.
+** Scope
+In scope: fix native org parser boundary bug for file-level org sources that contain only `#+` frontmatter and no trailing newline/body. Files: `crates/pi-org-engine/src/buffer.rs`, `crates/pi-natives/src/org_buffer.rs`. Out of scope: org syntax changes, task-file migration, or plan-mode workflow changes.
+
+** Existing Patterns
+- `extract_file_level_item` in `crates/pi-org-engine/src/buffer.rs` extracts file-level `#+TITLE`, `#+STATE`, `#+CUSTOM_ID`, arbitrary keyword properties, body, and clocks.
+- Current faulty code: `frontmatter_end += line.len() + 1`; `.lines()` does not prove a newline existed after the final line.
+- Native bridge tests live in `crates/pi-natives/src/org_buffer.rs` and use `execute_org(json!(...))`, `tempdir`, and category JSON helpers.
+
+** Tests
+Workflows first:
+1. `include_body=true` parse of frontmatter-only source with no final newline returns one file item, no body, no panic.
+2. `include_body=false` same source returns one file item, no panic.
+3. Control with frontmatter + blank line + body still returns body.
+4. Native `parse` command with `source` and `includeBody:true` returns `{ error:false }`.
+5. Native `orgIndexRebuild` + `orgIndexResolve(includeBody:true)` over a temp category containing such a file returns the item.
+
+** Implementation
+*** ITEM Add parser EOF regression tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-322-coding-agent-fix-native-org-file-level-e::parser-eof-tests
+:END:
+- File: `crates/pi-org-engine/src/buffer.rs` test module.
+- Add tests for workflows 1, 2, and 3. They should fail against current code and pass after the parser fix.
+
+*** ITEM Fix frontmatter range calculation
+:PROPERTIES:
+:CUSTOM_ID: BUG-322-coding-agent-fix-native-org-file-level-e::fix-frontmatter-range
+:DEPENDS: BUG-322-coding-agent-fix-native-org-file-level-e::parser-eof-tests
+:END:
+- File: `crates/pi-org-engine/src/buffer.rs`.
+- Replace `line.len() + 1` accounting with byte-accurate next-line boundary tracking. Prefer `split_inclusive('
+')` with stripped line endings for keyword parsing, or `line_indices()` with explicit next starts.
+- Do not use a blind clamp unless parsing semantics remain correct for no-newline, final-newline, CRLF, and body-present cases.
+
+*** ITEM Add native parse and index regressions
+:PROPERTIES:
+:CUSTOM_ID: BUG-322-coding-agent-fix-native-org-file-level-e::native-index-tests
+:DEPENDS: BUG-322-coding-agent-fix-native-org-file-level-e::fix-frontmatter-range
+:END:
+- File: `crates/pi-natives/src/org_buffer.rs` test module.
+- Add workflows 4 and 5. Assert normal completion, `error == false`, item id matches, and body is absent/null.
+
+*** ITEM Verify native org parser fix
+:PROPERTIES:
+:CUSTOM_ID: BUG-322-coding-agent-fix-native-org-file-level-e::parser-verification
+:DEPENDS: BUG-322-coding-agent-fix-native-org-file-level-e::native-index-tests
+:END:
+- Run focused parser/native tests by exact names.
+- Run `bun check:rs` after Rust changes.
+
+** Edge Cases
+- No final newline; final newline; frontmatter plus body; CRLF; non-ASCII keyword values. Slice offsets must remain byte offsets.
+
+** Acceptance Criteria
+- Parser cannot panic on frontmatter-only file-level org sources without trailing newline.
+- Native parse and org index resolve cover the regression.
+- Existing body extraction and clock parsing remain unchanged for normal files.
+** Scope
+In scope: fix the native org parser boundary bug that can panic when extracting a file-level org item whose source contains only `#+` frontmatter lines and no trailing newline/body. This covers `crates/pi-org-engine/src/buffer.rs`, native bridge parse/index tests in `crates/pi-natives/src/org_buffer.rs`, and focused Rust verification. Out of scope: changing org syntax, changing plan-mode workflow requirements, migrating existing task files, or deleting/recreating any org items.
+
+** Existing Patterns
+- Native entrypoint: `crates/pi-natives/src/org_buffer.rs::execute_org` exposes `executeOrg` NAPI and returns JSON `{ output, error }` instead of throwing for ordinary engine errors.
+- Parser boundary: `crates/pi-org-engine/src/buffer.rs::extract_file_level_item` reads file-level `#+TITLE`, `#+STATE`, `#+CUSTOM_ID`, and other keyword properties before extracting body with `include_body`.
+- Current bug: `frontmatter_end += line.len() + 1` assumes every `source.lines()` item ended with a newline. That is false for the final line when the file has no trailing newline. The subsequent `source[frontmatter_end..]` slice can panic with `start byte index ... is out of bounds`.
+- Current tests live inline under `#[cfg(test)] mod tests` in `crates/pi-org-engine/src/buffer.rs` and `crates/pi-natives/src/org_buffer.rs`; follow those fixtures and assertion style.
+
+** Tests
+Workflows to cover first:
+1. Parse a source string with title/state/custom-id/layer frontmatter and no trailing newline using `include_body=true`; expected: one file-level item, id `PLAN-EOF`, `body == None`, no panic.
+2. Same source with `include_body=false`; expected: one file-level item, no body extraction, no panic.
+3. Same source through native `execute_org({ command: "parse", source, includeBody: true, ... })`; expected `{ error: false }` and item metadata.
+4. Same content written to an org category file, then `orgIndexRebuild` and `orgIndexResolve` with `includeBody: true`; expected rebuild succeeds and resolve returns the item without body.
+5. Control case: frontmatter followed by body and/or trailing newline still preserves existing body extraction.
+
+** Implementation
+*** ITEM Add parser EOF regression tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-322-coding-agent-fix-native-org-file-level-e::parser-eof-tests
+:END:
+- File: `crates/pi-org-engine/src/buffer.rs` test module.
+- Add focused tests for Tests workflows 1, 2, and 5.
+- Tests must fail on the current implementation by reproducing the panic or incorrect boundary, then pass after the parser fix.
+
+*** ITEM Fix frontmatter range calculation
+:PROPERTIES:
+:CUSTOM_ID: BUG-322-coding-agent-fix-native-org-file-level-e::fix-frontmatter-range
+:DEPENDS: BUG-322-coding-agent-fix-native-org-file-level-e::parser-eof-tests
+:END:
+- File: `crates/pi-org-engine/src/buffer.rs`.
+- Replace the `line.len() + 1` frontmatter boundary accounting with byte-accurate logic that never exceeds `source.len()`.
+- Acceptable approaches: iterate with `split_inclusive('
+')` while stripping the line ending for keyword parsing, or use `line_indices()` plus computed next-line starts. Clamp-only is insufficient unless paired with correct parsing semantics for body start.
+- Preserve current handling of blank line after frontmatter, body trimming, clocks, title/state/property extraction, and heading extraction.
+
+*** ITEM Add native parse and index regressions
+:PROPERTIES:
+:CUSTOM_ID: BUG-322-coding-agent-fix-native-org-file-level-e::native-index-tests
+:DEPENDS: BUG-322-coding-agent-fix-native-org-file-level-e::fix-frontmatter-range
+:END:
+- File: `crates/pi-natives/src/org_buffer.rs` test module.
+- Add tests for Tests workflows 3 and 4.
+- Use `tempdir`, category JSON helpers already present in this file, and `execute_org(json!(...))` style.
+- Assert no panic by normal test completion plus `error == false`; assert returned `item.body` is absent/null rather than an empty misleading body string.
+
+*** ITEM Verify native org parser fix
+:PROPERTIES:
+:CUSTOM_ID: BUG-322-coding-agent-fix-native-org-file-level-e::parser-verification
+:DEPENDS: BUG-322-coding-agent-fix-native-org-file-level-e::native-index-tests
+:END:
+- Run `cargo test -p pi-org-engine frontmatter` or the exact focused test names added in `crates/pi-org-engine`.
+- Run `cargo test -p pi-natives org_frontmatter` or the exact focused test names added in `crates/pi-natives`.
+- Run `bun check:rs` after the Rust changes.
+
+** Edge Cases
+- Source with only frontmatter and no final newline.
+- Source with only frontmatter and a final newline.
+- Source with frontmatter, blank separator, and body.
+- Source with CRLF should not regress; existing `lines()` behavior includes `\r` in line text, so the new boundary code must account for actual byte ranges.
+- Non-ASCII title/property values must remain byte-safe; never calculate slice offsets from character counts.
+
+** Acceptance Criteria
+- Native org parser no longer panics for frontmatter-only file-level org items without trailing newline.
+- Native org index rebuild/resolve succeeds for a category containing such a file.
+- Existing org parser tests continue to pass.
+- Verification commands listed above pass without suppressing tests or weakening assertions.
+* CANCELLED [coding-agent] Harden org bridge and plan validation against native panics
+:PROPERTIES:
+:CUSTOM_ID: BUG-323-coding-agent-harden-org-bridge-and-plan
+:DEPENDS: BUG-322-coding-agent-fix-native-org-file-level-e
+:LAYER: org
+:END:
+
+This child item adds defense-in-depth around the native org boundary and proves the plan-validation workflow that crashed now reports ordinary validation output instead of aborting `spell`.
+
+Superseded during planning by [[id:BUG-325-coding-agent-contain-org-native-panics-i]] after duplicate suboutline IDs were created by body replacement. Do not execute.
+** Scope
+In scope: harden `crates/pi-natives/src/org_buffer.rs::execute_org` against unwinding panics crossing NAPI; add a coding-agent plan-validation regression for frontmatter-only PLAN files without trailing newline. Files may include `packages/coding-agent/src/plan-mode/plan-validation.ts`, `packages/coding-agent/src/tools/org.ts`, or `packages/coding-agent/src/tools/exit-plan-mode.ts` only if tests show misleading errors after native containment. Out of scope: all-native-module panic framework, crash-report UI redesign, or relaxing validator requirements.
+
+** Existing Patterns
+- `execute_org` currently maps ordinary `Err` from `execute_org_inner` into JSON `{ error:true, output }`.
+- `validatePlanItem` resolves PLAN and children through `resolvePlanItem`; `resolvePlanItem` uses `findItemById`; `findItemById` calls native `orgIndexResolve` with `includeBody:true`.
+- `OrgTool.execute` catches TypeScript-level errors, but native aborts bypass it.
+
+** Tests
+Workflows first:
+1. A testable helper around org dispatch catches a deliberately panicking injected closure and returns `{ error:true, output:{ code:"NATIVE_PANIC", ... } }`.
+2. Existing ordinary `Err` mapping and successful command mapping keep current shapes.
+3. A temp project with `!tasks/plans/PLAN-EOF.org` containing only file-level frontmatter and no trailing newline makes `validatePlanItem(Settings.isolated(), tmpDir, "PLAN-EOF")` return non-null invalid result with `missing-child-links`, not process abort.
+4. If using `OrgTool` `validate-plan`, rendered/surfaced text is user-readable and fail-closed.
+
+** Implementation
+Sequencing note: workflow 3 may depend on `BUG-322-coding-agent-fix-native-org-file-level-e::fix-frontmatter-range`; before that parser fix, native parsing aborts too early for TypeScript to observe behavior.
+
+*** ITEM Add native panic containment tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-323-coding-agent-harden-org-bridge-and-plan::panic-containment-tests
+:END:
+- File: `crates/pi-natives/src/org_buffer.rs` test module.
+- Extract dispatch/error mapping into a helper such as `execute_org_catching(options, run)` and inject a panicking closure in the test. Do not add a fake production command.
+
+*** ITEM Wrap executeOrg inner dispatch safely
+:PROPERTIES:
+:CUSTOM_ID: BUG-323-coding-agent-harden-org-bridge-and-plan::wrap-execute-org-panic
+:DEPENDS: BUG-323-coding-agent-harden-org-bridge-and-plan::panic-containment-tests
+:END:
+- File: `crates/pi-natives/src/org_buffer.rs`.
+- Wrap the org native dispatch boundary with `std::panic::catch_unwind(std::panic::AssertUnwindSafe(...))` and map panic payloads to structured JSON.
+- Preserve ordinary error mapping and successful output contracts.
+
+*** ITEM Add plan validation EOF fixture
+:PROPERTIES:
+:CUSTOM_ID: BUG-323-coding-agent-harden-org-bridge-and-plan::plan-validation-eof-tests
+:DEPENDS: BUG-322-coding-agent-fix-native-org-file-level-e::fix-frontmatter-range
+:END:
+- File: focused test under `packages/coding-agent/test/plan-mode/` near `org-plan.test.ts` conventions.
+- Create temp `!tasks/plans/PLAN-EOF.org` with title/state/custom-id/layer frontmatter and no trailing newline.
+- Assert `validatePlanItem` returns invalid with `missing-child-links` and does not abort.
+
+*** ITEM Surface plan validation errors truthfully
+:PROPERTIES:
+:CUSTOM_ID: BUG-323-coding-agent-harden-org-bridge-and-plan::plan-validation-error-surface
+:DEPENDS: BUG-323-coding-agent-harden-org-bridge-and-plan::wrap-execute-org-panic BUG-323-coding-agent-harden-org-bridge-and-plan::plan-validation-eof-tests
+:END:
+- Touch TypeScript validation/tool files only if tests show native structured errors are converted to a lie such as "not found" or success.
+- Fail closed: native/index failure must surface as an explicit validation/tool error, not allow `exit_plan_mode` to pass.
+
+*** ITEM Verify org bridge hardening
+:PROPERTIES:
+:CUSTOM_ID: BUG-323-coding-agent-harden-org-bridge-and-plan::bridge-verification
+:DEPENDS: BUG-323-coding-agent-harden-org-bridge-and-plan::plan-validation-error-surface
+:END:
+- Run focused Rust panic-containment tests.
+- Run focused coding-agent plan-validation EOF test when authorized.
+- Run `bun check:rs`; run `bun check:ts` if TypeScript changed.
+
+** Edge Cases
+- Panic payload may be `&str`, `String`, or non-string; extraction must not panic again.
+- `catch_unwind` helps only for unwind panics, not abort strategy; parser fix remains primary.
+- User-visible errors must avoid plausible success and preserve org command context.
+
+** Acceptance Criteria
+- Unexpected org native panic is converted to structured `{ error:true }` before crossing NAPI when unwind is available.
+- Plan validation handles the reported EOF boundary without aborting.
+- Existing successful org commands keep output contracts.
+** Scope
+In scope: prevent native org panics from aborting `spell`, and prove plan validation/index workflows handle the frontmatter-only EOF case without killing the process. This covers `crates/pi-natives/src/org_buffer.rs` and focused coding-agent/org tests around plan validation. Out of scope: broad crash-report redesign, changing all native NAPI modules, or relaxing plan validation requirements.
+
+** Existing Patterns
+- NAPI bridge: `crates/pi-natives/src/org_buffer.rs::execute_org(options: Value) -> Result<Value>` currently calls `execute_org_inner(&options)` and maps ordinary `Err` values to `{ error: true, output }`.
+- Crash mode: a Rust panic inside `execute_org_inner` crosses the NAPI boundary and can terminate the process with SIGABRT before TypeScript tool-layer `try/catch` can render an error.
+- Plan validation path: `packages/coding-agent/src/plan-mode/plan-validation.ts::validatePlanItem` calls `resolvePlanItem`, which calls `findItemById`, which invokes native `orgIndexResolve` with `includeBody: true`.
+- Org tool adapter: `packages/coding-agent/src/tools/org.ts::OrgTool.execute` catches TypeScript-level errors and returns JSON error text, but it cannot catch native aborts.
+
+** Tests
+Workflows to cover first:
+1. Native bridge panic containment: unit-test a helper that executes a closure which panics; expected returned JSON has `error: true`, code such as `NATIVE_PANIC`, and includes the org command name when available.
+2. Native bridge non-panic behavior: existing successful commands and ordinary `Err` mapping still return the same shapes as before.
+3. Plan validation with a PLAN org file that is only file-level frontmatter and has no trailing newline; expected validation returns a normal invalid result such as `missing-child-links`, not a thrown native abort.
+4. Org tool `validate-plan` or direct validation test for the same fixture; expected surfaced error/issue text is user-readable and does not terminate the test process.
+5. The empty-file artifacts accidentally left by failed `org create` attempts should not be treated as part of this implementation except as a reminder that org indexing must tolerate sparse/malformed files truthfully.
+
+** Implementation
+Sequencing note: test-first remains required for the panic wrapper helper and plan-validation fixture. The plan-validation fixture may depend on the parser EOF fix from `BUG-322-coding-agent-fix-native-org-file-level-e::fix-frontmatter-range` because the current native parser aborts before TypeScript can observe a result.
+
+*** ITEM Add native panic containment tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-323-coding-agent-harden-org-bridge-and-plan::panic-containment-tests
+:END:
+- File: `crates/pi-natives/src/org_buffer.rs` test module.
+- Extract the error-mapping behavior around `execute_org_inner` into a small testable helper, e.g. `execute_org_catching(options, run)` where `run` is injectable in tests.
+- Add a test whose injected closure panics with a string payload; assert `{ error: true }` and stable diagnostic code/message. Do not add a production-only fake command just to trigger a panic.
+
+*** ITEM Wrap executeOrg inner dispatch safely
+:PROPERTIES:
+:CUSTOM_ID: BUG-323-coding-agent-harden-org-bridge-and-plan::wrap-execute-org-panic
+:DEPENDS: BUG-323-coding-agent-harden-org-bridge-and-plan::panic-containment-tests
+:END:
+- File: `crates/pi-natives/src/org_buffer.rs`.
+- Wrap only the org native dispatch boundary (`execute_org_inner`) with `std::panic::catch_unwind(std::panic::AssertUnwindSafe(...))` so panics are converted before crossing NAPI.
+- Preserve existing ordinary `Err(error)` JSON mapping exactly enough that current tests do not need assertion downgrades.
+- Include command name in panic output when `options.command` is a string.
+
+*** ITEM Add plan validation EOF fixture
+:PROPERTIES:
+:CUSTOM_ID: BUG-323-coding-agent-harden-org-bridge-and-plan::plan-validation-eof-tests
+:DEPENDS: BUG-322-coding-agent-fix-native-org-file-level-e::fix-frontmatter-range
+:END:
+- File: add or extend a focused coding-agent test, preferably under `packages/coding-agent/test/plan-mode/` near existing `org-plan.test.ts` conventions.
+- Create a temp project with `!tasks/plans/PLAN-EOF.org` containing only `#+TITLE`, `#+STATE`, `#+CUSTOM_ID`, and `#+LAYER` lines with no trailing newline.
+- Call `validatePlanItem(Settings.isolated(), tmpDir, "PLAN-EOF")` or exercise `OrgTool` `validate-plan` if simpler.
+- Assert the result is non-null, `valid === false`, and includes `missing-child-links`; the process must not abort.
+
+*** ITEM Surface plan validation errors truthfully
+:PROPERTIES:
+:CUSTOM_ID: BUG-323-coding-agent-harden-org-bridge-and-plan::plan-validation-error-surface
+:DEPENDS: BUG-323-coding-agent-harden-org-bridge-and-plan::wrap-execute-org-panic BUG-323-coding-agent-harden-org-bridge-and-plan::plan-validation-eof-tests
+:END:
+- Files: `packages/coding-agent/src/plan-mode/plan-validation.ts`, `packages/coding-agent/src/tools/org.ts`, and/or `packages/coding-agent/src/tools/exit-plan-mode.ts` only if tests show current behavior is still misleading after native panic containment.
+- If native returns a structured panic/error, surface it as an explicit validation/tool error rather than converting it to "not found" or success.
+- Do not suppress issues to make `exit_plan_mode` pass; plan validation must fail closed.
+
+*** ITEM Verify org bridge hardening
+:PROPERTIES:
+:CUSTOM_ID: BUG-323-coding-agent-harden-org-bridge-and-plan::bridge-verification
+:DEPENDS: BUG-323-coding-agent-harden-org-bridge-and-plan::plan-validation-error-surface
+:END:
+- Run the focused Rust panic-containment test in `crates/pi-natives`.
+- Run the focused coding-agent plan-validation EOF test.
+- Run `bun check:ts` if TypeScript validation/tool files changed.
+- Run `bun check:rs` after Rust bridge changes.
+
+** Edge Cases
+- Panic payload may be `&str`, `String`, or non-string; message extraction must not panic again.
+- Panic containment must not mark successful native commands as errors.
+- Native panic output must not include raw home paths unless already part of the original user-visible command context; TUI rendering still sanitizes separately.
+- Plan validation must distinguish not-found PLAN id from native/index failure.
+- If Rust panic strategy is abort in a future build, `catch_unwind` cannot help; the parser fix remains the primary safety boundary, and tests must still prevent this known panic.
+
+** Acceptance Criteria
+- An unexpected panic in org native dispatch is converted to `{ error: true, output: { code: "NATIVE_PANIC", ... } }` inside Rust before crossing NAPI when unwind is available.
+- `validatePlanItem`/`org validate-plan` no longer aborts on a frontmatter-only PLAN file without trailing newline.
+- Existing successful org commands keep their output contracts.
+- Focused Rust and TypeScript tests plus relevant checks pass.
+* DONE [coding-agent] Repair org parser EOF byte boundary
+:PROPERTIES:
+:CUSTOM_ID: BUG-324-coding-agent-repair-org-parser-eof-byte
+:LAYER: org
+:END:
+
+This child item fixes the root native parser invariant behind the reported SIGABRT. Implementing agents must start from the failing EOF boundary tests, then change byte-range accounting in `crates/pi-org-engine/src/buffer.rs`, then prove native parse/index paths no longer panic.
+
+NOTE [2026-04-26]: Implemented parser EOF byte boundary fix and verified focused parser/native tests plus bun check:rs.
+** Scope
+In scope: fix native org parser boundary bug for file-level org sources that contain only `#+` frontmatter and no trailing newline/body. Files: `crates/pi-org-engine/src/buffer.rs`, `crates/pi-natives/src/org_buffer.rs`. Out of scope: org syntax changes, task-file migration, or plan-mode workflow changes.
+
+** Existing Patterns
+- `extract_file_level_item` in `crates/pi-org-engine/src/buffer.rs` extracts file-level `#+TITLE`, `#+STATE`, `#+CUSTOM_ID`, arbitrary keyword properties, body, and clocks.
+- Current faulty code: `frontmatter_end += line.len() + 1`; `.lines()` does not prove a newline existed after the final line.
+- Native bridge tests live in `crates/pi-natives/src/org_buffer.rs` and use `execute_org(json!(...))`, `tempdir`, and category JSON helpers.
+
+** Tests
+Workflows first:
+1. `include_body=true` parse of frontmatter-only source with no final newline returns one file item, no body, no panic.
+2. `include_body=false` same source returns one file item, no panic.
+3. Control with frontmatter + blank line + body still returns body.
+4. Native `parse` command with `source` and `includeBody:true` returns `{ error:false }`.
+5. Native `orgIndexRebuild` + `orgIndexResolve(includeBody:true)` over a temp category containing such a file returns the item.
+
+** Implementation
+*** DONE Add parser EOF regression tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-324-coding-agent-repair-org-parser-eof-byte::parser-eof-tests
+:END:
+
+- File: `crates/pi-org-engine/src/buffer.rs` test module.
+- Add tests for workflows 1, 2, and 3. They should fail against current code and pass after the parser fix.
+
+NOTE [2026-04-26]: Added parser EOF boundary regressions.
+*** DONE Fix frontmatter range calculation
+:PROPERTIES:
+:CUSTOM_ID: BUG-324-coding-agent-repair-org-parser-eof-byte::fix-frontmatter-range
+:DEPENDS: BUG-324-coding-agent-repair-org-parser-eof-byte::parser-eof-tests
+:END:
+- File: `crates/pi-org-engine/src/buffer.rs`.
+- Replace `line.len() + 1` accounting with byte-accurate next-line boundary tracking. Prefer `split_inclusive` with stripped line endings for keyword parsing, or `line_indices()` with explicit next starts.
+- Do not use a blind clamp unless parsing semantics remain correct for no-newline, final-newline, CRLF, and body-present cases.
+
+NOTE [2026-04-26]: Replaced source.lines byte accounting with split_inclusive byte boundary tracking.
+*** DONE Add native parse and index regressions
+:PROPERTIES:
+:CUSTOM_ID: BUG-324-coding-agent-repair-org-parser-eof-byte::native-index-tests
+:DEPENDS: BUG-324-coding-agent-repair-org-parser-eof-byte::fix-frontmatter-range
+:END:
+- File: `crates/pi-natives/src/org_buffer.rs` test module.
+- Add workflows 4 and 5. Assert normal completion, `error == false`, item id matches, and body is absent/null.
+
+NOTE [2026-04-26]: Added native parse and org index EOF regressions.
+*** DONE Verify native org parser fix
+:PROPERTIES:
+:CUSTOM_ID: BUG-324-coding-agent-repair-org-parser-eof-byte::parser-verification
+:DEPENDS: BUG-324-coding-agent-repair-org-parser-eof-byte::native-index-tests
+:END:
+- Run focused parser/native tests by exact names.
+- Run `bun check:rs` after Rust changes.
+
+NOTE [2026-04-26]: Verified parser/native focused tests and bun check:rs.
+** Edge Cases
+- No final newline; final newline; frontmatter plus body; CRLF; non-ASCII keyword values. Slice offsets must remain byte offsets.
+
+** Acceptance Criteria
+- Parser cannot panic on frontmatter-only file-level org sources without trailing newline.
+- Native parse and org index resolve cover the regression.
+- Existing body extraction and clock parsing remain unchanged for normal files.
+* DONE [coding-agent] Contain org native panics in validation
+:PROPERTIES:
+:CUSTOM_ID: BUG-325-coding-agent-contain-org-native-panics-i
+:DEPENDS: BUG-324-coding-agent-repair-org-parser-eof-byte
+:LAYER: org
+:END:
+
+This child item adds defense-in-depth around the native org boundary and proves the plan-validation workflow that crashed now reports ordinary validation output instead of aborting `spell`.
+
+NOTE [2026-04-26]: Implemented native org panic containment and verified focused native/plan-validation tests plus bun check:rs and bun check:ts.
+** Scope
+In scope: harden `crates/pi-natives/src/org_buffer.rs::execute_org` against unwinding panics crossing NAPI; add a coding-agent plan-validation regression for frontmatter-only PLAN files without trailing newline. Files may include `packages/coding-agent/src/plan-mode/plan-validation.ts`, `packages/coding-agent/src/tools/org.ts`, or `packages/coding-agent/src/tools/exit-plan-mode.ts` only if tests show misleading errors after native containment. Out of scope: all-native-module panic framework, crash-report UI redesign, or relaxing validator requirements.
+
+** Existing Patterns
+- `execute_org` currently maps ordinary `Err` from `execute_org_inner` into JSON `{ error:true, output }`.
+- `validatePlanItem` resolves PLAN and children through `resolvePlanItem`; `resolvePlanItem` uses `findItemById`; `findItemById` calls native `orgIndexResolve` with `includeBody:true`.
+- `OrgTool.execute` catches TypeScript-level errors, but native aborts bypass it.
+
+** Tests
+Workflows first:
+1. A testable helper around org dispatch catches a deliberately panicking injected closure and returns `{ error:true, output:{ code:"NATIVE_PANIC", ... } }`.
+2. Existing ordinary `Err` mapping and successful command mapping keep current shapes.
+3. A temp project with `!tasks/plans/PLAN-EOF.org` containing only file-level frontmatter and no trailing newline makes `validatePlanItem(Settings.isolated(), tmpDir, "PLAN-EOF")` return non-null invalid result with `missing-child-links`, not process abort.
+4. If using `OrgTool` `validate-plan`, rendered/surfaced text is user-readable and fail-closed.
+
+** Implementation
+Sequencing note: workflow 3 may depend on `BUG-324-coding-agent-repair-org-parser-eof-byte::fix-frontmatter-range`; before that parser fix, native parsing aborts too early for TypeScript to observe behavior.
+
+*** DONE Add native panic containment tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-325-coding-agent-contain-org-native-panics-i::panic-containment-tests
+:END:
+
+- File: `crates/pi-natives/src/org_buffer.rs` test module.
+- Extract dispatch/error mapping into a helper such as `execute_org_catching(options, run)` and inject a panicking closure in the test. Do not add a fake production command.
+
+NOTE [2026-04-26]: Added execute_org_catching panic, ordinary error, and success shape tests.
+*** DONE Wrap executeOrg inner dispatch safely
+:PROPERTIES:
+:CUSTOM_ID: BUG-325-coding-agent-contain-org-native-panics-i::wrap-execute-org-panic
+:DEPENDS: BUG-325-coding-agent-contain-org-native-panics-i::panic-containment-tests
+:END:
+- File: `crates/pi-natives/src/org_buffer.rs`.
+- Wrap the org native dispatch boundary with `std::panic::catch_unwind(std::panic::AssertUnwindSafe(...))` and map panic payloads to structured JSON.
+- Preserve ordinary error mapping and successful output contracts.
+
+NOTE [2026-04-26]: Wrapped org native dispatch with catch_unwind and NATIVE_PANIC JSON mapping.
+*** DONE Add plan validation EOF fixture
+:PROPERTIES:
+:CUSTOM_ID: BUG-325-coding-agent-contain-org-native-panics-i::plan-validation-eof-tests
+:DEPENDS: BUG-324-coding-agent-repair-org-parser-eof-byte::fix-frontmatter-range
+:END:
+- File: focused test under `packages/coding-agent/test/plan-mode/` near `org-plan.test.ts` conventions.
+- Create temp `!tasks/plans/PLAN-EOF.org` with title/state/custom-id/layer frontmatter and no trailing newline.
+- Assert `validatePlanItem` returns invalid with `missing-child-links` and does not abort.
+
+NOTE [2026-04-26]: Added plan-validation frontmatter-only PLAN without final newline regression.
+*** DONE Surface plan validation errors truthfully
+:PROPERTIES:
+:CUSTOM_ID: BUG-325-coding-agent-contain-org-native-panics-i::plan-validation-error-surface
+:DEPENDS: BUG-325-coding-agent-contain-org-native-panics-i::wrap-execute-org-panic BUG-325-coding-agent-contain-org-native-panics-i::plan-validation-eof-tests
+:END:
+- Touch TypeScript validation/tool files only if tests show native structured errors are converted to a lie such as "not found" or success.
+- Fail closed: native/index failure must surface as an explicit validation/tool error, not allow `exit_plan_mode` to pass.
+
+NOTE [2026-04-26]: Validation EOF workflow returns missing-child-links invalid result, not abort/success.
+*** DONE Verify org bridge hardening
+:PROPERTIES:
+:CUSTOM_ID: BUG-325-coding-agent-contain-org-native-panics-i::bridge-verification
+:DEPENDS: BUG-325-coding-agent-contain-org-native-panics-i::plan-validation-error-surface
+:END:
+- Run focused Rust panic-containment tests.
+- Run focused coding-agent plan-validation EOF test when authorized.
+- Run `bun check:rs`; run `bun check:ts` if TypeScript changed.
+
+NOTE [2026-04-26]: Verified focused native panic-containment test, plan-validation EOF test, bun check:rs, and bun check:ts.
+** Edge Cases
+- Panic payload may be `&str`, `String`, or non-string; extraction must not panic again.
+- `catch_unwind` helps only for unwind panics, not abort strategy; parser fix remains primary.
+- User-visible errors must avoid plausible success and preserve org command context.
+
+** Acceptance Criteria
+- Unexpected org native panic is converted to structured `{ error:true }` before crossing NAPI when unwind is available.
+- Plan validation handles the reported EOF boundary without aborting.
+- Existing successful org commands keep output contracts.

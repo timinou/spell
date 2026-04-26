@@ -677,20 +677,46 @@ fn execute_org_inner(options: &Value) -> Result<Value> {
 	}
 }
 
+fn org_error_response(error: napi::Error) -> Value {
+	let reason = error.to_string();
+	let payload = reason
+		.split_once(", ")
+		.and_then(|(_, candidate)| candidate.starts_with('{').then_some(candidate))
+		.unwrap_or(reason.as_str());
+	let output = serde_json::from_str::<Value>(payload).unwrap_or(Value::String(reason));
+	json_response(output, true)
+}
+
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+	if let Some(message) = payload.downcast_ref::<&str>() {
+		return (*message).to_string();
+	}
+	if let Some(message) = payload.downcast_ref::<String>() {
+		return message.clone();
+	}
+	"unknown panic payload".to_string()
+}
+
+fn execute_org_catching<F>(options: &Value, run: F) -> Value
+where
+	F: FnOnce(&Value) -> Result<Value>,
+{
+	match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(options))) {
+		Ok(Ok(value)) => value,
+		Ok(Err(error)) => org_error_response(error),
+		Err(payload) => json_response(
+			json!({
+				"code": "NATIVE_PANIC",
+				"message": format!("Native org dispatch panicked: {}", panic_payload_message(&*payload)),
+			}),
+			true,
+		),
+	}
+}
+
 #[napi(js_name = "executeOrg")]
 pub fn execute_org(options: Value) -> Result<Value> {
-	match execute_org_inner(&options) {
-		Ok(value) => Ok(value),
-		Err(error) => {
-			let reason = error.to_string();
-			let payload = reason
-				.split_once(", ")
-				.and_then(|(_, candidate)| candidate.starts_with('{').then_some(candidate))
-				.unwrap_or(reason.as_str());
-			let output = serde_json::from_str::<Value>(payload).unwrap_or(Value::String(reason));
-			Ok(json_response(output, true))
-		},
-	}
+	Ok(execute_org_catching(&options, execute_org_inner))
 }
 
 #[cfg(test)]
@@ -793,6 +819,95 @@ mod tests {
 
 	fn category_json(dir: &std::path::Path) -> Value {
 		json!([{ "absPath": dir.display().to_string(), "name": "features", "dir": "tasks" }])
+	}
+
+	#[test]
+	fn execute_org_catching_returns_native_panic_error_payload() {
+		let result = execute_org_catching(&json!({ "command": "parse" }), |_| -> Result<Value> {
+			panic!("boom")
+		});
+
+		assert_eq!(result["error"], json!(true));
+		assert_eq!(result["output"]["code"], json!("NATIVE_PANIC"));
+		assert_eq!(result["output"]["message"], json!("Native org dispatch panicked: boom"));
+	}
+
+	#[test]
+	fn execute_org_catching_preserves_error_response_shape() {
+		let result = execute_org_catching(&json!({ "command": "parse" }), |_| {
+			Err(org_err(
+				json!({ "code": "ORDINARY_ERROR", "message": "ordinary failure" }).to_string(),
+			))
+		});
+
+		assert_eq!(result["error"], json!(true));
+		assert_eq!(result["output"]["code"], json!("ORDINARY_ERROR"));
+		assert_eq!(result["output"]["message"], json!("ordinary failure"));
+	}
+
+	#[test]
+	fn execute_org_catching_preserves_success_response_shape() {
+		let result = execute_org_catching(&json!({ "command": "parse" }), |_| {
+			Ok(json_response(json!({ "ok": true }), false))
+		});
+
+		assert_eq!(result["error"], json!(false));
+		assert_eq!(result["output"], json!({ "ok": true }));
+	}
+
+	#[test]
+	fn org_parse_frontmatter_only_without_final_newline_includes_no_body() {
+		let parsed = execute_org(json!({
+			"command": "parse",
+			"source": "#+TITLE: EOF Plan\n#+CUSTOM_ID: PLAN-EOF\n#+STATE: ITEM",
+			"todoKeywords": ["ITEM", "DONE"],
+			"includeBody": true,
+			"category": "plans",
+			"dir": "plans"
+		}))
+		.expect("parse frontmatter-only source");
+
+		assert_eq!(parsed["error"], json!(false));
+		let items = parsed["output"]["items"].as_array().expect("items array");
+		assert_eq!(items.len(), 1);
+		assert_eq!(items[0]["id"], json!("PLAN-EOF"));
+		assert_eq!(items[0]["body"], Value::Null);
+	}
+
+	#[test]
+	fn org_index_resolves_frontmatter_only_without_final_newline_includes_no_body() {
+		let dir = tempdir().expect("tempdir");
+		let root = dir.path();
+		let category = root.join("features");
+		fs::create_dir_all(&category).expect("category");
+		fs::write(
+			category.join("PLAN-EOF.org"),
+			"#+TITLE: EOF Plan\n#+CUSTOM_ID: PLAN-EOF\n#+STATE: ITEM",
+		)
+		.expect("org file");
+
+		let rebuilt = execute_org(json!({
+			"command": "orgIndexRebuild",
+			"root": root.display().to_string(),
+			"categories": category_json(&category),
+			"todoKeywords": ["ITEM", "DONE"]
+		}))
+		.expect("rebuild");
+		assert_eq!(rebuilt["error"], json!(false));
+		assert_eq!(rebuilt["output"]["itemCount"], json!(1));
+
+		let resolved = execute_org(json!({
+			"command": "orgIndexResolve",
+			"root": root.display().to_string(),
+			"categories": category_json(&category),
+			"todoKeywords": ["ITEM", "DONE"],
+			"id": "PLAN-EOF",
+			"includeBody": true
+		}))
+		.expect("resolve");
+		assert_eq!(resolved["error"], json!(false));
+		assert_eq!(resolved["output"]["item"]["id"], json!("PLAN-EOF"));
+		assert_eq!(resolved["output"]["item"]["body"], Value::Null);
 	}
 
 	#[test]
