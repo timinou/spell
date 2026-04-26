@@ -651,7 +651,13 @@ impl BufferRegistry {
 							warnings.push(format!("journal append failed: {error}"));
 						}
 						warnings.extend(self.coord.drain_warnings());
-						self.close(&key)?;
+						fresh.disk_mtime = disk_mtime;
+						fresh.history.mark_saved();
+						fresh.dirty = false;
+						fresh.coord_revision = revision;
+						self
+							.buffers
+							.insert(key.clone(), Arc::new(Mutex::new(fresh)));
 						Ok(Ok((
 							TransactionOutcome {
 								revision,

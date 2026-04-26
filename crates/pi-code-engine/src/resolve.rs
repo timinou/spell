@@ -95,6 +95,23 @@ pub fn collect_top_level_decls_in_range(
 ///
 /// Supports dotted names by first matching the full string, then resolving the
 /// prefix recursively as a container path and the suffix as a member name.
+fn clojure_local_symbol_alias<'a>(
+	root: Node<'a>,
+	profile: &LanguageProfile,
+	source: &str,
+	symbol: &'a str,
+) -> Option<&'a str> {
+	let (namespace, local) = symbol.rsplit_once('/')?;
+	if namespace.is_empty() || local.is_empty() {
+		return None;
+	}
+	let namespace_matches = find_top_level_matches(root, profile, source, namespace)
+		.into_iter()
+		.any(|node| {
+			declaration_for(profile, node, source).is_some_and(|decl| decl.kind == "namespace")
+		});
+	namespace_matches.then_some(local)
+}
 pub fn resolve_symbol(
 	buffer: &CodeBuffer,
 	profile: &LanguageProfile,
@@ -103,6 +120,12 @@ pub fn resolve_symbol(
 	let source = buffer.source();
 	let root = buffer.tree().root_node();
 	if let Some(node) = find_symbol_node(root, profile, &source, symbol)? {
+		return Ok(build_resolved(node, profile, &source));
+	}
+	if profile.id.as_str() == "clojure"
+		&& let Some(local_symbol) = clojure_local_symbol_alias(root, profile, &source, symbol)
+		&& let Some(node) = find_symbol_node(root, profile, &source, local_symbol)?
+	{
 		return Ok(build_resolved(node, profile, &source));
 	}
 
@@ -1025,6 +1048,20 @@ Deep section body.
 
 		let resolved = resolve_symbol(&buffer, profile, "greet").expect("resolve greet");
 		assert_eq!(resolved.name, "greet");
+		assert_eq!(resolved.kind, "function");
+	}
+
+	#[test]
+	fn resolve_clojure_accepts_qualified_var_alias() {
+		let source = "(ns app.core)\n(defn normalize-name [s] s)\n";
+		let buffer =
+			CodeBuffer::from_str(source, LanguageId::new("clojure"), registry()).expect("buf");
+		let profile = registry();
+		let profile = profile.get(&LanguageId::new("clojure")).unwrap();
+
+		let resolved = resolve_symbol(&buffer, profile, "app.core/normalize-name")
+			.expect("resolve qualified clojure var");
+		assert_eq!(resolved.name, "normalize-name");
 		assert_eq!(resolved.kind, "function");
 	}
 }

@@ -1,0 +1,106 @@
+#+TITLE: [coding-agent] Code tool ergonomics for Clojure EDN and autosave
+#+STATE: DONE
+#+SESSION_ID: 14ca07298709faed
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-26T17-47-31-740Z_14ca07298709faed.jsonl]]
+#+CUSTOM_ID: PLAN-283-coding-agent-code-tool-ergonomics-for-cl
+#+LAYER: code-tool
+
+[[id:BUG-318-coding-agent-accept-qualified-code-targe]]
+[[id:FEAT-614-coding-agent-add-scoped-raw-text-replace]]
+[[id:BUG-319-coding-agent-make-code-undo-diff-work-af]]
+[[id:FEAT-615-coding-agent-make-clojure-navigation-and]]
+[[id:FEAT-616-coding-agent-add-edn-data-outlines-and-t]]
+[[id:BUG-320-coding-agent-label-and-ignore-code-graph]]
+
+* Context
+User tested Spell `code` tool affordances in `~/code/ora/clojend` against Clojure and EDN files. Clojure structure-aware reading, file-local symbols, workspace symbols, scoped edits, and graph exploration are viable, but daily ergonomics are not yet smooth.
+
+Settled design decisions:
+1. Scope includes generic code-tool work, Clojure-specific work, and EDN-specific work in one plan.
+2. File-local command output stays local/concise; commands accept both local target IDs and fully-qualified workspace/graph target IDs.
+3. Scoped literal edits support both safer `findAndReplace` substring fallback and an explicit `rawTextReplace` action.
+4. `code undo`/`code redo` must work after auto-save within the live managed buffer session.
+5. `code diff` shows unsaved buffer-vs-disk hunks when dirty plus uncommitted git working-tree diff for code-tool-edited files from journal/history, tagged by editing session/agent.
+6. EDN becomes data-ergonomic: outlines by map keys/vector indexes with target IDs such as `file::[:books 0 :title]`; EDN remains data-only, no graph/code semantics.
+7. Clojure context keeps keywords but sections/collapses them under “Data keywords”.
+8. Clojure navigation prioritizes semantic forms: defn body forms, let bindings, cond branches, map entries; raw token children are not default.
+9. `.spell/graph` artifacts remain project-local generated caches, but must be ignored, status-labeled, and documented.
+
+Repository evidence checked in current repo:
+- `packages/coding-agent/src/tools/code.ts`: file/graph command routing, schema, staged edit + save finalization, targetId parsing.
+- `packages/coding-agent/src/tools/code-result.ts`: diff/history/result formatting.
+- `crates/pi-natives/src/code_buffer.rs`: native file command dispatcher, target resolution, action handling, save/diff/undo/redo.
+- `crates/pi-code-engine/src/resolve.rs`: local declaration symbol resolver and current not-found diagnostics.
+- `crates/pi-code-engine/src/buffer.rs`: history, saved revision, undo/redo, save behavior, edit transactions.
+- `crates/pi-code-engine/src/language/mod.rs`: Clojure and EDN profiles.
+- `crates/pi-code-engine/src/navigate.rs`: current children/siblings implementation.
+- `crates/pi-code-graph/src/language/clojure.rs`: keyword symbol/reference extraction.
+- `crates/pi-natives/src/code_graph.rs`: graph/vector cache status and artifact paths.
+
+* Verification
+Run focused checks after implementation:
+- `bun check:ts` for TypeScript schema/result/tool changes.
+- `bun check:rs` for Rust native/code-engine changes.
+- Package-local tests may be run only when user explicitly authorizes `bun test`; otherwise use checks and manual tool scenarios.
+- Manual scenario in a Clojure fixture: workspace FQ target ID copied into `code edit`, substring scoped edit, auto-save undo/redo/diff, semantic navigation, context keyword sectioning, EDN target path outline/read/edit, graph status artifact labels.
+
+Acceptance at plan level:
+- Clojure file ops are copy-paste ergonomic across symbols/context/edit.
+- Scoped literal changes do not require exact full-line text.
+- Undo/redo/diff tell the truth after auto-save.
+- EDN fixtures provide useful data navigation without pretending to be code.
+- Graph cache artifacts are unsurprising and ignored.
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:BUG-318-coding-agent-accept-qualified-code-targe::target-id-tests]] Add qualified target fixtures and failing tests
+- [[id:BUG-319-coding-agent-make-code-undo-diff-work-af::autosave-history-tests]] Write autosave history contract tests
+- [[id:BUG-320-coding-agent-label-and-ignore-code-graph::graph-artifact-tests]] Write graph artifact status tests
+- [[id:FEAT-614-coding-agent-add-scoped-raw-text-replace::raw-text-tests]] Write scoped text replacement tests
+- [[id:FEAT-615-coding-agent-make-clojure-navigation-and::clojure-nav-tests]] Write Clojure navigation tests
+- [[id:FEAT-615-coding-agent-make-clojure-navigation-and::keyword-context-tests]] Write keyword context formatting tests
+- [[id:FEAT-616-coding-agent-add-edn-data-outlines-and-t::edn-data-tests]] Write EDN data path tests
+** wave-2 :wave:
+- [[id:BUG-318-coding-agent-accept-qualified-code-targe::target-id-aliases]] Implement language-aware target alias resolution
+- [[id:BUG-319-coding-agent-make-code-undo-diff-work-af::preserve-save-history]] Preserve managed buffer history across save
+- [[id:BUG-320-coding-agent-label-and-ignore-code-graph::graph-gitignore]] Add vector cache ignore entry
+- [[id:BUG-320-coding-agent-label-and-ignore-code-graph::graph-status-labels]] Surface cache artifact labels
+- [[id:FEAT-614-coding-agent-add-scoped-raw-text-replace::raw-text-action]] Implement rawTextReplace action
+- [[id:FEAT-615-coding-agent-make-clojure-navigation-and::semantic-form-navigation]] Implement semantic form navigation
+- [[id:FEAT-615-coding-agent-make-clojure-navigation-and::keyword-context-section]] Section Clojure data keywords in context
+** wave-3 :wave:
+- [[id:BUG-318-coding-agent-accept-qualified-code-targe::target-id-guidance]] Update code tool prompt guidance
+- [[id:BUG-319-coding-agent-make-code-undo-diff-work-af::diff-attribution-tests]] Write diff attribution tests
+- [[id:BUG-319-coding-agent-make-code-undo-diff-work-af::undo-redo-messaging]] Improve undo redo messaging
+- [[id:BUG-320-coding-agent-label-and-ignore-code-graph::graph-artifact-docs]] Update code graph guidance
+- [[id:FEAT-614-coding-agent-add-scoped-raw-text-replace::find-replace-fallback]] Add findAndReplace literal fallback
+- [[id:FEAT-615-coding-agent-make-clojure-navigation-and::clojure-nav-guidance]] Update Clojure guidance
+- [[id:FEAT-616-coding-agent-add-edn-data-outlines-and-t::edn-data-outline]] Implement EDN data outline entries
+** wave-4 :wave:
+- [[id:BUG-319-coding-agent-make-code-undo-diff-work-af::combined-diff-output]] Implement combined diff output
+- [[id:FEAT-614-coding-agent-add-scoped-raw-text-replace::raw-text-docs]] Update tool docs and hints
+- [[id:FEAT-616-coding-agent-add-edn-data-outlines-and-t::edn-target-resolution]] Resolve EDN target paths for read edit navigate
+** wave-5 :wave:
+- [[id:FEAT-616-coding-agent-add-edn-data-outlines-and-t::edn-docs]] Update EDN docs and hints
+
+** Completion [2026-04-26]
+*** Verification
+- `cargo test -p pi-code-engine clojure` → passed. Covers qualified Clojure target alias resolution.
+- `cargo test -p pi-code-engine apply_patches` → passed. Covers substring fallback and raw text patch behavior.
+- `cargo test -p pi-natives qualified_clojure` → passed. Covers copied FQ Clojure target ID with `rawTextReplace` through native code edit.
+- `cargo test -p pi-natives edn_outline` → passed. Covers EDN data outline target IDs, read by data path, and edit by data path.
+- `cargo test -p pi-natives persisted_edit_preserves` → passed. Covers autosaved edit preserving managed buffer undo history and diff visibility after undo.
+- `cargo test -p pi-natives status_labels_graph_cache_as_generated_artifact` → passed. Covers generated graph cache status label and persisted workspace cache.
+- `cargo test -p pi-natives context_sections_clojure_keywords_as_data_keywords` → passed. Covers Clojure keyword refs sectioned under `Data keywords`.
+- `bun check:ts && bun check:rs` → passed. TypeScript Biome + tsgo and Rust fmt/clippy workspace checks passed.
+*** Artifacts
+- No UI screenshots required; behavior verified by focused Rust tests and workspace checks above.
+- Org plan record: [[file:!tasks/plans/PLAN-283-coding-agent-code-tool-ergonomics-for-cl.org]]
+*** Deviations
+None.
+
+NOTE [2026-04-26]: Completed implementation, verification, and child reconciliation.
+
+*** Additional Verification
+- `cargo test -p pi-code-engine test_navigate_clojure_children_skip_defn_header` → passed after semantic-container navigation fix. Covers Clojure children navigation surfacing defn body forms instead of header tokens.
+- Re-ran `bun check:ts && bun check:rs` after navigation test addition → passed.

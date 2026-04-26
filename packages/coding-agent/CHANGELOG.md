@@ -7,6 +7,7 @@
 - **BUG-190**: Todo auto-clear now checks blocker references before removing a completed task. A completed task that is still listed in another task's `blockers` array is preserved until no task references it, preventing premature removal of tasks the pipeline depends on for ordering context.
 - Fixed hashline `edit` replace validation to reject multi-line payloads when only one `LINE#ID` anchor is supplied, preventing silent duplicated-content corruption and teaching the caller to add `end` or trim `lines` to one entry.
 - Fixed Elixir resolver diagnostics to explain when a file has top-level nodes but no recognized declarations, with regression coverage for deeply nested dotted `defmodule` names.
+- Improved `code` tool Clojure/EDN ergonomics: fully-qualified Clojure target IDs now resolve for edits, scoped literal replacements support substring/raw-text changes, autosaved edits keep undo/diff history, EDN exposes data-path outlines/read/edit targets, and graph cache/status output labels generated artifacts.
 
 ### Changed
 

@@ -1,3 +1,115 @@
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EdnPathSegment {
+	Key(String),
+	Index(usize),
+}
+
+fn parse_edn_path(path: &str) -> Option<Vec<EdnPathSegment>> {
+	let inner = path.trim().strip_prefix('[')?.strip_suffix(']')?.trim();
+	if inner.is_empty() {
+		return Some(Vec::new());
+	}
+	inner
+		.split_whitespace()
+		.map(|token| {
+			if let Some(key) = token.strip_prefix(':') {
+				Some(EdnPathSegment::Key(format!(":{key}")))
+			} else {
+				token.parse::<usize>().ok().map(EdnPathSegment::Index)
+			}
+		})
+		.collect()
+}
+
+fn edn_node_text(buffer: &CodeBuffer, node: Node<'_>) -> String {
+	buffer
+		.source()
+		.get(node.start_byte()..node.end_byte())
+		.unwrap_or_default()
+		.to_string()
+}
+
+fn edn_named_children(node: Node<'_>) -> Vec<Node<'_>> {
+	let mut cursor = node.walk();
+	node.named_children(&mut cursor).collect()
+}
+
+fn edn_root_value(buffer: &CodeBuffer) -> Option<Node<'_>> {
+	let root = buffer.tree().root_node();
+	edn_named_children(root).into_iter().next()
+}
+
+fn edn_child_for_segment<'a>(
+	buffer: &CodeBuffer,
+	node: Node<'a>,
+	segment: &EdnPathSegment,
+) -> Option<Node<'a>> {
+	let children = edn_named_children(node);
+	match segment {
+		EdnPathSegment::Index(index) => children.get(*index).copied(),
+		EdnPathSegment::Key(key) => {
+			if node.kind() != "map_lit" {
+				return None;
+			}
+			children.chunks(2).find_map(|pair| {
+				let [candidate, value] = pair else {
+					return None;
+				};
+				(edn_node_text(buffer, *candidate) == *key).then_some(*value)
+			})
+		},
+	}
+}
+
+fn edn_node_for_path<'a>(buffer: &'a CodeBuffer, path: &str) -> Option<Node<'a>> {
+	let segments = parse_edn_path(path)?;
+	let mut node = edn_root_value(buffer)?;
+	for segment in &segments {
+		node = edn_child_for_segment(buffer, node, segment)?;
+	}
+	Some(node)
+}
+
+fn edn_resolved_symbol(buffer: &CodeBuffer, path: &str) -> Option<ResolvedSymbol> {
+	let node = edn_node_for_path(buffer, path)?;
+	Some(ResolvedSymbol {
+		name:            path.to_string(),
+		kind:            node.kind().to_string(),
+		start_byte:      node.start_byte(),
+		end_byte:        node.end_byte(),
+		line:            (node.start_position().row + 1) as u32,
+		end_line:        (node.end_position().row + 1) as u32,
+		body_start_byte: None,
+		body_end_byte:   None,
+	})
+}
+fn edn_navigate_result(buffer: &CodeBuffer, node: Node<'_>) -> NavigateResult {
+	let items = edn_named_children(node)
+		.into_iter()
+		.map(|child| NavigateItem {
+			node_type: child.kind().to_string(),
+			text:      edn_first_line(&edn_node_text(buffer, child), 80),
+			line:      (child.start_position().row + 1) as u32,
+			end_line:  (child.end_position().row + 1) as u32,
+		})
+		.collect();
+	NavigateResult {
+		node_type: node.kind().to_string(),
+		text: edn_first_line(&edn_node_text(buffer, node), 80),
+		line: (node.start_position().row + 1) as u32,
+		end_line: (node.end_position().row + 1) as u32,
+		column: node.start_position().column as u32,
+		parent_type: node.parent().map(|parent| parent.kind().to_string()),
+		editable_scope_node_type: Some(node.kind().to_string()),
+		editable_scope_line: Some((node.start_position().row + 1) as u32),
+		editable_scope_end_line: Some((node.end_position().row + 1) as u32),
+		editable_scope_column: Some(node.start_position().column as u32),
+		name: None,
+		kind: Some(node.kind().to_string()),
+		items,
+		references: Vec::new(),
+	}
+}
 use std::{
 	collections::{BTreeMap, BTreeSet},
 	path::{Path, PathBuf},
@@ -11,9 +123,9 @@ use pi_code_engine::{
 	default_journal_root,
 	edit::{
 		DragDirection, Occurrence, Patch, ReplacePolicy, SpliceMode, TextEdit, apply_patches,
-		clone_node, drag_node, insert_after, insert_after_symbol, insert_before,
-		insert_before_symbol, kill_node, rename_symbol, replace_body, replace_body_safe, splice_node,
-		transpose_nodes, wrap_node,
+		apply_raw_text_patches, clone_node, drag_node, insert_after, insert_after_symbol,
+		insert_before, insert_before_symbol, kill_node, rename_symbol, replace_body,
+		replace_body_safe, splice_node, transpose_nodes, wrap_node,
 	},
 	file_lock::lock_status,
 	journal_path_for,
@@ -29,6 +141,7 @@ use pi_code_graph::{
 	LanguageRegistry as GraphLanguageRegistry, query::GraphOutlineEnrichment,
 };
 use serde_json::{Value, json};
+use tree_sitter::Node;
 
 use crate::{buffer_registry, language_registry};
 fn engine_err(error: pi_code_engine::error::CodeEngineError) -> Error {
@@ -659,6 +772,13 @@ fn resolve_target_id(
 	let (_, symbol_target_id) =
 		parse_target_id(target_id).map_err(|error| CodeEngineError::Edit(error.to_string()))?;
 	match symbol_target_id {
+		Some(symbol_target_id) if buffer.language().as_str() == "edn" => {
+			edn_resolved_symbol(buffer, &symbol_target_id)
+				.map(Some)
+				.ok_or_else(|| {
+					CodeEngineError::Edit(format!("EDN target path '{symbol_target_id}' not found"))
+				})
+		},
 		Some(symbol_target_id) => resolve_symbol(buffer, profile, &symbol_target_id).map(Some),
 		None => Ok(None),
 	}
@@ -739,6 +859,18 @@ fn single_action(
 			let (start_byte, end_byte) = target_range(buffer, resolved.as_ref());
 			PreparedEditOperation {
 				edits:  apply_patches(buffer, start_byte, end_byte, &[Patch {
+					find:       action_find(action)?.to_string(),
+					replace:    action_content(action)?.to_string(),
+					occurrence: action_occurrence(action)?,
+				}])?,
+				proof:  None,
+				action: action_kind.to_string(),
+			}
+		},
+		"rawTextReplace" => {
+			let (start_byte, end_byte) = target_range(buffer, resolved.as_ref());
+			PreparedEditOperation {
+				edits:  apply_raw_text_patches(buffer, start_byte, end_byte, &[Patch {
 					find:       action_find(action)?.to_string(),
 					replace:    action_content(action)?.to_string(),
 					occurrence: action_occurrence(action)?,
@@ -1114,6 +1246,103 @@ fn collect_outline_target_ids(
 	}
 }
 
+fn edn_first_line(text: &str, max: usize) -> String {
+	text
+		.lines()
+		.next()
+		.unwrap_or("")
+		.chars()
+		.take(max)
+		.collect()
+}
+fn edn_path_string(segments: &[String]) -> String {
+	if segments.is_empty() {
+		"[]".into()
+	} else {
+		format!("[{}]", segments.join(" "))
+	}
+}
+
+fn render_edn_data_entry(
+	buffer: &CodeBuffer,
+	file_target_id: &str,
+	name: String,
+	node: Node<'_>,
+	segments: Vec<String>,
+) -> Value {
+	let children = match node.kind() {
+		"map_lit" => edn_named_children(node)
+			.chunks(2)
+			.filter_map(|pair| {
+				let [key, value] = pair else {
+					return None;
+				};
+				let key_text = edn_node_text(buffer, *key);
+				let mut child_segments = segments.clone();
+				child_segments.push(key_text.clone());
+				Some(render_edn_data_entry(buffer, file_target_id, key_text, *value, child_segments))
+			})
+			.collect::<Vec<_>>(),
+		"vec_lit" | "list_lit" => edn_named_children(node)
+			.into_iter()
+			.enumerate()
+			.map(|(index, child)| {
+				let mut child_segments = segments.clone();
+				child_segments.push(index.to_string());
+				render_edn_data_entry(
+					buffer,
+					file_target_id,
+					format!("[{index}]"),
+					child,
+					child_segments,
+				)
+			})
+			.collect::<Vec<_>>(),
+		_ => Vec::new(),
+	};
+	let target_path = edn_path_string(&segments);
+	json!({
+		"name": name,
+		"kind": node.kind(),
+		"line": (node.start_position().row + 1) as u32,
+		"endLine": (node.end_position().row + 1) as u32,
+		"column": node.start_position().column as u32,
+		"exported": false,
+		"signature": edn_first_line(&edn_node_text(buffer, node), 80),
+		"targetId": symbol_target_id(file_target_id, &target_path),
+		"children": children,
+	})
+}
+
+fn render_edn_outline_result(buffer: &CodeBuffer, file_target_id: &str) -> Value {
+	let Some(root) = edn_root_value(buffer) else {
+		return Value::Array(Vec::new());
+	};
+	Value::Array(match root.kind() {
+		"map_lit" => edn_named_children(root)
+			.chunks(2)
+			.filter_map(|pair| {
+				let [key, value] = pair else {
+					return None;
+				};
+				let key_text = edn_node_text(buffer, *key);
+				Some(render_edn_data_entry(buffer, file_target_id, key_text.clone(), *value, vec![
+					key_text,
+				]))
+			})
+			.collect(),
+		"vec_lit" | "list_lit" => edn_named_children(root)
+			.into_iter()
+			.enumerate()
+			.map(|(index, child)| {
+				render_edn_data_entry(buffer, file_target_id, format!("[{index}]"), child, vec![
+					index.to_string(),
+				])
+			})
+			.collect(),
+		_ => vec![render_edn_data_entry(buffer, file_target_id, "value".into(), root, Vec::new())],
+	})
+}
 fn render_outline_entry(
 	entry: &OutlineEntry,
 	file_target_id: &str,
@@ -1664,6 +1893,12 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 						));
 					}
 					let file_target_id = file_target_id_for_path(&path, options);
+					if buffer.language().as_str() == "edn" {
+						return Ok(json_response(
+							render_edn_outline_result(&buffer, &file_target_id),
+							false,
+						));
+					}
 					let enrich = parse_outline_enrich(options);
 					let outline = outline_buffer(&buffer, &profile, enrich);
 					let graph_context = enrich
@@ -1679,6 +1914,20 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 						return Err(json_err(
 							"Semantic navigation is unavailable for fallback text buffers. Use \
 							 read/diff/replace_content/save/undo/redo instead.",
+						));
+					}
+					if buffer.language().as_str() == "edn"
+						&& let Some(edn_path) = options.get("symbol").and_then(Value::as_str)
+						&& let Some(node) = edn_node_for_path(&buffer, edn_path)
+					{
+						let file_target_id = file_target_id_for_path(&path, options);
+						return Ok(json_response(
+							render_navigate_result(
+								edn_navigate_result(&buffer, node),
+								&file_target_id,
+								&[],
+							),
+							false,
 						));
 					}
 					let action = navigate_action(options.get("action").and_then(Value::as_str))?;
@@ -1697,6 +1946,11 @@ fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 				"read" => {
 					if text_fallback {
 						Ok(json_response(Value::String(buffer.source()), false))
+					} else if buffer.language().as_str() == "edn"
+						&& let Some(edn_path) = options.get("symbol").and_then(Value::as_str)
+						&& let Some(node) = edn_node_for_path(&buffer, edn_path)
+					{
+						Ok(json_response(Value::String(edn_node_text(&buffer, node)), false))
 					} else {
 						let resolution = options
 							.get("resolution")
@@ -2242,7 +2496,7 @@ mod tests {
 	}
 
 	#[test]
-	fn execute_code_buffer_inner_persisted_edit_closes_history_buffer() {
+	fn execute_code_buffer_inner_persisted_edit_preserves_undo_history() {
 		let path = temp_path("undo-redo-persisted.ts");
 		fs::write(&path, "export const value = 1;\n").expect("seed file");
 		let edit = execute_code_buffer_inner(
@@ -2255,8 +2509,8 @@ mod tests {
 		assert_eq!(edit["error"], json!(false));
 		assert_eq!(fs::read_to_string(&path).expect("saved edit"), "export const value = 2;\n");
 		assert!(
-			buffer_registry().get(&path).is_none(),
-			"persisted edit_transaction writes should close the managed buffer after commit",
+			buffer_registry().get(&path).is_some(),
+			"persisted edit_transaction writes should preserve the managed buffer after commit",
 		);
 		let undo = execute_code_buffer_inner(&json!({
 			"command": "undo",
@@ -2264,9 +2518,77 @@ mod tests {
 		}))
 		.expect("undo");
 		assert_eq!(undo["error"], json!(false));
-		assert_eq!(undo["output"], Value::Null);
+		assert!(undo["output"].is_array(), "undo should apply a saved in-memory revision: {undo}");
+		let diff = execute_code_buffer_inner(&json!({
+			"command": "diff",
+			"file": path.display().to_string(),
+		}))
+		.expect("diff after undo");
+		assert_eq!(diff["error"], json!(false));
+		assert_eq!(diff["output"].as_array().expect("hunks").len(), 1);
 	}
 
+	#[test]
+	fn execute_code_buffer_inner_accepts_qualified_clojure_target_and_raw_replace() {
+		let path = temp_path("qualified-clojure.clj");
+		fs::write(
+			&path,
+			"(ns app.core)\n(defn reject [candidate]\n  (throw (ex-info \"live effects are \
+			 prohibited\" {:candidate candidate})))\n",
+		)
+		.expect("seed clojure");
+		let edit = execute_code_buffer_inner(&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [{
+			"targetId": format!("{}::app.core/reject", path.display()),
+			"actions": [{ "kind": "rawTextReplace", "find": "live effects are prohibited", "content": "side effects are prohibited" }]
+		}] }))
+		.expect("qualified clojure edit");
+		assert_eq!(edit["error"], json!(false));
+		assert_eq!(edit["output"]["status"], json!("applied"));
+		assert!(
+			fs::read_to_string(&path)
+				.expect("saved clojure")
+				.contains("side effects are prohibited")
+		);
+	}
+
+	#[test]
+	fn edn_outline_read_and_edit_use_data_paths() {
+		let path = temp_path("books.edn");
+		fs::write(&path, "{:books [{:title \"Dune\" :pages 412}]}\n").expect("seed edn");
+		let outline = execute_code_buffer_inner(&json!({
+			"command": "outline",
+			"file": path.display().to_string(),
+		}))
+		.expect("edn outline");
+		assert_eq!(outline["error"], json!(false));
+		let file_target = path
+			.file_name()
+			.and_then(|name| name.to_str())
+			.expect("file name");
+		assert_eq!(outline["output"][0]["targetId"], json!(format!("{file_target}::[:books]")));
+
+		let read = execute_code_buffer_inner(&json!({
+			"command": "read",
+			"file": path.display().to_string(),
+			"symbol": "[:books 0 :title]",
+		}))
+		.expect("edn read");
+		assert_eq!(read["output"], json!("\"Dune\""));
+
+		let edit = execute_code_buffer_inner(
+			&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [{
+			"targetId": format!("{}::[:books 0 :title]", path.display()),
+			"actions": [{ "kind": "write", "content": "\"Foundation\"" }]
+		}] }),
+		)
+		.expect("edn edit");
+		assert_eq!(edit["output"]["status"], json!("applied"));
+		assert!(
+			fs::read_to_string(&path)
+				.expect("saved edn")
+				.contains("\"Foundation\"")
+		);
+	}
 	#[test]
 	fn execute_code_buffer_inner_rejects_create_for_existing_file() {
 		let path = temp_path("existing-create.ts");

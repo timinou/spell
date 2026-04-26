@@ -1,0 +1,209 @@
+#+TITLE: [coding-agent] Add EDN data outlines and target paths
+#+STATE: DONE
+#+SESSION_ID: 14ca07298709faed
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-26T17-47-31-740Z_14ca07298709faed.jsonl]]
+#+CUSTOM_ID: FEAT-616-coding-agent-add-edn-data-outlines-and-t
+#+LAYER: code-tool
+#+DEPENDS: BUG-318-coding-agent-accept-qualified-code-targe
+
+* Initial Message
+
+this is in ~/code/ora/clojend's spell agent trying out the new clojure code tool affordances:
+
+ Q: does code work well + ergonomically for Clojure files?
+
+ A: mostly ✓, with sharp edges.
+
+ Tested against:
+ - src/clojend/ga/admission.clj
+ - test/fixtures/golden_books.edn
+
+ Ops exercised:
+ - code languages
+ - code outline
+ - code read
+ - code symbols
+ - code navigate
+ - code context
+ - code impact
+ - code edit
+ - code diff
+ - code undo
+ - code status
+
+ Findings:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Area                   │ Result                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Clojure support        │ ✓ clojure (clj, cljs, cljc, bb) supports                                     │
+ │ advertised             │ outline/read/navigate/resolve/edit/graph                                     │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Outline                │ ✓ good: found namespace + defns with line ranges                             │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ File-local symbols     │ ✓ good: lists namespace + functions                                          │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Workspace symbol       │ ✓ good: admit-candidate resolved to                                          │
+ │ lookup                 │ src/clojend/ga/admission.clj::clojend.ga.admission/admit-candidate           │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Function read          │ ✓ good at resolution:3; returns exact balanced form                          │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Graph context/impact   │ ✓ useful: found callers/callees/imported-by across tests + MCP tools         │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Edit                   │ ✓ works, but ergonomics mixed                                                │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Revert/undo            │ ✗ code undo had no effect after saved edit                                   │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Diff                   │ ? code diff showed 0 hunks despite the file being changed by code edit       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ EDN                    │ weak: outline on fixture returned 0 top; not much ergonomic value            │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Generated artifacts    │ ? graph ops created .spell/graph/workspace.bin; I removed it                 │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ Important friction:
+
+ 1. Target-ID inconsistency
+ code symbols reported:
+   ```text
+     src/clojend/ga/admission.clj::clojend.ga.admission/admit-candidate
+   ```
+   But code edit rejected that:
+   ```text
+     Symbol 'clojend.ga.admission/admit-candidate' not found.
+     Available: [clojend.ga.admission, render-candidate-source, readability-score, reject,
+ admit-candidate]
+   ```
+   Working target was:
+   ```text
+     src/clojend/ga/admission.clj::admit-candidate
+   ```
+   ∴ discoverability mismatch. The tool tells you to use FQ vars, then edit wants local names.
+ 2. findAndReplace needs exact scoped text
+ Replacing just:
+   ```clojure
+     "live effects are prohibited"
+   ```
+   failed, even though it existed in the scope. Full-line replacement worked.
+   ∴ substring replacement inside Clojure forms is not ergonomic.
+ 3. Navigation child/sibling behavior is not very useful
+ navigate children / siblings around a defn mostly surfaced defn token-level nodes, not semantically
+ useful form children.
+ 4. Context is powerful but noisy
+ code context returned real callers/callees, but also treated many local keywords as references:
+   ```text
+     :fitness
+     :readability
+     :analysis
+     :source
+     :accepted
+     ...
+   ```
+   ∴ useful for call graph, noisy for semantic references.
+
+ Verification:
+ - Temporary Clojure edit applied via code edit, then reverted via inverse code edit.
+ - git diff -- src/clojend/ga/admission.clj → empty.
+ - clojure -M:test:
+
+ ```text
+   Ran 27 tests containing 108 assertions.
+   0 failures, 0 errors.
+ ```
+
+ Repo status after test:
+ - No tracked source changes from this exercise.
+ - Existing unrelated untracked files remain:
+     - !tasks/...
+     - .cpcache/
+     - design/80-workbench-alpha.org
+     - specs/80-workbench-alpha.org
+
+ ∴ Verdict:
+
+ code is viable for Clojure structure-aware reading, symbol lookup, scoped edits, and graph exploration.
+ Not yet “smooth”: edit target IDs, substring replacement, undo/diff, and EDN ergonomics need work before
+ I’d call it reliably pleasant for daily Clojure refactors.
+
+
+please design together (ask me questions) to make this more ergonomic
+
+* Scope
+In scope: make `.edn` files ergonomically useful in the code tool by adding data outlines keyed by top-level map keys/vector indexes and target IDs like `test/fixtures/golden_books.edn::[:books 0 :title]`. EDN remains data-only: read/navigate/edit can target data forms; graph/code symbol semantics stay off.
+
+Out of scope: treating EDN as Clojure code, resolving namespaces/vars, evaluating tagged literals, or adding graph edges from EDN to Clojure vars. No runtime evaluation.
+
+* Existing Patterns
+- EDN profile: `crates/pi-code-engine/src/language/mod.rs`; `edn_profile()` uses tree-sitter-clojure grammar, `data_capabilities()`, no declarations, no graph.
+- Outline implementation: `crates/pi-code-engine/src/outline.rs`; currently only declaration patterns produce outline entries, so EDN returns 0 top-level entries.
+- Navigation: `crates/pi-code-engine/src/navigate.rs`; raw tree-sitter navigation exists but is not data-path oriented.
+- Native target IDs: `crates/pi-natives/src/code_buffer.rs`; `parse_target_id()` splits `<file>::<symbol>`, `resolve_target_id()` assumes symbol names. EDN target paths must coexist with normal symbols and with `::` separator.
+- TS output normalization: `packages/coding-agent/src/tools/code-result.ts`; outline entries already include `targetId`, name, kind, line ranges.
+
+* Tests
+User workflows to cover first:
+1. `code outline test/fixtures/golden_books.edn` returns top-level map keys (`:books`, `:metadata`, etc.) with line ranges and target IDs.
+2. Nested data outline can expose vector indexes and map keys enough to target `file::[:books 0 :title]`.
+3. `code read` or `code navigate` on an EDN data target returns the exact balanced data form/value.
+4. `code edit` can replace an EDN targeted value with balanced EDN content and reject unbalanced/invalid content.
+5. EDN graph commands remain unavailable/empty with clear data-only messaging.
+6. Target path parser handles spaces/strings/numeric indexes safely and rejects malformed paths truthfully.
+
+Test files:
+- `packages/natives/test/code-buffer.test.ts`: EDN fixture outline/read/edit target path scenarios.
+- `crates/pi-code-engine/src/outline.rs` or new EDN data outline module: unit tests for maps/vectors/nested paths.
+- `packages/coding-agent/test/tools/code.test.ts`: result formatting if target ID display changes.
+
+** ITEM Write EDN data path tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-616-coding-agent-add-edn-data-outlines-and-t::edn-data-tests
+:END:
+- Files: `packages/natives/test/code-buffer.test.ts`, engine unit tests near the EDN implementation.
+- Scenarios: workflows 1-6. Use fixture-like data containing map keys, nested vectors, strings, keywords, and tagged literal if parser supports it.
+
+** ITEM Implement EDN data outline entries
+:PROPERTIES:
+:CUSTOM_ID: FEAT-616-coding-agent-add-edn-data-outlines-and-t::edn-data-outline
+:DEPENDS: FEAT-616-coding-agent-add-edn-data-outlines-and-t::edn-data-tests BUG-318-coding-agent-accept-qualified-code-targe::target-id-aliases
+:END:
+- Files: `crates/pi-code-engine/src/language/mod.rs`, `crates/pi-code-engine/src/outline.rs`, optional new module `crates/pi-code-engine/src/data_outline.rs` if clearer.
+- For EDN profile, produce synthetic `OutlineEntry` values for map entries/vector elements with `kind` like `edn-key`, `edn-index`, `edn-value`.
+- Generate stable target path strings (`[:books 0 :title]`) from traversal.
+
+** ITEM Resolve EDN target paths for read edit navigate
+:PROPERTIES:
+:CUSTOM_ID: FEAT-616-coding-agent-add-edn-data-outlines-and-t::edn-target-resolution
+:DEPENDS: FEAT-616-coding-agent-add-edn-data-outlines-and-t::edn-data-outline
+:END:
+- Files: `crates/pi-natives/src/code_buffer.rs`, `crates/pi-code-engine/src/resolve.rs` or dedicated EDN resolver.
+- Parse EDN target path notation after `::` only for EDN buffers.
+- Resolve to byte ranges for exact balanced values.
+- Allow replacement via existing `write` and `rawTextReplace` only when resulting EDN remains parse-valid.
+
+** ITEM Update EDN docs and hints
+:PROPERTIES:
+:CUSTOM_ID: FEAT-616-coding-agent-add-edn-data-outlines-and-t::edn-docs
+:DEPENDS: FEAT-616-coding-agent-add-edn-data-outlines-and-t::edn-target-resolution
+:END:
+- Files: `packages/coding-agent/src/prompts/tools/code.md`, `packages/coding-agent/src/prompts/tools/code-hint-clojure.md`
+- State EDN target path syntax and data-only boundary.
+
+* Implementation
+1. Add tests first for data outline and path targeting.
+2. Implement data outline separately from declaration outline to avoid contorting code-symbol concepts.
+3. Add EDN target resolution only for `.edn`/`LanguageId("edn")`.
+4. Keep graph semantics disabled with clearer messaging.
+
+* Edge Cases
+- Duplicate map keys: target IDs may need occurrence suffixes or must report ambiguity; tests must define behavior.
+- Vectors/lists with large cardinality should cap output by `limit`.
+- EDN strings containing brackets/keywords must not confuse target path parser.
+- Tagged literals should be preserved as data forms, not evaluated.
+- Invalid EDN edits must rollback with disk unchanged.
+
+* Acceptance Criteria
+- EDN outline has useful top-level data entries.
+- Agents can target and replace nested EDN values by path.
+- EDN remains data-only; no graph/code symbol confusion.
+
+NOTE [2026-04-26]: Implemented and verified by PLAN-283 completion.

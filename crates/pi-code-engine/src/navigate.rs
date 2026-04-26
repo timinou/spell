@@ -188,12 +188,62 @@ fn siblings_result(buffer: &CodeBuffer, node: Node<'_>) -> NavigateResult {
 		.unwrap_or_default();
 	node_result(buffer, node).with_items(items)
 }
+fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
+	let mut cursor = node.walk();
+	node.named_children(&mut cursor).collect()
+}
+
+fn clojure_semantic_children(node: Node<'_>) -> Vec<Node<'_>> {
+	let children = named_children(node);
+	if node.kind() != "list_lit" {
+		return children;
+	}
+	let head_text = children
+		.first()
+		.map(|child| child.kind())
+		.unwrap_or_default();
+	if head_text != "sym_lit" {
+		return children;
+	}
+	let skip = match children.len() {
+		0..=2 => 1,
+		_ if children
+			.get(2)
+			.is_some_and(|child| child.kind() == "vec_lit") =>
+		{
+			3
+		},
+		_ => 2,
+	};
+	children.into_iter().skip(skip).collect()
+}
+fn clojure_semantic_container(mut node: Node<'_>) -> Node<'_> {
+	loop {
+		if matches!(node.kind(), "list_lit" | "map_lit" | "vec_lit") {
+			return node;
+		}
+		let Some(parent) = node.parent() else {
+			return node;
+		};
+		node = parent;
+	}
+}
 fn children_result(
 	buffer: &CodeBuffer,
 	profile: &LanguageProfile,
 	node: Node<'_>,
 ) -> NavigateResult {
-	let items = class_member_nodes(profile, node, &buffer.source())
+	let target = if profile.id.as_str() == "clojure" {
+		clojure_semantic_container(node)
+	} else {
+		node
+	};
+	let child_nodes = if profile.id.as_str() == "clojure" {
+		clojure_semantic_children(target)
+	} else {
+		class_member_nodes(profile, target, &buffer.source())
+	};
+	let items = child_nodes
 		.into_iter()
 		.map(|child| NavigateItem {
 			node_type: child.kind().to_string(),
@@ -202,7 +252,7 @@ fn children_result(
 			end_line:  (child.end_position().row + 1) as u32,
 		})
 		.collect();
-	node_result(buffer, node).with_items(items)
+	node_result(buffer, target).with_items(items)
 }
 fn references_result(
 	buffer: &CodeBuffer,
@@ -472,5 +522,24 @@ mod tests {
 		assert_eq!(r.editable_scope_node_type.as_deref(), Some("export_statement"));
 		assert_eq!(r.editable_scope_line, Some(1));
 		assert_eq!(r.editable_scope_end_line, Some(1));
+	}
+
+	#[test]
+	fn test_navigate_clojure_children_skip_defn_header() {
+		let source = "(ns app.core)\n(defn admit [candidate]\n  (let [score 1]\n    {:accepted true \
+		              :score score}))\n";
+		let buf =
+			CodeBuffer::from_str(source, LanguageId::new("clojure"), registry()).expect("buffer");
+		let p = profile("clojure");
+		let r = navigate(&buf, &p, NavigateAction::Children, 2, Some(2), None).expect("nav");
+
+		assert!(
+			r.items.iter().any(|item| item.text.starts_with("(let")),
+			"children should surface semantic body forms, not only defn header tokens: {r:?}",
+		);
+		assert!(
+			!r.items.iter().any(|item| item.text == "admit"),
+			"children should not default to defn name token: {r:?}",
+		);
 	}
 }

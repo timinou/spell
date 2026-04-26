@@ -1,0 +1,214 @@
+#+TITLE: [coding-agent] Make Clojure navigation and context semantic
+#+STATE: DONE
+#+SESSION_ID: 14ca07298709faed
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-26T17-47-31-740Z_14ca07298709faed.jsonl]]
+#+CUSTOM_ID: FEAT-615-coding-agent-make-clojure-navigation-and
+#+LAYER: code-tool
+
+* Initial Message
+
+this is in ~/code/ora/clojend's spell agent trying out the new clojure code tool affordances:
+
+ Q: does code work well + ergonomically for Clojure files?
+
+ A: mostly ✓, with sharp edges.
+
+ Tested against:
+ - src/clojend/ga/admission.clj
+ - test/fixtures/golden_books.edn
+
+ Ops exercised:
+ - code languages
+ - code outline
+ - code read
+ - code symbols
+ - code navigate
+ - code context
+ - code impact
+ - code edit
+ - code diff
+ - code undo
+ - code status
+
+ Findings:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Area                   │ Result                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Clojure support        │ ✓ clojure (clj, cljs, cljc, bb) supports                                     │
+ │ advertised             │ outline/read/navigate/resolve/edit/graph                                     │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Outline                │ ✓ good: found namespace + defns with line ranges                             │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ File-local symbols     │ ✓ good: lists namespace + functions                                          │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Workspace symbol       │ ✓ good: admit-candidate resolved to                                          │
+ │ lookup                 │ src/clojend/ga/admission.clj::clojend.ga.admission/admit-candidate           │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Function read          │ ✓ good at resolution:3; returns exact balanced form                          │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Graph context/impact   │ ✓ useful: found callers/callees/imported-by across tests + MCP tools         │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Edit                   │ ✓ works, but ergonomics mixed                                                │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Revert/undo            │ ✗ code undo had no effect after saved edit                                   │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Diff                   │ ? code diff showed 0 hunks despite the file being changed by code edit       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ EDN                    │ weak: outline on fixture returned 0 top; not much ergonomic value            │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Generated artifacts    │ ? graph ops created .spell/graph/workspace.bin; I removed it                 │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ Important friction:
+
+ 1. Target-ID inconsistency
+ code symbols reported:
+   ```text
+     src/clojend/ga/admission.clj::clojend.ga.admission/admit-candidate
+   ```
+   But code edit rejected that:
+   ```text
+     Symbol 'clojend.ga.admission/admit-candidate' not found.
+     Available: [clojend.ga.admission, render-candidate-source, readability-score, reject,
+ admit-candidate]
+   ```
+   Working target was:
+   ```text
+     src/clojend/ga/admission.clj::admit-candidate
+   ```
+   ∴ discoverability mismatch. The tool tells you to use FQ vars, then edit wants local names.
+ 2. findAndReplace needs exact scoped text
+ Replacing just:
+   ```clojure
+     "live effects are prohibited"
+   ```
+   failed, even though it existed in the scope. Full-line replacement worked.
+   ∴ substring replacement inside Clojure forms is not ergonomic.
+ 3. Navigation child/sibling behavior is not very useful
+ navigate children / siblings around a defn mostly surfaced defn token-level nodes, not semantically
+ useful form children.
+ 4. Context is powerful but noisy
+ code context returned real callers/callees, but also treated many local keywords as references:
+   ```text
+     :fitness
+     :readability
+     :analysis
+     :source
+     :accepted
+     ...
+   ```
+   ∴ useful for call graph, noisy for semantic references.
+
+ Verification:
+ - Temporary Clojure edit applied via code edit, then reverted via inverse code edit.
+ - git diff -- src/clojend/ga/admission.clj → empty.
+ - clojure -M:test:
+
+ ```text
+   Ran 27 tests containing 108 assertions.
+   0 failures, 0 errors.
+ ```
+
+ Repo status after test:
+ - No tracked source changes from this exercise.
+ - Existing unrelated untracked files remain:
+     - !tasks/...
+     - .cpcache/
+     - design/80-workbench-alpha.org
+     - specs/80-workbench-alpha.org
+
+ ∴ Verdict:
+
+ code is viable for Clojure structure-aware reading, symbol lookup, scoped edits, and graph exploration.
+ Not yet “smooth”: edit target IDs, substring replacement, undo/diff, and EDN ergonomics need work before
+ I’d call it reliably pleasant for daily Clojure refactors.
+
+
+please design together (ask me questions) to make this more ergonomic
+
+* Scope
+In scope: make Clojure `code navigate children/siblings` return semantically useful forms instead of raw token-level nodes, and make graph context keep Clojure keywords while sectioning/collapsing them under “Data keywords” to reduce call-graph noise.
+
+Out of scope: runtime nREPL/macro expansion, executing Clojure, or removing keyword extraction from the graph. Keywords are valuable data-flow signals and must remain available; they just must not crowd callers/callees/references.
+
+* Existing Patterns
+- Clojure profile: `crates/pi-code-engine/src/language/mod.rs`; Clojure uses `list_lit`, `sym_lit`, balanced-form helpers, and form procedures.
+- Navigation: `crates/pi-code-engine/src/navigate.rs`; `children_result()` currently uses `class_member_nodes(profile, node, source)`, which is not meaningful for Clojure because Clojure has no class-like declarations. `siblings_result()` currently uses named children of the raw parent.
+- Graph extraction: `crates/pi-code-graph/src/language/clojure.rs`; `extract_keywords()` creates `SymbolKind::Keyword`; `collect_references()` emits `EdgeKind::UsesKeyword`.
+- Graph query/formatting: `crates/pi-code-graph/src/query.rs` and `crates/pi-natives/src/code_graph.rs`; `format_context()` currently sections Callers/Callees/References/Referenced by/Imports/Imported by/Inherits uniformly.
+- TypeScript formatter: `packages/coding-agent/src/tools/code-result.ts` mostly returns graph `output` as native-formatted text.
+
+* Tests
+User workflows to cover first:
+1. `code navigate {file: "x.clj", action:"children", line:<defn line>}` returns defn body forms, not `defn`/symbol/vector token noise.
+2. Navigating children on a `let` form returns binding pairs and body forms with line ranges.
+3. Navigating children on map/vector EDN-like Clojure forms returns map entries/vector elements at semantic granularity.
+4. `siblings` around a form returns sibling forms in the same parent list/vector/map, not punctuation or leaf tokens.
+5. `code context` on a Clojure var still shows callers/callees/references, but keyword refs are grouped under “Data keywords” and capped/collapsed separately.
+6. `semantic:true` or an equivalent option may expand keyword detail if implemented, but default output must be quieter.
+
+Test files:
+- `packages/natives/test/code-buffer.test.ts`: Clojure navigate children/siblings fixtures.
+- `crates/pi-code-engine/src/navigate.rs`: unit tests for Clojure form item extraction if helper lives there.
+- `crates/pi-code-graph/src/language/clojure.rs` and/or `crates/pi-code-graph/src/query.rs`: graph tests proving keyword refs remain in model.
+- `crates/pi-natives/src/code_graph.rs`: formatting test for “Data keywords” section.
+
+** ITEM Write Clojure navigation tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-615-coding-agent-make-clojure-navigation-and::clojure-nav-tests
+:END:
+- Files: `packages/natives/test/code-buffer.test.ts`, `crates/pi-code-engine/src/navigate.rs`
+- Scenarios: workflows 1-4. Tests must assert semantic item text/line ranges, not just non-empty output.
+
+** ITEM Implement semantic form navigation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-615-coding-agent-make-clojure-navigation-and::semantic-form-navigation
+:DEPENDS: FEAT-615-coding-agent-make-clojure-navigation-and::clojure-nav-tests
+:END:
+- Files: `crates/pi-code-engine/src/navigate.rs`, optionally `crates/pi-code-engine/src/language/mod.rs` for reusable Clojure form helpers.
+- Add language-aware path for Clojure `list_lit`, `vec_lit`, `map_lit`, `set_lit` that returns body forms, binding pairs, branches, and entries.
+- Avoid raw punctuation/token children by default.
+
+** ITEM Write keyword context formatting tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-615-coding-agent-make-clojure-navigation-and::keyword-context-tests
+:END:
+- Files: `crates/pi-code-graph/src/query.rs`, `crates/pi-natives/src/code_graph.rs`
+- Scenarios: workflow 5. Ensure keyword symbols/edges remain indexed but are displayed separately from call/reference sections.
+
+** ITEM Section Clojure data keywords in context
+:PROPERTIES:
+:CUSTOM_ID: FEAT-615-coding-agent-make-clojure-navigation-and::keyword-context-section
+:DEPENDS: FEAT-615-coding-agent-make-clojure-navigation-and::keyword-context-tests
+:END:
+- Files: `crates/pi-code-graph/src/query.rs`, `crates/pi-natives/src/code_graph.rs`, `packages/coding-agent/src/tools/code-result.ts` only if TS formatting needs metadata.
+- Keep `SymbolKind::Keyword` and `EdgeKind::UsesKeyword`; change default context rendering to separate keyword hits under “Data keywords”.
+- Cap/collapse keyword output independently from callers/callees.
+
+** ITEM Update Clojure guidance
+:PROPERTIES:
+:CUSTOM_ID: FEAT-615-coding-agent-make-clojure-navigation-and::clojure-nav-guidance
+:DEPENDS: FEAT-615-coding-agent-make-clojure-navigation-and::semantic-form-navigation FEAT-615-coding-agent-make-clojure-navigation-and::keyword-context-section
+:END:
+- Files: `packages/coding-agent/src/prompts/tools/code-hint-clojure.md`
+- Explain semantic forms in `navigate children/siblings` and keyword sectioning in graph context.
+
+* Implementation
+1. Add failing navigation tests with realistic Clojure function body containing string literal, let, cond, and map data.
+2. Implement form-aware semantic item extraction in native engine.
+3. Preserve keyword graph semantics but restructure context output.
+4. Update hints.
+
+* Edge Cases
+- Comments and reader conditionals (`#?`) should not be returned as editable semantic children unless clearly represented.
+- Macro forms are static only; do not invent expanded children.
+- Very large maps/vectors should be capped with output limits.
+- Namespaced keywords (`::foo`, `:app/foo`) must remain distinguishable.
+
+* Acceptance Criteria
+- Clojure navigation returns forms an agent can act on.
+- Context call graph is still useful but keyword noise is separated.
+- Keyword graph data remains queryable and tested.
+
+NOTE [2026-04-26]: Implemented and verified by PLAN-283 completion.
