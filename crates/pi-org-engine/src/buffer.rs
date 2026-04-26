@@ -119,7 +119,11 @@ fn extract_file_level_item(
 	let mut state = String::new();
 	let mut frontmatter_end = 0usize;
 
-	for line in source.lines() {
+	for raw_line in source.split_inclusive('\n') {
+		let line_without_lf = raw_line.strip_suffix('\n').unwrap_or(raw_line);
+		let line = line_without_lf
+			.strip_suffix('\r')
+			.unwrap_or(line_without_lf);
 		if let Some(rest) = line.strip_prefix("#+") {
 			if let Some((key, value)) = rest.split_once(':') {
 				let key = key.trim().to_uppercase();
@@ -136,7 +140,7 @@ fn extract_file_level_item(
 					},
 				}
 			}
-			frontmatter_end += line.len() + 1;
+			frontmatter_end += raw_line.len();
 		} else {
 			break;
 		}
@@ -763,6 +767,49 @@ mod tests {
 		assert_eq!(item.state, "DOING");
 		assert_eq!(item.level, 0);
 		assert!(item.body.as_ref().unwrap().contains("Plan body"));
+	}
+
+	#[test]
+	fn extract_file_level_frontmatter_only_no_final_newline_with_body_enabled() {
+		let src = "#+TITLE: EOF Plan\n#+CUSTOM_ID: PLAN-EOF\n#+STATE: DOING";
+		let items = extract_test_items(src, true);
+
+		assert_eq!(items.len(), 1);
+		assert_eq!(items[0].id, "PLAN-EOF");
+		assert_eq!(items[0].title, "EOF Plan");
+		assert_eq!(items[0].state, "DOING");
+		assert_eq!(items[0].body, None);
+	}
+
+	#[test]
+	fn extract_file_level_frontmatter_only_no_final_newline_without_body() {
+		let src = "#+TITLE: EOF Plan\n#+CUSTOM_ID: PLAN-EOF\n#+STATE: DOING";
+		let items = extract_test_items(src, false);
+
+		assert_eq!(items.len(), 1);
+		assert_eq!(items[0].id, "PLAN-EOF");
+		assert_eq!(items[0].body, None);
+	}
+
+	#[test]
+	fn extract_file_level_frontmatter_then_body_keeps_body_start() {
+		let src = "#+TITLE: My Plan\n#+CUSTOM_ID: PLAN-BODY\n#+STATE: DOING\n\nPlan body.\n";
+		let items = extract_test_items(src, true);
+
+		assert_eq!(items.len(), 1);
+		assert_eq!(items[0].body.as_deref(), Some("Plan body."));
+	}
+
+	#[test]
+	fn extract_file_level_frontmatter_uses_byte_accurate_crlf_boundary() {
+		let src = "#+TITLE: Café Plan\r\n#+CUSTOM_ID: PLAN-CRLF\r\n#+STATE: DOING\r\n\r\nBody with \
+		           café.\r\n";
+		let items = extract_test_items(src, true);
+
+		assert_eq!(items.len(), 1);
+		assert_eq!(items[0].id, "PLAN-CRLF");
+		assert_eq!(items[0].title, "Café Plan");
+		assert_eq!(items[0].body.as_deref(), Some("Body with café."));
 	}
 
 	#[test]
