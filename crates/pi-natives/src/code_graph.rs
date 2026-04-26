@@ -10,10 +10,10 @@ use std::{
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use pi_code_graph::{
-	BuildGraphOptions, CacheStatus, CacheStore, CodeGraph, CodeGraphBuilder, GraphCluster,
-	GraphContextResult, GraphDeadCodeItem, GraphDepsResult, GraphFilesResult, GraphFlowResult,
-	GraphImpactResult, GraphNodeSummary, GraphSearchMatch, GraphStatus, GraphSymbolsResult,
-	GraphTraversalLevel, LanguageRegistry,
+	BuildGraphOptions, CacheStatus, CacheStore, CodeGraph, CodeGraphBuilder, GraphCacheEntry,
+	GraphCluster, GraphContextResult, GraphDeadCodeItem, GraphDepsResult, GraphFilesResult,
+	GraphFlowResult, GraphImpactResult, GraphNodeSummary, GraphSearchMatch, GraphStatus,
+	GraphSymbolsResult, GraphTraversalLevel, LanguageRegistry,
 };
 
 use crate::{
@@ -305,7 +305,7 @@ fn ensure_graph(
 	let status = builder.cache_status(root).map_err(to_napi_error)?;
 	if !force_rebuild && status == CacheStatus::Fresh {
 		let entry = cache
-			.load(CACHE_NAME)
+			.load::<GraphCacheEntry>(CACHE_NAME)
 			.map_err(to_napi_error)?
 			.ok_or_else(|| Error::from_reason("graph cache disappeared after status check"))?;
 		return Ok((CodeGraph::from(entry.graph), "fresh".into(), false));
@@ -330,7 +330,7 @@ fn render_status(root: &Path, builder: &CodeGraphBuilder) -> napi::Result<CodeGr
 		CacheStatus::Stale { reason } => format!("stale ({reason})"),
 	};
 	let status = cache
-		.load(CACHE_NAME)
+		.load::<GraphCacheEntry>(CACHE_NAME)
 		.map_err(to_napi_error)?
 		.map(|entry| CodeGraph::from(entry.graph).graph_status());
 	let semantic_status = load_vector_cache(cache, graph_fingerprint_hash(cache)).describe();
@@ -405,7 +405,7 @@ fn validate_worker_vectors(
 }
 
 fn graph_fingerprint_hash(cache: &CacheStore) -> Option<u64> {
-	let entry = cache.load(CACHE_NAME).ok().flatten()?;
+	let entry = cache.load::<GraphCacheEntry>(CACHE_NAME).ok().flatten()?;
 	let mut hasher = DefaultHasher::new();
 	entry.fingerprint.hash(&mut hasher);
 	Some(hasher.finish())
@@ -527,8 +527,8 @@ fn format_impact(result: &GraphImpactResult, limit: usize) -> String {
 
 fn format_deps(result: &GraphDepsResult, limit: usize) -> String {
 	let mut sections = vec![format!("Dependencies\nTarget: {}", result.target.label)];
-	append_section(&mut sections, "Outgoing imports", &result.outgoing, limit);
-	append_section(&mut sections, "Incoming imports", &result.incoming, limit);
+	append_section(&mut sections, "Outgoing dependencies", &result.outgoing, limit);
+	append_section(&mut sections, "Incoming dependencies", &result.incoming, limit);
 	sections.push("Next: code { command: \"clusters\" }".into());
 	sections.join("\n\n")
 }

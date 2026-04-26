@@ -47,6 +47,7 @@ pi-code-graph = { path = "../pi-code-graph", features = ["semantic"] }
 pi-code-vectors = { path = "../pi-code-vectors" }
 pi-code-engine = { path = "../pi-code-engine" }
 pi-org-engine = { path = "../pi-org-engine" }
+pi-workspace-cache = { path = "../pi-workspace-cache" }
 pi-typst-surface = { path = "../pi-typst-surface" }
 tree-sitter = "0.25"
 tree-sitter-bash = "0.25"
@@ -54,6 +55,7 @@ tree-sitter-c = "0.24"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-cpp = "0.23"
 tree-sitter-css = "0.25"
+tree-sitter-clojure = "0.1"
 tree-sitter-diff = "0.1"
 tree-sitter-elixir = "0.3"
 tree-sitter-go = "0.25"

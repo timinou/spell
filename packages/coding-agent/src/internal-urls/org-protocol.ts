@@ -39,7 +39,13 @@ export class OrgProtocolHandler implements ProtocolHandler {
 		const config = buildOrgConfig(settings);
 		const projectRoot = this.options.getCwd();
 		const categories = resolveCategories(config, projectRoot);
-		const catDirs = categories.map(c => ({ absPath: c.absPath, name: c.name, dir: c.dirName }));
+		const catDirs = categories.map(c => ({
+			absPath: c.absPath,
+			name: c.name,
+			dir: c.dirName,
+			prefix: c.prefix,
+			root: projectRoot,
+		}));
 
 		const item = await findItemById(catDirs, itemId, config.todoKeywords);
 		if (!item) {

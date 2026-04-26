@@ -62,16 +62,26 @@ export async function readCategory(
 }
 
 export async function findItemById(
-	categoryDirs: Array<{ absPath: string; name: string; dir: string }>,
+	categoryDirs: Array<{ absPath: string; name: string; dir: string; prefix?: string; root?: string }>,
 	customId: string,
 	todoKeywords: string[],
 ): Promise<OrgItem | undefined> {
-	for (const category of categoryDirs) {
-		const items = await readCategory(category.absPath, category.name, category.dir, todoKeywords, true);
-		const found = items.find(item => item.id === customId);
-		if (found) return found;
-	}
-	return undefined;
+	const root = categoryDirs.find(category => category.root)?.root ?? process.cwd();
+	const result = executeOrg({
+		command: "orgIndexResolve",
+		root,
+		categories: categoryDirs.map(category => ({
+			absPath: category.absPath,
+			name: category.name,
+			dir: category.dir,
+			prefix: category.prefix ?? category.name,
+		})),
+		todoKeywords,
+		id: customId,
+		includeBody: true,
+	});
+	if (result.error) throw new Error(String(result.output));
+	return ((result.output as { item?: OrgItem }).item ?? undefined) as OrgItem | undefined;
 }
 
 export async function appendItemToFile(

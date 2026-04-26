@@ -1,30 +1,10 @@
-use std::{
-	collections::BTreeMap,
-	fs,
-	io::{BufReader, BufWriter},
-	path::{Path, PathBuf},
-	time::UNIX_EPOCH,
+pub use pi_workspace_cache::{
+	CacheStatus, CacheStore, FileFingerprint, PersistentCacheEntry,
+	WorkspaceFingerprint as GraphFingerprint, read_git_head,
 };
-
 use serde::{Deserialize, Serialize};
 
-use crate::{
-	error::{CodeGraphError, Result},
-	model::{CodeGraph, PersistedCodeGraph},
-};
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct FileFingerprint {
-	pub size:           u64,
-	pub modified_at_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct GraphFingerprint {
-	pub root:     PathBuf,
-	pub git_head: Option<String>,
-	pub files:    BTreeMap<PathBuf, FileFingerprint>,
-}
+use crate::model::{CodeGraph, PersistedCodeGraph};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphCacheEntry {
@@ -32,131 +12,9 @@ pub struct GraphCacheEntry {
 	pub fingerprint: GraphFingerprint,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CacheStatus {
-	Missing,
-	Fresh,
-	Stale { reason: String },
-}
-
-#[derive(Debug, Clone)]
-pub struct CacheStore {
-	directory: PathBuf,
-}
-
-impl CacheStore {
-	pub fn new(directory: impl Into<PathBuf>) -> Self {
-		Self { directory: directory.into() }
-	}
-
-	pub fn directory(&self) -> &Path {
-		&self.directory
-	}
-
-	pub fn entry_path(&self, name: &str) -> PathBuf {
-		self.directory.join(format!("{name}.bin"))
-	}
-
-	pub fn load(&self, name: &str) -> Result<Option<GraphCacheEntry>> {
-		let path = self.entry_path(name);
-		if !path.exists() {
-			return Ok(None);
-		}
-		let file = fs::File::open(path)?;
-		let reader = BufReader::new(file);
-		let entry = bincode::deserialize_from(reader)?;
-		Ok(Some(entry))
-	}
-
-	pub fn save(&self, name: &str, entry: &GraphCacheEntry) -> Result<()> {
-		fs::create_dir_all(&self.directory)?;
-		let path = self.entry_path(name);
-		let file = fs::File::create(path)?;
-		let writer = BufWriter::new(file);
-		bincode::serialize_into(writer, entry)?;
-		Ok(())
-	}
-
-	pub fn fingerprint_root(
-		&self,
-		root: &Path,
-		matches_source: &dyn Fn(&Path) -> bool,
-	) -> Result<GraphFingerprint> {
-		if !root.is_dir() {
-			return Err(CodeGraphError::InvalidRoot(root.to_path_buf()));
-		}
-		let mut files = BTreeMap::new();
-		for entry in ignore::WalkBuilder::new(root)
-			.hidden(false)
-			.git_ignore(true)
-			.git_exclude(true)
-			.build()
-		{
-			let entry =
-				entry.map_err(|error| CodeGraphError::Io(std::io::Error::other(error.to_string())))?;
-			if !entry
-				.file_type()
-				.is_some_and(|file_type| file_type.is_file())
-			{
-				continue;
-			}
-			let path = entry.into_path();
-			let relative = path
-				.strip_prefix(root)
-				.unwrap_or(path.as_path())
-				.to_path_buf();
-			if relative.starts_with(".spell") || !matches_source(&path) {
-				continue;
-			}
-			let metadata = fs::metadata(&path)?;
-			files.insert(relative, FileFingerprint::from_metadata(&metadata)?);
-		}
-		Ok(GraphFingerprint { root: root.to_path_buf(), git_head: read_git_head(root), files })
-	}
-
-	pub fn status(
-		&self,
-		name: &str,
-		root: &Path,
-		matches_source: &dyn Fn(&Path) -> bool,
-	) -> Result<CacheStatus> {
-		let Some(entry) = self.load(name)? else {
-			return Ok(CacheStatus::Missing);
-		};
-		let current = self.fingerprint_root(root, matches_source)?;
-		if entry.fingerprint.git_head != current.git_head {
-			return Ok(CacheStatus::Stale { reason: "git HEAD changed".into() });
-		}
-		if entry.fingerprint.files != current.files {
-			return Ok(CacheStatus::Stale { reason: "workspace files changed".into() });
-		}
-		Ok(CacheStatus::Fresh)
-	}
-}
-
-impl FileFingerprint {
-	pub fn from_metadata(metadata: &fs::Metadata) -> Result<Self> {
-		let modified_at_ms = metadata
-			.modified()?
-			.duration_since(UNIX_EPOCH)
-			.unwrap_or_default()
-			.as_millis() as u64;
-		Ok(Self { size: metadata.len(), modified_at_ms })
-	}
-}
-
-pub fn read_git_head(root: &Path) -> Option<String> {
-	let git_dir = root.join(".git");
-	let head_path = git_dir.join("HEAD");
-	let head = fs::read_to_string(head_path).ok()?;
-	let trimmed = head.trim();
-	if let Some(reference) = trimmed.strip_prefix("ref: ") {
-		let ref_path = git_dir.join(reference);
-		fs::read_to_string(ref_path)
-			.ok()
-			.map(|value| value.trim().to_string())
-	} else {
-		Some(trimmed.to_string())
+impl PersistentCacheEntry for GraphCacheEntry {
+	fn fingerprint(&self) -> &GraphFingerprint {
+		&self.fingerprint
 	}
 }
 
@@ -168,12 +26,16 @@ impl GraphCacheEntry {
 
 #[cfg(test)]
 mod tests {
-	use std::path::{Path, PathBuf};
+	use std::{
+		collections::BTreeMap,
+		fs,
+		path::{Path, PathBuf},
+	};
 
 	use petgraph::stable_graph::StableGraph;
 
 	use super::*;
-	use crate::model::{EdgeKind, GraphNode, GraphStats, PersistedCodeGraph};
+	use crate::model::{EdgeKind, GraphNode, GraphStats};
 
 	fn temp_dir(name: &str) -> PathBuf {
 		std::env::temp_dir().join(format!("pi-code-graph-{name}-{}", std::process::id()))
@@ -207,7 +69,7 @@ mod tests {
 		};
 		store.save("unit", &entry).expect("save should succeed");
 		let loaded = store
-			.load("unit")
+			.load::<GraphCacheEntry>("unit")
 			.expect("load should succeed")
 			.expect("entry should exist");
 		assert_eq!(loaded.graph.generated_at_ms, 42);
@@ -260,7 +122,7 @@ mod tests {
 		fs::write(root.join("README.md"), "docs change").expect("markdown file should be written");
 
 		let status = store
-			.status("workspace", &root, &is_typescript_source)
+			.status::<GraphCacheEntry>("workspace", &root, &is_typescript_source)
 			.expect("status should succeed");
 		assert_eq!(status, CacheStatus::Fresh);
 		let _ = fs::remove_dir_all(root);

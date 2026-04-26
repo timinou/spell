@@ -1,0 +1,89 @@
+#+TITLE: Keep org index truthful across all org mutations
+#+STATE: DONE
+#+SESSION_ID: 14c1d9a329a1f873
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-20T09-20-46-758Z_14c1d9a329a1f873.jsonl]]
+#+CUSTOM_ID: FEAT-608-keep-org-index-truthful-across-all-org-m
+#+LAYER: pi-natives packages/org
+#+DEPENDS: PROJ-057-extract-shared-workspace-cache-substrate
+
+* Initial Message
+
+continue, what were you asking? what's your design so far?
+
+* Scope
+
+In scope:
+- Make every org mutation path keep the new org index truthful within the same session: `createItem`, `updateItem`, `setProperty`, `appendNote`, `editSection`, delete flows, and `suboutline-add`-driven body edits.
+- Ensure follow-up indexed reads, validation, wave generation, query, dashboard, and archive commands observe post-mutation state without requiring a manual rebuild or falling back to stale TypeScript rescans.
+- Define whether each mutation does incremental patching vs invalidate-and-reload, but keep one truthful behavior everywhere.
+
+Out of scope:
+- The initial shared cache / builder extraction (handled by PROJ-057).
+- Broad org read-surface cutover consumers (separate feature).
+- Coding-agent plan-validation formatting/hints (separate feature).
+
+Rationale:
+- A fast index that lies after writes is worse than the current slow path. Because the user selected full read-surface cutover in the first implementation wave, mutation coherence is a hard prerequisite, not a follow-up nicety.
+
+* Existing Patterns
+
+- `crates/pi-natives/src/org_buffer.rs` — native org mutation commands already centralize the authoritative write paths: `createItem`, `updateItem`, `setProperty`, `appendNote`, and `editSection`.
+- `packages/org/src/tool.ts` — `cmdCreate`, `cmdUpdate`, `cmdSet`, `cmdDelete`, and `cmdSuboutlineAdd` show every tool-surface mutation that must observe the same freshness rules.
+- `packages/org/src/native-ops.ts` — mutation helpers (`appendItemToFile`, `updateItemStateInFile`, `updateItemBodyInFile`, `appendToItemBodyInFile`) reveal the existing TS call sites that currently assume parse-after-write behavior.
+- `crates/pi-code-graph/src/cache.rs` freshness semantics (`Missing` / `Fresh` / `Stale`) are the baseline truthfulness contract to mirror.
+
+* Tests
+
+User workflows to defend first:
+1. Workflow 1 — creating a new item makes it immediately resolvable through the org index with correct file/category/body metadata.
+2. Workflow 2 — updating state/body/properties or appending a note changes subsequent indexed reads without stale leakage.
+3. Workflow 3 — `suboutline-add` and `editSection` update sub-outline entries and parent-item metadata in the index correctly.
+4. Workflow 4 — deleting an item or removing a file removes it from indexed lookup/query results immediately or after a single truthful invalidation/reload step.
+5. Workflow 5 — repeated writes inside one process do not drift the index away from on-disk reality.
+
+Concrete test files / scenarios:
+- New native/org tests around tempdir fixtures that perform write → indexed read assertions for every mutation type.
+- Extend `packages/org/test` command-level tests so post-mutation read commands (`get`, `query`, `wave`, `dashboard`, `archive`) observe the new state without hidden fallback rescans.
+- Include sub-outline-specific assertions: adding a sub-outline produces a new parent-qualified CUSTOM_ID entry; replacing an Execution Manifest section does not corrupt sibling sections in the index.
+
+* Implementation
+** ITEM Define failing mutation-coherence tests first
+:PROPERTIES:
+:CUSTOM_ID: FEAT-608-keep-org-index-truthful-across-all-org-m::mutation-tests
+:DEPENDS: PROJ-057-extract-shared-workspace-cache-substrate::native-status-and-index
+:END:
+- Files: focused native/org tests for write-then-read behavior across all mutation commands.
+- Encode Workflows 1-5 as initially-failing tests.
+
+** ITEM Implement native cache refresh / invalidation strategy for all writes
+:PROPERTIES:
+:CUSTOM_ID: FEAT-608-keep-org-index-truthful-across-all-org-m::native-refresh-strategy
+:DEPENDS: FEAT-608-keep-org-index-truthful-across-all-org-m::mutation-tests
+:END:
+- Files: `crates/pi-natives/src/org_buffer.rs` plus org-index builder/cache modules from PROJ-057.
+- Pick one truthful path for every mutation: targeted in-memory/index patch when provable, otherwise invalidate and rebuild before the next read.
+- Do not leave any write path on a stale best-effort branch.
+
+** ITEM Wire TypeScript org commands onto the post-write indexed truth path
+:PROPERTIES:
+:CUSTOM_ID: FEAT-608-keep-org-index-truthful-across-all-org-m::ts-postwrite-cutover
+:DEPENDS: FEAT-608-keep-org-index-truthful-across-all-org-m::native-refresh-strategy
+:END:
+- Files: `packages/org/src/tool.ts`, `packages/org/src/native-ops.ts`.
+- Remove assumptions that reparsing categories is required after every mutation.
+- Ensure command responses that include `item`/`body`/body length read from the refreshed native truth path.
+
+* Edge Cases
+
+- Multiple writes to the same file in one command/session must not race the cache into partial truth.
+- Mutations that fail mid-write must not partially refresh the index with impossible state.
+- A write that introduces duplicate CUSTOM_IDs must surface that conflict truthfully on the next indexed read/validate path.
+- Delete flows must remove both top-level and sub-outline entries; no orphan sub-outline index rows.
+- Section-level edits (`editSection`) must preserve unaffected headings and index only the final on-disk result.
+
+* Acceptance Criteria
+
+- Every supported org mutation path is followed by truthful indexed reads in the same process/session.
+- No read-side fallback to whole-category reparsing is required to observe freshly written state.
+- Tempdir tests cover create, update, set-property, append-note, suboutline-add, editSection, and delete flows.
+- The index never reports pre-write data after a successful mutation.

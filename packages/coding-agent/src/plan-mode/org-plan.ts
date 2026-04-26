@@ -55,7 +55,13 @@ export async function approvePlanItem(
 
 	const config = buildOrgConfig(settings);
 	const categories = resolveCategories(config, projectRoot);
-	const catDirs = categories.map(c => ({ absPath: c.absPath, name: c.name, dir: c.dirName }));
+	const catDirs = categories.map(c => ({
+		absPath: c.absPath,
+		name: c.name,
+		dir: c.dirName,
+		prefix: c.prefix,
+		root: projectRoot,
+	}));
 	const item = await findItemById(catDirs, planItem.id, config.todoKeywords);
 	if (!item) {
 		throw new Error(`Plan item "${planItem.id}" not found.`);
@@ -127,7 +133,13 @@ export async function completePlanItem(
 
 	const config = buildOrgConfig(settings);
 	const categories = resolveCategories(config, projectRoot);
-	const catDirs = categories.map(c => ({ absPath: c.absPath, name: c.name, dir: c.dirName }));
+	const catDirs = categories.map(c => ({
+		absPath: c.absPath,
+		name: c.name,
+		dir: c.dirName,
+		prefix: c.prefix,
+		root: projectRoot,
+	}));
 	const resolvedPlanItem = await findItemById(catDirs, planItem.id, config.todoKeywords);
 	if (!resolvedPlanItem) {
 		throw new Error(`Plan item "${planItem.id}" not found.`);
@@ -223,7 +235,13 @@ export async function resolvePlanItem(
 
 	const config = buildOrgConfig(settings);
 	const categories = resolveCategories(config, projectRoot);
-	const catDirs = categories.map(c => ({ absPath: c.absPath, name: c.name, dir: c.dirName }));
+	const catDirs = categories.map(c => ({
+		absPath: c.absPath,
+		name: c.name,
+		dir: c.dirName,
+		prefix: c.prefix,
+		root: projectRoot,
+	}));
 
 	const item = await findItemById(catDirs, itemId, config.todoKeywords);
 	if (!item) return null;
