@@ -180,6 +180,56 @@ describe("validatePlanItem dual-link manifest", () => {
 		expect(result?.valid).toBe(true);
 	});
 
+	test("validator_accepts_dag_sections_with_already_declared_links", async () => {
+		await seedFeature(
+			"FEAT-400",
+			"backend",
+			detailedFeatureBody("FEAT-400", ["** ITEM Define API", ":PROPERTIES:", ":CUSTOM_ID: FEAT-400::api", ":END:"]),
+		);
+		await seedPlan(
+			"PLAN-400",
+			[
+				"* Context",
+				"- [[id:FEAT-400]]",
+				"* Execution Manifest",
+				"** wave-1 :wave:",
+				"- [[id:FEAT-400::api]] Define API",
+				"** File-level DAG",
+				"- [[id:FEAT-400]] Feature node",
+				"** Subfeature-level DAG",
+				"- [[id:FEAT-400::api]] Subfeature node",
+			].join("\n"),
+		);
+
+		const result = await validatePlanItem(settings, tmpDir, "PLAN-400");
+		expect(result?.valid).toBe(true);
+	});
+
+	test("validator_accepts_dag_sections_with_code_form_ids", async () => {
+		await seedFeature(
+			"FEAT-401",
+			"backend",
+			detailedFeatureBody("FEAT-401", ["** ITEM Define API", ":PROPERTIES:", ":CUSTOM_ID: FEAT-401::api", ":END:"]),
+		);
+		await seedPlan(
+			"PLAN-401",
+			[
+				"* Context",
+				"- [[id:FEAT-401]]",
+				"* Execution Manifest",
+				"** wave-1 :wave:",
+				"- [[id:FEAT-401::api]] Define API",
+				"** File-level DAG",
+				"- `FEAT-401` Feature node",
+				"** Subfeature-level DAG",
+				"- `FEAT-401::api` Subfeature node",
+			].join("\n"),
+		);
+
+		const result = await validatePlanItem(settings, tmpDir, "PLAN-401");
+		expect(result?.valid).toBe(true);
+	});
+
 	test("validator_reports_missing_suboutline_link_hints", async () => {
 		const formatted = formatPlanValidationIssues("PLAN-999", [
 			{

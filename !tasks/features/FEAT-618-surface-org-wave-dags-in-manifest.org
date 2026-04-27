@@ -1,0 +1,72 @@
+#+TITLE: Surface org wave DAGs in manifest
+#+STATE: DONE
+#+SESSION_ID: 14cb704b03a40938
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-27T20-05-20-014Z_14cb704b03a40938.jsonl]]
+#+CUSTOM_ID: FEAT-618-surface-org-wave-dags-in-manifest
+#+LAYER: tool
+#+DEPENDS: FEAT-617-expose-native-org-wave-dag-data
+
+* Initial Message
+
+the org wave tool should provide the file-level DAG and the subfeature-level DAG, to provide better ways for the implementation agent to orchestrate smartly.
+
+* Scope
+- In scope: make `org wave` expose both DAGs in the TypeScript org tool response and append readable DAG sections into the PLAN `* Execution Manifest` when `manifest=true` and `planItemId` is used.
+- In scope files: `packages/org/src/tool.ts`, `packages/org/src/types.ts`, `packages/org/test/cmd-wave-manifest-plan.test.ts`, `packages/org/test/cmd-wave-flatten.test.ts`, `packages/org/test/cmd-wave-duplicate-id.test.ts`, and any focused org tool result tests needed for formatting.
+- Out of scope: changing `exit_plan_mode` wave extraction semantics, changing `todo_write` task materialization, or adding a new `org` subcommand.
+- User-settled decisions: file-level DAG nodes are child item CUSTOM_IDs, not physical paths; subfeature-level DAG nodes are sub-outline CUSTOM_IDs; `file_dag.edges` omit intra-child dependencies; readable DAG sections must be written into the PLAN Execution Manifest; structured response uses explicit `{ nodes, edges }`; `edges[].from` depends on `edges[].to`.
+
+* Existing Patterns
+- Current `cmdWave` calls `executeOrg({ command: "computeWaves", items, doneStates: ["DONE"] })`, formats only wave headings via `formatWaveManifest`, and writes via `writeManifestSection`.
+- Current manifest format is parsed by `packages/coding-agent/src/tools/exit-plan-mode.ts::extractPlanWaves`, which only consumes `** ... :wave:` headings. New DAG sections must not include the `:wave:` tag.
+- Current plan validation treats every `[[id:...]]` in the PLAN body as a child/sub-outline reference. To avoid false validator failures, DAG sections should reference only linked child IDs and declared sub-outline IDs, or use code-form IDs where links are not required.
+- Use existing TUI sanitization conventions if rendering changes are required; no raw console logging.
+
+* Tests
+- Workflow T1: `org wave category=features manifest=true` returns `file_dag` and `subfeature_dag` in JSON while preserving existing `manifest`, `waves`, `warnings`, and `total_sub_outlines` fields.
+- Workflow T2: `org wave manifest=true planItemId=PLAN-*` writes `* Execution Manifest` with wave sections plus readable `** File-level DAG` and `** Subfeature-level DAG` sections, neither tagged `:wave:`.
+- Workflow T3: file DAG collapses `FEAT-A::test -> FEAT-B::types` to `FEAT-A -> FEAT-B`, dedupes repeated cross-child edges, and omits `FEAT-A::impl -> FEAT-A::test`.
+- Workflow T4: duplicate ID errors from native `computeWaves` still return the exact existing `DUPLICATE_CUSTOM_ID` object and do not write a partial manifest.
+- Workflow T5: a PLAN with no linked child items preserves the existing warning-only no-write behavior.
+- Verification commands: `bun test packages/org/test/cmd-wave-manifest-plan.test.ts`; `bun test packages/org/test/cmd-wave-flatten.test.ts`; `bun test packages/org/test/cmd-wave-duplicate-id.test.ts`; `bun test packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts` if manifest formatting touches extraction compatibility.
+
+* Implementation
+** DONE Write org tool DAG response tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-618-surface-org-wave-dags-in-manifest::org-tool-dag-tests
+:DEPENDS: FEAT-617-expose-native-org-wave-dag-data::native-bridge-output-tests
+:END:
+- Add focused tests for T1, T3, and T4 in existing `packages/org/test/cmd-wave-*.test.ts` files.
+- Test the externally observable `createOrgTool(...).execute({ command: "wave", ... })` contract, not private helpers.
+
+** DONE Format DAG sections for PLAN manifest
+:PROPERTIES:
+:CUSTOM_ID: FEAT-618-surface-org-wave-dags-in-manifest::org-tool-manifest-dag-tests
+:DEPENDS: FEAT-618-surface-org-wave-dags-in-manifest::org-tool-dag-tests
+:END:
+- Add T2/T5 tests around `planItemId` flow.
+- Assert `extractExecutionManifest(content)` contains wave headings first and DAG sections after them.
+- Assert DAG headings are not `:wave:` headings so `exit_plan_mode` does not convert DAG rows into executable tasks.
+
+** DONE Implement TS org wave DAG surfacing
+:PROPERTIES:
+:CUSTOM_ID: FEAT-618-surface-org-wave-dags-in-manifest::org-tool-dag-impl
+:DEPENDS: FEAT-618-surface-org-wave-dags-in-manifest::org-tool-manifest-dag-tests
+:END:
+- Update `packages/org/src/types.ts` with concrete DAG node/edge/output types.
+- Update `cmdWave` output assembly to pass through native `file_dag` and `subfeature_dag` for both category/file manifest and planItemId flows.
+- Replace `formatWaveManifest` with a manifest formatter that emits wave sections and two readable DAG sections when DAG data exists.
+- Keep old no-DAG/native-stale behavior defensive only if needed for dev binary mismatch; do not silently claim DAG availability if native output lacks required fields.
+
+* Edge Cases
+- Native binary staleness: memory notes Rust API changes are not auto-rebuilt; implementation must run focused checks after rebuild or surface a truthful failure if the dev addon lacks DAG fields.
+- Validator compatibility: DAG sections must not introduce unresolvable org links.
+- Manifest replacement: existing stale Execution Manifest must be replaced exactly once, preserving `* Context` and `* Verification` sections.
+- Output compatibility: existing callers expecting `waves` must continue to work; new fields are additive.
+- Large DAGs: use concise deterministic text, not verbose prose; readable section can list nodes and edges as bullets.
+
+* Acceptance Criteria
+- `org wave` JSON has `file_dag` and `subfeature_dag` wherever `manifest=true` computes all waves.
+- PLAN manifest written by `org wave --manifest --planItemId` contains readable file-level and subfeature-level DAG sections after wave sections.
+- DAG headings do not affect `extractPlanWaves` task extraction.
+- Focused org tests pass.

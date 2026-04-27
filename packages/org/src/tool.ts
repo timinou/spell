@@ -12,7 +12,16 @@ import { extractIdLinks, parseSubOutlineId } from "./id-links";
 import { KeyedMutex } from "./mutex";
 import { DEFAULT_ORG_CONFIG, REQUIRED_PROPERTIES } from "./schema/defaults";
 import { rewriteSubOutlineIds } from "./sub-outline-rewrite";
-import type { ComputedWave, OrgConfig, OrgItem, OrgQueryFilter, OrgSessionContext, ValidationIssue } from "./types";
+import type {
+	ComputedWave,
+	ComputedWaveResult,
+	OrgConfig,
+	OrgDag,
+	OrgItem,
+	OrgQueryFilter,
+	OrgSessionContext,
+	ValidationIssue,
+} from "./types";
 
 const createCategoryMutex = new KeyedMutex<string>();
 const SUBOUTLINE_SLUG_RE = /^[A-Za-z0-9_-]+$/;
@@ -957,15 +966,59 @@ async function writeManifestSection(
 	}
 }
 
-function formatWaveManifest(waves: ComputedWave[]): string {
-	if (waves.length === 0) return "* Execution Manifest\n(No sub-outlines with dependencies found.)\n";
+function formatDagSection(title: string, dag: OrgDag): string[] {
+	const lines = [`** ${title}`, "*** Nodes"];
+	if (dag.nodes.length === 0) {
+		lines.push("- None.");
+	} else {
+		for (const node of dag.nodes) lines.push(`- \`${node.id}\` ${node.title} [${node.state}]`);
+	}
+	lines.push("*** Edges");
+	if (dag.edges.length === 0) {
+		lines.push("- None.");
+	} else {
+		for (const edge of dag.edges) lines.push(`- \`${edge.from}\` depends on \`${edge.to}\``);
+	}
+	return lines;
+}
+
+function formatExecutionManifest(waves: ComputedWave[], dags?: { fileDag: OrgDag; subfeatureDag: OrgDag }): string {
+	if (waves.length === 0 && !dags) return "* Execution Manifest\n(No sub-outlines with dependencies found.)\n";
 	const lines: string[] = ["* Execution Manifest"];
-	for (const wave of waves) {
-		lines.push(`** wave-${wave.number + 1} :wave:`);
-		for (const item of wave.items) lines.push(`- [[id:${item.custom_id}]] ${item.title}`);
+	if (waves.length === 0) {
+		lines.push("(No sub-outlines with dependencies found.)");
+	} else {
+		for (const wave of waves) {
+			lines.push(`** wave-${wave.number + 1} :wave:`);
+			for (const item of wave.items) lines.push(`- [[id:${item.custom_id}]] ${item.title}`);
+		}
+	}
+	if (dags) {
+		lines.push(...formatDagSection("File-level DAG", dags.fileDag));
+		lines.push(...formatDagSection("Subfeature-level DAG", dags.subfeatureDag));
 	}
 	lines.push("");
 	return lines.join("\n");
+}
+
+function requireComputedWaveResult(
+	output: unknown,
+): ComputedWaveResult | { error: true; code: string; message: string } {
+	const candidate = output as Partial<ComputedWaveResult>;
+	if (!candidate.file_dag || !candidate.subfeature_dag) {
+		return {
+			error: true,
+			code: "MISSING_DAG_OUTPUT",
+			message: "Native computeWaves output missing DAG fields; rebuild the native addon.",
+		};
+	}
+	return {
+		waves: candidate.waves ?? [],
+		warnings: candidate.warnings ?? [],
+		total_sub_outlines: candidate.total_sub_outlines ?? 0,
+		subfeature_dag: candidate.subfeature_dag,
+		file_dag: candidate.file_dag,
+	};
 }
 
 async function cmdWave(
@@ -993,19 +1046,21 @@ async function cmdWave(
 		}
 		const raw = executeOrg({ command: "computeWaves", items: collected.items, doneStates: ["DONE"] });
 		if (raw.error) return raw.output;
-		const output = raw.output as {
-			waves?: ComputedWave[];
-			warnings?: string[];
-			total_sub_outlines?: number;
-		};
-		const manifest = formatWaveManifest(output.waves ?? []);
+		const output = requireComputedWaveResult(raw.output);
+		if ("error" in output) return output;
+		const manifest = formatExecutionManifest(output.waves, {
+			fileDag: output.file_dag,
+			subfeatureDag: output.subfeature_dag,
+		});
 		const writeResult = await writeManifestSection(ctx, collected.planItem, args.planItemId, manifest);
 		if ("error" in writeResult) return writeResult;
 		return {
 			manifest,
 			waves: output.waves ?? [],
-			warnings: [...collected.warnings, ...(output.warnings ?? [])],
-			total_sub_outlines: output.total_sub_outlines ?? collected.items.length,
+			warnings: [...collected.warnings, ...output.warnings],
+			total_sub_outlines: output.total_sub_outlines,
+			subfeature_dag: output.subfeature_dag,
+			file_dag: output.file_dag,
 			wrote_to_plan: true,
 			plan_file: collected.planItem.file,
 			plan_item_id: args.planItemId,
@@ -1020,16 +1075,18 @@ async function cmdWave(
 	});
 	if (raw.error) return raw.output;
 	if (args.manifest) {
-		const output = raw.output as {
-			waves?: ComputedWave[];
-			warnings?: string[];
-			total_sub_outlines?: number;
-		};
+		const output = requireComputedWaveResult(raw.output);
+		if ("error" in output) return output;
 		return {
-			manifest: formatWaveManifest(output.waves ?? []),
-			waves: output.waves ?? [],
-			warnings: output.warnings ?? [],
-			total_sub_outlines: output.total_sub_outlines ?? 0,
+			manifest: formatExecutionManifest(output.waves, {
+				fileDag: output.file_dag,
+				subfeatureDag: output.subfeature_dag,
+			}),
+			waves: output.waves,
+			warnings: output.warnings,
+			total_sub_outlines: output.total_sub_outlines,
+			subfeature_dag: output.subfeature_dag,
+			file_dag: output.file_dag,
 		};
 	}
 	return raw.output;

@@ -12,7 +12,7 @@ use serde::Serialize;
 use crate::item::OrgItem;
 
 /// A dependency edge: `from` is blocked by `to`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DepEdge {
 	pub from: String,
 	pub to:   String,
@@ -41,6 +41,21 @@ pub struct GraphNode {
 	pub blockers: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct Dag {
+	pub nodes: Vec<DagNode>,
+	pub edges: Vec<DepEdge>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct DagNode {
+	pub id:        String,
+	pub title:     String,
+	pub state:     String,
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub parent_id: Option<String>,
+}
+
 /// A computed wave (topological layer).
 #[derive(Debug, Clone, Serialize)]
 pub struct Wave {
@@ -61,6 +76,8 @@ pub struct WaveResult {
 	pub waves:              Vec<Wave>,
 	pub warnings:           Vec<String>,
 	pub total_sub_outlines: usize,
+	pub subfeature_dag:     Dag,
+	pub file_dag:           Dag,
 }
 
 /// Result of next-wave query.
@@ -278,9 +295,11 @@ fn compute_waves_from_items(
 	let id_set: HashSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
 	let mut warnings = Vec::new();
 
-	// Build adjacency: item → items it blocks (reverse of BLOCKERS)
+	// Build adjacency: item → items it blocks (reverse of BLOCKERS), and retain
+	// explicit DAG edges.
 	let mut in_degree: HashMap<&str, usize> = HashMap::new();
 	let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
+	let mut subfeature_edges = Vec::new();
 
 	for item in items {
 		in_degree.entry(item.id.as_str()).or_insert(0);
@@ -291,9 +310,72 @@ fn compute_waves_from_items(
 					.entry(blocker)
 					.or_default()
 					.push(item.id.as_str());
+				subfeature_edges.push(DepEdge { from: item.id.clone(), to: blocker.to_string() });
+			} else if item.properties.contains_key("DEPENDS") {
+				warnings.push(format!("{}: blocker '{}' not found in item set", item.id, blocker));
 			}
 		}
 	}
+
+	let mut parent_ids: HashMap<&str, String> = HashMap::new();
+	for item in items {
+		parent_ids.insert(item.id.as_str(), parent_id_fn(&item.id));
+	}
+
+	let subfeature_dag = Dag {
+		nodes: items
+			.iter()
+			.map(|item| DagNode {
+				id:        item.id.clone(),
+				title:     item.title.clone(),
+				state:     item.state.clone(),
+				parent_id: parent_ids
+					.get(item.id.as_str())
+					.cloned()
+					.filter(|parent_id| !parent_id.is_empty()),
+			})
+			.collect(),
+		edges: subfeature_edges.clone(),
+	};
+
+	let mut file_nodes_by_id: BTreeMap<String, DagNode> = BTreeMap::new();
+	for item in items {
+		let file_id = parent_ids
+			.get(item.id.as_str())
+			.filter(|parent_id| !parent_id.is_empty())
+			.cloned()
+			.unwrap_or_else(|| item.id.clone());
+		file_nodes_by_id
+			.entry(file_id.clone())
+			.or_insert_with(|| DagNode {
+				id:        file_id,
+				title:     item.title.clone(),
+				state:     item.state.clone(),
+				parent_id: None,
+			});
+	}
+
+	let mut file_edges_by_pair: BTreeMap<(String, String), DepEdge> = BTreeMap::new();
+	for edge in &subfeature_edges {
+		let from = parent_ids
+			.get(edge.from.as_str())
+			.filter(|parent_id| !parent_id.is_empty())
+			.cloned()
+			.unwrap_or_else(|| edge.from.clone());
+		let to = parent_ids
+			.get(edge.to.as_str())
+			.filter(|parent_id| !parent_id.is_empty())
+			.cloned()
+			.unwrap_or_else(|| edge.to.clone());
+		if from != to {
+			file_edges_by_pair.insert((from.clone(), to.clone()), DepEdge { from, to });
+		}
+	}
+
+	let file_dag = Dag {
+		nodes: file_nodes_by_id.into_values().collect(),
+		edges: file_edges_by_pair.into_values().collect(),
+	};
 
 	// Kahn's algorithm with wave numbering
 	let mut wave_assignment: HashMap<&str, usize> = HashMap::new();
@@ -342,7 +424,7 @@ fn compute_waves_from_items(
 			.filter(|i| wave_assignment.get(i.id.as_str()) == Some(&wave_num))
 			.map(|i| WaveItem {
 				custom_id: i.id.clone(),
-				parent_id: parent_id_fn(&i.id),
+				parent_id: parent_ids.get(i.id.as_str()).cloned().unwrap_or_default(),
 				title:     i.title.clone(),
 			})
 			.collect();
@@ -351,7 +433,7 @@ fn compute_waves_from_items(
 		}
 	}
 
-	WaveResult { waves, warnings, total_sub_outlines: items.len() }
+	WaveResult { waves, warnings, total_sub_outlines: items.len(), subfeature_dag, file_dag }
 }
 
 /// Get the next wave of eligible items (not DONE, all blockers DONE).
@@ -596,6 +678,107 @@ mod tests {
 		assert_eq!(result.waves[1].items[0].custom_id, "FEAT-001::b");
 		assert_eq!(result.waves[1].items[0].parent_id, "FEAT-001");
 		assert_eq!(result.waves[2].items[0].custom_id, "FEAT-001::a");
+	}
+
+	#[test]
+	fn compute_waves_exposes_subfeature_dag_edges() {
+		let items = vec![
+			make_item_with_properties("FEAT-001::a", std::collections::HashMap::new()),
+			make_item_with_properties("FEAT-001::b", std::collections::HashMap::new()),
+			make_item_with_properties(
+				"FEAT-002::c",
+				std::collections::HashMap::from([(
+					"DEPENDS".to_string(),
+					"FEAT-001::a FEAT-001::b".to_string(),
+				)]),
+			),
+		];
+		let result = compute_waves(&items, |id| id.split("::").next().unwrap_or(id).to_string())
+			.expect("wave computation");
+
+		assert_eq!(
+			result
+				.subfeature_dag
+				.nodes
+				.iter()
+				.map(|node| (node.id.as_str(), node.parent_id.as_deref()))
+				.collect::<Vec<_>>(),
+			vec![
+				("FEAT-001::a", Some("FEAT-001")),
+				("FEAT-001::b", Some("FEAT-001")),
+				("FEAT-002::c", Some("FEAT-002")),
+			]
+		);
+		assert_eq!(result.subfeature_dag.edges, vec![
+			DepEdge { from: "FEAT-002::c".to_string(), to: "FEAT-001::a".to_string() },
+			DepEdge { from: "FEAT-002::c".to_string(), to: "FEAT-001::b".to_string() },
+		]);
+	}
+
+	#[test]
+	fn compute_waves_file_dag_collapses_cross_parent_edges() {
+		let items = vec![
+			make_item_with_properties("FEAT-001::types", std::collections::HashMap::new()),
+			make_item_with_properties(
+				"FEAT-001::test",
+				std::collections::HashMap::from([(
+					"DEPENDS".to_string(),
+					"FEAT-001::types".to_string(),
+				)]),
+			),
+			make_item_with_properties(
+				"FEAT-002::impl",
+				std::collections::HashMap::from([(
+					"DEPENDS".to_string(),
+					"FEAT-001::types FEAT-001::test".to_string(),
+				)]),
+			),
+		];
+		let result = compute_waves(&items, |id| id.split("::").next().unwrap_or(id).to_string())
+			.expect("wave computation");
+
+		assert_eq!(
+			result
+				.file_dag
+				.nodes
+				.iter()
+				.map(|node| node.id.as_str())
+				.collect::<Vec<_>>(),
+			vec!["FEAT-001", "FEAT-002"]
+		);
+		assert_eq!(result.file_dag.edges, vec![DepEdge {
+			from: "FEAT-002".to_string(),
+			to:   "FEAT-001".to_string(),
+		}]);
+	}
+
+	#[test]
+	fn compute_waves_unknown_dep_warns_and_excludes_dag_edge() {
+		let items = vec![make_item_with_properties(
+			"FEAT-001::impl",
+			std::collections::HashMap::from([("DEPENDS".to_string(), "MISSING::types".to_string())]),
+		)];
+		let result = compute_waves(&items, |id| id.split("::").next().unwrap_or(id).to_string())
+			.expect("wave computation");
+
+		assert_eq!(result.subfeature_dag.edges, Vec::<DepEdge>::new());
+		assert_eq!(result.file_dag.edges, Vec::<DepEdge>::new());
+		assert_eq!(result.warnings, vec![
+			"FEAT-001::impl: blocker 'MISSING::types' not found in item set"
+		]);
+	}
+
+	#[test]
+	fn compute_waves_cycle_keeps_dag_and_excludes_cyclic_waves() {
+		let items = vec![make_item("A", "B"), make_item("B", "A")];
+		let result = compute_waves(&items, |_| String::new()).expect("wave computation");
+
+		assert!(result.waves.is_empty());
+		assert_eq!(result.subfeature_dag.edges, vec![
+			DepEdge { from: "A".to_string(), to: "B".to_string() },
+			DepEdge { from: "B".to_string(), to: "A".to_string() },
+		]);
+		assert_eq!(result.warnings.len(), 2);
 	}
 
 	#[test]

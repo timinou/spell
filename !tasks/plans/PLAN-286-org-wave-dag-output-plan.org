@@ -1,0 +1,108 @@
+#+TITLE: Org wave DAG output plan
+#+STATE: DONE
+#+SESSION_ID: 14cb704b03a40938
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-27T20-05-20-014Z_14cb704b03a40938.jsonl]]
+#+CUSTOM_ID: PLAN-286-org-wave-dag-output-plan
+#+LAYER: planning
+
+* Initial Message
+
+the org wave tool should provide the file-level DAG and the subfeature-level DAG, to provide better ways for the implementation agent to orchestrate smartly.
+
+* Context
+Linked children:
+- [[id:FEAT-617-expose-native-org-wave-dag-data]]
+- [[id:FEAT-618-surface-org-wave-dags-in-manifest]]
+- [[id:FEAT-619-preserve-dag-guidance-for-plan-execution]]
+
+User request: `org wave` should provide both the file-level DAG and the subfeature-level DAG so the implementation agent can orchestrate more intelligently.
+
+Settled design decisions:
+1. File-level DAG nodes are child item CUSTOM_IDs (`FEAT-*`, `BUG-*`, etc.), not physical org file paths.
+2. File-level DAG edges are produced by collapsing sub-outline dependency edges to parent child IDs and omitting intra-parent edges.
+3. Subfeature-level DAG nodes are canonical sub-outline CUSTOM_IDs (`PARENT::slug`) included in the wave input.
+4. DAG edge direction matches existing native graph semantics: `from` depends on `to`.
+5. `org wave` exposes DAGs in structured JSON as explicit `{ nodes, edges }` fields.
+6. When `manifest=true` and `planItemId` is set, `org wave` writes readable DAG sections inside the PLAN `* Execution Manifest` after wave sections.
+7. DAG headings must not use the `:wave:` tag; only wave headings are executable task waves for `exit_plan_mode`.
+8. Existing outputs (`manifest`, `waves`, `warnings`, `total_sub_outlines`) and duplicate-ID error contracts remain compatible.
+
+Repository facts verified during planning:
+- `packages/org/src/tool.ts::cmdWave` currently calls native `executeOrg({ command: "computeWaves" })`, formats only wave headings with `formatWaveManifest`, and writes through `writeManifestSection`.
+- `crates/pi-org-engine/src/graph.rs` already has `DepEdge`, `GraphResult`, `WaveResult`, `compute_waves`, duplicate-ID checking, and existing edge semantics where `from` is blocked by `to`.
+- `crates/pi-natives/src/org_buffer.rs::cmd_compute_waves` serializes native `WaveResult` directly.
+- `packages/coding-agent/src/tools/exit-plan-mode.ts::extractPlanWaves` reads only `** ... :wave:` headings and ignores other `**` headings.
+- Memory note used: `memory://root/memory_summary.md` warns Rust API changes may hit native binary staleness; verification must rebuild/check native paths truthfully.
+
+Recommended approach:
+- Extend native `WaveResult` with DAG fields once, then pass those fields through the TS org tool and manifest formatter. This keeps the dependency graph source of truth in native graph code and avoids reconstructing divergent DAG semantics in TypeScript.
+
+Out of scope:
+- No new org subcommand.
+- No change to `nextWave` eligibility.
+- No change to approved task materialization beyond preserving/communicating DAG context.
+- No compatibility shim with reversed edge direction.
+
+* Verification
+Run focused verification after implementation:
+- `cargo test -p pi-org-engine graph::tests` or repo-valid equivalent focused Rust graph tests.
+- `bun test packages/natives/test/org-buffer.test.ts`
+- `bun test packages/org/test/cmd-wave-manifest-plan.test.ts`
+- `bun test packages/org/test/cmd-wave-flatten.test.ts`
+- `bun test packages/org/test/cmd-wave-duplicate-id.test.ts`
+- `bun test packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts`
+- `bun test packages/coding-agent/test/plan-mode/plan-validation-suboutline.test.ts`
+- `bun test packages/coding-agent/test/prompts/plan-mode-active-suboutline.test.ts`
+- `bun test packages/coding-agent/test/system-prompt-templates.test.ts`
+- Final safety check: `bun check:ts` if focused tests touch public TS types; `bun check:rs` if Rust graph/native signatures change broadly.
+
+Manual proof expected:
+- In a fixture PLAN with two child items and cross-child sub-outline deps, `org wave manifest=true planItemId=<PLAN>` returns JSON containing `file_dag` and `subfeature_dag` and writes both readable DAG sections to the PLAN file.
+- Re-running `exit_plan_mode` on a plan with DAG sections extracts only `:wave:` entries, not DAG bullets.
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:FEAT-617-expose-native-org-wave-dag-data::native-dag-tests]] Add native DAG contract tests
+** wave-2 :wave:
+- [[id:FEAT-617-expose-native-org-wave-dag-data::native-dag-impl]] Implement wave DAG output in Rust
+** wave-3 :wave:
+- [[id:FEAT-617-expose-native-org-wave-dag-data::native-bridge-output-tests]] Update NAPI and TS bridge typing
+** wave-4 :wave:
+- [[id:FEAT-618-surface-org-wave-dags-in-manifest::org-tool-dag-tests]] Write org tool DAG response tests
+** wave-5 :wave:
+- [[id:FEAT-618-surface-org-wave-dags-in-manifest::org-tool-manifest-dag-tests]] Format DAG sections for PLAN manifest
+** wave-6 :wave:
+- [[id:FEAT-618-surface-org-wave-dags-in-manifest::org-tool-dag-impl]] Implement TS org wave DAG surfacing
+** wave-7 :wave:
+- [[id:FEAT-619-preserve-dag-guidance-for-plan-execution::agent-extraction-dag-tests]] Write extraction compatibility tests
+** wave-8 :wave:
+- [[id:FEAT-619-preserve-dag-guidance-for-plan-execution::agent-validation-dag-tests]] Write validation compatibility tests
+** wave-9 :wave:
+- [[id:FEAT-619-preserve-dag-guidance-for-plan-execution::agent-prompt-dag-guidance]] Update plan-mode DAG guidance
+
+** Completion [2026-04-27]
+*** Verification
+- `bun --cwd=packages/natives run dev:native` — passed; rebuilt `packages/natives/native/pi_natives.dev.node` after Rust DAG changes.
+- `bun --cwd=packages/natives run build:native` — passed; rebuilt release addon `packages/natives/native/pi_natives.linux-x64-modern.node`.
+- `cargo test -p pi-org-engine graph::tests` — passed; 13 tests, 0 failed.
+- `bun test packages/natives/test/org-buffer.test.ts` — passed; 14 tests, 0 failed.
+- `bun test packages/natives/test/org-buffer-release.test.ts` — passed; 2 tests, 0 failed.
+- `bun test packages/org/test/cmd-wave-manifest-plan.test.ts packages/org/test/cmd-wave-flatten.test.ts packages/org/test/cmd-wave-duplicate-id.test.ts` — passed; 10 tests, 0 failed.
+- `bun test packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts` — passed; 11 tests, 0 failed.
+- `bun test packages/coding-agent/test/plan-mode/plan-validation-suboutline.test.ts` — passed; 9 tests, 0 failed.
+- `bun test packages/coding-agent/test/prompts/plan-mode-active-suboutline.test.ts packages/coding-agent/test/system-prompt-templates.test.ts` — passed; 18 tests, 0 failed.
+- Combined focused verification: `cargo test -p pi-org-engine graph::tests && bun test packages/natives/test/org-buffer.test.ts packages/natives/test/org-buffer-release.test.ts packages/org/test/cmd-wave-manifest-plan.test.ts packages/org/test/cmd-wave-flatten.test.ts packages/org/test/cmd-wave-duplicate-id.test.ts packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts packages/coding-agent/test/plan-mode/plan-validation-suboutline.test.ts packages/coding-agent/test/prompts/plan-mode-active-suboutline.test.ts packages/coding-agent/test/system-prompt-templates.test.ts` — passed; Rust 13 tests and Bun 64 tests, 0 failed.
+- `bun check:ts` — passed; Biome checked 1949 files and tsgo completed successfully.
+- `bun check:rs` — passed; `cargo fmt --all -- --check` and workspace clippy completed successfully.
+- Manual proof coverage: `packages/org/test/cmd-wave-manifest-plan.test.ts` verifies `org wave --manifest=true --planItemId=<PLAN>` returns `file_dag` and `subfeature_dag` and writes readable DAG sections; `packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts` verifies DAG sections are ignored by executable wave extraction.
+*** Artifacts
+- Source: [[file:crates/pi-org-engine/src/graph.rs]]
+- Native bridge/types/tests: [[file:packages/natives/src/org-buffer/types.ts]], [[file:packages/natives/test/org-buffer.test.ts]]
+- Org tool/types/tests: [[file:packages/org/src/tool.ts]], [[file:packages/org/src/types.ts]], [[file:packages/org/test/cmd-wave-manifest-plan.test.ts]], [[file:packages/org/test/cmd-wave-flatten.test.ts]], [[file:packages/org/test/cmd-wave-duplicate-id.test.ts]]
+- Coding-agent compatibility/prompt tests: [[file:packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts]], [[file:packages/coding-agent/test/plan-mode/plan-validation-suboutline.test.ts]], [[file:packages/coding-agent/test/prompts/plan-mode-active-suboutline.test.ts]], [[file:packages/coding-agent/test/system-prompt-templates.test.ts]]
+- Prompt docs: [[file:packages/coding-agent/src/prompts/system/plan-mode-active.md]], [[file:packages/coding-agent/src/prompts/system/plan-mode-approved.md]]
+- Org lifecycle items: [[id:FEAT-617-expose-native-org-wave-dag-data]], [[id:FEAT-618-surface-org-wave-dags-in-manifest]], [[id:FEAT-619-preserve-dag-guidance-for-plan-execution]], [[id:PLAN-286-org-wave-dag-output-plan]]
+*** Deviations
+- No deferred tasks or blocked child items.
+- Required verification surfaced two stale Handlebars closing blocks in `plan-mode-approved.md`; fixed so the system prompt template suite passes.
+- `packages/natives/test/org-buffer.test.ts` had a stale missing-source assertion expecting a thrown exception; current NAPI contract returns `{ error: true, output: ... }`, so the test now asserts the surfaced error object truthfully.

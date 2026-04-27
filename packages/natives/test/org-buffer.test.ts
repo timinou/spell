@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import type { OrgComputeWavesOutput } from "../src/org-buffer/types";
 
 // Load native addon directly, bypassing the embedded-addon import chain
 // which requires file assets that may not exist in development.
@@ -132,8 +133,18 @@ Body content here.
 			todoKeywords: ["ITEM", "DONE"],
 		});
 		expect(result.error).toBe(false);
-		const output = result.output as { waves: Array<{ wave: number; items: Array<{ id: string }> }> };
+		const output = result.output as OrgComputeWavesOutput;
 		expect(output.waves.length).toBeGreaterThanOrEqual(2);
+		expect(output.subfeature_dag.nodes.map(node => node.id)).toEqual(["T-A", "T-B", "T-C"]);
+		expect(output.subfeature_dag.edges).toEqual([
+			{ from: "T-B", to: "T-A" },
+			{ from: "T-C", to: "T-B" },
+		]);
+		expect(output.file_dag.nodes.map(node => node.id)).toEqual(["T-A", "T-B", "T-C"]);
+		expect(output.file_dag.edges).toEqual([
+			{ from: "T-B", to: "T-A" },
+			{ from: "T-C", to: "T-B" },
+		]);
 	});
 
 	it("deserializes TS-shaped items without byte_range (BUG-218 regression)", () => {
@@ -167,7 +178,7 @@ Body content here.
 			],
 		});
 		expect(result.error).toBe(false);
-		const output = result.output as { waves: Array<{ wave: number; items: Array<{ id: string }> }> };
+		const output = result.output as OrgComputeWavesOutput;
 		expect(output.waves.length).toBeGreaterThanOrEqual(2);
 	});
 
@@ -305,6 +316,8 @@ Code.
 	});
 
 	it("returns error when source is missing for parse", () => {
-		expect(() => executeOrg({ command: "parse" })).toThrow();
+		const result = executeOrg({ command: "parse" });
+
+		expect(result).toEqual({ output: "GenericFailure, Missing required field: file", error: true });
 	});
 });
