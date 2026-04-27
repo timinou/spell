@@ -108,9 +108,21 @@ describe("org wave planItemId manifest flow", () => {
 		expect(result.plan_item_id).toBe("PLAN-100");
 		expect(typeof result.manifest).toBe("string");
 		expect(result).toHaveProperty("total_sub_outlines");
+		expect(result).toHaveProperty("file_dag");
+		expect(result).toHaveProperty("subfeature_dag");
+		expect((result.file_dag as { edges: Array<{ from: string; to: string }> }).edges).toEqual([
+			{ from: "FEAT-100", to: "FEAT-200" },
+		]);
+		expect((result.subfeature_dag as { edges: Array<{ from: string; to: string }> }).edges).toEqual([
+			{ from: "FEAT-100::impl", to: "FEAT-200::types" },
+		]);
 		expect((result.manifest as string).indexOf("[[id:FEAT-200::types]]")).toBeLessThan(
 			(result.manifest as string).indexOf("[[id:FEAT-100::impl]]"),
 		);
+		expect(result.manifest as string).toContain("** File-level DAG");
+		expect(result.manifest as string).toContain("** Subfeature-level DAG");
+		expect(result.manifest as string).not.toContain("** File-level DAG :wave:");
+		expect(result.manifest as string).not.toContain("** Subfeature-level DAG :wave:");
 	});
 
 	test("wave_plan_item_writes_and_replaces_manifest_section", async () => {
@@ -146,7 +158,15 @@ describe("org wave planItemId manifest flow", () => {
 		expect(content).not.toContain("stale manifest");
 		expect(content).toContain("* Context");
 		expect(content).toContain("* Verification");
-		expect(extractExecutionManifest(content)).toBe(result.manifest.trimEnd());
+		const manifest = extractExecutionManifest(content);
+		expect(manifest).toBe(result.manifest.trimEnd());
+		expect(manifest).toContain("** wave-1 :wave:");
+		expect(manifest).toContain("** File-level DAG");
+		expect(manifest).toContain("** Subfeature-level DAG");
+		expect(manifest).not.toContain("** File-level DAG :wave:");
+		expect(manifest).not.toContain("** Subfeature-level DAG :wave:");
+		expect(manifest!.indexOf("** wave-1 :wave:")).toBeLessThan(manifest!.indexOf("** File-level DAG"));
+		expect(manifest!.indexOf("** File-level DAG")).toBeLessThan(manifest!.indexOf("** Subfeature-level DAG"));
 		expect(content.match(/\* Execution Manifest/g)?.length).toBe(1);
 	});
 
@@ -214,6 +234,8 @@ describe("org wave planItemId manifest flow", () => {
 		>;
 		expect(result).toHaveProperty("manifest");
 		expect(result).toHaveProperty("waves");
+		expect(result).toHaveProperty("file_dag");
+		expect(result).toHaveProperty("subfeature_dag");
 		expect(result).not.toHaveProperty("wrote_to_plan");
 		expect(result).not.toHaveProperty("plan_file");
 	});

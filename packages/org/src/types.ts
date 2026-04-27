@@ -261,3 +261,27 @@ export interface ComputedWave {
 	number: number;
 	items: WaveItem[];
 }
+export interface OrgDagEdge {
+	from: string;
+	to: string;
+}
+
+export interface OrgDagNode {
+	id: string;
+	title: string;
+	state: string;
+	parent_id?: string;
+}
+
+export interface OrgDag {
+	nodes: OrgDagNode[];
+	edges: OrgDagEdge[];
+}
+
+export interface ComputedWaveResult {
+	waves: ComputedWave[];
+	warnings: string[];
+	total_sub_outlines: number;
+	subfeature_dag: OrgDag;
+	file_dag: OrgDag;
+}

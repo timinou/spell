@@ -1,0 +1,67 @@
+#+TITLE: Preserve DAG guidance for plan execution
+#+STATE: DONE
+#+SESSION_ID: 14cb704b03a40938
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-27T20-05-20-014Z_14cb704b03a40938.jsonl]]
+#+CUSTOM_ID: FEAT-619-preserve-dag-guidance-for-plan-execution
+#+LAYER: agent
+#+DEPENDS: FEAT-618-surface-org-wave-dags-in-manifest
+
+* Initial Message
+
+the org wave tool should provide the file-level DAG and the subfeature-level DAG, to provide better ways for the implementation agent to orchestrate smartly.
+
+* Scope
+- In scope: update coding-agent guidance and compatibility tests so approved PLANs can carry the new DAG sections without confusing execution wave extraction, and so future plan-mode agents know to use DAG sections for orchestration.
+- In scope files: `packages/coding-agent/src/prompts/system/plan-mode-active.md` or the current plan-mode prompt file found by tests, `packages/coding-agent/test/prompts/plan-mode-active-suboutline.test.ts`, `packages/coding-agent/test/system-prompt-templates.test.ts`, `packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts`, and possibly `packages/coding-agent/src/tools/org.ts` tool description/render metadata if it should mention DAG fields.
+- Out of scope: changing approved plan task materialization, `todo_write` behavior, or creating a separate DAG executor.
+- Rationale: the implementation agent receives PLAN context after `exit_plan_mode`; readable DAG sections must be retained as context, while executable task waves must still come only from `:wave:` sections.
+
+* Existing Patterns
+- `packages/coding-agent/src/tools/exit-plan-mode.ts::extractPlanWaves` extracts entries only under `** ... :wave:` headings and ignores other `**` headings by resetting current wave.
+- Prompt tests already assert plan-mode guidance includes `org wave --manifest=true --planItemId=<PLAN-ID>`, `[[id:FEAT-001]]`, and `[[id:FEAT-001::define-types]]`.
+- The prompt standard instructs PLAN bodies to include `* Context`, `* Verification`, and `* Execution Manifest`; extend guidance rather than inventing a parallel section.
+- All rendered TUI text in coding-agent must follow sanitization patterns; no console logging.
+
+* Tests
+- Workflow A1: `extractPlanWaves` ignores `** File-level DAG` and `** Subfeature-level DAG` headings and entries, extracting only `:wave:` entries.
+- Workflow A2: prompt template guidance mentions that `org wave --manifest=true --planItemId=<PLAN-ID>` writes wave sections plus file/subfeature DAG sections, and that DAG headings must not use `:wave:`.
+- Workflow A3: plan validation still passes when the Execution Manifest includes DAG sections containing links that already appear as top-level child or declared sub-outline links.
+- Workflow A4: if DAG section uses code-form IDs instead of links, validation still depends on top-level and wave links, not the DAG text.
+- Verification commands: `bun test packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts`; `bun test packages/coding-agent/test/plan-mode/plan-validation-suboutline.test.ts`; `bun test packages/coding-agent/test/prompts/plan-mode-active-suboutline.test.ts`; `bun test packages/coding-agent/test/system-prompt-templates.test.ts`.
+
+* Implementation
+** DONE Write extraction compatibility tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-619-preserve-dag-guidance-for-plan-execution::agent-extraction-dag-tests
+:DEPENDS: FEAT-618-surface-org-wave-dags-in-manifest::org-tool-dag-impl
+:END:
+- Add A1 to `packages/coding-agent/test/tools/exit-plan-mode-waves.test.ts`.
+- Construct a manifest with one `:wave:` section, a `** File-level DAG` section, and a `** Subfeature-level DAG` section. Assert only the wave item becomes a `PlanWaveEntry`.
+
+** DONE Write validation compatibility tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-619-preserve-dag-guidance-for-plan-execution::agent-validation-dag-tests
+:DEPENDS: FEAT-619-preserve-dag-guidance-for-plan-execution::agent-extraction-dag-tests
+:END:
+- Add A3/A4 to `packages/coding-agent/test/plan-mode/plan-validation-suboutline.test.ts` if current validator would be touched by DAG link format decisions.
+- If implementation chooses code-form IDs in DAG sections and no validator change is required, keep this as a narrow regression test rather than changing validation logic.
+
+** DONE Update plan-mode DAG guidance
+:PROPERTIES:
+:CUSTOM_ID: FEAT-619-preserve-dag-guidance-for-plan-execution::agent-prompt-dag-guidance
+:DEPENDS: FEAT-619-preserve-dag-guidance-for-plan-execution::agent-validation-dag-tests
+:END:
+- Update plan-mode prompt/template tests so future planning agents expect `org wave` to provide both file-level and subfeature-level DAGs.
+- State the settled semantics: file nodes are child item CUSTOM_IDs; subfeature nodes are sub-outline CUSTOM_IDs; edge `from` depends on `to`; DAG headings are readable context, not executable `:wave:` headings.
+
+* Edge Cases
+- Do not tag DAG headings with `:wave:`; that would create fake tasks in approved sessions.
+- Do not rely on DAG sections as the only place sub-outline links appear; validator requires wave/manifest links for declared sub-outlines.
+- If readable DAG sections duplicate links, validator must remain deterministic and not require extra declarations.
+- If tool output grows, context pressure policy should still classify `org wave` as meta output; no broad rendering changes unless tests fail.
+
+* Acceptance Criteria
+- Approved plan wave extraction remains stable with DAG sections present.
+- Plan-mode prompt/tests document the new DAG output contract.
+- Validation compatibility is proven for DAG sections.
+- Focused coding-agent tests pass.

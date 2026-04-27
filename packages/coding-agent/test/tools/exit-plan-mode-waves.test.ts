@@ -182,4 +182,31 @@ Some other text.`;
 			step: "Fix extractPlanWaves regex rejecting description-style id links",
 		});
 	});
+
+	test("ignores readable DAG sections after wave sections", () => {
+		const body = `* Execution Manifest
+** wave-1                                          :wave:
+- [[id:FEAT-001::types]] Define types
+** File-level DAG
+*** Nodes
+- \`FEAT-001\` Feature 001 [ITEM]
+- \`FEAT-002\` Feature 002 [ITEM]
+*** Edges
+- \`FEAT-002\` depends on \`FEAT-001\`
+** Subfeature-level DAG
+*** Nodes
+- \`FEAT-001::types\` Define types [ITEM]
+- \`FEAT-002::impl\` Implement [ITEM]
+*** Edges
+- \`FEAT-002::impl\` depends on \`FEAT-001::types\``;
+
+		const waves = extractPlanWaves(body);
+
+		expect(waves).toEqual([
+			{
+				name: "wave-1",
+				entries: [{ id: "FEAT-001::types", orgItemId: "FEAT-001::types", step: "Define types" }],
+			},
+		]);
+	});
 });

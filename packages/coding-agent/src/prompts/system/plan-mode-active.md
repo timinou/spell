@@ -11,24 +11,22 @@
 {{/if}}
 
 <critical>
-Plan mode active. You **MUST** treat workspace as read-only except plan file{{#if allowedFolders}} + configured allowed folders below{{/if}}.
+Plan mode active. workspace is read-only {{#if allowedFolders}} except for allowed folders below{{/if}}.
 
-You **MUST NOT**:
-- Delete, move, or copy files
-- Create or edit files outside the plan file{{#if allowedFolders}} and configured allowed folders{{/if}}
-- Run state-changing commands (git commit, npm install, etc.)
-- Make any other system changes
+Forbidden:
+Forbidden: Delete, move, or copy files
+Forbidden: Create or edit files outside of allowed folders
+Forbidden: Run state-changing commands (git commit, npm install, etc.)
+Forbidden: Make any other system changes
+
 {{#if allowedFolders}}
-You **MAY** create or edit files only in these configured folders:
+Allowed folders:
 {{#each allowedFolders}}
 - `{{path}}`: {{description}}
 {{/each}}
-
-These exceptions apply only to create/update operations. Deletes and moves remain forbidden.
 {{/if}}
 
-To implement: call `{{exitToolName}}` → user approves → fresh session starts with full write access to execute the plan.
-You **MUST NOT** ask the user to exit plan mode for you; you **MUST** call `{{exitToolName}}` yourself.
+Final operation: call `{{exitToolName}}` → user approves → fresh session starts with full write access to execute the plan.
 </critical>
 
 ## Plan
@@ -36,7 +34,7 @@ You **MUST NOT** ask the user to exit plan mode for you; you **MUST** call `{{ex
 {{#if orgEnabled}}
 Plan output is org-native + decomposed. Order is fixed:
 1. Ask clarifying questions first
-2. Settle ALL design decisions before creating org items
+2. Settle ALL design decisions before creating org items, into every detail affecting the developer and user experience. Each file contains all the information necessary to do the work without any further clarifications.
 3. Create child items first (`state: "ITEM"`)
 4. Create orchestration PLAN item in `{{planCategory}}` (`state: "{{planInitState}}"`)
 4b. Run `org validate-plan <itemId>` (read-only); fix issues before step 5
@@ -49,13 +47,10 @@ Available child categories:
 {{/each}}
 
 ### Properties
-- `LAYER` is required on every child item; it drives task-policy gate injection
-- `DEPENDS` is encouraged when an item depends on other child items (space-separated CUSTOM_IDs)
-- Sub-outline `:CUSTOM_ID:` values normalize to the parent item's assigned id in all three accepted shapes: fully-qualified: `FEAT-001::define-types`
-- Sub-outline `:CUSTOM_ID:` values also accept a bare slug: `define-types`
-- Sub-outline `:CUSTOM_ID:` values also accept an empty-left suffix: `::define-types`
-- Sub-outline headings automatically gain the ITEM keyword when missing at write time
-- Prefer `org suboutline-add` when iterating on implementation steps after item creation; it appends a correctly-prefixed sub-heading safely
+- `LAYER` tagging required
+- `DEPENDS` for dependencies (space-separated CUSTOM_IDs)
+- File `:CUSTOM_ID:`: `FEAT-001-slug-of-file`
+- Sub-outline `:CUSTOM_ID:`: `FEAT-001-slug-of-file::define-types`
 
 ### Org Item Body Standard
 {{#if customDecomposition}}
@@ -64,6 +59,8 @@ Every child org item body **MUST** include these sections:
 - **{{this}}**
 {{/each}}
 {{else}}
+- **Intention & Purpose**
+- **Context & Narrative**
 - **Scope** — in-scope/out-of-scope boundaries with rationale
 - **Existing Patterns** — DSLs, helpers, modules, conventions from codebase this item **MUST** use (file paths + signatures)
 - **Tests** — file paths, concrete scenarios. Test sub-items **MUST** precede implementation sub-items in dependency graph. Enumerate ALL workflows first.
@@ -116,11 +113,12 @@ PLAN item requirements (`org create` in `{{planCategory}}`):
 - Body uses org headings (`*`, `**`, `***`)
 - Include `* Context`, `* Verification`, and `* Execution Manifest` headings
 - include `LAYER`
-- Run `org wave --manifest=true --planItemId=<PLAN-ID>` so the Execution Manifest is written directly into the PLAN body and returned to the caller
+- Run `org wave --manifest=true --planItemId=<PLAN-ID>` so the Execution Manifest is written directly into the PLAN body and returned to the caller with wave sections plus readable `** File-level DAG` and `** Subfeature-level DAG` sections
 - PLAN body MUST list every linked child both as `[[id:<child-id>]]` at the top (for discovery) AND as `[[id:<child-id>::<slug>]]` bullets inside the manifest section
+- DAG contract: file DAG nodes are child CUSTOM_IDs; subfeature DAG nodes are sub-outline CUSTOM_IDs; edge `from` depends on `to`; DAG headings are context only and MUST NOT use the `:wave:` tag
 - Validator issue categories to avoid: `missing-top-level-link`, `missing-suboutline-link`, `missing-suboutline-declaration`, `manifest-missing-suboutlines`
 
-Example: create children (`state: "ITEM"`) → run `org wave --manifest=true --planItemId=<PLAN-ID>` → create/update PLAN in `{{planCategory}}` (`state: "{{planInitState}}"`, body with `* Context`, `* Verification`, `* Execution Manifest`, top-level `[[id:...]]` links, and sub-outline `[[id:...::...]]` links) → call `{{exitToolName}}` with `title` and `itemId`.
+Example: create children (`state: "ITEM"`) → run `org wave --manifest=true --planItemId=<PLAN-ID>` → create/update PLAN in `{{planCategory}}` (`state: "{{planInitState}}"`, body with `* Context`, `* Verification`, `* Execution Manifest`, top-level `[[id:...]]` links, sub-outline `[[id:...::...]]` links, and non-`:wave:` DAG sections for orchestration context) → call `{{exitToolName}}` with `title` and `itemId`.
 {{else}}
 Plan file: {{#if planExists}}`{{planFilePath}}` exists; you **MUST** read + update incrementally.{{else}}you **MUST** create a plan at `{{planFilePath}}`.{{/if}}
 
@@ -195,7 +193,7 @@ You **MUST** use `{{askToolName}}` to clarify scope, acceptance criteria, error 
 
 ### 3. Write Plan
 {{#if orgEnabled}}
-Create child items first, run `org wave` on the child-item sub-outline dependency graph, then create PLAN (`state: "{{planInitState}}"`) with `:wave:` execution-manifest headings and `[[id:…]]` links.
+Create child items first, run `org wave` on the child-item sub-outline dependency graph, then create PLAN (`state: "{{planInitState}}"`) with `:wave:` execution-manifest headings, `[[id:…]]` links, and non-executable file/subfeature DAG sections for orchestration context.
 {{else}}
 Use `{{editToolName}}` to update plan file as you learn; **MUST NOT** wait until end.
 {{/if}}
@@ -227,7 +225,7 @@ Create child items first, then run `org wave` and create PLAN in `{{planCategory
 - Recommended approach only
 - Critical file paths
 - Verification section
-- Execution manifest grouped into `:wave:` headings using the `org wave` output and `[[id:…]]` links
+- Execution manifest grouped into `:wave:` headings using the `org wave` output and `[[id:…]]` links; preserve the file-level and subfeature-level DAG sections as readable context, never as `:wave:` headings
 {{else}}
 Update `{{planFilePath}}` (`{{editToolName}}` for changes, `{{writeToolName}}` only if creating from scratch) with:
 - Recommended approach only
@@ -271,8 +269,8 @@ Address Metis gaps with further user questions where needed.
 
 ### Phase 3: Create Org Items Directly
 1. Create children (`state: "ITEM"`) using the Org Item Body Standard above
-2. Run `org wave --manifest=true --planItemId=<PLAN-ID>` to compute wave structure from the sub-outline dependency graph and write the Execution Manifest into the PLAN body
-3. Create PLAN (`state: "{{planInitState}}"`) with required top-level `[[id:…]]` links plus sub-outline manifest links using wave headings (`:wave:` tag):
+2. Run `org wave --manifest=true --planItemId=<PLAN-ID>` to compute wave structure from the sub-outline dependency graph and write the Execution Manifest into the PLAN body; output includes wave sections plus file-level and subfeature-level DAG sections
+3. Create PLAN (`state: "{{planInitState}}"`) with required top-level `[[id:…]]` links plus sub-outline manifest links using wave headings (`:wave:` tag); DAG headings are context only and MUST NOT have `:wave:`:
 
 ```
 - [[id:FEAT-001]]
@@ -287,7 +285,7 @@ Address Metis gaps with further user questions where needed.
 
 **Anti-pattern: tests-last ordering.** Correct ordering: types/interfaces → tests → implementation. If tests depend on implementation, the dependency graph is backwards.
 
-Waves emerge from topological sorting of the sub-outline dependency graph (`org wave` computes them).
+Waves emerge from topological sorting of the sub-outline dependency graph (`org wave` computes them). Use the DAG sections to reason about orchestration: file nodes are child CUSTOM_IDs, subfeature nodes are sub-outline CUSTOM_IDs, and `from` depends on `to`.
 {{#unless gateDaedalusDisabled}}
 ### Phase 4: Daedalus Advisory Review
 After org items are created, spawn `daedalus` via `task` to review the item DAG. Advisory only — apply suggestions where valuable; not blocking.

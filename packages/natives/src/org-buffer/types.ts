@@ -30,6 +30,48 @@ export interface OrgBufferOptions {
 	categories?: Array<{ absPath: string; name: string; dir: string; prefix?: string }>;
 }
 
+export interface OrgDagEdge {
+	from: string;
+	to: string;
+}
+
+export interface OrgDagNode {
+	id: string;
+	title: string;
+	state: string;
+	parent_id?: string;
+}
+
+export interface OrgDag {
+	nodes: OrgDagNode[];
+	edges: OrgDagEdge[];
+}
+
+export interface OrgWaveItem {
+	custom_id: string;
+	parent_id: string;
+	title: string;
+}
+
+export interface OrgWave {
+	number: number;
+	items: OrgWaveItem[];
+}
+
+export interface OrgComputeWavesOutput {
+	waves: OrgWave[];
+	warnings: string[];
+	total_sub_outlines: number;
+	subfeature_dag: OrgDag;
+	file_dag: OrgDag;
+}
+
+export interface OrgDuplicateIdErrorOutput {
+	code: "DUPLICATE_CUSTOM_ID";
+	message: string;
+	duplicate_ids: string[];
+	duplicate_count: number;
+}
 export interface OrgBufferResult {
 	output: unknown;
 	error: boolean;

@@ -213,6 +213,9 @@ describe("system Handlebars prompt templates", () => {
 		expect(rendered).toContain("FILE-LEVEL-ID::suboutline-id");
 		expect(rendered).toContain("run `org wave`");
 		expect(rendered).toContain(":wave:` headings");
+		expect(rendered).toContain("file-level and subfeature-level DAG sections");
+		expect(rendered).toContain("DAG headings are context only");
+		expect(rendered).toContain("edge `from` depends on `to`");
 	});
 
 	test("system-prompt renders eager task guidance from default settings", async () => {

@@ -106,4 +106,63 @@ describe("org wave flatten output", () => {
 		expect(result.manifest).toContain("[[id:DRAFT-020-alpha-parent::first]]");
 		expect(result.warnings).toEqual([]);
 	});
+
+	test("wave_file_dag_collapses_cross_child_sub_outline_edges", async () => {
+		await seedFile(
+			"DRAFT-030-alpha.org",
+			[
+				"#+TITLE: Alpha\n",
+				"#+STATE: ITEM\n",
+				"#+CUSTOM_ID: DRAFT-030-alpha\n",
+				"\n",
+				"* ITEM Alpha\n",
+				":PROPERTIES:\n",
+				":CUSTOM_ID: DRAFT-030-alpha\n",
+				":END:\n",
+				"** ITEM Types\n",
+				":PROPERTIES:\n",
+				":CUSTOM_ID: DRAFT-030-alpha::types\n",
+				":END:\n",
+				"** ITEM Test\n",
+				":PROPERTIES:\n",
+				":CUSTOM_ID: DRAFT-030-alpha::test\n",
+				":DEPENDS: DRAFT-030-alpha::types\n",
+				":END:\n",
+			].join(""),
+		);
+		await seedFile(
+			"DRAFT-031-beta.org",
+			[
+				"#+TITLE: Beta\n",
+				"#+STATE: ITEM\n",
+				"#+CUSTOM_ID: DRAFT-031-beta\n",
+				"\n",
+				"* ITEM Beta\n",
+				":PROPERTIES:\n",
+				":CUSTOM_ID: DRAFT-031-beta\n",
+				":END:\n",
+				"** ITEM Impl\n",
+				":PROPERTIES:\n",
+				":CUSTOM_ID: DRAFT-031-beta::impl\n",
+				":DEPENDS: DRAFT-030-alpha::types DRAFT-030-alpha::test\n",
+				":END:\n",
+			].join(""),
+		);
+
+		const tool = createOrgTool(tmpDir, makeConfig());
+		const result = (await tool.execute({ command: "wave", category: "drafts", manifest: true })) as {
+			file_dag: { nodes: Array<{ id: string }>; edges: Array<{ from: string; to: string }> };
+			subfeature_dag: { edges: Array<{ from: string; to: string }> };
+		};
+
+		expect(result.subfeature_dag.edges).toEqual(
+			expect.arrayContaining([
+				{ from: "DRAFT-030-alpha::test", to: "DRAFT-030-alpha::types" },
+				{ from: "DRAFT-031-beta::impl", to: "DRAFT-030-alpha::types" },
+				{ from: "DRAFT-031-beta::impl", to: "DRAFT-030-alpha::test" },
+			]),
+		);
+		expect(result.file_dag.nodes.map(node => node.id)).toEqual(["DRAFT-030-alpha", "DRAFT-031-beta"]);
+		expect(result.file_dag.edges).toEqual([{ from: "DRAFT-031-beta", to: "DRAFT-030-alpha" }]);
+	});
 });

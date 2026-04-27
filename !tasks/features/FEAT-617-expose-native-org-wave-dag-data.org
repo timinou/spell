@@ -1,0 +1,71 @@
+#+TITLE: Expose native org wave DAG data
+#+STATE: DONE
+#+SESSION_ID: 14cb704b03a40938
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-27T20-05-20-014Z_14cb704b03a40938.jsonl]]
+#+CUSTOM_ID: FEAT-617-expose-native-org-wave-dag-data
+#+LAYER: native
+
+* Initial Message
+
+the org wave tool should provide the file-level DAG and the subfeature-level DAG, to provide better ways for the implementation agent to orchestrate smartly.
+
+* Scope
+- In scope: extend native org wave computation to return explicit DAG data alongside existing `waves`, `warnings`, and `total_sub_outlines` for `computeWaves` callers.
+- In scope files: `crates/pi-org-engine/src/graph.rs`, `crates/pi-natives/src/org_buffer.rs`, `packages/natives/src/org-buffer/types.ts`, `packages/natives/test/org-buffer.test.ts`, `packages/natives/test/org-buffer-release.test.ts` if release parity needs the new shape.
+- Out of scope: changing `nextWave` eligibility semantics, changing TODO state handling, changing org parsing, or changing dependency edge direction.
+- Rationale: `org wave` currently exposes topological layers but not the dependency graph that produced them. Agents need the graph to identify independent file-level work and exact sub-feature blockers.
+
+* Existing Patterns
+- Native source of truth: `crates/pi-org-engine/src/graph.rs` already defines `DepEdge { from, to }` where `from` is blocked by / depends on `to`, `GraphResult`, `WaveResult`, and Kahn-based `compute_waves`.
+- NAPI dispatch: `crates/pi-natives/src/org_buffer.rs::cmd_compute_waves` serializes `graph::compute_waves(...)` through `serde_json::to_value`.
+- TS bridge types: `packages/natives/src/org-buffer/types.ts` declares `OrgBufferResult`; update any specific output typing there rather than inventing local `any` in callers.
+- Existing duplicate-ID behavior must stay byte-compatible: `DUPLICATE_CUSTOM_ID` errors from `compute_waves` remain errors and must not be wrapped as DAG output.
+
+* Tests
+- Workflow N1: `computeWaves` over sub-outline nodes A, B, C with `C DEPENDS A B` returns `subfeature_dag.nodes` for all canonical nodes and `subfeature_dag.edges` as `{ from: C, to: A }`, `{ from: C, to: B }`.
+- Workflow N2: same input returns `file_dag.nodes` collapsed to parent IDs and `file_dag.edges` only for cross-parent deps; intra-parent sub-outline deps are omitted.
+- Workflow N3: duplicate CUSTOM_ID error response is unchanged and contains no partial DAG.
+- Workflow N4: unknown DEPENDS target continues warning behavior and is not emitted as a valid edge.
+- Workflow N5: cycle input still excludes cyclic nodes from waves and exposes cycle evidence through DAG warnings/cycles if implemented in native graph result.
+- Verification commands: `bun test packages/natives/test/org-buffer.test.ts`; if release binary is available after rebuild, `bun test packages/natives/test/org-buffer-release.test.ts`; focused Rust check `cargo test -p pi-org-engine graph::tests` or package-local equivalent used in repo.
+
+* Implementation
+** DONE Add native DAG contract tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-617-expose-native-org-wave-dag-data::native-dag-tests
+:END:
+- Files: `crates/pi-org-engine/src/graph.rs`, `crates/pi-natives/src/org_buffer.rs` tests if command-shape coverage is needed.
+- Add tests for workflows N1-N4 before implementation. Assert edge direction exactly: `from` depends on `to`.
+- Assert file-level collapse by parent CUSTOM_ID, not physical file path.
+
+** DONE Implement wave DAG output in Rust
+:PROPERTIES:
+:CUSTOM_ID: FEAT-617-expose-native-org-wave-dag-data::native-dag-impl
+:DEPENDS: FEAT-617-expose-native-org-wave-dag-data::native-dag-tests
+:END:
+- Extend `WaveResult` with `subfeature_dag` and `file_dag`.
+- Recommended shapes: `Dag { nodes: Vec<DagNode>, edges: Vec<DepEdge> }`; `DagNode` includes at least `id`, `title`, `state`, and for subfeature nodes `parent_id`; file-level node IDs are child item CUSTOM_IDs.
+- Build from the same canonical item set used by `compute_waves`, so duplicate filtering and file-level/frontmatter dedupe stay consistent.
+- For `file_dag`, collapse every sub-outline node to `parent_id_fn(id)`; omit an edge if collapsed `from == to`; dedupe edges deterministically.
+
+** DONE Update NAPI and TS bridge typing
+:PROPERTIES:
+:CUSTOM_ID: FEAT-617-expose-native-org-wave-dag-data::native-bridge-output-tests
+:DEPENDS: FEAT-617-expose-native-org-wave-dag-data::native-dag-impl
+:END:
+- Files: `crates/pi-natives/src/org_buffer.rs`, `packages/natives/src/org-buffer/types.ts`, `packages/natives/test/org-buffer.test.ts`.
+- Ensure `executeOrg({ command: "computeWaves" })` serializes both DAGs.
+- Update TS declarations to expose exact DAG output fields without `any`.
+
+* Edge Cases
+- Duplicate IDs: fail before DAG construction, preserving current JSON error contract.
+- Missing deps: preserve warnings and exclude missing-target edges from both DAGs.
+- Cycles: do not fabricate wave placement; cyclic items remain excluded from waves. DAG output may include cycle diagnostics only if the graph module already exposes them deterministically.
+- File-level rootless IDs: if a node has no `::`, file-level ID is the node itself; avoid empty-string file nodes.
+- Determinism: node and edge ordering must be stable across platforms and input file traversal order.
+
+* Acceptance Criteria
+- `computeWaves` output includes `subfeature_dag` and `file_dag` with explicit `nodes` and `edges`.
+- Edge direction matches existing `GraphResult`: `from` depends on `to`.
+- Existing wave consumers continue to pass without schema breakage.
+- Focused native and NAPI tests listed above pass.
