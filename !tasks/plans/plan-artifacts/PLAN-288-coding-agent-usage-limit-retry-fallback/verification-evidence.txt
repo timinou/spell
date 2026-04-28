@@ -1,0 +1,19 @@
+PLAN-288 verification evidence — 2026-04-28
+
+Commands:
+1. bun test packages/ai/test/rate-limit-utils.test.ts
+   Outcome: 16 pass, 0 fail, 57 expect() calls.
+
+2. bun test packages/coding-agent/test/agent-session-usage-limit-fallback.test.ts
+   Outcome: 4 pass, 0 fail, 7 expect() calls.
+   Manual proof encoded in tests:
+   - Kimi 429 rate_limit_error in subagent emits auto_retry_start delayMs=7 when retry.subagentUsageLimitMaxDelayMs=7, and no event delayMs=1_800_000.
+   - Kimi billing-cycle permission_error quota in subagent with no fallback emits auto_retry_end finalError containing "usage limit exhausted" and retryAttempt resets to 0.
+   - Subagent fallback role order skips same model/current provider and missing-key provider, then switches to openai/gpt-4o with delayMs=0.
+   - Top-level taskDepth=0 preserves existing QUOTA_EXHAUSTED delayMs=1_800_000.
+
+3. bun test packages/coding-agent/test/agent-session-usage-limit-fallback.test.ts packages/coding-agent/test/agent-session-stream-stall-retry.test.ts packages/coding-agent/test/task/model-fallback.test.ts
+   Outcome: 8 pass, 0 fail, 26 expect() calls.
+
+4. bun check:ts
+   Outcome: biome check passed over 1951 files; tsgo completed with exit code 0.

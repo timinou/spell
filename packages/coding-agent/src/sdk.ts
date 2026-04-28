@@ -1744,6 +1744,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		pendingActionStore,
 		toolSession,
 		loopManager,
+		taskDepth,
 	});
 
 	if (modesResult.resolvedConfigs.size > 0) {

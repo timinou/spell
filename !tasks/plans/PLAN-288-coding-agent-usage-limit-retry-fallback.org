@@ -1,0 +1,113 @@
+#+TITLE: [coding-agent] Usage-limit retry fallback and no 30m subagent sleeps
+#+STATE: DONE
+#+SESSION_ID: 14ccb5579fdc3f2c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T19-45-29-727Z_14ccb5579fdc3f2c.jsonl]]
+#+CUSTOM_ID: PLAN-288-coding-agent-usage-limit-retry-fallback
+#+layer: reliability
+
+* Initial Message
+
+429 errors have a 30m retry window!!!! in /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-28T14-14-29-054Z_14cc69946fb52683.jsonl
+ ID: 14cc69946fb52683
+
+for example. plz explain
+
+#+LAYER: reliability
+#+PRIORITY: #A
+
+[[id:BUG-327-coding-agent-prevent-429-rate-limit-erro]]
+[[id:BUG-328-coding-agent-fail-fast-or-switch-fallbac]]
+
+* Context
+User reported that provider 429 errors in session =14cc69946fb52683= create a 30 minute retry window. Investigation found:
+- The coordinator root log starts/awaits child jobs; provider errors are in child logs under the session artifact directory.
+- Current wave-5 examples: =37-W5ToolKbProofsDock.jsonl= and =38-W5DeleteDeadRuntime.jsonl= each recorded Kimi =429 rate_limit_error= around 19:35/19:36.
+- Earlier wave-2 proof: child logs =9-W2PreservePortBindings.jsonl=, =11-W2NotificationsRewrite.jsonl=, =12-W2MappingTestsAndService.jsonl=, =13-W2MappingEditorUi.jsonl=, =15-W2DockAttachAndUi.jsonl=, =16-W2KbUploadTests.jsonl=, and =17-W2BenchmarkRemoveFakeDefault.jsonl= show attempt 1 around 15:09 and attempt 2 around 15:39.
+- Code chain: =AgentSession.#handleRetryableError= → =parseRateLimitReason= → =calculateRateLimitBackoffMs= → =AuthStorage.markUsageLimitReached= → =abortableSleep(delayMs)=.
+- Parser misses snake-case =rate_limit_error= and then sees provider prose containing =quota=, producing =QUOTA_EXHAUSTED= → 30m.
+- Subagents currently do not have a policy boundary preventing long usage-limit sleeps.
+
+Settled design decisions:
+1. Explicit 429 rate-limit tokens (=rate_limit_error=, =rate_limit_exceeded=, =rate-limit=, =rate limit=, “too many requests”) classify as =RATE_LIMIT_EXCEEDED= before quota prose.
+2. True billing-cycle/quota exhaustion remains =QUOTA_EXHAUSTED= for credential-blocking semantics.
+3. Subagents must never sleep 30m for provider usage-limit/quota errors.
+4. Runtime order for subagents: same-provider credential rotation → configured fallback model role → short capped transient retry → fail fast for quota/unknown exhaustion.
+5. Fallback model selection is role-based/configured, not arbitrary first available model.
+6. Top-level interactive sessions preserve existing long quota wait behavior unless a future user request changes it.
+
+* Verification
+Focused verification:
+- =bun test packages/ai/test/rate-limit-utils.test.ts=
+- =bun test packages/coding-agent/test/agent-session-usage-limit-fallback.test.ts=
+- =bun test packages/coding-agent/test/agent-session-stream-stall-retry.test.ts packages/coding-agent/test/task/model-fallback.test.ts=
+
+Final verification after all items:
+- =bun check:ts=
+
+Manual proof expected after implementation:
+- A synthetic or test transcript showing a subagent usage-limit failure emits either immediate fallback model switch/retry or final fail-fast, with no =delayMs= near =1_800_000=.
+- If configured fallback roles resolve to no distinct model, subagent exits/fails quickly with a clear error instead of remaining =running= for 30m.
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:BUG-327-coding-agent-prevent-429-rate-limit-erro::write-rate-limit-classifier-tests]] Write classifier regression tests first
+** wave-2 :wave:
+- [[id:BUG-327-coding-agent-prevent-429-rate-limit-erro::implement-rate-limit-token-classification]] Implement explicit rate-limit token classification
+** wave-3 :wave:
+- [[id:BUG-327-coding-agent-prevent-429-rate-limit-erro::verify-rate-limit-classifier]] Verify lower-level contract
+** wave-4 :wave:
+- [[id:BUG-328-coding-agent-fail-fast-or-switch-fallbac::add-subagent-retry-settings-tests]] Add subagent retry settings tests first
+** wave-5 :wave:
+- [[id:BUG-328-coding-agent-fail-fast-or-switch-fallbac::wire-task-depth-into-agent-session]] Wire taskDepth into AgentSession
+- [[id:BUG-328-coding-agent-fail-fast-or-switch-fallbac::add-retry-settings-schema]] Add retry settings schema
+** wave-6 :wave:
+- [[id:BUG-328-coding-agent-fail-fast-or-switch-fallbac::implement-subagent-usage-limit-policy]] Implement fallback/fail-fast retry policy
+** wave-7 :wave:
+- [[id:BUG-328-coding-agent-fail-fast-or-switch-fallbac::verify-subagent-usage-limit-policy]] Verify subagent runtime retry behavior
+** File-level DAG
+*** Nodes
+- `BUG-327-coding-agent-prevent-429-rate-limit-erro` Write classifier regression tests first [ITEM]
+- `BUG-328-coding-agent-fail-fast-or-switch-fallbac` Add subagent retry settings tests first [ITEM]
+*** Edges
+- `BUG-328-coding-agent-fail-fast-or-switch-fallbac` depends on `BUG-327-coding-agent-prevent-429-rate-limit-erro`
+** Subfeature-level DAG
+*** Nodes
+- `BUG-327-coding-agent-prevent-429-rate-limit-erro::write-rate-limit-classifier-tests` Write classifier regression tests first [ITEM]
+- `BUG-327-coding-agent-prevent-429-rate-limit-erro::implement-rate-limit-token-classification` Implement explicit rate-limit token classification [ITEM]
+- `BUG-327-coding-agent-prevent-429-rate-limit-erro::verify-rate-limit-classifier` Verify lower-level contract [ITEM]
+- `BUG-328-coding-agent-fail-fast-or-switch-fallbac::add-subagent-retry-settings-tests` Add subagent retry settings tests first [ITEM]
+- `BUG-328-coding-agent-fail-fast-or-switch-fallbac::wire-task-depth-into-agent-session` Wire taskDepth into AgentSession [ITEM]
+- `BUG-328-coding-agent-fail-fast-or-switch-fallbac::add-retry-settings-schema` Add retry settings schema [ITEM]
+- `BUG-328-coding-agent-fail-fast-or-switch-fallbac::implement-subagent-usage-limit-policy` Implement fallback/fail-fast retry policy [ITEM]
+- `BUG-328-coding-agent-fail-fast-or-switch-fallbac::verify-subagent-usage-limit-policy` Verify subagent runtime retry behavior [ITEM]
+*** Edges
+- `BUG-327-coding-agent-prevent-429-rate-limit-erro::implement-rate-limit-token-classification` depends on `BUG-327-coding-agent-prevent-429-rate-limit-erro::write-rate-limit-classifier-tests`
+- `BUG-327-coding-agent-prevent-429-rate-limit-erro::verify-rate-limit-classifier` depends on `BUG-327-coding-agent-prevent-429-rate-limit-erro::implement-rate-limit-token-classification`
+- `BUG-328-coding-agent-fail-fast-or-switch-fallbac::add-subagent-retry-settings-tests` depends on `BUG-327-coding-agent-prevent-429-rate-limit-erro::verify-rate-limit-classifier`
+- `BUG-328-coding-agent-fail-fast-or-switch-fallbac::wire-task-depth-into-agent-session` depends on `BUG-328-coding-agent-fail-fast-or-switch-fallbac::add-subagent-retry-settings-tests`
+- `BUG-328-coding-agent-fail-fast-or-switch-fallbac::add-retry-settings-schema` depends on `BUG-328-coding-agent-fail-fast-or-switch-fallbac::add-subagent-retry-settings-tests`
+- `BUG-328-coding-agent-fail-fast-or-switch-fallbac::implement-subagent-usage-limit-policy` depends on `BUG-328-coding-agent-fail-fast-or-switch-fallbac::wire-task-depth-into-agent-session`
+- `BUG-328-coding-agent-fail-fast-or-switch-fallbac::implement-subagent-usage-limit-policy` depends on `BUG-328-coding-agent-fail-fast-or-switch-fallbac::add-retry-settings-schema`
+- `BUG-328-coding-agent-fail-fast-or-switch-fallbac::verify-subagent-usage-limit-policy` depends on `BUG-328-coding-agent-fail-fast-or-switch-fallbac::implement-subagent-usage-limit-policy`
+
+** Completion [2026-04-28]
+*** Verification
+- `bun test packages/ai/test/rate-limit-utils.test.ts` → 16 pass, 0 fail, 57 expect() calls.
+- `bun test packages/coding-agent/test/agent-session-usage-limit-fallback.test.ts` → 4 pass, 0 fail, 7 expect() calls.
+- `bun test packages/coding-agent/test/agent-session-usage-limit-fallback.test.ts packages/coding-agent/test/agent-session-stream-stall-retry.test.ts packages/coding-agent/test/task/model-fallback.test.ts` → 8 pass, 0 fail, 26 expect() calls.
+- `bun check:ts` → Biome checked 1951 files with no fixes; tsgo completed with exit code 0.
+
+Manual proof encoded in `agent-session-usage-limit-fallback.test.ts`:
+- Subagent Kimi `429 rate_limit_error` emits `auto_retry_start` with capped `delayMs=7` under test settings, and no `1_800_000`ms delay.
+- Subagent billing-cycle/quota exhaustion with no fallback emits `auto_retry_end` fail-fast containing `usage limit exhausted` and resets `retryAttempt` to 0.
+- Subagent fallback roles skip same/current-provider and missing-key candidates, switch to `openai/gpt-4o`, and retry immediately with `delayMs=0`.
+- Top-level `taskDepth=0` retains existing `QUOTA_EXHAUSTED` long delay compatibility (`delayMs=1_800_000`).
+
+*** Artifacts
+- Text evidence: [[file:!tasks/plans/plan-artifacts/PLAN-288-coding-agent-usage-limit-retry-fallback/verification-evidence.txt]]
+
+*** Lifecycle
+- Linked child items reconciled to DONE: [[id:BUG-327-coding-agent-prevent-429-rate-limit-erro]], [[id:BUG-328-coding-agent-fail-fast-or-switch-fallbac]].
+- Blocked linked child items: none.
+
+NOTE [2026-04-28]: Plan completed with verification evidence artifact and focused tests/checks passing.

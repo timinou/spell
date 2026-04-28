@@ -1,0 +1,174 @@
+#+TITLE: [coding-agent] Fail fast or switch fallback model on subagent usage-limit exhaustion
+#+STATE: DONE
+#+SESSION_ID: 14ccb5579fdc3f2c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T19-45-29-727Z_14ccb5579fdc3f2c.jsonl]]
+#+CUSTOM_ID: BUG-328-coding-agent-fail-fast-or-switch-fallbac
+#+layer: reliability
+#+depends: BUG-327-coding-agent-prevent-429-rate-limit-erro
+
+* Initial Message
+
+429 errors have a 30m retry window!!!! in /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-28T14-14-29-054Z_14cc69946fb52683.jsonl
+ ID: 14cc69946fb52683
+
+for example. plz explain
+
+#+LAYER: reliability
+#+PRIORITY: #A
+#+DEPENDS: BUG-327-coding-agent-prevent-429-rate-limit-erro
+
+* Intention & Purpose
+Prevent delegated subagents from sleeping for 30 minutes after provider usage-limit/quota failures. When a subagent hits a usage limit, Spell should first rotate credentials if possible, then switch to a configured fallback model role if possible, and otherwise fail fast for quota/billing-cycle exhaustion instead of blocking the coordinator's =await= for a long hidden sleep.
+
+This directly addresses session =14cc69946fb52683=:
+- Root coordinator launched wave-5 child tasks at 19:24 and awaited them.
+- Child logs =37-W5ToolKbProofsDock.jsonl= and =38-W5DeleteDeadRuntime.jsonl= recorded Kimi =429 rate_limit_error= around 19:35/19:36.
+- Earlier wave-2 logs show the behavior: attempts at ~15:09 then ~15:39, proving the current path sleeps 30m before the next retry.
+
+* Context & Narrative
+Current retry path:
+- =packages/coding-agent/src/session/agent-session.ts= imports =parseRateLimitReason= and =calculateRateLimitBackoffMs=.
+- =AgentSession.#isRetryableErrorMessage= treats =usage limit=, =rate limit=, =429=, and related errors as retryable.
+- =AgentSession.#handleRetryableError= increments =#retryAttempt=, computes exponential backoff, and for usage-limit messages calls:
+  - =#parseRetryAfterMsFromError(baseErrorMessage) ?? calculateRateLimitBackoffMs(parseRateLimitReason(baseErrorMessage))=.
+  - =this.#modelRegistry.authStorage.markUsageLimitReached(...)= to block/rotate credential.
+  - If no credential switch occurs and =retryAfterMs > delayMs=, it sleeps =retryAfterMs=.
+- =createAgentSession(options)= receives =taskDepth= for subagents but =AgentSession= does not currently store that depth.
+- =AgentSession.setModelTemporary(model)= already exists and switches models without persisting settings.
+- =AgentSession.resolveRoleModel(role)= / private =#resolveRoleModel= already resolve configured model roles.
+- =packages/coding-agent/src/config/model-registry.ts= defines roles =default=, =smol=, =slow=, =task=, =subtask=, etc.
+
+Desired runtime policy:
+1. Mark the current provider credential as usage-limited, preserving real retry/reset duration for auth storage.
+2. If another credential for the same provider is available, keep current behavior: switch credential and retry immediately.
+3. Else, if the current session is a subagent and a configured fallback model role resolves to a different model with an API key, switch to it temporarily and retry immediately.
+4. Else, for subagent quota/billing-cycle/unknown exhaustion, fail fast with a clear final error; do not sleep 30m.
+5. Else, for subagent transient rate-limit/model-capacity/server retry reasons, cap sleep to a short setting (default 60s).
+6. Interactive top-level sessions may keep long sleeps unless the new settings explicitly cap them later; this item is scoped to subagent safety.
+
+* Scope
+In scope:
+- Add =taskDepth= awareness to =AgentSession= via =AgentSessionConfig= and =createAgentSession= wiring.
+- Add settings under =retry.*= for subagent usage-limit behavior:
+  - =retry.subagentUsageLimitMaxDelayMs= default =60_000=.
+  - =retry.subagentUsageLimitFallbackRoles= default =['task', 'default', 'slow', 'smol']= or the closest schema-compatible array default.
+- Implement fallback role switching in =#handleRetryableError= after credential rotation fails and before sleeping.
+- Skip fallback candidates that are missing, equal to the current model, lack API key, or resolve to the same blocked provider/model.
+- For subagent =QUOTA_EXHAUSTED= / =UNKNOWN= with no credential/model fallback, return =false= from retry handling after formatting a final error message explaining that usage-limit exhaustion has no fallback; this lets task executor finish/fail instead of waiting.
+- Add focused unit tests covering subagent no-30m behavior, fallback model switch, and top-level compatibility.
+
+Out of scope:
+- No UI redesign.
+- No changes to task orchestration DAG behavior.
+- No provider credential setup changes.
+- No attempt to auto-pick arbitrary first available model outside configured fallback roles.
+
+* Existing Patterns
+- File: =packages/coding-agent/src/session/agent-session.ts=
+  - =async #handleRetryableError(message: AssistantMessage): Promise<boolean>= owns retry delay, retry event emission, message removal, abortable sleep, and scheduling continuation.
+  - =setModelTemporary(model: Model): Promise<void>= switches model without persisting role settings.
+  - =#resolveRoleModel(role, availableModels, currentModel)= resolves roles through =resolveModelRoleValue=.
+  - =#getCompactionModelCandidates= shows an existing pattern for collecting model-role candidates and deduplicating by model key.
+- File: =packages/coding-agent/src/sdk.ts=
+  - =CreateAgentSessionOptions.taskDepth?: number= already exists.
+  - =createAgentSession= passes =taskDepth= into prompt/tool context but not into =AgentSessionConfig= today.
+- File: =packages/coding-agent/src/config/settings-schema.ts=
+  - =retry.enabled=, =retry.maxRetries=, and =retry.baseDelayMs= already exist.
+  - Array settings exist for values like =disabledExtensions= and =enabledModels=.
+- Existing tests:
+  - =packages/coding-agent/test/agent-session-stream-stall-retry.test.ts= creates real =AgentSession= instances with isolated settings and fake events.
+  - =packages/coding-agent/test/task/model-fallback.test.ts= covers startup candidate fallback; this item is different because it is mid-session provider usage-limit handling.
+
+* Tests
+Enumerate workflows first:
+1. Subagent + Kimi 429 =rate_limit_error= after dependent classifier fix: retry delay is capped to =retry.subagentUsageLimitMaxDelayMs=, never 30m.
+2. Subagent + billing-cycle/quota exhaustion + no fallback model: retry handling returns final failure/no retry immediately; no =abortableSleep(1_800_000)= equivalent occurs.
+3. Subagent + usage-limit/quota exhaustion + configured fallback role =task= resolving to a distinct model with API key: session calls temporary model switch and schedules immediate retry with =delayMs= 0.
+4. If fallback role resolves to same model/current provider or lacks API key, it is skipped and next configured fallback role is tried.
+5. Top-level session behavior remains compatible: true quota exhaustion can still produce the existing long delay unless future settings change it.
+6. Retry event/log message exposes enough detail to diagnose fallback vs fail-fast, without leaking API keys.
+
+Verification commands:
+- =bun test packages/coding-agent/test/agent-session-usage-limit-fallback.test.ts=
+- =bun test packages/coding-agent/test/agent-session-stream-stall-retry.test.ts packages/coding-agent/test/task/model-fallback.test.ts=
+- Final integrator should run =bun check:ts= after both child items.
+
+* Implementation
+** DOING Add subagent retry settings tests first
+:PROPERTIES:
+:CUSTOM_ID: BUG-328-coding-agent-fail-fast-or-switch-fallbac::add-subagent-retry-settings-tests
+:DEPENDS: BUG-327-coding-agent-prevent-429-rate-limit-erro::verify-rate-limit-classifier
+:END:
+- File: =packages/coding-agent/test/agent-session-usage-limit-fallback.test.ts= (new) or add to the nearest existing =agent-session-*= retry test if helpers are reusable.
+- Create isolated settings with =retry.enabled=true=, =retry.maxRetries= enough for one retry, =retry.baseDelayMs= small, =retry.subagentUsageLimitMaxDelayMs= 5 or 10ms, and fallback roles explicitly set for deterministic tests.
+- Use fake/bundled models from =@oh-my-pi/pi-ai= where existing tests do.
+- Simulate assistant =stopReason: "error"= messages with error text matching the incident.
+
+** DOING Wire taskDepth into AgentSession
+:PROPERTIES:
+:CUSTOM_ID: BUG-328-coding-agent-fail-fast-or-switch-fallbac::wire-task-depth-into-agent-session
+:DEPENDS: BUG-328-coding-agent-fail-fast-or-switch-fallbac::add-subagent-retry-settings-tests
+:END:
+- Files: =packages/coding-agent/src/session/agent-session.ts= and =packages/coding-agent/src/sdk.ts=.
+- Add =taskDepth?: number= to =AgentSessionConfig=.
+- Store it as a private field, e.g. =#taskDepth = 0=.
+- Pass =taskDepth= from =createAgentSession(options)= into the =new AgentSession(...)= config.
+- Add a small helper like =#isSubagentSession(): boolean= returning =#taskDepth > 0=.
+
+** DOING Add retry settings schema
+:PROPERTIES:
+:CUSTOM_ID: BUG-328-coding-agent-fail-fast-or-switch-fallbac::add-retry-settings-schema
+:DEPENDS: BUG-328-coding-agent-fail-fast-or-switch-fallbac::add-subagent-retry-settings-tests
+:END:
+- File: =packages/coding-agent/src/config/settings-schema.ts=.
+- Add:
+  - ="retry.subagentUsageLimitMaxDelayMs": { type: "number", default: 60_000 }=
+  - ="retry.subagentUsageLimitFallbackRoles": { type: "array", default: ["task", "default", "slow", "smol"] }=
+- Extend =RetrySettings= interface accordingly.
+- Keep names under =retry= group so =settings.getGroup("retry")= can read them if group typing supports it; otherwise read by path in =AgentSession=.
+
+** DOING Implement fallback/fail-fast retry policy
+:PROPERTIES:
+:CUSTOM_ID: BUG-328-coding-agent-fail-fast-or-switch-fallbac::implement-subagent-usage-limit-policy
+:DEPENDS: BUG-328-coding-agent-fail-fast-or-switch-fallbac::wire-task-depth-into-agent-session BUG-328-coding-agent-fail-fast-or-switch-fallbac::add-retry-settings-schema
+:END:
+- File: =packages/coding-agent/src/session/agent-session.ts=.
+- In =#handleRetryableError=, compute =reason = parseRateLimitReason(baseErrorMessage)= once for usage-limit messages.
+- Preserve existing =markUsageLimitReached(..., { retryAfterMs })= call so auth storage blocks the exhausted credential for the real window.
+- If =switched= is true, keep =delayMs = 0=.
+- If =switched= is false and session is subagent:
+  1. Try configured fallback roles in order with a helper =#trySwitchUsageLimitFallbackModel(roles)=.
+  2. Use =#resolveRoleModel= and =#modelRegistry.getApiKey(candidate, this.sessionId)= or =setModelTemporary(candidate)= to validate.
+  3. On success, set =delayMs = 0= and continue; append a model-change entry via existing =setModelTemporary=.
+  4. If no fallback and =reason= is =QUOTA_EXHAUSTED= or =UNKNOWN=, format the assistant error as final/non-retry and return =false=; include message like “usage limit exhausted; no fallback model role available; not sleeping 30m in subagent”.
+  5. If no fallback and reason is transient, set =delayMs = Math.min(delayMs, retrySettings.subagentUsageLimitMaxDelayMs)=.
+- Top-level sessions must not use subagent fail-fast/cap unless explicitly in future work.
+
+** DOING Verify subagent runtime retry behavior
+:PROPERTIES:
+:CUSTOM_ID: BUG-328-coding-agent-fail-fast-or-switch-fallbac::verify-subagent-usage-limit-policy
+:DEPENDS: BUG-328-coding-agent-fail-fast-or-switch-fallbac::implement-subagent-usage-limit-policy
+:END:
+- Run focused tests listed in Tests.
+- Inspect failures for timing flakiness; keep sleeps tiny in tests through settings and avoid real 30m timers.
+- Run =bun check:ts= after the dependent classifier item is applied.
+
+* Edge Cases
+- A fallback role may be unset; skip silently with debug-level logging only.
+- A fallback role may resolve to the same model as the current one; skip to avoid retrying the blocked credential/model pair.
+- A fallback role may resolve to a model with no API key; skip and try the next role.
+- Credential rotation may succeed for the same provider; in that case do not switch model.
+- If a provider sends real =retry-after= for a transient rate limit in a subagent and it exceeds 60s, cap to the configured max.
+- If a provider sends real reset time for quota exhaustion, still pass it to =markUsageLimitReached= for credential blocking, but do not sleep it in subagents.
+- Abort during any short sleep must preserve existing retry cancellation behavior.
+- Do not leak API keys in errors, events, or logs.
+
+* Acceptance Criteria
+- No subagent can sleep for 30 minutes solely because of a usage-limit/quota error.
+- Kimi-like 429 =rate_limit_error= in subagents becomes short retry or fallback, not 30m sleep.
+- Kimi-like billing-cycle/quota exhaustion in subagents rotates credential, then fallback model, then fails fast if neither is available.
+- Fallback model selection is role-based and configurable, not arbitrary.
+- Top-level interactive sessions preserve existing long-wait behavior unless a future setting changes it.
+- Focused tests pass and final =bun check:ts= passes.
+
+NOTE [2026-04-28]: Implemented and verified subagent usage-limit fallback/fail-fast policy. Focused regression tests passed: 8 pass, 0 fail; `bun check:ts` passed.

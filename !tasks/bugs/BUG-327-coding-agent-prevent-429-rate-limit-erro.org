@@ -1,0 +1,107 @@
+#+TITLE: [coding-agent] Prevent 429 rate_limit_error from becoming 30 minute quota sleep
+#+STATE: DONE
+#+SESSION_ID: 14ccb5579fdc3f2c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T19-45-29-727Z_14ccb5579fdc3f2c.jsonl]]
+#+CUSTOM_ID: BUG-327-coding-agent-prevent-429-rate-limit-erro
+#+layer: reliability
+
+* Initial Message
+
+429 errors have a 30m retry window!!!! in /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-04-28T14-14-29-054Z_14cc69946fb52683.jsonl
+ ID: 14cc69946fb52683
+
+for example. plz explain
+
+#+LAYER: reliability
+#+PRIORITY: #A
+
+* Intention & Purpose
+Stop provider 429 responses with structured =rate_limit_error= / =rate_limit_exceeded= semantics from being classified as long quota exhaustion. The concrete incident is session =14cc69946fb52683=: wave-5 child logs =37-W5ToolKbProofsDock.jsonl= and =38-W5DeleteDeadRuntime.jsonl= recorded Kimi =429 rate_limit_error= usage-limit responses, while earlier wave-2 child logs show attempt 1 around 15:09 and attempt 2 around 15:39. The current classifier let those errors enter the 30 minute quota path.
+
+Purpose: make the reason classifier precise enough that transient/per-period 429s use short retry semantics, while true quota/billing-cycle messages remain quota exhaustion for credential blocking and fail-fast handling by the coding-agent layer.
+
+* Context & Narrative
+Current evidence:
+- =packages/ai/src/rate-limit-utils.ts= defines =parseRateLimitReason(errorMessage: string): RateLimitReason= and =calculateRateLimitBackoffMs(reason: RateLimitReason): number=.
+- The parser currently detects =rate limit= with a literal space but not =rate_limit_error= or =rate_limit_exceeded=.
+- The parser then sees =quota= in provider prose like “Your quota will be refreshed...” and classifies the whole response as =QUOTA_EXHAUSTED=.
+- =calculateRateLimitBackoffMs("QUOTA_EXHAUSTED")= returns =30 * 60 * 1000=.
+- Tests already exist in =packages/ai/test/rate-limit-utils.test.ts= for quota, too-many-requests, per-minute, model capacity, server error, and unknown.
+
+This item defines the lower-level classification contract. It does not decide whether subagents should sleep, switch model, or fail fast; that runtime policy is handled by the dependent coding-agent item.
+
+* Scope
+In scope:
+- Update =parseRateLimitReason= so explicit provider error codes/tokens =rate_limit_error=, =rate_limit_exceeded=, =rate-limit=, =rate_limit=, and “too many requests” classify as =RATE_LIMIT_EXCEEDED= even if surrounding prose mentions quota reset.
+- Preserve true quota exhaustion classification for billing-cycle/usage-quota phrases that do not carry an explicit rate-limit error code.
+- Add tests for Kimi-like 429 payload strings and for billing-cycle 403 permission errors.
+- Keep existing backoff constants unchanged: =QUOTA_EXHAUSTED= remains 30m for callers that intentionally use it; =RATE_LIMIT_EXCEEDED= remains 30s.
+
+Out of scope:
+- No AgentSession retry policy changes here.
+- No task/subagent fallback behavior here.
+- No provider-specific Kimi module work unless needed for the generic parser test.
+
+* Existing Patterns
+- File: =packages/ai/src/rate-limit-utils.ts=
+  - =export type RateLimitReason = "QUOTA_EXHAUSTED" | "RATE_LIMIT_EXCEEDED" | "MODEL_CAPACITY_EXHAUSTED" | "SERVER_ERROR" | "UNKNOWN"=.
+  - =parseRateLimitReason(errorMessage: string): RateLimitReason= uses ordered string checks.
+  - =calculateRateLimitBackoffMs(reason: RateLimitReason): number= maps reason to fixed delay.
+- File: =packages/ai/test/rate-limit-utils.test.ts=
+  - Bun test assertions import from =@oh-my-pi/pi-ai/rate-limit-utils=.
+  - Existing tests assert exact classifications and exact delay constants.
+
+* Tests
+Enumerate workflows first:
+1. Kimi 429 =rate_limit_error= payload with “usage limit for this period” and “quota will be refreshed” classifies as =RATE_LIMIT_EXCEEDED=.
+2. Snake-case =rate_limit_exceeded= and hyphenated =rate-limit exceeded= classify as =RATE_LIMIT_EXCEEDED=.
+3. Kimi 403 =permission_error= billing-cycle usage limit with quota refresh/upgrade prose remains =QUOTA_EXHAUSTED=.
+4. Existing Google quota/resource exhaustion tests remain unchanged.
+5. Existing =RATE_LIMIT_EXCEEDED= backoff remains 30s; =QUOTA_EXHAUSTED= remains 30m.
+
+Verification command:
+- =bun test packages/ai/test/rate-limit-utils.test.ts=
+
+* Implementation
+** DOING Write classifier regression tests first
+:PROPERTIES:
+:CUSTOM_ID: BUG-327-coding-agent-prevent-429-rate-limit-erro::write-rate-limit-classifier-tests
+:END:
+- File: =packages/ai/test/rate-limit-utils.test.ts=
+- Add tests for workflows 1-3 above before modifying source.
+- Use exact provider-like strings from the incident:
+  - =429 {"error":{"type":"rate_limit_error","message":"You've reached your usage limit for this period. Your quota will be refreshed in the next period."},"type":"error"}=
+  - =403 {"error":{"type":"permission_error","message":"You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle."},"type":"error"}=
+
+** DOING Implement explicit rate-limit token classification
+:PROPERTIES:
+:CUSTOM_ID: BUG-327-coding-agent-prevent-429-rate-limit-erro::implement-rate-limit-token-classification
+:DEPENDS: BUG-327-coding-agent-prevent-429-rate-limit-erro::write-rate-limit-classifier-tests
+:END:
+- File: =packages/ai/src/rate-limit-utils.ts=
+- Add a clear helper or regex near =parseRateLimitReason= for explicit rate-limit tokens, e.g. =/rate[ _-]?limit(?:[ _-]?(?:error|exceeded))?/i= plus existing “too many requests” and “per minute”.
+- Keep model capacity priority before rate limits as currently documented.
+- Keep quota detection after rate-limit detection.
+- Do not change exported type names.
+
+** DOING Verify lower-level contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-327-coding-agent-prevent-429-rate-limit-erro::verify-rate-limit-classifier
+:DEPENDS: BUG-327-coding-agent-prevent-429-rate-limit-erro::implement-rate-limit-token-classification
+:END:
+- Run =bun test packages/ai/test/rate-limit-utils.test.ts=.
+- If a wider package command is needed, run =bun check:ts= after dependent coding-agent item is complete, not inside this isolated item unless requested by the implementing agent.
+
+* Edge Cases
+- Error strings may be JSON text, plain text, provider wrapper text, or mixed prefixes like =Cloud Code Assist API error (429): ...=.
+- The token =rate_limit_error= must not be missed because of underscore.
+- Strings containing both =rate_limit_error= and =quota= should use rate-limit semantics; strings with only =quota= or billing-cycle usage limit remain quota semantics.
+- Do not make =resource exhausted= less transient than existing behavior; existing tests define that exact phrase as model capacity, while “Resource has been exhausted (e.g. check quota)” remains quota.
+
+* Acceptance Criteria
+- Kimi-style 429 =rate_limit_error= no longer maps to =QUOTA_EXHAUSTED=.
+- Billing-cycle permission/quota messages still map to =QUOTA_EXHAUSTED=.
+- Existing tests for =calculateRateLimitBackoffMs= still pass unchanged.
+- =bun test packages/ai/test/rate-limit-utils.test.ts= passes.
+
+NOTE [2026-04-28]: Implemented and verified classifier contract. `bun test packages/ai/test/rate-limit-utils.test.ts` passed: 16 pass, 0 fail.
