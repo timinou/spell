@@ -55,6 +55,7 @@ describe("manifest type guards", () => {
 						},
 					],
 				]),
+				templates: new Map(),
 				exportTargets: [],
 				notificationRoutes: [],
 				reviewPolicies: [],

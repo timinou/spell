@@ -11,6 +11,17 @@ export interface SpellServerConfig {
 	socket?: {
 		path: string;
 	};
+	web?: WebConfig;
+}
+
+/**
+ * Web frontend authentication subsystem. Multiple named bearer tokens
+ * authenticate human identities (“alice”, “bob” ...) against the same
+ * `/web/*` route surface (HTTP + WebSocket).
+ */
+export interface WebConfig {
+	/** Map of identity name → secret token bytes. */
+	tokens: Map<string, string>;
 }
 
 // -- Voice configuration types --

@@ -1,5 +1,7 @@
 import * as crypto from "node:crypto";
-import type { ServerConfig } from "./types";
+import { logger } from "@oh-my-pi/pi-utils";
+import type { WebConfig } from "../config/types";
+import type { ServerConfig, WebIdentity } from "./types";
 
 function decodeBasicCredentials(value: string): string | null {
 	try {
@@ -54,4 +56,68 @@ export function verifyBearerToken(request: Request, goalName: string, goalTokens
 
 	const token = header.slice(7);
 	return goalTokens[goalName] === token;
+}
+
+function extractPresentedToken(request: Request): { token: string; source: "header" | "query" } | null {
+	const header = request.headers.get("Authorization");
+	if (header?.startsWith("Bearer ")) {
+		const token = header.slice(7).trim();
+		if (token.length > 0) return { token, source: "header" };
+	}
+	try {
+		const url = new URL(request.url);
+		const token = (url.searchParams.get("token") ?? "").trim();
+		if (token.length > 0) return { token, source: "query" };
+	} catch {
+		// fall through
+	}
+	return null;
+}
+
+function constantTimeStringEqual(a: string, b: string): boolean {
+	const aBuf = Buffer.from(a, "utf8");
+	const bBuf = Buffer.from(b, "utf8");
+	// timingSafeEqual requires equal-length inputs; we still want timing parity
+	// across length mismatches by performing a dummy compare against a same-length copy.
+	if (aBuf.length !== bBuf.length) {
+		crypto.timingSafeEqual(aBuf, Buffer.alloc(aBuf.length));
+		return false;
+	}
+	return crypto.timingSafeEqual(aBuf, bBuf);
+}
+
+/**
+ * Verify a /web/* request against the configured token set.
+ *
+ * Token can be presented in two ways:
+ *   - `Authorization: Bearer <secret>` (preferred for XHR/fetch).
+ *   - `?token=<secret>` query string (used on the WebSocket upgrade because
+ *     browsers cannot set custom headers on `new WebSocket()`).
+ *
+ * On match returns `{ name }`. Identical secrets across two names: both kept;
+ * verifyWebToken returns the first match in alphabetical name order to keep
+ * behavior deterministic.
+ */
+export function verifyWebToken(request: Request, web: WebConfig | undefined): WebIdentity | null {
+	const presented = extractPresentedToken(request);
+	if (!presented) return null;
+	if (!web) {
+		logger.debug("web token presented but subsystem disabled", { source: presented.source });
+		return null;
+	}
+	const names = [...web.tokens.keys()].sort();
+	let match: WebIdentity | null = null;
+	for (const name of names) {
+		const secret = web.tokens.get(name);
+		if (secret === undefined) continue;
+		if (constantTimeStringEqual(presented.token, secret)) {
+			if (match === null) match = { name };
+		}
+	}
+	if (match) {
+		logger.debug("web token accepted", { name: match.name, source: presented.source });
+		return match;
+	}
+	logger.warn("web token rejected", { source: presented.source });
+	return null;
 }

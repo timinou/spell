@@ -3,7 +3,12 @@ import * as net from "node:net";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { SocketSessionRegistry } from "./session-registry";
-import { isSocketClientMessage, type RegisteredSocketServerMessage, type RegisterSocketClientMessage } from "./types";
+import {
+	isEventLogEntry,
+	isSocketClientMessage,
+	type RegisteredSocketServerMessage,
+	type RegisterSocketClientMessage,
+} from "./types";
 
 const SOCKET_CLEANUP_INTERVAL_MS = 60_000;
 const SERVER_VERSION = process.env.npm_package_version ?? "0.1.0";
@@ -58,7 +63,7 @@ export class SocketServer {
 		this.#server = null;
 		if (server) {
 			for (const entry of this.#registry.getActive()) {
-				entry.connection.destroy();
+				entry.connection?.destroy();
 			}
 			const closeDeferred = Promise.withResolvers<void>();
 			server.close(error => {
@@ -148,6 +153,13 @@ export class SocketServer {
 			case "event_resolved":
 				if (sessionId) {
 					this.#registry.clearBlockingEvent(sessionId);
+				}
+				return sessionId;
+			case "event_log":
+				if (sessionId && isEventLogEntry(parsed.entry)) {
+					this.#registry.appendEventLog(sessionId, parsed.entry);
+				} else if (sessionId) {
+					logger.warn("Skipping malformed event_log entry", { sessionId });
 				}
 				return sessionId;
 			default:

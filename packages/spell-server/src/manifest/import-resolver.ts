@@ -26,6 +26,7 @@ import {
 	type StateConfig,
 	type StateSchema,
 	type SyncCollection,
+	type Template,
 	type ToolModule,
 } from "./types";
 import { validateManifest } from "./validator";
@@ -40,6 +41,7 @@ interface ResolvedManifestModule {
 	version?: string;
 	setups: Map<string, ManifestSetup>;
 	goals: Map<string, ManifestGoal>;
+	templates: Map<string, Template>;
 	exportTargets: ExportTarget[];
 	notificationRoutes: NotificationRoute[];
 	reviewPolicies: ReviewPolicy[];
@@ -293,6 +295,22 @@ function prefixSetupSymbols(alias: string, symbols: Map<string, ManifestSetup>):
 	return prefixed;
 }
 
+function prefixTemplateSymbols(
+	alias: string,
+	templates: Map<string, Template>,
+	setups: Map<string, ManifestSetup>,
+): Map<string, Template> {
+	const prefixed = new Map<string, Template>();
+	for (const [name, template] of templates) {
+		const clone = structuredClone(template);
+		if (setups.has(template.setupRef)) {
+			clone.setupRef = `${alias}.${template.setupRef}`;
+		}
+		prefixed.set(`${alias}.${name}`, clone);
+	}
+	return prefixed;
+}
+
 function prefixGoalSymbols(
 	alias: string,
 	goals: Map<string, ManifestGoal>,
@@ -375,6 +393,7 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 			version: cached.version,
 			setups: cloneMap(cached.setups),
 			goals: cloneMap(cached.goals),
+			templates: cloneMap(cached.templates),
 			exportTargets: cloneArray(cached.exportTargets),
 			notificationRoutes: cloneArray(cached.notificationRoutes),
 			reviewPolicies: cloneArray(cached.reviewPolicies),
@@ -406,6 +425,7 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 
 	const setups = new Map<string, ManifestSetup>();
 	const goals = new Map<string, ManifestGoal>();
+	const templates = new Map<string, Template>();
 	const exportTargets: ExportTarget[] = [];
 	const notificationRoutes: NotificationRoute[] = [];
 	const reviewPolicies: ReviewPolicy[] = [];
@@ -436,6 +456,11 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 			goals,
 			prefixGoalSymbols(manifestImport.alias, imported.goals, imported.setups),
 			name => `Imported goal collision for ${name}`,
+		);
+		mergePrefixedSymbols(
+			templates,
+			prefixTemplateSymbols(manifestImport.alias, imported.templates, imported.setups),
+			name => `Imported template collision for ${name}`,
 		);
 		appendPrefixedItems(
 			exportTargets,
@@ -491,6 +516,7 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 
 	mergePrefixedSymbols(setups, manifestModule.setups, name => `Duplicate setup "${name}"`);
 	mergePrefixedSymbols(goals, manifestModule.goals, name => `Duplicate goal "${name}"`);
+	mergePrefixedSymbols(templates, manifestModule.templates, name => `Duplicate template "${name}"`);
 	appendItems(exportTargets, manifestModule.exportTargets, id => `Duplicate export-target "${id}"`);
 	appendItems(notificationRoutes, manifestModule.notificationRoutes, id => `Duplicate notification-route "${id}"`);
 	appendItems(reviewPolicies, manifestModule.reviewPolicies, id => `Duplicate review-policy "${id}"`);
@@ -533,6 +559,7 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 		version: manifestModule.version,
 		setups,
 		goals,
+		templates,
 		exportTargets,
 		notificationRoutes,
 		reviewPolicies,
@@ -549,6 +576,7 @@ async function resolveManifestModule(filePath: string, context: ResolveContext):
 		version: resolved.version,
 		setups: cloneMap(resolved.setups),
 		goals: cloneMap(resolved.goals),
+		templates: cloneMap(resolved.templates),
 		exportTargets: cloneArray(resolved.exportTargets),
 		notificationRoutes: cloneArray(resolved.notificationRoutes),
 		reviewPolicies: cloneArray(resolved.reviewPolicies),
@@ -585,6 +613,7 @@ export async function loadManifestFromFile(
 		version: resolved.version,
 		setups: resolved.setups,
 		goals: resolved.goals,
+		templates: resolved.templates,
 		exportTargets: resolved.exportTargets,
 		notificationRoutes: resolved.notificationRoutes,
 		reviewPolicies: resolved.reviewPolicies,

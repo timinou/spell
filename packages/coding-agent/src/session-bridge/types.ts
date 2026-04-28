@@ -91,12 +91,37 @@ export interface EventResolvedSocketClientMessage extends SocketMessageBase {
 	eventId: string;
 }
 
+export type EventLogEntryKind = "turn_start" | "turn_end" | "tool_call" | "assistant_text" | "plan_decision" | "error";
+
+export const EVENT_LOG_ENTRY_KINDS: ReadonlySet<EventLogEntryKind> = new Set([
+	"turn_start",
+	"turn_end",
+	"tool_call",
+	"assistant_text",
+	"plan_decision",
+	"error",
+]);
+
+export interface EventLogEntry {
+	kind: EventLogEntryKind;
+	ts: number;
+	text?: string;
+	toolName?: string;
+	meta?: Record<string, string | number | boolean>;
+}
+
+export interface EventLogSocketClientMessage extends SocketMessageBase {
+	type: "event_log";
+	entry: EventLogEntry;
+}
+
 export type SocketClientMessage =
 	| RegisterSocketClientMessage
 	| DeregisterSocketClientMessage
 	| BlockingEventSocketClientMessage
 	| HeartbeatSocketClientMessage
-	| EventResolvedSocketClientMessage;
+	| EventResolvedSocketClientMessage
+	| EventLogSocketClientMessage;
 
 export interface RegisteredSocketServerMessage extends SocketMessageBase {
 	type: "registered";

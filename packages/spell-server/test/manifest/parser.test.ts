@@ -13,6 +13,7 @@ function normalizeManifest(manifest: AutonomyManifest) {
 		version: manifest.version,
 		setups: [...manifest.setups.entries()],
 		goals: [...manifest.goals.entries()],
+		templates: [...manifest.templates.entries()],
 		exportTargets: manifest.exportTargets,
 		notificationRoutes: manifest.notificationRoutes,
 		reviewPolicies: manifest.reviewPolicies,

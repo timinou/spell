@@ -11,6 +11,7 @@ import type {
 	ManifestHookConfig,
 	ManifestSetup,
 	NamedStateStore,
+	Template,
 	NotificationRoute,
 	OperatorAction,
 	Panel,
@@ -410,6 +411,43 @@ function createOperatorActionNode(action: OperatorAction): Node {
 	return node;
 }
 
+function createTemplateNode(name: string, template: Template): Node {
+	const node = createNode("template");
+	node.addArgument(name);
+	node.children = new Document();
+	if (template.description !== undefined) {
+		const d = createNode("description");
+		d.addArgument(template.description);
+		node.children.appendNode(d);
+	}
+	const setupNode = createNode("setup");
+	setupNode.addArgument(template.setupRef);
+	node.children.appendNode(setupNode);
+	if (template.mode !== undefined) {
+		const modeNode = createNode("mode");
+		modeNode.addArgument(template.mode);
+		node.children.appendNode(modeNode);
+	}
+	const promptNode = createNode("prompt");
+	promptNode.addArgument(template.prompt);
+	node.children.appendNode(promptNode);
+	for (const param of template.params) {
+		const paramNode = createNode("param");
+		paramNode.addArgument(param.name);
+		paramNode.setProperty("type", param.type);
+		if (param.required !== undefined) paramNode.setProperty("required", param.required);
+		node.children.appendNode(paramNode);
+	}
+	if (template.artifactWatch && template.artifactWatch.ext.length > 0) {
+		// Properties cannot repeat the same key in KDL serialization;
+		// emit positional args which the parser also accepts.
+		const watchNode = createNode("artifact-watch");
+		for (const ext of template.artifactWatch.ext) watchNode.addArgument(ext);
+		node.children.appendNode(watchNode);
+	}
+	return node;
+}
+
 export function serializeManifestKdl(manifest: AutonomyManifest): string {
 	const document = new Document();
 	const nameNode = createNode("name");
@@ -423,6 +461,9 @@ export function serializeManifestKdl(manifest: AutonomyManifest): string {
 	}
 	for (const [name, goal] of manifest.goals) {
 		document.appendNode(createGoalNode(name, goal));
+	}
+	for (const [name, template] of manifest.templates) {
+		document.appendNode(createTemplateNode(name, template));
 	}
 	for (const target of manifest.exportTargets) document.appendNode(createExportTargetNode(target));
 	for (const route of manifest.notificationRoutes) document.appendNode(createNotificationRouteNode(route));

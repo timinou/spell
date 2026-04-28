@@ -32,6 +32,9 @@ import {
 	type ManifestOverrideStrategy,
 	type ManifestSetup,
 	type ManifestSetupPatch,
+	type ManifestTemplateArtifactWatch,
+	type ManifestTemplateParam,
+	type ManifestTemplateParamType,
 	type NamedStateStore,
 	type NotificationRoute,
 	type OperatorAction,
@@ -53,6 +56,7 @@ import {
 	type StateSchemaTable,
 	type StateSchemaTableColumn,
 	type SyncCollection,
+	type Template,
 	type TelegramHook,
 	type ToolModule,
 	type WebhookHook,
@@ -64,6 +68,108 @@ export interface ParseManifestOptions {
 	filePath?: string;
 	env?: Record<string, string | undefined>;
 	registry?: ActionRegistry;
+}
+
+const TEMPLATE_PARAM_TYPES = new Set<ManifestTemplateParamType>(["string", "number", "boolean"]);
+const TEMPLATE_MODES = new Set<NonNullable<Template["mode"]>>(["rpc"]);
+const ARTIFACT_EXT_PATTERN = /^\.[a-z0-9]+$/;
+
+function parseTemplateNode(node: Node, pathLabel: string, options: ParseManifestOptions): Template {
+	const name = expectStringArgument(node, `${pathLabel}.name`, 0, options);
+	validateSymbolName(name, `${pathLabel}.name`);
+	let description: string | undefined;
+	let setupRef: string | undefined;
+	let mode: Template["mode"];
+	let prompt: string | undefined;
+	const params: ManifestTemplateParam[] = [];
+	const seenParams = new Set<string>();
+	let artifactWatch: ManifestTemplateArtifactWatch | undefined;
+
+	for (const child of node.children?.nodes ?? []) {
+		const childName = child.getName();
+		if (childName === "description") {
+			description = expectStringArgument(child, `${pathLabel}.description`, 0, options);
+			continue;
+		}
+		if (childName === "setup") {
+			setupRef = expectStringArgument(child, `${pathLabel}.setup`, 0, options);
+			continue;
+		}
+		if (childName === "mode") {
+			const raw = expectStringArgument(child, `${pathLabel}.mode`, 0, options);
+			if (!TEMPLATE_MODES.has(raw as Template["mode"] & string)) {
+				throw new Error(`${pathLabel}.mode must be one of: ${[...TEMPLATE_MODES].join(", ")}`);
+			}
+			mode = raw as Template["mode"];
+			continue;
+		}
+		if (childName === "prompt") {
+			prompt = expectStringArgument(child, `${pathLabel}.prompt`, 0, options);
+			continue;
+		}
+		if (childName === "param") {
+			const paramName = expectStringArgument(child, `${pathLabel}.param.name`, 0, options);
+			if (seenParams.has(paramName)) {
+				throw new Error(`${pathLabel}.param duplicate name '${paramName}'`);
+			}
+			seenParams.add(paramName);
+			const typeValue = resolveOptionalStringProperty(child, "type", `${pathLabel}.param.${paramName}`, options);
+			if (!typeValue) {
+				throw new Error(`${pathLabel}.param.${paramName}.type is required`);
+			}
+			if (!TEMPLATE_PARAM_TYPES.has(typeValue as ManifestTemplateParamType)) {
+				throw new Error(
+					`${pathLabel}.param.${paramName}.type must be one of: ${[...TEMPLATE_PARAM_TYPES].join(", ")}`,
+				);
+			}
+			const required = resolveOptionalBooleanProperty(child, "required", `${pathLabel}.param.${paramName}`, options);
+			params.push({
+				name: paramName,
+				type: typeValue as ManifestTemplateParamType,
+				...(required !== undefined ? { required } : {}),
+			});
+			continue;
+		}
+		if (childName === "artifact-watch") {
+			const props = child.getProperties();
+			const rawExts: string[] = [];
+			for (const [key, value] of props.entries()) {
+				if (key !== "ext") continue;
+				rawExts.push(resolveEnvIfNeeded<string>(value, "string", `${pathLabel}.artifact-watch.ext`, options.env));
+			}
+			// Also accept positional args as ext entries (e.g. `artifact-watch ".pdf" ".png"`).
+			const args = parseStringArguments(child, `${pathLabel}.artifact-watch`, options);
+			for (const arg of args) rawExts.push(arg);
+			const ext = rawExts.map(value => value.toLowerCase());
+			if (ext.length === 0) {
+				throw new Error(`${pathLabel}.artifact-watch requires at least one ext`);
+			}
+			for (const value of ext) {
+				if (!ARTIFACT_EXT_PATTERN.test(value)) {
+					throw new Error(`${pathLabel}.artifact-watch.ext '${value}' must match /^\\.[a-z0-9]+$/`);
+				}
+			}
+			artifactWatch = { ext };
+			continue;
+		}
+		throw new Error(`Unsupported child node '${childName}' inside ${pathLabel}`);
+	}
+
+	if (!setupRef) {
+		throw new Error(`${pathLabel}.setup is required`);
+	}
+	if (prompt === undefined || prompt.length === 0) {
+		throw new Error(`${pathLabel}.prompt is required`);
+	}
+	return {
+		name,
+		...(description !== undefined ? { description } : {}),
+		setupRef,
+		...(mode !== undefined ? { mode } : {}),
+		prompt,
+		params,
+		...(artifactWatch !== undefined ? { artifactWatch } : {}),
+	};
 }
 
 const ACTION_PARAM_TYPES = new Set<ActionParameterType>([
@@ -844,6 +950,7 @@ export function parseManifestModuleDocument(
 	const imports: ManifestImport[] = [];
 	const setups = new Map<string, ManifestSetup>();
 	const goals = new Map<string, ManifestGoal>();
+	const templates = new Map<string, Template>();
 	const overrides: ManifestOverride[] = [];
 	const actionDescriptors: ActionDescriptor[] = [];
 	const exportTargets: ExportTarget[] = [];
@@ -891,6 +998,15 @@ export function parseManifestModuleDocument(
 					throw new Error(`Duplicate goal "${goalName}"`);
 				}
 				goals.set(goalName, finalizeGoal(parseGoalPatch(node, `goals.${goalName}`, options), `goals.${goalName}`));
+				continue;
+			}
+			if (nodeName === "template") {
+				const templateName = expectStringArgument(node, "template.name", 0, options);
+				validateSymbolName(templateName, "template.name");
+				if (templates.has(templateName)) {
+					throw new Error(`Duplicate template "${templateName}"`);
+				}
+				templates.set(templateName, parseTemplateNode(node, `templates.${templateName}`, options));
 				continue;
 			}
 			if (nodeName === "override") {
@@ -969,6 +1085,7 @@ export function parseManifestModuleDocument(
 		imports,
 		setups,
 		goals,
+		templates,
 		overrides,
 		actionDescriptors,
 		exportTargets,
@@ -996,6 +1113,7 @@ function hydrateManifest(manifestModule: ParsedManifestModule): AutonomyManifest
 		version: manifestModule.version,
 		setups: manifestModule.setups,
 		goals: manifestModule.goals,
+		templates: manifestModule.templates,
 		exportTargets: manifestModule.exportTargets,
 		notificationRoutes: manifestModule.notificationRoutes,
 		reviewPolicies: manifestModule.reviewPolicies,
