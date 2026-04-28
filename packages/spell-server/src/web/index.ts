@@ -1,4 +1,5 @@
 export * from "./artifacts/router";
+export * from "./assets/loader";
 export * from "./artifacts/signed-url";
 export * from "./artifacts/signing-key";
 export * from "./artifacts/types";
