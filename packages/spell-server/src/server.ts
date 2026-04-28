@@ -20,6 +20,13 @@ import { SessionManager } from "./session/session-manager";
 import { SocketServer, SocketSessionRegistry } from "./socket";
 import { StateStoreManager } from "./state/store-manager";
 import { TelegramBotService, type TelegramBotServiceOptions } from "./telegram/service";
+import { ArtifactWatcher } from "./web/artifacts/watcher";
+import { deriveSigningKey } from "./web/artifacts/signing-key";
+import { fallbackPlaceholderResponse, loadWebAssets } from "./web/assets/loader";
+import { WebSpawnedLifecycle } from "./web/session/spawned-lifecycle";
+import { WebSessionHub } from "./web/session/web-session-hub";
+import { TemplateRunner } from "./web/templates/runner";
+import { WebSubsystem } from "./web/ws/server";
 import { WorkflowEngine } from "./workflow";
 import { generateOperatorActionHandler } from "./workflow/operator-action-generator";
 
@@ -136,6 +143,57 @@ export async function startSpellServer(
 		(config.manifest.operatorActions.length > 0
 			? generateOperatorActionHandler(config.manifest.operatorActions, workflowEngine)
 			: await loadProjectOperatorActionHandler(cwd));
+	let sessionRegistry: SocketSessionRegistry | undefined;
+	let socketServer: SocketServer | undefined;
+	if (config.server.socket) {
+		sessionRegistry = new SocketSessionRegistry();
+		socketServer = new SocketServer(config.server.socket.path, sessionRegistry);
+		await socketServer.start();
+	}
+
+	let webSubsystem: WebSubsystem | undefined;
+	let webAssetServer: ((request: Request) => Promise<Response | null> | Response | null) | undefined;
+	let webHub: WebSessionHub | undefined;
+	let webWatcher: ArtifactWatcher | undefined;
+	let artifactDeps: import("./web/artifacts/types").ArtifactRequestDeps | undefined;
+	if (config.server.web) {
+		const registry = sessionRegistry ?? new SocketSessionRegistry();
+		sessionRegistry = registry;
+		const webSessionManager = new SessionManager<string>({
+			lifecycle: new WebSpawnedLifecycle(),
+			keyToString: key => key,
+		});
+		webHub = new WebSessionHub({ sessionManager: webSessionManager, registry });
+		webWatcher = new ArtifactWatcher();
+		const signingKey = deriveSigningKey(config.server);
+		artifactDeps = {
+			sessionRoots: id => webHub?.getSessionRoot(id),
+			web: config.server.web,
+			signingKey,
+		};
+		const templateRunner = new TemplateRunner({ manifest: config.manifest, hub: webHub, cwd });
+		webSubsystem = new WebSubsystem({
+			server: config.server,
+			signingKey,
+			registry,
+			hub: webHub,
+			watcher: webWatcher,
+			templateRunner,
+			manifest: config.manifest,
+		});
+		const distDir = resolveSpellWebDist(cwd);
+		try {
+			const loaded = await loadWebAssets(distDir);
+			webAssetServer = loaded.handle;
+		} catch (error) {
+			logger.warn("web frontend bundle missing", { distDir, error: String(error) });
+			webAssetServer = async req =>
+				req.url.includes("/web/api/") || req.url.includes("/web/artifacts/") || req.url.includes("/web/ws")
+					? null
+					: fallbackPlaceholderResponse();
+		}
+	}
+
 	const startHttpServerImpl = dependencies.startHttpServer ?? startHttpServer;
 	const httpServer = startHttpServerImpl({
 		executor,
@@ -151,14 +209,10 @@ export async function startSpellServer(
 		operatorActionHandler,
 		stateStoreManager,
 		workflowEngine,
+		web: webSubsystem,
+		webAssetServer,
+		artifactDeps,
 	});
-	let sessionRegistry: SocketSessionRegistry | undefined;
-	let socketServer: SocketServer | undefined;
-	if (config.server.socket) {
-		sessionRegistry = new SocketSessionRegistry();
-		socketServer = new SocketServer(config.server.socket.path, sessionRegistry);
-		await socketServer.start();
-	}
 
 	const createTelegramBotService =
 		dependencies.createTelegramBotService ?? (options => new TelegramBotService(options));
@@ -200,6 +254,8 @@ export async function startSpellServer(
 				if (telegramBot) {
 					await telegramBot.stop();
 				}
+				webHub?.stop();
+				webWatcher?.stop();
 
 				const inflightGoals = executor.getInflightGoalNames();
 				if (inflightGoals.length > 0) {
@@ -233,6 +289,14 @@ export async function startSpellServer(
 		await Promise.allSettled(cleanupTasks);
 		throw error;
 	}
+}
+
+function resolveSpellWebDist(cwd: string): string {
+	// Prefer the package's own bundled dist (works whether spell-server is
+	// installed via the monorepo or as a symlinked dependency); fall back to
+	// the workspace layout when running directly from the repo root.
+	const pkgRelative = join(import.meta.dir, "..", "web", "dist");
+	return pkgRelative ?? join(cwd, "packages/spell-server/web/dist");
 }
 
 function parseDurationToMs(value: string | undefined): number {

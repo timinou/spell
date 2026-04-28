@@ -22,14 +22,16 @@
 	"scripts": {
 		"check": "tsgo -p tsconfig.json",
 		"test": "bun test",
-		"start": "bun run src/main.ts"
+		"start": "bun run src/main.ts",
+		"build:web": "cd web && (bun install --frozen-lockfile || bun install) && bun run build"
 	},
 	"dependencies": {
 		"@bgotink/kdl": "^0.4",
+		"@oh-my-pi/pi-utils": "workspace:*",
 		"croner": "^9.0",
 		"grammy": "^1.35",
-		"qrcode": "^1.5",
-		"@oh-my-pi/pi-utils": "workspace:*",
+		"handlebars": "4.7.9",
+		"qrcode": "^1.5"
 	},
 	"devDependencies": {
 		"@types/bun": "^1.3",
