@@ -36,11 +36,7 @@ export class ParamCoercionError extends Error {
 
 export type CoercedParamValue = string | number | boolean;
 
-function coerceOne(
-	param: ManifestTemplateParam,
-	raw: unknown,
-	templateName: string,
-): CoercedParamValue {
+function coerceOne(param: ManifestTemplateParam, raw: unknown, templateName: string): CoercedParamValue {
 	switch (param.type) {
 		case "string": {
 			if (typeof raw === "string") return raw;

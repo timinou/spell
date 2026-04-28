@@ -42,6 +42,7 @@ describe("session event callback data encoding", () => {
 describe("formatBlockingEventNotification", () => {
 	const entry = {
 		sessionId: "test-session-abc",
+		kind: "external" as const,
 		pid: 12345,
 		cwd: "/home/user/project",
 		mode: "interactive",

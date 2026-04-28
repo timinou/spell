@@ -3,6 +3,9 @@ import type { GoalExecutionController } from "../executor/goal-executor";
 import type { AutonomyManifest } from "../manifest/types";
 import type { GoalScheduler } from "../scheduler/goal-scheduler";
 import type { StateStoreManager } from "../state/store-manager";
+import { handleArtifactsRoute } from "../web/artifacts/router";
+import type { ArtifactRequestDeps } from "../web/artifacts/types";
+import type { WebSubsystem } from "../web/ws/server";
 import type { WorkflowEngine } from "../workflow/engine";
 import { verifyBasicAuth } from "./auth";
 import frontendHtml from "./frontend/index.html" with { type: "text" };
@@ -31,6 +34,9 @@ export interface SpellServerDeps {
 	operatorActionHandler?: OperatorActionHandler;
 	stateStoreManager?: StateStoreManager;
 	workflowEngine?: WorkflowEngine;
+	web?: WebSubsystem;
+	webAssetServer?: (request: Request) => Promise<Response | null> | Response | null;
+	artifactDeps?: ArtifactRequestDeps;
 }
 
 const CORS_HEADERS = {
@@ -187,6 +193,18 @@ export async function handleRequest(request: Request, deps: SpellServerDeps): Pr
 	if (request.method === "OPTIONS") {
 		return withCors(new Response(null, { status: 204 }));
 	}
+	if (deps.artifactDeps && path.startsWith("/web/artifacts/")) {
+		const response = await handleArtifactsRoute(request, deps.artifactDeps);
+		if (response) return withCors(response);
+	}
+	if (deps.web) {
+		const restResponse = await deps.web.handleRest(request);
+		if (restResponse) return withCors(restResponse);
+	}
+	if (deps.webAssetServer && path.startsWith("/web")) {
+		const assetResponse = await deps.webAssetServer(request);
+		if (assetResponse) return withCors(assetResponse);
+	}
 	if ((path === "/" || path === "/index.html") && request.method === "GET") {
 		return withCors(
 			new Response(String(deps.frontendHtml ?? frontendHtml), {
@@ -225,15 +243,26 @@ export async function handleRequest(request: Request, deps: SpellServerDeps): Pr
 	return withCors(Response.json({ error: "Not found" }, { status: 404 }));
 }
 
-export function startHttpServer(deps: SpellServerDeps): { server: Bun.Server<undefined>; stop: () => void } {
-	const server = Bun.serve({
-		port: deps.config.port,
-		fetch(request) {
-			return handleRequest(request, deps).catch(error => {
-				logger.error("HTTP request failed", { path: new URL(request.url).pathname, error: String(error) });
-				return withCors(Response.json({ error: "Internal server error" }, { status: 500 }));
-			});
-		},
-	});
+export function startHttpServer(deps: SpellServerDeps): {
+	server: { port?: number; stop: () => void };
+	stop: () => void;
+} {
+	const webHandler = deps.web?.websocketHandler();
+	const fetcher = (
+		request: Request,
+		srv: { upgrade: (req: Request, opts?: unknown) => boolean },
+	): Promise<Response> | undefined => {
+		if (deps.web?.tryUpgrade(request, srv as never)) return undefined;
+		return handleRequest(request, deps).catch(error => {
+			logger.error("HTTP request failed", { path: new URL(request.url).pathname, error: String(error) });
+			return withCors(Response.json({ error: "Internal server error" }, { status: 500 }));
+		});
+	};
+	// Bun.serve splits its overloads on whether `websocket` is present;
+	// route through `unknown` so callers observe a single uniform surface.
+	const common = { port: deps.config.port, fetch: fetcher } as unknown as Parameters<typeof Bun.serve>[0];
+	const withWs = { ...common, websocket: webHandler } as unknown as Parameters<typeof Bun.serve>[0];
+	const server = (webHandler ? Bun.serve(withWs) : Bun.serve(common)) as unknown as { port: number; stop: () => void };
+	if (deps.web) deps.web.registerFanout();
 	return { server, stop: () => server.stop() };
 }

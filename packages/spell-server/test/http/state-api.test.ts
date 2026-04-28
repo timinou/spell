@@ -64,6 +64,7 @@ function buildManifest(stateStores?: Map<string, NamedStateStore>, stateSchemas?
 		version: "0.0.1",
 		setups: new Map([["default", defaultSetup]]),
 		goals: new Map(),
+		templates: new Map(),
 		exportTargets: [],
 		notificationRoutes: [],
 		reviewPolicies: [],

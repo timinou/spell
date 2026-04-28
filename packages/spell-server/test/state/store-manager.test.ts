@@ -31,6 +31,7 @@ function buildManifest(overrides?: {
 		version: "0.0.1",
 		setups: overrides?.setups ?? new Map(),
 		goals: overrides?.goals ?? new Map(),
+		templates: new Map(),
 		exportTargets: [],
 		notificationRoutes: [],
 		reviewPolicies: [],

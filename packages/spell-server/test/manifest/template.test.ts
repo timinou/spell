@@ -8,9 +8,7 @@ const HEADER = `name "spell-templates"\nversion "1.0"\nsetup "writer" { domain "
 
 describe("template parser", () => {
 	it("parses minimal template (setup + prompt)", () => {
-		const manifest = parseManifestKdl(
-			`${HEADER}template "doc" {\n\tsetup "writer"\n\tprompt "Hello"\n}`,
-		);
+		const manifest = parseManifestKdl(`${HEADER}template "doc" {\n\tsetup "writer"\n\tprompt "Hello"\n}`);
 		const tpl = manifest.templates.get("doc");
 		expect(tpl).toBeDefined();
 		expect(tpl?.setupRef).toBe("writer");
@@ -47,18 +45,14 @@ describe("template parser", () => {
 		expect(manifest.templates.get("doc")?.artifactWatch).toEqual({ ext: [".pdf", ".png"] });
 	});
 
-	it("parses explicit mode \"rpc\"", () => {
-		const manifest = parseManifestKdl(
-			`${HEADER}template "doc" {\n\tsetup "writer"\n\tprompt "Hi"\n\tmode "rpc"\n}`,
-		);
+	it('parses explicit mode "rpc"', () => {
+		const manifest = parseManifestKdl(`${HEADER}template "doc" {\n\tsetup "writer"\n\tprompt "Hi"\n\tmode "rpc"\n}`);
 		expect(manifest.templates.get("doc")?.mode).toBe("rpc");
 	});
 
 	it("rejects mode outside the allowed set", () => {
 		expect(() =>
-			parseManifestKdl(
-				`${HEADER}template "doc" {\n\tsetup "writer"\n\tprompt "Hi"\n\tmode "plan"\n}`,
-			),
+			parseManifestKdl(`${HEADER}template "doc" {\n\tsetup "writer"\n\tprompt "Hi"\n\tmode "plan"\n}`),
 		).toThrow(/mode must be one of/);
 	});
 
@@ -79,26 +73,20 @@ describe("template parser", () => {
 	});
 
 	it("rejects empty prompt at validation", () => {
-		expect(() =>
-			parseManifestKdl(
-				`${HEADER}template "doc" {\n\tsetup "writer"\n\tprompt ""\n}`,
-			),
-		).toThrow(/templates\.doc\.prompt|required/);
+		expect(() => parseManifestKdl(`${HEADER}template "doc" {\n\tsetup "writer"\n\tprompt ""\n}`)).toThrow(
+			/templates\.doc\.prompt|required/,
+		);
 	});
 
 	it("rejects unresolved setup ref at validation", () => {
-		expect(() =>
-			parseManifestKdl(
-				`${HEADER}template "doc" {\n\tsetup "missing"\n\tprompt "Hi"\n}`,
-			),
-		).toThrow(/templates\.doc\.setup/);
+		expect(() => parseManifestKdl(`${HEADER}template "doc" {\n\tsetup "missing"\n\tprompt "Hi"\n}`)).toThrow(
+			/templates\.doc\.setup/,
+		);
 	});
 
 	it("rejects artifact-watch ext without leading dot", () => {
 		expect(() =>
-			parseManifestKdl(
-				`${HEADER}template "doc" {\n\tsetup "writer"\n\tprompt "Hi"\n\tartifact-watch "pdf"\n}`,
-			),
+			parseManifestKdl(`${HEADER}template "doc" {\n\tsetup "writer"\n\tprompt "Hi"\n\tartifact-watch "pdf"\n}`),
 		).toThrow(/must match/);
 	});
 
@@ -127,10 +115,7 @@ describe("template parser", () => {
 			`name "tpls"\nversion "1.0"\nsetup "writer" { domain "coding" }\ntemplate "doc" {\n\tsetup "writer"\n\tprompt "Hi"\n}`,
 		);
 		const rootPath = path.join(tmp, "manifest.kdl");
-		await Bun.write(
-			rootPath,
-			`name "root"\nversion "1.0"\nimport "./tpls.kdl" as="x"\n`,
-		);
+		await Bun.write(rootPath, `name "root"\nversion "1.0"\nimport "./tpls.kdl" as="x"\n`);
 		const manifest = await loadManifestFromFile(rootPath);
 		expect(manifest.templates.has("x.doc")).toBe(true);
 		expect(manifest.templates.get("x.doc")?.setupRef).toBe("x.writer");

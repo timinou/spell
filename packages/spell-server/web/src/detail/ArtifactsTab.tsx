@@ -75,7 +75,7 @@ export function ArtifactsTab({ session, mintUrl, loadArtifacts }: Props) {
 						>
 							<div style={{ fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis" }}>{ref.filename}</div>
 							<div className="muted" style={{ fontSize: 11 }}>
-								{ref.agent}/{ref.tool} \u00b7 {(ref.sizeBytes / 1024).toFixed(1)} KiB
+								{ref.agent}/{ref.tool} {"\u00b7"} {(ref.sizeBytes / 1024).toFixed(1)} KiB
 							</div>
 						</div>
 					))}

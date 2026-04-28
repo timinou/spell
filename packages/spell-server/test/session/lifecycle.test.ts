@@ -8,6 +8,7 @@ function emptyManifest(): AutonomyManifest {
 		version: "1.0.0",
 		setups: new Map(),
 		goals: new Map(),
+		templates: new Map(),
 		exportTargets: [],
 		notificationRoutes: [],
 		reviewPolicies: [],

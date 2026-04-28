@@ -9,5 +9,6 @@ export * from "./scheduler";
 export * from "./server";
 export * from "./session";
 export * from "./socket";
+export * from "./web";
 
 export * from "./workflow";

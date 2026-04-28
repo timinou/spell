@@ -44,6 +44,7 @@ export function createManifest(goals: Map<string, ManifestGoal>): AutonomyManife
 		version: "1.0.0",
 		setups: new Map([["default", defaultSetup]]),
 		goals,
+		templates: new Map(),
 		exportTargets: [],
 		notificationRoutes: [],
 		reviewPolicies: [],

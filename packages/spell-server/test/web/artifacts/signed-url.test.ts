@@ -3,7 +3,7 @@ import { mintSignedArtifactUrl, verifySignedUrl } from "../../../src/web/artifac
 
 const KEY = Buffer.from("test-key-bytes-32".padEnd(32, "x"));
 
-function urlFromMint(uri: string, mint: string): string {
+function urlFromMint(_uri: string, mint: string): string {
 	return `http://localhost:8787${mint.startsWith("/") ? mint : `/${mint}`}`;
 }
 

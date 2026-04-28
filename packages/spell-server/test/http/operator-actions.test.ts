@@ -39,6 +39,7 @@ function createManifest(): AutonomyManifest {
 		version: "1.0.0",
 		setups: new Map([["default", defaultSetup]]),
 		goals: new Map([["incoming", webhookGoal]]),
+		templates: new Map(),
 		exportTargets: [],
 		notificationRoutes: [],
 		reviewPolicies: [],

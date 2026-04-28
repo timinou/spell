@@ -138,7 +138,6 @@ describe("SessionBridgeClient emitEventLog", () => {
 	it("drops entries with unknown kinds", async () => {
 		const client = makeClient({ eventLog: true });
 		await client.connect();
-		// biome-ignore lint/suspicious/noExplicitAny: invalid kind on purpose
 		client.emitEventLog({ kind: "garbage" as any, ts: 1 });
 		await Bun.sleep(20);
 		const eventLogLines = bridge.receivedLines.filter(line => line.includes('"event_log"'));
