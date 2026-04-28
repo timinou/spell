@@ -142,6 +142,7 @@ type SettingDef =
 // under `as const` while still letting SettingValue infer the correct element type.
 const EMPTY_STRING_ARRAY: string[] = [];
 const EMPTY_STRING_RECORD: Record<string, string> = {};
+const DEFAULT_SUBAGENT_USAGE_LIMIT_FALLBACK_ROLES: string[] = ["task", "default", "slow", "smol"];
 
 export const SETTINGS_SCHEMA = {
 	// ────────────────────────────────────────────────────────────────────────
@@ -437,6 +438,11 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	"retry.baseDelayMs": { type: "number", default: 2000 },
+	"retry.subagentUsageLimitMaxDelayMs": { type: "number", default: 60_000 },
+	"retry.subagentUsageLimitFallbackRoles": {
+		type: "array",
+		default: DEFAULT_SUBAGENT_USAGE_LIMIT_FALLBACK_ROLES,
+	},
 
 	// ────────────────────────────────────────────────────────────────────────
 	// Interaction
@@ -1886,6 +1892,8 @@ export interface RetrySettings {
 	enabled: boolean;
 	maxRetries: number;
 	baseDelayMs: number;
+	subagentUsageLimitMaxDelayMs: number;
+	subagentUsageLimitFallbackRoles: string[];
 }
 
 export interface MemoriesSettings {

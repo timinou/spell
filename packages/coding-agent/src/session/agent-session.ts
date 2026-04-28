@@ -256,6 +256,8 @@ export interface AgentSessionConfig {
 	toolSession?: { dispose?(): Promise<void> | void };
 	/** Loop orchestration manager for slash commands, tools, and dashboards */
 	loopManager?: LoopManager;
+	/** Task recursion depth; >0 means this session is a delegated subagent. */
+	taskDepth?: number;
 }
 
 /** Options for AgentSession.prompt() */
@@ -442,6 +444,7 @@ export class AgentSession {
 	// Retry state
 	#retryAbortController: AbortController | undefined = undefined;
 	#retryAttempt = 0;
+	#taskDepth = 0;
 	#retryPromise: Promise<void> | undefined = undefined;
 	#retryResolve: (() => void) | undefined = undefined;
 
@@ -534,6 +537,7 @@ export class AgentSession {
 		this.#skillWarnings = config.skillWarnings ?? [];
 		this.#customCommands = config.customCommands ?? [];
 		this.#skillsSettings = config.skillsSettings;
+		this.#taskDepth = config.taskDepth ?? 0;
 		this.#modelRegistry = config.modelRegistry;
 		this.#toolRegistry = config.toolRegistry ?? new Map();
 		this.#transformContext = config.transformContext ?? (messages => messages);
@@ -4909,6 +4913,65 @@ export class AgentSession {
 		// Smart Fallback if no exact headers found
 		return undefined;
 	}
+	#isSubagentSession(): boolean {
+		return this.#taskDepth > 0;
+	}
+
+	#persistAssistantErrorMessage(message: AssistantMessage): void {
+		const persistedAssistant = this.sessionManager
+			.getEntries()
+			.findLast(
+				(entry): entry is SessionMessageEntry & { message: AssistantMessage } =>
+					entry.type === "message" &&
+					entry.message.role === "assistant" &&
+					entry.message.timestamp === message.timestamp,
+			);
+		if (persistedAssistant) {
+			persistedAssistant.message.errorMessage = message.errorMessage;
+		}
+	}
+
+	async #trySwitchUsageLimitFallbackModel(roleNames: string[]): Promise<Model | undefined> {
+		const currentModel = this.model;
+		if (!currentModel) return undefined;
+
+		const availableModels = this.#modelRegistry.getAvailable();
+		const seen = new Set<string>();
+		for (const roleName of roleNames) {
+			const role = MODEL_ROLE_IDS.find(candidate => candidate === roleName);
+			if (!role) continue;
+
+			const candidate = this.#resolveRoleModel(role, availableModels, currentModel);
+			if (!candidate) continue;
+
+			const key = this.#getModelKey(candidate);
+			if (seen.has(key)) continue;
+			seen.add(key);
+
+			if (modelsAreEqual(candidate, currentModel)) continue;
+			if (candidate.provider === currentModel.provider) continue;
+
+			const apiKey = await this.#modelRegistry.getApiKey(candidate, this.sessionId);
+			if (!apiKey) continue;
+
+			try {
+				await this.setModelTemporary(candidate);
+				logger.debug("Subagent usage-limit retry switched to fallback model", {
+					from: `${currentModel.provider}/${currentModel.id}`,
+					to: `${candidate.provider}/${candidate.id}`,
+					role,
+				});
+				return candidate;
+			} catch (error) {
+				logger.debug("Subagent usage-limit fallback model switch failed", {
+					model: `${candidate.provider}/${candidate.id}`,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		return undefined;
+	}
 
 	/**
 	 * Handle retryable errors with exponential backoff.
@@ -4971,9 +5034,8 @@ export class AgentSession {
 		let delayMs = retrySettings.baseDelayMs * 2 ** (this.#retryAttempt - 1);
 
 		if (this.model && this.#isUsageLimitErrorMessage(baseErrorMessage)) {
-			const retryAfterMs =
-				this.#parseRetryAfterMsFromError(baseErrorMessage) ??
-				calculateRateLimitBackoffMs(parseRateLimitReason(baseErrorMessage));
+			const reason = parseRateLimitReason(baseErrorMessage);
+			const retryAfterMs = this.#parseRetryAfterMsFromError(baseErrorMessage) ?? calculateRateLimitBackoffMs(reason);
 			const switched = await this.#modelRegistry.authStorage.markUsageLimitReached(
 				this.model.provider,
 				this.sessionId,
@@ -4984,6 +5046,28 @@ export class AgentSession {
 			);
 			if (switched) {
 				delayMs = 0;
+			} else if (this.#isSubagentSession()) {
+				const fallbackModel = await this.#trySwitchUsageLimitFallbackModel(
+					retrySettings.subagentUsageLimitFallbackRoles,
+				);
+				if (fallbackModel) {
+					delayMs = 0;
+				} else if (reason === "QUOTA_EXHAUSTED" || reason === "UNKNOWN") {
+					const finalError = `${errorMessage} usage limit exhausted; no fallback model role available; not sleeping ${retryAfterMs}ms in subagent.`;
+					message.errorMessage = finalError;
+					this.#persistAssistantErrorMessage(message);
+					await this.#emitSessionEvent({
+						type: "auto_retry_end",
+						success: false,
+						attempt: this.#retryAttempt,
+						finalError,
+					});
+					this.#retryAttempt = 0;
+					this.#resolveRetry();
+					return false;
+				} else {
+					delayMs = Math.min(Math.max(delayMs, retryAfterMs), retrySettings.subagentUsageLimitMaxDelayMs);
+				}
 			} else if (retryAfterMs > delayMs) {
 				// No more accounts to switch to — wait out the backoff
 				delayMs = retryAfterMs;

@@ -24,6 +24,28 @@ describe("parseRateLimitReason", () => {
 		expect(parseRateLimitReason("Cloud Code Assist API error (429): Too many requests")).toBe("RATE_LIMIT_EXCEEDED");
 	});
 
+	it("classifies Kimi rate_limit_error quota prose as RATE_LIMIT_EXCEEDED", () => {
+		expect(
+			parseRateLimitReason(
+				'429 {"error":{"type":"rate_limit_error","message":"You\'ve reached your usage limit for this period. Your quota will be refreshed in the next period."},"type":"error"}',
+			),
+		).toBe("RATE_LIMIT_EXCEEDED");
+	});
+
+	it("classifies explicit snake-case and hyphenated rate-limit tokens as RATE_LIMIT_EXCEEDED", () => {
+		expect(parseRateLimitReason('429 {"error":{"type":"rate_limit_exceeded"}}')).toBe("RATE_LIMIT_EXCEEDED");
+		expect(parseRateLimitReason("Cloud provider rate-limit exceeded for this period")).toBe("RATE_LIMIT_EXCEEDED");
+		expect(parseRateLimitReason("Cloud provider rate_limit reached for this period")).toBe("RATE_LIMIT_EXCEEDED");
+	});
+
+	it("classifies Kimi billing-cycle permission quota prose as QUOTA_EXHAUSTED", () => {
+		expect(
+			parseRateLimitReason(
+				'403 {"error":{"type":"permission_error","message":"You\'ve reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle."},"type":"error"}',
+			),
+		).toBe("QUOTA_EXHAUSTED");
+	});
+
 	it("classifies per minute errors as RATE_LIMIT_EXCEEDED", () => {
 		expect(parseRateLimitReason("Requests per minute limit reached")).toBe("RATE_LIMIT_EXCEEDED");
 	});

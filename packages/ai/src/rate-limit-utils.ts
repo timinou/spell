@@ -15,6 +15,7 @@ const RATE_LIMIT_EXCEEDED_BACKOFF_MS = 30 * 1000; // 30s
 const MODEL_CAPACITY_BASE_MS = 45 * 1000; // 45s base
 const MODEL_CAPACITY_JITTER_MS = 30 * 1000; // ±15s
 const SERVER_ERROR_BACKOFF_MS = 20 * 1000; // 20s
+const EXPLICIT_RATE_LIMIT_PATTERN = /rate[ _-]?limit(?:[ _-]?(?:error|exceeded|reached))?/i;
 
 /**
  * Classify a rate-limit error message into a reason category.
@@ -38,7 +39,7 @@ export function parseRateLimitReason(errorMessage: string): RateLimitReason {
 
 	if (
 		lower.includes("per minute") ||
-		lower.includes("rate limit") ||
+		EXPLICIT_RATE_LIMIT_PATTERN.test(errorMessage) ||
 		lower.includes("too many requests") ||
 		lower.includes("presque")
 	) {
