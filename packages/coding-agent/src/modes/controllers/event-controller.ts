@@ -1,5 +1,5 @@
 import { INTENT_FIELD } from "@oh-my-pi/pi-agent-core";
-import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { getAnthropicStreamIdleTimeoutMs, type ImageContent } from "@oh-my-pi/pi-ai";
 import { Loader, TERMINAL, Text } from "@oh-my-pi/pi-tui";
 import { settings } from "../../config/settings";
 import { AssistantMessageComponent } from "../../modes/components/assistant-message";
@@ -14,6 +14,43 @@ import { formatAssistantToolCallFailureMessage } from "../../session/tool-call-d
 import type { ExitPlanModeDetails } from "../../tools";
 import { formatBytes } from "../../tools/render-utils";
 
+export const STREAM_IDLE_STATUS_GRACE_MS = 5_000;
+export const STREAM_IDLE_STATUS_INTERVAL_MS = 5_000;
+
+export type StreamIdlePhase = "thinking" | "response" | "tool call";
+
+export interface StreamIdleStatusSnapshot {
+	phase: StreamIdlePhase;
+	streamStartedAt: number;
+	lastEventAt: number;
+	now: number;
+	timeoutMs?: number;
+}
+
+interface StreamIdleStatusState {
+	phase: StreamIdlePhase;
+	streamStartedAt: number;
+	lastEventAt: number;
+	timeoutMs?: number;
+}
+
+interface AssistantStreamEventHint {
+	assistantMessageEvent?: { type?: string };
+}
+
+function formatSeconds(ms: number): number {
+	return Math.max(0, Math.floor(ms / 1000));
+}
+
+export function formatStreamIdleStatus(snapshot: StreamIdleStatusSnapshot): string {
+	const elapsedSeconds = formatSeconds(snapshot.now - snapshot.streamStartedAt);
+	const idleSeconds = formatSeconds(snapshot.now - snapshot.lastEventAt);
+	const phaseLabel =
+		snapshot.phase === "response" ? "Responding" : snapshot.phase === "tool call" ? "Tool call" : "Thinking";
+	const idleLabel = snapshot.phase === "tool call" ? "last update" : "last token";
+	const timeoutSuffix = snapshot.timeoutMs === undefined ? "" : `; timeout ${formatSeconds(snapshot.timeoutMs)}s`;
+	return `${phaseLabel} for ${elapsedSeconds}s; ${idleLabel} ${idleSeconds}s ago${timeoutSuffix}`;
+}
 export class EventController {
 	#lastReadGroup: ReadToolGroupComponent | undefined = undefined;
 	#lastThinkingCount = 0;
@@ -24,6 +61,8 @@ export class EventController {
 	#readToolCallArgs = new Map<string, Record<string, unknown>>();
 	#readToolCallAssistantComponents = new Map<string, AssistantMessageComponent>();
 	#lastAssistantComponent: AssistantMessageComponent | undefined = undefined;
+	#streamIdleStatusTimer: ReturnType<typeof setTimeout> | undefined = undefined;
+	#streamIdleStatus: StreamIdleStatusState | undefined = undefined;
 	constructor(private ctx: InteractiveModeContext) {}
 
 	#resetReadGroup(): void {
@@ -96,6 +135,63 @@ export class EventController {
 		this.#setWorkingMessage(`${normalizedToolName} args ${formatBytes(bytes)}`);
 	}
 
+	#stopStreamIdleStatus(): void {
+		if (this.#streamIdleStatusTimer) {
+			clearTimeout(this.#streamIdleStatusTimer);
+			this.#streamIdleStatusTimer = undefined;
+		}
+		this.#streamIdleStatus = undefined;
+	}
+
+	#scheduleStreamIdleStatus(delayMs = STREAM_IDLE_STATUS_GRACE_MS): void {
+		if (this.#streamIdleStatusTimer) {
+			clearTimeout(this.#streamIdleStatusTimer);
+		}
+		this.#streamIdleStatusTimer = setTimeout(() => {
+			this.#emitStreamIdleStatus();
+			if (this.#streamIdleStatus) {
+				this.#scheduleStreamIdleStatus(STREAM_IDLE_STATUS_INTERVAL_MS);
+			}
+		}, delayMs);
+	}
+
+	#emitStreamIdleStatus(): void {
+		if (!this.#streamIdleStatus) return;
+		if (this.#streamIdleStatus.phase === "tool call" && this.#lastIntent) return;
+		this.#setWorkingMessage(formatStreamIdleStatus({ ...this.#streamIdleStatus, now: Date.now() }));
+	}
+
+	#getStreamIdleTimeoutMs(): number | undefined {
+		return this.ctx.session.model?.provider === "anthropic" ? getAnthropicStreamIdleTimeoutMs() : undefined;
+	}
+
+	#getAssistantStreamPhase(event: AgentSessionEvent): StreamIdlePhase | undefined {
+		const eventType = (event as AssistantStreamEventHint).assistantMessageEvent?.type;
+		if (eventType === "thinking_start" || eventType === "thinking_delta") return "thinking";
+		if (eventType === "text_start" || eventType === "text_delta") return "response";
+		if (eventType === "toolcall_start" || eventType === "toolcall_delta") return "tool call";
+
+		if (event.type !== "message_update" || event.message.role !== "assistant") return undefined;
+		if (event.message.content.some(content => content.type === "toolCall")) return "tool call";
+		if (event.message.content.some(content => content.type === "text" && content.text.length > 0)) return "response";
+		if (event.message.content.some(content => content.type === "thinking" && content.thinking.length > 0))
+			return "thinking";
+		return undefined;
+	}
+
+	#recordAssistantStreamEvent(event: AgentSessionEvent): void {
+		const phase = this.#getAssistantStreamPhase(event);
+		if (!phase) return;
+		const now = Date.now();
+		this.#streamIdleStatus = {
+			phase,
+			streamStartedAt: this.#streamIdleStatus?.streamStartedAt ?? now,
+			lastEventAt: now,
+			timeoutMs: this.#getStreamIdleTimeoutMs(),
+		};
+		this.#scheduleStreamIdleStatus();
+	}
+
 	subscribeToAgent(): void {
 		this.ctx.unsubscribe = this.ctx.session.subscribe(async (event: AgentSessionEvent) => {
 			await this.handleEvent(event);
@@ -113,6 +209,7 @@ export class EventController {
 
 		switch (event.type) {
 			case "agent_start":
+				this.#stopStreamIdleStatus();
 				this.#lastIntent = undefined;
 				this.#readToolCallArgs.clear();
 				this.#lastWorkingMessage = undefined;
@@ -166,6 +263,8 @@ export class EventController {
 					this.ctx.addMessageToChat(event.message);
 					this.ctx.ui.requestRender();
 				} else if (event.message.role === "assistant") {
+					this.#stopStreamIdleStatus();
+					this.#lastIntent = undefined;
 					this.#lastThinkingCount = 0;
 					this.#resetReadGroup();
 					this.ctx.streamingComponent = new AssistantMessageComponent(undefined, this.ctx.hideThinkingBlock);
@@ -178,6 +277,7 @@ export class EventController {
 
 			case "message_update":
 				if (this.ctx.streamingComponent && event.message.role === "assistant") {
+					this.#recordAssistantStreamEvent(event);
 					this.ctx.streamingMessage = event.message;
 					this.ctx.streamingComponent.updateContent(this.ctx.streamingMessage);
 
@@ -255,6 +355,7 @@ export class EventController {
 
 			case "message_end":
 				if (event.message.role === "user") break;
+				if (event.message.role === "assistant") this.#stopStreamIdleStatus();
 				if (this.ctx.streamingComponent && event.message.role === "assistant") {
 					this.ctx.streamingMessage = event.message;
 					let errorMessage: string | undefined;
@@ -462,6 +563,7 @@ export class EventController {
 			}
 
 			case "agent_end":
+				this.#stopStreamIdleStatus();
 				if (this.ctx.loadingAnimation) {
 					this.ctx.loadingAnimation.stop();
 					this.ctx.loadingAnimation = undefined;
@@ -548,6 +650,7 @@ export class EventController {
 			}
 
 			case "auto_retry_start": {
+				this.#stopStreamIdleStatus();
 				this.ctx.retryEscapeHandler = this.ctx.editor.onEscape;
 				this.ctx.editor.onEscape = () => {
 					this.ctx.session.abortRetry();
@@ -567,6 +670,7 @@ export class EventController {
 			}
 
 			case "auto_retry_end": {
+				this.#stopStreamIdleStatus();
 				if (this.ctx.retryEscapeHandler) {
 					this.ctx.editor.onEscape = this.ctx.retryEscapeHandler;
 					this.ctx.retryEscapeHandler = undefined;

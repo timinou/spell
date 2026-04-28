@@ -2,7 +2,7 @@ import { $env } from "@oh-my-pi/pi-utils";
 
 const DEFAULT_OPENAI_STREAM_IDLE_TIMEOUT_MS = 45_000;
 
-export function normalizeIdleTimeoutMs(value: string | undefined, fallback: number): number | undefined {
+export function normalizeIdleTimeoutMs(value: string | number | undefined, fallback: number): number | undefined {
 	if (value === undefined) return fallback;
 	const parsed = Number(value);
 	if (!Number.isFinite(parsed)) return fallback;
@@ -19,7 +19,13 @@ export function getOpenAIStreamIdleTimeoutMs(): number | undefined {
 	return normalizeIdleTimeoutMs($env.PI_OPENAI_STREAM_IDLE_TIMEOUT_MS, DEFAULT_OPENAI_STREAM_IDLE_TIMEOUT_MS);
 }
 
-const DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = 45_000;
+const DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = 180_000;
+
+let anthropicStreamIdleTimeoutOverrideMs: number | undefined;
+
+export function setAnthropicStreamIdleTimeoutOverrideMs(value: number | undefined): void {
+	anthropicStreamIdleTimeoutOverrideMs = value;
+}
 
 /**
  * Returns the idle timeout used for Anthropic streaming transports.
@@ -27,7 +33,10 @@ const DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = 45_000;
  * Set `PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS=0` to disable the watchdog.
  */
 export function getAnthropicStreamIdleTimeoutMs(): number | undefined {
-	return normalizeIdleTimeoutMs($env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS, DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS);
+	if ($env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS !== undefined) {
+		return normalizeIdleTimeoutMs($env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS, DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS);
+	}
+	return normalizeIdleTimeoutMs(anthropicStreamIdleTimeoutOverrideMs, DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS);
 }
 const DEFAULT_BEDROCK_STREAM_IDLE_TIMEOUT_MS = 45_000;
 
