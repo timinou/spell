@@ -19,7 +19,7 @@ Mirror each task into `todo_write`; keep full dep graph explicit.
 {{/if}}
 
 ## Protocol
-Analyze deps; parallelize only truly independent tasks. Provide enough context for efficient execution or sub-orchestration.
+Analyze deps; parallelize only truly independent tasks. Provide comprehensive context for efficient execution or sub-orchestration.
 
 - keep `todo_write` truthful (`in_progress`, `completed`, `failed`, `abandoned` + follow-up);
 - execute directly or delegate with `task`;
@@ -31,10 +31,10 @@ Analyze deps; parallelize only truly independent tasks. Provide enough context f
 - You MAY refine todo structure when reality diverges, but blockers + progress must stay truthful.
 - `todo_write` handles lifecycle hooks automatically.
 - Delegate tasks via `todoRef`.
-- If work fails, report it truthfully and seek to review your approach to parallelisation. Atomise. Iterate and continue work.
+- If work fails, report it truthfully and seek to review your approach to parallelisation. Atomise. Iterate and continue work with new understanding.
 
 <critical>
-Plan approved. Implement it
+Plan approved. Implement it.
 </critical>
 
 Finalized plan artifact: `{{finalPlanFilePath}}`
@@ -43,35 +43,39 @@ Finalized plan artifact: `{{finalPlanFilePath}}`
 ## Completion Protocol
 Plan complete only when verification evidence exists and org lifecycle is truthfully closed.
 
+### Within tasks
+- Commit subtask work for semantic, meaningful advancements, alongside related org lifecycle updated, within tasks.
+
+### Final turn
+
 Before your final turn, you **MUST**:
 1. Finish every execution-manifest step or report the blocker truthfully.
 2. Capture verification evidence:
    - Run focused tests, checks, and manual verification required by the plan and linked child items.
-   - If UI/visual behavior matters, capture screenshots with `puppeteer` `action: "screenshot"` and save under `{{orgItemArtifactsDir}}/`.
+   - If UI/visual behavior matters, capture screenshots with `puppeteer` `action: "screenshot"`, save under `{{orgItemArtifactsDir}}/`, and refer to them in the org updates.
    - Screenshots and generated images automatically produce `artifact://` URIs (example `artifact://14b64b/main/screenshot/3.png`). Reference these URIs in the completion report's `*** Artifacts` section.
-   - To persist a session artifact into the plan record, copy it into `{{orgItemArtifactsDir}}/` using `cp`; `artifact://` URIs resolve to filesystem paths in bash.
+   - To persist a session artifact into the plan record, copy it into `{{orgItemArtifactsDir}}/` using `cp`; `artifact://` URIs resolve to filesystem paths only in bash.
    - Subagent artifacts use `artifact://<session-id>/<subagent-name>/<tool>/<file>` and resolve from the main session.
    - Use artifact filenames that explain what each file proves.
-   - For docs artifacts (org items, spec files, config files), reference file path or org heading in the completion report — do not screenshot text files.
+   - Visual proof (such as screenshots) for visual evidence. Text proof for text evidence.
 3. Update org item `{{orgItemId}}` with a completion report via `org update`:
    - Append `** Completion [YYYY-MM-DD]`
-   - Include `*** Verification`, `*** Artifacts`, `*** Deviations`
+   - Include `*** Verification`, `*** Artifacts`
    - Record exact commands/checks, outcomes, saved artifact paths
    - When referencing saved artifacts in the report, use org-mode file links like `[[file:{{orgItemArtifactsDir}}/name.png]]`
-   - For session-scoped artifacts not yet copied into `{{orgItemArtifactsDir}}/`, reference them as `artifact://<session-id>/<agent>/<tool>/<file>.<ext>`
-   - If tasks were deferred (abandoned with `deferralFupId`), list all FUP refs using `[[id:FUP-xxx]]` org links in Deviations
-   - If no deviations, write `None.`
 4. Close org lifecycle state truthfully:
    - Linked child items in `ITEM`, `INIT`, `DOING`, or `REVIEW` **MUST** move to `DONE`
    - Linked child items already `DONE` stay unchanged
    - Linked child items in `BLOCKED` stay unchanged and **MUST** be called out in the completion report
    - After child states are reconciled, PLAN item `{{orgItemId}}` **MUST** move from `DOING` to `DONE`
-5. Commit the changes:
-   - Stage only files modified by this plan execution (code, tests, configs)
+5. Commit the final changes:
+   - Stage only files modified by this plan execution (code, tests, configs) and forgotten by tasks
    - Stage the org-mode files from `!tasks/` that correspond to the committed changes (the linked child items and the PLAN item itself) in the same commit as the code they describe
    - Commit with a conventional commit message referencing the plan (for example, `fix(coding-agent): describe change`)
-   - Do **NOT** stage unrelated workspace changes
+   - Do **NOT** modify the state of any file not concerned by this plan.
+
 6. If verification fails or required evidence is missing, do **NOT** mark the plan `DONE`; keep org state truthful and report the blocker.
+7. Explain all your work exhaustively to the reviewer.
 
 {{#if childItems}}
 ## Child Item Specifications
@@ -105,8 +109,8 @@ For org-linked tasks, layer resolves automatically from the org item's `:LAYER:`
 {{/if}}
 
 <instruction>
-You **MUST** execute this plan step by step from `{{finalPlanFilePath}}`. You have full tool access.
-You **MUST** verify each step before proceeding to the next.
+Execute this plan from `{{finalPlanFilePath}}`. You have full tool access.
+Construct the right step workflow to get to the goal. Verify each step before moving on to the next.
 {{#has tools "todo_write"}}
 {{#if autoInitialized}}Todo list pre-populated from plan's execution structure. You MAY modify, add, reorder, or remove tasks while keeping progress truthful. Child org item state transitions happen automatically via `todo_write`. The completion report and final PLAN closeout are explicit steps. Use `task` to parallelize independent tasks within the same phase.
 After each completed step, you **MUST** immediately update `todo_write` so progress stays visible.
