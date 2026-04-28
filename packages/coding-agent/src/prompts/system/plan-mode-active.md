@@ -64,7 +64,7 @@ Every child org item body **MUST** include these sections:
 - **Scope** — in-scope/out-of-scope boundaries with rationale
 - **Existing Patterns** — DSLs, helpers, modules, conventions from codebase this item **MUST** use (file paths + signatures)
 - **Tests** — file paths, concrete scenarios. Test sub-items **MUST** precede implementation sub-items in dependency graph. Enumerate ALL workflows first.
-- **Implementation** — ordered steps tied to explicit test scenarios
+- **Implementation** — ordered steps tied to explicit test scenarios. Complete implementation details with all decisions settled.
 - **Edge Cases** — failure modes, error codes, degradation, race conditions, recovery
 - **Acceptance Criteria** — falsifiable, manually checkable outcomes
 {{/if}}
@@ -77,6 +77,8 @@ Implementation sub-steps **MUST** be sub-headings with `:CUSTOM_ID:` values that
 :END:
 - File: src/types/foo.ts
 
+... long explanation ...
+
 ** ITEM Write parser tests (TDD: before implementation)
 :PROPERTIES:
 :CUSTOM_ID: FEAT-001::parser-tests
@@ -85,12 +87,16 @@ Implementation sub-steps **MUST** be sub-headings with `:CUSTOM_ID:` values that
 - File: test/parser.test.ts
 - Scenarios from Tests section as initially-failing tests
 
+... long explanation ...
+
 ** ITEM Implement core parser (satisfies parser-tests)
 :PROPERTIES:
 :CUSTOM_ID: FEAT-001::implement-parser
 :DEPENDS: FEAT-001::parser-tests
 :END:
 - File: src/parser.ts
+
+... long explanation ...
 ```
 
 Child item requirements (`org create`):
