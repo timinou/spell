@@ -57,6 +57,7 @@ function createManifest(): AutonomyManifest {
 			["ship-it", cronGoal],
 			["incoming", webhookGoal],
 		]),
+		templates: new Map(),
 		exportTargets: [],
 		notificationRoutes: [],
 		reviewPolicies: [],

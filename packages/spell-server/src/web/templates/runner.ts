@@ -1,17 +1,19 @@
-import Handlebars from "handlebars";
 import { logger } from "@oh-my-pi/pi-utils";
+import Handlebars from "handlebars";
+import type { WebIdentity } from "../../http/types";
 import type { AutonomyManifest } from "../../manifest/types";
 import { setupToBaseSpawnOptions } from "../../session/setup-options";
-import type { WebIdentity } from "../../http/types";
 import type { WebSessionHub } from "../session/web-session-hub";
-import { coerceParams, type CoercedParamValue } from "./params";
+import { type CoercedParamValue, coerceParams } from "./params";
 
 export class PromptRenderError extends Error {
 	constructor(
 		readonly templateName: string,
 		readonly cause: unknown,
 	) {
-		super(`Template ${templateName}: prompt render failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+		super(
+			`Template ${templateName}: prompt render failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+		);
 		this.name = "PromptRenderError";
 	}
 }
@@ -45,11 +47,7 @@ export class TemplateRunner {
 		this.#deps = deps;
 	}
 
-	async runTemplate(
-		name: string,
-		params: Record<string, unknown>,
-		identity: WebIdentity,
-	): Promise<TemplateRunResult> {
+	async runTemplate(name: string, params: Record<string, unknown>, identity: WebIdentity): Promise<TemplateRunResult> {
 		const template = this.#deps.manifest.templates.get(name);
 		if (!template) {
 			throw new Error(`Unknown template '${name}'`);

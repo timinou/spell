@@ -11,7 +11,6 @@ import type {
 	ManifestHookConfig,
 	ManifestSetup,
 	NamedStateStore,
-	Template,
 	NotificationRoute,
 	OperatorAction,
 	Panel,
@@ -21,6 +20,7 @@ import type {
 	StateConfig,
 	StateSchema,
 	SyncCollection,
+	Template,
 	ToolModule,
 } from "./types";
 

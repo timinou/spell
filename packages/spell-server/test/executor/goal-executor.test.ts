@@ -103,6 +103,7 @@ function createManifest(
 		version: "1.0.0",
 		setups: new Map([["default", setup]]),
 		goals: new Map([["ship-it", goal]]),
+		templates: new Map(),
 		exportTargets: [],
 		notificationRoutes: [],
 		reviewPolicies: [],

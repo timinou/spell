@@ -8,6 +8,7 @@ function createMinimalManifest(overrides: Partial<AutonomyManifest> = {}): Auton
 		version: "1.0.0",
 		setups: new Map(),
 		goals: new Map(),
+		templates: new Map(),
 		exportTargets: [],
 		notificationRoutes: [],
 		reviewPolicies: [],

@@ -1,17 +1,16 @@
-import type { Server, WebSocketHandler } from "bun";
 import { logger } from "@oh-my-pi/pi-utils";
+import type { Server, WebSocketHandler } from "bun";
 import type { SpellServerConfig } from "../../config/types";
 import { verifyWebToken } from "../../http/auth";
 import type { AutonomyManifest } from "../../manifest/types";
 import type { SessionRegistryEntry, SocketSessionRegistry } from "../../socket/session-registry";
 import type { EventLogEntry } from "../../socket/types";
-import { handleArtifactsRoute } from "../artifacts/router";
 import { mintSignedArtifactUrl } from "../artifacts/signed-url";
 import type { ArtifactCreatedEvent } from "../artifacts/types";
 import type { ArtifactWatcher } from "../artifacts/watcher";
 import type { WebSessionHub } from "../session/web-session-hub";
-import type { TemplateRunner } from "../templates/runner";
 import { MissingParamError, ParamCoercionError, UnknownParamError } from "../templates/params";
+import type { TemplateRunner } from "../templates/runner";
 import { WebConnection, type WebConnectionData } from "./connection";
 import { type Channel, isWsClientMessage, type SessionSummary, type WsClientMessage } from "./protocol";
 

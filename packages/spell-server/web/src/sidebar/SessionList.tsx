@@ -19,7 +19,7 @@ export function SessionList() {
 	if (ordered.length === 0) {
 		return (
 			<div style={{ padding: 16 }} className="muted">
-				No sessions yet. Press <kbd>\u2318K</kbd> to launch a template.
+				No sessions yet. Press <kbd>{"\u2318K"}</kbd> to launch a template.
 			</div>
 		);
 	}

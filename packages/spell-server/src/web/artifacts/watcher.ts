@@ -126,7 +126,7 @@ export class ArtifactWatcher {
 	#mountDir(sessionId: string, entry: SessionWatch, dir: string, depth: number): void {
 		if (entry.dirs.has(dir)) return;
 		try {
-			const watcher = fs.watch(dir, (eventType, filename) => {
+			const watcher = fs.watch(dir, (_eventType, filename) => {
 				if (!filename) return;
 				const fullPath = path.join(dir, filename);
 				void this.#handleEvent(sessionId, entry, fullPath, depth);

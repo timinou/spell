@@ -24,10 +24,7 @@ describe("verifyWebToken", () => {
 	});
 
 	it("returns identity on valid query token (header absent)", () => {
-		const id = verifyWebToken(
-			makeRequest({ url: "http://localhost:8787/web/ws?token=secret-b" }),
-			web,
-		);
+		const id = verifyWebToken(makeRequest({ url: "http://localhost:8787/web/ws?token=secret-b" }), web);
 		expect(id).toEqual({ name: "bob" });
 	});
 
@@ -61,9 +58,7 @@ describe("verifyWebToken", () => {
 	it("rejects token of different length without leaking length difference", () => {
 		// Should not throw regardless of length disparity.
 		expect(verifyWebToken(makeRequest({ auth: "Bearer s" }), web)).toBeNull();
-		expect(
-			verifyWebToken(makeRequest({ auth: "Bearer this-is-much-longer-than-any-secret" }), web),
-		).toBeNull();
+		expect(verifyWebToken(makeRequest({ auth: "Bearer this-is-much-longer-than-any-secret" }), web)).toBeNull();
 	});
 
 	it("returns first lex-sorted name when two tokens share the same secret", () => {

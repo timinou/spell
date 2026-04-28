@@ -41,6 +41,7 @@ export function CommandBar({
 								{templates.map(t => (
 									<Command.Item
 										key={`tpl-${t.name}`}
+										className="cmd-item"
 										value={`run ${t.name}`}
 										onSelect={() => {
 											setOpen(false);
@@ -58,6 +59,7 @@ export function CommandBar({
 								{[...sessions.values()].map(s => (
 									<Command.Item
 										key={`kill-${s.sessionId}`}
+										className="cmd-item"
 										value={`kill ${s.sessionId} ${s.templateName ?? s.projectName}`}
 										onSelect={() => {
 											setOpen(false);

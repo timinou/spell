@@ -20,10 +20,7 @@ describe("loadWebAssets", () => {
 	beforeEach(async () => {
 		dist = await fs.mkdtemp(path.join(os.tmpdir(), "spell-web-loader-"));
 		await fs.mkdir(path.join(dist, "assets"), { recursive: true });
-		await Bun.write(
-			path.join(dist, "index.html"),
-			'<!doctype html><html><body>spell</body></html>',
-		);
+		await Bun.write(path.join(dist, "index.html"), "<!doctype html><html><body>spell</body></html>");
 		await Bun.write(path.join(dist, "assets", "index-AbC1234567.js"), "console.log('x');");
 		await Bun.write(path.join(dist, "assets", "index-AbC1234567.css"), "body { color: #fff; }");
 	});

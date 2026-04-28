@@ -8,7 +8,10 @@ function toBase64Url(bytes: Buffer): string {
 }
 
 function fromBase64Url(value: string): Buffer {
-	const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(value.length + ((4 - (value.length % 4)) % 4), "=");
+	const padded = value
+		.replace(/-/g, "+")
+		.replace(/_/g, "/")
+		.padEnd(value.length + ((4 - (value.length % 4)) % 4), "=");
 	return Buffer.from(padded, "base64");
 }
 
