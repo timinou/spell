@@ -35,6 +35,7 @@ export * from "./utils";
 export * from "./utils/anthropic-auth";
 export * from "./utils/discovery";
 export * from "./utils/event-stream";
+export * from "./utils/idle-iterator";
 export * from "./utils/oauth";
 export * from "./utils/overflow";
 export * from "./utils/retry";

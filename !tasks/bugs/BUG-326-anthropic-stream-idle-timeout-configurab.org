@@ -1,0 +1,158 @@
+#+TITLE: Anthropic stream idle timeout configurable and safer
+#+STATE: DONE
+#+SESSION_ID: 14cc6372007a1ece
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T13-47-40-929Z_14cc6372007a1ece.jsonl]]
+#+CUSTOM_ID: BUG-326-anthropic-stream-idle-timeout-configurab
+#+LAYER: coding-agent
+
+* Initial Message
+
+Error: Assistant response stalled while streaming thinking content. Idle timeout: 45000ms.
+
+
+
+^^^^ I get way too many of these during long thinking sessions and Anthropic. Maybe increase the timeout? Try to see what is happening?
+
+* Intention & Purpose
+Fix false-positive Anthropic streaming stalls during long reasoning/thinking gaps. The current watchdog aborts after 45,000ms without provider events, producing user-visible failures like:
+
+#+begin_example
+Assistant response stalled while streaming thinking content. Idle timeout: 45000ms.
+#+end_example
+
+The goal is not to hide real dead streams; it is to make the watchdog fit Anthropic long-thinking behavior and give users a persistent override path.
+
+* Context & Narrative
+Current repo evidence:
+- ~packages/ai/src/utils/idle-iterator.ts~ defines ~DEFAULT_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = 45_000~ and reads ~PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS~ via ~getAnthropicStreamIdleTimeoutMs()~. ~0~ disables the watchdog through ~normalizeIdleTimeoutMs()~.
+- ~packages/ai/src/providers/anthropic.ts~ calls ~getAnthropicStreamIdleTimeoutMs()~ once before wrapping ~client.messages.stream(...)~ in ~iterateWithIdleTimeout(...)~. On idle, the provider aborts the request and classifies the partial assistant message via ~classifyAssistantStreamInterruption(...)~.
+- ~packages/ai/src/utils/tool-call-diagnostics.ts~ maps the diagnostic state ~stalled_during_thinking~ to the exact user error string.
+- ~packages/ai/test/providers/anthropic-idle-timeout.test.ts~ already exercises idle timeout behavior with a mocked Anthropic stream.
+- ~packages/coding-agent/src/config/settings-schema.ts~ is the typed settings schema. Existing provider settings live under ~providers.*~ and expose UI metadata on the Providers tab.
+- ~packages/coding-agent/src/sdk.ts~ initializes provider preferences from settings near ~providers.webSearch~, ~providers.codeSearch~, ~providers.image~, and ~providers.openaiWebsockets~.
+
+User-settled requirements:
+- Scope: add a config knob plus Anthropic-specific safer default.
+- UX: use both a longer timeout and visible keepalive/status in the TUI (the visible status is planned in the dependent UI item).
+- Config: expose both config and environment setting with safer default.
+
+Settled design decisions for this item:
+1. Anthropic default stream idle timeout becomes ~180_000ms~.
+2. Existing env var ~PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS~ remains supported and takes precedence over coding-agent config.
+3. ~0~ disables the watchdog; invalid/non-finite values fall back to the safer default/configured fallback.
+4. Other providers keep their current defaults; do not broaden this change to OpenAI, Bedrock, or tool-argument idle timeout.
+5. Coding-agent exposes ~providers.anthropicStreamIdleTimeoutMs~ with default ~180000~ on the Providers settings tab.
+6. Coding-agent must wire this setting into ~@oh-my-pi/pi-ai~ through a small public runtime override API rather than mutating ~Bun.env~ as hidden configuration state.
+
+* Scope
+In scope:
+- Change Anthropic default from 45s to 180s in ~packages/ai/src/utils/idle-iterator.ts~.
+- Add a public pi-ai runtime override API for Anthropic stream idle timeout, exported from ~packages/ai/src/index.ts~.
+- Add ~providers.anthropicStreamIdleTimeoutMs~ to ~packages/coding-agent/src/config/settings-schema.ts~ with UI metadata and explicit ~0 disables~ description.
+- Wire the coding-agent setting in ~packages/coding-agent/src/sdk.ts~ at session creation.
+- Add a settings hook in ~packages/coding-agent/src/config/settings.ts~ so changing the setting at runtime affects future Anthropic requests in the same process.
+- Add focused tests for default, env precedence, config override, and disable behavior.
+
+Out of scope:
+- No CLI flag in this item; user chose config/env rather than CLI.
+- No changes to retry policy; existing retry handling remains.
+- No provider-wide timeout refactor; keep one sharp fix for Anthropic.
+- No change to tool argument timeout (~PI_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS~ stays separate and currently defaults to 180s).
+
+* Existing Patterns
+- Settings schema entries use dot paths with metadata, e.g. ~providers.openaiWebsockets~ in ~packages/coding-agent/src/config/settings-schema.ts~.
+- Settings access uses ~settings.get("path")~ with typed ~SettingPath~ from the schema.
+- Runtime settings hooks live in ~SETTING_HOOKS~ in ~packages/coding-agent/src/config/settings.ts~.
+- Provider preferences are initialized in ~createAgentSession(...)~ in ~packages/coding-agent/src/sdk.ts~.
+- Environment override parsing for stream idle timeouts currently lives in ~packages/ai/src/utils/idle-iterator.ts~ and must stay centralized.
+- No inline imports; use top-level imports only.
+- No ~any~; if a hook typing needs looseness, prefer a precise helper signature over expanding existing ~any~ usage.
+
+* Tests
+Enumerate workflows first:
+1. Default Anthropic stream idle timeout is now 180,000ms when neither env nor coding-agent runtime override is set.
+2. ~PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS=45000~ still produces 45,000ms and overrides the coding-agent config setting.
+3. Coding-agent setting ~providers.anthropicStreamIdleTimeoutMs: 240000~ flows into pi-ai and future Anthropic streams report/use 240,000ms.
+4. Setting or env value ~0~ disables the watchdog by returning ~undefined~ to ~iterateWithIdleTimeout~.
+5. Invalid env/config values fall back to the safer default/configured fallback and do not crash session startup.
+6. Existing Anthropic idle timeout diagnostics continue to include ~idleTimeoutMs~ when the watchdog fires.
+
+Concrete test files:
+- ~packages/ai/test/providers/anthropic-idle-timeout.test.ts~: update expectations/default-focused tests and add explicit default/env/disable coverage around ~getAnthropicStreamIdleTimeoutMs()~ or the mocked stream diagnostic.
+- If exported helper tests belong outside provider integration, add/update a focused pi-ai unit test under ~packages/ai/test/...~ for ~idle-iterator~ behavior.
+- ~packages/coding-agent/test/config/config-loading-hierarchy.test.ts~ or a focused new config/settings test: prove the schema default exists and isolated settings can override ~providers.anthropicStreamIdleTimeoutMs~.
+- ~packages/coding-agent/test/settings-manager.test.ts~ or focused SDK test: prove ~createAgentSession(...)~ applies the setting to the pi-ai runtime override without relying on env mutation. Use spies/injection; memory notes warn Bun module mocks leak across tests, so prefer ~vi.spyOn~ and restore.
+
+* Implementation
+** DOING Define timeout override API contract
+:PROPERTIES:
+:CUSTOM_ID: BUG-326-anthropic-stream-idle-timeout-configurab::define-timeout-api
+:END:
+- Files: ~packages/ai/src/utils/idle-iterator.ts~, ~packages/ai/src/index.ts~.
+- Contract: add exported functions with concrete names, e.g. ~setAnthropicStreamIdleTimeoutOverrideMs(value: number | undefined): void~ and keep ~getAnthropicStreamIdleTimeoutMs(): number | undefined~ as the single read path.
+- Precedence: env string > runtime override number > default 180,000ms.
+- Disable semantics: env/override value ~0~ returns ~undefined~.
+
+** DOING Write pi-ai timeout tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: BUG-326-anthropic-stream-idle-timeout-configurab::write-pi-ai-timeout-tests
+:DEPENDS: BUG-326-anthropic-stream-idle-timeout-configurab::define-timeout-api
+:END:
+- Files: ~packages/ai/test/providers/anthropic-idle-timeout.test.ts~ or a focused ~packages/ai/test/idle-iterator.test.ts~.
+- Scenarios: Tests workflow 1, 2, 4, 5, 6.
+- Tests should restore ~Bun.env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS~ and reset the runtime override after each case.
+
+** DOING Write coding-agent settings tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: BUG-326-anthropic-stream-idle-timeout-configurab::write-coding-agent-settings-tests
+:DEPENDS: BUG-326-anthropic-stream-idle-timeout-configurab::define-timeout-api
+:END:
+- Files: ~packages/coding-agent/test/config/config-loading-hierarchy.test.ts~, ~packages/coding-agent/test/settings-manager.test.ts~, or a new focused test file if existing files are not a natural fit.
+- Scenarios: Tests workflow 3 and schema default for workflow 1.
+- Use ~Settings.isolated({ "providers.anthropicStreamIdleTimeoutMs": 240000 })~ where possible.
+
+** DOING Implement pi-ai timeout behavior
+:PROPERTIES:
+:CUSTOM_ID: BUG-326-anthropic-stream-idle-timeout-configurab::implement-pi-ai-timeout
+:DEPENDS: BUG-326-anthropic-stream-idle-timeout-configurab::write-pi-ai-timeout-tests
+:END:
+- File: ~packages/ai/src/utils/idle-iterator.ts~.
+- Change Anthropic default to ~180_000~.
+- Add runtime override state with resettable setter.
+- Ensure env precedence remains exact.
+- Export the setter from ~packages/ai/src/index.ts~ using star-export style if a new module export is needed.
+
+** DOING Wire coding-agent setting
+:PROPERTIES:
+:CUSTOM_ID: BUG-326-anthropic-stream-idle-timeout-configurab::wire-coding-agent-setting
+:DEPENDS: BUG-326-anthropic-stream-idle-timeout-configurab::write-coding-agent-settings-tests BUG-326-anthropic-stream-idle-timeout-configurab::implement-pi-ai-timeout
+:END:
+- Files: ~packages/coding-agent/src/config/settings-schema.ts~, ~packages/coding-agent/src/config/settings.ts~, ~packages/coding-agent/src/sdk.ts~.
+- Add schema path ~providers.anthropicStreamIdleTimeoutMs~ default ~180000~, tab ~providers~, submenu true, label ~Anthropic Stream Idle Timeout~, description includes env var precedence and ~0 disables~.
+- In ~createAgentSession(...)~, call the pi-ai override setter using the typed setting before any Anthropic request can start.
+- In ~SETTING_HOOKS~, apply runtime changes to the same setter for future requests.
+
+** DOING Verify timeout configuration
+:PROPERTIES:
+:CUSTOM_ID: BUG-326-anthropic-stream-idle-timeout-configurab::verify-timeout-config
+:DEPENDS: BUG-326-anthropic-stream-idle-timeout-configurab::wire-coding-agent-setting
+:END:
+- Run focused verification only:
+  - ~bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts~ (or the new focused pi-ai timeout test).
+  - ~bun test packages/coding-agent/test/settings-manager.test.ts~ or the exact focused coding-agent config test added.
+  - ~bun check:ts~ if the implementation touches exported types or schema typing.
+
+* Edge Cases
+- Env var set to ~0~ must disable even when config is positive.
+- Env var set to invalid text must not disable accidentally; it should fall back.
+- Runtime override ~undefined~ must restore env/default behavior for tests and fresh isolated sessions.
+- If ~providers.anthropicStreamIdleTimeoutMs~ is negative, non-finite, or not a number because of malformed YAML, normalize rather than throwing in production startup.
+- Tool argument streaming must continue to use the larger of base timeout and ~DEFAULT_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS~ unless explicitly overridden by ~PI_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS~.
+- Existing retry diagnostics should still include the timeout that actually fired.
+
+* Acceptance Criteria
+- A default Anthropic thinking stall no longer aborts at 45s; default diagnostic timeout is 180,000ms when the watchdog fires.
+- Users can set ~PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS=0~ or config ~providers.anthropicStreamIdleTimeoutMs: 0~ to disable the watchdog.
+- Env var precedence is documented in schema description and proven by tests.
+- Other provider defaults are unchanged.
+- Focused tests pass and TypeScript check passes for touched packages.

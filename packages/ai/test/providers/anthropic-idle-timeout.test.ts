@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import { getBundledModel } from "../../src/models";
 import type { AssistantMessageEvent, Context, Model } from "../../src/types";
+import {
+	getAnthropicStreamIdleTimeoutMs,
+	setAnthropicStreamIdleTimeoutOverrideMs,
+} from "../../src/utils/idle-iterator";
 
 type MockEvent = {
 	type: string;
@@ -175,10 +179,47 @@ async function collectEventTypes(response: AsyncIterable<AssistantMessageEvent>)
 afterEach(() => {
 	delete Bun.env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS;
 	delete Bun.env.PI_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS;
+	setAnthropicStreamIdleTimeoutOverrideMs(undefined);
 	lastStream = null;
 	createdStreams = [];
 	streamSpecs = [{ events: [] }];
 	streamCallCount = 0;
+});
+
+describe("Anthropic stream idle timeout configuration", () => {
+	it("defaults to 180 seconds when no env or runtime override is set", () => {
+		expect(getAnthropicStreamIdleTimeoutMs()).toBe(180_000);
+	});
+
+	it("lets the runtime override configure future Anthropic streams", () => {
+		setAnthropicStreamIdleTimeoutOverrideMs(240_000);
+
+		expect(getAnthropicStreamIdleTimeoutMs()).toBe(240_000);
+	});
+
+	it("keeps PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS ahead of runtime override", () => {
+		setAnthropicStreamIdleTimeoutOverrideMs(240_000);
+		Bun.env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = "45000";
+
+		expect(getAnthropicStreamIdleTimeoutMs()).toBe(45_000);
+	});
+
+	it("disables the watchdog when env or runtime override is 0", () => {
+		setAnthropicStreamIdleTimeoutOverrideMs(0);
+		expect(getAnthropicStreamIdleTimeoutMs()).toBeUndefined();
+
+		setAnthropicStreamIdleTimeoutOverrideMs(240_000);
+		Bun.env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = "0";
+		expect(getAnthropicStreamIdleTimeoutMs()).toBeUndefined();
+	});
+
+	it("falls back to the safer default for invalid env or runtime override values", () => {
+		setAnthropicStreamIdleTimeoutOverrideMs(Number.NaN);
+		expect(getAnthropicStreamIdleTimeoutMs()).toBe(180_000);
+
+		Bun.env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS = "not-a-number";
+		expect(getAnthropicStreamIdleTimeoutMs()).toBe(180_000);
+	});
 });
 
 describe("Anthropic provider idle timeout regression", () => {

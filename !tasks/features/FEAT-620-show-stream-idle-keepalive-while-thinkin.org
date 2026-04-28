@@ -1,0 +1,145 @@
+#+TITLE: Show stream idle keepalive while thinking
+#+STATE: DONE
+#+SESSION_ID: 14cc6372007a1ece
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T13-47-40-929Z_14cc6372007a1ece.jsonl]]
+#+CUSTOM_ID: FEAT-620-show-stream-idle-keepalive-while-thinkin
+#+DEPENDS: BUG-326-anthropic-stream-idle-timeout-configurab
+#+LAYER: coding-agent
+
+* Initial Message
+
+Error: Assistant response stalled while streaming thinking content. Idle timeout: 45000ms.
+
+
+
+^^^^ I get way too many of these during long thinking sessions and Anthropic. Maybe increase the timeout? Try to see what is happening?
+
+* Intention & Purpose
+Make long Anthropic reasoning visibly alive in the TUI. Increasing the watchdog helps, but users still need feedback during long silent gaps: when the provider has opened a thinking block and no new deltas arrive, Spell should show a local keepalive/status line rather than leaving the same generic ~Working…~ loader until success or failure.
+
+* Context & Narrative
+This item depends on the timeout configuration item because the status should align with the configured Anthropic timeout when available.
+
+Current repo evidence:
+- ~packages/coding-agent/src/modes/controllers/event-controller.ts~ owns interactive session event handling. On ~agent_start~ it calls ~ctx.ensureLoadingAnimation()~; on ~message_start~ it creates ~AssistantMessageComponent~ for assistant output; on ~message_update~ it updates streamed content and may derive working messages from tool-call intent or partial tool args; on ~message_end~ it finalizes the streaming component.
+- ~packages/coding-agent/src/modes/interactive-mode.ts~ implements ~ensureLoadingAnimation()~, ~setWorkingMessage(message?: string)~, and ~applyPendingWorkingMessage()~. The default is currently ~Working… (esc to interrupt)~.
+- ~packages/coding-agent/src/session/agent-session.ts~ forwards core agent events, including ~message_update~ with ~assistantMessageEvent.type === "thinking_delta"~ for thinking streams.
+- ~packages/ai/src/providers/anthropic.ts~ emits ~thinking_start~, ~thinking_delta~, and ~thinking_end~ events for Anthropic thinking blocks.
+- Existing TUI rendering rules require user-visible text to be sanitized/truncated via existing helpers when it can contain dynamic content. This status uses only generated text plus model/provider labels, so no raw file content is involved.
+
+User-settled requirements:
+- UX should be both a longer timeout and visible keepalive/status.
+- Scope should focus on Anthropic thinking stalls, but implementation should not break text/tool streams.
+
+Settled design decisions for this item:
+1. Add a local TUI status timer; do not depend on provider heartbeat events because the failure mode is no provider events.
+2. Track the last assistant stream event time in ~EventController~ and update the working loader every few seconds while an assistant message is streaming.
+3. Prefer phase-specific labels: ~thinking~, ~response~, or ~tool call~ based on the latest assistant event type.
+4. For Anthropic streams, include the configured timeout when available, e.g. ~Thinking for 62s; last token 14s ago; timeout 180s~. For non-Anthropic providers, use the same keepalive without promising a timeout unless a known timeout helper is available.
+5. Stop and clear the timer on ~message_end~, ~agent_end~, abort/error finalization, and retry transitions so stale status cannot survive into the next turn.
+6. Keep tool intent messages higher priority: if a tool call streams an explicit ~_i~ intent, do not overwrite it with generic keepalive until a later assistant stream starts.
+
+* Scope
+In scope:
+- Extend ~packages/coding-agent/src/modes/controllers/event-controller.ts~ with stream idle status tracking and timer lifecycle.
+- Reuse ~ctx.setWorkingMessage(...)~ and existing loader; do not introduce a new chat transcript message.
+- Add helper functions in the same file or a small adjacent module if testing private timer logic directly is too awkward.
+- Add focused tests for timer lifecycle and message text.
+
+Out of scope:
+- No QML/canvas status work unless existing QML event mapping already consumes working messages; this item targets terminal interactive mode.
+- No changes to provider streaming protocol.
+- No attempt to synthesize assistant message deltas or alter session history.
+- No screenshots required; this is terminal status text and can be verified with component/context tests.
+
+* Existing Patterns
+- ~EventController.#setWorkingMessage(message)~ appends ~(esc to interrupt)~ and avoids duplicate status updates with ~#lastWorkingMessage~.
+- ~EventController.#updateWorkingMessageFromIntent(...)~ and ~#updateWorkingMessageFromPartialToolArgs(...)~ already centralize loader message changes.
+- ~InteractiveModeContext~ in ~packages/coding-agent/src/modes/types.ts~ exposes ~setWorkingMessage~, ~ensureLoadingAnimation~, ~ui.requestRender~, and session/model state.
+- Tests can mock ~InteractiveModeContext~ with only the fields the controller path uses; existing tests under ~packages/coding-agent/test/input-controller-escape.test.ts~ and ~interactive-mode-status.test.ts~ use partial context objects cast to ~InteractiveModeContext~.
+- Use Bun timers or injected clock carefully. If fake timers are used, restore them after each test.
+
+* Tests
+Enumerate workflows first:
+1. When an assistant thinking stream starts and then goes silent, the TUI working message updates periodically with elapsed/since-last-event text.
+2. A new ~thinking_delta~ resets the idle counter and updates phase to thinking.
+3. A later ~text_delta~ changes phase from thinking to response.
+4. A streamed tool call with explicit intent still shows the intent rather than generic keepalive.
+5. ~message_end~ stops the timer and prevents further keepalive updates.
+6. ~agent_end~ or retry start/end cleanup cannot leave stale timer state for the next user turn.
+7. The generated keepalive text remains bounded/sanitized and does not include raw assistant thinking content.
+
+Concrete test files:
+- Add a focused test such as ~packages/coding-agent/test/modes/stream-idle-keepalive.test.ts~ or extend a natural existing mode/controller test if one exists.
+- Use a minimal fake ~InteractiveModeContext~ with spies for ~setWorkingMessage~, ~ensureLoadingAnimation~, ~ui.requestRender~, ~statusLine.invalidate~, and ~updateEditorTopBorder~.
+- Use fake timers or an injectable interval helper so the test can advance time deterministically without sleeping.
+- If importing the Anthropic timeout helper for display, mock/spy it safely and restore after test; avoid module mock leakage.
+
+* Implementation
+** DOING Define keepalive status contract
+:PROPERTIES:
+:CUSTOM_ID: FEAT-620-show-stream-idle-keepalive-while-thinkin::define-keepalive-contract
+:DEPENDS: BUG-326-anthropic-stream-idle-timeout-configurab::define-timeout-api
+:END:
+- File: ~packages/coding-agent/src/modes/controllers/event-controller.ts~.
+- Define exact message shape and thresholds before implementation:
+  - Initial loader remains ~Working…~.
+  - After a small local grace period (recommended: 5s without assistant events), status changes to a concise keepalive.
+  - Repeat/update cadence recommended: every 5s.
+  - Include phase and elapsed/since-last-event seconds.
+- Decide constant names in code, e.g. ~STREAM_IDLE_STATUS_GRACE_MS~ and ~STREAM_IDLE_STATUS_INTERVAL_MS~.
+
+** DOING Write keepalive timer tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-620-show-stream-idle-keepalive-while-thinkin::write-keepalive-tests
+:DEPENDS: FEAT-620-show-stream-idle-keepalive-while-thinkin::define-keepalive-contract
+:END:
+- File: ~packages/coding-agent/test/modes/stream-idle-keepalive.test.ts~ or equivalent.
+- Scenarios: Tests workflow 1, 2, 3, 5, 6, 7.
+- Verify no raw thinking text is included: feed a ~thinking_delta~ with distinctive content and assert the working message omits it.
+
+** DOING Write intent priority test (TDD)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-620-show-stream-idle-keepalive-while-thinkin::write-intent-priority-test
+:DEPENDS: FEAT-620-show-stream-idle-keepalive-while-thinkin::define-keepalive-contract
+:END:
+- File: same focused keepalive test file.
+- Scenario: Tests workflow 4.
+- Build an assistant message with a tool call whose args include the intent field; verify the keepalive timer does not overwrite that intent during the same tool streaming phase.
+
+** DOING Implement keepalive timer lifecycle
+:PROPERTIES:
+:CUSTOM_ID: FEAT-620-show-stream-idle-keepalive-while-thinkin::implement-keepalive-lifecycle
+:DEPENDS: FEAT-620-show-stream-idle-keepalive-while-thinkin::write-keepalive-tests FEAT-620-show-stream-idle-keepalive-while-thinkin::write-intent-priority-test BUG-326-anthropic-stream-idle-timeout-configurab::wire-coding-agent-setting
+:END:
+- File: ~packages/coding-agent/src/modes/controllers/event-controller.ts~.
+- Add fields for timer handle, assistant stream start time, last event time, phase, and whether explicit tool intent currently owns the status.
+- Start tracking on assistant ~message_start~.
+- Update tracking on ~message_update~ using ~assistantMessageEvent.type~.
+- Call ~ctx.setWorkingMessage(...)~ only through the existing internal status helper so duplicate suppression remains.
+- Stop/clear on ~message_end~, ~agent_end~, retry transitions, and any cleanup paths.
+
+** DOING Verify keepalive UX
+:PROPERTIES:
+:CUSTOM_ID: FEAT-620-show-stream-idle-keepalive-while-thinkin::verify-keepalive-ux
+:DEPENDS: FEAT-620-show-stream-idle-keepalive-while-thinkin::implement-keepalive-lifecycle
+:END:
+- Run focused verification only:
+  - ~bun test packages/coding-agent/test/modes/stream-idle-keepalive.test.ts~ (or exact file used).
+  - ~bun check:ts~ if controller/context types changed.
+- Manual proof: start a mocked or real long-thinking Anthropic run and observe loader text updating while no assistant deltas arrive; no screenshot artifact required unless the implementer chooses to capture terminal output.
+
+* Edge Cases
+- If the stream starts and fails before the first assistant message, do not start a stale keepalive timer.
+- If an assistant message has thinking hidden by the user, still show generic keepalive because it does not reveal thinking content.
+- If timeout is disabled, keepalive should say timeout disabled or omit timeout, not show ~0s timeout~.
+- If a new user prompt begins immediately after a previous assistant ends, previous timer state must be cleared before the new turn.
+- If retry starts after a stall, retry loader/status should own the UI and the keepalive timer must be stopped.
+- If no model/provider is available on the context, use a provider-neutral message.
+
+* Acceptance Criteria
+- During a silent thinking gap, the terminal UI visibly changes from a static generic loader to a concise keepalive status.
+- Keepalive status never includes raw thinking content.
+- Timer stops after message end/agent end/retry cleanup; no stale status leaks across turns.
+- Explicit tool intent remains higher priority than generic keepalive.
+- Focused tests pass and TypeScript check passes for touched files.

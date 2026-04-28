@@ -13,6 +13,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { setAnthropicStreamIdleTimeoutOverrideMs } from "@oh-my-pi/pi-ai";
 import {
 	getAgentDbPath,
 	getAgentDir,
@@ -664,6 +665,9 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 		if (typeof value === "number") {
 			setDefaultTabWidth(value);
 		}
+	},
+	"providers.anthropicStreamIdleTimeoutMs": value => {
+		setAnthropicStreamIdleTimeoutOverrideMs(typeof value === "number" ? value : undefined);
 	},
 };
 

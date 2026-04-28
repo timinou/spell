@@ -1,0 +1,140 @@
+#+TITLE: Fix Anthropic thinking stream idle timeout
+#+STATE: DONE
+#+SESSION_ID: 14cc6372007a1ece
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T13-47-40-929Z_14cc6372007a1ece.jsonl]]
+#+CUSTOM_ID: PLAN-287-fix-anthropic-thinking-stream-idle-timeo
+#+LAYER: coding-agent
+
+* Initial Message
+
+Error: Assistant response stalled while streaming thinking content. Idle timeout: 45000ms.
+
+
+
+^^^^ I get way too many of these during long thinking sessions and Anthropic. Maybe increase the timeout? Try to see what is happening?
+
+[[id:BUG-326-anthropic-stream-idle-timeout-configurab][Anthropic stream idle timeout configurable and safer]]
+[[id:FEAT-620-show-stream-idle-keepalive-while-thinkin][Show stream idle keepalive while thinking]]
+
+* Context
+User sees repeated failures during long Anthropic thinking sessions:
+
+#+begin_example
+Assistant response stalled while streaming thinking content. Idle timeout: 45000ms.
+#+end_example
+
+Settled user decisions:
+- Implement config knob + Anthropic-specific safer default.
+- UX = both longer timeout and visible keepalive/status.
+- Config exposure = config plus env setting, not CLI flag.
+
+Source evidence:
+- Timeout source: ~packages/ai/src/utils/idle-iterator.ts~ has Anthropic default 45,000ms and env ~PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS~.
+- Anthropic stream path: ~packages/ai/src/providers/anthropic.ts~ wraps ~client.messages.stream(...)~ with ~iterateWithIdleTimeout(...)~ and classifies idle failures.
+- Diagnostic text: ~packages/ai/src/utils/tool-call-diagnostics.ts~ maps ~stalled_during_thinking~ to the reported string.
+- Coding-agent retry/user-facing formatting: ~packages/coding-agent/src/session/tool-call-diagnostics.ts~ and ~packages/coding-agent/test/agent-session-stream-stall-retry.test.ts~.
+- Settings schema/provider settings: ~packages/coding-agent/src/config/settings-schema.ts~ and ~packages/coding-agent/src/sdk.ts~.
+- TUI working status: ~packages/coding-agent/src/modes/controllers/event-controller.ts~ and ~packages/coding-agent/src/modes/interactive-mode.ts~.
+
+Recommended approach only:
+1. Update pi-ai Anthropic idle timeout default to 180,000ms.
+2. Preserve and prioritize ~PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS~.
+3. Add public pi-ai runtime override setter for coding-agent config.
+4. Add coding-agent setting ~providers.anthropicStreamIdleTimeoutMs~ default 180000; ~0~ disables.
+5. Wire settings at session creation and via settings hook for future requests.
+6. Add terminal keepalive timer for assistant stream silence; show phase/elapsed/last-event/timeout without raw thinking content.
+
+Non-goals:
+- No CLI flag.
+- No OpenAI/Bedrock default change.
+- No provider-wide transport rewrite.
+- No transcript mutation or synthetic assistant deltas for keepalive.
+
+* Verification
+Focused verification expected after implementation:
+- ~bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts~ or exact new pi-ai timeout test.
+- ~bun test packages/coding-agent/test/settings-manager.test.ts~ or exact new focused coding-agent settings test.
+- ~bun test packages/coding-agent/test/modes/stream-idle-keepalive.test.ts~ or exact controller test file.
+- ~bun check:ts~ if exported types/schema/controller types changed.
+
+Manual acceptance:
+- Anthropic default watchdog no longer aborts at 45s; diagnostic timeout is 180,000ms by default if watchdog fires.
+- User can disable with env or config value ~0~.
+- During a silent thinking gap, TUI loader visibly reports waiting/elapsed progress and never leaks raw thinking content.
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:BUG-326-anthropic-stream-idle-timeout-configurab::define-timeout-api]] Define timeout override API contract
+** wave-2 :wave:
+- [[id:BUG-326-anthropic-stream-idle-timeout-configurab::write-pi-ai-timeout-tests]] Write pi-ai timeout tests (TDD)
+- [[id:BUG-326-anthropic-stream-idle-timeout-configurab::write-coding-agent-settings-tests]] Write coding-agent settings tests (TDD)
+- [[id:FEAT-620-show-stream-idle-keepalive-while-thinkin::define-keepalive-contract]] Define keepalive status contract
+** wave-3 :wave:
+- [[id:BUG-326-anthropic-stream-idle-timeout-configurab::implement-pi-ai-timeout]] Implement pi-ai timeout behavior
+- [[id:FEAT-620-show-stream-idle-keepalive-while-thinkin::write-keepalive-tests]] Write keepalive timer tests (TDD)
+- [[id:FEAT-620-show-stream-idle-keepalive-while-thinkin::write-intent-priority-test]] Write intent priority test (TDD)
+** wave-4 :wave:
+- [[id:BUG-326-anthropic-stream-idle-timeout-configurab::wire-coding-agent-setting]] Wire coding-agent setting
+** wave-5 :wave:
+- [[id:BUG-326-anthropic-stream-idle-timeout-configurab::verify-timeout-config]] Verify timeout configuration
+- [[id:FEAT-620-show-stream-idle-keepalive-while-thinkin::implement-keepalive-lifecycle]] Implement keepalive timer lifecycle
+** wave-6 :wave:
+- [[id:FEAT-620-show-stream-idle-keepalive-while-thinkin::verify-keepalive-ux]] Verify keepalive UX
+** File-level DAG
+*** Nodes
+- `BUG-326-anthropic-stream-idle-timeout-configurab` Define timeout override API contract [ITEM]
+- `FEAT-620-show-stream-idle-keepalive-while-thinkin` Define keepalive status contract [ITEM]
+*** Edges
+- `FEAT-620-show-stream-idle-keepalive-while-thinkin` depends on `BUG-326-anthropic-stream-idle-timeout-configurab`
+** Subfeature-level DAG
+*** Nodes
+- `BUG-326-anthropic-stream-idle-timeout-configurab::define-timeout-api` Define timeout override API contract [ITEM]
+- `BUG-326-anthropic-stream-idle-timeout-configurab::write-pi-ai-timeout-tests` Write pi-ai timeout tests (TDD) [ITEM]
+- `BUG-326-anthropic-stream-idle-timeout-configurab::write-coding-agent-settings-tests` Write coding-agent settings tests (TDD) [ITEM]
+- `BUG-326-anthropic-stream-idle-timeout-configurab::implement-pi-ai-timeout` Implement pi-ai timeout behavior [ITEM]
+- `BUG-326-anthropic-stream-idle-timeout-configurab::wire-coding-agent-setting` Wire coding-agent setting [ITEM]
+- `BUG-326-anthropic-stream-idle-timeout-configurab::verify-timeout-config` Verify timeout configuration [ITEM]
+- `FEAT-620-show-stream-idle-keepalive-while-thinkin::define-keepalive-contract` Define keepalive status contract [ITEM]
+- `FEAT-620-show-stream-idle-keepalive-while-thinkin::write-keepalive-tests` Write keepalive timer tests (TDD) [ITEM]
+- `FEAT-620-show-stream-idle-keepalive-while-thinkin::write-intent-priority-test` Write intent priority test (TDD) [ITEM]
+- `FEAT-620-show-stream-idle-keepalive-while-thinkin::implement-keepalive-lifecycle` Implement keepalive timer lifecycle [ITEM]
+- `FEAT-620-show-stream-idle-keepalive-while-thinkin::verify-keepalive-ux` Verify keepalive UX [ITEM]
+*** Edges
+- `BUG-326-anthropic-stream-idle-timeout-configurab::write-pi-ai-timeout-tests` depends on `BUG-326-anthropic-stream-idle-timeout-configurab::define-timeout-api`
+- `BUG-326-anthropic-stream-idle-timeout-configurab::write-coding-agent-settings-tests` depends on `BUG-326-anthropic-stream-idle-timeout-configurab::define-timeout-api`
+- `BUG-326-anthropic-stream-idle-timeout-configurab::implement-pi-ai-timeout` depends on `BUG-326-anthropic-stream-idle-timeout-configurab::write-pi-ai-timeout-tests`
+- `BUG-326-anthropic-stream-idle-timeout-configurab::wire-coding-agent-setting` depends on `BUG-326-anthropic-stream-idle-timeout-configurab::write-coding-agent-settings-tests`
+- `BUG-326-anthropic-stream-idle-timeout-configurab::wire-coding-agent-setting` depends on `BUG-326-anthropic-stream-idle-timeout-configurab::implement-pi-ai-timeout`
+- `BUG-326-anthropic-stream-idle-timeout-configurab::verify-timeout-config` depends on `BUG-326-anthropic-stream-idle-timeout-configurab::wire-coding-agent-setting`
+- `FEAT-620-show-stream-idle-keepalive-while-thinkin::define-keepalive-contract` depends on `BUG-326-anthropic-stream-idle-timeout-configurab::define-timeout-api`
+- `FEAT-620-show-stream-idle-keepalive-while-thinkin::write-keepalive-tests` depends on `FEAT-620-show-stream-idle-keepalive-while-thinkin::define-keepalive-contract`
+- `FEAT-620-show-stream-idle-keepalive-while-thinkin::write-intent-priority-test` depends on `FEAT-620-show-stream-idle-keepalive-while-thinkin::define-keepalive-contract`
+- `FEAT-620-show-stream-idle-keepalive-while-thinkin::implement-keepalive-lifecycle` depends on `FEAT-620-show-stream-idle-keepalive-while-thinkin::write-keepalive-tests`
+- `FEAT-620-show-stream-idle-keepalive-while-thinkin::implement-keepalive-lifecycle` depends on `FEAT-620-show-stream-idle-keepalive-while-thinkin::write-intent-priority-test`
+- `FEAT-620-show-stream-idle-keepalive-while-thinkin::implement-keepalive-lifecycle` depends on `BUG-326-anthropic-stream-idle-timeout-configurab::wire-coding-agent-setting`
+- `FEAT-620-show-stream-idle-keepalive-while-thinkin::verify-keepalive-ux` depends on `FEAT-620-show-stream-idle-keepalive-while-thinkin::implement-keepalive-lifecycle`
+
+** Completion [2026-04-28]
+*** Verification
+- `bun test packages/ai/test/providers/anthropic-idle-timeout.test.ts` → 10 pass, 0 fail.
+- `bun test packages/coding-agent/test/settings-manager.test.ts` → 9 pass, 0 fail.
+- `bun test packages/coding-agent/test/modes/stream-idle-keepalive.test.ts` → 7 pass, 0 fail.
+- `bun check:ts` → passed (`biome check . && tsgo -p tsconfig.json`).
+
+*** Artifacts
+- Code/test evidence:
+  - [[file:packages/ai/src/utils/idle-iterator.ts]]
+  - [[file:packages/ai/test/providers/anthropic-idle-timeout.test.ts]]
+  - [[file:packages/coding-agent/src/config/settings-schema.ts]]
+  - [[file:packages/coding-agent/src/config/settings.ts]]
+  - [[file:packages/coding-agent/src/sdk.ts]]
+  - [[file:packages/coding-agent/src/modes/controllers/event-controller.ts]]
+  - [[file:packages/coding-agent/test/settings-manager.test.ts]]
+  - [[file:packages/coding-agent/test/modes/stream-idle-keepalive.test.ts]]
+- No UI screenshots required: behavior is terminal working-status text verified by controller tests.
+- Child lifecycle: [[id:BUG-326-anthropic-stream-idle-timeout-configurab]] DONE; [[id:FEAT-620-show-stream-idle-keepalive-while-thinkin]] DONE.
+
+*** Deviations
+None.
+
+NOTE [2026-04-28]: Implementation and verification complete. Child items are DONE; no deviations.

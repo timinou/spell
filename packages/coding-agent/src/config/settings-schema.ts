@@ -1571,6 +1571,17 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
+	"providers.anthropicStreamIdleTimeoutMs": {
+		type: "number",
+		default: 180_000,
+		ui: {
+			tab: "providers",
+			label: "Anthropic Stream Idle Timeout",
+			description:
+				"Milliseconds before aborting a silent Anthropic stream; 0 disables. PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS overrides this setting.",
+			submenu: true,
+		},
+	},
 	"providers.openaiWebsockets": {
 		type: "enum",
 		values: ["auto", "off", "on"] as const,
