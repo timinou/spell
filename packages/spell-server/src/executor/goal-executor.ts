@@ -1,8 +1,9 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { ManifestAction } from "../actions";
-import type { AutonomyManifest, FilterConfig, ManifestGoal, ManifestSetup } from "../manifest/types";
+import type { AutonomyManifest, ManifestGoal, ManifestSetup } from "../manifest/types";
 import type { RpcClient, RpcEvent } from "../rpc";
 import type { SessionManager } from "../session/session-manager";
+import { setupToBaseSpawnOptions } from "../session/setup-options";
 import type { BaseSpawnOptions } from "../session/types";
 import actionGoalPromptTemplate from "./action-goal-prompt.md" with { type: "text" };
 import { removeSandboxPolicy, writeSandboxPolicy } from "./sandbox-writer";
@@ -220,21 +221,7 @@ export class GoalExecutionController {
 		cwd: string,
 		sandboxPolicyPath?: string,
 	): BaseSpawnOptions {
-		const tools = this.#resolveAllowedValues(setup.tools);
-		return {
-			cwd,
-			tools,
-			appendSystemPrompt: undefined,
-			sandboxPolicyPath,
-		};
-	}
-
-	#resolveAllowedValues(filter?: FilterConfig): string[] {
-		if (!filter?.allow) {
-			return [];
-		}
-		const deny = new Set(filter.deny ?? []);
-		return filter.allow.filter(tool => !deny.has(tool));
+		return setupToBaseSpawnOptions(setup, { cwd, sandboxPolicyPath });
 	}
 
 	async #promptUntilSettled(

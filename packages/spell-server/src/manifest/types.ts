@@ -5,6 +5,7 @@ export interface AutonomyManifest {
 	version: string;
 	setups: Map<string, ManifestSetup>;
 	goals: Map<string, ManifestGoal>;
+	templates: Map<string, Template>;
 	exportTargets: ExportTarget[];
 	notificationRoutes: NotificationRoute[];
 	reviewPolicies: ReviewPolicy[];
@@ -15,6 +16,34 @@ export interface AutonomyManifest {
 	stateSchemas: StateSchema[];
 	toolModules: ToolModule[];
 	operatorActions: OperatorAction[];
+}
+
+/**
+ * Templates are lightweight, schedule-less, ad-hoc-runnable presets surfaced
+ * by the web frontend's command-bar (Linear-style ⌘K palette). Each template
+ * binds a setup, an initial Handlebars-renderable prompt, typed parameters,
+ * and an optional artifact-watch hint that drives “ready” card transitions.
+ */
+export interface Template {
+	name: string;
+	description?: string;
+	setupRef: string;
+	mode?: "rpc";
+	prompt: string;
+	params: ManifestTemplateParam[];
+	artifactWatch?: ManifestTemplateArtifactWatch;
+}
+
+export type ManifestTemplateParamType = "string" | "number" | "boolean";
+
+export interface ManifestTemplateParam {
+	name: string;
+	type: ManifestTemplateParamType;
+	required?: boolean;
+}
+
+export interface ManifestTemplateArtifactWatch {
+	ext: string[];
 }
 
 export interface ManifestImport {
@@ -30,6 +59,7 @@ export interface ParsedManifestModule {
 	imports: ManifestImport[];
 	setups: Map<string, ManifestSetup>;
 	goals: Map<string, ManifestGoal>;
+	templates: Map<string, Template>;
 	overrides: ManifestOverride[];
 	actionDescriptors: ActionDescriptor[];
 	exportTargets: ExportTarget[];
@@ -656,7 +686,8 @@ export function isValidGoal(value: unknown): value is ManifestGoal {
 export function isValidManifest(value: unknown): value is AutonomyManifest {
 	if (!isRecord(value)) return false;
 	if (typeof value.name !== "string" || typeof value.version !== "string") return false;
-	if (!(value.setups instanceof Map) || !(value.goals instanceof Map)) return false;
+	if (!(value.setups instanceof Map) || !(value.goals instanceof Map) || !(value.templates instanceof Map))
+		return false;
 	return (
 		Array.isArray(value.exportTargets) &&
 		Array.isArray(value.notificationRoutes) &&

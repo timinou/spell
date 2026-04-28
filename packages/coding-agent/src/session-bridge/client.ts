@@ -2,7 +2,16 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
-import type { BlockingEventPayload, EventResponsePayload, SocketClientMessage, SocketServerMessage } from "./types";
+import {
+	type BlockingEventPayload,
+	EVENT_LOG_ENTRY_KINDS,
+	type EventLogEntry,
+	type EventResponsePayload,
+	type SocketClientMessage,
+	type SocketServerMessage,
+} from "./types";
+
+const EVENT_LOG_TEXT_MAX = 256;
 
 const DEFAULT_SOCKET_RELATIVE_PATH = ".spell/server.sock";
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -20,6 +29,12 @@ export interface SessionBridgeOptions {
 	mode: string;
 	startedAt: number;
 	projectName: string;
+	/**
+	 * Opt in to forwarding low-fi summary events (`turn_start`, `tool_call`,
+	 * `assistant_text`, ...) to the bridge. Default off so external CLI sessions
+	 * never leak content unintentionally.
+	 */
+	eventLog?: boolean;
 }
 
 function isErrorWithCode(value: unknown): value is Error & { code?: string } {
@@ -131,6 +146,30 @@ export class SessionBridgeClient {
 		});
 
 		return promise;
+	}
+
+	/**
+	 * Fire-and-forget summary event push. Gated by either constructor flag
+	 * or `SPELL_BRIDGE_EVENT_LOG=1`; otherwise this is a no-op.
+	 */
+	emitEventLog(entry: EventLogEntry): void {
+		if (!this.#isEventLogEnabled()) return;
+		if (!this.#connected || !this.#socket) return;
+		if (!EVENT_LOG_ENTRY_KINDS.has(entry.kind)) return;
+		const clipped: EventLogEntry =
+			entry.text !== undefined && entry.text.length > EVENT_LOG_TEXT_MAX
+				? { ...entry, text: entry.text.slice(0, EVENT_LOG_TEXT_MAX) }
+				: entry;
+		this.#send({
+			type: "event_log",
+			timestamp: Date.now(),
+			entry: clipped,
+		});
+	}
+
+	#isEventLogEnabled(): boolean {
+		if (this.#options.eventLog === true) return true;
+		return process.env.SPELL_BRIDGE_EVENT_LOG === "1";
 	}
 
 	notifyEventResolved(eventId: string): void {

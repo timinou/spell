@@ -74,6 +74,14 @@ export interface ApprovalDetail extends ApprovalListEntry {
 	downstreamJobs: DownstreamJobEntry[];
 }
 
+/**
+ * Identity attached to an authenticated /web/* request. The `name` is the
+ * key under which the matching token was registered in `WebConfig.tokens`.
+ */
+export interface WebIdentity {
+	name: string;
+}
+
 export interface ServerConfig {
 	port: number;
 	auth: {

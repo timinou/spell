@@ -89,12 +89,49 @@ export interface EventResolvedSocketClientMessage extends SocketMessageBase {
 	eventId: string;
 }
 
+export type EventLogEntryKind = "turn_start" | "turn_end" | "tool_call" | "assistant_text" | "plan_decision" | "error";
+
+export const EVENT_LOG_ENTRY_KINDS: ReadonlySet<EventLogEntryKind> = new Set([
+	"turn_start",
+	"turn_end",
+	"tool_call",
+	"assistant_text",
+	"plan_decision",
+	"error",
+]);
+
+export interface EventLogEntry {
+	kind: EventLogEntryKind;
+	ts: number;
+	text?: string;
+	toolName?: string;
+	meta?: Record<string, string | number | boolean>;
+}
+
+export interface EventLogSocketClientMessage extends SocketMessageBase {
+	type: "event_log";
+	entry: EventLogEntry;
+}
+
+export function isEventLogEntry(value: unknown): value is EventLogEntry {
+	if (typeof value !== "object" || value === null) return false;
+	const entry = value as Record<string, unknown>;
+	if (typeof entry.kind !== "string" || !EVENT_LOG_ENTRY_KINDS.has(entry.kind as EventLogEntryKind)) {
+		return false;
+	}
+	if (typeof entry.ts !== "number" || !Number.isFinite(entry.ts)) return false;
+	if (entry.text !== undefined && typeof entry.text !== "string") return false;
+	if (entry.toolName !== undefined && typeof entry.toolName !== "string") return false;
+	return true;
+}
+
 export type SocketClientMessage =
 	| RegisterSocketClientMessage
 	| DeregisterSocketClientMessage
 	| BlockingEventSocketClientMessage
 	| HeartbeatSocketClientMessage
-	| EventResolvedSocketClientMessage;
+	| EventResolvedSocketClientMessage
+	| EventLogSocketClientMessage;
 
 export interface RegisteredSocketServerMessage extends SocketMessageBase {
 	type: "registered";
@@ -160,6 +197,7 @@ const SOCKET_CLIENT_MESSAGE_TYPES = new Set([
 	"blocking_event",
 	"heartbeat",
 	"event_resolved",
+	"event_log",
 ]);
 
 export function isSocketClientMessage(value: unknown): value is SocketClientMessage {

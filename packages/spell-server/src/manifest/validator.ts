@@ -83,5 +83,44 @@ export function validateManifest(manifest: AutonomyManifest, registry?: ActionRe
 		}
 	}
 
+	for (const [templateName, template] of manifest.templates) {
+		if (template.prompt.trim().length === 0) {
+			errors.push({ path: `templates.${templateName}.prompt`, message: "Template prompt must be non-empty" });
+		}
+		// Setup may be a local symbol OR an alias-qualified import key like "alias.name".
+		if (!manifest.setups.has(template.setupRef)) {
+			errors.push({
+				path: `templates.${templateName}.setup`,
+				message: `Unknown setup "${template.setupRef}"`,
+			});
+		}
+		const seenParams = new Set<string>();
+		for (const param of template.params) {
+			if (seenParams.has(param.name)) {
+				errors.push({
+					path: `templates.${templateName}.params.${param.name}`,
+					message: "Duplicate parameter name",
+				});
+			}
+			seenParams.add(param.name);
+		}
+		if (template.mode !== undefined && template.mode !== "rpc") {
+			errors.push({
+				path: `templates.${templateName}.mode`,
+				message: `Mode must be one of: rpc`,
+			});
+		}
+		if (template.artifactWatch) {
+			for (const ext of template.artifactWatch.ext) {
+				if (!/^\.[a-z0-9]+$/.test(ext)) {
+					errors.push({
+						path: `templates.${templateName}.artifactWatch.ext`,
+						message: `Extension '${ext}' must match /^\\.[a-z0-9]+$/`,
+					});
+				}
+			}
+		}
+	}
+
 	return errors.length === 0 ? { valid: true } : { valid: false, errors };
 }
