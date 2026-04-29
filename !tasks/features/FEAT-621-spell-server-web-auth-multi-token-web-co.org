@@ -1,0 +1,115 @@
+#+TITLE: spell-server web auth: multi-token web config + bearer guard
+#+STATE: DONE
+#+SESSION_ID: 14ccc1f70c4dbbca
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T20-40-38-705Z_14ccc1f70c4dbbca.jsonl]]
+#+CUSTOM_ID: FEAT-621-spell-server-web-auth-multi-token-web-co
+#+LAYER: config
+
+* Initial Message
+
+Goal: simple frontend to spell server. a client can connect with a secret token to a fast websocket that can let you connect with the running sessions by that user on that instance (through spell autodiscovery, consolidate the feature by looking at existing usage of similar features).
+
+On the frontend, you can start new plan sessions, you can request a url, etc. that lets you use both xterm.js and, for example, see the pdf generated from a typst requested by a task whose goal was to generate a report.
+
+easy way to setup templates from the frontend, wiht a linear-like command bar. Template 'document', you run it, you get a nice card in your session list, and then it tells you when it has the artifact ready.
+
+* Intention & Purpose
+Add a new ~web~ block to ~server.kdl~ that configures multiple named bearer tokens. Add a ~verifyWebToken~ guard that maps an inbound ~Authorization: Bearer <secret>~ header (or ~?token=<secret>~ query for WebSocket upgrade) to a stable identity record (~{name, source}~). All other ~/web~ subsystems consume this identity for ownedBy tagging and audit logging.
+
+* Context & Narrative
+Today ~server.kdl~ models only HTTP basic-auth for ~/api/*~ and HMAC/bearer for individual ~/trigger/<id>~ goals. The web frontend needs a different auth surface: shared bearer tokens, multiple human identities (Alice, Bob...), one keyspace per deployment, no per-route bypass. The token is sent on the WS upgrade request via ~?token=~ query string (browsers cannot set custom headers on ~new WebSocket()~) and on every plain HTTP /web request via ~Authorization: Bearer~. ~env(...)~ resolution is REQUIRED for the secret value so tokens never live in plaintext KDL.
+
+This item ONLY adds the config schema, parser, types, and the verifier function. Wiring it into routes is done in dependent items.
+
+* Scope
+In-scope:
+- ~WebConfig~ type ~{ tokens: Map<name, secret> }~ in ~src/config/types.ts~
+- ~web "<implicit-default-name>" { token "<name>" "<secret>"; ... }~ KDL parser in ~src/config/server-parser.ts~ (sibling of ~http~ and ~socket~)
+- New helper ~verifyWebToken(request, web): WebIdentity | null~ in ~src/http/auth.ts~
+- ~WebIdentity = { name: string }~ exported type
+- Constant-time compare for secret matching (reuse ~timingSafeEqual~ if used elsewhere; otherwise add)
+
+Out-of-scope:
+- HTTP route mounting (FEAT-WEB-WS / FEAT-WEB-ARTIFACTS / FEAT-WEB-TEMPLATE-RUN consume the verifier)
+- Frontend asset serving (own item)
+- Audit log persistence (only emit ~logger.info~ on auth success/fail)
+
+* Existing Patterns
+- ~src/config/server-parser.ts::parseServerConfig~ already handles a sibling-node pattern for ~socket~ alongside ~http~; mirror that.
+- ~src/config/env-resolver.ts::resolveEnvValue~ for ~env(...)~ resolution.
+- ~src/http/auth.ts::verifyBasicAuth~ and ~verifyBearerToken~ already use timing-safe compare semantics; reuse the same helper.
+- ~docs/spell-server/kdl-schema-reference.md~ ~socket~ section documents the sibling-node pattern.
+
+* Tests
+File: ~packages/spell-server/test/config/server-parser.test.ts~ (extend) and ~packages/spell-server/test/http/auth.test.ts~ (extend).
+
+Scenarios:
+1. Parses ~web { token "alice" "secret-a"; token "bob" "secret-b" }~ → ~tokens.get("alice") === "secret-a"~, two entries.
+2. Parses ~web { token "alice" "env(WEB_TOKEN_A)" }~ with ~WEB_TOKEN_A=xyz~ in env → ~tokens.get("alice") === "xyz"~.
+3. Missing required env var → throws with field path ~web.tokens.alice~ in error message.
+4. Empty ~web {}~ block (no tokens) → ~tokens~ is an empty Map (still defined). Used in tests to lock down "web subsystem on but no users".
+5. Omitted ~web~ node → ~LoadedConfig.server.web~ is ~undefined~ (web subsystem disabled).
+6. Duplicate token name → throws.
+7. ~verifyWebToken~ with valid ~Authorization: Bearer secret-a~ → returns ~{ name: "alice" }~.
+8. Invalid token → returns ~null~.
+9. Valid ~?token=secret-a~ on URL → returns ~{ name: "alice" }~.
+10. Missing both header and query → ~null~.
+11. Constant-time compare (no early return on length mismatch).
+12. ~web { token "alice" "" }~ → throws (empty secret rejected like other env-bypassed empties).
+
+* Implementation
+** ITEM Define WebConfig and WebIdentity types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-621-spell-server-web-auth-multi-token-web-co::define-types
+:END:
+- File: ~packages/spell-server/src/config/types.ts~
+- Add: ~export interface WebConfig { tokens: Map<string, string> }~
+- Extend ~ServerConfig~ with ~web?: WebConfig~
+- File: ~packages/spell-server/src/http/types.ts~ (or ~auth.ts~ if no types module): ~export interface WebIdentity { name: string }~
+
+** ITEM Write parser + auth tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-621-spell-server-web-auth-multi-token-web-co::write-tests
+:DEPENDS: FEAT-621-spell-server-web-auth-multi-token-web-co::define-types
+:END:
+- Files: ~packages/spell-server/test/config/server-parser.test.ts~, ~packages/spell-server/test/http/auth.test.ts~
+- Implement scenarios 1-12 above as initially-failing tests using the same harness already present in the suite.
+
+** ITEM Implement parseWebConfig in server-parser.ts
+:PROPERTIES:
+:CUSTOM_ID: FEAT-621-spell-server-web-auth-multi-token-web-co::parse-web-config
+:DEPENDS: FEAT-621-spell-server-web-auth-multi-token-web-co::write-tests
+:END:
+- File: ~packages/spell-server/src/config/server-parser.ts~
+- Add ~parseWebConfig(node, env): WebConfig~ helper near existing ~parseAuthNode~.
+- In ~parseServerConfig~, after the ~socket~ lookup, ~document.findNodeByName("web")~ → call ~parseWebConfig~ if present.
+- Each ~token "<name>" "<secret>"~ child: name from arg 0, secret resolved with ~resolveEnvValue<string>~ at field path ~web.tokens.<name>~.
+- Throw on duplicate name and on empty post-resolution secret.
+
+** ITEM Implement verifyWebToken in http/auth.ts
+:PROPERTIES:
+:CUSTOM_ID: FEAT-621-spell-server-web-auth-multi-token-web-co::verify-web-token
+:DEPENDS: FEAT-621-spell-server-web-auth-multi-token-web-co::write-tests
+:END:
+- File: ~packages/spell-server/src/http/auth.ts~
+- ~export function verifyWebToken(request: Request, web: WebConfig | undefined): WebIdentity | null~
+- Read ~Authorization~ header; strip ~Bearer ~ prefix; if absent fall back to ~new URL(request.url).searchParams.get("token")~.
+- Iterate ~web.tokens~ entries with ~timingSafeEqual~-equivalent compare on the secret bytes; return ~{ name }~ on match.
+- Return ~null~ if ~web~ is undefined or no match.
+- ~logger.debug~ on success with ~{ name, source: "header" | "query" }~; ~logger.warn~ on failed attempts with ~{ source }~ but never the attempted token bytes.
+
+* Edge Cases
+- Token presented but ~web~ not configured → 401 (verifier returns null, route layer maps to 401). Audit log notes "web subsystem disabled".
+- Both header and query present → header wins (more explicit).
+- Token containing ~:~ or ~/~ → still allowed; we never URL-encode/decode beyond what URLSearchParams does.
+- Empty ~Authorization: Bearer~ (whitespace only) → null.
+- ~web { token "alice" "env(MISSING, optional)" }~ → resolves to undefined → tokens.alice is dropped with a logger.warn (don't throw — optional ones may be intentionally inactive).
+- Identical secrets across two names → both entries kept; ~verifyWebToken~ returns the first lexicographically-sorted match. Documented in code comment as a defensive policy.
+
+* Acceptance Criteria
+- ~bun check:ts~ clean.
+- New tests pass; existing tests untouched.
+- ~docs/spell-server/kdl-schema-reference.md~ NOT yet updated (DOC-WEB owns that).
+- ~ServerConfig.web~ visible from ~startSpellServer~ deps wiring (read but unused inside this item).
+
+NOTE [2026-04-28]: WebConfig {tokens: Map}, parseWebConfig, verifyWebToken (Bearer | ?token=, constant-time, lex-sort), WebIdentity. Tests: server-web 8 + web-auth 9 = 17/17 pass.

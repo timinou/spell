@@ -1,0 +1,268 @@
+#+TITLE: spell frontend: web dashboard for live sessions, templates, artifacts
+#+STATE: DONE
+#+SESSION_ID: 14ccc1f70c4dbbca
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T20-40-38-705Z_14ccc1f70c4dbbca.jsonl]]
+#+CUSTOM_ID: PLAN-289-spell-frontend-web-dashboard-for-live-se
+#+LAYER: project
+
+* Initial Message
+
+Goal: simple frontend to spell server. a client can connect with a secret token to a fast websocket that can let you connect with the running sessions by that user on that instance (through spell autodiscovery, consolidate the feature by looking at existing usage of similar features).
+
+On the frontend, you can start new plan sessions, you can request a url, etc. that lets you use both xterm.js and, for example, see the pdf generated from a typst requested by a task whose goal was to generate a report.
+
+easy way to setup templates from the frontend, wiht a linear-like command bar. Template 'document', you run it, you get a nice card in your session list, and then it tells you when it has the artifact ready.
+
+* Context
+
+Spell needs a single-instance web dashboard so a user (or a small group via named bearer tokens) can drive ~spell-server~ and its sessions from a browser. The dashboard must:
+
+- Auto-discover all running spell sessions for that user on that instance: server-spawned RPC sessions (full control) and external CLI sessions registered via the existing ~~/.spell/server.sock~ bridge (read-only feed + answer blocking events).
+- Spawn new RPC sessions on demand. Templates declared in ~autonomy.kdl~ as a new top-level ~template "name" { … }~ node provide a Linear-style command-bar quick-launch with typed params and Handlebars-rendered prompts.
+- Render two xterm.js tabs per spawned session: Stream (RPC events as ANSI text + prompt/steer/abort) and Bash (RPC ~bash~ command). State and Artifacts tabs round it out.
+- Surface artifacts (PDF/img/typst output) over HTTP with bearer auth and short-lived signed URLs for embed cases. WS broadcast ~artifact_created~ events with optional file-extension subscription filter so a "document" template card flips to ~ready~ exactly when the matching ~.pdf~ lands on disk.
+
+Existing infrastructure consolidated:
+- ~SocketSessionRegistry~ becomes the unified registry (extended with ~kind: "external" | "spawned"~, ~ownedBy~, ~templateName~, ~rpcClient~).
+- ~SessionManager~ + ~RpcClient~ (already used by goals/Telegram) drive web-spawned RPC sessions through a new ~WebSpawnedLifecycle~.
+- ~ArtifactManager~ paths + ~resolveArtifactScopeFromSessionFile~ provide the canonical artifact addressing.
+- ~startHttpServer~ in ~http/server.ts~ extended with ~/web/*~ routes (SPA assets, REST API, WebSocket upgrade, artifact router).
+- Manifest parser/validator/serializer extended with the ~template~ node mirroring goal/setup conventions.
+- Bridge protocol (~socket/types.ts~) extended with one new opt-in ~event_log~ message kind for low-fi external-session feeds.
+
+Settled design decisions (from clarifications round):
+1. Mount: extend spell-server (no new package); single ~Bun.serve~ owns HTTP + WS.
+2. Auth: ~web { token "alice" "env(...)" }~ repeatable; bearer in ~Authorization~ or ~?token=~ for WS upgrade.
+3. Sessions: hybrid (spawned full control; external observe + answer blocking events).
+4. Templates: new top-level ~template~ KDL node; Handlebars prompts; param coercion reuses action-descriptor patterns.
+5. xterm.js: two tabs per session — Stream + Bash.
+6. Artifacts: header-auth + short-lived signed URLs; WS subscribe with optional ~artifactExt: string[]~ filter.
+7. Frontend: Vite SPA in ~packages/spell-server/web/~; build output embedded into spell-server at runtime.
+8. Owner: token name → ~ownedBy~ tag; soft (all clients see all sessions).
+
+* Linked children
+- [[id:FEAT-621-spell-server-web-auth-multi-token-web-co]]
+- [[id:FEAT-622-spell-server-template-manifest-node-kdl]]
+- [[id:FEAT-623-spell-server-bridge-event-log-opt-in-low]]
+- [[id:FEAT-624-spell-server-web-artifacts-http-router-f]]
+- [[id:FEAT-625-spell-server-web-session-hub-spawned-rpc]]
+- [[id:FEAT-626-spell-server-web-ws-server-protocol-chan]]
+- [[id:FEAT-627-spell-server-template-runner-render-reso]]
+- [[id:FEAT-628-spell-frontend-scaffold-vite-spa-bundle]]
+- [[id:FEAT-629-spell-frontend-cmd-k-palette-session-lis]]
+- [[id:FEAT-630-spell-frontend-session-detail-stream-bas]]
+- [[id:FUP-067-docs-spell-server-web-frontend-architect]]
+
+* Verification
+
+After all child items ship:
+
+1. ~bun check~ green at repo root.
+2. Run ~bun run build:web~ inside ~packages/spell-server/web~ → ~dist/~ populated.
+3. Start the server with a minimal config:
+   #+begin_src kdl
+   http port=8787 {
+     auth username="admin" password="admin"
+   }
+   socket path="~/.spell/server.sock"
+   web {
+     token "alice" "env(SPELL_TOKEN_ALICE)"
+   }
+   #+end_src
+   And a manifest with a ~template "document" { setup "writer"; param "topic" type="string" required=#true; prompt "Generate a typst PDF report on {{topic}}."; artifact-watch ext=".pdf" }~.
+4. Visit ~http://localhost:8787/web/~ in a browser; enter the token; observe the empty session list.
+5. Run any existing ~spell~ CLI session in another terminal with ~SPELL_BRIDGE_EVENT_LOG=1~ → external session appears in the list with low-fi event log.
+6. ⌘K → ~document~ → topic="memory" → submit. Card appears in sidebar; status transitions ~spawning~ → ~running~ → ~ready~ when the .pdf is written; PDF preview renders inline in the Artifacts tab via signed URL.
+7. Stream tab: text stream renders in real time; ~Cmd+Enter~ in the prompt issues a follow-up; ~^C~ aborts.
+8. Bash tab: ~ls
+~ executes the RPC ~bash~ command and prints output.
+9. WS reconnect after ~kill -STOP~/~CONT~ on the daemon's socket connection from the browser tab → store re-lists sessions cleanly.
+10. ~bun test packages/spell-server/test/web~ + ~bun test packages/spell-server/web/test~ green.
+
+Manual integration smoke (5-10 min):
+- Two browser tabs see the same session updates.
+- Killing a spawned session from one tab removes the card in the other within 1s.
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:FEAT-621-spell-server-web-auth-multi-token-web-co::define-types]] Define WebConfig and WebIdentity types
+- [[id:FEAT-622-spell-server-template-manifest-node-kdl::define-types]] Define Template type
+- [[id:FEAT-623-spell-server-bridge-event-log-opt-in-low::define-types]] Define EventLogEntry + message types
+- [[id:FEAT-624-spell-server-web-artifacts-http-router-f::define-types]] Define types and route helpers
+- [[id:FEAT-625-spell-server-web-session-hub-spawned-rpc::extend-registry]] Extend SessionRegistryEntry shape and registry methods
+- [[id:FEAT-626-spell-server-web-ws-server-protocol-chan::define-protocol]] Define protocol types
+- [[id:FEAT-627-spell-server-template-runner-render-reso::extract-setup-options]] Extract setup→RpcSpawnOptions helper
+- [[id:FEAT-628-spell-frontend-scaffold-vite-spa-bundle::vite-bootstrap]] Vite project bootstrap
+- [[id:FEAT-629-spell-frontend-cmd-k-palette-session-lis::sessions-store]] Sessions store + WS subscription
+- [[id:FEAT-629-spell-frontend-cmd-k-palette-session-lis::templates-store]] Templates store + API client
+- [[id:FEAT-630-spell-frontend-session-detail-stream-bas::stream-renderer]] StreamRenderer pure helper + tests
+- [[id:FEAT-630-spell-frontend-session-detail-stream-bas::state-tab]] StateTab
+- [[id:FUP-067-docs-spell-server-web-frontend-architect::web-md]] web.md narrative
+- [[id:FUP-067-docs-spell-server-web-frontend-architect::kdl-additions]] kdl-schema additions
+- [[id:FUP-067-docs-spell-server-web-frontend-architect::changelog]] CHANGELOG
+** wave-2 :wave:
+- [[id:FEAT-621-spell-server-web-auth-multi-token-web-co::write-tests]] Write parser + auth tests (TDD)
+- [[id:FEAT-622-spell-server-template-manifest-node-kdl::write-tests]] Add parser/validator/serializer tests (TDD)
+- [[id:FEAT-623-spell-server-bridge-event-log-opt-in-low::server-tests]] Add server-side registry tests (TDD)
+- [[id:FEAT-623-spell-server-bridge-event-log-opt-in-low::client-tests]] Client emitter tests (TDD)
+- [[id:FEAT-624-spell-server-web-artifacts-http-router-f::signed-url]] Implement signed-url + tests (TDD)
+- [[id:FEAT-624-spell-server-web-artifacts-http-router-f::watcher]] Implement watcher + tests (TDD)
+- [[id:FEAT-625-spell-server-web-session-hub-spawned-rpc::write-tests]] Tests for hub + lifecycle (TDD)
+- [[id:FEAT-626-spell-server-web-ws-server-protocol-chan::write-tests]] Tests (TDD)
+- [[id:FEAT-626-spell-server-web-ws-server-protocol-chan::rest-router]] REST router
+- [[id:FEAT-627-spell-server-template-runner-render-reso::param-coercion]] Param coercion + tests (TDD)
+- [[id:FEAT-628-spell-frontend-scaffold-vite-spa-bundle::asset-loader]] Asset loader + tests (TDD)
+- [[id:FEAT-628-spell-frontend-scaffold-vite-spa-bundle::auth]] Auth + login screen
+- [[id:FEAT-629-spell-frontend-cmd-k-palette-session-lis::session-list]] SessionList + SessionCard
+- [[id:FEAT-629-spell-frontend-cmd-k-palette-session-lis::cmd-bar]] CommandBar
+- [[id:FEAT-630-spell-frontend-session-detail-stream-bas::xterm-setup]] xterm.js setup module
+** wave-3 :wave:
+- [[id:FEAT-621-spell-server-web-auth-multi-token-web-co::parse-web-config]] Implement parseWebConfig in server-parser.ts
+- [[id:FEAT-621-spell-server-web-auth-multi-token-web-co::verify-web-token]] Implement verifyWebToken in http/auth.ts
+- [[id:FEAT-622-spell-server-template-manifest-node-kdl::parse]] Implement parser branch
+- [[id:FEAT-623-spell-server-bridge-event-log-opt-in-low::server-impl]] Server: handler in SocketServer + ring buffer in registry
+- [[id:FEAT-623-spell-server-bridge-event-log-opt-in-low::client-impl]] Client: SessionBridgeClient.emitEventLog
+- [[id:FEAT-624-spell-server-web-artifacts-http-router-f::router]] Implement router + tests (TDD)
+- [[id:FEAT-624-spell-server-web-artifacts-http-router-f::signing-key]] Auto-resolve signing key from server config
+- [[id:FEAT-625-spell-server-web-session-hub-spawned-rpc::lifecycle]] Implement WebSpawnedLifecycle
+- [[id:FEAT-626-spell-server-web-ws-server-protocol-chan::connection]] Implement WebConnection
+- [[id:FEAT-627-spell-server-template-runner-render-reso::runner]] Implement TemplateRunner
+- [[id:FEAT-628-spell-frontend-scaffold-vite-spa-bundle::ws-client]] SpellWsClient + tests
+- [[id:FEAT-628-spell-frontend-scaffold-vite-spa-bundle::wire-routes]] Wire /web/* routes in spell-server
+- [[id:FEAT-629-spell-frontend-cmd-k-palette-session-lis::template-runner]] TemplateRunner modal
+- [[id:FEAT-630-spell-frontend-session-detail-stream-bas::stream-tab]] StreamTab + prompt input
+- [[id:FEAT-630-spell-frontend-session-detail-stream-bas::bash-tab]] BashTab
+- [[id:FEAT-630-spell-frontend-session-detail-stream-bas::artifacts-tab]] ArtifactsTab
+** wave-4 :wave:
+- [[id:FEAT-622-spell-server-template-manifest-node-kdl::serialize]] Implement serializer branch
+- [[id:FEAT-622-spell-server-template-manifest-node-kdl::validate]] Implement validator branch
+- [[id:FEAT-622-spell-server-template-manifest-node-kdl::imports]] Wire imports / multi-file support
+- [[id:FEAT-623-spell-server-bridge-event-log-opt-in-low::wire-emission]] Wire emission points in agent loop
+- [[id:FEAT-625-spell-server-web-session-hub-spawned-rpc::hub]] Implement WebSessionHub
+- [[id:FEAT-626-spell-server-web-ws-server-protocol-chan::ws-server]] Implement WebSocketServer mount
+- [[id:FEAT-627-spell-server-template-runner-render-reso::wire]] Wire into REST/WS
+- [[id:FEAT-630-spell-frontend-session-detail-stream-bas::session-detail]] SessionDetail composition
+** wave-5 :wave:
+- [[id:FEAT-625-spell-server-web-session-hub-spawned-rpc::wire-startup]] Wire hub into startSpellServer
+- [[id:FEAT-626-spell-server-web-ws-server-protocol-chan::fanout]] Fan-out wiring
+** File-level DAG
+*** Nodes
+- `FEAT-621-spell-server-web-auth-multi-token-web-co` Define WebConfig and WebIdentity types [ITEM]
+- `FEAT-622-spell-server-template-manifest-node-kdl` Define Template type [ITEM]
+- `FEAT-623-spell-server-bridge-event-log-opt-in-low` Define EventLogEntry + message types [ITEM]
+- `FEAT-624-spell-server-web-artifacts-http-router-f` Define types and route helpers [ITEM]
+- `FEAT-625-spell-server-web-session-hub-spawned-rpc` Extend SessionRegistryEntry shape and registry methods [ITEM]
+- `FEAT-626-spell-server-web-ws-server-protocol-chan` Define protocol types [ITEM]
+- `FEAT-627-spell-server-template-runner-render-reso` Extract setup→RpcSpawnOptions helper [ITEM]
+- `FEAT-628-spell-frontend-scaffold-vite-spa-bundle` Vite project bootstrap [ITEM]
+- `FEAT-629-spell-frontend-cmd-k-palette-session-lis` Sessions store + WS subscription [ITEM]
+- `FEAT-630-spell-frontend-session-detail-stream-bas` StreamRenderer pure helper + tests [ITEM]
+- `FUP-067-docs-spell-server-web-frontend-architect` web.md narrative [ITEM]
+*** Edges
+- None.
+** Subfeature-level DAG
+*** Nodes
+- `FEAT-621-spell-server-web-auth-multi-token-web-co::define-types` Define WebConfig and WebIdentity types [ITEM]
+- `FEAT-621-spell-server-web-auth-multi-token-web-co::write-tests` Write parser + auth tests (TDD) [ITEM]
+- `FEAT-621-spell-server-web-auth-multi-token-web-co::parse-web-config` Implement parseWebConfig in server-parser.ts [ITEM]
+- `FEAT-621-spell-server-web-auth-multi-token-web-co::verify-web-token` Implement verifyWebToken in http/auth.ts [ITEM]
+- `FEAT-622-spell-server-template-manifest-node-kdl::define-types` Define Template type [ITEM]
+- `FEAT-622-spell-server-template-manifest-node-kdl::write-tests` Add parser/validator/serializer tests (TDD) [ITEM]
+- `FEAT-622-spell-server-template-manifest-node-kdl::parse` Implement parser branch [ITEM]
+- `FEAT-622-spell-server-template-manifest-node-kdl::serialize` Implement serializer branch [ITEM]
+- `FEAT-622-spell-server-template-manifest-node-kdl::validate` Implement validator branch [ITEM]
+- `FEAT-622-spell-server-template-manifest-node-kdl::imports` Wire imports / multi-file support [ITEM]
+- `FEAT-623-spell-server-bridge-event-log-opt-in-low::define-types` Define EventLogEntry + message types [ITEM]
+- `FEAT-623-spell-server-bridge-event-log-opt-in-low::server-tests` Add server-side registry tests (TDD) [ITEM]
+- `FEAT-623-spell-server-bridge-event-log-opt-in-low::server-impl` Server: handler in SocketServer + ring buffer in registry [ITEM]
+- `FEAT-623-spell-server-bridge-event-log-opt-in-low::client-tests` Client emitter tests (TDD) [ITEM]
+- `FEAT-623-spell-server-bridge-event-log-opt-in-low::client-impl` Client: SessionBridgeClient.emitEventLog [ITEM]
+- `FEAT-623-spell-server-bridge-event-log-opt-in-low::wire-emission` Wire emission points in agent loop [ITEM]
+- `FEAT-624-spell-server-web-artifacts-http-router-f::define-types` Define types and route helpers [ITEM]
+- `FEAT-624-spell-server-web-artifacts-http-router-f::signed-url` Implement signed-url + tests (TDD) [ITEM]
+- `FEAT-624-spell-server-web-artifacts-http-router-f::router` Implement router + tests (TDD) [ITEM]
+- `FEAT-624-spell-server-web-artifacts-http-router-f::watcher` Implement watcher + tests (TDD) [ITEM]
+- `FEAT-624-spell-server-web-artifacts-http-router-f::signing-key` Auto-resolve signing key from server config [ITEM]
+- `FEAT-625-spell-server-web-session-hub-spawned-rpc::extend-registry` Extend SessionRegistryEntry shape and registry methods [ITEM]
+- `FEAT-625-spell-server-web-session-hub-spawned-rpc::write-tests` Tests for hub + lifecycle (TDD) [ITEM]
+- `FEAT-625-spell-server-web-session-hub-spawned-rpc::lifecycle` Implement WebSpawnedLifecycle [ITEM]
+- `FEAT-625-spell-server-web-session-hub-spawned-rpc::hub` Implement WebSessionHub [ITEM]
+- `FEAT-625-spell-server-web-session-hub-spawned-rpc::wire-startup` Wire hub into startSpellServer [ITEM]
+- `FEAT-626-spell-server-web-ws-server-protocol-chan::define-protocol` Define protocol types [ITEM]
+- `FEAT-626-spell-server-web-ws-server-protocol-chan::write-tests` Tests (TDD) [ITEM]
+- `FEAT-626-spell-server-web-ws-server-protocol-chan::connection` Implement WebConnection [ITEM]
+- `FEAT-626-spell-server-web-ws-server-protocol-chan::ws-server` Implement WebSocketServer mount [ITEM]
+- `FEAT-626-spell-server-web-ws-server-protocol-chan::rest-router` REST router [ITEM]
+- `FEAT-626-spell-server-web-ws-server-protocol-chan::fanout` Fan-out wiring [ITEM]
+- `FEAT-627-spell-server-template-runner-render-reso::extract-setup-options` Extract setup→RpcSpawnOptions helper [ITEM]
+- `FEAT-627-spell-server-template-runner-render-reso::param-coercion` Param coercion + tests (TDD) [ITEM]
+- `FEAT-627-spell-server-template-runner-render-reso::runner` Implement TemplateRunner [ITEM]
+- `FEAT-627-spell-server-template-runner-render-reso::wire` Wire into REST/WS [ITEM]
+- `FEAT-628-spell-frontend-scaffold-vite-spa-bundle::vite-bootstrap` Vite project bootstrap [ITEM]
+- `FEAT-628-spell-frontend-scaffold-vite-spa-bundle::asset-loader` Asset loader + tests (TDD) [ITEM]
+- `FEAT-628-spell-frontend-scaffold-vite-spa-bundle::auth` Auth + login screen [ITEM]
+- `FEAT-628-spell-frontend-scaffold-vite-spa-bundle::ws-client` SpellWsClient + tests [ITEM]
+- `FEAT-628-spell-frontend-scaffold-vite-spa-bundle::wire-routes` Wire /web/* routes in spell-server [ITEM]
+- `FEAT-629-spell-frontend-cmd-k-palette-session-lis::sessions-store` Sessions store + WS subscription [ITEM]
+- `FEAT-629-spell-frontend-cmd-k-palette-session-lis::templates-store` Templates store + API client [ITEM]
+- `FEAT-629-spell-frontend-cmd-k-palette-session-lis::session-list` SessionList + SessionCard [ITEM]
+- `FEAT-629-spell-frontend-cmd-k-palette-session-lis::cmd-bar` CommandBar [ITEM]
+- `FEAT-629-spell-frontend-cmd-k-palette-session-lis::template-runner` TemplateRunner modal [ITEM]
+- `FEAT-630-spell-frontend-session-detail-stream-bas::stream-renderer` StreamRenderer pure helper + tests [ITEM]
+- `FEAT-630-spell-frontend-session-detail-stream-bas::xterm-setup` xterm.js setup module [ITEM]
+- `FEAT-630-spell-frontend-session-detail-stream-bas::stream-tab` StreamTab + prompt input [ITEM]
+- `FEAT-630-spell-frontend-session-detail-stream-bas::bash-tab` BashTab [ITEM]
+- `FEAT-630-spell-frontend-session-detail-stream-bas::artifacts-tab` ArtifactsTab [ITEM]
+- `FEAT-630-spell-frontend-session-detail-stream-bas::state-tab` StateTab [ITEM]
+- `FEAT-630-spell-frontend-session-detail-stream-bas::session-detail` SessionDetail composition [ITEM]
+- `FUP-067-docs-spell-server-web-frontend-architect::web-md` web.md narrative [ITEM]
+- `FUP-067-docs-spell-server-web-frontend-architect::kdl-additions` kdl-schema additions [ITEM]
+- `FUP-067-docs-spell-server-web-frontend-architect::changelog` CHANGELOG [ITEM]
+*** Edges
+- `FEAT-621-spell-server-web-auth-multi-token-web-co::write-tests` depends on `FEAT-621-spell-server-web-auth-multi-token-web-co::define-types`
+- `FEAT-621-spell-server-web-auth-multi-token-web-co::parse-web-config` depends on `FEAT-621-spell-server-web-auth-multi-token-web-co::write-tests`
+- `FEAT-621-spell-server-web-auth-multi-token-web-co::verify-web-token` depends on `FEAT-621-spell-server-web-auth-multi-token-web-co::write-tests`
+- `FEAT-622-spell-server-template-manifest-node-kdl::write-tests` depends on `FEAT-622-spell-server-template-manifest-node-kdl::define-types`
+- `FEAT-622-spell-server-template-manifest-node-kdl::parse` depends on `FEAT-622-spell-server-template-manifest-node-kdl::write-tests`
+- `FEAT-622-spell-server-template-manifest-node-kdl::serialize` depends on `FEAT-622-spell-server-template-manifest-node-kdl::parse`
+- `FEAT-622-spell-server-template-manifest-node-kdl::validate` depends on `FEAT-622-spell-server-template-manifest-node-kdl::parse`
+- `FEAT-622-spell-server-template-manifest-node-kdl::imports` depends on `FEAT-622-spell-server-template-manifest-node-kdl::parse`
+- `FEAT-623-spell-server-bridge-event-log-opt-in-low::server-tests` depends on `FEAT-623-spell-server-bridge-event-log-opt-in-low::define-types`
+- `FEAT-623-spell-server-bridge-event-log-opt-in-low::server-impl` depends on `FEAT-623-spell-server-bridge-event-log-opt-in-low::server-tests`
+- `FEAT-623-spell-server-bridge-event-log-opt-in-low::client-tests` depends on `FEAT-623-spell-server-bridge-event-log-opt-in-low::define-types`
+- `FEAT-623-spell-server-bridge-event-log-opt-in-low::client-impl` depends on `FEAT-623-spell-server-bridge-event-log-opt-in-low::client-tests`
+- `FEAT-623-spell-server-bridge-event-log-opt-in-low::wire-emission` depends on `FEAT-623-spell-server-bridge-event-log-opt-in-low::client-impl`
+- `FEAT-624-spell-server-web-artifacts-http-router-f::signed-url` depends on `FEAT-624-spell-server-web-artifacts-http-router-f::define-types`
+- `FEAT-624-spell-server-web-artifacts-http-router-f::router` depends on `FEAT-624-spell-server-web-artifacts-http-router-f::signed-url`
+- `FEAT-624-spell-server-web-artifacts-http-router-f::watcher` depends on `FEAT-624-spell-server-web-artifacts-http-router-f::define-types`
+- `FEAT-624-spell-server-web-artifacts-http-router-f::signing-key` depends on `FEAT-624-spell-server-web-artifacts-http-router-f::signed-url`
+- `FEAT-625-spell-server-web-session-hub-spawned-rpc::write-tests` depends on `FEAT-625-spell-server-web-session-hub-spawned-rpc::extend-registry`
+- `FEAT-625-spell-server-web-session-hub-spawned-rpc::lifecycle` depends on `FEAT-625-spell-server-web-session-hub-spawned-rpc::write-tests`
+- `FEAT-625-spell-server-web-session-hub-spawned-rpc::hub` depends on `FEAT-625-spell-server-web-session-hub-spawned-rpc::lifecycle`
+- `FEAT-625-spell-server-web-session-hub-spawned-rpc::wire-startup` depends on `FEAT-625-spell-server-web-session-hub-spawned-rpc::hub`
+- `FEAT-626-spell-server-web-ws-server-protocol-chan::write-tests` depends on `FEAT-626-spell-server-web-ws-server-protocol-chan::define-protocol`
+- `FEAT-626-spell-server-web-ws-server-protocol-chan::connection` depends on `FEAT-626-spell-server-web-ws-server-protocol-chan::write-tests`
+- `FEAT-626-spell-server-web-ws-server-protocol-chan::ws-server` depends on `FEAT-626-spell-server-web-ws-server-protocol-chan::connection`
+- `FEAT-626-spell-server-web-ws-server-protocol-chan::rest-router` depends on `FEAT-626-spell-server-web-ws-server-protocol-chan::define-protocol`
+- `FEAT-626-spell-server-web-ws-server-protocol-chan::fanout` depends on `FEAT-626-spell-server-web-ws-server-protocol-chan::ws-server`
+- `FEAT-627-spell-server-template-runner-render-reso::param-coercion` depends on `FEAT-627-spell-server-template-runner-render-reso::extract-setup-options`
+- `FEAT-627-spell-server-template-runner-render-reso::runner` depends on `FEAT-627-spell-server-template-runner-render-reso::param-coercion`
+- `FEAT-627-spell-server-template-runner-render-reso::wire` depends on `FEAT-627-spell-server-template-runner-render-reso::runner`
+- `FEAT-628-spell-frontend-scaffold-vite-spa-bundle::asset-loader` depends on `FEAT-628-spell-frontend-scaffold-vite-spa-bundle::vite-bootstrap`
+- `FEAT-628-spell-frontend-scaffold-vite-spa-bundle::auth` depends on `FEAT-628-spell-frontend-scaffold-vite-spa-bundle::vite-bootstrap`
+- `FEAT-628-spell-frontend-scaffold-vite-spa-bundle::ws-client` depends on `FEAT-628-spell-frontend-scaffold-vite-spa-bundle::auth`
+- `FEAT-628-spell-frontend-scaffold-vite-spa-bundle::wire-routes` depends on `FEAT-628-spell-frontend-scaffold-vite-spa-bundle::asset-loader`
+- `FEAT-629-spell-frontend-cmd-k-palette-session-lis::session-list` depends on `FEAT-629-spell-frontend-cmd-k-palette-session-lis::sessions-store`
+- `FEAT-629-spell-frontend-cmd-k-palette-session-lis::cmd-bar` depends on `FEAT-629-spell-frontend-cmd-k-palette-session-lis::templates-store`
+- `FEAT-629-spell-frontend-cmd-k-palette-session-lis::cmd-bar` depends on `FEAT-629-spell-frontend-cmd-k-palette-session-lis::sessions-store`
+- `FEAT-629-spell-frontend-cmd-k-palette-session-lis::template-runner` depends on `FEAT-629-spell-frontend-cmd-k-palette-session-lis::cmd-bar`
+- `FEAT-630-spell-frontend-session-detail-stream-bas::xterm-setup` depends on `FEAT-630-spell-frontend-session-detail-stream-bas::stream-renderer`
+- `FEAT-630-spell-frontend-session-detail-stream-bas::stream-tab` depends on `FEAT-630-spell-frontend-session-detail-stream-bas::xterm-setup`
+- `FEAT-630-spell-frontend-session-detail-stream-bas::bash-tab` depends on `FEAT-630-spell-frontend-session-detail-stream-bas::xterm-setup`
+- `FEAT-630-spell-frontend-session-detail-stream-bas::artifacts-tab` depends on `FEAT-630-spell-frontend-session-detail-stream-bas::xterm-setup`
+- `FEAT-630-spell-frontend-session-detail-stream-bas::session-detail` depends on `FEAT-630-spell-frontend-session-detail-stream-bas::stream-tab`
+- `FEAT-630-spell-frontend-session-detail-stream-bas::session-detail` depends on `FEAT-630-spell-frontend-session-detail-stream-bas::bash-tab`
+- `FEAT-630-spell-frontend-session-detail-stream-bas::session-detail` depends on `FEAT-630-spell-frontend-session-detail-stream-bas::artifacts-tab`
+- `FEAT-630-spell-frontend-session-detail-stream-bas::session-detail` depends on `FEAT-630-spell-frontend-session-detail-stream-bas::state-tab`
+
+NOTE [2026-04-28]: All 7 features (F621-F627) + frontend (F628-F630) + docs (FUP-067) shipped across 4 commits. SPA verified live: login, command palette, template listing from autonomy.kdl, REST API auth, ⌘K rendering. 584/585 tests pass (1 pre-existing frontend manifest test failure). bun check:ts clean. Smoke screenshots in plan-artifacts/.

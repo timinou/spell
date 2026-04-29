@@ -1,0 +1,105 @@
+#+TITLE: spell frontend cmd-K palette: session list + template runner cards
+#+STATE: DONE
+#+SESSION_ID: 14ccc1f70c4dbbca
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T20-40-38-705Z_14ccc1f70c4dbbca.jsonl]]
+#+CUSTOM_ID: FEAT-629-spell-frontend-cmd-k-palette-session-lis
+#+DEPENDS: FEAT-628-spell-frontend-scaffold-vite-spa-bundle FEAT-626-spell-server-web-ws-server-protocol-chan FEAT-627-spell-server-template-runner-render-reso
+#+LAYER: frontend
+
+* Initial Message
+
+Goal: simple frontend to spell server. a client can connect with a secret token to a fast websocket that can let you connect with the running sessions by that user on that instance (through spell autodiscovery, consolidate the feature by looking at existing usage of similar features).
+
+On the frontend, you can start new plan sessions, you can request a url, etc. that lets you use both xterm.js and, for example, see the pdf generated from a typst requested by a task whose goal was to generate a report.
+
+easy way to setup templates from the frontend, wiht a linear-like command bar. Template 'document', you run it, you get a nice card in your session list, and then it tells you when it has the artifact ready.
+
+* Intention & Purpose
+Build the Linear-style command bar (~cmdk~), the persistent session list in the sidebar, and the "template-as-card" UX. Running a template (e.g. ~document {topic: "memory"}~) yields a card that immediately appears in the list as ~status: spawning~ → ~running~ → ~ready~ when the watched-extension artifact arrives → ~done~ when the agent emits ~agent_end~.
+
+* Context & Narrative
+Templates are the entry point for non-interactive work. The user types ⌘K, picks ~document~, fills params with structured inputs, submits. Frontend issues ~POST /web/api/templates/:name/run~ which returns ~{ sessionId }~. The card subscribes to ~events~ and ~artifacts~ channels (with ext filter from the template's ~artifactWatch.ext~), updates state from incoming events, and surfaces the ready artifact as an inline preview on the card.
+
+* Scope
+In-scope:
+- ~packages/spell-server/web/src/sidebar/SessionList.tsx~ — ordered list (spawned first by ~startedAt~ desc, then external). Each row = ~SessionCard~.
+- ~packages/spell-server/web/src/sidebar/SessionCard.tsx~ — shows ~templateName~ or ~projectName~, ~ownedBy~ chip, status dot, latest artifact thumb (PDF first-page render via PDF.js or icon for non-image), one-line tail of last assistant text or last event_log entry.
+- ~packages/spell-server/web/src/cmd/CommandBar.tsx~ — ~cmdk~ palette, opens with ~⌘K~/~Ctrl+K~. Items: list templates + raw "New session", session-targeted commands (jump to session, kill).
+- ~packages/spell-server/web/src/cmd/TemplateRunner.tsx~ — modal-on-template-pick that renders param inputs based on ~ManifestTemplateParam[]~. ~string~ → text, ~number~ → number, ~boolean~ → switch, arrays → repeatable. Submit → ~POST /web/api/templates/:name/run~.
+- ~packages/spell-server/web/src/state/sessions.ts~ — store using ~zustand~ (small, no boilerplate; pick this single dep). Subscribes to global WS messages ~session_added~/~_removed~/~_updated~. Per-session derived state (~status~, ~artifactReady?~, ~lastText?~).
+- Status FSM: ~spawning~ (post-run, no rpc_event yet) → ~running~ (first ~agent_start~) → ~done~ (~agent_end~) → ~ready~ if ~artifact_created~ matched watch ext (overlay badge). Sticky terminal states: ~done~, ~error~.
+- API client: ~packages/spell-server/web/src/api/client.ts~ — typed wrappers for all ~/web/api/*~ routes using ~fetch~ + bearer.
+
+Out-of-scope:
+- Session detail view (FEAT-WEB-FRONTEND-SESSION-DETAIL).
+- Per-card artifact preview opens detail; opening logic is just ~setSelectedSession~.
+
+* Existing Patterns
+- ~cmdk~ — well-documented; install in ~web/package.json~.
+- ~zustand~ — minimal, fits the codebase preference for small deps.
+- The current dashboard's theme tokens (dark theme, accents).
+
+* Tests
+Files: ~packages/spell-server/web/test/cmd/CommandBar.test.tsx~, ~packages/spell-server/web/test/sidebar/SessionList.test.tsx~ — using Bun's test runner with ~happy-dom~ adapter.
+
+Scenarios:
+1. ⌘K opens palette; lists templates returned by ~GET /web/api/templates~.
+2. Picking a template with required params → modal with required-param inputs.
+3. Submitting template w/ valid params → POST issued; modal closes; card appears with status ~spawning~ within 100ms (optimistic).
+4. ~session_added~ for the spawned session arrives → card transitions to ~running~ on first ~rpc_event { type: "agent_start" }~.
+5. ~artifact_created~ matching ext filter → status overlay flips to ~ready~.
+6. ~agent_end~ → status ~done~. If ~ready~ already, both badges show.
+7. External session ~session_added~ → card appears with no run controls; click jumps to detail (read-only).
+8. Sidebar reorders correctly when sessions added/removed.
+9. Kill action from cmd bar (target a running spawned session) → ~DELETE /web/api/sessions/:id~ → optimistic removal.
+
+* Implementation
+** ITEM Sessions store + WS subscription
+:PROPERTIES:
+:CUSTOM_ID: FEAT-629-spell-frontend-cmd-k-palette-session-lis::sessions-store
+:END:
+- File: ~web/src/state/sessions.ts~ — zustand store; on WSClient ~auth_ok~ issue one ~list_sessions~; subscribe to all ~session_*~ + ~rpc_event~ + ~artifact_created~ + ~external_event_log~ messages and reduce them.
+- For each spawned session also issue ~subscribe { channels: ["events","artifacts"], artifactExt: <fromTemplate.artifactWatch.ext or undefined> }~ on first observation. (Backend supports this from FEAT-WEB-WS.)
+- Artifact-watch ext is sent by backend on ~session_added~ payload (added in hub via TEMPLATE-RUN ~watchExtensions~).
+
+** ITEM Templates store + API client
+:PROPERTIES:
+:CUSTOM_ID: FEAT-629-spell-frontend-cmd-k-palette-session-lis::templates-store
+:END:
+- File: ~web/src/state/templates.ts~ — list fetched on startup; lookup by name.
+
+** ITEM SessionList + SessionCard
+:PROPERTIES:
+:CUSTOM_ID: FEAT-629-spell-frontend-cmd-k-palette-session-lis::session-list
+:DEPENDS: FEAT-629-spell-frontend-cmd-k-palette-session-lis::sessions-store
+:END:
+- Files above. Status dot color: spawning gray, running blue (animated), done green, ready cyan badge, error red.
+
+** ITEM CommandBar
+:PROPERTIES:
+:CUSTOM_ID: FEAT-629-spell-frontend-cmd-k-palette-session-lis::cmd-bar
+:DEPENDS: FEAT-629-spell-frontend-cmd-k-palette-session-lis::templates-store FEAT-629-spell-frontend-cmd-k-palette-session-lis::sessions-store
+:END:
+- Files above.
+
+** ITEM TemplateRunner modal
+:PROPERTIES:
+:CUSTOM_ID: FEAT-629-spell-frontend-cmd-k-palette-session-lis::template-runner
+:DEPENDS: FEAT-629-spell-frontend-cmd-k-palette-session-lis::cmd-bar
+:END:
+- Param input renderer keyed by ~param.type~.
+
+* Edge Cases
+- Backend ~session_updated~ for fields the frontend doesn't render → ignored without warning.
+- Spawn HTTP fails (e.g., 4xx unknown_template) → toast; no card created.
+- Template with no params → modal still opens with a "Run" button (allows last-look prompt preview).
+- ~artifact_created~ for an unsubscribed session (e.g. external) → ignored; no toast spam.
+- WS reconnect → store is reset and re-listed; cards keep their per-session derived state via ~sessionId~ keys merging.
+- Card preview for PDF artifact: first-page thumb via PDF.js worker; if PDF.js fails, fall back to a generic doc icon.
+
+* Acceptance Criteria
+- ⌘K open + run ~document~ template (assuming a stub backend that always emits a fake .pdf) shows full lifecycle: card appears → running → ready badge → done.
+- ~bun test packages/spell-server/web/test~ green.
+- ~bun check:ts~ clean.
+
+NOTE [2026-04-29]: CommandBar (cmdk ⌘K toggle, Templates + Sessions groups), TemplateRunner modal (param form + handlebars render), SessionList sidebar, SessionCard, App.tsx Shell wiring AuthProvider+ws+stores+overlays. WS dispatch into useSessions store (session_added/session_updated/session_removed/session_list/rpc_event/artifact_created/external_event_log/blocking_event). Smoke verified live: palette opens, templates render with proper layout.

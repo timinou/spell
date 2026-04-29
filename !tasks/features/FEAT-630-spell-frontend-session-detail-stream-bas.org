@@ -1,0 +1,134 @@
+#+TITLE: spell frontend session detail: Stream + Bash xterm.js tabs + State + Artifacts viewer
+#+STATE: DONE
+#+SESSION_ID: 14ccc1f70c4dbbca
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T20-40-38-705Z_14ccc1f70c4dbbca.jsonl]]
+#+CUSTOM_ID: FEAT-630-spell-frontend-session-detail-stream-bas
+#+DEPENDS: FEAT-628-spell-frontend-scaffold-vite-spa-bundle FEAT-626-spell-server-web-ws-server-protocol-chan FEAT-624-spell-server-web-artifacts-http-router-f
+#+LAYER: frontend
+
+* Initial Message
+
+Goal: simple frontend to spell server. a client can connect with a secret token to a fast websocket that can let you connect with the running sessions by that user on that instance (through spell autodiscovery, consolidate the feature by looking at existing usage of similar features).
+
+On the frontend, you can start new plan sessions, you can request a url, etc. that lets you use both xterm.js and, for example, see the pdf generated from a typst requested by a task whose goal was to generate a report.
+
+easy way to setup templates from the frontend, wiht a linear-like command bar. Template 'document', you run it, you get a nice card in your session list, and then it tells you when it has the artifact ready.
+
+* Intention & Purpose
+The full main-pane view for an opened session: four tabs — Stream (xterm.js viewport rendering the agent event stream as ANSI-colored lines, with a prompt input box), Bash (full xterm.js terminal driving the RPC ~bash~ command for sandboxed shell-style use), State (model, queues, identity, ownedBy), Artifacts (list + inline PDF/image viewer using signed URLs).
+
+* Context & Narrative
+Render fidelity is the value proposition. Stream tab MUST behave like a familiar terminal: monospaced, scrollback, copy-paste-friendly, ANSI color, theming. Bash tab MUST feel like a real terminal pipe; backed by RPC ~bash~ command which executes one bash invocation at a time and returns ~BashResult~ with stdout/stderr lines. We compose the illusion of a continuous shell by chaining commands (each ⏎ submits an RPC ~bash~ call; output streams back via ~tool_execution_update~ events).
+
+External (read-only) sessions: Stream tab renders ~event_log~ entries chronologically; Bash tab is hidden; prompt input is hidden; Artifacts and State tabs reduced.
+
+* Scope
+In-scope:
+- ~packages/spell-server/web/src/detail/SessionDetail.tsx~ — tabs + selection.
+- ~packages/spell-server/web/src/detail/StreamTab.tsx~ — xterm.js terminal; consumes per-session ~rpc_event~ stream:
+  - ~message_update {assistantMessageEvent: text_delta}~ → ~term.write(delta)~
+  - ~thinking_delta~ → render dim italics
+  - ~tool_execution_start~ → ~term.writeln(\u001b[36m> tool: <name>\u001b[0m)~
+  - ~tool_execution_end isError~ → red label, otherwise green
+  - For external sessions, replace this stream with ~external_event_log~ entries formatted as compact lines.
+  - Below xterm: prompt textarea (Cmd+Enter to submit) → ~rpc { command: { type: "prompt", message } }~. Disabled for external. Steer/abort buttons next to it.
+- ~packages/spell-server/web/src/detail/BashTab.tsx~ — xterm.js terminal in line-input mode; on Enter sends ~rpc { command: { type: "bash", command } }~; while running, shows ~^C~ → ~abort_bash~. Streams ~tool_execution_update~ deltas back.
+- ~packages/spell-server/web/src/detail/StateTab.tsx~ — table with model, thinking level, queues, sessionFile, ownedBy, templateName, started/idle. Populated via ~get_state~ + ~get_session_stats~ called once on tab focus, plus periodic refresh while focused.
+- ~packages/spell-server/web/src/detail/ArtifactsTab.tsx~ — list + viewer pane. PDF viewer = ~<iframe src={signedUrl}>~. Image viewer = ~<img src={signedUrl}>~. Other binary types → download button. Signed URL minted on-demand via ~POST /web/api/sessions/:id/artifacts/url~.
+- ~packages/spell-server/web/src/detail/StreamRenderer.ts~ — pure helper translating ~AssistantEvent~/~RpcEvent~ to ANSI bytes. Unit-tested.
+
+xterm.js packages: ~@xterm/xterm~, ~@xterm/addon-fit~, ~@xterm/addon-web-links~, ~@xterm/addon-search~. Add to ~web/package.json~.
+
+PDF: ~pdfjs-dist~ for the thumbnail (already added in CMD-BAR if applicable; if not, add here). For the full viewer, prefer the browser's native PDF rendering via ~<iframe>~ — simpler.
+
+Out-of-scope:
+- Editing of session state (renames, model swap UI) — future polish.
+- Multi-session simultaneous attach UX (works because each card owns its own subscription; tab UI shows one at a time).
+
+* Existing Patterns
+- ~packages/qml-remote~ panels shape — for layout reference.
+- RPC event types: ~packages/coding-agent/src/modes/rpc/rpc-types.ts::RpcResponse, RpcSessionState~; mirrored to ~packages/spell-server/src/rpc/types.ts::RpcEvent, AssistantEvent~. Frontend imports the spell-server-side mirror.
+- ANSI: avoid pulling a heavy dep — write a tiny ~ansi.ts~ helper with ~bold~, ~dim~, ~fg(color)~, ~reset~. xterm.js parses ANSI natively.
+
+* Tests
+Files: ~packages/spell-server/web/test/detail/StreamRenderer.test.ts~, ~web/test/detail/BashTab.test.tsx~, ~web/test/detail/ArtifactsTab.test.tsx~ (happy-dom).
+
+Scenarios:
+1. StreamRenderer: ~text_delta { delta: "hi" }~ → output bytes contain ~"hi"~.
+2. StreamRenderer: ~tool_execution_start { toolName: "bash" }~ → contains ANSI cyan + ~"> bash"~.
+3. StreamRenderer: ~tool_execution_end { isError: true }~ → red marker.
+4. StreamRenderer: thinking_delta is wrapped in dim ESC sequence.
+5. BashTab: typing ~"ls
+"~ issues ~rpc { command: { type: "bash", command: "ls" } }~ exactly once; subsequent ~tool_execution_update~ deltas write to terminal.
+6. BashTab: while running, ~Ctrl+C~ issues ~rpc { command: { type: "abort_bash" } }~.
+7. ArtifactsTab: clicking a ~.pdf~ row issues ~POST /web/api/sessions/:id/artifacts/url~ then renders an iframe with the returned URL.
+8. ArtifactsTab: token expired → reload; fallback to bearer fetch → blob URL.
+9. External session: Stream renders ~event_log~ entries newest-at-bottom, no prompt input.
+10. State tab: shows ~ownedBy~ and ~templateName~ when present.
+
+* Implementation
+** ITEM StreamRenderer pure helper + tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-630-spell-frontend-session-detail-stream-bas::stream-renderer
+:END:
+- File: ~web/src/detail/StreamRenderer.ts~
+- Implements all conversions above; unit-testable without xterm.
+
+** ITEM xterm.js setup module
+:PROPERTIES:
+:CUSTOM_ID: FEAT-630-spell-frontend-session-detail-stream-bas::xterm-setup
+:DEPENDS: FEAT-630-spell-frontend-session-detail-stream-bas::stream-renderer
+:END:
+- File: ~web/src/detail/xterm-setup.ts~
+- Helpers: ~makeTerminal()~, ~attachToContainer(term, el)~, ~writeStream(term, bytes)~. Add fit + web-links addons. Theme tokens from dashboard.
+
+** ITEM StreamTab + prompt input
+:PROPERTIES:
+:CUSTOM_ID: FEAT-630-spell-frontend-session-detail-stream-bas::stream-tab
+:DEPENDS: FEAT-630-spell-frontend-session-detail-stream-bas::xterm-setup
+:END:
+- File above. Subscribes to ~rpc_event~/~external_event_log~ via store; pipes through ~StreamRenderer~ → terminal.
+
+** ITEM BashTab
+:PROPERTIES:
+:CUSTOM_ID: FEAT-630-spell-frontend-session-detail-stream-bas::bash-tab
+:DEPENDS: FEAT-630-spell-frontend-session-detail-stream-bas::xterm-setup
+:END:
+- File above. Implements line-input mode (capture Enter, allow basic readline editing).
+
+** ITEM ArtifactsTab
+:PROPERTIES:
+:CUSTOM_ID: FEAT-630-spell-frontend-session-detail-stream-bas::artifacts-tab
+:DEPENDS: FEAT-630-spell-frontend-session-detail-stream-bas::xterm-setup
+:END:
+- File above. Lists artifacts from ~session.artifacts~ in store (populated by ~artifact_created~ events plus initial ~GET /web/api/sessions/:id/artifacts~). Mints signed URL on selection.
+
+** ITEM StateTab
+:PROPERTIES:
+:CUSTOM_ID: FEAT-630-spell-frontend-session-detail-stream-bas::state-tab
+:END:
+- File above. ~rpc { command: get_state }~ + ~get_session_stats~ on focus and every 5s while focused.
+
+** ITEM SessionDetail composition
+:PROPERTIES:
+:CUSTOM_ID: FEAT-630-spell-frontend-session-detail-stream-bas::session-detail
+:DEPENDS: FEAT-630-spell-frontend-session-detail-stream-bas::stream-tab FEAT-630-spell-frontend-session-detail-stream-bas::bash-tab FEAT-630-spell-frontend-session-detail-stream-bas::artifacts-tab FEAT-630-spell-frontend-session-detail-stream-bas::state-tab
+:END:
+- File above. Tab bar; URL hash sync (~#stream~, ~#bash~, ~#artifacts~, ~#state~).
+
+* Edge Cases
+- Very fast text_delta bursts → batched via requestAnimationFrame to avoid xterm.js render thrash.
+- Terminal resize (split view) → addon-fit reflows; emits a virtual no-op back to RPC (we do NOT propagate resize since RPC doesn't model PTY).
+- Bash command very long-running → keep subscription alive; UI shows spinner; ~^C~ abort works.
+- PDF with auth-protected resources → signed URL is single-use-ish (TTL 60s); regenerate on iframe error.
+- Switching tabs mid-stream → terminal preserved (instance retained even when hidden via ~display:none~).
+- External session with no event_log entries (older CLI without ~SPELL_BRIDGE_EVENT_LOG=1~) → Stream tab shows banner explaining how to enable it on that session's process.
+
+* Acceptance Criteria
+- Stream tab renders text_delta in real time at 60fps for bursts ≤ 5 KiB/s.
+- Bash tab pipes stdout from a real RPC ~bash~ call (manual smoke test).
+- PDF artifact opens inline; image artifact opens inline; other types offer Download.
+- ~bun test packages/spell-server/web/test/detail~ green.
+- ~bun check:ts~ clean.
+
+NOTE [2026-04-29]: detail/{StreamRenderer.ts (RpcEvent→ANSI), xterm-setup.ts (Terminal+FitAddon+WebLinksAddon), StreamTab.tsx (xterm+prompt textarea Cmd+Enter), BashTab.tsx (xterm+line input→runBash RPC, Ctrl+C→abort_bash), StateTab.tsx (tabular metadata), ArtifactsTab.tsx (signed URL mint, PDF iframe / image / download), SessionDetail.tsx (tab composition with hash routing).

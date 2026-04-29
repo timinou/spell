@@ -1,0 +1,119 @@
+#+TITLE: spell frontend scaffold: Vite SPA + bundle embed + /web shell
+#+STATE: DONE
+#+SESSION_ID: 14ccc1f70c4dbbca
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T20-40-38-705Z_14ccc1f70c4dbbca.jsonl]]
+#+CUSTOM_ID: FEAT-628-spell-frontend-scaffold-vite-spa-bundle
+#+LAYER: frontend
+
+* Initial Message
+
+Goal: simple frontend to spell server. a client can connect with a secret token to a fast websocket that can let you connect with the running sessions by that user on that instance (through spell autodiscovery, consolidate the feature by looking at existing usage of similar features).
+
+On the frontend, you can start new plan sessions, you can request a url, etc. that lets you use both xterm.js and, for example, see the pdf generated from a typst requested by a task whose goal was to generate a report.
+
+easy way to setup templates from the frontend, wiht a linear-like command bar. Template 'document', you run it, you get a nice card in your session list, and then it tells you when it has the artifact ready.
+
+* Intention & Purpose
+Stand up a Vite-built React+TypeScript SPA that becomes the spell frontend. Embed its build output into ~@oh-my-pi/spell-server~ so the daemon serves the SPA at ~/web/~ with no runtime CDN dependency. Wire up authentication (token persisted in ~localStorage~, redirected to a login screen if missing/invalid) and a stable WebSocket client that connects to ~/web/ws~. Provide an empty layout shell (sidebar + main pane) and the auth/ws plumbing the next two items will build on.
+
+* Context & Narrative
+The existing dashboard at ~packages/spell-server/src/http/frontend/index.html~ is a single embedded HTML using Preact via esm.sh. Per the design decision, the new frontend is heavier (xterm.js, cmdk, PDF viewer) and benefits from a real bundler. Vite is the standard choice and integrates cleanly with Bun. The build emits a flat ~dist/~ which spell-server slurps at startup (small bundle, ≤ 1 MiB gzipped) into a Map and serves with correct Content-Type. Hashed filenames make caching trivial.
+
+* Scope
+In-scope:
+- New directory: ~packages/spell-server/web/~ — the SPA Vite project.
+  - ~package.json~ with dev dependency ~vite~, ~typescript~, ~@vitejs/plugin-react~. Workspace package name ~@oh-my-pi/spell-server-web~ ~private: true~.
+  - ~vite.config.ts~ with ~base: "/web/"~, ~build.outDir: "dist"~, code-splitting on per the default.
+  - ~tsconfig.json~ extends repo base with DOM lib + JSX react-jsx.
+  - ~index.html~ with viewport, theme color, ~<div id="root">~.
+  - ~src/main.tsx~ — React root + ~AuthProvider~ + ~WSProvider~ + ~AppShell~.
+  - ~src/auth/~ — token storage (localStorage), login screen, ~useAuth()~ hook.
+  - ~src/ws/~ — ~SpellWsClient~ class wrapping ~new WebSocket(...)~. Auto-reconnect with backoff [1s, 2s, 4s, 8s] capped at 30s. Typed message channels via the protocol shared with backend (see "shared types" below). ~useWS()~ hook.
+  - ~src/shell/~ — ~AppShell.tsx~ with persistent sidebar (empty placeholders) and content router. ~Toast~ provider for errors.
+  - ~src/styles/~ — Tailwind-free CSS modules; Linear-inspired dark theme tokens.
+- Shared protocol types: import the WS protocol types (FEAT-WEB-WS) from spell-server source. Set up a ~paths~ tsconfig alias ~@spell/protocol~ → ~../src/web/ws/protocol~. Vite respects tsconfig paths via ~vite-tsconfig-paths~ plugin.
+- Build script in ~packages/spell-server/package.json~: ~"build:web": "cd web && bun run build"~. Add ~"prestart"~ or document as manual step.
+- Bundle embedding in spell-server runtime:
+  - ~packages/spell-server/src/web/assets/loader.ts~ — at startup, read ~packages/spell-server/web/dist~ recursively (resolved via ~import.meta.dir~ + ~../../web/dist~), build ~Map<path, { bytes: Uint8Array; mime: string; etag: string }>~. ETag is SHA-256 of contents.
+  - Route ~/web/~ → serve ~index.html~ from the map, ~/web/<asset>~ → serve from map, 404 if absent.
+  - Cache-Control: hashed assets ~immutable, max-age=31536000~; ~index.html~ ~no-cache~.
+
+Out-of-scope:
+- Session list, command bar, session detail (FEAT-WEB-FRONTEND-CMD-BAR + FEAT-WEB-FRONTEND-SESSION-DETAIL).
+- Production build pipeline beyond a manual ~bun run build:web~ (a future polish task can add a release-time build hook).
+
+* Existing Patterns
+- ~packages/qml-remote/src/server.ts~ — bun WS client/server pattern.
+- ~packages/spell-server/src/http/frontend/index.html~ — current dashboard look-and-feel for theme tokens (dark, ~#0d1117~ background, ~#21262d~ borders).
+- ~packages/spell-server/src/http/server.ts::handleRequest~ — extension point for ~/web/~ routes.
+
+* Tests
+Files: ~packages/spell-server/test/web/assets/loader.test.ts~ (new), ~packages/spell-server/web/test/ws-client.test.ts~ (new, runs via ~bun test~ inside the SPA package).
+
+Scenarios:
+1. Asset loader reads all files under ~web/dist~ on startup; ~Map.size~ matches the file count.
+2. Asset loader sets correct mime for ~.js~ (application/javascript), ~.css~ (text/css), ~.svg~ (image/svg+xml), ~.html~ (text/html).
+3. Serving an unknown asset → 404.
+4. Serving ~/web/~ returns ~index.html~ contents with ~Cache-Control: no-cache~.
+5. Serving a hashed asset returns ~Cache-Control: public, max-age=31536000, immutable~.
+6. ~SpellWsClient~ connects with ~?token=~; on close fires reconnect after 1s; receives ~auth_ok~ message and resolves ~ready~ promise.
+7. ~SpellWsClient.send~ before ~ready~ queues until ~auth_ok~; in-order flush after.
+8. Token rotation: ~setToken(null)~ closes WS and prevents reconnect.
+
+* Implementation
+** ITEM Vite project bootstrap
+:PROPERTIES:
+:CUSTOM_ID: FEAT-628-spell-frontend-scaffold-vite-spa-bundle::vite-bootstrap
+:END:
+- Files: ~packages/spell-server/web/{package.json, vite.config.ts, tsconfig.json, index.html, src/main.tsx}~
+- Add to root ~package.json~ workspaces array.
+
+** ITEM Asset loader + tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-628-spell-frontend-scaffold-vite-spa-bundle::asset-loader
+:DEPENDS: FEAT-628-spell-frontend-scaffold-vite-spa-bundle::vite-bootstrap
+:END:
+- File: ~packages/spell-server/src/web/assets/loader.ts~
+- Tests in ~packages/spell-server/test/web/assets/loader.test.ts~.
+
+** ITEM Auth + login screen
+:PROPERTIES:
+:CUSTOM_ID: FEAT-628-spell-frontend-scaffold-vite-spa-bundle::auth
+:DEPENDS: FEAT-628-spell-frontend-scaffold-vite-spa-bundle::vite-bootstrap
+:END:
+- Files: ~packages/spell-server/web/src/auth/{provider.tsx, login.tsx, storage.ts}~
+- ~storage.ts~ uses ~localStorage~ key ~spell.token~. Fallback to in-memory if storage blocked.
+- Login screen prompts for token; submits a ~GET /web/api/sessions~ to validate; on success persists.
+
+** ITEM SpellWsClient + tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-628-spell-frontend-scaffold-vite-spa-bundle::ws-client
+:DEPENDS: FEAT-628-spell-frontend-scaffold-vite-spa-bundle::auth
+:END:
+- File: ~packages/spell-server/web/src/ws/client.ts~
+- Tests: ~packages/spell-server/web/test/ws-client.test.ts~ using ~ws~ npm package or Bun's WS in node mode.
+
+** ITEM Wire /web/* routes in spell-server
+:PROPERTIES:
+:CUSTOM_ID: FEAT-628-spell-frontend-scaffold-vite-spa-bundle::wire-routes
+:DEPENDS: FEAT-628-spell-frontend-scaffold-vite-spa-bundle::asset-loader
+:END:
+- File: ~packages/spell-server/src/http/server.ts~
+- ~handleRequest~: when path starts with ~/web/~ AND path !== ~/web/ws~ (handled by FEAT-WEB-WS upgrade) AND path !== ~/web/api/...~ AND not ~/web/artifacts/...~, delegate to ~serveAsset(path)~.
+
+* Edge Cases
+- ~web/dist~ does not exist (builder forgot to run) → at startup log a clear warning and serve a hard-coded HTML shell with "Run ~bun run build:web~ first." Do not crash spell-server.
+- Token rejected by ~/web/api/sessions~ → ~useAuth~ marks invalid, returns to login. WSClient does not start.
+- Browser without WebSocket support → fail gracefully, show banner.
+- Two tabs open → each holds an independent WS; both authenticate; both receive broadcast events. Documented as expected.
+- Asset path with ~..~ → 400.
+- Build hashing: vite default emits ~/assets/index-<hash>.js~; loader stores under exact path.
+
+* Acceptance Criteria
+- ~bun run build:web~ produces a working bundle.
+- Spell-server launches; ~curl /web/~ returns ~index.html~; ~curl /web/api/sessions~ with valid token returns JSON.
+- Browser visit shows login → token entry → empty shell with sidebar placeholder.
+- ~bun check:ts~ clean.
+- All scaffold tests pass.
+
+NOTE [2026-04-29]: packages/spell-server/web/: vite 6 + react 19 + zustand 5 + cmdk + xterm. vite.config.ts proxies /web/api,/web/artifacts,/web/ws to 127.0.0.1:8787, base /web/. Auth: storage + AuthProvider + Login. ws/client.ts SpellWsClient with reconnect backoff [1,2,4,8,16,30]s + queued sends. api/client.ts (sessions/artifacts/templates). zustand stores with status FSM spawning→running→done/error. Backend: assets/loader.ts eager dist load with ETag/cache, SPA fallback to index.html.

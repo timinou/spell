@@ -1,0 +1,125 @@
+#+TITLE: spell-server bridge event_log: opt-in low-fi feed from external CLI sessions
+#+STATE: DONE
+#+SESSION_ID: 14ccc1f70c4dbbca
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T20-40-38-705Z_14ccc1f70c4dbbca.jsonl]]
+#+CUSTOM_ID: FEAT-623-spell-server-bridge-event-log-opt-in-low
+#+LAYER: protocol
+
+* Initial Message
+
+Goal: simple frontend to spell server. a client can connect with a secret token to a fast websocket that can let you connect with the running sessions by that user on that instance (through spell autodiscovery, consolidate the feature by looking at existing usage of similar features).
+
+On the frontend, you can start new plan sessions, you can request a url, etc. that lets you use both xterm.js and, for example, see the pdf generated from a typst requested by a task whose goal was to generate a report.
+
+easy way to setup templates from the frontend, wiht a linear-like command bar. Template 'document', you run it, you get a nice card in your session list, and then it tells you when it has the artifact ready.
+
+* Intention & Purpose
+Extend the existing JSONL session bridge protocol with one new client→server message type ~event_log~ that lets external interactive CLI sessions push *summary* progress lines (turn started, last assistant text, tool invoked, tool finished, plan approved) to the server. The server keeps the most recent N entries per session in the registry. Web clients then see a low-fi live feed of CLI sessions started outside the daemon — no full deltas, no PTY, no full agent stream. Emitting these events is opt-in (env var or config) on the CLI side so default privacy is preserved.
+
+* Context & Narrative
+Today the bridge carries blocking events (~plan_approval~, ~ask~, …) and heartbeats. Web "autodiscovery" needs more than a process card: humans expect to see what each external session is currently doing. We deliberately stop short of streaming full ~message_update~ deltas because (a) the bridge is JSONL on a Unix socket where chatty traffic regresses everything else and (b) external sessions are not attachable for prompt steering anyway. Summary lines are the right resolution.
+
+* Scope
+In-scope:
+- New ~SocketClientMessage~ variant ~EventLogSocketClientMessage~
+- ~SocketSessionRegistry~ keeps a bounded ring buffer per session ~recentLog: EventLogEntry[]~ (default cap 50)
+- ~onEventLog~ handler exposed for WS bridge subscription
+- CLI emitter side: ~SessionBridgeClient.emitEventLog(entry)~ method, called from coding-agent's agent loop hooks. Gated by env ~SPELL_BRIDGE_EVENT_LOG=1~ OR an opt-in config setting (CLI flag ~--bridge-event-log~ / ~spell config~ key)
+- Wire emission points (small, finite list) in coding-agent: ~turn_start~, ~turn_end~, ~tool_call~, ~assistant_text_summary~ (last 200 chars), ~plan_approved~/~plan_rejected~
+
+Out-of-scope:
+- WebSocket forwarding (FEAT-WEB-WS subscribes to ~onEventLog~)
+- Full RPC-grade observation (stays out of scope by design)
+- Backfill / persistence beyond ring buffer
+
+* Existing Patterns
+- ~packages/spell-server/src/socket/types.ts~ — message taxonomy; mirror ~BlockingEventSocketClientMessage~ shape.
+- ~packages/spell-server/src/socket/server.ts::#handleLine~ — switch dispatch.
+- ~packages/spell-server/src/socket/session-registry.ts~ — handler registration pattern via ~onBlockingEvent~/~offBlockingEvent~.
+- ~packages/coding-agent/src/session-bridge/client.ts~ — emitter; mirror ~emitBlockingEvent~ but fire-and-forget (no response expected).
+- Agent loop hook points: ~packages/agent/src/agent-loop.ts~ has ~onTurnStart~/~onTurnEnd~/~onToolCall~ — confirm and use.
+
+* Tests
+File: ~packages/spell-server/test/socket/integration.test.ts~ (extend); ~packages/coding-agent/test/session-bridge/client.test.ts~ (extend).
+
+Scenarios:
+1. Server: ~event_log~ message with valid entry → registry recentLog grows by 1, ~onEventLog~ handler fires with sessionId+entry.
+2. Server: 60 ~event_log~ messages → registry retains exactly the last 50 (default cap). First 10 pruned in FIFO order.
+3. Server: malformed entry kind → log warning, do not crash, do not append.
+4. Server: ~event_log~ for unknown sessionId (sender not registered) → ignored silently (mirrors blocking_event behavior).
+5. Server registry: ~getRecentLog(sessionId): EventLogEntry[]~ returns a copy (mutating doesn't affect store).
+6. Client: with ~SPELL_BRIDGE_EVENT_LOG=1~, ~emitEventLog~ writes one ~event_log~ JSONL line ending with ~
+~.
+7. Client: without env opt-in, ~emitEventLog~ is a no-op.
+8. Client: emitter bytes do not exceed 4 KiB per entry (server-side cap or client-side truncate; pick client-side).
+9. Round-trip: client emits → server registry has matching entry kind+text after socket flush.
+
+* Implementation
+** ITEM Define EventLogEntry + message types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-623-spell-server-bridge-event-log-opt-in-low::define-types
+:END:
+- File: ~packages/spell-server/src/socket/types.ts~
+- ~export type EventLogEntryKind = "turn_start" | "turn_end" | "tool_call" | "assistant_text" | "plan_decision" | "error"~
+- ~export interface EventLogEntry { kind: EventLogEntryKind; ts: number; text?: string; toolName?: string; meta?: Record<string, string|number|boolean> }~
+- ~EventLogSocketClientMessage extends SocketMessageBase { type: "event_log"; entry: EventLogEntry }~
+- Add to ~SocketClientMessage~ union and to the literal-set in ~isSocketClientMessage~.
+- Validator helper ~isEventLogEntry~ to gate malformed payloads.
+
+** ITEM Add server-side registry tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-623-spell-server-bridge-event-log-opt-in-low::server-tests
+:DEPENDS: FEAT-623-spell-server-bridge-event-log-opt-in-low::define-types
+:END:
+- File: ~packages/spell-server/test/socket/integration.test.ts~
+- Implement scenarios 1-5 as initially-failing tests using existing ~TestSocketClient~ harness.
+
+** ITEM Server: handler in SocketServer + ring buffer in registry
+:PROPERTIES:
+:CUSTOM_ID: FEAT-623-spell-server-bridge-event-log-opt-in-low::server-impl
+:DEPENDS: FEAT-623-spell-server-bridge-event-log-opt-in-low::server-tests
+:END:
+- File: ~packages/spell-server/src/socket/server.ts~ — switch case ~"event_log"~ → call ~registry.appendEventLog(sessionId, entry)~.
+- File: ~packages/spell-server/src/socket/session-registry.ts~ — add ~#recentLog: Map<string, EventLogEntry[]>~, methods ~appendEventLog~, ~getRecentLog~, ~onEventLog~/~offEventLog~. Bound to 50 entries default; configurable via constructor.
+- ~deregister(sessionId)~ also clears ~recentLog~ entry.
+
+** ITEM Client emitter tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-623-spell-server-bridge-event-log-opt-in-low::client-tests
+:DEPENDS: FEAT-623-spell-server-bridge-event-log-opt-in-low::define-types
+:END:
+- File: ~packages/coding-agent/test/session-bridge/client.test.ts~
+- Scenarios 6-9 as initially-failing.
+
+** ITEM Client: SessionBridgeClient.emitEventLog
+:PROPERTIES:
+:CUSTOM_ID: FEAT-623-spell-server-bridge-event-log-opt-in-low::client-impl
+:DEPENDS: FEAT-623-spell-server-bridge-event-log-opt-in-low::client-tests
+:END:
+- File: ~packages/coding-agent/src/session-bridge/client.ts~
+- ~emitEventLog(entry: EventLogEntry): void~ — gated by ~process.env.SPELL_BRIDGE_EVENT_LOG === "1"~ or constructor flag.
+- Truncate ~entry.text~ to 256 chars; ~entry.kind~ validated against enum; otherwise drop.
+- Fire-and-forget: writes one JSONL line via ~#send~. No reconnect retry — best-effort summary feed.
+
+** ITEM Wire emission points in agent loop
+:PROPERTIES:
+:CUSTOM_ID: FEAT-623-spell-server-bridge-event-log-opt-in-low::wire-emission
+:DEPENDS: FEAT-623-spell-server-bridge-event-log-opt-in-low::client-impl
+:END:
+- File: ~packages/coding-agent/src/session/session-manager.ts~ or wherever agent-loop hooks are wired. Use existing hooks ~onTurnStart~, ~onTurnEnd~, ~onToolCall~, plus a hook for assistant text completion (use ~message_end~ event delivery in interactive mode). Each fires ~bridgeClient.emitEventLog~ with the matching kind.
+- Plan approval hook (when plan-mode resolves) → emit kind ~plan_decision~ with meta ~{ approved: boolean }~.
+
+* Edge Cases
+- Burst of tool calls in a tight loop → ring buffer protects; emitter never blocks the agent loop (fire-and-forget on socket).
+- Session disconnects (socket dropped) mid-turn → emitter swallows write errors; reconnect is the bridge client's existing concern.
+- Privacy: assistant_text trimmed to 256 chars and only the LAST chunk per turn (not per delta) — gates leakage of full content.
+- Event_log for a session that already has a blocking event pending → both coexist; web subscribers receive both streams independently.
+- Concurrent producers (background tasks): same session may emit overlapping entries — entries are timestamped; consumer orders by ts asc.
+
+* Acceptance Criteria
+- ~bun check:ts~ clean across both packages.
+- All scenarios pass.
+- ~SPELL_BRIDGE_EVENT_LOG~ off by default → existing behavior identical (zero new bytes on the wire).
+- Server registry exposes ~onEventLog~ and ~getRecentLog~ for FEAT-WEB-WS to consume.
+
+NOTE [2026-04-29]: EventLogEntry types in server + client. Registry ring buffer (cap 50). Server handler. Client emitEventLog gated by eventLog opt or SPELL_BRIDGE_EVENT_LOG=1, 256-char text trunc. Tests: server 4 + client 5 = 9/9 pass. Interactive-mode emission wiring left as follow-up (client API exercised by tests).

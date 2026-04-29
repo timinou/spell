@@ -1,0 +1,128 @@
+#+TITLE: spell-server template manifest node: KDL parser + typed model
+#+STATE: DONE
+#+SESSION_ID: 14ccc1f70c4dbbca
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T20-40-38-705Z_14ccc1f70c4dbbca.jsonl]]
+#+CUSTOM_ID: FEAT-622-spell-server-template-manifest-node-kdl
+#+LAYER: config
+
+* Initial Message
+
+Goal: simple frontend to spell server. a client can connect with a secret token to a fast websocket that can let you connect with the running sessions by that user on that instance (through spell autodiscovery, consolidate the feature by looking at existing usage of similar features).
+
+On the frontend, you can start new plan sessions, you can request a url, etc. that lets you use both xterm.js and, for example, see the pdf generated from a typst requested by a task whose goal was to generate a report.
+
+easy way to setup templates from the frontend, wiht a linear-like command bar. Template 'document', you run it, you get a nice card in your session list, and then it tells you when it has the artifact ready.
+
+* Intention & Purpose
+Introduce a new top-level ~template "<name>" { … }~ node alongside ~goal~ and ~setup~ in ~autonomy.kdl~. A template is a lightweight, schedule-less, ad-hoc-runnable preset: name + description + setup ref + initial prompt (Handlebars-renderable) + typed params + optional artifact-watch hint. Templates feed the web frontend's command-bar.
+
+* Context & Narrative
+Goals carry too much weight (cron schedule, hooks, retry, escalation). Templates fill the missing slot: a manifest-declared, parameterized one-shot the human invokes from the cmd-K palette. The grammar deliberately reuses the existing ~param~/~prompt-slot~ machinery already used by ~action-descriptor~ so the manifest layer evolves coherently. Validation runs alongside ~validateManifest~.
+
+This item only adds parsing/types/serialization/validation. Spawning is owned by FEAT-WEB-TEMPLATE-RUN.
+
+* Scope
+In-scope:
+- ~Template~ TS type in ~src/manifest/types.ts~ with ~{ name, description?, setupRef, mode?, prompt, params, artifactWatch? }~
+- ~AutonomyManifest.templates: Map<string, Template>~ (new map alongside ~goals~)
+- KDL parser branch in ~src/manifest/parser.ts~ (after ~goal~ branch)
+- Round-trip serializer in ~src/manifest/serializer.ts~
+- Validator in ~src/manifest/validator.ts~: setupRef must resolve, prompt must be non-empty, param names unique, ~mode~ when set ∈ ~{ "rpc" }~ for v1 (extension point)
+- ~artifactWatch.ext: string[]~ — extensions like ~".pdf"~ used by frontend to flip card to "ready"
+
+Out-of-scope:
+- Spawning / running templates (FEAT-WEB-TEMPLATE-RUN)
+- Frontend rendering (FEAT-WEB-FRONTEND-CMD-BAR)
+- Hot reload (manifest reload is already manifest layer's concern, not this item)
+
+* Existing Patterns
+- ~src/manifest/parser.ts~ already parses ~setup~, ~goal~, ~action-descriptor~ siblings; mirror the pattern.
+- ~param~ child syntax exists on ~action-descriptor~ — reuse the same parsing helper. Locate via ~grep -n "param" packages/spell-server/src/manifest/parser.ts~.
+- ~validateManifest~ in ~src/manifest/validator.ts~ already walks goals and resolves setup references; extend to walk ~templates~ similarly.
+- ~AutonomyManifest~ shape — see ~src/manifest/types.ts::AutonomyManifest~.
+
+* Tests
+File: ~packages/spell-server/test/manifest/parser.test.ts~ (extend), ~validator.test.ts~ (extend), ~serializer.test.ts~ (extend).
+
+Scenarios:
+1. Parse minimal template: ~template "doc" { setup "writer"; prompt "Hello {{topic}}" }~ → manifest.templates.get("doc") is non-null with rendered fields.
+2. Parse with params: ~param "topic" type="string" required=#true; param "depth" type="number"~ → params has 2 entries with types.
+3. Parse with artifact-watch: ~artifact-watch ext=".pdf" ext=".png"~ → ~artifactWatch.ext === [".pdf", ".png"]~.
+4. Parse with explicit mode: ~mode "rpc"~ → ~mode === "rpc"~.
+5. Round-trip: parse → serialize → parse equality.
+6. Validator: setup ref unresolved → fails with field path ~templates.doc.setup~.
+7. Validator: empty prompt → fails.
+8. Validator: duplicate param names → fails.
+9. Validator: ~mode "plan"~ in v1 → fails with allowed-set hint (or accepted if we allow "plan" — see decision below; v1 restricts to ~"rpc"~).
+10. Two templates with same name → parser throws "duplicate template" with file path.
+11. Imported template via ~import "./tpls.kdl" as="x"~ resolves to ~x.doc~ key (mirror goals/setups behavior).
+
+* Implementation
+** ITEM Define Template type
+:PROPERTIES:
+:CUSTOM_ID: FEAT-622-spell-server-template-manifest-node-kdl::define-types
+:END:
+- File: ~packages/spell-server/src/manifest/types.ts~
+- ~export interface ManifestTemplateParam { name: string; type: ParamType; required?: boolean }~ (reuse existing ~ParamType~ if defined for action descriptors).
+- ~export interface ManifestTemplateArtifactWatch { ext: string[] }~
+- ~export interface Template { name: string; description?: string; setupRef: string; mode?: "rpc"; prompt: string; params: ManifestTemplateParam[]; artifactWatch?: ManifestTemplateArtifactWatch }~
+- Extend ~AutonomyManifest~: ~templates: Map<string, Template>~ (always present, possibly empty).
+
+** ITEM Add parser/validator/serializer tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-622-spell-server-template-manifest-node-kdl::write-tests
+:DEPENDS: FEAT-622-spell-server-template-manifest-node-kdl::define-types
+:END:
+- Files: ~packages/spell-server/test/manifest/{parser,validator,serializer}.test.ts~
+- Implement scenarios 1-11 as initially-failing.
+
+** ITEM Implement parser branch
+:PROPERTIES:
+:CUSTOM_ID: FEAT-622-spell-server-template-manifest-node-kdl::parse
+:DEPENDS: FEAT-622-spell-server-template-manifest-node-kdl::write-tests
+:END:
+- File: ~packages/spell-server/src/manifest/parser.ts~
+- After existing ~goal~ branch: ~if (child.getName() === "template") { ... }~
+- Inner reads: arg 0 → name; ~description~ child string; ~setup "<name>"~ child or property → setupRef (mirrors goal); ~mode "rpc"~ optional; ~prompt "..."~ required; ~param~ children parsed via shared helper; ~artifact-watch~ child reads repeatable ~ext~ properties (or arg list — mirror how ~tools.allow~ is parsed).
+- Append to ~templates~ map; throw on duplicate name (with file path in error).
+
+** ITEM Implement serializer branch
+:PROPERTIES:
+:CUSTOM_ID: FEAT-622-spell-server-template-manifest-node-kdl::serialize
+:DEPENDS: FEAT-622-spell-server-template-manifest-node-kdl::parse
+:END:
+- File: ~packages/spell-server/src/manifest/serializer.ts~
+- After goals: emit ~template "<name>" { … }~ in stable field order matching parser.
+
+** ITEM Implement validator branch
+:PROPERTIES:
+:CUSTOM_ID: FEAT-622-spell-server-template-manifest-node-kdl::validate
+:DEPENDS: FEAT-622-spell-server-template-manifest-node-kdl::parse
+:END:
+- File: ~packages/spell-server/src/manifest/validator.ts~
+- Walk ~manifest.templates~; resolve setupRef against ~manifest.setups~ (and imported aliases); error path ~templates.<name>.setup~.
+- Reject empty prompt; reject duplicate params; reject ~mode~ outside ~{ "rpc" }~ (v1).
+- Validate ~artifactWatch.ext~ entries each start with ~.~ and contain only ~[a-z0-9]~ after the dot (e.g. ~.pdf~). Lowercase normalize on parse.
+
+** ITEM Wire imports / multi-file support
+:PROPERTIES:
+:CUSTOM_ID: FEAT-622-spell-server-template-manifest-node-kdl::imports
+:DEPENDS: FEAT-622-spell-server-template-manifest-node-kdl::parse
+:END:
+- File: ~packages/spell-server/src/manifest/import-resolver.ts~
+- Mirror exactly how ~goal~ and ~setup~ are merged from imported modules; expose imported templates under ~<alias>.<name>~.
+
+* Edge Cases
+- Param of type ~string[]~ from action descriptor parser is reusable; if not yet supported there, scope to ~string|number|boolean~ in v1.
+- Template body containing ~{{...}}~ Handlebars but no matching param → validator passes; rendering at run time logs unresolved-var warning (handled in TEMPLATE-RUN, not here).
+- ~setup "<imported-alias>.worker"~ — must resolve via import-resolver, not local-only setups map.
+- Empty ~params~ block omitted entirely → templates.params is ~[]~.
+- Override mechanism (~override "template" "name" from="..." strategy="..."~) is OUT of scope for v1.
+
+* Acceptance Criteria
+- ~bun check:ts~ clean.
+- All new tests pass.
+- Round-trip parse → serialize → parse identical for representative manifest.
+- Validation errors carry field path ~templates.<name>.<field>~.
+
+NOTE [2026-04-28]: Template/ManifestTemplateParam/ManifestTemplateArtifactWatch types, parser branch (description/setup/mode/prompt/param/artifact-watch), serializer round-trip, validator, import-resolver alias merge. templates: Map added to AutonomyManifest. 12/12 pass.

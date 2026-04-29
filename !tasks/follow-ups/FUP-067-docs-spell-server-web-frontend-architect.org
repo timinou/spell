@@ -1,0 +1,59 @@
+#+TITLE: docs: spell-server web frontend (architecture, KDL refs, run guide)
+#+STATE: DONE
+#+SESSION_ID: 14ccc1f70c4dbbca
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T20-40-38-705Z_14ccc1f70c4dbbca.jsonl]]
+#+CUSTOM_ID: FUP-067-docs-spell-server-web-frontend-architect
+#+LAYER: docs
+
+* Initial Message
+
+Goal: simple frontend to spell server. a client can connect with a secret token to a fast websocket that can let you connect with the running sessions by that user on that instance (through spell autodiscovery, consolidate the feature by looking at existing usage of similar features).
+
+On the frontend, you can start new plan sessions, you can request a url, etc. that lets you use both xterm.js and, for example, see the pdf generated from a typst requested by a task whose goal was to generate a report.
+
+easy way to setup templates from the frontend, wiht a linear-like command bar. Template 'document', you run it, you get a nice card in your session list, and then it tells you when it has the artifact ready.
+
+* Intention & Purpose
+Document the spell-server web frontend end-to-end: architecture, ~web~ KDL block, ~template~ KDL block, ~event_log~ bridge protocol, frontend dev workflow, deployment. Update ~docs/spell-server/{architecture.md, kdl-schema-reference.md, getting-started.md}~ and add ~docs/spell-server/web.md~. Update ~packages/spell-server/CHANGELOG.md~ under ~[Unreleased]~.
+
+* Scope
+In-scope:
+- ~docs/spell-server/web.md~ (new) — overview, auth model (multi-token bearer), session model (spawned vs external), templates, WS protocol summary, artifact serving, frontend dev workflow.
+- ~docs/spell-server/architecture.md~ — add a "Web subsystem" section; cross-link to ~web.md~.
+- ~docs/spell-server/kdl-schema-reference.md~ — append ~web~ block, ~template~ block, ~event_log~ wire format, ~SPELL_BRIDGE_EVENT_LOG~ env.
+- ~docs/spell-server/getting-started.md~ — append a "Open the dashboard" subsection covering generating a token and visiting ~http://localhost:<port>/web/~.
+- ~packages/spell-server/CHANGELOG.md~ — under ~[Unreleased]~ add Added entries for: ~web~ KDL block, ~template~ KDL block, ~/web/*~ routes, ~/web/ws~, artifact HTTP serving, ~event_log~ bridge protocol extension, embedded SPA.
+
+* Tests
+- Manual: link-checker pass on ~docs/spell-server/*.md~. Use ~markdown-link-check~ if available; otherwise visual review.
+
+* Implementation
+** ITEM web.md narrative
+:PROPERTIES:
+:CUSTOM_ID: FUP-067-docs-spell-server-web-frontend-architect::web-md
+:END:
+- Sections: Overview, Auth, Sessions (spawned vs external), Templates, WS protocol, Artifacts, Frontend (Vite, embedding, hot dev mode via Vite proxy → spell-server in dev only), Operations.
+
+** ITEM kdl-schema additions
+:PROPERTIES:
+:CUSTOM_ID: FUP-067-docs-spell-server-web-frontend-architect::kdl-additions
+:END:
+- File: ~docs/spell-server/kdl-schema-reference.md~
+- Add ~web~ section after ~socket~. Add ~template~ section after ~goal~ in autonomy.kdl section.
+
+** ITEM CHANGELOG
+:PROPERTIES:
+:CUSTOM_ID: FUP-067-docs-spell-server-web-frontend-architect::changelog
+:END:
+- File: ~packages/spell-server/CHANGELOG.md~
+- Group entries appropriately; reference no issue (this is a single coherent feature work; if any issue ID is provided at execution time, link it).
+
+* Edge Cases
+- Schema doc and parser drift → ~kdl-schema-reference.md~ examples MUST be parseable by the parser; CI grep ensures examples copy-paste.
+
+* Acceptance Criteria
+- All four docs files updated/created.
+- CHANGELOG entries land under ~[Unreleased]~.
+- Manual link-check passes.
+
+NOTE [2026-04-29]: docs/spell-server/web.md (full reference), architecture.md (Web Subsystem section), kdl-schema-reference.md (web node, event_log bridge messages, template node), getting-started.md (web dashboard quickstart). Created packages/spell-server/CHANGELOG.md.

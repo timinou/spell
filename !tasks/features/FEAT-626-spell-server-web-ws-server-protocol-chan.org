@@ -1,0 +1,170 @@
+#+TITLE: spell-server web WS server: protocol, channels, ext-filter subscriptions
+#+STATE: DONE
+#+SESSION_ID: 14ccc1f70c4dbbca
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T20-40-38-705Z_14ccc1f70c4dbbca.jsonl]]
+#+CUSTOM_ID: FEAT-626-spell-server-web-ws-server-protocol-chan
+#+DEPENDS: FEAT-621-spell-server-web-auth-multi-token-web-co FEAT-624-spell-server-web-artifacts-http-router-f FEAT-625-spell-server-web-session-hub-spawned-rpc
+#+LAYER: backend
+
+* Initial Message
+
+Goal: simple frontend to spell server. a client can connect with a secret token to a fast websocket that can let you connect with the running sessions by that user on that instance (through spell autodiscovery, consolidate the feature by looking at existing usage of similar features).
+
+On the frontend, you can start new plan sessions, you can request a url, etc. that lets you use both xterm.js and, for example, see the pdf generated from a typst requested by a task whose goal was to generate a report.
+
+easy way to setup templates from the frontend, wiht a linear-like command bar. Template 'document', you run it, you get a nice card in your session list, and then it tells you when it has the artifact ready.
+
+* Intention & Purpose
+Mount a WebSocket endpoint at ~/web/ws~ on the existing HTTP server. Authenticate with ~?token=~ on upgrade. Define a stable client/server message protocol: list/subscribe sessions, forward RPC commands, route blocking-event answers to external sessions, push artifact-created events filtered by extension, and broadcast registry lifecycle changes.
+
+Provide REST companions under ~/web/api/*~ for stateless lookups (sessions list, templates list, artifacts list, manifest read). All routes share ~verifyWebToken~ from FEAT-WEB-AUTH.
+
+* Context & Narrative
+~spell-server~ already creates one ~Bun.serve~ instance in ~http/server.ts::startHttpServer~. The Bun pattern uses ~server.upgrade(req, { data })~ inside ~fetch~ and a sibling ~websocket~ handler. We mirror the ~packages/qml-remote/src/server.ts~ template exactly, but here the WS handler lives co-located with the HTTP handler so a single ~Bun.serve~ owns both.
+
+A WS connection is a per-client multiplexer. The client subscribes to per-session channels with optional filter args (e.g., ~artifactExt: [".pdf"]~). The server pushes events tagged with ~sessionId~ + ~channel~. Lifecycle messages (~session_added~/~_removed~/~_updated~) flow on a global channel everyone sees.
+
+* Scope
+In-scope:
+- ~packages/spell-server/src/web/ws/protocol.ts~ — typed client/server message unions.
+- ~packages/spell-server/src/web/ws/connection.ts~ — ~WebConnection~ class wrapping one ~ServerWebSocket~. Tracks per-session subscriptions ~Map<sessionId, { channels: Set<Channel>; artifactExt?: string[] }>~. Holds identity.
+- ~packages/spell-server/src/web/ws/server.ts~ — mounts upgrade + ~websocket~ handler; constructs/owns ~WebConnection~ instances; wires registry+hub+watcher event sources to fan-out into connections.
+- ~packages/spell-server/src/web/api/router.ts~ — REST sub-router for ~/web/api/*~. Endpoints: ~GET /web/api/sessions~, ~GET /web/api/sessions/:id~, ~GET /web/api/sessions/:id/artifacts~, ~POST /web/api/sessions/:id/artifacts/url~ (mint signed URL via FEAT-WEB-ARTIFACTS), ~GET /web/api/templates~, ~POST /web/api/templates/:name/run~ (delegates to FEAT-WEB-TEMPLATE-RUN), ~POST /web/api/sessions~ (raw spawn w/o template), ~DELETE /web/api/sessions/:id~ (kill).
+- Wire ~handleArtifactsRoute~ (from FEAT-WEB-ARTIFACTS) into the main ~handleRequest~ when path starts with ~/web/artifacts/~.
+
+Channels:
+- ~"events"~ → server-spawned ~rpc_event~ + ~rpc_response~ + ~external_event_log~ (kind-multiplexed per session)
+- ~"artifacts"~ → ~artifact_created~ filtered by ~artifactExt~
+- ~"state"~ → periodic ~session_state~ updates (every 5s while subscribed) plus immediate-on-change for ~isStreaming~/~queuedMessageCount~
+
+Out-of-scope:
+- Template execution logic itself (FEAT-WEB-TEMPLATE-RUN owns ~runTemplate(name, params, identity)~). The WS/REST layers call into it.
+- Frontend code.
+
+Protocol (canonical):
+
+Client → Server:
+- ~{ type: "list_sessions" }~
+- ~{ type: "subscribe"; sessionId; channels: Channel[]; artifactExt?: string[] }~
+- ~{ type: "unsubscribe"; sessionId; channels?: Channel[] }~ (omit channels = all)
+- ~{ type: "rpc"; sessionId; command: RpcCommand }~ (spawned only)
+- ~{ type: "answer_blocking_event"; sessionId; eventId; payload: EventResponsePayload }~ (external only)
+- ~{ type: "spawn"; templateName?: string; params?: Record<string, unknown>; mode?: string; setupRef?: string; cwd?: string; initialPrompt?: string }~
+- ~{ type: "kill"; sessionId }~
+- ~{ type: "mint_artifact_url"; sessionId; artifactPath; ttlSec? }~
+- ~{ type: "ping" }~
+
+Server → Client:
+- ~{ type: "auth_ok"; identity: { name } }~ (immediately on open)
+- ~{ type: "session_list"; sessions: SessionSummary[] }~
+- ~{ type: "session_added" | "session_removed" | "session_updated"; session: SessionSummary }~
+- ~{ type: "rpc_event"; sessionId; event: RpcEvent }~
+- ~{ type: "rpc_response"; sessionId; response: RpcResponse }~
+- ~{ type: "external_event_log"; sessionId; entry: EventLogEntry }~
+- ~{ type: "blocking_event"; sessionId; payload: BlockingEventPayload }~ (mirrored when bridge fires)
+- ~{ type: "artifact_created"; sessionId; artifact: ArtifactRef & { ext, mime, sizeBytes, ts, label? } }~
+- ~{ type: "artifact_url"; sessionId; url: string; expiresAt: number }~
+- ~{ type: "spawn_result"; correlationId?; sessionId }~ (response to spawn)
+- ~{ type: "error"; correlationId?; code; message }~
+- ~{ type: "pong" }~
+
+* Existing Patterns
+- ~packages/qml-remote/src/server.ts~ — Bun WS pattern, ~server.upgrade~ in fetch + ~websocket~ handler.
+- ~packages/spell-server/src/http/server.ts::handleRequest~ — current routing structure to extend.
+- ~packages/spell-server/src/socket/session-registry.ts::onSessionChange~, ~onBlockingEvent~, ~onEventLog~ (added by FEAT-WEB-EVENT-LOG) — event sources to fan out.
+- ~packages/spell-server/src/web/session/web-session-hub.ts::subscribeEvents~ — RPC event source.
+- ~packages/spell-server/src/web/artifacts/watcher.ts~ — artifact event source.
+
+* Tests
+Files: ~packages/spell-server/test/web/ws/server.test.ts~, ~packages/spell-server/test/web/api/router.test.ts~ (new).
+
+Scenarios (WS):
+1. Upgrade with valid ~?token=~ succeeds; server immediately sends ~auth_ok~ with the identity name.
+2. Upgrade with invalid token → 401; no upgrade.
+3. ~list_sessions~ → ~session_list~ with all spawned + external entries.
+4. New external session registers via socket bridge → all open WS connections receive ~session_added~ with kind ~"external"~.
+5. ~spawn~ → spawn delegated to hub; on success, server replies with ~spawn_result~ (correlationId echoed) and broadcasts ~session_added~.
+6. ~subscribe~ to ~"events"~ on a spawned session → subsequent ~rpc_event~ messages arrive on that connection only.
+7. ~rpc { command: { type: "prompt", message: "..." } }~ → server forwards to hub; ~rpc_response~ later delivered.
+8. Two clients subscribed to same session, only one calls ~rpc~ → both see ~rpc_event~s; only the caller sees the matching ~rpc_response~ (correlated by command ~id~).
+9. ~subscribe~ with ~artifactExt: [".pdf"]~ → ~.pdf~ files emit ~artifact_created~; ~.png~ files do not. Case-insensitive.
+10. ~subscribe~ with ~ext: ["*"]~ or omitted → all artifacts.
+11. ~unsubscribe~ stops further deliveries on those channels.
+12. WS close → all subscriptions dropped; no leaks; pending mint_url settles with abort error.
+13. ~answer_blocking_event~ on external session forwards to ~SocketSessionRegistry.resolveEvent~. On spawned session, returns ~error~ with code ~"not_supported_for_spawned"~.
+14. ~mint_artifact_url~ → server returns ~artifact_url~ with valid signed URL.
+
+Scenarios (REST):
+15. ~GET /web/api/sessions~ with valid bearer → JSON list.
+16. Without bearer → 401.
+17. ~POST /web/api/sessions/:id/artifacts/url~ → JSON ~{ url, expiresAt }~.
+18. ~DELETE /web/api/sessions/:id~ → 204; underlying hub.kill called.
+
+* Implementation
+** ITEM Define protocol types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-626-spell-server-web-ws-server-protocol-chan::define-protocol
+:END:
+- File: ~packages/spell-server/src/web/ws/protocol.ts~
+- Tagged unions for client/server messages; ~SessionSummary~ derived from ~SessionRegistryEntry~ (drop ~connection~/~rpcClient~).
+- ~Channel = "events" | "artifacts" | "state"~
+
+** ITEM Tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-626-spell-server-web-ws-server-protocol-chan::write-tests
+:DEPENDS: FEAT-626-spell-server-web-ws-server-protocol-chan::define-protocol
+:END:
+- Files above. Use Bun's ~WebSocket~ client to connect to a real ~Bun.serve~ on a random port. Mock or real hub via FEAT-WEB-SESSION-HUB test doubles.
+
+** ITEM Implement WebConnection
+:PROPERTIES:
+:CUSTOM_ID: FEAT-626-spell-server-web-ws-server-protocol-chan::connection
+:DEPENDS: FEAT-626-spell-server-web-ws-server-protocol-chan::write-tests
+:END:
+- File: ~packages/spell-server/src/web/ws/connection.ts~
+- Constructor: ~ws~, ~identity~, ~deps { hub, registry, watcher, artifactsRouter, signingKey }~.
+- ~handleMessage(raw)~: validate, dispatch.
+- ~push(msg: ServerMessage)~: ~ws.send(JSON.stringify(msg))~.
+- Subscription bookkeeping with explicit cleanup on ~close~.
+
+** ITEM Implement WebSocketServer mount
+:PROPERTIES:
+:CUSTOM_ID: FEAT-626-spell-server-web-ws-server-protocol-chan::ws-server
+:DEPENDS: FEAT-626-spell-server-web-ws-server-protocol-chan::connection
+:END:
+- File: ~packages/spell-server/src/web/ws/server.ts~
+- ~mountWebSocket(server: Bun.Server, deps)~ — but actually wire-up happens in ~http/server.ts::startHttpServer~ via the ~websocket~ option; we expose ~makeWebSocketHandler(deps)~ that returns the handler object ~{ open, message, close, drain }~ and a ~handleUpgrade(request, server, deps): boolean~ helper called from ~handleRequest~.
+- Edit ~packages/spell-server/src/http/server.ts::startHttpServer~: pass ~websocket~ option; in ~fetch~ branch when path is ~/web/ws~ call ~handleUpgrade~ first.
+
+** ITEM REST router
+:PROPERTIES:
+:CUSTOM_ID: FEAT-626-spell-server-web-ws-server-protocol-chan::rest-router
+:DEPENDS: FEAT-626-spell-server-web-ws-server-protocol-chan::define-protocol
+:END:
+- File: ~packages/spell-server/src/web/api/router.ts~
+- Each handler reads ~verifyWebToken~ first → 401 if null.
+- Mount ~handleArtifactsRoute~ for ~/web/artifacts/...~ in ~handleRequest~.
+
+** ITEM Fan-out wiring
+:PROPERTIES:
+:CUSTOM_ID: FEAT-626-spell-server-web-ws-server-protocol-chan::fanout
+:DEPENDS: FEAT-626-spell-server-web-ws-server-protocol-chan::ws-server
+:END:
+- In ~makeWebSocketHandler~ ~open~ callback, register one global listener per upstream source (~registry.onSessionChange~, ~registry.onBlockingEvent~, ~registry.onEventLog~, ~watcher.onCreated~) and for each connection also ~hub.subscribeEvents(sessionId, ...)~ when subscribing.
+- Avoid one-listener-per-connection-per-event explosion: a single global listener iterates the connection set per event.
+
+* Edge Cases
+- Browser cannot send custom headers on ~new WebSocket()~ → ~?token=~ is the canonical path. Header still accepted for non-browser clients (curl, tests).
+- Connection drops mid-subscription → cleanup in ~close~ handler removes all listener registrations for that connection. Verified by leak test.
+- Sending an ~rpc~ command for an external session → respond ~error~ ~"not_steerable"~ but keep the connection.
+- Backpressure: ~ws.send~ with very large arg JSON → if ~ws.readyState !== OPEN~, drop and log; if buffered amount exceeds 4 MiB, drop subsequent events for that connection until below threshold.
+- Spawn with templateName when template manifest missing → ~error~ ~"unknown_template"~.
+- Two clients spawn the same template concurrently → each gets a distinct sessionId (no dedup).
+
+* Acceptance Criteria
+- ~bun check:ts~ clean.
+- All test scenarios pass.
+- ~startHttpServer~ now serves ~/web/ws~ + ~/web/api/*~ + ~/web/artifacts/*~ when ~web~ is configured.
+- WS opens with valid token in ≤ 200ms in tests.
+
+NOTE [2026-04-29]: web/ws/{protocol,connection,server}.ts. Typed WsClientMessage / WsServerMessage unions. WebConnection per-socket subscription state with ext filter. WebSubsystem.handleRest (GET/DELETE sessions, GET/POST artifacts, GET templates, POST templates/:name/run). tryUpgrade + websocketHandler. Fan-out registers session_change, blocking_event, event_log, hub lifecycle, artifact_created.

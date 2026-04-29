@@ -187,6 +187,17 @@ The UI polls the JSON API every ten seconds, stores `username:password` credenti
 
 This design keeps operations simple: if the Bun server is up, the dashboard is up.
 
+## Web Subsystem (`/web/*`)
+
+The `web` block in `server.kdl` activates a richer dashboard at `/web/*` with multi-token bearer auth, a typed WebSocket protocol at `/web/ws`, and a Vite-built React SPA bundled into the daemon. See [`web.md`](./web.md) for the full reference. Briefly:
+
+- `WebSubsystem` (`packages/spell-server/src/web/ws/server.ts`) owns one connection per WS, fans registry/hub/watcher events into open connections, and routes `/web/api/*` REST.
+- `WebSessionHub` spawns RPC sessions on demand (`spawn`/`kill`/`send`/`subscribeEvents`), tags `ownedBy`, and registers them in the same `SocketSessionRegistry` external CLI sessions use.
+- `ArtifactWatcher` mirrors `<sessionRoot>/<agent>/<tool>/<file>` writes as `artifact_created` events with debounce.
+- `TemplateRunner` resolves `template` manifest entries into spawn options + Handlebars-rendered prompts and steers them through the hub.
+
+The legacy `/` admin dashboard remains unchanged and complements the new surface.
+
 ## Sandbox Enforcement
 
 Sandbox policy lives at the setup level. The manifest parser understands three sandbox controls:
