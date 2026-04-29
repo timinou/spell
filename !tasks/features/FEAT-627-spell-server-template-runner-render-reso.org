@@ -1,0 +1,105 @@
+#+TITLE: spell-server template runner: render, resolve setup, spawn, fire initial prompt
+#+STATE: DONE
+#+SESSION_ID: 14ccc1f70c4dbbca
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T20-40-38-705Z_14ccc1f70c4dbbca.jsonl]]
+#+CUSTOM_ID: FEAT-627-spell-server-template-runner-render-reso
+#+DEPENDS: FEAT-622-spell-server-template-manifest-node-kdl FEAT-625-spell-server-web-session-hub-spawned-rpc
+#+LAYER: backend
+
+* Initial Message
+
+Goal: simple frontend to spell server. a client can connect with a secret token to a fast websocket that can let you connect with the running sessions by that user on that instance (through spell autodiscovery, consolidate the feature by looking at existing usage of similar features).
+
+On the frontend, you can start new plan sessions, you can request a url, etc. that lets you use both xterm.js and, for example, see the pdf generated from a typst requested by a task whose goal was to generate a report.
+
+easy way to setup templates from the frontend, wiht a linear-like command bar. Template 'document', you run it, you get a nice card in your session list, and then it tells you when it has the artifact ready.
+
+* Intention & Purpose
+Translate a ~template~ manifest entry plus parameter values into a live spawned RPC session: validate params, render the prompt with Handlebars, resolve the setup reference into ~RpcSpawnOptions~, call ~WebSessionHub.spawn~, then fire the rendered prompt as the first ~prompt~ RPC command. Returns the new ~sessionId~ to the caller (WS or REST).
+
+* Context & Narrative
+This item sits at the intersection of FEAT-WEB-TEMPLATE-MANIFEST (defines the schema) and FEAT-WEB-SESSION-HUB (spawns/owns the RPC client). The runner is the only place where Handlebars rendering happens for templates so the security/escape rules live in one location. Setup→RpcSpawnOptions resolution mirrors the existing path used by ~GoalExecutionController~.
+
+* Scope
+In-scope:
+- ~packages/spell-server/src/web/templates/runner.ts~ — ~TemplateRunner~ class.
+- Public API: ~runTemplate(name, params, identity, deps): Promise<{ sessionId: string }>~ where ~deps = { manifest, hub, cwd }~.
+- Param coercion: ~string~ stays string, ~number~ via ~Number(...)~, ~boolean~ via ~true|false~, arrays validated element-wise. Reject unknown param names. Reject missing required.
+- Setup resolution: lookup by name in ~manifest.setups~ (and imported aliases) → translate to ~RpcSpawnOptions~ (tools allow list, model, sandbox policy path, append-system-prompt, env). Reuse the helper goal-executor uses; if not exported, factor it out into ~packages/spell-server/src/session/setup-options.ts~ first.
+- Prompt rendering via existing ~handlebars~ package (it's already a transitive dep in coding-agent; spell-server may need to add it or import from a shared place). Decision: spell-server adds ~handlebars~ directly to keep dependencies contained. Compile in ~strict: false~ mode (missing vars → empty string + logger.warn).
+
+Out-of-scope:
+- Template definition syntax (FEAT-WEB-TEMPLATE-MANIFEST).
+- WS/REST plumbing (FEAT-WEB-WS calls ~runTemplate~).
+
+* Existing Patterns
+- ~packages/spell-server/src/executor/goal-executor.ts~ — has the setup→spawn translation already; lift the helper into a shared module.
+- ~packages/coding-agent/src/config/prompt-templates.ts::renderPromptTemplate~ — Handlebars usage example. Mirror the same compile flags.
+- ~packages/spell-server/src/manifest/types.ts::Setup~ — fields to translate.
+
+* Tests
+File: ~packages/spell-server/test/web/templates/runner.test.ts~ (new), ~packages/spell-server/test/session/setup-options.test.ts~ (new if extracted).
+
+Scenarios:
+1. Valid params + valid template → returns ~{ sessionId }~; hub.spawn called with translated options; immediately after spawn, hub.send called with ~prompt~ RPC carrying rendered text.
+2. Missing required param → throws ~MissingParamError~ before any spawn occurs.
+3. Unknown param name → throws ~UnknownParamError~.
+4. Param coercion: ~"5"~ for ~type=number~ → number 5; ~"true"~ → boolean true; ~"oops"~ for ~type=number~ → throws.
+5. Handlebars: prompt ~"On {{topic}} (depth {{depth}})"~ + params ~{topic:"AI", depth:3}~ → rendered text exact.
+6. Handlebars: missing var like ~{{missing}}~ → empty string (logger.warn fires once).
+7. Setup ref unresolved (validator should have caught, but defensive at runtime) → throws.
+8. ~ownedBy~ propagated from ~identity.name~ to hub.spawn.
+9. ~templateName~ tagged on the registry entry.
+10. If ~template.artifactWatch~ present, runner attaches a hint to ~hub.spawn~ so the hub records ~watchExtensions: string[]~ on the registry entry (frontend uses it as default ext filter).
+
+* Implementation
+** ITEM Extract setup→RpcSpawnOptions helper
+:PROPERTIES:
+:CUSTOM_ID: FEAT-627-spell-server-template-runner-render-reso::extract-setup-options
+:END:
+- File: ~packages/spell-server/src/session/setup-options.ts~ (new)
+- ~setupToSpawnOptions(setup: Setup, manifest: AutonomyManifest, cwd: string, env?: Record<string,string>): RpcSpawnOptions~
+- Move logic out of ~goal-executor.ts~ if needed; keep call site there pointing at the new helper. Re-add tests for the extracted helper in ~test/session/setup-options.test.ts~ if tests don't already exist.
+
+** ITEM Param coercion + tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-627-spell-server-template-runner-render-reso::param-coercion
+:DEPENDS: FEAT-627-spell-server-template-runner-render-reso::extract-setup-options
+:END:
+- File: ~packages/spell-server/src/web/templates/params.ts~
+- ~coerceParams(params: Map<string, ManifestTemplateParam>, raw: Record<string, unknown>): Record<string, string|number|boolean|...>~
+- Throw ~MissingParamError~, ~UnknownParamError~, ~ParamCoercionError~.
+
+** ITEM Implement TemplateRunner
+:PROPERTIES:
+:CUSTOM_ID: FEAT-627-spell-server-template-runner-render-reso::runner
+:DEPENDS: FEAT-627-spell-server-template-runner-render-reso::param-coercion
+:END:
+- File: ~packages/spell-server/src/web/templates/runner.ts~
+- ~runTemplate(name, params, identity, deps)~
+- Steps: lookup template → coerce params → render prompt → resolve setup → spawnOpts → ~hub.spawn({ ownedBy: identity.name, templateName: name, watchExtensions: tpl.artifactWatch?.ext, rpcSpawn: spawnOpts, cwd: deps.cwd, mode: tpl.mode ?? "rpc" })~ → ~hub.send(sessionId, { type: "prompt", message: renderedPrompt })~.
+- Surface initial prompt errors but DO NOT roll back the spawn (the session card stays alive so user can retry from the UI).
+
+** ITEM Wire into REST/WS
+:PROPERTIES:
+:CUSTOM_ID: FEAT-627-spell-server-template-runner-render-reso::wire
+:DEPENDS: FEAT-627-spell-server-template-runner-render-reso::runner
+:END:
+- ~packages/spell-server/src/web/api/router.ts~ ~POST /web/api/templates/:name/run~ → ~runner.runTemplate(name, body.params, identity, deps)~.
+- ~packages/spell-server/src/web/ws/connection.ts~ ~spawn~ message with ~templateName~ → same.
+
+* Edge Cases
+- Empty params object on a template with no required params → fine, render with empty context.
+- Handlebars syntax error in stored template prompt (manifest already loaded but invalid) → logger.error with template name and details; throws ~PromptRenderError~. UI surfaces as toast.
+- Race: two ~runTemplate~ calls for same template — both return distinct ~sessionId~ (templates are not singletons).
+- Setup that defines ~tools.deny~ excluding all default tools → spawn proceeds; agent will be limited (correct behavior).
+- ~mode~ on template = ~"rpc"~ is a no-op pass-through (only mode in v1); kept for forward compat.
+- ~initialPrompt~ failure (rpc client not ready yet) → retry once with 200ms backoff.
+
+* Acceptance Criteria
+- ~bun check:ts~ clean.
+- All scenarios pass.
+- ~runTemplate~ surfaces from ~/web/api/templates/:name/run~ and from ~spawn~ WS message.
+- Goal executor still works (regression: existing ~goal-executor.test.ts~ green after setup-options extraction).
+
+NOTE [2026-04-29]: setup-options helper (setupToBaseSpawnOptions + resolveAllowedValues), goal-executor refactored. web/templates/{params,runner}.ts: coerceParams (MissingParam/UnknownParam/ParamCoercionError). TemplateRunner.runTemplate → setupToBaseSpawnOptions → hub.spawn → hub.send Handlebars-rendered prompt. handlebars dep added. Fire-and-forget initial prompt. 9/9 pass.

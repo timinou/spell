@@ -1,0 +1,132 @@
+#+TITLE: spell-server web session hub: spawned-RPC lifecycle + ownedBy registry + event multiplex
+#+STATE: DONE
+#+SESSION_ID: 14ccc1f70c4dbbca
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T20-40-38-705Z_14ccc1f70c4dbbca.jsonl]]
+#+CUSTOM_ID: FEAT-625-spell-server-web-session-hub-spawned-rpc
+#+DEPENDS: FEAT-621-spell-server-web-auth-multi-token-web-co
+#+LAYER: backend
+
+* Initial Message
+
+Goal: simple frontend to spell server. a client can connect with a secret token to a fast websocket that can let you connect with the running sessions by that user on that instance (through spell autodiscovery, consolidate the feature by looking at existing usage of similar features).
+
+On the frontend, you can start new plan sessions, you can request a url, etc. that lets you use both xterm.js and, for example, see the pdf generated from a typst requested by a task whose goal was to generate a report.
+
+easy way to setup templates from the frontend, wiht a linear-like command bar. Template 'document', you run it, you get a nice card in your session list, and then it tells you when it has the artifact ready.
+
+* Intention & Purpose
+Own server-spawned RPC sessions for the web frontend. Provide a ~WebSessionHub~ that: (a) spawns ~spell --mode rpc~ via the existing ~SessionManager~ but with a web-specific lifecycle, (b) tags each spawned session with ~ownedBy~ (the ~WebIdentity.name~ from the spawning request), (c) registers spawned sessions into the unified ~SocketSessionRegistry~ so they appear next to external CLI sessions in autodiscovery, (d) multiplexes per-session ~RpcEvent~ streams to N subscribers, (e) supports forwarding ~RpcCommand~ from a subscriber back to the right ~RpcClient~.
+
+* Context & Narrative
+Two session origins must coexist in one list. External CLI sessions register themselves via the bridge socket and emit ~event_log~ entries. Server-spawned sessions need a sibling registration path so the WS layer queries one source of truth. We extend ~SessionRegistryEntry~ minimally: add ~kind: "external" | "spawned"~, ~ownedBy?: string~, ~templateName?: string~, ~rpcClient?: RpcClient~. ~rpcClient~ is the steering hook for spawned sessions; absent for external ones.
+
+The hub does NOT depend on FEAT-WEB-WS but is consumed by it. It also does NOT depend on FEAT-WEB-TEMPLATE-MANIFEST — template instantiation is owned by FEAT-WEB-TEMPLATE-RUN, which calls ~hub.spawn(...)~.
+
+* Scope
+In-scope:
+- ~packages/spell-server/src/web/session/spawned-lifecycle.ts~ — ~WebSpawnedLifecycle implements SessionLifecycle<string>~. Idle timeout 30 min default, configurable. Skip ~autonomy_state~ tool injection (web sessions need a clean tool surface).
+- ~packages/spell-server/src/web/session/web-session-hub.ts~ — ~WebSessionHub~ class.
+- Extend ~packages/spell-server/src/socket/session-registry.ts~ ~SessionRegistryEntry~ shape with optional ~kind~, ~ownedBy~, ~templateName~, ~rpcClient~ (see "Type Extension" below).
+- ~SocketSessionRegistry.registerSpawned({ sessionId, ownedBy, templateName, rpcClient, metadata })~ — register a spawned session; no socket connection needed (uses a NoopSocket sentinel or the entry omits the connection field — refactor ~connection~ to optional; only used to write back to the bridge so external sessions still set it).
+- ~SocketSessionRegistry.getSpawned()~, ~getExternal()~, ~getAll()~ — accessors.
+
+Type extension contract:
+~SessionRegistryEntry { sessionId; kind: "external" | "spawned"; pid: number; cwd: string; mode: string; startedAt: number; projectName: string; lastHeartbeat: number; currentBlockingEvent?: BlockingEventPayload; recentLog?: EventLogEntry[]; ownedBy?: string; templateName?: string; rpcClient?: RpcClient; connection?: net.Socket }~
+
+- ~WebSessionHub~ public API:
+  - ~spawn(opts: { ownedBy: string; templateName?: string; rpcSpawn: RpcSpawnOptions; cwd: string; mode: string }): Promise<{ sessionId: string }>~
+  - ~kill(sessionId): Promise<void>~ (only spawned)
+  - ~send(sessionId, command: RpcCommand): Promise<RpcResponse>~ (only spawned; throws on external)
+  - ~subscribeEvents(sessionId, listener: (event: RpcEvent) => void): () => void~
+  - ~getRpcSessionState(sessionId): Promise<RpcSessionState | null>~ (uses ~get_state~ RPC command)
+  - emits ~"session_added" | "session_removed" | "session_updated"~ to a top-level listener via ~onSessionLifecycle~
+
+Out-of-scope:
+- Template prompt rendering (FEAT-WEB-TEMPLATE-RUN)
+- WS protocol / fan-out (FEAT-WEB-WS uses ~subscribeEvents~)
+- Artifact watcher (FEAT-WEB-ARTIFACTS — but hub triggers ~ArtifactWatcher.watch(sessionId, sessionRoot)~ on ~spawn~ and ~unwatch~ on ~kill~. Wiring is owned here; watcher impl is FEAT-WEB-ARTIFACTS).
+
+* Existing Patterns
+- ~packages/spell-server/src/session/session-manager.ts::SessionManager~ — generic key→client manager. Already used by goals (with ~AutonomyLifecycle~).
+- ~packages/spell-server/src/session/autonomy-lifecycle.ts::AutonomyLifecycle~ — direct template for ~WebSpawnedLifecycle~ (just simpler: no tool injection, configurable idle timeout).
+- ~packages/spell-server/src/rpc/rpc-client.ts::RpcClient~ — already supports ~prompt~, ~abort~, ~bash~, ~get_state~ and event listening.
+- ~packages/spell-server/src/socket/session-registry.ts~ — registry shape; extend, do not duplicate.
+- ~packages/coding-agent/src/session/artifacts.ts::resolveArtifactScopeFromSessionFile~ — to derive ~sessionRoot~ for the watcher when given the spawned session's ~sessionFile~ from ~get_session_stats~.
+
+* Tests
+Files: ~packages/spell-server/test/web/session/web-session-hub.test.ts~, ~packages/spell-server/test/web/session/spawned-lifecycle.test.ts~ (new).
+
+Scenarios:
+1. ~spawn~ creates an entry visible via ~registry.getSpawned()~ with ~kind: "spawned"~, ~ownedBy~ tag, and ~rpcClient~ alive. Mock ~SessionManager.createClient~ in tests to avoid real subprocess.
+2. ~spawn~ emits ~session_added~ to lifecycle listeners.
+3. ~kill~ stops the rpc client, calls registry deregister, emits ~session_removed~.
+4. ~send~ on spawned session forwards the command and resolves with the matching response (correlated by ~id~).
+5. ~send~ on external session id throws "external sessions are not steerable".
+6. ~subscribeEvents~ delivers ~RpcEvent~s emitted by the underlying RpcClient to all subscribers; unsubscribe stops delivery.
+7. Two subscribers on the same session both receive each event exactly once (independent listener fanout).
+8. RpcClient process exits unexpectedly → hub catches ~error~ event, emits ~session_removed~, broadcasts ~error~ event to subscribers, deregisters from registry.
+9. Idle timeout reached → lifecycle expires session; hub deregisters and emits ~session_removed~.
+10. ~spawn~ returns synchronously after RPC ready event; ~spawn~ never resolves until ~ready~ is observed (or rejects on timeout).
+11. Registry: ~getAll()~ returns spawned + external entries in a stable order (spawned first, then external, by ~startedAt~ asc).
+
+* Implementation
+** ITEM Extend SessionRegistryEntry shape and registry methods
+:PROPERTIES:
+:CUSTOM_ID: FEAT-625-spell-server-web-session-hub-spawned-rpc::extend-registry
+:END:
+- File: ~packages/spell-server/src/socket/session-registry.ts~
+- Add fields ~kind~ (default ~"external"~ in ~register()~ for backward compat), ~ownedBy~, ~templateName~, ~rpcClient~. Make ~connection~ optional.
+- Add ~registerSpawned(args)~, ~getSpawned()~, ~getExternal()~, ~getAll()~. Existing ~deregister~ also fires ~rpcClient.kill()~ if present (idempotent guard).
+- Update ~cleanupStale~: only liveness-checks ~kind === "external"~ via ~process.kill(pid, 0)~. For spawned, liveness is the rpc client's ~alive~ flag.
+
+** ITEM Tests for hub + lifecycle (TDD)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-625-spell-server-web-session-hub-spawned-rpc::write-tests
+:DEPENDS: FEAT-625-spell-server-web-session-hub-spawned-rpc::extend-registry
+:END:
+- Files above; mock ~SessionManager~ ~createClient~ and a fake ~RpcClient~ with ~onEvent~/~prompt~/~kill~ surface.
+
+** ITEM Implement WebSpawnedLifecycle
+:PROPERTIES:
+:CUSTOM_ID: FEAT-625-spell-server-web-session-hub-spawned-rpc::lifecycle
+:DEPENDS: FEAT-625-spell-server-web-session-hub-spawned-rpc::write-tests
+:END:
+- File: ~packages/spell-server/src/web/session/spawned-lifecycle.ts~
+- Mirrors ~AutonomyLifecycle~ shape; takes ~{ idleTimeoutMs?: number }~ in constructor (default 30*60_000).
+- ~optionsForKey(key, base)~ returns the ~RpcSpawnOptions~ provided by ~base~ verbatim (no autonomy_state injection).
+
+** ITEM Implement WebSessionHub
+:PROPERTIES:
+:CUSTOM_ID: FEAT-625-spell-server-web-session-hub-spawned-rpc::hub
+:DEPENDS: FEAT-625-spell-server-web-session-hub-spawned-rpc::lifecycle
+:END:
+- File: ~packages/spell-server/src/web/session/web-session-hub.ts~
+- Constructor injects ~{ sessionManager: SessionManager<string>; registry: SocketSessionRegistry; artifactWatcher?: ArtifactWatcher }~.
+- ~#listeners: Map<sessionId, Set<(e: RpcEvent) => void>>~ for event multiplex.
+- ~spawn~: generate ~sessionId~ (uuid), call ~sessionManager.getOrCreate~ with the key; on ready, query ~get_session_stats~ to obtain ~sessionFile~; resolve ~sessionRoot~ via ~resolveArtifactScopeFromSessionFile~; ~artifactWatcher?.watch(sessionId, sessionRoot)~; ~registry.registerSpawned(...)~; emit ~session_added~.
+- ~send~: enforce kind, allocate ~id~ if absent, write to rpc client's stdin, return promise resolved on matching ~response~ event.
+- Listen to rpc client ~error~ event → cleanup as in scenario 8.
+
+** ITEM Wire hub into startSpellServer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-625-spell-server-web-session-hub-spawned-rpc::wire-startup
+:DEPENDS: FEAT-625-spell-server-web-session-hub-spawned-rpc::hub
+:END:
+- File: ~packages/spell-server/src/server.ts~
+- Construct ~WebSessionHub~ when ~config.server.web~ is set. Pass ~sessionManager~, ~sessionRegistry~ (lazy-create one if socket is disabled — web subsystem requires it), ~artifactWatcher~ (lazy-construct from FEAT-WEB-ARTIFACTS).
+- Expose hub on the returned ~SpellServer~ object as ~webSessionHub?~.
+
+* Edge Cases
+- Web enabled but ~socket~ disabled: still construct a SocketSessionRegistry (lazy, no SocketServer). External sessions just won't appear; spawned ones still register. Document this in DOC-WEB.
+- Two spawn calls for the same key (race) → SessionManager.getOrCreate already deduplicates; hub treats both as the same session and adds two subscribers if asked.
+- Subscribers added after ~spawn~ resolves but before first event → no missed events (RpcClient buffers nothing internally — that's accepted; templates always send the first prompt synchronously after spawn so subscribers attached in the same tick will see ~agent_start~).
+- Crash mid-spawn (binary missing, ENOENT) → hub rejects ~spawn~, emits nothing, no registry entry leaked.
+- Killing a session that another client is currently sending an ~rpc~ command to → in-flight ~send~ promise rejects with "session terminated".
+
+* Acceptance Criteria
+- ~bun check:ts~ clean.
+- All scenarios pass.
+- ~SocketSessionRegistry.getAll()~ returns interleaved spawned+external entries.
+- Hub never spawns when ~config.server.web~ is undefined.
+
+NOTE [2026-04-29]: SessionRegistryEntry {kind, connection, ownedBy, templateName, watchExtensions, rpcClient}. SessionKind, SpawnedRegistration, registerSpawned/getSpawned/getExternal/getAll. cleanupStale liveness-checks external only. WebSpawnedLifecycle (no autonomy_state, default 30min idle). WebSessionHub multiplexed event subscribers, spawn/kill/send/subscribeEvents/onLifecycle. 8/8 pass.

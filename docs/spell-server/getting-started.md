@@ -398,3 +398,35 @@ WantedBy=multi-user.target
 Replace `ExecStart` with your installed `spell server start` command if you ship the CLI wrapper. Keep secrets out of the unit file when possible; use `EnvironmentFile=` or a secret manager instead.
 
 Once the unit is enabled and started, revisit the curl checks above to confirm the listener, auth, and dashboard are working end to end.
+
+
+## Open the Web Dashboard
+
+The richer `/web/*` dashboard with the command bar, session detail tabs, and artifact viewer is enabled by adding a `web` block to `server.kdl` and building the SPA bundle.
+
+```kdl
+web {
+    token "alice" "env(SPELL_TOKEN_ALICE)"
+}
+```
+
+Generate a token (any random string works; the `name` is the human label):
+
+```sh
+export SPELL_TOKEN_ALICE=$(openssl rand -hex 24)
+```
+
+Build the SPA bundle once per release:
+
+```sh
+bun run --cwd=packages/spell-server build:web
+```
+
+Start the server, then visit `http://localhost:<port>/web/`. Paste the token to sign in. From there:
+
+- Press ⌘K (Ctrl+K on Linux/Windows) to open the command bar.
+- Pick a `template` you declared in `autonomy.kdl` to spawn a session with parameters and a Handlebars-rendered initial prompt.
+- The card on the sidebar transitions `spawning → running → done`, with a `READY` badge when an artifact matching `artifact-watch` lands.
+- Open the Artifacts tab to preview generated PDFs/images via short-lived signed URLs.
+
+If the bundle is missing the server returns a friendly placeholder explaining how to run `build:web`. See [`web.md`](./web.md) for the full reference.

@@ -1,0 +1,129 @@
+#+TITLE: spell-server web artifacts: HTTP router + fs watcher + signed URL minter
+#+STATE: DONE
+#+SESSION_ID: 14ccc1f70c4dbbca
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-28T20-40-38-705Z_14ccc1f70c4dbbca.jsonl]]
+#+CUSTOM_ID: FEAT-624-spell-server-web-artifacts-http-router-f
+#+DEPENDS: 
+#+LAYER: backend
+
+* Initial Message
+
+Goal: simple frontend to spell server. a client can connect with a secret token to a fast websocket that can let you connect with the running sessions by that user on that instance (through spell autodiscovery, consolidate the feature by looking at existing usage of similar features).
+
+On the frontend, you can start new plan sessions, you can request a url, etc. that lets you use both xterm.js and, for example, see the pdf generated from a typst requested by a task whose goal was to generate a report.
+
+easy way to setup templates from the frontend, wiht a linear-like command bar. Template 'document', you run it, you get a nice card in your session list, and then it tells you when it has the artifact ready.
+
+* Intention & Purpose
+Serve session artifacts over HTTP with two access modes: (1) bearer-auth direct fetch for headered XHR, (2) short-lived HMAC-signed URLs for embed contexts (PDF iframes, image src, video). Add a per-session fs.watch that surfaces newly-written artifact files as runtime events for FEAT-WEB-WS to broadcast. Subscribers may filter by file extension.
+
+* Context & Narrative
+Artifacts on disk follow ~<sessionRoot>/<agent>/<toolType>/<n>.<ext>~ with ~artifact://<sessionId>/<agent>/<tool>/<file>~ URIs. The web layer needs to translate ~sessionId~ + relative path back to a real file, content-type it, send with ~Content-Disposition: inline~. For ~<iframe src=>~ embeds, browsers cannot inject ~Authorization~ headers, so we mint a signed URL: ~/web/artifacts/<sessionId>/<agent>/<tool>/<file>?sig=<hmac>&exp=<unix>~. The HMAC key is derived from ~webhookSecret~ if present, otherwise from a deterministic value derived from ~web.tokens~ (server-only, never sent to client).
+
+The fs watcher is the canonical artifact-creation event source: hook on ~Bun.file().writer()~ is awkward and ~ArtifactManager.saveArtifact~ is invoked from many sites; watching the directory is robust and tool-call-agnostic.
+
+* Scope
+In-scope:
+- ~packages/spell-server/src/web/artifacts/router.ts~ — request router; parse path; resolve session by id (use spawned-session registry from FEAT-WEB-SESSION-HUB OR external bridge registry; pass both as deps); look up sessionRoot via ~resolveArtifactScopeFromSessionFile~; safety-check ~..~ and absolute-path components in path segments.
+- ~packages/spell-server/src/web/artifacts/signed-url.ts~ — ~mintSignedArtifactUrl(uri, ttlSec, key): URL~ and ~verifySignedUrl(request, key): boolean~. SHA-256 HMAC over ~uri
+exp~.
+- ~packages/spell-server/src/web/artifacts/watcher.ts~ — ~ArtifactWatcher~ class. ~watch(sessionId, sessionRoot): void~ recursively monitors ~<sessionRoot>~ for new files. Emits ~ArtifactCreatedEvent { sessionId, uri, agent, tool, filename, ext, mime, sizeBytes, ts }~ via ~onCreated~. Use ~node:fs~ ~watch~ (recursive on linux requires polling fallback; default to chokidar-style: ~fs.watch~ on each agent dir, lazy-add new ones).
+- Helper: ~filterByExt(events, ext[]): events~ used by WS code to feed subscribers.
+
+Out-of-scope:
+- WebSocket fan-out (FEAT-WEB-WS).
+- HTTP route MOUNTING in ~http/server.ts~: this item exposes a ~handleArtifactsRoute(request, deps): Promise<Response | null>~ function that the http server later calls when path starts with ~/web/artifacts/~.
+
+* Existing Patterns
+- ~packages/coding-agent/src/session/artifacts.ts::resolveArtifactScopeFromSessionFile~ — path → scope.
+- ~packages/spell-server/src/http/auth.ts::verifyHmac~ — HMAC pattern for trigger routes; reuse the helper, do not duplicate.
+- ~packages/spell-server/src/state/store-manager.ts~ — example of a watched filesystem store with cleanup.
+- MIME mapping: ~Bun.file(path).type~ already returns content-type; trust it for primary mapping. Override map: ~.pdf → application/pdf~, ~.typ → text/plain~, ~.svg → image/svg+xml~ — only as fallback when ~Bun.file().type~ returns ~application/octet-stream~.
+
+* Tests
+Files: ~packages/spell-server/test/web/artifacts/router.test.ts~, ~signed-url.test.ts~, ~watcher.test.ts~ (new dir).
+
+Scenarios:
+1. Router: GET valid path with ~Authorization: Bearer~ matching ~web.tokens~ → 200 with body bytes and correct Content-Type, ~Content-Disposition: inline; filename="..."~.
+2. Router: GET valid path with no auth → 401.
+3. Router: GET valid path with valid signed URL (signature + non-expired) → 200, no Authorization needed.
+4. Router: GET with valid sig but ~exp~ in past → 401.
+5. Router: GET with tampered query (~exp~ changed) → 401.
+6. Router: path traversal ~../~ in any segment → 400 (or 404 with no leak); file not opened.
+7. Router: unknown sessionId → 404.
+8. Router: HEAD also supported, returns same headers, no body.
+9. Mint: ~mintSignedArtifactUrl(uri, 60)~ → URL has ~sig~ and ~exp~ query params; ~verifySignedUrl~ returns true; after 60s, false.
+10. Mint: signature is constant-time-compared (no early exit). Tampered ~uri~ path → false.
+11. Watcher: write a new file under ~<sessionRoot>/main/bash/0.txt~ → ~onCreated~ fires once with correct ext ~.txt~, mime ~text/plain~, sizeBytes>0.
+12. Watcher: same file written twice (overwrite) → at most one ~onCreated~ within a 200ms debounce window.
+13. Watcher: ext filter helper ~filterByExt(["pdf"], events)~ matches both ~.pdf~ and ~pdf~ inputs and is case-insensitive.
+14. Watcher: ~stop()~ removes all watchers; subsequent file writes do not emit.
+
+* Implementation
+** ITEM Define types and route helpers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-624-spell-server-web-artifacts-http-router-f::define-types
+:END:
+- File: ~packages/spell-server/src/web/artifacts/types.ts~
+- ~ArtifactCreatedEvent~, ~ArtifactRequestDeps { sessionRoots: (id) => string | undefined; web: WebConfig | undefined; signingKey: Buffer | string }~
+
+** ITEM Implement signed-url + tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-624-spell-server-web-artifacts-http-router-f::signed-url
+:DEPENDS: FEAT-624-spell-server-web-artifacts-http-router-f::define-types
+:END:
+- File: ~packages/spell-server/src/web/artifacts/signed-url.ts~
+- HMAC-SHA256 over ~"<uri>
+<exp>"~; URL-safe base64 in ~sig~ param; ~exp~ unix seconds.
+- Use ~Bun.CryptoHasher~ or ~node:crypto~.
+- Tests for scenarios 9-10.
+
+** ITEM Implement router + tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-624-spell-server-web-artifacts-http-router-f::router
+:DEPENDS: FEAT-624-spell-server-web-artifacts-http-router-f::signed-url
+:END:
+- File: ~packages/spell-server/src/web/artifacts/router.ts~
+- ~handleArtifactsRoute(request, deps): Promise<Response>~
+- Parse path: ~/web/artifacts/<sessionId>/<agent>/<tool>/<file>~ (segments must each pass ~/^[a-zA-Z0-9._-]+$/~ and not be ~..~).
+- Lookup ~sessionRoots(sessionId)~; if undefined → 404.
+- Build absolute path and verify via ~path.relative~ that it stays under sessionRoot.
+- Auth path: signed URL → bypass bearer; else require ~verifyWebToken~.
+- Stream file with ~Bun.file(path).stream()~; set ~Content-Type~, ~Content-Length~, ~Content-Disposition: inline~ (or ~attachment~ if query ~?download=1~), ~Cache-Control: private, max-age=300~.
+- Tests for scenarios 1-8.
+
+** ITEM Implement watcher + tests (TDD)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-624-spell-server-web-artifacts-http-router-f::watcher
+:DEPENDS: FEAT-624-spell-server-web-artifacts-http-router-f::define-types
+:END:
+- File: ~packages/spell-server/src/web/artifacts/watcher.ts~
+- Class with ~watch(sessionId, sessionRoot)~, ~unwatch(sessionId)~, ~stop()~.
+- Underlying: ~fs.watch(dir, { recursive: true })~ where supported; ~chokidar~-equivalent fallback NOT introduced — instead, a per-tool-dir watcher created lazily as new tool dirs appear (reuse existing patterns from ~coding-agent~ ~BufferRegistry~ if present).
+- 200ms debounce per ~(uri)~ key.
+- ~filterByExt(filterList, event)~ helper exported.
+- Tests for scenarios 11-14 using ~fs.mkdtemp~.
+
+** ITEM Auto-resolve signing key from server config
+:PROPERTIES:
+:CUSTOM_ID: FEAT-624-spell-server-web-artifacts-http-router-f::signing-key
+:DEPENDS: FEAT-624-spell-server-web-artifacts-http-router-f::signed-url
+:END:
+- Helper ~deriveSigningKey(server: ServerConfig): Buffer~
+- Order: ~webhookSecret~ if present; else SHA-256 of sorted ~tokens.values()~ joined; else throw at startup ("web subsystem requires either a webhook-secret or at least one web.token to mint signed URLs").
+
+* Edge Cases
+- Concurrent writes from two tools → fs.watch fires per file; ring debounce protects.
+- Symlink in artifacts dir → router refuses (lstat then resolve check).
+- Very large file (>1 GiB) → stream; no buffer; no Content-Length if size unknown (Bun.file gives size synchronously when known).
+- ~ext~ subscription with ~"*"~ → all extensions match (documented helper behavior).
+- ~ext~ entries case-mixed (~.PDF~ vs ~.pdf~) → normalize lowercased.
+- Signed URL ~exp~ overflow (e.g. year 2038) → store as ~Number~; document Y2038 caveat for 32-bit systems (none in Bun targets).
+
+* Acceptance Criteria
+- ~bun check:ts~ clean.
+- All tests pass.
+- ~handleArtifactsRoute~ exported and unit-callable without spinning up Bun.serve.
+- Watcher test does not leak fs.watch handles between cases.
+
+NOTE [2026-04-29]: web/artifacts/{types,signed-url,router,watcher,signing-key}.ts. HMAC-SHA256 signed URLs over uri\\nexp (base64url). Router parses /web/artifacts/<sessionId>/<agent>/<tool>/<file>, regex segment guard, Bearer | signed URL, Bun.file streaming. Watcher: recursive fs.watch + 200ms debounce. 19/19 pass.

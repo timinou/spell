@@ -46,6 +46,43 @@ Notes:
 - The socket node is a document-root sibling of `http`, not a child of it.
 - The bridge protocol is newline-delimited JSON; the configured socket path is where the daemon listens for local clients.
 
+#### `event_log` bridge messages (opt-in)
+
+External CLI sessions may push low-fi summary lines to the daemon for the web dashboard's autodiscovery feed. The emitter is gated by `SPELL_BRIDGE_EVENT_LOG=1` (or the constructor flag on `SessionBridgeClient`). Wire format:
+
+```json
+{
+  "type": "event_log",
+  "timestamp": 1714305000000,
+  "entry": {
+    "kind": "tool_call",
+    "ts": 1714305000000,
+    "toolName": "bash"
+  }
+}
+```
+
+Kinds: `turn_start | turn_end | tool_call | assistant_text | plan_decision | error`. `entry.text` is truncated to 256 chars on the client.
+
+### `web` node
+
+Declare the web subsystem with at least one named bearer token. Omit to disable `/web/*` entirely.
+
+```kdl
+web {
+    token "alice" "env(SPELL_TOKEN_ALICE)"
+    token "bob"   "env(SPELL_TOKEN_BOB, optional)"
+}
+```
+
+| Child | Args | Notes |
+| --- | --- | --- |
+| `token "<name>" "<secret-or-env(...)>"` | name + secret | Repeatable. `env(...)` resolution is required for the secret. `env(VAR, optional)` whose variable is unset drops the slot at startup with a warning. Empty post-resolution secrets throw. |
+
+Notes:
+- Tokens authenticate `/web/*` requests via `Authorization: Bearer <secret>` (REST) or `?token=<secret>` (WebSocket upgrade).
+- The token name becomes the `WebIdentity` (also propagated to spawned sessions as `ownedBy`).
+
 ## `channels.kdl`
 
 `channels.kdl` remains transport-focused. It does not carry workflow definitions.
@@ -365,6 +402,37 @@ goal "daily-discovery" {
   retry max-retries=2 initial-delay-ms=300000 multiplier=2
 }
 ```
+
+### `template "<name>" { ... }`
+
+A `template` is a schedule-less, ad-hoc-runnable preset surfaced by the web dashboard's command bar. The runner instantiates a fresh RPC session, renders the prompt with Handlebars, and tags the spawned session with the caller's `WebIdentity.name` (`ownedBy`).
+
+```kdl
+template "document" {
+    description "Generate a typst PDF report"
+    setup "writer"
+    mode "rpc"
+    prompt "Generate a typst PDF report on {{topic}}."
+    param "topic" type="string" required=#true
+    param "depth" type="number"
+    artifact-watch ".pdf" ".png"
+}
+```
+
+| Child | Purpose |
+| --- | --- |
+| `setup "<setup-name>"` | Required. Resolves to a `setup` (or imported `<alias>.<name>`). |
+| `description "..."` | Optional. Surfaced in the command palette. |
+| `mode "rpc"` | Optional. v1 only allows `"rpc"`. |
+| `prompt "<handlebars-text>"` | Required. Rendered with the coerced parameter map. Missing variables become the empty string with a warning logged once. |
+| `param "<name>" type="<string\|number\|boolean>" required=#true` | Repeatable. Names must be unique inside the template. |
+| `artifact-watch ".pdf" ".png" ...` | Optional. Lower-cased extension hints; the spawned session's `watchExtensions` drives the frontend's "ready" badge filter. |
+
+Validation rules:
+
+- Setup must resolve, prompt must be non-empty, parameter names unique, mode in `{ rpc }`.
+- `artifact-watch` extensions must match `^\.[a-z0-9]+$` (case-insensitive accepted; lower-cased on parse).
+- Two `template` nodes with the same name throw with the file path in the error.
 
 ### Typed `action` blocks
 
