@@ -7,16 +7,28 @@ use std::{
 	collections::HashMap,
 	fs,
 	path::{Path, PathBuf},
+	time::{SystemTime, UNIX_EPOCH},
 };
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use pi_org_engine::{
 	buffer::extract_items_from_source,
+	edge::EdgeKind,
 	edit::{self as org_edit, CreateItemParams, SectionEditMode},
-	graph, markdown,
+	graph::{self, build_typed_graph, neighborhood, timeline},
+	item::OrgItem,
+	locate::{MultiRootIndex, RootScope},
+	markdown,
 	query::{self, QueryFilter},
 	section,
+};
+use pi_org_recall::{
+	embedder::MockEmbedder,
+	fts::FtsIndex,
+	recall::{recall, RecallContext, RecallQuery},
+	vec::VecIndex,
+	Embedder,
 };
 use serde_json::{Value, json};
 
@@ -646,6 +658,523 @@ fn cache_status_json(status: pi_workspace_cache::CacheStatus) -> Value {
 	}
 }
 
+
+// ---------------------------------------------------------------------------
+// New commands: recall, remember, timeline, subgraph, link
+// ---------------------------------------------------------------------------
+
+fn walk_org_files(dir: &Path) -> Vec<PathBuf> {
+	let mut files = Vec::new();
+	let Ok(read_dir) = fs::read_dir(dir) else { return files; };
+	for entry in read_dir.flatten() {
+		let path = entry.path();
+		if path.is_dir() {
+			files.extend(walk_org_files(&path));
+		} else if path.extension().is_some_and(|ext| ext == "org") {
+			files.push(path);
+		}
+	}
+	files
+}
+
+fn parse_org_files(files: &[PathBuf]) -> Vec<OrgItem> {
+	let mut items = Vec::new();
+	for file in files {
+		let path_str = file.to_string_lossy();
+		if let Ok(source) = fs::read_to_string(file) {
+			if let Ok(mut parsed) = extract_items_from_source(
+				&source, &[], "", "", &path_str, false,
+			) {
+				items.append(&mut parsed);
+			}
+		}
+	}
+	items
+}
+
+fn epoch_millis() -> i64 {
+	SystemTime::now()
+		.duration_since(UNIX_EPOCH)
+		.map(|d| d.as_millis() as i64)
+		.unwrap_or(0)
+}
+
+/// Civil date helper: seconds since epoch → (year, month, day)
+fn civil_date(secs: u64) -> (i32, u32, u32) {
+	// Based on Howard Hinnant's algorithm
+	let z = secs / 86400 + 719468;
+	let era = z / 146097;
+	let doe = z - era * 146097;
+	let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+	let y = yoe as i32 + era as i32 * 400;
+	let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+	let mp = (5 * doy + 2) / 153;
+	let d = doy - (153 * mp + 2) / 5 + 1;
+	let m = if mp < 10 { mp + 3 } else { mp - 9 };
+	let y = if m <= 2 { y + 1 } else { y };
+	(y as i32, m as u32, d as u32)
+}
+
+fn iso_date() -> String {
+	let secs = SystemTime::now()
+		.duration_since(UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	let (y, m, d) = civil_date(secs);
+	format!("{:04}-{:02}-{:02}", y, m, d)
+}
+
+fn iso_datetime() -> String {
+	let secs = SystemTime::now()
+		.duration_since(UNIX_EPOCH)
+		.map(|d| d.as_secs())
+		.unwrap_or(0);
+	let (y, m, d) = civil_date(secs);
+	let h = (secs % 86400) / 3600;
+	let min = (secs % 3600) / 60;
+	let s = secs % 60;
+	format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, m, d, h, min, s)
+}
+
+fn make_slug(summary: &str) -> String {
+	let slug: String = summary
+		.to_lowercase()
+		.chars()
+		.map(|c| if c.is_alphanumeric() { c } else { '-' })
+		.collect();
+	let trimmed: String = slug.trim_matches('-').to_string();
+	trimmed.chars().take(40).collect()
+}
+
+fn generate_id(prefix: &str, summary: &str) -> String {
+	use std::hash::{Hash, Hasher};
+	let ts = epoch_millis();
+	let mut hasher = std::collections::hash_map::DefaultHasher::new();
+	ts.hash(&mut hasher);
+	summary.hash(&mut hasher);
+	let hash = hasher.finish();
+	format!("{}-{:012x}", prefix, hash)
+}
+
+/// Build RELATIONS drawer lines from optional id lists.
+fn build_relations_drawer(
+	involves: &[String], about: &[String], produced: &[String],
+	distilled_from: &[String], supersedes: &[String],
+) -> String {
+	let mut lines: Vec<String> = Vec::new();
+	lines.push(":RELATIONS:".to_string());
+	for id in involves { lines.push(format!("INVOLVED: {}", id)); }
+	for id in about { lines.push(format!("ABOUT: {}", id)); }
+	for id in produced { lines.push(format!("PRODUCED: {}", id)); }
+	for id in distilled_from { lines.push(format!("DISTILLED_FROM: {}", id)); }
+	for id in supersedes { lines.push(format!("SUPERSEDES: {}", id)); }
+	lines.push(":END:".to_string());
+	lines.join("\n")
+}
+
+fn cmd_recall(options: &Value) -> Result<Value> {
+	let query_text = options.get("text").and_then(Value::as_str).map(String::from);
+	let scope: Vec<String> = options
+		.get("scope")
+		.and_then(Value::as_array)
+		.map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+		.unwrap_or_default();
+	let focus = options.get("focus").and_then(Value::as_str).map(String::from);
+	let graph_hops = options.get("graphHops").and_then(Value::as_u64).unwrap_or(1) as u8;
+	let limit = options.get("limit").and_then(Value::as_u64).unwrap_or(10) as usize;
+	let include_personal = options.get("includePersonal").and_then(Value::as_bool).unwrap_or(false);
+	let weights = options.get("weights").and_then(|w| serde_json::from_value::<pi_org_recall::FusionWeights>(w.clone()).ok());
+
+	let graph_kinds: Vec<EdgeKind> = options
+		.get("graphKinds")
+		.and_then(Value::as_array)
+		.map(|arr| arr.iter().filter_map(|v| v.as_str().map(EdgeKind::parse)).collect())
+		.unwrap_or_default();
+
+	let repo_root = options.get("repoRoot").and_then(Value::as_str).map(PathBuf::from)
+		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+	let mut all_items: Vec<OrgItem> = Vec::new();
+
+	let tasks_dir = repo_root.join("!tasks");
+	if tasks_dir.is_dir() {
+		let files = walk_org_files(&tasks_dir);
+		all_items.append(&mut parse_org_files(&files));
+	}
+
+	let memory_dir = repo_root.join(".spell").join("memory");
+	if memory_dir.is_dir() {
+		let files = walk_org_files(&memory_dir);
+		all_items.append(&mut parse_org_files(&files));
+	}
+
+	if all_items.is_empty() {
+		return Ok(json_response(json!({ "hits": [] }), false));
+	}
+
+	let fts = FtsIndex::open(&repo_root).map_err(|e| org_err(format!("fts open: {e}")))?;
+	fts.index(&all_items).map_err(|e| org_err(format!("fts index: {e}")))?;
+
+	let mut vec_idx = VecIndex::new(768);
+	let embedder = MockEmbedder::new();
+
+	// Embed each item and insert into VecIndex (uses blake3-based MockEmbedder)
+	let embed_texts: Vec<String> = all_items.iter().map(|item| {
+		match item.body.as_ref() {
+			Some(body) => format!("{} {}", item.title, body.chars().take(512).collect::<String>()),
+			None => item.title.clone(),
+		}
+	}).collect();
+	let embed_refs: Vec<&str> = embed_texts.iter().map(String::as_str).collect();
+
+	if let Ok(vectors) = embedder.embed_batch(&embed_refs) {
+		for (i, item) in all_items.iter().enumerate() {
+			if let Some(vec) = vectors.get(i) {
+				let _ = vec_idx.insert(item.id.clone(), vec.clone());
+			}
+		}
+	}
+
+	let typed_graph = build_typed_graph(&all_items);
+
+	let query = RecallQuery {
+		text: query_text,
+		scope,
+		focus,
+		graph_hops,
+		graph_kinds,
+		limit,
+		weights,
+		profile: options.get("profile").and_then(Value::as_str).map(String::from),
+		include_personal,
+	};
+
+	let ctx = RecallContext {
+		items: &all_items,
+		fts: &fts,
+		vec: &vec_idx,
+		embedder: &embedder,
+		graph: &typed_graph,
+	};
+
+	let hits = recall(query, &ctx).map_err(|e| org_err(format!("recall: {e}")))?;
+
+	let hits_json: Vec<Value> = hits.iter().map(|hit| {
+		let mut h = serde_json::to_value(hit).unwrap_or(Value::Null);
+		// Truncate excerpts to 200 chars
+		if let Some(excerpt) = h.get("excerpt").and_then(Value::as_str) {
+			let truncated: String = excerpt.chars().take(200).collect();
+			if truncated.len() < excerpt.len() {
+				h["excerpt"] = json!(truncated);
+			}
+		}
+		h
+	}).collect();
+
+	Ok(json_response(json!({ "hits": hits_json }), false))
+}
+
+fn cmd_remember(options: &Value) -> Result<Value> {
+	let kind = required_str(options, "kind")?;
+	let summary = required_str(options, "summary")?;
+	let involves: Vec<String> = options.get("involves")
+		.and_then(Value::as_array)
+		.map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+		.unwrap_or_default();
+	let about: Vec<String> = options.get("about")
+		.and_then(Value::as_array)
+		.map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+		.unwrap_or_default();
+	let produced: Vec<String> = options.get("produced")
+		.and_then(Value::as_array)
+		.map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+		.unwrap_or_default();
+	let distilled_from: Vec<String> = options.get("distilledFrom")
+		.and_then(Value::as_array)
+		.map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+		.unwrap_or_default();
+	let supersedes: Vec<String> = options.get("supersedes")
+		.and_then(Value::as_array)
+		.map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+		.unwrap_or_default();
+
+	let repo_root = options.get("repoRoot").and_then(Value::as_str).map(PathBuf::from)
+		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+	let (file_path, item_id, slug_str) = match kind {
+		"episode" => {
+			let date = iso_date();
+			let slug = make_slug(summary);
+			let id = generate_id("EP", summary);
+			let file = repo_root.join(".spell").join("memory").join("episodes").join(format!("{}.org", date));
+			(file, id, slug)
+		},
+		"concept" => {
+			let slug = make_slug(summary);
+			let id = format!("CON-{}", slug);
+			let file = repo_root.join(".spell").join("memory").join("concepts").join(format!("{}.org", slug));
+			(file, id, slug)
+		},
+		other => return Err(org_err(format!("Unknown kind: {other}"))),
+	};
+
+	// Ensure parent directory exists
+	if let Some(parent) = file_path.parent() {
+		fs::create_dir_all(parent).map_err(|e| org_err(format!("mkdir: {e}")))?;
+	}
+
+	// Build the org-formatted block
+	let relations_drawer = build_relations_drawer(&involves, &about, &produced, &distilled_from, &supersedes);
+	let created = iso_datetime();
+	let confidence = "0.6";
+
+	let block = format!(
+		"** ITEM {summary}\n:PROPERTIES:\n:CUSTOM_ID: {item_id}\n:KIND: {kind}\n:CONFIDENCE: {confidence}\n:CREATED: {created}\n:END:\n{relations_drawer}\n"
+	);
+
+	let path_str = file_path.to_string_lossy().to_string();
+
+	if file_path.exists() {
+		// Append to existing file
+		let mut contents = fs::read_to_string(&file_path)
+			.map_err(|e| org_err(format!("read: {e}")))?;
+		if !contents.ends_with('\n') {
+			contents.push('\n');
+		}
+		contents.push_str(&block);
+		fs::write(&file_path, &contents).map_err(|e| org_err(format!("write: {e}")))?;
+	} else {
+		// Create new file with title header
+		let date = iso_date();
+		let title = match kind {
+			"episode" => format!("Episodes {}", date),
+			_ => slug_str.clone(),
+		};
+		let contents = format!("#+TITLE: {title}\n\n{block}");
+		fs::write(&file_path, &contents).map_err(|e| org_err(format!("write: {e}")))?;
+	}
+
+	Ok(json_response(json!({
+		"id": item_id,
+		"file": path_str
+	}), false))
+}
+
+fn cmd_timeline(options: &Value) -> Result<Value> {
+	let target = required_str(options, "target")?;
+
+	let items = if let Some(source) = options.get("source").and_then(Value::as_str) {
+		let keywords = todo_keywords(options);
+		extract_items_from_source(source, &keywords, category(options), dir(options),
+			options.get("file").and_then(Value::as_str).unwrap_or(""), false)
+			.map_err(org_err)?
+	} else if let Some(items_arr) = options.get("items").and_then(Value::as_array) {
+		let parsed: Vec<OrgItem> = items_arr.iter().filter_map(|v| {
+			serde_json::from_value::<OrgItem>(v.clone()).ok()
+		}).collect();
+		parsed
+	} else {
+		let repo_root = options.get("repoRoot").and_then(Value::as_str).map(PathBuf::from)
+			.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+		let mut all_items = Vec::new();
+		for dir_name in &["!tasks", ".spell/memory"] {
+			let dir = repo_root.join(dir_name);
+			if dir.is_dir() {
+				let files = walk_org_files(&dir);
+				all_items.append(&mut parse_org_files(&files));
+			}
+		}
+		all_items
+	};
+
+	let entries = timeline(&items, target);
+
+	let entries_json: Vec<Value> = entries.iter().map(|entry| {
+		json!({
+			"id": entry.item.id,
+			"kind": entry.item.kind,
+			"title": entry.item.title,
+			"file": entry.item.file,
+			"ts": entry.ts,
+		})
+	}).collect();
+
+	Ok(json_response(json!({ "entries": entries_json }), false))
+}
+
+fn cmd_subgraph(options: &Value) -> Result<Value> {
+	let root = required_str(options, "root")?;
+	let hops: u8 = options.get("hops").and_then(Value::as_u64).unwrap_or(1) as u8;
+
+	let kinds: Vec<EdgeKind> = options
+		.get("kinds")
+		.and_then(Value::as_array)
+		.map(|arr| arr.iter().filter_map(|v| v.as_str().map(EdgeKind::parse)).collect())
+		.unwrap_or_default();
+
+	let items = if let Some(source) = options.get("source").and_then(Value::as_str) {
+		let keywords = todo_keywords(options);
+		extract_items_from_source(source, &keywords, category(options), dir(options),
+			options.get("file").and_then(Value::as_str).unwrap_or(""), false)
+			.map_err(org_err)?
+	} else if let Some(items_arr) = options.get("items").and_then(Value::as_array) {
+		let parsed: Vec<OrgItem> = items_arr.iter().filter_map(|v| {
+			serde_json::from_value::<OrgItem>(v.clone()).ok()
+		}).collect();
+		parsed
+	} else {
+		let repo_root = options.get("repoRoot").and_then(Value::as_str).map(PathBuf::from)
+			.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+		let mut all_items = Vec::new();
+		for dir_name in &["!tasks", ".spell/memory"] {
+			let dir = repo_root.join(dir_name);
+			if dir.is_dir() {
+				let files = walk_org_files(&dir);
+				all_items.append(&mut parse_org_files(&files));
+			}
+		}
+		all_items
+	};
+
+	let typed_graph = build_typed_graph(&items);
+	let sub = neighborhood(&typed_graph, root, hops, &kinds);
+
+	let nodes_json: Vec<Value> = sub.nodes.iter().map(|node| {
+		json!({
+			"id": node.id,
+			"kind": node.kind,
+			"title": node.title,
+			"file": node.file,
+			"dangling": node.dangling,
+		})
+	}).collect();
+
+	let edges_json: Vec<Value> = sub.edges.iter().map(|edge| {
+		json!({
+			"from": edge.from,
+			"to": edge.to,
+			"kind": edge.kind.token(),
+		})
+	}).collect();
+
+	Ok(json_response(json!({
+		"nodes": nodes_json,
+		"edges": edges_json,
+	}), false))
+}
+
+fn cmd_link(options: &Value) -> Result<Value> {
+	let from = required_str(options, "from")?;
+	let to = required_str(options, "to")?;
+	let kind_str = required_str(options, "kind")?;
+	let edge_kind = EdgeKind::parse(kind_str);
+
+	let repo_root = options.get("repoRoot").and_then(Value::as_str).map(PathBuf::from)
+		.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+	let todo_keywords: Vec<&str> = options.get("todoKeywords")
+		.and_then(Value::as_array)
+		.map(|arr| arr.iter().filter_map(Value::as_str).collect())
+		.unwrap_or_default();
+
+	let roots = vec![(RootScope::Cwd, repo_root.as_path())];
+	let index = MultiRootIndex::build(&roots, &todo_keywords);
+
+	let (_scope, file_path) = index.resolve(from)
+		.ok_or_else(|| org_err(format!("Item {from} not found")))?;
+	let file_path = file_path.to_path_buf();
+
+	let contents = fs::read_to_string(&file_path)
+		.map_err(|e| org_err(format!("read {}: {e}", file_path.display())))?;
+
+	let lines: Vec<String> = contents.lines().map(String::from).collect();
+	let mut new_lines = lines.clone();
+	let mut _found_at: Option<usize> = None;
+
+	#[derive(PartialEq)]
+	enum State { Seeking, InProperties, AfterProperties, FoundDrawer }
+	let mut state = State::Seeking;
+	let mut insert_pos: Option<usize> = None;
+	let mut line_idx = 0usize;
+
+	while line_idx < new_lines.len() {
+		let line = &new_lines[line_idx];
+		match state {
+			State::Seeking => {
+				if line.starts_with('*') {
+					state = State::InProperties;
+				}
+			},
+			State::InProperties => {
+				if line.starts_with(":CUSTOM_ID:") && line.contains(from) {
+					_found_at = Some(line_idx);
+				}
+				if line.starts_with(":END:") {
+					state = State::AfterProperties;
+				}
+			},
+			State::AfterProperties => {
+				insert_pos = Some(line_idx + 1);
+				if line.starts_with(":RELATIONS:") {
+					state = State::FoundDrawer;
+					let edge_line = format!("{}: {}", edge_kind.token(), to);
+					for check_idx in (line_idx + 1)..new_lines.len() {
+						let check = &new_lines[check_idx];
+						if check.starts_with(":END:") {
+							insert_pos = Some(check_idx);
+							break;
+						}
+						if check.trim() == edge_line {
+							let revision = epoch_millis();
+							return Ok(json_response(json!({
+								"revision": revision,
+								"file": file_path.to_string_lossy().to_string(),
+							}), false));
+						}
+					}
+				} else if line.starts_with('*') {
+					break;
+				}
+			},
+			State::FoundDrawer => {
+				if line.starts_with(":END:") {
+					insert_pos = Some(line_idx);
+					break;
+				}
+			},
+		}
+		line_idx += 1;
+	}
+
+	if state == State::Seeking || state == State::InProperties {
+		return Err(org_err(format!("Item {from} not found in {}", file_path.display())));
+	}
+
+	let edge_line = format!("{}: {}", edge_kind.token(), to);
+
+	if let Some(pos) = insert_pos {
+		if state == State::AfterProperties {
+			// Create new RELATIONS drawer
+			new_lines.insert(pos, ":RELATIONS:".to_string());
+			new_lines.insert(pos + 1, edge_line);
+			new_lines.insert(pos + 2, ":END:".to_string());
+		} else {
+			// Append to existing drawer (before :END:)
+			new_lines.insert(pos, edge_line);
+		}
+	}
+
+	let new_contents = new_lines.join("\n");
+	fs::write(&file_path, &new_contents)
+		.map_err(|e| org_err(format!("write {}: {e}", file_path.display())))?;
+
+	let revision = epoch_millis();
+	Ok(json_response(json!({
+		"revision": revision,
+		"file": file_path.to_string_lossy().to_string(),
+	}), false))
+}
+
 #[allow(dead_code, reason = "helper used through execute_org wrapper")]
 fn execute_org_inner(options: &Value) -> Result<Value> {
 	let command = options
@@ -673,6 +1202,11 @@ fn execute_org_inner(options: &Value) -> Result<Value> {
 		"orgIndexDashboard" => cmd_org_index_dashboard(options),
 		"orgIndexArchive" => cmd_org_index_archive(options),
 		"orgIndexValidatePlan" => cmd_org_index_validate_plan(options),
+		"recall" => cmd_recall(options),
+		"remember" => cmd_remember(options),
+		"timeline" => cmd_timeline(options),
+		"subgraph" => cmd_subgraph(options),
+		"link" => cmd_link(options),
 		other => Ok(json_response(Value::String(format!("Unknown command: {other}")), true)),
 	}
 }

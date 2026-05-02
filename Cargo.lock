@@ -3725,6 +3725,7 @@ dependencies = [
  "pi-code-graph",
  "pi-code-vectors",
  "pi-org-engine",
+ "pi-org-recall",
  "pi-typst-surface",
  "pi-workspace-cache",
  "portable-pty",

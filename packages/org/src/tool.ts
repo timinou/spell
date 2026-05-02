@@ -1110,6 +1110,112 @@ async function cmdArchive(ctx: OrgContext, args: { category?: string }): Promise
 	return result.output;
 }
 
+async function cmdRecall(
+	ctx: OrgContext,
+	args: {
+		text?: string;
+		scope?: string[];
+		focus?: string;
+		graphHops?: number;
+		limit?: number;
+		includePersonal?: boolean;
+	},
+): Promise<unknown> {
+	const result = executeOrg({
+		command: "recall",
+		text: args.text,
+		scope: args.scope,
+		focus: args.focus,
+		graphHops: args.graphHops,
+		limit: args.limit,
+		includePersonal: args.includePersonal,
+		repoRoot: ctx.projectRoot,
+	});
+	if (result.error) throw new Error(String(result.output));
+	return result.output;
+}
+
+async function cmdRemember(
+	ctx: OrgContext,
+	args: {
+		kind: string;
+		summary: string;
+		involves?: string[];
+		about?: string[];
+		produced?: string[];
+		distilledFrom?: string[];
+		supersedes?: string[];
+	},
+): Promise<unknown> {
+	const result = executeOrg({
+		command: "remember",
+		kind: args.kind,
+		summary: args.summary,
+		involves: args.involves,
+		about: args.about,
+		produced: args.produced,
+		distilledFrom: args.distilledFrom,
+		supersedes: args.supersedes,
+		repoRoot: ctx.projectRoot,
+	});
+	if (result.error) throw new Error(String(result.output));
+	return result.output;
+}
+
+async function cmdTimeline(
+	ctx: OrgContext,
+	args: {
+		target: string;
+		kind?: string;
+	},
+): Promise<unknown> {
+	const result = executeOrg({
+		command: "timeline",
+		target: args.target,
+		repoRoot: ctx.projectRoot,
+	});
+	if (result.error) throw new Error(String(result.output));
+	return result.output;
+}
+
+async function cmdSubgraph(
+	ctx: OrgContext,
+	args: {
+		root: string;
+		hops?: number;
+		kinds?: string[];
+	},
+): Promise<unknown> {
+	const result = executeOrg({
+		command: "subgraph",
+		root: args.root,
+		hops: args.hops ?? 1,
+		kinds: args.kinds,
+		repoRoot: ctx.projectRoot,
+	});
+	if (result.error) throw new Error(String(result.output));
+	return result.output;
+}
+
+async function cmdLink(
+	ctx: OrgContext,
+	args: {
+		from: string;
+		to: string;
+		kind: string;
+	},
+): Promise<unknown> {
+	const result = executeOrg({
+		command: "link",
+		from: args.from,
+		to: args.to,
+		kind: args.kind,
+		repoRoot: ctx.projectRoot,
+	});
+	if (result.error) throw new Error(String(result.output));
+	return result.output;
+}
+
 export function createOrgTool(
 	projectRoot: string,
 	config: OrgConfig = DEFAULT_ORG_CONFIG,
@@ -1123,7 +1229,7 @@ export function createOrgTool(
 	};
 	return {
 		name: "org",
-		description: `Org-mode project management. Subcommands:\n  init        Initialize org directories and category subdirs\n  create      Create a new task item (ID auto-generated)\n  query       List/filter items (state, category, priority, layer, or keyword query)\n  get         Get single item by ID with full body\n  update      Change state, body, title, or append text (any combo in one call)\n  note        Append a dated NOTE entry to an item (no state change)\n  set         Set a single PROPERTIES drawer value\n  validate    Validate items\n  delete       Delete an item file\n  validate-plan Validate a plan via injected callback\n  dashboard   Project metrics and in-progress/blocked summary\n  wave        Next wave of ready items by priority\n  graph       Dependency graph\n  archive     Archive DONE items\n  suboutline-add Append a structured implementation sub-heading to an existing item with auto-prefixed CUSTOM_ID.\n`,
+		description: `Org-mode project management. Subcommands:\n  init        Initialize org directories and category subdirs\n  create      Create a new task item (ID auto-generated)\n  query       List/filter items (state, category, priority, layer, or keyword query)\n  get         Get single item by ID with full body\n  update      Change state, body, title, or append text (any combo in one call)\n  note        Append a dated NOTE entry to an item (no state change)\n  set         Set a single PROPERTIES drawer value\n  validate    Validate items\n  delete       Delete an item file\n  validate-plan Validate a plan via injected callback\n  dashboard   Project metrics and in-progress/blocked summary\n  wave        Next wave of ready items by priority\n  graph       Dependency graph\n  archive     Archive DONE items\n  suboutline-add Append a structured implementation sub-heading to an existing item with auto-prefixed CUSTOM_ID.\n  recall      Hybrid recall search across tasks and memory\n  remember    Save an episode or concept to memory\n  timeline    Show timeline entries for a target\n  subgraph    Show neighborhood subgraph around a node\n  link        Add a typed edge between two items\n`,
 		parameters: {
 			type: "object",
 			properties: {
@@ -1144,8 +1250,13 @@ export function createOrgTool(
 						"wave",
 						"graph",
 						"archive",
-						"suboutline-add",
-					],
+					"suboutline-add",
+					"recall",
+					"remember",
+					"timeline",
+					"subgraph",
+					"link",
+				],
 				},
 			},
 			required: ["command"],
@@ -1249,6 +1360,42 @@ export function createOrgTool(
 						depends: Array.isArray(args.depends) ? (args.depends as string[]) : undefined,
 						layer: args.layer as string | undefined,
 						replace: args.replace as boolean | undefined,
+				});
+				case "recall":
+					return cmdRecall(ctx, {
+						text: args.text as string | undefined,
+						scope: Array.isArray(args.scope) ? (args.scope as string[]) : undefined,
+						focus: args.focus as string | undefined,
+						graphHops: args.graphHops as number | undefined,
+						limit: args.limit as number | undefined,
+						includePersonal: args.includePersonal as boolean | undefined,
+					});
+				case "remember":
+					return cmdRemember(ctx, {
+						kind: args.kind as string,
+						summary: args.summary as string,
+						involves: Array.isArray(args.involves) ? (args.involves as string[]) : undefined,
+						about: Array.isArray(args.about) ? (args.about as string[]) : undefined,
+						produced: Array.isArray(args.produced) ? (args.produced as string[]) : undefined,
+						distilledFrom: Array.isArray(args.distilledFrom) ? (args.distilledFrom as string[]) : undefined,
+						supersedes: Array.isArray(args.supersedes) ? (args.supersedes as string[]) : undefined,
+					});
+				case "timeline":
+					return cmdTimeline(ctx, {
+						target: args.target as string,
+						kind: args.kind as string | undefined,
+					});
+				case "subgraph":
+					return cmdSubgraph(ctx, {
+						root: args.root as string,
+						hops: args.hops as number | undefined,
+						kinds: Array.isArray(args.kinds) ? (args.kinds as string[]) : undefined,
+					});
+				case "link":
+					return cmdLink(ctx, {
+						from: args.from as string,
+						to: args.to as string,
+						kind: args.kind as string,
 					});
 				default:
 					return { error: true, message: `Unknown command: ${command}` };
