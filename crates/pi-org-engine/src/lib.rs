@@ -11,6 +11,8 @@
 
 pub mod buffer;
 pub mod clock;
+pub mod diff;
+pub mod edge;
 pub mod edit;
 pub mod effort;
 pub mod graph;

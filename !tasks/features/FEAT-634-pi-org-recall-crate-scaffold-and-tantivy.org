@@ -1,0 +1,126 @@
+#+TITLE: pi-org-recall crate scaffold and tantivy BM25 index
+#+STATE: ITEM
+#+SESSION_ID: 14d1b3e1f7efd81d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
+#+CUSTOM_ID: FEAT-634-pi-org-recall-crate-scaffold-and-tantivy
+#+DEPENDS: FEAT-631-org-engine-relations-drawer-parser-and-o
+#+LAYER: native
+
+* Intention & Purpose
+
+Stand up a new =pi-org-recall= crate with a Tantivy BM25 full-text index
+keyed by org item ID. This is the first of three retrieval lanes that
+FEAT-636 (hybrid recall) will fuse via RRF; the other two are HNSW
+vector recall (FEAT-633) and graph-walk seed expansion (FEAT-632).
+
+* Context & Narrative
+
+Spec: =specs/org-graph-memory.md=. Tantivy is the production-grade
+Rust BM25 engine — pure Rust, ~10 ms cold start, 2x Lucene speed.
+Mature ecosystem (ParadeDB, Codanna, Memgraph). It does not own vector
+search; that's HNSW's job (FEAT-633). They compose at the recall layer
+(FEAT-636) via Reciprocal Rank Fusion.
+
+The crate is positioned for org-specific concerns: schema mirrors org
+fields (id, kind, title, body, tags, file), tokenizer is English
+stemmer, index location is OS-cache (=~/.cache/spell/recall/<repo-hash>/fts/=)
+so it stays out of the repo and out of the dotfile sync surface.
+
+* Scope
+
+In scope:
+- New crate =crates/pi-org-recall/= with =Cargo.toml=, =src/lib.rs=, =src/fts.rs=
+- Tantivy schema: doc id (text, stored), kind (text, indexed), title (text, indexed, stored), body (text, indexed, stored), tags (text, indexed, multi), file (text, stored)
+- Tokenizer: =en_stem= = lowercase + ascii_folding + snowball English
+- API: =FtsIndex::open(repo_root: &Path) -> Result<Self>=, =FtsIndex::index(items: &[OrgItem]) -> Result<()>=, =FtsIndex::search(query: &str, scope: &[String], limit: usize) -> Result<Vec<(String, f32)>>= where the returned tuple is =(item_id, bm25_score)=
+- Repo-hash derivation: blake3 of canonicalized repo root path → first 12 hex chars
+- Cache base resolution: =$XDG_CACHE_HOME/spell/recall/= or =~/.cache/spell/recall/=, mkdir-p
+- Tests under =crates/pi-org-recall/tests/fts.rs=
+
+Out of scope:
+- Subscribing to broker events to keep the index hot — that's added in FEAT-639
+- Hybrid recall pipeline — FEAT-636
+- Personal-store cross-repo lookup — FEAT-642
+
+* Existing Patterns
+
+- Crate layout mirrors =crates/pi-code-vectors/= (=Cargo.toml= flat, =src/lib.rs= module re-exports, =tests/= integration tests).
+- Workspace addition: append =crates/pi-org-recall= to =[workspace] members= in repo-root =Cargo.toml=.
+- =OrgItem= comes from =pi-org-engine= dep; reuse =item.id=, =item.kind= (string property), =item.title=, =item.body=, =item.tags=, =item.file=.
+- Repo-root resolution helper precedent: =pi-workspace-cache= already does =canonicalize + hash=. Reuse its logic if exposed; otherwise inline blake3 + canonicalize.
+
+* Tests
+
+File: =crates/pi-org-recall/tests/fts.rs=. Initially-failing scenarios:
+
+1. =index_and_search_returns_doc_id_and_score= — index 3 docs, search a unique term → returns the matching doc with score > 0
+2. =scope_filter_excludes_other_kinds= — 2 episodes + 2 concepts; search with =scope=["concept"]= → only concept ids
+3. =stemming_matches_run_running_runs= — index "running"; search "run" → match (snowball stemmer)
+4. =reindex_replaces_existing_doc= — index id X with body A; reindex id X with body B; search for A → no hit; for B → hit
+5. =delete_doc_by_id= — =FtsIndex::remove(&[id])= drops the doc; subsequent search misses
+6. =empty_query_returns_empty= — graceful handling
+7. =multi_term_phrase_query= — quoted ="auth refactor"= matches only docs with adjacent tokens
+8. =cache_dir_uses_xdg_when_set= — set =XDG_CACHE_HOME=tmp/foo=; index location is =tmp/foo/spell/recall/<hash>/fts/=
+9. =repo_hash_is_stable_across_calls= — same canonical path → same 12-char hash twice
+10. =concurrent_search_safe= — 8 threads call =search()= against same =FtsIndex= → all succeed (Tantivy =Searcher= is Send+Sync via reload policy)
+11. =index_durability_round_trip= — index, drop, reopen → search returns same hits
+
+* Implementation
+
+** ITEM Scaffold crate
+:PROPERTIES:
+:CUSTOM_ID: FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::scaffold
+:END:
+- File: =crates/pi-org-recall/Cargo.toml= — deps =tantivy = "0.22"=, =pi-org-engine= path, =blake3=, =serde=, =thiserror=
+- File: =Cargo.toml= (root) — append =crates/pi-org-recall= to workspace members
+- File: =crates/pi-org-recall/src/lib.rs= — =pub mod fts; pub mod error;=
+- File: =crates/pi-org-recall/src/error.rs= — =thiserror= enum with =Tantivy=, =Io=, =RepoHash=, =Schema= variants
+
+** ITEM Define schema and tokenizer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::schema
+:DEPENDS: FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::scaffold
+:END:
+- File: =crates/pi-org-recall/src/fts.rs=
+- Build =SchemaBuilder= with the fields listed in Scope
+- Register =en_stem= tokenizer = =LowerCaser + AsciiFoldingFilter + Stemmer::new(Language::English)=
+- =title= and =body= fields use =TextFieldIndexing= referencing =en_stem=
+- Build =Schema= once, store on =FtsIndex=
+
+** ITEM Write FTS tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::tests
+:DEPENDS: FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::schema
+:END:
+- File: =crates/pi-org-recall/tests/fts.rs=
+- Implement all 11 scenarios using =tempfile= for index dirs
+- Use small inline OrgItem builders (manual struct construction; do not depend on parser for FTS-only tests)
+
+** ITEM Implement FtsIndex
+:PROPERTIES:
+:CUSTOM_ID: FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::impl
+:DEPENDS: FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::tests
+:END:
+- File: =crates/pi-org-recall/src/fts.rs=
+- =FtsIndex { index: tantivy::Index, schema: Schema, writer: IndexWriter, reader: IndexReader }=
+- =open(repo_root)= computes repo hash, ensures directory, =Index::open_or_create=
+- =index(items)= per item: build =Document=, call =writer.delete_term(Term::from_field_text(id, &item.id))= then =writer.add_document(doc)=; finally =writer.commit()=
+- =search(query, scope, limit)= via =QueryParser= against title+body fields; if scope non-empty, AND with a kind filter; map =TopDocs= to =(id, score)=
+- =remove(ids)= deletes by id term, commits
+
+* Edge Cases
+
+- =repo_root= not canonical: canonicalize first; if path doesn't exist, error =Error::RepoHash=
+- Index dir corrupted (Tantivy says invalid segment): bubble up; caller can wipe and re-index
+- Disk full: Tantivy commit fails → =Error::Io=; caller surfaces
+- Reindex storm (1000 items in tight loop): writer commits batched per call; document a single =writer.commit()= guarantees atomicity
+- Mixed-language stemming: snowball English only; non-English text falls through unstemmed (still lowercased + ascii-folded)
+- Scope filter with unknown kind string: returns empty hits (not error)
+
+* Acceptance Criteria
+
+- =cargo test -p pi-org-recall fts= passes all 11 scenarios
+- =cargo build -p pi-org-recall= clean
+- =bun check:rs= clean
+- =bun check:ts= clean (no TS yet, but ensure workspace builds)
+- Manual: pointing at =/home/user/code/ora/spell/!tasks/=, indexing all .org files, searching "wave" returns relevant items

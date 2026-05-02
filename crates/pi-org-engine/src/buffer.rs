@@ -17,6 +17,7 @@ use tree_sitter::Node;
 
 use crate::{
 	clock::{self, ClockEntry},
+	edge::EdgeKind,
 	item::OrgItem,
 };
 
@@ -146,6 +147,8 @@ fn extract_file_level_item(
 		}
 	}
 
+	let blockers_rels = synthesize_blockers_property(&properties);
+
 	let custom_id = properties.get("CUSTOM_ID")?.clone();
 	let body = if include_body {
 		let body_start = source[frontmatter_end..]
@@ -176,6 +179,7 @@ fn extract_file_level_item(
 		clocks,
 		byte_range: (0, source.len()),
 		children: Vec::new(),
+		relations: blockers_rels,
 	})
 }
 
@@ -307,6 +311,7 @@ fn extract_section_item(
 
 	let (level, state, title) = parse_headline(source, headline, options.todo_keywords);
 	let mut properties = HashMap::new();
+	let mut relations = Vec::new();
 	let mut body_parts = Vec::new();
 	let mut clocks = Vec::new();
 	let mut children = Vec::new();
@@ -317,12 +322,17 @@ fn extract_section_item(
 			"property_drawer" => extract_properties(source, child, &mut properties),
 			"body" => {
 				let text = nested_body_text(source, child);
-				if options.include_body && !text.is_empty() {
-					body_parts.push(text.clone());
-				}
-				for line in text.lines() {
-					if let Some(entry) = clock::parse_clock_line(line) {
-						clocks.push(entry);
+				let trimmed_text = text.trim();
+				if trimmed_text.starts_with(":RELATIONS:") {
+					relations.extend(parse_relations_drawer_text(trimmed_text));
+				} else {
+					if options.include_body && !trimmed_text.is_empty() {
+						body_parts.push(text.clone());
+					}
+					for line in text.lines() {
+						if let Some(entry) = clock::parse_clock_line(line) {
+							clocks.push(entry);
+						}
 					}
 				}
 				push_child_section_items(source, child, options, level, descendants, &mut children);
@@ -331,20 +341,26 @@ fn extract_section_item(
 				push_child_section_items(source, child, options, level, descendants, &mut children);
 			},
 			_ => {
-				if options.include_body {
-					let text = node_text(source, child).trim().to_string();
-					if !text.is_empty() {
-						body_parts.push(text);
+				let text = node_text(source, child);
+				let trimmed_text = text.trim();
+				if trimmed_text.starts_with(":RELATIONS:") {
+					relations.extend(parse_relations_drawer_text(trimmed_text));
+				} else {
+					if options.include_body && !trimmed_text.is_empty() {
+						body_parts.push(trimmed_text.to_string());
 					}
-				}
-				for line in node_text(source, child).lines() {
-					if let Some(entry) = clock::parse_clock_line(line) {
-						clocks.push(entry);
+					for line in text.lines() {
+						if let Some(entry) = clock::parse_clock_line(line) {
+							clocks.push(entry);
+						}
 					}
 				}
 			},
 		}
 	}
+
+	// Synthesize legacy BLOCKERS/DEPENDS → Blocks edges
+	relations.extend(synthesize_blockers_property(&properties));
 
 	let custom_id = properties.get("CUSTOM_ID").cloned();
 	if state.is_empty() && custom_id.is_none() {
@@ -384,6 +400,7 @@ fn extract_section_item(
 		clocks,
 		byte_range: (section.start_byte(), section.end_byte()),
 		children,
+		relations,
 	})
 }
 
@@ -502,7 +519,67 @@ fn parse_nested_properties(line: &str, properties: &mut HashMap<String, String>)
 		}
 	}
 }
+/// Strip `[[id:…]]` wrapper from a target id string.
+fn strip_id_wrapper(s: &str) -> &str {
+	if let Some(rest) = s.trim().strip_prefix("[[id:")
+		&& let Some(inner) = rest.strip_suffix("]]")
+	{
+		inner.trim()
+	} else {
+		s.trim()
+	}
+}
 
+/// Parse a single RELATIONS drawer line (\"KIND: target\") into an EdgeKind +
+/// target.
+fn parse_relations_line(line: &str) -> Option<(EdgeKind, String)> {
+	let trimmed = line.trim();
+	if trimmed.is_empty() || !trimmed.contains(':') {
+		return None;
+	}
+	let (kind_str, target_str) = trimmed.split_once(':')?;
+	if kind_str.trim().is_empty() {
+		return None;
+	}
+	let kind = EdgeKind::parse(kind_str);
+	let target = strip_id_wrapper(target_str).to_string();
+	if target.is_empty() {
+		return None;
+	}
+	Some((kind, target))
+}
+
+/// Parse RELATIONS drawer lines from a text block (between :RELATIONS: and
+/// :END:).
+fn parse_relations_drawer_text(text: &str) -> Vec<(EdgeKind, String)> {
+	let mut relations = Vec::new();
+	for line in text.lines() {
+		let trimmed = line.trim();
+		if trimmed == ":RELATIONS:" || trimmed == ":END:" || trimmed.is_empty() {
+			continue;
+		}
+		if let Some(rel) = parse_relations_line(trimmed) {
+			relations.push(rel);
+		}
+	}
+	relations
+}
+
+/// Synthesize Blocks edges from BLOCKERS or DEPENDS properties.
+fn synthesize_blockers_property(properties: &HashMap<String, String>) -> Vec<(EdgeKind, String)> {
+	let blockers_prop = properties
+		.get("BLOCKERS")
+		.or_else(|| properties.get("DEPENDS"));
+	let Some(value) = blockers_prop else {
+		return Vec::new();
+	};
+	value
+		.split(|c: char| c == ',' || c.is_whitespace())
+		.map(str::trim)
+		.filter(|s| !s.is_empty())
+		.map(|s| (EdgeKind::Blocks, strip_id_wrapper(s).to_string()))
+		.collect()
+}
 fn extract_descendant_items_from_section(
 	source: &str,
 	section: Node<'_>,
@@ -569,9 +646,11 @@ fn extract_nested_items_from_text(
 			continue;
 		};
 		let mut properties = HashMap::new();
+		let mut relations = Vec::new();
 		let mut body_lines = Vec::new();
 		let mut clocks = Vec::new();
 		let mut in_properties = false;
+		let mut in_relations = false;
 		for raw_line in lines {
 			let line = raw_line.trim_end_matches('\n');
 			if let Some((next_level, ..)) = parse_heading_line(line, options.todo_keywords)
@@ -583,12 +662,23 @@ fn extract_nested_items_from_text(
 				in_properties = true;
 				continue;
 			}
+			if line.trim() == ":RELATIONS:" {
+				in_relations = true;
+				continue;
+			}
 			if line.trim() == ":END:" {
 				in_properties = false;
+				in_relations = false;
 				continue;
 			}
 			if in_properties {
 				parse_nested_properties(line, &mut properties);
+				continue;
+			}
+			if in_relations {
+				if let Some(rel) = parse_relations_line(line) {
+					relations.push(rel);
+				}
 				continue;
 			}
 			if options.include_body {
@@ -598,6 +688,9 @@ fn extract_nested_items_from_text(
 				clocks.push(entry);
 			}
 		}
+		// Synthesize legacy BLOCKERS/DEPENDS → Blocks edges
+		relations.extend(synthesize_blockers_property(&properties));
+
 		let custom_id = properties.get("CUSTOM_ID").cloned();
 		if state.is_empty() && custom_id.is_none() {
 			continue;
@@ -623,6 +716,7 @@ fn extract_nested_items_from_text(
 				clocks,
 				byte_range: (*start_byte, end_byte),
 				children: Vec::new(),
+				relations: relations.clone(),
 			},
 			child_indices: Vec::new(),
 		});

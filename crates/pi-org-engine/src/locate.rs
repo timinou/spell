@@ -145,3 +145,97 @@ fn build_heading_location(item: OrgItem, source: String, lines: Vec<String>) -> 
 fn split_lines(source: &str) -> Vec<String> {
 	source.split('\n').map(str::to_string).collect()
 }
+
+use std::{collections::HashMap, path::{Path, PathBuf}};
+
+use serde::{Deserialize, Serialize};
+
+use crate::edge::ItemId;
+use crate::buffer::extract_items_from_source;
+
+/// Scope of a root directory for multi-root locate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RootScope {
+	/// The current working directory (project root).
+	#[serde(rename = "cwd")]
+	Cwd,
+	/// The personal/global directory.
+	#[serde(rename = "personal")]
+	Personal,
+}
+
+/// Multi-root index mapping item IDs to their file paths across scopes.
+#[derive(Debug, Clone)]
+pub struct MultiRootIndex {
+	roots: Vec<(RootScope, HashMap<ItemId, PathBuf>)>,
+}
+
+impl MultiRootIndex {
+	/// Build an index by scanning `.org` files in each root directory.
+	pub fn build(roots: &[(RootScope, &Path)], todo_keywords: &[&str]) -> Self {
+		let mut root_maps = Vec::with_capacity(roots.len());
+		for (scope, root_dir) in roots {
+			let mut map: HashMap<ItemId, PathBuf> = HashMap::new();
+			collect_org_files(root_dir, todo_keywords, &mut map);
+			root_maps.push((*scope, map));
+		}
+		Self { roots: root_maps }
+	}
+
+	/// Create from pre-built maps (test helper).
+	#[must_use]
+	pub fn from_roots(roots: Vec<(RootScope, HashMap<ItemId, PathBuf>)>) -> Self {
+		Self { roots }
+	}
+
+	/// Resolve an ID to its scope and path. Returns the first match (cwd-first).
+	#[must_use]
+	pub fn resolve(&self, id: &str) -> Option<(RootScope, &Path)> {
+		for (scope, map) in &self.roots {
+			if let Some(path) = map.get(id) {
+				return Some((*scope, path.as_path()));
+			}
+		}
+		None
+	}
+
+	/// Iterate over all (scope, id, path) entries.
+	pub fn iter(&self) -> impl Iterator<Item = (RootScope, &ItemId, &Path)> {
+		let mut entries = Vec::new();
+		for (scope, map) in &self.roots {
+			for (id, path) in map {
+				entries.push((*scope, id, path.as_path()));
+			}
+		}
+		entries.into_iter()
+	}
+
+	/// Number of root directories.
+	#[must_use]
+	pub fn root_count(&self) -> usize {
+		self.roots.len()
+	}
+}
+
+/// Recursively collect .org files from a directory and extract CUSTOM_IDs.
+fn collect_org_files(dir: &Path, todo_keywords: &[&str], map: &mut HashMap<ItemId, PathBuf>) {
+	let Ok(read_dir) = std::fs::read_dir(dir) else { return; };
+	for entry in read_dir.flatten() {
+		let path = entry.path();
+		if path.is_dir() {
+			collect_org_files(&path, todo_keywords, map);
+		} else if path.extension().is_some_and(|ext| ext == "org") {
+			if let Ok(source) = std::fs::read_to_string(&path) {
+				let path_str = path.to_string_lossy();
+				if let Ok(items) = extract_items_from_source(&source, todo_keywords, "", "", &path_str, false) {
+					for item in &items {
+						if !item.id.is_empty() {
+							map.entry(item.id.clone()).or_insert(path.clone());
+						}
+					}
+				}
+			}
+		}
+	}
+}

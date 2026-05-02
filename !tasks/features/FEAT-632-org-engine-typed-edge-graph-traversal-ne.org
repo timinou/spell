@@ -1,0 +1,141 @@
+#+TITLE: Org engine typed-edge graph traversal neighborhood timeline path
+#+STATE: ITEM
+#+SESSION_ID: 14d1b3e1f7efd81d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
+#+CUSTOM_ID: FEAT-632-org-engine-typed-edge-graph-traversal-ne
+#+DEPENDS: FEAT-631-org-engine-relations-drawer-parser-and-o
+#+LAYER: native
+
+* Intention & Purpose
+
+Extend =pi-org-engine::graph= with typed-edge traversal so callers can ask
+for the neighborhood around a node, the timeline of episodes about an
+entity, or the shortest typed path between two items. Today =graph.rs=
+only models the BLOCKERS DAG (cycle detection, waves, components). After
+FEAT-631 lands, items carry typed relations; this FEAT exposes them as
+queryable graph data without forcing every caller to hand-walk the
+=relations= vector.
+
+* Context & Narrative
+
+Spec: =specs/org-graph-memory.md=. The hybrid recall pipeline (FEAT-636)
+needs =graph.neighborhood(focus, hops, kinds)= to seed RRF fusion with
+graph-walk hits. =timeline= powers the timeline op (FEAT-637) and the
+agenda-style memory views. =path= surfaces audit trails (concept →
+distilled_from → episode → produced → artifact) for provenance display.
+
+The legacy DAG built from BLOCKERS keeps working because FEAT-631
+synthesizes Blocks edges from the BLOCKERS property; this FEAT just
+treats Blocks as one =EdgeKind= among many.
+
+* Scope
+
+In scope:
+- =crates/pi-org-engine/src/graph.rs=: typed-edge DAG construction
+- New types: =TypedEdge { from, to, kind }=, =Subgraph { nodes, edges }=, =TimelineEntry { item, ts }=, =GraphPath { edges }=
+- New fns: =build_typed_graph(items: &[OrgItem]) -> TypedGraph=, =neighborhood(graph, root, hops, kinds_filter) -> Subgraph=, =timeline(items, target) -> Vec<TimelineEntry>=, =path(graph, a, b, kinds_filter) -> Option<GraphPath>=
+- Tests under =crates/pi-org-engine/tests/graph_typed.rs=
+- Existing =GraphResult / Dag / WaveResult= APIs are unchanged; this FEAT only adds new public surface
+
+Out of scope:
+- N-API / TypeScript exposure of the new fns (FEAT-637 handles dispatch wiring)
+- Persistence of the typed graph (the recall layer rebuilds it from items each query; it is cheap)
+- Cross-repo merge (FEAT-642)
+
+* Existing Patterns
+
+- =graph.rs= already maps =items: &[OrgItem] -> Dag= via =canonical_wave_items= + a HashMap fold over the BLOCKERS property. Extend the same fold to walk =item.relations= instead — Blocks is one branch of a match.
+- =DepEdge= is the existing edge struct =(from, to)=; introduce =TypedEdge= with an =EdgeKind= field. Keep =DepEdge= for backward compat (=GraphResult.edges= consumers).
+- Cycle detection (iterative DFS) is already in =graph.rs::detect_cycles=; reuse for typed graphs by ignoring kind during traversal.
+- =EdgeKind= comes from =crate::edge= (FEAT-631).
+
+* Tests
+
+File: =crates/pi-org-engine/tests/graph_typed.rs=. Initially-failing scenarios:
+
+1. =neighborhood_hops_1_returns_direct_targets= — root has three outgoing edges → Subgraph contains root + 3 neighbors + 3 edges
+2. =neighborhood_hops_2_follows_transitively= — A→B→C, hops=2 → all three nodes
+3. =neighborhood_kind_filter_excludes_others= — root has Involved + About edges; filter=[About] → only About neighbors
+4. =neighborhood_respects_inbound_and_outbound= — when called bidirectionally (default), returns both directions; an =outbound_only=true= variant returns only outgoing
+5. =timeline_orders_episodes_by_at_property= — three episode items pointing About to entity X with different =:AT:= timestamps → timeline returns oldest-first
+6. =timeline_uses_created_at_when_at_missing= — fallback ordering field
+7. =path_finds_shortest_typed_chain= — concept C distilled_from episode E about entity X; =path(C, X)= returns 2-hop path through E
+8. =path_returns_none_when_disconnected= — no edges between A and B → None
+9. =path_filter_excludes_disallowed_kinds= — =path= with filter=[About] when only chain is About+Involved → still finds since Involved matches the filter; with =[About]= only finds About-only chains
+10. =cycle_in_about_edges_does_not_loop= — A About B, B About A → traversal terminates with both visited, no infinite loop
+11. =build_typed_graph_treats_legacy_blockers_as_blocks= — items with only BLOCKERS prop produce a typed graph identical (modulo extra kinds slot) to the legacy =Dag=
+12. =unknown_edge_kind_other_is_traversable= — Other("WHATEVER") edges appear in neighborhood when kind filter is empty
+
+* Implementation
+
+** ITEM Define typed graph types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-632-org-engine-typed-edge-graph-traversal-ne::types
+:END:
+- File: =crates/pi-org-engine/src/graph.rs=
+- =pub struct TypedEdge { pub from: ItemId, pub to: ItemId, pub kind: EdgeKind }=
+- =pub struct TypedGraph { pub nodes: BTreeMap<ItemId, GraphNode>, pub out_edges: HashMap<ItemId, Vec<TypedEdge>>, pub in_edges: HashMap<ItemId, Vec<TypedEdge>> }=
+- =pub struct Subgraph { pub nodes: Vec<GraphNode>, pub edges: Vec<TypedEdge> }=
+- =pub struct TimelineEntry { pub item: GraphNode, pub ts: Option<i64> }= (epoch ms; None when no timestamp)
+- =pub struct GraphPath { pub edges: Vec<TypedEdge> }=
+- All derive =Debug, Clone, Serialize=
+
+** ITEM Write traversal tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-632-org-engine-typed-edge-graph-traversal-ne::traversal-tests
+:DEPENDS: FEAT-632-org-engine-typed-edge-graph-traversal-ne::types
+:END:
+- File: =crates/pi-org-engine/tests/graph_typed.rs=
+- Implement all 12 scenarios; fixture builders parse small inline org strings via =extract_items_from_source= so tests cover the full parse → graph pipeline
+
+** ITEM Implement build_typed_graph
+:PROPERTIES:
+:CUSTOM_ID: FEAT-632-org-engine-typed-edge-graph-traversal-ne::build
+:DEPENDS: FEAT-632-org-engine-typed-edge-graph-traversal-ne::traversal-tests
+:END:
+- File: =crates/pi-org-engine/src/graph.rs=
+- Iterate items; for each =item.relations= entry push into =out_edges[from]= and =in_edges[to]=
+- Skip items missing CUSTOM_ID (no stable from)
+- Edge order preserved (insertion-stable BTreeMap or Vec)
+
+** ITEM Implement neighborhood traversal
+:PROPERTIES:
+:CUSTOM_ID: FEAT-632-org-engine-typed-edge-graph-traversal-ne::neighborhood
+:DEPENDS: FEAT-632-org-engine-typed-edge-graph-traversal-ne::build
+:END:
+- BFS from root; per-step expand =out_edges[u]= ∪ =in_edges[u]= filtered by kinds_filter
+- Stop at hops; collect visited nodes + traversed edges into Subgraph
+- Cycle protection: =HashSet<ItemId>= visited
+
+** ITEM Implement timeline
+:PROPERTIES:
+:CUSTOM_ID: FEAT-632-org-engine-typed-edge-graph-traversal-ne::timeline
+:DEPENDS: FEAT-632-org-engine-typed-edge-graph-traversal-ne::build
+:END:
+- Pre-filter items where =item.kind == Episode= AND any =relations= contains =(About, target)=
+- Read =:AT:= property → parse as ISO-8601 epoch ms; fallback =:CREATED:= or item-discovered timestamp
+- Sort ascending; return =Vec<TimelineEntry>=
+
+** ITEM Implement path
+:PROPERTIES:
+:CUSTOM_ID: FEAT-632-org-engine-typed-edge-graph-traversal-ne::path
+:DEPENDS: FEAT-632-org-engine-typed-edge-graph-traversal-ne::neighborhood
+:END:
+- Bidirectional BFS from a and b; first meeting node wins
+- Reconstruct path; respect kinds_filter throughout
+- Return None on disconnect
+
+* Edge Cases
+
+- Self-loop (item points relation at itself): retained in graph; neighborhood treats as zero-hop visit; path returns 0-edge GraphPath
+- Edge to non-existent target: kept in =out_edges= with no matching =GraphNode=; neighborhood includes it as a synthetic node with empty title and a =dangling=true= flag
+- Massive in-degree (>10k incoming edges to one node): timeline + neighborhood remain O(hops × avg_degree); document the bound
+- Concurrent mutation: this layer is read-only over an item slice; callers responsible for snapshot
+- Subgraph with cycles: edges may appear once or twice depending on direction; deduplicate by =(from, to, kind)= tuple before returning
+
+* Acceptance Criteria
+
+- =cargo test -p pi-org-engine graph_typed= passes all 12 scenarios
+- =bun check:rs= clean
+- Existing =graph::query=, =compute_waves=, =next_wave= public APIs unchanged; =cargo test -p pi-org-engine= passes the full suite
+- =build_typed_graph= for 10k items in under 50 ms (instrumented bench under =cargo bench -p pi-org-engine= or a =#[ignore]=-gated perf test)

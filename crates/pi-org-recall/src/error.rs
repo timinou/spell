@@ -45,6 +45,9 @@ impl From<pi_code_vectors::Error> for Error {
 			pi_code_vectors::Error::DimensionMismatch { expected, actual } => {
 				Self::DimensionMismatch { expected, actual }
 			}
+			pi_code_vectors::Error::IncompatibleIndexVersion { found, expected } => {
+				Self::VectorIndex(format!("incompatible version: found {found}, expected {expected}"))
+			}
 		}
 	}
 }

@@ -1,0 +1,25 @@
+name "spell-web-local"
+version "1.0.0"
+
+setup "writer" {
+  domain "coding"
+  mode "default"
+  tools {
+    allow "read" "grep" "find" "bash"
+  }
+  sandbox {
+    paths-write "out/" ".spell/tmp/"
+    bash-allow "typst*" "bun*"
+  }
+  timeout "10m"
+}
+
+template "document" {
+  description "Generate a short report"
+  setup "writer"
+  mode "rpc"
+  prompt "Generate a concise report on {{topic}}, depth={{depth}}."
+  param "topic" type="string" required=#true
+  param "depth" type="number"
+  artifact-watch ".pdf" ".png" ".md"
+}

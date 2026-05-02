@@ -1,0 +1,12 @@
+//http {
+//  port 8787
+//  webhook-secret "env(SPELL_WEBHOOK_SECRET)"
+//  auth {
+//    username "admin"
+//    password "env(SPELL_AUTH_PASSWORD)"
+//  }
+//}
+
+//web {
+// token "local" "env(SPELL_WEB_TOKEN)"
+//}

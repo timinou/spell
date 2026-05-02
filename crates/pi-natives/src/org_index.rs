@@ -78,6 +78,7 @@ impl From<PersistedOrgItem> for OrgItem {
 			state:      value.state,
 			category:   value.category,
 			dir:        value.dir,
+			relations:  Vec::new(),
 			file:       value.file,
 			line:       value.line,
 			level:      value.level,

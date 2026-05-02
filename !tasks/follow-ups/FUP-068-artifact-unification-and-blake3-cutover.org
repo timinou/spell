@@ -1,0 +1,64 @@
+#+TITLE: Artifact unification and blake3 cutover deferred from org graph memory v1
+#+STATE: ITEM
+#+SESSION_ID: 14d1b3e1f7efd81d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
+#+CUSTOM_ID: FUP-068-artifact-unification-and-blake3-cutover
+#+LAYER: app
+
+* Initial Message
+
+What would it take for Spell's org mode to be a fully featured graph that also includes memories, simlar to the SurrealDB plan in the kdl worktree?
+
+* Intention & Purpose
+
+Track the deferred work item: turning =artifact://= and =agent://= into
+first-class org items with =:KIND: artifact= and migrating
+content-addressed storage from sha256 to blake3. Settled out of v1 of
+the Org Graph Memory project ([[id:specs/org-graph-memory.md]]) because
+v1 already ships ~8 weeks of work; artifact unification is a separable
+~1 week effort that does not block any v1 capability.
+
+* Context
+
+After v1 lands, the artifact landscape is:
+
+- =artifact://<session-id>/<agent>/<tool>/<n>.<ext>= — append-only log files via =ArtifactManager= in =packages/coding-agent/src/=
+- =agent://<id>= — subagent markdown via =AgentOutputManager=
+- blob storage: filesystem, sha256-addressed, in =~/.spell/agent/sessions/.../blobs/=
+
+The graph memory model already reserves =:KIND: artifact= and the
+=PRODUCED= edge from episode → artifact. v1 does not populate either
+because the existing artifact stores keep working untouched.
+
+This FUP describes what would change in a follow-up FEAT to close
+that gap.
+
+* Suggested Scope (for the eventual FEAT)
+
+- New =artifact_kind "..."= KDL primitive matching the SurrealDB plan vocabulary (tool-log, subagent, export, brand-asset, meeting-notes)
+- One org item per artifact under =<repo>/.spell/memory/artifacts/<kind>/<id>.org= with =:BLOB:= property pointing at the blake3 hash
+- Filesystem layout: =<repo>/.spell/blobs/<h[0..2]>/<h[2..4]>/<hash>= (sharded)
+- Hash algorithm: blake3 (write side); sha256 read-side compat shim accepts =sha256:<h>= references during a deprecation window
+- Migration: walk existing =ArtifactManager= and =AgentOutputManager= stores, hash each blob, write the org item, leave originals in place behind a feature flag for one release
+- Recall: =scope: ["artifact"]= surfaces blobs by FTS over their referenced metadata + graph walk via PRODUCED edges
+- Tool surface: =read artifact://<kind>/<id>= still works; resolves through the new org item
+
+* Out of v1 because
+
+- 6 weeks of crate work (FEAT-A → FEAT-L) already lined up
+- Existing artifact paths function correctly; there is no v1 capability that requires unification
+- blake3 cutover invalidates blob references in active sessions; needs careful migration
+- Each artifact-producing site (tool-log, subagent, brand-asset, etc.) needs review for retention and visibility settings
+
+* Promotion Path
+
+When ready, this FUP becomes a fresh FEAT with the scope above and
+=DEPENDS: FEAT-637-executeorg-dispatch-recall-remember-time
+FEAT-639-pi-org-engine-broker-routed-edits-orgite=. The blake3 hashing
+work is independent and could parallelize.
+
+* Acceptance for closing this FUP
+
+Either:
+- A FEAT is created and reaches DONE, at which point this FUP is closed referencing the FEAT id, OR
+- A decision is made not to do the work (recorded as a NOTE), at which point this FUP is closed as ABANDONED with =:DEFERRAL_REASON:= explaining why
