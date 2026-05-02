@@ -11,11 +11,12 @@ pub mod personal;
 pub mod recall;
 pub mod vec;
 
-pub use error::{Error, Result};
-
 pub use embedder::Embedder;
+pub use error::{Error, Result};
+pub use personal::{DualContext, recall_dual};
 pub use recall::{
-    extract_excerpt, rrf, FusionWeights, RecallContext, RecallHit,
-    RecallProfileRegistry, RecallQuery, WhyHit,
+	FusionWeights, RecallContext, RecallHit, RecallProfileRegistry, RecallQuery, WhyHit,
+	extract_excerpt, rrf,
 };
+
 pub use crate::recall::recall;

@@ -1,0 +1,26 @@
+{{!-- session-start.md.hbs: deterministic memory_summary projection --}}
+# Memory Summary
+
+{{#if hits.length}}
+## Top concepts
+{{#each hits}}
+- **{{title}}** (`{{id}}`)  — score {{score}}
+  {{#if excerpt}}{{excerpt}}{{/if}}
+{{/each}}
+{{else}}
+_No concepts indexed yet._
+{{/if}}
+
+{{#if active.length}}
+## Active workflow items
+{{#each active}}
+- {{state}} {{title}} (`{{id}}`)
+{{/each}}
+{{/if}}
+
+{{#if recent.length}}
+## Recent episodes (last 24h)
+{{#each recent}}
+- {{title}} (`{{id}}`)
+{{/each}}
+{{/if}}
