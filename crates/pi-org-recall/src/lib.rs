@@ -12,3 +12,10 @@ pub mod recall;
 pub mod vec;
 
 pub use error::{Error, Result};
+
+pub use embedder::Embedder;
+pub use recall::{
+    extract_excerpt, rrf, FusionWeights, RecallContext, RecallHit,
+    RecallProfileRegistry, RecallQuery, WhyHit,
+};
+pub use crate::recall::recall;
