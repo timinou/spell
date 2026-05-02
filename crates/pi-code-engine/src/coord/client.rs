@@ -47,6 +47,38 @@ pub enum CommitResult {
 	},
 }
 
+/// A file the client intends to modify as part of a multi-file transaction.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileIntent {
+	pub file:         PathBuf,
+	pub code_paths:   Vec<String>,
+	pub base_revision: u64,
+}
+
+/// A file the client commits as part of a multi-file transaction.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileCommit {
+	pub file:            PathBuf,
+	pub revision:        u64,
+	pub parent_revision: u64,
+	pub code_paths:      Vec<String>,
+	pub diff_hash:       String,
+	pub byte_len:        u64,
+}
+
+/// Result of a multi-intent operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MultiIntentResult {
+	Acknowledged,
+	Conflict,
+}
+
+/// Result of a multi-commit operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MultiCommitResult {
+	Acknowledged,
+}
+
 pub trait CoordClient: Send + Sync {
 	fn on_open(&self, session: &str, file: &Path, revision: u64);
 	fn intent(
@@ -70,6 +102,29 @@ pub trait CoordClient: Send + Sync {
 	fn recent_peer_edits(&self, file: &Path, since_ms: u64, limit: usize) -> Vec<PeerEdit>;
 	fn peer_state(&self, file: &Path) -> PeerState;
 	fn on_close(&self, session: &str, file: &Path);
+
+	/// Multi-file intent: atomically claim all `files` or none across peers.
+	fn multi_intent(
+		&self,
+		_peers: &[SessionId],
+		_files: &[FileIntent],
+		_ttl_ms: u64,
+	) -> MultiIntentResult {
+		MultiIntentResult::Acknowledged
+	}
+
+	/// Multi-file commit: atomically commit all `files` under a granted txn.
+	fn multi_commit(
+		&self,
+		_peers: &[SessionId],
+		_files: &[FileCommit],
+	) -> MultiCommitResult {
+		MultiCommitResult::Acknowledged
+	}
+
+	/// Abort a multi-file txn.
+	fn multi_abort(&self, _peers: &[SessionId], _reason: &str) {}
+
 	fn drain_warnings(&self) -> Vec<String> {
 		Vec::new()
 	}

@@ -10,6 +10,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 pub type SessionId = String;
+pub type TxnId = String;
+pub type OrgItemPatch = serde_json::Value;
 
 /// One observed peer's public state in a `Welcome` message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -35,6 +37,54 @@ pub struct CommitRecord {
 	#[serde(rename = "diffHash")]
 	pub diff_hash:  String,
 	pub ts:         u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileIntent {
+	pub file: PathBuf,
+	#[serde(rename = "codePaths")]
+	pub code_paths: Vec<String>,
+	#[serde(rename = "baseRevision")]
+	pub base_revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FileCommit {
+	pub file: PathBuf,
+	pub revision: u64,
+	#[serde(rename = "parentRevision")]
+	pub parent_revision: u64,
+	#[serde(rename = "codePaths")]
+	pub code_paths: Vec<String>,
+	#[serde(rename = "diffHash")]
+	pub diff_hash: String,
+	#[serde(rename = "byteLen")]
+	pub byte_len: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PeerCommittedFile {
+	pub file: PathBuf,
+	pub revision: u64,
+	#[serde(rename = "codePaths")]
+	pub code_paths: Vec<String>,
+	#[serde(rename = "diffHash")]
+	pub diff_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct IntentConflictItem {
+	pub file: PathBuf,
+	#[serde(rename = "codePath")]
+	pub code_path: String,
+	#[serde(rename = "conflictingSession")]
+	pub conflicting_session: SessionId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MultiCommitRevision {
+	pub file: PathBuf,
+	pub revision: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -80,6 +130,25 @@ pub enum ClientMessage {
 		file:       PathBuf,
 		#[serde(rename = "codePaths")]
 		code_paths: Vec<String>,
+	},
+	/// Multi-file intent: atomically claim all `files` or none.
+	MultiIntent {
+		#[serde(rename = "txnId")]
+		txn_id: TxnId,
+		files:  Vec<FileIntent>,
+		#[serde(rename = "ttlMs")]
+		ttl_ms: u64,
+	},
+	/// Multi-file commit: atomically commit all `files` under a granted txn.
+	MultiCommit {
+		#[serde(rename = "txnId")]
+		txn_id: TxnId,
+		files:  Vec<FileCommit>,
+	},
+	/// Abort a multi-file txn, releasing all held intents.
+	MultiAbort {
+		#[serde(rename = "txnId")]
+		txn_id: TxnId,
 	},
 	Heartbeat,
 	Bye,
@@ -133,6 +202,8 @@ pub enum ServerMessage {
 		#[serde(rename = "diffHash")]
 		diff_hash:  String,
 		ts:         u64,
+		#[serde(rename = "orgItems", default, skip_serializing_if = "Option::is_none")]
+		org_items:  Option<Vec<OrgItemPatch>>,
 	},
 	PeerJoined {
 		#[serde(rename = "sessionId")]
@@ -141,6 +212,38 @@ pub enum ServerMessage {
 	PeerLeft {
 		#[serde(rename = "sessionId")]
 		session_id: SessionId,
+	},
+	/// Multi-intent response.
+	MultiIntentAck {
+		#[serde(rename = "txnId")]
+		txn_id:    TxnId,
+		granted:   bool,
+		#[serde(default)]
+		conflicts: Vec<IntentConflictItem>,
+	},
+	/// Multi-commit response.
+	MultiCommitAck {
+		#[serde(rename = "txnId")]
+		txn_id:    TxnId,
+		revisions: Vec<MultiCommitRevision>,
+	},
+	/// Broadcast: peer committed all files in a multi-file txn.
+	MultiPeerCommitted {
+		#[serde(rename = "txnId")]
+		txn_id:     TxnId,
+		#[serde(rename = "sessionId")]
+		session_id: SessionId,
+		files:      Vec<PeerCommittedFile>,
+		ts:         u64,
+		#[serde(rename = "orgItems", default, skip_serializing_if = "Option::is_none")]
+		org_items:  Option<Vec<OrgItemPatch>>,
+	},
+	/// Broadcast: peer's multi-file txn was rolled back (crash recovery or abort).
+	MultiPeerRolledBack {
+		#[serde(rename = "txnId")]
+		txn_id: TxnId,
+		files:  Vec<PathBuf>,
+		reason: String,
 	},
 	Error {
 		code:    String,

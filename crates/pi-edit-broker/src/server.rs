@@ -27,6 +27,7 @@ pub struct BrokerOptions {
 	pub socket_path:        PathBuf,
 	pub grace:              Duration,
 	pub broadcast_capacity: usize,
+	pub journal_path:       Option<PathBuf>,
 }
 
 impl Default for BrokerOptions {
@@ -35,6 +36,7 @@ impl Default for BrokerOptions {
 			socket_path:        PathBuf::from("edit-broker.sock"),
 			grace:              Duration::from_secs(30),
 			broadcast_capacity: 256,
+			journal_path:       None,
 		}
 	}
 }
@@ -43,7 +45,7 @@ impl Default for BrokerOptions {
 /// - SIGTERM / SIGINT arrives, or
 /// - no clients are connected and the grace period elapses.
 pub async fn run_server(opts: BrokerOptions) -> Result<()> {
-	let BrokerOptions { socket_path, grace, broadcast_capacity } = opts;
+	let BrokerOptions { socket_path, grace, broadcast_capacity, journal_path } = opts;
 
 	if socket_path.exists() {
 		let _ = std::fs::remove_file(&socket_path);
@@ -62,10 +64,11 @@ pub async fn run_server(opts: BrokerOptions) -> Result<()> {
 	let reaper_handle = {
 		let state = state.clone();
 		let bus = bus.clone();
-		tokio::spawn(async move { reaper::run(state, bus, reaper_rx).await })
+		let jp = journal_path.clone();
+		tokio::spawn(async move { reaper::run(state, bus, reaper_rx, jp).await })
 	};
 
-	let ctx = Arc::new(ConnContext { state: state.clone(), bus, tick_tx });
+	let ctx = Arc::new(ConnContext { state: state.clone(), bus, tick_tx, journal_path });
 
 	let mut sigterm = signal(SignalKind::terminate())?;
 	let mut sigint = signal(SignalKind::interrupt())?;

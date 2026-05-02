@@ -374,6 +374,29 @@ impl CoordClient for SocketCoordClient {
 
 	fn on_close(&self, _session: &str, _file: &Path) {}
 
+	fn multi_intent(
+		&self,
+		_peers: &[String],
+		_files: &[super::client::FileIntent],
+		_ttl_ms: u64,
+	) -> super::client::MultiIntentResult {
+		// Stub — full impl will coordinate across peers via broker multi-intent
+		super::client::MultiIntentResult::Acknowledged
+	}
+
+	fn multi_commit(
+		&self,
+		_peers: &[String],
+		_files: &[super::client::FileCommit],
+	) -> super::client::MultiCommitResult {
+		// Stub — orchestrator handles actual broker messages
+		super::client::MultiCommitResult::Acknowledged
+	}
+
+	fn multi_abort(&self, _peers: &[String], _reason: &str) {
+		// Stub
+	}
+
 	fn drain_warnings(&self) -> Vec<String> {
 		std::mem::take(&mut *self.warnings.lock())
 	}

@@ -27,6 +27,8 @@ struct Cli {
 	pid_file:  Option<PathBuf>,
 	#[arg(long = "grace-ms")]
 	grace_ms:  Option<u64>,
+	#[arg(long = "journal-path")]
+	journal_path: Option<PathBuf>,
 }
 
 fn default_socket() -> PathBuf {
@@ -125,8 +127,13 @@ fn main() -> std::io::Result<()> {
 		.build()?;
 
 	let run_result = runtime.block_on(async {
-		run_server(BrokerOptions { socket_path: socket_path.clone(), grace, broadcast_capacity: 256 })
-			.await
+		run_server(BrokerOptions {
+			socket_path: socket_path.clone(),
+			grace,
+			broadcast_capacity: 256,
+			journal_path: cli.journal_path,
+		})
+		.await
 	});
 
 	let _ = fs::remove_file(&pid_path);
