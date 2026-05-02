@@ -24,7 +24,7 @@ impl TestBroker {
 	pub async fn start_with_grace(grace: Duration) -> Self {
 		let temp = tempfile::tempdir().expect("tempdir");
 		let socket_path = temp.path().join("edit-broker.sock");
-		let opts = BrokerOptions { socket_path: socket_path.clone(), grace, broadcast_capacity: 256 };
+		let opts = BrokerOptions { socket_path: socket_path.clone(), grace, broadcast_capacity: 256, journal_path: None };
 		let handle = tokio::spawn(async move {
 			run_server(opts).await.expect("broker exits cleanly");
 		});
@@ -41,6 +41,22 @@ impl TestBroker {
 
 	pub async fn start() -> Self {
 		Self::start_with_grace(Duration::from_secs(30)).await
+	}
+
+	/// Start with full custom options.
+	pub async fn start_with(grace: Duration, socket_path: PathBuf, opts: BrokerOptions) -> Self {
+		let handle = tokio::spawn(async move {
+			run_server(opts).await.expect("broker exits cleanly");
+		});
+		// Wait up to 2s for the socket to appear.
+		let deadline = std::time::Instant::now() + Duration::from_secs(2);
+		while std::time::Instant::now() < deadline {
+			if UnixStream::connect(&socket_path).await.is_ok() {
+				break;
+			}
+			tokio::time::sleep(Duration::from_millis(20)).await;
+		}
+		Self { socket_path, _temp: tempfile::tempdir().expect("tempdir"), handle: Some(handle) }
 	}
 
 	// Intentionally allow some helpers to go unused per test binary.

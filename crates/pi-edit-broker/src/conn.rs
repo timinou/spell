@@ -18,8 +18,14 @@ use tokio::{
 };
 
 use crate::{
-	protocol::{ClientMessage, CommitRecord, PeerSummary, ServerMessage, SessionId},
-	state::{BrokerState, CommitDecision, IntentDecision, RegisterOutcome, SessionRecord, now_ms},
+	protocol::{
+		ClientMessage, CommitRecord, IntentConflictItem,
+		MultiCommitRevision, PeerCommittedFile, PeerSummary, ServerMessage, SessionId, TxnId,
+	},
+	state::{
+		BrokerState, CommitDecision, IntentDecision, RegisterOutcome, SessionRecord, now_ms,
+	},
+	txn_journal::{TxnJournalEntry, append_entry},
 };
 
 const SERVER_VERSION: &str = "1";
@@ -31,6 +37,18 @@ pub enum BrokerEvent {
 	PeerJoined { session_id: SessionId },
 	PeerLeft { session_id: SessionId },
 	PeerCommitted { file: PathBuf, record: CommitRecord },
+	MultiPeerCommitted {
+		txn_id:     TxnId,
+		session_id: SessionId,
+		files:      Vec<PeerCommittedFile>,
+		ts:         u64,
+		org_items:  Option<Vec<serde_json::Value>>,
+	},
+	MultiPeerRolledBack {
+		txn_id: TxnId,
+		files:  Vec<PathBuf>,
+		reason: String,
+	},
 }
 
 /// Signals the accept loop should start / cancel the grace-period countdown.
@@ -41,9 +59,10 @@ pub enum ConnTick {
 }
 
 pub struct ConnContext {
-	pub state:   Arc<RwLock<BrokerState>>,
-	pub bus:     broadcast::Sender<BrokerEvent>,
-	pub tick_tx: mpsc::UnboundedSender<ConnTick>,
+	pub state:        Arc<RwLock<BrokerState>>,
+	pub bus:          broadcast::Sender<BrokerEvent>,
+	pub tick_tx:      mpsc::UnboundedSender<ConnTick>,
+	pub journal_path: Option<PathBuf>,
 }
 
 pub async fn handle(stream: UnixStream, ctx: Arc<ConnContext>) {
@@ -279,6 +298,227 @@ async fn handle_message(
 				guard.release_intent(&session_id, &file, &code_paths);
 			}
 		},
+		ClientMessage::MultiIntent { txn_id, files, ttl_ms } => {
+			let Some(session_id) = registered.clone() else {
+				let _ = write_msg(writer, &ServerMessage::Error {
+					code:    "NOT_REGISTERED".into(),
+					message: "multi_intent before hello".into(),
+				})
+				.await;
+				return Step::Break;
+			};
+
+			// Journal the txn start
+			if let Some(ref jp) = ctx.journal_path {
+				let _ = append_entry(jp, &TxnJournalEntry::TxnStarted {
+					txn_id: txn_id.clone(),
+					session_id: session_id.clone(),
+					files: files.iter().map(|f| (f.file.clone(), f.base_revision)).collect(),
+					started_at: now_ms(),
+				});
+			}
+
+			let result = {
+				let mut guard = ctx.state.write().await;
+				guard.try_grant_multi(&txn_id, &session_id, files, ttl_ms)
+			};
+
+			match result {
+				Ok(()) => {
+					if write_msg(writer, &ServerMessage::MultiIntentAck {
+						txn_id,
+						granted: true,
+						conflicts: Vec::new(),
+					})
+					.await
+					.is_err()
+					{
+						return Step::Break;
+					}
+				},
+				Err(conflicts) => {
+					let conflict_items: Vec<IntentConflictItem> = conflicts
+						.into_iter()
+						.map(|(file, code_path, conflicting_session)| IntentConflictItem {
+							file,
+							code_path,
+							conflicting_session,
+						})
+						.collect();
+
+					if write_msg(writer, &ServerMessage::MultiIntentAck {
+						txn_id,
+						granted: false,
+						conflicts: conflict_items,
+					})
+					.await
+					.is_err()
+					{
+						return Step::Break;
+					}
+				},
+			}
+		},
+		ClientMessage::MultiCommit { txn_id, files } => {
+			let Some(session_id) = registered.clone() else {
+				let _ = write_msg(writer, &ServerMessage::Error {
+					code:    "NOT_REGISTERED".into(),
+					message: "multi_commit before hello".into(),
+				})
+				.await;
+				return Step::Break;
+			};
+
+			// Verify txn exists and belongs to this session
+			let txn_files = {
+				let guard = ctx.state.read().await;
+				guard.active_txns.get(&txn_id).map(|txn| {
+					(txn.session_id.clone(), txn.files.clone())
+				})
+			};
+
+			let Some((txn_session_id, _)) = txn_files else {
+				let _ = write_msg(writer, &ServerMessage::Error {
+					code: "MULTI_COMMIT_INVALID_TXN".into(),
+					message: format!("no active txn '{txn_id}' for this session"),
+				})
+				.await;
+				return Step::Break;
+			};
+
+			if txn_session_id != session_id {
+				let _ = write_msg(writer, &ServerMessage::Error {
+					code: "MULTI_COMMIT_INVALID_TXN".into(),
+					message: format!("txn '{txn_id}' belongs to a different session"),
+				})
+				.await;
+				return Step::Break;
+			}
+
+			let now = now_ms();
+
+			// Record each file commit
+			let mut revisions = Vec::new();
+			let mut peer_files = Vec::new();
+			let mut all_accepted = true;
+
+			for fc in &files {
+				let (decision, _record) = {
+					let mut guard = ctx.state.write().await;
+					guard.record_commit(
+						&session_id,
+						&fc.file,
+						fc.revision,
+						fc.parent_revision,
+						fc.code_paths.clone(),
+						fc.diff_hash.clone(),
+					)
+				};
+
+				match decision {
+					CommitDecision::Accepted => {
+						revisions.push(MultiCommitRevision {
+							file: fc.file.clone(),
+							revision: fc.revision,
+						});
+						peer_files.push(PeerCommittedFile {
+							file: fc.file.clone(),
+							revision: fc.revision,
+							code_paths: fc.code_paths.clone(),
+							diff_hash: fc.diff_hash.clone(),
+						});
+					},
+					CommitDecision::Conflict { code_path, .. } => {
+						all_accepted = false;
+						let _ = write_msg(writer, &ServerMessage::Error {
+							code: "MULTI_COMMIT_CONFLICT".into(),
+							message: format!("commit conflict on {}: {}", fc.file.display(), code_path),
+						})
+						.await;
+						break;
+					},
+				}
+			}
+
+			if all_accepted {
+				// Mark txn committed
+				{
+					let mut guard = ctx.state.write().await;
+					guard.mark_txn_committed(&txn_id);
+				}
+
+				// Journal the commit
+				if let Some(ref jp) = ctx.journal_path {
+					let _ = append_entry(jp, &TxnJournalEntry::TxnCommitted {
+						txn_id: txn_id.clone(),
+						files: revisions.iter().map(|r| (r.file.clone(), r.revision)).collect(),
+						ts: now,
+					});
+				}
+
+				if write_msg(writer, &ServerMessage::MultiCommitAck {
+					txn_id: txn_id.clone(),
+					revisions: revisions.clone(),
+				})
+				.await
+				.is_err()
+				{
+					return Step::Break;
+				}
+
+				// Broadcast MultiPeerCommitted
+				let _ = ctx.bus.send(BrokerEvent::MultiPeerCommitted {
+					txn_id,
+					session_id,
+					files: peer_files,
+					ts: now,
+					org_items: None,
+				});
+			}
+		},
+		ClientMessage::MultiAbort { txn_id } => {
+			let Some(session_id) = registered.clone() else {
+				let _ = write_msg(writer, &ServerMessage::Error {
+					code:    "NOT_REGISTERED".into(),
+					message: "multi_abort before hello".into(),
+				})
+				.await;
+				return Step::Break;
+			};
+
+			let released = {
+				let mut guard = ctx.state.write().await;
+				let txn = guard.active_txns.get(&txn_id).cloned();
+				if let Some(ref t) = txn {
+					if t.session_id != session_id {
+						None // not this session's txn
+					} else {
+						guard.release_txn(&txn_id)
+					}
+				} else {
+					None
+				}
+			};
+
+			if let Some(released_txn) = released {
+				let files: Vec<PathBuf> = released_txn.files.iter().map(|f| f.file.clone()).collect();
+
+				// Journal rollback
+				if let Some(ref jp) = ctx.journal_path {
+					let _ = append_entry(jp, &TxnJournalEntry::TxnRolledBack {
+						txn_id: txn_id.clone(),
+						reason: "client abort".into(),
+						ts: now_ms(),
+					});
+				}
+
+				let _ = ctx.bus.send(BrokerEvent::MultiPeerRolledBack {
+					txn_id,
+					files,
+					reason: "client abort".into(),
+				});
+			}
+		},
 		ClientMessage::Heartbeat => {
 			if let Some(session_id) = registered.clone() {
 				let mut guard = ctx.state.write().await;
@@ -301,6 +541,10 @@ fn should_forward(event: &BrokerEvent, self_id: Option<&str>, subscriptions: &[P
 			}
 			subscriptions.iter().any(|sub| sub == file)
 		},
+		BrokerEvent::MultiPeerCommitted { session_id, .. } => {
+			self_id.is_none_or(|id| id != session_id)
+		},
+		BrokerEvent::MultiPeerRolledBack { .. } => true,
 	}
 }
 
@@ -331,6 +575,27 @@ async fn write_event(
 			code_paths: record.code_paths.clone(),
 			diff_hash:  record.diff_hash.clone(),
 			ts:         record.ts,
+			org_items:  None,
+		},
+		BrokerEvent::MultiPeerCommitted {
+			txn_id,
+			session_id,
+			files,
+			ts,
+			org_items,
+		} => ServerMessage::MultiPeerCommitted {
+			txn_id: txn_id.clone(),
+			session_id: session_id.clone(),
+			files: files.clone(),
+			ts: *ts,
+			org_items: org_items.clone(),
+		},
+		BrokerEvent::MultiPeerRolledBack { txn_id, files, reason } => {
+			ServerMessage::MultiPeerRolledBack {
+				txn_id: txn_id.clone(),
+				files: files.clone(),
+				reason: reason.clone(),
+			}
 		},
 	};
 	write_msg(writer, &msg).await
