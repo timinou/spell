@@ -1,5 +1,5 @@
 #+TITLE: pi-org-recall crate scaffold and tantivy BM25 index
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d1b3e1f7efd81d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
 #+CUSTOM_ID: FEAT-634-pi-org-recall-crate-scaffold-and-tantivy
@@ -124,3 +124,5 @@ File: =crates/pi-org-recall/tests/fts.rs=. Initially-failing scenarios:
 - =bun check:rs= clean
 - =bun check:ts= clean (no TS yet, but ensure workspace builds)
 - Manual: pointing at =/home/user/code/ora/spell/!tasks/=, indexing all .org files, searching "wave" returns relevant items
+
+NOTE [2026-05-02]: Landed: pi-org-recall crate + Tantivy 0.26 BM25 FtsIndex + en_stem tokenizer + 11 tests.

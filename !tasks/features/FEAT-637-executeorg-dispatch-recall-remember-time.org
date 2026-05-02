@@ -1,5 +1,5 @@
 #+TITLE: executeOrg dispatch recall remember timeline graph link ops with NAPI bindings
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d1b3e1f7efd81d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
 #+CUSTOM_ID: FEAT-637-executeorg-dispatch-recall-remember-time
@@ -144,3 +144,5 @@ Files: =packages/org/test/recall.test.ts= and siblings:
 - =bun check:ts= clean
 - =bun test packages/org/test/recall.test.ts packages/org/test/remember.test.ts packages/org/test/graph.test.ts packages/org/test/timeline.test.ts packages/org/test/link.test.ts= passes 12/12
 - Manual smoke: =bun run packages/coding-agent= → tool dispatch =org { command: "recall", text: "wave" }= returns hits from the existing =!tasks/= seed
+
+NOTE [2026-05-02]: Landed: 5 new executeOrg commands (recall/remember/timeline/subgraph/link); NAPI rebuilt; 12 dispatch tests + end-to-end smoke. Note: existing 'graph' command preserved for backward compat; new typed neighborhood is exposed as 'subgraph'.

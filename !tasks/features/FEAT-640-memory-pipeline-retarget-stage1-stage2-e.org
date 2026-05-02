@@ -172,3 +172,5 @@ File: =packages/coding-agent/test/memories/pipeline.test.ts=:
 - Manual: run a session, trigger consolidation, verify =<repo>/.spell/memory/episodes/<today>.org= contains episode items, =<repo>/.spell/memory/concepts/= contains concept files, =<repo>/.spell/memory/cache/memory_summary.md= is regenerated and starts with the template-rendered top concept
 - Manual: =memory://root/memory_summary.md= URL still resolves and matches the file content
 - Grep: =rg "Bun.write.*MEMORY.md"= returns nothing (proof of deletion)
+
+NOTE [2026-05-02]: PARTIAL [2026-05-02]: Handlebars template (session-start.md.hbs) + projection.ts + 2 tests landed; standalone module is consumable today. Stage1+stage2 cutover and MEMORY.md deletion (~500 LOC TS + 12 tests) deferred to follow-up.

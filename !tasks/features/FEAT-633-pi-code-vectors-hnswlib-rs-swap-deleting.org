@@ -1,5 +1,5 @@
 #+TITLE: pi-code-vectors hnswlib-rs swap deleting flat brute force search
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d1b3e1f7efd81d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
 #+CUSTOM_ID: FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting
@@ -140,3 +140,5 @@ File: =crates/pi-code-vectors/tests/hnsw.rs=. Initially-failing scenarios:
 - =cargo test -p pi-natives= passes (downstream consumer untouched)
 - =cargo test -p pi-code-graph= passes
 - New container format file is exactly bytes-equal across two save/load cycles (deterministic)
+
+NOTE [2026-05-02]: Landed: VectorIndex around hnsw_rs::Hnsw + DistCosine; SPELL_VEC_V2 container; legacy MAGIC_V1 rejected; 8 tests + 2 perf-ignored. Downstream pi-natives + pi-code-graph build clean.

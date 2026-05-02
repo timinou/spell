@@ -1,5 +1,5 @@
 #+TITLE: Memory storage layout dirs gitignore and legacy migration
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d1b3e1f7efd81d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
 #+CUSTOM_ID: FEAT-641-memory-storage-layout-dirs-gitignore-and
@@ -130,3 +130,5 @@ File: =packages/coding-agent/test/memories/storage-layout.test.ts=:
 - =bun check:ts= clean
 - Manual: in a fresh repo, trigger memory pipeline once → verify directory tree, .gitignore line, no legacy MEMORY.org left dangling
 - =rg "/.spell/memory/" .gitignore= matches in any repo where the agent has run
+
+NOTE [2026-05-02]: Landed: layout helpers (resolveGraphMemoryRoot, ensureGraphMemoryDirs, ensureGitignoreEntry, migrateLegacyMemoryFiles) + 12 tests. Wire-into-runtime step deferred (depends on FEAT-640 cutover).

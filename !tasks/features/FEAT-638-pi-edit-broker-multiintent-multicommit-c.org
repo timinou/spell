@@ -1,5 +1,5 @@
 #+TITLE: pi-edit-broker MultiIntent MultiCommit cross-file atomic transaction protocol
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d1b3e1f7efd81d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
 #+CUSTOM_ID: FEAT-638-pi-edit-broker-multiintent-multicommit-c
@@ -165,3 +165,5 @@ File: =crates/pi-edit-broker/tests/multi_recovery.rs=:
 - =bun check:rs= clean
 - Existing single-Intent / single-Commit tests unchanged (no regression)
 - Manual: kill broker mid-MultiCommit (=kill -9= the process); restart; .tmp orphans cleaned within 1 s
+
+NOTE [2026-05-02]: Landed: MultiIntent/MultiCommit/MultiAbort + txn registry + journal (TxnStarted/TxnCommitted/TxnRolledBack) + reaper recovery + SocketCoordClient client API. 11 multi-* tests + 7 protocol/spawn = 18 broker tests; pi-code-engine 180 still green.

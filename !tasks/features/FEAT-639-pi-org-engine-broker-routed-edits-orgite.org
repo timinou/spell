@@ -180,3 +180,5 @@ File: =packages/org/test/subscribe.test.ts=:
 - =bun test packages/org/test/subscribe.test.ts= passes 5/5
 - =bun check:rs= and =bun check:ts= clean
 - Manual: =bun --cwd=packages/coding-agent run= → =org subscribe { query:"todo:DOING" }= → edit a DOING item in another shell → callback fires within 50 ms
+
+NOTE [2026-05-02]: PARTIAL [2026-05-02]: OrgItemPatch + compute_patches + protocol-extend (org_items field) landed. Coord wrapper, route through coord, subscribe op + native filter + TS wrapper, 7 coord tests + 5 subscribe tests deferred. Foundation in place; remaining work tracks ~600 LOC + 12 tests.

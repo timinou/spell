@@ -1,5 +1,5 @@
 #+TITLE: Org engine RELATIONS drawer parser and OrgItem typed-edge field
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d1b3e1f7efd81d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
 #+CUSTOM_ID: FEAT-631-org-engine-relations-drawer-parser-and-o
@@ -142,3 +142,5 @@ File: =crates/pi-org-engine/tests/relations.rs=. Initially-failing scenarios:
 - =bun --cwd=packages/natives run dev:native= regenerates bindings with =relations: Array<[string, string]>= on the OrgItem type
 - Existing tests in =crates/pi-org-engine/tests/= still pass unchanged (no regression in parse, query, graph, markdown, section)
 - Manual: grepping for the RELATIONS drawer string against any seed fixture parses without diagnostics
+
+NOTE [2026-05-02]: Landed: 12 RELATIONS parser tests + legacy BLOCKERS synthesis. NAPI types.ts updated with relations: ReadonlyArray<readonly [string, string]>.

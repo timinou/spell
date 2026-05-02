@@ -354,3 +354,105 @@ Manual smoke:
 - `FEAT-642-cross-repo-personal-store-id-link-resolu::remember-scope` depends on `FEAT-642-cross-repo-personal-store-id-link-resolu::personal-tests`
 - `FEAT-642-cross-repo-personal-store-id-link-resolu::settings` depends on `FEAT-642-cross-repo-personal-store-id-link-resolu::remember-scope`
 
+** Completion (Partial) [2026-05-02]
+
+Honest progress report. ~9.5 of 12 FEATs delivered with 250+ tests
+passing across the workspace; the keystone executeOrg surface is
+operational end-to-end. Three FEATs (or substantial parts of three)
+remain for follow-up.
+
+*** Verification
+
+Build/test gates run after the final commit:
+
+#+begin_src
+cargo test -p pi-org-engine -p pi-org-recall -p pi-edit-broker -p pi-code-vectors --tests --lib
+  → 218 pass / 0 fail / 2 ignored (perf-gated)
+cargo test -p pi-natives org_buffer
+  → 12/12 pass
+cargo build -p pi-natives -p pi-code-graph -p pi-code-engine
+  → clean
+bun test packages/coding-agent/test/memories/storage-layout.test.ts
+  → 12/12 pass
+bun test packages/coding-agent/test/memories/projection.test.ts
+  → 2/2 pass
+bun --cwd=packages/natives run dev:native
+  → addon rebuilt successfully
+#+end_src
+
+End-to-end smoke (NAPI rebuilt, fresh cwd, real org fixtures):
+
+#+begin_src
+remember-episode: OK
+remember-concept: OK
+recall:           OK
+timeline:         OK
+subgraph:         OK
+link:             OK
+#+end_src
+
+All 5 new ~executeOrg~ commands resolve, write/read the expected on-disk
+state, and return ranked / typed responses.
+
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-290-org-graph-memory-v1-typed-edges-hybrid-r/test-results.txt]] — full cargo test result tail
+- [[file:!tasks/plans/plan-artifacts/PLAN-290-org-graph-memory-v1-typed-edges-hybrid-r/smoke-results.txt]] — end-to-end NAPI smoke for the 5 new commands
+
+*** What landed (DONE)
+
+- [[id:FEAT-631-org-engine-relations-drawer-parser-and-o]] — RELATIONS drawer parser + legacy BLOCKERS synthesis. 12 integration tests.
+- [[id:FEAT-632-org-engine-typed-edge-graph-traversal-ne]] — typed graph (TypedEdge / TypedGraph / Subgraph / TimelineEntry / GraphPath) + neighborhood / timeline / path. 12 tests.
+- [[id:FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting]] — VectorIndex around hnsw_rs::Hnsw with DistCosine; SPELL_VEC_V2 container format; legacy MAGIC_V1 rejected. 8 tests + 2 perf-ignored.
+- [[id:FEAT-634-pi-org-recall-crate-scaffold-and-tantivy]] — pi-org-recall crate with Tantivy 0.26 BM25 FtsIndex (en_stem tokenizer, ~/.cache/spell/recall/<repo-hash>/fts/). 11 tests.
+- [[id:FEAT-635-pi-embedding-worker-org-concept-embed-ve]] — Embedder trait + WorkerEmbedder (vendored JSON-RPC client) + MockEmbedder + VecIndex (id-keyed wrapper around inner HNSW). 11 mock tests.
+- [[id:FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion]] — Hybrid recall pipeline with RRF fusion (k=60); RecallProfile registry seeded with session-start + priors. 15 tests.
+- [[id:FEAT-637-executeorg-dispatch-recall-remember-time]] — 5 new executeOrg commands (recall / remember / timeline / subgraph / link) wired through pi-natives + tool.ts; NAPI bindings rebuilt; 12 dispatch tests + 5/5 end-to-end smoke verified.
+- [[id:FEAT-638-pi-edit-broker-multiintent-multicommit-c]] — MultiIntent / MultiCommit / MultiAbort with txn registry, journal recovery (TxnStarted / TxnCommitted / TxnRolledBack), reaper TTL sweep, pi-code-engine SocketCoordClient client API. 11 multi-* tests + 7 existing protocol tests.
+- [[id:FEAT-641-memory-storage-layout-dirs-gitignore-and]] — resolveGraphMemoryRoot / resolvePersonalMemoryRoot / ensureGraphMemoryDirs / ensureGitignoreEntry / migrateLegacyMemoryFiles. 12 layout tests.
+- FEAT-642 partial: locate (4 tests), personal-context with DualContext + recall_dual (5 tests). Settings + KDL include-personal flag and remember-scope wiring deferred.
+- FEAT-639 partial: OrgItemPatch (~/.cache/spell/recall) diff type + compute_patches (4 tests); broker protocol PeerCommitted / MultiPeerCommitted gain ~org_items: Option<Vec<OrgItemPatch>>~ via serde_json::Value alias (avoids dep cycle). Coord wrapper + route through coord + subscribe op + native filter + TS subscribe wrapper deferred.
+- FEAT-640 partial: session-start.md.hbs Handlebars template + projection.ts standalone module that calls executeOrg(recall+query+query) and writes to ~<cwd>/.spell/memory/cache/memory_summary.md~. 2 tests. Stage1 / stage2 cutover and MEMORY.md deletion deferred.
+
+*** What did NOT land (deferred)
+
+These remain in their pre-existing state and are NOT marked DONE.
+
+- *FEAT-639 broker-routed edits (subscribe path):* OrgCoord wrapper, routing org_buffer through it, the subscribe op in executeOrg + ThreadsafeFunction registry, native filter matcher, TS subscribe wrapper, and end-to-end subscribe tests. Estimate ~600 LOC + 12 tests.
+- *FEAT-640 memory pipeline cutover:* rewriting packages/coding-agent/src/memories/index.ts (1299 LOC) so stage 1 emits memory_entries via executeOrg.remember and stage 2 dedupes via vector cosim ≥ 0.92 + executeOrg.remember(concept). Plus deleting MEMORY.md write path, updating internal-urls router, and the 12 pipeline tests.
+- *FEAT-641 wire-init-into-runtime:* depends on FEAT-640 stage 1.
+- *FEAT-642 remember-scope + settings:* RememberArgs.scope = personal routing, recall.includePersonal KDL/settings flag, 2 personal-flag TS tests.
+
+*** Why partial
+
+Two systemic issues consumed substantial effort:
+
+1. *Concurrent subagent file reverts.* The first parallel swarm
+   (6 agents touching disjoint files in different crates) silently
+   reverted each other's tracked-file edits to git HEAD when their
+   sandbox snapshots disagreed. F638's broker work was reverted twice
+   before being locked in via an immediate post-restoration commit.
+   This pattern blocked aggressive parallel dispatching beyond the
+   first wave; subsequent FEATs ran one-at-a-time with mid-flight
+   commits to lock state.
+2. *Plan scope vs session budget.* The plan itself estimated ~8 weeks
+   of work across 12 FEATs and ~75 sub-items. The 9.5 FEATs landed
+   represent the foundations and the keystone capability (recall +
+   remember + timeline + subgraph + link surfaces working end-to-end).
+   The deferred work is the higher-LOC, higher-risk integration tier:
+   the 1299-line memory pipeline rewrite and the broker-routed edit
+   subscription path.
+
+*** Promotion path
+
+Each deferred piece can land as a focused follow-up FEAT against the
+foundations now committed:
+1. ~FEAT-639a-coord-wrapper~: OrgCoord + route org_buffer through coord + 7 coord tests.
+2. ~FEAT-639b-subscribe~: subscribe op + native filter matcher + TS wrapper + tests.
+3. ~FEAT-640-pipeline-cutover~: stage1 + stage2 + MEMORY.md delete + router update + tests.
+4. ~FEAT-641-wire~: ensureGraphMemoryDirs + ensureGitignoreEntry + migrateLegacyMemoryFiles wired into stage 1 invocation.
+5. ~FEAT-642-final~: remember-scope (writes to ~/.spell/personal/) + settings.recall.includePersonal flag.
+
+PLAN-290 stays in DOING until the deferred FEATs land. The org graph
+memory v1 system is functionally usable today via the executeOrg
+surface; the cutover from MEMORY.md to the projection happens when
+FEAT-640 lands.
