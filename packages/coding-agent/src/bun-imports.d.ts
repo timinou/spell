@@ -32,3 +32,10 @@ declare module "*.kdl" {
 	const content: string;
 	export default content;
 }
+
+
+// Handlebars templates imported as text
+declare module "*.hbs" {
+	const content: string;
+	export default content;
+}
