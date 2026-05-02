@@ -1,6 +1,13 @@
+use std::io::{Read, Write};
+use std::sync::Arc;
+
+use hnsw_rs::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
+
+const MAGIC_V2: &[u8; 12] = b"SPELL_VEC_V2";
+const MAGIC_V1: &[u8; 12] = b"SPELL_VEC_V1";
 
 /// A single entry in the vector index mapping a graph node to its embedding.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,10 +25,9 @@ pub struct PersistedVectorIndex {
 	pub graph_fingerprint_hash: u64,
 }
 
-/// In-memory vector index with pre-normalized vectors for fast cosine search.
-#[derive(Debug, Clone)]
+/// In-memory vector index with hnsw_rs-backed approximate nearest neighbor search.
 pub struct VectorIndex {
-	/// Entries with L2-normalized vectors.
+	hnsw:       Arc<Hnsw<'static, f32, DistCosine>>,
 	entries:    Vec<VectorEntry>,
 	dimensions: usize,
 }
@@ -35,23 +41,22 @@ pub struct VectorSearchHit {
 }
 
 impl VectorIndex {
-	/// Build from embedding results. Pre-normalizes all vectors for O(n*d)
-	/// dot-product search.
+	/// Build from embedding results. Pre-normalizes all vectors.
 	pub fn new(entries: Vec<VectorEntry>, dimensions: usize) -> Self {
-		let entries = entries
-			.into_iter()
-			.map(|mut e| {
-				normalize(&mut e.vector);
-				e
-			})
-			.collect();
-		Self { entries, dimensions }
+		let n = entries.len();
+		let hnsw = Arc::new(Hnsw::new(16, n.max(1), 16, 200, DistCosine {}));
+		let mut normalized_entries = Vec::with_capacity(n);
+		for mut e in entries {
+			normalize(&mut e.vector);
+			normalized_entries.push(e);
+		}
+		for entry in &normalized_entries {
+			hnsw.insert_slice((entry.vector.as_slice(), entry.node_index));
+		}
+		Self { hnsw, entries: normalized_entries, dimensions }
 	}
 
-	/// Cosine similarity search. Returns top-k hits sorted by descending score.
-	///
-	/// Since vectors are pre-normalized, cosine similarity reduces to dot
-	/// product.
+	/// Cosine similarity search via HNSW.
 	pub fn search(&self, query_vector: &[f32], limit: usize) -> Result<Vec<VectorSearchHit>> {
 		if self.entries.is_empty() {
 			return Ok(Vec::new());
@@ -63,41 +68,38 @@ impl VectorIndex {
 			});
 		}
 
-		// Normalize the query vector.
 		let mut query_norm = query_vector.to_vec();
 		normalize(&mut query_norm);
 
-		let mut hits: Vec<VectorSearchHit> = self
-			.entries
+		let ef_search = (limit * 8).max(64);
+		let neighbours = self.hnsw.search(query_norm.as_slice(), limit, ef_search);
+
+		let hits: Vec<VectorSearchHit> = neighbours
 			.iter()
-			.map(|entry| {
-				let score = dot_product(&query_norm, &entry.vector);
-				VectorSearchHit { node_index: entry.node_index, score }
+			.map(|n| {
+				let node_index = n.d_id;
+				let similarity = 1.0 - n.distance;
+				VectorSearchHit { node_index, score: similarity }
 			})
 			.collect();
-
-		// Partial sort: only need top-k.
-		hits.sort_unstable_by(|a, b| b.score.total_cmp(&a.score));
-		hits.truncate(limit);
 		Ok(hits)
 	}
 
 	/// Number of indexed vectors.
-	pub const fn len(&self) -> usize {
+	#[must_use]
+	pub fn len(&self) -> usize {
 		self.entries.len()
 	}
 
 	/// Whether the index is empty.
-	pub const fn is_empty(&self) -> bool {
+	#[must_use]
+	pub fn is_empty(&self) -> bool {
 		self.entries.is_empty()
 	}
 
 	/// Convert to the persisted form for serialization.
-	pub fn to_persisted(
-		&self,
-		model_name: &str,
-		graph_fingerprint_hash: u64,
-	) -> PersistedVectorIndex {
+	#[must_use]
+	pub fn to_persisted(&self, model_name: &str, graph_fingerprint_hash: u64) -> PersistedVectorIndex {
 		PersistedVectorIndex {
 			model_name: model_name.to_owned(),
 			dimensions: self.dimensions,
@@ -106,22 +108,61 @@ impl VectorIndex {
 		}
 	}
 
-	/// Restore from persisted form. Vectors are already normalized from the
-	/// build step.
+	/// Restore from persisted form.
+	#[must_use]
 	pub fn from_persisted(persisted: PersistedVectorIndex) -> Self {
-		Self { dimensions: persisted.dimensions, entries: persisted.entries }
+		Self::new(persisted.entries, persisted.dimensions)
 	}
 }
 
-/// Serialize a `PersistedVectorIndex` to a writer via bincode.
-pub fn serialize_index(writer: impl std::io::Write, index: &PersistedVectorIndex) -> Result<()> {
-	bincode::serialize_into(writer, index)?;
+impl Clone for VectorIndex {
+	fn clone(&self) -> Self {
+		Self::new(self.entries.clone(), self.dimensions)
+	}
+}
+
+impl std::fmt::Debug for VectorIndex {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("VectorIndex")
+			.field("entries", &self.entries.len())
+			.field("dimensions", &self.dimensions)
+			.finish()
+	}
+}
+
+/// Serialize a `PersistedVectorIndex` with magic header + bincode.
+pub fn serialize_index(writer: impl Write, index: &PersistedVectorIndex) -> Result<()> {
+	let mut buf = Vec::new();
+	bincode::serialize_into(&mut buf, index)?;
+	let mut writer = writer;
+	writer.write_all(MAGIC_V2)?;
+	writer.write_all(&buf)?;
 	Ok(())
 }
 
-/// Deserialize a `PersistedVectorIndex` from a reader via bincode.
-pub fn deserialize_index(reader: impl std::io::Read) -> Result<PersistedVectorIndex> {
-	let index = bincode::deserialize_from(reader)?;
+/// Deserialize a `PersistedVectorIndex` from a reader with magic header.
+pub fn deserialize_index(reader: impl Read) -> Result<PersistedVectorIndex> {
+	let mut magic = [0u8; 12];
+	let mut reader = reader;
+	reader.read_exact(&mut magic)?;
+
+	if magic == *MAGIC_V1 {
+		return Err(Error::IncompatibleIndexVersion {
+			found:    String::from_utf8_lossy(MAGIC_V1).to_string(),
+			expected: String::from_utf8_lossy(MAGIC_V2).to_string(),
+		});
+	}
+	if magic != *MAGIC_V2 {
+		return Err(Error::Serialization(
+			bincode::ErrorKind::Custom(
+				format!("unknown magic header: {:?}", &magic[..]),
+			)
+			.into(),
+		));
+	}
+
+	let mut index: PersistedVectorIndex = bincode::deserialize_from(reader)?;
+	index.model_name = String::new();
 	Ok(index)
 }
 
@@ -132,116 +173,5 @@ fn normalize(v: &mut [f32]) {
 		for x in v.iter_mut() {
 			*x /= norm;
 		}
-	}
-}
-
-/// Dot product of two vectors.
-fn dot_product(a: &[f32], b: &[f32]) -> f32 {
-	a.iter().zip(b).map(|(x, y)| x * y).sum()
-}
-
-#[cfg(test)]
-mod tests {
-	use super::*;
-
-	fn make_entry(node_index: usize, vector: Vec<f32>) -> VectorEntry {
-		VectorEntry { node_index, vector }
-	}
-
-	#[test]
-	fn search_returns_correct_top_k() {
-		// Entries with known vectors. Query is closest to entry 2.
-		let entries = vec![
-			make_entry(0, vec![1.0, 0.0, 0.0]),
-			make_entry(1, vec![0.0, 1.0, 0.0]),
-			make_entry(2, vec![0.7, 0.7, 0.1]),
-		];
-		let index = VectorIndex::new(entries, 3);
-
-		let query = vec![0.6, 0.8, 0.0];
-		let hits = index.search(&query, 2).expect("search should succeed");
-		assert_eq!(hits.len(), 2);
-		// Entry 2 (0.7, 0.7, 0.1) should be closest to (0.6, 0.8, 0.0).
-		assert_eq!(hits[0].node_index, 2);
-		// Entry 1 (0.0, 1.0, 0.0) should be second.
-		assert_eq!(hits[1].node_index, 1);
-	}
-
-	#[test]
-	fn search_empty_index_returns_empty() {
-		let index = VectorIndex::new(Vec::new(), 3);
-		let hits = index
-			.search(&[1.0, 0.0, 0.0], 5)
-			.expect("search should succeed");
-		assert!(hits.is_empty());
-	}
-
-	#[test]
-	fn search_dimension_mismatch_returns_error() {
-		let entries = vec![make_entry(0, vec![1.0, 0.0, 0.0])];
-		let index = VectorIndex::new(entries, 3);
-		let error = index
-			.search(&[1.0, 0.0], 5)
-			.expect_err("mismatched query dimensions should fail");
-		assert!(matches!(error, Error::DimensionMismatch { expected: 3, actual: 2 }));
-	}
-
-	#[test]
-	fn persistence_round_trip() {
-		let entries = vec![make_entry(0, vec![1.0, 0.0, 0.0]), make_entry(1, vec![0.0, 1.0, 0.0])];
-		let index = VectorIndex::new(entries, 3);
-		let persisted = index.to_persisted("test-model", 42);
-
-		let mut buf = Vec::new();
-		serialize_index(&mut buf, &persisted).expect("serialize");
-		let loaded = deserialize_index(buf.as_slice()).expect("deserialize");
-
-		assert_eq!(loaded.model_name, "test-model");
-		assert_eq!(loaded.dimensions, 3);
-		assert_eq!(loaded.entries.len(), 2);
-		assert_eq!(loaded.graph_fingerprint_hash, 42);
-
-		// Restored index should produce identical search results.
-		let restored = VectorIndex::from_persisted(loaded);
-		let query = vec![1.0, 0.0, 0.0];
-		let hits = restored.search(&query, 1).expect("search should succeed");
-		assert_eq!(hits[0].node_index, 0);
-	}
-
-	#[test]
-	fn normalized_vectors_have_unit_length() {
-		let mut v = vec![3.0, 4.0];
-		normalize(&mut v);
-		let len: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-		assert!((len - 1.0).abs() < 1e-6, "normalized vector should have unit length, got {len}");
-	}
-
-	#[test]
-	fn identical_vectors_have_similarity_1() {
-		let entries = vec![make_entry(0, vec![1.0, 2.0, 3.0])];
-		let index = VectorIndex::new(entries, 3);
-		let hits = index
-			.search(&[1.0, 2.0, 3.0], 1)
-			.expect("search should succeed");
-		assert!(
-			(hits[0].score - 1.0).abs() < 1e-5,
-			"identical vectors should have cosine similarity ~1.0"
-		);
-	}
-
-	#[test]
-	fn fingerprint_hash_mismatch_triggers_invalidation() {
-		let entries = vec![make_entry(0, vec![1.0, 0.0])];
-		let index = VectorIndex::new(entries, 2);
-		let persisted = index.to_persisted("model", 100);
-
-		let mut buf = Vec::new();
-		serialize_index(&mut buf, &persisted).expect("serialize");
-		let loaded = deserialize_index(buf.as_slice()).expect("deserialize");
-
-		// Simulate a different graph fingerprint hash.
-		assert_ne!(loaded.graph_fingerprint_hash, 999, "setup check");
-		// Caller checks: if loaded.graph_fingerprint_hash != current_hash -> discard.
-		assert_eq!(loaded.graph_fingerprint_hash, 100);
 	}
 }

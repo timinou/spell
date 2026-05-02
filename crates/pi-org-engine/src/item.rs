@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
-use crate::clock::ClockEntry;
+use crate::{clock::ClockEntry, edge::EdgeKind};
 
 /// A single org-mode item (heading or file-level).
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -43,6 +43,10 @@ pub struct OrgItem {
 	/// Child items (sub-headings that are also items).
 	#[serde(skip_serializing_if = "Vec::is_empty", default)]
 	pub children:   Vec<Self>,
+	/// Typed edges parsed from the `:RELATIONS:` drawer (FEAT-631).
+	/// Order is source order; duplicates retained at parser layer.
+	#[serde(skip_serializing_if = "Vec::is_empty", default)]
+	pub relations:  Vec<(EdgeKind, String)>,
 }
 
 impl OrgItem {
@@ -113,6 +117,7 @@ mod tests {
 			clocks:     vec![],
 			byte_range: (0, 0),
 			children:   vec![],
+			relations:  vec![],
 		};
 		assert_eq!(item.blockers(), vec!["T-001", "T-002"]);
 	}
@@ -136,6 +141,7 @@ mod tests {
 			clocks:     vec![],
 			byte_range: (0, 0),
 			children:   vec![],
+			relations:  vec![],
 		};
 		assert_eq!(item.blockers(), vec!["T-001", "T-002", "T-003", "FEAT-001::slug"]);
 	}

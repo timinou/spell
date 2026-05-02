@@ -1,0 +1,144 @@
+#+TITLE: Org engine RELATIONS drawer parser and OrgItem typed-edge field
+#+STATE: ITEM
+#+SESSION_ID: 14d1b3e1f7efd81d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
+#+CUSTOM_ID: FEAT-631-org-engine-relations-drawer-parser-and-o
+#+LAYER: native
+
+* Intention & Purpose
+
+Add a first-class RELATIONS drawer to the org parser so org items can
+declare typed edges (INVOLVED, ABOUT, PRODUCED, DISTILLED_FROM, MENTIONS,
+SUPERSEDES, DERIVED_FROM, BLOCKS, ACTION) inline in the source file.
+This is the foundation every other v1 FEAT depends on: typed-graph
+traversal, hybrid recall, episode/concept memory writes, and live
+subscription patches all read this field.
+
+* Context & Narrative
+
+Spec: =specs/org-graph-memory.md=. Existing parser
+(=crates/pi-org-engine/src/buffer.rs=, =item.rs=) only surfaces
+=properties= (key→string) and =body=. Edges today are encoded only via
+the legacy =BLOCKERS: a b c= property and ad-hoc body =[[id:…]]= links;
+neither is queryable as typed graph data. The renewed model encodes
+edges as drawer lines with one =KIND: target-id= per line, terminated
+by =:END:=, sitting next to the PROPERTIES drawer. Multiple lines with
+the same kind = multiple targets. Targets are bare =CUSTOM_ID= strings
+(no double-bracket id wrap).
+
+* Scope
+
+In scope:
+- =crates/pi-org-engine/src/item.rs=: add =relations: Vec<(EdgeKind, ItemId)>= to =OrgItem=
+- =crates/pi-org-engine/src/edge.rs= (new): =EdgeKind= enum + parser/Display
+- =crates/pi-org-engine/src/buffer.rs=: extend drawer scanner to recognize the RELATIONS drawer alongside the existing PROPERTIES and LOGBOOK drawers
+- Translate legacy =BLOCKERS= property into =EdgeKind::Blocks= edges at parse time so existing wave/DAG code keeps working without callsite changes
+- Tests under =crates/pi-org-engine/tests/relations.rs=
+
+Out of scope:
+- Graph traversal (neighborhood, timeline, path) — that's FEAT-632
+- Writing edges back to disk via editSection — that's FEAT-637 / FEAT-639
+- Schema validation that target IDs exist (cross-file resolve) — FEAT-632 handles graph-time validation
+
+* Existing Patterns
+
+- Drawer parsing: =buffer.rs= already handles PROPERTIES and LOGBOOK via a state machine. Extend the same machine; do not introduce a parallel scanner.
+- =OrgItem= field additions: precedent in =effort.rs=, =clock.rs= — both add typed fields without breaking serde or NAPI bindings. Mirror their =Default= and =Serialize= patterns.
+- Tree-sitter grammar at =crates/tree-sitter-org/= already tokenizes generic drawers; the parser side classifies them by name.
+- Reserve =EdgeKind::Other(String)= for forward-compat with unknown kinds; log-warn but don't fail.
+
+* Tests
+
+File: =crates/pi-org-engine/tests/relations.rs=. Initially-failing scenarios:
+
+1. =parses_single_relation_line= — drawer with one =INVOLVED: ACT-x= → relations equals one tuple =(Involved, "ACT-x")=
+2. =parses_multi_value_same_kind= — two =ABOUT= lines → two edges in source order
+3. =parses_drawer_after_properties= — PROPERTIES drawer followed by RELATIONS drawer, both populated
+4. =legacy_blockers_property_synthesizes_blocks_edges= — item with =BLOCKERS: x y z= and no RELATIONS drawer → relations contains three Blocks edges
+5. =preserves_original_blockers_property= — synthesized edges do not erase the underlying property; downstream graph code can still read either
+6. =unknown_edge_kind_becomes_other= — =FOO_BAR: x= becomes =EdgeKind::Other("FOO_BAR")= edge with warning logged
+7. =empty_drawer_yields_empty_relations= — an empty RELATIONS drawer between markers → empty Vec
+8. =missing_end_marker_emits_error= — RELATIONS opener with no closing END before next heading → parse error surfaces in =OrgBuffer= diagnostics
+9. =malformed_line_skipped_with_warning= — line without colon is dropped, parse continues
+10. =relations_drawer_at_level_2_inherits_nothing= — level-2 child carries only its own relations, never inherited from parent
+11. =round_trip_via_extract_items_from_source= — given a string source, =extract_items_from_source= returns items with relations populated identically to file-based parse
+12. =target_id_with_double_bracket_is_normalized= — =ABOUT: [[id:ENT-x]]= is accepted and normalized to bare =ENT-x= (lenient ingest)
+
+* Implementation
+
+** ITEM Define EdgeKind enum and ItemId alias
+:PROPERTIES:
+:CUSTOM_ID: FEAT-631-org-engine-relations-drawer-parser-and-o::define-edge-kind
+:END:
+- File: =crates/pi-org-engine/src/edge.rs= (new)
+- =pub type ItemId = String= (later may become interned; keep as String for v1)
+- =pub enum EdgeKind { Involved, About, Produced, DistilledFrom, Mentions, Supersedes, DerivedFrom, Blocks, Action, Other(String) }=
+- =impl EdgeKind { pub fn parse(s: &str) -> Self }= maps the canonical uppercase tokens; falls back to Other
+- Derive =Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize=
+- =impl Display for EdgeKind= emits canonical token (used when re-serializing back to org)
+
+** ITEM Extend OrgItem with relations field
+:PROPERTIES:
+:CUSTOM_ID: FEAT-631-org-engine-relations-drawer-parser-and-o::extend-orgitem
+:DEPENDS: FEAT-631-org-engine-relations-drawer-parser-and-o::define-edge-kind
+:END:
+- File: =crates/pi-org-engine/src/item.rs=
+- Add =pub relations: Vec<(EdgeKind, ItemId)>= with =#[serde(default)]= so existing JSON consumers do not break
+- Update =OrgItem::default()=
+
+** ITEM Write parser tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-631-org-engine-relations-drawer-parser-and-o::parser-tests
+:DEPENDS: FEAT-631-org-engine-relations-drawer-parser-and-o::extend-orgitem
+:END:
+- File: =crates/pi-org-engine/tests/relations.rs=
+- Implement all 12 scenarios from the Tests section as initially-failing tests
+- Each test fixture is an inline string passed to =extract_items_from_source=
+
+** ITEM Implement RELATIONS drawer parsing in buffer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-631-org-engine-relations-drawer-parser-and-o::implement-parser
+:DEPENDS: FEAT-631-org-engine-relations-drawer-parser-and-o::parser-tests
+:END:
+- File: =crates/pi-org-engine/src/buffer.rs=
+- Locate the existing drawer-scan branch (search for the PROPERTIES drawer string literal). Add the RELATIONS drawer string to the same dispatch; reuse the END terminator logic.
+- Per line: split at the first colon. Left side = uppercased kind token; right side = trimmed target. If the target starts with =[[id:= and ends with =]]=, strip the wrappers.
+- Append =(EdgeKind::parse(kind), target)= to =item.relations=.
+- Malformed lines: skip and push a warning into =OrgBuffer::diagnostics()=.
+
+** ITEM Synthesize legacy BLOCKERS into Blocks edges
+:PROPERTIES:
+:CUSTOM_ID: FEAT-631-org-engine-relations-drawer-parser-and-o::legacy-blockers
+:DEPENDS: FEAT-631-org-engine-relations-drawer-parser-and-o::implement-parser
+:END:
+- File: =crates/pi-org-engine/src/buffer.rs= (post-extract pass)
+- After parsing properties + relations, if =item.properties.get("BLOCKERS")= is Some(s), split on whitespace, push each as =(Blocks, id)= into =item.relations=
+- Idempotent: do not re-synthesize if a Blocks edge with the same target already exists
+
+** ITEM Verify NAPI bindings regenerate with relations field
+:PROPERTIES:
+:CUSTOM_ID: FEAT-631-org-engine-relations-drawer-parser-and-o::napi-bindings
+:DEPENDS: FEAT-631-org-engine-relations-drawer-parser-and-o::legacy-blockers
+:END:
+- File: =packages/natives/src/org-buffer/types.ts= regeneration
+- Run =bun --cwd=packages/natives run dev:native= per AGENTS.md
+- Smoke: TypeScript consumer reads =item.relations= as =Array<[string, string]>=
+- File: =packages/natives/test/relations.test.ts= (new): single round-trip assertion
+
+* Edge Cases
+
+- Drawer ordering: RELATIONS drawer before PROPERTIES drawer must also parse (do not hard-code order)
+- Whitespace-only line inside drawer: skipped, no warning
+- Duplicate =(kind, target)= relation: kept verbatim (deduplication is a graph-layer concern, not parser-layer); document in function doc-comment
+- Extremely long relation list (>1000): no special handling; Vec scales linearly
+- Mixed-case kind token: uppercased before =EdgeKind::parse=
+- Target containing spaces: treated as one target string; spaces are not separators here (BLOCKERS legacy uses spaces, but RELATIONS uses one-target-per-line)
+- Existing items consumed via =extract_items_from_buffer= must default =relations= to empty when drawer absent — verified by scenario 7
+
+* Acceptance Criteria
+
+- =cargo test -p pi-org-engine relations= passes all 12 scenarios
+- =cargo build -p pi-org-engine= clean; clippy clean (=bun check:rs=)
+- =bun --cwd=packages/natives run dev:native= regenerates bindings with =relations: Array<[string, string]>= on the OrgItem type
+- Existing tests in =crates/pi-org-engine/tests/= still pass unchanged (no regression in parse, query, graph, markdown, section)
+- Manual: grepping for the RELATIONS drawer string against any seed fixture parses without diagnostics

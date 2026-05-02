@@ -1,0 +1,182 @@
+#+TITLE: pi-org-engine broker-routed edits OrgItemPatch diff and subscribe live query op
+#+STATE: ITEM
+#+SESSION_ID: 14d1b3e1f7efd81d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
+#+CUSTOM_ID: FEAT-639-pi-org-engine-broker-routed-edits-orgite
+#+DEPENDS: FEAT-631-org-engine-relations-drawer-parser-and-o FEAT-637-executeorg-dispatch-recall-remember-time FEAT-638-pi-edit-broker-multiintent-multicommit-c
+#+LAYER: integration
+
+* Intention & Purpose
+
+Route org file edits through =pi-edit-broker= so every commit emits a
+=PeerCommitted= event with an =OrgItemPatch= payload describing
+which items changed and which fields/relations were touched. Add a
+=subscribe= op to =executeOrg= that lets clients (QML, TUI agenda,
+recall cache invalidator) register an =OrgQlFilter= and receive only
+relevant patches via a NAPI =ThreadsafeFunction= callback. This is
+what makes "LIVE SELECT-equivalent" real for org files.
+
+* Context & Narrative
+
+Spec: =specs/org-graph-memory.md=. =pi-edit-broker= already broadcasts
+=PeerCommitted= per file commit. =pi-code-engine::coord::socket= is the
+client today, but only =pi-natives::code_buffer= uses it.
+=pi-natives::org_buffer= writes via =pi-org-engine::editSection=
+directly, bypassing the broker. This FEAT adds the missing routing.
+
+The =OrgItemPatch= diff is computed by parsing before- and after-state
+items and comparing =(id, properties, relations, body_hash)= tuples.
+Subscribers re-evaluate their filter only when the patch's
+=touched_props ∪ touched_relations= intersects the filter's input
+fields — keeps wake-ups proportional to relevance.
+
+* Scope
+
+In scope:
+- =crates/pi-org-engine/src/diff.rs= (new) — =OrgItemPatch= computation
+- =crates/pi-org-engine/src/coord.rs= (new) — broker client wrapper for org edits
+- =crates/pi-natives/src/org_buffer.rs= — route =editSection=, =remember=, =link= through coord
+- =crates/pi-edit-broker/src/protocol.rs= — extend =ServerMessage::PeerCommitted= and =MultiPeerCommitted= with =org_items: Option<Vec<OrgItemPatch>>=
+- =executeOrg::subscribe= dispatch (NAPI =ThreadsafeFunction= callback)
+- Subscription registry per-process: =SubscriptionRegistry { queries: HashMap<SubId, (OrgQlFilter, ThreadsafeFunction)> }=
+- TS side: =packages/org/src/tool.ts= adds =subscribe= op; =packages/org/src/subscription.ts= (new) wraps the callback into an iterator
+- Tests in =crates/pi-org-engine/tests/coord.rs= + =packages/org/test/subscribe.test.ts=
+
+Out of scope:
+- QML or TUI consumers of =subscribe= — that's UI work for a later iteration; this FEAT only ships the API
+- Cross-process subscription (client A subscribes, client B edits): IT WORKS by design via broker broadcast — covered by integration test 5
+
+* Existing Patterns
+
+- =pi-edit-broker::protocol::ServerMessage::PeerCommitted= already includes =code_paths= and =diff_hash=. Add =org_items= as additive field; preserve wire-compat for non-org code commits (None).
+- =pi-code-engine::coord::socket::SocketCoordClient= owns the connection lifecycle; reuse via =Arc<SocketCoordClient>= in =pi-org-engine::coord=.
+- =OrgQlFilter= already has =requiresEmacs= and matcher logic in TS; for native subscribe-side filtering, port the simple cases (todo, tags, properties=, kind) into Rust. Defer Emacs cases (we no longer use Emacs — verified in =!architecture/org-native/=).
+- =ThreadsafeFunction= NAPI helper precedent: =pi-natives::code_buffer= uses it for live edit notifications.
+
+* Tests
+
+File: =crates/pi-org-engine/tests/coord.rs=:
+
+1. =edit_through_coord_emits_peer_committed= — start TestBroker, edit a fixture file via coord, assert one =PeerCommitted= with non-empty =org_items=
+2. =org_item_patch_marks_added= — heading absent before, present after → =OrgItemPatch { id, kind: "added", touched_props: all, touched_relations: all }=
+3. =org_item_patch_marks_modified= — heading present, body changed → kind:"modified", =touched_props=[]= but =touched_body=true= flag
+4. =org_item_patch_marks_property_change= — change =:CONFIDENCE: 0.5= → 0.7 → kind:"modified", =touched_props=["CONFIDENCE"]=
+5. =org_item_patch_marks_relation_change= — add ABOUT line → kind:"modified", =touched_relations=[About]=
+6. =org_item_patch_marks_deleted= — heading removed → kind:"deleted"
+7. =multi_intent_emits_single_event_with_patches_per_file= — txn touching 2 files emits one =MultiPeerCommitted= with both files' =OrgItemPatch= lists
+
+File: =packages/org/test/subscribe.test.ts=:
+
+8. =subscribe_filter_matches_relevant_edit= — subscribe to =tags:auth=; edit a non-auth item → no callback; edit an auth item → callback fires with the patch
+9. =subscribe_unsubscribe_stops_callbacks= — unsubscribe(id); edit → no callback
+10. =subscribe_isolates_filters_across_subscriptions= — two subscriptions with different filters; one edit triggers only the matching one
+11. =subscribe_survives_broker_reconnect= — kill broker, restart; subscription resumes
+12. =subscribe_handles_multi_file_event= — multi-file txn fires one event aggregating both files' patches; subscriber sees a list
+
+* Implementation
+
+** ITEM Define OrgItemPatch type
+:PROPERTIES:
+:CUSTOM_ID: FEAT-639-pi-org-engine-broker-routed-edits-orgite::patch-type
+:END:
+- File: =crates/pi-org-engine/src/diff.rs=
+- =pub enum PatchKind { Added, Modified, Deleted }=
+- =pub struct OrgItemPatch { pub id: ItemId, pub file: PathBuf, pub kind: PatchKind, pub touched_props: Vec<String>, pub touched_relations: Vec<EdgeKind>, pub touched_body: bool, pub touched_state: bool, pub touched_tags: bool }=
+- Derive Debug, Clone, Serialize, Deserialize
+
+** ITEM Implement diff function
+:PROPERTIES:
+:CUSTOM_ID: FEAT-639-pi-org-engine-broker-routed-edits-orgite::diff
+:DEPENDS: FEAT-639-pi-org-engine-broker-routed-edits-orgite::patch-type
+:END:
+- File: =crates/pi-org-engine/src/diff.rs=
+- =pub fn compute_patches(before: &[OrgItem], after: &[OrgItem], file: &Path) -> Vec<OrgItemPatch>=
+- Map by =item.id=; classify each as added/modified/deleted
+- For modified: diff =properties=, =relations=, =body= (hash compare), =state=, =tags=
+
+** ITEM Extend broker protocol with org_items
+:PROPERTIES:
+:CUSTOM_ID: FEAT-639-pi-org-engine-broker-routed-edits-orgite::protocol-extend
+:DEPENDS: FEAT-639-pi-org-engine-broker-routed-edits-orgite::diff
+:END:
+- File: =crates/pi-edit-broker/src/protocol.rs=
+- Add =#[serde(default, skip_serializing_if = "Option::is_none")] org_items: Option<Vec<OrgItemPatch>>= to =PeerCommitted= and =MultiPeerCommitted=
+- Wire-compat: existing clients ignore unknown fields (serde default allow_unknown)
+
+** ITEM Implement coord wrapper
+:PROPERTIES:
+:CUSTOM_ID: FEAT-639-pi-org-engine-broker-routed-edits-orgite::coord
+:DEPENDS: FEAT-639-pi-org-engine-broker-routed-edits-orgite::protocol-extend
+:END:
+- File: =crates/pi-org-engine/src/coord.rs=
+- =pub struct OrgCoord { socket: Arc<SocketCoordClient> }=
+- =fn edit_section(&self, file, item_id, edit_fn) -> Result<u64>= acquires Intent, applies edit, computes patches, commits with =org_items=
+- =fn multi_edit(&self, ops: Vec<EditOp>) -> Result<TxnResult>= same for cross-file via MultiIntent
+
+** ITEM Route org_buffer through coord
+:PROPERTIES:
+:CUSTOM_ID: FEAT-639-pi-org-engine-broker-routed-edits-orgite::route
+:DEPENDS: FEAT-639-pi-org-engine-broker-routed-edits-orgite::coord
+:END:
+- File: =crates/pi-natives/src/org_buffer.rs=
+- Replace direct =edit_section= calls with =OrgCoord::edit_section=
+- =remember= and =link= use =OrgCoord::multi_edit= when targeting more than one file
+
+** ITEM Write coord tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-639-pi-org-engine-broker-routed-edits-orgite::coord-tests
+:DEPENDS: FEAT-639-pi-org-engine-broker-routed-edits-orgite::route
+:END:
+- File: =crates/pi-org-engine/tests/coord.rs=
+- Implement scenarios 1–7 with =TestBroker=
+
+** ITEM Implement subscribe op + registry
+:PROPERTIES:
+:CUSTOM_ID: FEAT-639-pi-org-engine-broker-routed-edits-orgite::subscribe
+:DEPENDS: FEAT-639-pi-org-engine-broker-routed-edits-orgite::coord-tests
+:END:
+- File: =crates/pi-natives/src/org_buffer.rs=
+- =SubscriptionRegistry= guarded by =Mutex<HashMap<SubId, Subscription>>=
+- =subscribe(filter, tsfn)= adds entry; spawns a task that reads broker events and fans out to matching subscriptions
+- =unsubscribe(id)= removes entry; tsfn dropped
+
+** ITEM Native filter matcher
+:PROPERTIES:
+:CUSTOM_ID: FEAT-639-pi-org-engine-broker-routed-edits-orgite::native-filter
+:DEPENDS: FEAT-639-pi-org-engine-broker-routed-edits-orgite::subscribe
+:END:
+- File: =crates/pi-org-engine/src/query.rs= (existing) — extend to accept an =OrgItemPatch= and decide if it could affect the filter result without re-running the full query
+- Heuristic: filter touches property X → re-evaluate only if =patch.touched_props.contains("X")=
+
+** ITEM TS subscribe wrapper
+:PROPERTIES:
+:CUSTOM_ID: FEAT-639-pi-org-engine-broker-routed-edits-orgite::ts-wrapper
+:DEPENDS: FEAT-639-pi-org-engine-broker-routed-edits-orgite::native-filter
+:END:
+- File: =packages/org/src/subscription.ts= (new)
+- =async function* subscribe(filter): AsyncIterable<OrgItemPatch[]>= wraps the NAPI callback into an async iterator using Promise.withResolvers per AGENTS.md
+
+** ITEM Write subscribe tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-639-pi-org-engine-broker-routed-edits-orgite::subscribe-tests
+:DEPENDS: FEAT-639-pi-org-engine-broker-routed-edits-orgite::ts-wrapper
+:END:
+- File: =packages/org/test/subscribe.test.ts=
+- Implement scenarios 8–12
+
+* Edge Cases
+
+- Broker disconnect mid-stream: client retries with backoff; subscriptions persist on the client and replay via Welcome on reconnect
+- Subscription leak (client crashes without unsubscribe): broker tracks per-session subscriptions and drops them on PeerLeft
+- Patch with =Other= edge kind: serializes as ="OTHER:WHATEVER"=; TS consumers see opaque string
+- Filter referencing inherited property: re-evaluate fully (cannot shortcut on touched_props)
+- Edit removes the only item in a file: =OrgItemPatch { kind: Deleted }= with the id; subscribers compute correctly
+- Patch dispatch latency target: <50 ms from commit to subscriber callback under no contention
+
+* Acceptance Criteria
+
+- =cargo test -p pi-org-engine coord= passes 7/7
+- =cargo test -p pi-edit-broker= still passes (no regression)
+- =bun test packages/org/test/subscribe.test.ts= passes 5/5
+- =bun check:rs= and =bun check:ts= clean
+- Manual: =bun --cwd=packages/coding-agent run= → =org subscribe { query:"todo:DOING" }= → edit a DOING item in another shell → callback fires within 50 ms

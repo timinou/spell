@@ -1,0 +1,132 @@
+#+TITLE: Memory storage layout dirs gitignore and legacy migration
+#+STATE: ITEM
+#+SESSION_ID: 14d1b3e1f7efd81d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
+#+CUSTOM_ID: FEAT-641-memory-storage-layout-dirs-gitignore-and
+#+DEPENDS: FEAT-640-memory-pipeline-retarget-stage1-stage2-e
+#+LAYER: app
+
+* Intention & Purpose
+
+Establish the on-disk layout for graph memory and ensure
+=<repo>/.spell/memory/= stays out of git. Migrate any pre-existing
+=MEMORY.org= or legacy memory files at first invocation. This FEAT is
+the small, mechanical complement to FEAT-640: FEAT-640 writes through
+=remember=; this FEAT ensures the directories exist and are gitignored.
+
+* Context & Narrative
+
+Spec: =specs/org-graph-memory.md=, layout block. Concepts:
+
+- =<repo>/.spell/memory/episodes/<YYYY-MM-DD>.org= — daily file, level-1 = rollout, level-2 = episode
+- =<repo>/.spell/memory/concepts/<slug>.org= — one file per concept
+- =<repo>/.spell/memory/cache/memory_summary.md= — derived projection
+- =<repo>/.spell/memory/migrated/<ts>.org= — quarantined legacy content
+
+Existing project memory dir resolution lives in =@oh-my-pi/pi-utils=
+=getMemoriesDir(cwd)= → =~/.spell/agent/memory/<cwd-hash>/=. This FEAT
+introduces the per-repo directory at =<cwd>/.spell/memory/= as the new
+home for graph-memory items, while keeping the legacy
+=getMemoriesDir(cwd)= as a read-side fallback for existing data.
+
+* Scope
+
+In scope:
+- New helper =resolveGraphMemoryRoot(cwd: string): string= returning =<cwd>/.spell/memory/=
+- Directory creation on first =remember()= or =renderSessionStartSummary= call
+- =.gitignore= maintenance: ensure =/.spell/memory/= line exists in repo root .gitignore (idempotent append)
+- Migration of legacy =<getMemoriesDir(cwd)>/MEMORY.org= into =<cwd>/.spell/memory/migrated/<ts>.org=
+- Tests under =packages/coding-agent/test/memories/storage-layout.test.ts=
+
+Out of scope:
+- The remember/episode-write logic (FEAT-640)
+- Cross-repo personal store (FEAT-642)
+- Touching the SQLite job DB schema
+
+* Existing Patterns
+
+- =@oh-my-pi/pi-utils::getMemoriesDir= — see =packages/utils=. Will be supplemented, not replaced.
+- =Bun.write= auto-creates parent directories; rely on it for episode/concept files.
+- =fs.mkdir({ recursive: true })= for explicit dir creation when no immediate write follows (e.g. cache dir).
+- =.gitignore= write idempotency precedent: search repo for existing helpers; if none, implement a small "append-line-if-missing" helper in =packages/utils/src/files.ts=.
+
+* Tests
+
+File: =packages/coding-agent/test/memories/storage-layout.test.ts=:
+
+1. =resolve_graph_memory_root_returns_dot_spell_memory= — function returns =<cwd>/.spell/memory/=
+2. =resolveGraphMemoryRoot_creates_dirs_on_first_call= — episodes/, concepts/, cache/ all exist after first call
+3. =gitignore_appends_memory_line_when_absent= — empty .gitignore → contains =/.spell/memory/= afterward
+4. =gitignore_idempotent= — running twice does not duplicate the line
+5. =gitignore_no_op_when_root_not_a_repo= — no .git/ in path → skip; do not error
+6. =legacy_memory_org_migrated= — pre-existing =<getMemoriesDir(cwd)>/MEMORY.org= moved to =<cwd>/.spell/memory/migrated/<ts>.org=, original gone
+7. =legacy_migration_idempotent= — second run is a no-op (no new file)
+8. =creates_only_missing_dirs= — episodes already present → no error, others created
+9. =cache_dir_world_readable= — cache file mode 0644 (or default umask)
+10. =migrated_dir_has_readme= — =migrated/README.txt= explains why files moved here
+
+* Implementation
+
+** ITEM Helper functions
+:PROPERTIES:
+:CUSTOM_ID: FEAT-641-memory-storage-layout-dirs-gitignore-and::helpers
+:END:
+- File: =packages/coding-agent/src/memories/layout.ts= (new)
+- =export function resolveGraphMemoryRoot(cwd: string): string=
+- =export async function ensureGraphMemoryDirs(cwd: string): Promise<void>=
+- =export async function ensureGitignoreEntry(repoRoot: string): Promise<void>=
+
+** ITEM Write storage tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-641-memory-storage-layout-dirs-gitignore-and::tests
+:DEPENDS: FEAT-641-memory-storage-layout-dirs-gitignore-and::helpers
+:END:
+- File: =packages/coding-agent/test/memories/storage-layout.test.ts=
+- Implement all 10 scenarios using =tmpdir= per AGENTS.md test-isolation rules
+
+** ITEM Implement helpers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-641-memory-storage-layout-dirs-gitignore-and::impl
+:DEPENDS: FEAT-641-memory-storage-layout-dirs-gitignore-and::tests
+:END:
+- File: =packages/coding-agent/src/memories/layout.ts=
+- =resolveGraphMemoryRoot=: =path.join(cwd, ".spell", "memory")=
+- =ensureGraphMemoryDirs=: =fs.mkdir(root, { recursive: true })= for =episodes=, =concepts=, =cache=, =migrated=
+- =ensureGitignoreEntry=: read existing .gitignore (try/catch ENOENT per AGENTS.md), search for =/.spell/memory/= line, append if missing; skip if =<repoRoot>/.git/= absent
+
+** ITEM Migration helper
+:PROPERTIES:
+:CUSTOM_ID: FEAT-641-memory-storage-layout-dirs-gitignore-and::migrate
+:DEPENDS: FEAT-641-memory-storage-layout-dirs-gitignore-and::impl
+:END:
+- File: =packages/coding-agent/src/memories/layout.ts=
+- =export async function migrateLegacyMemoryFiles(cwd: string): Promise<void>=
+- Locate legacy =<getMemoriesDir(cwd)>/MEMORY.org= via =@oh-my-pi/pi-utils=
+- Move to =<resolveGraphMemoryRoot(cwd)>/migrated/<isoTs>.org=
+- Write =<migrated>/README.txt= once with explanation
+- Idempotent: skip if no source
+
+** ITEM Wire init into memories runtime
+:PROPERTIES:
+:CUSTOM_ID: FEAT-641-memory-storage-layout-dirs-gitignore-and::wire
+:DEPENDS: FEAT-641-memory-storage-layout-dirs-gitignore-and::migrate
+:END:
+- File: =packages/coding-agent/src/memories/index.ts=
+- On first =stage1= or =renderSessionStartSummary= call per session: =await ensureGraphMemoryDirs(cwd); await ensureGitignoreEntry(cwd); await migrateLegacyMemoryFiles(cwd)= (cached via =Once<Promise<void>>=)
+
+* Edge Cases
+
+- Repo root not a git checkout: skip gitignore write; do not error
+- =cwd= inside a worktree: gitignore goes to the worktree's gitignore (not the bare repo)
+- Legacy =MEMORY.org= currently being read by another process: file rename is atomic on same filesystem; document the same-fs assumption
+- Disk full during mkdir: bubble error
+- Case-insensitive filesystem (macOS HFS+): =.spell= and =.SPELL= collide; honor whatever the user has, do not normalize case
+- Existing =.gitignore= ends without newline: append with leading "
+"
+
+* Acceptance Criteria
+
+- =bun test packages/coding-agent/test/memories/storage-layout.test.ts= passes 10/10
+- =bun check:ts= clean
+- Manual: in a fresh repo, trigger memory pipeline once → verify directory tree, .gitignore line, no legacy MEMORY.org left dangling
+- =rg "/.spell/memory/" .gitignore= matches in any repo where the agent has run

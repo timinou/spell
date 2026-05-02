@@ -1,0 +1,159 @@
+#+TITLE: Cross-repo personal store id-link resolution and recall scope merge
+#+STATE: ITEM
+#+SESSION_ID: 14d1b3e1f7efd81d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
+#+CUSTOM_ID: FEAT-642-cross-repo-personal-store-id-link-resolu
+#+DEPENDS: FEAT-632-org-engine-typed-edge-graph-traversal-ne FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion FEAT-637-executeorg-dispatch-recall-remember-time
+#+LAYER: native
+
+* Intention & Purpose
+
+Treat =~/.spell/personal/= as a second org root that lives alongside the
+per-repo =.spell/memory/= store. Concepts, entities, and actors defined
+in personal are referenceable from any repo via stable CUSTOM_IDs.
+Recall scope unions personal + per-cwd by default. No daemon, no
+namespacing, no cross-machine sync — that is the user's responsibility
+(rsync, git in =~/.spell/personal/.git=, or none).
+
+* Context & Narrative
+
+Spec: =specs/org-graph-memory.md=. Layout:
+
+- =~/.spell/personal/concepts/<slug>.org=
+- =~/.spell/personal/entities/<kind>/<slug>.org=
+- =~/.spell/personal/actors/<handle>.org=
+
+Collision policy: per-cwd shadows personal if the same =CUSTOM_ID= exists
+in both. This lets a repo override a personal concept when needed
+without touching the personal source.
+
+The id-resolver lives in =pi-org-engine::locate=. Today it indexes a
+single root. This FEAT adds a second root and a precedence rule. Recall
+fans out to both roots and unions hit lists before RRF fusion (each
+lane is run per-root and combined; this preserves ranking semantics).
+
+* Scope
+
+In scope:
+- =crates/pi-org-engine/src/locate.rs= — multi-root id index + precedence
+- New helper =resolvePersonalRoot()= in TypeScript = =~/.spell/personal/=
+- =crates/pi-org-recall/src/personal.rs= (new) — wraps two RecallContexts and unions hits
+- =RecallQuery.include_personal= flag honored (default true; configurable via spell.kdl)
+- =executeOrg::remember= writes concept items to =resolvePersonalRoot()/concepts/= when called with =scope: "personal"= argument
+- Tests under =crates/pi-org-engine/tests/locate_personal.rs= and =crates/pi-org-recall/tests/personal.rs=
+
+Out of scope:
+- Cross-machine sync (out of v1; documented as user-responsibility)
+- Personal store schema validation (entities can be schemaless)
+- Migrating existing personal data (none exists; greenfield)
+
+* Existing Patterns
+
+- =locate.rs= already builds an id → file map per root. Generalize to =Vec<(RootScope, HashMap<ItemId, PathBuf>)>=.
+- =RecallContext= from FEAT-636 takes a single items snapshot. Either make =RecallContext::personal: Option<Box<RecallContext>>= or build two contexts and run lanes over both. Choice: separate contexts, fuse at the RRF input layer (cleaner for tracing).
+- Home dir resolution: =home::home_dir()= via the =home= crate (already a dep transitively via several places; verify).
+
+* Tests
+
+File: =crates/pi-org-engine/tests/locate_personal.rs=:
+
+1. =resolves_id_in_personal_when_absent_in_cwd= — id =CON-x= only in personal → resolves to personal path
+2. =cwd_shadows_personal_on_same_id= — id present in both → resolves to cwd path; personal version remains discoverable via explicit scope
+3. =unknown_id_returns_none= — id in neither → None
+4. =locate_iter_yields_both_roots= — explicit iterator over all known ids tagged with =RootScope::Personal | Cwd=
+
+File: =crates/pi-org-recall/tests/personal.rs=:
+
+5. =recall_unions_hits_from_both_roots= — both roots have hits; result mixes them
+6. =include_personal_false_excludes_personal_hits= — flag respected
+7. =duplicate_id_collision_returns_cwd_only= — same id in both → dedupe in favor of cwd version
+8. =scope_personal_only_returns_only_personal= — scope=["personal-concept"] tag → only personal hits
+9. =remember_to_personal_writes_to_home_dir= — remember({ scope: "personal", kind: "concept", ... }) creates file under =~/.spell/personal/concepts/=
+
+File: =packages/org/test/personal-flag.test.ts=:
+
+10. =settings_default_include_personal_true= — default RecallQuery enables personal scope
+11. =kdl_disable_personal= — =recall { include-personal #false }= block in spell.kdl propagates to all recalls
+
+* Implementation
+
+** ITEM Define multi-root locate
+:PROPERTIES:
+:CUSTOM_ID: FEAT-642-cross-repo-personal-store-id-link-resolu::locate
+:END:
+- File: =crates/pi-org-engine/src/locate.rs=
+- =pub enum RootScope { Cwd, Personal }=
+- =pub struct MultiRootIndex { roots: Vec<(RootScope, HashMap<ItemId, PathBuf>)> }=
+- =pub fn resolve(&self, id: &ItemId) -> Option<(RootScope, &Path)>= cwd first
+- =pub fn iter(&self) -> impl Iterator<Item = (RootScope, &ItemId, &Path)>=
+
+** ITEM Write locate tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-642-cross-repo-personal-store-id-link-resolu::locate-tests
+:DEPENDS: FEAT-642-cross-repo-personal-store-id-link-resolu::locate
+:END:
+- File: =crates/pi-org-engine/tests/locate_personal.rs=
+- Implement scenarios 1–4
+
+** ITEM Implement multi-root locate
+:PROPERTIES:
+:CUSTOM_ID: FEAT-642-cross-repo-personal-store-id-link-resolu::locate-impl
+:DEPENDS: FEAT-642-cross-repo-personal-store-id-link-resolu::locate-tests
+:END:
+- File: =crates/pi-org-engine/src/locate.rs=
+- Build per-root index lazily; refresh on file change (read-only here, so caller invalidates)
+
+** ITEM Personal recall context
+:PROPERTIES:
+:CUSTOM_ID: FEAT-642-cross-repo-personal-store-id-link-resolu::personal-context
+:DEPENDS: FEAT-642-cross-repo-personal-store-id-link-resolu::locate-impl
+:END:
+- File: =crates/pi-org-recall/src/personal.rs=
+- =pub struct DualContext<'a> { pub cwd: RecallContext<'a>, pub personal: Option<RecallContext<'a>> }=
+- =pub fn recall_dual(query: RecallQuery, ctx: &DualContext) -> Vec<RecallHit>=
+- Run lanes against each context independently; tag hits with =RootScope=; RRF-fuse with same K; dedupe by id (cwd wins on collision); truncate to limit
+
+** ITEM Write personal recall tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-642-cross-repo-personal-store-id-link-resolu::personal-tests
+:DEPENDS: FEAT-642-cross-repo-personal-store-id-link-resolu::personal-context
+:END:
+- File: =crates/pi-org-recall/tests/personal.rs=
+- Implement scenarios 5–9
+
+** ITEM Wire executeOrg.remember scope
+:PROPERTIES:
+:CUSTOM_ID: FEAT-642-cross-repo-personal-store-id-link-resolu::remember-scope
+:DEPENDS: FEAT-642-cross-repo-personal-store-id-link-resolu::personal-tests
+:END:
+- File: =crates/pi-natives/src/org_buffer.rs=
+- =RememberArgs.scope: Option<String>= (=None= = cwd, =Some("personal")= = personal)
+- Resolve target dir via =resolveGraphMemoryRoot= or =~/.spell/personal/= depending on scope
+- Same broker MultiIntent path; the file just lives under a different root
+
+** ITEM Settings + KDL flag
+:PROPERTIES:
+:CUSTOM_ID: FEAT-642-cross-repo-personal-store-id-link-resolu::settings
+:DEPENDS: FEAT-642-cross-repo-personal-store-id-link-resolu::remember-scope
+:END:
+- File: =packages/coding-agent/src/config/settings.ts=
+- Add =recall.includePersonal: boolean= (default true)
+- Parse from =spell.kdl= block =recall { include-personal #false }=
+- File: =packages/org/test/personal-flag.test.ts= — implement scenarios 10–11
+
+* Edge Cases
+
+- =~/.spell/personal/= does not exist: =DualContext.personal= is None; recall behaves as cwd-only
+- Symlink loop in personal: locate must not follow into the same dir twice (canonicalize during scan)
+- File in personal contains an id that also appears in cwd: lookup returns cwd; recall dedupes
+- =remember(scope: "personal")= without write permission to ~/.spell/personal/: surface =RememberError::Permission= with hint
+- Personal store on a different filesystem than cwd: blob references using relative paths break; v1 sticks to absolute paths and documents the limitation
+- Performance: 2x recall lanes when personal exists; RRF fusion already linear; total stays well under the 200 ms budget for 10k+10k items
+
+* Acceptance Criteria
+
+- =cargo test -p pi-org-engine locate_personal= passes 4/4
+- =cargo test -p pi-org-recall personal= passes 5/5
+- =bun test packages/org/test/personal-flag.test.ts= passes 2/2
+- =bun check:rs= and =bun check:ts= clean
+- Manual: create =~/.spell/personal/concepts/test-cross-repo.org= with id =CON-test-cross-repo=; from any repo, =org recall { text: "cross repo" }= returns it; =org graph { root: "CON-test-cross-repo" }= resolves

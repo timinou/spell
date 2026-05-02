@@ -1,0 +1,150 @@
+#+TITLE: pi-embedding-worker org concept embed verbs and recall client wrapper
+#+STATE: ITEM
+#+SESSION_ID: 14d1b3e1f7efd81d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
+#+CUSTOM_ID: FEAT-635-pi-embedding-worker-org-concept-embed-ve
+#+DEPENDS: FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting FEAT-634-pi-org-recall-crate-scaffold-and-tantivy
+#+LAYER: native
+
+* Intention & Purpose
+
+Wire =pi-embedding-worker= into the recall pipeline as the embedding
+execution path. The worker already exists for =pi-natives::code_graph=;
+this FEAT exposes =embed_query= and =embed_batch= verbs callable from
+=pi-org-recall=, plus an HNSW vector lane that consumes the resulting
+vectors via the =hnswlib-rs= index from FEAT-633.
+
+* Context & Narrative
+
+Spec: =specs/org-graph-memory.md=, decision: subprocess via
+=pi-embedding-worker= (memory isolation; cold-load amortized across
+calls). The worker today serves the code-graph use case
+(=crates/pi-natives/src/embedding_worker.rs=). The org recall pipeline
+needs the same fastembed/jina-768-dim model. Reusing the worker avoids
+a second model download and a second process.
+
+A thin client in =pi-org-recall::embedder= wraps the existing JSON-RPC
+or stdin/stdout transport. The client does:
+1. lazy spawn (singleton per process)
+2. =embed_query(text) -> Vec<f32>=
+3. =embed_batch(texts) -> Vec<Vec<f32>>=
+4. graceful shutdown on drop
+
+The HNSW vector lane is built on the client + =pi-code-vectors::VectorIndex=
+(from FEAT-633). Wraps it as =VecIndex= in =pi-org-recall= keyed by org
+item ID rather than =node_index=.
+
+* Scope
+
+In scope:
+- Audit =crates/pi-natives/src/embedding_worker.rs= and =crates/pi-embedding-worker/src/main.rs=; expose =embed_query= and =embed_batch= verbs publicly if not already (likely already exists for code-graph)
+- New module =crates/pi-org-recall/src/embedder.rs=: =Embedder= struct wrapping the worker handle
+- New module =crates/pi-org-recall/src/vec.rs=: =VecIndex= mapping =item_id -> node_index -> vector= and delegating ANN to =VectorIndex=
+- Persistence: =VecIndex= dump goes to =~/.cache/spell/recall/<repo-hash>/vec.bin=
+- Tests under =crates/pi-org-recall/tests/embedder.rs= and =tests/vec.rs= (latter gated behind =SPELL_TEST_EMBEDDING=1= because the worker requires the model file)
+
+Out of scope:
+- Hybrid recall pipeline — FEAT-636
+- Re-embedding on file change (subscribe loop) — FEAT-636 incorporates that
+
+* Existing Patterns
+
+- =crates/pi-natives/src/embedding_worker.rs::with_engine= shows the spawn-once semantics
+- Worker binary path resolution: =resolve_binary= pattern from =pi-edit-broker/src/spawn.rs= (sibling-binary-then-PATH)
+- Model dimension is 768; matches FEAT-633 constants
+
+* Tests
+
+File: =crates/pi-org-recall/tests/embedder.rs= (gated):
+
+1. =embed_query_returns_768_dim= — single text → Vec<f32> length 768
+2. =embed_batch_returns_one_vector_per_input= — batch of 5 → 5 vectors
+3. =worker_lazy_spawn_singleton= — first call spawns; subsequent calls reuse the same process (PID identity check)
+4. =worker_crash_resurrect= — kill the worker process; next =embed_query= respawns and succeeds within 2 s
+
+File: =crates/pi-org-recall/tests/vec.rs= (gated):
+
+5. =vec_index_round_trip_with_real_embeddings= — embed 10 short strings, build VecIndex, knn(query) returns the closest by ground-truth cosine
+6. =vec_index_persistence= — build, save to tmp dir, reopen, search returns identical hits
+7. =item_id_keyed_lookup= — given query, =VecIndex::search= returns =Vec<(String, f32)>= where the string is the org item ID, not internal node_index
+
+Non-gated tests (mock embedder):
+8. =mock_embed_dimension_validation= — supply 768-dim mock vector; mismatched dim errors
+9. =mock_embedder_satisfies_trait= — ensure =Embedder= is a trait so production and mock are interchangeable
+
+* Implementation
+
+** ITEM Audit and stabilize embedding worker verbs
+:PROPERTIES:
+:CUSTOM_ID: FEAT-635-pi-embedding-worker-org-concept-embed-ve::worker-verbs
+:END:
+- File: =crates/pi-embedding-worker/src/main.rs=
+- Verify request schema = ={ verb: "embed_query"|"embed_batch", text|texts: ... }=
+- Add a JSON Schema doc-comment at the top of main.rs if missing
+- Confirm =napi/tests/embedding_worker= still passes
+
+** ITEM Define Embedder trait
+:PROPERTIES:
+:CUSTOM_ID: FEAT-635-pi-embedding-worker-org-concept-embed-ve::trait
+:DEPENDS: FEAT-635-pi-embedding-worker-org-concept-embed-ve::worker-verbs
+:END:
+- File: =crates/pi-org-recall/src/embedder.rs=
+- =pub trait Embedder: Send + Sync { fn embed_query(&self, text: &str) -> Result<Vec<f32>>; fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>; fn dim(&self) -> usize; }=
+- Production impl =WorkerEmbedder= wraps the JSON-RPC client
+- Test-only impl =MockEmbedder= behind =#[cfg(any(test, feature = "test-mock"))]=
+
+** ITEM Write embedder tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-635-pi-embedding-worker-org-concept-embed-ve::embedder-tests
+:DEPENDS: FEAT-635-pi-embedding-worker-org-concept-embed-ve::trait
+:END:
+- File: =crates/pi-org-recall/tests/embedder.rs=
+- Implement scenarios 1–4 + 8–9
+- Gate scenarios 1–4 with =#[cfg(feature = "test-embedding")]= matching =pi-code-vectors= convention
+
+** ITEM Implement WorkerEmbedder
+:PROPERTIES:
+:CUSTOM_ID: FEAT-635-pi-embedding-worker-org-concept-embed-ve::impl-embedder
+:DEPENDS: FEAT-635-pi-embedding-worker-org-concept-embed-ve::embedder-tests
+:END:
+- File: =crates/pi-org-recall/src/embedder.rs=
+- Reuse =pi-natives::embedding_worker= helpers if they're public; otherwise vendor the spawn + JSON-RPC client into this crate (~80 LOC)
+- Singleton via =OnceCell<Mutex<Child>>= keyed by model name
+- Drop impl: =SIGTERM= the child, await up to 1 s
+
+** ITEM Implement VecIndex
+:PROPERTIES:
+:CUSTOM_ID: FEAT-635-pi-embedding-worker-org-concept-embed-ve::impl-vec
+:DEPENDS: FEAT-635-pi-embedding-worker-org-concept-embed-ve::impl-embedder
+:END:
+- File: =crates/pi-org-recall/src/vec.rs=
+- =pub struct VecIndex { inner: pi_code_vectors::VectorIndex, id_to_node: HashMap<String, usize>, node_to_id: Vec<String> }=
+- =insert(id, vector)= appends to =node_to_id=, inserts into inner with =node_index = node_to_id.len()-1=
+- =search(query_vec, limit) -> Vec<(String, f32)>= delegates to inner, maps node_index → id
+- =to_persisted= dumps inner + the id arrays bincode-serialized after the inner blob
+- =from_persisted= reverse
+- Path: =~/.cache/spell/recall/<repo-hash>/vec.bin=
+
+** ITEM Write vec tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-635-pi-embedding-worker-org-concept-embed-ve::vec-tests
+:DEPENDS: FEAT-635-pi-embedding-worker-org-concept-embed-ve::impl-vec
+:END:
+- File: =crates/pi-org-recall/tests/vec.rs=
+- Scenarios 5–7 gated by =test-embedding= feature
+
+* Edge Cases
+
+- Worker fails to spawn (binary not found): =Error::WorkerSpawn= with hint to set =SPELL_EMBEDDING_WORKER_BIN=
+- Worker stalls on first request (model download): timeout 60 s on first call; document
+- Concurrent =embed_query= calls: client serializes via =Mutex<Child>= stdin/stdout; document the bottleneck and the future =embed_batch= mitigation
+- Item ID collision (same string passed twice to =VecIndex::insert=): replace existing node_index in-place, or surface =Error::Duplicate=. Decision: replace (memory pipeline can re-embed after edit)
+- Empty text: skip embed call; return zero-vector sentinel and skip insertion. Document and warn.
+
+* Acceptance Criteria
+
+- =cargo test -p pi-org-recall= passes (mock-only path)
+- With =SPELL_TEST_EMBEDDING=1=, gated tests pass
+- =bun check:rs= clean
+- =cargo bench --bench embed_batch -p pi-org-recall= (if bench added) shows batch is ≥ 5x faster than serial =embed_query=
+- =VecIndex= persistence file under 100 MB for 50k entries × 768-dim (≈153 MB for vectors alone — consider quantization in a follow-up if it bites; document)

@@ -1,0 +1,146 @@
+#+TITLE: executeOrg dispatch recall remember timeline graph link ops with NAPI bindings
+#+STATE: ITEM
+#+SESSION_ID: 14d1b3e1f7efd81d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
+#+CUSTOM_ID: FEAT-637-executeorg-dispatch-recall-remember-time
+#+DEPENDS: FEAT-631-org-engine-relations-drawer-parser-and-o FEAT-632-org-engine-typed-edge-graph-traversal-ne FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion
+#+LAYER: integration
+
+* Intention & Purpose
+
+Expose the new graph-and-memory primitives across the NAPI boundary by
+extending =executeOrg= with =recall=, =remember=, =timeline=, =graph=,
+and =link= ops. Mirrors the existing dispatch shape in
+=crates/pi-natives/src/org_buffer.rs=. The TypeScript side
+(=packages/org/src/tool.ts=) gains new cases that consume these ops via
+the regenerated bindings.
+
+* Context & Narrative
+
+Spec: =specs/org-graph-memory.md=. The recall, graph, and edit-tx
+primitives all live in Rust crates. NAPI is the single boundary for the
+TS layer (memory pipeline, settings, tool surface) to use them. Today
+=executeOrg= owns =parse=, =query=, =graph=, =computeWaves=, =nextWave=,
+=editSection=, =toMarkdown=. This FEAT adds five verbs in the same
+dispatch and keeps the contract that =executeOrg= is the only Rust→JS
+surface for org operations.
+
+The =subscribe= op is intentionally deferred to FEAT-639 alongside
+broker routing so the live-event path lands as a unit.
+
+* Scope
+
+In scope:
+- =crates/pi-natives/src/org_buffer.rs= — extend =OrgCommand= enum and dispatch
+- New crate dep: =pi-org-recall= path dep in =crates/pi-natives/Cargo.toml=
+- =packages/natives/src/org-buffer/types.ts= — regenerated NAPI types
+- =packages/org/src/tool.ts= — add op cases =recall=, =remember=, =timeline=, =graph=, =link= and surface in the tool's input schema (Zod)
+- KDL profile loading: parse =recall "name" { ... }= blocks from =spell.kdl= into a =RecallProfileRegistry=, pass into Rust via =recall= op argument =profile=
+- Tests under =packages/org/test/recall.test.ts=, =remember.test.ts=, =graph.test.ts=, =timeline.test.ts=, =link.test.ts=
+
+Out of scope:
+- =subscribe= op — FEAT-639
+- Personal-store toggle — FEAT-642 will add =includePersonal= flag handling once that store exists; for now accept the flag and treat as no-op
+
+* Existing Patterns
+
+- =org_buffer.rs::execute_org= dispatch + =OrgCommand= enum; mirror the variant style
+- =packages/org/src/tool.ts::createOrgTool= already routes ops via a switch on =command=; add cases following the existing pattern (see =case "query"= at line 1169, =case "graph"= at 1234)
+- Zod schema in tool.ts: extend =OrgToolInputSchema= with discriminated union members for the five new commands
+- KDL parsing: existing =packages/coding-agent/src/config/kdl-loader.ts= patterns; if recall blocks live in =spell.kdl=, follow that loader; otherwise inline a small parser scoped to =recall "name" { ... }=
+- Promise.withResolvers() per AGENTS.md when wiring async dispatch
+
+* Tests
+
+Files: =packages/org/test/recall.test.ts= and siblings:
+
+1. =recall_op_returns_ranked_hits= — happy path: index 5 items, recall("auth") returns hits with scores
+2. =recall_op_with_profile_uses_profile_weights= — recall({ profile:"priors" }) ignores explicit weights
+3. =recall_op_validates_input= — invalid scope value rejected by Zod
+4. =remember_op_writes_episode_item= — remember({ kind:"episode", summary:"X", involves:[id], about:[id] }) creates a level-2 child under today's episodes file with PROPERTIES + RELATIONS drawer; returns =EpisodeRef { id, file }=
+5. =remember_op_creates_episodes_dir= — first call creates =<repo>/.spell/memory/episodes/= and the day-file
+6. =remember_op_concept_kind_writes_concepts_dir= — kind:"concept" writes =concepts/<slug>.org=
+7. =timeline_op_returns_episodes_about_target= — adds 3 episodes about EntityX, timeline returns them ordered
+8. =graph_op_returns_subgraph= — graph({ root, hops:2 }) returns nodes + edges
+9. =link_op_appends_relation= — link({ from, to, kind:"ABOUT" }) edits the source file to add an ABOUT line; revision returned
+10. =link_op_idempotent_on_duplicate= — repeating link with same triple returns the same revision; file unchanged
+11. =recall_excerpt_present_for_text_queries= — RecallHit has excerpt populated when text is non-empty
+12. =profile_loading_from_kdl= — given a fixture =spell.kdl= with =recall "named" { weights vector=0.7 }=, registry registers it
+
+* Implementation
+
+** ITEM Extend OrgCommand enum
+:PROPERTIES:
+:CUSTOM_ID: FEAT-637-executeorg-dispatch-recall-remember-time::enum
+:END:
+- File: =crates/pi-natives/src/org_buffer.rs=
+- Add variants: =Recall { args: RecallArgs }=, =Remember { args: RememberArgs }=, =Timeline { args: TimelineArgs }=, =Graph { args: GraphArgs }=, =Link { args: LinkArgs }=
+- Add =RecallArgs= mirroring =RecallQuery= with NAPI-friendly types (=Option<Vec<String>>= etc.)
+- Wire dependency on =pi-org-recall=
+
+** ITEM Implement Rust dispatch
+:PROPERTIES:
+:CUSTOM_ID: FEAT-637-executeorg-dispatch-recall-remember-time::dispatch
+:DEPENDS: FEAT-637-executeorg-dispatch-recall-remember-time::enum
+:END:
+- File: =crates/pi-natives/src/org_buffer.rs=
+- Match each new variant; instantiate =RecallContext= per-call (cheap if FtsIndex/VecIndex are reused via a per-process cache; for v1 build per-call and revisit if profiling demands)
+- =Remember=: load today's episodes file (or create), use =editSection= to append a new level-2 heading with PROPERTIES + RELATIONS drawer, return new id
+- =Timeline=, =Graph=: pure read; build TypedGraph from items snapshot
+- =Link=: locate target item in its file, edit the RELATIONS drawer (create drawer if absent) via =editSection=
+
+** ITEM Regenerate NAPI bindings
+:PROPERTIES:
+:CUSTOM_ID: FEAT-637-executeorg-dispatch-recall-remember-time::bindings
+:DEPENDS: FEAT-637-executeorg-dispatch-recall-remember-time::dispatch
+:END:
+- Run =bun --cwd=packages/natives run dev:native=
+- Verify =packages/natives/src/org-buffer/types.ts= contains the new arg/result types
+- =bun check:ts= clean
+
+** ITEM Write tool tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-637-executeorg-dispatch-recall-remember-time::tool-tests
+:DEPENDS: FEAT-637-executeorg-dispatch-recall-remember-time::bindings
+:END:
+- File: =packages/org/test/recall.test.ts= and siblings
+- Implement all 12 scenarios via =createOrgTool().execute=
+- Use temp dirs for repo root and cache; tear down after each
+
+** ITEM Wire tool.ts cases
+:PROPERTIES:
+:CUSTOM_ID: FEAT-637-executeorg-dispatch-recall-remember-time::tool-cases
+:DEPENDS: FEAT-637-executeorg-dispatch-recall-remember-time::tool-tests
+:END:
+- File: =packages/org/src/tool.ts=
+- Extend Zod input schema with five new discriminated members
+- Add switch cases routing to =executeOrg({ command: "recall"|"remember"|... })=
+- Render results: human-readable preview for tool output (truncate excerpt to 200 chars per tui-rendering rule)
+
+** ITEM KDL profile loader
+:PROPERTIES:
+:CUSTOM_ID: FEAT-637-executeorg-dispatch-recall-remember-time::kdl-profiles
+:DEPENDS: FEAT-637-executeorg-dispatch-recall-remember-time::tool-cases
+:END:
+- File: =packages/org/src/recall-profiles.ts= (new)
+- Parse =recall "name" { scope ... weights bm25=... }= blocks from existing =spell.kdl= via the project KDL loader (see =packages/coding-agent/src/config/kdl-loader.ts=)
+- Pass profile registry to executeOrg call args (=profile_registry: Vec<RecallProfileEntry>= argument shape)
+
+* Edge Cases
+
+- =remember= called outside a repo (no repo root resolvable): error clearly =RememberError::NoRepoRoot=
+- =remember= when today's episodes file does not exist: create with file header (#+TITLE: Episodes <DATE>)
+- =link= when source item has no CUSTOM_ID: error =LinkError::SourceMissingId=; suggest creating one first
+- =link= when target item is in personal store and =include_personal=false=: still works — link is by id, recall scope is separate
+- =recall= with malformed profile name (not in registry): warn + fall back to defaults
+- Timeline with no episodes: empty Vec, no error
+- Concurrent =remember= to the same day file: broker MultiIntent (FEAT-639) ensures atomicity once routed; until then v1 race-tolerates by writer-side retry on ETag mismatch in editSection
+- TUI render: all op outputs pass through =replaceTabs= and =truncateToWidth= per AGENTS.md
+
+* Acceptance Criteria
+
+- =cargo build -p pi-natives= clean; =bun check:rs= clean
+- =bun --cwd=packages/natives run dev:native= regenerates bindings with five new commands
+- =bun check:ts= clean
+- =bun test packages/org/test/recall.test.ts packages/org/test/remember.test.ts packages/org/test/graph.test.ts packages/org/test/timeline.test.ts packages/org/test/link.test.ts= passes 12/12
+- Manual smoke: =bun run packages/coding-agent= → tool dispatch =org { command: "recall", text: "wave" }= returns hits from the existing =!tasks/= seed

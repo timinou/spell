@@ -1,0 +1,356 @@
+#+TITLE: Org graph memory v1 typed edges hybrid recall live broker memory cutover personal store
+#+STATE: DOING
+#+SESSION_ID: 14d1b3e1f7efd81d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
+#+CUSTOM_ID: PLAN-290-org-graph-memory-v1-typed-edges-hybrid-r
+#+LAYER: integration
+
+* Initial Message
+
+What would it take for Spell's org mode to be a fully featured graph that also includes memories, simlar to the SurrealDB plan in the kdl worktree?
+
+* Context
+
+Turn Spell's org subsystem into a fully featured graph with first-class
+episodic + semantic memory, hybrid recall (BM25 + HNSW vector +
+typed-graph), live patch subscriptions, atomic cross-file edits, and a
+cross-repo personal store — all without introducing SurrealDB or any
+external daemon.
+
+Source-of-truth spec: =[[file:../../specs/org-graph-memory.md][specs/org-graph-memory.md]]=.
+
+The plan is materially the answer to the conversation that asked "what
+would it take for Spell's org mode to be a fully featured graph that
+also includes memories, similar to the SurrealDB plan in the kdl
+worktree?". The four canonical objections to staying file-based were
+each demolished:
+
+- LIVE SELECT → broker-routed org edits + OrgItemPatch in PeerCommitted (FEAT-639)
+- ANN at scale → hnswlib-rs swap; flat brute-force deleted (FEAT-633)
+- Namespacing → dropped; per-repo scope is enough
+- One query language → tantivy BM25 + HNSW + typed-graph + RRF fusion in =pi-org-recall= (FEAT-636)
+- Atomic cross-record → MultiIntent / MultiCommit / journal recovery in =pi-edit-broker= (FEAT-638)
+
+Files stay diffable. No new daemons. The broker we already have becomes
+the LIVE substrate. Memory becomes typed org items via =remember()=,
+=MEMORY.md= is replaced by a deterministic projection over the concept
+graph.
+
+** Settled decisions
+
+1. Scope cutoff: v1 = everything except artifact unification (FUP-068)
+2. Edge syntax: dedicated =:RELATIONS:= drawer with KIND: target-id lines (FEAT-631)
+3. Memory storage: per-cwd =<repo>/.spell/memory/episodes/<YYYY-MM-DD>.org= + =concepts/<slug>.org= (FEAT-641)
+4. Memory pipeline: hard cutover; SQLite job queue stays, MEMORY.md vanishes, =memory_summary.md= becomes a recall projection (FEAT-640)
+5. Vector runtime: subprocess via =pi-embedding-worker= (FEAT-635)
+6. Vector struct: HNSW always, =hnswlib-rs= from day 1, flat code path deleted (FEAT-633)
+7. Cross-repo personal store in v1; artifact unification deferred (FUP-068)
+
+** Replacement for MEMORY.md
+
+A deterministic projection at =<repo>/.spell/memory/cache/memory_summary.md=:
+
+- top 12 concepts by =recency × confidence × backlink-count= via =recall({ profile: "session-start", scope: ["concept"] })=
+- top 5 active workflow items
+- top 3 last-24h episodes about the cwd
+
+Rendered through =packages/coding-agent/src/prompts/memories/session-start.md.hbs=.
+The =memory://root/memory_summary.md= URL keeps resolving.
+
+** Reserved vocabulary
+
+Item kinds: =episode | concept | playbook | entity | actor | session | workflow | artifact*=
+(=artifact= reserved for FUP-068).
+
+Edge kinds: =INVOLVED | ABOUT | PRODUCED | DISTILLED_FROM | MENTIONS | SUPERSEDES | DERIVED_FROM | BLOCKS | ACTION=
+
+Legacy =BLOCKERS: a b c= property keeps working — synthesized into =Blocks= edges by FEAT-631.
+
+** Top-level child links
+
+- [[id:FEAT-631-org-engine-relations-drawer-parser-and-o]]
+- [[id:FEAT-632-org-engine-typed-edge-graph-traversal-ne]]
+- [[id:FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting]]
+- [[id:FEAT-634-pi-org-recall-crate-scaffold-and-tantivy]]
+- [[id:FEAT-635-pi-embedding-worker-org-concept-embed-ve]]
+- [[id:FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion]]
+- [[id:FEAT-637-executeorg-dispatch-recall-remember-time]]
+- [[id:FEAT-638-pi-edit-broker-multiintent-multicommit-c]]
+- [[id:FEAT-639-pi-org-engine-broker-routed-edits-orgite]]
+- [[id:FEAT-640-memory-pipeline-retarget-stage1-stage2-e]]
+- [[id:FEAT-641-memory-storage-layout-dirs-gitignore-and]]
+- [[id:FEAT-642-cross-repo-personal-store-id-link-resolu]]
+- [[id:FUP-068-artifact-unification-and-blake3-cutover]]
+
+* Verification
+
+System-level acceptance, all enforced by per-FEAT criteria:
+
+1. Editing an episode in =<repo>/.spell/memory/episodes/2026-05-02.org= triggers exactly one PeerCommitted event with the changed item's OrgItemPatch. A subscribed QML panel re-renders without polling.
+2. =recall({ text: "auth refactor blockers", limit: 5 })= returns hits ranked by RRF fusion of BM25 + vector + graph in under 200 ms on a 10k concept index.
+3. =remember({ kind: "episode", ... })= that touches two files commits atomically; a mid-commit kill leaves no half-applied state.
+4. Killing the embedding worker subprocess and restarting recall returns correct results within 2 s.
+5. =<repo>/.spell/memory/cache/memory_summary.md= deletion + next session start regenerates the file from concept queries deterministically.
+6. A concept defined in =~/.spell/personal/concepts/cold-outreach.org= resolves via =[[id:CON-cold-outreach]]= from any repo.
+
+Build/test gates:
+
+- =bun check:rs= clean
+- =bun check:ts= clean
+- =cargo test -p pi-org-engine -p pi-code-vectors -p pi-org-recall -p pi-edit-broker= all green
+- =bun test packages/org/test/= and =packages/coding-agent/test/memories/= all green
+
+Manual smoke:
+
+- Run a session, trigger memory pipeline; verify episode + concept files appear; recall returns relevant hits; subscribe shows a live patch on edit.
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:FEAT-631-org-engine-relations-drawer-parser-and-o::define-edge-kind]] Define EdgeKind enum and ItemId alias
+- [[id:FEAT-632-org-engine-typed-edge-graph-traversal-ne::types]] Define typed graph types
+- [[id:FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::dep]] Add hnswlib-rs dependency
+- [[id:FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::scaffold]] Scaffold crate
+- [[id:FEAT-635-pi-embedding-worker-org-concept-embed-ve::worker-verbs]] Audit and stabilize embedding worker verbs
+- [[id:FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::types]] Define recall types
+- [[id:FEAT-637-executeorg-dispatch-recall-remember-time::enum]] Extend OrgCommand enum
+- [[id:FEAT-638-pi-edit-broker-multiintent-multicommit-c::protocol]] Define wire-protocol variants
+- [[id:FEAT-639-pi-org-engine-broker-routed-edits-orgite::patch-type]] Define OrgItemPatch type
+- [[id:FEAT-640-memory-pipeline-retarget-stage1-stage2-e::schemas]] Define new schemas
+- [[id:FEAT-641-memory-storage-layout-dirs-gitignore-and::helpers]] Helper functions
+- [[id:FEAT-642-cross-repo-personal-store-id-link-resolu::locate]] Define multi-root locate
+** wave-2 :wave:
+- [[id:FEAT-631-org-engine-relations-drawer-parser-and-o::extend-orgitem]] Extend OrgItem with relations field
+- [[id:FEAT-632-org-engine-typed-edge-graph-traversal-ne::traversal-tests]] Write traversal tests
+- [[id:FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::format]] Define container format constants
+- [[id:FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::schema]] Define schema and tokenizer
+- [[id:FEAT-635-pi-embedding-worker-org-concept-embed-ve::trait]] Define Embedder trait
+- [[id:FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::profiles]] Define profile registry
+- [[id:FEAT-637-executeorg-dispatch-recall-remember-time::dispatch]] Implement Rust dispatch
+- [[id:FEAT-638-pi-edit-broker-multiintent-multicommit-c::journal]] Define journal entries
+- [[id:FEAT-639-pi-org-engine-broker-routed-edits-orgite::diff]] Implement diff function
+- [[id:FEAT-640-memory-pipeline-retarget-stage1-stage2-e::prompts]] Update prompt templates
+- [[id:FEAT-641-memory-storage-layout-dirs-gitignore-and::tests]] Write storage tests
+- [[id:FEAT-642-cross-repo-personal-store-id-link-resolu::locate-tests]] Write locate tests
+** wave-3 :wave:
+- [[id:FEAT-631-org-engine-relations-drawer-parser-and-o::parser-tests]] Write parser tests
+- [[id:FEAT-632-org-engine-typed-edge-graph-traversal-ne::build]] Implement build_typed_graph
+- [[id:FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::error]] Add IncompatibleIndexVersion error variant
+- [[id:FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::tests]] Write FTS tests
+- [[id:FEAT-635-pi-embedding-worker-org-concept-embed-ve::embedder-tests]] Write embedder tests
+- [[id:FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::tests]] Write recall tests
+- [[id:FEAT-637-executeorg-dispatch-recall-remember-time::bindings]] Regenerate NAPI bindings
+- [[id:FEAT-638-pi-edit-broker-multiintent-multicommit-c::protocol-tests]] Write protocol tests
+- [[id:FEAT-639-pi-org-engine-broker-routed-edits-orgite::protocol-extend]] Extend broker protocol with org_items
+- [[id:FEAT-640-memory-pipeline-retarget-stage1-stage2-e::tests]] Write pipeline tests
+- [[id:FEAT-641-memory-storage-layout-dirs-gitignore-and::impl]] Implement helpers
+- [[id:FEAT-642-cross-repo-personal-store-id-link-resolu::locate-impl]] Implement multi-root locate
+** wave-4 :wave:
+- [[id:FEAT-631-org-engine-relations-drawer-parser-and-o::implement-parser]] Implement RELATIONS drawer parsing in buffer
+- [[id:FEAT-632-org-engine-typed-edge-graph-traversal-ne::neighborhood]] Implement neighborhood traversal
+- [[id:FEAT-632-org-engine-typed-edge-graph-traversal-ne::timeline]] Implement timeline
+- [[id:FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::tests]] Write HNSW tests
+- [[id:FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::impl]] Implement FtsIndex
+- [[id:FEAT-635-pi-embedding-worker-org-concept-embed-ve::impl-embedder]] Implement WorkerEmbedder
+- [[id:FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::rrf]] Implement RRF fusion helper
+- [[id:FEAT-637-executeorg-dispatch-recall-remember-time::tool-tests]] Write tool tests
+- [[id:FEAT-638-pi-edit-broker-multiintent-multicommit-c::state]] Implement state.rs txn registry
+- [[id:FEAT-639-pi-org-engine-broker-routed-edits-orgite::coord]] Implement coord wrapper
+- [[id:FEAT-640-memory-pipeline-retarget-stage1-stage2-e::stage1]] Rewrite stage1 path
+- [[id:FEAT-641-memory-storage-layout-dirs-gitignore-and::migrate]] Migration helper
+- [[id:FEAT-642-cross-repo-personal-store-id-link-resolu::personal-context]] Personal recall context
+** wave-5 :wave:
+- [[id:FEAT-631-org-engine-relations-drawer-parser-and-o::legacy-blockers]] Synthesize legacy BLOCKERS into Blocks edges
+- [[id:FEAT-632-org-engine-typed-edge-graph-traversal-ne::path]] Implement path
+- [[id:FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::impl]] Reimplement VectorIndex around Hnsw
+- [[id:FEAT-635-pi-embedding-worker-org-concept-embed-ve::impl-vec]] Implement VecIndex
+- [[id:FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::impl]] Implement recall pipeline
+- [[id:FEAT-637-executeorg-dispatch-recall-remember-time::tool-cases]] Wire tool.ts cases
+- [[id:FEAT-638-pi-edit-broker-multiintent-multicommit-c::handlers]] Implement conn.rs handlers
+- [[id:FEAT-639-pi-org-engine-broker-routed-edits-orgite::route]] Route org_buffer through coord
+- [[id:FEAT-640-memory-pipeline-retarget-stage1-stage2-e::stage2]] Rewrite stage2 path
+- [[id:FEAT-641-memory-storage-layout-dirs-gitignore-and::wire]] Wire init into memories runtime
+- [[id:FEAT-642-cross-repo-personal-store-id-link-resolu::personal-tests]] Write personal recall tests
+** wave-6 :wave:
+- [[id:FEAT-631-org-engine-relations-drawer-parser-and-o::napi-bindings]] Verify NAPI bindings regenerate with relations field
+- [[id:FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::downstream]] Verify downstream callers
+- [[id:FEAT-635-pi-embedding-worker-org-concept-embed-ve::vec-tests]] Write vec tests
+- [[id:FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::excerpt]] Excerpt extraction
+- [[id:FEAT-637-executeorg-dispatch-recall-remember-time::kdl-profiles]] KDL profile loader
+- [[id:FEAT-638-pi-edit-broker-multiintent-multicommit-c::reaper]] Implement reaper recovery
+- [[id:FEAT-639-pi-org-engine-broker-routed-edits-orgite::coord-tests]] Write coord tests
+- [[id:FEAT-640-memory-pipeline-retarget-stage1-stage2-e::projection]] Implement renderSessionStartSummary
+- [[id:FEAT-642-cross-repo-personal-store-id-link-resolu::remember-scope]] Wire executeOrg.remember scope
+** wave-7 :wave:
+- [[id:FEAT-638-pi-edit-broker-multiintent-multicommit-c::client]] Wire client API in pi-code-engine
+- [[id:FEAT-639-pi-org-engine-broker-routed-edits-orgite::subscribe]] Implement subscribe op + registry
+- [[id:FEAT-640-memory-pipeline-retarget-stage1-stage2-e::delete-memory-md]] Delete MEMORY.md write
+- [[id:FEAT-642-cross-repo-personal-store-id-link-resolu::settings]] Settings + KDL flag
+** wave-8 :wave:
+- [[id:FEAT-639-pi-org-engine-broker-routed-edits-orgite::native-filter]] Native filter matcher
+- [[id:FEAT-640-memory-pipeline-retarget-stage1-stage2-e::router]] Update internal-urls router
+** wave-9 :wave:
+- [[id:FEAT-639-pi-org-engine-broker-routed-edits-orgite::ts-wrapper]] TS subscribe wrapper
+** wave-10 :wave:
+- [[id:FEAT-639-pi-org-engine-broker-routed-edits-orgite::subscribe-tests]] Write subscribe tests
+** File-level DAG
+*** Nodes
+- `FEAT-631-org-engine-relations-drawer-parser-and-o` Define EdgeKind enum and ItemId alias [ITEM]
+- `FEAT-632-org-engine-typed-edge-graph-traversal-ne` Define typed graph types [ITEM]
+- `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting` Add hnswlib-rs dependency [ITEM]
+- `FEAT-634-pi-org-recall-crate-scaffold-and-tantivy` Scaffold crate [ITEM]
+- `FEAT-635-pi-embedding-worker-org-concept-embed-ve` Audit and stabilize embedding worker verbs [ITEM]
+- `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion` Define recall types [ITEM]
+- `FEAT-637-executeorg-dispatch-recall-remember-time` Extend OrgCommand enum [ITEM]
+- `FEAT-638-pi-edit-broker-multiintent-multicommit-c` Define wire-protocol variants [ITEM]
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite` Define OrgItemPatch type [ITEM]
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e` Define new schemas [ITEM]
+- `FEAT-641-memory-storage-layout-dirs-gitignore-and` Helper functions [ITEM]
+- `FEAT-642-cross-repo-personal-store-id-link-resolu` Define multi-root locate [ITEM]
+*** Edges
+- None.
+** Subfeature-level DAG
+*** Nodes
+- `FEAT-631-org-engine-relations-drawer-parser-and-o::define-edge-kind` Define EdgeKind enum and ItemId alias [ITEM]
+- `FEAT-631-org-engine-relations-drawer-parser-and-o::extend-orgitem` Extend OrgItem with relations field [ITEM]
+- `FEAT-631-org-engine-relations-drawer-parser-and-o::parser-tests` Write parser tests [ITEM]
+- `FEAT-631-org-engine-relations-drawer-parser-and-o::implement-parser` Implement RELATIONS drawer parsing in buffer [ITEM]
+- `FEAT-631-org-engine-relations-drawer-parser-and-o::legacy-blockers` Synthesize legacy BLOCKERS into Blocks edges [ITEM]
+- `FEAT-631-org-engine-relations-drawer-parser-and-o::napi-bindings` Verify NAPI bindings regenerate with relations field [ITEM]
+- `FEAT-632-org-engine-typed-edge-graph-traversal-ne::types` Define typed graph types [ITEM]
+- `FEAT-632-org-engine-typed-edge-graph-traversal-ne::traversal-tests` Write traversal tests [ITEM]
+- `FEAT-632-org-engine-typed-edge-graph-traversal-ne::build` Implement build_typed_graph [ITEM]
+- `FEAT-632-org-engine-typed-edge-graph-traversal-ne::neighborhood` Implement neighborhood traversal [ITEM]
+- `FEAT-632-org-engine-typed-edge-graph-traversal-ne::timeline` Implement timeline [ITEM]
+- `FEAT-632-org-engine-typed-edge-graph-traversal-ne::path` Implement path [ITEM]
+- `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::dep` Add hnswlib-rs dependency [ITEM]
+- `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::format` Define container format constants [ITEM]
+- `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::error` Add IncompatibleIndexVersion error variant [ITEM]
+- `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::tests` Write HNSW tests [ITEM]
+- `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::impl` Reimplement VectorIndex around Hnsw [ITEM]
+- `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::downstream` Verify downstream callers [ITEM]
+- `FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::scaffold` Scaffold crate [ITEM]
+- `FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::schema` Define schema and tokenizer [ITEM]
+- `FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::tests` Write FTS tests [ITEM]
+- `FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::impl` Implement FtsIndex [ITEM]
+- `FEAT-635-pi-embedding-worker-org-concept-embed-ve::worker-verbs` Audit and stabilize embedding worker verbs [ITEM]
+- `FEAT-635-pi-embedding-worker-org-concept-embed-ve::trait` Define Embedder trait [ITEM]
+- `FEAT-635-pi-embedding-worker-org-concept-embed-ve::embedder-tests` Write embedder tests [ITEM]
+- `FEAT-635-pi-embedding-worker-org-concept-embed-ve::impl-embedder` Implement WorkerEmbedder [ITEM]
+- `FEAT-635-pi-embedding-worker-org-concept-embed-ve::impl-vec` Implement VecIndex [ITEM]
+- `FEAT-635-pi-embedding-worker-org-concept-embed-ve::vec-tests` Write vec tests [ITEM]
+- `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::types` Define recall types [ITEM]
+- `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::profiles` Define profile registry [ITEM]
+- `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::tests` Write recall tests [ITEM]
+- `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::rrf` Implement RRF fusion helper [ITEM]
+- `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::impl` Implement recall pipeline [ITEM]
+- `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::excerpt` Excerpt extraction [ITEM]
+- `FEAT-637-executeorg-dispatch-recall-remember-time::enum` Extend OrgCommand enum [ITEM]
+- `FEAT-637-executeorg-dispatch-recall-remember-time::dispatch` Implement Rust dispatch [ITEM]
+- `FEAT-637-executeorg-dispatch-recall-remember-time::bindings` Regenerate NAPI bindings [ITEM]
+- `FEAT-637-executeorg-dispatch-recall-remember-time::tool-tests` Write tool tests [ITEM]
+- `FEAT-637-executeorg-dispatch-recall-remember-time::tool-cases` Wire tool.ts cases [ITEM]
+- `FEAT-637-executeorg-dispatch-recall-remember-time::kdl-profiles` KDL profile loader [ITEM]
+- `FEAT-638-pi-edit-broker-multiintent-multicommit-c::protocol` Define wire-protocol variants [ITEM]
+- `FEAT-638-pi-edit-broker-multiintent-multicommit-c::journal` Define journal entries [ITEM]
+- `FEAT-638-pi-edit-broker-multiintent-multicommit-c::protocol-tests` Write protocol tests [ITEM]
+- `FEAT-638-pi-edit-broker-multiintent-multicommit-c::state` Implement state.rs txn registry [ITEM]
+- `FEAT-638-pi-edit-broker-multiintent-multicommit-c::handlers` Implement conn.rs handlers [ITEM]
+- `FEAT-638-pi-edit-broker-multiintent-multicommit-c::reaper` Implement reaper recovery [ITEM]
+- `FEAT-638-pi-edit-broker-multiintent-multicommit-c::client` Wire client API in pi-code-engine [ITEM]
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::patch-type` Define OrgItemPatch type [ITEM]
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::diff` Implement diff function [ITEM]
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::protocol-extend` Extend broker protocol with org_items [ITEM]
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::coord` Implement coord wrapper [ITEM]
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::route` Route org_buffer through coord [ITEM]
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::coord-tests` Write coord tests [ITEM]
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::subscribe` Implement subscribe op + registry [ITEM]
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::native-filter` Native filter matcher [ITEM]
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::ts-wrapper` TS subscribe wrapper [ITEM]
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::subscribe-tests` Write subscribe tests [ITEM]
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::schemas` Define new schemas [ITEM]
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::prompts` Update prompt templates [ITEM]
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::tests` Write pipeline tests [ITEM]
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::stage1` Rewrite stage1 path [ITEM]
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::stage2` Rewrite stage2 path [ITEM]
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::projection` Implement renderSessionStartSummary [ITEM]
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::delete-memory-md` Delete MEMORY.md write [ITEM]
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::router` Update internal-urls router [ITEM]
+- `FEAT-641-memory-storage-layout-dirs-gitignore-and::helpers` Helper functions [ITEM]
+- `FEAT-641-memory-storage-layout-dirs-gitignore-and::tests` Write storage tests [ITEM]
+- `FEAT-641-memory-storage-layout-dirs-gitignore-and::impl` Implement helpers [ITEM]
+- `FEAT-641-memory-storage-layout-dirs-gitignore-and::migrate` Migration helper [ITEM]
+- `FEAT-641-memory-storage-layout-dirs-gitignore-and::wire` Wire init into memories runtime [ITEM]
+- `FEAT-642-cross-repo-personal-store-id-link-resolu::locate` Define multi-root locate [ITEM]
+- `FEAT-642-cross-repo-personal-store-id-link-resolu::locate-tests` Write locate tests [ITEM]
+- `FEAT-642-cross-repo-personal-store-id-link-resolu::locate-impl` Implement multi-root locate [ITEM]
+- `FEAT-642-cross-repo-personal-store-id-link-resolu::personal-context` Personal recall context [ITEM]
+- `FEAT-642-cross-repo-personal-store-id-link-resolu::personal-tests` Write personal recall tests [ITEM]
+- `FEAT-642-cross-repo-personal-store-id-link-resolu::remember-scope` Wire executeOrg.remember scope [ITEM]
+- `FEAT-642-cross-repo-personal-store-id-link-resolu::settings` Settings + KDL flag [ITEM]
+*** Edges
+- `FEAT-631-org-engine-relations-drawer-parser-and-o::extend-orgitem` depends on `FEAT-631-org-engine-relations-drawer-parser-and-o::define-edge-kind`
+- `FEAT-631-org-engine-relations-drawer-parser-and-o::parser-tests` depends on `FEAT-631-org-engine-relations-drawer-parser-and-o::extend-orgitem`
+- `FEAT-631-org-engine-relations-drawer-parser-and-o::implement-parser` depends on `FEAT-631-org-engine-relations-drawer-parser-and-o::parser-tests`
+- `FEAT-631-org-engine-relations-drawer-parser-and-o::legacy-blockers` depends on `FEAT-631-org-engine-relations-drawer-parser-and-o::implement-parser`
+- `FEAT-631-org-engine-relations-drawer-parser-and-o::napi-bindings` depends on `FEAT-631-org-engine-relations-drawer-parser-and-o::legacy-blockers`
+- `FEAT-632-org-engine-typed-edge-graph-traversal-ne::traversal-tests` depends on `FEAT-632-org-engine-typed-edge-graph-traversal-ne::types`
+- `FEAT-632-org-engine-typed-edge-graph-traversal-ne::build` depends on `FEAT-632-org-engine-typed-edge-graph-traversal-ne::traversal-tests`
+- `FEAT-632-org-engine-typed-edge-graph-traversal-ne::neighborhood` depends on `FEAT-632-org-engine-typed-edge-graph-traversal-ne::build`
+- `FEAT-632-org-engine-typed-edge-graph-traversal-ne::timeline` depends on `FEAT-632-org-engine-typed-edge-graph-traversal-ne::build`
+- `FEAT-632-org-engine-typed-edge-graph-traversal-ne::path` depends on `FEAT-632-org-engine-typed-edge-graph-traversal-ne::neighborhood`
+- `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::format` depends on `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::dep`
+- `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::error` depends on `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::format`
+- `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::tests` depends on `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::error`
+- `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::impl` depends on `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::tests`
+- `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::downstream` depends on `FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::impl`
+- `FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::schema` depends on `FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::scaffold`
+- `FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::tests` depends on `FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::schema`
+- `FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::impl` depends on `FEAT-634-pi-org-recall-crate-scaffold-and-tantivy::tests`
+- `FEAT-635-pi-embedding-worker-org-concept-embed-ve::trait` depends on `FEAT-635-pi-embedding-worker-org-concept-embed-ve::worker-verbs`
+- `FEAT-635-pi-embedding-worker-org-concept-embed-ve::embedder-tests` depends on `FEAT-635-pi-embedding-worker-org-concept-embed-ve::trait`
+- `FEAT-635-pi-embedding-worker-org-concept-embed-ve::impl-embedder` depends on `FEAT-635-pi-embedding-worker-org-concept-embed-ve::embedder-tests`
+- `FEAT-635-pi-embedding-worker-org-concept-embed-ve::impl-vec` depends on `FEAT-635-pi-embedding-worker-org-concept-embed-ve::impl-embedder`
+- `FEAT-635-pi-embedding-worker-org-concept-embed-ve::vec-tests` depends on `FEAT-635-pi-embedding-worker-org-concept-embed-ve::impl-vec`
+- `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::profiles` depends on `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::types`
+- `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::tests` depends on `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::profiles`
+- `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::rrf` depends on `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::tests`
+- `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::impl` depends on `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::rrf`
+- `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::excerpt` depends on `FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::impl`
+- `FEAT-637-executeorg-dispatch-recall-remember-time::dispatch` depends on `FEAT-637-executeorg-dispatch-recall-remember-time::enum`
+- `FEAT-637-executeorg-dispatch-recall-remember-time::bindings` depends on `FEAT-637-executeorg-dispatch-recall-remember-time::dispatch`
+- `FEAT-637-executeorg-dispatch-recall-remember-time::tool-tests` depends on `FEAT-637-executeorg-dispatch-recall-remember-time::bindings`
+- `FEAT-637-executeorg-dispatch-recall-remember-time::tool-cases` depends on `FEAT-637-executeorg-dispatch-recall-remember-time::tool-tests`
+- `FEAT-637-executeorg-dispatch-recall-remember-time::kdl-profiles` depends on `FEAT-637-executeorg-dispatch-recall-remember-time::tool-cases`
+- `FEAT-638-pi-edit-broker-multiintent-multicommit-c::journal` depends on `FEAT-638-pi-edit-broker-multiintent-multicommit-c::protocol`
+- `FEAT-638-pi-edit-broker-multiintent-multicommit-c::protocol-tests` depends on `FEAT-638-pi-edit-broker-multiintent-multicommit-c::journal`
+- `FEAT-638-pi-edit-broker-multiintent-multicommit-c::state` depends on `FEAT-638-pi-edit-broker-multiintent-multicommit-c::protocol-tests`
+- `FEAT-638-pi-edit-broker-multiintent-multicommit-c::handlers` depends on `FEAT-638-pi-edit-broker-multiintent-multicommit-c::state`
+- `FEAT-638-pi-edit-broker-multiintent-multicommit-c::reaper` depends on `FEAT-638-pi-edit-broker-multiintent-multicommit-c::handlers`
+- `FEAT-638-pi-edit-broker-multiintent-multicommit-c::client` depends on `FEAT-638-pi-edit-broker-multiintent-multicommit-c::reaper`
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::diff` depends on `FEAT-639-pi-org-engine-broker-routed-edits-orgite::patch-type`
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::protocol-extend` depends on `FEAT-639-pi-org-engine-broker-routed-edits-orgite::diff`
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::coord` depends on `FEAT-639-pi-org-engine-broker-routed-edits-orgite::protocol-extend`
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::route` depends on `FEAT-639-pi-org-engine-broker-routed-edits-orgite::coord`
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::coord-tests` depends on `FEAT-639-pi-org-engine-broker-routed-edits-orgite::route`
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::subscribe` depends on `FEAT-639-pi-org-engine-broker-routed-edits-orgite::coord-tests`
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::native-filter` depends on `FEAT-639-pi-org-engine-broker-routed-edits-orgite::subscribe`
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::ts-wrapper` depends on `FEAT-639-pi-org-engine-broker-routed-edits-orgite::native-filter`
+- `FEAT-639-pi-org-engine-broker-routed-edits-orgite::subscribe-tests` depends on `FEAT-639-pi-org-engine-broker-routed-edits-orgite::ts-wrapper`
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::prompts` depends on `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::schemas`
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::tests` depends on `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::prompts`
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::stage1` depends on `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::tests`
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::stage2` depends on `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::stage1`
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::projection` depends on `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::stage2`
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::delete-memory-md` depends on `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::projection`
+- `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::router` depends on `FEAT-640-memory-pipeline-retarget-stage1-stage2-e::delete-memory-md`
+- `FEAT-641-memory-storage-layout-dirs-gitignore-and::tests` depends on `FEAT-641-memory-storage-layout-dirs-gitignore-and::helpers`
+- `FEAT-641-memory-storage-layout-dirs-gitignore-and::impl` depends on `FEAT-641-memory-storage-layout-dirs-gitignore-and::tests`
+- `FEAT-641-memory-storage-layout-dirs-gitignore-and::migrate` depends on `FEAT-641-memory-storage-layout-dirs-gitignore-and::impl`
+- `FEAT-641-memory-storage-layout-dirs-gitignore-and::wire` depends on `FEAT-641-memory-storage-layout-dirs-gitignore-and::migrate`
+- `FEAT-642-cross-repo-personal-store-id-link-resolu::locate-tests` depends on `FEAT-642-cross-repo-personal-store-id-link-resolu::locate`
+- `FEAT-642-cross-repo-personal-store-id-link-resolu::locate-impl` depends on `FEAT-642-cross-repo-personal-store-id-link-resolu::locate-tests`
+- `FEAT-642-cross-repo-personal-store-id-link-resolu::personal-context` depends on `FEAT-642-cross-repo-personal-store-id-link-resolu::locate-impl`
+- `FEAT-642-cross-repo-personal-store-id-link-resolu::personal-tests` depends on `FEAT-642-cross-repo-personal-store-id-link-resolu::personal-context`
+- `FEAT-642-cross-repo-personal-store-id-link-resolu::remember-scope` depends on `FEAT-642-cross-repo-personal-store-id-link-resolu::personal-tests`
+- `FEAT-642-cross-repo-personal-store-id-link-resolu::settings` depends on `FEAT-642-cross-repo-personal-store-id-link-resolu::remember-scope`
+

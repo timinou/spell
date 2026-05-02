@@ -1,0 +1,167 @@
+#+TITLE: pi-edit-broker MultiIntent MultiCommit cross-file atomic transaction protocol
+#+STATE: ITEM
+#+SESSION_ID: 14d1b3e1f7efd81d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
+#+CUSTOM_ID: FEAT-638-pi-edit-broker-multiintent-multicommit-c
+#+LAYER: native
+
+* Intention & Purpose
+
+Extend =pi-edit-broker= with cross-file atomic transactions:
+=MultiIntent=, =MultiCommit=, =MultiIntentAck=, =MultiCommitAck=,
+=MultiPeerCommitted=. All-or-nothing acquire on N files; staged commit
+via .tmp paths + atomic renames; crash recovery via the existing
+=pi-code-engine::coord::journal=. This unblocks =remember()= writes
+that touch both an episode file and a concept file in one transaction.
+
+* Context & Narrative
+
+Spec: =specs/org-graph-memory.md=. The broker today (=protocol.rs=,
+=server.rs=, =conn.rs=, =state.rs=) provides per-file =Intent=/=Commit=
+with =IntentConflict= / =CommitConflict= peer awareness. Consumers in
+=pi-code-engine::coord::socket= already use it. This FEAT layers a
+transaction id on top so an N-file edit either fully lands and emits
+=MultiPeerCommitted= or fully rolls back leaving no partial state.
+
+The journal infrastructure exists at =pi-code-engine/src/coord/journal.rs=
+(107 LOC). Extend it to record per-txn entries; the broker reaper
+already runs as a sibling task and will be enhanced to detect
+abandoned transactions.
+
+* Scope
+
+In scope:
+- =crates/pi-edit-broker/src/protocol.rs= — five new variant pairs (Multi*)
+- =crates/pi-edit-broker/src/state.rs= — txn registry: =HashMap<TxnId, TxnState { files, granted_intents, ttl, started_at }>=
+- =crates/pi-edit-broker/src/conn.rs= — handle MultiIntent (acquire-all-or-release-granted), MultiCommit (stage-and-rename), tied broadcasts
+- =crates/pi-edit-broker/src/reaper.rs= — abandoned-txn detection and rollback
+- =crates/pi-code-engine/src/coord/journal.rs= — txn journal entries
+- =crates/pi-code-engine/src/coord/socket.rs= — client API: =multi_intent(files)=, =multi_commit(files)=
+- Tests under =crates/pi-edit-broker/tests/multi_intent.rs= + =multi_commit.rs= + =multi_recovery.rs=
+
+Out of scope:
+- Org-side use of MultiIntent (FEAT-637 wires it from =remember=, =link=)
+- Cross-machine coordination (broker is single-host as today)
+
+* Existing Patterns
+
+- =protocol.rs= NDJSON discriminated union with =#[serde(tag = "type", rename_all = "snake_case")]=. Add new variants in the same enum.
+- =state.rs::BrokerState= already tracks =active_intents: HashMap<(SessionId, PathBuf, CodePath), IntentRecord>=. Extend with =active_txns: HashMap<TxnId, TxnState>=.
+- =reaper.rs= owns the =broadcast::Sender<BrokerEvent>=; reuse to fire =MultiPeerRolledBack= on abandoned txns.
+- =journal.rs= already serializes per-file commit log entries; add =JournalEntry::TxnStarted=, =TxnCommitted=, =TxnRolledBack= variants.
+- Atomic rename: =std::fs::rename= is atomic on same filesystem; document the same-fs precondition. Bun-side writers must observe this.
+
+* Tests
+
+File: =crates/pi-edit-broker/tests/multi_intent.rs=:
+
+1. =multi_intent_grants_when_all_free= — 2 files, no peer holds intents → MultiIntentAck { granted: true }
+2. =multi_intent_releases_partial_grants_on_conflict= — peer holds intent on file B; client requests {A,B} → MultiIntentAck { granted: false }, A is not held
+3. =multi_intent_ttl_expires_unclaimed_grants= — grant {A,B}, sleep past ttl, do not commit → both intents released
+4. =multi_intent_supersedes_existing_single_intent= — same client already holds single Intent on A, can include A in MultiIntent without self-conflict
+
+File: =crates/pi-edit-broker/tests/multi_commit.rs=:
+
+5. =multi_commit_atomically_renames_all_files= — 2 .tmp files exist, MultiCommit succeeds → both renamed, =MultiPeerCommitted= emitted
+6. =multi_commit_fails_if_any_tmp_missing= — only A.tmp exists; commit fails; A remains unchanged
+7. =multi_commit_emits_single_event_with_all_files= — MultiPeerCommitted contains both files in one message
+8. =multi_peer_committed_replays_in_welcome= — new peer connects after multi-commit; Welcome includes the txn as one record
+
+File: =crates/pi-edit-broker/tests/multi_recovery.rs=:
+
+9. =broker_restart_replays_complete_journal_entry= — journal has TxnStarted + TxnCommitted; restart broker; new clients see consistent state
+10. =broker_restart_rolls_back_incomplete_journal_entry= — TxnStarted but no TxnCommitted; restart deletes any orphan .tmp files matching that txn
+11. =broker_restart_handles_partial_rename= — A renamed, B still .tmp at crash; recovery rolls A back from journal-stored backup hash, deletes B.tmp; emits =MultiPeerRolledBack=
+
+* Implementation
+
+** ITEM Define wire-protocol variants
+:PROPERTIES:
+:CUSTOM_ID: FEAT-638-pi-edit-broker-multiintent-multicommit-c::protocol
+:END:
+- File: =crates/pi-edit-broker/src/protocol.rs=
+- =pub type TxnId = String= (ULID; client-minted)
+- =ClientMessage::MultiIntent { txn_id, files: Vec<FileIntent>, ttl_ms }=
+- =ClientMessage::MultiCommit { txn_id, files: Vec<FileCommit> }=
+- =ClientMessage::MultiAbort { txn_id }= (explicit rollback)
+- =ServerMessage::MultiIntentAck { txn_id, granted, conflicts: Vec<IntentConflict> }=
+- =ServerMessage::MultiCommitAck { txn_id, revisions: Vec<(PathBuf, u64)> }=
+- =ServerMessage::MultiPeerCommitted { txn_id, files: Vec<PeerCommittedFile>, ts }=
+- =ServerMessage::MultiPeerRolledBack { txn_id, files: Vec<PathBuf>, reason }=
+- =FileIntent { file, code_paths, base_revision }=, =FileCommit { file, code_paths, revision, parent_revision, diff_hash, byte_len }=
+
+** ITEM Define journal entries
+:PROPERTIES:
+:CUSTOM_ID: FEAT-638-pi-edit-broker-multiintent-multicommit-c::journal
+:DEPENDS: FEAT-638-pi-edit-broker-multiintent-multicommit-c::protocol
+:END:
+- File: =crates/pi-code-engine/src/coord/journal.rs=
+- =JournalEntry::TxnStarted { txn_id, files: Vec<(PathBuf, u64)>, started_at }= (parent revisions captured)
+- =JournalEntry::TxnCommitted { txn_id, files: Vec<(PathBuf, u64)>, ts }= (new revisions)
+- =JournalEntry::TxnRolledBack { txn_id, reason, ts }=
+- Append-only log file at =<cache>/edit-journal.log=
+- =fn replay() -> ReplayState= scans entries; returns sets of completed and incomplete txns
+
+** ITEM Write protocol tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-638-pi-edit-broker-multiintent-multicommit-c::protocol-tests
+:DEPENDS: FEAT-638-pi-edit-broker-multiintent-multicommit-c::journal
+:END:
+- File: =crates/pi-edit-broker/tests/multi_intent.rs= + =multi_commit.rs= + =multi_recovery.rs=
+- Implement scenarios 1–11 against a =TestBroker::start= harness (already exists in =tests/common/mod.rs=)
+
+** ITEM Implement state.rs txn registry
+:PROPERTIES:
+:CUSTOM_ID: FEAT-638-pi-edit-broker-multiintent-multicommit-c::state
+:DEPENDS: FEAT-638-pi-edit-broker-multiintent-multicommit-c::protocol-tests
+:END:
+- File: =crates/pi-edit-broker/src/state.rs=
+- =TxnState { session_id, files: Vec<FileIntent>, granted_at, ttl_ms }=
+- =fn try_grant_multi(state, txn_id, files, ttl) -> Result<(), Vec<IntentConflict>>= attempts to acquire all; on partial conflict, releases granted and returns the conflict list
+- =fn release_txn(state, txn_id)= drops all intents; emits no event
+
+** ITEM Implement conn.rs handlers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-638-pi-edit-broker-multiintent-multicommit-c::handlers
+:DEPENDS: FEAT-638-pi-edit-broker-multiintent-multicommit-c::state
+:END:
+- File: =crates/pi-edit-broker/src/conn.rs=
+- Handle =MultiIntent=: call =try_grant_multi=, write =JournalEntry::TxnStarted= on success, send =MultiIntentAck=
+- Handle =MultiCommit=: per-file rename (=writer.commit=), write =JournalEntry::TxnCommitted=, broadcast =MultiPeerCommitted=, release intents
+- Handle =MultiAbort=: write =TxnRolledBack=, release intents, delete .tmp files referenced by journal
+
+** ITEM Implement reaper recovery
+:PROPERTIES:
+:CUSTOM_ID: FEAT-638-pi-edit-broker-multiintent-multicommit-c::reaper
+:DEPENDS: FEAT-638-pi-edit-broker-multiintent-multicommit-c::handlers
+:END:
+- File: =crates/pi-edit-broker/src/reaper.rs= and =server.rs=
+- On startup: =journal.replay()= → for each incomplete txn, attempt rollback (delete .tmp files; if some files renamed, restore from backup hash)
+- TTL sweep: every 1s, expire stale =TxnState= entries (older than ttl_ms)
+
+** ITEM Wire client API in pi-code-engine
+:PROPERTIES:
+:CUSTOM_ID: FEAT-638-pi-edit-broker-multiintent-multicommit-c::client
+:DEPENDS: FEAT-638-pi-edit-broker-multiintent-multicommit-c::reaper
+:END:
+- File: =crates/pi-code-engine/src/coord/socket.rs= and =coord/client.rs=
+- =SocketCoordClient::multi_intent(txn_id, files) -> Result<MultiIntentAck>=
+- =SocketCoordClient::multi_commit(txn_id, files) -> Result<MultiCommitAck>=
+- =SocketCoordClient::multi_abort(txn_id)=
+
+* Edge Cases
+
+- TxnId collision (client mints same ULID twice): broker rejects with =MultiIntentAck { granted:false, conflicts:[{code:"DUP_TXN"}] }=
+- Cross-filesystem rename (.tmp on tmpfs, target on disk): document precondition; tooling stages .tmp in same directory as target
+- Disk full during second-of-two renames: detect, restore first from backup, journal as RolledBack
+- Broker crashes mid-rename: journal replays and matches actual fs state; if first rename succeeded, restore from hash backup
+- Two clients each open MultiIntent overlapping files in opposite order: classic lock-order deadlock impossible because grant is atomic (acquire-all-or-none)
+- TTL passes during commit: refuse commit, rollback; client must re-intent
+
+* Acceptance Criteria
+
+- =cargo test -p pi-edit-broker multi_intent multi_commit multi_recovery= passes 11/11
+- =cargo build -p pi-edit-broker -p pi-code-engine= clean
+- =bun check:rs= clean
+- Existing single-Intent / single-Commit tests unchanged (no regression)
+- Manual: kill broker mid-MultiCommit (=kill -9= the process); restart; .tmp orphans cleaned within 1 s

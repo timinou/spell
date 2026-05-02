@@ -1,0 +1,149 @@
+#+TITLE: pi-org-recall hybrid pipeline RRF fusion BM25 vector graph
+#+STATE: ITEM
+#+SESSION_ID: 14d1b3e1f7efd81d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
+#+CUSTOM_ID: FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion
+#+DEPENDS: FEAT-632-org-engine-typed-edge-graph-traversal-ne FEAT-634-pi-org-recall-crate-scaffold-and-tantivy FEAT-635-pi-embedding-worker-org-concept-embed-ve
+#+LAYER: native
+
+* Intention & Purpose
+
+Glue the three retrieval lanes (Tantivy BM25, HNSW vector, typed-graph
+neighborhood) into a single =recall(query)= entry point that returns a
+ranked Vec<RecallHit>. Fusion uses Reciprocal Rank Fusion (RRF) with
+default weights bm25=0.3, vector=0.5, graph=0.2 and K=60. This is the
+recall layer that =executeOrg::recall= (FEAT-637) and the
+session-start memory_summary projection (FEAT-640) consume.
+
+* Context & Narrative
+
+Spec: =specs/org-graph-memory.md=. RRF beats both pure-dense and
+pure-sparse on 60–80% of production hybrid-search benchmarks. Formula:
+=RRF(doc) = Σ 1 / (K + rank(doc, source) + 1)= summed across the BM25,
+vector, and graph rankings. Weights scale each source's contribution
+before the sum.
+
+Named profiles (e.g. ="session-start"=, ="priors-for-article"=) live in
+config (=spell.kdl= recall blocks, surfaced through the existing
+settings layer). For v1 the profile lookup is a string-keyed map
+loaded once per process; KDL parsing is unchanged from current behavior.
+
+* Scope
+
+In scope:
+- =crates/pi-org-recall/src/recall.rs= — pipeline + RRF fusion
+- Types: =RecallQuery=, =RecallHit=, =FusionWeights=, =RecallProfile=
+- Public fn =recall(query: RecallQuery, ctx: &RecallContext) -> Vec<RecallHit>= where =RecallContext= bundles =FtsIndex=, =VecIndex=, =Embedder=, =TypedGraph=, and the items snapshot
+- Profile registry: =RecallProfileRegistry= loaded from a static map (KDL parsing arrives as part of FEAT-637 when the ts side calls in)
+- Tests under =crates/pi-org-recall/tests/recall.rs=
+
+Out of scope:
+- KDL profile loading at the TS layer (FEAT-637 dispatch handles config plumbing)
+- Live re-index on file change (folded into FEAT-637 alongside subscribe)
+- Personal-store cross-repo merge (FEAT-642)
+
+* Existing Patterns
+
+- =FtsIndex::search= → Vec<(id, score)> exists from FEAT-634
+- =VecIndex::search= → Vec<(id, score)> exists from FEAT-635
+- =graph::neighborhood= → Subgraph exists from FEAT-632
+- Profiles: settings precedent from =packages/coding-agent/src/config/settings.ts= — but this crate stays config-agnostic; profile is a Rust struct passed in
+
+* Tests
+
+File: =crates/pi-org-recall/tests/recall.rs=:
+
+1. =fuses_three_lanes_with_rrf= — 5 docs, BM25 ranks [A,B,C], vector ranks [B,A,D], graph seeds {C,D}; weighted RRF produces a deterministic order with B first (appears high in 2/3 lanes)
+2. =bm25_only_when_vector_disabled= — weights {bm25:1, vector:0, graph:0} → ordering equals BM25
+3. =vector_only_when_bm25_disabled= — symmetric
+4. =graph_seed_only_when_text_empty= — query.text = None, focus = "X", graphHops=2 → returns subgraph members ranked by hop count
+5. =scope_filter_propagates_to_all_lanes= — scope=["concept"]: BM25 query passes kind filter, VecIndex lookup intersects scope, graph traversal pruned
+6. =limit_truncates_after_fusion= — limit=3 → returns 3 RecallHits
+7. =rrf_k_constant_default_60_and_overridable= — supplying K=10 changes scores measurably
+8. =empty_query_with_focus_works= — text=None, focus=Some(id) → graph-only result
+9. =empty_query_no_focus_returns_empty= — guards against pathological inputs
+10. =profile_lookup_resolves_named_profile= — RecallProfileRegistry returns expected weights for "session-start"
+11. =hit_includes_explanation_why= — RecallHit.why has bm25_rank/vector_rank/graph_seed populated for traceability
+
+* Implementation
+
+** ITEM Define recall types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::types
+:END:
+- File: =crates/pi-org-recall/src/recall.rs=
+- =pub struct RecallQuery { pub text: Option<String>, pub scope: Vec<String>, pub focus: Option<String>, pub graph_hops: u8, pub graph_kinds: Vec<EdgeKind>, pub limit: usize, pub weights: Option<FusionWeights>, pub profile: Option<String>, pub include_personal: bool }=
+- =pub struct FusionWeights { pub bm25: f32, pub vector: f32, pub graph: f32, pub k: f32 }=
+- =pub struct RecallHit { pub id: String, pub kind: String, pub score: f32, pub title: String, pub excerpt: Option<String>, pub path_from_focus: Option<Vec<String>>, pub why: WhyHit }=
+- =pub struct WhyHit { pub bm25_rank: Option<usize>, pub vector_rank: Option<usize>, pub graph_seed: bool, pub graph_hops_from_focus: Option<u8> }=
+- =pub struct RecallContext<'a> { pub items: &'a [OrgItem], pub fts: &'a FtsIndex, pub vec: &'a VecIndex, pub embedder: &'a dyn Embedder, pub graph: &'a TypedGraph }=
+
+** ITEM Define profile registry
+:PROPERTIES:
+:CUSTOM_ID: FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::profiles
+:DEPENDS: FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::types
+:END:
+- File: =crates/pi-org-recall/src/recall.rs=
+- =pub struct RecallProfileRegistry { profiles: HashMap<String, RecallProfile> }=
+- =pub struct RecallProfile { pub scope: Vec<String>, pub weights: FusionWeights, pub graph_hops: u8, pub graph_kinds: Vec<EdgeKind>, pub limit: usize }=
+- Default registry seeds =session-start= = {scope:[concept], weights:{bm25:0.0, vector:0.0, graph:0.0, k:60}, graph_hops:0, limit:12} (used by FEAT-640 template; recency/confidence weighting handled at TS layer)
+- Default seeds =priors= = {scope:[concept,episode], weights:{bm25:0.4, vector:0.5, graph:0.1, k:60}, graph_hops:1, limit:12}
+
+** ITEM Write recall tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::tests
+:DEPENDS: FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::profiles
+:END:
+- File: =crates/pi-org-recall/tests/recall.rs=
+- Implement all 11 scenarios using =MockEmbedder= and small in-memory item snapshots
+- Use deterministic test vectors so ordering assertions are stable
+
+** ITEM Implement RRF fusion helper
+:PROPERTIES:
+:CUSTOM_ID: FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::rrf
+:DEPENDS: FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::tests
+:END:
+- File: =crates/pi-org-recall/src/recall.rs=
+- =fn rrf(rankings: &[(f32, Vec<&str>)], k: f32) -> Vec<(String, f32)>= where the float is the lane weight
+- Per ranking entry: =score += weight / (k + rank as f32 + 1.0)=
+- Sort descending by score; return top items
+
+** ITEM Implement recall pipeline
+:PROPERTIES:
+:CUSTOM_ID: FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::impl
+:DEPENDS: FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::rrf
+:END:
+- File: =crates/pi-org-recall/src/recall.rs=
+- Resolve effective profile: =query.profile.and_then(registry.get).unwrap_or(default)=
+- Compute lanes:
+  - if text is Some and weight.bm25 > 0: =fts.search(text, scope, limit*3)= (over-fetch then RRF)
+  - if text is Some and weight.vector > 0: =embedder.embed_query(text)= → =vec.search(vec, limit*3)= (filter by scope post-hoc since VecIndex stores all)
+  - if focus is Some and weight.graph > 0: =graph::neighborhood(graph, focus, hops, kinds)= → seed list ordered by hop count ascending
+- Pass each lane's ordering through RRF; truncate to =query.limit=
+- Look up RecallHit fields (kind, title, excerpt) from items snapshot
+
+** ITEM Excerpt extraction
+:PROPERTIES:
+:CUSTOM_ID: FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::excerpt
+:DEPENDS: FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion::impl
+:END:
+- File: =crates/pi-org-recall/src/recall.rs=
+- For text-driven queries, extract a 200-char excerpt around the first matching token in the body
+- Tantivy =Snippet= API does this; reuse rather than hand-roll
+
+* Edge Cases
+
+- Empty BM25 hit set with non-empty vector: lane ranking is empty Vec; RRF skips it
+- Tied RRF scores: secondary sort by id ascending for determinism
+- Scope filter eliminates all candidates: return empty Vec, no error
+- Focus id not in graph: graph lane returns empty; if focus was the only lane, returns empty
+- Limit = 0: return empty Vec, no error
+- Embedder failure: lane returns empty; RRF degrades to BM25 + graph
+- Tantivy snippet failure: fall back to first 200 chars of body
+
+* Acceptance Criteria
+
+- =cargo test -p pi-org-recall recall= passes all 11 scenarios
+- =bun check:rs= clean
+- Determinism: a fixture-driven recall returns the same Vec<RecallHit> across two runs (no HashMap iteration leakage)
+- 200 ms budget at 10k items, hops=2: gated perf test under =cargo test --release -p pi-org-recall recall_perf -- --ignored=

@@ -11,6 +11,8 @@ pub enum Error {
 	Chunking(String),
 	#[error("Vector dimension mismatch: expected {expected}, got {actual}")]
 	DimensionMismatch { expected: usize, actual: usize },
+	#[error("incompatible vector index version: found {found}, expected {expected}")]
+	IncompatibleIndexVersion { found: String, expected: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -1,0 +1,174 @@
+#+TITLE: Memory pipeline retarget stage1 stage2 emit episodes concepts via remember and replace MEMORY.md projection
+#+STATE: ITEM
+#+SESSION_ID: 14d1b3e1f7efd81d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
+#+CUSTOM_ID: FEAT-640-memory-pipeline-retarget-stage1-stage2-e
+#+DEPENDS: FEAT-637-executeorg-dispatch-recall-remember-time
+#+LAYER: app
+
+* Intention & Purpose
+
+Rewrite the memory pipeline so stage 1 emits =episode= org items and
+stage 2 emits/updates =concept= org items, both via =executeOrg::remember=.
+Delete =MEMORY.md= writing entirely; replace =memory_summary.md=
+generation with a deterministic projection over the concept graph
+rendered through a Handlebars template. The =bun:sqlite= job queue at
+=packages/coding-agent/src/memories/storage.ts= stays — only its outputs
+change.
+
+* Context & Narrative
+
+Spec: =specs/org-graph-memory.md=. Today =applyConsolidation=
+(=memories/index.ts:928,929=) writes =MEMORY.md= and =memory_summary.md=
+from an LLM blob; =MEMORY.org= is opt-in when the LLM emits structured
+=memory_entries= (line 943). After this FEAT:
+
+- Stage 1 (per-rollout extraction) emits =memory_entries=; each entry
+  becomes one episode item under =<repo>/.spell/memory/episodes/<YYYY-MM-DD>.org=
+  via =remember({ kind: "episode", ... })=.
+- Stage 2 (cross-rollout consolidation) dedupes via vector cosim ≥ 0.92
+  using the recall vector lane; new or updated concept items written via
+  =remember({ kind: "concept", distilled_from: [...] })=.
+- =MEMORY.md= writing is deleted from =applyConsolidation=.
+- =memory_summary.md= is regenerated on every consolidation as a deterministic
+  projection: =recall({ profile: "session-start", scope: ["concept"], limit: 12 })=
+  rendered through =packages/coding-agent/src/prompts/memories/session-start.md.hbs=.
+- Existing =memory://root/memory_summary.md= URL keeps resolving.
+
+* Scope
+
+In scope:
+- =packages/coding-agent/src/memories/index.ts= rewritten:
+  - Stage 1 output schema =Stage1OutputSchema= replaced with =MemoryEntriesSchema { entries: Array<{ summary, kind_tag, confidence, involves, about, produced }> }=
+  - =applyConsolidation= no longer writes =MEMORY.md=; instead loops over =concept_entries= calling =executeOrg.remember=
+  - New helper =renderSessionStartSummary(repoRoot)= renders the projection
+- New file =packages/coding-agent/src/prompts/memories/session-start.md.hbs= (Handlebars template)
+- =packages/coding-agent/src/prompts/memories/consolidation.md= updated: schema reflects =concept_entries=, =memory_summary= prose blob removed
+- =packages/coding-agent/src/prompts/memories/stage_one_input.md= and =stage_one_system.md= updated to request structured =memory_entries=
+- One-time migration in =cleanupConsolidatedArtifacts= deletes any pre-existing =MEMORY.md=
+- Tests under =packages/coding-agent/test/memories/pipeline.test.ts=
+
+Out of scope:
+- Storage layout & .gitignore (FEAT-641)
+- Cross-repo personal store interaction (FEAT-642)
+- Existing job queue schema (storage.ts is unchanged at the SQL level)
+
+* Existing Patterns
+
+- Handlebars rendering: =packages/coding-agent/src/config/prompt-templates.ts= already exposes =renderPromptTemplate=. Reuse.
+- Bun text imports: per AGENTS.md, =import sessionStartTemplate from "./session-start.md.hbs" with { type: "text" }=
+- =Effort= / =Model= / =completeSimple= already in use in =index.ts= — no new pi-ai work
+- =serializeMemoryFile= from =@oh-my-pi/pi-org= currently builds the optional MEMORY.org. After this FEAT it is replaced by direct =remember= calls and can be removed if no other caller exists (verify via grep before delete)
+
+* Tests
+
+File: =packages/coding-agent/test/memories/pipeline.test.ts=:
+
+1. =stage1_emits_one_episode_per_memory_entry= — stage 1 with 3 entries → 3 level-2 items appear under today's episodes file with PROPERTIES :KIND: episode and :SOURCE_SESSION:
+2. =stage1_skips_when_zero_entries= — empty entries → no remember calls, no file created
+3. =stage2_dedup_at_cosim_above_0_92= — two near-identical entries from different rollouts → second creates a SUPERSEDES edge to the first, no duplicate concept
+4. =stage2_creates_distilled_from_edges= — concept emitted from 3 episodes → relations contains 3 DISTILLED_FROM lines
+5. =memory_md_no_longer_written= — assert no =MEMORY.md= file created during consolidation
+6. =memory_summary_md_is_projection= — after consolidation, =memory_summary.md= contains rendered template; field count matches recall result count
+7. =session_start_summary_idempotent= — calling =renderSessionStartSummary= twice produces byte-identical output (deterministic)
+8. =legacy_memory_md_deleted_on_first_run= — pre-existing =MEMORY.md= removed by =cleanupConsolidatedArtifacts=
+9. =memory_protocol_url_resolves_to_summary= — =memory://root/memory_summary.md= still resolves via existing router
+10. =confidence_default_when_absent= — entry without confidence field gets default :CONFIDENCE: 0.6 in PROPERTIES
+11. =stage1_handles_remember_failure= — if =executeOrg.remember= throws, the job is marked failed in jobs table for retry (existing semantics)
+12. =supersedes_chain_capped_at_3_levels= — long supersedes chain trims older versions to a max of 3 (regression cap)
+
+* Implementation
+
+** ITEM Define new schemas
+:PROPERTIES:
+:CUSTOM_ID: FEAT-640-memory-pipeline-retarget-stage1-stage2-e::schemas
+:END:
+- File: =packages/coding-agent/src/memories/index.ts=
+- Replace =Stage1OutputSchema= with =MemoryEntriesSchema=
+- Replace =ConsolidationOutputSchema.memoryMd / memory_summary= with =concept_entries=
+
+** ITEM Update prompt templates
+:PROPERTIES:
+:CUSTOM_ID: FEAT-640-memory-pipeline-retarget-stage1-stage2-e::prompts
+:DEPENDS: FEAT-640-memory-pipeline-retarget-stage1-stage2-e::schemas
+:END:
+- Files: =packages/coding-agent/src/prompts/memories/{stage_one_system,stage_one_input,consolidation}.md=
+- Schema doc inside the prompts updated to match new shape
+- File: =packages/coding-agent/src/prompts/memories/session-start.md.hbs= (new) — projection template; consumes =hits= array with title/excerpt/score; renders a compact ranked list
+
+** ITEM Write pipeline tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-640-memory-pipeline-retarget-stage1-stage2-e::tests
+:DEPENDS: FEAT-640-memory-pipeline-retarget-stage1-stage2-e::prompts
+:END:
+- File: =packages/coding-agent/test/memories/pipeline.test.ts=
+- Implement scenarios 1–12; mock the LLM via the existing test fixtures pattern (search =memories= test fixtures for precedent)
+
+** ITEM Rewrite stage1 path
+:PROPERTIES:
+:CUSTOM_ID: FEAT-640-memory-pipeline-retarget-stage1-stage2-e::stage1
+:DEPENDS: FEAT-640-memory-pipeline-retarget-stage1-stage2-e::tests
+:END:
+- File: =packages/coding-agent/src/memories/index.ts=
+- After LLM returns =MemoryEntries=, loop entries → call =executeOrg.remember({ kind: "episode", summary, involves, about, produced, payload: { confidence, kind_tag } })=
+- Persist sourceSession id in the episode's =:SOURCE_SESSION:= property via =remember=
+
+** ITEM Rewrite stage2 path
+:PROPERTIES:
+:CUSTOM_ID: FEAT-640-memory-pipeline-retarget-stage1-stage2-e::stage2
+:DEPENDS: FEAT-640-memory-pipeline-retarget-stage1-stage2-e::stage1
+:END:
+- File: =packages/coding-agent/src/memories/index.ts=
+- For each =concept_entry=:
+  - call =executeOrg.recall({ text: entry.summary, scope: ["concept"], limit: 1, weights: { vector: 1, bm25: 0, graph: 0 } })=
+  - if top hit cosim ≥ 0.92: =remember({ kind: "concept", id_hint: existing_id, supersedes: [existing_id], distilled_from: source_episode_ids })= (creates a new concept revision linked via SUPERSEDES)
+  - else: =remember({ kind: "concept", distilled_from: source_episode_ids })=
+- Cap supersedes chain depth at 3 (oldest pruned)
+
+** ITEM Implement renderSessionStartSummary
+:PROPERTIES:
+:CUSTOM_ID: FEAT-640-memory-pipeline-retarget-stage1-stage2-e::projection
+:DEPENDS: FEAT-640-memory-pipeline-retarget-stage1-stage2-e::stage2
+:END:
+- File: =packages/coding-agent/src/memories/index.ts=
+- =async function renderSessionStartSummary(repoRoot: string): Promise<string>=
+- =const recall = await executeOrg({ command: "recall", profile: "session-start", scope: ["concept"], limit: 12 })=
+- =const active = await executeOrg({ command: "query", todo: ["DOING", "TODO"], limit: 5 })=
+- =const recent = await executeOrg({ command: "query", kind: "episode", dateRange: { from: "-1d" }, limit: 3 })=
+- Render via =renderPromptTemplate(sessionStartTemplate, { hits, active, recent })=
+- Write to =<repoRoot>/.spell/memory/cache/memory_summary.md=
+
+** ITEM Delete MEMORY.md write
+:PROPERTIES:
+:CUSTOM_ID: FEAT-640-memory-pipeline-retarget-stage1-stage2-e::delete-memory-md
+:DEPENDS: FEAT-640-memory-pipeline-retarget-stage1-stage2-e::projection
+:END:
+- File: =packages/coding-agent/src/memories/index.ts=
+- Remove =Bun.write(...MEMORY.md...)= line (currently 928)
+- Update =cleanupConsolidatedArtifacts= to delete legacy =MEMORY.md= once via =fs.rm=
+
+** ITEM Update internal-urls router
+:PROPERTIES:
+:CUSTOM_ID: FEAT-640-memory-pipeline-retarget-stage1-stage2-e::router
+:DEPENDS: FEAT-640-memory-pipeline-retarget-stage1-stage2-e::delete-memory-md
+:END:
+- File: =packages/coding-agent/src/internal-urls/memory-protocol.ts=
+- Adjust =DEFAULT_MEMORY_FILE= path to =cache/memory_summary.md=
+- Keep =memory://root/memory_summary.md= resolving (already does; just relocate)
+
+* Edge Cases
+
+- Stage 1 schema regression: LLM emits old MEMORY.md format → schema validation fails; job marked failed-for-retry; logged warning
+- Concept dedup ties at exactly 0.92: tie-break by id ascending for determinism
+- =renderSessionStartSummary= when no concepts exist yet: render an empty-but-valid summary with a short greeting
+- Repo without =.spell/memory/= dir: =FEAT-641= handles creation; this FEAT calls =executeOrg.remember= which delegates layout to FEAT-641
+- Supersedes-chain pruning races with active subscribers reading old concept: subscribers see a Deleted patch for the trimmed item; UI must handle gracefully
+- Migration: pre-existing =MEMORY.org= still works (read by recall as concept items if it parses); not deleted by this FEAT
+
+* Acceptance Criteria
+
+- =bun test packages/coding-agent/test/memories/pipeline.test.ts= passes 12/12
+- =bun check:ts= clean
+- Manual: run a session, trigger consolidation, verify =<repo>/.spell/memory/episodes/<today>.org= contains episode items, =<repo>/.spell/memory/concepts/= contains concept files, =<repo>/.spell/memory/cache/memory_summary.md= is regenerated and starts with the template-rendered top concept
+- Manual: =memory://root/memory_summary.md= URL still resolves and matches the file content
+- Grep: =rg "Bun.write.*MEMORY.md"= returns nothing (proof of deletion)

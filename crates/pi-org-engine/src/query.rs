@@ -411,6 +411,7 @@ mod tests {
 			clocks: Vec::new(),
 			byte_range: (0, 0),
 			children: Vec::new(),
+			relations: Vec::new(),
 		}
 	}
 }

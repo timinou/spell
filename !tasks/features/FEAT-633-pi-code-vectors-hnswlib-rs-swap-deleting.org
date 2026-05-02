@@ -1,0 +1,142 @@
+#+TITLE: pi-code-vectors hnswlib-rs swap deleting flat brute force search
+#+STATE: ITEM
+#+SESSION_ID: 14d1b3e1f7efd81d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
+#+CUSTOM_ID: FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting
+#+LAYER: native
+
+* Intention & Purpose
+
+Replace =pi-code-vectors::VectorIndex= flat brute-force scan with HNSW
+ANN via the =hnswlib-rs= crate. Same external API (=new=, =search=,
+=to_persisted=, =from_persisted=). Persistence becomes graph-bin +
+vectors-bin in one container file. Flat code path is deleted (per
+settled decision). Existing call sites in =pi-natives::code_graph= and
+=pi-code-graph= must continue to work unchanged.
+
+* Context & Narrative
+
+Spec: =specs/org-graph-memory.md=. Today =index.rs= implements
+=search()= as a linear scan with full sort: O(n × d) per query. At 10k
+× 768-dim that is ~7 ms; at 100k+ it becomes the recall bottleneck.
+=hnswlib-rs= (jean-pierreBoth, January 2026, 2024 edition, ~70 KiB SLoC)
+provides decoupled graph + vector store: =Hnsw<NodeId, M>= owns the
+graph; the caller supplies a =VectorStore= keyed by =NodeId=. =save_to=
+/ =load_from= persist via std::io and bincode.
+
+This FEAT is a self-contained crate refactor; downstream FEAT-635 uses
+the new index from the embedding worker, FEAT-634 scaffolds the recall
+crate that wraps it.
+
+* Scope
+
+In scope:
+- =crates/pi-code-vectors/Cargo.toml=: add =hnswlib-rs= dep, keep =bincode=, =serde=, =fastembed=
+- =crates/pi-code-vectors/src/index.rs=: rewrite =VectorIndex= around an =Hnsw= core + an in-memory =VectorStore=
+- Container format: single file, header magic =SPELL_VEC_V2= followed by =[vec_len: u64][graph_blob][store_blob]=. Old flat-format files are detected by a different magic and rejected with a clear migration error
+- Tests under =crates/pi-code-vectors/tests/hnsw.rs= (existing flat tests in =index.rs= replaced)
+- Verify existing callers compile and pass: =crates/pi-natives/src/code_graph.rs=, =crates/pi-code-graph/src/=
+
+Out of scope:
+- New API verbs (everything stays the same surface)
+- Disk-backed (LMDB) variant — single =.bin= dump is enough for v1; if a future workload needs >10M entries we add =hannoy= behind the same trait
+- Org-side wiring (FEAT-634 / FEAT-636 handle that)
+
+* Existing Patterns
+
+- Persisted format precedent: =index.rs::PersistedVectorIndex= already uses serde + bincode. Keep the wrapper struct; only the inner blob format changes.
+- =VectorEntry { node_index, vector }= shape stays; pre-normalization stays (HNSW cosine distance benefits from it).
+- Error type: =crate::error::Error= already enumerates =DimensionMismatch=; add =Error::IncompatibleIndexVersion= for legacy detection.
+- Build settings: =hnswlib-rs= is pure Rust, no FFI; no changes to =build.rs=.
+
+* Tests
+
+File: =crates/pi-code-vectors/tests/hnsw.rs=. Initially-failing scenarios:
+
+1. =knn_returns_top_k_on_synthetic_clusters= — 100 vectors in 5 gaussian clusters, query at cluster center → top-5 hits all from that cluster (recall@5 = 1.0)
+2. =knn_recall_at_10k_above_0_95= — generate 10k random unit vectors, brute-force ground truth, HNSW recall@10 must be ≥ 0.95
+3. =persistence_round_trip= — build index, =to_persisted= → bytes → =from_persisted= → search returns identical hits
+4. =legacy_format_rejected_with_migration_error= — supply bytes with old =SPELL_VEC_V1= magic → =Error::IncompatibleIndexVersion=
+5. =empty_index_returns_empty_hits= — =search()= on zero-entry index returns empty Vec, no error
+6. =dimension_mismatch_errors= — query vector with wrong dim → =Error::DimensionMismatch=
+7. =concurrent_search_is_safe= — spawn 8 threads, each calling =search()=, all return without panic (=Hnsw= is Sync)
+8. =build_under_5s_at_50k= — 50k × 768-dim build under 5 seconds (gated behind =#[ignore]= or a =cargo test --release= flag); runs in CI nightly only
+9. =single_thread_query_under_10ms_at_100k= — release-mode bench gated test
+10. =node_index_remapping_via_external_keys= — caller provides arbitrary =node_index: usize= values → =VectorSearchHit.node_index= equals the original
+
+* Implementation
+
+** ITEM Add hnswlib-rs dependency
+:PROPERTIES:
+:CUSTOM_ID: FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::dep
+:END:
+- File: =crates/pi-code-vectors/Cargo.toml=
+- Add =hnswlib-rs = "0.3"= (or current crates.io version pinned)
+- =bun check:rs= must remain clean
+
+** ITEM Define container format constants
+:PROPERTIES:
+:CUSTOM_ID: FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::format
+:DEPENDS: FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::dep
+:END:
+- File: =crates/pi-code-vectors/src/index.rs=
+- =const MAGIC_V2: &[u8; 12] = b"SPELL_VEC_V2";=
+- =const MAGIC_V1: &[u8; 12] = b"SPELL_VEC_V1";= (legacy detect)
+- Header layout: =[12-byte magic][u32 dim][u64 entry_count]= followed by =[graph_blob: hnsw save_to bytes][store_blob: bincode Vec<VectorEntry>]=
+
+** ITEM Add IncompatibleIndexVersion error variant
+:PROPERTIES:
+:CUSTOM_ID: FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::error
+:DEPENDS: FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::format
+:END:
+- File: =crates/pi-code-vectors/src/error.rs=
+- =Error::IncompatibleIndexVersion { found: String, expected: String }=
+
+** ITEM Write HNSW tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::tests
+:DEPENDS: FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::error
+:END:
+- File: =crates/pi-code-vectors/tests/hnsw.rs=
+- Implement all 10 scenarios; gate perf tests with =#[ignore]=
+
+** ITEM Reimplement VectorIndex around Hnsw
+:PROPERTIES:
+:CUSTOM_ID: FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::impl
+:DEPENDS: FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::tests
+:END:
+- File: =crates/pi-code-vectors/src/index.rs=
+- =pub struct VectorIndex { hnsw: Hnsw<NodeId, hnswlib_rs::Cosine>, store: HashMap<NodeId, Vec<f32>>, dim: usize }=
+- =VectorIndex::new(entries, dim)= inserts each entry into the Hnsw with =M=16, ef_construction=200= (defaults; tunable via env)
+- =search(query, limit)= calls =hnsw.search(&store, &query_norm, limit)=
+- =to_persisted= writes header + =hnsw.save_to= + bincode store
+- =from_persisted= reads header, validates magic, restores both halves
+- Pre-normalize vectors before insert and before query (cosine on unit vectors = dot product, fastest)
+
+** ITEM Verify downstream callers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::downstream
+:DEPENDS: FEAT-633-pi-code-vectors-hnswlib-rs-swap-deleting::impl
+:END:
+- =cargo build -p pi-code-graph= clean
+- =cargo build -p pi-natives= clean
+- =cargo test -p pi-natives code_graph::vector= existing test suite passes
+- If a callsite passed a slice that relied on flat-scan ordering, surface that and update the call
+
+* Edge Cases
+
+- Single-entry index: HNSW with one node still works; search returns that one hit
+- All-zero vector: pre-normalize step would divide by zero. Detect ‖v‖ < 1e-9 → push as a sentinel zero-vector and skip normalization; document
+- Persisted bytes truncated mid-graph-blob: serde error surfaces; caller drops the index and rebuilds from entries
+- Index built with one M, queried after format change: header includes M; mismatch is treated as IncompatibleIndexVersion
+- Crash during =to_persisted=: write to =foo.bin.tmp= then atomic rename. Recovery on next load: missing =foo.bin= is fine, rebuild from source
+- =hnswlib-rs= panic on degenerate input: wrap inserts in =catch_unwind= and convert to =Error::Build=
+
+* Acceptance Criteria
+
+- =cargo test -p pi-code-vectors= passes all 10 new scenarios + existing tests; =recall@10 ≥ 0.95= on 10k random vectors
+- =cargo build --release -p pi-code-vectors= completes without warnings
+- =bun check:rs= clean
+- =cargo test -p pi-natives= passes (downstream consumer untouched)
+- =cargo test -p pi-code-graph= passes
+- New container format file is exactly bytes-equal across two save/load cycles (deterministic)
