@@ -28,6 +28,35 @@ export interface OrgBufferOptions {
 	value?: string;
 	root?: string;
 	categories?: Array<{ absPath: string; name: string; dir: string; prefix?: string }>;
+	// recall
+	text?: string;
+	scope?: string[];
+	focus?: string;
+	graphHops?: number;
+	graphKinds?: string[];
+	limit?: number;
+	weights?: Record<string, number>;
+	profile?: string;
+	includePersonal?: boolean;
+	repoRoot?: string;
+	// remember
+	kind?: string;
+	summary?: string;
+	involves?: string[];
+	about?: string[];
+	produced?: string[];
+	distilledFrom?: string[];
+	supersedes?: string[];
+	// timeline
+	target?: string;
+	// subgraph
+	hops?: number;
+	kinds?: string[];
+	// link
+	from?: string;
+	to?: string;
+	// payload (remember)
+	payload?: unknown;
 }
 
 export interface OrgDagEdge {
