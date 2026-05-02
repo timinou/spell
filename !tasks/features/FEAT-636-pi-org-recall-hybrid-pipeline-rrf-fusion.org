@@ -1,5 +1,5 @@
 #+TITLE: pi-org-recall hybrid pipeline RRF fusion BM25 vector graph
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d1b3e1f7efd81d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
 #+CUSTOM_ID: FEAT-636-pi-org-recall-hybrid-pipeline-rrf-fusion
@@ -147,3 +147,5 @@ File: =crates/pi-org-recall/tests/recall.rs=:
 - =bun check:rs= clean
 - Determinism: a fixture-driven recall returns the same Vec<RecallHit> across two runs (no HashMap iteration leakage)
 - 200 ms budget at 10k items, hops=2: gated perf test under =cargo test --release -p pi-org-recall recall_perf -- --ignored=
+
+NOTE [2026-05-02]: Landed: RRF fusion (k=60) over BM25 + vector + graph lanes; RecallProfile registry; 15 recall tests pass.

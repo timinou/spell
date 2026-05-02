@@ -1,5 +1,5 @@
 #+TITLE: Org engine typed-edge graph traversal neighborhood timeline path
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d1b3e1f7efd81d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
 #+CUSTOM_ID: FEAT-632-org-engine-typed-edge-graph-traversal-ne
@@ -139,3 +139,5 @@ File: =crates/pi-org-engine/tests/graph_typed.rs=. Initially-failing scenarios:
 - =bun check:rs= clean
 - Existing =graph::query=, =compute_waves=, =next_wave= public APIs unchanged; =cargo test -p pi-org-engine= passes the full suite
 - =build_typed_graph= for 10k items in under 50 ms (instrumented bench under =cargo bench -p pi-org-engine= or a =#[ignore]=-gated perf test)
+
+NOTE [2026-05-02]: Landed: TypedGraph + neighborhood/timeline/path; 12 tests pass. Existing query/compute_waves/next_wave/Dag APIs unchanged.

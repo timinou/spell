@@ -1,5 +1,5 @@
 #+TITLE: pi-embedding-worker org concept embed verbs and recall client wrapper
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d1b3e1f7efd81d
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-02T16-51-31-423Z_14d1b3e1f7efd81d.jsonl]]
 #+CUSTOM_ID: FEAT-635-pi-embedding-worker-org-concept-embed-ve
@@ -148,3 +148,5 @@ Non-gated tests (mock embedder):
 - =bun check:rs= clean
 - =cargo bench --bench embed_batch -p pi-org-recall= (if bench added) shows batch is ≥ 5x faster than serial =embed_query=
 - =VecIndex= persistence file under 100 MB for 50k entries × 768-dim (≈153 MB for vectors alone — consider quantization in a follow-up if it bites; document)
+
+NOTE [2026-05-02]: Landed: Embedder trait + WorkerEmbedder (vendored JSON-RPC client) + MockEmbedder + VecIndex; 11 mock tests pass. Real worker test gated by feature flag, deferred.

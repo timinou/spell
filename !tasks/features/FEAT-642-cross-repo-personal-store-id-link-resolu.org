@@ -157,3 +157,5 @@ File: =packages/org/test/personal-flag.test.ts=:
 - =bun test packages/org/test/personal-flag.test.ts= passes 2/2
 - =bun check:rs= and =bun check:ts= clean
 - Manual: create =~/.spell/personal/concepts/test-cross-repo.org= with id =CON-test-cross-repo=; from any repo, =org recall { text: "cross repo" }= returns it; =org graph { root: "CON-test-cross-repo" }= resolves
+
+NOTE [2026-05-02]: PARTIAL [2026-05-02]: MultiRootIndex (4 tests) + DualContext + recall_dual (5 tests) landed. RememberArgs.scope=personal wiring + recall.includePersonal KDL/settings flag + personal-flag TS tests deferred.
