@@ -10,9 +10,7 @@ mock.module("@oh-my-pi/pi-natives", () => ({
 	executeOrg: mockExecuteOrg,
 }));
 
-const { renderSessionStartSummary } = await import(
-	"../../src/memories/projection"
-);
+const { renderSessionStartSummary } = await import("../../src/memories/projection");
 
 async function tmpDir(): Promise<string> {
 	return fs.mkdtemp(path.join(os.tmpdir(), "spell-proj-"));
@@ -38,9 +36,7 @@ describe("renderSessionStartSummary", () => {
 				return {
 					error: false,
 					output: {
-						items: [
-							{ id: "e1", title: "Refactored auth module" },
-						],
+						items: [{ id: "e1", title: "Refactored auth module" }],
 					},
 				};
 			}
@@ -84,9 +80,7 @@ describe("renderSessionStartSummary", () => {
 				return {
 					error: false,
 					output: {
-						hits: [
-							{ id: "c1", title: "Rust patterns", score: 0.92, excerpt: "common Rust patterns" },
-						],
+						hits: [{ id: "c1", title: "Rust patterns", score: 0.92, excerpt: "common Rust patterns" }],
 					},
 				};
 			}
@@ -100,9 +94,7 @@ describe("renderSessionStartSummary", () => {
 				return {
 					error: false,
 					output: {
-						items: [
-							{ id: "w1", title: "Implement dual recall", state: "DOING" },
-						],
+						items: [{ id: "w1", title: "Implement dual recall", state: "DOING" }],
 					},
 				};
 			}

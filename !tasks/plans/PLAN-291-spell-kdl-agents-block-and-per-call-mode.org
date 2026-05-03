@@ -1,0 +1,175 @@
+#+TITLE: spell.kdl agents block and per-call model overrides
+#+STATE: ITEM
+#+SESSION_ID: 14d27f187b617f71
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T07-39-22-477Z_14d27f187b617f71.jsonl]]
+#+CUSTOM_ID: PLAN-291-spell-kdl-agents-block-and-per-call-mode
+#+LAYER: tools
+
+* Initial Message
+
+I want to customise the TASK tool even further. Look at how subagents are currently being launched and how I could e.g. assign all explore agents to a specific model. I think there's something around kdl policies about this somewhere?
+
+[[id:FEAT-643-land-kdl-config-branch-on-current-main]]
+[[id:FEAT-644-spell-kdl-agents-block-parser-and-select]]
+[[id:FEAT-645-per-call-model-override-in-taskitem-sche]]
+[[id:FEAT-646-unified-agent-config-resolver-for-taskto]]
+[[id:FEAT-647-agent-dashboard-surfaces-effective-rules]]
+[[id:FEAT-648-documentation-and-template-updates-for-a]]
+
+* Context
+
+** Goal
+Extend task tool customisation so users can declaratively assign models (and other defaults) to groups of agents (e.g. "all explore agents → anthropic/claude-haiku-4-5") via `spell.kdl`, plus expose a per-call `model` override on the task tool's JSON schema so a calling agent can pick a model for a single dispatch.
+
+** Background (from planning session)
+- Today's only override surfaces are settings DB (`task.agentModelOverrides[name]` exact-name only, `task.disabledAgents[]`) and bundled/user agent markdown frontmatter (`model:`, `thinkingLevel:`, `tools:`).
+- `spell.kdl` currently parses only `domain`, `import`, `layer`, `policy`. The `policy` node configures org-item layer gates — orthogonal to subagent dispatch.
+- A separate branch worktree `/home/user/code/ora/spell_kdl-config` already migrated the full settings system into `spell.kdl` form: `loadUserSpellKdl`, `mergeSpellConfigs(user, project)`, `kdlDocumentToSettings`, plus `tasks { }`, `keybindings { }`, `modes { }`, `providers { }` blocks. That branch's last main merge is `e0aa813bd`; current main HEAD at planning time is `5987345a4`. Branch is +13k/-42k versus main across 564 files.
+
+** Settled decisions
+1. Two-phase delivery: rebase/merge `spell_kdl-config` config-only diff onto main first (FEAT-643), then add `agents { }` selector layer on top (FEAT-644…648). Branch's task/scheduler refactors are NOT in scope — config layer only.
+2. Selector forms: positional bare-string argument on each `rule`. Auto-detect: contains `*` or `?` → glob; otherwise exact match. Wildcards: `*`, `?`.
+3. Specificity (highest → lowest): exact > prefix-glob (`name*`) > suffix-glob (`*name`) > infix (`*name*`) > catch-all (`*`).
+4. Tie-breaker: same-specificity ties resolve by last-declared. Conflicts surface as `agentRuleConflicts` on TaskToolDetails and as a yellow warning in the `/agents` dashboard inspector.
+5. Config home: project `spell.kdl` (cwd) + user `~/.spell/spell.kdl`. Project rules merge after user → project wins ties.
+6. Resolution precedence (highest → lowest): per-call task `model` > per-call batch `model` > project spell.kdl rule > user spell.kdl rule > settings DB (`task.agentModelOverrides[name]` retained as escape hatch) > frontmatter `model:` > role alias > parent active model.
+7. v1 rule keys: `model`, `thinking-level`, `tools` (replace, not append), `disabled` (boolean). v2 deferred to FUPs: `spawns`, `prepend-tools`, `append-tools`, parent-context-aware rules.
+8. v1 per-call shape: `model: string` per task item + batch-level `model: string` default. Item wins over batch.
+
+** Critical file paths
+- `packages/coding-agent/src/config/spell-kdl.ts` — extended on FEAT-643 (async signature, user-level loader, merge), FEAT-644 (agents block).
+- `packages/coding-agent/src/config/agents-kdl.ts` (new, FEAT-644) — parser, glob matcher, specificity, conflict detector.
+- `packages/coding-agent/src/task/agent-config-resolver.ts` (new, FEAT-646) — unified `resolveAgentEffectiveConfig`.
+- `packages/coding-agent/src/task/types.ts:37,77` — schema additions for per-call `model` (FEAT-645).
+- `packages/coding-agent/src/task/index.ts:1297,1334` — site of replaced single-knob lookups (FEAT-646).
+- `packages/coding-agent/src/modes/components/agent-dashboard.ts:744-760` — resolver wiring + inspector additions (FEAT-647).
+- `packages/coding-agent/DEVELOPMENT.md:879-880` — outdated resolution chain (FEAT-648).
+- `packages/coding-agent/src/templates/spell.coding.*.kdl`, `spell.growth.default.kdl` — commented examples (FEAT-648).
+
+** Branch reconciliation note
+Worktree at `/home/user/code/ora/spell_kdl-config` should be brought up-to-date with main BEFORE cherry-picking. Once reconciled, only the `packages/coding-agent/src/config/**` plus tests, templates, and `domain/detection.ts` (async caller updates) cross over to main. The branch's task/, tools/, and frontmatter changes stay on the branch (file FUPs if any are still wanted).
+
+* Verification
+
+** Per-feature gates
+- FEAT-643: `bun check` green; `bun test packages/coding-agent/test/config/` green; new `loadUserSpellKdl` and `mergeSpellConfigs` exported; sample `import "./fragment.kdl"` resolves relative to baseDir.
+- FEAT-644: `bun test packages/coding-agent/test/config/agents-kdl.test.ts` passes ≥12 cases (parser + matcher + conflict detector).
+- FEAT-645: `bun test packages/coding-agent/test/task/task-schema.test.ts` passes; `Static<TaskSchema>` exposes `tasks[number].model: string | undefined` and batch `model`.
+- FEAT-646: `bun test packages/coding-agent/test/task/agent-config-resolver.test.ts` passes; `TaskTool.#executeSync` no longer reads `task.agentModelOverrides` directly.
+- FEAT-647: dashboard test asserts `Source: spell.kdl (project)` label + conflict banner; manual smoke on a fixture project.
+- FEAT-648: DEVELOPMENT.md, CHANGELOG, and all five templates updated; task tool description mentions per-call `model`.
+
+** Aggregate end-to-end
+- Place `spell.kdl` at repo root containing:
+  ```kdl
+  agents {
+      rule "explore" { model "anthropic/claude-haiku-4-5" }
+      rule "*-tester" { model "openai/gpt-5-mini" }
+  }
+  ```
+- Dispatch via task tool: `task({ agent: "explore", tasks: [{ id: "a", description: "x" }] })`. Inspect captured `runSubprocess` opts (or `agent://<id>` artifact) — `modelOverride` should be `anthropic/claude-haiku-4-5`.
+- Override per-call: same call with `tasks: [{ id: "a", description: "x", model: "openai/gpt-5-mini" }]` → `modelOverride === "openai/gpt-5-mini"`.
+- Same call with `model: "pi/smol"` at batch level → `modelOverride` = resolved `pi/smol`.
+
+** Manual checks
+- `/agents` dashboard renders `Source` and `Rule` lines for each agent.
+- Two same-specificity rules cause a yellow conflict banner.
+- `bun check` and full `bun test packages/coding-agent` suite green.
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:FEAT-643-land-kdl-config-branch-on-current-main::rebase-reconcile]] Rebase reconciliation
+- [[id:FEAT-644-spell-kdl-agents-block-parser-and-select::define-types]] Define types and selector matcher
+- [[id:FEAT-645-per-call-model-override-in-taskitem-sche::tests]] Write schema tests
+- [[id:FEAT-646-unified-agent-config-resolver-for-taskto::define-types]] Define EffectiveAgentConfig type and resolver signature
+- [[id:FEAT-647-agent-dashboard-surfaces-effective-rules::audit]] Audit dashboard tests
+- [[id:FEAT-648-documentation-and-template-updates-for-a::dev-md]] Update DEVELOPMENT.md task tool section
+- [[id:FEAT-648-documentation-and-template-updates-for-a::changelog]] Update CHANGELOG
+- [[id:FEAT-648-documentation-and-template-updates-for-a::templates]] Update spell.kdl templates
+** wave-2 :wave:
+- [[id:FEAT-643-land-kdl-config-branch-on-current-main::cherrypick]] Cherry-pick config-only diff onto main
+- [[id:FEAT-644-spell-kdl-agents-block-parser-and-select::tests]] Write tests for parser + selector matcher
+- [[id:FEAT-645-per-call-model-override-in-taskitem-sche::add-fields]] Add model field to schemas
+- [[id:FEAT-646-unified-agent-config-resolver-for-taskto::tests]] Write resolver tests
+- [[id:FEAT-647-agent-dashboard-surfaces-effective-rules::tests]] Write rendering tests
+** wave-3 :wave:
+- [[id:FEAT-643-land-kdl-config-branch-on-current-main::async-callers]] Update callers for async parseSpellKdl
+- [[id:FEAT-644-spell-kdl-agents-block-parser-and-select::parser]] Implement agents-block parser
+- [[id:FEAT-645-per-call-model-override-in-taskitem-sche::surface]] Surface fields on TaskItem in TaskTool
+- [[id:FEAT-648-documentation-and-template-updates-for-a::tool-desc]] Update task tool description
+** wave-4 :wave:
+- [[id:FEAT-643-land-kdl-config-branch-on-current-main::verify]] Verify integration
+- [[id:FEAT-644-spell-kdl-agents-block-parser-and-select::wire-spell-kdl]] Wire into parseSpellKdl
+- [[id:FEAT-646-unified-agent-config-resolver-for-taskto::impl]] Implement resolver
+** wave-5 :wave:
+- [[id:FEAT-646-unified-agent-config-resolver-for-taskto::wire-tasktool]] Wire resolver into TaskTool
+- [[id:FEAT-647-agent-dashboard-surfaces-effective-rules::wire-resolver]] Wire resolver into dashboard
+** wave-6 :wave:
+- [[id:FEAT-646-unified-agent-config-resolver-for-taskto::update-existing-tests]] Update existing tests
+- [[id:FEAT-647-agent-dashboard-surfaces-effective-rules::render]] Render inspector additions
+** File-level DAG
+*** Nodes
+- `FEAT-643-land-kdl-config-branch-on-current-main` Rebase reconciliation [ITEM]
+- `FEAT-644-spell-kdl-agents-block-parser-and-select` Define types and selector matcher [ITEM]
+- `FEAT-645-per-call-model-override-in-taskitem-sche` Write schema tests [ITEM]
+- `FEAT-646-unified-agent-config-resolver-for-taskto` Define EffectiveAgentConfig type and resolver signature [ITEM]
+- `FEAT-647-agent-dashboard-surfaces-effective-rules` Audit dashboard tests [ITEM]
+- `FEAT-648-documentation-and-template-updates-for-a` Update DEVELOPMENT.md task tool section [ITEM]
+*** Edges
+- `FEAT-644-spell-kdl-agents-block-parser-and-select` depends on `FEAT-643-land-kdl-config-branch-on-current-main`
+- `FEAT-646-unified-agent-config-resolver-for-taskto` depends on `FEAT-643-land-kdl-config-branch-on-current-main`
+- `FEAT-646-unified-agent-config-resolver-for-taskto` depends on `FEAT-644-spell-kdl-agents-block-parser-and-select`
+- `FEAT-646-unified-agent-config-resolver-for-taskto` depends on `FEAT-645-per-call-model-override-in-taskitem-sche`
+- `FEAT-647-agent-dashboard-surfaces-effective-rules` depends on `FEAT-646-unified-agent-config-resolver-for-taskto`
+- `FEAT-648-documentation-and-template-updates-for-a` depends on `FEAT-645-per-call-model-override-in-taskitem-sche`
+** Subfeature-level DAG
+*** Nodes
+- `FEAT-643-land-kdl-config-branch-on-current-main::rebase-reconcile` Rebase reconciliation [ITEM]
+- `FEAT-643-land-kdl-config-branch-on-current-main::cherrypick` Cherry-pick config-only diff onto main [ITEM]
+- `FEAT-643-land-kdl-config-branch-on-current-main::async-callers` Update callers for async parseSpellKdl [ITEM]
+- `FEAT-643-land-kdl-config-branch-on-current-main::verify` Verify integration [ITEM]
+- `FEAT-644-spell-kdl-agents-block-parser-and-select::define-types` Define types and selector matcher [ITEM]
+- `FEAT-644-spell-kdl-agents-block-parser-and-select::tests` Write tests for parser + selector matcher [ITEM]
+- `FEAT-644-spell-kdl-agents-block-parser-and-select::parser` Implement agents-block parser [ITEM]
+- `FEAT-644-spell-kdl-agents-block-parser-and-select::wire-spell-kdl` Wire into parseSpellKdl [ITEM]
+- `FEAT-645-per-call-model-override-in-taskitem-sche::tests` Write schema tests [ITEM]
+- `FEAT-645-per-call-model-override-in-taskitem-sche::add-fields` Add model field to schemas [ITEM]
+- `FEAT-645-per-call-model-override-in-taskitem-sche::surface` Surface fields on TaskItem in TaskTool [ITEM]
+- `FEAT-646-unified-agent-config-resolver-for-taskto::define-types` Define EffectiveAgentConfig type and resolver signature [ITEM]
+- `FEAT-646-unified-agent-config-resolver-for-taskto::tests` Write resolver tests [ITEM]
+- `FEAT-646-unified-agent-config-resolver-for-taskto::impl` Implement resolver [ITEM]
+- `FEAT-646-unified-agent-config-resolver-for-taskto::wire-tasktool` Wire resolver into TaskTool [ITEM]
+- `FEAT-646-unified-agent-config-resolver-for-taskto::update-existing-tests` Update existing tests [ITEM]
+- `FEAT-647-agent-dashboard-surfaces-effective-rules::audit` Audit dashboard tests [ITEM]
+- `FEAT-647-agent-dashboard-surfaces-effective-rules::tests` Write rendering tests [ITEM]
+- `FEAT-647-agent-dashboard-surfaces-effective-rules::wire-resolver` Wire resolver into dashboard [ITEM]
+- `FEAT-647-agent-dashboard-surfaces-effective-rules::render` Render inspector additions [ITEM]
+- `FEAT-648-documentation-and-template-updates-for-a::dev-md` Update DEVELOPMENT.md task tool section [ITEM]
+- `FEAT-648-documentation-and-template-updates-for-a::changelog` Update CHANGELOG [ITEM]
+- `FEAT-648-documentation-and-template-updates-for-a::templates` Update spell.kdl templates [ITEM]
+- `FEAT-648-documentation-and-template-updates-for-a::tool-desc` Update task tool description [ITEM]
+*** Edges
+- `FEAT-643-land-kdl-config-branch-on-current-main::cherrypick` depends on `FEAT-643-land-kdl-config-branch-on-current-main::rebase-reconcile`
+- `FEAT-643-land-kdl-config-branch-on-current-main::async-callers` depends on `FEAT-643-land-kdl-config-branch-on-current-main::cherrypick`
+- `FEAT-643-land-kdl-config-branch-on-current-main::verify` depends on `FEAT-643-land-kdl-config-branch-on-current-main::async-callers`
+- `FEAT-644-spell-kdl-agents-block-parser-and-select::tests` depends on `FEAT-644-spell-kdl-agents-block-parser-and-select::define-types`
+- `FEAT-644-spell-kdl-agents-block-parser-and-select::parser` depends on `FEAT-644-spell-kdl-agents-block-parser-and-select::tests`
+- `FEAT-644-spell-kdl-agents-block-parser-and-select::wire-spell-kdl` depends on `FEAT-644-spell-kdl-agents-block-parser-and-select::parser`
+- `FEAT-644-spell-kdl-agents-block-parser-and-select::wire-spell-kdl` depends on `FEAT-643-land-kdl-config-branch-on-current-main::cherrypick`
+- `FEAT-645-per-call-model-override-in-taskitem-sche::add-fields` depends on `FEAT-645-per-call-model-override-in-taskitem-sche::tests`
+- `FEAT-645-per-call-model-override-in-taskitem-sche::surface` depends on `FEAT-645-per-call-model-override-in-taskitem-sche::add-fields`
+- `FEAT-646-unified-agent-config-resolver-for-taskto::tests` depends on `FEAT-646-unified-agent-config-resolver-for-taskto::define-types`
+- `FEAT-646-unified-agent-config-resolver-for-taskto::impl` depends on `FEAT-646-unified-agent-config-resolver-for-taskto::tests`
+- `FEAT-646-unified-agent-config-resolver-for-taskto::impl` depends on `FEAT-644-spell-kdl-agents-block-parser-and-select::parser`
+- `FEAT-646-unified-agent-config-resolver-for-taskto::impl` depends on `FEAT-645-per-call-model-override-in-taskitem-sche::add-fields`
+- `FEAT-646-unified-agent-config-resolver-for-taskto::wire-tasktool` depends on `FEAT-646-unified-agent-config-resolver-for-taskto::impl`
+- `FEAT-646-unified-agent-config-resolver-for-taskto::wire-tasktool` depends on `FEAT-644-spell-kdl-agents-block-parser-and-select::wire-spell-kdl`
+- `FEAT-646-unified-agent-config-resolver-for-taskto::wire-tasktool` depends on `FEAT-645-per-call-model-override-in-taskitem-sche::surface`
+- `FEAT-646-unified-agent-config-resolver-for-taskto::wire-tasktool` depends on `FEAT-643-land-kdl-config-branch-on-current-main::async-callers`
+- `FEAT-646-unified-agent-config-resolver-for-taskto::update-existing-tests` depends on `FEAT-646-unified-agent-config-resolver-for-taskto::wire-tasktool`
+- `FEAT-647-agent-dashboard-surfaces-effective-rules::tests` depends on `FEAT-647-agent-dashboard-surfaces-effective-rules::audit`
+- `FEAT-647-agent-dashboard-surfaces-effective-rules::wire-resolver` depends on `FEAT-647-agent-dashboard-surfaces-effective-rules::tests`
+- `FEAT-647-agent-dashboard-surfaces-effective-rules::wire-resolver` depends on `FEAT-646-unified-agent-config-resolver-for-taskto::impl`
+- `FEAT-647-agent-dashboard-surfaces-effective-rules::render` depends on `FEAT-647-agent-dashboard-surfaces-effective-rules::wire-resolver`
+- `FEAT-648-documentation-and-template-updates-for-a::tool-desc` depends on `FEAT-645-per-call-model-override-in-taskitem-sche::add-fields`
+

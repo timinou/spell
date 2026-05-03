@@ -1,0 +1,85 @@
+#+TITLE: Per-call model override in TaskItem schema
+#+STATE: ITEM
+#+SESSION_ID: 14d27f187b617f71
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T07-39-22-477Z_14d27f187b617f71.jsonl]]
+#+CUSTOM_ID: FEAT-645-per-call-model-override-in-taskitem-sche
+#+DEPENDS: FEAT-643-land-kdl-config-branch-on-current-main
+#+LAYER: tools
+
+* Initial Message
+
+I want to customise the TASK tool even further. Look at how subagents are currently being launched and how I could e.g. assign all explore agents to a specific model. I think there's something around kdl policies about this somewhere?
+
+* Intention & Purpose
+Expose `model: string` on the task tool's JSON schema at both the batch level and per-task-item level so a calling agent can dispatch a single task to a specific model without editing config. Highest-priority override in the new resolution chain. Per-task wins over batch when both supplied.
+
+* Context & Narrative
+- The executor (`packages/coding-agent/src/task/executor.ts:182`) already accepts `modelOverride?: string | string[]` and propagates it. The plumbing reaches `runSubprocess(modelOverride, ...)` (line 1583, 1637, 1731).
+- What's missing: the JSON schema seen by the LLM. `taskItemSchema` (`packages/coding-agent/src/task/types.ts:37`) and the batch schema (`createTaskSchema`, line 77) do not include a `model` field, so the calling LLM cannot select a model per dispatch.
+- Today the only model selection paths are: settings DB (`task.agentModelOverrides[agentName]`) and agent frontmatter `model:`. Both are static.
+- This item adds the user-facing schema; FEAT-646 wires it into the resolution chain.
+
+* Scope
+- In-scope:
+  - Add `model?: string` to `taskItemSchema` (per-task) and to the batch object schema returned by `createTaskSchema` (batch default).
+  - Validate that values resolve to either an explicit `provider/id` form, a configured role alias (`pi/subtask`, `pi/smol`, `pi/task`, `default`), or a model pattern parsable by `resolveConfiguredModelPatterns`. Validation surface = a soft warning at dispatch time; invalid strings fall through to the next priority (no hard error — keeps the schema permissive).
+  - Update `TaskItem` and `TaskParams` static types accordingly (already auto-derived via `Static<typeof ...>`).
+- Out-of-scope:
+  - `thinkingLevel`, `tools`, `disabled` at per-call level — declarative-only via spell.kdl rules.
+  - Caller-supplied multi-model fallback list — keep `string`, not `string[]`. Fallback chains stay declarative.
+
+* Existing Patterns
+- `taskItemSchema` (`src/task/types.ts:37`) — TypeBox object with `Type.Optional(Type.String({ description: "..." }))` shape. Match it.
+- `createTaskSchema` (`src/task/types.ts:77`) — function-built object schema with `properties` map. Add `model` at the top-level `properties` object.
+- Description text style (concise, no emojis, action-first imperative) — see `agent`, `phase`, `context` descriptions.
+- Resolution: `resolveConfiguredModelPatterns(value, settings)` (`src/config/model-resolver.ts:385`) handles role aliases. Pass per-call value through this in FEAT-646.
+
+* Tests
+- File: `packages/coding-agent/test/task/task-schema.test.ts` (new).
+  - Schema accepts `tasks: [{ id: "a", description: "x", model: "anthropic/claude-haiku-4-5" }]`.
+  - Schema accepts batch-level `model: "pi/smol"` plus per-task override.
+  - Schema accepts omitted `model` (backward-compatible).
+  - `Static<typeof taskSchema>` type test verifies `tasks[number].model: string | undefined` and `model: string | undefined`.
+- File: `packages/coding-agent/test/task/task-tool.test.ts` (extend if exists, otherwise new) — call `TaskTool.execute` with mocked session; assert dispatched task carries the per-call model end-to-end (verified via captured `runSubprocess` args once FEAT-646 lands; for this item only verify schema parse).
+
+* Implementation
+** ITEM Write schema tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-645-per-call-model-override-in-taskitem-sche::tests
+:END:
+- File: `packages/coding-agent/test/task/task-schema.test.ts`.
+- Use `@sinclair/typebox` `Value.Check(taskSchema, value)` to validate sample payloads.
+- Tests must FAIL initially.
+
+** ITEM Add model field to schemas
+:PROPERTIES:
+:CUSTOM_ID: FEAT-645-per-call-model-override-in-taskitem-sche::add-fields
+:DEPENDS: FEAT-645-per-call-model-override-in-taskitem-sche::tests
+:END:
+- File: `packages/coding-agent/src/task/types.ts`.
+- In `taskItemSchema`: add `model: Type.Optional(Type.String({ description: "Model override for this single task (e.g. 'anthropic/claude-haiku-4-5' or a configured role alias 'pi/smol'). Highest priority in the resolution chain — overrides batch-level model, spell.kdl rules, and settings." }))`.
+- In `createTaskSchema` properties: add `model: Type.Optional(Type.String({ description: "Default model for all tasks in this batch. Per-task `model` field overrides this. Same value space as per-task model." }))`.
+- Confirm `taskSchema` and `taskSchemaNoIsolation` rebuild from `createTaskSchema(...)` and pick up the new field.
+
+** ITEM Surface fields on TaskItem in TaskTool
+:PROPERTIES:
+:CUSTOM_ID: FEAT-645-per-call-model-override-in-taskitem-sche::surface
+:DEPENDS: FEAT-645-per-call-model-override-in-taskitem-sche::add-fields
+:END:
+- File: `packages/coding-agent/src/task/index.ts`.
+- In `#executeSync`, capture `params.model` (batch-level) into a local variable for FEAT-646 to consume. For this item, only thread it into a no-op argument on the `runTask` closure (the wiring belongs to FEAT-646; here we just unblock that wiring).
+- Per-task: forward `task.model` via `taskExecution.taskCallModel` in the `taskExecutions.map` step. Existing `taskExecution` shape is built around `task.id`, `task.blockers`, `task.todoRef`, `task.filesDeps` — add `taskCallModel` next to them.
+- No behavior change yet; just plumbing.
+
+* Edge Cases
+- Empty string `model: ""` — treat as omitted (do NOT pass through). Use `value?.trim() || undefined` at consumption.
+- Both batch and per-task `model` set: per-task wins. Batch is the default for all tasks that don't specify their own.
+- Role alias `pi/task` (parent-inherits): per-call request to inherit. Resolves through `resolveAgentModelPatterns` in FEAT-646; behaves like agent frontmatter `model: pi/task`.
+- Caller passes a model the user hasn't configured (no API key): falls back to next priority via `resolveModelCandidates` — already handled in `runSubprocess` startup-fallback logic.
+
+* Acceptance Criteria
+- `bun test packages/coding-agent/test/task/task-schema.test.ts` passes.
+- `taskItemSchema.properties.model` and `createTaskSchema(...).properties.model` both present.
+- `TaskItem` and `TaskParams` Static types include `model?: string`.
+- No regressions in existing task tests; existing payloads (without `model`) continue to validate.
+- `TaskTool.#executeSync` captures both per-task and batch `model` values as local variables (pass-through, no consumption — FEAT-646 wires them).

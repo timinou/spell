@@ -72,7 +72,8 @@ export class OAuthSelectorComponent extends Container {
 
 		let pending = 0;
 		for (const provider of this.#allProviders) {
-			if (!this.#authStorage.hasAuth(provider.id)) {
+			const storageId = provider.storageId ?? provider.id;
+			if (!this.#authStorage.hasAuth(storageId)) {
 				this.#authState.delete(provider.id);
 				continue;
 			}
@@ -138,7 +139,9 @@ export class OAuthSelectorComponent extends Container {
 		if (state === "valid") {
 			return theme.fg("success", ` ${theme.status.success} logged in`);
 		}
-		return this.#authStorage.hasAuth(providerId) ? theme.fg("success", ` ${theme.status.success} logged in`) : "";
+		const providerInfo = this.#allProviders.find(p => p.id === providerId);
+		const storageId = providerInfo?.storageId ?? providerId;
+		return this.#authStorage.hasAuth(storageId) ? theme.fg("success", ` ${theme.status.success} logged in`) : "";
 	}
 	#updateList(): void {
 		this.#listContainer.clear();

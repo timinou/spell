@@ -1,0 +1,93 @@
+#+TITLE: Agent dashboard surfaces effective rules and conflicts
+#+STATE: ITEM
+#+SESSION_ID: 14d27f187b617f71
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T07-39-22-477Z_14d27f187b617f71.jsonl]]
+#+CUSTOM_ID: FEAT-647-agent-dashboard-surfaces-effective-rules
+#+DEPENDS: FEAT-646-unified-agent-config-resolver-for-taskto
+#+LAYER: frontend
+
+* Initial Message
+
+I want to customise the TASK tool even further. Look at how subagents are currently being launched and how I could e.g. assign all explore agents to a specific model. I think there's something around kdl policies about this somewhere?
+
+* Intention & Purpose
+The `/agents` dashboard (`AgentDashboard` component) must display the new resolution chain so users can see why a given agent is using a given model: the matching rule's selector, source (project vs user spell.kdl), and rule-level `thinking-level` / `tools` / `disabled` overrides. It must also surface the `conflicts` list when same-specificity selectors collide, per the user's "Warn in the TUI" requirement.
+
+* Context & Narrative
+- `AgentDashboard` (`packages/coding-agent/src/modes/components/agent-dashboard.ts`) currently shows the settings-DB override at `:393` (`overrides[agent.name]?.trim()`). Two existing methods compute resolution preview: `#defaultPatternsFor` (`:744`) and `#effectivePatternsFor` (`:753`). Both call `resolveAgentModelPatterns`.
+- After FEAT-646, dashboard should call `resolveAgentEffectiveConfig` instead and render the winning rule + source path inline beside the agent.
+- The `Enter` key today opens a model-override edit input. Behavior should keep working for the settings-DB layer, with a label clarifying that any matching spell.kdl rule will override this value.
+
+* Scope
+- In-scope:
+  - Replace `#effectivePatternsFor` and `#defaultPatternsFor` calls with the new resolver.
+  - Inspector panel shows: `Resolved model: <value>`, `Source: <"per-call" | "spell.kdl (project)" | "spell.kdl (user)" | "settings.kdl" | "frontmatter" | "role-alias" | "default">`, and the matching `rule "<selector>"` text when applicable.
+  - Conflicts panel: when `agentRuleConflicts` for the displayed agent is non-empty, render a yellow warning line `⚠ ambiguous rules: rule "<sel-1>" rule "<sel-2>"` with file path of each.
+  - Settings-DB edit flow stays. Add a hint line below the input: `Rules in spell.kdl override this value when they match.`
+- Out-of-scope:
+  - Editing spell.kdl rules from the dashboard (read-only surface for v1).
+  - `/agents` keybinding to open spell.kdl in `$EDITOR` (deferred to FUP).
+
+* Existing Patterns
+- Rendering helpers: `theme.fg("muted", ...)`, `theme.bold(...)` — see `:786-787` for tab bar.
+- File-path shortening: `shortenPath(filePath)` from `src/tools/render-utils.ts` (already imported `:51`).
+- Sanitization: `replaceTabs(...)`, `truncateToWidth(...)` — required for any rendered file content per AGENTS.md.
+
+* Tests
+- File: `packages/coding-agent/test/modes/agent-dashboard.test.ts` (extend if exists, otherwise new — check first).
+  - Verify dashboard renders the `Source: spell.kdl (project)` label when a matching rule exists.
+  - Verify conflicts banner appears when two same-specificity rules match the displayed agent.
+  - Verify backward-compat: when no rules exist, label reads `Source: frontmatter` or `Source: settings.kdl` as appropriate.
+- Manual smoke (recorded in acceptance):
+  - Create a fixture project with `spell.kdl` containing `agents { rule "explore" { model "anthropic/claude-haiku-4-5" } rule "*" { model "openai/gpt-5-mini" } }`.
+  - Open `/agents`, select `explore` → inspector shows resolved model and `Source: spell.kdl (project)` and `Rule: explore`.
+  - Add a second `rule "explor?"` with the same model → conflict banner appears.
+
+* Implementation
+** ITEM Audit dashboard tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-647-agent-dashboard-surfaces-effective-rules::audit
+:END:
+- `find packages/coding-agent/test -name 'agent-dashboard*'`. If none, create new test file. If existing, identify reusable harness for headless component rendering (see other dashboard tests for setup pattern).
+
+** ITEM Write rendering tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-647-agent-dashboard-surfaces-effective-rules::tests
+:DEPENDS: FEAT-647-agent-dashboard-surfaces-effective-rules::audit
+:END:
+- File: `packages/coding-agent/test/modes/agent-dashboard.test.ts`.
+- Build a fake `Settings` + fake `discoverAgents` returning two agents (`explore`, `reviewer`).
+- Provide three rule scenarios: empty, single-rule, conflict.
+- Render the dashboard via existing harness; capture `extractPrintableText` of the inspector pane; assert label substrings.
+
+** ITEM Wire resolver into dashboard
+:PROPERTIES:
+:CUSTOM_ID: FEAT-647-agent-dashboard-surfaces-effective-rules::wire-resolver
+:DEPENDS: FEAT-647-agent-dashboard-surfaces-effective-rules::tests FEAT-646-unified-agent-config-resolver-for-taskto::impl
+:END:
+- File: `packages/coding-agent/src/modes/components/agent-dashboard.ts`.
+- Replace `#defaultPatternsFor` and `#effectivePatternsFor` with calls to `resolveAgentEffectiveConfig` (FEAT-646), passing the same active/fallback patterns and the loaded rules from project + user kdl. Cache rules at dashboard mount; reload via `Ctrl+R` (already wired to `#reloadData`).
+- Track resolution `source` in the resolver output (extend `EffectiveAgentConfig` with `modelSource: "per-call" | "rule" | "settings" | "frontmatter" | "role-alias" | "default"` plus `ruleSelector?: string`, `ruleSourcePath?: string`). Update FEAT-646 resolver to set these fields when wired here — coordinate via shared interface.
+
+** ITEM Render inspector additions
+:PROPERTIES:
+:CUSTOM_ID: FEAT-647-agent-dashboard-surfaces-effective-rules::render
+:DEPENDS: FEAT-647-agent-dashboard-surfaces-effective-rules::wire-resolver
+:END:
+- In the inspector renderer (search `#renderInspector` in agent-dashboard.ts):
+  - Add lines: `Source: <source>`, `Rule: <selector> (<shortenPath(sourcePath)>)` when `source === "rule"`.
+  - When `agentRuleConflicts` for the agent is non-empty: render a yellow warning line listing each conflicting selector + path.
+  - Apply `replaceTabs` and `truncateToWidth(width, ui.truncate)` to file paths.
+- Add a hint below the edit input: `Rules in spell.kdl override this value when they match.` (theme: `muted`).
+
+* Edge Cases
+- Dashboard renders before resolver finishes async load — show a `loading rules…` placeholder for one frame; handle missing `agents` config gracefully (treat as `rules: []`).
+- Long selector strings — truncate to `TRUNCATE_LENGTHS.inspector` or 60 chars.
+- Conflict count > 5 — collapse to `+N more` to keep the panel readable.
+- User does not have `~/.spell/spell.kdl` — `loadUserSpellKdl` returns undefined; resolver gets empty `userRules`; no error.
+
+* Acceptance Criteria
+- `bun test packages/coding-agent/test/modes/agent-dashboard.test.ts` passes.
+- Manual: opening `/agents` against a project with `agents { rule "explore" { model "..." } }` shows the rule's selector and source in the inspector.
+- Manual: a project with two same-specificity rules surfaces a conflict warning in the inspector.
+- The settings-DB edit flow (`Enter` to override) still works and persists to settings DB.

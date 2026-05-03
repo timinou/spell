@@ -74,3 +74,4 @@ packages/qml/native/
 .env
 
 .spell/graph/*.bin
+.spell/org/*.bin

@@ -14,11 +14,13 @@ export type OAuthProvider =
 	| "cerebras"
 	| "cloudflare-ai-gateway"
 	| "cursor"
+	| "deepseek"
 	| "github-copilot"
 	| "google-gemini-cli"
 	| "google-antigravity"
 	| "gitlab-duo"
 	| "huggingface"
+	| "kimi"
 	| "kimi-code"
 	| "kilo"
 	| "kagi"
@@ -63,6 +65,12 @@ export interface OAuthProviderInfo {
 	id: OAuthProviderId;
 	name: string;
 	available: boolean;
+	/**
+	 * Optional alternate provider id under which this entry's credential is stored.
+	 * Use when an entry's UI/login id differs from the provider key resolved at
+	 * model-streaming time (e.g. "kimi" entry whose credentials live under "kimi-code").
+	 */
+	storageId?: OAuthProviderId;
 }
 
 export interface OAuthController {

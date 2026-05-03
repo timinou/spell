@@ -1,0 +1,115 @@
+#+TITLE: spell.kdl agents block parser and selector matcher
+#+STATE: ITEM
+#+SESSION_ID: 14d27f187b617f71
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T07-39-22-477Z_14d27f187b617f71.jsonl]]
+#+CUSTOM_ID: FEAT-644-spell-kdl-agents-block-parser-and-select
+#+DEPENDS: FEAT-643-land-kdl-config-branch-on-current-main
+#+LAYER: tools
+
+* Initial Message
+
+I want to customise the TASK tool even further. Look at how subagents are currently being launched and how I could e.g. assign all explore agents to a specific model. I think there's something around kdl policies about this somewhere?
+
+* Intention & Purpose
+Add a declarative `agents { rule "<selector>" { ... } }` block to `spell.kdl` so users can override per-agent or per-pattern (`explore*`, `*-tester`, `*`) defaults for `model`, `thinking-level`, `tools`, and `disabled` without touching the settings DB or per-agent markdown frontmatter. This is the surface the user explicitly asked for ("assign all explore agents to a specific model").
+
+* Context & Narrative
+- Today's only knob is `task.agentModelOverrides: Record<string, string>` (settings DB, exact-name only) plus `task.disabledAgents: string[]`. UI: `/agents` dashboard. No declarative config, no globs.
+- Bundled agent frontmatter already supports `model`, `thinkingLevel`, `tools`, `spawns` (`packages/coding-agent/src/discovery/helpers.ts:214 parseAgentFields`) — this feature mirrors those fields at config layer.
+- After FEAT-643 lands, `parseSpellKdl` is async and returns `SpellProjectConfig` with `RawSettings` plus structured blocks. Add an `agents` field on `SpellProjectConfig` and a parser that runs alongside the existing layer/policy/providers/keybindings/modes parsers.
+
+* Scope
+- In-scope:
+  - Schema: `agents { rule "<selector>" [disabled=#true] { model "..."; thinking-level "..."; tools "a" "b" "c" } }`.
+  - Selector forms: bare string. Auto-detect: contains `*` or `?` → glob; otherwise exact match.
+  - Specificity ranking (highest → lowest): exact > prefix-only glob (`name*`) > suffix-only glob (`*name`) > infix (`*name*`) > catch-all (`*`).
+  - Tie-breaking within the same specificity bucket: last declared wins. Conflicting same-bucket ties get a `logger.warn` and surface a `conflicts: AgentRuleConflict[]` field on the parsed config for TUI consumption (FEAT-647).
+  - User and project spell.kdl both contribute rules; merging handled by FEAT-646. This item only parses one document and returns its rule list.
+- Out-of-scope:
+  - `spawns` overrides (security-sensitive, deferred to FUP).
+  - `prepend-tools` / `append-tools` (deferred to FUP).
+  - Per-parent context rules (`when explore spawns reviewer ...`) (deferred to FUP).
+  - Wiring rules into `TaskTool.#executeSync` (FEAT-646).
+
+* Existing Patterns
+- `packages/coding-agent/src/config/task-policies-kdl.ts:103 parseTaskPoliciesKdl` — pattern for reading typed nodes/properties out of a kdl `Document`.
+- `packages/coding-agent/src/config/spell-kdl.ts:34 parseSpellKdl` (post-FEAT-643) — host loop iterating top-level nodes by name. Add `case "agents":` here.
+- `packages/coding-agent/src/config/kdl-helpers.ts` (post-FEAT-643): `getStringArgument`, `getStringProperty`, `getBooleanArgument` — reuse for typed accessors.
+- `packages/coding-agent/src/discovery/helpers.ts:189 parseModelList` and `:200 ParsedAgentFields` — same shape constraints (model is `string[]`, thinkingLevel is `ThinkingLevel`).
+- Glob matching: `node:path` `minimatch`-style is overkill. Implement a tiny pure matcher: convert `*` → `.*`, `?` → `.`, anchor with `^…$`. Add to `src/config/agents-kdl.ts`.
+
+* Tests
+- File: `packages/coding-agent/test/config/agents-kdl.test.ts` — new.
+  - Parse exact selector: `rule "explore" { model "a/b" }` → `[{ selector: { kind: "exact", value: "explore" }, model: ["a/b"] }]`.
+  - Parse prefix glob: `rule "explore*" { ... }` → `selector.kind === "prefixGlob"`.
+  - Parse suffix glob: `rule "*-tester" { ... }` → `selector.kind === "suffixGlob"`.
+  - Parse catch-all: `rule "*" { ... }` → `selector.kind === "wildcard"`.
+  - Parse all keys: `model`, `thinking-level`, `tools` (variadic strings), `disabled` (boolean).
+  - Multiple matching rules across specificity buckets: `matchAgentRules("explore", rules)` returns the most-specific match first; same-bucket ties yield `conflicts: [{ agent: "explore", selectors: ["explore", "explor?"] }]`.
+  - Last-declared tie-break: two `rule "*"` entries — second's `model` overrides first's.
+  - Invalid selector (empty string): rule skipped, warning logged.
+  - Glob matcher unit tests: `matchSelector("explore", "explore*")` ✓, `matchSelector("explore-x", "explore*")` ✓, `matchSelector("xexplore", "explore*")` ✗, `matchSelector("foo-tester", "*-tester")` ✓.
+
+* Implementation
+** ITEM Define types and selector matcher
+:PROPERTIES:
+:CUSTOM_ID: FEAT-644-spell-kdl-agents-block-parser-and-select::define-types
+:END:
+- File: `packages/coding-agent/src/config/agents-kdl.ts` (new).
+- Export interfaces:
+  - `AgentRuleSelector = { kind: "exact" | "prefixGlob" | "suffixGlob" | "infixGlob" | "wildcard"; value: string; pattern: RegExp }`
+  - `AgentRule = { selector: AgentRuleSelector; model?: string[]; thinkingLevel?: ThinkingLevel; tools?: string[]; disabled?: boolean; sourcePath?: string; declarationOrder: number }`
+  - `AgentRuleConflict = { agentName: string; selectors: string[] }`
+  - `AgentRulesConfig = { rules: AgentRule[]; conflicts: AgentRuleConflict[] }`
+- Export `parseAgentSelector(raw: string): AgentRuleSelector | undefined` — auto-detect glob vs exact; return undefined for empty.
+- Export `compileGlob(selector: string): RegExp` — pure: escape regex metas except `*`/`?`, replace those with `.*`/`.`, anchor.
+- Export `selectorSpecificity(s: AgentRuleSelector): number` — bigger = more specific. exact=4, prefixGlob=3, suffixGlob=2, infixGlob=1, wildcard=0.
+
+** ITEM Write tests for parser + selector matcher
+:PROPERTIES:
+:CUSTOM_ID: FEAT-644-spell-kdl-agents-block-parser-and-select::tests
+:DEPENDS: FEAT-644-spell-kdl-agents-block-parser-and-select::define-types
+:END:
+- File: `packages/coding-agent/test/config/agents-kdl.test.ts` (new).
+- Cover all scenarios from "Tests" section above. Tests must FAIL until parser is wired.
+
+** ITEM Implement agents-block parser
+:PROPERTIES:
+:CUSTOM_ID: FEAT-644-spell-kdl-agents-block-parser-and-select::parser
+:DEPENDS: FEAT-644-spell-kdl-agents-block-parser-and-select::tests
+:END:
+- In `src/config/agents-kdl.ts`, export `parseAgentsBlock(node: Node, sourcePath?: string): AgentRulesConfig`.
+- Iterate `node.children?.nodes ?? []`, switch on `getName()`. Only handle `case "rule":`.
+- For each rule: read positional arg as selector; read property `disabled` as boolean; iterate child nodes for `model` (string or string[] via variadic args), `thinking-level` (string → `parseThinkingLevel`), `tools` (variadic strings).
+- Skip rules with invalid/empty selector — `logger.warn`.
+- Assign `declarationOrder = index` to enable last-declared tie-breaking later.
+- Export `matchAgentRules(agentName: string, rules: AgentRule[]): { winning?: AgentRule; conflicts: AgentRuleConflict[] }`.
+  - Filter to matching selectors (`pattern.test(agentName)`).
+  - Sort by specificity desc, then declarationOrder desc.
+  - Top entry is `winning`. If two entries share top specificity, record a conflict and still return the last-declared as winner.
+
+** ITEM Wire into parseSpellKdl
+:PROPERTIES:
+:CUSTOM_ID: FEAT-644-spell-kdl-agents-block-parser-and-select::wire-spell-kdl
+:DEPENDS: FEAT-644-spell-kdl-agents-block-parser-and-select::parser FEAT-643-land-kdl-config-branch-on-current-main::cherrypick
+:END:
+- File: `packages/coding-agent/src/config/spell-kdl.ts`.
+- Add `agents?: AgentRulesConfig` to `SpellProjectConfig`.
+- In `parseSpellKdl`, add `case "agents":` → call `parseAgentsBlock(node, sourcePath)` and store on `result.agents`.
+- Update `mergeSpellConfigs(base, override)`: concatenate rules (`base.agents.rules ++ override.agents.rules`), preserving declarationOrder so override rules tie-break after base. Re-detect conflicts on the merged list.
+- Update `createEmptyConfig`: `agents: { rules: [], conflicts: [] }`.
+
+* Edge Cases
+- Selector `"*"` is wildcard, not infixGlob — handle separately.
+- Empty `agents { }` block: parsed as zero rules, no conflicts, no warnings.
+- Malformed rule (e.g. selector arg missing): skipped with warning, parsing continues.
+- Same selector declared twice (e.g. two `rule "explore"`): both parsed, second wins via last-declared, recorded as conflict with `selectors: ["explore", "explore"]`.
+- Conflicting overrides across user + project: handled in FEAT-646 by merging into one rule list before matching; same conflict detection applies.
+- KDL-side `tools` with empty variadic args (`tools`) is treated as "explicit empty tool list" — distinct from omitted `tools` key. Document in DEVELOPMENT.md (FEAT-648).
+- `thinking-level "invalid"` → `parseThinkingLevel` returns undefined → field omitted from rule, logger warning.
+
+* Acceptance Criteria
+- `parseAgentsBlock` and `matchAgentRules` exported from `src/config/agents-kdl.ts` with full test coverage.
+- `SpellProjectConfig.agents` populated by `parseSpellKdl` and merged by `mergeSpellConfigs`.
+- `bun test packages/coding-agent/test/config/agents-kdl.test.ts` passes (≥ 12 cases listed above).
+- No public API change to existing `parseSpellKdl` signature beyond the new optional `agents` field.

@@ -83,7 +83,7 @@ describe("ensureGitignoreEntry", () => {
 		await ensureGitignoreEntry(dir);
 		await ensureGitignoreEntry(dir);
 		const gi = await fs.readFile(path.join(dir, ".gitignore"), "utf8");
-		const matches = gi.split("\n").filter((l) => l.trim() === "/.spell/memory/");
+		const matches = gi.split("\n").filter(l => l.trim() === "/.spell/memory/");
 		expect(matches.length).toBe(1);
 		await fs.rm(dir, { recursive: true, force: true });
 	});
@@ -131,7 +131,7 @@ describe("migrateLegacyMemoryFiles", () => {
 
 		// Should exist in migrated/ with a timestamp-based name
 		const migratedFiles = await fs.readdir(path.join(root, "migrated"));
-		const orgFiles = migratedFiles.filter((f) => f.endsWith(".org"));
+		const orgFiles = migratedFiles.filter(f => f.endsWith(".org"));
 		expect(orgFiles.length).toBeGreaterThanOrEqual(1);
 
 		await fs.rm(dir, { recursive: true, force: true });
@@ -150,7 +150,7 @@ describe("migrateLegacyMemoryFiles", () => {
 		await migrateLegacyMemoryFiles(dir, legacyDir);
 
 		const migratedFiles = await fs.readdir(path.join(root, "migrated"));
-		const orgFiles = migratedFiles.filter((f) => f.endsWith(".org"));
+		const orgFiles = migratedFiles.filter(f => f.endsWith(".org"));
 		expect(orgFiles.length).toBe(1);
 
 		await fs.rm(dir, { recursive: true, force: true });
