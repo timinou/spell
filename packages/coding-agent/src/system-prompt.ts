@@ -42,7 +42,12 @@ const AGENTS_MD_LIMIT = 200;
 const SYSTEM_PROMPT_PREP_TIMEOUT_MS = 5000;
 const AGENTS_MD_EXCLUDED_DIRS = new Set(["node_modules", ".git"]);
 
-async function raceWithTimeout<T>(name: string, promise: Promise<T>, fallback: T, timeoutMs: number): Promise<T> {
+export async function raceWithTimeout<T>(
+	name: string,
+	promise: Promise<T>,
+	fallback: T,
+	timeoutMs: number,
+): Promise<T> {
 	const result = await Promise.race([
 		promise.then(v => ({ ok: true as const, value: v })),
 		Bun.sleep(timeoutMs).then(() => ({ ok: false as const })),
@@ -129,7 +134,7 @@ async function listAgentsMdFiles(root: string, limit: number): Promise<string[]>
 	}
 }
 
-async function buildAgentsMdSearch(cwd: string): Promise<AgentsMdSearch> {
+export async function buildAgentsMdSearch(cwd: string): Promise<AgentsMdSearch> {
 	const files = await listAgentsMdFiles(cwd, AGENTS_MD_LIMIT);
 	return {
 		scopePath: ".",
@@ -397,6 +402,10 @@ export interface BuildSystemPromptOptions {
 	contextFiles?: Array<{ path: string; content: string; depth?: number }>;
 	/** Skills provided directly to system prompt construction. */
 	skills?: Skill[];
+	/** Pre-computed AGENTS.md search result. */
+	agentsMdSearch?: AgentsMdSearch;
+	/** Pre-computed SYSTEM.md customization. */
+	systemPromptCustomization?: string | null;
 	/** Pre-loaded rulebook rules (descriptions, excluding TTSR and always-apply). */
 	rules?: Array<{ name: string; description?: string; path: string; globs?: string[] }>;
 	/** Intent field name injected into every tool schema. If set, explains the field in the prompt. */
@@ -431,6 +440,8 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		cwd,
 		contextFiles: providedContextFiles,
 		skills: providedSkills,
+		agentsMdSearch: providedAgentsMdSearch,
+		systemPromptCustomization: providedSystemPromptCustomization,
 		rules,
 		intentField,
 		mcpDiscoveryMode = false,
@@ -447,15 +458,17 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		resolvePromptInput(appendSystemPrompt, "append system prompt"),
 	]);
 
-	const systemPromptCustomizationPromise: Promise<string | null> = logger.timeAsync(
-		"loadSystemPromptFiles",
-		loadSystemPromptFiles,
-		{ cwd: resolvedCwd },
-	);
+	const systemPromptCustomizationPromise: Promise<string | null> =
+		providedSystemPromptCustomization !== undefined
+			? Promise.resolve(providedSystemPromptCustomization)
+			: logger.timeAsync("loadSystemPromptFiles", loadSystemPromptFiles, { cwd: resolvedCwd });
 	const contextFilesPromise: Promise<Array<{ path: string; content: string; depth?: number }>> = providedContextFiles
 		? Promise.resolve(providedContextFiles)
 		: logger.timeAsync("loadProjectContextFiles", loadProjectContextFiles, { cwd: resolvedCwd });
-	const agentsMdSearchPromise = logger.timeAsync("buildAgentsMdSearch", buildAgentsMdSearch, resolvedCwd);
+	const agentsMdSearchPromise =
+		providedAgentsMdSearch !== undefined
+			? Promise.resolve(providedAgentsMdSearch)
+			: logger.timeAsync("buildAgentsMdSearch", buildAgentsMdSearch, resolvedCwd);
 	const skillsPromise: Promise<Skill[]> =
 		providedSkills !== undefined
 			? Promise.resolve(providedSkills)

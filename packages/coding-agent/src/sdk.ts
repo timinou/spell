@@ -103,9 +103,12 @@ import { checkFileAgainstManifests, extractModifiedPaths, formatSpellcastSyncNot
 import { closeAllConnections } from "./ssh/connection-manager";
 import { unmountAll } from "./ssh/sshfs-mount";
 import {
+	buildAgentsMdSearch,
 	buildSystemPrompt as buildSystemPromptInternal,
 	buildSystemPromptToolMetadata,
 	loadProjectContextFiles as loadContextFilesInternal,
+	loadSystemPromptFiles,
+	raceWithTimeout,
 } from "./system-prompt";
 import { AgentOutputManager } from "./task/output-manager";
 import { parseThinkingLevel, resolveThinkingLevelForModel, toReasoningEffort } from "./thinking";
@@ -864,6 +867,19 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 
 	const contextFiles = [...domainPromptContext.contextFiles, ...baseContextFiles];
 
+	// Pre-compute system prompt preparation results for reuse across rebuilds.
+	// AGENTS.md and SYSTEM.md are immutable for the session lifetime.
+	const agentsMdSearchFallback = {
+		scopePath: ".",
+		limit: 200,
+		pattern: "AGENTS.md depth 1-4",
+		files: [],
+	};
+	const [prepAgentsMdSearch, prepSystemPromptCustomization] = await Promise.all([
+		raceWithTimeout("AGENTS.md search", buildAgentsMdSearch(cwd), agentsMdSearchFallback, 5000),
+		raceWithTimeout("SYSTEM.md loading", loadSystemPromptFiles({ cwd }), null, 5000),
+	]);
+
 	const spellcastDiscovery = await logger.timeAsync("discoverSpellcastManifests", () =>
 		discoverSpellcastManifests(cwd),
 	);
@@ -1424,6 +1440,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			cwd,
 			skills,
 			contextFiles,
+			agentsMdSearch: prepAgentsMdSearch,
+			systemPromptCustomization: prepSystemPromptCustomization,
 			tools: promptTools,
 			toolNames,
 			specializedToolNames,
@@ -1451,6 +1469,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				cwd,
 				skills,
 				contextFiles,
+				agentsMdSearch: prepAgentsMdSearch,
+				systemPromptCustomization: prepSystemPromptCustomization,
 				tools: promptTools,
 				toolNames,
 				specializedToolNames,
