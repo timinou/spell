@@ -5,15 +5,19 @@ import * as path from "node:path";
 
 import { loadSpellKdl, parseSpellKdl } from "../../src/config/spell-kdl";
 
+async function makeTempDir(prefix: string): Promise<string> {
+	return await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+}
+
 describe("parseSpellKdl", () => {
-	it("parses domain node", () => {
-		const result = parseSpellKdl('domain "coding"');
+	it("parses domain node", async () => {
+		const result = await parseSpellKdl('domain "coding"');
 		expect(result.domain).toBe("coding");
 		expect(result.policies.policies).toEqual([]);
 	});
 
-	it("parses layers and policies directly", () => {
-		const result = parseSpellKdl(`
+	it("parses layers and policies directly", async () => {
+		const result = await parseSpellKdl(`
 layer "api" description="API endpoints"
 
 policy "api-quality" layer="api" {
@@ -28,85 +32,146 @@ policy "api-quality" layer="api" {
 		expect(result.policies.policies[0].gates.gateCmd).toBe("bun test");
 	});
 
-	it("resolves a single import", () => {
-		const result = parseSpellKdl(`
-domain "coding"
-import "spell.coding.typescript"
-`);
-		expect(result.domain).toBe("coding");
-		// Template provides core, api, ui, data layers
-		expect(Object.keys(result.policies.layers)).toEqual(expect.arrayContaining(["core", "api", "ui", "data"]));
-		// Template provides policies
-		expect(result.policies.policies.length).toBeGreaterThanOrEqual(1);
-	});
-
-	it("local policy overrides imported policy by name", () => {
-		const result = parseSpellKdl(`
-import "spell.coding.typescript"
-
-policy "api-quality" layer="api" {
-    gate-cmd "bun test src/api/"
+	it("parses appearance settings", async () => {
+		const result = await parseSpellKdl(`
+appearance {
+	theme dark="titanium" light="light"
+	symbols "unicode"
+	color-blind #false
 }
 `);
-		const apiPolicy = result.policies.policies.find(p => p.name === "api-quality");
-		expect(apiPolicy).toBeDefined();
-		// Local override replaces the template's gate-cmd
-		expect(apiPolicy!.gates.gateCmd).toBe("bun test src/api/");
-		// The template's gateCommit is NOT present because the local policy fully replaces it
-		expect(apiPolicy!.gates.gateCommit).toBeUndefined();
+		expect(result.settings).toMatchObject({
+			theme: { dark: "titanium", light: "light" },
+			symbolPreset: "unicode",
+			colorBlindMode: false,
+		});
 	});
 
-	it("local layer overrides imported layer by key", () => {
-		const result = parseSpellKdl(`
-import "spell.coding.typescript"
-
-layer "api" description="Custom API description"
+	it("parses providers block", async () => {
+		const result = await parseSpellKdl(`
+providers {
+	web-search "auto"
+	code-search "grep"
+	image "auto"
+	provider "anthropic" {
+		api-key "$ANTHROPIC_API_KEY"
+	}
+}
 `);
-		expect(result.policies.layers.api).toEqual({ description: "Custom API description" });
-		// Other imported layers still present
-		expect(result.policies.layers.core).toBeDefined();
+		expect(result.providers).toEqual({
+			providers: {
+				anthropic: { apiKey: "$ANTHROPIC_API_KEY" },
+			},
+			webSearch: "auto",
+			codeSearch: "grep",
+			image: "auto",
+		});
 	});
 
-	it("multiple imports merge in order", () => {
-		const result = parseSpellKdl(`
-import "spell.coding.typescript"
-import "spell.growth.default"
+	it("parses keybindings block", async () => {
+		const result = await parseSpellKdl(`
+keybindings {
+	interrupt "escape"
+	clear "ctrl+c"
+	exit "ctrl+d"
+}
 `);
-		// Has layers from both templates
-		expect(result.policies.layers.core).toBeDefined(); // from typescript
-		expect(result.policies.layers.content).toBeDefined(); // from growth
-		expect(result.policies.layers.analytics).toBeDefined(); // from growth
+		expect(result.keybindings).toEqual({
+			interrupt: "escape",
+			clear: "ctrl+c",
+			exit: "ctrl+d",
+		});
 	});
 
-	it("unknown import namespace is skipped", () => {
-		const result = parseSpellKdl(`
-domain "coding"
-import "spell.nonexistent.template"
-
-layer "custom" description="A custom layer"
+	it("parses mode blocks", async () => {
+		const result = await parseSpellKdl(`
+mode "plan" extends="base" {
+	command "/plan"
+	read-only #true
+	instructions "./modes/plan/MODE.md"
+}
 `);
-		expect(result.domain).toBe("coding");
-		// Only the local layer is present, no template layers
-		expect(Object.keys(result.policies.layers)).toEqual(["custom"]);
+		expect(result.modes).toEqual([
+			{
+				name: "plan",
+				config: {
+					extends: "base",
+					command: "/plan",
+					readOnly: true,
+					instructions: "./modes/plan/MODE.md",
+				},
+				instructionsPath: "./modes/plan/MODE.md",
+			},
+		]);
 	});
 
-	it("returns config with no domain for empty document", () => {
-		const result = parseSpellKdl("");
+	it("resolves file-relative imports and applies local overrides", async () => {
+		const tmpDir = await makeTempDir("spell-kdl-import-");
+		try {
+			await Bun.write(
+				path.join(tmpDir, "shared.kdl"),
+				`domain "shared"
+layer "shared" description="Shared layer"
+keybindings { interrupt "escape" }
+`,
+			);
+			const result = await parseSpellKdl(
+				`import "./shared.kdl"
+domain "local"
+layer "local" description="Local layer"
+`,
+				tmpDir,
+			);
+			expect(result.domain).toBe("local");
+			expect(result.policies.layers.shared).toEqual({ description: "Shared layer" });
+			expect(result.policies.layers.local).toEqual({ description: "Local layer" });
+			expect(result.keybindings).toEqual({ interrupt: "escape" });
+		} finally {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("stops on import cycles", async () => {
+		const tmpDir = await makeTempDir("spell-kdl-cycle-");
+		try {
+			await Bun.write(path.join(tmpDir, "a.kdl"), `import "./b.kdl"\nlayer "a" description="A"\n`);
+			await Bun.write(path.join(tmpDir, "b.kdl"), `import "./a.kdl"\nlayer "b" description="B"\n`);
+			const result = await parseSpellKdl(`import "./a.kdl"\n`, tmpDir);
+			expect(result.policies.layers.a).toEqual({ description: "A" });
+			expect(result.policies.layers.b).toEqual({ description: "B" });
+		} finally {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("returns config with no domain for empty document", async () => {
+		const result = await parseSpellKdl("");
 		expect(result.domain).toBeUndefined();
+		expect(result.settings).toEqual({});
 		expect(result.policies).toEqual({ version: 1, layers: {}, policies: [] });
 	});
 
-	it("returns empty config for invalid KDL", () => {
-		const result = parseSpellKdl('domain "broken" {');
+	it("returns empty config for invalid KDL", async () => {
+		const result = await parseSpellKdl('domain "broken" {');
 		expect(result.domain).toBeUndefined();
+		expect(result.settings).toEqual({});
 		expect(result.policies).toEqual({ version: 1, layers: {}, policies: [] });
 	});
 
-	it("handles domain without imports or policies", () => {
-		const result = parseSpellKdl('domain "growth"');
+	it("handles domain without imports or policies", async () => {
+		const result = await parseSpellKdl('domain "growth"');
 		expect(result.domain).toBe("growth");
 		expect(result.policies.layers).toEqual({});
 		expect(result.policies.policies).toEqual([]);
+	});
+
+	it("loads built-in imports", async () => {
+		const result = await parseSpellKdl(`
+domain "coding"
+import "spell.coding.typescript"
+`);
+		expect(result.domain).toBe("coding");
+		expect(Object.keys(result.policies.layers)).toEqual(expect.arrayContaining(["core", "api"]));
 	});
 });
 
@@ -139,6 +204,7 @@ describe("loadSpellKdl", () => {
 		const result = await loadSpellKdl(tmpDir);
 		expect(result).toBeDefined();
 		expect(result!.domain).toBeUndefined();
+		expect(result!.settings).toEqual({});
 		expect(result!.policies).toEqual({ version: 1, layers: {}, policies: [] });
 	});
 });

@@ -248,7 +248,7 @@ const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<BuiltinSlashCommandSpec> = [
 			{ name: "last", description: "Copy full last agent message" },
 			{ name: "code", description: "Copy last code block" },
 			{ name: "all", description: "Copy all code blocks from last message" },
-			{ name: "cmd", description: "Copy last bash/python command" },
+			{ name: "cmd", description: "Copy last bash command" },
 		],
 		allowArgs: true,
 		handle: async (command, runtime) => {

@@ -8,12 +8,12 @@ Missing proof:
 - {{this}}
 {{/each}}
 
-You MUST repair the missing proof before success can be accepted. Do this now:
+You **MUST** repair the missing proof before success can be accepted. Do this now:
 1. Run the required verification command(s), create the required artifact, and/or commit changes.
 2. Call submit_result again when the task is truthfully complete.
 3. If verification still cannot be satisfied, call submit_result with `result.error` explaining the exact blocker.
 
-You MUST NOT call submit_result success again until the required proof exists.
+You **MUST NOT** call submit_result success again until the required proof exists.
 {{else}}
 You stopped without calling submit_result. This is reminder {{retryCount}} of {{maxRetries}}.
 

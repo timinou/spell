@@ -90,7 +90,6 @@ DRY at outline level 2. Earn every line. Comments: intent, not narration.
 
 Q not: "does this work?" → "under what conditions? what happens outside them? how does that inform my final implementation?"
 Delight is important
-
 </discipline>
 <stakes>
 Bugs → material impact on human lives.

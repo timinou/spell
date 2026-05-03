@@ -1,5 +1,7 @@
 Launches subagents to parallelize workflows.
 
+Each task item accepts an optional `model` to dispatch that single task to a specific model (e.g. "anthropic/claude-haiku-4-5" or a configured role alias "pi/smol"). The batch-level `model` is the default for all items.
+
 {{#if asyncEnabled}}
 - Use `read jobs://` to inspect state; use `await` to wait until completion.
 {{/if}}
@@ -125,7 +127,7 @@ Caller runs `bun check:ts` after both tasks complete. Tasks must NOT run it.
 - Replace every call site `parseConfig(` → `loadConfig(`
 
 ## Edge Cases
-- If a file spreads the import and calls `cfg.parseConfig(...)`, update the property access too
+- If a file spreads the import and calls `cfg.parseConfig(…)`, update the property access too
 - String literals containing `parseConfig` are documentation — leave them
 - If any file re-exports `parseConfig` externally, keep the old name via `export { loadConfig as parseConfig }` and add a `// TODO: remove after next major` comment
 

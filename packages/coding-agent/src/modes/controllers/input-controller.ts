@@ -34,7 +34,6 @@ export class InputController {
 					this.ctx.session.isCompacting ||
 					this.ctx.session.isGeneratingHandoff ||
 					this.ctx.session.isBashRunning ||
-					this.ctx.session.isPythonRunning ||
 					this.ctx.autoCompactionLoader ||
 					this.ctx.retryLoader ||
 					this.ctx.autoCompactionEscapeHandler ||
@@ -54,12 +53,6 @@ export class InputController {
 			} else if (this.ctx.isBashMode) {
 				this.ctx.editor.setText("");
 				this.ctx.isBashMode = false;
-				this.ctx.updateEditorBorderColor();
-			} else if (this.ctx.session.isPythonRunning) {
-				this.ctx.session.abortPython();
-			} else if (this.ctx.isPythonMode) {
-				this.ctx.editor.setText("");
-				this.ctx.isPythonMode = false;
 				this.ctx.updateEditorBorderColor();
 			} else if (this.ctx.session.isStreaming) {
 				void this.ctx.session.abort();
@@ -157,11 +150,9 @@ export class InputController {
 
 		this.ctx.editor.onChange = (text: string) => {
 			const wasBashMode = this.ctx.isBashMode;
-			const wasPythonMode = this.ctx.isPythonMode;
-			const trimmed = text.trimStart();
+			const _trimmed = text.trimStart();
 			this.ctx.isBashMode = text.trimStart().startsWith("!");
-			this.ctx.isPythonMode = trimmed.startsWith("$") && !trimmed.startsWith("${");
-			if (wasBashMode !== this.ctx.isBashMode || wasPythonMode !== this.ctx.isPythonMode) {
+			if (wasBashMode !== this.ctx.isBashMode) {
 				this.ctx.updateEditorBorderColor();
 			}
 		};
@@ -274,24 +265,6 @@ export class InputController {
 					this.ctx.editor.addToHistory(text);
 					await this.ctx.handleBashCommand(command, isExcluded);
 					this.ctx.isBashMode = false;
-					this.ctx.updateEditorBorderColor();
-					return;
-				}
-			}
-
-			// Handle python command ($ for normal, $$ for excluded from context)
-			if (text.startsWith("$")) {
-				const isExcluded = text.startsWith("$$");
-				const code = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
-				if (code) {
-					if (this.ctx.session.isPythonRunning) {
-						this.ctx.showWarning("A Python execution is already running. Press Esc to cancel it first.");
-						this.ctx.editor.setText(text);
-						return;
-					}
-					this.ctx.editor.addToHistory(text);
-					await this.ctx.handlePythonCommand(code, isExcluded);
-					this.ctx.isPythonMode = false;
 					this.ctx.updateEditorBorderColor();
 					return;
 				}

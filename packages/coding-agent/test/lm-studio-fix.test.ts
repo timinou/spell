@@ -43,7 +43,7 @@ describe("ModelRegistry LM Studio Fixes", () => {
 			return new Response(null, { status: 404 });
 		});
 
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 		await registry.refresh();
 
 		const allModels = registry.getAll();

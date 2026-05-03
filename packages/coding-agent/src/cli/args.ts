@@ -303,8 +303,6 @@ ${chalk.bold("Available Tools (default-enabled unless noted):")}
   grep          - Search file contents
   find          - Find files by glob pattern
   lsp           - Language server protocol (code intelligence)
-  python        - Execute Python code (requires: ${APP_NAME} setup python)
-  notebook      - Edit Jupyter notebooks
   inspect_image - Analyze images with a vision model
   browser       - Browser automation (Puppeteer)
   task          - Launch sub-agents for parallel tasks

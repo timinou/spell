@@ -125,7 +125,6 @@ export class WelcomeComponent implements Component {
 			` ${theme.fg("dim", "#")}${theme.fg("muted", " for prompt actions")}`,
 			` ${theme.fg("dim", "/")}${theme.fg("muted", " for commands")}`,
 			` ${theme.fg("dim", "!")}${theme.fg("muted", " to run bash")}`,
-			` ${theme.fg("dim", "$")}${theme.fg("muted", " to run python")}`,
 			separator,
 			` ${theme.bold(theme.fg("accent", "LSP Servers"))}`,
 			...lspLines,

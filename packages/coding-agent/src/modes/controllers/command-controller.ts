@@ -16,12 +16,10 @@ import { $ } from "bun";
 import { reset as resetCapabilities } from "../../capability";
 import { loadCustomShare } from "../../export/custom-share";
 import type { CompactOptions } from "../../extensibility/extensions/types";
-import { getGatewayStatus } from "../../ipy/gateway-coordinator";
 import { buildMemoryToolDeveloperInstructions, clearMemoryData, enqueueMemoryConsolidation } from "../../memories";
 import { BashExecutionComponent } from "../../modes/components/bash-execution";
 import { BorderedLoader } from "../../modes/components/bordered-loader";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
-import { PythonExecutionComponent } from "../../modes/components/python-execution";
 import { getMarkdownTheme, getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import { buildHotkeysMarkdown } from "../../modes/utils/hotkeys-markdown";
@@ -273,7 +271,7 @@ export class CommandController {
 
 	#copyLastCommand() {
 		const messages = this.ctx.session.messages;
-		// Walk backwards to find the last bash/python tool call
+		// Walk backwards to find the last bash tool call
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const msg = messages[i];
 			if (msg.role !== "assistant") continue;
@@ -284,13 +282,9 @@ export class CommandController {
 					this.#doCopy(tc.arguments.command, "Copied last bash command to clipboard");
 					return;
 				}
-				if (tc.name === "python" && typeof tc.arguments.code === "string") {
-					this.#doCopy(tc.arguments.code, "Copied last python code to clipboard");
-					return;
-				}
 			}
 		}
-		this.ctx.showWarning("No bash or python command found in the conversation.");
+		this.ctx.showWarning("No bash command found in the conversation.");
 	}
 
 	#doCopy(content: string, label: string) {
@@ -357,28 +351,6 @@ export class CommandController {
 			if (normalizedPremiumRequests > 0) {
 				info += `${theme.fg("dim", "Premium Requests:")} ${normalizedPremiumRequests.toLocaleString()}\n`;
 			}
-		}
-
-		const gateway = await getGatewayStatus();
-		info += `\n${theme.bold("Python Gateway")}\n`;
-		if (gateway.active) {
-			info += `${theme.fg("dim", "Status:")} ${theme.fg("success", "Active (Global)")}\n`;
-			info += `${theme.fg("dim", "URL:")} ${gateway.url}\n`;
-			info += `${theme.fg("dim", "PID:")} ${gateway.pid}\n`;
-			if (gateway.pythonPath) {
-				info += `${theme.fg("dim", "Python:")} ${gateway.pythonPath}\n`;
-			}
-			if (gateway.venvPath) {
-				info += `${theme.fg("dim", "Venv:")} ${gateway.venvPath}\n`;
-			}
-			if (gateway.uptime !== null) {
-				const uptimeSec = Math.floor(gateway.uptime / 1000);
-				const mins = Math.floor(uptimeSec / 60);
-				const secs = uptimeSec % 60;
-				info += `${theme.fg("dim", "Uptime:")} ${mins}m ${secs}s\n`;
-			}
-		} else {
-			info += `${theme.fg("dim", "Status:")} ${theme.fg("dim", "Inactive")}\n`;
 		}
 
 		if (this.ctx.lspServers && this.ctx.lspServers.length > 0) {
@@ -745,48 +717,6 @@ export class CommandController {
 		}
 
 		this.ctx.bashComponent = undefined;
-		this.ctx.ui.requestRender();
-	}
-
-	async handlePythonCommand(code: string, excludeFromContext = false): Promise<void> {
-		const isDeferred = this.ctx.session.isStreaming;
-		this.ctx.pythonComponent = new PythonExecutionComponent(code, this.ctx.ui, excludeFromContext);
-
-		if (isDeferred) {
-			this.ctx.pendingMessagesContainer.addChild(this.ctx.pythonComponent);
-			this.ctx.pendingPythonComponents.push(this.ctx.pythonComponent);
-		} else {
-			this.ctx.chatContainer.addChild(this.ctx.pythonComponent);
-		}
-		this.ctx.ui.requestRender();
-
-		try {
-			const result = await this.ctx.session.executePython(
-				code,
-				chunk => {
-					if (this.ctx.pythonComponent) {
-						this.ctx.pythonComponent.appendOutput(chunk);
-						this.ctx.ui.requestRender();
-					}
-				},
-				{ excludeFromContext },
-			);
-
-			if (this.ctx.pythonComponent) {
-				const meta = outputMeta().truncationFromSummary(result, { direction: "tail" }).get();
-				this.ctx.pythonComponent.setComplete(result.exitCode, result.cancelled, {
-					output: result.output,
-					truncation: meta?.truncation,
-				});
-			}
-		} catch (error) {
-			if (this.ctx.pythonComponent) {
-				this.ctx.pythonComponent.setComplete(undefined, false);
-			}
-			this.ctx.showError(`Python execution failed: ${error instanceof Error ? error.message : "Unknown error"}`);
-		}
-
-		this.ctx.pythonComponent = undefined;
 		this.ctx.ui.requestRender();
 	}
 

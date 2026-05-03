@@ -29,7 +29,7 @@ import {
 	renderJsonTreeLines,
 	stripInternalArgs,
 } from "../../tools/json-tree";
-import { PYTHON_DEFAULT_PREVIEW_LINES } from "../../tools/python";
+
 import { formatExpandHint, replaceTabs, truncateToWidth } from "../../tools/render-utils";
 import { toolRenderers } from "../../tools/renderers";
 import { renderStatusLine } from "../../tui";
@@ -571,12 +571,6 @@ export class ToolExecutionComponent extends Container {
 			context.expanded = this.#expanded;
 			context.previewLines = BASH_DEFAULT_PREVIEW_LINES;
 			context.timeout = normalizeTimeoutSeconds(this.#args?.timeout, 3600);
-		} else if (this.#toolName === "python" && this.#result) {
-			const output = this.#getTextOutput().trimEnd();
-			context.output = output;
-			context.expanded = this.#expanded;
-			context.previewLines = PYTHON_DEFAULT_PREVIEW_LINES;
-			context.timeout = normalizeTimeoutSeconds(this.#args?.timeout, 600);
 		} else if (this.#toolName === "edit") {
 			// Edit needs diff preview and renderDiff function
 			context.editDiffPreview = this.#editDiffPreview;

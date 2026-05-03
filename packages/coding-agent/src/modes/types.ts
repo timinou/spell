@@ -20,7 +20,6 @@ import type { CustomEditor } from "./components/custom-editor";
 import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent } from "./components/hook-selector";
-import type { PythonExecutionComponent } from "./components/python-execution";
 import type { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import type { OAuthManualInputManager } from "./oauth-manual-input";
@@ -77,9 +76,6 @@ export interface InteractiveModeContext {
 	pendingTools: Map<string, ToolExecutionHandle>;
 	pendingBashComponents: BashExecutionComponent[];
 	bashComponent: BashExecutionComponent | undefined;
-	pendingPythonComponents: PythonExecutionComponent[];
-	pythonComponent: PythonExecutionComponent | undefined;
-	isPythonMode: boolean;
 	streamingComponent: AssistantMessageComponent | undefined;
 	streamingMessage: AssistantMessage | undefined;
 	loadingAnimation: Loader | undefined;
@@ -167,7 +163,6 @@ export interface InteractiveModeContext {
 	handleClearCommand(): Promise<void>;
 	handleForkCommand(): Promise<void>;
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void>;
-	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void>;
 	handleMCPCommand(text: string): Promise<void>;
 	handleSSHCommand(text: string): Promise<void>;
 	handleCompactCommand(customInstructions?: string): Promise<void>;

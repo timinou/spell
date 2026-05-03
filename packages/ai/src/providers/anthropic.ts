@@ -1065,12 +1065,12 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	return {
 		isOAuthToken: oauthToken,
 		apiKey: isLocalhostBaseUrl(baseUrl) || oauthToken ? null : apiKey,
-		authToken: oauthToken && !isLocalhostBaseUrl(baseUrl) ? apiKey : undefined,
+		authToken: isLocalhostBaseUrl(baseUrl) ? undefined : oauthToken ? apiKey : undefined,
 		baseURL: baseUrl,
 		maxRetries: 5,
 		dangerouslyAllowBrowser: true,
 		defaultHeaders: isLocalhostBaseUrl(baseUrl)
-			? { ...defaultHeaders, "x-api-key": null as string | null }
+			? { ...defaultHeaders, "x-api-key": null as string | null, authorization: null as string | null }
 			: defaultHeaders,
 		...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
 	};

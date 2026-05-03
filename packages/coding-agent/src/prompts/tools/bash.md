@@ -4,7 +4,7 @@ Executes bash commands for terminal operations like git, bun, cargo, python.
 - Use `async: true` for long-running commands when you do not need immediate output.
 - Use `read jobs://` for background job state; use `await` when you need to block until completion.
 {{/if}}
-- Default spill policy is artifact-first: broad stdout/stderr spills quickly, transcript/log spelunking stays summary-first by default, then follow-up analysis should read or grep the emitted `artifact://...` output.
+- Default spill policy is artifact-first: broad stdout/stderr spills quickly, transcript/log spelunking stays summary-first by default, then follow-up analysis should read or grep the emitted `artifact://…` output.
 - Explicit non-zero `head`/`tail` opts into bounded raw output for that call only; `head: 0` and `tail: 0` do **not** opt in.
 - Use `lenientSpill: true` only when one bash call truly needs the legacy wider inline tail; it applies to that call only and emits a warning.
 

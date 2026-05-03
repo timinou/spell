@@ -62,23 +62,6 @@ export interface BashExecutionMessage {
 }
 
 /**
- * Message type for user-initiated Python executions via the $ command.
- * Shares the same kernel session as the agent's Python tool.
- */
-export interface PythonExecutionMessage {
-	role: "pythonExecution";
-	code: string;
-	output: string;
-	exitCode: number | undefined;
-	cancelled: boolean;
-	truncated: boolean;
-	meta?: OutputMeta;
-	timestamp: number;
-	/** If true, this message is excluded from LLM context ($$ prefix) */
-	excludeFromContext?: boolean;
-}
-
-/**
  * Message type for extension-injected messages via sendMessage().
  */
 export interface CustomMessage<T = unknown> {
@@ -145,7 +128,6 @@ export interface FileMentionMessage {
 declare module "@oh-my-pi/pi-agent-core" {
 	interface CustomAgentMessages {
 		bashExecution: BashExecutionMessage;
-		pythonExecution: PythonExecutionMessage;
 		custom: CustomMessage;
 		hookMessage: HookMessage;
 		branchSummary: BranchSummaryMessage;
@@ -168,25 +150,6 @@ export function bashExecutionToText(msg: BashExecutionMessage): string {
 		text += "\n\n(command cancelled)";
 	} else if (msg.exitCode !== null && msg.exitCode !== undefined && msg.exitCode !== 0) {
 		text += `\n\nCommand exited with code ${msg.exitCode}`;
-	}
-	text += formatOutputNotice(msg.meta);
-	return text;
-}
-
-/**
- * Convert a PythonExecutionMessage to user message text for LLM context.
- */
-export function pythonExecutionToText(msg: PythonExecutionMessage): string {
-	let text = `Ran Python:\n\`\`\`python\n${msg.code}\n\`\`\`\n`;
-	if (msg.output) {
-		text += `Output:\n\`\`\`\n${msg.output}\n\`\`\``;
-	} else {
-		text += "(no output)";
-	}
-	if (msg.cancelled) {
-		text += "\n\n(execution cancelled)";
-	} else if (msg.exitCode !== null && msg.exitCode !== undefined && msg.exitCode !== 0) {
-		text += `\n\nExecution failed with code ${msg.exitCode}`;
 	}
 	text += formatOutputNotice(msg.meta);
 	return text;
@@ -257,16 +220,6 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 					return {
 						role: "user",
 						content: [{ type: "text", text: bashExecutionToText(m) }],
-						attribution: "user",
-						timestamp: m.timestamp,
-					};
-				case "pythonExecution":
-					if (m.excludeFromContext) {
-						return undefined;
-					}
-					return {
-						role: "user",
-						content: [{ type: "text", text: pythonExecutionToText(m) }],
 						attribution: "user",
 						timestamp: m.timestamp,
 					};

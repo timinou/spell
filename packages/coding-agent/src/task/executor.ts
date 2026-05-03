@@ -765,16 +765,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	if (atMaxDepth && toolNames?.includes("task")) {
 		toolNames = toolNames.filter(name => name !== "task");
 	}
-	const pythonToolMode = settings.get("python.toolMode") ?? "both";
 	if (toolNames?.includes("exec")) {
 		const expanded = toolNames.filter(name => name !== "exec");
-		if (pythonToolMode === "bash-only") {
-			expanded.push("bash");
-		} else if (pythonToolMode === "ipy-only") {
-			expanded.push("python");
-		} else {
-			expanded.push("python", "bash");
-		}
+		expanded.push("bash");
 		toolNames = Array.from(new Set(expanded));
 	}
 
@@ -789,7 +782,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				: agent.spawns.join(",");
 
 	const lspEnabled = enableLsp ?? true;
-	const skipPythonPreflight = Array.isArray(toolNames) && !toolNames.includes("python");
 
 	const outputChunks: string[] = [];
 	const finalOutputChunks: string[] = [];
@@ -1404,7 +1396,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 							parentTaskPrefix: id,
 							enableLsp: lspEnabled,
 							sandboxPolicy: effectiveSandboxPolicy,
-							skipPythonPreflight,
+
 							enableMCP,
 							customTools: allCustomTools.length > 0 ? allCustomTools : undefined,
 						});

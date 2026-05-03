@@ -1,14 +1,13 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { GatewayClient } from "@oh-my-pi/pi-gateway";
-import { $env, logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManager } from "../async";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import type { TaskPolicy } from "../config/task-policies";
 import type { Skill } from "../extensibility/skills";
 import type { InternalUrlRouter } from "../internal-urls";
-import { getPreludeDocs, warmPythonEnvironment } from "../ipy/executor";
-import { checkPythonKernelAvailability } from "../ipy/kernel";
+
 import type { LoopManager } from "../loop/loop-manager";
 import { LoopDoneTool, LoopLaunchTool, LoopPrepareTool } from "../loop/loop-tools";
 import { LspTool } from "../lsp";
@@ -44,10 +43,10 @@ import { GatewayTool } from "./gateway";
 import { GoalsTool } from "./goals-tool";
 import { GrepTool } from "./grep";
 import { InspectImageTool } from "./inspect-image";
-import { NotebookTool } from "./notebook";
+
 import { OrgTool } from "./org";
 import { wrapToolWithMetaNotice } from "./output-meta";
-import { PythonTool } from "./python";
+
 import { ReadTool } from "./read";
 import { RenderMermaidTool } from "./render-mermaid";
 import { ResolveTool } from "./resolve";
@@ -93,9 +92,9 @@ export * from "./gemini-image";
 export * from "./goals-tool";
 export * from "./grep";
 export * from "./inspect-image";
-export * from "./notebook";
+
 export * from "./pending-action";
-export * from "./python";
+
 export * from "./read";
 export * from "./render-mermaid";
 export * from "./resolve";
@@ -124,8 +123,7 @@ export interface ToolSession {
 	cwd: string;
 	/** Whether UI is available */
 	hasUI: boolean;
-	/** Skip Python kernel availability check and warmup */
-	skipPythonPreflight?: boolean;
+
 	/** Pre-loaded context files (AGENTS.md, etc) */
 	contextFiles?: ContextFileEntry[];
 	/** Pre-loaded skills */
@@ -243,7 +241,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	render_mermaid: s => new RenderMermaidTool(s),
 	ask: AskTool.createIf,
 	bash: s => new BashTool(s),
-	python: s => new PythonTool(s),
+
 	calc: s => new CalculatorTool(s),
 	ssh: loadSshTool,
 	edit: s => new EditTool(s),
@@ -251,7 +249,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	grep: s => new GrepTool(s),
 	lsp: LspTool.createIf,
 	code: s => new CodeTool(s),
-	notebook: s => new NotebookTool(s),
+
 	read: s => new ReadTool(s),
 	inspect_image: s => new InspectImageTool(s),
 	browser: s => new BrowserTool(s),
@@ -307,8 +305,7 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 
 	// Specialized — compact API descriptions to reduce token usage
 	canvas: "specialized",
-	python: "specialized",
-	notebook: "specialized",
+
 	render_mermaid: "specialized",
 	ssh: "specialized",
 	inspect_image: "specialized",
@@ -356,36 +353,6 @@ export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 
 export type ToolName = keyof typeof BUILTIN_TOOLS;
 
-export type PythonToolMode = "ipy-only" | "bash-only" | "both";
-
-/**
- * Parse PI_PY environment variable to determine Python tool mode.
- * Returns null if not set or invalid.
- *
- * Values:
- * - "0" or "bash" → bash-only
- * - "1" or "py" → ipy-only
- * - "mix" or "both" → both
- */
-function getPythonModeFromEnv(): PythonToolMode | null {
-	const value = $env.PI_PY?.toLowerCase();
-	if (!value) return null;
-
-	switch (value) {
-		case "0":
-		case "bash":
-			return "bash-only";
-		case "1":
-		case "py":
-			return "ipy-only";
-		case "mix":
-		case "both":
-			return "both";
-		default:
-			return null;
-	}
-}
-
 /**
  * Create tools from BUILTIN_TOOLS registry.
  */
@@ -396,58 +363,6 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		toolNames && toolNames.length > 0 ? [...new Set(toolNames.map(name => name.toLowerCase()))] : undefined;
 	if (requestedTools && !requestedTools.includes("exit_plan_mode")) {
 		requestedTools.push("exit_plan_mode");
-	}
-	const pythonMode = getPythonModeFromEnv() ?? session.settings.get("python.toolMode");
-	const skipPythonPreflight = session.skipPythonPreflight === true;
-	let pythonAvailable = true;
-	const shouldCheckPython =
-		!skipPythonPreflight &&
-		pythonMode !== "bash-only" &&
-		(requestedTools === undefined || requestedTools.includes("python"));
-	const isTestEnv = Bun.env.BUN_ENV === "test" || Bun.env.NODE_ENV === "test";
-	const skipPythonWarm = isTestEnv || $env.PI_PYTHON_SKIP_CHECK === "1";
-
-	if (shouldCheckPython) {
-		const availability = await logger.timeAsync(
-			"createTools:pythonCheck",
-			checkPythonKernelAvailability,
-			session.cwd,
-		);
-		pythonAvailable = availability.ok;
-		if (!availability.ok) {
-			logger.warn("Python kernel unavailable, falling back to bash", {
-				reason: availability.reason,
-			});
-		} else if (!skipPythonWarm && getPreludeDocs().length === 0) {
-			const sessionFile = session.getSessionFile?.() ?? undefined;
-			const warmSessionId = sessionFile ? `session:${sessionFile}:cwd:${session.cwd}` : `cwd:${session.cwd}`;
-			try {
-				await logger.timeAsync(
-					"createTools:warmPython",
-					warmPythonEnvironment,
-					session.cwd,
-					warmSessionId,
-					session.settings.get("python.sharedGateway"),
-				);
-			} catch (err) {
-				logger.warn("Failed to warm Python environment", {
-					error: err instanceof Error ? err.message : String(err),
-				});
-			}
-		}
-	}
-
-	const effectiveMode = pythonAvailable ? pythonMode : "bash-only";
-	const allowBash = effectiveMode !== "ipy-only";
-	const allowPython = effectiveMode !== "bash-only";
-	if (
-		requestedTools &&
-		allowBash &&
-		!allowPython &&
-		requestedTools.includes("python") &&
-		!requestedTools.includes("bash")
-	) {
-		requestedTools.push("bash");
 	}
 
 	// Auto-include AST counterparts when their text-based sibling is present
@@ -479,15 +394,14 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "org") return !!session.settings.get("org.enabled");
 		if (name === "todo_write" && inPlanMode) return true;
 		if (name === "lsp") return enableLsp;
-		if (name === "bash") return allowBash;
-		if (name === "python") return allowPython;
+
 		if (name === "todo_write") return session.settings.get("todo.enabled");
 		if (name === "find") return session.settings.get("find.enabled");
 		if (name === "grep") return session.settings.get("grep.enabled");
 		if (name === "ast_grep") return session.settings.get("astGrep.enabled");
 		if (name === "ast_edit") return session.settings.get("astEdit.enabled");
 		if (name === "render_mermaid") return session.settings.get("renderMermaid.enabled");
-		if (name === "notebook") return session.settings.get("notebook.enabled");
+
 		if (name === "inspect_image") return session.settings.get("inspect_image.enabled");
 		if (name === "fetch") return session.settings.get("fetch.enabled");
 		if (name === "web_search") return session.settings.get("web_search.enabled");

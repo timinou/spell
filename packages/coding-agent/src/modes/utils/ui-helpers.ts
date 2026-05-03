@@ -8,7 +8,6 @@ import { BranchSummaryMessageComponent } from "../../modes/components/branch-sum
 import { CompactionSummaryMessageComponent } from "../../modes/components/compaction-summary-message";
 import { CustomMessageComponent } from "../../modes/components/custom-message";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
-import { PythonExecutionComponent } from "../../modes/components/python-execution";
 import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
 import { SkillMessageComponent } from "../../modes/components/skill-message";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
@@ -75,17 +74,6 @@ export class UiHelpers {
 		switch (message.role) {
 			case "bashExecution": {
 				const component = new BashExecutionComponent(message.command, this.ctx.ui, message.excludeFromContext);
-				if (message.output) {
-					component.appendOutput(message.output);
-				}
-				component.setComplete(message.exitCode, message.cancelled, {
-					truncation: message.meta?.truncation,
-				});
-				this.ctx.chatContainer.addChild(component);
-				break;
-			}
-			case "pythonExecution": {
-				const component = new PythonExecutionComponent(message.code, this.ctx.ui, message.excludeFromContext);
 				if (message.output) {
 					component.appendOutput(message.output);
 				}
@@ -379,7 +367,6 @@ export class UiHelpers {
 		this.ctx.chatContainer.clear();
 		this.ctx.pendingMessagesContainer.clear();
 		this.ctx.pendingBashComponents = [];
-		this.ctx.pendingPythonComponents = [];
 
 		// Get aligned messages and entries from session context
 		const context = this.ctx.sessionManager.buildSessionContext();
@@ -596,11 +583,6 @@ export class UiHelpers {
 			this.ctx.chatContainer.addChild(component);
 		}
 		this.ctx.pendingBashComponents = [];
-		for (const component of this.ctx.pendingPythonComponents) {
-			this.ctx.pendingMessagesContainer.removeChild(component);
-			this.ctx.chatContainer.addChild(component);
-		}
-		this.ctx.pendingPythonComponents = [];
 	}
 
 	findLastAssistantMessage(): AssistantMessage | undefined {

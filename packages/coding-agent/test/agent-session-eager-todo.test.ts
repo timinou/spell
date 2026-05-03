@@ -115,7 +115,7 @@ describe("AgentSession eager todo enforcement", () => {
 
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, undefined, path.join(tempDir.path(), "models.yml"));
 		const settings = Settings.isolated({
 			"compaction.enabled": false,
 			"todo.enabled": true,

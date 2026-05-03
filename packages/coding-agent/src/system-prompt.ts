@@ -538,7 +538,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 
 	// Build tool metadata for system prompt rendering
 	// Priority: explicit list > tools map > defaults
-	// Default includes both bash and python; actual availability determined by settings in createTools
+	// Default includes bash; actual availability determined by settings in createTools
 	let toolNames = providedToolNames;
 	if (!toolNames) {
 		if (tools) {
@@ -546,7 +546,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 			toolNames = Array.from(tools.keys());
 		} else {
 			// Use defaults
-			toolNames = ["read", "bash", "python", "edit", "write"]; // TODO: Why?
+			toolNames = ["read", "bash", "edit", "write"]; // TODO: Why?
 		}
 	}
 

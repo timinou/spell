@@ -54,7 +54,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		({}) as unknown as AssistantMessageEventStream;
 
 	test("loads built-in GitLab Duo models and OAuth provider metadata", () => {
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 		const model = registry.find("gitlab-duo", "claude-sonnet-4-5-20250929");
 
 		expect(model).toBeDefined();
@@ -63,7 +63,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("validates provider config before mutating custom API state", () => {
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 		const beforeAnthropicCount = registry.getAll().filter(model => model.provider === "anthropic").length;
 
 		const invalidConfig: ProviderConfigInput = {
@@ -84,7 +84,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("merges provider/model headers and adds Authorization when authHeader is enabled", () => {
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 
 		const config: ProviderConfigInput = {
 			baseUrl: "https://runtime.example.com/v1",
@@ -105,7 +105,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("registerProvider preserves explicit thinking on runtime models", () => {
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 		const config: ProviderConfigInput = {
 			baseUrl: "https://runtime.example.com/v1",
 			apiKey: "RUNTIME_KEY",
@@ -135,7 +135,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("clearSourceRegistrations and syncExtensionSources remove source-scoped API and OAuth providers", () => {
-		const registry = new ModelRegistry(authStorage, modelsJsonPath);
+		const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 		const oauthCredentials: OAuthCredentials = {
 			access: "access-token",
 			refresh: "refresh-token",

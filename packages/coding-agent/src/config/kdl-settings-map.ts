@@ -435,14 +435,7 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 		accessor: "property",
 		propertyName: "simple-ls",
 	},
-	"python.toolMode": { block: "tools", nodePath: "python", accessor: "property", propertyName: "tool-mode" },
-	"python.kernelMode": { block: "tools", nodePath: "python", accessor: "property", propertyName: "kernel-mode" },
-	"python.sharedGateway": {
-		block: "tools",
-		nodePath: "python",
-		accessor: "property",
-		propertyName: "shared-gateway",
-	},
+
 	"lsp.enabled": { block: "tools", nodePath: "lsp", accessor: "property", propertyName: "enabled" },
 	"lsp.formatOnWrite": { block: "tools", nodePath: "lsp", accessor: "property", propertyName: "format-on-write" },
 	"lsp.diagnosticsOnWrite": {
@@ -472,7 +465,7 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 	"grep.contextAfter": { block: "tools", nodePath: "grep", accessor: "property", propertyName: "context-after" },
 	"astGrep.enabled": { block: "tools", nodePath: "ast-grep", accessor: "property", propertyName: "enabled" },
 	"astEdit.enabled": { block: "tools", nodePath: "ast-edit", accessor: "property", propertyName: "enabled" },
-	"notebook.enabled": { block: "tools", nodePath: "notebook", accessor: "property", propertyName: "enabled" },
+
 	"renderMermaid.enabled": {
 		block: "tools",
 		nodePath: "render-mermaid",
