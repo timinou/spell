@@ -58,8 +58,6 @@ export {
 	pollCursorAuth,
 	refreshCursorToken,
 } from "./cursor";
-// DeepSeek (API key)
-export { loginDeepseek } from "./deepseek";
 // GitHub Copilot
 export {
 	getGitHubCopilotBaseUrl,
@@ -81,8 +79,6 @@ export { loginKagi } from "./kagi";
 export { loginKilo } from "./kilo";
 // Kimi Code
 export { loginKimi, refreshKimiToken } from "./kimi";
-// Kimi (API key)
-export { loginKimiApiKey } from "./kimi-api-key";
 // LiteLLM (API key)
 export { loginLiteLLM } from "./litellm";
 // LM Studio (optional API key)
@@ -150,20 +146,9 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 		available: true,
 	},
 	{
-		id: "deepseek",
-		name: "DeepSeek (API Key)",
-		available: true,
-	},
-	{
 		id: "kimi-code",
 		name: "Kimi Code",
 		available: true,
-	},
-	{
-		id: "kimi",
-		name: "Kimi (API Key)",
-		available: true,
-		storageId: "kimi-code",
 	},
 	{
 		id: "kilo",
@@ -218,11 +203,6 @@ const builtInOAuthProviders: OAuthProviderInfo[] = [
 	{
 		id: "huggingface",
 		name: "Hugging Face Inference",
-		available: true,
-	},
-	{
-		id: "inception",
-		name: "Inception",
 		available: true,
 	},
 	{
@@ -403,7 +383,6 @@ export async function refreshOAuthToken(
 			break;
 		case "perplexity":
 		case "huggingface":
-		case "inception":
 		case "opencode-zen":
 		case "opencode-go":
 		case "cerebras":
@@ -422,8 +401,6 @@ export async function refreshOAuthToken(
 		case "minimax-code-cn":
 		case "moonshot":
 		case "kagi":
-		case "deepseek":
-		case "kimi":
 		case "cloudflare-ai-gateway":
 		case "qwen-portal":
 		case "zenmux":

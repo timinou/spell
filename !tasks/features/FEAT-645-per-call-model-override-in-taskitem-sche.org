@@ -1,5 +1,5 @@
 #+TITLE: Per-call model override in TaskItem schema
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d27f187b617f71
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T07-39-22-477Z_14d27f187b617f71.jsonl]]
 #+CUSTOM_ID: FEAT-645-per-call-model-override-in-taskitem-sche

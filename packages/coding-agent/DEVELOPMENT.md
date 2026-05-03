@@ -877,7 +877,7 @@ Key orchestration responsibilities in `TaskTool.execute(...)`:
 - Re-discover available agents on each call with `discoverAgents(this.session.cwd)`.
 - Validate agent existence (`getAgent(...)`), disabled-agent settings (`task.disabledAgents`), and task list integrity (non-empty IDs, case-insensitive duplicate detection).
 - Resolve model/thinking/output schema precedence:
-  - model: `task.agentModelOverrides[agentName]` → resolved agent frontmatter patterns (single inheriting aliases fall back to the parent active model) → parent active model
+  - model: per-call task model > per-call batch model > project `spell.kdl` rule > user `spell.kdl` rule > settings DB `task.agentModelOverrides[agentName]` > frontmatter `model:` > role alias > parent active model
   - output schema: agent frontmatter `output` → tool params `schema` → parent session schema
 - Prepare shared context (`context.md`) and unique per-task IDs via `AgentOutputManager.allocateBatch(...)`.
 - Execute all tasks with bounded concurrency using `mapWithConcurrencyLimit(...)` from `src/task/parallel.ts`.
@@ -895,6 +895,56 @@ Bundled agent definitions are implemented in `packages/coding-agent/src/task/age
 - `PI_BLOCKED_AGENT` prevents self-recursive spawn of a specific agent.
 - Parent spawn policy (`session.getSessionSpawns()`) gates whether a child can be launched.
 - In plan mode (`session.getPlanModeState?.().enabled`), effective subagent tools are replaced with a restricted set (`read`, `grep`, `find`, `ls`, `lsp`, `fetch`, `web_search`, `org`) and child spawning is disabled for that effective agent (`spawns: undefined`).
+
+### Agent Override Rules (`agents { ... }`)
+
+The `agents { ... }` block in `spell.kdl` lets projects and users override which model, thinking level, and output schema an agent receives. These rules are evaluated inside `TaskTool.execute(...)` after per-call overrides and before frontmatter defaults.
+
+```kdl
+agents {
+    // Exact match — highest specificity
+    "code-explorer" model="claude-sonnet-4" thinking="deep" output="json"
+
+    // Prefix wildcard
+    "reviewer*" model="gpt-4o"
+
+    // Suffix wildcard
+    "*task" thinking="none"
+
+    // Infix wildcard
+    "*design*" model="gemini-2.5-pro"
+
+    // Catch-all — lowest specificity
+    "*" model="claude-sonnet-4"
+}
+```
+
+**Selector forms and specificity ranking (highest wins):**
+
+1. **Exact** — `"code-explorer"` matches only that agent name.
+2. **Prefix** — `"reviewer*"` matches any name starting with `reviewer`.
+3. **Suffix** — `"*task"` matches any name ending with `task`.
+4. **Infix** — `"*design*"` matches any name containing `design`.
+5. **Catch-all** — `"*"` matches every agent.
+
+When two rules have the same specificity, the **later** rule in the file wins.
+
+**Conflict semantics and dashboard surface:**
+
+- Rules are surfaced in the `/agents` dashboard with their effective selector, model, thinking level, and output schema.
+- A rule that overlaps with a higher-specificity rule is shown as "shadowed" in the UI.
+- The dashboard lets users toggle individual rules off without editing the KDL file.
+
+**User vs project file precedence:**
+
+- Project `spell.kdl` rules are evaluated first.
+- User `spell.kdl` rules are evaluated next and can override project rules.
+- Per-call `task` tool parameters (`model`, `batchModel`, etc.) still take precedence over both file sources.
+
+**Caching:**
+
+- Rules are read once per `TaskTool.execute` call.
+- Reload via the `/agents` dashboard with Ctrl+R.
 
 ## Execution Boundary: In-Process Session, Not OS Subprocess
 

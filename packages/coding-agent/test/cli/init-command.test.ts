@@ -40,7 +40,7 @@ describe("runInitCommand", () => {
 		await runInitCommand({ flags: {} });
 
 		const content = await Bun.file(path.join(tempDir, "spell.kdl")).text();
-		const config = parseSpellKdl(content);
+		const config = await parseSpellKdl(content);
 		expect(content).toContain('domain "coding"');
 		expect(content).toContain('import "spell.coding.typescript"');
 		expect(config.policies.policies.find(policy => policy.name === "api-quality")?.gates.gateCmd).toBe("bun test");
@@ -56,7 +56,7 @@ describe("runInitCommand", () => {
 		const content = await Bun.file(path.join(tempDir, "spell.kdl")).text();
 		expect(content).toContain('domain "growth"');
 		expect(content).toContain('import "spell.growth.default"');
-		expect(parseSpellKdl(content).domain).toBe("growth");
+		expect((await parseSpellKdl(content)).domain).toBe("growth");
 	});
 
 	it("overwrites spell.kdl when force is set", async () => {
@@ -70,7 +70,7 @@ describe("runInitCommand", () => {
 		const content = await Bun.file(path.join(tempDir, "spell.kdl")).text();
 		expect(content).not.toContain('domain "old"');
 		expect(content).toContain('domain "coding"');
-		expect(parseSpellKdl(content).domain).toBe("coding");
+		expect((await parseSpellKdl(content)).domain).toBe("coding");
 	});
 
 	it("does not overwrite spell.kdl without force", async () => {
@@ -105,7 +105,7 @@ describe("runInitCommand", () => {
 		const content = await Bun.file(path.join(tempDir, "spell.kdl")).text();
 		expect(content).toContain('domain "coding"');
 		expect(content).not.toContain("import ");
-		expect(parseSpellKdl(content).domain).toBe("coding");
+		expect((await parseSpellKdl(content)).domain).toBe("coding");
 	});
 
 	it("uses language template for arbitrary custom domain", async () => {
@@ -122,7 +122,7 @@ describe("runInitCommand", () => {
 		expect(content).toContain('domain "ops"');
 		// Custom non-growth domain still uses language-specific template
 		expect(content).toContain('import "spell.coding.typescript"');
-		const config = parseSpellKdl(content);
+		const config = await parseSpellKdl(content);
 		expect(config.domain).toBe("ops");
 	});
 });

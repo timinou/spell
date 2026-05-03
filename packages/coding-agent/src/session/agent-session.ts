@@ -5047,9 +5047,7 @@ export class AgentSession {
 			if (switched) {
 				delayMs = 0;
 			} else if (this.#isSubagentSession()) {
-				const fallbackModel = await this.#trySwitchUsageLimitFallbackModel(
-					retrySettings.subagentUsageLimitFallbackRoles,
-				);
+				const fallbackModel = await this.#trySwitchUsageLimitFallbackModel([] as string[]);
 				if (fallbackModel) {
 					delayMs = 0;
 				} else if (reason === "QUOTA_EXHAUSTED" || reason === "UNKNOWN") {
@@ -5066,7 +5064,7 @@ export class AgentSession {
 					this.#resolveRetry();
 					return false;
 				} else {
-					delayMs = Math.min(Math.max(delayMs, retryAfterMs), retrySettings.subagentUsageLimitMaxDelayMs);
+					delayMs = Math.min(Math.max(delayMs, retryAfterMs), 7_200_000);
 				}
 			} else if (retryAfterMs > delayMs) {
 				// No more accounts to switch to — wait out the backoff

@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import {
 	type Api,
 	type AssistantMessageEventStream,
@@ -27,9 +26,10 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import { type Static, Type } from "@sinclair/typebox";
-import { type ConfigError, ConfigFile } from "../config";
+import type { ConfigError } from "../config";
 import type { ThemeColor } from "../modes/theme/theme";
 import type { AuthStorage, OAuthCredential } from "../session/auth-storage";
+import type { KdlProviderConfig } from "./kdl-providers";
 
 export const kNoAuth = "N/A";
 
@@ -327,28 +327,6 @@ function validateProviderConfiguration(
 	}
 }
 
-export const ModelsConfigFile = new ConfigFile<ModelsConfig>("models", ModelsConfigSchema).withValidation(
-	"models",
-	config => {
-		for (const [providerName, providerConfig] of Object.entries(config.providers)) {
-			validateProviderConfiguration(
-				providerName,
-				{
-					baseUrl: providerConfig.baseUrl,
-					apiKey: providerConfig.apiKey,
-					api: providerConfig.api as Api | undefined,
-					auth: (providerConfig.auth ?? "apiKey") as ProviderAuthMode,
-					discovery: providerConfig.discovery as ProviderDiscovery | undefined,
-					compat: providerConfig.compat,
-					modelOverrides: providerConfig.modelOverrides,
-					models: (providerConfig.models ?? []) as ProviderValidationModel[],
-				},
-				"models-config",
-			);
-		}
-	},
-);
-
 /** Provider override config (baseUrl, headers, apiKey, compat) without custom models */
 interface ProviderOverride {
 	baseUrl?: string;
@@ -379,7 +357,7 @@ export interface ProviderDiscoveryState {
 	error?: string;
 }
 
-/** Result of loading custom models from models.json */
+/** Result of loading provider-defined models from spell.kdl */
 interface CustomModelsResult {
 	models?: Model<Api>[];
 	overrides?: Map<string, ProviderOverride>;
@@ -638,7 +616,7 @@ export class ModelRegistry {
 	#discoverableProviders: DiscoveryProviderConfig[] = [];
 	#modelOverrides: Map<string, Map<string, ModelOverride>> = new Map();
 	#configError: ConfigError | undefined = undefined;
-	#modelsConfigFile: ConfigFile<ModelsConfig>;
+	#providerConfigs?: Record<string, KdlProviderConfig>;
 	#registeredProviderSources: Set<string> = new Set();
 	#providerDiscoveryStates: Map<string, ProviderDiscoveryState> = new Map();
 	#cacheDbPath?: string;
@@ -648,13 +626,16 @@ export class ModelRegistry {
 
 	/**
 	 * @param authStorage - Auth storage for API key resolution
+	 * @param providerConfigs - Pre-parsed provider configs from KDL (optional)
+	 * @param cacheDbPath - Path for model discovery cache DB (optional)
 	 */
 	constructor(
 		readonly authStorage: AuthStorage,
-		modelsPath?: string,
+		providerConfigs?: Record<string, KdlProviderConfig>,
+		cacheDbPath?: string,
 	) {
-		this.#modelsConfigFile = ModelsConfigFile.relocate(modelsPath);
-		this.#cacheDbPath = modelsPath ? path.join(path.dirname(modelsPath), "models.db") : undefined;
+		this.#providerConfigs = providerConfigs;
+		this.#cacheDbPath = cacheDbPath;
 		// Set up fallback resolver for custom provider API keys
 		this.authStorage.setFallbackResolver(provider => {
 			const keyConfig = this.#customProviderApiKeys.get(provider);
@@ -668,7 +649,7 @@ export class ModelRegistry {
 	}
 
 	/**
-	 * Reload models from disk (built-in + custom from models.json).
+	 * Reload models from config (built-in + provider-defined models from spell.kdl).
 	 */
 	async refresh(strategy: ModelRefreshStrategy = "online-if-uncached"): Promise<void> {
 		this.#reloadStaticModels();
@@ -699,7 +680,6 @@ export class ModelRegistry {
 	}
 
 	#reloadStaticModels(): void {
-		this.#modelsConfigFile.invalidate();
 		this.#customProviderApiKeys.clear();
 		this.#keylessProviders.clear();
 		this.#discoverableProviders = [];
@@ -715,14 +695,14 @@ export class ModelRegistry {
 	}
 
 	/**
-	 * Get any error from loading models.json (undefined if no error).
+	 * Get any error from loading spell.kdl provider config (undefined if no error).
 	 */
 	getError(): ConfigError | undefined {
 		return this.#configError;
 	}
 
 	#loadModels() {
-		// Load custom models from models.json first (to know which providers to override)
+		// Load spell.kdl provider config first (to know which providers to override)
 		const {
 			models: customModels = [],
 			overrides = new Map(),
@@ -872,9 +852,7 @@ export class ModelRegistry {
 	}
 
 	#loadCustomModels(): CustomModelsResult {
-		const { value, error, status } = this.#modelsConfigFile.tryLoad();
-
-		if (status === "error") {
+		if (!this.#providerConfigs || Object.keys(this.#providerConfigs).length === 0) {
 			return {
 				models: [],
 				overrides: new Map(),
@@ -882,20 +860,16 @@ export class ModelRegistry {
 				keylessProviders: new Set(),
 				discoverableProviders: [],
 				configuredProviders: new Set(),
-				error,
-				found: true,
-			};
-		} else if (status === "not-found") {
-			return {
-				models: [],
-				overrides: new Map(),
-				modelOverrides: new Map(),
-				keylessProviders: new Set(),
-				discoverableProviders: [],
-				configuredProviders: new Set(),
-				found: false,
+				found: !!this.#providerConfigs,
 			};
 		}
+
+		// Convert KdlProviderConfig to the internal format
+		const providers: Record<string, Record<string, unknown>> = {};
+		for (const [name, config] of Object.entries(this.#providerConfigs)) {
+			providers[name] = config as unknown as Record<string, unknown>;
+		}
+		const value = { providers } as ModelsConfig;
 
 		const overrides = new Map<string, ProviderOverride>();
 		const allModelOverrides = new Map<string, Map<string, ModelOverride>>();
@@ -1527,7 +1501,7 @@ export class ModelRegistry {
 
 	/**
 	 * Get all models (built-in + custom).
-	 * If models.json had errors, returns only built-in models.
+	 * If spell.kdl provider config had errors, returns only built-in models.
 	 */
 	getAll(): Model<Api>[] {
 		return this.#models;

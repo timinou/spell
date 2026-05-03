@@ -9,12 +9,7 @@ import {
 	INTENT_FIELD,
 	type ThinkingLevel,
 } from "@oh-my-pi/pi-agent-core";
-import {
-	type Message,
-	type Model,
-	type SystemPromptBlock,
-	setAnthropicStreamIdleTimeoutOverrideMs,
-} from "@oh-my-pi/pi-ai";
+import type { Message, Model, SystemPromptBlock } from "@oh-my-pi/pi-ai";
 import { prewarmOpenAICodexResponses } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { GatewayClient } from "@oh-my-pi/pi-gateway";
 import type { Component } from "@oh-my-pi/pi-tui";
@@ -721,10 +716,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	if (imageProvider === "auto" || imageProvider === "gemini" || imageProvider === "openrouter") {
 		setPreferredImageProvider(imageProvider);
 	}
-	const anthropicStreamIdleTimeoutMs = settings.get("providers.anthropicStreamIdleTimeoutMs");
-	setAnthropicStreamIdleTimeoutOverrideMs(
-		typeof anthropicStreamIdleTimeoutMs === "number" ? anthropicStreamIdleTimeoutMs : undefined,
-	);
+	// providers.anthropicStreamIdleTimeoutMs removed in kdl-config cutover
 
 	const sessionManager =
 		options.sessionManager ??

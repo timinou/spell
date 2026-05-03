@@ -61,7 +61,7 @@ export async function detectDomain(cwd: string, cliOverride?: string): Promise<s
 			return "coding";
 		}
 
-		const spellConfig = parseSpellKdl(spellKdlContent);
+		const spellConfig = await parseSpellKdl(spellKdlContent);
 		if (spellConfig.domain) return spellConfig.domain;
 	} catch (error) {
 		if (!isEnoent(error)) {

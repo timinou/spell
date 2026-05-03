@@ -6,6 +6,8 @@
 
 - Added `/login deepseek` and `/login kimi` API-key flows. Selecting `DeepSeek (API Key)` validates a DeepSeek key against `https://api.deepseek.com/v1` and stores it under the `deepseek` provider; selecting `Kimi (API Key)` validates a Kimi key against `https://api.kimi.com/coding/v1` and persists it under the existing `kimi-code` provider so the bundled Kimi Code models pick it up alongside the OAuth device flow.
 - Added `OAuthProviderInfo.storageId` aliasing so the OAuth selector and `/logout` flow display logged-in state and remove credentials at the underlying provider key when a UI entry is intentionally a thin wrapper (e.g. `Kimi (API Key)` -> `kimi-code`).
+- Added `agents { rule ... }` block to spell.kdl for declarative per-agent / glob-pattern overrides of model, thinking-level, tools, and disabled flag. Resolves at runtime via task tool.
+- Added per-call `model` field on the task tool's task items and batch payload for caller-supplied model selection.
 
 ### Fixed
 

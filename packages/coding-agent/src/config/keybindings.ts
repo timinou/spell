@@ -1,4 +1,5 @@
-import * as path from "node:path";
+import { parse } from "@bgotink/kdl";
+
 import {
 	DEFAULT_EDITOR_KEYBINDINGS,
 	type EditorAction,
@@ -8,7 +9,10 @@ import {
 	matchesKey,
 	setEditorKeybindings,
 } from "@oh-my-pi/pi-tui";
-import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+
+import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+
+import { parseKeybindingsBlock, resolveKeybindingRuntimeAction } from "./kdl-keybindings";
 
 /**
  * Application-level actions (coding agent specific).
@@ -93,7 +97,6 @@ export const DEFAULT_KEYBINDINGS: Required<KeybindingsConfig> = {
 	...DEFAULT_APP_KEYBINDINGS,
 };
 
-// App actions list for type checking
 const APP_ACTIONS: AppAction[] = [
 	"interrupt",
 	"clear",
@@ -190,17 +193,41 @@ export class KeybindingsManager {
 	/**
 	 * Create from config file and set up editor keybindings.
 	 */
-	static async create(agentDir: string = getAgentDir()): Promise<KeybindingsManager> {
-		const configPath = path.join(agentDir, "keybindings.json");
-		const config = await KeybindingsManager.#loadFromFile(configPath);
+	static async create(userKdlPath?: string, projectKdlPath?: string): Promise<KeybindingsManager> {
+		let config: KeybindingsConfig = {};
+
+		if (userKdlPath) {
+			try {
+				const content = await Bun.file(userKdlPath).text();
+				const doc = parse(content);
+				const userBindings = parseKeybindingsBlock(doc);
+				config = { ...config, ...userBindings };
+			} catch (error) {
+				if (!isEnoent(error)) logger.warn("keybindings: failed to load user KDL", { error });
+			}
+		}
+
+		if (projectKdlPath) {
+			try {
+				const content = await Bun.file(projectKdlPath).text();
+				const doc = parse(content);
+				const projectBindings = parseKeybindingsBlock(doc);
+				config = { ...config, ...projectBindings };
+			} catch (error) {
+				if (!isEnoent(error)) logger.warn("keybindings: failed to load project KDL", { error });
+			}
+		}
+
 		const manager = new KeybindingsManager(config);
 
-		// Set up editor keybindings globally
 		const editorConfig: EditorKeybindingsConfig = {};
 		for (const [action, keys] of Object.entries(config)) {
-			if (!isAppAction(action)) {
+			if (resolveKeybindingRuntimeAction(action)) continue;
+			if (action in DEFAULT_EDITOR_KEYBINDINGS) {
 				editorConfig[action as EditorAction] = keys;
+				continue;
 			}
+			logger.warn("keybindings: unknown configured action", { action });
 		}
 		setEditorKeybindings(new EditorKeybindingsManager(editorConfig));
 
@@ -214,20 +241,9 @@ export class KeybindingsManager {
 		return new KeybindingsManager(config);
 	}
 
-	static async #loadFromFile(path: string): Promise<KeybindingsConfig> {
-		try {
-			return await Bun.file(path).json();
-		} catch (error) {
-			if (isEnoent(error)) return {};
-			logger.warn("Failed to parse keybindings config", { path, error: String(error) });
-			return {};
-		}
-	}
-
 	#buildMaps(): void {
 		this.#appActionToKeys.clear();
 
-		// Set defaults for app actions
 		for (const [action, keys] of Object.entries(DEFAULT_APP_KEYBINDINGS)) {
 			const keyArray = Array.isArray(keys) ? keys : [keys];
 			this.#appActionToKeys.set(
@@ -236,12 +252,12 @@ export class KeybindingsManager {
 			);
 		}
 
-		// Override with user config (app actions only)
 		for (const [action, keys] of Object.entries(this.config)) {
-			if (keys === undefined || !isAppAction(action)) continue;
+			const runtimeAction = resolveKeybindingRuntimeAction(action);
+			if (keys === undefined || !runtimeAction || !isAppAction(runtimeAction)) continue;
 			const keyArray = Array.isArray(keys) ? keys : [keys];
 			this.#appActionToKeys.set(
-				action,
+				runtimeAction,
 				keyArray.map(key => normalizeKeyId(key as KeyId)),
 			);
 		}

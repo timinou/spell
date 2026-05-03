@@ -701,7 +701,7 @@ export function resolveCliModel(options: {
 		return {
 			model: undefined,
 			warning: undefined,
-			error: "No models available. Check your installation or add models to models.json.",
+			error: "No models available. Check your installation or add providers/models to spell.kdl.",
 		};
 	}
 

@@ -16,3 +16,15 @@ policy "api-quality" layer="api" {
 policy "cmd-quality" layer="cmd" {
     gate-commit #true
 }
+// agents {
+//     rule "explore" {
+//         model "anthropic/claude-haiku-4-5"
+//     }
+//     rule "*-tester" {
+//         model "openai/gpt-5-mini"
+//         thinking-level "low"
+//     }
+//     rule "*" {
+//         // catch-all default for any agent not matched above
+//     }
+// }

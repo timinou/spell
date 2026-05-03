@@ -1,23 +1,8 @@
 import type { Document, Node } from "@bgotink/kdl";
 import { parse } from "@bgotink/kdl";
 import { logger } from "@oh-my-pi/pi-utils";
-
+import { getBooleanArgument, getStringArgument, getStringProperty } from "./kdl-helpers";
 import type { LayerDefinition, TaskPolicy, TaskPolicyConfig, TaskPolicyGates } from "./task-policies";
-
-export function getStringArgument(node: Node, index = 0): string | undefined {
-	const value = node.getArgument(index);
-	return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-export function getBooleanArgument(node: Node, index = 0): boolean | undefined {
-	const value = node.getArgument(index);
-	return typeof value === "boolean" ? value : undefined;
-}
-
-export function getStringProperty(node: Node, name: string): string | undefined {
-	const value = node.getProperty(name);
-	return typeof value === "string" && value.length > 0 ? value : undefined;
-}
 
 function parseLayerNode(node: Node): [string, LayerDefinition] | undefined {
 	const name = getStringArgument(node);

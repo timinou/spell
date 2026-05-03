@@ -142,7 +142,6 @@ type SettingDef =
 // under `as const` while still letting SettingValue infer the correct element type.
 const EMPTY_STRING_ARRAY: string[] = [];
 const EMPTY_STRING_RECORD: Record<string, string> = {};
-const DEFAULT_SUBAGENT_USAGE_LIMIT_FALLBACK_ROLES: string[] = ["task", "default", "slow", "smol"];
 
 export const SETTINGS_SCHEMA = {
 	// ────────────────────────────────────────────────────────────────────────
@@ -438,11 +437,6 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	"retry.baseDelayMs": { type: "number", default: 2000 },
-	"retry.subagentUsageLimitMaxDelayMs": { type: "number", default: 60_000 },
-	"retry.subagentUsageLimitFallbackRoles": {
-		type: "array",
-		default: DEFAULT_SUBAGENT_USAGE_LIMIT_FALLBACK_ROLES,
-	},
 
 	// ────────────────────────────────────────────────────────────────────────
 	// Interaction
@@ -1577,17 +1571,6 @@ export const SETTINGS_SCHEMA = {
 		},
 	},
 
-	"providers.anthropicStreamIdleTimeoutMs": {
-		type: "number",
-		default: 180_000,
-		ui: {
-			tab: "providers",
-			label: "Anthropic Stream Idle Timeout",
-			description:
-				"Milliseconds before aborting a silent Anthropic stream; 0 disables. PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS overrides this setting.",
-			submenu: true,
-		},
-	},
 	"providers.openaiWebsockets": {
 		type: "enum",
 		values: ["auto", "off", "on"] as const,
@@ -1892,8 +1875,6 @@ export interface RetrySettings {
 	enabled: boolean;
 	maxRetries: number;
 	baseDelayMs: number;
-	subagentUsageLimitMaxDelayMs: number;
-	subagentUsageLimitFallbackRoles: string[];
 }
 
 export interface MemoriesSettings {
