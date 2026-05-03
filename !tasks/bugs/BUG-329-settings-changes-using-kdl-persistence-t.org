@@ -1,5 +1,5 @@
 #+TITLE: Settings changes using KDL persistence tiers are lost on abnormal exit and on normal exit before debounce flush fires
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14d2b250d7528657
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T11-23-09-533Z_14d2b250d7528657.jsonl]]
 #+CUSTOM_ID: BUG-329-settings-changes-using-kdl-persistence-t
@@ -59,3 +59,5 @@ Single file: `packages/coding-agent/src/config/settings.ts`
 1. `settings.set("lastChangelogVersion", "13.12.8", "user")` called during startup → settings value visible in `~/.spell/spell.kdl` after process exits normally.
 2. Changlog NOT shown on next startup (because `lastChangelogVersion` persists).
 3. `bun run check:ts` passes.
+
+NOTE [2026-05-03]: Implemented: Added postmortem.register("settings-flush", () => instance.flush()) in Settings.init(). The flush() method already existed and handles clearing pending timers + synchronous save. Postmortem runs cleanup callbacks on exit (including SIGINT and process.exit()). Verified: bun run check:ts passes, existing settings tests unchanged.
