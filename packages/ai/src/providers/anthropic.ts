@@ -116,6 +116,16 @@ function isAnthropicApiBaseUrl(baseUrl?: string): boolean {
 	}
 }
 
+function isLocalhostBaseUrl(baseUrl?: string): boolean {
+	if (!baseUrl) return false;
+	try {
+		const url = new URL(baseUrl);
+		return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]";
+	} catch {
+		return false;
+	}
+}
+
 export function isAnthropicAdaptiveOnlyModel(model: Model<"anthropic-messages">): boolean {
 	return model.id === "claude-opus-4-7";
 }
@@ -163,8 +173,11 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 		"X-App": "cli",
 	};
 
+	// Localhost proxies handle their own auth; skip sending API keys
 	if (oauthToken || !isAnthropicApiBaseUrl(options.baseUrl)) {
-		headers.Authorization = `Bearer ${options.apiKey}`;
+		if (!isLocalhostBaseUrl(options.baseUrl)) {
+			headers.Authorization = `Bearer ${options.apiKey}`;
+		}
 	} else {
 		headers["X-Api-Key"] = options.apiKey;
 	}
@@ -424,17 +437,23 @@ function normalizeBaseUrl(baseUrl: string | undefined): string | undefined {
 }
 
 function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: string): string | undefined {
+	if (model.provider === "anthropic") {
+		// KDL base-url wins first (set via ModelRegistry from provider config)
+		const modelBaseUrl = normalizeBaseUrl(model.baseUrl);
+		if (modelBaseUrl && modelBaseUrl !== "https://api.anthropic.com") return modelBaseUrl;
+	}
 	if (model.provider === "github-copilot") {
 		return normalizeBaseUrl(resolveGitHubCopilotBaseUrl(model.baseUrl, apiKey) ?? model.baseUrl);
 	}
 	if (model.provider === "anthropic" && isFoundryEnabled()) {
 		const foundryBaseUrl = normalizeBaseUrl($env.FOUNDRY_BASE_URL);
-		if (foundryBaseUrl) {
-			return foundryBaseUrl;
-		}
+		if (foundryBaseUrl) return foundryBaseUrl;
 	}
 	if (model.provider === "anthropic") {
-		return normalizeBaseUrl(model.baseUrl) ?? "https://api.anthropic.com";
+		// Env ANTHROPIC_BASE_URL is fallback when no KDL base-url
+		const envBaseUrl = normalizeBaseUrl($env.ANTHROPIC_BASE_URL);
+		if (envBaseUrl) return envBaseUrl;
+		return "https://api.anthropic.com";
 	}
 	return normalizeBaseUrl(model.baseUrl);
 }
@@ -1045,7 +1064,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 	return {
 		isOAuthToken: oauthToken,
 		apiKey: oauthToken ? null : apiKey,
-		authToken: oauthToken ? apiKey : undefined,
+		authToken: oauthToken && !isLocalhostBaseUrl(baseUrl) ? apiKey : undefined,
 		baseURL: baseUrl,
 		maxRetries: 5,
 		dangerouslyAllowBrowser: true,
