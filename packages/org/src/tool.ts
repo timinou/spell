@@ -1250,13 +1250,13 @@ export function createOrgTool(
 						"wave",
 						"graph",
 						"archive",
-					"suboutline-add",
-					"recall",
-					"remember",
-					"timeline",
-					"subgraph",
-					"link",
-				],
+						"suboutline-add",
+						"recall",
+						"remember",
+						"timeline",
+						"subgraph",
+						"link",
+					],
 				},
 			},
 			required: ["command"],
@@ -1360,7 +1360,7 @@ export function createOrgTool(
 						depends: Array.isArray(args.depends) ? (args.depends as string[]) : undefined,
 						layer: args.layer as string | undefined,
 						replace: args.replace as boolean | undefined,
-				});
+					});
 				case "recall":
 					return cmdRecall(ctx, {
 						text: args.text as string | undefined,
