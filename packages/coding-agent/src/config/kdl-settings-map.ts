@@ -30,7 +30,6 @@ export interface KdlSettingMapping {
 
 /** Settings that are internal state and not written to spell.kdl */
 export const EXCLUDED_FROM_KDL = new Set<string>([
-	"lastChangelogVersion",
 	"shellPath",
 	"extensions",
 	"disabledExtensions",
@@ -237,6 +236,7 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 	autocompleteMaxVisible: { block: "interaction", nodePath: "autocomplete-max-visible", accessor: "argument" },
 	"startup.quiet": { block: "interaction", nodePath: "startup", accessor: "property", propertyName: "quiet" },
 	collapseChangelog: { block: "interaction", nodePath: "collapse-changelog", accessor: "argument" },
+	lastChangelogVersion: { block: "interaction", nodePath: "last-changelog-version", accessor: "argument" },
 	"completion.notify": {
 		block: "interaction",
 		nodePath: "completion",

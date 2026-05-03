@@ -261,13 +261,13 @@ async function getChangelogForDisplay(parsed: Args): Promise<string | undefined>
 
 	if (!lastVersion) {
 		if (entries.length > 0) {
-			settings.set("lastChangelogVersion", VERSION);
+			settings.set("lastChangelogVersion", VERSION, "user");
 			return entries.map(e => e.content).join("\n\n");
 		}
 	} else {
 		const newEntries = getNewEntries(entries, lastVersion);
 		if (newEntries.length > 0) {
-			settings.set("lastChangelogVersion", VERSION);
+			settings.set("lastChangelogVersion", VERSION, "user");
 			return newEntries.map(e => e.content).join("\n\n");
 		}
 	}
