@@ -30,7 +30,7 @@ For simple tasks (1-2 files, linear changes), execute directly.
 </workflow>
 
 ### Example
-``` 
+```
 // 1. After investigating, create sniper todos:
 todo_write({ ops: [{ op: "replace", groups: [{
   name: "Implementation",

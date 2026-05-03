@@ -53,7 +53,7 @@ describe("AgentSession role model thinking behavior", () => {
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		authStorages.push(authStorage);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, undefined, path.join(tempDir.path(), "models.yml"));
 
 		sessionSettings = Settings.isolated();
 		for (const [role, modelRoleValue] of Object.entries(options.modelRoles)) {
@@ -188,7 +188,11 @@ describe("AgentSession role model thinking behavior", () => {
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth-non-xhigh.db"));
 		authStorages.push(authStorage);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models-non-xhigh.yml"));
+		const modelRegistry = new ModelRegistry(
+			authStorage,
+			undefined,
+			path.join(tempDir.path(), "models-non-xhigh.yml"),
+		);
 
 		sessionSettings = Settings.isolated();
 		session = new AgentSession({
@@ -218,7 +222,11 @@ describe("AgentSession role model thinking behavior", () => {
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth-cycle-thinking.db"));
 		authStorages.push(authStorage);
 		authStorage.setRuntimeApiKey("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models-cycle-thinking.yml"));
+		const modelRegistry = new ModelRegistry(
+			authStorage,
+			undefined,
+			path.join(tempDir.path(), "models-cycle-thinking.yml"),
+		);
 
 		sessionSettings = Settings.isolated();
 		session = new AgentSession({

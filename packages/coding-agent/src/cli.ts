@@ -53,7 +53,7 @@ const commands: CommandEntry[] = [
 	{ name: "grep", load: () => import("./commands/grep").then(m => m.default) },
 	{ name: "init", load: () => import("./commands/init").then(m => m.default) },
 	{ name: "growth", load: () => import("./commands/growth").then(m => m.default) },
-	{ name: "jupyter", load: () => import("./commands/jupyter").then(m => m.default) },
+
 	{ name: "plugin", load: () => import("./commands/plugin").then(m => m.default) },
 	{ name: "recover", load: () => import("./commands/recover").then(m => m.default) },
 	{ name: "setup", load: () => import("./commands/setup").then(m => m.default) },

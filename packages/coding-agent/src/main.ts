@@ -13,7 +13,7 @@ import { createInterface } from "node:readline/promises";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { StatusFileReader } from "@oh-my-pi/pi-desktop-common";
 import { isDisplayAvailable } from "@oh-my-pi/pi-qml";
-import { $env, getProjectDir, logger, postmortem, setProjectDir, VERSION } from "@oh-my-pi/pi-utils";
+import { $env, getAgentDir, getProjectDir, logger, postmortem, setProjectDir, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "chalk";
 import type { Args } from "./cli/args";
 import { loadSandboxPolicy } from "./cli/args";
@@ -24,6 +24,7 @@ import { findConfigFile } from "./config";
 import { ModelRegistry } from "./config/model-registry";
 import { resolveCliModel, resolveModelRoleValue, resolveModelScope, type ScopedModel } from "./config/model-resolver";
 import { Settings, settings } from "./config/settings";
+import { loadMergedProviderConfigs } from "./config/spell-kdl";
 import { initializeWithSettings } from "./discovery";
 import { detectDomain } from "./domain/detection";
 import { loadActiveDomain, type SpellDomain } from "./domain/loader";
@@ -603,7 +604,8 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 	// Create AuthStorage and ModelRegistry upfront
 	const { authStorage, modelRegistry } = await logger.timeAsync("discoverModels", async () => {
 		const authStorage = await discoverAuthStorage();
-		const modelRegistry = new ModelRegistry(authStorage);
+		const providerConfigs = await loadMergedProviderConfigs(getProjectDir(), getAgentDir());
+		const modelRegistry = new ModelRegistry(authStorage, providerConfigs);
 		return { authStorage, modelRegistry };
 	});
 

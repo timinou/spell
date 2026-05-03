@@ -292,7 +292,6 @@
             parts.push(msg.role);
             if (msg.content) parts.push(extractContent(msg.content));
             if (msg.role === 'bashExecution' && msg.command) parts.push(msg.command);
-            if (msg.role === 'pythonExecution' && msg.code) parts.push(msg.code);
             break;
           }
           case 'custom_message':
@@ -482,10 +481,6 @@
             if (msg.role === 'bashExecution') {
               const cmd = truncate(normalize(msg.command || ''));
               return labelHtml + `<span class="tree-role-tool">[bash]:</span> ${escapeHtml(cmd)}`;
-            }
-            if (msg.role === 'pythonExecution') {
-              const code = truncate(normalize(msg.code || ''));
-              return labelHtml + `<span class="tree-role-tool">[python]:</span> ${escapeHtml(code)}`;
             }
             return labelHtml + `<span class="tree-muted">[${msg.role}]</span>`;
           }
@@ -982,19 +977,6 @@
             return html;
           }
 
-          if (msg.role === 'pythonExecution') {
-            const isError = msg.cancelled || (msg.exitCode !== 0 && msg.exitCode !== null);
-            let html = `<div class="tool-execution ${isError ? 'error' : 'success'}" id="${entryId}">${tsHtml}`;
-            html += `<div class="tool-command">$ ${escapeHtml(msg.code)}</div>`;
-            if (msg.output) html += formatExpandableOutput(msg.output, 10);
-            if (msg.cancelled) {
-              html += '<div style="color: var(--warning)">(cancelled)</div>';
-            } else if (msg.exitCode !== 0 && msg.exitCode !== null) {
-              html += `<div style="color: var(--error)">(exit ${msg.exitCode})</div>`;
-            }
-            html += '</div>';
-            return html;
-          }
 
           if (msg.role === 'toolResult') return '';
         }

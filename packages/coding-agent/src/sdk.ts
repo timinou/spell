@@ -32,6 +32,7 @@ import { resolveModeConfig } from "./discovery/mode-helpers";
 import "./discovery";
 import { buildServicePromptSection } from "./browser/service-prompt-section";
 import { resolveConfigValue } from "./config/resolve-config-value";
+import { loadMergedProviderConfigs } from "./config/spell-kdl";
 import { loadTaskPolicies, mergePolicies, type TaskPolicy } from "./config/task-policies";
 import { initializeWithSettings } from "./discovery";
 import type { SpellDomain } from "./domain/loader";
@@ -76,7 +77,7 @@ import {
 	RuleProtocolHandler,
 	SkillProtocolHandler,
 } from "./internal-urls";
-import { disposeAllKernelSessions } from "./ipy/executor";
+
 import { LoopManager } from "./loop/loop-manager";
 import { discoverAndLoadMCPTools, type MCPManager, type MCPToolsLoadResult } from "./mcp";
 import {
@@ -122,7 +123,6 @@ import {
 	isCodeSearchProviderId,
 	isSearchProviderPreference,
 	loadSshTool,
-	PythonTool,
 	ReadTool,
 	ResolveTool,
 	renderSearchToolBm25Description,
@@ -216,7 +216,6 @@ export interface CreateAgentSessionOptions {
 	/** Optional sandbox policy constraining file writes and bash commands for this session */
 	sandboxPolicy?: import("./sandbox").SandboxPolicy;
 	/** Skip Python kernel availability check and prelude warmup */
-	skipPythonPreflight?: boolean;
 
 	/** Tool names explicitly requested (enables disabled-by-default tools) */
 	toolNames?: string[];
@@ -293,7 +292,6 @@ export {
 	GrepTool,
 	HIDDEN_TOOLS,
 	loadSshTool,
-	PythonTool,
 	ReadTool,
 	ResolveTool,
 	type ToolSession,
@@ -464,14 +462,6 @@ function registerSshCleanup(): void {
 	if (sshCleanupRegistered) return;
 	sshCleanupRegistered = true;
 	postmortem.register("ssh-cleanup", cleanupSshResources);
-}
-
-let pythonCleanupRegistered = false;
-
-function registerPythonCleanup(): void {
-	if (pythonCleanupRegistered) return;
-	pythonCleanupRegistered = true;
-	postmortem.register("python-cleanup", disposeAllKernelSessions);
 }
 
 function customToolToDefinition(tool: CustomTool): ToolDefinition {
@@ -675,12 +665,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const eventBus = options.eventBus ?? new EventBus();
 
 	registerSshCleanup();
-	registerPythonCleanup();
 
 	// Use provided or create AuthStorage and ModelRegistry
 	const { authStorage, modelRegistry } = await logger.timeAsync("discoverModels", async () => {
 		const authStorage = options.authStorage ?? (await discoverAuthStorage(agentDir));
-		const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage);
+		const providerConfigs = await loadMergedProviderConfigs(cwd, agentDir);
+		const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage, providerConfigs);
 		return { authStorage, modelRegistry };
 	});
 	const spellcastingWarning = await logger.timeAsync("validateSpellcastingToken", () =>
@@ -980,7 +970,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		enableLsp,
 		sandboxPolicy: options.sandboxPolicy,
 		hasEditTool: requestedBuiltInToolNames.includes("edit"),
-		skipPythonPreflight: options.skipPythonPreflight,
+
 		contextFiles,
 		skills,
 		eventBus,
@@ -1783,20 +1773,23 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 
 	// Warm up LSP servers (connects to detected servers)
-	let lspServers: CreateAgentSessionResult["lspServers"];
+	// LSP servers are warmed up in background — don't block session creation.
+	// Tools use lazy getOrCreateClient, so they work before warmup completes.
+	const lspServers: CreateAgentSessionResult["lspServers"] = [];
 	if (enableLsp && settings.get("lsp.diagnosticsOnWrite")) {
-		try {
-			const result = await logger.timeAsync("warmupLspServers", warmupLspServers, cwd, {
-				onConnecting: serverNames => {
-					if (options.hasUI && serverNames.length > 0) {
-						process.stderr.write(chalk.gray(`Starting LSP servers: ${serverNames.join(", ")}…\n`));
-					}
-				},
+		warmupLspServers(cwd, {
+			onConnecting: serverNames => {
+				if (options.hasUI && serverNames.length > 0) {
+					process.stderr.write(chalk.gray(`Starting LSP servers: ${serverNames.join(", ")}…\n`));
+				}
+			},
+		})
+			.then(result => {
+				lspServers.push(...result.servers);
+			})
+			.catch(error => {
+				logger.warn("LSP server warmup failed", { cwd, error: String(error) });
 			});
-			lspServers = result.servers;
-		} catch (error) {
-			logger.warn("LSP server warmup failed", { cwd, error: String(error) });
-		}
 	}
 
 	toolSession.dispose = async () => {

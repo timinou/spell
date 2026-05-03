@@ -9,8 +9,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createOrgTool, type OrgToolDefinition } from "../src/tool";
 import { executeOrg } from "@oh-my-pi/pi-natives";
+import { createOrgTool, type OrgToolDefinition } from "../src/tool";
 
 let tmpDir: string;
 let tool: OrgToolDefinition;

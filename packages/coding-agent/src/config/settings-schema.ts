@@ -996,37 +996,6 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// Python
-	"python.toolMode": {
-		type: "enum",
-		values: ["ipy-only", "bash-only", "both"] as const,
-		default: "both",
-		ui: {
-			tab: "editing",
-			label: "Python Tool Mode",
-			description: "How Python code is executed",
-		},
-	},
-
-	"python.kernelMode": {
-		type: "enum",
-		values: ["session", "per-call"] as const,
-		default: "session",
-		ui: {
-			tab: "editing",
-			label: "Python Kernel Mode",
-			description: "Whether to keep IPython kernel alive across calls",
-		},
-	},
-
-	"python.sharedGateway": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "editing",
-			label: "Shared Python Gateway",
-			description: "Share IPython kernel gateway across pi instances",
-		},
-	},
 
 	// ────────────────────────────────────────────────────────────────────────
 	// Tools
@@ -1138,15 +1107,6 @@ export const SETTINGS_SCHEMA = {
 	},
 
 	// Optional tools
-	"notebook.enabled": {
-		type: "boolean",
-		default: true,
-		ui: {
-			tab: "tools",
-			label: "Notebook",
-			description: "Enable the notebook tool for notebook editing",
-		},
-	},
 
 	"renderMermaid.enabled": {
 		type: "boolean",

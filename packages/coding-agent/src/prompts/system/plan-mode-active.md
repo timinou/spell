@@ -120,11 +120,11 @@ PLAN item requirements (`org create` in `{{planCategory}}`):
 - Include `* Context`, `* Verification`, and `* Execution Manifest` headings
 - include `LAYER`
 - Run `org wave --manifest=true --planItemId=<PLAN-ID>` so the Execution Manifest is written directly into the PLAN body and returned to the caller with wave sections plus readable `** File-level DAG` and `** Subfeature-level DAG` sections
-- PLAN body MUST list every linked child both as `[[id:<child-id>]]` at the top (for discovery) AND as `[[id:<child-id>::<slug>]]` bullets inside the manifest section
-- DAG contract: file DAG nodes are child CUSTOM_IDs; subfeature DAG nodes are sub-outline CUSTOM_IDs; edge `from` depends on `to`; DAG headings are context only and MUST NOT use the `:wave:` tag
+- PLAN body **MUST** list every linked child both as `[[id:<child-id>]]` at the top (for discovery) AND as `[[id:<child-id>::<slug>]]` bullets inside the manifest section
+- DAG contract: file DAG nodes are child CUSTOM_IDs; subfeature DAG nodes are sub-outline CUSTOM_IDs; edge `from` depends on `to`; DAG headings are context only and **MUST NOT** use the `:wave:` tag
 - Validator issue categories to avoid: `missing-top-level-link`, `missing-suboutline-link`, `missing-suboutline-declaration`, `manifest-missing-suboutlines`
 
-Example: create children (`state: "ITEM"`) → run `org wave --manifest=true --planItemId=<PLAN-ID>` → create/update PLAN in `{{planCategory}}` (`state: "{{planInitState}}"`, body with `* Context`, `* Verification`, `* Execution Manifest`, top-level `[[id:...]]` links, sub-outline `[[id:...::...]]` links, and non-`:wave:` DAG sections for orchestration context) → call `{{exitToolName}}` with `title` and `itemId`.
+Example: create children (`state: "ITEM"`) → run `org wave --manifest=true --planItemId=<PLAN-ID>` → create/update PLAN in `{{planCategory}}` (`state: "{{planInitState}}"`, body with `* Context`, `* Verification`, `* Execution Manifest`, top-level `[[id:…]]` links, sub-outline `[[id:…::…]]` links, and non-`:wave:` DAG sections for orchestration context) → call `{{exitToolName}}` with `title` and `itemId`.
 {{else}}
 Plan file: {{#if planExists}}`{{planFilePath}}` exists; you **MUST** read + update incrementally.{{else}}you **MUST** create a plan at `{{planFilePath}}`.{{/if}}
 
@@ -239,7 +239,6 @@ Update `{{planFilePath}}` (`{{editToolName}}` for changes, `{{writeToolName}}` o
 - Verification section
 {{/if}}
 </procedure>
-
 {{/if}}
 
 <critical>
@@ -276,7 +275,7 @@ Address Metis gaps with further user questions where needed.
 ### Phase 3: Create Org Items Directly
 1. Create children (`state: "ITEM"`) using the Org Item Body Standard above
 2. Run `org wave --manifest=true --planItemId=<PLAN-ID>` to compute wave structure from the sub-outline dependency graph and write the Execution Manifest into the PLAN body; output includes wave sections plus file-level and subfeature-level DAG sections
-3. Create PLAN (`state: "{{planInitState}}"`) with required top-level `[[id:…]]` links plus sub-outline manifest links using wave headings (`:wave:` tag); DAG headings are context only and MUST NOT have `:wave:`:
+3. Create PLAN (`state: "{{planInitState}}"`) with required top-level `[[id:…]]` links plus sub-outline manifest links using wave headings (`:wave:` tag); DAG headings are context only and **MUST NOT** have `:wave:`:
 
 ```
 - [[id:FEAT-001]]

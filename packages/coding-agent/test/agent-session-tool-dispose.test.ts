@@ -42,7 +42,7 @@ describe("AgentSession tool dispose lifecycle", () => {
 		sessionManager = SessionManager.create(tempDir);
 		const settings = Settings.isolated();
 		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth.db"));
-		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const modelRegistry = new ModelRegistry(authStorage, undefined, path.join(tempDir, "models.yml"));
 
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Test model not found in registry");
@@ -148,7 +148,7 @@ describe("AgentSession tool dispose lifecycle", () => {
 		// We need to create a new session with toolSession in config
 		const settings = Settings.isolated();
 		const authStorage = await AuthStorage.create(path.join(tempDir, "testauth2.db"));
-		const modelRegistry2 = new ModelRegistry(authStorage, path.join(tempDir, "models2.yml"));
+		const modelRegistry2 = new ModelRegistry(authStorage, undefined, path.join(tempDir, "models2.yml"));
 		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Test model not found");
 

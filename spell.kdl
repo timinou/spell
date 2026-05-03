@@ -1,0 +1,122 @@
+// Spell project configuration
+// Docs: https://github.com/can1357/oh-my-pi
+
+domain "coding"
+import "spell.coding.typescript"
+
+appearance {
+	// theme dark="titanium" light="light"
+	// symbols "unicode"
+	// color-blind #false
+	// status-line preset="default" separator="powerline-thin" {
+	// 	left "pi" "model" "plan_mode" "path" "git"
+	// 	right "token_total" "cost" "context_pct" "time"
+	// 	show-hook-status #true
+	// }
+	// images show-inline=#true auto-resize=#true
+}
+
+model {
+	// thinking "high"
+	// max-thinking-tokens 16384
+	roles {
+		// default "anthropic/claude-sonnet-4-20250514"
+		// smol "anthropic/claude-haiku-3"
+		// slow "anthropic/claude-sonnet-4-20250514"
+		// task "anthropic/claude-sonnet-4-20250514"
+		// commit "anthropic/claude-haiku-3"
+	}
+	// sampling {
+	// 	temperature -1
+	// 	top-p -1
+	// 	top-k -1
+	// 	service-tier "none"
+	// }
+	// retry max=3 backoff-ms=1000
+	// compaction enabled=#true threshold=0.7 strategy="context-full"
+}
+
+providers {
+	// provider "anthropic" {
+	// 	api-key "$ANTHROPIC_API_KEY"
+	// }
+}
+
+tools {
+	// intent-tracing #true
+	// max-timeout 0
+	// bash enabled=#true
+	// fetch enabled=#true
+	// browser enabled=#true headless=#true
+	// org enabled=#true
+	// checkpoint enabled=#false
+	// mcp project-config=#true discovery-mode=#false notifications=#false
+	// async enabled=#false max-jobs=100
+}
+
+tasks {
+	// eager #false
+	// auto-roster #true
+	// max-concurrency 32
+	// max-recursion 2
+	// max-tool-calls 200
+	// cache-stagger-ms 800
+	// isolation mode="none" merge="patch" commits="generic"
+}
+
+interaction {
+	// steering #true
+	// caveman enabled=#false level="full"
+	// auto-compact #true
+	context max-file-lines=2000 {
+		// promotion enabled=#true target="slow"
+	}
+	editing {
+		// auto-format #true
+		// preserve-indentation #true
+	}
+}
+
+keybindings {
+	// interrupt "escape"
+	// clear "ctrl+c"
+	// exit "ctrl+d"
+	// cycle-thinking-level "shift+tab"
+	// cycle-model-forward "ctrl+p"
+	// cycle-model-backward "shift+ctrl+p"
+	// select-model "ctrl+l"
+	// toggle-plan-mode "alt+shift+p"
+	// history-search "ctrl+r"
+	// expand-tools "ctrl+o"
+	// toggle-thinking "ctrl+t"
+	// external-editor "ctrl+g"
+	// follow-up "ctrl+enter"
+	// paste-image "ctrl+v"
+	// toggle-stt "alt+h"
+}
+
+skills {
+	// enabled #true
+	// enable-commands #true
+	// custom-directories "./custom-skills"
+	// ignored "voice-agent"
+}
+
+org {
+	// enabled #true
+	// todo-keywords "INIT" "ITEM" "DOING" "REVIEW" "DONE" "BLOCKED"
+}
+
+// Project-specific policy overrides
+// The imported template provides base layers and policies.
+// Policies declared here override the template by name.
+policy "api-quality" layer="api" {
+    gate-commit #true
+    gate-cmd "bun run --workspaces --if-present --parallel test"
+    verify-cmd "bun run --parallel check:ts check:rs"
+}
+
+policy "ui-quality" layer="ui" {
+    gate-commit #true
+    gate-cmd "bun run --workspaces --if-present --parallel test"
+}

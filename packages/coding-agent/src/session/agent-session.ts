@@ -90,7 +90,6 @@ import type { HookCommandContext } from "../extensibility/hooks/types";
 import type { Skill, SkillWarning } from "../extensibility/skills";
 import { expandSlashCommand, type FileSlashCommand } from "../extensibility/slash-commands";
 import { resolveLocalUrlToPath } from "../internal-urls";
-import { executePython as executePythonCommand, type PythonResult } from "../ipy/executor";
 import type { LoopManager } from "../loop/loop-manager";
 import manifestBuildingPrompt from "../loop/prompts/manifest-building-active.md" with { type: "text" };
 import {
@@ -155,8 +154,6 @@ import {
 	convertToLlm,
 	type FileMentionMessage,
 	type HookMessage,
-	type PythonExecutionMessage,
-	pythonExecutionToText,
 } from "./messages";
 import type {
 	BranchSummaryEntry,
@@ -462,10 +459,6 @@ export class AgentSession {
 	#pendingBashMessages: BashExecutionMessage[] = [];
 	#trackedBashToolExecutions: TrackedBashExecution[] = [];
 	#bashToolArgsByCallId = new Map<string, Record<string, unknown>>();
-
-	// Python execution state
-	#pythonAbortController: AbortController | undefined = undefined;
-	#pendingPythonMessages: PythonExecutionMessage[] = [];
 
 	// Extension system
 	#extensionRunner: ExtensionRunner | undefined = undefined;
@@ -2481,7 +2474,6 @@ export class AgentSession {
 		try {
 			// Flush any pending bash messages before the new prompt
 			this.#flushPendingBashMessages();
-			this.#flushPendingPythonMessages();
 
 			// Reset todo reminder count on new user prompt
 			this.#todoReminderCount = 0;
@@ -5301,117 +5293,17 @@ export class AgentSession {
 		this.#pendingBashMessages = [];
 	}
 
-	// =========================================================================
-	// User-Initiated Python Execution
-	// =========================================================================
-
-	/**
-	 * Execute Python code in the shared kernel.
-	 * Uses the same kernel session as the agent's Python tool, allowing collaborative editing.
-	 * @param code The Python code to execute
-	 * @param onChunk Optional streaming callback for output
-	 * @param options.excludeFromContext If true, execution won't be sent to LLM ($$ prefix)
-	 */
-	async executePython(
-		code: string,
-		onChunk?: (chunk: string) => void,
-		options?: { excludeFromContext?: boolean },
-	): Promise<PythonResult> {
-		const excludeFromContext = options?.excludeFromContext === true;
-		const cwd = this.sessionManager.getCwd();
-
-		if (this.#extensionRunner?.hasHandlers("user_python")) {
-			const hookResult = await this.#extensionRunner.emitUserPython({
-				type: "user_python",
-				code,
-				excludeFromContext,
-				cwd,
-			});
-			if (hookResult?.result) {
-				this.recordPythonResult(code, hookResult.result, options);
-				return hookResult.result;
-			}
-		}
-
-		this.#pythonAbortController = new AbortController();
-
-		try {
-			// Use the same session ID as the Python tool for kernel sharing
-			const sessionFile = this.sessionManager.getSessionFile();
-			const sessionId = sessionFile ? `session:${sessionFile}:cwd:${cwd}` : `cwd:${cwd}`;
-
-			const result = await executePythonCommand(code, {
-				cwd,
-				sessionId,
-				kernelMode: this.settings.get("python.kernelMode"),
-				useSharedGateway: this.settings.get("python.sharedGateway"),
-				onChunk,
-				signal: this.#pythonAbortController.signal,
-			});
-
-			this.recordPythonResult(code, result, options);
-			return result;
-		} finally {
-			this.#pythonAbortController = undefined;
-		}
-	}
-
-	/**
-	 * Record a Python execution result in session history.
-	 */
-	recordPythonResult(code: string, result: PythonResult, options?: { excludeFromContext?: boolean }): void {
-		const meta = outputMeta().truncationFromSummary(result, { direction: "tail" }).get();
-		const pythonMessage: PythonExecutionMessage = {
-			role: "pythonExecution",
-			code,
-			output: result.output,
-			exitCode: result.exitCode,
-			cancelled: result.cancelled,
-			truncated: result.truncated,
-			meta,
-			timestamp: Date.now(),
-			excludeFromContext: options?.excludeFromContext,
-		};
-
-		// If agent is streaming, defer adding to avoid breaking tool_use/tool_result ordering
-		if (this.isStreaming) {
-			this.#pendingPythonMessages.push(pythonMessage);
-		} else {
-			this.agent.appendMessage(pythonMessage);
-			this.sessionManager.appendMessage(pythonMessage);
-		}
-	}
-
 	/**
 	 * Cancel running Python execution.
 	 */
-	abortPython(): void {
-		this.#pythonAbortController?.abort();
-	}
 
 	/** Whether a Python execution is currently running */
-	get isPythonRunning(): boolean {
-		return this.#pythonAbortController !== undefined;
-	}
 
 	/** Whether there are pending Python messages waiting to be flushed */
-	get hasPendingPythonMessages(): boolean {
-		return this.#pendingPythonMessages.length > 0;
-	}
 
 	/**
 	 * Flush pending Python messages to agent state and session.
 	 */
-	#flushPendingPythonMessages(): void {
-		if (this.#pendingPythonMessages.length === 0) return;
-
-		for (const pythonMessage of this.#pendingPythonMessages) {
-			this.agent.appendMessage(pythonMessage);
-			this.sessionManager.appendMessage(pythonMessage);
-		}
-
-		this.#pendingPythonMessages = [];
-	}
 
 	// =========================================================================
 	// Session Management
@@ -6129,13 +6021,6 @@ export class AgentSession {
 					lines.push(bashExecutionToText(bashMsg));
 					lines.push("\n");
 				}
-			} else if (msg.role === "pythonExecution") {
-				const pythonMsg = msg as PythonExecutionMessage;
-				if (!pythonMsg.excludeFromContext) {
-					lines.push("## Python Execution\n");
-					lines.push(pythonExecutionToText(pythonMsg));
-					lines.push("\n");
-				}
 			} else if (msg.role === "custom" || msg.role === "hookMessage") {
 				const customMsg = msg as CustomMessage | HookMessage;
 				lines.push(`## ${customMsg.customType}\n`);
@@ -6240,7 +6125,7 @@ export class AgentSession {
 				lines.push(compactMsg.summary);
 				lines.push("");
 			}
-			// Skip: toolResult, bashExecution, pythonExecution, branchSummary, custom, hookMessage
+			// Skip: toolResult, bashExecution, branchSummary, custom, hookMessage
 		}
 
 		return lines.join("\n").trim();

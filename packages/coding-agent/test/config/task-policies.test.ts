@@ -4,7 +4,6 @@ import {
 	loadTaskPolicies,
 	matchPolicies,
 	mergePolicies,
-	parseTaskPolicies,
 	resolveGates,
 	resolveInjectText,
 	resolveLayerFromProperties,
@@ -15,49 +14,6 @@ import {
 
 // Fixtures
 // =============================================================================
-
-const VALID_YAML = `
-version: 1
-layers:
-  frontend:
-    description: "LiveView pages, components, browser interactions"
-  api:
-    description: "REST/GraphQL endpoints, request/response contracts"
-  infra:
-    description: "Infrastructure, CI/CD, deployment"
-policies:
-  - name: frontend-journey-tests
-    match:
-      layer: frontend
-    gates:
-      gateLlm: "Journey tests covering complete user flow must be present"
-      gateCmd: "mix test test/journey/"
-    inject: |
-      Write journey tests in test/journey/.
-  - name: api-contract-tests
-    match:
-      layer: api
-    gates:
-      gateCmd: "mix test test/contract/"
-      verifyCmd: "mix openapi.validate"
-`;
-
-const LAYERS_ONLY_YAML = `
-version: 1
-layers:
-  frontend:
-    description: "UI components"
-  backend:
-    description: "Server logic"
-`;
-
-const EMPTY_POLICIES_YAML = `
-version: 1
-layers:
-  frontend:
-    description: "UI"
-policies: []
-`;
 
 function makePolicies(): TaskPolicy[] {
 	return [
@@ -80,87 +36,6 @@ function makePolicies(): TaskPolicy[] {
 		},
 	];
 }
-
-// Tests
-// =============================================================================
-
-describe("parseTaskPolicies", () => {
-	it("parses valid YAML with layers and policies", () => {
-		const config = parseTaskPolicies(VALID_YAML);
-		expect(config).toBeDefined();
-		expect(config!.version).toBe(1);
-		expect(Object.keys(config!.layers)).toEqual(["frontend", "api", "infra"]);
-		expect(config!.layers.frontend.description).toBe("LiveView pages, components, browser interactions");
-		expect(config!.policies).toHaveLength(2);
-		expect(config!.policies[0].name).toBe("frontend-journey-tests");
-		expect(config!.policies[0].match.layer).toBe("frontend");
-		expect(config!.policies[0].gates.gateLlm).toBe("Journey tests covering complete user flow must be present");
-		expect(config!.policies[0].gates.gateCmd).toBe("mix test test/journey/");
-		expect(config!.policies[0].inject).toContain("Write journey tests");
-		expect(config!.policies[1].name).toBe("api-contract-tests");
-		expect(config!.policies[1].gates.gateCmd).toBe("mix test test/contract/");
-		expect(config!.policies[1].gates.verifyCmd).toBe("mix openapi.validate");
-	});
-
-	it("returns undefined for missing version field", () => {
-		const result = parseTaskPolicies("layers:\n  frontend:\n    description: UI\n");
-		expect(result).toBeUndefined();
-	});
-
-	it("ignores unknown gate fields", () => {
-		const yaml = `
-version: 1
-policies:
-  - name: test
-    match:
-      layer: frontend
-    gates:
-      gateCmd: "test"
-      unknownGate: "should be ignored"
-`;
-		const config = parseTaskPolicies(yaml);
-		expect(config).toBeDefined();
-		expect(config!.policies[0].gates).toEqual({ gateCmd: "test" });
-	});
-
-	it("returns config with empty policies array", () => {
-		const config = parseTaskPolicies(EMPTY_POLICIES_YAML);
-		expect(config).toBeDefined();
-		expect(config!.policies).toEqual([]);
-		expect(config!.layers.frontend.description).toBe("UI");
-	});
-
-	it("returns config with layers only when no policies key", () => {
-		const config = parseTaskPolicies(LAYERS_ONLY_YAML);
-		expect(config).toBeDefined();
-		expect(config!.policies).toEqual([]);
-		expect(Object.keys(config!.layers)).toEqual(["frontend", "backend"]);
-	});
-
-	it("returns undefined for invalid YAML", () => {
-		const result = parseTaskPolicies("{{{{invalid yaml");
-		expect(result).toBeUndefined();
-	});
-
-	it("skips policies without valid match.layer", () => {
-		const yaml = `
-version: 1
-policies:
-  - name: bad-policy
-    gates:
-      gateCmd: "test"
-  - name: good-policy
-    match:
-      layer: frontend
-    gates:
-      gateCmd: "test"
-`;
-		const config = parseTaskPolicies(yaml);
-		expect(config).toBeDefined();
-		expect(config!.policies).toHaveLength(1);
-		expect(config!.policies[0].name).toBe("good-policy");
-	});
-});
 
 describe("matchPolicies", () => {
 	const policies = makePolicies();

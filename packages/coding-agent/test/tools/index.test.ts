@@ -57,7 +57,6 @@ describe("createTools", () => {
 		const names = tools.map(t => t.name);
 
 		// Core tools should always be present
-		expect(names).toContain("python");
 		expect(names).toContain("bash");
 		expect(names).toContain("read");
 		expect(names).toContain("edit");
@@ -65,41 +64,13 @@ describe("createTools", () => {
 		expect(names).toContain("grep");
 		expect(names).toContain("find");
 		expect(names).toContain("lsp");
-		expect(names).toContain("notebook");
+
 		expect(names).toContain("task");
 		expect(names).toContain("todo_write");
 		expect(names).toContain("fetch");
 		expect(names).toContain("web_search");
 		expect(names).toContain("exit_plan_mode");
 		expect(names).not.toContain("autonomy_state");
-	});
-
-	it("includes bash and python when python mode is both", async () => {
-		const session = createTestSession({
-			settings: createSettingsWithOverrides({
-				"python.toolMode": "both",
-				"python.kernelMode": "session",
-			}),
-		});
-		const tools = await createTools(session);
-		const names = tools.map(t => t.name);
-
-		expect(names).toContain("bash");
-		expect(names).toContain("python");
-	});
-
-	it("includes bash only when python mode is bash-only", async () => {
-		const session = createTestSession({
-			settings: createSettingsWithOverrides({
-				"python.toolMode": "bash-only",
-				"python.kernelMode": "session",
-			}),
-		});
-		const tools = await createTools(session);
-		const names = tools.map(t => t.name);
-
-		expect(names).toContain("bash");
-		expect(names).not.toContain("python");
 	});
 
 	it("excludes lsp tool when session disables LSP", async () => {
@@ -271,7 +242,7 @@ describe("TOOL_TIERS", () => {
 	});
 
 	it("assigns specialized tier to deferred tools", () => {
-		const specialized: string[] = ["canvas", "python", "notebook", "browser", "calc", "gateway"];
+		const specialized: string[] = ["canvas", "browser", "calc", "gateway"];
 		for (const name of specialized) {
 			expect(getToolTier(name)).toBe("specialized");
 		}
@@ -372,7 +343,7 @@ describe("compact description wrapping on real tool objects", () => {
 		const session = createTestSession({
 			settings: Settings.isolated({
 				"browser.enabled": true,
-				"notebook.enabled": true,
+
 				"inspect_image.enabled": true,
 				"renderMermaid.enabled": true,
 				"calc.enabled": true,

@@ -20,7 +20,6 @@ Mirror each task into `todo_write`; keep full dep graph explicit.
 
 ## Protocol
 Analyze deps; parallelize only truly independent tasks. Provide comprehensive context for efficient execution or sub-orchestration.
-
 - keep `todo_write` truthful (`in_progress`, `completed`, `failed`, `abandoned` + follow-up);
 - execute directly or delegate with `task`;
 - attempt satisfying verification gates before gated `completed`;
@@ -28,7 +27,7 @@ Analyze deps; parallelize only truly independent tasks. Provide comprehensive co
 - update `todo_write` after every status change.
 
 ## Rules
-- You MAY refine todo structure when reality diverges, but blockers + progress must stay truthful.
+- You **MAY** refine todo structure when reality diverges, but blockers + progress must stay truthful.
 - `todo_write` handles lifecycle hooks automatically.
 - Delegate tasks via `todoRef`.
 - If work fails, report it truthfully and seek to review your approach to parallelisation. Atomise. Iterate and continue work with new understanding.
@@ -39,7 +38,6 @@ Plan approved. Implement it.
 
 Finalized plan artifact: `{{finalPlanFilePath}}`
 {{#if orgItemId}}Active org item: `{{orgItemId}}`{{/if}}
-
 ## Completion Protocol
 Plan complete only when verification evidence exists and org lifecycle is truthfully closed.
 
@@ -73,7 +71,6 @@ Before your final turn, you **MUST**:
    - Stage the org-mode files from `!tasks/` that correspond to the committed changes (the linked child items and the PLAN item itself) in the same commit as the code they describe
    - Commit with a conventional commit message referencing the plan (for example, `fix(coding-agent): describe change`)
    - Do **NOT** modify the state of any file not concerned by this plan.
-
 6. If verification fails or required evidence is missing, do **NOT** mark the plan `DONE`; keep org state truthful and report the blocker.
 7. Explain all your work exhaustively to the reviewer.
 
@@ -87,7 +84,6 @@ Before your final turn, you **MUST**:
 {{#if truncated}}
 …(elided — fetch via `org get {{id}}`)
 {{/if}}
-
 {{/each}}
 {{#if omittedCount}}…({{omittedCount}} of {{totalCount}} child specifications omitted — fetch via `org get`)
 {{/if}}
@@ -112,9 +108,9 @@ For org-linked tasks, layer resolves automatically from the org item's `:LAYER:`
 Execute this plan from `{{finalPlanFilePath}}`. You have full tool access.
 Construct the right step workflow to get to the goal. Verify each step before moving on to the next.
 {{#has tools "todo_write"}}
-{{#if autoInitialized}}Todo list pre-populated from plan's execution structure. You MAY modify, add, reorder, or remove tasks while keeping progress truthful. Child org item state transitions happen automatically via `todo_write`. The completion report and final PLAN closeout are explicit steps. Use `task` to parallelize independent tasks within the same phase.
+{{#if autoInitialized}}Todo list pre-populated from plan's execution structure. You **MAY** modify, add, reorder, or remove tasks while keeping progress truthful. Child org item state transitions happen automatically via `todo_write`. The completion report and final PLAN closeout are explicit steps. Use `task` to parallelize independent tasks within the same phase.
 After each completed step, you **MUST** immediately update `todo_write` so progress stays visible.
-{{else}}{{#if autoRosterEnabled}}Before execution, you SHOULD initialize todos with `todo_write` only when you need gates, org links, or a manually curated roster before dispatch.
+{{else}}{{#if autoRosterEnabled}}Before execution, you **SHOULD** initialize todos with `todo_write` only when you need gates, org links, or a manually curated roster before dispatch.
 {{#if waves}}### Wave-based Task Dispatch
 Set `phase` to the wave name when dispatching via `task`. The auto-roster creates tracking items automatically.
 - One dispatch batch per wave — tasks within a wave are parallelizable

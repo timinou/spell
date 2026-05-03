@@ -29,7 +29,6 @@ import type { KeybindingsManager } from "../../config/keybindings";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { BashResult } from "../../exec/bash-executor";
 import type { ExecOptions, ExecResult } from "../../exec/exec";
-import type { PythonResult } from "../../ipy/executor";
 import type { Theme } from "../../modes/theme/theme";
 import type { EditToolDetails } from "../../patch";
 import type { CompactionPreparation, CompactionResult } from "../../session/compaction";
@@ -842,7 +841,6 @@ export interface UserBashEventResult {
 /** Result from user_python event handler */
 export interface UserPythonEventResult {
 	/** Full replacement: extension handled execution, use this result */
-	result?: PythonResult;
 }
 
 export interface ToolResultEventResult {

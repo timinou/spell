@@ -64,7 +64,6 @@ import type { HookEditorComponent } from "./components/hook-editor";
 import type { HookInputComponent } from "./components/hook-input";
 import type { HookSelectorComponent } from "./components/hook-selector";
 import { PlanModeOverlay } from "./components/plan-mode-overlay";
-import type { PythonExecutionComponent } from "./components/python-execution";
 import { StatusLineComponent } from "./components/status-line";
 import type { ToolExecutionHandle } from "./components/tool-execution";
 import { WelcomeComponent } from "./components/welcome";
@@ -208,9 +207,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	pendingTools = new Map<string, ToolExecutionHandle>();
 	pendingBashComponents: BashExecutionComponent[] = [];
 	bashComponent: BashExecutionComponent | undefined = undefined;
-	pendingPythonComponents: PythonExecutionComponent[] = [];
-	pythonComponent: PythonExecutionComponent | undefined = undefined;
-	isPythonMode = false;
 	streamingComponent: AssistantMessageComponent | undefined = undefined;
 	streamingMessage: AssistantMessage | undefined = undefined;
 	loadingAnimation: Loader | undefined = undefined;
@@ -712,8 +708,6 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.editor.borderColor = theme.getPlanModeBorderColor();
 		} else if (this.isBashMode) {
 			this.editor.borderColor = theme.getBashModeBorderColor();
-		} else if (this.isPythonMode) {
-			this.editor.borderColor = theme.getPythonModeBorderColor();
 		} else {
 			const level = this.session.thinkingLevel ?? ThinkingLevel.Off;
 			this.editor.borderColor = theme.getThinkingBorderColor(level);
@@ -1980,10 +1974,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	handleBashCommand(command: string, excludeFromContext?: boolean): Promise<void> {
 		return this.#commandController.handleBashCommand(command, excludeFromContext);
-	}
-
-	handlePythonCommand(code: string, excludeFromContext?: boolean): Promise<void> {
-		return this.#commandController.handlePythonCommand(code, excludeFromContext);
 	}
 
 	async handleMCPCommand(text: string): Promise<void> {
