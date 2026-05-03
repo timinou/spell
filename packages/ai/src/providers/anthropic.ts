@@ -84,7 +84,7 @@ export function buildBetaHeader(baseBetas: string[], extraBetas: string[]): stri
 	return result.join(",");
 }
 
-const claudeCodeBetaDefaults = [
+export const claudeCodeBetaDefaults = [
 	"claude-code-20250219",
 	"oauth-2025-04-20",
 	"interleaved-thinking-2025-05-14",
@@ -92,7 +92,10 @@ const claudeCodeBetaDefaults = [
 	"prompt-caching-scope-2026-01-05",
 	"token-efficient-tools-2025-02-19",
 ];
-function getHeaderCaseInsensitive(headers: Record<string, string> | undefined, headerName: string): string | undefined {
+export function getHeaderCaseInsensitive(
+	headers: Record<string, string> | undefined,
+	headerName: string,
+): string | undefined {
 	if (!headers) return undefined;
 	const normalizedName = headerName.toLowerCase();
 	for (const [key, value] of Object.entries(headers)) {
@@ -101,7 +104,7 @@ function getHeaderCaseInsensitive(headers: Record<string, string> | undefined, h
 	return undefined;
 }
 
-function isClaudeCodeClientUserAgent(userAgent: string | undefined): userAgent is string {
+export function isClaudeCodeClientUserAgent(userAgent: string | undefined): userAgent is string {
 	if (!userAgent) return false;
 	return userAgent.toLowerCase().startsWith("claude-cli");
 }
@@ -425,7 +428,7 @@ function normalizeBaseUrl(baseUrl: string | undefined): string | undefined {
 	return trimmed ? trimmed.replace(/\/+$/, "") : undefined;
 }
 
-function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: string): string | undefined {
+export function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: string): string | undefined {
 	if (model.provider === "anthropic") {
 		// KDL base-url wins first (set via ModelRegistry from provider config)
 		const modelBaseUrl = normalizeBaseUrl(model.baseUrl);
@@ -444,6 +447,14 @@ function resolveAnthropicBaseUrl(model: Model<"anthropic-messages">, apiKey?: st
 		if (envBaseUrl) return envBaseUrl;
 		return "https://api.anthropic.com";
 	}
+	if (model.provider === "better-ccflare") {
+		const modelBaseUrl = normalizeBaseUrl(model.baseUrl);
+		if (modelBaseUrl) return modelBaseUrl;
+		const envBaseUrl = normalizeBaseUrl($env.ANTHROPIC_BASE_URL);
+		if (envBaseUrl) return envBaseUrl;
+		return "http://localhost:8080";
+	}
+
 	return normalizeBaseUrl(model.baseUrl);
 }
 
@@ -1620,3 +1631,5 @@ function mapStopReason(reason: Anthropic.Messages.StopReason | string): StopReas
 			throw new Error(`Unhandled stop reason: ${reason}`);
 	}
 }
+
+export { isAnthropicOAuthToken } from "../utils";

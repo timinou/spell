@@ -88,6 +88,7 @@ export type KnownProvider =
 	| "alibaba-coding-plan"
 	| "amazon-bedrock"
 	| "anthropic"
+	| "better-ccflare"
 	| "google"
 	| "google-gemini-cli"
 	| "google-antigravity"
