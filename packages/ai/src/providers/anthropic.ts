@@ -173,9 +173,11 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 		"X-App": "cli",
 	};
 
-	// Localhost proxies get x-api-key (same as upstream Anthropic);
-	// OAuth-only non-Anthropic URLs get Bearer auth
-	if (oauthToken && !isAnthropicApiBaseUrl(options.baseUrl) && !isLocalhostBaseUrl(options.baseUrl)) {
+	// Localhost proxies (better-ccflare etc.) use OAuth passthrough — no auth header
+	// OAuth tokens to non-Anthropic URLs get Bearer; standard gets x-api-key
+	if (isLocalhostBaseUrl(options.baseUrl)) {
+		// No auth header — proxy detects Claude CLI by user-agent and uses its own OAuth
+	} else if (oauthToken && !isAnthropicApiBaseUrl(options.baseUrl)) {
 		headers.Authorization = `Bearer ${options.apiKey}`;
 	} else {
 		headers["X-Api-Key"] = options.apiKey;
@@ -1062,7 +1064,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 
 	return {
 		isOAuthToken: oauthToken,
-		apiKey: oauthToken && !isLocalhostBaseUrl(baseUrl) ? null : apiKey,
+		apiKey: isLocalhostBaseUrl(baseUrl) || oauthToken ? null : apiKey,
 		authToken: oauthToken && !isLocalhostBaseUrl(baseUrl) ? apiKey : undefined,
 		baseURL: baseUrl,
 		maxRetries: 5,
