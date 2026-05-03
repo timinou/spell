@@ -1,3 +1,5 @@
+// pragma: allowlist secret
+
 import { describe, expect, test } from "bun:test";
 import { resolveAnthropicBaseUrl } from "../src/providers/anthropic";
 import { getEnvApiKey } from "../src/stream";
@@ -29,9 +31,31 @@ describe("better-ccflare env var resolution", () => {
 		}
 	});
 
-	test("getEnvApiKey returns undefined when ANTHROPIC_AUTH_TOKEN is unset", () => {
+	test("getEnvApiKey returns undefined when both ANTHROPIC_AUTH_TOKEN and ANTHROPIC_API_KEY are unset", () => {
 		delete Bun.env.ANTHROPIC_AUTH_TOKEN;
+		delete Bun.env.ANTHROPIC_API_KEY;
 		expect(getEnvApiKey("better-ccflare")).toBeUndefined();
+	});
+
+	test("getEnvApiKey falls back to ANTHROPIC_API_KEY when ANTHROPIC_AUTH_TOKEN is unset", () => {
+		delete Bun.env.ANTHROPIC_AUTH_TOKEN;
+		Bun.env.ANTHROPIC_API_KEY = "sk-ant-fallback-test-key"; // pragma: allowlist secret
+		try {
+			expect(getEnvApiKey("better-ccflare")).toBe("sk-ant-fallback-test-key");
+		} finally {
+			delete Bun.env.ANTHROPIC_API_KEY;
+		}
+	});
+
+	test("getEnvApiKey prefers ANTHROPIC_AUTH_TOKEN over ANTHROPIC_API_KEY when both are set", () => {
+		Bun.env.ANTHROPIC_AUTH_TOKEN = "btr-primary-key"; // pragma: allowlist secret
+		Bun.env.ANTHROPIC_API_KEY = "sk-ant-secondary-key"; // pragma: allowlist secret
+		try {
+			expect(getEnvApiKey("better-ccflare")).toBe("btr-primary-key");
+		} finally {
+			delete Bun.env.ANTHROPIC_AUTH_TOKEN;
+			delete Bun.env.ANTHROPIC_API_KEY;
+		}
 	});
 
 	test("resolveAnthropicBaseUrl returns ANTHROPIC_BASE_URL when set", () => {

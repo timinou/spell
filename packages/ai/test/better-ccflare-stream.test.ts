@@ -1,6 +1,6 @@
 // pragma: allowlist secret
 import { describe, expect, test } from "bun:test";
-import { buildBetterCcflareHeaders } from "../src/providers/better-ccflare";
+import { buildBetterCcflareHeaders, streamBetterCcflare } from "../src/providers/better-ccflare";
 
 describe("buildBetterCcflareHeaders", () => {
 	test("OAuth passthrough: no auth header when apiKey is empty", () => {
@@ -82,5 +82,55 @@ describe("better-ccflare env-aware request construction", () => {
 	test("uses x-api-key when ANTHROPIC_AUTH_TOKEN is a non-OAuth token", () => {
 		const headers = buildBetterCcflareHeaders({ apiKey: "btr-my-real-key" });
 		expect(headers["x-api-key"]).toBe("btr-my-real-key");
+	});
+});
+
+describe("streamBetterCcflare URL construction", () => {
+	test("constructs SDK client without /v1 suffix (SDK appends its own /v1/ prefix)", async () => {
+		let resolvePath: (path: string) => void;
+		const pathPromise = new Promise<string>(resolve => {
+			resolvePath = resolve;
+		});
+
+		const server = Bun.serve({
+			port: 0,
+			fetch(req) {
+				const pathname = new URL(req.url).pathname;
+				resolvePath(pathname);
+				return new Response(JSON.stringify({ error: "test-server" }), {
+					status: 400,
+					headers: { "Content-Type": "application/json" },
+				});
+			},
+		});
+
+		try {
+			Bun.env.ANTHROPIC_BASE_URL = `http://localhost:${server.port}`;
+
+			const model: any = {
+				id: "claude-sonnet-4-20250514",
+				api: "anthropic-messages",
+				provider: "better-ccflare",
+				baseUrl: undefined,
+				reasoning: true,
+				input: ["text"],
+				contextWindow: 200_000,
+				maxTokens: 64_000,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			};
+			const context: any = {
+				system: "test",
+				messages: [{ role: "user", content: "ping" }],
+			};
+
+			streamBetterCcflare(model, context, { apiKey: "btr-test-key" }); // pragma: allowlist secret
+
+			const path = await pathPromise;
+			expect(path).toBe("/v1/messages");
+			expect(path).not.toBe("/v1/v1/messages");
+		} finally {
+			delete Bun.env.ANTHROPIC_BASE_URL;
+			server.stop(true);
+		}
 	});
 });
