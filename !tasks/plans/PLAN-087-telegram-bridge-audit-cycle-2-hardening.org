@@ -1,5 +1,5 @@
 #+TITLE: Telegram bridge audit cycle 2 hardening
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14aae0e4276d8b54
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-07-24-445Z_14aae0e4276d8b54.jsonl]]
 #+CUSTOM_ID: PLAN-087-telegram-bridge-audit-cycle-2-hardening
@@ -50,3 +50,5 @@ Test-first: each bug-fix item writes failing tests that demonstrate the defect, 
 
 ** wave-2                                                                  :wave:
 - [[id:BUG-092-main-message-flow-lacks-regression-test]] Main message flow regression test (30m, depends BUG-090 + BUG-091, verification tests)
+
+NOTE [2026-05-03]: Completed 2026-05-03: All children (BUG-090, BUG-091, BUG-092) resolved. Code migrated to packages/spell-server/src/telegram/. 161/161 tests pass. Plan scope fully implemented.

@@ -1,0 +1,101 @@
+#+TITLE: Fix better-ccflare 404 and auth fallback
+#+STATE: DONE
+#+SESSION_ID: 14d3056468a17f96
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T17-26-07-522Z_14d3056468a17f96.jsonl]]
+#+CUSTOM_ID: PLAN-295-fix-better-ccflare-404-and-auth-fallback
+#+LAYER: core
+
+[[id:BUG-332-fix-better-ccflare-double-v1-path-causin]]
+[[id:BUG-333-add-anthropic-api-key-fallback-for-bette]]
+
+* Context
+
+PLAN-293 implemented a better-ccflare provider. Two bugs discovered in first live test:
+
+1. Double /v1/ path: streamBetterCcflare constructs baseURL with /v1 suffix, but Anthropic SDK also prefixes /v1/. Results in /v1/v1/messages → 404.
+
+2. Auth fallback missing: serviceProviderMap only resolves ANTHROPIC_AUTH_TOKEN. When unset, no auth header sent. better-ccflare rejects with x-api-key required.
+
+* Verification
+
+1. bun check:ts passes
+2. bun test packages/ai/test/better-ccflare-*.test.ts passes
+3. Manual: curl through better-ccflare shows /v1/messages (single prefix)
+
+* Execution Manifest
+:wave: wave-1
+- [[id:BUG-332-fix-better-ccflare-double-v1-path-causin::fix-baseurl]] Fix baseURL in streamBetterCcflare
+- [[id:BUG-333-add-anthropic-api-key-fallback-for-bette::update-service-map]] Update serviceProviderMap fallback
+:wave: wave-2
+- [[id:BUG-332-fix-better-ccflare-double-v1-path-causin::update-tests]] Add baseURL test
+- [[id:BUG-333-add-anthropic-api-key-fallback-for-bette::update-provider-tests]] Update provider tests
+- [[id:BUG-333-add-anthropic-api-key-fallback-for-bette::update-stream-tests]] Update stream tests
+
+** File-level DAG
+*** Nodes
+- BUG-332-fix-better-ccflare-double-v1-path-causin Fix double /v1/ path (ITEM)
+- BUG-333-add-anthropic-api-key-fallback-for-bette Add auth fallback (ITEM)
+*** Edges
+- None.
+
+** Subfeature-level DAG
+*** Nodes
+- BUG-332-fix-better-ccflare-double-v1-path-causin::fix-baseurl Fix baseURL (ITEM)
+- BUG-332-fix-better-ccflare-double-v1-path-causin::update-tests Add test (ITEM)
+- BUG-333-add-anthropic-api-key-fallback-for-bette::update-service-map Update serviceProviderMap (ITEM)
+- BUG-333-add-anthropic-api-key-fallback-for-bette::update-provider-tests Update provider tests (ITEM)
+- BUG-333-add-anthropic-api-key-fallback-for-bette::update-stream-tests Update stream tests (ITEM)
+*** Edges
+- BUG-332-fix-better-ccflare-double-v1-path-causin::update-tests depends on BUG-332-fix-better-ccflare-double-v1-path-causin::fix-baseurl
+- BUG-333-add-anthropic-api-key-fallback-for-bette::update-provider-tests depends on BUG-333-add-anthropic-api-key-fallback-for-bette::update-service-map
+- BUG-333-add-anthropic-api-key-fallback-for-bette::update-stream-tests depends on BUG-333-add-anthropic-api-key-fallback-for-bette::update-service-map
+
+** New discovery (2026-05-03): The 404 from better-ccflare is masked as "Connection error." because better-ccflare v3.4.27 sets ~Content-Encoding: gzip~ on error responses without actually gzip-compressing the body. bun's ~fetch()~ auto-decompresses based on the header → ~ZlibError~ → Anthropic SDK wraps as ~APIConnectionError("Connection error.")~. Confirmed via: (1) curl -v showing ~Content-Encoding: gzip~ + ~Content-Length: 140~ on uncompressed JSON body, (2) bun ~fetch()~ against better-ccflare 404 endpoint throwing ~ZlibError~, (3) Anthropic SDK error.ts:106 defaulting to "Connection error." message. Fixing the double /v1/ URL is the primary fix; the gzip encoding issue is upstream (better-ccflare) but warrants a followup workaround (~Accept-Encoding: identity~ or error response handling).
+
+** Completion [2026-05-03]
+
+*** Summary
+
+Two bugs discovered in first live test of better-ccflare provider (PLAN-293):
+1. Double /v1/ path → 404 (masked as "Connection error." due to better-ccflare v3.4.27 gzip bug)
+2. Missing ANTHROPIC_API_KEY fallback → no auth header → x-api-key required error
+
+Both root causes fixed with minimal changes (4 lines of production code).
+
+*** Changes
+
+| File | Change |
+|------|--------|
+| packages/ai/src/providers/better-ccflare.ts:154 | baseURL: `${baseUrl}/v1` → baseURL: baseUrl |
+| packages/ai/src/providers/better-ccflare.ts:171 | url: `${baseUrl}/v1/messages` → url: `${baseUrl}/messages` |
+| packages/ai/src/stream.ts:132 | +ANTHROPIC_API_KEY fallback in $pickenv |
+| packages/ai/test/better-ccflare-provider.test.ts | +2 fallback tests, fixed pre-existing "undefined" test |
+| packages/ai/test/better-ccflare-stream.test.ts | +1 integration test (captures SDK request path via local server) |
+
+*** Root Cause Analysis
+
+1. *Double /v1/*: Anthropic SDK internally prefixes baseURL with /v1/messages. streamBetterCcflare appended /v1 to baseURL, producing /v1/v1/messages. better-ccflare returned 404.
+
+2. *Auth fallback*: serviceProviderMap only resolved ANTHROPIC_AUTH_TOKEN. Users with standard ANTHROPIC_API_KEY had no auth header sent. Added ANTHROPIC_API_KEY as fallback (ANTHROPIC_AUTH_TOKEN still preferred).
+
+*** Verification
+
+- bun run check:ts: Clean (0 warnings, 0 errors)
+- bun test packages/ai/test/better-ccflare-provider.test.ts: 7/7 pass
+- bun test packages/ai/test/better-ccflare-stream.test.ts: 13/13 pass
+  - Includes new integration test: captures actual SDK request path → /v1/messages (single prefix)
+- Combined: 20/20 pass, 33 expect() calls
+
+*** Artifacts
+
+- [[file:!tasks/plans/plan-artifacts/PLAN-295-fix-better-ccflare-404-and-auth-fallback/test-results.txt][Test results]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-295-fix-better-ccflare-404-and-auth-fallback/diff-summary.txt][Diff summary]]
+
+*** Commits
+
+- d46c94474: fix(ai): fix better-ccflare double /v1/ path and add ANTHROPIC_API_KEY auth fallback
+- 0543e0560: test(ai): add baseURL and auth fallback tests for better-ccflare
+
+*** Follow-up
+
+- better-ccflare v3.4.27 sets Content-Encoding: gzip on error responses without compressing body → ZlibError in bun fetch() → APIConnectionError("Connection error."). Upstream issue. Workaround: Accept-Encoding: identity or server-side fix.

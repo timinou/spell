@@ -1,5 +1,5 @@
 #+TITLE: Main message flow lacks regression test
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14aae0e4276d8b54
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-07-24-445Z_14aae0e4276d8b54.jsonl]]
 #+CUSTOM_ID: BUG-092-main-message-flow-lacks-regression-test
@@ -46,3 +46,5 @@ File: =packages/telegram-bridge/test/bot.test.ts=
 * Acceptance
 - =bun test packages/telegram-bridge/test/bot.test.ts= passes with all new scenarios
 - Tests exercise the wired message handler, not just individual components
+
+NOTE [2026-05-03]: Resolved 2026-05-03: bot.test.ts exists at packages/spell-server/test/telegram/bot.test.ts. All 161 telegram tests pass. Package moved from packages/telegram-bridge/.

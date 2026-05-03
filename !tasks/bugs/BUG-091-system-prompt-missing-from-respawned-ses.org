@@ -1,5 +1,5 @@
 #+TITLE: System prompt missing from respawned sessions and photo-only messages dropped
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14aae0e4276d8b54
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-07-24-445Z_14aae0e4276d8b54.jsonl]]
 #+CUSTOM_ID: BUG-091-system-prompt-missing-from-respawned-ses
@@ -100,3 +100,5 @@ Adjust logging: =messageLength: message.text?.length ?? 0=
 - =bun test packages/telegram-bridge/= passes with updated mocks and new assertions
 - =respawnSession= calls =getOrCreate= with =appendSystemPrompt=
 - Messages with photos or documents (no text) reach =handleTelegramMessage=
+
+NOTE [2026-05-03]: Resolved 2026-05-03: All fixes applied in packages/spell-server/src/telegram/. telegramPrompt in CommandContext, respawnSession passes appendSystemPrompt, message guard loosened for photo/document. Package moved from packages/telegram-bridge/. 161/161 telegram tests pass.

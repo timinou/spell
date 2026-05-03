@@ -1,5 +1,5 @@
 #+TITLE: CODE_SYMBOLS_DUAL_MODE_RESTORATION
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14bf7538a105e3c5
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T12-45-05-540Z_14bf7538a105e3c5.jsonl]]
 #+CUSTOM_ID: PLAN-250-code-symbols-dual-mode-restoration
@@ -101,3 +101,5 @@ This plan is intentionally single-item because the requested change is one coher
 
 *** State correction [2026-04-18]
 The plan briefly auto-transitioned to DONE during local todo verification, but that state was incorrect. The plan remains DOING because `[[id:BUG-283-restore-code-symbols-dual-mode-contract]]` is BLOCKED by the verification failures recorded above.
+
+NOTE [2026-05-03]: Completed 2026-05-03: BUG-283 resolved, all verification gates pass (bun check:ts 1975 files clean, cargo test -p pi-natives code_graph 13/13 passed).

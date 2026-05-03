@@ -1,0 +1,5 @@
+ packages/ai/src/providers/better-ccflare.ts      |  4 +-
+ packages/ai/src/stream.ts                        |  2 +-
+ packages/ai/test/better-ccflare-provider.test.ts | 26 +++++++++++-
+ packages/ai/test/better-ccflare-stream.test.ts   | 52 +++++++++++++++++++++++-
+ 4 files changed, 79 insertions(+), 5 deletions(-)

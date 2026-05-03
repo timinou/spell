@@ -46,7 +46,7 @@ Out-of-scope:
 
 * Implementation
 
-** ITEM Add better-ccflare model entries to models.json
+** DOING Add better-ccflare model entries to models.json
 :PROPERTIES:
 :CUSTOM_ID: FEAT-652-add-default-better-ccflare-model-entries::add-json-entries
 :END:
@@ -61,7 +61,7 @@ Out-of-scope:
   - ~"baseUrl": "http://localhost:8080"~
 - Keep all other fields identical (cost, contextWindow, maxTokens, input, reasoning, thinking)
 
-** ITEM Write model registry tests
+** DOING Write model registry tests
 :PROPERTIES:
 :CUSTOM_ID: FEAT-652-add-default-better-ccflare-model-entries::model-tests
 :DEPENDS: FEAT-652-add-default-better-ccflare-model-entries::add-json-entries
