@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { executeOrg } from "@oh-my-pi/pi-natives";
-import { isEnoent } from "@oh-my-pi/pi-utils";
+import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import type { MemoryEntry, OrgCreateParams, OrgItem, OrgSessionContext } from "./types";
 
 interface ReadOrgFileOptions {
@@ -121,7 +121,16 @@ export async function updateItemStateInFile(
 		note,
 		todoKeywords,
 	});
-	return !result.error;
+	if (result.error) {
+		logger.warn("updateItemStateInFile: native error", {
+			id: customId,
+			file: filePath,
+			newState,
+			output: JSON.stringify(result.output),
+		});
+		return false;
+	}
+	return true;
 }
 
 export async function updateItemBodyInFile(
@@ -131,7 +140,15 @@ export async function updateItemBodyInFile(
 	todoKeywords: string[],
 ): Promise<boolean> {
 	const result = executeOrg({ command: "updateItem", file: filePath, id: customId, body: newBody, todoKeywords });
-	return !result.error;
+	if (result.error) {
+		logger.warn("updateItemBodyInFile: native error", {
+			id: customId,
+			file: filePath,
+			output: JSON.stringify(result.output),
+		});
+		return false;
+	}
+	return true;
 }
 
 export async function appendToItemBodyInFile(
@@ -141,7 +158,15 @@ export async function appendToItemBodyInFile(
 	todoKeywords: string[],
 ): Promise<boolean> {
 	const result = executeOrg({ command: "updateItem", file: filePath, id: customId, append: text, todoKeywords });
-	return !result.error;
+	if (result.error) {
+		logger.warn("appendToItemBodyInFile: native error", {
+			id: customId,
+			file: filePath,
+			output: JSON.stringify(result.output),
+		});
+		return false;
+	}
+	return true;
 }
 
 export async function setPropertyInFile(

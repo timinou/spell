@@ -73,13 +73,17 @@ export async function approvePlanItem(
 			: `* Initial message\n\n${initialMessage}`;
 		const bodyUpdated = await updateItemBodyInFile(planItem.file, planItem.id, prefixedBody, config.todoKeywords);
 		if (!bodyUpdated) {
-			throw new Error(`Failed to update body for plan item "${planItem.id}".`);
+			throw new Error(
+				`Failed to update body for plan item "${planItem.id}" (file: ${planItem.file}). Check logs for native error details.`,
+			);
 		}
 	}
 
 	const stateUpdated = await updateItemStateInFile(planItem.file, planItem.id, "DOING", config.todoKeywords);
 	if (!stateUpdated) {
-		throw new Error(`Failed to transition plan item "${planItem.id}" to DOING.`);
+		throw new Error(
+			`Failed to transition plan item "${planItem.id}" to DOING (file: ${planItem.file}). Check logs for native error details.`,
+		);
 	}
 
 	// Extract planning transcript path from the org file's #+TRANSCRIPT_PATH keyword.
@@ -179,7 +183,9 @@ export async function completePlanItem(
 
 		const childStateUpdated = await updateItemStateInFile(item.file, item.id, "DONE", config.todoKeywords);
 		if (!childStateUpdated) {
-			throw new Error(`Failed to transition child item "${item.id}" to DONE.`);
+			throw new Error(
+				`Failed to transition child item "${item.id}" to DONE (file: ${item.file}). Check logs for native error details.`,
+			);
 		}
 		completedChildIds.push(item.id);
 	}
@@ -193,13 +199,17 @@ export async function completePlanItem(
 			config.todoKeywords,
 		);
 		if (!bodyAppended) {
-			throw new Error(`Failed to append completion report for plan item "${planItem.id}".`);
+			throw new Error(
+				`Failed to append completion report for plan item "${planItem.id}" (file: ${planFilePath}). Check logs for native error details.`,
+			);
 		}
 	}
 
 	const planStateUpdated = await updateItemStateInFile(planFilePath, planItem.id, "DONE", config.todoKeywords);
 	if (!planStateUpdated) {
-		throw new Error(`Failed to transition plan item "${planItem.id}" to DONE.`);
+		throw new Error(
+			`Failed to transition plan item "${planItem.id}" to DONE (file: ${planFilePath}). Check logs for native error details.`,
+		);
 	}
 
 	logger.debug("org-plan: completed plan", {
