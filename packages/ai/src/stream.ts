@@ -94,7 +94,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 	anthropic: () =>
 		isFoundryEnabled()
 			? $pickenv("ANTHROPIC_FOUNDRY_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
-			: $pickenv("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"),
+			: $pickenv("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"),
 	"gitlab-duo": "GITLAB_TOKEN",
 	// Vertex AI supports either GOOGLE_CLOUD_API_KEY or Application Default Credentials.
 	"google-vertex": () => {
@@ -128,6 +128,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 			return "<authenticated>";
 		}
 	},
+	"better-ccflare": () => $pickenv("ANTHROPIC_AUTH_TOKEN"),
 	synthetic: "SYNTHETIC_API_KEY",
 	"cloudflare-ai-gateway": "CLOUDFLARE_AI_GATEWAY_API_KEY",
 	huggingface: () => $pickenv("HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"),
