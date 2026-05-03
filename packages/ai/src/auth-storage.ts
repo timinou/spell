@@ -36,14 +36,17 @@ import { loginAnthropic } from "./utils/oauth/anthropic";
 import { loginCerebras } from "./utils/oauth/cerebras";
 import { loginCloudflareAiGateway } from "./utils/oauth/cloudflare-ai-gateway";
 import { loginCursor } from "./utils/oauth/cursor";
+import { loginDeepseek } from "./utils/oauth/deepseek";
 import { loginGitHubCopilot } from "./utils/oauth/github-copilot";
 import { loginGitLabDuo } from "./utils/oauth/gitlab-duo";
 import { loginAntigravity } from "./utils/oauth/google-antigravity";
 import { loginGeminiCli } from "./utils/oauth/google-gemini-cli";
 import { loginHuggingface } from "./utils/oauth/huggingface";
+import { loginInception } from "./utils/oauth/inception";
 import { loginKagi } from "./utils/oauth/kagi";
 import { loginKilo } from "./utils/oauth/kilo";
 import { loginKimi } from "./utils/oauth/kimi";
+import { loginKimiApiKey } from "./utils/oauth/kimi-api-key";
 import { loginLiteLLM } from "./utils/oauth/litellm";
 import { loginLmStudio } from "./utils/oauth/lm-studio";
 import { loginMiniMaxCode, loginMiniMaxCodeCn } from "./utils/oauth/minimax-code";
@@ -879,6 +882,20 @@ export class AuthStorage {
 				await saveApiKeyCredential(apiKey);
 				return;
 			}
+			case "deepseek": {
+				const apiKey = await loginDeepseek(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "kimi": {
+				const apiKey = await loginKimiApiKey(ctrl);
+				// Persist under the kimi-code provider so the existing Kimi Code model
+				// resolution finds the api_key credential without further wiring.
+				const existing = this.#getCredentialsForProvider("kimi-code");
+				const newCredential: ApiKeyCredential = { type: "api_key", key: apiKey };
+				await this.set("kimi-code", existing.length === 0 ? newCredential : [...existing, newCredential]);
+				return;
+			}
 			case "nanogpt": {
 				const apiKey = await loginNanoGPT(ctrl);
 				await saveApiKeyCredential(apiKey);
@@ -921,6 +938,11 @@ export class AuthStorage {
 			}
 			case "zenmux": {
 				const apiKey = await loginZenMux(ctrl);
+				await saveApiKeyCredential(apiKey);
+				return;
+			}
+			case "inception": {
+				const apiKey = await loginInception(ctrl);
 				await saveApiKeyCredential(apiKey);
 				return;
 			}

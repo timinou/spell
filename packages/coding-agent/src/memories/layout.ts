@@ -36,9 +36,7 @@ export function resolvePersonalMemoryRoot(): string {
 export async function ensureGraphMemoryDirs(cwd: string): Promise<void> {
 	const root = resolveGraphMemoryRoot(cwd);
 	await Promise.all(
-		["episodes", "concepts", "cache", "migrated"].map((sub) =>
-			fs.mkdir(path.join(root, sub), { recursive: true }),
-		),
+		["episodes", "concepts", "cache", "migrated"].map(sub => fs.mkdir(path.join(root, sub), { recursive: true })),
 	);
 }
 
@@ -71,7 +69,7 @@ export async function ensureGitignoreEntry(repoRoot: string): Promise<void> {
 	}
 
 	const lines = existing.split("\n");
-	if (lines.some((l) => l.trim() === GITIGNORE_LINE)) {
+	if (lines.some(l => l.trim() === GITIGNORE_LINE)) {
 		return;
 	}
 
@@ -84,10 +82,7 @@ export async function ensureGitignoreEntry(repoRoot: string): Promise<void> {
  * Move legacy `<getMemoriesDir(cwd)>/MEMORY.org` (if any) into
  * `<resolveGraphMemoryRoot(cwd)>/migrated/<isoTs>.org`. Idempotent.
  */
-export async function migrateLegacyMemoryFiles(
-	cwd: string,
-	legacyMemoryDir: string | null,
-): Promise<void> {
+export async function migrateLegacyMemoryFiles(cwd: string, legacyMemoryDir: string | null): Promise<void> {
 	if (!legacyMemoryDir) {
 		return;
 	}
@@ -130,10 +125,5 @@ export async function migrateLegacyMemoryFiles(
 }
 
 function isEnoent(err: unknown): boolean {
-	return (
-		typeof err === "object" &&
-		err !== null &&
-		"code" in err &&
-		(err as { code?: string }).code === "ENOENT"
-	);
+	return typeof err === "object" && err !== null && "code" in err && (err as { code?: string }).code === "ENOENT";
 }

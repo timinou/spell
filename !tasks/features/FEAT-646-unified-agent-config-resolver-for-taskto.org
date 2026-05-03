@@ -1,0 +1,152 @@
+#+TITLE: Unified agent config resolver for TaskTool
+#+STATE: ITEM
+#+SESSION_ID: 14d27f187b617f71
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T07-39-22-477Z_14d27f187b617f71.jsonl]]
+#+CUSTOM_ID: FEAT-646-unified-agent-config-resolver-for-taskto
+#+DEPENDS: FEAT-644-spell-kdl-agents-block-parser-and-select FEAT-645-per-call-model-override-in-taskitem-sche
+#+LAYER: tools
+
+* Initial Message
+
+I want to customise the TASK tool even further. Look at how subagents are currently being launched and how I could e.g. assign all explore agents to a specific model. I think there's something around kdl policies about this somewhere?
+
+* Intention & Purpose
+Replace the single-knob `task.agentModelOverrides[name]` lookup in `TaskTool.#executeSync` with a unified `resolveAgentEffectiveConfig(...)` that integrates per-call (item + batch), spell.kdl agent rules (project + user), settings DB, frontmatter, role alias, and parent active model — in the precedence order the user committed to. Also resolves `disabled`, `thinkingLevel`, and `tools` overrides where rules supply them.
+
+* Context & Narrative
+- Current resolution lives in two spots:
+  - Disabled check: `TaskTool.#executeSync` reads `task.disabledAgents` (`src/task/index.ts:1297`).
+  - Model resolution: `resolveAgentModelPatterns(...)` (`src/config/model-resolver.ts:401`) accepts only a flat `settingsOverride`.
+- This item collapses both into a single resolver fed by:
+  1. Per-task `model` (TaskItem.model — added in FEAT-645)
+  2. Per-batch `model` (TaskParams.model — added in FEAT-645)
+  3. Project spell.kdl `agents { rule ... }` rules (FEAT-644)
+  4. User spell.kdl `agents { rule ... }` rules (FEAT-644 via `loadUserSpellKdl` from FEAT-643)
+  5. Settings DB `task.agentModelOverrides[name]` (existing escape hatch — kept)
+  6. Agent frontmatter `model:` / `thinkingLevel:` (existing)
+  7. Role alias resolution via `resolveConfiguredModelPatterns`
+  8. Parent active model
+
+* Scope
+- In-scope:
+  - New module `packages/coding-agent/src/task/agent-config-resolver.ts` exporting `resolveAgentEffectiveConfig(input): EffectiveAgentConfig`.
+  - Replace inline lookups at `src/task/index.ts:1297` (disabled check) and `:1334-1342` (model override) with single call to the new resolver.
+  - Apply rule-level `tools` override: replace `effectiveAgent.tools` after plan-mode merging if rule supplied a list. Apply rule-level `disabled` to the same code path that today reads `task.disabledAgents`.
+  - Apply rule-level `thinkingLevel` to `thinkingLevelOverride` consumed at `:1343`.
+- Out-of-scope:
+  - Migrating settings DB into spell.kdl — settings DB stays as runtime escape hatch (per user's "settings DB" precedence step).
+  - `spawns` overrides (deferred to FUP).
+  - Parent-context-aware rules (deferred to FUP).
+  - Per-call `thinkingLevel` / `tools` (FEAT-645 declined per design).
+
+* Existing Patterns
+- `resolveAgentModelPatterns(options)` (`src/config/model-resolver.ts:401`) — preserve as a primitive but invoke it from the new resolver after composing the `settingsOverride` from selector match.
+- `mergeSpellConfigs(base, override)` (post-FEAT-643) — used to merge user + project agents rules into one list.
+- `matchAgentRules(name, rules)` (FEAT-644) — used to find the winning rule + collect conflicts.
+- Session settings access: `this.session.settings.get("task.agentModelOverrides")` and `this.session.settings.get("task.disabledAgents")` — keep using.
+- Active model query: `this.session.getActiveModelString?.()` and `this.session.getModelString?.()` — already passed to `resolveAgentModelPatterns`.
+
+* Tests
+- File: `packages/coding-agent/test/task/agent-config-resolver.test.ts` (new).
+  - Per-task model wins over per-batch model.
+  - Per-batch model wins over project rule.
+  - Project rule wins over user rule.
+  - User rule wins over settings DB.
+  - Settings DB wins over frontmatter.
+  - Frontmatter wins over role-alias-only resolution.
+  - Catch-all `rule "*" { model "..." }` applies when nothing more specific matches.
+  - Rule-level `disabled #true` short-circuits regardless of settings DB `task.disabledAgents`.
+  - Rule-level `tools "read" "grep"` replaces frontmatter `tools` (not appends).
+  - Conflicts list propagates from merged rules into the resolver output for FEAT-647.
+  - Empty per-task `model: ""` does not override anything.
+- File: `packages/coding-agent/test/task/task-tool-resolution.test.ts` (extend existing if present).
+  - End-to-end: `TaskTool.execute({ agent: "explore", model: "pi/smol", tasks: [{ id: "a", description: "x", model: "anthropic/claude-haiku-4-5" }] })` → captured `runSubprocess` opts has `modelOverride === "anthropic/claude-haiku-4-5"`.
+  - Same call without per-task model → `modelOverride === <pi/smol resolution>`.
+
+* Implementation
+** ITEM Define EffectiveAgentConfig type and resolver signature
+:PROPERTIES:
+:CUSTOM_ID: FEAT-646-unified-agent-config-resolver-for-taskto::define-types
+:END:
+- File: `packages/coding-agent/src/task/agent-config-resolver.ts` (new).
+- Export:
+  - `interface EffectiveAgentConfig { model: string[]; thinkingLevel?: ThinkingLevel; tools?: string[]; disabled: boolean; rule?: AgentRule; conflicts: AgentRuleConflict[] }`
+  - `interface ResolveAgentConfigInput { agent: AgentDefinition; agentName: string; perCallTaskModel?: string; perCallBatchModel?: string; projectRules: AgentRule[]; userRules: AgentRule[]; settings: Settings; activeModelPattern?: string; fallbackModelPattern?: string }`
+  - `function resolveAgentEffectiveConfig(input: ResolveAgentConfigInput): EffectiveAgentConfig`
+
+** ITEM Write resolver tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-646-unified-agent-config-resolver-for-taskto::tests
+:DEPENDS: FEAT-646-unified-agent-config-resolver-for-taskto::define-types
+:END:
+- File: `packages/coding-agent/test/task/agent-config-resolver.test.ts`.
+- All scenarios from "Tests" section. FAIL until impl lands.
+
+** ITEM Implement resolver
+:PROPERTIES:
+:CUSTOM_ID: FEAT-646-unified-agent-config-resolver-for-taskto::impl
+:DEPENDS: FEAT-646-unified-agent-config-resolver-for-taskto::tests FEAT-644-spell-kdl-agents-block-parser-and-select::parser FEAT-645-per-call-model-override-in-taskitem-sche::add-fields
+:END:
+- Logic order in `resolveAgentEffectiveConfig`:
+  1. Merge `projectRules` after `userRules` (project last → wins ties via declarationOrder).
+  2. `match = matchAgentRules(agentName, mergedRules)` → `{ winning, conflicts }`.
+  3. `disabled = winning?.disabled ?? settings.get("task.disabledAgents").includes(agentName)`.
+  4. Compute model patterns by priority (each step short-circuits when it produces non-empty patterns):
+     - per-task `perCallTaskModel?.trim()`
+     - per-batch `perCallBatchModel?.trim()`
+     - winning rule `winning?.model`
+     - settings DB `settings.get("task.agentModelOverrides")[agentName]`
+     - agent frontmatter `agent.model`
+     - parent active model fallback (`activeModelPattern || fallbackModelPattern || settings.getModelRole("default")`)
+     Each non-empty value passes through `resolveConfiguredModelPatterns(value, settings)`. The first source producing a non-empty array wins. If a single agent pattern equals `pi/task` (session-inherit), allow falling through to active model — preserves current `resolveAgentModelPatterns` semantics.
+  5. `thinkingLevel = winning?.thinkingLevel ?? agent.thinkingLevel`.
+  6. `tools = winning?.tools ?? agent.tools`.
+- Reuse `resolveConfiguredModelPatterns` from `model-resolver.ts` for each step.
+
+** ITEM Wire resolver into TaskTool
+:PROPERTIES:
+:CUSTOM_ID: FEAT-646-unified-agent-config-resolver-for-taskto::wire-tasktool
+:DEPENDS: FEAT-646-unified-agent-config-resolver-for-taskto::impl FEAT-644-spell-kdl-agents-block-parser-and-select::wire-spell-kdl FEAT-645-per-call-model-override-in-taskitem-sche::surface FEAT-643-land-kdl-config-branch-on-current-main::async-callers
+:END:
+- File: `packages/coding-agent/src/task/index.ts::TaskTool.#executeSync`.
+- Load spell.kdl rules: at `#executeSync` start, fetch (cached on session) `projectAgents = (await loadSpellKdl(this.session.cwd))?.agents?.rules ?? []` and `userAgents = (await loadUserSpellKdl())?.agents?.rules ?? []`. Cache on `this.session` to avoid disk read per execute. Cache key: project cwd. Invalidate when settings change is overkill — accept a TUI `/agents` reload for now (note in DEVELOPMENT.md).
+- Replace the disabled check at `:1297` and the model resolution at `:1334-1342` with a single call:
+  ```ts
+  const effective = resolveAgentEffectiveConfig({
+    agent: effectiveAgent, agentName, projectRules, userRules,
+    perCallTaskModel: undefined,  // per-task evaluated inside the runTask closure
+    perCallBatchModel: params.model,
+    settings: this.session.settings,
+    activeModelPattern: this.session.getActiveModelString?.(),
+    fallbackModelPattern: this.session.getModelString?.(),
+  });
+  if (effective.disabled) { /* existing disabled-error response */ }
+  // Apply effective.tools/thinkingLevel to effectiveAgent.
+  ```
+- Per-task model: inside the `runTask` closure, re-resolve once per task with the task-level `model`:
+  ```ts
+  const taskEffective = resolveAgentEffectiveConfig({ ...inputs, perCallTaskModel: taskExecution.taskCallModel });
+  // pass taskEffective.model as modelOverride to runSubprocess.
+  ```
+- Surface `effective.conflicts` on the `TaskToolDetails` (new field `agentRuleConflicts?: AgentRuleConflict[]`) so the dashboard (FEAT-647) and future renderers can display them.
+
+** ITEM Update existing tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-646-unified-agent-config-resolver-for-taskto::update-existing-tests
+:DEPENDS: FEAT-646-unified-agent-config-resolver-for-taskto::wire-tasktool
+:END:
+- Audit `packages/coding-agent/test/task/**` for tests that read `task.agentModelOverrides` directly. Update them to use the new resolver path or keep the existing settings-DB fixture; either works because settings DB remains a valid source.
+
+* Edge Cases
+- Both per-task and per-batch `model` empty → fall through to rules.
+- A rule sets `disabled #true` AND `model "..."` — disabled takes precedence; resolver skips to short-circuit.
+- Rule sets `tools` to empty list (`tools` with no args) — interpret as "no tools at all"? Decision: empty list means "no override" (omit). Document in DEVELOPMENT.md (FEAT-648).
+- Rule applies to bundled `task` agent which has frontmatter `spawns: "*"` — rule-level `tools` override does not strip `task` tool (still auto-included by depth gating in `runSubprocess`).
+- Caching staleness: editing `spell.kdl` requires `/agents` reload or restart. Acceptable for v1; note in docs.
+
+* Acceptance Criteria
+- `bun test packages/coding-agent/test/task/agent-config-resolver.test.ts` passes.
+- `bun test packages/coding-agent/test/task/` green overall.
+- `TaskTool.#executeSync` no longer reads `task.agentModelOverrides` or `task.disabledAgents` directly — both flow through `resolveAgentEffectiveConfig`.
+- Per-task `model` from a TaskItem reaches `runSubprocess.modelOverride`. Per-batch `model` is the default. Spell.kdl rules apply when neither is set.
+- `TaskToolDetails.agentRuleConflicts` populated when conflicting same-specificity rules exist.

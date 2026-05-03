@@ -702,8 +702,10 @@ export class SelectorController {
 	}
 
 	async #handleOAuthLogout(providerId: string): Promise<void> {
+		const providerInfo = getOAuthProviders().find(p => p.id === providerId);
+		const storageId = providerInfo?.storageId ?? providerId;
 		try {
-			await this.ctx.session.modelRegistry.authStorage.logout(providerId);
+			await this.ctx.session.modelRegistry.authStorage.logout(storageId);
 			await this.ctx.session.modelRegistry.refresh();
 			this.ctx.chatContainer.addChild(new Spacer(1));
 			this.ctx.chatContainer.addChild(
@@ -732,7 +734,7 @@ export class SelectorController {
 			await this.#refreshOAuthProviderAuthState();
 			const oauthProviders = getOAuthProviders();
 			const loggedInProviders = oauthProviders.filter(provider =>
-				this.ctx.session.modelRegistry.authStorage.hasAuth(provider.id),
+				this.ctx.session.modelRegistry.authStorage.hasAuth(provider.storageId ?? provider.id),
 			);
 			if (loggedInProviders.length === 0) {
 				this.ctx.showStatus("No OAuth providers logged in. Use /login first.");
@@ -761,8 +763,10 @@ export class SelectorController {
 				},
 				{
 					validateAuth: async (selectedProviderId: string) => {
+						const providerInfo = getOAuthProviders().find(p => p.id === selectedProviderId);
+						const storageId = providerInfo?.storageId ?? selectedProviderId;
 						const apiKey = await this.ctx.session.modelRegistry.getApiKeyForProvider(
-							selectedProviderId,
+							storageId,
 							this.ctx.session.sessionId,
 						);
 						return !!apiKey;

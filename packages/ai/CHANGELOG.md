@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added `loginDeepseek` and registered DeepSeek as a built-in OAuth provider so `/login deepseek` prompts for an API key, validates it against `https://api.deepseek.com/v1`, and stores it under the `deepseek` provider.
+- Added `loginKimiApiKey` and a `Kimi (API Key)` entry to the OAuth provider list. `/login kimi` validates an API key against `https://api.kimi.com/coding/v1` and persists it as an `api_key` credential under the `kimi-code` provider so existing Kimi Code models pick it up automatically alongside the OAuth device flow.
+- Added `DEEPSEEK_API_KEY` env-var fallback to `getEnvApiKey` for the `deepseek` provider.
+- Added native DeepSeek provider with `deepseek-v4-flash` and `deepseek-v4-pro` models served by `https://api.deepseek.com/v1` (1M context, 384K max output, thinking mode enabled by default), plus `deepseekModelManagerOptions` factory and catalog descriptor wired through `DEEPSEEK_API_KEY` / `deepseek` OAuth credentials.
+
 ## [13.12.0] - 2026-03-14
 
 ### Added

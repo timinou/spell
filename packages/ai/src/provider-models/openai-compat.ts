@@ -376,7 +376,63 @@ export function groqModelManagerOptions(config?: GroqModelManagerConfig): ModelM
 }
 
 // ---------------------------------------------------------------------------
-// 3. Cerebras
+// 3. Inception
+// ---------------------------------------------------------------------------
+
+export interface InceptionModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function inceptionModelManagerOptions(
+	config?: InceptionModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://api.inceptionlabs.ai/v1";
+	const references = createBundledReferenceMap<"openai-completions">("inception");
+	return {
+		providerId: "inception",
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "inception",
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults, _context) => {
+						const reference = references.get(defaults.id);
+						const pricing = entry.pricing as Record<string, unknown> | undefined;
+						return {
+							...defaults,
+							name:
+								typeof entry.name === "string" && entry.name.length > 0
+									? entry.name
+									: (reference?.name ?? defaults.name),
+							contextWindow:
+								typeof entry.context_length === "number"
+									? entry.context_length
+									: (reference?.contextWindow ?? defaults.contextWindow),
+							maxTokens:
+								typeof entry.max_output_length === "number"
+									? entry.max_output_length
+									: (reference?.maxTokens ?? defaults.maxTokens),
+							cost: pricing
+								? {
+										input: parseFloat(String(pricing.prompt ?? "0")) * 1_000_000,
+										output: parseFloat(String(pricing.completion ?? "0")) * 1_000_000,
+										cacheRead: parseFloat(String(pricing.input_cache_reads ?? "0")) * 1_000_000,
+										cacheWrite: parseFloat(String(pricing.input_cache_writes ?? "0")) * 1_000_000,
+									}
+								: (reference?.cost ?? defaults.cost),
+						};
+					},
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// 3. Cerebras (original 3 → 4 now)
 // ---------------------------------------------------------------------------
 
 export interface CerebrasModelManagerConfig {
@@ -527,6 +583,39 @@ export function mistralModelManagerOptions(
 				fetchOpenAICompatibleModels({
 					api: "openai-completions",
 					provider: "mistral",
+					baseUrl,
+					apiKey,
+					mapModel: (entry, defaults) => {
+						const reference = references.get(defaults.id);
+						return mapWithBundledReference(entry, defaults, reference);
+					},
+				}),
+		}),
+	};
+}
+
+// ---------------------------------------------------------------------------
+// 7b. DeepSeek
+// ---------------------------------------------------------------------------
+
+export interface DeepseekModelManagerConfig {
+	apiKey?: string;
+	baseUrl?: string;
+}
+
+export function deepseekModelManagerOptions(
+	config?: DeepseekModelManagerConfig,
+): ModelManagerOptions<"openai-completions"> {
+	const apiKey = config?.apiKey;
+	const baseUrl = config?.baseUrl ?? "https://api.deepseek.com/v1";
+	const references = createBundledReferenceMap<"openai-completions">("deepseek");
+	return {
+		providerId: "deepseek",
+		...(apiKey && {
+			fetchDynamicModels: () =>
+				fetchOpenAICompatibleModels({
+					api: "openai-completions",
+					provider: "deepseek",
 					baseUrl,
 					apiKey,
 					mapModel: (entry, defaults) => {

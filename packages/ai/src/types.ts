@@ -100,6 +100,7 @@ export type KnownProvider =
 	| "github-copilot"
 	| "gitlab-duo"
 	| "cursor"
+	| "deepseek"
 	| "xai"
 	| "groq"
 	| "cerebras"
@@ -126,6 +127,7 @@ export type KnownProvider =
 	| "vllm"
 	| "xiaomi"
 	| "zenmux"
+	| "inception"
 	| "lm-studio";
 export type Provider = KnownProvider | string;
 

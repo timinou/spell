@@ -1,0 +1,94 @@
+#+TITLE: Land kdl-config branch on current main
+#+STATE: ITEM
+#+SESSION_ID: 14d27f187b617f71
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T07-39-22-477Z_14d27f187b617f71.jsonl]]
+#+CUSTOM_ID: FEAT-643-land-kdl-config-branch-on-current-main
+#+LAYER: infra
+
+* Initial Message
+
+I want to customise the TASK tool even further. Look at how subagents are currently being launched and how I could e.g. assign all explore agents to a specific model. I think there's something around kdl policies about this somewhere?
+
+* Intention & Purpose
+Bring the `spell_kdl-config` branch (worktree at `/home/user/code/ora/spell_kdl-config`, last commit `f53d949d5`) onto current main as the foundation for declarative `agents { ... }` overrides. Without `loadUserSpellKdl`, `mergeSpellConfigs`, and `kdlDocumentToSettings`, the new feature would have to invent the same plumbing in parallel.
+
+* Context & Narrative
+- Branch base diverged from main; latest commits include several `Merge branch 'main' into kdl-config` reconciles. Last main merge is `e0aa813bd` on the branch tip.
+- Current main HEAD at planning time: `5987345a4 docs(plan-290)`.
+- Branch adds 7 new files in `packages/coding-agent/src/config/`: `kdl-compatibility.ts`, `kdl-helpers.ts`, `kdl-keybindings.ts`, `kdl-modes.ts`, `kdl-providers.ts`, `kdl-reader.ts`, `kdl-settings-map.ts` (+668), `kdl-writer.ts`.
+- Modifies existing `spell-kdl.ts` (62 → 344 lines) adding `loadUserSpellKdl`, `parseSpellKdl(content, baseDir, visited)`, `mergeSpellConfigs`, relative-path imports with cycle detection, providers/keybindings/modes blocks, `kdlDocumentToSettings(doc)` integration.
+- Touches `settings.ts` (~196 lines diff), `settings-schema.ts`, `keybindings.ts`, `model-registry.ts`, `model-resolver.ts`, `task-policies.ts`.
+- Branch also includes orthogonal task-tool work in `task/{batch-scheduler,executor,index,mutable-dag,render,subagent-tracker,swarm-scheduler,types}.ts`, plus `tools/index.ts`, `ttsr-tool-choice-rules.ts`, `frontmatter.ts`, etc. These are NOT part of this item — only the config/KDL changes get merged. Coordinate cherry-pick scope below.
+
+* Scope
+- In-scope: `packages/coding-agent/src/config/{spell-kdl.ts,kdl-*.ts,settings.ts,settings-schema.ts,keybindings.ts,task-policies.ts,task-policies-kdl.ts,model-registry.ts,model-resolver.ts}` + `pi-utils` `getAgentDir` if branch updated it + tests under `packages/coding-agent/test/config/**`.
+- In-scope: `domain/detection.ts` if branch made `parseSpellKdl` async (signature change → update callers).
+- In-scope: any `cli/init-cli.ts` template updates to the kdl format.
+- Out-of-scope: branch's task/ scheduler refactors, ttsr rules, tools/ changes — leave for follow-up FUPs if useful (FUP-643a, FUP-643b stubs created at end of execution).
+- Out-of-scope: branch's `.local/!journal/agentic/PLAN-*` org files — those are local artifacts.
+
+* Existing Patterns
+- Current `parseSpellKdl(content)` is synchronous and returns `SpellProjectConfig` with only domain/policies (`packages/coding-agent/src/config/spell-kdl.ts:34`). After this item: async signature `parseSpellKdl(content, baseDir?, visited?): Promise<SpellProjectConfig>` matching the branch.
+- Current `loadTaskPolicies(projectDir)` resolution order (`packages/coding-agent/src/config/task-policies.ts:141`) — confirm branch preserves the YAML/legacy fallback or removes it (PLAN-246 was a "missing-features cutover" — likely YAML removed). Decision: preserve current main's behavior — keep `.spell/task-policies.yml` legacy reader if branch dropped it.
+- `Settings` class instantiation in `packages/coding-agent/src/config/settings.ts` — branch reduced `~196` lines and added `RawSettings` type. Verify no public API break for consumers in `task/`, `modes/`, `tools/`.
+
+* Tests
+- File: `packages/coding-agent/test/config/spell-kdl.test.ts` — augment with: user-level kdl loaded from `~/.spell/spell.kdl` via `loadUserSpellKdl`; project overrides user via `mergeSpellConfigs(user, project)`; relative `import "./fragment.kdl"` resolves against baseDir; cycle detection for self-importing fragment; templates still importable by namespace.
+- File: `packages/coding-agent/test/config/task-policies-kdl.test.ts` — confirm policy parsing unchanged after merge.
+- File: `packages/coding-agent/test/config/config-loading-hierarchy.test.ts` — confirm precedence project > user > settings DB > defaults.
+- Smoke: `bun check:ts` passes; `bun test packages/coding-agent/test/config` passes.
+
+* Implementation
+** ITEM Rebase reconciliation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-643-land-kdl-config-branch-on-current-main::rebase-reconcile
+:END:
+- Update branch worktree to current main: `cd /home/user/code/ora/spell_kdl-config && git fetch && git merge origin/main` OR `git rebase origin/main`. Resolve conflicts touching `spell-kdl.ts`, `settings.ts`, `task-policies.ts`, `model-resolver.ts` deliberately — preserve branch's KDL-cutover logic over main.
+- Verify `bun check:ts` and `bun test packages/coding-agent/test/config` pass on the updated branch.
+
+** ITEM Cherry-pick config-only diff onto main
+:PROPERTIES:
+:CUSTOM_ID: FEAT-643-land-kdl-config-branch-on-current-main::cherrypick
+:DEPENDS: FEAT-643-land-kdl-config-branch-on-current-main::rebase-reconcile
+:END:
+- From the reconciled branch worktree, generate a focused patch containing ONLY:
+  - `packages/coding-agent/src/config/{spell-kdl.ts,kdl-*.ts,settings.ts,settings-schema.ts,task-policies.ts,task-policies-kdl.ts,keybindings.ts,model-registry.ts,model-resolver.ts}`
+  - `packages/coding-agent/test/config/**`
+  - `packages/coding-agent/src/templates/*.kdl` if updated
+  - `packages/coding-agent/src/cli/init-cli.ts` for template emission
+  - `packages/coding-agent/src/domain/detection.ts` for async parseSpellKdl callers
+- Apply patch on main with `git apply --3way`. Resolve any drift since branch's last main merge (commits `5987345a4` `ec6e6911f` `d4f4acac8` `0eb2b69d6` `7185baac0` and earlier).
+
+** ITEM Update callers for async parseSpellKdl
+:PROPERTIES:
+:CUSTOM_ID: FEAT-643-land-kdl-config-branch-on-current-main::async-callers
+:DEPENDS: FEAT-643-land-kdl-config-branch-on-current-main::cherrypick
+:END:
+- `parseSpellKdl` becomes async. Audit all callers:
+  - `src/config/task-policies.ts::loadTaskPolicies` (already async — change call site).
+  - `src/domain/detection.ts::detectDomain` (currently sync read+parse — convert).
+  - `test/config/spell-kdl.test.ts` and `test/cli/init-command.test.ts`.
+- Add `await` everywhere. Run `bun check:ts`.
+
+** ITEM Verify integration
+:PROPERTIES:
+:CUSTOM_ID: FEAT-643-land-kdl-config-branch-on-current-main::verify
+:DEPENDS: FEAT-643-land-kdl-config-branch-on-current-main::async-callers
+:END:
+- `bun check` passes (TypeScript + Rust).
+- `bun test packages/coding-agent/test/config/` passes.
+- `bun test packages/coding-agent/test/cli/init-command.test.ts` passes.
+- Manual smoke: `bun run packages/coding-agent/src/cli.ts --help` boots without spell-kdl warnings; with a sample `spell.kdl` containing a `tasks { max-concurrency 4 }` block, `Settings` reads it through.
+
+* Edge Cases
+- Branch's `loadImportedConfig` template path treats imports as `parseTaskPoliciesKdl`, not `parseSpellKdl`. Confirm this is intentional — templates only declare layer/policy, not full config (avoids template→template recursion). If broken on rebase, fix to match the design above.
+- Cycle detection in relative imports — must `visited.delete(importPath)` after resolution to allow same fragment imported by different parents. Branch already does this in the `.finally` clause; preserve.
+- Settings DB precedence: ensure `mergeRawSettings` from spell.kdl does NOT override user-edited settings DB values. If branch deviates, file FUP and document.
+- KDL-only project today: zero `spell.kdl` in repo (`find spell.kdl` returned nothing). Migration only matters for downstream users — flag in CHANGELOG.
+
+* Acceptance Criteria
+- `bun check` and `bun test packages/coding-agent/test/config/` green on main after merge.
+- `loadUserSpellKdl()` and `mergeSpellConfigs(user, project)` exported from `src/config/spell-kdl.ts`.
+- `kdlDocumentToSettings(doc)` available for FEAT-644 to map an `agents { ... }` block.
+- A test fixture `spell.kdl` containing `import "./fragment.kdl"` resolves the fragment relative to the kdl file.
+- CHANGELOG.md `[Unreleased]` notes the unified config landing.

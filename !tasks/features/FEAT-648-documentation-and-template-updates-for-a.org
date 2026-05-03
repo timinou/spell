@@ -1,0 +1,102 @@
+#+TITLE: Documentation and template updates for agents block
+#+STATE: ITEM
+#+SESSION_ID: 14d27f187b617f71
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T07-39-22-477Z_14d27f187b617f71.jsonl]]
+#+CUSTOM_ID: FEAT-648-documentation-and-template-updates-for-a
+#+DEPENDS: FEAT-644-spell-kdl-agents-block-parser-and-select FEAT-645-per-call-model-override-in-taskitem-sche
+#+LAYER: documentation
+
+* Initial Message
+
+I want to customise the TASK tool even further. Look at how subagents are currently being launched and how I could e.g. assign all explore agents to a specific model. I think there's something around kdl policies about this somewhere?
+
+* Intention & Purpose
+Document the new `agents { ... }` block, per-call `model` field, and updated resolution chain so users discover the feature and contributors maintain it correctly. Update bundled spell.kdl templates so `spell init` emits a commented example.
+
+* Context & Narrative
+- DEVELOPMENT.md (`packages/coding-agent/DEVELOPMENT.md:879-880`) currently states the model resolution chain as `task.agentModelOverrides[name] → frontmatter → parent active`. After FEAT-646 this is wrong — needs full chain documented.
+- Spell.kdl templates at `packages/coding-agent/src/templates/spell.coding.{typescript,rust,python,go}.kdl` and `spell.growth.default.kdl` only contain layer/policy. Add a commented `// agents { ... }` example to each so users see the surface.
+- Tool description for the task tool (`packages/coding-agent/src/task/index.ts::TaskTool.description`) is rendered to the LLM. After FEAT-645 adds `model` fields, the description needs a one-line note pointing to the per-call override.
+
+* Scope
+- In-scope:
+  - Update `DEVELOPMENT.md` Task Tool section: full resolution chain, `agents { rule ... }` schema reference, conflict semantics, caching note.
+  - Update `CHANGELOG.md` `[Unreleased]` Added section.
+  - Add commented `agents` example to all four `spell.coding.*.kdl` templates and `spell.growth.default.kdl`.
+  - Add a one-line "Per-call model override" note to the task tool description (rendered to LLMs).
+- Out-of-scope:
+  - User-facing prose docs in a separate `docs/` site.
+  - Migration guide for projects already using `task.agentModelOverrides` (link to existing setting in dashboard is sufficient).
+
+* Existing Patterns
+- DEVELOPMENT.md uses backtick code spans for file paths and `### Heading` levels. Match.
+- CHANGELOG attribution rule (AGENTS.md): `Added <text> ([#<id>](https://github.com/can1357/oh-my-pi/issues/<id>))` for issue-driven, plain text for internal-only. This is a feature, no issue → plain text under `### Added`.
+- Task tool description: declared in `TaskTool.description` getter in `src/task/index.ts:267`. Renders frontmatter + dynamic agent listing. Add the per-call note above the agents listing for visibility.
+
+* Tests
+- No automated tests for docs.
+- Smoke: `bun run packages/coding-agent/src/cli.ts init --domain coding --type typescript` in a tmp dir emits `spell.kdl` containing the commented `agents { ... }` block.
+
+* Implementation
+** ITEM Update DEVELOPMENT.md task tool section
+:PROPERTIES:
+:CUSTOM_ID: FEAT-648-documentation-and-template-updates-for-a::dev-md
+:END:
+- File: `packages/coding-agent/DEVELOPMENT.md`.
+- In "Task Tool: Agent Delegation, Selection, and Parallel Execution" section, replace the model resolution bullet (line 880) with the full ordered chain from FEAT-646 implementation. Reference `resolveAgentEffectiveConfig` and `src/task/agent-config-resolver.ts`.
+- Add a new subsection "Agent Override Rules (`agents { ... }`)" below "Agent Definitions and Selection" describing:
+  - Schema with example.
+  - Selector forms and specificity ranking.
+  - Conflict semantics + dashboard surface.
+  - User vs project file precedence.
+  - Caching: rules read once per `TaskTool.execute` (project + user kdl); reload via `/agents` Ctrl+R or session restart.
+
+** ITEM Update CHANGELOG
+:PROPERTIES:
+:CUSTOM_ID: FEAT-648-documentation-and-template-updates-for-a::changelog
+:END:
+- File: `packages/coding-agent/CHANGELOG.md`.
+- Under `## [Unreleased]` `### Added`, add:
+  - `Added \`agents { rule ... }\` block to spell.kdl for declarative per-agent / glob-pattern overrides of model, thinking-level, tools, and disabled flag. Resolves at runtime via task tool.`
+  - `Added per-call \`model\` field on the task tool's task items and batch payload for caller-supplied model selection.`
+
+** ITEM Update spell.kdl templates
+:PROPERTIES:
+:CUSTOM_ID: FEAT-648-documentation-and-template-updates-for-a::templates
+:END:
+- Files: `packages/coding-agent/src/templates/spell.coding.typescript.kdl`, `spell.coding.rust.kdl`, `spell.coding.python.kdl`, `spell.coding.go.kdl`, `spell.growth.default.kdl`.
+- Append (commented out) at end of each file:
+  ```kdl
+  // agents {
+  //     rule "explore" {
+  //         model "anthropic/claude-haiku-4-5"
+  //     }
+  //     rule "*-tester" {
+  //         model "openai/gpt-5-mini"
+  //         thinking-level "low"
+  //     }
+  //     rule "*" {
+  //         // catch-all default for any agent not matched above
+  //     }
+  // }
+  ```
+
+** ITEM Update task tool description
+:PROPERTIES:
+:CUSTOM_ID: FEAT-648-documentation-and-template-updates-for-a::tool-desc
+:DEPENDS: FEAT-645-per-call-model-override-in-taskitem-sche::add-fields
+:END:
+- File: `packages/coding-agent/src/task/index.ts::TaskTool.description`.
+- Add a brief, LLM-facing line near the top of the rendered description: `Each task item accepts an optional \`model\` to dispatch that single task to a specific model (e.g. \"anthropic/claude-haiku-4-5\" or a configured role alias \"pi/smol\"). The batch-level \`model\` is the default for all items.`
+- Keep length tight — task tool description is already long.
+
+* Edge Cases
+- Existing users with custom modes/extensions referencing the old "single-knob" wording in DEVELOPMENT.md — note in CHANGELOG that the resolution chain has expanded; existing settings DB knob still works.
+- Templates are emitted on `spell init` only when no `spell.kdl` exists — no impact on existing projects.
+
+* Acceptance Criteria
+- DEVELOPMENT.md describes the new resolution chain and `agents { }` schema with at least one example.
+- CHANGELOG has two `### Added` entries under `[Unreleased]`.
+- All five `*.kdl` templates contain the commented agents example.
+- Task tool description (visible to LLMs) mentions the per-call `model` override.
+- `bun check` passes.

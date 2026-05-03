@@ -92,6 +92,28 @@ describe("/login slash command", () => {
 		expect(harness.getSelectorProvider()).toBe("parallel");
 	});
 
+	it("routes /login deepseek to direct provider login", async () => {
+		const manualInput = new OAuthManualInputManager();
+		const harness = createRuntimeHarness(manualInput);
+
+		const handled = await executeBuiltinSlashCommand("/login deepseek", harness.runtime);
+
+		expect(handled).toBe(true);
+		expect(harness.getSelectorMode()).toBe("login");
+		expect(harness.getSelectorProvider()).toBe("deepseek");
+	});
+
+	it("routes /login kimi to direct provider login", async () => {
+		const manualInput = new OAuthManualInputManager();
+		const harness = createRuntimeHarness(manualInput);
+
+		const handled = await executeBuiltinSlashCommand("/login kimi", harness.runtime);
+
+		expect(handled).toBe(true);
+		expect(harness.getSelectorMode()).toBe("login");
+		expect(harness.getSelectorProvider()).toBe("kimi");
+	});
+
 	it("warns when no pending login exists for manual callback", async () => {
 		const manualInput = new OAuthManualInputManager();
 		const harness = createRuntimeHarness(manualInput);
