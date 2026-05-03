@@ -128,6 +128,68 @@ function parseModels(node: Node): KdlModelConfig[] | undefined {
 	return models.length > 0 ? models : undefined;
 }
 
+function parseModelOverridesBlock(node: Node): Record<string, Record<string, unknown>> | undefined {
+	const overrides: Record<string, Record<string, unknown>> = {};
+	for (const child of getChildNodes(node)) {
+		const id = child.getName();
+		const entry: Record<string, unknown> = {};
+		for (const field of getChildNodes(child)) {
+			switch (field.getName()) {
+				case "name": {
+					const v = getStringArgument(field);
+					if (v !== undefined) entry.name = v;
+					break;
+				}
+				case "context-window": {
+					const v = getNumberArgument(field);
+					if (v !== undefined) entry.contextWindow = v;
+					break;
+				}
+				case "max-tokens": {
+					const v = getNumberArgument(field);
+					if (v !== undefined) entry.maxTokens = v;
+					break;
+				}
+				case "reasoning": {
+					const v = getBooleanArgument(field);
+					if (v !== undefined) entry.reasoning = v;
+					break;
+				}
+				case "premium-multiplier": {
+					const v = getNumberArgument(field);
+					if (v !== undefined) entry.premiumMultiplier = v;
+					break;
+				}
+				case "input": {
+					const input = getStringArguments(field);
+					if (input.length > 0) entry.input = input;
+					break;
+				}
+				case "cost": {
+					const cost: Record<string, number> = {};
+					for (const c of getChildNodes(field)) {
+						const v = getNumberArgument(c);
+						if (typeof v === "number") cost[c.getName()] = v;
+					}
+					if (Object.keys(cost).length > 0) entry.cost = cost;
+					break;
+				}
+				case "thinking": {
+					const thinking: Record<string, unknown> = {};
+					for (const c of getChildNodes(field)) {
+						const v = parseValue(c);
+						if (v !== undefined) thinking[c.getName()] = v;
+					}
+					if (Object.keys(thinking).length > 0) entry.thinking = thinking;
+					break;
+				}
+			}
+		}
+		if (Object.keys(entry).length > 0) overrides[id] = entry;
+	}
+	return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
+
 function parseProviderNode(node: Node): KdlProviderConfig | undefined {
 	const config: KdlProviderConfig = {};
 
@@ -173,7 +235,7 @@ function parseProviderNode(node: Node): KdlProviderConfig | undefined {
 				config.models = parseModels(child);
 				break;
 			case "model-overrides":
-				config.modelOverrides = parseCompatBlock(child);
+				config.modelOverrides = parseModelOverridesBlock(child);
 				break;
 		}
 	}
