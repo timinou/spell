@@ -1,5 +1,5 @@
 #+TITLE: Add better-ccflare provider with OAuth passthrough
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14d2ecf186a17f91
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T15-39-18-426Z_14d2ecf186a17f91.jsonl]]
 #+CUSTOM_ID: PLAN-293-add-better-ccflare-provider-with-oauth-p
@@ -72,3 +72,37 @@ Users configure models as ~better-ccflare/claude-opus-4-7~ in their ~spell.kdl~ 
 - `FEAT-651-implement-better-ccflare-provider-with-s::stream-tests` depends on `FEAT-651-implement-better-ccflare-provider-with-s::register-dispatch`
 - `FEAT-652-add-default-better-ccflare-model-entries::model-tests` depends on `FEAT-652-add-default-better-ccflare-model-entries::add-json-entries`
 
+
+
+** Completion [2026-05-03]
+
+*** Verification
+
+- ~bun check:ts~: passes clean (0 errors)
+- ~bun test packages/ai/test/better-ccflare-provider.test.ts~: 5/5 pass
+- ~bun test packages/ai/test/better-ccflare-models.test.ts~: 6/6 pass
+- ~bun test packages/ai/test/better-ccflare-stream.test.ts~: 12/12 pass
+- All 23 better-ccflare tests pass across 3 files
+- Existing anthropic tests: 38/41 pass (3 pre-existing Foundry failures unrelated to this change)
+
+*** Implementation Summary
+
+- Added ~"better-ccflare"~ to KnownProvider union in ~packages/ai/src/types.ts~
+- Added better-ccflare entry to serviceProviderMap resolving ~ANTHROPIC_AUTH_TOKEN~
+- Exported ~resolveAnthropicBaseUrl~ with better-ccflare base URL logic (model.baseUrl > env > http://localhost:8080)
+- Created ~packages/ai/src/providers/better-ccflare.ts~ with:
+  - ~buildBetterCcflareHeaders~: OAuth passthrough (no auth header when apiKey empty) + stealth headers
+  - ~streamBetterCcflare~: Full Anthropic-compatible streaming with all stealth behaviors preserved
+- Exported 10 internal functions from ~anthropic.ts~ (buildParams, applyPromptCaching, enforceCacheControlLimit, etc.)
+- Added 4 better-ccflare model entries to ~models.json~ (opus-4-7, sonnet-4, sonnet-4-5, haiku-4-5)
+- Registered ~streamBetterCcflare~ in ~stream.ts~ dispatch (provider check before anthropic-messages case)
+
+*** Artifacts
+
+N/A (no visual/UI changes — this is a backend provider change)
+
+*** Commits
+
+- ~f25fa8e6a~ feat(ai): add better-ccflare provider foundation
+- ~b796a30eb~ chore(ai): fix pre-existing lint and ts errors in better-ccflare files
+- ~142797ad8~ test(ai): add better-ccflare stream behavior tests
