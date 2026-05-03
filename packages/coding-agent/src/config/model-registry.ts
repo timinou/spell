@@ -730,6 +730,10 @@ export class ModelRegistry {
 		const combined = this.#mergeCustomModels(builtInModels, [...customModels, ...cachedDiscoveries]);
 
 		this.#models = this.#applyHardcodedModelPolicies(combined);
+
+		// better-ccflare is keyless by default — its OAuth passthrough mode sends no client key.
+		// When ANTHROPIC_AUTH_TOKEN is set, the provider falls back to x-api-key auth.
+		this.#keylessProviders.add("better-ccflare");
 	}
 
 	/** Load built-in models, applying provider and per-model overrides */
