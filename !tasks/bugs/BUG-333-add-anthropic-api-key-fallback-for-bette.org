@@ -1,0 +1,51 @@
+#+TITLE: Add ANTHROPIC_API_KEY fallback for better-ccflare auth
+#+STATE: DONE
+#+SESSION_ID: 14d3056468a17f96
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T17-26-07-522Z_14d3056468a17f96.jsonl]]
+#+CUSTOM_ID: BUG-333-add-anthropic-api-key-fallback-for-bette
+#+LAYER: core
+
+* Initial Message
+
+trace /home/user/.spell/logs/http-400-requests/1777832363494-1ab0mxo98fdbg.json and tell me what should have happened
+
+* Intention &amp; Purpose
+
+Add ANTHROPIC_API_KEY as fallback env var for better-ccflare so users with existing Anthropic keys can route through the proxy without setting ANTHROPIC_AUTH_TOKEN.
+
+* Scope
+
+In-scope: Update serviceProviderMap in stream.ts, update tests.
+Out-of-scope: better-ccflare server config, btr- key generation.
+
+* Implementation
+
+** DONE Update serviceProviderMap
+:PROPERTIES:
+:CUSTOM_ID: BUG-333-add-anthropic-api-key-fallback-for-bette::update-service-map
+:END:
+- File: packages/ai/src/stream.ts
+- Change: better-ccflare: () => $pickenv("ANTHROPIC_AUTH_TOKEN")
+- To: better-ccflare: () => $pickenv("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
+
+** DONE Update provider tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-333-add-anthropic-api-key-fallback-for-bette::update-provider-tests
+:DEPENDS: BUG-333-add-anthropic-api-key-fallback-for-bette::update-service-map
+:END:
+- File: packages/ai/test/better-ccflare-provider.test.ts
+- Add test: getEnvApiKey("better-ccflare") falls back to ANTHROPIC_API_KEY when ANTHROPIC_AUTH_TOKEN unset
+
+** DONE Update stream tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-333-add-anthropic-api-key-fallback-for-bette::update-stream-tests
+:DEPENDS: BUG-333-add-anthropic-api-key-fallback-for-bette::update-service-map
+:END:
+- File: packages/ai/test/better-ccflare-stream.test.ts
+- Existing tests remain valid; verify no regressions
+
+* Acceptance Criteria
+- bun check:ts passes
+- bun test packages/ai/test/better-ccflare-provider.test.ts passes
+- bun test packages/ai/test/better-ccflare-stream.test.ts passes
+- getEnvApiKey("better-ccflare") falls back to ANTHROPIC_API_KEY

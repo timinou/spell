@@ -1,0 +1,100 @@
+#+TITLE: Add ANTHROPIC_API_KEY fallback for better-ccflare auth
+#+STATE: ITEM
+#+SESSION_ID: 14d3056468a17f96
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T17-26-07-522Z_14d3056468a17f96.jsonl]]
+#+CUSTOM_ID: BUG-331-add-anthropic-api-key-fallback-for-bette::update-service-map
+#+LAYER: core
+
+* Initial Message
+
+trace /home/user/.spell/logs/http-400-requests/1777832363494-1ab0mxo98fdbg.json and tell me what should have happened
+
+* Intention &amp; Purpose
+
+Add ANTHROPIC_API_KEY as fallback env var for better-ccflare provider so users with existing Anthropic keys can route through the proxy without setting ANTHROPIC_AUTH_TOKEN.
+
+* Context &amp; Narrative
+
+PLAN-293's serviceProviderMap entry only resolves ANTHROPIC_AUTH_TOKEN:
+  better-ccflare: () => $pickenv("ANTHROPIC_AUTH_TOKEN")
+
+When this is unset (common case — user hasn't generated a btr- key), the provider sends no auth header. better-ccflare instances with API keys configured reject requests with:
+  {"type":"authentication_error","message":"x-api-key header is required"}
+
+better-ccflare's API auth is OPTIONAL per docs. When no API keys exist, the proxy is wide open. When keys are configured (this user's instance), a valid btr- key is required. But users may also want to route their standard Anthropic key through better-ccflare for analytics/load-balancing even without a btr key.
+
+The fix: fall back to ANTHROPIC_API_KEY (the user's existing Anthropic key). This matches how the user's pre-PLAN-293 setup worked — routing anthropic models through better-ccflare with their Anthropic key as x-api-key.
+
+Auth priority: ANTHROPIC_AUTH_TOKEN (btr- key) → ANTHROPIC_API_KEY (standard Anthropic key) → "" (keyless mode for instances without API keys)
+
+* Scope
+
+In-scope:
+- Update serviceProviderMap entry for better-ccflare in packages/ai/src/stream.ts
+- Update buildBetterCcflareHeaders: remove OAuth token detection (better-ccflare uses simple x-api-key, not Bearer auth)
+- Update better-ccflare-stream.test.ts: add tests for apiKey fallback
+
+Out-of-scope:
+- better-ccflare server configuration (user must manage their own instance)
+- btr- key generation (user does this via better-ccflare CLI)
+
+* Existing Patterns
+
+- anthropic serviceProviderMap entry: `anthropic: () => $pickenv("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")`
+- $pickenv imported from @oh-my-pi/pi-utils, returns first defined env var, undefined if all are unset/falsy
+- buildBetterCcflareHeaders currently handles: OAuth token detection via isAnthropicOAuthToken, Authorization Bearer for OAuth, x-api-key for regular keys, no header for empty key
+
+* Tests
+
+packages/ai/test/better-ccflare-stream.test.ts — update/add:
+1. "sends x-api-key when ANTHROPIC_AUTH_TOKEN is set" (existing test — verify still passes)
+2. "OAuth passthrough (no auth) when apiKey is empty" (existing test — rename, this is "keyless mode")
+3. NEW: "sends x-api-key when ANTHROPIC_API_KEY is set as fallback" — if ANTHROPIC_AUTH_TOKEN unset, should pick up ANTHROPIC_API_KEY
+
+packages/ai/test/better-ccflare-provider.test.ts — update:
+1. "getEnvApiKey returns ANTHROPIC_AUTH_TOKEN when set" → verify fallback to ANTHROPIC_API_KEY works
+
+* Implementation
+
+** ITEM Update serviceProviderMap fallback
+:PROPERTIES:
+:CUSTOM_ID: BUG-331-add-better-ccflare-auth-fallback::update-service-map
+:END:
+- File: packages/ai/src/stream.ts
+- Change: `better-ccflare: () => $pickenv("ANTHROPIC_AUTH_TOKEN")`
+- To:     `better-ccflare: () => $pickenv("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")`
+- This picks up the user's existing Anthropic key when no btr- key is configured
+
+** ITEM Update provider tests for fallback
+:PROPERTIES:
+:CUSTOM_ID: BUG-331-add-better-ccflare-auth-fallback::update-provider-tests
+:DEPENDS: BUG-331-add-better-ccflare-auth-fallback::update-service-map
+:END:
+- File: packages/ai/test/better-ccflare-provider.test.ts
+- Add test: "getEnvApiKey falls back to ANTHROPIC_API_KEY when ANTHROPIC_AUTH_TOKEN is unset"
+  - Delete ANTHROPIC_AUTH_TOKEN, set ANTHROPIC_API_KEY=sk-ant-api03-fallback
+  - expect(getEnvApiKey("better-ccflare")).toBe("sk-ant-api03-fallback")
+
+** ITEM Update stream tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-331-add-better-ccflare-auth-fallback::update-stream-tests
+:DEPENDS: BUG-331-add-better-ccflare-auth-fallback::update-service-map
+:END:
+- File: packages/ai/test/better-ccflare-stream.test.ts
+- The existing "OAuth passthrough" tests are still valid — when apiKey is "" (both env vars unset), no auth header is sent (keyless mode)
+- Verify existing test "API key auth: x-api-key header when apiKey is set" still passes
+
+* Edge Cases
+
+- Both ANTHROPIC_AUTH_TOKEN and ANTHROPIC_API_KEY set: ANTHROPIC_AUTH_TOKEN wins (btr- key takes priority)
+- ANTHROPIC_AUTH_TOKEN set but empty string: $pickenv treats falsy as unset → falls back to ANTHROPIC_API_KEY
+- Both unset: apiKey = "" → no auth header (keyless mode)
+- ANTHROPIC_API_KEY set to OAuth token (sk-ant-oat-...): sent as x-api-key (better-ccflare doesn't distinguish OAuth vs API key — it just validates the x-api-key header)
+- Existing anthropic provider unaffected (separate serviceProviderMap entry)
+
+* Acceptance Criteria
+
+- `bun check:ts` passes
+- `bun test packages/ai/test/better-ccflare-provider.test.ts` passes
+- `bun test packages/ai/test/better-ccflare-stream.test.ts` passes
+- getEnvApiKey("better-ccflare") falls back to ANTHROPIC_API_KEY when ANTHROPIC_AUTH_TOKEN is unset

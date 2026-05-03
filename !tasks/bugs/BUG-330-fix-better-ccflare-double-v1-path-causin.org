@@ -1,0 +1,84 @@
+#+TITLE: Fix better-ccflare double /v1/ path causing 404
+#+STATE: ITEM
+#+SESSION_ID: 14d3056468a17f96
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T17-26-07-522Z_14d3056468a17f96.jsonl]]
+#+CUSTOM_ID: BUG-330-fix-better-ccflare-double-v1-path-causin::fix-baseurl
+#+LAYER: core
+
+* Initial Message
+
+trace /home/user/.spell/logs/http-400-requests/1777832363494-1ab0mxo98fdbg.json and tell me what should have happened
+
+* Intention &amp; Purpose
+
+Fix streamBetterCcflare constructing `http://localhost:8080/v1/v1/messages` (double /v1/) which causes better-ccflare proxy to return 404.
+
+* Context &amp; Narrative
+
+PLAN-293 implemented a better-ccflare provider. The first user test returned:
+  Error: 404 {"type":"error","error":{"type":"not_found_error","message":"Not found"}}
+
+better-ccflare's own request log shows the root cause:
+  "path": "/v1/v1/messages"
+  "statusCode": 404
+
+The Anthropic JS SDK internally prefixes all routes with /v1/. streamBetterCcflare was also appending /v1/ to baseURL, creating a double prefix. streamAnthropic does not append /v1/ — it passes the base URL directly and lets the SDK handle routing.
+
+Confirmed via curl:
+  /v1/messages     → 503 (correct path, SDK adds /v1/ internally)
+  /v1/v1/messages  → 404 (current bug)
+
+* Scope
+
+In-scope:
+- Fix baseURL construction in streamBetterCcflare: remove `/v1` suffix (line 154)
+- Fix rawRequestDump URL to reflect actual request path (optional, line 171)
+- Update better-ccflare-stream.test.ts to add a base URL test
+
+Out-of-scope:
+- Other stream providers (they don't have this bug)
+- Auth changes (separate bug item)
+
+* Existing Patterns
+
+- streamAnthropic in packages/ai/src/providers/anthropic.ts passes baseUrl directly to Anthropic SDK constructor as baseURL, no /v1 suffix
+- buildAnthropicClientOptions: `baseURL: baseUrl,` (line 1042, 1068)
+- The Anthropic SDK constructor: `new Anthropic({ baseURL, ... })` handles /v1/ prefixing
+
+* Tests
+
+packages/ai/test/better-ccflare-stream.test.ts — add test:
+1. "baseURL does not double-prefix /v1" — verify streamBetterCcflare passes correct baseURL
+
+* Implementation
+
+** ITEM Fix baseURL and raw request URL
+:PROPERTIES:
+:CUSTOM_ID: BUG-330-fix-better-ccflare-double-v1-path::fix-baseurl
+:END:
+- File: packages/ai/src/providers/better-ccflare.ts
+- Line 154: Change `baseURL: \`${baseUrl}/v1\`` to `baseURL: baseUrl`
+- Line 171: Change `url: \`${baseUrl}/v1/messages\`` to `url: \`${baseUrl}/messages\`` (the SDK sends to {baseURL}/v1/messages, and since baseURL no longer has /v1, we show the SDK-constructed path)
+- This matches streamAnthropic behavior (line 658: `url: \`${baseUrl}/v1/messages\`` where baseUrl has no /v1 suffix)
+
+** ITEM Update stream tests
+:PROPERTIES:
+:CUSTOM_ID: BUG-330-fix-better-ccflare-double-v1-path::update-tests
+:DEPENDS: BUG-330-fix-better-ccflare-double-v1-path::fix-baseurl
+:END:
+- File: packages/ai/test/better-ccflare-stream.test.ts
+- Add test: "baseURL does not double-prefix /v1"
+  - Use buildBetterCcflareHeaders with a baseUrl, verify the base URL is passed correctly
+  - Or: mock the Anthropic constructor and verify baseURL has no /v1 suffix
+
+* Edge Cases
+
+- baseUrl already has trailing /v1 from env/config: unlikely with our resolveAnthropicBaseUrl logic, but if it happens, the SDK would still prefix. normalizeBaseUrl should strip it.
+- Other providers (anthropic, github-copilot) not affected — they don't append /v1
+
+* Acceptance Criteria
+
+- `bun check:ts` passes
+- `bun test packages/ai/test/better-ccflare-stream.test.ts` passes (new test + all existing)
+- Verify: curl through better-ccflare shows /v1/messages (no double prefix)
+- All 23 better-ccflare tests still pass

@@ -73,7 +73,7 @@ Tests use HTTP interception (~nock~ or similar) to verify request headers withou
 
 * Implementation
 
-** ITEM Create buildBetterCcflareHeaders
+** DOING Create buildBetterCcflareHeaders
 :PROPERTIES:
 :CUSTOM_ID: FEAT-651-implement-better-ccflare-provider-with-s::create-headers
 :END:
@@ -87,7 +87,7 @@ Tests use HTTP interception (~nock~ or similar) to verify request headers withou
   - Auth: if ~options.apiKey~ is set AND NOT ~oauthToken~ → ~x-api-key: <key>~
 - Import all stealth header constants from ~../providers/anthropic~
 
-** ITEM Create streamBetterCcflare
+** DOING Create streamBetterCcflare
 :PROPERTIES:
 :CUSTOM_ID: FEAT-651-implement-better-ccflare-provider-with-s::create-stream
 :DEPENDS: FEAT-651-implement-better-ccflare-provider-with-s::create-headers
@@ -120,7 +120,7 @@ Tests use HTTP interception (~nock~ or similar) to verify request headers withou
   - This avoids changing the API type but routes by provider
 - Alternative: add a new case. But since API type is ~"anthropic-messages"~, the provider check is the cleanest insertion point.
 
-** ITEM Write stream tests
+** DOING Write stream tests
 :PROPERTIES:
 :CUSTOM_ID: FEAT-651-implement-better-ccflare-provider-with-s::stream-tests
 :DEPENDS: FEAT-651-implement-better-ccflare-provider-with-s::register-dispatch

@@ -1,5 +1,5 @@
 #+TITLE: ResponseStreamer done hang and event listener leak
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14aae0e4276d8b54
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-02T13-07-24-445Z_14aae0e4276d8b54.jsonl]]
 #+CUSTOM_ID: BUG-090-responsestreamer-done-hang-and-event-lis
@@ -70,3 +70,5 @@ Replace the finally block:
 - =bun test packages/telegram-bridge/= passes with new tests
 - =streamer.done= resolves in all code paths (cancel, finalize, error)
 - No listener accumulation: =offEvent= removes listener after each message
+
+NOTE [2026-05-03]: Resolved 2026-05-03: All fixes (cancel(), try/finally in #finalize(), offEvent()) already applied in packages/spell-server/src/telegram/. Package path changed from packages/telegram-bridge/ to packages/spell-server/src/telegram/ — item was stale.

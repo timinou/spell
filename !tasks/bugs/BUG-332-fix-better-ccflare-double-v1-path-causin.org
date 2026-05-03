@@ -1,0 +1,43 @@
+#+TITLE: Fix better-ccflare double /v1/ path causing 404
+#+STATE: DONE
+#+SESSION_ID: 14d3056468a17f96
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T17-26-07-522Z_14d3056468a17f96.jsonl]]
+#+CUSTOM_ID: BUG-332-fix-better-ccflare-double-v1-path-causin
+#+LAYER: core
+
+* Initial Message
+
+trace /home/user/.spell/logs/http-400-requests/1777832363494-1ab0mxo98fdbg.json and tell me what should have happened
+
+* Intention &amp; Purpose
+
+Fix streamBetterCcflare constructing http://localhost:8080/v1/v1/messages (double /v1/) which causes better-ccflare proxy to return 404.
+
+* Scope
+
+In-scope: Fix baseURL construction (remove /v1 suffix on line 154), fix rawRequestDump URL (line 171).
+Out-of-scope: Auth changes, other providers.
+
+* Implementation
+
+** DONE Fix baseURL in streamBetterCcflare
+:PROPERTIES:
+:CUSTOM_ID: BUG-332-fix-better-ccflare-double-v1-path-causin::fix-baseurl
+:END:
+- File: packages/ai/src/providers/better-ccflare.ts
+- Line 154: Change baseURL: \`${baseUrl}/v1\` to baseURL: baseUrl
+- Line 171: Change url: \`${baseUrl}/v1/messages\` to url: \`${baseUrl}/messages\`
+- The Anthropic SDK internally prefixes /v1/ — appending it creates double prefix
+
+** DONE Add baseURL test
+:PROPERTIES:
+:CUSTOM_ID: BUG-332-fix-better-ccflare-double-v1-path-causin::update-tests
+:DEPENDS: BUG-332-fix-better-ccflare-double-v1-path-causin::fix-baseurl
+:END:
+- File: packages/ai/test/better-ccflare-stream.test.ts
+- Add test verifying baseURL has no /v1 suffix
+
+* Acceptance Criteria
+- bun check:ts passes
+- bun test packages/ai/test/better-ccflare-stream.test.ts passes
+- curl through better-ccflare shows /v1/messages (not /v1/v1/messages)
