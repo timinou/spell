@@ -173,11 +173,10 @@ export function buildAnthropicHeaders(options: AnthropicHeaderOptions): Record<s
 		"X-App": "cli",
 	};
 
-	// Localhost proxies handle their own auth; skip sending API keys
-	if (oauthToken || !isAnthropicApiBaseUrl(options.baseUrl)) {
-		if (!isLocalhostBaseUrl(options.baseUrl)) {
-			headers.Authorization = `Bearer ${options.apiKey}`;
-		}
+	// Localhost proxies get x-api-key (same as upstream Anthropic);
+	// OAuth-only non-Anthropic URLs get Bearer auth
+	if (oauthToken && !isAnthropicApiBaseUrl(options.baseUrl) && !isLocalhostBaseUrl(options.baseUrl)) {
+		headers.Authorization = `Bearer ${options.apiKey}`;
 	} else {
 		headers["X-Api-Key"] = options.apiKey;
 	}
@@ -412,7 +411,7 @@ export type AnthropicClientOptionsResult = {
 	baseURL?: string;
 	maxRetries: number;
 	dangerouslyAllowBrowser: boolean;
-	defaultHeaders: Record<string, string>;
+	defaultHeaders: Record<string, string | null>;
 	fetchOptions?: AnthropicSdkClientOptions["fetchOptions"];
 };
 
@@ -1063,12 +1062,14 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 
 	return {
 		isOAuthToken: oauthToken,
-		apiKey: oauthToken ? null : apiKey,
+		apiKey: oauthToken && !isLocalhostBaseUrl(baseUrl) ? null : apiKey,
 		authToken: oauthToken && !isLocalhostBaseUrl(baseUrl) ? apiKey : undefined,
 		baseURL: baseUrl,
 		maxRetries: 5,
 		dangerouslyAllowBrowser: true,
-		defaultHeaders,
+		defaultHeaders: isLocalhostBaseUrl(baseUrl)
+			? { ...defaultHeaders, "x-api-key": null as string | null }
+			: defaultHeaders,
 		...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
 	};
 }
