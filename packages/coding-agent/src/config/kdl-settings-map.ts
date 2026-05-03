@@ -38,6 +38,10 @@ export const EXCLUDED_FROM_KDL = new Set<string>([
 	// STT paths are system-specific, not config
 	"stt.whisperPath",
 	"stt.modelPath",
+	// Plan-mode internal byte limits, not user-config
+	"plan.injectedChildItemMaxBytes",
+	"plan.approvedPromptMaxBytes",
+	"plan.injectedTodoDetailsMaxBytes",
 ]);
 
 // ═══════════════════════════════════════════════════════════════════════════
