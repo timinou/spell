@@ -1,5 +1,5 @@
 #+TITLE: Fix settings persistence on exit and system prompt preparation timeout robustness
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14d2b250d7528657
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T11-23-09-533Z_14d2b250d7528657.jsonl]]
 #+CUSTOM_ID: PLAN-294-fix-settings-persistence-on-exit-and-sys
@@ -58,3 +58,27 @@ On this project (~7365 dirs, 3 AGENTS.md, 10 skills), isolated measurements show
 BUG-329-settings-changes-using-kdl-persistence-t
 FEAT-653-system-prompt-preparation-per-op-timeout
 FEAT-654-pre-compute-system-prompt-preparation-re → FEAT-653-system-prompt-preparation-per-op-timeout
+
+** Completion [2026-05-03]
+
+*** Verification
+- `bun run check:ts`: passes (3 pre-existing biome lint issues in better-ccflare.ts, unrelated)
+- `bun test packages/coding-agent/test/system-prompt-templates.test.ts`: 14/15 pass (1 pre-existing failure: "Delegate work to subagents by default" text missing from template, unrelated)
+- `bun test packages/coding-agent/test/settings-manager.test.ts`: 2/6 pass (4 pre-existing failures, confirmed identical without changes via git stash)
+- `bun test packages/coding-agent/test/caveman.test.ts`: passes
+- `bun test packages/coding-agent/test/extensibility/skill-globs.test.ts`: passes
+
+*** Changes
+- BUG-329: Added `postmortem.register("settings-flush", () => instance.flush())` in `Settings.init()` — 2-line change in `packages/coding-agent/src/config/settings.ts`
+- FEAT-653: Replaced single `Promise.race(all, 5000)` with per-op `raceWithTimeout` calls in `buildSystemPrompt()` — `packages/coding-agent/src/system-prompt.ts`
+- FEAT-654: Pre-computed AGENTS.md and SYSTEM.md in `createAgentSession()`, passed cached results to `rebuildSystemPrompt` — `packages/coding-agent/src/sdk.ts` + `packages/coding-agent/src/system-prompt.ts`
+
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-294-fix-settings-persistence-on-exit-and-sys/]]
+
+*** Child Items
+- [[id:BUG-329-settings-changes-using-kdl-persistence-t]] → DONE
+- [[id:FEAT-653-system-prompt-preparation-per-op-timeout]] → DONE
+- [[id:FEAT-654-pre-compute-system-prompt-preparation-re]] → DONE
+
+All three work items implemented. No blockers remain.

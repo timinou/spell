@@ -1,5 +1,5 @@
 #+TITLE: System prompt preparation — per-op timeouts with named diagnostics and partial resilience
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d2b250d7528657
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T11-23-09-533Z_14d2b250d7528657.jsonl]]
 #+CUSTOM_ID: FEAT-653-system-prompt-preparation-per-op-timeout
