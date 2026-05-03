@@ -1,5 +1,5 @@
 #+TITLE: Implement better-ccflare provider with stealth mode and OAuth passthrough auth
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d2ecf186a17f91
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T15-39-18-426Z_14d2ecf186a17f91.jsonl]]
 #+CUSTOM_ID: FEAT-651-implement-better-ccflare-provider-with-s
