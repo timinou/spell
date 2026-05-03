@@ -129,7 +129,7 @@ const serviceProviderMap: Record<string, KeyResolver> = {
 			return "<authenticated>";
 		}
 	},
-	"better-ccflare": () => $pickenv("ANTHROPIC_AUTH_TOKEN"),
+	"better-ccflare": () => $pickenv("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"),
 	synthetic: "SYNTHETIC_API_KEY",
 	"cloudflare-ai-gateway": "CLOUDFLARE_AI_GATEWAY_API_KEY",
 	huggingface: () => $pickenv("HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"),

@@ -151,7 +151,7 @@ export const streamBetterCcflare: StreamFunction<"anthropic-messages"> = (
 
 			const client = new Anthropic({
 				apiKey: apiKey || "dummy", // SDK requires non-empty string
-				baseURL: `${baseUrl}/v1`,
+				baseURL: baseUrl,
 				maxRetries: 4,
 				dangerouslyAllowBrowser: true,
 				defaultHeaders,
@@ -168,7 +168,7 @@ export const streamBetterCcflare: StreamFunction<"anthropic-messages"> = (
 				api: output.api,
 				model: model.id,
 				method: "POST",
-				url: `${baseUrl}/v1/messages`,
+				url: `${baseUrl}/messages`,
 				body: params,
 			};
 
