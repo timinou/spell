@@ -1,5 +1,5 @@
 #+TITLE: Add better-ccflare provider type and env var resolution
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d2ecf186a17f91
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T15-39-18-426Z_14d2ecf186a17f91.jsonl]]
 #+CUSTOM_ID: FEAT-649-add-better-ccflare-provider-type-and-env
@@ -54,7 +54,7 @@ Out-of-scope:
 - Add ~| "better-ccflare"~ to ~KnownProvider~ union (after ~| "anthropic"~, before ~| "google"~)
 - No other type changes needed — ~Api = "anthropic-messages"~ is already the API type for Anthropic-compatible providers
 
-** ITEM Add better-ccflare to serviceProviderMap
+^** DONE Add better-ccflare to serviceProviderMap
 :PROPERTIES:
 :CUSTOM_ID: FEAT-649-add-better-ccflare-provider-type-and-env::add-to-service-map
 :END:
@@ -64,7 +64,7 @@ Out-of-scope:
 - Note: NO fallback to ~ANTHROPIC_API_KEY~ — better-ccflare should not pick up standard Anthropic keys
 - Return undefined when unset; provider handles missing key via OAuth passthrough
 
-** ITEM Export resolveAnthropicBaseUrl and add better-ccflare case
+^** DONE Export resolveAnthropicBaseUrl and add better-ccflare case
 :PROPERTIES:
 :CUSTOM_ID: FEAT-649-add-better-ccflare-provider-type-and-env::export-resolve-base-url
 :END:
