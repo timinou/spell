@@ -12,6 +12,7 @@ import {
 import { type BedrockOptions, streamBedrock } from "./providers/amazon-bedrock";
 import { type AnthropicOptions, streamAnthropic } from "./providers/anthropic";
 import { streamAzureOpenAIResponses } from "./providers/azure-openai-responses";
+import { streamBetterCcflare } from "./providers/better-ccflare";
 import { type CursorOptions, streamCursor } from "./providers/cursor";
 import { isGitLabDuoModel, streamGitLabDuo } from "./providers/gitlab-duo";
 import { type GoogleOptions, streamGoogle } from "./providers/google";
@@ -201,6 +202,11 @@ export function stream<TApi extends Api>(
 	const api: Api = model.api;
 	switch (api) {
 		case "anthropic-messages":
+			// Route better-ccflare provider to its own stream function
+			// (same API type, different auth header behavior)
+			if (model.provider === "better-ccflare") {
+				return streamBetterCcflare(model as Model<"anthropic-messages">, context, providerOptions);
+			}
 			return streamAnthropic(model as Model<"anthropic-messages">, context, providerOptions);
 
 		case "openai-completions":

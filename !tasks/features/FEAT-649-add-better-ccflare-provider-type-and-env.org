@@ -76,7 +76,7 @@ Out-of-scope:
   - Default: ~"http://localhost:8080"~ (better-ccflare default port)
 - Order: check better-ccflare BEFORE the generic ~return normalizeBaseUrl(model.baseUrl)~ fallback at line 449
 
-** ITEM Write type/env tests
+** DOING Write type/env tests
 :PROPERTIES:
 :CUSTOM_ID: FEAT-649-add-better-ccflare-provider-type-and-env::types-env-tests
 :DEPENDS: FEAT-649-add-better-ccflare-provider-type-and-env::add-to-known-provider FEAT-649-add-better-ccflare-provider-type-and-env::add-to-service-map FEAT-649-add-better-ccflare-provider-type-and-env::export-resolve-base-url

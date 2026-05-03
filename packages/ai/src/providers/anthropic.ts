@@ -269,7 +269,7 @@ export function generateClaudeCloakingUserId(): string {
 	return `user_${userHash}_account_${accountId}_session_${sessionId}`;
 }
 
-function resolveAnthropicMetadataUserId(userId: unknown, isOAuthToken: boolean): string | undefined {
+export function resolveAnthropicMetadataUserId(userId: unknown, isOAuthToken: boolean): string | undefined {
 	if (typeof userId === "string") {
 		if (!isOAuthToken || isClaudeCloakingUserId(userId)) {
 			return userId;
@@ -574,7 +574,7 @@ function mergeHeaders(...headerSources: (Record<string, string> | undefined)[]):
  * Anthropic-compatible proxy endpoints.
  */
 /** Transient stream corruption errors: truncated JSON or out-of-order SSE events. */
-function isTransientStreamParseError(error: unknown): boolean {
+export function isTransientStreamParseError(error: unknown): boolean {
 	if (!(error instanceof Error)) return false;
 	return /json parse error|unterminated string|unexpected end of json input|unexpected event order/i.test(
 		error.message,
@@ -1082,7 +1082,7 @@ function createClient(
 	return { client, isOAuthToken: oauthToken };
 }
 
-function disableThinkingIfToolChoiceForced(params: MessageCreateParamsStreaming): void {
+export function disableThinkingIfToolChoiceForced(params: MessageCreateParamsStreaming): void {
 	const toolChoice = params.tool_choice;
 	if (!toolChoice) return;
 	if (toolChoice.type === "any" || toolChoice.type === "tool") {
@@ -1091,7 +1091,10 @@ function disableThinkingIfToolChoiceForced(params: MessageCreateParamsStreaming)
 	}
 }
 
-function ensureMaxTokensForThinking(params: MessageCreateParamsStreaming, model: Model<"anthropic-messages">): void {
+export function ensureMaxTokensForThinking(
+	params: MessageCreateParamsStreaming,
+	model: Model<"anthropic-messages">,
+): void {
 	const thinking = params.thinking;
 	if (!thinking || thinking.type !== "enabled") return;
 
@@ -1132,7 +1135,7 @@ function applyCacheControlToLastTextBlock(
 	applyCacheControlToLastBlock(blocks, cacheControl);
 }
 
-function applyPromptCaching(params: MessageCreateParamsStreaming, cacheControl?: AnthropicCacheControl): void {
+export function applyPromptCaching(params: MessageCreateParamsStreaming, cacheControl?: AnthropicCacheControl): void {
 	if (!cacheControl) return;
 
 	// Skip if cache_control breakpoints were already placed externally on messages.
@@ -1226,7 +1229,7 @@ function normalizeCacheControlBlockTtl(block: CacheControlBlock, seenFiveMinute:
 	}
 }
 
-function normalizeCacheControlTtlOrdering(params: MessageCreateParamsStreaming): void {
+export function normalizeCacheControlTtlOrdering(params: MessageCreateParamsStreaming): void {
 	const seenFiveMinute = { value: false };
 	if (params.tools) {
 		for (const tool of params.tools as Array<Anthropic.Messages.Tool & CacheControlBlock>) {
@@ -1312,7 +1315,7 @@ function countCacheControlBreakpoints(params: MessageCreateParamsStreaming): num
 	return total;
 }
 
-function enforceCacheControlLimit(params: MessageCreateParamsStreaming, maxBreakpoints: number): void {
+export function enforceCacheControlLimit(params: MessageCreateParamsStreaming, maxBreakpoints: number): void {
 	const total = countCacheControlBreakpoints(params);
 	if (total <= maxBreakpoints) return;
 	const excessCounter = { value: total - maxBreakpoints };
@@ -1341,7 +1344,7 @@ function enforceCacheControlLimit(params: MessageCreateParamsStreaming, maxBreak
 		stripAllCacheControl(toolBlocks, excessCounter);
 	}
 }
-function buildParams(
+export function buildParams(
 	model: Model<"anthropic-messages">,
 	context: Context,
 	isOAuthToken: boolean,
@@ -1592,7 +1595,7 @@ export function convertAnthropicMessages(
 	return params;
 }
 
-function convertTools(tools: Tool[], isOAuthToken: boolean): Anthropic.Messages.Tool[] {
+export function convertTools(tools: Tool[], isOAuthToken: boolean): Anthropic.Messages.Tool[] {
 	if (!tools) return [];
 
 	return tools.map(tool => {
@@ -1610,7 +1613,7 @@ function convertTools(tools: Tool[], isOAuthToken: boolean): Anthropic.Messages.
 	});
 }
 
-function mapStopReason(reason: Anthropic.Messages.StopReason | string): StopReason {
+export function mapStopReason(reason: Anthropic.Messages.StopReason | string): StopReason {
 	switch (reason) {
 		case "end_turn":
 			return "stop";
