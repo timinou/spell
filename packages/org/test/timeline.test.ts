@@ -66,10 +66,10 @@ describe("timeline ordered episodes", () => {
 			].join("\n"),
 		);
 
-		const result = await tool.execute({
+		const result = (await tool.execute({
 			command: "timeline",
 			target,
-		}) as Record<string, unknown>;
+		})) as Record<string, unknown>;
 
 		const entries = (result as { entries?: unknown[] }).entries ?? [];
 		expect(entries.length).toBeGreaterThanOrEqual(1);
@@ -99,10 +99,10 @@ describe("timeline no-target empty", () => {
 			].join("\n"),
 		);
 
-		const result = await tool.execute({
+		const result = (await tool.execute({
 			command: "timeline",
 			target: "CON-nonexistent",
-		}) as Record<string, unknown>;
+		})) as Record<string, unknown>;
 
 		const entries = (result as { entries?: unknown[] }).entries ?? [];
 		expect(entries.length).toBe(0);

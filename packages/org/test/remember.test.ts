@@ -48,17 +48,17 @@ describe("remember episode", () => {
 	test("writes an episode file under .spell/memory/episodes", async () => {
 		if (skipIfNoNative()) return;
 
-		const result = await tool.execute({
+		const result = (await tool.execute({
 			command: "remember",
 			kind: "episode",
 			summary: "Debugged auth flow edge case",
 			involves: ["FEAT-001", "FEAT-002"],
-		}) as Record<string, unknown>;
+		})) as Record<string, unknown>;
 
 		expect(typeof result.id).toBe("string");
 		expect((result.id as string).startsWith("EP-")).toBe(true);
 		expect(typeof result.file).toBe("string");
-		expect((result.file as string)).toContain(".spell/memory/episodes/");
+		expect(result.file as string).toContain(".spell/memory/episodes/");
 	});
 });
 
@@ -66,16 +66,16 @@ describe("remember concept", () => {
 	test("writes a concept file under .spell/memory/concepts", async () => {
 		if (skipIfNoNative()) return;
 
-		const result = await tool.execute({
+		const result = (await tool.execute({
 			command: "remember",
 			kind: "concept",
 			summary: "JWT Token Validation",
 			about: ["CON-001"],
-		}) as Record<string, unknown>;
+		})) as Record<string, unknown>;
 
 		expect(result.id).toBe("CON-jwt-token-validation");
 		expect(typeof result.file).toBe("string");
-		expect((result.file as string)).toContain(".spell/memory/concepts/jwt-token-validation.org");
+		expect(result.file as string).toContain(".spell/memory/concepts/jwt-token-validation.org");
 	});
 });
 
@@ -84,18 +84,18 @@ describe("remember idempotent append", () => {
 		if (skipIfNoNative()) return;
 
 		// First write
-		const r1 = await tool.execute({
+		const r1 = (await tool.execute({
 			command: "remember",
 			kind: "episode",
 			summary: "First episode today",
-		}) as Record<string, unknown>;
+		})) as Record<string, unknown>;
 
 		// Second write to same day
-		const r2 = await tool.execute({
+		const r2 = (await tool.execute({
 			command: "remember",
 			kind: "episode",
 			summary: "Second episode today",
-		}) as Record<string, unknown>;
+		})) as Record<string, unknown>;
 
 		expect(typeof r1.id).toBe("string");
 		expect(typeof r2.id).toBe("string");

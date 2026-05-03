@@ -51,36 +51,24 @@ describe("link appends edge", () => {
 		await fs.mkdir(tasksDir, { recursive: true });
 		await Bun.write(
 			path.join(tasksDir, "FEAT-001.org"),
-			[
-				"* ITEM Feature One",
-				":PROPERTIES:",
-				":CUSTOM_ID: FEAT-001",
-				":END:",
-				"",
-				"Some body text.",
-			].join("\n"),
+			["* ITEM Feature One", ":PROPERTIES:", ":CUSTOM_ID: FEAT-001", ":END:", "", "Some body text."].join("\n"),
 		);
 		// Write target item
 		await Bun.write(
 			path.join(tasksDir, "FEAT-002.org"),
-			[
-				"* ITEM Feature Two",
-				":PROPERTIES:",
-				":CUSTOM_ID: FEAT-002",
-				":END:",
-			].join("\n"),
+			["* ITEM Feature Two", ":PROPERTIES:", ":CUSTOM_ID: FEAT-002", ":END:"].join("\n"),
 		);
 
-		const result = await tool.execute({
+		const result = (await tool.execute({
 			command: "link",
 			from: "FEAT-001",
 			to: "FEAT-002",
 			kind: "INVOLVED",
-		}) as Record<string, unknown>;
+		})) as Record<string, unknown>;
 
 		expect(typeof result.revision).toBe("number");
 		expect(typeof result.file).toBe("string");
-		expect((result.file as string)).toContain("FEAT-001.org");
+		expect(result.file as string).toContain("FEAT-001.org");
 	});
 });
 
@@ -105,20 +93,15 @@ describe("link idempotent", () => {
 		);
 		await Bun.write(
 			path.join(tasksDir, "FEAT-004.org"),
-			[
-				"* ITEM Feature Four",
-				":PROPERTIES:",
-				":CUSTOM_ID: FEAT-004",
-				":END:",
-			].join("\n"),
+			["* ITEM Feature Four", ":PROPERTIES:", ":CUSTOM_ID: FEAT-004", ":END:"].join("\n"),
 		);
 
-		const result = await tool.execute({
+		const result = (await tool.execute({
 			command: "link",
 			from: "FEAT-003",
 			to: "FEAT-004",
 			kind: "INVOLVED",
-		}) as Record<string, unknown>;
+		})) as Record<string, unknown>;
 
 		// Should succeed without adding duplicate
 		expect(typeof result.revision).toBe("number");

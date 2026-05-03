@@ -74,11 +74,11 @@ describe("subgraph hops=1", () => {
 			].join("\n"),
 		);
 
-		const result = await tool.execute({
+		const result = (await tool.execute({
 			command: "subgraph",
 			root: "CON-oauth",
 			hops: 1,
-		}) as Record<string, unknown>;
+		})) as Record<string, unknown>;
 
 		const nodes = (result as { nodes?: unknown[] }).nodes ?? [];
 		const edges = (result as { edges?: unknown[] }).edges ?? [];
@@ -134,12 +134,12 @@ describe("subgraph hops=2 with kind filter", () => {
 			].join("\n"),
 		);
 
-		const result = await tool.execute({
+		const result = (await tool.execute({
 			command: "subgraph",
 			root: "CON-root",
 			hops: 2,
 			kinds: ["INVOLVED"],
-		}) as Record<string, unknown>;
+		})) as Record<string, unknown>;
 
 		const nodeIds = ((result as { nodes?: Array<{ id: string }> }).nodes ?? []).map(n => n.id);
 		const edgeKinds = ((result as { edges?: Array<{ kind: string }> }).edges ?? []).map(e => e.kind);
