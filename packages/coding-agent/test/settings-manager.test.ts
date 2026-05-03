@@ -5,7 +5,6 @@ import * as path from "node:path";
 import * as ai from "@oh-my-pi/pi-ai";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { _resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { getDefault, getUi } from "@oh-my-pi/pi-coding-agent/config/settings-schema";
 import { reset as resetCapabilityCache } from "@oh-my-pi/pi-coding-agent/discovery";
 import { getProjectAgentDir, Snowflake } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
@@ -37,32 +36,7 @@ describe("Settings", () => {
 		await Bun.write(getConfigPath(), YAML.stringify(settings, null, 2));
 	};
 
-	describe("Anthropic stream idle timeout setting", () => {
-		it("exposes a provider-tab default matching the pi-ai safer default", () => {
-			expect(getDefault("providers.anthropicStreamIdleTimeoutMs")).toBe(180_000);
-
-			const ui = getUi("providers.anthropicStreamIdleTimeoutMs");
-			expect(ui?.tab).toBe("providers");
-			expect(ui?.description).toContain("0 disables");
-		});
-
-		it("applies setting changes to pi-ai runtime override without env mutation", () => {
-			const settings = Settings.isolated();
-
-			settings.set("providers.anthropicStreamIdleTimeoutMs", 240_000);
-
-			expect(ai.getAnthropicStreamIdleTimeoutMs()).toBe(240_000);
-			expect(Bun.env.PI_ANTHROPIC_STREAM_IDLE_TIMEOUT_MS).toBeUndefined();
-		});
-
-		it("allows config value 0 to disable the Anthropic watchdog", () => {
-			const settings = Settings.isolated();
-
-			settings.set("providers.anthropicStreamIdleTimeoutMs", 0);
-
-			expect(ai.getAnthropicStreamIdleTimeoutMs()).toBeUndefined();
-		});
-	});
+	// providers.anthropicStreamIdleTimeoutMs removed in kdl-config cutover — test section deleted
 	const readSettings = async (): Promise<Record<string, unknown>> => {
 		const file = Bun.file(getConfigPath());
 		if (!(await file.exists())) return {};

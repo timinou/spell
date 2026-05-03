@@ -1,5 +1,5 @@
 #+TITLE: Agent dashboard surfaces effective rules and conflicts
-#+STATE: ITEM
+#+STATE: BLOCKED
 #+SESSION_ID: 14d27f187b617f71
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T07-39-22-477Z_14d27f187b617f71.jsonl]]
 #+CUSTOM_ID: FEAT-647-agent-dashboard-surfaces-effective-rules
@@ -91,3 +91,5 @@ The `/agents` dashboard (`AgentDashboard` component) must display the new resolu
 - Manual: opening `/agents` against a project with `agents { rule "explore" { model "..." } }` shows the rule's selector and source in the inspector.
 - Manual: a project with two same-specificity rules surfaces a conflict warning in the inspector.
 - The settings-DB edit flow (`Enter` to override) still works and persists to settings DB.
+
+NOTE [2026-05-03]: Dashboard wiring placeholder - resolver call pattern documented, rendering deferred to follow-up

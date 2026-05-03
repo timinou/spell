@@ -21,7 +21,7 @@ import { processFileArguments } from "./cli/file-processor";
 import { listModels } from "./cli/list-models";
 import { selectSession } from "./cli/session-picker";
 import { findConfigFile } from "./config";
-import { ModelRegistry, ModelsConfigFile } from "./config/model-registry";
+import { ModelRegistry } from "./config/model-registry";
 import { resolveCliModel, resolveModelRoleValue, resolveModelScope, type ScopedModel } from "./config/model-resolver";
 import { Settings, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
@@ -843,7 +843,8 @@ export async function runRootCommand(parsed: Args, rawArgs: string[]): Promise<v
 		}
 		process.stderr.write(`${chalk.yellow("\nSet an API key environment variable:")}\n`);
 		process.stderr.write("  ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY, etc.\n");
-		process.stderr.write(`${chalk.yellow(`\nOr create ${ModelsConfigFile.path()}`)}\n`);
+		process.stderr.write(`${chalk.yellow(`\nOr create ~/.spell/models.yml`)}
+  `);
 		await session.dispose();
 		process.exit(1);
 	}

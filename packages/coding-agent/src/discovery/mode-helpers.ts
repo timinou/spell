@@ -1,4 +1,5 @@
 import type { ModeConfig, ModeConfigFrontmatter, ModeConfigSections, ResolvedModeConfig } from "../capability/mode";
+import { type ParsedFrontmatter, parseFrontmatter } from "../utils/frontmatter";
 
 const KNOWN_SECTIONS: Record<string, keyof Omit<ModeConfigSections, "custom">> = {
 	context: "context",
@@ -43,6 +44,14 @@ export function parseModeConfigSections(body: string): ModeConfigSections {
 	return sections;
 }
 
+export function parseModeConfig(
+	content: string,
+	source?: unknown,
+): { frontmatter: ModeConfigFrontmatter; sections: ModeConfigSections; format: ParsedFrontmatter["format"] } {
+	const { frontmatter, body, format } = parseFrontmatter(content, { source });
+	return { frontmatter: frontmatter as ModeConfigFrontmatter, sections: parseModeConfigSections(body), format };
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -58,13 +67,10 @@ export function deepMergeFrontmatter(
 		if (childVal === undefined) continue;
 
 		if (Array.isArray(childVal)) {
-			// Arrays: child replaces parent
 			result[key] = childVal;
 		} else if (isPlainObject(childVal) && isPlainObject(result[key])) {
-			// Objects: recursive merge
 			result[key] = deepMergeFrontmatter(result[key] as ModeConfigFrontmatter, childVal as ModeConfigFrontmatter);
 		} else {
-			// Scalars: child wins
 			result[key] = childVal;
 		}
 	}
@@ -95,9 +101,7 @@ export function mergeSections(parent: ModeConfigSections, child: ModeConfigSecti
 		}
 	}
 
-	// Custom sections: merge maps, child wins on collision
 	result.custom = { ...parent.custom, ...child.custom };
-
 	return result;
 }
 
@@ -128,15 +132,10 @@ export function detectExtendsCycle(
 export function resolveToolAccess(chain: ModeConfigFrontmatter[]): string[] | undefined {
 	let tools: Set<string> | undefined;
 
-	// Walk parent-first (chain[0] is root parent, last is the mode itself)
 	for (const fm of chain) {
-		if (fm.tools?.allow) {
-			tools = new Set(fm.tools.allow);
-		}
+		if (fm.tools?.allow) tools = new Set(fm.tools.allow);
 		if (fm.tools?.deny && tools) {
-			for (const denied of fm.tools.deny) {
-				tools.delete(denied);
-			}
+			for (const denied of fm.tools.deny) tools.delete(denied);
 		}
 	}
 
@@ -156,13 +155,11 @@ export function resolveModeConfig(
 	allModes: Map<string, ModeConfig>,
 	builtinModes: Map<string, ModeConfig>,
 ): ResolvedModeConfig {
-	// Check for cycles first
 	const cycle = detectExtendsCycle(mode.name, allModes, builtinModes);
 	if (cycle) {
 		throw new Error(`Circular extends detected in mode "${mode.name}": ${cycle.join(" -> ")}`);
 	}
 
-	// Build the chain from root ancestor to mode (parent first)
 	const chain: ModeConfig[] = [];
 	let current: ModeConfig | undefined = mode;
 
@@ -179,8 +176,6 @@ export function resolveModeConfig(
 	}
 
 	const extendsChain = chain.map(m => m.name);
-
-	// Merge frontmatter and sections along the chain
 	let mergedFrontmatter = chain[0].frontmatter;
 	let mergedSections = chain[0].sections;
 
@@ -189,9 +184,7 @@ export function resolveModeConfig(
 		mergedSections = mergeSections(mergedSections, chain[i].sections);
 	}
 
-	// Resolve tool access
-	const frontmatterChain = chain.map(m => m.frontmatter);
-	const resolvedTools = resolveToolAccess(frontmatterChain);
+	const resolvedTools = resolveToolAccess(chain.map(m => m.frontmatter));
 
 	return {
 		name: mode.name,

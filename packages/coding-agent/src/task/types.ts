@@ -71,6 +71,12 @@ export const taskItemSchema = Type.Object({
 			description: "Layer for policy-based gate injection. Propagated to auto-roster todo items.",
 		}),
 	),
+	model: Type.Optional(
+		Type.String({
+			description:
+				"Model override for this single task (e.g. 'anthropic/claude-haiku-4-5' or a configured role alias 'pi/smol'). Highest priority in the resolution chain — overrides batch-level model, spell.kdl rules, and settings.",
+		}),
+	),
 });
 export type TaskItem = Static<typeof taskItemSchema>;
 
@@ -93,6 +99,12 @@ const createTaskSchema = (options: { isolationEnabled: boolean }) => {
 			Type.Record(Type.String(), Type.Unknown(), {
 				description:
 					"JTD schema defining expected response structure. Use typed properties. Output format belongs here — never in context or assignment.",
+			}),
+		),
+		model: Type.Optional(
+			Type.String({
+				description:
+					"Default model for all tasks in this batch. Per-task `model` field overrides this. Same value space as per-task model.",
 			}),
 		),
 		tasks: Type.Array(taskItemSchema, {

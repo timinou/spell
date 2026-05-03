@@ -2,14 +2,13 @@
  * Per-project task policy system.
  *
  * Policies associate layer-based gates and guidance with org items. Projects
- * declare their layer vocabulary in `spell.kdl` (preferred), `.spell/task-policies.kdl`,
- * or `.spell/task-policies.yml`; modes can override or extend via frontmatter
+ * declare their layer vocabulary in `spell.kdl` (preferred) or `.spell/task-policies.kdl`;
+ * modes can override or extend via frontmatter
  * `taskPolicies`. Gates are auto-injected whenever a task is created with a
  * matching `layer` value.
  */
 
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
 import { loadSpellKdl } from "./spell-kdl";
 import { parseTaskPoliciesKdl } from "./task-policies-kdl";
 
@@ -46,87 +45,8 @@ export interface TaskPolicyConfig {
 	policies: TaskPolicy[];
 }
 
-// Parsing + Validation
+// Loading
 // =============================================================================
-
-interface RawPolicy {
-	name?: unknown;
-	description?: unknown;
-	match?: { layer?: unknown };
-	gates?: Record<string, unknown>;
-	inject?: unknown;
-}
-
-interface RawConfig {
-	version?: unknown;
-	layers?: Record<string, { description?: unknown }>;
-	policies?: RawPolicy[];
-}
-
-/**
- * Parse and validate a task-policies YAML string.
- * Returns undefined on parse failure or missing version field.
- */
-export function parseTaskPolicies(yamlContent: string): TaskPolicyConfig | undefined {
-	let raw: RawConfig;
-	try {
-		raw = YAML.parse(yamlContent) as RawConfig;
-	} catch (error) {
-		logger.warn("task-policies: YAML parse error", { error: error instanceof Error ? error.message : String(error) });
-		return undefined;
-	}
-	if (!raw || typeof raw !== "object") return undefined;
-
-	if (raw.version === undefined || raw.version === null) {
-		logger.warn("task-policies: missing 'version' field");
-		return undefined;
-	}
-
-	const version = Number(raw.version);
-	if (!Number.isFinite(version)) {
-		logger.warn("task-policies: invalid version", { version: raw.version });
-		return undefined;
-	}
-
-	const layers: Record<string, LayerDefinition> = {};
-	if (raw.layers && typeof raw.layers === "object") {
-		for (const [name, def] of Object.entries(raw.layers)) {
-			layers[name] = { description: typeof def?.description === "string" ? def.description : "" };
-		}
-	}
-
-	const policies: TaskPolicy[] = [];
-	if (Array.isArray(raw.policies)) {
-		for (const rawPolicy of raw.policies) {
-			if (!rawPolicy || typeof rawPolicy !== "object") continue;
-			if (typeof rawPolicy.name !== "string" || !rawPolicy.name) {
-				logger.warn("task-policies: skipping policy without name");
-				continue;
-			}
-			if (!rawPolicy.match || typeof rawPolicy.match !== "object" || typeof rawPolicy.match.layer !== "string") {
-				logger.warn("task-policies: skipping policy without valid match.layer", { name: rawPolicy.name });
-				continue;
-			}
-			const gates: TaskPolicyGates = {};
-			if (rawPolicy.gates && typeof rawPolicy.gates === "object") {
-				if (typeof rawPolicy.gates.gateCommit === "boolean") gates.gateCommit = rawPolicy.gates.gateCommit;
-				if (typeof rawPolicy.gates.gateArtifact === "string") gates.gateArtifact = rawPolicy.gates.gateArtifact;
-				if (typeof rawPolicy.gates.gateCmd === "string") gates.gateCmd = rawPolicy.gates.gateCmd;
-				if (typeof rawPolicy.gates.gateLlm === "string") gates.gateLlm = rawPolicy.gates.gateLlm;
-				if (typeof rawPolicy.gates.verifyCmd === "string") gates.verifyCmd = rawPolicy.gates.verifyCmd;
-			}
-			policies.push({
-				name: rawPolicy.name,
-				description: typeof rawPolicy.description === "string" ? rawPolicy.description : undefined,
-				match: { layer: rawPolicy.match.layer },
-				gates,
-				inject: typeof rawPolicy.inject === "string" ? rawPolicy.inject : undefined,
-			});
-		}
-	}
-
-	return { version, layers, policies };
-}
 
 /**
  * Load task policies from the project root.
@@ -134,7 +54,6 @@ export function parseTaskPolicies(yamlContent: string): TaskPolicyConfig | undef
  * Resolution order:
  * 1. `spell.kdl` at project root (unified config)
  * 2. `.spell/task-policies.kdl` (standalone KDL)
- * 3. `.spell/task-policies.yml` (legacy YAML)
  *
  * First file found wins. No merging across formats.
  */
@@ -158,19 +77,7 @@ export async function loadTaskPolicies(projectDir: string): Promise<TaskPolicyCo
 		}
 	}
 
-	// 3. Fall back to .spell/task-policies.yml
-	const yamlPath = `${projectDir}/.spell/task-policies.yml`;
-	try {
-		const yamlContent = await Bun.file(yamlPath).text();
-		return parseTaskPolicies(yamlContent);
-	} catch (error) {
-		if (isEnoent(error)) return undefined;
-		logger.warn("task-policies: failed to load YAML", {
-			filePath: yamlPath,
-			error: error instanceof Error ? error.message : String(error),
-		});
-		return undefined;
-	}
+	return undefined;
 }
 
 // Matching

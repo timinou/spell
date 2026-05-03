@@ -20,8 +20,8 @@ import type { Usage } from "@oh-my-pi/pi-ai";
 import { $env, logger, Snowflake } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { ToolSession } from "..";
-import { resolveAgentModelPatterns } from "../config/model-resolver";
 import { renderPromptTemplate } from "../config/prompt-templates";
+import { loadSpellKdl, loadUserSpellKdl } from "../config/spell-kdl";
 import type { Theme } from "../modes/theme/theme";
 import { listPlanModeAllowedFolders } from "../plan-mode/allowed-folders";
 import planModeSubagentPrompt from "../prompts/system/plan-mode-subagent.md" with { type: "text" };
@@ -42,6 +42,7 @@ import {
 	type TodoStatus,
 	TodoWriteTool,
 } from "../tools/todo-write";
+import { resolveAgentEffectiveConfig } from "./agent-config-resolver";
 // Import review tools for side effects (registers subagent tool handlers)
 import "../tools/review";
 import { generateCommitMessage } from "../utils/commit-message-generator";
@@ -1273,6 +1274,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		const commitStyle = this.session.settings.get("task.isolation.commits");
 		const maxConcurrency = this.session.settings.get("task.maxConcurrency");
 		const cacheStaggerMs = this.session.settings.get("task.cacheStaggerMs") ?? 800;
+		const _batchModel = params.model?.trim() || undefined;
 
 		// Validate agent exists
 		const agent = getAgent(agents, agentName);
@@ -1293,24 +1295,13 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			};
 		}
 
-		// Check if agent is disabled in settings
-		const disabledAgents = this.session.settings.get("task.disabledAgents") as string[];
-		if (disabledAgents.length > 0 && disabledAgents.includes(agentName)) {
-			const enabled = agents.filter(a => !disabledAgents.includes(a.name)).map(a => a.name);
-			return {
-				content: [
-					{
-						type: "text",
-						text: `Agent "${agentName}" is disabled in settings. Enable it via /agents, or use a different agent type.${enabled.length > 0 ? ` Available: ${enabled.join(", ")}` : ""}`,
-					},
-				],
-				details: {
-					projectAgentsDir,
-					results: [],
-					totalDurationMs: 0,
-				},
-			};
-		}
+		// Load spell.kdl agent rules
+		const projectConfig = await loadSpellKdl(this.session.cwd);
+		const userConfig = await loadUserSpellKdl();
+		const kdlRules = {
+			projectRules: projectConfig?.agents?.rules ?? [],
+			userRules: userConfig?.agents?.rules ?? [],
+		};
 
 		const planModeState = this.session.getPlanModeState?.();
 		const planModeAllowedFolders = listPlanModeAllowedFolders(this.session.settings.get("planMode.allowedFolders"));
@@ -1330,17 +1321,38 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				}
 			: agent;
 
-		// Apply per-agent model override from settings (highest priority)
-		const agentModelOverrides = this.session.settings.get("task.agentModelOverrides");
-		const settingsModelOverride = agentModelOverrides[agentName];
-		const modelOverride = resolveAgentModelPatterns({
-			settingsOverride: settingsModelOverride,
-			agentModel: effectiveAgent.model,
+		// Resolve effective agent config (unified precedence: per-call > kdl rules > settings > frontmatter)
+		const effectiveConfig = resolveAgentEffectiveConfig({
+			agent: effectiveAgent,
+			agentName,
+			perCallTaskModel: undefined, // populated per-task below
+			perCallBatchModel: _batchModel,
+			projectRules: kdlRules.projectRules,
+			userRules: kdlRules.userRules,
 			settings: this.session.settings,
 			activeModelPattern: this.session.getActiveModelString?.(),
 			fallbackModelPattern: this.session.getModelString?.(),
 		});
-		const thinkingLevelOverride = effectiveAgent.thinkingLevel;
+
+		// Check if agent is disabled (by rule or settings)
+		if (effectiveConfig.disabled) {
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Agent "${agentName}" is disabled. Enable it via /agents or remove the rule in spell.kdl.`,
+					},
+				],
+				details: {
+					projectAgentsDir,
+					results: [],
+					totalDurationMs: 0,
+				},
+			};
+		}
+
+		const modelOverride = effectiveConfig.model;
+		const thinkingLevelOverride = effectiveConfig.thinkingLevel;
 
 		// Output schema priority: agent frontmatter > params > inherited from parent session
 		const effectiveOutputSchema = effectiveAgent.output ?? outputSchema ?? this.session.outputSchema;
@@ -1509,6 +1521,7 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				blockers: task.blockers,
 				todoRef: task.todoRef,
 				filesDeps: task.filesDeps,
+				taskCallModel: task.model?.trim() || undefined,
 				...renderTemplate(context, task),
 			}));
 			const syncBatchGraph = buildBatchGraph(

@@ -11,26 +11,16 @@
  *   const isolated = Settings.isolated({ "compaction.enabled": false });
  */
 
-import * as fs from "node:fs";
 import * as path from "node:path";
-import { setAnthropicStreamIdleTimeoutOverrideMs } from "@oh-my-pi/pi-ai";
-import {
-	getAgentDbPath,
-	getAgentDir,
-	getProjectDir,
-	isEnoent,
-	logger,
-	procmgr,
-	setDefaultTabWidth,
-} from "@oh-my-pi/pi-utils";
-import { YAML } from "bun";
+import { getAgentDbPath, getAgentDir, getProjectDir, logger, procmgr, setDefaultTabWidth } from "@oh-my-pi/pi-utils";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
 import type { ModelRole } from "../config/model-registry";
 import { loadCapability } from "../discovery";
 import { isLightTheme, setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "../modes/theme/theme";
 import { type EditMode, normalizeEditMode } from "../patch";
 import { AgentStorage } from "../session/agent-storage";
-import { withFileLock } from "./file-lock";
+import { loadKdlSettings } from "./kdl-reader";
+import { writeKdlSettings } from "./kdl-writer";
 import {
 	type BashInterceptorRule,
 	type GroupPrefix,
@@ -49,15 +39,18 @@ export * from "./settings-schema";
 // Types
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Raw settings object as stored in YAML */
+/** Raw settings object — nested key-value store */
 export interface RawSettings {
 	[key: string]: unknown;
 }
 
+/** Write tier for settings persistence. */
+export type WriteTier = "session" | "project" | "user";
+
 export interface SettingsOptions {
 	/** Current working directory for project settings discovery */
 	cwd?: string;
-	/** Agent directory for config.yml storage */
+	/** Agent directory for persistent storage */
 	agentDir?: string;
 	/** Don't persist to disk (for tests) */
 	inMemory?: boolean;
@@ -113,22 +106,25 @@ function setByPath(obj: RawSettings, segments: string[], value: unknown): void {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export class Settings {
-	#configPath: string | null;
+	#userKdlPath: string;
+	#projectKdlPath: string;
 	#cwd: string;
 	#agentDir: string;
 	#storage: AgentStorage | null = null;
 
-	/** Global settings from config.yml */
+	/** User settings from user spell.kdl */
 	#global: RawSettings = {};
-	/** Project settings from .claude/settings.yml etc */
+	/** Project settings from project-local spell.kdl */
 	#project: RawSettings = {};
 	/** Runtime overrides (not persisted) */
 	#overrides: RawSettings = {};
 	/** Merged view (global + project + overrides) */
 	#merged: RawSettings = {};
 
-	/** Paths modified during this session (for partial save) */
+	/** Paths modified during this session (for partial save to user KDL) */
 	#modified = new Set<string>();
+	/** Paths modified for project-level save */
+	#projectModified = new Set<string>();
 
 	/** Pending save (debounced) */
 	#saveTimer?: NodeJS.Timeout;
@@ -137,10 +133,13 @@ export class Settings {
 	/** Whether to persist changes */
 	#persist: boolean;
 
-	private constructor(options: SettingsOptions = {}) {
+	constructor(options: SettingsOptions = {}) {
 		this.#cwd = path.normalize(options.cwd ?? getProjectDir());
 		this.#agentDir = path.normalize(options.agentDir ?? getAgentDir());
-		this.#configPath = options.inMemory ? null : path.join(this.#agentDir, "config.yml");
+		// User KDL: ~/.spell/spell.kdl (parent of agentDir which is ~/.spell/agent)
+		this.#userKdlPath = options.inMemory ? "" : path.join(path.dirname(this.#agentDir), "spell.kdl");
+		// Project KDL: ./spell.kdl
+		this.#projectKdlPath = options.inMemory ? "" : path.join(this.#cwd, "spell.kdl");
 		this.#persist = !options.inMemory;
 
 		if (options.overrides) {
@@ -218,16 +217,28 @@ export class Settings {
 
 	/**
 	 * Set a setting value (sync).
-	 * Updates global settings and queues a background save.
+	 * Default tier is "session" (in-memory only). Use "project" or "user" for persistent writes.
 	 * Triggers hooks for settings that have side effects.
 	 */
-	set<P extends SettingPath>(path: P, value: SettingValue<P>): void {
+	set<P extends SettingPath>(path: P, value: SettingValue<P>, tier?: WriteTier): void {
 		const prev = this.get(path);
 		const segments = parsePath(path);
-		setByPath(this.#global, segments, value);
-		this.#modified.add(path);
+		switch (tier ?? "session") {
+			case "session":
+				setByPath(this.#overrides, segments, value);
+				break;
+			case "project":
+				setByPath(this.#project, segments, value);
+				this.#projectModified.add(path);
+				this.#queueSave();
+				break;
+			case "user":
+				setByPath(this.#global, segments, value);
+				this.#modified.add(path);
+				this.#queueSave();
+				break;
+		}
 		this.#rebuildMerged();
-		this.#queueSave();
 
 		// Trigger hook if exists
 		const hook = SETTING_HOOKS[path];
@@ -272,7 +283,7 @@ export class Settings {
 		if (this.#savePromise) {
 			await this.#savePromise;
 		}
-		if (this.#modified.size > 0) {
+		if (this.#modified.size > 0 || this.#projectModified.size > 0) {
 			await this.#saveNow();
 		}
 	}
@@ -399,15 +410,11 @@ export class Settings {
 		if (this.#persist) {
 			// Open storage
 			this.#storage = await AgentStorage.open(getAgentDbPath(this.#agentDir));
-
-			// Migrate from legacy formats if needed
-			await this.#migrateFromLegacy();
-
-			// Load global settings from config.yml
-			this.#global = await this.#loadYaml(this.#configPath!);
+			// Load user settings from user spell.kdl
+			this.#global = await loadKdlSettings(this.#userKdlPath);
 		}
 
-		// Load project settings
+		// Load project settings from project-local spell.kdl, then capability overlays
 		this.#project = await this.#loadProjectSettings();
 
 		// Build merged view
@@ -416,79 +423,17 @@ export class Settings {
 		return this;
 	}
 
-	async #loadYaml(filePath: string): Promise<RawSettings> {
-		try {
-			const content = await Bun.file(filePath).text();
-			const parsed = YAML.parse(content);
-			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-				return {};
-			}
-			return this.#migrateRawSettings(parsed as RawSettings);
-		} catch (error) {
-			if (isEnoent(error)) return {};
-			logger.warn("Settings: failed to load", { path: filePath, error: String(error) });
-			return {};
-		}
-	}
-
 	async #loadProjectSettings(): Promise<RawSettings> {
+		let merged = await loadKdlSettings(this.#projectKdlPath);
 		try {
 			const result = await loadCapability(settingsCapability.id, { cwd: this.#cwd });
-			let merged: RawSettings = {};
 			for (const item of result.items as SettingsCapabilityItem[]) {
 				if (item.level === "project") {
 					merged = this.#deepMerge(merged, item.data as RawSettings);
 				}
 			}
-			return this.#migrateRawSettings(merged);
-		} catch {
-			return {};
-		}
-	}
-
-	async #migrateFromLegacy(): Promise<void> {
-		if (!this.#configPath) return;
-
-		// Check if config.yml already exists
-		try {
-			await Bun.file(this.#configPath).text();
-			return; // Already exists, no migration needed
-		} catch (err) {
-			if (!isEnoent(err)) return;
-		}
-
-		let settings: RawSettings = {};
-		let migrated = false;
-
-		// 1. Migrate from settings.json
-		const settingsJsonPath = path.join(this.#agentDir, "settings.json");
-		try {
-			const parsed = JSON.parse(await Bun.file(settingsJsonPath).text());
-			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-				settings = this.#deepMerge(settings, this.#migrateRawSettings(parsed));
-				migrated = true;
-				try {
-					fs.renameSync(settingsJsonPath, `${settingsJsonPath}.bak`);
-				} catch {}
-			}
 		} catch {}
-
-		// 2. Migrate from agent.db
-		try {
-			const dbSettings = this.#storage?.getSettings();
-			if (dbSettings) {
-				settings = this.#deepMerge(settings, this.#migrateRawSettings(dbSettings as RawSettings));
-				migrated = true;
-			}
-		} catch {}
-
-		// 3. Write merged settings
-		if (migrated && Object.keys(settings).length > 0) {
-			try {
-				await Bun.write(this.#configPath, YAML.stringify(settings, null, 2));
-				logger.debug("Settings: migrated to config.yml", { path: this.#configPath });
-			} catch {}
-		}
+		return this.#migrateRawSettings(merged);
 	}
 
 	/** Apply schema migrations to raw settings */
@@ -538,8 +483,7 @@ export class Settings {
 	// ─────────────────────────────────────────────────────────────────────────
 
 	#queueSave(): void {
-		if (!this.#persist || !this.#configPath) return;
-
+		if (!this.#persist) return;
 		// Debounce: wait 100ms for more changes
 		if (this.#saveTimer) {
 			clearTimeout(this.#saveTimer);
@@ -553,37 +497,30 @@ export class Settings {
 	}
 
 	async #saveNow(): Promise<void> {
-		if (!this.#persist || !this.#configPath || this.#modified.size === 0) return;
+		await this.#saveTier("user");
+		await this.#saveTier("project");
+	}
 
-		const configPath = this.#configPath;
-		const modifiedPaths = [...this.#modified];
-		this.#modified.clear();
-
+	async #saveTier(target: "user" | "project"): Promise<void> {
+		const filePath = target === "user" ? this.#userKdlPath : this.#projectKdlPath;
+		const modified = target === "user" ? this.#modified : this.#projectModified;
+		if (!this.#persist || !filePath || modified.size === 0) return;
+		const modifiedPaths = [...modified];
+		modified.clear();
+		const changes = new Map<string, unknown>();
+		for (const modPath of modifiedPaths) {
+			const segments = parsePath(modPath);
+			const source = target === "user" ? this.#global : this.#project;
+			changes.set(modPath, getByPath(source, segments));
+		}
 		try {
-			await withFileLock(configPath, async () => {
-				// Re-read to preserve external changes
-				const current = await this.#loadYaml(configPath);
-
-				// Apply only our modified paths
-				for (const modPath of modifiedPaths) {
-					const segments = parsePath(modPath);
-					const value = getByPath(this.#global, segments);
-					setByPath(current, segments, value);
-				}
-
-				// Update our global with any external changes we preserved
-				this.#global = current;
-				await Bun.write(configPath, YAML.stringify(this.#global, null, 2));
-			});
+			await writeKdlSettings(filePath, changes);
 		} catch (error) {
-			logger.warn("Settings: save failed", { error: String(error) });
-			// Re-add failed paths for retry
+			logger.warn("Settings: save failed", { target, error: String(error) });
 			for (const p of modifiedPaths) {
-				this.#modified.add(p);
+				modified.add(p);
 			}
 		}
-
-		this.#rebuildMerged();
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────
@@ -666,17 +603,14 @@ const SETTING_HOOKS: Partial<Record<SettingPath, SettingHook<any>>> = {
 			setDefaultTabWidth(value);
 		}
 	},
-	"providers.anthropicStreamIdleTimeoutMs": value => {
-		setAnthropicStreamIdleTimeoutOverrideMs(typeof value === "number" ? value : undefined);
-	},
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Global Singleton
 // ═══════════════════════════════════════════════════════════════════════════
 
-let globalInstance: Settings | null = null;
-let globalInstancePromise: Promise<Settings> | null = null;
+var globalInstance: Settings | null = null;
+var globalInstancePromise: Promise<Settings> | null = null;
 
 /**
  * Reset the global singleton for testing.

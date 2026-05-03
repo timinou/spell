@@ -1,133 +1,333 @@
-/**
- * Unified spell.kdl project configuration parser.
- *
- * spell.kdl is the single entry point for project config. It supports:
- * - `domain "coding"` — set the active domain
- * - `import "spell.coding.typescript"` — pull in built-in template
- * - `layer` / `policy` nodes — same format as task-policies.kdl
- *
- * Import resolution merges template layers/policies as a base;
- * local declarations override by name (layers by key, policies by name).
- */
-
-import type { Node } from "@bgotink/kdl";
+import * as path from "node:path";
 import { Document, format, parse } from "@bgotink/kdl";
-import { isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
 
+import type { ModeConfig, ModeConfigFrontmatter, ModeConfigSections } from "../capability/mode";
+import { createSourceMeta } from "../discovery/helpers";
+import { deepMergeFrontmatter, parseModeConfig } from "../discovery/mode-helpers";
 import { resolveTemplate } from "../templates";
+import { type AgentRulesConfig, parseAgentsBlock } from "./agents-kdl";
+import { getStringArgument } from "./kdl-helpers";
+import { parseKeybindingsBlock } from "./kdl-keybindings";
+import type { ParsedModeBlock } from "./kdl-modes";
+import { parseModeBlocks } from "./kdl-modes";
+import { type KdlProviderConfig, parseProvidersBlock } from "./kdl-providers";
+import { kdlDocumentToSettings } from "./kdl-reader";
+import type { RawSettings } from "./settings";
 import type { TaskPolicyConfig } from "./task-policies";
-import { getStringArgument, parseTaskPoliciesKdl } from "./task-policies-kdl";
+import { parseTaskPoliciesKdl } from "./task-policies-kdl";
 
 export interface SpellProjectConfig {
 	domain?: string;
 	policies: TaskPolicyConfig;
+	settings: RawSettings;
+	providers?: {
+		providers: Record<string, KdlProviderConfig>;
+		webSearch?: string;
+		codeSearch?: string;
+		image?: string;
+	};
+	keybindings?: Record<string, string>;
+	modes?: ParsedModeBlock[];
+	agents?: AgentRulesConfig;
 }
 
-/**
- * Parse a spell.kdl content string into a SpellProjectConfig.
- *
- * Resolves `import` references against built-in templates and merges
- * them in order. Local layer/policy nodes override imported ones.
- * On KDL parse error, returns an empty config (domain undefined, no
- * layers/policies) and logs a warning — never throws.
- */
-export function parseSpellKdl(content: string): SpellProjectConfig {
+function createEmptyConfig(): SpellProjectConfig {
+	return {
+		domain: undefined,
+		policies: { version: 1, layers: {}, policies: [] },
+		settings: {},
+		agents: { rules: [], conflicts: [] },
+	};
+}
+
+function mergeRawSettings(base: RawSettings, override: RawSettings): RawSettings {
+	const result: RawSettings = { ...base };
+	for (const [key, value] of Object.entries(override)) {
+		const baseValue = result[key];
+		if (
+			baseValue &&
+			value &&
+			typeof baseValue === "object" &&
+			typeof value === "object" &&
+			!Array.isArray(baseValue) &&
+			!Array.isArray(value)
+		) {
+			result[key] = mergeRawSettings(baseValue as RawSettings, value as RawSettings);
+		} else {
+			result[key] = value;
+		}
+	}
+	return result;
+}
+
+function mergeSpellConfigs(base: SpellProjectConfig, override: SpellProjectConfig): SpellProjectConfig {
+	const mergedLayers = { ...base.policies.layers, ...override.policies.layers };
+	const overridePolicyNames = new Set(override.policies.policies.map(policy => policy.name));
+	const mergedPolicies = [
+		...base.policies.policies.filter(policy => !overridePolicyNames.has(policy.name)),
+		...override.policies.policies,
+	];
+	const providers =
+		base.providers || override.providers
+			? {
+					providers: { ...(base.providers?.providers ?? {}), ...(override.providers?.providers ?? {}) },
+					webSearch: override.providers?.webSearch ?? base.providers?.webSearch,
+					codeSearch: override.providers?.codeSearch ?? base.providers?.codeSearch,
+					image: override.providers?.image ?? base.providers?.image,
+				}
+			: undefined;
+	const keybindings =
+		base.keybindings || override.keybindings
+			? { ...(base.keybindings ?? {}), ...(override.keybindings ?? {}) }
+			: undefined;
+	const modes = [...(base.modes ?? []), ...(override.modes ?? [])];
+	const agents =
+		base.agents || override.agents
+			? {
+					rules: [...(base.agents?.rules ?? []), ...(override.agents?.rules ?? [])],
+					conflicts: [],
+				}
+			: undefined;
+
+	return {
+		domain: override.domain ?? base.domain,
+		policies: { version: 1, layers: mergedLayers, policies: mergedPolicies },
+		settings: mergeRawSettings(base.settings, override.settings),
+		providers,
+		keybindings,
+		modes: modes.length > 0 ? modes : undefined,
+		agents,
+	};
+}
+
+function createEmptyModeSections(): ModeConfigSections {
+	return { custom: {} };
+}
+
+function getModeFrontmatter(block: ParsedModeBlock): ModeConfigFrontmatter {
+	const { instructions: _instructions, ...frontmatter } = block.config as ModeConfigFrontmatter & {
+		instructions?: string;
+	};
+	return frontmatter;
+}
+
+async function loadModeInstructions(
+	block: ParsedModeBlock,
+	projectDir: string,
+	_sourcePath: string,
+): Promise<{ frontmatter: ModeConfigFrontmatter; sections: ModeConfigSections; warnings: string[] }> {
+	if (!block.instructionsPath) {
+		return { frontmatter: {}, sections: createEmptyModeSections(), warnings: [] };
+	}
+
+	const resolvedPath = path.resolve(projectDir, block.instructionsPath);
+	try {
+		const content = await Bun.file(resolvedPath).text();
+		const parsed = parseModeConfig(content, resolvedPath);
+		return { frontmatter: parsed.frontmatter, sections: parsed.sections, warnings: [] };
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		return {
+			frontmatter: {},
+			sections: createEmptyModeSections(),
+			warnings: [
+				isEnoent(error)
+					? `Mode "${block.name}": instructions file not found at ${resolvedPath}`
+					: `Mode "${block.name}": failed to load instructions from ${resolvedPath}: ${detail}`,
+			],
+		};
+	}
+}
+
+function validateSpellModeFrontmatter(
+	frontmatter: ModeConfigFrontmatter,
+	sourcePath: string,
+	modeName: string,
+): string | undefined {
+	if (frontmatter.tools) {
+		if (frontmatter.tools.allow !== undefined && !Array.isArray(frontmatter.tools.allow)) {
+			return `Mode "${modeName}" at ${sourcePath}: tools.allow must be a string array, got ${typeof frontmatter.tools.allow}`;
+		}
+		if (frontmatter.tools.deny !== undefined && !Array.isArray(frontmatter.tools.deny)) {
+			return `Mode "${modeName}" at ${sourcePath}: tools.deny must be a string array, got ${typeof frontmatter.tools.deny}`;
+		}
+	}
+	if (frontmatter.extends !== undefined && typeof frontmatter.extends !== "string") {
+		return `Mode "${modeName}" at ${sourcePath}: extends must be a string, got ${typeof frontmatter.extends}`;
+	}
+	if (frontmatter.command !== undefined && typeof frontmatter.command !== "string") {
+		return `Mode "${modeName}" at ${sourcePath}: command must be a string, got ${typeof frontmatter.command}`;
+	}
+	return undefined;
+}
+
+export async function spellKdlModesToModeConfigs(
+	blocks: ParsedModeBlock[],
+	sourcePath: string,
+	projectDir: string,
+	sourceId = "spell.kdl",
+): Promise<{ items: ModeConfig[]; warnings: string[] }> {
+	const items: ModeConfig[] = [];
+	const warnings: string[] = [];
+	for (const block of blocks) {
+		const loaded = await loadModeInstructions(block, projectDir, sourcePath);
+		warnings.push(...loaded.warnings);
+		const frontmatter = deepMergeFrontmatter(loaded.frontmatter, getModeFrontmatter(block));
+		const warning = validateSpellModeFrontmatter(frontmatter, sourcePath, block.name);
+		if (warning) {
+			warnings.push(warning);
+			continue;
+		}
+		items.push({
+			name: block.name,
+			path: sourcePath,
+			frontmatter,
+			sections: loaded.sections,
+			level: "project",
+			_source: createSourceMeta(sourceId, sourcePath, "project"),
+		});
+	}
+	return { items, warnings };
+}
+
+function loadImportedConfig(
+	ns: string,
+	baseDir: string | undefined,
+	visited: Set<string>,
+): Promise<SpellProjectConfig | undefined> | undefined {
+	if (ns.startsWith("./") || ns.startsWith("../")) {
+		if (!baseDir) {
+			logger.warn("spell-kdl: relative import without baseDir, skipping", { namespace: ns });
+			return undefined;
+		}
+
+		const importPath = path.resolve(baseDir, ns);
+		if (visited.has(importPath)) {
+			logger.warn("spell-kdl: import cycle detected, skipping", { filePath: importPath });
+			return undefined;
+		}
+
+		visited.add(importPath);
+		return Bun.file(importPath)
+			.text()
+			.then(async content => parseSpellKdl(content, path.dirname(importPath), visited))
+			.catch(error => {
+				if (isEnoent(error)) {
+					logger.warn("spell-kdl: imported file missing, skipping", { filePath: importPath });
+					return undefined;
+				}
+				throw error;
+			})
+			.finally(() => {
+				visited.delete(importPath);
+			});
+	}
+
+	const templateContent = resolveTemplate(ns);
+	if (!templateContent) {
+		logger.warn("spell-kdl: unknown import namespace, skipping", { namespace: ns });
+		return undefined;
+	}
+
+	const templateConfig = parseTaskPoliciesKdl(templateContent);
+	if (!templateConfig) {
+		logger.warn("spell-kdl: failed to parse template", { namespace: ns });
+		return undefined;
+	}
+
+	return Promise.resolve({ domain: undefined, policies: templateConfig, settings: {} });
+}
+
+export async function parseSpellKdl(
+	content: string,
+	baseDir?: string,
+	visited: Set<string> = new Set(),
+): Promise<SpellProjectConfig> {
 	let document: Document;
 	try {
 		document = parse(content);
 	} catch (error) {
-		logger.warn("spell-kdl: parse error", {
-			error: error instanceof Error ? error.message : String(error),
-		});
-		return {
-			domain: undefined,
-			policies: { version: 1, layers: {}, policies: [] },
-		};
+		logger.warn("spell-kdl: parse error", { error: error instanceof Error ? error.message : String(error) });
+		return createEmptyConfig();
 	}
 
-	let domain: string | undefined;
-	const importNamespaces: string[] = [];
-
-	// Collect domain and import nodes; build a KDL subset of layer/policy nodes
-	// by filtering them from the original document for reuse with parseTaskPoliciesKdl.
-	const layerPolicyNodes: Node[] = [];
-
+	let result = createEmptyConfig();
 	for (const node of document.nodes) {
 		switch (node.getName()) {
 			case "domain":
-				domain = getStringArgument(node);
+				result.domain = getStringArgument(node);
 				break;
-			case "import":
-				{
-					const ns = getStringArgument(node);
-					if (ns) importNamespaces.push(ns);
-				}
+			case "import": {
+				const ns = getStringArgument(node);
+				if (!ns) break;
+				const importedConfig = await loadImportedConfig(ns, baseDir, visited);
+				if (importedConfig) result = mergeSpellConfigs(result, importedConfig);
 				break;
+			}
 			case "layer":
 			case "policy":
-				layerPolicyNodes.push(node);
+				break;
+			case "agents": {
+				const parsed = parseAgentsBlock(node, baseDir);
+				if (parsed.rules.length > 0) {
+					result.agents = {
+						rules: [...(result.agents?.rules ?? []), ...parsed.rules],
+						conflicts: [],
+					};
+				}
+				break;
+			}
+			default:
 				break;
 		}
 	}
 
-	// Resolve imports: each template provides base layers/policies
-	let mergedLayers: Record<string, { description: string }> = {};
-	let mergedPolicies: TaskPolicyConfig["policies"] = [];
-
-	for (const ns of importNamespaces) {
-		const templateContent = resolveTemplate(ns);
-		if (!templateContent) {
-			logger.warn("spell-kdl: unknown import namespace, skipping", { namespace: ns });
-			continue;
-		}
-		const templateConfig = parseTaskPoliciesKdl(templateContent);
-		if (!templateConfig) {
-			logger.warn("spell-kdl: failed to parse template", { namespace: ns });
-			continue;
-		}
-		// Accumulate: later imports override earlier ones by key/name
-		mergedLayers = { ...mergedLayers, ...templateConfig.layers };
-		const templateNames = new Set(templateConfig.policies.map(p => p.name));
-		mergedPolicies = [...mergedPolicies.filter(p => !templateNames.has(p.name)), ...templateConfig.policies];
+	result.settings = mergeRawSettings(result.settings, kdlDocumentToSettings(document));
+	const providersBlock = parseProvidersBlock(document);
+	if (
+		Object.keys(providersBlock.providers).length > 0 ||
+		providersBlock.webSearch ||
+		providersBlock.codeSearch ||
+		providersBlock.image
+	) {
+		result.providers = result.providers
+			? {
+					providers: { ...result.providers.providers, ...providersBlock.providers },
+					webSearch: providersBlock.webSearch ?? result.providers.webSearch,
+					codeSearch: providersBlock.codeSearch ?? result.providers.codeSearch,
+					image: providersBlock.image ?? result.providers.image,
+				}
+			: providersBlock;
+	}
+	const keybindings = parseKeybindingsBlock(document);
+	if (Object.keys(keybindings).length > 0) {
+		result.keybindings = { ...(result.keybindings ?? {}), ...keybindings };
+	}
+	const modes = parseModeBlocks(document);
+	if (modes.length > 0) {
+		result.modes = [...(result.modes ?? []), ...modes];
 	}
 
-	// Parse local layer/policy nodes by reconstructing a minimal KDL string
-	// that parseTaskPoliciesKdl can handle.
-	if (layerPolicyNodes.length > 0) {
-		// Serialize the subset back to KDL text for parsing
-		const subsetDoc = new Document([...layerPolicyNodes]);
-		const localContent = format(subsetDoc);
-		const localConfig = parseTaskPoliciesKdl(localContent);
-		if (localConfig) {
-			// Local layers override imported layers by key
-			mergedLayers = { ...mergedLayers, ...localConfig.layers };
-			// Local policies override imported policies by name
-			const localNames = new Set(localConfig.policies.map(p => p.name));
-			mergedPolicies = [...mergedPolicies.filter(p => !localNames.has(p.name)), ...localConfig.policies];
-		}
+	const localPolicyConfig = parseTaskPoliciesKdl(
+		format(new Document(document.nodes.filter(node => node.getName() === "layer" || node.getName() === "policy"))),
+	);
+	if (localPolicyConfig) {
+		result.policies = mergeSpellConfigs(result, {
+			domain: undefined,
+			policies: localPolicyConfig,
+			settings: {},
+		}).policies;
 	}
 
-	return {
-		domain,
-		policies: {
-			version: 1,
-			layers: mergedLayers,
-			policies: mergedPolicies,
-		},
-	};
+	return result;
 }
 
-/**
- * Load and parse spell.kdl from a project directory.
- *
- * Returns undefined if the file doesn't exist or an I/O error occurs.
- * Returns an empty config (with warning logged) if the file exists but has invalid KDL.
- */
 export async function loadSpellKdl(projectDir: string): Promise<SpellProjectConfig | undefined> {
 	const spellKdlPath = `${projectDir}/spell.kdl`;
 	try {
 		const content = await Bun.file(spellKdlPath).text();
-		return parseSpellKdl(content);
+		return await parseSpellKdl(content, projectDir);
 	} catch (error) {
 		if (isEnoent(error)) return undefined;
 		logger.warn("spell-kdl: failed to load spell.kdl", {
@@ -136,4 +336,30 @@ export async function loadSpellKdl(projectDir: string): Promise<SpellProjectConf
 		});
 		return undefined;
 	}
+}
+
+export async function loadUserSpellKdl(agentDir = getAgentDir()): Promise<SpellProjectConfig | undefined> {
+	const spellKdlPath = path.join(path.dirname(agentDir), "spell.kdl");
+	try {
+		const content = await Bun.file(spellKdlPath).text();
+		return await parseSpellKdl(content, path.dirname(spellKdlPath));
+	} catch (error) {
+		if (isEnoent(error)) return undefined;
+		logger.warn("spell-kdl: failed to load user spell.kdl", {
+			filePath: spellKdlPath,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return undefined;
+	}
+}
+
+export async function loadMergedProviderConfigs(
+	projectDir: string,
+	agentDir = getAgentDir(),
+): Promise<Record<string, KdlProviderConfig> | undefined> {
+	const [userConfig, projectConfig] = await Promise.all([loadUserSpellKdl(agentDir), loadSpellKdl(projectDir)]);
+	const mergedConfig = mergeSpellConfigs(userConfig ?? createEmptyConfig(), projectConfig ?? createEmptyConfig());
+	const providers = mergedConfig.providers?.providers;
+	if (!providers || Object.keys(providers).length === 0) return undefined;
+	return providers;
 }

@@ -94,7 +94,7 @@ describe("ModelRegistry", () => {
 				anthropic: overrideConfig("https://my-proxy.example.com/v1"),
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const anthropicModels = getModelsForProvider(registry, "anthropic");
 
 			// Should have multiple built-in models, not just one
@@ -107,7 +107,7 @@ describe("ModelRegistry", () => {
 				anthropic: overrideConfig("https://my-proxy.example.com/v1"),
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const anthropicModels = getModelsForProvider(registry, "anthropic");
 
 			// All models should have the new baseUrl
@@ -123,7 +123,7 @@ describe("ModelRegistry", () => {
 				}),
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const anthropicModels = getModelsForProvider(registry, "anthropic");
 
 			for (const model of anthropicModels) {
@@ -136,7 +136,7 @@ describe("ModelRegistry", () => {
 				anthropic: overrideConfig("https://my-proxy.example.com/v1"),
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const googleModels = getModelsForProvider(registry, "google");
 
 			// Google models should still have their original baseUrl
@@ -156,7 +156,7 @@ describe("ModelRegistry", () => {
 				),
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 
 			// Anthropic: multiple built-in models with new baseUrl
 			const anthropicModels = getModelsForProvider(registry, "anthropic");
@@ -173,7 +173,7 @@ describe("ModelRegistry", () => {
 			writeRawModelsJson({
 				anthropic: overrideConfig("https://first-proxy.example.com/v1"),
 			});
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 
 			expect(getModelsForProvider(registry, "anthropic")[0].baseUrl).toBe("https://first-proxy.example.com/v1");
 
@@ -198,7 +198,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const models = getModelsForProvider(registry, "openrouter");
 			expect(models.length).toBeGreaterThan(0);
 			for (const model of models) {
@@ -230,7 +230,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const model = registry.find("demo", "demo-model");
 			expect(model?.compat?.supportsUsageInStreaming).toBe(false);
 			expect(model?.compat?.maxTokensField).toBe("max_tokens");
@@ -263,7 +263,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const model = registry.find("demo", "demo-model");
 			expect(model?.compat?.supportsUsageInStreaming).toBe(true);
 			expect(model?.compat?.maxTokensField).toBe("max_completion_tokens");
@@ -276,7 +276,7 @@ describe("ModelRegistry", () => {
 				anthropic: providerConfig("https://my-proxy.example.com/v1", [{ id: "claude-custom" }]),
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const anthropicModels = getModelsForProvider(registry, "anthropic");
 
 			// Built-in models still present, custom model merged in
@@ -295,7 +295,7 @@ describe("ModelRegistry", () => {
 				),
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const models = getModelsForProvider(registry, "openrouter");
 			const sonnetModels = models.filter(m => m.id === "anthropic/claude-sonnet-4");
 
@@ -308,7 +308,7 @@ describe("ModelRegistry", () => {
 				anthropic: providerConfig("https://my-proxy.example.com/v1", [{ id: "claude-custom" }]),
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 
 			expect(getModelsForProvider(registry, "google").length).toBeGreaterThan(0);
 			expect(getModelsForProvider(registry, "openai").length).toBeGreaterThan(0);
@@ -319,7 +319,7 @@ describe("ModelRegistry", () => {
 				anthropic: providerConfig("https://merged-proxy.example.com/v1", [{ id: "claude-custom" }]),
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const anthropicModels = getModelsForProvider(registry, "anthropic");
 
 			for (const model of anthropicModels) {
@@ -356,7 +356,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const m25 = registry.find("opencode-go", "minimax-m2.5");
 			const glm5 = registry.find("opencode-go", "glm-5");
 
@@ -389,7 +389,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const models = getModelsForProvider(registry, "openrouter");
 
 			expect(models.some(m => m.id === "custom/openrouter-model")).toBe(true);
@@ -402,7 +402,7 @@ describe("ModelRegistry", () => {
 			writeModelsJson({
 				anthropic: providerConfig("https://first-proxy.example.com/v1", [{ id: "claude-custom" }]),
 			});
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			expect(getModelsForProvider(registry, "anthropic").some(m => m.id === "claude-custom")).toBe(true);
 
 			// Update and refresh
@@ -418,7 +418,7 @@ describe("ModelRegistry", () => {
 		});
 
 		test("built-in gpt-5.4 applies the hardcoded context window policy", () => {
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			expect(registry.find("openai", "gpt-5.4")?.contextWindow).toBe(1_000_000);
 		});
 
@@ -427,7 +427,7 @@ describe("ModelRegistry", () => {
 				openai: providerConfig("https://my-proxy.example.com/v1", [{ id: "gpt-5.4" }], "openai-responses"),
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			expect(registry.find("openai", "gpt-5.4")?.contextWindow).toBe(1_000_000);
 		});
 
@@ -435,7 +435,7 @@ describe("ModelRegistry", () => {
 			writeModelsJson({
 				anthropic: providerConfig("https://proxy.example.com/v1", [{ id: "claude-custom" }]),
 			});
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 
 			expect(getModelsForProvider(registry, "anthropic").some(m => m.id === "claude-custom")).toBe(true);
 
@@ -464,7 +464,7 @@ describe("ModelRegistry", () => {
 				]),
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const model = getModelsForProvider(registry, "anthropic").find(m => m.id === "claude-custom");
 
 			expect(model?.thinking).toEqual(thinking);
@@ -481,7 +481,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const model = getModelsForProvider(registry, "openrouter").find(m => m.id === "anthropic/claude-sonnet-4");
 
 			expect(model?.thinking).toEqual({
@@ -504,7 +504,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const models = getModelsForProvider(registry, "openrouter");
 
 			const sonnet = models.find(m => m.id === "anthropic/claude-sonnet-4");
@@ -528,7 +528,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const models = getModelsForProvider(registry, "openrouter");
 
 			const sonnet = models.find(m => m.id === "anthropic/claude-sonnet-4");
@@ -549,7 +549,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const models = getModelsForProvider(registry, "openrouter");
 			const sonnet = models.find(m => m.id === "anthropic/claude-sonnet-4");
 
@@ -578,7 +578,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const models = getModelsForProvider(registry, "openrouter");
 			const sonnet = models.find(m => m.id === "anthropic/claude-sonnet-4");
 
@@ -600,7 +600,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const models = getModelsForProvider(registry, "openrouter");
 
 			const sonnet = models.find(m => m.id === "anthropic/claude-sonnet-4");
@@ -624,7 +624,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const models = getModelsForProvider(registry, "openrouter");
 			const sonnet = models.find(m => m.id === "anthropic/claude-sonnet-4");
 
@@ -649,7 +649,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const models = getModelsForProvider(registry, "openrouter");
 
 			// Should not create a new model
@@ -669,7 +669,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const models = getModelsForProvider(registry, "openrouter");
 			const sonnet = models.find(m => m.id === "anthropic/claude-sonnet-4");
 
@@ -690,7 +690,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const models = getModelsForProvider(registry, "openrouter");
 			const sonnet = models.find(m => m.id === "anthropic/claude-sonnet-4");
 
@@ -708,7 +708,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			expect(
 				getModelsForProvider(registry, "openrouter").find(m => m.id === "anthropic/claude-sonnet-4")?.name,
 			).toBe("First Name");
@@ -741,7 +741,7 @@ describe("ModelRegistry", () => {
 				},
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const customName = getModelsForProvider(registry, "openrouter").find(
 				m => m.id === "anthropic/claude-sonnet-4",
 			)?.name;
@@ -775,7 +775,7 @@ describe("ModelRegistry", () => {
 				},
 			]);
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const model = registry.find("github-copilot", "gpt-4o");
 			expect(model).toBeDefined();
 			if (!model) throw new Error("Expected github-copilot/gpt-4o model");
@@ -807,7 +807,7 @@ describe("ModelRegistry", () => {
 				throw new Error(`Unexpected URL: ${url}`);
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			await registry.refresh();
 			const ollamaModels = getModelsForProvider(registry, "ollama");
 			expect(ollamaModels.some(m => m.id === "phi4-mini")).toBe(true);
@@ -844,7 +844,7 @@ describe("ModelRegistry", () => {
 				throw new Error(`Unexpected URL: ${url}`);
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			await registry.refresh();
 
 			const ollamaModels = getModelsForProvider(registry, "ollama");
@@ -894,7 +894,7 @@ describe("ModelRegistry", () => {
 				throw new Error(`Unexpected request: ${url}`);
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			await registry.refresh();
 
 			const qwen = registry.find("ollama", "qwen3.5:397b-cloud");
@@ -937,7 +937,7 @@ describe("ModelRegistry", () => {
 				throw new Error(`Unexpected request: ${url}`);
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			await registry.refresh();
 
 			const gemma = registry.find("ollama", "gemma3:4b");
@@ -961,7 +961,7 @@ describe("ModelRegistry", () => {
 				throw new Error("connection refused");
 			});
 
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			await registry.refresh();
 			expect(getModelsForProvider(registry, "ollama")).toHaveLength(0);
 			expect(registry.getError()).toBeUndefined();
@@ -993,11 +993,11 @@ describe("ModelRegistry", () => {
 					}
 					throw new Error(`Unexpected URL: ${url}`);
 				});
-				const primedRegistry = new ModelRegistry(authStorage, modelsJsonPath);
+				const primedRegistry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 				await primedRegistry.refresh();
 			}
 
-			const cachedRegistry = new ModelRegistry(authStorage, modelsJsonPath);
+			const cachedRegistry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			expect(getModelsForProvider(cachedRegistry, "ollama").some(model => model.id === "phi4-mini")).toBe(true);
 			expect(cachedRegistry.getProviderDiscoveryState("ollama")?.status).toBe("cached");
 
@@ -1041,12 +1041,12 @@ describe("ModelRegistry", () => {
 					}
 					throw new Error(`Unexpected URL: ${url}`);
 				});
-				const primedRegistry = new ModelRegistry(authStorage, modelsJsonPath);
+				const primedRegistry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 				await primedRegistry.refreshProvider("custom-local");
 			}
 
 			authStorage.setRuntimeApiKey("custom-local", "");
-			const cachedRegistry = new ModelRegistry(authStorage, modelsJsonPath);
+			const cachedRegistry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			await cachedRegistry.refreshProvider("custom-local");
 
 			expect(getModelsForProvider(cachedRegistry, "custom-local").some(model => model.id === "local-coder")).toBe(
@@ -1090,7 +1090,7 @@ describe("ModelRegistry", () => {
 				}
 				throw new Error(`Unexpected URL: ${url}`);
 			});
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			await registry.refresh();
 			const llamaModels = getModelsForProvider(registry, "llama.cpp");
 			expect(llamaModels.some(m => m.id === "llama-3.2:3b")).toBe(true);
@@ -1132,7 +1132,7 @@ describe("ModelRegistry", () => {
 				}
 				throw new Error(`Unexpected URL: ${url}`);
 			});
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			await registry.refresh();
 			const state = registry.getProviderDiscoveryState("llama.cpp");
 			if (state?.status !== "ok") {
@@ -1170,7 +1170,7 @@ describe("ModelRegistry", () => {
 				}
 				throw new Error(`Unexpected URL: ${url}`);
 			});
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			await registry.refresh();
 			const llama = registry.find("llama.cpp", "qwen35-35b-a3b");
 			expect(llama?.contextWindow).toBe(262144);
@@ -1203,7 +1203,7 @@ describe("ModelRegistry", () => {
 					],
 				},
 			});
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			// Runtime override (tier 1) must return the OAuth marker regardless of the configured apiKey
 			const key = await registry.getApiKeyForProvider(PROXY_PROVIDER);
 			expect(key).toBe("sk-ant-oat");
@@ -1227,7 +1227,7 @@ describe("ModelRegistry", () => {
 					models: [modelDef],
 				},
 			});
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			expect(await registry.getApiKeyForProvider(PROXY_PROVIDER)).toBe("sk-ant-oat");
 
 			// Update config: remove proxy flag
@@ -1269,7 +1269,7 @@ describe("ModelRegistry", () => {
 					models: [modelDef],
 				},
 			});
-			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const registry = new ModelRegistry(authStorage, undefined, modelsJsonPath);
 			const proxyKey = await registry.getApiKeyForProvider(PROXY_PROVIDER);
 			const plainKey = await registry.getApiKeyForProvider(PLAIN_PROVIDER);
 			// Only the proxy provider gets the OAuth marker
