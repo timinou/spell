@@ -1,0 +1,104 @@
+#+TITLE: Add better-ccflare provider type and env var resolution
+#+STATE: ITEM
+#+SESSION_ID: 14d2ecf186a17f91
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T15-39-18-426Z_14d2ecf186a17f91.jsonl]]
+#+CUSTOM_ID: FEAT-649-add-better-ccflare-provider-type-and-env
+#+LAYER: core
+
+* Intention &amp; Purpose
+
+Register ~better-ccflare~ as a known provider in Spell's type system and wire up env var resolution so downstream code can dispatch on it.
+
+* Context &amp; Narrative
+
+better-ccflare is an Anthropic-compatible proxy running at ~localhost:8080~. It delegates to configured OAuth accounts when no client auth is sent, or maps ~btr-~ API keys to backend accounts. Spell currently has no concept of a better-ccflare provider — all models with ~api: "anthropic-messages"~ use the full Anthropic auth flow which breaks OAuth passthrough.
+
+This item defines the type-level contract: provider name, env var mapping, and model config surface.
+
+* Scope
+
+In-scope:
+- Add ~"better-ccflare"~ to ~KnownProvider~ union in ~packages/ai/src/types.ts~
+- Add ~better-ccflare~ entry to ~serviceProviderMap~ in ~packages/ai/src/stream.ts~, resolving ~ANTHROPIC_AUTH_TOKEN~ env var (falls back to empty string — provider handles missing key)
+- Export ~resolveAnthropicBaseUrl~ from anthropic.ts (currently private) so better-ccflare provider can reuse it with different defaults
+- Add ~better-ccflare~ case to ~resolveAnthropicBaseUrl~: when ~model.provider === "better-ccflare"~, base URL from ~ANTHROPIC_BASE_URL~ env or ~model.baseUrl~ config, defaulting to ~http://localhost:8080~
+
+Out-of-scope:
+- Model discovery / model catalog entries (separate item)
+- Auth header behavior (separate item)
+- Actual provider streaming code (separate item)
+
+* Existing Patterns
+
+- Provider registration: ~serviceProviderMap~ in ~packages/ai/src/stream.ts~ maps provider name → env var resolver function. Example: ~anthropic: () => $pickenv("ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")~
+- Type union: ~KnownProvider~ in ~packages/ai/src/types.ts:87-92~
+- Base URL resolution: ~resolveAnthropicBaseUrl~ in ~packages/ai/src/providers/anthropic.ts:428-450~, checks ~model.provider === "anthropic"~ and ~model.provider === "github-copilot"~
+- ~$pickenv~ utility: ~packages/ai/src/stream.ts~ imports from ~@oh-my-pi/pi-utils~
+
+* Tests
+
+- ~packages/ai/test/better-ccflare-provider.test.ts~:
+  1. ~getEnvApiKey("better-ccflare")~ returns ~ANTHROPIC_AUTH_TOKEN~ when set
+  2. ~getEnvApiKey("better-ccflare")~ returns undefined when ~ANTHROPIC_AUTH_TOKEN~ is unset
+  3. ~resolveAnthropicBaseUrl~ returns ~ANTHROPIC_BASE_URL~ for better-ccflare provider when set
+  4. ~resolveAnthropicBaseUrl~ returns ~http://localhost:8080~ for better-ccflare when no env/base URL set
+  5. ~resolveAnthropicBaseUrl~ returns KDL baseUrl for better-ccflare when set (model.baseUrl takes priority)
+
+* Implementation
+
+** DOING Add better-ccflare to KnownProvider
+:PROPERTIES:
+:CUSTOM_ID: FEAT-649-add-better-ccflare-provider-type-and-env::add-to-known-provider
+:END:
+- File: ~packages/ai/src/types.ts~
+- Add ~| "better-ccflare"~ to ~KnownProvider~ union (after ~| "anthropic"~, before ~| "google"~)
+- No other type changes needed — ~Api = "anthropic-messages"~ is already the API type for Anthropic-compatible providers
+
+** ITEM Add better-ccflare to serviceProviderMap
+:PROPERTIES:
+:CUSTOM_ID: FEAT-649-add-better-ccflare-provider-type-and-env::add-to-service-map
+:END:
+- File: ~packages/ai/src/stream.ts~
+- Add entry: ~better-ccflare: () => $pickenv("ANTHROPIC_AUTH_TOKEN")~
+- ~ANTHROPIC_AUTH_TOKEN~ is the canonical better-ccflare env var per [[https://github.com/tombii/better-ccflare#option-2-using-api-key-authentication][docs]]
+- Note: NO fallback to ~ANTHROPIC_API_KEY~ — better-ccflare should not pick up standard Anthropic keys
+- Return undefined when unset; provider handles missing key via OAuth passthrough
+
+** ITEM Export resolveAnthropicBaseUrl and add better-ccflare case
+:PROPERTIES:
+:CUSTOM_ID: FEAT-649-add-better-ccflare-provider-type-and-env::export-resolve-base-url
+:END:
+- File: ~packages/ai/src/providers/anthropic.ts~
+- Export ~resolveAnthropicBaseUrl~ (currently ~function~ not exported at line 428)
+- Add case for ~model.provider === "better-ccflare"~:
+  - KDL ~model.baseUrl~ wins first (allows per-model override)
+  - Env ~ANTHROPIC_BASE_URL~ as fallback
+  - Default: ~"http://localhost:8080"~ (better-ccflare default port)
+- Order: check better-ccflare BEFORE the generic ~return normalizeBaseUrl(model.baseUrl)~ fallback at line 449
+
+** ITEM Write type/env tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-649-add-better-ccflare-provider-type-and-env::types-env-tests
+:DEPENDS: FEAT-649-add-better-ccflare-provider-type-and-env::add-to-known-provider FEAT-649-add-better-ccflare-provider-type-and-env::add-to-service-map FEAT-649-add-better-ccflare-provider-type-and-env::export-resolve-base-url
+:END:
+- File: ~packages/ai/test/better-ccflare-provider.test.ts~
+- Test 1: ~getEnvApiKey("better-ccflare")~ with ~ANTHROPIC_AUTH_TOKEN=test-key~ → returns ~"test-key"~
+- Test 2: ~getEnvApiKey("better-ccflare")~ without env → returns ~undefined~
+- Test 3: ~resolveAnthropicBaseUrl({ provider: "better-ccflare", ... }, undefined)~ with ~ANTHROPIC_BASE_URL=http://localhost:9999~ → returns ~"http://localhost:9999"~
+- Test 4: ~resolveAnthropicBaseUrl({ provider: "better-ccflare", baseUrl: "http://custom:3000", ... }, undefined)~ → returns ~"http://custom:3000"~ (KDL wins)
+- Test 5: ~resolveAnthropicBaseUrl({ provider: "better-ccflare", ... }, undefined)~ without any env → returns ~"http://localhost:8080"~ (default)
+- Use ~withEnv~ helper pattern from existing tests (~packages/ai/test/anthropic-alignment.test.ts:470~)
+
+* Edge Cases
+
+- ~ANTHROPIC_AUTH_TOKEN~ set to empty string: ~$pickenv~ should return undefined (falsy check), triggering OAuth passthrough
+- ~ANTHROPIC_BASE_URL~ set to non-localhost URL: provider respects it (user may have remote better-ccflare)
+- Model with ~provider: "better-ccflare"~ but ~api: "openai-completions"~: this should never happen; model config validation catches it
+- Coexistence with ~provider: "anthropic"~ in same session: models with different providers resolve different env vars, no conflict
+
+* Acceptance Criteria
+
+- ~bun check:ts~ passes with new provider in type union
+- ~getEnvApiKey("better-ccflare")~ resolves ~ANTHROPIC_AUTH_TOKEN~
+- ~resolveAnthropicBaseUrl~ returns correct URLs for better-ccflare in all cases
+- Tests pass: ~bun test packages/ai/test/better-ccflare-provider.test.ts~

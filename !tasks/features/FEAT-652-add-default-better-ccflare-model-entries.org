@@ -1,0 +1,87 @@
+#+TITLE: Add default better-ccflare model entries to models.json
+#+STATE: ITEM
+#+SESSION_ID: 14d2ecf186a17f91
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T15-39-18-426Z_14d2ecf186a17f91.jsonl]]
+#+CUSTOM_ID: FEAT-652-add-default-better-ccflare-model-entries
+#+LAYER: core
+
+* Intention &amp; Purpose
+
+Add a ~"better-ccflare"~ key to ~packages/ai/src/models.json~ with essential Claude models so users can reference them as ~better-ccflare/claude-sonnet-4-20250514~ in their config.
+
+* Context &amp; Narrative
+
+The model system resolves models from the static ~models.json~ registry (~packages/ai/src/models.ts:14-21~). Provider keys in this file must exist for ~parseModelString("better-ccflare/claude-opus-4-7")~ to find a model. Without entries, the user would get a "model not found" error even if the provider plumbing is correct.
+
+Models are identical to their ~"anthropic"~ counterparts except:
+- ~provider: "better-ccflare"~
+- ~baseUrl: "http://localhost:8080"~ (better-ccflare default)
+- Same costs, context window, max tokens, input types, reasoning flags
+
+* Scope
+
+In-scope:
+- Add ~"better-ccflare"~ key to ~packages/ai/src/models.json~
+- Include 4 essential models: ~claude-opus-4-7~, ~claude-sonnet-4-20250514~, ~claude-sonnet-4-5-20250929~, ~claude-haiku-4-5-20251001~
+- Each entry: copy from ~"anthropic"~ key, change ~provider~ and ~baseUrl~
+
+Out-of-scope:
+- Models.dev discovery for better-ccflare (future work)
+- Auto-syncing better-ccflare models with anthropic models
+
+* Existing Patterns
+
+- ~packages/ai/src/models.json~: top-level keys are provider names, values are ~{ [modelId: string]: Model }~ objects
+- Anthropic model example: ~claude-opus-4-7~ has ~api: "anthropic-messages"~, ~provider: "anthropic"~, ~baseUrl: "https://api.anthropic.com"~
+- ~packages/ai/src/models.ts~: ~modelRegistry~ is built from ~models.json~ at import time; ~getBundledModel(provider, modelId)~ is the lookup
+
+* Tests
+
+- ~packages/ai/test/better-ccflare-models.test.ts~ (new file):
+  1. ~getBundledModel("better-ccflare", "claude-opus-4-7")~ returns a valid model with ~provider: "better-ccflare"~
+  2. ~getBundledModel("better-ccflare", "claude-sonnet-4-20250514")~ returns a valid model
+  3. Better-ccflare models have ~api: "anthropic-messages"~
+  4. Better-ccflare models have ~baseUrl: "http://localhost:8080"~
+  5. ~getBundledProviders()~ includes ~"better-ccflare"~
+
+* Implementation
+
+** ITEM Add better-ccflare model entries to models.json
+:PROPERTIES:
+:CUSTOM_ID: FEAT-652-add-default-better-ccflare-model-entries::add-json-entries
+:END:
+- File: ~packages/ai/src/models.json~
+- Copy the following model entries from ~"anthropic"~ to a new ~"better-ccflare"~ key:
+  1. ~claude-opus-4-7~ (Opus, adaptive thinking, 1M context)
+  2. ~claude-sonnet-4-20250514~ (Sonnet 4, 200K context)
+  3. ~claude-sonnet-4-5-20250929~ (Sonnet 4.5, 200K context)
+  4. ~claude-haiku-4-5-20251001~ (Haiku 4.5, 200K context)
+- For each entry, change:
+  - ~"provider": "better-ccflare"~
+  - ~"baseUrl": "http://localhost:8080"~
+- Keep all other fields identical (cost, contextWindow, maxTokens, input, reasoning, thinking)
+
+** ITEM Write model registry tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-652-add-default-better-ccflare-model-entries::model-tests
+:DEPENDS: FEAT-652-add-default-better-ccflare-model-entries::add-json-entries
+:END:
+- File: ~packages/ai/test/better-ccflare-models.test.ts~
+- Test 1: ~getBundledModel("better-ccflare", "claude-opus-4-7")~ → ~model.provider === "better-ccflare"~
+- Test 2: ~getBundledModel("better-ccflare", "claude-sonnet-4-20250514")~ → ~model.api === "anthropic-messages"~
+- Test 3: ~getBundledModel("better-ccflare", "claude-opus-4-7")~ → ~model.baseUrl === "http://localhost:8080"~
+- Test 4: Non-existent model → undefined
+- Test 5: ~getBundledProviders()~ includes ~"better-ccflare"~
+
+* Edge Cases
+
+- Model ID collisions: better-ccflare and anthropic models have the same IDs but different providers, so ~getBundledModel("better-ccflare", "claude-opus-4-7")~ and ~getBundledModel("anthropic", "claude-opus-4-7")~ return different objects — no collision
+- Model updates: when anthropic models change (new version, new pricing), better-ccflare entries must be manually synced. This is acceptable for the MVP.
+- Missing models: if a user references a model not in the better-ccflare catalog, they get a resolution error. They can add it via ~spell.kdl~ or wait for catalog update.
+
+* Acceptance Criteria
+
+- ~bun check:ts~ passes
+- ~getBundledModel("better-ccflare", "claude-opus-4-7")~ returns a valid model
+- All 4 models are present with correct provider and base URL
+- ~bun test packages/ai/test/better-ccflare-models.test.ts~ passes

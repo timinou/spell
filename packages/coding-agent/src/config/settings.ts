@@ -12,7 +12,15 @@
  */
 
 import * as path from "node:path";
-import { getAgentDbPath, getAgentDir, getProjectDir, logger, procmgr, setDefaultTabWidth } from "@oh-my-pi/pi-utils";
+import {
+	getAgentDbPath,
+	getAgentDir,
+	getProjectDir,
+	logger,
+	postmortem,
+	procmgr,
+	setDefaultTabWidth,
+} from "@oh-my-pi/pi-utils";
 import { type Settings as SettingsCapabilityItem, settingsCapability } from "../capability/settings";
 import type { ModelRole } from "../config/model-registry";
 import { loadCapability } from "../discovery";
@@ -167,6 +175,7 @@ export class Settings {
 		return promise.then(
 			instance => {
 				globalInstance = instance;
+				postmortem.register("settings-flush", () => instance.flush());
 				globalInstancePromise = Promise.resolve(instance);
 				return instance;
 			},
