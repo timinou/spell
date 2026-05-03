@@ -18,6 +18,7 @@
 	"types": "./src/index.ts",
 	"scripts": {
 		"check": "tsgo -p tsconfig.json",
+		"check:ts": "tsgo --noEmit -p tsconfig.json",
 		"test": "bun test"
 	},
 	"dependencies": {
