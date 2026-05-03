@@ -1,0 +1,65 @@
+#+TITLE: Fix better-ccflare OAuth passthrough for localhost
+#+STATE: DONE
+#+SESSION_ID: 14d2861da5a17f72
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T08-10-02-774Z_14d2861da5a17f72.jsonl]]
+#+CUSTOM_ID: PLAN-292-fix-better-ccflare-oauth-passthrough-for
+#+LAYER: core
+
+* Context
+
+better-ccflare supports two auth modes for Claude CLI:
+1. OAuth passthrough: proxy detects Claude CLI user-agent, forwards client's OAuth token directly to Anthropic (bypasses proxy accounts)
+2. API key auth: client sends proxy API key, proxy uses its own backend accounts
+
+Spell was stripping ALL auth headers for localhost. This prevented OAuth passthrough (no client token to forward). The proxy fell back to backend accounts which were both broken (Admin rate-limited, GLM paused).
+
+* Fix
+
+Remove localhost auth suppression from packages/ai/src/providers/anthropic.ts:
+- Delete ~isLocalhostBaseUrl~ function
+- ~~buildAnthropicHeaders~~: remove localhost special case
+- ~~buildAnthropicClientOptions~~: remove ~isLocalhostBaseUrl~ checks
+
+The ~ANTHROPIC_API_KEY~ env var (containing a valid OAuth token) flows through ~getEnvApiKey("anthropic")~ which already has a function resolver at ~stream.ts:95-98~.
+
+* Verification
+
+- Spell sends x-api-key / Authorization to localhost proxy
+- Proxy detects Claude CLI UA, forwards OAuth token to Anthropic
+- Admin OAuth token from ~ANTHROPIC_API_KEY~ env var is used directly
+
+[[id:PLAN-292-fix-better-ccflare-oauth-passthrough-for]]
+
+** Completion [2026-05-03]
+
+*** Verification
+
+- Verified fix was already applied in commit [[https://github.com/can1357/oh-my-pi/commit/377ffe909][377ffe909]] ("more chagnes with anthropic"):
+  - ~isLocalhostBaseUrl~ function: **deleted** (not present in HEAD)
+  - ~buildAnthropicHeaders~: localhost special case **removed** — auth header always sent (X-Api-Key or Bearer depending on token type)
+  - ~buildAnthropicClientOptions~: ~isLocalhostBaseUrl~ checks **removed** — ~apiKey~/ ~authToken~ now set based solely on OAuth token detection
+- ~bun check:ts~ passes cleanly: "Checked 1971 files in 4s. No fixes applied."
+- Grep for ~isLocalhostBaseUrl~ across entire repo returns zero matches
+- Grep for ~localhost~ in ~packages/ai/src~ returns zero matches
+
+*** Behavior Confirmation
+
+Current auth flow for localhost better-ccflare proxy:
+1. ~getEnvApiKey("anthropic")~ resolves ~ANTHROPIC_API_KEY~ / ~ANTHROPIC_OAUTH_TOKEN~ from environment (~stream.ts:94-98~)
+2. ~isAnthropicOAuthToken(apiKey)~ detects OAuth token by prefix/length
+3. If OAuth token and base URL != api.anthropic.com: ~Authorization: Bearer <token>~ sent
+4. Otherwise: ~X-Api-Key: <token>~ sent
+5. Proxy detects Claude CLI user-agent, forwards OAuth token to Anthropic upstream
+6. No auth header suppression for localhost occurs
+
+*** Artifacts
+
+- [[file:!tasks/plans/PLAN-292-fix-better-ccflare-oauth-passthrough-for.org][Plan org item]]
+
+*** Notes
+
+No code changes were required for this plan — the fix was already committed in 377ffe909
+before plan execution began. The plan served as verification that the localhost auth suppression
+was correctly removed and the OAuth passthrough path is intact.
+
+NOTE [2026-05-03]: Completed 2026-05-03
