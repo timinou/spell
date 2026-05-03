@@ -272,6 +272,7 @@ describe("EventController streamed task working message", () => {
 			streamingMessage: undefined,
 			pendingTools,
 			ui: { requestRender: () => {} },
+			session: { model: undefined },
 			setWorkingMessage: (message?: string) => {
 				if (message) setMessages.push(message);
 			},

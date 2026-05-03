@@ -220,19 +220,15 @@ export function matchAgentRules(
 	const conflicts: AgentRuleConflict[] = [];
 
 	if (sameSpec.length > 1) {
-		// Check if selectors are actually different (same selector text = same rule, not a conflict)
-		const uniqueSelectors = new Set(sameSpec.map(r => r.selector.value));
-		if (uniqueSelectors.size > 1) {
-			conflicts.push({
-				agentName,
-				selectors: sameSpec.map(r => r.selector.value),
-			});
-			logger.warn("agents-kdl: ambiguous agent rules — same specificity, last-declared wins", {
-				agentName,
-				selectors: sameSpec.map(r => r.selector.value),
-				winning: winning.selector.value,
-			});
-		}
+		conflicts.push({
+			agentName,
+			selectors: sameSpec.map(r => r.selector.value),
+		});
+		logger.warn("agents-kdl: ambiguous agent rules — same specificity, last-declared wins", {
+			agentName,
+			selectors: sameSpec.map(r => r.selector.value),
+			winning: winning.selector.value,
+		});
 	}
 
 	return { winning, conflicts };

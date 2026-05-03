@@ -255,11 +255,11 @@ describe("matchAgentRules", () => {
 	});
 
 	it("multiple same-specificity rules with different selectors → conflict recorded", () => {
-		const rules = [makeRule("review*", 0), makeRule("*viewer", 1)];
+		const rules = [makeRule("review*", 0), makeRule("rev*", 1)];
 		const result = matchAgentRules("reviewer", rules);
 		expect(result.winning).toBeDefined();
 		expect(result.conflicts).toHaveLength(1);
-		expect(result.conflicts[0].selectors.sort()).toEqual(["*viewer", "review*"]);
+		expect(result.conflicts[0].selectors.sort()).toEqual(["rev*", "review*"]);
 	});
 
 	it("only highest-specificity matching rules are considered", () => {
