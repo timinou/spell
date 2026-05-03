@@ -1,13 +1,11 @@
-import type { Model } from "../types";
 import {
 	buildBetaHeader,
 	claudeCodeBetaDefaults,
 	claudeCodeHeaders,
 	claudeCodeVersion,
-	isAnthropicOAuthToken,
 	getHeaderCaseInsensitive,
+	isAnthropicOAuthToken,
 	isClaudeCodeClientUserAgent,
-	normalizeExtraBetas,
 } from "./anthropic";
 
 export interface BetterCcflareHeaderOptions {
@@ -46,7 +44,7 @@ export function buildBetterCcflareHeaders(options: BetterCcflareHeaderOptions): 
 	// Auth: OAuth passthrough when apiKey is empty/falsy
 	if (options.apiKey) {
 		if (oauthToken) {
-			headers["Authorization"] = `Bearer ${options.apiKey}`;
+			headers.Authorization = `Bearer ${options.apiKey}`;
 		} else {
 			headers["x-api-key"] = options.apiKey;
 		}
@@ -54,9 +52,7 @@ export function buildBetterCcflareHeaders(options: BetterCcflareHeaderOptions): 
 	// else: NO auth header → OAuth passthrough mode
 
 	// Apply model-specific headers, respecting enforced keys
-	const enforcedHeaderKeys = new Set(
-		Object.keys(headers).map(key => key.toLowerCase())
-	);
+	const enforcedHeaderKeys = new Set(Object.keys(headers).map(key => key.toLowerCase()));
 	if (options.modelHeaders) {
 		for (const [key, value] of Object.entries(options.modelHeaders)) {
 			if (!enforcedHeaderKeys.has(key.toLowerCase())) {
