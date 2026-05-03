@@ -1,0 +1,102 @@
+#+TITLE: Pre-compute system prompt preparation results during createAgentSession
+#+STATE: ITEM
+#+SESSION_ID: 14d2b250d7528657
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T11-23-09-533Z_14d2b250d7528657.jsonl]]
+#+CUSTOM_ID: FEAT-654-pre-compute-system-prompt-preparation-re
+#+DEPENDS: FEAT-653-system-prompt-preparation-per-op-timeout
+#+LAYER: core
+
+* Initial Message
+
+can you do a memory profiling of the spell app? it's been slow since the latest merge, and always shows the changelog
+
+**Intention & Purpose**
+Move the 4 system prompt preparation operations (skills, AGENTS.md search, context files, SYSTEM.md loading) to run during `createAgentSession()` in `sdk.ts`, storing results in the `rebuildSystemPrompt` closure for reuse across all subsequent system prompt rebuilds. This eliminates the race between system prompt prep and session initialization — by the time the agent needs its first system prompt, the results are already available.
+
+**Context & Narrative**
+Currently, `rebuildSystemPrompt()` in `sdk.ts:1366` calls `buildSystemPromptInternal()` which runs all 4 prep ops inline via `Promise.all` -> `Promise.race`. This happens EVERY time the system prompt is rebuilt (tool changes, domain changes, MCP refresh). The ops are pure/immutable for the session lifetime — AGENTS.md files don't change, skills don't change, context files don't change. Computing them once and caching is correct and avoids repeated I/O.
+
+Additionally, starting these ops during `createAgentSession()` (which already does heavy async work) gives them more time to complete before the first system prompt build. Combined with FEAT-653 (per-op timeouts), this means the first rebuild either succeeds with full context or fails gracefully with partial results — but never blocks the user with a 5s+ stall.
+
+**Scope**
+- In scope: Extract prep result computation into a memoized closure inside `createAgentSession`. Call it eagerly during session creation.
+- In scope: Store results as closure variables. Subsequent `rebuildSystemPrompt()` calls read the cached results.
+- In scope: The prep runs with per-op timeouts (FEAT-653) and partial resilience.
+- Out of scope: Persisting prep results across sessions. Changing what data the prep ops produce.
+
+**Existing Patterns**
+- `createAgentSession()` in `packages/coding-agent/src/sdk.ts` — already computes many things eagerly (skills, contextFiles, domain context, rulebook rules). The prep results just need to be computed one step earlier.
+- `rebuildSystemPrompt` closure at line 1366 captures `cwd`, `skills`, `contextFiles`, `settings`, `rules`, `domainPromptContext`. Adding `prepResults` to the closure is natural.
+- The same closure is passed to `AgentSession` constructor (line 1720) and called from `setActiveToolsByName` (agent-session.ts:1923) and `refreshBaseSystemPrompt` (agent-session.ts:1932).
+
+**Design Decisions**
+1. **Where to compute**: In `createAgentSession()`, after skills and context files are already loaded (they're already computed eagerly). The only NEW work is running the 4 prep ops as a batch. Actually — skills and context files ARE the prep ops. So this item is about: after skills and context files are loaded (which already happens in `createAgentSession`), package them into a `PrepResults` object and pass to `rebuildSystemPrompt`. The remaining ops (AGENTS.md search, SYSTEM.md loading) should also be loaded here rather than inside `buildSystemPromptInternal()`.
+
+Wait — let me re-read the code. `createAgentSession()` already calls `discoverSkills()` and `loadContextFiles()`. These return `skills` and `contextFiles` arrays. Then `rebuildSystemPrompt` passes these to `buildSystemPromptInternal()` which wraps them in Promises. So the actual I/O already happens in `createAgentSession()` — the `Promise.resolve()` inside `buildSystemPromptInternal` is a no-op for pre-resolved values.
+
+But `buildAgentsMdSearch` and `loadSystemPromptFiles` are NOT pre-computed — they run fresh inside `buildSystemPromptInternal`. THESE are the ops that should be pre-computed.
+
+2. **What changes**:
+   - In `createAgentSession()`: compute `agentsMdSearch` and `systemPromptCustomization` eagerly (alongside skills and context files).
+   - Store results in closure variables.
+   - In `rebuildSystemPrompt`: pass cached `agentsMdSearch` and `systemPromptCustomization` to `buildSystemPromptInternal()` via `options` parameters that already exist: `contextFiles: providedContextFiles` and `skills: providedSkills`.
+   - `buildSystemPromptInternal()` already accepts pre-computed values — if `providedContextFiles` is set, it skips loading. Same for `providedSkills`. We need to add similar parameters for `agentsMdSearch` and `systemPromptCustomization`.
+
+**Implementation**
+Two files: `packages/coding-agent/src/sdk.ts` and `packages/coding-agent/src/system-prompt.ts`
+
+### system-prompt.ts
+Add two new options to `BuildSystemPromptOptions`:
+```ts
+/** Pre-computed AGENTS.md search result */
+agentsMdSearch?: AgentsMdSearch;
+/** Pre-computed SYSTEM.md customization */
+systemPromptCustomization?: string | null;
+```
+
+In `buildSystemPrompt()`, use these when provided instead of recomputing:
+```ts
+const agentsMdSearchPromise = options.agentsMdSearch !== undefined
+  ? Promise.resolve(options.agentsMdSearch)
+  : logger.timeAsync("buildAgentsMdSearch", buildAgentsMdSearch, resolvedCwd);
+
+const systemPromptCustomizationPromise = options.systemPromptCustomization !== undefined
+  ? Promise.resolve(options.systemPromptCustomization)
+  : logger.timeAsync("loadSystemPromptFiles", loadSystemPromptFiles, { cwd: resolvedCwd });
+```
+
+### sdk.ts
+In `createAgentSession()`, after skills and context files are loaded (~line 1340):
+```ts
+const [prepAgentsMdSearch, prepSystemPromptCustomization] = await Promise.all([
+  raceWithTimeout("AGENTS.md search", buildAgentsMdSearch(cwd), fallbackAgentsMd, 5000),
+  raceWithTimeout("SYSTEM.md loading", loadSystemPromptFiles({ cwd }), null, 5000),
+]);
+```
+
+Store these in closure variables, pass them to `rebuildSystemPrompt`:
+```ts
+const rebuildSystemPrompt = async (...) => {
+  const defaultPrompt = await buildSystemPromptInternal({
+    // ...existing...
+    agentsMdSearch: prepAgentsMdSearch,
+    systemPromptCustomization: prepSystemPromptCustomization,
+  });
+};
+```
+
+Note: `raceWithTimeout` is implemented in FEAT-653. This item builds on it.
+
+**Edge Cases**
+- First run: prep results computed during `createAgentSession()`. If they timeout (per-op), fallbacks used. Subsequent rebuilds use same cached fallbacks — consistent.
+- Tool change (rebuildSystemPrompt called again): cached results re-used. No re-scan. Correct — AGENTS.md and SYSTEM.md don't change during session.
+- `--resume` session: `createAgentSession()` still runs, prep still computed. Correct — resumed session should have current AGENTS.md context.
+- Error in one prep op: caught by per-op race, fallback used. Other ops unaffected.
+- `NULL_PROMPT=true`: `buildSystemPrompt` returns early (line 406-408). Prep is never called. `createAgentSession` can skip prep computation if `$env.NULL_PROMPT === "true"`.
+
+**Acceptance Criteria**
+1. `bun run check:ts` passes.
+2. Running with `PI_TIMING=1` shows "buildAgentsMdSearch" and "loadSystemPromptFiles" timings in the `createAgentSession` phase, NOT in the first `rebuildSystemPrompt` call.
+3. System prompt rebuilds (triggered by tool changes) complete in <10ms (cached results, no I/O).
+4. Existing system prompt tests pass.
+5. `NULL_PROMPT=true` still works (no prep computation).

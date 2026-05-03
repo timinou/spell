@@ -1,0 +1,168 @@
+#+TITLE: Implement better-ccflare provider with stealth mode and OAuth passthrough auth
+#+STATE: ITEM
+#+SESSION_ID: 14d2ecf186a17f91
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T15-39-18-426Z_14d2ecf186a17f91.jsonl]]
+#+CUSTOM_ID: FEAT-651-implement-better-ccflare-provider-with-s
+#+LAYER: core
+
+* Intention &amp; Purpose
+
+Create ~streamBetterCcflare~ — a full Anthropic-compatible provider that reuses all Claude Code stealth behavior but sends NO auth header when ~ANTHROPIC_AUTH_TOKEN~ is unset (OAuth passthrough mode). The proxy at ~localhost:8080~ uses its own configured OAuth accounts.
+
+* Context &amp; Narrative
+
+The existing ~streamAnthropic~ in ~packages/ai/src/providers/anthropic.ts~ always sends an auth header (~x-api-key~ or ~Authorization: Bearer~). This breaks better-ccflare's OAuth passthrough mode, where the proxy expects NO client auth so it can use its own configured OAuth accounts.
+
+The stealth mode (Claude Code headers, tool prefixing, billing header, cache control normalization) must be preserved — better-ccflare forwards requests to Anthropic, and Anthropic expects Claude CLI-formatted requests for proper rate limiting and feature access.
+
+~streamBetterCcflare~ delegates to ~anthropic.ts~ exports for all shared behavior and only overrides auth header construction and base URL default.
+
+* Scope
+
+In-scope:
+- New file ~packages/ai/src/providers/better-ccflare.ts~ exporting ~streamBetterCcflare~ and ~buildBetterCcflareHeaders~
+- Auth behavior: if ~ANTHROPIC_AUTH_TOKEN~ is unset → NO ~x-api-key~ or ~Authorization~ header (OAuth passthrough). If set → ~x-api-key: <token>~ (API key auth).
+- Base URL: default ~http://localhost:8080~ (from ~resolveAnthropicBaseUrl~ modified in FEAT-649)
+- ALL stealth mode features preserved: Claude Code headers, ~proxy_~ tool prefix, billing header, user-agent spoofing, TLS fetch options, cache control, thinking budget, message conversion, stream retry, raw request dump
+- Register ~streamBetterCcflare~ in ~packages/ai/src/stream.ts~ dispatch
+
+Out-of-scope:
+- Changes to ~anthropic.ts~ beyond what FEAT-649 already does (exporting ~resolveAnthropicBaseUrl~)
+- Model discovery / catalog entries
+- ~ANTHROPIC_BASE_URL~ env var handling (FEAT-649)
+
+* Existing Patterns
+
+All stealth-mode exports from ~packages/ai/src/providers/anthropic.ts~ — the better-ccflare provider imports and reuses:
+- ~buildAnthropicHeaders~ — NOT reused; replaced by ~buildBetterCcflareHeaders~
+- ~buildAnthropicClientOptions~ — NOT reused; replaced by inline logic
+- ~buildAnthropicSystemBlocks~ — reused (billing header + system instruction)
+- ~convertAnthropicMessages~ — reused (identical message format)
+- ~claudeCodeHeaders~, ~claudeCodeVersion~, ~claudeToolPrefix~ — reused
+- ~applyClaudeToolPrefix~, ~stripClaudeToolPrefix~ — reused
+- ~mapStainlessOs~, ~mapStainlessArch~ — reused
+- ~isAnthropicAdaptiveOnlyModel~ — reused
+- ~normalizeExtraBetas~ — reused
+- ~claudeCodeSystemInstruction~ — reused
+- ~isProviderRetryableError~ — reused
+- ~resolveAnthropicBaseUrl~ — reused (modified in FEAT-649)
+
+Internal functions called by ~streamAnthropic~ that need to be duplicated:
+- ~createClient~ — internal, wraps ~buildAnthropicClientOptions~ + ~new Anthropic()~. Must be duplicated or inlined.
+- ~buildParams~ — internal, builds the MessageCreateParams. Can be duplicated (pure function with no auth logic).
+- ~applyPromptCaching~, ~enforceCacheControlLimit~, ~normalizeCacheControlTtlOrdering~ — internal caching functions. Must be duplicated or exported.
+- ~disableThinkingIfToolChoiceForced~, ~ensureMaxTokensForThinking~ — internal validation. Must be duplicated or exported.
+- ~resolveAnthropicMetadataUserId~, ~resolveAnthropicBillingUserOverride~ — internal. Must be duplicated or exported.
+
+Strategy: ~better-ccflare.ts~ imports ALL exported symbols from anthropic.ts and duplicates only the truly internal functions it needs. The duplicated functions are pure and unlikely to diverge.
+
+* Tests
+
+~packages/ai/test/better-ccflare-stream.test.ts~:
+1. OAuth passthrough: no ~ANTHROPIC_AUTH_TOKEN~ set → request has NO ~x-api-key~ or ~Authorization~ header
+2. API key auth: ~ANTHROPIC_AUTH_TOKEN=btr-test-key~ → request has ~x-api-key: btr-test-key~
+3. Stealth headers present: ~User-Agent: claude-cli/...~, ~X-App: cli~, Anthropic betas
+4. Tool prefixing: tools with names are prefixed with ~proxy_~
+5. Billing header injected for non-haiku models
+6. Base URL defaults to ~http://localhost:8080~
+7. Override base URL via ~ANTHROPIC_BASE_URL~ env
+8. Stream retry behavior preserved (retryable error detection)
+9. Cache control normalization preserved
+
+Tests use HTTP interception (~nock~ or similar) to verify request headers without needing a real proxy.
+
+* Implementation
+
+** ITEM Create buildBetterCcflareHeaders
+:PROPERTIES:
+:CUSTOM_ID: FEAT-651-implement-better-ccflare-provider-with-s::create-headers
+:END:
+- File: ~packages/ai/src/providers/better-ccflare.ts~ (new)
+- Function: ~buildBetterCcflareHeaders(options: BetterCcflareHeaderOptions): Record<string, string>~
+- Same as ~buildAnthropicHeaders~ EXCEPT the auth section:
+  - Compute ~oauthToken~ same way: ~isOAuth ?? isAnthropicOAuthToken(options.apiKey)~
+  - Set all Claude Code headers (User-Agent, X-App, Anthropic-Version, betas, etc.)
+  - Auth: if ~options.apiKey~ is empty/falsy → skip auth header entirely (OAuth passthrough)
+  - Auth: if ~options.apiKey~ is set AND ~oauthToken~ → ~Authorization: Bearer <key>~
+  - Auth: if ~options.apiKey~ is set AND NOT ~oauthToken~ → ~x-api-key: <key>~
+- Import all stealth header constants from ~../providers/anthropic~
+
+** ITEM Create streamBetterCcflare
+:PROPERTIES:
+:CUSTOM_ID: FEAT-651-implement-better-ccflare-provider-with-s::create-stream
+:DEPENDS: FEAT-651-implement-better-ccflare-provider-with-s::create-headers
+:END:
+- File: ~packages/ai/src/providers/better-ccflare.ts~
+- Function: ~export const streamBetterCcflare: StreamFunction<"anthropic-messages">~
+- Pattern: direct adaptation of ~streamAnthropic~ (~packages/ai/src/providers/anthropic.ts:583~)
+- Differences from ~streamAnthropic~:
+  1. ~apiKey = options?.apiKey ?? getEnvApiKey("better-ccflare") ?? ""~ (from serviceProviderMap, resolves ~ANTHROPIC_AUTH_TOKEN~)
+  2. ~baseUrl = resolveAnthropicBaseUrl(model, apiKey) ?? "http://localhost:8080"~
+  3. Client creation: inline instead of calling ~createClient~ — uses ~buildBetterCcflareHeaders~ for auth, rest same as ~buildAnthropicClientOptions~
+  4. ~isOAuthToken~: still computed from ~isAnthropicOAuthToken(apiKey)~ — needed for tool prefixing and billing header
+  5. Everything else IDENTICAL: ~buildParams~, stream handling, retry loop, raw request dump, error mapping
+- Duplicate internal functions from anthropic.ts that ~buildParams~ needs:
+  - ~buildParams~ (pure, no auth logic — safe to duplicate)
+  - ~applyPromptCaching~, ~enforceCacheControlLimit~, ~normalizeCacheControlTtlOrdering~
+  - ~disableThinkingIfToolChoiceForced~, ~ensureMaxTokensForThinking~
+  - ~resolveAnthropicMetadataUserId~, ~resolveAnthropicBillingUserOverride~
+  - ~convertTools~ (internal in anthropic.ts)
+
+** ITEM Register streamBetterCcflare in stream.ts dispatch
+:PROPERTIES:
+:CUSTOM_ID: FEAT-651-implement-better-ccflare-provider-with-s::register-dispatch
+:DEPENDS: FEAT-651-implement-better-ccflare-provider-with-s::create-stream
+:END:
+- File: ~packages/ai/src/stream.ts~
+- Add import: ~import { streamBetterCcflare } from "./providers/better-ccflare";~
+- In ~stream()~ function, before the ~case "anthropic-messages":~ dispatch:
+  - Check ~if (model.provider === "better-ccflare")~ → call ~streamBetterCcflare~
+  - This avoids changing the API type but routes by provider
+- Alternative: add a new case. But since API type is ~"anthropic-messages"~, the provider check is the cleanest insertion point.
+
+** ITEM Write stream tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-651-implement-better-ccflare-provider-with-s::stream-tests
+:DEPENDS: FEAT-651-implement-better-ccflare-provider-with-s::register-dispatch
+:END:
+- File: ~packages/ai/test/better-ccflare-stream.test.ts~
+- Use HTTP interception (mock ~fetch~ or ~nock~) to capture outgoing requests
+- Test 1: OAuth passthrough — no auth header
+  - Set up model with ~provider: "better-ccflare"~
+  - No ~ANTHROPIC_AUTH_TOKEN~ env
+  - Call ~stream(...)~ with a simple "hi" message
+  - Assert: request has no ~x-api-key~ or ~Authorization~ header
+  - Assert: User-Agent is ~claude-cli/...~ (stealth mode active)
+- Test 2: API key auth
+  - Set ~ANTHROPIC_AUTH_TOKEN=btr-test-key~
+  - Assert: request has ~x-api-key: btr-test-key~
+- Test 3: Stealth headers present
+  - Assert: ~X-App: cli~, ~Anthropic-Beta: ...~, ~Anthropic-Version: 2023-06-01~
+- Test 4: Tool prefixing
+  - Tools passed to ~stream~ are prefixed with ~proxy_~
+- Test 5: Base URL default
+  - Assert: request URL starts with ~http://localhost:8080~
+- Test 6: Custom base URL via ~ANTHROPIC_BASE_URL~
+  - Set ~ANTHROPIC_BASE_URL=http://localhost:9999~
+  - Assert: request URL starts with ~http://localhost:9999~
+
+* Edge Cases
+
+- ~ANTHROPIC_AUTH_TOKEN~ set but empty: treated as unset → OAuth passthrough
+- ~ANTHROPIC_AUTH_TOKEN~ set to ~dummy-key~ (open access): sent as ~x-api-key: dummy-key~
+- ~ANTHROPIC_AUTH_TOKEN~ set to ~btr-...~ (real key): sent as ~x-api-key: btr-...~
+- Model with ~provider: "better-ccflare"~ but ~api: "openai-completions"~: should not happen; the dispatch only intercepts ~anthropic-messages~ API
+- Thinking disabled models: should work correctly (no thinking params)
+- Opus adaptive thinking: should work correctly (effort config)
+- Tool choice forced: should disable thinking as anthropic provider does
+- Streaming errors mid-response: retry logic preserved
+- GitHub Copilot dynamic headers: NOT applicable for better-ccflare, but the code checks ~model.provider === "github-copilot"~ so it naturally skips
+- Foundry mode: NOT applicable for better-ccflare, no interaction
+
+* Acceptance Criteria
+
+- ~bun check:ts~ passes
+- ~bun test packages/ai/test/better-ccflare-provider.test.ts~ passes
+- ~bun test packages/ai/test/better-ccflare-stream.test.ts~ passes
+- Manual verification: with ~ANTHROPIC_BASE_URL=http://localhost:8080~ and unset ~ANTHROPIC_AUTH_TOKEN~, a spell session using a better-ccflare model successfully routes through the proxy and gets a response from Anthropic
+- Existing anthropic tests still pass (no regression)

@@ -1,0 +1,61 @@
+#+TITLE: Settings changes using KDL persistence tiers are lost on abnormal exit and on normal exit before debounce flush fires
+#+STATE: DOING
+#+SESSION_ID: 14d2b250d7528657
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T11-23-09-533Z_14d2b250d7528657.jsonl]]
+#+CUSTOM_ID: BUG-329-settings-changes-using-kdl-persistence-t
+#+LAYER: core
+
+* Initial Message
+
+can you do a memory profiling of the spell app? it's been slow since the latest merge, and always shows the changelog
+
+**Intention & Purpose**
+Ensure all settings persisted via `Settings.set(path, value, "user")` or `Settings.set(path, value, "project")` survive process exit, regardless of how the process terminates (clean exit, SIGINT, crash). The current 100ms debounced background save races against process exit — if the process exits within 100ms of the last `set()` call (or before the debounce timer fires), the setting is silently lost.
+
+**Context & Narrative**
+`Settings.set(path, value, "user")` calls `#queueSave()` which creates a 100ms `setTimeout`. `postmortem.quit()` runs cleanup callbacks then calls `process.exit()`. But `Settings` never registers a cleanup callback. The debounce timer never fires → `lastChangelogVersion` is never written to `~/.spell/spell.kdl` → changelog always shows on next startup.
+
+The codebase already uses `postmortem.register()` for similar flush-on-exit patterns: `session-manager-flush` in `interactive-mode.ts`, `ssh-cleanup` in `connection-manager.ts`, `logger-flush` in `postmortem.ts` itself. Settings should follow the same pattern.
+
+**Scope**
+- In scope: Register a `settings-flush` postmortem callback that calls `Settings.flush()` (which clears any pending timer and saves pending writes synchronously).
+- In scope: The `flush()` method already exists and already handles both user and project tiers — we just need to connect it to process exit.
+- Out of scope: Changing the 100ms debounce default. Changing the save mechanism itself. Adding a synchronous write path bypassing the debounce.
+
+**Existing Patterns**
+- `postmortem.register("logger-flush", ...)` — logger closes on exit (`packages/utils/src/postmortem.ts:339`)
+- `postmortem.register("session-manager-flush", ...)` — session manager flushes on exit (`packages/coding-agent/src/modes/interactive-mode.ts:404`)
+- `postmortem.register("ssh-cleanup", ...)` — SSH resources cleaned on exit (`packages/coding-agent/src/sdk.ts:464`)
+- Import: `import { postmortem } from "@oh-my-pi/pi-utils"` — already imported in `interactive-mode.ts`, needs to be added to `settings.ts`
+- `Settings.flush()` — `packages/coding-agent/src/config/settings.ts:283-292` — clears save timers, calls `#saveNow()` for user + project tiers
+
+**Implementation**
+Single file: `packages/coding-agent/src/config/settings.ts`
+
+1. Add `postmortem` to the existing `@oh-my-pi/pi-utils` import (line 15):
+   From: `import { getAgentDbPath, getAgentDir, getProjectDir, logger, procmgr, setDefaultTabWidth } from "@oh-my-pi/pi-utils";`
+   To: `import { getAgentDbPath, getAgentDir, getProjectDir, logger, postmortem, procmgr, setDefaultTabWidth } from "@oh-my-pi/pi-utils";`
+
+2. In `static async init(options)` method, after `globalInstance = instance` (~line 170), register the callback:
+   ```ts
+   postmortem.register("settings-flush", () => instance.flush());
+   ```
+   The callback must capture `instance` by closure, not use `this` (static context).
+
+3. The `flush()` method already handles:
+   - Clearing pending timers
+   - Waiting for in-flight save promise
+   - Saving user + project pending changes
+   - No-op if no changes pending
+
+**Edge Cases**
+- Double-init: `Settings.init()` is called once, guarded by `globalInstancePromise`. The register only fires on first init.
+- In-memory mode (tests via `Settings.isolated()`): `isolated()` does not call `init()`, so no postmortem registration. Correct — in-memory instances have no file to flush.
+- Postmortem already running: `postmortem.register()` handles this — if cleanup is already in progress, it warns and runs the callback immediately on a microtask.
+- Flush failure during shutdown: `#saveNow()` catches errors internally and re-queues failed paths. Postmortem callbacks run with `Promise.allSettled`, so a flush failure won't block other cleanup.
+- Process exit via `process.exit()` directly (bypassing `postmortem.quit()`): postmortem registers `process.on("exit", ...)` which fires cleanup (though in fire-and-forget mode). The flush will attempt to run but may not complete before the event loop drains. This is acceptable — best-effort is correct for crash scenarios.
+
+**Acceptance Criteria**
+1. `settings.set("lastChangelogVersion", "13.12.8", "user")` called during startup → settings value visible in `~/.spell/spell.kdl` after process exits normally.
+2. Changlog NOT shown on next startup (because `lastChangelogVersion` persists).
+3. `bun run check:ts` passes.

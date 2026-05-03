@@ -1,0 +1,74 @@
+#+TITLE: Add better-ccflare provider with OAuth passthrough
+#+STATE: DOING
+#+SESSION_ID: 14d2ecf186a17f91
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T15-39-18-426Z_14d2ecf186a17f91.jsonl]]
+#+CUSTOM_ID: PLAN-293-add-better-ccflare-provider-with-oauth-p
+
+* Context
+
+better-ccflare is an Anthropic-compatible proxy running at localhost:8080. It maintains its own OAuth accounts and routes requests to Anthropic. It has two auth modes:
+1. OAuth passthrough: NO client auth → proxy uses its own configured OAuth accounts
+2. API key auth: ~x-api-key: btr-~ or ~x-api-key: dummy-key~ → proxy maps to configured accounts
+
+Spell's current Anthropic provider always sends an auth header (~x-api-key~ or ~Authorization: Bearer~). This breaks OAuth passthrough — the proxy receives ~x-api-key: sk-ant-api03-...~ (the user's Anthropic API key with no credits) and either forwards it to Anthropic (fails with "credit balance too low") or rejects it.
+
+The fix: a separate ~better-ccflare~ provider that reuses ALL Anthropic stealth-mode behavior (Claude Code headers, tool prefixing, user-agent spoofing, billing header, cache control) but sends NO auth header when ~ANTHROPIC_AUTH_TOKEN~ is unset (OAuth passthrough mode).
+
+Users configure models as ~better-ccflare/claude-opus-4-7~ in their ~spell.kdl~ role settings. The provider reuses the ~anthropic-messages~ API type — only the auth path differs.
+
+
+[[id:FEAT-649-add-better-ccflare-provider-type-and-env]]
+[[id:FEAT-651-implement-better-ccflare-provider-with-s]]
+[[id:FEAT-652-add-default-better-ccflare-model-entries]]
+* Verification
+
+1. ~bun check:ts~ passes with new provider type
+2. ~bun test packages/ai/test/better-ccflare-provider.test.ts~ — env var resolution tests pass
+3. ~bun test packages/ai/test/better-ccflare-stream.test.ts~ — request header tests pass
+4. ~bun test packages/ai/test/models.test.ts~ — model registry tests pass
+5. Manual: with ~ANTHROPIC_BASE_URL=http://localhost:8080~ and unset ~ANTHROPIC_AUTH_TOKEN~, a spell session using a better-ccflare model successfully routes through the proxy and gets a response from Anthropic
+6. Existing anthropic tests still pass (no regression)
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:FEAT-649-add-better-ccflare-provider-type-and-env::add-to-known-provider]] Add better-ccflare to KnownProvider
+- [[id:FEAT-649-add-better-ccflare-provider-type-and-env::add-to-service-map]] Add better-ccflare to serviceProviderMap
+- [[id:FEAT-649-add-better-ccflare-provider-type-and-env::export-resolve-base-url]] Export resolveAnthropicBaseUrl and add better-ccflare case
+- [[id:FEAT-651-implement-better-ccflare-provider-with-s::create-headers]] Create buildBetterCcflareHeaders
+- [[id:FEAT-652-add-default-better-ccflare-model-entries::add-json-entries]] Add better-ccflare model entries to models.json
+** wave-2 :wave:
+- [[id:FEAT-649-add-better-ccflare-provider-type-and-env::types-env-tests]] Write type/env tests
+- [[id:FEAT-651-implement-better-ccflare-provider-with-s::create-stream]] Create streamBetterCcflare
+- [[id:FEAT-652-add-default-better-ccflare-model-entries::model-tests]] Write model registry tests
+** wave-3 :wave:
+- [[id:FEAT-651-implement-better-ccflare-provider-with-s::register-dispatch]] Register streamBetterCcflare in stream.ts dispatch
+** wave-4 :wave:
+- [[id:FEAT-651-implement-better-ccflare-provider-with-s::stream-tests]] Write stream tests
+** File-level DAG
+*** Nodes
+- `FEAT-649-add-better-ccflare-provider-type-and-env` Add better-ccflare to KnownProvider [ITEM]
+- `FEAT-651-implement-better-ccflare-provider-with-s` Create buildBetterCcflareHeaders [ITEM]
+- `FEAT-652-add-default-better-ccflare-model-entries` Add better-ccflare model entries to models.json [ITEM]
+*** Edges
+- None.
+** Subfeature-level DAG
+*** Nodes
+- `FEAT-649-add-better-ccflare-provider-type-and-env::add-to-known-provider` Add better-ccflare to KnownProvider [ITEM]
+- `FEAT-649-add-better-ccflare-provider-type-and-env::add-to-service-map` Add better-ccflare to serviceProviderMap [ITEM]
+- `FEAT-649-add-better-ccflare-provider-type-and-env::export-resolve-base-url` Export resolveAnthropicBaseUrl and add better-ccflare case [ITEM]
+- `FEAT-649-add-better-ccflare-provider-type-and-env::types-env-tests` Write type/env tests [ITEM]
+- `FEAT-651-implement-better-ccflare-provider-with-s::create-headers` Create buildBetterCcflareHeaders [ITEM]
+- `FEAT-651-implement-better-ccflare-provider-with-s::create-stream` Create streamBetterCcflare [ITEM]
+- `FEAT-651-implement-better-ccflare-provider-with-s::register-dispatch` Register streamBetterCcflare in stream.ts dispatch [ITEM]
+- `FEAT-651-implement-better-ccflare-provider-with-s::stream-tests` Write stream tests [ITEM]
+- `FEAT-652-add-default-better-ccflare-model-entries::add-json-entries` Add better-ccflare model entries to models.json [ITEM]
+- `FEAT-652-add-default-better-ccflare-model-entries::model-tests` Write model registry tests [ITEM]
+*** Edges
+- `FEAT-649-add-better-ccflare-provider-type-and-env::types-env-tests` depends on `FEAT-649-add-better-ccflare-provider-type-and-env::add-to-known-provider`
+- `FEAT-649-add-better-ccflare-provider-type-and-env::types-env-tests` depends on `FEAT-649-add-better-ccflare-provider-type-and-env::add-to-service-map`
+- `FEAT-649-add-better-ccflare-provider-type-and-env::types-env-tests` depends on `FEAT-649-add-better-ccflare-provider-type-and-env::export-resolve-base-url`
+- `FEAT-651-implement-better-ccflare-provider-with-s::create-stream` depends on `FEAT-651-implement-better-ccflare-provider-with-s::create-headers`
+- `FEAT-651-implement-better-ccflare-provider-with-s::register-dispatch` depends on `FEAT-651-implement-better-ccflare-provider-with-s::create-stream`
+- `FEAT-651-implement-better-ccflare-provider-with-s::stream-tests` depends on `FEAT-651-implement-better-ccflare-provider-with-s::register-dispatch`
+- `FEAT-652-add-default-better-ccflare-model-entries::model-tests` depends on `FEAT-652-add-default-better-ccflare-model-entries::add-json-entries`
+

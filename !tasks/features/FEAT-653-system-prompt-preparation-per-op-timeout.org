@@ -1,0 +1,96 @@
+#+TITLE: System prompt preparation — per-op timeouts with named diagnostics and partial resilience
+#+STATE: ITEM
+#+SESSION_ID: 14d2b250d7528657
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T11-23-09-533Z_14d2b250d7528657.jsonl]]
+#+CUSTOM_ID: FEAT-653-system-prompt-preparation-per-op-timeout
+#+LAYER: core
+
+* Initial Message
+
+can you do a memory profiling of the spell app? it's been slow since the latest merge, and always shows the changelog
+
+**Intention & Purpose**
+Replace the all-or-nothing 5-second `Promise.race` over all system prompt preparation operations with per-operation timeouts that allow partial success. When an individual operation (skills, AGENTS.md, context files, or SYSTEM.md) times out, log which one and proceed with whatever results completed in time — never discard good data just because one op is slow.
+
+**Context & Narrative**
+`buildSystemPrompt()` in `packages/coding-agent/src/system-prompt.ts:472-478` wraps all 4 async prep operations in a single `Promise.all`, then races the whole bundle against `Bun.sleep(5000)`. If ANY operation takes >5s total, ALL results are discarded and the user gets "using minimal startup context" — losing AGENTS.md, context files, system prompt customizations, and skills.
+
+On this project (ora/spell monorepo, ~7365 dirs), all 4 ops complete in <100ms in isolation. But under I/O contention during full startup (model discovery, domain loading, session creation running concurrently), the combined ops occasionally exceed 5s. The all-or-nothing approach is unnecessarily fragile.
+
+**Scope**
+- In scope: Replace single `Promise.race(all, 5000)` with per-operation deadlines. Each op gets its own timeout. Results are gathered with `Promise.allSettled`-style aggregation.
+- In scope: When an op times out, log `logger.warn(...)` and emit a user-visible `process.stderr.write(...)` naming the specific operation (e.g., "Skills discovery timed out (5000ms); continuing without skills.").
+- In scope: Ops that complete successfully contribute their results. Ops that timeout return their fallback defaults (empty arrays/empty string/null).
+- Out of scope: Changing the 5000ms timeout value. Optimizing the operations themselves (separate item). Pre-computing/caching results.
+
+**Existing Patterns**
+- Current timeout: `packages/coding-agent/src/system-prompt.ts:472-478` — `Promise.race([prepPromise, Bun.sleep(SYSTEM_PROMPT_PREP_TIMEOUT_MS)])`
+- `SYSTEM_PROMPT_PREP_TIMEOUT_MS = 5000` defined at line 42
+- The `prepPromise` bundles: `resolvePromptInput(custom)`, `resolvePromptInput(append)`, `loadSystemPromptFiles`, `loadProjectContextFiles`, `buildAgentsMdSearch`, `loadSkills`
+- Fallback values when timeout hits: `contextFiles = []`, `agentsMdSearch = { files: [] }`, `skills = []`, `systemPromptCustomization = null`
+
+**Design Decision: Per-op deadline strategy**
+Each individual async op gets its own 5s race. The total wall time can exceed 5s (ops run in parallel), but no single op can block past 5s. This is correct because:
+- A single slow op shouldn't torpedo all prep
+- The user gets AGENTS.md even if skills are slow
+- Each op independently benefits from the timeout guard
+
+Implementation approach:
+```ts
+async function raceWithTimeout<T>(name: string, promise: Promise<T>, fallback: T, timeoutMs: number): Promise<T> {
+  const result = await Promise.race([
+    promise.then(v => ({ ok: true as const, value: v })),
+    Bun.sleep(timeoutMs).then(() => ({ ok: false as const })),
+  ]);
+  if (!result.ok) {
+    logger.warn(`System prompt: ${name} timed out (${timeoutMs}ms); continuing without.`);
+    process.stderr.write(`Warning: ${name} timed out after ${timeoutMs}ms; proceeding without it.
+`);
+    return fallback;
+  }
+  return result.value;
+}
+```
+
+Then replace the single race with:
+```ts
+const [resolvedCustomPrompt, resolvedAppendPrompt] = await Promise.all([
+  resolvePromptInput(customPrompt, "system prompt"),
+  resolvePromptInput(appendSystemPrompt, "append system prompt"),
+]);
+// These are cheap (resolve file paths or return strings) — no timeout needed
+
+const [systemPromptCustomization, contextFiles, agentsMdSearch, skills] = await Promise.all([
+  raceWithTimeout("system prompt files", systemPromptCustomizationPromise, null, timeoutMs),
+  raceWithTimeout("project context files", contextFilesPromise, providedContextFiles ?? [], timeoutMs),
+  raceWithTimeout("AGENTS.md discovery", agentsMdSearchPromise, { scopePath: ".", limit: 200, pattern: "...", files: [] }, timeoutMs),
+  raceWithTimeout("skills discovery", skillsPromise, providedSkills ?? [], timeoutMs),
+]);
+```
+
+**Implementation**
+Single file: `packages/coding-agent/src/system-prompt.ts`
+
+1. Add `raceWithTimeout` helper function near the top of the file (after constants, before `buildSystemPrompt`).
+2. Replace lines ~430-517 (the prep + race block) with per-op races as shown above.
+3. Remove the `prepPromise` wrapping IIFE — inline the individual promises with per-op races.
+4. Update the `prepResult.type` switch to handle per-op results (or remove it — each op already handled individually).
+
+**Edge Cases**
+- `resolvePromptInput` is fast (file read or identity) — no timeout needed. Keep outside the race.
+- `providedContextFiles` / `providedSkills` are already resolved — wrap with `Promise.resolve()` in the promise, the race is a no-op for pre-resolved values.
+- If ALL ops time out: agent still works with minimal context (same as before). But now individual timeout warnings indicate which ops were slow.
+- Backward compatibility: callers that pass `contextFiles` or `skills` directly still work — the race short-circuits on pre-resolved Promises.
+
+**Tests**
+- File: `packages/coding-agent/test/system-prompt-timeout.test.ts`
+- Scenario 1: All ops fast — results flow through normally. Verify get expected blocks.
+- Scenario 2: Skills op slow (mock `loadSkills` with `Bun.sleep(6000)`) — skills empty, other ops provide results. Verify warning emitted.
+- Scenario 3: All ops slow — all fallbacks used, minimal context. Verify multiple warnings.
+- Scenario 4: Mixed — AGENTS.md fast, context files timeout — verify AGENTS.md results preserved.
+
+**Acceptance Criteria**
+1. `bun run check:ts` passes.
+2. Running with `PI_TIMING=1` shows per-op timing breakdown instead of single "system prompt prep" line.
+3. When skills discovery is artificially slowed (mock), the agent starts with AGENTS.md + context files + SYSTEM.md but without skills — no "minimal startup context" warning.
+4. Existing tests for system prompt building still pass.

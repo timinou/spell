@@ -1,0 +1,60 @@
+#+TITLE: Fix settings persistence on exit and system prompt preparation timeout robustness
+#+STATE: DOING
+#+SESSION_ID: 14d2b250d7528657
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T11-23-09-533Z_14d2b250d7528657.jsonl]]
+#+CUSTOM_ID: PLAN-294-fix-settings-persistence-on-exit-and-sys
+
+[[id:BUG-329-settings-changes-using-kdl-persistence-t]]
+[[id:FEAT-653-system-prompt-preparation-per-op-timeout]]
+[[id:FEAT-654-pre-compute-system-prompt-preparation-re]]
+
+* Context
+
+Two related startup issues discovered during memory profiling of Spell v13.12.8:
+
+1. **Changelog always showing**: `settings.set("lastChangelogVersion", VERSION, "user")` queues a 100ms debounced save, but no `Settings.flush()` is called on process exit. The debounce timer races against `process.exit()` and loses. The setting is silently lost — every cold start shows the full changelog again.
+
+2. **System prompt timeout warning**: `buildSystemPrompt()` races ALL 4 prep operations (skills, AGENTS.md, context files, SYSTEM.md) against a single 5s timeout. If any combination exceeds 5s under I/O contention at startup, ALL results are discarded — the agent loses AGENTS.md context, skills, and customizations, and the user sees "using minimal startup context".
+
+On this project (~7365 dirs, 3 AGENTS.md, 10 skills), isolated measurements show all 4 ops complete in <100ms. The timeout only fires under startup I/O contention when model discovery, domain loading, and session creation compete for the event loop. The fix: per-op resilience (never discard good data) + pre-compute immutable results during session creation (no time pressure).
+
+* Verification
+
+1. `bun run check:ts` passes after all changes.
+2. Set a user-tier setting → exit normally → verify it appears in `~/.spell/spell.kdl` → restart → changelog NOT shown.
+3. Kill the process with SIGINT after a user-tier set → verify the same.
+4. `PI_TIMING=1 spell` shows per-op timing breakdown for system prompt prep.
+5. Artificially slow skills discovery (mock with `Bun.sleep(6000)`) → agent starts with AGENTS.md + context files + SYSTEM.md but without skills. Warning names "skills discovery".
+6. Tool change during session → system prompt rebuild completes in <10ms (cached prep results).
+7. `NULL_PROMPT=true` → no prep computation, no timeout.
+
+* Execution Manifest
+
+** Wave 1: Foundation (can parallel)
+
+[[id:BUG-329-settings-changes-using-kdl-persistence-t]]
+- File: `packages/coding-agent/src/config/settings.ts`
+- Register `postmortem` flush callback in `Settings.init()`
+- No dependencies
+
+[[id:FEAT-653-system-prompt-preparation-per-op-timeout]]
+- File: `packages/coding-agent/src/system-prompt.ts`
+- Replace single `Promise.race(all, 5000)` with per-op races
+- Add `raceWithTimeout` helper
+- Per-op named warnings on timeout
+- No dependencies
+
+** Wave 2: Optimization (depends on Wave 1)
+
+[[id:FEAT-654-pre-compute-system-prompt-preparation-re]]
+- Depends on: FEAT-653 (uses `raceWithTimeout` and partial-resilience pattern)
+- Files: `packages/coding-agent/src/sdk.ts`, `packages/coding-agent/src/system-prompt.ts`
+- Pre-compute AGENTS.md and SYSTEM.md in `createAgentSession`
+- Pass cached results to `rebuildSystemPrompt` / `buildSystemPromptInternal`
+- Add optional `agentsMdSearch` and `systemPromptCustomization` params to `BuildSystemPromptOptions`
+
+** File-level DAG
+
+BUG-329-settings-changes-using-kdl-persistence-t
+FEAT-653-system-prompt-preparation-per-op-timeout
+FEAT-654-pre-compute-system-prompt-preparation-re → FEAT-653-system-prompt-preparation-per-op-timeout
