@@ -723,10 +723,6 @@ export class ModelRegistry {
 			this.authStorage.removeRuntimeApiKey(provider);
 		}
 		this.#proxyProviders = proxyProviders;
-		// Inject proxy marker at runtime override priority (tier 1) so it wins over env vars
-		for (const provider of this.#proxyProviders) {
-			this.authStorage.setRuntimeApiKey(provider, "sk-ant-oat");
-		}
 
 		this.#addImplicitDiscoverableProviders(configuredProviders);
 		const builtInModels = this.#loadBuiltInModels(overrides, modelOverrides);
@@ -907,11 +903,12 @@ export class ModelRegistry {
 			}
 
 			// Always store API key for fallback resolver
-			if (providerConfig.apiKey) {
+			// Only store API key for fallback if not a proxy (proxy uses env vars)
+			if (providerConfig.apiKey && providerConfig.proxy !== true) {
 				this.#customProviderApiKeys.set(providerName, providerConfig.apiKey);
 			}
 
-			// Proxy providers get a runtime override so the OAuth marker wins over env vars
+			// Proxy providers skip runtime key override — let env API key flow through
 			if (providerConfig.proxy === true) {
 				proxyProviders.add(providerName);
 			}
