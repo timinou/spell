@@ -3,6 +3,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { executeCodePath } from "@oh-my-pi/pi-natives";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
+import manageDescription from "../prompts/tools/manage.md" with { type: "text" };
 import { renderCodeCell } from "../tui";
 import { formatCodePathResult } from "./codepath-result";
 import type { ManageParams } from "./codepath-types";
@@ -17,8 +18,7 @@ type ManageToolResultDetails = DetailsWithMeta & {
 export class ManageTool implements AgentTool<typeof manageSchema> {
 	readonly name = "manage";
 	readonly label = "Manage";
-	readonly description =
-		"Management commands for code buffers and workspace state: save, undo, redo, diff, buffers, languages, index, watcherStatus, lockStatus, status, context.";
+	readonly description = manageDescription;
 	readonly parameters = manageSchema;
 	readonly lenientArgValidation = true;
 

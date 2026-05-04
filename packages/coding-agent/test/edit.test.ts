@@ -41,7 +41,7 @@ describe("CodepathEditTool", () => {
 			await fs.rm(tmpDir, { recursive: true });
 		} catch {}
 		try {
-			(spyOn(nativesModule, "executeCodePath") as any).mockRestore?.();
+			(spyOn(nativesModule, "executeCodeBuffer") as any).mockRestore?.();
 		} catch {}
 	});
 
@@ -87,10 +87,11 @@ describe("CodepathEditTool", () => {
 		expect(content).toBe("alpha\nbeta");
 	});
 
-	it("dispatches structural rename to executeCodePath", async () => {
-		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-			{ nodes: [], diagnostics: [], done: true } as any,
-		]);
+	it("dispatches structural rename to executeCodeBuffer", async () => {
+		const spy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: { editCount: 1 } as any,
+			error: false,
+		});
 		const tool = new CodepathEditTool(createSession());
 		await tool.execute("t", {
 			operations: [
@@ -103,10 +104,27 @@ describe("CodepathEditTool", () => {
 		expect(spy).toHaveBeenCalledWith(
 			expect.objectContaining({
 				command: "edit",
-				target: path.join(tmpDir, "src/example.ts::oldName"),
-				actions: [{ kind: "rename", content: "newName" }],
+				root: tmpDir,
+				operations: [
+					expect.objectContaining({
+						targetId: path.join(tmpDir, "src/example.ts::oldName"),
+						actions: [expect.objectContaining({ kind: "rename", content: "newName" })],
+					}),
+				],
 			}),
 		);
+	});
+
+	it("surfaces structural edit errors from executeCodeBuffer", async () => {
+		spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: { code: "TARGET_NOT_FOUND", message: "oldName not found" } as any,
+			error: true,
+		});
+		const tool = new CodepathEditTool(createSession());
+		const result = await tool.execute("t", {
+			operations: [{ target: "src/example.ts::oldName", action: { kind: "rename", content: "newName" } }],
+		});
+		expect(getText(result)).toContain("oldName not found");
 	});
 
 	it("applies patch unified-diff", async () => {
@@ -167,9 +185,10 @@ describe("CodepathEditTool", () => {
 	});
 
 	it("passes occurrence first to structural action", async () => {
-		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-			{ nodes: [], diagnostics: [], done: true } as any,
-		]);
+		const spy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: { editCount: 1 } as any,
+			error: false,
+		});
 		const tool = new CodepathEditTool(createSession());
 		await tool.execute("t", {
 			operations: [
@@ -180,13 +199,14 @@ describe("CodepathEditTool", () => {
 			],
 		});
 		const call = spy.mock.calls[0]?.[0] as any;
-		expect(call.actions[0].occurrence).toBe("first");
+		expect(call.operations[0].actions[0].occurrence).toBe("first");
 	});
 
 	it("passes occurrence last to structural action", async () => {
-		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-			{ nodes: [], diagnostics: [], done: true } as any,
-		]);
+		const spy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: { editCount: 1 } as any,
+			error: false,
+		});
 		const tool = new CodepathEditTool(createSession());
 		await tool.execute("t", {
 			operations: [
@@ -197,13 +217,14 @@ describe("CodepathEditTool", () => {
 			],
 		});
 		const call = spy.mock.calls[0]?.[0] as any;
-		expect(call.actions[0].occurrence).toBe("last");
+		expect(call.operations[0].actions[0].occurrence).toBe("last");
 	});
 
 	it("passes occurrence all to structural action", async () => {
-		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-			{ nodes: [], diagnostics: [], done: true } as any,
-		]);
+		const spy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: { editCount: 1 } as any,
+			error: false,
+		});
 		const tool = new CodepathEditTool(createSession());
 		await tool.execute("t", {
 			operations: [
@@ -214,13 +235,14 @@ describe("CodepathEditTool", () => {
 			],
 		});
 		const call = spy.mock.calls[0]?.[0] as any;
-		expect(call.actions[0].occurrence).toBe("all");
+		expect(call.operations[0].actions[0].occurrence).toBe("all");
 	});
 
 	it("passes occurrence N to structural action", async () => {
-		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-			{ nodes: [], diagnostics: [], done: true } as any,
-		]);
+		const spy = spyOn(nativesModule, "executeCodeBuffer").mockReturnValue({
+			output: { editCount: 1 } as any,
+			error: false,
+		});
 		const tool = new CodepathEditTool(createSession());
 		await tool.execute("t", {
 			operations: [
@@ -231,7 +253,7 @@ describe("CodepathEditTool", () => {
 			],
 		});
 		const call = spy.mock.calls[0]?.[0] as any;
-		expect(call.actions[0].occurrence).toBe(3);
+		expect(call.operations[0].actions[0].occurrence).toBe(3);
 	});
 
 	it("returns stale anchor diagnostic for mismatched hash", async () => {

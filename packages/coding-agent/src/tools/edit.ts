@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
-import { executeCodePath } from "@oh-my-pi/pi-natives";
+import { executeCodeBuffer } from "@oh-my-pi/pi-natives";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import type { FileSystem, PatchInput } from "../patch";
@@ -18,6 +18,7 @@ import {
 	stripBom,
 } from "../patch";
 import { generateDiffString } from "../patch/diff";
+import editDescription from "../prompts/tools/edit.md" with { type: "text" };
 import { enforcePathWrite } from "../sandbox";
 import { renderCodeCell } from "../tui";
 import type { ToolSession } from ".";
@@ -137,8 +138,7 @@ class SimpleFileSystem implements FileSystem {
 export class CodepathEditTool implements AgentTool<typeof editSchema> {
 	readonly name = "edit";
 	readonly label = "Edit";
-	readonly description =
-		"Perform structural code edits, LINE#ID-based text edits, or apply unified diffs. Supports 18+ action kinds with occurrence selectors and idempotent semantics.";
+	readonly description = editDescription;
 	readonly parameters = editSchema;
 	readonly lenientArgValidation = true;
 	readonly concurrency = "exclusive";
@@ -197,16 +197,41 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 	async #executeStructural(
 		targetPath: string,
 		action: CodePathAction,
-		signal?: AbortSignal,
+		_signal?: AbortSignal,
 	): Promise<AgentToolResult> {
-		const chunks = await executeCodePath({
+		// Delegate structural ops to the managed-buffer edit transaction in pi-natives.
+		// `executeCodePath` is query-only and silently ignores `actions`, so it cannot
+		// be used here. The targetId convention (`<file>::Symbol.member`) matches the
+		// CodeOperation contract verbatim.
+		const sessionId = this.session.getSessionId?.() ?? undefined;
+		const result = executeCodeBuffer({
 			command: "edit",
-			target: targetPath,
-			actions: [normalizeStructuralAction(action)],
-			abortSignal: signal,
+			root: this.session.cwd,
+			sessionId,
+			operations: [
+				{
+					targetId: targetPath,
+					actions: [normalizeStructuralAction(action) as never],
+				},
+			],
 		});
-		const result = formatCodePathResult(chunks, { format: "node-list" });
-		return toolResult<EditToolResultDetails>({ target: targetPath, action: action.kind }).text(result.text).done();
+		if (result.error) {
+			const err = (result.output ?? {}) as { code?: string; message?: string };
+			return toolResult<EditToolResultDetails>({
+				target: targetPath,
+				action: action.kind,
+				error: err.code ?? "edit_failed",
+			})
+				.text(err.message ?? `Edit failed for ${targetPath}`)
+				.done();
+		}
+		const out = (result.output ?? {}) as { diff?: string; editCount?: number; created?: boolean };
+		const summary = out.diff?.length
+			? out.diff
+			: out.created
+				? `Created ${targetPath}`
+				: `Updated ${targetPath} (${out.editCount ?? 1} edit(s))`;
+		return toolResult<EditToolResultDetails>({ target: targetPath, action: action.kind }).text(summary).done();
 	}
 
 	async #executeLineId(
@@ -223,7 +248,9 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 				const content = action.kind === "prepend" ? lines : lines;
 				await fs.mkdir(nodePath.dirname(targetPath), { recursive: true });
 				await fs.writeFile(targetPath, content, "utf-8");
-				return toolResult<EditToolResultDetails>({ target: targetPath, op: "create" }).text(`Created ${targetPath}`).done();
+				return toolResult<EditToolResultDetails>({ target: targetPath, op: "create" })
+					.text(`Created ${targetPath}`)
+					.done();
 			}
 			throw new Error(`File not found: ${targetPath}`);
 		}
@@ -307,7 +334,9 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 			text += `\n\nWarnings:\n${result.warnings.join("\n")}`;
 		}
 
-		return toolResult<EditToolResultDetails>({ target: targetPath, op: "update", diff: change.newContent }).text(text).done();
+		return toolResult<EditToolResultDetails>({ target: targetPath, op: "update", diff: change.newContent })
+			.text(text)
+			.done();
 	}
 
 	renderResult(result: AgentToolResult, options: RenderResultOptions, theme: unknown): Component {
