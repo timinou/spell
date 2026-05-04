@@ -24,7 +24,12 @@ pub struct NodeRef {
 	#[serde(default)]
 	pub diagnostics: Vec<Diagnostic>,
 }
-
+impl NodeRef {
+	/// Return a canonical (locator, range) key for deduplication.
+	pub fn canonical_locator(&self) -> (&str, std::ops::Range<usize>) {
+		(&self.locator, self.range.clone())
+	}
+}
 // ── Content ──────────────────────────────────────────────────────
 
 /// Content payload — what lives at a node.

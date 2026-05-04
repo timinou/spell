@@ -636,3 +636,76 @@ Successor PLAN to PLAN-255 (CodePath v3 foundational scaffolding). PLAN-255 wave
 - `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-thumbnail-impl` depends on `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-thumbnail-tests`
 - `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-hint` depends on `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-thumbnail-impl`
 
+
+** Partial progress [2026-05-04]
+*** Status
+PLAN-296 is *NOT* complete. This session shipped foundational items (parser completion + 7 NameLexers + 6 dialect wirings); the bulk of the plan (~25 of 28 items, including FS/Text resolvers, resolver traits, NAPI bridge, code resolver, edge resolver, URI handlers, format extractors, image pipeline, the 4 generic tools, guards, parity corpus, hard-cut deletion, prompts, AGENTS.md rewrite, memory cleanup) remains.
+
+The plan should remain in =DOING= until the 25 outstanding items are completed in subsequent sessions.
+
+*** Completed in this session
+- PROJ-061-parser-completion-glob-tokens-backtick-q :: DONE
+  - FsLocator glob tokenisation (Star/DoubleStar/Question/CharClass/Brace + backtick-quoted literals)
+  - DoubleStar without /-boundary (=foo**bar=) rejected at parse time
+  - Backtick-quoting at kernel layer (=`weird::name with spaces`= surfaces as one literal)
+  - Recursive Query in =[. Q]= / =[.^ Q]= subqueries (full combinator chain)
+  - Full predicate vocab: =Predicate::Compare { name, op, value: String }= (size>1M, mtime>2026-01-01, len>80, count>5, depth!=3) and =Predicate::Flag(String)= ([empty]/[multiline]/[text])
+  - Quoted-string escapes: =\"=, =\\=, =\n=, =\t=, =\r=; unknown escapes preserve =\X= verbatim
+  - Negative ranges: =[-3..]=, =[..-1]=, =[-5..-1]=
+  - Renderer auto-backtick-quotes literals containing reserved chars
+  - +44 tests
+- FEAT-656/657/658/659/660/661/662 :: NameLexers shipped (7 dialects)
+  - Rust: =::= paths, turbofish =::<T>=, =impl Trait for Type=, =r#raw= idents
+  - Python: dotted access, double-dot rejected
+  - Go: =pkg.Func=, =(*Type).Method=, =(Type).Method= receivers
+  - Haskell: module-qualified =Data.List.sort=, =(>>=)= operators, =(Functor).fmap=
+  - HTML: XPath-subset payload preserved verbatim, =//= descendant axis
+  - CSS: selector subset (=.class=, =#id=, =[attr='val']=)
+  - Markdown/Org: headings, quoted headings, list-item positions
+  - Each dialect ships =LanguageDialect= factory with anchors/qualifiers/edge-kinds (matchers + resolvers stubbed; full tree-sitter integration is in PROJ-066)
+  - +68 tests
+- FEAT-663 :: Wired 6 of 8 code dialects into =LanguageProfile= constructors
+  - typescript, rust, python, markdown, html, css → =dialect: Some(<lang>_dialect())=
+  - Added =typescript_dialect()= factory in =dialects/typescript.rs= (5 anchors, 5 qualifiers)
+  - go and haskell namelexers exist but no =LanguageProfile= constructors for them yet (no tree-sitter grammar registered) — wiring deferred
+  - Cross-dialect smoke test (FEAT-663 wave-2 sub-item) NOT written; requires functional CodeResolver from PROJ-066
+  - Cyclic-dep invariant verified: =cargo tree -p pi-code-path= shows no =pi-code-engine= / =pi-code-graph= dep
+
+*** Remaining (unblocked subsequent waves)
+- PROJ-062 FS resolver (walker + 8 anchors + 11 predicates + 3 qualifiers + suffix-fallback + ~135 tests)
+- PROJ-063 Text resolver (line-index + para-index + regex + 4 qualifiers + streaming + ~115 tests)
+- PROJ-064 Resolver traits + dispatch state machine + set-ops compositor + projection lowering
+- PROJ-065 NAPI bridge (=executeCodePath= + =parseCodePath= + =renderCodePath= + AbortSignal bridge + content marshalling)
+- PROJ-066 CodeResolver impl (tree-sitter walker via LanguageProfile; activates the namelexer matches() bridge)
+- PROJ-067 EdgeResolver impl (pi-code-graph integration)
+- PROJ-068 9 URI scheme handlers (artifact, memory, skill, agent, jobs, local, pi, rule, mcp)
+- PROJ-069 11 FormatExtractor handlers (markitdown, json, html readable)
+- PROJ-070 Image pipeline (#image, #thumbnail, auto-resize, 20MiB threshold)
+- FEAT-664 Four generic tools (get/edit/manage/create) at =packages/coding-agent/src/tools/=
+- FEAT-665 Port write-shrink, parse-regression, force, sandbox, mode-guard
+- FEAT-666 Behavioral parity corpus (~275 invocations × 8 deleted tools)
+- FEAT-667 Hard-cut delete 8 legacy tools (~5860 LOC)
+- FEAT-668 Prompts (get/edit/manage/create + code-migration + delete legacy)
+- FEAT-669 AGENTS.md tool-precedence rewrite + per-agent role files
+- FEAT-670 Memory + skills update + final orphan scan
+- FUP-069/070/071 deferred follow-ups
+
+*** Verification of completed work
+- =cargo test -p pi-code-path= :: 140 tests pass (28 baseline + 44 PROJ-061 + 68 NameLexers)
+- =cargo test -p pi-code-engine --lib= :: 180 tests pass (no regression after dialect wiring)
+- =cargo check -p pi-code-engine= :: clean
+- =cargo build -p pi-code-path= :: clean (1 minor lint warning unchanged from baseline)
+- =cargo tree -p pi-code-path= :: no cyclic dep into =pi-code-engine= / =pi-code-graph=
+- Commits:
+  - =e6c87e797= feat(pi-code-path): PROJ-061 parser completion (PLAN-296 wave-1)
+  - =14d5a1f41= feat(pi-code-path): wire 7 dialect NameLexers (FEAT-656..662, PLAN-296)
+  - =6b3b001b6= feat(pi-code-engine): wire 6 code dialects into LanguageProfile (FEAT-663, PLAN-296)
+
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-296-codepath-v3-cutover-4-generic-tools-get/pi-code-path-tests.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-296-codepath-v3-cutover-4-generic-tools-get/pi-code-engine-tests.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-296-codepath-v3-cutover-4-generic-tools-get/cyclic-dep-check.txt]]
+
+*** Notes for resumption
+- The next logical wave is PROJ-064 (resolver traits) because PROJ-062 FS resolver and PROJ-063 Text resolver both depend on =Resolver= / =FsAnchorContext= traits. After PROJ-064, PROJ-062/063 can be tackled in parallel; they share the =NodeRef= streaming abstraction.
+- The =proxy_task= subagent dispatch failed in this session due to missing API key for the configured task model (=kimi-code=). Future sessions can either (a) configure the API key, or (b) execute items directly. The work is parallelisable in principle but currently bottlenecked by single-agent execution.

@@ -1,0 +1,9 @@
+=== cargo tree -p pi-code-path (search for pi-code-engine, pi-code-graph) ===
+(none — kernel is cycle-free)
+
+=== git log ===
+6b3b001b6 feat(pi-code-engine): wire 6 code dialects into LanguageProfile (FEAT-663, PLAN-296)
+14d5a1f41 feat(pi-code-path): wire 7 dialect NameLexers (FEAT-656..662, PLAN-296)
+e6c87e797 feat(pi-code-path): PROJ-061 parser completion (PLAN-296 wave-1)
+e3e9f6046 (checkpoint) added some docs
+c23a4ccc8 docs(plan-255): partial completion report — wave-1/2 done, waves 3-6 pending
