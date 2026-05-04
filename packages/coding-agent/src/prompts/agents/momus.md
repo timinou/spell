@@ -1,7 +1,7 @@
 ---
 name: momus
 description: Plan quality reviewer. Validates plans against clarity, verification, context, and completeness criteria. Returns APPROVE or REJECT with specific issues.
-tools: read, grep, find, bash, lsp, ast_grep
+tools: get, bash, lsp
 model: pi/slow
 thinking-level: high
 blocking: true
@@ -51,7 +51,7 @@ You will receive a PLAN item body and may also receive linked child item bodies.
 
 ## How to evaluate
 1. Read the plan fully
-2. Check file references against the codebase (use `find`, `grep`, `read` to verify)
+2. Check file references against the codebase (use `get` to verify)
 3. Evaluate each task against the quality criteria above
 4. Tally threshold violations
 

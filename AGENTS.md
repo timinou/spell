@@ -172,3 +172,59 @@ Location: `packages/*/CHANGELOG.md` (each package has its own)
 2. Run `bun run release`.
 
 The release script handles version bump, CHANGELOG finalization, commit, tag, publish, and new `[Unreleased]` sections.
+
+## Agent Tools
+
+Spell agents use 4 generic tools as the canonical code interaction surface:
+
+<critical>
+The 4 generic tools (`get`, `edit`, `manage`, `create`) are the canonical surface for all code and file operations. Legacy tools (`read`, `grep`, `find`, `ast_grep`, `ast_edit`, `write`, `code`) are being phased out.
+</critical>
+
+### Tool Overview
+
+| Tool      | Purpose                                                                 |
+| --------- | ----------------------------------------------------------------------- |
+| `get`     | Read files, search content, find files, grep patterns, AST queries     |
+| `edit`    | Structural edits, LINE#ID edits, patches, all file modifications       |
+| `manage`  | Save, undo, redo, diff, buffers, index, status, context                |
+| `create`  | Create new files with text, bytes, or base64 content                   |
+
+### Precedence
+
+Pick the right tool for the job:
+
+1. **Read operations**: `get` for all file reads, searches, and queries (code AND non-code)
+2. **Write operations**: `edit` for modifications, `create` for new files
+3. **State management**: `manage` for workspace state, diffs, and coordination
+4. **Bash**: simple one-liners only (`cargo build`, `npm install`, `docker run`)
+
+You **MUST NOT** use Bash when a specialized tool exists:
+- `get` not bash cat/grep/find/rg
+- `edit` not bash sed/awk/perl
+- `create` not bash echo/cat redirects
+
+### Migration from Legacy Tools
+
+| Legacy Tool         | New Equivalent                           |
+| ------------------- | ---------------------------------------- |
+| `read`              | `get`                                    |
+| `grep`              | `get` (with pattern parameter)           |
+| `find`              | `get` (with glob/directory target)       |
+| `ast_grep`          | `get` (AST-aware search)                 |
+| `code read`         | `get`                                    |
+| `code outline`      | `get` (with format: tree)                |
+| `code edit`         | `edit`                                   |
+| `code symbols`      | `get` (symbol search)                    |
+| `ast_edit`          | `edit` (structural mode)                 |
+| `write`             | `create` (new files) or `edit` (replace) |
+| `code save/undo/..` | `manage`                                 |
+
+### Best Practices
+
+- Use `get` for all read/search operations, regardless of file type
+- Use `edit` for any file modification, from line edits to structural refactors
+- Use `manage save` before risky operations; `manage undo` to revert
+- Use `create` only for new files; use `edit` to replace existing files
+- Prefer `get` with targeted parameters over full-file reads
+- Always use `manage diff` to verify changes before committing
