@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as nodePath from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createTools, GetTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import * as nativesModule from "@oh-my-pi/pi-natives";
@@ -18,9 +20,7 @@ function getText(result: Awaited<ReturnType<GetTool["execute"]>>): string {
 	return result.content.find(c => c.type === "text")?.text ?? "";
 }
 
-function makeChunk(
-	nodes: Array<{ locator: string; kind: string; content?: { text?: string } }>,
-): any {
+function makeChunk(nodes: Array<{ locator: string; kind: string; content?: { text?: string } }>): any {
 	return {
 		nodes: nodes.map(n => ({
 			locator: n.locator,
@@ -43,7 +43,7 @@ describe("GetTool", () => {
 		} catch {}
 	});
 
-	it("dispatches bare path target to executeCodePath", async () => {
+	it("dispatches bare path target (non-existent file passes through unchanged)", async () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			makeChunk([{ locator: "src/main.ts", kind: "file", content: { text: "export const x = 1;" } }]),
 		]);
@@ -51,6 +51,40 @@ describe("GetTool", () => {
 		const result = await tool.execute("t", { target: "src/main.ts" });
 		expect(getText(result)).toContain("src/main.ts");
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ command: "get", target: "src/main.ts" }));
+	});
+
+	it("auto-attaches #raw when target is a bare path to an existing file", async () => {
+		const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-raw");
+		await fs.mkdir(tmp, { recursive: true });
+		const real = nodePath.join(tmp, "hello.txt");
+		await fs.writeFile(real, "hi", "utf-8");
+		try {
+			const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+				makeChunk([{ locator: real, kind: "file", content: { text: "hi" } }]),
+			]);
+			const tool = new GetTool();
+			await tool.execute("t", { target: real });
+			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${real}#raw` }));
+		} finally {
+			await fs.rm(tmp, { recursive: true });
+		}
+	});
+
+	it("does not auto-attach #raw when content=false is set explicitly", async () => {
+		const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-noraw");
+		await fs.mkdir(tmp, { recursive: true });
+		const real = nodePath.join(tmp, "hello.txt");
+		await fs.writeFile(real, "hi", "utf-8");
+		try {
+			const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+				makeChunk([{ locator: real, kind: "file" }]),
+			]);
+			const tool = new GetTool();
+			await tool.execute("t", { target: real, content: false });
+			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: real }));
+		} finally {
+			await fs.rm(tmp, { recursive: true });
+		}
 	});
 
 	it("dispatches glob target to executeCodePath", async () => {

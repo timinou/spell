@@ -2,7 +2,10 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { Component } from "@oh-my-pi/pi-tui";
 import { executeCodePath } from "@oh-my-pi/pi-natives";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { Theme } from "../modes/theme/theme";
+import getDescription from "../prompts/tools/get.md" with { type: "text" };
 import { renderCodeCell } from "../tui";
 import { type CodePathFormatMode, formatCodePathResult } from "./codepath-result";
 import type { GetParams } from "./codepath-types";
@@ -14,11 +17,25 @@ type GetToolResultDetails = DetailsWithMeta & {
 	format?: string;
 };
 
+/**
+ * A target qualifies for auto `#raw` attachment when it is a plain filesystem
+ * path: no scheme (`foo://`), no axis separator (`::`), no qualifier (`#`), no
+ * payload terminator (`;`), and no glob magic (`*`, `?`, `[`). Caller still
+ * `fs.stat`s the resolved path before mutating the target so directories and
+ * non-existent paths fall through to the kernel unchanged.
+ */
+function shouldAutoAttachRaw(target: string): boolean {
+	if (target.includes("://")) return false;
+	if (target.includes("::")) return false;
+	if (target.includes("#")) return false;
+	if (target.includes(";")) return false;
+	return !/[*?\[]/.test(target);
+}
+
 export class GetTool implements AgentTool<typeof getSchema> {
 	readonly name = "get";
 	readonly label = "Get";
-	readonly description =
-		"Retrieve code, files, symbols, or matches using a CodePath target. Supports paths, globs, symbols, regex, and URI schemes.";
+	readonly description = getDescription;
 	readonly parameters = getSchema;
 	readonly lenientArgValidation = true;
 
@@ -29,9 +46,24 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		_onUpdate?: AgentToolUpdateCallback,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult> {
+		// UX: bare file paths returning kernel metadata (no content) trips models
+		// migrating from the legacy `read` tool. Auto-attach `#raw` when the target
+		// is a plain path pointing at an existing file. Explicit `content:false`
+		// opts out for callers that just want the file node.
+		let target = params.target;
+		if (params.content !== false && shouldAutoAttachRaw(target)) {
+			const absCandidate = path.isAbsolute(target) ? target : path.resolve(params.root ?? process.cwd(), target);
+			try {
+				const stat = await fs.stat(absCandidate);
+				if (stat.isFile()) target = `${target}#raw`;
+			} catch {
+				// Path does not exist; let the kernel surface its native diagnostics.
+			}
+		}
+
 		const chunks = await executeCodePath({
 			command: "get",
-			target: params.target,
+			target,
 			limit: params.limit,
 			head: params.head,
 			tail: params.tail,
