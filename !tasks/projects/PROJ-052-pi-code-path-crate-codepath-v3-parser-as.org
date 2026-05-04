@@ -114,7 +114,7 @@ New Rust crate =crates/pi-code-path= implementing the CodePath v3 shared query a
 
 ** Define CodePath AST types
 :PROPERTIES:
-:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-ast-types
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-ast-types
 :END:
 - File: =crates/pi-code-path/src/ast.rs=
 - Types: =CodePath=, =Locator=, =Query=, =Step=, =Combinator=, =Axis=, =Head=, =Predicate=, =Qualifier=, =EdgeKind=, =NamePayload=, =NodeSet=
@@ -129,8 +129,8 @@ New Rust crate =crates/pi-code-path= implementing the CodePath v3 shared query a
 
 ** Define NameLexer trait and LanguageDialect struct
 :PROPERTIES:
-:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-name-lexer-trait
-:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-ast-types
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-name-lexer-trait
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-ast-types
 :END:
 - File: =crates/pi-code-path/src/dialect.rs=
 - =NameLexer= trait: =parse=, =render=, =matches= methods
@@ -145,8 +145,8 @@ New Rust crate =crates/pi-code-path= implementing the CodePath v3 shared query a
 
 ** Implement winnow parser for kernel grammar
 :PROPERTIES:
-:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-winnow-parser
-:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-ast-types PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-name-lexer-trait
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-winnow-parser
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-ast-types PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-name-lexer-trait
 :END:
 - File: =crates/pi-code-path/src/parser.rs=
 - Add =winnow= dependency to =Cargo.toml=
@@ -163,8 +163,8 @@ New Rust crate =crates/pi-code-path= implementing the CodePath v3 shared query a
 
 ** Implement renderer (AST -> canonical text)
 :PROPERTIES:
-:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-renderer
-:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-ast-types PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-name-lexer-trait
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-renderer
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-ast-types PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-name-lexer-trait
 :END:
 - File: =crates/pi-code-path/src/render.rs=
 - =fn render(path: &CodePath, dialect: &LanguageDialect) -> String=
@@ -174,8 +174,8 @@ New Rust crate =crates/pi-code-path= implementing the CodePath v3 shared query a
 
 ** Implement tree-sitter resolver
 :PROPERTIES:
-:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-resolver
-:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-winnow-parser PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-name-lexer-trait
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-resolver
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-winnow-parser PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-name-lexer-trait
 :END:
 - File: =crates/pi-code-path/src/resolve.rs=
 - =fn resolve(path: &CodePath, ctx: &ResolveContext) -> Result<NodeSet, ResolveError>=
@@ -198,8 +198,8 @@ New Rust crate =crates/pi-code-path= implementing the CodePath v3 shared query a
 
 ** Implement edge axis resolver
 :PROPERTIES:
-:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-edge-resolver
-:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-resolver
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-edge-resolver
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-resolver
 :END:
 - File: =crates/pi-code-path/src/edge.rs=
 - When resolver encounters =Edge(kind)= combinator:
@@ -215,8 +215,8 @@ New Rust crate =crates/pi-code-path= implementing the CodePath v3 shared query a
 
 ** Implement set operations on NodeSet
 :PROPERTIES:
-:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-set-ops
-:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-resolver
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-set-ops
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-resolver
 :END:
 - File: =crates/pi-code-path/src/node_set.rs=
 - =NodeSet= wraps =Vec<ResolvedNode>=, sorted by (file, start_byte)
@@ -228,7 +228,7 @@ New Rust crate =crates/pi-code-path= implementing the CodePath v3 shared query a
 
 ** Crate setup and Cargo.toml
 :PROPERTIES:
-:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::PROJ-crate-setup
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-crate-setup
 :END:
 - Create =crates/pi-code-path/Cargo.toml= with dependencies:
   - =winnow= (parser)
@@ -261,3 +261,89 @@ New Rust crate =crates/pi-code-path= implementing the CodePath v3 shared query a
 - [ ] Set operations produce correct cardinality
 - [ ] =cargo check -p pi-code-path= clean (no warnings)
 - [ ] =cargo clippy -p pi-code-path= clean
+
+** ITEM Define NodeRef and Content types (v3 extension)
+:PROPERTIES:
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-noderef-content-types
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-ast-types
+:END:
+- File: =crates/pi-code-path/src/noderef.rs=
+- Per spec =specs/code-graph/code-path-extensions.md= §4
+- =NodeRef= struct: =locator=, =range=, =kind=, =content=, =metadata=, =diagnostics=
+- =Content= enum: =Text(String) | Bytes(ArtifactHandle) | Image(ImageHandle) | ExtractedText { source_kind: ExtractKind, text: String }=
+- =NodeRange= struct: =byte_start: u32=, =byte_end: u32=, =line_start: Option<u32>=, =line_end: Option<u32>=
+- =NodeKindLabel= dialect-tagged: =Code(LangId, &'static str) | Text(TextKind) | Fs(FsKind) | Uri(SchemeId, &'static str)=
+- =ArtifactHandle= and =ImageHandle= as newtype wrappers around URI strings
+- =Diagnostic= variants: =Inaccessible=, =EncodingFallback=, =BinaryFile=, =MatchWindowTruncated=, =SuffixSuggestion=, =ArtifactNotFound=, =UnknownLocatorScheme=, =JsonPathError=, …
+- Content is populated only when path includes a content-class qualifier; otherwise =None=
+
+** ITEM Implement dialect-switch resolver state machine
+:PROPERTIES:
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-dialect-switch-resolver
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-resolver PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-noderef-content-types
+:END:
+- File: =crates/pi-code-path/src/resolve/dispatch.rs=
+- Per spec =specs/code-graph/code-path-extensions.md= §3
+- =ResolveScope= tracks current-dialect across step boundaries
+- Initial scope = =FsDialect= rooted at cwd or =root= projection option
+- After =§file= match → switch to file's code dialect (or stay FS if next axis is FS-class)
+- First =§line=/=§chunk=/=§para=/=§span= axis → switch to text dialect for that file
+- Text → code transition mid-file is rejected with =Diagnostic::TextToCodeMidFile=; must =^= to file root and re-enter via code axis
+- =→= edge axis: cross-file; new file's dialect takes over
+- URI Locator: scheme dialect first; then delegate per scheme table (PROJ-060)
+- Cost discipline enforced: each step picks cheapest interpreter for its dialect
+
+** ITEM Implement streaming resolver
+:PROPERTIES:
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-streaming-resolver
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-resolver PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-noderef-content-types
+:END:
+- File: =crates/pi-code-path/src/resolve/stream.rs=
+- =fn resolve_stream(path: &CodePath, ctx: &ResolveContext, cancel: CancellationToken) -> impl Stream<Item = NodeRef>=
+- Existing =resolve()= becomes a thin wrapper that collects the stream into a =NodeSet=
+- Cancellation token checked at every step boundary
+- Backpressure-friendly: yields incrementally for NAPI bridge consumption (PROJ-054 streaming chunks)
+- Memory bound: never holds more than one file's worth of NodeRefs in flight
+- Tests: 1 GiB fixture file with =§line[text~="rare"]= peaks under 100 MiB RSS; cancellation aborts within 100 ms
+
+** ITEM Wire FS, Text, URI dialects as kernel baselines
+:PROPERTIES:
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-non-code-dialect-baselines
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-ast-types PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-name-lexer-trait
+:END:
+- File: =crates/pi-code-path/src/dialects/mod.rs=
+- Declare =BaselineDialects= registry that unconditionally registers FS, Text, and URI scheme dispatcher (not opt-in profile registrations)
+- This sub-outline owns only the trait surfaces, registration points, and stub dialect structs
+- Concrete FS impl ships in PROJ-059 (=PROJ-059-fs-dialect-filesystem-tree-locator-queri=)
+- Concrete Text impl ships in PROJ-058 (=PROJ-058-text-dialect-line-chunk-para-axes-replac=)
+- Concrete URI scheme dispatcher ships in PROJ-060 (=PROJ-060-uri-scheme-locator-dialects-artifact-mem=)
+- Locator parser extension =Locator := UriLocator | FsLocator= lives here
+
+** ITEM Implement projection-option lowering
+:PROPERTIES:
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-projection-lowering
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-renderer
+:END:
+- File: =crates/pi-code-path/src/projection.rs=
+- Per spec =specs/code-graph/code-path-extensions.md= §5
+- =fn lower_projection(path: CodePath, opts: ProjectionOpts) -> CodePath=
+- =limit=N=/=head=N= → append =[0..N]= to outer query
+- =tail=N= → append =[-N..]=
+- =context.pre=N= → set-union with =<<[0..N]= over =§line= node sets
+- =context.post=N= → set-union with =>>[0..N]=
+- =content="raw"|"text"|"none"= → set default qualifier when none in path
+- =format= options carried as resolver hint, not lowered to syntax
+- Round-trip property: =parse(render(lower_projection(p, o))) == lower_projection(p, o)=
+
+** ITEM Tests for v3 extensions
+:PROPERTIES:
+:CUSTOM_ID: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-v3-extension-tests
+:DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-noderef-content-types PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-dialect-switch-resolver PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-streaming-resolver PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-projection-lowering
+:END:
+- File: =crates/pi-code-path/tests/v3_extensions.rs=
+- T-V1: =NodeRef.content= is =Some= iff path includes a content-class qualifier
+- T-V2: dialect-switch FS → code → text matches reference traces for 6 representative paths
+- T-V3: text → code mid-file rejected with correct diagnostic; works after =^= re-anchor
+- T-V4: streaming resolver yields NodeRefs incrementally; cancellation honored
+- T-V5: projection-option lowering round-trip identity for 30+ option combinations
+- T-V6: edge-axis crossing files swaps dialect correctly

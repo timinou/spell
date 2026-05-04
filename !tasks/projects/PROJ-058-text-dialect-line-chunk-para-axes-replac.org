@@ -1,0 +1,190 @@
+#+TITLE: Text dialect — line/chunk/para axes (replaces read and grep tools)
+#+STATE: ITEM
+#+SESSION_ID: 14d34634c16fd492
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T22-09-18-086Z_14d34634c16fd492.jsonl]]
+#+CUSTOM_ID: PROJ-058-text-dialect-line-chunk-para-axes-replac
+#+DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as
+#+EFFORT: L
+#+LAYER: pi-code-path
+#+PRIORITY: #A
+
+* Initial Message
+
+how would you implement the full vision of codepath v3? in a way that replaces the need for the find and the read tools? and maybe even for the grep tool, not sacrificng any flexibility?
+
+* Scope
+
+Implement the Text dialect as a baseline component of =crates/pi-code-path=. Every file regardless of code dialect supports a parallel text view via =§line=/=§chunk=/=§para=/=§span= node kinds. Bypasses tree-sitter entirely for cost. Replaces both =read= (slice + content delivery, including format-aware extraction) and =grep= (regex search, optionally cross-file via FS-glob locator).
+
+Authoritative design: =specs/code-graph/code-path-extensions.md= §2.2, §3, §4.
+
+** In scope
+- Node kinds: =§line= (1-indexed), =§chunk= (N-line block, default N=20), =§para= (blank-line-separated), =§span= (regex match span)
+- Combinators on text nodes: =<<= and =>>= specialized for adjacent lines (context windows)
+- Predicates: =[text~="re"]=, =[match="literal"]=, =[len>N]=, =[multiline]=, =[startsWith="…"]=, =[endsWith="…"]=, =[a..b]= (line slice), =[last]=, =[-N..]=
+- Qualifiers: =#raw=, =#text= (format-aware), =#match=, =#captures[N]=, =#lines[a..b]=, =#bytes=, =#image=, =#thumbnail[size]=
+- Lazy line-byte index built on first text-axis use
+- Multiline regex via inline =(?m)= / =(?s)= flags (no separate option)
+- Format-aware =#text= extraction routed by MIME: PDF, DOCX, JSON-pretty, HTML-readable
+- Streaming match iterator over lines for cross-file glob locators
+- Encoding: UTF-8 default with latin-1 fallback (parity with =read.ts=)
+
+** Out of scope
+- FS dialect (proj-fs-dialect)
+- URI scheme dialects (proj-uri-dialects)
+- Code-dialect parsing — text dialect deliberately bypasses tree-sitter
+- Tool surface deletion (separate FEAT)
+
+** Existing patterns
+- =packages/coding-agent/src/tools/read.ts= (1019 lines) — current read behavior, including PDF/DOCX/image extraction pipelines
+- =packages/coding-agent/src/tools/grep.ts= (926 lines) — current grep with ripgrep
+- =grep-regex= and =regex= crates (workspace deps) — reuse for ripgrep parity
+- Existing PDF/DOCX/HTML readable-mode pipelines in read.ts — wrap rather than reimplement
+
+** Tests
+File: =crates/pi-code-path/tests/dialects/text.rs=
+
+*** T1: line slicing
+=foo.ts :: §line[10..20]= returns lines 10-20 with line-number metadata; verify byte ranges and 1-indexed semantics
+
+*** T2: line regex matching
+=foo.ts :: §line[text~="useState"]= matches grep behavior; capture groups exposed via metadata
+
+*** T3: trailing context
+=foo.ts :: §line[text~="useState"]>>[0..3]= returns the matching line plus 3 trailing lines as a flat NodeSet, no duplicates when matches are adjacent
+
+*** T4: leading context
+=foo.ts :: §line[text~="useState"]<<[0..2]= returns 2 leading lines plus the match
+
+*** T5: full-file raw
+=foo.ts :: #raw= equivalent to current =read foo.ts= no-offset; entire-file string
+
+*** T6: line-range slice
+=foo.ts :: #lines[50..150]= equivalent to current =read offset=50 limit=100=
+
+*** T7: PDF extraction
+=foo.pdf :: #text= invokes existing PDF pipeline; emits =ExtractedText { source_kind: Pdf }= Content variant
+
+*** T8: image
+=img.png :: #image= returns =Content::Image(handle)= with optional =#thumbnail[256]= reduction
+
+*** T9: capture groups
+=foo.ts :: §line[text~="(\\w+)Config"]#captures[1]= returns capture 1 as Content::Text per match
+
+*** T10: cross-file streaming grep
+=src/**/*.ts :: §line[text~="TODO"]= matches =grep "TODO" src/ --type ts= line-by-line; verify streaming (no full file load)
+
+*** T11: paragraph axis
+=README.md :: §para[text~="^# Installation"]= matches multi-line markdown sections via =(?m)= regex
+
+*** T12: encoding fallback
+Latin-1 file with non-UTF-8 bytes: emit =Diagnostic::EncodingFallback=, content still delivered
+
+*** T13: large file streaming
+1 GiB fixture file with =§line[text~="rare-marker"]=: peak RSS stays below 100 MiB, completes in reasonable time
+
+*** T14: parity corpus — read
+20 golden queries vs current =read= tool (offset/limit, dir listing equivalent, PDF, image, JSON pretty, HTML readable)
+
+*** T15: parity corpus — grep
+20 golden queries vs current =grep= tool (regex, multiline, --pre/--post, glob, type filter)
+
+** Implementation
+
+** ITEM proj-text-line-index
+:PROPERTIES:
+:CUSTOM_ID: PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-line-index
+:END:
+- File: =crates/pi-code-path/src/dialects/text/line_index.rs=
+- =LineIndex { byte_offsets: Vec<u32> }= — 1-indexed line→byte mapping
+- Built lazily on first text-axis use, cached per buffer
+- =fn line_at(byte: u32) -> u32=, =fn range_for(line: u32) -> Range<u32>=, =fn slice(a: u32, b: u32) -> Range<u32>=
+- CRLF normalization: line index based on =
+=; rendering preserves original
+
+** ITEM proj-text-axes
+:PROPERTIES:
+:CUSTOM_ID: PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-axes
+:DEPENDS: PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-line-index
+:END:
+- File: =crates/pi-code-path/src/dialects/text/axes.rs=
+- =§line=, =§chunk=, =§para=, =§span= NodeKind handlers
+- =<<= / =>>= combinators specialize for line nodes (adjacent lines via line index)
+- =§para= detection: blank-line boundaries
+- =§span= produced by regex predicates with explicit byte ranges
+
+** ITEM proj-text-regex
+:PROPERTIES:
+:CUSTOM_ID: PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-regex
+:DEPENDS: PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-line-index
+:END:
+- File: =crates/pi-code-path/src/dialects/text/regex.rs=
+- Use =grep-regex= (for ripgrep parity) for the =[text~=…]= predicate engine
+- Use =regex= crate for =[match=…]= literal escapes
+- Streaming iterator over file bytes; never load full file unless qualifier demands
+- Capture-group metadata threaded through =NodeRef.metadata.captures: Vec<(u32, String)>=
+
+** ITEM proj-text-qualifiers
+:PROPERTIES:
+:CUSTOM_ID: PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-qualifiers
+:DEPENDS: PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-line-index
+:END:
+- File: =crates/pi-code-path/src/dialects/text/qualifiers.rs=
+- =#raw= → =Content::Text= (full file via mmap or buffered read; large-file warning above 10 MiB)
+- =#text= → MIME dispatch:
+  - text/* → =Content::Text=
+  - application/pdf → =Content::ExtractedText { source_kind: Pdf, … }= via existing PDF pipeline
+  - application/json → =Content::ExtractedText { source_kind: Json }= pretty-printed
+  - text/html → =Content::ExtractedText { source_kind: Html }= readable-mode
+  - DOCX, RTF → respective extractors
+- =#bytes= → =Content::Bytes(ArtifactHandle)= (artifact stored, never inlined)
+- =#image= → =Content::Image(handle)= with optional =#thumbnail[size]= post-process
+- =#match= → =Content::Text= of the matched span only
+- =#captures[N]= → =Content::Text= of Nth capture group from matching predicate
+- =#lines[a..b]= → =Content::Text= of line range slice (1-indexed)
+
+** ITEM proj-text-cross-file-streaming
+:PROPERTIES:
+:CUSTOM_ID: PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-cross-file-streaming
+:DEPENDS: PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-axes PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-regex
+:END:
+- File: =crates/pi-code-path/src/dialects/text/stream.rs=
+- When Locator is an FS-glob, walker yields per-file text-dialect resolvers
+- Per-file resolver streams =NodeRef=s for matching lines/spans
+- Tool-layer projection options apply caps (=limit=, =head=, =tail=)
+- Cancellation propagates through walker → per-file iterator
+
+** ITEM proj-text-tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-tests
+:DEPENDS: PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-line-index PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-axes PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-regex PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-qualifiers PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-cross-file-streaming
+:END:
+- File: =crates/pi-code-path/tests/dialects/text.rs=
+- All 15 test scenarios above
+- Parity corpora: 20 read-tool queries + 20 grep-tool queries golden-snapshotted
+- Large-file streaming test: 1 GiB fixture (generated, not committed)
+
+** Edge Cases
+
+- Files >100 MiB: stream lines; never load whole file unless =#raw= or =#bytes= explicit; emit warning diagnostic
+- Binary file in text query: =[¶text]= filter excludes; =#text= refuses with =Diagnostic::BinaryFile=; =#bytes= always works
+- Multiline regex spanning huge windows: cap window size to 16 lines by default; emit =Diagnostic::MatchWindowTruncated= when capped
+- Encoding: UTF-8 default; emit =Diagnostic::EncodingFallback= for latin-1 fallback (parity with read.ts)
+- CRLF: line index normalizes; line numbering preserved; rendering preserves original line endings
+- =§para= over a file with no blank lines = entire file as one para
+- =§chunk[n=N]=: N parsed from predicate args; default 20
+- =[text~=…]= against a binary file: predicate yields zero matches (not error) when no text bytes detected
+- Capture groups beyond what the regex defines: =Diagnostic::InvalidCaptureIndex=
+- =#thumbnail[size]= for non-image: =Diagnostic::NotAnImage=
+
+** Acceptance Criteria
+
+- [ ] All 15 tests pass
+- [ ] Cross-file glob queries match =grep= behavior on 20-query parity corpus
+- [ ] =#raw= / =#lines= match =read= behavior on 20-query parity corpus
+- [ ] PDF/DOCX/image/HTML extraction works through =#text= / =#image= qualifiers
+- [ ] Streaming holds: 1 GiB file with =§line[text~="rare"]= peaks under 100 MiB RSS
+- [ ] Cancellation aborts mid-stream within 100 ms
+- [ ] Performance: cross-file glob =§line[text~=…]= within 1.5× of =grep= wall-clock
+- [ ] =cargo test -p pi-code-path --test text= passes
+- [ ] Documented in =specs/code-graph/code-path-dialects/00-text.md= (new file produced by FEAT-581 amendment)

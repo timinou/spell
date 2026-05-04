@@ -1,4 +1,4 @@
-#+TITLE: CodePath v3 full implementation: parser, dialects, NAPI, code tool cutover
+#+TITLE: CodePath v3 full implementation: kernel + 8 code dialects + FS/Text/URI baselines + NAPI + tool cutover
 #+STATE: DOING
 #+SESSION_ID: 14bf80b7760fbaa2
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-35-19-000Z_14bf80b7760fbaa2.jsonl]]
@@ -9,31 +9,65 @@
 
 you should also think about how you will change the surfaces of the other code subcommands in light of the code path
 
+(extension turn) how would you implement the full vision of codepath v3 in a way that replaces the need for the find and the read tools and maybe even for the grep tool, not sacrificing any flexibility
+
 * Context
 
 CodePath v3 is a unified query algebra for addressing code structures across languages. It replaces the current =targetId= (=file::Symbol.member=) addressing with a full path algebra supporting combinators, predicates, qualifiers, edge axis, and set operations — all with language-pluggable NameLexer payloads.
 
+The v3 *extension scope* (resolved in plan turn 2) folds into the same delivery: every CodePath whose Locator is a project-relative filesystem path or an internal URI is also a first-class query, and every file has a parallel text view via =§line=/=§chunk=/=§para= axes. This collapses =find=, =read=, =grep=, and =ast-grep= into specializations of one =code get= surface, mirroring the way the existing graph commands collapse into edge-axis queries (per =specs/code-graph/code-path.md= §5).
+
+Authoritative design for the extension layer: =specs/code-graph/code-path-extensions.md= (specs/code-graph/code-path-extensions.md).
+
 ** Settled Design Decisions
 
-1. *3-command surface*: =code get= (reads/queries/nav/graph) + =code edit= (mutations) + =code manage= (lifecycle). Replaces 20+ current subcommands.
+1. *3-command surface*: =code get= (reads/queries/nav/graph/files/dirs/regex/URIs) + =code edit= (mutations) + =code manage= (lifecycle). Replaces 20+ current subcommands AND the =find=/=read=/=grep=/=ast-grep= tool family.
+
 2. *targetId → target*: Structured =target= field with CodePath expression. Full cutover, no backward compat shim. Old =file::Symbol.member= is valid CodePath syntax naturally (=Locator :: NamePayload=).
+
 3. *scope field removed*: =#body= qualifier in CodePath target replaces =scope: "body" | "target"=. Complete removal.
+
 4. *Graph commands replaced*: =context=, =impact=, =deps=, =flow= become =code get= with edge axis (=ref→=, =def→=, =call→=, =import→=). =dead_code= and =clusters= accessed via =code get { target: ":dead_code" }=.
+
 5. *Parser*: winnow (not chumsky) in new =crates/pi-code-path= crate.
-6. *NAPI*: New =executeCodePath= function alongside existing NAPI exports.
+
+6. *NAPI*: New =executeCodePath= function alongside existing NAPI exports. Streaming chunked async iterator surface.
+
 7. *Sigils*: =§= (node-kind), =¶= (anchor), =→= (edge), =:= (field), =#= (qualifier). Update =code-path.md= to match dialect files.
-8. *Full v3 scope*: Parser + resolver + all 8 NameLexers + edge axis + set ops + qualifiers + predicates.
-9. *Prompts*: Full rewrite of all code tool prompt files for 3-command model.
+
+8. *Code dialect scope*: Parser + resolver + all 8 NameLexers + edge axis + set ops + qualifiers + predicates.
+
+9. *FS dialect baked in*: Filesystem tree as a kernel-baseline dialect. Globs in Locator, anchors (=¶hidden=, =¶ignored=, =¶code=, …), predicates (=ext=, =lang=, =size=, =mtime=, =name=, …), qualifiers (=#listing=, =#tree=, =#stat=). Standalone =FsLocator= queries (no =::Query=) yield NodeSets of files. Replaces =find=.
+
+10. *Text dialect baked in*: Every file regardless of code dialect supports =§line=/=§chunk=/=§para=/=§span= axes via lazy line-byte index, bypassing tree-sitter. Predicates =[text~=…]=/=[match=…]=/=[len>…]=, combinators =<<=/=>>= for context, qualifiers =#raw=/=#text=/=#match=/=#captures[N]=/=#lines[a..b]=/=#bytes=/=#image=/=#thumbnail=. Format-aware =#text= extraction for PDF/DOCX/JSON/HTML reusing existing pipelines. Replaces =read= and =grep= (and =ast-grep= via =//§NodeKind[name=…]= structural predicates).
+
+11. *URI scheme dialects baked in*: All 7 internal URI schemes (=artifact://=, =memory://=, =skill://=, =agent://=, =jobs://=, =local://=, =pi://=) become first-class Locators. Each is a small dialect that resolves URI→NodeRef, then delegates structural queries to FS/Text/Markdown/JSON sub-dialects. Replaces =read=-with-URL.
+
+12. *NodeRef return shape*: Unified =NodeRef { locator, range, kind, content?, metadata, diagnostics }=. Content populated only when path includes a content-class qualifier. Binary content never inlined across NAPI — staged as =artifact://= handles. Streaming via chunked iterators with cancellation.
+
+13. *Resolver state machine*: Dialect-switch dispatch is mechanical and explicit — the axis chosen determines dialect transition. Initial = FS. =§file= match → file's code dialect. First =§line= axis → text dialect. =→= edge → cross-file new dialect. URI Locator → scheme dialect → delegate. Text→code mid-file rejected (text loses tree position); must =^= and re-enter.
+
+14. *Projection options as sugar*: Tool-layer =limit=, =head=, =tail=, =context: { pre, post }=, =content=, =format=, =root= are sugar for canonical CodePath syntax (=[0..N]=, =[-N..]=, =<<=/=>>=, qualifier defaults). Lowered to syntax in Rust before resolution. Round-trip property preserved.
+
+15. *Tool deletion at cutover*: =find.ts= (491 LOC), =read.ts= (1019 LOC), =grep.ts= (926 LOC), =ast-grep.ts= (466 LOC) deleted in one cycle alongside =code get= projection-option rollout. No transition aliases. Migration table embedded in =code.md= prompt.
+
+16. *Prompts*: Full rewrite of all code tool prompt files for 3-command model + migration patterns from deleted tools. =AGENTS.md= and per-agent role files updated.
+
+17. *Cost discipline*: Pure FS query → walker only. Text-only query → line-index only. Code query → tree-sitter. Edge axis → code-graph. Mixed → composition. No interpreter does work it doesn't need to.
 
 ** Key File Paths
 
-*** Specs
-- =specs/code-graph/code-path.md= — v3 spec (needs sigil update)
-- =specs/code-graph/code-path-dialects/README.md= — dialect overview + sigil table
-- =specs/code-graph/code-path-dialects/01..08-*.md= — per-language dialect specs
+*** Specs (writable; landing artifacts)
+- =specs/code-graph/code-path.md= — v3 algebra (sigil update + cross-references to extensions)
+- =specs/code-graph/code-path-extensions.md= — full v3 extension design (already written this turn)
+- =specs/code-graph/code-path-dialects/README.md= — dialect overview + baseline-dialects index update
+- =specs/code-graph/code-path-dialects/01..08-*.md= — per-language code dialects (existing)
+- =specs/code-graph/code-path-dialects/00-fs.md= — *new*: FS dialect spec
+- =specs/code-graph/code-path-dialects/00-text.md= — *new*: Text dialect spec
+- =specs/code-graph/code-path-dialects/00-uri.md= — *new*: URI scheme dialects spec
 
 *** New Crate
-- =crates/pi-code-path/= — new crate for parser, AST, resolver, NameLexer trait
+- =crates/pi-code-path/= — new crate for parser, AST, resolver, NameLexer trait, baseline dialects (FS/Text/URI), per-language code dialects
 
 *** Existing Rust (to extend)
 - =crates/pi-code-engine/src/language/profile.rs= — add =dialect: Option<LanguageDialect>= field
@@ -44,17 +78,28 @@ CodePath v3 is a unified query algebra for addressing code structures across lan
 - =crates/pi-code-graph/src/model.rs= — =EdgeKind=, =SymbolNode=, =GraphNode=
 
 *** NAPI Bridge
-- =crates/pi-natives/src/code_path.rs= — new NAPI module
-- =packages/natives/src/code-path/types.ts= — TypeScript types
+- =crates/pi-natives/src/code_path.rs= — new NAPI module with streaming surface
+- =packages/natives/src/code-path/types.ts= — TypeScript types: =NodeRef=, =Content=, =CodePathOptions=, =CodePathChunk=
 
 *** Code Tool (full cutover)
-- =packages/coding-agent/src/tools/code.ts= — 3-command schema + dispatcher
-- =packages/coding-agent/src/tools/code-result.ts= — result types for get/edit/manage
-- =packages/coding-agent/src/prompts/tools/code.md= — rewrite
-- =packages/coding-agent/src/prompts/tools/code-hint-*.md= — rewrite all 4
+- =packages/coding-agent/src/tools/code.ts= — 3-command schema + dispatcher + projection options
+- =packages/coding-agent/src/tools/code-result.ts= — result types for get/edit/manage with NodeRef
+- =packages/coding-agent/src/prompts/tools/code.md= — full rewrite + migration table
+- =packages/coding-agent/src/prompts/tools/code-hint-*.md= — rewrite all 4 hint files
+- =packages/coding-agent/src/prompts/tools/code-migration.md= — *new*: full legacy → CodePath migration patterns
+
+*** Tools to delete
+- =packages/coding-agent/src/tools/find.ts= (491 lines)
+- =packages/coding-agent/src/tools/read.ts= (1019 lines)
+- =packages/coding-agent/src/tools/grep.ts= (926 lines)
+- =packages/coding-agent/src/tools/ast-grep.ts= (466 lines)
+- Corresponding =find.md=/=read.md=/=grep.md=/=ast-grep.md= prompt files
 
 *** System Prompts
-- =AGENTS.md= — update code tool references
+- =AGENTS.md= — update tool-precedence section, code tool references
+- =packages/coding-agent/src/prompts/system/= — update read-precedence rules, "MUST use Grep/Read/Find" guidance
+- Per-agent role files (frontmatter Tools: lists, prose examples)
+- All skills under memory tree referencing the deleted tools
 
 ** Inventory Findings (from exploration)
 
@@ -66,35 +111,343 @@ CodePath v3 is a unified query algebra for addressing code structures across lan
 *** 9 EdgeKind variants: Defines, Imports, Calls, References, Inherits, Renders, Styles, TypeImports, TypeParameterOf
 *** 14 SymbolKind variants: Function, Class, Method, Variable, Interface, TypeAlias, Enum, Module, Macro, Template, Element, CssRule, CssProperty
 *** Language profiles: TS(7 decl), Rust(9), Python(3), HTML(4), CSS(5), Markdown(2)
+*** Tool LOC to delete: find=491, read=1019, grep=926, ast-grep=466 (total 2902 LOC)
+*** =find.ts= uses =@oh-my-pi/pi-natives::glob()= and the =ignore= crate via NAPI
+*** =read.ts= handles 7 URI schemes (artifact, memory, skill, agent, jobs, local, pi), suffix/typo correction, image auto-resize, PDF/DOCX/HTML/JSON pipelines
+*** =grep.ts= wraps ripgrep with =mode: auto|rawText|semantic= switch — semantic mode subsumed by =def→= edge axis
 
 * Verification
 
-- =cargo test -p pi-code-path= — parser round-trip, resolver, predicates, edge axis, set ops
+- =cargo test -p pi-code-path= — parser round-trip, resolver, predicates, edge axis, set ops, FS/Text/URI dialects
 - =cargo check -p pi-code-path -p pi-code-engine -p pi-code-graph -p pi-natives= — clean
 - =cargo clippy -p pi-code-path= — clean
 - =bun check:ts= — TypeScript type checking
 - =bun lint:ts= — Biome lint
-- All 8 dialect test suites pass (258+ tests from specs)
-- Cross-dialect smoke test passes
+- =bun run --workspaces --if-present --parallel test= — full workspace tests pass
+- All 8 code dialect test suites pass (258+ tests from specs)
+- FS dialect: 10 tests + 12-query parity corpus vs current =find=
+- Text dialect: 15 tests + 20-query read parity + 20-query grep parity
+- URI dialects: 32 tests across 7 schemes
+- Cross-dialect smoke test passes (including FS+Text baseline view)
 - =code get=, =code edit=, =code manage= are the only accepted code commands
-- No stale references to old command names in prompts or AGENTS.md
+- Four legacy tools (=find=, =read=, =grep=, =ast-grep=) deleted; zero references in source/prompts/agents/skills
+- Streaming holds: 1 GiB file with =§line[text~=…]= peaks under 100 MiB RSS
+- Performance: pure FS query within 1.2× of =find=; cross-file regex within 1.5× of =grep=
 - Legacy =file::Symbol.member= syntax works as valid CodePath
+- Migration table published in =code.md= and =code-migration.md=
+
+
+
+** Pre-flight validator note
+=org validate-plan PLAN-255-...= currently reports =manifest-missing-suboutlines= for every linked child. Root cause: pre-existing regex bug in =packages/org/src/id-links.ts= (=extractIdLinks=) that rejects uppercase-prefixed sub-slugs (=proj-ast-types=, =feat-sigil-grammar=, …) — the established repo convention. Tracked in ==BUG-334-extractidlinks-regex-rejects-uppercase-s==. The wave engine itself parses these sub-outlines correctly (different code path), so the manifest in this PLAN body is structurally complete and executable; only the pre-flight validator misreports. =BUG-334= is a hard prerequisite for this plan's pre-flight check to clear.
+
+* Linked Children
+
+- [[id:FEAT-581-update-code-path-md-to-use-revised-sigil]]
+- [[id:FEAT-582-add-code-tool-3-command-model-addendum-t]]
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as]]
+- [[id:PROJ-053-namelexer-implementations-for-all-8-code]]
+- [[id:PROJ-054-napi-bridge-executecodepath-function-in]]
+- [[id:PROJ-055-code-tool-surface-cutover-3-command-mode]]
+- [[id:PROJ-058-text-dialect-line-chunk-para-axes-replac]]
+- [[id:PROJ-059-fs-dialect-filesystem-tree-locator-queri]]
+- [[id:PROJ-060-uri-scheme-locator-dialects-artifact-mem]]
+- [[id:FEAT-655-delete-find-read-grep-ast-grep-tools-and]]
 
 * Execution Manifest
+** wave-1 :wave:
+- [[id:FEAT-581-update-code-path-md-to-use-revised-sigil::feat-sigil-grammar]] Replace sigils in grammar spec (§1)
+- [[id:FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-additional-files]] Additional files to produce
+- [[id:FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-acceptance-addendum]] Acceptance criteria addendum
+- [[id:FEAT-582-add-code-tool-3-command-model-addendum-t::feat-tool-surface-mapping]] Write §11 tool surface mapping
+- [[id:FEAT-582-add-code-tool-3-command-model-addendum-t::feat-582-projection-options-section]] Projection options on code get
+- [[id:FEAT-582-add-code-tool-3-command-model-addendum-t::feat-582-noderef-section]] NodeRef and content-bearing return shape
+- [[id:FEAT-582-add-code-tool-3-command-model-addendum-t::feat-582-migration-table-section]] Migration table for deleted tools
+- [[id:FEAT-582-add-code-tool-3-command-model-addendum-t::feat-582-acceptance-addendum]] Acceptance criteria addendum
+- [[id:FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-tool-deletion]] proj-cutover-tool-deletion
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-ast-types]] Define CodePath AST types
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-crate-setup]] Crate setup and Cargo.toml
+- [[id:PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field]] Extend LanguageProfile with dialect field
+- [[id:PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-skeleton]] Create NAPI function skeleton
+- [[id:PROJ-055-code-tool-surface-cutover-3-command-mode::proj-new-schema]] Define new codeSchema (3-command model)
+- [[id:PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-line-index]] proj-text-line-index
+- [[id:PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-name-payload]] proj-fs-name-payload
+- [[id:PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar]] proj-uri-locator-grammar
+** wave-2 :wave:
+- [[id:FEAT-581-update-code-path-md-to-use-revised-sigil::feat-sigil-examples]] Replace sigils in all examples (§§1-10)
+- [[id:FEAT-581-update-code-path-md-to-use-revised-sigil::feat-winnow-refs]] Replace chumsky with winnow
+- [[id:FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-readme-index-update]] README index update
+- [[id:FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-codepath-md-extensions]] code-path.md additions
+- [[id:FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-prompt-rewrite]] proj-cutover-prompt-rewrite
+- [[id:FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-agent-allowlists]] proj-cutover-agent-allowlists
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-name-lexer-trait]] Define NameLexer trait and LanguageDialect struct
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-noderef-content-types]] Define NodeRef and Content types (v3 extension)
+- [[id:PROJ-053-namelexer-implementations-for-all-8-code::proj-ts-name-lexer]] Implement TypeScript NameLexer
+- [[id:PROJ-053-namelexer-implementations-for-all-8-code::proj-rust-name-lexer]] Implement Rust NameLexer
+- [[id:PROJ-053-namelexer-implementations-for-all-8-code::proj-python-name-lexer]] Implement Python NameLexer
+- [[id:PROJ-053-namelexer-implementations-for-all-8-code::proj-go-name-lexer]] Implement Go NameLexer
+- [[id:PROJ-053-namelexer-implementations-for-all-8-code::proj-haskell-name-lexer]] Implement Haskell NameLexer
+- [[id:PROJ-053-namelexer-implementations-for-all-8-code::proj-html-name-lexer]] Implement HTML NameLexer
+- [[id:PROJ-053-namelexer-implementations-for-all-8-code::proj-css-name-lexer]] Implement CSS NameLexer
+- [[id:PROJ-053-namelexer-implementations-for-all-8-code::proj-mdorg-name-lexer]] Implement Markdown/Org NameLexer
+- [[id:PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-get]] Implement get command dispatcher
+- [[id:PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-ts-types]] Create TypeScript types
+- [[id:PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-streaming-iterator]] NAPI streaming chunked iterator surface
+- [[id:PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-content-marshalling]] NAPI Content marshalling
+- [[id:PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-dispatcher]] Rewrite CodeTool.execute() dispatcher
+- [[id:PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-results]] Rewrite code-result.ts for 3-command model
+- [[id:PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-prompts]] Rewrite LLM prompts
+- [[id:PROJ-055-code-tool-surface-cutover-3-command-mode::proj-remove-scope]] Remove scope field from action schema
+- [[id:PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-projection-options]] Add projection options to code get schema
+- [[id:PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-axes]] proj-text-axes
+- [[id:PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-regex]] proj-text-regex
+- [[id:PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-qualifiers]] proj-text-qualifiers
+- [[id:PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-walker]] proj-fs-walker
+- [[id:PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-artifact]] proj-uri-artifact
+- [[id:PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-memory]] proj-uri-memory
+- [[id:PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-skill]] proj-uri-skill
+- [[id:PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-agent-json]] proj-uri-agent-json
+- [[id:PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-jobs]] proj-uri-jobs
+- [[id:PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-local]] proj-uri-local
+- [[id:PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-pi]] proj-uri-pi
+** wave-3 :wave:
+- [[id:FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-system-prompts]] proj-cutover-system-prompts
+- [[id:FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-agents-md]] proj-cutover-agents-md
+- [[id:FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-skills]] proj-cutover-skills
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-winnow-parser]] Implement winnow parser for kernel grammar
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-renderer]] Implement renderer (AST -> canonical text)
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-non-code-dialect-baselines]] Wire FS, Text, URI dialects as kernel baselines
+- [[id:PROJ-053-namelexer-implementations-for-all-8-code::proj-wire-dialects]] Wire all dialects into language profiles
+- [[id:PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-edit]] Implement edit command dispatcher
+- [[id:PROJ-055-code-tool-surface-cutover-3-command-mode::proj-update-agents-md]] Update AGENTS.md and system prompt references
+- [[id:PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-migration-table]] Document migration table from deleted tools
+- [[id:PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-cross-file-streaming]] proj-text-cross-file-streaming
+- [[id:PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-anchors-predicates]] proj-fs-anchors-predicates
+- [[id:PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-qualifiers]] proj-fs-qualifiers
+- [[id:PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-suffix-fallback]] proj-fs-suffix-fallback
+- [[id:PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-tests]] proj-uri-tests
+** wave-4 :wave:
+- [[id:FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-verification]] proj-cutover-verification
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-resolver]] Implement tree-sitter resolver
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-projection-lowering]] Implement projection-option lowering
+- [[id:PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-coordinate-deletion]] Coordinate with FEAT-655 tool deletion
+- [[id:PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-tests]] proj-text-tests
+- [[id:PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-tests]] proj-fs-tests
+** wave-5 :wave:
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-edge-resolver]] Implement edge axis resolver
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-set-ops]] Implement set operations on NodeSet
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-dialect-switch-resolver]] Implement dialect-switch resolver state machine
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-streaming-resolver]] Implement streaming resolver
+- [[id:PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-projection-options]] NAPI projection options
+** wave-6 :wave:
+- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-v3-extension-tests]] Tests for v3 extensions
+- [[id:PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-ts-noderef-types]] TypeScript NodeRef and projection types
+- [[id:PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-extension-tests]] Tests for streaming and content marshalling
+** File-level DAG
+*** Nodes
+- `FEAT-581-update-code-path-md-to-use-revised-sigil` Replace sigils in grammar spec (§1) []
+- `FEAT-582-add-code-tool-3-command-model-addendum-t` Write §11 tool surface mapping []
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and` proj-cutover-tool-deletion [ITEM]
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as` Define CodePath AST types []
+- `PROJ-053-namelexer-implementations-for-all-8-code` Extend LanguageProfile with dialect field []
+- `PROJ-054-napi-bridge-executecodepath-function-in` Create NAPI function skeleton []
+- `PROJ-055-code-tool-surface-cutover-3-command-mode` Define new codeSchema (3-command model) []
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac` proj-text-line-index [ITEM]
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri` proj-fs-name-payload [ITEM]
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem` proj-uri-locator-grammar [ITEM]
+*** Edges
+- `PROJ-054-napi-bridge-executecodepath-function-in` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as`
+** Subfeature-level DAG
+*** Nodes
+- `FEAT-581-update-code-path-md-to-use-revised-sigil::feat-sigil-grammar` Replace sigils in grammar spec (§1) []
+- `FEAT-581-update-code-path-md-to-use-revised-sigil::feat-sigil-examples` Replace sigils in all examples (§§1-10) []
+- `FEAT-581-update-code-path-md-to-use-revised-sigil::feat-winnow-refs` Replace chumsky with winnow []
+- `FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-additional-files` Additional files to produce [ITEM]
+- `FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-readme-index-update` README index update [ITEM]
+- `FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-codepath-md-extensions` code-path.md additions [ITEM]
+- `FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-acceptance-addendum` Acceptance criteria addendum [ITEM]
+- `FEAT-582-add-code-tool-3-command-model-addendum-t::feat-tool-surface-mapping` Write §11 tool surface mapping []
+- `FEAT-582-add-code-tool-3-command-model-addendum-t::feat-582-projection-options-section` Projection options on code get [ITEM]
+- `FEAT-582-add-code-tool-3-command-model-addendum-t::feat-582-noderef-section` NodeRef and content-bearing return shape [ITEM]
+- `FEAT-582-add-code-tool-3-command-model-addendum-t::feat-582-migration-table-section` Migration table for deleted tools [ITEM]
+- `FEAT-582-add-code-tool-3-command-model-addendum-t::feat-582-acceptance-addendum` Acceptance criteria addendum [ITEM]
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-tool-deletion` proj-cutover-tool-deletion [ITEM]
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-prompt-rewrite` proj-cutover-prompt-rewrite [ITEM]
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-system-prompts` proj-cutover-system-prompts [ITEM]
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-agents-md` proj-cutover-agents-md [ITEM]
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-skills` proj-cutover-skills [ITEM]
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-agent-allowlists` proj-cutover-agent-allowlists [ITEM]
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-verification` proj-cutover-verification [ITEM]
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-ast-types` Define CodePath AST types []
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-name-lexer-trait` Define NameLexer trait and LanguageDialect struct []
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-winnow-parser` Implement winnow parser for kernel grammar []
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-renderer` Implement renderer (AST -> canonical text) []
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-resolver` Implement tree-sitter resolver []
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-edge-resolver` Implement edge axis resolver []
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-set-ops` Implement set operations on NodeSet []
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-crate-setup` Crate setup and Cargo.toml []
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-noderef-content-types` Define NodeRef and Content types (v3 extension) [ITEM]
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-dialect-switch-resolver` Implement dialect-switch resolver state machine [ITEM]
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-streaming-resolver` Implement streaming resolver [ITEM]
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-non-code-dialect-baselines` Wire FS, Text, URI dialects as kernel baselines [ITEM]
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-projection-lowering` Implement projection-option lowering [ITEM]
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-v3-extension-tests` Tests for v3 extensions [ITEM]
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field` Extend LanguageProfile with dialect field []
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-ts-name-lexer` Implement TypeScript NameLexer []
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-rust-name-lexer` Implement Rust NameLexer []
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-python-name-lexer` Implement Python NameLexer []
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-go-name-lexer` Implement Go NameLexer []
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-haskell-name-lexer` Implement Haskell NameLexer []
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-html-name-lexer` Implement HTML NameLexer []
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-css-name-lexer` Implement CSS NameLexer []
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-mdorg-name-lexer` Implement Markdown/Org NameLexer []
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-wire-dialects` Wire all dialects into language profiles []
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-skeleton` Create NAPI function skeleton []
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-get` Implement get command dispatcher []
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-edit` Implement edit command dispatcher []
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-ts-types` Create TypeScript types []
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-streaming-iterator` NAPI streaming chunked iterator surface [ITEM]
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-content-marshalling` NAPI Content marshalling [ITEM]
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-projection-options` NAPI projection options [ITEM]
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-ts-noderef-types` TypeScript NodeRef and projection types [ITEM]
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-extension-tests` Tests for streaming and content marshalling [ITEM]
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-new-schema` Define new codeSchema (3-command model) []
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-dispatcher` Rewrite CodeTool.execute() dispatcher []
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-results` Rewrite code-result.ts for 3-command model []
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-prompts` Rewrite LLM prompts []
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-update-agents-md` Update AGENTS.md and system prompt references []
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-remove-scope` Remove scope field from action schema []
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-projection-options` Add projection options to code get schema [ITEM]
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-migration-table` Document migration table from deleted tools [ITEM]
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-coordinate-deletion` Coordinate with FEAT-655 tool deletion [ITEM]
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-line-index` proj-text-line-index [ITEM]
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-axes` proj-text-axes [ITEM]
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-regex` proj-text-regex [ITEM]
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-qualifiers` proj-text-qualifiers [ITEM]
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-cross-file-streaming` proj-text-cross-file-streaming [ITEM]
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-tests` proj-text-tests [ITEM]
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-name-payload` proj-fs-name-payload [ITEM]
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-walker` proj-fs-walker [ITEM]
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-anchors-predicates` proj-fs-anchors-predicates [ITEM]
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-qualifiers` proj-fs-qualifiers [ITEM]
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-suffix-fallback` proj-fs-suffix-fallback [ITEM]
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-tests` proj-fs-tests [ITEM]
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar` proj-uri-locator-grammar [ITEM]
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-artifact` proj-uri-artifact [ITEM]
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-memory` proj-uri-memory [ITEM]
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-skill` proj-uri-skill [ITEM]
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-agent-json` proj-uri-agent-json [ITEM]
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-jobs` proj-uri-jobs [ITEM]
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-local` proj-uri-local [ITEM]
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-pi` proj-uri-pi [ITEM]
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-tests` proj-uri-tests [ITEM]
+*** Edges
+- `FEAT-581-update-code-path-md-to-use-revised-sigil::feat-sigil-examples` depends on `FEAT-581-update-code-path-md-to-use-revised-sigil::feat-sigil-grammar`
+- `FEAT-581-update-code-path-md-to-use-revised-sigil::feat-winnow-refs` depends on `FEAT-581-update-code-path-md-to-use-revised-sigil::feat-sigil-grammar`
+- `FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-readme-index-update` depends on `FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-additional-files`
+- `FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-codepath-md-extensions` depends on `FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-additional-files`
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-prompt-rewrite` depends on `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-tool-deletion`
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-system-prompts` depends on `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-prompt-rewrite`
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-agents-md` depends on `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-prompt-rewrite`
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-skills` depends on `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-prompt-rewrite`
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-agent-allowlists` depends on `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-tool-deletion`
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-verification` depends on `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-tool-deletion`
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-verification` depends on `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-prompt-rewrite`
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-verification` depends on `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-system-prompts`
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-verification` depends on `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-agents-md`
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-verification` depends on `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-skills`
+- `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-verification` depends on `FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-agent-allowlists`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-name-lexer-trait` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-ast-types`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-winnow-parser` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-ast-types`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-winnow-parser` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-name-lexer-trait`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-renderer` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-ast-types`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-renderer` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-name-lexer-trait`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-resolver` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-winnow-parser`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-resolver` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-name-lexer-trait`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-edge-resolver` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-resolver`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-set-ops` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-resolver`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-noderef-content-types` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-ast-types`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-dialect-switch-resolver` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-resolver`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-dialect-switch-resolver` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-noderef-content-types`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-streaming-resolver` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-resolver`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-streaming-resolver` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-noderef-content-types`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-non-code-dialect-baselines` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-ast-types`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-non-code-dialect-baselines` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-name-lexer-trait`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-projection-lowering` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-renderer`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-v3-extension-tests` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-noderef-content-types`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-v3-extension-tests` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-dialect-switch-resolver`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-v3-extension-tests` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-streaming-resolver`
+- `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-v3-extension-tests` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-projection-lowering`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-ts-name-lexer` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-rust-name-lexer` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-python-name-lexer` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-go-name-lexer` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-haskell-name-lexer` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-html-name-lexer` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-css-name-lexer` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-mdorg-name-lexer` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-wire-dialects` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-ts-name-lexer`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-wire-dialects` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-rust-name-lexer`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-wire-dialects` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-python-name-lexer`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-wire-dialects` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-go-name-lexer`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-wire-dialects` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-haskell-name-lexer`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-wire-dialects` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-html-name-lexer`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-wire-dialects` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-css-name-lexer`
+- `PROJ-053-namelexer-implementations-for-all-8-code::proj-wire-dialects` depends on `PROJ-053-namelexer-implementations-for-all-8-code::proj-mdorg-name-lexer`
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-get` depends on `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-skeleton`
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-edit` depends on `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-get`
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-ts-types` depends on `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-skeleton`
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-streaming-iterator` depends on `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-skeleton`
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-content-marshalling` depends on `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-skeleton`
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-projection-options` depends on `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-skeleton`
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-projection-options` depends on `PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-projection-lowering`
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-ts-noderef-types` depends on `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-ts-types`
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-ts-noderef-types` depends on `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-streaming-iterator`
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-ts-noderef-types` depends on `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-content-marshalling`
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-ts-noderef-types` depends on `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-projection-options`
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-extension-tests` depends on `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-streaming-iterator`
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-extension-tests` depends on `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-content-marshalling`
+- `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-extension-tests` depends on `PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-projection-options`
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-dispatcher` depends on `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-new-schema`
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-results` depends on `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-new-schema`
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-prompts` depends on `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-new-schema`
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-update-agents-md` depends on `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-prompts`
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-remove-scope` depends on `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-new-schema`
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-projection-options` depends on `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-new-schema`
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-migration-table` depends on `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-prompts`
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-coordinate-deletion` depends on `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-projection-options`
+- `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-coordinate-deletion` depends on `PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-migration-table`
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-axes` depends on `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-line-index`
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-regex` depends on `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-line-index`
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-qualifiers` depends on `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-line-index`
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-cross-file-streaming` depends on `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-axes`
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-cross-file-streaming` depends on `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-regex`
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-tests` depends on `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-line-index`
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-tests` depends on `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-axes`
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-tests` depends on `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-regex`
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-tests` depends on `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-qualifiers`
+- `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-tests` depends on `PROJ-058-text-dialect-line-chunk-para-axes-replac::proj-text-cross-file-streaming`
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-walker` depends on `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-name-payload`
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-anchors-predicates` depends on `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-walker`
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-qualifiers` depends on `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-walker`
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-suffix-fallback` depends on `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-walker`
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-tests` depends on `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-name-payload`
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-tests` depends on `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-walker`
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-tests` depends on `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-anchors-predicates`
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-tests` depends on `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-qualifiers`
+- `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-tests` depends on `PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-suffix-fallback`
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-artifact` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar`
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-memory` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar`
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-skill` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar`
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-agent-json` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar`
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-jobs` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar`
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-local` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar`
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-pi` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar`
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-tests` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-artifact`
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-tests` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-memory`
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-tests` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-skill`
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-tests` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-agent-json`
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-tests` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-jobs`
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-tests` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-local`
+- `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-tests` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-pi`
 
-** :wave: 1 — Foundation (specs + crate skeleton)
-- [[id:FEAT-581-update-code-path-md-to-use-revised-sigil]] — sigil + winnow update in code-path.md
-- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as]] — start: crate setup, AST types, NameLexer trait, winnow parser
-
-** :wave: 2 — Kernel completion
-- [[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as]] — complete: resolver, edge axis, set ops, full test suite
-- [[id:FEAT-582-add-code-tool-3-command-model-addendum-t]] — spec addendum for 3-command model
-
-** :wave: 3 — Dialects (parallelizable)
-- [[id:PROJ-053-namelexer-implementations-for-all-8-code]] — all 8 NameLexers + profile wiring
-
-** :wave: 4 — NAPI bridge
-- [[id:PROJ-054-napi-bridge-executecodepath-function-in]] — executeCodePath NAPI function
-
-** :wave: 5 — Code tool cutover
-- [[id:PROJ-055-code-tool-surface-cutover-3-command-mode]] — 3-command model, prompt rewrites, AGENTS.md

@@ -1,0 +1,213 @@
+#+TITLE: URI scheme Locator dialects (artifact, memory, skill, agent, jobs, local, pi)
+#+STATE: ITEM
+#+SESSION_ID: 14d34634c16fd492
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T22-09-18-086Z_14d34634c16fd492.jsonl]]
+#+CUSTOM_ID: PROJ-060-uri-scheme-locator-dialects-artifact-mem
+#+DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as PROJ-058-text-dialect-line-chunk-para-axes-replac PROJ-059-fs-dialect-filesystem-tree-locator-queri PROJ-053-namelexer-implementations-for-all-8-code
+#+EFFORT: L
+#+LAYER: pi-code-path
+#+PRIORITY: #A
+
+* Initial Message
+
+how would you implement the full vision of codepath v3? in a way that replaces the need for the find and the read tools? and maybe even for the grep tool, not sacrificng any flexibility?
+
+* Scope
+
+First-class CodePath Locator schemes for the seven internal URI kinds. Each scheme is a small =LanguageDialect= registered in the Locator parser's scheme table. After URI resolution, structural queries delegate to the appropriate downstream dialect (text/markdown/json/fs).
+
+Authoritative design: =specs/code-graph/code-path-extensions.md= §2.3.
+
+** In scope
+- Kernel grammar extension: =Locator := UriLocator | FsLocator=
+- Scheme registry → dispatch table to dialect resolvers
+- =artifact://session/agent/tool/N.ext= — slices into stored artifacts
+- =memory://root= and =memory://root/<path>= — markdown payload, delegates to MD/Org dialect
+- =skill://name= and =skill://name/<path>= — skill SKILL.md or relative file
+- =agent://id= and =agent://id/<jq-path>= — JSON field extraction (new JSON sub-dialect)
+- =jobs://job-id= — job state document (new Job sub-dialect)
+- =local://<filename>.md= — completed plan artifacts; delegates to FS dialect
+- =pi://<path>= — internal Spell docs; delegates to FS dialect rooted in pi tree
+- =UnknownLocatorScheme= diagnostic with available-schemes hint for typos
+
+** Out of scope
+- Implementation of artifact storage, memory system, job tracking (existing systems — wrap, don't reimplement)
+- =data:// dataContent= concept (different system, reference-only via FS)
+- Tool surface deletion (separate FEAT)
+
+** Existing patterns
+- =packages/coding-agent/src/internal-urls/= — current URI resolvers (artifact-protocol.ts, memory-protocol.ts, skill-protocol.ts, agent-protocol.ts, jobs-protocol.ts, local-protocol.ts, pi-protocol.ts)
+- =packages/coding-agent/src/tools/read.ts= — current dispatcher logic to URI resolvers; behavior to preserve
+- =serde_json::Value= traversal — pattern for JSON sub-dialect
+- Memory system in =crates/pi-org-recall= and memory_summary.md storage
+
+** Tests
+File: =crates/pi-code-path/tests/dialects/uri.rs=
+
+Per scheme: 4 tests = (a) raw delivery, (b) structural query, (c) slice via combinator, (d) error on malformed URI. Plus cross-cutting tests. Total 32 tests.
+
+*** T1-T4: artifact://
+- =artifact://abc/main/bash/1.txt :: #raw= returns full text
+- =artifact://abc/main/bash/1.txt :: §line[10..50]= slices via text dialect
+- =artifact://abc/main/bash/1.txt :: §line[text~="error"]= regex search
+- =artifact://nonexistent= → =Diagnostic::ArtifactNotFound=
+
+*** T5-T8: memory://
+- =memory://root :: #raw= returns memory summary file
+- =memory://root :: //§heading[text~="recall"]#body= structural markdown query
+- =memory://root/skills/canvas/SKILL.md :: §heading "Examples"#body=
+- =memory://root/missing= → =Diagnostic::MemoryPathNotFound=
+
+*** T9-T12: skill://
+- =skill://canvas :: #raw= returns SKILL.md
+- =skill://canvas :: //§heading[text~="canvas"]= structural query
+- =skill://canvas/scripts/init.py :: §line[1..20]= relative file slice
+- =skill://nonexistent= → =Diagnostic::SkillNotFound=
+
+*** T13-T16: agent:// (JSON sub-dialect)
+- =agent://xyz :: #raw= returns JSON pretty
+- =agent://xyz/.findings= equivalent to =:findings= field axis
+- =agent://xyz/.findings.results[0].severity= path navigation with index
+- =agent://malformed-id= → =Diagnostic::AgentNotFound=
+
+*** T17-T20: jobs://
+- =jobs://j-123 :: #raw= returns job state document
+- =jobs://j-123 :: §status#text= returns status field
+- =jobs://j-123 :: §stdout/§line[last]= last line of stdout
+- =jobs://nonexistent= → =Diagnostic::JobNotFound=
+
+*** T21-T24: local://
+- =local://MY_PLAN.md :: #raw= returns plan artifact
+- =local://MY_PLAN.md :: //§heading[text~="Verification"]= delegates to MD dialect
+- =local://MY_PLAN.md :: §line[1..5]= delegates to text dialect
+- =local://nonexistent.md= → suffix-fallback diagnostic
+
+*** T25-T28: pi://
+- =pi://docs/index.md :: #raw= returns doc file
+- =pi://docs/architecture/* :: #listing= delegates to FS dialect
+- =pi://docs/architecture/code-engine.md :: //§heading[text~="resolver"]=
+- =pi://nonexistent= → =Diagnostic::PiPathNotFound=
+
+*** T29-T32: cross-cutting
+- =Diagnostic::UnknownLocatorScheme= for =fake://...= with hint listing supported schemes
+- Scheme parsing: =foo://= prefix detected; =foo:bar= without =//= treated as FS path
+- Backtick-quoted URI in code-axis context: =Foo/`artifact://x` =  not parsed as URI
+- Auth/permission boundary: stale artifact handle → diagnostic, not crash
+
+** Implementation
+
+** ITEM proj-uri-locator-grammar
+:PROPERTIES:
+:CUSTOM_ID: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar
+:END:
+- File: =crates/pi-code-path/src/parser.rs= (extend Locator parser)
+- Detect =scheme://= prefix in =Locator= position
+- Build =UriLocator { scheme: String, path: String }=
+- Scheme registry: =SCHEMES: &[(&str, fn(...) -> Box<dyn UriDialect>)]=
+- =UriDialect= trait: =resolve(uri_path) -> Result<NodeRef, Diagnostic>=, =delegate_dialect(node) -> &'static dyn LanguageDialect=
+
+** ITEM proj-uri-artifact
+:PROPERTIES:
+:CUSTOM_ID: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-artifact
+:DEPENDS: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar
+:END:
+- File: =crates/pi-code-path/src/dialects/uri/artifact.rs=
+- =ArtifactDialect=: parses =session/agent/tool/N.ext=
+- Resolves to underlying file path → delegates to FS dialect (and downstream text dialect for =§line= queries)
+- Reuses existing =ArtifactProtocolHandler= (currently in =packages/coding-agent/src/internal-urls/artifact-protocol.ts=) — port resolution logic to Rust or call out via NAPI shim during transition
+
+** ITEM proj-uri-memory
+:PROPERTIES:
+:CUSTOM_ID: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-memory
+:DEPENDS: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar
+:END:
+- File: =crates/pi-code-path/src/dialects/uri/memory.rs=
+- =MemoryDialect=: parses =memory://root[/<path>]=
+- Resolves =memory://root= → memory_summary.md path
+- Resolves =memory://root/skills/<name>/SKILL.md= → skill file
+- After locator resolution, structural queries delegate to Markdown dialect (PROJ-053 mdorg lexer)
+
+** ITEM proj-uri-skill
+:PROPERTIES:
+:CUSTOM_ID: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-skill
+:DEPENDS: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar
+:END:
+- File: =crates/pi-code-path/src/dialects/uri/skill.rs=
+- =SkillDialect=: parses =skill://<name>[/<path>]=
+- Resolves to skill directory; delegates to FS for arbitrary file, to MD for SKILL.md
+- Skill discovery via existing skill registry
+
+** ITEM proj-uri-agent-json
+:PROPERTIES:
+:CUSTOM_ID: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-agent-json
+:DEPENDS: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar
+:END:
+- File: =crates/pi-code-path/src/dialects/uri/agent.rs=
+- =AgentDialect=: parses =agent://<id>[/<jq-path>]=
+- New JSON sub-dialect:
+  - Node kinds: =§object=, =§array=, =§field=, =§array-elem=, =§string=, =§number=, =§bool=, =§null=
+  - Field axis (=:prop-name=) acts as JSON property accessor
+  - Predicate =[N]= acts as array index
+  - jq-style path =.foo.bar[0]= reuses kernel combinators (=/=) and predicates (=[0]=)
+- =Content::Text= for leaf values, =Content::ExtractedText { source_kind: Json }= for object/array sub-trees
+
+** ITEM proj-uri-jobs
+:PROPERTIES:
+:CUSTOM_ID: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-jobs
+:DEPENDS: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar
+:END:
+- File: =crates/pi-code-path/src/dialects/uri/jobs.rs=
+- =JobsDialect=: parses =jobs://<job-id>=
+- New Job sub-dialect:
+  - Node kinds: =§job= (root), =§status=, =§stdout=, =§stderr=, =§result=, =§error=, =§duration_ms=, =§started_at=, =§ended_at=
+  - Each child resolves to a typed slot of the job state document
+
+** ITEM proj-uri-local
+:PROPERTIES:
+:CUSTOM_ID: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-local
+:DEPENDS: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar
+:END:
+- File: =crates/pi-code-path/src/dialects/uri/local.rs=
+- =LocalDialect=: parses =local://<filename>.md=
+- Resolves against the plan artifact directory; delegates to FS, then resolved-file dialect
+
+** ITEM proj-uri-pi
+:PROPERTIES:
+:CUSTOM_ID: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-pi
+:DEPENDS: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-locator-grammar
+:END:
+- File: =crates/pi-code-path/src/dialects/uri/pi.rs=
+- =PiDialect=: parses =pi://<path>=
+- Resolves against Spell docs root; delegates to FS, then resolved-file dialect
+
+** ITEM proj-uri-tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-tests
+:DEPENDS: PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-artifact PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-memory PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-skill PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-agent-json PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-jobs PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-local PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-pi
+:END:
+- File: =crates/pi-code-path/tests/dialects/uri.rs=
+- All 32 test scenarios above
+- Fixtures: =crates/pi-code-path/tests/fixtures/uri/= with synthetic artifact files, mock memory tree, agent JSON outputs, job state docs
+
+** Edge Cases
+
+- Unknown scheme: =Diagnostic::UnknownLocatorScheme { tried, available }= with the seven supported schemes listed
+- =foo:bar= (no =//=): treated as FS path, not URI — disambiguates from time strings, port numbers
+- Stale artifact handle (file deleted between resolution and content read): emit =Diagnostic::ArtifactStale= attached to NodeRef; partial results returned
+- Cross-session artifact references: respect existing signed-URL/auth boundary; failures emit =Diagnostic::ArtifactAuthFailure=
+- =memory://root/skills/<name>/SKILL.md= parses as memory + path; resolves to file
+- =agent://= with malformed jq path (=...[abc]= where number expected): =Diagnostic::JsonPathError= with span
+- =jobs://= for finished job vs running job: state document includes both =result= and =stdout=; running jobs may have partial fields
+- URI containing query string or fragment (=memory://root#section=): the kernel =#qualifier= takes precedence over URL fragment; URL fragments not supported in v1
+- Backtick-quoted URI in non-Locator position: not parsed as URI scheme
+
+** Acceptance Criteria
+
+- [ ] All 32 tests pass
+- [ ] All 7 schemes work as Locators in =code get { target }=
+- [ ] Structural queries against memory/skill markdown work via Markdown dialect
+- [ ] JSON queries against =agent://= work with field axis and array-index predicates
+- [ ] Existing =read.ts= URI behavior fully reproduced through =code get=
+- [ ] =Diagnostic::UnknownLocatorScheme= produces actionable hints for typos
+- [ ] =cargo test -p pi-code-path --test uri= passes
+- [ ] Documented in =specs/code-graph/code-path-dialects/00-uri.md= (new file produced by FEAT-581 amendment)

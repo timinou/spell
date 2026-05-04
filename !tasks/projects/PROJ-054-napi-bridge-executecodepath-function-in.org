@@ -84,7 +84,7 @@ New NAPI function =executeCodePath= in =crates/pi-natives= that exposes the Code
 
 ** Create NAPI function skeleton
 :PROPERTIES:
-:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::PROJ-napi-skeleton
+:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-skeleton
 :END:
 - File: =crates/pi-natives/src/code_path.rs=
 - Define =CodePathOptions= NAPI struct: command, target, resolution, offset, limit, actions, root, signal, timeout_ms
@@ -94,8 +94,8 @@ New NAPI function =executeCodePath= in =crates/pi-natives= that exposes the Code
 
 ** Implement get command dispatcher
 :PROPERTIES:
-:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::PROJ-napi-get
-:DEPENDS: PROJ-054-napi-bridge-executecodepath-function-in::PROJ-napi-skeleton
+:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-get
+:DEPENDS: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-skeleton
 :END:
 - Parse =target= as CodePath using dialect from file extension
 - If target starts with =:= → special command dispatch (:dead_code, :clusters, :status, :index)
@@ -105,8 +105,8 @@ New NAPI function =executeCodePath= in =crates/pi-natives= that exposes the Code
 
 ** Implement edit command dispatcher
 :PROPERTIES:
-:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::PROJ-napi-edit
-:DEPENDS: PROJ-054-napi-bridge-executecodepath-function-in::PROJ-napi-get
+:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-edit
+:DEPENDS: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-get
 :END:
 - Parse =target= as CodePath, resolve to target node
 - Validate: exactly one node for non-set operations
@@ -116,8 +116,8 @@ New NAPI function =executeCodePath= in =crates/pi-natives= that exposes the Code
 
 ** Create TypeScript types
 :PROPERTIES:
-:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::PROJ-napi-ts-types
-:DEPENDS: PROJ-054-napi-bridge-executecodepath-function-in::PROJ-napi-skeleton
+:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-ts-types
+:DEPENDS: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-skeleton
 :END:
 - File: =packages/natives/src/code-path/types.ts=
 - =CodePathOptions= interface matching Rust struct
@@ -142,3 +142,64 @@ New NAPI function =executeCodePath= in =crates/pi-natives= that exposes the Code
 - [ ] Legacy targetId format (=file::Symbol.member=) works unchanged
 - [ ] Parse errors return structured diagnostics with span info
 - [ ] =cargo check -p pi-natives= clean
+
+** ITEM NAPI streaming chunked iterator surface
+:PROPERTIES:
+:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-streaming-iterator
+:DEPENDS: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-skeleton
+:END:
+- Per spec =specs/code-graph/code-path-extensions.md= §6
+- =executeCodePath= returns chunked async iterator on the TypeScript side
+- Rust side uses =napi::threadsafe_function::ThreadsafeFunction= to emit =CodePathChunk { nodes: NodeRef[], done: boolean, diagnostics?: Diagnostic[] }=
+- =chunkSize= defaults to 64; configurable via =CodePathOptions.chunkSize=
+- TypeScript =AbortSignal= bridged to Rust =CancellationToken= via signal listener
+- TS surface: =async function* executeCodePath(opts): AsyncIterable<CodePathChunk>=
+- Convenience wrapper: =async function executeCodePathCollected(opts): CodePathResult= for callers that want the eager-collected legacy shape
+
+** ITEM NAPI Content marshalling
+:PROPERTIES:
+:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-content-marshalling
+:DEPENDS: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-skeleton
+:END:
+- TS =NodeRef.content= discriminated union: =text= | =bytes= | =image= | =extractedText=
+- Binary content NEVER inlined across NAPI: Rust stages bytes to artifact store, returns =artifact://= handle string in =Content::Bytes=
+- Image content: reuse existing image pipeline; return =artifact://= or =image://= handle in =Content::Image=
+- =ExtractedText { source_kind, text }= carries =sourceKind: "pdf"|"docx"|"json"|"html"|...= for downstream rendering hints
+- =metadata= passed as =Record<string, unknown>= (capture groups, size, mtime, language, etc.)
+- =diagnostics= per-node and per-chunk; soft errors do not abort iteration
+
+** ITEM NAPI projection options
+:PROPERTIES:
+:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-projection-options
+:DEPENDS: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-skeleton PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-projection-lowering
+:END:
+- =CodePathOptions= flat fields per spec §6: =limit=, =head=, =tail=, =context: { pre, post }=, =content: "auto"|"none"|"raw"|"text"=, =format: "node-list"|"locations"|"content-only"|"tree"|"stats"=, =root=, =chunkSize=, =signal=
+- Lowered to CodePath syntax in Rust before resolution via PROJ-052::proj-projection-lowering
+- =format= controls rendering only; resolver always returns the NodeRef stream; format is applied at the Rust→TS marshalling boundary
+
+** ITEM TypeScript NodeRef and projection types
+:PROPERTIES:
+:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-ts-noderef-types
+:DEPENDS: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-ts-types PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-streaming-iterator PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-content-marshalling PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-projection-options
+:END:
+- File: =packages/natives/src/code-path/types.ts=
+- =NodeRef=, =Content= (discriminated union), =NodeRange=, =Diagnostic=, =NodeKindLabel= interfaces matching the Rust shapes
+- =CodePathOptions= with the full projection-options surface
+- =CodePathChunk= for streaming consumers
+- =EditAction= and =ManageCommand= types for =edit= and =manage= commands
+- Re-export from =packages/natives/src/index.ts=
+- =bun check:ts= and =bun lint:ts= clean
+
+** ITEM Tests for streaming and content marshalling
+:PROPERTIES:
+:CUSTOM_ID: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-extension-tests
+:DEPENDS: PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-streaming-iterator PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-content-marshalling PROJ-054-napi-bridge-executecodepath-function-in::proj-napi-projection-options
+:END:
+- File: =packages/natives/test/code-path-streaming.test.ts=
+- T-N1: chunked async iteration yields multiple chunks for large NodeSets
+- T-N2: =AbortSignal.abort()= terminates iteration within 100 ms; partial chunks honored
+- T-N3: =Content.bytes= variant always returns =artifact://= handle for binary content; never inlined
+- T-N4: =Content.image= variant matches existing image pipeline output
+- T-N5: =Content.extractedText= for PDF/DOCX/JSON/HTML round-trips =sourceKind=
+- T-N6: projection options lower correctly: =limit=10= produces same NodeSet as =target + " :: ... [0..10]"=
+- T-N7: =format="locations"= renders file:line:col strings; =format="tree"= renders directory tree; =format="stats"= renders metadata block

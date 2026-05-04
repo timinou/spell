@@ -1,0 +1,162 @@
+#+TITLE: FS dialect — filesystem-tree Locator queries (replaces find tool)
+#+STATE: ITEM
+#+SESSION_ID: 14d34634c16fd492
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T22-09-18-086Z_14d34634c16fd492.jsonl]]
+#+CUSTOM_ID: PROJ-059-fs-dialect-filesystem-tree-locator-queri
+#+DEPENDS: PROJ-052-pi-code-path-crate-codepath-v3-parser-as
+#+EFFORT: L
+#+LAYER: pi-code-path
+#+PRIORITY: #A
+
+* Initial Message
+
+how would you implement the full vision of codepath v3? in a way that replaces the need for the find and the read tools? and maybe even for the grep tool, not sacrificng any flexibility?
+
+* Scope
+
+Implement the FS dialect as a baseline (always-present) component of =crates/pi-code-path=. Every CodePath whose Locator is a project-relative filesystem path resolves through this dialect. Standalone =FsLocator= queries (no =::Query=) yield a NodeSet of files, replacing the =find= tool surface.
+
+Authoritative design: =specs/code-graph/code-path-extensions.md= §2.1, §3, §4.
+
+** In scope
+- =FsName= NamePayload: glob path with =*=, =**=, =?=, =[abc]=, ={a,b}= operators
+- Node kinds: =§dir=, =§file=, =§symlink=
+- Anchors: =¶hidden=, =¶ignored=, =¶lockfile=, =¶code=, =¶doc=, =¶image=, =¶binary=, =¶large=
+- Predicates: =[ext=…]=, =[lang=…]=, =[size>N]=, =[mtime>…]=, =[name="glob"]=, =[depth=N]=, =[empty]=, =[text]=
+- Qualifiers: =#listing=, =#tree[depth=N]=, =#stat=
+- Streaming walker on =ignore= crate; respects =.gitignore= by default; hidden files included by default (parity with current =find=)
+- Suffix/typo fuzzy fallback when zero matches (parity with current =read= behavior)
+- =NodeRef= emission with =metadata= populated for =#stat=
+
+** Out of scope
+- Code-tree resolution past the FS layer (PROJ-052 dialect-switch resolver)
+- Text content of files (proj-text-dialect)
+- Tool surface deletion (FEAT for find/read/grep removal)
+
+** Existing patterns
+- =@oh-my-pi/pi-natives= =glob()= and =FileType= — current file walking surface
+- =packages/coding-agent/src/tools/find.ts= (491 lines) — behavior to preserve
+- =ignore= crate (workspace dep) — gitignore-aware walker used by ripgrep
+- =packages/coding-agent/src/tools/path-utils.ts= — =parseFindPattern=, =resolveMultiFindPattern=
+
+** Tests
+File: =crates/pi-code-path/tests/dialects/fs.rs=
+
+*** T1: glob expansion
+=src/**/*.ts= matches expected file set against fixture project layout
+
+*** T2: hidden default
+Hidden files (=.env=, =.git/= contents excluded by walker, =.dotfile= included) match current find tool defaults
+
+*** T3: gitignore semantics
+Default walk excludes =.gitignore= entries; =[¶ignored]= predicate opts back in; verify with fixture =.gitignore=
+
+*** T4: anchor classification
+=[¶code]= matches files with extensions registered in any LanguageProfile; =[¶image]= matches png/jpg/svg; =[¶lockfile]= matches Cargo.lock/bun.lock; =[¶binary]= matches binary detection
+
+*** T5: predicates
+=[ext=ts]=, =[size>1000]=, =[mtime>2026-01-01]=, =[name="*.test.ts"]=, =[depth=2]=, =[empty]= each filter correctly against fixture
+
+*** T6: qualifiers
+=#listing= → one-level NodeRefs with =§file=/=§dir= kinds
+=#tree[depth=2]= → recursive listing capped at depth 2
+=#stat= → metadata only (size, mtime, kind, no content)
+
+*** T7: suffix fallback
+=src/api.t= (typo) → zero matches, =Diagnostic::SuffixSuggestion= with =suggestion: NodeRef= for =src/api.ts=
+
+*** T8: streaming
+Walker yields =NodeRef=s incrementally over fixture with 10000 files; cancellation token aborts mid-walk; total RSS stays bounded
+
+*** T9: parity corpus
+12 golden queries against a fixture project assert exact parity with current =find= tool output (file list, ordering, hidden behavior, gitignore behavior)
+
+*** T10: error envelope
+Permission-denied entries surface as per-NodeRef =diagnostics= rather than aborting walk
+
+** Implementation
+
+** ITEM proj-fs-name-payload
+:PROPERTIES:
+:CUSTOM_ID: PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-name-payload
+:END:
+- File: =crates/pi-code-path/src/dialects/fs.rs=
+- =FsName= struct: =Vec<GlobSegment>= where =GlobSegment= ∈ =Literal(String) | Star | DoubleStar | Question | CharClass(Vec<char>) | Brace(Vec<String>)=
+- =FsLexer: NameLexer= impl: parse with winnow into =FsName=
+- =render()= produces canonical glob string
+- =matches(name, node, profile, src)= compares =FsName= against an =fs= NodeKind's path
+
+** ITEM proj-fs-walker
+:PROPERTIES:
+:CUSTOM_ID: PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-walker
+:DEPENDS: PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-name-payload
+:END:
+- File: =crates/pi-code-path/src/dialects/fs/walker.rs=
+- Build on =ignore::WalkBuilder= with hidden-true and gitignore-true defaults
+- =fn walk(name: &FsName, root: &Path, opts: WalkOpts) -> impl Stream<Item = NodeRef>=
+- Cancellation via tokio =CancellationToken= passed to walker thread
+- Permission errors → per-entry =Diagnostic::Inaccessible=, never fatal
+- Symlink cycle protection (delegated to =ignore=)
+
+** ITEM proj-fs-anchors-predicates
+:PROPERTIES:
+:CUSTOM_ID: PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-anchors-predicates
+:DEPENDS: PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-walker
+:END:
+- File: =crates/pi-code-path/src/dialects/fs/predicates.rs=
+- Anchor matchers consult: =std::fs::metadata=, extension lookup against =LanguageRegistry=, hardcoded lists for =¶lockfile=/=¶image=, UTF-8 sniff for =¶binary=
+- Predicate evaluators for =ext=, =lang=, =size=, =mtime=, =name=, =depth=, =empty=, =text=
+- =[¶ignored]= predicate flips the =WalkBuilder= gitignore flag for that query branch
+
+** ITEM proj-fs-qualifiers
+:PROPERTIES:
+:CUSTOM_ID: PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-qualifiers
+:DEPENDS: PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-walker
+:END:
+- File: =crates/pi-code-path/src/dialects/fs/qualifiers.rs=
+- =#listing= QualifierResolver: emit one level of children as NodeRefs
+- =#tree[depth=N]= with N parsed from qualifier args
+- =#stat=: emit =NodeRef= with empty content but populated =metadata= (=size=, =mtime=, =kind=, optional =hash= when explicitly requested)
+
+** ITEM proj-fs-suffix-fallback
+:PROPERTIES:
+:CUSTOM_ID: PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-suffix-fallback
+:DEPENDS: PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-walker
+:END:
+- File: =crates/pi-code-path/src/dialects/fs/fallback.rs=
+- When walker yields zero NodeRefs for an exact (non-glob) =FsLocator=, run fuzzy match against project file index
+- Use Levenshtein distance ≤ 2 + suffix-extension hints
+- Emit =Diagnostic::SuffixSuggestion { tried: String, suggestion: NodeRef }= attached to the parent query result
+- Reproduces current =read.ts= =resolveSuffixedPath= behavior
+
+** ITEM proj-fs-tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-tests
+:DEPENDS: PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-name-payload PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-walker PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-anchors-predicates PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-qualifiers PROJ-059-fs-dialect-filesystem-tree-locator-queri::proj-fs-suffix-fallback
+:END:
+- File: =crates/pi-code-path/tests/dialects/fs.rs=
+- All 10 test scenarios above
+- Fixture project: =crates/pi-code-path/tests/fixtures/fs/= with mixed extensions, hidden files, =.gitignore=, lockfiles, binary files, large file, empty dir
+- Golden test: snapshot of NodeRef output for the 12 parity queries vs current =find=
+
+** Edge Cases
+
+- Glob crossing project root via =..=: rejected at parse unless =root= projection option overrides
+- Symbolic-link cycle: =ignore= crate detects and skips; document behavior
+- Permission-denied entries: emit =Diagnostic::Inaccessible= as per-NodeRef diagnostic, do not abort walk
+- Globstar with no slash separator (=foo**bar=): reject at parse with span diagnostic
+- Path containing CodePath-significant chars (=::=, =/=, =#=): require backtick quoting (Q-1 from dialects README)
+- =[name=…]= predicate uses leaf-name only matching, not full path; matches =find -name= semantics
+- =[size>…]= unit suffixes (=K=, =M=, =G=): supported
+- =[mtime>…]= accepts RFC3339 datetime or =YYYY-MM-DD= shorthand
+- Cross-file=NodeSet returned by =FsLocator= — combinators with =|=, =&=, =-= work uniformly
+
+** Acceptance Criteria
+
+- [ ] All 10 tests pass
+- [ ] Parity test against fixture corpus shows zero behavior drift from current =find=
+- [ ] Walker is streaming (no full eager load for repos >10000 files)
+- [ ] Cancellation works mid-walk (RSS bounded; iteration stops within 100 ms of token cancel)
+- [ ] Performance: pure FS query within 1.2× of =find= tool wall-clock on 10000-file fixture
+- [ ] =cargo test -p pi-code-path --test fs= passes
+- [ ] Documented in =specs/code-graph/code-path-dialects/00-fs.md= (new file produced by FEAT-581 amendment)

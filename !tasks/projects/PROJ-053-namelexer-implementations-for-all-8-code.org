@@ -89,7 +89,7 @@ Each dialect spec defines a test suite in section E. Implement as Rust integrati
 
 ** Extend LanguageProfile with dialect field
 :PROPERTIES:
-:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field
 :END:
 - File: =crates/pi-code-engine/src/language/profile.rs=
 - Add =pub dialect: Option<pi_code_path::LanguageDialect>= field to =LanguageProfile=
@@ -98,8 +98,8 @@ Each dialect spec defines a test suite in section E. Implement as Rust integrati
 
 ** Implement TypeScript NameLexer
 :PROPERTIES:
-:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-ts-name-lexer
-:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::proj-ts-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field
 :END:
 - File: =crates/pi-code-path/src/dialects/typescript.rs=
 - NamePayload: =TsName { segments: Vec<TsSegment> }= where =TsSegment= is =Ident(String) | PrivateField(String) | ComputedKey(String)=
@@ -112,8 +112,8 @@ Each dialect spec defines a test suite in section E. Implement as Rust integrati
 
 ** Implement Rust NameLexer
 :PROPERTIES:
-:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-rust-name-lexer
-:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::proj-rust-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field
 :END:
 - File: =crates/pi-code-path/src/dialects/rust.rs=
 - NamePayload: =RustName { segments: Vec<String>, turbofish: Option<Vec<String>> }=
@@ -123,8 +123,8 @@ Each dialect spec defines a test suite in section E. Implement as Rust integrati
 
 ** Implement Python NameLexer
 :PROPERTIES:
-:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-python-name-lexer
-:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::proj-python-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field
 :END:
 - File: =crates/pi-code-path/src/dialects/python.rs=
 - NamePayload: =PythonName { segments: Vec<String> }=
@@ -134,8 +134,8 @@ Each dialect spec defines a test suite in section E. Implement as Rust integrati
 
 ** Implement Go NameLexer
 :PROPERTIES:
-:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-go-name-lexer
-:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::proj-go-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field
 :END:
 - File: =crates/pi-code-path/src/dialects/go.rs=
 - NamePayload: =GoName { package: Option<String>, name: String, receiver: Option<String> }=
@@ -145,8 +145,8 @@ Each dialect spec defines a test suite in section E. Implement as Rust integrati
 
 ** Implement Haskell NameLexer
 :PROPERTIES:
-:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-haskell-name-lexer
-:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::proj-haskell-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field
 :END:
 - File: =crates/pi-code-path/src/dialects/haskell.rs=
 - NamePayload: =HaskellName { segments: Vec<String>, operator: bool }=
@@ -156,8 +156,8 @@ Each dialect spec defines a test suite in section E. Implement as Rust integrati
 
 ** Implement HTML NameLexer
 :PROPERTIES:
-:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-html-name-lexer
-:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::proj-html-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field
 :END:
 - File: =crates/pi-code-path/src/dialects/html.rs=
 - NamePayload: =HtmlName { tag: Option<String>, id: Option<String>, classes: Vec<String>, text: Option<String> }=
@@ -168,8 +168,8 @@ Each dialect spec defines a test suite in section E. Implement as Rust integrati
 
 ** Implement CSS NameLexer
 :PROPERTIES:
-:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-css-name-lexer
-:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::proj-css-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field
 :END:
 - File: =crates/pi-code-path/src/dialects/css.rs=
 - NamePayload: =CssName { selector: Option<String>, property: Option<String>, at_rule: Option<AtRulePayload> }=
@@ -180,8 +180,8 @@ Each dialect spec defines a test suite in section E. Implement as Rust integrati
 
 ** Implement Markdown/Org NameLexer
 :PROPERTIES:
-:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-mdorg-name-lexer
-:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-profile-dialect-field
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::proj-mdorg-name-lexer
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::proj-profile-dialect-field
 :END:
 - File: =crates/pi-code-path/src/dialects/markdown_org.rs=
 - NamePayload: =MdOrgName { heading_text: Option<String>, code_lang: Option<String>, level: Option<u8> }=
@@ -191,8 +191,8 @@ Each dialect spec defines a test suite in section E. Implement as Rust integrati
 
 ** Wire all dialects into language profiles
 :PROPERTIES:
-:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-wire-dialects
-:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::PROJ-ts-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::PROJ-rust-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::PROJ-python-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::PROJ-go-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::PROJ-haskell-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::PROJ-html-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::PROJ-css-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::PROJ-mdorg-name-lexer
+:CUSTOM_ID: PROJ-053-namelexer-implementations-for-all-8-code::proj-wire-dialects
+:DEPENDS: PROJ-053-namelexer-implementations-for-all-8-code::proj-ts-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::proj-rust-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::proj-python-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::proj-go-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::proj-haskell-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::proj-html-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::proj-css-name-lexer PROJ-053-namelexer-implementations-for-all-8-code::proj-mdorg-name-lexer
 :END:
 - File: =crates/pi-code-engine/src/language/mod.rs=
 - Set =dialect: Some(typescript_dialect())= in =typescript_profile()=

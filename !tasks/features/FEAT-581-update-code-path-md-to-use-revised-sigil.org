@@ -44,7 +44,7 @@ Update =specs/code-graph/code-path.md= to use the revised sigil scheme from =spe
 
 ** Replace sigils in grammar spec (§1)
 :PROPERTIES:
-:CUSTOM_ID: FEAT-581-update-code-path-md-to-use-revised-sigil::FEAT-sigil-grammar
+:CUSTOM_ID: FEAT-581-update-code-path-md-to-use-revised-sigil::feat-sigil-grammar
 :END:
 - Update the formal grammar block to use =§=, =¶=, =→=
 - Update =Axis := "@"= → =Axis := "§"=
@@ -54,8 +54,8 @@ Update =specs/code-graph/code-path.md= to use the revised sigil scheme from =spe
 
 ** Replace sigils in all examples (§§1-10)
 :PROPERTIES:
-:CUSTOM_ID: FEAT-581-update-code-path-md-to-use-revised-sigil::FEAT-sigil-examples
-:DEPENDS: FEAT-581-update-code-path-md-to-use-revised-sigil::FEAT-sigil-grammar
+:CUSTOM_ID: FEAT-581-update-code-path-md-to-use-revised-sigil::feat-sigil-examples
+:DEPENDS: FEAT-581-update-code-path-md-to-use-revised-sigil::feat-sigil-grammar
 :END:
 - Every code block and inline example using =@= as axis → =§=
 - Every =~= as anchor → =¶=
@@ -64,8 +64,8 @@ Update =specs/code-graph/code-path.md= to use the revised sigil scheme from =spe
 
 ** Replace chumsky with winnow
 :PROPERTIES:
-:CUSTOM_ID: FEAT-581-update-code-path-md-to-use-revised-sigil::FEAT-winnow-refs
-:DEPENDS: FEAT-581-update-code-path-md-to-use-revised-sigil::FEAT-sigil-grammar
+:CUSTOM_ID: FEAT-581-update-code-path-md-to-use-revised-sigil::feat-winnow-refs
+:DEPENDS: FEAT-581-update-code-path-md-to-use-revised-sigil::feat-sigil-grammar
 :END:
 - §1 title: "one DSL, chumsky-built once" → "one DSL, winnow-built once"
 - §2 trait: update NameLexer parse signature from =IResult= (nom/chumsky style) to winnow's =Parser= trait reference
@@ -84,3 +84,52 @@ Update =specs/code-graph/code-path.md= to use the revised sigil scheme from =spe
 - [ ] Zero instances of =~>= or =~>>= as edge axis (=→= everywhere)
 - [ ] Zero instances of =chumsky= (=winnow= everywhere)
 - [ ] All examples consistent with dialect README sigil table
+
+* v3 Extensions — additional spec coverage
+
+The folded scope (PLAN-255 amendment for find/read/grep tool subsumption) requires that this FEAT also publishes the non-code dialect specs and updates the dialects README index. Authoritative design lives in =specs/code-graph/code-path-extensions.md= (already written).
+
+** ITEM Additional files to produce
+:PROPERTIES:
+:CUSTOM_ID: FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-additional-files
+:END:
+- =specs/code-graph/code-path-dialects/00-fs.md= — FS dialect spec following the same A-E structure as 01-08 (NamePayload, registries, examples, edge cases, test stubs)
+- =specs/code-graph/code-path-dialects/00-text.md= — Text dialect spec
+- =specs/code-graph/code-path-dialects/00-uri.md= — URI scheme dialects spec covering all 7 schemes plus JSON sub-dialect for =agent://= and Job sub-dialect for =jobs://=
+
+** ITEM README index update
+:PROPERTIES:
+:CUSTOM_ID: FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-readme-index-update
+:DEPENDS: FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-additional-files
+:END:
+- =specs/code-graph/code-path-dialects/README.md= §2 dialect index: insert three baseline-dialect entries before the 8 code dialects:
+  #+begin_example
+  00a FS (filesystem)              00-fs.md
+  00b Text (lines / chunks / paras) 00-text.md
+  00c URI schemes (artifact, …)    00-uri.md
+  01-08 (existing code dialects)
+  #+end_example
+- §1 Dialect trait recap: add note that FS/Text/URI dialects are kernel-baked, not optional registrations — they ship with =pi-code-path= and cannot be disabled
+- §4 Cross-dialect contract test: extend to require the same TODO-search query also runs against =§line[text~="TODO"]= via the Text dialect on every fixture
+- §5 Registration checklist: not applicable to baseline dialects (R-1..R-9 are for opt-in code dialects); add a footnote
+
+** ITEM code-path.md additions
+:PROPERTIES:
+:CUSTOM_ID: FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-codepath-md-extensions
+:DEPENDS: FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-additional-files
+:END:
+- Append §11 "Non-code dialects" referencing =code-path-extensions.md= for full content; brief in-line summary of the three baselines
+- Append §12 "Locator grammar extension" — short note that =Locator := UriLocator | FsLocator= (full detail in extensions doc)
+- Append §13 "NodeRef and content delivery" — short note pointing at extensions §4
+- Append §14 "Resolver dispatch state machine" — short note pointing at extensions §3
+- Keep code-path.md focused on the algebra; cross-link into extensions doc for the load-bearing detail
+
+** ITEM Acceptance criteria addendum
+:PROPERTIES:
+:CUSTOM_ID: FEAT-581-update-code-path-md-to-use-revised-sigil::feat-581-acceptance-addendum
+:END:
+- [ ] All three new dialect spec files exist and follow the A-E structure
+- [ ] Dialects README index lists baseline + code dialects with clear separation
+- [ ] code-path.md contains §11-§14 with cross-references
+- [ ] code-path-extensions.md is referenced from both code-path.md and the dialects README
+- [ ] No examples in code-path.md or any dialect doc reference the deleted tool surfaces

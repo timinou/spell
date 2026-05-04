@@ -255,6 +255,7 @@ fn typescript_profile() -> LanguageProfile {
 		all_types:        gd.all_types,
 		supertypes:       gd.supertypes,
 		ts_language:      tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+		dialect:          None,
 	}
 }
 
@@ -392,6 +393,7 @@ fn rust_profile() -> LanguageProfile {
 		all_types:        gd.all_types,
 		supertypes:       gd.supertypes,
 		ts_language:      tree_sitter_rust::LANGUAGE.into(),
+		dialect:          None,
 	}
 }
 
@@ -471,6 +473,7 @@ fn python_profile() -> LanguageProfile {
 		all_types:        gd.all_types,
 		supertypes:       gd.supertypes,
 		ts_language:      tree_sitter_python::LANGUAGE.into(),
+		dialect:          None,
 	}
 }
 
@@ -754,6 +757,7 @@ fn markdown_profile() -> LanguageProfile {
 		all_types: gd.all_types,
 		supertypes: gd.supertypes,
 		ts_language: tree_sitter_md::LANGUAGE.into(),
+		dialect:          None,
 	}
 }
 
@@ -901,6 +905,7 @@ fn html_profile() -> LanguageProfile {
 		all_types: gd.all_types,
 		supertypes: gd.supertypes,
 		ts_language: tree_sitter_html::LANGUAGE.into(),
+		dialect:          None,
 	}
 }
 
@@ -1064,6 +1069,7 @@ fn css_profile() -> LanguageProfile {
 		all_types: gd.all_types,
 		supertypes: gd.supertypes,
 		ts_language: tree_sitter_css::LANGUAGE.into(),
+		dialect:          None,
 	}
 }
 fn typst_profile() -> LanguageProfile {
@@ -1156,6 +1162,7 @@ fn typst_profile() -> LanguageProfile {
 		all_types: gd.all_types,
 		supertypes: gd.supertypes,
 		ts_language: codebook_tree_sitter_typst::LANGUAGE.into(),
+		dialect:          None,
 	}
 }
 
@@ -1489,6 +1496,7 @@ fn clojure_profile() -> LanguageProfile {
 		all_types:        gd.all_types,
 		supertypes:       gd.supertypes,
 		ts_language:      tree_sitter_clojure::LANGUAGE.into(),
+		dialect:          None,
 	}
 }
 
@@ -1511,6 +1519,7 @@ fn edn_profile() -> LanguageProfile {
 		all_types:        gd.all_types,
 		supertypes:       gd.supertypes,
 		ts_language:      tree_sitter_clojure::LANGUAGE.into(),
+		dialect:          None,
 	}
 }
 
@@ -1605,6 +1614,7 @@ fn elixir_profile() -> LanguageProfile {
 		all_types:        gd.all_types,
 		supertypes:       gd.supertypes,
 		ts_language:      tree_sitter_elixir::LANGUAGE.into(),
+		dialect:          None,
 	}
 }
 
@@ -1626,6 +1636,7 @@ fn text_profile() -> LanguageProfile {
 		all_types:        vec![],
 		supertypes:       vec![],
 		ts_language:      tree_sitter_md::LANGUAGE.into(),
+		dialect:          None,
 	}
 }
 
@@ -1669,6 +1680,7 @@ fn org_profile() -> LanguageProfile {
 		all_types:        gd.all_types,
 		supertypes:       gd.supertypes,
 		ts_language:      tree_sitter_org::LANGUAGE.into(),
+		dialect:          None,
 	}
 }
 

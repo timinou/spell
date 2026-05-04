@@ -32,7 +32,7 @@ Add a new section to =specs/code-graph/code-path.md= documenting how the CodePat
 
 ** Write §11 tool surface mapping
 :PROPERTIES:
-:CUSTOM_ID: FEAT-582-add-code-tool-3-command-model-addendum-t::FEAT-tool-surface-mapping
+:CUSTOM_ID: FEAT-582-add-code-tool-3-command-model-addendum-t::feat-tool-surface-mapping
 :END:
 - Append new section to =specs/code-graph/code-path.md=
 - Include migration table:
@@ -55,3 +55,44 @@ Add a new section to =specs/code-graph/code-path.md= documenting how the CodePat
 - [ ] §11 added to code-path.md
 - [ ] All old commands have documented new equivalents
 - [ ] Examples are syntactically valid CodePath expressions
+
+* v3 Extensions — projection options, content-bearing returns, tool deletion
+
+The folded scope (PLAN-255 amendment for find/read/grep tool subsumption) requires this addendum to also document the tool-layer projection options, the NodeRef/Content return shape, and the deletion of =find=/=read=/=grep=/=ast-grep=. Authoritative design lives in =specs/code-graph/code-path-extensions.md= §5 and §6.
+
+** ITEM Projection options on code get
+:PROPERTIES:
+:CUSTOM_ID: FEAT-582-add-code-tool-3-command-model-addendum-t::feat-582-projection-options-section
+:END:
+- Document the projection options as defined in extensions §5: =limit=, =head=, =tail=, =context: { pre, post }=, =content: "auto"|"none"|"raw"|"text"=, =format: "node-list"|"locations"|"content-only"|"tree"|"stats"=, =root=
+- Each option is sugar for canonical CodePath syntax; cite the equivalence per the table in extensions §5
+- Document the lowering contract: tool layer forwards options to NAPI which lowers them via PROJ-052::proj-projection-lowering before resolution
+- Round-trip property: lowered path + options round-trips through render → parse
+
+** ITEM NodeRef and content-bearing return shape
+:PROPERTIES:
+:CUSTOM_ID: FEAT-582-add-code-tool-3-command-model-addendum-t::feat-582-noderef-section
+:END:
+- Document =NodeRef= and =Content= (per extensions §4) as the unified return shape from =code get=
+- Content populated only when path includes a content-class qualifier; default is location + metadata
+- Streaming: tool emits chunks; default chunk size 64; configurable via =chunkSize=
+- =metadata= field is dialect-specific (capture groups for text-regex, size/mtime for FS-stat, language/exports for code, jq-path for JSON)
+
+** ITEM Migration table for deleted tools
+:PROPERTIES:
+:CUSTOM_ID: FEAT-582-add-code-tool-3-command-model-addendum-t::feat-582-migration-table-section
+:END:
+- Embed the full migration table from extensions §5 as a normative section in this spec addendum
+- Cover every form: file discovery, file content, regex search (with all flags), semantic search, structural patterns, URI access
+- Each row: legacy invocation → projection-option sugar → canonical CodePath syntax
+- Cross-reference =FEAT-655-delete-find-read-grep-ast-grep-tools-and= for the actual deletion work
+
+** ITEM Acceptance criteria addendum
+:PROPERTIES:
+:CUSTOM_ID: FEAT-582-add-code-tool-3-command-model-addendum-t::feat-582-acceptance-addendum
+:END:
+- [ ] Projection options section documents all 6 options with sugar/canonical equivalence
+- [ ] NodeRef/Content section documents the unified return shape with examples
+- [ ] Migration table covers all 4 deleted tools with every common invocation form
+- [ ] Spec addendum cross-references =code-path-extensions.md=, =FEAT-655=, =PROJ-055=
+- [ ] No example in the addendum references =find=/=read=/=grep=/=ast-grep= as live tools
