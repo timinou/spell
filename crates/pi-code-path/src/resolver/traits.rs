@@ -102,6 +102,10 @@ pub trait FsAnchorContext: Send + Sync {
 	fn is_image_extension(&self, ext: &str) -> bool;
 	fn is_doc_extension(&self, ext: &str) -> bool;
 	fn is_lockfile_basename(&self, name: &str) -> bool;
+	/// Root directory for resolving relative paths.
+	fn root(&self) -> Option<&std::path::Path> {
+		None
+	}
 }
 
 /// Extracts text from binary or structured formats (pdf, docx, …).
