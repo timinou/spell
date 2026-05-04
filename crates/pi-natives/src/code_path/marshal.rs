@@ -6,8 +6,8 @@ use pi_code_path::types::{Content, Diagnostic, DiagnosticVariant, NodeRef};
 
 use crate::code_path::napi::{ContentDto, DiagnosticDto, NodeRefDto, SpanDto};
 
-/// Default artifact staging threshold (~512 KiB).
-pub const ARTIFACT_THRESHOLD: usize = 512 * 1024;
+/// Default artifact staging threshold (~256 KiB).
+pub const ARTIFACT_THRESHOLD: usize = 256 * 1024;
 
 /// Convert a batch of kernel `NodeRef`s into DTOs, staging large payloads.
 pub fn nodes_to_dtos(nodes: Vec<NodeRef>, threshold: usize) -> Vec<NodeRefDto> {
@@ -62,6 +62,8 @@ fn diagnostic_variant_to_string(v: &DiagnosticVariant) -> String {
 		DiagnosticVariant::Inaccessible => "inaccessible".to_string(),
 		DiagnosticVariant::EncodingFallback => "encoding_fallback".to_string(),
 		DiagnosticVariant::SchemeNotImplemented => "scheme_not_implemented".to_string(),
+		DiagnosticVariant::FileExists => "file_exists".to_string(),
+		DiagnosticVariant::StaleAnchor => "stale_anchor".to_string(),
 		DiagnosticVariant::Cancelled => "cancelled".to_string(),
 	}
 }
@@ -115,7 +117,10 @@ fn content_to_dto(content: Content, threshold: usize) -> ContentDto {
 						},
 						Err(_) => ContentDto {
 							kind: "image".to_string(),
-							value: Some(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &b)),
+							value: Some(base64::Engine::encode(
+								&base64::engine::general_purpose::STANDARD,
+								&b,
+							)),
 							mime_type: Some(mime_type),
 							width,
 							height,
@@ -178,4 +183,61 @@ fn stage_artifact(bytes: &[u8]) -> std::io::Result<String> {
 	let path = dir.join(format!("{}.bin", id));
 	std::fs::write(&path, bytes)?;
 	Ok(format!("artifact://blobs/code-path/{}.bin", id))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::collections::HashMap;
+
+	fn text_node(value: String) -> NodeRef {
+		NodeRef {
+			locator: "test".to_string(),
+			range: 0..0,
+			kind: "test".to_string(),
+			content: Some(Content::Text { value }),
+			metadata: HashMap::new(),
+			diagnostics: Vec::new(),
+		}
+	}
+
+	#[test]
+	fn default_threshold_externalises_large_text() {
+		let node = text_node("x".repeat(256 * 1024 + 1));
+		let dtos = nodes_to_dtos(vec![node], ARTIFACT_THRESHOLD);
+		assert_eq!(dtos.len(), 1);
+		let c = dtos[0].content.as_ref().expect("content expected");
+		assert!(c.artifact_uri.is_some(), "expected artifact_uri for content > 256 KiB");
+		assert!(c.value.is_none(), "expected no inline value");
+	}
+
+	#[test]
+	fn low_threshold_externalises_text() {
+		let node = text_node("x".repeat(1025));
+		let dtos = nodes_to_dtos(vec![node], 1024);
+		assert_eq!(dtos.len(), 1);
+		let c = dtos[0].content.as_ref().expect("content expected");
+		assert!(c.artifact_uri.is_some(), "expected artifact_uri for content > 1 KiB");
+		assert!(c.value.is_none());
+	}
+
+	#[test]
+	fn zero_threshold_externalises_everything() {
+		let node = text_node("x".to_string());
+		let dtos = nodes_to_dtos(vec![node], 0);
+		assert_eq!(dtos.len(), 1);
+		let c = dtos[0].content.as_ref().expect("content expected");
+		assert!(c.artifact_uri.is_some(), "expected artifact_uri for zero threshold");
+		assert!(c.value.is_none());
+	}
+
+	#[test]
+	fn max_threshold_inlines_everything() {
+		let node = text_node("x".repeat(256 * 1024 + 1));
+		let dtos = nodes_to_dtos(vec![node], u32::MAX as usize);
+		assert_eq!(dtos.len(), 1);
+		let c = dtos[0].content.as_ref().expect("content expected");
+		assert!(c.artifact_uri.is_none(), "expected no artifact_uri for huge threshold");
+		assert!(c.value.is_some(), "expected inline value");
+	}
 }

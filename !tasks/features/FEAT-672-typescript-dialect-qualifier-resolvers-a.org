@@ -1,5 +1,5 @@
 #+TITLE: TypeScript dialect — qualifier resolvers + anchor evaluators + edge kinds
-#+STATE: ITEM
+#+STATE: DOING
 #+SESSION_ID: 14d40726c985291f
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
 #+CUSTOM_ID: FEAT-672-typescript-dialect-qualifier-resolvers-a

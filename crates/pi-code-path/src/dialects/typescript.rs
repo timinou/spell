@@ -165,67 +165,398 @@ mod tests {
     }
 }
 
-// ── Dialect factory ───────────────────────────────────────────
+// ── Anchors and qualifiers ──────────────────────────────────────
 
 use std::ops::Range;
 use std::sync::Arc;
 
 use crate::dialect::{AnchorPattern, EdgeKindSet, LanguageDialect, QualifierResolver, QualifierSpec};
 
-struct StubResolver;
-impl QualifierResolver for StubResolver {
-	fn resolve(
-		&self,
-		_node: tree_sitter::Node<'_>,
-		_src: &str,
-		_args: Option<&str>,
-	) -> Option<Range<usize>> {
-		Some(0..0)
-	}
+mod qualifiers {
+    use std::ops::Range;
+    use tree_sitter::Node;
+    use crate::dialect::QualifierResolver;
+
+    pub struct Body;
+    impl QualifierResolver for Body {
+        fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+            if let Some(body) = node.child_by_field_name("body") {
+                return Some(body.start_byte()..body.end_byte());
+            }
+            // Arrow function stored in a variable_declarator's "value" field
+            if let Some(value) = node.child_by_field_name("value") {
+                if value.kind() == "arrow_function" {
+                    return value.child_by_field_name("body")
+                        .map(|c| c.start_byte()..c.end_byte());
+                }
+            }
+            None
+        }
+    }
+
+    pub struct Sig;
+    impl QualifierResolver for Sig {
+        fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+            let target = if let Some(value) = node.child_by_field_name("value") {
+                if value.kind() == "arrow_function" { value } else { node }
+            } else {
+                node
+            };
+            match target.child_by_field_name("body") {
+                Some(body) => Some(target.start_byte()..body.start_byte()),
+                None => Some(target.start_byte()..target.end_byte()),
+            }
+        }
+    }
+
+    pub struct Name;
+    impl QualifierResolver for Name {
+        fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+            node.child_by_field_name("name").map(|c| c.start_byte()..c.end_byte())
+        }
+    }
+
+    pub struct Decorators;
+    impl QualifierResolver for Decorators {
+        fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+            // Strategy 1: direct children (class_declaration)
+            let mut first: Option<Node> = None;
+            let mut last: Option<Node> = None;
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "decorator" {
+                    if first.is_none() {
+                        first = Some(child);
+                    }
+                    last = Some(child);
+                }
+            }
+            if first.is_some() {
+                return Some(first.unwrap().start_byte()..last.unwrap().end_byte());
+            }
+            // Strategy 2: previous siblings (method_definition inside class_body)
+            let mut sib = node.prev_sibling();
+            while let Some(n) = sib {
+                if n.kind() == "decorator" {
+                    if first.is_none() {
+                        first = Some(n);
+                    }
+                    last = Some(n);
+                } else if n.is_named() {
+                    break;
+                }
+                sib = n.prev_sibling();
+            }
+            match (first, last) {
+                (Some(f), Some(l)) => Some(f.start_byte()..l.end_byte()),
+                _ => None,
+            }
+        }
+    }
+
+    pub struct TypeParams;
+    impl QualifierResolver for TypeParams {
+        fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+            let target = if let Some(value) = node.child_by_field_name("value") {
+                if value.kind() == "arrow_function" { value } else { node }
+            } else {
+                node
+            };
+            target.child_by_field_name("type_parameters")
+                .map(|c| c.start_byte()..c.end_byte())
+        }
+    }
+
+    pub struct ReturnType;
+    impl QualifierResolver for ReturnType {
+        fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+            let target = if let Some(value) = node.child_by_field_name("value") {
+                if value.kind() == "arrow_function" { value } else { node }
+            } else {
+                node
+            };
+            target.child_by_field_name("return_type")
+                .map(|c| c.start_byte()..c.end_byte())
+        }
+    }
+
+    pub struct JsxChildren;
+    impl QualifierResolver for JsxChildren {
+        fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+            if node.kind() != "jsx_element" {
+                return None;
+            }
+            let opening = node.child_by_field_name("opening_element")?;
+            let closing = node.child_by_field_name("closing_element")?;
+            let start = opening.end_byte();
+            let end = closing.start_byte();
+            if start >= end {
+                return None;
+            }
+            Some(start..end)
+        }
+    }
+
+    pub struct JsxAttrs;
+    impl QualifierResolver for JsxAttrs {
+        fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+            if node.kind() != "jsx_element" && node.kind() != "jsx_self_closing_element" {
+                return None;
+            }
+            let opening = node.child_by_field_name("opening_element")?;
+            let mut first: Option<Node> = None;
+            let mut last: Option<Node> = None;
+            let mut cursor = opening.walk();
+            for child in opening.children(&mut cursor) {
+                if child.kind() == "jsx_attribute" {
+                    if first.is_none() {
+                        first = Some(child);
+                    }
+                    last = Some(child);
+                }
+            }
+            match (first, last) {
+                (Some(f), Some(l)) => Some(f.start_byte()..l.end_byte()),
+                _ => None,
+            }
+        }
+    }
+
+    pub struct DefaultExport;
+    impl QualifierResolver for DefaultExport {
+        fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+            if node.kind() != "export_statement" {
+                return None;
+            }
+            // Verify it contains a `default` keyword child
+            let mut cursor = node.walk();
+            if !node.children(&mut cursor).any(|c| c.kind() == "default") {
+                return None;
+            }
+            Some(node.start_byte()..node.end_byte())
+        }
+    }
 }
 
 fn match_kind(node: &tree_sitter::Node<'_>, kinds: &[&str]) -> bool {
-	kinds.contains(&node.kind())
+    kinds.contains(&node.kind())
+}
+
+fn has_descendant_kind(node: tree_sitter::Node<'_>, kind: &str) -> bool {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == kind {
+            return true;
+        }
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
+}
+
+fn has_descendant_if_with_return(node: tree_sitter::Node<'_>) -> bool {
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "if_statement" {
+            // Check if the consequence (first named child after condition) contains return
+            let mut cursor = n.walk();
+            let mut found_condition = false;
+            for child in n.children(&mut cursor) {
+                if found_condition && child.is_named() {
+                    if has_descendant_kind(child, "return_statement") {
+                        return true;
+                    }
+                    break;
+                }
+                if child.kind() == "parenthesized_expression" || child.kind() == "binary_expression" {
+                    // condition might be wrapped; look for a direct condition field
+                }
+                // Heuristic: the first parenthesized_expression or field named condition
+            }
+            // Fallback: check any descendant of the if_statement
+            if has_descendant_kind(n, "return_statement") {
+                return true;
+            }
+        }
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    false
 }
 
 /// Bundle the TypeScript / JavaScript / TSX dialect.
 pub fn typescript_dialect() -> LanguageDialect {
-	LanguageDialect {
-		name_lexer: Arc::new(TsNameLexer),
-		anchors: vec![
-			AnchorPattern { name: "hook-deps", matcher: |n, _s| match_kind(n, &["call_expression"]) },
-			AnchorPattern { name: "return", matcher: |n, _s| match_kind(n, &["return_statement"]) },
-			AnchorPattern { name: "async", matcher: |n, _s| match_kind(n, &["function_declaration", "arrow_function"]) },
-			AnchorPattern { name: "export", matcher: |n, _s| match_kind(n, &["export_statement"]) },
-			AnchorPattern { name: "import", matcher: |n, _s| match_kind(n, &["import_statement"]) },
-		],
-		qualifiers: vec![
-			QualifierSpec {
-				name:       "body",
-				applies_to: vec!["function_declaration".into(), "arrow_function".into()],
-				resolve:    Arc::new(StubResolver),
-			},
-			QualifierSpec {
-				name:       "sig",
-				applies_to: vec!["function_declaration".into()],
-				resolve:    Arc::new(StubResolver),
-			},
-			QualifierSpec {
-				name:       "name",
-				applies_to: vec!["function_declaration".into(), "class_declaration".into()],
-				resolve:    Arc::new(StubResolver),
-			},
-			QualifierSpec {
-				name:       "docstring",
-				applies_to: vec!["function_declaration".into()],
-				resolve:    Arc::new(StubResolver),
-			},
-			QualifierSpec {
-				name:       "type-params",
-				applies_to: vec!["function_declaration".into()],
-				resolve:    Arc::new(StubResolver),
-			},
-		],
-		edge_kinds: EdgeKindSet::default(),
-	}
+    LanguageDialect {
+        name_lexer: Arc::new(TsNameLexer),
+        anchors: vec![
+            AnchorPattern {
+                name: "return",
+                matcher: |n, _s| {
+                    match_kind(n, &["function_declaration", "method_definition", "arrow_function"])
+                        && has_descendant_kind(*n, "return_statement")
+                },
+            },
+            AnchorPattern {
+                name: "guard",
+                matcher: |n, _s| {
+                    match_kind(n, &["function_declaration", "method_definition", "arrow_function"])
+                        && has_descendant_if_with_return(*n)
+                },
+            },
+            AnchorPattern {
+                name: "hook-deps",
+                matcher: |n, src| {
+                    if !match_kind(n, &["call_expression"]) {
+                        return false;
+                    }
+                    // callee is first named child or child_by_field_name("function")
+                    let callee = n.child_by_field_name("function");
+                    if let Some(c) = callee {
+                        if c.kind() == "identifier" {
+                            if let Some(text) = src.get(c.start_byte()..c.end_byte()) {
+                                return text.starts_with("use");
+                            }
+                        }
+                    }
+                    false
+                },
+            },
+            AnchorPattern {
+                name: "default-export",
+                matcher: |n, _s| {
+                    if !match_kind(n, &["export_statement"]) {
+                        return false;
+                    }
+                    let mut cursor = n.walk();
+                    n.children(&mut cursor).any(|c| c.kind() == "default")
+                },
+            },
+            AnchorPattern {
+                name: "first-import",
+                matcher: |n, _s| {
+                    if n.kind() != "import_statement" {
+                        return false;
+                    }
+                    let mut sib = n.prev_sibling();
+                    while let Some(p) = sib {
+                        if p.kind() == "import_statement" {
+                            return false;
+                        }
+                        sib = p.prev_sibling();
+                    }
+                    true
+                },
+            },
+            AnchorPattern {
+                name: "last-import",
+                matcher: |n, _s| {
+                    if n.kind() != "import_statement" {
+                        return false;
+                    }
+                    let mut sib = n.next_sibling();
+                    while let Some(p) = sib {
+                        if p.kind() == "import_statement" {
+                            return false;
+                        }
+                        sib = p.next_sibling();
+                    }
+                    true
+                },
+            },
+            AnchorPattern {
+                name: "module-side-effect",
+                matcher: |n, _s| {
+                    n.kind() == "expression_statement" && n.parent().map_or(false, |p| p.kind() == "program")
+                },
+            },
+        ],
+        qualifiers: vec![
+            QualifierSpec {
+                name:       "body",
+                applies_to: vec![
+                    "function_declaration".into(),
+                    "method_definition".into(),
+                    "arrow_function".into(),
+                    "variable_declarator".into(),
+                ],
+                resolve:    Arc::new(qualifiers::Body),
+            },
+            QualifierSpec {
+                name:       "sig",
+                applies_to: vec![
+                    "function_declaration".into(),
+                    "method_definition".into(),
+                    "arrow_function".into(),
+                    "variable_declarator".into(),
+                ],
+                resolve:    Arc::new(qualifiers::Sig),
+            },
+            QualifierSpec {
+                name:       "name",
+                applies_to: vec![
+                    "function_declaration".into(),
+                    "class_declaration".into(),
+                    "method_definition".into(),
+                    "interface_declaration".into(),
+                    "type_alias_declaration".into(),
+                    "variable_declarator".into(),
+                ],
+                resolve:    Arc::new(qualifiers::Name),
+            },
+            QualifierSpec {
+                name:       "decorators",
+                applies_to: vec![
+                    "class_declaration".into(),
+                    "method_definition".into(),
+                ],
+                resolve:    Arc::new(qualifiers::Decorators),
+            },
+            QualifierSpec {
+                name:       "type-params",
+                applies_to: vec![
+                    "function_declaration".into(),
+                    "method_definition".into(),
+                    "class_declaration".into(),
+                    "interface_declaration".into(),
+                    "type_alias_declaration".into(),
+                    "variable_declarator".into(),
+                ],
+                resolve:    Arc::new(qualifiers::TypeParams),
+            },
+            QualifierSpec {
+                name:       "return-type",
+                applies_to: vec![
+                    "function_declaration".into(),
+                    "method_definition".into(),
+                    "arrow_function".into(),
+                    "variable_declarator".into(),
+                ],
+                resolve:    Arc::new(qualifiers::ReturnType),
+            },
+            QualifierSpec {
+                name:       "jsx-children",
+                applies_to: vec!["jsx_element".into()],
+                resolve:    Arc::new(qualifiers::JsxChildren),
+            },
+            QualifierSpec {
+                name:       "jsx-attrs",
+                applies_to: vec!["jsx_element".into(), "jsx_self_closing_element".into()],
+                resolve:    Arc::new(qualifiers::JsxAttrs),
+            },
+            QualifierSpec {
+                name:       "default-export",
+                applies_to: vec!["export_statement".into()],
+                resolve:    Arc::new(qualifiers::DefaultExport),
+            },
+        ],
+        edge_kinds: {
+            let k = EdgeKindSet::default();
+            // TODO: type→ and jsx-prop→ edges deferred until EdgeKind extension
+            k
+        },
+    }
 }

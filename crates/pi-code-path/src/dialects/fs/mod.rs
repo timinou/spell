@@ -5,6 +5,7 @@
 //! resolver, and suffix-fallback fuzzy matcher.
 
 pub mod anchors;
+pub mod mutation;
 pub mod predicates;
 pub mod qualifiers;
 pub mod suffix_fallback;

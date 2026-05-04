@@ -3,6 +3,8 @@ pub mod walker;
 
 #[cfg(test)]
 mod qualifier_tests;
+#[cfg(test)]
+mod py_qualifier_tests;
 
 pub use walker::CodeResolverImpl;
 

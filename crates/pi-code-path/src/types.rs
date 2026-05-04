@@ -43,7 +43,13 @@ pub enum Content {
 	/// Binary content — an artifact:// handle.
 	Bytes { artifact_uri: String, size: u64 },
 	/// Image content — a handle (artifact:// or image://).
-	Image { handle: String, mime_type: String, width: Option<u32>, height: Option<u32>, bytes: Option<Vec<u8>> },
+	Image {
+		handle:    String,
+		mime_type: String,
+		width:     Option<u32>,
+		height:    Option<u32>,
+		bytes:     Option<Vec<u8>>,
+	},
 	/// Extracted/converted text from a non-text source.
 	ExtractedText {
 		/// Kind of the source (pdf, docx, json, html, ...).
@@ -100,6 +106,10 @@ pub enum DiagnosticVariant {
 	EncodingFallback,
 	/// The requested scheme is not implemented in this release.
 	SchemeNotImplemented,
+	/// Target file already exists.
+	FileExists,
+	/// Anchor hash mismatch — file changed since read.
+	StaleAnchor,
 	/// Timeout or cancellation.
 	Cancelled,
 }
