@@ -197,4 +197,117 @@ describe("TaskTool blocker integration", () => {
 
 		await asyncJobManager.dispose({ timeoutMs: 1_000 });
 	});
+	it("Scenario C: dispatch text enumerates queued tasks with explicit blocker chain", async () => {
+		const asyncJobManager = new AsyncJobManager({
+			onJobComplete: async () => {},
+		});
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			await Bun.sleep(5);
+			return createResult(options.id, options.description ?? "task");
+		});
+
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(
+			createSession(
+				tempDir,
+				Settings.isolated({
+					"async.enabled": true,
+					"task.isolation.mode": "none",
+					"task.maxConcurrency": 4,
+					"todo.enabled": false,
+				}),
+				asyncJobManager,
+			),
+		);
+		const result = await tool.execute("call-queued-text", {
+			agent: "task",
+			tasks: [
+				{ id: "X", description: "X", assignment: "## Target\\n- Task: X" },
+				{ id: "Y", description: "Y", assignment: "## Target\\n- Task: Y" },
+				{ id: "Z", description: "Z", assignment: "## Target\\n- Task: Z", blockers: ["X"] },
+			],
+		});
+
+		const text = result.content.find(part => part.type === "text")?.text ?? "";
+		expect(text).toContain("Started 2 background task jobs");
+		expect(text).toContain("1 queued");
+		expect(text).toContain("Z<-X");
+
+		await asyncJobManager.dispose({ timeoutMs: 1_000 });
+	});
+
+	it("Scenario D: dispatch text mentions queued for implicit-only blockers", async () => {
+		const asyncJobManager = new AsyncJobManager({
+			onJobComplete: async () => {},
+		});
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			await Bun.sleep(5);
+			return createResult(options.id, options.description ?? "task");
+		});
+
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(
+			createSession(
+				tempDir,
+				Settings.isolated({
+					"async.enabled": true,
+					"task.isolation.mode": "none",
+					"task.maxConcurrency": 4,
+					"todo.enabled": false,
+				}),
+				asyncJobManager,
+			),
+		);
+		const result = await tool.execute("call-implicit-queued", {
+			agent: "task",
+			tasks: [
+				{ id: "P", description: "P", assignment: "## Target\\n- Task: P", filesDeps: ["a.ts"] },
+				{ id: "Q", description: "Q", assignment: "## Target\\n- Task: Q", filesDeps: ["a.ts"] },
+			],
+		});
+
+		const text = result.content.find(part => part.type === "text")?.text ?? "";
+		expect(text).toContain("1 queued");
+		expect(text).toContain("Q<-P");
+
+		await asyncJobManager.dispose({ timeoutMs: 1_000 });
+	});
+
+	it("Scenario E: dispatch text omits queued mention when no blockers", async () => {
+		const asyncJobManager = new AsyncJobManager({
+			onJobComplete: async () => {},
+		});
+		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			await Bun.sleep(5);
+			return createResult(options.id, options.description ?? "task");
+		});
+
+		const { TaskTool } = await import("../../src/task/index");
+		const tool = await TaskTool.create(
+			createSession(
+				tempDir,
+				Settings.isolated({
+					"async.enabled": true,
+					"task.isolation.mode": "none",
+					"task.maxConcurrency": 4,
+					"todo.enabled": false,
+				}),
+				asyncJobManager,
+			),
+		);
+		const result = await tool.execute("call-no-blockers-no-queued", {
+			agent: "task",
+			tasks: [
+				{ id: "M", description: "M", assignment: "## Target\\n- Task: M" },
+				{ id: "N", description: "N", assignment: "## Target\\n- Task: N" },
+			],
+		});
+
+		const text = result.content.find(part => part.type === "text")?.text ?? "";
+		expect(text).not.toContain("queued");
+		// guard: should still mention started count
+		expect(text).toContain("Started 2");
+
+		await asyncJobManager.dispose({ timeoutMs: 1_000 });
+	});
 });
