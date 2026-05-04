@@ -347,3 +347,25 @@ New Rust crate =crates/pi-code-path= implementing the CodePath v3 shared query a
 - T-V4: streaming resolver yields NodeRefs incrementally; cancellation honored
 - T-V5: projection-option lowering round-trip identity for 30+ option combinations
 - T-V6: edge-axis crossing files swaps dialect correctly
+
+NOTE [2026-05-04]: Wave-1/2 partial completion 2026-05-04:
+
+DONE:
+- proj-crate-setup: pi-code-path crate created with winnow, regex, grep-regex, serde, tree-sitter deps
+- proj-ast-types: All AST types in src/ast.rs (CodePath, Locator, Query, Step, Combinator, Axis, Head, Predicate, Qualifier, EdgeKind, NamePayload, NodeSet, FsLocator, FsSegment, UriLocator, CompareOp)
+- proj-name-lexer-trait: src/dialect.rs with NameLexer, QualifierResolver, AnchorPattern, QualifierSpec, EdgeKindSet, LanguageDialect
+- proj-noderef-content-types: src/types.rs with NodeRef, Content (Text/Bytes/Image/ExtractedText), Diagnostic + 13 variants, Span, CodePathChunk
+- proj-winnow-parser: Recursive-descent parser in src/parser.rs covers full grammar. 12 unit tests pass.
+- proj-renderer: Round-trip renderer in src/renderer.rs. 7 round-trip tests pass.
+- proj-resolver: Trait + StubResolver + FsExistsResolver scaffold. 3 tests pass.
+
+OUTSTANDING (deferred - require integration with pi-code-engine/pi-code-graph at NAPI layer to avoid circular crate deps):
+- proj-edge-resolver: Full edge axis traversal via pi-code-graph
+- proj-set-ops: NodeSet has union/intersect/except impls but query-level set ops not wired
+- proj-dialect-switch-resolver: State machine for FS→code→text→graph transitions
+- proj-streaming-resolver: Async streaming with cancellation
+- proj-non-code-dialect-baselines: FS/Text/URI baseline dialects (split into PROJ-058/059/060)
+- proj-projection-lowering: Lower limit/head/tail/context to canonical CodePath
+- proj-v3-extension-tests: Extended test suite
+
+Status: 28 unit tests pass. Workspace compiles clean. Foundation ready for resolver integration at NAPI layer.

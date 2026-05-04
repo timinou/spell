@@ -1,5 +1,5 @@
 #+TITLE: Update code-path.md to use revised sigils and winnow references
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bf80b7760fbaa2
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-35-19-000Z_14bf80b7760fbaa2.jsonl]]
 #+CUSTOM_ID: FEAT-581-update-code-path-md-to-use-revised-sigil
@@ -133,3 +133,5 @@ The folded scope (PLAN-255 amendment for find/read/grep tool subsumption) requir
 - [ ] code-path.md contains §11-§14 with cross-references
 - [ ] code-path-extensions.md is referenced from both code-path.md and the dialects README
 - [ ] No examples in code-path.md or any dialect doc reference the deleted tool surfaces
+
+NOTE [2026-05-04]: Wave-1 complete: sigil refresh (42 changes, 0 chumsky, 0 ~>), 3 baseline dialect spec files created (00-fs.md, 00-text.md, 00-uri.md), README index updated with 00a/00b/00c entries + kernel-baked note + cross-dialect text test, §§E/F/G appended to code-path.md cross-referencing extensions doc.

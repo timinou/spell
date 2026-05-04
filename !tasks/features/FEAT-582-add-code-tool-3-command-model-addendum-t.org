@@ -1,5 +1,5 @@
 #+TITLE: Add code tool 3-command model addendum to code-path.md
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14bf80b7760fbaa2
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-04-18T13-35-19-000Z_14bf80b7760fbaa2.jsonl]]
 #+CUSTOM_ID: FEAT-582-add-code-tool-3-command-model-addendum-t
@@ -96,3 +96,5 @@ The folded scope (PLAN-255 amendment for find/read/grep tool subsumption) requir
 - [ ] Migration table covers all 4 deleted tools with every common invocation form
 - [ ] Spec addendum cross-references =code-path-extensions.md=, =FEAT-655=, =PROJ-055=
 - [ ] No example in the addendum references =find=/=read=/=grep=/=ast-grep= as live tools
+
+NOTE [2026-05-04]: Wave-1 complete: §A (tool surface mapping) §B (projection options) §C (NodeRef return shape) §D (migration table) appended to code-path.md.

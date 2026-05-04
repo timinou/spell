@@ -211,3 +211,5 @@ Per scheme: 4 tests = (a) raw delivery, (b) structural query, (c) slice via comb
 - [ ] =Diagnostic::UnknownLocatorScheme= produces actionable hints for typos
 - [ ] =cargo test -p pi-code-path --test uri= passes
 - [ ] Documented in =specs/code-graph/code-path-dialects/00-uri.md= (new file produced by FEAT-581 amendment)
+
+NOTE [2026-05-04]: Status 2026-05-04: SPEC COMPLETE, PARTIAL IMPL. specs/code-graph/code-path-dialects/00-uri.md created with full A-E structure (32 test stubs covering all 7 schemes + cross-cutting). UriLocator AST type defined and parser handles scheme://path. Per-scheme dialect modules (artifact/memory/skill/agent/jobs/local/pi) pending.

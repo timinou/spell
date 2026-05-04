@@ -188,3 +188,5 @@ Latin-1 file with non-UTF-8 bytes: emit =Diagnostic::EncodingFallback=, content 
 - [ ] Performance: cross-file glob =§line[text~=…]= within 1.5× of =grep= wall-clock
 - [ ] =cargo test -p pi-code-path --test text= passes
 - [ ] Documented in =specs/code-graph/code-path-dialects/00-text.md= (new file produced by FEAT-581 amendment)
+
+NOTE [2026-05-04]: Status 2026-05-04: SPEC COMPLETE, IMPL NOT STARTED. specs/code-graph/code-path-dialects/00-text.md created with full A-E structure (15 test stubs, 11 worked examples, 10 edge cases). NAMEspace claimed in pi-code-path crate but no source files yet (text/line_index.rs, text/axes.rs, text/regex.rs, text/qualifiers.rs, text/stream.rs all pending).

@@ -203,3 +203,5 @@ New NAPI function =executeCodePath= in =crates/pi-natives= that exposes the Code
 - T-N5: =Content.extractedText= for PDF/DOCX/JSON/HTML round-trips =sourceKind=
 - T-N6: projection options lower correctly: =limit=10= produces same NodeSet as =target + " :: ... [0..10]"=
 - T-N7: =format="locations"= renders file:line:col strings; =format="tree"= renders directory tree; =format="stats"= renders metadata block
+
+NOTE [2026-05-04]: Status 2026-05-04: NOT STARTED. Blocked on full resolver integration. The NAPI bridge (executeCodePath function in pi-natives) requires the full resolver state machine including LanguageProfile-aware code resolution and pi-code-graph edge axis dispatch. Foundation crate pi-code-path is ready (parser + renderer + AST + types + dialect trait + scaffold resolver, 28 unit tests pass).

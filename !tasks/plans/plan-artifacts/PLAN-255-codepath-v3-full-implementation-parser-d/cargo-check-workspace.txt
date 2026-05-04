@@ -1,0 +1,20 @@
+warning: function `make_item_with_properties` is never used
+   --> crates/pi-org-engine/src/graph.rs:861:5
+    |
+861 |     fn make_item_with_properties(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: `pi-org-engine` (lib) generated 3 warnings
+warning: field `schema` is never read
+  --> crates/pi-org-recall/src/fts.rs:51:2
+   |
+49 | pub struct FtsIndex {
+   |            -------- field in this struct
+50 |     index:  Index,
+51 |     schema: Schema,
+   |     ^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `pi-org-recall` (lib) generated 1 warning
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.42s
