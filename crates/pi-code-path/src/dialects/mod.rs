@@ -26,4 +26,4 @@ pub use html::{HtmlName, HtmlNameLexer, html_dialect};
 pub use mdorg::{MdName, MdNameLexer, MdSegment, markdown_dialect};
 pub use python::{PyName, PyNameLexer, PySegment, python_dialect};
 pub use rust::{RustName, RustNameLexer, RustSegment, rust_dialect};
-pub use typescript::{TsName, TsNameLexer, TsSegment};
+pub use typescript::{TsName, TsNameLexer, TsSegment, typescript_dialect};

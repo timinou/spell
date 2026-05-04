@@ -164,3 +164,68 @@ mod tests {
         }
     }
 }
+
+// ── Dialect factory ───────────────────────────────────────────
+
+use std::ops::Range;
+use std::sync::Arc;
+
+use crate::dialect::{AnchorPattern, EdgeKindSet, LanguageDialect, QualifierResolver, QualifierSpec};
+
+struct StubResolver;
+impl QualifierResolver for StubResolver {
+	fn resolve(
+		&self,
+		_node: tree_sitter::Node<'_>,
+		_src: &str,
+		_args: Option<&str>,
+	) -> Option<Range<usize>> {
+		Some(0..0)
+	}
+}
+
+fn match_kind(node: &tree_sitter::Node<'_>, kinds: &[&str]) -> bool {
+	kinds.contains(&node.kind())
+}
+
+/// Bundle the TypeScript / JavaScript / TSX dialect.
+pub fn typescript_dialect() -> LanguageDialect {
+	LanguageDialect {
+		name_lexer: Arc::new(TsNameLexer),
+		anchors: vec![
+			AnchorPattern { name: "hook-deps", matcher: |n, _s| match_kind(n, &["call_expression"]) },
+			AnchorPattern { name: "return", matcher: |n, _s| match_kind(n, &["return_statement"]) },
+			AnchorPattern { name: "async", matcher: |n, _s| match_kind(n, &["function_declaration", "arrow_function"]) },
+			AnchorPattern { name: "export", matcher: |n, _s| match_kind(n, &["export_statement"]) },
+			AnchorPattern { name: "import", matcher: |n, _s| match_kind(n, &["import_statement"]) },
+		],
+		qualifiers: vec![
+			QualifierSpec {
+				name:       "body",
+				applies_to: vec!["function_declaration".into(), "arrow_function".into()],
+				resolve:    Arc::new(StubResolver),
+			},
+			QualifierSpec {
+				name:       "sig",
+				applies_to: vec!["function_declaration".into()],
+				resolve:    Arc::new(StubResolver),
+			},
+			QualifierSpec {
+				name:       "name",
+				applies_to: vec!["function_declaration".into(), "class_declaration".into()],
+				resolve:    Arc::new(StubResolver),
+			},
+			QualifierSpec {
+				name:       "docstring",
+				applies_to: vec!["function_declaration".into()],
+				resolve:    Arc::new(StubResolver),
+			},
+			QualifierSpec {
+				name:       "type-params",
+				applies_to: vec!["function_declaration".into()],
+				resolve:    Arc::new(StubResolver),
+			},
+		],
+		edge_kinds: EdgeKindSet::default(),
+	}
+}
