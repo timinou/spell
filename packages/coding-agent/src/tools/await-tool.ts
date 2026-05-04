@@ -133,6 +133,8 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 				"id" | "type" | "status" | "label" | "startTime" | "resultText" | "errorText" | "latestProgress"
 			>
 		>,
+		initialIds: Set<string> = new Set(),
+		awaitInvocationTime = 0,
 	): AgentToolResult<AwaitToolDetails> {
 		const now = Date.now();
 		const jobResults: AwaitResult[] = jobs.map(job => {
@@ -153,6 +155,31 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 
 		const completed = jobResults.filter(job => job.status !== "running");
 		const running = jobResults.filter(job => job.status === "running");
+
+		// Detect jobs that were auto-promoted from queued to running during the await
+		const newlyStartedJobs =
+			awaitInvocationTime > 0
+				? manager
+					.getRunningJobs()
+					.filter(j => !initialIds.has(j.id) && j.startTime >= awaitInvocationTime)
+				: [];
+		const newlyStarted: AwaitResult[] = newlyStartedJobs.map(job => {
+			const retry = extractRetryState(job);
+			return {
+				id: job.id,
+				type: job.type,
+				status: "running" as const,
+				label: job.label,
+				durationMs: Math.max(0, now - job.startTime),
+				...(retry ? { retry } : {}),
+			};
+		});
+		manager.acknowledgeDeliveries(newlyStarted.map(j => j.id));
+
+		// Append newly-started to jobResults so details.jobs includes them
+		for (const ns of newlyStarted) {
+			jobResults.push(ns);
+		}
 
 		const lines: string[] = [];
 		if (completed.length > 0) {
@@ -177,6 +204,13 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 				if (job.retry) {
 					lines.push(`  ${replaceTabs(formatRetryStatus(job.retry))}`);
 				}
+			}
+		}
+
+		if (newlyStarted.length > 0) {
+			lines.push(`## Newly Started (${newlyStarted.length})\n`);
+			for (const job of newlyStarted) {
+				lines.push(`- \`${job.id}\` [${job.type}] — ${replaceTabs(job.label)}`);
 			}
 		}
 
