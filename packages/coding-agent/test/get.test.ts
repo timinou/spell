@@ -466,8 +466,8 @@ describe("GetTool", () => {
 				done: true,
 			}];
 			const result = formatCodePathResult(chunks as any, { format: "node-list" });
-			expect(result.text).toContain("[§file]");
-			expect(result.text).toContain("specs/README.md");
+   expect(result.text).toContain("  [file]");
+   			expect(result.text).toContain("specs/README.md");
 		});
 
 		// T2.3: mixed §file + §symbol node → falls back to existing node-list
@@ -543,7 +543,7 @@ describe("GetTool", () => {
 			expect(result.text).toContain("(no entries)");
 		});
 
-		// T2.8: §stat node with just kind metadata
+		// T2.8: §stat node with metadata kind
 		it("renders stat kind for stat nodes", () => {
 			const chunks = [{
 				nodes: [{
@@ -552,7 +552,7 @@ describe("GetTool", () => {
 					rangeEnd: 0,
 					kind: "stat",
 					content: undefined,
-					metadata: { size: 0, mtime: "2026-01-15T10:30:00Z" },
+					metadata: { size: 0, mtime: "2026-01-15T10:30:00Z", kind: "§dir" },
 					diagnostics: [],
 				}],
 				diagnostics: [],
@@ -571,7 +571,7 @@ describe("GetTool", () => {
 					rangeEnd: 0,
 					kind: "stat",
 					content: undefined,
-					metadata: { size: 2048, mtime: "2026-01-15T10:30:00Z" },
+					metadata: { size: 2048, mtime: "2026-01-15T10:30:00Z", kind: "§file" },
 					diagnostics: [],
 				}],
 				diagnostics: [],

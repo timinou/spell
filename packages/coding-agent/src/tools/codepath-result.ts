@@ -2,7 +2,7 @@ import type { CodePathChunk, DiagnosticDto, NodeRefDto } from "./codepath-types"
 import { applyListLimit, type ListLimitOptions } from "./list-limit";
 import { outputMeta } from "./output-meta";
 
-export type CodePathFormatMode = "node-list" | "locations" | "content-only" | "tree" | "simple-list";
+export type CodePathFormatMode = "node-list" | "locations" | "content-only" | "tree" | "simple-list" | "fs-listing";
 
 export interface CodePathResultOptions {
 	format?: CodePathFormatMode;
@@ -103,6 +103,47 @@ function buildSimpleList(nodes: NodeRefDto[]): string {
 	return [...paths].join("\n");
 }
 
+const FS_KINDS = new Set(["file", "dir", "symlink", "stat"]);
+
+function allFsNodes(nodes: NodeRefDto[]): boolean {
+	return nodes.length > 0 && nodes.every(n => FS_KINDS.has(n.kind));
+}
+
+function formatSize(bytes: unknown): string {
+	if (typeof bytes !== "number" || bytes < 0) return "";
+	if (bytes < 1024) return `${bytes}B`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}K`;
+	return `${(bytes / (1024 * 1024)).toFixed(1)}M`;
+}
+
+function buildFsListing(nodes: NodeRefDto[]): string {
+	const lines: string[] = [];
+	for (const node of nodes) {
+		const loc = nodeToLocation(node);
+		if (node.kind === "stat") {
+			const parts: string[] = [loc];
+			const meta = node.metadata ?? {};
+			if (meta.size !== undefined) parts.push(`size=${meta.size}`);
+			if (meta.mtime) parts.push(`mtime=${meta.mtime}`);
+			if (meta.kind) {
+				parts.push(`kind=${meta.kind}`);
+			} else {
+				parts.push("kind=§stat");
+			}
+			lines.push(parts.join("  "));
+		} else if (node.kind === "dir") {
+			lines.push(`${loc}/`);
+		} else if (node.kind === "symlink") {
+			lines.push(`${loc}@`);
+		} else {
+			const size = node.metadata?.size;
+			const sizeStr = size !== undefined ? `  ${formatSize(size)}` : "";
+			lines.push(`${loc}${sizeStr}`);
+		}
+	}
+	return lines.join("\n");
+}
+
 function extractImages(nodes: NodeRefDto[]): Array<{ data: string; mimeType: string; text?: string }> {
 	const images: Array<{ data: string; mimeType: string; text?: string }> = [];
 	for (const node of nodes) {
@@ -157,9 +198,27 @@ export function formatCodePathResult(chunks: CodePathChunk[], options: CodePathR
 		case "simple-list":
 			text = buildSimpleList(nodes);
 			break;
-		default:
-			text = buildNodeList(nodes);
+		case "fs-listing":
+			text = buildFsListing(nodes);
 			break;
+ 	default:
+ 			// Auto-promote to fs-listing only when format is unset (not explicit).
+ 			if (options.format === undefined && allFsNodes(nodes)) {
+ 				text = buildFsListing(nodes);
+ 			} else {
+ 				text = buildNodeList(nodes);
+ 			}
+ 			break;
+	}
+
+	// Degenerate-result hint: single dir node suggests recursive/depth.
+	if (nodes.length === 1 && nodes[0].kind === "dir" && text === `${nodes[0].locator}/`) {
+		text += "\n\n(hint: single directory marker — use recursive: true or depth for recursive listing, or content: false to suppress)";
+	}
+
+	// Empty directory placeholder.
+	if (options.format === undefined && nodes.length === 0 && text === "") {
+		text = "(no entries)";
 	}
 
 	if (diagnostics.length > 0) {
