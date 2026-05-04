@@ -35,7 +35,7 @@ impl NodeRef {
 /// Content payload — what lives at a node.
 /// Binary content is NEVER inlined; it is staged to the artifact store
 /// and returned as an artifact:// handle.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Content {
 	/// Plain text content.

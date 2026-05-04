@@ -19,6 +19,7 @@ pub mod html;
 pub mod mdorg;
 pub mod python;
 pub mod rust;
+pub mod text;
 pub mod typescript;
 
 pub use css::{CssName, CssNameLexer, css_dialect};
