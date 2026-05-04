@@ -1,0 +1,80 @@
+#+TITLE: ARTIFACT_THRESHOLD — make 256 KiB content externalisation threshold configurable per-call (G10)
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-684-artifact-threshold-make-256-kib-content
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+=ARTIFACT_THRESHOLD = 256 KiB= is hardcoded in =marshal.rs:10=. Content larger than this
+is externalised to artifact URIs. Make it configurable via =CodePathOptions= so callers
+can opt to inline larger content (e.g. when the model needs full context) or
+externalise smaller (e.g. for streaming UX).
+
+* Context & Narrative
+Per audit (agent://35-Resolvers): =marshal.rs:10= defines threshold; applied in
+=nodes_to_dtos=. No runtime override. Tools have no way to request "always inline"
+or "always externalise".
+
+* Scope
+** In-scope
+- Add =CodePathOptions.artifact_threshold: Option<u32>= (bytes) NAPI field
+- Plumb through to =nodes_to_dtos=
+- Default behaviour preserved (256 KiB) when option absent
+- TS-side: =get= and =edit= and =manage= and =create= tool schemas accept optional
+  =artifactThreshold=
+- Tests
+** Out-of-scope
+- Per-resolver thresholds
+- Auto-tuning based on model context budget
+
+* Existing Patterns
+- =crates/pi-natives/src/code_path/marshal.rs=
+- =CodePathOptions= NAPI struct at =napi.rs:79-94=
+
+* Tests
+File: =crates/pi-natives/src/code_path/marshal_tests.rs= (extend)
+
+Scenarios:
+1. Default (no option) — content >256 KiB externalised, ≤ inlined
+2. =artifactThreshold: 1024= — content >1 KiB externalised
+3. =artifactThreshold: 0= — everything externalised
+4. =artifactThreshold: u32::MAX= — nothing externalised (bounded by NAPI byte limits)
+
+* Implementation
+** ITEM Threshold-config tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-684-artifact-threshold-make-256-kib-content::tests
+:END:
+4 scenarios.
+
+** ITEM Plumb threshold through NAPI
+:PROPERTIES:
+:CUSTOM_ID: FEAT-684-artifact-threshold-make-256-kib-content::plumb
+:DEPENDS: FEAT-684-artifact-threshold-make-256-kib-content::tests
+:END:
+- Add field to =CodePathOptions= + =CodePathTaskOptions=
+- Pass to =nodes_to_dtos(nodes, threshold)=
+- Default fallback to existing =ARTIFACT_THRESHOLD=
+
+** ITEM TS schema updates
+:PROPERTIES:
+:CUSTOM_ID: FEAT-684-artifact-threshold-make-256-kib-content::ts-schema
+:DEPENDS: FEAT-684-artifact-threshold-make-256-kib-content::plumb
+:END:
+- File: =packages/coding-agent/src/tools/codepath-types.ts=
+- Add optional =artifactThreshold= to get/edit/manage/create schemas
+
+* Edge Cases
+- Threshold larger than NAPI message-size limit (≈ 1 GiB) — kernel rejects with
+  Diagnostic
+- Threshold = 0 with binary file — externalisation always; no infinite loop
+
+* Acceptance Criteria
+- 4 scenarios pass
+- =cargo test -p pi-natives --tests marshal= green
+- =bun run --cwd packages/coding-agent check= 0 errors

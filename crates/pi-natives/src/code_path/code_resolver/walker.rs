@@ -25,6 +25,7 @@ impl CodeResolver for CodeResolverImpl {
 		&self,
 		file: &Path,
 		query: &Query,
+		_qualifier: Option<&pi_code_path::ast::Qualifier>,
 		cancel: &CancellationToken,
 	) -> Result<Vec<NodeRef>, Diagnostic> {
 		let profile = match self.registry.match_path(file) {
@@ -88,14 +89,50 @@ impl CodeResolver for CodeResolverImpl {
 		let locator = file.to_string_lossy().into_owned();
 		let mut results = Vec::with_capacity(nodes.len());
 		for node in nodes {
-			results.push(NodeRef {
+			let mut nref = NodeRef {
 				locator:     locator.clone(),
 				range:       node.start_byte()..node.end_byte(),
 				kind:        format!("§{}", node.kind()),
 				content:     None,
 				metadata:    HashMap::new(),
 				diagnostics: Vec::new(),
-			});
+			};
+			if let Some(q) = _qualifier {
+				if let Some(qspec) = dialect.qualifiers.iter().find(|qs| qs.name == q.name) {
+					if qspec.applies_to.iter().any(|k| k == node.kind()) {
+						if let Some(byte_range) = qspec.resolve.resolve(node, &src, q.args.as_deref()) {
+							if byte_range.is_empty() {
+								nref.diagnostics.push(Diagnostic {
+									variant: DiagnosticVariant::UnsupportedOperation,
+									message: "qualifier returned empty range".into(),
+									span:    None,
+								});
+							} else {
+								nref.range = byte_range.clone();
+								nref.content = Some(pi_code_path::types::Content::Text {
+									value: src[byte_range].to_string(),
+								});
+							}
+						}
+					} else {
+						nref.diagnostics.push(Diagnostic {
+							variant: DiagnosticVariant::UnsupportedOperation,
+							message: format!(
+								"qualifier '{}' does not apply to node kind '{}'",
+								q.name, node.kind()
+							),
+							span:    None,
+						});
+					}
+				} else {
+					nref.diagnostics.push(Diagnostic {
+						variant: DiagnosticVariant::UnsupportedOperation,
+						message: format!("unknown qualifier '{}'", q.name),
+						span:    None,
+					});
+				}
+			}
+			results.push(nref);
 		}
 
 		Ok(results)
@@ -266,6 +303,10 @@ fn predicates_match(
 				!evaluate_query(q, vec![a], src, dialect, &CancellationToken::new()).is_empty()
 			})
 		},
+		Predicate::AnchorFilter(name) => dialect
+			.anchors
+			.iter()
+			.any(|a| a.name == name.as_str() && (a.matcher)(&node, src)),
 		_ => super::predicates::eval(p, &node, src, dialect),
 	})
 }
@@ -344,7 +385,7 @@ mod tests {
 
 	fn run_query(resolver: &CodeResolverImpl, file: &Path, query: Query) -> Vec<NodeRef> {
 		resolver
-			.resolve(file, &query, &CancellationToken::new())
+			.resolve(file, &query, None, &CancellationToken::new())
 			.unwrap()
 	}
 
@@ -497,7 +538,7 @@ mod tests {
 			predicates: vec![],
 		});
 		let err = resolver
-			.resolve(f.path(), &query, &CancellationToken::new())
+			.resolve(f.path(), &query, None, &CancellationToken::new())
 			.unwrap_err();
 		assert!(
 			err.message.contains("no code dialect") || err.message.contains("no language profile")
@@ -518,5 +559,4 @@ mod tests {
 		assert!(!results.is_empty());
 		assert!(results.iter().any(|r| r.kind == "§ERROR"));
 	}
-
 }

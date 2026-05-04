@@ -29,6 +29,8 @@ export class ManageTool implements AgentTool<typeof manageSchema> {
 		_onUpdate?: AgentToolUpdateCallback,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult> {
+		// `index` triggers background code-graph indexing; edge resolvers
+		// emit CODE_GRAPH_NOT_INITIALISED until it completes.
 		const chunks = await executeCodePath({
 			command: "manage",
 			manage: params.command,

@@ -1,0 +1,115 @@
+#+TITLE: Code-resolver routing — symbol queries on md/org/html/css route to CodeResolver, not FsResolver
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-679-code-resolver-routing-symbol-queries-on
+#+LAYER: core
+#+DEPENDS: PROJ-071-napi-namelexer-dispatch-file-extension-r
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+Fix the routing miss in =execute_code_path_inner= where symbol queries on
+non-tree-sitter-Code dialects silently fall through to FsResolver, returning the file
+node instead of the symbol. Spec §3 promises =doc.md::heading=, =styles.css::.btn=,
+=index.html::div[@id]=, =doc.org::Task= return symbol-shaped nodes; today they don't.
+
+* Context & Narrative
+Per audit (agent://35-Resolvers): =napi.rs:194-237= routes Locator::Fs targets via:
+1. =is_text_query(cp)= → TextResolver (for §line/§para/§chunk axes)
+2. =cp.query.is_some()= → FsResolver walks files, then CodeResolver per file
+3. else → FsResolver only
+
+The =cp.query.is_some()= branch ALWAYS runs for symbol queries (=foo.X::Sym= produces a
+query). It calls =code_resolver::new()= which uses =pi_code_engine::LanguageRegistry= to
+look up tree-sitter languages — but mdorg, html, css resolution may behave differently
+since their =NameLexer= isn't a simple identifier lexer.
+
+This item ensures CodeResolver dispatches correctly to tree-sitter-markdown, html, css
+parsers and that the symbol matching uses each dialect's =NameLexer.matches()= against
+parsed AST nodes.
+
+* Scope
+** In-scope
+- Verify =pi_code_engine::LanguageRegistry= has tree-sitter language registrations for
+  =.md/.mdx/.org=, =.html/.htm=, =.css= — add if missing
+- Verify =CodeResolver.resolve= correctly routes to dialect-specific NameLexer.matches
+- Add integration tests at NAPI level proving symbol queries return symbol nodes for
+  each dialect, not file nodes
+- Update =is_text_query= or split into =is_pure_text_query= vs =is_symbol_query= so
+  routing is unambiguous
+
+** Out-of-scope
+- Per-dialect qualifier/anchor impl (covered by FEAT-672..678)
+- Action surface
+
+* Existing Patterns
+- =crates/pi-natives/src/code_path/napi.rs:194-237=, =is_text_query=
+- =crates/pi-natives/src/code_path/code_resolver/walker.rs::CodeResolverImpl=
+- =pi_code_engine::LanguageRegistry= — language registration table
+
+* Tests
+File: =crates/pi-natives/src/code_path/routing_tests.rs= (new)
+
+Scenarios:
+1. =execute_code_path_inner= with target =doc.md::Introduction= returns a node with
+   kind =§heading= (or appropriate md kind), NOT =§file=
+2. Same for =doc.org::Task=
+3. =styles.css::.btn= returns =§rule= node, NOT =§file=
+4. =index.html::div[@id='main']= returns =§element= node, NOT =§file=
+5. =doc.md::§line[10]= still returns line node (text query path preserved)
+6. =doc.md::Foo#first-para= correctly chains: code resolver finds Foo heading, qualifier
+   resolves first-para byte range
+7. =doc.md= (no =::=) still returns single =§file= node
+
+* Implementation
+** ITEM Routing test fixtures
+:PROPERTIES:
+:CUSTOM_ID: FEAT-679-code-resolver-routing-symbol-queries-on::tests
+:END:
+7 scenario tests with real fs fixtures via =tempfile=.
+
+** ITEM Audit + complete LanguageRegistry registrations
+:PROPERTIES:
+:CUSTOM_ID: FEAT-679-code-resolver-routing-symbol-queries-on::registry
+:DEPENDS: FEAT-679-code-resolver-routing-symbol-queries-on::tests
+:END:
+Audit =pi_code_engine::LanguageRegistry= for mdorg/html/css entries. Add
+=tree_sitter_markdown=, =tree_sitter_html=, =tree_sitter_css=, =tree_sitter_org= as
+deps if missing. Register file-extension mappings.
+
+** ITEM Refine routing logic
+:PROPERTIES:
+:CUSTOM_ID: FEAT-679-code-resolver-routing-symbol-queries-on::routing
+:DEPENDS: FEAT-679-code-resolver-routing-symbol-queries-on::registry
+:END:
+- File: =crates/pi-natives/src/code_path/napi.rs=
+- Rename =is_text_query= → =is_pure_text_query= (only line/para/chunk on text axes)
+- Add =is_symbol_query(cp)= for symbol-axis queries (any =head.head= other than
+  line/para/chunk on Structural axis OR any axis other than Structural)
+- Update routing decision tree: pure text → TextResolver; symbol → CodeResolver with
+  dialect picked by file extension; otherwise FsResolver
+
+** ITEM Doc fix
+:PROPERTIES:
+:CUSTOM_ID: FEAT-679-code-resolver-routing-symbol-queries-on::doc-fix
+:DEPENDS: FEAT-679-code-resolver-routing-symbol-queries-on::routing
+:END:
+Update =specs/code-graph/code-path-extensions.md= "Resolver dispatch state machine"
+section with the corrected routing rules.
+
+* Edge Cases
+- Mixed query: =doc.md::Foo/§line[5]= (heading + line slice) — CodeResolver scopes the
+  text axis to within the resolved Foo's byte range
+- File without registered tree-sitter language → returns =§file= node + diagnostic
+  (degrades gracefully, not panic)
+- Empty file → returns =§file= with empty content
+
+* Acceptance Criteria
+- 7 scenarios pass
+- =cargo test -p pi-natives= green
+- Manual smoke: =executeCodePath({target: "README.md::CodePath"})= returns a heading
+  node, not the whole file
+- Spec doc updated with new routing rule

@@ -1,0 +1,98 @@
+#+TITLE: Python dialect — qualifier resolvers + anchor evaluators + edge kinds
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-673-python-dialect-qualifier-resolvers-ancho
+#+LAYER: core
+#+DEPENDS: PROJ-072-qualifierresolver-anchorevaluator-framew PROJ-071-napi-namelexer-dispatch-file-extension-r
+
+* Intention & Purpose
+Port the PROJ-072 framework to Python. Replace =StubResolver= entries in
+=crates/pi-code-path/src/dialects/python.rs= with real resolvers backed by
+=tree_sitter_python=. Customize =EdgeKindSet= per spec =03-python.md=.
+
+* Context & Narrative
+Python dialect has 10 NameLexer tests, zero AST tests. Spec promises 7 qualifiers, 6
+anchors, and edges =ref→/def→/call→/import→/type→/inherits→/override→= (+ optional =export→=).
+Cross-file dependency on PROJ-072 framework + PROJ-071 dispatch is captured via
+=:DEPENDS:= property on this FEAT.
+
+* Scope
+** In-scope
+- 7 qualifier resolvers: =#body=, =#name=, =#sig=, =#docstring=, =#decorators=,
+  =#return-annotation=, =#base-classes=
+- 6 anchor evaluators: =¶return=, =¶guard=, =¶async=, =¶default-param=, =¶first-import=,
+  =¶last-import=
+- =EdgeKindSet= adds =type→=, =inherits→=, =override→= to default
+- 6 edge cases D-1..D-6
+
+** Out-of-scope
+- =__all__= export edge (FUP)
+- Edge graph backend integration
+
+* Existing Patterns
+- =crates/pi-code-path/src/dialects/python.rs= (current dialect)
+- =specs/code-graph/code-path-dialects/03-python.md=
+- =tree_sitter_python= node kinds: =function_definition=, =class_definition=,
+  =decorated_definition=, =decorator=, =import_statement=, =import_from_statement=,
+  =parameters=, =default_parameter=, =return_statement=, =async= keyword,
+  =expression_statement= containing string (docstring)
+
+* Tests
+File: =crates/pi-code-path/src/dialects/python.rs= (extend =mod tests=)
+
+Scenarios:
+1. =foo.py::greet#body= returns function body block
+2. =foo.py::greet#sig= returns =def greet(name: str) -> str= range (excluding body + docstring)
+3. =foo.py::greet#docstring= returns first =expression_statement= containing string
+4. =foo.py::greet#decorators= returns concatenated =@property= etc. span
+5. =foo.py::greet#return-annotation= returns =-> str= span if present
+6. =foo.py::Foo#base-classes= returns =(BaseA, BaseB)= span
+7. =foo.py::*[¶async]= filters to =async def= functions
+8. =foo.py::greet[¶default-param]= filters to functions with default-valued params
+9. =foo.py::*[¶first-import]= matches first =import= or =from ... import=
+10. Edge case D-1: =foo.py::Foo._Foo__priv= matches name-mangled private attribute
+11. Edge case D-2: =foo.py::Foo.x[¶property]= filters property/setter/deleter triples
+12. Edge case D-6: nested function =foo.py::outer.inner= resolves correctly
+
+* Implementation
+** ITEM Python qualifier + anchor test fixtures
+:PROPERTIES:
+:CUSTOM_ID: FEAT-673-python-dialect-qualifier-resolvers-ancho::tests
+:END:
+Add 12 scenario tests using small inline Python source. Parse via =tree_sitter_python=,
+run through CodeResolver, assert byte ranges or filter membership.
+
+** ITEM Python qualifier resolvers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-673-python-dialect-qualifier-resolvers-ancho::qualifiers
+:DEPENDS: FEAT-673-python-dialect-qualifier-resolvers-ancho::tests
+:END:
+Implement =QualifierResolver= for the 7 qualifiers above. Wire into =python::dialect()=.
+
+** ITEM Python anchor evaluators
+:PROPERTIES:
+:CUSTOM_ID: FEAT-673-python-dialect-qualifier-resolvers-ancho::anchors
+:DEPENDS: FEAT-673-python-dialect-qualifier-resolvers-ancho::tests
+:END:
+Implement =AnchorEvaluator= for the 6 anchors above.
+
+** ITEM Python edge kind set
+:PROPERTIES:
+:CUSTOM_ID: FEAT-673-python-dialect-qualifier-resolvers-ancho::edge-kinds
+:DEPENDS: FEAT-673-python-dialect-qualifier-resolvers-ancho::tests
+:END:
+Customize =EdgeKindSet= in =python::dialect()= with =type→/inherits→/override→= added.
+
+* Edge Cases
+- Async functions: handle =async= keyword on =function_definition= node
+- Decorated functions: =decorated_definition= wraps =function_definition=; resolvers must
+  unwrap to access body/sig
+- Property triples: three separate =@property=/=@x.setter=/=@x.deleter= decorators
+- Star imports (=from X import *=): handled by general import edge resolution
+- Multiline docstrings preserved as single =string= node
+
+* Acceptance Criteria
+- 12 scenarios pass; =cargo test -p pi-code-path --tests python= green
+- No =StubResolver= for Python qualifiers
+- Spec =03-python.md= fully cross-walked

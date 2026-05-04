@@ -10,18 +10,20 @@ pub mod qualifiers;
 pub mod suffix_fallback;
 pub mod walker;
 
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
+
 pub use anchors::{DefaultFsAnchorContext, FsAnchor, classify};
 pub use predicates::eval as eval_predicate;
 pub use qualifiers::resolve as resolve_qualifier;
-pub use suffix_fallback::try_suffix_match;
+use suffix_fallback::fs_locator_to_string;
+pub use suffix_fallback::{SuffixFallbackResult, try_suffix_match};
 pub use walker::{WalkOpts, walk};
 
-use std::path::PathBuf;
-use std::sync::Arc;
-
-use crate::ast::{CodePath, Locator};
-use crate::resolver::{CancellationToken, Resolver};
-use crate::types::{Diagnostic, DiagnosticVariant, NodeRef};
+use crate::{
+	ast::{CodePath, Locator},
+	resolver::{CancellationToken, Resolver},
+	types::{Diagnostic, DiagnosticVariant, NodeRef},
+};
 
 /// Top-level FS resolver implementing `Resolver`.
 pub struct FsResolver {
@@ -62,8 +64,43 @@ impl Resolver for FsResolver {
 		}
 		// Suffix fallback if no matches and the locator is plain.
 		if nodes.is_empty() {
-			if let Some(n) = try_suffix_match(loc, &self.root) {
-				nodes.push(n);
+			match try_suffix_match(loc, &self.root) {
+				SuffixFallbackResult::Match(n) => nodes.push(n),
+				SuffixFallbackResult::Ambiguous(candidates) => {
+					let input = fs_locator_to_string(loc);
+					let total = candidates.len();
+					let shown: Vec<_> = candidates.iter().take(5).cloned().collect();
+					let msg = if total > 5 {
+						format!(
+							"[DID_YOU_MEAN] No exact match for {}; candidates: {:?} (... and {} more)",
+							input,
+							shown,
+							total - 5
+						)
+					} else {
+						format!("[DID_YOU_MEAN] No exact match for {}; candidates: {:?}", input, shown)
+					};
+					nodes.push(NodeRef {
+						locator:     input,
+						range:       0..0,
+						kind:        "§not-found".into(),
+						content:     None,
+						metadata:    {
+							let mut m = HashMap::new();
+							m.insert(
+								"did_you_mean".into(),
+								serde_json::to_value(&candidates).unwrap_or_default(),
+							);
+							m
+						},
+						diagnostics: vec![Diagnostic {
+							variant: DiagnosticVariant::Inaccessible,
+							message: msg,
+							span:    None,
+						}],
+					});
+				},
+				SuffixFallbackResult::NotFound => {},
 			}
 		}
 		// Apply qualifier if present.
@@ -78,5 +115,48 @@ impl Resolver for FsResolver {
 			nodes = out;
 		}
 		Ok(nodes)
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::fs;
+
+	use super::*;
+	use crate::ast::{FsLocator, FsSegment};
+
+	#[test]
+	fn resolver_ambiguous_suffix_emits_not_found_node_with_diagnostic() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::create_dir(root.join("a")).unwrap();
+		fs::create_dir(root.join("b")).unwrap();
+		fs::write(root.join("a/foo.ts"), b"1").unwrap();
+		fs::write(root.join("b/foo.ts"), b"2").unwrap();
+
+		let cp = CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![FsSegment::Literal("foo.ts".to_string())],
+			}),
+			query:     None,
+			qualifier: None,
+		};
+		let resolver = FsResolver::new(root);
+		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
+		assert_eq!(nodes.len(), 1);
+		assert_eq!(nodes[0].kind, "§not-found");
+		assert!(!nodes[0].diagnostics.is_empty());
+		let diag = &nodes[0].diagnostics[0];
+		assert!(
+			diag.message.contains("[DID_YOU_MEAN]"),
+			"expected DID_YOU_MEAN marker, got: {}",
+			diag.message
+		);
+		assert!(diag.message.contains("a/foo.ts"));
+		assert!(diag.message.contains("b/foo.ts"));
+		// Metadata should carry the raw candidate list
+		let did_you_mean = nodes[0].metadata.get("did_you_mean").unwrap();
+		let arr = did_you_mean.as_array().unwrap();
+		assert_eq!(arr.len(), 2);
 	}
 }

@@ -1,0 +1,82 @@
+#+TITLE: Go dialect — qualifier resolvers + anchor evaluators + edge kinds
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-674-go-dialect-qualifier-resolvers-anchor-ev
+#+LAYER: core
+#+DEPENDS: PROJ-072-qualifierresolver-anchorevaluator-framew PROJ-071-napi-namelexer-dispatch-file-extension-r
+
+* Intention & Purpose
+Port PROJ-072 framework to Go. Replace stubs in =crates/pi-code-path/src/dialects/go.rs=
+with real resolvers via =tree_sitter_go=. Customize =EdgeKindSet= per spec =04-go.md=.
+Cross-file dep on PROJ-072 captured via :DEPENDS: property.
+
+* Scope
+** In-scope
+- 9 qualifiers: =#body=, =#name=, =#sig=, =#receiver=, =#returns=, =#type-params=,
+  =#struct-tag[key]=, =#interface-method-set=, =#named-returns=
+- 7 anchors: =¶defer=, =¶panic=, =¶recover=, =¶error-check=, =¶return=, =¶first-import=,
+  =¶last-import=
+- =EdgeKindSet= adds =type→/implements→/embeds→=
+- Edge cases D-1..D-7
+** Out-of-scope
+- Generic constraint resolution
+
+* Existing Patterns
+- =crates/pi-code-path/src/dialects/go.rs= (253 LOC)
+- =specs/code-graph/code-path-dialects/04-go.md=
+- =tree_sitter_go= kinds: =function_declaration=, =method_declaration=,
+  =type_declaration=, =struct_type=, =interface_type=, =receiver=, =defer_statement=,
+  =go_statement=, =import_declaration=, =field_declaration=
+
+* Tests
+File: =crates/pi-code-path/src/dialects/go.rs=
+
+Scenarios:
+1. =foo.go::Foo.Bar#body= returns method body for value-receiver
+2. =foo.go::*Foo.Bar#receiver= returns pointer-receiver =(f *Foo)= span
+3. =foo.go::handler#returns= returns full =(int, error)= return tuple
+4. =foo.go::S#struct-tag[json]= returns =json:"name"= tag value
+5. =foo.go::I#interface-method-set= returns concatenated method sigs
+6. =foo.go::*[¶defer]= filters to functions containing =defer=
+7. =foo.go::*[¶error-check]= filters to functions with =if err != nil=
+8. =foo.go::genericFn#type-params= returns =[T any]= span
+9. Edge case D-1: =foo.go::Foo.Bar= and =*Foo.Bar= treated as distinct
+10. Edge case D-3: blank ident =_= ignored
+
+* Implementation
+** ITEM Go qualifier + anchor test fixtures
+:PROPERTIES:
+:CUSTOM_ID: FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::tests
+:END:
+10 scenario tests with inline Go source.
+
+** ITEM Go qualifier resolvers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::qualifiers
+:DEPENDS: FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::tests
+:END:
+9 qualifiers wired into =go::dialect()=.
+
+** ITEM Go anchor evaluators
+:PROPERTIES:
+:CUSTOM_ID: FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::anchors
+:DEPENDS: FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::tests
+:END:
+7 anchors wired.
+
+** ITEM Go edge kind set
+:PROPERTIES:
+:CUSTOM_ID: FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::edge-kinds
+:DEPENDS: FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::tests
+:END:
+=EdgeKindSet= with =type→/implements→/embeds→=.
+
+* Edge Cases
+- Method-set asymmetry: pointer methods belong to =*T= but not =T= (D-2)
+- Multiple =init()= per package: all match =foo.go::init= (D-4)
+- Embedded field access (D-7): handled by edge resolver, not qualifier
+
+* Acceptance Criteria
+- 10 scenarios pass; =cargo test -p pi-code-path --tests go= green
+- Spec =04-go.md= cross-walked

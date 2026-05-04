@@ -1,0 +1,76 @@
+#+TITLE: HTML dialect — qualifier resolvers + anchor evaluators + edge kinds (XPath integration)
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-676-html-dialect-qualifier-resolvers-anchor
+#+LAYER: core
+#+DEPENDS: PROJ-072-qualifierresolver-anchorevaluator-framew PROJ-071-napi-namelexer-dispatch-file-extension-r
+
+* Intention & Purpose
+Port PROJ-072 framework to HTML/XML. Replace stubs in
+=crates/pi-code-path/src/dialects/html.rs= with real resolvers using XPath query engine
+(=sxd-xpath= or =xrust= per spec). Customize =EdgeKindSet= per =06-html.md=. Cross-file dep
+captured via :DEPENDS: property.
+
+* Scope
+** In-scope
+- 5 qualifiers: =#innerHTML=, =#outerHTML=, =#text=, =#attr[name]=, =#tag=
+- 1 anchor: =¶landmark-by-role= (matches ARIA role / HTML5 semantic landmark)
+- =EdgeKindSet= adds =include→= for =iframe[src]=, =object[data]= references
+- Edge cases D-1..D-7
+
+** Out-of-scope
+- Browser-rendering / shadow DOM
+- Live DOM (works only on serialised source)
+
+* Existing Patterns
+- =crates/pi-code-path/src/dialects/html.rs= (current 214 LOC)
+- =specs/code-graph/code-path-dialects/06-html.md=
+- XPath crate selection: =sxd-xpath= for XPath 1.0 (broader compat). Document choice.
+
+* Tests
+File: =crates/pi-code-path/src/dialects/html.rs=
+
+Scenarios:
+1. =index.html::div[@id='main']#innerHTML= returns inner HTML
+2. =index.html::div[@id='main']#outerHTML= returns outer HTML including =<div>= tag
+3. =index.html::p[3]#text= returns text content of third =<p>= (no markup)
+4. =index.html::a[@href]#attr[href]= returns href attribute value
+5. =index.html::button#tag= returns =button= literal
+6. =index.html::*[¶landmark-by-role]= filters to elements with =role= or semantic tags
+7. Edge case D-1: =<br />= self-closing returns empty innerHTML, no error
+8. Edge case D-2: =<template>= contents walked as separate document fragment
+9. Edge case D-6: =<my-element>= custom element matched by tag name
+
+* Implementation
+** ITEM HTML qualifier + anchor test fixtures
+:PROPERTIES:
+:CUSTOM_ID: FEAT-676-html-dialect-qualifier-resolvers-anchor::tests
+:END:
+9 scenario tests using inline HTML strings.
+
+** ITEM HTML qualifier resolvers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-676-html-dialect-qualifier-resolvers-anchor::qualifiers
+:DEPENDS: FEAT-676-html-dialect-qualifier-resolvers-anchor::tests
+:END:
+5 qualifiers wired. =#attr[name]= takes a string arg from QualifierArg::Ident. Add
+=sxd-xpath= dep to =Cargo.toml= if not already present.
+
+** ITEM HTML anchor evaluators + edges
+:PROPERTIES:
+:CUSTOM_ID: FEAT-676-html-dialect-qualifier-resolvers-anchor::anchors-edges
+:DEPENDS: FEAT-676-html-dialect-qualifier-resolvers-anchor::tests
+:END:
+=¶landmark-by-role= evaluator + =include→= edge kind for iframe/object references.
+
+* Edge Cases
+- Self-closing void elements (=<br>=, =<img>=, =<input>=) — innerHTML empty
+- Template fragments (D-2) — separate document; resolver walks parsed contents
+- CDATA sections (D-5) — preserved as text in HTML5 contexts
+- Custom elements with hyphens (=<my-foo>=)
+- Namespace prefixes (D-4) — bind via =xmlns:= attributes
+
+* Acceptance Criteria
+- 9 scenarios pass; =cargo test -p pi-code-path --tests html= green
+- Spec =06-html.md= cross-walked

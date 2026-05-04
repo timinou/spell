@@ -1,0 +1,118 @@
+#+TITLE: FsResolver + TextResolver MutationResolver impls — file-level + line-level actions
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: PROJ-074-fsresolver-textresolver-mutationresolver
+#+LAYER: core
+#+DEPENDS: PROJ-073-action-trait-per-resolver-dispatch-kerne
+
+* Intention & Purpose
+Implement =MutationResolver= for =FsResolver= (file-create / write / delete) and
+=TextResolver= (line-level append / prepend / insert / replace / patch). Migrates the
+work today done by =create.ts::fs.writeFile= + =edit.ts::applyHashlineEdits= behind
+the kernel boundary.
+
+Cross-file dependency on PROJ-073 (Action trait) captured via :DEPENDS: property on
+this PROJ.
+
+* Context & Narrative
+Phase A of PLAN-296 routed =create.ts= to direct =fs.writeFile= and kept hashline edits
+in TS. With kernel-side actions, both flows route through =executeCodePath=. This item
+ships the impls; PROJ-073 ships the trait surface; FEAT-686 wires NAPI; FEAT-687
+migrates tool callers.
+
+* Scope
+** In-scope
+- =FsResolver= impl =MutationResolver= for: =Create=, =Write=, =Delete=
+- =TextResolver= impl =MutationResolver= for: =Append=, =Prepend=, =Insert=,
+  =Replace= (LINE#ID), =Patch= (unified diff)
+- Idempotent flag handling
+- Force flag handling
+- Atomic write via =tempfile + rename=
+- Hashline anchor evaluation matching existing TS-side =applyHashlineEdits= semantics
+- Tests against tempdir fixtures
+
+** Out-of-scope
+- Structural code actions (PROJ-075)
+- Mode/sandbox guards stay in TS-tool side
+- Write-shrink / parse-regression guards stay in TS tools
+
+* Existing Patterns
+- =crates/pi-code-path/src/dialects/fs/= and =text/= existing read-side resolvers
+- =packages/coding-agent/src/patch/= existing Rust-equivalent hashline + patch logic in TS
+- =crates/pi-natives/src/code_buffer.rs= — atomic write, diff generation patterns
+- =diffy= crate (already a dep)
+
+* Tests
+File: =crates/pi-code-path/src/dialects/fs/mutation_tests.rs= (new)
+File: =crates/pi-code-path/src/dialects/text/mutation_tests.rs= (new)
+
+Scenarios (FS):
+1. =Action::Create { content: "hi" }= on =new.txt= writes the file
+2. =Action::Create= without =force= on existing path → Diagnostic =FILE_EXISTS=
+3. =Action::Create { force: true }= overwrites
+4. =Action::Write { content: "..." }= overwrites existing
+5. =Action::Delete= removes file; missing path → =FILE_NOT_FOUND=
+6. Atomic write: process killed mid-write leaves file untouched (best-effort doc-test)
+
+Scenarios (Text):
+7. =Action::Append { lines: ["line"] }= appends
+8. =Action::Prepend { lines: ["line"] }= prepends
+9. =Action::Replace { pos: "5#abc", lines: ["new"] }= replaces line 5 if hash matches
+10. =Action::Replace= with stale hash → =STALE_ANCHOR=
+11. =Action::Patch { diff: "..." }= applies unified diff
+12. =Action::Replace= idempotent — same content + =idempotent: true= → no-op outcome
+13. =Action::Replace= same content + =idempotent: false= → =NOOP= Diagnostic
+
+* Implementation
+** ITEM FS mutation tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-074-fsresolver-textresolver-mutationresolver::fs-tests
+:END:
+6 FS scenarios.
+
+** ITEM Text mutation tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-074-fsresolver-textresolver-mutationresolver::text-tests
+:END:
+7 Text scenarios.
+
+** ITEM FsResolver MutationResolver impl
+:PROPERTIES:
+:CUSTOM_ID: PROJ-074-fsresolver-textresolver-mutationresolver::fs-impl
+:DEPENDS: PROJ-074-fsresolver-textresolver-mutationresolver::fs-tests
+:END:
+- File: =crates/pi-code-path/src/dialects/fs/mutation.rs= (new)
+- Atomic write via =tempfile= + =std::fs::rename=
+- Permission errors → Diagnostic =PERMISSION_DENIED=
+
+** ITEM TextResolver MutationResolver impl
+:PROPERTIES:
+:CUSTOM_ID: PROJ-074-fsresolver-textresolver-mutationresolver::text-impl
+:DEPENDS: PROJ-074-fsresolver-textresolver-mutationresolver::text-tests
+:END:
+- File: =crates/pi-code-path/src/dialects/text/mutation.rs= (new)
+- Hashline computation: align with =packages/coding-agent/src/patch/hashline.ts=
+- Patch apply via =diffy= crate
+
+** ITEM Capability registry entries
+:PROPERTIES:
+:CUSTOM_ID: PROJ-074-fsresolver-textresolver-mutationresolver::caps
+:DEPENDS: PROJ-074-fsresolver-textresolver-mutationresolver::fs-impl PROJ-074-fsresolver-textresolver-mutationresolver::text-impl
+:END:
+Wire =FsResolver::SUPPORTED_ACTIONS= and =TextResolver::SUPPORTED_ACTIONS= per PROJ-073.
+
+* Edge Cases
+- Race: two processes writing same file. Atomic rename ensures one wins; loser's
+  Diagnostic includes =EDIT_RACE=
+- Symlink: write through symlink writes the target. Document this
+- Trailing newline preservation: detect line ending, preserve in writes
+- BOM: detect, strip before logical operations, restore on write
+- Hash algorithm: must match TS-side computeLineHash exactly. Cross-language test
+  fixture verifying parity.
+
+* Acceptance Criteria
+- 13 scenarios pass
+- =cargo test -p pi-code-path --tests fs --tests text= green
+- Hash parity verified
+- TextResolver mutation outcomes include =diff= field

@@ -1,0 +1,102 @@
+#+TITLE: CodeResolver MutationResolver impl — structural code actions via tree-sitter or delegation
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: PROJ-075-coderesolver-mutationresolver-impl-struc
+#+LAYER: core
+#+DEPENDS: PROJ-073-action-trait-per-resolver-dispatch-kerne
+
+* Intention & Purpose
+Implement =MutationResolver= for =CodeResolver=, covering structural action kinds:
+=Rename=, =Wrap=, =FindAndReplace=, =RawTextReplace=, =Splice=, =Move=, =Clone=,
+=Transpose=, =Promote=, =Demote=, =ReplaceCodeBlock=, =RenameClassToken=,
+=RenameIdToken=, =RenameCustomProperty=, =RemoveDeadStyle=, =InsertBefore=,
+=InsertAfter=, =Delete=.
+
+Cross-file dep on PROJ-073 (Action trait) captured via :DEPENDS: property.
+
+Decision: design allows incremental migration. Initial impl can delegate to
+=pi-natives::code_buffer::edit_transaction= for actions where it already produces
+correct results; over time, code paths migrate inward to pure =pi-code-path= logic.
+
+* Context & Narrative
+=pi-natives::code_buffer.rs::execute_code_buffer_inner= (1724 LOC) implements all
+structural actions today, used by Phase A's =edit.ts::#executeStructural=. The
+challenge: =pi-code-path= must NOT depend on =pi-natives= (cycle-free invariant). So
+the impl strategy is:
+
+1. =CodeResolver= in =pi-natives= (impl already lives there per audit) gains a
+   =MutationResolver= impl that internally calls its existing structural-edit machinery.
+2. The =MutationResolver= trait lives in =pi-code-path= so the contract is shared.
+3. =execute_code_path_inner= dispatches actions to =CodeResolver::apply= which then
+   internally consults =edit_transaction= where appropriate.
+
+* Scope
+** In-scope
+- =CodeResolver= (impl in =crates/pi-natives/src/code_path/code_resolver/=) implements
+  =MutationResolver=
+- Action dispatch table mapping =Action= variants → existing =CodeAction= shapes
+- Idempotent + force flag handling consistent with FsResolver/TextResolver
+- Tests via tempdir + tree-sitter fixtures
+
+** Out-of-scope
+- Reimplementing structural-edit logic from scratch
+- Removing =edit_transaction= NAPI (later FUP)
+
+* Existing Patterns
+- =crates/pi-natives/src/code_path/code_resolver/walker.rs= (=CodeResolverImpl=)
+- =crates/pi-natives/src/code_buffer.rs::execute_code_buffer_inner= (structural-edit)
+- =crates/pi-natives/src/code_buffer.rs::CodeAction= struct for reuse
+- =packages/coding-agent/src/tools/edit.ts::#executeStructural= is current caller
+
+* Tests
+File: =crates/pi-natives/src/code_path/code_resolver/mutation_tests.rs= (new)
+
+Scenarios:
+1. =Action::Rename { content: "newName" }= against =foo.ts::oldName= renames symbol
+2. =Action::Wrap= wraps a function body in =try { ... } catch (e) { throw e; }=
+3. =Action::FindAndReplace { find: "oldApi", content: "newApi", occurrence: "all" }=
+4. =Action::Splice { mode: "self" }= deletes the targeted node
+5. =Action::Move { direction: "up" }= moves node above its prev sibling
+6. =Action::InsertBefore { lines: ["// comment"] }= inserts before target
+7. Action against nonexistent target → =TARGET_NOT_FOUND=
+8. Cancellation mid-action → =CANCELLED=
+
+* Implementation
+** ITEM CodeResolver mutation tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-075-coderesolver-mutationresolver-impl-struc::tests
+:END:
+8 scenarios.
+
+** ITEM CodeResolver MutationResolver impl
+:PROPERTIES:
+:CUSTOM_ID: PROJ-075-coderesolver-mutationresolver-impl-struc::impl
+:DEPENDS: PROJ-075-coderesolver-mutationresolver-impl-struc::tests
+:END:
+- File: =crates/pi-natives/src/code_path/code_resolver/mutation.rs= (new)
+- Map kernel =Action= → existing =code_buffer::CodeAction=
+- Delegate to existing structural-edit machinery for proven cases
+- Surface results via =MutationOutcome= (diff, edit_count, target_summary)
+
+** ITEM Capability registry
+:PROPERTIES:
+:CUSTOM_ID: PROJ-075-coderesolver-mutationresolver-impl-struc::caps
+:DEPENDS: PROJ-075-coderesolver-mutationresolver-impl-struc::impl
+:END:
+Register =CodeResolver::SUPPORTED_ACTIONS= covering all 18 structural action kinds.
+
+* Edge Cases
+- Multiple targets matching same query — apply to each, return aggregate edit_count
+- Action target doesn't exist (=TARGET_NOT_FOUND=) — distinct from "exists but no match"
+  (=NO_MATCH=)
+- Invalid action params — =INVALID_ACTION_PARAMS=
+- Cross-file actions (=Rename= updating both decl + refs) — out of scope
+- Tree-sitter parse failure on target → Diagnostic, no mutation
+
+* Acceptance Criteria
+- 8 scenarios pass
+- =cargo test -p pi-natives --tests code_resolver= green
+- =CodeResolver::supports(...)= reports correct capabilities for all 18 action kinds
+- Architecture invariant intact: =pi-code-path= still has zero deps on =pi-natives=,
+  =pi-code-graph=, =pi-code-engine=

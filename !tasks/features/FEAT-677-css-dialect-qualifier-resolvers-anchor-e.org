@@ -1,0 +1,80 @@
+#+TITLE: CSS dialect — qualifier resolvers + anchor evaluators + edge kinds
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-677-css-dialect-qualifier-resolvers-anchor-e
+#+LAYER: core
+#+DEPENDS: PROJ-072-qualifierresolver-anchorevaluator-framew PROJ-071-napi-namelexer-dispatch-file-extension-r
+
+* Intention & Purpose
+Port PROJ-072 framework to CSS. Replace stubs in
+=crates/pi-code-path/src/dialects/css.rs= with real resolvers using =cssparser= +
+=selectors= crates per spec =07-css.md=. Customize =EdgeKindSet=. Cross-file dep
+captured via :DEPENDS: property.
+
+* Scope
+** In-scope
+- 6 qualifiers: =#selector=, =#declaration[prop]=, =#value=, =#specificity=,
+  =#important=, =#prelude=
+- 3 anchors: =¶custom-prop=, =¶important=, =¶vendor-prefix=
+- =EdgeKindSet= adds =extends→= (Sass-style, optional), =imports→= (=@import=),
+  =mixin→= (Sass-style, optional)
+- Edge cases D-1..D-7
+
+** Out-of-scope
+- Sass / Less preprocessing
+- CSSOM specificity beyond what =selectors= provides
+
+* Existing Patterns
+- =crates/pi-code-path/src/dialects/css.rs= (210 LOC)
+- =specs/code-graph/code-path-dialects/07-css.md=
+- Crates: =cssparser= (lex), =selectors= (selector matching, specificity)
+
+* Tests
+File: =crates/pi-code-path/src/dialects/css.rs=
+
+Scenarios:
+1. =styles.css::.btn#selector= returns selector text =.btn=
+2. =styles.css::.btn#declaration[color]= returns =color: red;=
+3. =styles.css::.btn#value= for matched declaration returns value =red=
+4. =styles.css::.btn#specificity= returns calculated specificity (0,1,0)
+5. =styles.css::@media=screen#prelude= returns =screen and (max-width: 600px)=
+6. =styles.css::*[¶important]= filters declarations with =!important=
+7. =styles.css::*[¶custom-prop]= filters =--var-name= declarations
+8. =styles.css::*[¶vendor-prefix]= filters =-webkit-=, =-moz-=, etc.
+9. Edge case D-1: =styles.css::.a, .b= treated as two distinct selectors
+10. Edge case D-3: nested rule =.btn { .icon {} }= resolves =.btn .icon=
+
+* Implementation
+** ITEM CSS qualifier + anchor test fixtures
+:PROPERTIES:
+:CUSTOM_ID: FEAT-677-css-dialect-qualifier-resolvers-anchor-e::tests
+:END:
+10 scenario tests with inline CSS source.
+
+** ITEM CSS qualifier resolvers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-677-css-dialect-qualifier-resolvers-anchor-e::qualifiers
+:DEPENDS: FEAT-677-css-dialect-qualifier-resolvers-anchor-e::tests
+:END:
+6 qualifiers wired into =css::dialect()=. =#declaration[prop]= takes property-name arg.
+
+** ITEM CSS anchor evaluators + edges
+:PROPERTIES:
+:CUSTOM_ID: FEAT-677-css-dialect-qualifier-resolvers-anchor-e::anchors-edges
+:DEPENDS: FEAT-677-css-dialect-qualifier-resolvers-anchor-e::tests
+:END:
+3 anchors + =extends→/imports→/mixin→= edge kinds.
+
+* Edge Cases
+- Selector lists (D-1): =a, b= produces two QSelector entries
+- Functional pseudos (D-2): =:is(.x, .y)= flattens; =:has()= depth-1 only
+- Nesting (D-3): =&= reference handled via parent selector concat
+- =@scope= (D-4): contained selectors limited to =@scope { }= scope
+- Custom property cascade (D-5): =--name= matched as custom-prop anchor
+- =!important= (D-6): boolean flag on declaration
+- Duplicate declarations (D-7): all match; ordinal disambiguates
+
+* Acceptance Criteria
+- 10 scenarios pass; =cargo test -p pi-code-path --tests css= green
+- Spec =07-css.md= cross-walked

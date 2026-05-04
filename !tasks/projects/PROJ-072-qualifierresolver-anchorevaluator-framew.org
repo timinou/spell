@@ -1,0 +1,182 @@
+#+TITLE: QualifierResolver + AnchorEvaluator framework — replace StubResolver with real per-dialect contract
+#+STATE: DOING
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: PROJ-072-qualifierresolver-anchorevaluator-framew
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+
+Define and ship the trait surface that every dialect's =#qualifier= and =[¶anchor]= will
+resolve against. Currently =QualifierSpec.resolver= is universally a =StubResolver= that
+returns 0..0 byte ranges and =AnchorPattern.matcher= is a fn pointer that's defined per
+dialect but **never invoked at query time**. This item delivers the framework + spec doc
++ Rust dialect as the pilot implementation. FEAT-672..679 (per-dialect work) all build
+on these contracts.
+
+* Context & Narrative
+
+Per audit (=memory://root= / agent://33-Spec): all 8 dialects register =QualifierSpec=
+entries with names like =body=, =name=, =sig=, =decorators=, =return-type=, etc., but
+the =resolver: Box<dyn QualifierResolver>= is universally =StubResolver= which returns
+=Range { start: 0, end: 0 }=. So =foo.ts::Bar#body= parses correctly, the qualifier is
+attached, but its byte range is wrong → the get tool returns the entire file or nothing.
+
+Anchors have a similar issue. =AnchorPattern.matcher: fn(node, src) -> bool= is defined
+per dialect but =CodeResolver.evaluate_query= does not call it for =Predicate::AnchorFilter=
+or =Head::AnchorName=. So =foo.ts::Bar[¶return]= (filter to functions containing a return)
+silently no-ops.
+
+This item ships:
+1. A real =QualifierResolver= trait + invocation point in =CodeResolver=
+2. A real =AnchorEvaluator= surface invoked for =[¶name]= predicates and =¶head= locators
+3. The Rust dialect's qualifiers and anchors as the proof-of-concept pilot
+
+The remaining 7 dialects are subsequent FEAT items.
+
+* Scope
+
+** In-scope
+- =QualifierResolver= trait redesigned with full per-dialect signature
+- =AnchorEvaluator= path through =CodeResolver=
+- =CodeResolver= updated to call qualifier/anchor resolvers
+- Pilot impl: Rust qualifiers (=#body=, =#name=, =#sig=, =#generics=, =#where=, =#attrs=,
+  =#visibility=, =#match-arm=, =#unsafe-block=) and anchors (=¶test-body=, =¶bench-body=,
+  =¶unsafe=, =¶return=, =¶guard=, =¶error-path=, =¶first-use=, =¶last-use=,
+  =¶mod-side-effect=, =¶doc-comment=)
+- Tests for the framework + Rust pilot
+
+** Out-of-scope
+- The remaining 7 dialects (covered by FEAT-672..679 sibling items)
+- New combinators or AST changes
+- Edge resolver work (PROJ-073)
+
+* Existing Patterns
+
+- =crates/pi-code-path/src/dialect.rs= — =QualifierSpec=, =AnchorPattern=, =LanguageDialect=
+- =crates/pi-code-path/src/dialects/rust.rs= — has stub qualifiers + anchor matchers; pilot here
+- =crates/pi-natives/src/code_path/code_resolver/walker.rs= — =evaluate_query= consumes
+  =Combinator= but ignores =Qualifier= and =Predicate::AnchorFilter=
+- =tree_sitter::Node= API — =node.kind()=, =node.byte_range()=, =node.child_by_field_name()=,
+  =node.children(&mut cursor)= — primitive ops the resolvers will call
+
+* Tests
+
+File: =crates/pi-code-path/src/dialects/rust.rs= (extend tests module)
+File: =crates/pi-natives/src/code_path/code_resolver/qualifier_tests.rs= (new)
+
+Scenarios:
+1. =foo.rs::my_fn#body= returns the byte range of the function body block, NOT the whole
+   item
+2. =foo.rs::my_fn#sig= returns the byte range from =fn= keyword through return type, NOT
+   including body
+3. =foo.rs::my_fn#name= returns the byte range of the identifier =my_fn=
+4. =foo.rs::Foo#generics= returns the =<T>= part of =impl<T> Foo<T>=
+5. =foo.rs::my_fn#attrs= returns concatenated attribute byte ranges (=#[test]=, =#[cfg(...)]=)
+6. =foo.rs/[¶test-body]= filters to functions that have a =#[test]= attribute
+7. =foo.rs::*[¶unsafe]= filters to items containing an =unsafe { }= block
+8. =foo.rs::*[¶doc-comment]= filters to items preceded by a =///= doc comment
+9. =foo.rs::my_fn[.return]= still works (=HasDescendant= subquery — verifies anchor is
+   distinct from subquery)
+10. Anchor not found → empty result (NOT error)
+11. Qualifier on non-applicable node kind (=#body= on a =const=) → empty content + diagnostic
+
+* Implementation
+
+** ITEM Define QualifierResolver + AnchorEvaluator traits
+:PROPERTIES:
+:CUSTOM_ID: PROJ-072-qualifierresolver-anchorevaluator-framew::traits
+:END:
+- File: =crates/pi-code-path/src/dialect.rs=
+- Replace =QualifierSpec.resolver: Box<dyn QualifierResolver>= signature:
+  =fn resolve(&self, node: tree_sitter::Node, src: &[u8], args: &[QualifierArg]) -> Result<NodeRef, Diagnostic>=
+- Add =QualifierArg= enum (Range, Integer, String, Ident) for arg-bearing qualifiers
+  like =#captures[3]= or =#lines[10..20]=
+- Add =AnchorEvaluator= trait: =fn matches(&self, node: tree_sitter::Node, src: &[u8]) -> bool=
+- Convert =AnchorPattern.matcher: fn(...)= to =Box<dyn AnchorEvaluator>= for symmetry
+- Keep backward-compat shims if needed; mark =StubResolver= deprecated
+
+** ITEM Wire CodeResolver to call resolvers
+:PROPERTIES:
+:CUSTOM_ID: PROJ-072-qualifierresolver-anchorevaluator-framew::resolver-wiring
+:DEPENDS: PROJ-072-qualifierresolver-anchorevaluator-framew::traits
+:END:
+- File: =crates/pi-natives/src/code_path/code_resolver/walker.rs=
+- After =evaluate_query= produces matching nodes, if =cp.qualifier.is_some()=, call
+  =dialect.qualifiers.get(name)?.resolver.resolve(node, src, args)= and either replace
+  the NodeRef's content/range with the resolver output or attach a diagnostic
+- For =Predicate::AnchorFilter(name)= and =Head::AnchorName(name)=, look up
+  =dialect.anchors.iter().find(|a| a.name == name)= and call =a.evaluator.matches(node, src)=
+  to filter
+- Apply qualifier resolution AFTER all combinators/predicates so qualifiers see the final
+  candidate set
+
+** ITEM Implement Rust qualifier resolvers (pilot)
+:PROPERTIES:
+:CUSTOM_ID: PROJ-072-qualifierresolver-anchorevaluator-framew::rust-qualifiers
+:DEPENDS: PROJ-072-qualifierresolver-anchorevaluator-framew::resolver-wiring
+:END:
+- File: =crates/pi-code-path/src/dialects/rust.rs=
+- Implement 9 qualifier resolvers in a new sub-module =rust::qualifiers=:
+  - =#body= — for fn/impl/mod/trait nodes, return the block body's byte range
+  - =#sig= — for fn nodes, range from =fn= keyword through return-type node (excluding body)
+  - =#name= — for any decl, byte range of the =name= field child
+  - =#generics= — return =<T,U>= range if present, else empty
+  - =#where= — return =where ...= clause range if present
+  - =#attrs= — concat attribute ranges; if multiple, return aggregate byte span
+  - =#visibility= — =pub=/=pub(crate)= range if present
+  - =#match-arm[N]= — Nth match arm in a =match= expression
+  - =#unsafe-block= — first =unsafe { }= block range within node
+- Each returns =NodeRef= with =Content::Text { start, end }= byte range; failures emit a
+  =Diagnostic= but do NOT panic
+
+** ITEM Implement Rust anchor evaluators
+:PROPERTIES:
+:CUSTOM_ID: PROJ-072-qualifierresolver-anchorevaluator-framew::rust-anchors
+:DEPENDS: PROJ-072-qualifierresolver-anchorevaluator-framew::resolver-wiring
+:END:
+- File: =crates/pi-code-path/src/dialects/rust.rs=
+- Implement 10 anchor evaluators (=AnchorEvaluator= impls):
+  - =¶test-body= — node has child =#[test]= attribute
+  - =¶bench-body= — node has child =#[bench]=
+  - =¶unsafe= — node contains =unsafe { }= or has =unsafe= modifier
+  - =¶return= — node contains =return= expr
+  - =¶guard= — node is a function with =if let Some(...) = ... else return= early-exit pattern
+  - =¶error-path= — node has =?= operator usage
+  - =¶first-use= — first =use= statement in module
+  - =¶last-use= — last =use= statement in module
+  - =¶mod-side-effect= — mod has top-level expression statements
+  - =¶doc-comment= — node preceded by sibling =line_comment= matching =///= or =//!=
+
+** ITEM Add Rust dialect AST tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-072-qualifierresolver-anchorevaluator-framew::rust-tests
+:DEPENDS: PROJ-072-qualifierresolver-anchorevaluator-framew::rust-qualifiers PROJ-072-qualifierresolver-anchorevaluator-framew::rust-anchors
+:END:
+- File: =crates/pi-code-path/src/dialects/rust.rs= (extend =mod tests=)
+- Use =tempfile= + =tree_sitter_rust= + Rust source fixtures
+- Cover all 11 scenarios from the Tests section above
+- Each test uses a real Rust source file, parses via tree-sitter, runs CodeResolver, asserts
+  byte range or filter result
+
+* Edge Cases
+
+- Tree-sitter parse failure → diagnostic, qualifier returns 0..0 with error
+- Qualifier =#body= on node without body (=const X = 1=) → empty range + warning diagnostic
+- Anchor matcher returning =true= for non-applicable nodes — guard with kind check
+- Multiple anchors of same name in a node — =[¶X]= is boolean, dedup not relevant
+- =#match-arm[N]= where N exceeds arm count → empty range + diagnostic
+- Performance: anchor matcher fired per candidate node; cache nothing for now (FUP target)
+
+* Acceptance Criteria
+
+- All 11 Rust pilot test scenarios pass
+- =cargo test -p pi-code-path= delta is positive (more passing tests, no regressions)
+- =StubResolver= no longer used by Rust dialect (other 7 dialects retain it until FEAT-672..679 land)
+- Spec doc =specs/code-graph/code-path-dialects/02-rust.md= cross-checked: every qualifier
+  + anchor in the spec has a real impl
+- Public docstrings on =QualifierResolver= and =AnchorEvaluator= traits explain contract

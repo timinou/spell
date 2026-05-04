@@ -1,0 +1,120 @@
+#+TITLE: Action trait + per-resolver dispatch — kernel mutation surface design
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: PROJ-073-action-trait-per-resolver-dispatch-kerne
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+Define the kernel's mutation API. Today =pi-code-path= is read-only:
+=opts.command/opts.actions/opts.manage= in =CodePathOptions= are unused. This item
+delivers the trait surface + spec doc + AST extension for actions; sibling items
+implement actions per resolver.
+
+Decision per planning Q3: kernel exposes an =Action= trait dispatched per-resolver.
+Each resolver chooses how to apply (FS write, text-line edit, structural code edit).
+This allows incremental migration: =executeCodeBuffer= can stay during transition.
+
+* Context & Narrative
+Per audit (agent://35-Resolvers): =Resolver=, =CodeResolver=, =EdgeResolver=,
+=SchemeHandler= all expose only =fn resolve()=. No mutation method. =CodePathOptions=
+fields exist but are dead. Phase A of PLAN-296 patched around this by routing
+=create.ts= to direct =fs.writeFile= and =edit.ts= structural to =executeCodeBuffer=.
+
+This item ships the trait + Action types + dispatch wiring **without** implementing any
+specific action (siblings do). Pure type scaffolding so downstream items can land in
+parallel.
+
+* Scope
+** In-scope
+- =Action= enum in =crates/pi-code-path/src/ast.rs=: variants per spec (Create, Write,
+  Delete, Append, Prepend, Insert, Replace, Patch, Rename, Wrap, FindAndReplace,
+  RawTextReplace, Splice, Move, Clone, Transpose, RemoveDeadStyle, Promote, Demote,
+  ReplaceCodeBlock, RenameClassToken, RenameIdToken, RenameCustomProperty)
+- =ActionParams= struct with all fields the action might need (content, find, mode,
+  pos, end, lines, diff, scope, occurrence, force, idempotent, etc.)
+- =MutationResolver= trait extending =Resolver=:
+  =fn apply(&self, target: &CodePath, action: &Action, params: &ActionParams,
+   cancel: &CancellationToken) -> Result<MutationOutcome, Diagnostic>=
+- =MutationOutcome= struct: =edit_count, diff, created, target_summary=
+- =SUPPORTED_ACTIONS: &[ActionKind]= per resolver — for capability discovery
+- Spec doc updated: =specs/code-graph/code-path-extensions.md= "Action surface" section
+- Backward-compat: =Resolver= existing =resolve= unchanged; =MutationResolver= is opt-in
+- Tests: trait surface compiles; placeholder default impls return =UNSUPPORTED_ACTION= Diagnostic
+** Out-of-scope
+- Resolver-specific action impls (covered by PROJ-074 fs/text + PROJ-075 code)
+- NAPI bridge (covered by FEAT-686)
+- Tool migration (covered by FEAT-687/-688)
+
+* Existing Patterns
+- =crates/pi-code-path/src/ast.rs= — AST types, =Locator/Query/Step/Predicate/Combinator=
+- =crates/pi-code-path/src/resolver/traits.rs= — existing =Resolver= trait
+- =packages/coding-agent/src/tools/codepath-types.ts::codePathActionSchema= — TS-side
+  schema with all 22 action kinds; mirror the structure in Rust =Action= enum
+- =crates/pi-natives/src/code_buffer.rs::CodeAction= struct — existing Rust-side action
+  shape; reuse field names for consistency
+
+* Tests
+File: =crates/pi-code-path/src/ast.rs= and =resolver/traits.rs= test modules
+
+Scenarios:
+1. =Action::Create { content }= constructs and round-trips through serde
+2. =Action::Replace { pos, end, lines }= constructs
+3. =MutationResolver::apply= default impl returns =UNSUPPORTED_ACTION= Diagnostic
+4. =SUPPORTED_ACTIONS= constant exposes resolver capabilities
+5. Spec round-trip: every action kind in =codePathActionSchema= TS-side has a Rust =Action= variant
+
+* Implementation
+** ITEM Action enum + ActionParams + serde
+:PROPERTIES:
+:CUSTOM_ID: PROJ-073-action-trait-per-resolver-dispatch-kerne::types
+:END:
+- File: =crates/pi-code-path/src/ast.rs=
+- Add =Action= enum, =ActionParams= struct, =ActionKind= identifiers
+- =serde= derive for both, mirroring TS schema field names
+- Round-trip tests parse(render(action)) ≡ action
+
+** ITEM MutationResolver trait
+:PROPERTIES:
+:CUSTOM_ID: PROJ-073-action-trait-per-resolver-dispatch-kerne::trait
+:DEPENDS: PROJ-073-action-trait-per-resolver-dispatch-kerne::types
+:END:
+- File: =crates/pi-code-path/src/resolver/traits.rs=
+- Define =MutationResolver= trait with =apply= method + =supports(action: ActionKind) -> bool=
+- Default impls return =UnsupportedAction= Diagnostic
+- =MutationOutcome= struct
+
+** ITEM Spec doc update
+:PROPERTIES:
+:CUSTOM_ID: PROJ-073-action-trait-per-resolver-dispatch-kerne::spec
+:DEPENDS: PROJ-073-action-trait-per-resolver-dispatch-kerne::trait
+:END:
+- File: =specs/code-graph/code-path-extensions.md=
+- Add "Action surface" section: trait contract, action enum, dispatch rules
+- Update "NAPI bridge streaming contract" with mutation flow
+
+** ITEM Capability registry
+:PROPERTIES:
+:CUSTOM_ID: PROJ-073-action-trait-per-resolver-dispatch-kerne::registry
+:DEPENDS: PROJ-073-action-trait-per-resolver-dispatch-kerne::trait
+:END:
+Per-resolver =SUPPORTED_ACTIONS: &'static [ActionKind]=. Used by NAPI bridge to dispatch
+correctly: an action targeting an FS path goes to FsResolver mutation impl; structural
+action against a symbol path goes to CodeResolver mutation impl.
+
+* Edge Cases
+- Action with mismatched params (e.g. Replace without =pos=) — Diagnostic
+  =INVALID_ACTION_PARAMS= at apply time, not compile time (params are typed Optional)
+- Multiple actions on same target — applied in order; earlier failures abort
+- Cancellation during apply — Diagnostic =CANCELLED=, no partial state guarantees beyond
+  what the resolver provides
+
+* Acceptance Criteria
+- =cargo test -p pi-code-path= 0 regressions
+- 5 trait/serde test scenarios pass
+- Spec doc updated and matches Rust =Action= enum exhaustively
+- TS schema and Rust enum cross-walked: 22 action kinds align

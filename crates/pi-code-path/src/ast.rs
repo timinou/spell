@@ -294,3 +294,350 @@ impl fmt::Display for Axis {
 		}
 	}
 }
+// ── Actions ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Action {
+	Create {
+		content: ActionContent,
+		#[serde(default)]
+		force:   bool,
+	},
+	Write {
+		content: ActionContent,
+		#[serde(default)]
+		force:   bool,
+	},
+	Delete,
+	Append {
+		lines: ActionContent,
+	},
+	Prepend {
+		lines: ActionContent,
+	},
+	Insert {
+		#[serde(default)]
+		pos:   Option<String>,
+		#[serde(default)]
+		line:  Option<u32>,
+		lines: ActionContent,
+	},
+	Replace {
+		#[serde(default)]
+		pos:   Option<String>,
+		#[serde(default)]
+		end:   Option<String>,
+		#[serde(default)]
+		line:  Option<u32>,
+		#[serde(default)]
+		lines: Option<ActionContent>,
+	},
+	Patch {
+		diff: String,
+	},
+	Rename {
+		content: String,
+	},
+	Wrap {
+		content: ActionContent,
+	},
+	FindAndReplace {
+		find:       ActionContent,
+		content:    ActionContent,
+		#[serde(default)]
+		occurrence: Option<Occurrence>,
+	},
+	RawTextReplace {
+		find:    ActionContent,
+		content: ActionContent,
+	},
+	Splice {
+		#[serde(default)]
+		mode: Option<SpliceMode>,
+	},
+	Move {
+		direction: Direction,
+	},
+	Clone {
+		#[serde(default)]
+		direction: Option<Direction>,
+	},
+	Transpose {
+		#[serde(default)]
+		line:   Option<u32>,
+		#[serde(default)]
+		column: Option<u32>,
+	},
+	RenameClassToken {
+		find:    String,
+		content: String,
+	},
+	RenameIdToken {
+		find:    String,
+		content: String,
+	},
+	RenameCustomProperty {
+		find:    String,
+		content: String,
+	},
+	RemoveDeadStyle,
+	Promote,
+	Demote,
+	ReplaceCodeBlock {
+		content: ActionContent,
+	},
+	InsertBefore {
+		lines: ActionContent,
+	},
+	InsertAfter {
+		lines: ActionContent,
+	},
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ActionContent {
+	Single(String),
+	Multi(Vec<String>),
+}
+
+impl ActionContent {
+	pub fn join(&self, sep: &str) -> String {
+		match self {
+			Self::Single(s) => s.clone(),
+			Self::Multi(v) => v.join(sep),
+		}
+	}
+
+	pub fn lines(&self) -> Vec<String> {
+		match self {
+			Self::Single(s) => s.split('\n').map(String::from).collect(),
+			Self::Multi(v) => v.clone(),
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Occurrence {
+	First,
+	Last,
+	All,
+	#[serde(untagged)]
+	Index(u32),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpliceMode {
+	#[serde(rename = "self")]
+	OnlySelf,
+	Up,
+	Down,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Direction {
+	Up,
+	Down,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ActionKind {
+	Create,
+	Write,
+	Delete,
+	Append,
+	Prepend,
+	Insert,
+	Replace,
+	Patch,
+	Rename,
+	Wrap,
+	FindAndReplace,
+	RawTextReplace,
+	Splice,
+	Move,
+	Clone,
+	Transpose,
+	RenameClassToken,
+	RenameIdToken,
+	RenameCustomProperty,
+	RemoveDeadStyle,
+	Promote,
+	Demote,
+	ReplaceCodeBlock,
+	InsertBefore,
+	InsertAfter,
+}
+
+impl Action {
+	pub fn kind(&self) -> ActionKind {
+		match self {
+			Self::Create { .. } => ActionKind::Create,
+			Self::Write { .. } => ActionKind::Write,
+			Self::Delete => ActionKind::Delete,
+			Self::Append { .. } => ActionKind::Append,
+			Self::Prepend { .. } => ActionKind::Prepend,
+			Self::Insert { .. } => ActionKind::Insert,
+			Self::Replace { .. } => ActionKind::Replace,
+			Self::Patch { .. } => ActionKind::Patch,
+			Self::Rename { .. } => ActionKind::Rename,
+			Self::Wrap { .. } => ActionKind::Wrap,
+			Self::FindAndReplace { .. } => ActionKind::FindAndReplace,
+			Self::RawTextReplace { .. } => ActionKind::RawTextReplace,
+			Self::Splice { .. } => ActionKind::Splice,
+			Self::Move { .. } => ActionKind::Move,
+			Self::Clone { .. } => ActionKind::Clone,
+			Self::Transpose { .. } => ActionKind::Transpose,
+			Self::RenameClassToken { .. } => ActionKind::RenameClassToken,
+			Self::RenameIdToken { .. } => ActionKind::RenameIdToken,
+			Self::RenameCustomProperty { .. } => ActionKind::RenameCustomProperty,
+			Self::RemoveDeadStyle => ActionKind::RemoveDeadStyle,
+			Self::Promote => ActionKind::Promote,
+			Self::Demote => ActionKind::Demote,
+			Self::ReplaceCodeBlock { .. } => ActionKind::ReplaceCodeBlock,
+			Self::InsertBefore { .. } => ActionKind::InsertBefore,
+			Self::InsertAfter { .. } => ActionKind::InsertAfter,
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct MutationOutcome {
+	#[serde(default)]
+	pub edit_count:     u32,
+	#[serde(default)]
+	pub diff:           Option<String>,
+	#[serde(default)]
+	pub created:        bool,
+	#[serde(default)]
+	pub target_summary: Option<String>,
+}
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn action_create_serializes_correctly() {
+		let a = Action::Create { content: ActionContent::Single("hi".into()), force: false };
+		let v = serde_json::to_value(&a).unwrap();
+		assert_eq!(v["kind"], "create");
+		assert_eq!(v["content"], "hi");
+		assert_eq!(v["force"], false);
+	}
+
+	#[test]
+	fn action_roundtrip_create() {
+		let a = Action::Create { content: ActionContent::Single("hi".into()), force: true };
+		let json = serde_json::to_string(&a).unwrap();
+		let b: Action = serde_json::from_str(&json).unwrap();
+		assert_eq!(a, b);
+	}
+
+	#[test]
+	fn action_roundtrip_replace_with_pos_and_lines() {
+		let a = Action::Replace {
+			pos:   Some("5#abc".into()),
+			end:   None,
+			line:  None,
+			lines: Some(ActionContent::Multi(vec!["x".into()])),
+		};
+		let json = serde_json::to_string(&a).unwrap();
+		let b: Action = serde_json::from_str(&json).unwrap();
+		assert_eq!(a, b);
+	}
+
+	#[test]
+	fn mutation_outcome_default_serializes_with_zero_edit_count() {
+		let m = MutationOutcome::default();
+		let v = serde_json::to_value(&m).unwrap();
+		assert_eq!(v["editCount"], 0);
+	}
+
+	#[test]
+	fn occurrence_index_roundtrips() {
+		let o = Occurrence::Index(4);
+		let json = serde_json::to_string(&o).unwrap();
+		assert_eq!(json, "4");
+		let back: Occurrence = serde_json::from_str(&json).unwrap();
+		assert_eq!(o, back);
+	}
+
+	#[test]
+	fn action_content_multi_roundtrips() {
+		let c = ActionContent::Multi(vec!["a".into(), "b".into()]);
+		let json = serde_json::to_string(&c).unwrap();
+		let back: ActionContent = serde_json::from_str(&json).unwrap();
+		assert_eq!(c, back);
+	}
+
+	#[test]
+	fn action_kind_all_variants_reachable() {
+		let actions = vec![
+			Action::Create { content: ActionContent::Single("".into()), force: false },
+			Action::Write { content: ActionContent::Single("".into()), force: false },
+			Action::Delete,
+			Action::Append { lines: ActionContent::Single("".into()) },
+			Action::Prepend { lines: ActionContent::Single("".into()) },
+			Action::Insert { pos: None, line: None, lines: ActionContent::Single("".into()) },
+			Action::Replace { pos: None, end: None, line: None, lines: None },
+			Action::Patch { diff: "".into() },
+			Action::Rename { content: "".into() },
+			Action::Wrap { content: ActionContent::Single("".into()) },
+			Action::FindAndReplace {
+				find:       ActionContent::Single("".into()),
+				content:    ActionContent::Single("".into()),
+				occurrence: None,
+			},
+			Action::RawTextReplace {
+				find:    ActionContent::Single("".into()),
+				content: ActionContent::Single("".into()),
+			},
+			Action::Splice { mode: None },
+			Action::Move { direction: Direction::Up },
+			Action::Clone { direction: None },
+			Action::Transpose { line: None, column: None },
+			Action::RenameClassToken { find: "".into(), content: "".into() },
+			Action::RenameIdToken { find: "".into(), content: "".into() },
+			Action::RenameCustomProperty { find: "".into(), content: "".into() },
+			Action::RemoveDeadStyle,
+			Action::Promote,
+			Action::Demote,
+			Action::ReplaceCodeBlock { content: ActionContent::Single("".into()) },
+			Action::InsertBefore { lines: ActionContent::Single("".into()) },
+			Action::InsertAfter { lines: ActionContent::Single("".into()) },
+		];
+		let kinds: Vec<ActionKind> = actions.iter().map(|a| a.kind()).collect();
+		assert_eq!(kinds.len(), 25);
+		// Ensure each ActionKind variant appears at least once.
+		assert!(kinds.contains(&ActionKind::Create));
+		assert!(kinds.contains(&ActionKind::Write));
+		assert!(kinds.contains(&ActionKind::Delete));
+		assert!(kinds.contains(&ActionKind::Append));
+		assert!(kinds.contains(&ActionKind::Prepend));
+		assert!(kinds.contains(&ActionKind::Insert));
+		assert!(kinds.contains(&ActionKind::Replace));
+		assert!(kinds.contains(&ActionKind::Patch));
+		assert!(kinds.contains(&ActionKind::Rename));
+		assert!(kinds.contains(&ActionKind::Wrap));
+		assert!(kinds.contains(&ActionKind::FindAndReplace));
+		assert!(kinds.contains(&ActionKind::RawTextReplace));
+		assert!(kinds.contains(&ActionKind::Splice));
+		assert!(kinds.contains(&ActionKind::Move));
+		assert!(kinds.contains(&ActionKind::Clone));
+		assert!(kinds.contains(&ActionKind::Transpose));
+		assert!(kinds.contains(&ActionKind::RenameClassToken));
+		assert!(kinds.contains(&ActionKind::RenameIdToken));
+		assert!(kinds.contains(&ActionKind::RenameCustomProperty));
+		assert!(kinds.contains(&ActionKind::RemoveDeadStyle));
+		assert!(kinds.contains(&ActionKind::Promote));
+		assert!(kinds.contains(&ActionKind::Demote));
+		assert!(kinds.contains(&ActionKind::ReplaceCodeBlock));
+		assert!(kinds.contains(&ActionKind::InsertBefore));
+		assert!(kinds.contains(&ActionKind::InsertAfter));
+	}
+}

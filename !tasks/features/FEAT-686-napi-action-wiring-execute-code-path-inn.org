@@ -1,0 +1,92 @@
+#+TITLE: NAPI action wiring — execute_code_path_inner consumes opts.command and opts.actions
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-686-napi-action-wiring-execute-code-path-inn
+#+LAYER: core
+#+DEPENDS: PROJ-073-action-trait-per-resolver-dispatch-kerne PROJ-074-fsresolver-textresolver-mutationresolver PROJ-075-coderesolver-mutationresolver-impl-struc
+
+* Intention & Purpose
+Wire the dead =command= and =actions= fields in =CodePathOptions= so
+=executeCodePath({command:"edit", actions:[...]})= actually dispatches mutations
+through the new =MutationResolver= traits delivered in PROJ-073/074/075.
+
+Cross-file deps on PROJ-073 + PROJ-074 + PROJ-075 captured via :DEPENDS: property.
+
+* Context & Narrative
+Today =execute_code_path_inner= ignores =opts.command= and =opts.actions=. With kernel
+mutation surface ready, dispatch becomes:
+- =command: "get"= (default) → query path (current behaviour)
+- =command: "edit"= + =actions= → resolver-specific apply()
+- =command: "manage"= + =manage= → existing manage commands — preserved
+
+* Scope
+** In-scope
+- =execute_code_path_inner= reads =opts.command=
+- For =command: "edit"=: parse =opts.actions= JSON value into =Vec<(Action, ActionParams)>=
+- Pick resolver based on Locator + Action kind
+- Sequential apply with first-failure abort
+- Aggregate =MutationOutcome= back into =CodePathChunk= response
+- Action → resolver routing table documented in spec
+- Tests
+** Out-of-scope
+- New action kinds (PROJ-073)
+- =command: "manage"= changes (existing path stays)
+
+* Existing Patterns
+- =crates/pi-natives/src/code_path/napi.rs:167-276=
+- =crates/pi-natives/src/code_path/marshal.rs= for outcome serialisation
+
+* Tests
+File: =crates/pi-natives/src/code_path/napi.rs= (extend tests module)
+
+Scenarios:
+1. =command:"edit", actions:[Create{content:"hi"}], target:"new.txt"= writes file via
+   FsResolver
+2. =command:"edit", actions:[Rename{content:"newName"}], target:"foo.ts::oldName"=
+   renames via CodeResolver
+3. =command:"edit", actions:[Append, Append]= applies sequentially
+4. Action 1 fails — actions 2..N skipped; aggregate Diagnostic returned
+5. =command:"edit"= without =actions= → =MISSING_ACTIONS= Diagnostic
+6. Action targeting unsupported resolver → =UNSUPPORTED_ACTION_FOR_RESOLVER=
+7. =command:"get"= preserves current query behaviour (no regression)
+
+* Implementation
+** ITEM Action dispatch tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-686-napi-action-wiring-execute-code-path-inn::tests
+:END:
+7 scenarios.
+
+** ITEM Wire command + actions in execute_code_path_inner
+:PROPERTIES:
+:CUSTOM_ID: FEAT-686-napi-action-wiring-execute-code-path-inn::wire
+:DEPENDS: FEAT-686-napi-action-wiring-execute-code-path-inn::tests
+:END:
+- File: =crates/pi-natives/src/code_path/napi.rs=
+- Branch on =opts.command=
+- For "edit": parse JSON =opts.actions= via =serde_json= → =Vec<(Action, ActionParams)>=
+- Resolver selection: pick first resolver in priority order (FS → Text → Code → Edge)
+  whose =supports(action_kind)= returns true
+- Aggregate outcomes into chunks
+
+** ITEM Outcome marshalling
+:PROPERTIES:
+:CUSTOM_ID: FEAT-686-napi-action-wiring-execute-code-path-inn::marshal
+:DEPENDS: FEAT-686-napi-action-wiring-execute-code-path-inn::wire
+:END:
+- File: =crates/pi-natives/src/code_path/marshal.rs=
+- =MutationOutcome= → =NodeRefDto= with kind =§edit-result= and metadata fields
+  =editCount, diff, created, targetSummary=
+
+* Edge Cases
+- Mixed target types in actions array — current scope: each action resolves its own target
+- Cancellation mid-sequence — actions completed remain; pending actions skip with =CANCELLED=
+- Idempotent flag: per-action =ActionParams.idempotent= takes precedence; batch-level
+  flag could be a FUP
+
+* Acceptance Criteria
+- 7 scenarios pass
+- =cargo test -p pi-natives --tests code_path= green
+- =CodePathOptions.command= and =.actions= consumed end-to-end
+- Spec doc updated with action-dispatch contract

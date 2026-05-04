@@ -289,3 +289,38 @@ Markdown-specific code operations:
 - `operation: "replace-code-block"` replaces a fenced code block within a section by `index` or `language`.
 - `operation: "replace-body"` replaces section content while keeping the heading.
 - `read` at resolution 2 shows section content summaries and drill-in hints.
+
+
+---
+
+## F · Implementation notes
+
+### `jobs://` fragment slots
+
+The `jobs://<job-id>` root resolves to a `§job` summary node. Individual
+slots are addressable via the fragment:
+
+| Fragment    | Node kind  | Source file (relative to `.spell/jobs/<id>/`) |
+|-------------|------------|-----------------------------------------------|
+| (none)      | `§job`     | Summary assembled from `status.txt` + `result.txt` + `error.txt` |
+| `#status`   | `§status`  | `status.txt`                                  |
+| `#result`   | `§result`  | `result.txt`                                  |
+| `#error`    | `§error`   | `error.txt`                                   |
+| `#stderr`   | `§stderr`  | `stderr.log` (empty string if absent)         |
+| `#progress` | `§progress`| `progress.txt`                                |
+
+If the job directory does not exist, the resolver emits `JobNotFound`.
+If the directory exists but a requested slot file is missing, the
+resolver returns an empty text node (zombie-state tolerance).
+
+### `mcp://` — not implemented
+
+The `mcp://` scheme is **not implemented** in the current release.
+Attempting to resolve an `mcp://` locator returns a
+`SchemeNotImplemented` diagnostic with the message
+`"mcp:// scheme not implemented in current release; use direct paths"`.
+
+Rationale: MCP runtime integration requires an out-of-process server
+registry and capability-negotiation protocol that is not yet wired into
+the CodePath kernel. When MCP support lands, the handler will be swapped
+in without changing the scheme registry shape.

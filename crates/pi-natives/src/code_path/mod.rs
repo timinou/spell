@@ -8,9 +8,13 @@
 
 pub mod abort;
 pub mod code_resolver;
+pub mod dialect_registry;
 pub mod edge_resolver;
 pub mod extractors;
 pub mod image_pipeline;
 pub mod marshal;
 pub mod napi;
 pub mod uri;
+
+#[cfg(test)]
+mod dispatch_tests;

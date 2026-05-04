@@ -1,0 +1,30 @@
+#+TITLE: URI scheme end-to-end tests (G13)
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FUP-073-uri-scheme-end-to-end-tests-g13
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+URI scheme handlers in =crates/pi-natives/src/code_path/uri/= currently have parse/format
+unit tests but zero end-to-end resolution tests. Add a layer that exercises each scheme
+through =executeCodePath= against real internal-router fixtures.
+
+* Scope
+- =artifact://= against a real session-scoped artifact
+- =memory://root= against test memory fixture
+- =skill://name= against test skill dir
+- =agent://id= against agent JSON fixture
+- =rule://name= against test rule
+- =local://path= against test local file
+
+* Out-of-scope
+- Network-hitting URIs
+
+* Acceptance
+- 6 scheme e2e tests added
+- =cargo test -p pi-natives --tests uri_e2e= green

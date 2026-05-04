@@ -1,0 +1,75 @@
+#+TITLE: Suffix-fallback — return disambiguation choices instead of None on ambiguous basename (G9)
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-683-suffix-fallback-return-disambiguation-ch
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+When a literal FS target resolves to zero matches and the suffix-fallback walker finds
+multiple basename matches, it currently returns =None=, leaving the user with "not
+found". Surface the matches as a Diagnostic =DID_YOU_MEAN= with a list so the user can
+pick.
+
+* Context & Narrative
+Per audit (agent://35-Resolvers): =crates/pi-code-path/src/dialects/fs/suffix_fallback.rs:7-48=
+returns one match if unique, =None= otherwise. The =get= prompt promises "fuzzy filename
+suggestions" but the multi-match case is silent.
+
+* Scope
+** In-scope
+- Modify =suffix_fallback= to return =SuffixFallbackResult { Match(NodeRef), Ambiguous(Vec<PathBuf>), None }=
+- =FsResolver= surfaces =Ambiguous= as a =Diagnostic= with code =DID_YOU_MEAN= and
+  serialised candidate list (max 5)
+- =GetTool= renderer shows the candidates with a hint to use a more specific path
+** Out-of-scope
+- Levenshtein-distance fuzzy matching (basename equality only for now)
+
+* Existing Patterns
+- =crates/pi-code-path/src/dialects/fs/suffix_fallback.rs:7-48=
+- =crates/pi-code-path/src/dialects/fs/mod.rs= (FsResolver call site)
+
+* Tests
+File: =crates/pi-code-path/src/dialects/fs/suffix_fallback.rs=
+
+Scenarios:
+1. Single match: =index.ts= matches one unique candidate → returns Match
+2. Two matches: =foo.ts= matches =src/foo.ts= and =test/foo.ts= → returns Ambiguous with
+   both paths
+3. No match: =nonexistent.ts= → returns None
+4. FsResolver: ambiguous fallback emits Diagnostic with all candidates
+5. GetTool renderer: Diagnostic surfaces in ToolResult text with "Did you mean: ..." line
+
+* Implementation
+** ITEM Suffix-fallback ambiguity tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-683-suffix-fallback-return-disambiguation-ch::tests
+:END:
+5 scenarios.
+
+** ITEM Refactor suffix-fallback return type
+:PROPERTIES:
+:CUSTOM_ID: FEAT-683-suffix-fallback-return-disambiguation-ch::return-type
+:DEPENDS: FEAT-683-suffix-fallback-return-disambiguation-ch::tests
+:END:
+=SuffixFallbackResult= enum + caller updates in =fs/mod.rs=.
+
+** ITEM Wire Diagnostic + GetTool render
+:PROPERTIES:
+:CUSTOM_ID: FEAT-683-suffix-fallback-return-disambiguation-ch::wire
+:DEPENDS: FEAT-683-suffix-fallback-return-disambiguation-ch::return-type
+:END:
+=DID_YOU_MEAN= diagnostic; =get.ts= renderer formats as user-readable hint.
+
+* Edge Cases
+- More than 5 ambiguous matches → list first 5 + "(... and N more)" hint
+- Symlink / canonical basename collision — dedup by canonical path
+
+* Acceptance Criteria
+- 5 scenarios pass
+- =cargo test -p pi-code-path --tests fs= green
+- Manual: =get({target:"main.ts"})= in repo with multiple =main.ts= shows candidates

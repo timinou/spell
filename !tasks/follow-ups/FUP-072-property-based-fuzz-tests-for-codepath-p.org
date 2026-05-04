@@ -1,0 +1,27 @@
+#+TITLE: Property-based / fuzz tests for CodePath parser (G14)
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FUP-072-property-based-fuzz-tests-for-codepath-p
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+Add =proptest= or =quickcheck= for parser round-trip invariants (parse(render(ast)) ≡
+ast for arbitrarily generated AST). Add =cargo-fuzz= harness for adversarial inputs
+(Unicode, deeply nested combinators, malformed escapes) to surface panics before users do.
+
+* Scope
+- =proptest= generators for =CodePath= AST
+- Round-trip invariant test
+- Optional: =cargo-fuzz= target for =parse_code_path=
+
+* Out-of-scope
+- Performance fuzzing (separate concern)
+
+* Acceptance
+- ≥ 100 prop-test cases run per CI invocation
+- Zero panics on parser fuzz over 1M iterations

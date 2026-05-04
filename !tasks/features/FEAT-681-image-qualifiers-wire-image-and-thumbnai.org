@@ -1,0 +1,107 @@
+#+TITLE: Image qualifiers — wire #image and #thumbnail real bytes through NAPI response (G7)
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-681-image-qualifiers-wire-image-and-thumbnai
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+=#image= and =#thumbnail[N]= qualifiers currently return placeholder =Content::Image=
+nodes with handle URIs but no actual image data flows through =CodePathChunk= to the
+JS-side ToolResult. Models can't see the image. Fix the wiring end-to-end.
+
+* Context & Narrative
+Per audit (agent://35-Resolvers): qualifier resolvers in
+=crates/pi-code-path/src/dialects/text/qualifiers.rs:17-234= return =Content::Image=
+NodeRefs. =image_pipeline/mod.rs= has lazy-load + 512 KiB threshold. The marshal layer
+=crates/pi-natives/src/code_path/marshal.rs= converts =NodeRef= → =NodeRefDto= but the
+=ContentDto= variant for images may not preserve image bytes.
+
+The =GetTool= renderer at =packages/coding-agent/src/tools/get.ts:60-67= already accepts
+images and emits them as ToolResult content blocks, but only when =result.images= is
+populated by =formatCodePathResult=. Need to verify and fix the chain.
+
+* Scope
+** In-scope
+- Marshal: =Content::Image= → =ContentDto::Image { mimeType, data, byteLength, width, height }=
+- =formatCodePathResult= in =packages/coding-agent/src/tools/codepath-result.ts= extracts
+  images from chunks
+- GetTool emits image blocks (already does — verify)
+- Thumbnail generation: =image_pipeline= produces a resized image; bytes flow through
+- Original image >512 KiB: served as artifact URI with handle, model resolves via
+  separate =get= call; document this contract
+- Tests
+** Out-of-scope
+- New image formats beyond what =image= crate handles
+- OCR / image-to-text (not in spec)
+
+* Existing Patterns
+- =crates/pi-natives/src/code_path/image_pipeline/mod.rs=
+- =crates/pi-code-path/src/dialects/text/qualifiers.rs::resolve_image, resolve_thumbnail=
+- =packages/coding-agent/src/tools/codepath-result.ts::formatCodePathResult=
+- =packages/coding-agent/src/tools/get.ts:60-67= (image emission)
+
+* Tests
+File: =crates/pi-natives/src/code_path/image_pipeline/integration_tests.rs= (new)
+File: =packages/coding-agent/test/get-image.test.ts= (new)
+
+Scenarios:
+1. =foo.png#image= small image (<512 KiB) returns ContentDto::Image with base64 bytes
+2. =foo.png#image= large image (>=512 KiB) returns Content::Bytes with artifact URI;
+   GetTool's renderer flags it as "lazy load — fetch via artifact://"
+3. =foo.png#thumbnail[256]= returns resized image bytes (max 256px on longest edge)
+4. =foo.svg#image= returns SVG text inline (no rasterization)
+5. =foo.tiff#image= unsupported format → diagnostic, no panic
+6. JS-side: =get({target:"foo.png#image"})= ToolResult contains ={type:"image",
+   mimeType:"image/png", data:"..."}= block
+
+* Implementation
+** ITEM Image-pipeline integration tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-681-image-qualifiers-wire-image-and-thumbnai::rust-tests
+:END:
+6 scenarios across Rust + TS layers.
+
+** ITEM Marshal Content::Image to ContentDto::Image
+:PROPERTIES:
+:CUSTOM_ID: FEAT-681-image-qualifiers-wire-image-and-thumbnai::marshal
+:DEPENDS: FEAT-681-image-qualifiers-wire-image-and-thumbnai::rust-tests
+:END:
+- File: =crates/pi-natives/src/code_path/marshal.rs=
+- Verify =ContentDto::Image= variant exists with =mimeType, data (base64 string), width, height=
+  fields; add if missing
+- =Content::Image= → =ContentDto::Image= (small) or =Content::Bytes= (large per threshold)
+
+** ITEM Wire formatCodePathResult to extract images
+:PROPERTIES:
+:CUSTOM_ID: FEAT-681-image-qualifiers-wire-image-and-thumbnai::format
+:DEPENDS: FEAT-681-image-qualifiers-wire-image-and-thumbnai::marshal
+:END:
+- File: =packages/coding-agent/src/tools/codepath-result.ts=
+- Walk chunks; for each =ContentDto::Image=, push to =result.images=
+- Existing GetTool emission already wires images to ToolResult content blocks
+
+** ITEM Thumbnail resize implementation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-681-image-qualifiers-wire-image-and-thumbnai::thumbnail
+:DEPENDS: FEAT-681-image-qualifiers-wire-image-and-thumbnai::marshal
+:END:
+- File: =crates/pi-natives/src/code_path/image_pipeline/mod.rs=
+- Use =image= crate to load + resize; preserve aspect ratio; max edge = N from
+  =QualifierArg::Integer(N)=
+
+* Edge Cases
+- Animated GIF: extract first frame for thumbnail
+- HEIC / WebP: requires feature flag in =image= crate; document fallback to artifact URI
+- Image too small to thumbnail (less than N): return original
+- Corrupt image: diagnostic =IMAGE_DECODE_FAILED=
+
+* Acceptance Criteria
+- 6 scenarios pass
+- =cargo test -p pi-natives --tests image_pipeline= green
+- =bun test packages/coding-agent/test/get-image.test.ts= green
+- Manual smoke: =get({target:"foo.png#image"})= shows image inline in TUI

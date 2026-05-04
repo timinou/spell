@@ -1,0 +1,85 @@
+#+TITLE: Haskell dialect — qualifier resolvers + anchor evaluators + edge kinds
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-675-haskell-dialect-qualifier-resolvers-anch
+#+LAYER: core
+#+DEPENDS: PROJ-072-qualifierresolver-anchorevaluator-framew PROJ-071-napi-namelexer-dispatch-file-extension-r
+
+* Intention & Purpose
+Port PROJ-072 framework to Haskell. Replace stubs in
+=crates/pi-code-path/src/dialects/haskell.rs= with real resolvers via
+=tree_sitter_haskell=. Customize =EdgeKindSet= per spec =05-haskell.md=. Cross-file dep
+captured via :DEPENDS: property.
+
+* Scope
+** In-scope
+- 8 qualifiers: =#body=, =#name=, =#sig=, =#type-signature=, =#where-clause=, =#guards=,
+  =#exports=, =#pragmas=
+- 6 anchors: =¶return=, =¶guard=, =¶where-binding=, =¶pattern-match=, =¶case-of=,
+  =¶lambda=
+- =EdgeKindSet= adds =type→/class→/has-instance→/derives→=
+- Edge cases D-1..D-7
+
+** Out-of-scope
+- Type inference / unification (purely structural matching)
+
+* Existing Patterns
+- =crates/pi-code-path/src/dialects/haskell.rs= (246 LOC)
+- =specs/code-graph/code-path-dialects/05-haskell.md=
+- =tree_sitter_haskell= kinds: =function=, =signature=, =data=, =class=, =instance=,
+  =where=, =case=, =lambda=, =module=, =exports=, =pragma=, =guarded_rhs=
+
+* Tests
+File: =crates/pi-code-path/src/dialects/haskell.rs=
+
+Scenarios:
+1. =Foo.hs::insert#body= returns function body (RHS) span
+2. =Foo.hs::insert#type-signature= returns separate =insert :: Map k v -> ...= line
+3. =Foo.hs::insert#where-clause= returns =where= block
+4. =Foo.hs::insert#guards= returns =| pred1 = ...= guard list
+5. =Foo.hs::Mod#pragmas= returns =LANGUAGE=/=OPTIONS= pragma list
+6. =Foo.hs::Mod#exports= returns =module Mod (a, b, c)= export list
+7. =Foo.hs::*[¶guard]= filters to functions with guarded equations
+8. =Foo.hs::*[¶where-binding]= filters to functions with =where= clauses
+9. =Foo.hs::*[¶lambda]= filters to expressions containing =\x ->=
+10. Edge case D-1: =Foo.hs::insert= matches all equations (multi-equation function)
+11. Edge case D-3: operator section =Foo.hs::(<$>)= preserved through NameLexer
+
+* Implementation
+** ITEM Haskell qualifier + anchor test fixtures
+:PROPERTIES:
+:CUSTOM_ID: FEAT-675-haskell-dialect-qualifier-resolvers-anch::tests
+:END:
+11 scenario tests with inline Haskell source.
+
+** ITEM Haskell qualifier resolvers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-675-haskell-dialect-qualifier-resolvers-anch::qualifiers
+:DEPENDS: FEAT-675-haskell-dialect-qualifier-resolvers-anch::tests
+:END:
+8 qualifiers wired into =haskell::dialect()=.
+
+** ITEM Haskell anchor evaluators
+:PROPERTIES:
+:CUSTOM_ID: FEAT-675-haskell-dialect-qualifier-resolvers-anch::anchors
+:DEPENDS: FEAT-675-haskell-dialect-qualifier-resolvers-anch::tests
+:END:
+6 anchors wired.
+
+** ITEM Haskell edge kind set
+:PROPERTIES:
+:CUSTOM_ID: FEAT-675-haskell-dialect-qualifier-resolvers-anch::edge-kinds
+:DEPENDS: FEAT-675-haskell-dialect-qualifier-resolvers-anch::tests
+:END:
+Add =type→/class→/has-instance→/derives→=.
+
+* Edge Cases
+- Multi-equation function (D-1): all equations share name; ordinal selects individual
+- Separate type signature (D-2): =insert :: ...= is sibling of decls
+- Operator parens (D-3): NameLexer preserves; resolver matches =(<$>)=
+- Orphan / overlapping instances (D-4/D-5): each instance distinct decl
+
+* Acceptance Criteria
+- 11 scenarios pass; =cargo test -p pi-code-path --tests haskell= green
+- Spec =05-haskell.md= cross-walked

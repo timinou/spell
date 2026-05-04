@@ -2,7 +2,10 @@
 //!
 //! Exposes `executeCodePath`, `parseCodePath`, and `renderCodePath`.
 
-use std::path::{Path, PathBuf};
+use std::{
+	path::{Path, PathBuf},
+	sync::{Arc, OnceLock},
+};
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -13,11 +16,12 @@ use pi_code_path::{
 	parser::parse_code_path,
 	renderer::render_code_path,
 	resolver::{CancellationToken, CodeResolver, ProjectionOpts, Resolver},
+	types::{Diagnostic, DiagnosticVariant},
 };
 use winnow::{Parser, token::take_while};
 
 use super::{
-	code_resolver,
+	code_resolver, dialect_registry,
 	extractors::default_extractors,
 	marshal::{ARTIFACT_THRESHOLD, nodes_to_dtos},
 	uri::default_registry,
@@ -96,17 +100,17 @@ pub struct CodePathOptions<'env> {
 // ── Task options (owned, Send) ───────────────────────────────────
 
 #[allow(dead_code)]
-struct CodePathTaskOptions {
-	command: String,
-	target:  String,
-	limit:   Option<u32>,
-	head:    Option<u32>,
-	tail:    Option<u32>,
-	offset:  Option<u32>,
-	format:  Option<String>,
-	root:    Option<String>,
-	actions: Option<serde_json::Value>,
-	manage:  Option<String>,
+pub(crate) struct CodePathTaskOptions {
+	pub command: String,
+	pub target:  String,
+	pub limit:   Option<u32>,
+	pub head:    Option<u32>,
+	pub tail:    Option<u32>,
+	pub offset:  Option<u32>,
+	pub format:  Option<String>,
+	pub root:    Option<String>,
+	pub actions: Option<serde_json::Value>,
+	pub manage:  Option<String>,
 }
 
 impl From<CodePathOptions<'_>> for CodePathTaskOptions {
@@ -153,6 +157,79 @@ impl NameLexer for DotLexer {
 	}
 }
 
+static DOT_LEXER_ARC: OnceLock<Arc<dyn NameLexer>> = OnceLock::new();
+
+/// Thin wrapper so `Arc<dyn NameLexer>` satisfies the `NameLexer` trait
+/// bound required by `parse_code_path`.
+struct NameLexerWrapper(Arc<dyn NameLexer>);
+
+impl NameLexer for NameLexerWrapper {
+	fn parse<'s>(&self, input: &mut &'s str) -> winnow::Result<pi_code_path::ast::NamePayload> {
+		self.0.parse(input)
+	}
+
+	fn render(&self, n: &pi_code_path::ast::NamePayload) -> String {
+		self.0.render(n)
+	}
+
+	fn matches(
+		&self,
+		n: &pi_code_path::ast::NamePayload,
+		node: tree_sitter::Node<'_>,
+		src: &str,
+	) -> bool {
+		self.0.matches(n, node, src)
+	}
+}
+
+/// Two-phase lexer selection:
+/// 1. Split `target` on the first `::`.
+/// 2. Strip surrounding backticks from the FS prefix.
+/// 3. If the prefix is empty, contains glob magic, or has no recognised
+///    extension, fall back to the generic `DotLexer`.
+/// 4. Otherwise look up the dialect by extension via `select_dialect`.
+fn select_lexer(target: &str) -> (NameLexerWrapper, Vec<Diagnostic>) {
+	let mut diagnostics = Vec::new();
+
+	let Some(pos) = target.find("::") else {
+		return (
+			NameLexerWrapper(DOT_LEXER_ARC.get_or_init(|| Arc::new(DotLexer)).clone()),
+			diagnostics,
+		);
+	};
+
+	let prefix = &target[..pos];
+
+	// Strip surrounding backticks from quoted FS literals.
+	let prefix = prefix.strip_prefix('`').unwrap_or(prefix);
+	let prefix = prefix.strip_suffix('`').unwrap_or(prefix);
+
+	if prefix.is_empty() {
+		return (
+			NameLexerWrapper(DOT_LEXER_ARC.get_or_init(|| Arc::new(DotLexer)).clone()),
+			diagnostics,
+		);
+	}
+
+	if prefix.chars().any(|c| matches!(c, '*' | '?' | '[' | '{')) {
+		diagnostics.push(Diagnostic {
+			variant: DiagnosticVariant::UnsupportedOperation,
+			message: "weak NamePayload parse: glob FS prefix uses generic DotLexer".to_string(),
+			span:    None,
+		});
+		return (
+			NameLexerWrapper(DOT_LEXER_ARC.get_or_init(|| Arc::new(DotLexer)).clone()),
+			diagnostics,
+		);
+	}
+
+	if let Some(lexer) = dialect_registry::select_dialect(Path::new(prefix)) {
+		(NameLexerWrapper(lexer), diagnostics)
+	} else {
+		(NameLexerWrapper(DOT_LEXER_ARC.get_or_init(|| Arc::new(DotLexer)).clone()), diagnostics)
+	}
+}
+
 // ── executeCodePath ──────────────────────────────────────────────
 
 #[napi(js_name = "executeCodePath")]
@@ -163,14 +240,12 @@ pub fn execute_code_path(options: CodePathOptions<'_>) -> crate::task::Async<Vec
 		execute_code_path_inner(task_options, cancel_token)
 	})
 }
-
-fn execute_code_path_inner(
+pub(crate) fn execute_code_path_inner(
 	opts: CodePathTaskOptions,
 	cancel_token: CancelToken,
 ) -> Result<Vec<CodePathChunk>> {
-	let dot_lexer = DotLexer;
-	let mut cp =
-		parse_code_path(&opts.target, &dot_lexer).map_err(|d| Error::from_reason(d.message))?;
+	let (lexer, parse_diagnostics) = select_lexer(&opts.target);
+	let mut cp = parse_code_path(&opts.target, &lexer).map_err(|d| Error::from_reason(d.message))?;
 
 	// Apply projection opts.
 	if let Some(query) = cp.query.take() {
@@ -218,7 +293,7 @@ fn execute_code_path_inner(
 					} else {
 						root.join(&file_node.locator)
 					};
-					match code_resolver.resolve(&path, query, &pi_token) {
+					match code_resolver.resolve(&path, query, None, &pi_token) {
 						Ok(mut nodes) => results.append(&mut nodes),
 						Err(d) => {
 							let mut node = file_node;
@@ -273,6 +348,29 @@ fn execute_code_path_inner(
 		});
 	}
 
+	// Attach any lexer-selection diagnostics to the first chunk.
+	if !parse_diagnostics.is_empty() {
+		let dtos: Vec<DiagnosticDto> = parse_diagnostics
+			.into_iter()
+			.map(|d| DiagnosticDto {
+				variant: "unsupported_operation".to_string(),
+				message: d.message,
+				span:    d
+					.span
+					.map(|s| SpanDto { start: s.start as u32, end: s.end as u32 }),
+			})
+			.collect();
+		if let Some(first) = chunks.first_mut() {
+			first.diagnostics.extend(dtos);
+		} else {
+			chunks.push(CodePathChunk {
+				nodes:       Vec::new(),
+				diagnostics: dtos,
+				done:        true,
+			});
+		}
+	}
+
 	Ok(chunks)
 }
 
@@ -291,8 +389,8 @@ fn is_text_query(cp: &CodePath) -> bool {
 
 #[napi(js_name = "parseCodePath")]
 pub fn parse_code_path_napi(target: String) -> Result<serde_json::Value> {
-	let dot_lexer = DotLexer;
-	let cp = parse_code_path(&target, &dot_lexer).map_err(|d| Error::from_reason(d.message))?;
+	let (lexer, _diagnostics) = select_lexer(&target);
+	let cp = parse_code_path(&target, &lexer).map_err(|d| Error::from_reason(d.message))?;
 	serde_json::to_value(&cp).map_err(|e| Error::from_reason(format!("serde error: {e}")))
 }
 
