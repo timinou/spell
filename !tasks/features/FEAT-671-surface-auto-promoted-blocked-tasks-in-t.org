@@ -1,5 +1,5 @@
 #+TITLE: Surface auto-promoted blocked tasks in task tool messaging
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d4527d99eada8e
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T17-41-27-271Z_14d4527d99eada8e.jsonl]]
 #+CUSTOM_ID: FEAT-671-surface-auto-promoted-blocked-tasks-in-t
@@ -188,3 +188,21 @@ Test commands (LAYER=core triggers commit-only gate):
 - =bun run --cwd packages/coding-agent check=
 
 Manual proof: after merge, replay the failure mode by dispatching a 2-task blocker batch in a fresh session and verifying the await output shows =Newly Started= without intervention.
+
+** Completion [2026-05-04]
+*** Verification
+- =bun test packages/coding-agent/test/task/await-newly-started.test.ts=: 2 pass / 0 fail (Scenarios A, B)
+- =bun test packages/coding-agent/test/task/task-blockers.test.ts=: 7 pass / 0 fail (4 existing + Scenarios C, D, E)
+- =bun test packages/coding-agent/test/task/=: 290 pass / 17 todo / 0 fail (full suite, no regressions)
+- =bun run --cwd packages/coding-agent check=: 0 TypeScript errors
+*** Changes
+- =packages/coding-agent/src/tools/await-tool.ts=: Capture awaitInvocationTime + initialIds set; diff running jobs at result-time; render ## Newly Started (n) heading
+- =packages/coding-agent/src/task/index.ts=: Compute queued tasks and blocker chains after scheduleReadyTasks(); enrich dispatch text with queued count and chains
+- =packages/coding-agent/src/prompts/tools/await.md=: Append Newly Started section description (~2 lines)
+- =packages/coding-agent/test/task/await-newly-started.test.ts=: NEW — 2 test scenarios (A, B)
+- =packages/coding-agent/test/task/task-blockers.test.ts=: EXTENDED — 3 test scenarios (C, D, E)
+*** Commits
+- [[https://github.com/ora/spell/commit/bf03830a6][bf03830]]: test(coding-agent): add test scenarios for auto-promoted blocked task visibility
+- [[https://github.com/ora/spell/commit/6cd9e2d5e][6cd9e2d]]: feat(coding-agent): add Newly Started section to await-tool
+- [[https://github.com/ora/spell/commit/0127891ca][0127891]]: feat(coding-agent): enrich dispatch text with queued task count and blocker chains
+- [[https://github.com/ora/spell/commit/7ba1d0bc7][7ba1d0b]]: docs(coding-agent): add Newly Started section description to await.md prompt

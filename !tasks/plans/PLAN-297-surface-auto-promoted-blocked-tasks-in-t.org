@@ -1,5 +1,5 @@
 #+TITLE: Surface auto-promoted blocked tasks in task tool messaging
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14d4527d99eada8e
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T17-41-27-271Z_14d4527d99eada8e.jsonl]]
 #+CUSTOM_ID: PLAN-297-surface-auto-promoted-blocked-tasks-in-t
@@ -62,3 +62,17 @@ Manual smoke: dispatch =[X, Y blocked on X]= in a fresh session; first =await= r
 - FEAT-671-surface-auto-promoted-blocked-tasks-in-t::impl-dispatch-text ← FEAT-671-surface-auto-promoted-blocked-tasks-in-t::write-tests
 - FEAT-671-surface-auto-promoted-blocked-tasks-in-t::update-prompt ← FEAT-671-surface-auto-promoted-blocked-tasks-in-t::impl-newly-started
 - FEAT-671-surface-auto-promoted-blocked-tasks-in-t::update-prompt ← FEAT-671-surface-auto-promoted-blocked-tasks-in-t::impl-dispatch-text
+
+** Completion [2026-05-04]
+*** Verification
+All 5 test scenarios pass:
+- Scenarios A+B (await-newly-started.test.ts): 2 pass, 0 fail
+- Scenarios C+D+E (task-blockers.test.ts): 7 pass, 0 fail (includes 4 pre-existing)
+- Full suite: =bun test packages/coding-agent/test/task/= = 290 pass, 0 fail (no regressions)
+- TypeScript: =bun run --cwd packages/coding-agent check= = 0 errors
+*** Implementation Summary
+1. *await-tool.ts*: Captures =initialIds= set and =awaitInvocationTime= at execute entry. After Promise.race resolves, queries =manager.getRunningJobs()= for jobs not in initialIds with =startTime >= awaitInvocationTime=. Renders them under =## Newly Started (n)= heading. Appended to =details.jobs= so consumers can re-await.
+2. *task/index.ts*: After =scheduleReadyTasks()= in async path, computes queued tasks (not started, not terminal) and their blocker chains from =batchGraph.blockersById=. Enriches dispatch text: =Started N background task jobs using agent (Q queued behind blockers: [X<-A, Y<-B])=. Zero queued: format unchanged.
+3. *await.md*: Appended 2-line note about Newly Started section and re-calling await.
+*** Child item status
+- [[id:FEAT-671-surface-auto-promoted-blocked-tasks-in-t]]: DONE
