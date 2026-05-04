@@ -1187,6 +1187,18 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 		};
 
 		scheduleReadyTasks();
+
+		// Compute queued tasks for transparency in dispatch text
+		const startedTaskIds = new Set(startedJobs.map(j => j.taskId));
+		const queuedTasks = taskExecutions.filter(
+			t => !startedTaskIds.has(t.logicalId) && !completedTaskIds.has(t.logicalId),
+		);
+		const queuedCount = queuedTasks.length;
+		const queuedChains = queuedTasks.map(t => {
+			const blockers = batchGraph.blockersById.get(t.logicalId) ?? [];
+			return `${t.logicalId}<-${blockers.join(",")}`;
+		});
+
 		if (startedJobs.length === 0) {
 			const failureText =
 				completedJobs === taskItems.length
@@ -1219,7 +1231,11 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 			content: [
 				{
 					type: "text",
-					text: `${implicitBlockerNote}Started ${startedJobs.length} background task job${startedJobs.length === 1 ? "" : "s"} using ${params.agent}.${scheduleFailureSummary} Results will be delivered when complete.`,
+					text: `${implicitBlockerNote}Started ${startedJobs.length} background task job${startedJobs.length === 1 ? "" : "s"} using ${params.agent}${
+						queuedCount > 0
+							? ` (${queuedCount} queued behind blocker${queuedCount === 1 ? "" : "s"}: [${queuedChains.join("; ")}])`
+							: ""
+					}.${scheduleFailureSummary} Results will be delivered when complete.`,
 				},
 			],
 			details: withImplicitBlockers(
