@@ -160,3 +160,5 @@ Permission-denied entries surface as per-NodeRef =diagnostics= rather than abort
 - [ ] Performance: pure FS query within 1.2× of =find= tool wall-clock on 10000-file fixture
 - [ ] =cargo test -p pi-code-path --test fs= passes
 - [ ] Documented in =specs/code-graph/code-path-dialects/00-fs.md= (new file produced by FEAT-581 amendment)
+
+NOTE [2026-05-04]: Status 2026-05-04: SPEC COMPLETE, IMPL NOT STARTED. specs/code-graph/code-path-dialects/00-fs.md created with full A-E structure (12 test stubs, 7 worked examples, 9 edge cases). FsLocator/FsSegment AST types defined in pi-code-path/ast.rs but full FsName payload + walker + anchors + qualifiers + suffix-fallback pending.

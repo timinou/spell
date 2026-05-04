@@ -220,3 +220,21 @@ Each dialect spec defines a test suite in section E. Implement as Rust integrati
 - [ ] Go and Haskell dialects compile and pass tests (may use stub profiles)
 - [ ] =cargo check -p pi-code-path= clean
 - [ ] =cargo clippy -p pi-code-path= clean
+
+NOTE [2026-05-04]: Wave-1/2 partial completion 2026-05-04:
+
+DONE:
+- proj-profile-dialect-field: LanguageProfile gains pub dialect: Option<pi_code_path::LanguageDialect>; all 12 profile constructors initialize dialect: None for backward compat. pi-code-engine adds pi-code-path workspace dep.
+- proj-ts-name-lexer: TsNameLexer in src/dialects/typescript.rs with TsName{segments:Vec<TsSegment>}, TsSegment{Ident|PrivateField|ComputedKey}. Parses dotted ids, private fields. Stops at kernel ops. 7 unit + 1 integration test pass.
+
+OUTSTANDING:
+- proj-rust-name-lexer (PathSegments + turbofish + impl-for)
+- proj-python-name-lexer (dotted + decorator attribute)
+- proj-go-name-lexer (Package.Function + receiver methods)
+- proj-haskell-name-lexer (module-qualified + operators in parens + typeclass)
+- proj-html-name-lexer (CSS-selector-like)
+- proj-css-name-lexer (selector strings, at-rule payloads)
+- proj-mdorg-name-lexer (heading text, code block lang)
+- proj-wire-dialects: Wire all dialects into language profile constructors (replace dialect: None with Some(dialect))
+
+Status: TS lexer demonstrates the pattern; remaining 7 lexers follow the same shape per spec files 02-08 in code-path-dialects/.

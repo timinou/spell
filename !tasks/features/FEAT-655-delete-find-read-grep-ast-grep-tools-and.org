@@ -160,3 +160,7 @@ Final cutover step: delete the four legacy tools (=find=, =read=, =grep=, =ast-g
 - [ ] Migration table published in =code.md= and =code-migration.md=
 - [ ] Snapshot tests for prompt rendering pass
 - [ ] Manual verification: a session uses =code get= for file/dir reads, regex search, and structural queries with no recourse to deleted tools
+
+NOTE [2026-05-04]: Status 2026-05-04: NOT STARTED. Blocked on PROJ-055 (code tool cutover with projection options). Cannot delete find/read/grep/ast-grep tools until code get with projection options can replace their functionality.
+
+Migration table documented in code-path.md §D as preparatory work.

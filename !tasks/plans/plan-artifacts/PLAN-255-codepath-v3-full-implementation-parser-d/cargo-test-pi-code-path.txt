@@ -1,0 +1,41 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running unittests src/lib.rs (target/debug/deps/pi_code_path-15d2f9f91033e71c)
+
+running 28 tests
+test dialects::typescript::tests::parse_dotted ... ok
+test dialects::typescript::tests::integration_with_codepath_parser ... ok
+test dialects::typescript::tests::parse_private_field ... ok
+test dialects::typescript::tests::parse_simple_ident ... ok
+test dialects::typescript::tests::stops_at_kernel_op ... ok
+test dialects::typescript::tests::stops_at_predicate ... ok
+test dialects::typescript::tests::stops_at_qualifier ... ok
+test parser::tests::parse_anchor_predicate ... ok
+test parser::tests::parse_descendant ... ok
+test parser::tests::parse_kind_predicate ... ok
+test parser::tests::parse_file_with_symbol ... ok
+test parser::tests::parse_predicate_ordinal ... ok
+test parser::tests::parse_node_kind_axis ... ok
+test parser::tests::parse_simple_file_only ... ok
+test parser::tests::parse_range_predicate ... ok
+test parser::tests::parse_predicate_text_match ... ok
+test parser::tests::parse_with_qualifier ... ok
+test renderer::tests::round_trip_descendant ... ok
+test renderer::tests::round_trip_simple ... ok
+test renderer::tests::round_trip_predicate ... ok
+test renderer::tests::round_trip_edge ... ok
+test renderer::tests::round_trip_uri ... ok
+test resolver::tests::stub_resolver_returns_node ... ok
+test parser::tests::parse_uri_locator ... ok
+test resolver::tests::fs_exists_resolver_reports_missing_file ... ok
+test renderer::tests::round_trip_with_query ... ok
+test renderer::tests::round_trip_with_qualifier ... ok
+test resolver::tests::fs_exists_resolver_finds_existing_file ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests pi_code_path
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

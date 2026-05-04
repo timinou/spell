@@ -236,3 +236,14 @@ Full cutover of the =code= tool from the current 20+ subcommand surface to a 3-c
 - Sequencing constraint: PROJ-055 and FEAT-655 must land in the same release cycle to avoid a window where two tool surfaces coexist
 - This sub-outline is the explicit handoff to FEAT-655; verifies =code get= projection-option parity is sufficient for every legacy invocation before deletion
 - Verification: cross-reference the FEAT-655 T2 grep checklist against this sub-outline's migration table
+
+NOTE [2026-05-04]: Status 2026-05-04: NOT STARTED. Blocked on PROJ-054 (NAPI bridge). The 3-command code tool cutover (get/edit/manage with CodePath targets) needs executeCodePath NAPI function to dispatch.
+
+DONE preparatory work in spec layer (FEAT-582):
+- §A Tool surface mapping documented in code-path.md
+- §B Projection options documented
+- §C NodeRef return shape documented
+- §D Migration table for deleted tools documented
+- New schema design crystallized in spec form
+
+OUTSTANDING: actual TypeScript implementation of CodeTool dispatcher rewrite.

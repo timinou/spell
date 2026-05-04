@@ -1,0 +1,27 @@
+=== Sigil verification for code-path.md ===
+chumsky occurrences: 0
+0
+~> occurrences: 0
+0
+→ uses: 51
+@ remaining (should be prose only):
+306:This is as far inward as the language-specific pocket can shrink while preserving "feels native in the payload". Anything smaller and TS devs see `@` and `~` and feel they're reading a grammar meta-language; anything larger and Rust and Elixir devs can't share a predicate vocabulary.
+
+=== New dialect spec files ===
+-rw-r--r-- 1 user user  7567 May  4 08:44 specs/code-graph/code-path-dialects/00-fs.md
+-rw-r--r-- 1 user user  8271 May  4 08:44 specs/code-graph/code-path-dialects/00-text.md
+-rw-r--r-- 1 user user 11207 May  4 08:44 specs/code-graph/code-path-dialects/00-uri.md
+
+=== New code-path.md sections ===
+398:## §A · Tool surface mapping
+438:## §B · Projection options
+456:## §C · NodeRef and content-bearing return shape
+486:## §D · Migration table for find / read / grep / ast-grep
+512:## §E · Non-code dialects
+561:## §F · Locator grammar extension
+580:## §G · Resolver dispatch state machine
+
+=== Dialect README updates ===
+97:00a FS (filesystem)                  00-fs.md
+98:00b Text (lines / chunks / paras)     00-text.md
+99:00c URI schemes (artifact, …)         00-uri.md

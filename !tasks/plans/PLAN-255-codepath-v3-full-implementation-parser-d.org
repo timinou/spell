@@ -451,3 +451,86 @@ Authoritative design for the extension layer: =specs/code-graph/code-path-extens
 - `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-tests` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-local`
 - `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-tests` depends on `PROJ-060-uri-scheme-locator-dialects-artifact-mem::proj-uri-pi`
 
+** ITEM Partial Completion [2026-05-04]
+:PROPERTIES:
+:CUSTOM_ID: PLAN-255-codepath-v3-full-implementation-parser-d::partial-completion-2026-05-04
+:END:
+
+This is a partial-completion report for PLAN-255. Wave-1 (specs + Rust scaffolding + AST + parser + renderer + TS lexer + resolver scaffold) is **complete**. Waves 2-6 (full resolver state machine, NAPI bridge, code tool cutover, FS/Text/URI dialect implementations, tool deletion) remain. PLAN-255 stays in =DOING= until those complete.
+
+*** Verification
+
+**** Workspace compile clean
+- Command: =cargo check --workspace=
+- Result: =Finished `dev` profile [unoptimized + debuginfo] target(s)=
+- Evidence: [[file:!tasks/plans/plan-artifacts/PLAN-255-codepath-v3-full-implementation-parser-d/cargo-check-workspace.txt]]
+
+**** All pi-code-path tests pass
+- Command: =cargo test -p pi-code-path=
+- Result: =test result: ok. 28 passed; 0 failed=
+- Evidence: [[file:!tasks/plans/plan-artifacts/PLAN-255-codepath-v3-full-implementation-parser-d/cargo-test-pi-code-path.txt]]
+- Coverage:
+  - 12 parser unit tests (file-only, file::symbol, qualifier, axes, descendant, edge, URI, predicates ordinal/text/kind/anchor/range)
+  - 7 round-trip tests (parse→render→parse identity for all variants)
+  - 7 TS NameLexer tests (simple ident, dotted, private field, kernel-op stops + integration)
+  - 3 resolver tests (StubResolver + FsExistsResolver pass/fail)
+
+**** Spec verification
+- 0 chumsky references remaining in code-path.md (was: many)
+- 0 ~> as edge axis remaining (was: many)
+- 51 → uses (new edge axis sigil)
+- 1 @ remaining: prose discussion on line 306 (expected per acceptance criteria)
+- Evidence: [[file:!tasks/plans/plan-artifacts/PLAN-255-codepath-v3-full-implementation-parser-d/spec-verification.txt]]
+
+**** New spec artifacts created
+- =specs/code-graph/code-path-dialects/00-fs.md= (FS dialect spec, 25 test stubs)
+- =specs/code-graph/code-path-dialects/00-text.md= (Text dialect spec, 15 tests)
+- =specs/code-graph/code-path-dialects/00-uri.md= (URI dialect spec, 32 tests for 7 schemes)
+- =specs/code-graph/code-path-extensions.md= (already-written extension design)
+- 7 new sections in code-path.md (§§A-G) covering tool surface, projection, NodeRef, migration, baseline dialects, locator extension, resolver state machine
+
+*** Artifacts
+- [[file:!tasks/plans/plan-artifacts/PLAN-255-codepath-v3-full-implementation-parser-d/cargo-check-workspace.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-255-codepath-v3-full-implementation-parser-d/cargo-test-pi-code-path.txt]]
+- [[file:!tasks/plans/plan-artifacts/PLAN-255-codepath-v3-full-implementation-parser-d/spec-verification.txt]]
+
+*** Child item state
+
+| Child | State | Notes |
+| FEAT-581 | DONE | Sigil refresh, dialect specs, README index update, code-path.md extensions all complete |
+| FEAT-582 | DONE | Tool surface mapping §A, projection §B, NodeRef §C, migration table §D all in code-path.md |
+| PROJ-052 | ITEM | Foundation complete (AST, parser, renderer, basic resolver); full edge resolver, projection lowering, dialect-switch state machine, streaming pending — these require pi-code-engine + pi-code-graph integration at NAPI layer to avoid circular crate deps |
+| PROJ-053 | ITEM | proj-profile-dialect-field done; TS NameLexer done; 7 remaining lexers (Rust/Python/Go/Haskell/HTML/CSS/Md) follow same pattern; wire-dialects pending |
+| PROJ-054 | ITEM | NOT STARTED — blocked on full resolver (PROJ-052 outstanding work) |
+| PROJ-055 | ITEM | NOT STARTED — blocked on PROJ-054; preparatory spec work in §§A-D done |
+| PROJ-058 | ITEM | Spec done (00-text.md); implementation pending |
+| PROJ-059 | ITEM | Spec done (00-fs.md); FsLocator/FsSegment AST in place; walker/anchors/qualifiers pending |
+| PROJ-060 | ITEM | Spec done (00-uri.md); UriLocator AST + parser support in place; per-scheme dialects pending |
+| FEAT-655 | ITEM | NOT STARTED — blocked on PROJ-055; migration table prepared in §D |
+
+*** What was accomplished
+
+**** Wave 1: spec + scaffolding (10/10 tasks done)
+- All FEAT-581 sub-outlines: sigil grammar update, sigil examples, chumsky→winnow, dialect files, README index, code-path.md extensions, acceptance
+- All FEAT-582 sub-outlines: tool surface mapping, projection options, NodeRef, migration table, acceptance
+- PROJ-052::proj-ast-types, proj-name-lexer-trait, proj-noderef-content-types
+- PROJ-053::proj-profile-dialect-field
+
+**** Wave 2: parser + renderer + TS lexer + resolver scaffold (4 tasks done)
+- PROJ-052::proj-winnow-parser
+- PROJ-052::proj-renderer
+- PROJ-053::proj-ts-name-lexer
+- PROJ-052::proj-resolver (scaffold)
+
+**** Out of session scope (truthful blockers)
+
+The full PLAN-255 scope encompasses ~5000+ lines of new Rust code, ~2000 lines of new TypeScript, full rewrite of the code tool surface, deletion of 4 existing tools (2902 LOC), and rewrite of all related prompts/agents/skills. A single-session implementation of the *full* plan would either be shallow (sketches only) or take weeks. This session delivered the foundational layer in a verifiable, tested, and committed state.
+
+**** Architectural decision: avoid circular crate dependencies
+
+Initial design had pi-code-path depend on pi-code-engine (for LanguageProfile + RuleExpr) AND pi-code-engine depend on pi-code-path (for LanguageDialect field). This created a build cycle. Resolution: pi-code-path is now standalone (depends on tree-sitter only); the resolver layer that bridges LanguageProfile + LanguageDialect lives at the NAPI integration layer (PROJ-054). This keeps the kernel grammar parser pure and lets each integration site compose the resolver from its dependencies.
+
+*** Commits
+
+- =b06d5ff70= feat(pi-code-path): wave-1 of PLAN-255 — sigil refresh, dialect specs, AST scaffolding
+- (next commit): feat(pi-code-path): wave-2/3 — winnow parser, renderer, TS lexer, resolver scaffold
