@@ -108,7 +108,7 @@ Full cutover of the =code= tool from the current 20+ subcommand surface to a 3-c
 
 ** Define new codeSchema (3-command model)
 :PROPERTIES:
-:CUSTOM_ID: PROJ-055-code-tool-surface-cutover-3-command-mode::PROJ-new-schema
+:CUSTOM_ID: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-new-schema
 :END:
 - File: =packages/coding-agent/src/tools/code.ts=
 - Replace =codeSchema= with discriminated union on =command: "get" | "edit" | "manage"=
@@ -119,8 +119,8 @@ Full cutover of the =code= tool from the current 20+ subcommand surface to a 3-c
 
 ** Rewrite CodeTool.execute() dispatcher
 :PROPERTIES:
-:CUSTOM_ID: PROJ-055-code-tool-surface-cutover-3-command-mode::PROJ-rewrite-dispatcher
-:DEPENDS: PROJ-055-code-tool-surface-cutover-3-command-mode::PROJ-new-schema
+:CUSTOM_ID: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-dispatcher
+:DEPENDS: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-new-schema
 :END:
 - File: =packages/coding-agent/src/tools/code.ts=
 - Remove =GRAPH_COMMANDS=, =FILE_COMMANDS=, =REMOVED_SEARCH_COMMANDS= sets
@@ -134,8 +134,8 @@ Full cutover of the =code= tool from the current 20+ subcommand surface to a 3-c
 
 ** Rewrite code-result.ts for 3-command model
 :PROPERTIES:
-:CUSTOM_ID: PROJ-055-code-tool-surface-cutover-3-command-mode::PROJ-rewrite-results
-:DEPENDS: PROJ-055-code-tool-surface-cutover-3-command-mode::PROJ-new-schema
+:CUSTOM_ID: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-results
+:DEPENDS: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-new-schema
 :END:
 - File: =packages/coding-agent/src/tools/code-result.ts=
 - Replace =CodeFileCommand= and =CodeGraphCommand= with =CodeCommand = "get" | "edit" | "manage"=
@@ -146,8 +146,8 @@ Full cutover of the =code= tool from the current 20+ subcommand surface to a 3-c
 
 ** Rewrite LLM prompts
 :PROPERTIES:
-:CUSTOM_ID: PROJ-055-code-tool-surface-cutover-3-command-mode::PROJ-rewrite-prompts
-:DEPENDS: PROJ-055-code-tool-surface-cutover-3-command-mode::PROJ-new-schema
+:CUSTOM_ID: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-prompts
+:DEPENDS: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-new-schema
 :END:
 - File: =packages/coding-agent/src/prompts/tools/code.md=
 - New content covering =code get=, =code edit=, =code manage= with CodePath examples
@@ -161,8 +161,8 @@ Full cutover of the =code= tool from the current 20+ subcommand surface to a 3-c
 
 ** Update AGENTS.md and system prompt references
 :PROPERTIES:
-:CUSTOM_ID: PROJ-055-code-tool-surface-cutover-3-command-mode::PROJ-update-agents-md
-:DEPENDS: PROJ-055-code-tool-surface-cutover-3-command-mode::PROJ-rewrite-prompts
+:CUSTOM_ID: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-update-agents-md
+:DEPENDS: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-prompts
 :END:
 - File: =AGENTS.md= — update all code tool references to use new 3-command surface
 - Search for =code read=, =code outline=, =code symbols=, =code navigate=, =code context=, =code impact=, =code flow=, =code deps= and replace with =code get= equivalents
@@ -172,8 +172,8 @@ Full cutover of the =code= tool from the current 20+ subcommand surface to a 3-c
 
 ** Remove scope field from action schema
 :PROPERTIES:
-:CUSTOM_ID: PROJ-055-code-tool-surface-cutover-3-command-mode::PROJ-remove-scope
-:DEPENDS: PROJ-055-code-tool-surface-cutover-3-command-mode::PROJ-new-schema
+:CUSTOM_ID: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-remove-scope
+:DEPENDS: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-new-schema
 :END:
 - File: =packages/coding-agent/src/tools/code.ts= — remove =scope= from =codeActionSchema=
 - File: =crates/pi-natives/src/code_buffer.rs= — the NAPI side still accepts scope internally for backward compat with =executeCodeBuffer=, but =executeCodePath= never sends it
@@ -199,3 +199,40 @@ Full cutover of the =code= tool from the current 20+ subcommand surface to a 3-c
 - [ ] Manage commands work for buffer lifecycle
 - [ ] =bun check:ts= passes
 - [ ] =bun lint:ts= passes
+
+** ITEM Add projection options to code get schema
+:PROPERTIES:
+:CUSTOM_ID: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-projection-options
+:DEPENDS: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-new-schema
+:END:
+- Per spec =specs/code-graph/code-path-extensions.md= §5
+- File: =packages/coding-agent/src/tools/code.ts=
+- Extend =code get= schema with: =limit=, =head=, =tail=, =context: { pre, post }=, =content: "auto"|"none"|"raw"|"text"=, =format: "node-list"|"locations"|"content-only"|"tree"|"stats"=, =root=
+- Document each as sugar for canonical CodePath syntax (table in spec §5)
+- All also expressible directly inside =target=; tool layer simply forwards to NAPI which handles lowering (PROJ-054::proj-napi-projection-options)
+- Result formatting branches on =format=: =locations= (grep-style file:line:col), =content-only= (concatenated text), =tree= (directory listing), =stats= (metadata block), =node-list= (default)
+
+** ITEM Document migration table from deleted tools
+:PROPERTIES:
+:CUSTOM_ID: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-migration-table
+:DEPENDS: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-rewrite-prompts
+:END:
+- Embed the spec §5 migration table verbatim in =packages/coding-agent/src/prompts/tools/code.md=
+- Cover every form of =find=/=read=/=grep=/=ast-grep= invocation:
+  - File discovery (glob, hidden, gitignore, ext/lang/size/mtime predicates)
+  - File content (raw, line range, dir listing, PDF/DOCX/image/HTML)
+  - Regex search (literal, multiline, case-insensitive, capture groups, context windows, type filter)
+  - Semantic search (now =def→= edge axis instead of =mode: "semantic"=)
+  - Structural pattern match (now =//§NodeKind[name=...]= instead of ast-grep =$VAR= patterns)
+  - URI access (=artifact://=, =memory://=, =skill://=, =agent://=, =jobs://=, =local://=, =pi://=)
+- Include 8+ worked examples with both projection-option syntax and equivalent CodePath syntax
+
+** ITEM Coordinate with FEAT-655 tool deletion
+:PROPERTIES:
+:CUSTOM_ID: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-coordinate-deletion
+:DEPENDS: PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-projection-options PROJ-055-code-tool-surface-cutover-3-command-mode::proj-cutover-migration-table
+:END:
+- After this PROJ ships =code get= projection options, =FEAT-655-delete-find-read-grep-ast-grep-tools-and= performs the tool-file deletion + prompt + agent allowlist + skill migration
+- Sequencing constraint: PROJ-055 and FEAT-655 must land in the same release cycle to avoid a window where two tool surfaces coexist
+- This sub-outline is the explicit handoff to FEAT-655; verifies =code get= projection-option parity is sufficient for every legacy invocation before deletion
+- Verification: cross-reference the FEAT-655 T2 grep checklist against this sub-outline's migration table

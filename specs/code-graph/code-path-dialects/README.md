@@ -87,11 +87,16 @@ D  Edge cases
 E  Test suite (stubs the dialect implementation must pass)
 ```
 
+
+**Note:** The three baseline dialects (FS, Text, URI) are kernel-baked — they ship with `pi-code-path` and cannot be disabled. They are not optional registrations like the 8 code dialects described below.
 ---
 
 ## 2 · Dialect index
 
 ```
+00a FS (filesystem)                  00-fs.md
+00b Text (lines / chunks / paras)     00-text.md
+00c URI schemes (artifact, …)         00-uri.md
 01  TypeScript / JavaScript / TSX    01-typescript.md
 02  Rust                              02-rust.md
 03  Python                            03-python.md
@@ -143,6 +148,8 @@ src/**/*.hs   :: //[.§string[text~="TODO"]]#body
 styles/*.css  :: //[.§declaration[text~="TODO"]]#block
 *.html        :: //*[contains(text(), 'TODO')]           -- XPath native
 *.md          :: //[.§inline[text~="TODO"]]^^
+
+*.{ts,rs,py,go,hs,html,css,md} :: §line[text~="TODO"]     -- text dialect, bypasses tree-sitter
 ```
 
 Operator skeleton identical. Payload predicates localized. The dialect's test suite must include this cross-dialect case as a smoke test against the operator semantics.
@@ -168,4 +175,4 @@ R-8  Wire into LanguageProfile registry; grammar binding unchanged
 R-9  Cross-dialect smoke test (§4) must pass
 ```
 
-The dialect is ready to ship when R-1 through R-9 are green.
+The dialect is ready to ship when R-1 through R-9 are green. R-1 through R-9 apply to opt-in code dialects only. Baseline dialects (FS, Text, URI) are kernel-baked and follow the A-E structure but do not require separate registration — they ship with `pi-code-path` and cannot be disabled.

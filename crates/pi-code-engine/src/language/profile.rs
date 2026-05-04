@@ -33,6 +33,9 @@ pub struct LanguageProfile {
 
 	/// tree-sitter Language for creating parsers.
 	pub ts_language: tree_sitter::Language,
+
+	/// CodePath v3 dialect for this language (optional for backward compat).
+	pub dialect: Option<pi_code_path::LanguageDialect>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

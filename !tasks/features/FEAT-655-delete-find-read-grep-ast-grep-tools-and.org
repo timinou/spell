@@ -1,0 +1,162 @@
+#+TITLE: Delete find/read/grep/ast-grep tools and migrate prompts to code get
+#+STATE: ITEM
+#+SESSION_ID: 14d34634c16fd492
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T22-09-18-086Z_14d34634c16fd492.jsonl]]
+#+CUSTOM_ID: FEAT-655-delete-find-read-grep-ast-grep-tools-and
+#+DEPENDS: PROJ-055-code-tool-surface-cutover-3-command-mode
+#+EFFORT: M
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+how would you implement the full vision of codepath v3? in a way that replaces the need for the find and the read tools? and maybe even for the grep tool, not sacrificng any flexibility?
+
+* Scope
+
+Final cutover step: delete the four legacy tools (=find=, =read=, =grep=, =ast-grep=) and migrate every reference in prompts, skills, AGENTS.md, and downstream tooling to =code get= with CodePath targets and the projection-options surface defined in =code-path-extensions.md= §5. No transition aliases.
+
+** In scope
+- Delete =packages/coding-agent/src/tools/find.ts= (491 lines)
+- Delete =packages/coding-agent/src/tools/read.ts= (1019 lines)
+- Delete =packages/coding-agent/src/tools/grep.ts= (926 lines)
+- Delete =packages/coding-agent/src/tools/ast-grep.ts= (466 lines)
+- Delete corresponding prompt files: =find.md=, =read.md=, =grep.md=, =ast-grep.md=
+- Remove tool registrations from the agent toolbox (e.g. =packages/coding-agent/src/tools/index.ts= and similar wiring)
+- Remove tool entries from agent definitions (=Tools:= lists in agent frontmatter or explicit allowlists in =spell.kdl=)
+- Update =AGENTS.md= and per-agent role docs to remove =find=/=read=/=grep= mentions and add =code get= patterns
+- Update every Skill (=memory://root/skills/=) referencing the deleted tools
+- Update system prompts in =packages/coding-agent/src/prompts/system/= (read-precedence rules, "you MUST use Grep", "you MUST use Read", etc. — all rewritten for =code get=)
+- Update hint files for tool selection (=packages/coding-agent/src/prompts/tools/code-hint-*.md=) with migration patterns
+- Migrate any internal call sites that import the deleted tool classes
+
+** Out of scope
+- The 3-command schema (PROJ-055)
+- Projection options on =code get= (PROJ-055 amendment)
+- The CodePath kernel and dialects (PROJ-052/058/059/uri)
+- The NAPI bridge (PROJ-054)
+
+** Existing patterns
+- Tool registration site: =packages/coding-agent/src/tools/index.ts= (collect class instances)
+- Agent definitions: agent system prompt files declare allowed tools
+- Tool description rendering: =renderPromptTemplate= used in each tool's =description=
+- Prior tool-deletion analogues: search for past PRs deleting subagent-only tools
+- Grep semantic mode: subsumed by edge-axis CodePath (=parseConfig/def→=)
+
+** Tests
+
+*** T1: tool registry compiles
+- =bun check:ts= passes after deletions; no dangling imports
+
+*** T2: no stale references
+- =rg "FindTool|ReadTool|GrepTool|AstGrepTool"= returns zero hits in =packages/= and =apps/=
+- =rg "<tool>find</tool>|<tool>read</tool>|<tool>grep</tool>|<tool>ast-grep</tool>"= zero hits in prompt files
+- AGENTS.md and per-agent role files contain no references to the four tools
+
+*** T3: prompt migration patterns present
+- =packages/coding-agent/src/prompts/tools/code.md= contains the migration table from =code-path-extensions.md= §5
+- =code-hint-*.md= files include at least one =code get= example replacing each deleted tool
+
+*** T4: agent-allowlist cleanup
+- For each agent in =packages/coding-agent/src/prompts/agents/=, the =Tools:= list omits the four removed tools
+- =spell.kdl= agent overrides omit the four tools
+
+*** T5: end-to-end test
+- An agent run through a representative session that previously used =find=/=read=/=grep= now succeeds with =code get= equivalents
+- No regression in the existing snapshot-test suite for prompts (=packages/coding-agent/test/=)
+
+*** T6: skill migration
+- All skills under =memory://root/skills/= reviewed; deleted-tool references replaced with =code get=
+- =skill://*/SKILL.md= files validate against the schema
+
+** Implementation
+
+** ITEM proj-cutover-tool-deletion
+:PROPERTIES:
+:CUSTOM_ID: FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-tool-deletion
+:END:
+- Delete the four =.ts= files
+- Remove imports/exports in =packages/coding-agent/src/tools/index.ts= or equivalent registry
+- Remove TS type aliases (=FindToolInput=, =ReadToolInput=, etc.) — search and excise from re-exports
+
+** ITEM proj-cutover-prompt-rewrite
+:PROPERTIES:
+:CUSTOM_ID: FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-prompt-rewrite
+:DEPENDS: FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-tool-deletion
+:END:
+- =packages/coding-agent/src/prompts/tools/code.md= — append the migration table from spec §5; add 4 worked examples (one per deleted tool)
+- =code-hint-semantic.md= — keep edge-axis examples as already planned in PROJ-055; add note that grep semantic mode is now =def→=
+- =code-hint-markdown.md= — add =§heading=/=#body= examples for what was previously =read+grep= on markdown
+- =code-hint-typst.md= — same migration coverage
+- =code-hint-text-fallback.md= — explicitly cover the =§line=, =§para=, =§chunk= text-dialect entry points
+- New file: =code-migration.md= (optional, hints layer) — full table of legacy → CodePath patterns including the rare cases (multiline regex, capture groups, JSON jq paths, PDF extraction, image content)
+
+** ITEM proj-cutover-system-prompts
+:PROPERTIES:
+:CUSTOM_ID: FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-system-prompts
+:DEPENDS: FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-prompt-rewrite
+:END:
+- Search =packages/coding-agent/src/prompts/system/= for "you MUST use Grep", "you MUST use Read", "you MUST use Find", "you MUST use ast-grep"
+- Replace with prescriptive =code get= guidance scoped to each context
+- Update read-precedence rules ("Read tool for non-code files, URLs, images") to reflect =code get= URI Locators and =#text=/=#image= qualifiers
+- Update plan-mode prompt (=plan-mode-active.md=) — codepaths/explore phase guidance
+
+** ITEM proj-cutover-agents-md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-agents-md
+:DEPENDS: FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-prompt-rewrite
+:END:
+- =AGENTS.md= top-level — replace tool-precedence section to drop =find=/=read=/=grep=/=ast-grep= and centre on =code get=/=code edit=/=code manage=
+- Per-agent role files — review =Tools:= lists and prose; update examples
+- Project-specific =.spell/AGENTS.md= conventions — note the cutover
+
+** ITEM proj-cutover-skills
+:PROPERTIES:
+:CUSTOM_ID: FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-skills
+:DEPENDS: FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-prompt-rewrite
+:END:
+- Iterate every skill under the memory tree
+- For each =SKILL.md= referencing the deleted tools, rewrite usage examples
+- Keep skill semantics; only the tool surface changes
+
+** ITEM proj-cutover-agent-allowlists
+:PROPERTIES:
+:CUSTOM_ID: FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-agent-allowlists
+:DEPENDS: FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-tool-deletion
+:END:
+- =spell.kdl= — remove =find=/=read=/=grep=/=ast-grep= from agent =tools= node entries
+- Per-agent definition files — remove from =Tools:= lists
+- Add =code= (parent tool) where missing
+
+** ITEM proj-cutover-verification
+:PROPERTIES:
+:CUSTOM_ID: FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-verification
+:DEPENDS: FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-tool-deletion FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-prompt-rewrite FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-system-prompts FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-agents-md FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-skills FEAT-655-delete-find-read-grep-ast-grep-tools-and::proj-cutover-agent-allowlists
+:END:
+- Run =bun run --workspaces --if-present --parallel test=
+- Run =bun run --parallel check:ts check:rs=
+- Run =bun run --parallel lint:ts lint:rs=
+- Greps from T2 return zero hits
+- Snapshot tests for prompt rendering pass
+
+** Edge Cases
+
+- Custom-tools extension surface (=packages/coding-agent/src/extensibility/custom-tools/=): if any custom tool wraps the deleted tools, surface a deprecation diagnostic during build
+- Subagent definitions referencing the deleted tools: hard error at agent-load time with hint to migrate
+- Test fixtures that mock =FindTool=/=ReadTool=/=GrepTool= classes: rewrite to mock =CodeTool= or move to integration tests against the real surface
+- Public package consumers (if any external consumer imports these classes): document the breaking change in CHANGELOG; this is part of the v3 cutover, not a separate break
+- README and root-level docs that show example tool usage: rewrite to =code get= equivalents
+
+** Acceptance Criteria
+
+- [ ] Four tool files deleted
+- [ ] Four prompt files deleted
+- [ ] =bun check:ts= passes (no dangling imports)
+- [ ] =bun lint:ts= passes
+- [ ] =bun run --workspaces test= passes
+- [ ] Zero hits for =FindTool|ReadTool|GrepTool|AstGrepTool= in source tree
+- [ ] Zero references to the four tool names in prompt/system/agents/skill markdown
+- [ ] AGENTS.md updated to centre on =code get=/=edit=/=manage=
+- [ ] Migration table published in =code.md= and =code-migration.md=
+- [ ] Snapshot tests for prompt rendering pass
+- [ ] Manual verification: a session uses =code get= for file/dir reads, regex search, and structural queries with no recourse to deleted tools

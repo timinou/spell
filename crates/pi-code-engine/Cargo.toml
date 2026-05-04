@@ -39,6 +39,7 @@ notify = { version = "6", default-features = false, features = [
 fd-lock = "4"
 blake3 = "1"
 pi-edit-broker = { path = "../pi-edit-broker" }
+pi-code-path = { path = "../pi-code-path" }
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }
