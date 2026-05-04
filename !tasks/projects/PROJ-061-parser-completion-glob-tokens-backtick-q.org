@@ -1,5 +1,5 @@
 #+TITLE: Parser completion: glob tokens, backtick quoting, full predicate set, capture stub
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d3c7b47c6586ef
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
 #+CUSTOM_ID: PROJ-061-parser-completion-glob-tokens-backtick-q
