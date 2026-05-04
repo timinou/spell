@@ -6,15 +6,16 @@
 //! The parsed payload is preserved verbatim (`HtmlName.raw`); semantic
 //! interpretation is deferred to the resolver layer (PROJ-066).
 
-use std::ops::Range;
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use tree_sitter::Node;
 
-use crate::ast::NamePayload;
-use crate::dialect::{
-	AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierResolver, QualifierSpec,
+use crate::{
+	ast::NamePayload,
+	dialect::{
+		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierResolver, QualifierSpec,
+	},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -96,15 +97,157 @@ impl NameLexer for HtmlNameLexer {
 	}
 }
 
-struct StubResolver;
-impl QualifierResolver for StubResolver {
-	fn resolve(
-		&self,
-		_node: Node<'_>,
-		_src: &str,
-		_args: Option<&str>,
-	) -> Option<Range<usize>> {
-		Some(0..0)
+// ── Helpers ─────────────────────────────────────────────────────
+
+fn find_start_tag(node: Node<'_>) -> Option<Node<'_>> {
+	let mut cursor = node.walk();
+	for child in node.children(&mut cursor) {
+		if child.kind() == "start_tag" || child.kind() == "self_closing_tag" {
+			return Some(child);
+		}
+	}
+	None
+}
+
+fn find_end_tag(node: Node<'_>) -> Option<Node<'_>> {
+	let mut cursor = node.walk();
+	for child in node.children(&mut cursor) {
+		if child.kind() == "end_tag" {
+			return Some(child);
+		}
+	}
+	None
+}
+
+fn find_tag_name(node: Node<'_>) -> Option<Node<'_>> {
+	let mut cursor = node.walk();
+	for child in node.children(&mut cursor) {
+		if child.kind() == "tag_name" {
+			return Some(child);
+		}
+	}
+	None
+}
+
+fn find_attribute_name(node: Node<'_>) -> Option<Node<'_>> {
+	let mut cursor = node.walk();
+	for child in node.children(&mut cursor) {
+		if child.kind() == "attribute_name" {
+			return Some(child);
+		}
+	}
+	None
+}
+
+// ── Anchors and qualifiers ──────────────────────────────────────
+
+mod qualifiers {
+	use std::ops::Range;
+	use tree_sitter::Node;
+	use crate::dialect::QualifierResolver;
+	use super::{find_attribute_name, find_end_tag, find_start_tag, find_tag_name};
+
+	pub struct InnerHTML;
+	impl QualifierResolver for InnerHTML {
+		fn resolve(
+			&self,
+			node: Node<'_>,
+			_src: &str,
+			_args: Option<&str>,
+		) -> Option<Range<usize>> {
+			let start_tag = find_start_tag(node)?;
+			let end_tag = find_end_tag(node);
+			match end_tag {
+				Some(et) => Some(start_tag.end_byte()..et.start_byte()),
+				None => Some(start_tag.end_byte()..start_tag.end_byte()),
+			}
+		}
+	}
+
+	pub struct OuterHTML;
+	impl QualifierResolver for OuterHTML {
+		fn resolve(
+			&self,
+			node: Node<'_>,
+			_src: &str,
+			_args: Option<&str>,
+		) -> Option<Range<usize>> {
+			Some(node.start_byte()..node.end_byte())
+		}
+	}
+
+	pub struct Text;
+	impl QualifierResolver for Text {
+		fn resolve(
+			&self,
+			node: Node<'_>,
+			_src: &str,
+			_args: Option<&str>,
+		) -> Option<Range<usize>> {
+			let mut first: Option<Node> = None;
+			let mut last: Option<Node> = None;
+			let mut stack = vec![node];
+			while let Some(n) = stack.pop() {
+				if n.kind() == "text" || n.kind() == "raw_text" {
+					if first.is_none() {
+						first = Some(n);
+					}
+					last = Some(n);
+				}
+				let mut cursor = n.walk();
+				for child in n.children(&mut cursor) {
+					stack.push(child);
+				}
+			}
+			match (first, last) {
+				(Some(f), Some(l)) => Some(f.start_byte()..l.end_byte()),
+				_ => Some(node.end_byte()..node.end_byte()),
+			}
+		}
+	}
+
+	pub struct Attr;
+	impl QualifierResolver for Attr {
+		fn resolve(
+			&self,
+			node: Node<'_>,
+			src: &str,
+			args: Option<&str>,
+		) -> Option<Range<usize>> {
+			let target_name = args?;
+			let tag = find_start_tag(node)?;
+			let mut cursor = tag.walk();
+			for child in tag.children(&mut cursor) {
+				if child.kind() == "attribute" {
+					if let Some(attr_name_node) = find_attribute_name(child) {
+						if let Some(name_text) = src.get(attr_name_node.start_byte()..attr_name_node.end_byte()) {
+							if name_text == target_name {
+								let mut attr_cursor = child.walk();
+								for attr_child in child.children(&mut attr_cursor) {
+									if attr_child.kind() == "quoted_attribute_value" {
+										return Some(attr_child.start_byte()..attr_child.end_byte());
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			None
+		}
+	}
+
+	pub struct Tag;
+	impl QualifierResolver for Tag {
+		fn resolve(
+			&self,
+			node: Node<'_>,
+			_src: &str,
+			_args: Option<&str>,
+		) -> Option<Range<usize>> {
+			let tag = find_start_tag(node)?;
+			find_tag_name(tag).map(|n| n.start_byte()..n.end_byte())
+		}
 	}
 }
 
@@ -112,40 +255,80 @@ fn match_kind(node: &Node<'_>, kinds: &[&str]) -> bool {
 	kinds.contains(&node.kind())
 }
 
+fn has_role_attribute(node: &Node<'_>, src: &str) -> bool {
+	let tag = match find_start_tag(*node) {
+		Some(t) => t,
+		None => return false,
+	};
+	let mut cursor = tag.walk();
+	for child in tag.children(&mut cursor) {
+		if child.kind() == "attribute" {
+			if let Some(attr_name_node) = find_attribute_name(child) {
+				if let Some(name_text) = src.get(attr_name_node.start_byte()..attr_name_node.end_byte()) {
+					if name_text == "role" {
+						return true;
+					}
+				}
+			}
+		}
+	}
+	false
+}
+
+fn tag_name_text<'a>(node: &Node<'_>, src: &'a str) -> Option<&'a str> {
+	let tag = find_start_tag(*node)?;
+	let tag_name = find_tag_name(tag)?;
+	src.get(tag_name.start_byte()..tag_name.end_byte())
+}
+
 pub fn html_dialect() -> LanguageDialect {
+	let element_kinds: Vec<String> =
+		vec!["element".into(), "script_element".into(), "style_element".into()];
 	LanguageDialect {
 		name_lexer: Arc::new(HtmlNameLexer),
-		anchors: vec![
-			AnchorPattern { name: "hook-deps", matcher: |n, _s| match_kind(n, &["element"]) },
-			AnchorPattern { name: "interactive", matcher: |n, _s| match_kind(n, &["element"]) },
-			AnchorPattern { name: "aria-live", matcher: |n, _s| match_kind(n, &["element"]) },
-			AnchorPattern { name: "landmark", matcher: |n, _s| match_kind(n, &["element"]) },
-		],
+		anchors:    vec![AnchorPattern {
+			name:    "landmark-by-role",
+			matcher: |n, src| {
+				if !match_kind(n, &["element", "script_element", "style_element"]) {
+					return false;
+				}
+				if has_role_attribute(n, src) {
+					return true;
+				}
+				if let Some(name) = tag_name_text(n, src) {
+					return matches!(
+						name,
+						"header" | "footer" | "main" | "nav" | "aside" | "section" | "article"
+					);
+				}
+				false
+			},
+		}],
 		qualifiers: vec![
 			QualifierSpec {
 				name:       "innerHTML",
-				applies_to: vec!["element".into()],
-				resolve:    Arc::new(StubResolver),
+				applies_to: element_kinds.clone(),
+				resolve:    Arc::new(qualifiers::InnerHTML),
 			},
 			QualifierSpec {
 				name:       "outerHTML",
-				applies_to: vec!["element".into()],
-				resolve:    Arc::new(StubResolver),
+				applies_to: element_kinds.clone(),
+				resolve:    Arc::new(qualifiers::OuterHTML),
 			},
 			QualifierSpec {
 				name:       "text",
-				applies_to: vec!["element".into()],
-				resolve:    Arc::new(StubResolver),
+				applies_to: element_kinds.clone(),
+				resolve:    Arc::new(qualifiers::Text),
 			},
 			QualifierSpec {
 				name:       "attr",
-				applies_to: vec!["element".into()],
-				resolve:    Arc::new(StubResolver),
+				applies_to: element_kinds.clone(),
+				resolve:    Arc::new(qualifiers::Attr),
 			},
 			QualifierSpec {
-				name:       "tag-name",
-				applies_to: vec!["element".into()],
-				resolve:    Arc::new(StubResolver),
+				name:       "tag",
+				applies_to: element_kinds.clone(),
+				resolve:    Arc::new(qualifiers::Tag),
 			},
 		],
 		edge_kinds: EdgeKindSet::default(),
@@ -208,7 +391,7 @@ mod tests {
 	#[test]
 	fn dialect_factory_populates_registries() {
 		let d = html_dialect();
-		assert_eq!(d.anchors.len(), 4);
+		assert_eq!(d.anchors.len(), 1);
 		assert_eq!(d.qualifiers.len(), 5);
 	}
 }

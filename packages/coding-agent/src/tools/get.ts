@@ -18,18 +18,31 @@ type GetToolResultDetails = DetailsWithMeta & {
 };
 
 /**
- * A target qualifies for auto `#raw` attachment when it is a plain filesystem
- * path: no scheme (`foo://`), no axis separator (`::`), no qualifier (`#`), no
- * payload terminator (`;`), and no glob magic (`*`, `?`, `[`). Caller still
- * `fs.stat`s the resolved path before mutating the target so directories and
- * non-existent paths fall through to the kernel unchanged.
+ * Classifies a target for auto-attach behavior.
+ * - `"bare-plain"`: plain filesystem path (no scheme, axis, qualifier, terminator, glob).
+ *   Auto-attach `#raw` for files, `#listing` for dirs.
+ * - `"qualified"`: has explicit qualifier (`#...`) — caller's qualifier wins.
+ * - `"other"`: scheme, axis, terminator, or glob — pass through unchanged.
  */
-function shouldAutoAttachRaw(target: string): boolean {
-	if (target.includes("://")) return false;
-	if (target.includes("::")) return false;
-	if (target.includes("#")) return false;
-	if (target.includes(";")) return false;
-	return !/[*?\[]/.test(target);
+function classifyBareTarget(target: string): "bare-plain" | "qualified" | "other" {
+	if (target.includes("://")) return "other";
+	if (target.includes("::")) return "other";
+	if (target.includes(";")) return "other";
+	if (/[*?\[]/.test(target)) return "other";
+	if (target.includes("#")) return "qualified";
+	return "bare-plain";
+}
+
+/**
+ * Builds a directory qualifier from params:
+ * - `depth` → `#tree[depth=N]` (overrides recursive)
+ * - `recursive` → `#tree` (full recursion)
+ * - default → `#listing` (one level)
+ */
+function buildDirQualifier(target: string, params: GetParams): string {
+	if (params.depth !== undefined) return `${target}#tree[depth=${params.depth}]`;
+	if (params.recursive) return `${target}#tree`;
+	return `${target}#listing`;
 }
 /**
  * When the kernel surfaces a [DID_YOU_MEAN] diagnostic, replace the raw
@@ -67,14 +80,22 @@ export class GetTool implements AgentTool<typeof getSchema> {
 	): Promise<AgentToolResult> {
 		// UX: bare file paths returning kernel metadata (no content) trips models
 		// migrating from the legacy `read` tool. Auto-attach `#raw` when the target
-		// is a plain path pointing at an existing file. Explicit `content:false`
-		// opts out for callers that just want the file node.
+		// Auto-attach qualifiers for bare filesystem paths.
+		// - Files → `#raw` (existing behavior)
+		// - Directories → `#listing` by default, `#tree`/`#tree[depth=N]` when recursive/depth set
+		// - `content: false` opts out for callers wanting the raw node
+		// - Already-qualified targets pass through unchanged
 		let target = params.target;
-		if (params.content !== false && shouldAutoAttachRaw(target)) {
-			const absCandidate = path.isAbsolute(target) ? target : path.resolve(params.root ?? process.cwd(), target);
+		if (params.content !== false && classifyBareTarget(target) === "bare-plain") {
+			const normalized = target.replace(/\/+$/, "");
+			const absCandidate = path.isAbsolute(normalized) ? normalized : path.resolve(params.root ?? process.cwd(), normalized);
 			try {
 				const stat = await fs.stat(absCandidate);
-				if (stat.isFile()) target = `${target}#raw`;
+				if (stat.isFile()) {
+					target = `${normalized}#raw`;
+				} else if (stat.isDirectory()) {
+					target = buildDirQualifier(normalized, params);
+				}
 			} catch {
 				// Path does not exist; let the kernel surface its native diagnostics.
 			}

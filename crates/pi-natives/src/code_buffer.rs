@@ -1721,7 +1721,7 @@ fn execute_edit_command(options: &Value, session_id: &str) -> Result<Value> {
 		false,
 	))
 }
-fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
+pub(crate) fn execute_code_buffer_inner(options: &Value) -> Result<Value> {
 	let command = options
 		.get("command")
 		.and_then(Value::as_str)

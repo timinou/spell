@@ -1,8 +1,13 @@
+pub mod mutation;
 pub mod predicates;
 pub mod walker;
 
 #[cfg(test)]
+mod css_qualifier_tests;
+#[cfg(test)]
 mod go_qualifier_tests;
+#[cfg(test)]
+mod hs_qualifier_tests;
 #[cfg(test)]
 mod py_qualifier_tests;
 #[cfg(test)]
