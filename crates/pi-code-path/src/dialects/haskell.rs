@@ -4,17 +4,17 @@
 //! module-qualified `Data.List.sort`, parens-wrapped operators `(>>=)`,
 //! `(<$>)`, and typeclass-method form `(Functor).fmap`.
 
-use std::ops::Range;
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use tree_sitter::Node;
-use winnow::Parser;
-use winnow::token::take_while;
+use winnow::{Parser, token::take_while};
 
-use crate::ast::NamePayload;
-use crate::dialect::{
-	AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierResolver, QualifierSpec,
+use crate::{
+	ast::NamePayload,
+	dialect::{
+		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierResolver, QualifierSpec,
+	},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -104,66 +104,234 @@ fn parse_paren_form(input: &mut &str) -> winnow::Result<NamePayload> {
 }
 
 fn parse_ident(input: &mut &str) -> winnow::Result<String> {
-	let s: &str = take_while(1.., |c: char| c.is_alphanumeric() || c == '_' || c == '\'')
-		.parse_next(input)?;
+	let s: &str =
+		take_while(1.., |c: char| c.is_alphanumeric() || c == '_' || c == '\'').parse_next(input)?;
 	Ok(s.to_string())
-}
-
-struct StubResolver;
-impl QualifierResolver for StubResolver {
-	fn resolve(
-		&self,
-		_node: Node<'_>,
-		_src: &str,
-		_args: Option<&str>,
-	) -> Option<Range<usize>> {
-		Some(0..0)
-	}
 }
 
 fn match_kind(node: &Node<'_>, kinds: &[&str]) -> bool {
 	kinds.contains(&node.kind())
 }
 
+fn has_descendant_kind(node: Node<'_>, kind: &str) -> bool {
+	let mut stack = vec![node];
+	while let Some(n) = stack.pop() {
+		if n.kind() == kind {
+			return true;
+		}
+		let mut cursor = n.walk();
+		for child in n.children(&mut cursor) {
+			stack.push(child);
+		}
+	}
+	false
+}
+
+fn has_descendant_text(node: Node<'_>, src: &str, needle: &str) -> bool {
+	let mut stack = vec![node];
+	while let Some(n) = stack.pop() {
+		if let Some(text) = src.get(n.start_byte()..n.end_byte()) {
+			if text == needle {
+				return true;
+			}
+		}
+		let mut cursor = n.walk();
+		for child in n.children(&mut cursor) {
+			stack.push(child);
+		}
+	}
+	false
+}
+
+// ── Anchors and qualifiers ──────────────────────────────────────
+
+mod qualifiers {
+	use std::ops::Range;
+
+	use tree_sitter::Node;
+
+	use crate::dialect::QualifierResolver;
+
+	pub struct Body;
+	impl QualifierResolver for Body {
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+			let mut first: Option<Node> = None;
+			let mut last: Option<Node> = None;
+			let mut cursor = node.walk();
+			for child in node.children(&mut cursor) {
+				if child.kind() == "match" {
+					if first.is_none() {
+						first = Some(child);
+					}
+					last = Some(child);
+				}
+			}
+			match (first, last) {
+				(Some(f), Some(l)) => Some(f.start_byte()..l.end_byte()),
+				_ => None,
+			}
+		}
+	}
+
+	pub struct Name;
+	impl QualifierResolver for Name {
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+			node
+				.child_by_field_name("name")
+				.map(|c| c.start_byte()..c.end_byte())
+		}
+	}
+
+	pub struct Sig;
+	impl QualifierResolver for Sig {
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+			Some(node.start_byte()..node.end_byte())
+		}
+	}
+
+	pub struct WhereClause;
+	impl QualifierResolver for WhereClause {
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+			node
+				.child_by_field_name("binds")
+				.map(|c| c.start_byte()..c.end_byte())
+		}
+	}
+
+	pub struct Guards;
+	impl QualifierResolver for Guards {
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+			let mut first: Option<Node> = None;
+			let mut last: Option<Node> = None;
+			let mut cursor = node.walk();
+			for child in node.children(&mut cursor) {
+				if child.kind() == "match" {
+					if let Some(guards) = child.child_by_field_name("guards") {
+						if first.is_none() {
+							first = Some(guards);
+						}
+						last = Some(guards);
+					}
+				}
+			}
+			match (first, last) {
+				(Some(f), Some(l)) => Some(f.start_byte()..l.end_byte()),
+				_ => None,
+			}
+		}
+	}
+
+	pub struct Exports;
+	impl QualifierResolver for Exports {
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+			if node.kind() == "exports" {
+				return Some(node.start_byte()..node.end_byte());
+			}
+			node
+				.child_by_field_name("exports")
+				.map(|c| c.start_byte()..c.end_byte())
+		}
+	}
+
+	pub struct Pragmas;
+	impl QualifierResolver for Pragmas {
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+			Some(node.start_byte()..node.end_byte())
+		}
+	}
+}
+
 pub fn haskell_dialect() -> LanguageDialect {
 	LanguageDialect {
 		name_lexer: Arc::new(HsNameLexer),
-		anchors: vec![
-			AnchorPattern { name: "guard", matcher: |n, _s| match_kind(n, &["guards"]) },
-			AnchorPattern { name: "instance", matcher: |n, _s| match_kind(n, &["instance"]) },
-			AnchorPattern { name: "pragma", matcher: |n, _s| match_kind(n, &["pragma"]) },
-			AnchorPattern { name: "type-sig", matcher: |n, _s| match_kind(n, &["signature"]) },
+		anchors:    vec![
+			AnchorPattern {
+				name:    "return",
+				matcher: |n, src| {
+					if !match_kind(n, &["function", "bind"]) {
+						return false;
+					}
+					has_descendant_text(*n, src, "return")
+				},
+			},
+			AnchorPattern {
+				name:    "guard",
+				matcher: |n, _src| {
+					if n.kind() != "function" {
+						return false;
+					}
+					let mut cursor = n.walk();
+					n.children(&mut cursor).any(|c| {
+						if c.kind() == "match" {
+							c.child_by_field_name("guards").is_some()
+						} else {
+							false
+						}
+					})
+				},
+			},
+			AnchorPattern {
+				name:    "where-binding",
+				matcher: |n, _src| {
+					if n.kind() != "function" {
+						return false;
+					}
+					n.child_by_field_name("binds").is_some()
+				},
+			},
+			AnchorPattern {
+				name:    "pattern-match",
+				matcher: |n, _src| match_kind(n, &["function", "lambda", "alternative"]),
+			},
+			AnchorPattern { name: "case-of", matcher: |n, _src| n.kind() == "case" },
+			AnchorPattern { name: "lambda", matcher: |n, _src| n.kind() == "lambda" },
 		],
 		qualifiers: vec![
 			QualifierSpec {
 				name:       "body",
-				applies_to: vec!["function".into()],
-				resolve:    Arc::new(StubResolver),
+				applies_to: vec!["function".into(), "bind".into()],
+				resolve:    Arc::new(qualifiers::Body),
 			},
 			QualifierSpec {
 				name:       "sig",
 				applies_to: vec!["signature".into()],
-				resolve:    Arc::new(StubResolver),
+				resolve:    Arc::new(qualifiers::Sig),
+			},
+			QualifierSpec {
+				name:       "type-signature",
+				applies_to: vec!["signature".into()],
+				resolve:    Arc::new(qualifiers::Sig),
 			},
 			QualifierSpec {
 				name:       "name",
-				applies_to: vec!["function".into(), "data_type".into()],
-				resolve:    Arc::new(StubResolver),
+				applies_to: vec![
+					"function".into(),
+					"bind".into(),
+					"signature".into(),
+					"data_type".into(),
+					"class".into(),
+				],
+				resolve:    Arc::new(qualifiers::Name),
 			},
 			QualifierSpec {
-				name:       "docstring",
+				name:       "where-clause",
 				applies_to: vec!["function".into()],
-				resolve:    Arc::new(StubResolver),
+				resolve:    Arc::new(qualifiers::WhereClause),
 			},
 			QualifierSpec {
-				name:       "type",
+				name:       "guards",
 				applies_to: vec!["function".into()],
-				resolve:    Arc::new(StubResolver),
+				resolve:    Arc::new(qualifiers::Guards),
 			},
 			QualifierSpec {
-				name:       "instances",
-				applies_to: vec!["class".into()],
-				resolve:    Arc::new(StubResolver),
+				name:       "exports",
+				applies_to: vec!["header".into(), "exports".into()],
+				resolve:    Arc::new(qualifiers::Exports),
+			},
+			QualifierSpec {
+				name:       "pragmas",
+				applies_to: vec!["pragma".into()],
+				resolve:    Arc::new(qualifiers::Pragmas),
 			},
 		],
 		edge_kinds: EdgeKindSet::default(),
@@ -240,7 +408,7 @@ mod tests {
 	#[test]
 	fn dialect_factory_populates_registries() {
 		let d = haskell_dialect();
-		assert_eq!(d.anchors.len(), 4);
-		assert_eq!(d.qualifiers.len(), 6);
+		assert_eq!(d.anchors.len(), 6);
+		assert_eq!(d.qualifiers.len(), 8);
 	}
 }
