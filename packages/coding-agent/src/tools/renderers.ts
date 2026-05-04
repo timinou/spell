@@ -11,21 +11,17 @@ import { editToolRenderer } from "../patch";
 import { taskToolRenderer } from "../task/render";
 import { webSearchToolRenderer } from "../web/search/render";
 import { askToolRenderer } from "./ask";
-import { astEditToolRenderer } from "./ast-edit";
-import { astGrepToolRenderer } from "./ast-grep";
+
 import { bashToolRenderer } from "./bash";
 import { calculatorToolRenderer } from "./calculator";
 import { fetchToolRenderer } from "./fetch";
-import { findToolRenderer } from "./find";
-import { grepToolRenderer } from "./grep";
+
 import { inspectImageToolRenderer } from "./inspect-image-renderer";
 
-import { readToolRenderer } from "./read";
 import { resolveToolRenderer } from "./resolve";
 import { searchToolBm25Renderer } from "./search-tool-bm25";
 import { sshToolRenderer } from "./ssh";
 import { todoWriteToolRenderer } from "./todo-write";
-import { writeToolRenderer } from "./write";
 
 type ToolRenderer = {
 	renderCall: (args: unknown, options: RenderResultOptions, theme: Theme) => Component;
@@ -42,18 +38,16 @@ type ToolRenderer = {
 
 export const toolRenderers: Record<string, ToolRenderer> = {
 	ask: askToolRenderer as ToolRenderer,
-	ast_grep: astGrepToolRenderer as ToolRenderer,
-	ast_edit: astEditToolRenderer as ToolRenderer,
+
 	bash: bashToolRenderer as ToolRenderer,
 
 	calc: calculatorToolRenderer as ToolRenderer,
 	edit: editToolRenderer as ToolRenderer,
-	find: findToolRenderer as ToolRenderer,
-	grep: grepToolRenderer as ToolRenderer,
+
 	lsp: lspToolRenderer as ToolRenderer,
 
 	inspect_image: inspectImageToolRenderer as ToolRenderer,
-	read: readToolRenderer as ToolRenderer,
+
 	resolve: resolveToolRenderer as ToolRenderer,
 	search_tool_bm25: searchToolBm25Renderer as ToolRenderer,
 	ssh: sshToolRenderer as ToolRenderer,
@@ -61,5 +55,4 @@ export const toolRenderers: Record<string, ToolRenderer> = {
 	todo_write: todoWriteToolRenderer as ToolRenderer,
 	fetch: fetchToolRenderer as ToolRenderer,
 	web_search: webSearchToolRenderer as ToolRenderer,
-	write: writeToolRenderer as ToolRenderer,
 };

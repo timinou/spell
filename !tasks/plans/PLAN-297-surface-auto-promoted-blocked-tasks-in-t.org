@@ -1,0 +1,64 @@
+#+TITLE: Surface auto-promoted blocked tasks in task tool messaging
+#+STATE: DOING
+#+SESSION_ID: 14d4527d99eada8e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T17-41-27-271Z_14d4527d99eada8e.jsonl]]
+#+CUSTOM_ID: PLAN-297-surface-auto-promoted-blocked-tasks-in-t
+#+EFFORT: 2h
+#+LAYER: core
+#+PRIORITY: #A
+
+* Initial Message
+
+When the task tool dispatches a tool after another one (for partial sequentiality), it sends a message to the parent thread saying that a job was completed, but not that a previously queued job was started.
+
+[[id:FEAT-671-surface-auto-promoted-blocked-tasks-in-t]]
+
+* Context
+The `task` tool's batch dispatch holds blocked tasks in a closure-local `readyQueue` (see =packages/coding-agent/src/task/index.ts= line 1026, =scheduleReadyTasks=). They become real `AsyncJobManager` jobs only when their blocker's success handler re-runs the scheduler. The `await` tool snapshots `manager.getRunningJobs()` once on entry (=packages/coding-agent/src/tools/await-tool.ts= line 82) and renders only that snapshot. Auto-promoted jobs are therefore invisible to the parent agent: it sees "Still Running (0)" and concludes the batch is over.
+
+Concrete failure: session =14d40726c985291f= 17:29-17:41 UTC. Batch =[TSFix, Prompts, AgentsMd, LegacyDelete (filesDeps blocker on TSFix via index.ts)]= dispatched. After TSFix completed, =await= reported batch done. Parent agent re-dispatched LegacyDelete manually. User: "it's already dispatching automatically you fucking idiot". Parent had to =ls= the session dir to discover =31-LegacyDelete.jsonl= already running.
+
+Two complementary signals fix this:
+1. *Dispatch-time*: enumerate queued tasks with their blocker chains (extending the existing `implicitBlockerNote` pattern to all blockers, not just filesDeps-derived ones).
+2. *Await-return-time*: a "Newly Started" section listing jobs that came online between the await call and result, computed via diff of the running-jobs snapshot using `AsyncJob.startTime` filtering.
+
+Out of scope: pre-registering queued tasks as first-class jobs in =AsyncJobManager= (would require adding a =queued= status to =SubagentOutcome= and updating web dashboard, =jobs://= URI, event log; defer).
+
+* Verification
+Per-task gates (LAYER=core → commit-only):
+- =bun test packages/coding-agent/test/task/await-newly-started.test.ts= — 2 pass.
+- =bun test packages/coding-agent/test/task/task-blockers.test.ts= — pre-existing tests + 3 new scenarios pass.
+- =bun run --cwd packages/coding-agent check= — 0 TypeScript errors.
+- =bun test packages/coding-agent/test/task/= — full suite green (no regressions).
+
+Manual smoke: dispatch =[X, Y blocked on X]= in a fresh session; first =await= result must contain both =## Completed (1)= (X) and =## Newly Started (1)= (Y).
+
+* Execution Manifest
+
+** Wave 1 — Tests (TDD seed)
+:PROPERTIES:
+:wave: 1
+:END:
+- [[id:FEAT-671-surface-auto-promoted-blocked-tasks-in-t::write-tests]] — write all 5 test scenarios; expect 3 fail / 2 pass initially.
+
+** Wave 2 — Parallel implementation
+:PROPERTIES:
+:wave: 2
+:END:
+- [[id:FEAT-671-surface-auto-promoted-blocked-tasks-in-t::impl-newly-started]] — Newly Started rendering in =await-tool.ts=. Depends on write-tests.
+- [[id:FEAT-671-surface-auto-promoted-blocked-tasks-in-t::impl-dispatch-text]] — enriched dispatch text in =task/index.ts=. Depends on write-tests.
+
+** Wave 3 — Prompt
+:PROPERTIES:
+:wave: 3
+:END:
+- [[id:FEAT-671-surface-auto-promoted-blocked-tasks-in-t::update-prompt]] — append Newly Started note to =await.md=. Depends on both impl items.
+
+** File-level DAG
+- FEAT-671-surface-auto-promoted-blocked-tasks-in-t (no inter-feature dependencies; single feature)
+
+** Subfeature-level DAG
+- FEAT-671-surface-auto-promoted-blocked-tasks-in-t::impl-newly-started ← FEAT-671-surface-auto-promoted-blocked-tasks-in-t::write-tests
+- FEAT-671-surface-auto-promoted-blocked-tasks-in-t::impl-dispatch-text ← FEAT-671-surface-auto-promoted-blocked-tasks-in-t::write-tests
+- FEAT-671-surface-auto-promoted-blocked-tasks-in-t::update-prompt ← FEAT-671-surface-auto-promoted-blocked-tasks-in-t::impl-newly-started
+- FEAT-671-surface-auto-promoted-blocked-tasks-in-t::update-prompt ← FEAT-671-surface-auto-promoted-blocked-tasks-in-t::impl-dispatch-text

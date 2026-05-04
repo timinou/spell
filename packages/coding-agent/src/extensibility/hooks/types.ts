@@ -21,7 +21,7 @@ import type {
 	SessionEntry,
 	SessionManager,
 } from "../../session/session-manager";
-import type { BashToolDetails, FindToolDetails, GrepToolDetails, ReadToolDetails } from "../../tools";
+import type { BashToolDetails } from "../../tools";
 import type { TodoItem } from "../../tools/todo-write";
 
 // Re-export for backward compatibility
@@ -476,34 +476,10 @@ export interface BashToolResultEvent extends ToolResultEventBase {
 	details: BashToolDetails | undefined;
 }
 
-/** Tool result event for read tool */
-export interface ReadToolResultEvent extends ToolResultEventBase {
-	toolName: "read";
-	details: ReadToolDetails | undefined;
-}
-
 /** Tool result event for edit tool */
 export interface EditToolResultEvent extends ToolResultEventBase {
 	toolName: "edit";
 	details: EditToolDetails | undefined;
-}
-
-/** Tool result event for write tool */
-export interface WriteToolResultEvent extends ToolResultEventBase {
-	toolName: "write";
-	details: undefined;
-}
-
-/** Tool result event for grep tool */
-export interface GrepToolResultEvent extends ToolResultEventBase {
-	toolName: "grep";
-	details: GrepToolDetails | undefined;
-}
-
-/** Tool result event for find tool */
-export interface FindToolResultEvent extends ToolResultEventBase {
-	toolName: "find";
-	details: FindToolDetails | undefined;
 }
 
 /** Tool result event for custom/unknown tools */
@@ -517,14 +493,7 @@ export interface CustomToolResultEvent extends ToolResultEventBase {
  * Fired after a tool is executed. Hooks can modify the result.
  * Use toolName to discriminate and get typed details.
  */
-export type ToolResultEvent =
-	| BashToolResultEvent
-	| ReadToolResultEvent
-	| EditToolResultEvent
-	| WriteToolResultEvent
-	| GrepToolResultEvent
-	| FindToolResultEvent
-	| CustomToolResultEvent;
+export type ToolResultEvent = BashToolResultEvent | EditToolResultEvent | CustomToolResultEvent;
 
 /**
  * Union of all hook event types.

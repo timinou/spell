@@ -66,6 +66,7 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 		_onUpdate?: AgentToolUpdateCallback<AwaitToolDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<AwaitToolDetails>> {
+		const awaitInvocationTime = Date.now();
 		const manager = this.session.asyncJobManager;
 		if (!manager) {
 			return {
@@ -91,10 +92,13 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 			};
 		}
 
+		// Capture initial watched IDs before any auto-promotion can happen
+		const initialIds = new Set(jobsToWatch.map(j => j.id));
+
 		// If all watched jobs are already done, return immediately
 		const runningJobs = jobsToWatch.filter(j => j.status === "running");
 		if (runningJobs.length === 0) {
-			return this.#buildResult(manager, jobsToWatch);
+			return this.#buildResult(manager, jobsToWatch, initialIds, awaitInvocationTime);
 		}
 
 		// Block until at least one running job finishes or the call is aborted
@@ -115,10 +119,10 @@ export class AwaitTool implements AgentTool<typeof awaitSchema, AwaitToolDetails
 		}
 
 		if (signal?.aborted) {
-			return this.#buildResult(manager, jobsToWatch);
+			return this.#buildResult(manager, jobsToWatch, initialIds, awaitInvocationTime);
 		}
 
-		return this.#buildResult(manager, jobsToWatch);
+		return this.#buildResult(manager, jobsToWatch, initialIds, awaitInvocationTime);
 	}
 
 	#buildResult(
