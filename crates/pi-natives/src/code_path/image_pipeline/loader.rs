@@ -3,7 +3,7 @@ use std::path::Path;
 
 use pi_code_path::types::{Diagnostic, DiagnosticVariant};
 
-pub const DEFAULT_INLINE_THRESHOLD_BYTES: u64 = 1_572_864; // 1.5 * 1024 * 1024
+pub const DEFAULT_INLINE_THRESHOLD_BYTES: u64 = 524_288; // 512 KiB
 pub const DEFAULT_MAX_BYTES: u64 = 20_971_520; // 20 * 1024 * 1024
 
 #[derive(Debug, Clone)]

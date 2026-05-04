@@ -209,19 +209,169 @@ fn render_segments(segs: &[RustSegment]) -> String {
 	out
 }
 
-// ── Anchors and qualifiers (stub matchers for now) ──────────────
+// ── Anchors and qualifiers ──────────────────────────────────────
 
-struct StubResolver;
-impl QualifierResolver for StubResolver {
-	fn resolve(
-		&self,
-		_node: Node<'_>,
-		_src: &str,
-		_args: Option<&str>,
-	) -> Option<Range<usize>> {
-		// Real implementation lives in PROJ-066 (CodeResolver); this returns a
-		// placeholder so the dialect compiles and registry round-trips.
-		Some(0..0)
+mod qualifiers {
+	use std::ops::Range;
+	use tree_sitter::Node;
+	use crate::dialect::QualifierResolver;
+
+	pub struct Body;
+	impl QualifierResolver for Body {
+		fn resolve(
+			&self,
+			node: Node<'_>,
+			_src: &str,
+			_args: Option<&str>,
+		) -> Option<Range<usize>> {
+			node.child_by_field_name("body").map(|c| c.start_byte()..c.end_byte())
+		}
+	}
+
+	pub struct Sig;
+	impl QualifierResolver for Sig {
+		fn resolve(
+			&self,
+			node: Node<'_>,
+			_src: &str,
+			_args: Option<&str>,
+		) -> Option<Range<usize>> {
+			match node.child_by_field_name("body") {
+				Some(body) => Some(node.start_byte()..body.start_byte()),
+				None => Some(node.start_byte()..node.end_byte()),
+			}
+		}
+	}
+
+	pub struct Name;
+	impl QualifierResolver for Name {
+		fn resolve(
+			&self,
+			node: Node<'_>,
+			_src: &str,
+			_args: Option<&str>,
+		) -> Option<Range<usize>> {
+			node.child_by_field_name("name").map(|c| c.start_byte()..c.end_byte())
+		}
+	}
+
+	pub struct Generics;
+	impl QualifierResolver for Generics {
+		fn resolve(
+			&self,
+			node: Node<'_>,
+			_src: &str,
+			_args: Option<&str>,
+		) -> Option<Range<usize>> {
+			node.child_by_field_name("type_parameters").map(|c| c.start_byte()..c.end_byte())
+		}
+	}
+
+	pub struct WhereClause;
+	impl QualifierResolver for WhereClause {
+		fn resolve(
+			&self,
+			node: Node<'_>,
+			_src: &str,
+			_args: Option<&str>,
+		) -> Option<Range<usize>> {
+			node.child_by_field_name("where_clause").map(|c| c.start_byte()..c.end_byte())
+		}
+	}
+
+	pub struct Attrs;
+	impl QualifierResolver for Attrs {
+		fn resolve(
+			&self,
+			node: Node<'_>,
+			_src: &str,
+			_args: Option<&str>,
+		) -> Option<Range<usize>> {
+			let mut first: Option<Node> = None;
+			let mut last: Option<Node> = None;
+			// Try children first (some tree-sitter versions embed attrs).
+			let mut cursor = node.walk();
+			for child in node.children(&mut cursor) {
+				if child.kind() == "attribute_item" {
+					if first.is_none() {
+						first = Some(child);
+					}
+					last = Some(child);
+				}
+			}
+			// Fall back to prev-siblings (attrs as siblings preceding decl).
+			if first.is_none() {
+				let mut sib = node.prev_sibling();
+				while let Some(n) = sib {
+					if n.kind() == "attribute_item" {
+						if last.is_none() {
+							last = Some(n);
+						}
+						first = Some(n);
+						sib = n.prev_sibling();
+					} else if n.is_named() {
+						break;
+					} else {
+						sib = n.prev_sibling();
+					}
+				}
+			}
+			match (first, last) {
+				(Some(f), Some(l)) => Some(f.start_byte()..l.end_byte()),
+				_ => None,
+			}
+		}
+	}
+
+	pub struct Visibility;
+	impl QualifierResolver for Visibility {
+		fn resolve(
+			&self,
+			node: Node<'_>,
+			_src: &str,
+			_args: Option<&str>,
+		) -> Option<Range<usize>> {
+			node.child_by_field_name("visibility_modifier").map(|c| c.start_byte()..c.end_byte())
+		}
+	}
+
+	pub struct MatchArm;
+	impl QualifierResolver for MatchArm {
+		fn resolve(
+			&self,
+			node: Node<'_>,
+			_src: &str,
+			args: Option<&str>,
+		) -> Option<Range<usize>> {
+			let idx = args.and_then(|a| a.parse::<usize>().ok()).unwrap_or(0);
+			let mut cursor = node.walk();
+			node.children(&mut cursor)
+				.filter(|c| c.kind() == "match_arm")
+				.nth(idx)
+				.map(|c| c.start_byte()..c.end_byte())
+		}
+	}
+
+	pub struct UnsafeBlock;
+	impl QualifierResolver for UnsafeBlock {
+		fn resolve(
+			&self,
+			node: Node<'_>,
+			_src: &str,
+			_args: Option<&str>,
+		) -> Option<Range<usize>> {
+			let mut stack = vec![node];
+			while let Some(n) = stack.pop() {
+				if n.kind() == "unsafe_block" {
+					return Some(n.start_byte()..n.end_byte());
+				}
+				let mut cursor = n.walk();
+				for child in n.children(&mut cursor) {
+					stack.push(child);
+				}
+			}
+			None
+		}
 	}
 }
 
@@ -229,58 +379,256 @@ fn match_kind(node: &Node<'_>, kinds: &[&str]) -> bool {
 	kinds.contains(&node.kind())
 }
 
+fn has_prev_sibling_attr(node: &Node<'_>, src: &str, needle: &str) -> bool {
+	let mut sib = node.prev_sibling();
+	while let Some(n) = sib {
+		if n.kind() == "attribute_item" {
+			if let Some(text) = src.get(n.start_byte()..n.end_byte()) {
+				if text.contains(needle) {
+					return true;
+				}
+			}
+		}
+		sib = n.prev_sibling();
+	}
+	false
+}
+
+fn has_descendant_kind(node: Node<'_>, kind: &str) -> bool {
+	let mut stack = vec![node];
+	while let Some(n) = stack.pop() {
+		if n.kind() == kind {
+			return true;
+		}
+		let mut cursor = n.walk();
+		for child in n.children(&mut cursor) {
+			stack.push(child);
+		}
+	}
+	false
+}
+
 pub fn rust_dialect() -> LanguageDialect {
 	LanguageDialect {
 		name_lexer: Arc::new(RustNameLexer),
-		anchors: vec![
+		anchors:    vec![
 			AnchorPattern {
-				name:    "test-attr",
-				matcher: |n, _s| match_kind(n, &["attribute_item"]),
+				name:    "test-body",
+				matcher: |n, src| {
+					match_kind(n, &["function_item"]) && has_prev_sibling_attr(n, src, "#[test]")
+				},
 			},
 			AnchorPattern {
-				name:    "derive",
-				matcher: |n, _s| match_kind(n, &["attribute_item"]),
+				name:    "bench-body",
+				matcher: |n, src| {
+					match_kind(n, &["function_item"]) && has_prev_sibling_attr(n, src, "#[bench]")
+				},
 			},
 			AnchorPattern {
-				name:    "unsafe-block",
-				matcher: |n, _s| match_kind(n, &["unsafe_block"]),
+				name:    "unsafe",
+				matcher: |n, src| {
+					if match_kind(n, &["unsafe_block"]) {
+						return true;
+					}
+					if has_descendant_kind(*n, "unsafe_block") {
+						return true;
+					}
+					if let Some(text) = src.get(n.start_byte()..n.end_byte()) {
+						if text.contains("unsafe") {
+							return true;
+						}
+					}
+					false
+				},
 			},
 			AnchorPattern {
-				name:    "pub",
-				matcher: |n, _s| match_kind(n, &["visibility_modifier"]),
+				name:    "return",
+				matcher: |n, _src| has_descendant_kind(*n, "return_expression"),
 			},
-			AnchorPattern { name: "mut", matcher: |n, _s| match_kind(n, &["mutable_specifier"]) },
+			AnchorPattern {
+				name:    "guard",
+				matcher: |n, src| {
+					if has_descendant_kind(*n, "if_let_expression") {
+						return true;
+					}
+					if let Some(text) = src.get(n.start_byte()..n.end_byte()) {
+						if text.contains("else { return") || text.contains("else {return") {
+							return true;
+						}
+					}
+					false
+				},
+			},
+			AnchorPattern {
+				name:    "error-path",
+				matcher: |n, src| {
+					if has_descendant_kind(*n, "try_expression") {
+						return true;
+					}
+					if let Some(text) = src.get(n.start_byte()..n.end_byte()) {
+						if text.contains('?') {
+							return true;
+						}
+					}
+					false
+				},
+			},
+			AnchorPattern {
+				name:    "first-use",
+				matcher: |n, _src| {
+					if n.kind() != "use_declaration" {
+						return false;
+					}
+					let mut sib = n.prev_sibling();
+					while let Some(p) = sib {
+						if p.kind() == "use_declaration" {
+							return false;
+						}
+						sib = p.prev_sibling();
+					}
+					true
+				},
+			},
+			AnchorPattern {
+				name:    "last-use",
+				matcher: |n, _src| {
+					if n.kind() != "use_declaration" {
+						return false;
+					}
+					let mut sib = n.next_sibling();
+					while let Some(p) = sib {
+						if p.kind() == "use_declaration" {
+							return false;
+						}
+						sib = p.next_sibling();
+					}
+					true
+				},
+			},
+			AnchorPattern {
+				name:    "mod-side-effect",
+				matcher: |n, _src| {
+					if n.kind() != "mod_item" {
+						return false;
+					}
+					let mut cursor = n.walk();
+					for child in n.children(&mut cursor) {
+						if child.kind() == "expression_statement" {
+							return true;
+						}
+					}
+					false
+				},
+			},
+			AnchorPattern {
+				name:    "doc-comment",
+				matcher: |n, src| {
+					let mut sib = n.prev_sibling();
+					while let Some(p) = sib {
+						if p.kind() == "line_comment" {
+							if let Some(text) = src.get(p.start_byte()..p.end_byte()) {
+								if text.starts_with("///") || text.starts_with("//!") {
+									return true;
+								}
+							}
+							sib = p.prev_sibling();
+						} else if p.is_named() {
+							break;
+						} else {
+							sib = p.prev_sibling();
+						}
+					}
+					false
+				},
+			},
 		],
 		qualifiers: vec![
 			QualifierSpec {
 				name:       "body",
-				applies_to: vec!["function_item".into(), "impl_item".into()],
-				resolve:    Arc::new(StubResolver),
+				applies_to: vec![
+					"function_item".into(),
+					"impl_item".into(),
+					"mod_item".into(),
+					"trait_item".into(),
+				],
+				resolve:    Arc::new(qualifiers::Body),
 			},
 			QualifierSpec {
 				name:       "sig",
 				applies_to: vec!["function_item".into()],
-				resolve:    Arc::new(StubResolver),
+				resolve:    Arc::new(qualifiers::Sig),
 			},
 			QualifierSpec {
 				name:       "name",
-				applies_to: vec!["function_item".into(), "struct_item".into()],
-				resolve:    Arc::new(StubResolver),
-			},
-			QualifierSpec {
-				name:       "docstring",
-				applies_to: vec!["function_item".into()],
-				resolve:    Arc::new(StubResolver),
-			},
-			QualifierSpec {
-				name:       "return-type",
-				applies_to: vec!["function_item".into()],
-				resolve:    Arc::new(StubResolver),
+				applies_to: vec![
+					"function_item".into(),
+					"struct_item".into(),
+					"enum_item".into(),
+					"trait_item".into(),
+					"impl_item".into(),
+					"type_item".into(),
+					"module".into(),
+					"mod_item".into(),
+				],
+				resolve:    Arc::new(qualifiers::Name),
 			},
 			QualifierSpec {
 				name:       "generics",
-				applies_to: vec!["function_item".into(), "struct_item".into()],
-				resolve:    Arc::new(StubResolver),
+				applies_to: vec![
+					"function_item".into(),
+					"struct_item".into(),
+					"enum_item".into(),
+					"trait_item".into(),
+					"impl_item".into(),
+					"type_item".into(),
+				],
+				resolve:    Arc::new(qualifiers::Generics),
+			},
+			QualifierSpec {
+				name:       "where",
+				applies_to: vec![
+					"function_item".into(),
+					"trait_item".into(),
+					"impl_item".into(),
+				],
+				resolve:    Arc::new(qualifiers::WhereClause),
+			},
+			QualifierSpec {
+				name:       "attrs",
+				applies_to: vec![
+					"function_item".into(),
+					"struct_item".into(),
+					"enum_item".into(),
+					"trait_item".into(),
+					"impl_item".into(),
+					"mod_item".into(),
+				],
+				resolve:    Arc::new(qualifiers::Attrs),
+			},
+			QualifierSpec {
+				name:       "visibility",
+				applies_to: vec![
+					"function_item".into(),
+					"struct_item".into(),
+					"enum_item".into(),
+					"trait_item".into(),
+					"impl_item".into(),
+					"mod_item".into(),
+					"const_item".into(),
+					"static_item".into(),
+					"type_item".into(),
+				],
+				resolve:    Arc::new(qualifiers::Visibility),
+			},
+			QualifierSpec {
+				name:       "match-arm",
+				applies_to: vec!["match_expression".into(), "match_block".into()],
+				resolve:    Arc::new(qualifiers::MatchArm),
+			},
+			QualifierSpec {
+				name:       "unsafe-block",
+				applies_to: vec!["function_item".into(), "impl_item".into(), "block".into()],
+				resolve:    Arc::new(qualifiers::UnsafeBlock),
 			},
 		],
 		edge_kinds: EdgeKindSet::default(),
@@ -374,8 +722,8 @@ mod tests {
 	#[test]
 	fn dialect_factory_populates_registries() {
 		let d = rust_dialect();
-		assert_eq!(d.anchors.len(), 5);
-		assert_eq!(d.qualifiers.len(), 6);
+		assert_eq!(d.anchors.len(), 10);
+		assert_eq!(d.qualifiers.len(), 9);
 		assert!(d.edge_kinds.kinds.len() >= 4);
 	}
 

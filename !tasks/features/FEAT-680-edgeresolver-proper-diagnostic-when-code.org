@@ -1,0 +1,85 @@
+#+TITLE: EdgeResolver — proper diagnostic when CodeGraph not initialised (G6)
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-680-edgeresolver-proper-diagnostic-when-code
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+When users issue an edge query (e.g. =foo.ts::Bar/ref→=) in a project where the code
+graph hasn't been built/indexed yet, EdgeResolver currently surfaces =FileNotFound= or
+similar misleading errors. This item makes the diagnostic explicit: "code graph not
+initialised for this workspace; run =manage index= first" or equivalent.
+
+* Context & Narrative
+Per audit (agent://35-Resolvers risks): =EdgeResolverImpl= at
+=crates/pi-natives/src/code_path/edge_resolver/mod.rs:18-250= depends on
+=pi_code_graph::CodeGraph=. If graph isn't initialised, errors during =resolve= read as
+generic =Diagnostic= without distinguishing "graph missing" vs "no edges found". Current
+=executeCodePath= just propagates whatever error.
+
+* Scope
+** In-scope
+- New diagnostic code =CODE_GRAPH_NOT_INITIALISED= surfaced when graph backend missing
+- =EdgeResolverImpl::resolve= probes graph readiness before traversal; emits the
+  diagnostic with remediation hint
+- =manage index= command surfaces the build-graph entrypoint (verify it's already
+  exposed; if not, this item adds it)
+- TS-side ToolResult error formatter prints the diagnostic in a copy-pasteable format
+  with the suggested next command
+** Out-of-scope
+- Auto-building the graph on demand (triggers data races + potentially expensive)
+
+* Existing Patterns
+- =crates/pi-natives/src/code_path/edge_resolver/mod.rs:18-250=
+- =pi_code_graph::CodeGraph= initialisation API
+- =crates/pi-code-path/src/types.rs::Diagnostic= structure
+
+* Tests
+File: =crates/pi-natives/src/code_path/edge_resolver/mod.rs= (extend tests)
+
+Scenarios:
+1. EdgeResolver against uninitialised graph returns Diagnostic with code
+   =CODE_GRAPH_NOT_INITIALISED= and hint text mentioning =manage index=
+2. EdgeResolver against initialised but empty graph returns empty Vec, NOT error
+3. EdgeResolver finds edges in populated graph — happy path
+
+* Implementation
+** ITEM Edge-resolver no-graph test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-680-edgeresolver-proper-diagnostic-when-code::tests
+:END:
+Tests for the 3 scenarios.
+
+** ITEM Edge-resolver readiness probe + diagnostic
+:PROPERTIES:
+:CUSTOM_ID: FEAT-680-edgeresolver-proper-diagnostic-when-code::probe
+:DEPENDS: FEAT-680-edgeresolver-proper-diagnostic-when-code::tests
+:END:
+- File: =crates/pi-natives/src/code_path/edge_resolver/mod.rs=
+- Add =EdgeResolverImpl::ensure_initialised() -> Result<(), Diagnostic>= called at top
+  of =resolve=
+- Diagnostic has =code: "CODE_GRAPH_NOT_INITIALISED"= and message includes
+  "Run \"manage index\" or wait for background indexing to complete."
+
+** ITEM Manage tool surfaces index entrypoint
+:PROPERTIES:
+:CUSTOM_ID: FEAT-680-edgeresolver-proper-diagnostic-when-code::manage-index
+:DEPENDS: FEAT-680-edgeresolver-proper-diagnostic-when-code::probe
+:END:
+- File: =packages/coding-agent/src/tools/manage.ts=
+- Verify =manage index= dispatches to =executeCodePath({command:"manage", manage:"index"})=
+  or appropriate NAPI surface; document the path
+
+* Edge Cases
+- Graph backend exists but corrupted → distinct diagnostic =CODE_GRAPH_CORRUPTED=
+- Workspace without indexable files → graph empty but initialised, not an error
+
+* Acceptance Criteria
+- 3 scenarios pass
+- =cargo test -p pi-natives --tests edge_resolver= green
+- Manual: edge query in fresh workspace shows actionable error

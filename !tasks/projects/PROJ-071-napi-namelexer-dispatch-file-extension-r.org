@@ -1,0 +1,154 @@
+#+TITLE: NAPI NameLexer dispatch — file-extension routing for symbol parsing
+#+STATE: DOING
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: PROJ-071-napi-namelexer-dispatch-file-extension-r
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+
+Replace the generic =DotLexer= used at the NAPI boundary with file-extension-driven dispatch
+to the language-specific =NameLexer= implementations registered in =LanguageDialect=. Without
+this, symbol queries like =foo.ts::Foo.bar= or =mod/lib.rs::path::Type= are parsed by a
+lexer that only understands =[A-Za-z0-9_.]= — losing dotted structure for TS, =::= for Rust,
+operators for Haskell, etc. The NAPI surface currently honours the spec only for FS and
+text dialects; symbol dialects are silently weakened.
+
+* Context & Narrative
+
+In =crates/pi-natives/src/code_path/napi.rs:131-154= a generic =DotLexer= (alphanumeric +
+=.= only) is hard-coded into =execute_code_path_inner= at line 171:
+=parse_code_path(&opts.target, &dot_lexer)=. All 8 dialect =NameLexer= impls
+(=crates/pi-code-path/src/dialects/{rust,typescript,python,go,haskell,html,css,mdorg}.rs=)
+exist, are tested in isolation, and are wired into =LanguageDialect= factories — but never
+selected at parse time. =CodeResolver= uses =NameLexer.matches()= during resolution, but
+matches against a NamePayload that was parsed with the wrong lexer.
+
+This is a pre-condition for FEAT-672..679 (per-dialect qualifier work) — the qualifier
+resolvers only fire on correctly parsed NamePayloads.
+
+* Scope
+
+** In-scope
+- File-extension → =LanguageDialect= registry (extend or reuse =pi_code_engine::LanguageRegistry=)
+- Two-phase parse strategy: (1) pre-scan FS prefix to detect extension, (2) re-parse with
+  the right lexer once known
+- Glob targets fall back to =DotLexer= since multiple files could match; document this
+- Symbol-axis switch (=A.ts::Foo/B.ts::Bar=) — each side picks its own lexer via the FS
+  literal preceding =::=
+- =parseCodePath= NAPI surface: also routes via extension when called with an FS-prefixed target
+
+** Out-of-scope
+- New dialect registration (existing 8 stay)
+- Parser internal grammar changes (combinators/predicates remain unchanged)
+- Spec changes to NameLexer trait
+
+* Existing Patterns
+
+- =crates/pi-code-path/src/dialect.rs= — =NameLexer= trait (parse / render / matches),
+  =LanguageDialect= struct (name_lexer + anchors + qualifiers + edge_kinds)
+- =crates/pi-code-path/src/parser.rs::parse_code_path(input, lexer)= — entry point
+- =crates/pi-natives/src/code_path/code_resolver/= — file-ext → tree-sitter language is already
+  resolved here via =pi_code_engine::LanguageRegistry=; the same registry can expose
+  ext → =LanguageDialect=
+- =DotLexer= at =napi.rs:131-154= is the placeholder to delete
+
+* Tests
+
+File: =crates/pi-natives/src/code_path/tests.rs= (new module under code_path)
+File: =crates/pi-code-path/src/parser.rs= (extend existing parser tests for fixture inputs)
+
+Scenarios:
+1. =parse_code_path("foo.ts::Foo.bar.baz", TsName-lexer)= produces 3 dotted segments, NOT one
+   payload "Foo.bar.baz"
+2. =parse_code_path("src/lib.rs::std::collections::HashMap", RustName-lexer)= recognises
+   =::= as path separator
+3. =execute_code_path_inner= with target =foo.py::ClassA.method= picks =python= dialect
+4. =execute_code_path_inner= with target =*.ts::Foo= (glob) falls back to DotLexer and
+   surfaces a diagnostic warning that NamePayload may be weakly parsed
+5. =execute_code_path_inner= with target =foo.unknown::Bar= falls back to DotLexer (no
+   registered dialect for =.unknown=)
+6. =execute_code_path_inner= with target =src/foo.go= (no =::=) does not invoke any name lexer
+7. Round-trip: parse(render(ast)) holds for all 8 dialects' names through the NAPI boundary
+
+* Implementation
+
+** ITEM Test scenarios for NameLexer dispatch
+:PROPERTIES:
+:CUSTOM_ID: PROJ-071-napi-namelexer-dispatch-file-extension-r::dispatch-tests
+:END:
+Add =crates/pi-natives/src/code_path/dispatch_tests.rs= with fixtures covering all 7
+scenarios above. Use =tempfile= for fs fixtures. Tests assert NAPI =execute_code_path_inner=
+returns nodes whose locator string matches the dialect-specific symbol form (e.g. Rust
+=::= preserved). Wire test module into =crates/pi-natives/src/code_path/mod.rs=.
+
+** ITEM Add file-extension → LanguageDialect registry
+:PROPERTIES:
+:CUSTOM_ID: PROJ-071-napi-namelexer-dispatch-file-extension-r::dialect-registry
+:DEPENDS: PROJ-071-napi-namelexer-dispatch-file-extension-r::dispatch-tests
+:END:
+- File: =crates/pi-natives/src/code_path/dialect_registry.rs= (new)
+- Function =select_dialect(path: &Path) -> Option<&'static LanguageDialect>=
+- Mapping: =.ts/.tsx/.js/.jsx/.mjs/.cjs= → typescript; =.rs= → rust; =.py= → python;
+  =.go= → go; =.hs/.lhs= → haskell; =.html/.htm= → html; =.css= → css;
+  =.md/.mdx/.org= → mdorg
+- Use =once_cell::sync::Lazy= for per-dialect cached =LanguageDialect= instances
+- Re-export from =pi_code_engine::LanguageRegistry= if convenient; otherwise stand-alone
+
+** ITEM Implement two-phase parse in NAPI bridge
+:PROPERTIES:
+:CUSTOM_ID: PROJ-071-napi-namelexer-dispatch-file-extension-r::two-phase-parse
+:DEPENDS: PROJ-071-napi-namelexer-dispatch-file-extension-r::dialect-registry
+:END:
+- File: =crates/pi-natives/src/code_path/napi.rs=
+- Replace single =parse_code_path(target, &dot_lexer)= with logic:
+  1. Pre-scan: find first =::= in target. If absent, parse with DotLexer (no symbol).
+  2. Extract FS prefix; if literal (no glob magic), call =select_dialect(prefix)=.
+  3. If a dialect is found, parse with =&dialect.name_lexer=. Otherwise DotLexer.
+  4. For glob FS prefixes, parse with DotLexer and emit a diagnostic on the resulting
+     CodePath query indicating "weak NamePayload parse".
+- Delete =struct DotLexer= from =napi.rs= IFF nothing else uses it (keep elsewhere if so).
+
+** ITEM Wire dispatch into parseCodePath NAPI
+:PROPERTIES:
+:CUSTOM_ID: PROJ-071-napi-namelexer-dispatch-file-extension-r::parse-code-path-napi
+:DEPENDS: PROJ-071-napi-namelexer-dispatch-file-extension-r::two-phase-parse
+:END:
+=parseCodePath= NAPI export at =napi.rs:292+= currently uses the same DotLexer. Apply
+the same dispatch logic so the JS-side =parseCodePath= utility returns correctly
+structured NamePayloads for tooling.
+
+** ITEM Verify round-trip and document fallback behaviour
+:PROPERTIES:
+:CUSTOM_ID: PROJ-071-napi-namelexer-dispatch-file-extension-r::roundtrip-verify
+:DEPENDS: PROJ-071-napi-namelexer-dispatch-file-extension-r::two-phase-parse
+:END:
+Run =cargo test -p pi-code-path -p pi-natives= and confirm 0 regressions. Add a doc
+comment on =execute_code_path_inner= describing the dispatch contract and fallback rules.
+Update =specs/code-graph/code-path-extensions.md= "NAPI bridge" subsection with the
+two-phase parse rule.
+
+* Edge Cases
+
+- =foo.ts.snap::Snap= (file with multiple dots in extension) → use last extension =.snap=,
+  fall back to DotLexer (no registered =.snap= dialect)
+- =src/Foo.test.ts::Bar= → still routes to TS via final =.ts=
+- Symlinks: dialect chosen by symlink target name, not link name. Resolved via
+  =std::fs::canonicalize= when needed; if symlink dangling, fall back to extension on link
+- Empty FS prefix (=::Foo=) → no FS literal, fall back to DotLexer
+- Quoted backtick FS literal (=` foo bar.ts `::Bar=) → strip backticks before extension scan
+- Non-UTF-8 paths → fall back to DotLexer; diagnostic emitted
+
+* Acceptance Criteria
+
+- Test scenarios 1-7 pass
+- =cargo test -p pi-code-path -p pi-natives= 0 regressions
+- =bun run --cwd packages/coding-agent check= 0 errors
+- =bun test packages/coding-agent/test/get.test.ts edit.test.ts manage.test.ts create.test.ts= all green
+- Spec doc =specs/code-graph/code-path-extensions.md= updated with the dispatch rule
+- Manual smoke: =executeCodePath({target: "src/lib.rs::std::collections::HashMap"})= returns a
+  node whose locator preserves =::= rather than collapsing to dotted form

@@ -1,0 +1,23 @@
+#+TITLE: Performance benchmarks — 1.2x find / 1.5x grep / 100 MiB RSS on 1 GiB file (deferred from PLAN-296)
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FUP-078-performance-benchmarks-1-2x-find-1-5x-gr
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+Spec promises =get= within 1.2× of =find= and 1.5× of =grep= and bounded RSS at
+100 MiB on 1 GiB inputs. Deferred from PLAN-296 cutover; revisit once qualifier work is
+in place and the kernel surface is stable.
+
+* Scope
+- Bench harness =crates/pi-code-path/benches/= with =criterion=
+- Synthetic + real-world repos
+- RSS measurement via =resource= or =heaptrack= (linux)
+
+* Acceptance
+- Bench pass thresholds; reports archived per release

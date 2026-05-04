@@ -1,0 +1,103 @@
+#+TITLE: Migrate create.ts + edit.ts back to executeCodePath — single NAPI surface
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-687-migrate-create-ts-edit-ts-back-to-execut
+#+LAYER: core
+#+DEPENDS: FEAT-686-napi-action-wiring-execute-code-path-inn
+
+* Intention & Purpose
+With kernel actions wired (FEAT-686), migrate =create.ts= back from direct
+=fs.writeFile= and =edit.ts::#executeStructural= back from =executeCodeBuffer= so all
+four tools talk to a single NAPI surface =executeCodePath=. Realises the planning
+decision of "kernel becomes self-sufficient and tools route through one NAPI surface".
+
+Cross-file dep on FEAT-686 captured via :DEPENDS: property.
+
+* Context & Narrative
+Phase A of PLAN-296 patched the silent-data-loss bug by routing tools to working
+backends:
+- =create.ts= → =fs.mkdir + fs.writeFile= directly
+- =edit.ts::#executeStructural= → =executeCodeBuffer({command:"edit", operations:[...]})=
+
+With kernel mutation surface live, both can route through =executeCodePath=. This
+unifies the NAPI surface; future tool authors learn one API.
+
+* Scope
+** In-scope
+- =create.ts::execute= replaces =fs.mkdir + fs.writeFile= with
+  =executeCodePath({command:"edit", target, actions:[{kind:"create", content, force}]})=
+- =edit.ts::#executeStructural= replaces =executeCodeBuffer= with
+  =executeCodePath({command:"edit", target, actions:[normalizeStructuralAction(action)]})=
+- Verify: existing tests + E2E regression test still green
+- Update prompts (=prompts/tools/create.md=, =edit.md=) with current contract
+
+** Out-of-scope
+- Removing =executeCodeBuffer= NAPI export entirely (FUP)
+- Tools other than create/edit (get/manage already on executeCodePath)
+
+* Existing Patterns
+- =packages/coding-agent/src/tools/create.ts= (Phase A version)
+- =packages/coding-agent/src/tools/edit.ts::#executeStructural= (Phase A version)
+- Tests at =packages/coding-agent/test/{create,edit}.test.ts=
+
+* Tests
+File: =packages/coding-agent/test/{create,edit}.test.ts= updates
+
+Scenarios:
+1. CreateTool: existing 8 scenarios pass — content reads back from disk after create
+2. CreateTool: spy on =executeCodePath= asserts call shape =command:"edit",
+   actions:[{kind:"create", content, force}]=
+3. EditTool: existing 14 scenarios pass — patch + LINE#ID + structural rename
+4. EditTool structural test: spy on =executeCodePath= asserts call shape
+5. =create-e2e-regression.test.ts= still passes against new code path
+6. Phase-A regression: file gets persisted (matches the failing session's exact path)
+
+* Implementation
+** ITEM Update test fixtures for new call shape
+:PROPERTIES:
+:CUSTOM_ID: FEAT-687-migrate-create-ts-edit-ts-back-to-execut::tests
+:END:
+Adjust spy assertions: replace =fs.writeFile= verification with =executeCodePath= call
+shape verification while keeping post-execute =fs.readFile= filesystem assertions.
+
+** ITEM Migrate create.ts
+:PROPERTIES:
+:CUSTOM_ID: FEAT-687-migrate-create-ts-edit-ts-back-to-execut::create
+:DEPENDS: FEAT-687-migrate-create-ts-edit-ts-back-to-execut::tests
+:END:
+- File: =packages/coding-agent/src/tools/create.ts=
+- Replace =fs.mkdir + fs.writeFile= block with =executeCodePath= call
+- Keep guards (=enforceModeWrite=, =enforcePathWrite=, =evaluateWriteGuards=) on TS side
+- Post-execute =fs.stat= for byte-count display preserved
+
+** ITEM Migrate edit.ts structural
+:PROPERTIES:
+:CUSTOM_ID: FEAT-687-migrate-create-ts-edit-ts-back-to-execut::edit
+:DEPENDS: FEAT-687-migrate-create-ts-edit-ts-back-to-execut::tests
+:END:
+- File: =packages/coding-agent/src/tools/edit.ts=
+- Replace =executeCodeBuffer= call in =#executeStructural= with =executeCodePath=
+- =isLineIdAction= and =isPatchAction= paths remain on TS side until future cleanup
+
+** ITEM Update prompts
+:PROPERTIES:
+:CUSTOM_ID: FEAT-687-migrate-create-ts-edit-ts-back-to-execut::prompts
+:DEPENDS: FEAT-687-migrate-create-ts-edit-ts-back-to-execut::create FEAT-687-migrate-create-ts-edit-ts-back-to-execut::edit
+:END:
+- =packages/coding-agent/src/prompts/tools/create.md= — note unified NAPI surface
+- =packages/coding-agent/src/prompts/tools/edit.md= — same
+
+* Edge Cases
+- Per-action vs per-batch error semantics: TS-side wraps a single action in actions[]
+  array of length 1; preserve current "single action per call" contract
+- Sandbox + mode-guards stay TS-side (session-coupled, can't move to kernel cleanly)
+- Diagnostics returned by kernel are shown verbatim in tool result text
+
+* Acceptance Criteria
+- =bun test packages/coding-agent/test/{create,edit,manage,get}.test.ts=
+  all green
+- =bun test packages/coding-agent/test/create-e2e-regression.test.ts= still green
+- =bun run --cwd packages/coding-agent check= 0 errors
+- TS-side =edit.ts= no longer imports =executeCodeBuffer= for structural ops
+- Manual smoke: replicate the original session that failed and confirm file persists

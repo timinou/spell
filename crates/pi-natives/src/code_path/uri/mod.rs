@@ -3,33 +3,29 @@
 //! Covers artifact://, memory://, skill://, local://, pi://, rule://,
 //! agent://, jobs:// and mcp://.
 
-use std::{
-	collections::HashMap,
-	path::PathBuf,
-	sync::Arc,
-};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use pi_code_path::resolver::SchemeHandler;
 
+mod agent;
 mod artifact;
-mod memory;
-mod skill;
+mod jobs;
 mod local;
+mod mcp;
+mod memory;
 mod pi;
 mod rule;
-mod agent;
-mod jobs;
-mod mcp;
+mod skill;
 
+pub use agent::*;
 pub use artifact::*;
-pub use memory::*;
-pub use skill::*;
+pub use jobs::*;
 pub use local::*;
+pub use mcp::*;
+pub use memory::*;
 pub use pi::*;
 pub use rule::*;
-pub use agent::*;
-pub use jobs::*;
-pub use mcp::*;
+pub use skill::*;
 
 /// Registry that maps scheme names to their handlers.
 #[derive(Default)]
@@ -62,28 +58,22 @@ pub fn default_registry(
 ) -> SchemeRegistry {
 	let mut reg = SchemeRegistry::new();
 	reg.register(Arc::new(ArtifactHandler { root: artifact_root }));
-	reg.register(Arc::new(MemoryHandler {
-		project_root: project_root.clone(),
-	}));
-	reg.register(Arc::new(SkillHandler {
-		project_root: project_root.clone(),
-	}));
-	reg.register(Arc::new(LocalHandler {
-		project_root: project_root.clone(),
-	}));
-	reg.register(Arc::new(PiHandler {
-		project_root: project_root.clone(),
-	}));
-	reg.register(Arc::new(RuleHandler {
-		project_root: project_root.clone(),
-	}));
-	reg.register(Arc::new(AgentHandler {
-		agent_blobs_root,
-	}));
-	reg.register(Arc::new(JobsHandler));
+	reg.register(Arc::new(MemoryHandler { project_root: project_root.clone() }));
+	reg.register(Arc::new(SkillHandler { project_root: project_root.clone() }));
+	reg.register(Arc::new(LocalHandler { project_root: project_root.clone() }));
+	reg.register(Arc::new(PiHandler { project_root: project_root.clone() }));
+	reg.register(Arc::new(RuleHandler { project_root: project_root.clone() }));
+	reg.register(Arc::new(AgentHandler { agent_blobs_root }));
+	reg.register(Arc::new(JobsHandler { project_root: project_root.clone() }));
 	reg.register(Arc::new(McpHandler));
 	reg
 }
+
+#[cfg(test)]
+mod jobs_tests;
+
+#[cfg(test)]
+mod mcp_tests;
 
 #[cfg(test)]
 mod tests {
@@ -91,19 +81,18 @@ mod tests {
 
 	#[test]
 	fn unknown_scheme_returns_none() {
-		let reg = default_registry(PathBuf::from("/tmp"), PathBuf::from("/tmp"), PathBuf::from("/tmp"));
+		let reg =
+			default_registry(PathBuf::from("/tmp"), PathBuf::from("/tmp"), PathBuf::from("/tmp"));
 		assert!(reg.lookup("no-such-scheme").is_none());
 	}
 
 	#[test]
 	fn all_nine_schemes_registered() {
-		let reg = default_registry(PathBuf::from("/tmp"), PathBuf::from("/tmp"), PathBuf::from("/tmp"));
-		for scheme in &["artifact", "memory", "skill", "local", "pi", "rule", "agent", "jobs", "mcp"] {
-			assert!(
-				reg.lookup(scheme).is_some(),
-				"scheme {} should be registered",
-				scheme
-			);
+		let reg =
+			default_registry(PathBuf::from("/tmp"), PathBuf::from("/tmp"), PathBuf::from("/tmp"));
+		for scheme in &["artifact", "memory", "skill", "local", "pi", "rule", "agent", "jobs", "mcp"]
+		{
+			assert!(reg.lookup(scheme).is_some(), "scheme {} should be registered", scheme);
 		}
 	}
 }

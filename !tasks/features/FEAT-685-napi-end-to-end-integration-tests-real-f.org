@@ -1,0 +1,125 @@
+#+TITLE: NAPI end-to-end integration tests — real fs + real graph through executeCodePath (G12)
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-685-napi-end-to-end-integration-tests-real-f
+#+LAYER: core
+#+DEPENDS: FEAT-672-typescript-dialect-qualifier-resolvers-a FEAT-673-python-dialect-qualifier-resolvers-ancho FEAT-674-go-dialect-qualifier-resolvers-anchor-ev FEAT-675-haskell-dialect-qualifier-resolvers-anch FEAT-676-html-dialect-qualifier-resolvers-anchor FEAT-677-css-dialect-qualifier-resolvers-anchor-e FEAT-678-markdown-org-dialect-qualifier-resolvers FEAT-679-code-resolver-routing-symbol-queries-on
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+Per audit (agent://36-Tests): all TS tests for the 4 generic tools mock
+=executeCodePath=. NAPI Rust tests assert option marshalling, not full resolution. There
+are zero "call NAPI with real fs + real code graph → assert returned nodes" tests.
+This is exactly the gap that let PLAN-296's silent data-loss bugs ship to production.
+
+This item adds an end-to-end test fixture + runner that exercises every promised
+behaviour through the real NAPI binary against real source files.
+
+* Context & Narrative
+The current test architecture has 4 layers, none of which are e2e:
+1. Kernel unit tests (parser/renderer/setops): pure Rust, no I/O
+2. Dialect NameLexer tests: parse/render only, no AST
+3. NAPI tests: tempdir + real fs but only assert option marshalling
+4. TS tests: mock =executeCodePath= entirely
+
+We need layer 5: build the native binary, drive it from a test harness, assert real
+behaviour against real files. Captures regressions like "kernel ignores
+=opts.actions= silently" or "qualifier returns 0..0".
+
+* Scope
+** In-scope
+- Test fixture corpus: =crates/pi-natives/tests/fixtures/= with realistic source files
+  per dialect (10-20 files total)
+- New integration test crate: =crates/pi-natives/tests/code_path_e2e.rs=
+- Tests cover: bare fs, glob, line slice, regex grep, symbol query for all 8 dialects,
+  qualifier resolution, anchor filtering, edge traversal (against test graph),
+  URI schemes, content qualifiers, cancellation
+- Runs in CI alongside unit tests: =cargo test -p pi-natives --test code_path_e2e=
+- TS-side e2e harness: =packages/coding-agent/test/codepath-e2e/= drives executeCodePath
+  through pi-natives without mocking; asserts on real returned NodeRefDto chunks
+** Out-of-scope
+- Performance / fuzz testing (separate FUP)
+
+* Existing Patterns
+- =packages/coding-agent/test/create-e2e-regression.test.ts= (recently added pattern)
+- =crates/pi-natives/src/code_path/napi.rs:340+= existing NAPI tests
+- =tempfile= + =std::fs::write= for fixture setup
+
+* Tests
+
+** Fixture corpus
+File: =crates/pi-natives/tests/fixtures/= containing:
+- =sample.ts= (TS class + arrow + JSX)
+- =sample.tsx= (JSX-heavy)
+- =sample.rs= (struct + impl + trait + test fn)
+- =sample.py= (class + decorators + docstring + async)
+- =sample.go= (struct + interface + method + generics)
+- =sample.hs= (multi-equation function + type sig + where)
+- =sample.html= (semantic landmarks + iframe + custom element)
+- =sample.css= (rules + at-rules + nesting + custom props)
+- =sample.md= (headings + frontmatter + code-fence + footnote)
+- =sample.org= (TODO + properties + drawer + checkbox)
+- =sample.txt= (line-axis text)
+- =sample.json= (JSON for #text extractor)
+- =sample.png= (binary image for #image qualifier)
+
+** Scenario count: ~50 e2e tests covering
+- Each dialect's symbol query returns symbol nodes
+- Each dialect's qualifier returns correct byte ranges
+- Each dialect's anchor predicate filters correctly
+- Each URI scheme resolves
+- Cancellation interrupts long walks
+- Threshold respect (large file externalised)
+- Auto-#raw on bare path returns content
+
+* Implementation
+** ITEM Fixture corpus
+:PROPERTIES:
+:CUSTOM_ID: FEAT-685-napi-end-to-end-integration-tests-real-f::fixtures
+:END:
+Author the 13 fixture files. Each file should be small (10-50 lines) but exercise the
+spec's edge cases.
+
+** ITEM Rust e2e test harness
+:PROPERTIES:
+:CUSTOM_ID: FEAT-685-napi-end-to-end-integration-tests-real-f::rust-e2e
+:DEPENDS: FEAT-685-napi-end-to-end-integration-tests-real-f::fixtures
+:END:
+- File: =crates/pi-natives/tests/code_path_e2e.rs= (Cargo integration test)
+- Helper: =fn execute(target: &str, root: &Path) -> Vec<CodePathChunk>=
+- ~50 scenario tests grouped by dialect / feature
+
+** ITEM TS e2e harness
+:PROPERTIES:
+:CUSTOM_ID: FEAT-685-napi-end-to-end-integration-tests-real-f::ts-e2e
+:DEPENDS: FEAT-685-napi-end-to-end-integration-tests-real-f::fixtures
+:END:
+- Dir: =packages/coding-agent/test/codepath-e2e/=
+- =setup.ts= copies fixtures to tempdir, runs executeCodePath without mocks
+- ~30 scenarios verifying tool-level UX (auto-#raw, get/edit/manage/create end-to-end)
+
+** ITEM CI wiring
+:PROPERTIES:
+:CUSTOM_ID: FEAT-685-napi-end-to-end-integration-tests-real-f::ci
+:DEPENDS: FEAT-685-napi-end-to-end-integration-tests-real-f::rust-e2e FEAT-685-napi-end-to-end-integration-tests-real-f::ts-e2e
+:END:
+Add =cargo test -p pi-natives --test code_path_e2e= and =bun test
+packages/coding-agent/test/codepath-e2e/= to top-level test runner. Document in repo
+README.
+
+* Edge Cases
+- Tests must not depend on system locale, time-zone, network
+- Native binary build dependency: =bun --cwd=packages/natives run dev:native= prerequisite
+- =cargo test= cache: invalidate on fixture changes via =include_str!= or path-bytes
+  hashing if needed
+
+* Acceptance Criteria
+- ~80 new e2e tests added, all green
+- Coverage report shows previously-uncovered code paths exercised (qualifier resolvers,
+  anchor evaluators, URI handlers)
+- Bug regression test: a deliberately broken qualifier impl makes the relevant scenario
+  fail (manual verification once during development)

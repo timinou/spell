@@ -1,6 +1,9 @@
 pub mod predicates;
 pub mod walker;
 
+#[cfg(test)]
+mod qualifier_tests;
+
 pub use walker::CodeResolverImpl;
 
 use std::sync::Arc;

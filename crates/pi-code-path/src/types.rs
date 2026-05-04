@@ -43,7 +43,7 @@ pub enum Content {
 	/// Binary content — an artifact:// handle.
 	Bytes { artifact_uri: String, size: u64 },
 	/// Image content — a handle (artifact:// or image://).
-	Image { handle: String, mime_type: String, width: Option<u32>, height: Option<u32> },
+	Image { handle: String, mime_type: String, width: Option<u32>, height: Option<u32>, bytes: Option<Vec<u8>> },
 	/// Extracted/converted text from a non-text source.
 	ExtractedText {
 		/// Kind of the source (pdf, docx, json, html, ...).
@@ -98,6 +98,8 @@ pub enum DiagnosticVariant {
 	Inaccessible,
 	/// Encoding fallback (e.g. latin-1 for non-UTF-8 file).
 	EncodingFallback,
+	/// The requested scheme is not implemented in this release.
+	SchemeNotImplemented,
 	/// Timeout or cancellation.
 	Cancelled,
 }

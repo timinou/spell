@@ -1,0 +1,27 @@
+#+TITLE: Remove unused Length and Count predicate variants from AST (G15)
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FUP-074-remove-unused-length-and-count-predicate
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+=Predicate::Length= and =Predicate::Count= variants exist in =ast.rs:177-180= but the
+parser never produces them (legacy back-compat per the comments). =Compare= predicate
+covers the same use-cases. Either delete the variants or wire the parser to emit them
+where appropriate.
+
+* Scope
+- Audit for any external consumers (impossible since enum is crate-internal); if none,
+  delete variants
+- Update any pattern matches that explicitly handle them
+- Confirm tests still pass
+
+* Acceptance
+- Variants removed
+- =cargo test -p pi-code-path= green
+- =cargo build= zero warnings

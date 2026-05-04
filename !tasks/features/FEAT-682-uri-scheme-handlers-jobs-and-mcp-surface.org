@@ -1,0 +1,78 @@
+#+TITLE: URI scheme handlers — jobs:// and mcp:// surface real Diagnostic instead of placeholder text (G8)
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+=jobs://= and =mcp://= scheme handlers currently return =Content::Text= with placeholder
+strings, which silently looks like success. Either implement real handlers or surface a
+clean =Diagnostic= so callers know the feature is unavailable.
+
+* Context & Narrative
+Per audit (agent://35-Resolvers): =uri/mod.rs= scheme registry wires 9 handlers; 7 are
+production, =jobs://= and =mcp://= are stubs. The =get= tool's =target: "jobs://abc#status"=
+appears to succeed but returns garbage.
+
+* Scope
+** In-scope
+- =jobs://= handler implements job state slot reads per spec =00-uri.md=:
+  =jobs://<id>=, =jobs://<id>#status=, =jobs://<id>#result=, =jobs://<id>#error=,
+  =jobs://<id>#stderr=, =jobs://<id>#progress=
+- =mcp://= handler returns =Diagnostic= =SCHEME_NOT_IMPLEMENTED= since no MCP runtime
+  integration in scope; users who need MCP file access use direct paths
+- TS-side =get= tool surfaces diagnostic clearly
+** Out-of-scope
+- MCP runtime integration (separate plan)
+
+* Existing Patterns
+- =crates/pi-natives/src/code_path/uri/=
+- =specs/code-graph/code-path-dialects/00-uri.md=
+- Existing =JobsResolver= from coding-agent (if any) — reuse for =jobs://= state lookup
+
+* Tests
+File: =crates/pi-natives/src/code_path/uri/jobs_tests.rs= (extend if exists)
+File: =crates/pi-natives/src/code_path/uri/mcp_tests.rs= (new or extend)
+
+Scenarios:
+1. =jobs://valid-id#status= returns =Content::Text= with state =running|done|failed=
+2. =jobs://valid-id#result= returns the result text artifact
+3. =jobs://nonexistent= returns Diagnostic =JOB_NOT_FOUND=
+4. =mcp://server/path= returns Diagnostic =SCHEME_NOT_IMPLEMENTED= with hint to use
+   direct path
+
+* Implementation
+** ITEM URI scheme handler tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface::tests
+:END:
+4 scenarios.
+
+** ITEM Jobs scheme implementation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface::jobs
+:DEPENDS: FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface::tests
+:END:
+- File: =crates/pi-natives/src/code_path/uri/jobs.rs= (or existing stub location)
+- Read job state from session-local job manager (path conventions per spec)
+
+** ITEM MCP scheme deprecation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface::mcp
+:DEPENDS: FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface::tests
+:END:
+- Replace stub with explicit Diagnostic =SCHEME_NOT_IMPLEMENTED=
+
+* Edge Cases
+- Job in zombie state (process exited but state file present) → return last known state
+- mcp:// targeting a known MCP-mounted prefix → still error (out of scope)
+
+* Acceptance Criteria
+- 4 scenarios pass
+- =cargo test -p pi-natives --tests uri= green
+- Spec =00-uri.md= updated to mark mcp:// as not-implemented in current release

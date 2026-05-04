@@ -1,0 +1,20 @@
+#+TITLE: Capture binding (Q) as $m — deferred from spec; re-evaluate after qualifier work lands
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FUP-077-capture-binding-q-as-m-deferred-from-spe
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+Capture binding syntax =(Q) as $m= is deferred per =specs/code-graph/code-path.md=
+notes; current replacement uses =[name=$pattern]= predicate. Reassess once the
+PROJ-072 / FEAT-672..678 qualifier framework is shipping and there's clearer pull from
+real query patterns.
+
+* Acceptance
+- Decision documented either to ship or permanently drop
+- Spec text updated accordingly

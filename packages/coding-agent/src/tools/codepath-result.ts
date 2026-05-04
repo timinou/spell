@@ -107,8 +107,11 @@ function extractImages(nodes: NodeRefDto[]): Array<{ data: string; mimeType: str
 	const images: Array<{ data: string; mimeType: string; text?: string }> = [];
 	for (const node of nodes) {
 		const content = node.content;
-		if (content && content.kind === "image" && content.value && content.mimeType) {
-			images.push({ data: content.value, mimeType: content.mimeType, text: content.text });
+		if (content && content.kind === "image" && content.mimeType) {
+			const data = content.value ?? content.artifactUri;
+			if (data) {
+				images.push({ data, mimeType: content.mimeType, text: content.text });
+			}
 		}
 	}
 	return images;
@@ -119,7 +122,9 @@ function collectAllNodes(chunks: CodePathChunk[]): NodeRefDto[] {
 }
 
 function collectDiagnostics(chunks: CodePathChunk[]): DiagnosticDto[] {
-	return chunks.flatMap(c => c.diagnostics);
+	const nodeDiags = chunks.flatMap(c => c.nodes.flatMap(n => n.diagnostics ?? []));
+	const chunkDiags = chunks.flatMap(c => c.diagnostics);
+	return [...nodeDiags, ...chunkDiags];
 }
 
 /**

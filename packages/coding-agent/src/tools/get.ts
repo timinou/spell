@@ -31,7 +31,26 @@ function shouldAutoAttachRaw(target: string): boolean {
 	if (target.includes(";")) return false;
 	return !/[*?\[]/.test(target);
 }
-
+/**
+ * When the kernel surfaces a [DID_YOU_MEAN] diagnostic, replace the raw
+ * machine-oriented line with a friendly hint.
+ */
+function prettifyDidYouMean(text: string): string {
+	return text.replace(
+		/^\[(\w+)\] \[DID_YOU_MEAN\] No exact match for [^;]+; candidates: (\[.*?\])(?: \([^)]+\))?$/gm,
+		(_match, _variant, candidatesJson: string) => {
+			try {
+				const candidates = JSON.parse(candidatesJson) as string[];
+				if (Array.isArray(candidates) && candidates.length > 0) {
+					return `Did you mean: ${candidates.join(", ")}`;
+				}
+			} catch {
+				// ignore parse errors, leave original
+			}
+			return _match;
+		},
+	);
+}
 export class GetTool implements AgentTool<typeof getSchema> {
 	readonly name = "get";
 	readonly label = "Get";
@@ -78,7 +97,8 @@ export class GetTool implements AgentTool<typeof getSchema> {
 			limit: params.limit,
 		});
 
-		const builder = toolResult<GetToolResultDetails>({ format: params.format }).text(result.text);
+		const text = prettifyDidYouMean(result.text);
+		const builder = toolResult<GetToolResultDetails>({ format: params.format }).text(text);
 		if (result.meta) {
 			builder.limits({
 				resultLimit: result.meta.limits?.resultLimit?.reached,
@@ -104,10 +124,12 @@ export class GetTool implements AgentTool<typeof getSchema> {
 
 	renderResult(result: AgentToolResult, options: RenderResultOptions, theme: unknown): Component {
 		const uiTheme = theme as Theme;
-		const text = result.content
-			.filter(c => c.type === "text")
-			.map(c => (c as { text?: string }).text ?? "")
-			.join("\n");
+		const text = prettifyDidYouMean(
+			result.content
+				.filter(c => c.type === "text")
+				.map(c => (c as { text?: string }).text ?? "")
+				.join("\n"),
+		);
 		const sanitized = replaceTabs(text);
 		const maxChars = 2_000;
 		const truncated = sanitized.length > maxChars ? `${sanitized.slice(0, maxChars)}\n...truncated` : sanitized;

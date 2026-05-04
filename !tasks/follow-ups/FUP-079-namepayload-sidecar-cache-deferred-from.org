@@ -1,0 +1,18 @@
+#+TITLE: NamePayload sidecar cache (deferred from PLAN-296)
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FUP-079-namepayload-sidecar-cache-deferred-from
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+Cache parsed =NamePayload= per file to avoid re-parsing on hot queries. Deferred from
+PLAN-296 cutover; consider after qualifier work is stable so the cache key is
+well-defined.
+
+* Acceptance
+- Cache hit rate measured; cache invalidation tested

@@ -1,0 +1,24 @@
+#+TITLE: bind→ EdgeKind — implement scope-local bind tracking or remove the variant (G18)
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FUP-076-bind-edgekind-implement-scope-local-bind
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+=KernelEdgeKind::Bind= is part of the kernel enum but
+=edge_resolver/mod.rs::to_graph_edge= returns =None= and the resolver returns
+=Unsupported= Diagnostic. Decide: (a) implement bind→ via local-scope analysis (let-in,
+where, lambda-bound) per spec, or (b) remove the variant and update parser to reject
+=bind→= combinator with helpful error.
+
+Until decided, callers see "feature unavailable" runtime error. Decision should be made
+once the qualifier/anchor work in PROJ-072 / FEAT-672..678 lands and we have a clearer
+picture of what scope analysis utilities exist.
+
+* Acceptance
+- Variant either fully implemented OR cleanly removed with parser surface diagnostic

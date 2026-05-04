@@ -1,0 +1,378 @@
+#+TITLE: CodePath kernel completeness — qualifier resolvers, dialect routing, UX gaps, e2e tests, kernel mutation surface
+#+STATE: DOING
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: PLAN-298-codepath-kernel-completeness-qualifier-r
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+#+TITLE: CodePath kernel completeness — qualifier resolvers, dialect routing, UX gaps, e2e tests, kernel mutation surface
+
+* Context
+
+Phase A of PLAN-296 (CodePath v3 cutover) shipped the 4 generic tools and patched
+silent-data-loss bugs in =create.ts= and =edit.ts= structural ops. Subsequent audit
+revealed the underlying kernel =pi-code-path= ships with its full read-side grammar +
+parser + 8 NameLexers + FS / Text / Code / Edge / URI resolvers, but with several
+spec-promised features that are stubbed, mis-routed, or never wired into the NAPI
+boundary.
+
+Audit summary (sources: =memory://root=, =agent://33-Spec=, =agent://34-Parser=,
+=agent://35-Resolvers=, =agent://36-Tests=):
+
+** Critical gaps
+- *G2* NAPI uses generic =DotLexer= for ALL languages — 8 NameLexers exist but never
+  selected by file extension. Symbol queries weakly parsed.
+- *G3* All qualifier resolvers (=#body=/=#name=/=#sig=/etc.) are =StubResolver=
+  returning 0..0 byte ranges. Spec §3.4 promises broken.
+- *G4* Anchor matchers per dialect exist; =CodeResolver.evaluate_query= never invokes
+  them. =[¶name]= predicates silently no-op.
+- *G5* =is_text_query= routing miss: symbol queries on md/org/html/css fall through
+  to =FsResolver= and return file nodes instead of symbol nodes.
+
+** High-priority UX
+- *G6* EdgeResolver no-graph diagnostic is generic, not actionable.
+- *G7* =#image=/=#thumbnail= return placeholder Content::Image, no bytes flow.
+- *G8* =jobs://= + =mcp://= scheme handlers stub instead of erroring.
+- *G9* Suffix-fallback ambiguity returns =None= instead of "did you mean".
+- *G10* =ARTIFACT_THRESHOLD = 256 KiB= hardcoded.
+- *G16* All 8 dialects use =EdgeKindSet::default()= — language-specific edges parse but
+  don't resolve.
+
+** Test coverage
+- *G11* Zero dialect AST tests. NameLexer tested in isolation; qualifier/anchor
+  resolution untested. Addressed inside each per-dialect FEAT in this plan.
+- *G12* No NAPI end-to-end tests. All TS tests mock =executeCodePath=. The exact gap
+  that let PLAN-296 silent-data-loss ship.
+
+** Architectural unification
+- *G1* Kernel is read-only. =opts.command/.actions/.manage= are dead API. Two NAPI
+  surfaces (=executeCodePath= for query, =executeCodeBuffer= for mutation) — should
+  unify so tools talk to one boundary.
+
+** Deferred (FUPs)
+- *G13* URI scheme e2e tests → [[id:FUP-073-uri-scheme-end-to-end-tests-g13]]
+- *G14* Property-based / fuzz parser tests → [[id:FUP-072-property-based-fuzz-tests-for-codepath-p]]
+- *G15* Length/Count predicate cleanup → [[id:FUP-074-remove-unused-length-and-count-predicate]]
+- *G17* =unreachable!()= cleanup → [[id:FUP-075-replace-unreachable-in-rust-rs203-render]]
+- *G18* =bind→= edge implement-or-remove → [[id:FUP-076-bind-edgekind-implement-scope-local-bind]]
+- Capture binding =(Q) as $m= → [[id:FUP-077-capture-binding-q-as-m-deferred-from-spe]]
+- Performance benchmarks → [[id:FUP-078-performance-benchmarks-1-2x-find-1-5x-gr]]
+- NamePayload sidecar cache → [[id:FUP-079-namepayload-sidecar-cache-deferred-from]]
+
+* Linked Children
+
+** Wave 0 — Foundation (no deps)
+- [[id:PROJ-071-napi-namelexer-dispatch-file-extension-r]] NAPI NameLexer dispatch (G2)
+- [[id:PROJ-072-qualifierresolver-anchorevaluator-framew]] Qualifier+Anchor framework + Rust pilot (G3, G4 base)
+
+** Wave 1 — Per-dialect features (parallel after PROJ-072)
+- [[id:FEAT-672-typescript-dialect-qualifier-resolvers-a]] TypeScript dialect
+- [[id:FEAT-673-python-dialect-qualifier-resolvers-ancho]] Python dialect
+- [[id:FEAT-674-go-dialect-qualifier-resolvers-anchor-ev]] Go dialect
+- [[id:FEAT-675-haskell-dialect-qualifier-resolvers-anch]] Haskell dialect
+- [[id:FEAT-676-html-dialect-qualifier-resolvers-anchor]] HTML dialect
+- [[id:FEAT-677-css-dialect-qualifier-resolvers-anchor-e]] CSS dialect
+- [[id:FEAT-678-markdown-org-dialect-qualifier-resolvers]] Markdown/Org dialect
+
+** Wave 2 — Routing fix
+- [[id:FEAT-679-code-resolver-routing-symbol-queries-on]] Code-resolver routing for non-tree-sitter dialects (G5)
+
+** Wave 3 — UX gaps
+- [[id:FEAT-680-edgeresolver-proper-diagnostic-when-code]] EdgeResolver no-graph diagnostic (G6)
+- [[id:FEAT-681-image-qualifiers-wire-image-and-thumbnai]] Image+thumbnail wiring (G7)
+- [[id:FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface]] jobs:// + mcp:// real Diagnostic (G8)
+- [[id:FEAT-683-suffix-fallback-return-disambiguation-ch]] Suffix-fallback choices (G9)
+- [[id:FEAT-684-artifact-threshold-make-256-kib-content]] Artifact threshold config (G10)
+
+** Wave 4 — Test layer
+- [[id:FEAT-685-napi-end-to-end-integration-tests-real-f]] NAPI e2e integration tests (G12)
+
+** Wave 5 — Kernel mutation surface (final wave)
+- [[id:PROJ-073-action-trait-per-resolver-dispatch-kerne]] Action trait + dispatch surface
+- [[id:PROJ-074-fsresolver-textresolver-mutationresolver]] FS + Text mutation impls
+- [[id:PROJ-075-coderesolver-mutationresolver-impl-struc]] Code mutation impl
+- [[id:FEAT-686-napi-action-wiring-execute-code-path-inn]] NAPI action wiring (G1)
+- [[id:FEAT-687-migrate-create-ts-edit-ts-back-to-execut]] Migrate create.ts + edit.ts to executeCodePath
+
+* Verification
+
+** Per-wave verification
+- *Wave 0*: =cargo test -p pi-code-path -p pi-natives= 0 regressions; spec docs updated
+- *Wave 1*: each dialect FEAT shows ≥10 new AST scenarios green; per-dialect spec
+  cross-walked
+- *Wave 2*: integration tests prove md/org/html/css symbol queries return symbol nodes
+- *Wave 3*: each UX FEAT ships its own tests + spec doc updates
+- *Wave 4*: ~80 new e2e tests added and green; coverage increases for previously-stub
+  paths
+- *Wave 5*: =bun test packages/coding-agent/test/{create,edit}.test.ts= +
+  =create-e2e-regression.test.ts= still green; =bun run --cwd packages/coding-agent
+  check= 0 errors; manual smoke replicates the original failing session and persists
+
+** Plan-level acceptance
+- Architecture invariant intact: =pi-code-path= zero deps on =pi-natives=,
+  =pi-code-engine=, =pi-code-graph=
+- =cargo test --workspace= 0 failures
+- =bun run --workspaces --if-present --parallel test= 0 failures
+- =bun run --parallel check:ts check:rs= 0 errors
+- All TS prompts (=prompts/tools/{get,edit,manage,create}.md=) reflect current behaviour
+- =StubResolver= no longer registered on any production qualifier
+- Spec docs (=specs/code-graph/code-path.md=, =code-path-extensions.md=, dialect 00-08)
+  cross-walked: every promise has impl
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:FEAT-672-typescript-dialect-qualifier-resolvers-a::tests]] TS qualifier + anchor test fixtures
+- [[id:FEAT-673-python-dialect-qualifier-resolvers-ancho::tests]] Python qualifier + anchor test fixtures
+- [[id:FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::tests]] Go qualifier + anchor test fixtures
+- [[id:FEAT-675-haskell-dialect-qualifier-resolvers-anch::tests]] Haskell qualifier + anchor test fixtures
+- [[id:FEAT-676-html-dialect-qualifier-resolvers-anchor::tests]] HTML qualifier + anchor test fixtures
+- [[id:FEAT-677-css-dialect-qualifier-resolvers-anchor-e::tests]] CSS qualifier + anchor test fixtures
+- [[id:FEAT-678-markdown-org-dialect-qualifier-resolvers::tests]] Mdorg qualifier + anchor test fixtures
+- [[id:FEAT-679-code-resolver-routing-symbol-queries-on::tests]] Routing test fixtures
+- [[id:FEAT-680-edgeresolver-proper-diagnostic-when-code::tests]] Edge-resolver no-graph test
+- [[id:FEAT-681-image-qualifiers-wire-image-and-thumbnai::rust-tests]] Image-pipeline integration tests
+- [[id:FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface::tests]] URI scheme handler tests
+- [[id:FEAT-683-suffix-fallback-return-disambiguation-ch::tests]] Suffix-fallback ambiguity tests
+- [[id:FEAT-684-artifact-threshold-make-256-kib-content::tests]] Threshold-config tests
+- [[id:FEAT-685-napi-end-to-end-integration-tests-real-f::fixtures]] Fixture corpus
+- [[id:FEAT-686-napi-action-wiring-execute-code-path-inn::tests]] Action dispatch tests
+- [[id:FEAT-687-migrate-create-ts-edit-ts-back-to-execut::tests]] Update test fixtures for new call shape
+- [[id:PROJ-071-napi-namelexer-dispatch-file-extension-r::dispatch-tests]] Test scenarios for NameLexer dispatch
+- [[id:PROJ-072-qualifierresolver-anchorevaluator-framew::traits]] Define QualifierResolver + AnchorEvaluator traits
+- [[id:PROJ-073-action-trait-per-resolver-dispatch-kerne::types]] Action enum + ActionParams + serde
+- [[id:PROJ-074-fsresolver-textresolver-mutationresolver::fs-tests]] FS mutation tests
+- [[id:PROJ-074-fsresolver-textresolver-mutationresolver::text-tests]] Text mutation tests
+- [[id:PROJ-075-coderesolver-mutationresolver-impl-struc::tests]] CodeResolver mutation tests
+** wave-2 :wave:
+- [[id:FEAT-672-typescript-dialect-qualifier-resolvers-a::qualifiers]] TS qualifier resolvers
+- [[id:FEAT-672-typescript-dialect-qualifier-resolvers-a::anchors]] TS anchor evaluators
+- [[id:FEAT-672-typescript-dialect-qualifier-resolvers-a::edge-kinds]] TS edge kind set customization
+- [[id:FEAT-673-python-dialect-qualifier-resolvers-ancho::qualifiers]] Python qualifier resolvers
+- [[id:FEAT-673-python-dialect-qualifier-resolvers-ancho::anchors]] Python anchor evaluators
+- [[id:FEAT-673-python-dialect-qualifier-resolvers-ancho::edge-kinds]] Python edge kind set
+- [[id:FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::qualifiers]] Go qualifier resolvers
+- [[id:FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::anchors]] Go anchor evaluators
+- [[id:FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::edge-kinds]] Go edge kind set
+- [[id:FEAT-675-haskell-dialect-qualifier-resolvers-anch::qualifiers]] Haskell qualifier resolvers
+- [[id:FEAT-675-haskell-dialect-qualifier-resolvers-anch::anchors]] Haskell anchor evaluators
+- [[id:FEAT-675-haskell-dialect-qualifier-resolvers-anch::edge-kinds]] Haskell edge kind set
+- [[id:FEAT-676-html-dialect-qualifier-resolvers-anchor::qualifiers]] HTML qualifier resolvers
+- [[id:FEAT-676-html-dialect-qualifier-resolvers-anchor::anchors-edges]] HTML anchor evaluators + edges
+- [[id:FEAT-677-css-dialect-qualifier-resolvers-anchor-e::qualifiers]] CSS qualifier resolvers
+- [[id:FEAT-677-css-dialect-qualifier-resolvers-anchor-e::anchors-edges]] CSS anchor evaluators + edges
+- [[id:FEAT-678-markdown-org-dialect-qualifier-resolvers::md-resolvers]] Markdown qualifier + anchor resolvers
+- [[id:FEAT-678-markdown-org-dialect-qualifier-resolvers::org-resolvers]] Org qualifier + anchor resolvers
+- [[id:FEAT-678-markdown-org-dialect-qualifier-resolvers::edge-kinds]] Mdorg edge kind set
+- [[id:FEAT-679-code-resolver-routing-symbol-queries-on::registry]] Audit + complete LanguageRegistry registrations
+- [[id:FEAT-680-edgeresolver-proper-diagnostic-when-code::probe]] Edge-resolver readiness probe + diagnostic
+- [[id:FEAT-681-image-qualifiers-wire-image-and-thumbnai::marshal]] Marshal Content::Image to ContentDto::Image
+- [[id:FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface::jobs]] Jobs scheme implementation
+- [[id:FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface::mcp]] MCP scheme deprecation
+- [[id:FEAT-683-suffix-fallback-return-disambiguation-ch::return-type]] Refactor suffix-fallback return type
+- [[id:FEAT-684-artifact-threshold-make-256-kib-content::plumb]] Plumb threshold through NAPI
+- [[id:FEAT-685-napi-end-to-end-integration-tests-real-f::rust-e2e]] Rust e2e test harness
+- [[id:FEAT-685-napi-end-to-end-integration-tests-real-f::ts-e2e]] TS e2e harness
+- [[id:FEAT-686-napi-action-wiring-execute-code-path-inn::wire]] Wire command + actions in execute_code_path_inner
+- [[id:FEAT-687-migrate-create-ts-edit-ts-back-to-execut::create]] Migrate create.ts
+- [[id:FEAT-687-migrate-create-ts-edit-ts-back-to-execut::edit]] Migrate edit.ts structural
+- [[id:PROJ-071-napi-namelexer-dispatch-file-extension-r::dialect-registry]] Add file-extension → LanguageDialect registry
+- [[id:PROJ-072-qualifierresolver-anchorevaluator-framew::resolver-wiring]] Wire CodeResolver to call resolvers
+- [[id:PROJ-073-action-trait-per-resolver-dispatch-kerne::trait]] MutationResolver trait
+- [[id:PROJ-074-fsresolver-textresolver-mutationresolver::fs-impl]] FsResolver MutationResolver impl
+- [[id:PROJ-074-fsresolver-textresolver-mutationresolver::text-impl]] TextResolver MutationResolver impl
+- [[id:PROJ-075-coderesolver-mutationresolver-impl-struc::impl]] CodeResolver MutationResolver impl
+** wave-3 :wave:
+- [[id:FEAT-679-code-resolver-routing-symbol-queries-on::routing]] Refine routing logic
+- [[id:FEAT-680-edgeresolver-proper-diagnostic-when-code::manage-index]] Manage tool surfaces index entrypoint
+- [[id:FEAT-681-image-qualifiers-wire-image-and-thumbnai::format]] Wire formatCodePathResult to extract images
+- [[id:FEAT-681-image-qualifiers-wire-image-and-thumbnai::thumbnail]] Thumbnail resize implementation
+- [[id:FEAT-683-suffix-fallback-return-disambiguation-ch::wire]] Wire Diagnostic + GetTool render
+- [[id:FEAT-684-artifact-threshold-make-256-kib-content::ts-schema]] TS schema updates
+- [[id:FEAT-685-napi-end-to-end-integration-tests-real-f::ci]] CI wiring
+- [[id:FEAT-686-napi-action-wiring-execute-code-path-inn::marshal]] Outcome marshalling
+- [[id:FEAT-687-migrate-create-ts-edit-ts-back-to-execut::prompts]] Update prompts
+- [[id:PROJ-071-napi-namelexer-dispatch-file-extension-r::two-phase-parse]] Implement two-phase parse in NAPI bridge
+- [[id:PROJ-072-qualifierresolver-anchorevaluator-framew::rust-qualifiers]] Implement Rust qualifier resolvers (pilot)
+- [[id:PROJ-072-qualifierresolver-anchorevaluator-framew::rust-anchors]] Implement Rust anchor evaluators
+- [[id:PROJ-073-action-trait-per-resolver-dispatch-kerne::spec]] Spec doc update
+- [[id:PROJ-073-action-trait-per-resolver-dispatch-kerne::registry]] Capability registry
+- [[id:PROJ-074-fsresolver-textresolver-mutationresolver::caps]] Capability registry entries
+- [[id:PROJ-075-coderesolver-mutationresolver-impl-struc::caps]] Capability registry
+** wave-4 :wave:
+- [[id:FEAT-679-code-resolver-routing-symbol-queries-on::doc-fix]] Doc fix
+- [[id:PROJ-071-napi-namelexer-dispatch-file-extension-r::parse-code-path-napi]] Wire dispatch into parseCodePath NAPI
+- [[id:PROJ-071-napi-namelexer-dispatch-file-extension-r::roundtrip-verify]] Verify round-trip and document fallback behaviour
+- [[id:PROJ-072-qualifierresolver-anchorevaluator-framew::rust-tests]] Add Rust dialect AST tests
+** File-level DAG
+*** Nodes
+- `FEAT-672-typescript-dialect-qualifier-resolvers-a` TS qualifier + anchor test fixtures [ITEM]
+- `FEAT-673-python-dialect-qualifier-resolvers-ancho` Python qualifier + anchor test fixtures [ITEM]
+- `FEAT-674-go-dialect-qualifier-resolvers-anchor-ev` Go qualifier + anchor test fixtures [ITEM]
+- `FEAT-675-haskell-dialect-qualifier-resolvers-anch` Haskell qualifier + anchor test fixtures [ITEM]
+- `FEAT-676-html-dialect-qualifier-resolvers-anchor` HTML qualifier + anchor test fixtures [ITEM]
+- `FEAT-677-css-dialect-qualifier-resolvers-anchor-e` CSS qualifier + anchor test fixtures [ITEM]
+- `FEAT-678-markdown-org-dialect-qualifier-resolvers` Mdorg qualifier + anchor test fixtures [ITEM]
+- `FEAT-679-code-resolver-routing-symbol-queries-on` Routing test fixtures [ITEM]
+- `FEAT-680-edgeresolver-proper-diagnostic-when-code` Edge-resolver no-graph test [ITEM]
+- `FEAT-681-image-qualifiers-wire-image-and-thumbnai` Image-pipeline integration tests [ITEM]
+- `FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface` URI scheme handler tests [ITEM]
+- `FEAT-683-suffix-fallback-return-disambiguation-ch` Suffix-fallback ambiguity tests [ITEM]
+- `FEAT-684-artifact-threshold-make-256-kib-content` Threshold-config tests [ITEM]
+- `FEAT-685-napi-end-to-end-integration-tests-real-f` Fixture corpus [ITEM]
+- `FEAT-686-napi-action-wiring-execute-code-path-inn` Action dispatch tests [ITEM]
+- `FEAT-687-migrate-create-ts-edit-ts-back-to-execut` Update test fixtures for new call shape [ITEM]
+- `PROJ-071-napi-namelexer-dispatch-file-extension-r` Test scenarios for NameLexer dispatch [ITEM]
+- `PROJ-072-qualifierresolver-anchorevaluator-framew` Define QualifierResolver + AnchorEvaluator traits [ITEM]
+- `PROJ-073-action-trait-per-resolver-dispatch-kerne` Action enum + ActionParams + serde [ITEM]
+- `PROJ-074-fsresolver-textresolver-mutationresolver` FS mutation tests [ITEM]
+- `PROJ-075-coderesolver-mutationresolver-impl-struc` CodeResolver mutation tests [ITEM]
+*** Edges
+- None.
+** Subfeature-level DAG
+*** Nodes
+- `FEAT-672-typescript-dialect-qualifier-resolvers-a::tests` TS qualifier + anchor test fixtures [ITEM]
+- `FEAT-672-typescript-dialect-qualifier-resolvers-a::qualifiers` TS qualifier resolvers [ITEM]
+- `FEAT-672-typescript-dialect-qualifier-resolvers-a::anchors` TS anchor evaluators [ITEM]
+- `FEAT-672-typescript-dialect-qualifier-resolvers-a::edge-kinds` TS edge kind set customization [ITEM]
+- `FEAT-673-python-dialect-qualifier-resolvers-ancho::tests` Python qualifier + anchor test fixtures [ITEM]
+- `FEAT-673-python-dialect-qualifier-resolvers-ancho::qualifiers` Python qualifier resolvers [ITEM]
+- `FEAT-673-python-dialect-qualifier-resolvers-ancho::anchors` Python anchor evaluators [ITEM]
+- `FEAT-673-python-dialect-qualifier-resolvers-ancho::edge-kinds` Python edge kind set [ITEM]
+- `FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::tests` Go qualifier + anchor test fixtures [ITEM]
+- `FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::qualifiers` Go qualifier resolvers [ITEM]
+- `FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::anchors` Go anchor evaluators [ITEM]
+- `FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::edge-kinds` Go edge kind set [ITEM]
+- `FEAT-675-haskell-dialect-qualifier-resolvers-anch::tests` Haskell qualifier + anchor test fixtures [ITEM]
+- `FEAT-675-haskell-dialect-qualifier-resolvers-anch::qualifiers` Haskell qualifier resolvers [ITEM]
+- `FEAT-675-haskell-dialect-qualifier-resolvers-anch::anchors` Haskell anchor evaluators [ITEM]
+- `FEAT-675-haskell-dialect-qualifier-resolvers-anch::edge-kinds` Haskell edge kind set [ITEM]
+- `FEAT-676-html-dialect-qualifier-resolvers-anchor::tests` HTML qualifier + anchor test fixtures [ITEM]
+- `FEAT-676-html-dialect-qualifier-resolvers-anchor::qualifiers` HTML qualifier resolvers [ITEM]
+- `FEAT-676-html-dialect-qualifier-resolvers-anchor::anchors-edges` HTML anchor evaluators + edges [ITEM]
+- `FEAT-677-css-dialect-qualifier-resolvers-anchor-e::tests` CSS qualifier + anchor test fixtures [ITEM]
+- `FEAT-677-css-dialect-qualifier-resolvers-anchor-e::qualifiers` CSS qualifier resolvers [ITEM]
+- `FEAT-677-css-dialect-qualifier-resolvers-anchor-e::anchors-edges` CSS anchor evaluators + edges [ITEM]
+- `FEAT-678-markdown-org-dialect-qualifier-resolvers::tests` Mdorg qualifier + anchor test fixtures [ITEM]
+- `FEAT-678-markdown-org-dialect-qualifier-resolvers::md-resolvers` Markdown qualifier + anchor resolvers [ITEM]
+- `FEAT-678-markdown-org-dialect-qualifier-resolvers::org-resolvers` Org qualifier + anchor resolvers [ITEM]
+- `FEAT-678-markdown-org-dialect-qualifier-resolvers::edge-kinds` Mdorg edge kind set [ITEM]
+- `FEAT-679-code-resolver-routing-symbol-queries-on::tests` Routing test fixtures [ITEM]
+- `FEAT-679-code-resolver-routing-symbol-queries-on::registry` Audit + complete LanguageRegistry registrations [ITEM]
+- `FEAT-679-code-resolver-routing-symbol-queries-on::routing` Refine routing logic [ITEM]
+- `FEAT-679-code-resolver-routing-symbol-queries-on::doc-fix` Doc fix [ITEM]
+- `FEAT-680-edgeresolver-proper-diagnostic-when-code::tests` Edge-resolver no-graph test [ITEM]
+- `FEAT-680-edgeresolver-proper-diagnostic-when-code::probe` Edge-resolver readiness probe + diagnostic [ITEM]
+- `FEAT-680-edgeresolver-proper-diagnostic-when-code::manage-index` Manage tool surfaces index entrypoint [ITEM]
+- `FEAT-681-image-qualifiers-wire-image-and-thumbnai::rust-tests` Image-pipeline integration tests [ITEM]
+- `FEAT-681-image-qualifiers-wire-image-and-thumbnai::marshal` Marshal Content::Image to ContentDto::Image [ITEM]
+- `FEAT-681-image-qualifiers-wire-image-and-thumbnai::format` Wire formatCodePathResult to extract images [ITEM]
+- `FEAT-681-image-qualifiers-wire-image-and-thumbnai::thumbnail` Thumbnail resize implementation [ITEM]
+- `FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface::tests` URI scheme handler tests [ITEM]
+- `FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface::jobs` Jobs scheme implementation [ITEM]
+- `FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface::mcp` MCP scheme deprecation [ITEM]
+- `FEAT-683-suffix-fallback-return-disambiguation-ch::tests` Suffix-fallback ambiguity tests [ITEM]
+- `FEAT-683-suffix-fallback-return-disambiguation-ch::return-type` Refactor suffix-fallback return type [ITEM]
+- `FEAT-683-suffix-fallback-return-disambiguation-ch::wire` Wire Diagnostic + GetTool render [ITEM]
+- `FEAT-684-artifact-threshold-make-256-kib-content::tests` Threshold-config tests [ITEM]
+- `FEAT-684-artifact-threshold-make-256-kib-content::plumb` Plumb threshold through NAPI [ITEM]
+- `FEAT-684-artifact-threshold-make-256-kib-content::ts-schema` TS schema updates [ITEM]
+- `FEAT-685-napi-end-to-end-integration-tests-real-f::fixtures` Fixture corpus [ITEM]
+- `FEAT-685-napi-end-to-end-integration-tests-real-f::rust-e2e` Rust e2e test harness [ITEM]
+- `FEAT-685-napi-end-to-end-integration-tests-real-f::ts-e2e` TS e2e harness [ITEM]
+- `FEAT-685-napi-end-to-end-integration-tests-real-f::ci` CI wiring [ITEM]
+- `FEAT-686-napi-action-wiring-execute-code-path-inn::tests` Action dispatch tests [ITEM]
+- `FEAT-686-napi-action-wiring-execute-code-path-inn::wire` Wire command + actions in execute_code_path_inner [ITEM]
+- `FEAT-686-napi-action-wiring-execute-code-path-inn::marshal` Outcome marshalling [ITEM]
+- `FEAT-687-migrate-create-ts-edit-ts-back-to-execut::tests` Update test fixtures for new call shape [ITEM]
+- `FEAT-687-migrate-create-ts-edit-ts-back-to-execut::create` Migrate create.ts [ITEM]
+- `FEAT-687-migrate-create-ts-edit-ts-back-to-execut::edit` Migrate edit.ts structural [ITEM]
+- `FEAT-687-migrate-create-ts-edit-ts-back-to-execut::prompts` Update prompts [ITEM]
+- `PROJ-071-napi-namelexer-dispatch-file-extension-r::dispatch-tests` Test scenarios for NameLexer dispatch [ITEM]
+- `PROJ-071-napi-namelexer-dispatch-file-extension-r::dialect-registry` Add file-extension → LanguageDialect registry [ITEM]
+- `PROJ-071-napi-namelexer-dispatch-file-extension-r::two-phase-parse` Implement two-phase parse in NAPI bridge [ITEM]
+- `PROJ-071-napi-namelexer-dispatch-file-extension-r::parse-code-path-napi` Wire dispatch into parseCodePath NAPI [ITEM]
+- `PROJ-071-napi-namelexer-dispatch-file-extension-r::roundtrip-verify` Verify round-trip and document fallback behaviour [ITEM]
+- `PROJ-072-qualifierresolver-anchorevaluator-framew::traits` Define QualifierResolver + AnchorEvaluator traits [ITEM]
+- `PROJ-072-qualifierresolver-anchorevaluator-framew::resolver-wiring` Wire CodeResolver to call resolvers [ITEM]
+- `PROJ-072-qualifierresolver-anchorevaluator-framew::rust-qualifiers` Implement Rust qualifier resolvers (pilot) [ITEM]
+- `PROJ-072-qualifierresolver-anchorevaluator-framew::rust-anchors` Implement Rust anchor evaluators [ITEM]
+- `PROJ-072-qualifierresolver-anchorevaluator-framew::rust-tests` Add Rust dialect AST tests [ITEM]
+- `PROJ-073-action-trait-per-resolver-dispatch-kerne::types` Action enum + ActionParams + serde [ITEM]
+- `PROJ-073-action-trait-per-resolver-dispatch-kerne::trait` MutationResolver trait [ITEM]
+- `PROJ-073-action-trait-per-resolver-dispatch-kerne::spec` Spec doc update [ITEM]
+- `PROJ-073-action-trait-per-resolver-dispatch-kerne::registry` Capability registry [ITEM]
+- `PROJ-074-fsresolver-textresolver-mutationresolver::fs-tests` FS mutation tests [ITEM]
+- `PROJ-074-fsresolver-textresolver-mutationresolver::text-tests` Text mutation tests [ITEM]
+- `PROJ-074-fsresolver-textresolver-mutationresolver::fs-impl` FsResolver MutationResolver impl [ITEM]
+- `PROJ-074-fsresolver-textresolver-mutationresolver::text-impl` TextResolver MutationResolver impl [ITEM]
+- `PROJ-074-fsresolver-textresolver-mutationresolver::caps` Capability registry entries [ITEM]
+- `PROJ-075-coderesolver-mutationresolver-impl-struc::tests` CodeResolver mutation tests [ITEM]
+- `PROJ-075-coderesolver-mutationresolver-impl-struc::impl` CodeResolver MutationResolver impl [ITEM]
+- `PROJ-075-coderesolver-mutationresolver-impl-struc::caps` Capability registry [ITEM]
+*** Edges
+- `FEAT-672-typescript-dialect-qualifier-resolvers-a::qualifiers` depends on `FEAT-672-typescript-dialect-qualifier-resolvers-a::tests`
+- `FEAT-672-typescript-dialect-qualifier-resolvers-a::anchors` depends on `FEAT-672-typescript-dialect-qualifier-resolvers-a::tests`
+- `FEAT-672-typescript-dialect-qualifier-resolvers-a::edge-kinds` depends on `FEAT-672-typescript-dialect-qualifier-resolvers-a::tests`
+- `FEAT-673-python-dialect-qualifier-resolvers-ancho::qualifiers` depends on `FEAT-673-python-dialect-qualifier-resolvers-ancho::tests`
+- `FEAT-673-python-dialect-qualifier-resolvers-ancho::anchors` depends on `FEAT-673-python-dialect-qualifier-resolvers-ancho::tests`
+- `FEAT-673-python-dialect-qualifier-resolvers-ancho::edge-kinds` depends on `FEAT-673-python-dialect-qualifier-resolvers-ancho::tests`
+- `FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::qualifiers` depends on `FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::tests`
+- `FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::anchors` depends on `FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::tests`
+- `FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::edge-kinds` depends on `FEAT-674-go-dialect-qualifier-resolvers-anchor-ev::tests`
+- `FEAT-675-haskell-dialect-qualifier-resolvers-anch::qualifiers` depends on `FEAT-675-haskell-dialect-qualifier-resolvers-anch::tests`
+- `FEAT-675-haskell-dialect-qualifier-resolvers-anch::anchors` depends on `FEAT-675-haskell-dialect-qualifier-resolvers-anch::tests`
+- `FEAT-675-haskell-dialect-qualifier-resolvers-anch::edge-kinds` depends on `FEAT-675-haskell-dialect-qualifier-resolvers-anch::tests`
+- `FEAT-676-html-dialect-qualifier-resolvers-anchor::qualifiers` depends on `FEAT-676-html-dialect-qualifier-resolvers-anchor::tests`
+- `FEAT-676-html-dialect-qualifier-resolvers-anchor::anchors-edges` depends on `FEAT-676-html-dialect-qualifier-resolvers-anchor::tests`
+- `FEAT-677-css-dialect-qualifier-resolvers-anchor-e::qualifiers` depends on `FEAT-677-css-dialect-qualifier-resolvers-anchor-e::tests`
+- `FEAT-677-css-dialect-qualifier-resolvers-anchor-e::anchors-edges` depends on `FEAT-677-css-dialect-qualifier-resolvers-anchor-e::tests`
+- `FEAT-678-markdown-org-dialect-qualifier-resolvers::md-resolvers` depends on `FEAT-678-markdown-org-dialect-qualifier-resolvers::tests`
+- `FEAT-678-markdown-org-dialect-qualifier-resolvers::org-resolvers` depends on `FEAT-678-markdown-org-dialect-qualifier-resolvers::tests`
+- `FEAT-678-markdown-org-dialect-qualifier-resolvers::edge-kinds` depends on `FEAT-678-markdown-org-dialect-qualifier-resolvers::tests`
+- `FEAT-679-code-resolver-routing-symbol-queries-on::registry` depends on `FEAT-679-code-resolver-routing-symbol-queries-on::tests`
+- `FEAT-679-code-resolver-routing-symbol-queries-on::routing` depends on `FEAT-679-code-resolver-routing-symbol-queries-on::registry`
+- `FEAT-679-code-resolver-routing-symbol-queries-on::doc-fix` depends on `FEAT-679-code-resolver-routing-symbol-queries-on::routing`
+- `FEAT-680-edgeresolver-proper-diagnostic-when-code::probe` depends on `FEAT-680-edgeresolver-proper-diagnostic-when-code::tests`
+- `FEAT-680-edgeresolver-proper-diagnostic-when-code::manage-index` depends on `FEAT-680-edgeresolver-proper-diagnostic-when-code::probe`
+- `FEAT-681-image-qualifiers-wire-image-and-thumbnai::marshal` depends on `FEAT-681-image-qualifiers-wire-image-and-thumbnai::rust-tests`
+- `FEAT-681-image-qualifiers-wire-image-and-thumbnai::format` depends on `FEAT-681-image-qualifiers-wire-image-and-thumbnai::marshal`
+- `FEAT-681-image-qualifiers-wire-image-and-thumbnai::thumbnail` depends on `FEAT-681-image-qualifiers-wire-image-and-thumbnai::marshal`
+- `FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface::jobs` depends on `FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface::tests`
+- `FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface::mcp` depends on `FEAT-682-uri-scheme-handlers-jobs-and-mcp-surface::tests`
+- `FEAT-683-suffix-fallback-return-disambiguation-ch::return-type` depends on `FEAT-683-suffix-fallback-return-disambiguation-ch::tests`
+- `FEAT-683-suffix-fallback-return-disambiguation-ch::wire` depends on `FEAT-683-suffix-fallback-return-disambiguation-ch::return-type`
+- `FEAT-684-artifact-threshold-make-256-kib-content::plumb` depends on `FEAT-684-artifact-threshold-make-256-kib-content::tests`
+- `FEAT-684-artifact-threshold-make-256-kib-content::ts-schema` depends on `FEAT-684-artifact-threshold-make-256-kib-content::plumb`
+- `FEAT-685-napi-end-to-end-integration-tests-real-f::rust-e2e` depends on `FEAT-685-napi-end-to-end-integration-tests-real-f::fixtures`
+- `FEAT-685-napi-end-to-end-integration-tests-real-f::ts-e2e` depends on `FEAT-685-napi-end-to-end-integration-tests-real-f::fixtures`
+- `FEAT-685-napi-end-to-end-integration-tests-real-f::ci` depends on `FEAT-685-napi-end-to-end-integration-tests-real-f::rust-e2e`
+- `FEAT-685-napi-end-to-end-integration-tests-real-f::ci` depends on `FEAT-685-napi-end-to-end-integration-tests-real-f::ts-e2e`
+- `FEAT-686-napi-action-wiring-execute-code-path-inn::wire` depends on `FEAT-686-napi-action-wiring-execute-code-path-inn::tests`
+- `FEAT-686-napi-action-wiring-execute-code-path-inn::marshal` depends on `FEAT-686-napi-action-wiring-execute-code-path-inn::wire`
+- `FEAT-687-migrate-create-ts-edit-ts-back-to-execut::create` depends on `FEAT-687-migrate-create-ts-edit-ts-back-to-execut::tests`
+- `FEAT-687-migrate-create-ts-edit-ts-back-to-execut::edit` depends on `FEAT-687-migrate-create-ts-edit-ts-back-to-execut::tests`
+- `FEAT-687-migrate-create-ts-edit-ts-back-to-execut::prompts` depends on `FEAT-687-migrate-create-ts-edit-ts-back-to-execut::create`
+- `FEAT-687-migrate-create-ts-edit-ts-back-to-execut::prompts` depends on `FEAT-687-migrate-create-ts-edit-ts-back-to-execut::edit`
+- `PROJ-071-napi-namelexer-dispatch-file-extension-r::dialect-registry` depends on `PROJ-071-napi-namelexer-dispatch-file-extension-r::dispatch-tests`
+- `PROJ-071-napi-namelexer-dispatch-file-extension-r::two-phase-parse` depends on `PROJ-071-napi-namelexer-dispatch-file-extension-r::dialect-registry`
+- `PROJ-071-napi-namelexer-dispatch-file-extension-r::parse-code-path-napi` depends on `PROJ-071-napi-namelexer-dispatch-file-extension-r::two-phase-parse`
+- `PROJ-071-napi-namelexer-dispatch-file-extension-r::roundtrip-verify` depends on `PROJ-071-napi-namelexer-dispatch-file-extension-r::two-phase-parse`
+- `PROJ-072-qualifierresolver-anchorevaluator-framew::resolver-wiring` depends on `PROJ-072-qualifierresolver-anchorevaluator-framew::traits`
+- `PROJ-072-qualifierresolver-anchorevaluator-framew::rust-qualifiers` depends on `PROJ-072-qualifierresolver-anchorevaluator-framew::resolver-wiring`
+- `PROJ-072-qualifierresolver-anchorevaluator-framew::rust-anchors` depends on `PROJ-072-qualifierresolver-anchorevaluator-framew::resolver-wiring`
+- `PROJ-072-qualifierresolver-anchorevaluator-framew::rust-tests` depends on `PROJ-072-qualifierresolver-anchorevaluator-framew::rust-qualifiers`
+- `PROJ-072-qualifierresolver-anchorevaluator-framew::rust-tests` depends on `PROJ-072-qualifierresolver-anchorevaluator-framew::rust-anchors`
+- `PROJ-073-action-trait-per-resolver-dispatch-kerne::trait` depends on `PROJ-073-action-trait-per-resolver-dispatch-kerne::types`
+- `PROJ-073-action-trait-per-resolver-dispatch-kerne::spec` depends on `PROJ-073-action-trait-per-resolver-dispatch-kerne::trait`
+- `PROJ-073-action-trait-per-resolver-dispatch-kerne::registry` depends on `PROJ-073-action-trait-per-resolver-dispatch-kerne::trait`
+- `PROJ-074-fsresolver-textresolver-mutationresolver::fs-impl` depends on `PROJ-074-fsresolver-textresolver-mutationresolver::fs-tests`
+- `PROJ-074-fsresolver-textresolver-mutationresolver::text-impl` depends on `PROJ-074-fsresolver-textresolver-mutationresolver::text-tests`
+- `PROJ-074-fsresolver-textresolver-mutationresolver::caps` depends on `PROJ-074-fsresolver-textresolver-mutationresolver::fs-impl`
+- `PROJ-074-fsresolver-textresolver-mutationresolver::caps` depends on `PROJ-074-fsresolver-textresolver-mutationresolver::text-impl`
+- `PROJ-075-coderesolver-mutationresolver-impl-struc::impl` depends on `PROJ-075-coderesolver-mutationresolver-impl-struc::tests`
+- `PROJ-075-coderesolver-mutationresolver-impl-struc::caps` depends on `PROJ-075-coderesolver-mutationresolver-impl-struc::impl`
+

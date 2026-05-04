@@ -1,368 +1,46 @@
-# CodePath v3 — extensions for full tool subsumption
+# CodePath v3 — Extensions and Cutover Spec
 
-Companion to `specs/code-graph/code-path.md` and `specs/code-graph/code-path-dialects/README.md`.
-Defines the additions that let CodePath v3 absorb the entire `find` / `read` / `grep` / `ast-grep` / `ast-edit` / `edit` / `write` tool surface plus the legacy `code` subcommand surface
-without sacrificing flexibility. Locked in alongside the kernel deliverables of the active CodePath v3 PLAN.
+## 0 · Goal
 
----
-
-## 0 · Why this is a kernel concern, not a tool layer
-
-`find`, `read`, `grep` exist because today's CodePath addresses *only* code structures inside files.
-Once the addressing algebra also covers (a) the filesystem itself, (b) the raw-text view of any file,
-and (c) internal URI schemes, those tools become five specializations of one query — exactly the way
-the existing graph commands collapse into edge-axis queries (§5 of `code-path.md`).
-
-The pieces below must land in `crates/pi-code-path` from day 1 because the resolver is dialect-aware
-state-machine and retrofitting non-code dialects breaks that machine. They are *not* opt-in dialect
-registrations — they are baseline kernel components alongside the per-language code dialects.
-
-```
-v3 baseline:    kernel + 8 code dialects + edge axis + set ops               [ PLAN-255 today ]
-v3 with full
-tool subsume:   + FS dialect + Text dialect + URI scheme dialects
-                + content-bearing NodeRef + projection options                [ this addendum ]
-```
+Replace the seven legacy tools (`find`, `read`, `grep`, `ast-grep`, `ast-edit`, `edit`, `write`) and the legacy `code` subcommand surface with four generic tools (`get`, `edit`, `manage`, `create`) backed by a single query algebra (CodePath v3). The algebra is parsed and executed in Rust (`pi-code-path` kernel + `pi-natives` NAPI bridge) and surfaced to TypeScript via `executeCodePath`, `parseCodePath`, and `renderCodePath`.
 
 ---
 
-## 1 · Locator grammar extension
+## 1 · Query algebra recap
 
-```
+CodePath v3 grammar (kernel-resident):
+
+```text
+CodePath   := Locator "::" Query Qualifier?
 Locator    := UriLocator | FsLocator
 UriLocator := Scheme "://" UriPath
-FsLocator  := <project-relative path; literal segments and glob segments mixed>
-Scheme     := "artifact" | "memory" | "skill" | "agent" | "jobs" | "local" | "pi" | "rule" | "mcp"
-```
-
-**FS glob operators in `FsLocator`:** `*`, `**`, `?`, `[abc]`, `{a,b,c}`. These are *parsed by the
-FsLexer*, not the kernel; the kernel sees them as a `NamePayload`. The kernel still reserves `::`,
-`/`, `//`, `^`, `^^`, `<<`, `>>`, `|`, `&`, `-`, `→`, `#` — paths containing these as literal segments
-must backtick-quote (Q-1 rule from the dialects README applies).
-
-`Locator` may stand alone (no `::Query`) — that yields a NodeSet of files, replacing `find`.
-
----
-
-## 2 · The three baseline non-code dialects
-
-### 2.1 FS dialect (always present)
-
-```
-Node kinds   §dir           directory
-             §file          regular file
-             §symlink       symbolic link
-
-Anchors      ¶hidden        leading-dot file/dir
-             ¶ignored       matches .gitignore (excluded by default; this anchor opts in)
-             ¶lockfile      bun.lock, Cargo.lock, package-lock.json, etc.
-             ¶code          extension belongs to a registered code LanguageProfile
-             ¶doc           md, org, txt, rst, adoc
-             ¶image         png, jpg, jpeg, gif, webp, svg
-             ¶binary        not detected as text (UTF-8 sniff fails)
-             ¶large         size > 1 MiB
-
-Predicates   [ext=ts]               extension match (no dot)
-             [lang=rust]            registered language match
-             [size>1000]            byte size compare; <, >, <=, >=, =
-             [mtime>2026-01-01]     RFC3339 or YYYY-MM-DD
-             [name="*.test.ts"]     glob match against leaf name
-             [depth=N]              walk depth from root (root = 0)
-             [empty]                empty file (size=0) or empty dir
-             [text]                 (synonym for ¬¶binary)
-
-Qualifiers   #listing               one-level child NodeRefs
-             #tree[depth=N]         recursive listing capped at N (default unbounded)
-             #stat                  metadata only: size, mtime, kind, optional hash
-```
-
-**Hidden default:** included (matches today's `find`). Filter with `-[¶hidden]`.
-**Gitignore default:** respected (matches today's `grep`/`find`). Override with `[¶ignored]` / projection option.
-
-**Walker:** built on the `ignore` crate (already a workspace dep). Streams `NodeRef`s; cancellation via
-`CancellationToken` mid-walk. No eager directory load.
-
-**Suffix/typo fallback:** when an exact `FsLocator` resolves to zero NodeRefs, the FS dialect
-runs a fuzzy match against the project file index and emits a `Diagnostic::SuffixSuggestion {
-tried, suggestion: NodeRef }`. Reproduces today's `read` typo correction.
-
-### 2.2 Text dialect (always present, parallel to every file's code dialect)
-
-Every file regardless of code dialect has a parallel text view, available the moment a `§line`-class
-axis is used. The text dialect bypasses tree-sitter entirely.
-
-```
-Node kinds   §line          1-indexed line; carries leading-line-number metadata
-             §chunk         N-line block; defaults to N=20, override with [n=…]
-             §para          blank-line-separated block
-             §span          regex-match span (start byte..end byte)
-
-Combinators  <<  >>         adjacent lines (context windows). Applies to §line.
-
-Predicates   [text~="re"]           regex (PCRE-ish, ripgrep parity)
-             [match="literal"]      literal match (escaped)
-             [len>80]               byte length compare
-             [multiline]            spans more than one line (for §chunk/§para/§span)
-             [startsWith="…"]
-             [endsWith="…"]
-             [10..50]               line slice (1-indexed, inclusive end optional)
-             [last]                 last line
-             [-3..]                 last three lines
-
-Qualifiers   #raw                   whole-file bytes as text (UTF-8; latin-1 fallback)
-             #text                  format-aware text via markitdown / native extractors:
-                                    PDF/DOC/DOCX/PPT/PPTX/XLS/XLSX/RTF/EPUB → markitdown,
-                                    JSON → pretty-print, HTML → readable mode (mirrors today's `read`)
-             #match                 just the matched span (string, not the §line)
-             #captures[N]           Nth regex capture group from the matching predicate
-             #lines[a..b]           line slice content (1-indexed)
-             #bytes                 ArtifactHandle (no inline transfer; binary safe)
-             #image                 ImageHandle (uses existing image pipeline)
-             #thumbnail[N]          generated preview at size N
-```
-
-**Multiline regex:** inline `(?m)` / `(?s)` flags rather than a dedicated knob.
-**Encoding:** UTF-8 default; emit `Diagnostic::EncodingFallback` on latin-1 fallback (matches today).
-**Streaming:** lazy line index; no full file load except under `#raw`/`#bytes`/`#text`.
-
-### 2.3 URI scheme Locator dialects (always present)
-
-Each scheme is a tiny `LanguageDialect` registered in the `Locator` parser's scheme table. After
-URI resolution, structural queries delegate to a downstream dialect (Markdown for memory/skill md
-files, JSON for agent payloads, FS for arbitrary files, etc.).
-
-```
-Scheme        Resolves to                          Downstream dialect on `::Query`
-artifact://   Stored artifact bytes/text           Text or Markdown depending on extension
-memory://     Memory tree files                    Markdown/Org
-skill://      Skill files                          FS for arbitrary, MD for SKILL.md
-agent://      Agent JSON output                    JSON sub-dialect (see below)
-jobs://       Job state document                   Job sub-dialect (see below)
-local://      Plan artifact dir                    FS, then resolved file's dialect
-pi://         Internal Spell docs                  FS, then resolved file's dialect
-rule://       Rule definition by name              Markdown/Org for rule body content
-mcp://        MCP-discovered tool/resource         Per-MCP-tool dialect (defaults to JSON or text)
-```
-
-**JSON sub-dialect (for `agent://`):**
-```
-Node kinds:  §object, §array, §field, §array-elem, §string, §number, §bool, §null
-Field axis:  :prop-name           JSON property accessor
-Predicate:   [N]                  array index
-jq-like:     agent://id/.foo.bar[0]    reuses kernel combinators (/) and predicates ([0])
-```
-
-**Job sub-dialect (for `jobs://`):**
-```
-Node kinds: §job (root), §status, §stdout, §stderr, §result, §error, §duration_ms
+FsLocator  := <project-relative path; literal + glob segments>
+Query      := Step (Combinator Step)*
+Combinator := "/" | "//" | "^" | "^^" | "<<" | ">>" | "|" | "&" | "-" | Edge
+Edge       := EdgeKind "→"
+Step       := Axis? Head Predicate*
+Axis       := "§" | ":" | "¶"
+Head       := NamePayload | NodeKind | FieldName | AnchorName | "(" Query ")"
+Predicate  := "[" PredicateBody "]"
+Qualifer   := "#" Ident Args?
 ```
 
 ---
 
-## 3 · Resolver dispatch — the dialect-switch state machine
+## 2 · The four generic tools
 
-This is the load-bearing piece. The resolver tracks a *current scope dialect* per step. Transitions
-are mechanical and explicit; the user never declares a dialect, the axis chosen does.
-
-```
-Initial scope:                  FsDialect rooted at cwd (or `root` projection option)
-After matching §file:           switch to file's code dialect (or stay FS for #listing/#stat)
-First §line/§chunk/§para axis:  switch to text dialect for this file
-Inside text dialect:            cannot return to code dialect mid-file (text loses tree position)
-                                must `^` to file root, then re-enter via code-axis
-Across `→` (edge axis):         cross-file; new file's dialect takes over
-URI Locator resolution:         scheme dialect first; then delegate per the table in §2.3
-```
-
-**Why no return-to-code from text:** text steps don't carry tree-sitter positions. To go
-text→code in the same file, the path must explicitly re-anchor: `foo.ts :: §line[42] / ^ / §file
-:: methodFoo` (re-resolves from file root). This keeps the resolver stateless across step
-boundaries — preserves the cost discipline and parallelism of streaming.
-
-**Cost discipline:**
-- Pure FS query (no `::`)         → walker only, no tree-sitter
-- Text-only query (`§line` axes)  → line index only, no tree-sitter
-- Code-only query                 → tree-sitter, current behavior
-- Edge axis                       → code-graph lookup, current behavior
-- Mixed                           → composition; each step picks the cheapest interpreter for its dialect
-
-**Crate boundary (architecture):** `pi-code-path` ships the resolver *traits* (`Resolver`, `CodeResolver`, `EdgeResolver`, `UriResolver`, `SchemeHandler`) and the FS + Text resolver impls (no engine deps). `pi-natives` implements `CodeResolver` against `pi-code-engine::LanguageProfile` + tree-sitter, implements `EdgeResolver` against `pi-code-graph::neighbors_by_kind`/`bfs_levels`, and registers all 9 `SchemeHandler` impls (artifact, memory, skill, agent, jobs, local, pi, rule, mcp). This avoids the cyclic crate dep that would arise if `pi-code-path` depended on `pi-code-engine`/`pi-code-graph`.
+| Tool     | Purpose                              | Example target                              |
+| -------- | ------------------------------------ | ------------------------------------------- |
+| `get`    | Read / find / grep / AST-search      | `src/api.ts::§function[name="foo"]#body`    |
+| `edit`   | Modify source (replace, move, etc.)  | `src/api.ts::foo → rename(#name, "bar")`    |
+| `manage` | Lifecycle (index, cache, purge)      | `memory://root #purge`                      |
+| `create` | Create files / artifacts             | (lowers to `edit { action: { kind: "create" } }`) |
 
 ---
 
-## 4 · NodeRef — the unified return shape
+## 3 · NAPI bridge — streaming across the boundary
 
-Every resolver path returns a stream of `NodeRef`. Content is populated only when a content-class
-qualifier is in the path; otherwise NodeRef is location + metadata. This keeps `get` cheap by
-default and rich when asked.
-
-```rust
-pub struct NodeRef {
-    pub locator:    Locator,                  // file path or URI of the host
-    pub range:      Option<NodeRange>,        // byte/line range; None = whole locator
-    pub kind:       NodeKindLabel,            // dialect-tagged: "ts:method" | "fs:file" | "text:line" | …
-    pub content:    Option<Content>,          // populated iff a #content-class qualifier was used
-    pub metadata:   BTreeMap<String, Value>,  // size, mtime, lang, capture groups, score, …
-    pub diagnostics: Vec<Diagnostic>,         // per-node soft errors (e.g. permission denied, encoding fallback)
-}
-
-pub enum Content {
-    Text(String),
-    Bytes(ArtifactHandle),
-    Image(ImageHandle),
-    ExtractedText { source_kind: ExtractKind, text: String },  // PDF | DOCX | JSON | HTML | …
-}
-
-pub struct NodeRange {
-    pub byte_start: u32,
-    pub byte_end:   u32,
-    pub line_start: Option<u32>,    // populated for text-dialect nodes
-    pub line_end:   Option<u32>,
-}
-```
-
-**Content-class qualifiers that populate `content`:** `#raw`, `#text`, `#match`, `#captures[N]`,
-`#lines[a..b]`, `#bytes`, `#image`, `#thumbnail[…]`, `#body`, `#sig`, `#name`, `#docstring`, etc.
-Anything that does *not* select a sub-range or content stays content-`None`.
-
-**Streaming:** the resolver returns `impl Stream<Item = NodeRef>`. NAPI bridges this as a chunked
-async iterator (see §6).
-
----
-
-## 5 · Tool surface — four generic commands, projection options orthogonal to query syntax
-
-The v3 tool surface drops the `code` prefix because CodePath addresses now span filesystem, text, code, and internal URIs uniformly. Four top-level tools replace twenty-odd `code` subcommands plus seven standalone tools (`find`, `read`, `grep`, `ast-grep`, `ast-edit`, `edit`, `write`).
-
-```ts
-get { 
-  target:  <CodePath> | <bare path>,         // bare path = FsLocator with no ::Query
-  // projection options — sugar for query suffixes; equivalent CodePath always works
-  limit?:  number,                          // ⇔ [0..N]
-  head?:   number,                          // ⇔ [0..N]
-  tail?:   number,                          // ⇔ [-N..]
-  context?: { pre?: number, post?: number },// ⇔ << / >> set-union
-  content?: "auto" | "none" | "raw" | "text",  // defaults: auto for symbols, none for FS-only
-  format?: "node-list" | "locations" | "content-only" | "tree" | "stats",
-  root?:   string,                          // override walker root (default: cwd)
-  offset?: number,                          // 1-indexed line start (sugar for §line[offset..])
-}
-
-edit {
-  operations: [{
-    target: <CodePath> | <bare path>,        // file-level, symbol-level, or line-range CodePath
-    action: EditAction,
-    children?: EditOperation[],              // nested edits under same root target
-    occurrence?: "first" | "last" | "all" | number,
-    idempotent?: boolean                     // allow no-op edits to succeed
-  }]
-}
-
-manage {
-  command: "save" | "undo" | "redo" | "diff" | "open" | "close"
-         | "buffers" | "languages" | "index" | "watcherStatus" | "lockStatus",
-  file?: string,
-  ...
-}
-
-create {
-  path: <FsLocator>,                          // bare path required
-  content: string                              // text content (UTF-8)
-         | { kind: "bytes", artifactUri: string }     // binary by handle (no inline transfer)
-         | { kind: "base64", data: string },           // binary inline (small files only)
-  force?: boolean                             // bypass write-shrink + parse-regression guards
-}
-```
-
-### EditAction shape — ergonomic edit forms preserved
-
-Every operation supported by today's `edit`, `code edit`, `ast-edit`, and `write` tools has a direct shape in the new `edit`. Bare-string file paths and `LINE#ID` stale-detection anchors are preserved verbatim; CodePath targets unlock structural addressing.
-
-```ts
-type EditAction =
-  // line-anchored text edits (replaces today's `edit` tool with LINE#ID)
-  | { kind: "replace";   pos?: string; end?: string; content: string | string[] }
-  | { kind: "append";    pos?: string; content: string | string[] }   // pos? = file-level append at EOF if absent
-  | { kind: "prepend";   end?: string; content: string | string[] }
-  | { kind: "delete" }
-
-  // structural code edits (replaces today's `code edit` action kinds)
-  | { kind: "write";              scope?: "target" | "body"; content: string | string[] }
-  | { kind: "findAndReplace";     find: string | string[]; content: string | string[] }
-  | { kind: "rawTextReplace";     find: string; content: string }
-  | { kind: "wrap";               content: string | string[] }                    // template uses $BODY
-  | { kind: "rename";             content: string }
-  | { kind: "insertBefore";       content: string | string[]; line?: number; nodeType?: string }
-  | { kind: "insertAfter";        content: string | string[]; line?: number; nodeType?: string }
-  | { kind: "splice";             mode?: "self" | "up" | "down" }
-  | { kind: "move";               direction: "up" | "down" }
-  | { kind: "clone" }
-  | { kind: "transpose";          line?: number; column?: number }
-  | { kind: "renameClassToken";   content: string }
-  | { kind: "renameIdToken";      content: string }
-  | { kind: "renameCustomProperty"; content: string }
-  | { kind: "removeDeadStyle" }
-  | { kind: "promote" }                                                            // markdown heading up-level
-  | { kind: "demote" }                                                             // markdown heading down-level
-  | { kind: "replaceCodeBlock";   content: string; index?: number; language?: string }
-
-  // file lifecycle (replaces today's `write` tool)
-  | { kind: "create"; content: string | { kind: "bytes"; artifactUri: string } | { kind: "base64"; data: string }; force?: boolean }
-
-  // unified-diff edits (replaces today's `edit` patch mode)
-  | { kind: "patch"; diff: string }                                                // git-style unified diff, may span multiple files via target
-
-  // sibling cleanup escape hatch
-  | { allowSiblingDelete?: boolean; ... };
-```
-
-**LINE#ID stale-detection** stays a first-class concept on `replace`/`append`/`prepend` actions: pass `pos` and/or `end` as `LINE#ID` strings copied verbatim from a recent `get` resolution-3 read. The kernel re-validates the hash before applying; on mismatch the action fails with `Diagnostic::StaleAnchor { current: "<fresh LINE#ID>" }`. This is the same contract today's `edit` tool ships.
-
-**Bare-string file paths**: `target: "foo.ts"` parses as an `FsLocator` with no `::Query`, the cheapest path. The kernel never re-parses bare paths as CodePaths. Use bare strings for plain-text edits; use CodePath syntax only when you want structural addressing (`foo.ts :: Bar.baz#body`).
-
-**Projection options are sugar.** Every one is also expressible inside the path. The lowering contract guarantees a round-trip property: a lowered path renders to the same canonical string that parses back to the same AST.
-
-| Today                           | Sugar                            | CodePath syntax                    |
-| ------------------------------- | -------------------------------- | ---------------------------------- |
-| `find "*.ts"`                   | `get { target: "**/*.ts" }`      | `**/*.ts` (locator-only)           |
-| `find "*.ts" --hidden=false`    | + `get { target: "**/*.ts" }`    | `**/*.ts -[¶hidden]`               |
-| `read foo.ts`                   | `get { target: "foo.ts" }`       | `foo.ts#raw`                       |
-| `read foo.ts offset=50 limit=100` | + `head: 100,` …               | `foo.ts :: §line[50..150]#text`    |
-| `read dir/`                     | `get { target: "dir/" }`         | `dir/#listing`                     |
-| `read foo.pdf`                  | `get { target: "foo.pdf" }`      | `foo.pdf#text`                     |
-| `read foo.docx` (or `.doc`/`.ppt`/`.pptx`/`.xls`/`.xlsx`/`.rtf`/`.epub`) | `get { target: "foo.docx" }` | `foo.docx#text` (markitdown extraction) |
-| `read img.png`                  | `get { target: "img.png" }`      | `img.png#image`                    |
-| `read artifact://…/1.txt`       | `get { target: "artifact://…/1.txt" }` | `artifact://…/1.txt#raw` |
-| `read rule://my-rule`           | `get { target: "rule://my-rule" }` | `rule://my-rule#text`            |
-| `read mcp://server/path`        | `get { target: "mcp://server/path" }` | `mcp://server/path#raw`        |
-| `grep "useState" src/`          | + via `target`                   | `src/** :: §line[text~="useState"]` |
-| `grep --post 3 "TODO"`          | + `context: { post: 3 }`         | `§line[text~="TODO"] >>[0..3]` |
-| `grep --type ts "x"`            | + `target` glob                  | `**/*.ts :: §line[text~="x"]`      |
-| `grep mode=semantic "parseConfig"` | (no sugar — use edge axis)    | `parseConfig/def→`                 |
-| `ast-grep "console.log($A)"`    | (no sugar — use predicates)      | `**/*.ts :: //§call_expression[name=console.log]` |
-| `ast-edit { ops: [{pat, out}] }` | (no sugar — use edit kind)       | `edit { operations: [{ target: "**/*.ts", action: { kind: "findAndReplace", find: pat, content: out } }] }` |
-| `edit foo.txt replace pos=10#AB end=12#CD lines=["…"]` | (none) | `edit { operations: [{ target: "foo.txt", action: { kind: "replace", pos: "10#AB", end: "12#CD", content: "…" } }] }` |
-| `edit { input: "<unified diff>" }` (patch mode) | (none) | `edit { operations: [{ action: { kind: "patch", diff: "…" } }] }` |
-| `write foo.ts content`          | (none)                           | `create { path: "foo.ts", content: "…" }` |
-| `write img.png` (binary)        | (none)                           | `create { path: "img.png", content: { kind: "bytes", artifactUri: "artifact://…" } }` |
-
-**`format`** controls the rendering, not the result shape:
-- `node-list` (default for symbol queries)
-- `locations` — file:line:col triples (grep-style, default for `§line[text~=…]`)
-- `content-only` — concatenated `content` blobs (default for `#raw`/`#text`/`#lines`)
-- `tree` — directory-tree-style (default for `#tree`/`#listing`)
-- `stats` — metadata-only formatted (default for `#stat`)
-
-**The cutover deletes seven tools and the legacy `code` subcommand surface in one cycle:** `find.ts`, `read.ts`, `grep.ts`, `ast-grep.ts`, `ast-edit.ts`, `edit.ts` (in `patch/index.ts`), `write.ts`, and the legacy `code.ts`. No transition aliases. Migration is taught in `get.md` / `edit.md` / `manage.md` / `create.md` and `code-migration.md` with the table above.
-
----
-
-## 6 · NAPI bridge — streaming across the boundary
-
-`executeCodePath` returns NodeRefs as a chunked async iterator on the TypeScript side. NAPI
-threadsafe-functions emit batches; cancellation via `AbortSignal` propagates to the Rust
-`CancellationToken`. The NAPI surface carries three commands; `create` is a TS-side ergonomic
-wrapper that lowers to `edit { action: { kind: "create" } }` before crossing the boundary.
+`executeCodePath` returns NodeRefs as a chunked async iterator on the TypeScript side. NAPI threadsafe-functions emit batches; cancellation via `AbortSignal` propagates to the Rust `CancellationToken`. The NAPI surface carries three commands; `create` is a TS-side ergonomic wrapper that lowers to `edit { action: { kind: "create" } }` before crossing the boundary.
 
 ```ts
 interface CodePathOptions {
@@ -416,12 +94,11 @@ interface NodeRef {
 }
 ```
 
-**Binary content over NAPI:** never inline. The Rust side stages bytes to the artifact store and
-returns an `artifact://` handle; the tool layer surfaces the handle as a normal file reference.
+**Binary content over NAPI:** never inline. The Rust side stages bytes to the artifact store and returns an `artifact://` handle; the tool layer surfaces the handle as a normal file reference.
 
 ---
 
-## 7 · Worked examples — does this feel right?
+## 4 · Worked examples — does this feel right?
 
 ```
 # Find all TypeScript test files larger than 10 KiB modified this month
@@ -459,12 +136,11 @@ docs/ #tree[depth=2]
 **/Cargo.lock #stat
 ```
 
-Same operators throughout. Payload (FS glob, line regex, code symbol, JSON path, markdown
-heading) varies by dialect. Predicates and combinators do not.
+Same operators throughout. Payload (FS glob, line regex, code symbol, JSON path, markdown heading) varies by dialect. Predicates and combinators do not.
 
 ---
 
-## 8 · Sequencing and impact on the active CodePath v3 PLAN
+## 5 · Sequencing and impact on the active CodePath v3 PLAN
 
 Foundational scaffolding (parser, AST, renderer, NameLexer trait, NodeRef, Content, dialect contracts, TS NameLexer, FsExistsResolver scaffold) shipped under PLAN-255 wave-1/2 — see commits `b06d5ff70`, `f387aa977`. The successor PLAN folds in: full FS/Text/URI dialect resolvers, 7 remaining code NameLexers, NAPI bridge, and the four-generic-tools cutover. The kernel resolver must know FS, Text, and URI dialects from day 1; the dispatch state machine cannot be retrofitted later without breaking the streaming contract.
 
@@ -513,7 +189,7 @@ Performance benchmarks (1.2× of `find`, 1.5× of `grep`, 100 MiB RSS on 1 GiB f
 
 ---
 
-## 9 · Acceptance for the full vision
+## 6 · Acceptance for the full vision
 
 - The seven standalone tools `find`, `read`, `grep`, `ast-grep`, `ast-edit`, `edit`, `write` and the legacy `code` subcommand surface are removed from `packages/coding-agent/src/tools/`
 - Four generic top-level tools (`get`, `edit`, `manage`, `create`) reproduce every behavior of the deleted tools, verified by a behavioral parity corpus of 30–50 representative invocations per deleted tool (semantic equivalence, not byte-equivalent output)
@@ -527,3 +203,122 @@ Performance benchmarks (1.2× of `find`, 1.5× of `grep`, 100 MiB RSS on 1 GiB f
 - Image pipeline (auto-resize threshold, 20 MiB rejection, `inspect_image` hand-off hint, `#thumbnail[N]` preview) is owned by the kernel `#image` qualifier, not the tool layer
 - Capture binding `(Q) as $m` for ast-grep `$A`/`$$$A` parity is **deferred** to follow-up; replacement uses `[name=$pattern]` predicate matching
 - Resolver traits live in `pi-code-path`; concrete impls (code, edge, URI scheme handlers) live in `pi-natives` to avoid circular crate dependency
+
+---
+
+## 7 · Diagnostics
+
+### `CODE_GRAPH_NOT_INITIALISED`
+
+Emitted by the `EdgeResolver` when the underlying code graph has not yet been built or loaded.
+
+- **Variant:** `DiagnosticVariant::UnsupportedOperation`
+- **Message prefix:** `[CODE_GRAPH_NOT_INITIALISED] ...`
+- **Remediation:** Run `manage index` to trigger background indexing, or wait for the background indexer to finish and persist the graph.
+- **Empty graphs:** A workspace with no indexable files produces an empty graph (zero nodes, zero edges). This is still considered *initialised* and does **not** trigger this diagnostic, provided the graph root path exists.
+
+---
+
+## 8 · NAPI bridge — file-extension dispatch
+
+The `executeCodePath` and `parseCodePath` NAPI functions perform a **two-phase parse** to choose the correct `NameLexer` for the target string.
+
+### Two-phase parse rule
+
+1. **Split** the target on the first `::` occurrence. The left side is the FS prefix; the right side is the query.
+2. **Strip** one pair of surrounding backticks from the FS prefix (e.g. `` `foo bar.ts` `` → `foo bar.ts`).
+3. **Detect glob magic** in the FS prefix. If any of `* ? [ {` is present, fall back to the generic `DotLexer` and emit a `Diagnostic { variant: UnsupportedOperation, message: "weak NamePayload parse: glob FS prefix uses generic DotLexer" }` on the first returned chunk.
+4. **Detect empty prefix** (target starts with `::`). Fall back to `DotLexer`; no diagnostic.
+5. **Extension lookup**. Take the *last* extension of the FS prefix and map it to a dialect `NameLexer`:
+
+| Extension(s)                            | Dialect      | NameLexer impl      |
+| --------------------------------------- | ------------ | ------------------- |
+| `.ts` `.tsx` `.js` `.jsx` `.mjs` `.cjs` | TypeScript   | `TsNameLexer`       |
+| `.rs`                                   | Rust         | `RustNameLexer`     |
+| `.py`                                   | Python       | `PyNameLexer`       |
+| `.go`                                   | Go           | `GoNameLexer`       |
+| `.hs` `.lhs`                            | Haskell      | `HaskellNameLexer`  |
+| `.html` `.htm`                          | HTML         | `HtmlNameLexer`     |
+| `.css`                                  | CSS          | `CssNameLexer`      |
+| `.md` `.mdx` `.org`                     | Markdown/Org | `MdOrgNameLexer`    |
+
+If the extension is unknown, the path contains non-UTF-8 bytes, or there is no extension, fall back to the generic `DotLexer` silently.
+
+### Edge cases
+
+- **`foo.ts.snap::Snap`** — last extension is `.snap`; falls back to `DotLexer`.
+- **`src/Foo.test.ts::Bar`** — last extension is `.ts`; dispatches to `TsNameLexer`.
+- **Symlink dangling** — extension is taken from the link name; the path is **not** canonicalised.
+- **Quoted FS literal** — `` `foo bar.ts`::Bar `` → backticks stripped before extension scan.
+- **Non-UTF-8 paths** — `Path::extension().and_then(|e| e.to_str())` returns `None`; falls back.
+
+### Crate boundaries
+
+- `pi-code-path` defines the `NameLexer` trait and every dialect `NameLexer` implementation.
+- `pi-natives::code_path::dialect_registry` maps extensions to `Arc<dyn NameLexer>` via lazy `OnceLock` initialisation.
+- `pi-natives::code_path::napi` houses the two-phase split logic (`select_lexer`) and injects fallback diagnostics into `CodePathChunk` results.
+
+## Action surface (PROJ-073)
+
+The kernel exposes a typed action enum and a `MutationResolver` trait for applying edits to resolved targets. This section documents the Rust-side contract; concrete resolver implementations are owned by PROJ-074/075.
+
+### Action enum (25 variants)
+
+```rust
+pub enum Action {
+    Create  { content: ActionContent, force: bool },
+    Write   { content: ActionContent, force: bool },
+    Delete,
+    Append  { lines: ActionContent },
+    Prepend { lines: ActionContent },
+    Insert  { pos: Option<String>, line: Option<u32>, lines: ActionContent },
+    Replace { pos: Option<String>, end: Option<String>, line: Option<u32>, lines: Option<ActionContent> },
+    Patch   { diff: String },
+    Rename  { content: String },
+    Wrap    { content: ActionContent },
+    FindAndReplace { find: ActionContent, content: ActionContent, occurrence: Option<Occurrence> },
+    RawTextReplace { find: ActionContent, content: ActionContent },
+    Splice  { mode: Option<SpliceMode> },
+    Move    { direction: Direction },
+    Clone   { direction: Option<Direction> },
+    Transpose { line: Option<u32>, column: Option<u32> },
+    RenameClassToken  { find: String, content: String },
+    RenameIdToken     { find: String, content: String },
+    RenameCustomProperty { find: String, content: String },
+    RemoveDeadStyle,
+    Promote,
+    Demote,
+    ReplaceCodeBlock { content: ActionContent },
+    InsertBefore { lines: ActionContent },
+    InsertAfter  { lines: ActionContent },
+}
+```
+
+`ActionContent` is an untagged union accepting either a single `string` or an array of strings. `Occurrence` is `first | last | all | <uint>`. `SpliceMode` is `self | up | down`. `Direction` is `up | down`.
+
+### MutationResolver trait
+
+```rust
+pub trait MutationResolver: Send + Sync {
+    fn supports(&self, kind: ActionKind) -> bool { false }
+    fn apply(&self, target: &CodePath, action: &Action, cancel: &CancellationToken)
+        -> Result<MutationOutcome, Diagnostic>;
+}
+```
+
+- **Capability discovery**: callers check `MutationResolver::supports(kind)` before dispatch.
+- **Default impl**: returns `Diagnostic { variant: UnsupportedOperation, ... }` for every action.
+- **Dispatch order**: concrete resolver selection (file-system vs tree-sitter vs markdown) is TBD by FEAT-686.
+
+### MutationOutcome
+
+```rust
+pub struct MutationOutcome {
+    pub edit_count:    u32,
+    pub diff:          Option<String>,
+    pub created:       bool,
+    pub target_summary: Option<String>,
+}
+```
+
+The `diff` field is optional and populated only when the resolver supports generating a unified diff of the mutation.

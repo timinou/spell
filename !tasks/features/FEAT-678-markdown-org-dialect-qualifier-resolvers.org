@@ -1,0 +1,93 @@
+#+TITLE: Markdown/Org dialect — qualifier resolvers + anchor evaluators + edge kinds
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-678-markdown-org-dialect-qualifier-resolvers
+#+LAYER: core
+#+DEPENDS: PROJ-072-qualifierresolver-anchorevaluator-framew PROJ-071-napi-namelexer-dispatch-file-extension-r
+
+* Intention & Purpose
+Port PROJ-072 framework to Markdown + Org. Replace stubs in
+=crates/pi-code-path/src/dialects/mdorg.rs= with real resolvers via
+=tree_sitter_markdown= and =tree_sitter_org=. Customize =EdgeKindSet= per
+=08-markdown-org.md=. Cross-file dep captured via :DEPENDS: property.
+
+* Scope
+** In-scope
+- 7 Markdown-shared qualifiers: =#body=, =#intro=, =#first-para=, =#toc=,
+  =#frontmatter=, =#title=, =#level=
+- 5+ Org-only qualifiers: =#logbook=, =#properties[key]=, =#todo-state=, =#priority=,
+  =#tags=, =#scheduled=, =#deadline=
+- 5 anchors: =¶code-block=, =¶quote=, =¶table=, =¶image=, =¶footnote=
+- 4 Org-only anchors: =¶agenda-item=, =¶archived=, =¶checkbox=, =¶deadline-soon=
+- =EdgeKindSet= adds =xref→/cite→/include→/link→/footnote→/transclude→=
+- Edge cases D-1..D-7
+
+** Out-of-scope
+- MDX JSX expression evaluation (D-4 partial)
+- Org-mode time-tracking semantics
+
+* Existing Patterns
+- =crates/pi-code-path/src/dialects/mdorg.rs= (244 LOC)
+- =specs/code-graph/code-path-dialects/08-markdown-org.md=
+- Crates: =tree_sitter_markdown=, =tree_sitter_org= (or =orgize= fallback)
+
+* Tests
+File: =crates/pi-code-path/src/dialects/mdorg.rs=
+
+Scenarios:
+1. =doc.md::Introduction#body= returns body of section under =# Introduction=
+2. =doc.md::Introduction#intro= returns first paragraph after the heading
+3. =doc.md::Introduction#first-para= same as #intro
+4. =doc.md::*#level= returns the heading level as integer
+5. =doc.md::Top#toc= returns ToC structure for descendants
+6. =doc.md#frontmatter= returns YAML/TOML frontmatter block content
+7. =doc.md::*[¶code-block]= filters to sections containing fenced code blocks
+8. =doc.md::*[¶table]= filters to sections containing tables
+9. Edge case D-1: duplicate =# Foo= headings — ordinal =[N]= disambiguates
+10. Edge case D-2: setext vs ATX heading both match
+11. =doc.org::Task#todo-state= returns TODO state keyword
+12. =doc.org::Task#properties[ID]= returns =:ID:= drawer value
+13. =doc.org::*[¶checkbox]= filters list items with =[ ]= or =[X]=
+14. =doc.org::*[¶deadline-soon]= filters items with =DEADLINE: <2026-...>= within 7 days
+
+* Implementation
+** ITEM Mdorg qualifier + anchor test fixtures
+:PROPERTIES:
+:CUSTOM_ID: FEAT-678-markdown-org-dialect-qualifier-resolvers::tests
+:END:
+14 scenarios using inline =.md= and =.org= sources.
+
+** ITEM Markdown qualifier + anchor resolvers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-678-markdown-org-dialect-qualifier-resolvers::md-resolvers
+:DEPENDS: FEAT-678-markdown-org-dialect-qualifier-resolvers::tests
+:END:
+7 qualifiers + 5 shared anchors. Wire into =mdorg::dialect()= MD branch.
+
+** ITEM Org qualifier + anchor resolvers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-678-markdown-org-dialect-qualifier-resolvers::org-resolvers
+:DEPENDS: FEAT-678-markdown-org-dialect-qualifier-resolvers::tests
+:END:
+5+ Org-only qualifiers + 4 Org-only anchors. Branch on file extension.
+
+** ITEM Mdorg edge kind set
+:PROPERTIES:
+:CUSTOM_ID: FEAT-678-markdown-org-dialect-qualifier-resolvers::edge-kinds
+:DEPENDS: FEAT-678-markdown-org-dialect-qualifier-resolvers::tests
+:END:
+=EdgeKindSet= with =xref→/cite→/include→/link→/footnote→/transclude→=.
+
+* Edge Cases
+- Duplicate headings (D-1): NameLexer matches all, ordinal selects
+- Setext (===/---) vs ATX (#) (D-2): both represented as =heading=; level extracted
+- Markdown inside HTML (D-3): =<div>...</div>= block contents recurse
+- MDX components (D-4): =<MyComp />= recognised; full TS routing FUP
+- Reference-style links (D-5): =[text][ref]= followed by =[ref]: url=
+- Footnote (D-6): =[^1]= reference + =[^1]: text= definition
+- Code fence language hint (D-7): =```rust= sets =language= field
+
+* Acceptance Criteria
+- 14 scenarios pass; =cargo test -p pi-code-path --tests mdorg= green
+- Spec =08-markdown-org.md= cross-walked

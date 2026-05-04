@@ -117,6 +117,7 @@ smallvec = { version = "1.15.1", features = [
    "union",
    "const_new",
 ] }
+base64 = "0.22"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -162,6 +162,19 @@ impl EdgeResolverImpl {
 			})
 			.unwrap_or_default()
 	}
+
+	/// Verify the underlying code graph has been initialised.
+	fn ensure_initialised(&self) -> Result<(), Diagnostic> {
+		if self.graph.root().exists() {
+			Ok(())
+		} else {
+			Err(Diagnostic {
+				variant: DiagnosticVariant::UnsupportedOperation,
+				message: "[CODE_GRAPH_NOT_INITIALISED] code graph not initialised; run `manage index` first or wait for background indexing".to_string(),
+				span:    None,
+			})
+		}
+	}
 }
 
 impl EdgeResolver for EdgeResolverImpl {
@@ -172,6 +185,12 @@ impl EdgeResolver for EdgeResolverImpl {
 		depth: Option<usize>,
 		cancel: &CancellationToken,
 	) -> Result<Vec<NodeRef>, Diagnostic> {
+		self.ensure_initialised()?;
+
+		if self.graph.graph().node_count() == 0 {
+			return Ok(Vec::new());
+		}
+
 		let Some(start) = self.find_node_index(source) else {
 			return Err(Diagnostic {
 				variant: DiagnosticVariant::FileNotFound,
@@ -285,6 +304,28 @@ mod tests {
 		CodeGraph::from(persisted)
 	}
 
+	fn build_graph_with_root(
+		root: std::path::PathBuf,
+		nodes: serde_json::Value,
+		edges: serde_json::Value,
+		stats: serde_json::Value,
+	) -> CodeGraph {
+		let json = serde_json::json!({
+			"root": root,
+			"graph": {
+				"nodes": nodes,
+				"node_holes": [],
+				"edge_property": "directed",
+				"edges": edges
+			},
+			"stats": stats,
+			"generated_at_ms": 0,
+			"git_head": null
+		});
+		let persisted: PersistedCodeGraph = serde_json::from_value(json).unwrap();
+		CodeGraph::from(persisted)
+	}
+
 	fn ref_call_import_graph() -> CodeGraph {
 		build_graph(
 			serde_json::json!([
@@ -367,6 +408,62 @@ mod tests {
 			metadata:    Default::default(),
 			diagnostics: Vec::new(),
 		}
+	}
+
+	#[test]
+	fn uninitialised_graph_returns_not_initialised_diagnostic() {
+		let dir = tempfile::tempdir().unwrap();
+		let bad_root = dir.path().join("nonexistent_project");
+		let graph = build_graph_with_root(
+			bad_root,
+			serde_json::json!([]),
+			serde_json::json!([]),
+			serde_json::json!({"file_count": 0, "symbol_count": 0, "edge_count": 0, "language_counts": {}}),
+		);
+		let r = EdgeResolverImpl::new(Arc::new(graph));
+		let source = node_ref_by_qualified_name("foo::bar");
+		let err = r
+			.resolve(&source, KernelEdgeKind::Ref, None, &CancellationToken::new())
+			.unwrap_err();
+		assert!(
+			matches!(err.variant, DiagnosticVariant::UnsupportedOperation),
+			"expected UnsupportedOperation, got {:?}",
+			err.variant
+		);
+		assert!(
+			err.message.contains("CODE_GRAPH_NOT_INITIALISED"),
+			"expected CODE_GRAPH_NOT_INITIALISED in message, got: {}",
+			err.message
+		);
+	}
+
+	#[test]
+	fn empty_initialised_graph_returns_empty_vec() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		let graph = build_graph_with_root(
+			root,
+			serde_json::json!([]),
+			serde_json::json!([]),
+			serde_json::json!({"file_count": 0, "symbol_count": 0, "edge_count": 0, "language_counts": {}}),
+		);
+		let r = EdgeResolverImpl::new(Arc::new(graph));
+		let source = node_ref_by_qualified_name("foo::bar");
+		let results = r
+			.resolve(&source, KernelEdgeKind::Ref, None, &CancellationToken::new())
+			.unwrap();
+		assert_eq!(results.len(), 0, "expected empty results for empty initialised graph");
+	}
+
+	#[test]
+	fn populated_graph_finds_edges() {
+		let r = resolver();
+		let source = node_ref_by_qualified_name("src/a.ts::a1");
+		let results = r
+			.resolve(&source, KernelEdgeKind::Ref, None, &CancellationToken::new())
+			.unwrap();
+		assert_eq!(results.len(), 1);
+		assert_eq!(results[0].locator, "src/b.ts:1");
 	}
 
 	#[test]

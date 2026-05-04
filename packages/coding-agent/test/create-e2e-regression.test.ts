@@ -20,7 +20,7 @@ test("e2e: create tool actually writes the file (PLAN-296 regression)", async ()
       content: 'defmodule Hotelcomm.Boot.PgvectorTypesGuardTest do\n  use ExUnit.Case\nend\n',
     });
 
-    const text = result.content.find((c: any) => c.type === "text")?.text ?? "";
+    const text = (result.content.find((c: any) => c.type === "text") as any)?.text ?? "";
     console.log("[create] result text:", text);
     const target = path.join(tmp, "apps/hotelcomm/test/hotelcomm/boot/pgvector_types_guard_test.exs");
     expect(await fs.exists(target)).toBe(true);

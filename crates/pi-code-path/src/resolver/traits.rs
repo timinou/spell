@@ -12,7 +12,7 @@ use std::{
 };
 
 use crate::{
-	ast::{CodePath, EdgeKind, Query, UriLocator},
+	ast::{Action, ActionKind, CodePath, EdgeKind, MutationOutcome, Query, UriLocator},
 	types::{Diagnostic, NodeRef},
 };
 
@@ -65,6 +65,7 @@ pub trait CodeResolver: Send + Sync {
 		&self,
 		file: &Path,
 		query: &Query,
+		qualifier: Option<&crate::ast::Qualifier>,
 		cancel: &CancellationToken,
 	) -> Result<Vec<NodeRef>, Diagnostic>;
 }
@@ -112,6 +113,28 @@ pub trait FsAnchorContext: Send + Sync {
 pub trait FormatExtractor: Send + Sync {
 	fn extracts(&self, ext: &str) -> bool;
 	fn extract(&self, bytes: &[u8], cancel: &CancellationToken) -> Result<String, Diagnostic>;
+}
+
+/// Applies mutations (edit actions) to a resolved target.
+pub trait MutationResolver: Send + Sync {
+	fn supports(&self, kind: ActionKind) -> bool {
+		let _ = kind;
+		false
+	}
+
+	fn apply(
+		&self,
+		target: &CodePath,
+		action: &Action,
+		cancel: &CancellationToken,
+	) -> Result<MutationOutcome, Diagnostic> {
+		let _ = (target, action, cancel);
+		Err(Diagnostic {
+			variant: crate::types::DiagnosticVariant::UnsupportedOperation,
+			message: format!("unsupported action: {:?}", action.kind()),
+			span: None,
+		})
+	}
 }
 
 #[cfg(test)]

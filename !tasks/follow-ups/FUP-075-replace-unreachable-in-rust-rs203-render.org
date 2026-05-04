@@ -1,0 +1,19 @@
+#+TITLE: Replace unreachable!() in rust.rs:203 render_segments with explicit match (G17)
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FUP-075-replace-unreachable-in-rust-rs203-render
+#+LAYER: core
+
+* Initial Message
+
+no dude, await tool is being edited by another agent. don't touch it
+
+* Intention & Purpose
+=crates/pi-code-path/src/dialects/rust.rs:203= contains =unreachable!()= in
+=render_segments= as the catch-all of an exhaustive match on =RustSegment=. Safe today
+but opaque if a new variant is added. Replace with explicit =_ => unreachable!("...")=
+with descriptive message, or restructure to compile-time exhaustiveness.
+
+* Acceptance
+- Match arm replaced; build clean; tests green

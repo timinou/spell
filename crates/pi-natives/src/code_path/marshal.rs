@@ -6,8 +6,8 @@ use pi_code_path::types::{Content, Diagnostic, DiagnosticVariant, NodeRef};
 
 use crate::code_path::napi::{ContentDto, DiagnosticDto, NodeRefDto, SpanDto};
 
-/// Default artifact staging threshold (~256 KiB).
-pub const ARTIFACT_THRESHOLD: usize = 256 * 1024;
+/// Default artifact staging threshold (~512 KiB).
+pub const ARTIFACT_THRESHOLD: usize = 512 * 1024;
 
 /// Convert a batch of kernel `NodeRef`s into DTOs, staging large payloads.
 pub fn nodes_to_dtos(nodes: Vec<NodeRef>, threshold: usize) -> Vec<NodeRefDto> {
@@ -61,6 +61,7 @@ fn diagnostic_variant_to_string(v: &DiagnosticVariant) -> String {
 		DiagnosticVariant::UnsupportedOperation => "unsupported_operation".to_string(),
 		DiagnosticVariant::Inaccessible => "inaccessible".to_string(),
 		DiagnosticVariant::EncodingFallback => "encoding_fallback".to_string(),
+		DiagnosticVariant::SchemeNotImplemented => "scheme_not_implemented".to_string(),
 		DiagnosticVariant::Cancelled => "cancelled".to_string(),
 	}
 }
@@ -90,13 +91,48 @@ fn content_to_dto(content: Content, threshold: usize) -> ContentDto {
 			size: Some(size as i64),
 			..Default::default()
 		},
-		Content::Image { handle, mime_type, width, height } => ContentDto {
-			kind: "image".to_string(),
-			handle: Some(handle),
-			mime_type: Some(mime_type),
-			width,
-			height,
-			..Default::default()
+		Content::Image { handle, mime_type, width, height, bytes } => {
+			if let Some(b) = bytes {
+				if b.len() <= threshold {
+					let base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &b);
+					ContentDto {
+						kind: "image".to_string(),
+						value: Some(base64),
+						mime_type: Some(mime_type),
+						width,
+						height,
+						..Default::default()
+					}
+				} else {
+					match stage_artifact(&b) {
+						Ok(uri) => ContentDto {
+							kind: "image".to_string(),
+							artifact_uri: Some(uri),
+							mime_type: Some(mime_type),
+							width,
+							height,
+							..Default::default()
+						},
+						Err(_) => ContentDto {
+							kind: "image".to_string(),
+							value: Some(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &b)),
+							mime_type: Some(mime_type),
+							width,
+							height,
+							..Default::default()
+						},
+					}
+				}
+			} else {
+				ContentDto {
+					kind: "image".to_string(),
+					artifact_uri: Some(handle),
+					mime_type: Some(mime_type),
+					width,
+					height,
+					..Default::default()
+				}
+			}
 		},
 		Content::ExtractedText { source_kind, text, mime_type } => {
 			if text.len() > threshold {

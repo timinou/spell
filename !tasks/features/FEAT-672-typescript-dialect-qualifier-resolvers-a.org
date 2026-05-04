@@ -1,0 +1,124 @@
+#+TITLE: TypeScript dialect — qualifier resolvers + anchor evaluators + edge kinds
+#+STATE: ITEM
+#+SESSION_ID: 14d40726c985291f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
+#+CUSTOM_ID: FEAT-672-typescript-dialect-qualifier-resolvers-a
+#+LAYER: core
+#+DEPENDS: PROJ-072-qualifierresolver-anchorevaluator-framew PROJ-071-napi-namelexer-dispatch-file-extension-r
+
+* Intention & Purpose
+
+Port the Rust pilot from PROJ-072 to the TypeScript dialect. Implement real qualifier
+resolvers (=#body=, =#name=, =#sig=, =#decorators=, =#type-params=, =#return-type=,
+=#jsx-children=, =#jsx-attrs=, =#default-export=), real anchor evaluators (=¶return=,
+=¶guard=, =¶hook-deps=, =¶default-export=, =¶first-import=, =¶last-import=,
+=¶module-side-effect=), and customize the dialect's =EdgeKindSet= with TS-specific
+edges (=type→=, =jsx-prop→=) per spec =01-typescript.md=.
+
+* Context & Narrative
+
+Per audit (agent://33-Spec, agent://34-Parser): TypeScript dialect at
+=crates/pi-code-path/src/dialects/typescript.rs= has 7 NameLexer tests but zero AST
+qualifier/anchor tests. =QualifierSpec.resolver= entries are =StubResolver=. =AnchorPattern.matcher=
+fns are defined but not invoked at query time.
+
+After PROJ-072 lands the trait surface and CodeResolver wiring, this item replaces the
+TS stubs with real implementations using =tree_sitter_typescript=.
+
+* Scope
+
+** In-scope
+- 9 qualifier resolvers per spec =01-typescript.md=
+- 7 anchor evaluators per spec =01-typescript.md=
+- =EdgeKindSet= customization adds =type→= and =jsx-prop→= to default
+  Ref/Def/Call/Import
+- TSX support: queries against =.tsx= files use the same dialect
+- Edge cases D-1 to D-7 per spec
+
+** Out-of-scope
+- Edge resolution backend (CodeGraph) wiring
+- Action surface (Wave 5)
+
+* Existing Patterns
+
+- =crates/pi-code-path/src/dialects/typescript.rs= — current dialect, NameLexer + stubs
+- =specs/code-graph/code-path-dialects/01-typescript.md= — canonical feature list
+- =tree_sitter_typescript= grammar — node kinds: =function_declaration=, =method_definition=,
+  =arrow_function=, =class_declaration=, =interface_declaration=, =type_alias_declaration=,
+  =enum_declaration=, =import_statement=, =export_statement=, =jsx_element=, =jsx_attribute=,
+  =decorator=, =type_parameters=, =return_type=
+- PROJ-072 Rust pilot at =crates/pi-code-path/src/dialects/rust.rs= — copy structural pattern
+
+* Tests
+
+File: =crates/pi-code-path/src/dialects/typescript.rs= (extend =mod tests=)
+
+Scenarios:
+1. =foo.ts::handler#body= returns the body of an arrow function or function declaration
+2. =foo.ts::handler#sig= returns parameters + return type, NOT body
+3. =foo.ts::handler#return-type= returns =: Promise<void>= span
+4. =foo.ts::Bar#decorators= returns =@injectable()= decorator span
+5. =foo.ts::Bar#type-params= returns =<T extends X>= span
+6. =foo.tsx::App#jsx-children= returns concatenated JSX children of the JSX root
+7. =foo.tsx::App#jsx-attrs= returns JSX attributes span
+8. =foo.ts::default#default-export= returns =export default ...= statement range
+9. =foo.ts::useEffect[¶hook-deps]= filters to useEffect calls with stale deps array
+10. =foo.ts::*[¶return]= filters to functions containing a =return= statement
+11. =foo.ts::*[¶first-import]= matches the first =import= at module top
+12. =foo.ts::*[¶module-side-effect]= filters to top-level expression statements
+13. Edge case D-2: =foo.ts::default= resolves the default-export declaration
+14. Edge case D-7: =foo.ts::Bar/¶decorator= filters to decorator calls
+
+* Implementation
+
+** ITEM TS qualifier + anchor test fixtures
+:PROPERTIES:
+:CUSTOM_ID: FEAT-672-typescript-dialect-qualifier-resolvers-a::tests
+:END:
+Add scenarios 1-14 as Rust unit tests in =typescript.rs::tests=. Use small TS source
+strings (1-15 lines each). Use =tree_sitter_typescript= parse to feed real ASTs to the
+resolvers. Tests assert byte ranges and filter membership.
+
+** ITEM TS qualifier resolvers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-672-typescript-dialect-qualifier-resolvers-a::qualifiers
+:DEPENDS: FEAT-672-typescript-dialect-qualifier-resolvers-a::tests
+:END:
+Implement =QualifierResolver= for the 9 qualifiers above. Wire into
+=typescript::dialect()= factory.
+
+Cross-file dependency on PROJ-072 framework is captured at the file level via
+=:DEPENDS:= property on this FEAT.
+
+** ITEM TS anchor evaluators
+:PROPERTIES:
+:CUSTOM_ID: FEAT-672-typescript-dialect-qualifier-resolvers-a::anchors
+:DEPENDS: FEAT-672-typescript-dialect-qualifier-resolvers-a::tests
+:END:
+Implement =AnchorEvaluator= for the 7 anchors above. Wire into =typescript::dialect()=.
+
+** ITEM TS edge kind set customization
+:PROPERTIES:
+:CUSTOM_ID: FEAT-672-typescript-dialect-qualifier-resolvers-a::edge-kinds
+:DEPENDS: FEAT-672-typescript-dialect-qualifier-resolvers-a::tests
+:END:
+Replace =EdgeKindSet::default()= in =typescript::dialect()= with a custom set including
+=type→= and =jsx-prop→= per spec.
+
+* Edge Cases
+
+- Overloaded functions (D-1) → all overloads share the same name; resolver returns the
+  resolved overload's body via existing CodeResolver overload-disambiguation logic
+- Export default with no name (D-2) → CodePath =foo.ts::default= or =foo.ts/[¶default-export]=
+- Module augmentation (D-3) → multiple decls of same name across different files
+- Computed member (D-4) → =foo['bar']= access; matcher must skip these
+- const-enum (D-5) → enum with =const= keyword
+- JSX member (D-6) → =<Foo.Bar />= treated as JSX expression
+- Decorator call (D-7) → =@dec()= node kind is =decorator=, not =call_expression=
+
+* Acceptance Criteria
+
+- 14 scenarios pass
+- =cargo test -p pi-code-path --tests typescript= green
+- No new =StubResolver= references for TS qualifiers
+- Spec =01-typescript.md= cross-walked: every qualifier + anchor + edge has impl

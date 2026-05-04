@@ -24,4 +24,5 @@ pub use ast::*;
 pub use dialect::*;
 pub use parser::{parse_code_path, parse_locator};
 pub use renderer::render_code_path;
+pub use resolver::traits::MutationResolver;
 pub use types::*;

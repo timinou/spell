@@ -1,6 +1,8 @@
 pub mod loader;
 pub mod resize;
 pub mod thumbnail;
+#[cfg(test)]
+pub mod integration_tests;
 
 pub use loader::*;
 pub use resize::*;

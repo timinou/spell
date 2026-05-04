@@ -3838,6 +3838,7 @@ dependencies = [
  "globset",
  "grep-regex",
  "ignore",
+ "image",
  "regex",
  "serde",
  "serde_json",
@@ -3888,6 +3889,7 @@ version = "13.12.8"
 dependencies = [
  "arboard",
  "ast-grep-core",
+ "base64 0.22.1",
  "brush-builtins",
  "brush-core",
  "clap",
