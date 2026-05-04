@@ -1,0 +1,206 @@
+#+TITLE: Behavioral parity corpus: 30-50 invocations per deleted tool
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FEAT-666-behavioral-parity-corpus-30-50-invocatio
+#+DEPENDS: FEAT-665-port-write-shrink-parse-regression-force
+#+LAYER: api
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Lock in the cutover with a behavioral parity corpus: 30-50 representative invocations per deleted tool, each translated to the new generic-tool form, asserting semantic equivalence (not byte-equivalent output) of results. Prevents silent feature regression during the hard-cut.
+
+* Context & Narrative
+
+Per design decision (=parity_test_corpus= question), the cutover uses *behavioral* parity: 30-50 representative invocations per deleted tool. Each entry is =(legacy_invocation, new_invocation, expected_semantics)=. Tests run both invocations against shared fixtures and assert equivalent NodeRef sets, content, or diagnostics.
+
+Tools to cover:
+- =find= (491 LOC)
+- =read= (1019 LOC)
+- =grep= (926 LOC)
+- =ast-grep= (466 LOC)
+- =ast-edit= (568 LOC)
+- =edit= (973 LOC, in patch/index.ts)
+- =write= (402 LOC)
+- =code= (1014 LOC across 20 subcommands)
+
+Total: ~280 parity test entries.
+
+* Scope
+
+In:
+- =packages/coding-agent/test/parity/= directory with one =.test.ts= per legacy tool.
+- Fixtures at =packages/coding-agent/test/parity/fixtures/=.
+- Each test entry: legacy tool call (via existing impl, which still exists pre-deletion) → output A; new tool call → output B; assertion: A ≡ B under semantic equivalence rules per tool.
+- Specific equivalence rules per tool documented in test header.
+- Migration table fixture (extracted from =specs/code-graph/code-path.md §D=).
+- Run order: parity tests pass *before* =FEAT-delete-legacy-tools= runs.
+
+Out:
+- Performance benchmarks (deferred to FUP).
+- Full byte-identical output equivalence — only semantic equivalence required.
+
+* Existing Patterns
+
+- =packages/coding-agent/test/find.test.ts=, =read.test.ts=, =grep.test.ts=, etc. — existing per-tool tests; mine for representative invocations.
+- =specs/code-graph/code-path.md §D= migration table.
+
+* Tests
+
+File: =packages/coding-agent/test/parity/{find,read,grep,ast-grep,ast-edit,edit,write,code}-parity.test.ts=
+
+Per-tool entries (representative subset, full corpus expanded during impl):
+
+** find (~30 entries)
+- =find "*.ts"= → =get { target: "**/*.ts" }=
+- =find "*.ts" --hidden=false= → =get { target: "**/*.ts -[¶hidden]" }=
+- =find "**/*.test.ts" --limit=10= → =get { target: "**/*.test.ts", limit: 10 }=
+- mtime sort, multi-path lists, dir filter, etc.
+
+** read (~50 entries)
+- =read foo.ts=, =read foo.ts offset=50 limit=100=, =read dir/=
+- =read foo.pdf=, =read foo.docx=, =read img.png=
+- =read artifact://...=, =read memory://root=, =read agent://id=, etc. (9 schemes)
+- suffix-fallback case
+- encoding fallback latin-1
+- large file streaming
+
+** grep (~40 entries)
+- =grep "TODO" src/=, =grep --multiline "fn .*\{$"=
+- =grep --post 3 "TODO"=, =grep --pre 2 "error"=
+- =grep --type ts "useState"=, =grep -i "todo"=
+- =grep mode=semantic "parseConfig"= → edge axis
+
+** ast-grep (~25 entries)
+- =ast-grep { pat: "console.log($A)" }=, =ast-grep { pat, sel }= → has-descendant
+- captures (basic [name=$pat]; complex $A/$$$A in FUP)
+
+** ast-edit (~25 entries)
+- single-file pat→out, multi-file pat→out
+- preview-then-resolve workflow
+
+** edit (~40 entries)
+- LINE#ID replace with pos+end
+- LINE#ID append with pos
+- Single-line replace
+- Multi-line range replace
+- patch mode (unified diff)
+- create-via-edit
+
+** write (~15 entries)
+- text create
+- create with force
+- create with bytes-handle
+- create with base64
+- guard chain rejections
+
+** code (~50 entries; covers 20 legacy subcommands)
+- =code read=, =code outline=, =code symbols=, =code edit=, =code navigate=
+- =code context=, =code impact=, =code flow=, =code deps=
+- =code dead_code=, =code clusters=
+- =code save=, =code undo=, =code redo=, =code diff=
+- =code buffers=, =code languages=, =code index=, =code watcherStatus=, =code lockStatus=
+- =code edit { scope: "body" }= → =edit { target: "...#body" }=
+
+Total: ~275 parity entries.
+
+* Implementation
+
+** ITEM Define parity test fixtures
+:PROPERTIES:
+:CUSTOM_ID: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-fixtures
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/test/parity/fixtures/= — small representative project tree, sample documents (PDF, DOCX), images, hidden files, gitignored files, multiple file types.
+
+** ITEM Define equivalence-rules helpers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-helpers
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/test/parity/equivalence.ts=
+
+=fn assertEquivalent(legacy: Result, modern: Result, rules: EquivalenceRules)=. Rules: file-set equality, content-set equality (whitespace-normalised), diagnostic-class equality.
+
+** ITEM find parity tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-find
+:DEPENDS: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-helpers
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/test/parity/find-parity.test.ts=
+
+** ITEM read parity tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-read
+:DEPENDS: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-find
+:LAYER: api
+:END:
+
+** ITEM grep parity tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-grep
+:DEPENDS: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-read
+:LAYER: api
+:END:
+
+** ITEM ast-grep + ast-edit parity tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-ast
+:DEPENDS: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-grep
+:LAYER: api
+:END:
+
+** ITEM edit parity tests (LINE#ID + patch mode)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-edit
+:DEPENDS: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-ast
+:LAYER: api
+:END:
+
+** ITEM write parity tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-write
+:DEPENDS: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-edit
+:LAYER: api
+:END:
+
+** ITEM code parity tests (20 subcommands)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-code
+:DEPENDS: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-write
+:LAYER: api
+:END:
+
+** ITEM Port relevant existing tests to new tools
+:PROPERTIES:
+:CUSTOM_ID: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-port-existing
+:DEPENDS: FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-code
+:LAYER: api
+:END:
+
+Existing test files for legacy tools (=read.test.ts=, =find.test.ts=, =grep.test.ts=, etc.) contain useful regression coverage. Port to new tool surface with target= rewrites; remove legacy tool imports. Decision: keep both old and new tests passing during overlap; old tests deleted in =FEAT-delete-legacy-tools=.
+
+* Edge Cases
+
+- Diagnostic-class equivalence: legacy emits string error; new emits structured Diagnostic. Define mapping table (e.g. legacy "ENOENT: file not found" ≡ =Diagnostic::FileNotFound=).
+- Output ordering: legacy may sort differently. Normalise both before comparison.
+- Pagination differences: legacy uses absolute indices; new may chunk. Compare full materialised result sets.
+- Diagnostic-only outputs: parity covers structure-of-error, not exact strings.
+- Side effects (write, edit): use ephemeral tempdirs per test; assert post-state.
+- ast-grep $A/$$$A captures: deferred per FUP; mark these tests as =it.todo=.
+
+* Acceptance Criteria
+
+- ~275 parity entries pass.
+- =bun test packages/coding-agent/test/parity= clean.
+- Each deleted tool has at least 25 parity entries (write may have 15 due to narrower surface).
+- Equivalence helper documented; rules per-tool clear.
+- All known legacy edge cases covered (suffix-fallback, encoding fallback, mtime sort, etc.).

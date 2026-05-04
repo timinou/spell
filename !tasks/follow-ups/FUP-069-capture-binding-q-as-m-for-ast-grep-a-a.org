@@ -1,0 +1,77 @@
+#+TITLE: Capture binding (Q) as $m for ast-grep $A/$$$A parity
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FUP-069-capture-binding-q-as-m-for-ast-grep-a-a
+#+LAYER: core
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Implement capture binding =(Q) as $m= from spec §5 of =code-path.md= so ast-grep =$A= / =$$$A= patterns have full structural-match parity. Deferred from the main CodePath v3 PLAN per design decision.
+
+* Context & Narrative
+
+The current cutover replaces ast-grep with =//§NodeKind[name=$capture]= simple capture predicates, which works for ~80% of cases. The remaining 20% (multi-pattern joins, nested captures, complex pattern templates) need the full capture-binding algebra: =//(Foo/bar) as $m= captures matched node as =$m=, then =$m/ref→/#name= references back.
+
+This is a significant grammar + resolver extension; deferring lets the v3 cutover ship without it.
+
+* Scope
+
+In:
+- AST: add =Capture { name: String, query: Box<Query> }= node.
+- Parser: =(Q) as $m= production at Step level.
+- Resolver: capture-table threading through stream; reference resolution =$m= as a Step head.
+- Renderer: capture binding round-trip.
+- 30 ast-grep parity tests using =$A=/=$$$A= patterns updated to use =$capture= form.
+- Spec update: §5 of =code-path.md= clarification of capture semantics.
+
+Out:
+- Migrating existing ast-grep usages — covered in cutover with simple predicate; this is enrichment.
+
+* Existing Patterns
+
+- Spec =specs/code-graph/code-path.md §5= already describes capture syntax.
+- ast-grep documentation for =$A=/=$$$A= reference.
+
+* Tests
+
+Workflows: capture single match, capture descendant, reference back via =$m=, multi-capture.
+
+* Implementation
+
+** ITEM Add Capture AST + parser
+:PROPERTIES:
+:CUSTOM_ID: FUP-069-capture-binding-q-as-m-for-ast-grep-a-a::capture-ast-parser
+:LAYER: core
+:END:
+
+** ITEM Capture resolver threading
+:PROPERTIES:
+:CUSTOM_ID: FUP-069-capture-binding-q-as-m-for-ast-grep-a-a::capture-resolver
+:DEPENDS: FUP-069-capture-binding-q-as-m-for-ast-grep-a-a::capture-ast-parser
+:LAYER: core
+:END:
+
+** ITEM ast-grep $A/$$$A parity tests
+:PROPERTIES:
+:CUSTOM_ID: FUP-069-capture-binding-q-as-m-for-ast-grep-a-a::capture-parity-tests
+:DEPENDS: FUP-069-capture-binding-q-as-m-for-ast-grep-a-a::capture-resolver
+:LAYER: core
+:END:
+
+* Edge Cases
+
+- Variadic =$$$A= multi-node captures.
+- Capture names colliding across nested scopes.
+- Referenced capture not bound → =Diagnostic::UnboundCapture=.
+
+* Acceptance Criteria
+
+- Spec §5 implemented.
+- Round-trip identity for capture forms.
+- 30 ast-grep parity tests pass with =$A=/=$$$A= equivalent semantics.
+- =cargo test -p pi-code-path capture= clean.

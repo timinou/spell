@@ -1,0 +1,106 @@
+#+TITLE: EdgeResolver impl (pi-code-graph integration)
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: PROJ-067-edgeresolver-impl-pi-code-graph-integrat
+#+DEPENDS: PROJ-064-resolver-traits-dialect-switch-state-mac
+#+LAYER: api
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Implement =EdgeResolver= trait against =pi-code-graph= at =crates/pi-natives/src/code_path/edge_resolver.rs=. Activates the =→= edge-axis combinator: =parseConfig/def→=, =foo/ref→=, =bar/call→=, =baz/import→=, =qux/bind→=. Subsumes =code symbols=, =code references=, =code impact=, =code flow=, =code deps= legacy commands.
+
+* Context & Narrative
+
+=pi-code-graph= already supports edge traversal via =neighbors_by_kind()= and =bfs_levels()= in =crates/pi-code-graph/src/query.rs=. This item bridges those into the =EdgeResolver= trait surface. Edge kinds in =pi-code-graph= are richer than the kernel's 5 (=Defines, Imports, Calls, References, Inherits, Renders, Styles, TypeImports, TypeParameterOf=); map kernel =EdgeKind= to graph =EdgeKind= bidirectionally.
+
+* Scope
+
+In:
+- =crates/pi-natives/src/code_path/edge_resolver.rs= module.
+- =EdgeResolverImpl= struct implementing =pi_code_path::EdgeResolver= trait.
+- Edge kind mapping: kernel =Ref/Def/Call/Import/Bind= ↔ graph =References/Defines/Calls/Imports/(no direct match)=.
+- BFS depth control for projection options =depth: N=.
+- Cross-file NodeRef construction (the result NodeRef has different host file than source).
+- Tests against multi-file fixtures.
+
+Out:
+- Code-graph indexing — assumes graph already built.
+- Capture binding =(Q) as $m= → =FUP-capture-binding=.
+
+* Existing Patterns
+
+- =crates/pi-code-graph/src/query.rs= — =neighbors_by_kind=, =bfs_levels=.
+- =crates/pi-code-graph/src/model.rs= — =EdgeKind=, =SymbolNode=, =GraphNode=.
+- =pi-code-path::ast::EdgeKind= (=Ref=, =Def=, =Call=, =Import=, =Bind=).
+
+* Tests
+
+File: =crates/pi-natives/src/code_path/edge_resolver.rs::tests= and =crates/pi-natives/tests/edge_resolver_cross_file.rs=
+
+Workflows:
+1. Reference: =parseConfig/ref→= → declaration NodeRef in source file.
+2. Definition: =parseConfig/def→= → all reference NodeRefs (cross-file).
+3. Call: =handler/call→= → callee declaration.
+4. Import: =foo/import→= → module-source NodeRef.
+5. Bind: =name/bind→= → binding-site NodeRef (scope-local).
+6. Set ops: =parseConfig/def→ - src/**/*.test.ts :: *= → references outside tests.
+7. Depth: BFS depth-2 traversal for impact-style queries.
+8. Cross-file path rendering: result NodeRef rendered correctly relative to its host file.
+
+* Implementation
+
+** ITEM Tests for edge kind dispatch
+:PROPERTIES:
+:CUSTOM_ID: PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-dispatch-tests
+:LAYER: api
+:END:
+
+** ITEM Implement EdgeResolverImpl
+:PROPERTIES:
+:CUSTOM_ID: PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-impl
+:DEPENDS: PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-dispatch-tests
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/edge_resolver.rs=
+
+=fn resolve(&self, source: &NodeRef, kind: EdgeKind, depth: Option<usize>) -> Stream<NodeRef>=. Map kernel EdgeKind to graph EdgeKind; call =neighbors_by_kind= or =bfs_levels= depending on depth.
+
+** ITEM Cross-file NodeRef construction tests + impl
+:PROPERTIES:
+:CUSTOM_ID: PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-cross-file
+:DEPENDS: PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-impl
+:LAYER: api
+:END:
+
+** ITEM Set-ops integration tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-set-ops
+:DEPENDS: PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-cross-file
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/tests/edge_resolver_cross_file.rs=
+
+Scenario 6. Compose with =FsResolver= for the =- src/**/*.test.ts :: *= half. Verifies =SetOpsCompositor= from =PROJ-064= works across resolvers.
+
+* Edge Cases
+
+- =bind→= currently has no direct graph-kind map → either skip with =Diagnostic::UnsupportedEdgeKind= or implement scope-local resolver via tree-sitter (defer; emit diagnostic for v1).
+- Cycle in references (A → B → A): BFS handles via visited set; emit each NodeRef once.
+- Cross-file edge crossing into unsupported file: result NodeRef carries =Diagnostic::UnknownLanguage=; downstream resolution uses text fallback.
+- Unindexed file: =Diagnostic::FileNotIndexed=; suggest re-indexing.
+- Unbounded =def→= on widely-referenced symbol: cap default at =limit: 100=; require explicit =limit: ...= for full set.
+
+* Acceptance Criteria
+
+- All 5 edge kinds resolved (Bind may emit UnsupportedEdgeKind diag).
+- BFS depth control works.
+- Cross-file NodeRef rendering correct (canonical CodePath includes new host file).
+- Set ops compose: =A/def→ - B :: *= correct semantics.
+- =cargo test -p pi-natives edge_resolver= clean.

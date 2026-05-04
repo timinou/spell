@@ -1,0 +1,246 @@
+#+TITLE: Tool suite: get, edit, manage, create generic tools (TS layer)
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FEAT-664-tool-suite-get-edit-manage-create-generi
+#+DEPENDS: PROJ-065-napi-bridge-executecodepath-streaming-ch
+#+LAYER: api
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Implement the four generic top-level tools (=get=, =edit=, =manage=, =create=) at =packages/coding-agent/src/tools/=. Each tool wraps =executeCodePath= NAPI with appropriate schema, projection-option lowering, result rendering, and TUI renderer. Replaces =code.ts= (1014 LOC) + =read.ts= (1019) + =find.ts= (490) + =grep.ts= (926) + =ast-grep.ts= (466) + =ast-edit.ts= (568) + =write.ts= (402) + =patch/index.ts= EditTool (973), totaling ~5860 LOC removed.
+
+* Context & Narrative
+
+Spec authority: =specs/code-graph/code-path-extensions.md §5= for tool surface; =specs/code-graph/code-path.md §A/§B= for projection options. Per design decisions:
+
+- =get= takes =target: <CodePath>= + projection options (=limit/head/tail/context/content/format/root/offset=); flattens to NAPI =CodePathOptions=.
+- =edit= takes =operations: [{ target, action, children?, occurrence?, idempotent? }]=; lowers to NAPI =edit= command.
+- =manage= takes =command: ManageCommand= + optional =file=; lowers to NAPI =manage= command.
+- =create= takes =path: FsLocator= + =content: string | bytes-handle | base64= + =force?: boolean=; lowers to =edit { action: { kind: "create" } }= at TS layer (NAPI surface remains 3 commands).
+
+LINE#ID stale-detection MUST stay first-class on =edit= replace/append/prepend actions per the user's ergonomic requirement (turn 6 in this planning session).
+
+* Scope
+
+In:
+- =packages/coding-agent/src/tools/get.ts= — schema + dispatcher + result formatter + renderer.
+- =packages/coding-agent/src/tools/edit.ts= — schema + dispatcher + EditAction registry (all 18 kinds + replace/append/prepend with LINE#ID + create + patch); preserves preview-then-resolve workflow for code structural ops.
+- =packages/coding-agent/src/tools/manage.ts= — schema + dispatcher.
+- =packages/coding-agent/src/tools/create.ts= — schema + dispatcher (lowers to edit{action:create}); accepts text/bytes/base64 content variants.
+- Shared types =packages/coding-agent/src/tools/codepath-types.ts= for =CodePathOptions=, =EditOperation=, =EditAction=, =NodeRef= TS types.
+- Result formatter =packages/coding-agent/src/tools/codepath-result.ts= replacing =code-result.ts=.
+- Index exports in =packages/coding-agent/src/tools/index.ts=.
+- Per-tool TUI renderer following existing pattern (=getToolRenderer=, =editToolRenderer=, etc.).
+- Bun tests at =packages/coding-agent/test/get.test.ts=, =edit.test.ts=, =manage.test.ts=, =create.test.ts=.
+
+Out:
+- Guards (=FEAT-port-guards=).
+- Parity corpus (=FEAT-parity-corpus=).
+- Legacy tool deletion (=FEAT-delete-legacy-tools=).
+- Prompts (=FEAT-tool-prompts=).
+
+* Existing Patterns
+
+- =packages/coding-agent/src/tools/code.ts= — =CodeTool= class + =codeSchema= structure.
+- =packages/coding-agent/src/tools/read.ts=, =find.ts=, =grep.ts=, =ast-grep.ts=, =ast-edit.ts= — schema + dispatch + renderer patterns.
+- =packages/coding-agent/src/patch/index.ts= — EditTool with LINE#ID handling.
+- =packages/coding-agent/src/tools/output-meta.ts= — artifact spilling.
+- =packages/coding-agent/src/tools/list-limit.ts= — applyListLimit.
+- =packages/coding-agent/src/tools/managed-buffer-guards.ts= — guard infra (also referenced by =FEAT-port-guards=).
+- =packages/coding-agent/src/tools/context-pressure-policy.ts= — context pressure classification.
+- =packages/coding-agent/src/sandbox= — =enforcePathWrite=.
+- =packages/coding-agent/src/tools/mode-guard.ts= — =enforceModeWrite=.
+
+* Tests
+
+File: =packages/coding-agent/test/get.test.ts=, =edit.test.ts=, =manage.test.ts=, =create.test.ts=
+
+User workflows per tool:
+
+** =get= (replaces find/read/grep/ast-grep + read-shaped code commands)
+
+1. Bare path: =get { target: "src/foo.ts" }= → file content.
+2. Glob: =get { target: "**/*.ts" }= → file list.
+3. Line slice: =get { target: "foo.ts", offset: 50, head: 100 }= → 100-line slice.
+4. Regex grep: =get { target: "src/** :: §line[text~=\"TODO\"]" }= → matches.
+5. Code symbol: =get { target: "foo.ts :: Bar.baz" }= → symbol body.
+6. URI scheme (each of 9): =get { target: "memory://root" }=, =artifact://...=, etc.
+7. Format: =get { target: "**/*.ts", format: "locations" }= → file:line:col.
+8. Tree listing: =get { target: "src/", format: "tree" }= → tree-style output.
+9. Image: =get { target: "img.png" }= → inline image.
+10. Document extraction: =get { target: "doc.pdf" }= → extracted text.
+11. Cancellation via tool-level abort signal.
+12. Suffix-fallback: typo path triggers SuffixSuggestion in result.
+13. Diagnostic surface: every error path returns diagnostic, not throw.
+
+** =edit= (replaces ast-edit + patch/index.ts + code edit + write-edit)
+
+14. LINE#ID replace: =edit { operations: [{ target: "foo.txt", action: { kind: "replace", pos: "10#AB", end: "12#CD", content: "..." } }] }= → success/diff.
+15. LINE#ID append (file-level append at EOF): =edit { operations: [{ target: "foo.txt", action: { kind: "append", content: "..." } }] }=.
+16. LINE#ID prepend at end-anchor.
+17. Code structural: =edit { operations: [{ target: "foo.ts :: Bar.baz", action: { kind: "findAndReplace", find: "old", content: "new" } }] }=.
+18. Each of the 18 EditAction kinds (write/findAndReplace/rawTextReplace/wrap/rename/delete/insert*/splice/move/clone/transpose/renameClassToken/renameIdToken/renameCustomProperty/removeDeadStyle/promote/demote/replaceCodeBlock).
+19. patch mode (unified diff): =edit { operations: [{ action: { kind: "patch", diff: "..." } }] }=.
+20. Nested children: =edit { operations: [{ target: "foo.ts :: Bar", actions: [...], children: [{ target: "foo.ts :: Bar.baz", action: ... }] }] }=.
+21. Stale anchor: =Diagnostic::StaleAnchor { current: "<fresh LINE#ID>" }= when anchor mismatch.
+22. Preview-then-resolve workflow (existing ast-edit pattern): edit emits preview; resolve apply/discard.
+23. Idempotent flag.
+24. Occurrence selectors first/last/all/N.
+
+** =manage= (replaces code save/undo/redo/diff/buffers/languages/index/watcherStatus/lockStatus)
+
+25. Each of 11 commands tested individually.
+
+** =create= (replaces write.ts)
+
+26. Text create: =create { path: "foo.ts", content: "..." }= → new file.
+27. Bytes handle: =create { path: "img.png", content: { kind: "bytes", artifactUri: "artifact://..." } }= → binary write.
+28. Base64: =create { path: "img.png", content: { kind: "base64", data: "..." } }=.
+29. Force flag: =create { path: ..., force: true }= bypasses guards.
+30. Lowers to =edit { action: create }= internally; verify NAPI call shape.
+
+Total: ~30 test scenarios across 4 files.
+
+* Implementation
+
+** ITEM Define shared TS types
+:PROPERTIES:
+:CUSTOM_ID: FEAT-664-tool-suite-get-edit-manage-create-generi::tool-shared-types
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/src/tools/codepath-types.ts=
+
+TS interfaces matching =@oh-my-pi/pi-natives::CodePathOptions=, =EditOperation=, =EditAction=, =CodePathChunk=, =NodeRef=, =Content=, =Diagnostic=. Use Type.* schema builders for runtime validation. Each EditAction kind has its own variant.
+
+** ITEM Tests for get tool
+:PROPERTIES:
+:CUSTOM_ID: FEAT-664-tool-suite-get-edit-manage-create-generi::get-tests
+:DEPENDS: FEAT-664-tool-suite-get-edit-manage-create-generi::tool-shared-types
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/test/get.test.ts=
+
+Scenarios 1-13. Initially failing.
+
+** ITEM Implement get tool
+:PROPERTIES:
+:CUSTOM_ID: FEAT-664-tool-suite-get-edit-manage-create-generi::get-impl
+:DEPENDS: FEAT-664-tool-suite-get-edit-manage-create-generi::get-tests
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/src/tools/get.ts=
+
+=class GetTool implements AgentTool=. =readonly name = "get"=. Schema validates target + projection options. Dispatch: pass to =executeCodePath({ command: "get", ... })=. Result formatter handles all 5 =format= modes (node-list/locations/content-only/tree/stats).
+
+** ITEM Tests for edit tool
+:PROPERTIES:
+:CUSTOM_ID: FEAT-664-tool-suite-get-edit-manage-create-generi::edit-tests
+:DEPENDS: FEAT-664-tool-suite-get-edit-manage-create-generi::get-impl
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/test/edit.test.ts=
+
+Scenarios 14-24. Initially failing.
+
+** ITEM Implement edit tool
+:PROPERTIES:
+:CUSTOM_ID: FEAT-664-tool-suite-get-edit-manage-create-generi::edit-impl
+:DEPENDS: FEAT-664-tool-suite-get-edit-manage-create-generi::edit-tests
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/src/tools/edit.ts=
+
+=class EditTool implements AgentTool=. =readonly name = "edit"=. Schema validates operations[] with all 18 action kinds + replace/append/prepend (LINE#ID) + create + patch. Dispatch to =executeCodePath({ command: "edit", operations: [...] })=. Preserve preview-then-resolve workflow via existing pending-action infra. Stale-anchor diagnostic surfaced as actionable error.
+
+** ITEM Tests for manage tool
+:PROPERTIES:
+:CUSTOM_ID: FEAT-664-tool-suite-get-edit-manage-create-generi::manage-tests
+:DEPENDS: FEAT-664-tool-suite-get-edit-manage-create-generi::edit-impl
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/test/manage.test.ts=
+
+Scenario 25 (each of 11 commands).
+
+** ITEM Implement manage tool
+:PROPERTIES:
+:CUSTOM_ID: FEAT-664-tool-suite-get-edit-manage-create-generi::manage-impl
+:DEPENDS: FEAT-664-tool-suite-get-edit-manage-create-generi::manage-tests
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/src/tools/manage.ts=
+
+=class ManageTool implements AgentTool=. =readonly name = "manage"=. Schema validates command enum. Dispatch to =executeCodePath({ command: "manage", manage: "...", target?: "..." })=.
+
+** ITEM Tests for create tool
+:PROPERTIES:
+:CUSTOM_ID: FEAT-664-tool-suite-get-edit-manage-create-generi::create-tests
+:DEPENDS: FEAT-664-tool-suite-get-edit-manage-create-generi::manage-impl
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/test/create.test.ts=
+
+Scenarios 26-30.
+
+** ITEM Implement create tool
+:PROPERTIES:
+:CUSTOM_ID: FEAT-664-tool-suite-get-edit-manage-create-generi::create-impl
+:DEPENDS: FEAT-664-tool-suite-get-edit-manage-create-generi::create-tests
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/src/tools/create.ts=
+
+=class CreateTool implements AgentTool=. =readonly name = "create"=. Schema validates path + content (string | bytes-handle | base64) + force. Lowers to =executeCodePath({ command: "edit", operations: [{ target: path, action: { kind: "create", content, force } }] })=.
+
+** ITEM Index exports + result formatter
+:PROPERTIES:
+:CUSTOM_ID: FEAT-664-tool-suite-get-edit-manage-create-generi::tool-index-exports
+:DEPENDS: FEAT-664-tool-suite-get-edit-manage-create-generi::create-impl
+:LAYER: api
+:END:
+
+Files: =packages/coding-agent/src/tools/index.ts=, =packages/coding-agent/src/tools/codepath-result.ts=
+
+Add =GetTool=, =EditTool=, =ManageTool=, =CreateTool= imports + exports. Implement shared result formatter for all 4 tools.
+
+* Edge Cases
+
+- =get= with empty target → ParseError diagnostic, not throw.
+- =get= with locator-only (no =::Query=) yields locator-as-NodeRef (replaces =find=).
+- =edit= with empty operations array → no-op success (matches existing edit semantics).
+- =edit= LINE#ID stale → return diagnostic with fresh LINE#ID; tool layer formats as actionable error.
+- =edit= with create action against existing file → =Diagnostic::FileExists=; require explicit =force= or use update action.
+- =create= without force on existing file → =Diagnostic::FileExists=.
+- =create= with bytes-handle pointing to expired artifact → =Diagnostic::ArtifactNotFound=.
+- =manage= with unknown command → schema rejects at validation.
+- =manage save= on file that doesn't exist as buffer → =Diagnostic::NoBuffer=.
+- AbortSignal mid-stream: tool surfaces partial results + Cancelled diagnostic.
+- Tool-level approval gates: =edit= and =create= require approval per existing policy; =get= and =manage= don't.
+- Mode guards: =plan-mode= rejects =edit=/=create=/=manage save= in non-plan dirs unless allowlisted.
+
+* Acceptance Criteria
+
+- 4 tools registered with =readonly name= matching =get=, =edit=, =manage=, =create=.
+- ~30 test scenarios pass.
+- =bun test packages/coding-agent/test/{get,edit,manage,create}.test.ts= clean.
+- =bun check:ts= clean across affected files.
+- =bun lint:ts= clean.
+- LINE#ID anchor stale detection works end-to-end (edit fails with fresh LINE#ID returned).
+- All 18 EditAction kinds dispatch successfully against fixture code.
+- patch mode unified-diff parsing works for at least 3 representative diff inputs.
+- create with bytes-handle and base64 both work.
+- Result format= modes render correctly (node-list/locations/content-only/tree/stats).

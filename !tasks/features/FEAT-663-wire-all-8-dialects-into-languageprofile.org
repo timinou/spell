@@ -1,0 +1,105 @@
+#+TITLE: Wire all 8 dialects into LanguageProfile + cross-dialect smoke test
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FEAT-663-wire-all-8-dialects-into-languageprofile
+#+DEPENDS: FEAT-656-rust-namelexer-paths-turbofish-impl-for FEAT-657-python-namelexer-dotted-decorator-attrib FEAT-658-go-namelexer-package-function-receiver-m FEAT-659-haskell-namelexer-module-qualified-opera FEAT-660-html-namelexer-vendored-xpath-payload-re FEAT-661-css-namelexer-vendored-cssparser-selecto FEAT-662-markdown-org-namelexer-heading-text-quot
+#+LAYER: core
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Replace =dialect: None= placeholders in the 12 =LanguageProfile= constructors with =dialect: Some(<lang>_dialect())= once all 8 NameLexers exist. Add the cross-dialect smoke test from =specs/code-graph/code-path-dialects/README.md §4= so a single conceptual query =//[.§string_literal[text~="TODO"]]#body= works across TS, Rust, Python, Go, Haskell, HTML, CSS, Markdown.
+
+* Context & Narrative
+
+PLAN-255 wave-2 added the =dialect: Option<LanguageDialect>= field to =LanguageProfile= and initialised every constructor to =None=. With all 8 NameLexers shipped, this item flips them on and validates that the operator skeleton holds across all 11 dialects (8 code + FS/Text/URI baselines).
+
+The cross-dialect smoke test from spec README §4 is the canonical contract: same query intent ("every definition whose body contains the literal TODO") expressed in each dialect, asserting that result *cardinality and semantic role* agree across languages.
+
+* Scope
+
+In:
+- Edit =crates/pi-code-engine/src/language/mod.rs= to import dialect factories from =pi_code_path::dialects= and set =dialect: Some(typescript_dialect())= etc. for all 8 profiles.
+- =crates/pi-code-path/src/dialects/mod.rs= re-exports the 8 factories.
+- New integration test =crates/pi-code-path/tests/cross_dialect_smoke.rs= covering README §4 query intent across all 8 code dialects + 1 text-baseline test.
+- Regression: assert =cargo check -p pi-code-engine= still clean (no cyclic dep).
+
+Out:
+- Resolver behaviour (handled by =PROJ-064-resolver-traits=).
+- Tree-sitter integration of NameLexer.matches() (handled in =PROJ-code-resolver-impl= at NAPI layer).
+
+* Existing Patterns
+
+- =crates/pi-code-engine/src/language/mod.rs= profile constructors (12 functions).
+- =crates/pi-code-path/src/dialects/= NameLexer factories.
+- =specs/code-graph/code-path-dialects/README.md §4= cross-dialect contract.
+
+* Tests
+
+File: =crates/pi-code-path/tests/cross_dialect_smoke.rs= (new)
+
+Workflows: per README §4 — fixture file in each language with a function whose body contains a "TODO" string literal; assert the same query yields one =NodeRef= with the function-body range.
+
+Plus:
+- 8 unit tests in =crates/pi-code-engine/src/language/mod.rs::tests= asserting =profile.dialect.is_some()= for each language.
+- 1 unit test asserting cyclic-dep absence (=cargo tree -p pi-code-path= contains no =pi-code-engine=).
+
+* Implementation
+
+** ITEM Add cross-dialect test fixtures
+:PROPERTIES:
+:CUSTOM_ID: FEAT-663-wire-all-8-dialects-into-languageprofile::cross-dialect-fixtures
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/tests/fixtures/cross_dialect/= — 8 short source files (one per language), each with a function/method whose body contains a TODO string literal in the language's idiomatic string form.
+
+** ITEM Write cross-dialect smoke test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-663-wire-all-8-dialects-into-languageprofile::cross-dialect-test
+:DEPENDS: FEAT-663-wire-all-8-dialects-into-languageprofile::cross-dialect-fixtures
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/tests/cross_dialect_smoke.rs=
+
+Per README §4: 8 query strings + 1 text-baseline query. Run each through the resolver (uses =PROJ-064-resolver-traits= dispatch + per-language =CodeResolver= stub). Assert each returns exactly one NodeRef with body kind.
+
+** ITEM Wire dialects into LanguageProfile constructors
+:PROPERTIES:
+:CUSTOM_ID: FEAT-663-wire-all-8-dialects-into-languageprofile::wire-dialects
+:DEPENDS: FEAT-663-wire-all-8-dialects-into-languageprofile::cross-dialect-test
+:LAYER: core
+:END:
+
+File: =crates/pi-code-engine/src/language/mod.rs=
+
+Change 8 lines (one per code language profile): =dialect: None= → =dialect: Some(typescript_dialect())= etc. Markdown profile uses =markdown_dialect()=. The 4 non-code profiles (clojure, elixir, org, text) keep =dialect: None= unless they also get dialects (out of scope for this plan).
+
+** ITEM Verify no cyclic dep
+:PROPERTIES:
+:CUSTOM_ID: FEAT-663-wire-all-8-dialects-into-languageprofile::verify-no-cycle
+:DEPENDS: FEAT-663-wire-all-8-dialects-into-languageprofile::wire-dialects
+:LAYER: core
+:END:
+
+Run =cargo tree -p pi-code-path -e features --no-default-features= and assert =pi-code-engine= absent. Add CI check or shell test asserting same.
+
+* Edge Cases
+
+- Adding a new dialect later requires touching =mod.rs= constructor — document in =crates/pi-code-engine/AGENTS.md=.
+- Dialect factory may fail at construction (e.g. embedded grammar invalid) — surface =LanguageProfileLoadError=; current code panics, refactor to Result if needed.
+- Cross-dialect test must skip a tier if its tree-sitter grammar is unavailable in CI — use =#[cfg(feature = "tree-sitter-<lang>")]= conditionals.
+- HTML dialect's vendored XPath may have parser limitations; document in test if smoke fails for HTML.
+
+* Acceptance Criteria
+
+- All 8 LanguageProfile constructors have =dialect: Some(...)=.
+- Cross-dialect smoke test passes for all 8 code tiers + 1 text-baseline tier.
+- =cargo check -p pi-code-engine= clean.
+- =cargo tree -p pi-code-path= shows no =pi-code-engine= or =pi-code-graph= dep.
+- =cargo test -p pi-code-path --test cross_dialect_smoke= clean.

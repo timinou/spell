@@ -1,0 +1,139 @@
+#+TITLE: FormatExtractor handlers: 11 markitdown formats + JSON + HTML readable
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: PROJ-069-formatextractor-handlers-11-markitdown-f
+#+DEPENDS: PROJ-063-text-resolver-line-index-regex-qualifier
+#+LAYER: api
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Implement concrete =FormatExtractor= handlers for all 11 document formats supported by today's =read.ts=: PDF, DOC, DOCX, PPT, PPTX, XLS, XLSX, RTF, EPUB → markitdown; JSON → pretty-print; HTML → readable mode. Wired into =TextResolver= as =Vec<Box<dyn FormatExtractor>>= via =SchemeRegistry= pattern.
+
+* Context & Narrative
+
+The =FormatExtractor= trait is defined in =PROJ-063-text-resolver= (kernel side). This item provides the concrete impls that live in =pi-natives= because they require external binaries (markitdown), large parser deps (lol_html for readable mode), or complex state machines.
+
+Reference: =packages/coding-agent/src/tools/read.ts= lines 44 (=CONVERTIBLE_EXTENSIONS=) and document-extraction logic. The TS today shells out to =markitdown=; this Rust port can either (a) shell out from Rust via =std::process::Command= or (b) call a Python sub-process via FFI. Decision: shell out to =markitdown= CLI for parity (no Rust port of office formats).
+
+* Scope
+
+In:
+- =crates/pi-natives/src/code_path/extractors/= module with =mod.rs= + =markitdown.rs= + =json.rs= + =html.rs=.
+- =MarkitdownExtractor= shelling out to =markitdown= binary; covers 9 formats (PDF, DOC, DOCX, PPT, PPTX, XLS, XLSX, RTF, EPUB).
+- =JsonExtractor= using =serde_json= for pretty-print with sorted keys.
+- =HtmlReadableExtractor= using =lol_html= or existing =crates/pi-natives/src/html.rs= readable-mode logic.
+- Default factory =fn default_extractors() -> Vec<Box<dyn FormatExtractor>>=.
+- Tests with sample fixtures for each format (small, in-tree).
+- Diagnostic surfaces: =MarkitdownNotFound=, =ExtractionTimeout=, =UnsupportedExtension=.
+
+Out:
+- Native Rust office-format parsers — out of scope (markitdown shells out).
+- Image extraction (handled by =PROJ-image-pipeline=).
+
+* Existing Patterns
+
+- =packages/coding-agent/src/tools/read.ts::CONVERTIBLE_EXTENSIONS= (line 44).
+- Existing =markitdown= binary on system / installed via =uv= or pip.
+- =crates/pi-natives/src/html.rs= for HTML readable mode.
+- =serde_json::Value= for JSON.
+- =std::process::Command::new("markitdown")= for shell-out.
+
+* Tests
+
+File: =crates/pi-natives/src/code_path/extractors/tests.rs= (new) and =crates/pi-natives/tests/extraction_parity.rs= (new)
+
+Workflows:
+1. PDF: 5-page test PDF → text content; first page contains expected snippet.
+2. DOCX: simple Word doc → text.
+3. JSON: =foo.json= → pretty-printed text with sorted keys (deterministic).
+4. HTML: =foo.html= with boilerplate → readable mode strips header/footer, returns article text.
+5. Each of DOC/PPT/PPTX/XLS/XLSX/RTF/EPUB: one fixture each → extraction succeeds.
+6. Markitdown not found: =Diagnostic::MarkitdownNotFound= with install hint.
+7. Extraction timeout (synthetic 60+ second extraction): =Diagnostic::ExtractionTimeout=.
+8. Unknown extension: =Diagnostic::UnsupportedExtension=; fall through to =#raw=.
+9. Parity vs read.ts: 11 fixtures (one per format) yield equivalent text.
+
+* Implementation
+
+** ITEM Define test fixtures
+:PROPERTIES:
+:CUSTOM_ID: PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-fixtures
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/tests/fixtures/extraction/= — 11 small (<10 KiB each) sample files.
+
+** ITEM Tests for MarkitdownExtractor
+:PROPERTIES:
+:CUSTOM_ID: PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-md-tests
+:DEPENDS: PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-fixtures
+:LAYER: api
+:END:
+
+** ITEM Implement MarkitdownExtractor
+:PROPERTIES:
+:CUSTOM_ID: PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-md-impl
+:DEPENDS: PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-md-tests
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/extractors/markitdown.rs=
+
+Shell out to =markitdown= CLI with timeout (default 30s). Capture stdout as =Content::ExtractedText { source_kind: <ext>, text: ... }=. Buffer cap (10 MiB; spill to artifact if exceeded).
+
+** ITEM Tests + impl JsonExtractor
+:PROPERTIES:
+:CUSTOM_ID: PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-json
+:DEPENDS: PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-md-impl
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/extractors/json.rs=
+
+Parse with =serde_json::from_slice=, re-serialise with =serde_json::to_string_pretty= and =BTreeMap= for deterministic key order.
+
+** ITEM Tests + impl HtmlReadableExtractor
+:PROPERTIES:
+:CUSTOM_ID: PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-html
+:DEPENDS: PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-json
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/extractors/html.rs=
+
+Reuse readable-mode logic from existing =crates/pi-natives/src/html.rs= or implement minimal version (strip header/footer/nav/aside, extract main/article).
+
+** ITEM Parity corpus
+:PROPERTIES:
+:CUSTOM_ID: PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-parity
+:DEPENDS: PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-html
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/tests/extraction_parity.rs=
+
+11 fixtures × today's read.ts output. Compare extracted text within tolerance (whitespace-normalised equality).
+
+* Edge Cases
+
+- markitdown binary missing: emit =Diagnostic::MarkitdownNotFound= with install hint =uv tool install markitdown= or =pip install markitdown=.
+- Extraction times out (default 30s, configurable): emit =Diagnostic::ExtractionTimeout=; partial output discarded.
+- Encrypted PDF: markitdown fails; emit =Diagnostic::ExtractionFailed { reason: "encrypted" }=.
+- Massive output (>10 MiB extracted text): spill to artifact; return =Content::Bytes= handle.
+- Concurrent extraction: serialised per-file (lock); avoid markitdown CPU contention.
+- Non-UTF-8 in extracted text: latin-1 fallback; emit =EncodingFallback=.
+- HTML with no readable content (pure boilerplate): emit empty string; no diagnostic.
+
+* Acceptance Criteria
+
+- 11 format extractors registered.
+- Each format passes its specific test fixture.
+- Parity corpus passes vs read.ts.
+- markitdown-missing case produces actionable diagnostic.
+- Timeout enforcement works (manually verified with synthetic slow file).
+- =cargo test -p pi-natives extractors= clean (gated behind feature flag if markitdown absent in CI).

@@ -1,0 +1,638 @@
+#+TITLE: CodePath v3 cutover: 4 generic tools (get/edit/manage/create), 9 URI schemes, 11 extractors, 8 dialects, NAPI bridge
+#+STATE: DOING
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: PLAN-296-codepath-v3-cutover-4-generic-tools-get
+#+LAYER: api
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Initial Message
+
+Successor PLAN to PLAN-255 (CodePath v3 foundational scaffolding). PLAN-255 wave-1/2 shipped specs + Rust crate scaffolding + parser + AST + renderer + TS NameLexer + FsExistsResolver scaffold (commits =b06d5ff70=, =f387aa977=, =c23a4ccc8=). This PLAN folds in the remaining 24 deliverables across 6 waves: full FS/Text resolvers + 7 NameLexers + dialect wiring + NAPI bridge + 9 URI scheme handlers + 11 markitdown extractors + image pipeline + 4 generic top-level tools (=get=, =edit=, =manage=, =create=) + parity corpus + hard-cut delete of 8 legacy tools (=code=, =read=, =find=, =grep=, =ast-grep=, =ast-edit=, =edit=, =write=) + prompt rewrite + agent allowlist updates + orphan-scan cleanup.
+
+* Context
+
+** Settled Design Decisions
+
+1. *Four generic tools*: =get= (reads/queries/nav/graph/files/dirs/regex/URIs/extraction), =edit= (mutations + LINE#ID + patch mode + 18 EditAction kinds), =manage= (lifecycle), =create= (new-file creation, lowers to =edit { action: create }= at TS layer). Drops the =code= prefix because addresses now span FS/text/code/URIs uniformly.
+
+2. *Hard-cut, no aliases*: =code.ts=, =read.ts=, =find.ts=, =grep.ts=, =ast-grep.ts=, =ast-edit.ts=, =edit.ts= (=patch/index.ts=), =write.ts= deleted in one cycle. ~5860 LOC removed. Migration taught only via new prompts + =code-migration.md=.
+
+3. *NamePayload = Raw(String)*: kernel keeps =NamePayload::Raw(String)= per FUP-071. Each NameLexer re-parses on demand (microseconds). Sidecar cache deferred.
+
+4. *URI resolver = SchemeRegistry pattern*: single =SchemeHandler= trait (in =pi-code-path=) + =HashMap<UriScheme, Box<dyn SchemeHandler>>= (in =pi-natives=). Adding a scheme = registering a handler.
+
+5. *Resolver-trait location*: traits in =pi-code-path= (=Resolver=, =CodeResolver=, =EdgeResolver=, =UriResolver=, =SchemeHandler=, =FormatExtractor=, =FsAnchorContext=); concrete impls in =pi-natives=. Avoids cyclic crate dep.
+
+6. *9 URI schemes*: artifact, memory, skill, agent, jobs, local, pi, *rule*, *mcp* (last two added vs PLAN-255 spec).
+
+7. *11 document extraction formats*: PDF/DOC/DOCX/PPT/PPTX/XLS/XLSX/RTF/EPUB → markitdown; JSON → pretty-print; HTML → readable. Spec extension already drafted.
+
+8. *Image pipeline kernel-owned*: =#image= qualifier + =#thumbnail[N]= + auto-resize + 20 MiB threshold + =inspect_image= hand-off hint live in =pi-natives::code_path::image_pipeline=, not in tool wrapper.
+
+9. *Patch mode preserved*: =edit { operations: [{ action: { kind: "patch", diff: "..." } }] }= ports unified-diff parsing from today's =edit.ts=.
+
+10. *Binary content via create*: =create { path, content: string | { kind: "bytes", artifactUri } | { kind: "base64", data } }= supports binary writes.
+
+11. *Guards at TS tool layer*: =write-shrink=, =parse-regression=, =force=, =sandbox=, =mode-guard= preserved verbatim at =edit.ts= and =create.ts= entry (before NAPI). =force= flag bypass.
+
+12. *Behavioral parity corpus*: 30-50 representative invocations per deleted tool (~275 entries total). Semantic equivalence, not byte-equivalent output.
+
+13. *ast-grep $A/$$$A captures deferred*: cutover uses simple =[name=$pat]= predicate matching. Full capture binding =(Q) as $m= → FUP-069.
+
+14. *Performance benchmarks deferred*: 1.2× of =find=, 1.5× of =grep=, 100 MiB RSS / 1 GiB file → FUP-070.
+
+15. *Test corpus = Medium* per dialect: 50 round-trip + 20 resolver fixtures + 10 negative cases = ~880 corpus entries across all 11 dialects.
+
+16. *LINE#ID stale-detection preserved*: =edit { operations: [{ action: { kind: "replace", pos: "10#AB", end: "12#CD", content: "..." } }] }= retains the same hash-based stale-detection contract as today's =edit= tool. Per user's ergonomic requirement during planning session.
+
+17. *Bare-string file paths*: =target: "foo.ts"= parses as =FsLocator= with no =::Query= — cheapest path, no kernel overhead. Use bare strings for plain-text edits; CodePath syntax only when structural addressing is needed.
+
+** Key File Paths
+
+*** Specs (already updated this planning session)
+- =specs/code-graph/code-path.md= — sigils, §A tool surface, §B projection options, §C NodeRef, §D migration table for 7 deleted tools.
+- =specs/code-graph/code-path-extensions.md= — 9 URI schemes, 11 extraction formats, EditAction shapes, crate-boundary architecture, sequencing for this PLAN.
+- =specs/code-graph/code-path-dialects/00-fs.md=, =00-text.md=, =00-uri.md= — baseline dialects (already shipped in PLAN-255).
+- =specs/code-graph/code-path-dialects/01..08-*.md= — per-language code dialects (already exist).
+
+*** New Rust modules (to be created)
+- =crates/pi-code-path/src/dialects/{rust,python,go,haskell,html,css,mdorg}.rs= — 7 NameLexers.
+- =crates/pi-code-path/src/dialects/fs/= + =text/= modules — kernel resolvers.
+- =crates/pi-code-path/src/resolver/{traits,dispatch,setops,projection}.rs= — kernel resolver surface.
+- =crates/pi-natives/src/code_path/{dispatch,code_resolver,edge_resolver,uri/*,extractors/*,image_pipeline/*,marshal,abort}.rs= — NAPI integration layer.
+- =crates/pi-natives/src/code_path.rs= — =executeCodePath= NAPI function.
+
+*** New TS modules (to be created)
+- =packages/coding-agent/src/tools/{get,edit,manage,create}.ts= — four generic tools.
+- =packages/coding-agent/src/tools/codepath-types.ts= — shared types.
+- =packages/coding-agent/src/tools/codepath-result.ts= — result formatter.
+- =packages/coding-agent/src/prompts/tools/{get,edit,manage,create,code-migration}.md= — prompts.
+- =packages/natives/src/code-path/{types,index}.ts= — TS NAPI types.
+
+*** Tools to delete in cutover
+- =packages/coding-agent/src/tools/{code,read,find,grep,ast-grep,ast-edit,write}.ts= (~5460 LOC).
+- =packages/coding-agent/src/patch/index.ts= EditTool (~973 LOC; preserve other exports).
+- =packages/coding-agent/src/prompts/tools/{code,code-hint-*,code-search,read,find,grep,ast-grep,ast-edit}.md=.
+
+*** System prompts to update
+- =AGENTS.md= top-level tool-precedence table.
+- =packages/coding-agent/src/prompts/system/= system prompts.
+- Per-agent role files (boss, morgan, code-architect, code-explorer, reviewer, plan, explore).
+- =memory/MEMORY.md=, =memory/memory_summary.md=, =memory/skills/*/SKILL.md=.
+
+** Inventory Findings (already audited)
+
+- Today's tool LOC: code=1014, read=1019, grep=926, ast-grep=466, ast-edit=568, edit=973, write=402, find=490 → 5858 LOC + ~17 prompt files.
+- 7 internal URI schemes used today: artifact, memory, skill, agent, jobs, local, pi (read.ts handles via =InternalUrlRouter=). Plus rule:// and mcp:// — adding these makes 9.
+- =read.ts= handles 11 doc-extraction formats via markitdown (CONVERTIBLE_EXTENSIONS: pdf/doc/docx/ppt/pptx/xls/xlsx/rtf/epub) + JSON pretty-print + HTML readable.
+- =edit.ts= (=patch/index.ts=) supports two modes: hashline (LINE#ID) and patch (unified diff).
+- =write.ts= guard chain: =enforceModeWrite= → =enforcePathWrite= → =evaluateWriteGuards= (write-shrink + parse-regression). =force= bypasses last.
+- =grep.ts= modes: auto, rawText, semantic; semantic delegates to =def→= edge axis.
+- 18 EditAction kinds in =code.ts=: write/findAndReplace/rawTextReplace/wrap/rename/delete/insertBefore/insertAfter/splice/move/clone/transpose/renameClassToken/renameIdToken/renameCustomProperty/removeDeadStyle/promote/demote/replaceCodeBlock.
+- 28 tests pass in =cargo test -p pi-code-path= post PLAN-255 wave-1/2.
+
+* Verification
+
+- =cargo test -p pi-code-path= — parser, renderer, FS/Text resolvers, set ops, projection lowering, dialect-switch, all 8 NameLexers, cross-dialect smoke.
+- =cargo test -p pi-natives= — NAPI bridge, code-resolver, edge-resolver, URI handlers (9), extractors (11), image pipeline.
+- =cargo check --workspace= clean.
+- =cargo clippy --workspace -- -D warnings= clean.
+- =cargo tree -p pi-code-path= shows no =pi-code-engine= or =pi-code-graph= dep (architectural invariant).
+- =bun test --workspaces --if-present --parallel= — packages/natives + packages/coding-agent test suites pass.
+- =bun check:ts= clean.
+- =bun lint:ts= clean.
+- =bun run --parallel check:ts check:rs= clean.
+- =bun run --parallel lint:ts lint:rs= clean.
+- All 8 spec dialect test stubs pass (00-fs, 00-text, 00-uri, 01-08).
+- Cross-dialect smoke test passes for all 8 code tiers + 1 text-baseline tier.
+- ~275 parity entries pass across all 8 deleted tools.
+- 9 URI schemes resolve correctly (artifact, memory, skill, agent, jobs, local, pi, rule, mcp).
+- 11 extraction formats produce equivalent text vs legacy =read=.
+- LINE#ID stale-detection works on =edit { action: replace }= operations.
+- Image pipeline: 20 MiB rejection, auto-resize threshold, =#thumbnail[N]= sizing all enforced.
+- 4 new tools registered: =get=, =edit=, =manage=, =create=. =index.ts= imports + exports updated.
+- 8 legacy tools deleted from =packages/coding-agent/src/tools/=. Orphan-reference =rg= scan returns zero.
+- 12 legacy prompt files deleted; 5 new prompt files (=get/edit/manage/create/code-migration.md=) authored.
+- AGENTS.md tool-precedence table updated.
+- Per-agent role file =Tools:= lists updated for all relevant agents.
+- Memory tree updated.
+- Final orphan scan returns zero deleted-tool references in code/prompts/agents/skills/memory.
+- =FUP-069/070/071= tracked for future work (capture binding, perf benchmarks, NamePayload cache).
+
+* Linked Children
+
+- [[id:PROJ-061-parser-completion-glob-tokens-backtick-q]]
+- [[id:PROJ-062-fs-resolver-walker-anchors-predicates-qu]]
+- [[id:PROJ-063-text-resolver-line-index-regex-qualifier]]
+- [[id:PROJ-064-resolver-traits-dialect-switch-state-mac]]
+- [[id:FEAT-656-rust-namelexer-paths-turbofish-impl-for]]
+- [[id:FEAT-657-python-namelexer-dotted-decorator-attrib]]
+- [[id:FEAT-658-go-namelexer-package-function-receiver-m]]
+- [[id:FEAT-659-haskell-namelexer-module-qualified-opera]]
+- [[id:FEAT-660-html-namelexer-vendored-xpath-payload-re]]
+- [[id:FEAT-661-css-namelexer-vendored-cssparser-selecto]]
+- [[id:FEAT-662-markdown-org-namelexer-heading-text-quot]]
+- [[id:FEAT-663-wire-all-8-dialects-into-languageprofile]]
+- [[id:PROJ-065-napi-bridge-executecodepath-streaming-ch]]
+- [[id:PROJ-066-coderesolver-impl-tree-sitter-via-langua]]
+- [[id:PROJ-067-edgeresolver-impl-pi-code-graph-integrat]]
+- [[id:PROJ-068-uri-scheme-handlers-9-schemehandler-impl]]
+- [[id:PROJ-069-formatextractor-handlers-11-markitdown-f]]
+- [[id:PROJ-070-image-pipeline-image-qualifier-thumbnail]]
+- [[id:FEAT-664-tool-suite-get-edit-manage-create-generi]]
+- [[id:FEAT-665-port-write-shrink-parse-regression-force]]
+- [[id:FEAT-666-behavioral-parity-corpus-30-50-invocatio]]
+- [[id:FEAT-667-delete-legacy-tools-code-read-find-grep]]
+- [[id:FEAT-668-tool-prompts-write-get-md-edit-md-manage]]
+- [[id:FEAT-669-agents-md-tool-precedence-rewrite-per-ag]]
+- [[id:FEAT-670-memory-skills-update-final-orphan-refere]]
+- [[id:FUP-069-capture-binding-q-as-m-for-ast-grep-a-a]]
+- [[id:FUP-070-performance-benchmarks-1-2x-of-find-1-5x]]
+- [[id:FUP-071-namepayload-sidecar-cache-memoise-typed]]
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-lexer-tests]] Tests for RustNameLexer parse
+- [[id:FEAT-657-python-namelexer-dotted-decorator-attrib::python-lexer-tests]] Tests for PyNameLexer
+- [[id:FEAT-658-go-namelexer-package-function-receiver-m::go-lexer-tests]] Tests for GoNameLexer
+- [[id:FEAT-659-haskell-namelexer-module-qualified-opera::haskell-lexer-tests]] Tests for HsNameLexer
+- [[id:FEAT-660-html-namelexer-vendored-xpath-payload-re::html-lexer-tests]] Tests for HtmlNameLexer
+- [[id:FEAT-661-css-namelexer-vendored-cssparser-selecto::css-lexer-tests]] Tests for CssNameLexer
+- [[id:FEAT-662-markdown-org-namelexer-heading-text-quot::mdorg-lexer-tests]] Tests for MdNameLexer
+- [[id:FEAT-663-wire-all-8-dialects-into-languageprofile::cross-dialect-fixtures]] Add cross-dialect test fixtures
+- [[id:FEAT-664-tool-suite-get-edit-manage-create-generi::tool-shared-types]] Define shared TS types
+- [[id:FEAT-665-port-write-shrink-parse-regression-force::guard-tests]] Tests for guard chain
+- [[id:FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-fixtures]] Define parity test fixtures
+- [[id:FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-helpers]] Define equivalence-rules helpers
+- [[id:FEAT-667-delete-legacy-tools-code-read-find-grep::pre-delete-scan]] Pre-flight orphan scan
+- [[id:FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-get]] Author get.md
+- [[id:FEAT-669-agents-md-tool-precedence-rewrite-per-ag::audit-agents-md]] Audit AGENTS.md and prompt files
+- [[id:FEAT-670-memory-skills-update-final-orphan-refere::audit-memory]] Audit memory tree references
+- [[id:FUP-069-capture-binding-q-as-m-for-ast-grep-a-a::capture-ast-parser]] Add Capture AST + parser
+- [[id:FUP-070-performance-benchmarks-1-2x-of-find-1-5x::bench-fixtures]] Synthetic fixture builders
+- [[id:PROJ-061-parser-completion-glob-tokens-backtick-q::parser-glob-tests]] Add tests for full glob tokenisation
+- [[id:PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-test-fixtures]] Define test fixtures
+- [[id:PROJ-063-text-resolver-line-index-regex-qualifier::text-test-fixtures]] Define test fixtures
+- [[id:PROJ-064-resolver-traits-dialect-switch-state-mac::traits-skeleton]] Define trait module skeleton
+- [[id:PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-types]] Define NAPI types
+- [[id:PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-walker-tests]] Tests for AST walker per combinator
+- [[id:PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-dispatch-tests]] Tests for edge kind dispatch
+- [[id:PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-registry]] Define SchemeRegistry
+- [[id:PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-fixtures]] Define test fixtures
+- [[id:PROJ-070-image-pipeline-image-qualifier-thumbnail::image-fixtures]] Define fixtures
+** wave-2 :wave:
+- [[id:FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-lexer-impl]] Implement RustNameLexer
+- [[id:FEAT-657-python-namelexer-dotted-decorator-attrib::python-lexer-impl]] Implement PyNameLexer
+- [[id:FEAT-658-go-namelexer-package-function-receiver-m::go-lexer-impl]] Implement GoNameLexer
+- [[id:FEAT-659-haskell-namelexer-module-qualified-opera::haskell-lexer-impl]] Implement HsNameLexer
+- [[id:FEAT-660-html-namelexer-vendored-xpath-payload-re::html-lexer-impl]] Implement HtmlNameLexer (XPath subset)
+- [[id:FEAT-661-css-namelexer-vendored-cssparser-selecto::css-lexer-impl]] Implement CssNameLexer
+- [[id:FEAT-662-markdown-org-namelexer-heading-text-quot::mdorg-lexer-impl]] Implement MdNameLexer
+- [[id:FEAT-663-wire-all-8-dialects-into-languageprofile::cross-dialect-test]] Write cross-dialect smoke test
+- [[id:FEAT-664-tool-suite-get-edit-manage-create-generi::get-tests]] Tests for get tool
+- [[id:FEAT-665-port-write-shrink-parse-regression-force::wire-edit-guards]] Wire guards into edit dispatch
+- [[id:FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-find]] find parity tests
+- [[id:FEAT-667-delete-legacy-tools-code-read-find-grep::delete-sources]] Delete source files
+- [[id:FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-edit]] Author edit.md
+- [[id:FEAT-669-agents-md-tool-precedence-rewrite-per-ag::rewrite-agents-md]] Rewrite AGENTS.md tool-precedence
+- [[id:FEAT-670-memory-skills-update-final-orphan-refere::update-memory]] Update memory tree files
+- [[id:FUP-069-capture-binding-q-as-m-for-ast-grep-a-a::capture-resolver]] Capture resolver threading
+- [[id:FUP-070-performance-benchmarks-1-2x-of-find-1-5x::bench-suites]] Three benchmark suites
+- [[id:PROJ-061-parser-completion-glob-tokens-backtick-q::parser-glob-impl]] Implement glob tokenisation in fs_locator
+- [[id:PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-walker-tests]] Tests for glob expansion + hidden + gitignore
+- [[id:PROJ-063-text-resolver-line-index-regex-qualifier::text-line-tests]] Tests for line index + slicing
+- [[id:PROJ-064-resolver-traits-dialect-switch-state-mac::dispatch-tests]] Tests for dialect dispatch state machine
+- [[id:PROJ-065-napi-bridge-executecodepath-streaming-ch::ts-types]] TS types + facade
+- [[id:PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-walker-impl]] Implement AST walker
+- [[id:PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-impl]] Implement EdgeResolverImpl
+- [[id:PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-scheme-tests]] Tests for each scheme
+- [[id:PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-md-tests]] Tests for MarkitdownExtractor
+- [[id:PROJ-070-image-pipeline-image-qualifier-thumbnail::image-qualifier-tests]] Tests for #image qualifier
+** wave-3 :wave:
+- [[id:FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-anchor-tests]] Tests for AnchorPattern matchers
+- [[id:FEAT-657-python-namelexer-dotted-decorator-attrib::python-anchor-qual-tests]] Tests for anchors + qualifiers
+- [[id:FEAT-658-go-namelexer-package-function-receiver-m::go-anchors-qualifiers]] Tests + impl anchors, qualifiers, factory
+- [[id:FEAT-659-haskell-namelexer-module-qualified-opera::haskell-anchors-qualifiers]] Tests + impl anchors, qualifiers, factory
+- [[id:FEAT-660-html-namelexer-vendored-xpath-payload-re::html-anchors-qualifiers]] Tests + impl anchors, qualifiers, factory
+- [[id:FEAT-661-css-namelexer-vendored-cssparser-selecto::css-anchors-qualifiers]] Tests + impl anchors, qualifiers, factory
+- [[id:FEAT-662-markdown-org-namelexer-heading-text-quot::mdorg-anchors-qualifiers]] Tests + impl anchors, qualifiers, factory
+- [[id:FEAT-663-wire-all-8-dialects-into-languageprofile::wire-dialects]] Wire dialects into LanguageProfile constructors
+- [[id:FEAT-664-tool-suite-get-edit-manage-create-generi::get-impl]] Implement get tool
+- [[id:FEAT-665-port-write-shrink-parse-regression-force::wire-create-guards]] Wire guards into create dispatch
+- [[id:FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-read]] read parity tests
+- [[id:FEAT-667-delete-legacy-tools-code-read-find-grep::delete-tests]] Delete test files
+- [[id:FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-manage-create]] Author manage.md + create.md
+- [[id:FEAT-669-agents-md-tool-precedence-rewrite-per-ag::update-system-prompts]] Update system prompt files
+- [[id:FEAT-670-memory-skills-update-final-orphan-refere::final-orphan-scan]] Final repo-wide orphan scan
+- [[id:FUP-069-capture-binding-q-as-m-for-ast-grep-a-a::capture-parity-tests]] ast-grep $A/$$$A parity tests
+- [[id:FUP-070-performance-benchmarks-1-2x-of-find-1-5x::bench-ci]] CI integration
+- [[id:PROJ-061-parser-completion-glob-tokens-backtick-q::parser-backtick-tests]] Add backtick-quoting tests
+- [[id:PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-walker-impl]] Implement FsWalker on ignore crate
+- [[id:PROJ-063-text-resolver-line-index-regex-qualifier::text-line-impl]] Implement LineIndex (lazy)
+- [[id:PROJ-064-resolver-traits-dialect-switch-state-mac::dispatch-impl]] Implement DispatchEngine
+- [[id:PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-tests]] Tests for executeCodePath
+- [[id:PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-cross-lang-tests]] Tests cross-language
+- [[id:PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-cross-file]] Cross-file NodeRef construction tests + impl
+- [[id:PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-artifact]] Implement artifact handler
+- [[id:PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-md-impl]] Implement MarkitdownExtractor
+- [[id:PROJ-070-image-pipeline-image-qualifier-thumbnail::image-loader-impl]] Implement loader + threshold logic
+** wave-4 :wave:
+- [[id:FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-anchor-impl]] Implement AnchorPatterns
+- [[id:FEAT-657-python-namelexer-dotted-decorator-attrib::python-impl]] Implement anchors, qualifiers, dialect factory
+- [[id:FEAT-663-wire-all-8-dialects-into-languageprofile::verify-no-cycle]] Verify no cyclic dep
+- [[id:FEAT-664-tool-suite-get-edit-manage-create-generi::edit-tests]] Tests for edit tool
+- [[id:FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-grep]] grep parity tests
+- [[id:FEAT-667-delete-legacy-tools-code-read-find-grep::verify-clean]] Verify clean
+- [[id:FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-migration]] Author code-migration.md
+- [[id:FEAT-669-agents-md-tool-precedence-rewrite-per-ag::update-agent-roles]] Update per-agent role file Tools: lists
+- [[id:FEAT-670-memory-skills-update-final-orphan-refere::e2e-smoke]] End-to-end smoke test
+- [[id:PROJ-061-parser-completion-glob-tokens-backtick-q::parser-backtick-impl]] Implement backtick-quoting in path_until_kernel_op + NameLexer trait
+- [[id:PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-anchor-tests]] Tests for anchors
+- [[id:PROJ-063-text-resolver-line-index-regex-qualifier::text-para-tests]] Tests for ParaIndex + chunk axis
+- [[id:PROJ-064-resolver-traits-dialect-switch-state-mac::setops-tests]] Tests for set ops compositor
+- [[id:PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-dispatch-impl]] Implement dispatch composition
+- [[id:PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-predicate-eval]] Predicate evaluator
+- [[id:PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-set-ops]] Set-ops integration tests
+- [[id:PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-fs-backed]] Implement memory + skill + local + pi + rule handlers
+- [[id:PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-json]] Tests + impl JsonExtractor
+- [[id:PROJ-070-image-pipeline-image-qualifier-thumbnail::image-resize-impl]] Implement auto-resize
+** wave-5 :wave:
+- [[id:FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-qualifier-tests]] Tests for QualifierResolvers
+- [[id:FEAT-664-tool-suite-get-edit-manage-create-generi::edit-impl]] Implement edit tool
+- [[id:FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-ast]] ast-grep + ast-edit parity tests
+- [[id:FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-registration]] Update prompt registration
+- [[id:PROJ-061-parser-completion-glob-tokens-backtick-q::parser-predicate-tests]] Add full predicate vocab tests
+- [[id:PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-anchor-impl]] Implement anchor classifiers
+- [[id:PROJ-063-text-resolver-line-index-regex-qualifier::text-para-impl]] Implement ParaIndex + chunk
+- [[id:PROJ-064-resolver-traits-dialect-switch-state-mac::setops-impl]] Implement set-ops compositor
+- [[id:PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-execute-impl]] Implement executeCodePath NAPI function
+- [[id:PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-agent-json]] Implement agent JSON sub-dialect
+- [[id:PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-html]] Tests + impl HtmlReadableExtractor
+- [[id:PROJ-070-image-pipeline-image-qualifier-thumbnail::image-thumbnail-tests]] Tests for #thumbnail
+** wave-6 :wave:
+- [[id:FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-qualifier-impl]] Implement QualifierResolvers + dialect factory
+- [[id:FEAT-664-tool-suite-get-edit-manage-create-generi::manage-tests]] Tests for manage tool
+- [[id:FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-edit]] edit parity tests (LINE#ID + patch mode)
+- [[id:FEAT-668-tool-prompts-write-get-md-edit-md-manage::delete-legacy-prompts]] Delete legacy prompts
+- [[id:PROJ-061-parser-completion-glob-tokens-backtick-q::parser-predicate-impl]] Implement full predicate vocab + CompareOp wiring
+- [[id:PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-predicate-tests]] Tests for predicates
+- [[id:PROJ-063-text-resolver-line-index-regex-qualifier::text-regex-tests]] Tests for regex + context windows
+- [[id:PROJ-064-resolver-traits-dialect-switch-state-mac::projection-tests]] Tests for projection lowering
+- [[id:PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-parse-render]] Implement parseCodePath + renderCodePath
+- [[id:PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-jobs]] Implement jobs typed-slot dialect
+- [[id:PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-parity]] Parity corpus
+- [[id:PROJ-070-image-pipeline-image-qualifier-thumbnail::image-thumbnail-impl]] Implement #thumbnail[N]
+** wave-7 :wave:
+- [[id:FEAT-664-tool-suite-get-edit-manage-create-generi::manage-impl]] Implement manage tool
+- [[id:FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-write]] write parity tests
+- [[id:PROJ-061-parser-completion-glob-tokens-backtick-q::parser-subquery-tests]] Add subquery + range tests
+- [[id:PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-predicate-impl]] Implement predicate evaluator
+- [[id:PROJ-063-text-resolver-line-index-regex-qualifier::text-regex-impl]] Implement regex matcher + << >> combinators
+- [[id:PROJ-064-resolver-traits-dialect-switch-state-mac::projection-impl]] Implement projection lowering
+- [[id:PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-abort-bridge]] AbortSignal ↔ CancellationToken bridge
+- [[id:PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-mcp]] Implement mcp handler
+- [[id:PROJ-070-image-pipeline-image-qualifier-thumbnail::image-hint]] inspect_image hint
+** wave-8 :wave:
+- [[id:FEAT-664-tool-suite-get-edit-manage-create-generi::create-tests]] Tests for create tool
+- [[id:FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-code]] code parity tests (20 subcommands)
+- [[id:PROJ-061-parser-completion-glob-tokens-backtick-q::parser-subquery-impl]] Implement subquery recursion + negative ranges + escapes
+- [[id:PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-qualifier-tests]] Tests for qualifiers
+- [[id:PROJ-063-text-resolver-line-index-regex-qualifier::text-qualifier-tests]] Tests for content-class qualifiers
+- [[id:PROJ-064-resolver-traits-dialect-switch-state-mac::cancellation-wiring]] Wire CancellationToken through all resolvers
+- [[id:PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-content-threshold]] Content marshalling threshold logic
+- [[id:PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-cross-cutting]] Cross-cutting tests
+** wave-9 :wave:
+- [[id:FEAT-664-tool-suite-get-edit-manage-create-generi::create-impl]] Implement create tool
+- [[id:FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-port-existing]] Port relevant existing tests to new tools
+- [[id:PROJ-061-parser-completion-glob-tokens-backtick-q::parser-negative-tests]] Add negative-case tests
+- [[id:PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-qualifier-impl]] Implement qualifiers
+- [[id:PROJ-063-text-resolver-line-index-regex-qualifier::text-qualifier-impl]] Implement qualifiers + FormatExtractor trait
+** wave-10 :wave:
+- [[id:FEAT-664-tool-suite-get-edit-manage-create-generi::tool-index-exports]] Index exports + result formatter
+- [[id:PROJ-061-parser-completion-glob-tokens-backtick-q::parser-renderer-update]] Update renderer for new variants + round-trip property
+- [[id:PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-suffix-tests]] Tests for suffix-fallback
+- [[id:PROJ-063-text-resolver-line-index-regex-qualifier::text-streaming-tests]] Tests for streaming + parity
+** wave-11 :wave:
+- [[id:PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-suffix-impl]] Implement suffix-fallback
+- [[id:PROJ-063-text-resolver-line-index-regex-qualifier::text-streaming-impl]] Implement streaming wrapper
+** wave-12 :wave:
+- [[id:PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-resolver-wiring]] FsResolver wiring + parity corpus
+** File-level DAG
+*** Nodes
+- `FEAT-656-rust-namelexer-paths-turbofish-impl-for` Tests for RustNameLexer parse [ITEM]
+- `FEAT-657-python-namelexer-dotted-decorator-attrib` Tests for PyNameLexer [ITEM]
+- `FEAT-658-go-namelexer-package-function-receiver-m` Tests for GoNameLexer [ITEM]
+- `FEAT-659-haskell-namelexer-module-qualified-opera` Tests for HsNameLexer [ITEM]
+- `FEAT-660-html-namelexer-vendored-xpath-payload-re` Tests for HtmlNameLexer [ITEM]
+- `FEAT-661-css-namelexer-vendored-cssparser-selecto` Tests for CssNameLexer [ITEM]
+- `FEAT-662-markdown-org-namelexer-heading-text-quot` Tests for MdNameLexer [ITEM]
+- `FEAT-663-wire-all-8-dialects-into-languageprofile` Add cross-dialect test fixtures [ITEM]
+- `FEAT-664-tool-suite-get-edit-manage-create-generi` Define shared TS types [ITEM]
+- `FEAT-665-port-write-shrink-parse-regression-force` Tests for guard chain [ITEM]
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio` Define parity test fixtures [ITEM]
+- `FEAT-667-delete-legacy-tools-code-read-find-grep` Pre-flight orphan scan [ITEM]
+- `FEAT-668-tool-prompts-write-get-md-edit-md-manage` Author get.md [ITEM]
+- `FEAT-669-agents-md-tool-precedence-rewrite-per-ag` Audit AGENTS.md and prompt files [ITEM]
+- `FEAT-670-memory-skills-update-final-orphan-refere` Audit memory tree references [ITEM]
+- `FUP-069-capture-binding-q-as-m-for-ast-grep-a-a` Add Capture AST + parser [ITEM]
+- `FUP-070-performance-benchmarks-1-2x-of-find-1-5x` Synthetic fixture builders [ITEM]
+- `PROJ-061-parser-completion-glob-tokens-backtick-q` Add tests for full glob tokenisation [ITEM]
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu` Define test fixtures [ITEM]
+- `PROJ-063-text-resolver-line-index-regex-qualifier` Define test fixtures [ITEM]
+- `PROJ-064-resolver-traits-dialect-switch-state-mac` Define trait module skeleton [ITEM]
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch` Define NAPI types [ITEM]
+- `PROJ-066-coderesolver-impl-tree-sitter-via-langua` Tests for AST walker per combinator [ITEM]
+- `PROJ-067-edgeresolver-impl-pi-code-graph-integrat` Tests for edge kind dispatch [ITEM]
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl` Define SchemeRegistry [ITEM]
+- `PROJ-069-formatextractor-handlers-11-markitdown-f` Define test fixtures [ITEM]
+- `PROJ-070-image-pipeline-image-qualifier-thumbnail` Define fixtures [ITEM]
+*** Edges
+- None.
+** Subfeature-level DAG
+*** Nodes
+- `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-lexer-tests` Tests for RustNameLexer parse [ITEM]
+- `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-lexer-impl` Implement RustNameLexer [ITEM]
+- `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-anchor-tests` Tests for AnchorPattern matchers [ITEM]
+- `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-anchor-impl` Implement AnchorPatterns [ITEM]
+- `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-qualifier-tests` Tests for QualifierResolvers [ITEM]
+- `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-qualifier-impl` Implement QualifierResolvers + dialect factory [ITEM]
+- `FEAT-657-python-namelexer-dotted-decorator-attrib::python-lexer-tests` Tests for PyNameLexer [ITEM]
+- `FEAT-657-python-namelexer-dotted-decorator-attrib::python-lexer-impl` Implement PyNameLexer [ITEM]
+- `FEAT-657-python-namelexer-dotted-decorator-attrib::python-anchor-qual-tests` Tests for anchors + qualifiers [ITEM]
+- `FEAT-657-python-namelexer-dotted-decorator-attrib::python-impl` Implement anchors, qualifiers, dialect factory [ITEM]
+- `FEAT-658-go-namelexer-package-function-receiver-m::go-lexer-tests` Tests for GoNameLexer [ITEM]
+- `FEAT-658-go-namelexer-package-function-receiver-m::go-lexer-impl` Implement GoNameLexer [ITEM]
+- `FEAT-658-go-namelexer-package-function-receiver-m::go-anchors-qualifiers` Tests + impl anchors, qualifiers, factory [ITEM]
+- `FEAT-659-haskell-namelexer-module-qualified-opera::haskell-lexer-tests` Tests for HsNameLexer [ITEM]
+- `FEAT-659-haskell-namelexer-module-qualified-opera::haskell-lexer-impl` Implement HsNameLexer [ITEM]
+- `FEAT-659-haskell-namelexer-module-qualified-opera::haskell-anchors-qualifiers` Tests + impl anchors, qualifiers, factory [ITEM]
+- `FEAT-660-html-namelexer-vendored-xpath-payload-re::html-lexer-tests` Tests for HtmlNameLexer [ITEM]
+- `FEAT-660-html-namelexer-vendored-xpath-payload-re::html-lexer-impl` Implement HtmlNameLexer (XPath subset) [ITEM]
+- `FEAT-660-html-namelexer-vendored-xpath-payload-re::html-anchors-qualifiers` Tests + impl anchors, qualifiers, factory [ITEM]
+- `FEAT-661-css-namelexer-vendored-cssparser-selecto::css-lexer-tests` Tests for CssNameLexer [ITEM]
+- `FEAT-661-css-namelexer-vendored-cssparser-selecto::css-lexer-impl` Implement CssNameLexer [ITEM]
+- `FEAT-661-css-namelexer-vendored-cssparser-selecto::css-anchors-qualifiers` Tests + impl anchors, qualifiers, factory [ITEM]
+- `FEAT-662-markdown-org-namelexer-heading-text-quot::mdorg-lexer-tests` Tests for MdNameLexer [ITEM]
+- `FEAT-662-markdown-org-namelexer-heading-text-quot::mdorg-lexer-impl` Implement MdNameLexer [ITEM]
+- `FEAT-662-markdown-org-namelexer-heading-text-quot::mdorg-anchors-qualifiers` Tests + impl anchors, qualifiers, factory [ITEM]
+- `FEAT-663-wire-all-8-dialects-into-languageprofile::cross-dialect-fixtures` Add cross-dialect test fixtures [ITEM]
+- `FEAT-663-wire-all-8-dialects-into-languageprofile::cross-dialect-test` Write cross-dialect smoke test [ITEM]
+- `FEAT-663-wire-all-8-dialects-into-languageprofile::wire-dialects` Wire dialects into LanguageProfile constructors [ITEM]
+- `FEAT-663-wire-all-8-dialects-into-languageprofile::verify-no-cycle` Verify no cyclic dep [ITEM]
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::tool-shared-types` Define shared TS types [ITEM]
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::get-tests` Tests for get tool [ITEM]
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::get-impl` Implement get tool [ITEM]
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::edit-tests` Tests for edit tool [ITEM]
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::edit-impl` Implement edit tool [ITEM]
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::manage-tests` Tests for manage tool [ITEM]
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::manage-impl` Implement manage tool [ITEM]
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::create-tests` Tests for create tool [ITEM]
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::create-impl` Implement create tool [ITEM]
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::tool-index-exports` Index exports + result formatter [ITEM]
+- `FEAT-665-port-write-shrink-parse-regression-force::guard-tests` Tests for guard chain [ITEM]
+- `FEAT-665-port-write-shrink-parse-regression-force::wire-edit-guards` Wire guards into edit dispatch [ITEM]
+- `FEAT-665-port-write-shrink-parse-regression-force::wire-create-guards` Wire guards into create dispatch [ITEM]
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-fixtures` Define parity test fixtures [ITEM]
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-helpers` Define equivalence-rules helpers [ITEM]
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-find` find parity tests [ITEM]
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-read` read parity tests [ITEM]
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-grep` grep parity tests [ITEM]
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-ast` ast-grep + ast-edit parity tests [ITEM]
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-edit` edit parity tests (LINE#ID + patch mode) [ITEM]
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-write` write parity tests [ITEM]
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-code` code parity tests (20 subcommands) [ITEM]
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-port-existing` Port relevant existing tests to new tools [ITEM]
+- `FEAT-667-delete-legacy-tools-code-read-find-grep::pre-delete-scan` Pre-flight orphan scan [ITEM]
+- `FEAT-667-delete-legacy-tools-code-read-find-grep::delete-sources` Delete source files [ITEM]
+- `FEAT-667-delete-legacy-tools-code-read-find-grep::delete-tests` Delete test files [ITEM]
+- `FEAT-667-delete-legacy-tools-code-read-find-grep::verify-clean` Verify clean [ITEM]
+- `FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-get` Author get.md [ITEM]
+- `FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-edit` Author edit.md [ITEM]
+- `FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-manage-create` Author manage.md + create.md [ITEM]
+- `FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-migration` Author code-migration.md [ITEM]
+- `FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-registration` Update prompt registration [ITEM]
+- `FEAT-668-tool-prompts-write-get-md-edit-md-manage::delete-legacy-prompts` Delete legacy prompts [ITEM]
+- `FEAT-669-agents-md-tool-precedence-rewrite-per-ag::audit-agents-md` Audit AGENTS.md and prompt files [ITEM]
+- `FEAT-669-agents-md-tool-precedence-rewrite-per-ag::rewrite-agents-md` Rewrite AGENTS.md tool-precedence [ITEM]
+- `FEAT-669-agents-md-tool-precedence-rewrite-per-ag::update-system-prompts` Update system prompt files [ITEM]
+- `FEAT-669-agents-md-tool-precedence-rewrite-per-ag::update-agent-roles` Update per-agent role file Tools: lists [ITEM]
+- `FEAT-670-memory-skills-update-final-orphan-refere::audit-memory` Audit memory tree references [ITEM]
+- `FEAT-670-memory-skills-update-final-orphan-refere::update-memory` Update memory tree files [ITEM]
+- `FEAT-670-memory-skills-update-final-orphan-refere::final-orphan-scan` Final repo-wide orphan scan [ITEM]
+- `FEAT-670-memory-skills-update-final-orphan-refere::e2e-smoke` End-to-end smoke test [ITEM]
+- `FUP-069-capture-binding-q-as-m-for-ast-grep-a-a::capture-ast-parser` Add Capture AST + parser [ITEM]
+- `FUP-069-capture-binding-q-as-m-for-ast-grep-a-a::capture-resolver` Capture resolver threading [ITEM]
+- `FUP-069-capture-binding-q-as-m-for-ast-grep-a-a::capture-parity-tests` ast-grep $A/$$$A parity tests [ITEM]
+- `FUP-070-performance-benchmarks-1-2x-of-find-1-5x::bench-fixtures` Synthetic fixture builders [ITEM]
+- `FUP-070-performance-benchmarks-1-2x-of-find-1-5x::bench-suites` Three benchmark suites [ITEM]
+- `FUP-070-performance-benchmarks-1-2x-of-find-1-5x::bench-ci` CI integration [ITEM]
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-glob-tests` Add tests for full glob tokenisation [ITEM]
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-glob-impl` Implement glob tokenisation in fs_locator [ITEM]
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-backtick-tests` Add backtick-quoting tests [ITEM]
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-backtick-impl` Implement backtick-quoting in path_until_kernel_op + NameLexer trait [ITEM]
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-predicate-tests` Add full predicate vocab tests [ITEM]
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-predicate-impl` Implement full predicate vocab + CompareOp wiring [ITEM]
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-subquery-tests` Add subquery + range tests [ITEM]
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-subquery-impl` Implement subquery recursion + negative ranges + escapes [ITEM]
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-negative-tests` Add negative-case tests [ITEM]
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-renderer-update` Update renderer for new variants + round-trip property [ITEM]
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-test-fixtures` Define test fixtures [ITEM]
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-walker-tests` Tests for glob expansion + hidden + gitignore [ITEM]
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-walker-impl` Implement FsWalker on ignore crate [ITEM]
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-anchor-tests` Tests for anchors [ITEM]
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-anchor-impl` Implement anchor classifiers [ITEM]
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-predicate-tests` Tests for predicates [ITEM]
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-predicate-impl` Implement predicate evaluator [ITEM]
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-qualifier-tests` Tests for qualifiers [ITEM]
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-qualifier-impl` Implement qualifiers [ITEM]
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-suffix-tests` Tests for suffix-fallback [ITEM]
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-suffix-impl` Implement suffix-fallback [ITEM]
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-resolver-wiring` FsResolver wiring + parity corpus [ITEM]
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-test-fixtures` Define test fixtures [ITEM]
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-line-tests` Tests for line index + slicing [ITEM]
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-line-impl` Implement LineIndex (lazy) [ITEM]
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-para-tests` Tests for ParaIndex + chunk axis [ITEM]
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-para-impl` Implement ParaIndex + chunk [ITEM]
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-regex-tests` Tests for regex + context windows [ITEM]
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-regex-impl` Implement regex matcher + << >> combinators [ITEM]
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-qualifier-tests` Tests for content-class qualifiers [ITEM]
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-qualifier-impl` Implement qualifiers + FormatExtractor trait [ITEM]
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-streaming-tests` Tests for streaming + parity [ITEM]
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-streaming-impl` Implement streaming wrapper [ITEM]
+- `PROJ-064-resolver-traits-dialect-switch-state-mac::traits-skeleton` Define trait module skeleton [ITEM]
+- `PROJ-064-resolver-traits-dialect-switch-state-mac::dispatch-tests` Tests for dialect dispatch state machine [ITEM]
+- `PROJ-064-resolver-traits-dialect-switch-state-mac::dispatch-impl` Implement DispatchEngine [ITEM]
+- `PROJ-064-resolver-traits-dialect-switch-state-mac::setops-tests` Tests for set ops compositor [ITEM]
+- `PROJ-064-resolver-traits-dialect-switch-state-mac::setops-impl` Implement set-ops compositor [ITEM]
+- `PROJ-064-resolver-traits-dialect-switch-state-mac::projection-tests` Tests for projection lowering [ITEM]
+- `PROJ-064-resolver-traits-dialect-switch-state-mac::projection-impl` Implement projection lowering [ITEM]
+- `PROJ-064-resolver-traits-dialect-switch-state-mac::cancellation-wiring` Wire CancellationToken through all resolvers [ITEM]
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-types` Define NAPI types [ITEM]
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch::ts-types` TS types + facade [ITEM]
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-tests` Tests for executeCodePath [ITEM]
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-dispatch-impl` Implement dispatch composition [ITEM]
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-execute-impl` Implement executeCodePath NAPI function [ITEM]
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-parse-render` Implement parseCodePath + renderCodePath [ITEM]
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-abort-bridge` AbortSignal ↔ CancellationToken bridge [ITEM]
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-content-threshold` Content marshalling threshold logic [ITEM]
+- `PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-walker-tests` Tests for AST walker per combinator [ITEM]
+- `PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-walker-impl` Implement AST walker [ITEM]
+- `PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-cross-lang-tests` Tests cross-language [ITEM]
+- `PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-predicate-eval` Predicate evaluator [ITEM]
+- `PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-dispatch-tests` Tests for edge kind dispatch [ITEM]
+- `PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-impl` Implement EdgeResolverImpl [ITEM]
+- `PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-cross-file` Cross-file NodeRef construction tests + impl [ITEM]
+- `PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-set-ops` Set-ops integration tests [ITEM]
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-registry` Define SchemeRegistry [ITEM]
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-scheme-tests` Tests for each scheme [ITEM]
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-artifact` Implement artifact handler [ITEM]
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-fs-backed` Implement memory + skill + local + pi + rule handlers [ITEM]
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-agent-json` Implement agent JSON sub-dialect [ITEM]
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-jobs` Implement jobs typed-slot dialect [ITEM]
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-mcp` Implement mcp handler [ITEM]
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-cross-cutting` Cross-cutting tests [ITEM]
+- `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-fixtures` Define test fixtures [ITEM]
+- `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-md-tests` Tests for MarkitdownExtractor [ITEM]
+- `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-md-impl` Implement MarkitdownExtractor [ITEM]
+- `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-json` Tests + impl JsonExtractor [ITEM]
+- `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-html` Tests + impl HtmlReadableExtractor [ITEM]
+- `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-parity` Parity corpus [ITEM]
+- `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-fixtures` Define fixtures [ITEM]
+- `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-qualifier-tests` Tests for #image qualifier [ITEM]
+- `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-loader-impl` Implement loader + threshold logic [ITEM]
+- `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-resize-impl` Implement auto-resize [ITEM]
+- `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-thumbnail-tests` Tests for #thumbnail [ITEM]
+- `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-thumbnail-impl` Implement #thumbnail[N] [ITEM]
+- `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-hint` inspect_image hint [ITEM]
+*** Edges
+- `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-lexer-impl` depends on `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-lexer-tests`
+- `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-anchor-tests` depends on `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-lexer-impl`
+- `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-anchor-impl` depends on `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-anchor-tests`
+- `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-qualifier-tests` depends on `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-anchor-impl`
+- `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-qualifier-impl` depends on `FEAT-656-rust-namelexer-paths-turbofish-impl-for::rust-qualifier-tests`
+- `FEAT-657-python-namelexer-dotted-decorator-attrib::python-lexer-impl` depends on `FEAT-657-python-namelexer-dotted-decorator-attrib::python-lexer-tests`
+- `FEAT-657-python-namelexer-dotted-decorator-attrib::python-anchor-qual-tests` depends on `FEAT-657-python-namelexer-dotted-decorator-attrib::python-lexer-impl`
+- `FEAT-657-python-namelexer-dotted-decorator-attrib::python-impl` depends on `FEAT-657-python-namelexer-dotted-decorator-attrib::python-anchor-qual-tests`
+- `FEAT-658-go-namelexer-package-function-receiver-m::go-lexer-impl` depends on `FEAT-658-go-namelexer-package-function-receiver-m::go-lexer-tests`
+- `FEAT-658-go-namelexer-package-function-receiver-m::go-anchors-qualifiers` depends on `FEAT-658-go-namelexer-package-function-receiver-m::go-lexer-impl`
+- `FEAT-659-haskell-namelexer-module-qualified-opera::haskell-lexer-impl` depends on `FEAT-659-haskell-namelexer-module-qualified-opera::haskell-lexer-tests`
+- `FEAT-659-haskell-namelexer-module-qualified-opera::haskell-anchors-qualifiers` depends on `FEAT-659-haskell-namelexer-module-qualified-opera::haskell-lexer-impl`
+- `FEAT-660-html-namelexer-vendored-xpath-payload-re::html-lexer-impl` depends on `FEAT-660-html-namelexer-vendored-xpath-payload-re::html-lexer-tests`
+- `FEAT-660-html-namelexer-vendored-xpath-payload-re::html-anchors-qualifiers` depends on `FEAT-660-html-namelexer-vendored-xpath-payload-re::html-lexer-impl`
+- `FEAT-661-css-namelexer-vendored-cssparser-selecto::css-lexer-impl` depends on `FEAT-661-css-namelexer-vendored-cssparser-selecto::css-lexer-tests`
+- `FEAT-661-css-namelexer-vendored-cssparser-selecto::css-anchors-qualifiers` depends on `FEAT-661-css-namelexer-vendored-cssparser-selecto::css-lexer-impl`
+- `FEAT-662-markdown-org-namelexer-heading-text-quot::mdorg-lexer-impl` depends on `FEAT-662-markdown-org-namelexer-heading-text-quot::mdorg-lexer-tests`
+- `FEAT-662-markdown-org-namelexer-heading-text-quot::mdorg-anchors-qualifiers` depends on `FEAT-662-markdown-org-namelexer-heading-text-quot::mdorg-lexer-impl`
+- `FEAT-663-wire-all-8-dialects-into-languageprofile::cross-dialect-test` depends on `FEAT-663-wire-all-8-dialects-into-languageprofile::cross-dialect-fixtures`
+- `FEAT-663-wire-all-8-dialects-into-languageprofile::wire-dialects` depends on `FEAT-663-wire-all-8-dialects-into-languageprofile::cross-dialect-test`
+- `FEAT-663-wire-all-8-dialects-into-languageprofile::verify-no-cycle` depends on `FEAT-663-wire-all-8-dialects-into-languageprofile::wire-dialects`
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::get-tests` depends on `FEAT-664-tool-suite-get-edit-manage-create-generi::tool-shared-types`
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::get-impl` depends on `FEAT-664-tool-suite-get-edit-manage-create-generi::get-tests`
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::edit-tests` depends on `FEAT-664-tool-suite-get-edit-manage-create-generi::get-impl`
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::edit-impl` depends on `FEAT-664-tool-suite-get-edit-manage-create-generi::edit-tests`
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::manage-tests` depends on `FEAT-664-tool-suite-get-edit-manage-create-generi::edit-impl`
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::manage-impl` depends on `FEAT-664-tool-suite-get-edit-manage-create-generi::manage-tests`
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::create-tests` depends on `FEAT-664-tool-suite-get-edit-manage-create-generi::manage-impl`
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::create-impl` depends on `FEAT-664-tool-suite-get-edit-manage-create-generi::create-tests`
+- `FEAT-664-tool-suite-get-edit-manage-create-generi::tool-index-exports` depends on `FEAT-664-tool-suite-get-edit-manage-create-generi::create-impl`
+- `FEAT-665-port-write-shrink-parse-regression-force::wire-edit-guards` depends on `FEAT-665-port-write-shrink-parse-regression-force::guard-tests`
+- `FEAT-665-port-write-shrink-parse-regression-force::wire-create-guards` depends on `FEAT-665-port-write-shrink-parse-regression-force::wire-edit-guards`
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-find` depends on `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-helpers`
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-read` depends on `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-find`
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-grep` depends on `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-read`
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-ast` depends on `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-grep`
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-edit` depends on `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-ast`
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-write` depends on `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-edit`
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-code` depends on `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-write`
+- `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-port-existing` depends on `FEAT-666-behavioral-parity-corpus-30-50-invocatio::parity-code`
+- `FEAT-667-delete-legacy-tools-code-read-find-grep::delete-sources` depends on `FEAT-667-delete-legacy-tools-code-read-find-grep::pre-delete-scan`
+- `FEAT-667-delete-legacy-tools-code-read-find-grep::delete-tests` depends on `FEAT-667-delete-legacy-tools-code-read-find-grep::delete-sources`
+- `FEAT-667-delete-legacy-tools-code-read-find-grep::verify-clean` depends on `FEAT-667-delete-legacy-tools-code-read-find-grep::delete-tests`
+- `FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-edit` depends on `FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-get`
+- `FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-manage-create` depends on `FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-edit`
+- `FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-migration` depends on `FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-manage-create`
+- `FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-registration` depends on `FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-migration`
+- `FEAT-668-tool-prompts-write-get-md-edit-md-manage::delete-legacy-prompts` depends on `FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-registration`
+- `FEAT-669-agents-md-tool-precedence-rewrite-per-ag::rewrite-agents-md` depends on `FEAT-669-agents-md-tool-precedence-rewrite-per-ag::audit-agents-md`
+- `FEAT-669-agents-md-tool-precedence-rewrite-per-ag::update-system-prompts` depends on `FEAT-669-agents-md-tool-precedence-rewrite-per-ag::rewrite-agents-md`
+- `FEAT-669-agents-md-tool-precedence-rewrite-per-ag::update-agent-roles` depends on `FEAT-669-agents-md-tool-precedence-rewrite-per-ag::update-system-prompts`
+- `FEAT-670-memory-skills-update-final-orphan-refere::update-memory` depends on `FEAT-670-memory-skills-update-final-orphan-refere::audit-memory`
+- `FEAT-670-memory-skills-update-final-orphan-refere::final-orphan-scan` depends on `FEAT-670-memory-skills-update-final-orphan-refere::update-memory`
+- `FEAT-670-memory-skills-update-final-orphan-refere::e2e-smoke` depends on `FEAT-670-memory-skills-update-final-orphan-refere::final-orphan-scan`
+- `FUP-069-capture-binding-q-as-m-for-ast-grep-a-a::capture-resolver` depends on `FUP-069-capture-binding-q-as-m-for-ast-grep-a-a::capture-ast-parser`
+- `FUP-069-capture-binding-q-as-m-for-ast-grep-a-a::capture-parity-tests` depends on `FUP-069-capture-binding-q-as-m-for-ast-grep-a-a::capture-resolver`
+- `FUP-070-performance-benchmarks-1-2x-of-find-1-5x::bench-suites` depends on `FUP-070-performance-benchmarks-1-2x-of-find-1-5x::bench-fixtures`
+- `FUP-070-performance-benchmarks-1-2x-of-find-1-5x::bench-ci` depends on `FUP-070-performance-benchmarks-1-2x-of-find-1-5x::bench-suites`
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-glob-impl` depends on `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-glob-tests`
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-backtick-tests` depends on `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-glob-impl`
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-backtick-impl` depends on `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-backtick-tests`
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-predicate-tests` depends on `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-backtick-impl`
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-predicate-impl` depends on `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-predicate-tests`
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-subquery-tests` depends on `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-predicate-impl`
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-subquery-impl` depends on `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-subquery-tests`
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-negative-tests` depends on `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-subquery-impl`
+- `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-renderer-update` depends on `PROJ-061-parser-completion-glob-tokens-backtick-q::parser-negative-tests`
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-walker-tests` depends on `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-test-fixtures`
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-walker-impl` depends on `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-walker-tests`
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-anchor-tests` depends on `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-walker-impl`
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-anchor-impl` depends on `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-anchor-tests`
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-predicate-tests` depends on `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-anchor-impl`
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-predicate-impl` depends on `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-predicate-tests`
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-qualifier-tests` depends on `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-predicate-impl`
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-qualifier-impl` depends on `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-qualifier-tests`
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-suffix-tests` depends on `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-qualifier-impl`
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-suffix-impl` depends on `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-suffix-tests`
+- `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-resolver-wiring` depends on `PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-suffix-impl`
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-line-tests` depends on `PROJ-063-text-resolver-line-index-regex-qualifier::text-test-fixtures`
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-line-impl` depends on `PROJ-063-text-resolver-line-index-regex-qualifier::text-line-tests`
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-para-tests` depends on `PROJ-063-text-resolver-line-index-regex-qualifier::text-line-impl`
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-para-impl` depends on `PROJ-063-text-resolver-line-index-regex-qualifier::text-para-tests`
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-regex-tests` depends on `PROJ-063-text-resolver-line-index-regex-qualifier::text-para-impl`
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-regex-impl` depends on `PROJ-063-text-resolver-line-index-regex-qualifier::text-regex-tests`
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-qualifier-tests` depends on `PROJ-063-text-resolver-line-index-regex-qualifier::text-regex-impl`
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-qualifier-impl` depends on `PROJ-063-text-resolver-line-index-regex-qualifier::text-qualifier-tests`
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-streaming-tests` depends on `PROJ-063-text-resolver-line-index-regex-qualifier::text-qualifier-impl`
+- `PROJ-063-text-resolver-line-index-regex-qualifier::text-streaming-impl` depends on `PROJ-063-text-resolver-line-index-regex-qualifier::text-streaming-tests`
+- `PROJ-064-resolver-traits-dialect-switch-state-mac::dispatch-tests` depends on `PROJ-064-resolver-traits-dialect-switch-state-mac::traits-skeleton`
+- `PROJ-064-resolver-traits-dialect-switch-state-mac::dispatch-impl` depends on `PROJ-064-resolver-traits-dialect-switch-state-mac::dispatch-tests`
+- `PROJ-064-resolver-traits-dialect-switch-state-mac::setops-tests` depends on `PROJ-064-resolver-traits-dialect-switch-state-mac::dispatch-impl`
+- `PROJ-064-resolver-traits-dialect-switch-state-mac::setops-impl` depends on `PROJ-064-resolver-traits-dialect-switch-state-mac::setops-tests`
+- `PROJ-064-resolver-traits-dialect-switch-state-mac::projection-tests` depends on `PROJ-064-resolver-traits-dialect-switch-state-mac::setops-impl`
+- `PROJ-064-resolver-traits-dialect-switch-state-mac::projection-impl` depends on `PROJ-064-resolver-traits-dialect-switch-state-mac::projection-tests`
+- `PROJ-064-resolver-traits-dialect-switch-state-mac::cancellation-wiring` depends on `PROJ-064-resolver-traits-dialect-switch-state-mac::projection-impl`
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch::ts-types` depends on `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-types`
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-tests` depends on `PROJ-065-napi-bridge-executecodepath-streaming-ch::ts-types`
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-dispatch-impl` depends on `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-tests`
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-execute-impl` depends on `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-dispatch-impl`
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-parse-render` depends on `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-execute-impl`
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-abort-bridge` depends on `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-parse-render`
+- `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-content-threshold` depends on `PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-abort-bridge`
+- `PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-walker-impl` depends on `PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-walker-tests`
+- `PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-cross-lang-tests` depends on `PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-walker-impl`
+- `PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-predicate-eval` depends on `PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-cross-lang-tests`
+- `PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-impl` depends on `PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-dispatch-tests`
+- `PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-cross-file` depends on `PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-impl`
+- `PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-set-ops` depends on `PROJ-067-edgeresolver-impl-pi-code-graph-integrat::edge-cross-file`
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-scheme-tests` depends on `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-registry`
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-artifact` depends on `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-scheme-tests`
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-fs-backed` depends on `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-artifact`
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-agent-json` depends on `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-fs-backed`
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-jobs` depends on `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-agent-json`
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-mcp` depends on `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-jobs`
+- `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-cross-cutting` depends on `PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-mcp`
+- `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-md-tests` depends on `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-fixtures`
+- `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-md-impl` depends on `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-md-tests`
+- `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-json` depends on `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-md-impl`
+- `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-html` depends on `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-json`
+- `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-parity` depends on `PROJ-069-formatextractor-handlers-11-markitdown-f::extraction-html`
+- `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-qualifier-tests` depends on `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-fixtures`
+- `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-loader-impl` depends on `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-qualifier-tests`
+- `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-resize-impl` depends on `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-loader-impl`
+- `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-thumbnail-tests` depends on `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-resize-impl`
+- `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-thumbnail-impl` depends on `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-thumbnail-tests`
+- `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-hint` depends on `PROJ-070-image-pipeline-image-qualifier-thumbnail::image-thumbnail-impl`
+

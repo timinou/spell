@@ -1,0 +1,64 @@
+#+TITLE: Performance benchmarks: 1.2x of find, 1.5x of grep, 100 MiB RSS on 1 GiB file
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FUP-070-performance-benchmarks-1-2x-of-find-1-5x
+#+LAYER: core
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Establish CI-gated performance benchmarks against the spec's acceptance criteria: pure FS query within 1.2× of legacy =find=; cross-file regex within 1.5× of =grep=; 1 GiB file streaming under 100 MiB RSS. Deferred from main PLAN per design decision (focus on correctness/parity first; perf later).
+
+* Context & Narrative
+
+The CodePath v3 spec promises performance parity with the legacy tools, since both use the =ignore= crate for FS walking and =grep-regex= for regex matching. Empirical confirmation requires benchmarks. Memory bound on streaming requires synthetic test fixtures (1 GiB).
+
+* Scope
+
+In:
+- =crates/pi-code-path/benches/= using =criterion=.
+- Three benchmark suites: =fs_walk_bench=, =regex_grep_bench=, =streaming_rss_bench=.
+- Synthetic fixtures: 10k-file project tree, 1 GiB single file.
+- CI workflow integration (dedicated benchmarks job).
+- Acceptance: each metric within tolerance vs legacy baseline.
+
+Out:
+- Optimisations beyond what's needed to hit baselines.
+
+* Tests
+
+Three benchmark scenarios with hard thresholds.
+
+* Implementation
+
+** ITEM Synthetic fixture builders
+:PROPERTIES:
+:CUSTOM_ID: FUP-070-performance-benchmarks-1-2x-of-find-1-5x::bench-fixtures
+:LAYER: core
+:END:
+
+** ITEM Three benchmark suites
+:PROPERTIES:
+:CUSTOM_ID: FUP-070-performance-benchmarks-1-2x-of-find-1-5x::bench-suites
+:DEPENDS: FUP-070-performance-benchmarks-1-2x-of-find-1-5x::bench-fixtures
+:LAYER: core
+:END:
+
+** ITEM CI integration
+:PROPERTIES:
+:CUSTOM_ID: FUP-070-performance-benchmarks-1-2x-of-find-1-5x::bench-ci
+:DEPENDS: FUP-070-performance-benchmarks-1-2x-of-find-1-5x::bench-suites
+:LAYER: core
+:END:
+
+* Acceptance Criteria
+
+- =cargo bench -p pi-code-path= reports all three suites.
+- FS walk within 1.2× of legacy.
+- Regex grep within 1.5×.
+- 1 GiB stream peaks under 100 MiB RSS.
+- CI gate fails if regression beyond 10%.

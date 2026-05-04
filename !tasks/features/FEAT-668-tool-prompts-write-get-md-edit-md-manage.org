@@ -1,0 +1,129 @@
+#+TITLE: Tool prompts: write get.md, edit.md, manage.md, create.md, code-migration.md; delete legacy
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FEAT-668-tool-prompts-write-get-md-edit-md-manage
+#+DEPENDS: FEAT-667-delete-legacy-tools-code-read-find-grep
+#+LAYER: api
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Author the new prompt files for the four generic tools and write a comprehensive migration guide that teaches LLMs how to translate every legacy tool invocation into CodePath form. Delete legacy prompts in the same cycle. Final tool surface seen by every agent is taught only through these new prompts.
+
+* Context & Narrative
+
+Today's prompts at =packages/coding-agent/src/prompts/tools/= include:
+- =code.md= (13 lines), =code-hint-*.md= (5 files, mostly stubs), =code-search.md=
+- =read.md=, =find.md=, =grep.md=, =ast-grep.md=, =ast-edit.md=
+- =memories/read-path.md=
+
+These are loaded into the system prompt when tools are active. Replacing them is a hard requirement for the cutover.
+
+The new prompts must:
+1. Be concise per the project's compression discipline (see =skill://semantic-compression=).
+2. Show the most common use cases as one-liner examples.
+3. Reference the migration table for legacy patterns.
+4. Cover all dialects, schemes, and projection options.
+5. Demonstrate LINE#ID anchor edits and bare-path conventions.
+
+* Scope
+
+In:
+- New: =packages/coding-agent/src/prompts/tools/get.md= (~80 lines).
+- New: =packages/coding-agent/src/prompts/tools/edit.md= (~120 lines, covers all 18 EditAction kinds + LINE#ID + patch).
+- New: =packages/coding-agent/src/prompts/tools/manage.md= (~30 lines, 11 commands).
+- New: =packages/coding-agent/src/prompts/tools/create.md= (~50 lines, content variants + force).
+- New: =packages/coding-agent/src/prompts/tools/code-migration.md= (~150 lines, migration table from =specs/code-graph/code-path.md §A/§D=).
+- Delete: =code.md=, =code-hint-clojure.md=, =code-hint-markdown.md=, =code-hint-semantic.md=, =code-hint-text-fallback.md=, =code-hint-typst.md=, =code-search.md=, =read.md=, =find.md=, =grep.md=, =ast-grep.md=, =ast-edit.md=.
+- Update prompt registration in =packages/coding-agent/src/config/prompt-templates= or wherever prompts are mounted.
+- Update =packages/coding-agent/src/prompts/memories/read-path.md= → rename and rewrite as =get-path.md= or merge into =get.md=.
+
+Out:
+- AGENTS.md (=FEAT-agents-md=).
+- Agent role files (=FEAT-agents-md=).
+- Memory skills updates (=FEAT-orphan-scan=).
+
+* Existing Patterns
+
+- Existing prompt structure in =packages/coding-agent/src/prompts/tools/=.
+- Spec migration table at =specs/code-graph/code-path.md §A/§D= and =code-path-extensions.md §5=.
+
+* Tests
+
+Manual review + automated scan:
+1. New prompt files exist.
+2. =bun build= succeeds with prompts mounted.
+3. Agent that uses tools loads prompts without error.
+4. Orphan scan: zero references to deleted prompt files in code.
+
+* Implementation
+
+** ITEM Author get.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-get
+:LAYER: api
+:END:
+
+** ITEM Author edit.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-edit
+:DEPENDS: FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-get
+:LAYER: api
+:END:
+
+Cover all 18 EditAction kinds with one example each. LINE#ID stale-detection contract. patch mode with unified-diff example.
+
+** ITEM Author manage.md + create.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-manage-create
+:DEPENDS: FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-edit
+:LAYER: api
+:END:
+
+** ITEM Author code-migration.md
+:PROPERTIES:
+:CUSTOM_ID: FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-migration
+:DEPENDS: FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-manage-create
+:LAYER: api
+:END:
+
+Full table from spec §A + §D, plus narrative of why each translation works.
+
+** ITEM Update prompt registration
+:PROPERTIES:
+:CUSTOM_ID: FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-registration
+:DEPENDS: FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-migration
+:LAYER: api
+:END:
+
+Wire new prompts into =prompt-templates= or system-prompt assembly. Remove references to deleted prompt files.
+
+** ITEM Delete legacy prompts
+:PROPERTIES:
+:CUSTOM_ID: FEAT-668-tool-prompts-write-get-md-edit-md-manage::delete-legacy-prompts
+:DEPENDS: FEAT-668-tool-prompts-write-get-md-edit-md-manage::prompt-registration
+:LAYER: api
+:END:
+
+=git rm= the 12 legacy prompt files.
+
+* Edge Cases
+
+- Prompt content too long: chunk if exceeds context budget; cross-link to migration.md.
+- Hint files (=code-hint-*.md=) currently stubs (1-7 lines); content lost on delete is minimal but document.
+- Memories file =read-path.md= referenced by older agents: deprecate path; update memory if needed.
+- Tool description in =GetTool.description= duplicates prompt — keep both in sync.
+
+* Acceptance Criteria
+
+- 5 new prompt files present.
+- 12 legacy prompt files removed.
+- Prompt registration updated.
+- =bun check:ts= clean.
+- =bun build= succeeds.
+- Agents load prompts without error.
+- Cross-link from each new prompt to =code-migration.md= for legacy patterns.
