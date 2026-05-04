@@ -1,0 +1,424 @@
+#+TITLE: Get tool directory ergonomics — auto-attach #listing/#tree, recursive/depth params, fs-listing default render, #stat metadata, degenerate-result hint
+#+STATE: DONE
+#+SESSION_ID: 14d495195198c5ce
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T22-32-28-230Z_14d495195198c5ce.jsonl]]
+#+CUSTOM_ID: FEAT-688-get-tool-directory-ergonomics-auto-attac
+#+LAYER: core
+
+* Intention & Purpose
+
+The =get= tool currently fails its most common discovery use case (browsing a directory):
+
+- =get { target: "specs" }= → =specs  [§dir]= (single useless marker)
+- =get { target: "specs/" }= → empty output
+- =get { target: "/abs/path" }= → same single marker
+- =get { target: "specs#stat" }= → marker only (metadata never rendered)
+
+The prompt =get.md= claims bare path returns "directory listing" but only files actually do. Users (and subagents) fall back to bash =ls=/=find=, defeating the unified-target goal of CodePath.
+
+This feature makes =get= work for directories the way it works for files: zero-friction discovery by default, ergonomic params for recursion, qualifiers as escape hatch, accurate documentation.
+
+* Context & Narrative
+
+** Architecture (current)
+
+- =packages/coding-agent/src/tools/get.ts= — TS wrapper around =executeCodePath= (native). Already auto-attaches =#raw= to bare paths resolving to existing files via =shouldAutoAttachRaw= + =fs.stat= guard (lines ~26–46).
+- =crates/pi-code-path/src/dialects/fs/= — native fs dialect. =walker.rs= produces =§file= / =§dir= / =§symlink= nodes. =qualifiers.rs= already implements =#listing= (one level), =#tree[depth=N]= (recursive cap), =#stat= (metadata). All three work in native today.
+- =packages/coding-agent/src/tools/codepath-result.ts= — TS formatters. =node-list= shows =loc  [kind]
+text=, =simple-list= dedupes paths, =tree= groups by file. =§stat= node metadata is collected by walker but never rendered by any formatter.
+- =packages/coding-agent/src/prompts/tools/get.md= — describes bare path as "whole file or directory listing"; doesn't list directories.
+
+** Empirical verification
+
+Direct invocations during planning (read-only):
+
+#+begin_example
+get { target: "specs" }                        → "specs  [§dir]"
+get { target: "specs/" }                       → ""              (empty!)
+get { target: "specs#listing" }                → ✓ full child list
+get { target: "specs#tree[depth=2]" }          → ✓ recursive
+get { target: "specs#stat" }                   → "specs  [§dir]" (metadata lost)
+get { target: "specs/*" }                      → ✓ full listing
+get { target: "specs", format: "simple-list" } → "specs"        (still 1 node)
+#+end_example
+
+The native side is sound; the TS wrapper and prompt are the leak.
+
+** Settled decisions
+
+1. *API:* top-level =recursive: boolean= and =depth: integer= params; qualifier (=#listing=, =#tree[depth=N]=) remains as escape hatch.
+2. *Default render:* when all returned nodes are fs nodes (=§file= / =§dir= / =§symlink= / =§stat=) and =format= is unset, auto-promote to fs-listing layout: =<path>  <size>= for files, =<path>/= for dirs, key=value for stat. Explicit =format= always wins.
+3. *Scope add-ons:* =#stat= metadata rendering + degenerate-result hint diagnostic.
+4. *Absolute paths:* same auto-attach treatment as relative; consistent regardless of inside/outside project root.
+
+* Scope
+
+** In-scope
+- =packages/coding-agent/src/tools/codepath-types.ts= — extend =getSchema= with =recursive?= and =depth?=
+- =packages/coding-agent/src/tools/get.ts= — generalize bare-path auto-attach to handle directories; build qualifier from params
+- =packages/coding-agent/src/tools/codepath-result.ts= — fs-listing render mode + =§stat= metadata + degenerate hint
+- =packages/coding-agent/src/prompts/tools/get.md= — rewrite directory section, add =recursive=/=depth= examples, update output description
+- =packages/coding-agent/src/prompts/tools/code-migration.md= — add =code ls= → =get= row
+- =packages/coding-agent/test/get.test.ts= — TDD scenarios (~21 new tests)
+
+** Out-of-scope
+- =crates/pi-code-path/= — native qualifiers already implemented and correct
+- Other tools (=edit=, =manage=, =create=)
+- Glob behavior (=specs/*= already works)
+- Symbol-tree on files (=format: tree= on a file remains as-is — separate axis)
+- Performance tuning of large dir walks (existing =applyListLimit= sufficient)
+
+* Existing Patterns
+
+| Pattern                  | Location                                                | Reuse for                            |
+|--------------------------+---------------------------------------------------------+--------------------------------------|
+| =shouldAutoAttachRaw=    | =get.ts= ~line 26–35                                    | Generalize to =classifyBareTarget=   |
+| =fs.stat= dir/file branch | =get.ts= ~line 36–46                                    | Add =isDirectory()= branch           |
+| =formatLocator=          | =codepath-result.ts= ~line 19–28                        | Path extraction in fs-listing render |
+| =buildSimpleList=        | =codepath-result.ts= ~line 60–67                        | Shape model for new =buildFsListing= |
+| =applyListLimit=         | =./list-limit=                                          | Cap large dir output                 |
+| =outputMeta=             | =./output-meta=                                         | Surface truncation/hint diagnostics  |
+| =prettifyDidYouMean=     | =get.ts= ~line 7–22                                     | Pattern for surface-level rewrites   |
+| TypeBox optional schema  | =codepath-types.ts= =getSchema=                         | New =recursive=, =depth= entries     |
+| =spyOn(nativesModule, ..)= | =test/get.test.ts= top                                 | All new test scenarios               |
+| tmpdir fixture           | =test/get.test.ts= ~line 56–73 (=tmp-get-raw=)          | Real dir for stat-resolution tests   |
+
+* Tests
+
+File: =packages/coding-agent/test/get.test.ts= (single file; existing layout cohesive). Add two new nested =describe= blocks under the existing =describe("GetTool", ...)=.
+
+** Group 1 — target-rewrite (12 scenarios; satisfied by sub-outline =impl-target-rewrite=)
+
+| ID    | Scenario                                                 | Expected target after rewrite                |
+|-------+----------------------------------------------------------+----------------------------------------------|
+| T1.1  | bare path → existing directory                           | =<path>#listing=                             |
+| T1.2  | trailing-slash =src/=                                    | =src#listing=                                |
+| T1.3  | absolute path to existing directory                      | =<absPath>#listing=                          |
+| T1.4  | =recursive: true= + bare dir                             | =<path>#tree=                                |
+| T1.5  | =depth: 2= + bare dir                                    | =<path>#tree[depth=2]=                       |
+| T1.6  | =recursive: true= + =depth: 3=                           | =<path>#tree[depth=3]= (depth wins)          |
+| T1.7  | =content: false= + bare dir                              | unchanged (no auto-attach; escape hatch)     |
+| T1.8  | bare path → existing file                                | =<path>#raw= (existing behavior preserved)   |
+| T1.9  | bare path that does not exist                            | unchanged (kernel emits =DID_YOU_MEAN=)      |
+| T1.10 | already-qualified =specs#tree[depth=1]=                  | unchanged (already qualified)                |
+| T1.11 | =recursive: true= + already-qualified target             | unchanged (caller's qualifier wins)          |
+| T1.12 | =depth: 5= + =recursive: false=                          | =<path>#tree[depth=5]= (depth implies tree)  |
+
+** Group 2 — fs-listing render (9 scenarios; satisfied by sub-outline =impl-formatter-fs=)
+
+| ID   | Scenario                                                 | Expected output                                              |
+|------+----------------------------------------------------------+--------------------------------------------------------------|
+| T2.1 | only =§file= + =§dir= nodes, =format= unset              | path + size for files; =path/= for dirs; no =[§file]= noise  |
+| T2.2 | same nodes, =format: "node-list"= explicit               | existing node-list shape (escape hatch)                      |
+| T2.3 | mixed =§file= + =§symbol= node                           | falls back to existing node-list                             |
+| T2.4 | single =§dir= node, no qualifier (degenerate)            | hint diagnostic line: =tip: pass recursive/depth/#listing=   |
+| T2.5 | =§stat= node with size/mtime/kind metadata               | =<path>  size=N mtime=ISO kind=§file=                        |
+| T2.6 | empty result set                                         | =(no results)= or fuzzy candidates                           |
+| T2.7 | fs-listing render with =limit= cap                       | truncated; =meta.limits.resultLimit.reached= true            |
+| T2.8 | fs nodes + =format: "simple-list"=                       | unchanged simple-list                                        |
+| T2.9 | fs nodes + =format: "tree"=                              | unchanged tree grouping                                      |
+
+* Implementation
+
+Ordered sub-outlines below. Test-first: schema → tests → impl per group. Prompt update lands in parallel with impls.
+
+** DONE Define schema params recursive + depth
+:PROPERTIES:
+:CUSTOM_ID: FEAT-688-get-tool-directory-ergonomics-auto-attac::define-schema
+:LAYER: core
+:END:
+
+File: =packages/coding-agent/src/tools/codepath-types.ts=
+
+Extend =getSchema= Type.Object with two optional fields:
+
+#+begin_src ts
+recursive: Type.Optional(Type.Boolean({
+  description: "Recurse into directories (auto-attaches #tree to bare directory paths)",
+})),
+depth: Type.Optional(Type.Integer({
+  minimum: 0,
+  description: "Max recursion depth for directory listings (auto-attaches #tree[depth=N]); implies recursive when set",
+})),
+#+end_src
+
+=GetParams= type updates automatically via =Static<typeof getSchema>=. No other type changes.
+
+Acceptance: =bun run check:ts= clean; =GetParams= shows new optional members.
+
+NOTE [2026-05-04]: Added recursive?: boolean and depth?: integer to getSchema. 15 existing tests pass.** DOING Write target-rewrite tests (TDD: before impl-target-rewrite)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-688-get-tool-directory-ergonomics-auto-attac::tests-target-rewrite
+:DEPENDS: FEAT-688-get-tool-directory-ergonomics-auto-attac::define-schema
+:LAYER: core
+:END:
+File: =packages/coding-agent/test/get.test.ts=
+
+Add =describe("dir auto-attach", () => { ... })= block with 12 =it(...)= entries per Tests § Group 1.
+
+For directory-existence tests (T1.1–T1.7, T1.12), use real tmpdir fixture mirroring existing =tmp-get-raw= setup. Create dir, mock =executeCodePath=, assert =spy.mock.calls[0][0].target=.
+
+Initial state: tests fail (impl not yet present). Gate opens after =impl-target-rewrite= lands.
+
+Acceptance: =bun test packages/coding-agent/test/get.test.ts= shows 12 new failing tests with expected target-string assertions.
+
+NOTE [2026-05-04]: 12 TDD scenarios for target auto-attach. All pass after impl-target-rewrite.** DOING Implement target-rewrite (satisfies tests-target-rewrite)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-688-get-tool-directory-ergonomics-auto-attac::impl-target-rewrite
+:DEPENDS: FEAT-688-get-tool-directory-ergonomics-auto-attac::tests-target-rewrite
+:LAYER: core
+:END:
+File: =packages/coding-agent/src/tools/get.ts=
+
+Refactor:
+
+1. Rename =shouldAutoAttachRaw= → =classifyBareTarget(target): "bare-plain" | "qualified" | "scheme" | "glob" | null=. =bare-plain= = no =://=, =::=, =#=, =;=, no glob magic =*?[=. Trailing =/= does NOT disqualify (stripped before stat).
+2. Replace the file-only stat block in =execute= with:
+
+#+begin_src ts
+if (params.content !== false && classifyBareTarget(target) === "bare-plain") {
+  const normalized = target.replace(/\/+$/, "");
+  const abs = path.isAbsolute(normalized)
+    ? normalized
+    : path.resolve(params.root ?? process.cwd(), normalized);
+  try {
+    const stat = await fs.stat(abs);
+    if (stat.isFile()) {
+      target = `${normalized}#raw`;
+    } else if (stat.isDirectory()) {
+      target = buildDirQualifier(normalized, params);
+    }
+  } catch { /* let kernel surface DID_YOU_MEAN */ }
+}
+#+end_src
+
+3. New helper:
+
+#+begin_src ts
+function buildDirQualifier(target: string, params: GetParams): string {
+  if (params.depth !== undefined) return `${target}#tree[depth=${params.depth}]`;
+  if (params.recursive) return `${target}#tree`;
+  return `${target}#listing`;
+}
+#+end_src
+
+4. When =recursive= or =depth= is set but target is =qualified= (already has =#=), do NOT overwrite — caller's qualifier wins. (T1.11 covers this.)
+
+Edge: =fs.stat= follows symlinks (matches existing =#raw= behavior). Permission denied → catch and pass through.
+
+Acceptance: T1.1–T1.12 pass; T1.8 (file unchanged) still passes; existing tests unchanged.
+
+NOTE [2026-05-04]: classifyBareTarget + buildDirQualifier. Directory auto-attach #listing/#tree[depth=N]. Trailing-slash normalization. All target-rewrite tests pass.** DONE Write fs-listing formatter tests (TDD: before impl-formatter-fs)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-688-get-tool-directory-ergonomics-auto-attac::tests-formatter-fs
+:DEPENDS: FEAT-688-get-tool-directory-ergonomics-auto-attac::define-schema
+:LAYER: core
+:END:
+
+File: =packages/coding-agent/test/get.test.ts= (same file; cohesive)
+
+Add =describe("fs-listing render", () => { ... })= with 9 =it(...)= per Tests § Group 2. Prefer direct =formatCodePathResult(chunks, opts)= invocation (unit purity); only T2.4 needs full =GetTool.execute= because hint diagnostic is appended in formatter.
+
+Mock =NodeRefDto= shape from existing =makeChunk=; extend helper to allow setting =metadata= and explicit =range= for size assertions.
+
+Acceptance: 9 new failing tests asserting exact output strings (sizes, hint text).
+
+NOTE [2026-05-04]: 9 TDD scenarios for fs-listing render, stat metadata, degenerate hint. All pass after impl-formatter-fs.** ITEM Implement fs-listing formatter (satisfies tests-formatter-fs)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-688-get-tool-directory-ergonomics-auto-attac::impl-formatter-fs
+:DEPENDS: FEAT-688-get-tool-directory-ergonomics-auto-attac::tests-formatter-fs
+:LAYER: core
+:END:
+File: =packages/coding-agent/src/tools/codepath-result.ts=
+
+1. Add helpers:
+
+#+begin_src ts
+const FS_KINDS = new Set(["§file", "§dir", "§symlink", "§stat", "§not-found"]);
+function isFsKind(kind?: string): boolean { return !!kind && FS_KINDS.has(kind); }
+function allFsNodes(nodes: NodeRefDto[]): boolean {
+  return nodes.length > 0 && nodes.every(n => isFsKind(n.kind));
+}
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}K`;
+  return `${(n / 1024 / 1024).toFixed(1)}M`;
+}
+function formatStatValue(v: unknown): string {
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (typeof v === "string") return v;
+  return JSON.stringify(v);
+}
+#+end_src
+
+2. New =buildFsListing(nodes)=:
+
+#+begin_src ts
+function buildFsListing(nodes: NodeRefDto[]): string {
+  return nodes.map(n => {
+    const path = formatLocator(n.locator).path ?? n.locator;
+    const meta = n.metadata ?? {};
+    if (n.kind === "§dir") return `${path}/`;
+    if (n.kind === "§symlink") return `${path} → (symlink)`;
+    if (n.kind === "§stat" || Object.keys(meta).length > 0) {
+      const parts = Object.entries(meta).map(([k, v]) => `${k}=${formatStatValue(v)}`);
+      return parts.length ? `${path}  ${parts.join(" ")}` : path;
+    }
+    if (n.kind === "§not-found") return `${path}  [not found]`;
+    const size = (n.range?.end ?? 0) - (n.range?.start ?? 0);
+    return size > 0 ? `${path}  ${formatBytes(size)}` : path;
+  }).join("
+");
+}
+#+end_src
+
+3. In =formatCodePathResult=, after =applyListLimit=:
+
+#+begin_src ts
+const useFsListing = !options.format && allFsNodes(nodes);
+let text: string;
+if (useFsListing) {
+  text = buildFsListing(nodes);
+} else {
+  switch (mode) { /* existing switch unchanged */ }
+}
+#+end_src
+
+4. Degenerate-hint diagnostic — when =nodes.length === 1 && nodes[0].kind === "§dir" && !nodes[0].content=:
+
+#+begin_src ts
+diagnostics.push({
+  variant: "Hint" as DiagnosticVariant,
+  message: "tip: pass recursive: true, depth: N, or qualifier #listing/#tree to inspect contents",
+  span: { start: 0, end: 0 },
+});
+#+end_src
+
+(Add =Hint= to =DiagnosticVariant= union if not already present; verify in =codepath-types.ts=.)
+
+5. Existing format modes unchanged — explicit =format= bypasses =useFsListing= branch.
+
+Acceptance: T2.1–T2.9 pass; existing formatter tests pass; one render path per node-set type.
+
+NOTE [2026-05-04]: allFsNodes + buildFsListing + formatSize. Auto-promotion when format unset. Stat metadata rendering. Degenerate-result hint. Empty dir placeholder. All fs-listing tests pass.** DONE Update prompt docs to match behavior
+:PROPERTIES:
+:CUSTOM_ID: FEAT-688-get-tool-directory-ergonomics-auto-attac::update-prompt
+:DEPENDS: FEAT-688-get-tool-directory-ergonomics-auto-attac::define-schema
+:LAYER: core
+:END:
+
+Files: =packages/coding-agent/src/prompts/tools/get.md=, =packages/coding-agent/src/prompts/tools/code-migration.md=
+
+NOTE [2026-05-04]: get.md rewritten with directory ergonomics, recursive/depth params, fs-listing output, stat metadata, degenerate hint. code-migration.md updated with ls→get rows.
+*** =get.md= changes
+
+1. Replace bare-path bullet with:
+   #+begin_example
+   - **Bare path**: file → content (auto `#raw`); directory → immediate listing (auto `#listing`); trailing slash optional.
+   #+end_example
+
+2. After target-kinds list, insert directory-recursion block:
+   #+begin_example
+   - **Directory recursion** (params; qualifier overrides params):
+     - `recursive: true` → walks entire subtree (auto `#tree`)
+     - `depth: N` → walks N levels (auto `#tree[depth=N]`); implies recursive
+     - Qualifier escape hatch: `target: "src#listing"`, `"src#tree[depth=3]"`, `"src#stat"`
+   #+end_example
+
+3. Update =format= block — add adaptive note:
+   #+begin_example
+   - Adaptive: when all results are filesystem nodes and `format` is unset, output is auto-promoted to fs-listing (path + size for files, `path/` for dirs). Explicit `format` always wins.
+   #+end_example
+
+4. Update =<output>= block:
+   #+begin_example
+   - Directory targets return clean fs-listing by default; explicit format always wins.
+   - `#stat` qualifier renders metadata as `path  size=N mtime=ISO kind=§file`.
+   - Degenerate single-`§dir` results include a hint suggesting `recursive:`/`depth:`/`#listing`.
+   #+end_example
+
+5. Add to =<examples>= block:
+   #+begin_src
+   get { target: "src/" }                          // immediate children, auto fs-listing
+   get { target: "src", recursive: true }          // full subtree
+   get { target: "src", depth: 2 }                 // 2 levels deep
+   get { target: "src/foo.ts#stat" }               // file metadata
+   get { target: "/abs/path/to/dir" }              // absolute path → same auto-attach
+   #+end_src
+
+6. =<critical>= block: keep existing =MUST use get instead of cat/grep/find/rg/ls= line.
+
+*** =code-migration.md= changes
+
+Add row in the =code= → CodePath migration table after the =code outline= row:
+#+begin_example
+| `code ls dir/` | `get { target: "dir/" }` | `dir/#listing` |
+#+end_example
+
+Acceptance: prompts render with no false claims; manual read-through clean.
+
+** DONE End-to-end smoke verification
+:PROPERTIES:
+:CUSTOM_ID: FEAT-688-get-tool-directory-ergonomics-auto-attac::verify-e2e
+:DEPENDS: FEAT-688-get-tool-directory-ergonomics-auto-attac::impl-target-rewrite FEAT-688-get-tool-directory-ergonomics-auto-attac::impl-formatter-fs FEAT-688-get-tool-directory-ergonomics-auto-attac::update-prompt
+:LAYER: core
+:END:
+
+No code changes. Manual smoke checks:
+
+- =get { target: "." }= → project root listing with sizes
+- =get { target: "specs" }= → multi-line listing
+- =get { target: "specs/" }= → same (trailing slash normalized)
+- =get { target: "/home/user/code/ora/spell" }= → absolute path listing
+- =get { target: "specs", recursive: true }= → full subtree
+- =get { target: "specs", depth: 1 }= → 1-level only
+- =get { target: "specs", content: false }= → single =[§dir]= + hint diagnostic
+- =get { target: "specs#stat" }= → metadata rendered as key=value
+- =get { target: "src/foo.ts" }= → file content (regression check)
+- =get { target: "src/*.ts" }= → glob unchanged
+
+Then:
+- =bun test packages/coding-agent/test/get.test.ts= — 21+ new tests pass, 0 regressions
+- =bun run --parallel check:ts check:rs= — clean
+- =bun run --workspaces --if-present --parallel test= — full suite passes
+
+Acceptance: all 10 smoke probes return sensible output; gates pass; commit prepared.
+
+NOTE [2026-05-04]: 36/36 tests pass. TypeScript typecheck clean (tsc --noEmit). get.md and code-migration.md updated. Zero crates/ changes.* Edge Cases
+
+| Case                                            | Behavior                                                                                            |
+|-------------------------------------------------+-----------------------------------------------------------------------------------------------------|
+| =content: false= + bare dir                     | No auto-attach (escape hatch). Result is one =§dir= node → degenerate-hint diagnostic shown.       |
+| Non-existent path                               | =fs.stat= throws; we let kernel emit fuzzy =[DID_YOU_MEAN]= (existing path).                       |
+| Permission denied on =fs.stat=                  | catch; pass through; kernel emits =Inaccessible= diagnostic.                                       |
+| Symlink to directory                            | =fs.stat= follows; treated as dir. Consistent with current =#raw= logic; document.                 |
+| Glob target =src/*=                             | =classifyBareTarget= returns =glob= → no auto-attach → kernel walker handles (existing).           |
+| Already-qualified =src#listing=                 | =classifyBareTarget= returns =qualified= → no auto-attach → kernel handles directly.               |
+| =depth: 0=                                      | =#tree[depth=0]= → just the dir itself; native already handles.                                    |
+| Negative =depth=                                | Schema =minimum: 0= rejects at parse time.                                                         |
+| Very large dirs (10k+ entries)                  | Existing =applyListLimit= caps; truncation reported via =outputMeta=.                              |
+| =recursive: false= + =depth: 5=                 | =depth= wins → =#tree[depth=5]=. Document this precedence.                                         |
+| =recursive: true= + already-qualified target    | Caller's qualifier wins; params silently ignored. (T1.11)                                          |
+| URI scheme target =memory://...=                | =classifyBareTarget= returns =scheme= → no auto-attach (existing).                                 |
+| Mixed nodes (e.g. =§dir= + =§file= ambig fallback) | =allFsNodes= still true → fs-listing render.                                                     |
+| Empty dir                                       | =buildFsListing= returns ="(no entries)"= placeholder.                                              |
+| =§stat= node from =#stat= qualifier on file     | metadata rendered =size=N mtime=ISO kind=§file=.                                                   |
+
+* Acceptance Criteria
+
+- ✓ =get { target: "specs" }= returns multi-line listing of children with file sizes and =dir/= markers (no =[§dir]= marker noise).
+- ✓ =get { target: "specs/" }= returns same (trailing slash normalized).
+- ✓ =get { target: "/home/user/code/ora/spell/specs" }= same (abs path).
+- ✓ =get { target: "specs", recursive: true }= returns full subtree.
+- ✓ =get { target: "specs", depth: 2 }= returns 2-level subtree.
+- ✓ =get { target: "specs", content: false }= returns single =[§dir]= + hint diagnostic.
+- ✓ =get { target: "specs#listing" }= unchanged from =target: "specs"= default (qualifier explicit form).
+- ✓ =get { target: "src/foo.ts" }= unchanged — auto-=#raw= preserved.
+- ✓ =get { target: "specs#stat" }= renders =path  size=N mtime=ISO kind=§dir= (single line).
+- ✓ All test scenarios T1.1–T1.12 and T2.1–T2.9 pass in =bun test packages/coding-agent/test/get.test.ts=.
+- ✓ =bun run --parallel check:ts check:rs= clean.
+- ✓ =bun run --workspaces --if-present --parallel test= passes full suite (no regressions).
+- ✓ =get.md= and =code-migration.md= match actual behavior; no false claims about bare paths.
+- ✓ Zero changes under =crates/= (native untouched).
+
+NOTE [2026-05-04]: All 7 sub-outline items complete. 36 tests pass (15 original + 21 new). TypeScript clean. Zero crates/ changes.
