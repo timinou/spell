@@ -23,7 +23,7 @@ use winnow::{
 	ModalResult, Parser,
 	ascii::{digit1, multispace0},
 	combinator::{alt, delimited, opt, preceded, repeat},
-	token::{none_of, take_till, take_while},
+	token::{take_till, take_while},
 };
 
 use crate::{
@@ -163,24 +163,40 @@ fn uri_locator(input: &mut &str) -> ModalResult<UriLocator> {
 	Ok(UriLocator { scheme: scheme.to_string(), path })
 }
 
+/// Consume input up to a kernel boundary: `::`, ` ::`, `#`, or bare space.
+/// Backtick-quoted regions are taken verbatim so `\`weird::name with spaces\``
+/// is one literal.
+/// Consume input up to a kernel boundary: `::`, ` ::`, `#`, or bare space.
+/// Backtick-quoted regions are taken verbatim so `\`weird::name with spaces\``
+/// is one literal.
 fn path_until_kernel_op(input: &mut &str) -> String {
 	let mut s = String::new();
 	let mut consumed = 0;
-	let chars = input.char_indices();
-	for (idx, c) in chars {
-		// Stop on "::" (kernel separator)
+	let mut in_backtick = false;
+	for (idx, c) in input.char_indices() {
+		if in_backtick {
+			s.push(c);
+			consumed = idx + c.len_utf8();
+			if c == '`' {
+				in_backtick = false;
+			}
+			continue;
+		}
+		if c == '`' {
+			in_backtick = true;
+			s.push(c);
+			consumed = idx + c.len_utf8();
+			continue;
+		}
 		if c == ':' && input[idx..].starts_with("::") {
 			break;
 		}
-		// Stop on " ::" (with leading space)
 		if c == ' ' && input[idx..].trim_start().starts_with("::") {
 			break;
 		}
-		// Stop on "#" qualifier sigil
 		if c == '#' {
 			break;
 		}
-		// Stop on bare space (caller intends end of locator)
 		if c == ' ' {
 			break;
 		}
@@ -196,9 +212,130 @@ fn fs_locator(input: &mut &str) -> ModalResult<FsLocator> {
 	if raw.is_empty() {
 		return Err(winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default()));
 	}
-	Ok(FsLocator { segments: vec![FsSegment::Literal(raw)] })
+	let segments = tokenise_fs_path(&raw).map_err(|_| winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default()))?;
+	Ok(FsLocator { segments })
 }
 
+/// Tokenise a raw filesystem path string into FsSegment variants.
+pub(crate) fn tokenise_fs_path(raw: &str) -> Result<Vec<FsSegment>, ()> {
+	let mut out: Vec<FsSegment> = Vec::new();
+	let mut buf = String::new();
+	let mut chars = raw.chars().peekable();
+	while let Some(c) = chars.next() {
+		if c == '`' {
+			let mut lit = String::new();
+			let mut closed = false;
+			for cc in chars.by_ref() {
+				if cc == '`' {
+					closed = true;
+					break;
+				}
+				lit.push(cc);
+			}
+			if !closed {
+				return Err(());
+			}
+			if !buf.is_empty() {
+				flush_segment_tokens(&mut out, std::mem::take(&mut buf))?;
+			}
+			out.push(FsSegment::Literal(lit));
+			continue;
+		}
+		if c == '/' {
+			flush_segment_tokens(&mut out, std::mem::take(&mut buf))?;
+			out.push(FsSegment::Literal("/".to_string()));
+			continue;
+		}
+		buf.push(c);
+	}
+	flush_segment_tokens(&mut out, std::mem::take(&mut buf))?;
+	Ok(out)
+}
+
+fn flush_segment_tokens(out: &mut Vec<FsSegment>, seg: String) -> Result<(), ()> {
+	if seg.is_empty() {
+		return Ok(());
+	}
+	let tokens = tokenise_segment(&seg)?;
+	out.extend(tokens);
+	Ok(())
+}
+
+/// Tokenise a single path component (between slashes) into glob primitives.
+fn tokenise_segment(seg: &str) -> Result<Vec<FsSegment>, ()> {
+	if !seg.chars().any(|c| matches!(c, '*' | '?' | '[' | '{')) {
+		return Ok(vec![FsSegment::Literal(seg.to_string())]);
+	}
+	let mut out: Vec<FsSegment> = Vec::new();
+	let mut buf = String::new();
+	let mut chars = seg.chars().peekable();
+	let flush_lit = |buf: &mut String, out: &mut Vec<FsSegment>| {
+		if !buf.is_empty() {
+			out.push(FsSegment::Literal(std::mem::take(buf)));
+		}
+	};
+	while let Some(c) = chars.next() {
+		match c {
+			'*' => {
+				flush_lit(&mut buf, &mut out);
+				if chars.peek() == Some(&'*') {
+					chars.next();
+					if !out.is_empty() || chars.peek().is_some() {
+						return Err(());
+					}
+					out.push(FsSegment::DoubleStar);
+				} else {
+					out.push(FsSegment::Star);
+				}
+			},
+			'?' => {
+				flush_lit(&mut buf, &mut out);
+				out.push(FsSegment::Question);
+			},
+			'[' => {
+				flush_lit(&mut buf, &mut out);
+				let mut class: Vec<char> = Vec::new();
+				let mut closed = false;
+				for cc in chars.by_ref() {
+					if cc == ']' {
+						closed = true;
+						break;
+					}
+					class.push(cc);
+				}
+				if !closed {
+					return Err(());
+				}
+				out.push(FsSegment::CharClass(class));
+			},
+			'{' => {
+				flush_lit(&mut buf, &mut out);
+				let mut items: Vec<String> = Vec::new();
+				let mut cur = String::new();
+				let mut closed = false;
+				for cc in chars.by_ref() {
+					if cc == '}' {
+						closed = true;
+						break;
+					}
+					if cc == ',' {
+						items.push(std::mem::take(&mut cur));
+					} else {
+						cur.push(cc);
+					}
+				}
+				if !closed {
+					return Err(());
+				}
+				items.push(cur);
+				out.push(FsSegment::Brace(items));
+			},
+			other => buf.push(other),
+		}
+	}
+	flush_lit(&mut buf, &mut out);
+	Ok(out)
+}
 fn edge_kind_p(input: &mut &str) -> ModalResult<EdgeKind> {
 	alt((
 		"import".value(EdgeKind::Import),
@@ -259,18 +396,20 @@ fn predicate(input: &mut &str) -> ModalResult<Predicate> {
 fn predicate_body(input: &mut &str) -> ModalResult<Predicate> {
 	let _ = ws(input);
 	alt((
-		preceded((".^", ws), inner_step)
-			.map(|s| Predicate::HasAncestor(Box::new(Query { head: s, chain: Vec::new() }))),
-		preceded((".", ws), inner_step)
-			.map(|s| Predicate::HasDescendant(Box::new(Query { head: s, chain: Vec::new() }))),
+		range_predicate,
+		preceded((".^", ws), inner_query)
+			.map(|q| Predicate::HasAncestor(Box::new(q))),
+		preceded((".", ws), inner_query)
+			.map(|q| Predicate::HasDescendant(Box::new(q))),
 		preceded(("§", ws), ident).map(|s: &str| Predicate::KindFilter(s.to_string())),
 		preceded(("¶", ws), ident).map(|s: &str| Predicate::AnchorFilter(s.to_string())),
 		preceded(("text~=", ws), quoted_string).map(Predicate::TextMatch),
 		preceded(("match=", ws), quoted_string).map(Predicate::LiteralMatch),
-		range_predicate,
 		"last".value(Predicate::Ordinal(-1)),
 		integer.map(Predicate::Ordinal),
+		compare_predicate,
 		attribute_predicate,
+		flag_predicate,
 	))
 	.parse_next(input)
 }
@@ -292,6 +431,38 @@ fn inner_step(input: &mut &str) -> ModalResult<Step> {
 	Ok(Step { axis: ax, head, predicates })
 }
 
+/// Recursive Query parser for use inside subquery predicates `[. Q]` and `[.^ Q]`.
+/// Uses dialect-agnostic name parsing (kernel-generic). Supports combinator
+/// chaining (`/`, `//`, `^`, `^^`, `<<`, `>>`, edge `→`, set ops `|`, `&`, `-`).
+fn inner_query(input: &mut &str) -> ModalResult<Query> {
+	let head = inner_step(input)?;
+	let mut chain: Vec<(Combinator, Step)> = Vec::new();
+	loop {
+		let snapshot = *input;
+		let _ = ws(input);
+		// Stop at `]` (end of predicate) without consuming it.
+		if input.starts_with(']') {
+			*input = snapshot;
+			break;
+		}
+		let combinator_res = combinator(input);
+		match combinator_res {
+			Ok(c) => match inner_step(input) {
+				Ok(s) => chain.push((c, s)),
+				Err(_) => {
+					*input = snapshot;
+					break;
+				},
+			},
+			Err(_) => {
+				*input = snapshot;
+				break;
+			},
+		}
+	}
+	Ok(Query { head, chain })
+}
+
 fn range_predicate(input: &mut &str) -> ModalResult<Predicate> {
 	let start = opt(integer).parse_next(input)?;
 	"..".parse_next(input)?;
@@ -306,16 +477,65 @@ fn attribute_predicate(input: &mut &str) -> ModalResult<Predicate> {
 	Ok(Predicate::Attribute { name: name.to_string(), value })
 }
 
+/// `[name OP value]` where OP ∈ {>, <, >=, <=, !=}. Equality `name=value`
+/// is handled by `attribute_predicate` (kept simple so existing AST shape
+/// holds for `[ext=ts]`-style attributes). The right-hand side is a free
+/// token consumed up to `]` with quotes optional; resolvers normalise units.
+fn compare_predicate(input: &mut &str) -> ModalResult<Predicate> {
+	let name: &str = ident.parse_next(input)?;
+	// Try the multi-character ops first to avoid ambiguity.
+	let op: CompareOp = alt((
+		">=".value(CompareOp::Gte),
+		"<=".value(CompareOp::Lte),
+		"!=".value(CompareOp::Neq),
+		">".value(CompareOp::Gt),
+		"<".value(CompareOp::Lt),
+	))
+	.parse_next(input)?;
+	let value: String = alt((
+		quoted_string,
+		take_while(1.., |c: char| c != ']' && c != ' ').map(|s: &str| s.to_string()),
+	))
+	.parse_next(input)?;
+	Ok(Predicate::Compare { name: name.to_string(), op, value })
+}
+
+/// Bare flag predicate `[empty]`, `[multiline]`, `[text]`, etc. Consumes a
+/// trailing identifier; the kernel does not enumerate the recognised flags
+/// (each dialect/resolver decides what flags it honours).
+fn flag_predicate(input: &mut &str) -> ModalResult<Predicate> {
+	let name: &str = ident.parse_next(input)?;
+	Ok(Predicate::Flag(name.to_string()))
+}
+
+/// Parse a `"…"`-delimited string supporting escape sequences:
+/// `\\"`, `\\\\`, `\\n`, `\\t`, `\\r`. Other escapes (`\\x` etc.) preserve the
+/// `\\X` form verbatim.
 fn quoted_string(input: &mut &str) -> ModalResult<String> {
-	delimited(
-		'"',
-		repeat(0.., none_of(['"', '\\'])).fold(String::new, |mut acc, c| {
-			acc.push(c);
-			acc
-		}),
-		'"',
-	)
-	.parse_next(input)
+	'"'.parse_next(input)?;
+	let mut out = String::new();
+	loop {
+		let c: char = winnow::token::any.parse_next(input)?;
+		match c {
+			'"' => return Ok(out),
+			'\\' => {
+				let esc: char = winnow::token::any.parse_next(input)?;
+				let rendered = match esc {
+					'"' => '"',
+					'\\' => '\\',
+					'n' => '\n',
+					't' => '\t',
+					'r' => '\r',
+					other => {
+						out.push('\\');
+						other
+					},
+				};
+				out.push(rendered);
+			},
+			ch => out.push(ch),
+		}
+	}
 }
 
 fn qualifier(input: &mut &str) -> ModalResult<Qualifier> {
@@ -445,4 +665,409 @@ mod tests {
 			_ => panic!("expected range"),
 		}
 	}
+
+	// ── PROJ-061: glob tokenisation ─────────────────────────────────
+
+	fn fs_segs(input: &str) -> Vec<FsSegment> {
+		let cp = parse_code_path(input, &DotLexer).unwrap();
+		match cp.locator {
+			Locator::Fs(fs) => fs.segments,
+			_ => panic!("expected FS"),
+		}
+	}
+
+	fn rt(input: &str) {
+		let cp = parse_code_path(input, &DotLexer)
+			.unwrap_or_else(|d| panic!("parse failed for {input:?}: {d:?}"));
+		let rendered = crate::render_code_path(&cp, &DotLexer);
+		let cp2 = parse_code_path(&rendered, &DotLexer)
+			.unwrap_or_else(|d| panic!("re-parse failed for {rendered:?}: {d:?}"));
+		assert_eq!(cp, cp2, "AST mismatch for {input:?} → {rendered:?}");
+	}
+
+	#[test]
+	fn glob_double_star() {
+		let segs = fs_segs("src/**/*.ts");
+		// src / ** / *.ts → Literal("src"), Literal("/"), DoubleStar, Literal("/"), Star, Literal(".ts")
+		assert!(matches!(segs[0], FsSegment::Literal(ref s) if s == "src"));
+		assert!(matches!(segs[1], FsSegment::Literal(ref s) if s == "/"));
+		assert!(matches!(segs[2], FsSegment::DoubleStar));
+		assert!(matches!(segs[3], FsSegment::Literal(ref s) if s == "/"));
+		assert!(matches!(segs[4], FsSegment::Star));
+		assert!(matches!(segs[5], FsSegment::Literal(ref s) if s == ".ts"));
+	}
+
+	#[test]
+	fn glob_brace() {
+		let segs = fs_segs("tests/**/*.{ts,rs}");
+		assert!(segs.iter().any(|s| matches!(s, FsSegment::Brace(items) if items == &vec!["ts".to_string(), "rs".to_string()])));
+	}
+
+	#[test]
+	fn glob_question() {
+		let segs = fs_segs("src/utils?");
+		assert!(segs.iter().any(|s| matches!(s, FsSegment::Question)));
+	}
+
+	#[test]
+	fn glob_charclass() {
+		let segs = fs_segs("src/[abc]");
+		assert!(segs.iter().any(|s| matches!(s, FsSegment::CharClass(c) if c == &vec!['a', 'b', 'c'])));
+	}
+
+	#[test]
+	fn glob_star_only() {
+		let segs = fs_segs("src/*.ts");
+		assert!(segs.iter().any(|s| matches!(s, FsSegment::Star)));
+	}
+
+	#[test]
+	fn glob_nested_braces_simple() {
+		rt("src/{a,b}/*.ts");
+	}
+
+	#[test]
+	fn glob_double_star_alone() {
+		rt("**/*.ts");
+	}
+
+	#[test]
+	fn glob_round_trip_corpus() {
+		for s in &[
+			"src/foo.ts",
+			"src/**/*.ts",
+			"tests/**/*.{ts,rs}",
+			"src/utils?.ts",
+			"src/[abc].ts",
+			"src/{a,b,c}/*.rs",
+			"a/b/c/d/e.txt",
+			"./relative.md",
+			"src/*",
+			"src/**",
+		] {
+			rt(s);
+		}
+	}
+
+	#[test]
+	fn glob_reject_double_star_no_boundary() {
+		// foo**bar (no /-boundary) must fail
+		assert!(parse_code_path("src/foo**bar.ts", &DotLexer).is_err());
+	}
+
+	#[test]
+	fn glob_reject_unbalanced_brace() {
+		assert!(parse_code_path("src/{a,b", &DotLexer).is_err());
+	}
+
+	#[test]
+	fn glob_reject_unbalanced_charclass() {
+		assert!(parse_code_path("src/[abc", &DotLexer).is_err());
+	}
+
+	// ── PROJ-061: backtick quoting ─────────────────────────────────
+
+	#[test]
+	fn backtick_path_with_spaces() {
+		let segs = fs_segs("`weird::name with spaces`");
+		assert_eq!(segs.len(), 1);
+		match &segs[0] {
+			FsSegment::Literal(s) => assert_eq!(s, "weird::name with spaces"),
+			_ => panic!("expected literal"),
+		}
+	}
+
+	#[test]
+	fn backtick_path_with_kernel_chars() {
+		let segs = fs_segs("`a::b/c#d`");
+		assert_eq!(segs.len(), 1);
+		match &segs[0] {
+			FsSegment::Literal(s) => assert_eq!(s, "a::b/c#d"),
+			_ => panic!("expected literal"),
+		}
+	}
+
+	#[test]
+	fn backtick_round_trip() {
+		rt("`weird name.rs`");
+		rt("`a::b`");
+	}
+
+	#[test]
+	fn backtick_unterminated_rejected() {
+		assert!(parse_code_path("`unterminated", &DotLexer).is_err());
+	}
+
+	// ── PROJ-061: full predicate vocab ─────────────────────────────
+
+	#[test]
+	fn predicate_compare_size() {
+		let cp = parse_code_path("src/foo.ts::Foo[size>1M]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		match &q.head.predicates[0] {
+			Predicate::Compare { name, op, value } => {
+				assert_eq!(name, "size");
+				assert!(matches!(op, CompareOp::Gt));
+				assert_eq!(value, "1M");
+			},
+			other => panic!("expected Compare, got {other:?}"),
+		}
+	}
+
+	#[test]
+	fn predicate_compare_mtime() {
+		let cp = parse_code_path("src/foo.ts::Foo[mtime>2026-01-01]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		match &q.head.predicates[0] {
+			Predicate::Compare { name, op, value } => {
+				assert_eq!(name, "mtime");
+				assert!(matches!(op, CompareOp::Gt));
+				assert_eq!(value, "2026-01-01");
+			},
+			other => panic!("expected Compare, got {other:?}"),
+		}
+	}
+
+	#[test]
+	fn predicate_compare_len_gt() {
+		let cp = parse_code_path("src/foo.ts::§line[len>80]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		match &q.head.predicates[0] {
+			Predicate::Compare { name, op, value } => {
+				assert_eq!(name, "len");
+				assert!(matches!(op, CompareOp::Gt));
+				assert_eq!(value, "80");
+			},
+			_ => panic!("expected Compare"),
+		}
+	}
+
+	#[test]
+	fn predicate_compare_count_gte() {
+		let cp = parse_code_path("src/foo.ts::Foo[count>=5]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(&q.head.predicates[0], Predicate::Compare { name, op, value } if name == "count" && matches!(op, CompareOp::Gte) && value == "5"));
+	}
+
+	#[test]
+	fn predicate_compare_neq() {
+		let cp = parse_code_path("src/foo.ts::Foo[depth!=3]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(&q.head.predicates[0], Predicate::Compare { name, op, .. } if name == "depth" && matches!(op, CompareOp::Neq)));
+	}
+
+	#[test]
+	fn predicate_attribute_ext() {
+		let cp = parse_code_path("src/foo.ts::Foo[ext=ts]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "ext" && value == "ts"));
+	}
+
+	#[test]
+	fn predicate_attribute_lang() {
+		let cp = parse_code_path("src/foo.ts::Foo[lang=rust]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "lang" && value == "rust"));
+	}
+
+	#[test]
+	fn predicate_attribute_name_quoted() {
+		let cp = parse_code_path(r#"src/foo.ts::Foo[name="*.test.ts"]"#, &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "name" && value == "*.test.ts"));
+	}
+
+	#[test]
+	fn predicate_attribute_starts_with() {
+		let cp = parse_code_path(r#"src/foo.ts::§line[startsWith="//"]"#, &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "startsWith" && value == "//"));
+	}
+
+	#[test]
+	fn predicate_attribute_ends_with() {
+		let cp = parse_code_path(r#"src/foo.ts::§line[endsWith="\\"]"#, &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "endsWith" && value == "\\"));
+	}
+
+	#[test]
+	fn predicate_flag_empty() {
+		let cp = parse_code_path("src/foo.ts::Foo[empty]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(&q.head.predicates[0], Predicate::Flag(s) if s == "empty"));
+	}
+
+	#[test]
+	fn predicate_flag_multiline() {
+		let cp = parse_code_path("src/foo.ts::§line[multiline]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(&q.head.predicates[0], Predicate::Flag(s) if s == "multiline"));
+	}
+
+	#[test]
+	fn predicate_flag_text() {
+		let cp = parse_code_path("src/foo.ts::Foo[text]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(&q.head.predicates[0], Predicate::Flag(s) if s == "text"));
+	}
+
+	#[test]
+	fn predicate_round_trip_compare_corpus() {
+		for s in &[
+			"src/foo.ts :: §file[size>1M]",
+			"src/foo.ts :: §file[size<=512K]",
+			"src/foo.ts :: §file[mtime>2026-01-01]",
+			"src/foo.ts :: §line[len>80]",
+			"src/foo.ts :: §line[len<=120]",
+			"src/foo.ts :: Foo[count>=5]",
+			"src/foo.ts :: Foo[count<10]",
+			"src/foo.ts :: Foo[depth!=3]",
+		] {
+			rt(s);
+		}
+	}
+
+	#[test]
+	fn predicate_round_trip_attribute_corpus() {
+		for s in &[
+			"src/foo.ts :: Foo[ext=ts]",
+			"src/foo.ts :: Foo[lang=rust]",
+			"src/foo.ts :: §file[depth=2]",
+		] {
+			rt(s);
+		}
+	}
+
+	#[test]
+	fn predicate_round_trip_flag_corpus() {
+		for s in &[
+			"src/foo.ts :: §file[empty]",
+			"src/foo.ts :: §line[multiline]",
+			"src/foo.ts :: Foo[text]",
+		] {
+			rt(s);
+		}
+	}
+
+	// ── PROJ-061: subquery + range ─────────────────────────────────
+
+	#[test]
+	fn subquery_full_query_descendant() {
+		let cp = parse_code_path("src/foo.ts::Foo[.Bar//§call_expression]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		match &q.head.predicates[0] {
+			Predicate::HasDescendant(inner) => {
+				assert_eq!(inner.chain.len(), 1, "expected combinator chain in subquery");
+				assert!(matches!(inner.chain[0].0, Combinator::Descendant));
+			},
+			_ => panic!("expected HasDescendant"),
+		}
+	}
+
+	#[test]
+	fn subquery_full_query_ancestor() {
+		let cp = parse_code_path("src/foo.ts::Foo[.^Bar/baz]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		match &q.head.predicates[0] {
+			Predicate::HasAncestor(inner) => {
+				assert_eq!(inner.chain.len(), 1);
+			},
+			_ => panic!("expected HasAncestor"),
+		}
+	}
+
+	#[test]
+	fn range_negative_tail() {
+		let cp = parse_code_path("src/foo.ts::§line[-3..]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		match &q.head.predicates[0] {
+			Predicate::Range { start, end } => {
+				assert_eq!(*start, Some(-3));
+				assert_eq!(*end, None);
+			},
+			_ => panic!("expected Range"),
+		}
+	}
+
+	#[test]
+	fn range_negative_head() {
+		let cp = parse_code_path("src/foo.ts::§line[..-1]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		match &q.head.predicates[0] {
+			Predicate::Range { start, end } => {
+				assert_eq!(*start, None);
+				assert_eq!(*end, Some(-1));
+			},
+			_ => panic!("expected Range"),
+		}
+	}
+
+	#[test]
+	fn range_negative_both() {
+		let cp = parse_code_path("src/foo.ts::§line[-5..-1]", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(&q.head.predicates[0], Predicate::Range { start: Some(-5), end: Some(-1) }));
+	}
+
+	#[test]
+	fn range_round_trip() {
+		for s in &[
+			"src/foo.ts :: §line[-3..]",
+			"src/foo.ts :: §line[..-1]",
+			"src/foo.ts :: §line[-5..-1]",
+			"src/foo.ts :: §line[10..20]",
+		] {
+			rt(s);
+		}
+	}
+
+	// ── PROJ-061: quoted-string escapes ────────────────────────────
+
+	#[test]
+	fn quoted_escape_quote() {
+		let cp = parse_code_path(r#"src/foo.ts::§line[text~="a\"b"]"#, &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(&q.head.predicates[0], Predicate::TextMatch(s) if s == "a\"b"));
+	}
+
+	#[test]
+	fn quoted_escape_backslash() {
+		let cp = parse_code_path(r#"src/foo.ts::§line[text~="a\\b"]"#, &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(&q.head.predicates[0], Predicate::TextMatch(s) if s == "a\\b"));
+	}
+
+	#[test]
+	fn quoted_escape_newline() {
+		let cp = parse_code_path(r#"src/foo.ts::§line[text~="hello\nworld"]"#, &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(&q.head.predicates[0], Predicate::TextMatch(s) if s == "hello\nworld"));
+	}
+
+	#[test]
+	fn quoted_escape_unknown_passthrough() {
+		// \\x is unknown — preserved as literal `\x`
+		let cp = parse_code_path(r#"src/foo.ts::§line[text~="a\xb"]"#, &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(&q.head.predicates[0], Predicate::TextMatch(s) if s == "a\\xb"));
+	}
+
+	// ── PROJ-061: negative parse cases ─────────────────────────────
+
+	#[test]
+	fn neg_unbalanced_predicate_bracket() {
+		assert!(parse_code_path("src/foo.ts::Foo[", &DotLexer).is_err());
+	}
+
+	#[test]
+	fn neg_unbalanced_subquery() {
+		assert!(parse_code_path("src/foo.ts::Foo[.Bar", &DotLexer).is_err());
+	}
+
+	#[test]
+	fn neg_bad_attribute_no_value() {
+		assert!(parse_code_path("src/foo.ts::Foo[ext=]", &DotLexer).is_err());
+	}
+
 }

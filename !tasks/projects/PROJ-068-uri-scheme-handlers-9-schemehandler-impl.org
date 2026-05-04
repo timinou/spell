@@ -1,0 +1,172 @@
+#+TITLE: URI scheme handlers: 9 SchemeHandler impls (artifact, memory, skill, agent, jobs, local, pi, rule, mcp)
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: PROJ-068-uri-scheme-handlers-9-schemehandler-impl
+#+DEPENDS: PROJ-064-resolver-traits-dialect-switch-state-mac PROJ-063-text-resolver-line-index-regex-qualifier
+#+LAYER: api
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Implement the 9 =SchemeHandler= traits at =crates/pi-natives/src/code_path/uri/=. Each handler resolves a scheme-specific URI (=artifact://=, =memory://=, =skill://=, =agent://=, =jobs://=, =local://=, =pi://=, =rule://=, =mcp://=) to a =NodeRef= and identifies the downstream dialect for any =::Query= continuation.
+
+* Context & Narrative
+
+Spec authority: =specs/code-graph/code-path-dialects/00-uri.md= (32 test stubs across 9 schemes + cross-cutting). Per architecture decision, =SchemeHandler= trait lives in =pi-code-path=; concrete impls live in =pi-natives= because each requires environment-bound context (artifact store, session manager, internal-url-router, MCP discovery).
+
+Reference behaviour: =packages/coding-agent/src/tools/read.ts::#handleInternalUrl= already handles all 9 schemes today via =InternalUrlRouter=. This item ports that logic to Rust and exposes via the =SchemeHandler= trait.
+
+* Scope
+
+In:
+- =crates/pi-natives/src/code_path/uri/= module with =mod.rs= + 9 sub-modules =artifact.rs=, =memory.rs=, =skill.rs=, =agent.rs=, =jobs.rs=, =local.rs=, =pi.rs=, =rule.rs=, =mcp.rs=.
+- =SchemeRegistry= struct holding =HashMap<UriScheme, Box<dyn SchemeHandler>>=.
+- 9 concrete impls per spec §B per-scheme registries.
+- Agent URI: jq-style path =agent://id/.foo.bar[0]= via JSON sub-dialect (kernel combinators handle =/= and predicates handle =[N]=).
+- Job URI: typed slot dialect (=§job=, =§status=, =§stdout=, =§stderr=, =§result=, =§error=, =§duration_ms=).
+- Markdown/Org delegation for =memory://=, =skill://*= (SKILL.md), =local://*.md=.
+- Diagnostics per scheme (=ArtifactNotFound=, =MemoryPathNotFound=, etc.).
+- 32 test stubs from spec §E.
+- Cross-cutting tests (=UnknownLocatorScheme=, =:foo:bar= treated as FS, backtick-quoted URIs as literal).
+
+Out:
+- Markdown/Org dialect itself (handled in =FEAT-662-mdorg-namelexer=).
+- Concrete artifact-store / memory-tree backends — assumed present in =pi-natives=.
+
+* Existing Patterns
+
+- =packages/coding-agent/src/tools/read.ts::#handleInternalUrl= — reference port logic.
+- =packages/coding-agent/src/internal-urls.ts= (or wherever =InternalUrlRouter= lives) — existing scheme registry on TS side.
+- =crates/pi-natives/src/code_buffer.rs= — existing artifact-handle pattern.
+- Spec =specs/code-graph/code-path-dialects/00-uri.md= — exact registries per scheme.
+
+* Tests
+
+File: =crates/pi-natives/src/code_path/uri/tests.rs= (new) and =crates/pi-natives/tests/uri_schemes.rs= (new)
+
+Workflows per spec §E:
+
+1-4. =artifact://=: raw, structural delegate, regex slice, NotFound diag.
+5-8. =memory://=: raw summary, MD heading delegate, skill MD path, NotFound diag.
+9-12. =skill://=: raw SKILL.md, MD delegate, FS for arbitrary file, NotFound.
+13-16. =agent://=: raw JSON, field path, jq-path with combinator + predicate, NotFound.
+17-20. =jobs://=: raw doc, typed status slot, stdout last-line via text delegation, NotFound.
+21-24. =local://=: raw plan artifact, MD delegate, line slice, suffix-fallback diag.
+25-28. =pi://=: raw doc, listing glob, code-dialect delegate, NotFound.
+29-32. Cross-cutting: UnknownScheme diag with hint, =foo:bar= treated as FS, backtick-quoted URI as literal, stale artifact handle no-panic.
+
+Plus =rule://= scheme: rule-name resolves to rule body content (Markdown-formatted).
+Plus =mcp://= scheme: MCP-tool URL resolves through =DiscoverableMCPSearchIndex=.
+
+Total: 32 + ~6 (rule + mcp) = ~38 tests.
+
+* Implementation
+
+** ITEM Define SchemeRegistry
+:PROPERTIES:
+:CUSTOM_ID: PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-registry
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/uri/mod.rs=
+
+=struct SchemeRegistry { handlers: HashMap<UriScheme, Box<dyn SchemeHandler>> }=. Builder pattern: =fn register(&mut self, scheme: UriScheme, h: Box<dyn SchemeHandler>)=. Default factory =fn default_registry(ctx: &SessionContext) -> SchemeRegistry= wires all 9.
+
+** ITEM Tests for each scheme
+:PROPERTIES:
+:CUSTOM_ID: PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-scheme-tests
+:DEPENDS: PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-registry
+:LAYER: api
+:END:
+
+Tests for all 9 schemes per spec §E. Initially failing.
+
+** ITEM Implement artifact handler
+:PROPERTIES:
+:CUSTOM_ID: PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-artifact
+:DEPENDS: PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-scheme-tests
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/uri/artifact.rs=
+
+Resolves =artifact://session/agent/tool/N.ext= to a =NodeRef= pointing at the underlying file. Delegates to text dialect downstream. Stale handle → =ArtifactNotFound=.
+
+** ITEM Implement memory + skill + local + pi + rule handlers
+:PROPERTIES:
+:CUSTOM_ID: PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-fs-backed
+:DEPENDS: PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-artifact
+:LAYER: api
+:END:
+
+Files: =memory.rs=, =skill.rs=, =local.rs=, =pi.rs=, =rule.rs=
+
+All five resolve to project-relative file paths and delegate to FS dialect → text/markdown.
+
+** ITEM Implement agent JSON sub-dialect
+:PROPERTIES:
+:CUSTOM_ID: PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-agent-json
+:DEPENDS: PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-fs-backed
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/uri/agent.rs=
+
+JSON sub-dialect: =§object=, =§array=, =§field=, =§array-elem=, =§string=, =§number=, =§bool=, =§null=. Field axis =:prop-name=, predicate =[N]= = array index. jq-path =agent://id/.foo.bar[0]= reuses kernel combinators.
+
+** ITEM Implement jobs typed-slot dialect
+:PROPERTIES:
+:CUSTOM_ID: PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-jobs
+:DEPENDS: PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-agent-json
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/uri/jobs.rs=
+
+Typed slots: =§job=, =§status=, =§stdout=, =§stderr=, =§result=, =§error=, =§duration_ms=, =§started_at=, =§ended_at=. Each slot delegates appropriately (status → enum value, stdout → text dialect, etc.).
+
+** ITEM Implement mcp handler
+:PROPERTIES:
+:CUSTOM_ID: PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-mcp
+:DEPENDS: PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-jobs
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/uri/mcp.rs=
+
+Bridge to =DiscoverableMCPSearchIndex=. =mcp://server/path= resolves to MCP tool/resource. Per-MCP-tool dialect default: JSON or text.
+
+** ITEM Cross-cutting tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-cross-cutting
+:DEPENDS: PROJ-068-uri-scheme-handlers-9-schemehandler-impl::uri-mcp
+:LAYER: api
+:END:
+
+Scenarios 29-32 + the 6 rule/mcp tests.
+
+* Edge Cases
+
+- =foo:bar= without =//= → not a URI; FS dialect.
+- =foo://= empty path → =Diagnostic::EmptyUriPath=.
+- Backtick-quoted URI in code-axis context → literal text, not parsed as locator.
+- Stale =artifact://= handle: session expired or artifact GC'd → =ArtifactNotFound= diagnostic; never panics.
+- =memory://root/...= relative path validation: must stay within memory tree; reject =../=.
+- =skill://name= alone vs =skill://name/path= disambiguation: bare resolves to SKILL.md; with path resolves to that file.
+- =agent://id/.foo[10]= where field is array of <10 elements → =Diagnostic::IndexOutOfRange=.
+- =jobs://j-123= where job not found → =Diagnostic::JobNotFound=.
+- =local://MY_PLAN.md= when not found → =Diagnostic::SuffixSuggestion= with closest plan match.
+- =mcp://server/path= when MCP server not registered → =Diagnostic::McpServerNotFound=.
+
+* Acceptance Criteria
+
+- All 32 spec test stubs + 6 rule/mcp tests pass.
+- =cargo test -p pi-natives uri_schemes= clean.
+- Each scheme registers via =SchemeRegistry::register=.
+- Cross-cutting: unknown scheme emits =Diagnostic::UnknownLocatorScheme= with =available= hint listing all 9.
+- Stale artifact handles never panic.
+- =bun test packages/natives/test/code-path.test.ts= URI scenarios pass.

@@ -149,7 +149,7 @@ pub enum NamePayload {
 pub enum Predicate {
 	/// [N] — ordinal index.
 	Ordinal(isize),
-	/// [a..b] — range slice.
+	/// [a..b] — range slice (negatives allowed).
 	Range { start: Option<isize>, end: Option<isize> },
 	/// [§ NodeKind] — kind filter.
 	KindFilter(String),
@@ -159,15 +159,24 @@ pub enum Predicate {
 	HasDescendant(Box<Query>),
 	/// [.^ Q] — has-ancestor subquery.
 	HasAncestor(Box<Query>),
-	/// [attr=value] — attribute match.
+	/// [attr=value] — attribute equality (string value).
 	Attribute { name: String, value: String },
 	/// [text~="regex"] — text-pattern match.
 	TextMatch(String),
 	/// [match="literal"] — literal match.
 	LiteralMatch(String),
-	/// [len>N] / [len<N] — length comparison.
+	/// [name OP value] — comparison form (size>1M, mtime>2026-01-01, depth>=2,
+	/// len>80, count>5). `value` is the raw textual right-hand side; resolvers
+	/// normalise units (K/M/G/Ki/Mi/Gi) and date formats (RFC3339 /
+	/// YYYY-MM-DD).
+	Compare { name: String, op: CompareOp, value: String },
+	/// [flag] — bare flag predicate ([empty], [multiline], [text]).
+	Flag(String),
+	/// [len OP N] — typed length comparison (kept for back-compat; new code uses
+	/// Compare).
 	Length { op: CompareOp, value: u64 },
-	/// [count>N] — count comparison.
+	/// [count OP N] — typed count comparison (kept for back-compat; new code
+	/// uses Compare).
 	Count { kind: Option<String>, op: CompareOp, value: u64 },
 }
 

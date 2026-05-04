@@ -1,0 +1,149 @@
+#+TITLE: Image pipeline: #image qualifier, #thumbnail[N], auto-resize, threshold, inspect_image hint
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: PROJ-070-image-pipeline-image-qualifier-thumbnail
+#+DEPENDS: PROJ-063-text-resolver-line-index-regex-qualifier
+#+LAYER: api
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Implement the image pipeline as kernel concerns (per settled design decision): =#image= qualifier loads image content into =Content::Image= with auto-resize threshold + 20 MiB rejection + =inspect_image= hand-off hint diagnostic. =#thumbnail[N]= generates preview at size N. Replaces image-handling logic from =read.ts= (lines 262-510).
+
+* Context & Narrative
+
+Spec authority: =specs/code-graph/code-path-dialects/00-text.md= §B "#image" + "#thumbnail[N]" + edge case D-5. Per design decision, the image pipeline is a kernel concern owned by the =#image= qualifier, not a tool-layer wrapper. The auto-resize threshold and =inspect_image= hint live in the resolver.
+
+Reference: =packages/coding-agent/src/tools/read.ts= image branch (lines 262-528). Today's behaviour: load image, check size (max 20 MiB), auto-resize to fit context window if =settings.images.autoResize= true, suggest =inspect_image= tool for analysis.
+
+* Scope
+
+In:
+- =crates/pi-natives/src/code_path/image_pipeline/= module with =mod.rs=, =loader.rs=, =resize.rs=, =thumbnail.rs=.
+- =ImageQualifierResolver= implementing =QualifierResolver= for =#image= and =#thumbnail[N]=.
+- Auto-resize logic: configurable threshold (default 1.5 MiB inline; larger gets thumbnail).
+- 20 MiB rejection threshold with =Diagnostic::ImageTooLarge=.
+- =inspect_image= hint: emit =Diagnostic::InspectImageRecommended= when image exceeds inline threshold.
+- Sniff supported formats: PNG, JPEG, GIF, WEBP, SVG, BMP, TIFF.
+- Fixture-based tests.
+
+Out:
+- Concrete inspect_image tool — already exists at =packages/coding-agent/src/tools/inspect-image.ts=; this only emits the hint.
+- Vector-image processing for SVG → handled as text passthrough.
+- Animation extraction.
+
+* Existing Patterns
+
+- =packages/coding-agent/src/tools/read.ts::loadImageInput= and =formatImageOutput=.
+- =packages/coding-agent/src/utils/image-input.ts= — existing image-input pipeline; reuse if Rust-callable.
+- =crates/pi-natives/src/image.rs= — likely existing image NAPI module; check before adding.
+- =image= crate (Rust) for resize.
+
+* Tests
+
+File: =crates/pi-natives/src/code_path/image_pipeline/tests.rs= and =crates/pi-natives/tests/image_pipeline.rs=
+
+Workflows:
+1. Small PNG (=img.png= < 1.5 MiB): =#image= → =Content::Image { handle, mimeType, width, height }= inline.
+2. Large PNG (> 1.5 MiB but < 20 MiB): =#image= → resized handle + =Diagnostic::ImageAutoResized=.
+3. Huge PNG (> 20 MiB): =#image= → =Diagnostic::ImageTooLarge=, no content.
+4. =#thumbnail[256]= on any image: returns 256-px thumbnail handle.
+5. =#thumbnail[1024]= on a 500-px image: upscale rejected, returns original size + =Diagnostic::ThumbnailUpscaleSkipped=.
+6. SVG: =#image= → returns SVG text content (=Content::Image= variant for SVG bypasses raster pipeline).
+7. Invalid image bytes: =Diagnostic::InvalidImage=.
+8. Inspect-image hint: emitted whenever image content is shown inline (always informational).
+9. Parity vs read.ts: 5 representative invocations match output.
+
+* Implementation
+
+** ITEM Define fixtures
+:PROPERTIES:
+:CUSTOM_ID: PROJ-070-image-pipeline-image-qualifier-thumbnail::image-fixtures
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/tests/fixtures/image/= — small/medium/large PNG, JPEG, WEBP, SVG, invalid-bytes file.
+
+** ITEM Tests for #image qualifier
+:PROPERTIES:
+:CUSTOM_ID: PROJ-070-image-pipeline-image-qualifier-thumbnail::image-qualifier-tests
+:DEPENDS: PROJ-070-image-pipeline-image-qualifier-thumbnail::image-fixtures
+:LAYER: api
+:END:
+
+** ITEM Implement loader + threshold logic
+:PROPERTIES:
+:CUSTOM_ID: PROJ-070-image-pipeline-image-qualifier-thumbnail::image-loader-impl
+:DEPENDS: PROJ-070-image-pipeline-image-qualifier-thumbnail::image-qualifier-tests
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/image_pipeline/loader.rs=
+
+Detect format by sniff. For raster formats, decode header to get dimensions. Apply threshold: < 1.5 MiB inline; >= 1.5 MiB and < 20 MiB → resize; >= 20 MiB → reject.
+
+** ITEM Implement auto-resize
+:PROPERTIES:
+:CUSTOM_ID: PROJ-070-image-pipeline-image-qualifier-thumbnail::image-resize-impl
+:DEPENDS: PROJ-070-image-pipeline-image-qualifier-thumbnail::image-loader-impl
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/image_pipeline/resize.rs=
+
+Use =image= crate; resize to fit max-edge (default 2048 px) with Lanczos filter. Stage to artifact store. Return =Content::Image { handle, mimeType, width, height }=.
+
+** ITEM Tests for #thumbnail
+:PROPERTIES:
+:CUSTOM_ID: PROJ-070-image-pipeline-image-qualifier-thumbnail::image-thumbnail-tests
+:DEPENDS: PROJ-070-image-pipeline-image-qualifier-thumbnail::image-resize-impl
+:LAYER: api
+:END:
+
+** ITEM Implement #thumbnail[N]
+:PROPERTIES:
+:CUSTOM_ID: PROJ-070-image-pipeline-image-qualifier-thumbnail::image-thumbnail-impl
+:DEPENDS: PROJ-070-image-pipeline-image-qualifier-thumbnail::image-thumbnail-tests
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/image_pipeline/thumbnail.rs=
+
+Generate N-pixel max-edge preview. Skip upscale (emit diagnostic).
+
+** ITEM inspect_image hint
+:PROPERTIES:
+:CUSTOM_ID: PROJ-070-image-pipeline-image-qualifier-thumbnail::image-hint
+:DEPENDS: PROJ-070-image-pipeline-image-qualifier-thumbnail::image-thumbnail-impl
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/image_pipeline/mod.rs=
+
+Emit =Diagnostic::InspectImageRecommended= alongside =Content::Image= whenever image is returned. Tool layer surfaces this as a hint.
+
+* Edge Cases
+
+- Image with corrupted header: =Diagnostic::InvalidImage=.
+- SVG with embedded JS: strip to safe SVG before display? Out of scope; pass through.
+- Animation (GIF, animated WEBP): use first frame for =#image=; =#thumbnail[N]= same.
+- EXIF-rotated JPEG: respect rotation before resize.
+- Image too small to thumbnail: skip upscale, emit hint.
+- =#thumbnail= without args: default size 512.
+- Image qualifier on non-image file: =Diagnostic::UnsupportedQualifierForExtension=.
+- Concurrent image processing: per-file lock (avoid re-decoding).
+
+* Acceptance Criteria
+
+- 5 raster formats + 1 SVG handled correctly.
+- 20 MiB rejection works.
+- Auto-resize triggers at threshold.
+- =#thumbnail[N]= for various N produces correct pixel size.
+- Upscale rejected with diagnostic.
+- inspect_image hint emitted for every inline image.
+- =cargo test -p pi-natives image_pipeline= clean.
+- 5 parity invocations vs read.ts pass.

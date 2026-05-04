@@ -1,0 +1,107 @@
+#+TITLE: Port write-shrink, parse-regression, force, sandbox, mode-guard to create+edit tools
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FEAT-665-port-write-shrink-parse-regression-force
+#+DEPENDS: FEAT-664-tool-suite-get-edit-manage-create-generi
+#+LAYER: api
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Preserve verbatim every write-side guard from the deleted =write.ts= and =edit.ts= tools at the new =create.ts= and =edit.ts= TS layer (before NAPI). Per design decision, guards live at the TS tool layer (not in the kernel) so the four generic tools enforce them uniformly. Also ports sandbox path-write enforcement and mode-guard plan-mode enforcement.
+
+* Context & Narrative
+
+Today's =write.ts= calls =enforceModeWrite=, =enforcePathWrite=, =evaluateWriteGuards= (write-shrink + parse-regression), and respects =force=. Today's =edit.ts= (in =patch/index.ts=) inherits the same guard chain. The new =create=/=edit= tools must reproduce all five enforcements.
+
+Reference: =packages/coding-agent/src/tools/write.ts= lines 113-150.
+
+* Scope
+
+In:
+- Wire =enforceModeWrite= into =edit.ts= and =create.ts= dispatch entry points (before NAPI call).
+- Wire =enforcePathWrite= sandbox check.
+- Wire =evaluateWriteGuards= (write-shrink + parse-regression) into both tools.
+- Honor =force= flag bypassing guards.
+- Diagnostic surface: =Diagnostic::SandboxRejected=, =ModeRejected=, =WriteShrink=, =ParseRegression=.
+- Tests at =packages/coding-agent/test/edit-guards.test.ts= and =create-guards.test.ts=.
+
+Out:
+- New guard logic — only port existing.
+- Kernel-level guards (out of scope; kept at tool layer per decision).
+
+* Existing Patterns
+
+- =packages/coding-agent/src/sandbox::enforcePathWrite=.
+- =packages/coding-agent/src/tools/mode-guard::enforceModeWrite=, =resolvePlanPath=.
+- =packages/coding-agent/src/tools/managed-buffer-guards::evaluateWriteGuards=.
+- =packages/coding-agent/src/tools/write.ts= lines 113-150 — exact guard chain order.
+
+* Tests
+
+File: =packages/coding-agent/test/edit-guards.test.ts= and =create-guards.test.ts=
+
+Workflows:
+1. Sandbox: write outside cwd rejected with =Diagnostic::SandboxRejected=.
+2. Plan-mode: =edit= in non-allowlisted folder during plan-mode rejected with =Diagnostic::ModeRejected=.
+3. Write-shrink: replacing 1000-line file with 10 lines without =force= → =Diagnostic::WriteShrink= with shrink ratio.
+4. Parse-regression: edit that produces tree-sitter parse errors → =Diagnostic::ParseRegression=.
+5. Force flag: same scenarios with =force: true= → success.
+6. =create= against existing file without =force= → =Diagnostic::FileExists=.
+7. =create= against existing file with =force= → success.
+8. Sandbox + mode-guard order: sandbox checked first; mode-guard second; guard third.
+
+* Implementation
+
+** ITEM Tests for guard chain
+:PROPERTIES:
+:CUSTOM_ID: FEAT-665-port-write-shrink-parse-regression-force::guard-tests
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/test/edit-guards.test.ts= and =create-guards.test.ts=
+
+Scenarios 1-8.
+
+** ITEM Wire guards into edit dispatch
+:PROPERTIES:
+:CUSTOM_ID: FEAT-665-port-write-shrink-parse-regression-force::wire-edit-guards
+:DEPENDS: FEAT-665-port-write-shrink-parse-regression-force::guard-tests
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/src/tools/edit.ts=
+
+Add guard chain at entry: =enforceModeWrite= → =enforcePathWrite= → =evaluateWriteGuards= per operation target. Diagnostics emitted before NAPI call. =force= flag in EditAction bypasses guards 3 (write-shrink, parse-regression).
+
+** ITEM Wire guards into create dispatch
+:PROPERTIES:
+:CUSTOM_ID: FEAT-665-port-write-shrink-parse-regression-force::wire-create-guards
+:DEPENDS: FEAT-665-port-write-shrink-parse-regression-force::wire-edit-guards
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/src/tools/create.ts=
+
+Same chain. Plus =FileExists= check (non-force) before NAPI call.
+
+* Edge Cases
+
+- Multi-operation =edit= where one passes guards and another fails: emit guard diag for failures; succeed for passes? Decision: atomic — fail entire edit operation; emit per-operation diagnostic.
+- =force: true= on individual EditAction vs operation level: per-action force overrides for that action only.
+- Plan-mode allowlist (e.g. =specs/=): =resolvePlanPath= identifies allowed paths; honor.
+- Sandbox policy varies per session: re-check on every call.
+- Parse-regression for non-code files: skip (only run on tree-sitter-supported extensions).
+
+* Acceptance Criteria
+
+- All 5 guard types enforced on =edit= and =create=.
+- =force= bypasses appropriately.
+- Sandbox + mode + write-guard chain order preserved.
+- 8 test scenarios pass.
+- =bun test packages/coding-agent/test/{edit,create}-guards.test.ts= clean.
+- Comparing today's =write.ts= guard chain side-by-side: identical behaviour.

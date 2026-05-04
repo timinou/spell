@@ -1,0 +1,186 @@
+#+TITLE: NAPI bridge: executeCodePath, streaming chunked iterator, content marshalling, AbortSignal
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: PROJ-065-napi-bridge-executecodepath-streaming-ch
+#+DEPENDS: PROJ-064-resolver-traits-dialect-switch-state-mac
+#+LAYER: api
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Expose the CodePath resolver to the TypeScript tool layer via NAPI. Implement =executeCodePath= as a streaming chunked async-iterator function in =crates/pi-natives/src/code_path.rs=. This is the boundary between the Rust kernel (=pi-code-path= traits + resolvers) and the four generic TS tools (=get=, =edit=, =manage=, =create=).
+
+* Context & Narrative
+
+Per spec =code-path-extensions.md §6=, the NAPI surface carries 3 commands (=get=, =edit=, =manage=); =create= is a TS-side ergonomic wrapper that lowers to =edit { action: { kind: "create" } }= before crossing the boundary.
+
+Streaming via NAPI threadsafe-functions emitting batches of =CodePathChunk= (default 64 NodeRefs/chunk). Cancellation via =AbortSignal= → Rust =CancellationToken=. Binary content (=Bytes=, =Image=, =ExtractedText for large outputs=) staged to artifact store; never inlined.
+
+This item depends on =PROJ-064-resolver-traits= (the dispatch engine + traits) being shipped. The concrete sub-resolvers (Code, Edge, URI scheme handlers) are sibling items that this NAPI bridge composes.
+
+* Scope
+
+In:
+- =crates/pi-natives/src/code_path.rs= new module.
+- =crates/pi-natives/src/code_path/dispatch.rs= — composes =FsResolver= + =TextResolver= + =CodeResolver= + =EdgeResolver= + URI scheme registry.
+- NAPI function =executeCodePath(opts: CodePathOptions) -> AsyncIterator<CodePathChunk>=.
+- NAPI function =renderCodePath(ast: CodePath) -> string= for tool-side rendering.
+- NAPI function =parseCodePath(target: string) -> CodePath | Diagnostic= for tool-side parsing/validation.
+- AbortSignal ↔ CancellationToken bridge.
+- Content marshalling: =Text= inline; =Bytes=/=Image=/=ExtractedText= over threshold staged to artifact store and returned as handle.
+- TS types in =packages/natives/src/code-path/types.ts=.
+- Index export in =packages/natives/src/code-path/index.ts=.
+- Integration tests at =packages/natives/test/code-path.test.ts=.
+
+Out:
+- Concrete CodeResolver impl (=PROJ-code-resolver-impl=).
+- Concrete EdgeResolver impl (=PROJ-edge-resolver-impl=).
+- Concrete URI scheme handlers (=PROJ-uri-schemes=).
+- Tool-layer schemas (=FEAT-tools-suite=).
+
+* Existing Patterns
+
+- =crates/pi-natives/src/grep.rs= — existing NAPI streaming pattern (rg-style streaming with chunks).
+- =crates/pi-natives/src/code_buffer.rs= — existing NAPI structured-options pattern.
+- =crates/pi-natives/src/lib.rs= — module registrations, NAPI macros.
+- =napi 2.x= and =napi-derive 2.x= already used.
+- =crates/pi-natives/src/text.rs= — existing artifact-store integration for large content.
+- =packages/natives/src/native.ts= — reference for TS-side NAPI binding.
+- =packages/natives/src/grep/index.d.ts= — reference for TS type shape.
+
+* Tests
+
+File: =packages/natives/test/code-path.test.ts= (new) and =crates/pi-natives/src/code_path/tests.rs= (new).
+
+User workflows:
+
+1. Bare path get: =executeCodePath({ command: "get", target: "src/foo.ts" })= → stream of one NodeRef.
+2. FS glob: =executeCodePath({ command: "get", target: "**/*.ts" })= → stream of file NodeRefs.
+3. Text slice: =executeCodePath({ command: "get", target: "foo.ts", offset: 50, head: 100 })= → 100-line text.
+4. Regex search: =executeCodePath({ command: "get", target: "src/** :: §line[text~=\"TODO\"]" })= → matching lines.
+5. Code symbol: =executeCodePath({ command: "get", target: "src/foo.ts :: Bar.baz" })= → symbol NodeRef.
+6. URI scheme: =executeCodePath({ command: "get", target: "memory://root" })= → memory file content.
+7. Edit: =executeCodePath({ command: "edit", target: "foo.txt", actions: [{ kind: "replace", pos: "10#AB", end: "12#CD", content: "..." }] })= → success/diff result.
+8. Manage: =executeCodePath({ command: "manage", manage: "save", target: "foo.ts" })= → save result.
+9. Streaming: large query yields multiple chunks; each chunk has =done: false= except last.
+10. Cancellation: AbortSignal aborts mid-stream; final chunk has =Diagnostic::Cancelled=.
+11. Binary content: =target: "img.png#image"= → NodeRef.content is =Image= with =artifact://= handle, no inline base64.
+12. Encoding fallback: latin-1 file with =#raw= → NodeRef.diagnostics contains =EncodingFallback=.
+13. Suffix-fallback: typo path → result includes =Diagnostic::SuffixSuggestion=.
+14. Diagnostics surface: every error path emits a typed =Diagnostic=, no panics.
+
+* Implementation
+
+** ITEM Define NAPI types
+:PROPERTIES:
+:CUSTOM_ID: PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-types
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/types.rs=
+
+NAPI-derive types matching =CodePathOptions=, =EditOperation=, =EditAction=, =CodePathChunk=, =NodeRef=, =Content=, =Diagnostic=. Use =#[napi(object)]= for structs and =#[napi(string_enum)]= for tag-discriminated enums.
+
+** ITEM TS types + facade
+:PROPERTIES:
+:CUSTOM_ID: PROJ-065-napi-bridge-executecodepath-streaming-ch::ts-types
+:DEPENDS: PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-types
+:LAYER: api
+:END:
+
+Files: =packages/natives/src/code-path/types.ts=, =packages/natives/src/code-path/index.ts=
+
+Hand-written TypeScript types matching NAPI surface (since napi 2 doesn't auto-generate union types cleanly). Re-export from =packages/natives/src/index.ts=.
+
+** ITEM Tests for executeCodePath
+:PROPERTIES:
+:CUSTOM_ID: PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-tests
+:DEPENDS: PROJ-065-napi-bridge-executecodepath-streaming-ch::ts-types
+:LAYER: api
+:END:
+
+File: =packages/natives/test/code-path.test.ts=
+
+Scenarios 1-14. Initially failing.
+
+** ITEM Implement dispatch composition
+:PROPERTIES:
+:CUSTOM_ID: PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-dispatch-impl
+:DEPENDS: PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-tests
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/dispatch.rs=
+
+Compose =DispatchEngine= from =pi-code-path= with concrete sub-resolvers (Code/Edge/URI). Each sub-resolver is a Box<dyn Trait>. The dispatch engine takes a =ResolveContext= bundling them.
+
+** ITEM Implement executeCodePath NAPI function
+:PROPERTIES:
+:CUSTOM_ID: PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-execute-impl
+:DEPENDS: PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-dispatch-impl
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path.rs=
+
+=#[napi(js_name = "executeCodePath")]= async function. Takes =CodePathOptions= and returns an =AsyncIterator<CodePathChunk>=. Uses =napi::threadsafe_function::ThreadsafeFunction= to push chunks to TS-side iterator. Streams until =Stream= completes or =AbortSignal= fires.
+
+** ITEM Implement parseCodePath + renderCodePath
+:PROPERTIES:
+:CUSTOM_ID: PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-parse-render
+:DEPENDS: PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-execute-impl
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path.rs=
+
+=#[napi(js_name = "parseCodePath")]= sync function: =fn(target: String) -> Result<CodePath, Diagnostic>=. =#[napi(js_name = "renderCodePath")]= sync function: =fn(cp: CodePath) -> String=. Used by tool layer for validation + canonicalisation.
+
+** ITEM AbortSignal ↔ CancellationToken bridge
+:PROPERTIES:
+:CUSTOM_ID: PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-abort-bridge
+:DEPENDS: PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-parse-render
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/abort.rs=
+
+Bridge =AbortSignal= → =CancellationToken= via =addEventListener("abort", ...)= callback that triggers =cancel()=. Pass token through dispatch.
+
+** ITEM Content marshalling threshold logic
+:PROPERTIES:
+:CUSTOM_ID: PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-content-threshold
+:DEPENDS: PROJ-065-napi-bridge-executecodepath-streaming-ch::napi-abort-bridge
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/marshal.rs=
+
+Decision: =Text= and =ExtractedText< 1 MiB= inline. =Text > 1 MiB= staged to artifact store as =Bytes= handle with diagnostic. =Bytes= and =Image= always staged. Wire to existing =crates/pi-natives/src/text.rs::stage_artifact= (or the text spill mechanism).
+
+* Edge Cases
+
+- Empty target string → =Diagnostic::ParseError=.
+- Target with =::Query= but no Locator → =Diagnostic::ParseError= ("locator required").
+- Cancellation before stream starts → first chunk has =Diagnostic::Cancelled=, =done: true=.
+- Target referencing a deleted file mid-stream → per-NodeRef =Diagnostic::FileNotFound=, stream continues.
+- Edit action against non-existent file → =Diagnostic::FileNotFound= (not auto-create; use =command: "create"= or =action: { kind: "create" }= explicitly).
+- =command: "manage"= with unknown subcommand → =Diagnostic::UnsupportedOperation=.
+- Concurrent calls share session: each call gets its own =CancellationToken=; no cross-call interference.
+- NAPI threadsafe function backpressure: if TS side pulls slow, queue grows; cap at 4 chunks queued; emit =Diagnostic::Backpressure= if exceeded; drop oldest? policy decision: block sender (preserves correctness over throughput).
+- Binary content over 100 MiB → reject with =Diagnostic::ContentTooLarge=; require explicit chunked read.
+
+* Acceptance Criteria
+
+- =bun --cwd=packages/natives run dev:native= builds the addon.
+- =bun test packages/natives/test/code-path.test.ts= passes scenarios 1-14.
+- =cargo test -p pi-natives code_path= passes Rust-side tests.
+- =cargo check -p pi-natives= clean.
+- =bun check:ts= clean.
+- AbortSignal cancellation aborts mid-stream within 100 ms (verified by test).
+- Binary content never inlined: =NodeRef.content.kind === "bytes" || === "image"= always carries an =artifact://= handle string.
+- Streaming: large fixture (10k files) yields ≥10 chunks; each chunk has correct =done= flag.

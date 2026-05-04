@@ -1,0 +1,127 @@
+#+TITLE: Delete legacy tools: code/read/find/grep/ast-grep/ast-edit/edit/write (~5860 LOC)
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FEAT-667-delete-legacy-tools-code-read-find-grep
+#+DEPENDS: FEAT-666-behavioral-parity-corpus-30-50-invocatio
+#+LAYER: api
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Hard-delete the eight legacy tools and their tests once the parity corpus passes. No transition aliases. Removes ~5860 LOC of TS source plus their prompt files. Per design decision (=tool_scope= question), this is the WIDEST cutover variant — also deletes =write.ts= since =create= subsumes new-file creation.
+
+* Context & Narrative
+
+Hard-cut policy: legacy tools removed in one commit alongside prompt removal. No grace period, no aliases. The parity corpus (=FEAT-666=) gates this delete: must pass before this item runs.
+
+Files to delete:
+- =packages/coding-agent/src/tools/code.ts= (1014 LOC)
+- =packages/coding-agent/src/tools/code-result.ts= (LOC TBD)
+- =packages/coding-agent/src/tools/code-supported-files.ts= (review for relevance after cutover; may keep)
+- =packages/coding-agent/src/tools/code-text-compatibility.ts= (review)
+- =packages/coding-agent/src/tools/read.ts= (1019)
+- =packages/coding-agent/src/tools/find.ts= (490)
+- =packages/coding-agent/src/tools/grep.ts= (926)
+- =packages/coding-agent/src/tools/ast-grep.ts= (466)
+- =packages/coding-agent/src/tools/ast-edit.ts= (568)
+- =packages/coding-agent/src/tools/write.ts= (402)
+- =packages/coding-agent/src/patch/index.ts= EditTool class (973 — but file may host other exports; evaluate)
+
+Plus index.ts entries:
+- Remove =CodeTool=, =ReadTool=, =FindTool=, =GrepTool=, =AstGrepTool=, =AstEditTool=, =WriteTool=, =EditTool= imports.
+- Remove corresponding =export *= entries.
+
+Plus test files:
+- =packages/coding-agent/test/code.test.ts=, =read.test.ts=, =find.test.ts=, =grep.test.ts=, =ast-grep.test.ts=, =ast-edit.test.ts=, =write.test.ts=, =code-buffer.test.ts= (review).
+- Tests already ported to new tool surface in =FEAT-666=.
+
+* Scope
+
+In:
+- Delete the 8 source files.
+- Delete the corresponding test files (already ported in =FEAT-666=).
+- Delete prompt files (=code.md=, =code-hint-*.md=, =code-search.md=, =read.md=, =find.md=, =grep.md=, =ast-grep.md=, =ast-edit.md=) — coordinated with =FEAT-tool-prompts=.
+- Update =packages/coding-agent/src/tools/index.ts= imports + exports.
+- Verify zero source references to deleted tool classes via grep scan.
+- Verify =bun check:ts= clean.
+- Verify =bun test --workspaces= clean (with new tools handling all coverage).
+
+Out:
+- Prompt cutover (separate item =FEAT-tool-prompts=).
+- AGENTS.md / agent role files / memory skills (separate items).
+
+* Existing Patterns
+
+- Existing import structure in =packages/coding-agent/src/tools/index.ts=.
+- Hard-cut commit discipline: one commit deletes; one revert restores if regression caught.
+
+* Tests
+
+File: regression check via existing test suite + orphan-reference scan.
+
+Workflows:
+1. After delete, =bun check:ts= clean.
+2. After delete, =bun lint:ts= clean.
+3. After delete, =bun test --workspaces --if-present --parallel= clean (no test imports deleted tools).
+4. =rg "import.*\\b(CodeTool|ReadTool|FindTool|GrepTool|AstGrepTool|AstEditTool|WriteTool|EditTool)\\b" packages/= returns zero in source files (ignoring renamed/preserved EditTool in patch path which is itself deleted).
+5. =rg "from \"\\./tools/(code|read|find|grep|ast-grep|ast-edit|write|patch)\"" packages/= returns zero.
+
+* Implementation
+
+** ITEM Pre-flight orphan scan
+:PROPERTIES:
+:CUSTOM_ID: FEAT-667-delete-legacy-tools-code-read-find-grep::pre-delete-scan
+:LAYER: api
+:END:
+
+Run =rg= scans to find every import / reference to legacy tool classes. Document each as a follow-up edit (likely already covered by =FEAT-664= and =FEAT-665=).
+
+** ITEM Delete source files
+:PROPERTIES:
+:CUSTOM_ID: FEAT-667-delete-legacy-tools-code-read-find-grep::delete-sources
+:DEPENDS: FEAT-667-delete-legacy-tools-code-read-find-grep::pre-delete-scan
+:LAYER: api
+:END:
+
+=git rm= the 8 source files. Update =index.ts=.
+
+** ITEM Delete test files
+:PROPERTIES:
+:CUSTOM_ID: FEAT-667-delete-legacy-tools-code-read-find-grep::delete-tests
+:DEPENDS: FEAT-667-delete-legacy-tools-code-read-find-grep::delete-sources
+:LAYER: api
+:END:
+
+=git rm= the legacy test files. Tests already ported in =FEAT-666=.
+
+** ITEM Verify clean
+:PROPERTIES:
+:CUSTOM_ID: FEAT-667-delete-legacy-tools-code-read-find-grep::verify-clean
+:DEPENDS: FEAT-667-delete-legacy-tools-code-read-find-grep::delete-tests
+:LAYER: api
+:END:
+
+Run =bun check:ts=, =bun lint:ts=, =bun test=, and =rg= orphan-reference scan. All must pass.
+
+* Edge Cases
+
+- =code-supported-files.ts= and =code-text-compatibility.ts= may be referenced by non-deleted code. Audit before deletion; keep if external refs exist.
+- =patch/index.ts= may host non-EditTool exports (e.g. helper functions). Audit; preserve as needed; rename if necessary.
+- Renderer functions (=astEditToolRenderer=, etc.) may be re-exported elsewhere. Grep for re-exports.
+- Some tests may indirectly import via =tool indices=; clean those.
+- Prompt files referenced from system prompts at runtime — coordinated with =FEAT-tool-prompts=.
+
+* Acceptance Criteria
+
+- 8 source files deleted.
+- 8 test files deleted (or merged into new test suite via =FEAT-666=).
+- =index.ts= imports + exports updated.
+- =bun check:ts= clean.
+- =bun lint:ts= clean.
+- =bun test --workspaces --if-present --parallel= clean.
+- Orphan-reference =rg= scan returns zero.
+- Total LOC reduction in this commit: ~5860 LOC (verified via =git diff --stat=).

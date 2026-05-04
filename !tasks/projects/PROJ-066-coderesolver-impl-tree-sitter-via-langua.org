@@ -1,0 +1,123 @@
+#+TITLE: CodeResolver impl (tree-sitter via LanguageProfile)
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: PROJ-066-coderesolver-impl-tree-sitter-via-langua
+#+DEPENDS: PROJ-064-resolver-traits-dialect-switch-state-mac FEAT-663-wire-all-8-dialects-into-languageprofile
+#+LAYER: api
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Implement =CodeResolver= trait against =pi-code-engine::LanguageProfile= + tree-sitter at =crates/pi-natives/src/code_path/code_resolver.rs=. Resolves =Foo.bar/§call_expression[name=fetch]/:arguments[0]= against an actual TS/Rust/etc. AST. This is what activates the per-language NameLexers shipped in =FEAT-656= through =FEAT-662=.
+
+* Context & Narrative
+
+The =CodeResolver= trait is declared in =pi-code-path/src/resolver/traits.rs=. It needs =LanguageProfile= context to: (1) parse a file with the right tree-sitter grammar; (2) call =NameLexer::matches()= with full context; (3) traverse AST applying combinators (=/=, =//=, =^=, =^^=, =<<=, =>>=, kernel-shared step walk).
+
+The existing =resolve_symbol()= pattern in =pi-code-engine= (per PLAN-255 inventory) is the reference for top-level + member-chain walk. Anchors (=¶name=) consult =LanguageDialect::anchors= via =LanguageProfile.dialect=. Qualifiers (=#name=) consult =LanguageDialect::qualifiers= for body/sig/name range resolution.
+
+* Scope
+
+In:
+- =crates/pi-natives/src/code_path/code_resolver.rs= module.
+- =CodeResolverImpl= struct implementing =pi_code_path::CodeResolver= trait.
+- AST walker for combinators on tree-sitter Tree.
+- NameLexer.matches() invocation with profile + source.
+- Anchor matcher dispatch.
+- Qualifier resolution (delegates to =QualifierResolver= via =QualifierSpec=).
+- Predicate evaluator for kernel-shared predicates (=[N]=, =[a..b]=, =[§K]=, =[¶A]=, =[.Q]=, =[.^Q]=, =[attr=…]=, =[text~=re]=).
+- Streaming via =impl Stream<Item = NodeRef>= with bounded recursion.
+- Tests against fixtures from each of the 8 languages.
+
+Out:
+- NameLexer parse logic (already in dialect modules).
+- NAPI bridge (=PROJ-065-napi-bridge=).
+- Edge axis (=PROJ-edge-resolver-impl=).
+
+* Existing Patterns
+
+- =crates/pi-code-engine/src/language/profile.rs= — =LanguageProfile= struct.
+- =crates/pi-code-engine/src/procedure/= — =RuleExpr=, =matches_rule_expr= for predicate eval.
+- =crates/pi-code-engine= existing =resolve_symbol= function and member-chain walker.
+- =pi-code-path::ast= for Query/Step/Combinator/Predicate.
+- =pi-code-path::dialect::NameLexer= trait.
+
+* Tests
+
+File: =crates/pi-natives/src/code_path/code_resolver.rs::tests=
+
+Workflows:
+1. Top-level symbol: =foo.ts :: Bar= → NodeRef of class declaration.
+2. Member: =foo.ts :: Bar.baz= → NodeRef of method.
+3. Descendant: =foo.ts :: //§call_expression= → all calls.
+4. Predicate: =foo.ts :: //§call[name=fetch]= → matching calls.
+5. Anchor: =foo.ts :: //§arrow_function[.¶hook-deps]= → hooks-style fns.
+6. Qualifier: =foo.ts :: Bar.baz#body= → method body range.
+7. Kernel-shared: =foo.ts :: //§method[.//§string_literal[text~="TODO"]]#body= per cross-dialect smoke.
+8. Cross-language: same query on .rs / .py / .go / .hs / .html / .css / .md fixtures.
+
+* Implementation
+
+** ITEM Tests for AST walker per combinator
+:PROPERTIES:
+:CUSTOM_ID: PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-walker-tests
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/code_resolver.rs::tests=
+
+Scenarios 1-7. Initially failing.
+
+** ITEM Implement AST walker
+:PROPERTIES:
+:CUSTOM_ID: PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-walker-impl
+:DEPENDS: PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-walker-tests
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/code_resolver.rs=
+
+=fn walk(tree: &Tree, root: Node, query: &Query, profile: &LanguageProfile, src: &str) -> Vec<NodeRef>=. Recursive descent with combinator dispatch.
+
+** ITEM Tests cross-language
+:PROPERTIES:
+:CUSTOM_ID: PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-cross-lang-tests
+:DEPENDS: PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-walker-impl
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/tests/code_resolver_cross_lang.rs=
+
+Scenario 8. Use cross-dialect smoke fixtures from =FEAT-663=.
+
+** ITEM Predicate evaluator
+:PROPERTIES:
+:CUSTOM_ID: PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-predicate-eval
+:DEPENDS: PROJ-066-coderesolver-impl-tree-sitter-via-langua::code-cross-lang-tests
+:LAYER: api
+:END:
+
+File: =crates/pi-natives/src/code_path/code_resolver/predicates.rs=
+
+Evaluate kernel-shared predicates against tree-sitter nodes. Reuse =matches_rule_expr= from =pi-code-engine= where applicable. Recursion for =[.Q]= / =[.^Q]= subqueries.
+
+* Edge Cases
+
+- File with parse errors: tree-sitter still produces tree with error nodes; walker continues; emit =Diagnostic::PartialParse=.
+- Symbol not found: empty stream + =Diagnostic::NoMatches=.
+- Ambiguous symbol (e.g. two top-level decls with same name): emit all matches; let projection decide; optionally emit =Diagnostic::AmbiguousTarget { count: N }=.
+- Qualifier on incompatible node kind (=#body= on a variable): =Diagnostic::UnsupportedQualifierForNodeKind=.
+- File unsupported language (no =LanguageProfile.dialect=): fall back to text dialect; emit =Diagnostic::UnknownLanguage=.
+
+* Acceptance Criteria
+
+- 8 language tiers pass cross-dialect smoke test.
+- All combinators (=/=, =//=, =^=, =^^=, =<<=, =>>=) tested against fixtures.
+- Predicate evaluator passes the 7 predicate categories per spec.
+- Qualifier resolution returns correct byte range for =#body=, =#sig=, =#name= on each language.
+- =cargo test -p pi-natives code_resolver= clean.
+- =cargo check -p pi-natives= clean.

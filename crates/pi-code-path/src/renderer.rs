@@ -35,7 +35,21 @@ fn render_locator(out: &mut String, loc: &Locator) {
 
 fn render_fs_segment(out: &mut String, seg: &FsSegment) {
 	match seg {
-		FsSegment::Literal(s) => out.push_str(s),
+		FsSegment::Literal(s) => {
+			// Auto-quote literals containing reserved kernel/glob chars so
+			// round-trip survives. Plain `/` separator literals are passed through.
+			if s == "/" {
+				out.push('/');
+			} else if s.chars().any(|c| {
+				matches!(c, ' ' | ':' | '#' | '`' | '*' | '?' | '[' | ']' | '{' | '}' | '|' | '&')
+			}) {
+				out.push('`');
+				out.push_str(s);
+				out.push('`');
+			} else {
+				out.push_str(s);
+			}
+		},
 		FsSegment::Star => out.push('*'),
 		FsSegment::DoubleStar => out.push_str("**"),
 		FsSegment::Question => out.push('?'),
@@ -145,6 +159,12 @@ fn render_predicate<N: NameLexer>(out: &mut String, p: &Predicate, name_lexer: &
 		},
 		Predicate::Length { op, value } => {
 			let _ = write!(out, "len{}{}", render_compare_op(op), value);
+		},
+		Predicate::Compare { name, op, value } => {
+			let _ = write!(out, "{}{}{}", name, render_compare_op(op), value);
+		},
+		Predicate::Flag(name) => {
+			out.push_str(name);
 		},
 		Predicate::Count { kind, op, value } => {
 			if let Some(k) = kind {

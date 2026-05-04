@@ -1,0 +1,110 @@
+#+TITLE: AGENTS.md tool-precedence rewrite + per-agent role file Tools: lists update
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FEAT-669-agents-md-tool-precedence-rewrite-per-ag
+#+DEPENDS: FEAT-668-tool-prompts-write-get-md-edit-md-manage
+#+LAYER: api
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Update AGENTS.md tool-precedence sections, =MUST use Grep/Read/Find= guidance, and per-agent role frontmatter =Tools:= lists across the spell-monorepo so every agent sees the new four-generic-tool surface.
+
+* Context & Narrative
+
+Today's =AGENTS.md= contains tool-precedence tables ("Use Grep not bash grep", "Use Read not bash cat") and =Tools:= lists per agent. Multiple agent role files (=boss=, =morgan=, =code-architect=, =code-explorer=, =reviewer=, =plan=, =explore=, etc.) declare specific tool allowlists.
+
+Every reference to =find=, =read=, =grep=, =ast-grep=, =ast-edit=, =edit=, =write=, =code= must be replaced with the appropriate generic tool (=get=, =edit=, =manage=, =create=) — sometimes one-to-one, sometimes one-to-many.
+
+* Scope
+
+In:
+- =AGENTS.md= (top-level) — tool-precedence section rewrite.
+- =packages/coding-agent/src/prompts/system/= — system prompt files referencing tool names.
+- Per-agent role files — each agent definition's =Tools:= frontmatter list.
+- Spell-server agents (if relevant) — same.
+- Remove =MUST use Grep/Read/Find/Edit/Write= bullets; replace with =MUST use get/edit/manage/create=.
+- Add precedence: =get= over =bash grep/cat/find=, =edit= over =bash sed=, =create= over =bash echo > file=.
+
+Out:
+- New tool prompts (=FEAT-tool-prompts=).
+- Memory skills (=FEAT-orphan-scan=).
+
+* Existing Patterns
+
+- =AGENTS.md= top-level tool-precedence table.
+- =packages/coding-agent/src/prompts/system/= system prompts.
+- Per-agent role files at TBD locations (need to grep).
+
+* Tests
+
+1. =bun check:ts= clean.
+2. =bun lint:ts= clean (no orphan references).
+3. =rg "\\b(find|read|grep|ast-grep|ast_grep|ast-edit|ast_edit|write)\\b" AGENTS.md packages/coding-agent/src/prompts/= returns zero in tool-name contexts (allowing =find=/=search= verbs in prose).
+4. Each agent role file's =Tools:= list contains valid tool names matching new surface.
+5. System prompts no longer reference deleted tools.
+
+* Implementation
+
+** ITEM Audit AGENTS.md and prompt files
+:PROPERTIES:
+:CUSTOM_ID: FEAT-669-agents-md-tool-precedence-rewrite-per-ag::audit-agents-md
+:LAYER: api
+:END:
+
+Run =rg= to enumerate every file mentioning the 8 deleted tool names. Catalogue for systematic rewrite.
+
+** ITEM Rewrite AGENTS.md tool-precedence
+:PROPERTIES:
+:CUSTOM_ID: FEAT-669-agents-md-tool-precedence-rewrite-per-ag::rewrite-agents-md
+:DEPENDS: FEAT-669-agents-md-tool-precedence-rewrite-per-ag::audit-agents-md
+:LAYER: api
+:END:
+
+File: =AGENTS.md=
+
+Replace tool-precedence tables. New table:
+| Instead of (WRONG) | Use (CORRECT) |
+| =bash cat file= | =get { target: "file", offset, limit }= |
+| =bash grep -rn 'pat' dir= | =get { target: "dir/** :: §line[text~=\"pat\"]" }= |
+| =bash find dir -name '*.ts'= | =get { target: "dir/**/*.ts" }= |
+| =bash sed -i 's/old/new/' file= | =edit { operations: [{ target: "file", action: { kind: "findAndReplace", find: "old", content: "new" } }] }= |
+| =bash echo "..." > file= | =create { path: "file", content: "..." }= |
+
+** ITEM Update system prompt files
+:PROPERTIES:
+:CUSTOM_ID: FEAT-669-agents-md-tool-precedence-rewrite-per-ag::update-system-prompts
+:DEPENDS: FEAT-669-agents-md-tool-precedence-rewrite-per-ag::rewrite-agents-md
+:LAYER: api
+:END:
+
+File: =packages/coding-agent/src/prompts/system/= and any other system-prompt locations.
+
+** ITEM Update per-agent role file Tools: lists
+:PROPERTIES:
+:CUSTOM_ID: FEAT-669-agents-md-tool-precedence-rewrite-per-ag::update-agent-roles
+:DEPENDS: FEAT-669-agents-md-tool-precedence-rewrite-per-ag::update-system-prompts
+:LAYER: api
+:END:
+
+For each agent role file, replace =find=/=read=/=grep=/=ast-grep=/=ast-edit=/=write= with =get=/=edit=/=manage=/=create= as appropriate.
+
+* Edge Cases
+
+- Prose references to "find" as a verb (not the tool) — preserve.
+- Agent allowlists may need broader scope post-cutover (e.g. =explore= agent that had only =read,grep,find= now needs =get= which subsumes all three).
+- Agent restrictions: some agents are read-only (=explore=, =reviewer=); confirm they should NOT receive =edit=/=manage=/=create= access.
+- Spell-server agent definitions (if separate) — sync.
+- Documentation in =specs/= referencing deleted tools — leave unchanged unless they prescribe behaviour.
+
+* Acceptance Criteria
+
+- AGENTS.md has new tool-precedence table.
+- =rg= scan: zero references to deleted tool names in mandate contexts.
+- Every agent role file has updated =Tools:= list.
+- =bun check:ts= and =bun lint:ts= clean.
+- Spell-server / boss / morgan / code-architect / code-explorer / reviewer / plan / explore agent definitions all updated.

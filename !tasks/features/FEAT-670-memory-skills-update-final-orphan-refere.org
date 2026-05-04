@@ -1,0 +1,100 @@
+#+TITLE: Memory skills update + final orphan-reference scan + cleanup
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FEAT-670-memory-skills-update-final-orphan-refere
+#+DEPENDS: FEAT-669-agents-md-tool-precedence-rewrite-per-ag
+#+LAYER: api
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Update memory skills referencing deleted tools and run a final repo-wide orphan-reference scan to catch stragglers. The cutover is verified complete only after this item passes.
+
+* Context & Narrative
+
+Memory skills under =memory/skills/<name>/SKILL.md= and =memory/MEMORY.md= often reference deleted tools in their how-to-do-X examples. Each must be updated to the new tool surface. Final scan catches anything missed across all prior items.
+
+* Scope
+
+In:
+- =memory/MEMORY.md= and =memory/memory_summary.md= updates.
+- =memory/skills/*/SKILL.md= files referencing deleted tools.
+- Final cross-repo orphan scan: =rg "\\bfind\\(|\\bread\\(|\\bgrep\\(|\\bast_grep\\b|\\bast_edit\\b|\\bwrite\\.ts\\b|\\bedit\\.ts\\b|CodeTool|ReadTool|FindTool|GrepTool" --type ts --type md=.
+- Cleanup of any remaining references found.
+- README files at top-level and =packages/*/README.md= if they reference tools.
+- =SKILL.md= files in =skills/= directories if any.
+
+Out:
+- The new tool implementations (already done in =FEAT-664=).
+- Spec files (intentionally documenting legacy in migration tables; preserve).
+
+* Existing Patterns
+
+- =memory/skills/canvas/SKILL.md= structure.
+- =memory/MEMORY.md= and =memory_summary.md= structure.
+- =rg= scans for orphan references.
+
+* Tests
+
+1. =rg= scan: zero unexpected references to deleted tool names in non-spec, non-migration-table contexts.
+2. Each updated skill loads correctly when referenced.
+3. =bun build= succeeds.
+4. Final smoke: invoke each new tool through a representative agent task end-to-end.
+
+* Implementation
+
+** ITEM Audit memory tree references
+:PROPERTIES:
+:CUSTOM_ID: FEAT-670-memory-skills-update-final-orphan-refere::audit-memory
+:LAYER: api
+:END:
+
+Run =rg= scan against =memory/= for deleted tool names. Catalogue every match.
+
+** ITEM Update memory tree files
+:PROPERTIES:
+:CUSTOM_ID: FEAT-670-memory-skills-update-final-orphan-refere::update-memory
+:DEPENDS: FEAT-670-memory-skills-update-final-orphan-refere::audit-memory
+:LAYER: api
+:END:
+
+For each match, rewrite to use new tool surface. Preserve historical context if the reference is in a "previously known" or "memory-archive" section.
+
+** ITEM Final repo-wide orphan scan
+:PROPERTIES:
+:CUSTOM_ID: FEAT-670-memory-skills-update-final-orphan-refere::final-orphan-scan
+:DEPENDS: FEAT-670-memory-skills-update-final-orphan-refere::update-memory
+:LAYER: api
+:END:
+
+Cross-repo =rg= scan covering source, prompts, agents, skills, README, and code comments. Catalogue and clean every false positive.
+
+** ITEM End-to-end smoke test
+:PROPERTIES:
+:CUSTOM_ID: FEAT-670-memory-skills-update-final-orphan-refere::e2e-smoke
+:DEPENDS: FEAT-670-memory-skills-update-final-orphan-refere::final-orphan-scan
+:LAYER: api
+:END:
+
+Manual test: run a representative task through each agent (=boss=, =explore=, =task=, =plan=, =reviewer=) using only new tool surface. Verify no agent invokes a deleted tool name.
+
+* Edge Cases
+
+- Memory entries describing past sessions may contain legacy tool names — leave as historical record unless prescriptive.
+- Skill examples in =skills/<name>/scripts/init.py= or similar — update if they prescribe legacy tool usage.
+- Cargo workspace =AGENTS.md= or per-crate =AGENTS.md= — update.
+- Documentation in =specs/= migration tables — PRESERVE (these document the migration, not prescribe).
+- Comments in deleted tool source — gone with the source.
+
+* Acceptance Criteria
+
+- Memory tree updated.
+- Final orphan scan returns only spec/migration-table references.
+- All 5 representative agents pass end-to-end smoke.
+- =bun check:ts=, =bun lint:ts=, =bun test --workspaces= all clean.
+- =cargo check --workspace= clean.
+- No deleted-tool references in code, prompts, agents, skills, memory.

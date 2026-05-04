@@ -1,0 +1,36 @@
+#+TITLE: NamePayload sidecar cache: memoise typed dialect parse
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FUP-071-namepayload-sidecar-cache-memoise-typed
+#+LAYER: core
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+If profiling shows NameLexer.matches() re-parse cost is a hotspot, add a sidecar cache so each NamePayload memoises its typed parse result. Deferred from main PLAN per design decision (decision was option A: Raw + per-call re-parse; layer cache later if needed).
+
+* Context & Narrative
+
+Per the resolved design (=NamePayload=A=), the AST holds =NamePayload::Raw(String)= and each NameLexer re-parses on demand. Re-parse cost is microseconds (each NameLexer ~80-150 LOC). If profiling shows this becomes a hotspot for hot paths (e.g. cross-file edge resolution with many name comparisons), a sidecar cache memoises the typed parse.
+
+Implementation candidate: =Arc<dyn Any>= sidecar field on =NamePayload= or a separate =DashMap<NamePayload, TypedCache>= keyed by hash. Decision deferred until profile data exists.
+
+* Scope
+
+In:
+- Profile NameLexer.matches() across cross-file dialect resolver workloads.
+- If hotspot confirmed: implement sidecar cache.
+- Cache invalidation: NamePayload is immutable; cache lives for object lifetime.
+- Memory cap: bounded LRU.
+
+Out:
+- Pre-emptive optimisation without profile data.
+
+* Acceptance Criteria
+
+- Profile data collected from realistic workload.
+- If cache implemented: =cargo bench= shows >2× improvement on hot path; no correctness regression.
