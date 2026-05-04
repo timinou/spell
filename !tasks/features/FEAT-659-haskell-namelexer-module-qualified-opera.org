@@ -1,0 +1,71 @@
+#+TITLE: Haskell NameLexer: module-qualified, operators-in-parens, typeclass
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FEAT-659-haskell-namelexer-module-qualified-opera
+#+DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q
+#+LAYER: core
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Implement Haskell dialect at =crates/pi-code-path/src/dialects/haskell.rs= per =specs/code-graph/code-path-dialects/05-haskell.md=. Names support module-qualified =Data.List.sort=, operators-in-parens =(>>=)=, and typeclass-method form =(class).method=.
+
+* Scope
+
+In:
+- =HsName= with =Vec<HsSegment>=: =Ident=, =Operator(String)=, =TypeClassMethod { class_: String, method: String }=, =Module(Vec<String>)=.
+- =HsNameLexer= parse/render/matches.
+- AnchorPatterns: =¶guard=, =¶instance=, =¶pragma=, =¶type-sig= per spec.
+- QualifierSpecs: =#body=, =#sig=, =#name=, =#docstring=, =#type=, =#instances= per spec.
+- =haskell_dialect()= factory.
+- 50/20/10 corpus.
+
+Out: LanguageProfile wiring; tree-sitter integration.
+
+* Existing Patterns
+
+TS lexer + Rust lexer as structural reference. =specs/code-graph/code-path-dialects/05-haskell.md=.
+
+* Tests
+
+Workflows: =Data.List.sort=, =Prelude.map=, operator =(>>=)=, =(<$>)=, typeclass =(Functor).fmap=, stops-at-kernel-ops, =¶guard= matches pattern guards, =¶instance= matches instance decl, =#sig= resolves to type signature, negatives (mismatched parens, empty operator).
+
+* Implementation
+
+** ITEM Tests for HsNameLexer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-659-haskell-namelexer-module-qualified-opera::haskell-lexer-tests
+:LAYER: core
+:END:
+
+** ITEM Implement HsNameLexer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-659-haskell-namelexer-module-qualified-opera::haskell-lexer-impl
+:DEPENDS: FEAT-659-haskell-namelexer-module-qualified-opera::haskell-lexer-tests
+:LAYER: core
+:END:
+
+** ITEM Tests + impl anchors, qualifiers, factory
+:PROPERTIES:
+:CUSTOM_ID: FEAT-659-haskell-namelexer-module-qualified-opera::haskell-anchors-qualifiers
+:DEPENDS: FEAT-659-haskell-namelexer-module-qualified-opera::haskell-lexer-impl
+:LAYER: core
+:END:
+
+* Edge Cases
+
+- Operator names containing kernel sigils: =(::)= for Haskell type-cons → backtick-quote required (=\`(::)\`=).
+- Lazy patterns =~pat= → spec already excludes =~= as kernel operator; safe.
+- Pragma =#text= → may collide with =#= qualifier sigil; pragma matched at anchor level not name level.
+- Type-application names =Foo @Int= → encoded with =@= preserved in payload (kernel doesn't reserve =@= post-FEAT-581 sigil revision).
+- Qualified record field access =mod.field= → ambiguous with module path; longest-match rule, with explicit =Mod.MoreMod.field= preferred.
+
+* Acceptance Criteria
+
+- 50/20/10 corpus passes.
+- =cargo test -p pi-code-path haskell= clean.
+- Cross-dialect smoke Haskell tier passes.

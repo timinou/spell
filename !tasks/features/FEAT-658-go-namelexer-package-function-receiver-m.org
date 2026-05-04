@@ -1,0 +1,71 @@
+#+TITLE: Go NameLexer: Package.Function, receiver methods, registries
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FEAT-658-go-namelexer-package-function-receiver-m
+#+DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q
+#+LAYER: core
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Implement Go dialect at =crates/pi-code-path/src/dialects/go.rs= per =specs/code-graph/code-path-dialects/04-go.md=. Names use =.= separator with =(*Type).Method= receiver-method form.
+
+* Scope
+
+In:
+- =GoName= with =Vec<GoSegment>=: =Ident=, =Receiver { ptr: bool, ty: String, method: String }=.
+- =GoNameLexer= parse/render/matches.
+- AnchorPatterns: =¶interface=, =¶struct-tag=, =¶goroutine=, =¶defer= per spec.
+- QualifierSpecs: =#body=, =#sig=, =#name=, =#docstring=, =#receiver=, =#tags= per spec.
+- =go_dialect()= factory.
+- 50 round-trips + 20 resolver fixtures + 10 negatives.
+
+Out: LanguageProfile wiring; tree-sitter integration (NAPI layer).
+
+* Existing Patterns
+
+=crates/pi-code-path/src/dialects/typescript.rs= structural reference. =specs/code-graph/code-path-dialects/04-go.md= for exact registries.
+
+* Tests
+
+File: =crates/pi-code-path/src/dialects/go.rs::tests=
+
+Workflows: plain ident, =pkg.Func=, =(*Server).HandleRequest=, struct-receiver method =(s *Server).foo=, stops-at-kernel-ops, anchors, qualifiers, negatives (=(*).foo= unbalanced).
+
+* Implementation
+
+** ITEM Tests for GoNameLexer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-658-go-namelexer-package-function-receiver-m::go-lexer-tests
+:LAYER: core
+:END:
+
+** ITEM Implement GoNameLexer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-658-go-namelexer-package-function-receiver-m::go-lexer-impl
+:DEPENDS: FEAT-658-go-namelexer-package-function-receiver-m::go-lexer-tests
+:LAYER: core
+:END:
+
+** ITEM Tests + impl anchors, qualifiers, factory
+:PROPERTIES:
+:CUSTOM_ID: FEAT-658-go-namelexer-package-function-receiver-m::go-anchors-qualifiers
+:DEPENDS: FEAT-658-go-namelexer-package-function-receiver-m::go-lexer-impl
+:LAYER: core
+:END:
+
+* Edge Cases
+
+- =(*Server).Foo= vs =(Server).Foo= — pointer vs value receiver; both accepted.
+- Embedded interfaces: name resolution defers to the embedded type's lexer.
+- Generic instantiation =Foo[int]= — accept; encoded as one segment.
+
+* Acceptance Criteria
+
+- 50 round-trips, 20 resolver fixtures, 10 negatives all pass.
+- =cargo test -p pi-code-path go= clean.
+- Cross-dialect smoke Go tier passes.

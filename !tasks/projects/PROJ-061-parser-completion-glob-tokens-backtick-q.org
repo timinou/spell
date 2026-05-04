@@ -1,0 +1,223 @@
+#+TITLE: Parser completion: glob tokens, backtick quoting, full predicate set, capture stub
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: PROJ-061-parser-completion-glob-tokens-backtick-q
+#+LAYER: core
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Close the gap between the current parser (covers basic kernel forms; PLAN-255 wave-2) and the full grammar required by =specs/code-graph/code-path.md= and =specs/code-graph/code-path-extensions.md=. The parser is the entry point for every CodePath operation across all four tools (=get=, =edit=, =manage=, =create=); incomplete parsing here surfaces as silent feature loss everywhere downstream.
+
+* Context & Narrative
+
+PLAN-255 wave-2 shipped a working recursive-descent parser at =crates/pi-code-path/src/parser.rs= using winnow primitives. Twelve unit + seven round-trip tests pass. Several spec-required forms are absent or shallow:
+
+- =FsLocator= parses entire path as one =FsSegment::Literal(raw)= — never tokenizes glob ops (=*=, =**=, =?=, =[abc]=, ={a,b,c}=). The renderer assumes proper segments.
+- =path_until_kernel_op= breaks on bare =' '= → file paths with spaces silently truncate. No backtick quoting at any layer (kernel Q-1 rule unimpl).
+- Inner predicate subquery =[. Q]= only parses one Step, not full Query. Spec demands recursive Query.
+- =quoted_string= lacks escape handling (=\"=, =\\=, =
+=).
+- Predicate vocab partial: missing K/M/G size suffix, =[empty]=, =[multiline]=, =[startsWith=…]=, =[endsWith=…]=, =[ext=ts]= / =[lang=rust]= / =[mtime>…]= / =[depth=N]= attribute normalisation, =[name=$capture]= simple capture predicate.
+- Length/count compare predicates parse but never use =CompareOp= internally.
+- =[-3..]= negative ranges untested.
+
+This item completes the kernel parser to the full v3 grammar. No new dialect logic, no resolver. Pure parser + AST + renderer + tests.
+
+* Scope
+
+In:
+- =FsLocator= glob tokenisation into typed =FsSegment= variants (Literal/Star/DoubleStar/Question/CharClass/Brace).
+- Backtick-quoting at the kernel level: =\`weird::name with spaces\`= surfaces as one literal segment.
+- =[. Q]= and =[.^ Q]= predicate bodies accept full =Query= (not just =Step=).
+- =quoted_string= escape handling.
+- Full predicate vocab: =[ext=…]=, =[lang=…]=, =[size>…]= (with K/M/G suffix), =[mtime>…]= (RFC3339 + YYYY-MM-DD), =[depth=N]=, =[name=…]=, =[empty]=, =[multiline]=, =[startsWith=…]=, =[endsWith=…]=, =[text]=, =[len>N]=, =[count>N]= with =CompareOp=, simple =[name=$identifier]= capture.
+- Negative ranges (=[-3..]=, =[..-1]=).
+- Round-trip tests for every new form.
+
+Out:
+- Capture binding =(Q) as $m= from spec §5 → deferred to =FUP-capture-binding=.
+- NameLexer-specific name parsing (per-dialect; separate items).
+- Resolver behaviour — this item is parser-only.
+
+* Existing Patterns
+
+- =crates/pi-code-path/src/parser.rs= — current recursive-descent parser; extend.
+- =crates/pi-code-path/src/ast.rs= — =FsSegment= enum already has the variants; only the parser side is missing.
+- =crates/pi-code-path/src/renderer.rs= — renderer already handles =FsSegment= variants; round-trip wires through.
+- winnow 0.7 primitives (=alt=, =delimited=, =repeat=, =take_while=, =opt=).
+- Existing tests in =crates/pi-code-path/src/parser.rs::tests= and =crates/pi-code-path/src/renderer.rs::tests=.
+
+* Tests
+
+File: =crates/pi-code-path/src/parser.rs::tests= and =crates/pi-code-path/src/renderer.rs::tests=
+
+User workflows tested:
+
+1. *find* glob input: =src/**/*.ts=, =tests/**/*.{ts,rs}=, =src/utils?=, =src/[abc]=, =\`weird::name.rs\`=.
+2. *find* with backtick: paths containing reserved chars resolve as literal segments.
+3. *grep* with predicate combinations: =§line[text~="re"][len>80]=, =§line[startsWith="//"]=, =§line[empty]=.
+4. *FS predicates*: =[ext=ts]=, =[lang=rust]=, =[size>1M]=, =[mtime>2026-01-01]=, =[depth=2]=, =[name="*.test.ts"]=, =[empty]=.
+5. *Has-descendant subquery* with full nested Query: =[.Foo/§call_expression[name=fetch]]=, =[.^Bar/baz]=.
+6. *Negative ranges*: =§line[-3..]=, =[..-1]=, =§line[-5..-1]=.
+7. *Quoted-string escapes*: ="hello\
+world"=, ="a\\\"b"=, ="path\\\
+ame"=.
+8. *Round-trip*: every test must include parse → render → parse → AST equality.
+9. *Negative cases*: malformed globs (=foo**bar= without /-boundary), unbalanced brackets, unbalanced braces, untermininated backtick, bad attribute syntax.
+
+Corpus targets:
+- 30 round-trip glob strings.
+- 20 predicate-combination strings.
+- 15 negative cases.
+- 5 backtick-quoted edge cases.
+
+Total ~70 new tests.
+
+* Implementation
+
+** ITEM Add tests for full glob tokenisation
+:PROPERTIES:
+:CUSTOM_ID: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-glob-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/parser.rs::tests=
+
+Add ~30 tests covering each =FsSegment= variant in isolation and combination. Test scenarios 1, 2 from Tests section.
+
+Test discipline: each test parses then renders then re-parses, asserts AST equality.
+
+** ITEM Implement glob tokenisation in fs_locator
+:PROPERTIES:
+:CUSTOM_ID: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-glob-impl
+:DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-glob-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/parser.rs=
+
+Replace =fs_locator= with a per-segment tokeniser that splits on =/= and recognises:
+- =*=, =**= → Star, DoubleStar
+- =?= → Question
+- =[abc]= → CharClass(['a','b','c'])
+- ={a,b,c}= → Brace(["a","b","c"])
+- backtick-quoted segment → Literal verbatim
+- otherwise → Literal
+
+Reject =foo**bar= (DoubleStar without =/= boundary) with =Diagnostic::ParseError=.
+
+** ITEM Add backtick-quoting tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-backtick-tests
+:DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-glob-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/parser.rs::tests=
+
+Tests for kernel-reserved-char escape via backticks: paths containing =::=, =/=, =#=, spaces. Tests for backtick INSIDE NamePayload (passes through to NameLexer with the backtick-strip applied).
+
+** ITEM Implement backtick-quoting in path_until_kernel_op + NameLexer trait
+:PROPERTIES:
+:CUSTOM_ID: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-backtick-impl
+:DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-backtick-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/parser.rs= and =crates/pi-code-path/src/dialect.rs=
+
+Modify =path_until_kernel_op= to handle backtick-balanced regions verbatim. Add =NameLexer::parse_quoted= default impl that consumes a backtick-bracketed region as a single =NamePayload::Raw=.
+
+** ITEM Add full predicate vocab tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-predicate-tests
+:DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-backtick-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/parser.rs::tests=
+
+Tests for =[ext=…]=, =[lang=…]=, =[size>…]= (with K/M/G), =[mtime>…]= (RFC3339 + YYYY-MM-DD), =[depth=N]=, =[name=…]=, =[empty]=, =[multiline]=, =[startsWith=…]=, =[endsWith=…]=, =[text]=, =[len>N]=, =[count>N]=. Test scenarios 3, 4 from Tests section.
+
+** ITEM Implement full predicate vocab + CompareOp wiring
+:PROPERTIES:
+:CUSTOM_ID: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-predicate-impl
+:DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-predicate-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/parser.rs= and =crates/pi-code-path/src/ast.rs=
+
+Extend =Predicate= enum with new variants OR extend =Attribute { name, value }= to recognise reserved attribute names at the parse layer (preferred: keep AST simple, normalise at predicate evaluation time). Wire =CompareOp= into =Length= and =Count= predicate parsing. Recognise K/M/G size suffixes in attribute_predicate when name ∈ {=size=, =len=}.
+
+** ITEM Add subquery + range tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-subquery-tests
+:DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-predicate-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/parser.rs::tests=
+
+Tests for =[. Q]= / =[.^ Q]= with nested combinators (=[.Foo/§call[name=fetch]]=, =[.^Bar/baz]=), negative ranges (=§line[-3..]=, =§line[-5..-1]=, =§line[..-1]=), quoted-string escapes. Scenarios 5, 6, 7.
+
+** ITEM Implement subquery recursion + negative ranges + escapes
+:PROPERTIES:
+:CUSTOM_ID: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-subquery-impl
+:DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-subquery-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/parser.rs=
+
+Replace =inner_step= with a recursive =parse_query= call. Update =range_predicate= to accept negative integers in start and end. Update =quoted_string= to handle =\"=, =\\=, =
+=, =	= escape sequences.
+
+** ITEM Add negative-case tests
+:PROPERTIES:
+:CUSTOM_ID: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-negative-tests
+:DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-subquery-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/parser.rs::tests=
+
+Tests for malformed inputs — each must surface =Diagnostic::ParseError= with span: untermininated backtick, unbalanced brace, =foo**bar= globstar, bad attribute syntax (missing =), trailing junk. Scenario 9.
+
+** ITEM Update renderer for new variants + round-trip property
+:PROPERTIES:
+:CUSTOM_ID: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-renderer-update
+:DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q::parser-negative-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/renderer.rs=
+
+Render new attribute-name normalisations (=size>1M= → canonical =size>1048576= or preserve K-suffix?). Decision: preserve original suffix in canonical form (=size>1M= round-trips as =size>1M=); add metadata to =Predicate::Attribute= if needed. Render backtick-quoted segments correctly. Add round-trip tests for all new forms.
+
+* Edge Cases
+
+- =foo**bar= globstar without =/= boundary → =Diagnostic::ParseError= with span pointing to the second =*=.
+- Unterminated backtick at EOF → ParseError; no silent close.
+- Empty glob segment (consecutive =//=) → already handled as Descendant combinator; no ambiguity since CharClass starts with =[=.
+- Brace with single alt ({foo}) → keep as Brace with one item; renderer emits ={foo}=.
+- Nested braces ({a,{b,c}}) → flatten at parse time? Spec ambiguous. Decision: reject nested braces (=Diagnostic::UnsupportedGlob=); document.
+- =[size>0]= → CompareOp::Gt with value 0 (zero-byte file matcher); not =[empty]= (alias).
+- =[mtime>2026-01-01]= without time component → start-of-day UTC.
+- =[name="*.test.ts"]= unquoted vs quoted: both accepted; quoted preserves leading/trailing whitespace.
+- Recursive =[. Q]= depth: cap at 8 levels to prevent stack blow on adversarial input; emit =Diagnostic::SubqueryDepthExceeded=.
+
+* Acceptance Criteria
+
+- =cargo test -p pi-code-path= passes all new tests (~70 added; total ≥98).
+- =cargo check -p pi-code-path= clean.
+- =cargo clippy -p pi-code-path -- -D warnings= clean.
+- Every new parse form has a paired round-trip test asserting AST equality after parse → render → parse.
+- Every new negative case surfaces a specific =Diagnostic= variant; no panics.
+- =FsLocator= renders =src/**/*.{ts,rs}= identical to the input string.
+- Backtick-quoted path with =::= and spaces parses as single literal segment, renders identical.

@@ -397,30 +397,31 @@ CodePath is an addressing algebra. An algebra is defined by its operators, not i
 
 ## §A · Tool surface mapping
 
-The v3 tool surface collapses from twenty-odd distinct commands to three. The query itself — expressed as a CodePath string — carries all the information that previously required a separate command name.
+The v3 tool surface collapses from twenty-odd `code` subcommands plus seven standalone tools (`find`, `read`, `grep`, `ast-grep`, `ast-edit`, `edit`, `write`) into four generic top-level tools. CodePath addresses span filesystem, text, code, and internal URIs uniformly, so the tool surface drops the `code` prefix.
 
 ```
-code get  { target: <CodePath>, <projection options> }   # reads, queries, navigation, graph traversals
-code edit { operations: [{ target: <CodePath>, action: ..., children?: ... }] }   # mutations
-code manage { command: "save"|"undo"|"redo"|"diff"|"open"|"close"|"buffers"|"languages"|"index"|"watcherStatus"|"lockStatus", ... }   # buffer lifecycle
+get    { target: <CodePath>, <projection options> }     # reads, queries, navigation, graph traversals, listings
+edit   { operations: [{ target: <CodePath>, action: ..., children?: ... }] }    # mutations to existing addresses
+manage { command: "save"|"undo"|"redo"|"diff"|"open"|"close"|"buffers"|"languages"|"index"|"watcherStatus"|"lockStatus", ... }   # buffer lifecycle
+create { path: <FsLocator>, content: string | { kind: "bytes", artifactUri: string } | { kind: "base64", data: string }, force?: boolean }   # new-file creation; lowers to edit { action: { kind: "create" } }
 ```
 
 ### Command-to-path mapping
 
 | Legacy command | New invocation |
 |----------------|----------------|
-| `code read { file }` | `code get { target: "file.ts" }` |
-| `code read { file, symbol }` | `code get { target: "file.ts :: Symbol" }` |
-| `code outline { file }` | `code get { target: "file.ts", resolution: 0 }` |
-| `code symbols { query }` | `code get { target: "**::query" }` |
-| `code context { symbol }` | `code get { target: "file.ts :: Symbol", edges: true }` |
-| `code impact { symbol }` | `code get { target: "**::Symbol/def→", depth: 3 }` |
-| `code flow { symbol }` | `code get { target: "**::Symbol/call→", depth: 3 }` |
-| `code deps { file }` | `code get { target: "file.ts/import→" }` |
-| `code navigate { defun-at, line }` | `code get { target: "file.ts", line: 42 }` |
-| `code dead_code` | `code get { target: ":dead_code" }` |
-| `code clusters` | `code get { target: ":clusters" }` |
-| `code save` / `undo` / `redo` / `diff` / `buffers` / `languages` / `index` / `watcherStatus` / `lockStatus` | `code manage { command: "...", file: "..." }` |
+| `code read { file }` | `get { target: "file.ts" }` |
+| `code read { file, symbol }` | `get { target: "file.ts :: Symbol" }` |
+| `code outline { file }` | `get { target: "file.ts", resolution: 0 }` |
+| `code symbols { query }` | `get { target: "**::query" }` |
+| `code context { symbol }` | `get { target: "file.ts :: Symbol", edges: true }` |
+| `code impact { symbol }` | `get { target: "**::Symbol/def→", depth: 3 }` |
+| `code flow { symbol }` | `get { target: "**::Symbol/call→", depth: 3 }` |
+| `code deps { file }` | `get { target: "file.ts/import→" }` |
+| `code navigate { defun-at, line }` | `get { target: "file.ts", line: 42 }` |
+| `code dead_code` | `get { target: ":dead_code" }` |
+| `code clusters` | `get { target: ":clusters" }` |
+| `code save` / `undo` / `redo` / `diff` / `buffers` / `languages` / `index` / `watcherStatus` / `lockStatus` | `manage { command: "...", file: "..." }` |
 
 ### Special targets
 
@@ -455,7 +456,7 @@ Projection options are sugar for canonical CodePath syntax. They are flattened i
 
 ## §C · NodeRef and content-bearing return shape
 
-Every `code get` invocation returns a stream of `NodeRef`. Content is present only when the path includes a content-class qualifier; otherwise the node is location and metadata only. This makes the default path cheap and the rich path explicit.
+Every `get` invocation returns a stream of `NodeRef`. Content is present only when the path includes a content-class qualifier; otherwise the node is location and metadata only. This makes the default path cheap and the rich path explicit.
 
 ```rust
 pub struct NodeRef {
@@ -483,29 +484,37 @@ Full type definitions and NAPI bridge details: see `code-path-extensions.md` §4
 
 ---
 
-## §D · Migration table for find / read / grep / ast-grep
+## §D · Migration table for find / read / grep / ast-grep / ast-edit / edit / write
 
-On cutover the four standalone tools are deleted. Every behavior they provided is reproduced by `code get` with a CodePath target. The table below shows the legacy invocation, the projection-option sugar (when available), and the canonical CodePath syntax.
+On cutover the seven standalone tools (`find`, `read`, `grep`, `ast-grep`, `ast-edit`, `edit`, `write`) and the legacy `code` subcommand surface are deleted in one cycle. Every behavior they provided is reproduced by `get` / `edit` / `manage` / `create` with a CodePath target. The table below shows the legacy invocation, the projection-option sugar (when available), and the canonical CodePath syntax.
 
 | Legacy tool | Projection sugar | Canonical CodePath |
 |-------------|-----------------|-------------------|
-| `find "*.ts"` | `code get { target: "**/*.ts" }` | `**/*.ts` |
-| `find "*.ts" --hidden=false` | `code get { target: "**/*.ts" }` | `**/*.ts -[¶hidden]` |
-| `read foo.ts` | `code get { target: "foo.ts" }` | `foo.ts#raw` |
-| `read foo.ts offset=50 limit=100` | `code get { target: "foo.ts", head: 100, … }` | `foo.ts :: §line[50..150]#text` |
-| `read dir/` | `code get { target: "dir/" }` | `dir/#listing` |
-| `read foo.pdf` | `code get { target: "foo.pdf" }` | `foo.pdf#text` |
-| `read img.png` | `code get { target: "img.png" }` | `img.png#image` |
-| `read artifact://…/1.txt` | `code get { target: "artifact://…/1.txt" }` | `artifact://…/1.txt#raw` |
-| `grep "useState" src/` | `code get { target: "src/** :: §line[text~=\"useState\"]" }` | `src/** :: §line[text~="useState"]` |
-| `grep --post 3 "TODO"` | `code get { target: "§line[text~=\"TODO\"]", context: { post: 3 } }` | `§line[text~="TODO"] | §line[…] >>[0..3]` |
-| `grep --type ts "x"` | `code get { target: "**/*.ts :: §line[text~=\"x\"]" }` | `**/*.ts :: §line[text~="x"]` |
+| `find "*.ts"` | `get { target: "**/*.ts" }` | `**/*.ts` |
+| `find "*.ts" --hidden=false` | `get { target: "**/*.ts" }` | `**/*.ts -[¶hidden]` |
+| `read foo.ts` | `get { target: "foo.ts" }` | `foo.ts#raw` |
+| `read foo.ts offset=50 limit=100` | `get { target: "foo.ts", head: 100, … }` | `foo.ts :: §line[50..150]#text` |
+| `read dir/` | `get { target: "dir/" }` | `dir/#listing` |
+| `read foo.pdf` | `get { target: "foo.pdf" }` | `foo.pdf#text` |
+| `read foo.docx` / `.doc` / `.ppt` / `.pptx` / `.xls` / `.xlsx` / `.rtf` / `.epub` | `get { target: "foo.docx" }` | `foo.docx#text` (markitdown extraction) |
+| `read img.png` | `get { target: "img.png" }` | `img.png#image` |
+| `read artifact://…/1.txt` | `get { target: "artifact://…/1.txt" }` | `artifact://…/1.txt#raw` |
+| `read rule://my-rule` / `mcp://server/path` | `get { target: "rule://my-rule" }` | `rule://my-rule#text` |
+| `grep "useState" src/` | `get { target: "src/** :: §line[text~=\"useState\"]" }` | `src/** :: §line[text~="useState"]` |
+| `grep --post 3 "TODO"` | `get { target: "§line[text~=\"TODO\"]", context: { post: 3 } }` | `§line[text~="TODO"] >>[0..3]` |
+| `grep --type ts "x"` | `get { target: "**/*.ts :: §line[text~=\"x\"]" }` | `**/*.ts :: §line[text~="x"]` |
 | `grep mode=semantic "parseConfig"` | (no sugar — use edge axis) | `parseConfig/def→` |
-| `ast-grep "console.log($A)"` | (no sugar — use predicates) | `**/*.ts :: //§call_expression[name=console.log]` |
+| `ast-grep { pat: "console.log($A)" }` | (no sugar — use predicates) | `**/*.ts :: //§call_expression[name=console.log]` |
+| `ast-grep { pat, sel }` | sel is contextual selector | `**/*.ts :: //$pat[.$sel]` (has-descendant predicate) |
+| `ast-edit { ops: [{pat, out}] }` | (none) | `edit { operations: [{ target: "**/*.ts", action: { kind: "findAndReplace", find: pat, content: out } }] }` |
+| `edit foo.txt replace pos=10 end=12 lines=["…"]` | (none) | `edit { operations: [{ target: "foo.txt :: §line[10..12]", action: { kind: "replace", content: "…" } }] }` |
+| `edit { input: "--- a/foo.ts\\n+++ b/foo.ts\\n@@…" }` (patch mode) | (none) | `edit { operations: [{ action: { kind: "patch", diff: "…" } }] }` |
+| `write foo.ts content` | (none) | `create { path: "foo.ts", content: "…" }` |
+| `write img.png { kind: "bytes", artifactUri }` | (none) | `create { path: "img.png", content: { kind: "bytes", artifactUri: "artifact://…" } }` |
 
 The edge axis, predicate system, and set combinators subsume the old "smart query" commands (`context`, `impact`, `flow`, `deps`) without dedicated sugar. See §5 of `code-path.md` for edge-axis examples.
 
-Cross-reference: FEAT-655 (tool deletion and prompt migration), `code-path-extensions.md` §5.
+Cross-reference: tool-deletion and prompt-migration items in the active PLAN, `code-path-extensions.md` §5.
 
 ---
 

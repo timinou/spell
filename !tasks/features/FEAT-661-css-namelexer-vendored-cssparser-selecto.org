@@ -1,0 +1,71 @@
+#+TITLE: CSS NameLexer: vendored cssparser, selector-shaped payload
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FEAT-661-css-namelexer-vendored-cssparser-selecto
+#+DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q
+#+LAYER: core
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Implement CSS dialect at =crates/pi-code-path/src/dialects/css.rs= per =specs/code-graph/code-path-dialects/07-css.md=. CSS payloads are CSS selectors (=tag#id.class=, =:hover=, =[data-state="active"]=). Vendor =cssparser= crate for tokenisation.
+
+* Scope
+
+In:
+- =CssName= holding =cssparser::Selector=.
+- =CssNameLexer= parse/render/matches.
+- AnchorPatterns: =¶at-rule=, =¶media-query=, =¶custom-property=, =¶keyframe= per spec.
+- QualifierSpecs: =#block=, =#declarations=, =#selector-text=, =#property[name]= per spec.
+- =css_dialect()= factory.
+- 50/20/10 corpus.
+
+Out: LanguageProfile wiring; full CSS Selectors Level 4 (subset only).
+
+* Existing Patterns
+
+=cssparser= crate (add as workspace dep). =specs/code-graph/code-path-dialects/07-css.md=.
+
+* Tests
+
+Workflows: =.save=, =#app=, =button.save=, =button:hover=, =[data-state="active"]=, =#app > .save=, qualifier =#block= returns rule body, =#declarations= returns declaration list.
+
+* Implementation
+
+** ITEM Tests for CssNameLexer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-661-css-namelexer-vendored-cssparser-selecto::css-lexer-tests
+:LAYER: core
+:END:
+
+** ITEM Implement CssNameLexer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-661-css-namelexer-vendored-cssparser-selecto::css-lexer-impl
+:DEPENDS: FEAT-661-css-namelexer-vendored-cssparser-selecto::css-lexer-tests
+:LAYER: core
+:END:
+
+** ITEM Tests + impl anchors, qualifiers, factory
+:PROPERTIES:
+:CUSTOM_ID: FEAT-661-css-namelexer-vendored-cssparser-selecto::css-anchors-qualifiers
+:DEPENDS: FEAT-661-css-namelexer-vendored-cssparser-selecto::css-lexer-impl
+:LAYER: core
+:END:
+
+* Edge Cases
+
+- Pseudo-classes vs kernel sigils: =:hover= → =:= is kernel field axis; CSS payload must preserve =:= internally; backtick-quote required for selectors starting with =:=.
+- Quoted attribute values with kernel chars: =[data-foo=":hover"]= — quote preserved; round-trip identity.
+- =@media= rules: matched by =¶media-query= anchor; not part of NameLexer.
+- =--custom-property: value;= — =¶custom-property= anchor + =#property[--name]= qualifier.
+- =@keyframes name { ... }=: =¶keyframe= anchor; name extracted as separate field.
+
+* Acceptance Criteria
+
+- 50/20/10 corpus passes.
+- =cargo test -p pi-code-path css= clean.
+- Cross-dialect smoke CSS tier passes.

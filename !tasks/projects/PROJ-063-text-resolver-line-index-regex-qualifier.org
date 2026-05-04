@@ -1,0 +1,227 @@
+#+TITLE: Text resolver: line index, regex, qualifiers, format-aware extraction routing
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: PROJ-063-text-resolver-line-index-regex-qualifier
+#+DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q
+#+LAYER: core
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Implement the Text dialect resolver in =pi-code-path=. Subsumes =read.ts= (line slicing, raw bytes, format-aware extraction), =grep.ts= (regex, pre/post context windows), and the line-axis half of =edit.ts= (LINE#ID anchored edits at read-time). Bypasses tree-sitter entirely; operates on opaque bytes with structural axes =§line=, =§chunk=, =§para=, =§span=.
+
+* Context & Narrative
+
+Spec authority: =specs/code-graph/code-path-dialects/00-text.md= (15 test stubs, 11 worked examples, 10 edge cases). Per spec, kernel-baked, parallel to every file's code dialect. No NameLexer (head position is always a node-kind axis).
+
+Lazy line-byte index built on first use; no eager full-file load except under =#raw=, =#bytes=, =#text=. Streaming for large files via =impl Stream<Item = NodeRef>=. UTF-8 default with latin-1 fallback emitting =Diagnostic::EncodingFallback=.
+
+Format-aware =#text= extraction routes to per-format extractors. Spec lists 11 formats: PDF/DOC/DOCX/PPT/PPTX/XLS/XLSX/RTF/EPUB → markitdown; JSON → pretty-print; HTML → readable mode. Concrete extraction implementations live in =pi-natives= (=PROJ-extraction-handlers=); this item defines the routing trait =FormatExtractor= and the kernel-side dispatch logic only.
+
+* Scope
+
+In:
+- New module =crates/pi-code-path/src/dialects/text/= with =mod.rs=, =line_index.rs=, =para_index.rs=, =axes.rs=, =regex.rs=, =qualifiers.rs=, =stream.rs=.
+- =TextResolver= struct implementing =Resolver=.
+- All 4 axes (=§line=, =§chunk=, =§para=, =§span=).
+- Combinators =<<= / =>>= for context windows on =§line=.
+- All predicates from spec §B (=text~=re=, =match=lit=, =len>N=, =multiline=, =startsWith=, =endsWith=, =[a..b]=, =[last]=, =[-N..]=).
+- All qualifiers (=#raw=, =#text=, =#match=, =#captures[N]=, =#lines[a..b]=, =#bytes=, =#image=, =#thumbnail[N]=).
+- =FormatExtractor= trait (concrete impls in =pi-natives=).
+- Streaming + cancellation.
+- 50 line-slice pairs + 30 regex-match fixtures + 20 context-window cases + 15 test stubs (per spec §E).
+
+Out:
+- Concrete markitdown/pdf-extract bindings (=PROJ-extraction-handlers= in =pi-natives=).
+- Image pipeline binary handling (=PROJ-image-pipeline= in =pi-natives=).
+- Cross-dialect text → code re-anchoring (handled by resolver dispatch in =PROJ-resolver-traits=).
+
+* Existing Patterns
+
+- =grep-regex 0.1= (already a workspace dep on =pi-code-path=) — multi-line aware regex matcher.
+- =regex 1.x= for pattern compile.
+- =crates/pi-natives/src/grep.rs= — existing grep impl; study for context-window logic.
+- =packages/coding-agent/src/tools/read.ts= — reference for offset/limit, encoding fallback, format detection.
+- =crates/pi-code-path/src/types.rs= — =Content::Text=, =Content::Bytes=, =Content::Image=, =Content::ExtractedText=, =Diagnostic::EncodingFallback=.
+
+* Tests
+
+File: =crates/pi-code-path/src/dialects/text/tests.rs= (new) and =crates/pi-code-path/tests/text_parity.rs=
+
+User workflows tested (per spec 00-text.md §E and §C):
+
+1. *Line slicing*: =foo.ts :: §line[10..20]= returns lines 10-20 inclusive.
+2. *Line regex match*: =§line[text~="useState"]= every matching line.
+3. *Trailing context*: =§line[text~="error"]>>[0..3]= match + 3 trailing lines.
+4. *Leading context*: =§line[text~="error"]<<[0..2]= 2 leading + match.
+5. *Full file raw*: =#raw= full UTF-8; latin-1 fallback diagnostic.
+6. *Line-range qualifier*: =#lines[50..150]= equivalent to =read offset=50 limit=100=.
+7. *Format-aware extraction*: =foo.pdf#text= dispatches to PDF extractor (mocked at this layer; concrete impl in =PROJ-extraction-handlers=).
+8. *Image handle*: =img.png#image= returns =Content::Image= placeholder (concrete in =PROJ-image-pipeline=).
+9. *Capture groups*: =§line[text~="(\\w+)Config"]#captures[1]= returns first capture per match.
+10. *Cross-file streaming*: =src/**/*.ts :: §line[text~="TODO"]= streams across files.
+11. *Paragraph axis with multiline regex*: =§para[text~="^# Installation"]= matches paragraph starting with heading.
+12. *Encoding fallback*: latin-1 file emits =Diagnostic::EncodingFallback=.
+13. *Large-file streaming boundedness*: scenario uses 100 MiB synthetic; RSS bounded (verified via reasonable buffer sizing, no full-file load assertion).
+14. *Parity vs read*: 20 representative invocations match semantic output.
+15. *Parity vs grep*: 20 representative invocations match semantic output.
+
+* Implementation
+
+** ITEM Define test fixtures
+:PROPERTIES:
+:CUSTOM_ID: PROJ-063-text-resolver-line-index-regex-qualifier::text-test-fixtures
+:LAYER: core
+:END:
+
+Files: =crates/pi-code-path/tests/fixtures/text/= — UTF-8 source files, latin-1 encoded file, 100 MiB synthetic, files with various line endings (=
+=, =\r
+=, single-line-no-trailing-newline), empty file.
+
+** ITEM Tests for line index + slicing
+:PROPERTIES:
+:CUSTOM_ID: PROJ-063-text-resolver-line-index-regex-qualifier::text-line-tests
+:DEPENDS: PROJ-063-text-resolver-line-index-regex-qualifier::text-test-fixtures
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/text/line_index.rs::tests=
+
+Scenarios 1, 5, 6 + edge cases D-8 (CRLF), D-9 (empty), D-10 (single line no trailing newline). Initially failing.
+
+** ITEM Implement LineIndex (lazy)
+:PROPERTIES:
+:CUSTOM_ID: PROJ-063-text-resolver-line-index-regex-qualifier::text-line-impl
+:DEPENDS: PROJ-063-text-resolver-line-index-regex-qualifier::text-line-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/text/line_index.rs=
+
+=struct LineIndex { offsets: Vec<u32> }= built on first call to =fn build(content: &[u8]) -> Self=. Maps 1-indexed line N to byte range. Built by scanning for =
+= only; =\r= treated as ordinary content.
+
+** ITEM Tests for ParaIndex + chunk axis
+:PROPERTIES:
+:CUSTOM_ID: PROJ-063-text-resolver-line-index-regex-qualifier::text-para-tests
+:DEPENDS: PROJ-063-text-resolver-line-index-regex-qualifier::text-line-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/text/para_index.rs::tests=
+
+Scenario 11. Test that paragraphs are blank-line-separated. =§chunk[n=20]= produces 20-line blocks.
+
+** ITEM Implement ParaIndex + chunk
+:PROPERTIES:
+:CUSTOM_ID: PROJ-063-text-resolver-line-index-regex-qualifier::text-para-impl
+:DEPENDS: PROJ-063-text-resolver-line-index-regex-qualifier::text-para-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/text/para_index.rs=
+
+=struct ParaIndex { boundaries: Vec<u32> }= scanning for blank lines. =§chunk[n=N]= computed lazily from LineIndex.
+
+** ITEM Tests for regex + context windows
+:PROPERTIES:
+:CUSTOM_ID: PROJ-063-text-resolver-line-index-regex-qualifier::text-regex-tests
+:DEPENDS: PROJ-063-text-resolver-line-index-regex-qualifier::text-para-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/text/regex.rs::tests=
+
+Scenarios 2, 3, 4, 9, 10, 11. Test multi-line regex via =(?m)= / =(?s)= inline flags. Capture groups via =#captures[N]=.
+
+** ITEM Implement regex matcher + << >> combinators
+:PROPERTIES:
+:CUSTOM_ID: PROJ-063-text-resolver-line-index-regex-qualifier::text-regex-impl
+:DEPENDS: PROJ-063-text-resolver-line-index-regex-qualifier::text-regex-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/text/regex.rs= and =text/axes.rs=
+
+Use =grep-regex= for streaming line-aware match. =<<[0..N]=  emits N preceding lines before each match; =>>[0..N]= emits N following. Capture groups stored in =NodeRef.metadata.captures: Vec<String>=.
+
+** ITEM Tests for content-class qualifiers
+:PROPERTIES:
+:CUSTOM_ID: PROJ-063-text-resolver-line-index-regex-qualifier::text-qualifier-tests
+:DEPENDS: PROJ-063-text-resolver-line-index-regex-qualifier::text-regex-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/text/qualifiers.rs::tests=
+
+Scenarios 5, 6, 7, 8, 9, 12. Each qualifier produces appropriate =Content= variant.
+
+** ITEM Implement qualifiers + FormatExtractor trait
+:PROPERTIES:
+:CUSTOM_ID: PROJ-063-text-resolver-line-index-regex-qualifier::text-qualifier-impl
+:DEPENDS: PROJ-063-text-resolver-line-index-regex-qualifier::text-qualifier-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/text/qualifiers.rs=
+
+=#raw= → =Content::Text= UTF-8 (latin-1 fallback emits diag). =#bytes= → =Content::Bytes= placeholder (artifact handle resolved by =pi-natives=). =#image= → =Content::Image= placeholder. =#text= → dispatch via =FormatExtractor= trait based on extension.
+
+Define trait:
+=trait FormatExtractor: Send + Sync { fn supports(&self, ext: &str) -> bool; fn extract(&self, path: &Path) -> Result<Content, Diagnostic>; }=
+
+The =TextResolver= holds =Vec<Box<dyn FormatExtractor>>=; concrete impls registered by =pi-natives=. Default fallback for unknown extensions: =#text= behaves as =#raw=.
+
+** ITEM Tests for streaming + parity
+:PROPERTIES:
+:CUSTOM_ID: PROJ-063-text-resolver-line-index-regex-qualifier::text-streaming-tests
+:DEPENDS: PROJ-063-text-resolver-line-index-regex-qualifier::text-qualifier-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/text/stream.rs::tests= and =tests/text_parity.rs=
+
+Scenario 13 (large file streaming). Parity corpus: 20 read-equivalent + 20 grep-equivalent invocations.
+
+** ITEM Implement streaming wrapper
+:PROPERTIES:
+:CUSTOM_ID: PROJ-063-text-resolver-line-index-regex-qualifier::text-streaming-impl
+:DEPENDS: PROJ-063-text-resolver-line-index-regex-qualifier::text-streaming-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/text/stream.rs=
+
+=fn resolve_text(loc: &FsLocator, query: &Query, opts: TextOpts) -> impl Stream<Item = NodeRef>=. Stream chunked by 64 NodeRefs. Cancellation via =CancellationToken=. Memory budget: line-index allocations are O(num_lines * 4 bytes) which is fine.
+
+* Edge Cases
+
+- D-1: Encoding fallback UTF-8 → latin-1 emits =Diagnostic::EncodingFallback=.
+- D-2: Large files: streaming only; =#raw= or =#bytes= or =#text= returns =Content= via the artifact store (handled at =pi-natives= NAPI layer for >threshold; this layer decides threshold).
+- D-3: Multiline regex via inline =(?m)= / =(?s)=; no separate dialect option.
+- D-4: =#text= routing → markitdown for PDF/DOC/DOCX/PPT/PPTX/XLS/XLSX/RTF/EPUB; native for JSON, HTML; fallback to =#raw= for unknown extensions. The dispatch logic lives here; concrete extractors in =PROJ-extraction-handlers=.
+- D-5: Binary content NEVER inlined. =#bytes= and =#image= always return artifact handles. =#raw= on a binary file emits =Diagnostic::BinaryContent= and refuses inline transfer.
+- D-6: =#captures[N]= post-processes already-matched NodeRef; out-of-bounds N → =Diagnostic::CaptureIndexOutOfBounds=.
+- D-7: Overlapping spans from one line returned as separate NodeRefs; coalescing only on opt-in projection.
+- D-8: CRLF normalisation: LineIndex on =
+= only; =\r= preserved in content; rendering preserves source line endings.
+- D-9: Empty file: §line, §chunk, §para empty sets; =#raw= empty string.
+- D-10: Single line no trailing newline: line 1 valid; =[last]= = =[-1..]= resolves correctly.
+
+* Acceptance Criteria
+
+- 15 test stubs from spec 00-text.md §E pass.
+- 50 line-slice round-trip pairs pass.
+- 30 regex-match fixtures pass.
+- 20 read-parity corpus passes (semantic equivalence vs legacy =read=).
+- 20 grep-parity corpus passes.
+- =cargo test -p pi-code-path= clean.
+- =cargo clippy= clean.
+- Streaming: walker yields incrementally; 100 MiB synthetic file processed without panic. Memory budget bounded (LineIndex ≤ O(line_count * 4 bytes)).
+- Cancellation: aborts mid-stream within 100 ms.
+- Encoding fallback: latin-1 file emits diag, content still readable.
+- Format-aware =#text= dispatches via =FormatExtractor= trait; default fallback to =#raw= for unknown extensions.

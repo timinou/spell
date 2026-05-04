@@ -1,0 +1,229 @@
+#+TITLE: FS resolver: walker, anchors, predicates, qualifiers, suffix-fallback
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: PROJ-062-fs-resolver-walker-anchors-predicates-qu
+#+DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q
+#+LAYER: core
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Implement the FS dialect resolver in =pi-code-path= so =get { target: "src/**/*.ts" }= and =get { target: "dir/" }= work end-to-end. Replaces =find.ts= and the directory-listing portions of =read.ts=. Foundation for the cross-dialect FS+Code+Text composition.
+
+* Context & Narrative
+
+Spec authority: =specs/code-graph/code-path-dialects/00-fs.md= (25 test stubs, 7 worked examples, 9 edge cases). Per spec, the FS dialect is *kernel-baked* — it ships in =pi-code-path= and cannot be disabled. Its node kinds are =§dir=, =§file=, =§symlink=. Its anchors and predicates are documented exhaustively in the dialect spec.
+
+The walker uses the =ignore= crate (already a workspace dep, used by =find.ts= and =grep.ts= today). Cancellation via =CancellationToken=. The walker streams =NodeRef=s; no eager directory load.
+
+Suffix/typo fallback reproduces today's =read= correction behaviour: when an exact =FsLocator= resolves to zero NodeRefs, run a fuzzy match against the project file index and emit =Diagnostic::SuffixSuggestion { tried, suggestion: NodeRef }=. The fuzzy logic in =read.ts= (=findUniqueSuffixMatch=) is the reference.
+
+* Scope
+
+In:
+- New module =crates/pi-code-path/src/dialects/fs/= with =mod.rs=, =walker.rs=, =anchors.rs=, =predicates.rs=, =qualifiers.rs=, =suffix_fallback.rs=.
+- =FsResolver= struct implementing =Resolver= trait (the trait lands in =PROJ-resolver-traits=).
+- All 8 anchors (=¶hidden=, =¶ignored=, =¶code=, =¶doc=, =¶image=, =¶binary=, =¶large=, =¶lockfile=).
+- All 11 predicates (=ext=, =lang=, =size= with K/M/G, =mtime=, =name=, =depth=, =empty=, =text=, plus the kernel-shared =§=, =¶=, =[N]=, =[a..b]=).
+- 3 qualifiers (=#listing=, =#tree[depth=N]=, =#stat=).
+- Streaming via =impl Stream<Item = NodeRef>=.
+- Cancellation via =CancellationToken=.
+- Suffix-fallback diagnostic emission.
+- 80 round-trip glob tests + 40 resolver fixtures + 15 negative cases (per spec §E "Test suite").
+
+Out:
+- Cross-dialect composition (FS → Code transitions handled by =PROJ-resolver-traits= dispatch).
+- Locator parsing (lives in =PROJ-061-parser-completion=).
+- ¶code/¶image/¶doc anchors require a =LanguageProfile= registry → use a trait =FsAnchorContext= that =pi-natives= injects later (avoid cyclic dep).
+
+* Existing Patterns
+
+- =ignore::WalkBuilder= — fluent builder used in =packages/coding-agent/src/tools/find.ts= via =@oh-my-pi/pi-natives::glob()=. Same crate.
+- =crates/pi-natives/src/glob.rs= and =crates/pi-natives/src/glob_util.rs= — existing glob walker; study for cancellation patterns and gitignore integration.
+- =crates/pi-code-path/src/types.rs= — =NodeRef=, =Diagnostic=, =DiagnosticVariant::SuffixSuggestion=, =Content=.
+- =crates/pi-code-path/src/ast.rs= — =FsLocator=, =FsSegment=, =Predicate=, =Qualifier=.
+- =packages/coding-agent/src/tools/read.ts::findUniqueSuffixMatch= — reference for suffix-fallback logic.
+
+* Tests
+
+File: =crates/pi-code-path/src/dialects/fs/tests.rs= (new file)
+
+User workflows tested (per spec 00-fs.md §E and §C):
+
+1. *Glob expansion*: =src/**/*.ts= yields all .ts files recursively under src/.
+2. *Hidden default*: =src/= includes =.gitignore= unless filtered with =-[¶hidden]=.
+3. *Gitignore default*: =src/= excludes paths matching project =.gitignore= unless =[¶ignored]= is present.
+4. *Anchor classification*: =¶code= matches =foo.ts= when TS profile registered; =¶image= matches =x.png=; =¶lockfile= matches =Cargo.lock=, =bun.lock=, =package-lock.json=; =¶binary= matches files where UTF-8 sniff fails.
+5. *Predicates*: =[ext=ts]= filters by extension; =[size>1M]= compares with K/M/G suffix; =[mtime>2026-01-01]= compares dates; =[name="*.test.ts"]= globs leaf name only; =[depth=2]= limits walk depth; =[empty]= matches zero-byte files; =[text]= synonym for ¬¶binary.
+6. *Qualifiers*: =#listing= one-level child NodeRefs; =#tree[depth=2]= recursive listing; =#stat= metadata only.
+7. *Suffix fallback*: =foo.ts= when only =src/utils/foo.ts= exists → =Diagnostic::SuffixSuggestion=.
+8. *Streaming*: walker yields incrementally; cancellation aborts mid-walk within 100 ms.
+9. *Permission denied*: per-NodeRef diagnostic; walk continues. No abort.
+10. *Set ops on results*: =A | B=, =A & B=, =A - B= compose correctly across FS results.
+
+Corpus targets per spec: 80 round-trip glob strings, 40 resolver fixtures (fixture, path, expected node kind + path), 15 negative cases.
+
+Plus parity corpus against legacy =find.ts=: 30 representative invocations with semantic-equivalent expected output.
+
+* Implementation
+
+** ITEM Define test fixtures
+:PROPERTIES:
+:CUSTOM_ID: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-test-fixtures
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/tests/fixtures/fs/= — directory tree with mixed code/doc/binary/image/lockfile entries, =.gitignore= file with realistic patterns, hidden files, symlinks, large files (one >1 MiB synthetic). Created via build script if needed.
+
+** ITEM Tests for glob expansion + hidden + gitignore
+:PROPERTIES:
+:CUSTOM_ID: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-walker-tests
+:DEPENDS: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-test-fixtures
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/fs/walker.rs::tests= and =fs/tests.rs=
+
+Scenarios 1-3, 8, 9. Each test uses a tempdir-backed fixture or the static fixtures. Initially failing tests.
+
+** ITEM Implement FsWalker on ignore crate
+:PROPERTIES:
+:CUSTOM_ID: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-walker-impl
+:DEPENDS: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-walker-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/fs/walker.rs=
+
+Public API: =fn walk(loc: &FsLocator, opts: WalkOpts) -> impl Stream<Item = NodeRef>=. =WalkOpts= has =hidden: bool= (default true), =gitignore: bool= (default true), =cancel: CancellationToken=, =root: PathBuf=.
+
+Glob match: each =FsLocator= compiled to a =globset::GlobSet= for fast match. Hidden-by-default + gitignore-respect are walker-level overrides.
+
+** ITEM Tests for anchors
+:PROPERTIES:
+:CUSTOM_ID: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-anchor-tests
+:DEPENDS: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-walker-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/fs/anchors.rs::tests=
+
+Scenarios from spec §E "Anchor classification". 8 tests, one per anchor.
+
+** ITEM Implement anchor classifiers
+:PROPERTIES:
+:CUSTOM_ID: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-anchor-impl
+:DEPENDS: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-anchor-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/fs/anchors.rs=
+
+=fn classify(node: &NodeRef, ctx: &dyn FsAnchorContext) -> EnumSet<FsAnchor>=. =FsAnchorContext= is a trait that provides registered code-language extensions (defined in =PROJ-resolver-traits=). =¶hidden=, =¶ignored=, =¶image=, =¶doc=, =¶lockfile=, =¶large= are intrinsic. =¶code= consults the context. =¶binary= runs UTF-8 sniff on first 8 KiB.
+
+** ITEM Tests for predicates
+:PROPERTIES:
+:CUSTOM_ID: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-predicate-tests
+:DEPENDS: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-anchor-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/fs/predicates.rs::tests=
+
+Scenarios from spec §B "Predicates" plus §D "Edge cases" D-6, D-7, D-8 (size suffixes, mtime formats, name leaf-only).
+
+** ITEM Implement predicate evaluator
+:PROPERTIES:
+:CUSTOM_ID: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-predicate-impl
+:DEPENDS: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-predicate-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/fs/predicates.rs=
+
+=fn eval(pred: &Predicate, node: &NodeRef, ctx: &dyn FsAnchorContext) -> bool=. Dispatch on attribute name for normalised predicates: =ext=, =lang=, =size=, =mtime=, =name=, =depth=. Implement K/M/G suffix parsing for =size=. Implement RFC3339 + YYYY-MM-DD parsing for =mtime=. =name= matches leaf only via =globset::Glob=.
+
+** ITEM Tests for qualifiers
+:PROPERTIES:
+:CUSTOM_ID: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-qualifier-tests
+:DEPENDS: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-predicate-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/fs/qualifiers.rs::tests=
+
+Scenarios from spec §B "Qualifiers" — =#listing=, =#tree[depth=N]=, =#stat=.
+
+** ITEM Implement qualifiers
+:PROPERTIES:
+:CUSTOM_ID: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-qualifier-impl
+:DEPENDS: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-qualifier-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/fs/qualifiers.rs=
+
+=#listing= → walk depth-1 yielding child NodeRefs. =#tree[depth=N]= → walk capped at depth N. =#stat= → metadata only (size, mtime, kind, optional hash). All return =Vec<NodeRef>= or =Stream<NodeRef>=.
+
+** ITEM Tests for suffix-fallback
+:PROPERTIES:
+:CUSTOM_ID: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-suffix-tests
+:DEPENDS: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-qualifier-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/fs/suffix_fallback.rs::tests=
+
+Scenarios: =foo.ts= when only =src/utils/foo.ts= exists; ambiguous =Foo= with two matches (no suggestion); zero-distance match always wins.
+
+** ITEM Implement suffix-fallback
+:PROPERTIES:
+:CUSTOM_ID: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-suffix-impl
+:DEPENDS: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-suffix-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/fs/suffix_fallback.rs=
+
+Reference: =packages/coding-agent/src/tools/read.ts::findUniqueSuffixMatch=. Use =globset= for the suffix glob; bail on multi-match (no suggestion in ambiguous cases).
+
+** ITEM FsResolver wiring + parity corpus
+:PROPERTIES:
+:CUSTOM_ID: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-resolver-wiring
+:DEPENDS: PROJ-062-fs-resolver-walker-anchors-predicates-qu::fs-suffix-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/fs/mod.rs= and =crates/pi-code-path/tests/fs_parity.rs=
+
+=FsResolver= struct implementing =Resolver= (or =CodeResolver::resolve_fs=). Wire walker + anchors + predicates + qualifiers + suffix-fallback. 30-invocation parity corpus comparing semantic equivalence with legacy =find=: each entry is =(legacy_args, codepath, expected_paths)=.
+
+* Edge Cases
+
+- Symbolic-link cycle: walker skips (ignore crate handles); test fixture includes one cycle.
+- Permission denied: per-NodeRef =Diagnostic::Inaccessible=; walk continues.
+- Glob crossing project root via =..=: rejected at parse time (handled in =PROJ-061=); resolver assumes well-formed input but defensively rejects =..= segments with =Diagnostic::PathTraversal=.
+- =[name=…]= matches leaf only, never project-relative path. Test D-6.
+- =[size>1M]= power of 1024 (1048576), not 1000. Test D-7.
+- =[mtime>2026-01-01]= start-of-day UTC. Test D-8.
+- Cross-file NodeSet: =A | B= union via dedup-on-canonical-path. =A - B= with overlapping streams: stream A and skip any path matching B's set. =A & B= materialises both then intersects.
+- =¶binary= UTF-8 sniff: first 8 KiB; reject on invalid sequence; emit =Diagnostic::EncodingFallback= if latin-1 retry succeeds.
+- Suffix-fallback zero-result: emit =Diagnostic::NoMatches= with =SuffixSuggestion= as additional hint, not as result substitution. The caller decides whether to retry.
+- Cancellation: token check inside the walker's batch boundary (every 100 entries) to bound abort latency.
+
+* Acceptance Criteria
+
+- All 25 spec test stubs (=00-fs.md §E=) pass.
+- 30-invocation parity corpus passes (semantic equivalence vs legacy =find=).
+- =cargo test -p pi-code-path= clean.
+- =cargo clippy -p pi-code-path -- -D warnings= clean.
+- Walker streams (no eager full-tree load): test asserts =Vec<NodeRef>= grows incrementally with =yield_now= boundaries.
+- Cancellation: aborts mid-walk within 100 ms (test with 10k-file fixture and cancel after 50 ms).
+- Suffix-fallback: zero-match query against fixture with one near-match emits =Diagnostic::SuffixSuggestion= with the close match path; ambiguous case emits no suggestion.
+- =¶ignored= opts back into gitignored entries; without it, gitignored entries excluded.
+- =¶hidden= default-included, filterable via =-[¶hidden]=.
+- All glob operators (=*=, =**=, =?=, =[abc]=, ={a,b,c}=) match correctly against fixture tree.

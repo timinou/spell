@@ -1,0 +1,83 @@
+#+TITLE: extractIdLinks regex rejects uppercase sub-outline slugs (PROJ-/FEAT-/BUG- prefixes)
+#+STATE: ITEM
+#+SESSION_ID: 14d34634c16fd492
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-03T22-09-18-086Z_14d34634c16fd492.jsonl]]
+#+CUSTOM_ID: BUG-334-extractidlinks-regex-rejects-uppercase-s
+#+EFFORT: S
+#+LAYER: core
+#+PRIORITY: #A
+
+* Initial Message
+
+how would you implement the full vision of codepath v3? in a way that replaces the need for the find and the read tools? and maybe even for the grep tool, not sacrificng any flexibility?
+
+* Scope
+
+The link-extraction regex in =packages/org/src/id-links.ts:7= and the matching =parseSubOutlineId= contract reject sub-outline IDs whose suffix contains uppercase letters. Concrete failure: =[[id:PROJ-052-pi-code-path-crate-codepath-v3-parser-as::proj-ast-types]]= does not parse because the sub-slug regex is =[a-z0-9-]+= but the repo's actual sub-outline naming convention uses uppercase-prefixed slugs (=proj-ast-types=, =feat-sigil-grammar=, =proj-cutover-tool-deletion=).
+
+Effect: =org validate-plan= reports =manifest-missing-suboutlines= for every linked child whose declared sub-outlines use uppercase prefixes — *including* multiple in-flight plans (PLAN-255, presumably others). The plan engine itself works fine (different parser); only the pre-flight validator fails.
+
+** In scope
+- Loosen the regex in =extractIdLinks= to accept the actual repo convention
+- Update =parseSubOutlineId= and any peer parsers in =@oh-my-pi/pi-org= to match
+- Add test fixtures using uppercase-prefixed sub-slugs from real plan data
+- Re-run =org validate-plan PLAN-255-...= and confirm zero issues from this category
+
+** Out of scope
+- Renaming existing sub-outline CUSTOM_IDs across all plans/projects — too much blast radius
+- Validator gates beyond link extraction (sub-outline declaration parsing, manifest grouping)
+
+** Existing patterns
+- =packages/org/src/id-links.ts:7= — current regex =/\[\[id:([A-Z]+-\d+(?:-[a-z0-9-]+)?(?:::[a-z0-9-]+)?)\](?:\[[^\]]*\])?\]/g=
+- =packages/org/test/sub-outline-ids.test.ts= — tests use only =define-types=, =parser-tests=, =implement-parser= (lowercase)
+- =!tasks/projects/PROJ-052-...= and many other items use =PROJ-/FEAT-/BUG-= prefixed sub-slugs
+- =FEAT-606-validateplanitem-requires-dual-link-mani= introduced =manifest-missing-suboutlines= category
+
+** Tests
+- T-B1: =extractIdLinks("[[id:PROJ-052-foo::proj-ast-types]]")= returns =["PROJ-052-foo::proj-ast-types"]= — currently returns =[]=
+- T-B2: =parseSubOutlineId("PROJ-052-foo::proj-ast-types")= returns ={ parentId, subSlug: "proj-ast-types" }= — currently returns null
+- T-B3: =extractIdLinks= preserves rejection of clearly malformed IDs (=[[id:not::an::id]]= etc.)
+- T-B4: Run =org validate-plan PLAN-255-codepath-v3-full-implementation-parser-d= and assert =manifest-missing-suboutlines= category does not appear
+- T-B5: Existing sub-outline tests (=parser-tests=, =define-types=, …) still pass — backward compatible
+
+** Implementation
+
+** ITEM bug-loosen-extractIdLinks
+:PROPERTIES:
+:CUSTOM_ID: BUG-334-extractidlinks-regex-rejects-uppercase-s::bug-loosen-id-link-regex
+:END:
+- File: =packages/org/src/id-links.ts=
+- Change sub-slug class from =[a-z0-9-]+= to =[A-Za-z0-9_-]+= (matches the validator's =normalizeSuboutlineId= which already accepts =[A-Za-z0-9_-]+= at =plan-validation.ts:218=)
+- Keep parent ID class unchanged (=[A-Z]+-\d+(?:-[a-z0-9-]+)?=)
+- =parseSubOutlineId= already returns =subSlug: id.slice(sepIndex + 2)= without character-class restriction — already correct
+
+** ITEM bug-test-fixtures
+:PROPERTIES:
+:CUSTOM_ID: BUG-334-extractidlinks-regex-rejects-uppercase-s::bug-test-uppercase-slugs
+:DEPENDS: BUG-334-extractidlinks-regex-rejects-uppercase-s::bug-loosen-id-link-regex
+:END:
+- File: =packages/org/test/sub-outline-ids.test.ts=
+- Add 5 test cases using actual in-tree slug shapes: =proj-ast-types=, =feat-sigil-grammar=, =proj-cutover-tool-deletion=, =bug-loosen-id-link-regex=, =feat-582-projection-options-section= (digit-mixed)
+
+** ITEM bug-revalidate-plan-255
+:PROPERTIES:
+:CUSTOM_ID: BUG-334-extractidlinks-regex-rejects-uppercase-s::bug-revalidate-plan-255
+:DEPENDS: BUG-334-extractidlinks-regex-rejects-uppercase-s::bug-loosen-id-link-regex BUG-334-extractidlinks-regex-rejects-uppercase-s::bug-test-uppercase-slugs
+:END:
+- After regex fix lands, run =org validate-plan PLAN-255-codepath-v3-full-implementation-parser-d= and confirm clean
+- If other validator categories surface (now that links parse), file follow-ups against PLAN-255 specifically
+
+** Edge Cases
+
+- Underscore in suffix: existing =normalizeSuboutlineId= already allows; align extractIdLinks regex with it
+- Numeric-only suffix (=foo::123=): already valid
+- Empty suffix (=foo::=): already rejected by =parseSubOutlineId= — preserve
+
+** Acceptance Criteria
+
+- [ ] =bun test packages/org/test/id-links.test.ts= passes including new uppercase-slug fixtures
+- [ ] =bun test packages/org/test/sub-outline-ids.test.ts= passes with new fixtures
+- [ ] =bun check:ts= passes
+- [ ] =bun lint:ts= passes
+- [ ] =org validate-plan PLAN-255-codepath-v3-full-implementation-parser-d= no longer reports =manifest-missing-suboutlines=
+- [ ] No regression in =extractIdLinks= for existing lowercase-only fixtures

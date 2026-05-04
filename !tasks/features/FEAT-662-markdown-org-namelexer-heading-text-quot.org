@@ -1,0 +1,72 @@
+#+TITLE: Markdown/Org NameLexer: heading text, quoted text, list position
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FEAT-662-markdown-org-namelexer-heading-text-quot
+#+DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q
+#+LAYER: core
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Implement Markdown/Org dialect at =crates/pi-code-path/src/dialects/mdorg.rs= per =specs/code-graph/code-path-dialects/08-markdown-org.md=. Names are heading text (possibly quoted: ="Quick start"=) or list positions (=item.3.subitem=).
+
+* Scope
+
+In:
+- =MdName= with =Vec<MdSegment>=: =Heading(String)=, =QuotedHeading(String)=, =ListItem { index: usize }=.
+- =MdNameLexer= parse/render/matches.
+- AnchorPatterns: =¶code-block=, =¶quote=, =¶task-item=, =¶link= per spec.
+- QualifierSpecs: =#body=, =#heading-level=, =#code-block-content=, =#section= per spec.
+- =markdown_dialect()= factory (covers both Markdown and Org via =tree-sitter-org= for Org subset).
+- 50/20/10 corpus.
+
+Out: LanguageProfile wiring; full CommonMark / Org TODO state machine (existing pi-org-engine handles Org).
+
+* Existing Patterns
+
+=specs/code-graph/code-path-dialects/08-markdown-org.md=. =crates/pi-org-engine= for Org parsing patterns. =crates/tree-sitter-org=.
+
+* Tests
+
+Workflows: =Installation= (heading), ="Quick start"= (quoted heading with spaces), =Foo.Bar= (nested heading), list positions, ¶code-block matches fenced code block, =#body= returns section body, ¶task-item matches =- [ ]= list items, negatives (unmatched quote).
+
+* Implementation
+
+** ITEM Tests for MdNameLexer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-662-markdown-org-namelexer-heading-text-quot::mdorg-lexer-tests
+:LAYER: core
+:END:
+
+** ITEM Implement MdNameLexer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-662-markdown-org-namelexer-heading-text-quot::mdorg-lexer-impl
+:DEPENDS: FEAT-662-markdown-org-namelexer-heading-text-quot::mdorg-lexer-tests
+:LAYER: core
+:END:
+
+** ITEM Tests + impl anchors, qualifiers, factory
+:PROPERTIES:
+:CUSTOM_ID: FEAT-662-markdown-org-namelexer-heading-text-quot::mdorg-anchors-qualifiers
+:DEPENDS: FEAT-662-markdown-org-namelexer-heading-text-quot::mdorg-lexer-impl
+:LAYER: core
+:END:
+
+* Edge Cases
+
+- Quoted heading with embedded quotes: ="He said \"hello\""= — preserve.
+- Heading text containing kernel sigils =/= or =::=: backtick-quote required.
+- Org TODO states embedded in heading: =* TODO Foo= — TODO state strips, name is =Foo=.
+- Numbered list: =item.3.subitem.5= → =Vec<ListItem>= chain.
+- Empty heading text → ParseError.
+- Markdown vs Org dialect: differ in heading sigil (=#=, =*=); both stripped; payload identical.
+
+* Acceptance Criteria
+
+- 50/20/10 corpus passes.
+- =cargo test -p pi-code-path mdorg= clean.
+- Cross-dialect smoke MdOrg tier passes.
