@@ -13,6 +13,7 @@ export interface CodePathOptions {
 	abortSignal?: AbortSignal;
 	/** Timeout in milliseconds for the operation. */
 	timeoutMs?: number;
+	artifactThreshold?: number;
 }
 
 export interface SpanDto {
