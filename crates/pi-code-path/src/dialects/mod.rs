@@ -3,14 +3,16 @@
 //! Each dialect defines:
 //! - A `NamePayload`-shaped representation of its identifier syntax.
 //! - A `NameLexer` impl that parses, renders, and matches.
-//! - A `LanguageDialect` factory wiring its anchors, qualifiers, and edge kinds.
+//! - A `LanguageDialect` factory wiring its anchors, qualifiers, and edge
+//!   kinds.
 //!
-//! Per spec README §1, dialects are kernel-pluggable. The 8 code dialects listed
-//! in `specs/code-graph/code-path-dialects/` (TS, Rust, Python, Go, Haskell, HTML,
-//! CSS, Markdown/Org) each get a module here. The 3 baseline dialects (FS, Text,
-//! URI) are kernel-baked.
+//! Per spec README §1, dialects are kernel-pluggable. The 8 code dialects
+//! listed in `specs/code-graph/code-path-dialects/` (TS, Rust, Python, Go,
+//! Haskell, HTML, CSS, Markdown/Org) each get a module here. The 3 baseline
+//! dialects (FS, Text, URI) are kernel-baked.
 
 pub mod css;
+pub mod fs;
 pub mod go;
 pub mod haskell;
 pub mod html;

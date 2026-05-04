@@ -3665,7 +3665,10 @@ dependencies = [
 name = "pi-code-path"
 version = "13.12.8"
 dependencies = [
+ "chrono",
+ "globset",
  "grep-regex",
+ "ignore",
  "regex",
  "serde",
  "serde_json",
