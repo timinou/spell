@@ -1,43 +1,51 @@
-Legacy tool to CodePath v3 migration guide.
+Migration guide: legacy tools → unified CodePath tools (get / edit / manage / create).
 
-On cutover the eight standalone legacy tools and the `code` subcommand surface are deleted. Every behavior they provided is reproduced by `get`, `edit`, `manage`, or `create` with a CodePath target.
+On cutover the seven standalone tools (`find`, `read`, `grep`, `ast-grep`, `ast-edit`, legacy `edit`, `write`) and the legacy `code` subcommand surface are deleted in one cycle. Every behavior they provided is reproduced by `get` / `edit` / `manage` / `create` with a CodePath target.
 
-| Legacy tool | New tool | Projection sugar | Canonical CodePath |
-|---|---|---|---|
-| `find "*.ts"` | `get` | `get { target: "**/*.ts" }` | `**/*.ts` |
-| `find "*.ts" --hidden=false` | `get` | `get { target: "**/*.ts" }` | `**/*.ts -[¶hidden]` |
-| `read foo.ts` | `get` | `get { target: "foo.ts" }` | `foo.ts#raw` |
-| `read foo.ts offset=50 limit=100` | `get` | `get { target: "foo.ts", head: 100, … }` | `foo.ts :: §line[50..150]#text` |
-| `read dir/` | `get` | `get { target: "dir/" }` | `dir/#listing` |
-| `read foo.pdf` | `get` | `get { target: "foo.pdf" }` | `foo.pdf#text` |
-| `read foo.docx` | `get` | `get { target: "foo.docx" }` | `foo.docx#text` |
-| `read img.png` | `get` | `get { target: "img.png" }` | `img.png#image` |
-| `read artifact://…` | `get` | `get { target: "artifact://…" }` | `artifact://…#raw` |
-| `read rule://my-rule` | `get` | `get { target: "rule://my-rule" }` | `rule://my-rule#text` |
-| `grep "useState" src/` | `get` | `get { target: "src/** :: §line[text~=\"useState\"]" }` | `src/** :: §line[text~="useState"]` |
-| `grep --post 3 "TODO"` | `get` | `get { target: "§line[text~=\"TODO\"]", context: { post: 3 } }` | `§line[text~="TODO"] >>[0..3]` |
-| `grep --type ts "x"` | `get` | `get { target: "**/*.ts :: §line[text~=\"x\"]" }` | `**/*.ts :: §line[text~="x"]` |
-| `grep mode=semantic "parseConfig"` | `get` | (no sugar) | `parseConfig/def→` |
-| `ast-grep { pat: "console.log($A)" }` | `get` | (no sugar) | `**/*.ts :: //§call_expression[name=console.log]` |
-| `ast-grep { pat, sel }` | `get` | sel is contextual selector | `**/*.ts :: //$pat[.$sel]` |
-| `ast-edit { ops: [{pat, out}] }` | `edit` | (none) | `edit { operations: [{ target: "**/*.ts", action: { kind: "findAndReplace", find: pat, content: out } }] }` |
-| `edit foo.txt replace pos=10 end=12` | `edit` | (none) | `edit { operations: [{ target: "foo.txt :: §line[10..12]", action: { kind: "replace", content: "…" } }] }` |
-| `edit { input: "…patch…" }` | `edit` | (none) | `edit { operations: [{ action: { kind: "patch", diff: "…" } }] }` |
-| `write foo.ts content` | `create` | (none) | `create { path: "foo.ts", content: "…" }` |
-| `write img.png { kind: "bytes", artifactUri }` | `create` | (none) | `create { path: "img.png", content: { kind: "bytes", artifactUri: "…" } }` |
-| `code read { file }` | `get` | `get { target: "file.ts" }` | `file.ts` |
-| `code read { file, symbol }` | `get` | `get { target: "file.ts :: Symbol" }` | `file.ts :: Symbol` |
-| `code outline { file }` | `get` | `get { target: "file.ts", resolution: 0 }` | `file.ts` |
-| `code symbols { query }` | `get` | `get { target: "**::query" }` | `**::query` |
-| `code context { symbol }` | `get` | `get { target: "file.ts :: Symbol", edges: true }` | `file.ts :: Symbol` |
-| `code impact { symbol }` | `get` | `get { target: "**::Symbol/def→", depth: 3 }` | `**::Symbol/def→` |
-| `code flow { symbol }` | `get` | `get { target: "**::Symbol/call→", depth: 3 }` | `**::Symbol/call→` |
-| `code deps { file }` | `get` | `get { target: "file.ts/import→" }` | `file.ts/import→` |
-| `code save` / `undo` / `redo` / `diff` / `buffers` / `languages` / `index` / `watcherStatus` / `lockStatus` | `manage` | `manage { command: "…", file: "…" }` | — |
+## Migration table
 
-Key rules:
-- Use `get` for every read, search, listing, or navigation operation.
-- Use `edit` for every mutation to an existing file.
-- Use `create` for every new file.
-- Use `manage` for buffer lifecycle and workspace state.
-- Do not use `code` as a prefix for any tool call.
+| Legacy tool | New tool | CodePath syntax |
+|-------------|----------|-----------------|
+| **Find** | | |
+| `find "*.ts"` | `get { target: "**/*.ts" }` | `**/*.ts` |
+| `find "*.ts" --hidden=false` | `get { target: "**/*.ts -[¶hidden]" }` | `**/*.ts -[¶hidden]` |
+| **Read** | | |
+| `read foo.ts` | `get { target: "foo.ts" }` | `foo.ts#raw` |
+| `read foo.ts offset=50 limit=100` | `get { target: "foo.ts", offset: 50, head: 100 }` | `foo.ts::§line[50..150]#text` |
+| `read dir/` | `get { target: "dir/" }` | `dir/#listing` |
+| `read foo.pdf` | `get { target: "foo.pdf" }` | `foo.pdf#text` |
+| `read foo.docx` | `get { target: "foo.docx" }` | `foo.docx#text` |
+| `read img.png` | `get { target: "img.png" }` | `img.png#image` |
+| `read artifact://…/1.txt` | `get { target: "artifact://…/1.txt" }` | `artifact://…/1.txt#raw` |
+| `read rule://my-rule` | `get { target: "rule://my-rule" }` | `rule://my-rule#text` |
+| **Grep** | | |
+| `grep "useState" src/` | `get { target: "src/**::§line[text~=\"useState\"]" }` | `src/**::§line[text~="useState"]` |
+| `grep --post 3 "TODO"` | `get { target: "§line[text~=\"TODO\"] >>[0..3]" }` | `§line[text~="TODO"] >>[0..3]` |
+| `grep --type ts "x"` | `get { target: "**/*.ts::§line[text~=\"x\"]" }` | `**/*.ts::§line[text~="x"]` |
+| `grep mode=semantic "parseConfig"` | (use edge axis) | `parseConfig/def→` |
+| **AST Grep** | | |
+| `ast-grep { pat: "console.log($A)" }` | (use predicates) | `**/*.ts::§call_expression[name=console.log]` |
+| `ast-grep { pat, sel }` | (use has-descendant) | `**/*.ts::§node[.$sel]` |
+| **AST Edit** | | |
+| `ast-edit { ops: [{pat, out}] }` | `edit { operations: [{ target: "**/*.ts", action: { kind: "findAndReplace", find: pat, content: out } }] }` | — |
+| **Edit (legacy hashline)** | | |
+| `edit foo.txt replace pos=10 end=12 lines=["…"]` | `edit { operations: [{ target: "foo.txt::§line[10..12]", action: { kind: "replace", content: "…" } }] }` | `foo.txt::§line[10..12]` |
+| `edit { input: "--- a/foo.ts\n+++ …" }` | `edit { operations: [{ target: "foo.ts", action: { kind: "patch", diff: "…" } }] }` | — |
+| **Write** | | |
+| `write foo.ts content` | `create { path: "foo.ts", content: "…" }` | — |
+| `write img.png { kind: "bytes", artifactUri }` | `create { path: "img.png", content: { kind: "bytes", artifactUri: "artifact://…" } }` | — |
+| **Code (legacy)** | | |
+| `code read file.ts` | `get { target: "file.ts" }` | `file.ts` |
+| `code edit { targetId: "foo.ts::Bar" }` | `edit { operations: [{ target: "foo.ts::Bar", action: { kind: "…" } }] }` | `foo.ts::Bar` |
+| `code outline file.ts` | `get { target: "file.ts", format: "tree" }` | `file.ts#tree` |
+
+## Key differences
+
+- **Unified target syntax**: All tools accept CodePath expressions; no separate `path`/`pattern`/`file` parameters.
+- **Projection options**: `head`, `tail`, `offset`, `limit` replace separate pagination params.
+- **Format control**: `format` parameter replaces per-tool output modes.
+- **Occurrence selectors**: `first`, `last`, `all`, `N` replace ambiguous multi-match behavior.
+- **LINE#ID anchors**: Replace legacy hashline `pos`/`end` with stable CID anchors from `get` output.
+- **Edge axis**: Replaces semantic grep mode and `context`/`impact`/`flow`/`deps` commands.
+
+Cross-reference: `specs/code-graph/code-path.md` §D, `code-path-extensions.md` §5.
