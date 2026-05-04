@@ -10,6 +10,20 @@
 //! CSS, Markdown/Org) each get a module here. The 3 baseline dialects (FS, Text,
 //! URI) are kernel-baked.
 
+pub mod css;
+pub mod go;
+pub mod haskell;
+pub mod html;
+pub mod mdorg;
+pub mod python;
+pub mod rust;
 pub mod typescript;
 
-pub use typescript::{TsNameLexer, TsName, TsSegment};
+pub use css::{CssName, CssNameLexer, css_dialect};
+pub use go::{GoName, GoNameLexer, GoSegment, go_dialect};
+pub use haskell::{HsName, HsNameLexer, HsSegment, haskell_dialect};
+pub use html::{HtmlName, HtmlNameLexer, html_dialect};
+pub use mdorg::{MdName, MdNameLexer, MdSegment, markdown_dialect};
+pub use python::{PyName, PyNameLexer, PySegment, python_dialect};
+pub use rust::{RustName, RustNameLexer, RustSegment, rust_dialect};
+pub use typescript::{TsName, TsNameLexer, TsSegment};
