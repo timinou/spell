@@ -36,17 +36,19 @@ import { CanvasTool } from "./canvas";
 import { CanvasCastTool } from "./canvas-cast";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 import { CodeTool } from "./code";
+import { CreateTool } from "./create";
+import { CodepathEditTool } from "./edit";
 import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FetchTool } from "./fetch";
 import { FindTool } from "./find";
 import { GatewayTool } from "./gateway";
+import { GetTool } from "./get";
 import { GoalsTool } from "./goals-tool";
 import { GrepTool } from "./grep";
 import { InspectImageTool } from "./inspect-image";
-
+import { ManageTool } from "./manage";
 import { OrgTool } from "./org";
 import { wrapToolWithMetaNotice } from "./output-meta";
-
 import { ReadTool } from "./read";
 import { RenderMermaidTool } from "./render-mermaid";
 import { ResolveTool } from "./resolve";
@@ -83,18 +85,22 @@ export * from "./canvas";
 export * from "./canvas-cast";
 export * from "./checkpoint";
 export * from "./code";
+export * from "./codepath-result";
+export * from "./codepath-types";
 export * from "./context-pressure-policy";
+export * from "./create";
+export * from "./edit";
 export * from "./exit-plan-mode";
 export * from "./fetch";
 export * from "./find";
 export * from "./gateway";
 export * from "./gemini-image";
+export * from "./get";
 export * from "./goals-tool";
 export * from "./grep";
 export * from "./inspect-image";
-
+export * from "./manage";
 export * from "./pending-action";
-
 export * from "./read";
 export * from "./render-mermaid";
 export * from "./resolve";
@@ -244,6 +250,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 
 	calc: s => new CalculatorTool(s),
 	ssh: loadSshTool,
+	// biome-ignore lint/suspicious/noDuplicateObjectKeys: coexistence override; new registration below
 	edit: s => new EditTool(s),
 	find: s => new FindTool(s),
 	grep: s => new GrepTool(s),
@@ -273,6 +280,11 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	loop_launch: s => (s.loopManager ? new LoopLaunchTool(s) : null),
 	loop_done: s => (s.loopManager ? new LoopDoneTool(s) : null),
 	gateway: GatewayTool.createIf,
+	// Generic code-path tools (coexistence wave; override legacy registrations)
+	get: s => new GetTool(s),
+	manage: s => new ManageTool(s),
+	create: s => new CreateTool(s),
+	edit: s => new CodepathEditTool(s),
 };
 
 export type ToolTier = "core" | "standard" | "specialized";
@@ -302,6 +314,11 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	canvas_cast: "standard",
 	goals: "standard",
 	approvals: "standard",
+
+	// Standard — loaded by default
+	get: "standard",
+	manage: "standard",
+	create: "standard",
 
 	// Specialized — compact API descriptions to reduce token usage
 	canvas: "specialized",
