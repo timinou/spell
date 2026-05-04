@@ -3971,6 +3971,7 @@ dependencies = [
  "unicode-width",
  "wait-timeout",
  "windows-sys 0.61.2",
+ "winnow",
  "winreg 0.55.0",
 ]
 

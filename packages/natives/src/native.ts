@@ -30,6 +30,7 @@ import "./shell/types";
 import "./text/types";
 import "./work/types";
 import "./typst-surface/types";
+import "./code-path/types";
 
 export type { NativeBindings, TsFunc } from "./bindings";
 
@@ -304,6 +305,9 @@ function validateNative(bindings: NativeBindings, source: string): void {
 	checkFn("extractSegments");
 	checkFn("matchesKittySequence");
 	checkFn("executeShell");
+	checkFn("executeCodePath");
+	checkFn("parseCodePath");
+	checkFn("renderCodePath");
 	checkFn("executeCodeGraph");
 	checkFn("executeCodeBuffer");
 	checkFn("PtySession");
