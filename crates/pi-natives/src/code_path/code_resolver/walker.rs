@@ -467,7 +467,8 @@ mod tests {
 		});
 		let results = run_query(&resolver, f.path(), query);
 		assert_eq!(results.len(), 1);
-		assert_eq!(results[0].kind, "§return_statement");
+// FEAT-672: ¶return matches function containing return (spec 01-typescript.md).
+		assert_eq!(results[0].kind, "§function_declaration");
 	}
 
 	// ------------------------------------------------------------------
