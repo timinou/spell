@@ -14,6 +14,3 @@ pub mod image_pipeline;
 pub mod marshal;
 pub mod napi;
 pub mod uri;
-
-#[cfg(test)]
-pub mod tests;

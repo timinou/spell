@@ -2,10 +2,7 @@
 //!
 //! Exposes `executeCodePath`, `parseCodePath`, and `renderCodePath`.
 
-use std::{
-	path::{Path, PathBuf},
-	sync::Arc,
-};
+use std::path::{Path, PathBuf};
 
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -15,15 +12,14 @@ use pi_code_path::{
 	dialects::{fs::FsResolver, text::TextResolver},
 	parser::parse_code_path,
 	renderer::render_code_path,
-	resolver::{CancellationToken, ProjectionOpts, Resolver, CodeResolver as _CodeResolverTrait},
-	types::{Diagnostic, NodeRef},
+	resolver::{CancellationToken, CodeResolver, ProjectionOpts, Resolver},
 };
 use winnow::{Parser, token::take_while};
 
 use super::{
 	code_resolver,
 	extractors::default_extractors,
-	marshal::{self, ARTIFACT_THRESHOLD, nodes_to_dtos},
+	marshal::{ARTIFACT_THRESHOLD, nodes_to_dtos},
 	uri::default_registry,
 };
 use crate::task::CancelToken;
@@ -80,7 +76,7 @@ pub struct CodePathChunk {
 }
 
 #[napi(object)]
-pub struct CodePathOptions {
+pub struct CodePathOptions<'env> {
 	pub command:      String,
 	pub target:       String,
 	pub limit:        Option<u32>,
@@ -92,28 +88,29 @@ pub struct CodePathOptions {
 	#[napi(ts_type = "any")]
 	pub actions:      Option<serde_json::Value>,
 	pub manage:       Option<String>,
-	pub abort_signal: Option<Unknown<'static>>,
+	pub abort_signal: Option<Unknown<'env>>,
 	#[napi(js_name = "timeoutMs")]
 	pub timeout_ms:   Option<u32>,
 }
 
 // ── Task options (owned, Send) ───────────────────────────────────
 
-pub(crate) struct CodePathTaskOptions {
-	pub(crate) command: String,
-	pub(crate) target:  String,
-	pub(crate) limit:   Option<u32>,
-	pub(crate) head:    Option<u32>,
-	pub(crate) tail:    Option<u32>,
-	pub(crate) offset:  Option<u32>,
-	pub(crate) format:  Option<String>,
-	pub(crate) root:    Option<String>,
-	pub(crate) actions: Option<serde_json::Value>,
-	pub(crate) manage:  Option<String>,
+#[allow(dead_code)]
+struct CodePathTaskOptions {
+	command: String,
+	target:  String,
+	limit:   Option<u32>,
+	head:    Option<u32>,
+	tail:    Option<u32>,
+	offset:  Option<u32>,
+	format:  Option<String>,
+	root:    Option<String>,
+	actions: Option<serde_json::Value>,
+	manage:  Option<String>,
 }
 
-impl From<CodePathOptions> for CodePathTaskOptions {
-	fn from(value: CodePathOptions) -> Self {
+impl From<CodePathOptions<'_>> for CodePathTaskOptions {
+	fn from(value: CodePathOptions<'_>) -> Self {
 		Self {
 			command: value.command,
 			target:  value.target,
@@ -159,7 +156,7 @@ impl NameLexer for DotLexer {
 // ── executeCodePath ──────────────────────────────────────────────
 
 #[napi(js_name = "executeCodePath")]
-pub fn execute_code_path(options: CodePathOptions) -> crate::task::Async<Vec<CodePathChunk>> {
+pub fn execute_code_path(options: CodePathOptions<'_>) -> crate::task::Async<Vec<CodePathChunk>> {
 	let cancel_token = CancelToken::new(options.timeout_ms, options.abort_signal);
 	let task_options = CodePathTaskOptions::from(options);
 	crate::task::blocking("code_path", cancel_token, move |cancel_token| {
@@ -167,7 +164,7 @@ pub fn execute_code_path(options: CodePathOptions) -> crate::task::Async<Vec<Cod
 	})
 }
 
-pub(crate) fn execute_code_path_inner(
+fn execute_code_path_inner(
 	opts: CodePathTaskOptions,
 	cancel_token: CancelToken,
 ) -> Result<Vec<CodePathChunk>> {
@@ -306,4 +303,239 @@ pub fn render_code_path_napi(ast: serde_json::Value) -> Result<String> {
 	let cp: CodePath =
 		serde_json::from_value(ast).map_err(|e| Error::from_reason(format!("deser error: {e}")))?;
 	Ok(render_code_path(&cp, &DotLexer))
+}
+#[cfg(test)]
+mod tests {
+	use std::path::PathBuf;
+
+	use super::*;
+	fn opts(target: impl Into<String>) -> CodePathTaskOptions {
+		CodePathTaskOptions {
+			command: "resolve".to_string(),
+			target:  target.into(),
+			limit:   None,
+			head:    None,
+			tail:    None,
+			offset:  None,
+			format:  None,
+			root:    None,
+			actions: None,
+			manage:  None,
+		}
+	}
+	fn opts_with_root(target: impl Into<String>, root: PathBuf) -> CodePathTaskOptions {
+		CodePathTaskOptions {
+			command: "resolve".to_string(),
+			target:  target.into(),
+			limit:   None,
+			head:    None,
+			tail:    None,
+			offset:  None,
+			format:  None,
+			root:    Some(root.to_string_lossy().to_string()),
+			actions: None,
+			manage:  None,
+		}
+	}
+	#[test]
+	fn bare_path_returns_file_node() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), b"hello").unwrap();
+		let chunks = execute_code_path_inner(
+			opts_with_root("a.txt", root.clone()),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert_eq!(chunks.len(), 1);
+		assert!(chunks[0].done);
+		assert_eq!(chunks[0].nodes.len(), 1);
+		assert_eq!(chunks[0].nodes[0].kind, "§file");
+	}
+	#[test]
+	fn glob_returns_multiple_files() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), b"a").unwrap();
+		std::fs::write(root.join("b.txt"), b"b").unwrap();
+		std::fs::write(root.join("c.rs"), b"c").unwrap();
+		let chunks = execute_code_path_inner(
+			opts_with_root("*.txt", root),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
+		assert_eq!(nodes.len(), 2);
+		assert!(nodes.iter().any(|n| n.locator.ends_with("a.txt")));
+		assert!(nodes.iter().any(|n| n.locator.ends_with("b.txt")));
+	}
+	#[test]
+	fn line_slice_returns_sliced_text() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), b"l1\nl2\nl3\nl4\n").unwrap();
+		let chunks = execute_code_path_inner(
+			opts_with_root("a.txt::§line[2..3]", root),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
+		assert_eq!(nodes.len(), 2);
+		assert!(nodes[0].locator.contains("<line 2>"));
+		assert!(nodes[1].locator.contains("<line 3>"));
+	}
+	#[test]
+	fn regex_grep_over_glob() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), b"foo\nbar\nbaz\n").unwrap();
+		std::fs::write(root.join("b.txt"), b"qux\nbar\n").unwrap();
+		let chunks = execute_code_path_inner(
+			opts_with_root(r#"*.txt::§line[text~="ba."]"#, root),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
+		assert_eq!(nodes.len(), 3);
+		assert!(
+			nodes
+				.iter()
+				.any(|n| n.locator.contains("a.txt") && n.locator.contains("<line 2>"))
+		);
+		assert!(
+			nodes
+				.iter()
+				.any(|n| n.locator.contains("a.txt") && n.locator.contains("<line 3>"))
+		);
+		assert!(
+			nodes
+				.iter()
+				.any(|n| n.locator.contains("b.txt") && n.locator.contains("<line 2>"))
+		);
+	}
+	#[test]
+	fn memory_uri_scheme() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::create_dir_all(root.join("memory")).unwrap();
+		std::fs::write(root.join("memory/root"), b"memory data").unwrap();
+		let chunks = execute_code_path_inner(
+			opts_with_root("memory://root", root),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert_eq!(chunks.len(), 1);
+		assert!(chunks[0].done);
+		assert_eq!(chunks[0].nodes.len(), 1);
+		assert_eq!(chunks[0].nodes[0].kind, "§memory");
+		assert_eq!(chunks[0].nodes[0].locator, "memory://root");
+	}
+	#[test]
+	fn cancellation_aborts_mid_walk() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		for i in 0..10 {
+			std::fs::write(root.join(format!("{i}.txt")), b"a\n").unwrap();
+		}
+		let mut cancel = crate::task::CancelToken::default();
+		cancel
+			.emplace_abort_token()
+			.abort(crate::task::AbortReason::User);
+		let result = execute_code_path_inner(opts_with_root("*.txt::§line", root), cancel);
+		assert!(result.is_err(), "expected cancellation error");
+	}
+	#[test]
+	fn suffix_fallback_exact_basename() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::create_dir_all(root.join("src/utils")).unwrap();
+		std::fs::write(root.join("src/utils/foo.ts"), b"data").unwrap();
+		let chunks = execute_code_path_inner(
+			opts_with_root("foo.ts", root),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
+		assert!(
+			nodes
+				.iter()
+				.any(|n| n.locator.ends_with("src/utils/foo.ts")),
+			"expected suffix fallback to src/utils/foo.ts, got {:?}",
+			nodes
+		);
+	}
+	#[test]
+	fn qualifier_stat_returns_metadata() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), b"hello world").unwrap();
+		let chunks = execute_code_path_inner(
+			opts_with_root("a.txt#stat", root),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
+		assert_eq!(nodes.len(), 1);
+		assert!(nodes[0].metadata.get("size").is_some());
+	}
+	#[test]
+	fn parse_render_round_trip() {
+		let target = "src/foo.ts::Bar//§call[0..5]#body";
+		let ast = parse_code_path_napi(target.to_string()).unwrap();
+		let rendered = render_code_path_napi(ast).unwrap();
+		let ast2 = parse_code_path_napi(rendered.clone()).unwrap();
+		let rendered2 = render_code_path_napi(ast2).unwrap();
+		assert_eq!(rendered, rendered2, "round-trip mismatch: {} vs {}", rendered, rendered2);
+	}
+	#[test]
+	fn chunking_sixty_four_nodes() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		for i in 0..70 {
+			std::fs::write(root.join(format!("{i}.txt")), b"x\n").unwrap();
+		}
+		let chunks = execute_code_path_inner(
+			opts_with_root("*.txt::§line", root),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert_eq!(chunks.len(), 2, "expected 2 chunks for 70 nodes");
+		assert_eq!(chunks[0].nodes.len(), 64);
+		assert!(!chunks[0].done);
+		assert_eq!(chunks[1].nodes.len(), 6);
+		assert!(chunks[1].done);
+	}
+	#[test]
+	fn empty_result_emits_done_chunk() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		let chunks = execute_code_path_inner(
+			opts_with_root("*.nonexistent", root),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert_eq!(chunks.len(), 1);
+		assert!(chunks[0].done);
+		assert!(chunks[0].nodes.is_empty());
+	}
+	#[test]
+	fn parse_code_path_returns_json() {
+		let ast = parse_code_path_napi("src/a.ts::Foo".to_string()).unwrap();
+		assert!(ast.is_object());
+		let locator = ast.get("locator").and_then(|l| l.as_object());
+		assert!(locator.is_some());
+	}
+	#[test]
+	fn projection_limit_truncates_results() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		for i in 0..5 {
+			std::fs::write(root.join(format!("{i}.txt")), b"l1\nl2\nl3\n").unwrap();
+		}
+		let mut o = opts_with_root("*.txt::§line", root);
+		o.limit = Some(2);
+		let chunks = execute_code_path_inner(o, crate::task::CancelToken::default()).unwrap();
+		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
+		assert_eq!(nodes.len(), 10, "expected 2 lines × 5 files = 10 nodes");
+	}
 }

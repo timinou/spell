@@ -1,6 +1,4 @@
-import type { Cancellable } from "../bindings";
-
-export interface CodePathOptions extends Cancellable {
+export interface CodePathOptions {
 	command: string;
 	target: string;
 	limit?: number;
@@ -11,6 +9,10 @@ export interface CodePathOptions extends Cancellable {
 	root?: string;
 	actions?: any;
 	manage?: string;
+	/** Abort signal for cancelling the operation. */
+	abortSignal?: AbortSignal;
+	/** Timeout in milliseconds for the operation. */
+	timeoutMs?: number;
 }
 
 export interface SpanDto {
