@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { Component } from "@oh-my-pi/pi-tui";
 import { executeCodePath } from "@oh-my-pi/pi-natives";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
@@ -25,7 +26,19 @@ import type { CodePathAction, EditParams } from "./codepath-types";
 import { editSchema } from "./codepath-types";
 import { enforceModeWrite } from "./mode-guard";
 import { replaceTabs } from "./render-utils";
-import { toolResult } from "./tool-result";
+import { type DetailsWithMeta, toolResult } from "./tool-result";
+
+type EditToolResultDetails = DetailsWithMeta & {
+	operations?: number;
+	target?: string;
+	action?: string;
+	op?: string;
+	error?: string;
+	noop?: boolean;
+	idempotent?: boolean;
+	diff?: string;
+	firstChangedLine?: number;
+};
 
 type Anchor = { line: number; hash: string };
 type HashlineEdit =
@@ -33,8 +46,8 @@ type HashlineEdit =
 	| { op: "append"; pos?: Anchor; lines: string[] }
 	| { op: "prepend"; pos?: Anchor; lines: string[] };
 
-function normalizeLines(value: string | string[] | undefined): string | undefined {
-	if (value === undefined) return undefined;
+function normalizeLines(value: string | string[] | null | undefined): string | undefined {
+	if (value === undefined || value === null) return undefined;
 	return typeof value === "string" ? value : value.join("\n");
 }
 
@@ -100,7 +113,6 @@ function normalizeStructuralAction(action: CodePathAction): Record<string, unkno
 	if (action.nodeType) out.nodeType = action.nodeType;
 	if (action.allowSiblingDelete !== undefined) out.allowSiblingDelete = action.allowSiblingDelete;
 	if (action.occurrence !== undefined) out.occurrence = action.occurrence;
-	if (action.idempotent !== undefined) out.idempotent = action.idempotent;
 	return out;
 }
 
@@ -179,7 +191,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 			)
 			.join("\n\n");
 		const _hasError = results.some(r => "isError" in r && r.isError === true);
-		return toolResult({ operations: params.operations.length }).text(allText).done();
+		return toolResult<EditToolResultDetails>({ operations: params.operations.length }).text(allText).done();
 	}
 
 	async #executeStructural(
@@ -194,7 +206,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 			abortSignal: signal,
 		});
 		const result = formatCodePathResult(chunks, { format: "node-list" });
-		return toolResult({ target: targetPath, action: action.kind }).text(result.text).done();
+		return toolResult<EditToolResultDetails>({ target: targetPath, action: action.kind }).text(result.text).done();
 	}
 
 	async #executeLineId(
@@ -211,7 +223,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 				const content = action.kind === "prepend" ? lines : lines;
 				await fs.mkdir(nodePath.dirname(targetPath), { recursive: true });
 				await fs.writeFile(targetPath, content, "utf-8");
-				return toolResult({ target: targetPath, op: "create" }).text(`Created ${targetPath}`).done();
+				return toolResult<EditToolResultDetails>({ target: targetPath, op: "create" }).text(`Created ${targetPath}`).done();
 			}
 			throw new Error(`File not found: ${targetPath}`);
 		}
@@ -234,20 +246,20 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		} catch (err) {
 			if (err instanceof HashlineMismatchError) {
 				const diag = HashlineMismatchError.formatMessage(err.mismatches, err.fileLines);
-				return toolResult({ target: targetPath, error: "stale_anchor" }).text(diag).done();
+				return toolResult<EditToolResultDetails>({ target: targetPath, error: "stale_anchor" }).text(diag).done();
 			}
 			throw err;
 		}
 
 		if (originalNormalized === normalizedText) {
 			if (!idempotent) {
-				return toolResult({ target: targetPath, noop: true })
+				return toolResult<EditToolResultDetails>({ target: targetPath, noop: true })
 					.text(
 						`No changes made to ${targetPath}. The edits produced identical content. Retry with idempotent=true only when an intentional no-op is acceptable.`,
 					)
 					.done();
 			}
-			return toolResult({ target: targetPath, noop: true, idempotent: true })
+			return toolResult<EditToolResultDetails>({ target: targetPath, noop: true, idempotent: true })
 				.text(`No changes (idempotent).`)
 				.done();
 		}
@@ -261,7 +273,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		const warningsBlock = warnings?.length ? `\n\nWarnings:\n${warnings.join("\n")}` : "";
 		const previewBlock = preview.preview ? `\n\nDiff preview:\n${preview.preview}` : "";
 
-		return toolResult({
+		return toolResult<EditToolResultDetails>({
 			target: targetPath,
 			diff: diffResult.diff,
 			firstChangedLine: firstChangedLine ?? diffResult.firstChangedLine,
@@ -295,7 +307,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 			text += `\n\nWarnings:\n${result.warnings.join("\n")}`;
 		}
 
-		return toolResult({ target: targetPath, op: "update", diff: change.newContent }).text(text).done();
+		return toolResult<EditToolResultDetails>({ target: targetPath, op: "update", diff: change.newContent }).text(text).done();
 	}
 
 	renderResult(result: AgentToolResult, options: RenderResultOptions, theme: unknown): Component {

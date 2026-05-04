@@ -6,7 +6,7 @@ import { outputMeta } from "./output-meta";
 
 type ToolContent = Array<TextContent | ImageContent>;
 
-type DetailsWithMeta = { meta?: OutputMeta };
+export type DetailsWithMeta = { meta?: OutputMeta };
 
 export class ToolResultBuilder<TDetails extends DetailsWithMeta> {
 	#details: TDetails;

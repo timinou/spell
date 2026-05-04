@@ -19,7 +19,7 @@ function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
 	};
 }
 
-function getText(result: Awaited<ReturnType<EditTool["execute"]>>): string {
+function getText(result: Awaited<ReturnType<CodepathEditTool["execute"]>>): string {
 	return result.content.find(c => c.type === "text")?.text ?? "";
 }
 
@@ -29,7 +29,7 @@ async function writeFile(filePath: string, content: string): Promise<void> {
 	await fs.writeFile(filePath, content, "utf-8");
 }
 
-describe("EditTool", () => {
+describe("CodepathEditTool", () => {
 	beforeEach(async () => {
 		try {
 			await fs.mkdir(tmpDir, { recursive: true });
@@ -38,7 +38,7 @@ describe("EditTool", () => {
 
 	afterEach(async () => {
 		try {
-			await fs.rmdir(tmpDir, { recursive: true });
+			await fs.rm(tmpDir, { recursive: true });
 		} catch {}
 		try {
 			(spyOn(nativesModule, "executeCodePath") as any).mockRestore?.();
