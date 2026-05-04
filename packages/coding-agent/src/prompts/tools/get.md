@@ -1,35 +1,48 @@
 Retrieve code, files, symbols, or matches using a CodePath target. Supports paths, globs, symbols, regex, and URI schemes.
 
 <instruction>
-- `target` is a CodePath string: bare file (`src/foo.ts`), glob (`**/*.test.ts`), symbol (`src/foo.ts::Bar.baz`), regex (`src/** :: §line[text~="TODO"]`), or URI (`memory://root`, `artifact://…`, `skill://name`).
-- `format` controls output shape: `node-list` (default), `locations`, `content-only`, `tree`, `simple-list`.
-- Slice large files with `head`, `tail`, `offset`, `limit`. Use at most one of head/tail per call.
-- `root` overrides the working directory for relative target resolution.
-- Code symbol resolution works after dialects are wired; use `file.ts::SymbolName` for precise addressing.
-- Internal URI schemes resolve to their downstream dialects: `memory://` → Markdown/Org, `agent://` → JSON, `skill://` → FS/Markdown, `artifact://` → Text/Markdown by extension.
-- If a target does not match exactly, the resolver may return a suffix-fallback diagnostic suggesting the nearest valid locator.
+- `target` accepts:
+  - **Bare path**: `"src/foo.ts"` for whole file or directory listing.
+  - **Glob**: `"src/**/*.ts"` for all TypeScript files under src.
+  - **Line slice**: `"foo.ts::§line[1..50]"` for lines 1-50.
+  - **Regex filter**: `"foo.ts::§line[text~=\"TODO\"]"` for lines matching pattern.
+  - **Code symbol**: `"src/foo.ts::Bar.method"` for specific declaration.
+  - **URI schemes**: `"memory://root"`, `"artifact://..."`, `"skill://name"`, `"agent://id"`, `"rule://name"`, `"local://..."`, `"pi://..."`.
+- `format` controls output structure:
+  - `"node-list"` (default) — structured nodes with CID prefixes, source ranges, metadata.
+  - `"locations"` — file:line:col locations only.
+  - `"content-only"` — raw content without metadata.
+  - `"tree"` — hierarchical tree representation.
+  - `"simple-list"` — minimal file/symbol listing.
+- Projection options:
+  - `head` / `tail` — limit from start/end.
+  - `offset` / `limit` — skip first N, return M.
+- When path typo'd or missing, returns fuzzy filename suggestions.
 </instruction>
 
 <output>
-- Returns a node list with canonical locators, ranges, kinds, and optional content.
-- Binary content is staged to the artifact store and returned as an `artifact://` handle.
-- Results may carry limit-reached flags; paginate with `offset`/`limit` if truncated.
+- Returns structured nodes with LINE#ID anchors (for `edit` tool), source ranges, and content.
+- Directory targets return formatted listings with modification times.
+- Binary files return metadata; images can be viewed via `#image` qualifier.
+- URI targets resolve via internal schemes and delegate to downstream dialects.
 </output>
-
-<critical>
-- You **MUST** use `get` instead of legacy `read`, `find`, `grep`, `ast-grep`, or `code read`.
-- You **MUST NOT** invoke `cat`, `head`, `grep`, or `rg` via Bash when `get` covers the need.
-- For open-ended searches requiring multiple rounds, use Task tool with explore subagent instead.
-</critical>
 
 <examples>
 ```
-get { target: "src/api.ts" }
-get { target: "src/api.ts", head: 50 }
-get { target: "**/*.rs", format: "simple-list" }
-get { target: "src/api.ts :: UserService", format: "content-only" }
-get { target: "src/** :: §line[text~=\"FIXME\"]" }
-get { target: "memory://root/skills/coding/SKILL.md" }
-get { target: "artifact://session-id/agent/tool/1.png" }
+get { target: "src/server.ts" }
+get { target: "src/**/*.test.ts" }
+get { target: "src/config.ts::§line[1..50]" }
+get { target: "src/app.ts::App.handleRequest" }
+get { target: "**/*.ts::§line[text~=\"useState\"]", limit: 20 }
+get { target: "memory://root" }
+get { target: "artifact://abc123/output.json" }
+get { target: "src/", format: "simple-list" }
 ```
 </examples>
+
+<critical>
+- You **MUST** use `get` instead of legacy `read`, `grep`, `find`, `ast-grep`, or bash equivalents.
+- You **MUST NOT** use `cat`, `grep`, `find`, `rg`, `ls` in bash when `get` can retrieve the target.
+- For structural code queries, prefer symbol paths (`foo.ts::ClassName.method`) over line slices.
+- For regex searches across files, use glob + line predicates: `"**/*.ts::§line[text~=\"pattern\"]"`.
+</critical>
