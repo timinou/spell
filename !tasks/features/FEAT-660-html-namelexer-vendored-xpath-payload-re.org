@@ -1,0 +1,73 @@
+#+TITLE: HTML NameLexer: vendored XPath payload, registries
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FEAT-660-html-namelexer-vendored-xpath-payload-re
+#+DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q
+#+LAYER: core
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Implement HTML dialect at =crates/pi-code-path/src/dialects/html.rs= per =specs/code-graph/code-path-dialects/06-html.md=. Per spec, HTML payload IS XPath — vendor the XPath grammar inside the NameLexer so paths like =//form[method='post']= and =#app//button[.save]= work natively. Selectors are CSS-like at the surface but the underlying machinery is a vendored XPath subset.
+
+* Scope
+
+In:
+- =HtmlName= with =vendored::XPathExpr= payload (use =sxd-xpath= crate or hand-rolled XPath subset; decision: use =xpath= crate if available else hand-roll a 200-LOC subset covering element, attribute predicates, text predicates, descendant axis).
+- =HtmlNameLexer= parse/render/matches.
+- AnchorPatterns: =¶hook-deps=, =¶interactive=, =¶aria-live=, =¶landmark= per spec.
+- QualifierSpecs: =#innerHTML=, =#outerHTML=, =#text=, =#attr[name]=, =#tag-name= per spec.
+- =html_dialect()= factory.
+- 50/20/10 corpus.
+
+Out: LanguageProfile wiring; full XPath 2.0 (only XPath 1.0 subset).
+
+* Existing Patterns
+
+=specs/code-graph/code-path-dialects/06-html.md= — full XPath surface.
+TS lexer for NameLexer trait shape.
+Existing HTML handling in =crates/pi-natives/src/html.rs= — readable mode + XPath-ish selectors.
+
+* Tests
+
+Workflows: simple element =button=, attribute predicate =[method='post']=, descendant =#app//button=, class shortcut =button.save=, ID shortcut =#app=, =#attr[action]= qualifier returns attribute value, =#text= returns inner text.
+
+* Implementation
+
+** ITEM Tests for HtmlNameLexer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-660-html-namelexer-vendored-xpath-payload-re::html-lexer-tests
+:LAYER: core
+:END:
+
+** ITEM Implement HtmlNameLexer (XPath subset)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-660-html-namelexer-vendored-xpath-payload-re::html-lexer-impl
+:DEPENDS: FEAT-660-html-namelexer-vendored-xpath-payload-re::html-lexer-tests
+:LAYER: core
+:END:
+
+** ITEM Tests + impl anchors, qualifiers, factory
+:PROPERTIES:
+:CUSTOM_ID: FEAT-660-html-namelexer-vendored-xpath-payload-re::html-anchors-qualifiers
+:DEPENDS: FEAT-660-html-namelexer-vendored-xpath-payload-re::html-lexer-impl
+:LAYER: core
+:END:
+
+* Edge Cases
+
+- XPath predicates with quotes: =[@class="foo bar"]= — preserved; round-trip identity.
+- Mixed CSS/XPath: =#app .save= with CSS shortcut → translated to =//*[@id='app']//*[contains(@class, 'save')]= internally.
+- =//= as XPath descendant axis vs kernel descendant combinator: in HTML name payload, =//= is XPath; outside (between kernel steps) it's the kernel combinator. The NameLexer consumes within name boundary; kernel takes over after.
+- =text()= function: =[text()='foo']= → text predicate; map to kernel =[text~="foo"]=.
+- Namespaces: =svg:circle= → preserved verbatim.
+
+* Acceptance Criteria
+
+- 50/20/10 corpus passes.
+- =cargo test -p pi-code-path html= clean.
+- Cross-dialect smoke HTML tier passes.

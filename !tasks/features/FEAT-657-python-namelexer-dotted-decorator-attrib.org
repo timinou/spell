@@ -1,0 +1,106 @@
+#+TITLE: Python NameLexer: dotted, decorator-attribute, registries
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: FEAT-657-python-namelexer-dotted-decorator-attrib
+#+DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q
+#+LAYER: core
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Implement the Python dialect NameLexer + AnchorPattern + QualifierSpec + EdgeKindSet at =crates/pi-code-path/src/dialects/python.rs=. Per spec =specs/code-graph/code-path-dialects/03-python.md=. Same shape as =FEAT-656-rust-namelexer= and the existing =typescript.rs=.
+
+* Context & Narrative
+
+Python names use =.= separator (matches TS), with dotted attribute access (=mod.cls.method=). Decorator-attached anchors are Python-specific (=¶pytest-fixture=, =¶staticmethod=, =¶classmethod=, =¶property=). =async def= produces a =¶async= anchor.
+
+* Scope
+
+In:
+- =PyName= struct with =Vec<PySegment>= where =PySegment= variants are =Ident=, =DecoratorRef=.
+- =PyNameLexer= with parse/render/matches.
+- AnchorPatterns: =¶pytest-fixture=, =¶staticmethod=, =¶classmethod=, =¶property=, =¶async=, =¶abstract= per spec.
+- QualifierSpecs: =#body=, =#sig=, =#name=, =#docstring=, =#decorators= per spec.
+- =fn python_dialect() -> LanguageDialect= factory.
+- 50 round-trips, 20 resolver fixtures, 10 negatives.
+
+Out:
+- LanguageProfile wiring (=FEAT-dialect-wiring=).
+- F-strings in name predicates (deferred FUP).
+
+* Existing Patterns
+
+=crates/pi-code-path/src/dialects/typescript.rs= and =FEAT-656-rust-namelexer= as structural reference. =specs/code-graph/code-path-dialects/03-python.md= for exact registries.
+
+* Tests
+
+File: =crates/pi-code-path/src/dialects/python.rs::tests=
+
+Workflows:
+1. Plain ident: =parse_config=.
+2. Dotted: =mod.cls.method=, =numpy.array.shape=.
+3. Stops at kernel ops, predicates, qualifiers (same as TS).
+4. Round-trip identity.
+5. Anchor =¶pytest-fixture= matches =@pytest.fixture
+def foo(): ...=.
+6. Anchor =¶async= matches =async def foo(): ...=.
+7. =#body= resolves to function/class body range.
+8. =#docstring= resolves to first triple-string statement of body.
+9. Negatives: malformed dotted access (=foo..bar=).
+
+Corpus: 50 + 20 + 10.
+
+* Implementation
+
+** ITEM Tests for PyNameLexer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-657-python-namelexer-dotted-decorator-attrib::python-lexer-tests
+:LAYER: core
+:END:
+
+Scenarios 1-4, 9. Initially failing.
+
+** ITEM Implement PyNameLexer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-657-python-namelexer-dotted-decorator-attrib::python-lexer-impl
+:DEPENDS: FEAT-657-python-namelexer-dotted-decorator-attrib::python-lexer-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/dialects/python.rs=. Same shape as TS lexer; encoded as =NamePayload::Raw(rendered)=.
+
+** ITEM Tests for anchors + qualifiers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-657-python-namelexer-dotted-decorator-attrib::python-anchor-qual-tests
+:DEPENDS: FEAT-657-python-namelexer-dotted-decorator-attrib::python-lexer-impl
+:LAYER: core
+:END:
+
+Scenarios 5-8.
+
+** ITEM Implement anchors, qualifiers, dialect factory
+:PROPERTIES:
+:CUSTOM_ID: FEAT-657-python-namelexer-dotted-decorator-attrib::python-impl
+:DEPENDS: FEAT-657-python-namelexer-dotted-decorator-attrib::python-anchor-qual-tests
+:LAYER: core
+:END:
+
+6 anchors, 5 qualifiers, =python_dialect()= factory.
+
+* Edge Cases
+
+- Double-dot =foo..bar= → ParseError.
+- Decorator with arguments: =@pytest.fixture(scope="module")= → anchor matcher accepts the call form.
+- =async def= vs =def=: only async methods carry =¶async= anchor.
+- =__init__= method: =#name= returns =__init__=, no special handling.
+- Class-method docstring vs method docstring: scoped to enclosing definition.
+
+* Acceptance Criteria
+
+- 50 round-trips pass; 20 resolver triples pass; 10 negatives produce diagnostics.
+- =cargo test -p pi-code-path python= clean.
+- Cross-dialect smoke (=FEAT-dialect-wiring=) Python tier passes.

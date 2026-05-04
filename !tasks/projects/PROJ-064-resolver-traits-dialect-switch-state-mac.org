@@ -1,0 +1,181 @@
+#+TITLE: Resolver traits, dialect-switch state machine, set ops, projection lowering
+#+STATE: ITEM
+#+SESSION_ID: 14d3c7b47c6586ef
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T07-35-05-457Z_14d3c7b47c6586ef.jsonl]]
+#+CUSTOM_ID: PROJ-064-resolver-traits-dialect-switch-state-mac
+#+DEPENDS: PROJ-061-parser-completion-glob-tokens-backtick-q
+#+LAYER: core
+
+* Initial Message
+
+This is good, so now please take your time to plan the completion of the original PLAN-255 plan fully. This will be written in a new plan. First start by doing a review of what CodePath v3 is and what was done, and what was blocking, and how to make sure every step that you come up with is thoroughly validated. First review, wait for my input, then we will go through the formal planning
+
+* Intention & Purpose
+
+Define the resolver-trait surface that =pi-natives= will implement, plus the dialect-switch state machine, projection-option lowering, and set-ops compositor that live entirely in =pi-code-path=. This item is the architectural *seam* between =pi-code-path= (kernel) and =pi-natives= (integration with =pi-code-engine= + =pi-code-graph=). Without it the FS/Text/Code resolvers cannot compose into a single pipeline.
+
+* Context & Narrative
+
+PLAN-255 wave-2 left an empty =resolver.rs= with =StubResolver= and =FsExistsResolver= as scaffolds. The full design needs:
+
+1. *Trait surface*: =Resolver= (top-level), =CodeResolver= (per-language tree-sitter), =EdgeResolver= (graph axis), =UriResolver= (scheme dispatch), =SchemeHandler= (per-scheme), =FormatExtractor= (#text routing — already in =PROJ-text-resolver=), =FsAnchorContext= (¶code/¶image/¶doc context).
+
+2. *Dialect-switch state machine*: per spec §3 of =code-path-extensions.md=. Initial scope = FsDialect; =§file= match → switch to file's code dialect; first =§line=/=§chunk=/=§para= → text dialect; text→code mid-file rejected; =→= edge → cross-file new dialect; URI Locator → scheme dialect → delegate.
+
+3. *Set-ops compositor*: =A | B=, =A & B=, =A - B= over =Stream<NodeRef>=. Streaming-aware union (dedup on canonical locator), intersect (materialise both), except (filter A by absence in B's set).
+
+4. *Projection lowering*: =limit=, =head=, =tail=, =context= flattens to canonical CodePath suffix. Round-trip property: lowered path renders to same canonical string that parses back to same AST.
+
+* Scope
+
+In:
+- =crates/pi-code-path/src/resolver/= module restructure: =mod.rs=, =traits.rs=, =dispatch.rs=, =setops.rs=, =projection.rs=.
+- 7 traits: =Resolver=, =CodeResolver=, =EdgeResolver=, =UriResolver=, =SchemeHandler=, =FsAnchorContext=, plus =FormatExtractor= (re-exported from text dialect).
+- =DispatchEngine= struct that orchestrates per-step dialect switch.
+- =SetOpsCompositor= for stream union/intersect/except.
+- =Projection= struct + lowering function: =fn lower(opts: ProjectionOpts, q: Query) -> Query=.
+- Stub impls used by tests (for FS/Text/Code/Edge/URI).
+- Round-trip tests for projection lowering.
+- Property tests for set-ops associativity, commutativity, identity.
+- =CancellationToken= flowing through every resolver.
+
+Out:
+- Concrete CodeResolver impl (lives in =pi-natives= per architecture).
+- Concrete EdgeResolver impl (lives in =pi-natives=).
+- Concrete SchemeHandler impls (live in =pi-natives=).
+- Streaming async runtime — pure function signatures use =impl Stream<Item = NodeRef>= but no tokio binding.
+
+* Existing Patterns
+
+- =crates/pi-code-path/src/resolver.rs= — current scaffold; refactor into module.
+- =crates/pi-code-path/src/types.rs= — =NodeRef=, =Diagnostic=, =CodePathChunk=.
+- =crates/pi-code-path/src/ast.rs= — =Query=, =Step=, =Combinator=, =Predicate=.
+- =crates/pi-code-path/src/dialect.rs= — =LanguageDialect= (already there).
+
+* Tests
+
+File: =crates/pi-code-path/src/resolver/tests.rs= (new)
+
+User workflows tested:
+
+1. *Trait shape*: each trait compiles as =dyn Trait= and =impl Trait=. Mock impls used for tests.
+2. *Dialect dispatch*: parsed CodePath =src/foo.ts :: Bar/§call[name=fetch]= dispatches FS → Code → kernel-shared step walk; assert correct sub-resolver invoked at each step.
+3. *Text re-anchor*: =foo.ts :: §line[42] / ^ / §file :: methodFoo= rejected with =Diagnostic::TextToCodeMidFile= unless the explicit =/ ^ / §file= re-anchor is present.
+4. *URI dispatch*: =memory://root :: //§heading[text~="Edit"]= routes through =SchemeHandler= for memory then delegates to Markdown dialect.
+5. *Edge crossing*: =parseConfig/def→= invokes =EdgeResolver=; result NodeRefs may have different host file than source.
+6. *Set ops*: =A | B= deduplicates by canonical locator; =A & B= preserves intersection; =A - B= filters A by absence; properties (associativity, commutativity for union/intersect; identity with empty set).
+7. *Projection lowering*: =limit: 10= lowers to =[0..10]= suffix; =context: { post: 3 }= lowers to =>>[0..3]=; =tail: 5= lowers to =[-5..]=. Each lowered path round-trips.
+8. *Cancellation*: token cancelled mid-stream → resolver yields =Diagnostic::Cancelled=; no further nodes.
+
+* Implementation
+
+** ITEM Define trait module skeleton
+:PROPERTIES:
+:CUSTOM_ID: PROJ-064-resolver-traits-dialect-switch-state-mac::traits-skeleton
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/resolver/traits.rs=
+
+7 trait definitions with full method signatures and doc comments. No impls beyond default trait fns. Compile clean as =dyn Trait=.
+
+** ITEM Tests for dialect dispatch state machine
+:PROPERTIES:
+:CUSTOM_ID: PROJ-064-resolver-traits-dialect-switch-state-mac::dispatch-tests
+:DEPENDS: PROJ-064-resolver-traits-dialect-switch-state-mac::traits-skeleton
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/resolver/dispatch.rs::tests=
+
+Scenarios 2, 3, 4, 5, 8 with mock impls for each sub-resolver. Initially failing.
+
+** ITEM Implement DispatchEngine
+:PROPERTIES:
+:CUSTOM_ID: PROJ-064-resolver-traits-dialect-switch-state-mac::dispatch-impl
+:DEPENDS: PROJ-064-resolver-traits-dialect-switch-state-mac::dispatch-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/resolver/dispatch.rs=
+
+State machine per spec §3 of =code-path-extensions.md=. =fn dispatch(cp: &CodePath, ctx: &dyn ResolveContext) -> impl Stream<Item = NodeRef>=. =ResolveContext= bundles the four sub-resolvers + anchor context + extractors + cancellation token.
+
+** ITEM Tests for set ops compositor
+:PROPERTIES:
+:CUSTOM_ID: PROJ-064-resolver-traits-dialect-switch-state-mac::setops-tests
+:DEPENDS: PROJ-064-resolver-traits-dialect-switch-state-mac::dispatch-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/resolver/setops.rs::tests=
+
+Scenario 6 + property tests. Use proptest crate (add as dev-dep) for associativity/commutativity/identity.
+
+** ITEM Implement set-ops compositor
+:PROPERTIES:
+:CUSTOM_ID: PROJ-064-resolver-traits-dialect-switch-state-mac::setops-impl
+:DEPENDS: PROJ-064-resolver-traits-dialect-switch-state-mac::setops-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/resolver/setops.rs=
+
+=fn union(a: Stream, b: Stream) -> Stream= dedup by canonical locator. =fn intersect(a, b) -> Stream= materialise then filter. =fn except(a, b) -> Stream= materialise b's keyset, filter a streaming.
+
+** ITEM Tests for projection lowering
+:PROPERTIES:
+:CUSTOM_ID: PROJ-064-resolver-traits-dialect-switch-state-mac::projection-tests
+:DEPENDS: PROJ-064-resolver-traits-dialect-switch-state-mac::setops-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/resolver/projection.rs::tests=
+
+Scenario 7. Each option type tested with round-trip property.
+
+** ITEM Implement projection lowering
+:PROPERTIES:
+:CUSTOM_ID: PROJ-064-resolver-traits-dialect-switch-state-mac::projection-impl
+:DEPENDS: PROJ-064-resolver-traits-dialect-switch-state-mac::projection-tests
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/resolver/projection.rs=
+
+=struct ProjectionOpts { limit: Option<usize>, head: Option<usize>, tail: Option<usize>, context: Option<ContextOpts>, content: Option<ContentMode>, format: Option<FormatHint>, root: Option<String>, offset: Option<usize> }=. =fn lower(opts: ProjectionOpts, q: Query) -> Query=: append predicates and combinators per spec §B mapping table.
+
+Round-trip: =render(parse(render(lower(opts, q)))) == render(lower(opts, q))=.
+
+** ITEM Wire CancellationToken through all resolvers
+:PROPERTIES:
+:CUSTOM_ID: PROJ-064-resolver-traits-dialect-switch-state-mac::cancellation-wiring
+:DEPENDS: PROJ-064-resolver-traits-dialect-switch-state-mac::projection-impl
+:LAYER: core
+:END:
+
+File: =crates/pi-code-path/src/resolver/=
+
+Add =CancellationToken= parameter to every resolver fn signature. Document semantics: token check at batch boundary (every 64 NodeRefs); =Diagnostic::Cancelled= terminates stream.
+
+* Edge Cases
+
+- =§file= match yielding zero files → no dialect transition; resolver emits empty stream; =Diagnostic::NoMatches= optional.
+- Multiple =§file= matches → fan out to multiple per-file dialect resolvers; results concatenated.
+- =→= edge crossing into a file with no registered LanguageProfile → fall back to text dialect; emit =Diagnostic::UnknownLanguage=.
+- URI scheme not registered → =Diagnostic::UnknownLocatorScheme { available: [...] }=.
+- Set-op =A - B= where B is unbounded → blocks until B completes; document; consider =Diagnostic::SetOpUnbounded= warning if B has no upper bound.
+- Projection =head: 0= or =limit: 0= → empty stream; =Diagnostic::ZeroLimit= optional info.
+- Projection =tail: N= requires materialisation; document buffer cost.
+- Cancellation mid-batch: emit completed NodeRefs, then =Diagnostic::Cancelled=, then end.
+
+* Acceptance Criteria
+
+- 7 traits defined and compile as =dyn Trait=.
+- =DispatchEngine= passes all 6 dispatch scenarios.
+- Set ops pass property tests (commutativity for | and &, associativity for all three, identity with empty set, idempotence).
+- Projection lowering: every option type produces a canonical-CodePath suffix; round-trip property holds.
+- Cancellation: every resolver fn checks token at batch boundary.
+- =cargo test -p pi-code-path= clean.
+- =cargo clippy= clean.
+- Architecture invariant: =pi-code-path= compiles without =pi-code-engine= or =pi-code-graph= deps (verified by =cargo tree -p pi-code-path=).
