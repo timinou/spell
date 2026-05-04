@@ -88,12 +88,14 @@ export const getSchema = Type.Object(
 		tail: Type.Optional(Type.Integer({ description: "Max lines from tail" })),
 		offset: Type.Optional(Type.Integer({ description: "Start line 1-indexed" })),
 		format: Type.Optional(
-			Type.String({ description: "Output format: node-list | locations | content-only | tree | simple-list" }),
+			Type.String({ description: "Output format: node-list | locations | content-only | tree | simple-list | fs-listing" }),
 		),
 		root: Type.Optional(
 			Type.String({ description: "Optional project-relative or absolute root for target resolution" }),
 		),
 		content: Type.Optional(Type.Boolean({ description: "Include content in output" })),
+		recursive: Type.Optional(Type.Boolean({ description: "Recurse into subdirectories (default: false)" })),
+		depth: Type.Optional(Type.Integer({ description: "Max recursion depth (1 = one level, overrides recursive)" })),
 	},
 	{ additionalProperties: false },
 );
