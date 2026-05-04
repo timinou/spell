@@ -1,0 +1,190 @@
+#+TITLE: Surface auto-promoted blocked tasks in task tool messaging
+#+STATE: ITEM
+#+SESSION_ID: 14d4527d99eada8e
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T17-41-27-271Z_14d4527d99eada8e.jsonl]]
+#+CUSTOM_ID: FEAT-671-surface-auto-promoted-blocked-tasks-in-t
+#+EFFORT: 2h
+#+LAYER: core
+#+PRIORITY: #A
+
+* Initial Message
+
+When the task tool dispatches a tool after another one (for partial sequentiality), it sends a message to the parent thread saying that a job was completed, but not that a previously queued job was started.
+
+* Intention & Purpose
+Fix a transparency bug in the `task` tool's batch scheduling.
+
+When a task is dispatched with a `blockers` chain (explicit or implicit via `filesDeps` overlap), the blocked task is held in the TaskTool's internal `readyQueue` and only registered with `AsyncJobManager` *after* its blocker completes. The parent agent has no signal that this auto-promotion has happened: the next `await` call snapshots `manager.getRunningJobs()` once on entry and renders only that snapshot, so the newly-registered job is invisible. The parent concludes the batch is done, then either re-dispatches the work manually or stalls.
+
+Concrete failure observed in session =14d40726c985291f= around 17:29-17:41 UTC: a 4-task batch (TSFix, Prompts, AgentsMd, LegacyDelete) was dispatched with LegacyDelete blocked on TSFix via filesDeps overlap on =packages/coding-agent/src/tools/index.ts=. After TSFix completed, the `await` result said "Still Running (0)" — even though LegacyDelete had just been auto-promoted and was already running. The parent agent re-dispatched LegacyDelete manually, the user replied "it's already dispatching automatically you fucking idiot", and the parent only discovered the running job by =ls=ing the session directory.
+
+This feature gives the parent two correct signals:
+1. At dispatch time: explicit count and identity of *queued* tasks waiting on blockers, so the parent knows more work is coming.
+2. At await-return time: a "Newly Started" section listing jobs that transitioned from queued to running while the await was blocking, so the parent knows what to await next.
+
+* Context & Narrative
+The relevant code paths:
+
+- =packages/coding-agent/src/task/index.ts::TaskTool.execute= (lines ~1020-1235): owns the batch dispatch loop and `scheduleReadyTasks()`. Blocked tasks live in the local `readyQueue` closure, not in `AsyncJobManager`. Dispatch text at line 1222 says "Started ${startedJobs.length} background task jobs" with an `implicitBlockerNote` prefix that only mentions =filesDeps=-derived blockers.
+- =packages/coding-agent/src/tools/await-tool.ts::AwaitTool.execute= (lines 62-122): captures =jobsToWatch = manager.getRunningJobs()= once at line 82, races those promises, and renders =#buildResult= over the *original* snapshot. Newly-registered jobs that came online during the wait are never queried.
+- =packages/coding-agent/src/async/job-manager.ts::AsyncJobManager.register= (lines 77-158): assigns a fresh =jobId= each time a task is registered. Queued tasks are not pre-registered; they only enter the manager when their blocker's success handler calls =scheduleReadyTasks()= at lines 1133/1161 of =task/index.ts=.
+- =packages/coding-agent/src/task/batch-scheduler.ts::buildBatchGraph= (lines 84-123): produces =blockersById= and =implicitBlockers=. The TaskTool currently only forwards =implicitBlockers= into the dispatch =details=, but the same map gives full per-task blocker chains.
+
+* Scope
+*In scope*:
+- =packages/coding-agent/src/tools/await-tool.ts= — re-query running jobs at result-time and render a "Newly Started" section.
+- =packages/coding-agent/src/task/index.ts= — enrich the dispatch result content text with queued-task count and per-task blocker chain.
+- =packages/coding-agent/src/prompts/tools/await.md= — short additive note about the Newly Started section.
+- Tests in =packages/coding-agent/test/task/= covering both behaviors.
+
+*Out of scope*:
+- Pre-registering queued tasks in =AsyncJobManager= as first-class jobs with a new =queued= status. (Bigger architectural change; would touch =SubagentOutcome=, web dashboard, =jobs://= URI, event log, and many type signatures. Defer.)
+- Changes to =bash= subprocess job lifecycle.
+- Changes to swarm scheduler or DAG construction itself.
+- Cancellation semantics for queued tasks.
+- Web dashboard rendering of queued tasks.
+
+* Existing Patterns
+- =AsyncJob.startTime= (=async/job-manager.ts= line 22) is set at registration time. Filtering newly-started jobs by =startTime >= awaitInvocationTime= is reliable because the manager assigns it via =Date.now()= on register.
+- =manager.getRunningJobs()= (=async/job-manager.ts= line 175) already returns currently-running =AsyncJob= entries with =status === "running"=. Calling it twice — once on entry, once at result-time — is idempotent and cheap.
+- =BatchGraph.blockersById= (=task/batch-scheduler.ts= line 39) is already produced and cached on =batchGraph=. Use directly.
+- =BatchImplicitBlocker= shape (=task/batch-scheduler.ts= line 31) and =buildImplicitBlockerNote= (=task/index.ts= line 200-208) already render =to=/=from= chains. Mirror that format for queued-task chains in dispatch text.
+- =replaceTabs= (=tools/render-utils.ts=) sanitizes job labels for output. Reuse for any new render paths.
+- =AwaitToolDetails.jobs: AwaitResult[]= already exists. Append newly-started entries to this array unchanged in shape; consumers receive them via =details.jobs= and can re-await with their =id=.
+
+* Tests
+Test scenarios are listed in dependency order. All in =packages/coding-agent/test/task/=.
+
+** Scenario A — await renders Newly Started for auto-promoted blocker
+File: =packages/coding-agent/test/task/await-newly-started.test.ts= (NEW).
+
+Setup: =Settings.isolated({ "async.enabled": true, "task.isolation.mode": "none", "task.maxConcurrency": 4, "todo.enabled": false })=. Mock =executorModule.runSubprocess= so that:
+- Task =A= sleeps 30ms then returns success.
+- Task =B= returns success immediately when invoked.
+Dispatch a 2-task batch: =A=, =B with blockers: ["A"]= via async path. Capture initial =async.jobId= from =startResult.details=.
+
+Assertions:
+- After =await({ jobs: [jobIdA] })= resolves, =awaitResult.content[0].text= contains the literal substring ="## Newly Started"=.
+- =awaitResult.details.jobs= length is 2 (not just 1): one entry with =status: "completed"= and =label: "A"=, one with =status: "running"= and =label: "B"=.
+- The =B= entry has =startTime= strictly later than the initial =await= call timestamp.
+
+** Scenario B — await without auto-promotion does not render Newly Started
+Same file. Dispatch a single non-blocked task =C=. Await it. Assert =awaitResult.content[0].text= does *not* contain ="## Newly Started"=. Guards against false positives from the new diff logic.
+
+** Scenario C — dispatch text enumerates queued tasks with blocker chain
+File: =packages/coding-agent/test/task/task-blockers.test.ts= (EXTEND existing file).
+
+Dispatch a 3-task batch =[X, Y, Z with blockers: ["X"]]= with =async.enabled: true=. Inspect =startResult.content[0].text= and assert:
+- Substring ="Started 2 background task jobs"= (X and Y started immediately).
+- Substring ="1 queued"=.
+- Substring ="Z<-X"= (matches existing implicit-blocker chain format).
+
+** Scenario D — dispatch text format with implicit-only blockers
+Same file. Dispatch =[P with filesDeps: ["a.ts"], Q with filesDeps: ["a.ts"]]=. Assert dispatch text mentions =1 queued= and =Q<-P= chain (already exists for implicit blockers, but verify the new wording wraps it correctly). Catches regression on the existing implicit-blocker note.
+
+** Scenario E — dispatch text omits queued mention when no blockers
+Same file. Dispatch =[M, N]= with no blockers, no overlapping =filesDeps=. Assert dispatch text does NOT contain =queued= substring. Guards against confusing zero-counts.
+
+* Implementation
+** Sub-outline order (test-first)
+1. =write-tests= — write all 5 scenarios as failing tests.
+2. =impl-newly-started= — implement Newly Started in await-tool.
+3. =impl-dispatch-text= — implement enriched dispatch text in task/index.
+4. =update-prompt= — update await.md.
+
+After step 3, scenarios A-E pass. Step 4 has no test gate (prompt-only).
+
+** Detailed steps
+*** ITEM Write tests for newly-started + dispatch text
+:PROPERTIES:
+:CUSTOM_ID: FEAT-671-surface-auto-promoted-blocked-tasks-in-t::write-tests
+:END:
+- Files:
+  - =packages/coding-agent/test/task/await-newly-started.test.ts= (NEW)
+  - =packages/coding-agent/test/task/task-blockers.test.ts= (EXTEND)
+- Use the helper patterns from =task-blockers.test.ts= and =async-progress.test.ts=: =createSession=, =Settings.isolated=, =vi.spyOn(executorModule, "runSubprocess")=.
+- Cover all five scenarios (A-E) above. They MUST initially fail because:
+  - The await tool does not yet emit ="## Newly Started"= text.
+  - The dispatch text does not yet contain ="queued"=.
+- Run =bun test packages/coding-agent/test/task/await-newly-started.test.ts packages/coding-agent/test/task/task-blockers.test.ts= and confirm: scenarios A, C, D fail; B, E pass (negative assertions).
+- Acceptance: 5 new test cases registered, expected initial state {fail:3, pass:2}.
+
+*** ITEM Implement Newly Started rendering in await-tool
+:PROPERTIES:
+:CUSTOM_ID: FEAT-671-surface-auto-promoted-blocked-tasks-in-t::impl-newly-started
+:DEPENDS: FEAT-671-surface-auto-promoted-blocked-tasks-in-t::write-tests
+:END:
+- File: =packages/coding-agent/src/tools/await-tool.ts=.
+- Capture =const awaitInvocationTime = Date.now();= at the start of =execute()=.
+- Capture initial watched-id set: =const initialIds = new Set(jobsToWatch.map(j => j.id));= immediately after the =jobsToWatch= resolution at line 82.
+- After the =Promise.race(...)= resolves (line 109/114), before calling =#buildResult=, query =const newlyStarted = manager.getRunningJobs().filter(j => !initialIds.has(j.id) && j.startTime >= awaitInvocationTime);=.
+- Pass =newlyStarted= as a third argument to =#buildResult=: =return this.#buildResult(manager, jobsToWatch, newlyStarted);=.
+- Update the early-return branches (lines 96-97, 117-118) to also call =manager.getRunningJobs()= for newly-started detection — a snapshot still happens in those paths.
+- In =#buildResult=, accept =newlyStarted: AsyncJob[]= and:
+  - Convert each to an =AwaitResult= with =status: "running"=, =durationMs: now - startTime=, no =resultText= or =errorText=.
+  - Append to =jobResults= array (so =details.jobs= contains them).
+  - Render under =## Newly Started (n)= heading using the same per-job line format as Still Running: =`- `${id}` [${type}] — ${replaceTabs(label)}`=.
+  - Order: Completed → Still Running → Newly Started.
+- Edge case: if the same job appears in =initialIds= and was running at result-time, it stays in Still Running, never duplicated under Newly Started.
+- Edge case: if =newlyStarted= is empty, do not emit the heading at all.
+- After change: =bun test packages/coding-agent/test/task/await-newly-started.test.ts= passes scenarios A and B.
+- Acceptance:
+  - 2/2 await-newly-started tests pass.
+  - =bun run --cwd packages/coding-agent check= still 0 errors.
+
+*** ITEM Implement enriched dispatch text in task/index
+:PROPERTIES:
+:CUSTOM_ID: FEAT-671-surface-auto-promoted-blocked-tasks-in-t::impl-dispatch-text
+:DEPENDS: FEAT-671-surface-auto-promoted-blocked-tasks-in-t::write-tests
+:END:
+- File: =packages/coding-agent/src/task/index.ts=.
+- Compute queued count and chains right after =scheduleReadyTasks();= at line 1189, before the success branch. Source of truth: tasks in =taskItems= whose =logicalId= is NOT in =startedJobs.map(j => j.taskId)= and NOT yet terminal.
+- For each queued task, derive its blockers from =batchGraph.blockersById.get(taskId)= (which already includes both explicit and implicit). Build chain segment: =`${queuedTaskId}<-${blockers.join(",")}`=.
+- Format: when at least one queued task exists, modify the dispatch text from
+  : `Started ${started} background task job${s} using ${agent}.${failures} Results will be delivered when complete.`
+  to
+  : `Started ${started} background task job${s} using ${agent} (${queued} queued behind blocker${s}: [${chains.join("; ")}]).${failures} Results will be delivered when complete.`
+- When zero queued tasks, leave the existing format untouched.
+- Keep =implicitBlockerNote= prefix logic at line 200-208 unchanged for backward compatibility — the new wording references all blockers (including implicit) so the note remains a useful diagnostic aid for filesDeps-driven reorganization.
+- After change: =bun test packages/coding-agent/test/task/task-blockers.test.ts= passes scenarios C, D, E.
+- Acceptance:
+  - 3/3 new task-blockers test cases pass.
+  - All previously-passing tests in =task-blockers.test.ts= still pass.
+  - =bun run --cwd packages/coding-agent check= still 0 errors.
+
+*** ITEM Update await.md prompt
+:PROPERTIES:
+:CUSTOM_ID: FEAT-671-surface-auto-promoted-blocked-tasks-in-t::update-prompt
+:DEPENDS: FEAT-671-surface-auto-promoted-blocked-tasks-in-t::impl-newly-started FEAT-671-surface-auto-promoted-blocked-tasks-in-t::impl-dispatch-text
+:END:
+- File: =packages/coding-agent/src/prompts/tools/await.md=.
+- Append a single short paragraph after the existing 5-line prompt:
+  : When a queued task is auto-promoted to running while you are waiting (because its blocker just completed), the result includes a `## Newly Started` section listing those jobs. Re-call `await` (with no arguments, or with the new IDs) to wait for them.
+- Keep the prompt terse — match the existing tone.
+- Acceptance: file size grows by ~3 lines; no semantic changes to other tools' prompts.
+
+* Edge Cases
+- *Race in result-time snapshot*: a job started by =scheduleReadyTasks()= during the very first millisecond of =await()= might already be in =initialIds=. Handled — =initialIds= filter excludes it from Newly Started.
+- *Job started, completed, then evicted, all during the same await*: =AsyncJobManager= retains finished jobs for =DEFAULT_RETENTION_MS= = 5min, so this can't happen in any realistic timing. If it did, =getRunningJobs()= would not list it, =startTime= filter would exclude it from Newly Started; net effect: the job is invisible to the await caller, but =manager.getJob(id)= still resolves it. Acceptable.
+- *Multiple awaits race for the same newly-started job*: both will receive it under their own =Newly Started=. Idempotent because the job's =id= is stable; consumers de-duplicate by id if needed.
+- *Initial dispatch with all tasks queued behind a synthetic root*: =startedJobs.length === 0= already enters the failure branch at line 1190-1206. Untouched by this change.
+- *Cancellation*: if the parent =await= aborts via signal mid-wait, the existing early-return at line 117-119 still fires; with the change, it picks up newly-started jobs queued so far. This is more informative than the current behavior.
+- *Concurrency limit reached*: =register()= throws if =runningCount >= maxRunningJobs=. =scheduleReadyTasks()= already wraps =register()= in =try/catch= at line 1177; the queued task transitions to terminal failed status. Newly Started won't show it because it's not running. Correct.
+
+* Acceptance Criteria
+1. =bun test packages/coding-agent/test/task/await-newly-started.test.ts= reports 2 pass / 0 fail.
+2. =bun test packages/coding-agent/test/task/task-blockers.test.ts= continues to pass all pre-existing tests AND the 3 new scenarios (C, D, E).
+3. =bun run --cwd packages/coding-agent check= returns 0 TypeScript errors.
+4. Manual replay smoke test: dispatch =[X, Y blocked on X]=. After awaiting X, the result text contains lines:
+   - =## Completed (1)= followed by X's entry
+   - =## Newly Started (1)= followed by Y's entry
+5. =await.md= prompt contains the new paragraph; rendered length ≤ 10 lines total.
+6. No regressions in =bun test packages/coding-agent/test/task/= (full suite passes).
+
+* Verification
+Test commands (LAYER=core triggers commit-only gate):
+- =bun test packages/coding-agent/test/task/await-newly-started.test.ts=
+- =bun test packages/coding-agent/test/task/task-blockers.test.ts=
+- =bun run --cwd packages/coding-agent check=
+
+Manual proof: after merge, replay the failure mode by dispatching a 2-task blocker batch in a fresh session and verifying the await output shows =Newly Started= without intervention.

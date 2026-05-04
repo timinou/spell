@@ -14,7 +14,7 @@ import { LspTool } from "../lsp";
 import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
 import type { CanvasTaskManager } from "../orchestrators/canvas-task-manager";
-import { EditTool } from "../patch";
+
 import type { ActiveModeState, PlanModeState } from "../plan-mode/state";
 import type { SandboxPolicy } from "../sandbox";
 import type { ArtifactRef } from "../session/artifacts";
@@ -24,8 +24,7 @@ import type { EventBus } from "../utils/event-bus";
 import { SearchTool } from "../web/search";
 import { ApprovalsTool } from "./approvals-tool";
 import { AskTool } from "./ask";
-import { AstEditTool } from "./ast-edit";
-import { AstGrepTool } from "./ast-grep";
+
 import { AutonomyStateTool } from "./autonomy-state";
 import { AwaitTool } from "./await-tool";
 import { BashTool } from "./bash";
@@ -35,21 +34,21 @@ import { CancelJobTool } from "./cancel-job";
 import { CanvasTool } from "./canvas";
 import { CanvasCastTool } from "./canvas-cast";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
-import { CodeTool } from "./code";
+
 import { CreateTool } from "./create";
 import { CodepathEditTool } from "./edit";
 import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FetchTool } from "./fetch";
-import { FindTool } from "./find";
+
 import { GatewayTool } from "./gateway";
 import { GetTool } from "./get";
 import { GoalsTool } from "./goals-tool";
-import { GrepTool } from "./grep";
+
 import { InspectImageTool } from "./inspect-image";
 import { ManageTool } from "./manage";
 import { OrgTool } from "./org";
 import { wrapToolWithMetaNotice } from "./output-meta";
-import { ReadTool } from "./read";
+
 import { RenderMermaidTool } from "./render-mermaid";
 import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
@@ -58,7 +57,6 @@ import { SendFileTool } from "./send-file";
 import { loadSshTool } from "./ssh";
 import { SubmitResultTool } from "./submit-result";
 import { type TodoGroup, TodoWriteTool } from "./todo-write";
-import { WriteTool } from "./write";
 
 // Exa MCP tools (22 tools)
 
@@ -73,8 +71,7 @@ export * from "../task";
 export * from "../web/search";
 export * from "./approvals-tool";
 export * from "./ask";
-export * from "./ast-edit";
-export * from "./ast-grep";
+
 export * from "./autonomy-state";
 export * from "./await-tool";
 export * from "./bash";
@@ -84,7 +81,7 @@ export * from "./cancel-job";
 export * from "./canvas";
 export * from "./canvas-cast";
 export * from "./checkpoint";
-export * from "./code";
+
 export * from "./codepath-result";
 export * from "./codepath-types";
 export * from "./context-pressure-policy";
@@ -92,16 +89,16 @@ export * from "./create";
 export * from "./edit";
 export * from "./exit-plan-mode";
 export * from "./fetch";
-export * from "./find";
+
 export * from "./gateway";
 export * from "./gemini-image";
 export * from "./get";
 export * from "./goals-tool";
-export * from "./grep";
+
 export * from "./inspect-image";
 export * from "./manage";
 export * from "./pending-action";
-export * from "./read";
+
 export * from "./render-mermaid";
 export * from "./resolve";
 export * from "./review";
@@ -110,7 +107,6 @@ export * from "./send-file";
 export * from "./ssh";
 export * from "./submit-result";
 export * from "./todo-write";
-export * from "./write";
 
 /** Tool type (AgentTool from pi-ai) */
 export type Tool = AgentTool<any, any, any>;
@@ -242,8 +238,6 @@ export interface ToolSession {
 type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
 
 export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
-	ast_grep: s => new AstGrepTool(s),
-	ast_edit: s => new AstEditTool(s),
 	render_mermaid: s => new RenderMermaidTool(s),
 	ask: AskTool.createIf,
 	bash: s => new BashTool(s),
@@ -252,12 +246,9 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	ssh: loadSshTool,
 	// biome-ignore lint/suspicious/noDuplicateObjectKeys: coexistence override; new registration below
 	// edit: s => new EditTool(s), // Replaced by CodepathEditTool below
-	find: s => new FindTool(s),
-	grep: s => new GrepTool(s),
-	lsp: LspTool.createIf,
-	code: s => new CodeTool(s),
 
-	read: s => new ReadTool(s),
+	lsp: LspTool.createIf,
+
 	inspect_image: s => new InspectImageTool(s),
 	browser: s => new BrowserTool(s),
 	checkpoint: CheckpointTool.createIf,
@@ -272,7 +263,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	search_tool_bm25: SearchToolBm25Tool.createIf,
 	goals: GoalsTool.createIf,
 	approvals: ApprovalsTool.createIf,
-	write: s => new WriteTool(s),
+
 	send_file: s => new SendFileTool(s),
 	canvas: s => new CanvasTool(s),
 	canvas_cast: CanvasCastTool.createIf,

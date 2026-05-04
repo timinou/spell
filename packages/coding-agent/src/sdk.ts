@@ -117,16 +117,12 @@ import {
 	BUILTIN_TOOLS,
 	compactToolDescription,
 	createTools,
-	EditTool,
-	FindTool,
-	GrepTool,
 	getSearchTools,
 	getToolTier,
 	HIDDEN_TOOLS,
 	isCodeSearchProviderId,
 	isSearchProviderPreference,
 	loadSshTool,
-	ReadTool,
 	ResolveTool,
 	renderSearchToolBm25Description,
 	setPreferredCodeSearchProvider,
@@ -134,7 +130,6 @@ import {
 	setPreferredSearchProvider,
 	type Tool,
 	type ToolSession,
-	WriteTool,
 	warmupLspServers,
 } from "./tools";
 import {
@@ -290,15 +285,10 @@ export {
 	// Tool classes and factories
 	BUILTIN_TOOLS,
 	createTools,
-	EditTool,
-	FindTool,
-	GrepTool,
 	HIDDEN_TOOLS,
 	loadSshTool,
-	ReadTool,
 	ResolveTool,
 	type ToolSession,
-	WriteTool,
 };
 
 // Helper Functions
