@@ -3,6 +3,7 @@ export * from "./ast";
 export * from "./clipboard";
 export * from "./code-buffer";
 export * from "./code-graph";
+export * from "./code-path";
 export * from "./glob";
 export * from "./grep";
 export * from "./highlight";
