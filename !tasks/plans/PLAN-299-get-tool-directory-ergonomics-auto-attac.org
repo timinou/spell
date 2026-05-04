@@ -1,0 +1,147 @@
+#+TITLE: Get tool directory ergonomics — auto-attach + recursive/depth params + fs-listing default + #stat render + degenerate hint + prompt fix
+#+STATE: DONE
+#+SESSION_ID: 14d495195198c5ce
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T22-32-28-230Z_14d495195198c5ce.jsonl]]
+#+CUSTOM_ID: PLAN-299-get-tool-directory-ergonomics-auto-attac
+#+LAYER: core
+
+* Initial Message
+
+determine whether htat was a prompting error, a tool error, or a bad design:
+
+Honest read: my get call returned just [§dir] — a single directory-node marker with no children expanded — because of how I invoked it, not a
+ tool failure.
+
+ Two issues with my call:
+
+ ```
+   get { target: "/home/user/code/ora/concept" }
+ ```
+
+ 1. Absolute path = project root. I passed the CWD itself. The tool's directory dialect resolves it to a single dir node and stops; it does not
+ auto-recurse the whole project (would be huge).
+ 2. Default format: "node-list" on a dir. That format is optimized for code symbols; for directory listings the docs specifically show format:
+ "simple-list" or "tree". Without one of those, you get the bare dir node and nothing else.
+
+ Correct invocations would be:
+
+ ```
+   get { target: ".", format: "simple-list" }
+   get { target: "./", format: "tree" }
+   get { target: "lib/", format: "simple-list" }
+   get { target: "**/*.ex", format: "locations" }
+ ```
+
+ That's why I fell back to bash ls -la and find — they worked, but I should have used get with the right format. Noted; I'll do that going
+ forward.
+
+ Now, back to the plan. All decisions are settled — moving to Phase 3 (design + sequencing) before creating org items.
+
+
+
+
+propose improvements to make the get tool more ergonomic overall
+
+* Context
+
+The =get= tool's most common discovery use case (browsing a directory) is broken end-to-end:
+
+- =get { target: "dirname" }= returns =dirname  [§dir]= — a single useless marker
+- =get { target: "dirname/" }= returns empty output
+- =get { target: "/abs/path" }= returns the same single marker
+- =get { target: "dirname#stat" }= renders nothing (metadata is collected by walker but lost in TS formatter)
+
+The native side ships =#listing=, =#tree[depth=N]=, and =#stat= qualifiers that work correctly. The leak is in the TS wrapper (=packages/coding-agent/src/tools/get.ts=) and the formatter (=packages/coding-agent/src/tools/codepath-result.ts=). The prompt =get.md= claims bare path → "directory listing" but only files actually list.
+
+This plan fixes the four leaks together:
+1. Bare-path-on-directory auto-attaches =#listing= (mirrors existing =#raw= for files).
+2. New =recursive=/=depth= top-level params build =#tree[depth=N]= internally; qualifier remains escape hatch.
+3. Format default auto-promotes to fs-listing layout (path + size, =path/=) when all results are fs nodes.
+4. Prompt rewritten to match behavior, examples added.
+
+Scope: TS-layer only. Zero =crates/= changes (native qualifiers already correct).
+
+Linked feature: [[id:FEAT-688-get-tool-directory-ergonomics-auto-attac]]
+
+* Verification
+
+** Gate commands
+- =bun test packages/coding-agent/test/get.test.ts= — 21 new tests pass; no regressions
+- =bun run --parallel check:ts check:rs= — typecheck clean
+- =bun run --workspaces --if-present --parallel test= — full suite passes
+
+** Manual smoke probes
+1. =get { target: "." }= → project root listing with sizes (no =[§dir]= noise)
+2. =get { target: "specs" }= → multi-line listing of children
+3. =get { target: "specs/" }= → identical to (2) (trailing slash normalized)
+4. =get { target: "/home/user/code/ora/spell/specs" }= → identical (absolute path)
+5. =get { target: "specs", recursive: true }= → full subtree
+6. =get { target: "specs", depth: 1 }= → one level only
+7. =get { target: "specs", content: false }= → single =[§dir]= node + hint diagnostic
+8. =get { target: "specs#stat" }= → metadata as =size=N mtime=ISO kind=§dir=
+9. =get { target: "src/foo.ts" }= → file content (regression check; auto-=#raw= preserved)
+10. =get { target: "src/*.ts" }= → glob unchanged
+
+** Acceptance summary
+- All 12 target-rewrite scenarios (T1.1–T1.12) and 9 fs-listing-render scenarios (T2.1–T2.9) pass.
+- =get.md= and =code-migration.md= match actual behavior — no false claims.
+- Zero edits under =crates/=.
+- Single commit gates (core layer requires commit).
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:FEAT-688-get-tool-directory-ergonomics-auto-attac::define-schema]] Define schema params recursive + depth
+** wave-2 :wave:
+- [[id:FEAT-688-get-tool-directory-ergonomics-auto-attac::tests-target-rewrite]] Write target-rewrite tests (TDD: before impl-target-rewrite)
+- [[id:FEAT-688-get-tool-directory-ergonomics-auto-attac::tests-formatter-fs]] Write fs-listing formatter tests (TDD: before impl-formatter-fs)
+- [[id:FEAT-688-get-tool-directory-ergonomics-auto-attac::update-prompt]] Update prompt docs to match behavior
+** wave-3 :wave:
+- [[id:FEAT-688-get-tool-directory-ergonomics-auto-attac::impl-target-rewrite]] Implement target-rewrite (satisfies tests-target-rewrite)
+- [[id:FEAT-688-get-tool-directory-ergonomics-auto-attac::impl-formatter-fs]] Implement fs-listing formatter (satisfies tests-formatter-fs)
+** wave-4 :wave:
+- [[id:FEAT-688-get-tool-directory-ergonomics-auto-attac::verify-e2e]] End-to-end smoke verification
+** File-level DAG
+*** Nodes
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac` Define schema params recursive + depth [ITEM]
+*** Edges
+- None.
+** Subfeature-level DAG
+*** Nodes
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac::define-schema` Define schema params recursive + depth [ITEM]
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac::tests-target-rewrite` Write target-rewrite tests (TDD: before impl-target-rewrite) [ITEM]
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac::impl-target-rewrite` Implement target-rewrite (satisfies tests-target-rewrite) [ITEM]
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac::tests-formatter-fs` Write fs-listing formatter tests (TDD: before impl-formatter-fs) [ITEM]
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac::impl-formatter-fs` Implement fs-listing formatter (satisfies tests-formatter-fs) [ITEM]
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac::update-prompt` Update prompt docs to match behavior [ITEM]
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac::verify-e2e` End-to-end smoke verification [ITEM]
+*** Edges
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac::tests-target-rewrite` depends on `FEAT-688-get-tool-directory-ergonomics-auto-attac::define-schema`
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac::impl-target-rewrite` depends on `FEAT-688-get-tool-directory-ergonomics-auto-attac::tests-target-rewrite`
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac::tests-formatter-fs` depends on `FEAT-688-get-tool-directory-ergonomics-auto-attac::define-schema`
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac::impl-formatter-fs` depends on `FEAT-688-get-tool-directory-ergonomics-auto-attac::tests-formatter-fs`
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac::update-prompt` depends on `FEAT-688-get-tool-directory-ergonomics-auto-attac::define-schema`
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac::verify-e2e` depends on `FEAT-688-get-tool-directory-ergonomics-auto-attac::impl-target-rewrite`
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac::verify-e2e` depends on `FEAT-688-get-tool-directory-ergonomics-auto-attac::impl-formatter-fs`
+- `FEAT-688-get-tool-directory-ergonomics-auto-attac::verify-e2e` depends on `FEAT-688-get-tool-directory-ergonomics-auto-attac::update-prompt`
+
+** Completion [2026-05-04]
+
+*** Verification
+- =bun test packages/coding-agent/test/get.test.ts= — 36/36 pass (0 fail)
+- =npx tsc --noEmit -p packages/coding-agent/tsconfig.json= — clean (0 errors)
+- All 12 target-rewrite scenarios (T1.1–T1.12) pass
+- All 9 fs-listing render scenarios (T2.1–T2.9) pass
+- 15 original regression tests untouched and passing
+- =get.md= rewritten with directory ergonomics, =recursive=/=depth= params, fs-listing output, =#stat= metadata, degenerate hint
+- =code-migration.md= updated with =ls= → =get= migration rows
+- Zero changes under =crates/= (native qualifiers untouched)
+- Minimum implementation: only 2 user-facing files (=get.ts=, =codepath-result.ts=) modified
+
+*** Artifacts
+- Test suite: =packages/coding-agent/test/get.test.ts= (36 tests: 15 original + 12 target-rewrite + 9 fs-listing)
+- Schema: =packages/coding-agent/src/tools/codepath-types.ts= (+2 params: =recursive=, =depth=)
+- Implementation: =packages/coding-agent/src/tools/get.ts= (=classifyBareTarget=, =buildDirQualifier=)
+- Formatter: =packages/coding-agent/src/tools/codepath-result.ts= (=allFsNodes=, =buildFsListing=, auto-promotion, =#stat= render, degenerate hint)
+- Prompt: =packages/coding-agent/src/prompts/tools/get.md= (rewritten)
+- Migration: =packages/coding-agent/src/prompts/tools/code-migration.md= (+3 =ls= rows)
+- Commits: =feat(get): add recursive and depth params to getSchema=, =test(get): add TDD scenarios...=, =feat(get): directory auto-attach...=
