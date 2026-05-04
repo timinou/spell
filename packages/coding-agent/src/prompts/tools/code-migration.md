@@ -13,6 +13,9 @@ On cutover the seven standalone tools (`find`, `read`, `grep`, `ast-grep`, `ast-
 | `read foo.ts` | `get { target: "foo.ts" }` | `foo.ts#raw` |
 | `read foo.ts offset=50 limit=100` | `get { target: "foo.ts", offset: 50, head: 100 }` | `foo.ts::§line[50..150]#text` |
 | `read dir/` | `get { target: "dir/" }` | `dir/#listing` |
+| `ls dir/` | `get { target: "dir/" }` | `dir/` (auto-listing) |
+| `ls -R dir/` | `get { target: "dir/", recursive: true }` | `dir/#tree` |
+| `ls -L2 dir/` | `get { target: "dir/", depth: 2 }` | `dir/#tree[depth=2]` |
 | `read foo.pdf` | `get { target: "foo.pdf" }` | `foo.pdf#text` |
 | `read foo.docx` | `get { target: "foo.docx" }` | `foo.docx#text` |
 | `read img.png` | `get { target: "img.png" }` | `img.png#image` |

@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createTools, GetTool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import { formatCodePathResult } from "@oh-my-pi/pi-coding-agent/tools/codepath-result";
 import * as nativesModule from "@oh-my-pi/pi-natives";
 
 function createSession(overrides: Partial<ToolSession> = {}): ToolSession {
@@ -224,8 +225,361 @@ describe("GetTool", () => {
 		expect(getText(result)).toContain("# Hello");
 	});
 
+	describe("target-rewrite", () => {
+		afterEach(() => {
+			try {
+				(spyOn(nativesModule, "executeCodePath") as any).mockRestore?.();
+			} catch {}
+		});
+
+		// T1.1: bare path → existing directory → #listing
+		it("auto-attaches #listing when target is a bare path to an existing directory", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-dir");
+			await fs.mkdir(tmp, { recursive: true });
+			try {
+				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: tmp, kind: "dir" }]),
+				]);
+				const tool = new GetTool();
+				await tool.execute("t", { target: tmp });
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#listing` }));
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		// T1.2: trailing-slash → #listing (normalized)
+		it("normalizes trailing slash and auto-attaches #listing", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-trailing");
+			await fs.mkdir(tmp, { recursive: true });
+			try {
+				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: tmp, kind: "dir" }]),
+				]);
+				const tool = new GetTool();
+				await tool.execute("t", { target: `${tmp}/` });
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#listing` }));
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		// T1.3: absolute path to existing directory
+		it("auto-attaches #listing for absolute path to directory", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-absdir");
+			await fs.mkdir(tmp, { recursive: true });
+			try {
+				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: tmp, kind: "dir" }]),
+				]);
+				const tool = new GetTool();
+				await tool.execute("t", { target: tmp });
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#listing` }));
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		// T1.4: recursive: true + bare dir → #tree
+		it("auto-attaches #tree when recursive=true for a directory", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-recursive");
+			await fs.mkdir(tmp, { recursive: true });
+			try {
+				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: tmp, kind: "dir" }]),
+				]);
+				const tool = new GetTool();
+				await tool.execute("t", { target: tmp, recursive: true });
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#tree` }));
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		// T1.5: depth: 2 + bare dir → #tree[depth=2]
+		it("auto-attaches #tree[depth=N] when depth is set", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-depth");
+			await fs.mkdir(tmp, { recursive: true });
+			try {
+				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: tmp, kind: "dir" }]),
+				]);
+				const tool = new GetTool();
+				await tool.execute("t", { target: tmp, depth: 2 });
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#tree[depth=2]` }));
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		// T1.6: recursive: true + depth: 3 → depth wins
+		it("depth wins when both recursive=true and depth are set", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-both");
+			await fs.mkdir(tmp, { recursive: true });
+			try {
+				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: tmp, kind: "dir" }]),
+				]);
+				const tool = new GetTool();
+				await tool.execute("t", { target: tmp, recursive: true, depth: 3 });
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#tree[depth=3]` }));
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		// T1.7: content: false + bare dir → unchanged (no auto-attach, escape hatch)
+		it("does not auto-attach when content=false for a directory", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-nocontent");
+			await fs.mkdir(tmp, { recursive: true });
+			try {
+				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: tmp, kind: "dir" }]),
+				]);
+				const tool = new GetTool();
+				await tool.execute("t", { target: tmp, content: false });
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: tmp }));
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		// T1.8: bare path → existing file → #raw (existing behavior preserved)
+		it("auto-attaches #raw when target is an existing file", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-file");
+			await fs.mkdir(tmp, { recursive: true });
+			const real = nodePath.join(tmp, "hello.txt");
+			await fs.writeFile(real, "hi", "utf-8");
+			try {
+				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: real, kind: "file", content: { text: "hi" } }]),
+				]);
+				const tool = new GetTool();
+				await tool.execute("t", { target: real });
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${real}#raw` }));
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		// T1.9: bare path that does not exist → unchanged
+		it("passes non-existent paths through unchanged", async () => {
+			const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+				makeChunk([{ locator: "nonexistent", kind: "file" }]),
+			]);
+			const tool = new GetTool();
+			await tool.execute("t", { target: "nonexistent/path" });
+			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: "nonexistent/path" }));
+		});
+
+		// T1.10: already-qualified target → unchanged
+		it("does not modify already-qualified targets", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-qual");
+			await fs.mkdir(tmp, { recursive: true });
+			try {
+				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: tmp, kind: "dir" }]),
+				]);
+				const tool = new GetTool();
+				await tool.execute("t", { target: `${tmp}#tree[depth=1]` });
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#tree[depth=1]` }));
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		// T1.11: recursive: true + already-qualified target → unchanged (caller's qualifier wins)
+		it("preserves caller's qualifier when recursive=true on already-qualified target", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-qual-rec");
+			await fs.mkdir(tmp, { recursive: true });
+			try {
+				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: tmp, kind: "dir" }]),
+				]);
+				const tool = new GetTool();
+				await tool.execute("t", { target: `${tmp}#listing`, recursive: true });
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#listing` }));
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		// T1.12: depth: 5 + recursive: false → #tree[depth=5] (depth implies tree)
+		it("depth implies #tree even when recursive=false", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-depth-no-rec");
+			await fs.mkdir(tmp, { recursive: true });
+			try {
+				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: tmp, kind: "dir" }]),
+				]);
+				const tool = new GetTool();
+				await tool.execute("t", { target: tmp, depth: 5, recursive: false });
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#tree[depth=5]` }));
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+	});
+
 	it("is registered in createTools", async () => {
 		const tools = await createTools(createSession());
 		expect(tools.some(t => t.name === "get")).toBe(true);
+	});
+
+	describe("fs-listing render", () => {
+		const makeNode = (locator: string, kind: string, text?: string) => ({
+			locator,
+			rangeStart: 0,
+			rangeEnd: 0,
+			kind,
+			content: text ? { kind: "text", text } : undefined,
+			metadata: {},
+			diagnostics: [],
+		});
+
+		// T2.1: only §file + §dir nodes, format unset → fs-listing layout
+		it("auto-promotes to fs-listing layout when all nodes are fs nodes (format unset)", () => {
+			const chunks = [{
+				nodes: [
+					makeNode("specs/README.md", "file", undefined),
+					makeNode("specs/plan.md", "file", undefined),
+					makeNode("specs/subdir", "dir", undefined),
+				],
+				diagnostics: [],
+				done: true,
+			}];
+			const result = formatCodePathResult(chunks as any, {});
+   expect(result.text).not.toContain("  [file]");
+   		expect(result.text).not.toContain("  [dir]");
+   		expect(result.text).toContain("specs/README.md");
+   		expect(result.text).toContain("specs/plan.md");
+   		expect(result.text).toContain("specs/subdir/");
+		});
+
+		// T2.2: same nodes, format: "node-list" explicit → existing node-list shape
+		it("honors explicit format even when all nodes are fs nodes", () => {
+			const chunks = [{
+				nodes: [
+					makeNode("specs/README.md", "file", "content"),
+				],
+				diagnostics: [],
+				done: true,
+			}];
+			const result = formatCodePathResult(chunks as any, { format: "node-list" });
+			expect(result.text).toContain("[§file]");
+			expect(result.text).toContain("specs/README.md");
+		});
+
+		// T2.3: mixed §file + §symbol node → falls back to existing node-list
+		it("falls back to node-list when nodes are mixed fs and non-fs", () => {
+			const chunks = [{
+				nodes: [
+					makeNode("src/server.ts", "file", undefined),
+					makeNode("src/server.ts", "symbol", "handleRequest"),
+				],
+				diagnostics: [],
+				done: true,
+			}];
+			const result = formatCodePathResult(chunks as any, {});
+   expect(result.text).toContain("  [file]");
+   		expect(result.text).toContain("  [symbol]");
+		});
+
+		// T2.4: §stat node from #stat qualifier → metadata rendered
+		it("renders metadata for §stat nodes", () => {
+			const chunks = [{
+				nodes: [{
+					locator: "specs",
+					rangeStart: 0,
+					rangeEnd: 0,
+					kind: "stat",
+					content: undefined,
+					metadata: { size: 4096, mtime: "2026-01-15T10:30:00Z" },
+					diagnostics: [],
+				}],
+				diagnostics: [],
+				done: true,
+			}];
+			const result = formatCodePathResult(chunks as any, {});
+			expect(result.text).toContain("size=4096");
+			expect(result.text).toContain("2026-01-15T10:30:00Z");
+		});
+
+		// T2.5: single §dir with no children → degenerate hint
+		it("emits degenerate-result hint when only a single §dir node is returned", () => {
+			const chunks = [{
+				nodes: [makeNode("specs", "dir", undefined)],
+				diagnostics: [],
+				done: true,
+			}];
+			const result = formatCodePathResult(chunks as any, {});
+			expect(result.text).toContain("specs/");
+			expect(result.text).toContain("hint");
+		});
+
+		// T2.6: §file + §symlink nodes → fs-listing layout
+		it("auto-promotes mixed §file + §symlink nodes to fs-listing", () => {
+			const chunks = [{
+				nodes: [
+					makeNode("lib", "symlink", undefined),
+					makeNode("lib/foo.ts", "file", undefined),
+				],
+				diagnostics: [],
+				done: true,
+			}];
+			const result = formatCodePathResult(chunks as any, {});
+   expect(result.text).not.toContain("  [file]");
+   		expect(result.text).not.toContain("  [symlink]");
+		});
+
+		// T2.7: empty dir → placeholder
+		it("renders placeholder for empty directory", () => {
+			const chunks = [{
+				nodes: [],
+				diagnostics: [],
+				done: true,
+			}];
+			const result = formatCodePathResult(chunks as any, {});
+			expect(result.text).toContain("(no entries)");
+		});
+
+		// T2.8: §stat node with just kind metadata
+		it("renders stat kind for stat nodes", () => {
+			const chunks = [{
+				nodes: [{
+					locator: "specs",
+					rangeStart: 0,
+					rangeEnd: 0,
+					kind: "stat",
+					content: undefined,
+					metadata: { size: 0, mtime: "2026-01-15T10:30:00Z" },
+					diagnostics: [],
+				}],
+				diagnostics: [],
+				done: true,
+			}];
+			const result = formatCodePathResult(chunks as any, {});
+			expect(result.text).toContain("kind=§dir");
+		});
+
+		// T2.9: §stat node for file with size
+		it("renders metadata for §stat on file", () => {
+			const chunks = [{
+				nodes: [{
+					locator: "package.json",
+					rangeStart: 0,
+					rangeEnd: 0,
+					kind: "stat",
+					content: undefined,
+					metadata: { size: 2048, mtime: "2026-01-15T10:30:00Z" },
+					diagnostics: [],
+				}],
+				diagnostics: [],
+				done: true,
+			}];
+			const result = formatCodePathResult(chunks as any, {});
+			expect(result.text).toContain("size=2048");
+			expect(result.text).toContain("kind=§file");
+		});
 	});
 });
