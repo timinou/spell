@@ -29,7 +29,7 @@ describe("ManageTool", () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			{ nodes: [], diagnostics: [], done: true } as any,
 		]);
-		const tool = new ManageTool(createSession());
+		const tool = new ManageTool();
 		await tool.execute("t", { command: "save", file: "src/main.ts" });
 		expect(spy).toHaveBeenCalledWith(
 			expect.objectContaining({ command: "manage", manage: "save", target: "src/main.ts" }),
@@ -40,7 +40,7 @@ describe("ManageTool", () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			{ nodes: [], diagnostics: [], done: true } as any,
 		]);
-		const tool = new ManageTool(createSession());
+		const tool = new ManageTool();
 		await tool.execute("t", { command: "undo", file: "src/main.ts" });
 		expect(spy).toHaveBeenCalledWith(
 			expect.objectContaining({ command: "manage", manage: "undo", target: "src/main.ts" }),
@@ -51,7 +51,7 @@ describe("ManageTool", () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			{ nodes: [], diagnostics: [], done: true } as any,
 		]);
-		const tool = new ManageTool(createSession());
+		const tool = new ManageTool();
 		await tool.execute("t", { command: "redo", file: "src/main.ts" });
 		expect(spy).toHaveBeenCalledWith(
 			expect.objectContaining({ command: "manage", manage: "redo", target: "src/main.ts" }),
@@ -62,7 +62,7 @@ describe("ManageTool", () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			{ nodes: [], diagnostics: [], done: true } as any,
 		]);
-		const tool = new ManageTool(createSession());
+		const tool = new ManageTool();
 		await tool.execute("t", { command: "diff", file: "src/main.ts" });
 		expect(spy).toHaveBeenCalledWith(
 			expect.objectContaining({ command: "manage", manage: "diff", target: "src/main.ts" }),
@@ -77,7 +77,7 @@ describe("ManageTool", () => {
 				done: true,
 			} as any,
 		]);
-		const tool = new ManageTool(createSession());
+		const tool = new ManageTool();
 		const result = await tool.execute("t", { command: "buffers" });
 		expect(getText(result)).toContain("buf.ts");
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ command: "manage", manage: "buffers", target: "" }));
@@ -93,7 +93,7 @@ describe("ManageTool", () => {
 				done: true,
 			} as any,
 		]);
-		const tool = new ManageTool(createSession());
+		const tool = new ManageTool();
 		const result = await tool.execute("t", { command: "languages" });
 		expect(getText(result)).toContain("typescript");
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ command: "manage", manage: "languages" }));
@@ -103,7 +103,7 @@ describe("ManageTool", () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			{ nodes: [], diagnostics: [], done: true } as any,
 		]);
-		const tool = new ManageTool(createSession());
+		const tool = new ManageTool();
 		await tool.execute("t", { command: "index" });
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ command: "manage", manage: "index" }));
 	});
@@ -112,7 +112,7 @@ describe("ManageTool", () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			{ nodes: [], diagnostics: [], done: true } as any,
 		]);
-		const tool = new ManageTool(createSession());
+		const tool = new ManageTool();
 		await tool.execute("t", { command: "watcherStatus" });
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ command: "manage", manage: "watcherStatus" }));
 	});
@@ -121,7 +121,7 @@ describe("ManageTool", () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			{ nodes: [], diagnostics: [], done: true } as any,
 		]);
-		const tool = new ManageTool(createSession());
+		const tool = new ManageTool();
 		await tool.execute("t", { command: "lockStatus" });
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ command: "manage", manage: "lockStatus" }));
 	});
@@ -130,7 +130,7 @@ describe("ManageTool", () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			{ nodes: [], diagnostics: [], done: true } as any,
 		]);
-		const tool = new ManageTool(createSession());
+		const tool = new ManageTool();
 		await tool.execute("t", { command: "status" });
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ command: "manage", manage: "status" }));
 	});
@@ -139,7 +139,7 @@ describe("ManageTool", () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			{ nodes: [], diagnostics: [], done: true } as any,
 		]);
-		const tool = new ManageTool(createSession());
+		const tool = new ManageTool();
 		await tool.execute("t", { command: "context" });
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ command: "manage", manage: "context" }));
 	});

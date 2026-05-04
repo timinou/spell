@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { Component } from "@oh-my-pi/pi-tui";
 import { executeCodePath } from "@oh-my-pi/pi-natives";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
@@ -7,7 +8,11 @@ import { formatCodePathResult } from "./codepath-result";
 import type { ManageParams } from "./codepath-types";
 import { manageSchema } from "./codepath-types";
 import { replaceTabs } from "./render-utils";
-import { toolResult } from "./tool-result";
+import { type DetailsWithMeta, toolResult } from "./tool-result";
+
+type ManageToolResultDetails = DetailsWithMeta & {
+	command?: string;
+};
 
 export class ManageTool implements AgentTool<typeof manageSchema> {
 	readonly name = "manage";
@@ -32,7 +37,7 @@ export class ManageTool implements AgentTool<typeof manageSchema> {
 		});
 
 		const result = formatCodePathResult(chunks, { format: "node-list" });
-		const builder = toolResult({ command: params.command }).text(result.text);
+		const builder = toolResult<ManageToolResultDetails>({ command: params.command }).text(result.text);
 		if (result.meta) {
 			builder.limits({
 				resultLimit: result.meta.limits?.resultLimit?.reached,

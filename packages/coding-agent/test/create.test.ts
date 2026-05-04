@@ -31,7 +31,7 @@ describe("CreateTool", () => {
 
 	afterEach(async () => {
 		try {
-			await fs.rmdir(tmpDir, { recursive: true });
+			await fs.rm(tmpDir, { recursive: true });
 		} catch {}
 		try {
 			(spyOn(nativesModule, "executeCodePath") as any).mockRestore?.();

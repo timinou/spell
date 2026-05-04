@@ -20,7 +20,7 @@ function getText(result: Awaited<ReturnType<GetTool["execute"]>>): string {
 
 function makeChunk(
 	nodes: Array<{ locator: string; kind: string; content?: { text?: string } }>,
-): ReturnType<typeof nativesModule.executeCodePath> extends Promise<infer R> ? R[number] : never {
+): any {
 	return {
 		nodes: nodes.map(n => ({
 			locator: n.locator,
@@ -47,7 +47,7 @@ describe("GetTool", () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			makeChunk([{ locator: "src/main.ts", kind: "file", content: { text: "export const x = 1;" } }]),
 		]);
-		const tool = new GetTool(createSession());
+		const tool = new GetTool();
 		const result = await tool.execute("t", { target: "src/main.ts" });
 		expect(getText(result)).toContain("src/main.ts");
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ command: "get", target: "src/main.ts" }));
@@ -60,7 +60,7 @@ describe("GetTool", () => {
 				{ locator: "b.ts", kind: "file" },
 			]),
 		]);
-		const tool = new GetTool(createSession());
+		const tool = new GetTool();
 		const result = await tool.execute("t", { target: "*.ts" });
 		expect(getText(result)).toContain("a.ts");
 		expect(getText(result)).toContain("b.ts");
@@ -71,7 +71,7 @@ describe("GetTool", () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			makeChunk([{ locator: "src/main.ts:1:1", kind: "line", content: { text: "line one" } }]),
 		]);
-		const tool = new GetTool(createSession());
+		const tool = new GetTool();
 		await tool.execute("t", { target: "src/main.ts", offset: 5, limit: 10 });
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ offset: 5, limit: 10 }));
 	});
@@ -80,7 +80,7 @@ describe("GetTool", () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			makeChunk([{ locator: "src/main.ts:3:5", kind: "match", content: { text: "foo()" } }]),
 		]);
-		const tool = new GetTool(createSession());
+		const tool = new GetTool();
 		await tool.execute("t", { target: "/foo.+/" });
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: "/foo.+/" }));
 	});
@@ -89,7 +89,7 @@ describe("GetTool", () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			makeChunk([{ locator: "src/main.ts::foo", kind: "function", content: { text: "function foo() {}" } }]),
 		]);
-		const tool = new GetTool(createSession());
+		const tool = new GetTool();
 		await tool.execute("t", { target: "src/main.ts::foo" });
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: "src/main.ts::foo" }));
 	});
@@ -98,7 +98,7 @@ describe("GetTool", () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			makeChunk([{ locator: "memory://root", kind: "resource", content: { text: "memory content" } }]),
 		]);
-		const tool = new GetTool(createSession());
+		const tool = new GetTool();
 		await tool.execute("t", { target: "memory://root" });
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: "memory://root" }));
 	});
@@ -107,7 +107,7 @@ describe("GetTool", () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			makeChunk([{ locator: "artifact://sess/1", kind: "artifact", content: { text: "artifact content" } }]),
 		]);
-		const tool = new GetTool(createSession());
+		const tool = new GetTool();
 		await tool.execute("t", { target: "artifact://sess/1" });
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: "artifact://sess/1" }));
 	});
@@ -119,7 +119,7 @@ describe("GetTool", () => {
 				{ locator: "b.ts:2:3", kind: "match" },
 			]),
 		]);
-		const tool = new GetTool(createSession());
+		const tool = new GetTool();
 		const result = await tool.execute("t", { target: "foo", format: "locations" });
 		const text = getText(result);
 		expect(text).toContain("a.ts:1:1");
@@ -133,7 +133,7 @@ describe("GetTool", () => {
 				{ locator: "src/b.ts:2:3", kind: "class" },
 			]),
 		]);
-		const tool = new GetTool(createSession());
+		const tool = new GetTool();
 		const result = await tool.execute("t", { target: "src", format: "tree" });
 		const text = getText(result);
 		expect(text).toContain("src/a.ts");
@@ -158,7 +158,7 @@ describe("GetTool", () => {
 				done: true,
 			} as any,
 		]);
-		const tool = new GetTool(createSession());
+		const tool = new GetTool();
 		const result = await tool.execute("t", { target: "img.png" });
 		const images = result.content.filter(c => c.type === "image");
 		expect(images.length).toBe(1);
@@ -175,7 +175,7 @@ describe("GetTool", () => {
 				done: true,
 			} as any,
 		]);
-		const tool = new GetTool(createSession());
+		const tool = new GetTool();
 		const result = await tool.execute("t", { target: "x.ts" });
 		expect(getText(result)).toContain("suffix_fallback");
 		expect(getText(result)).toContain("Resolved via suffix match");
@@ -185,7 +185,7 @@ describe("GetTool", () => {
 		spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			makeChunk([{ locator: "doc.md", kind: "doc", content: { text: "# Hello\nWorld" } }]),
 		]);
-		const tool = new GetTool(createSession());
+		const tool = new GetTool();
 		const result = await tool.execute("t", { target: "doc.md" });
 		expect(getText(result)).toContain("# Hello");
 	});

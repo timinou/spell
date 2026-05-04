@@ -251,7 +251,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	calc: s => new CalculatorTool(s),
 	ssh: loadSshTool,
 	// biome-ignore lint/suspicious/noDuplicateObjectKeys: coexistence override; new registration below
-	edit: s => new EditTool(s),
+	// edit: s => new EditTool(s), // Replaced by CodepathEditTool below
 	find: s => new FindTool(s),
 	grep: s => new GrepTool(s),
 	lsp: LspTool.createIf,
@@ -281,8 +281,8 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	loop_done: s => (s.loopManager ? new LoopDoneTool(s) : null),
 	gateway: GatewayTool.createIf,
 	// Generic code-path tools (coexistence wave; override legacy registrations)
-	get: s => new GetTool(s),
-	manage: s => new ManageTool(s),
+	get: () => new GetTool(),
+	manage: () => new ManageTool(),
 	create: s => new CreateTool(s),
 	edit: s => new CodepathEditTool(s),
 };

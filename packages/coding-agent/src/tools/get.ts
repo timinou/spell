@@ -1,4 +1,5 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { Component } from "@oh-my-pi/pi-tui";
 import { executeCodePath } from "@oh-my-pi/pi-natives";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
@@ -7,7 +8,11 @@ import { type CodePathFormatMode, formatCodePathResult } from "./codepath-result
 import type { GetParams } from "./codepath-types";
 import { getSchema } from "./codepath-types";
 import { replaceTabs } from "./render-utils";
-import { toolResult } from "./tool-result";
+import { type DetailsWithMeta, toolResult } from "./tool-result";
+
+type GetToolResultDetails = DetailsWithMeta & {
+	format?: string;
+};
 
 export class GetTool implements AgentTool<typeof getSchema> {
 	readonly name = "get";
@@ -41,7 +46,7 @@ export class GetTool implements AgentTool<typeof getSchema> {
 			limit: params.limit,
 		});
 
-		const builder = toolResult({ format: params.format }).text(result.text);
+		const builder = toolResult<GetToolResultDetails>({ format: params.format }).text(result.text);
 		if (result.meta) {
 			builder.limits({
 				resultLimit: result.meta.limits?.resultLimit?.reached,

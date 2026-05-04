@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { Component } from "@oh-my-pi/pi-tui";
 import { executeCodePath } from "@oh-my-pi/pi-natives";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
@@ -10,7 +11,14 @@ import { formatCodePathResult } from "./codepath-result";
 import type { CreateParams } from "./codepath-types";
 import { createSchema } from "./codepath-types";
 import { replaceTabs } from "./render-utils";
-import { toolResult } from "./tool-result";
+import { type DetailsWithMeta, toolResult } from "./tool-result";
+
+type CreateToolResultDetails = DetailsWithMeta & {
+	path?: string;
+	exists?: boolean;
+	error?: string;
+	created?: boolean;
+};
 
 export class CreateTool implements AgentTool<typeof createSchema> {
 	readonly name = "create";
@@ -34,7 +42,7 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 		if (!params.force) {
 			const exists = await fs.exists(resolvedPath);
 			if (exists) {
-				return toolResult({ path: params.path, exists: true })
+				return toolResult<CreateToolResultDetails>({ path: params.path, exists: true })
 					.text(`File already exists: ${params.path}. Use force=true to overwrite.`)
 					.done();
 			}
@@ -49,7 +57,7 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 			// bytes from artifact URI
 			const router = this.session.internalRouter;
 			if (!router?.canHandle(params.content.artifactUri)) {
-				return toolResult({ path: params.path, error: "invalid_artifact_uri" })
+				return toolResult<CreateToolResultDetails>({ path: params.path, error: "invalid_artifact_uri" })
 					.text(`Cannot resolve artifact URI: ${params.content.artifactUri}`)
 					.done();
 			}
@@ -67,7 +75,7 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 
 		const result = formatCodePathResult(chunks, { format: "node-list" });
 		const text = result.text || `Created ${params.path}`;
-		return toolResult({ path: params.path, created: true }).text(text).done();
+		return toolResult<CreateToolResultDetails>({ path: params.path, created: true }).text(text).done();
 	}
 
 	renderResult(result: AgentToolResult, options: RenderResultOptions, theme: unknown): Component {
