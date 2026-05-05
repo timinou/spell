@@ -328,6 +328,7 @@ mod tests {
 		fn render(&self, n: &crate::ast::NamePayload) -> String {
 			match n {
 				crate::ast::NamePayload::Raw(s) => s.clone(),
+				crate::ast::NamePayload::Quoted(s) => s.clone(),
 			}
 		}
 

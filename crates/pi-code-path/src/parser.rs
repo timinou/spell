@@ -613,6 +613,7 @@ mod tests {
 		fn render(&self, n: &NamePayload) -> String {
 			match n {
 				NamePayload::Raw(s) => s.clone(),
+				NamePayload::Quoted(s) => s.clone(),
 			}
 		}
 
@@ -1137,5 +1138,16 @@ mod tests {
 	#[test]
 	fn neg_bad_attribute_no_value() {
 		assert!(parse_code_path("src/foo.ts::Foo[ext=]", &DotLexer).is_err());
+	}
+
+	#[test]
+	fn unquoted_multiword_returns_did_you_mean() {
+		let result = parse_code_path("foo.ts::export * from \"./json\"", &crate::dialects::typescript::TsNameLexer);
+		let diag = result.unwrap_err();
+		assert!(
+			diag.message.contains("§") || diag.message.to_lowercase().contains("axis"),
+			"expected DidYouMean hint, got: {}",
+			diag.message
+		);
 	}
 }

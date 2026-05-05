@@ -41,6 +41,7 @@ impl NameLexer for PyNameLexer {
 	fn render(&self, n: &NamePayload) -> String {
 		match n {
 			NamePayload::Raw(s) => s.clone(),
+			NamePayload::Quoted(s) => s.clone(),
 		}
 	}
 
@@ -49,6 +50,7 @@ impl NameLexer for PyNameLexer {
 		// declaration kinds and compare to the requested name.
 		let target = match n {
 			NamePayload::Raw(s) => s.as_str(),
+			NamePayload::Quoted(_) => return false,
 		};
 		let leaf = target.rsplit('.').next().unwrap_or(target);
 		if matches!(

@@ -55,11 +55,15 @@ impl NameLexer for GoNameLexer {
 	fn render(&self, n: &NamePayload) -> String {
 		match n {
 			NamePayload::Raw(s) => s.clone(),
+			NamePayload::Quoted(s) => s.clone(),
 		}
 	}
 
 fn matches(&self, n: &NamePayload, node: Node<'_>, src: &str) -> bool {
-	let NamePayload::Raw(name) = n;
+	let name = match n {
+		NamePayload::Raw(s) => s,
+		NamePayload::Quoted(_) => return false,
+	};
 	let segments = match parse_name(name) {
 		Some(s) => s,
 		None => return false,

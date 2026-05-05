@@ -275,3 +275,36 @@ impl ContentValue for pi_code_path::types::Content {
 		}
 	}
 }
+
+fn resolve_quoted(src: &str, quoted: &str) -> Vec<pi_code_path::types::NodeRef> {
+	let dir = tempfile::tempdir().unwrap();
+	let path = dir.path().join("foo.ts");
+	std::fs::write(&path, src).unwrap();
+	let cp = parse_code_path(&format!("foo.ts::`{}`", quoted), &pi_code_path::dialects::typescript::TsNameLexer).unwrap();
+	let query = cp.query.unwrap();
+	resolver().resolve(&path, &query, None, &CancellationToken::new()).unwrap()
+}
+
+#[test]
+fn quoted_payload_matches_export_statement_by_normalized_text() {
+	let src = "export * from \"./json\";\nexport const x = 1;\n";
+	let nodes = resolve_quoted(src, "export * from \"./json\"");
+	assert_eq!(nodes.len(), 1);
+	assert_eq!(nodes[0].kind, "§export_statement");
+}
+
+#[test]
+fn quoted_payload_matches_with_whitespace_normalization() {
+	let src = "import   { Foo }   from \"./bar\";";
+	let nodes = resolve_quoted(src, "import { Foo } from \"./bar\"");
+	assert_eq!(nodes.len(), 1);
+}
+
+#[test]
+fn quoted_payload_no_match_returns_empty() {
+	let src = "const x = 1;";
+	let nodes = resolve_quoted(src, "export * from \"./other\"");
+	assert!(nodes.is_empty());
+}
+
+

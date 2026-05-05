@@ -147,6 +147,8 @@ pub enum Head {
 pub enum NamePayload {
 	/// Generic fallback: raw string.
 	Raw(String),
+	/// Backtick-quoted verbatim text (allows spaces and special chars).
+	Quoted(String),
 }
 
 // ── Predicate ─────────────────────────────────────────────────────

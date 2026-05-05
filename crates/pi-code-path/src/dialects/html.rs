@@ -89,6 +89,7 @@ impl NameLexer for HtmlNameLexer {
 	fn render(&self, n: &NamePayload) -> String {
 		match n {
 			NamePayload::Raw(s) => s.clone(),
+			NamePayload::Quoted(s) => s.clone(),
 		}
 	}
 
@@ -409,4 +410,3 @@ mod tests {
 		assert_eq!(d.qualifiers.len(), 5);
 	}
 }
-
