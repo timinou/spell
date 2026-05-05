@@ -117,8 +117,13 @@ pub trait FormatExtractor: Send + Sync {
 
 /// Applies mutations (edit actions) to a resolved target.
 pub trait MutationResolver: Send + Sync {
-	fn supports(&self, kind: ActionKind) -> bool {
-		let _ = kind;
+	/// Whether this resolver claims responsibility for `(path, kind)`.
+	///
+	/// FEAT-689: dispatchers MUST consult `path` (not just `kind`) so a
+	/// symbol-target Delete is not silently routed to FsResolver, which
+	/// would `remove_file` the entire host file.
+	fn supports(&self, path: &CodePath, kind: ActionKind) -> bool {
+		let _ = (path, kind);
 		false
 	}
 

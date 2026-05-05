@@ -702,6 +702,53 @@ fn action_content(action: &Value) -> std::result::Result<&str, CodeEngineError> 
 	required_str(action, "content").map_err(|error| CodeEngineError::Edit(error.to_string()))
 }
 
+/// FEAT-707: identifier shape check used by clone-with-rename.
+fn is_valid_identifier(s: &str) -> bool {
+	let mut chars = s.chars();
+	let Some(first) = chars.next() else {
+		return false;
+	};
+	if !(first.is_alphabetic() || first == '_' || first == '$') {
+		return false;
+	}
+	chars.all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+}
+
+/// FEAT-707: replace the first whole-word occurrence of `from` with `to`
+/// inside `text`. Used to rename the cloned declaration's identifier.
+fn rename_first_occurrence(text: &str, from: &str, to: &str) -> String {
+	if from.is_empty() {
+		return text.to_string();
+	}
+	let bytes = text.as_bytes();
+	let from_bytes = from.as_bytes();
+	let mut i = 0;
+	while i + from_bytes.len() <= bytes.len() {
+		if &bytes[i..i + from_bytes.len()] == from_bytes {
+			let before_ok = i == 0
+				|| {
+					let prev = bytes[i - 1] as char;
+					!(prev.is_alphanumeric() || prev == '_' || prev == '$')
+				};
+			let after_idx = i + from_bytes.len();
+			let after_ok = after_idx == bytes.len()
+				|| {
+					let next = bytes[after_idx] as char;
+					!(next.is_alphanumeric() || next == '_' || next == '$')
+				};
+			if before_ok && after_ok {
+				let mut out = String::with_capacity(text.len() - from.len() + to.len());
+				out.push_str(&text[..i]);
+				out.push_str(to);
+				out.push_str(&text[i + from.len()..]);
+				return out;
+			}
+		}
+		i += 1;
+	}
+	text.to_string()
+}
+
 fn action_find(action: &Value) -> std::result::Result<&str, CodeEngineError> {
 	required_str(action, "find").map_err(|error| CodeEngineError::Edit(error.to_string()))
 }
@@ -1017,10 +1064,31 @@ fn single_action(
 			proof:  None,
 			action: action_kind.to_string(),
 		},
-		"clone" => PreparedEditOperation {
-			edits:  clone_node(buffer, action_line(action, resolved.as_ref()), within)?,
-			proof:  None,
-			action: action_kind.to_string(),
+		"clone" => {
+			let mut edits = clone_node(buffer, action_line(action, resolved.as_ref()), within)?;
+			// FEAT-707: when `content` is provided, rename the identifier
+			// inside the cloned snippet so the agent gets two named
+			// declarations instead of `foo` + `foo` (and an immediate
+			// duplicate-binding error).
+			if let Some(new_name) = action.get("content").and_then(Value::as_str)
+				&& !new_name.is_empty()
+			{
+				if !is_valid_identifier(new_name) {
+					return Err(CodeEngineError::Edit(format!(
+						"clone content must be a valid identifier (got {new_name:?})"
+					)));
+				}
+				if let Some(orig_name) = resolved.as_ref().map(|r| r.name.clone()) {
+					for edit in &mut edits {
+						edit.new_text = rename_first_occurrence(&edit.new_text, &orig_name, new_name);
+					}
+				}
+			}
+			PreparedEditOperation {
+				edits,
+				proof:  None,
+				action: action_kind.to_string(),
+			}
 		},
 		"transpose" => PreparedEditOperation {
 			edits:  transpose_nodes(

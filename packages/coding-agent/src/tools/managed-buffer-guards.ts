@@ -76,7 +76,11 @@ function probesAsStructurallyValid(sourcePath: string, initialContent: string, n
  * real backstop. A `WRITE_PARSE_REGRESSION` gate can be added here once
  * pi-natives exposes a read-only parse command.
  */
-export function evaluateWriteGuards(absolutePath: string, newContent: string): WriteGuardResult | WriteGuardBlocked {
+export function evaluateWriteGuards(
+	absolutePath: string,
+	newContent: string,
+	options: { force?: boolean } = {},
+): WriteGuardResult | WriteGuardBlocked {
 	if (!isCodeToolSupportedPath(absolutePath)) {
 		return { ok: true };
 	}
@@ -97,13 +101,16 @@ export function evaluateWriteGuards(absolutePath: string, newContent: string): W
 
 	const newSize = Buffer.byteLength(newContent, "utf8");
 
-	if (oldSize >= SHRINK_GUARD_MIN_BYTES) {
+	// FEAT-703: `force:true` bypasses the size-shrink heuristic. Parse-
+	// regression check stays on regardless — force is for "I really mean
+	// to overwrite", not "ship a broken file".
+	if (oldSize >= SHRINK_GUARD_MIN_BYTES && !options.force) {
 		const floor = Math.max(SHRINK_GUARD_FLOOR_BYTES, Math.floor(oldSize * SHRINK_GUARD_RATIO));
 		if (newSize < floor) {
 			return {
 				ok: false,
 				code: "WRITE_SHRINK_BLOCKED",
-				detail: `write would shrink ${absolutePath} from ${oldSize} bytes to ${newSize} bytes (floor ${floor})`,
+				detail: `write would shrink ${absolutePath} from ${oldSize} bytes to ${newSize} bytes (floor ${floor}). Pass force:true to bypass.`,
 			};
 		}
 	}

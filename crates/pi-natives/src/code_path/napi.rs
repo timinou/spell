@@ -10,7 +10,7 @@ use std::{
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use pi_code_path::{
-	ast::{Action, Axis, CodePath, Head, Locator, MutationOutcome},
+	ast::{Action, ActionKind, Axis, CodePath, Head, Locator, MutationOutcome},
 	dialect::NameLexer,
 	dialects::{fs::FsResolver, text::TextResolver},
 	parser::parse_code_path,
@@ -82,7 +82,9 @@ pub struct CodePathChunk {
 #[napi(object)]
 pub struct CodePathOptions<'env> {
 	pub command:            String,
-	pub target:             String,
+	pub target:             Option<String>,
+	#[napi(ts_type = "\"best-effort\" | \"strict\"")]
+	pub transaction:        Option<String>,
 	pub limit:              Option<u32>,
 	pub head:               Option<u32>,
 	pub tail:               Option<u32>,
@@ -99,12 +101,82 @@ pub struct CodePathOptions<'env> {
 	pub artifact_threshold: Option<u32>,
 }
 
+// ── Transaction mode ─────────────────────────────────────────────
+
+/// Atomicity mode for multi-action edit chains.
+///
+/// `BestEffort` (default): apply ops sequentially, abort on first failure,
+/// keep prior writes on disk. Matches pre-FEAT-712 behaviour.
+///
+/// `Strict`: snapshot every target file before the loop. On any failure,
+/// restore the snapshots before returning the diagnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionMode {
+	BestEffort,
+	Strict,
+}
+
+impl TransactionMode {
+	pub fn from_str(s: &str) -> Option<Self> {
+		match s {
+			"best-effort" | "bestEffort" | "best_effort" => Some(Self::BestEffort),
+			"strict" => Some(Self::Strict),
+			_ => None,
+		}
+	}
+}
+
+
+/// FEAT-712: snapshot of a target file's pre-edit bytes (or `None` if
+/// the file did not exist). Stored once per unique path so a multi-op
+/// chain that touches the same file twice doesn't double-snapshot.
+pub struct FileSnapshot {
+	pub path:  std::path::PathBuf,
+	pub prior: Option<Vec<u8>>,
+}
+
+/// FEAT-712: walk the action list and the resolved CodePath, collect
+/// the absolute path of every file that could be mutated, snapshot
+/// the current bytes (or mark "didn't exist"). Best-effort:
+/// unresolvable paths are skipped silently — the loop will surface
+/// them as runtime diagnostics.
+pub fn snapshot_targets(
+	actions: &[Action],
+	cp: &CodePath,
+	root: &std::path::Path,
+) -> Vec<FileSnapshot> {
+	let _ = actions;
+	let mut paths: Vec<std::path::PathBuf> = Vec::new();
+	if let Locator::Fs(fs) = &cp.locator {
+		let mut p = root.to_path_buf();
+		for seg in &fs.segments {
+			if let pi_code_path::ast::FsSegment::Literal(s) = seg {
+				if s == "/" {
+					continue;
+				}
+				p.push(s);
+			}
+		}
+		paths.push(p);
+	}
+	paths.sort();
+	paths.dedup();
+	paths
+		.into_iter()
+		.map(|path| {
+			let prior = std::fs::read(&path).ok();
+			FileSnapshot { path, prior }
+		})
+		.collect()
+}
+
 // ── Task options (owned, Send) ───────────────────────────────────
 
 #[allow(dead_code)]
 pub struct CodePathTaskOptions {
 	pub command:            String,
 	pub target:             String,
+	pub transaction:        Option<TransactionMode>,
 	pub limit:              Option<u32>,
 	pub head:               Option<u32>,
 	pub tail:               Option<u32>,
@@ -120,7 +192,8 @@ impl From<CodePathOptions<'_>> for CodePathTaskOptions {
 	fn from(value: CodePathOptions<'_>) -> Self {
 		Self {
 			command:            value.command,
-			target:             value.target,
+			target:             value.target.unwrap_or_default(),
+			transaction:        value.transaction.as_deref().and_then(TransactionMode::from_str),
 			limit:              value.limit,
 			head:               value.head,
 			tail:               value.tail,
@@ -248,6 +321,42 @@ pub fn execute_code_path_inner(
 	opts: CodePathTaskOptions,
 	cancel_token: CancelToken,
 ) -> Result<Vec<CodePathChunk>> {
+	// FEAT-704: `command:"manage"` short-circuits the CodePath parser.
+	// Manage subcommands operate on workspace/buffer state, not on a
+	// resolvable CodePath query. Pre-FEAT-704 this hit `parse_code_path`
+	// with empty target and returned "parse failed at position 0".
+	if opts.command == "manage" {
+		let _ = &cancel_token;
+		let root = opts
+			.root
+			.as_deref()
+			.map(std::path::PathBuf::from)
+			.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+		let target = opts.target.clone();
+		let manage = opts.manage.as_deref().unwrap_or("");
+		let outcome = match manage {
+			"" => Err(super::manage::handle_missing()),
+			"languages" => super::manage::handle_languages(),
+			"buffers" => super::manage::handle_buffers(),
+			"save" => super::manage::handle_save(&target, &root),
+			"undo" => super::manage::handle_undo(&target, &root),
+			"redo" => super::manage::handle_redo(&target, &root),
+			"diff" => super::manage::handle_diff(&target, &root),
+			"watcherStatus" | "watcher_status" => super::manage::handle_watcher_status(),
+			"lockStatus" | "lock_status" => super::manage::handle_lock_status(&target, &root),
+			"status" => super::manage::handle_status(
+				if target.is_empty() { None } else { Some(target.as_str()) },
+				&root,
+			),
+			"index" => super::manage::handle_index(&root),
+			other => Err(super::manage::handle_unknown(other)),
+		};
+		let chunk = match outcome {
+			Ok(node) => CodePathChunk { nodes: vec![node], diagnostics: Vec::new(), done: true },
+			Err(d) => CodePathChunk { nodes: Vec::new(), diagnostics: vec![d], done: true },
+		};
+		return Ok(vec![chunk]);
+	}
 	let (lexer, parse_diagnostics) = select_lexer(&opts.target);
 	let mut cp = parse_code_path(&opts.target, &lexer).map_err(|d| Error::from_reason(d.message))?;
 
@@ -291,24 +400,76 @@ pub fn execute_code_path_inner(
 		let fs_resolver = FsResolver::new(root.clone());
 		let extractors = default_extractors();
 		let text_resolver = TextResolver::new(root.clone()).with_extractors(extractors);
-		let code_resolver = code_resolver::new().map_err(|d| Error::from_reason(d.message))?;
+		let code_resolver = code_resolver::new()
+			.map_err(|d| Error::from_reason(d.message))?
+			.with_root(root.clone());
+
+		// FEAT-712: when transaction:"strict", snapshot every target
+		// file before the loop. On any failure, restore the snapshots
+		// before returning the diagnostic. Default `BestEffort` keeps
+		// the pre-FEAT-712 behaviour: prior writes stay on disk.
+		let strict_mode = opts.transaction == Some(TransactionMode::Strict);
+		let snapshots: Vec<FileSnapshot> = if strict_mode {
+			snapshot_targets(&actions, &cp, &root)
+		} else {
+			Vec::new()
+		};
+		let restore_strict = |snaps: &[FileSnapshot]| -> usize {
+			let mut restored = 0_usize;
+			for snap in snaps {
+				match &snap.prior {
+					Some(bytes) => {
+						if std::fs::write(&snap.path, bytes).is_ok() {
+							restored += 1;
+						}
+					},
+					None => {
+						let _ = std::fs::remove_file(&snap.path);
+						restored += 1;
+					},
+				}
+			}
+			restored
+		};
 
 		let mut outcomes: Vec<MutationOutcome> = Vec::new();
 		for action in &actions {
-			let resolver: &dyn MutationResolver = if fs_resolver.supports(action.kind()) {
+			let resolver: &dyn MutationResolver = if fs_resolver.supports(&cp, action.kind()) {
 				&fs_resolver
-			} else if text_resolver.supports(action.kind()) {
+			} else if text_resolver.supports(&cp, action.kind()) {
 				&text_resolver
-			} else if code_resolver.supports(action.kind()) {
+			} else if code_resolver.supports(&cp, action.kind()) {
 				&code_resolver
 			} else {
+				// FEAT-712: rollback prior writes if strict mode.
+				let rolled = if strict_mode { restore_strict(&snapshots) } else { 0 };
+				// FEAT-689: distinguish the "would have nuked the file"
+				// case so the agent can self-correct.
+				let (variant, message) = if matches!(action.kind(), ActionKind::Delete)
+					&& matches!(cp.locator, Locator::Fs(_))
+					&& cp.query.is_some()
+				{
+					(
+						"symbol_delete_without_resolver".to_string(),
+						format!(
+							"Delete on symbol target {:?} not supported by any resolver. 							 Routing to FsResolver was rejected to prevent host-file deletion. 							 Use a code-resolver-backed declaration target.",
+							render_code_path(&cp, &DotLexer)
+						),
+					)
+				} else {
+					(
+						"unsupported_action_for_resolver".to_string(),
+						format!("no resolver supports action {:?}", action.kind()),
+					)
+				};
+				let final_message = if strict_mode {
+					format!("{message} (rolled back {rolled} file(s))")
+				} else {
+					message
+				};
 				return Ok(vec![CodePathChunk {
 					nodes:       outcomes.into_iter().map(mutation_outcome_to_dto).collect(),
-					diagnostics: vec![DiagnosticDto {
-						variant: "unsupported_action_for_resolver".to_string(),
-						message: format!("no resolver supports action {:?}", action.kind()),
-						span:    None,
-					}],
+					diagnostics: vec![DiagnosticDto { variant, message: final_message, span: None }],
 					done:        true,
 				}]);
 			};
@@ -316,9 +477,14 @@ pub fn execute_code_path_inner(
 			match resolver.apply(&cp, action, &pi_token) {
 				Ok(outcome) => outcomes.push(outcome),
 				Err(d) => {
+					let mut diag = diagnostic_to_dto(d);
+					if strict_mode {
+						let rolled = restore_strict(&snapshots);
+						diag.message = format!("{} (rolled back {rolled} file(s))", diag.message);
+					}
 					return Ok(vec![CodePathChunk {
 						nodes:       outcomes.into_iter().map(mutation_outcome_to_dto).collect(),
-						diagnostics: vec![diagnostic_to_dto(d)],
+						diagnostics: vec![diag],
 						done:        true,
 					}]);
 				},
@@ -346,7 +512,18 @@ pub fn execute_code_path_inner(
 	// ── Query path (default) ─────────────────────────────────────
 	let nodes = match &cp.locator {
 		Locator::Fs(_) => {
-			if is_pure_text_query(&cp) {
+			if is_text_qualifier_only(&cp) {
+				// FEAT-689 / B2,B10: bare-file + content qualifier (#raw,
+				// #bytes, #lines, #text, #match, #image) routes to the
+				// TextResolver, not the FsResolver. Without this branch
+				// the FsResolver claims the path and emits "unknown
+				// qualifier" because it only knows listing/tree/stat.
+				let extractors = default_extractors();
+				let resolver = TextResolver::new(root.clone()).with_extractors(extractors);
+				resolver
+					.resolve(&cp, &pi_token)
+					.map_err(|d| Error::from_reason(d.message))?
+			} else if is_pure_text_query(&cp) {
 				let extractors = default_extractors();
 				let resolver = TextResolver::new(root).with_extractors(extractors);
 				resolver
@@ -468,6 +645,20 @@ fn is_pure_text_query(cp: &CodePath) -> bool {
 	matches!(head_kind, "line" | "para" | "chunk") && query.head.axis == Some(Axis::Structural)
 }
 
+/// FEAT-689: a CodePath with no query and a content-class qualifier
+/// (raw/bytes/lines/text/match/image) is a TextResolver target, not an
+/// FsResolver one. The FsResolver only understands listing/tree/stat
+/// qualifiers, so without this routing predicate a bare `get("a.ts")`
+/// (auto-qualified to `a.ts#raw`) errors out as "unknown qualifier: raw".
+fn is_text_qualifier_only(cp: &CodePath) -> bool {
+	if cp.query.is_some() {
+		return false;
+	}
+	cp.qualifier.as_ref().is_some_and(|q| {
+		matches!(q.name.as_str(), "raw" | "bytes" | "lines" | "text" | "match" | "image")
+	})
+}
+
 fn is_symbol_query(cp: &CodePath) -> bool {
 	cp.query.is_some() && !is_pure_text_query(cp)
 }
@@ -496,8 +687,9 @@ mod tests {
 	use super::*;
 	fn opts(target: impl Into<String>) -> CodePathTaskOptions {
 		CodePathTaskOptions {
-			command:            "resolve".to_string(),
-			target:             target.into(),
+			command: "resolve".to_string(),
+			target: target.into(),
+			transaction: None,
 			limit:              None,
 			head:               None,
 			tail:               None,
@@ -511,8 +703,9 @@ mod tests {
 	}
 	fn opts_with_root(target: impl Into<String>, root: PathBuf) -> CodePathTaskOptions {
 		CodePathTaskOptions {
-			command:            "resolve".to_string(),
-			target:             target.into(),
+			command: "resolve".to_string(),
+			target: target.into(),
+			transaction: None,
 			limit:              None,
 			head:               None,
 			tail:               None,
@@ -532,6 +725,7 @@ mod tests {
 		CodePathTaskOptions {
 			command: "edit".to_string(),
 			target: target.into(),
+			transaction: None,
 			limit: None,
 			head: None,
 			tail: None,
@@ -587,8 +781,8 @@ mod tests {
 		.unwrap();
 		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
 		assert_eq!(nodes.len(), 2);
-		assert!(nodes[0].locator.contains("<line 2>"));
-		assert!(nodes[1].locator.contains("<line 3>"));
+		assert!(nodes[0].locator.contains("<line 2#"));
+		assert!(nodes[1].locator.contains("<line 3#"));
 	}
 	#[test]
 	fn regex_grep_over_glob() {
@@ -606,17 +800,17 @@ mod tests {
 		assert!(
 			nodes
 				.iter()
-				.any(|n| n.locator.contains("a.txt") && n.locator.contains("<line 2>"))
+				.any(|n| n.locator.contains("a.txt") && n.locator.contains("<line 2#"))
 		);
 		assert!(
 			nodes
 				.iter()
-				.any(|n| n.locator.contains("a.txt") && n.locator.contains("<line 3>"))
+				.any(|n| n.locator.contains("a.txt") && n.locator.contains("<line 3#"))
 		);
 		assert!(
 			nodes
 				.iter()
-				.any(|n| n.locator.contains("b.txt") && n.locator.contains("<line 2>"))
+				.any(|n| n.locator.contains("b.txt") && n.locator.contains("<line 2#"))
 		);
 	}
 	#[test]

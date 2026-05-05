@@ -362,14 +362,19 @@ describe("GetTool", () => {
 			}
 		});
 
-		// T1.9: bare path that does not exist → unchanged
-		it("passes non-existent paths through unchanged", async () => {
+		// T1.9: FEAT-711 — non-existent bare path returns PATH_NOT_FOUND
+		// at the TS layer (no kernel call) so the agent gets an
+		// actionable error instead of generic "Inaccessible: ENOENT".
+		it("returns PATH_NOT_FOUND for non-existent paths without invoking kernel", async () => {
 			const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 				makeChunk([{ locator: "nonexistent", kind: "file" }]),
 			]);
 			const tool = new GetTool();
-			await tool.execute("t", { target: "nonexistent/path" });
-			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: "nonexistent/path" }));
+			const result = await tool.execute("t", { target: "./nonexistent/path" });
+			expect(spy).not.toHaveBeenCalled();
+			const text = result.content.find(c => c.type === "text")?.text ?? "";
+			expect(text).toContain("PATH_NOT_FOUND");
+			expect(text).toContain("./nonexistent/path");
 		});
 
 		// T1.10: already-qualified target → unchanged

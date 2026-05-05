@@ -362,6 +362,10 @@ pub enum Action {
 	Clone {
 		#[serde(default)]
 		direction: Option<Direction>,
+		#[serde(default)]
+		line:      Option<u32>,
+		#[serde(default)]
+		content:   Option<ActionContent>,
 	},
 	Transpose {
 		#[serde(default)]
@@ -599,7 +603,7 @@ mod tests {
 			},
 			Action::Splice { mode: None },
 			Action::Move { direction: Direction::Up },
-			Action::Clone { direction: None },
+			Action::Clone { direction: None, line: None, content: None },
 			Action::Transpose { line: None, column: None },
 			Action::RenameClassToken { find: "".into(), content: "".into() },
 			Action::RenameIdToken { find: "".into(), content: "".into() },

@@ -1,0 +1,93 @@
+#+TITLE: edit transaction strict mode — atomic snapshot/restore on multi-op failure (B15)
+#+STATE: ITEM
+#+SESSION_ID: 14d47a7632d063d9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
+#+CUSTOM_ID: FEAT-712-edit-transaction-strict-mode-atomic-snap
+#+LAYER: core
+
+* Intention & Purpose
+Give callers an opt-in atomic mode: when any op in a multi-op edit fails, all prior file mutations are rolled back. Default behavior (best-effort, first-failure-abort) is preserved — strict mode is opt-in via `transaction:"strict"` field on CodePathOptions.
+
+* Context & Narrative
+`crates/pi-natives/src/code_path/napi.rs:296-326` applies edit actions sequentially. On failure, prior outcomes are returned but prior file writes remain on disk. Test `edit_first_failure_aborts_rest` (line 882) codifies this as intentional. Make atomic mode opt-in.
+
+Snapshot strategy: before applying any op, scan action list to enumerate target files; for each, read into Vec<u8> snapshot keyed by absolute path (and noting "didn't exist" for create-target paths). On failure: restore each touched file (or remove if it didn't exist before).
+
+* Scope
+In-scope:
+- `crates/pi-code-path/src/types.rs` — `transaction: Option<TransactionMode>` on `CodePathOptions`
+- `crates/pi-natives/src/code_path/napi.rs` — strict-mode snapshot/restore around action loop
+- `packages/natives/src/code-path/types.ts` — `transaction?: "best-effort" | "strict"` field
+- `crates/pi-natives/src/code_path/napi_tests.rs` — strict-mode rollback tests
+- `specs/code-graph/code-path-extensions.md` §14
+Out-of-scope:
+- Cross-process atomicity
+- Distributed transactions
+- Buffer (in-memory) atomicity beyond fs (managed buffers already have undo stack)
+
+* Existing Patterns (MUST use)
+- `CodePathOptions` field-add pattern from FEAT-684 (`artifact_threshold`)
+- Action target extraction via `resolve_target_path` (FsResolver) or symbol target (file from CodePath.locator)
+- File snapshot: `std::fs::read` to Vec<u8>; restore via `std::fs::write`; create-rollback via `std::fs::remove_file`
+
+* Tests
+File: `crates/pi-natives/src/code_path/napi.rs` (extend tests)
+Scenarios:
+1. `transaction_strict_rolls_back_on_later_failure` — first creates `a.txt`; second fails; after: `a.txt` does NOT exist
+2. `transaction_strict_succeeds_when_all_ops_succeed`
+3. `transaction_strict_restores_modified_file` — pre-existing `a.txt` "v1"; first op replaces with "v2"; second fails; after: `a.txt` contains "v1"
+4. `transaction_best_effort_default_unchanged`
+5. `transaction_strict_handles_create_then_delete_chain` — create+delete+fail → file doesn't exist (matches initial)
+6. `transaction_strict_diagnostic_mentions_rollback`
+
+* Implementation
+** ITEM Add TransactionMode enum and CodePathOptions field
+:PROPERTIES:
+:CUSTOM_ID: FEAT-712-edit-transaction-strict-mode-atomic-snap::types
+:END:
+- File: `crates/pi-code-path/src/types.rs`
+- `pub enum TransactionMode { BestEffort, Strict }` with serde rename `"best-effort"|"strict"`
+- `CodePathOptions::transaction: Option<TransactionMode>` defaults None (best-effort)
+- File: `packages/natives/src/code-path/types.ts`
+
+** ITEM Tests for strict-mode rollback
+:PROPERTIES:
+:CUSTOM_ID: FEAT-712-edit-transaction-strict-mode-atomic-snap::tests
+:DEPENDS: FEAT-712-edit-transaction-strict-mode-atomic-snap::types
+:END:
+- File: `crates/pi-natives/src/code_path/napi.rs` test module
+- Scenarios 1-6; initially fail (no rollback impl)
+
+** ITEM Implement snapshot/restore wrapper
+:PROPERTIES:
+:CUSTOM_ID: FEAT-712-edit-transaction-strict-mode-atomic-snap::snapshot
+:DEPENDS: FEAT-712-edit-transaction-strict-mode-atomic-snap::tests
+:END:
+- File: `crates/pi-natives/src/code_path/napi.rs`
+- New `struct FileSnapshot { path: PathBuf, prior: Option<Vec<u8>> }` (None = didn't exist)
+- Helper `fn snapshot_targets(actions: &[Action], cp: &CodePath, root: &Path) -> Vec<FileSnapshot>`
+- In edit branch: when `opts.transaction == Some(Strict)`, snapshot before loop; on Err, restore (write prior bytes, or remove if None) before returning diagnostic; on Ok, drop snapshots
+- Diagnostic on rollback includes "rolled back {N} file(s)"
+
+** ITEM Update spec
+:PROPERTIES:
+:CUSTOM_ID: FEAT-712-edit-transaction-strict-mode-atomic-snap::spec
+:LAYER: api
+:DEPENDS: FEAT-712-edit-transaction-strict-mode-atomic-snap::snapshot
+:END:
+- File: `specs/code-graph/code-path-extensions.md` §14
+- Document: best-effort default; strict semantics; what's NOT atomic; recommended for create-chains and rename-cascades
+
+* Edge Cases
+- Snapshot fails (file too large): fall back to best-effort with diagnostic warning
+- Restore fails (disk full, permission revoked): catastrophic; emit FATAL diagnostic listing what was lost
+- Strict + already-failing first op: no snapshots to restore (no-op)
+- Same file targeted by multiple ops: one snapshot per file (deduplicated)
+- Symbol-target ops don't need snapshot beyond host file
+
+* Acceptance Criteria
+- 6 tests pass
+- Manual: edit chain with `transaction:"strict"` rolls back on intentional failure mid-chain
+- Existing `edit_first_failure_aborts_rest` test still passes (best-effort path unchanged)
+- `cargo test -p pi-natives --tests` clean
+- `bun run --parallel check:ts` clean

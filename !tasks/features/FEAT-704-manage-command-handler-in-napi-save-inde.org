@@ -1,0 +1,115 @@
+#+TITLE: manage command handler in NAPI — save/index/languages/buffers/undo/redo/status (B6)
+#+STATE: ITEM
+#+SESSION_ID: 14d47a7632d063d9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
+#+CUSTOM_ID: FEAT-704-manage-command-handler-in-napi-save-inde
+#+LAYER: core
+
+* Intention & Purpose
+Make `manage save`, `manage index`, `manage languages`, `manage buffers`, `manage undo`, `manage redo`, `manage status`, `manage watcherStatus`, `manage lockStatus` work. Currently all return "parse failed at position 0" because `execute_code_path_inner` parses the (empty) target unconditionally — no `command:"manage"` branch exists.
+
+* Context & Narrative
+`crates/pi-natives/src/code_path/napi.rs:247-344 execute_code_path_inner` has a `command:"edit"` branch (FEAT-686) and a default query path. NO `command:"manage"` branch. `manage.ts` calls `executeCodePath({command:"manage", manage:params.command, target: params.file ?? ""})` — empty target hits `parse_code_path` at `crates/pi-code-path/src/parser.rs:53-59` which returns "parse failed at position 0".
+
+Manage subcommands are mostly workspace-level (no CodePath target needed): save flushes dirty buffers; index triggers code-graph indexing; languages lists registered language profiles; buffers lists open managed buffers; undo/redo replay buffer history; status reports session state; watcherStatus/lockStatus report broker state. `diff` takes a target.
+
+* Scope
+In-scope:
+- `crates/pi-natives/src/code_path/napi.rs` — `command:"manage"` branch BEFORE target parsing
+- `crates/pi-code-path/src/types.rs` — `target` optional when `command:"manage"`
+- `crates/pi-natives/src/code_path/manage.rs` (new) — handlers per subcommand
+- `packages/natives/src/code-path/types.ts` — `manage?:string` field
+- `crates/pi-natives/src/code_path/manage_tests.rs` (new)
+Out-of-scope:
+- New manage subcommands beyond current set
+- Changing manage.ts public API
+- Diff rendering (FEAT-710)
+
+* Existing Patterns (MUST use)
+- `executeCodeBuffer` legacy NAPI exposes underlying operations
+- `crates/pi-natives/src/buffer_registry.rs` — buffer list/save
+- `crates/pi-code-engine/src/language/mod.rs::LanguageRegistry::with_builtins` — languages enumeration
+- `crates/pi-natives/src/code_graph_index.rs` — index trigger
+- `crates/pi-natives/src/edit_broker/` — watcher and lock state
+- DTO output: NodeRefDto with kind `§manage-result`, metadata `{subcommand, payload}`
+
+* Tests
+File: `crates/pi-natives/src/code_path/manage_tests.rs` (new)
+Scenarios:
+1. `manage_languages_returns_registered_profiles`
+2. `manage_buffers_returns_open_buffer_list`
+3. `manage_save_flushes_dirty_buffers`
+4. `manage_index_triggers_indexing`
+5. `manage_status_returns_session_summary`
+6. `manage_watcherStatus_returns_broker_state`
+7. `manage_lockStatus_returns_lock_table`
+8. `manage_undo_redo_round_trip`
+9. `manage_with_empty_target_does_not_parse_codepath`
+10. `manage_unknown_subcommand_returns_diagnostic`
+
+File: `packages/coding-agent/test/manage.test.ts`
+Scenarios:
+11. `manage_languages_e2e_through_tool_layer`
+12. `manage_save_e2e`
+
+* Implementation
+** ITEM Make target optional in CodePathTaskOptions for manage
+:PROPERTIES:
+:CUSTOM_ID: FEAT-704-manage-command-handler-in-napi-save-inde::types
+:END:
+- File: `crates/pi-code-path/src/types.rs`
+- `CodePathTaskOptions::target: Option<String>`; default empty when command="manage"
+- File: `packages/natives/src/code-path/types.ts` — `target?:string` optional with `manage` field
+
+** ITEM Add tests for each manage subcommand
+:PROPERTIES:
+:CUSTOM_ID: FEAT-704-manage-command-handler-in-napi-save-inde::tests
+:DEPENDS: FEAT-704-manage-command-handler-in-napi-save-inde::types
+:END:
+- File: `crates/pi-natives/src/code_path/manage_tests.rs` (new); `mod manage_tests;` in `mod.rs`
+- Scenarios 1-10
+- Tests fail (no manage branch)
+
+** ITEM Implement manage subcommand handlers
+:PROPERTIES:
+:CUSTOM_ID: FEAT-704-manage-command-handler-in-napi-save-inde::handlers
+:DEPENDS: FEAT-704-manage-command-handler-in-napi-save-inde::tests
+:END:
+- File: `crates/pi-natives/src/code_path/manage.rs` (new)
+- One handler fn per subcommand (`handle_save`, `handle_index`, `handle_languages`, `handle_buffers`, `handle_undo`, `handle_redo`, `handle_status`, `handle_watcher_status`, `handle_lock_status`, `handle_diff`)
+- Each delegates to existing buffer_registry/indexer/etc. APIs
+- Returns `Vec<NodeRefDto>` with `kind: "§manage-result"`, `metadata: {subcommand, ...}`
+
+** ITEM Wire manage branch in execute_code_path_inner
+:PROPERTIES:
+:CUSTOM_ID: FEAT-704-manage-command-handler-in-napi-save-inde::wire
+:DEPENDS: FEAT-704-manage-command-handler-in-napi-save-inde::handlers
+:END:
+- File: `crates/pi-natives/src/code_path/napi.rs`
+- Before `parse_code_path` (line ~252): `if opts.command == Some("manage")` → dispatch by `opts.manage`
+- Unknown manage subcommand → Diagnostic UnsupportedOperation
+- Tests pass
+
+** ITEM Extend manage.ts e2e coverage
+:PROPERTIES:
+:CUSTOM_ID: FEAT-704-manage-command-handler-in-napi-save-inde::ts-tests
+:LAYER: api
+:DEPENDS: FEAT-704-manage-command-handler-in-napi-save-inde::wire
+:END:
+- File: `packages/coding-agent/test/manage.test.ts`
+- Scenarios 11-12
+- Mock executeCodePath returning manage-result nodes; assert tool formats them as text
+
+* Edge Cases
+- Empty manage subcommand: Diagnostic listing valid subcommands
+- `manage diff` without target: Diagnostic "manage diff requires file target"
+- Index already in progress: return current progress, not error
+- Undo with empty history: Diagnostic "no undo available"
+- Cancellation token: handlers check pi_token periodically
+
+* Acceptance Criteria
+- 12 tests pass
+- Manual: `manage save`, `manage languages`, `manage buffers` all return non-error responses
+- `cargo test -p pi-natives --tests manage_tests` 10/10
+- `cargo test -p pi-natives --tests` clean
+- `bun test packages/coding-agent/test/manage.test.ts` clean

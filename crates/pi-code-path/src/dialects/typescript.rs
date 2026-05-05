@@ -63,11 +63,82 @@ impl NameLexer for TsNameLexer {
         }
     }
 
-    fn matches(&self, n: &NamePayload, _node: tree_sitter::Node<'_>, _src: &str) -> bool {
-        // Matching against tree-sitter nodes requires LanguageProfile and NameExtractor
-        // application. Stub for now: returns true if the rendered name matches.
-        // Full implementation needs the profile passed in (planned follow-up).
-        let _ = n;
+    fn matches(&self, n: &NamePayload, node: tree_sitter::Node<'_>, src: &str) -> bool {
+        // FEAT-708: extract the declared name from common TS/TSX
+        // declaration kinds and compare to the requested name. The
+        // walker's existing fallbacks (name-field text match) cover
+        // function/class declarations; this lexer extends coverage to
+        // interfaces, type aliases, enums, namespaces, method
+        // definitions, and variable declarators bound to functions.
+        let target = match n {
+            NamePayload::Raw(s) => s.as_str(),
+        };
+        // Strip dotted suffixes — the walker handles dotted paths via
+        // multiple steps. Here we only validate the leaf segment.
+        let leaf = target.rsplit('.').next().unwrap_or(target);
+        let leaf = leaf.trim_start_matches('#');
+
+        // Direct `name` field on a known declaration kind.
+        if matches!(
+            node.kind(),
+            "function_declaration"
+                | "function_signature"
+                | "class_declaration"
+                | "interface_declaration"
+                | "type_alias_declaration"
+                | "enum_declaration"
+                | "internal_module"
+                | "module"
+                | "method_definition"
+                | "method_signature"
+                | "abstract_method_signature"
+                | "abstract_class_declaration"
+                | "public_field_definition"
+                | "property_signature"
+                | "namespace_export"
+        ) {
+            if let Some(name_child) = node.child_by_field_name("name")
+                && let Some(text) = src.get(name_child.start_byte()..name_child.end_byte())
+            {
+                return text.trim_start_matches('#') == leaf;
+            }
+        }
+
+        // `variable_declarator` whose name binds a function expression
+        // or arrow expression — common React-component / hook pattern.
+        if node.kind() == "variable_declarator"
+            && let Some(name_child) = node.child_by_field_name("name")
+            && let Some(text) = src.get(name_child.start_byte()..name_child.end_byte())
+        {
+            return text == leaf;
+        }
+
+        // `lexical_declaration` / `variable_declaration` wrapping a
+        // single declarator (the walker often hands us the wrapper).
+        if matches!(node.kind(), "lexical_declaration" | "variable_declaration") {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "variable_declarator"
+                    && let Some(name_child) = child.child_by_field_name("name")
+                    && let Some(text) = src.get(name_child.start_byte()..name_child.end_byte())
+                    && text == leaf
+                {
+                    return true;
+                }
+            }
+        }
+
+        // `export_statement` wrapping a recognized declaration —
+        // delegate via the unwrap pattern.
+        if node.kind() == "export_statement" {
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() != "export_statement" && self.matches(n, child, src) {
+                    return true;
+                }
+            }
+        }
+
         false
     }
 }

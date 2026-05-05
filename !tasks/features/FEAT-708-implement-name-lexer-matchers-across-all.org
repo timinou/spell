@@ -1,0 +1,106 @@
+#+TITLE: Implement Name lexer matchers across all dialects — TS interface lookup + class/struct fallbacks (B11)
+#+STATE: ITEM
+#+SESSION_ID: 14d47a7632d063d9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
+#+CUSTOM_ID: FEAT-708-implement-name-lexer-matchers-across-all
+#+LAYER: core
+
+* Intention & Purpose
+Make `target:"file.ts::DemoConfig"` resolve to a TypeScript interface (and similarly for all dialects with stubbed name lexers). Currently `TsNameLexer.matches()` is a stub returning false; interfaces have no fallback path.
+
+* Context & Narrative
+`crates/pi-code-path/src/dialects/typescript.rs:66-72 TsNameLexer.matches()` returns false unconditionally. Walker `crates/pi-natives/src/code_path/code_resolver/walker.rs:241-275 head_matches` calls `dialect.name_lexer.matches()` first; on false, walks fallbacks (field name, text match) which work for some node kinds (function_declaration) but not others (interface_declaration, type_alias_declaration).
+
+Each dialect's `NameLexer::matches()` consults the per-language `NameExtractor` (registered in `crates/pi-code-engine/src/language/mod.rs::with_builtins`) to extract the declared name from the node and compare to the requested name.
+
+* Scope
+In-scope:
+- `crates/pi-code-path/src/dialect.rs` — `NameLexer` trait gains `LanguageProfile` reference (or wraps with NameExtractor)
+- `crates/pi-code-path/src/dialects/{rust,typescript,python,go,haskell,html,css,mdorg}.rs` — real `matches()` impls
+- `crates/pi-natives/src/code_path/code_resolver/walker.rs` — pass profile into name_lexer call
+- Tests across pi-natives qualifier_tests for each dialect
+Out-of-scope:
+- New declaration kinds beyond current LanguageProfile
+- Cross-language symbols
+- Symbol overloads disambiguation
+
+* Existing Patterns (MUST use)
+- `crates/pi-code-engine/src/language/mod.rs::LanguageProfile::name_extractor` extracts names per node kind
+- `with_builtins` lists `interface_declaration`, `type_alias_declaration`, `function_declaration`, `class_declaration`, etc.
+- Each dialect already has a `NameLexer` impl block
+
+* Tests
+File: `crates/pi-natives/src/code_path/code_resolver/ts_qualifier_tests.rs` (extend)
+Scenarios:
+1. `ts_interface_lookup_resolves` — `interface DemoConfig {...}` → resolves
+2. `ts_type_alias_lookup_resolves`
+3. `ts_class_lookup_resolves`
+4. `ts_function_lookup_still_works` — regression
+5. `ts_method_via_dot_path_resolves`
+
+File: `crates/pi-natives/src/code_path/code_resolver/py_qualifier_tests.rs` (extend)
+Scenarios:
+6. `py_class_lookup_resolves`
+7. `py_function_lookup_resolves` — regression
+
+Similar extensions for go (struct/interface), haskell (data/class), css (custom selectors)
+Scenarios 8-11
+
+* Implementation
+** ITEM Tests for interface/type/class/struct lookups across dialects
+:PROPERTIES:
+:CUSTOM_ID: FEAT-708-implement-name-lexer-matchers-across-all::tests
+:END:
+- Add scenarios 1-11 across qualifier_tests files
+- Initially fail with "Symbol not found"
+
+** ITEM Plumb LanguageProfile to NameLexer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-708-implement-name-lexer-matchers-across-all::plumb
+:DEPENDS: FEAT-708-implement-name-lexer-matchers-across-all::tests
+:END:
+- File: `crates/pi-code-path/src/dialect.rs`
+- NameLexer trait gains `&NameLexerContext` arg carrying `&LanguageProfile`
+- Walker passes context through
+
+** ITEM Implement TsNameLexer.matches via NameExtractor
+:PROPERTIES:
+:CUSTOM_ID: FEAT-708-implement-name-lexer-matchers-across-all::ts-impl
+:DEPENDS: FEAT-708-implement-name-lexer-matchers-across-all::plumb
+:END:
+- File: `crates/pi-code-path/src/dialects/typescript.rs`
+- `matches(payload, node, src, ctx)`: if node kind is in profile's declaration set, run NameExtractor; compare extracted name to `payload.name`
+- Handle interface_declaration, type_alias_declaration, class_declaration, function_declaration, method_definition, variable_declarator
+- Tests 1-5 pass
+
+** ITEM Implement Name lexers for remaining dialects
+:PROPERTIES:
+:CUSTOM_ID: FEAT-708-implement-name-lexer-matchers-across-all::other-impls
+:DEPENDS: FEAT-708-implement-name-lexer-matchers-across-all::ts-impl
+:END:
+- Files: `crates/pi-code-path/src/dialects/{python,rust,go,haskell,css,mdorg}.rs`
+- Same pattern per dialect
+- Tests 6-11 pass
+
+** ITEM HTML name lexer (low priority)
+:PROPERTIES:
+:CUSTOM_ID: FEAT-708-implement-name-lexer-matchers-across-all::html-impl
+:DEPENDS: FEAT-708-implement-name-lexer-matchers-across-all::other-impls
+:END:
+- File: `crates/pi-code-path/src/dialects/html.rs`
+- HTML "name" = element id attr or class
+- Add test: `target:"f.html::myDiv"` resolves to element id="myDiv"
+
+* Edge Cases
+- Profile doesn't list a declaration kind: lexer returns false → fallback to text match (existing)
+- Symbol with same name as a built-in: walker returns first match in document order
+- Anonymous declarations: no name; existing behavior
+- Generics: `Foo<T>` matches on `Foo` (existing NameExtractor)
+- Mangled names with dots (`a.b.c`): walker handles via step chain
+
+* Acceptance Criteria
+- 11 tests pass
+- Manual: `get(target:"src/foo.ts::DemoConfig")` returns interface body
+- Manual: `edit(target:"src/foo.py::MyClass", actions:[{kind:"rename", content:"NewClass"}])` succeeds
+- `cargo test -p pi-natives --tests` 290+ pass
+- `cargo test -p pi-code-path --tests` clean

@@ -8,6 +8,7 @@ fn opts(target: impl Into<String>) -> CodePathTaskOptions {
 	CodePathTaskOptions {
 		command: "resolve".to_string(),
 		target:  target.into(),
+		transaction: None,
 		limit:   None,
 		head:    None,
 		tail:    None,
@@ -24,6 +25,7 @@ fn opts_with_root(target: impl Into<String>, root: std::path::PathBuf) -> CodePa
 	CodePathTaskOptions {
 		command: "resolve".to_string(),
 		target:  target.into(),
+		transaction: None,
 		limit:   None,
 		head:    None,
 		tail:    None,

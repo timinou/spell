@@ -15,6 +15,8 @@ import { type DetailsWithMeta, toolResult } from "./tool-result";
 
 type GetToolResultDetails = DetailsWithMeta & {
 	format?: string;
+	target?: string;
+	error?: string;
 };
 
 /**
@@ -86,7 +88,14 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		// - `content: false` opts out for callers wanting the raw node
 		// - Already-qualified targets pass through unchanged
 		let target = params.target;
-		if (params.content !== false && classifyBareTarget(target) === "bare-plain") {
+		// FEAT-711: a `/regex/` literal looks like a bare-plain target to
+		// classifyBareTarget but is meant for the kernel's grep dialect.
+		// Skip the stat probe so we don't trip ENOENT on the pattern.
+		// Heuristic: starts with `/`, ends with `/[flags]`, no embedded
+		// path separators between, and contains regex meta chars.
+		const looksLikeRegex =
+			/^\/[^\/]+\/[a-z]*$/.test(target) && /[.*+?()|\\\[\]]/.test(target);
+		if (params.content !== false && !looksLikeRegex && classifyBareTarget(target) === "bare-plain") {
 			const normalized = target.replace(/\/+$/, "");
 			const absCandidate = path.isAbsolute(normalized) ? normalized : path.resolve(params.root ?? process.cwd(), normalized);
 			try {
@@ -96,8 +105,36 @@ export class GetTool implements AgentTool<typeof getSchema> {
 				} else if (stat.isDirectory()) {
 					target = buildDirQualifier(normalized, params);
 				}
-			} catch {
-				// Path does not exist; let the kernel surface its native diagnostics.
+			} catch (err) {
+				// FEAT-711: classify ENOENT/EACCES when the caller passed
+				// an explicit path (absolute, or contains `/`). Bare
+				// basenames flow through to the kernel so its suffix
+				// fallback / glob walk can still find the file.
+				const code = (err as NodeJS.ErrnoException | undefined)?.code;
+				// Only fire on absolute or explicitly-relative (./, ../) paths
+				// — relative basenames flow through to kernel suffix
+				// fallback so partial paths still resolve.
+				const isExplicitPath =
+					path.isAbsolute(normalized) ||
+					normalized.startsWith("./") ||
+					normalized.startsWith("../");
+				if (isExplicitPath && code === "ENOENT") {
+					return toolResult<GetToolResultDetails>({
+						target: params.target,
+						error: "PATH_NOT_FOUND",
+					})
+						.text(`PATH_NOT_FOUND: ${params.target} (resolved to ${absCandidate})`)
+						.done();
+				}
+				if (isExplicitPath && (code === "EACCES" || code === "EPERM")) {
+					return toolResult<GetToolResultDetails>({
+						target: params.target,
+						error: "PATH_NOT_READABLE",
+					})
+						.text(`PATH_NOT_READABLE: ${params.target} (resolved to ${absCandidate})`)
+						.done();
+				}
+				// Other errors / non-explicit paths flow through to the kernel.
 			}
 		}
 

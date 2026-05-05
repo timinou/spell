@@ -1,0 +1,72 @@
+#+TITLE: edit.ts action normalizer — propagate lines/pos/end/diff to kernel (B3)
+#+STATE: ITEM
+#+SESSION_ID: 14d47a7632d063d9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
+#+CUSTOM_ID: FEAT-701-edit-ts-action-normalizer-propagate-line
+#+LAYER: api
+
+* Intention & Purpose
+Fix `insertBefore`/`insertAfter` actions which currently always reject with "missing field 'lines'". The TS-side action normalizer drops the `lines` field before sending to the kernel; the Rust Action enum requires it. Same defect affects positional anchors (`pos`, `end`) and patch (`diff`).
+
+* Context & Narrative
+`packages/coding-agent/src/tools/edit.ts::normalizeStructuralAction` (lines 105-118) copies a hand-listed subset of fields from the TS schema into the JSON sent to executeCodePath. The list misses `lines` (used by InsertBefore/InsertAfter/Append/Prepend/Splice replacement), `pos`/`end` (LINE#ID anchors), and `diff` (patch action). The kernel's `Action` enum in `crates/pi-code-path/src/ast.rs:390-395` declares `InsertBefore { lines: ActionContent }` and similar — when the JSON lacks the field, serde rejects with "missing field 'lines'".
+
+* Scope
+In-scope:
+- `packages/coding-agent/src/tools/edit.ts::normalizeStructuralAction` — complete the copy list
+- `packages/coding-agent/test/edit.test.ts` — per-action-kind round-trip tests
+Out-of-scope:
+- Schema changes (`codepath-types.ts` already accepts these fields)
+- Kernel changes (Action enum is correct)
+- LINE#ID anchor generation (FEAT-705)
+
+* Existing Patterns (MUST use)
+- `CodePathAction` schema in `packages/coding-agent/src/tools/codepath-types.ts`
+- `ActionContent` Rust type in `crates/pi-code-path/src/ast.rs`
+- Test pattern: `spyOn(natives, "executeCodePath").mockResolvedValue([...]); ... expect(executeCodePath).toHaveBeenCalledWith(expect.objectContaining({actions: [...]}))`
+
+* Tests
+File: `packages/coding-agent/test/edit.test.ts`
+Scenarios:
+1. `insertBefore_propagates_lines_string` — `lines:"// hi"` reaches kernel
+2. `insertBefore_propagates_lines_array` — `lines:["a","b"]` reaches kernel
+3. `insertAfter_propagates_lines` — same shape
+4. `splice_propagates_pos_and_end` — both anchors propagated
+5. `patch_propagates_diff` — diff field propagated
+6. `append_propagates_lines` — regression check
+7. `findAndReplace_propagates_find` — sanity check existing copy
+
+* Implementation
+** ITEM Write failing tests for missing field propagation
+:PROPERTIES:
+:CUSTOM_ID: FEAT-701-edit-ts-action-normalizer-propagate-line::tests
+:END:
+- File: `packages/coding-agent/test/edit.test.ts`
+- Add `describe("action normalizer")` block with 7 scenarios
+- Mock executeCodePath, capture call args, assert action shape
+- Initially fails
+
+** ITEM Complete normalizeStructuralAction field copies
+:PROPERTIES:
+:CUSTOM_ID: FEAT-701-edit-ts-action-normalizer-propagate-line::implement
+:DEPENDS: FEAT-701-edit-ts-action-normalizer-propagate-line::tests
+:END:
+- File: `packages/coding-agent/src/tools/edit.ts`
+- After existing `if (action.content !== undefined) ...`:
+  - `if (action.lines !== undefined) out.lines = normalizeLines(action.lines);`
+  - `if (action.pos !== undefined) out.pos = action.pos;`
+  - `if (action.end !== undefined) out.end = action.end;`
+  - `if (action.diff !== undefined) out.diff = action.diff;`
+- Tests pass
+
+* Edge Cases
+- `lines: ""` empty string — propagate (kernel accepts empty replacement)
+- `lines: []` empty array — same
+- `pos` without `end` — kernel accepts; test
+- `diff` with tabs/unicode — replaceTabs NOT applied (display-only transform)
+
+* Acceptance Criteria
+- 7 normalizer tests pass: `bun test packages/coding-agent/test/edit.test.ts -t "action normalizer"`
+- Existing 23 edit tests still pass
+- Manual: `edit("a.ts", [{kind:"insertAfter", line:5, lines:"// inserted"}])` succeeds
+- `bun run --parallel check:ts check:rs` clean

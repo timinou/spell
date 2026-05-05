@@ -128,7 +128,11 @@ fn make_diff(old: &str, new: &str) -> Option<String> {
 }
 
 impl MutationResolver for super::TextResolver {
-	fn supports(&self, kind: ActionKind) -> bool {
+	fn supports(&self, _path: &CodePath, kind: ActionKind) -> bool {
+		// TextResolver currently treats every CodePath the same way — it
+		// always rewrites the whole file. The path-aware signature is in
+		// place for FEAT-689 dispatch correctness; future text-axis
+		// edits (per-line splice, etc.) can refine it.
 		matches!(
 			kind,
 			ActionKind::Append

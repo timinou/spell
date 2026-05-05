@@ -1,0 +1,65 @@
+#+TITLE: get directory vs bare-file error distinction — explicit ENOENT and trailing-slash hint (B14)
+#+STATE: ITEM
+#+SESSION_ID: 14d47a7632d063d9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
+#+CUSTOM_ID: FEAT-711-get-directory-vs-bare-file-error-distinc
+#+LAYER: api
+
+* Intention & Purpose
+When `get(target:"./not-real")` fails, the error should distinguish (a) path doesn't exist, (b) path exists but is unreadable, and suggest a trailing slash if user might have meant a directory.
+
+* Context & Narrative
+`packages/coding-agent/src/tools/get.ts:88-102` calls `fs.stat(absCandidate)` to decide between bare-file (`#raw`) and bare-dir (`#listing`/`#tree`). On error, silently swallows; lets the kernel surface generic "Inaccessible: ENOENT". The TS layer has the most context (knows whether path probably exists, what user passed) and should produce the rich error.
+
+* Scope
+In-scope:
+- `packages/coding-agent/src/tools/get.ts` — on stat ENOENT/EACCES, classify and emit explicit diagnostic before kernel
+- New diagnostic codes: `PATH_NOT_FOUND`, `PATH_NOT_READABLE`
+- Trailing-slash suggestion (deferred unless cheap)
+Out-of-scope:
+- Kernel changes
+- Filesystem watching for path-changed scenarios
+
+* Existing Patterns (MUST use)
+- `prettifyDidYouMean` in `get.ts:51-66` — extend with PATH_NOT_FOUND prettification
+- `toolResult` builder pattern
+- `fs.stat` error code field
+
+* Tests
+File: `packages/coding-agent/test/get.test.ts`
+Scenarios:
+1. `get_nonexistent_file_returns_PATH_NOT_FOUND`
+2. `get_nonexistent_dir_with_trailing_slash_returns_PATH_NOT_FOUND`
+3. `get_unreadable_file_returns_PATH_NOT_READABLE` — chmod 000 fixture
+4. `get_directory_target_no_trailing_slash_works` — regression
+5. `get_did_you_mean_dir_suggests_trailing_slash` (deferred unless cheap)
+
+* Implementation
+** ITEM Tests for path classification
+:PROPERTIES:
+:CUSTOM_ID: FEAT-711-get-directory-vs-bare-file-error-distinc::tests
+:END:
+- Scenarios 1-4 (5 deferred)
+- Use temp fs fixtures via `fs.mkdtemp`
+
+** ITEM Catch ENOENT/EACCES in get.ts and emit explicit diagnostics
+:PROPERTIES:
+:CUSTOM_ID: FEAT-711-get-directory-vs-bare-file-error-distinc::classify
+:DEPENDS: FEAT-711-get-directory-vs-bare-file-error-distinc::tests
+:END:
+- File: `packages/coding-agent/src/tools/get.ts`
+- Replace `try { stat } catch {}` with: catch `err.code === "ENOENT"` → `PATH_NOT_FOUND` tool result; `EACCES` → `PATH_NOT_READABLE`; other → re-throw
+- Tool result text: `PATH_NOT_FOUND: ${target} (resolved to ${absCandidate})`
+- Tests 1-3 pass; test 4 regression-safe
+
+* Edge Cases
+- Already-qualified target (e.g., `a.ts#raw`): stat probe runs but failures still reach kernel
+- URI targets (jobs://, agent://): no fs probe (existing classifyBareTarget excludes)
+- Read permission on file but no execute on parent: EACCES; classified
+- Symlink to non-existent target: stat returns ENOENT for follow; PATH_NOT_FOUND
+- Race: file deleted between probe and kernel — kernel surfaces own diagnostic
+
+* Acceptance Criteria
+- 4 tests pass (5th deferred)
+- Manual: `get(target:"./absolutely-fake-path")` → `PATH_NOT_FOUND: ./absolutely-fake-path (resolved to /full/path/absolutely-fake-path)`
+- `bun test packages/coding-agent/test/get.test.ts` clean
