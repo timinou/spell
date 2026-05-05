@@ -109,3 +109,27 @@ Two auth-key precedence bugs fixed:
 
 *** Design notes
 For BUG-336, the implementation used a #providersWithOAuth Set rather than querying #getCredentialsForProvider directly. This was necessary because markAuthFailure → #disableCredentialAt → #resetProviderAssignments wipes the credential store, but the Set survives since it only tracks presence (populated on set/reload, never cleared on disable). This ensures the guard works even after auth failure cascades.
+
+NOTE [2026-05-05]: ** Follow-up fix [2026-05-05]
+*** Root cause of "fix not working"
+stream() and streamSimple() both independently called getEnvApiKey(model.provider) via `options?.apiKey || getEnvApiKey(...)`. When the SDK passed apiKey: undefined (because authStorage.getApiKey returned undefined due to OAuth guard), the stream functions treated it as "no key provided" and fell back to env vars — picking up ANTHROPIC_API_KEY.
+
+This defeated the BUG-336 fix (OAuth→env guard) in auth-storage.ts because the guard only prevented fallback WITHIN getApiKey(), but the stream functions had their own independent fallback.
+
+*** Fix
+Changed stream() line 196 and streamSimple() line 272 from:
+  options?.apiKey || getEnvApiKey(model.provider)
+To:
+  (options && 'apiKey' in options) ? options.apiKey : getEnvApiKey(model.provider)
+
+When the SDK explicitly passes apiKey: undefined (auth failure), the stream now respects it and throws "No API key for provider". When stream is called without apiKey at all (standalone usage), env var fallback still works.
+
+*** All fixes summary
+1. stream.ts:132 — better-ccflare $pickenv("ANTHROPIC_AUTH_TOKEN") only (BUG-335)
+2. auth-storage.ts:2014 — #providersWithOAuth guard before env fallback (BUG-336)
+3. stream.ts:196,272 — respect explicit apiKey:undefined, no independent env fallback (NEW)
+
+*** Verification
+- Targeted tests: 42 pass, 0 fail
+- stream.test.ts: 3 pass, 0 fail (118 skipped, pre-existing)
+- After restart, user with expired OAuth + ANTHROPIC_API_KEY in env should see "No API key" instead of "credit balance too low"
