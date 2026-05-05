@@ -2015,6 +2015,12 @@ export class AuthStorage {
 			console.error(`[AUTH-TRACE] OAuth guard blocked env fallback for "${provider}"`);
 			return undefined;
 		}
+		// Also check disabled creds — when all OAuth creds for a provider
+		// are disabled at startup, reload() never adds them to the Set.
+		if (this.#store.hasDisabledOAuth(provider)) {
+			console.error(`[AUTH-TRACE] OAuth guard (disabled) blocked env fallback for "${provider}"`);
+			return undefined;
+		}
 
 		// Fall back to environment variable
 		const envKey = getEnvApiKey(provider);
@@ -2471,6 +2477,15 @@ export class AuthCredentialStore {
 			results.push(toStoredAuthCredential(row, credential));
 		}
 		return results;
+	}
+
+
+	/**
+	 * Check if provider has any disabled OAuth credentials.
+	 */
+	hasDisabledOAuth(provider: string): boolean {
+		const rows = (this.#listDisabledByProviderStmt.all(provider) as AuthRow[]) ?? [];
+		return rows.some(r => r.credential_type === "oauth");
 	}
 
 	replaceAuthCredentialsForProvider(provider: string, credentials: AuthCredential[]): StoredAuthCredential[] {
