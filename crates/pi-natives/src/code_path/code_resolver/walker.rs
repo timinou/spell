@@ -11,12 +11,22 @@ use tree_sitter::Node;
 
 /// Tree-sitter backed implementation of [`CodeResolver`].
 pub struct CodeResolverImpl {
-	registry: Arc<LanguageRegistry>,
+	pub(super) registry: Arc<LanguageRegistry>,
+	/// Optional root used by mutation.rs to absolutise relative
+	/// `Locator::Fs` paths before delegating to `code_buffer::execute`.
+	/// FEAT-689 / FEAT-708: without this the legacy code_buffer surface
+	/// can't open the host file when the test ran from a tempdir.
+	pub(super) root:     Option<std::path::PathBuf>,
 }
 
 impl CodeResolverImpl {
 	pub fn new(registry: Arc<LanguageRegistry>) -> Self {
-		Self { registry }
+		Self { registry, root: None }
+	}
+
+	pub fn with_root(mut self, root: std::path::PathBuf) -> Self {
+		self.root = Some(root);
+		self
 	}
 }
 

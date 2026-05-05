@@ -1,0 +1,65 @@
+#+TITLE: manage diff render parity with edit diff — use language=diff (B13)
+#+STATE: ITEM
+#+SESSION_ID: 14d47a7632d063d9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
+#+CUSTOM_ID: FEAT-710-manage-diff-render-parity-with-edit-diff
+#+LAYER: api
+#+DEPENDS: FEAT-704-manage-command-handler-in-napi-save-inde
+
+* Intention & Purpose
+Make `manage diff` render with the same diff-syntax-highlighted view as `edit` diffs. Currently `manage.ts::renderResult` hardcodes `language: "text"` so diff hunks display as plain text; `edit.ts` uses `language: "diff"` which renders +/-/@@ with syntax color.
+
+* Context & Narrative
+`packages/coding-agent/src/tools/manage.ts:52-76 renderResult` always sets `language: "text"`. `packages/coding-agent/src/tools/edit.ts:341-365` selects `language: "diff"` for diff results. Converge: when `manage.command === "diff"`, use `language: "diff"`; else `"text"`.
+
+(Note: user described this as "manage diff renders as image" — the current implementation actually renders as text-mode `renderCodeCell`. Either way the fix unifies experience by routing diff content to diff renderer.)
+
+* Scope
+In-scope:
+- `packages/coding-agent/src/tools/manage.ts::renderResult` — branch language by subcommand
+- `packages/coding-agent/test/manage.test.ts` — assert renderCodeCell receives `language: "diff"` for diff
+Out-of-scope:
+- Cross-tool unified diff renderer
+- New diff variants
+
+* Existing Patterns (MUST use)
+- `ManageToolResultDetails.command` (line 14-16)
+- `renderCodeCell({code, language, title, ...})` API
+- `edit.ts:341-365` precedent
+
+* Tests
+File: `packages/coding-agent/test/manage.test.ts`
+Scenarios:
+1. `manage_diff_renderResult_uses_language_diff` — details `{command:"diff"}` → `language: "diff"`
+2. `manage_save_renderResult_uses_language_text` — `{command:"save"}` → `"text"` (regression)
+3. `manage_index_renderResult_uses_language_text`
+
+* Implementation
+** ITEM Tests for diff vs non-diff rendering
+:PROPERTIES:
+:CUSTOM_ID: FEAT-710-manage-diff-render-parity-with-edit-diff::tests
+:END:
+- File: `packages/coding-agent/test/manage.test.ts`
+- Scenarios 1-3
+- Initially fail (all currently use "text")
+
+** ITEM Branch language selection by subcommand
+:PROPERTIES:
+:CUSTOM_ID: FEAT-710-manage-diff-render-parity-with-edit-diff::wire
+:DEPENDS: FEAT-710-manage-diff-render-parity-with-edit-diff::tests
+:END:
+- File: `packages/coding-agent/src/tools/manage.ts`
+- Read `result.details?.command`; when `=== "diff"`, pass `language: "diff"`; else `"text"`
+- Title reflects subcommand (e.g., "Manage / diff")
+- Tests pass
+
+* Edge Cases
+- Missing details: default to "text"
+- Future subcommands producing diff-like output: explicit subcommand check
+- Diff subcommand with empty result: renders with diff language; output shows "(no changes)"
+
+* Acceptance Criteria
+- 3 tests pass
+- Manual: `manage diff some-file.ts` renders with diff syntax highlighting
+- Manual: `manage save` still renders as plain text
+- `bun test packages/coding-agent/test/manage.test.ts` clean

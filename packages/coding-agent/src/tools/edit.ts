@@ -107,6 +107,14 @@ function normalizeStructuralAction(action: CodePathAction): Record<string, unkno
 	if (action.scope) out.scope = action.scope;
 	if (action.content !== undefined) out.content = normalizeLines(action.content);
 	if (action.find !== undefined) out.find = normalizeLines(action.find);
+	// FEAT-701: lines/pos/end/diff were silently dropped; the kernel
+	// Action enum requires `lines` for InsertBefore/InsertAfter/Append/
+	// Prepend/Splice replacement, `pos`/`end` for LINE#ID anchors, and
+	// `diff` for the patch action.
+	if (action.lines !== undefined) out.lines = normalizeLines(action.lines);
+	if (action.pos !== undefined) out.pos = action.pos;
+	if (action.end !== undefined) out.end = action.end;
+	if (action.diff !== undefined) out.diff = action.diff;
 	if (action.mode) out.mode = action.mode;
 	if (action.direction) out.direction = action.direction;
 	if (action.line !== undefined) out.line = action.line;

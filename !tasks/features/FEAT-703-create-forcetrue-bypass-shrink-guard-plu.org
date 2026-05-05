@@ -1,0 +1,80 @@
+#+TITLE: create force:true bypass shrink guard — plumb force through write guards (B5)
+#+STATE: ITEM
+#+SESSION_ID: 14d47a7632d063d9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
+#+CUSTOM_ID: FEAT-703-create-forcetrue-bypass-shrink-guard-plu
+#+LAYER: api
+
+* Intention & Purpose
+Make `force:true` actually bypass the shrink guard on `create`. Currently `force:true` is honored by the kernel but the TS-side pre-flight guard `evaluateWriteGuards` blocks the call before the kernel runs.
+
+* Context & Narrative
+`packages/coding-agent/src/tools/managed-buffer-guards.ts:79-122 evaluateWriteGuards()` is called from `create.ts:80-86` BEFORE the kernel sees the request. Shrink floor `max(64, oldSize*0.1)` blocks any new write below it regardless of force. Force MUST bypass shrink, but parse-regression guard stays on (force ≠ break the file).
+
+* Scope
+In-scope:
+- `packages/coding-agent/src/tools/managed-buffer-guards.ts::evaluateWriteGuards` — accept `force?: boolean`, skip shrink under force
+- `packages/coding-agent/src/tools/create.ts` — pass `params.force` through
+- `packages/coding-agent/test/managed-buffer-guards.test.ts` (new or extend)
+- `packages/coding-agent/test/create.test.ts`
+Out-of-scope:
+- Edit-tool guard changes
+- Removing the shrink guard
+
+* Existing Patterns (MUST use)
+- `WriteGuardResult | WriteGuardBlocked` types
+- `SHRINK_GUARD_FLOOR_BYTES`, `SHRINK_GUARD_MIN_BYTES`, `SHRINK_GUARD_RATIO` constants
+- `probesAsStructurallyValid` helper
+
+* Tests
+File: `packages/coding-agent/test/managed-buffer-guards.test.ts`
+Scenarios:
+1. `evaluateWriteGuards_no_force_blocks_shrink`
+2. `evaluateWriteGuards_with_force_skips_shrink`
+3. `evaluateWriteGuards_with_force_keeps_parse_check` — force does NOT bypass parse
+4. `evaluateWriteGuards_no_force_no_shrink_passes`
+
+File: `packages/coding-agent/test/create.test.ts`
+Scenarios:
+5. `create_force_overwrites_shrunk_file` — 379→50 bytes succeeds with force
+6. `create_no_force_blocks_shrink`
+
+* Implementation
+** ITEM Write failing tests for force bypass
+:PROPERTIES:
+:CUSTOM_ID: FEAT-703-create-forcetrue-bypass-shrink-guard-plu::tests
+:END:
+- 6 scenarios as initially-failing tests
+
+** ITEM Update evaluateWriteGuards to accept force flag
+:PROPERTIES:
+:CUSTOM_ID: FEAT-703-create-forcetrue-bypass-shrink-guard-plu::guards-impl
+:DEPENDS: FEAT-703-create-forcetrue-bypass-shrink-guard-plu::tests
+:END:
+- File: `packages/coding-agent/src/tools/managed-buffer-guards.ts`
+- Signature: `evaluateWriteGuards(absolutePath, newContent, options?: {force?: boolean})`
+- `if (oldSize >= SHRINK_GUARD_MIN_BYTES && !options?.force) { ... shrink check ... }`
+- Parse-regression check unchanged
+- Tests pass
+
+** ITEM Pass force from create.ts to guards
+:PROPERTIES:
+:CUSTOM_ID: FEAT-703-create-forcetrue-bypass-shrink-guard-plu::create-wire
+:DEPENDS: FEAT-703-create-forcetrue-bypass-shrink-guard-plu::guards-impl
+:END:
+- File: `packages/coding-agent/src/tools/create.ts`
+- `evaluateWriteGuards(absolutePath, content, {force: params.force === true})`
+- Tests pass
+
+* Edge Cases
+- File doesn't exist: no shrink to compute, returns ok regardless of force
+- File exists, `force:false`/undefined: shrink guard active
+- Binary file: probesAsStructurallyValid returns true; force bypasses shrink only
+- Parse-regression even with force: blocked WRITE_PARSE_REGRESSION
+
+* Acceptance Criteria
+- 6 tests pass
+- Manual: `create("big.txt", "x", force:true)` on 500-byte file succeeds with 1-byte content
+- Manual: `create("valid.ts", "this is not valid ts", force:true)` blocked WRITE_PARSE_REGRESSION
+- `bun test packages/coding-agent/test/` clean
+- `bun run --parallel check:ts` clean

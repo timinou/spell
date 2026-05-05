@@ -1,0 +1,72 @@
+#+TITLE: stat output rendering — surface size/mtime metadata in get display (B12)
+#+STATE: ITEM
+#+SESSION_ID: 14d47a7632d063d9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
+#+CUSTOM_ID: FEAT-709-stat-output-rendering-surface-size-mtime
+#+LAYER: api
+
+* Intention & Purpose
+Make `get(target:"file.ts#stat")` actually display size and mtime instead of bare path. The kernel produces the metadata correctly; the display layer drops it.
+
+* Context & Narrative
+`crates/pi-code-path/src/dialects/fs/qualifiers.rs:143-184 resolve_stat()` returns NodeRef with `kind: "§file"|"§dir"|"§symlink"`, `metadata: {size, mtime, kind}`, `range: 0..size`. The marshal layer converts metadata to JSON. Display function in `packages/coding-agent/src/tools/codepath-result.ts` doesn't recognize stat-shape metadata.
+
+* Scope
+In-scope:
+- `packages/coding-agent/src/tools/codepath-result.ts` — extend node renderer to format stat metadata
+- `packages/coding-agent/test/codepath-result.test.ts` — render tests
+Out-of-scope:
+- Kernel changes (stat output is correct)
+- Adding more stat fields (perms, owner)
+
+* Existing Patterns (MUST use)
+- `getNodeKindLabel(node)` in `codepath-result.ts:45-47` — extend to include stat formatting
+- `nodeToLocation(node)` in `:30-35` — append metadata suffix
+- ISO 8601 mtime: `new Date(mtime * 1000).toISOString()`
+- Human-readable size: existing `formatBytes` helper if present, else inline `(${size} B)`/etc.
+
+* Tests
+File: `packages/coding-agent/test/codepath-result.test.ts` (new)
+Scenarios:
+1. `formatNode_with_stat_metadata_renders_size_and_mtime` — `{kind:"§file", metadata:{size:1234, mtime:1700000000}}` → output contains `1.2 KB` and `2023-11-14T22:13:20Z`
+2. `formatNode_dir_stat_omits_size_when_zero` — `{kind:"§dir", metadata:{size:0, mtime:N}}` → no size
+3. `formatNode_symlink_renders_target`
+4. `formatNode_no_stat_metadata_unchanged` — regression
+
+* Implementation
+** ITEM Tests for stat rendering
+:PROPERTIES:
+:CUSTOM_ID: FEAT-709-stat-output-rendering-surface-size-mtime::tests
+:END:
+- File: `packages/coding-agent/test/codepath-result.test.ts` (new)
+- Scenarios 1-4
+
+** ITEM Add formatStatMetadata helper
+:PROPERTIES:
+:CUSTOM_ID: FEAT-709-stat-output-rendering-surface-size-mtime::helper
+:DEPENDS: FEAT-709-stat-output-rendering-surface-size-mtime::tests
+:END:
+- File: `packages/coding-agent/src/tools/codepath-result.ts`
+- `function formatStatMetadata(node): string | null` — returns ` [§file size=1.2 KB mtime=2023-11-14T22:13:20Z]` or null when no stat metadata
+
+** ITEM Wire formatStatMetadata into node rendering
+:PROPERTIES:
+:CUSTOM_ID: FEAT-709-stat-output-rendering-surface-size-mtime::wire
+:DEPENDS: FEAT-709-stat-output-rendering-surface-size-mtime::helper
+:END:
+- Update `formatLocator` (or `nodeToLocation`) to append metadata suffix when present
+- Ensure non-stat nodes unaffected
+- Tests pass
+
+* Edge Cases
+- Missing mtime: render `size=N` only
+- Missing size: render `mtime=...` only
+- Both missing: render bare locator
+- Symlink with broken target: kernel produces `kind:§symlink`; display shows whatever metadata is present
+- Non-numeric mtime: skip mtime, keep size
+
+* Acceptance Criteria
+- 4 tests pass
+- Manual: `get(target:"package.json#stat")` → `package.json [§file size=2.4 KB mtime=2025-05-04T12:34:56Z]`
+- `bun test packages/coding-agent/test/codepath-result.test.ts` clean
+- Existing `bun test packages/coding-agent/test/get.test.ts` regression-clean

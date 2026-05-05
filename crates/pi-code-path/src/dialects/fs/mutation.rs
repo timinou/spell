@@ -50,8 +50,15 @@ fn write_file_atomic(target: &Path, content: &str) -> Result<(), std::io::Error>
 }
 
 impl MutationResolver for super::FsResolver {
-	fn supports(&self, kind: ActionKind) -> bool {
-		matches!(kind, ActionKind::Create | ActionKind::Write | ActionKind::Delete)
+	fn supports(&self, path: &CodePath, kind: ActionKind) -> bool {
+		// FEAT-689: only claim filesystem-shaped mutations on bare-file
+		// targets. A symbol-target Delete (`a.ts::Foo`) or any qualifier
+		// (`a.ts#stat`, `a.ts#raw`, …) MUST go to another resolver
+		// instead of nuking the whole host file.
+		if !matches!(kind, ActionKind::Create | ActionKind::Write | ActionKind::Delete) {
+			return false;
+		}
+		path.query.is_none() && path.qualifier.is_none()
 	}
 
 	fn apply(

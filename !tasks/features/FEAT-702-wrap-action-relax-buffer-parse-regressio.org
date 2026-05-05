@@ -1,0 +1,76 @@
+#+TITLE: wrap action — relax buffer parse-regression check to wrapped subtree (B4)
+#+STATE: ITEM
+#+SESSION_ID: 14d47a7632d063d9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
+#+CUSTOM_ID: FEAT-702-wrap-action-relax-buffer-parse-regressio
+#+LAYER: core
+
+* Intention & Purpose
+Make `wrap` actually work. Currently every wrap (even `["if(true){", "$BODY", "}"]`) fails with "structurally invalid" because the post-wrap full-buffer reparse trips on edge cases. Replace the full-file reparse with a localized parse of just the wrapped subtree.
+
+* Context & Narrative
+`crates/pi-code-engine/src/buffer.rs:868-875` re-parses the entire post-wrap buffer with tree-sitter and rejects when `tree.root_node().has_error()`. Wrap templates that produce locally-valid but globally-suspect ASTs trip the check. The intended semantic: "the edit must not introduce a parse error at or inside the wrap site". Outside the wrap site, errors pre-existed and aren't our concern.
+
+* Scope
+In-scope:
+- `crates/pi-code-engine/src/buffer.rs` — replace full-buffer parse-validity check with subtree check
+- `crates/pi-code-engine/src/edit/wrap.rs` — return wrap-region byte range so validator can scope check
+- Unit tests for trivial-template wraps
+Out-of-scope:
+- Other action kinds' validation (splice/insertBefore work)
+- Cross-language wrap-template AST validation
+
+* Existing Patterns (MUST use)
+- `pi-code-engine` already passes `LanguageProfile` into the buffer
+- `wrap_node` in `edit/wrap.rs` knows the wrap region
+- Subtree parsing: `parser.parse_with(...)`, navigate to wrap-region root, check `has_error()`
+
+* Tests
+File: `crates/pi-code-engine/src/edit/wrap.rs` (extend) and `crates/pi-natives/src/code_path/code_resolver/mutation_tests.rs`
+Scenarios:
+1. `wrap_top_level_fn_with_if_true_succeeds` — `function foo(){return 1;}` + `["if(true){","$BODY","}"]` succeeds
+2. `wrap_inner_block_with_try_catch_succeeds`
+3. `wrap_with_invalid_template_still_rejects` — `["if(true)", "$BODY"]` (no opening brace) rejected naming bad token
+4. `wrap_with_missing_body_marker_rejected` — template without `$BODY` rejected
+5. `wrap_preserves_pre_existing_errors_outside_region` — file with unrelated syntax error doesn't block valid wrap
+
+* Implementation
+** ITEM Write failing tests for trivial wrap templates
+:PROPERTIES:
+:CUSTOM_ID: FEAT-702-wrap-action-relax-buffer-parse-regressio::tests
+:END:
+- File: `crates/pi-code-engine/src/edit/wrap.rs`
+- Add 5 tests above as `#[test]` functions
+- Tests fail with "structurally invalid"
+
+** ITEM Return wrap region range from wrap_node
+:PROPERTIES:
+:CUSTOM_ID: FEAT-702-wrap-action-relax-buffer-parse-regressio::wrap-range
+:DEPENDS: FEAT-702-wrap-action-relax-buffer-parse-regressio::tests
+:END:
+- File: `crates/pi-code-engine/src/edit/wrap.rs`
+- `wrap_node(...)` returns `Result<(String, Range<usize>)>`
+- Update callers
+
+** ITEM Replace full-buffer validity check with subtree check
+:PROPERTIES:
+:CUSTOM_ID: FEAT-702-wrap-action-relax-buffer-parse-regressio::subtree-validity
+:DEPENDS: FEAT-702-wrap-action-relax-buffer-parse-regressio::wrap-range
+:END:
+- File: `crates/pi-code-engine/src/buffer.rs`
+- Parse new buffer; navigate to node containing wrap-region byte range; assert `!has_error()`
+- On error: diagnostic names byte range and first error node kind
+- Tests pass
+
+* Edge Cases
+- Wrap region spans multiple top-level nodes: use lowest common ancestor
+- Wrap region is entire file: subtree check = full check
+- Pre-existing errors inside wrap subtree: subtree inherits ambient errors; document and accept
+- Duplicate $BODY markers: rejected by wrap_node upstream
+
+* Acceptance Criteria
+- 5 wrap tests pass: `cargo test -p pi-code-engine --tests wrap`
+- Existing wrap tests still pass
+- e2e: `edit("a.ts::foo", action={kind:"wrap", content:["if(true){","$BODY","}"]})` succeeds
+- `cargo test -p pi-code-engine --tests` clean
+- `cargo test -p pi-natives --tests` clean

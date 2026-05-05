@@ -40,10 +40,12 @@ impl NameLexer for DummyLexer {
 
 /// Build a code_buffer-style `targetId` from a `CodePath`.
 ///
-/// Format: `<file>` or `<file>::<symbol>`.
+/// Format: `<file>` or `<file>::<symbol>`. When `root` is provided, the
+/// file portion is absolutised so the legacy `code_buffer::execute` can
+/// open it without depending on cwd. FEAT-689.
 /// Qualifiers are rejected because the code_buffer `resolve_symbol`
 /// surface only understands simple symbol names.
-fn build_target_id(path: &CodePath) -> Result<String, Diagnostic> {
+fn build_target_id(path: &CodePath, root: Option<&std::path::Path>) -> Result<String, Diagnostic> {
 	if path.qualifier.is_some() {
 		return Err(Diagnostic {
 			variant: DiagnosticVariant::UnsupportedOperation,
@@ -51,8 +53,25 @@ fn build_target_id(path: &CodePath) -> Result<String, Diagnostic> {
 			span:    None,
 		});
 	}
-	let rendered = render_code_path(path, &DummyLexer);
-	Ok(rendered.replace(" :: ", "::"))
+	let rendered = render_code_path(path, &DummyLexer).replace(" :: ", "::");
+	let Some((file_part, sym_part)) = rendered.split_once("::") else {
+		// No symbol component — absolutise the whole rendered path if
+		// possible.
+		return Ok(absolutise(&rendered, root));
+	};
+	let abs_file = absolutise(file_part, root);
+	Ok(format!("{abs_file}::{sym_part}"))
+}
+
+fn absolutise(file_part: &str, root: Option<&std::path::Path>) -> String {
+	let candidate = std::path::Path::new(file_part);
+	if candidate.is_absolute() {
+		return file_part.to_string();
+	}
+	match root {
+		Some(r) => r.join(candidate).to_string_lossy().to_string(),
+		None => file_part.to_string(),
+	}
 }
 
 /// Convert an `Action` into the JSON shape expected by
@@ -65,14 +84,34 @@ fn action_to_value(action: &Action) -> Value {
 		if let Some(lines) = obj.remove("lines") {
 			obj.insert("content".into(), lines);
 		}
+		// FEAT-689 / FEAT-702: code_buffer's `action_content` calls
+		// `required_str`, but the kernel ActionContent allows arrays.
+		// Flatten array content to a newline-joined string here so the
+		// legacy surface accepts wrap/findAndReplace/etc.
+		flatten_string_array(obj, "content");
+		flatten_string_array(obj, "find");
 	}
 	value
+}
+
+fn flatten_string_array(obj: &mut serde_json::Map<String, Value>, key: &str) {
+	if let Some(Value::Array(arr)) = obj.get(key)
+		&& arr.iter().all(|v| v.is_string())
+	{
+		let joined: String = arr
+			.iter()
+			.filter_map(|v| v.as_str())
+			.collect::<Vec<_>>()
+			.join("
+");
+		obj.insert(key.to_string(), Value::String(joined));
+	}
 }
 
 // ── MutationResolver impl ────────────────────────────────────────
 
 impl MutationResolver for CodeResolverImpl {
-	fn supports(&self, kind: ActionKind) -> bool {
+	fn supports(&self, _path: &CodePath, kind: ActionKind) -> bool {
 		matches!(
 			kind,
 			ActionKind::Rename
@@ -127,7 +166,7 @@ impl MutationResolver for CodeResolverImpl {
 			});
 		}
 
-		let target_id = build_target_id(target)?;
+		let target_id = build_target_id(target, self.root.as_deref())?;
 		let action_json = action_to_value(action);
 
 		let request = json!({

@@ -1,0 +1,87 @@
+#+TITLE: clone action — accept content/name field for the new symbol name (B9)
+#+STATE: ITEM
+#+SESSION_ID: 14d47a7632d063d9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
+#+CUSTOM_ID: FEAT-707-clone-action-accept-content-name-field-f
+#+LAYER: core
+
+* Intention & Purpose
+Make `clone(target:"file.ts::foo", content:"newName")` clone the `foo` declaration to a new symbol named `newName`. Currently `content` is silently ignored by the kernel; some other code path interprets it as a numeric line value, producing the misleading "line 3 is outside the target declaration span" error.
+
+* Context & Narrative
+`crates/pi-code-path/src/ast.rs::Action::Clone` doesn't have a `content` field. When TS sends `{kind:"clone", content:"newName"}`, serde silently drops `content`. Then `content` re-enters as a line number through coercion, leading to confusing error. Intended semantic: "duplicate the target declaration; if `content` given, rename the clone to that identifier". Matches `rename` action's API.
+
+* Scope
+In-scope:
+- `crates/pi-code-path/src/ast.rs` — add `content: Option<ActionContent>` to `Action::Clone`
+- `crates/pi-natives/src/code_buffer.rs` clone handler — accept `content` (rename clone in-place)
+- `packages/coding-agent/src/tools/edit.ts::normalizeStructuralAction` — propagate `content` for clone (via FEAT-701)
+- Tests
+Out-of-scope:
+- Cross-file clone
+- New "clone-and-modify" semantics beyond rename
+
+* Existing Patterns (MUST use)
+- `Action::Rename { content: ActionContent }` shape — clone mirrors
+- `code_buffer.rs` clone helper — extend to accept rename
+- TS `CodePathAction` schema in `codepath-types.ts` already has `content?: string|string[]`
+
+* Tests
+File: `crates/pi-code-path/src/ast.rs` (tests)
+Scenarios:
+1. `clone_action_serde_roundtrip_with_content`
+
+File: `crates/pi-natives/src/code_path/code_resolver/mutation_tests.rs`
+Scenarios:
+2. `clone_with_content_renames_clone` — `function foo(){return 1;}` + clone+content:"bar" → both foo and bar exist
+3. `clone_without_content_appends_dup_suffix` — preserve current behavior
+4. `clone_with_invalid_identifier_rejected` — `content:"123foo"` → Diagnostic
+
+* Implementation
+** ITEM Extend Action::Clone with content field
+:PROPERTIES:
+:CUSTOM_ID: FEAT-707-clone-action-accept-content-name-field-f::ast
+:END:
+- File: `crates/pi-code-path/src/ast.rs`
+- `Clone { direction: Option<String>, line: Option<u32>, content: Option<ActionContent> }`
+- Test 1
+
+** ITEM Tests for clone+content behavior
+:PROPERTIES:
+:CUSTOM_ID: FEAT-707-clone-action-accept-content-name-field-f::tests
+:DEPENDS: FEAT-707-clone-action-accept-content-name-field-f::ast
+:END:
+- Scenarios 2-4 in `mutation_tests.rs`
+
+** ITEM Implement clone-with-rename in code_buffer
+:PROPERTIES:
+:CUSTOM_ID: FEAT-707-clone-action-accept-content-name-field-f::buffer
+:DEPENDS: FEAT-707-clone-action-accept-content-name-field-f::tests
+:END:
+- File: `crates/pi-natives/src/code_buffer.rs`
+- Clone handler: when `content` is non-empty string, run rename pass on clone identifier
+- Validate identifier shape per language (delegate to existing rename validator)
+- Tests pass
+
+** ITEM Verify edit.ts normalizer covers clone+content
+:PROPERTIES:
+:CUSTOM_ID: FEAT-707-clone-action-accept-content-name-field-f::normalize
+:LAYER: api
+:DEPENDS: FEAT-707-clone-action-accept-content-name-field-f::buffer
+:END:
+- File: `packages/coding-agent/src/tools/edit.ts`
+- `normalizeStructuralAction` already copies `content`; ensure not dropped post-FEAT-701
+- e2e test: mock asserts kernel receives content for clone
+
+* Edge Cases
+- Clone of nonexistent symbol: existing "Symbol not found" preserved
+- Clone with content matching existing symbol: error "name already exists in scope"
+- Clone with empty string content: treated as no rename
+- Clone with array content: rejected "clone content must be a single identifier"
+
+* Acceptance Criteria
+- 4 tests pass
+- Manual: `edit("f.ts::foo", [{kind:"clone", content:"bar"}])` produces both foo and bar
+- `cargo test -p pi-code-path --tests` 285+ pass
+- `cargo test -p pi-natives --tests mutation_tests` clean
+- `bun test packages/coding-agent/test/edit.test.ts` clean

@@ -17,6 +17,7 @@ fn opts_with_root(target: impl Into<String>, root: PathBuf) -> CodePathTaskOptio
     CodePathTaskOptions {
         command: "resolve".to_string(),
         target: target.into(),
+		transaction: None,
         limit: None,
         head: None,
         tail: None,

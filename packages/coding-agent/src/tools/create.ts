@@ -77,8 +77,11 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 
 		// Managed-buffer guards (shrink + parse-regression) only when overwriting an
 		// existing code-supported file. A brand-new file has nothing to compare against.
+		// FEAT-703: pass `force` so the shrink guard is skipped when the
+		// caller deliberately wants to replace a large file with a tiny
+		// one. Parse-regression guard stays on either way.
 		if (params.force && isCodeToolSupportedPath(resolvedPath)) {
-			const guard = evaluateWriteGuards(resolvedPath, content);
+			const guard = evaluateWriteGuards(resolvedPath, content, { force: params.force === true });
 			if ("ok" in guard && guard.ok === false) {
 				return toolResult<CreateToolResultDetails>({ path: params.path, error: guard.code })
 					.text(guard.detail)

@@ -1,0 +1,96 @@
+#+TITLE: Resolver routing — Delete on symbol target + text-qualifier-only routing (B1, B2, B10)
+#+STATE: ITEM
+#+SESSION_ID: 14d47a7632d063d9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
+#+CUSTOM_ID: FEAT-689-resolver-routing-delete-on-symbol-target
+#+LAYER: core
+
+* Intention & Purpose
+Stop the data-loss bug where `edit(target="file.ts::fnName", action={kind:"delete"})` deletes the entire file. Stop the silent-read bug where `get(target="any-file.ts")` returns "unknown qualifier: raw". Both are routing defects in `execute_code_path_inner`: FsResolver claims actions/queries that should reach a different resolver because the routing predicate ignores the qualifier/symbol portions of the parsed CodePath.
+
+* Context & Narrative
+Two related routing flaws surfaced after FEAT-687 migration. (1) FsResolver.supports() returns true for Action::Delete unconditionally; resolve_target_path discards the query selector; apply() runs std::fs::remove_file on the whole file. (2) For reads, get.ts auto-attaches `#raw` to bare files, but the routing predicate is_pure_text_query requires a structural query head (line/para/chunk). A bare file with #raw and no query head falls through to FsResolver, which only knows listing/tree/stat — so it errors "unknown qualifier: raw". Both root causes are in the dispatch logic, not the resolvers themselves.
+
+* Scope
+In-scope:
+- `crates/pi-code-path/src/dialects/fs/mutation.rs` — `FsResolver::supports()` declines actions when CodePath carries a non-FS query or qualifier
+- `crates/pi-natives/src/code_path/napi.rs` — add `is_text_qualifier_only(cp)` predicate; route bare-file + text-qualifier (raw|bytes|lines|text|match|image) → TextResolver
+- `crates/pi-code-path/src/types.rs` — add `DiagnosticVariant::SymbolDeleteWithoutResolver`
+Out-of-scope:
+- New text qualifiers (existing set sufficient)
+- Symbol-Delete deleting declaration body (CodeResolver already handles)
+- get.ts changes (handled in B14 follow-up)
+
+* Existing Patterns (MUST use)
+- `napi.rs::is_pure_text_query` (line 460) and `::is_symbol_query` (line 471)
+- `fs/mutation.rs::FsResolver::supports` (line 53-54)
+- Routing branch order at `napi.rs:347-390`
+- `CodePath` struct from `pi-code-path/src/lib.rs`
+
+* Tests
+File: `crates/pi-natives/src/code_path/code_resolver/mutation_tests.rs` (new) and `crates/pi-natives/src/code_path/routing_tests.rs` (extend)
+Scenarios:
+1. `delete_with_symbol_target_routes_to_code_resolver` — file persists post-call
+2. `delete_with_bare_file_target_uses_fs_resolver` — file removed (existing)
+3. `delete_with_qualifier_target_rejects_at_fs` — SymbolDeleteWithoutResolver diagnostic
+4. `bare_file_raw_qualifier_routes_to_text_resolver` — content returned
+5. `bare_file_bytes_qualifier_routes_to_text` — byte slice returned
+6. `bare_file_lines_qualifier_routes_to_text` — lines returned
+7. `bare_file_listing_qualifier_stays_fs` — dir entries
+8. `bare_file_unknown_qualifier_yields_helpful_error` — diagnostic names dialects
+
+* Implementation
+** DOING Add SymbolDeleteWithoutResolver diagnostic variant
+:PROPERTIES:
+:CUSTOM_ID: FEAT-689-resolver-routing-delete-on-symbol-target::diagnostic
+:END:
+- File: `crates/pi-code-path/src/types.rs`
+- Add `SymbolDeleteWithoutResolver` to `DiagnosticVariant` enum
+- Wire `marshal::diagnostic_variant_to_string` mapping
+- Update `pi-natives/src/code_path/marshal.rs` mapping
+- Update `specs/code-graph/code-path-extensions.md` §11 Diagnostic catalogue
+
+** ITEM Tighten FsResolver.supports for symbol/qualifier targets
+:PROPERTIES:
+:CUSTOM_ID: FEAT-689-resolver-routing-delete-on-symbol-target::fs-supports
+:DEPENDS: FEAT-689-resolver-routing-delete-on-symbol-target::diagnostic
+:END:
+- File: `crates/pi-code-path/src/dialects/fs/mutation.rs`
+- `FsResolver::supports(kind)` becomes `supports(path: &CodePath, kind: ActionKind)` — pass full CodePath
+- For Delete/Move/Rename/Create/Write: require `path.query.is_none() && path.qualifier.is_none()` (or FS-only qualifier listing/tree/stat)
+- Update `MutationResolver` trait signature to pass `&CodePath` (3 call sites: napi.rs, FsResolver, TextResolver, CodeResolver)
+- Unit tests: supports() false for `("a.ts::foo", Delete)`, true for `("a.ts", Delete)`
+
+** ITEM Add is_text_qualifier_only predicate and route to TextResolver
+:PROPERTIES:
+:CUSTOM_ID: FEAT-689-resolver-routing-delete-on-symbol-target::routing-predicate
+:DEPENDS: FEAT-689-resolver-routing-delete-on-symbol-target::fs-supports
+:END:
+- File: `crates/pi-natives/src/code_path/napi.rs`
+- Add `fn is_text_qualifier_only(cp: &CodePath) -> bool` — true when `cp.query.is_none() && cp.qualifier.as_ref().is_some_and(|q| matches!(q.name.as_str(), "raw" | "bytes" | "lines" | "text" | "match" | "image"))`
+- New branch in routing at line 349 BEFORE FsResolver fallback: route to TextResolver
+- Wire 7 routing tests in `routing_tests.rs`
+
+** ITEM Add edit-side unsupported-Delete diagnostic for symbol+fs case
+:PROPERTIES:
+:CUSTOM_ID: FEAT-689-resolver-routing-delete-on-symbol-target::edit-supports-fallback
+:DEPENDS: FEAT-689-resolver-routing-delete-on-symbol-target::routing-predicate
+:END:
+- File: `crates/pi-natives/src/code_path/napi.rs` edit branch (lines 296-326)
+- supports() now passes `&cp` so fallback produces UnsupportedActionForResolver
+- Verify CodeResolverImpl claims Delete for symbol targets
+- 3 mutation tests in `mutation_tests.rs` (scenarios 1-3)
+
+* Edge Cases
+- `Locator::Uri(_)`: FsResolver errors "mutation target must be a filesystem path" — preserved
+- `Locator::Fs` + `#stat`: supports() allows Read, denies Delete
+- Concurrent edit chains: atomicity unchanged — see FEAT-712
+- Non-existent file + `#raw`: TextResolver Inaccessible diagnostic — preserved
+
+* Acceptance Criteria
+- `bun test packages/coding-agent/test/edit.test.ts` clean including new symbol-delete safety test
+- `cargo test -p pi-natives --tests routing_tests` 14 tests (7 existing + 7 new)
+- `cargo test -p pi-natives --tests mutation_tests` 3 symbol-delete scenarios pass
+- Manual: `edit(target="src/foo.ts::Bar", action={kind:"delete"})` — file persists
+- Manual: `get(target="src/foo.ts")` — returns content
+- `cargo test -p pi-code-path --tests` 284+ pass

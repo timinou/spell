@@ -1,0 +1,114 @@
+#+TITLE: LINE#ID anchors — surface deterministic line IDs in get output (B7)
+#+STATE: ITEM
+#+SESSION_ID: 14d47a7632d063d9
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
+#+CUSTOM_ID: FEAT-705-lineid-anchors-surface-deterministic-lin
+#+LAYER: core
+#+DEPENDS: FEAT-701-edit-ts-action-normalizer-propagate-line
+
+* Intention & Purpose
+Make line anchors copy-pasteable. Tool docs promise `LINE#ID` format (e.g., `5#QW`) so an agent can read a line then reference it in `splice`/`insertBefore` `pos:"5#QW"`. Currently get output shows `<line 5>` with no hash ID, breaking the documented contract.
+
+* Context & Narrative
+`crates/pi-code-path/src/dialects/text/axes.rs:28-42` produces NodeRef with `locator: format!("<line {}>", ln)` — no hash ID. The display layer (`packages/coding-agent/src/tools/codepath-result.ts::formatLocator`/`nodeToLocation`) doesn't synthesize one. The kernel-side `pos`/`end` action handlers can already accept `"5#QW"` strings and resolve via content-hash lookup; the missing piece is generating and emitting the IDs at line-render time.
+
+Anchor ID semantics: deterministic per (file, line, line-content). Two-character base32 hash of `line_text` is enough — collisions within a single file are vanishingly rare, and the kernel re-validates the hash before applying the action. Edits earlier in the file that don't touch line 5 leave its anchor stable.
+
+* Scope
+In-scope:
+- `crates/pi-code-path/src/dialects/text/axes.rs` — emit `locator: format!("{path}:line:{ln}#{id}")` with 2-char base32 hash
+- `crates/pi-code-path/src/dialects/text/anchor.rs` (new) — `pub fn line_anchor_id(line_text: &str) -> String`
+- `packages/coding-agent/src/tools/codepath-result.ts::formatLocator` — render `LINE#ID:` prefix
+- `crates/pi-code-engine/src/line_target.rs` — accept `"5#QW"` and validate hash; reject if drifted
+- Spec update: `specs/code-graph/code-path-extensions.md` §12
+Out-of-scope:
+- Anchor IDs for non-line content (paragraphs/chunks)
+- Cross-file anchors
+
+* Existing Patterns (MUST use)
+- Existing locator string format `"path:line:N"`
+- Existing `nodeToLocation` in `codepath-result.ts:30-35`
+- `specs/code-graph/code-path-extensions.md` §1
+
+* Tests
+File: `crates/pi-code-path/src/dialects/text/anchor.rs`
+Scenarios:
+1. `anchor_id_deterministic`
+2. `anchor_id_differs_for_different_text`
+3. `anchor_id_is_2_chars_base32`
+
+File: `crates/pi-code-path/src/dialects/text/axes.rs` (extend)
+Scenarios:
+4. `line_step_emits_anchor_id_in_locator`
+5. `line_step_emits_per_line_unique_ids`
+
+File: `packages/coding-agent/test/codepath-result.test.ts` (new)
+Scenarios:
+6. `formatLocator_renders_LINE_ID_prefix`
+
+File: `crates/pi-code-engine/src/line_target_tests.rs`
+Scenarios:
+7. `pos_with_anchor_id_validates_match`
+8. `pos_with_stale_anchor_id_rejected` — Diagnostic AnchorMismatch
+
+* Implementation
+** ITEM Add line anchor ID helper and tests
+:PROPERTIES:
+:CUSTOM_ID: FEAT-705-lineid-anchors-surface-deterministic-lin::anchor-helper
+:END:
+- File: `crates/pi-code-path/src/dialects/text/anchor.rs` (new)
+- `pub fn line_anchor_id(line_text: &str) -> String` — `crc32fast::hash(line_text.as_bytes())` → take 10 bits → 2 base32 chars (alphabet `ABCDEFGHJKMNPQRSTUVWXYZ23456789`, no I/L/0/1/O)
+- Tests 1-3
+
+** ITEM Emit anchor IDs in line step locators
+:PROPERTIES:
+:CUSTOM_ID: FEAT-705-lineid-anchors-surface-deterministic-lin::axes-emit
+:DEPENDS: FEAT-705-lineid-anchors-surface-deterministic-lin::anchor-helper
+:END:
+- File: `crates/pi-code-path/src/dialects/text/axes.rs`
+- Replace `<line {n}>` format with `{file_path}:line:{n}#{id}` where id = `line_anchor_id(line_text)`
+- Tests 4-5
+
+** ITEM Render LINE#ID prefix in get output
+:PROPERTIES:
+:CUSTOM_ID: FEAT-705-lineid-anchors-surface-deterministic-lin::render
+:LAYER: api
+:DEPENDS: FEAT-705-lineid-anchors-surface-deterministic-lin::axes-emit
+:END:
+- File: `packages/coding-agent/src/tools/codepath-result.ts`
+- Update `formatLocator(node)`: if locator matches `/^.+:line:(\d+)#([A-Z0-9]{2})$/`, emit `${line}#${id}:` as inline prefix
+- Test 6
+
+** ITEM Accept and validate pos="N#ID" anchors in edit
+:PROPERTIES:
+:CUSTOM_ID: FEAT-705-lineid-anchors-surface-deterministic-lin::pos-validate
+:DEPENDS: FEAT-705-lineid-anchors-surface-deterministic-lin::axes-emit
+:END:
+- File: `crates/pi-code-engine/src/line_target.rs`
+- Parse `"5#QW"` → `(line=5, expected_id=Some("QW"))`
+- After resolving line: compute `line_anchor_id(actual_line)`; if `expected_id` present AND mismatches, return `Diagnostic::AnchorMismatch{ line, expected, actual }`
+- Tests 7-8
+
+** ITEM Update spec
+:PROPERTIES:
+:CUSTOM_ID: FEAT-705-lineid-anchors-surface-deterministic-lin::spec
+:LAYER: api
+:DEPENDS: FEAT-705-lineid-anchors-surface-deterministic-lin::pos-validate
+:END:
+- File: `specs/code-graph/code-path-extensions.md`
+- New §12 Anchor format: LINE#ID format, anchor stability semantics, AnchorMismatch diagnostic
+
+* Edge Cases
+- Empty line: `line_anchor_id("")` deterministic value (e.g., `"AA"`)
+- Trailing whitespace: hash includes whitespace
+- Windows line endings: anchor on bytes between newlines
+- pos with no `#ID` suffix (just `"5"`): permitted, no hash validation (backwards-compat)
+- Hash collision: documented; user re-anchors via fresh get
+
+* Acceptance Criteria
+- 8 tests pass
+- Manual: `get("a.ts#lines[1..5]")` shows `1#QW: ...`
+- Manual: `edit("a.ts", [{kind:"splice", pos:"3#XY", lines:"new"}])` succeeds when line 3 hashes to `XY`; AnchorMismatch when content changed
+- `cargo test -p pi-code-path --tests` 290+ pass
+- `cargo test -p pi-code-engine --tests line_target` clean
+- `bun test packages/coding-agent/test/codepath-result.test.ts` clean

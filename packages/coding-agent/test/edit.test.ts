@@ -282,3 +282,87 @@ describe("CodepathEditTool", () => {
 		expect(tools.some(t => t.name === "edit")).toBe(true);
 	});
 });
+
+
+describe("action normalizer (FEAT-701)", () => {
+	beforeEach(async () => {
+		try {
+			await fs.mkdir(tmpDir, { recursive: true });
+		} catch {}
+	});
+	afterEach(async () => {
+		try {
+			await fs.rm(tmpDir, { recursive: true });
+		} catch {}
+		try {
+			(spyOn(nativesModule, "executeCodePath") as any).mockRestore?.();
+		} catch {}
+	});
+
+	async function captureActions(action: any): Promise<any> {
+		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue(mockEditResult());
+		const tool = new CodepathEditTool(createSession());
+		await tool.execute("t", {
+			operations: [{ target: "src/example.ts::Foo", action }],
+		});
+		const call = spy.mock.calls[0]?.[0] as any;
+		return call?.actions?.[0];
+	}
+
+	it("insertBefore propagates lines as string", async () => {
+		const sent = await captureActions({ kind: "insertBefore", lines: "// hi" });
+		expect(sent.lines).toBe("// hi");
+	});
+
+	it("insertBefore propagates lines as array", async () => {
+		const sent = await captureActions({ kind: "insertBefore", lines: ["a", "b"] });
+		// normalizeLines collapses arrays into newline-joined strings.
+		expect(typeof sent.lines).toBe("string");
+		expect(sent.lines).toContain("a");
+		expect(sent.lines).toContain("b");
+	});
+
+	it("insertAfter propagates lines", async () => {
+		const sent = await captureActions({ kind: "insertAfter", lines: "// after" });
+		expect(sent.lines).toBe("// after");
+	});
+
+	it("splice propagates pos and end", async () => {
+		const sent = await captureActions({
+			kind: "splice",
+			pos: "3#AB",
+			end: "5#CD",
+			lines: ["x"],
+		});
+		expect(sent.pos).toBe("3#AB");
+		expect(sent.end).toBe("5#CD");
+		expect(typeof sent.lines).toBe("string");
+		expect(sent.lines).toContain("x");
+	});
+
+	// Patch is intercepted by `isPatchAction` and routed to the patch
+	// helper (not executeCodePath), so the structural normalizer is not
+	// involved. Validate via wrap (which IS structural) instead.
+	it("wrap propagates content array", async () => {
+		const sent = await captureActions({
+			kind: "wrap",
+			content: ["if (true) {", "$BODY", "}"],
+		});
+		expect(typeof sent.content).toBe("string");
+		expect(sent.content).toContain("$BODY");
+	});
+
+	// Append/Prepend/Replace go through the LINE#ID edit path, NOT the
+	// structural normalizer. We exercise insertBefore as a structural
+	// regression for the lines field instead.
+	it("insertBefore omits lines when not set", async () => {
+		const sent = await captureActions({ kind: "insertBefore" } as any);
+		expect(sent.lines).toBeUndefined();
+	});
+
+	it("findAndReplace propagates find (regression)", async () => {
+		const sent = await captureActions({ kind: "findAndReplace", find: "foo", content: "bar" });
+		expect(sent.find).toBe("foo");
+		expect(sent.content).toBe("bar");
+	});
+});

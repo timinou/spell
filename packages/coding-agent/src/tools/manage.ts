@@ -58,13 +58,20 @@ export class ManageTool implements AgentTool<typeof manageSchema> {
 		const sanitized = replaceTabs(text);
 		const maxChars = 2_000;
 		const truncated = sanitized.length > maxChars ? `${sanitized.slice(0, maxChars)}\n...truncated` : sanitized;
+		// FEAT-710: diff subcommand renders with diff syntax highlighting
+		// to match the edit-tool output. Other manage subcommands stay
+		// plain-text.
+		const details = (result as AgentToolResult & { details?: ManageToolResultDetails }).details;
+		const subcommand = details?.command;
+		const language = subcommand === "diff" ? "diff" : "text";
+		const title = subcommand ? `Manage / ${subcommand}` : "Manage";
 		return {
 			render: (width: number) =>
 				renderCodeCell(
 					{
 						code: truncated,
-						language: "text",
-						title: `Manage`,
+						language,
+						title,
 						status: "complete",
 						expanded: options.expanded,
 						width,

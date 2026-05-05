@@ -2,6 +2,7 @@
 //!
 //! Operates on opaque bytes with structural axes (`§line`, `§chunk`, `§para`).
 
+pub mod anchor;
 pub mod axes;
 pub mod line_index;
 pub mod mutation;
@@ -13,6 +14,7 @@ pub mod stream;
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use super::fs::anchors::DefaultFsAnchorContext;
+use self::anchor::line_anchor_id;
 use crate::{
 	ast::{CodePath, Combinator, Head, Locator, Predicate, Step},
 	dialects::fs::walker::{WalkOpts, walk},
@@ -77,18 +79,49 @@ impl Resolver for TextResolver {
 		let query = match &path.query {
 			Some(q) => q,
 			None => {
-				// No query — return file nodes.
-				return Ok(file_paths
-					.into_iter()
+				// No query — build file nodes. If a content qualifier is
+				// set (FEAT-689 routing of bare-file `#raw`/`#bytes`/…),
+				// apply it now so we return inlined content rather than
+				// a bare §file stub.
+				let mut file_nodes: Vec<NodeRef> = file_paths
+					.iter()
 					.map(|p| NodeRef {
 						locator:     p.to_string_lossy().to_string(),
-						range:       0..0,
+						range:       0..p.metadata().map(|m| m.len() as usize).unwrap_or(0),
 						kind:        "§file".to_string(),
 						content:     None,
 						metadata:    HashMap::new(),
 						diagnostics: Vec::new(),
 					})
-					.collect());
+					.collect();
+				if let Some(qual) = &path.qualifier {
+					let mut out = Vec::new();
+					for n in file_nodes {
+						let abs = PathBuf::from(&n.locator);
+						let content = match std::fs::read(&abs) {
+							Ok(c) => c,
+							Err(_) => {
+								out.push(n);
+								continue;
+							},
+						};
+						match qualifiers::resolve_qualifier(
+							&n,
+							&content,
+							qual,
+							&self.format_extractors,
+						) {
+							Ok(m) => out.push(m),
+							Err(d) => {
+								let mut n = n;
+								n.diagnostics.push(d);
+								out.push(n);
+							},
+						}
+					}
+					file_nodes = out;
+				}
+				return Ok(file_nodes);
 			},
 		};
 
@@ -232,12 +265,16 @@ fn expand_context(
 		for ln in start_line..=end_line {
 			let range = idx.line_range(ln, content.len()).unwrap_or(0..0);
 			let line_text = text[range.clone()].to_string();
+			let anchor = line_anchor_id(line_text.trim_end_matches(['\n', '\r']));
+			let mut metadata = HashMap::new();
+			metadata.insert("anchorId".to_string(), serde_json::Value::String(anchor.clone()));
+			metadata.insert("line".to_string(), serde_json::Value::Number(ln.into()));
 			let ctx_node = NodeRef {
-				locator: format!("{}::<line {}>", path_str, ln),
+				locator: format!("{}::<line {ln}#{anchor}>", path_str),
 				range,
 				kind: "§line".to_string(),
 				content: Some(Content::Text { value: line_text }),
-				metadata: HashMap::new(),
+				metadata,
 				diagnostics: Vec::new(),
 			};
 			if !result
@@ -264,7 +301,9 @@ fn context_count(step: &Step) -> usize {
 fn parse_line_num(locator: &str) -> Option<usize> {
 	let s = locator.strip_prefix("<line ")?;
 	let s = s.strip_suffix(">")?;
-	s.parse().ok()
+	// New format: `<line N#ID>`. Backwards-compat: bare `<line N>` still parses.
+	let number_part = s.split('#').next()?;
+	number_part.parse().ok()
 }
 
 #[cfg(test)]
@@ -316,8 +355,8 @@ mod tests {
 		let cp = parse_code_path("a.txt::§line[2..3]", &DummyLexer).unwrap();
 		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
 		assert_eq!(nodes.len(), 2);
-		assert!(nodes[0].locator.contains("<line 2>"));
-		assert!(nodes[1].locator.contains("<line 3>"));
+		assert!(nodes[0].locator.contains("<line 2#"));
+		assert!(nodes[1].locator.contains("<line 3#"));
 	}
 
 	#[test]
@@ -330,8 +369,8 @@ mod tests {
 		let cp = parse_code_path(r#"a.txt::§line[text~="ba."]"#, &DummyLexer).unwrap();
 		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
 		assert_eq!(nodes.len(), 2);
-		assert!(nodes[0].locator.contains("<line 2>"));
-		assert!(nodes[1].locator.contains("<line 3>"));
+		assert!(nodes[0].locator.contains("<line 2#"));
+		assert!(nodes[1].locator.contains("<line 3#"));
 	}
 
 	#[test]
@@ -377,9 +416,9 @@ mod tests {
 		// match line 2 + 2 trailing context lines (3,4) = 3 total
 		assert_eq!(nodes.len(), 3);
 		let locs: Vec<_> = nodes.iter().map(|n| n.locator.clone()).collect();
-		assert!(locs.iter().any(|l| l.contains("<line 2>")));
-		assert!(locs.iter().any(|l| l.contains("<line 3>")));
-		assert!(locs.iter().any(|l| l.contains("<line 4>")));
+		assert!(locs.iter().any(|l| l.contains("<line 2#")));
+		assert!(locs.iter().any(|l| l.contains("<line 3#")));
+		assert!(locs.iter().any(|l| l.contains("<line 4#")));
 	}
 
 	#[test]
@@ -411,9 +450,9 @@ mod tests {
 		// match line 4 + 2 leading context lines (2,3) = 3 total
 		assert_eq!(nodes.len(), 3);
 		let locs: Vec<_> = nodes.iter().map(|n| n.locator.clone()).collect();
-		assert!(locs.iter().any(|l| l.contains("<line 2>")));
-		assert!(locs.iter().any(|l| l.contains("<line 3>")));
-		assert!(locs.iter().any(|l| l.contains("<line 4>")));
+		assert!(locs.iter().any(|l| l.contains("<line 2#")));
+		assert!(locs.iter().any(|l| l.contains("<line 3#")));
+		assert!(locs.iter().any(|l| l.contains("<line 4#")));
 	}
 
 	#[test]

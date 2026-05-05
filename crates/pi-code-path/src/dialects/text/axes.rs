@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use regex::Regex;
 
-use super::{line_index::LineIndex, para_index::ParaIndex};
+use super::{anchor::line_anchor_id, line_index::LineIndex, para_index::ParaIndex};
 use crate::{
 	ast::{CompareOp, Predicate, Step},
 	types::{Content, NodeRef},
@@ -29,12 +29,16 @@ pub fn line_steps(content: &[u8], step: &Step) -> Vec<NodeRef> {
 		.map(|ln| {
 			let range = line_index.line_range(ln, content.len()).unwrap_or(0..0);
 			let line_text = text[range.clone()].to_string();
+			let anchor = line_anchor_id(line_text.trim_end_matches(['\n', '\r']));
+			let mut metadata = HashMap::new();
+			metadata.insert("anchorId".to_string(), serde_json::Value::String(anchor.clone()));
+			metadata.insert("line".to_string(), serde_json::Value::Number(ln.into()));
 			NodeRef {
-				locator: format!("<line {}>", ln),
+				locator: format!("<line {ln}#{anchor}>"),
 				range,
 				kind: "§line".to_string(),
 				content: Some(Content::Text { value: line_text }),
-				metadata: HashMap::new(),
+				metadata,
 				diagnostics: Vec::new(),
 			}
 		})
@@ -307,8 +311,8 @@ mod tests {
 		let content = b"a\nb\nc\n";
 		let nodes = line_steps(content, &step(vec![]));
 		assert_eq!(nodes.len(), 3);
-		assert_eq!(nodes[0].locator, "<line 1>");
-		assert_eq!(nodes[1].locator, "<line 2>");
+		assert!(nodes[0].locator.starts_with("<line 1#"), "{}", nodes[0].locator);
+		assert!(nodes[1].locator.starts_with("<line 2#"), "{}", nodes[1].locator);
 	}
 
 	#[test]
@@ -317,8 +321,8 @@ mod tests {
 		let nodes =
 			line_steps(content, &step(vec![Predicate::Range { start: Some(2), end: Some(3) }]));
 		assert_eq!(nodes.len(), 2);
-		assert_eq!(nodes[0].locator, "<line 2>"); // 1-indexed: 2..=3 => lines 2 & 3
-		assert_eq!(nodes[1].locator, "<line 3>");
+		assert!(nodes[0].locator.starts_with("<line 2#"), "{}", nodes[0].locator); // 1-indexed: 2..=3 => lines 2 & 3
+		assert!(nodes[1].locator.starts_with("<line 3#"), "{}", nodes[1].locator);
 	}
 
 	#[test]
@@ -326,7 +330,7 @@ mod tests {
 		let content = b"a\nb\nc\n";
 		let nodes = line_steps(content, &step(vec![Predicate::Ordinal(2)]));
 		assert_eq!(nodes.len(), 1);
-		assert_eq!(nodes[0].locator, "<line 2>"); // ordinal 2 => line 2
+		assert!(nodes[0].locator.starts_with("<line 2#"), "{}", nodes[0].locator); // ordinal 2 => line 2
 	}
 
 	#[test]
@@ -334,7 +338,7 @@ mod tests {
 		let content = b"a\nb\nc\n";
 		let nodes = line_steps(content, &step(vec![Predicate::Ordinal(-1)]));
 		assert_eq!(nodes.len(), 1);
-		assert_eq!(nodes[0].locator, "<line 3>");
+		assert!(nodes[0].locator.starts_with("<line 3#"), "{}", nodes[0].locator);
 	}
 
 	#[test]
@@ -342,8 +346,8 @@ mod tests {
 		let content = b"foo\nbar\nbaz\n";
 		let nodes = line_steps(content, &step(vec![Predicate::TextMatch(r"ba.".to_string())]));
 		assert_eq!(nodes.len(), 2);
-		assert_eq!(nodes[0].locator, "<line 2>");
-		assert_eq!(nodes[1].locator, "<line 3>");
+		assert!(nodes[0].locator.starts_with("<line 2#"), "{}", nodes[0].locator);
+		assert!(nodes[1].locator.starts_with("<line 3#"), "{}", nodes[1].locator);
 	}
 
 	#[test]
@@ -365,8 +369,8 @@ mod tests {
 			}]),
 		);
 		assert_eq!(nodes.len(), 2); // "a\n" len=2, "abcd\n" len=5, "abc\n" len=4
-		assert_eq!(nodes[0].locator, "<line 2>");
-		assert_eq!(nodes[1].locator, "<line 3>");
+		assert!(nodes[0].locator.starts_with("<line 2#"), "{}", nodes[0].locator);
+		assert!(nodes[1].locator.starts_with("<line 3#"), "{}", nodes[1].locator);
 	}
 
 	#[test]
@@ -381,7 +385,7 @@ mod tests {
 		let content = b"a\nb\nc\n";
 		let nodes = line_steps(content, &step(vec![Predicate::Flag("last".to_string())]));
 		assert_eq!(nodes.len(), 1);
-		assert_eq!(nodes[0].locator, "<line 3>");
+		assert!(nodes[0].locator.starts_with("<line 3#"), "{}", nodes[0].locator);
 	}
 
 	#[test]
@@ -447,7 +451,7 @@ mod tests {
 		let content = b"1\n2\n3\n4\n5\n";
 		let nodes = line_steps(content, &step(vec![Predicate::Range { start: Some(-2), end: None }]));
 		assert_eq!(nodes.len(), 2);
-		assert_eq!(nodes[0].locator, "<line 4>");
-		assert_eq!(nodes[1].locator, "<line 5>");
+		assert!(nodes[0].locator.starts_with("<line 4#"), "{}", nodes[0].locator);
+		assert!(nodes[1].locator.starts_with("<line 5#"), "{}", nodes[1].locator);
 	}
 }

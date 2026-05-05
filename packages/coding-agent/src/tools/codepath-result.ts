@@ -16,8 +16,24 @@ export interface CodePathResult {
 	images: Array<{ data: string; mimeType: string; text?: string }>;
 }
 
-function formatLocator(locator: string): { path?: string; line?: number; column?: number } {
-	// locator shapes: "path", "path:line", "path:line:col", "path@line:col"
+function formatLocator(locator: string): {
+	path?: string;
+	line?: number;
+	column?: number;
+	anchorId?: string;
+} {
+	// FEAT-705: text-axis line locators arrive as
+	// `path::<line N#ID>` from the resolver. Strip the angle-bracket
+	// envelope and split on `#` for the deterministic anchor id.
+	const newLineMatch = locator.match(/^(.+?)(?:::?)<line (\d+)(?:#([A-Z0-9]{2}))?>$/);
+	if (newLineMatch) {
+		return {
+			path: newLineMatch[1],
+			line: Number(newLineMatch[2]),
+			anchorId: newLineMatch[3],
+		};
+	}
+	// Legacy shapes: "path", "path:line", "path:line:col"
 	const match = locator.match(/^(.+?)(?::(\d+)(?::(\d+))?)?$/);
 	if (!match) return { path: locator };
 	return {
@@ -28,10 +44,16 @@ function formatLocator(locator: string): { path?: string; line?: number; column?
 }
 
 function nodeToLocation(node: NodeRefDto): string {
-	const { path, line, column } = formatLocator(node.locator);
-	if (line !== undefined && column !== undefined) return `${path}:${line}:${column}`;
-	if (line !== undefined) return `${path}:${line}`;
-	return path ?? node.locator;
+	const { path, line, column, anchorId } = formatLocator(node.locator);
+	const stat = formatStatMetadata(node);
+	const suffix = stat ?? "";
+	// FEAT-705: when we have a deterministic anchor id, render it next
+	// to the line so the agent can copy `LINE#ID` straight back as a
+	// pos/end anchor on edit actions.
+	if (line !== undefined && anchorId) return `${path}:${line}#${anchorId}${suffix}`;
+	if (line !== undefined && column !== undefined) return `${path}:${line}:${column}${suffix}`;
+	if (line !== undefined) return `${path}:${line}${suffix}`;
+	return (path ?? node.locator) + suffix;
 }
 
 function getNodeText(node: NodeRefDto): string | undefined {
@@ -44,6 +66,33 @@ function getNodeText(node: NodeRefDto): string | undefined {
 
 function getNodeKindLabel(node: NodeRefDto): string {
 	return node.kind ?? "node";
+}
+
+function localFormatBytes(bytes: number): string {
+	if (bytes < 1024) return `${bytes} B`;
+	const kb = bytes / 1024;
+	if (kb < 1024) return `${kb.toFixed(1)} KB`;
+	const mb = kb / 1024;
+	if (mb < 1024) return `${mb.toFixed(1)} MB`;
+	return `${(mb / 1024).toFixed(2)} GB`;
+}
+
+function formatStatMetadata(node: NodeRefDto): string | null {
+	// FEAT-709: surface size + mtime on §file/§dir/§symlink stat results
+	// so `get(target:"…#stat")` is informative instead of bare-path.
+	if (!["§file", "§dir", "§symlink"].includes(node.kind)) return null;
+	const meta = (node.metadata ?? {}) as Record<string, unknown>;
+	const sizeRaw = meta.size;
+	const mtimeRaw = meta.mtime;
+	const parts: string[] = [];
+	if (typeof sizeRaw === "number" && sizeRaw > 0) parts.push(`size=${localFormatBytes(sizeRaw)}`);
+	if (typeof mtimeRaw === "number") {
+		const iso = new Date(mtimeRaw * 1000).toISOString();
+		parts.push(`mtime=${iso}`);
+	}
+	if (typeof meta.target === "string") parts.push(`target=${meta.target}`);
+	if (parts.length === 0) return null;
+	return ` [${node.kind} ${parts.join(" ")}]`;
 }
 
 function formatDiagnostic(d: DiagnosticDto): string {
