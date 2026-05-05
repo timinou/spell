@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
-import { executeCodePath } from "@oh-my-pi/pi-natives";
+import { executeCodePath, getRegisteredExtensions } from "@oh-my-pi/pi-natives";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -11,6 +11,14 @@ import { type CodePathFormatMode, formatCodePathResult } from "./codepath-result
 import type { GetParams } from "./codepath-types";
 import { getSchema } from "./codepath-types";
 import { replaceTabs } from "./render-utils";
+
+let _sourceExtensions: Set<string> | null = null;
+function getSourceExtensions(): Set<string> {
+	if (!_sourceExtensions) {
+		_sourceExtensions = new Set(getRegisteredExtensions());
+	}
+	return _sourceExtensions;
+}
 import { type DetailsWithMeta, toolResult } from "./tool-result";
 
 type GetToolResultDetails = DetailsWithMeta & {
@@ -100,8 +108,12 @@ export class GetTool implements AgentTool<typeof getSchema> {
 			const absCandidate = path.isAbsolute(normalized) ? normalized : path.resolve(params.root ?? process.cwd(), normalized);
 			try {
 				const stat = await fs.stat(absCandidate);
-				if (stat.isFile()) {
-					target = `${normalized}#raw`;
+ 			if (stat.isFile()) {
+ 					const ext = path.extname(normalized).slice(1);
+					const isSourceFile = getSourceExtensions().has(ext);
+ 					target = isSourceFile
+ 						? `${normalized}#outline`
+ 						: `${normalized}#raw`;
 				} else if (stat.isDirectory()) {
 					target = buildDirQualifier(normalized, params);
 				}

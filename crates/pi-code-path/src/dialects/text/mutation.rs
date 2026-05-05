@@ -330,7 +330,7 @@ impl MutationResolver for super::TextResolver {
 mod tests {
 	use super::{super::TextResolver, compute_line_hash};
 	use crate::{
-		ast::{Action, ActionContent, CodePath, FsLocator, FsSegment, Locator},
+		ast::{Action, ActionContent, ActionKind, CodePath, FsLocator, FsSegment, Locator, Qualifier},
 		resolver::{CancellationToken, MutationResolver},
 		types::DiagnosticVariant,
 	};
@@ -514,5 +514,55 @@ mod tests {
 		assert_eq!(outcome.edit_count, 0);
 		let content = std::fs::read_to_string(root.join("a.txt")).unwrap();
 		assert_eq!(content, "foo\nbar\nbaz\n");
+	}
+
+	#[test]
+	fn text_resolver_rejects_qualified_path_for_whole_file_ops() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		let resolver = TextResolver::new(root);
+		let qualified = CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![FsSegment::Literal("a.txt".to_string())],
+			}),
+			query:     None,
+			qualifier: Some(Qualifier { name: "raw".into(), args: None }),
+		};
+		assert!(!resolver.supports(&qualified, ActionKind::Patch));
+		assert!(!resolver.supports(&qualified, ActionKind::Append));
+		assert!(!resolver.supports(&qualified, ActionKind::Prepend));
+	}
+
+	#[test]
+	fn text_resolver_accepts_bare_path_for_whole_file_ops() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		let resolver = TextResolver::new(root);
+		let bare = CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![FsSegment::Literal("a.txt".to_string())],
+			}),
+			query:     None,
+			qualifier: None,
+		};
+		assert!(resolver.supports(&bare, ActionKind::Patch));
+		assert!(resolver.supports(&bare, ActionKind::Append));
+		assert!(resolver.supports(&bare, ActionKind::Prepend));
+	}
+
+	#[test]
+	fn text_resolver_accepts_qualified_path_for_line_ops() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		let resolver = TextResolver::new(root);
+		let qualified = CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![FsSegment::Literal("a.txt".to_string())],
+			}),
+			query:     None,
+			qualifier: Some(Qualifier { name: "lines".into(), args: None }),
+		};
+		assert!(resolver.supports(&qualified, ActionKind::Insert));
+		assert!(resolver.supports(&qualified, ActionKind::Replace));
 	}
 }

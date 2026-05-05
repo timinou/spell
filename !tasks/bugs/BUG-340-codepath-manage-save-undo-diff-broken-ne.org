@@ -1,5 +1,5 @@
 #+TITLE: CodePath manage save/undo/diff broken; needs per-session edit-history tracker
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d50def80d06410
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T07-20-24-835Z_14d50def80d06410.jsonl]]
 #+CUSTOM_ID: BUG-340-codepath-manage-save-undo-diff-broken-ne
@@ -344,3 +344,5 @@ fn uncommitted_only_filter_excludes_post_commit_entries() {
 * References
 
 [[id:PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo]]
+
+NOTE [2026-05-05]: Implemented in commit e05d327a6. 6/6 tests pass. Revert uses 3-way chunk-replace.

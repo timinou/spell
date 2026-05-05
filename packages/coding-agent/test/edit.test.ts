@@ -366,3 +366,41 @@ describe("action normalizer (FEAT-701)", () => {
 		expect(sent.content).toBe("bar");
 	});
 });
+
+describe("BUG-341 zero-byte guard and routing", () => {
+	beforeEach(async () => {
+		try {
+			await fs.mkdir(tmpDir, { recursive: true });
+		} catch {}
+	});
+	afterEach(async () => {
+		try {
+			await fs.rm(tmpDir, { recursive: true });
+		} catch {}
+	});
+
+	it("delete on bare path unlinks file", async () => {
+		const file = path.join(tmpDir, "delete-bare.txt");
+		await writeFile(file, "hi\n");
+		const tool = new CodepathEditTool(createSession());
+		const result = await tool.execute("t", {
+			operations: [{ target: file, action: { kind: "delete" } }],
+		});
+		expect(getText(result)).toContain("Updated");
+		expect(await fs.exists(file)).toBe(false);
+	});
+
+	it("delete on path::Symbol erases bytes but file survives", async () => {
+		const file = path.join(tmpDir, "delete-symbol.ts");
+		await writeFile(file, "export const X = 1;\nexport const Y = 2;\n");
+		const tool = new CodepathEditTool(createSession());
+		const result = await tool.execute("t", {
+			operations: [
+				{ target: `${file}::X`, action: { kind: "delete" } },
+			],
+		});
+		expect(await fs.exists(file)).toBe(true);
+		const content = await fs.readFile(file, "utf-8");
+		expect(content).not.toContain("export const X");
+	});
+});

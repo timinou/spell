@@ -2423,7 +2423,8 @@ mod tests {
 	fn execute_code_buffer_inner_creates_missing_file_buffers() {
 		let path = temp_path("create-buffer.ts");
 		let edit = execute_code_buffer_inner(
-			&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [{
+			&json!({ "command": "edit",
+				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
 				"targetId": path.display().to_string(),
 				"actions": [{ "kind": "write", "content": "export const created = 1;\n" }]
 			}] }),
@@ -2445,7 +2446,8 @@ mod tests {
 	fn execute_code_buffer_inner_accepts_create_with_empty_transport_defaults() {
 		let path = temp_path("create-buffer-transport.ts");
 		let edit = execute_code_buffer_inner(
-			&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [{
+			&json!({ "command": "edit",
+				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
 				"targetId": path.display().to_string(),
 				"actions": [{ "kind": "write", "content": "export const created = 1;\n" }]
 			}],
@@ -2473,7 +2475,8 @@ mod tests {
 		let path = temp_path("empty-edits-shadow.ts");
 		fs::write(&path, "export const original = 1;\n").expect("seed file");
 		let edit = execute_code_buffer_inner(
-			&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "saveMode": "staged",
+			&json!({ "command": "edit",
+				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "saveMode": "staged",
 			"operations": [{
 				"targetId": path.display().to_string(),
 				"actions": [{ "kind": "write", "content": "export const replaced = 2;\n" }]
@@ -2505,7 +2508,8 @@ mod tests {
 		let second = temp_path("multi-file-second.ts");
 		fs::write(&first, "export const first = 1;\n").expect("seed first");
 		fs::write(&second, "export const second = 2;\n").expect("seed second");
-		let edit = execute_code_buffer_inner(&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [
+		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
+				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [
 				{ "targetId": first.display().to_string(), "actions": [{ "kind": "write", "content": "export const first = 10;\n" }] },
 				{ "targetId": second.display().to_string(), "actions": [{ "kind": "write", "content": "export const second = 20;\n" }] }
 			] }))
@@ -2527,7 +2531,8 @@ mod tests {
 		fs::write(&first, "export const first = 1;\n").expect("seed first");
 		fs::write(&second, "export function main() {\n  return oldCall();\n}\n")
 			.expect("seed second");
-		let edit = execute_code_buffer_inner(&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [
+		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
+				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [
 				{ "targetId": first.display().to_string(), "actions": [{ "kind": "write", "content": "export const first = 3;\n" }] },
 				{ "targetId": format!("{}::missing", second.display()), "actions": [{ "kind": "findAndReplace", "find": "return oldCall();", "content": "return never();" }] }
 			] }))
@@ -2556,7 +2561,8 @@ mod tests {
 	fn execute_code_buffer_inner_clears_failed_multi_edit_state() {
 		let path = temp_path("failed-multi-edit.ts");
 		fs::write(&path, "export function main() {\n  return oldCall();\n}\n").expect("seed file");
-		let failed = execute_code_buffer_inner(&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [{
+		let failed = execute_code_buffer_inner(&json!({ "command": "edit",
+				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
 				"targetId": format!("{}::main", path.display()),
 				"actions": [{ "kind": "findAndReplace", "find": "return oldCall();", "content": "return newCall();" }],
 				"children": [{
@@ -2582,7 +2588,8 @@ mod tests {
 				),
 			"failed multi-edit should not leave a dirty staged buffer behind: {listed}",
 		);
-		let follow_up = execute_code_buffer_inner(&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [{
+		let follow_up = execute_code_buffer_inner(&json!({ "command": "edit",
+				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
 				"targetId": format!("{}::main", path.display()),
 				"actions": [{ "kind": "findAndReplace", "find": "return oldCall();", "content": "return finalCall();" }]
 			}] }))
@@ -2599,7 +2606,8 @@ mod tests {
 		let path = temp_path("undo-redo-persisted.ts");
 		fs::write(&path, "export const value = 1;\n").expect("seed file");
 		let edit = execute_code_buffer_inner(
-			&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [{
+			&json!({ "command": "edit",
+				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
 				"targetId": path.display().to_string(),
 				"actions": [{ "kind": "write", "content": "export const value = 2;\n" }]
 			}] }),
@@ -2636,7 +2644,8 @@ mod tests {
 			 prohibited\" {:candidate candidate})))\n",
 		)
 		.expect("seed clojure");
-		let edit = execute_code_buffer_inner(&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [{
+		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
+				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
 			"targetId": format!("{}::app.core/reject", path.display()),
 			"actions": [{ "kind": "rawTextReplace", "find": "live effects are prohibited", "content": "side effects are prohibited" }]
 		}] }))
@@ -2675,7 +2684,8 @@ mod tests {
 		assert_eq!(read["output"], json!("\"Dune\""));
 
 		let edit = execute_code_buffer_inner(
-			&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "operations": [{
+			&json!({ "command": "edit",
+				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
 			"targetId": format!("{}::[:books 0 :title]", path.display()),
 			"actions": [{ "kind": "write", "content": "\"Foundation\"" }]
 		}] }),
@@ -2693,7 +2703,8 @@ mod tests {
 		let path = temp_path("existing-create.ts");
 		fs::write(&path, "export const existing = true;\n").expect("seed file");
 		let result = execute_code_buffer_inner(
-			&json!({ "command": "edit", "sessionId": TEST_SESSION_ID, "file": path.display().to_string(),
+			&json!({ "command": "edit",
+				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "file": path.display().to_string(),
 			"operation": "create",
 			"content": "export const created = 1;\n" }),
 		)
@@ -3032,5 +3043,37 @@ mod tests {
 			output.contains("Missing required field: command"),
 			"expected missing command error, got: {output}"
 		);
+	}
+
+	fn delete_via_dispatch(src: &str, line: usize) -> Result<Value> {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		let file = root.join("test.ts");
+		fs::write(&file, src).unwrap();
+		execute_code_buffer_inner(
+			&json!({
+				"command": "edit",
+				"sessionId": "bug-341-test",
+				"root": root.display().to_string(),
+				"operations": [{
+					"targetId": file.display().to_string(),
+					"actions": [{"kind": "delete", "line": line}]
+				}]
+			})
+		)
+	}
+
+	#[test]
+	fn delete_via_kill_node_rejects_zero_byte_outcome() {
+		let result: Result<Value> = delete_via_dispatch("fn alone() {}\n", 1);
+		assert!(result.is_err());
+		let err = result.unwrap_err();
+		assert!(err.to_string().contains("zero"), "expected zero-byte hint, got: {err}");
+	}
+
+	#[test]
+	fn delete_via_kill_node_allows_non_zero_byte_outcome() {
+		let result: Result<Value> = delete_via_dispatch("fn a() {}\nfn b() {}\n", 1);
+		assert!(result.is_ok());
 	}
 }

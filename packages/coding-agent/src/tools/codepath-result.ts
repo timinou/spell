@@ -80,7 +80,7 @@ function localFormatBytes(bytes: number): string {
 function formatStatMetadata(node: NodeRefDto): string | null {
 	// FEAT-709: surface size + mtime on §file/§dir/§symlink stat results
 	// so `get(target:"…#stat")` is informative instead of bare-path.
-	if (!["§file", "§dir", "§symlink"].includes(node.kind)) return null;
+ if (!["§file", "§dir", "§symlink", "§outline"].includes(node.kind)) return null;
 	const meta = (node.metadata ?? {}) as Record<string, unknown>;
 	const sizeRaw = meta.size;
 	const mtimeRaw = meta.mtime;

@@ -251,7 +251,7 @@ mod tests {
 
 	use pi_code_path::{
 		ast::{
-			Action, ActionContent, CodePath, FsLocator, FsSegment, Head, Locator, NamePayload,
+			Action, ActionContent, ActionKind, CodePath, FsLocator, FsSegment, Head, Locator, NamePayload,
 			Occurrence, Query, Step,
 		},
 		resolver::traits::{CancellationToken, MutationResolver},
@@ -421,5 +421,46 @@ mod tests {
 			.unwrap_err();
 		assert!(matches!(err.variant, DiagnosticVariant::UnsupportedOperation));
 		assert!(err.message.contains("Promote"));
+	}
+
+	#[test]
+	fn code_resolver_rejects_bare_path_delete() {
+		let cp = ts_path(std::path::Path::new("foo.ts"));
+		let resolver = ts_resolver();
+		assert!(!resolver.supports(&cp, ActionKind::Delete));
+	}
+
+	#[test]
+	fn code_resolver_accepts_qualified_delete() {
+		let cp = ts_symbol_path(std::path::Path::new("foo.ts"), "Foo");
+		let resolver = ts_resolver();
+		assert!(resolver.supports(&cp, ActionKind::Delete));
+	}
+
+	#[test]
+	fn code_resolver_rejects_bare_path_for_all_symbol_kinds() {
+		let cp = ts_path(std::path::Path::new("foo.ts"));
+		let resolver = ts_resolver();
+		for k in [
+			ActionKind::Rename,
+			ActionKind::Wrap,
+			ActionKind::Splice,
+			ActionKind::Clone,
+			ActionKind::InsertBefore,
+			ActionKind::InsertAfter,
+			ActionKind::FindAndReplace,
+			ActionKind::RawTextReplace,
+			ActionKind::Move,
+			ActionKind::Transpose,
+			ActionKind::Promote,
+			ActionKind::Demote,
+			ActionKind::ReplaceCodeBlock,
+			ActionKind::RenameClassToken,
+			ActionKind::RenameIdToken,
+			ActionKind::RenameCustomProperty,
+			ActionKind::RemoveDeadStyle,
+		] {
+			assert!(!resolver.supports(&cp, k), "rejects {k:?} on bare path");
+		}
 	}
 }

@@ -720,6 +720,23 @@ pub fn render_code_path_napi(ast: serde_json::Value) -> Result<String> {
 		serde_json::from_value(ast).map_err(|e| Error::from_reason(format!("deser error: {e}")))?;
 	Ok(render_code_path(&cp, &DotLexer))
 }
+
+// ── getRegisteredExtensions ─────────────────────────────────────
+
+#[napi(js_name = "getRegisteredExtensions")]
+pub fn get_registered_extensions() -> Result<Vec<String>> {
+	let reg = pi_code_engine::language::LanguageRegistry::with_builtins()
+		.map_err(|e| Error::from_reason(format!("registry error: {e}")))?;
+	let mut exts = Vec::new();
+	for id in reg.languages() {
+		if let Some(profile) = reg.get(id) {
+			if profile.capabilities.outline {
+				exts.extend(profile.extensions.iter().cloned());
+			}
+		}
+	}
+	Ok(exts)
+}
 #[cfg(test)]
 mod tests {
 	use std::path::PathBuf;
