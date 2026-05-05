@@ -19,6 +19,7 @@ fn opts_with_root(target: impl Into<String>, root: PathBuf) -> CodePathTaskOptio
 		root:    Some(root.to_string_lossy().to_string()),
 		actions: None,
 		manage:  None,
+		artifact_threshold: None,
 	}
 }
 

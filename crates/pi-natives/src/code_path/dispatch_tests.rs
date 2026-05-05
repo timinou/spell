@@ -16,6 +16,7 @@ fn opts(target: impl Into<String>) -> CodePathTaskOptions {
 		root:    None,
 		actions: None,
 		manage:  None,
+		artifact_threshold: None,
 	}
 }
 
@@ -31,6 +32,7 @@ fn opts_with_root(target: impl Into<String>, root: std::path::PathBuf) -> CodePa
 		root:    Some(root.to_string_lossy().to_string()),
 		actions: None,
 		manage:  None,
+		artifact_threshold: None,
 	}
 }
 
