@@ -23,7 +23,12 @@ fn resolve_target_path(root: &Path, path: &CodePath) -> Result<PathBuf, Diagnost
 	let mut target = root.to_path_buf();
 	for seg in &loc.segments {
 		match seg {
-			FsSegment::Literal(s) => target.push(s),
+			FsSegment::Literal(s) => {
+				if s == "/" {
+					continue;
+				}
+				target.push(s)
+			}
 			_ => {
 				return Err(Diagnostic {
 					variant: DiagnosticVariant::ParseError,

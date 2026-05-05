@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
-import { executeCodeBuffer } from "@oh-my-pi/pi-natives";
+import { executeCodePath } from "@oh-my-pi/pi-natives";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import type { FileSystem, PatchInput } from "../patch";
@@ -199,39 +199,38 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		action: CodePathAction,
 		_signal?: AbortSignal,
 	): Promise<AgentToolResult> {
-		// Delegate structural ops to the managed-buffer edit transaction in pi-natives.
-		// `executeCodePath` is query-only and silently ignores `actions`, so it cannot
-		// be used here. The targetId convention (`<file>::Symbol.member`) matches the
-		// CodeOperation contract verbatim.
-		const sessionId = this.session.getSessionId?.() ?? undefined;
-		const result = executeCodeBuffer({
+		// Delegate structural ops to the unified executeCodePath edit surface.
+		const chunks = await executeCodePath({
 			command: "edit",
+			target: nodePath.relative(this.session.cwd, targetPath),
+			actions: [normalizeStructuralAction(action)],
 			root: this.session.cwd,
-			sessionId,
-			operations: [
-				{
-					targetId: targetPath,
-					actions: [normalizeStructuralAction(action) as never],
-				},
-			],
 		});
-		if (result.error) {
-			const err = (result.output ?? {}) as { code?: string; message?: string };
+
+		const diagnostics = chunks.flatMap(c => c.diagnostics);
+		if (diagnostics.length > 0) {
+			const diag = diagnostics[0]!;
 			return toolResult<EditToolResultDetails>({
-				target: targetPath,
+				target: nodePath.relative(this.session.cwd, targetPath),
 				action: action.kind,
-				error: err.code ?? "edit_failed",
+				error: diag.variant,
 			})
-				.text(err.message ?? `Edit failed for ${targetPath}`)
+				.text(diag.message)
 				.done();
 		}
-		const out = (result.output ?? {}) as { diff?: string; editCount?: number; created?: boolean };
-		const summary = out.diff?.length
-			? out.diff
-			: out.created
+
+		const nodes = chunks.flatMap(c => c.nodes);
+		const editResult = nodes.find(n => n.kind === "§edit-result");
+		const meta = editResult?.metadata as Record<string, unknown> | undefined;
+		const diff = meta?.diff as string | undefined;
+		const editCount = (meta?.editCount as number) ?? 1;
+		const created = meta?.created as boolean | undefined;
+		const summary = diff?.length
+			? diff
+			: created
 				? `Created ${targetPath}`
-				: `Updated ${targetPath} (${out.editCount ?? 1} edit(s))`;
-		return toolResult<EditToolResultDetails>({ target: targetPath, action: action.kind }).text(summary).done();
+				: `Updated ${targetPath} (${editCount} edit(s))`;
+		return toolResult<EditToolResultDetails>({ target: nodePath.relative(this.session.cwd, targetPath), action: action.kind }).text(summary).done();
 	}
 
 	async #executeLineId(
@@ -248,7 +247,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 				const content = action.kind === "prepend" ? lines : lines;
 				await fs.mkdir(nodePath.dirname(targetPath), { recursive: true });
 				await fs.writeFile(targetPath, content, "utf-8");
-				return toolResult<EditToolResultDetails>({ target: targetPath, op: "create" })
+				return toolResult<EditToolResultDetails>({ target: nodePath.relative(this.session.cwd, targetPath), op: "create" })
 					.text(`Created ${targetPath}`)
 					.done();
 			}
@@ -273,20 +272,20 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		} catch (err) {
 			if (err instanceof HashlineMismatchError) {
 				const diag = HashlineMismatchError.formatMessage(err.mismatches, err.fileLines);
-				return toolResult<EditToolResultDetails>({ target: targetPath, error: "stale_anchor" }).text(diag).done();
+				return toolResult<EditToolResultDetails>({ target: nodePath.relative(this.session.cwd, targetPath), error: "stale_anchor" }).text(diag).done();
 			}
 			throw err;
 		}
 
 		if (originalNormalized === normalizedText) {
 			if (!idempotent) {
-				return toolResult<EditToolResultDetails>({ target: targetPath, noop: true })
+				return toolResult<EditToolResultDetails>({ target: nodePath.relative(this.session.cwd, targetPath), noop: true })
 					.text(
 						`No changes made to ${targetPath}. The edits produced identical content. Retry with idempotent=true only when an intentional no-op is acceptable.`,
 					)
 					.done();
 			}
-			return toolResult<EditToolResultDetails>({ target: targetPath, noop: true, idempotent: true })
+			return toolResult<EditToolResultDetails>({ target: nodePath.relative(this.session.cwd, targetPath), noop: true, idempotent: true })
 				.text(`No changes (idempotent).`)
 				.done();
 		}
@@ -301,7 +300,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		const previewBlock = preview.preview ? `\n\nDiff preview:\n${preview.preview}` : "";
 
 		return toolResult<EditToolResultDetails>({
-			target: targetPath,
+			target: nodePath.relative(this.session.cwd, targetPath),
 			diff: diffResult.diff,
 			firstChangedLine: firstChangedLine ?? diffResult.firstChangedLine,
 		})
@@ -334,7 +333,7 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 			text += `\n\nWarnings:\n${result.warnings.join("\n")}`;
 		}
 
-		return toolResult<EditToolResultDetails>({ target: targetPath, op: "update", diff: change.newContent })
+		return toolResult<EditToolResultDetails>({ target: nodePath.relative(this.session.cwd, targetPath), op: "update", diff: change.newContent })
 			.text(text)
 			.done();
 	}

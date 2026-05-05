@@ -13,6 +13,7 @@ import type { CreateParams } from "./codepath-types";
 import { createSchema } from "./codepath-types";
 import { evaluateWriteGuards } from "./managed-buffer-guards";
 import { enforceModeWrite } from "./mode-guard";
+import { executeCodePath } from "@oh-my-pi/pi-natives";
 import { replaceTabs } from "./render-utils";
 import { type DetailsWithMeta, toolResult } from "./tool-result";
 
@@ -85,12 +86,27 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 			}
 		}
 
-		// Persist to disk. Ensure parent dir, write atomically through node fs.
+		// Ensure parent directory exists before delegating to kernel.
 		await fs.mkdir(path.dirname(resolvedPath), { recursive: true });
-		await fs.writeFile(resolvedPath, content, "utf-8");
 
-		// Verify by stat — surfaces e.g. permission/quota failures the writeFile
-		// promise might mask.
+		// Delegate to kernel via unified executeCodePath edit surface.
+		const chunks = await executeCodePath({
+			command: "edit",
+			target: path.relative(sessionCwd, resolvedPath),
+			actions: [{ kind: "create", content, force: params.force ?? false }],
+			root: this.session.cwd,
+		});
+
+		const diagnostics = chunks.flatMap(c => c.diagnostics);
+		if (diagnostics.length > 0) {
+			const message = diagnostics.map(d => `[${d.variant}] ${d.message}`).join("\n");
+			return toolResult<CreateToolResultDetails>({ path: params.path, error: diagnostics[0]!.variant })
+				.text(message)
+				.done();
+		}
+
+		// Verify by stat — surfaces e.g. permission/quota failures the kernel
+		// promise might mask, and provides byte-count display.
 		const stat = await fs.stat(resolvedPath);
 		return toolResult<CreateToolResultDetails>({ path: params.path, created: true, bytes: stat.size })
 			.text(`Created ${params.path} (${stat.size} bytes)`)

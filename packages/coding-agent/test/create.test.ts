@@ -1,8 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { CreateTool, createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
+import * as nativesModule from "@oh-my-pi/pi-natives";
 
 const tmpDir = path.join(process.cwd(), "packages/coding-agent/test/tmp-create");
 
@@ -31,6 +32,9 @@ describe("CreateTool", () => {
 	afterEach(async () => {
 		try {
 			await fs.rm(tmpDir, { recursive: true });
+		} catch {}
+		try {
+			(spyOn(nativesModule, "executeCodePath") as any).mockRestore?.();
 		} catch {}
 	});
 
@@ -117,6 +121,39 @@ describe("CreateTool", () => {
 		expect(getText(result)).toContain("Cannot resolve artifact URI");
 		// File must NOT have been created.
 		expect(await fs.exists(path.join(tmpDir, "fail.txt"))).toBe(false);
+	});
+
+	it("dispatches create to executeCodePath with correct shape", async () => {
+		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+			{
+				nodes: [
+					{
+						locator: "edit",
+						rangeStart: 0,
+						rangeEnd: 0,
+						kind: "§edit-result",
+						content: null as any,
+						metadata: { editCount: 1, created: true },
+						diagnostics: [],
+					},
+				],
+				diagnostics: [],
+				done: true,
+			},
+		] as any);
+		const statSpy = spyOn(fs, "stat").mockResolvedValue({ size: 11 } as any);
+		const tool = new CreateTool(createSession());
+		const result = await tool.execute("t", { path: "spy.txt", content: "spy content" });
+		expect(getText(result)).toContain("Created");
+		expect(spy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				command: "edit",
+				target: "spy.txt",
+				actions: [expect.objectContaining({ kind: "create", content: "spy content", force: false })],
+			}),
+		);
+		spy.mockRestore();
+		statSpy.mockRestore();
 	});
 
 	it("is registered in createTools", async () => {
