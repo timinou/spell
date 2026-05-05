@@ -8,6 +8,7 @@ use std::{
 	fs::{File, OpenOptions},
 	io::{BufRead, BufReader, Write},
 	path::{Path, PathBuf},
+	sync::atomic::{AtomicU64, Ordering},
 	time::SystemTime,
 };
 
@@ -94,7 +95,10 @@ impl JsonlHistory {
 
 	#[cfg(test)]
 	pub fn in_memory() -> Self {
-		let path = std::env::temp_dir().join(format!("edit-history-{}.jsonl", std::process::id()));
+		static COUNTER: AtomicU64 = AtomicU64::new(0);
+		let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+		let path = std::env::temp_dir().join(format!("edit-history-{}-{}.jsonl", std::process::id(), n));
+		let _ = std::fs::remove_file(&path);
 		Self { path }
 	}
 

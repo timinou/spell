@@ -1,20 +1,19 @@
-//! `command:"manage"` subcommand handlers (FEAT-704).
+//! `command:"manage"` subcommand handlers (FEAT-704 / BUG-340).
 //!
 //! Manage subcommands are workspace- or file-level operations that don't
-//! map cleanly onto a CodePath query: `save` flushes a dirty buffer,
-//! `index` triggers code-graph indexing, `languages`/`buffers`/`status`/
-//! `watcherStatus`/`lockStatus` report broker state. Pre-FEAT-704 every
-//! `manage` call hit `parse_code_path` with an empty target and returned
-//! "parse failed at position 0".
+//! map cleanly onto a CodePath query.  Pre-FEAT-704 every `manage` call
+//! hit `parse_code_path` with an empty target and returned "parse failed
+//! at position 0".
 //!
-//! Each handler returns a single `NodeRefDto` with `kind: "§manage-result"`.
-//! The handler delegates to the existing `executeCodeBuffer` surface (or
-//! the registries directly) so we don't duplicate state-management code.
+//! BUG-340 reframes save/undo/diff/context as a per-session edit-history
+//! tracker: edits auto-persist, so `manage` inspects or reverts THIS
+//! session's changes without affecting sibling sessions.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
+use super::edit_history::{EditHistory, HistoryQuery, JsonlHistory};
 use super::napi::{DiagnosticDto, NodeRefDto};
 
 /// Build a §manage-result NodeRefDto with the given subcommand and payload.
@@ -45,7 +44,21 @@ fn dispatch(request: Value) -> Result<Value, String> {
 	Ok(output)
 }
 
-const MANAGE_SESSION_ID: &str = "pi-code-path-manage";
+fn history_for(root: &Path) -> JsonlHistory {
+	let path = root.join(".spell").join("edit-history.jsonl");
+	JsonlHistory::new(path)
+}
+
+fn absolute_path(file: &str, root: &PathBuf) -> PathBuf {
+	let p = Path::new(file);
+	if p.is_absolute() { p.to_path_buf() } else { root.join(p) }
+}
+
+fn diag_internal(message: String) -> DiagnosticDto {
+	DiagnosticDto { variant: "manage_dispatch_failed".to_string(), message, span: None }
+}
+
+// ── Subcommand handlers ──────────────────────────────────────────
 
 pub fn handle_languages() -> Result<NodeRefDto, DiagnosticDto> {
 	let payload = dispatch(json!({ "command": "languages" })).map_err(diag_internal)?;
@@ -57,40 +70,45 @@ pub fn handle_buffers() -> Result<NodeRefDto, DiagnosticDto> {
 	Ok(manage_result("buffers", payload))
 }
 
-pub fn handle_save(file: &str, root: &PathBuf) -> Result<NodeRefDto, DiagnosticDto> {
-	let path = absolute_path(file, root);
-	let payload = dispatch(json!({
-		"command": "save",
-		"sessionId": MANAGE_SESSION_ID,
-		"file": path.display().to_string(),
-	}))
-	.map_err(diag_internal)?;
-	Ok(manage_result("save", payload))
+pub fn handle_save(_file: &str, _root: &PathBuf) -> Result<NodeRefDto, DiagnosticDto> {
+	Ok(manage_result("save", json!({
+		"message": "edits auto-persist; use manage diff to inspect or manage undo to revert",
+	})))
 }
 
-pub fn handle_undo(file: &str, root: &PathBuf) -> Result<NodeRefDto, DiagnosticDto> {
+pub fn handle_undo(file: &str, root: &PathBuf, session_id: &str) -> Result<NodeRefDto, DiagnosticDto> {
+	if file.is_empty() {
+		return Err(DiagnosticDto {
+			variant: "missing_target".to_string(),
+			message: "manage undo requires a file target".to_string(),
+			span:    None,
+		});
+	}
 	let path = absolute_path(file, root);
-	let payload = dispatch(json!({
-		"command": "undo",
-		"sessionId": MANAGE_SESSION_ID,
-		"file": path.display().to_string(),
-	}))
-	.map_err(diag_internal)?;
-	Ok(manage_result("undo", payload))
+	let history = history_for(root);
+	let query = HistoryQuery::default()
+		.session_id(session_id)
+		.file_glob(path.to_string_lossy().to_string());
+	match history.revert(query) {
+		super::edit_history::RevertOutcome::Success { entry_id } => {
+			Ok(manage_result("undo", json!({ "reverted": entry_id })))
+		},
+		super::edit_history::RevertOutcome::NotFound => {
+			Ok(manage_result("undo", json!({ "message": "no uncommitted edit found for this session and file" })))
+		},
+		super::edit_history::RevertOutcome::Error(e) => {
+			Err(diag_internal(format!("revert failed: {e}")))
+		},
+	}
 }
 
-pub fn handle_redo(file: &str, root: &PathBuf) -> Result<NodeRefDto, DiagnosticDto> {
-	let path = absolute_path(file, root);
-	let payload = dispatch(json!({
-		"command": "redo",
-		"sessionId": MANAGE_SESSION_ID,
-		"file": path.display().to_string(),
-	}))
-	.map_err(diag_internal)?;
-	Ok(manage_result("redo", payload))
+pub fn handle_redo(_file: &str, _root: &PathBuf, _session_id: &str) -> Result<NodeRefDto, DiagnosticDto> {
+	Ok(manage_result("redo", json!({
+		"message": "redo not yet implemented; re-apply the edit manually",
+	})))
 }
 
-pub fn handle_diff(file: &str, root: &PathBuf) -> Result<NodeRefDto, DiagnosticDto> {
+pub fn handle_diff(file: &str, root: &PathBuf, session_id: &str) -> Result<NodeRefDto, DiagnosticDto> {
 	if file.is_empty() {
 		return Err(DiagnosticDto {
 			variant: "missing_target".to_string(),
@@ -99,13 +117,34 @@ pub fn handle_diff(file: &str, root: &PathBuf) -> Result<NodeRefDto, DiagnosticD
 		});
 	}
 	let path = absolute_path(file, root);
-	let payload = dispatch(json!({
-		"command": "diff",
-		"sessionId": MANAGE_SESSION_ID,
-		"file": path.display().to_string(),
-	}))
-	.map_err(diag_internal)?;
+	let history = history_for(root);
+	let query = HistoryQuery::default()
+		.session_id(session_id)
+		.file_glob(path.to_string_lossy().to_string())
+		.uncommitted_only(true);
+	let entries = history.query(query);
+	let diffs: Vec<String> = entries.into_iter().map(|e| e.diff).collect();
+	let payload = json!({ "diffs": diffs, "count": diffs.len() });
 	Ok(manage_result("diff", payload))
+}
+
+pub fn handle_context(root: &PathBuf, session_id: &str) -> Result<NodeRefDto, DiagnosticDto> {
+	let history = history_for(root);
+	let query = HistoryQuery::default()
+		.session_id(session_id)
+		.uncommitted_only(true);
+	let entries = history.query(query);
+	let payload = json!({
+		"entries": entries.into_iter().map(|e| json!({
+			"id": e.id,
+			"sessionId": e.session_id,
+			"file": e.file.display().to_string(),
+			"timestamp": e.timestamp.duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs(),
+			"diff": e.diff,
+			"reverted": e.reverted,
+		})).collect::<Vec<Value>>(),
+	});
+	Ok(manage_result("context", payload))
 }
 
 pub fn handle_watcher_status() -> Result<NodeRefDto, DiagnosticDto> {
@@ -124,7 +163,7 @@ pub fn handle_lock_status(file: &str, root: &PathBuf) -> Result<NodeRefDto, Diag
 	let path = absolute_path(file, root);
 	let payload = dispatch(json!({
 		"command": "lockStatus",
-		"sessionId": MANAGE_SESSION_ID,
+		"sessionId": "pi-code-path-manage",
 		"file": path.display().to_string(),
 	}))
 	.map_err(diag_internal)?;
@@ -132,9 +171,6 @@ pub fn handle_lock_status(file: &str, root: &PathBuf) -> Result<NodeRefDto, Diag
 }
 
 pub fn handle_status(file: Option<&str>, root: &PathBuf) -> Result<NodeRefDto, DiagnosticDto> {
-	// Workspace-level status: report watcher activity + buffer count. If a
-	// file is given, also include per-file coord status (delegates to the
-	// existing `coord_status` command).
 	let watcher = dispatch(json!({ "command": "watcherStatus" })).map_err(diag_internal)?;
 	let buffers = dispatch(json!({ "command": "list" })).map_err(diag_internal)?;
 	let coord = match file {
@@ -142,7 +178,7 @@ pub fn handle_status(file: Option<&str>, root: &PathBuf) -> Result<NodeRefDto, D
 			let path = absolute_path(f, root);
 			dispatch(json!({
 				"command": "coord_status",
-				"sessionId": MANAGE_SESSION_ID,
+				"sessionId": "pi-code-path-manage",
 				"file": path.display().to_string(),
 			}))
 			.ok()
@@ -158,10 +194,6 @@ pub fn handle_status(file: Option<&str>, root: &PathBuf) -> Result<NodeRefDto, D
 }
 
 pub fn handle_index(root: &PathBuf) -> Result<NodeRefDto, DiagnosticDto> {
-	// Trigger a fresh code-graph index pass over the workspace root.
-	// `executeCodeBuffer` doesn't expose this directly; we report the
-	// current graph statistics so the caller knows the state. A future
-	// FEAT can wire a real index trigger.
 	let payload = dispatch(json!({
 		"command": "graph_stats",
 		"root": root.display().to_string(),
@@ -174,8 +206,8 @@ pub fn handle_unknown(name: &str) -> DiagnosticDto {
 	DiagnosticDto {
 		variant: "unsupported_operation".to_string(),
 		message: format!(
-			"unknown manage subcommand: {name:?}. Valid: save | index | languages | buffers | undo \
-			 | redo | diff | status | watcherStatus | lockStatus"
+			"unknown manage subcommand: {name:?}. Valid: save | undo | redo | diff | context | \
+			 status | buffers | languages | watcherStatus | lockStatus | index"
 		),
 		span:    None,
 	}
@@ -184,18 +216,10 @@ pub fn handle_unknown(name: &str) -> DiagnosticDto {
 pub fn handle_missing() -> DiagnosticDto {
 	DiagnosticDto {
 		variant: "missing_subcommand".to_string(),
-		message: "command:\"manage\" requires a non-empty `manage` field. Valid: save | index | \
-		          languages | buffers | undo | redo | diff | status | watcherStatus | lockStatus"
+		message: "command:\"manage\" requires a non-empty `manage` field. Valid: save | undo | \
+		          redo | diff | context | status | buffers | languages | watcherStatus | \
+		          lockStatus | index"
 			.to_string(),
 		span:    None,
 	}
-}
-
-fn absolute_path(file: &str, root: &PathBuf) -> PathBuf {
-	let p = std::path::Path::new(file);
-	if p.is_absolute() { p.to_path_buf() } else { root.join(p) }
-}
-
-fn diag_internal(message: String) -> DiagnosticDto {
-	DiagnosticDto { variant: "manage_dispatch_failed".to_string(), message, span: None }
 }

@@ -20,6 +20,7 @@ fn manage_opts(subcommand: &str, target: &str, root: PathBuf) -> CodePathTaskOpt
 		actions:            None,
 		manage:             Some(subcommand.to_string()),
 		artifact_threshold: None,
+		session_id: None,
 	}
 }
 
