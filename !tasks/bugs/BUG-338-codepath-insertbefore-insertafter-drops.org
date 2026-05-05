@@ -1,5 +1,5 @@
 #+TITLE: CodePath insertBefore/insertAfter drops LINE#ID anchor causing line-0 errors
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d50def80d06410
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T07-20-24-835Z_14d50def80d06410.jsonl]]
 #+CUSTOM_ID: BUG-338-codepath-insertbefore-insertafter-drops
@@ -303,3 +303,5 @@ fn action_line_parses_pos_when_line_absent() {
 * References
 
 [[id:BUG-337-codepath-multi-word-symbols-fail-to-pars]] — sibling bug (parser path)
+
+NOTE [2026-05-05]: Fixed in commits 3993e5e39 (failing tests) + 8663c7988 (impl). Routed insertBefore/insertAfter with pos through #executeLineId, mapping to prepend/append hashline ops. 26 edit.test.ts pass; cargo test -p pi-code-path -p pi-natives green.
