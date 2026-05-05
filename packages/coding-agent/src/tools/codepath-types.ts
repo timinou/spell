@@ -84,7 +84,7 @@ export const getSchema = Type.Object(
 	{
 		target: Type.String({
 			description:
-				'CodePath target string (path, glob, symbol, URI). Multi-word symbols may be backtick-quoted, e.g. foo.ts::\`export * from "./json"\`',
+				'CodePath target string (path, glob, symbol, URI). Multi-word symbols may be backtick-quoted, e.g. foo.ts::`export * from "./json"`',
 		}),
 		limit: Type.Optional(Type.Integer({ description: "Max results or lines" })),
 		head: Type.Optional(Type.Integer({ description: "Max lines from head" })),
@@ -116,7 +116,7 @@ export const editOperationSchema = Type.Recursive(This =>
 		{
 			target: Type.String({
 				description:
-					"Stable edit target ID: '<file>' for file roots or '<file>::Symbol.member' for declarations. Multi-word symbols may be backtick-quoted, e.g. foo.ts::\`export * from \"./json\"\`",
+					"Stable edit target ID: '<file>' for file roots or '<file>::Symbol.member' for declarations. Multi-word symbols may be backtick-quoted, e.g. foo.ts::`export * from \"./json\"`",
 			}),
 			action: codePathActionSchema,
 			children: Type.Optional(
@@ -149,6 +149,12 @@ export const editSchema = Type.Object(
 		idempotent: Type.Optional(
 			Type.Boolean({
 				description: "Allow mutating edit commands to succeed when they intentionally make no semantic change",
+			}),
+		),
+		transaction: Type.Optional(
+			Type.Union([Type.Literal("best-effort"), Type.Literal("strict")], {
+				description:
+					"Batch transaction mode. 'best-effort' (default): on failure, applied ops stay applied and remaining ops are skipped. 'strict': snapshot all target files before any op; on any failure, restore snapshots (and unlink files that did not exist before) and report rollback.",
 			}),
 		),
 	},
