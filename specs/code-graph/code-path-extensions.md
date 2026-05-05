@@ -322,3 +322,36 @@ pub struct MutationOutcome {
 ```
 
 The `diff` field is optional and populated only when the resolver supports generating a unified diff of the mutation.
+
+
+---
+
+## 9 · Resolver dispatch
+
+`execute_code_path_inner` routes `Locator::Fs` targets through three mutually-exclusive branches based on the parsed `CodePath`:
+
+```text
+Locator::Fs
+├── is_pure_text_query(cp)  → TextResolver
+├── is_symbol_query(cp)     → FsResolver (file walk) → CodeResolver per file
+└── otherwise               → FsResolver only
+```
+
+### Pure-text query branch
+A query is classified as **pure-text** when its head is a `NodeKind` of `"line"`, `"para"`, or `"chunk"` and the axis is `Structural`. These queries are serviced by `TextResolver`, which performs line-oriented indexing, regex matching, and positional slicing without invoking tree-sitter.
+
+### Symbol-query branch
+A **symbol query** is any query that is present and is *not* a pure-text query. The dispatcher:
+
+1. Strips the qualifier from `cp` (`cp.qualifier.take()`) so that `FsResolver` only performs file-system walking.
+2. Walks files with `FsResolver` to obtain a list of matching file nodes.
+3. For each file node, invokes `CodeResolver` with the file path, the query, and the **original qualifier** forwarded.
+4. Collects code nodes (e.g. `§section`, `§element`, `§rule_set`) into the result stream.
+
+If a file’s extension is registered in `LanguageRegistry` with a `dialect: Some(...)`, `CodeResolver` uses the dialect’s `NameLexer`, declaration patterns, anchor resolvers, and qualifier resolvers. This enables symbol queries on markdown (`md`/`mdx`), org (`org`), HTML (`html`/`htm`), and CSS (`css`) to return structured nodes rather than falling back to `§file` nodes.
+
+### Fallback branch
+When no query is present (bare path or glob), `FsResolver` handles the request directly, returning `§file` nodes with optional qualifier application (e.g. `#stat`).
+
+### URI branch
+`Locator::Uri` bypasses the above tree entirely; the scheme registry dispatches to the matching `SchemeHandler`.
