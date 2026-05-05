@@ -1,0 +1,83 @@
+#+TITLE: get: replace hardcoded SOURCE_EXTENSIONS with dynamic lookup from registered dialects
+#+STATE: ITEM
+#+SESSION_ID: 14d5505d7e65f2fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T12-10-38-969Z_14d5505d7e65f2fa.jsonl]]
+#+CUSTOM_ID: FUP-080-get-replace-hardcoded-source-extensions
+
+* Intention & Purpose
+
+FEAT-713 introduced a hardcoded `SOURCE_EXTENSIONS` Set in `get.ts` to decide whether a bare file gets `#outline` (source file) or `#raw` (non-source). This list will rot — every new dialect added to the language registry must also be manually added to the TS constant. Replace with a dynamic lookup that reads the registered extensions from the native language registry.
+
+* Context & Narrative
+
+Current: `get.ts` checks `SOURCE_EXTENSIONS.has(ext)` — a hand-maintained Set of 30+ extensions.
+
+Desired: `get.ts` calls a native function (or existing mechanism) that answers "does this file extension have a registered tree-sitter dialect?"
+
+The registry already knows all dialects: `LanguageRegistry::with_builtins()` in `dialect_registry.rs` and `LanguageRegistry::match_path()` in `language/mod.rs`. The `select_dialect()` function in `dialect_registry.rs` already maps extensions → NameLexer.
+
+* Scope
+
+In scope:
+- Expose registered extension list via NAPI (`getRegisteredExtensions` → `string[]`)
+- Or: add a `hasDialect(path: string) → boolean` NAPI function
+- Remove `SOURCE_EXTENSIONS` constant from `get.ts`
+- Replace usage with dynamic check
+
+Out of scope:
+- Changing the outline rendering
+- Adding new dialects
+
+* Implementation
+
+Approach: Expose `getRegisteredExtensions()` from NAPI.
+
+**Rust** (`crates/pi-natives/src/code_path/dialect_registry.rs`):
+```rust
+#[napi]
+pub fn get_registered_extensions() -> Vec<String> {
+    // Return all extensions from the builtin language registry
+    // that have tree-sitter grammars
+}
+```
+
+Or: iterate `LanguageRegistry`'s dialect map and collect all matched extensions.
+
+**TS** (`packages/coding-agent/src/tools/get.ts`):
+```typescript
+import { getRegisteredExtensions } from "@oh-my-pi/pi-natives";
+
+// Replace:
+const SOURCE_EXTENSIONS = new Set([...]);
+
+// With:
+let _sourceExtensions: Set<string> | null = null;
+function getSourceExtensions(): Set<string> {
+    if (!_sourceExtensions) {
+        _sourceExtensions = new Set(getRegisteredExtensions());
+    }
+    return _sourceExtensions;
+}
+```
+
+**Test** (`dispatch_tests.rs` or new NAPI test):
+```rust
+#[test]
+fn registered_extensions_includes_ts_and_py() {
+    let exts = get_registered_extensions();
+    assert!(exts.contains(&"ts".to_string()));
+    assert!(exts.contains(&"py".to_string()));
+}
+```
+
+* Edge Cases
+- Extensions loaded lazily: `getRegisteredExtensions` must trigger registry init if not already done
+- New dialects added via plugins: registry must be refreshable
+- Empty registry (no dialects loaded): fall back to empty set → all files get `#raw` (safe default)
+
+* Acceptance Criteria
+- `SOURCE_EXTENSIONS` constant removed from `get.ts`
+- `get { target: "foo.rs" }` → outline (Rust has dialect)
+- `get { target: "foo.xyz" }` → full content (no dialect)
+- `cargo test -p pi-natives` green
+- TS compilation clean

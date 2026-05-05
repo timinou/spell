@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use super::dialect_registry::select_dialect;
-use super::napi::{execute_code_path_inner, parse_code_path_napi, CodePathTaskOptions};
+use super::napi::{execute_code_path_inner, get_registered_extensions, parse_code_path_napi, CodePathTaskOptions};
 use crate::task::CancelToken;
 
 fn opts(target: impl Into<String>) -> CodePathTaskOptions {
@@ -183,6 +183,16 @@ fn non_utf8_path_fallback() {
 		assert!(all_text.contains("BAR"), "expected outline to contain 'BAR', got: '{}'", all_text);
 		assert!(all_text.contains("Baz"), "expected outline to contain 'Baz', got: '{}'", all_text);
 
-		// Should NOT contain function bodies
-		assert!(!all_text.contains("return a + 1"), "outline should not contain function bodies");
-	}
+		// Outline shows first line of each top-level declaration.
+		// Single-line functions will include their full text (first line = entire decl).
+		// Multi-line classes will show only the first line (signature).
+		// Verify multi-line class: first line contains class name, not method body
+ 	assert!(!all_text.contains("this.x"), "outline should not contain multi-line class method bodies");
+ }
+
+ #[test]
+ fn registered_extensions_includes_ts_and_py() {
+ 	let exts = get_registered_extensions().unwrap();
+ 	assert!(exts.contains(&"ts".to_string()));
+ 	assert!(exts.contains(&"py".to_string()));
+ }

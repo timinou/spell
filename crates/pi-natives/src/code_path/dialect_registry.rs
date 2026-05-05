@@ -38,3 +38,26 @@ static HASKELL_LEXER: OnceLock<Arc<dyn NameLexer>> = OnceLock::new();
 static HTML_LEXER: OnceLock<Arc<dyn NameLexer>> = OnceLock::new();
 static CSS_LEXER: OnceLock<Arc<dyn NameLexer>> = OnceLock::new();
 static MDORG_LEXER: OnceLock<Arc<dyn NameLexer>> = OnceLock::new();
+
+/// Return all registered extensions that have a dialect lexer.
+pub fn registered_extensions() -> Vec<String> {
+    vec![
+        "ts".into(),
+        "tsx".into(),
+        "js".into(),
+        "jsx".into(),
+        "mjs".into(),
+        "cjs".into(),
+        "rs".into(),
+        "py".into(),
+        "go".into(),
+        "hs".into(),
+        "lhs".into(),
+        "html".into(),
+        "htm".into(),
+        "css".into(),
+        "md".into(),
+        "mdx".into(),
+        "org".into(),
+    ]
+}

@@ -63,5 +63,6 @@ declare module "../bindings" {
 		executeCodePath(options: CodePathOptions): Promise<CodePathChunk[]>;
 		parseCodePath(target: string): any;
 		renderCodePath(ast: any): string;
+		getRegisteredExtensions(): string[];
 	}
 }

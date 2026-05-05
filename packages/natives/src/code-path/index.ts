@@ -15,3 +15,7 @@ export function parseCodePath(target: string): any {
 export function renderCodePath(ast: any): string {
 	return native.renderCodePath(ast);
 }
+
+export function getRegisteredExtensions(): string[] {
+	return native.getRegisteredExtensions();
+}
