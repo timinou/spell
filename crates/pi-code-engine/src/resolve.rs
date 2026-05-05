@@ -12,20 +12,38 @@ use crate::{
 	buffer::CodeBuffer,
 	error::{CodeEngineError, Result},
 	language::LanguageProfile,
-	outline::{class_member_nodes, declaration_body_range, declaration_for, declaration_name},
+	outline::{class_member_nodes, declaration_body_range, declaration_for, declaration_name, declaration_name_resolution},
 };
 
+/// Byte range within the source buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ByteRange {
+	pub start: usize,
+	pub end:   usize,
+}
+
 /// Resolved symbol with byte range and optional body range.
+///
+/// Three explicit ranges are provided so that action handlers can pick the
+/// appropriate span without guessing:
+/// - `identifier_range` — the bare name token (used by rename).
+/// - `declaration_range` — the unwrapped declaration body (default for find/get).
+/// - `statement_range` — the smallest enclosing statement that includes leading
+///   keywords such as `export`, decorators, or Rust attributes (used by wrap,
+///   splice, move, clone).
 #[derive(Debug, Clone)]
 pub struct ResolvedSymbol {
-	pub name:            String,
-	pub kind:            String,
-	pub start_byte:      usize,
-	pub end_byte:        usize,
-	pub line:            u32,
-	pub end_line:        u32,
-	pub body_start_byte: Option<usize>,
-	pub body_end_byte:   Option<usize>,
+	pub name:               String,
+	pub kind:               String,
+	pub start_byte:         usize,
+	pub end_byte:           usize,
+	pub line:               u32,
+	pub end_line:           u32,
+	pub body_start_byte:    Option<usize>,
+	pub body_end_byte:      Option<usize>,
+	pub identifier_range:   ByteRange,
+	pub declaration_range:  ByteRange,
+	pub statement_range:    ByteRange,
 }
 
 fn declaration_name_for_node(
@@ -193,6 +211,33 @@ fn unwrap_export(node: Node<'_>) -> Node<'_> {
 }
 
 /// Build a ResolvedSymbol from a declaration node.
+fn statement_range_for(node: Node<'_>, profile: &LanguageProfile) -> ByteRange {
+	let mut statement_node = node;
+	while let Some(parent) = statement_node.parent() {
+		if profile.enclosing_statement_kinds.iter().any(|k| k == parent.kind()) {
+			statement_node = parent;
+		} else {
+			break;
+		}
+	}
+	// Rust-specific: include preceding attribute_item siblings.
+	if profile.id.as_str() == "rust" {
+		let mut start_byte = statement_node.start_byte();
+		let mut current = statement_node;
+		while let Some(prev) = current.prev_sibling() {
+			if prev.kind() == "attribute_item" {
+				start_byte = prev.start_byte();
+				current = prev;
+			} else {
+				break;
+			}
+		}
+		ByteRange { start: start_byte, end: statement_node.end_byte() }
+	} else {
+		ByteRange { start: statement_node.start_byte(), end: statement_node.end_byte() }
+	}
+}
+
 fn build_resolved(node: Node<'_>, profile: &LanguageProfile, source: &str) -> ResolvedSymbol {
 	let decl = declaration_for(profile, node, source);
 	let name = decl
@@ -205,15 +250,26 @@ fn build_resolved(node: Node<'_>, profile: &LanguageProfile, source: &str) -> Re
 		.map(|(start, end)| (Some(start), Some(end)))
 		.unwrap_or((None, None));
 
+	let (id_start, id_end) = decl
+		.and_then(|d| declaration_name_resolution(source, node, d))
+		.map(|res| (res.start_byte, res.end_byte))
+		.unwrap_or_else(|| (node.start_byte(), node.end_byte()));
+
+	let declaration_range = ByteRange { start: node.start_byte(), end: node.end_byte() };
+	let statement_range = statement_range_for(node, profile);
+
 	ResolvedSymbol {
 		name,
 		kind,
-		start_byte: node.start_byte(),
-		end_byte: node.end_byte(),
+		start_byte: declaration_range.start,
+		end_byte: declaration_range.end,
 		line: (node.start_position().row + 1) as u32,
 		end_line: (node.end_position().row + 1) as u32,
 		body_start_byte: body_start,
 		body_end_byte: body_end,
+		identifier_range: ByteRange { start: id_start, end: id_end },
+		declaration_range,
+		statement_range,
 	}
 }
 

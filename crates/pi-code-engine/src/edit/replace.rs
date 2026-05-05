@@ -283,6 +283,7 @@ mod tests {
 	use crate::{
 		buffer::CodeBuffer,
 		language::{LanguageId, LanguageRegistry},
+		resolve::ByteRange,
 	};
 
 	fn registry() -> Arc<LanguageRegistry> {
@@ -299,14 +300,17 @@ mod tests {
 			.find("\n}\n")
 			.map_or(source.len(), |idx| start + idx + 3);
 		ResolvedSymbol {
-			name:            name.to_string(),
-			kind:            "declaration".into(),
-			start_byte:      start,
-			end_byte:        end,
-			line:            source[..start].matches('\n').count() as u32 + 1,
-			end_line:        source[..end].matches('\n').count() as u32 + 1,
-			body_start_byte: None,
-			body_end_byte:   None,
+			name:               name.to_string(),
+			kind:               "declaration".into(),
+			start_byte:         start,
+			end_byte:           end,
+			line:               source[..start].matches('\n').count() as u32 + 1,
+			end_line:           source[..end].matches('\n').count() as u32 + 1,
+			body_start_byte:    None,
+			body_end_byte:      None,
+			identifier_range:   ByteRange { start, end },
+			declaration_range:  ByteRange { start, end },
+			statement_range:    ByteRange { start, end },
 		}
 	}
 
@@ -337,14 +341,17 @@ mod tests {
 		let edits = insert_after_symbol(
 			&buffer,
 			&ResolvedSymbol {
-				name:            "Foo.bar".into(),
-				kind:            "method".into(),
-				start_byte:      start,
-				end_byte:        end,
-				line:            2,
-				end_line:        2,
-				body_start_byte: None,
-				body_end_byte:   None,
+				name:               "Foo.bar".into(),
+				kind:               "method".into(),
+				start_byte:         start,
+				end_byte:           end,
+				line:               2,
+				end_line:           2,
+				body_start_byte:    None,
+				body_end_byte:      None,
+				identifier_range:   ByteRange { start, end },
+				declaration_range:  ByteRange { start, end },
+				statement_range:    ByteRange { start, end },
 			},
 			"baz() { return 2; }",
 		)
@@ -362,14 +369,17 @@ mod tests {
 		let err = insert_after_symbol(
 			&buffer,
 			&ResolvedSymbol {
-				name:            "Foo.bar".into(),
-				kind:            "method".into(),
-				start_byte:      start,
-				end_byte:        end,
-				line:            1,
-				end_line:        1,
-				body_start_byte: None,
-				body_end_byte:   None,
+				name:               "Foo.bar".into(),
+				kind:               "method".into(),
+				start_byte:         start,
+				end_byte:           end,
+				line:               1,
+				end_line:           1,
+				body_start_byte:    None,
+				body_end_byte:      None,
+				identifier_range:   ByteRange { start, end },
+				declaration_range:  ByteRange { start, end },
+				statement_range:    ByteRange { start, end },
 			},
 			"qux() { return 3; }",
 		)

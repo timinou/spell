@@ -36,6 +36,11 @@ pub struct LanguageProfile {
 
 	/// CodePath v3 dialect for this language (optional for backward compat).
 	pub dialect: Option<pi_code_path::LanguageDialect>,
+
+	/// Node kinds that should be included when escalating from a declaration
+	/// to its enclosing statement range (e.g. `export_statement`,
+	/// `decorated_definition`).
+	pub enclosing_statement_kinds: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

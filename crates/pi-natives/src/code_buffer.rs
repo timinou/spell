@@ -73,14 +73,17 @@ fn edn_node_for_path<'a>(buffer: &'a CodeBuffer, path: &str) -> Option<Node<'a>>
 fn edn_resolved_symbol(buffer: &CodeBuffer, path: &str) -> Option<ResolvedSymbol> {
 	let node = edn_node_for_path(buffer, path)?;
 	Some(ResolvedSymbol {
-		name:            path.to_string(),
-		kind:            node.kind().to_string(),
-		start_byte:      node.start_byte(),
-		end_byte:        node.end_byte(),
-		line:            (node.start_position().row + 1) as u32,
-		end_line:        (node.end_position().row + 1) as u32,
-		body_start_byte: None,
-		body_end_byte:   None,
+		name:               path.to_string(),
+		kind:               node.kind().to_string(),
+		start_byte:         node.start_byte(),
+		end_byte:           node.end_byte(),
+		line:               (node.start_position().row + 1) as u32,
+		end_line:           (node.end_position().row + 1) as u32,
+		body_start_byte:    None,
+		body_end_byte:      None,
+		identifier_range:   ByteRange { start: node.start_byte(), end: node.end_byte() },
+		declaration_range:  ByteRange { start: node.start_byte(), end: node.end_byte() },
+		statement_range:    ByteRange { start: node.start_byte(), end: node.end_byte() },
 	})
 }
 fn edn_navigate_result(buffer: &CodeBuffer, node: Node<'_>) -> NavigateResult {
@@ -133,7 +136,7 @@ use pi_code_engine::{
 	navigate::{NavigateAction, NavigateItem, NavigateResult, navigate as navigate_buffer},
 	outline::{EnrichFlags, OutlineEntry, outline as outline_buffer, read as read_buffer},
 	procedure::ProcedureProof,
-	resolve::{ResolvedSymbol, resolve_symbol},
+	resolve::{ByteRange, ResolvedSymbol, resolve_symbol},
 	run_procedure,
 };
 use pi_code_graph::{
@@ -801,6 +804,19 @@ fn action_within(resolved: Option<&ResolvedSymbol>) -> Option<(usize, usize)> {
 	Some((symbol.start_byte, symbol.end_byte))
 }
 
+fn range_for_action(kind: &str, resolved: &ResolvedSymbol) -> ByteRange {
+	match kind {
+		"rename" => resolved.identifier_range,
+		"wrap" | "splice" | "move" | "clone" => resolved.statement_range,
+		_ => resolved.declaration_range,
+	}
+}
+
+fn statement_within(resolved: Option<&ResolvedSymbol>) -> Option<(usize, usize)> {
+	let symbol = resolved?;
+	Some((symbol.statement_range.start, symbol.statement_range.end))
+}
+
 fn action_column(action: &Value) -> usize {
 	value_to_usize(action.get("column"), 0)
 }
@@ -937,8 +953,12 @@ fn single_action(
 			let symbol = resolved
 				.as_ref()
 				.ok_or_else(|| CodeEngineError::Edit("wrap requires a declaration targetId".into()))?;
+			let range = range_for_action("wrap", symbol);
+			let mut sym = symbol.clone();
+			sym.start_byte = range.start;
+			sym.end_byte = range.end;
 			PreparedEditOperation {
-				edits:  wrap_node(buffer, symbol, action_content(action)?)?,
+				edits:  wrap_node(buffer, &sym, action_content(action)?)?,
 				proof:  None,
 				action: action_kind.to_string(),
 			}
@@ -960,8 +980,12 @@ fn single_action(
 			let symbol = resolved.as_ref().ok_or_else(|| {
 				CodeEngineError::Edit("rename requires a declaration targetId".into())
 			})?;
+			let range = range_for_action("rename", symbol);
+			let mut sym = symbol.clone();
+			sym.start_byte = range.start;
+			sym.end_byte = range.end;
 			PreparedEditOperation {
-				edits:  rename_symbol(buffer, symbol, action_content(action)?)?,
+				edits:  rename_symbol(buffer, &sym, action_content(action)?)?,
 				proof:  None,
 				action: action_kind.to_string(),
 			}
@@ -1049,7 +1073,7 @@ fn single_action(
 				buffer,
 				action_line(action, resolved.as_ref()),
 				action_mode(action),
-				within,
+				statement_within(resolved.as_ref()),
 			)?,
 			proof:  None,
 			action: action_kind.to_string(),
@@ -1066,13 +1090,13 @@ fn single_action(
 					"up" => DragDirection::Up,
 					_ => DragDirection::Down,
 				},
-				within,
+				statement_within(resolved.as_ref()),
 			)?,
 			proof:  None,
 			action: action_kind.to_string(),
 		},
 		"clone" => {
-			let mut edits = clone_node(buffer, action_line(action, resolved.as_ref()), within)?;
+			let mut edits = clone_node(buffer, action_line(action, resolved.as_ref()), statement_within(resolved.as_ref()))?;
 			// FEAT-707: when `content` is provided, rename the identifier
 			// inside the cloned snippet so the agent gets two named
 			// declarations instead of `foo` + `foo` (and an immediate

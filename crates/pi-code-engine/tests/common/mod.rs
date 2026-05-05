@@ -27,6 +27,7 @@ impl TestBroker {
 			socket_path:        socket_path.clone(),
 			grace:              Duration::from_secs(30),
 			broadcast_capacity: 256,
+			journal_path:       None,
 		};
 		let handle = tokio::spawn(async move {
 			run_server(opts).await.expect("broker exits cleanly");
