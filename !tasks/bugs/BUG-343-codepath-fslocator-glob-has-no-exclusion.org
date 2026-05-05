@@ -1,5 +1,5 @@
 #+TITLE: CodePath FsLocator glob has no exclusion — can't filter out .d.ts/.map
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d50def80d06410
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T07-20-24-835Z_14d50def80d06410.jsonl]]
 #+CUSTOM_ID: BUG-343-codepath-fslocator-glob-has-no-exclusion
@@ -265,3 +265,11 @@ fn glob_with_exclusion_excludes_d_ts() {
 * References
 
 [[id:PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo]]
+
+NOTE [2026-05-05]: - Changed FsSegment::Brace to struct variant with items + exclusions fields.
+- Extended parser tokenise_segment to split !-prefixed items into exclusions; pure-exclusion is parse error.
+- Updated all call sites: renderer, suffix_fallback, walker.
+- Added negative globset matching in walker.rs: a path matches iff (positive glob matches) AND (no negative glob matches).
+- Added 3 parser unit tests + 1 fs integration test (all green).
+- Full gate: cargo test -p pi-code-path (293 tests passed).
+- Updated FS spec doc with new syntax.
