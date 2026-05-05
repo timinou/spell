@@ -2,10 +2,12 @@ use std::path::Path;
 
 use regex::Regex;
 
-use crate::ast::{CompareOp, Predicate};
-use crate::dialects::fs::anchors::{classify, anchor_name_matches};
-use crate::resolver::traits::FsAnchorContext;
-use crate::types::NodeRef;
+use crate::{
+	ast::{CompareOp, Predicate},
+	dialects::fs::anchors::{anchor_name_matches, classify},
+	resolver::traits::FsAnchorContext,
+	types::NodeRef,
+};
 
 /// Evaluate a `Predicate` against a filesystem `NodeRef`.
 pub fn eval(pred: &Predicate, node: &NodeRef, ctx: &dyn FsAnchorContext) -> bool {
@@ -13,36 +15,32 @@ pub fn eval(pred: &Predicate, node: &NodeRef, ctx: &dyn FsAnchorContext) -> bool
 		Predicate::Ordinal(_) | Predicate::Range { .. } => {
 			// Positional — caller pre-collects.
 			true
-		}
+		},
 		Predicate::KindFilter(kind) => &node.kind == kind,
 		Predicate::AnchorFilter(name) => {
 			let anchors = classify(node, ctx);
 			anchors.iter().any(|a| anchor_name_matches(*a, name))
-		}
+		},
 		Predicate::Attribute { name, value } => match name.as_str() {
-			"ext" => {
-				Path::new(&node.locator)
-					.extension()
-					.map(|e| e.to_str().unwrap_or("") == value)
-					.unwrap_or(false)
-			}
-			"lang" => {
-				Path::new(&node.locator)
-					.extension()
-					.map(|e| ctx.is_code_extension(e.to_str().unwrap_or("")))
-					.unwrap_or(false)
-			}
+			"ext" => Path::new(&node.locator)
+				.extension()
+				.map(|e| e.to_str().unwrap_or("") == value)
+				.unwrap_or(false),
+			"lang" => Path::new(&node.locator)
+				.extension()
+				.map(|e| ctx.is_code_extension(e.to_str().unwrap_or("")))
+				.unwrap_or(false),
 			"depth" => {
 				let target: usize = value.parse().unwrap_or(0);
 				node_depth(node) == target
-			}
+			},
 			"name" => {
 				let basename = Path::new(&node.locator)
 					.file_name()
 					.and_then(|n| n.to_str())
 					.unwrap_or("");
 				glob_match(value, basename)
-			}
+			},
 			_ => false,
 		},
 		Predicate::Compare { name, op, value } => match name.as_str() {
@@ -61,10 +59,8 @@ pub fn eval(pred: &Predicate, node: &NodeRef, ctx: &dyn FsAnchorContext) -> bool
 		Predicate::Length { op, value } => {
 			let size = file_size(node, ctx).unwrap_or(0);
 			compare_u64(op, size, *value)
-		}
-		Predicate::Count { kind: _, op, value } => {
-			compare_u64(op, 0, *value)
-		}
+		},
+		Predicate::Count { kind: _, op, value } => compare_u64(op, 0, *value),
 		_ => false,
 	}
 }
@@ -82,7 +78,10 @@ fn file_size(node: &NodeRef, ctx: &dyn FsAnchorContext) -> Option<u64> {
 }
 
 fn file_mtime(node: &NodeRef, ctx: &dyn FsAnchorContext) -> Option<std::time::SystemTime> {
-	abs_path(node, ctx)?.metadata().ok().and_then(|m| m.modified().ok())
+	abs_path(node, ctx)?
+		.metadata()
+		.ok()
+		.and_then(|m| m.modified().ok())
 }
 
 fn is_empty(node: &NodeRef, ctx: &dyn FsAnchorContext) -> bool {
@@ -90,11 +89,13 @@ fn is_empty(node: &NodeRef, ctx: &dyn FsAnchorContext) -> bool {
 		"§file" => file_size(node, ctx).unwrap_or(1) == 0,
 		"§dir" => {
 			if let Some(path) = abs_path(node, ctx) {
-				std::fs::read_dir(path).map(|mut d| d.next().is_none()).unwrap_or(false)
+				std::fs::read_dir(path)
+					.map(|mut d| d.next().is_none())
+					.unwrap_or(false)
 			} else {
 				false
 			}
-		}
+		},
 		_ => false,
 	}
 }
@@ -118,7 +119,7 @@ fn is_binary(node: &NodeRef, ctx: &dyn FsAnchorContext) -> bool {
 		Ok(data) => {
 			let sample = &data[..max];
 			std::str::from_utf8(sample).is_err()
-		}
+		},
 		Err(_) => true,
 	}
 }
@@ -166,8 +167,7 @@ fn parse_mtime(s: &str) -> Option<std::time::SystemTime> {
 		let year: i32 = s[..4].parse().ok()?;
 		let month: u32 = s[5..7].parse().ok()?;
 		let day: u32 = s[8..10].parse().ok()?;
-		let dt = chrono::NaiveDate::from_ymd_opt(year, month, day)?
-			.and_hms_opt(0, 0, 0)?;
+		let dt = chrono::NaiveDate::from_ymd_opt(year, month, day)?.and_hms_opt(0, 0, 0)?;
 		let unix = dt.and_utc().timestamp();
 		return Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs(unix as u64));
 	}
@@ -179,7 +179,12 @@ fn parse_mtime(s: &str) -> Option<std::time::SystemTime> {
 	None
 }
 
-fn compare_size(op: &CompareOp, value_str: &str, node: &NodeRef, ctx: &dyn FsAnchorContext) -> bool {
+fn compare_size(
+	op: &CompareOp,
+	value_str: &str,
+	node: &NodeRef,
+	ctx: &dyn FsAnchorContext,
+) -> bool {
 	let target = parse_size(value_str);
 	let actual = file_size(node, ctx).unwrap_or(0);
 	match op {
@@ -246,16 +251,16 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 				return set.is_match(text);
 			}
 			false
-		}
+		},
 		Err(_) => text == pattern,
 	}
 }
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use std::fs;
 
+	use super::*;
 	use crate::dialects::fs::anchors::DefaultFsAnchorContext;
 
 	fn ctx(root: std::path::PathBuf) -> DefaultFsAnchorContext {
@@ -277,8 +282,16 @@ mod tests {
 	fn predicate_kind_filter() {
 		let dir = tempfile::tempdir().unwrap();
 		let n = node("src/main.rs", "§file");
-		assert!(eval(&Predicate::KindFilter("§file".to_string()), &n, &ctx(dir.path().to_path_buf())));
-		assert!(!eval(&Predicate::KindFilter("§dir".to_string()), &n, &ctx(dir.path().to_path_buf())));
+		assert!(eval(
+			&Predicate::KindFilter("§file".to_string()),
+			&n,
+			&ctx(dir.path().to_path_buf())
+		));
+		assert!(!eval(
+			&Predicate::KindFilter("§dir".to_string()),
+			&n,
+			&ctx(dir.path().to_path_buf())
+		));
 	}
 
 	#[test]
@@ -298,10 +311,7 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		let n = node("main.rs", "§file");
 		assert!(eval(
-			&Predicate::Attribute {
-				name:  "ext".to_string(),
-				value: "rs".to_string(),
-			},
+			&Predicate::Attribute { name: "ext".to_string(), value: "rs".to_string() },
 			&n,
 			&ctx(dir.path().to_path_buf()),
 		));
@@ -312,10 +322,7 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		let n = node("main.rs", "§file");
 		assert!(eval(
-			&Predicate::Attribute {
-				name:  "lang".to_string(),
-				value: "rust".to_string(),
-			},
+			&Predicate::Attribute { name: "lang".to_string(), value: "rust".to_string() },
 			&n,
 			&ctx(dir.path().to_path_buf()),
 		));
@@ -326,10 +333,7 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		let n = node("a/b/c.rs", "§file");
 		assert!(eval(
-			&Predicate::Attribute {
-				name:  "depth".to_string(),
-				value: "2".to_string(),
-			},
+			&Predicate::Attribute { name: "depth".to_string(), value: "2".to_string() },
 			&n,
 			&ctx(dir.path().to_path_buf()),
 		));
@@ -340,10 +344,7 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		let n = node("src/utils/helper.ts", "§file");
 		assert!(eval(
-			&Predicate::Attribute {
-				name:  "name".to_string(),
-				value: "*.ts".to_string(),
-			},
+			&Predicate::Attribute { name: "name".to_string(), value: "*.ts".to_string() },
 			&n,
 			&ctx(dir.path().to_path_buf()),
 		));
@@ -433,11 +434,7 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		fs::write(dir.path().join("empty.rs"), "").unwrap();
 		let n = node("empty.rs", "§file");
-		assert!(eval(
-			&Predicate::Flag("empty".to_string()),
-			&n,
-			&ctx(dir.path().to_path_buf()),
-		));
+		assert!(eval(&Predicate::Flag("empty".to_string()), &n, &ctx(dir.path().to_path_buf()),));
 	}
 
 	#[test]
@@ -445,11 +442,7 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		fs::write(dir.path().join("hello.rs"), "fn main() {}").unwrap();
 		let n = node("hello.rs", "§file");
-		assert!(eval(
-			&Predicate::Flag("text".to_string()),
-			&n,
-			&ctx(dir.path().to_path_buf()),
-		));
+		assert!(eval(&Predicate::Flag("text".to_string()), &n, &ctx(dir.path().to_path_buf()),));
 	}
 
 	#[test]

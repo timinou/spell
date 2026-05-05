@@ -29,8 +29,7 @@ fn qualifier_body_returns_block_range() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_py("foo.py", "def greet():\n    \"\"\"doc\"\"\"\n    x = 1\n", dir.path());
 	let cp =
-		parse_code_path("foo.py::greet#body", &pi_code_path::dialects::python::PyNameLexer)
-			.unwrap();
+		parse_code_path("foo.py::greet#body", &pi_code_path::dialects::python::PyNameLexer).unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -45,10 +44,10 @@ fn qualifier_body_returns_block_range() {
 #[test]
 fn qualifier_sig_excludes_body() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_py("foo.py", "def greet() -> str:\n    \"\"\"doc\"\"\"\n    x = 1\n", dir.path());
+	let path =
+		temp_py("foo.py", "def greet() -> str:\n    \"\"\"doc\"\"\"\n    x = 1\n", dir.path());
 	let cp =
-		parse_code_path("foo.py::greet#sig", &pi_code_path::dialects::python::PyNameLexer)
-			.unwrap();
+		parse_code_path("foo.py::greet#sig", &pi_code_path::dialects::python::PyNameLexer).unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -65,11 +64,9 @@ fn qualifier_sig_excludes_body() {
 fn qualifier_docstring_first_string_statement() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_py("foo.py", "def greet():\n    \"\"\"hello\"\"\"\n    pass\n", dir.path());
-	let cp = parse_code_path(
-		"foo.py::greet#docstring",
-		&pi_code_path::dialects::python::PyNameLexer,
-	)
-	.unwrap();
+	let cp =
+		parse_code_path("foo.py::greet#docstring", &pi_code_path::dialects::python::PyNameLexer)
+			.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -85,11 +82,9 @@ fn qualifier_docstring_first_string_statement() {
 fn qualifier_decorators_aggregate_span() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_py("foo.py", "@deco1\n@deco2\ndef greet():\n    pass\n", dir.path());
-	let cp = parse_code_path(
-		"foo.py::greet#decorators",
-		&pi_code_path::dialects::python::PyNameLexer,
-	)
-	.unwrap();
+	let cp =
+		parse_code_path("foo.py::greet#decorators", &pi_code_path::dialects::python::PyNameLexer)
+			.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -124,11 +119,9 @@ fn qualifier_return_annotation_span() {
 fn qualifier_base_classes_span() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_py("foo.py", "class Foo(BaseA, BaseB):\n    pass\n", dir.path());
-	let cp = parse_code_path(
-		"foo.py::Foo#base-classes",
-		&pi_code_path::dialects::python::PyNameLexer,
-	)
-	.unwrap();
+	let cp =
+		parse_code_path("foo.py::Foo#base-classes", &pi_code_path::dialects::python::PyNameLexer)
+			.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -147,11 +140,8 @@ fn qualifier_base_classes_span() {
 #[test]
 fn anchor_async_filter() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_py(
-		"foo.py",
-		"async def greet():\n    pass\n\ndef normal():\n    pass\n",
-		dir.path(),
-	);
+	let path =
+		temp_py("foo.py", "async def greet():\n    pass\n\ndef normal():\n    pass\n", dir.path());
 	let query = Query::single(Step {
 		axis:       Some(pi_code_path::ast::Axis::Structural),
 		head:       Head::NodeKind("function_definition".into()),
@@ -171,11 +161,8 @@ fn anchor_async_filter() {
 #[test]
 fn anchor_default_param_filter() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_py(
-		"foo.py",
-		"def greet(x=1):\n    pass\n\ndef no_default():\n    pass\n",
-		dir.path(),
-	);
+	let path =
+		temp_py("foo.py", "def greet(x=1):\n    pass\n\ndef no_default():\n    pass\n", dir.path());
 	let query = Query::single(Step {
 		axis:       Some(pi_code_path::ast::Axis::Structural),
 		head:       Head::NodeKind("function_definition".into()),

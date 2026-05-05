@@ -50,8 +50,8 @@ pub enum CommitResult {
 /// A file the client intends to modify as part of a multi-file transaction.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileIntent {
-	pub file:         PathBuf,
-	pub code_paths:   Vec<String>,
+	pub file:          PathBuf,
+	pub code_paths:    Vec<String>,
 	pub base_revision: u64,
 }
 
@@ -114,11 +114,7 @@ pub trait CoordClient: Send + Sync {
 	}
 
 	/// Multi-file commit: atomically commit all `files` under a granted txn.
-	fn multi_commit(
-		&self,
-		_peers: &[SessionId],
-		_files: &[FileCommit],
-	) -> MultiCommitResult {
+	fn multi_commit(&self, _peers: &[SessionId], _files: &[FileCommit]) -> MultiCommitResult {
 		MultiCommitResult::Acknowledged
 	}
 

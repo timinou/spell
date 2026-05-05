@@ -20,13 +20,13 @@ use pi_edit_broker::{BrokerOptions, run_server, spawn};
 #[command(name = "pi-edit-broker", version)]
 struct Cli {
 	#[arg(long)]
-	daemonize: bool,
+	daemonize:    bool,
 	#[arg(long)]
-	socket:    Option<PathBuf>,
+	socket:       Option<PathBuf>,
 	#[arg(long = "pid-file")]
-	pid_file:  Option<PathBuf>,
+	pid_file:     Option<PathBuf>,
 	#[arg(long = "grace-ms")]
-	grace_ms:  Option<u64>,
+	grace_ms:     Option<u64>,
 	#[arg(long = "journal-path")]
 	journal_path: Option<PathBuf>,
 }

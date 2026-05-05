@@ -8,17 +8,17 @@
 //! Payload shape: `RustName { segments: Vec<RustSegment> }`. Encoded as
 //! `NamePayload::Raw(rendered)` per kernel-wide convention.
 
-use std::ops::Range;
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use tree_sitter::Node;
-use winnow::Parser;
-use winnow::token::take_while;
+use winnow::{Parser, token::take_while};
 
-use crate::ast::NamePayload;
-use crate::dialect::{
-	AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierResolver, QualifierSpec,
+use crate::{
+	ast::NamePayload,
+	dialect::{
+		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierResolver, QualifierSpec,
+	},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -40,6 +40,8 @@ pub enum RustSegment {
 	/// `impl Trait for Type` clause encoded as a single segment for
 	/// path purposes; the final method segment follows in subsequent segments.
 	ImplFor { trait_: String, ty: String },
+	/// Backtick-quoted verbatim text.
+	Quoted(String),
 }
 
 pub struct RustNameLexer;
@@ -50,7 +52,11 @@ impl NameLexer for RustNameLexer {
 		if segments.is_empty() {
 			return Err(winnow::error::ContextError::default());
 		}
-		Ok(NamePayload::Raw(render_segments(&segments)))
+		if segments.iter().any(|s| matches!(s, RustSegment::Quoted(_))) {
+			Ok(NamePayload::Quoted(render_segments(&segments)))
+		} else {
+			Ok(NamePayload::Raw(render_segments(&segments)))
+		}
 	}
 
 	fn render(&self, n: &NamePayload) -> String {
@@ -157,15 +163,35 @@ fn parse_segments(input: &mut &str) -> winnow::Result<Vec<RustSegment>> {
 }
 
 fn parse_segment(input: &mut &str) -> winnow::Result<RustSegment> {
+	// Backtick-quoted verbatim text
+	if input.starts_with('`') {
+		*input = &input[1..];
+		let mut buf = String::new();
+		let mut closed = false;
+		let mut chars = input.char_indices();
+		let mut consumed = 0;
+		for (idx, c) in chars.by_ref() {
+			if c == '`' {
+				closed = true;
+				consumed = idx + 1;
+				break;
+			}
+			buf.push(c);
+			consumed = idx + c.len_utf8();
+		}
+		if !closed {
+			return Err(winnow::error::ContextError::default());
+		}
+		*input = &input[consumed..];
+		return Ok(RustSegment::Quoted(buf));
+	}
 	// Raw identifier: r#ident
 	if input.starts_with("r#") {
 		*input = &input[2..];
-		let s: &str =
-			take_while(1.., |c: char| c.is_alphanumeric() || c == '_').parse_next(input)?;
+		let s: &str = take_while(1.., |c: char| c.is_alphanumeric() || c == '_').parse_next(input)?;
 		return Ok(RustSegment::Raw(s.to_string()));
 	}
-	let s: &str =
-		take_while(1.., |c: char| c.is_alphanumeric() || c == '_').parse_next(input)?;
+	let s: &str = take_while(1.., |c: char| c.is_alphanumeric() || c == '_').parse_next(input)?;
 	let owned = s.to_string();
 	if matches!(owned.as_str(), "crate" | "self" | "super" | "Self") {
 		Ok(RustSegment::Keyword(owned))
@@ -216,29 +242,23 @@ fn render_segments(segs: &[RustSegment]) -> String {
 
 mod qualifiers {
 	use std::ops::Range;
+
 	use tree_sitter::Node;
+
 	use crate::dialect::QualifierResolver;
 
 	pub struct Body;
 	impl QualifierResolver for Body {
-		fn resolve(
-			&self,
-			node: Node<'_>,
-			_src: &str,
-			_args: Option<&str>,
-		) -> Option<Range<usize>> {
-			node.child_by_field_name("body").map(|c| c.start_byte()..c.end_byte())
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+			node
+				.child_by_field_name("body")
+				.map(|c| c.start_byte()..c.end_byte())
 		}
 	}
 
 	pub struct Sig;
 	impl QualifierResolver for Sig {
-		fn resolve(
-			&self,
-			node: Node<'_>,
-			_src: &str,
-			_args: Option<&str>,
-		) -> Option<Range<usize>> {
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
 			match node.child_by_field_name("body") {
 				Some(body) => Some(node.start_byte()..body.start_byte()),
 				None => Some(node.start_byte()..node.end_byte()),
@@ -248,48 +268,34 @@ mod qualifiers {
 
 	pub struct Name;
 	impl QualifierResolver for Name {
-		fn resolve(
-			&self,
-			node: Node<'_>,
-			_src: &str,
-			_args: Option<&str>,
-		) -> Option<Range<usize>> {
-			node.child_by_field_name("name").map(|c| c.start_byte()..c.end_byte())
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+			node
+				.child_by_field_name("name")
+				.map(|c| c.start_byte()..c.end_byte())
 		}
 	}
 
 	pub struct Generics;
 	impl QualifierResolver for Generics {
-		fn resolve(
-			&self,
-			node: Node<'_>,
-			_src: &str,
-			_args: Option<&str>,
-		) -> Option<Range<usize>> {
-			node.child_by_field_name("type_parameters").map(|c| c.start_byte()..c.end_byte())
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+			node
+				.child_by_field_name("type_parameters")
+				.map(|c| c.start_byte()..c.end_byte())
 		}
 	}
 
 	pub struct WhereClause;
 	impl QualifierResolver for WhereClause {
-		fn resolve(
-			&self,
-			node: Node<'_>,
-			_src: &str,
-			_args: Option<&str>,
-		) -> Option<Range<usize>> {
-			node.child_by_field_name("where_clause").map(|c| c.start_byte()..c.end_byte())
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+			node
+				.child_by_field_name("where_clause")
+				.map(|c| c.start_byte()..c.end_byte())
 		}
 	}
 
 	pub struct Attrs;
 	impl QualifierResolver for Attrs {
-		fn resolve(
-			&self,
-			node: Node<'_>,
-			_src: &str,
-			_args: Option<&str>,
-		) -> Option<Range<usize>> {
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
 			let mut first: Option<Node> = None;
 			let mut last: Option<Node> = None;
 			// Try children first (some tree-sitter versions embed attrs).
@@ -328,27 +334,20 @@ mod qualifiers {
 
 	pub struct Visibility;
 	impl QualifierResolver for Visibility {
-		fn resolve(
-			&self,
-			node: Node<'_>,
-			_src: &str,
-			_args: Option<&str>,
-		) -> Option<Range<usize>> {
-			node.child_by_field_name("visibility_modifier").map(|c| c.start_byte()..c.end_byte())
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
+			node
+				.child_by_field_name("visibility_modifier")
+				.map(|c| c.start_byte()..c.end_byte())
 		}
 	}
 
 	pub struct MatchArm;
 	impl QualifierResolver for MatchArm {
-		fn resolve(
-			&self,
-			node: Node<'_>,
-			_src: &str,
-			args: Option<&str>,
-		) -> Option<Range<usize>> {
+		fn resolve(&self, node: Node<'_>, _src: &str, args: Option<&str>) -> Option<Range<usize>> {
 			let idx = args.and_then(|a| a.parse::<usize>().ok()).unwrap_or(0);
 			let mut cursor = node.walk();
-			node.children(&mut cursor)
+			node
+				.children(&mut cursor)
 				.filter(|c| c.kind() == "match_arm")
 				.nth(idx)
 				.map(|c| c.start_byte()..c.end_byte())
@@ -357,12 +356,7 @@ mod qualifiers {
 
 	pub struct UnsafeBlock;
 	impl QualifierResolver for UnsafeBlock {
-		fn resolve(
-			&self,
-			node: Node<'_>,
-			_src: &str,
-			_args: Option<&str>,
-		) -> Option<Range<usize>> {
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
 			let mut stack = vec![node];
 			while let Some(n) = stack.pop() {
 				if n.kind() == "unsafe_block" {
@@ -411,6 +405,25 @@ fn has_descendant_kind(node: Node<'_>, kind: &str) -> bool {
 	false
 }
 
+fn normalize_ws(text: &str) -> String {
+	let mut out = String::new();
+	let mut prev_space = true;
+	for c in text.chars() {
+		if c.is_whitespace() {
+			if !prev_space {
+				out.push(' ');
+				prev_space = true;
+			}
+		} else {
+			out.push(c);
+			prev_space = false;
+		}
+	}
+	if out.ends_with(' ') {
+		out.pop();
+	}
+	out
+}
 pub fn rust_dialect() -> LanguageDialect {
 	LanguageDialect {
 		name_lexer: Arc::new(RustNameLexer),
@@ -589,11 +602,7 @@ pub fn rust_dialect() -> LanguageDialect {
 			},
 			QualifierSpec {
 				name:       "where",
-				applies_to: vec![
-					"function_item".into(),
-					"trait_item".into(),
-					"impl_item".into(),
-				],
+				applies_to: vec!["function_item".into(), "trait_item".into(), "impl_item".into()],
 				resolve:    Arc::new(qualifiers::WhereClause),
 			},
 			QualifierSpec {
@@ -717,8 +726,9 @@ mod tests {
 
 	#[test]
 	fn round_trip_via_codepath_parser() {
-		let cp = crate::parser::parse_code_path("src/lib.rs::crate::util::parse#body", &RustNameLexer)
-			.expect("parse should succeed");
+		let cp =
+			crate::parser::parse_code_path("src/lib.rs::crate::util::parse#body", &RustNameLexer)
+				.expect("parse should succeed");
 		assert_eq!(cp.qualifier.as_ref().unwrap().name, "body");
 	}
 

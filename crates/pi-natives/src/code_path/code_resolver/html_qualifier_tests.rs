@@ -27,16 +27,11 @@ fn temp_html(name: &str, content: &str, dir: &std::path::Path) -> PathBuf {
 #[test]
 fn qualifier_inner_html_excludes_tags() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_html(
-		"foo.html",
-		"<div class=\"foo\">hello <span>world</span></div>\n",
-		dir.path(),
-	);
-	let cp = parse_code_path(
-		"foo.html::div#innerHTML",
-		&pi_code_path::dialects::html::HtmlNameLexer,
-	)
-	.unwrap();
+	let path =
+		temp_html("foo.html", "<div class=\"foo\">hello <span>world</span></div>\n", dir.path());
+	let cp =
+		parse_code_path("foo.html::div#innerHTML", &pi_code_path::dialects::html::HtmlNameLexer)
+			.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -54,16 +49,11 @@ fn qualifier_inner_html_excludes_tags() {
 #[test]
 fn qualifier_outer_html_includes_tags() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_html(
-		"foo.html",
-		"<div class=\"foo\">hello <span>world</span></div>\n",
-		dir.path(),
-	);
-	let cp = parse_code_path(
-		"foo.html::div#outerHTML",
-		&pi_code_path::dialects::html::HtmlNameLexer,
-	)
-	.unwrap();
+	let path =
+		temp_html("foo.html", "<div class=\"foo\">hello <span>world</span></div>\n", dir.path());
+	let cp =
+		parse_code_path("foo.html::div#outerHTML", &pi_code_path::dialects::html::HtmlNameLexer)
+			.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -80,16 +70,10 @@ fn qualifier_outer_html_includes_tags() {
 #[test]
 fn qualifier_text_concatenates() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_html(
-		"foo.html",
-		"<div class=\"foo\">hello <span>world</span></div>\n",
-		dir.path(),
-	);
-	let cp = parse_code_path(
-		"foo.html::div#text",
-		&pi_code_path::dialects::html::HtmlNameLexer,
-	)
-	.unwrap();
+	let path =
+		temp_html("foo.html", "<div class=\"foo\">hello <span>world</span></div>\n", dir.path());
+	let cp =
+		parse_code_path("foo.html::div#text", &pi_code_path::dialects::html::HtmlNameLexer).unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -105,16 +89,10 @@ fn qualifier_text_concatenates() {
 #[test]
 fn qualifier_attr_returns_value() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_html(
-		"foo.html",
-		"<div class=\"foo\" id=\"app\">content</div>\n",
-		dir.path(),
-	);
-	let cp = parse_code_path(
-		"foo.html::div#attr[class]",
-		&pi_code_path::dialects::html::HtmlNameLexer,
-	)
-	.unwrap();
+	let path = temp_html("foo.html", "<div class=\"foo\" id=\"app\">content</div>\n", dir.path());
+	let cp =
+		parse_code_path("foo.html::div#attr[class]", &pi_code_path::dialects::html::HtmlNameLexer)
+			.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -130,11 +108,8 @@ fn qualifier_attr_returns_value() {
 fn qualifier_tag_returns_tag_name() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_html("foo.html", "<div>content</div>\n", dir.path());
-	let cp = parse_code_path(
-		"foo.html::div#tag",
-		&pi_code_path::dialects::html::HtmlNameLexer,
-	)
-	.unwrap();
+	let cp =
+		parse_code_path("foo.html::div#tag", &pi_code_path::dialects::html::HtmlNameLexer).unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -150,11 +125,8 @@ fn qualifier_tag_returns_tag_name() {
 fn qualifier_self_closing_empty_inner_html() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_html("foo.html", "<br/>\n", dir.path());
-	let cp = parse_code_path(
-		"foo.html::br#innerHTML",
-		&pi_code_path::dialects::html::HtmlNameLexer,
-	)
-	.unwrap();
+	let cp = parse_code_path("foo.html::br#innerHTML", &pi_code_path::dialects::html::HtmlNameLexer)
+		.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -164,7 +136,10 @@ fn qualifier_self_closing_empty_inner_html() {
 	assert_eq!(elems.len(), 1, "expected one element match, got: {:?}", results);
 	let nref = elems[0];
 	assert!(
-		nref.diagnostics.iter().any(|d| d.message.contains("empty range")),
+		nref
+			.diagnostics
+			.iter()
+			.any(|d| d.message.contains("empty range")),
 		"expected diagnostic for empty innerHTML on self-closing tag, got: {:?}",
 		nref.diagnostics
 	);
@@ -177,11 +152,8 @@ fn qualifier_self_closing_empty_inner_html() {
 #[test]
 fn anchor_landmark_by_role_matches_landmark_tags() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_html(
-		"foo.html",
-		"<header>hdr</header>\n<nav>nav</nav>\n<div>plain</div>\n",
-		dir.path(),
-	);
+	let path =
+		temp_html("foo.html", "<header>hdr</header>\n<nav>nav</nav>\n<div>plain</div>\n", dir.path());
 	let query = Query::single(Step {
 		axis:       Some(pi_code_path::ast::Axis::Structural),
 		head:       Head::NodeKind("element".into()),
@@ -198,11 +170,8 @@ fn anchor_landmark_by_role_matches_landmark_tags() {
 #[test]
 fn anchor_landmark_by_role_matches_role_attribute() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_html(
-		"foo.html",
-		"<div role=\"main\">main</div>\n<span>plain</span>\n",
-		dir.path(),
-	);
+	let path =
+		temp_html("foo.html", "<div role=\"main\">main</div>\n<span>plain</span>\n", dir.path());
 	let query = Query::single(Step {
 		axis:       Some(pi_code_path::ast::Axis::Structural),
 		head:       Head::NodeKind("element".into()),

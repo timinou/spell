@@ -4,14 +4,10 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use pi_org_engine::{
-    edge::EdgeKind,
-    graph::TypedGraph,
-    item::OrgItem,
-};
+use pi_org_engine::{edge::EdgeKind, graph::TypedGraph, item::OrgItem};
 use serde::{Deserialize, Serialize};
 
-use crate::{embedder::Embedder, fts::FtsIndex, vec::VecIndex, Result};
+use crate::{Result, embedder::Embedder, fts::FtsIndex, vec::VecIndex};
 
 // ---------------------------------------------------------------------------
 // Types

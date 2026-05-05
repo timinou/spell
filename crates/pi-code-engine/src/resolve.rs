@@ -12,7 +12,10 @@ use crate::{
 	buffer::CodeBuffer,
 	error::{CodeEngineError, Result},
 	language::LanguageProfile,
-	outline::{class_member_nodes, declaration_body_range, declaration_for, declaration_name, declaration_name_resolution},
+	outline::{
+		class_member_nodes, declaration_body_range, declaration_for, declaration_name,
+		declaration_name_resolution,
+	},
 };
 
 /// Byte range within the source buffer.
@@ -27,23 +30,24 @@ pub struct ByteRange {
 /// Three explicit ranges are provided so that action handlers can pick the
 /// appropriate span without guessing:
 /// - `identifier_range` — the bare name token (used by rename).
-/// - `declaration_range` — the unwrapped declaration body (default for find/get).
+/// - `declaration_range` — the unwrapped declaration body (default for
+///   find/get).
 /// - `statement_range` — the smallest enclosing statement that includes leading
 ///   keywords such as `export`, decorators, or Rust attributes (used by wrap,
 ///   splice, move, clone).
 #[derive(Debug, Clone)]
 pub struct ResolvedSymbol {
-	pub name:               String,
-	pub kind:               String,
-	pub start_byte:         usize,
-	pub end_byte:           usize,
-	pub line:               u32,
-	pub end_line:           u32,
-	pub body_start_byte:    Option<usize>,
-	pub body_end_byte:      Option<usize>,
-	pub identifier_range:   ByteRange,
-	pub declaration_range:  ByteRange,
-	pub statement_range:    ByteRange,
+	pub name:              String,
+	pub kind:              String,
+	pub start_byte:        usize,
+	pub end_byte:          usize,
+	pub line:              u32,
+	pub end_line:          u32,
+	pub body_start_byte:   Option<usize>,
+	pub body_end_byte:     Option<usize>,
+	pub identifier_range:  ByteRange,
+	pub declaration_range: ByteRange,
+	pub statement_range:   ByteRange,
 }
 
 fn declaration_name_for_node(
@@ -214,7 +218,11 @@ fn unwrap_export(node: Node<'_>) -> Node<'_> {
 fn statement_range_for(node: Node<'_>, profile: &LanguageProfile) -> ByteRange {
 	let mut statement_node = node;
 	while let Some(parent) = statement_node.parent() {
-		if profile.enclosing_statement_kinds.iter().any(|k| k == parent.kind()) {
+		if profile
+			.enclosing_statement_kinds
+			.iter()
+			.any(|k| k == parent.kind())
+		{
 			statement_node = parent;
 		} else {
 			break;

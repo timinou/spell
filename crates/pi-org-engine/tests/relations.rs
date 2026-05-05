@@ -1,13 +1,11 @@
-//! Integration tests for `:RELATIONS:` drawer parsing and legacy BLOCKERS bridge.
+//! Integration tests for `:RELATIONS:` drawer parsing and legacy BLOCKERS
+//! bridge.
 //!
 //! These tests drive the parser via `extract_items_from_source()`, which
 //! exercises both the tree-sitter path (level-1 headings) and the text-based
 //! fallback path (level-2+ headings).
 
-use pi_org_engine::{
-	edge::EdgeKind,
-	buffer::extract_items_from_source,
-};
+use pi_org_engine::{buffer::extract_items_from_source, edge::EdgeKind};
 
 const TODO: &[&str] = &["ITEM", "DOING", "DONE"];
 
@@ -25,12 +23,7 @@ fn relations_of(source: &str) -> Vec<(EdgeKind, String)> {
 
 #[test]
 fn parses_single_relation_line() {
-	let src = concat!(
-		"* ITEM Test\n",
-		":RELATIONS:\n",
-		"INVOLVED: ACT-x\n",
-		":END:\n",
-	);
+	let src = concat!("* ITEM Test\n", ":RELATIONS:\n", "INVOLVED: ACT-x\n", ":END:\n",);
 	let rels = relations_of(src);
 	assert_eq!(rels, vec![(EdgeKind::Involved, "ACT-x".into())]);
 }
@@ -76,28 +69,28 @@ fn parses_drawer_after_properties() {
 
 #[test]
 fn parses_drawer_before_properties() {
-    // PROPERTIES first (idiomatic), then RELATIONS — tree-sitter only
-    // recognizes property_drawer when it's the first drawer after headline.
-    let src = concat!(
-        "* ITEM Test
+	// PROPERTIES first (idiomatic), then RELATIONS — tree-sitter only
+	// recognizes property_drawer when it's the first drawer after headline.
+	let src = concat!(
+		"* ITEM Test
 ",
-        ":PROPERTIES:
+		":PROPERTIES:
 ",
-        ":CUSTOM_ID: T-002
+		":CUSTOM_ID: T-002
 ",
-        ":END:
+		":END:
 ",
-        ":RELATIONS:
+		":RELATIONS:
 ",
-        "DISTILLED_FROM: EP-01HX7Q
+		"DISTILLED_FROM: EP-01HX7Q
 ",
-        ":END:
+		":END:
 ",
-    );
-    let items = extract(src);
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0].relations, vec![(EdgeKind::DistilledFrom, "EP-01HX7Q".into())]);
-    assert_eq!(items[0].property("CUSTOM_ID"), Some("T-002"));
+	);
+	let items = extract(src);
+	assert_eq!(items.len(), 1);
+	assert_eq!(items[0].relations, vec![(EdgeKind::DistilledFrom, "EP-01HX7Q".into())]);
+	assert_eq!(items[0].property("CUSTOM_ID"), Some("T-002"));
 }
 #[test]
 fn legacy_blockers_property_synthesizes_blocks_edges() {
@@ -136,12 +129,7 @@ fn preserves_original_blockers_property() {
 
 #[test]
 fn unknown_edge_kind_becomes_other() {
-	let src = concat!(
-		"* ITEM Test\n",
-		":RELATIONS:\n",
-		"FOO_BAR: x\n",
-		":END:\n",
-	);
+	let src = concat!("* ITEM Test\n", ":RELATIONS:\n", "FOO_BAR: x\n", ":END:\n",);
 	let rels = relations_of(src);
 	assert_eq!(rels.len(), 1);
 	match &rels[0] {
@@ -157,11 +145,7 @@ fn unknown_edge_kind_becomes_other() {
 
 #[test]
 fn empty_drawer_yields_empty_relations() {
-	let src = concat!(
-		"* ITEM Test\n",
-		":RELATIONS:\n",
-		":END:\n",
-	);
+	let src = concat!("* ITEM Test\n", ":RELATIONS:\n", ":END:\n",);
 	let rels = relations_of(src);
 	assert!(rels.is_empty());
 }
@@ -238,13 +222,7 @@ fn round_trip_via_extract_items_from_source() {
 
 #[test]
 fn target_id_with_double_bracket_normalized() {
-	let src = concat!(
-		"* ITEM Test\n",
-		":RELATIONS:\n",
-		"ABOUT: [[id:ENT-x]]\n",
-		":END:\n",
-	);
+	let src = concat!("* ITEM Test\n", ":RELATIONS:\n", "ABOUT: [[id:ENT-x]]\n", ":END:\n",);
 	let rels = relations_of(src);
 	assert_eq!(rels, vec![(EdgeKind::About, "ENT-x".into())]);
 }
-

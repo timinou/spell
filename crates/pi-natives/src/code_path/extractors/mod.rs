@@ -19,9 +19,9 @@ pub use markitdown::MarkitdownExtractor;
 /// Default extractor chain. Order matters: json and html short-circuit
 /// before the heavier markitdown fallback.
 pub fn default_extractors() -> Vec<Arc<dyn FormatExtractor>> {
-    vec![
-        Arc::new(JsonExtractor::new()),
-        Arc::new(HtmlReadableExtractor::new()),
-        Arc::new(MarkitdownExtractor::new()),
-    ]
+	vec![
+		Arc::new(JsonExtractor::new()),
+		Arc::new(HtmlReadableExtractor::new()),
+		Arc::new(MarkitdownExtractor::new()),
+	]
 }

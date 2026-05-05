@@ -137,7 +137,7 @@ pub trait MutationResolver: Send + Sync {
 		Err(Diagnostic {
 			variant: crate::types::DiagnosticVariant::UnsupportedOperation,
 			message: format!("unsupported action: {:?}", action.kind()),
-			span: None,
+			span:    None,
 		})
 	}
 }

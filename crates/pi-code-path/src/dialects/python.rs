@@ -25,6 +25,7 @@ pub struct PyName {
 pub enum PySegment {
 	Ident(String),
 	DecoratorRef(String),
+	Quoted(String),
 }
 
 pub struct PyNameLexer;
@@ -35,7 +36,11 @@ impl NameLexer for PyNameLexer {
 		if segments.is_empty() {
 			return Err(winnow::error::ContextError::default());
 		}
-		Ok(NamePayload::Raw(render_segments(&segments)))
+		if segments.iter().any(|s| matches!(s, PySegment::Quoted(_))) {
+			Ok(NamePayload::Quoted(render_segments(&segments)))
+		} else {
+			Ok(NamePayload::Raw(render_segments(&segments)))
+		}
 	}
 
 	fn render(&self, n: &NamePayload) -> String {
@@ -46,33 +51,46 @@ impl NameLexer for PyNameLexer {
 	}
 
 	fn matches(&self, n: &NamePayload, node: Node<'_>, src: &str) -> bool {
-		// FEAT-708: extract the declared name from common Python
-		// declaration kinds and compare to the requested name.
-		let target = match n {
-			NamePayload::Raw(s) => s.as_str(),
-			NamePayload::Quoted(_) => return false,
-		};
-		let leaf = target.rsplit('.').next().unwrap_or(target);
-		if matches!(
-			node.kind(),
-			"function_definition"
-				| "class_definition"
-				| "decorated_definition"
-		) {
-			if let Some(name_child) = node.child_by_field_name("name")
-				&& let Some(text) = src.get(name_child.start_byte()..name_child.end_byte())
-			{
-				return text == leaf;
-			}
+		match n {
+			NamePayload::Raw(target) => {
+				let leaf = target.rsplit('.').next().unwrap_or(target);
+				if matches!(
+					node.kind(),
+					"function_definition" | "class_definition" | "decorated_definition"
+				) {
+					if let Some(name_child) = node.child_by_field_name("name")
+						&& let Some(text) = src.get(name_child.start_byte()..name_child.end_byte())
+					{
+						return text == leaf;
+					}
+				}
+				false
+			},
+			NamePayload::Quoted(target) => {
+				if !matches!(
+					node.kind(),
+					"import_statement"
+						| "import_from_statement"
+						| "return_statement"
+						| "expression_statement"
+						| "call"
+				) {
+					return false;
+				}
+				let text = src
+					.get(node.start_byte()..node.end_byte())
+					.unwrap_or("")
+					.trim_end_matches(';');
+				normalize_ws(text) == normalize_ws(target)
+			},
 		}
-		false
 	}
 }
 
 fn parse_segments(input: &mut &str) -> winnow::Result<Vec<PySegment>> {
 	let mut segments = Vec::new();
-	let first = parse_ident(input)?;
-	segments.push(PySegment::Ident(first));
+	let first = parse_segment(input)?;
+	segments.push(first);
 	while input.starts_with('.') {
 		let snapshot = *input;
 		*input = &input[1..];
@@ -81,8 +99,8 @@ fn parse_segments(input: &mut &str) -> winnow::Result<Vec<PySegment>> {
 			*input = snapshot;
 			return Err(winnow::error::ContextError::default());
 		}
-		match parse_ident(input) {
-			Ok(s) => segments.push(PySegment::Ident(s)),
+		match parse_segment(input) {
+			Ok(s) => segments.push(s),
 			Err(_) => {
 				*input = snapshot;
 				break;
@@ -92,9 +110,30 @@ fn parse_segments(input: &mut &str) -> winnow::Result<Vec<PySegment>> {
 	Ok(segments)
 }
 
-fn parse_ident(input: &mut &str) -> winnow::Result<String> {
+fn parse_segment(input: &mut &str) -> winnow::Result<PySegment> {
+	if input.starts_with('`') {
+		*input = &input[1..];
+		let mut buf = String::new();
+		let mut closed = false;
+		let mut chars = input.char_indices();
+		let mut consumed = 0;
+		for (idx, c) in chars.by_ref() {
+			if c == '`' {
+				closed = true;
+				consumed = idx + 1;
+				break;
+			}
+			buf.push(c);
+			consumed = idx + c.len_utf8();
+		}
+		if !closed {
+			return Err(winnow::error::ContextError::default());
+		}
+		*input = &input[consumed..];
+		return Ok(PySegment::Quoted(buf));
+	}
 	let s: &str = take_while(1.., |c: char| c.is_alphanumeric() || c == '_').parse_next(input)?;
-	Ok(s.to_string())
+	Ok(PySegment::Ident(s.to_string()))
 }
 
 fn render_segments(segs: &[PySegment]) -> String {
@@ -103,6 +142,7 @@ fn render_segments(segs: &[PySegment]) -> String {
 		.map(|s| match s {
 			PySegment::Ident(i) => i.clone(),
 			PySegment::DecoratorRef(d) => format!("@{d}"),
+			PySegment::Quoted(q) => q.clone(),
 		})
 		.collect::<Vec<_>>()
 		.join(".")
@@ -265,6 +305,25 @@ fn has_descendant_kind(node: Node<'_>, kind: &str) -> bool {
 	false
 }
 
+fn normalize_ws(text: &str) -> String {
+	let mut out = String::new();
+	let mut prev_space = true;
+	for c in text.chars() {
+		if c.is_whitespace() {
+			if !prev_space {
+				out.push(' ');
+				prev_space = true;
+			}
+		} else {
+			out.push(c);
+			prev_space = false;
+		}
+	}
+	if out.ends_with(' ') {
+		out.pop();
+	}
+	out
+}
 pub fn python_dialect() -> LanguageDialect {
 	LanguageDialect {
 		name_lexer: Arc::new(PyNameLexer),

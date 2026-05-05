@@ -57,8 +57,6 @@ pub struct TxnStartedRecord {
 	pub started_at: u64,
 }
 
-
-
 /// Replay the journal file, segregating completed vs incomplete txns.
 ///
 /// A complete txn has `TxnStarted` followed by `TxnCommitted` (or
@@ -83,14 +81,13 @@ pub fn replay_journal(path: &Path) -> std::io::Result<ReplayState> {
 		};
 		match entry {
 			TxnJournalEntry::TxnStarted { txn_id, session_id, files, started_at } => {
-				state.incomplete_txns.insert(
-					txn_id.clone(),
-					TxnStartedRecord {
+				state
+					.incomplete_txns
+					.insert(txn_id.clone(), TxnStartedRecord {
 						session_id,
 						files: files.into_iter().map(|(p, _)| p).collect(),
 						started_at,
-					},
-				);
+					});
 			},
 			TxnJournalEntry::TxnCommitted { txn_id, .. }
 			| TxnJournalEntry::TxnRolledBack { txn_id, .. } => {
@@ -116,7 +113,6 @@ pub fn append_entry(path: &Path, entry: &TxnJournalEntry) -> std::io::Result<()>
 
 /// Default transaction journal path.
 pub fn default_journal_path() -> PathBuf {
-	let home =
-		std::env::var_os("HOME").unwrap_or_else(|| std::ffi::OsString::from("/tmp"));
+	let home = std::env::var_os("HOME").unwrap_or_else(|| std::ffi::OsString::from("/tmp"));
 	PathBuf::from(home).join(".spell/edit-txn-journal.jsonl")
 }

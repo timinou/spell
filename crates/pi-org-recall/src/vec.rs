@@ -3,12 +3,13 @@
 //! Wraps `pi_code_vectors::VectorIndex` with a `String`-keyed id mapping and
 //! disk serialization. Duplicate inserts replace the old vector (O(n) rebuild).
 
-use std::collections::HashMap;
-use std::io::{BufReader, BufWriter, Read, Write};
-use std::path::Path;
+use std::{
+	collections::HashMap,
+	io::{BufReader, BufWriter, Read, Write},
+	path::Path,
+};
 
 use pi_code_vectors::{VectorEntry, VectorIndex as InnerIndex};
-
 use tracing::warn;
 
 use crate::{Error, Result};
@@ -33,10 +34,10 @@ impl VecIndex {
 	/// Create a new empty index with the given vector dimensionality.
 	pub fn new(dim: usize) -> Self {
 		Self {
-			inner:      InnerIndex::new(Vec::new(), dim),
+			inner: InnerIndex::new(Vec::new(), dim),
 			id_to_node: HashMap::new(),
 			node_to_id: Vec::new(),
-			vectors:    Vec::new(),
+			vectors: Vec::new(),
 			dim,
 		}
 	}
@@ -49,18 +50,13 @@ impl VecIndex {
 	/// Zero-norm vectors (`‖v‖ < 1e-9`) are logged as warnings and skipped.
 	pub fn insert(&mut self, id: String, vector: Vec<f32>) -> Result<()> {
 		if vector.len() != self.dim {
-			return Err(Error::DimensionMismatch {
-				expected: self.dim,
-				actual:   vector.len(),
-			});
+			return Err(Error::DimensionMismatch { expected: self.dim, actual: vector.len() });
 		}
 
 		// Detect zero-norm vector → skip
 		let norm: f32 = vector.iter().map(|x| x * x).sum::<f32>().sqrt();
 		if norm < 1e-9 {
-			warn!(
-				"skipping zero-norm vector for id={id}: ‖v‖={norm:e} < 1e-9",
-			);
+			warn!("skipping zero-norm vector for id={id}: ‖v‖={norm:e} < 1e-9",);
 			return Ok(());
 		}
 
@@ -80,10 +76,7 @@ impl VecIndex {
 			.vectors
 			.iter()
 			.enumerate()
-			.map(|(node_idx, v)| VectorEntry {
-				node_index: node_idx,
-				vector:     v.clone(),
-			})
+			.map(|(node_idx, v)| VectorEntry { node_index: node_idx, vector: v.clone() })
 			.collect();
 		self.inner = InnerIndex::new(entries, self.dim);
 		Ok(())
@@ -166,25 +159,18 @@ impl VecIndex {
 		}
 
 		// Read id_to_node and node_to_id
-		let id_to_node: HashMap<String, usize> =
-			bincode::deserialize_from(&mut reader)
-				.map_err(|e| Error::Serialization(format!("id_to_node: {e}")))?;
-		let node_to_id: Vec<String> =
-			bincode::deserialize_from(&mut reader)
-				.map_err(|e| Error::Serialization(format!("node_to_id: {e}")))?;
+		let id_to_node: HashMap<String, usize> = bincode::deserialize_from(&mut reader)
+			.map_err(|e| Error::Serialization(format!("id_to_node: {e}")))?;
+		let node_to_id: Vec<String> = bincode::deserialize_from(&mut reader)
+			.map_err(|e| Error::Serialization(format!("node_to_id: {e}")))?;
 
 		// Read inner persisted index
 		let persisted = pi_code_vectors::deserialize_index(&mut reader)?;
 		let dim = persisted.dimensions;
 		// Extract vectors from persisted entries before consuming
-		let vectors: Vec<Vec<f32>> = persisted
-			.entries
-			.iter()
-			.map(|e| e.vector.clone())
-			.collect();
+		let vectors: Vec<Vec<f32>> = persisted.entries.iter().map(|e| e.vector.clone()).collect();
 		let inner = InnerIndex::from_persisted(persisted);
 
 		Ok(Self { inner, id_to_node, node_to_id, vectors, dim })
 	}
 }
-

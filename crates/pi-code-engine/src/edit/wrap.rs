@@ -278,7 +278,10 @@ mod tests {
 			result.contains("try { export const X = 1; } catch (e) {}"),
 			"expected wrap to include export keyword, got: {result}"
 		);
-		assert!(!result.contains("export try"), "export keyword should not be left dangling: {result}");
+		assert!(
+			!result.contains("export try"),
+			"export keyword should not be left dangling: {result}"
+		);
 	}
 
 	#[test]

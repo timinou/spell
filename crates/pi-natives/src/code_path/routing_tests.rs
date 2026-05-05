@@ -5,23 +5,23 @@
 
 use std::path::PathBuf;
 
-use super::napi::{execute_code_path_inner, CodePathTaskOptions};
+use super::napi::{CodePathTaskOptions, execute_code_path_inner};
 
 fn opts_with_root(target: impl Into<String>, root: PathBuf) -> CodePathTaskOptions {
 	CodePathTaskOptions {
-		command: "resolve".to_string(),
-		target:  target.into(),
-		transaction: None,
-		limit:   None,
-		head:    None,
-		tail:    None,
-		offset:  None,
-		format:  None,
-		root:    Some(root.to_string_lossy().to_string()),
-		actions: None,
-		manage:  None,
+		command:            "resolve".to_string(),
+		target:             target.into(),
+		transaction:        None,
+		limit:              None,
+		head:               None,
+		tail:               None,
+		offset:             None,
+		format:             None,
+		root:               Some(root.to_string_lossy().to_string()),
+		actions:            None,
+		manage:             None,
 		artifact_threshold: None,
-		session_id: None,
+		session_id:         None,
 	}
 }
 
@@ -40,7 +40,9 @@ fn md_symbol_query_returns_section() {
 	.unwrap();
 	let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
 	assert!(
-		nodes.iter().any(|n| n.kind == "§section" || n.kind == "§atx_heading"),
+		nodes
+			.iter()
+			.any(|n| n.kind == "§section" || n.kind == "§atx_heading"),
 		"expected §section or §atx_heading for md heading, got kinds: {:?}",
 		nodes.iter().map(|n| &n.kind).collect::<Vec<_>>()
 	);
@@ -66,7 +68,9 @@ fn org_symbol_query_returns_heading() {
 	.unwrap();
 	let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
 	assert!(
-		nodes.iter().any(|n| n.kind == "§section" || n.kind == "§headline"),
+		nodes
+			.iter()
+			.any(|n| n.kind == "§section" || n.kind == "§headline"),
 		"expected §section or §headline for org heading, got kinds: {:?}",
 		nodes.iter().map(|n| &n.kind).collect::<Vec<_>>()
 	);
@@ -161,11 +165,9 @@ fn bare_md_path_returns_file_node() {
 	let dir = tempfile::tempdir().unwrap();
 	let root = dir.path().to_path_buf();
 	std::fs::write(root.join("doc.md"), "# Hello\n").unwrap();
-	let chunks = execute_code_path_inner(
-		opts_with_root("doc.md", root),
-		crate::task::CancelToken::default(),
-	)
-	.unwrap();
+	let chunks =
+		execute_code_path_inner(opts_with_root("doc.md", root), crate::task::CancelToken::default())
+			.unwrap();
 	let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
 	assert_eq!(nodes.len(), 1, "expected exactly one node for bare path");
 	assert_eq!(nodes[0].kind, "§file", "expected §file for bare path");
@@ -178,11 +180,7 @@ fn bare_md_path_returns_file_node() {
 fn md_symbol_qualifier_chain() {
 	let dir = tempfile::tempdir().unwrap();
 	let root = dir.path().to_path_buf();
-	std::fs::write(
-		root.join("doc.md"),
-		"# Foo\n\nFirst paragraph.\n\nSecond paragraph.\n",
-	)
-	.unwrap();
+	std::fs::write(root.join("doc.md"), "# Foo\n\nFirst paragraph.\n\nSecond paragraph.\n").unwrap();
 	let chunks = execute_code_path_inner(
 		opts_with_root("doc.md::Foo#first-para", root),
 		crate::task::CancelToken::default(),
@@ -202,11 +200,7 @@ fn md_symbol_qualifier_chain() {
 		.and_then(|c| c.value.as_ref())
 		.map(|s| s.as_str())
 		.unwrap_or("");
-	assert!(
-		text.contains("First paragraph."),
-		"expected first paragraph content, got: {}",
-		text
-	);
+	assert!(text.contains("First paragraph."), "expected first paragraph content, got: {}", text);
 }
 
 // ── FEAT-689 (B1/B2/B10) routing tests ────────────────────────────
@@ -217,19 +211,19 @@ fn opts_edit_with_root(
 	actions: serde_json::Value,
 ) -> CodePathTaskOptions {
 	CodePathTaskOptions {
-		command: "edit".to_string(),
-		target: target.into(),
-		transaction: None,
-		limit: None,
-		head: None,
-		tail: None,
-		offset: None,
-		format: None,
-		root: Some(root.to_string_lossy().to_string()),
-		actions: Some(actions),
-		manage: None,
+		command:            "edit".to_string(),
+		target:             target.into(),
+		transaction:        None,
+		limit:              None,
+		head:               None,
+		tail:               None,
+		offset:             None,
+		format:             None,
+		root:               Some(root.to_string_lossy().to_string()),
+		actions:            Some(actions),
+		manage:             None,
 		artifact_threshold: None,
-		session_id: None,
+		session_id:         None,
 	}
 }
 
@@ -305,11 +299,7 @@ fn delete_with_qualifier_target_rejects_at_fs() {
 	let root = dir.path().to_path_buf();
 	std::fs::write(root.join("safe.txt"), "intact").unwrap();
 	let chunks = execute_code_path_inner(
-		opts_edit_with_root(
-			"safe.txt#stat",
-			root.clone(),
-			serde_json::json!([{"kind": "delete"}]),
-		),
+		opts_edit_with_root("safe.txt#stat", root.clone(), serde_json::json!([{"kind": "delete"}])),
 		crate::task::CancelToken::default(),
 	)
 	.unwrap();
@@ -330,11 +320,7 @@ fn delete_with_symbol_target_routes_to_code_resolver() {
 	)
 	.unwrap();
 	let _ = execute_code_path_inner(
-		opts_edit_with_root(
-			"a.ts::remove_me",
-			root.clone(),
-			serde_json::json!([{"kind": "delete"}]),
-		),
+		opts_edit_with_root("a.ts::remove_me", root.clone(), serde_json::json!([{"kind": "delete"}])),
 		crate::task::CancelToken::default(),
 	)
 	.unwrap();
@@ -348,11 +334,7 @@ fn wrap_action_with_trivial_template_succeeds() {
 	// not be rejected by the buffer-validity gate.
 	let dir = tempfile::tempdir().unwrap();
 	let root = dir.path().to_path_buf();
-	std::fs::write(
-		root.join("a.ts"),
-		"function foo() {\n  return 1;\n}\n",
-	)
-	.unwrap();
+	std::fs::write(root.join("a.ts"), "function foo() {\n  return 1;\n}\n").unwrap();
 	let chunks = execute_code_path_inner(
 		opts_edit_with_root(
 			"a.ts::foo",
@@ -378,11 +360,7 @@ fn wrap_action_with_trivial_template_succeeds() {
 fn clone_with_content_renames_clone() {
 	let dir = tempfile::tempdir().unwrap();
 	let root = dir.path().to_path_buf();
-	std::fs::write(
-		root.join("c.ts"),
-		"function foo() {\n  return 1;\n}\n",
-	)
-	.unwrap();
+	std::fs::write(root.join("c.ts"), "function foo() {\n  return 1;\n}\n").unwrap();
 	let chunks = execute_code_path_inner(
 		opts_edit_with_root(
 			"c.ts::foo",
@@ -405,17 +383,9 @@ fn clone_without_content_appends_dup_suffix() {
 	// (creates a duplicate which the language flags downstream).
 	let dir = tempfile::tempdir().unwrap();
 	let root = dir.path().to_path_buf();
-	std::fs::write(
-		root.join("c.ts"),
-		"function foo() {\n  return 1;\n}\n",
-	)
-	.unwrap();
+	std::fs::write(root.join("c.ts"), "function foo() {\n  return 1;\n}\n").unwrap();
 	let _ = execute_code_path_inner(
-		opts_edit_with_root(
-			"c.ts::foo",
-			root.clone(),
-			serde_json::json!([{"kind": "clone"}]),
-		),
+		opts_edit_with_root("c.ts::foo", root.clone(), serde_json::json!([{"kind": "clone"}])),
 		crate::task::CancelToken::default(),
 	)
 	.unwrap();
@@ -428,11 +398,7 @@ fn clone_without_content_appends_dup_suffix() {
 fn clone_with_invalid_identifier_rejected() {
 	let dir = tempfile::tempdir().unwrap();
 	let root = dir.path().to_path_buf();
-	std::fs::write(
-		root.join("c.ts"),
-		"function foo() {\n  return 1;\n}\n",
-	)
-	.unwrap();
+	std::fs::write(root.join("c.ts"), "function foo() {\n  return 1;\n}\n").unwrap();
 	let chunks = execute_code_path_inner(
 		opts_edit_with_root(
 			"c.ts::foo",
@@ -454,19 +420,19 @@ fn opts_edit_strict(
 	actions: serde_json::Value,
 ) -> CodePathTaskOptions {
 	CodePathTaskOptions {
-		command: "edit".to_string(),
-		target: target.into(),
-		transaction: Some(super::napi::TransactionMode::Strict),
-		limit: None,
-		head: None,
-		tail: None,
-		offset: None,
-		format: None,
-		root: Some(root.to_string_lossy().to_string()),
-		actions: Some(actions),
-		manage: None,
+		command:            "edit".to_string(),
+		target:             target.into(),
+		transaction:        Some(super::napi::TransactionMode::Strict),
+		limit:              None,
+		head:               None,
+		tail:               None,
+		offset:             None,
+		format:             None,
+		root:               Some(root.to_string_lossy().to_string()),
+		actions:            Some(actions),
+		manage:             None,
 		artifact_threshold: None,
-		session_id: None,
+		session_id:         None,
 	}
 }
 
@@ -530,5 +496,7 @@ fn transaction_best_effort_default_unchanged() {
 	)
 	.unwrap();
 	// Best-effort: each op runs in order, both succeed → file deleted.
-	assert!(!root.join("a.txt").exists() || std::fs::read_to_string(root.join("a.txt")).unwrap() == "v2");
+	assert!(
+		!root.join("a.txt").exists() || std::fs::read_to_string(root.join("a.txt")).unwrap() == "v2"
+	);
 }

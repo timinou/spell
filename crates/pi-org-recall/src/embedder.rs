@@ -55,9 +55,9 @@ struct WorkerResponse {
 	ok:      bool,
 	error:   Option<String>,
 	#[serde(default)]
-	dim:    Option<usize>,
+	dim:     Option<usize>,
 	#[serde(default)]
-	vector: Option<Vec<f32>>,
+	vector:  Option<Vec<f32>>,
 	#[serde(default)]
 	vectors: Option<Vec<Vec<f32>>>,
 }
@@ -76,11 +76,11 @@ impl WorkerEmbedder {
 		let dim = with_worker(|worker| {
 			let resp = worker.request(&WorkerCommand::Init)?;
 			if !resp.ok {
-				return Err(Error::Embedder(
-					resp.error.unwrap_or_else(|| "init failed".to_string()),
-				));
+				return Err(Error::Embedder(resp.error.unwrap_or_else(|| "init failed".to_string())));
 			}
-			resp.dim.ok_or_else(|| Error::Embedder("init response missing dim".to_string()))
+			resp
+				.dim
+				.ok_or_else(|| Error::Embedder("init response missing dim".to_string()))
 		})?;
 		Ok(Self { dim })
 	}
@@ -89,17 +89,17 @@ impl WorkerEmbedder {
 impl Embedder for WorkerEmbedder {
 	fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
 		let vector = with_worker(|worker| {
-			let resp = worker.request(&WorkerCommand::EmbedQuery {
-				text: text.to_owned(),
-			})?;
+			let resp = worker.request(&WorkerCommand::EmbedQuery { text: text.to_owned() })?;
 			if !resp.ok {
 				return Err(Error::Embedder(
-					resp.error.unwrap_or_else(|| "embed_query failed".to_string()),
+					resp
+						.error
+						.unwrap_or_else(|| "embed_query failed".to_string()),
 				));
 			}
-			resp.vector.ok_or_else(|| {
-				Error::Embedder("embed_query response missing vector".to_string())
-			})
+			resp
+				.vector
+				.ok_or_else(|| Error::Embedder("embed_query response missing vector".to_string()))
 		})?;
 		Ok(vector)
 	}
@@ -107,17 +107,17 @@ impl Embedder for WorkerEmbedder {
 	fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
 		let text_owned: Vec<String> = texts.iter().map(|t| (*t).to_owned()).collect();
 		let vectors = with_worker(|worker| {
-			let resp = worker.request(&WorkerCommand::EmbedBatch {
-				texts: text_owned,
-			})?;
+			let resp = worker.request(&WorkerCommand::EmbedBatch { texts: text_owned })?;
 			if !resp.ok {
 				return Err(Error::Embedder(
-					resp.error.unwrap_or_else(|| "embed_batch failed".to_string()),
+					resp
+						.error
+						.unwrap_or_else(|| "embed_batch failed".to_string()),
 				));
 			}
-			resp.vectors.ok_or_else(|| {
-				Error::Embedder("embed_batch response missing vectors".to_string())
-			})
+			resp
+				.vectors
+				.ok_or_else(|| Error::Embedder("embed_batch response missing vectors".to_string()))
 		})?;
 		Ok(vectors)
 	}
@@ -164,9 +164,7 @@ fn spawn_worker() -> Result<WorkerHandle> {
 		.stdout(Stdio::piped())
 		.stderr(Stdio::inherit())
 		.spawn()
-		.map_err(|e| {
-			Error::WorkerSpawn(format!("failed to spawn {}: {e}", path.display()))
-		})?;
+		.map_err(|e| Error::WorkerSpawn(format!("failed to spawn {}: {e}", path.display())))?;
 	let stdin = child
 		.stdin
 		.take()
@@ -175,11 +173,7 @@ fn spawn_worker() -> Result<WorkerHandle> {
 		.stdout
 		.take()
 		.ok_or_else(|| Error::WorkerSpawn("failed to capture worker stdout".to_string()))?;
-	Ok(WorkerHandle {
-		_child: child,
-		stdin: BufWriter::new(stdin),
-		stdout: BufReader::new(stdout),
-	})
+	Ok(WorkerHandle { _child: child, stdin: BufWriter::new(stdin), stdout: BufReader::new(stdout) })
 }
 
 impl WorkerHandle {
@@ -187,10 +181,12 @@ impl WorkerHandle {
 		self.ensure_running()?;
 		serde_json::to_writer(&mut self.stdin, command)
 			.map_err(|e| Error::Embedder(format!("failed to encode request: {e}")))?;
-		self.stdin
+		self
+			.stdin
 			.write_all(b"\n")
 			.map_err(|e| Error::Embedder(format!("failed to write request: {e}")))?;
-		self.stdin
+		self
+			.stdin
 			.flush()
 			.map_err(|e| Error::Embedder(format!("failed to flush request: {e}")))?;
 
@@ -208,12 +204,12 @@ impl WorkerHandle {
 	}
 
 	fn ensure_running(&mut self) -> Result<()> {
-		if let Some(status) = self._child.try_wait().map_err(|e| {
-			Error::WorkerSpawn(format!("failed to poll worker state: {e}"))
-		})? {
-			return Err(Error::WorkerSpawn(format!(
-				"worker exited with status {status}"
-			)));
+		if let Some(status) = self
+			._child
+			.try_wait()
+			.map_err(|e| Error::WorkerSpawn(format!("failed to poll worker state: {e}")))?
+		{
+			return Err(Error::WorkerSpawn(format!("worker exited with status {status}")));
 		}
 		Ok(())
 	}
@@ -296,7 +292,10 @@ impl Embedder for MockEmbedder {
 	}
 
 	fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
-		Ok(texts.iter().map(|t| hash_to_normalized_vec(t, self.dim)).collect())
+		Ok(texts
+			.iter()
+			.map(|t| hash_to_normalized_vec(t, self.dim))
+			.collect())
 	}
 
 	fn dim(&self) -> usize {

@@ -20,7 +20,7 @@ use tokio::{
 use crate::{
 	conn::BrokerEvent,
 	state::BrokerState,
-	txn_journal::{replay_journal, TxnJournalEntry},
+	txn_journal::{TxnJournalEntry, replay_journal},
 };
 
 pub const REAP_INTERVAL: Duration = Duration::from_secs(5);
@@ -59,18 +59,15 @@ pub async fn run(
 					// Broadcast rollback for this incomplete txn
 					let _ = bus.send(BrokerEvent::MultiPeerRolledBack {
 						txn_id: txn_id.clone(),
-						files: files.clone(),
+						files:  files.clone(),
 						reason: "broker restart — incomplete txn".into(),
 					});
 					// Append a rollback entry so it's marked completed on next restart
-					let _ = crate::txn_journal::append_entry(
-						jp,
-						&TxnJournalEntry::TxnRolledBack {
-							txn_id: txn_id.clone(),
-							reason: "broker restart — incomplete txn".into(),
-							ts: crate::state::now_ms(),
-						},
-					);
+					let _ = crate::txn_journal::append_entry(jp, &TxnJournalEntry::TxnRolledBack {
+						txn_id: txn_id.clone(),
+						reason: "broker restart — incomplete txn".into(),
+						ts:     crate::state::now_ms(),
+					});
 				}
 			},
 			Err(e) => {

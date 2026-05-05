@@ -4,17 +4,17 @@
 //! heading text (possibly quoted with `"…"` to embed spaces) or list-item
 //! positions (`item.3.subitem.5`).
 
-use std::ops::Range;
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use tree_sitter::Node;
-use winnow::Parser;
-use winnow::token::take_while;
+use winnow::{Parser, token::take_while};
 
-use crate::ast::NamePayload;
-use crate::dialect::{
-	AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierResolver, QualifierSpec,
+use crate::{
+	ast::NamePayload,
+	dialect::{
+		AnchorPattern, EdgeKindSet, LanguageDialect, NameLexer, QualifierResolver, QualifierSpec,
+	},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -82,8 +82,8 @@ fn parse_segment(input: &mut &str) -> winnow::Result<MdSegment> {
 	if input.starts_with('"') {
 		return parse_quoted(input);
 	}
-	let s: &str = take_while(1.., |c: char| c.is_alphanumeric() || c == '_' || c == '-')
-		.parse_next(input)?;
+	let s: &str =
+		take_while(1.., |c: char| c.is_alphanumeric() || c == '_' || c == '-').parse_next(input)?;
 	if let Ok(n) = s.parse::<usize>() {
 		Ok(MdSegment::ListItem(n))
 	} else {
@@ -132,10 +132,13 @@ fn parse_quoted(input: &mut &str) -> winnow::Result<MdSegment> {
 }
 
 fn render_segments(segs: &[MdSegment]) -> String {
-	segs.iter()
+	segs
+		.iter()
 		.map(|s| match s {
 			MdSegment::Heading(h) => h.clone(),
-			MdSegment::QuotedHeading(q) => format!("\"{}\"", q.replace('\\', "\\\\").replace('"', "\\\"")),
+			MdSegment::QuotedHeading(q) => {
+				format!("\"{}\"", q.replace('\\', "\\\\").replace('"', "\\\""))
+			},
 			MdSegment::ListItem(n) => n.to_string(),
 		})
 		.collect::<Vec<_>>()
@@ -198,9 +201,15 @@ fn first_child_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
 
 mod qualifiers {
 	use std::ops::Range;
+
 	use tree_sitter::Node;
-	use crate::dialect::QualifierResolver;
-	use crate::dialects::mdorg::{first_child_kind, has_descendant_kind, heading_child, heading_text_node, match_kind};
+
+	use crate::{
+		dialect::QualifierResolver,
+		dialects::mdorg::{
+			first_child_kind, has_descendant_kind, heading_child, heading_text_node, match_kind,
+		},
+	};
 
 	pub struct Body;
 	impl QualifierResolver for Body {
@@ -359,7 +368,8 @@ mod qualifiers {
 			let item = heading_text_node(heading)?;
 			let text = src.get(item.start_byte()..item.end_byte())?;
 			let first_word = text.split_whitespace().next()?;
-			const TODO_KEYWORDS: &[&str] = &["TODO", "DONE", "DOING", "CANCELLED", "WAITING", "HOLD", "IDEA"];
+			const TODO_KEYWORDS: &[&str] =
+				&["TODO", "DONE", "DOING", "CANCELLED", "WAITING", "HOLD", "IDEA"];
 			if TODO_KEYWORDS.iter().any(|k| *k == first_word) {
 				let start = item.start_byte();
 				return Some(start..start + first_word.len());
@@ -374,7 +384,11 @@ mod qualifiers {
 			let heading = heading_child(node)?;
 			let item = heading_text_node(heading)?;
 			let text = src.get(item.start_byte()..item.end_byte())?;
-			if let Some(start) = text.find("#A").or_else(|| text.find("#B")).or_else(|| text.find("#C")) {
+			if let Some(start) = text
+				.find("#A")
+				.or_else(|| text.find("#B"))
+				.or_else(|| text.find("#C"))
+			{
 				let abs_start = item.start_byte() + start;
 				return Some(abs_start..abs_start + 2);
 			}
@@ -443,9 +457,9 @@ mod qualifiers {
 pub fn markdown_dialect() -> LanguageDialect {
 	LanguageDialect {
 		name_lexer: Arc::new(MdNameLexer),
-		anchors: vec![
+		anchors:    vec![
 			AnchorPattern {
-				name: "code-block",
+				name:    "code-block",
 				matcher: |n, _s| {
 					match_kind(n, &["fenced_code_block", "code_fence_content"])
 						|| (n.kind() == "section" && has_descendant_kind(*n, "fenced_code_block"))
@@ -453,14 +467,15 @@ pub fn markdown_dialect() -> LanguageDialect {
 			},
 			AnchorPattern { name: "quote", matcher: |n, _s| match_kind(n, &["block_quote"]) },
 			AnchorPattern {
-				name: "table",
+				name:    "table",
 				matcher: |n, _s| {
 					match_kind(n, &["pipe_table", "table"])
-						|| (n.kind() == "section" && (has_descendant_kind(*n, "pipe_table") || has_descendant_kind(*n, "table")))
+						|| (n.kind() == "section"
+							&& (has_descendant_kind(*n, "pipe_table") || has_descendant_kind(*n, "table")))
 				},
 			},
 			AnchorPattern {
-				name: "image",
+				name:    "image",
 				matcher: |n, s| {
 					if n.kind() != "paragraph" {
 						return false;
@@ -474,7 +489,7 @@ pub fn markdown_dialect() -> LanguageDialect {
 				},
 			},
 			AnchorPattern {
-				name: "footnote",
+				name:    "footnote",
 				matcher: |n, s| {
 					if n.kind() != "paragraph" {
 						return false;
@@ -488,21 +503,27 @@ pub fn markdown_dialect() -> LanguageDialect {
 				},
 			},
 			AnchorPattern {
-				name: "agenda-item",
+				name:    "agenda-item",
 				matcher: |n, s| {
 					if n.kind() != "section" {
 						return false;
 					}
-					let Some(heading) = heading_child(*n) else { return false };
-					let Some(item) = heading_text_node(heading) else { return false };
-					let Some(text) = s.get(item.start_byte()..item.end_byte()) else { return false };
+					let Some(heading) = heading_child(*n) else {
+						return false;
+					};
+					let Some(item) = heading_text_node(heading) else {
+						return false;
+					};
+					let Some(text) = s.get(item.start_byte()..item.end_byte()) else {
+						return false;
+					};
 					let first = text.split_whitespace().next().unwrap_or("");
 					!matches!(first, "DONE" | "CANCELLED")
 						&& ["TODO", "DOING", "WAITING", "HOLD", "IDEA"].contains(&first)
 				},
 			},
 			AnchorPattern {
-				name: "archived",
+				name:    "archived",
 				matcher: |n, s| {
 					if n.kind() != "section" {
 						return false;
@@ -512,11 +533,11 @@ pub fn markdown_dialect() -> LanguageDialect {
 				},
 			},
 			AnchorPattern {
-				name: "checkbox",
+				name:    "checkbox",
 				matcher: |n, _s| n.kind() == "listitem" && has_descendant_kind(*n, "checkbox"),
 			},
 			AnchorPattern {
-				name: "deadline-soon",
+				name:    "deadline-soon",
 				matcher: |n, s| {
 					if n.kind() != "section" {
 						return false;
@@ -544,74 +565,74 @@ pub fn markdown_dialect() -> LanguageDialect {
 		],
 		qualifiers: vec![
 			QualifierSpec {
-				name: "body",
+				name:       "body",
 				applies_to: vec!["section".into()],
-				resolve: Arc::new(qualifiers::Body),
+				resolve:    Arc::new(qualifiers::Body),
 			},
 			QualifierSpec {
-				name: "intro",
+				name:       "intro",
 				applies_to: vec!["section".into()],
-				resolve: Arc::new(qualifiers::Intro),
+				resolve:    Arc::new(qualifiers::Intro),
 			},
 			QualifierSpec {
-				name: "first-para",
+				name:       "first-para",
 				applies_to: vec!["section".into()],
-				resolve: Arc::new(qualifiers::FirstPara),
+				resolve:    Arc::new(qualifiers::FirstPara),
 			},
 			QualifierSpec {
-				name: "toc",
+				name:       "toc",
 				applies_to: vec!["section".into()],
-				resolve: Arc::new(qualifiers::Toc),
+				resolve:    Arc::new(qualifiers::Toc),
 			},
 			QualifierSpec {
-				name: "frontmatter",
+				name:       "frontmatter",
 				applies_to: vec!["document".into()],
-				resolve: Arc::new(qualifiers::Frontmatter),
+				resolve:    Arc::new(qualifiers::Frontmatter),
 			},
 			QualifierSpec {
-				name: "title",
+				name:       "title",
 				applies_to: vec!["section".into()],
-				resolve: Arc::new(qualifiers::Title),
+				resolve:    Arc::new(qualifiers::Title),
 			},
 			QualifierSpec {
-				name: "level",
+				name:       "level",
 				applies_to: vec!["section".into()],
-				resolve: Arc::new(qualifiers::Level),
+				resolve:    Arc::new(qualifiers::Level),
 			},
 			QualifierSpec {
-				name: "logbook",
+				name:       "logbook",
 				applies_to: vec!["section".into()],
-				resolve: Arc::new(qualifiers::Logbook),
+				resolve:    Arc::new(qualifiers::Logbook),
 			},
 			QualifierSpec {
-				name: "properties",
+				name:       "properties",
 				applies_to: vec!["section".into()],
-				resolve: Arc::new(qualifiers::Properties),
+				resolve:    Arc::new(qualifiers::Properties),
 			},
 			QualifierSpec {
-				name: "todo-state",
+				name:       "todo-state",
 				applies_to: vec!["section".into()],
-				resolve: Arc::new(qualifiers::TodoState),
+				resolve:    Arc::new(qualifiers::TodoState),
 			},
 			QualifierSpec {
-				name: "priority",
+				name:       "priority",
 				applies_to: vec!["section".into()],
-				resolve: Arc::new(qualifiers::Priority),
+				resolve:    Arc::new(qualifiers::Priority),
 			},
 			QualifierSpec {
-				name: "tags",
+				name:       "tags",
 				applies_to: vec!["section".into()],
-				resolve: Arc::new(qualifiers::Tags),
+				resolve:    Arc::new(qualifiers::Tags),
 			},
 			QualifierSpec {
-				name: "scheduled",
+				name:       "scheduled",
 				applies_to: vec!["section".into()],
-				resolve: Arc::new(qualifiers::Scheduled),
+				resolve:    Arc::new(qualifiers::Scheduled),
 			},
 			QualifierSpec {
-				name: "deadline",
+				name:       "deadline",
 				applies_to: vec!["section".into()],
-				resolve: Arc::new(qualifiers::Deadline),
+				resolve:    Arc::new(qualifiers::Deadline),
 			},
 		],
 		edge_kinds: EdgeKindSet::default(),

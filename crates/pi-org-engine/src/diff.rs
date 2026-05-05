@@ -30,19 +30,19 @@ pub enum PatchKind {
 /// cheap to filter against an `OrgQlFilter`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrgItemPatch {
-	pub id:                 String,
-	pub file:               PathBuf,
-	pub kind:               PatchKind,
+	pub id:                String,
+	pub file:              PathBuf,
+	pub kind:              PatchKind,
 	#[serde(default)]
-	pub touched_props:      Vec<String>,
+	pub touched_props:     Vec<String>,
 	#[serde(default)]
-	pub touched_relations:  Vec<EdgeKind>,
+	pub touched_relations: Vec<EdgeKind>,
 	#[serde(default)]
-	pub touched_body:       bool,
+	pub touched_body:      bool,
 	#[serde(default)]
-	pub touched_state:      bool,
+	pub touched_state:     bool,
 	#[serde(default)]
-	pub touched_tags:       bool,
+	pub touched_tags:      bool,
 }
 
 /// Compute patches between two ordered slices of items belonging to the
@@ -66,11 +66,7 @@ pub fn compute_patches(before: &[OrgItem], after: &[OrgItem], file: &Path) -> Ve
 				id:                id.clone(),
 				file:              file.to_path_buf(),
 				kind:              PatchKind::Added,
-				touched_props:     after_item
-					.properties
-					.keys()
-					.cloned()
-					.collect::<Vec<_>>(),
+				touched_props:     after_item.properties.keys().cloned().collect::<Vec<_>>(),
 				touched_relations: vec![],
 				touched_body:      after_item.body.as_ref().is_some_and(|b| !b.is_empty()),
 				touched_state:     !after_item.state.is_empty(),
@@ -87,11 +83,7 @@ pub fn compute_patches(before: &[OrgItem], after: &[OrgItem], file: &Path) -> Ve
 			id:                id.clone(),
 			file:              file.to_path_buf(),
 			kind:              PatchKind::Deleted,
-			touched_props:     before_item
-				.properties
-				.keys()
-				.cloned()
-				.collect::<Vec<_>>(),
+			touched_props:     before_item.properties.keys().cloned().collect::<Vec<_>>(),
 			touched_relations: vec![],
 			touched_body:      before_item.body.as_ref().is_some_and(|b| !b.is_empty()),
 			touched_state:     !before_item.state.is_empty(),
@@ -115,8 +107,7 @@ fn diff_one(before: &OrgItem, after: &OrgItem, file: &Path) -> Option<OrgItemPat
 	}
 
 	let mut touched_relations: BTreeSet<EdgeKind> = BTreeSet::new();
-	let before_rel: BTreeSet<(EdgeKind, String)> =
-		before.relations.iter().cloned().collect();
+	let before_rel: BTreeSet<(EdgeKind, String)> = before.relations.iter().cloned().collect();
 	let after_rel: BTreeSet<(EdgeKind, String)> = after.relations.iter().cloned().collect();
 	for (kind, _target) in before_rel.symmetric_difference(&after_rel) {
 		touched_relations.insert(kind.clone());
@@ -125,23 +116,19 @@ fn diff_one(before: &OrgItem, after: &OrgItem, file: &Path) -> Option<OrgItemPat
 	let touched_body = before.body != after.body;
 	let touched_state = before.state != after.state;
 
-	if touched_props.is_empty()
-		&& touched_relations.is_empty()
-		&& !touched_body
-		&& !touched_state
-	{
+	if touched_props.is_empty() && touched_relations.is_empty() && !touched_body && !touched_state {
 		return None;
 	}
 
 	Some(OrgItemPatch {
-		id:                after.id.clone(),
-		file:              file.to_path_buf(),
-		kind:              PatchKind::Modified,
+		id: after.id.clone(),
+		file: file.to_path_buf(),
+		kind: PatchKind::Modified,
 		touched_props,
 		touched_relations: touched_relations.into_iter().collect(),
 		touched_body,
 		touched_state,
-		touched_tags:      false,
+		touched_tags: false,
 	})
 }
 
@@ -236,7 +223,9 @@ mod tests {
 	#[test]
 	fn detects_property_change() {
 		let mut a_before = item("a");
-		a_before.properties.insert("CONFIDENCE".into(), "0.5".into());
+		a_before
+			.properties
+			.insert("CONFIDENCE".into(), "0.5".into());
 		let mut a_after = item("a");
 		a_after.properties.insert("CONFIDENCE".into(), "0.7".into());
 		let patches = compute_patches(&[a_before], &[a_after], Path::new("/x.org"));
@@ -248,9 +237,7 @@ mod tests {
 	fn detects_relation_change() {
 		let a_before = item("a");
 		let mut a_after = item("a");
-		a_after
-			.relations
-			.push((EdgeKind::About, "ENT-x".into()));
+		a_after.relations.push((EdgeKind::About, "ENT-x".into()));
 		let patches = compute_patches(&[a_before], &[a_after], Path::new("/x.org"));
 		assert_eq!(patches.len(), 1);
 		assert_eq!(patches[0].touched_relations, vec![EdgeKind::About]);

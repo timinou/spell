@@ -14,23 +14,23 @@ use super::walker::CodeResolverImpl;
 fn resolver_hs() -> CodeResolverImpl {
 	let mut reg = LanguageRegistry::with_builtins().expect("builtins");
 	let profile = pi_code_engine::language::LanguageProfile {
-		id:                        pi_code_engine::language::LanguageId::new("haskell"),
-		capabilities:              pi_code_engine::language::LanguageCapabilities::default(),
-		extensions:                vec!["hs".into()],
-		declarations:              vec![],
-		class_like:                vec![],
-		imports:                   vec![],
-		exports:                   vec![],
-		references:                vec![],
-		separators:                vec![],
-		embedded_regions:          vec![],
-		procedures:                std::collections::HashMap::new(),
-		production_rules:          std::collections::HashMap::new(),
-		inverse_rules:             std::collections::HashMap::new(),
-		all_types:                 vec![],
-		supertypes:                vec![],
-		ts_language:               tree_sitter_haskell::LANGUAGE.into(),
-		dialect:                   Some(pi_code_path::dialects::haskell::haskell_dialect()),
+		id: pi_code_engine::language::LanguageId::new("haskell"),
+		capabilities: pi_code_engine::language::LanguageCapabilities::default(),
+		extensions: vec!["hs".into()],
+		declarations: vec![],
+		class_like: vec![],
+		imports: vec![],
+		exports: vec![],
+		references: vec![],
+		separators: vec![],
+		embedded_regions: vec![],
+		procedures: std::collections::HashMap::new(),
+		production_rules: std::collections::HashMap::new(),
+		inverse_rules: std::collections::HashMap::new(),
+		all_types: vec![],
+		supertypes: vec![],
+		ts_language: tree_sitter_haskell::LANGUAGE.into(),
+		dialect: Some(pi_code_path::dialects::haskell::haskell_dialect()),
 		enclosing_statement_kinds: Vec::new(),
 	};
 	reg.register(profile).expect("register haskell");
@@ -51,9 +51,8 @@ fn temp_hs(name: &str, content: &str, dir: &std::path::Path) -> PathBuf {
 fn qualifier_body_of_function() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_hs("sample.hs", "foo x = x + 1\n", dir.path());
-	let cp =
-		parse_code_path("sample.hs::foo#body", &pi_code_path::dialects::haskell::HsNameLexer)
-			.unwrap();
+	let cp = parse_code_path("sample.hs::foo#body", &pi_code_path::dialects::haskell::HsNameLexer)
+		.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver_hs()
@@ -69,9 +68,8 @@ fn qualifier_body_of_function() {
 fn qualifier_body_of_bind() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_hs("sample.hs", "foo = 42\n", dir.path());
-	let cp =
-		parse_code_path("sample.hs::foo#body", &pi_code_path::dialects::haskell::HsNameLexer)
-			.unwrap();
+	let cp = parse_code_path("sample.hs::foo#body", &pi_code_path::dialects::haskell::HsNameLexer)
+		.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver_hs()
@@ -88,8 +86,7 @@ fn qualifier_sig_returns_type_signature() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_hs("sample.hs", "foo :: Int -> Int\n", dir.path());
 	let cp =
-		parse_code_path("sample.hs::foo#sig", &pi_code_path::dialects::haskell::HsNameLexer)
-			.unwrap();
+		parse_code_path("sample.hs::foo#sig", &pi_code_path::dialects::haskell::HsNameLexer).unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver_hs()
@@ -105,9 +102,8 @@ fn qualifier_sig_returns_type_signature() {
 fn qualifier_name_of_function() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_hs("sample.hs", "foo x = x + 1\n", dir.path());
-	let cp =
-		parse_code_path("sample.hs::foo#name", &pi_code_path::dialects::haskell::HsNameLexer)
-			.unwrap();
+	let cp = parse_code_path("sample.hs::foo#name", &pi_code_path::dialects::haskell::HsNameLexer)
+		.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver_hs()
@@ -123,11 +119,9 @@ fn qualifier_name_of_function() {
 fn qualifier_where_clause_extracted() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_hs("sample.hs", "foo x = y + 1 where y = x\n", dir.path());
-	let cp = parse_code_path(
-		"sample.hs::foo#where-clause",
-		&pi_code_path::dialects::haskell::HsNameLexer,
-	)
-	.unwrap();
+	let cp =
+		parse_code_path("sample.hs::foo#where-clause", &pi_code_path::dialects::haskell::HsNameLexer)
+			.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver_hs()
@@ -143,9 +137,8 @@ fn qualifier_where_clause_extracted() {
 fn qualifier_guards_extracted() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_hs("sample.hs", "foo x | x > 0 = 1 | otherwise = 0\n", dir.path());
-	let cp =
-		parse_code_path("sample.hs::foo#guards", &pi_code_path::dialects::haskell::HsNameLexer)
-			.unwrap();
+	let cp = parse_code_path("sample.hs::foo#guards", &pi_code_path::dialects::haskell::HsNameLexer)
+		.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver_hs()
@@ -155,11 +148,7 @@ fn qualifier_guards_extracted() {
 	assert_eq!(funcs.len(), 1, "expected exactly one function result, got {:?}", results);
 	let text = funcs[0].content.as_ref().unwrap().value();
 	assert!(text.contains("x > 0"), "guards should contain first guard, got: {}", text);
-	assert!(
-		text.contains("otherwise"),
-		"guards should contain second guard, got: {}",
-		text
-	);
+	assert!(text.contains("otherwise"), "guards should contain second guard, got: {}", text);
 }
 
 #[test]
@@ -168,11 +157,9 @@ fn qualifier_exports_list() {
 	let path = temp_hs("sample.hs", "module Foo (bar, baz) where\n", dir.path());
 	// module_id matches "Foo" but #exports only applies to header/exports;
 	// verify the resolver handles the mismatch gracefully (no panic).
-	let cp = parse_code_path(
-		"sample.hs::Foo#exports",
-		&pi_code_path::dialects::haskell::HsNameLexer,
-	)
-	.unwrap();
+	let cp =
+		parse_code_path("sample.hs::Foo#exports", &pi_code_path::dialects::haskell::HsNameLexer)
+			.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver_hs()
@@ -186,11 +173,9 @@ fn qualifier_pragmas() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_hs("sample.hs", "{-# LANGUAGE OverloadedStrings #-}\n", dir.path());
 	// Pragmas are not addressable by name; verify qualifier doesn't crash.
-	let cp = parse_code_path(
-		"sample.hs::LANGUAGE#pragmas",
-		&pi_code_path::dialects::haskell::HsNameLexer,
-	)
-	.unwrap();
+	let cp =
+		parse_code_path("sample.hs::LANGUAGE#pragmas", &pi_code_path::dialects::haskell::HsNameLexer)
+			.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver_hs()
@@ -206,11 +191,7 @@ fn qualifier_pragmas() {
 #[test]
 fn anchor_guard_filter() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_hs(
-		"sample.hs",
-		"foo x | x > 0 = 1\nbar x = x + 1\n",
-		dir.path(),
-	);
+	let path = temp_hs("sample.hs", "foo x | x > 0 = 1\nbar x = x + 1\n", dir.path());
 	let query = Query::single(Step {
 		axis:       Some(pi_code_path::ast::Axis::Structural),
 		head:       Head::NodeKind("function".into()),
@@ -247,11 +228,7 @@ fn anchor_lambda_filter() {
 #[test]
 fn anchor_pattern_match_filter() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_hs(
-		"sample.hs",
-		"foo x = x + 1\nbar = \\x -> x\n",
-		dir.path(),
-	);
+	let path = temp_hs("sample.hs", "foo x = x + 1\nbar = \\x -> x\n", dir.path());
 	let query = Query::single(Step {
 		axis:       Some(pi_code_path::ast::Axis::Structural),
 		head:       Head::NodeKind("function".into()),

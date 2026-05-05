@@ -1,9 +1,10 @@
-use std::collections::HashSet;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+	collections::HashSet,
+	fs,
+	path::{Path, PathBuf},
+};
 
-use crate::resolver::traits::FsAnchorContext;
-use crate::types::NodeRef;
+use crate::{resolver::traits::FsAnchorContext, types::NodeRef};
 
 /// Anchor classification for filesystem entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,22 +21,22 @@ pub enum FsAnchor {
 
 /// Default anchor context with standard extension / basename sets.
 pub struct DefaultFsAnchorContext {
-	root:            PathBuf,
-	code_exts:       HashSet<String>,
-	image_exts:      HashSet<String>,
-	doc_exts:        HashSet<String>,
-	lockfile_names:  HashSet<String>,
+	root:           PathBuf,
+	code_exts:      HashSet<String>,
+	image_exts:     HashSet<String>,
+	doc_exts:       HashSet<String>,
+	lockfile_names: HashSet<String>,
 }
 
 impl DefaultFsAnchorContext {
 	pub fn new(root: impl Into<PathBuf>) -> Self {
 		let mut code_exts = HashSet::new();
 		for &ext in &[
-			"ts", "tsx", "js", "jsx", "rs", "py", "go", "hs", "c", "cpp", "cc", "cxx", "h",
-			"hpp", "java", "kt", "scala", "rb", "php", "swift", "cs", "fs", "fsx", "ml",
-			"mli", "erl", "ex", "exs", "clj", "cljs", "elm", "lua", "vim", "sh", "bash",
-			"zsh", "fish", "ps1", "sql", "r", "m", "mm", "groovy", "dart", "json", "yaml",
-			"yml", "toml", "xml", "html", "css", "scss", "sass", "less", "vue", "svelte",
+			"ts", "tsx", "js", "jsx", "rs", "py", "go", "hs", "c", "cpp", "cc", "cxx", "h", "hpp",
+			"java", "kt", "scala", "rb", "php", "swift", "cs", "fs", "fsx", "ml", "mli", "erl", "ex",
+			"exs", "clj", "cljs", "elm", "lua", "vim", "sh", "bash", "zsh", "fish", "ps1", "sql", "r",
+			"m", "mm", "groovy", "dart", "json", "yaml", "yml", "toml", "xml", "html", "css", "scss",
+			"sass", "less", "vue", "svelte",
 		] {
 			code_exts.insert(ext.to_string());
 		}
@@ -64,13 +65,7 @@ impl DefaultFsAnchorContext {
 			lockfile_names.insert(name.to_string());
 		}
 
-		DefaultFsAnchorContext {
-			root:           root.into(),
-			code_exts,
-			image_exts,
-			doc_exts,
-			lockfile_names,
-		}
+		DefaultFsAnchorContext { root: root.into(), code_exts, image_exts, doc_exts, lockfile_names }
 	}
 }
 
@@ -141,7 +136,7 @@ pub fn classify(node: &NodeRef, ctx: &dyn FsAnchorContext) -> Vec<FsAnchor> {
 					Ok(data) => {
 						let sample = &data[..max];
 						std::str::from_utf8(sample).is_err()
-					}
+					},
 					Err(_) => true,
 				}
 			} else {
@@ -158,8 +153,12 @@ pub fn classify(node: &NodeRef, ctx: &dyn FsAnchorContext) -> Vec<FsAnchor> {
 			if let Ok(rel) = abs.strip_prefix(root) {
 				let abs_path = root.join(rel);
 				let is_dir = abs_path.is_dir();
-				// `matched_path_or_any_parents` walks ancestor dirs so `target/`-style patterns hit `target/foo`.
-				if gitignore.matched_path_or_any_parents(rel, is_dir).is_ignore() {
+				// `matched_path_or_any_parents` walks ancestor dirs so `target/`-style patterns
+				// hit `target/foo`.
+				if gitignore
+					.matched_path_or_any_parents(rel, is_dir)
+					.is_ignore()
+				{
 					anchors.push(FsAnchor::Ignored);
 				}
 			}
@@ -187,8 +186,9 @@ pub fn anchor_name_matches(anchor: FsAnchor, name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use std::fs;
+
+	use super::*;
 
 	fn ctx(root: PathBuf) -> DefaultFsAnchorContext {
 		DefaultFsAnchorContext::new(root)

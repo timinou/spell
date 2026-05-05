@@ -1,14 +1,18 @@
 //! Tantivy BM25 full-text index keyed by org item id.
 
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::{
+	path::{Path, PathBuf},
+	sync::Mutex,
+};
 
 use blake3::Hasher;
-use tantivy::collector::TopDocs;
-use tantivy::query::{BooleanQuery, Occur, QueryParser, TermQuery};
-use tantivy::schema::*;
-use tantivy::tokenizer::*;
-use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument};
+use tantivy::{
+	Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument,
+	collector::TopDocs,
+	query::{BooleanQuery, Occur, QueryParser, TermQuery},
+	schema::*,
+	tokenizer::*,
+};
 
 use crate::error::{Error, Result};
 
@@ -35,7 +39,8 @@ fn cache_base() -> PathBuf {
 }
 
 fn kind_of(item: &pi_org_engine::item::OrgItem) -> &str {
-	item.properties
+	item
+		.properties
 		.get("KIND")
 		.map(String::as_str)
 		.unwrap_or("")
@@ -81,22 +86,18 @@ impl FtsIndex {
 		// --- schema ---
 		let mut sb = Schema::builder();
 
-let title_opts = TextOptions::default()
-    .set_stored()
-    .set_indexing_options(
-        TextFieldIndexing::default()
-            .set_tokenizer("en_stem")
-            .set_fieldnorms(true)
-            .set_index_option(IndexRecordOption::WithFreqsAndPositions),
-);
-let body_opts = TextOptions::default()
-    .set_stored()
-    .set_indexing_options(
-        TextFieldIndexing::default()
-            .set_tokenizer("en_stem")
-            .set_fieldnorms(true)
-            .set_index_option(IndexRecordOption::WithFreqsAndPositions),
-);
+		let title_opts = TextOptions::default().set_stored().set_indexing_options(
+			TextFieldIndexing::default()
+				.set_tokenizer("en_stem")
+				.set_fieldnorms(true)
+				.set_index_option(IndexRecordOption::WithFreqsAndPositions),
+		);
+		let body_opts = TextOptions::default().set_stored().set_indexing_options(
+			TextFieldIndexing::default()
+				.set_tokenizer("en_stem")
+				.set_fieldnorms(true)
+				.set_index_option(IndexRecordOption::WithFreqsAndPositions),
+		);
 
 		let id = sb.add_text_field("id", STRING | STORED);
 		let kind = sb.add_text_field("kind", STRING);
@@ -108,13 +109,14 @@ let body_opts = TextOptions::default()
 		let schema = sb.build();
 
 		// --- index ---
-let index = match Index::open_in_dir(&index_dir) {
-    Ok(idx) => idx,
-    Err(_) => Index::create_in_dir(&index_dir, schema.clone())?,
-};
+		let index = match Index::open_in_dir(&index_dir) {
+			Ok(idx) => idx,
+			Err(_) => Index::create_in_dir(&index_dir, schema.clone())?,
+		};
 
 		// Register the schema _after_ creating the index.
-		// (open_or_create reads the existing schema; we need to register tokenizers on it.)
+		// (open_or_create reads the existing schema; we need to register tokenizers on
+		// it.)
 		index.tokenizers().register(
 			"en_stem",
 			TextAnalyzer::builder(SimpleTokenizer::default())
@@ -141,21 +143,15 @@ let index = match Index::open_in_dir(&index_dir) {
 			schema,
 			writer: Mutex::new(writer),
 			reader,
-			fields: IndexedFields {
-				id,
-				kind,
-				title,
-				body,
-				tags,
-				file,
-			},
+			fields: IndexedFields { id, kind, title, body, tags, file },
 		})
 	}
 
 	/// Index (or re-index) a batch of org items.
 	///
 	/// For each item, any existing document with the same `id` is deleted before
-	/// the new document is added. A single commit makes the batch atomically visible.
+	/// the new document is added. A single commit makes the batch atomically
+	/// visible.
 	pub fn index(&self, items: &[pi_org_engine::item::OrgItem]) -> Result<()> {
 		let mut writer = self.writer.lock().unwrap();
 		for item in items {
@@ -164,7 +160,11 @@ let index = match Index::open_in_dir(&index_dir) {
 			let kind_val = kind_of(item);
 
 			// Build tags: split on whitespace/commas.
-			let tags_str = item.properties.get("TAGS").map(String::as_str).unwrap_or("");
+			let tags_str = item
+				.properties
+				.get("TAGS")
+				.map(String::as_str)
+				.unwrap_or("");
 			let tags: Vec<&str> = tags_str
 				.split(|c: char| c == ',' || c.is_whitespace())
 				.map(str::trim)
@@ -187,33 +187,30 @@ let index = match Index::open_in_dir(&index_dir) {
 				doc.add_text(self.fields.tags, tag);
 			}
 
-writer.add_document(doc).map_err(|e| Error::Tantivy(e.to_string()))?;
+			writer
+				.add_document(doc)
+				.map_err(|e| Error::Tantivy(e.to_string()))?;
 		}
 		writer.commit()?;
 		Ok(())
 	}
 
-	/// Search the full-text index, returning matching document ids with BM25 scores.
+	/// Search the full-text index, returning matching document ids with BM25
+	/// scores.
 	///
 	/// * `query`  — the user's search string. Empty string → empty result.
-	/// * `scope`  — optional kind filter; only items whose `kind` matches one of these are returned.
+	/// * `scope`  — optional kind filter; only items whose `kind` matches one of
+	///   these are returned.
 	/// * `limit`  — maximum number of results.
-	pub fn search(
-		&self,
-		query: &str,
-		scope: &[String],
-		limit: usize,
-	) -> Result<Vec<(String, f32)>> {
+	pub fn search(&self, query: &str, scope: &[String], limit: usize) -> Result<Vec<(String, f32)>> {
 		if query.trim().is_empty() {
 			return Ok(Vec::new());
 		}
-self.reader.reload()?;
-let searcher = self.reader.searcher();
+		self.reader.reload()?;
+		let searcher = self.reader.searcher();
 
-		let mut query_parser = QueryParser::for_index(&self.index, vec![
-			self.fields.title,
-			self.fields.body,
-		]);
+		let mut query_parser =
+			QueryParser::for_index(&self.index, vec![self.fields.title, self.fields.body]);
 		query_parser.set_field_boost(self.fields.title, 2.0);
 
 		let parsed = query_parser
@@ -237,10 +234,8 @@ let searcher = self.reader.searcher();
 
 			let scope_filter = Box::new(BooleanQuery::new(scope_subqueries));
 
-			let combined: Vec<(Occur, Box<dyn tantivy::query::Query>)> = vec![
-				(Occur::Must, parsed),
-				(Occur::Must, scope_filter),
-			];
+			let combined: Vec<(Occur, Box<dyn tantivy::query::Query>)> =
+				vec![(Occur::Must, parsed), (Occur::Must, scope_filter)];
 			Box::new(BooleanQuery::new(combined))
 		};
 
@@ -276,28 +271,35 @@ let searcher = self.reader.searcher();
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use std::collections::HashMap;
+
 	use tempfile::tempdir;
 
-	fn mk_item(id: &str, title: &str, kind: &str, body: Option<&str>) -> pi_org_engine::item::OrgItem {
+	use super::*;
+
+	fn mk_item(
+		id: &str,
+		title: &str,
+		kind: &str,
+		body: Option<&str>,
+	) -> pi_org_engine::item::OrgItem {
 		let mut props = HashMap::new();
 		props.insert("KIND".into(), kind.into());
 		pi_org_engine::item::OrgItem {
-			id: id.into(),
-			title: title.into(),
-			state: "".into(),
-			category: "".into(),
-			dir: "".into(),
-			file: "".into(),
-			line: 1,
-			level: 1,
+			id:         id.into(),
+			title:      title.into(),
+			state:      "".into(),
+			category:   "".into(),
+			dir:        "".into(),
+			file:       "".into(),
+			line:       1,
+			level:      1,
 			properties: props,
-			body: body.map(|s| s.into()),
-			clocks: vec![],
+			body:       body.map(|s| s.into()),
+			clocks:     vec![],
 			byte_range: (0, 0),
-    children: vec![],
-    relations: vec![],
+			children:   vec![],
+			relations:  vec![],
 		}
 	}
 
@@ -383,8 +385,10 @@ mod tests {
 		let cache = tempdir().unwrap();
 		let idx = FtsIndex::open_at(dir.path(), cache.path()).unwrap();
 
-		idx.index(&[mk_item("EP-1", "Old title", "episode", Some("original content"))]).unwrap();
-		idx.index(&[mk_item("EP-1", "New title", "episode", Some("replacement content"))]).unwrap();
+		idx.index(&[mk_item("EP-1", "Old title", "episode", Some("original content"))])
+			.unwrap();
+		idx.index(&[mk_item("EP-1", "New title", "episode", Some("replacement content"))])
+			.unwrap();
 
 		// search for "original" → no hit
 		let r1 = idx.search("original", &[], 10).unwrap();
@@ -405,7 +409,8 @@ mod tests {
 		idx.index(&[
 			mk_item("EP-1", "Auth", "episode", Some("OAuth2")),
 			mk_item("EP-2", "DB", "episode", Some("tables")),
-		]).unwrap();
+		])
+		.unwrap();
 
 		idx.remove(&["EP-1".into()]).unwrap();
 
@@ -422,7 +427,8 @@ mod tests {
 		let cache = tempdir().unwrap();
 		let idx = FtsIndex::open_at(dir.path(), cache.path()).unwrap();
 
-		idx.index(&[mk_item("EP-1", "Auth", "episode", Some("OAuth2"))]).unwrap();
+		idx.index(&[mk_item("EP-1", "Auth", "episode", Some("OAuth2"))])
+			.unwrap();
 
 		let results = idx.search("", &[], 10).unwrap();
 		assert!(results.is_empty());
@@ -440,7 +446,8 @@ mod tests {
 		idx.index(&[
 			mk_item("EP-1", "Auth refactor", "episode", Some("Refactoring the auth module")),
 			mk_item("EP-2", "Database audit", "episode", Some("Audit the auth database")),
-		]).unwrap();
+		])
+		.unwrap();
 
 		// Phrase query: "auth refactor" should match only EP-1 (adjacent tokens)
 		let results = idx.search("\"auth refactor\"", &[], 10).unwrap();

@@ -158,18 +158,15 @@ fn find_attribute_name(node: Node<'_>) -> Option<Node<'_>> {
 
 pub mod qualifiers {
 	use std::ops::Range;
+
 	use tree_sitter::Node;
-	use crate::dialect::QualifierResolver;
+
 	use super::{find_attribute_name, find_end_tag, find_start_tag, find_tag_name};
+	use crate::dialect::QualifierResolver;
 
 	pub struct InnerHTML;
 	impl QualifierResolver for InnerHTML {
-		fn resolve(
-			&self,
-			node: Node<'_>,
-			_src: &str,
-			_args: Option<&str>,
-		) -> Option<Range<usize>> {
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
 			let start_tag = find_start_tag(node)?;
 			let end_tag = find_end_tag(node);
 			match end_tag {
@@ -181,24 +178,14 @@ pub mod qualifiers {
 
 	pub struct OuterHTML;
 	impl QualifierResolver for OuterHTML {
-		fn resolve(
-			&self,
-			node: Node<'_>,
-			_src: &str,
-			_args: Option<&str>,
-		) -> Option<Range<usize>> {
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
 			Some(node.start_byte()..node.end_byte())
 		}
 	}
 
 	pub struct Text;
 	impl QualifierResolver for Text {
-		fn resolve(
-			&self,
-			node: Node<'_>,
-			_src: &str,
-			_args: Option<&str>,
-		) -> Option<Range<usize>> {
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
 			let mut first: Option<usize> = None;
 			let mut last: Option<usize> = None;
 			let mut stack = vec![node];
@@ -207,7 +194,9 @@ pub mod qualifiers {
 					if first.is_none() || n.start_byte() < first.unwrap() {
 						first = Some(n.start_byte());
 					}
-					if last.is_none() || n.end_byte() > last.unwrap() { last = Some(n.end_byte()); }
+					if last.is_none() || n.end_byte() > last.unwrap() {
+						last = Some(n.end_byte());
+					}
 				}
 				let mut cursor = n.walk();
 				for child in n.children(&mut cursor) {
@@ -223,19 +212,16 @@ pub mod qualifiers {
 
 	pub struct Attr;
 	impl QualifierResolver for Attr {
-		fn resolve(
-			&self,
-			node: Node<'_>,
-			src: &str,
-			args: Option<&str>,
-		) -> Option<Range<usize>> {
+		fn resolve(&self, node: Node<'_>, src: &str, args: Option<&str>) -> Option<Range<usize>> {
 			let target_name = args?;
 			let tag = find_start_tag(node)?;
 			let mut cursor = tag.walk();
 			for child in tag.children(&mut cursor) {
 				if child.kind() == "attribute" {
 					if let Some(attr_name_node) = find_attribute_name(child) {
-						if let Some(name_text) = src.get(attr_name_node.start_byte()..attr_name_node.end_byte()) {
+						if let Some(name_text) =
+							src.get(attr_name_node.start_byte()..attr_name_node.end_byte())
+						{
 							if name_text == target_name {
 								let mut attr_cursor = child.walk();
 								for attr_child in child.children(&mut attr_cursor) {
@@ -254,12 +240,7 @@ pub mod qualifiers {
 
 	pub struct Tag;
 	impl QualifierResolver for Tag {
-		fn resolve(
-			&self,
-			node: Node<'_>,
-			_src: &str,
-			_args: Option<&str>,
-		) -> Option<Range<usize>> {
+		fn resolve(&self, node: Node<'_>, _src: &str, _args: Option<&str>) -> Option<Range<usize>> {
 			let tag = find_start_tag(node)?;
 			find_tag_name(tag).map(|n| n.start_byte()..n.end_byte())
 		}
@@ -279,7 +260,8 @@ fn has_role_attribute(node: &Node<'_>, src: &str) -> bool {
 	for child in tag.children(&mut cursor) {
 		if child.kind() == "attribute" {
 			if let Some(attr_name_node) = find_attribute_name(child) {
-				if let Some(name_text) = src.get(attr_name_node.start_byte()..attr_name_node.end_byte()) {
+				if let Some(name_text) = src.get(attr_name_node.start_byte()..attr_name_node.end_byte())
+				{
 					if name_text == "role" {
 						return true;
 					}

@@ -1,5 +1,7 @@
-use std::io::{Read, Write};
-use std::sync::Arc;
+use std::{
+	io::{Read, Write},
+	sync::Arc,
+};
 
 use hnsw_rs::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -25,7 +27,8 @@ pub struct PersistedVectorIndex {
 	pub graph_fingerprint_hash: u64,
 }
 
-/// In-memory vector index with hnsw_rs-backed approximate nearest neighbor search.
+/// In-memory vector index with hnsw_rs-backed approximate nearest neighbor
+/// search.
 pub struct VectorIndex {
 	hnsw:       Arc<Hnsw<'static, f32, DistCosine>>,
 	entries:    Vec<VectorEntry>,
@@ -99,7 +102,11 @@ impl VectorIndex {
 
 	/// Convert to the persisted form for serialization.
 	#[must_use]
-	pub fn to_persisted(&self, model_name: &str, graph_fingerprint_hash: u64) -> PersistedVectorIndex {
+	pub fn to_persisted(
+		&self,
+		model_name: &str,
+		graph_fingerprint_hash: u64,
+	) -> PersistedVectorIndex {
 		PersistedVectorIndex {
 			model_name: model_name.to_owned(),
 			dimensions: self.dimensions,
@@ -154,10 +161,7 @@ pub fn deserialize_index(reader: impl Read) -> Result<PersistedVectorIndex> {
 	}
 	if magic != *MAGIC_V2 {
 		return Err(Error::Serialization(
-			bincode::ErrorKind::Custom(
-				format!("unknown magic header: {:?}", &magic[..]),
-			)
-			.into(),
+			bincode::ErrorKind::Custom(format!("unknown magic header: {:?}", &magic[..])).into(),
 		));
 	}
 

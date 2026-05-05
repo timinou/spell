@@ -131,9 +131,9 @@ fn fallback_capabilities() -> LanguageCapabilities {
 fn typescript_profile() -> LanguageProfile {
 	let gd = generated::typescript::grammar();
 	LanguageProfile {
-		id:               LanguageId::new("typescript"),
-		capabilities:     semantic_capabilities(&[]),
-		extensions:       vec![
+		id: LanguageId::new("typescript"),
+		capabilities: semantic_capabilities(&[]),
+		extensions: vec![
 			"ts".into(),
 			"tsx".into(),
 			"js".into(),
@@ -143,7 +143,7 @@ fn typescript_profile() -> LanguageProfile {
 			"mts".into(),
 			"cts".into(),
 		],
-		declarations:     vec![
+		declarations: vec![
 			DeclarationPattern {
 				node_types:         vec!["function_declaration".into()],
 				name:               NameExtractor::Field { name: "name".into() },
@@ -215,7 +215,7 @@ fn typescript_profile() -> LanguageProfile {
 				outline_enrichment: DeclarationOutlineEnrichment::default(),
 			},
 		],
-		class_like:       vec![ClassLikePattern {
+		class_like: vec![ClassLikePattern {
 			node_type:    "class_declaration".into(),
 			body:         ClassBodyExtractor::Field { name: "body".into() },
 			filter_field: None,
@@ -226,7 +226,7 @@ fn typescript_profile() -> LanguageProfile {
 				"property_definition".into(),
 			],
 		}],
-		imports:          vec![ImportPattern {
+		imports: vec![ImportPattern {
 			node_type:       "import_statement".into(),
 			specifier_field: Some("source".into()),
 			specifier:       None,
@@ -234,11 +234,11 @@ fn typescript_profile() -> LanguageProfile {
 			filter_names:    None,
 			is_type_only:    false,
 		}],
-		exports:          vec![ExportPattern {
+		exports: vec![ExportPattern {
 			node_type:  "export_statement".into(),
 			visibility: "export".into(),
 		}],
-		references:       vec![ReferencePattern {
+		references: vec![ReferencePattern {
 			node_type:            "identifier".into(),
 			exclude_parent_types: vec![
 				"comment".into(),
@@ -247,26 +247,29 @@ fn typescript_profile() -> LanguageProfile {
 				"string_fragment".into(),
 			],
 		}],
-		separators:       vec![",".into(), ";".into()],
+		separators: vec![",".into(), ";".into()],
 		embedded_regions: vec![],
-		procedures:       HashMap::new(),
+		procedures: HashMap::new(),
 		production_rules: gd.production_rules,
-		inverse_rules:    gd.inverse_rules,
-		all_types:        gd.all_types,
-		supertypes:       gd.supertypes,
-		ts_language:      tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-		dialect:                  Some(pi_code_path::dialects::typescript_dialect()),
-		enclosing_statement_kinds: vec!["export_statement".into(), "export_default_declaration".into()],
+		inverse_rules: gd.inverse_rules,
+		all_types: gd.all_types,
+		supertypes: gd.supertypes,
+		ts_language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+		dialect: Some(pi_code_path::dialects::typescript_dialect()),
+		enclosing_statement_kinds: vec![
+			"export_statement".into(),
+			"export_default_declaration".into(),
+		],
 	}
 }
 
 fn rust_profile() -> LanguageProfile {
 	let gd = generated::rust_lang::grammar();
 	LanguageProfile {
-		id:               LanguageId::new("rust"),
-		capabilities:     semantic_capabilities(&[]),
-		extensions:       vec!["rs".into()],
-		declarations:     vec![
+		id: LanguageId::new("rust"),
+		capabilities: semantic_capabilities(&[]),
+		extensions: vec!["rs".into()],
+		declarations: vec![
 			DeclarationPattern {
 				node_types:         vec!["function_item".into()],
 				name:               NameExtractor::Field { name: "name".into() },
@@ -358,14 +361,14 @@ fn rust_profile() -> LanguageProfile {
 				outline_enrichment: DeclarationOutlineEnrichment::default(),
 			},
 		],
-		class_like:       vec![ClassLikePattern {
+		class_like: vec![ClassLikePattern {
 			node_type:    "impl_item".into(),
 			body:         ClassBodyExtractor::Field { name: "body".into() },
 			filter_field: None,
 			filter_names: None,
 			member_types: vec!["function_item".into(), "const_item".into(), "type_item".into()],
 		}],
-		imports:          vec![ImportPattern {
+		imports: vec![ImportPattern {
 			node_type:       "use_declaration".into(),
 			specifier_field: Some("argument".into()),
 			specifier:       None,
@@ -373,11 +376,8 @@ fn rust_profile() -> LanguageProfile {
 			filter_names:    None,
 			is_type_only:    false,
 		}],
-		exports:          vec![ExportPattern {
-			node_type:  "function_item".into(),
-			visibility: "pub".into(),
-		}],
-		references:       vec![ReferencePattern {
+		exports: vec![ExportPattern { node_type: "function_item".into(), visibility: "pub".into() }],
+		references: vec![ReferencePattern {
 			node_type:            "identifier".into(),
 			exclude_parent_types: vec![
 				"line_comment".into(),
@@ -386,15 +386,15 @@ fn rust_profile() -> LanguageProfile {
 				"raw_string_literal".into(),
 			],
 		}],
-		separators:       vec![",".into(), ";".into()],
+		separators: vec![",".into(), ";".into()],
 		embedded_regions: vec![],
-		procedures:       HashMap::new(),
+		procedures: HashMap::new(),
 		production_rules: gd.production_rules,
-		inverse_rules:    gd.inverse_rules,
-		all_types:        gd.all_types,
-		supertypes:       gd.supertypes,
-		ts_language:      tree_sitter_rust::LANGUAGE.into(),
-		dialect:                  Some(pi_code_path::dialects::rust_dialect()),
+		inverse_rules: gd.inverse_rules,
+		all_types: gd.all_types,
+		supertypes: gd.supertypes,
+		ts_language: tree_sitter_rust::LANGUAGE.into(),
+		dialect: Some(pi_code_path::dialects::rust_dialect()),
 		enclosing_statement_kinds: vec![],
 	}
 }
@@ -402,10 +402,10 @@ fn rust_profile() -> LanguageProfile {
 fn python_profile() -> LanguageProfile {
 	let gd = generated::python::grammar();
 	LanguageProfile {
-		id:               LanguageId::new("python"),
-		capabilities:     semantic_capabilities(&[]),
-		extensions:       vec!["py".into(), "pyi".into()],
-		declarations:     vec![
+		id: LanguageId::new("python"),
+		capabilities: semantic_capabilities(&[]),
+		extensions: vec!["py".into(), "pyi".into()],
+		declarations: vec![
 			DeclarationPattern {
 				node_types:         vec!["function_definition".into()],
 				name:               NameExtractor::Field { name: "name".into() },
@@ -437,14 +437,14 @@ fn python_profile() -> LanguageProfile {
 				outline_enrichment: DeclarationOutlineEnrichment::default(),
 			},
 		],
-		class_like:       vec![ClassLikePattern {
+		class_like: vec![ClassLikePattern {
 			node_type:    "class_definition".into(),
 			body:         ClassBodyExtractor::Field { name: "body".into() },
 			filter_field: None,
 			filter_names: None,
 			member_types: vec!["function_definition".into(), "decorated_definition".into()],
 		}],
-		imports:          vec![
+		imports: vec![
 			ImportPattern {
 				node_type:       "import_statement".into(),
 				specifier_field: Some("name".into()),
@@ -462,20 +462,20 @@ fn python_profile() -> LanguageProfile {
 				is_type_only:    false,
 			},
 		],
-		exports:          vec![],
-		references:       vec![ReferencePattern {
+		exports: vec![],
+		references: vec![ReferencePattern {
 			node_type:            "identifier".into(),
 			exclude_parent_types: vec!["comment".into(), "string".into()],
 		}],
-		separators:       vec![",".into()],
+		separators: vec![",".into()],
 		embedded_regions: vec![],
-		procedures:       HashMap::new(),
+		procedures: HashMap::new(),
 		production_rules: gd.production_rules,
-		inverse_rules:    gd.inverse_rules,
-		all_types:        gd.all_types,
-		supertypes:       gd.supertypes,
-		ts_language:      tree_sitter_python::LANGUAGE.into(),
-		dialect:                  Some(pi_code_path::dialects::python_dialect()),
+		inverse_rules: gd.inverse_rules,
+		all_types: gd.all_types,
+		supertypes: gd.supertypes,
+		ts_language: tree_sitter_python::LANGUAGE.into(),
+		dialect: Some(pi_code_path::dialects::python_dialect()),
 		enclosing_statement_kinds: vec!["decorated_definition".into()],
 	}
 }
@@ -1471,10 +1471,10 @@ fn clojure_declaration(head: &str, kind: &str) -> DeclarationPattern {
 fn clojure_profile() -> LanguageProfile {
 	let gd = generated::clojure::grammar();
 	LanguageProfile {
-		id:               LanguageId::new("clojure"),
-		capabilities:     semantic_capabilities(&[]),
-		extensions:       vec!["clj".into(), "cljs".into(), "cljc".into(), "bb".into()],
-		declarations:     vec![
+		id: LanguageId::new("clojure"),
+		capabilities: semantic_capabilities(&[]),
+		extensions: vec!["clj".into(), "cljs".into(), "cljc".into(), "bb".into()],
+		declarations: vec![
 			clojure_declaration("ns", "namespace"),
 			clojure_declaration("def", "var"),
 			clojure_declaration("defonce", "var"),
@@ -1488,22 +1488,22 @@ fn clojure_profile() -> LanguageProfile {
 			clojure_declaration("deftype", "type"),
 			clojure_declaration("deftest", "test"),
 		],
-		class_like:       vec![],
-		imports:          vec![],
-		exports:          vec![],
-		references:       vec![ReferencePattern {
+		class_like: vec![],
+		imports: vec![],
+		exports: vec![],
+		references: vec![ReferencePattern {
 			node_type:            "sym_lit".into(),
 			exclude_parent_types: vec!["str_lit".into(), "comment".into()],
 		}],
-		separators:       vec![" ".into(), "\n".into()],
+		separators: vec![" ".into(), "\n".into()],
 		embedded_regions: vec![],
-		procedures:       clojure_procedures(),
+		procedures: clojure_procedures(),
 		production_rules: gd.production_rules,
-		inverse_rules:    gd.inverse_rules,
-		all_types:        gd.all_types,
-		supertypes:       gd.supertypes,
-		ts_language:      tree_sitter_clojure::LANGUAGE.into(),
-		dialect:          None,
+		inverse_rules: gd.inverse_rules,
+		all_types: gd.all_types,
+		supertypes: gd.supertypes,
+		ts_language: tree_sitter_clojure::LANGUAGE.into(),
+		dialect: None,
 		enclosing_statement_kinds: Vec::new(),
 	}
 }
@@ -1511,23 +1511,23 @@ fn clojure_profile() -> LanguageProfile {
 fn edn_profile() -> LanguageProfile {
 	let gd = generated::clojure::grammar();
 	LanguageProfile {
-		id:               LanguageId::new("edn"),
-		capabilities:     data_capabilities(),
-		extensions:       vec!["edn".into()],
-		declarations:     vec![],
-		class_like:       vec![],
-		imports:          vec![],
-		exports:          vec![],
-		references:       vec![],
-		separators:       vec![" ".into(), "\n".into()],
+		id: LanguageId::new("edn"),
+		capabilities: data_capabilities(),
+		extensions: vec!["edn".into()],
+		declarations: vec![],
+		class_like: vec![],
+		imports: vec![],
+		exports: vec![],
+		references: vec![],
+		separators: vec![" ".into(), "\n".into()],
 		embedded_regions: vec![],
-		procedures:       HashMap::new(),
+		procedures: HashMap::new(),
 		production_rules: gd.production_rules,
-		inverse_rules:    gd.inverse_rules,
-		all_types:        gd.all_types,
-		supertypes:       gd.supertypes,
-		ts_language:      tree_sitter_clojure::LANGUAGE.into(),
-		dialect:          None,
+		inverse_rules: gd.inverse_rules,
+		all_types: gd.all_types,
+		supertypes: gd.supertypes,
+		ts_language: tree_sitter_clojure::LANGUAGE.into(),
+		dialect: None,
 		enclosing_statement_kinds: Vec::new(),
 	}
 }
@@ -1535,10 +1535,10 @@ fn edn_profile() -> LanguageProfile {
 fn elixir_profile() -> LanguageProfile {
 	let gd = generated::elixir::grammar();
 	LanguageProfile {
-		id:               LanguageId::new("elixir"),
-		capabilities:     semantic_capabilities(&[]),
-		extensions:       vec!["ex".into(), "exs".into()],
-		declarations:     vec![
+		id: LanguageId::new("elixir"),
+		capabilities: semantic_capabilities(&[]),
+		extensions: vec!["ex".into(), "exs".into()],
+		declarations: vec![
 			DeclarationPattern {
 				node_types:         vec!["call".into()],
 				name:               NameExtractor::Field { name: "target".into() },
@@ -1590,14 +1590,14 @@ fn elixir_profile() -> LanguageProfile {
 				outline_enrichment: DeclarationOutlineEnrichment::default(),
 			},
 		],
-		class_like:       vec![ClassLikePattern {
+		class_like: vec![ClassLikePattern {
 			node_type:    "call".into(),
 			body:         ClassBodyExtractor::Field { name: "do_block".into() },
 			filter_field: Some("target".into()),
 			filter_names: Some(vec!["defmodule".into()]),
 			member_types: vec!["call".into()],
 		}],
-		imports:          vec![ImportPattern {
+		imports: vec![ImportPattern {
 			node_type:       "call".into(),
 			specifier_field: Some("arguments".into()),
 			specifier:       None,
@@ -1610,43 +1610,43 @@ fn elixir_profile() -> LanguageProfile {
 			]),
 			is_type_only:    false,
 		}],
-		exports:          vec![],
-		references:       vec![ReferencePattern {
+		exports: vec![],
+		references: vec![ReferencePattern {
 			node_type:            "identifier".into(),
 			exclude_parent_types: vec!["comment".into(), "string".into()],
 		}],
-		separators:       vec![",".into()],
+		separators: vec![",".into()],
 		embedded_regions: vec![],
-		procedures:       HashMap::new(),
+		procedures: HashMap::new(),
 		production_rules: gd.production_rules,
-		inverse_rules:    gd.inverse_rules,
-		all_types:        gd.all_types,
-		supertypes:       gd.supertypes,
-		ts_language:      tree_sitter_elixir::LANGUAGE.into(),
-		dialect:          None,
+		inverse_rules: gd.inverse_rules,
+		all_types: gd.all_types,
+		supertypes: gd.supertypes,
+		ts_language: tree_sitter_elixir::LANGUAGE.into(),
+		dialect: None,
 		enclosing_statement_kinds: Vec::new(),
 	}
 }
 
 fn text_profile() -> LanguageProfile {
 	LanguageProfile {
-		id:               LanguageId::new("text"),
-		capabilities:     fallback_capabilities(),
-		extensions:       vec![],
-		declarations:     vec![],
-		class_like:       vec![],
-		imports:          vec![],
-		exports:          vec![],
-		references:       vec![],
-		separators:       vec![],
+		id: LanguageId::new("text"),
+		capabilities: fallback_capabilities(),
+		extensions: vec![],
+		declarations: vec![],
+		class_like: vec![],
+		imports: vec![],
+		exports: vec![],
+		references: vec![],
+		separators: vec![],
 		embedded_regions: vec![],
-		procedures:       HashMap::new(),
+		procedures: HashMap::new(),
 		production_rules: HashMap::new(),
-		inverse_rules:    HashMap::new(),
-		all_types:        vec![],
-		supertypes:       vec![],
-		ts_language:      tree_sitter_md::LANGUAGE.into(),
-		dialect:          None,
+		inverse_rules: HashMap::new(),
+		all_types: vec![],
+		supertypes: vec![],
+		ts_language: tree_sitter_md::LANGUAGE.into(),
+		dialect: None,
 		enclosing_statement_kinds: Vec::new(),
 	}
 }
@@ -1654,10 +1654,10 @@ fn text_profile() -> LanguageProfile {
 fn org_profile() -> LanguageProfile {
 	let gd = generated::org::grammar();
 	LanguageProfile {
-		id:               LanguageId::new("org"),
-		capabilities:     semantic_capabilities(&[]),
-		extensions:       vec!["org".into()],
-		declarations:     vec![DeclarationPattern {
+		id: LanguageId::new("org"),
+		capabilities: semantic_capabilities(&[]),
+		extensions: vec!["org".into()],
+		declarations: vec![DeclarationPattern {
 			node_types:         vec!["section".into()],
 			name:               NameExtractor::ChildField {
 				child_type: "headline".into(),
@@ -1670,28 +1670,28 @@ fn org_profile() -> LanguageProfile {
 			name_from_arg:      false,
 			outline_enrichment: DeclarationOutlineEnrichment::default(),
 		}],
-		class_like:       vec![ClassLikePattern {
+		class_like: vec![ClassLikePattern {
 			node_type:    "section".into(),
 			body:         ClassBodyExtractor::Direct,
 			filter_field: None,
 			filter_names: None,
 			member_types: vec!["section".into()],
 		}],
-		imports:          vec![],
-		exports:          vec![],
-		references:       vec![ReferencePattern {
+		imports: vec![],
+		exports: vec![],
+		references: vec![ReferencePattern {
 			node_type:            "expr".into(),
 			exclude_parent_types: vec!["comment".into()],
 		}],
-		separators:       vec![" ".into(), ":".into()],
+		separators: vec![" ".into(), ":".into()],
 		embedded_regions: vec![],
-		procedures:       HashMap::new(),
+		procedures: HashMap::new(),
 		production_rules: gd.production_rules,
-		inverse_rules:    gd.inverse_rules,
-		all_types:        gd.all_types,
-		supertypes:       gd.supertypes,
-		ts_language:      tree_sitter_org::LANGUAGE.into(),
-		dialect:          Some(pi_code_path::dialects::markdown_dialect()),
+		inverse_rules: gd.inverse_rules,
+		all_types: gd.all_types,
+		supertypes: gd.supertypes,
+		ts_language: tree_sitter_org::LANGUAGE.into(),
+		dialect: Some(pi_code_path::dialects::markdown_dialect()),
 		enclosing_statement_kinds: Vec::new(),
 	}
 }

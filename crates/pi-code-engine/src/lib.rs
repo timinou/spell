@@ -13,8 +13,8 @@ pub mod resolve;
 pub mod watcher;
 
 pub use buffer::{
-	BufferInfo, BufferRegistry, BufferSnapshot, CodeBuffer, EditRecord, EditResult,
-	RevisionSummary, ScopedUndoResult, TextEdit, TransactionOutcome, workspace_root_for,
+	BufferInfo, BufferRegistry, BufferSnapshot, CodeBuffer, EditRecord, EditResult, RevisionSummary,
+	ScopedUndoResult, TextEdit, TransactionOutcome, workspace_root_for,
 };
 pub use coord::{
 	BrokerEndpoint, CommitResult, CoordClient, IntentResult, JournalEntry, JournalReader,

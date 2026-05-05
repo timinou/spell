@@ -19,12 +19,10 @@ use tokio::{
 
 use crate::{
 	protocol::{
-		ClientMessage, CommitRecord, IntentConflictItem,
-		MultiCommitRevision, PeerCommittedFile, PeerSummary, ServerMessage, SessionId, TxnId,
+		ClientMessage, CommitRecord, IntentConflictItem, MultiCommitRevision, PeerCommittedFile,
+		PeerSummary, ServerMessage, SessionId, TxnId,
 	},
-	state::{
-		BrokerState, CommitDecision, IntentDecision, RegisterOutcome, SessionRecord, now_ms,
-	},
+	state::{BrokerState, CommitDecision, IntentDecision, RegisterOutcome, SessionRecord, now_ms},
 	txn_journal::{TxnJournalEntry, append_entry},
 };
 
@@ -34,9 +32,16 @@ const MAX_LINE_BYTES: usize = 1024 * 1024;
 /// Event broadcast from the state core to all subscribers.
 #[derive(Debug, Clone)]
 pub enum BrokerEvent {
-	PeerJoined { session_id: SessionId },
-	PeerLeft { session_id: SessionId },
-	PeerCommitted { file: PathBuf, record: CommitRecord },
+	PeerJoined {
+		session_id: SessionId,
+	},
+	PeerLeft {
+		session_id: SessionId,
+	},
+	PeerCommitted {
+		file:   PathBuf,
+		record: CommitRecord,
+	},
 	MultiPeerCommitted {
 		txn_id:     TxnId,
 		session_id: SessionId,
@@ -311,9 +316,12 @@ async fn handle_message(
 			// Journal the txn start
 			if let Some(ref jp) = ctx.journal_path {
 				let _ = append_entry(jp, &TxnJournalEntry::TxnStarted {
-					txn_id: txn_id.clone(),
+					txn_id:     txn_id.clone(),
 					session_id: session_id.clone(),
-					files: files.iter().map(|f| (f.file.clone(), f.base_revision)).collect(),
+					files:      files
+						.iter()
+						.map(|f| (f.file.clone(), f.base_revision))
+						.collect(),
 					started_at: now_ms(),
 				});
 			}
@@ -372,14 +380,15 @@ async fn handle_message(
 			// Verify txn exists and belongs to this session
 			let txn_files = {
 				let guard = ctx.state.read().await;
-				guard.active_txns.get(&txn_id).map(|txn| {
-					(txn.session_id.clone(), txn.files.clone())
-				})
+				guard
+					.active_txns
+					.get(&txn_id)
+					.map(|txn| (txn.session_id.clone(), txn.files.clone()))
 			};
 
 			let Some((txn_session_id, _)) = txn_files else {
 				let _ = write_msg(writer, &ServerMessage::Error {
-					code: "MULTI_COMMIT_INVALID_TXN".into(),
+					code:    "MULTI_COMMIT_INVALID_TXN".into(),
 					message: format!("no active txn '{txn_id}' for this session"),
 				})
 				.await;
@@ -388,7 +397,7 @@ async fn handle_message(
 
 			if txn_session_id != session_id {
 				let _ = write_msg(writer, &ServerMessage::Error {
-					code: "MULTI_COMMIT_INVALID_TXN".into(),
+					code:    "MULTI_COMMIT_INVALID_TXN".into(),
 					message: format!("txn '{txn_id}' belongs to a different session"),
 				})
 				.await;
@@ -418,20 +427,20 @@ async fn handle_message(
 				match decision {
 					CommitDecision::Accepted => {
 						revisions.push(MultiCommitRevision {
-							file: fc.file.clone(),
+							file:     fc.file.clone(),
 							revision: fc.revision,
 						});
 						peer_files.push(PeerCommittedFile {
-							file: fc.file.clone(),
-							revision: fc.revision,
+							file:       fc.file.clone(),
+							revision:   fc.revision,
 							code_paths: fc.code_paths.clone(),
-							diff_hash: fc.diff_hash.clone(),
+							diff_hash:  fc.diff_hash.clone(),
 						});
 					},
 					CommitDecision::Conflict { code_path, .. } => {
 						all_accepted = false;
 						let _ = write_msg(writer, &ServerMessage::Error {
-							code: "MULTI_COMMIT_CONFLICT".into(),
+							code:    "MULTI_COMMIT_CONFLICT".into(),
 							message: format!("commit conflict on {}: {}", fc.file.display(), code_path),
 						})
 						.await;
@@ -451,13 +460,16 @@ async fn handle_message(
 				if let Some(ref jp) = ctx.journal_path {
 					let _ = append_entry(jp, &TxnJournalEntry::TxnCommitted {
 						txn_id: txn_id.clone(),
-						files: revisions.iter().map(|r| (r.file.clone(), r.revision)).collect(),
-						ts: now,
+						files:  revisions
+							.iter()
+							.map(|r| (r.file.clone(), r.revision))
+							.collect(),
+						ts:     now,
 					});
 				}
 
 				if write_msg(writer, &ServerMessage::MultiCommitAck {
-					txn_id: txn_id.clone(),
+					txn_id:    txn_id.clone(),
 					revisions: revisions.clone(),
 				})
 				.await
@@ -508,7 +520,7 @@ async fn handle_message(
 					let _ = append_entry(jp, &TxnJournalEntry::TxnRolledBack {
 						txn_id: txn_id.clone(),
 						reason: "client abort".into(),
-						ts: now_ms(),
+						ts:     now_ms(),
 					});
 				}
 
@@ -577,23 +589,19 @@ async fn write_event(
 			ts:         record.ts,
 			org_items:  None,
 		},
-		BrokerEvent::MultiPeerCommitted {
-			txn_id,
-			session_id,
-			files,
-			ts,
-			org_items,
-		} => ServerMessage::MultiPeerCommitted {
-			txn_id: txn_id.clone(),
-			session_id: session_id.clone(),
-			files: files.clone(),
-			ts: *ts,
-			org_items: org_items.clone(),
+		BrokerEvent::MultiPeerCommitted { txn_id, session_id, files, ts, org_items } => {
+			ServerMessage::MultiPeerCommitted {
+				txn_id:     txn_id.clone(),
+				session_id: session_id.clone(),
+				files:      files.clone(),
+				ts:         *ts,
+				org_items:  org_items.clone(),
+			}
 		},
 		BrokerEvent::MultiPeerRolledBack { txn_id, files, reason } => {
 			ServerMessage::MultiPeerRolledBack {
 				txn_id: txn_id.clone(),
-				files: files.clone(),
+				files:  files.clone(),
 				reason: reason.clone(),
 			}
 		},

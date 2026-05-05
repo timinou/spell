@@ -73,17 +73,17 @@ fn edn_node_for_path<'a>(buffer: &'a CodeBuffer, path: &str) -> Option<Node<'a>>
 fn edn_resolved_symbol(buffer: &CodeBuffer, path: &str) -> Option<ResolvedSymbol> {
 	let node = edn_node_for_path(buffer, path)?;
 	Some(ResolvedSymbol {
-		name:               path.to_string(),
-		kind:               node.kind().to_string(),
-		start_byte:         node.start_byte(),
-		end_byte:           node.end_byte(),
-		line:               (node.start_position().row + 1) as u32,
-		end_line:           (node.end_position().row + 1) as u32,
-		body_start_byte:    None,
-		body_end_byte:      None,
-		identifier_range:   ByteRange { start: node.start_byte(), end: node.end_byte() },
-		declaration_range:  ByteRange { start: node.start_byte(), end: node.end_byte() },
-		statement_range:    ByteRange { start: node.start_byte(), end: node.end_byte() },
+		name:              path.to_string(),
+		kind:              node.kind().to_string(),
+		start_byte:        node.start_byte(),
+		end_byte:          node.end_byte(),
+		line:              (node.start_position().row + 1) as u32,
+		end_line:          (node.end_position().row + 1) as u32,
+		body_start_byte:   None,
+		body_end_byte:     None,
+		identifier_range:  ByteRange { start: node.start_byte(), end: node.end_byte() },
+		declaration_range: ByteRange { start: node.start_byte(), end: node.end_byte() },
+		statement_range:   ByteRange { start: node.start_byte(), end: node.end_byte() },
 	})
 }
 fn edn_navigate_result(buffer: &CodeBuffer, node: Node<'_>) -> NavigateResult {
@@ -735,17 +735,15 @@ fn rename_first_occurrence(text: &str, from: &str, to: &str) -> String {
 	let mut i = 0;
 	while i + from_bytes.len() <= bytes.len() {
 		if &bytes[i..i + from_bytes.len()] == from_bytes {
-			let before_ok = i == 0
-				|| {
-					let prev = bytes[i - 1] as char;
-					!(prev.is_alphanumeric() || prev == '_' || prev == '$')
-				};
+			let before_ok = i == 0 || {
+				let prev = bytes[i - 1] as char;
+				!(prev.is_alphanumeric() || prev == '_' || prev == '$')
+			};
 			let after_idx = i + from_bytes.len();
-			let after_ok = after_idx == bytes.len()
-				|| {
-					let next = bytes[after_idx] as char;
-					!(next.is_alphanumeric() || next == '_' || next == '$')
-				};
+			let after_ok = after_idx == bytes.len() || {
+				let next = bytes[after_idx] as char;
+				!(next.is_alphanumeric() || next == '_' || next == '$')
+			};
 			if before_ok && after_ok {
 				let mut out = String::with_capacity(text.len() - from.len() + to.len());
 				out.push_str(&text[..i]);
@@ -869,7 +867,6 @@ fn target_range(buffer: &CodeBuffer, resolved: Option<&ResolvedSymbol>) -> (usiz
 		None => (0, buffer.source().len()),
 	}
 }
-
 
 fn would_leave_zero_bytes(buffer: &CodeBuffer, edits: &[TextEdit]) -> bool {
 	let mut result = buffer.source().to_string();
@@ -1029,16 +1026,12 @@ fn single_action(
 			};
 			if would_leave_zero_bytes(buffer, &edits) {
 				return Err(CodeEngineError::Edit(
-					"zero_byte_delete_blocked: deleting this target would leave the file empty; \
-					 use a bare path target to delete the file"
+					"zero_byte_delete_blocked: deleting this target would leave the file empty; use a \
+					 bare path target to delete the file"
 						.into(),
 				));
 			}
-			PreparedEditOperation {
-				edits,
-				proof:  None,
-				action: action_kind.to_string(),
-			}
+			PreparedEditOperation { edits, proof: None, action: action_kind.to_string() }
 		},
 		"insertBefore" => {
 			let content = action_content(action)?;
@@ -1110,7 +1103,11 @@ fn single_action(
 			action: action_kind.to_string(),
 		},
 		"clone" => {
-			let mut edits = clone_node(buffer, action_line(action, resolved.as_ref()), statement_within(resolved.as_ref()))?;
+			let mut edits = clone_node(
+				buffer,
+				action_line(action, resolved.as_ref()),
+				statement_within(resolved.as_ref()),
+			)?;
 			// FEAT-707: when `content` is provided, rename the identifier
 			// inside the cloned snippet so the agent gets two named
 			// declarations instead of `foo` + `foo` (and an immediate
@@ -1129,11 +1126,7 @@ fn single_action(
 					}
 				}
 			}
-			PreparedEditOperation {
-				edits,
-				proof:  None,
-				action: action_kind.to_string(),
-			}
+			PreparedEditOperation { edits, proof: None, action: action_kind.to_string() }
 		},
 		"transpose" => PreparedEditOperation {
 			edits:  transpose_nodes(
@@ -2436,13 +2429,11 @@ mod tests {
 	#[test]
 	fn execute_code_buffer_inner_creates_missing_file_buffers() {
 		let path = temp_path("create-buffer.ts");
-		let edit = execute_code_buffer_inner(
-			&json!({ "command": "edit",
+		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
 				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
 				"targetId": path.display().to_string(),
 				"actions": [{ "kind": "write", "content": "export const created = 1;\n" }]
-			}] }),
-		)
+			}] }))
 		.expect("create edit");
 		assert_eq!(edit["error"], json!(false));
 		assert_eq!(edit["output"]["status"], json!("applied"));
@@ -2459,8 +2450,7 @@ mod tests {
 	#[test]
 	fn execute_code_buffer_inner_accepts_create_with_empty_transport_defaults() {
 		let path = temp_path("create-buffer-transport.ts");
-		let edit = execute_code_buffer_inner(
-			&json!({ "command": "edit",
+		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
 				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
 				"targetId": path.display().to_string(),
 				"actions": [{ "kind": "write", "content": "export const created = 1;\n" }]
@@ -2475,8 +2465,7 @@ mod tests {
 			"resolution": 0,
 			"offset": 0,
 			"limit": 0,
-			"depth": 0 }),
-		)
+			"depth": 0 }))
 		.expect("create edit with defaults");
 		assert_eq!(edit["error"], json!(false));
 		assert_eq!(edit["output"]["status"], json!("applied"));
@@ -2488,15 +2477,13 @@ mod tests {
 	fn execute_code_buffer_inner_ignores_empty_edits_for_top_level_operations() {
 		let path = temp_path("empty-edits-shadow.ts");
 		fs::write(&path, "export const original = 1;\n").expect("seed file");
-		let edit = execute_code_buffer_inner(
-			&json!({ "command": "edit",
+		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
 				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "saveMode": "staged",
 			"operations": [{
 				"targetId": path.display().to_string(),
 				"actions": [{ "kind": "write", "content": "export const replaced = 2;\n" }]
 			}],
-			"edits": [] }),
-		)
+			"edits": [] }))
 		.expect("staged edit");
 		assert_eq!(edit["error"], json!(false));
 		assert_eq!(edit["output"]["status"], json!("staged"));
@@ -2619,13 +2606,11 @@ mod tests {
 	fn execute_code_buffer_inner_persisted_edit_preserves_undo_history() {
 		let path = temp_path("undo-redo-persisted.ts");
 		fs::write(&path, "export const value = 1;\n").expect("seed file");
-		let edit = execute_code_buffer_inner(
-			&json!({ "command": "edit",
+		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
 				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
 				"targetId": path.display().to_string(),
 				"actions": [{ "kind": "write", "content": "export const value = 2;\n" }]
-			}] }),
-		)
+			}] }))
 		.expect("persisted edit");
 		assert_eq!(edit["error"], json!(false));
 		assert_eq!(fs::read_to_string(&path).expect("saved edit"), "export const value = 2;\n");
@@ -2697,13 +2682,11 @@ mod tests {
 		.expect("edn read");
 		assert_eq!(read["output"], json!("\"Dune\""));
 
-		let edit = execute_code_buffer_inner(
-			&json!({ "command": "edit",
+		let edit = execute_code_buffer_inner(&json!({ "command": "edit",
 				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "operations": [{
 			"targetId": format!("{}::[:books 0 :title]", path.display()),
 			"actions": [{ "kind": "write", "content": "\"Foundation\"" }]
-		}] }),
-		)
+		}] }))
 		.expect("edn edit");
 		assert_eq!(edit["output"]["status"], json!("applied"));
 		assert!(
@@ -2716,12 +2699,10 @@ mod tests {
 	fn execute_code_buffer_inner_rejects_create_for_existing_file() {
 		let path = temp_path("existing-create.ts");
 		fs::write(&path, "export const existing = true;\n").expect("seed file");
-		let result = execute_code_buffer_inner(
-			&json!({ "command": "edit",
+		let result = execute_code_buffer_inner(&json!({ "command": "edit",
 				"sessionId": "bug-341-test", "sessionId": TEST_SESSION_ID, "file": path.display().to_string(),
 			"operation": "create",
-			"content": "export const created = 1;\n" }),
-		)
+			"content": "export const created = 1;\n" }))
 		.expect_err("create rejection");
 		assert_eq!(
 			result.to_string(),
@@ -3068,17 +3049,15 @@ mod tests {
 		if !node_type.is_empty() {
 			action["nodeType"] = json!(node_type);
 		}
-		execute_code_buffer_inner(
-			&json!({
-				"command": "edit",
-				"sessionId": "bug-341-test",
-				"root": root.display().to_string(),
-				"operations": [{
-					"targetId": file.display().to_string(),
-					"actions": [action]
-				}]
-			})
-		)
+		execute_code_buffer_inner(&json!({
+			"command": "edit",
+			"sessionId": "bug-341-test",
+			"root": root.display().to_string(),
+			"operations": [{
+				"targetId": file.display().to_string(),
+				"actions": [action]
+			}]
+		}))
 	}
 
 	#[test]
@@ -3093,8 +3072,9 @@ mod tests {
 
 	#[test]
 	fn delete_via_kill_node_allows_non_zero_byte_outcome() {
-		let result: Result<Value> = delete_via_dispatch("fn a() {}\nfn b() {}\n", 1, "function_declaration");
-		
+		let result: Result<Value> =
+			delete_via_dispatch("fn a() {}\nfn b() {}\n", 1, "function_declaration");
+
 		assert!(result.is_ok());
 		assert!(result.is_ok());
 	}

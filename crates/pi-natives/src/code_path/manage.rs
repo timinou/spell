@@ -13,8 +13,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use super::edit_history::{EditHistory, HistoryQuery, JsonlHistory};
-use super::napi::{DiagnosticDto, NodeRefDto};
+use super::{
+	edit_history::{EditHistory, HistoryQuery, JsonlHistory},
+	napi::{DiagnosticDto, NodeRefDto},
+};
 
 /// Build a §manage-result NodeRefDto with the given subcommand and payload.
 fn manage_result(subcommand: &str, payload: Value) -> NodeRefDto {
@@ -35,10 +37,16 @@ fn manage_result(subcommand: &str, payload: Value) -> NodeRefDto {
 fn dispatch(request: Value) -> Result<Value, String> {
 	let result = crate::code_buffer::execute_code_buffer_inner(&request)
 		.map_err(|e| format!("manage dispatch failed: {e}"))?;
-	let is_error = result.get("error").and_then(Value::as_bool).unwrap_or(false);
+	let is_error = result
+		.get("error")
+		.and_then(Value::as_bool)
+		.unwrap_or(false);
 	let output = result.get("output").cloned().unwrap_or(Value::Null);
 	if is_error {
-		let msg = output.as_str().map(String::from).unwrap_or_else(|| output.to_string());
+		let msg = output
+			.as_str()
+			.map(String::from)
+			.unwrap_or_else(|| output.to_string());
 		return Err(msg);
 	}
 	Ok(output)
@@ -56,7 +64,11 @@ fn history_for(file: &str, root: &PathBuf) -> JsonlHistory {
 
 fn absolute_path(file: &str, root: &PathBuf) -> PathBuf {
 	let p = Path::new(file);
-	if p.is_absolute() { p.to_path_buf() } else { root.join(p) }
+	if p.is_absolute() {
+		p.to_path_buf()
+	} else {
+		root.join(p)
+	}
 }
 
 fn diag_internal(message: String) -> DiagnosticDto {
@@ -76,12 +88,19 @@ pub fn handle_buffers() -> Result<NodeRefDto, DiagnosticDto> {
 }
 
 pub fn handle_save(_file: &str, _root: &PathBuf) -> Result<NodeRefDto, DiagnosticDto> {
-	Ok(manage_result("save", json!({
-		"message": "edits auto-persist; use manage diff to inspect or manage undo to revert",
-	})))
+	Ok(manage_result(
+		"save",
+		json!({
+			"message": "edits auto-persist; use manage diff to inspect or manage undo to revert",
+		}),
+	))
 }
 
-pub fn handle_undo(file: &str, root: &PathBuf, session_id: &str) -> Result<NodeRefDto, DiagnosticDto> {
+pub fn handle_undo(
+	file: &str,
+	root: &PathBuf,
+	session_id: &str,
+) -> Result<NodeRefDto, DiagnosticDto> {
 	if file.is_empty() {
 		return Err(DiagnosticDto {
 			variant: "missing_target".to_string(),
@@ -98,22 +117,34 @@ pub fn handle_undo(file: &str, root: &PathBuf, session_id: &str) -> Result<NodeR
 		super::edit_history::RevertOutcome::Success { entry_id } => {
 			Ok(manage_result("undo", json!({ "reverted": entry_id })))
 		},
-		super::edit_history::RevertOutcome::NotFound => {
-			Ok(manage_result("undo", json!({ "message": "no uncommitted edit found for this session and file" })))
-		},
+		super::edit_history::RevertOutcome::NotFound => Ok(manage_result(
+			"undo",
+			json!({ "message": "no uncommitted edit found for this session and file" }),
+		)),
 		super::edit_history::RevertOutcome::Error(e) => {
 			Err(diag_internal(format!("revert failed: {e}")))
 		},
 	}
 }
 
-pub fn handle_redo(_file: &str, _root: &PathBuf, _session_id: &str) -> Result<NodeRefDto, DiagnosticDto> {
-	Ok(manage_result("redo", json!({
-		"message": "redo not yet implemented; re-apply the edit manually",
-	})))
+pub fn handle_redo(
+	_file: &str,
+	_root: &PathBuf,
+	_session_id: &str,
+) -> Result<NodeRefDto, DiagnosticDto> {
+	Ok(manage_result(
+		"redo",
+		json!({
+			"message": "redo not yet implemented; re-apply the edit manually",
+		}),
+	))
 }
 
-pub fn handle_diff(file: &str, root: &PathBuf, session_id: &str) -> Result<NodeRefDto, DiagnosticDto> {
+pub fn handle_diff(
+	file: &str,
+	root: &PathBuf,
+	session_id: &str,
+) -> Result<NodeRefDto, DiagnosticDto> {
 	if file.is_empty() {
 		return Err(DiagnosticDto {
 			variant: "missing_target".to_string(),
@@ -222,9 +253,9 @@ pub fn handle_unknown(name: &str) -> DiagnosticDto {
 pub fn handle_missing() -> DiagnosticDto {
 	DiagnosticDto {
 		variant: "missing_subcommand".to_string(),
-		message: "command:\"manage\" requires a non-empty `manage` field. Valid: save | undo | \
-		          redo | diff | context | status | buffers | languages | watcherStatus | \
-		          lockStatus | index"
+		message: "command:\"manage\" requires a non-empty `manage` field. Valid: save | undo | redo \
+		          | diff | context | status | buffers | languages | watcherStatus | lockStatus | \
+		          index"
 			.to_string(),
 		span:    None,
 	}

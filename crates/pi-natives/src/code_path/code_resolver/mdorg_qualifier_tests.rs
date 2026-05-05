@@ -33,11 +33,7 @@ fn temp_org(name: &str, content: &str, dir: &std::path::Path) -> PathBuf {
 #[test]
 fn qualifier_body_returns_section_body() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_md(
-		"foo.md",
-		"# Hello\n\nIntro text.\n\n## Sub\n\nSub body.\n",
-		dir.path(),
-	);
+	let path = temp_md("foo.md", "# Hello\n\nIntro text.\n\n## Sub\n\nSub body.\n", dir.path());
 	let cp =
 		parse_code_path("foo.md::Hello#body", &pi_code_path::dialects::mdorg::MdNameLexer).unwrap();
 	let query = cp.query.unwrap();
@@ -47,9 +43,15 @@ fn qualifier_body_returns_section_body() {
 		.unwrap();
 	eprintln!("deadline results count: {}", results.len());
 	for (i, r) in results.iter().enumerate() {
-		eprintln!("result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}", i, r.kind, r.range, r.content, r.diagnostics);
+		eprintln!(
+			"result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}",
+			i, r.kind, r.range, r.content, r.diagnostics
+		);
 	}
-	let result = results.iter().find(|r| r.content.is_some()).expect("expected a result with content");
+	let result = results
+		.iter()
+		.find(|r| r.content.is_some())
+		.expect("expected a result with content");
 	let text = result.content.as_ref().unwrap().value();
 	assert!(text.contains("Intro text."), "body should contain intro text, got: {}", text);
 	assert!(!text.contains("# Hello"), "body should not contain heading");
@@ -58,14 +60,9 @@ fn qualifier_body_returns_section_body() {
 #[test]
 fn qualifier_intro_ends_at_subheading() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_md(
-		"foo.md",
-		"# Hello\n\nIntro text.\n\n## Sub\n\nSub body.\n",
-		dir.path(),
-	);
+	let path = temp_md("foo.md", "# Hello\n\nIntro text.\n\n## Sub\n\nSub body.\n", dir.path());
 	let cp =
-		parse_code_path("foo.md::Hello#intro", &pi_code_path::dialects::mdorg::MdNameLexer)
-			.unwrap();
+		parse_code_path("foo.md::Hello#intro", &pi_code_path::dialects::mdorg::MdNameLexer).unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -73,9 +70,15 @@ fn qualifier_intro_ends_at_subheading() {
 		.unwrap();
 	eprintln!("deadline results count: {}", results.len());
 	for (i, r) in results.iter().enumerate() {
-		eprintln!("result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}", i, r.kind, r.range, r.content, r.diagnostics);
+		eprintln!(
+			"result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}",
+			i, r.kind, r.range, r.content, r.diagnostics
+		);
 	}
-	let result = results.iter().find(|r| r.content.is_some()).expect("expected a result with content");
+	let result = results
+		.iter()
+		.find(|r| r.content.is_some())
+		.expect("expected a result with content");
 	let text = result.content.as_ref().unwrap().value();
 	assert!(text.contains("Intro text."), "intro should contain intro text, got: {}", text);
 	assert!(!text.contains("Sub body"), "intro should not contain subsection");
@@ -84,16 +87,10 @@ fn qualifier_intro_ends_at_subheading() {
 #[test]
 fn qualifier_first_para_single_node() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_md(
-		"foo.md",
-		"# Hello\n\nFirst paragraph.\n\nSecond paragraph.\n",
-		dir.path(),
-	);
-	let cp = parse_code_path(
-		"foo.md::Hello#first-para",
-		&pi_code_path::dialects::mdorg::MdNameLexer,
-	)
-	.unwrap();
+	let path = temp_md("foo.md", "# Hello\n\nFirst paragraph.\n\nSecond paragraph.\n", dir.path());
+	let cp =
+		parse_code_path("foo.md::Hello#first-para", &pi_code_path::dialects::mdorg::MdNameLexer)
+			.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -101,9 +98,15 @@ fn qualifier_first_para_single_node() {
 		.unwrap();
 	eprintln!("deadline results count: {}", results.len());
 	for (i, r) in results.iter().enumerate() {
-		eprintln!("result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}", i, r.kind, r.range, r.content, r.diagnostics);
+		eprintln!(
+			"result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}",
+			i, r.kind, r.range, r.content, r.diagnostics
+		);
 	}
-	let result = results.iter().find(|r| r.content.is_some()).expect("expected a result with content");
+	let result = results
+		.iter()
+		.find(|r| r.content.is_some())
+		.expect("expected a result with content");
 	let text = result.content.as_ref().unwrap().value();
 	assert!(text.contains("First paragraph."), "first-para should match, got: {}", text);
 	assert!(!text.contains("Second paragraph"), "first-para should not contain second para");
@@ -115,8 +118,7 @@ fn qualifier_title_returns_heading_text() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_md("foo.md", "# Hello world\n\nBody\n", dir.path());
 	let cp =
-		parse_code_path("foo.md::Hello#title", &pi_code_path::dialects::mdorg::MdNameLexer)
-			.unwrap();
+		parse_code_path("foo.md::Hello#title", &pi_code_path::dialects::mdorg::MdNameLexer).unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -124,9 +126,15 @@ fn qualifier_title_returns_heading_text() {
 		.unwrap();
 	eprintln!("deadline results count: {}", results.len());
 	for (i, r) in results.iter().enumerate() {
-		eprintln!("result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}", i, r.kind, r.range, r.content, r.diagnostics);
+		eprintln!(
+			"result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}",
+			i, r.kind, r.range, r.content, r.diagnostics
+		);
 	}
-	let result = results.iter().find(|r| r.content.is_some()).expect("expected a result with content");
+	let result = results
+		.iter()
+		.find(|r| r.content.is_some())
+		.expect("expected a result with content");
 	let text = result.content.as_ref().unwrap().value();
 	assert_eq!(text.trim(), "Hello world", "title should be 'Hello world', got: {}", text);
 }
@@ -136,8 +144,7 @@ fn qualifier_level_returns_marker() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_md("foo.md", "## Hello\n", dir.path());
 	let cp =
-		parse_code_path("foo.md::Hello#level", &pi_code_path::dialects::mdorg::MdNameLexer)
-			.unwrap();
+		parse_code_path("foo.md::Hello#level", &pi_code_path::dialects::mdorg::MdNameLexer).unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -145,9 +152,15 @@ fn qualifier_level_returns_marker() {
 		.unwrap();
 	eprintln!("deadline results count: {}", results.len());
 	for (i, r) in results.iter().enumerate() {
-		eprintln!("result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}", i, r.kind, r.range, r.content, r.diagnostics);
+		eprintln!(
+			"result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}",
+			i, r.kind, r.range, r.content, r.diagnostics
+		);
 	}
-	let result = results.iter().find(|r| r.content.is_some()).expect("expected a result with content");
+	let result = results
+		.iter()
+		.find(|r| r.content.is_some())
+		.expect("expected a result with content");
 	let text = result.content.as_ref().unwrap().value();
 	assert_eq!(text.trim(), "##", "level should be '##', got: {}", text);
 }
@@ -156,16 +169,9 @@ fn qualifier_level_returns_marker() {
 #[test]
 fn qualifier_frontmatter_block() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_md(
-		"foo.md",
-		"---\ntitle: Hello\n---\n\n# Body\n",
-		dir.path(),
-	);
-	let cp = parse_code_path(
-		"foo.md::#frontmatter",
-		&pi_code_path::dialects::mdorg::MdNameLexer,
-	)
-	.unwrap();
+	let path = temp_md("foo.md", "---\ntitle: Hello\n---\n\n# Body\n", dir.path());
+	let cp =
+		parse_code_path("foo.md::#frontmatter", &pi_code_path::dialects::mdorg::MdNameLexer).unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -173,9 +179,15 @@ fn qualifier_frontmatter_block() {
 		.unwrap();
 	eprintln!("deadline results count: {}", results.len());
 	for (i, r) in results.iter().enumerate() {
-		eprintln!("result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}", i, r.kind, r.range, r.content, r.diagnostics);
+		eprintln!(
+			"result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}",
+			i, r.kind, r.range, r.content, r.diagnostics
+		);
 	}
-	let result = results.iter().find(|r| r.content.is_some()).expect("expected a result with content");
+	let result = results
+		.iter()
+		.find(|r| r.content.is_some())
+		.expect("expected a result with content");
 	let text = result.content.as_ref().unwrap().value();
 	assert!(text.contains("title: Hello"), "frontmatter should contain YAML, got: {}", text);
 }
@@ -189,11 +201,8 @@ fn qualifier_frontmatter_block() {
 fn qualifier_org_todo_state() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_org("foo.org", "* TODO My task\nBody\n", dir.path());
-	let cp = parse_code_path(
-		"foo.org::My#todo-state",
-		&pi_code_path::dialects::mdorg::MdNameLexer,
-	)
-	.unwrap();
+	let cp = parse_code_path("foo.org::My#todo-state", &pi_code_path::dialects::mdorg::MdNameLexer)
+		.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -201,9 +210,15 @@ fn qualifier_org_todo_state() {
 		.unwrap();
 	eprintln!("deadline results count: {}", results.len());
 	for (i, r) in results.iter().enumerate() {
-		eprintln!("result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}", i, r.kind, r.range, r.content, r.diagnostics);
+		eprintln!(
+			"result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}",
+			i, r.kind, r.range, r.content, r.diagnostics
+		);
 	}
-	let result = results.iter().find(|r| r.content.is_some()).expect("expected a result with content");
+	let result = results
+		.iter()
+		.find(|r| r.content.is_some())
+		.expect("expected a result with content");
 	let text = result.content.as_ref().unwrap().value();
 	assert_eq!(text.trim(), "TODO", "todo-state should be 'TODO', got: {}", text);
 }
@@ -212,9 +227,8 @@ fn qualifier_org_todo_state() {
 fn qualifier_org_tags() {
 	let dir = tempfile::tempdir().unwrap();
 	let path = temp_org("foo.org", "* Heading :tag1:tag2:\nBody\n", dir.path());
-	let cp =
-		parse_code_path("foo.org::Heading#tags", &pi_code_path::dialects::mdorg::MdNameLexer)
-			.unwrap();
+	let cp = parse_code_path("foo.org::Heading#tags", &pi_code_path::dialects::mdorg::MdNameLexer)
+		.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -222,9 +236,15 @@ fn qualifier_org_tags() {
 		.unwrap();
 	eprintln!("deadline results count: {}", results.len());
 	for (i, r) in results.iter().enumerate() {
-		eprintln!("result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}", i, r.kind, r.range, r.content, r.diagnostics);
+		eprintln!(
+			"result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}",
+			i, r.kind, r.range, r.content, r.diagnostics
+		);
 	}
-	let result = results.iter().find(|r| r.content.is_some()).expect("expected a result with content");
+	let result = results
+		.iter()
+		.find(|r| r.content.is_some())
+		.expect("expected a result with content");
 	let text = result.content.as_ref().unwrap().value();
 	assert_eq!(text.trim(), ":tag1:tag2:", "tags should match, got: {}", text);
 }
@@ -233,16 +253,11 @@ fn qualifier_org_tags() {
 #[test]
 fn qualifier_org_properties_drawer() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_org(
-		"foo.org",
-		"* Heading\n:PROPERTIES:\n:CATEGORY: work\n:END:\nBody\n",
-		dir.path(),
-	);
-	let cp = parse_code_path(
-		"foo.org::Heading#properties",
-		&pi_code_path::dialects::mdorg::MdNameLexer,
-	)
-	.unwrap();
+	let path =
+		temp_org("foo.org", "* Heading\n:PROPERTIES:\n:CATEGORY: work\n:END:\nBody\n", dir.path());
+	let cp =
+		parse_code_path("foo.org::Heading#properties", &pi_code_path::dialects::mdorg::MdNameLexer)
+			.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -250,9 +265,15 @@ fn qualifier_org_properties_drawer() {
 		.unwrap();
 	eprintln!("deadline results count: {}", results.len());
 	for (i, r) in results.iter().enumerate() {
-		eprintln!("result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}", i, r.kind, r.range, r.content, r.diagnostics);
+		eprintln!(
+			"result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}",
+			i, r.kind, r.range, r.content, r.diagnostics
+		);
 	}
-	let result = results.iter().find(|r| r.content.is_some()).expect("expected a result with content");
+	let result = results
+		.iter()
+		.find(|r| r.content.is_some())
+		.expect("expected a result with content");
 	let text = result.content.as_ref().unwrap().value();
 	assert!(text.contains("CATEGORY: work"), "properties should contain CATEGORY, got: {}", text);
 }
@@ -261,11 +282,8 @@ fn qualifier_org_properties_drawer() {
 #[test]
 fn qualifier_org_properties_key_filter() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_org(
-		"foo.org",
-		"* Heading\n:PROPERTIES:\n:CATEGORY: work\n:END:\nBody\n",
-		dir.path(),
-	);
+	let path =
+		temp_org("foo.org", "* Heading\n:PROPERTIES:\n:CATEGORY: work\n:END:\nBody\n", dir.path());
 	let cp = parse_code_path(
 		"foo.org::Heading#properties[CATEGORY]",
 		&pi_code_path::dialects::mdorg::MdNameLexer,
@@ -278,9 +296,15 @@ fn qualifier_org_properties_key_filter() {
 		.unwrap();
 	eprintln!("deadline results count: {}", results.len());
 	for (i, r) in results.iter().enumerate() {
-		eprintln!("result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}", i, r.kind, r.range, r.content, r.diagnostics);
+		eprintln!(
+			"result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}",
+			i, r.kind, r.range, r.content, r.diagnostics
+		);
 	}
-	let result = results.iter().find(|r| r.content.is_some()).expect("expected a result with content");
+	let result = results
+		.iter()
+		.find(|r| r.content.is_some())
+		.expect("expected a result with content");
 	let text = result.content.as_ref().unwrap().value();
 	assert!(text.contains(":CATEGORY: work"), "properties key filter should match, got: {}", text);
 }
@@ -289,16 +313,10 @@ fn qualifier_org_properties_key_filter() {
 #[test]
 fn qualifier_org_deadline_entry() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_org(
-		"foo.org",
-		"* Heading\nDEADLINE: <2025-01-01>\nBody\n",
-		dir.path(),
-	);
-	let cp = parse_code_path(
-		"foo.org::Heading#deadline",
-		&pi_code_path::dialects::mdorg::MdNameLexer,
-	)
-	.unwrap();
+	let path = temp_org("foo.org", "* Heading\nDEADLINE: <2025-01-01>\nBody\n", dir.path());
+	let cp =
+		parse_code_path("foo.org::Heading#deadline", &pi_code_path::dialects::mdorg::MdNameLexer)
+			.unwrap();
 	let query = cp.query.unwrap();
 	let qualifier = cp.qualifier.as_ref();
 	let results = resolver()
@@ -306,9 +324,15 @@ fn qualifier_org_deadline_entry() {
 		.unwrap();
 	eprintln!("deadline results count: {}", results.len());
 	for (i, r) in results.iter().enumerate() {
-		eprintln!("result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}", i, r.kind, r.range, r.content, r.diagnostics);
+		eprintln!(
+			"result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}",
+			i, r.kind, r.range, r.content, r.diagnostics
+		);
 	}
-	let result = results.iter().find(|r| r.content.is_some()).expect("expected a result with content");
+	let result = results
+		.iter()
+		.find(|r| r.content.is_some())
+		.expect("expected a result with content");
 	let text = result.content.as_ref().unwrap().value();
 	assert!(text.contains("DEADLINE"), "deadline should contain DEADLINE, got: {}", text);
 }
@@ -320,11 +344,7 @@ fn qualifier_org_deadline_entry() {
 #[test]
 fn anchor_code_block_filter() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_md(
-		"foo.md",
-		"# Hello\n\n```rust\nlet x = 1;\n```\n\nText\n",
-		dir.path(),
-	);
+	let path = temp_md("foo.md", "# Hello\n\n```rust\nlet x = 1;\n```\n\nText\n", dir.path());
 	let query = Query::single(Step {
 		axis:       Some(pi_code_path::ast::Axis::Structural),
 		head:       Head::NodeKind("section".into()),
@@ -342,11 +362,7 @@ fn anchor_code_block_filter() {
 #[test]
 fn anchor_table_filter() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_md(
-		"foo.md",
-		"# Hello\n\n| a | b |\n|---|---|\n| 1 | 2 |\n",
-		dir.path(),
-	);
+	let path = temp_md("foo.md", "# Hello\n\n| a | b |\n|---|---|\n| 1 | 2 |\n", dir.path());
 	let query = Query::single(Step {
 		axis:       Some(pi_code_path::ast::Axis::Structural),
 		head:       Head::NodeKind("section".into()),
@@ -364,11 +380,7 @@ fn anchor_table_filter() {
 #[test]
 fn anchor_agenda_item_filter() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_org(
-		"foo.org",
-		"* TODO Active\nBody\n* DONE Completed\nBody\n",
-		dir.path(),
-	);
+	let path = temp_org("foo.org", "* TODO Active\nBody\n* DONE Completed\nBody\n", dir.path());
 	let query = Query::single(Step {
 		axis:       Some(pi_code_path::ast::Axis::Structural),
 		head:       Head::NodeKind("section".into()),
@@ -386,11 +398,7 @@ fn anchor_agenda_item_filter() {
 #[test]
 fn anchor_checkbox_filter() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_org(
-		"foo.org",
-		"* Heading\n- [ ] unchecked\n- normal\n",
-		dir.path(),
-	);
+	let path = temp_org("foo.org", "* Heading\n- [ ] unchecked\n- normal\n", dir.path());
 	let query = Query::single(Step {
 		axis:       Some(pi_code_path::ast::Axis::Structural),
 		head:       Head::NodeKind("listitem".into()),
@@ -413,11 +421,7 @@ fn anchor_checkbox_filter() {
 #[ignore = "TOC generation requires heading enumeration not available in tree-sitter AST"]
 fn qualifier_toc_generated() {
 	let dir = tempfile::tempdir().unwrap();
-	let path = temp_md(
-		"foo.md",
-		"# Hello\n\n- [Sub](#sub)\n\n## Sub\n\nBody\n",
-		dir.path(),
-	);
+	let path = temp_md("foo.md", "# Hello\n\n- [Sub](#sub)\n\n## Sub\n\nBody\n", dir.path());
 	let cp =
 		parse_code_path("foo.md::Hello#toc", &pi_code_path::dialects::mdorg::MdNameLexer).unwrap();
 	let query = cp.query.unwrap();
@@ -427,7 +431,10 @@ fn qualifier_toc_generated() {
 		.unwrap();
 	eprintln!("deadline results count: {}", results.len());
 	for (i, r) in results.iter().enumerate() {
-		eprintln!("result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}", i, r.kind, r.range, r.content, r.diagnostics);
+		eprintln!(
+			"result[{}]: kind={}, range={:?}, content={:?}, diagnostics={:?}",
+			i, r.kind, r.range, r.content, r.diagnostics
+		);
 	}
 	assert!(!results.is_empty());
 }
@@ -481,22 +488,31 @@ impl ContentValue for pi_code_path::types::Content {
 #[ignore = "FEAT-678 mdorg: tree-sitter grammar mismatch; impl exists, test needs refinement"]
 #[test]
 fn dump_simple_org() {
-    let org = "* Heading\nDEADLINE: <2025-01-01>\nBody\n";
-    let reg = LanguageRegistry::with_builtins().unwrap();
-    let profile = reg.get(&pi_code_engine::language::LanguageId::new("org")).unwrap();
-    let mut parser = tree_sitter::Parser::new();
-    parser.set_language(&profile.ts_language).unwrap();
-    let tree = parser.parse(org, None).unwrap();
-    fn walk(node: tree_sitter::Node, src: &str, depth: usize) {
-        let indent = "  ".repeat(depth);
-        let text = &src[node.start_byte()..node.end_byte().min(src.len())];
-        let preview = if text.len() > 30 { &text[..30] } else { text };
-        eprintln!("{}{} [{}..{}] = {:?}", indent, node.kind(), node.start_byte(), node.end_byte(), preview);
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            walk(child, src, depth + 1);
-        }
-    }
-    walk(tree.root_node(), org, 0);
-    panic!("intentional");
+	let org = "* Heading\nDEADLINE: <2025-01-01>\nBody\n";
+	let reg = LanguageRegistry::with_builtins().unwrap();
+	let profile = reg
+		.get(&pi_code_engine::language::LanguageId::new("org"))
+		.unwrap();
+	let mut parser = tree_sitter::Parser::new();
+	parser.set_language(&profile.ts_language).unwrap();
+	let tree = parser.parse(org, None).unwrap();
+	fn walk(node: tree_sitter::Node, src: &str, depth: usize) {
+		let indent = "  ".repeat(depth);
+		let text = &src[node.start_byte()..node.end_byte().min(src.len())];
+		let preview = if text.len() > 30 { &text[..30] } else { text };
+		eprintln!(
+			"{}{} [{}..{}] = {:?}",
+			indent,
+			node.kind(),
+			node.start_byte(),
+			node.end_byte(),
+			preview
+		);
+		let mut cursor = node.walk();
+		for child in node.children(&mut cursor) {
+			walk(child, src, depth + 1);
+		}
+	}
+	walk(tree.root_node(), org, 0);
+	panic!("intentional");
 }

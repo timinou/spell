@@ -44,7 +44,15 @@ pub fn parse_code_path<N: NameLexer>(input: &str, name_lexer: &N) -> Result<Code
 			if !working.is_empty() {
 				return Err(Diagnostic {
 					variant: DiagnosticVariant::ParseError,
-					message: format!("unexpected trailing input: {working:?}"),
+					message: format!(
+						"unexpected trailing input: {working:?}{}",
+						if working.contains(' ') || working.contains('*') || working.contains('"') {
+							" — try backtick-quoting the symbol or use a structural axis like \
+							 §export_statement[text~=\"...\"]"
+						} else {
+							""
+						}
+					),
 					span:    Some(Span { start: input.len() - working.len(), end: input.len() }),
 				});
 			}
@@ -1142,7 +1150,10 @@ mod tests {
 
 	#[test]
 	fn unquoted_multiword_returns_did_you_mean() {
-		let result = parse_code_path("foo.ts::export * from \"./json\"", &crate::dialects::typescript::TsNameLexer);
+		let result = parse_code_path(
+			"foo.ts::export * from \"./json\"",
+			&crate::dialects::typescript::TsNameLexer,
+		);
 		let diag = result.unwrap_err();
 		assert!(
 			diag.message.contains("§") || diag.message.to_lowercase().contains("axis"),

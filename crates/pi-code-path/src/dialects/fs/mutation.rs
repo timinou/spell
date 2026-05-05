@@ -28,7 +28,7 @@ fn resolve_target_path(root: &Path, path: &CodePath) -> Result<PathBuf, Diagnost
 					continue;
 				}
 				target.push(s)
-			}
+			},
 			_ => {
 				return Err(Diagnostic {
 					variant: DiagnosticVariant::ParseError,

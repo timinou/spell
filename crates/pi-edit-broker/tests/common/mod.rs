@@ -24,7 +24,12 @@ impl TestBroker {
 	pub async fn start_with_grace(grace: Duration) -> Self {
 		let temp = tempfile::tempdir().expect("tempdir");
 		let socket_path = temp.path().join("edit-broker.sock");
-		let opts = BrokerOptions { socket_path: socket_path.clone(), grace, broadcast_capacity: 256, journal_path: None };
+		let opts = BrokerOptions {
+			socket_path: socket_path.clone(),
+			grace,
+			broadcast_capacity: 256,
+			journal_path: None,
+		};
 		let handle = tokio::spawn(async move {
 			run_server(opts).await.expect("broker exits cleanly");
 		});

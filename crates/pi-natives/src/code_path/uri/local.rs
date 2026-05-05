@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
-use pi_code_path::resolver::{CancellationToken, SchemeHandler};
-use pi_code_path::types::{Content, Diagnostic, DiagnosticVariant, NodeRef};
+use pi_code_path::{
+	resolver::{CancellationToken, SchemeHandler},
+	types::{Content, Diagnostic, DiagnosticVariant, NodeRef},
+};
 
 /// Resolves `local://<NAME>.md` to the local plan-artifact directory.
 pub struct LocalHandler {
@@ -20,11 +22,13 @@ impl SchemeHandler for LocalHandler {
 			return Err(Diagnostic {
 				variant: DiagnosticVariant::FileNotFound,
 				message: format!("local file not found: local://{path}"),
-				span: None,
+				span:    None,
 			});
 		}
 
-		let content = std::fs::read_to_string(&target).ok().map(|value| Content::Text { value });
+		let content = std::fs::read_to_string(&target)
+			.ok()
+			.map(|value| Content::Text { value });
 		Ok(NodeRef {
 			locator: format!("local://{path}"),
 			range: 0..0,
@@ -38,8 +42,9 @@ impl SchemeHandler for LocalHandler {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use std::io::Write;
+
+	use super::*;
 
 	#[test]
 	fn local_happy_path() {
@@ -59,10 +64,10 @@ mod tests {
 	#[test]
 	fn local_missing_file() {
 		let dir = tempfile::tempdir().unwrap();
-		let h = LocalHandler {
-			project_root: dir.path().to_path_buf(),
-		};
-		let err = h.handle("MISSING.md", &CancellationToken::new()).unwrap_err();
+		let h = LocalHandler { project_root: dir.path().to_path_buf() };
+		let err = h
+			.handle("MISSING.md", &CancellationToken::new())
+			.unwrap_err();
 		assert!(matches!(err.variant, DiagnosticVariant::FileNotFound));
 	}
 }
