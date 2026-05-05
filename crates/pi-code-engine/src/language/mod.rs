@@ -757,7 +757,7 @@ fn markdown_profile() -> LanguageProfile {
 		all_types: gd.all_types,
 		supertypes: gd.supertypes,
 		ts_language: tree_sitter_md::LANGUAGE.into(),
-		dialect:          Some(pi_code_path::dialects::markdown_dialect()),
+		dialect: Some(pi_code_path::dialects::markdown_dialect()),
 	}
 }
 
@@ -905,7 +905,7 @@ fn html_profile() -> LanguageProfile {
 		all_types: gd.all_types,
 		supertypes: gd.supertypes,
 		ts_language: tree_sitter_html::LANGUAGE.into(),
-		dialect:          Some(pi_code_path::dialects::html_dialect()),
+		dialect: Some(pi_code_path::dialects::html_dialect()),
 	}
 }
 
@@ -1069,7 +1069,7 @@ fn css_profile() -> LanguageProfile {
 		all_types: gd.all_types,
 		supertypes: gd.supertypes,
 		ts_language: tree_sitter_css::LANGUAGE.into(),
-		dialect:          Some(pi_code_path::dialects::css_dialect()),
+		dialect: Some(pi_code_path::dialects::css_dialect()),
 	}
 }
 fn typst_profile() -> LanguageProfile {
@@ -1162,7 +1162,7 @@ fn typst_profile() -> LanguageProfile {
 		all_types: gd.all_types,
 		supertypes: gd.supertypes,
 		ts_language: codebook_tree_sitter_typst::LANGUAGE.into(),
-		dialect:          None,
+		dialect: None,
 	}
 }
 
@@ -1680,7 +1680,7 @@ fn org_profile() -> LanguageProfile {
 		all_types:        gd.all_types,
 		supertypes:       gd.supertypes,
 		ts_language:      tree_sitter_org::LANGUAGE.into(),
-		dialect:          None,
+		dialect:          Some(pi_code_path::dialects::markdown_dialect()),
 	}
 }
 
