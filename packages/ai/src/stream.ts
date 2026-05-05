@@ -193,7 +193,7 @@ export function stream<TApi extends Api>(
 		return streamBedrock(model as Model<"bedrock-converse-stream">, context, (options || {}) as BedrockOptions);
 	}
 
-	const apiKey = options?.apiKey || getEnvApiKey(model.provider);
+	const apiKey = (options && 'apiKey' in options) ? options.apiKey : getEnvApiKey(model.provider);
 	if (!apiKey) {
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
@@ -269,7 +269,7 @@ export function streamSimple<TApi extends Api>(
 		return stream(model, context, providerOptions);
 	}
 
-	const apiKey = options?.apiKey || getEnvApiKey(model.provider);
+	const apiKey = (options && 'apiKey' in options) ? options.apiKey : getEnvApiKey(model.provider);
 	if (!apiKey) {
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
