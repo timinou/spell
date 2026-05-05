@@ -1,5 +1,5 @@
 #+TITLE: Fix .env API key silently overriding stored OAuth credentials when refresh fails
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d541d738757262
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T11-07-11-457Z_14d541d738757262.jsonl]]
 #+CUSTOM_ID: BUG-336-fix-env-api-key-silently-overriding-stor
@@ -124,3 +124,5 @@ File: `packages/ai/test/auth-storage-anthropic-invalid-token.test.ts`
   ```
 - Verify: `bun test packages/ai/test/auth-storage-anthropic-invalid-token.test.ts`
 - Verify: `bun run --workspaces --if-present --parallel test`
+
+NOTE [2026-05-05]: Fixed OAuth→env fallback: auth-storage.ts getApiKey() — added #providersWithOAuth guard before env fallback. When OAuth credentials exist but refresh fails, return undefined instead of silently falling back to .env. Tests: 35/35 pass across all auth-storage test files. Commit: c90cb58e6.
