@@ -94,6 +94,7 @@ pub struct CodePathOptions<'env> {
 	#[napi(ts_type = "any")]
 	pub actions:            Option<serde_json::Value>,
 	pub manage:             Option<String>,
+	pub session_id:         Option<String>,
 	pub abort_signal:       Option<Unknown<'env>>,
 	#[napi(js_name = "timeoutMs")]
 	pub timeout_ms:         Option<u32>,
@@ -185,6 +186,7 @@ pub struct CodePathTaskOptions {
 	pub root:               Option<String>,
 	pub actions:            Option<serde_json::Value>,
 	pub manage:             Option<String>,
+	pub session_id:         Option<String>,
 	pub artifact_threshold: Option<u32>,
 }
 
@@ -202,6 +204,7 @@ impl From<CodePathOptions<'_>> for CodePathTaskOptions {
 			root:               value.root,
 			actions:            value.actions,
 			manage:             value.manage,
+			session_id:         value.session_id,
 			artifact_threshold: value.artifact_threshold,
 		}
 	}
@@ -334,14 +337,16 @@ pub fn execute_code_path_inner(
 			.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
 		let target = opts.target.clone();
 		let manage = opts.manage.as_deref().unwrap_or("");
+		let session_id = opts.session_id.as_deref().unwrap_or("");
 		let outcome = match manage {
 			"" => Err(super::manage::handle_missing()),
 			"languages" => super::manage::handle_languages(),
 			"buffers" => super::manage::handle_buffers(),
 			"save" => super::manage::handle_save(&target, &root),
-			"undo" => super::manage::handle_undo(&target, &root),
-			"redo" => super::manage::handle_redo(&target, &root),
-			"diff" => super::manage::handle_diff(&target, &root),
+			"undo" => super::manage::handle_undo(&target, &root, session_id),
+			"redo" => super::manage::handle_redo(&target, &root, session_id),
+			"diff" => super::manage::handle_diff(&target, &root, session_id),
+			"context" => super::manage::handle_context(&root, session_id),
 			"watcherStatus" | "watcher_status" => super::manage::handle_watcher_status(),
 			"lockStatus" | "lock_status" => super::manage::handle_lock_status(&target, &root),
 			"status" => super::manage::handle_status(
@@ -707,6 +712,7 @@ mod tests {
 			actions:            None,
 			manage:             None,
 			artifact_threshold: None,
+			session_id: None,
 		}
 	}
 	fn opts_with_root(target: impl Into<String>, root: PathBuf) -> CodePathTaskOptions {
@@ -723,6 +729,7 @@ mod tests {
 			actions:            None,
 			manage:             None,
 			artifact_threshold: None,
+			session_id: None,
 		}
 	}
 	fn opts_edit_with_root(
@@ -743,6 +750,7 @@ mod tests {
 			actions,
 			manage: None,
 			artifact_threshold: None,
+			session_id: None,
 		}
 	}
 	#[test]
