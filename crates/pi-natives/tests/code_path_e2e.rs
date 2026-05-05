@@ -27,8 +27,9 @@ fn opts_with_root(target: impl Into<String>, root: PathBuf) -> CodePathTaskOptio
         actions: None,
         manage: None,
         artifact_threshold: None,
-    }
-}
+                session_id: Some("e2e-test-session".into()),
+            }
+        }
 
 fn opts(target: impl Into<String>) -> CodePathTaskOptions {
     opts_with_root(target, fixture_root())

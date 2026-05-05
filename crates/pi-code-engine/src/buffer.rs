@@ -286,18 +286,29 @@ pub struct CodeBuffer {
 	coord_revision: u64,
 }
 
+/// Record emitted by  on successful commit.
+#[derive(Debug, Clone)]
+pub struct EditRecord {
+	pub session_id: String,
+	pub file:       PathBuf,
+	pub before:     String,
+	pub after:      String,
+	pub diff:       String,
+}
+
 pub struct BufferRegistry {
-	buffers:  DashMap<PathBuf, Arc<Mutex<CodeBuffer>>>,
-	registry: Arc<LanguageRegistry>,
-	watcher:  Option<FileWatcher>,
-	coord:    Arc<dyn crate::coord::CoordClient>,
+	buffers:       DashMap<PathBuf, Arc<Mutex<CodeBuffer>>>,
+	registry:      Arc<LanguageRegistry>,
+	watcher:       Option<FileWatcher>,
+	coord:         Arc<dyn crate::coord::CoordClient>,
+	edit_recorder: Option<Arc<dyn Fn(EditRecord) + Send + Sync>>,
 }
 
 fn registry_key(path: &Path) -> PathBuf {
 	fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-fn workspace_root_for(path: &Path) -> PathBuf {
+pub fn workspace_root_for(path: &Path) -> PathBuf {
 	let mut current = path.parent().unwrap_or(path);
 	let mut last_non_root = current.to_path_buf();
 	loop {
@@ -399,13 +410,18 @@ impl BufferRegistry {
 		watcher: Option<FileWatcher>,
 		coord: Arc<dyn crate::coord::CoordClient>,
 	) -> Self {
-		Self { buffers: DashMap::new(), registry, watcher, coord }
+		Self { buffers: DashMap::new(), registry, watcher, coord, edit_recorder: None }
 	}
 
 	/// Borrow the coordination client. `Arc<dyn CoordClient>` so callers can
 	/// clone and hand it to background tasks.
 	pub fn coord(&self) -> &Arc<dyn crate::coord::CoordClient> {
 		&self.coord
+	}
+
+	pub fn with_edit_recorder(mut self, recorder: Arc<dyn Fn(EditRecord) + Send + Sync>) -> Self {
+		self.edit_recorder = Some(recorder);
+		self
 	}
 
 	pub const fn watcher(&self) -> Option<&FileWatcher> {
@@ -587,8 +603,16 @@ impl BufferRegistry {
 					CodeBuffer::create(&key, self.registry.clone())?
 				};
 				fresh.coord_revision = parent_revision;
+				let before_source = fresh.source();
 				let result = apply(&mut fresh)?;
-				let source = fresh.source();
+				let after_source = fresh.source();
+				let source = after_source.clone();
+				let diff = crate::diff_lines(&before_source, &after_source)
+					.into_iter()
+					.map(|h| h.content)
+					.collect::<Vec<_>>()
+					.join("
+");
 				if !fresh.dirty {
 					warnings.extend(self.coord.drain_warnings());
 					return Ok(Ok((
@@ -658,6 +682,15 @@ impl BufferRegistry {
 						self
 							.buffers
 							.insert(key.clone(), Arc::new(Mutex::new(fresh)));
+						if let Some(ref recorder) = self.edit_recorder {
+							recorder(EditRecord {
+								session_id: session_id.to_string(),
+								file:       key.clone(),
+								before:     before_source.clone(),
+								after:      after_source.clone(),
+								diff,
+							});
+						}
 						Ok(Ok((
 							TransactionOutcome {
 								revision,

@@ -16,16 +16,22 @@ pub struct CodeResolverImpl {
 	/// `Locator::Fs` paths before delegating to `code_buffer::execute`.
 	/// FEAT-689 / FEAT-708: without this the legacy code_buffer surface
 	/// can't open the host file when the test ran from a tempdir.
-	pub(super) root:     Option<std::path::PathBuf>,
+	pub(super) root:        Option<std::path::PathBuf>,
+	pub(super) session_id:  Option<String>,
 }
 
 impl CodeResolverImpl {
 	pub fn new(registry: Arc<LanguageRegistry>) -> Self {
-		Self { registry, root: None }
+		Self { registry, root: None, session_id: None }
 	}
 
 	pub fn with_root(mut self, root: std::path::PathBuf) -> Self {
 		self.root = Some(root);
+		self
+	}
+
+	pub fn with_session_id(mut self, sid: String) -> Self {
+		self.session_id = Some(sid);
 		self
 	}
 }
@@ -69,6 +75,7 @@ impl CodeResolver for CodeResolverImpl {
 			span:    None,
 		})?;
 
+		let bytes_len = bytes.len();
 		let src = match String::from_utf8(bytes) {
 			Ok(s) => s,
 			Err(e) => {
@@ -87,13 +94,42 @@ impl CodeResolver for CodeResolverImpl {
 				span:    None,
 			})?;
 
-		let tree = parser.parse(&src, None).ok_or_else(|| Diagnostic {
-			variant: DiagnosticVariant::ParseError,
-			message: "tree-sitter parse failed".into(),
-			span:    None,
-		})?;
+  let tree = parser.parse(&src, None).ok_or_else(|| Diagnostic {
+  			variant: DiagnosticVariant::ParseError,
+  			message: "tree-sitter parse failed".into(),
+  			span:    None,
+  		})?;
 
-		let root = tree.root_node();
+		// #outline qualifier: return symbol outline instead of full content
+		if _qualifier.is_some_and(|q| q.name == "outline") {
+			let root = tree.root_node();
+			let mut cursor = root.walk();
+			let children: Vec<_> = root.named_children(&mut cursor).collect();
+			let mut lines: Vec<String> = Vec::with_capacity(children.len());
+			for child in &children {
+				let range = child.start_byte()..child.end_byte();
+				let decl_text = src[range].to_string();
+				let first_line = decl_text.lines().next().unwrap_or("").to_string();
+				lines.push(format!("{} | {} (L{}-L{})",
+					first_line,
+					child.kind(),
+					child.start_position().row + 1,
+					child.end_position().row + 1,
+				));
+			}
+			let text = lines.join("\n");
+			let node = NodeRef {
+				locator:     file.to_string_lossy().to_string(),
+				range:       0..src.len(),
+				kind:        "§outline".into(),
+				content:     Some(pi_code_path::types::Content::Text { value: text }),
+				metadata:    HashMap::new(),
+				diagnostics: vec![],
+			};
+			return Ok(vec![node]);
+		}
+
+  		let root = tree.root_node();
 		let nodes = evaluate_query(query, vec![root], &src, dialect, cancel);
 
 		let locator = file.to_string_lossy().into_owned();

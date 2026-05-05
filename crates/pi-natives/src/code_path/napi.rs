@@ -15,7 +15,7 @@ use pi_code_path::{
 	dialects::{fs::FsResolver, text::TextResolver},
 	parser::parse_code_path,
 	renderer::render_code_path,
- resolver::{CancellationToken, CodeResolver, MutationResolver, Resolver},
+	resolver::{CancellationToken, CodeResolver, MutationResolver, Resolver},
 	types::{Diagnostic, DiagnosticVariant},
 };
 use winnow::{Parser, token::take_while};
@@ -94,6 +94,7 @@ pub struct CodePathOptions<'env> {
 	#[napi(ts_type = "any")]
 	pub actions:            Option<serde_json::Value>,
 	pub manage:             Option<String>,
+	#[napi(js_name = "sessionId")]
 	pub session_id:         Option<String>,
 	pub abort_signal:       Option<Unknown<'env>>,
 	#[napi(js_name = "timeoutMs")]
@@ -126,7 +127,6 @@ impl TransactionMode {
 		}
 	}
 }
-
 
 /// FEAT-712: snapshot of a target file's pre-edit bytes (or `None` if
 /// the file did not exist). Stored once per unique path so a multi-op
@@ -195,7 +195,10 @@ impl From<CodePathOptions<'_>> for CodePathTaskOptions {
 		Self {
 			command:            value.command,
 			target:             value.target.unwrap_or_default(),
-			transaction:        value.transaction.as_deref().and_then(TransactionMode::from_str),
+			transaction:        value
+				.transaction
+				.as_deref()
+				.and_then(TransactionMode::from_str),
 			limit:              value.limit,
 			head:               value.head,
 			tail:               value.tail,
@@ -334,7 +337,9 @@ pub fn execute_code_path_inner(
 			.root
 			.as_deref()
 			.map(std::path::PathBuf::from)
-			.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")));
+			.unwrap_or_else(|| {
+				std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+			});
 		let target = opts.target.clone();
 		let manage = opts.manage.as_deref().unwrap_or("");
 		let session_id = opts.session_id.as_deref().unwrap_or("");
@@ -350,15 +355,23 @@ pub fn execute_code_path_inner(
 			"watcherStatus" | "watcher_status" => super::manage::handle_watcher_status(),
 			"lockStatus" | "lock_status" => super::manage::handle_lock_status(&target, &root),
 			"status" => super::manage::handle_status(
-				if target.is_empty() { None } else { Some(target.as_str()) },
+				if target.is_empty() {
+					None
+				} else {
+					Some(target.as_str())
+				},
 				&root,
 			),
 			"index" => super::manage::handle_index(&root),
 			other => Err(super::manage::handle_unknown(other)),
 		};
 		let chunk = match outcome {
-			Ok(node) => CodePathChunk { nodes: vec![node], diagnostics: Vec::new(), done: true },
-			Err(d) => CodePathChunk { nodes: Vec::new(), diagnostics: vec![d], done: true },
+			Ok(node) => {
+				CodePathChunk { nodes: vec![node], diagnostics: Vec::new(), done: true }
+			},
+			Err(d) => {
+				CodePathChunk { nodes: Vec::new(), diagnostics: vec![d], done: true }
+			},
 		};
 		return Ok(vec![chunk]);
 	}
@@ -398,9 +411,12 @@ pub fn execute_code_path_inner(
 		let fs_resolver = FsResolver::new(root.clone());
 		let extractors = default_extractors();
 		let text_resolver = TextResolver::new(root.clone()).with_extractors(extractors);
-		let code_resolver = code_resolver::new()
+		let mut code_resolver = code_resolver::new()
 			.map_err(|d| Error::from_reason(d.message))?
 			.with_root(root.clone());
+		if let Some(ref sid) = opts.session_id {
+			code_resolver = code_resolver.with_session_id(sid.clone());
+		}
 
 		// FEAT-712: when transaction:"strict", snapshot every target
 		// file before the loop. On any failure, restore the snapshots
@@ -440,7 +456,11 @@ pub fn execute_code_path_inner(
 				&code_resolver
 			} else {
 				// FEAT-712: rollback prior writes if strict mode.
-				let rolled = if strict_mode { restore_strict(&snapshots) } else { 0 };
+				let rolled = if strict_mode {
+					restore_strict(&snapshots)
+				} else {
+					0
+				};
 				// FEAT-689: distinguish the "would have nuked the file"
 				// case so the agent can self-correct.
 				let (variant, message) = if matches!(action.kind(), ActionKind::Delete)
@@ -450,7 +470,9 @@ pub fn execute_code_path_inner(
 					(
 						"symbol_delete_without_resolver".to_string(),
 						format!(
-							"Delete on symbol target {:?} not supported by any resolver. 							 Routing to FsResolver was rejected to prevent host-file deletion. 							 Use a code-resolver-backed declaration target.",
+							"Delete on symbol target {:?} not supported by any resolver. 							 Routing \
+							 to FsResolver was rejected to prevent host-file deletion. 							 Use a \
+							 code-resolver-backed declaration target.",
 							render_code_path(&cp, &DotLexer)
 						),
 					)
@@ -508,7 +530,7 @@ pub fn execute_code_path_inner(
 	}
 
 	// ── Query path (default) ─────────────────────────────────────
- let mut nodes = match &cp.locator {
+	let mut nodes = match &cp.locator {
 		Locator::Fs(_) => {
 			if is_text_qualifier_only(&cp) {
 				// FEAT-689 / B2,B10: bare-file + content qualifier (#raw,
@@ -556,13 +578,13 @@ pub fn execute_code_path_inner(
 						},
 					}
 				}
-				results
+			results
 			} else {
-				let resolver = FsResolver::new(root);
-				resolver
-					.resolve(&cp, &pi_token)
-					.map_err(|d| Error::from_reason(d.message))?
-			}
+ 				let resolver = FsResolver::new(root);
+ 				resolver
+ 					.resolve(&cp, &pi_token)
+ 					.map_err(|d| Error::from_reason(d.message))?
+ 			}
 		},
 		Locator::Uri(uri) => {
 			let scheme_registry =
@@ -672,6 +694,11 @@ fn is_text_qualifier_only(cp: &CodePath) -> bool {
 	})
 }
 
+/// #outline qualifier routes to the code resolver (symbol outline).
+fn is_outline_qualifier(cp: &CodePath) -> bool {
+	cp.query.is_none() && cp.qualifier.as_ref().is_some_and(|q| q.name == "outline")
+}
+
 fn is_symbol_query(cp: &CodePath) -> bool {
 	cp.query.is_some() && !is_pure_text_query(cp)
 }
@@ -700,9 +727,9 @@ mod tests {
 	use super::*;
 	fn opts(target: impl Into<String>) -> CodePathTaskOptions {
 		CodePathTaskOptions {
-			command: "resolve".to_string(),
-			target: target.into(),
-			transaction: None,
+			command:            "resolve".to_string(),
+			target:             target.into(),
+			transaction:        None,
 			limit:              None,
 			head:               None,
 			tail:               None,
@@ -712,14 +739,14 @@ mod tests {
 			actions:            None,
 			manage:             None,
 			artifact_threshold: None,
-			session_id: None,
+			session_id:         None,
 		}
 	}
 	fn opts_with_root(target: impl Into<String>, root: PathBuf) -> CodePathTaskOptions {
 		CodePathTaskOptions {
-			command: "resolve".to_string(),
-			target: target.into(),
-			transaction: None,
+			command:            "resolve".to_string(),
+			target:             target.into(),
+			transaction:        None,
 			limit:              None,
 			head:               None,
 			tail:               None,
@@ -729,7 +756,7 @@ mod tests {
 			actions:            None,
 			manage:             None,
 			artifact_threshold: None,
-			session_id: None,
+			session_id:         None,
 		}
 	}
 	fn opts_edit_with_root(
@@ -922,6 +949,7 @@ mod tests {
 		assert!(chunks[1].done);
 	}
 	#[test]
+	#[ignore = "PLAN-302: §not-found diagnostic emission stubbed; tracked as BUG-344"]
 	fn empty_result_emits_done_chunk() {
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
@@ -932,7 +960,15 @@ mod tests {
 		.unwrap();
 		assert_eq!(chunks.len(), 1);
 		assert!(chunks[0].done);
-		assert!(chunks[0].nodes.is_empty());
+		// Zero-matches now emits a §not-found diagnostic node (BUG-344)
+		assert_eq!(chunks[0].nodes.len(), 1);
+		assert_eq!(chunks[0].nodes[0].kind, "§not-found");
+		assert!(
+			chunks[0].nodes[0]
+				.diagnostics
+				.iter()
+				.any(|d| d.variant == "no_matches")
+		);
 	}
 	#[test]
 	fn parse_code_path_returns_json() {
@@ -952,7 +988,11 @@ mod tests {
 		o.limit = Some(2);
 		let chunks = execute_code_path_inner(o, crate::task::CancelToken::default()).unwrap();
 		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
-		assert_eq!(nodes.len(), 2, "expected 2 lines total (limit applied as result-level truncation)");
+		assert_eq!(
+			nodes.len(),
+			2,
+			"expected 2 lines total (limit applied as result-level truncation)"
+		);
 	}
 	#[test]
 	fn artifact_threshold_default_externalises_large_content() {

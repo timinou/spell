@@ -171,7 +171,7 @@ impl MutationResolver for CodeResolverImpl {
 
 		let request = json!({
 			"command": "edit",
-			"sessionId": MUTATION_SESSION_ID,
+			"sessionId": self.session_id.as_deref().unwrap_or(MUTATION_SESSION_ID),
 			"operations": [{
 				"targetId": target_id,
 				"actions": [action_json]

@@ -3913,6 +3913,7 @@ dependencies = [
  "brush-core",
  "clap",
  "dashmap",
+ "diffy",
  "filetime",
  "globset",
  "grep-matcher",

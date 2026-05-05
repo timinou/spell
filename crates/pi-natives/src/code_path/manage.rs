@@ -44,8 +44,13 @@ fn dispatch(request: Value) -> Result<Value, String> {
 	Ok(output)
 }
 
-fn history_for(root: &Path) -> JsonlHistory {
-	let path = root.join(".spell").join("edit-history.jsonl");
+fn history_for(file: &str, root: &PathBuf) -> JsonlHistory {
+	let workspace = if file.is_empty() {
+		pi_code_engine::workspace_root_for(root)
+	} else {
+		pi_code_engine::workspace_root_for(&absolute_path(file, root))
+	};
+	let path = workspace.join(".spell").join("edit-history.jsonl");
 	JsonlHistory::new(path)
 }
 
@@ -85,7 +90,7 @@ pub fn handle_undo(file: &str, root: &PathBuf, session_id: &str) -> Result<NodeR
 		});
 	}
 	let path = absolute_path(file, root);
-	let history = history_for(root);
+	let history = history_for(file, root);
 	let query = HistoryQuery::default()
 		.session_id(session_id)
 		.file_glob(path.to_string_lossy().to_string());
@@ -117,7 +122,7 @@ pub fn handle_diff(file: &str, root: &PathBuf, session_id: &str) -> Result<NodeR
 		});
 	}
 	let path = absolute_path(file, root);
-	let history = history_for(root);
+	let history = history_for(file, root);
 	let query = HistoryQuery::default()
 		.session_id(session_id)
 		.file_glob(path.to_string_lossy().to_string())
@@ -129,10 +134,11 @@ pub fn handle_diff(file: &str, root: &PathBuf, session_id: &str) -> Result<NodeR
 }
 
 pub fn handle_context(root: &PathBuf, session_id: &str) -> Result<NodeRefDto, DiagnosticDto> {
-	let history = history_for(root);
+	let history = history_for("", root);
 	let query = HistoryQuery::default()
 		.session_id(session_id)
-		.uncommitted_only(true);
+		.uncommitted_only(true)
+		.exclude_reverted(true);
 	let entries = history.query(query);
 	let payload = json!({
 		"entries": entries.into_iter().map(|e| json!({
