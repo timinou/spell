@@ -1,5 +1,5 @@
 #+TITLE: CodePath resolver supports() asymmetry — symbol resolvers claim bare-path actions
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d50def80d06410
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T07-20-24-835Z_14d50def80d06410.jsonl]]
 #+CUSTOM_ID: BUG-341-codepath-resolver-supports-asymmetry-sym
@@ -317,3 +317,5 @@ export const Y = 2;
 * References
 
 [[id:PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo]] §FEAT-689 (FsResolver gate)
+
+NOTE [2026-05-05]: Fixed resolver supports() asymmetry: CodeResolver now requires has_target_query() for symbol-scoped kinds, TextResolver audited per-kind (Append/Prepend/Patch bare-only; Insert/Replace bare or text-qualifier), FsResolver uses shared helper. Added zero-byte delete guard in code_buffer.rs that returns diagnostic when edits would empty the file.
