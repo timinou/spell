@@ -1,5 +1,5 @@
 #+TITLE: CodePath multi-word symbols fail to parse and resolve
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d50def80d06410
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T07-20-24-835Z_14d50def80d06410.jsonl]]
 #+CUSTOM_ID: BUG-337-codepath-multi-word-symbols-fail-to-pars
@@ -282,3 +282,5 @@ fn unquoted_multiword_returns_did_you_mean() {
 * References
 
 [[id:PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo]] — predecessor analysis
+
+NOTE [2026-05-05]: Fixed: added NamePayload::Quoted variant, backtick parsing in TS/Python/Rust/Haskell dialects, whitespace-normalized text matching for statement-level nodes, DidYouMean hint in parser, and schema docs. cargo test -p pi-code-path -p pi-natives green.
