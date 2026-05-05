@@ -81,20 +81,22 @@ pub struct CodePathChunk {
 
 #[napi(object)]
 pub struct CodePathOptions<'env> {
-	pub command:      String,
-	pub target:       String,
-	pub limit:        Option<u32>,
-	pub head:         Option<u32>,
-	pub tail:         Option<u32>,
-	pub offset:       Option<u32>,
-	pub format:       Option<String>,
-	pub root:         Option<String>,
+	pub command:            String,
+	pub target:             String,
+	pub limit:              Option<u32>,
+	pub head:               Option<u32>,
+	pub tail:               Option<u32>,
+	pub offset:             Option<u32>,
+	pub format:             Option<String>,
+	pub root:               Option<String>,
 	#[napi(ts_type = "any")]
-	pub actions:      Option<serde_json::Value>,
-	pub manage:       Option<String>,
-	pub abort_signal: Option<Unknown<'env>>,
+	pub actions:            Option<serde_json::Value>,
+	pub manage:             Option<String>,
+	pub abort_signal:       Option<Unknown<'env>>,
 	#[napi(js_name = "timeoutMs")]
-	pub timeout_ms:   Option<u32>,
+	pub timeout_ms:         Option<u32>,
+	#[napi(js_name = "artifactThreshold")]
+	pub artifact_threshold: Option<u32>,
 }
 
 // ── Task options (owned, Send) ───────────────────────────────────
@@ -111,6 +113,7 @@ pub struct CodePathTaskOptions {
 	pub root:    Option<String>,
 	pub actions: Option<serde_json::Value>,
 	pub manage:  Option<String>,
+	pub artifact_threshold: Option<u32>,
 }
 
 impl From<CodePathOptions<'_>> for CodePathTaskOptions {
@@ -126,6 +129,7 @@ impl From<CodePathOptions<'_>> for CodePathTaskOptions {
 			root:    value.root,
 			actions: value.actions,
 			manage:  value.manage,
+			artifact_threshold: value.artifact_threshold,
 		}
 	}
 }
@@ -330,7 +334,8 @@ pub fn execute_code_path_inner(
 		return Err(Error::from_reason("Aborted: Signal"));
 	}
 
-	let dtos = nodes_to_dtos(nodes, ARTIFACT_THRESHOLD);
+	let threshold = opts.artifact_threshold.map(|n| n as usize).unwrap_or(ARTIFACT_THRESHOLD);
+	let dtos = nodes_to_dtos(nodes, threshold);
 	let mut chunks: Vec<CodePathChunk> = Vec::new();
 	for chunk in dtos.chunks(64) {
 		chunks.push(CodePathChunk {
@@ -424,6 +429,7 @@ mod tests {
 			root:    None,
 			actions: None,
 			manage:  None,
+			artifact_threshold: None,
 		}
 	}
 	fn opts_with_root(target: impl Into<String>, root: PathBuf) -> CodePathTaskOptions {
@@ -438,6 +444,7 @@ mod tests {
 			root:    Some(root.to_string_lossy().to_string()),
 			actions: None,
 			manage:  None,
+			artifact_threshold: None,
 		}
 	}
 	#[test]
@@ -640,5 +647,62 @@ mod tests {
 		let chunks = execute_code_path_inner(o, crate::task::CancelToken::default()).unwrap();
 		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
 		assert_eq!(nodes.len(), 10, "expected 2 lines × 5 files = 10 nodes");
+	}	#[test]
+	fn artifact_threshold_default_externalises_large_content() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), "x".repeat(256 * 1024 + 1)).unwrap();
+		let chunks = execute_code_path_inner(
+			opts_with_root("a.txt::§line", root),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
+		assert!(!nodes.is_empty());
+		let c = nodes[0].content.as_ref().expect("content expected");
+		assert!(c.artifact_uri.is_some(), "expected artifact_uri for content > 256 KiB");
+		assert!(c.value.is_none(), "expected no inline value");
+	}
+	#[test]
+	fn artifact_threshold_low_externalises_text() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), "x".repeat(1025)).unwrap();
+		let mut o = opts_with_root("a.txt::§line", root);
+		o.artifact_threshold = Some(1024);
+		let chunks = execute_code_path_inner(o, crate::task::CancelToken::default()).unwrap();
+		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
+		assert!(!nodes.is_empty());
+		let c = nodes[0].content.as_ref().expect("content expected");
+		assert!(c.artifact_uri.is_some(), "expected artifact_uri for content > 1 KiB");
+		assert!(c.value.is_none());
+	}
+	#[test]
+	fn artifact_threshold_zero_externalises_everything() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), "xx".to_string()).unwrap();
+		let mut o = opts_with_root("a.txt::§line", root);
+		o.artifact_threshold = Some(0);
+		let chunks = execute_code_path_inner(o, crate::task::CancelToken::default()).unwrap();
+		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
+		assert!(!nodes.is_empty());
+		let c = nodes[0].content.as_ref().expect("content expected");
+		assert!(c.artifact_uri.is_some(), "expected artifact_uri for zero threshold");
+		assert!(c.value.is_none());
+	}
+	#[test]
+	fn artifact_threshold_max_inlines_everything() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), "x".repeat(256 * 1024 + 1)).unwrap();
+		let mut o = opts_with_root("a.txt::§line", root);
+		o.artifact_threshold = Some(u32::MAX);
+		let chunks = execute_code_path_inner(o, crate::task::CancelToken::default()).unwrap();
+		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
+		assert!(!nodes.is_empty());
+		let c = nodes[0].content.as_ref().expect("content expected");
+		assert!(c.artifact_uri.is_none(), "expected no artifact_uri for huge threshold");
+		assert!(c.value.is_some(), "expected inline value");
 	}
 }
