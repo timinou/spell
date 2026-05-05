@@ -43,7 +43,7 @@ pub enum FsSegment {
 	DoubleStar,
 	Question,
 	CharClass(Vec<char>),
-	Brace(Vec<String>),
+	Brace { items: Vec<String>, exclusions: Vec<String> },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

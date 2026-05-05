@@ -284,6 +284,8 @@ export class AuthStorage {
 	#sessionLastCredential: Map<string, Map<string, { type: AuthCredential["type"]; index: number }>> = new Map();
 	/** Maps provider:type -> credentialIndex -> blockedUntilMs for temporary backoff. */
 	#credentialBackoff: Map<string, Map<number, number>> = new Map();
+	/** Tracks providers that have ever had OAuth credentials configured. Survives cred disabling. */
+	#providersWithOAuth: Set<string> = new Set();
 	#usageProviderResolver?: (provider: Provider) => UsageProvider | undefined;
 	#rankingStrategyResolver?: (provider: Provider) => CredentialRankingStrategy | undefined;
 	#usageCache: UsageCache;
@@ -374,6 +376,10 @@ export class AuthStorage {
 			const deduped = this.#pruneDuplicateStoredCredentials(provider, entries);
 			if (deduped.length > 0) {
 				dedupedGrouped.set(provider, deduped);
+				// Track OAuth presence for env fallback guard
+				if (deduped.some(c => c.credential.type === "oauth")) {
+					this.#providersWithOAuth.add(provider);
+				}
 			}
 		}
 		this.#data = dedupedGrouped;
@@ -399,6 +405,11 @@ export class AuthStorage {
 			this.#data.delete(provider);
 		} else {
 			this.#data.set(provider, credentials);
+		}
+		// Track OAuth presence — survives credential disabling so the
+		// env fallback guard can still detect that OAuth was configured.
+		if (credentials.some(c => c.credential.type === "oauth")) {
+			this.#providersWithOAuth.add(provider);
 		}
 	}
 
@@ -665,6 +676,7 @@ export class AuthStorage {
 	async remove(provider: string): Promise<void> {
 		this.#store.deleteAuthCredentialsForProvider(provider, "deleted by user");
 		this.#data.delete(provider);
+		this.#providersWithOAuth.delete(provider);
 		this.#resetProviderAssignments(provider);
 	}
 
@@ -1994,6 +2006,13 @@ export class AuthStorage {
 		const oauthKey = await this.#resolveOAuthApiKey(provider, sessionId, options);
 		if (oauthKey) {
 			return oauthKey;
+		}
+
+		// If the provider has OAuth credentials that failed to resolve,
+		// don't fall back to env. The user explicitly logged in — they
+		// should re-login rather than silently using a stale .env key.
+		if (this.#providersWithOAuth.has(provider)) {
+			return undefined;
 		}
 
 		// Fall back to environment variable

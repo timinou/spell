@@ -212,7 +212,8 @@ fn fs_locator(input: &mut &str) -> ModalResult<FsLocator> {
 	if raw.is_empty() {
 		return Err(winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default()));
 	}
-	let segments = tokenise_fs_path(&raw).map_err(|_| winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default()))?;
+	let segments = tokenise_fs_path(&raw)
+		.map_err(|_| winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default()))?;
 	Ok(FsLocator { segments })
 }
 
@@ -328,7 +329,7 @@ fn tokenise_segment(seg: &str) -> Result<Vec<FsSegment>, ()> {
 					return Err(());
 				}
 				items.push(cur);
-				out.push(FsSegment::Brace(items));
+				out.push(FsSegment::Brace { items, exclusions: vec![] });
 			},
 			other => buf.push(other),
 		}
@@ -397,10 +398,8 @@ fn predicate_body(input: &mut &str) -> ModalResult<Predicate> {
 	let _ = ws(input);
 	alt((
 		range_predicate,
-		preceded((".^", ws), inner_query)
-			.map(|q| Predicate::HasAncestor(Box::new(q))),
-		preceded((".", ws), inner_query)
-			.map(|q| Predicate::HasDescendant(Box::new(q))),
+		preceded((".^", ws), inner_query).map(|q| Predicate::HasAncestor(Box::new(q))),
+		preceded((".", ws), inner_query).map(|q| Predicate::HasDescendant(Box::new(q))),
 		preceded(("§", ws), ident).map(|s: &str| Predicate::KindFilter(s.to_string())),
 		preceded(("¶", ws), ident).map(|s: &str| Predicate::AnchorFilter(s.to_string())),
 		preceded(("text~=", ws), quoted_string).map(Predicate::TextMatch),
@@ -431,9 +430,10 @@ fn inner_step(input: &mut &str) -> ModalResult<Step> {
 	Ok(Step { axis: ax, head, predicates })
 }
 
-/// Recursive Query parser for use inside subquery predicates `[. Q]` and `[.^ Q]`.
-/// Uses dialect-agnostic name parsing (kernel-generic). Supports combinator
-/// chaining (`/`, `//`, `^`, `^^`, `<<`, `>>`, edge `→`, set ops `|`, `&`, `-`).
+/// Recursive Query parser for use inside subquery predicates `[. Q]` and `[.^
+/// Q]`. Uses dialect-agnostic name parsing (kernel-generic). Supports
+/// combinator chaining (`/`, `//`, `^`, `^^`, `<<`, `>>`, edge `→`, set ops
+/// `|`, `&`, `-`).
 fn inner_query(input: &mut &str) -> ModalResult<Query> {
 	let head = inner_step(input)?;
 	let mut chain: Vec<(Combinator, Step)> = Vec::new();
@@ -550,6 +550,32 @@ fn qualifier(input: &mut &str) -> ModalResult<Qualifier> {
 // ── Tests ────────────────────────────────────────────────────────
 
 #[cfg(test)]
+// ── BUG-343: brace exclusions ──────────────────────────────────
+#[test]
+fn brace_with_exclusion() {
+	let r = tokenise_segment("foo.{ts,!d.ts}").unwrap();
+	match &r[..] {
+		[FsSegment::Literal(prefix), FsSegment::Brace { items, exclusions }] => {
+			assert_eq!(prefix, "foo.");
+			assert_eq!(items, &["ts".to_string()]);
+			assert_eq!(exclusions, &["d.ts".to_string()]);
+		},
+		_ => panic!("unexpected segments: {:?}", r),
+	}
+}
+
+#[test]
+fn brace_pure_exclusion_is_parse_error() {
+	assert!(tokenise_segment("foo.{!d.ts}").is_err());
+}
+
+#[test]
+fn brace_back_compat_no_exclusions() {
+	let r = tokenise_segment("foo.{ts,tsx}").unwrap();
+	assert!(
+		matches!(&r[..], [_, FsSegment::Brace { items, exclusions }] if items.len() == 2 && exclusions.is_empty())
+	);
+}
 mod tests {
 	use winnow::token::take_while;
 
@@ -688,7 +714,8 @@ mod tests {
 	#[test]
 	fn glob_double_star() {
 		let segs = fs_segs("src/**/*.ts");
-		// src / ** / *.ts → Literal("src"), Literal("/"), DoubleStar, Literal("/"), Star, Literal(".ts")
+		// src / ** / *.ts → Literal("src"), Literal("/"), DoubleStar, Literal("/"),
+		// Star, Literal(".ts")
 		assert!(matches!(segs[0], FsSegment::Literal(ref s) if s == "src"));
 		assert!(matches!(segs[1], FsSegment::Literal(ref s) if s == "/"));
 		assert!(matches!(segs[2], FsSegment::DoubleStar));
@@ -700,7 +727,9 @@ mod tests {
 	#[test]
 	fn glob_brace() {
 		let segs = fs_segs("tests/**/*.{ts,rs}");
-		assert!(segs.iter().any(|s| matches!(s, FsSegment::Brace(items) if items == &vec!["ts".to_string(), "rs".to_string()])));
+		assert!(segs.iter().any(
+			|s| matches!(s, FsSegment::Brace { items, exclusions } if items == &vec!["ts".to_string(), "rs".to_string()] && exclusions.is_empty())
+		));
 	}
 
 	#[test]
@@ -712,7 +741,11 @@ mod tests {
 	#[test]
 	fn glob_charclass() {
 		let segs = fs_segs("src/[abc]");
-		assert!(segs.iter().any(|s| matches!(s, FsSegment::CharClass(c) if c == &vec!['a', 'b', 'c'])));
+		assert!(
+			segs
+				.iter()
+				.any(|s| matches!(s, FsSegment::CharClass(c) if c == &vec!['a', 'b', 'c']))
+		);
 	}
 
 	#[test]
@@ -846,49 +879,63 @@ mod tests {
 	fn predicate_compare_count_gte() {
 		let cp = parse_code_path("src/foo.ts::Foo[count>=5]", &DotLexer).unwrap();
 		let q = cp.query.unwrap();
-		assert!(matches!(&q.head.predicates[0], Predicate::Compare { name, op, value } if name == "count" && matches!(op, CompareOp::Gte) && value == "5"));
+		assert!(
+			matches!(&q.head.predicates[0], Predicate::Compare { name, op, value } if name == "count" && matches!(op, CompareOp::Gte) && value == "5")
+		);
 	}
 
 	#[test]
 	fn predicate_compare_neq() {
 		let cp = parse_code_path("src/foo.ts::Foo[depth!=3]", &DotLexer).unwrap();
 		let q = cp.query.unwrap();
-		assert!(matches!(&q.head.predicates[0], Predicate::Compare { name, op, .. } if name == "depth" && matches!(op, CompareOp::Neq)));
+		assert!(
+			matches!(&q.head.predicates[0], Predicate::Compare { name, op, .. } if name == "depth" && matches!(op, CompareOp::Neq))
+		);
 	}
 
 	#[test]
 	fn predicate_attribute_ext() {
 		let cp = parse_code_path("src/foo.ts::Foo[ext=ts]", &DotLexer).unwrap();
 		let q = cp.query.unwrap();
-		assert!(matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "ext" && value == "ts"));
+		assert!(
+			matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "ext" && value == "ts")
+		);
 	}
 
 	#[test]
 	fn predicate_attribute_lang() {
 		let cp = parse_code_path("src/foo.ts::Foo[lang=rust]", &DotLexer).unwrap();
 		let q = cp.query.unwrap();
-		assert!(matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "lang" && value == "rust"));
+		assert!(
+			matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "lang" && value == "rust")
+		);
 	}
 
 	#[test]
 	fn predicate_attribute_name_quoted() {
 		let cp = parse_code_path(r#"src/foo.ts::Foo[name="*.test.ts"]"#, &DotLexer).unwrap();
 		let q = cp.query.unwrap();
-		assert!(matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "name" && value == "*.test.ts"));
+		assert!(
+			matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "name" && value == "*.test.ts")
+		);
 	}
 
 	#[test]
 	fn predicate_attribute_starts_with() {
 		let cp = parse_code_path(r#"src/foo.ts::§line[startsWith="//"]"#, &DotLexer).unwrap();
 		let q = cp.query.unwrap();
-		assert!(matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "startsWith" && value == "//"));
+		assert!(
+			matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "startsWith" && value == "//")
+		);
 	}
 
 	#[test]
 	fn predicate_attribute_ends_with() {
 		let cp = parse_code_path(r#"src/foo.ts::§line[endsWith="\\"]"#, &DotLexer).unwrap();
 		let q = cp.query.unwrap();
-		assert!(matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "endsWith" && value == "\\"));
+		assert!(
+			matches!(&q.head.predicates[0], Predicate::Attribute { name, value } if name == "endsWith" && value == "\\")
+		);
 	}
 
 	#[test]
@@ -1007,7 +1054,10 @@ mod tests {
 	fn range_negative_both() {
 		let cp = parse_code_path("src/foo.ts::§line[-5..-1]", &DotLexer).unwrap();
 		let q = cp.query.unwrap();
-		assert!(matches!(&q.head.predicates[0], Predicate::Range { start: Some(-5), end: Some(-1) }));
+		assert!(matches!(&q.head.predicates[0], Predicate::Range {
+			start: Some(-5),
+			end:   Some(-1),
+		}));
 	}
 
 	#[test]
@@ -1069,5 +1119,4 @@ mod tests {
 	fn neg_bad_attribute_no_value() {
 		assert!(parse_code_path("src/foo.ts::Foo[ext=]", &DotLexer).is_err());
 	}
-
 }

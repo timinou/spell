@@ -127,6 +127,40 @@ mod tests {
 	use crate::ast::{FsLocator, FsSegment};
 
 	#[test]
+	fn glob_with_exclusion_excludes_d_ts() {
+		let temp = tempfile::tempdir().unwrap();
+		fs::write(temp.path().join("foo.ts"), "").unwrap();
+		fs::write(temp.path().join("foo.d.ts"), "").unwrap();
+
+		let cp = CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![
+					FsSegment::Star,
+					FsSegment::Literal(".".to_string()),
+					FsSegment::Brace { items: vec!["ts".to_string()], exclusions: vec!["d.ts".to_string()] },
+				],
+			}),
+			query:     None,
+			qualifier: None,
+		};
+		let resolver = FsResolver::new(temp.path().to_path_buf());
+		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
+
+		let names: Vec<_> = nodes
+			.iter()
+			.map(|n| {
+				std::path::Path::new(&n.locator)
+					.file_name()
+					.unwrap()
+					.to_string_lossy()
+					.to_string()
+			})
+			.collect();
+		assert!(names.contains(&"foo.ts".to_string()));
+		assert!(!names.contains(&"foo.d.ts".to_string()));
+	}
+
+	#[test]
 	fn resolver_ambiguous_suffix_emits_not_found_node_with_diagnostic() {
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();

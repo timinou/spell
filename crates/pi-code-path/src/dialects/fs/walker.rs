@@ -1,12 +1,16 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::{
+	collections::HashMap,
+	path::{Path, PathBuf},
+};
 
 use ignore::WalkBuilder;
 
-use crate::ast::{FsLocator, FsSegment};
-use crate::parser;
-use crate::resolver::traits::CancellationToken;
-use crate::types::{Diagnostic, DiagnosticVariant, NodeRef};
+use crate::{
+	ast::{FsLocator, FsSegment},
+	parser,
+	resolver::traits::CancellationToken,
+	types::{Diagnostic, DiagnosticVariant, NodeRef},
+};
 
 /// Options controlling filesystem walk behaviour.
 #[derive(Debug, Clone)]
@@ -18,11 +22,7 @@ pub struct WalkOpts {
 
 impl Default for WalkOpts {
 	fn default() -> Self {
-		WalkOpts {
-			hidden:    true,
-			gitignore: true,
-			root:      PathBuf::new(),
-		}
+		WalkOpts { hidden: true, gitignore: true, root: PathBuf::new() }
 	}
 }
 
@@ -40,7 +40,8 @@ pub fn walk(
 	let mut builder = WalkBuilder::new(&opts.root);
 	builder.hidden(!opts.hidden);
 	builder.git_ignore(opts.gitignore);
-	// Honour `.gitignore` even outside a git repo (e.g. tempdir tests, project subtrees).
+	// Honour `.gitignore` even outside a git repo (e.g. tempdir tests, project
+	// subtrees).
 	if opts.gitignore {
 		builder.add_custom_ignore_filename(".gitignore");
 	}
@@ -77,20 +78,20 @@ pub fn walk(
 					_ => {
 						let sz = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 						("§file".to_string(), sz)
-					}
+					},
 				};
 
 				let range = 0..size as usize;
 
 				results.push(Ok(NodeRef {
-					locator:     rel_str,
+					locator: rel_str,
 					range,
 					kind,
-					content:     None,
-					metadata:    HashMap::new(),
+					content: None,
+					metadata: HashMap::new(),
 					diagnostics: Vec::new(),
 				}));
-			}
+			},
 			Err(err) => {
 				// `ignore::Error` doesn't expose the path uniformly across variants;
 				// stringify the error which already includes path context.
@@ -109,7 +110,7 @@ pub fn walk(
 					message: msg,
 					span:    None,
 				}));
-			}
+			},
 		}
 	}
 
@@ -124,7 +125,7 @@ fn build_globset(pattern: &str) -> Option<globset::GlobSet> {
 	match globset::Glob::new(pattern) {
 		Ok(glob) => {
 			builder.add(glob);
-		}
+		},
 		Err(_) => return None,
 	}
 	builder.build().ok()
@@ -158,7 +159,7 @@ fn fs_locator_to_glob(loc: &FsLocator) -> String {
 						}
 					}
 				}
-			}
+			},
 			FsSegment::Star => out.push('*'),
 			FsSegment::DoubleStar => out.push_str("**"),
 			FsSegment::Question => out.push('?'),
@@ -168,12 +169,12 @@ fn fs_locator_to_glob(loc: &FsLocator) -> String {
 					out.push(*c);
 				}
 				out.push(']');
-			}
-			FsSegment::Brace(items) => {
+			},
+			FsSegment::Brace { items, exclusions: _ } => {
 				out.push('{');
 				out.push_str(&items.join(","));
 				out.push('}');
-			}
+			},
 		}
 	}
 	out
@@ -181,8 +182,9 @@ fn fs_locator_to_glob(loc: &FsLocator) -> String {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use std::fs;
+
+	use super::*;
 
 	fn make_walker_root() -> (tempfile::TempDir, PathBuf) {
 		let dir = tempfile::tempdir().unwrap();
@@ -198,14 +200,8 @@ mod tests {
 	#[test]
 	fn walk_all_files() {
 		let (_dir, root) = make_walker_root();
-		let loc = FsLocator {
-			segments: vec![FsSegment::Literal("**".to_string())],
-		};
-		let opts = WalkOpts {
-			hidden:    true,
-			gitignore: true,
-			root,
-		};
+		let loc = FsLocator { segments: vec![FsSegment::Literal("**".to_string())] };
+		let opts = WalkOpts { hidden: true, gitignore: true, root };
 		let results = walk(&loc, &opts, &CancellationToken::new());
 		let nodes: Vec<_> = results.into_iter().filter_map(|r| r.ok()).collect();
 		let locators: Vec<_> = nodes.iter().map(|n| n.locator.clone()).collect();
@@ -225,11 +221,7 @@ mod tests {
 				FsSegment::Literal(".rs".to_string()),
 			],
 		};
-		let opts = WalkOpts {
-			hidden:    true,
-			gitignore: true,
-			root,
-		};
+		let opts = WalkOpts { hidden: true, gitignore: true, root };
 		let results = walk(&loc, &opts, &CancellationToken::new());
 		let nodes: Vec<_> = results.into_iter().filter_map(|r| r.ok()).collect();
 		assert_eq!(nodes.len(), 2);
@@ -245,14 +237,8 @@ mod tests {
 		fs::write(root.join(".hidden/secret.rs"), "").unwrap();
 		fs::write(root.join("visible.rs"), "").unwrap();
 
-		let loc = FsLocator {
-			segments: vec![FsSegment::Literal("**".to_string())],
-		};
-		let opts = WalkOpts {
-			hidden:    false,
-			gitignore: true,
-			root:      root.clone(),
-		};
+		let loc = FsLocator { segments: vec![FsSegment::Literal("**".to_string())] };
+		let opts = WalkOpts { hidden: false, gitignore: true, root: root.clone() };
 		let results = walk(&loc, &opts, &CancellationToken::new());
 		let nodes: Vec<_> = results.into_iter().filter_map(|r| r.ok()).collect();
 		let locators: Vec<_> = nodes.iter().map(|n| n.locator.clone()).collect();
@@ -267,14 +253,8 @@ mod tests {
 		fs::create_dir(root.join(".hidden")).unwrap();
 		fs::write(root.join(".hidden/secret.rs"), "").unwrap();
 
-		let loc = FsLocator {
-			segments: vec![FsSegment::Literal("**".to_string())],
-		};
-		let opts = WalkOpts {
-			hidden:    true,
-			gitignore: true,
-			root:      root.clone(),
-		};
+		let loc = FsLocator { segments: vec![FsSegment::Literal("**".to_string())] };
+		let opts = WalkOpts { hidden: true, gitignore: true, root: root.clone() };
 		let results = walk(&loc, &opts, &CancellationToken::new());
 		let nodes: Vec<_> = results.into_iter().filter_map(|r| r.ok()).collect();
 		let locators: Vec<_> = nodes.iter().map(|n| n.locator.clone()).collect();
@@ -289,14 +269,8 @@ mod tests {
 		fs::write(root.join("kept.rs"), "").unwrap();
 		fs::write(root.join("ignored.rs"), "").unwrap();
 
-		let loc = FsLocator {
-			segments: vec![FsSegment::Literal("*.rs".to_string())],
-		};
-		let opts = WalkOpts {
-			hidden:    true,
-			gitignore: true,
-			root:      root.clone(),
-		};
+		let loc = FsLocator { segments: vec![FsSegment::Literal("*.rs".to_string())] };
+		let opts = WalkOpts { hidden: true, gitignore: true, root: root.clone() };
 		let results = walk(&loc, &opts, &CancellationToken::new());
 		let nodes: Vec<_> = results.into_iter().filter_map(|r| r.ok()).collect();
 		assert_eq!(nodes.len(), 1);
@@ -311,15 +285,9 @@ mod tests {
 			fs::write(root.join(format!("f{i}.txt")), "x").unwrap();
 		}
 
-		let loc = FsLocator {
-			segments: vec![FsSegment::Literal("*.txt".to_string())],
-		};
+		let loc = FsLocator { segments: vec![FsSegment::Literal("*.txt".to_string())] };
 		let cancel = CancellationToken::new();
-		let opts = WalkOpts {
-			hidden:    true,
-			gitignore: true,
-			root:      root.clone(),
-		};
+		let opts = WalkOpts { hidden: true, gitignore: true, root: root.clone() };
 
 		// Cancel immediately
 		cancel.cancel();

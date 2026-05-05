@@ -60,9 +60,11 @@ fn render_fs_segment(out: &mut String, seg: &FsSegment) {
 			}
 			out.push(']');
 		},
-		FsSegment::Brace(items) => {
+		FsSegment::Brace { items, exclusions } => {
 			out.push('{');
-			out.push_str(&items.join(","));
+			let mut all = items.clone();
+			all.extend(exclusions.iter().map(|e| format!("!{}", e)));
+			out.push_str(&all.join(","));
 			out.push('}');
 		},
 	}

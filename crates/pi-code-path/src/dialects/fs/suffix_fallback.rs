@@ -88,9 +88,11 @@ pub(crate) fn fs_locator_to_string(loc: &FsLocator) -> String {
 				}
 				out.push(']');
 			},
-			FsSegment::Brace(items) => {
+			FsSegment::Brace { items, exclusions } => {
 				out.push('{');
-				out.push_str(&items.join(","));
+				let mut all = items.clone();
+				all.extend(exclusions.iter().map(|e| format!("!{}", e)));
+				out.push_str(&all.join(","));
 				out.push('}');
 			},
 		}
