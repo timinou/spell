@@ -1,0 +1,121 @@
+#+TITLE: get tool: CWD context missing from path-not-found diagnostics
+#+STATE: ITEM
+#+SESSION_ID: 14d5505d7e65f2fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T12-10-38-969Z_14d5505d7e65f2fa.jsonl]]
+#+CUSTOM_ID: BUG-345-get-tool-cwd-context-missing-from-path-n
+#+LAYER: core
+
+* Intention & Purpose
+
+When `get` returns "Did you mean: lib/agentmaker/admin/workbench" for a target like `apps/agentmaker/lib/agentmaker/admin/workbench`, the agent doesn't understand that the session CWD is `apps/agentmaker` — so it repeats the same wrong path prefix across multiple calls. Add CWD context to the diagnostic so the agent can correct its paths.
+
+Evidence: session `14d54f5d0e274ba8` lines 7-11 — agent made 4 consecutive `get` calls with `apps/agentmaker/...` prefix, each returning `[§not-found]` with suggestions that dropped the prefix. Agent never realized it should use paths relative to CWD.
+
+* Context & Narrative
+
+The suffix fallback in `FsResolver` strips the `apps/agentmaker/` prefix when generating "Did you mean" suggestions because it resolves paths relative to the workspace root. The suggestions are correct relative paths — but the agent doesn't know the workspace root or session CWD.
+
+Fix: include the session CWD in the suggestion text, e.g.:
+```
+Did you mean: lib/agentmaker/admin/workbench, lib/agentmaker_web/components/workbench
+Note: session CWD is apps/agentmaker — try paths relative to CWD
+```
+
+Or, shorter: annotate each suggestion with the CWD note.
+
+* Scope
+
+In scope:
+- Thread session CWD from NAPI layer into `ZeroMatches` suggestion text
+- Add CWD note to "Did you mean" output in `formatForTool`
+- CWD sourced from `FetchOpts` which already carries `cwd: Option<PathBuf>`
+
+Out of scope:
+- Auto-resolving paths relative to CWD (behavior change, not just diagnostic)
+- Changing the suffix fallback algorithm
+- Showing workspace root (less useful than CWD)
+
+* Existing Patterns
+
+`FetchOpts` in `napi.rs` already carries `cwd`:
+```rust
+pub struct FetchOpts {
+    pub cwd: Option<PathBuf>,
+    pub kind: Option<String>,
+    // ...
+}
+```
+
+`FsResolver::resolve()` receives `fetch_opts: &FetchOpts` — can extract `cwd` from it.
+
+Current suffix_fallback signature in `fs/suffix_fallback.rs`:
+```rust
+pub fn suffix_fallback(
+    locator: &FsLocator,
+    workspace_root: &Path,
+    fetch_opts: &FetchOpts,
+) -> Option<String>
+```
+
+Current "Did you mean" rendering in `get.ts` ~line 60:
+```typescript
+return `Did you mean: ${candidates.join(", ")}`;
+```
+
+* Tests
+
+File: `crates/pi-code-path/src/dialects/fs/mod.rs` tests
+
+Scenario 1: CWD context appears in suggestion when CWD is set
+- Create temp dir at `/tmp/test-cwd/apps/agentmaker/lib/foo/`
+- Set workspace_root to `/tmp/test-cwd`
+- Set fetch_opts.cwd to `Some("/tmp/test-cwd/apps/agentmaker")`
+- Resolve `apps/agentmaker/lib/foo/nonexistent` (fails because double-prefix)
+- Assert: suggestion text includes CWD note — e.g., contains "apps/agentmaker"
+
+Scenario 2: No CWD note when CWD equals workspace root
+- Set fetch_opts.cwd to workspace_root
+- Assert: suggestion does NOT include CWD note (redundant)
+
+Scenario 3: No CWD note when CWD is unset
+- Set fetch_opts.cwd to None
+- Assert: suggestion does NOT crash, renders without CWD note
+
+File: `packages/coding-agent/test/get.test.ts`
+
+Scenario 4: formatForTool renders CWD context
+- Mock "Did you mean" suggestion containing CWD note
+- Assert: output includes the CWD context text
+
+* Implementation
+** ITEM Thread CWD into suffix fallback suggestion
+:PROPERTIES:
+:CUSTOM_ID: BUG-345-get-tool-cwd-context-missing-from-path-n::thread-cwd-into-suggestion
+:END:
+- File: crates/pi-code-path/src/dialects/fs/mod.rs ~line 60-95
+- Change: After suffix_fallback returns suggestion, append CWD note when CWD differs from workspace root
+- Add unit tests: CWD note present when CWD != root, absent when CWD == root, absent when CWD unset
+- See BUG-345 body Implementation Step 1 for exact code
+
+** ITEM Verify CWD is populated in FetchOpts from NAPI layer
+:PROPERTIES:
+:CUSTOM_ID: BUG-345-get-tool-cwd-context-missing-from-path-n::verify-cwd-in-fetchopts
+:END:
+- File: crates/pi-natives/src/code_path/napi.rs
+- Change: Verify `execute_code_path_inner` passes session CWD into `FetchOpts.cwd`. If not, add it.
+- File: packages/coding-agent/src/tools/codepath-result.ts
+- Change: Verify `fromExecuteCodePath` forwards CWD to native call. If not, add `cwd: process.cwd()` or from context.
+- Check: `cargo test -p pi-natives` green
+* Edge Cases
+
+- CWD equals workspace root: suppress CWD note (redundant)
+- CWD is None: no CWD note (backward compat)
+- Very long CWD: display un-truncated (diagnostic has no practical length limit)
+- CWD contains special characters: no escaping needed
+
+* Acceptance Criteria
+
+- `get` on path with wrong CWD prefix returns "Did you mean: ..." with CWD note
+- `get` on path when CWD equals workspace root: no CWD note (regression check)
+- `cargo test -p pi-code-path` green
+- Manual: agent session with non-root CWD sees CWD hint in diagnostics
