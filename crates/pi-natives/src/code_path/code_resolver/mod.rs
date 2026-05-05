@@ -9,6 +9,8 @@ mod go_qualifier_tests;
 #[cfg(test)]
 mod hs_qualifier_tests;
 #[cfg(test)]
+mod html_qualifier_tests;
+#[cfg(test)]
 mod py_qualifier_tests;
 #[cfg(test)]
 mod qualifier_tests;
