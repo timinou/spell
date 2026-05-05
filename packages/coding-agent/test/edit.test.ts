@@ -436,3 +436,106 @@ describe("BUG-341 zero-byte guard and routing", () => {
 		expect(getText(result)).toContain("changed since last read");
 	});
 });
+
+describe("BUG-342 batch fail-fast + transaction:strict", () => {
+	beforeEach(async () => {
+		try {
+			await fs.mkdir(tmpDir, { recursive: true });
+		} catch {}
+	});
+	afterEach(async () => {
+		try {
+			await fs.rm(tmpDir, { recursive: true, force: true });
+		} catch {}
+	});
+
+	test("failed batch propagates isError=true", async () => {
+		const file = path.join(tmpDir, "f.ts");
+		await writeFile(file, "const a = 1;\n");
+		const result = await edit({
+			operations: [{ target: file, action: { kind: "findAndReplace", find: "NOTPRESENT", content: "X" } }],
+		});
+		expect((result as { isError?: boolean }).isError).toBe(true);
+	});
+
+	test("batch with mid-failure short-circuits subsequent ops (best-effort default)", async () => {
+		const a = path.join(tmpDir, "a.ts");
+		const b = path.join(tmpDir, "b.ts");
+		const c = path.join(tmpDir, "c.ts");
+		await writeFile(a, "const alpha = 1;\n");
+		await writeFile(b, "const beta = 2;\n");
+		await writeFile(c, "const gamma = 3;\n");
+		const result = await edit({
+			operations: [
+				{ target: a, action: { kind: "findAndReplace", find: "alpha", content: "A1" } },
+				{ target: b, action: { kind: "findAndReplace", find: "NOPE", content: "X" } },
+				{ target: c, action: { kind: "findAndReplace", find: "gamma", content: "G3" } },
+			],
+		});
+		expect((result as { isError?: boolean }).isError).toBe(true);
+		// op 1 applied (best-effort); op 3 skipped
+		expect(await fs.readFile(a, "utf8")).toBe("const A1 = 1;\n");
+		expect(await fs.readFile(c, "utf8")).toBe("const gamma = 3;\n");
+		expect(getText(result)).toMatch(/operation 2.*failed/i);
+		expect(getText(result)).toMatch(/operation 3.*skipped/i);
+	});
+
+	test("batch with transaction:strict rolls back on failure", async () => {
+		const a = path.join(tmpDir, "a.ts");
+		const b = path.join(tmpDir, "b.ts");
+		await writeFile(a, "const alpha = 1;\n");
+		await writeFile(b, "const beta = 2;\n");
+		const result = await edit({
+			transaction: "strict",
+			operations: [
+				{ target: a, action: { kind: "findAndReplace", find: "alpha", content: "A1" } },
+				{ target: b, action: { kind: "findAndReplace", find: "NOPE", content: "X" } },
+			],
+		} as any);
+		expect((result as { isError?: boolean }).isError).toBe(true);
+		// BOTH files restored
+		expect(await fs.readFile(a, "utf8")).toBe("const alpha = 1;\n");
+		expect(await fs.readFile(b, "utf8")).toBe("const beta = 2;\n");
+	});
+
+	test("batch transaction:strict unlinks file that didn't exist before", async () => {
+		const created = path.join(tmpDir, `new-${Date.now()}.ts`);
+		const existing = path.join(tmpDir, "existing.ts");
+		await writeFile(existing, "const x = 1;\n");
+		const result = await edit({
+			transaction: "strict",
+			operations: [
+				{ target: created, action: { kind: "create", content: "const fresh = 1;\n" } },
+				{ target: existing, action: { kind: "findAndReplace", find: "NOPE", content: "X" } },
+			],
+		} as any);
+		expect((result as { isError?: boolean }).isError).toBe(true);
+		expect(await fs.exists(created)).toBe(false);
+		expect(await fs.readFile(existing, "utf8")).toBe("const x = 1;\n");
+	});
+
+	test("successful batch returns operations: N in details with isError unset", async () => {
+		const a = path.join(tmpDir, "a.ts");
+		const b = path.join(tmpDir, "b.ts");
+		await writeFile(a, "const a = 1;\n");
+		await writeFile(b, "const b = 2;\n");
+		const result = await edit({
+			operations: [
+				{ target: a, action: { kind: "findAndReplace", find: "a = 1", content: "a = 11" } },
+				{ target: b, action: { kind: "findAndReplace", find: "b = 2", content: "b = 22" } },
+			],
+		});
+		expect((result as { isError?: boolean }).isError).toBeFalsy();
+		expect((result.details as { operations?: number } | undefined)?.operations).toBe(2);
+	});
+
+	test("single-op failure returns the per-op result unchanged (regression)", async () => {
+		const a = path.join(tmpDir, "a.ts");
+		await writeFile(a, "const a = 1;\n");
+		const result = await edit({
+			operations: [{ target: a, action: { kind: "findAndReplace", find: "NOPE", content: "X" } }],
+		});
+		// Single-op behavior: per-op result returned directly. Aggregate envelope is for multi-op only.
+		expect(result.details).toBeDefined();
+	});
+});
