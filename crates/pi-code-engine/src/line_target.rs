@@ -29,7 +29,7 @@ pub fn resolve_line_target(
 	let line_idx = (line - 1) as usize;
 	let line_start = rope.line_to_byte_idx(line_idx, LineType::LF_CR);
 	let byte = line_start + target_column_offset(buffer, line_idx, column);
-	ensure_within_target_scope(line as usize, byte, within)?;
+	ensure_within_target_scope(buffer, line as usize, byte, within)?;
 	let raw = raw_node_at_byte(buffer, byte, within)?;
 	Ok(LineTarget { raw, editable_scope: editable_scope_for_node(raw, within) })
 }
@@ -48,7 +48,8 @@ pub fn resolve_edit_target<'a>(
 		.ok_or_else(|| CodeEngineError::Edit(format!("No node found at line {line}")))
 }
 
-const fn ensure_within_target_scope(
+fn ensure_within_target_scope(
+	buffer: &CodeBuffer,
 	line: usize,
 	byte: usize,
 	within: Option<TargetSpan>,
@@ -58,7 +59,20 @@ const fn ensure_within_target_scope(
 	};
 	let upper = target_end.saturating_sub(1);
 	if byte < target_start || byte > upper {
-		return Err(CodeEngineError::LineOutOfTargetScope { line, target_start, target_end });
+		// FEAT-706: include the symbol's line range and a remediation
+		// hint in the error so the agent can self-correct.
+		let rope = buffer.rope();
+		let total_bytes = buffer.source().len();
+		let target_line_start = rope.byte_to_line_idx(target_start.min(total_bytes), LineType::LF_CR) + 1;
+		let end_clamped = target_end.saturating_sub(1).min(total_bytes.saturating_sub(1).max(0));
+		let target_line_end = rope.byte_to_line_idx(end_clamped, LineType::LF_CR) + 1;
+		return Err(CodeEngineError::LineOutOfTargetScope {
+			line,
+			target_start,
+			target_end,
+			target_line_start,
+			target_line_end,
+		});
 	}
 	Ok(())
 }
@@ -274,5 +288,50 @@ mod tests {
 		let target = resolve_edit_target(&buffer, 3, "atom", Some((foo_start, foo_end)))
 			.expect("resolve inside foo span");
 		assert_eq!(target.kind(), "atom");
+	}
+}
+
+#[cfg(test)]
+mod feat_706_tests {
+	use super::*;
+	use crate::language::{LanguageId, LanguageRegistry};
+	use std::sync::Arc;
+
+	fn ts_buffer(source: &str) -> CodeBuffer {
+		let registry = Arc::new(LanguageRegistry::with_builtins().expect("registry"));
+		CodeBuffer::from_str(source, LanguageId::new("typescript"), registry).expect("buffer")
+	}
+
+	#[test]
+	fn out_of_scope_error_includes_target_line_range() {
+		let source = "// 1\n// 2\nfunction foo() {\n  return 1;\n}\n// 6\n";
+		let buffer = ts_buffer(source);
+		let span_start = source.find("function").unwrap();
+		let span_end = source.find("}\n// 6").unwrap() + 1;
+		let err = ensure_within_target_scope(&buffer, 1, 0, Some((span_start, span_end))).unwrap_err();
+		let msg = err.to_string();
+		assert!(msg.contains("symbol span"), "expected 'symbol span' phrase: {msg}");
+		assert!(msg.contains("lines 3..5") || msg.contains("3..5"), "msg: {msg}");
+	}
+
+	#[test]
+	fn out_of_scope_error_includes_suggestion() {
+		let source = "// 1\nfunction bar() {\n  return 2;\n}\n";
+		let buffer = ts_buffer(source);
+		let span_start = source.find("function").unwrap();
+		let span_end = source.find("}\n").unwrap() + 1;
+		let err = ensure_within_target_scope(&buffer, 1, 0, Some((span_start, span_end))).unwrap_err();
+		let msg = err.to_string();
+		assert!(msg.contains("file-level target") || msg.contains("LINE#ID"),
+			"expected remediation hint: {msg}");
+	}
+
+	#[test]
+	fn in_scope_passes() {
+		let source = "function foo() {\n  return 1;\n}\n";
+		let buffer = ts_buffer(source);
+		let span_start = 0;
+		let span_end = source.len();
+		assert!(ensure_within_target_scope(&buffer, 2, 17, Some((span_start, span_end))).is_ok());
 	}
 }

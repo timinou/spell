@@ -158,11 +158,18 @@ fn engine_err(error: pi_code_engine::error::CodeEngineError) -> Error {
 			"original": original,
 			"new": new,
 		}),
-		CodeEngineError::LineOutOfTargetScope { line, target_start, target_end } => json!({
+		CodeEngineError::LineOutOfTargetScope {
+			line,
+			target_start,
+			target_end,
+			target_line_start,
+			target_line_end,
+		} => json!({
 			"code": "LINE_OUT_OF_TARGET_SCOPE",
 			"message": error.to_string(),
 			"line": line,
 			"targetSpan": { "start": target_start, "end": target_end },
+			"targetLineSpan": { "start": target_line_start, "end": target_line_end },
 		}),
 		CodeEngineError::LockTimeout { path, budget_ms } => json!({
 			"code": "LOCK_TIMEOUT",

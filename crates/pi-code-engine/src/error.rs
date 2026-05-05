@@ -40,10 +40,17 @@ pub enum CodeEngineError {
 		new:        usize,
 	},
 	#[error(
-		"line {line} is outside the target declaration span ({target_start}..{target_end}); \
-		 positional actions under a declaration targetId must anchor a line inside that declaration"
+		"line {line} is outside symbol span (lines {target_line_start}..{target_line_end}, bytes \
+		 {target_start}..{target_end}). Use a file-level target with absolute line, or \
+		 pos:'<line>#<id>' anchor for line-id stability."
 	)]
-	LineOutOfTargetScope { line: usize, target_start: usize, target_end: usize },
+	LineOutOfTargetScope {
+		line:              usize,
+		target_start:      usize,
+		target_end:        usize,
+		target_line_start: usize,
+		target_line_end:   usize,
+	},
 	#[error(
 		"timed out waiting {budget_ms}ms for advisory file lock on {}",
 		path.display()
