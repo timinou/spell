@@ -34,6 +34,7 @@ edit { operations: [{ target: "src/old.ts::legacyFn", action: { kind: "delete" }
 ```
 edit { operations: [{ target: "src/server.ts", action: { kind: "replace", pos: "42#AB", end: "45#CD", lines: ["const x = 1;"] } }] }
 edit { operations: [{ target: "config.txt", action: { kind: "append", pos: "10#XY", lines: ["new line"] } }] }
+edit { operations: [{ target: "src/server.ts", action: { kind: "insertBefore", pos: "5#QW", lines: ["// inserted\n"] } }] }
 ```
 
 **Patch mode:**
