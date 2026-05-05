@@ -47,7 +47,7 @@ Scenarios:
 - Add `target_line_start`, `target_line_end` to error variant
 - `ensure_within_target_scope` computes target_line range using byte→line conversion
 
-** ITEM Tests for actionable error message
+** DOING Tests for actionable error message
 :PROPERTIES:
 :CUSTOM_ID: FEAT-706-splice-positional-ops-with-symbol-target::tests
 :DEPENDS: FEAT-706-splice-positional-ops-with-symbol-target::error-shape

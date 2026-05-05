@@ -401,3 +401,86 @@ Each successful outcome is marshalled into a `NodeRefDto` with:
 
 - `command: "get"` (or any value other than `"edit"`) continues to use the existing query resolver tree documented in §9.
 - `command: "manage"` is reserved and also falls through to the query tree in this release.
+## 11 · LINE#ID anchor format (FEAT-705)
+
+`§line` axes emit deterministic anchor IDs alongside line numbers:
+
+```
+src/foo.ts::<line 5#QW>
+```
+
+The two-character ID is a base32 encoding of the low 10 bits of an FNV-1a
+hash over the line content (with trailing `\n` and `\r` stripped). The
+alphabet is Crockford-style — visually ambiguous characters (`I`, `L`,
+`O`, `0`, `1`) are excluded.
+
+Edit actions accept the same shape as `pos`/`end` anchors:
+
+```ts
+{ kind: "splice", pos: "5#QW", lines: ["new line 5"] }
+```
+
+When the ID component is present, the resolver re-hashes the current
+line and rejects with `AnchorMismatch` if it doesn't match. A bare `pos:
+"5"` (no `#ID`) skips the validation for backwards compatibility.
+
+Anchor stability: identifiers are deterministic per (line content). Edits
+that don't touch a given line preserve its anchor. Edits that change the
+line content invalidate the anchor — the agent re-reads the file to pick
+up the new ID.
+
+## 12 · Symbol-target Delete safety (FEAT-689)
+
+The dispatcher routing predicate consults the full CodePath, not just
+the action kind, before selecting a `MutationResolver`:
+
+| CodePath shape | Action | Resolver |
+|---|---|---|
+| `path` | Delete | FsResolver — removes the file |
+| `path::Symbol` | Delete | CodeResolver — removes the symbol body |
+| `path#stat` | Delete | rejected (no resolver claims stat-target Delete) |
+| `path` | Create / Write | FsResolver |
+| `path::Symbol` | any code action | CodeResolver |
+| `path#raw` (and other text qualifiers) | Read | TextResolver |
+
+A Delete that lands at the dispatcher with a symbol target but no
+CodeResolver claim emits the `SymbolDeleteWithoutResolver` diagnostic
+listing the rendered path so the agent can self-correct.
+
+## 13 · Positional ops within symbol targets (FEAT-706)
+
+Line numbers in `splice`/`insertBefore`/`insertAfter`/`replace` are
+ABSOLUTE. When the target is a symbol declaration, the resolver
+enforces "the line MUST fall within the declaration span". On
+violation the diagnostic includes the symbol's line range and a
+remediation hint:
+
+```
+line 99 is outside symbol span (lines 12..18, bytes 240..513). Use a
+file-level target with absolute line, or pos:'<line>#<id>' anchor for
+line-id stability.
+```
+
+Relative-line semantics were rejected because (a) absolute composes
+uniformly with LINE#ID anchors, (b) `get` output prints absolute line
+numbers, and (c) hybrid semantics would surprise callers.
+
+## 14 · Edit transaction modes (FEAT-712)
+
+`CodePathOptions.transaction` selects the atomicity mode of a multi-op
+edit chain:
+
+- `"best-effort"` (default): apply ops sequentially, abort on first
+  failure, keep prior writes on disk. Pre-FEAT-712 behaviour.
+- `"strict"`: snapshot every target file before the loop. On any
+  failure, restore the snapshots before returning the diagnostic.
+  Diagnostic message includes "(rolled back N file(s))".
+
+What's NOT atomic under strict:
+- In-memory managed-buffer state (the legacy `code_buffer` undo stack
+  remains separate).
+- Cross-process / cross-host coordination.
+- File-modification timestamps after restore (best-effort `write`).
+
+Recommended for create-chains and rename-cascades where partial
+application leaves the workspace in a worse state than before.

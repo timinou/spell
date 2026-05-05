@@ -44,8 +44,25 @@ impl NameLexer for PyNameLexer {
 		}
 	}
 
-	fn matches(&self, _n: &NamePayload, _node: Node<'_>, _src: &str) -> bool {
-		// Tree-sitter integration deferred to NAPI layer.
+	fn matches(&self, n: &NamePayload, node: Node<'_>, src: &str) -> bool {
+		// FEAT-708: extract the declared name from common Python
+		// declaration kinds and compare to the requested name.
+		let target = match n {
+			NamePayload::Raw(s) => s.as_str(),
+		};
+		let leaf = target.rsplit('.').next().unwrap_or(target);
+		if matches!(
+			node.kind(),
+			"function_definition"
+				| "class_definition"
+				| "decorated_definition"
+		) {
+			if let Some(name_child) = node.child_by_field_name("name")
+				&& let Some(text) = src.get(name_child.start_byte()..name_child.end_byte())
+			{
+				return text == leaf;
+			}
+		}
 		false
 	}
 }
