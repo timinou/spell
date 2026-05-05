@@ -47,6 +47,7 @@ pub fn walk(
 	}
 
 	let globset = build_globset(&pattern);
+	let negative_globsets = build_negative_globsets(loc);
 
 	let mut results = Vec::new();
 	let mut count = 0;
@@ -70,6 +71,9 @@ pub fn walk(
 					if !gs.is_match(rel) {
 						continue;
 					}
+				}
+				if negative_globsets.iter().any(|ngs| ngs.is_match(rel)) {
+					continue;
 				}
 
 				let (kind, size) = match ent.file_type() {
@@ -130,7 +134,70 @@ fn build_globset(pattern: &str) -> Option<globset::GlobSet> {
 	}
 	builder.build().ok()
 }
+fn build_negative_globsets(loc: &FsLocator) -> Vec<globset::GlobSet> {
+	let segments = if loc.segments.len() == 1 {
+		if let FsSegment::Literal(raw) = &loc.segments[0] {
+			parser::tokenise_fs_path(raw).unwrap_or_else(|_| loc.segments.clone())
+		} else {
+			loc.segments.clone()
+		}
+	} else {
+		loc.segments.clone()
+	};
 
+	let mut result = Vec::new();
+	for (i, seg) in segments.iter().enumerate() {
+		if let FsSegment::Brace { items: _, exclusions } = seg {
+			for excl in exclusions {
+				let mut pattern = String::new();
+				for (j, s) in segments.iter().enumerate() {
+					match s {
+						FsSegment::Literal(s) => {
+							if s == "/" {
+								pattern.push('/');
+							} else {
+								for c in s.chars() {
+									if matches!(c, '*' | '?' | '[' | ']' | '{' | '}') {
+										pattern.push('[');
+										pattern.push(c);
+										pattern.push(']');
+									} else {
+										pattern.push(c);
+									}
+								}
+							}
+						},
+						FsSegment::Star => pattern.push('*'),
+						FsSegment::DoubleStar => pattern.push_str("**"),
+						FsSegment::Question => pattern.push('?'),
+						FsSegment::CharClass(chars) => {
+							pattern.push('[');
+							for c in chars {
+								pattern.push(*c);
+							}
+							pattern.push(']');
+						},
+						FsSegment::Brace { items, exclusions: _ } => {
+							if i == j {
+								pattern.push('{');
+								pattern.push_str(excl);
+								pattern.push('}');
+							} else {
+								pattern.push('{');
+								pattern.push_str(&items.join(","));
+								pattern.push('}');
+							}
+						},
+					}
+				}
+				if let Some(gs) = build_globset(&pattern) {
+					result.push(gs);
+				}
+			}
+		}
+	}
+	result
+}
 fn fs_locator_to_glob(loc: &FsLocator) -> String {
 	let segments = if loc.segments.len() == 1 {
 		if let FsSegment::Literal(raw) = &loc.segments[0] {

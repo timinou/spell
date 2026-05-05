@@ -13,11 +13,14 @@ pub mod edge_resolver;
 pub mod edit_history;
 pub mod extractors;
 pub mod image_pipeline;
+pub mod manage;
 pub mod marshal;
 pub mod napi;
 pub mod uri;
 
 #[cfg(test)]
 mod dispatch_tests;
+#[cfg(test)]
+mod manage_tests;
 #[cfg(test)]
 mod routing_tests;

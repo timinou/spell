@@ -1,5 +1,5 @@
 #+TITLE: Fix better-ccflare env var resolution picking up ANTHROPIC_API_KEY instead of OAuth passthrough
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d541d738757262
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T11-07-11-457Z_14d541d738757262.jsonl]]
 #+CUSTOM_ID: BUG-335-fix-better-ccflare-env-var-resolution-pi

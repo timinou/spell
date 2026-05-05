@@ -312,6 +312,7 @@ fn tokenise_segment(seg: &str) -> Result<Vec<FsSegment>, ()> {
 			'{' => {
 				flush_lit(&mut buf, &mut out);
 				let mut items: Vec<String> = Vec::new();
+				let mut exclusions: Vec<String> = Vec::new();
 				let mut cur = String::new();
 				let mut closed = false;
 				for cc in chars.by_ref() {
@@ -320,7 +321,14 @@ fn tokenise_segment(seg: &str) -> Result<Vec<FsSegment>, ()> {
 						break;
 					}
 					if cc == ',' {
-						items.push(std::mem::take(&mut cur));
+						if cur.starts_with('!') {
+							if cur.len() > 1 {
+								exclusions.push(cur[1..].to_string());
+							}
+						} else {
+							items.push(std::mem::take(&mut cur));
+						}
+						cur.clear();
 					} else {
 						cur.push(cc);
 					}
@@ -328,8 +336,19 @@ fn tokenise_segment(seg: &str) -> Result<Vec<FsSegment>, ()> {
 				if !closed {
 					return Err(());
 				}
-				items.push(cur);
-				out.push(FsSegment::Brace { items, exclusions: vec![] });
+				if !cur.is_empty() {
+					if cur.starts_with('!') {
+						if cur.len() > 1 {
+							exclusions.push(cur[1..].to_string());
+						}
+					} else {
+						items.push(cur);
+					}
+				}
+				if items.is_empty() {
+					return Err(());
+				}
+				out.push(FsSegment::Brace { items, exclusions });
 			},
 			other => buf.push(other),
 		}
