@@ -1,5 +1,5 @@
 #+TITLE: ARTIFACT_THRESHOLD — make 256 KiB content externalisation threshold configurable per-call (G10)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d40726c985291f
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
 #+CUSTOM_ID: FEAT-684-artifact-threshold-make-256-kib-content
