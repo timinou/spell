@@ -2012,12 +2012,16 @@ export class AuthStorage {
 		// don't fall back to env. The user explicitly logged in — they
 		// should re-login rather than silently using a stale .env key.
 		if (this.#providersWithOAuth.has(provider)) {
+			console.error(`[AUTH-TRACE] OAuth guard blocked env fallback for "${provider}"`);
 			return undefined;
 		}
 
 		// Fall back to environment variable
 		const envKey = getEnvApiKey(provider);
-		if (envKey) return envKey;
+		if (envKey) {
+			console.error(`[AUTH-TRACE] env var resolved key for "${provider}" (key prefix: ${envKey.substring(0, 10)}...)`);
+			return envKey;
+		}
 
 		// Fall back to custom resolver (e.g., models.json custom providers)
 		return this.#fallbackResolver?.(provider) ?? undefined;
