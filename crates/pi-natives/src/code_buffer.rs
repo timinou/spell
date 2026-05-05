@@ -870,6 +870,16 @@ fn target_range(buffer: &CodeBuffer, resolved: Option<&ResolvedSymbol>) -> (usiz
 	}
 }
 
+
+fn would_leave_zero_bytes(buffer: &CodeBuffer, edits: &[TextEdit]) -> bool {
+	let mut result = buffer.source().to_string();
+	let mut sorted: Vec<_> = edits.iter().collect();
+	sorted.sort_by_key(|e| std::cmp::Reverse(e.start_byte));
+	for edit in sorted {
+		result.replace_range(edit.start_byte..edit.old_end_byte, &edit.new_text);
+	}
+	result.is_empty()
+}
 fn single_action(
 	buffer: &CodeBuffer,
 	profile: &LanguageProfile,
@@ -1004,26 +1014,30 @@ fn single_action(
 					matches:    None,
 				});
 			}
-			match (resolved.as_ref(), has_meaningful_index_field(action.get("line"))) {
-				(Some(symbol), false) => PreparedEditOperation {
-					edits:  vec![TextEdit {
-						start_byte:   symbol.start_byte,
-						old_end_byte: symbol.end_byte,
-						new_text:     String::new(),
-					}],
-					proof:  None,
-					action: action_kind.to_string(),
-				},
-				_ => PreparedEditOperation {
-					edits:  kill_node(
-						buffer,
-						action_line(action, resolved.as_ref()),
-						action_node_type(action),
-						within,
-					)?,
-					proof:  None,
-					action: action_kind.to_string(),
-				},
+			let edits = match (resolved.as_ref(), has_meaningful_index_field(action.get("line"))) {
+				(Some(symbol), false) => vec![TextEdit {
+					start_byte:   symbol.start_byte,
+					old_end_byte: symbol.end_byte,
+					new_text:     String::new(),
+				}],
+				_ => kill_node(
+					buffer,
+					action_line(action, resolved.as_ref()),
+					action_node_type(action),
+					within,
+				)?,
+			};
+			if would_leave_zero_bytes(buffer, &edits) {
+				return Err(CodeEngineError::Edit(
+					"zero_byte_delete_blocked: deleting this target would leave the file empty; \
+					 use a bare path target to delete the file"
+						.into(),
+				));
+			}
+			PreparedEditOperation {
+				edits,
+				proof:  None,
+				action: action_kind.to_string(),
 			}
 		},
 		"insertBefore" => {
@@ -3045,11 +3059,15 @@ mod tests {
 		);
 	}
 
-	fn delete_via_dispatch(src: &str, line: usize) -> Result<Value> {
+	fn delete_via_dispatch(src: &str, line: usize, node_type: &str) -> Result<Value> {
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		let file = root.join("test.ts");
 		fs::write(&file, src).unwrap();
+		let mut action = json!({"kind": "delete", "line": line});
+		if !node_type.is_empty() {
+			action["nodeType"] = json!(node_type);
+		}
 		execute_code_buffer_inner(
 			&json!({
 				"command": "edit",
@@ -3057,7 +3075,7 @@ mod tests {
 				"root": root.display().to_string(),
 				"operations": [{
 					"targetId": file.display().to_string(),
-					"actions": [{"kind": "delete", "line": line}]
+					"actions": [action]
 				}]
 			})
 		)
@@ -3065,15 +3083,19 @@ mod tests {
 
 	#[test]
 	fn delete_via_kill_node_rejects_zero_byte_outcome() {
-		let result: Result<Value> = delete_via_dispatch("fn alone() {}\n", 1);
-		assert!(result.is_err());
-		let err = result.unwrap_err();
-		assert!(err.to_string().contains("zero"), "expected zero-byte hint, got: {err}");
+		let result: Result<Value> = delete_via_dispatch("fn alone() {}\n", 1, "program");
+		assert!(result.is_ok());
+		let payload = result.unwrap();
+		let file_results = payload["output"]["fileResults"].as_array().unwrap();
+		let error_msg = file_results[0]["error"]["message"].as_str().unwrap();
+		assert!(error_msg.contains("zero"), "expected zero-byte hint, got: {error_msg}");
 	}
 
 	#[test]
 	fn delete_via_kill_node_allows_non_zero_byte_outcome() {
-		let result: Result<Value> = delete_via_dispatch("fn a() {}\nfn b() {}\n", 1);
+		let result: Result<Value> = delete_via_dispatch("fn a() {}\nfn b() {}\n", 1, "function_declaration");
+		
+		assert!(result.is_ok());
 		assert!(result.is_ok());
 	}
 }

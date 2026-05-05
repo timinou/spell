@@ -58,7 +58,7 @@ impl MutationResolver for super::FsResolver {
 		if !matches!(kind, ActionKind::Create | ActionKind::Write | ActionKind::Delete) {
 			return false;
 		}
-		path.query.is_none() && path.qualifier.is_none()
+		!path.has_target_query()
 	}
 
 	fn apply(
