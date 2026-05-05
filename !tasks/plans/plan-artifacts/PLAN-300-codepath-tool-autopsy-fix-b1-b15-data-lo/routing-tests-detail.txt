@@ -1,0 +1,25 @@
+
+running 20 tests
+test code_path::routing_tests::bare_file_listing_qualifier_stays_fs ... ok
+test code_path::routing_tests::md_text_axis_line_query_returns_line ... ok
+test code_path::routing_tests::bare_file_bytes_qualifier_routes_to_text ... ok
+test code_path::routing_tests::bare_md_path_returns_file_node ... ok
+test code_path::routing_tests::bare_file_raw_qualifier_routes_to_text_resolver ... ok
+test code_path::routing_tests::delete_with_qualifier_target_rejects_at_fs ... ok
+test code_path::routing_tests::delete_with_bare_file_target_uses_fs_resolver ... ok
+test code_path::routing_tests::html_symbol_query_returns_element ... ok
+test code_path::routing_tests::transaction_strict_restores_modified_file ... ok
+test code_path::routing_tests::md_symbol_query_returns_section ... ok
+test code_path::routing_tests::css_symbol_query_returns_rule ... ok
+test code_path::routing_tests::transaction_strict_succeeds_when_all_ops_succeed ... ok
+test code_path::routing_tests::transaction_best_effort_default_unchanged ... ok
+test code_path::routing_tests::clone_with_content_renames_clone ... ok
+test code_path::routing_tests::clone_with_invalid_identifier_rejected ... ok
+test code_path::routing_tests::clone_without_content_appends_dup_suffix ... ok
+test code_path::routing_tests::delete_with_symbol_target_routes_to_code_resolver ... ok
+test code_path::routing_tests::md_symbol_qualifier_chain ... ok
+test code_path::routing_tests::org_symbol_query_returns_heading ... ok
+test code_path::routing_tests::wrap_action_with_trivial_template_succeeds ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 293 filtered out; finished in 0.04s
+

@@ -1,5 +1,5 @@
 #+TITLE: Resolver routing — Delete on symbol target + text-qualifier-only routing (B1, B2, B10)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d47a7632d063d9
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
 #+CUSTOM_ID: FEAT-689-resolver-routing-delete-on-symbol-target
