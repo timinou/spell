@@ -243,20 +243,36 @@ mod tests {
 		assert!(err.to_string().contains("$BODY"));
 	}
 
-
 	fn apply_edits(source: &str, edits: Vec<TextEdit>) -> String {
 		let mut buffer = ts_buffer(source);
 		buffer.edit_batch(edits).expect("edit batch");
 		buffer.source().to_string()
 	}
 
+	fn wrap_via_dispatch(source: &str, name: &str, template: &str) -> Vec<TextEdit> {
+		let buffer = ts_buffer(source);
+		let p = profile();
+		let resolved = resolve_symbol(&buffer, &p, name).unwrap();
+		let mut sym = resolved.clone();
+		sym.start_byte = sym.statement_range.start;
+		sym.end_byte = sym.statement_range.end;
+		wrap_node(&buffer, &sym, template).unwrap()
+	}
+
+	fn rename_via_dispatch(source: &str, name: &str, new_name: &str) -> Vec<TextEdit> {
+		let buffer = ts_buffer(source);
+		let p = profile();
+		let resolved = resolve_symbol(&buffer, &p, name).unwrap();
+		let mut sym = resolved.clone();
+		sym.start_byte = sym.identifier_range.start;
+		sym.end_byte = sym.identifier_range.end;
+		rename_symbol(&buffer, &sym, new_name).unwrap()
+	}
+
 	#[test]
 	fn wrap_export_const_includes_export_keyword() {
 		let source = "export const X = 1;\n";
-		let buffer = ts_buffer(source);
-		let p = profile();
-		let resolved = resolve_symbol(&buffer, &p, "X").unwrap();
-		let edits = wrap_node(&buffer, &resolved, "try { $BODY } catch (e) {}").unwrap();
+		let edits = wrap_via_dispatch(source, "X", "try { $BODY } catch (e) {}");
 		let result = apply_edits(source, edits);
 		assert!(
 			result.contains("try { export const X = 1; } catch (e) {}"),
@@ -268,10 +284,7 @@ mod tests {
 	#[test]
 	fn wrap_export_default_function_includes_default() {
 		let source = "export default function foo() { return 1; }\n";
-		let buffer = ts_buffer(source);
-		let p = profile();
-		let resolved = resolve_symbol(&buffer, &p, "foo").unwrap();
-		let edits = wrap_node(&buffer, &resolved, "/* WRAPPED */ $BODY").unwrap();
+		let edits = wrap_via_dispatch(source, "foo", "/* WRAPPED */ $BODY");
 		let result = apply_edits(source, edits);
 		assert!(
 			result.contains("/* WRAPPED */ export default function foo()"),
@@ -282,10 +295,7 @@ mod tests {
 	#[test]
 	fn rename_uses_identifier_range_unchanged() {
 		let source = "export const X = 1;\n";
-		let buffer = ts_buffer(source);
-		let p = profile();
-		let resolved = resolve_symbol(&buffer, &p, "X").unwrap();
-		let edits = rename_symbol(&buffer, &resolved, "Y").unwrap();
+		let edits = rename_via_dispatch(source, "X", "Y");
 		let result = apply_edits(source, edits);
 		assert_eq!(result, "export const Y = 1;\n");
 	}

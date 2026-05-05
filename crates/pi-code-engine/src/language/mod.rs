@@ -255,7 +255,8 @@ fn typescript_profile() -> LanguageProfile {
 		all_types:        gd.all_types,
 		supertypes:       gd.supertypes,
 		ts_language:      tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-		dialect:          Some(pi_code_path::dialects::typescript_dialect()),
+		dialect:                  Some(pi_code_path::dialects::typescript_dialect()),
+		enclosing_statement_kinds: vec!["export_statement".into(), "export_default_declaration".into()],
 	}
 }
 
@@ -393,7 +394,8 @@ fn rust_profile() -> LanguageProfile {
 		all_types:        gd.all_types,
 		supertypes:       gd.supertypes,
 		ts_language:      tree_sitter_rust::LANGUAGE.into(),
-		dialect:          Some(pi_code_path::dialects::rust_dialect()),
+		dialect:                  Some(pi_code_path::dialects::rust_dialect()),
+		enclosing_statement_kinds: vec![],
 	}
 }
 
@@ -473,7 +475,8 @@ fn python_profile() -> LanguageProfile {
 		all_types:        gd.all_types,
 		supertypes:       gd.supertypes,
 		ts_language:      tree_sitter_python::LANGUAGE.into(),
-		dialect:          Some(pi_code_path::dialects::python_dialect()),
+		dialect:                  Some(pi_code_path::dialects::python_dialect()),
+		enclosing_statement_kinds: vec!["decorated_definition".into()],
 	}
 }
 
@@ -758,6 +761,7 @@ fn markdown_profile() -> LanguageProfile {
 		supertypes: gd.supertypes,
 		ts_language: tree_sitter_md::LANGUAGE.into(),
 		dialect: Some(pi_code_path::dialects::markdown_dialect()),
+		enclosing_statement_kinds: Vec::new(),
 	}
 }
 
@@ -906,6 +910,7 @@ fn html_profile() -> LanguageProfile {
 		supertypes: gd.supertypes,
 		ts_language: tree_sitter_html::LANGUAGE.into(),
 		dialect: Some(pi_code_path::dialects::html_dialect()),
+		enclosing_statement_kinds: Vec::new(),
 	}
 }
 
@@ -1070,6 +1075,7 @@ fn css_profile() -> LanguageProfile {
 		supertypes: gd.supertypes,
 		ts_language: tree_sitter_css::LANGUAGE.into(),
 		dialect: Some(pi_code_path::dialects::css_dialect()),
+		enclosing_statement_kinds: Vec::new(),
 	}
 }
 fn typst_profile() -> LanguageProfile {
@@ -1163,6 +1169,7 @@ fn typst_profile() -> LanguageProfile {
 		supertypes: gd.supertypes,
 		ts_language: codebook_tree_sitter_typst::LANGUAGE.into(),
 		dialect: None,
+		enclosing_statement_kinds: Vec::new(),
 	}
 }
 
@@ -1497,6 +1504,7 @@ fn clojure_profile() -> LanguageProfile {
 		supertypes:       gd.supertypes,
 		ts_language:      tree_sitter_clojure::LANGUAGE.into(),
 		dialect:          None,
+		enclosing_statement_kinds: Vec::new(),
 	}
 }
 
@@ -1520,6 +1528,7 @@ fn edn_profile() -> LanguageProfile {
 		supertypes:       gd.supertypes,
 		ts_language:      tree_sitter_clojure::LANGUAGE.into(),
 		dialect:          None,
+		enclosing_statement_kinds: Vec::new(),
 	}
 }
 
@@ -1615,6 +1624,7 @@ fn elixir_profile() -> LanguageProfile {
 		supertypes:       gd.supertypes,
 		ts_language:      tree_sitter_elixir::LANGUAGE.into(),
 		dialect:          None,
+		enclosing_statement_kinds: Vec::new(),
 	}
 }
 
@@ -1637,6 +1647,7 @@ fn text_profile() -> LanguageProfile {
 		supertypes:       vec![],
 		ts_language:      tree_sitter_md::LANGUAGE.into(),
 		dialect:          None,
+		enclosing_statement_kinds: Vec::new(),
 	}
 }
 
@@ -1681,6 +1692,7 @@ fn org_profile() -> LanguageProfile {
 		supertypes:       gd.supertypes,
 		ts_language:      tree_sitter_org::LANGUAGE.into(),
 		dialect:          Some(pi_code_path::dialects::markdown_dialect()),
+		enclosing_statement_kinds: Vec::new(),
 	}
 }
 
