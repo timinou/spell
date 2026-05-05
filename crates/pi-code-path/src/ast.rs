@@ -400,9 +400,17 @@ pub enum Action {
 		content: ActionContent,
 	},
 	InsertBefore {
+		#[serde(default)]
+		pos:   Option<String>,
+		#[serde(default)]
+		line:  Option<u32>,
 		lines: ActionContent,
 	},
 	InsertAfter {
+		#[serde(default)]
+		pos:   Option<String>,
+		#[serde(default)]
+		line:  Option<u32>,
 		lines: ActionContent,
 	},
 }
@@ -620,8 +628,8 @@ mod tests {
 			Action::Promote,
 			Action::Demote,
 			Action::ReplaceCodeBlock { content: ActionContent::Single("".into()) },
-			Action::InsertBefore { lines: ActionContent::Single("".into()) },
-			Action::InsertAfter { lines: ActionContent::Single("".into()) },
+			Action::InsertBefore { pos: None, line: None, lines: ActionContent::Single("".into()) },
+			Action::InsertAfter { pos: None, line: None, lines: ActionContent::Single("".into()) },
 		];
 		let kinds: Vec<ActionKind> = actions.iter().map(|a| a.kind()).collect();
 		assert_eq!(kinds.len(), 25);
@@ -651,5 +659,19 @@ mod tests {
 		assert!(kinds.contains(&ActionKind::ReplaceCodeBlock));
 		assert!(kinds.contains(&ActionKind::InsertBefore));
 		assert!(kinds.contains(&ActionKind::InsertAfter));
+	}
+
+	#[test]
+	fn insert_before_action_carries_pos_through_serde() {
+		let json = r#"{"kind":"insertBefore","pos":"5#XX","lines":["foo"]}"#;
+		let action: Action = serde_json::from_str(json).unwrap();
+		match action {
+			Action::InsertBefore { pos, line, lines } => {
+				assert_eq!(pos, Some("5#XX".to_string()));
+				assert_eq!(line, None);
+				assert_eq!(lines.lines(), vec!["foo".to_string()]);
+			},
+			_ => panic!("expected InsertBefore"),
+		}
 	}
 }

@@ -768,6 +768,13 @@ fn action_line(action: &Value, resolved: Option<&ResolvedSymbol>) -> usize {
 		.and_then(|line| usize::try_from(line).ok())
 		.filter(|line| *line > 0)
 		.or_else(|| resolved.map(|symbol| symbol.line as usize))
+		.or_else(|| {
+			action
+				.get("pos")
+				.and_then(Value::as_str)
+				.and_then(|pos| pos.split('#').next())
+				.and_then(|num| num.parse().ok())
+		})
 		.unwrap_or(0)
 }
 
@@ -3077,5 +3084,17 @@ mod tests {
 
 		assert!(result.is_ok());
 		assert!(result.is_ok());
+	}
+
+	#[test]
+	fn action_line_parses_pos_when_line_absent() {
+		let action = json!({"kind":"insertBefore","pos":"7#AB","lines":["x"]});
+		assert_eq!(action_line(&action, None), 7);
+	}
+
+	#[test]
+	fn action_line_prefers_explicit_line_over_pos() {
+		let action = json!({"line":3,"pos":"7#AB"});
+		assert_eq!(action_line(&action, None), 3);
 	}
 }

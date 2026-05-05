@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -51,6 +51,16 @@ function mockEditResult(editCount = 1, created = false, diff?: string): any {
 	];
 }
 
+async function tempFile(content: string): Promise<string> {
+	const name = `tmp-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`;
+	const filePath = path.join(tmpDir, name);
+	await writeFile(filePath, content);
+	return filePath;
+}
+async function edit(params: any): Promise<ReturnType<CodepathEditTool["execute"]>> {
+	const tool = new CodepathEditTool(createSession());
+	return tool.execute("t", params);
+}
 describe("CodepathEditTool", () => {
 	beforeEach(async () => {
 		try {
@@ -283,7 +293,6 @@ describe("CodepathEditTool", () => {
 	});
 });
 
-
 describe("action normalizer (FEAT-701)", () => {
 	beforeEach(async () => {
 		try {
@@ -395,12 +404,35 @@ describe("BUG-341 zero-byte guard and routing", () => {
 		await writeFile(file, "export const X = 1;\nexport const Y = 2;\n");
 		const tool = new CodepathEditTool(createSession());
 		const result = await tool.execute("t", {
-			operations: [
-				{ target: `${file}::X`, action: { kind: "delete" } },
-			],
+			operations: [{ target: `${file}::X`, action: { kind: "delete" } }],
 		});
 		expect(await fs.exists(file)).toBe(true);
 		const content = await fs.readFile(file, "utf-8");
 		expect(content).not.toContain("export const X");
+	});
+
+	test("insertBefore with LINE#ID anchor inserts before that line", async () => {
+		const file = await tempFile(`alpha\nbeta\ngamma\n`);
+		const tag = computeLineHash(2, "beta");
+		const result = await edit({
+			operations: [{ target: file, action: { kind: "insertBefore", pos: `2#${tag}`, lines: ["INSERTED\n"] } }],
+		});
+		expect(result.isError).toBeFalsy();
+		expect(await fs.readFile(file, "utf8")).toBe("alpha\nINSERTED\nbeta\ngamma\n");
+	});
+
+	test("insertAfter with LINE#ID inserts after that line", async () => {
+		const file = await tempFile(`a\nb\nc\n`);
+		const tag = computeLineHash(2, "b");
+		await edit({ operations: [{ target: file, action: { kind: "insertAfter", pos: `2#${tag}`, lines: ["X\n"] } }] });
+		expect(await fs.readFile(file, "utf8")).toBe("a\nb\nX\nc\n");
+	});
+
+	test("insertBefore with stale LINE#ID returns hash-mismatch diagnostic", async () => {
+		const file = await tempFile(`alpha\nbeta\ngamma\n`);
+		const result = await edit({
+			operations: [{ target: file, action: { kind: "insertBefore", pos: "2#XX", lines: ["X"] } }],
+		});
+		expect(result.isError).toBeTruthy();
 	});
 });
