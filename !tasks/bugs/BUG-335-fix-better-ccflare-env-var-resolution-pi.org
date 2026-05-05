@@ -1,0 +1,109 @@
+#+TITLE: Fix better-ccflare env var resolution picking up ANTHROPIC_API_KEY instead of OAuth passthrough
+#+STATE: ITEM
+#+SESSION_ID: 14d541d738757262
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T11-07-11-457Z_14d541d738757262.jsonl]]
+#+CUSTOM_ID: BUG-335-fix-better-ccflare-env-var-resolution-pi
+#+LAYER: api
+
+* Initial Message
+
+Operation aborted
+
+
+ hi
+
+
+ Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase
+ credits."},"request_id":"req_011CajKCMZ6SniKHP6tdBeJW"}
+ raw-http-request=/home/user/.spell/logs/http-400-requests/1777979200485-1w7pp8azslfie.json
+
+ Temporary model: claude-opus-4-7
+
+
+ hi
+
+
+ Error: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"},"request_id":"req_011CajKDB75Ayis7WZxQ89we"}
+
+
+
+
+For the first one, I was using anthropic, and the problem (I think) is that the api key in the .env takes precedence over the configured one, which it shouldn't
+For the second one, I think the issue is that better ccflare requires its own 'btr-' api key, which is okay if I provide it through better ccflare or if you tell me how to remove this requirement from my instance
+
+**Intention & Purpose**
+Fix the better-ccflare provider so it correctly uses OAuth passthrough mode (no auth header) when `ANTHROPIC_AUTH_TOKEN` is not set, instead of picking up `ANTHROPIC_API_KEY` from `.env` and sending it as an `x-api-key` header (which better-ccflare rejects with 401 because it expects `btr-` prefixed keys).
+
+**Context & Narrative**
+When a user has `ANTHROPIC_API_KEY=sk-ant-...` in their `.env` file and uses better-ccflare (at localhost:8080), the current env var resolution chain causes the Anthropic API key to be sent to better-ccflare. Better-ccflare rejects this with 401 "invalid x-api-key" because it requires `btr-` prefixed API keys.
+
+The intended behavior (documented in memory and implemented in `buildBetterCcflareHeaders`) is OAuth passthrough: when no auth token is provided, NO auth header is sent. The `buildBetterCcflareHeaders` function at line 73-79 already handles this correctly — it only adds auth headers when `options.apiKey` is truthy. The bug is in the upstream key resolution that feeds a value into `apiKey` when it should be empty.
+
+**Scope**
+In scope:
+- `packages/ai/src/stream.ts` line 97: Remove `"ANTHROPIC_API_KEY"` from the `$pickenv` call for `"better-ccflare"`
+- `packages/ai/test/better-ccflare-provider.test.ts`: Add test verifying OAuth passthrough behavior
+- Ensure `getEnvApiKey("better-ccflare")` returns `undefined` when only `ANTHROPIC_API_KEY` is set
+
+Out of scope:
+- Changes to `buildBetterCcflareHeaders` (already correct)
+- Changes to how the SDK passes `apiKey` to providers
+- Adding a dedicated `BETTER_CCFLARE_API_KEY` env var (can be done separately if needed)
+
+**Existing Patterns**
+- `serviceProviderMap` in `packages/ai/src/stream.ts` lines 64-110 maps provider IDs to env var resolvers
+- `$pickenv` from `@oh-my-pi/pi-utils` returns the first defined env var from the given keys
+- `buildBetterCcflareHeaders` in `packages/ai/src/providers/better-ccflare.ts` lines 60-90: when `apiKey` is falsy, no auth header is added → OAuth passthrough
+- Test pattern in `packages/ai/test/better-ccflare-provider.test.ts`: sets `Bun.env` directly, uses `try/finally` to clean up
+
+**Tests**
+File: `packages/ai/test/better-ccflare-provider.test.ts`
+- Test: `getEnvApiKey("better-ccflare")` returns undefined when only `ANTHROPIC_API_KEY` is set (not `ANTHROPIC_AUTH_TOKEN`)
+- Test: `getEnvApiKey("better-ccflare")` returns the token when `ANTHROPIC_AUTH_TOKEN` is set
+- Test: stream with `better-ccflare` provider and no auth env vars uses OAuth passthrough (no `x-api-key` or `Authorization` header)
+
+**Implementation**
+1. **Write failing test** (TDD): Add the tests above to `packages/ai/test/better-ccflare-provider.test.ts`
+2. **Fix the env var resolution**: In `packages/ai/src/stream.ts` line 97, change:
+   ```
+   "better-ccflare": () => $pickenv("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"),
+   ```
+   to:
+   ```
+   "better-ccflare": () => $pickenv("ANTHROPIC_AUTH_TOKEN"),
+   ```
+3. **Verify tests pass**: Run `bun test packages/ai/test/better-ccflare-provider.test.ts`
+
+**Edge Cases**
+- User has both `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` set → uses `ANTHROPIC_AUTH_TOKEN` (unchanged behavior)
+- User has neither env var set → OAuth passthrough (fixed: previously would try ANTHROPIC_API_KEY first)
+- User has only `ANTHROPIC_AUTH_TOKEN` set → uses it (unchanged)
+- User with direct Anthropic API key in `.env` for anthropic provider is unaffected (the `anthropic` provider still checks `ANTHROPIC_API_KEY`)
+
+**Acceptance Criteria**
+- `/model` with better-ccflare models at localhost:8080 works without `ANTHROPIC_AUTH_TOKEN` set (OAuth passthrough)
+- `getEnvApiKey("better-ccflare")` returns undefined when only `ANTHROPIC_API_KEY` is set
+- Existing better-ccflare tests continue to pass
+- `bun run --parallel check:ts check:rs` passes
+
+** ITEM Better-ccflare env var test (TDD)
+:PROPERTIES:
+:CUSTOM_ID: BUG-335-fix-better-ccflare-env-var-resolution-pi::env-var-tests
+:LAYER: api
+:END:
+- File: packages/ai/test/better-ccflare-provider.test.ts
+- Add test: getEnvApiKey("better-ccflare") returns undefined when only ANTHROPIC_API_KEY set
+- Add test: getEnvApiKey("better-ccflare") returns token when ANTHROPIC_AUTH_TOKEN set
+- Add test: stream with better-ccflare uses OAuth passthrough (no auth header) when no env vars set
+- Pattern: set Bun.env directly, use try/finally cleanup
+
+** ITEM Fix better-ccflare env var resolver (satisfies env-var-tests)
+:PROPERTIES:
+:CUSTOM_ID: BUG-335-fix-better-ccflare-env-var-resolution-pi::fix-env-var-resolver
+:LAYER: api
+:DEPENDS: BUG-335-fix-better-ccflare-env-var-resolution-pi::env-var-tests
+:END:
+- File: packages/ai/src/stream.ts line 97
+- Change: `$pickenv("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")` → `$pickenv("ANTHROPIC_AUTH_TOKEN")`
+- This ensures when ANTHROPIC_AUTH_TOKEN is unset, getEnvApiKey returns undefined → OAuth passthrough
+- Verify: `bun test packages/ai/test/better-ccflare-provider.test.ts`

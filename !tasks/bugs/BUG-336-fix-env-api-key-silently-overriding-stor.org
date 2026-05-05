@@ -1,0 +1,126 @@
+#+TITLE: Fix .env API key silently overriding stored OAuth credentials when refresh fails
+#+STATE: ITEM
+#+SESSION_ID: 14d541d738757262
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T11-07-11-457Z_14d541d738757262.jsonl]]
+#+CUSTOM_ID: BUG-336-fix-env-api-key-silently-overriding-stor
+#+LAYER: core
+
+* Initial Message
+
+Operation aborted
+
+
+ hi
+
+
+ Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase
+ credits."},"request_id":"req_011CajKCMZ6SniKHP6tdBeJW"}
+ raw-http-request=/home/user/.spell/logs/http-400-requests/1777979200485-1w7pp8azslfie.json
+
+ Temporary model: claude-opus-4-7
+
+
+ hi
+
+
+ Error: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"},"request_id":"req_011CajKDB75Ayis7WZxQ89we"}
+
+
+
+
+For the first one, I was using anthropic, and the problem (I think) is that the api key in the .env takes precedence over the configured one, which it shouldn't
+For the second one, I think the issue is that better ccflare requires its own 'btr-' api key, which is okay if I provide it through better ccflare or if you tell me how to remove this requirement from my instance
+
+**Intention & Purpose**
+When a user has logged in via OAuth (e.g., `/login anthropic`) and the OAuth token can no longer be refreshed, `getApiKey()` silently falls back to the `.env` `ANTHROPIC_API_KEY` instead of returning `undefined`. This masks the OAuth session expiry and uses a potentially stale or low-credit key. The user sees errors like "credit balance too low" from the .env key rather than being prompted to re-login.
+
+**Context & Narrative**
+The `getApiKey()` method in `AuthStorage` (auth-storage.ts:1981-2005) has this priority chain:
+1. Runtime override (CLI --api-key)
+2. Stored api_key credential
+3. OAuth token (refreshed if expired)
+4. Environment variable (.env)
+5. Custom resolver (models.json)
+
+When the user runs `/login anthropic`, credentials are stored as `type: "oauth"` (line 972). Step 2 is always skipped (no `api_key` type). Step 3 attempts OAuth resolution — if the token is expired and refresh fails (e.g., network error, revoked token), `#resolveOAuthApiKey` returns `undefined`. The code then falls through to step 4 and picks up `ANTHROPIC_API_KEY` from `.env`.
+
+The user never sees that their OAuth session expired. They get cryptic errors from the .env key instead.
+
+**Scope**
+In scope:
+- `packages/ai/src/auth-storage.ts` `getApiKey()` method (lines 1994-2001): After OAuth returns undefined, check if the provider has any OAuth credentials. If yes, return undefined immediately (skip .env fallback)
+- `packages/ai/test/auth-storage-anthropic-invalid-token.test.ts`: Add test verifying .env is NOT used as fallback when OAuth credentials exist but fail
+
+Out of scope:
+- Changing how OAuth tokens are refreshed
+- Changing how `/login` stores credentials
+- Adding a warning log (returning undefined already triggers the existing "No API key" error path in sdk.ts:1658)
+- Changes to `peekApiKey` or `getCredentialSync` — those have different use cases and keeping .env fallback there is acceptable for model discovery
+
+**Existing Patterns**
+- `#getCredentialsForProvider(provider)` returns all stored credentials for a provider
+- `hasOAuth(provider)` at line 700-701: `this.#getCredentialsForProvider(provider).some(credential => credential.type === "oauth")`
+- Test pattern in `packages/ai/test/auth-storage-anthropic-invalid-token.test.ts`: creates temp DB, instantiates `AuthStorage`, uses `vi.spyOn` for mocking
+- Error message in sdk.ts line 1658: `throw new Error(`No API key found for provider "${provider}"`);`
+
+**Tests**
+File: `packages/ai/test/auth-storage-anthropic-invalid-token.test.ts`
+- Test: When OAuth credentials exist for a provider and refresh fails, `getApiKey()` does NOT fall back to the environment variable
+- Test: When OAuth credentials exist and are valid, `getApiKey()` still returns the OAuth token (no regression)
+- Test: When NO credentials exist for a provider (neither OAuth nor api_key), `getApiKey()` still falls back to environment variable (existing behavior preserved for env-only users)
+
+**Implementation**
+1. **Write failing test** (TDD): Add the test scenarios above to the existing test file
+2. **Add OAuth credential check in `getApiKey`**: After line 1997 (`return oauthKey;` returns undefined), add:
+   ```typescript
+   // If the provider has OAuth credentials that failed to resolve, don't fall back to env.
+   // The user explicitly logged in — they should re-login rather than silently using a stale .env key.
+   if (this.#getCredentialsForProvider(provider).some(c => c.type === "oauth")) {
+       return undefined;
+   }
+   ```
+   This goes BEFORE the `// Fall back to environment variable` comment at line 1999.
+3. **Verify tests pass**: Run `bun test packages/ai/test/auth-storage-anthropic-invalid-token.test.ts`
+4. **Run full test suite**: `bun run --workspaces --if-present --parallel test`
+
+**Edge Cases**
+- Provider has BOTH api_key and OAuth credentials: api_key wins at step 2, OAuth step never reached → no change
+- Provider has OAuth credentials but user set `--api-key` runtime override: runtime override wins at step 1 → no change
+- Provider has NO credentials at all (env-only user): still falls back to .env → existing behavior preserved
+- Multiple OAuth credentials for same provider: all must be unresolvable for the check to trigger. If any resolves, it's returned normally
+
+**Acceptance Criteria**
+- User who `/login anthropic` and has `ANTHROPIC_API_KEY` in .env gets "No API key found for provider" error when OAuth refresh fails (not "credit balance too low" from the .env key)
+- User with NO stored credentials and only .env still works (env fallback preserved)
+- Existing auth-storage tests pass
+- `bun run --parallel check:ts check:rs` passes
+- `bun run --workspaces --if-present --parallel test` passes
+
+** ITEM OAuth-to-env fallback prevention test (TDD)
+:PROPERTIES:
+:CUSTOM_ID: BUG-336-fix-env-api-key-silently-overriding-stor::oauth-env-fallback-tests
+:LAYER: core
+:END:
+- File: packages/ai/test/auth-storage-anthropic-invalid-token.test.ts
+- Add test: When OAuth credentials exist and refresh fails, getApiKey() does NOT fall back to env var
+- Add test: When OAuth credentials exist and are valid, getApiKey() returns the token (no regression)
+- Add test: When NO credentials exist, getApiKey() still falls back to env var (existing behavior preserved)
+- Pattern: create temp DB, instantiate AuthStorage, set Bun.env ANTHROPIC_API_KEY, mock refreshOAuthToken to fail
+
+** ITEM Add OAuth credential guard in getApiKey (satisfies oauth-env-fallback-tests)
+:PROPERTIES:
+:CUSTOM_ID: BUG-336-fix-env-api-key-silently-overriding-stor::add-oauth-guard
+:LAYER: core
+:DEPENDS: BUG-336-fix-env-api-key-silently-overriding-stor::oauth-env-fallback-tests
+:END:
+- File: packages/ai/src/auth-storage.ts lines 1994-2001
+- After OAuth step returns undefined (line ~1997), before env fallback (line 1999), add:
+  ```typescript
+  // If the provider has OAuth credentials that failed to resolve, don't fall back to env.
+  // The user explicitly logged in — they should re-login rather than silently using a stale .env key.
+  if (this.#getCredentialsForProvider(provider).some(c => c.type === "oauth")) {
+      return undefined;
+  }
+  ```
+- Verify: `bun test packages/ai/test/auth-storage-anthropic-invalid-token.test.ts`
+- Verify: `bun run --workspaces --if-present --parallel test`

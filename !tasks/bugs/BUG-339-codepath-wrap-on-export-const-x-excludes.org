@@ -1,0 +1,285 @@
+#+TITLE: CodePath wrap on `export const X` excludes `export` keyword
+#+STATE: ITEM
+#+SESSION_ID: 14d50def80d06410
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T07-20-24-835Z_14d50def80d06410.jsonl]]
+#+CUSTOM_ID: BUG-339-codepath-wrap-on-export-const-x-excludes
+#+EFFORT: 3h
+#+LAYER: backend
+
+* Initial Message
+
+I asked a new session to check how the new tool is performing and this is what it told me:
+
+Updated Tool Review — Round 2
+
+ ### GET — Major Fixes ✅
+
+ ┌─────────────────────────────────────┬────────────────────┐
+ │ Was broken                          │ Now                │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ Bare file paths → images (#raw bug) │ ✅ Returns content │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ tail/head params → #raw bug         │ ✅ Works           │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ format: "content-only" → #raw bug   │ ✅ Works           │
+ └─────────────────────────────────────┴────────────────────┘
+
+ Still working from before:
+ - Line slices with LINE#ID anchors (1#DT format now)
+ - Regex line filters across codebase (::§line[text~="export function"])
+ - Glob patterns, directory listing, #stat qualifier
+ - offset/limit pagination, locations format, recursive/depth
+
+ Remaining gaps:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Issue                  │ Detail                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Symbol get on TS →     │ foo.ts::symbolName renders as image. Works on Rust                           │
+ │ image                  │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Multi-word symbol      │ ::export * from "./json" → "unexpected trailing input". Blocked on get, edit │
+ │ targets fail           │ insertBefore, and edit symbol-targeted ops                                   │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ No source-only filter  │ Directories mix .ts, .js, .d.ts, .map — no pattern/glob param                │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ 1KB spill limit        │ Consistent across all outputs; artifact roundtrip needed for full files      │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### EDIT — LINE#ID Chain Fixed ✅
+
+ ┌───────────────────────────────────┬──────────────────────────────────────────────┐
+ │ Was broken                        │ Now                                          │
+ ├───────────────────────────────────┼──────────────────────────────────────────────┤
+ │ LINE#ID anchors from get rejected │ ✅ 5#6V accepted, append applied, diff shown │
+ ├───────────────────────────────────┼──────────────────────────────────────────────┤
+ │ findAndReplace multi-line         │ ✅ Works                                     │
+ └───────────────────────────────────┴──────────────────────────────────────────────┘
+
+ Still working:
+ - rawTextReplace, rename, wrap (Rust), findAndReplace with occurrence selectors
+
+ Remaining gaps:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Issue                  │ Detail                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ wrap splits export     │ Targeting ERGO_V2 wrapped only const ERGO_V2 = 42, left export dangling      │
+ │ const                  │ outside. Should either include the export statement or warn                  │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ delete leaves empty    │ File still exists after delete — need second cleanup step                    │
+ │ file                   │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ insertBefore via       │ "unsafe line-target insert-before at line 0" — wants newline suffix, then    │
+ │ LINE#ID                │ reports "line out of range"                                                  │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Multi-word symbol      │ Same as get — quotes/spaces in symbol names fail parsing                     │
+ │ targets                │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Batch edit failure     │ Edit 1 fails → edit 2 runs anyway against stale state → cryptic error        │
+ │ propagation            │                                                                              │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### MANAGE — Partially Fixed ✅
+
+ ┌─────────────────────────────────────────────┬────────────────────────────────────────────────┐
+ │ Was broken                                  │ Now                                            │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ All commands → "parse failed at position 0" │ ✅ Most work                                   │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ buffers                                     │ ✅ []                                          │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ status                                      │ ✅ Shows watcher, buffers, coordinator         │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ languages                                   │ ✅ Full tree-sitter registry with capabilities │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ watcherStatus                               │ ✅ {active: true, watched: 2}                  │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ lockStatus                                  │ ✅ (needs file param)                          │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ index                                       │ ✅ Reports unavailable                         │
+ └─────────────────────────────────────────────┴────────────────────────────────────────────────┘
+
+ Still broken:
+
+ ┌─────────┬───────────────────────────────────────────┐
+ │ Command │ Error                                     │
+ ├─────────┼───────────────────────────────────────────┤
+ │ save    │ "I/O error: Is a directory (os error 21)" │
+ ├─────────┼───────────────────────────────────────────┤
+ │ undo    │ Same I/O error                            │
+ ├─────────┼───────────────────────────────────────────┤
+ │ diff    │ Returns [] even when file is dirty        │
+ ├─────────┼───────────────────────────────────────────┤
+ │ context │ Not a valid subcommand                    │
+ └─────────┴───────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### CREATE — Solid ✅
+
+ - Create in-project, outside-project, force overwrite — all work
+ - No sandbox warnings for paths outside project root
+
+ ### LSP — Unchanged
+
+ - symbols, hover, references, diagnostics, status all work
+ - Hover output terse (declaration only, no doc comments)
+ - No TypeScript server loaded (only rust-analyzer/tinymist/yamlls/taplo)
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ Priority Fix List
+
+ ┌───┬───────────────────────────┬───────────────────────────────────────────────────────────────────────┐
+ │ # │ Issue                     │ Impact                                                                │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 1 │ Multi-word symbol targets │ Blocks get symbol resolution, edit insertBefore/insertAfter on most   │
+ │   │                           │ real symbols                                                          │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 2 │ manage save/undo/diff     │ Can't persist, revert, or inspect changes without bash                │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 3 │ Symbol get on TS → image  │ Major gap; works on Rust so likely a dialect-specific rendering bug   │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 4 │ wrap splitting export     │ Correctness bug — mutates semantics silently                          │
+ │   │ const                     │                                                                       │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 5 │ delete leaves empty file  │ Leaks stale files; needs rm follow-up                                 │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 6 │ insertBefore via LINE#ID  │ Seems like a coordinate/indexing bug (reports line 0)                 │
+ └───┴───────────────────────────┴───────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+Please through each and explain what is going on. I want root causes and structural causes+fixes too, think about what CodePath is supposed to solve, and give me a list of tool+codepath cases and what they should do, + discrepancies in expected vs. actual behaviour, and surprises in ergonomics, go for it
+
+* Symptoms
+
+#+begin_example
+edit { target: "foo.ts::ERGO_V2",
+       action: { kind: "wrap", content: ["try { $BODY } catch (e) {}"] }}
+
+before:  export const ERGO_V2 = 42;
+after:   export try { const ERGO_V2 = 42; } catch (e) {}
+                 ^^^ export dangling, semantically broken
+#+end_example
+
+Same hazard for ~export default function~, ~export class~, ~export interface~, ~export async function~, decorated declarations, and any leading-modifier construct.
+
+* Root cause
+
+- =crates/pi-code-engine/src/resolve.rs:156-180= ~match_declaration~ unwraps =export_statement= to extract the inner declaration's name (correct for rename — we want to compare against ~variable_declarator.name~).
+- =crates/pi-code-engine/src/resolve.rs:195-219= ~build_resolved~ creates ~ResolvedSymbol.{start_byte, end_byte}~ from the unwrapped inner node.
+- =crates/pi-code-engine/src/edit/wrap.rs:17-35= ~wrap_node~ uses that range — leaves the =export= keyword outside.
+- =crates/pi-natives/src/code_buffer.rs:936-943= dispatcher passes resolved as-is; no action-aware escalation.
+
+* Structural cause
+
+ResolvedSymbol carries ONE range used by THREE different consumers with different semantic needs:
+- rename → wants identifier-only sub-range
+- splice / clone / wrap → wants statement-level range (including modifiers/decorators)
+- find / get → wants declaration range (no statement keywords)
+
+The pipeline silently picks one (the unwrapped declaration), and downstream actions inherit the wrong range.
+
+* Fix contract (C: structural multi-range)
+
+** Type extension
+- =crates/pi-code-engine/src/resolve.rs= ~ResolvedSymbol~: extend with three explicit byte ranges:
+  - ~identifier_range~: the bare name token (for rename)
+  - ~declaration_range~: the unwrapped declaration body (current default; for find/get)
+  - ~statement_range~: smallest enclosing statement that includes modifiers, decorators, leading export — ascends until a node kind whose parent is module/program/class_body/etc.
+
+- ~build_resolved~ computes all three. Identifier from name field; declaration from unwrapped node; statement by walking up while parent kind ∈ {export_statement, export_default_declaration, decorator, modifier, etc.}.
+
+** Action handler selection
+- =crates/pi-natives/src/code_buffer.rs=: each kind dispatches with the appropriate range:
+  - rename → uses identifier_range
+  - wrap, splice, move, clone → uses statement_range
+  - default (other ops) → uses declaration_range
+- Helper: ~range_for_action(kind, resolved) -> Range~.
+
+** Wrap implementation
+- =crates/pi-code-engine/src/edit/wrap.rs:17-35= unchanged; receives the right range from the dispatcher.
+
+** Other dialects
+- Python: enclosing statement may include decorators (~@property def x~) — escalation walks decorator parents.
+- Rust: ~pub fn~ — pub modifier and attributes (~#[derive]~) get included.
+- Implement statement_range escalation per dialect via a NameLexer/Profile method ~enclosing_statement_kinds() -> &[&str]~.
+
+* TDD protocol
+
+** Failing tests (write first, commit)
+
+Add to =crates/pi-code-engine/src/edit/wrap.rs= tests:
+#+begin_src rust
+#[test]
+fn wrap_export_const_includes_export_keyword() {
+    let src = "export const X = 1;
+";
+    // resolve `X`, wrap with try { $BODY } catch (e) {}
+    let edits = wrap_via_dispatch(src, "X", "try { $BODY } catch (e) {}");
+    let result = apply_edits(src, &edits);
+    assert!(result.contains("try { export const X = 1; } catch (e) {}"));
+    assert!(!result.contains("export try"));
+}
+
+#[test]
+fn wrap_export_default_function_includes_default() {
+    let src = "export default function foo() { return 1; }
+";
+    let edits = wrap_via_dispatch(src, "foo", "/* WRAPPED */ $BODY");
+    let result = apply_edits(src, &edits);
+    assert!(result.contains("/* WRAPPED */ export default function foo()"));
+}
+
+#[test]
+fn wrap_decorated_python_class_includes_decorator() {
+    let src = "@dataclass
+class Foo:
+    x: int
+";
+    let edits = wrap_via_dispatch_py(src, "Foo", "if True:
+    $BODY");
+    let result = apply_edits(src, &edits);
+    assert!(result.contains("if True:
+    @dataclass"));
+}
+
+#[test]
+fn rename_uses_identifier_range_unchanged() {
+    // Existing rename behavior must not regress
+    let src = "export const X = 1;
+";
+    let edits = rename_via_dispatch(src, "X", "Y");
+    let result = apply_edits(src, &edits);
+    assert_eq!(result, "export const Y = 1;
+");
+}
+#+end_src
+
+* Acceptance
+
+- All four tests pass (red→green)
+- ~cargo test -p pi-code-engine -p pi-natives~ green
+- Existing rename / find / get / outline tests do not regress
+- ResolvedSymbol changes documented in the type doc-comment
+
+* Files
+
+- crates/pi-code-engine/src/resolve.rs (ResolvedSymbol type + build_resolved)
+- crates/pi-code-engine/src/edit/wrap.rs (tests; impl unchanged or minor)
+- crates/pi-natives/src/code_buffer.rs (range_for_action helper, dispatch sites)
+- crates/pi-code-engine/src/language/mod.rs (LanguageProfile.enclosing_statement_kinds if extending)
+- crates/pi-code-path/src/dialects/{typescript,python,rust}.rs (per-dialect statement kinds)
+
+* References
+
+[[id:BUG-337-codepath-multi-word-symbols-fail-to-pars]]
+[[id:BUG-338-codepath-insertbefore-insertafter-drops]]

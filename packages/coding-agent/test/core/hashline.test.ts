@@ -29,7 +29,7 @@ function makeTag(line: number, content: string): Anchor {
 describe("computeLineHash", () => {
 	it("returns 2-4 character alphanumeric hash string", () => {
 		const hash = computeLineHash(1, "hello");
-		expect(hash).toMatch(/^[ZPMQVRWSNKTXJBYH]{2}$/);
+		expect(hash).toMatch(/^[A-HJKMNP-Z2-9]{2}$/);
 	});
 
 	it("same content at same line produces same hash", () => {
@@ -46,13 +46,16 @@ describe("computeLineHash", () => {
 
 	it("empty line produces valid hash", () => {
 		const hash = computeLineHash(1, "");
-		expect(hash).toMatch(/^[ZPMQVRWSNKTXJBYH]{2}$/);
+		expect(hash).toMatch(/^[A-HJKMNP-Z2-9]{2}$/);
 	});
 
-	it("uses line number for symbol-only lines", () => {
+	it("produces same hash for identical symbol-only lines (regression: line number no longer mixed)", () => {
+		// FEAT-XXX: computeLineHash now matches Rust line_anchor_id() which
+		// does not mix line numbers. The line number is already part of the
+		// LINE#ID anchor, so the hash only needs to identify content.
 		const a = computeLineHash(1, "***");
 		const b = computeLineHash(2, "***");
-		expect(a).not.toBe(b);
+		expect(a).toBe(b);
 	});
 
 	it("does not use line number for alphanumeric lines", () => {
@@ -93,7 +96,7 @@ describe("formatHashLines", () => {
 		const result = formatHashLines("foo\n\nbar");
 		const lines = result.split("\n");
 		expect(lines).toHaveLength(3);
-		expect(lines[1]).toMatch(/^2#[ZPMQVRWSNKTXJBYH]{2}:$/);
+		expect(lines[1]).toMatch(/^2#[A-HJKMNP-Z2-9]{2}:$/);
 	});
 
 	it("round-trips with computeLineHash", () => {
@@ -102,7 +105,7 @@ describe("formatHashLines", () => {
 		const lines = formatted.split("\n");
 
 		for (let i = 0; i < lines.length; i++) {
-			const match = lines[i].match(/^(\d+)#([ZPMQVRWSNKTXJBYH]{2}):(.*)$/);
+			const match = lines[i].match(/^(\d+)#([A-HJKMNP-Z2-9]{2}):(.*)$/);
 			expect(match).not.toBeNull();
 			const lineNum = Number.parseInt(match![1], 10);
 			const hash = match![2];
@@ -206,6 +209,21 @@ describe("parseTag", () => {
 
 	it("rejects empty hash", () => {
 		expect(() => parseTag("5#")).toThrow(/Invalid line reference/);
+	});
+
+	it("parses real-world Crockford anchors from get tool", () => {
+		expect(parseTag("1#D7")).toEqual({ line: 1, hash: "D7" });
+		expect(parseTag("336#A3")).toEqual({ line: 336, hash: "A3" });
+		expect(parseTag("337#YE")).toEqual({ line: 337, hash: "YE" });
+	});
+
+	it("rejects characters outside Crockford base32 alphabet", () => {
+		// I, L, O are excluded from Crockford
+		expect(() => parseTag("5#IL")).toThrow(/Invalid line reference/);
+		// 0 and 1 are excluded
+		expect(() => parseTag("10#01")).toThrow(/Invalid line reference/);
+		// lowercase is not allowed
+		expect(() => parseTag("3#aa")).toThrow(/Invalid line reference/);
 	});
 });
 
@@ -1163,7 +1181,7 @@ describe("hashlineParseContent", () => {
 
 	it("preserves comment lines starting with '# Word:' through hashlineParseText", () => {
 		// Regression: HASHLINE_PREFIX_RE matched '# Note:', '# TODO:', etc. because the
-		// hash ID segment was [0-9a-zA-Z]{1,16} instead of [ZPMQVRWSNKTXJBYH]{2}.
+		// hash ID segment was [0-9a-zA-Z]{1,16} instead of [A-HJKMNP-Z2-9]{2}.
 		expect(hashlineParseText(["  # Note: Using version 1.24.x"])).toEqual(["  # Note: Using version 1.24.x"]);
 		expect(hashlineParseText(["# TODO: remove this"])).toEqual(["# TODO: remove this"]);
 		expect(hashlineParseText(["# step: install deps"])).toEqual(["# step: install deps"]);

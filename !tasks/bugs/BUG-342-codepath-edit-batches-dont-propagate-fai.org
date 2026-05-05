@@ -1,0 +1,302 @@
+#+TITLE: CodePath edit batches don't propagate failures; no transaction across operations
+#+STATE: ITEM
+#+SESSION_ID: 14d50def80d06410
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T07-20-24-835Z_14d50def80d06410.jsonl]]
+#+CUSTOM_ID: BUG-342-codepath-edit-batches-dont-propagate-fai
+#+EFFORT: 2h
+#+LAYER: backend
+
+* Initial Message
+
+I asked a new session to check how the new tool is performing and this is what it told me:
+
+Updated Tool Review — Round 2
+
+ ### GET — Major Fixes ✅
+
+ ┌─────────────────────────────────────┬────────────────────┐
+ │ Was broken                          │ Now                │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ Bare file paths → images (#raw bug) │ ✅ Returns content │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ tail/head params → #raw bug         │ ✅ Works           │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ format: "content-only" → #raw bug   │ ✅ Works           │
+ └─────────────────────────────────────┴────────────────────┘
+
+ Still working from before:
+ - Line slices with LINE#ID anchors (1#DT format now)
+ - Regex line filters across codebase (::§line[text~="export function"])
+ - Glob patterns, directory listing, #stat qualifier
+ - offset/limit pagination, locations format, recursive/depth
+
+ Remaining gaps:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Issue                  │ Detail                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Symbol get on TS →     │ foo.ts::symbolName renders as image. Works on Rust                           │
+ │ image                  │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Multi-word symbol      │ ::export * from "./json" → "unexpected trailing input". Blocked on get, edit │
+ │ targets fail           │ insertBefore, and edit symbol-targeted ops                                   │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ No source-only filter  │ Directories mix .ts, .js, .d.ts, .map — no pattern/glob param                │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ 1KB spill limit        │ Consistent across all outputs; artifact roundtrip needed for full files      │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### EDIT — LINE#ID Chain Fixed ✅
+
+ ┌───────────────────────────────────┬──────────────────────────────────────────────┐
+ │ Was broken                        │ Now                                          │
+ ├───────────────────────────────────┼──────────────────────────────────────────────┤
+ │ LINE#ID anchors from get rejected │ ✅ 5#6V accepted, append applied, diff shown │
+ ├───────────────────────────────────┼──────────────────────────────────────────────┤
+ │ findAndReplace multi-line         │ ✅ Works                                     │
+ └───────────────────────────────────┴──────────────────────────────────────────────┘
+
+ Still working:
+ - rawTextReplace, rename, wrap (Rust), findAndReplace with occurrence selectors
+
+ Remaining gaps:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Issue                  │ Detail                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ wrap splits export     │ Targeting ERGO_V2 wrapped only const ERGO_V2 = 42, left export dangling      │
+ │ const                  │ outside. Should either include the export statement or warn                  │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ delete leaves empty    │ File still exists after delete — need second cleanup step                    │
+ │ file                   │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ insertBefore via       │ "unsafe line-target insert-before at line 0" — wants newline suffix, then    │
+ │ LINE#ID                │ reports "line out of range"                                                  │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Multi-word symbol      │ Same as get — quotes/spaces in symbol names fail parsing                     │
+ │ targets                │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Batch edit failure     │ Edit 1 fails → edit 2 runs anyway against stale state → cryptic error        │
+ │ propagation            │                                                                              │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### MANAGE — Partially Fixed ✅
+
+ ┌─────────────────────────────────────────────┬────────────────────────────────────────────────┐
+ │ Was broken                                  │ Now                                            │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ All commands → "parse failed at position 0" │ ✅ Most work                                   │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ buffers                                     │ ✅ []                                          │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ status                                      │ ✅ Shows watcher, buffers, coordinator         │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ languages                                   │ ✅ Full tree-sitter registry with capabilities │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ watcherStatus                               │ ✅ {active: true, watched: 2}                  │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ lockStatus                                  │ ✅ (needs file param)                          │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ index                                       │ ✅ Reports unavailable                         │
+ └─────────────────────────────────────────────┴────────────────────────────────────────────────┘
+
+ Still broken:
+
+ ┌─────────┬───────────────────────────────────────────┐
+ │ Command │ Error                                     │
+ ├─────────┼───────────────────────────────────────────┤
+ │ save    │ "I/O error: Is a directory (os error 21)" │
+ ├─────────┼───────────────────────────────────────────┤
+ │ undo    │ Same I/O error                            │
+ ├─────────┼───────────────────────────────────────────┤
+ │ diff    │ Returns [] even when file is dirty        │
+ ├─────────┼───────────────────────────────────────────┤
+ │ context │ Not a valid subcommand                    │
+ └─────────┴───────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### CREATE — Solid ✅
+
+ - Create in-project, outside-project, force overwrite — all work
+ - No sandbox warnings for paths outside project root
+
+ ### LSP — Unchanged
+
+ - symbols, hover, references, diagnostics, status all work
+ - Hover output terse (declaration only, no doc comments)
+ - No TypeScript server loaded (only rust-analyzer/tinymist/yamlls/taplo)
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ Priority Fix List
+
+ ┌───┬───────────────────────────┬───────────────────────────────────────────────────────────────────────┐
+ │ # │ Issue                     │ Impact                                                                │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 1 │ Multi-word symbol targets │ Blocks get symbol resolution, edit insertBefore/insertAfter on most   │
+ │   │                           │ real symbols                                                          │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 2 │ manage save/undo/diff     │ Can't persist, revert, or inspect changes without bash                │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 3 │ Symbol get on TS → image  │ Major gap; works on Rust so likely a dialect-specific rendering bug   │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 4 │ wrap splitting export     │ Correctness bug — mutates semantics silently                          │
+ │   │ const                     │                                                                       │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 5 │ delete leaves empty file  │ Leaks stale files; needs rm follow-up                                 │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 6 │ insertBefore via LINE#ID  │ Seems like a coordinate/indexing bug (reports line 0)                 │
+ └───┴───────────────────────────┴───────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+Please through each and explain what is going on. I want root causes and structural causes+fixes too, think about what CodePath is supposed to solve, and give me a list of tool+codepath cases and what they should do, + discrepancies in expected vs. actual behaviour, and surprises in ergonomics, go for it
+
+* Symptoms
+
+#+begin_example
+edit { operations: [
+  { target: A, action: …succeeds… },
+  { target: B, action: …FAILS… },
+  { target: C, action: …runs anyway against stale state… }
+]}
+→ result.isError == false
+→ user told "operations: 3" with concatenated text
+→ no per-op breakdown; no rollback; failed op silently masked
+#+end_example
+
+* Root cause
+
+- =packages/coding-agent/src/tools/edit.ts:166-188= iterates ops, pushes results, no early return on failure.
+- Line 201: ~_hasError = results.some(r => r.isError === true)~ computed but **prefixed with underscore = unused**. Aggregate result returns success.
+- No transaction concept at the TS API surface. Kernel FEAT-712 ~transaction:"strict"~ wraps the *actions array within ONE op*, not the *operations array of the batch*.
+
+* Fix contract (C: fail-fast default + opt-in atomic restore)
+
+** A. Fail-fast (default)
+- After each ~results.push(...)~, check ~r.isError~. If true:
+  - Mark remaining ops as ~status: "skipped"~ in aggregate result
+  - Set ~result.isError = true~
+  - ~text~ summary names the failed op index and reason
+  - ~return~ early — do not run subsequent ops
+
+** B. Strict transaction (opt-in)
+- Add ~transaction~ field to editSchema:
+  - ~"best-effort"~ (default) — fail-fast (A) but applied ops stay applied
+  - ~"strict"~ — snapshot all ~targetPath~ files before loop; on any failure, restore snapshots; return aggregate isError with rollback summary
+- Snapshot model: read each unique targetPath once before loop. Restore via ~fs.writeFile(targetPath, snapshot)~ for files that existed; ~fs.unlink~ for files that didn't.
+- Mirrors kernel ~transaction:"strict"~ at the TS layer (similar shape, different scope).
+
+** Schema/prompts
+- =packages/coding-agent/src/tools/codepath-types.ts=: add ~transaction~ field doc:
+  "transaction: 'best-effort' (default) | 'strict'. Strict snapshots all target files before any op and restores on failure."
+- =packages/coding-agent/src/tools/edit.ts editDescription=: one example showing transaction:"strict" usage.
+
+* TDD protocol
+
+** Failing tests (write first, commit)
+
+Add to =packages/coding-agent/test/edit.test.ts=:
+#+begin_src ts
+test("batch with mid-failure short-circuits subsequent ops", async () => {
+    const a = await tempFile("alpha
+");
+    const b = await tempFile("beta
+");
+    const c = await tempFile("gamma
+");
+
+    const result = await edit({
+      operations: [
+        { target: a, action: { kind: "rawTextReplace", find: ["alpha"], content: ["A1"] }},
+        { target: b, action: { kind: "rawTextReplace", find: ["NOPE"], content: ["X"] }}, // fails
+        { target: c, action: { kind: "rawTextReplace", find: ["gamma"], content: ["G3"] }},
+      ]
+    });
+    expect(result.isError).toBe(true);
+    // op 1 applied (best-effort); op 2 failed; op 3 not run
+    expect(await fs.readFile(a, "utf8")).toBe("A1
+");
+    expect(await fs.readFile(b, "utf8")).toBe("beta
+");
+    expect(await fs.readFile(c, "utf8")).toBe("gamma
+");
+    expect(/* result text */).toMatch(/operation 2.*failed/i);
+    expect(/* result text */).toMatch(/operation 3.*skipped/i);
+});
+
+test("batch with transaction:strict rolls back on failure", async () => {
+    const a = await tempFile("alpha
+");
+    const b = await tempFile("beta
+");
+
+    const result = await edit({
+      transaction: "strict",
+      operations: [
+        { target: a, action: { kind: "rawTextReplace", find: ["alpha"], content: ["A1"] }},
+        { target: b, action: { kind: "rawTextReplace", find: ["NOPE"], content: ["X"] }}, // fails
+      ]
+    });
+    expect(result.isError).toBe(true);
+    // BOTH files restored
+    expect(await fs.readFile(a, "utf8")).toBe("alpha
+");
+    expect(await fs.readFile(b, "utf8")).toBe("beta
+");
+});
+
+test("batch transaction:strict restores file that didn't exist before", async () => {
+    const a = path.join(tmpdir(), `new-${Date.now()}.txt`);
+    const result = await edit({
+      transaction: "strict",
+      operations: [
+        { target: a, action: { kind: "create", content: ["hi
+"] }},
+        { target: "nonexistent.ts::foo", action: { kind: "rename", content: "bar" }}, // fails
+      ]
+    });
+    expect(result.isError).toBe(true);
+    expect(await fs.exists(a)).toBe(false);  // file unlinked on rollback
+});
+
+test("successful batch returns isError=false with per-op summary", async () => {
+    const a = await tempFile("a
+");
+    const b = await tempFile("b
+");
+    const result = await edit({
+      operations: [
+        { target: a, action: { kind: "rawTextReplace", find: ["a"], content: ["A"] }},
+        { target: b, action: { kind: "rawTextReplace", find: ["b"], content: ["B"] }},
+      ]
+    });
+    expect(result.isError).toBeFalsy();
+    expect(/* text */).toMatch(/operations: 2/);
+});
+#+end_src
+
+* Acceptance
+
+- All four tests pass
+- ~_hasError~ is honored (not discarded)
+- Single-op batches behavior unchanged (regression check)
+- ~bun test packages/coding-agent/test/edit.test.ts~ green
+- editSchema documents ~transaction~ field
+
+* Files
+
+- packages/coding-agent/src/tools/codepath-types.ts (transaction field)
+- packages/coding-agent/src/tools/edit.ts (loop control + snapshot/restore)
+- packages/coding-agent/test/edit.test.ts (tests)
+
+* References
+
+[[id:PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo]] §FEAT-712 — kernel-side strict mode (different scope: actions within one op)

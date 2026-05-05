@@ -1,0 +1,319 @@
+#+TITLE: CodePath resolver supports() asymmetry — symbol resolvers claim bare-path actions
+#+STATE: ITEM
+#+SESSION_ID: 14d50def80d06410
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T07-20-24-835Z_14d50def80d06410.jsonl]]
+#+CUSTOM_ID: BUG-341-codepath-resolver-supports-asymmetry-sym
+#+EFFORT: 2h
+#+LAYER: backend
+
+* Initial Message
+
+I asked a new session to check how the new tool is performing and this is what it told me:
+
+Updated Tool Review — Round 2
+
+ ### GET — Major Fixes ✅
+
+ ┌─────────────────────────────────────┬────────────────────┐
+ │ Was broken                          │ Now                │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ Bare file paths → images (#raw bug) │ ✅ Returns content │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ tail/head params → #raw bug         │ ✅ Works           │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ format: "content-only" → #raw bug   │ ✅ Works           │
+ └─────────────────────────────────────┴────────────────────┘
+
+ Still working from before:
+ - Line slices with LINE#ID anchors (1#DT format now)
+ - Regex line filters across codebase (::§line[text~="export function"])
+ - Glob patterns, directory listing, #stat qualifier
+ - offset/limit pagination, locations format, recursive/depth
+
+ Remaining gaps:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Issue                  │ Detail                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Symbol get on TS →     │ foo.ts::symbolName renders as image. Works on Rust                           │
+ │ image                  │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Multi-word symbol      │ ::export * from "./json" → "unexpected trailing input". Blocked on get, edit │
+ │ targets fail           │ insertBefore, and edit symbol-targeted ops                                   │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ No source-only filter  │ Directories mix .ts, .js, .d.ts, .map — no pattern/glob param                │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ 1KB spill limit        │ Consistent across all outputs; artifact roundtrip needed for full files      │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### EDIT — LINE#ID Chain Fixed ✅
+
+ ┌───────────────────────────────────┬──────────────────────────────────────────────┐
+ │ Was broken                        │ Now                                          │
+ ├───────────────────────────────────┼──────────────────────────────────────────────┤
+ │ LINE#ID anchors from get rejected │ ✅ 5#6V accepted, append applied, diff shown │
+ ├───────────────────────────────────┼──────────────────────────────────────────────┤
+ │ findAndReplace multi-line         │ ✅ Works                                     │
+ └───────────────────────────────────┴──────────────────────────────────────────────┘
+
+ Still working:
+ - rawTextReplace, rename, wrap (Rust), findAndReplace with occurrence selectors
+
+ Remaining gaps:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Issue                  │ Detail                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ wrap splits export     │ Targeting ERGO_V2 wrapped only const ERGO_V2 = 42, left export dangling      │
+ │ const                  │ outside. Should either include the export statement or warn                  │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ delete leaves empty    │ File still exists after delete — need second cleanup step                    │
+ │ file                   │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ insertBefore via       │ "unsafe line-target insert-before at line 0" — wants newline suffix, then    │
+ │ LINE#ID                │ reports "line out of range"                                                  │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Multi-word symbol      │ Same as get — quotes/spaces in symbol names fail parsing                     │
+ │ targets                │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Batch edit failure     │ Edit 1 fails → edit 2 runs anyway against stale state → cryptic error        │
+ │ propagation            │                                                                              │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### MANAGE — Partially Fixed ✅
+
+ ┌─────────────────────────────────────────────┬────────────────────────────────────────────────┐
+ │ Was broken                                  │ Now                                            │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ All commands → "parse failed at position 0" │ ✅ Most work                                   │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ buffers                                     │ ✅ []                                          │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ status                                      │ ✅ Shows watcher, buffers, coordinator         │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ languages                                   │ ✅ Full tree-sitter registry with capabilities │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ watcherStatus                               │ ✅ {active: true, watched: 2}                  │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ lockStatus                                  │ ✅ (needs file param)                          │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ index                                       │ ✅ Reports unavailable                         │
+ └─────────────────────────────────────────────┴────────────────────────────────────────────────┘
+
+ Still broken:
+
+ ┌─────────┬───────────────────────────────────────────┐
+ │ Command │ Error                                     │
+ ├─────────┼───────────────────────────────────────────┤
+ │ save    │ "I/O error: Is a directory (os error 21)" │
+ ├─────────┼───────────────────────────────────────────┤
+ │ undo    │ Same I/O error                            │
+ ├─────────┼───────────────────────────────────────────┤
+ │ diff    │ Returns [] even when file is dirty        │
+ ├─────────┼───────────────────────────────────────────┤
+ │ context │ Not a valid subcommand                    │
+ └─────────┴───────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### CREATE — Solid ✅
+
+ - Create in-project, outside-project, force overwrite — all work
+ - No sandbox warnings for paths outside project root
+
+ ### LSP — Unchanged
+
+ - symbols, hover, references, diagnostics, status all work
+ - Hover output terse (declaration only, no doc comments)
+ - No TypeScript server loaded (only rust-analyzer/tinymist/yamlls/taplo)
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ Priority Fix List
+
+ ┌───┬───────────────────────────┬───────────────────────────────────────────────────────────────────────┐
+ │ # │ Issue                     │ Impact                                                                │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 1 │ Multi-word symbol targets │ Blocks get symbol resolution, edit insertBefore/insertAfter on most   │
+ │   │                           │ real symbols                                                          │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 2 │ manage save/undo/diff     │ Can't persist, revert, or inspect changes without bash                │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 3 │ Symbol get on TS → image  │ Major gap; works on Rust so likely a dialect-specific rendering bug   │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 4 │ wrap splitting export     │ Correctness bug — mutates semantics silently                          │
+ │   │ const                     │                                                                       │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 5 │ delete leaves empty file  │ Leaks stale files; needs rm follow-up                                 │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 6 │ insertBefore via LINE#ID  │ Seems like a coordinate/indexing bug (reports line 0)                 │
+ └───┴───────────────────────────┴───────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+Please through each and explain what is going on. I want root causes and structural causes+fixes too, think about what CodePath is supposed to solve, and give me a list of tool+codepath cases and what they should do, + discrepancies in expected vs. actual behaviour, and surprises in ergonomics, go for it
+
+* Symptoms
+
+Latent data-loss vector. Currently masked by FsResolver winning the dispatch race; if order ever changes, symbol resolvers silently corrupt files.
+
+#+begin_example
+edit { target: "foo.ts", action: { kind: "delete" }}
+              ^^^ bare path, no qualifier
+
+Expected: fs::remove_file → file unlinked
+Actual today: FsResolver wins → unlinked ✓
+But: CodeResolver.supports() ALSO claims this Delete action.
+     If FsResolver were down/disabled/reordered → CodeResolver
+     dispatches → kill_node clears bytes → file becomes 0-byte
+     but survives.
+
+Same asymmetry: TextResolver claims Insert/Replace/Patch on
+qualified paths it cannot safely handle.
+#+end_example
+
+* Root cause
+
+PLAN-300 fixed FsResolver to gate by path structure:
+#+begin_src rust
+// crates/pi-code-path/src/dialects/fs/mutation.rs:53-62
+fn supports(&self, path: &CodePath, kind: ActionKind) -> bool {
+    if !matches!(kind, Create | Write | Delete) { return false; }
+    path.query.is_none() && path.qualifier.is_none()  // ← path-aware ✓
+}
+#+end_src
+
+But CodeResolver and TextResolver still gate on action kind alone:
+#+begin_src rust
+// crates/pi-natives/src/code_path/code_resolver/mutation.rs:114-135
+fn supports(&self, _path: &CodePath, kind: ActionKind) -> bool {  // ← _path ignored
+    matches!(kind, Rename | Wrap | … | Delete | …)
+}
+
+// crates/pi-code-path/src/dialects/text/mutation.rs:131-144
+fn supports(&self, _path: &CodePath, kind: ActionKind) -> bool {  // ← _path ignored
+    matches!(kind, Append | Prepend | Insert | Replace | Patch)
+}
+#+end_src
+
+* Fix contract (C: full structural alignment)
+
+** A. CodeResolver
+- Symbol-scoped kinds (Rename/Wrap/FindAndReplace/RawTextReplace/Splice/Move/Clone/Transpose/InsertBefore/InsertAfter/Delete/RenameClassToken/RenameIdToken/RenameCustomProperty/ReplaceCodeBlock/RemoveDeadStyle/Promote/Demote) require ~path.query.is_some() || path.qualifier.is_some()~.
+- Without a query/qualifier, return false → not this resolver's job.
+
+** B. Zero-byte guard in code_buffer kill_node
+- =crates/pi-natives/src/code_buffer.rs= delete handler: after computing edits, if applying them would leave the file at 0 bytes AND the original CodePath had no qualifier, return diagnostic ~zero_byte_delete_blocked~ with hint "use bare path target to delete the file".
+- Belt-and-braces against future regression of (A).
+
+** C. TextResolver
+- Insert/Replace require ~path.qualifier.is_some()~ (text qualifiers like #raw, #lines) — currently TextResolver "rewrites the whole file" per its own comment, which is wrong for symbol-targeted text ops.
+- Append/Prepend on bare paths are OK (they append/prepend to the whole file).
+- Patch is bare-path — keep claimed.
+- Audit each kind:
+  - Append: claim ↔ bare path only
+  - Prepend: claim ↔ bare path only
+  - Insert (line-anchored): claim ↔ bare path or text qualifier
+  - Replace (line-anchored): claim ↔ bare path or text qualifier
+  - Patch: claim ↔ bare path only
+
+** Common helper
+- Add ~CodePath::has_target_query()~ inherent helper to avoid duplicating ~path.query.is_some() || path.qualifier.is_some()~ across resolvers.
+
+* TDD protocol
+
+** Failing tests (write first, commit)
+
+Add to =crates/pi-natives/src/code_path/code_resolver/mutation.rs= tests:
+#+begin_src rust
+#[test]
+fn code_resolver_rejects_bare_path_delete() {
+    let cp = bare_path("foo.ts");
+    let resolver = ts_resolver();
+    assert!(!resolver.supports(&cp, ActionKind::Delete));
+}
+
+#[test]
+fn code_resolver_accepts_qualified_delete() {
+    let cp = symbol_path("foo.ts", "Foo");
+    let resolver = ts_resolver();
+    assert!(resolver.supports(&cp, ActionKind::Delete));
+}
+
+#[test]
+fn code_resolver_rejects_bare_path_for_all_symbol_kinds() {
+    let cp = bare_path("foo.ts");
+    let resolver = ts_resolver();
+    for k in [Rename, Wrap, Splice, Clone, InsertBefore, InsertAfter] {
+        assert!(!resolver.supports(&cp, k), "rejects {k:?} on bare path");
+    }
+}
+#+end_src
+
+Add to =crates/pi-code-path/src/dialects/text/mutation.rs= tests:
+#+begin_src rust
+#[test]
+fn text_resolver_rejects_qualified_path_for_whole_file_ops() {
+    let cp = qualified_path("foo.ts", "raw");
+    let resolver = TextResolver::new(tmp_root());
+    // depends on per-kind audit
+    assert!(!resolver.supports(&cp, ActionKind::Patch));
+}
+#+end_src
+
+Add to =crates/pi-natives/src/code_buffer.rs= tests:
+#+begin_src rust
+#[test]
+fn delete_via_kill_node_rejects_zero_byte_outcome() {
+    let src = "fn alone() {}
+";
+    // delete the only function → would leave 0 bytes
+    let result = delete_via_dispatch(src, "alone");
+    assert!(result.is_err());
+    assert!(result.err().unwrap().message.contains("zero"));
+}
+#+end_src
+
+E2E (TS):
+#+begin_src ts
+test("delete on bare path unlinks file", async () => {
+    const file = await tempFile("hi
+");
+    await edit({ operations: [{ target: file, action: { kind: "delete" }}]});
+    expect(await fs.exists(file)).toBe(false);
+});
+
+test("delete on path::Symbol erases bytes but file survives", async () => {
+    const file = await tempFile("export const X = 1;
+export const Y = 2;
+");
+    await edit({ operations: [{ target: `${file}::X`, action: { kind: "delete" }}]});
+    expect(await fs.exists(file)).toBe(true);
+    expect(await fs.readFile(file, "utf8")).not.toContain("export const X");
+});
+#+end_src
+
+* Acceptance
+
+- All resolvers' ~supports()~ check both kind AND path shape
+- Routing tests verify each (kind, path-shape) tuple goes to the correct resolver
+- Zero-byte guard prevents the data-loss class
+- ~cargo test -p pi-code-path -p pi-natives~ green
+
+* Files
+
+- crates/pi-code-path/src/ast.rs (CodePath::has_target_query helper)
+- crates/pi-natives/src/code_path/code_resolver/mutation.rs (supports + tests)
+- crates/pi-code-path/src/dialects/text/mutation.rs (supports + tests)
+- crates/pi-code-path/src/dialects/fs/mutation.rs (use shared helper)
+- crates/pi-natives/src/code_buffer.rs (zero-byte guard + tests)
+
+* References
+
+[[id:PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo]] §FEAT-689 (FsResolver gate)

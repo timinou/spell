@@ -20,32 +20,50 @@ export type HashlineEdit =
 	| { op: "append"; pos?: Anchor; lines: string[] }
 	| { op: "prepend"; pos?: Anchor; lines: string[] };
 
-const NIBBLE_STR = "ZPMQVRWSNKTXJBYH";
+// Crockford base32 alphabet (omits I, L, O, 0, 1 for readability).
+// Matches the Rust line_anchor_id() in crates/pi-code-path/src/dialects/text/anchor.rs.
+// 32 symbols → 5 bits per char → 2 chars = 10 bits = 1024 values.
+// The trailing `!` is a defensive fallback (unreachable in practice —
+// hi/lo are each 0-31, and the alphabet has 32 entries).
+const ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789!";
 
-const DICT = Array.from({ length: 256 }, (_, i) => {
-	const h = i >>> 4;
-	const l = i & 0x0f;
-	return `${NIBBLE_STR[h]}${NIBBLE_STR[l]}`;
-});
-
-const RE_SIGNIFICANT = /[\p{L}\p{N}]/u;
+// FNV-1a constants, matching Rust implementation.
+const FNV_OFFSET = 0x811c9dc5;
+const FNV_PRIME = 0x01000193;
 
 /**
- * Compute a short hexadecimal hash of a single line.
+ * Compute a 2-character Crockford base32 anchor ID for a line.
  *
- * Uses xxHash32 on a trailing-whitespace-trimmed, CR-stripped line, truncated to 2 chars from
- * {@link NIBBLE_STR}. For lines containing no alphanumeric characters (only
- * punctuation/symbols/whitespace), the line number is mixed in to reduce hash collisions.
+ * Algorithm: FNV-1a hash over line bytes, take low 10 bits,
+ * split into hi 5 bits + lo 5 bits, encode each via Crockford base32.
+ *
+ * Matches the Rust `line_anchor_id()` in crates/pi-code-path/src/dialects/text/anchor.rs
+ * so that anchors copied from `get` tool output are reliably validated
+ * by the `edit` tool.
+ *
  * The line input should not include a trailing newline.
  */
-export function computeLineHash(idx: number, line: string): string {
+export function computeLineHash(_idx: number, line: string): string {
+	// Strip CR and trailing whitespace (matches Rust behaviour —
+	// line_anchor_id receives the line text without trailing newline).
 	line = line.replace(/\r/g, "").trimEnd();
 
-	let seed = 0;
-	if (!RE_SIGNIFICANT.test(line)) {
-		seed = idx;
+	// FNV-1a 32-bit hash (unsigned arithmetic — Math.imul gives signed
+	// 32-bit, then >>> 0 converts back to unsigned for the XOR step).
+	let hash = FNV_OFFSET;
+	const bytes = new TextEncoder().encode(line);
+	for (const b of bytes) {
+		hash ^= b;
+		// Math.imul wraps to signed 32-bit; >>> 0 ensures unsigned wrapping.
+		hash = Math.imul(hash, FNV_PRIME) >>> 0;
 	}
-	return DICT[Bun.hash.xxHash32(line, seed) & 0xff];
+
+	// Low 10 bits → 1024-element space.
+	const bits10 = (hash & 0x3ff) >>> 0;
+	const hi = (bits10 >> 5) & 0x1f;
+	const lo = bits10 & 0x1f;
+	const safe = (c: string) => c === "!" ? "Z" : c;
+	return safe(ALPHABET[hi]) + safe(ALPHABET[lo]);
 }
 
 /**
@@ -302,9 +320,9 @@ export function parseTag(ref: string): { line: number; hash: string } {
 	//  1. optional leading ">+" and whitespace
 	//  2. line number (1+ digits)
 	//  3. "#" with optional surrounding spaces
-	//  4. hash (2 hex chars)
+	//  4. hash (2 Crockford base32 chars)
 	//  5. optional trailing display suffix (":..." or "  ...")
-	const match = ref.match(/^\s*[>+-]*\s*(\d+)\s*#\s*([ZPMQVRWSNKTXJBYH]{2})/);
+	const match = ref.match(/^\s*[>+-]*\s*(\d+)\s*#\s*([A-HJKMNP-Z2-9]{2})/);
 	if (!match) {
 		throw new Error(`Invalid line reference "${ref}". Expected format "LINE#ID" (e.g. "5#QW").`);
 	}
