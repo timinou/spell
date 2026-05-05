@@ -1,5 +1,5 @@
 #+TITLE: EdgeResolver — proper diagnostic when CodeGraph not initialised (G6)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d40726c985291f
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
 #+CUSTOM_ID: FEAT-680-edgeresolver-proper-diagnostic-when-code

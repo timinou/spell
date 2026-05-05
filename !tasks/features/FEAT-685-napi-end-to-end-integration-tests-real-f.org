@@ -1,5 +1,5 @@
 #+TITLE: NAPI end-to-end integration tests — real fs + real graph through executeCodePath (G12)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d40726c985291f
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T12-12-17-574Z_14d40726c985291f.jsonl]]
 #+CUSTOM_ID: FEAT-685-napi-end-to-end-integration-tests-real-f
