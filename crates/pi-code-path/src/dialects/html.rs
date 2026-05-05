@@ -92,7 +92,21 @@ impl NameLexer for HtmlNameLexer {
 		}
 	}
 
-	fn matches(&self, _n: &NamePayload, _node: Node<'_>, _src: &str) -> bool {
+	fn matches(&self, n: &NamePayload, node: Node<'_>, src: &str) -> bool {
+		let rendered = self.render(n);
+		if rendered.contains('/') || rendered.contains('[') || rendered.starts_with('@') {
+			return false;
+		}
+		if !matches!(node.kind(), "element" | "script_element" | "style_element") {
+			return false;
+		}
+		if let Some(tag) = find_start_tag(node) {
+			if let Some(tag_name) = find_tag_name(tag) {
+				if let Some(text) = src.get(tag_name.start_byte()..tag_name.end_byte()) {
+					return text == rendered;
+				}
+			}
+		}
 		false
 	}
 }
@@ -141,7 +155,7 @@ fn find_attribute_name(node: Node<'_>) -> Option<Node<'_>> {
 
 // ── Anchors and qualifiers ──────────────────────────────────────
 
-mod qualifiers {
+pub mod qualifiers {
 	use std::ops::Range;
 	use tree_sitter::Node;
 	use crate::dialect::QualifierResolver;
@@ -184,15 +198,15 @@ mod qualifiers {
 			_src: &str,
 			_args: Option<&str>,
 		) -> Option<Range<usize>> {
-			let mut first: Option<Node> = None;
-			let mut last: Option<Node> = None;
+			let mut first: Option<usize> = None;
+			let mut last: Option<usize> = None;
 			let mut stack = vec![node];
 			while let Some(n) = stack.pop() {
 				if n.kind() == "text" || n.kind() == "raw_text" {
-					if first.is_none() {
-						first = Some(n);
+					if first.is_none() || n.start_byte() < first.unwrap() {
+						first = Some(n.start_byte());
 					}
-					last = Some(n);
+					if last.is_none() || n.end_byte() > last.unwrap() { last = Some(n.end_byte()); }
 				}
 				let mut cursor = n.walk();
 				for child in n.children(&mut cursor) {
@@ -200,7 +214,7 @@ mod qualifiers {
 				}
 			}
 			match (first, last) {
-				(Some(f), Some(l)) => Some(f.start_byte()..l.end_byte()),
+				(Some(f), Some(l)) => Some(f..l),
 				_ => Some(node.end_byte()..node.end_byte()),
 			}
 		}
@@ -395,3 +409,4 @@ mod tests {
 		assert_eq!(d.qualifiers.len(), 5);
 	}
 }
+
