@@ -1,0 +1,104 @@
+#+TITLE: get tool: formatForTool can return empty string — add safety-net guard
+#+STATE: ITEM
+#+SESSION_ID: 14d5505d7e65f2fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T12-10-38-969Z_14d5505d7e65f2fa.jsonl]]
+#+CUSTOM_ID: BUG-346-get-tool-formatfortool-can-return-empty
+#+LAYER: core
+
+* Intention & Purpose
+
+`formatForTool()` must never return an empty string. This is a protocol invariant: when an agent calls `get`, it must always receive visible output — either content, a listing, or a diagnostic explaining why nothing was returned. An empty string is indistinguishable from a tool crash and causes agents to abandon the tool.
+
+Add a safety-net fallback at the tool handler level so any future resolution bug that produces empty output still surfaces visibly.
+
+* Context & Narrative
+
+There are multiple code paths that can produce empty output:
+1. `items` is empty AND `diagnostics` is empty (BUG-344 covers making diagnostics non-empty)
+2. `items` contains nodes but all have empty content (edge case with zero-byte files)
+3. Content was stripped during NAPI serialization (hypothetical future regression)
+
+The safety net catches all of these with a single check.
+
+Evidence: session `14d54f5d0e274ba8` — agent received `""` for multiple `get` calls, switched to `bash sed/grep/cat` for all subsequent file reading.
+
+* Scope
+
+In scope:
+- Add empty-output fallback in `get.ts` handler or `codepath-result.ts` `formatForTool()`
+- Fallback text: `"[§no-results] No output for target: {target}"`
+
+Out of scope:
+- Fixing the root causes of empty output (BUG-344, BUG-345)
+- Adding similar guards to other tools (manage, etc.)
+
+* Existing Patterns
+
+`get.ts` handler ~line 70-90:
+```typescript
+static async execute(params, context) {
+    const result = await CodePathResult.fromExecuteCodePath({...});
+    
+    const output = result.formatForTool();
+    return {
+        content: output,  // ← can be ""
+        ...
+    };
+}
+```
+
+`formatForTool()` in `codepath-result.ts`:
+```typescript
+formatForTool(): string {
+    const lines: string[] = [];
+    for (const item of this.items) {
+        lines.push(this.formatCodePathItem(item));
+    }
+    for (const diag of this.diagnostics) {
+        lines.push(this.formatDiagnostic(diag));
+    }
+    return lines.join("
+").trim();
+}
+```
+
+* Tests
+
+File: `packages/coding-agent/test/get.test.ts`
+
+Scenario 1: Empty items + empty diagnostics → fallback
+- Create `CodePathResult` with `items: []`, `diagnostics: []`, `meta.target: "nonexistent/**/*.rs"`
+- Assert: `formatForTool()` returns string containing `[§no-results]`
+- Assert: returned string includes the target
+
+Scenario 2: Normal content unchanged
+- Create `CodePathResult` with valid file content item
+- Assert: `formatForTool()` returns the file content as before
+
+Scenario 3: Only diagnostics, no items → diagnostics rendered
+- Create `CodePathResult` with `items: []`, one warning diagnostic
+- Assert: `formatForTool()` includes the diagnostic text, NOT the fallback
+
+* Implementation
+** ITEM Add empty-output fallback in formatForTool
+:PROPERTIES:
+:CUSTOM_ID: BUG-346-get-tool-formatfortool-can-return-empty::add-empty-output-fallback
+:END:
+- File: packages/coding-agent/src/tools/codepath-result.ts
+- Change: After building output lines, if trimmed result is empty, return `[§no-results] No output for target: {target}`
+- Add/verify tests: empty items+diagnostics → fallback text; normal content → unchanged; diagnostics-only → unchanged
+- See BUG-346 body Implementation for exact code
+* Edge Cases
+
+- Output is whitespace-only: `trim()` makes it empty → fallback fires. Correct: whitespace-only is still "no content."
+- Target not available in meta: fall back to `"unknown"` — this shouldn't happen in practice
+- Very long target strings: render un-truncated
+- Multiple concurrent calls: no shared state, each call independent
+
+* Acceptance Criteria
+
+- `get` with empty items+diagnostics returns `[§no-results] ...`, never `""`
+- `get` with valid content returns content unchanged
+- `get` with diagnostic-only returns diagnostic text unchanged
+- `bun test packages/coding-agent/test/get.test.ts` green (or manual verification)
+- If no existing get.test.ts, create one with the 3 scenarios above

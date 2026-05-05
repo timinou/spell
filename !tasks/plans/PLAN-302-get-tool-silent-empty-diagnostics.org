@@ -1,0 +1,67 @@
+#+TITLE: GET_TOOL_SILENT_EMPTY_DIAGNOSTICS
+#+STATE: ITEM
+#+SESSION_ID: 14d5505d7e65f2fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T12-10-38-969Z_14d5505d7e65f2fa.jsonl]]
+#+CUSTOM_ID: PLAN-302-get-tool-silent-empty-diagnostics
+
+[[id:BUG-344-get-tool-zero-matches-returns-silent-emp]]
+[[id:BUG-345-get-tool-cwd-context-missing-from-path-n]]
+[[id:BUG-346-get-tool-formatfortool-can-return-empty]]
+
+* Context
+
+Session `14d54f5d0e274ba8` (2026-05-05, agentmaker) traced 7 `get` tool calls → 5 failures. Agent abandoned `get` and fell back to `bash sed/grep/cat` for all subsequent file reading.
+
+Three root causes identified:
+1. Zero-matches resolution (glob or file-not-found) produces `§not-found` node without diagnostic when suffix fallback finds nothing → `formatForTool` returns `""`
+2. "Did you mean" suggestions lack CWD context → agent repeats wrong path prefix across calls
+3. No safety-net guard against empty output in `formatForTool` → any future regression silently breaks the tool
+
+Each bug is a 5-15 line surgical fix. No architecture changes. The existing FEAT-688/711/683 scaffolding (suffix fallback, ENOENT distinction, degenerate-result hints) is already in place — these three fill the remaining diagnostic gaps.
+
+* Verification
+
+**Per-bug verification:**
+- BUG-344: `cargo test -p pi-code-path` + TS test verifying `formatForTool` renders diagnostic message
+- BUG-345: `cargo test -p pi-code-path` + manual agent session with non-root CWD
+- BUG-346: `bun test packages/coding-agent/test/get.test.ts` + existing get tests don't regress
+
+**Integration verification:**
+- `cargo test -p pi-code-path -p pi-natives` green
+- `bun run --parallel check:ts check:rs` green
+- Manual: agent `get` on nonexistent path returns visible diagnostic, not empty string
+- Manual: agent `get` on glob that matches nothing returns visible diagnostic
+- Manual: agent `get` on existing file still returns content unchanged
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:BUG-344-get-tool-zero-matches-returns-silent-emp::extend-zeromatches-diagnostic]] Extend ZeroMatches diagnostic with message field
+- [[id:BUG-345-get-tool-cwd-context-missing-from-path-n::thread-cwd-into-suggestion]] Thread CWD into suffix fallback suggestion
+- [[id:BUG-345-get-tool-cwd-context-missing-from-path-n::verify-cwd-in-fetchopts]] Verify CWD is populated in FetchOpts from NAPI layer
+- [[id:BUG-346-get-tool-formatfortool-can-return-empty::add-empty-output-fallback]] Add empty-output fallback in formatForTool
+** wave-2 :wave:
+- [[id:BUG-344-get-tool-zero-matches-returns-silent-emp::always-emit-diagnostic-in-resolve]] Always emit ZeroMatches diagnostic in FsResolver::resolve
+- [[id:BUG-344-get-tool-zero-matches-returns-silent-emp::update-all-construction-sites]] Update all ZeroMatches construction sites
+** wave-3 :wave:
+- [[id:BUG-344-get-tool-zero-matches-returns-silent-emp::update-formatfortool-fallback]] Update formatForTool to render message as fallback
+** File-level DAG
+*** Nodes
+- `BUG-344-get-tool-zero-matches-returns-silent-emp` Extend ZeroMatches diagnostic with message field [ITEM]
+- `BUG-345-get-tool-cwd-context-missing-from-path-n` Thread CWD into suffix fallback suggestion [ITEM]
+- `BUG-346-get-tool-formatfortool-can-return-empty` Add empty-output fallback in formatForTool [ITEM]
+*** Edges
+- None.
+** Subfeature-level DAG
+*** Nodes
+- `BUG-344-get-tool-zero-matches-returns-silent-emp::extend-zeromatches-diagnostic` Extend ZeroMatches diagnostic with message field [ITEM]
+- `BUG-344-get-tool-zero-matches-returns-silent-emp::always-emit-diagnostic-in-resolve` Always emit ZeroMatches diagnostic in FsResolver::resolve [ITEM]
+- `BUG-344-get-tool-zero-matches-returns-silent-emp::update-formatfortool-fallback` Update formatForTool to render message as fallback [ITEM]
+- `BUG-344-get-tool-zero-matches-returns-silent-emp::update-all-construction-sites` Update all ZeroMatches construction sites [ITEM]
+- `BUG-345-get-tool-cwd-context-missing-from-path-n::thread-cwd-into-suggestion` Thread CWD into suffix fallback suggestion [ITEM]
+- `BUG-345-get-tool-cwd-context-missing-from-path-n::verify-cwd-in-fetchopts` Verify CWD is populated in FetchOpts from NAPI layer [ITEM]
+- `BUG-346-get-tool-formatfortool-can-return-empty::add-empty-output-fallback` Add empty-output fallback in formatForTool [ITEM]
+*** Edges
+- `BUG-344-get-tool-zero-matches-returns-silent-emp::always-emit-diagnostic-in-resolve` depends on `BUG-344-get-tool-zero-matches-returns-silent-emp::extend-zeromatches-diagnostic`
+- `BUG-344-get-tool-zero-matches-returns-silent-emp::update-formatfortool-fallback` depends on `BUG-344-get-tool-zero-matches-returns-silent-emp::always-emit-diagnostic-in-resolve`
+- `BUG-344-get-tool-zero-matches-returns-silent-emp::update-all-construction-sites` depends on `BUG-344-get-tool-zero-matches-returns-silent-emp::extend-zeromatches-diagnostic`
+

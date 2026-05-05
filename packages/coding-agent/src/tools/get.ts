@@ -155,8 +155,10 @@ export class GetTool implements AgentTool<typeof getSchema> {
 			limit: params.limit,
 		});
 
-		const text = prettifyDidYouMean(result.text);
-		const builder = toolResult<GetToolResultDetails>({ format: params.format }).text(text);
+  const displayText = result.text?.trim()
+  			|| `[§no-results] No content for target: ${params.target}`;
+  		const text = prettifyDidYouMean(displayText);
+  		const builder = toolResult<GetToolResultDetails>({ format: params.format }).text(text);
 		if (result.meta) {
 			builder.limits({
 				resultLimit: result.meta.limits?.resultLimit?.reached,

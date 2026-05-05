@@ -1,0 +1,154 @@
+#+TITLE: get tool: zero-matches returns silent empty — must emit diagnostic always
+#+STATE: ITEM
+#+SESSION_ID: 14d5505d7e65f2fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T12-10-38-969Z_14d5505d7e65f2fa.jsonl]]
+#+CUSTOM_ID: BUG-344-get-tool-zero-matches-returns-silent-emp
+#+LAYER: core
+
+* Intention & Purpose
+
+When `get` resolves a target and finds zero matches, the `formatForTool` output must always include a human-readable diagnostic explaining what happened. Currently, when suffix fallback also finds nothing, a `§not-found` node is created with no `ZeroMatches` diagnostic — `formatForTool` renders empty string. Agent sees silence, abandons tool.
+
+Evidence: session `14d54f5d0e274ba8` — `get` with glob `apps/agentmaker/**/*workbench*` returned `""`. Agent switched to `bash` for all subsequent file reading.
+
+* Context & Narrative
+
+The resolution chain:
+1. `FsResolver::resolve()` calls `resolve_path_content()` → returns empty vec
+2. `suffix_fallback()` tries fuzzy match → returns `None` (no candidates)
+3. Currently: `diagnostics` stays empty, `§not-found` node is pushed with no `ZeroMatches` diagnostic
+4. `formatForTool` in TS: checks `diagnostics.find(d => d.kind === 'zeroMatches')?.suggestion` → undefined → no "Did you mean" line → only renders the `§not-found` kind label which collapses to empty
+
+Fix: always emit a `ZeroMatches` diagnostic, with a message that always renders. The `suggestion` field stays optional for the "Did you mean" rendering, but a `message` field provides the fallback text.
+
+* Scope
+
+In scope:
+- `FsResolver::resolve()` in `fs/mod.rs`: always emit `ZeroMatches` diagnostic when nodes are empty
+- `formatForTool` / `formatCodePathItem` in `codepath-result.ts`: render `diagnostic.message` as fallback when `suggestion` is absent
+- Unit test: empty glob produces visible diagnostic text
+
+Out of scope:
+- Changing suffix_fallback algorithm
+- CWD context (separate bug)
+- Empty-string guard at the tool handler level (separate bug)
+
+* Existing Patterns
+
+`ZeroMatches` diagnostic type in `types.rs`:
+```rust
+pub enum DiagnosticKind {
+    /// Suffix/typo suggestion when zero matches found.
+    ZeroMatches { suggestion: Option<String> },
+    /// Zero nodes matched (no suggestion available).
+    // ??? — this variant doesn't exist yet
+}
+```
+
+Current `resolve()` in `fs/mod.rs` ~line 66-92:
+```rust
+if nodes.is_empty() {
+    if let Some(suggestion) = suffix_fallback(&locator, &self.workspace_root, fetch_opts) {
+        diagnostics.push(Diagnostic {
+            kind: DiagnosticKind::ZeroMatches { suggestion: Some(suggestion) },
+            ..
+        });
+    }
+    nodes.push(resolved_node(ResolvedNode {
+        kind: "§not-found".into(),
+        diagnostics,
+        ..
+    }));
+}
+```
+
+Current `formatForTool` detection in `get.ts` ~line 57-63:
+```typescript
+if (item.kind?.includes("not-found")) {
+    const diagnostics = item.diagnostics || [];
+    const zeroDiag = diagnostics.find(d => d.kind === "zeroMatches");
+    if (zeroDiag?.suggestion) {
+        return `Did you mean: ${zeroDiag.suggestion}`;
+    }
+    return "";  // ← BUG: no fallback
+}
+```
+
+* Tests
+
+File: `crates/pi-code-path/src/dialects/fs/mod.rs` tests section
+
+Scenario 1: Glob matches zero files, no suffix fallback
+- Create temp dir with files: `a.rs`, `b.rs`, `c.txt`
+- Resolve glob `*.ts` (matches nothing)
+- Assert: response contains a node with `kind: "§not-found"`
+- Assert: node diagnostics contains `ZeroMatches` with non-empty `message` field
+- Assert: `message` includes the original target pattern
+
+Scenario 2: File path doesn't exist, no suffix fallback
+- Resolve `nonexistent/path/foo.rs`
+- Assert: `§not-found` node with `ZeroMatches` diagnostic containing message
+
+Scenario 3: Suffix fallback still works (regression)
+- Resolve `workbench` (typo of `workbench.ex`)
+- Assert: `§not-found` node with `ZeroMatches` diagnostic containing both message AND suggestion
+
+File: `packages/coding-agent/test/get.test.ts`
+
+Scenario 4: formatForTool renders diagnostic message when no suggestion
+- Mock `CodePathResult` with `§not-found` node, `ZeroMatches` diagnostic with `message: "Target '*.ts' matched 0 files"` but no `suggestion`
+- Assert: `formatForTool()` returns string containing the message text
+- Assert: `formatForTool()` does NOT return empty string
+
+* Implementation
+** ITEM Extend ZeroMatches diagnostic with message field
+:PROPERTIES:
+:CUSTOM_ID: BUG-344-get-tool-zero-matches-returns-silent-emp::extend-zeromatches-diagnostic
+:END:
+- File: crates/pi-code-path/src/types.rs
+- Change: Add `message: String` to `DiagnosticKind::ZeroMatches` variant
+- Update all construction sites to include `message`
+- See BUG-344 body Implementation Step 1 for exact code
+
+** ITEM Always emit ZeroMatches diagnostic in FsResolver::resolve
+:PROPERTIES:
+:CUSTOM_ID: BUG-344-get-tool-zero-matches-returns-silent-emp::always-emit-diagnostic-in-resolve
+:DEPENDS: BUG-344-get-tool-zero-matches-returns-silent-emp::extend-zeromatches-diagnostic
+:END:
+- File: crates/pi-code-path/src/dialects/fs/mod.rs ~line 66-92
+- Change: Move diagnostic emission outside the `if let Some(suggestion)` block — always push `ZeroMatches` with message, suggestion optional
+- Add unit tests for zero-matches scenarios
+- See BUG-344 body Implementation Step 2 for exact code
+
+** ITEM Update formatForTool to render message as fallback
+:PROPERTIES:
+:CUSTOM_ID: BUG-344-get-tool-zero-matches-returns-silent-emp::update-formatfortool-fallback
+:DEPENDS: BUG-344-get-tool-zero-matches-returns-silent-emp::always-emit-diagnostic-in-resolve
+:END:
+- File: packages/coding-agent/src/tools/get.ts ~line 57-63
+- Change: When `zeroDiag` found, render `message` field even when `suggestion` is absent; fallback to `[§not-found]` if no diagnostic at all
+- See BUG-344 body Implementation Step 3 for exact code
+
+** ITEM Update all ZeroMatches construction sites
+:PROPERTIES:
+:CUSTOM_ID: BUG-344-get-tool-zero-matches-returns-silent-emp::update-all-construction-sites
+:DEPENDS: BUG-344-get-tool-zero-matches-returns-silent-emp::extend-zeromatches-diagnostic
+:END:
+- File: crates/pi-code-path/src/dialects/fs/mod.rs (tests), fs/suffix_fallback.rs
+- Change: Update all `DiagnosticKind::ZeroMatches { suggestion }` → `DiagnosticKind::ZeroMatches { message, suggestion }`
+- Run `cargo test -p pi-code-path` to catch any missed sites
+* Edge Cases
+
+- Zero-byte directory: `get` on empty directory should still render `[§dir]` with empty listing, not trigger `ZeroMatches`
+- `§not-found` node with multiple diagnostics: only render `ZeroMatches`; other diagnostics are separate
+- Workspace root is unset: message falls back to "Target 'X' matched 0 files"
+- Suggestion text contains special characters: no escaping needed, plain text
+
+* Acceptance Criteria
+
+- `get { target: "nonexistent/**/*.ts" }` returns visible diagnostic text, not empty string
+- `get { target: "real_dir/nonexistent_file.rs" }` returns diagnostic with message + "Did you mean" for close matches
+- `get { target: "real_dir/" }` (existing directory) still works unchanged
+- `get { target: "real_dir/existing_file.rs" }` (existing file) still returns content unchanged
+- `cargo test -p pi-code-path` green
+- `bun test packages/coding-agent/test/get.test.ts` green (if test file exists) or verify via manual agent session
