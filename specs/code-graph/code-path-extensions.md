@@ -355,3 +355,49 @@ When no query is present (bare path or glob), `FsResolver` handles the request d
 
 ### URI branch
 `Locator::Uri` bypasses the above tree entirely; the scheme registry dispatches to the matching `SchemeHandler`.
+
+
+## 10 · Action dispatch contract (FEAT-686)
+
+When `opts.command == "edit"`, `execute_code_path_inner` enters the **action dispatch** branch instead of the query resolver tree.
+
+### Entry conditions
+
+- `command` must be exactly `"edit"`.
+- `opts.actions` must be present and deserializable as `Vec<pi_code_path::ast::Action>`. If absent, a single `CodePathChunk` is returned with a `missing_actions` diagnostic.
+
+### Resolver selection
+
+Three resolvers are instantiated up front:
+
+1. `FsResolver` — supports `Create`, `Write`, `Delete`.
+2. `TextResolver` — supports `Append`, `Prepend`, `Insert`, `Replace`, `Patch`.
+3. `CodeResolverImpl` — supports all remaining code-structural actions (`Rename`, `Wrap`, `FindAndReplace`, `Splice`, `Move`, `Clone`, `Transpose`, `InsertBefore`, `InsertAfter`, `Delete`, etc.).
+
+For each action in order, the dispatcher picks the first resolver whose `supports(action.kind())` returns `true`. If no resolver claims the action, the chunk returns an `unsupported_action_for_resolver` diagnostic alongside any prior successful outcomes.
+
+### Sequential application with first-failure abort
+
+Actions are applied strictly in order:
+
+- On success, the `MutationOutcome` is collected.
+- On failure, the loop aborts immediately. The returned chunk contains:
+  - `nodes`: all prior successful outcomes converted to `NodeRefDto` with `kind: "§edit-result"`.
+  - `diagnostics`: the failure diagnostic.
+  - `done: true`.
+
+### MutationOutcome → NodeRefDto mapping
+
+Each successful outcome is marshalled into a `NodeRefDto` with:
+
+- `kind`: `"§edit-result"`
+- `locator`: `"edit"`
+- `metadata.editCount`: outcome edit count
+- `metadata.diff`: optional diff string
+- `metadata.created`: boolean
+- `metadata.targetSummary`: rendered target identifier
+
+### Behaviour preservation
+
+- `command: "get"` (or any value other than `"edit"`) continues to use the existing query resolver tree documented in §9.
+- `command: "manage"` is reserved and also falls through to the query tree in this release.

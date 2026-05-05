@@ -100,6 +100,10 @@ pub enum DiagnosticVariant {
 	},
 	/// The resolver does not support the requested operation.
 	UnsupportedOperation,
+	/// Edit command invoked without actions.
+	MissingActions,
+	/// No resolver supports the requested action kind.
+	UnsupportedActionForResolver,
 	/// Permission denied when accessing a filesystem entry.
 	Inaccessible,
 	/// Encoding fallback (e.g. latin-1 for non-UTF-8 file).
