@@ -101,23 +101,7 @@ impl Resolver for FsResolver {
 						}],
 					});
 				},
-    SuffixFallbackResult::NotFound => {
-    					let message = format!(
-    						"Target '{}' matched 0 files",
-    						fs_locator_to_string(locator)
-    					);
-    					diagnostics.push(Diagnostic {
-          variant: DiagnosticVariant::PathNotFound {
-          							message,
-          						},
-    						severity: DiagnosticSeverity::Warning,
-    					});
-    					nodes.push(resolved_node(ResolvedNode {
-    						kind: "§not-found".into(),
-    						diagnostics,
-    						content: None,
-    					}));
-    				},
+				SuffixFallbackResult::NotFound => {},
 			}
 		}
 		// Apply qualifier if present.
