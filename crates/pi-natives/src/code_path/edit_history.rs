@@ -8,7 +8,6 @@ use std::{
 	fs::{File, OpenOptions},
 	io::{BufRead, BufReader, Write},
 	path::{Path, PathBuf},
-	sync::{Mutex, MutexGuard},
 	time::SystemTime,
 };
 
@@ -86,18 +85,17 @@ pub trait EditHistory: Send + Sync {
 /// JSONL-backed history stored at `<root>/.spell/edit-history.jsonl`.
 pub struct JsonlHistory {
 	path: PathBuf,
-	_temp: Option<tempfile::NamedTempFile>,
 }
 
 impl JsonlHistory {
 	pub fn new(path: PathBuf) -> Self {
-		Self { path, _temp: None }
+		Self { path }
 	}
 
+	#[cfg(test)]
 	pub fn in_memory() -> Self {
-		let file = tempfile::NamedTempFile::new().expect("temp file");
-		let path = file.path().to_path_buf();
-		Self { path, _temp: Some(file) }
+		let path = std::env::temp_dir().join(format!("edit-history-{}.jsonl", std::process::id()));
+		Self { path }
 	}
 
 	fn read_all(&self) -> Vec<EditEntry> {
@@ -273,7 +271,7 @@ mod tests {
 	#[test]
 	fn uncommitted_only_filter_excludes_post_commit_entries() {
 		let h = JsonlHistory::in_memory();
-		let mut e1 = entry("S1", "a.txt");
+		let e1 = entry("S1", "a.txt");
 		let mut e2 = entry("S1", "a.txt");
 		e2.commit = Some("abc".into());
 		e2.id = "2".into();
