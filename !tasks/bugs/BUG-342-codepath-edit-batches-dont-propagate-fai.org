@@ -1,5 +1,5 @@
 #+TITLE: CodePath edit batches don't propagate failures; no transaction across operations
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d50def80d06410
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T07-20-24-835Z_14d50def80d06410.jsonl]]
 #+CUSTOM_ID: BUG-342-codepath-edit-batches-dont-propagate-fai
@@ -300,3 +300,5 @@ test("successful batch returns isError=false with per-op summary", async () => {
 * References
 
 [[id:PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo]] §FEAT-712 — kernel-side strict mode (different scope: actions within one op)
+
+NOTE [2026-05-05]: Fixed in commits 4a82ed7ed (failing tests) + 2d21560ed (impl). Fail-fast default propagates isError, short-circuits remaining ops, marks them 'skipped' in aggregate text. transaction:'strict' snapshots all targets pre-batch and restores/unlinks on failure. AgentToolResult.isError typed; ToolResultBuilder.error() added. 6/6 BUG-342 tests pass; 32/32 edit.test.ts pass.
