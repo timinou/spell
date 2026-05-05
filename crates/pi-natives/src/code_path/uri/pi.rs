@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
-use pi_code_path::resolver::{CancellationToken, SchemeHandler};
-use pi_code_path::types::{Content, Diagnostic, DiagnosticVariant, NodeRef};
+use pi_code_path::{
+	resolver::{CancellationToken, SchemeHandler},
+	types::{Content, Diagnostic, DiagnosticVariant, NodeRef},
+};
 
 /// Resolves `pi://<path>` to internal Spell documentation.
 pub struct PiHandler {
@@ -20,11 +22,13 @@ impl SchemeHandler for PiHandler {
 			return Err(Diagnostic {
 				variant: DiagnosticVariant::PiPathNotFound,
 				message: format!("pi path not found: pi://{path}"),
-				span: None,
+				span:    None,
 			});
 		}
 
-		let content = std::fs::read_to_string(&target).ok().map(|value| Content::Text { value });
+		let content = std::fs::read_to_string(&target)
+			.ok()
+			.map(|value| Content::Text { value });
 		Ok(NodeRef {
 			locator: format!("pi://{path}"),
 			range: 0..0,
@@ -38,8 +42,9 @@ impl SchemeHandler for PiHandler {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use std::io::Write;
+
+	use super::*;
 
 	#[test]
 	fn pi_happy_path() {
@@ -50,7 +55,9 @@ mod tests {
 		write!(f, "pi docs").unwrap();
 
 		let h = PiHandler { project_root: root };
-		let node = h.handle("docs/index.md", &CancellationToken::new()).unwrap();
+		let node = h
+			.handle("docs/index.md", &CancellationToken::new())
+			.unwrap();
 		assert_eq!(node.locator, "pi://docs/index.md");
 		assert_eq!(node.kind, "§pi");
 		assert!(matches!(node.content, Some(Content::Text { .. })));
@@ -59,10 +66,10 @@ mod tests {
 	#[test]
 	fn pi_missing_path() {
 		let dir = tempfile::tempdir().unwrap();
-		let h = PiHandler {
-			project_root: dir.path().to_path_buf(),
-		};
-		let err = h.handle("missing.md", &CancellationToken::new()).unwrap_err();
+		let h = PiHandler { project_root: dir.path().to_path_buf() };
+		let err = h
+			.handle("missing.md", &CancellationToken::new())
+			.unwrap_err();
 		assert!(matches!(err.variant, DiagnosticVariant::PiPathNotFound));
 	}
 }

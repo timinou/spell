@@ -6,11 +6,11 @@
 
 use std::collections::HashMap;
 
-use pi_org_engine::edge::EdgeKind;
-use pi_org_engine::graph::{
-	build_typed_graph, neighborhood, path, timeline, TypedGraphNode, TypedEdge,
+use pi_org_engine::{
+	edge::EdgeKind,
+	graph::{TypedEdge, TypedGraphNode, build_typed_graph, neighborhood, path, timeline},
+	item::OrgItem,
 };
-use pi_org_engine::item::OrgItem;
 
 // ── Helpers ─────────────────────────────────────────────────────
 
@@ -255,10 +255,16 @@ fn cycle_in_about_edges_does_not_loop() {
 #[test]
 fn build_typed_graph_treats_legacy_blockers_as_blocks() {
 	let mut item_a = make_item("TASK-A");
-	item_a.properties.insert("CUSTOM_ID".to_string(), "TASK-A".to_string());
+	item_a
+		.properties
+		.insert("CUSTOM_ID".to_string(), "TASK-A".to_string());
 	let mut item_b = make_item("TASK-B");
-	item_b.properties.insert("CUSTOM_ID".to_string(), "TASK-B".to_string());
-	item_b.properties.insert("BLOCKERS".to_string(), "TASK-A".to_string());
+	item_b
+		.properties
+		.insert("CUSTOM_ID".to_string(), "TASK-B".to_string());
+	item_b
+		.properties
+		.insert("BLOCKERS".to_string(), "TASK-A".to_string());
 
 	let item_c = with_relations(make_item("TASK-C"), vec![(EdgeKind::Blocks, "TASK-A")]);
 
@@ -268,11 +274,15 @@ fn build_typed_graph_treats_legacy_blockers_as_blocks() {
 	let b_edges = graph.out_edges.get("TASK-B").unwrap();
 	let c_edges = graph.out_edges.get("TASK-C").unwrap();
 	assert!(
-		b_edges.iter().any(|e| e.kind == EdgeKind::Blocks && e.to == "TASK-A"),
+		b_edges
+			.iter()
+			.any(|e| e.kind == EdgeKind::Blocks && e.to == "TASK-A"),
 		"BLOCKERS property -> Blocks edge"
 	);
 	assert!(
-		c_edges.iter().any(|e| e.kind == EdgeKind::Blocks && e.to == "TASK-A"),
+		c_edges
+			.iter()
+			.any(|e| e.kind == EdgeKind::Blocks && e.to == "TASK-A"),
 		"RELATIONS BLOCKS -> Blocks edge"
 	);
 }
@@ -281,9 +291,7 @@ fn build_typed_graph_treats_legacy_blockers_as_blocks() {
 
 #[test]
 fn unknown_edge_kind_other_is_traversable() {
-	let a = with_relations(make_item("A"), vec![
-		(EdgeKind::Other("WHATEVER".to_string()), "B"),
-	]);
+	let a = with_relations(make_item("A"), vec![(EdgeKind::Other("WHATEVER".to_string()), "B")]);
 	let b = make_item("B");
 	let items = vec![a, b];
 

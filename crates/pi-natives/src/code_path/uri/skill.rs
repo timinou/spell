@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
-use pi_code_path::resolver::{CancellationToken, SchemeHandler};
-use pi_code_path::types::{Content, Diagnostic, DiagnosticVariant, NodeRef};
+use pi_code_path::{
+	resolver::{CancellationToken, SchemeHandler},
+	types::{Content, Diagnostic, DiagnosticVariant, NodeRef},
+};
 
 /// Resolves `skill://<name>` and `skill://<name>/<file>`.
 pub struct SkillHandler {
@@ -25,11 +27,13 @@ impl SchemeHandler for SkillHandler {
 			return Err(Diagnostic {
 				variant: DiagnosticVariant::SkillNotFound,
 				message: format!("skill not found: skill://{path}"),
-				span: None,
+				span:    None,
 			});
 		}
 
-		let content = std::fs::read_to_string(&target).ok().map(|value| Content::Text { value });
+		let content = std::fs::read_to_string(&target)
+			.ok()
+			.map(|value| Content::Text { value });
 		Ok(NodeRef {
 			locator: format!("skill://{path}"),
 			range: 0..0,
@@ -43,8 +47,9 @@ impl SchemeHandler for SkillHandler {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use std::io::Write;
+
+	use super::*;
 
 	#[test]
 	fn skill_root_file() {
@@ -70,7 +75,9 @@ mod tests {
 		write!(f, "print('hi')").unwrap();
 
 		let h = SkillHandler { project_root: root };
-		let node = h.handle("canvas/scripts/init.py", &CancellationToken::new()).unwrap();
+		let node = h
+			.handle("canvas/scripts/init.py", &CancellationToken::new())
+			.unwrap();
 		assert_eq!(node.locator, "skill://canvas/scripts/init.py");
 		assert!(matches!(node.content, Some(Content::Text { .. })));
 	}
@@ -78,9 +85,7 @@ mod tests {
 	#[test]
 	fn skill_missing() {
 		let dir = tempfile::tempdir().unwrap();
-		let h = SkillHandler {
-			project_root: dir.path().to_path_buf(),
-		};
+		let h = SkillHandler { project_root: dir.path().to_path_buf() };
 		let err = h.handle("missing", &CancellationToken::new()).unwrap_err();
 		assert!(matches!(err.variant, DiagnosticVariant::SkillNotFound));
 	}

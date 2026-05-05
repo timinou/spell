@@ -13,8 +13,8 @@ pub mod stream;
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
-use super::fs::anchors::DefaultFsAnchorContext;
 use self::anchor::line_anchor_id;
+use super::fs::anchors::DefaultFsAnchorContext;
 use crate::{
 	ast::{CodePath, Combinator, Head, Locator, Predicate, Step},
 	dialects::fs::walker::{WalkOpts, walk},
@@ -105,12 +105,7 @@ impl Resolver for TextResolver {
 								continue;
 							},
 						};
-						match qualifiers::resolve_qualifier(
-							&n,
-							&content,
-							qual,
-							&self.format_extractors,
-						) {
+						match qualifiers::resolve_qualifier(&n, &content, qual, &self.format_extractors) {
 							Ok(m) => out.push(m),
 							Err(d) => {
 								let mut n = n;

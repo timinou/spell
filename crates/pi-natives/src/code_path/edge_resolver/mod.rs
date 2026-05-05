@@ -8,19 +8,19 @@ use std::{
 	sync::Arc,
 };
 
+use pi_code_graph::model::{CodeGraph, EdgeKind as GraphEdgeKind, GraphNode};
 use pi_code_path::{
 	ast::EdgeKind as KernelEdgeKind,
 	resolver::{CancellationToken, EdgeResolver},
 	types::{Diagnostic, DiagnosticVariant, NodeRef},
 };
-use pi_code_graph::model::{CodeGraph, EdgeKind as GraphEdgeKind, GraphNode};
 
 /// [`EdgeResolver`] backed by a `pi-code-graph` [`CodeGraph`].
 pub struct EdgeResolverImpl {
 	pub graph: Arc<CodeGraph>,
-	outgoing: HashMap<usize, Vec<(usize, GraphEdgeKind)>>,
-	incoming: HashMap<usize, Vec<(usize, GraphEdgeKind)>>,
-	nodes: HashMap<usize, NodeRef>,
+	outgoing:  HashMap<usize, Vec<(usize, GraphEdgeKind)>>,
+	incoming:  HashMap<usize, Vec<(usize, GraphEdgeKind)>>,
+	nodes:     HashMap<usize, NodeRef>,
 }
 
 impl EdgeResolverImpl {
@@ -38,43 +38,43 @@ impl EdgeResolverImpl {
 			if let Some(node) = g.node_weight(idx) {
 				let node_ref = match node {
 					GraphNode::Symbol(sym) => NodeRef {
-						locator: format!("{}:{}", sym.file.display(), sym.line),
-						range:   0..0,
-						kind:    format!("{:?}", sym.kind).to_ascii_lowercase(),
-						content: None,
-						metadata: Default::default(),
+						locator:     format!("{}:{}", sym.file.display(), sym.line),
+						range:       0..0,
+						kind:        format!("{:?}", sym.kind).to_ascii_lowercase(),
+						content:     None,
+						metadata:    Default::default(),
 						diagnostics: Vec::new(),
 					},
 					GraphNode::File(file) => NodeRef {
-						locator: file.path.display().to_string(),
-						range:   0..0,
-						kind:    "file".into(),
-						content: None,
-						metadata: Default::default(),
+						locator:     file.path.display().to_string(),
+						range:       0..0,
+						kind:        "file".into(),
+						content:     None,
+						metadata:    Default::default(),
 						diagnostics: Vec::new(),
 					},
 				};
 				nodes.insert(index, node_ref);
 			}
-
 		}
 		// Build adjacency lists using only inherent methods so we don't need
 		// to import petgraph traits.
 		for ei in g.edge_indices() {
 			if let Some((src, dst)) = g.edge_endpoints(ei) {
 				if let Some(&kind) = g.edge_weight(ei) {
-					outgoing.entry(src.index()).or_default().push((dst.index(), kind));
-					incoming.entry(dst.index()).or_default().push((src.index(), kind));
+					outgoing
+						.entry(src.index())
+						.or_default()
+						.push((dst.index(), kind));
+					incoming
+						.entry(dst.index())
+						.or_default()
+						.push((src.index(), kind));
 				}
 			}
 		}
 
-		Self {
-			graph,
-			outgoing,
-			incoming,
-			nodes,
-		}
+		Self { graph, outgoing, incoming, nodes }
 	}
 
 	/// Locate a graph node index from a [`NodeRef`] locator.
@@ -151,7 +151,11 @@ impl EdgeResolverImpl {
 	/// Return the neighbours of `node` that are connected by `kind` in the
 	/// requested direction.
 	fn neighbors(&self, node: usize, kind: GraphEdgeKind, incoming: bool) -> Vec<usize> {
-		let adj = if incoming { &self.incoming } else { &self.outgoing };
+		let adj = if incoming {
+			&self.incoming
+		} else {
+			&self.outgoing
+		};
 		adj.get(&node)
 			.map(|edges| {
 				edges
@@ -170,7 +174,9 @@ impl EdgeResolverImpl {
 		} else {
 			Err(Diagnostic {
 				variant: DiagnosticVariant::UnsupportedOperation,
-				message: "[CODE_GRAPH_NOT_INITIALISED] code graph not initialised; run `manage index` first or wait for background indexing".to_string(),
+				message: "[CODE_GRAPH_NOT_INITIALISED] code graph not initialised; run `manage index` \
+				          first or wait for background indexing"
+					.to_string(),
 				span:    None,
 			})
 		}
@@ -279,9 +285,9 @@ impl EdgeResolver for EdgeResolverImpl {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
-
 	use pi_code_graph::model::{CodeGraph, PersistedCodeGraph};
+
+	use super::*;
 
 	fn build_graph(
 		nodes: serde_json::Value,
@@ -344,7 +350,7 @@ mod tests {
 				[2, 4, "Calls"],
 				[0, 1, "Imports"]
 			]),
-			serde_json::json!({"file_count": 2, "symbol_count": 3, "edge_count": 7, "language_counts": {"ts": 2}})
+			serde_json::json!({"file_count": 2, "symbol_count": 3, "edge_count": 7, "language_counts": {"ts": 2}}),
 		)
 	}
 
@@ -355,13 +361,12 @@ mod tests {
 				{"Symbol": {"name": "x", "qualified_name": "src/cycle.ts::x", "file": "src/cycle.ts", "kind": "Function", "exported": true, "line": 1, "column": 1, "detail": null}},
 				{"Symbol": {"name": "y", "qualified_name": "src/cycle.ts::y", "file": "src/cycle.ts", "kind": "Function", "exported": true, "line": 2, "column": 1, "detail": null}}
 			]),
-			serde_json::json!([
-				[0, 1, "Defines"],
-				[0, 2, "Defines"],
-				[1, 2, "References"],
-				[2, 1, "References"]
-			]),
-			serde_json::json!({"file_count": 1, "symbol_count": 2, "edge_count": 4, "language_counts": {"ts": 1}})
+			serde_json::json!([[0, 1, "Defines"], [0, 2, "Defines"], [1, 2, "References"], [
+				2,
+				1,
+				"References"
+			]]),
+			serde_json::json!({"file_count": 1, "symbol_count": 2, "edge_count": 4, "language_counts": {"ts": 1}}),
 		)
 	}
 
@@ -370,9 +375,7 @@ mod tests {
 			serde_json::json!({"File": {"path": "src/big.ts", "language": "ts"}}),
 			serde_json::json!({"Symbol": {"name": "hub", "qualified_name": "src/big.ts::hub", "file": "src/big.ts", "kind": "Function", "exported": true, "line": 1, "column": 1, "detail": null}}),
 		];
-		let mut edges = vec![
-			serde_json::json!([0, 1, "Defines"]),
-		];
+		let mut edges = vec![serde_json::json!([0, 1, "Defines"])];
 		for i in 0..101 {
 			nodes.push(serde_json::json!({
 				"Symbol": {
@@ -391,7 +394,7 @@ mod tests {
 		build_graph(
 			serde_json::Value::Array(nodes),
 			serde_json::Value::Array(edges),
-			serde_json::json!({"file_count": 1, "symbol_count": 102, "edge_count": 103, "language_counts": {"ts": 1}})
+			serde_json::json!({"file_count": 1, "symbol_count": 102, "edge_count": 103, "language_counts": {"ts": 1}}),
 		)
 	}
 
@@ -566,7 +569,10 @@ mod tests {
 		assert_eq!(results.len(), 100);
 		let last = results.last().unwrap();
 		assert!(
-			last.diagnostics.iter().any(|d| matches!(d.variant, DiagnosticVariant::ParseError)),
+			last
+				.diagnostics
+				.iter()
+				.any(|d| matches!(d.variant, DiagnosticVariant::ParseError)),
 			"expected truncation diagnostic on last node, got diagnostics: {:?}",
 			last.diagnostics
 		);

@@ -611,8 +611,10 @@ impl BufferRegistry {
 					.into_iter()
 					.map(|h| h.content)
 					.collect::<Vec<_>>()
-					.join("
-");
+					.join(
+						"
+",
+					);
 				if !fresh.dirty {
 					warnings.extend(self.coord.drain_warnings());
 					return Ok(Ok((
@@ -685,9 +687,9 @@ impl BufferRegistry {
 						if let Some(ref recorder) = self.edit_recorder {
 							recorder(EditRecord {
 								session_id: session_id.to_string(),
-								file:       key.clone(),
-								before:     before_source.clone(),
-								after:      after_source.clone(),
+								file: key.clone(),
+								before: before_source.clone(),
+								after: after_source.clone(),
 								diff,
 							});
 						}
@@ -739,11 +741,11 @@ impl BufferRegistry {
 /// error elsewhere in the file pre-existed and isn't ours to reject.
 ///
 /// Strategy:
-/// 1. For each edit, compute an "affected range" that includes the
-///    insertion plus one character of context on each side (so a pure
-///    deletion still has a non-empty checking window).
-/// 2. Walk the tree to find any error/missing node that overlaps any
-///    affected range.
+/// 1. For each edit, compute an "affected range" that includes the insertion
+///    plus one character of context on each side (so a pure deletion still has
+///    a non-empty checking window).
+/// 2. Walk the tree to find any error/missing node that overlaps any affected
+///    range.
 /// 3. If found, reject. Otherwise accept.
 fn errors_intersect_ranges(tree: &tree_sitter::Tree, ranges: &[(usize, usize)]) -> bool {
 	if ranges.is_empty() {
@@ -1067,8 +1069,8 @@ impl CodeBuffer {
 				if errors_intersect_ranges(&self.tree, &edit_ranges) {
 					restore(self);
 					return Err(CodeEngineError::Edit(
-						"Edit batch would leave the buffer structurally invalid. Re-anchor the target or \
-						 include an explicit separator."
+						"Edit batch would leave the buffer structurally invalid. Re-anchor the target \
+						 or include an explicit separator."
 							.into(),
 					));
 				}

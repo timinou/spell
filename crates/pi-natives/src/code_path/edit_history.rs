@@ -24,16 +24,16 @@ pub fn next_entry_id() -> String {
 /// One edit committed by a single agent session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditEntry {
-	pub id:            String,
-	pub session_id:    String,
-	pub agent_label:   String,
-	pub file:          PathBuf,
-	pub before:        String,
-	pub after:         String,
-	pub diff:          String,
-	pub timestamp:     SystemTime,
-	pub commit:        Option<String>,
-	pub reverted:      bool,
+	pub id:          String,
+	pub session_id:  String,
+	pub agent_label: String,
+	pub file:        PathBuf,
+	pub before:      String,
+	pub after:       String,
+	pub diff:        String,
+	pub timestamp:   SystemTime,
+	pub commit:      Option<String>,
+	pub reverted:    bool,
 }
 
 /// Builder-style query for the history log.
@@ -48,7 +48,9 @@ pub struct HistoryQuery {
 }
 
 impl HistoryQuery {
-	pub fn new() -> Self { Self::default() }
+	pub fn new() -> Self {
+		Self::default()
+	}
 
 	pub fn session_id(mut self, s: impl Into<String>) -> Self {
 		self.session_id = Some(s.into());
@@ -110,7 +112,8 @@ impl JsonlHistory {
 	pub fn in_memory() -> Self {
 		static COUNTER: AtomicU64 = AtomicU64::new(0);
 		let n = COUNTER.fetch_add(1, Ordering::SeqCst);
-		let path = std::env::temp_dir().join(format!("edit-history-{}-{}.jsonl", std::process::id(), n));
+		let path =
+			std::env::temp_dir().join(format!("edit-history-{}-{}.jsonl", std::process::id(), n));
 		let _ = std::fs::remove_file(&path);
 		Self { path }
 	}
@@ -165,7 +168,8 @@ impl EditHistory for JsonlHistory {
 	}
 
 	fn query(&self, q: HistoryQuery) -> Vec<EditEntry> {
-		self.read_all()
+		self
+			.read_all()
 			.into_iter()
 			.filter(|e| {
 				if let Some(ref sid) = q.session_id {
@@ -201,24 +205,22 @@ impl EditHistory for JsonlHistory {
 
 	fn revert(&self, q: HistoryQuery) -> RevertOutcome {
 		let mut entries = self.read_all();
-		let idx = entries
-			.iter()
-			.rposition(|e| {
-				if e.reverted {
+		let idx = entries.iter().rposition(|e| {
+			if e.reverted {
+				return false;
+			}
+			if let Some(ref sid) = q.session_id {
+				if e.session_id != *sid {
 					return false;
 				}
-				if let Some(ref sid) = q.session_id {
-					if e.session_id != *sid {
-						return false;
-					}
+			}
+			if let Some(ref glob) = q.file_glob {
+				if !glob_match(glob, &e.file) {
+					return false;
 				}
-				if let Some(ref glob) = q.file_glob {
-					if !glob_match(glob, &e.file) {
-						return false;
-					}
-				}
-				true
-			});
+			}
+			true
+		});
 		let idx = match idx {
 			Some(i) => i,
 			None => return RevertOutcome::NotFound,
@@ -235,10 +237,12 @@ impl EditHistory for JsonlHistory {
 		} else {
 			match revert_chunk_replace(&current, &entry.after, &entry.before) {
 				Some(s) => s,
-				None => return RevertOutcome::Error(format!(
-					"cannot revert {} cleanly: file changed since edit and chunk replace failed",
-					entry.id
-				)),
+				None => {
+					return RevertOutcome::Error(format!(
+						"cannot revert {} cleanly: file changed since edit and chunk replace failed",
+						entry.id
+					));
+				},
 			}
 		};
 		if let Err(e) = std::fs::write(file, &new_content) {
@@ -250,7 +254,6 @@ impl EditHistory for JsonlHistory {
 		RevertOutcome::Success { entry_id }
 	}
 }
-
 
 /// Compute file content with `from→to` change reverted.
 /// Walks line-by-line through `before` and `after`, identifies the first
@@ -337,7 +340,11 @@ mod tests {
 		let h = JsonlHistory::in_memory();
 		h.record(entry("S1", a.to_str().unwrap()));
 		h.record(entry("S1", b.to_str().unwrap()));
-		let r = h.revert(HistoryQuery::default().session_id("S1").file_glob(a.to_str().unwrap()));
+		let r = h.revert(
+			HistoryQuery::default()
+				.session_id("S1")
+				.file_glob(a.to_str().unwrap()),
+		);
 		assert!(matches!(r, RevertOutcome::Success { .. }), "got {r:?}");
 		let _ = std::fs::remove_file(&a);
 		let _ = std::fs::remove_file(&b);
@@ -355,7 +362,11 @@ mod tests {
 		e2.id = "2".into();
 		h.record(e1);
 		h.record(e2);
-		let r = h.query(HistoryQuery::default().session_id("S1").uncommitted_only(true));
+		let r = h.query(
+			HistoryQuery::default()
+				.session_id("S1")
+				.uncommitted_only(true),
+		);
 		assert_eq!(r.len(), 1);
 		assert!(r[0].commit.is_none());
 	}

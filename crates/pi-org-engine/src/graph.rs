@@ -9,8 +9,10 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::edge::{EdgeKind, ItemId};
-use crate::item::OrgItem;
+use crate::{
+	edge::{EdgeKind, ItemId},
+	item::OrgItem,
+};
 
 /// A dependency edge: `from` is blocked by `to`.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -555,32 +557,30 @@ pub fn connected_components(items: &[OrgItem]) -> Vec<Vec<String>> {
 	components.into_values().collect()
 }
 
-
-
 /// A typed edge between two items in the org graph.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct TypedEdge {
 	pub from: ItemId,
-	pub to: ItemId,
+	pub to:   ItemId,
 	pub kind: EdgeKind,
 }
 
 /// A node in the typed org graph.
 #[derive(Debug, Clone, Serialize)]
 pub struct TypedGraphNode {
-	pub id: ItemId,
-	pub kind: String,
-	pub title: String,
-	pub file: String,
+	pub id:       ItemId,
+	pub kind:     String,
+	pub title:    String,
+	pub file:     String,
 	pub dangling: bool,
 }
 
 /// The full typed graph with bidirectional edge indexing.
 #[derive(Debug, Clone, Serialize)]
 pub struct TypedGraph {
-	pub nodes: BTreeMap<ItemId, TypedGraphNode>,
+	pub nodes:     BTreeMap<ItemId, TypedGraphNode>,
 	pub out_edges: HashMap<ItemId, Vec<TypedEdge>>,
-	pub in_edges: HashMap<ItemId, Vec<TypedEdge>>,
+	pub in_edges:  HashMap<ItemId, Vec<TypedEdge>>,
 }
 
 /// A subgraph result from neighborhood queries.
@@ -594,7 +594,7 @@ pub struct Subgraph {
 #[derive(Debug, Clone, Serialize)]
 pub struct TimelineEntry {
 	pub item: TypedGraphNode,
-	pub ts: Option<i64>,
+	pub ts:   Option<i64>,
 }
 
 /// A shortest path between two nodes.
@@ -615,19 +615,29 @@ pub fn build_typed_graph(items: &[OrgItem]) -> TypedGraph {
 			if !target.is_empty() {
 				edges.push(TypedEdge {
 					from: item.id.clone(),
-					to: target.clone(),
+					to:   target.clone(),
 					kind: kind.clone(),
 				});
 			}
 		}
-		let blockers_prop = item.properties.get("BLOCKERS").or_else(|| item.properties.get("DEPENDS"));
+		let blockers_prop = item
+			.properties
+			.get("BLOCKERS")
+			.or_else(|| item.properties.get("DEPENDS"));
 		if let Some(value) = blockers_prop {
-			for token in value.split(|c: char| c == ',' || c.is_whitespace()).map(str::trim).filter(|s| !s.is_empty()) {
-				let already = item.relations.iter().any(|(k, t)| *k == EdgeKind::Blocks && t == token);
+			for token in value
+				.split(|c: char| c == ',' || c.is_whitespace())
+				.map(str::trim)
+				.filter(|s| !s.is_empty())
+			{
+				let already = item
+					.relations
+					.iter()
+					.any(|(k, t)| *k == EdgeKind::Blocks && t == token);
 				if !already {
 					edges.push(TypedEdge {
 						from: item.id.clone(),
-						to: token.to_string(),
+						to:   token.to_string(),
 						kind: EdgeKind::Blocks,
 					});
 				}
@@ -635,16 +645,24 @@ pub fn build_typed_graph(items: &[OrgItem]) -> TypedGraph {
 		}
 	}
 
-	fn walk_items(items: &[OrgItem], nodes: &mut BTreeMap<ItemId, TypedGraphNode>, all_edges: &mut Vec<TypedEdge>) {
+	fn walk_items(
+		items: &[OrgItem],
+		nodes: &mut BTreeMap<ItemId, TypedGraphNode>,
+		all_edges: &mut Vec<TypedEdge>,
+	) {
 		for item in items {
-			if item.id.is_empty() { continue; }
-			nodes.entry(item.id.clone()).or_insert_with(|| TypedGraphNode {
-				id: item.id.clone(),
-				kind: String::new(),
-				title: item.title.clone(),
-				file: item.file.clone(),
-				dangling: false,
-			});
+			if item.id.is_empty() {
+				continue;
+			}
+			nodes
+				.entry(item.id.clone())
+				.or_insert_with(|| TypedGraphNode {
+					id:       item.id.clone(),
+					kind:     String::new(),
+					title:    item.title.clone(),
+					file:     item.file.clone(),
+					dangling: false,
+				});
 			collect_edges(item, all_edges);
 			walk_items(&item.children, nodes, all_edges);
 		}
@@ -654,15 +672,27 @@ pub fn build_typed_graph(items: &[OrgItem]) -> TypedGraph {
 	walk_items(items, &mut nodes, &mut all_edges);
 
 	for edge in &all_edges {
-		out_edges.entry(edge.from.clone()).or_default().push(edge.clone());
-		in_edges.entry(edge.to.clone()).or_default().push(edge.clone());
+		out_edges
+			.entry(edge.from.clone())
+			.or_default()
+			.push(edge.clone());
+		in_edges
+			.entry(edge.to.clone())
+			.or_default()
+			.push(edge.clone());
 	}
 
 	TypedGraph { nodes, out_edges, in_edges }
 }
 
-/// Compute the neighborhood of a node up to `hops` away, optionally filtered by kind.
-pub fn neighborhood(graph: &TypedGraph, root: &str, hops: u8, kinds_filter: &[EdgeKind]) -> Subgraph {
+/// Compute the neighborhood of a node up to `hops` away, optionally filtered by
+/// kind.
+pub fn neighborhood(
+	graph: &TypedGraph,
+	root: &str,
+	hops: u8,
+	kinds_filter: &[EdgeKind],
+) -> Subgraph {
 	let mut visited: HashSet<ItemId> = HashSet::new();
 	let mut found_edges: Vec<TypedEdge> = Vec::new();
 	let mut queue: VecDeque<(ItemId, u8)> = VecDeque::new();
@@ -671,11 +701,15 @@ pub fn neighborhood(graph: &TypedGraph, root: &str, hops: u8, kinds_filter: &[Ed
 	queue.push_back((root.to_string(), 0));
 
 	while let Some((current, depth)) = queue.pop_front() {
-		if depth >= hops { continue; }
+		if depth >= hops {
+			continue;
+		}
 
 		if let Some(edges) = graph.out_edges.get(&current) {
 			for edge in edges {
-				if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) { continue; }
+				if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) {
+					continue;
+				}
 				if visited.insert(edge.to.clone()) {
 					queue.push_back((edge.to.clone(), depth + 1));
 				}
@@ -685,7 +719,9 @@ pub fn neighborhood(graph: &TypedGraph, root: &str, hops: u8, kinds_filter: &[Ed
 
 		if let Some(edges) = graph.in_edges.get(&current) {
 			for edge in edges {
-				if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) { continue; }
+				if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) {
+					continue;
+				}
 				if visited.insert(edge.from.clone()) {
 					queue.push_back((edge.from.clone(), depth + 1));
 				}
@@ -695,32 +731,59 @@ pub fn neighborhood(graph: &TypedGraph, root: &str, hops: u8, kinds_filter: &[Ed
 	}
 
 	let mut seen_edges: HashSet<TypedEdge> = HashSet::new();
-	let deduped_edges: Vec<TypedEdge> = found_edges.into_iter().filter(|e| seen_edges.insert(e.clone())).collect();
+	let deduped_edges: Vec<TypedEdge> = found_edges
+		.into_iter()
+		.filter(|e| seen_edges.insert(e.clone()))
+		.collect();
 
-	let nodes: Vec<TypedGraphNode> = visited.iter().map(|id| {
-		graph.nodes.get(id).cloned().unwrap_or_else(|| TypedGraphNode {
-			id: id.clone(), kind: String::new(), title: String::new(), file: String::new(), dangling: true,
+	let nodes: Vec<TypedGraphNode> = visited
+		.iter()
+		.map(|id| {
+			graph
+				.nodes
+				.get(id)
+				.cloned()
+				.unwrap_or_else(|| TypedGraphNode {
+					id:       id.clone(),
+					kind:     String::new(),
+					title:    String::new(),
+					file:     String::new(),
+					dangling: true,
+				})
 		})
-	}).collect();
+		.collect();
 
 	Subgraph { nodes, edges: deduped_edges }
 }
 
 /// Timeline of items that `About` a target entity, sorted chronologically.
 pub fn timeline(items: &[OrgItem], target: &str) -> Vec<TimelineEntry> {
-	let mut entries: Vec<TimelineEntry> = items.iter().filter(|item| {
-		item.relations.iter().any(|(kind, t)| *kind == EdgeKind::About && t == target)
-	}).map(|item| {
-		let ts = item.properties.get("AT").or_else(|| item.properties.get("CREATED")).and_then(|v| {
-			parse_iso_datetime(v)
-		});
-		TimelineEntry {
-			item: TypedGraphNode {
-				id: item.id.clone(), kind: String::new(), title: item.title.clone(), file: item.file.clone(), dangling: false,
-			},
-			ts,
-		}
-	}).collect();
+	let mut entries: Vec<TimelineEntry> = items
+		.iter()
+		.filter(|item| {
+			item
+				.relations
+				.iter()
+				.any(|(kind, t)| *kind == EdgeKind::About && t == target)
+		})
+		.map(|item| {
+			let ts = item
+				.properties
+				.get("AT")
+				.or_else(|| item.properties.get("CREATED"))
+				.and_then(|v| parse_iso_datetime(v));
+			TimelineEntry {
+				item: TypedGraphNode {
+					id:       item.id.clone(),
+					kind:     String::new(),
+					title:    item.title.clone(),
+					file:     item.file.clone(),
+					dangling: false,
+				},
+				ts,
+			}
+		})
+		.collect();
 
 	entries.sort_by(|a, b| a.ts.cmp(&b.ts));
 	entries
@@ -762,48 +825,78 @@ pub fn path(graph: &TypedGraph, a: &str, b: &str, kinds_filter: &[EdgeKind]) -> 
 		if let Some(current) = forward_queue.pop_front() {
 			if let Some(edges) = graph.out_edges.get(&current) {
 				for edge in edges {
-					if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) { continue; }
+					if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) {
+						continue;
+					}
 					if !forward_visited.contains_key(&edge.to) {
 						let prev = (current.clone(), edge.clone());
 						forward_visited.insert(edge.to.clone(), Some(prev));
-						if backward_visited.contains_key(&edge.to) { meeting = Some(edge.to.clone()); break; }
+						if backward_visited.contains_key(&edge.to) {
+							meeting = Some(edge.to.clone());
+							break;
+						}
 						forward_queue.push_back(edge.to.clone());
 					}
 				}
 			}
 			if let Some(edges) = graph.in_edges.get(&current) {
 				for edge in edges {
-					if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) { continue; }
+					if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) {
+						continue;
+					}
 					if !forward_visited.contains_key(&edge.from) {
-						let rev = TypedEdge { from: edge.from.clone(), to: current.clone(), kind: edge.kind.clone() };
+						let rev = TypedEdge {
+							from: edge.from.clone(),
+							to:   current.clone(),
+							kind: edge.kind.clone(),
+						};
 						forward_visited.insert(edge.from.clone(), Some((current.clone(), rev)));
-						if backward_visited.contains_key(&edge.from) { meeting = Some(edge.from.clone()); break; }
+						if backward_visited.contains_key(&edge.from) {
+							meeting = Some(edge.from.clone());
+							break;
+						}
 						forward_queue.push_back(edge.from.clone());
 					}
 				}
 			}
 		}
 
-		if meeting.is_some() { break; }
+		if meeting.is_some() {
+			break;
+		}
 
 		if let Some(current) = backward_queue.pop_front() {
 			if let Some(edges) = graph.in_edges.get(&current) {
 				for edge in edges {
-					if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) { continue; }
+					if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) {
+						continue;
+					}
 					if !backward_visited.contains_key(&edge.from) {
-						let rev = TypedEdge { from: edge.from.clone(), to: current.clone(), kind: edge.kind.clone() };
+						let rev = TypedEdge {
+							from: edge.from.clone(),
+							to:   current.clone(),
+							kind: edge.kind.clone(),
+						};
 						backward_visited.insert(edge.from.clone(), Some((current.clone(), rev)));
-						if forward_visited.contains_key(&edge.from) { meeting = Some(edge.from.clone()); break; }
+						if forward_visited.contains_key(&edge.from) {
+							meeting = Some(edge.from.clone());
+							break;
+						}
 						backward_queue.push_back(edge.from.clone());
 					}
 				}
 			}
 			if let Some(edges) = graph.out_edges.get(&current) {
 				for edge in edges {
-					if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) { continue; }
+					if !kinds_filter.is_empty() && !kinds_filter.contains(&edge.kind) {
+						continue;
+					}
 					if !backward_visited.contains_key(&edge.to) {
 						backward_visited.insert(edge.to.clone(), Some((current.clone(), edge.clone())));
-						if forward_visited.contains_key(&edge.to) { meeting = Some(edge.to.clone()); break; }
+						if forward_visited.contains_key(&edge.to) {
+							meeting = Some(edge.to.clone());
+							break;
+						}
 						backward_queue.push_back(edge.to.clone());
 					}
 				}

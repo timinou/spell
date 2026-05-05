@@ -25,7 +25,7 @@ fn resolve_target_path(root: &Path, path: &CodePath) -> Result<PathBuf, Diagnost
 					continue;
 				}
 				target.push(s)
-			}
+			},
 			_ => {
 				return Err(Diagnostic {
 					variant: DiagnosticVariant::ParseError,
@@ -131,13 +131,11 @@ impl MutationResolver for super::TextResolver {
 	fn supports(&self, path: &CodePath, kind: ActionKind) -> bool {
 		match kind {
 			// Whole-file ops: claim only bare paths (no qualifier)
-			ActionKind::Append | ActionKind::Prepend | ActionKind::Patch => {
-				path.qualifier.is_none()
-			}
+			ActionKind::Append | ActionKind::Prepend | ActionKind::Patch => path.qualifier.is_none(),
 			// Line-anchored ops: claim bare paths or text qualifiers
 			ActionKind::Insert | ActionKind::Replace => {
 				path.qualifier.is_none() || path.has_target_query()
-			}
+			},
 			_ => false,
 		}
 	}
@@ -329,7 +327,9 @@ impl MutationResolver for super::TextResolver {
 mod tests {
 	use super::{super::TextResolver, compute_line_hash};
 	use crate::{
-		ast::{Action, ActionContent, ActionKind, CodePath, FsLocator, FsSegment, Locator, Qualifier},
+		ast::{
+			Action, ActionContent, ActionKind, CodePath, FsLocator, FsSegment, Locator, Qualifier,
+		},
 		resolver::{CancellationToken, MutationResolver},
 		types::DiagnosticVariant,
 	};

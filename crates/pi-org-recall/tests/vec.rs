@@ -33,11 +33,7 @@ fn vec_index_insert_and_search() {
 		let cmp = pair[0].1.total_cmp(&pair[1].1);
 		assert!(cmp != std::cmp::Ordering::Less, "scores not descending: {:?}", &results);
 		if cmp == std::cmp::Ordering::Equal {
-			assert!(
-				pair[0].0 <= pair[1].0,
-				"same-score ties not sorted by id: {:?}",
-				&results
-			);
+			assert!(pair[0].0 <= pair[1].0, "same-score ties not sorted by id: {:?}", &results);
 		}
 	}
 }
@@ -87,8 +83,10 @@ fn vec_index_dim_mismatch_errors() {
 #[test]
 fn item_id_keyed_lookup_preserves_string() {
 	let mut idx = VecIndex::new(4);
-	idx.insert("my-doc-42".to_string(), test_vector(4, 1.0)).unwrap();
-	idx.insert("other-doc".to_string(), test_vector(4, 2.0)).unwrap();
+	idx.insert("my-doc-42".to_string(), test_vector(4, 1.0))
+		.unwrap();
+	idx.insert("other-doc".to_string(), test_vector(4, 2.0))
+		.unwrap();
 	let query = test_vector(4, 1.0);
 	let results = idx.search(&query, 10).unwrap();
 	let ids: Vec<&str> = results.iter().map(|(id, _)| id.as_str()).collect();
@@ -99,7 +97,8 @@ fn item_id_keyed_lookup_preserves_string() {
 #[test]
 fn zero_vector_skipped_with_warning() {
 	let mut idx = VecIndex::new(4);
-	idx.insert("valid".to_string(), test_vector(4, 1.0)).unwrap();
+	idx.insert("valid".to_string(), test_vector(4, 1.0))
+		.unwrap();
 	assert_eq!(idx.len(), 1);
 
 	// Insert a zero vector — should be skipped

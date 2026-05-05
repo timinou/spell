@@ -16,9 +16,8 @@ pub mod txn_journal;
 
 pub use error::{BrokerError, Result};
 pub use protocol::{
-	ClientMessage, CommitRecord, FileCommit, FileIntent, IntentConflictItem,
-	MultiCommitRevision, OrgItemPatch, PeerCommittedFile, PeerSummary, ServerMessage, SessionId,
-	TxnId,
+	ClientMessage, CommitRecord, FileCommit, FileIntent, IntentConflictItem, MultiCommitRevision,
+	OrgItemPatch, PeerCommittedFile, PeerSummary, ServerMessage, SessionId, TxnId,
 };
 pub use server::{BrokerOptions, run_server};
 pub use spawn::{probe, resolve_binary, spawn_broker_if_absent};

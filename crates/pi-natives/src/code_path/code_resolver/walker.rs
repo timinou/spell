@@ -11,13 +11,13 @@ use tree_sitter::Node;
 
 /// Tree-sitter backed implementation of [`CodeResolver`].
 pub struct CodeResolverImpl {
-	pub(super) registry: Arc<LanguageRegistry>,
+	pub(super) registry:   Arc<LanguageRegistry>,
 	/// Optional root used by mutation.rs to absolutise relative
 	/// `Locator::Fs` paths before delegating to `code_buffer::execute`.
 	/// FEAT-689 / FEAT-708: without this the legacy code_buffer surface
 	/// can't open the host file when the test ran from a tempdir.
-	pub(super) root:        Option<std::path::PathBuf>,
-	pub(super) session_id:  Option<String>,
+	pub(super) root:       Option<std::path::PathBuf>,
+	pub(super) session_id: Option<String>,
 }
 
 impl CodeResolverImpl {
@@ -94,11 +94,11 @@ impl CodeResolver for CodeResolverImpl {
 				span:    None,
 			})?;
 
-  let tree = parser.parse(&src, None).ok_or_else(|| Diagnostic {
-  			variant: DiagnosticVariant::ParseError,
-  			message: "tree-sitter parse failed".into(),
-  			span:    None,
-  		})?;
+		let tree = parser.parse(&src, None).ok_or_else(|| Diagnostic {
+			variant: DiagnosticVariant::ParseError,
+			message: "tree-sitter parse failed".into(),
+			span:    None,
+		})?;
 
 		// #outline qualifier: return symbol outline instead of full content
 		if _qualifier.is_some_and(|q| q.name == "outline") {
@@ -110,7 +110,8 @@ impl CodeResolver for CodeResolverImpl {
 				let range = child.start_byte()..child.end_byte();
 				let decl_text = src[range].to_string();
 				let first_line = decl_text.lines().next().unwrap_or("").to_string();
-				lines.push(format!("{} | {} (L{}-L{})",
+				lines.push(format!(
+					"{} | {} (L{}-L{})",
 					first_line,
 					child.kind(),
 					child.start_position().row + 1,
@@ -129,7 +130,7 @@ impl CodeResolver for CodeResolverImpl {
 			return Ok(vec![node]);
 		}
 
-  		let root = tree.root_node();
+		let root = tree.root_node();
 		let nodes = evaluate_query(query, vec![root], &src, dialect, cancel);
 
 		let locator = file.to_string_lossy().into_owned();
@@ -165,7 +166,8 @@ impl CodeResolver for CodeResolverImpl {
 							variant: DiagnosticVariant::UnsupportedOperation,
 							message: format!(
 								"qualifier '{}' does not apply to node kind '{}'",
-								q.name, node.kind()
+								q.name,
+								node.kind()
 							),
 							span:    None,
 						});
@@ -513,7 +515,7 @@ mod tests {
 		});
 		let results = run_query(&resolver, f.path(), query);
 		assert_eq!(results.len(), 1);
-// FEAT-672: ¶return matches function containing return (spec 01-typescript.md).
+		// FEAT-672: ¶return matches function containing return (spec 01-typescript.md).
 		assert_eq!(results[0].kind, "§function_declaration");
 	}
 

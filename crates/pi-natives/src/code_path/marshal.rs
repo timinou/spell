@@ -92,9 +92,7 @@ pub fn diagnostic_variant_to_string(v: &DiagnosticVariant) -> String {
 		DiagnosticVariant::StaleAnchor => "stale_anchor".to_string(),
 		DiagnosticVariant::Cancelled => "cancelled".to_string(),
 		DiagnosticVariant::MissingActions => "missing_actions".to_string(),
-		DiagnosticVariant::ZeroByteDeleteBlocked => {
-			"zero_byte_delete_blocked".to_string()
-		},
+		DiagnosticVariant::ZeroByteDeleteBlocked => "zero_byte_delete_blocked".to_string(),
 		DiagnosticVariant::UnsupportedActionForResolver => {
 			"unsupported_action_for_resolver".to_string()
 		},

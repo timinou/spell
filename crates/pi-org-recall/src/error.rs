@@ -34,7 +34,6 @@ impl From<tantivy::TantivyError> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-
 impl From<pi_code_vectors::Error> for Error {
 	fn from(value: pi_code_vectors::Error) -> Self {
 		match value {
@@ -44,10 +43,10 @@ impl From<pi_code_vectors::Error> for Error {
 			pi_code_vectors::Error::Chunking(msg) => Self::VectorIndex(msg),
 			pi_code_vectors::Error::DimensionMismatch { expected, actual } => {
 				Self::DimensionMismatch { expected, actual }
-			}
+			},
 			pi_code_vectors::Error::IncompatibleIndexVersion { found, expected } => {
 				Self::VectorIndex(format!("incompatible version: found {found}, expected {expected}"))
-			}
+			},
 		}
 	}
 }

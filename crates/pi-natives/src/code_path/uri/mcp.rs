@@ -1,5 +1,7 @@
-use pi_code_path::resolver::{CancellationToken, SchemeHandler};
-use pi_code_path::types::{Diagnostic, DiagnosticVariant};
+use pi_code_path::{
+	resolver::{CancellationToken, SchemeHandler},
+	types::{Diagnostic, DiagnosticVariant},
+};
 
 /// Handler for `mcp://` resources.
 ///
@@ -11,11 +13,15 @@ impl SchemeHandler for McpHandler {
 		"mcp"
 	}
 
-	fn handle(&self, _path: &str, _cancel: &CancellationToken) -> Result<pi_code_path::types::NodeRef, Diagnostic> {
+	fn handle(
+		&self,
+		_path: &str,
+		_cancel: &CancellationToken,
+	) -> Result<pi_code_path::types::NodeRef, Diagnostic> {
 		Err(Diagnostic {
 			variant: DiagnosticVariant::SchemeNotImplemented,
 			message: "mcp:// scheme not implemented in current release; use direct paths".into(),
-			span: None,
+			span:    None,
 		})
 	}
 }

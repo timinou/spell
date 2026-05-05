@@ -4,24 +4,25 @@
 //! Currently a stub: FS branch executes a closure-stub; URI/Edge emit
 //! diagnostics until PROJ-066/067 wire concrete impls.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use crate::ast::{CodePath, Locator};
-use crate::resolver::traits::{
-	CancellationToken, CodeResolver, EdgeResolver, FormatExtractor, FsAnchorContext,
-	SchemeHandler,
+use crate::{
+	ast::{CodePath, Locator},
+	resolver::traits::{
+		CancellationToken, CodeResolver, EdgeResolver, FormatExtractor, FsAnchorContext,
+		SchemeHandler,
+	},
+	types::{Diagnostic, DiagnosticVariant, NodeRef},
 };
-use crate::types::{Diagnostic, DiagnosticVariant, NodeRef};
 
 /// Shared context passed through every resolve call.
 pub struct ResolveContext {
-	pub fs_anchor:   Arc<dyn FsAnchorContext>,
-	pub extractors:  Vec<Arc<dyn FormatExtractor>>,
-	pub schemes:     HashMap<String, Arc<dyn SchemeHandler>>,
+	pub fs_anchor:     Arc<dyn FsAnchorContext>,
+	pub extractors:    Vec<Arc<dyn FormatExtractor>>,
+	pub schemes:       HashMap<String, Arc<dyn SchemeHandler>>,
 	pub code_resolver: Option<Arc<dyn CodeResolver>>,
 	pub edge_resolver: Option<Arc<dyn EdgeResolver>>,
-	pub cancel:      CancellationToken,
+	pub cancel:        CancellationToken,
 }
 
 /// Dispatch engine: routes CodePath to sub-resolvers.
@@ -45,11 +46,7 @@ impl DispatchEngine {
 			},
 			Locator::Uri(uri) => {
 				let msg = format!("dispatch routing not yet implemented for uri-{}", uri.scheme);
-				Err(Diagnostic {
-					variant: DiagnosticVariant::ParseError,
-					message: msg,
-					span:    None,
-				})
+				Err(Diagnostic { variant: DiagnosticVariant::ParseError, message: msg, span: None })
 			},
 		}
 	}
@@ -73,12 +70,15 @@ mod tests {
 		fn is_code_extension(&self, _ext: &str) -> bool {
 			false
 		}
+
 		fn is_image_extension(&self, _ext: &str) -> bool {
 			false
 		}
+
 		fn is_doc_extension(&self, _ext: &str) -> bool {
 			false
 		}
+
 		fn is_lockfile_basename(&self, _name: &str) -> bool {
 			false
 		}
@@ -101,7 +101,11 @@ mod tests {
 		let ctx = empty_context();
 		let cp = CodePath {
 			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("src".to_string()), FsSegment::Literal("/".to_string()), FsSegment::Literal("main.rs".to_string())],
+				segments: vec![
+					FsSegment::Literal("src".to_string()),
+					FsSegment::Literal("/".to_string()),
+					FsSegment::Literal("main.rs".to_string()),
+				],
 			}),
 			query:     None,
 			qualifier: None,
@@ -127,7 +131,11 @@ mod tests {
 		assert!(res.is_err());
 		let diag = res.unwrap_err();
 		assert!(matches!(diag.variant, DiagnosticVariant::ParseError));
-		assert!(diag.message.contains("dispatch routing not yet implemented"));
+		assert!(
+			diag
+				.message
+				.contains("dispatch routing not yet implemented")
+		);
 		assert!(diag.message.contains("uri-artifact"));
 	}
 }

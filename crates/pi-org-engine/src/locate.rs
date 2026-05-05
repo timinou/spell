@@ -146,12 +146,14 @@ fn split_lines(source: &str) -> Vec<String> {
 	source.split('\n').map(str::to_string).collect()
 }
 
-use std::{collections::HashMap, path::{Path, PathBuf}};
+use std::{
+	collections::HashMap,
+	path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
-use crate::edge::ItemId;
-use crate::buffer::extract_items_from_source;
+use crate::{buffer::extract_items_from_source, edge::ItemId};
 
 /// Scope of a root directory for multi-root locate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -220,7 +222,9 @@ impl MultiRootIndex {
 
 /// Recursively collect .org files from a directory and extract CUSTOM_IDs.
 fn collect_org_files(dir: &Path, todo_keywords: &[&str], map: &mut HashMap<ItemId, PathBuf>) {
-	let Ok(read_dir) = std::fs::read_dir(dir) else { return; };
+	let Ok(read_dir) = std::fs::read_dir(dir) else {
+		return;
+	};
 	for entry in read_dir.flatten() {
 		let path = entry.path();
 		if path.is_dir() {
@@ -228,7 +232,9 @@ fn collect_org_files(dir: &Path, todo_keywords: &[&str], map: &mut HashMap<ItemI
 		} else if path.extension().is_some_and(|ext| ext == "org") {
 			if let Ok(source) = std::fs::read_to_string(&path) {
 				let path_str = path.to_string_lossy();
-				if let Ok(items) = extract_items_from_source(&source, todo_keywords, "", "", &path_str, false) {
+				if let Ok(items) =
+					extract_items_from_source(&source, todo_keywords, "", "", &path_str, false)
+				{
 					for item in &items {
 						if !item.id.is_empty() {
 							map.entry(item.id.clone()).or_insert(path.clone());

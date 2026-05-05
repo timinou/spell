@@ -114,7 +114,8 @@ pub enum DiagnosticVariant {
 	FileExists,
 	/// Anchor hash mismatch — file changed since read.
 	StaleAnchor,
-	/// Delete would leave the file at zero bytes; use a bare-path target to remove the file.
+	/// Delete would leave the file at zero bytes; use a bare-path target to
+	/// remove the file.
 	ZeroByteDeleteBlocked,
 	/// Timeout or cancellation.
 	Cancelled,

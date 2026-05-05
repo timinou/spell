@@ -1,19 +1,18 @@
-//! Tests for multi-root locate: cwd vs personal scope, shadowing, and iteration.
+//! Tests for multi-root locate: cwd vs personal scope, shadowing, and
+//! iteration.
 //!
 //! Each test builds temporary dir trees with `.org` fixtures and runs
 //! `MultiRootIndex::build` then exercises `resolve` / `iter`.
 
 use std::path::Path;
 
-use pi_org_engine::{locate::MultiRootIndex, locate::RootScope};
+use pi_org_engine::locate::{MultiRootIndex, RootScope};
 
 const TODO: &[&str] = &["ITEM", "DOING", "DONE"];
 
 /// Write an org file at `dir/name` with a heading carrying `custom_id`.
 fn write_org_fixture(dir: &Path, name: &str, custom_id: &str) {
-	let src = format!(
-		"* ITEM {name}\n:PROPERTIES:\n:CUSTOM_ID: {custom_id}\n:END:\n"
-	);
+	let src = format!("* ITEM {name}\n:PROPERTIES:\n:CUSTOM_ID: {custom_id}\n:END:\n");
 	std::fs::write(dir.join(name), &src).unwrap();
 }
 
@@ -61,12 +60,7 @@ fn cwd_shadows_personal_on_same_id() {
 	let (scope, path) = result.unwrap();
 	assert_eq!(scope, RootScope::Cwd, "cwd should shadow personal");
 	// Path should be in cwd dir
-	assert!(
-		path.starts_with(cwd.path()),
-		"path {:?} should be under cwd {:?}",
-		path,
-		cwd.path()
-	);
+	assert!(path.starts_with(cwd.path()), "path {:?} should be under cwd {:?}", path, cwd.path());
 }
 
 // ── 3: Unknown id returns none ────────────────────────────────────────────
@@ -113,8 +107,5 @@ fn iter_yields_all_known_ids_with_scope_tag() {
 	assert!(collected.contains(&(RootScope::Cwd, "EP-a".into())), "EP-a with Cwd");
 	assert!(collected.contains(&(RootScope::Cwd, "EP-b".into())), "EP-b with Cwd");
 	// CON-z should carry Personal scope
-	assert!(
-		collected.contains(&(RootScope::Personal, "CON-z".into())),
-		"CON-z with Personal"
-	);
+	assert!(collected.contains(&(RootScope::Personal, "CON-z".into())), "CON-z with Personal");
 }

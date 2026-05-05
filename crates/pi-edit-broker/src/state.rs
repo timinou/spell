@@ -127,7 +127,9 @@ impl BrokerState {
 		for subs in self.subscriptions.values_mut() {
 			subs.remove(session_id);
 		}
-		self.active_txns.retain(|_, txn| txn.session_id != session_id);
+		self
+			.active_txns
+			.retain(|_, txn| txn.session_id != session_id);
 		self.sessions.remove(session_id)
 	}
 
@@ -331,9 +333,10 @@ impl BrokerState {
 			entry.retain(|intent| intent.expires_at > now);
 
 			for cp in &fi.code_paths {
-				if let Some(peer) = entry.iter().find(|intent| {
-					intent.code_path == *cp && intent.session_id != session_id
-				}) {
+				if let Some(peer) = entry
+					.iter()
+					.find(|intent| intent.code_path == *cp && intent.session_id != session_id)
+				{
 					conflicts.push((fi.file.clone(), cp.clone(), peer.session_id.clone()));
 				}
 			}
@@ -357,25 +360,22 @@ impl BrokerState {
 			// Grant txn-level intents
 			for cp in &fi.code_paths {
 				entry.push(Intent {
-					session_id: session_id.to_string(),
-					code_path: cp.clone(),
+					session_id:    session_id.to_string(),
+					code_path:     cp.clone(),
 					base_revision: fi.base_revision,
-					expires_at: now.saturating_add(ttl_ms),
-					ts: now,
+					expires_at:    now.saturating_add(ttl_ms),
+					ts:            now,
 				});
 			}
 		}
 
-		self.active_txns.insert(
-			txn_id.to_string(),
-			TxnState {
-				session_id: session_id.to_string(),
-				files,
-				granted_at: now,
-				ttl_ms,
-				committed: false,
-			},
-		);
+		self.active_txns.insert(txn_id.to_string(), TxnState {
+			session_id: session_id.to_string(),
+			files,
+			granted_at: now,
+			ttl_ms,
+			committed: false,
+		});
 
 		Ok(())
 	}
@@ -387,8 +387,7 @@ impl BrokerState {
 			let key = canonicalise(&fi.file);
 			if let Some(entry) = self.intents.get_mut(&key) {
 				entry.retain(|intent| {
-					intent.session_id != txn.session_id
-						|| !fi.code_paths.contains(&intent.code_path)
+					intent.session_id != txn.session_id || !fi.code_paths.contains(&intent.code_path)
 				});
 			}
 		}
@@ -417,9 +416,7 @@ impl BrokerState {
 		let stale: Vec<TxnId> = self
 			.active_txns
 			.iter()
-			.filter(|(_, txn)| {
-				!txn.committed && now.saturating_sub(txn.granted_at) > txn.ttl_ms
-			})
+			.filter(|(_, txn)| !txn.committed && now.saturating_sub(txn.granted_at) > txn.ttl_ms)
 			.map(|(id, _)| id.clone())
 			.collect();
 

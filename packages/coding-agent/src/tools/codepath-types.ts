@@ -82,7 +82,7 @@ export type CodePathAction = Static<typeof codePathActionSchema>;
 
 export const getSchema = Type.Object(
 	{
-		target: Type.String({ description: "CodePath target string (path, glob, symbol, URI)" }),
+		target: Type.String({ description: "CodePath target string (path, glob, symbol, URI). Multi-word symbols may be backtick-quoted, e.g. foo.ts::\`export * from \"./json\"\`" }),
 		limit: Type.Optional(Type.Integer({ description: "Max results or lines" })),
 		head: Type.Optional(Type.Integer({ description: "Max lines from head" })),
 		tail: Type.Optional(Type.Integer({ description: "Max lines from tail" })),
@@ -110,7 +110,7 @@ export const editOperationSchema = Type.Recursive(This =>
 	Type.Object(
 		{
 			target: Type.String({
-				description: "Stable edit target ID: '<file>' for file roots or '<file>::Symbol.member' for declarations",
+			description: "Stable edit target ID: '<file>' for file roots or '<file>::Symbol.member' for declarations. Multi-word symbols may be backtick-quoted, e.g. foo.ts::\`export * from \"./json\"\`",
 			}),
 			action: codePathActionSchema,
 			children: Type.Optional(

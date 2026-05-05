@@ -27,9 +27,36 @@ pub enum HsSegment {
 	Ident(String),
 	Operator(String),
 	TypeClassMethod { class_: String, method: String },
+	Quoted(String),
 }
 
 pub struct HsNameLexer;
+
+fn parse_segment(input: &mut &str) -> winnow::Result<HsSegment> {
+	if input.starts_with('`') {
+		*input = &input[1..];
+		let mut buf = String::new();
+		let mut closed = false;
+		let mut chars = input.char_indices();
+		let mut consumed = 0;
+		for (idx, c) in chars.by_ref() {
+			if c == '`' {
+				closed = true;
+				consumed = idx + 1;
+				break;
+			}
+			buf.push(c);
+			consumed = idx + c.len_utf8();
+		}
+		if !closed {
+			return Err(winnow::error::ContextError::default());
+		}
+		*input = &input[consumed..];
+		return Ok(HsSegment::Quoted(buf));
+	}
+	let s = parse_ident(input)?;
+	Ok(HsSegment::Ident(s))
+}
 
 impl NameLexer for HsNameLexer {
 	fn parse<'s>(&self, input: &mut &'s str) -> winnow::Result<NamePayload> {
@@ -38,24 +65,25 @@ impl NameLexer for HsNameLexer {
 			return parse_paren_form(input);
 		}
 		// Module-qualified or simple ident, dot-separated.
-		let mut out = String::new();
-		let first = parse_ident(input)?;
-		out.push_str(&first);
+		let mut segments = Vec::new();
+		let first = parse_segment(input)?;
+		segments.push(first);
 		while input.starts_with('.') {
 			let snapshot = *input;
 			*input = &input[1..];
-			match parse_ident(input) {
-				Ok(s) => {
-					out.push('.');
-					out.push_str(&s);
-				},
+			match parse_segment(input) {
+				Ok(s) => segments.push(s),
 				Err(_) => {
 					*input = snapshot;
 					break;
 				},
 			}
 		}
-		Ok(NamePayload::Raw(out))
+		if segments.iter().any(|s| matches!(s, HsSegment::Quoted(_))) {
+			Ok(NamePayload::Quoted(render_segments(&segments)))
+		} else {
+			Ok(NamePayload::Raw(render_segments(&segments)))
+		}
 	}
 
 	fn render(&self, n: &NamePayload) -> String {
@@ -70,6 +98,18 @@ impl NameLexer for HsNameLexer {
 	}
 }
 
+fn render_segments(segs: &[HsSegment]) -> String {
+	segs
+		.iter()
+		.map(|s| match s {
+			HsSegment::Ident(i) => i.clone(),
+			HsSegment::Operator(o) => format!("({o})"),
+			HsSegment::TypeClassMethod { class_, method } => format!("({class_}).{method}"),
+			HsSegment::Quoted(q) => q.clone(),
+		})
+		.collect::<Vec<_>>()
+		.join(".")
+}
 fn parse_paren_form(input: &mut &str) -> winnow::Result<NamePayload> {
 	let snapshot = *input;
 	*input = &input[1..]; // '('
@@ -240,6 +280,26 @@ mod qualifiers {
 			Some(node.start_byte()..node.end_byte())
 		}
 	}
+}
+
+fn normalize_ws(text: &str) -> String {
+	let mut out = String::new();
+	let mut prev_space = true;
+	for c in text.chars() {
+		if c.is_whitespace() {
+			if !prev_space {
+				out.push(' ');
+				prev_space = true;
+			}
+		} else {
+			out.push(c);
+			prev_space = false;
+		}
+	}
+	if out.ends_with(' ') {
+		out.pop();
+	}
+	out
 }
 
 pub fn haskell_dialect() -> LanguageDialect {

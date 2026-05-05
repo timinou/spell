@@ -41,49 +41,49 @@ pub struct CommitRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileIntent {
-	pub file: PathBuf,
+	pub file:          PathBuf,
 	#[serde(rename = "codePaths")]
-	pub code_paths: Vec<String>,
+	pub code_paths:    Vec<String>,
 	#[serde(rename = "baseRevision")]
 	pub base_revision: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileCommit {
-	pub file: PathBuf,
-	pub revision: u64,
+	pub file:            PathBuf,
+	pub revision:        u64,
 	#[serde(rename = "parentRevision")]
 	pub parent_revision: u64,
 	#[serde(rename = "codePaths")]
-	pub code_paths: Vec<String>,
+	pub code_paths:      Vec<String>,
 	#[serde(rename = "diffHash")]
-	pub diff_hash: String,
+	pub diff_hash:       String,
 	#[serde(rename = "byteLen")]
-	pub byte_len: u64,
+	pub byte_len:        u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PeerCommittedFile {
-	pub file: PathBuf,
-	pub revision: u64,
+	pub file:       PathBuf,
+	pub revision:   u64,
 	#[serde(rename = "codePaths")]
 	pub code_paths: Vec<String>,
 	#[serde(rename = "diffHash")]
-	pub diff_hash: String,
+	pub diff_hash:  String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IntentConflictItem {
-	pub file: PathBuf,
+	pub file:                PathBuf,
 	#[serde(rename = "codePath")]
-	pub code_path: String,
+	pub code_path:           String,
 	#[serde(rename = "conflictingSession")]
 	pub conflicting_session: SessionId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MultiCommitRevision {
-	pub file: PathBuf,
+	pub file:     PathBuf,
 	pub revision: u64,
 }
 
@@ -238,7 +238,8 @@ pub enum ServerMessage {
 		#[serde(rename = "orgItems", default, skip_serializing_if = "Option::is_none")]
 		org_items:  Option<Vec<OrgItemPatch>>,
 	},
-	/// Broadcast: peer's multi-file txn was rolled back (crash recovery or abort).
+	/// Broadcast: peer's multi-file txn was rolled back (crash recovery or
+	/// abort).
 	MultiPeerRolledBack {
 		#[serde(rename = "txnId")]
 		txn_id: TxnId,

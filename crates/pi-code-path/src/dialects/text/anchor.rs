@@ -12,8 +12,8 @@
 /// Strategy:
 /// 1. Run a stable inline FNV-1a 32-bit hash over the bytes.
 /// 2. Take the low 10 bits (1024 buckets).
-/// 3. Encode the 10-bit number using a 32-symbol Crockford-ish alphabet
-///    that omits visually ambiguous characters (`I`, `L`, `O`, `0`, `1`).
+/// 3. Encode the 10-bit number using a 32-symbol Crockford-ish alphabet that
+///    omits visually ambiguous characters (`I`, `L`, `O`, `0`, `1`).
 ///
 /// FNV-1a is fast, dependency-free, and deterministic across builds.
 /// Two characters give 1024 distinct anchors per file — collisions are
@@ -27,12 +27,12 @@ pub fn line_anchor_id(line_text: &str) -> String {
 		hash ^= u32::from(b);
 		hash = hash.wrapping_mul(FNV_PRIME);
 	}
-	let bits10 = (hash & 0x3FF) as usize; // 10 low bits
+	let bits10 = (hash & 0x3ff) as usize; // 10 low bits
 	const ALPHABET: &[u8; 32] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789!";
 	// 32 symbols (the trailing `!` is unreachable; we only emit two chars
 	// from a 1024-element space, encoded big-endian: hi 5 bits + lo 5 bits).
-	let hi = (bits10 >> 5) & 0x1F;
-	let lo = bits10 & 0x1F;
+	let hi = (bits10 >> 5) & 0x1f;
+	let lo = bits10 & 0x1f;
 	let bytes = [ALPHABET[hi], ALPHABET[lo]];
 	// All 32 entries except trailing `!` are valid; mask `!` to `Z` as
 	// a defensive fallback (currently unreachable since hi/lo < 32).
@@ -44,7 +44,11 @@ pub fn line_anchor_id(line_text: &str) -> String {
 /// Returns `None` when matching, or `Some(actual_id)` when drifted.
 pub fn anchor_drift(line_text: &str, expected_id: &str) -> Option<String> {
 	let actual = line_anchor_id(line_text);
-	if actual == expected_id { None } else { Some(actual) }
+	if actual == expected_id {
+		None
+	} else {
+		Some(actual)
+	}
 }
 
 #[cfg(test)]

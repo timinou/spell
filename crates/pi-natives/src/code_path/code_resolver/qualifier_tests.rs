@@ -280,9 +280,15 @@ fn resolve_quoted(src: &str, quoted: &str) -> Vec<pi_code_path::types::NodeRef> 
 	let dir = tempfile::tempdir().unwrap();
 	let path = dir.path().join("foo.ts");
 	std::fs::write(&path, src).unwrap();
-	let cp = parse_code_path(&format!("foo.ts::`{}`", quoted), &pi_code_path::dialects::typescript::TsNameLexer).unwrap();
+	let cp = parse_code_path(
+		&format!("foo.ts::`{}`", quoted),
+		&pi_code_path::dialects::typescript::TsNameLexer,
+	)
+	.unwrap();
 	let query = cp.query.unwrap();
-	resolver().resolve(&path, &query, None, &CancellationToken::new()).unwrap()
+	resolver()
+		.resolve(&path, &query, None, &CancellationToken::new())
+		.unwrap()
 }
 
 #[test]
@@ -306,5 +312,3 @@ fn quoted_payload_no_match_returns_empty() {
 	let nodes = resolve_quoted(src, "export * from \"./other\"");
 	assert!(nodes.is_empty());
 }
-
-

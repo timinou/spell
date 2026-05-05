@@ -103,8 +103,10 @@ fn flatten_string_array(obj: &mut serde_json::Map<String, Value>, key: &str) {
 			.iter()
 			.filter_map(|v| v.as_str())
 			.collect::<Vec<_>>()
-			.join("
-");
+			.join(
+				"
+",
+			);
 		obj.insert(key.to_string(), Value::String(joined));
 	}
 }
@@ -255,8 +257,8 @@ mod tests {
 
 	use pi_code_path::{
 		ast::{
-			Action, ActionContent, ActionKind, CodePath, FsLocator, FsSegment, Head, Locator, NamePayload,
-			Occurrence, Query, Step,
+			Action, ActionContent, ActionKind, CodePath, FsLocator, FsSegment, Head, Locator,
+			NamePayload, Occurrence, Query, Step,
 		},
 		resolver::traits::{CancellationToken, MutationResolver},
 		types::DiagnosticVariant,

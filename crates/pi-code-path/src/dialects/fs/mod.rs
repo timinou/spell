@@ -137,7 +137,10 @@ mod tests {
 				segments: vec![
 					FsSegment::Star,
 					FsSegment::Literal(".".to_string()),
-					FsSegment::Brace { items: vec!["ts".to_string()], exclusions: vec!["d.ts".to_string()] },
+					FsSegment::Brace {
+						items:      vec!["ts".to_string()],
+						exclusions: vec!["d.ts".to_string()],
+					},
 				],
 			}),
 			query:     None,

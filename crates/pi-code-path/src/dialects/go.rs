@@ -59,81 +59,83 @@ impl NameLexer for GoNameLexer {
 		}
 	}
 
-fn matches(&self, n: &NamePayload, node: Node<'_>, src: &str) -> bool {
-	let name = match n {
-		NamePayload::Raw(s) => s,
-		NamePayload::Quoted(_) => return false,
-	};
-	let segments = match parse_name(name) {
-		Some(s) => s,
-		None => return false,
-	};
+	fn matches(&self, n: &NamePayload, node: Node<'_>, src: &str) -> bool {
+		let name = match n {
+			NamePayload::Raw(s) => s,
+			NamePayload::Quoted(_) => return false,
+		};
+		let segments = match parse_name(name) {
+			Some(s) => s,
+			None => return false,
+		};
 
-	match node.kind() {
-		"function_declaration" => {
-			if segments.len() == 1 {
-				if let Some(GoSegment::Ident(ident)) = segments.first() {
-					if let Some(name_node) = node.child_by_field_name("name") {
-						if let Some(text) = src.get(name_node.start_byte()..name_node.end_byte()) {
-							return text == ident;
+		match node.kind() {
+			"function_declaration" => {
+				if segments.len() == 1 {
+					if let Some(GoSegment::Ident(ident)) = segments.first() {
+						if let Some(name_node) = node.child_by_field_name("name") {
+							if let Some(text) = src.get(name_node.start_byte()..name_node.end_byte()) {
+								return text == ident;
+							}
 						}
 					}
 				}
-			}
-			false
-		},
-		"method_declaration" => {
-			let Some(name_node) = node.child_by_field_name("name") else {
-				return false;
-			};
-			let Some(text) = src.get(name_node.start_byte()..name_node.end_byte()) else {
-				return false;
-			};
-			match segments.as_slice() {
-				[GoSegment::Receiver { ptr, ty, method }] => {
-					if text != method {
-						return false;
-					}
-					let Some(recv_node) = node.child_by_field_name("receiver") else {
-						return false;
-					};
-					let Some(recv_text) = src.get(recv_node.start_byte()..recv_node.end_byte()) else {
-						return false;
-					};
-					let expected = if *ptr { format!("*{}", ty) } else { ty.clone() };
-					recv_text.contains(&expected)
-				},
-				[GoSegment::Ident(ty), GoSegment::Ident(method)] => {
-					if text != method {
-						return false;
-					}
-					let Some(recv_node) = node.child_by_field_name("receiver") else {
-						return false;
-					};
-					let Some(recv_text) = src.get(recv_node.start_byte()..recv_node.end_byte()) else {
-						return false;
-					};
-					recv_text.contains(ty)
-				},
-				[GoSegment::Ident(method)] => text == method,
-				_ => false,
-			}
-		},
-		"type_spec" => {
-			if segments.len() == 1 {
-				if let Some(GoSegment::Ident(ident)) = segments.first() {
-					if let Some(name_node) = node.child_by_field_name("name") {
-						if let Some(text) = src.get(name_node.start_byte()..name_node.end_byte()) {
-							return text == ident;
+				false
+			},
+			"method_declaration" => {
+				let Some(name_node) = node.child_by_field_name("name") else {
+					return false;
+				};
+				let Some(text) = src.get(name_node.start_byte()..name_node.end_byte()) else {
+					return false;
+				};
+				match segments.as_slice() {
+					[GoSegment::Receiver { ptr, ty, method }] => {
+						if text != method {
+							return false;
+						}
+						let Some(recv_node) = node.child_by_field_name("receiver") else {
+							return false;
+						};
+						let Some(recv_text) = src.get(recv_node.start_byte()..recv_node.end_byte())
+						else {
+							return false;
+						};
+						let expected = if *ptr { format!("*{}", ty) } else { ty.clone() };
+						recv_text.contains(&expected)
+					},
+					[GoSegment::Ident(ty), GoSegment::Ident(method)] => {
+						if text != method {
+							return false;
+						}
+						let Some(recv_node) = node.child_by_field_name("receiver") else {
+							return false;
+						};
+						let Some(recv_text) = src.get(recv_node.start_byte()..recv_node.end_byte())
+						else {
+							return false;
+						};
+						recv_text.contains(ty)
+					},
+					[GoSegment::Ident(method)] => text == method,
+					_ => false,
+				}
+			},
+			"type_spec" => {
+				if segments.len() == 1 {
+					if let Some(GoSegment::Ident(ident)) = segments.first() {
+						if let Some(name_node) = node.child_by_field_name("name") {
+							if let Some(text) = src.get(name_node.start_byte()..name_node.end_byte()) {
+								return text == ident;
+							}
 						}
 					}
 				}
-			}
-			false
-		},
-		_ => false,
+				false
+			},
+			_ => false,
+		}
 	}
-}
 }
 
 fn parse_name(input: &str) -> Option<Vec<GoSegment>> {

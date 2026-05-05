@@ -63,8 +63,11 @@ fn ensure_within_target_scope(
 		// hint in the error so the agent can self-correct.
 		let rope = buffer.rope();
 		let total_bytes = buffer.source().len();
-		let target_line_start = rope.byte_to_line_idx(target_start.min(total_bytes), LineType::LF_CR) + 1;
-		let end_clamped = target_end.saturating_sub(1).min(total_bytes.saturating_sub(1).max(0));
+		let target_line_start =
+			rope.byte_to_line_idx(target_start.min(total_bytes), LineType::LF_CR) + 1;
+		let end_clamped = target_end
+			.saturating_sub(1)
+			.min(total_bytes.saturating_sub(1).max(0));
 		let target_line_end = rope.byte_to_line_idx(end_clamped, LineType::LF_CR) + 1;
 		return Err(CodeEngineError::LineOutOfTargetScope {
 			line,
@@ -293,9 +296,10 @@ mod tests {
 
 #[cfg(test)]
 mod feat_706_tests {
+	use std::sync::Arc;
+
 	use super::*;
 	use crate::language::{LanguageId, LanguageRegistry};
-	use std::sync::Arc;
 
 	fn ts_buffer(source: &str) -> CodeBuffer {
 		let registry = Arc::new(LanguageRegistry::with_builtins().expect("registry"));
@@ -308,7 +312,8 @@ mod feat_706_tests {
 		let buffer = ts_buffer(source);
 		let span_start = source.find("function").unwrap();
 		let span_end = source.find("}\n// 6").unwrap() + 1;
-		let err = ensure_within_target_scope(&buffer, 1, 0, Some((span_start, span_end))).unwrap_err();
+		let err =
+			ensure_within_target_scope(&buffer, 1, 0, Some((span_start, span_end))).unwrap_err();
 		let msg = err.to_string();
 		assert!(msg.contains("symbol span"), "expected 'symbol span' phrase: {msg}");
 		assert!(msg.contains("lines 3..5") || msg.contains("3..5"), "msg: {msg}");
@@ -320,10 +325,13 @@ mod feat_706_tests {
 		let buffer = ts_buffer(source);
 		let span_start = source.find("function").unwrap();
 		let span_end = source.find("}\n").unwrap() + 1;
-		let err = ensure_within_target_scope(&buffer, 1, 0, Some((span_start, span_end))).unwrap_err();
+		let err =
+			ensure_within_target_scope(&buffer, 1, 0, Some((span_start, span_end))).unwrap_err();
 		let msg = err.to_string();
-		assert!(msg.contains("file-level target") || msg.contains("LINE#ID"),
-			"expected remediation hint: {msg}");
+		assert!(
+			msg.contains("file-level target") || msg.contains("LINE#ID"),
+			"expected remediation hint: {msg}"
+		);
 	}
 
 	#[test]

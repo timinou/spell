@@ -1,18 +1,18 @@
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::{
+	collections::HashMap,
+	path::{Path, PathBuf},
+};
 
-use crate::ast::Qualifier;
-use crate::types::{Diagnostic, DiagnosticVariant, NodeRef};
+use crate::{
+	ast::Qualifier,
+	types::{Diagnostic, DiagnosticVariant, NodeRef},
+};
 
 /// Resolve an FS qualifier for the given node.
 ///
 /// `#listing` returns one-level children.  `#tree[depth=N]` returns a
 /// recursive listing capped at depth *N*.  `#stat` returns metadata.
-pub fn resolve(
-	node: &NodeRef,
-	qual: &Qualifier,
-	root: &Path,
-) -> Result<Vec<NodeRef>, Diagnostic> {
+pub fn resolve(node: &NodeRef, qual: &Qualifier, root: &Path) -> Result<Vec<NodeRef>, Diagnostic> {
 	match qual.name.as_str() {
 		"listing" => resolve_listing(node, root),
 		"tree" => resolve_tree(node, qual.args.as_deref(), root),
@@ -60,10 +60,10 @@ fn resolve_listing(node: &NodeRef, root: &Path) -> Result<Vec<NodeRef>, Diagnost
 		let size = meta.len();
 		nodes.push(NodeRef {
 			locator,
-			range:       0..size as usize,
+			range: 0..size as usize,
 			kind,
-			content:     None,
-			metadata:    HashMap::new(),
+			content: None,
+			metadata: HashMap::new(),
 			diagnostics: Vec::new(),
 		});
 	}
@@ -110,11 +110,11 @@ fn resolve_tree(
 
 		let size = meta.len();
 		results.push(NodeRef {
-			locator:     path.to_string_lossy().to_string(),
-			range:       0..size as usize,
+			locator: path.to_string_lossy().to_string(),
+			range: 0..size as usize,
 			kind,
-			content:     None,
-			metadata:    HashMap::new(),
+			content: None,
+			metadata: HashMap::new(),
 			diagnostics: Vec::new(),
 		});
 
@@ -162,10 +162,7 @@ fn resolve_stat(node: &NodeRef, root: &Path) -> Result<Vec<NodeRef>, Diagnostic>
 	let mtime = meta.modified().ok();
 
 	let mut metadata = HashMap::new();
-	metadata.insert(
-		"size".to_string(),
-		serde_json::Value::Number(size.into()),
-	);
+	metadata.insert("size".to_string(), serde_json::Value::Number(size.into()));
 	if let Some(t) = mtime {
 		let secs = t
 			.duration_since(std::time::UNIX_EPOCH)
@@ -193,8 +190,9 @@ fn resolve_full_path(path: &Path, root: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use std::fs;
+
+	use super::*;
 
 	fn node(locator: &str, kind: &str) -> NodeRef {
 		NodeRef {
@@ -216,10 +214,7 @@ mod tests {
 		fs::write(root.join("src/b.rs"), "").unwrap();
 
 		let n = node("src", "§dir");
-		let qual = Qualifier {
-			name: "listing".to_string(),
-			args: None,
-		};
+		let qual = Qualifier { name: "listing".to_string(), args: None };
 		let children = resolve(&n, &qual, &root).unwrap();
 		assert_eq!(children.len(), 2);
 		assert!(children.iter().any(|c| c.locator == "src/a.rs"));
@@ -235,10 +230,7 @@ mod tests {
 		fs::write(root.join("a/b/c.rs"), "").unwrap();
 
 		let n = node("a", "§dir");
-		let qual = Qualifier {
-			name: "tree".to_string(),
-			args: Some("depth=1".to_string()),
-		};
+		let qual = Qualifier { name: "tree".to_string(), args: Some("depth=1".to_string()) };
 		let results = resolve(&n, &qual, &root).unwrap();
 		let locators: Vec<_> = results.iter().map(|r| r.locator.clone()).collect();
 		assert!(locators.contains(&"a".to_string()));
@@ -253,18 +245,12 @@ mod tests {
 		fs::write(root.join("file.rs"), "hello").unwrap();
 
 		let n = node("file.rs", "§file");
-		let qual = Qualifier {
-			name: "stat".to_string(),
-			args: None,
-		};
+		let qual = Qualifier { name: "stat".to_string(), args: None };
 		let results = resolve(&n, &qual, &root).unwrap();
 		assert_eq!(results.len(), 1);
 		let meta = &results[0].metadata;
 		assert!(meta.contains_key("size"));
 		assert!(meta.contains_key("mtime"));
-		assert_eq!(
-			meta.get("kind"),
-			Some(&serde_json::Value::String("§file".to_string()))
-		);
+		assert_eq!(meta.get("kind"), Some(&serde_json::Value::String("§file".to_string())));
 	}
 }

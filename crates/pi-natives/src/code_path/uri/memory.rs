@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
-use pi_code_path::resolver::{CancellationToken, SchemeHandler};
-use pi_code_path::types::{Content, Diagnostic, DiagnosticVariant, NodeRef};
+use pi_code_path::{
+	resolver::{CancellationToken, SchemeHandler},
+	types::{Content, Diagnostic, DiagnosticVariant, NodeRef},
+};
 
 /// Resolves `memory://<path>` to the memory tree.
 pub struct MemoryHandler {
@@ -30,7 +32,9 @@ impl SchemeHandler for MemoryHandler {
 	fn handle(&self, path: &str, _cancel: &CancellationToken) -> Result<NodeRef, Diagnostic> {
 		match self.resolve_path(path) {
 			Some(target) => {
-				let content = std::fs::read_to_string(&target).ok().map(|value| Content::Text { value });
+				let content = std::fs::read_to_string(&target)
+					.ok()
+					.map(|value| Content::Text { value });
 				Ok(NodeRef {
 					locator: format!("memory://{path}"),
 					range: 0..0,
@@ -39,11 +43,11 @@ impl SchemeHandler for MemoryHandler {
 					metadata: Default::default(),
 					diagnostics: vec![],
 				})
-			}
+			},
 			None => Err(Diagnostic {
 				variant: DiagnosticVariant::MemoryPathNotFound,
 				message: format!("memory path not found: memory://{path}"),
-				span: None,
+				span:    None,
 			}),
 		}
 	}
@@ -51,8 +55,9 @@ impl SchemeHandler for MemoryHandler {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use std::io::Write;
+
+	use super::*;
 
 	#[test]
 	fn memory_direct_folder() {
@@ -78,16 +83,16 @@ mod tests {
 		write!(f, "skill data").unwrap();
 
 		let h = MemoryHandler { project_root: root };
-		let node = h.handle("skills/canvas/SKILL.md", &CancellationToken::new()).unwrap();
+		let node = h
+			.handle("skills/canvas/SKILL.md", &CancellationToken::new())
+			.unwrap();
 		assert_eq!(node.locator, "memory://skills/canvas/SKILL.md");
 	}
 
 	#[test]
 	fn memory_missing_path() {
 		let dir = tempfile::tempdir().unwrap();
-		let h = MemoryHandler {
-			project_root: dir.path().to_path_buf(),
-		};
+		let h = MemoryHandler { project_root: dir.path().to_path_buf() };
 		let err = h.handle("missing", &CancellationToken::new()).unwrap_err();
 		assert!(matches!(err.variant, DiagnosticVariant::MemoryPathNotFound));
 	}

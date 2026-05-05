@@ -1,7 +1,8 @@
 //! Mock-only tests for MockEmbedder.
 //!
 //! These tests use the deterministic `MockEmbedder` and do NOT require a real
-//! embedding worker. Run with `cargo test -p pi-org-recall --features test-mock`.
+//! embedding worker. Run with `cargo test -p pi-org-recall --features
+//! test-mock`.
 
 use pi_org_recall::embedder::{Embedder, MockEmbedder};
 

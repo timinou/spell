@@ -20,7 +20,7 @@ fn manage_opts(subcommand: &str, target: &str, root: PathBuf) -> CodePathTaskOpt
 		actions:            None,
 		manage:             Some(subcommand.to_string()),
 		artifact_threshold: None,
-		session_id: None,
+		session_id:         None,
 	}
 }
 
@@ -51,7 +51,11 @@ fn manage_languages_returns_registered_profiles() {
 	let payload = chunk.nodes[0].metadata.get("payload").unwrap();
 	let langs = payload.get("languages").and_then(Value::as_array).unwrap();
 	// At minimum, typescript should be registered.
-	assert!(langs.iter().any(|l| l.get("id").and_then(Value::as_str) == Some("typescript")));
+	assert!(
+		langs
+			.iter()
+			.any(|l| l.get("id").and_then(Value::as_str) == Some("typescript"))
+	);
 }
 
 #[test]
@@ -118,10 +122,7 @@ fn manage_save_flushes_dirty_buffer() {
 	// Save against a non-open buffer surfaces as a manage_dispatch_failed
 	// diagnostic; that's OK — the test asserts the routing flowed
 	// through the manage branch (no parse error).
-	assert!(
-		chunk.nodes.len() + chunk.diagnostics.len() >= 1,
-		"expected node OR diagnostic"
-	);
+	assert!(chunk.nodes.len() + chunk.diagnostics.len() >= 1, "expected node OR diagnostic");
 }
 
 #[test]

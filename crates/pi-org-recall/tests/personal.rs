@@ -6,8 +6,8 @@ use std::collections::HashMap;
 
 use pi_org_engine::{graph::build_typed_graph, item::OrgItem};
 use pi_org_recall::{
-    DualContext, FusionWeights, RecallContext, RecallQuery, embedder::MockEmbedder,
-    fts::FtsIndex, recall_dual, vec::VecIndex,
+	DualContext, FusionWeights, RecallContext, RecallQuery, embedder::MockEmbedder, fts::FtsIndex,
+	recall_dual, vec::VecIndex,
 };
 use tempfile::tempdir;
 
