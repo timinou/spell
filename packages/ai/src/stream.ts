@@ -197,6 +197,9 @@ export function stream<TApi extends Api>(
 	if (!apiKey) {
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
+	if (!options || !('apiKey' in options)) {
+		console.error(`[AUTH-TRACE] stream() independently resolved env key for "${model.provider}" (SDK did not provide apiKey)`);
+	}
 	const providerOptions = { ...options, apiKey };
 
 	const api: Api = model.api;
