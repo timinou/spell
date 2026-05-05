@@ -578,9 +578,38 @@ pub fn execute_code_path_inner(
 						},
 					}
 				}
-			results
-			} else {
- 				let resolver = FsResolver::new(root);
+ 		results
+ 			} else if is_outline_qualifier(&cp) {
+ 				let qualifier = cp.qualifier.take();
+ 				let fs_resolver = FsResolver::new(root.clone());
+ 				let file_nodes = fs_resolver
+ 					.resolve(&cp, &pi_token)
+ 					.map_err(|d| Error::from_reason(d.message))?;
+ 				let code_resolver = code_resolver::new().map_err(|d| Error::from_reason(d.message))?;
+ 				let dummy_query = pi_code_path::ast::Query::single(pi_code_path::ast::Step {
+ 					axis: None,
+ 					head: pi_code_path::ast::Head::NodeKind("*".into()),
+ 					predicates: vec![],
+ 				});
+ 				let mut results = Vec::new();
+ 				for file_node in file_nodes {
+ 					let path = if Path::new(&file_node.locator).is_absolute() {
+ 						PathBuf::from(&file_node.locator)
+ 					} else {
+ 						root.join(&file_node.locator)
+ 					};
+ 					match code_resolver.resolve(&path, &dummy_query, qualifier.as_ref(), &pi_token) {
+ 						Ok(mut nodes) => results.append(&mut nodes),
+ 						Err(d) => {
+ 							let mut node = file_node;
+ 							node.diagnostics.push(d);
+ 							results.push(node);
+ 						},
+ 					}
+ 				}
+ 				results
+ 			} else {
+  				let resolver = FsResolver::new(root);
  				resolver
  					.resolve(&cp, &pi_token)
  					.map_err(|d| Error::from_reason(d.message))?

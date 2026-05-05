@@ -111,8 +111,8 @@ fn flatten_string_array(obj: &mut serde_json::Map<String, Value>, key: &str) {
 // ── MutationResolver impl ────────────────────────────────────────
 
 impl MutationResolver for CodeResolverImpl {
-	fn supports(&self, _path: &CodePath, kind: ActionKind) -> bool {
-		matches!(
+	fn supports(&self, path: &CodePath, kind: ActionKind) -> bool {
+		if !matches!(
 			kind,
 			ActionKind::Rename
 				| ActionKind::Wrap
@@ -132,7 +132,10 @@ impl MutationResolver for CodeResolverImpl {
 				| ActionKind::InsertBefore
 				| ActionKind::InsertAfter
 				| ActionKind::Delete
-		)
+		) {
+			return false;
+		}
+		path.has_target_query()
 	}
 
 	fn apply(

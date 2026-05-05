@@ -18,6 +18,12 @@ impl CodePath {
 	pub fn is_standalone_locator(&self) -> bool {
 		self.query.is_none() && self.qualifier.is_none()
 	}
+
+	/// True when the CodePath carries a query or qualifier, i.e. it is not a
+	/// bare locator. Symbol resolvers use this to reject bare-path targets.
+	pub fn has_target_query(&self) -> bool {
+		self.query.is_some() || self.qualifier.is_some()
+	}
 }
 
 // ── Locator ───────────────────────────────────────────────────────
