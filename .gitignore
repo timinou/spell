@@ -75,3 +75,4 @@ packages/qml/native/
 
 .spell/graph/*.bin
 .spell/org/*.bin
+.spell/edit-history.jsonl
