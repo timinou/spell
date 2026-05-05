@@ -53,6 +53,7 @@ impl NameLexer for MdNameLexer {
 	fn render(&self, n: &NamePayload) -> String {
 		match n {
 			NamePayload::Raw(s) => s.clone(),
+			NamePayload::Quoted(s) => s.clone(),
 		}
 	}
 
@@ -634,6 +635,7 @@ mod tests {
 		let payload = MdNameLexer.parse(&mut input).unwrap();
 		match payload {
 			NamePayload::Raw(s) => assert_eq!(s, "\"Quick start\""),
+			_ => panic!("expected Raw"),
 		}
 	}
 
@@ -657,6 +659,7 @@ mod tests {
 		let payload = MdNameLexer.parse(&mut input).unwrap();
 		match payload {
 			NamePayload::Raw(s) => assert_eq!(s, "\"He said \\\"hi\\\"\""),
+			_ => panic!("expected Raw"),
 		}
 	}
 

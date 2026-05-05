@@ -130,6 +130,7 @@ mod tests {
 		fn render(&self, n: &NamePayload) -> String {
 			match n {
 				NamePayload::Raw(s) => s.clone(),
+				NamePayload::Quoted(s) => s.clone(),
 			}
 		}
 

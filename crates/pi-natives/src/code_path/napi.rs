@@ -227,6 +227,7 @@ impl NameLexer for DotLexer {
 	fn render(&self, n: &pi_code_path::ast::NamePayload) -> String {
 		match n {
 			pi_code_path::ast::NamePayload::Raw(s) => s.clone(),
+			pi_code_path::ast::NamePayload::Quoted(s) => s.clone(),
 		}
 	}
 

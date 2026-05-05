@@ -60,6 +60,7 @@ impl NameLexer for TsNameLexer {
     fn render(&self, n: &NamePayload) -> String {
         match n {
             NamePayload::Raw(s) => s.clone(),
+            NamePayload::Quoted(s) => s.clone(),
         }
     }
 
@@ -72,6 +73,7 @@ impl NameLexer for TsNameLexer {
         // definitions, and variable declarators bound to functions.
         let target = match n {
             NamePayload::Raw(s) => s.as_str(),
+            NamePayload::Quoted(_) => return false,
         };
         // Strip dotted suffixes — the walker handles dotted paths via
         // multiple steps. Here we only validate the leaf segment.
@@ -233,6 +235,33 @@ mod tests {
         } else {
             panic!("expected Name(Raw(Foo.bar))");
         }
+    }
+
+    #[test]
+    fn parses_backtick_quoted_segment_with_spaces_and_asterisks() {
+        let input = "`export * from \"./json\"`";
+        let mut s = input;
+        let parsed = TsNameLexer.parse(&mut s).expect("parses");
+        match parsed {
+            NamePayload::Quoted(text) => assert_eq!(text, "export * from \"./json\""),
+            _ => panic!("expected Quoted variant"),
+        }
+        assert!(s.is_empty(), "consumed all input");
+    }
+
+    #[test]
+    fn parses_quoted_regular_ident_resolves_same_as_unquoted() {
+        let mut a = "Foo";
+        let mut b = "`Foo`";
+        let pa = TsNameLexer.parse(&mut a).unwrap();
+        let pb = TsNameLexer.parse(&mut b).unwrap();
+        assert_eq!(TsNameLexer.render(&pa), TsNameLexer.render(&pb));
+    }
+
+    #[test]
+    fn unterminated_backtick_returns_parse_error() {
+        let mut s = "`unterminated";
+        assert!(TsNameLexer.parse(&mut s).is_err());
     }
 }
 

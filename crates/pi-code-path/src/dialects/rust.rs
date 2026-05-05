@@ -56,12 +56,15 @@ impl NameLexer for RustNameLexer {
 	fn render(&self, n: &NamePayload) -> String {
 		match n {
 			NamePayload::Raw(s) => s.clone(),
+			NamePayload::Quoted(s) => s.clone(),
 		}
 	}
 
-	fn matches(&self, _n: &NamePayload, _node: Node<'_>, _src: &str) -> bool {
-		// Tree-sitter integration deferred to NAPI layer (PROJ-066 CodeResolver).
-		false
+	fn matches(&self, n: &NamePayload, _node: Node<'_>, _src: &str) -> bool {
+		match n {
+			NamePayload::Raw(_) => false,
+			NamePayload::Quoted(_) => false,
+		}
 	}
 }
 
