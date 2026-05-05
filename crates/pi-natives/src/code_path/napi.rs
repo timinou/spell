@@ -100,7 +100,7 @@ pub struct CodePathOptions<'env> {
 // ── Task options (owned, Send) ───────────────────────────────────
 
 #[allow(dead_code)]
-pub(crate) struct CodePathTaskOptions {
+pub struct CodePathTaskOptions {
 	pub command: String,
 	pub target:  String,
 	pub limit:   Option<u32>,
@@ -240,7 +240,7 @@ pub fn execute_code_path(options: CodePathOptions<'_>) -> crate::task::Async<Vec
 		execute_code_path_inner(task_options, cancel_token)
 	})
 }
-pub(crate) fn execute_code_path_inner(
+pub fn execute_code_path_inner(
 	opts: CodePathTaskOptions,
 	cancel_token: CancelToken,
 ) -> Result<Vec<CodePathChunk>> {
@@ -268,14 +268,15 @@ pub(crate) fn execute_code_path_inner(
 
 	let nodes = match &cp.locator {
 		Locator::Fs(_) => {
-			if is_text_query(&cp) {
+			if is_pure_text_query(&cp) {
 				let extractors = default_extractors();
 				let resolver = TextResolver::new(root).with_extractors(extractors);
 				resolver
 					.resolve(&cp, &pi_token)
 					.map_err(|d| Error::from_reason(d.message))?
-			} else if cp.query.is_some() {
+			} else if is_symbol_query(&cp) {
 				// Code query: walk files, then apply code resolver per file.
+				let qualifier = cp.qualifier.take();
 				let fs_resolver = FsResolver::new(root.clone());
 				let file_nodes = fs_resolver
 					.resolve(&cp, &pi_token)
@@ -293,7 +294,7 @@ pub(crate) fn execute_code_path_inner(
 					} else {
 						root.join(&file_node.locator)
 					};
-					match code_resolver.resolve(&path, query, None, &pi_token) {
+					match code_resolver.resolve(&path, query, qualifier.as_ref(), &pi_token) {
 						Ok(mut nodes) => results.append(&mut nodes),
 						Err(d) => {
 							let mut node = file_node;
@@ -374,7 +375,7 @@ pub(crate) fn execute_code_path_inner(
 	Ok(chunks)
 }
 
-fn is_text_query(cp: &CodePath) -> bool {
+fn is_pure_text_query(cp: &CodePath) -> bool {
 	let Some(query) = &cp.query else {
 		return false;
 	};
@@ -383,6 +384,10 @@ fn is_text_query(cp: &CodePath) -> bool {
 		_ => return false,
 	};
 	matches!(head_kind, "line" | "para" | "chunk") && query.head.axis == Some(Axis::Structural)
+}
+
+fn is_symbol_query(cp: &CodePath) -> bool {
+	cp.query.is_some() && !is_pure_text_query(cp)
 }
 
 // ── parseCodePath ────────────────────────────────────────────────

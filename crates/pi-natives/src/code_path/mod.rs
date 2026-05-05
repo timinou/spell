@@ -18,3 +18,5 @@ pub mod uri;
 
 #[cfg(test)]
 mod dispatch_tests;
+#[cfg(test)]
+mod routing_tests;
