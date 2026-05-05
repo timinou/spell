@@ -10,12 +10,12 @@ use std::{
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use pi_code_path::{
-	ast::{Axis, CodePath, Head, Locator},
+	ast::{Action, Axis, CodePath, Head, Locator, MutationOutcome},
 	dialect::NameLexer,
 	dialects::{fs::FsResolver, text::TextResolver},
 	parser::parse_code_path,
 	renderer::render_code_path,
-	resolver::{CancellationToken, CodeResolver, ProjectionOpts, Resolver},
+	resolver::{CancellationToken, CodeResolver, MutationResolver, ProjectionOpts, Resolver},
 	types::{Diagnostic, DiagnosticVariant},
 };
 use winnow::{Parser, token::take_while};
@@ -23,7 +23,7 @@ use winnow::{Parser, token::take_while};
 use super::{
 	code_resolver, dialect_registry,
 	extractors::default_extractors,
-	marshal::{ARTIFACT_THRESHOLD, nodes_to_dtos},
+	marshal::{ARTIFACT_THRESHOLD, diagnostic_to_dto, mutation_outcome_to_dto, nodes_to_dtos},
 	uri::default_registry,
 };
 use crate::task::CancelToken;
@@ -103,32 +103,32 @@ pub struct CodePathOptions<'env> {
 
 #[allow(dead_code)]
 pub struct CodePathTaskOptions {
-	pub command: String,
-	pub target:  String,
-	pub limit:   Option<u32>,
-	pub head:    Option<u32>,
-	pub tail:    Option<u32>,
-	pub offset:  Option<u32>,
-	pub format:  Option<String>,
-	pub root:    Option<String>,
-	pub actions: Option<serde_json::Value>,
-	pub manage:  Option<String>,
+	pub command:            String,
+	pub target:             String,
+	pub limit:              Option<u32>,
+	pub head:               Option<u32>,
+	pub tail:               Option<u32>,
+	pub offset:             Option<u32>,
+	pub format:             Option<String>,
+	pub root:               Option<String>,
+	pub actions:            Option<serde_json::Value>,
+	pub manage:             Option<String>,
 	pub artifact_threshold: Option<u32>,
 }
 
 impl From<CodePathOptions<'_>> for CodePathTaskOptions {
 	fn from(value: CodePathOptions<'_>) -> Self {
 		Self {
-			command: value.command,
-			target:  value.target,
-			limit:   value.limit,
-			head:    value.head,
-			tail:    value.tail,
-			offset:  value.offset,
-			format:  value.format,
-			root:    value.root,
-			actions: value.actions,
-			manage:  value.manage,
+			command:            value.command,
+			target:             value.target,
+			limit:              value.limit,
+			head:               value.head,
+			tail:               value.tail,
+			offset:             value.offset,
+			format:             value.format,
+			root:               value.root,
+			actions:            value.actions,
+			manage:             value.manage,
 			artifact_threshold: value.artifact_threshold,
 		}
 	}
@@ -270,6 +270,80 @@ pub fn execute_code_path_inner(
 
 	let pi_token = CancellationToken::new();
 
+	// ── Edit command branch ──────────────────────────────────────
+	if opts.command == "edit" {
+		let actions: Vec<Action> = match opts.actions {
+			Some(v) => serde_json::from_value(v)
+				.map_err(|e| Error::from_reason(format!("invalid actions: {e}")))?,
+			None => {
+				return Ok(vec![CodePathChunk {
+					nodes:       vec![],
+					diagnostics: vec![DiagnosticDto {
+						variant: "missing_actions".to_string(),
+						message: "command: edit requires actions".to_string(),
+						span:    None,
+					}],
+					done:        true,
+				}]);
+			},
+		};
+
+		let fs_resolver = FsResolver::new(root.clone());
+		let extractors = default_extractors();
+		let text_resolver = TextResolver::new(root.clone()).with_extractors(extractors);
+		let code_resolver = code_resolver::new().map_err(|d| Error::from_reason(d.message))?;
+
+		let mut outcomes: Vec<MutationOutcome> = Vec::new();
+		for action in &actions {
+			let resolver: &dyn MutationResolver = if fs_resolver.supports(action.kind()) {
+				&fs_resolver
+			} else if text_resolver.supports(action.kind()) {
+				&text_resolver
+			} else if code_resolver.supports(action.kind()) {
+				&code_resolver
+			} else {
+				return Ok(vec![CodePathChunk {
+					nodes:       outcomes.into_iter().map(mutation_outcome_to_dto).collect(),
+					diagnostics: vec![DiagnosticDto {
+						variant: "unsupported_action_for_resolver".to_string(),
+						message: format!("no resolver supports action {:?}", action.kind()),
+						span:    None,
+					}],
+					done:        true,
+				}]);
+			};
+
+			match resolver.apply(&cp, action, &pi_token) {
+				Ok(outcome) => outcomes.push(outcome),
+				Err(d) => {
+					return Ok(vec![CodePathChunk {
+						nodes:       outcomes.into_iter().map(mutation_outcome_to_dto).collect(),
+						diagnostics: vec![diagnostic_to_dto(d)],
+						done:        true,
+					}]);
+				},
+			}
+		}
+
+		let nodes: Vec<NodeRefDto> = outcomes.into_iter().map(mutation_outcome_to_dto).collect();
+		let mut chunk = CodePathChunk { nodes, diagnostics: Vec::new(), done: true };
+		if !parse_diagnostics.is_empty() {
+			chunk
+				.diagnostics
+				.extend(parse_diagnostics.into_iter().map(|d| {
+					DiagnosticDto {
+						variant: "unsupported_operation".to_string(),
+						message: d.message,
+						span:    d
+							.span
+							.map(|s| SpanDto { start: s.start as u32, end: s.end as u32 }),
+					}
+				}));
+		}
+		return Ok(vec![chunk]);
+	}
+
+	// ── Query path (default) ─────────────────────────────────────
 	let nodes = match &cp.locator {
 		Locator::Fs(_) => {
 			if is_pure_text_query(&cp) {
@@ -334,7 +408,10 @@ pub fn execute_code_path_inner(
 		return Err(Error::from_reason("Aborted: Signal"));
 	}
 
-	let threshold = opts.artifact_threshold.map(|n| n as usize).unwrap_or(ARTIFACT_THRESHOLD);
+	let threshold = opts
+		.artifact_threshold
+		.map(|n| n as usize)
+		.unwrap_or(ARTIFACT_THRESHOLD);
 	let dtos = nodes_to_dtos(nodes, threshold);
 	let mut chunks: Vec<CodePathChunk> = Vec::new();
 	for chunk in dtos.chunks(64) {
@@ -419,31 +496,50 @@ mod tests {
 	use super::*;
 	fn opts(target: impl Into<String>) -> CodePathTaskOptions {
 		CodePathTaskOptions {
-			command: "resolve".to_string(),
-			target:  target.into(),
-			limit:   None,
-			head:    None,
-			tail:    None,
-			offset:  None,
-			format:  None,
-			root:    None,
-			actions: None,
-			manage:  None,
+			command:            "resolve".to_string(),
+			target:             target.into(),
+			limit:              None,
+			head:               None,
+			tail:               None,
+			offset:             None,
+			format:             None,
+			root:               None,
+			actions:            None,
+			manage:             None,
 			artifact_threshold: None,
 		}
 	}
 	fn opts_with_root(target: impl Into<String>, root: PathBuf) -> CodePathTaskOptions {
 		CodePathTaskOptions {
-			command: "resolve".to_string(),
-			target:  target.into(),
-			limit:   None,
-			head:    None,
-			tail:    None,
-			offset:  None,
-			format:  None,
-			root:    Some(root.to_string_lossy().to_string()),
-			actions: None,
-			manage:  None,
+			command:            "resolve".to_string(),
+			target:             target.into(),
+			limit:              None,
+			head:               None,
+			tail:               None,
+			offset:             None,
+			format:             None,
+			root:               Some(root.to_string_lossy().to_string()),
+			actions:            None,
+			manage:             None,
+			artifact_threshold: None,
+		}
+	}
+	fn opts_edit_with_root(
+		target: impl Into<String>,
+		root: PathBuf,
+		actions: Option<serde_json::Value>,
+	) -> CodePathTaskOptions {
+		CodePathTaskOptions {
+			command: "edit".to_string(),
+			target: target.into(),
+			limit: None,
+			head: None,
+			tail: None,
+			offset: None,
+			format: None,
+			root: Some(root.to_string_lossy().to_string()),
+			actions,
+			manage: None,
 			artifact_threshold: None,
 		}
 	}
@@ -647,7 +743,8 @@ mod tests {
 		let chunks = execute_code_path_inner(o, crate::task::CancelToken::default()).unwrap();
 		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
 		assert_eq!(nodes.len(), 10, "expected 2 lines × 5 files = 10 nodes");
-	}	#[test]
+	}
+	#[test]
 	fn artifact_threshold_default_externalises_large_content() {
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
@@ -704,5 +801,159 @@ mod tests {
 		let c = nodes[0].content.as_ref().expect("content expected");
 		assert!(c.artifact_uri.is_none(), "expected no artifact_uri for huge threshold");
 		assert!(c.value.is_some(), "expected inline value");
+	}
+
+	#[test]
+	fn edit_create_writes_file_via_fs_resolver() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		let actions = Some(serde_json::json!([
+			{"kind": "create", "content": "hi"}
+		]));
+		let chunks = execute_code_path_inner(
+			opts_edit_with_root("new.txt", root.clone(), actions),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert_eq!(chunks.len(), 1);
+		assert!(chunks[0].done);
+		assert_eq!(chunks[0].nodes.len(), 1);
+		assert_eq!(chunks[0].nodes[0].kind, "§edit-result");
+		assert_eq!(chunks[0].nodes[0].metadata.get("editCount").unwrap(), &1);
+		assert_eq!(std::fs::read_to_string(root.join("new.txt")).unwrap(), "hi");
+	}
+
+	#[test]
+	fn edit_rename_symbol_via_code_resolver() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		let file = root.join("foo.ts");
+		std::fs::write(&file, "function oldName() {}\n").unwrap();
+		let actions = Some(serde_json::json!([
+			{"kind": "rename", "content": "newName"}
+		]));
+		let target = format!("{}::oldName", file.display());
+		let chunks = execute_code_path_inner(
+			opts_edit_with_root(target, root.clone(), actions),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert_eq!(chunks.len(), 1);
+		assert!(chunks[0].done);
+		assert_eq!(chunks[0].nodes.len(), 1);
+		assert_eq!(chunks[0].nodes[0].kind, "§edit-result");
+		assert!(
+			chunks[0].nodes[0]
+				.metadata
+				.get("editCount")
+				.unwrap()
+				.as_u64()
+				.unwrap()
+				>= 1
+		);
+		let text = std::fs::read_to_string(root.join("foo.ts")).unwrap();
+		assert!(text.contains("newName"), "expected rename to newName, got: {}", text);
+	}
+
+	#[test]
+	fn edit_sequential_append_applies_both() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), "first\n").unwrap();
+		let actions = Some(serde_json::json!([
+			{"kind": "append", "lines": "second"},
+			{"kind": "append", "lines": "third"}
+		]));
+		let chunks = execute_code_path_inner(
+			opts_edit_with_root("a.txt", root.clone(), actions),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert_eq!(chunks.len(), 1);
+		assert!(chunks[0].done);
+		assert_eq!(chunks[0].nodes.len(), 2, "expected two edit-result nodes");
+		let text = std::fs::read_to_string(root.join("a.txt")).unwrap();
+		assert!(text.contains("first"));
+		assert!(text.contains("second"));
+		assert!(text.contains("third"));
+	}
+
+	#[test]
+	fn edit_first_failure_aborts_rest() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), "exists\n").unwrap();
+		let actions = Some(serde_json::json!([
+			{"kind": "create", "content": "x"},
+			{"kind": "append", "lines": "y"}
+		]));
+		let chunks = execute_code_path_inner(
+			opts_edit_with_root("a.txt", root.clone(), actions),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert_eq!(chunks.len(), 1);
+		assert!(chunks[0].done);
+		assert_eq!(chunks[0].nodes.len(), 0, "prior outcomes empty since first action failed");
+		assert_eq!(chunks[0].diagnostics.len(), 1);
+		assert_eq!(
+			chunks[0].diagnostics[0].variant, "file_exists",
+			"expected file_exists from first create failure"
+		);
+		let text = std::fs::read_to_string(root.join("a.txt")).unwrap();
+		assert!(!text.contains("y"), "second append should have been skipped");
+	}
+
+	#[test]
+	fn edit_missing_actions_returns_diagnostic() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		let chunks = execute_code_path_inner(
+			opts_edit_with_root("a.txt", root, None),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert_eq!(chunks.len(), 1);
+		assert!(chunks[0].done);
+		assert!(chunks[0].nodes.is_empty());
+		assert_eq!(chunks[0].diagnostics.len(), 1);
+		assert_eq!(chunks[0].diagnostics[0].variant, "missing_actions");
+	}
+
+	#[test]
+	fn edit_unsupported_action_returns_diagnostic() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("foo.ts"), "function a() {}\n").unwrap();
+		let actions = Some(serde_json::json!([
+			{"kind": "promote"}
+		]));
+		let chunks = execute_code_path_inner(
+			opts_edit_with_root("foo.ts::a", root, actions),
+			crate::task::CancelToken::default(),
+		)
+		.unwrap();
+		assert_eq!(chunks.len(), 1);
+		assert!(chunks[0].done);
+		assert!(chunks[0].nodes.is_empty());
+		assert_eq!(chunks[0].diagnostics.len(), 1);
+		assert_eq!(
+			chunks[0].diagnostics[0].variant, "unsupported_operation",
+			"expected unsupported_operation for unimplemented code action"
+		);
+	}
+
+	#[test]
+	fn edit_get_preserves_query_behaviour() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), b"hello").unwrap();
+		let mut o = opts_with_root("a.txt", root);
+		o.command = "get".to_string();
+		let chunks = execute_code_path_inner(o, crate::task::CancelToken::default()).unwrap();
+		assert_eq!(chunks.len(), 1);
+		assert!(chunks[0].done);
+		assert_eq!(chunks[0].nodes.len(), 1);
+		assert_eq!(chunks[0].nodes[0].kind, "§file");
 	}
 }

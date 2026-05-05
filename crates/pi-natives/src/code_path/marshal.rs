@@ -2,7 +2,10 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use pi_code_path::types::{Content, Diagnostic, DiagnosticVariant, NodeRef};
+use pi_code_path::{
+	ast::MutationOutcome,
+	types::{Content, Diagnostic, DiagnosticVariant, NodeRef},
+};
 
 use crate::code_path::napi::{ContentDto, DiagnosticDto, NodeRefDto, SpanDto};
 
@@ -10,6 +13,29 @@ use crate::code_path::napi::{ContentDto, DiagnosticDto, NodeRefDto, SpanDto};
 pub const ARTIFACT_THRESHOLD: usize = 256 * 1024;
 
 /// Convert a batch of kernel `NodeRef`s into DTOs, staging large payloads.
+/// Convert a `MutationOutcome` into a single `NodeRefDto` with kind
+/// `§edit-result`.
+pub fn mutation_outcome_to_dto(outcome: MutationOutcome) -> NodeRefDto {
+	let mut metadata = serde_json::Map::new();
+	metadata.insert("editCount".into(), serde_json::json!(outcome.edit_count));
+	if let Some(diff) = &outcome.diff {
+		metadata.insert("diff".into(), serde_json::json!(diff));
+	}
+	metadata.insert("created".into(), serde_json::json!(outcome.created));
+	if let Some(summary) = &outcome.target_summary {
+		metadata.insert("targetSummary".into(), serde_json::json!(summary));
+	}
+	NodeRefDto {
+		locator:     "edit".to_string(),
+		range_start: 0,
+		range_end:   0,
+		kind:        "§edit-result".to_string(),
+		content:     None,
+		metadata:    serde_json::Value::Object(metadata),
+		diagnostics: Vec::new(),
+	}
+}
+
 pub fn nodes_to_dtos(nodes: Vec<NodeRef>, threshold: usize) -> Vec<NodeRefDto> {
 	nodes
 		.into_iter()
@@ -34,7 +60,7 @@ fn node_to_dto(node: NodeRef, threshold: usize) -> NodeRefDto {
 	}
 }
 
-fn diagnostic_to_dto(d: Diagnostic) -> DiagnosticDto {
+pub fn diagnostic_to_dto(d: Diagnostic) -> DiagnosticDto {
 	DiagnosticDto {
 		variant: diagnostic_variant_to_string(&d.variant),
 		message: d.message,
@@ -44,7 +70,7 @@ fn diagnostic_to_dto(d: Diagnostic) -> DiagnosticDto {
 	}
 }
 
-fn diagnostic_variant_to_string(v: &DiagnosticVariant) -> String {
+pub fn diagnostic_variant_to_string(v: &DiagnosticVariant) -> String {
 	match v {
 		DiagnosticVariant::ParseError => "parse_error".to_string(),
 		DiagnosticVariant::FileNotFound => "file_not_found".to_string(),
@@ -65,6 +91,10 @@ fn diagnostic_variant_to_string(v: &DiagnosticVariant) -> String {
 		DiagnosticVariant::FileExists => "file_exists".to_string(),
 		DiagnosticVariant::StaleAnchor => "stale_anchor".to_string(),
 		DiagnosticVariant::Cancelled => "cancelled".to_string(),
+		DiagnosticVariant::MissingActions => "missing_actions".to_string(),
+		DiagnosticVariant::UnsupportedActionForResolver => {
+			"unsupported_action_for_resolver".to_string()
+		},
 	}
 }
 
@@ -187,16 +217,17 @@ fn stage_artifact(bytes: &[u8]) -> std::io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use std::collections::HashMap;
+
+	use super::*;
 
 	fn text_node(value: String) -> NodeRef {
 		NodeRef {
-			locator: "test".to_string(),
-			range: 0..0,
-			kind: "test".to_string(),
-			content: Some(Content::Text { value }),
-			metadata: HashMap::new(),
+			locator:     "test".to_string(),
+			range:       0..0,
+			kind:        "test".to_string(),
+			content:     Some(Content::Text { value }),
+			metadata:    HashMap::new(),
 			diagnostics: Vec::new(),
 		}
 	}
