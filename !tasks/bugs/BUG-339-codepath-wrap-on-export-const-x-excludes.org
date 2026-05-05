@@ -1,5 +1,5 @@
 #+TITLE: CodePath wrap on `export const X` excludes `export` keyword
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d50def80d06410
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T07-20-24-835Z_14d50def80d06410.jsonl]]
 #+CUSTOM_ID: BUG-339-codepath-wrap-on-export-const-x-excludes
@@ -283,3 +283,10 @@ fn rename_uses_identifier_range_unchanged() {
 
 [[id:BUG-337-codepath-multi-word-symbols-fail-to-pars]]
 [[id:BUG-338-codepath-insertbefore-insertafter-drops]]
+
+Fixed by extending ResolvedSymbol with identifier_range, declaration_range, statement_range.
+- build_resolved computes all three; statement_range walks up enclosing_statement_kinds.
+- TypeScript: export_statement, export_default_declaration. Python: decorated_definition. Rust: attribute_item siblings.
+- Dispatcher in code_buffer.rs uses range_for_action: rename→identifier_range, wrap/splice/move/clone→statement_range, default→declaration_range.
+- wrap.rs tests added (red→green) and pass.
+- Acceptance: cargo test -p pi-code-engine -p pi-natives green.
