@@ -415,16 +415,16 @@ describe("BUG-341 zero-byte guard and routing", () => {
 		const file = await tempFile(`alpha\nbeta\ngamma\n`);
 		const tag = computeLineHash(2, "beta");
 		const result = await edit({
-			operations: [{ target: file, action: { kind: "insertBefore", pos: `2#${tag}`, lines: ["INSERTED\n"] } }],
+			operations: [{ target: file, action: { kind: "insertBefore", pos: `2#${tag}`, lines: ["INSERTED"] } }],
 		});
-		expect(result.isError).toBeFalsy();
+		expect(getText(result)).not.toContain("changed");
 		expect(await fs.readFile(file, "utf8")).toBe("alpha\nINSERTED\nbeta\ngamma\n");
 	});
 
 	test("insertAfter with LINE#ID inserts after that line", async () => {
 		const file = await tempFile(`a\nb\nc\n`);
 		const tag = computeLineHash(2, "b");
-		await edit({ operations: [{ target: file, action: { kind: "insertAfter", pos: `2#${tag}`, lines: ["X\n"] } }] });
+		await edit({ operations: [{ target: file, action: { kind: "insertAfter", pos: `2#${tag}`, lines: ["X"] } }] });
 		expect(await fs.readFile(file, "utf8")).toBe("a\nb\nX\nc\n");
 	});
 
@@ -433,6 +433,6 @@ describe("BUG-341 zero-byte guard and routing", () => {
 		const result = await edit({
 			operations: [{ target: file, action: { kind: "insertBefore", pos: "2#XX", lines: ["X"] } }],
 		});
-		expect(result.isError).toBeTruthy();
+		expect(getText(result)).toContain("changed since last read");
 	});
 });

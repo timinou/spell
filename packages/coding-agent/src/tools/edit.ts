@@ -53,7 +53,13 @@ function normalizeLines(value: string | string[] | null | undefined): string | u
 }
 
 function isLineIdAction(action: CodePathAction): boolean {
-	return action.kind === "replace" || action.kind === "append" || action.kind === "prepend";
+	if (action.kind === "replace" || action.kind === "append" || action.kind === "prepend") {
+		return true;
+	}
+	if ((action.kind === "insertBefore" || action.kind === "insertAfter") && action.pos !== undefined) {
+		return true;
+	}
+	return false;
 }
 
 function isPatchAction(action: CodePathAction): boolean {
@@ -73,7 +79,14 @@ function parseHashlineAnchor(raw: string, field: "pos" | "end", editIndex: numbe
 function resolveEditAnchors(action: CodePathAction, editIndex: number): HashlineEdit[] {
 	const lines = normalizeLines(action.lines);
 	const contentLines = lines === undefined ? [] : lines.split("\n");
-	const op = action.kind === "append" || action.kind === "prepend" ? action.kind : "replace";
+	const op =
+		action.kind === "append" || action.kind === "prepend"
+			? action.kind
+			: action.kind === "insertBefore"
+				? "prepend"
+				: action.kind === "insertAfter"
+					? "append"
+					: "replace";
 	const pos = action.pos !== undefined ? parseHashlineAnchor(action.pos, "pos", editIndex) : undefined;
 	const end = action.end !== undefined ? parseHashlineAnchor(action.end, "end", editIndex) : undefined;
 
@@ -238,7 +251,12 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 			: created
 				? `Created ${targetPath}`
 				: `Updated ${targetPath} (${editCount} edit(s))`;
-		return toolResult<EditToolResultDetails>({ target: nodePath.relative(this.session.cwd, targetPath), action: action.kind }).text(summary).done();
+		return toolResult<EditToolResultDetails>({
+			target: nodePath.relative(this.session.cwd, targetPath),
+			action: action.kind,
+		})
+			.text(summary)
+			.done();
 	}
 
 	async #executeLineId(
@@ -255,7 +273,10 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 				const content = action.kind === "prepend" ? lines : lines;
 				await fs.mkdir(nodePath.dirname(targetPath), { recursive: true });
 				await fs.writeFile(targetPath, content, "utf-8");
-				return toolResult<EditToolResultDetails>({ target: nodePath.relative(this.session.cwd, targetPath), op: "create" })
+				return toolResult<EditToolResultDetails>({
+					target: nodePath.relative(this.session.cwd, targetPath),
+					op: "create",
+				})
 					.text(`Created ${targetPath}`)
 					.done();
 			}
@@ -280,20 +301,32 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		} catch (err) {
 			if (err instanceof HashlineMismatchError) {
 				const diag = HashlineMismatchError.formatMessage(err.mismatches, err.fileLines);
-				return toolResult<EditToolResultDetails>({ target: nodePath.relative(this.session.cwd, targetPath), error: "stale_anchor" }).text(diag).done();
+				return toolResult<EditToolResultDetails>({
+					target: nodePath.relative(this.session.cwd, targetPath),
+					error: "stale_anchor",
+				})
+					.text(diag)
+					.done();
 			}
 			throw err;
 		}
 
 		if (originalNormalized === normalizedText) {
 			if (!idempotent) {
-				return toolResult<EditToolResultDetails>({ target: nodePath.relative(this.session.cwd, targetPath), noop: true })
+				return toolResult<EditToolResultDetails>({
+					target: nodePath.relative(this.session.cwd, targetPath),
+					noop: true,
+				})
 					.text(
 						`No changes made to ${targetPath}. The edits produced identical content. Retry with idempotent=true only when an intentional no-op is acceptable.`,
 					)
 					.done();
 			}
-			return toolResult<EditToolResultDetails>({ target: nodePath.relative(this.session.cwd, targetPath), noop: true, idempotent: true })
+			return toolResult<EditToolResultDetails>({
+				target: nodePath.relative(this.session.cwd, targetPath),
+				noop: true,
+				idempotent: true,
+			})
 				.text(`No changes (idempotent).`)
 				.done();
 		}
@@ -341,7 +374,11 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 			text += `\n\nWarnings:\n${result.warnings.join("\n")}`;
 		}
 
-		return toolResult<EditToolResultDetails>({ target: nodePath.relative(this.session.cwd, targetPath), op: "update", diff: change.newContent })
+		return toolResult<EditToolResultDetails>({
+			target: nodePath.relative(this.session.cwd, targetPath),
+			op: "update",
+			diff: change.newContent,
+		})
 			.text(text)
 			.done();
 	}

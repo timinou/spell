@@ -50,7 +50,7 @@ export const codePathActionSchema = Type.Object(
 		pos: Type.Optional(
 			Type.String({
 				description:
-					"Start anchor in LINE#ID format copied from read output. A single anchor (pos or end, but not both) replaces exactly one line; lines.length does not control span.",
+					'Start anchor in LINE#ID format copied from read output (e.g. "5#QW"). Supported on replace, append, prepend, insertBefore, insertAfter, and splice. A single anchor (pos or end, but not both) replaces exactly one line; lines.length does not control span.',
 			}),
 		),
 		end: Type.Optional(
@@ -82,13 +82,18 @@ export type CodePathAction = Static<typeof codePathActionSchema>;
 
 export const getSchema = Type.Object(
 	{
-		target: Type.String({ description: "CodePath target string (path, glob, symbol, URI). Multi-word symbols may be backtick-quoted, e.g. foo.ts::\`export * from \"./json\"\`" }),
+		target: Type.String({
+			description:
+				'CodePath target string (path, glob, symbol, URI). Multi-word symbols may be backtick-quoted, e.g. foo.ts::\`export * from "./json"\`',
+		}),
 		limit: Type.Optional(Type.Integer({ description: "Max results or lines" })),
 		head: Type.Optional(Type.Integer({ description: "Max lines from head" })),
 		tail: Type.Optional(Type.Integer({ description: "Max lines from tail" })),
 		offset: Type.Optional(Type.Integer({ description: "Start line 1-indexed" })),
 		format: Type.Optional(
-			Type.String({ description: "Output format: node-list | locations | content-only | tree | simple-list | fs-listing" }),
+			Type.String({
+				description: "Output format: node-list | locations | content-only | tree | simple-list | fs-listing",
+			}),
 		),
 		root: Type.Optional(
 			Type.String({ description: "Optional project-relative or absolute root for target resolution" }),
@@ -110,7 +115,8 @@ export const editOperationSchema = Type.Recursive(This =>
 	Type.Object(
 		{
 			target: Type.String({
-			description: "Stable edit target ID: '<file>' for file roots or '<file>::Symbol.member' for declarations. Multi-word symbols may be backtick-quoted, e.g. foo.ts::\`export * from \"./json\"\`",
+				description:
+					"Stable edit target ID: '<file>' for file roots or '<file>::Symbol.member' for declarations. Multi-word symbols may be backtick-quoted, e.g. foo.ts::\`export * from \"./json\"\`",
 			}),
 			action: codePathActionSchema,
 			children: Type.Optional(
