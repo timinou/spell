@@ -1,8 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as nodePath from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { Component } from "@oh-my-pi/pi-tui";
 import { executeCodePath } from "@oh-my-pi/pi-natives";
+import type { Component } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import type { FileSystem, PatchInput } from "../patch";
@@ -50,6 +50,12 @@ type HashlineEdit =
 function normalizeLines(value: string | string[] | null | undefined): string | undefined {
 	if (value === undefined || value === null) return undefined;
 	return typeof value === "string" ? value : value.join("\n");
+}
+
+function isErrorResult(result: AgentToolResult): boolean {
+	if (result.isError === true) return true;
+	const details = result.details as { error?: unknown } | undefined;
+	return details?.error !== undefined;
 }
 
 function isLineIdAction(action: CodePathAction): boolean {
@@ -174,13 +180,38 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult> {
 		const sessionCwd = this.session.cwd;
+		const transactionMode: "best-effort" | "strict" = params.transaction ?? "best-effort";
+
+		// Pre-resolve target paths once; used by strict snapshot and the loop.
+		const ops = params.operations
+			.map((op, i) => {
+				if (!op) return null;
+				const targetPath = nodePath.isAbsolute(op.target) ? op.target : nodePath.resolve(sessionCwd, op.target);
+				return { i, op, targetPath };
+			})
+			.filter(
+				(x): x is { i: number; op: NonNullable<EditParams["operations"][number]>; targetPath: string } =>
+					x !== null,
+			);
+
+		// Strict transaction: snapshot every unique target file before any op runs.
+		const snapshots = new Map<string, { existed: boolean; content: string | null }>();
+		if (transactionMode === "strict") {
+			for (const { targetPath } of ops) {
+				if (snapshots.has(targetPath)) continue;
+				if (await fs.exists(targetPath)) {
+					snapshots.set(targetPath, { existed: true, content: await fs.readFile(targetPath, "utf-8") });
+				} else {
+					snapshots.set(targetPath, { existed: false, content: null });
+				}
+			}
+		}
+
 		const results: AgentToolResult[] = [];
+		let failedOpIndex: number | null = null;
+		const skippedOpIndices: number[] = [];
 
-		for (let i = 0; i < params.operations.length; i++) {
-			const op = params.operations[i];
-			if (!op) continue;
-
-			const targetPath = nodePath.isAbsolute(op.target) ? op.target : nodePath.resolve(sessionCwd, op.target);
+		for (const { i, op, targetPath } of ops) {
 			enforceModeWrite(this.session, targetPath, { op: "update" });
 			const sandboxError = enforcePathWrite(targetPath, sessionCwd, this.session.sandboxPolicy);
 			if (sandboxError) throw new Error(sandboxError);
@@ -188,31 +219,57 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 			const action = op.action;
 			const idempotent = op.idempotent ?? params.idempotent ?? false;
 
+			let result: AgentToolResult;
 			if (isPatchAction(action)) {
-				const patchResult = await this.#executePatch(targetPath, action.diff!, signal);
-				results.push(patchResult);
+				result = await this.#executePatch(targetPath, action.diff!, signal);
 			} else if (isLineIdAction(action)) {
-				const lineIdResult = await this.#executeLineId(targetPath, action, i + 1, idempotent);
-				results.push(lineIdResult);
+				result = await this.#executeLineId(targetPath, action, i + 1, idempotent);
 			} else {
-				const structuralResult = await this.#executeStructural(targetPath, action, signal);
-				results.push(structuralResult);
+				result = await this.#executeStructural(targetPath, action, signal);
 			}
+
+			if (isErrorResult(result)) {
+				result.isError = true;
+				results.push(result);
+				failedOpIndex = i + 1;
+				for (let j = i + 1; j < params.operations.length; j++) skippedOpIndices.push(j + 1);
+				break;
+			}
+			results.push(result);
 		}
 
-		if (results.length === 1) return results[0]!;
+		// Strict rollback: restore every snapshotted file on any failure.
+		let rolledBack = false;
+		if (transactionMode === "strict" && failedOpIndex !== null) {
+			for (const [path, snap] of snapshots) {
+				if (snap.existed) {
+					await fs.writeFile(path, snap.content ?? "", "utf-8");
+				} else if (await fs.exists(path)) {
+					await fs.unlink(path);
+				}
+			}
+			rolledBack = true;
+		}
 
-		// Aggregate multiple results
-		const allText = results
-			.map(r =>
-				r.content
-					.filter(c => c.type === "text")
-					.map(c => (c as { text?: string }).text ?? "")
-					.join("\n"),
-			)
-			.join("\n\n");
-		const _hasError = results.some(r => "isError" in r && r.isError === true);
-		return toolResult<EditToolResultDetails>({ operations: params.operations.length }).text(allText).done();
+		// Single-op shortcut: hand the per-op result back unchanged (isError already stamped).
+		if (params.operations.length === 1 && results.length === 1) return results[0]!;
+
+		// Aggregate multi-op text with per-op headers and skipped/rolled-back markers.
+		const sections: string[] = [];
+		for (let i = 0; i < results.length; i++) {
+			const tag = failedOpIndex === i + 1 ? " (failed)" : "";
+			const body = results[i]!.content.filter(c => c.type === "text")
+				.map(c => (c as { text?: string }).text ?? "")
+				.join("\n");
+			sections.push(`── operation ${i + 1}${tag} ──\n${body}`);
+		}
+		for (const idx of skippedOpIndices) sections.push(`── operation ${idx} (skipped) ──`);
+		if (rolledBack) sections.push("Rolled back transaction:strict — all target files restored to pre-batch state.");
+		const allText = sections.join("\n\n");
+
+		const builder = toolResult<EditToolResultDetails>({ operations: params.operations.length }).text(allText);
+		if (failedOpIndex !== null) builder.error();
+		return builder.done();
 	}
 
 	async #executeStructural(

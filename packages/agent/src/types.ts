@@ -200,6 +200,9 @@ export interface AgentToolResult<T = any, _TInput = unknown> {
 	content: (TextContent | ImageContent)[];
 	// Details to be displayed in a UI or logged
 	details?: T;
+	// True when the tool surfaced an error to the model. Aggregators can read this
+	// to short-circuit subsequent operations or roll back transactional batches.
+	isError?: boolean;
 }
 
 // Callback for streaming tool execution updates

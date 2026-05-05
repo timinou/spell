@@ -12,6 +12,7 @@ export class ToolResultBuilder<TDetails extends DetailsWithMeta> {
 	#details: TDetails;
 	#meta = outputMeta();
 	#content: ToolContent = [];
+	#isError = false;
 
 	constructor(details?: TDetails) {
 		this.#details = details ?? ({} as TDetails);
@@ -67,6 +68,11 @@ export class ToolResultBuilder<TDetails extends DetailsWithMeta> {
 		return this;
 	}
 
+	error(flag = true): this {
+		this.#isError = flag;
+		return this;
+	}
+
 	done(): AgentToolResult<TDetails> {
 		const meta = this.#meta.get();
 		if (meta) {
@@ -74,10 +80,12 @@ export class ToolResultBuilder<TDetails extends DetailsWithMeta> {
 		}
 		const hasDetails = Object.entries(this.#details).some(([, value]) => value !== undefined);
 
-		return {
+		const result: AgentToolResult<TDetails> = {
 			content: this.#content,
 			details: hasDetails ? this.#details : undefined,
 		};
+		if (this.#isError) result.isError = true;
+		return result;
 	}
 }
 
