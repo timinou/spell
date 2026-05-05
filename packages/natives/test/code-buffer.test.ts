@@ -538,7 +538,7 @@ describe("executeCodeBuffer NAPI bridge", () => {
 		expect(result.error).toBe(false);
 		const output = result.output as { languages: Array<{ id: string }> };
 		expect(output.languages.map(language => language.id).sort()).toEqual(
-			["css", "elixir", "html", "markdown", "org", "python", "rust", "typst", "typescript"].sort(),
+			["clojure", "css", "edn", "elixir", "html", "markdown", "org", "python", "rust", "typst", "typescript"].sort(),
 		);
 	});
 
