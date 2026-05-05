@@ -1,0 +1,20 @@
+  |    ^^^^
+
+warning: `pi-natives` (lib test) generated 2 warnings
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+     Running unittests src/lib.rs (target/debug/deps/pi_natives-22761ed57d38aba0)
+
+running 10 tests
+test code_path::manage_tests::manage_lock_status_requires_target ... ok
+test code_path::manage_tests::manage_diff_requires_target ... ok
+test code_path::manage_tests::manage_unknown_subcommand_returns_diagnostic ... ok
+test code_path::manage_tests::manage_buffers_returns_open_buffer_list ... ok
+test code_path::manage_tests::manage_watcher_status_returns_broker_state ... ok
+test code_path::manage_tests::manage_status_returns_session_summary ... ok
+test code_path::manage_tests::manage_languages_returns_registered_profiles ... ok
+test code_path::manage_tests::manage_with_empty_target_does_not_parse_codepath ... ok
+test code_path::manage_tests::manage_undo_redo_round_trip ... ok
+test code_path::manage_tests::manage_save_flushes_dirty_buffer ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 303 filtered out; finished in 0.01s
+

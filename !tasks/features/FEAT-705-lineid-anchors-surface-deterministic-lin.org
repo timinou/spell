@@ -1,5 +1,5 @@
 #+TITLE: LINE#ID anchors — surface deterministic line IDs in get output (B7)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d47a7632d063d9
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
 #+CUSTOM_ID: FEAT-705-lineid-anchors-surface-deterministic-lin

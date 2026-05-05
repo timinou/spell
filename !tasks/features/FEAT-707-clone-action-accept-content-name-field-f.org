@@ -1,5 +1,5 @@
 #+TITLE: clone action — accept content/name field for the new symbol name (B9)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d47a7632d063d9
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
 #+CUSTOM_ID: FEAT-707-clone-action-accept-content-name-field-f

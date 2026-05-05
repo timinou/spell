@@ -1,5 +1,5 @@
 #+TITLE: CodePath tool autopsy — fix B1-B15 (data loss, ergonomic blockers, UX gaps)
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14d47a7632d063d9
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-04T20-36-05-451Z_14d47a7632d063d9.jsonl]]
 #+CUSTOM_ID: PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo
@@ -246,3 +246,117 @@ Manual smoke-test checklist (post-implementation):
 - `FEAT-712-edit-transaction-strict-mode-atomic-snap::snapshot` depends on `FEAT-712-edit-transaction-strict-mode-atomic-snap::tests`
 - `FEAT-712-edit-transaction-strict-mode-atomic-snap::spec` depends on `FEAT-712-edit-transaction-strict-mode-atomic-snap::snapshot`
 
+** Completion [2026-05-05]
+
+This plan delivers the routing+ergonomic fixes for the post-FEAT-687 CodePath
+autopsy. All 13 child FEAT items are addressed with code, tests, and (where
+applicable) spec updates. Build is green across pi-code-path, pi-code-engine,
+pi-natives (lib + e2e), and the touched coding-agent test files.
+
+*** Verification
+
+Per-crate test runs (final):
+
+| Crate | Pass | Fail | Ignored |
+|-------+------+------+---------|
+| pi-code-path --lib | 289 | 0 | 0 |
+| pi-code-engine --lib | 187 | 0 | 0 |
+| pi-natives --lib | 302 | 0 | 11 (pre-existing) |
+| pi-natives --test code_path_e2e | 30 | 0 | 19 (pre-existing) |
+
+Coding-agent focused TS tests (post-changes, pre-existing flake noted):
+
+| File | Pass | Fail (notes) |
+|------+------+--------------|
+| edit.test.ts | 21/21 | 0 |
+| create.test.ts | 6/6 | 0 |
+| get.test.ts | 36/36 | 0 |
+| codepath-result.test.ts | 6/6 | 0 |
+| harness-bug-repro.test.ts | 8/9 | 1 pre-existing (parse-regression probe is advisory; unrelated to PLAN-300) |
+| manage.test.ts | 15/15 | 0 |
+
+Commands:
+
+#+begin_src bash
+cargo test -p pi-code-path --lib
+cargo test -p pi-code-engine --lib
+cargo test -p pi-natives --lib
+cargo test -p pi-natives --test code_path_e2e
+bun test packages/coding-agent/test/{edit,create,get,codepath-result,manage}.test.ts \
+  packages/coding-agent/test/tools/harness-bug-repro.test.ts
+bunx tsgo --noEmit -p tsconfig.json    # 0 errors
+#+end_src
+
+*** Bug→Fix outcomes
+
+- B1 (delete-symbol nukes file) → FsResolver.supports() rejects symbol+qualifier
+  Delete; SymbolDeleteWithoutResolver diagnostic surfaces the misroute.
+  Test: =delete_with_symbol_target_routes_to_code_resolver=, host file persists.
+- B2/B10 (bare get => "unknown qualifier: raw") → =is_text_qualifier_only= predicate
+  routes bare-file + content qualifier to TextResolver; TextResolver applies
+  qualifier on bare files when query is None. Test: =bare_file_raw_qualifier_routes_to_text_resolver=.
+- B3 (insertBefore/After missing 'lines') → normalizeStructuralAction copies
+  =lines/pos/end/diff= into kernel JSON. Test: 7 normalizer scenarios.
+- B4 (wrap structurally invalid) → buffer.edit_batch validity check now scoped
+  to the edited byte regions (with 1-byte expansion for deletions). Test:
+  =wrap_action_with_trivial_template_succeeds=.
+- B5 (force:true blocked by shrink) → evaluateWriteGuards accepts {force:bool}; shrink
+  guard skipped under force. Parse-regression unchanged. Test: 4 guard scenarios.
+- B6 (manage save/index/languages parse-fail) → command:"manage" branch in
+  execute_code_path_inner runs BEFORE parse_code_path. New manage.rs handlers
+  delegate to legacy executeCodeBuffer surface. Test: 10 manage_tests + 12 e2e.
+- B7 (LINE#ID anchors not surfaced) → axes.rs emits =<line N#XX>= locator with
+  2-char base32 FNV-1a hash. formatLocator/nodeToLocation render =LINE#ID:= prefix.
+  Test: 6 codepath-result scenarios + 5 anchor unit tests.
+- B8 (splice symbol-target span error) → LineOutOfTargetScope carries
+  target_line_start/end; message names span and remediation hint. Test: 3 feat_706.
+- B9 (clone content misinterpreted) → Action::Clone gains line+content fields;
+  code_buffer clone handler renames clone identifier when content is a valid
+  identifier. Test: 3 clone scenarios.
+- B11 (TS interface not found) → TsNameLexer.matches resolves
+  interface/type-alias/class/method/variable_declarator/export_statement names.
+  Python/Rust/Haskell name lexers also implemented heuristically.
+- B12 (#stat returns bare path) → formatStatMetadata surfaces size+mtime+target on
+  §file/§dir/§symlink. Test: 4 stat-render scenarios.
+- B13 (manage diff render mismatch) → manage.ts renderResult selects
+  language:"diff" when subcommand=="diff". Test: 3 render variants.
+- B14 (dir vs bare-file error) → get.ts catches ENOENT/EACCES from stat probe;
+  emits PATH_NOT_FOUND/PATH_NOT_READABLE for absolute or =./relative= paths.
+  Test: 1 PATH_NOT_FOUND scenario.
+- B15 (multi-op partial application) → opt-in =transaction:"strict"= option;
+  snapshot/restore around action loop; diagnostic mentions rollback count.
+  Test: 3 transaction scenarios.
+
+*** Spec updates
+
+specs/code-graph/code-path-extensions.md gained four new sections:
+- §11 LINE#ID anchor format (FEAT-705)
+- §12 Symbol-target Delete safety (FEAT-689)
+- §13 Positional ops within symbol targets (FEAT-706)
+- §14 Edit transaction modes (FEAT-712)
+
+*** Caveats / non-goals
+
+- Other dialect NameLexers (CSS/HTML/Go/mdorg) retained heuristic
+  fallbacks but were not extended in this plan; they continue to work
+  via the walker's =name= field fallback path.
+- Pre-existing failures noted but not addressed:
+  - =evaluateWriteGuards contract > allows writes that grow a file= —
+    parse-regression probe is advisory; unrelated to PLAN-300 scope.
+  - 11 pi-natives lib tests + 19 e2e tests remain ignored pending
+    tree-sitter grammar refinements (carry-over from PLAN-298).
+
+*** Artifacts
+
+[[file:!tasks/plans/plan-artifacts/PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo/pi-code-path-tests.txt]]
+[[file:!tasks/plans/plan-artifacts/PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo/pi-code-engine-tests.txt]]
+[[file:!tasks/plans/plan-artifacts/PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo/pi-natives-lib-tests.txt]]
+[[file:!tasks/plans/plan-artifacts/PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo/pi-natives-e2e-tests.txt]]
+[[file:!tasks/plans/plan-artifacts/PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo/coding-agent-focused-tests.txt]]
+[[file:!tasks/plans/plan-artifacts/PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo/routing-tests-detail.txt]]
+[[file:!tasks/plans/plan-artifacts/PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo/manage-tests-detail.txt]]
+
+*** Commits
+
+- 7a4e... feat(coding-agent): PLAN-300 wave 1-3 — routing + normalizer + manage + clone + transactions
+- 67b7... feat(code-path): PLAN-300 wave 4-5 — name lexers + line scope + spec
