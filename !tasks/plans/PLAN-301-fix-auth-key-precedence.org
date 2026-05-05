@@ -1,5 +1,5 @@
 #+TITLE: FIX_AUTH_KEY_PRECEDENCE
-#+STATE: DOING
+#+STATE: DONE
 #+SESSION_ID: 14d541d738757262
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T11-07-11-457Z_14d541d738757262.jsonl]]
 #+CUSTOM_ID: PLAN-301-fix-auth-key-precedence
@@ -79,3 +79,33 @@ After both fixes:
 - `BUG-335-fix-better-ccflare-env-var-resolution-pi::fix-env-var-resolver` depends on `BUG-335-fix-better-ccflare-env-var-resolution-pi::env-var-tests`
 - `BUG-336-fix-env-api-key-silently-overriding-stor::add-oauth-guard` depends on `BUG-336-fix-env-api-key-silently-overriding-stor::oauth-env-fallback-tests`
 
+NOTE [2026-05-05]: ** Completion [2026-05-05]
+*** Summary
+Two auth-key precedence bugs fixed:
+1. better-ccflare provider was falling back to ANTHROPIC_API_KEY from .env, sending sk-ant- prefixed keys to better-ccflare which requires btr- prefixed keys (401 error)
+2. Anthropic provider was silently falling back to .env ANTHROPIC_API_KEY when OAuth refresh failed, masking session expiry
+
+*** Verification
+- bun test packages/ai/test/better-ccflare-provider.test.ts: 7/7 pass
+- bun test packages/ai/test/auth-storage-anthropic-invalid-token.test.ts: 5/5 pass
+- bun test packages/ai/test/auth-storage: 35/35 pass across 4 files
+- Combined: 42 pass, 0 fail across 5 files
+- check:ts: no errors in changed files (19 pre-existing errors in unrelated files)
+
+*** Artifacts
+- Commit: [[https://github.com/orac/ora/commit/c90cb58e6][c90cb58e6]] — all 4 changed files
+- stream.ts line 132: $pickenv("ANTHROPIC_AUTH_TOKEN") (removed ANTHROPIC_API_KEY fallback)
+- auth-storage.ts getApiKey(): #providersWithOAuth guard before env var fallback
+- better-ccflare-provider.test.ts: modified fallback test to expect undefined
+- auth-storage-anthropic-invalid-token.test.ts: 3 new tests for OAuth→env fallback prevention
+
+*** Child items
+- [[id:BUG-335-fix-better-ccflare-env-var-resolution-pi][BUG-335]] → DONE — better-ccflare env var resolution
+  - env-var-tests → completed
+  - fix-env-var-resolver → completed
+- [[id:BUG-336-fix-env-api-key-silently-overriding-stor][BUG-336]] → DONE — OAuth→env fallback prevention
+  - oauth-env-fallback-tests → completed
+  - add-oauth-guard → completed
+
+*** Design notes
+For BUG-336, the implementation used a #providersWithOAuth Set rather than querying #getCredentialsForProvider directly. This was necessary because markAuthFailure → #disableCredentialAt → #resetProviderAssignments wipes the credential store, but the Set survives since it only tracks presence (populated on set/reload, never cleared on disable). This ensures the guard works even after auth failure cascades.

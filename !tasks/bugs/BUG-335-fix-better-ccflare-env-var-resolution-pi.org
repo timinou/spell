@@ -107,3 +107,17 @@ File: `packages/ai/test/better-ccflare-provider.test.ts`
 - Change: `$pickenv("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")` → `$pickenv("ANTHROPIC_AUTH_TOKEN")`
 - This ensures when ANTHROPIC_AUTH_TOKEN is unset, getEnvApiKey returns undefined → OAuth passthrough
 - Verify: `bun test packages/ai/test/better-ccflare-provider.test.ts`
+
+NOTE [2026-05-05]: ** Completion [2026-05-05]
+*** Verification
+- bun test packages/ai/test/better-ccflare-provider.test.ts: 7/7 pass
+- bun test packages/ai/test/auth-storage: 35/35 pass
+- bun test packages/ai/test/auth-storage-anthropic-invalid-token.test.ts: 5/5 pass
+- Combined: 42 pass, 0 fail across 5 files
+*** Artifacts
+- Commit: [[https://github.com/orac/ora/commit/c90cb58e6][c90cb58e6]] — stream.ts:132 changed $pickenv("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY") → $pickenv("ANTHROPIC_AUTH_TOKEN")
+- Test file: [[file:packages/ai/test/better-ccflare-provider.test.ts]]
+*** Root cause
+better-ccflare provider's serviceProviderMap entry included ANTHROPIC_API_KEY as a fallback in the $pickenv chain. When a user has ANTHROPIC_API_KEY=sk-ant-... in .env (for the anthropic provider), the better-ccflare provider would pick it up and send it as an x-api-key header. Better-ccflare rejects sk-ant- prefixed keys with 401 "invalid x-api-key" because it requires btr- prefixed tokens.
+*** Fix
+Removed ANTHROPIC_API_KEY from the $pickenv fallback for "better-ccflare" in serviceProviderMap. Now only ANTHROPIC_AUTH_TOKEN is checked. When unset, getEnvApiKey returns undefined, and buildBetterCcflareHeaders sends no auth header → OAuth passthrough mode.

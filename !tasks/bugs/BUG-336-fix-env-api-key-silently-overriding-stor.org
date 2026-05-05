@@ -126,3 +126,16 @@ File: `packages/ai/test/auth-storage-anthropic-invalid-token.test.ts`
 - Verify: `bun run --workspaces --if-present --parallel test`
 
 NOTE [2026-05-05]: Fixed OAuth→env fallback: auth-storage.ts getApiKey() — added #providersWithOAuth guard before env fallback. When OAuth credentials exist but refresh fails, return undefined instead of silently falling back to .env. Tests: 35/35 pass across all auth-storage test files. Commit: c90cb58e6.
+
+NOTE [2026-05-05]: ** Completion [2026-05-05]
+*** Verification
+- bun test packages/ai/test/auth-storage-anthropic-invalid-token.test.ts: 5/5 pass
+- bun test packages/ai/test/auth-storage: 35/35 pass across 4 files
+- Combined targeted tests: 42 pass, 0 fail across 5 files
+*** Artifacts
+- Commit: [[https://github.com/orac/ora/commit/c90cb58e6][c90cb58e6]] — auth-storage.ts getApiKey(): added #providersWithOAuth guard before env fallback
+- Test file: [[file:packages/ai/test/auth-storage-anthropic-invalid-token.test.ts]]
+*** Root cause
+getApiKey() in AuthStorage had priority chain: runtime override → stored api_key → OAuth → env var (.env). When OAuth credentials existed but refresh failed, the method fell silently through to the .env fallback, using a potentially stale or low-credit ANTHROPIC_API_KEY. The user saw "credit balance too low" instead of being prompted to re-login.
+*** Fix
+Added a #providersWithOAuth Set<string> that tracks which providers have OAuth credentials. Populated on set()/reload(), cleared on remove(). In getApiKey(), after OAuth resolution returns undefined, check if the provider has any OAuth credentials. If yes, return undefined immediately (skip .env fallback). The #providersWithOAuth Set survives credential disabling after markAuthFailure, unlike the credential store itself.
