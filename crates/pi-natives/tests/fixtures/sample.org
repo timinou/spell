@@ -1,0 +1,15 @@
+#+TITLE: Sample Org
+#+AUTHOR: Test
+
+* TODO Write integration tests
+:PROPERTIES:
+:Effort:   2h
+:END:
+
+** DONE Prepare fixtures
+- [X] sample.ts
+- [X] sample.rs
+- [ ] sample.png
+
+* Notes
+Small org fixture for e2e coverage.
