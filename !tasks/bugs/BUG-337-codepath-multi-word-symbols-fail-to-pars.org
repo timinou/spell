@@ -1,0 +1,284 @@
+#+TITLE: CodePath multi-word symbols fail to parse and resolve
+#+STATE: ITEM
+#+SESSION_ID: 14d50def80d06410
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T07-20-24-835Z_14d50def80d06410.jsonl]]
+#+CUSTOM_ID: BUG-337-codepath-multi-word-symbols-fail-to-pars
+#+EFFORT: 2h
+#+LAYER: backend
+
+* Initial Message
+
+I asked a new session to check how the new tool is performing and this is what it told me:
+
+Updated Tool Review — Round 2
+
+ ### GET — Major Fixes ✅
+
+ ┌─────────────────────────────────────┬────────────────────┐
+ │ Was broken                          │ Now                │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ Bare file paths → images (#raw bug) │ ✅ Returns content │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ tail/head params → #raw bug         │ ✅ Works           │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ format: "content-only" → #raw bug   │ ✅ Works           │
+ └─────────────────────────────────────┴────────────────────┘
+
+ Still working from before:
+ - Line slices with LINE#ID anchors (1#DT format now)
+ - Regex line filters across codebase (::§line[text~="export function"])
+ - Glob patterns, directory listing, #stat qualifier
+ - offset/limit pagination, locations format, recursive/depth
+
+ Remaining gaps:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Issue                  │ Detail                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Symbol get on TS →     │ foo.ts::symbolName renders as image. Works on Rust                           │
+ │ image                  │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Multi-word symbol      │ ::export * from "./json" → "unexpected trailing input". Blocked on get, edit │
+ │ targets fail           │ insertBefore, and edit symbol-targeted ops                                   │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ No source-only filter  │ Directories mix .ts, .js, .d.ts, .map — no pattern/glob param                │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ 1KB spill limit        │ Consistent across all outputs; artifact roundtrip needed for full files      │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### EDIT — LINE#ID Chain Fixed ✅
+
+ ┌───────────────────────────────────┬──────────────────────────────────────────────┐
+ │ Was broken                        │ Now                                          │
+ ├───────────────────────────────────┼──────────────────────────────────────────────┤
+ │ LINE#ID anchors from get rejected │ ✅ 5#6V accepted, append applied, diff shown │
+ ├───────────────────────────────────┼──────────────────────────────────────────────┤
+ │ findAndReplace multi-line         │ ✅ Works                                     │
+ └───────────────────────────────────┴──────────────────────────────────────────────┘
+
+ Still working:
+ - rawTextReplace, rename, wrap (Rust), findAndReplace with occurrence selectors
+
+ Remaining gaps:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Issue                  │ Detail                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ wrap splits export     │ Targeting ERGO_V2 wrapped only const ERGO_V2 = 42, left export dangling      │
+ │ const                  │ outside. Should either include the export statement or warn                  │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ delete leaves empty    │ File still exists after delete — need second cleanup step                    │
+ │ file                   │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ insertBefore via       │ "unsafe line-target insert-before at line 0" — wants newline suffix, then    │
+ │ LINE#ID                │ reports "line out of range"                                                  │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Multi-word symbol      │ Same as get — quotes/spaces in symbol names fail parsing                     │
+ │ targets                │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Batch edit failure     │ Edit 1 fails → edit 2 runs anyway against stale state → cryptic error        │
+ │ propagation            │                                                                              │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### MANAGE — Partially Fixed ✅
+
+ ┌─────────────────────────────────────────────┬────────────────────────────────────────────────┐
+ │ Was broken                                  │ Now                                            │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ All commands → "parse failed at position 0" │ ✅ Most work                                   │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ buffers                                     │ ✅ []                                          │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ status                                      │ ✅ Shows watcher, buffers, coordinator         │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ languages                                   │ ✅ Full tree-sitter registry with capabilities │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ watcherStatus                               │ ✅ {active: true, watched: 2}                  │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ lockStatus                                  │ ✅ (needs file param)                          │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ index                                       │ ✅ Reports unavailable                         │
+ └─────────────────────────────────────────────┴────────────────────────────────────────────────┘
+
+ Still broken:
+
+ ┌─────────┬───────────────────────────────────────────┐
+ │ Command │ Error                                     │
+ ├─────────┼───────────────────────────────────────────┤
+ │ save    │ "I/O error: Is a directory (os error 21)" │
+ ├─────────┼───────────────────────────────────────────┤
+ │ undo    │ Same I/O error                            │
+ ├─────────┼───────────────────────────────────────────┤
+ │ diff    │ Returns [] even when file is dirty        │
+ ├─────────┼───────────────────────────────────────────┤
+ │ context │ Not a valid subcommand                    │
+ └─────────┴───────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### CREATE — Solid ✅
+
+ - Create in-project, outside-project, force overwrite — all work
+ - No sandbox warnings for paths outside project root
+
+ ### LSP — Unchanged
+
+ - symbols, hover, references, diagnostics, status all work
+ - Hover output terse (declaration only, no doc comments)
+ - No TypeScript server loaded (only rust-analyzer/tinymist/yamlls/taplo)
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ Priority Fix List
+
+ ┌───┬───────────────────────────┬───────────────────────────────────────────────────────────────────────┐
+ │ # │ Issue                     │ Impact                                                                │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 1 │ Multi-word symbol targets │ Blocks get symbol resolution, edit insertBefore/insertAfter on most   │
+ │   │                           │ real symbols                                                          │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 2 │ manage save/undo/diff     │ Can't persist, revert, or inspect changes without bash                │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 3 │ Symbol get on TS → image  │ Major gap; works on Rust so likely a dialect-specific rendering bug   │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 4 │ wrap splitting export     │ Correctness bug — mutates semantics silently                          │
+ │   │ const                     │                                                                       │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 5 │ delete leaves empty file  │ Leaks stale files; needs rm follow-up                                 │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 6 │ insertBefore via LINE#ID  │ Seems like a coordinate/indexing bug (reports line 0)                 │
+ └───┴───────────────────────────┴───────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+Please through each and explain what is going on. I want root causes and structural causes+fixes too, think about what CodePath is supposed to solve, and give me a list of tool+codepath cases and what they should do, + discrepancies in expected vs. actual behaviour, and surprises in ergonomics, go for it
+
+* Symptoms
+
+Targets like =foo.ts::export * from "./json"= produce ="unexpected trailing input"=. Quoted/spaced/non-identifier names cannot be addressed at all.
+
+* Root cause
+
+- =crates/pi-code-path/src/dialects/typescript.rs:146-160= TsNameLexer.parse_segment accepts only =[A-Za-z0-9_$]=. First non-ID char terminates the segment.
+- =crates/pi-code-path/src/parser.rs:39-60= top-level returns "unexpected trailing input" diagnostic with no remediation hint.
+- =crates/pi-code-path/src/ast.rs= NamePayload has only =Raw(String)=; no =Quoted= variant. Even if backticks parsed, the matcher would compare against tree-sitter =name= field (which doesn't exist for re-exports).
+- =crates/pi-natives/src/code_path/code_resolver/walker.rs= NameLexer.matches() compares only against =name= field of declarations.
+
+* Fix contract (D: Quoted variant + walker text-match)
+
+** AST extension
+- Add =NamePayload::Quoted(String)= alongside =Raw(String)= in =crates/pi-code-path/src/ast.rs=.
+- Update serde derives, render(), and Hash/PartialEq.
+
+** Parser
+- =crates/pi-code-path/src/dialects/typescript.rs::parse_segment=: when input starts with =`=, consume verbatim until matching =`=, emit =Quoted(payload)=. Reject unterminated.
+- Also Python/Rust/Haskell name lexers — backtick path same shape.
+- =crates/pi-code-path/src/parser.rs::parse_code_path_inner=: when the trailing-input diagnostic fires AND the unconsumed input contains space or asterisk after first identifier, append a DidYouMean hint suggesting =§export_statement[text~"…"]= or appropriate axis.
+
+** Walker matcher
+- =crates/pi-natives/src/code_path/code_resolver/walker.rs= and =crates/pi-code-path/src/dialects/typescript.rs::matches=: for =Quoted=, compare against the candidate node's source text after whitespace normalization (collapse =\s+= → one space, trim ends).
+- Scope: match only against statement-level node kinds (export_statement, import_statement, return_statement, expression_statement, call_expression). Bounds walker cost.
+- Equality after normalization. Anchor predicate =[~=]= for contains can be added in a follow-up.
+
+** Schema/prompts
+- Update tool descriptions in =packages/coding-agent/src/tools/codepath-types.ts= editSchema and getSchema to document backtick-quoting.
+
+* TDD protocol
+
+Red → green → refactor. Each test commit precedes implementation commit.
+
+** Failing tests (write first, commit)
+
+Add to =crates/pi-code-path/src/dialects/typescript.rs=:
+#+begin_src rust
+#[test]
+fn parses_backtick_quoted_segment_with_spaces_and_asterisks() {
+    let input = "`export * from \"./json\"`";
+    let mut s = input;
+    let parsed = TsNameLexer.parse(&mut s).expect("parses");
+    match parsed {
+        NamePayload::Quoted(text) => assert_eq!(text, "export * from \"./json\""),
+        _ => panic!("expected Quoted variant"),
+    }
+    assert!(s.is_empty(), "consumed all input");
+}
+
+#[test]
+fn parses_quoted_regular_ident_same_as_unquoted() {
+    let mut a = "Foo";
+    let mut b = "`Foo`";
+    let pa = TsNameLexer.parse(&mut a).unwrap();
+    let pb = TsNameLexer.parse(&mut b).unwrap();
+    assert_eq!(TsNameLexer.render(&pa), TsNameLexer.render(&pb));
+}
+
+#[test]
+fn unterminated_backtick_returns_parse_error() {
+    let mut s = "`unterminated";
+    assert!(TsNameLexer.parse(&mut s).is_err());
+}
+#+end_src
+
+Add to =crates/pi-natives/src/code_path/code_resolver/qualifier_tests.rs=:
+#+begin_src rust
+#[test]
+fn quoted_payload_matches_export_statement_by_normalized_text() {
+    let src = "export * from \"./json\";
+export const x = 1;
+";
+    // target: foo.ts::`export * from "./json"`
+    // expect: resolves to the export_statement node, range = 0..(idx of trailing ;)
+    let nodes = resolve_quoted(src, "export * from \"./json\"");
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].kind, "§export_statement");
+}
+
+#[test]
+fn quoted_payload_matches_with_whitespace_normalization() {
+    let src = "import   { Foo }   from \"./bar\";";
+    let nodes = resolve_quoted(src, "import { Foo } from \"./bar\"");
+    assert_eq!(nodes.len(), 1);
+}
+
+#[test]
+fn quoted_payload_no_match_returns_empty_with_diagnostic() {
+    let src = "const x = 1;";
+    let nodes = resolve_quoted(src, "export * from \"./other\"");
+    assert!(nodes.is_empty());
+}
+
+#[test]
+fn unquoted_multiword_returns_did_you_mean() {
+    let result = parse_code_path_str("foo.ts::export * from \"./json\"");
+    let diag = result.unwrap_err();
+    assert!(diag.message.contains("§export_statement"));
+}
+#+end_src
+
+* Acceptance
+
+- ~cargo test -p pi-code-path~ green
+- ~cargo test -p pi-natives~ green
+- New tests above all pass
+- ~bun run --filter @oh-my-pi/pi-coding-agent test~ no regression
+- One commit for failing tests, one or more for impl, one for refactor/cleanup
+
+* Files
+
+- crates/pi-code-path/src/ast.rs (add Quoted variant)
+- crates/pi-code-path/src/parser.rs (DidYouMean diagnostic)
+- crates/pi-code-path/src/dialects/typescript.rs (parse_segment + matches)
+- crates/pi-code-path/src/dialects/{python,rust,haskell}.rs (parse_segment backtick path)
+- crates/pi-natives/src/code_path/code_resolver/walker.rs (Quoted matching)
+- crates/pi-natives/src/code_path/code_resolver/qualifier_tests.rs (tests)
+- packages/coding-agent/src/tools/codepath-types.ts (doc strings)
+
+* References
+
+[[id:PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo]] — predecessor analysis

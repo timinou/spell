@@ -1,0 +1,346 @@
+#+TITLE: CodePath manage save/undo/diff broken; needs per-session edit-history tracker
+#+STATE: ITEM
+#+SESSION_ID: 14d50def80d06410
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T07-20-24-835Z_14d50def80d06410.jsonl]]
+#+CUSTOM_ID: BUG-340-codepath-manage-save-undo-diff-broken-ne
+#+EFFORT: 5h
+#+LAYER: backend
+
+* Initial Message
+
+I asked a new session to check how the new tool is performing and this is what it told me:
+
+Updated Tool Review — Round 2
+
+ ### GET — Major Fixes ✅
+
+ ┌─────────────────────────────────────┬────────────────────┐
+ │ Was broken                          │ Now                │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ Bare file paths → images (#raw bug) │ ✅ Returns content │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ tail/head params → #raw bug         │ ✅ Works           │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ format: "content-only" → #raw bug   │ ✅ Works           │
+ └─────────────────────────────────────┴────────────────────┘
+
+ Still working from before:
+ - Line slices with LINE#ID anchors (1#DT format now)
+ - Regex line filters across codebase (::§line[text~="export function"])
+ - Glob patterns, directory listing, #stat qualifier
+ - offset/limit pagination, locations format, recursive/depth
+
+ Remaining gaps:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Issue                  │ Detail                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Symbol get on TS →     │ foo.ts::symbolName renders as image. Works on Rust                           │
+ │ image                  │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Multi-word symbol      │ ::export * from "./json" → "unexpected trailing input". Blocked on get, edit │
+ │ targets fail           │ insertBefore, and edit symbol-targeted ops                                   │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ No source-only filter  │ Directories mix .ts, .js, .d.ts, .map — no pattern/glob param                │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ 1KB spill limit        │ Consistent across all outputs; artifact roundtrip needed for full files      │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### EDIT — LINE#ID Chain Fixed ✅
+
+ ┌───────────────────────────────────┬──────────────────────────────────────────────┐
+ │ Was broken                        │ Now                                          │
+ ├───────────────────────────────────┼──────────────────────────────────────────────┤
+ │ LINE#ID anchors from get rejected │ ✅ 5#6V accepted, append applied, diff shown │
+ ├───────────────────────────────────┼──────────────────────────────────────────────┤
+ │ findAndReplace multi-line         │ ✅ Works                                     │
+ └───────────────────────────────────┴──────────────────────────────────────────────┘
+
+ Still working:
+ - rawTextReplace, rename, wrap (Rust), findAndReplace with occurrence selectors
+
+ Remaining gaps:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Issue                  │ Detail                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ wrap splits export     │ Targeting ERGO_V2 wrapped only const ERGO_V2 = 42, left export dangling      │
+ │ const                  │ outside. Should either include the export statement or warn                  │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ delete leaves empty    │ File still exists after delete — need second cleanup step                    │
+ │ file                   │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ insertBefore via       │ "unsafe line-target insert-before at line 0" — wants newline suffix, then    │
+ │ LINE#ID                │ reports "line out of range"                                                  │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Multi-word symbol      │ Same as get — quotes/spaces in symbol names fail parsing                     │
+ │ targets                │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Batch edit failure     │ Edit 1 fails → edit 2 runs anyway against stale state → cryptic error        │
+ │ propagation            │                                                                              │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### MANAGE — Partially Fixed ✅
+
+ ┌─────────────────────────────────────────────┬────────────────────────────────────────────────┐
+ │ Was broken                                  │ Now                                            │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ All commands → "parse failed at position 0" │ ✅ Most work                                   │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ buffers                                     │ ✅ []                                          │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ status                                      │ ✅ Shows watcher, buffers, coordinator         │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ languages                                   │ ✅ Full tree-sitter registry with capabilities │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ watcherStatus                               │ ✅ {active: true, watched: 2}                  │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ lockStatus                                  │ ✅ (needs file param)                          │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ index                                       │ ✅ Reports unavailable                         │
+ └─────────────────────────────────────────────┴────────────────────────────────────────────────┘
+
+ Still broken:
+
+ ┌─────────┬───────────────────────────────────────────┐
+ │ Command │ Error                                     │
+ ├─────────┼───────────────────────────────────────────┤
+ │ save    │ "I/O error: Is a directory (os error 21)" │
+ ├─────────┼───────────────────────────────────────────┤
+ │ undo    │ Same I/O error                            │
+ ├─────────┼───────────────────────────────────────────┤
+ │ diff    │ Returns [] even when file is dirty        │
+ ├─────────┼───────────────────────────────────────────┤
+ │ context │ Not a valid subcommand                    │
+ └─────────┴───────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### CREATE — Solid ✅
+
+ - Create in-project, outside-project, force overwrite — all work
+ - No sandbox warnings for paths outside project root
+
+ ### LSP — Unchanged
+
+ - symbols, hover, references, diagnostics, status all work
+ - Hover output terse (declaration only, no doc comments)
+ - No TypeScript server loaded (only rust-analyzer/tinymist/yamlls/taplo)
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ Priority Fix List
+
+ ┌───┬───────────────────────────┬───────────────────────────────────────────────────────────────────────┐
+ │ # │ Issue                     │ Impact                                                                │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 1 │ Multi-word symbol targets │ Blocks get symbol resolution, edit insertBefore/insertAfter on most   │
+ │   │                           │ real symbols                                                          │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 2 │ manage save/undo/diff     │ Can't persist, revert, or inspect changes without bash                │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 3 │ Symbol get on TS → image  │ Major gap; works on Rust so likely a dialect-specific rendering bug   │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 4 │ wrap splitting export     │ Correctness bug — mutates semantics silently                          │
+ │   │ const                     │                                                                       │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 5 │ delete leaves empty file  │ Leaks stale files; needs rm follow-up                                 │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 6 │ insertBefore via LINE#ID  │ Seems like a coordinate/indexing bug (reports line 0)                 │
+ └───┴───────────────────────────┴───────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+Please through each and explain what is going on. I want root causes and structural causes+fixes too, think about what CodePath is supposed to solve, and give me a list of tool+codepath cases and what they should do, + discrepancies in expected vs. actual behaviour, and surprises in ergonomics, go for it
+
+* Symptoms
+
+#+begin_example
+manage save        → "I/O error: Is a directory (os error 21)"
+manage undo        → same EISDIR
+manage diff        → returns []  even after edits
+manage context     → "unknown manage subcommand"
+#+end_example
+
+* Root cause
+
+- =crates/pi-natives/src/code_path/manage.rs:194= ~absolute_path("", root) = root~. Empty file param → root dir → EISDIR.
+- =crates/pi-code-engine/src/buffer.rs:1302-1350= ~save()~/~save_with_watcher()~ formally deprecated; edit goes through ~edit_transaction~ which auto-persists and closes the buffer.
+- =crates/pi-natives/src/code_path/napi.rs:324-360= ~context~ in TS schema, missing from Rust dispatch match.
+- After auto-commit, no buffer is left dirty → manage diff/undo/save have nothing to operate on.
+
+* Reframed goal (per user direction)
+
+Even when edits auto-save (which is correct default), the agent should be able to:
+1. ~edit~ a file → it persists to disk
+2. ~manage diff~ → see what THIS agent session changed (vs disk-prior)
+3. ~manage undo~ → revert THIS session's changes; sibling agents' overlapping changes survive
+4. ~manage context~ → enumerate edits by agent/session/commit (initial scope: uncommitted; future: cross-commit)
+
+This is a per-session edit-history tracker, not a managed-buffer revival. Building blocks already exist (edit_transaction, watcher, sessionId).
+
+* Fix contract (small, simple, extensible trait)
+
+** New module: ~crates/pi-natives/src/code_path/edit_history.rs~
+
+- Trait ~EditHistory~ with builder methods:
+  #+begin_src rust
+  pub trait EditHistory {
+      fn record(&self, entry: EditEntry);
+      fn query(&self, q: HistoryQuery) -> Vec<EditEntry>;
+      fn revert(&self, q: HistoryQuery) -> RevertOutcome;
+  }
+
+  pub struct EditEntry {
+      pub id: String,           // monotonic
+      pub session_id: String,
+      pub agent_label: String,  // optional, e.g. "task-09-explorer"
+      pub file: PathBuf,
+      pub before: String,       // pre-edit content (for revert)
+      pub after: String,        // post-edit content
+      pub diff: String,         // unified diff
+      pub timestamp: SystemTime,
+      pub commit: Option<String>,  // git commit if known; None=uncommitted
+  }
+
+  pub struct HistoryQuery {
+      pub session_id: Option<String>,
+      pub agent_label: Option<String>,
+      pub file_glob: Option<String>,
+      pub since: Option<SystemTime>,
+      pub uncommitted_only: bool,  // initial default
+  }
+  #+end_src
+
+** Storage (initial)
+- File-backed JSONL log at =<root>/.spell/edit-history.jsonl=, append-only.
+- One record per ~edit_transaction~ commit. The ~before~ is the rope content at edit-start; ~after~ is the persisted result.
+- Reverting overwrites the file with the recorded ~before~ content. Reverting a chain replays in reverse.
+
+** Wiring
+- =crates/pi-code-engine/src/buffer.rs= ~edit_transaction~: emit one ~EditEntry~ on success. Take a sessionId/agentLabel from request payload (already plumbed through code_buffer JSON).
+- =crates/pi-natives/src/code_path/manage.rs= handlers:
+  - ~handle_diff(file, root, sessionId)~: query history for sessionId, file → join all diffs.
+  - ~handle_undo(file, root, sessionId)~: query history for sessionId, file → revert most-recent entry.
+  - ~handle_redo(file, root, sessionId)~: track reverted entries, replay.
+  - ~handle_context(root, sessionId, opts)~: query history with builder filters; render summary.
+  - ~handle_save~: deprecate to a no-op + diagnostic "edits auto-persist; use manage diff to inspect or manage undo to revert".
+- All file params validated: empty string → ~missing_target~ diagnostic (mirror existing diff guard).
+- =crates/pi-natives/src/code_path/napi.rs= dispatch: add ~"context"~ branch.
+
+** Schema/prompts
+- =packages/coding-agent/src/tools/codepath-types.ts= manage subcommand list updated.
+- Tool description for manage explains the per-session model: "edits auto-save; use manage to inspect/revert THIS session's changes".
+
+* TDD protocol — three required scenarios
+
+** Failing test 1: edit → save (auto) → revert
+#+begin_src ts
+test("edit auto-saves then manage undo restores", async () => {
+    const file = await tempFile("hello
+");
+    await edit({ operations: [{ target: file, action: { kind: "rawTextReplace", find: ["hello"], content: ["world"] }}]});
+    expect(await fs.readFile(file, "utf8")).toBe("world
+");
+
+    await manage({ command: "manage", manage: "undo", file, sessionId: "S1" });
+    expect(await fs.readFile(file, "utf8")).toBe("hello
+");
+});
+#+end_src
+
+** Failing test 2: two agents edit, only one's undo reverts
+#+begin_src ts
+test("two sessions edit different lines; one undoes, the other survives", async () => {
+    const file = await tempFile("a
+b
+c
+");
+
+    await editAs("S1", { operations: [{ target: file, action: { kind: "rawTextReplace", find: ["a"], content: ["A1"] }}]});
+    await editAs("S2", { operations: [{ target: file, action: { kind: "rawTextReplace", find: ["b"], content: ["B2"] }}]});
+    expect(await fs.readFile(file, "utf8")).toBe("A1
+B2
+c
+");
+
+    await manage({ command: "manage", manage: "undo", file, sessionId: "S1" });
+    // S1's change reverted; S2's survives
+    expect(await fs.readFile(file, "utf8")).toBe("a
+B2
+c
+");
+});
+#+end_src
+
+** Failing test 3: context lists per-session edits
+#+begin_src ts
+test("manage context lists this session's edits", async () => {
+    const file = await tempFile("x
+");
+    await editAs("S1", { operations: [{ target: file, action: { kind: "rawTextReplace", find: ["x"], content: ["y"] }}]});
+    await editAs("S1", { operations: [{ target: file, action: { kind: "rawTextReplace", find: ["y"], content: ["z"] }}]});
+
+    const ctx = await manage({ command: "manage", manage: "context", sessionId: "S1" });
+    // returns 2 entries for file, both attributed to S1, with diffs
+    expect(ctx.entries.length).toBe(2);
+    expect(ctx.entries[0].file).toBe(file);
+    expect(ctx.entries[0].sessionId).toBe("S1");
+});
+#+end_src
+
+** Trait/builder unit tests
+#+begin_src rust
+#[test]
+fn history_query_filters_by_session() {
+    let h = JsonlHistory::in_memory();
+    h.record(entry("S1", "a.txt"));
+    h.record(entry("S2", "a.txt"));
+    let r = h.query(HistoryQuery::default().session_id("S1"));
+    assert_eq!(r.len(), 1);
+}
+
+#[test]
+fn revert_undoes_only_targeted_entry() {
+    /* … */
+}
+
+#[test]
+fn uncommitted_only_filter_excludes_post_commit_entries() {
+    /* … sets .commit on entry … */
+}
+#+end_src
+
+* Acceptance
+
+- All three integration tests pass (red→green)
+- Trait/builder unit tests pass
+- Existing manage tests (buffers/status/languages/watcherStatus/lockStatus/index) still green
+- Schema mirrors implementation: =manage= subcommand list = {save→noop, undo, redo, diff, context, status, buffers, languages, watcherStatus, lockStatus, index}; no orphan items in either layer
+- Edit-history file =<root>/.spell/edit-history.jsonl= grows with each edit; .gitignore'd
+
+* Files (new + modified)
+
+- NEW crates/pi-natives/src/code_path/edit_history.rs (trait + JSONL impl)
+- crates/pi-code-engine/src/buffer.rs (record on edit_transaction commit)
+- crates/pi-natives/src/code_path/manage.rs (handlers rewritten)
+- crates/pi-natives/src/code_path/napi.rs (context dispatch)
+- packages/coding-agent/src/tools/codepath-types.ts (manage schema)
+- packages/coding-agent/src/tools/manage.ts (renderResult for new shape)
+- packages/coding-agent/test/manage-history.test.ts (NEW)
+
+* Future extensions (out of scope for this BUG)
+
+- Cross-commit history: once recorded, walk git log to attribute commits → entries
+- Cross-process: store a marker (commit hash + session_id) so other Spell processes see the same history
+- TUI viewer: ~manage timeline~ subcommand with date/agent grouping
+
+* References
+
+[[id:PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo]]

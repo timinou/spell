@@ -118,11 +118,25 @@ function buildTreeNodes(nodes: NodeRefDto[]): string {
 	return lines.join("\n");
 }
 
+function getManagePayloadText(node: NodeRefDto): string | undefined {
+	if (node.kind !== "§manage-result") return undefined;
+	const payload = (node.metadata as Record<string, unknown> | undefined)?.payload;
+	if (payload === null || payload === undefined) return undefined;
+	if (typeof payload === "string") return payload;
+	if (typeof payload === "object") {
+		try {
+			return JSON.stringify(payload, null, 2);
+		} catch {
+			return undefined;
+		}
+	}
+	return undefined;
+}
 function buildNodeList(nodes: NodeRefDto[]): string {
 	return nodes
 		.map(node => {
 			const loc = nodeToLocation(node);
-			const text = getNodeText(node);
+			const text = getManagePayloadText(node) ?? getNodeText(node);
 			const kind = getNodeKindLabel(node);
 			if (text !== undefined) {
 				return `${loc}  [${kind}]\n${text}`;

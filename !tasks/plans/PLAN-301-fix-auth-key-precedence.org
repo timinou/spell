@@ -1,0 +1,81 @@
+#+TITLE: FIX_AUTH_KEY_PRECEDENCE
+#+STATE: DOING
+#+SESSION_ID: 14d541d738757262
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T11-07-11-457Z_14d541d738757262.jsonl]]
+#+CUSTOM_ID: PLAN-301-fix-auth-key-precedence
+#+LAYER: core
+
+* Initial Message
+
+Operation aborted
+
+
+ hi
+
+
+ Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase
+ credits."},"request_id":"req_011CajKCMZ6SniKHP6tdBeJW"}
+ raw-http-request=/home/user/.spell/logs/http-400-requests/1777979200485-1w7pp8azslfie.json
+
+ Temporary model: claude-opus-4-7
+
+
+ hi
+
+
+ Error: 401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"},"request_id":"req_011CajKDB75Ayis7WZxQ89we"}
+
+
+
+
+For the first one, I was using anthropic, and the problem (I think) is that the api key in the .env takes precedence over the configured one, which it shouldn't
+For the second one, I think the issue is that better ccflare requires its own 'btr-' api key, which is okay if I provide it through better ccflare or if you tell me how to remove this requirement from my instance
+
+* Context
+
+Two auth bugs discovered during normal usage:
+
+1. **Better-ccflare at localhost:8080** receives `ANTHROPIC_API_KEY` from `.env` via the `serviceProviderMap` fallback chain. Better-ccflare expects `btr-` prefixed keys, so it returns 401. The intended behavior (OAuth passthrough — no auth header) is broken because `$pickenv("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")` picks up the existing `.env` key.
+
+2. **Anthropic provider** silently falls back to `.env` `ANTHROPIC_API_KEY` when OAuth token refresh fails. The user logged in via `/login anthropic` (storing OAuth credentials), but when the token expires and can't refresh, `getApiKey()` falls to the env var fallback. The user sees "credit balance too low" from the stale `.env` key instead of being told to re-login.
+
+Files affected:
+- `packages/ai/src/stream.ts` line 97 — better-ccflare env var resolver
+- `packages/ai/src/auth-storage.ts` lines 1994-2001 — `getApiKey()` OAuth→env fallback
+
+[[id:BUG-335-fix-better-ccflare-env-var-resolution-pi]]
+[[id:BUG-336-fix-env-api-key-silently-overriding-stor]]
+
+* Verification
+
+After both fixes:
+- `bun test packages/ai/test/better-ccflare-provider.test.ts` — new tests for env var resolution
+- `bun test packages/ai/test/auth-storage-anthropic-invalid-token.test.ts` — new tests for OAuth→env fallback prevention
+- `bun run --workspaces --if-present --parallel test` — full test suite
+- `bun run --parallel check:ts check:rs` — type checks
+- Manual: `/model` with better-ccflare models at localhost:8080 works without `ANTHROPIC_AUTH_TOKEN`
+- Manual: `/login anthropic` + expired token + ANTHROPIC_API_KEY in .env → "No API key" error (not "credit balance too low")
+
+* Execution Manifest
+** wave-1 :wave:
+- [[id:BUG-335-fix-better-ccflare-env-var-resolution-pi::env-var-tests]] Better-ccflare env var test (TDD)
+- [[id:BUG-336-fix-env-api-key-silently-overriding-stor::oauth-env-fallback-tests]] OAuth-to-env fallback prevention test (TDD)
+** wave-2 :wave:
+- [[id:BUG-335-fix-better-ccflare-env-var-resolution-pi::fix-env-var-resolver]] Fix better-ccflare env var resolver (satisfies env-var-tests)
+- [[id:BUG-336-fix-env-api-key-silently-overriding-stor::add-oauth-guard]] Add OAuth credential guard in getApiKey (satisfies oauth-env-fallback-tests)
+** File-level DAG
+*** Nodes
+- `BUG-335-fix-better-ccflare-env-var-resolution-pi` Better-ccflare env var test (TDD) [ITEM]
+- `BUG-336-fix-env-api-key-silently-overriding-stor` OAuth-to-env fallback prevention test (TDD) [ITEM]
+*** Edges
+- None.
+** Subfeature-level DAG
+*** Nodes
+- `BUG-335-fix-better-ccflare-env-var-resolution-pi::env-var-tests` Better-ccflare env var test (TDD) [ITEM]
+- `BUG-335-fix-better-ccflare-env-var-resolution-pi::fix-env-var-resolver` Fix better-ccflare env var resolver (satisfies env-var-tests) [ITEM]
+- `BUG-336-fix-env-api-key-silently-overriding-stor::oauth-env-fallback-tests` OAuth-to-env fallback prevention test (TDD) [ITEM]
+- `BUG-336-fix-env-api-key-silently-overriding-stor::add-oauth-guard` Add OAuth credential guard in getApiKey (satisfies oauth-env-fallback-tests) [ITEM]
+*** Edges
+- `BUG-335-fix-better-ccflare-env-var-resolution-pi::fix-env-var-resolver` depends on `BUG-335-fix-better-ccflare-env-var-resolution-pi::env-var-tests`
+- `BUG-336-fix-env-api-key-silently-overriding-stor::add-oauth-guard` depends on `BUG-336-fix-env-api-key-silently-overriding-stor::oauth-env-fallback-tests`
+

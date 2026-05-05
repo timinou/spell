@@ -1,0 +1,305 @@
+#+TITLE: CodePath insertBefore/insertAfter drops LINE#ID anchor causing line-0 errors
+#+STATE: ITEM
+#+SESSION_ID: 14d50def80d06410
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T07-20-24-835Z_14d50def80d06410.jsonl]]
+#+CUSTOM_ID: BUG-338-codepath-insertbefore-insertafter-drops
+#+EFFORT: 3h
+#+LAYER: backend
+
+* Initial Message
+
+I asked a new session to check how the new tool is performing and this is what it told me:
+
+Updated Tool Review — Round 2
+
+ ### GET — Major Fixes ✅
+
+ ┌─────────────────────────────────────┬────────────────────┐
+ │ Was broken                          │ Now                │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ Bare file paths → images (#raw bug) │ ✅ Returns content │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ tail/head params → #raw bug         │ ✅ Works           │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ format: "content-only" → #raw bug   │ ✅ Works           │
+ └─────────────────────────────────────┴────────────────────┘
+
+ Still working from before:
+ - Line slices with LINE#ID anchors (1#DT format now)
+ - Regex line filters across codebase (::§line[text~="export function"])
+ - Glob patterns, directory listing, #stat qualifier
+ - offset/limit pagination, locations format, recursive/depth
+
+ Remaining gaps:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Issue                  │ Detail                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Symbol get on TS →     │ foo.ts::symbolName renders as image. Works on Rust                           │
+ │ image                  │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Multi-word symbol      │ ::export * from "./json" → "unexpected trailing input". Blocked on get, edit │
+ │ targets fail           │ insertBefore, and edit symbol-targeted ops                                   │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ No source-only filter  │ Directories mix .ts, .js, .d.ts, .map — no pattern/glob param                │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ 1KB spill limit        │ Consistent across all outputs; artifact roundtrip needed for full files      │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### EDIT — LINE#ID Chain Fixed ✅
+
+ ┌───────────────────────────────────┬──────────────────────────────────────────────┐
+ │ Was broken                        │ Now                                          │
+ ├───────────────────────────────────┼──────────────────────────────────────────────┤
+ │ LINE#ID anchors from get rejected │ ✅ 5#6V accepted, append applied, diff shown │
+ ├───────────────────────────────────┼──────────────────────────────────────────────┤
+ │ findAndReplace multi-line         │ ✅ Works                                     │
+ └───────────────────────────────────┴──────────────────────────────────────────────┘
+
+ Still working:
+ - rawTextReplace, rename, wrap (Rust), findAndReplace with occurrence selectors
+
+ Remaining gaps:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Issue                  │ Detail                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ wrap splits export     │ Targeting ERGO_V2 wrapped only const ERGO_V2 = 42, left export dangling      │
+ │ const                  │ outside. Should either include the export statement or warn                  │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ delete leaves empty    │ File still exists after delete — need second cleanup step                    │
+ │ file                   │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ insertBefore via       │ "unsafe line-target insert-before at line 0" — wants newline suffix, then    │
+ │ LINE#ID                │ reports "line out of range"                                                  │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Multi-word symbol      │ Same as get — quotes/spaces in symbol names fail parsing                     │
+ │ targets                │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Batch edit failure     │ Edit 1 fails → edit 2 runs anyway against stale state → cryptic error        │
+ │ propagation            │                                                                              │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### MANAGE — Partially Fixed ✅
+
+ ┌─────────────────────────────────────────────┬────────────────────────────────────────────────┐
+ │ Was broken                                  │ Now                                            │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ All commands → "parse failed at position 0" │ ✅ Most work                                   │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ buffers                                     │ ✅ []                                          │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ status                                      │ ✅ Shows watcher, buffers, coordinator         │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ languages                                   │ ✅ Full tree-sitter registry with capabilities │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ watcherStatus                               │ ✅ {active: true, watched: 2}                  │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ lockStatus                                  │ ✅ (needs file param)                          │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ index                                       │ ✅ Reports unavailable                         │
+ └─────────────────────────────────────────────┴────────────────────────────────────────────────┘
+
+ Still broken:
+
+ ┌─────────┬───────────────────────────────────────────┐
+ │ Command │ Error                                     │
+ ├─────────┼───────────────────────────────────────────┤
+ │ save    │ "I/O error: Is a directory (os error 21)" │
+ ├─────────┼───────────────────────────────────────────┤
+ │ undo    │ Same I/O error                            │
+ ├─────────┼───────────────────────────────────────────┤
+ │ diff    │ Returns [] even when file is dirty        │
+ ├─────────┼───────────────────────────────────────────┤
+ │ context │ Not a valid subcommand                    │
+ └─────────┴───────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### CREATE — Solid ✅
+
+ - Create in-project, outside-project, force overwrite — all work
+ - No sandbox warnings for paths outside project root
+
+ ### LSP — Unchanged
+
+ - symbols, hover, references, diagnostics, status all work
+ - Hover output terse (declaration only, no doc comments)
+ - No TypeScript server loaded (only rust-analyzer/tinymist/yamlls/taplo)
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ Priority Fix List
+
+ ┌───┬───────────────────────────┬───────────────────────────────────────────────────────────────────────┐
+ │ # │ Issue                     │ Impact                                                                │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 1 │ Multi-word symbol targets │ Blocks get symbol resolution, edit insertBefore/insertAfter on most   │
+ │   │                           │ real symbols                                                          │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 2 │ manage save/undo/diff     │ Can't persist, revert, or inspect changes without bash                │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 3 │ Symbol get on TS → image  │ Major gap; works on Rust so likely a dialect-specific rendering bug   │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 4 │ wrap splitting export     │ Correctness bug — mutates semantics silently                          │
+ │   │ const                     │                                                                       │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 5 │ delete leaves empty file  │ Leaks stale files; needs rm follow-up                                 │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 6 │ insertBefore via LINE#ID  │ Seems like a coordinate/indexing bug (reports line 0)                 │
+ └───┴───────────────────────────┴───────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+Please through each and explain what is going on. I want root causes and structural causes+fixes too, think about what CodePath is supposed to solve, and give me a list of tool+codepath cases and what they should do, + discrepancies in expected vs. actual behaviour, and surprises in ergonomics, go for it
+
+* Symptoms
+
+#+begin_example
+edit { kind: "insertBefore", pos: "5#6V", lines: [...] }
+→ "unsafe line-target insert-before at line 0"
+→ retry with newline suffix → "line out of range"
+#+end_example
+
+The LINE#ID anchor is silently dropped through 4 layers; kernel falls back to line=0.
+
+* Root cause (4-layer drop)
+
+1. =packages/coding-agent/src/tools/edit.ts:55= ~isLineIdAction~ returns true only for replace/append/prepend; insertBefore/insertAfter route through ~#executeStructural~ which forwards =pos= raw to kernel.
+2. =crates/pi-code-path/src/ast.rs:394-399= ~Action::InsertBefore { lines }~ has NO pos/line field. Serde silently drops =pos= during deserialization (separate variant from ~Action::Insert { pos, line, lines }~).
+3. =crates/pi-natives/src/code_path/code_resolver/mutation.rs:79= ~action_to_value~ re-serializes after the drop.
+4. =crates/pi-natives/src/code_buffer.rs:763-771= ~action_line()~ reads only ~action.get("line")~; with line absent, returns 0 via ~unwrap_or(0)~.
+
+Then =insert_before(buf, 0, ...)=:
+- =crates/pi-code-engine/src/edit/replace.rs:21-31= rejects "Unsafe line-target insert-before at line 0" if content lacks newline.
+- =crates/pi-code-engine/src/line_target.rs:25= rejects =line == 0= as "line out of range".
+
+* Fix contract (D: structural collapse)
+
+Collapse the AST asymmetry. ~Action::Insert~ and ~Action::InsertBefore~ become ONE variant family with optional anchor.
+
+** AST
+- =crates/pi-code-path/src/ast.rs=: change ~Action::InsertBefore { lines }~ to ~Action::InsertBefore { #[serde(default)] pos: Option<String>, #[serde(default)] line: Option<u32>, lines: ActionContent }~. Same for ~InsertAfter~.
+- ~Action::Insert~ already has pos/line/lines — keep for backward compat OR remove if no callers depend on the unique kind="insert" tag (audit needed).
+- Update ~ActionKind~ enum + ~kind()~ impl.
+
+** Kernel dispatch
+- =crates/pi-natives/src/code_buffer.rs:763= ~action_line()~: when ~action.line~ absent, parse ~action.pos~ as ="<n>#<id>"=, return n. Hash validation occurs in TS path, kernel just trusts the line component (or optionally re-validates).
+- =crates/pi-code-path/src/dialects/text/anchor.rs= already has the line+hash parser; reuse it.
+
+** TS dispatch
+- =packages/coding-agent/src/tools/edit.ts:55= ~isLineIdAction~: include ~insertBefore~, ~insertAfter~, ~splice~. The dedicated ~#executeLineId~ path validates the anchor via ~parseTag~ and ~applyHashlineEdits~ before delegating; this is the preferred route.
+- ~#executeLineId~ may need extension to support insertBefore/insertAfter semantics (insert N lines at byte offset of line start; verify hash before write).
+
+** Schema + prompts
+- =packages/coding-agent/src/tools/codepath-types.ts= editSchema description: explicitly document =pos= as supported on =insertBefore=/=insertAfter=/=splice=, format ="<line>#<id>"=.
+- =packages/coding-agent/src/tools/edit.ts editDescription= (the prompt): show one example of insertBefore-with-LINE#ID.
+
+* TDD protocol
+
+** Failing tests (write first, commit)
+
+Add to =packages/coding-agent/test/edit.test.ts=:
+#+begin_src ts
+test("insertBefore with LINE#ID anchor inserts before that line", async () => {
+    const file = await tempFile(`alpha
+beta
+gamma
+`);
+    // Get the LINE#ID for line 2 (beta)
+    const tag = computeLineTag(2, "beta");  // e.g. "2#XX"
+    const result = await edit({
+      operations: [{
+        target: file,
+        action: { kind: "insertBefore", pos: tag, lines: ["INSERTED
+"] }
+      }]
+    });
+    expect(result.isError).toBeFalsy();
+    expect(await fs.readFile(file, "utf8")).toBe("alpha
+INSERTED
+beta
+gamma
+");
+});
+
+test("insertAfter with LINE#ID inserts after that line", async () => {
+    const file = await tempFile(`a
+b
+c
+`);
+    const tag = computeLineTag(2, "b");
+    await edit({ operations: [{ target: file, action: { kind: "insertAfter", pos: tag, lines: ["X
+"] } }] });
+    expect(await fs.readFile(file, "utf8")).toBe("a
+b
+X
+c
+");
+});
+
+test("insertBefore with stale LINE#ID returns hash-mismatch diagnostic", async () => {
+    const file = await tempFile(`alpha
+beta
+gamma
+`);
+    const result = await edit({
+      operations: [{ target: file, action: { kind: "insertBefore", pos: "2#XX", lines: ["X"] } }]
+    });
+    expect(result.isError).toBeTruthy();
+    expect(/* extract diagnostic text */).toContain("hash");
+});
+#+end_src
+
+Add to =crates/pi-code-path/src/ast.rs= tests:
+#+begin_src rust
+#[test]
+fn insert_before_action_carries_pos_through_serde() {
+    let json = r#"{"kind":"insertBefore","pos":"5#XX","lines":["foo"]}"#;
+    let action: Action = serde_json::from_str(json).unwrap();
+    match action {
+        Action::InsertBefore { pos, line, lines } => {
+            assert_eq!(pos, Some("5#XX".to_string()));
+            assert_eq!(line, None);
+            assert_eq!(lines.lines(), vec!["foo".to_string()]);
+        }
+        _ => panic!("expected InsertBefore"),
+    }
+}
+#+end_src
+
+Add to =crates/pi-natives/src/code_buffer.rs= tests:
+#+begin_src rust
+#[test]
+fn action_line_parses_pos_when_line_absent() {
+    let action = json!({"kind":"insertBefore","pos":"7#AB","lines":["x"]});
+    assert_eq!(action_line(&action, None), 7);
+}
+#+end_src
+
+* Acceptance
+
+- New tests pass
+- Existing edit/manage/get tests do not regress
+- ~cargo test -p pi-code-path -p pi-natives~ green
+- ~bun run --filter @oh-my-pi/pi-coding-agent test packages/coding-agent/test/edit.test.ts~ green
+- Tool description in editSchema includes pos:"<line>#<id>" example for insertBefore
+
+* Files
+
+- crates/pi-code-path/src/ast.rs (Action variant + tests)
+- crates/pi-natives/src/code_buffer.rs (action_line; tests)
+- crates/pi-natives/src/code_path/code_resolver/mutation.rs (action_to_value passthrough — verify pos preserved)
+- packages/coding-agent/src/tools/edit.ts (isLineIdAction + #executeLineId)
+- packages/coding-agent/src/tools/codepath-types.ts (schema docs)
+- packages/coding-agent/test/edit.test.ts (tests)
+
+* References
+
+[[id:BUG-337-codepath-multi-word-symbols-fail-to-pars]] — sibling bug (parser path)

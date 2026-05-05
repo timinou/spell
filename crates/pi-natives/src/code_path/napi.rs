@@ -15,7 +15,7 @@ use pi_code_path::{
 	dialects::{fs::FsResolver, text::TextResolver},
 	parser::parse_code_path,
 	renderer::render_code_path,
-	resolver::{CancellationToken, CodeResolver, MutationResolver, ProjectionOpts, Resolver},
+ resolver::{CancellationToken, CodeResolver, MutationResolver, Resolver},
 	types::{Diagnostic, DiagnosticVariant},
 };
 use winnow::{Parser, token::take_while};
@@ -360,17 +360,10 @@ pub fn execute_code_path_inner(
 	let (lexer, parse_diagnostics) = select_lexer(&opts.target);
 	let mut cp = parse_code_path(&opts.target, &lexer).map_err(|d| Error::from_reason(d.message))?;
 
-	// Apply projection opts.
-	if let Some(query) = cp.query.take() {
-		let proj = ProjectionOpts {
-			limit:   opts.limit.map(|n| n as usize),
-			head:    opts.head.map(|n| n as usize),
-			tail:    opts.tail.map(|n| n as usize),
-			offset:  opts.offset.map(|n| n as usize),
-			context: None,
-		};
-		cp.query = Some(pi_code_path::resolver::lower(proj, query));
-	}
+	// Projection is applied as post-processing on the resolver result,
+	// not as query predicates. Predicates within a step are AND-ed,
+	// which breaks sequential operations like "take first 3 of lines
+	// 324–340" (AND of [324..340] and [0..3] is always empty).
 
 	let root = opts
 		.root
@@ -510,7 +503,7 @@ pub fn execute_code_path_inner(
 	}
 
 	// ── Query path (default) ─────────────────────────────────────
-	let nodes = match &cp.locator {
+ let mut nodes = match &cp.locator {
 		Locator::Fs(_) => {
 			if is_text_qualifier_only(&cp) {
 				// FEAT-689 / B2,B10: bare-file + content qualifier (#raw,
@@ -580,6 +573,21 @@ pub fn execute_code_path_inner(
 			}
 		},
 	};
+
+	// Apply projection as sequential post-processing on the result set.
+	// Order: offset → (tail | head/limit). Tail takes precedence over
+	// head/limit, matching the pre-FEAT-XXX projection.lower() semantics.
+	if let Some(off) = opts.offset {
+		let off = (off as usize).min(nodes.len());
+		nodes = nodes.split_off(off);
+	}
+	if let Some(n) = opts.tail {
+		let n = (n as usize).min(nodes.len());
+		nodes = nodes.split_off(nodes.len() - n);
+	} else if let Some(n) = opts.head.or(opts.limit) {
+		let n = (n as usize).min(nodes.len());
+		nodes.truncate(n);
+	}
 
 	if cancel_token.aborted() {
 		return Err(Error::from_reason("Aborted: Signal"));
@@ -936,7 +944,7 @@ mod tests {
 		o.limit = Some(2);
 		let chunks = execute_code_path_inner(o, crate::task::CancelToken::default()).unwrap();
 		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
-		assert_eq!(nodes.len(), 10, "expected 2 lines × 5 files = 10 nodes");
+		assert_eq!(nodes.len(), 2, "expected 2 lines total (limit applied as result-level truncation)");
 	}
 	#[test]
 	fn artifact_threshold_default_externalises_large_content() {

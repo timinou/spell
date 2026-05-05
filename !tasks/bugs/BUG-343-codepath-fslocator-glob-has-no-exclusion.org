@@ -1,0 +1,267 @@
+#+TITLE: CodePath FsLocator glob has no exclusion — can't filter out .d.ts/.map
+#+STATE: ITEM
+#+SESSION_ID: 14d50def80d06410
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T07-20-24-835Z_14d50def80d06410.jsonl]]
+#+CUSTOM_ID: BUG-343-codepath-fslocator-glob-has-no-exclusion
+#+EFFORT: 1.5h
+#+LAYER: backend
+
+* Initial Message
+
+I asked a new session to check how the new tool is performing and this is what it told me:
+
+Updated Tool Review — Round 2
+
+ ### GET — Major Fixes ✅
+
+ ┌─────────────────────────────────────┬────────────────────┐
+ │ Was broken                          │ Now                │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ Bare file paths → images (#raw bug) │ ✅ Returns content │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ tail/head params → #raw bug         │ ✅ Works           │
+ ├─────────────────────────────────────┼────────────────────┤
+ │ format: "content-only" → #raw bug   │ ✅ Works           │
+ └─────────────────────────────────────┴────────────────────┘
+
+ Still working from before:
+ - Line slices with LINE#ID anchors (1#DT format now)
+ - Regex line filters across codebase (::§line[text~="export function"])
+ - Glob patterns, directory listing, #stat qualifier
+ - offset/limit pagination, locations format, recursive/depth
+
+ Remaining gaps:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Issue                  │ Detail                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Symbol get on TS →     │ foo.ts::symbolName renders as image. Works on Rust                           │
+ │ image                  │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Multi-word symbol      │ ::export * from "./json" → "unexpected trailing input". Blocked on get, edit │
+ │ targets fail           │ insertBefore, and edit symbol-targeted ops                                   │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ No source-only filter  │ Directories mix .ts, .js, .d.ts, .map — no pattern/glob param                │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ 1KB spill limit        │ Consistent across all outputs; artifact roundtrip needed for full files      │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### EDIT — LINE#ID Chain Fixed ✅
+
+ ┌───────────────────────────────────┬──────────────────────────────────────────────┐
+ │ Was broken                        │ Now                                          │
+ ├───────────────────────────────────┼──────────────────────────────────────────────┤
+ │ LINE#ID anchors from get rejected │ ✅ 5#6V accepted, append applied, diff shown │
+ ├───────────────────────────────────┼──────────────────────────────────────────────┤
+ │ findAndReplace multi-line         │ ✅ Works                                     │
+ └───────────────────────────────────┴──────────────────────────────────────────────┘
+
+ Still working:
+ - rawTextReplace, rename, wrap (Rust), findAndReplace with occurrence selectors
+
+ Remaining gaps:
+
+ ┌────────────────────────┬──────────────────────────────────────────────────────────────────────────────┐
+ │ Issue                  │ Detail                                                                       │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ wrap splits export     │ Targeting ERGO_V2 wrapped only const ERGO_V2 = 42, left export dangling      │
+ │ const                  │ outside. Should either include the export statement or warn                  │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ delete leaves empty    │ File still exists after delete — need second cleanup step                    │
+ │ file                   │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ insertBefore via       │ "unsafe line-target insert-before at line 0" — wants newline suffix, then    │
+ │ LINE#ID                │ reports "line out of range"                                                  │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Multi-word symbol      │ Same as get — quotes/spaces in symbol names fail parsing                     │
+ │ targets                │                                                                              │
+ ├────────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+ │ Batch edit failure     │ Edit 1 fails → edit 2 runs anyway against stale state → cryptic error        │
+ │ propagation            │                                                                              │
+ └────────────────────────┴──────────────────────────────────────────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### MANAGE — Partially Fixed ✅
+
+ ┌─────────────────────────────────────────────┬────────────────────────────────────────────────┐
+ │ Was broken                                  │ Now                                            │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ All commands → "parse failed at position 0" │ ✅ Most work                                   │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ buffers                                     │ ✅ []                                          │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ status                                      │ ✅ Shows watcher, buffers, coordinator         │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ languages                                   │ ✅ Full tree-sitter registry with capabilities │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ watcherStatus                               │ ✅ {active: true, watched: 2}                  │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ lockStatus                                  │ ✅ (needs file param)                          │
+ ├─────────────────────────────────────────────┼────────────────────────────────────────────────┤
+ │ index                                       │ ✅ Reports unavailable                         │
+ └─────────────────────────────────────────────┴────────────────────────────────────────────────┘
+
+ Still broken:
+
+ ┌─────────┬───────────────────────────────────────────┐
+ │ Command │ Error                                     │
+ ├─────────┼───────────────────────────────────────────┤
+ │ save    │ "I/O error: Is a directory (os error 21)" │
+ ├─────────┼───────────────────────────────────────────┤
+ │ undo    │ Same I/O error                            │
+ ├─────────┼───────────────────────────────────────────┤
+ │ diff    │ Returns [] even when file is dirty        │
+ ├─────────┼───────────────────────────────────────────┤
+ │ context │ Not a valid subcommand                    │
+ └─────────┴───────────────────────────────────────────┘
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ ### CREATE — Solid ✅
+
+ - Create in-project, outside-project, force overwrite — all work
+ - No sandbox warnings for paths outside project root
+
+ ### LSP — Unchanged
+
+ - symbols, hover, references, diagnostics, status all work
+ - Hover output terse (declaration only, no doc comments)
+ - No TypeScript server loaded (only rust-analyzer/tinymist/yamlls/taplo)
+
+ ────────────────────────────────────────────────────────────────────────────────
+
+ Priority Fix List
+
+ ┌───┬───────────────────────────┬───────────────────────────────────────────────────────────────────────┐
+ │ # │ Issue                     │ Impact                                                                │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 1 │ Multi-word symbol targets │ Blocks get symbol resolution, edit insertBefore/insertAfter on most   │
+ │   │                           │ real symbols                                                          │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 2 │ manage save/undo/diff     │ Can't persist, revert, or inspect changes without bash                │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 3 │ Symbol get on TS → image  │ Major gap; works on Rust so likely a dialect-specific rendering bug   │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 4 │ wrap splitting export     │ Correctness bug — mutates semantics silently                          │
+ │   │ const                     │                                                                       │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 5 │ delete leaves empty file  │ Leaks stale files; needs rm follow-up                                 │
+ ├───┼───────────────────────────┼───────────────────────────────────────────────────────────────────────┤
+ │ 6 │ insertBefore via LINE#ID  │ Seems like a coordinate/indexing bug (reports line 0)                 │
+ └───┴───────────────────────────┴───────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+Please through each and explain what is going on. I want root causes and structural causes+fixes too, think about what CodePath is supposed to solve, and give me a list of tool+codepath cases and what they should do, + discrepancies in expected vs. actual behaviour, and surprises in ergonomics, go for it
+
+* Symptoms
+
+#+begin_example
+get { target: "dist/*.ts" }
+→ matches dist/foo.ts, dist/foo.d.ts, dist/foo.ts.map (technically not .ts)
+→ user has no way to exclude generated .d.ts and source-map files
+#+end_example
+
+* Root cause
+
+- =crates/pi-code-path/src/parser.rs:265-338= ~tokenise_segment~ supports glob primitives Star/DoubleStar/CharClass/Brace but no NEGATION.
+- Brace ~{a,b}~ is positive matching only; users naturally try ~{ts,!d.ts}~ and it gets parsed as a literal ~!d.ts~.
+
+* Fix contract (A: extend brace grammar with `!` exclusion)
+
+** Grammar
+- ~{a,b,!c,!d}~ matches anything in {a,b} that does NOT match {c,d}.
+- Inclusion items first, exclusion items prefixed with ~!~.
+- Pure-exclusion ~{!c}~ is a parse error (must have at least one positive).
+
+** Implementation
+- =crates/pi-code-path/src/parser.rs::tokenise_segment= (around line 311):
+  - When parsing brace contents, split items on ~,~
+  - Items starting with ~!~ go into ~exclusions: Vec<String>~
+  - Other items stay as ~items: Vec<String>~
+  - Emit a new ~FsSegment::Brace { items, exclusions }~ variant (or extend existing Brace tuple)
+
+** AST
+- =crates/pi-code-path/src/ast.rs= ~FsSegment::Brace(Vec<String>)~ → ~FsSegment::Brace { items: Vec<String>, exclusions: Vec<String> }~. Update all call sites; existing serialization may need a #[serde(rename)] migration.
+
+** Walker
+- =crates/pi-code-path/src/dialects/fs/mod.rs= matcher: a name matches a Brace if (any item matches) AND (no exclusion matches).
+- Items and exclusions follow the same suffix-/prefix-/exact-match rules.
+
+** Tests in parser
+- ~tokenise_segment("foo.{ts,!d.ts}")~ → Brace { items: ["ts"], exclusions: ["d.ts"] }
+- ~tokenise_segment("foo.{!d.ts}")~ → parse error (no positive item)
+- ~tokenise_segment("foo.{ts}")~ → Brace { items: ["ts"], exclusions: [] } (back-compat)
+
+* TDD protocol
+
+** Failing tests (write first, commit)
+
+Add to =crates/pi-code-path/src/parser.rs= tests:
+#+begin_src rust
+#[test]
+fn brace_with_exclusion() {
+    let r = tokenise_segment("foo.{ts,!d.ts}").unwrap();
+    match &r[..] {
+        [FsSegment::Literal(prefix), FsSegment::Brace { items, exclusions }] => {
+            assert_eq!(prefix, "foo.");
+            assert_eq!(items, &["ts".to_string()]);
+            assert_eq!(exclusions, &["d.ts".to_string()]);
+        }
+        _ => panic!("unexpected segments: {:?}", r),
+    }
+}
+
+#[test]
+fn brace_pure_exclusion_is_parse_error() {
+    assert!(tokenise_segment("foo.{!d.ts}").is_err());
+}
+
+#[test]
+fn brace_back_compat_no_exclusions() {
+    let r = tokenise_segment("foo.{ts,tsx}").unwrap();
+    // matches existing positive-only behavior
+    assert!(matches!(&r[..], [_, FsSegment::Brace { items, exclusions }] if items.len() == 2 && exclusions.is_empty()));
+}
+#+end_src
+
+Add to =crates/pi-code-path/src/dialects/fs/mod.rs= tests:
+#+begin_src rust
+#[test]
+fn glob_with_exclusion_excludes_d_ts() {
+    let temp = tmpdir();
+    fs::write(temp.path().join("foo.ts"), "").unwrap();
+    fs::write(temp.path().join("foo.d.ts"), "").unwrap();
+
+    let resolver = FsResolver::new(temp.path().to_path_buf());
+    let cp = parse_code_path(&format!("{}/*.{{ts,!d.ts}}", temp.path().display())).unwrap();
+    let nodes = resolver.resolve(&cp, &CancellationToken::default()).unwrap();
+
+    let names: Vec<_> = nodes.iter().map(|n| /* basename */).collect();
+    assert!(names.contains(&"foo.ts".to_string()));
+    assert!(!names.contains(&"foo.d.ts".to_string()));
+}
+#+end_src
+
+* Acceptance
+
+- New tests pass
+- ~cargo test -p pi-code-path~ green
+- Existing brace tests do not regress
+- Spec section in =specs/code-graph/code-path-extensions.md= or =specs/code-graph/code-path-dialects/= documents the new syntax with one example
+
+* Files
+
+- crates/pi-code-path/src/ast.rs (FsSegment::Brace shape)
+- crates/pi-code-path/src/parser.rs (tokenise_segment + tests)
+- crates/pi-code-path/src/dialects/fs/mod.rs (matcher; tests)
+- specs/code-graph/code-path-dialects/README.md or extensions.md (one-paragraph doc)
+
+* References
+
+[[id:PLAN-300-codepath-tool-autopsy-fix-b1-b15-data-lo]]
