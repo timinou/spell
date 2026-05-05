@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { executeCodePath } from "@oh-my-pi/pi-natives";
 
 const tmpDir = path.join(process.cwd(), "packages/coding-agent/test/tmp-manage-history");
+const historyFile = path.join(process.cwd(), ".spell", "edit-history.jsonl");
 
 async function writeFile(filePath: string, content: string): Promise<void> {
 	const dir = path.dirname(filePath);
@@ -57,6 +58,7 @@ async function manage(manage: string, sessionId: string, file?: string): Promise
 describe("manage history (BUG-340)", () => {
 	beforeEach(async () => {
 		await fs.mkdir(tmpDir, { recursive: true });
+		try { await fs.unlink(historyFile); } catch {}
 	});
 
 	afterEach(async () => {

@@ -14,6 +14,13 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
+static ENTRY_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Generate a monotonic entry id.
+pub fn next_entry_id() -> String {
+	ENTRY_ID.fetch_add(1, Ordering::SeqCst).to_string()
+}
+
 /// One edit committed by a single agent session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditEntry {
@@ -37,6 +44,7 @@ pub struct HistoryQuery {
 	pub file_glob:        Option<String>,
 	pub since:            Option<SystemTime>,
 	pub uncommitted_only: bool,
+	pub exclude_reverted: bool,
 }
 
 impl HistoryQuery {
@@ -64,6 +72,11 @@ impl HistoryQuery {
 
 	pub fn uncommitted_only(mut self, b: bool) -> Self {
 		self.uncommitted_only = b;
+		self
+	}
+
+	pub fn exclude_reverted(mut self, b: bool) -> Self {
+		self.exclude_reverted = b;
 		self
 	}
 }
@@ -133,13 +146,22 @@ impl JsonlHistory {
 
 impl EditHistory for JsonlHistory {
 	fn record(&self, entry: EditEntry) {
-		let mut file = OpenOptions::new()
+		if let Some(parent) = self.path.parent() {
+			let _ = std::fs::create_dir_all(parent);
+		}
+		let mut file = match OpenOptions::new()
 			.append(true)
 			.create(true)
 			.open(&self.path)
-			.expect("open history file");
-		let line = serde_json::to_string(&entry).expect("serialize entry");
-		writeln!(file, "{line}").expect("write history");
+		{
+			Ok(f) => f,
+			Err(_) => return, // history is best-effort; never block the edit
+		};
+		let line = match serde_json::to_string(&entry) {
+			Ok(s) => s,
+			Err(_) => return,
+		};
+		let _ = writeln!(file, "{line}");
 	}
 
 	fn query(&self, q: HistoryQuery) -> Vec<EditEntry> {
@@ -167,6 +189,9 @@ impl EditHistory for JsonlHistory {
 					}
 				}
 				if q.uncommitted_only && e.commit.is_some() {
+					return false;
+				}
+				if q.exclude_reverted && e.reverted {
 					return false;
 				}
 				true
@@ -204,7 +229,19 @@ impl EditHistory for JsonlHistory {
 		if let Some(parent) = file.parent() {
 			let _ = std::fs::create_dir_all(parent);
 		}
-		if let Err(e) = std::fs::write(file, &entry.before) {
+		let current = std::fs::read_to_string(file).unwrap_or_else(|_| entry.after.clone());
+		let new_content = if current == entry.after {
+			entry.before.clone()
+		} else {
+			match revert_chunk_replace(&current, &entry.after, &entry.before) {
+				Some(s) => s,
+				None => return RevertOutcome::Error(format!(
+					"cannot revert {} cleanly: file changed since edit and chunk replace failed",
+					entry.id
+				)),
+			}
+		};
+		if let Err(e) = std::fs::write(file, &new_content) {
 			return RevertOutcome::Error(format!("write failed: {e}"));
 		}
 		let entry_id = entry.id.clone();
@@ -212,6 +249,36 @@ impl EditHistory for JsonlHistory {
 		self.write_all(&entries);
 		RevertOutcome::Success { entry_id }
 	}
+}
+
+
+/// Compute file content with `from→to` change reverted.
+/// Walks line-by-line through `before` and `after`, identifies the first
+/// minimal differing chunk, and replaces it in `current`. Returns None if
+/// the chunk isn't found verbatim (overlap with another edit).
+fn revert_chunk_replace(current: &str, after: &str, before: &str) -> Option<String> {
+	let a_lines: Vec<&str> = after.split_inclusive('\n').collect();
+	let b_lines: Vec<&str> = before.split_inclusive('\n').collect();
+	// Find minimal differing range: skip identical prefix and suffix.
+	let mut start = 0;
+	while start < a_lines.len() && start < b_lines.len() && a_lines[start] == b_lines[start] {
+		start += 1;
+	}
+	let mut a_end = a_lines.len();
+	let mut b_end = b_lines.len();
+	while a_end > start && b_end > start && a_lines[a_end - 1] == b_lines[b_end - 1] {
+		a_end -= 1;
+		b_end -= 1;
+	}
+	let after_chunk: String = a_lines[start..a_end].concat();
+	let before_chunk: String = b_lines[start..b_end].concat();
+	if after_chunk == before_chunk {
+		return Some(current.to_string()); // no-op
+	}
+	if !current.contains(&after_chunk) {
+		return None;
+	}
+	Some(current.replacen(&after_chunk, &before_chunk, 1))
 }
 
 /// Very simple glob: exact match or "*" wildcard prefix/suffix.
@@ -262,11 +329,18 @@ mod tests {
 
 	#[test]
 	fn revert_undoes_only_targeted_entry() {
+		let tmp = std::env::temp_dir();
+		let a = tmp.join(format!("history-test-a-{}.txt", std::process::id()));
+		let b = tmp.join(format!("history-test-b-{}.txt", std::process::id()));
+		std::fs::write(&a, "after").unwrap();
+		std::fs::write(&b, "after").unwrap();
 		let h = JsonlHistory::in_memory();
-		h.record(entry("S1", "a.txt"));
-		h.record(entry("S1", "b.txt"));
-		let r = h.revert(HistoryQuery::default().session_id("S1").file_glob("a.txt"));
-		assert!(matches!(r, RevertOutcome::Success { .. }));
+		h.record(entry("S1", a.to_str().unwrap()));
+		h.record(entry("S1", b.to_str().unwrap()));
+		let r = h.revert(HistoryQuery::default().session_id("S1").file_glob(a.to_str().unwrap()));
+		assert!(matches!(r, RevertOutcome::Success { .. }), "got {r:?}");
+		let _ = std::fs::remove_file(&a);
+		let _ = std::fs::remove_file(&b);
 		let all = h.query(HistoryQuery::default().session_id("S1"));
 		assert!(all[0].reverted);
 		assert!(!all[1].reverted);

@@ -157,3 +157,32 @@ fn non_utf8_path_fallback() {
 	let path = Path::new(bad);
 	assert!(select_dialect(path).is_none(), "expected None for non-UTF-8 extension");
 }
+
+	// Outline qualifier returns symbols, not full content
+	#[test]
+	fn outline_qualifier_returns_top_level_symbols() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		let src = "export function foo(a: number): number { return a + 1; }\nexport const BAR = 42;\nclass Baz { x = 3; }\n";
+		std::fs::write(root.join("outline.ts"), src).unwrap();
+
+		let mut opts = opts_with_root("outline.ts#outline", root);
+		opts.format = Some("content-only".into());
+		let chunks = execute_code_path_inner(opts, CancelToken::default()).unwrap();
+
+		// Should produce output (not empty)
+		assert!(!chunks.is_empty(), "outline should produce chunks");
+		let all_text: String = chunks.iter()
+			.flat_map(|c| c.nodes.iter())
+   .filter_map(|n| n.content.as_ref().and_then(|c| c.value.clone()))
+			.collect::<Vec<_>>()
+			.join(" ");
+
+		// Should contain symbol names
+		assert!(all_text.contains("foo"), "expected outline to contain 'foo', got: '{}'", all_text);
+		assert!(all_text.contains("BAR"), "expected outline to contain 'BAR', got: '{}'", all_text);
+		assert!(all_text.contains("Baz"), "expected outline to contain 'Baz', got: '{}'", all_text);
+
+		// Should NOT contain function bodies
+		assert!(!all_text.contains("return a + 1"), "outline should not contain function bodies");
+	}

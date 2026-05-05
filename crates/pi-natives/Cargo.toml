@@ -16,6 +16,7 @@ workspace = true
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["full"] }
 winnow = "0.7"
+diffy = "0.4"
 
 napi = { version = "3", features = [
    "napi10",

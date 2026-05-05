@@ -9,6 +9,8 @@ export interface CodePathOptions {
 	root?: string;
 	actions?: any;
 	manage?: string;
+	/** Session ID for per-agent edit history attribution. */
+	sessionId?: string;
 	/** Abort signal for cancelling the operation. */
 	abortSignal?: AbortSignal;
 	/** Timeout in milliseconds for the operation. */

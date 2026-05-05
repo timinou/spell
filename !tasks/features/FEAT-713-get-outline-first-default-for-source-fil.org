@@ -1,0 +1,15 @@
+#+TITLE: get: outline-first default for source files — §outline + #raw inversion
+#+STATE: ITEM
+#+SESSION_ID: 14d5505d7e65f2fa
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T12-10-38-969Z_14d5505d7e65f2fa.jsonl]]
+#+CUSTOM_ID: FEAT-713-get-outline-first-default-for-source-fil
+
+* Initial Message
+
+look at the beginning of File:
+ /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-agentmaker/2026-05-05T12-06-16-376Z_14d54f5d0e27
+ 4ba8.jsonl
+ ID: 14d54f5d0e274ba8
+
+
+and tell me if BUG-338--343 address any of the bugs/ergonomics of the get tool being given up on in that session?
