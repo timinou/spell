@@ -887,7 +887,9 @@ pub fn declaration_name(source: &str, node: Node<'_>, decl: &DeclarationPattern)
 
 #[derive(Debug, Clone)]
 pub(crate) struct NameResolution {
-	pub text: String,
+	pub text:       String,
+	pub start_byte: usize,
+	pub end_byte:   usize,
 }
 
 pub(crate) fn declaration_name_resolution(
@@ -941,7 +943,7 @@ pub(crate) fn declaration_name_resolution(
 				list_form_value_text(source, node, 0).is_some_and(|value| value == head.as_str())
 			})
 			.and_then(|child| resolution_from_node(source, child, None, false)),
-		NameExtractor::Literal { name } => Some(NameResolution { text: name.clone() }),
+		NameExtractor::Literal { name } => Some(NameResolution { text: name.clone(), start_byte: node.start_byte(), end_byte: node.end_byte() }),
 		NameExtractor::AttributeValue { within_type, attr_name, prefix, take_first_token } => {
 			attribute_value_resolution(
 				source,
@@ -1005,7 +1007,9 @@ fn resolution_from_node(
 		return None;
 	}
 	Some(NameResolution {
-		text: prefix.map_or_else(|| token.to_string(), |prefix| format!("{prefix}{token}")),
+		text:       prefix.map_or_else(|| token.to_string(), |prefix| format!("{prefix}{token}")),
+		start_byte: node.start_byte(),
+		end_byte:   node.end_byte(),
 	})
 }
 
@@ -1040,7 +1044,9 @@ fn attribute_value_resolution(
 		return None;
 	}
 	Some(NameResolution {
-		text: prefix.map_or_else(|| token.to_string(), |prefix| format!("{prefix}{token}")),
+		text:       prefix.map_or_else(|| token.to_string(), |prefix| format!("{prefix}{token}")),
+		start_byte: node.start_byte(),
+		end_byte:   node.end_byte(),
 	})
 }
 
