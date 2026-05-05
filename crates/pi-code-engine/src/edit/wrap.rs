@@ -108,6 +108,7 @@ mod tests {
 
 	use super::*;
 	use crate::{
+		edit::rename_symbol,
 		language::{LanguageId, LanguageRegistry},
 		resolve::resolve_symbol,
 	};
@@ -242,4 +243,50 @@ mod tests {
 		assert!(err.to_string().contains("$BODY"));
 	}
 
+
+	fn apply_edits(source: &str, edits: Vec<TextEdit>) -> String {
+		let mut buffer = ts_buffer(source);
+		buffer.edit_batch(edits).expect("edit batch");
+		buffer.source().to_string()
+	}
+
+	#[test]
+	fn wrap_export_const_includes_export_keyword() {
+		let source = "export const X = 1;\n";
+		let buffer = ts_buffer(source);
+		let p = profile();
+		let resolved = resolve_symbol(&buffer, &p, "X").unwrap();
+		let edits = wrap_node(&buffer, &resolved, "try { $BODY } catch (e) {}").unwrap();
+		let result = apply_edits(source, edits);
+		assert!(
+			result.contains("try { export const X = 1; } catch (e) {}"),
+			"expected wrap to include export keyword, got: {result}"
+		);
+		assert!(!result.contains("export try"), "export keyword should not be left dangling: {result}");
+	}
+
+	#[test]
+	fn wrap_export_default_function_includes_default() {
+		let source = "export default function foo() { return 1; }\n";
+		let buffer = ts_buffer(source);
+		let p = profile();
+		let resolved = resolve_symbol(&buffer, &p, "foo").unwrap();
+		let edits = wrap_node(&buffer, &resolved, "/* WRAPPED */ $BODY").unwrap();
+		let result = apply_edits(source, edits);
+		assert!(
+			result.contains("/* WRAPPED */ export default function foo()"),
+			"expected wrap to include default keyword, got: {result}"
+		);
+	}
+
+	#[test]
+	fn rename_uses_identifier_range_unchanged() {
+		let source = "export const X = 1;\n";
+		let buffer = ts_buffer(source);
+		let p = profile();
+		let resolved = resolve_symbol(&buffer, &p, "X").unwrap();
+		let edits = rename_symbol(&buffer, &resolved, "Y").unwrap();
+		let result = apply_edits(source, edits);
+		assert_eq!(result, "export const Y = 1;\n");
+	}
 }

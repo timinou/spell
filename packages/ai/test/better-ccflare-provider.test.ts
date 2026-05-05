@@ -37,11 +37,11 @@ describe("better-ccflare env var resolution", () => {
 		expect(getEnvApiKey("better-ccflare")).toBeUndefined();
 	});
 
-	test("getEnvApiKey falls back to ANTHROPIC_API_KEY when ANTHROPIC_AUTH_TOKEN is unset", () => {
+	test("getEnvApiKey returns undefined when only ANTHROPIC_API_KEY is set (no ANTHROPIC_AUTH_TOKEN)", () => {
 		delete Bun.env.ANTHROPIC_AUTH_TOKEN;
 		Bun.env.ANTHROPIC_API_KEY = "sk-ant-fallback-test-key"; // pragma: allowlist secret
 		try {
-			expect(getEnvApiKey("better-ccflare")).toBe("sk-ant-fallback-test-key");
+			expect(getEnvApiKey("better-ccflare")).toBeUndefined();
 		} finally {
 			delete Bun.env.ANTHROPIC_API_KEY;
 		}

@@ -106,4 +106,55 @@ describe("AuthStorage anthropic invalid bearer handling", () => {
 		expect(store.listAuthCredentials("anthropic")).toHaveLength(1);
 		expect(readDisabledCauses(dbPath, "anthropic")).toEqual(["oauth rejected by provider: 401 Invalid bearer token"]);
 	});
+
+	it("does not fall back to env var when oauth credentials exist but refresh fails", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		await authStorage.set("anthropic", createCredential("primary"));
+
+		// Set .env ANTHROPIC_API_KEY to verify it's NOT used
+		Bun.env.ANTHROPIC_API_KEY = "sk-ant-env-fallback"; // pragma: allowlist secret
+
+		// Make the first getApiKey call so a session is pinned
+		const sessionId = "session-no-env-fallback";
+		await authStorage.getApiKey("anthropic", sessionId);
+
+		// Mock refresh to fail (simulate expired/revoked token)
+		vi.spyOn(oauthUtils, "refreshOAuthToken").mockRejectedValue(new Error("Refresh failed"));
+
+		try {
+			// Mark auth failure → triggers refresh → refresh fails
+			await authStorage.markAuthFailure("anthropic", sessionId, "401 Invalid bearer token");
+			// getApiKey should return undefined (not the env var)
+			const result = await authStorage.getApiKey("anthropic", sessionId);
+			expect(result).toBeUndefined();
+		} finally {
+			delete Bun.env.ANTHROPIC_API_KEY;
+		}
+	});
+
+	it("returns oauth token when credentials are valid", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		await authStorage.set("anthropic", createCredential("primary"));
+
+		// Set .env ANTHROPIC_API_KEY to verify it's ignored when OAuth works
+		Bun.env.ANTHROPIC_API_KEY = "sk-ant-env-ignored"; // pragma: allowlist secret
+		try {
+			const result = await authStorage.getApiKey("anthropic", "session-valid");
+			expect(result).toBe("sk-ant-oat-primary");
+		} finally {
+			delete Bun.env.ANTHROPIC_API_KEY;
+		}
+	});
+
+	it("falls back to env var when no credentials exist", async () => {
+		if (!authStorage || !store) throw new Error("test setup failed");
+		// No credentials stored — pure env-only user
+		Bun.env.ANTHROPIC_API_KEY = "sk-ant-env-only"; // pragma: allowlist secret
+		try {
+			const result = await authStorage.getApiKey("anthropic", "session-env-only");
+			expect(result).toBe("sk-ant-env-only");
+		} finally {
+			delete Bun.env.ANTHROPIC_API_KEY;
+		}
+	});
 });
