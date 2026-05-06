@@ -48,13 +48,13 @@ const renderContext: TemplateContext = {
 	readFiles: [],
 	repeatToolDescriptions: true,
 	reentry: false,
-	request: "Document the code-edit contract",
+	request: "Document the edit contract",
 	retryCount: 0,
 	rules: [],
 	skills: [],
 	systemPromptCustomization: "",
 	toolInfo: [],
-	tools: ["read", "grep", "find", "edit", "write", "code", "task"],
+	tools: ["get", "edit", "create", "manage", "task", "bash"],
 	worktree: "/tmp/project",
 	writeToolName: "write",
 	eagerTasks: true,
@@ -96,7 +96,7 @@ describe("code-edit contract prompts", () => {
 	});
 
 	it("states managed edits do not require reread after success", () => {
-		expect(planModeReminder).toContain("Successful managed edits do not require a fresh `read` before the next edit");
+		expect(planModeReminder).toContain("Successful managed edits do not require a fresh `get` before the next edit");
 		expect(planModeReminder).toContain("tighten the target/action");
 		expect(fallbackHint).toContain("`code edit { operations: [{ targetId, actions }] }`");
 		expect(fallbackHint).not.toContain('code read, code diff, code edit { operation: "replace" }');
@@ -104,7 +104,7 @@ describe("code-edit contract prompts", () => {
 
 	it("keeps write prompt aligned with strict code edit create guidance", () => {
 		expect(writePrompt).toContain(
-			'code edit { operations: [{ targetId: "src/new-file.ts", actions: [{ kind: "write", content: ["..."] }] }] }',
+			'code edit { operations: [{ targetId: "src/new-file.ts", actions: [{ kind: "write", content: ["…"] }] }] }',
 		);
 		expect(writePrompt).not.toContain('code edit { file, operation: "create", content: ["..."] }');
 	});
@@ -114,9 +114,9 @@ describe("code-edit contract prompts", () => {
 		const template = await Bun.file(templatePath).text();
 		const rendered = renderPromptTemplate(template, renderContext);
 
-		expect(rendered).toContain("structural edits on code-supported files with usable tree-sitter support");
-		expect(rendered).toContain("code edit { operations: [{ targetId, actions }] }");
-		expect(rendered).toContain("Line-target `code edit` operations resolve AST/node boundaries");
-		expect(rendered).toContain("Do not switch to text `edit` or `write` for that file");
+		expect(rendered).toContain("tree-sitter read/outline/edit/change");
+		expect(rendered).toContain("Your main tool: `edit`.");
+		expect(rendered).toContain("line-target resolve AST/node boundaries");
+		expect(rendered).toContain("fallback to patch mode is last resort");
 	});
 });

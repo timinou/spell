@@ -1,4 +1,4 @@
-- `code edit` is a structural edit path for code-supported files with usable tree-sitter support.
-- Successful managed edits do not require a fresh `read` before the next edit.
-- If a structural edit fails, re-read/navigate, tighten the target/action, and retry narrowly.
+- `edit` is the structural edit path for code-supported files with usable tree-sitter support.
+- Successful managed edits do not require a fresh `get` before the next edit.
+- If a structural edit fails, re-retrieve/navigate, tighten the target/action, and retry narrowly.
 - Fall back to text `edit` only for non-code files or files without tree-sitter grammar.

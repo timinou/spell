@@ -1,5 +1,5 @@
 Search code snippets and technical content.
-This tool behaves more like grep than natural-language web search.
+This tool behaves more like `get` with glob + line predicates than natural-language web search.
 
 <instruction>
 - Query with exact symbols, identifiers, error strings, CLI flags, filenames, import paths, and short code fragments.
@@ -30,7 +30,7 @@ Good queries:
 </avoid>
 
 <critical>
-- `query` should be grep-style code search, not a natural-language request.
+- `query` should be pattern-style code search, not a natural-language request.
 - `code_context` is optional and should stay short.
 - If you need explanations, best practices, or comprehensive answers, use broader web search tools instead.
 </critical>

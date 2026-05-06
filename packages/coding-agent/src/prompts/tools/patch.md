@@ -1,1 +1,1 @@
-- This tool is only for unsupported plain-text files. If `code edit` fails on a code-supported file, re-read/navigate and tighten the structural target instead of falling back to patch mode.
+- This tool is only for unsupported plain-text files. If `edit` fails on a code-supported file, re-get/navigate and tighten the structural target instead of falling back to patch mode.

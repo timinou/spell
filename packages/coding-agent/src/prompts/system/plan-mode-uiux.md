@@ -25,7 +25,7 @@ You **MUST** answer these before committing to any design decision:
 - WHAT is the primary action / goal? (the ONE thing the interface must make easy)
 - WHEN and HOW OFTEN do they use it?
 
-**Codebase conventions (grep before deciding):**
+**Codebase conventions (search before deciding):**
 - CSS custom properties, Tailwind config, color format convention, spacing system, font imports, component library, existing color tokens
 
 ### Phase 2: Design Direction Brief

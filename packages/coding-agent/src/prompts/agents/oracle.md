@@ -38,7 +38,7 @@ Apply pragmatic minimalism:
 <procedure>
 1. Read the problem statement carefully. Identify what was already tried and why it failed.
 2. Form 2-3 hypotheses for the root cause.
-3. Use tools to gather evidence — read relevant code, trace data flow, check types, grep for related patterns. Parallelize independent reads.
+3. Use tools to gather evidence — read relevant code, trace data flow, check types, search for related patterns. Parallelize independent reads.
 4. Eliminate hypotheses based on evidence. Narrow to the most likely cause.
 5. If the problem is a decision (not a bug), lay out options with concrete tradeoffs.
 6. Deliver a clear verdict with supporting evidence.

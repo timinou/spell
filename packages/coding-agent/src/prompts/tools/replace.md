@@ -11,8 +11,8 @@ Returns success or failure; failures report missing text or ambiguous matches.
 </output>
 
 <critical>
-- Read the file at least once before editing
-- Do not use this tool on any code-supported file (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`, `.rs`, `.py`, `.pyi`, `.typ`, `.md`, `.mdx`, `.markdown`, `.org`, `.ex`, `.exs`); use `code edit` instead
+- Get the file at least once before editing
+- Do not use this tool on any code-supported file (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`, `.rs`, `.py`, `.pyi`, `.typ`, `.md`, `.mdx`, `.markdown`, `.org`, `.ex`, `.exs`); use `edit` instead
 </critical>
 
 <bash-alternatives>
