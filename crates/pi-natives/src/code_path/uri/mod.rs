@@ -1,15 +1,12 @@
 //! URI scheme registry and handlers for internal Spell URLs.
 //!
-//! artifact:// remains in Rust; all other schemes are owned by the JS
-//! InternalUrlRouter (FEAT-721).
+//! All schemes are owned by the JS InternalUrlRouter (FEAT-721).
+//! The Rust kernel registry is kept empty; URI locators that reach the
+//! kernel are by construction unknown schemes.
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use pi_code_path::resolver::SchemeHandler;
-
-mod artifact;
-
-pub use artifact::*;
 
 /// Registry that maps scheme names to their handlers.
 #[derive(Default)]
@@ -34,26 +31,13 @@ impl SchemeRegistry {
 	}
 }
 
-/// Build a registry with only the artifact handler wired.
-pub fn default_registry(artifact_root: PathBuf) -> SchemeRegistry {
-	let mut reg = SchemeRegistry::new();
-	reg.register(Arc::new(ArtifactHandler { root: artifact_root }));
-	reg
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
 
 	#[test]
 	fn unknown_scheme_returns_none() {
-		let reg = default_registry(PathBuf::from("/tmp"));
+		let reg = SchemeRegistry::new();
 		assert!(reg.lookup("no-such-scheme").is_none());
-	}
-
-	#[test]
-	fn only_artifact_scheme_registered() {
-		let reg = default_registry(PathBuf::from("/tmp"));
-		assert!(reg.lookup("artifact").is_some(), "scheme artifact should be registered");
 	}
 }

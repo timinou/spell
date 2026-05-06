@@ -325,7 +325,7 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		const { uriBase, codepathSuffix } = splitCodepath(target);
 		if (!router || !router.canHandle(uriBase)) return null;
 
-		let resource: { url?: string; content: string; sourcePath?: string };
+		let resource: { url?: string; content: string; sourcePath?: string; notes?: readonly string[] };
 		try {
 			resource = await router.resolve(uriBase);
 		} catch (error) {
@@ -339,6 +339,7 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		// Filesystem-backed resource + codepath qualifier → kernel handles the
 		// projection on the real path. Virtual sourcePaths ("pi://...", embedded
 		// docs, in-memory state) skip this branch.
+		const notePrefix = resource.notes?.length ? `${resource.notes.map(n => `[note] ${n}`).join("\n")}\n` : "";
 		const sourcePath = resource.sourcePath;
 		if (codepathSuffix && sourcePath && !sourcePath.includes("://")) {
 			const chunks = await executeCodePath({
@@ -353,7 +354,7 @@ export class GetTool implements AgentTool<typeof getSchema> {
 				format: (params.format as CodePathFormatMode) ?? "node-list",
 			});
 			return toolResult<GetToolResultDetails>({ format: params.format, target })
-				.text(rendered.text?.trim() || `[§empty] ${target}`)
+				.text(notePrefix + (rendered.text?.trim() || `[§empty] ${target}`))
 				.sourceInternal(resource.url ?? target)
 				.done();
 		}
@@ -365,7 +366,7 @@ export class GetTool implements AgentTool<typeof getSchema> {
 			text = `${text || ""}\n[note] codepath qualifier '${codepathSuffix}' ignored (resource '${scheme}://' is not filesystem-backed)`;
 		}
 		return toolResult<GetToolResultDetails>({ format: params.format, target })
-			.text(text || `[§empty] ${target}`)
+			.text(notePrefix + (text || `[§empty] ${target}`))
 			.sourceInternal(resource.url ?? target)
 			.done();
 	}
