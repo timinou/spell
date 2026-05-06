@@ -1,0 +1,68 @@
+#+TITLE: CodePath parser: bare-path line shorthand :A-B / :N / :-N / :A- / :A+N
+#+STATE: ITEM
+#+SESSION_ID: 14d6607fc1369b3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T07-59-37-220Z_14d6607fc1369b3d.jsonl]]
+#+CUSTOM_ID: FEAT-715-codepath-parser-bare-path-line-shorthand
+#+EFFORT: 3h
+#+LAYER: pi-code-path
+#+PARENT: PLAN-303-codepath-line-range-ergonomics-shorthand
+#+PRIORITY: #A
+
+* Initial Message
+
+ok so your previous analysis is great *but* I would like to make CodePath more ergonomic and able to refer to all the empirical evidence of the bash tools directly in code path, without having to have a battery of arguments to the get tool. let's brainstorm, you can push back if you deem it worthy
+
+* Initial Message
+
+Add file:line shorthand to CodePath grammar so `foo.ts:80-130` desugars to the line-slice form natively. Replaces ~580 `sed -n` / `awk NR>=A&&NR<=B` bash idioms across recent sessions.
+
+* Scope
+- File: =crates/pi-code-path/src/parser.rs= (1164 LoC) — add shorthand recognition before existing path parsing branch
+- File: =crates/pi-code-path/src/ast.rs= — leverage existing `Predicate::Range { start: Option<isize>, end: Option<isize> }`; no new AST variants
+- Add tests in same file, plus =crates/pi-code-path/tests/= integration test if pattern exists
+
+* Grammar (final)
+
+| Input              | Desugars to (semantic)                 | Range fields              |
+|--------------------+----------------------------------------+---------------------------|
+| =foo.ts=           | full file                              | n/a                       |
+| =foo.ts:50=        | first 50 lines (head)                  | start=None, end=Some(50)  |
+| =foo.ts:-50=       | last 50 lines (tail)                   | start=Some(-50), end=None |
+| =foo.ts:80-130=    | lines 80..=130                         | start=80, end=130         |
+| =foo.ts:80-=       | line 80 to EOF                         | start=80, end=None        |
+| =foo.ts:80+50=     | 50 lines starting at line 80 (=80..129)| start=80, end=129         |
+| =foo.ts:80-130#raw=| same range, with #raw qualifier        | start=80, end=130         |
+
+Internally, the shorthand desugars to the same internal representation as `foo.ts::§line[A..B]` (after FEAT-line-range-slice-shape lands and makes the range form return a sliced body).
+
+* Disambiguation rules
+- Only triggers when the path-prefix preceding `:` does NOT contain `://`
+- Only triggers when the segment after `:` matches one of the regexes: =^-?\d+$=, =^\d+-\d*$=, =^-\d+$=, =^\d+\+\d+$=
+- Bare digits without `-`/`+` => head N (matches `:50`)
+- Symbol form (=::Symbol=) takes precedence (double-colon)
+- Qualifiers (`#raw`, `#stat`, etc.) apply to the result and remain compatible
+
+* Tests
+- W1a: Each row of grammar table parses correctly
+- W1b: =foo.ts::Bar.method= still parses as symbol (no shorthand bleed)
+- W1c: =http://x.com:80/path= keeps URL form (URI sniff wins)
+- W1d: =foo.ts:abc= falls through to normal parser (not a shorthand match)
+- W1e: =foo.ts:50#raw= composes with qualifier
+- W1f: =foo.ts:0-10= and =foo.ts:0= rejected with clear diagnostic ("line numbers are 1-indexed")
+- W1g: =foo.ts:200-100= rejected (start > end)
+- W1h: end-to-end through =execute_code_path_inner= returning the right slice text
+
+* Edge cases
+- Trailing newline preserved by sliced body
+- Negative shorthand (`:-50`) means "last 50 lines" — start=-50, end=None signals tail-from-end
+- Empty file ⇒ slice returns empty text + diagnostic, not pagination-overshoot
+- Invalid bounds (`:0-`, `:1-1000000` against 50-line file) ⇒ clamp + warning, not error
+
+* Acceptance
+- =cargo test -p pi-code-path= passes
+- New shorthand round-trips: parse(serialize(parse(s))) == parse(s) for all valid forms
+- Existing parser tests untouched and passing
+- No new warnings under =cargo clippy=
+
+* Verification
+=cargo test -p pi-code-path parser=

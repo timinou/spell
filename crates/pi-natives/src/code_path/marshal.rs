@@ -96,6 +96,8 @@ pub fn diagnostic_variant_to_string(v: &DiagnosticVariant) -> String {
 		DiagnosticVariant::UnsupportedActionForResolver => {
 			"unsupported_action_for_resolver".to_string()
 		},
+		DiagnosticVariant::RangeBoundsInverted => "range_bounds_inverted".to_string(),
+		DiagnosticVariant::RangeClamped => "range_clamped".to_string(),
 	}
 }
 

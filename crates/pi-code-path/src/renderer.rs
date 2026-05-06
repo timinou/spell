@@ -83,10 +83,60 @@ fn render_step<N: NameLexer>(out: &mut String, step: &Step, name_lexer: &N) {
 		let _ = write!(out, "{axis}");
 	}
 	render_head(out, &step.head, name_lexer);
+	// FEAT-718: SymbolSlice predicates serialise as `:suffix`, not `[..]`.
 	for predicate in &step.predicates {
+		if matches!(predicate, Predicate::SymbolSlice { .. }) {
+			continue;
+		}
 		out.push('[');
 		render_predicate(out, predicate, name_lexer);
 		out.push(']');
+	}
+	for predicate in &step.predicates {
+		if let Predicate::SymbolSlice { start, end, relative } = predicate {
+			out.push(':');
+			render_symbol_slice(out, *start, *end, *relative);
+		}
+	}
+}
+
+fn render_symbol_slice(out: &mut String, start: Option<i64>, end: Option<i64>, relative: bool) {
+	if !relative {
+		match (start, end) {
+			(Some(a), Some(b)) => {
+				let _ = write!(out, "{a}-{b}");
+			},
+			(Some(a), None) => {
+				let _ = write!(out, "{a}-");
+			},
+			(None, Some(b)) => {
+				let _ = write!(out, "-{b}");
+			},
+			(None, None) => {},
+		}
+		return;
+	}
+	// Symmetric ±N when start = -N and end = +N.
+	if let (Some(s), Some(e)) = (start, end) {
+		if s == -e && s < 0 {
+			let _ = write!(out, "±{}", -s);
+			return;
+		}
+	}
+	if let Some(s) = start {
+		if s >= 0 {
+			let _ = write!(out, "+{s}");
+		} else {
+			let _ = write!(out, "{s}");
+		}
+	}
+	out.push_str("..");
+	if let Some(e) = end {
+		if e >= 0 {
+			let _ = write!(out, "+{e}");
+		} else {
+			let _ = write!(out, "{e}");
+		}
 	}
 }
 
@@ -174,6 +224,9 @@ fn render_predicate<N: NameLexer>(out: &mut String, p: &Predicate, name_lexer: &
 			} else {
 				let _ = write!(out, "count{}{}", render_compare_op(op), value);
 			}
+		},
+		Predicate::SymbolSlice { start, end, relative } => {
+			render_symbol_slice(out, *start, *end, *relative);
 		},
 	}
 }

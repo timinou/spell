@@ -1,0 +1,71 @@
+#+TITLE: CodePath text dialect: §line[A..B] returns single sliced body, not per-line nodes
+#+STATE: ITEM
+#+SESSION_ID: 14d6607fc1369b3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T07-59-37-220Z_14d6607fc1369b3d.jsonl]]
+#+CUSTOM_ID: FEAT-716-codepath-text-dialect-linea-b-returns-si
+#+EFFORT: 2h
+#+LAYER: pi-code-path
+#+PARENT: PLAN-303-codepath-line-range-ergonomics-shorthand
+#+PRIORITY: #A
+
+* Initial Message
+
+ok so your previous analysis is great *but* I would like to make CodePath more ergonomic and able to refer to all the empirical evidence of the bash tools directly in code path, without having to have a battery of arguments to the get tool. let's brainstorm, you can push back if you deem it worthy
+
+* Initial Message
+
+Today =§line[A..B]= emits one node per source line. A 50-line range becomes 200 output lines (each wrapped with =LOC#ID  [§line]
+  body
+
+=). Agents avoid it and reach for `awk`. Reframe by output shape:
+
+| Form                 | Semantics                       | Output                                  |
+|----------------------+---------------------------------+-----------------------------------------|
+| =§line[N]=           | one specific line (anchor lookup)| one node, with LINE#ID anchor          |
+| =§line[A..B]=        | range = SLICE                   | ONE node, content = lines A..B as text  |
+| =§line[..N]=         | head N                          | ONE node, lines 1..N                    |
+| =§line[N..]=         | from N to EOF                   | ONE node                                |
+| =§line[-N..]=        | tail N (negative anchor)        | ONE node                                |
+| =§line[text~="PAT"]= | grep — per-line matches         | per-line nodes (UNCHANGED)              |
+| =§line[match="LIT"]= | literal grep                    | per-line nodes (UNCHANGED)              |
+
+Range form == slice == one body. Predicate form == grep == per-line. The grammar already separates these (=Predicate::Range= vs =Predicate::TextMatch=); only the executor conflates them today.
+
+* Scope
+- File: =crates/pi-code-path/src/dialects/text/axes.rs= (457 LoC) — line axis emission
+- File: =crates/pi-code-path/src/dialects/text/line_index.rs= (111 LoC) — supports range queries
+- May touch =crates/pi-code-path/src/dialects/text/mod.rs= for resolver wiring
+- Tests at the bottom of the affected files
+
+* Implementation sketch
+1. Detect when the §line head carries a single =Predicate::Range= (no =TextMatch= / =Compare= / =Flag=)
+2. In that branch, build ONE =§slice= (or reuse =§line= kind with a marker on metadata) node whose content is the joined sliced text
+3. Negative anchor support: =start = Some(-30)= means "30 lines from EOF"; =end = Some(-1)= means "EOF minus 1"; bounds resolve against =line_index.line_count()=
+4. Predicate paths (TextMatch, etc.) remain untouched — keep per-line emission
+5. =§line[N]= (single integer, parsed as `Predicate::Ordinal` or similar) keeps single-line LINE#ID anchor — that's the explicit anchor-resolution case for =edit=
+
+* Tests
+- W2a: =a.txt::§line[2..3]= returns 1 node, content = lines 2..3 as one body (UPDATE existing test in =napi.rs:880=)
+- W2b: =a.txt::§line[..5]= returns 1 node, lines 1..5
+- W2c: =a.txt::§line[3..]= returns 1 node, lines 3..EOF
+- W2d: =a.txt::§line[-2..]= returns 1 node, last 2 lines
+- W2e: =a.txt::§line[10]= returns 1 node, that line, with =LINE#ID= anchor (preserved)
+- W2f: =a.txt::§line[text~="ba."]= returns per-line nodes (UNCHANGED — verify existing test in =napi.rs:896= still passes)
+- W2g: Range bounds beyond EOF clamp + diagnostic (not error)
+
+* Edge cases
+- Range against 0-line file ⇒ empty body, no diagnostic
+- =§line[10..5]= (start > end) ⇒ explicit diagnostic, not silent empty
+- Trailing newline preserved
+- Composition with =#raw= ⇒ raw text emission, no per-node wrapper
+- Composition with shorthand from FEAT-715 ⇒ same code path (shorthand desugars to range form)
+
+* Acceptance
+- =cargo test -p pi-code-path= passes
+- Existing per-line tests for =§line[text~=..]= still emit per-line shape
+- New range tests confirm single-body shape
+- Output byte-count for a 50-line range ≤ source bytes + 50 bytes (small header), not 4× source
+
+* Verification
+=cargo test -p pi-code-path text=
+=cargo test -p pi-natives line_slice=

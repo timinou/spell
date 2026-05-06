@@ -1,0 +1,43 @@
+#+TITLE: CodePath #stat qualifier: include lineCount field
+#+STATE: DONE
+#+SESSION_ID: 14d6607fc1369b3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T07-59-37-220Z_14d6607fc1369b3d.jsonl]]
+#+CUSTOM_ID: FEAT-717-codepath-stat-qualifier-include-linecoun
+#+EFFORT: 0.5h
+#+LAYER: pi-code-path
+#+PARENT: PLAN-303-codepath-line-range-ergonomics-shorthand
+#+PRIORITY: #B
+
+* Initial Message
+
+ok so your previous analysis is great *but* I would like to make CodePath more ergonomic and able to refer to all the empirical evidence of the bash tools directly in code path, without having to have a battery of arguments to the get tool. let's brainstorm, you can push back if you deem it worthy
+
+* Initial Message
+
+97 =wc -l FILE= bash calls in recent sessions. Add =lineCount= to =#stat= output so this idiom becomes =get foo.ts#stat=.
+
+* Scope
+- File: =crates/pi-code-path/src/dialects/text/qualifiers.rs= (582 LoC) — extend =#stat= renderer
+- Possibly =crates/pi-code-path/src/dialects/fs/qualifiers.rs= if =#stat= for fs has its own path
+- Tests inline
+
+* Implementation
+- =#stat= already emits size, mtime; reuse the existing =line_index= or =memchr::memchr_iter(b'
+', ...)= to count newlines (cheap, no full UTF-8 walk)
+- Add =lineCount: u64= to the JSON payload
+- For binary files: omit =lineCount= (or set to null) — don't lie
+
+* Tests
+- W6a: =foo.ts#stat= JSON contains =lineCount= matching =wc -l= for a known file
+- W6b: =/tmp/empty#stat= ⇒ =lineCount: 0=
+- W6c: file ending without newline ⇒ count is the number of lines (include the unterminated final line)
+- W6d: PNG / binary file ⇒ no =lineCount= or =null=
+
+* Acceptance
+- =cargo test -p pi-code-path qualifier=
+- Manual: =get { target: "Cargo.toml#stat" }= returns lineCount
+
+* Verification
+=cargo test -p pi-code-path stat=
+
+NOTE [2026-05-06]: Landed in crates/pi-code-path/src/dialects/fs/qualifiers.rs (function line_count_for_stat). 4 new tests + 305 existing tests passing.

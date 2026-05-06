@@ -1,0 +1,89 @@
+#+TITLE: CodePath line-range ergonomics: shorthand, §line semantics, render shape
+#+STATE: DONE
+#+SESSION_ID: 14d6607fc1369b3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T07-59-37-220Z_14d6607fc1369b3d.jsonl]]
+#+CUSTOM_ID: PLAN-303-codepath-line-range-ergonomics-shorthand
+#+EFFORT: 12h
+#+LAYER: pi-code-path coding-agent
+#+PRIORITY: #A
+
+* Initial Message
+
+ok so your previous analysis is great *but* I would like to make CodePath more ergonomic and able to refer to all the empirical evidence of the bash tools directly in code path, without having to have a battery of arguments to the get tool. let's brainstorm, you can push back if you deem it worthy
+
+* Initial Message
+
+Empirical analysis of recent agent sessions across 3 repos / 8 sessions / 3115 bash calls shows ~580 line-range file reads expressed as `sed -n 'A,Bp' FILE` (472), `awk 'NR>=A && NR<=B' FILE` (92), `head -n` / `tail -n`, `cat | head` (37). Plus 103 `grep -n` and 97 `wc -l`. These should all flow through CodePath / `get`.
+
+Three independent faults blocked native usage:
+1. `§line[A..B]` returns one node per source line ⇒ ~4× output expansion. Agents try once, give up.
+2. `offset` on the `get` tool is interpreted at *node* count by the kernel; combined with `head`/`tail` it returns `§no-results pagination-overshoot` on bare paths.
+3. No bash-style file:line shorthand; no native shape that matches `grep -n`; `#stat` lacks lineCount so `wc -l` survives.
+
+Strategy: keep CodePath as "views over a path", do not turn it into a DSL. Add the missing line-view affordances at the grammar layer; thin out `get` to just execute paths.
+
+* Goals
+- `get { target: "foo.ts:80-130" }` ⇒ lines 80..130 as ONE sliced text body
+- `get { target: "foo.ts:50" }` ⇒ first 50 lines (head)
+- `get { target: "foo.ts:-50" }` ⇒ last 50 lines (tail)
+- `get { target: "foo.ts:80-" }` ⇒ lines 80..EOF
+- `get { target: "foo.ts:80+50" }` ⇒ 50 lines starting at 80
+- `get { target: "foo.ts::Bar.method:80-90" }` ⇒ symbol with absolute clamp (validated against symbol span)
+- `get { target: "foo.ts::Bar.method:±5" }` ⇒ symbol + 5 lines before/after (relative)
+- `get { target: "foo.ts::Bar.method:-5..+10" }` ⇒ 5 lines before symbol-start to 10 after symbol-end
+- `get { target: "foo.ts::§line[text~=PAT]" }` ⇒ rendered as `LINE: content` per match (grep shape), not `LOC#ID  [§line]
+  body
+
+`
+- `get { target: "foo.ts#stat" }` ⇒ payload includes `lineCount`
+- `get` schema drops `head` / `tail` / `offset` / `limit` (limit migrates to internal kernel option only)
+
+* Non-goals
+- No mutating verbs in CodePath (sort/uniq/reverse stay in bash on `get`'s output)
+- No multi-file reduction inside CodePath grammar (already handled by glob + code_search)
+- No new sigil (use existing `§line[]` and the `:A-B` bare-path branch)
+
+* Existing Patterns
+- Parser: =crates/pi-code-path/src/parser.rs= (1164 LoC). `Predicate::Range { start: Option<isize>, end: Option<isize> }` already supports negative bounds in the AST (=crates/pi-code-path/src/ast.rs= line ~161). Need parser branch for `:A-B` shorthand and resolution semantics for negative anchors.
+- Text dialect: =crates/pi-code-path/src/dialects/text/= — `axes.rs` produces `§line` nodes; `qualifiers.rs` handles `#raw`/`#stat`; `regex_match.rs` handles `text~=` predicate; `line_index.rs` is the byte-line index.
+- `get` tool: =packages/coding-agent/src/tools/get.ts= (388 LoC) with BUG-347 line-slice helper for `head`/`tail` (will be removed). =packages/coding-agent/src/tools/codepath-types.ts= line 83-118 holds the schema being trimmed.
+- Prompt: =packages/coding-agent/src/prompts/tools/get.md= needs full rewrite of slicing examples + `<critical>` block.
+
+* Tests / Workflows
+- W1: Bare-path shorthand — `:N`, `:-N`, `:A-B`, `:A-`, `:A+N` all desugar correctly
+- W2: `§line[A..B]` range form returns a single sliced text body (not per-line nodes) when both bounds are integer; `§line[N]` keeps single-line LINE#ID anchor; `§line[text~=...]` keeps per-line emission
+- W3: Symbol + absolute slice — `Bar.method:80-90` resolves only if span overlaps; out-of-range returns explicit diagnostic
+- W4: Symbol + relative slice — `Bar.method:±5`, `Bar.method:-5..+10` extend the symbol span by signed offsets, clamped to file bounds
+- W5: Grep render shape — `§line[text~=PAT]` produces `42:  matched line` per match; no LOC#ID anchor block
+- W6: `#stat` includes `lineCount`
+- W7: `get` schema rejects `head`/`tail`/`offset`/`limit` with a hint pointing at the new shorthand
+- W8: Prompt examples cover all forms; `<critical>` lists `cat`/`grep`/`find`/`rg`/`ls`/`sed`/`awk`/`head`/`tail`/`wc` as forbidden when `get` works
+
+* Execution Manifest
+
+Wave 1 — Foundation (parallel):
+- [[id:FEAT-line-range-shorthand-parser]] Parser: `:A-B` desugar (Rust)
+- [[id:FEAT-line-range-slice-shape]] Text dialect: §line[A..B] returns sliced body (Rust)
+- [[id:FEAT-stat-line-count]] qualifiers.rs: #stat carries lineCount (Rust)
+
+Wave 2 — Composition + render (parallel, after Wave 1):
+- [[id:FEAT-symbol-slice-composition]] Code resolver: symbol + absolute/relative slice (Rust)
+- [[id:FEAT-grep-render-shape]] Renderer: predicate-match render = `LINE: content` (Rust + TS marshalling if needed)
+
+Wave 3 — Surface cleanup:
+- [[id:FEAT-get-schema-trim]] `get` schema: drop head/tail/offset/limit, prompt rewrite (TS)
+
+* Acceptance
+- All workflows W1–W8 covered by tests
+- Repo-wide `bun test` and `cargo test -p pi-code-path` green
+- `bun run --parallel check:ts check:rs` green
+- `packages/coding-agent/test/get.test.ts` exercises every shorthand form end-to-end through `executeCodePath`
+- Prompt rewrite committed alongside FEAT-get-schema-trim
+
+* Risks Captured
+- `:` collision with `URL:port`, Windows `C:` ⇒ shorthand only desugars when input lacks `://` and isn't a URI scheme. Branch sequence: URI sniff → shorthand → existing path parsing.
+- `:N` reads as head 50 (NOT line N). To address single-line need, agents use `::§line[N]` for the LINE#ID anchor form.
+- Symbol+slice with non-overlapping absolute range ⇒ explicit diagnostic, not silent empty. Must test.
+- Display truncation in TUI is a separate concern; not included unless it visibly breaks the new shorthand presentation.
+
+NOTE [2026-05-06]: All 6 FEATs (715-720) landed and verified. Final state: kernel grammar adds bare-path shorthand (:N, :-N, :A-B, :A-, :A+N), §line[A..B] returns single sliced body, #stat includes lineCount, symbol+slice composition (absolute clamped + signed relative) with symbol-slice-disjoint diagnostic, grep render shape uses LINE: content, get tool drops head/tail/offset/limit. Verified: pi-code-path 336/336, pi-natives 226/226 code_path tests, get.test.ts 60/60, tsgo clean, end-to-end smoke confirms all idioms.

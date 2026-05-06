@@ -212,6 +212,19 @@ fn apply_step(content: &[u8], step: &Step, path: &std::path::Path) -> Vec<NodeRe
 	for n in &mut nodes {
 		n.locator = format!("{}::{}", path.to_string_lossy(), n.locator);
 	}
+	// FEAT-719: mark predicate-matched §line nodes so the renderer can switch to grep -n shape.
+	// Pure ordinal/range queries leave shape unset; FEAT-716 may add `shape=slice` for sliced bodies.
+	if matches!(&step.head, Head::NodeKind(k) if k == "line") {
+		let is_match = step.predicates.iter().any(|p| {
+			matches!(p, Predicate::TextMatch(_) | Predicate::LiteralMatch(_) | Predicate::Compare { .. })
+		});
+		if is_match {
+			for n in &mut nodes {
+				n.metadata
+					.insert("shape".to_string(), serde_json::Value::String("match".to_string()));
+			}
+		}
+	}
 	nodes
 }
 
@@ -357,9 +370,13 @@ mod tests {
 		let resolver = make_resolver(root.clone());
 		let cp = parse_code_path("a.txt::§line[2..3]", &DummyLexer).unwrap();
 		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
-		assert_eq!(nodes.len(), 2);
-		assert!(nodes[0].locator.contains("<line 2#"));
-		assert!(nodes[1].locator.contains("<line 3#"));
+		assert_eq!(nodes.len(), 1);
+		assert!(nodes[0].locator.ends_with("<line 2..3>"), "{}", nodes[0].locator);
+		let body = match nodes[0].content.as_ref().unwrap() {
+			crate::types::Content::Text { value } => value.as_str(),
+			_ => panic!("slice node must be Text"),
+		};
+		assert_eq!(body, "l2\nl3\n");
 	}
 
 	#[test]
@@ -524,5 +541,64 @@ mod tests {
 		cancel.cancel();
 		let nodes = resolver.resolve(&cp, &cancel).unwrap();
 		assert!(nodes.len() < 10);
+	}
+
+	#[test]
+	fn render_shape_match_metadata_set_for_text_match() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), b"alpha\nbeta useState\ngamma useState\ndelta\n").unwrap();
+
+		let resolver = make_resolver(root.clone());
+		let cp = parse_code_path("a.txt::\u{a7}line[text~=\"useState\"]", &DummyLexer).unwrap();
+		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
+		assert_eq!(nodes.len(), 2);
+		for n in &nodes {
+			assert_eq!(
+				n.metadata.get("shape"),
+				Some(&serde_json::Value::String("match".to_string())),
+				"shape=match should be set on text-match \u{a7}line nodes",
+			);
+		}
+	}
+
+	#[test]
+	fn render_shape_match_metadata_set_for_literal_match() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), b"alpha\nfoo TODO bar\nbaz\n").unwrap();
+
+		let resolver = make_resolver(root.clone());
+		let cp = parse_code_path("a.txt::\u{a7}line[match=\"TODO\"]", &DummyLexer).unwrap();
+		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
+		assert_eq!(nodes.len(), 1);
+		assert_eq!(
+			nodes[0].metadata.get("shape"),
+			Some(&serde_json::Value::String("match".to_string())),
+		);
+	}
+
+	#[test]
+	fn render_shape_absent_for_ordinal_and_range() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		std::fs::write(root.join("a.txt"), b"l1\nl2\nl3\nl4\n").unwrap();
+
+		let resolver = make_resolver(root.clone());
+		let cp_ord = parse_code_path("a.txt::\u{a7}line[2]", &DummyLexer).unwrap();
+		let ordinal_nodes = resolver.resolve(&cp_ord, &CancellationToken::new()).unwrap();
+		for n in &ordinal_nodes {
+			assert!(n.metadata.get("shape").is_none(), "ordinal must not carry shape metadata");
+		}
+
+		let cp_range = parse_code_path("a.txt::\u{a7}line[2..3]", &DummyLexer).unwrap();
+		let range_nodes = resolver.resolve(&cp_range, &CancellationToken::new()).unwrap();
+		for n in &range_nodes {
+			assert!(
+				n.metadata.get("shape").is_none()
+					|| n.metadata.get("shape") == Some(&serde_json::Value::String("slice".to_string())),
+				"range must not carry shape=match (FEAT-716 may set shape=slice)"
+			);
+		}
 	}
 }

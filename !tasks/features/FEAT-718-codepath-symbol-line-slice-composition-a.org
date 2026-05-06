@@ -1,0 +1,71 @@
+#+TITLE: CodePath: symbol + line-slice composition (absolute clamped + signed relative)
+#+STATE: DONE
+#+SESSION_ID: 14d6607fc1369b3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T07-59-37-220Z_14d6607fc1369b3d.jsonl]]
+#+CUSTOM_ID: FEAT-718-codepath-symbol-line-slice-composition-a
+#+EFFORT: 3h
+#+LAYER: pi-code-path
+#+PARENT: PLAN-303-codepath-line-range-ergonomics-shorthand
+#+PRIORITY: #A
+
+* Initial Message
+
+ok so your previous analysis is great *but* I would like to make CodePath more ergonomic and able to refer to all the empirical evidence of the bash tools directly in code path, without having to have a battery of arguments to the get tool. let's brainstorm, you can push back if you deem it worthy
+
+* Initial Message
+
+Allow line-slice on a symbol target. Two semantics, sign-disambiguated:
+
+| Form                              | Semantics                                              |
+|-----------------------------------+--------------------------------------------------------|
+| =foo.ts::Bar.method=              | symbol body (current)                                  |
+| =foo.ts::Bar.method:80-90=        | absolute lines 80..90 — must intersect symbol span     |
+| =foo.ts::Bar.method:5-15=         | absolute lines 5..15 — error if symbol starts past 15  |
+| =foo.ts::Bar.method:±5=           | symbol span EXTENDED by 5 lines on each side           |
+| =foo.ts::Bar.method:-5..+10=      | (start - 5) to (end + 10), inclusive (relative)        |
+| =foo.ts::Bar.method:0..+5=        | symbol-end to symbol-end+5 (trailing context only)     |
+| =foo.ts::Bar.method:-3..0=        | symbol-start-3 to symbol-start (leading context only)  |
+| =foo.ts::Bar.method:+5..+10=      | symbol-end+5 to symbol-end+10 (after-block context)    |
+
+Disambiguation: bare digits ⇒ absolute file lines. Signed digits (=+= or =-=) ⇒ relative to symbol boundaries. =±N= ⇒ shorthand for =-N..+N=.
+
+* Scope
+- File: =crates/pi-code-path/src/parser.rs= — extend symbol-step parser to accept trailing =:slice= (reuse same lexer as bare-path shorthand from FEAT-715)
+- File: =crates/pi-code-path/src/code_resolver/= — symbol resolver applies the slice after symbol span is resolved
+- File: =crates/pi-code-path/src/dialects/text/= — share the slice application helper
+- AST: extend =Step= or attach a =SymbolSlice= predicate; pick whichever keeps the AST minimal
+- Tests: =crates/pi-code-path/tests/= or inline
+
+* Semantics
+- Absolute: =Bar.method:A-B= where A,B unsigned. Result = lines max(A, sym.start)..min(B, sym.end). If empty intersection ⇒ explicit diagnostic =symbol-slice-disjoint=
+- Relative: =Bar.method:-X..+Y= = lines (sym.start - X)..(sym.end + Y), clamped to [1, file.lineCount]
+- =±N= = =-N..+N=
+- Output: ONE sliced text body (same shape as FEAT-716 range form)
+
+* Tests
+- W3a: =foo.ts::method:80-90= where method spans 70..120 ⇒ lines 80..90 of file
+- W3b: =foo.ts::method:5-15= where method spans 70..120 ⇒ diagnostic =symbol-slice-disjoint=
+- W3c: =foo.ts::method:200-300= where file is 150 lines ⇒ diagnostic
+- W4a: =foo.ts::method:±5= ⇒ lines (start-5)..(end+5)
+- W4b: =foo.ts::method:-5..+10= ⇒ (start-5)..(end+10)
+- W4c: =foo.ts::method:0..+5= ⇒ (end)..(end+5)
+- W4d: =foo.ts::method:-3..0= ⇒ (start-3)..(start)
+- W4e: Relative bounds clamp to file bounds (negative resolved-line ⇒ 1; past EOF ⇒ EOF)
+- W4f: Compose with qualifier — =foo.ts::method:±5#raw= emits raw text
+
+* Edge cases
+- Symbol resolves to multiple matches (overload) ⇒ apply slice to each, return one node per match
+- Symbol not found ⇒ existing symbol-not-found diagnostic, slice not attempted
+- Inline arrow / nested symbol whose span is single-line ⇒ relative slice still works
+- Comments + leading/trailing whitespace inside symbol body preserved
+
+* Acceptance
+- All W3*/W4* tests green
+- Diagnostic strings stable and tested
+- Round-trip: parse(serialize(parse(s))) preserves slice
+- =cargo test -p pi-code-path= and =cargo test -p pi-natives= pass
+
+* Verification
+=cargo test -p pi-code-path symbol_slice=
+
+NOTE [2026-05-06]: Resolver implemented in walker.rs (apply_symbol_slice + line_count_of + line_byte_range helpers). Tests W3a/W3b/W4a/W4b/W4e + 2 helper tests pass (7 new). Round-trip serialization via render_symbol_slice in renderer.rs. Predicate passthrough in pi-natives predicates.rs. End-to-end smoke verified: absolute clamp, disjoint diagnostic, ±N, signed range, end-clamp all working through GetTool. Pi-code-path 336/336, pi-natives code_path 226/226, get.test.ts 60/60, tsgo clean.

@@ -86,10 +86,6 @@ export const getSchema = Type.Object(
 			description:
 				'CodePath target string (path, glob, symbol, URI). Multi-word symbols may be backtick-quoted, e.g. foo.ts::`export * from "./json"`',
 		}),
-		limit: Type.Optional(Type.Integer({ description: "Max results or lines" })),
-		head: Type.Optional(Type.Integer({ description: "Max lines from head" })),
-		tail: Type.Optional(Type.Integer({ description: "Max lines from tail" })),
-		offset: Type.Optional(Type.Integer({ description: "Start line 1-indexed" })),
 		format: Type.Optional(
 			Type.String({
 				description: "Output format: node-list | locations | content-only | tree | simple-list | fs-listing",
