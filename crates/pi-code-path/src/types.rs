@@ -78,11 +78,7 @@ pub enum DiagnosticVariant {
 	/// Locator not found.
 	FileNotFound,
 	ArtifactNotFound,
-	MemoryPathNotFound,
-	SkillNotFound,
-	AgentNotFound,
-	JobNotFound,
-	PiPathNotFound,
+
 	/// Unknown URI scheme, with hint of available schemes.
 	UnknownLocatorScheme {
 		available: Vec<String>,
