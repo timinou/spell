@@ -1,10 +1,10 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { executeCodeBuffer } from "@oh-my-pi/pi-natives";
 import { isCodeToolSupportedPath } from "./code-supported-files";
 
-export type WriteGuardCode = "WRITE_SHRINK_BLOCKED" | "WRITE_PARSE_REGRESSION";
+export type WriteGuardCode = "WRITE_PARSE_REGRESSION";
 
 export interface WriteGuardResult {
 	ok: true;
@@ -16,12 +16,6 @@ export interface WriteGuardBlocked {
 	detail: string;
 }
 
-/** Minimum file size (bytes) before the shrink guard engages. Matches FEAT-585. */
-const SHRINK_GUARD_MIN_BYTES = 256;
-/** Floor for the allowed new size when the guard is active. Matches FEAT-585. */
-const SHRINK_GUARD_FLOOR_BYTES = 64;
-/** Ratio floor: the new size must not drop below this fraction of the old size. */
-const SHRINK_GUARD_RATIO = 0.1;
 const PARSE_PROBE_SESSION_ID = "write-guard-parse-probe";
 
 function extractEditFailure(output: unknown): boolean {
@@ -54,65 +48,24 @@ function probesAsStructurallyValid(sourcePath: string, initialContent: string, n
 }
 
 /**
- * Gate catastrophic overwrites of existing code-supported source files.
- *
- * Prior implementation probed the managed buffer via
- * `executeCodeBuffer({command:"status"})`. That command does not exist in
- * pi-natives: the native responds with `{error:true, output:"Unknown command:
- * status"}`, which the guard interpreted as "file is not tracked" and skipped
- * every check. This made the guard a silent no-op — the exact regression path
- * that let a subagent replace todo-write.ts (58_563 B parseable TS) with a
- * 1_691 B parseable stub in session 2026-04-19T08-55-28-607Z_14c08a4197c6a60b.
- *
- * The implementation here uses `fs.statSync` for existence + size. It does not
- * depend on the managed buffer at all, so the guard works identically for
- * files the managed buffer has seen and files it has not.
- *
- * Parse-regression guarding is advisory only at this layer: pi-natives
- * currently has no side-effect-free parse probe. The structural-validity
- * check inside `applyManagedBufferContent` (via
- * `executeCodeBuffer({command:"edit", actions:[{kind:"write"}]})`) rejects
- * writes that the native engine considers structurally invalid, which is the
- * real backstop. A `WRITE_PARSE_REGRESSION` gate can be added here once
- * pi-natives exposes a read-only parse command.
+ * Gate writes that would introduce structural parse failures in code-supported
+ * source files. Size-shrink heuristics were removed (FEAT-816): they produced
+ * too many false positives — refactors and dead-code removal legitimately
+ * shrink files. The structural parse probe remains as the only backstop;
+ * `force:true` does not bypass it because shipping unparseable code is never
+ * a valid intent.
  */
 export function evaluateWriteGuards(
 	absolutePath: string,
 	newContent: string,
-	options: { force?: boolean } = {},
+	_options: { force?: boolean } = {},
 ): WriteGuardResult | WriteGuardBlocked {
 	if (!isCodeToolSupportedPath(absolutePath)) {
 		return { ok: true };
 	}
 
-	const oldExists = existsSync(absolutePath);
-	if (!oldExists) {
+	if (!existsSync(absolutePath)) {
 		return { ok: true };
-	}
-
-	let oldSize = 0;
-	try {
-		oldSize = statSync(absolutePath).size;
-	} catch {
-		// Existence raced with removal — treat as new file, let the write
-		// proceed and the kernel surface any real failure.
-		return { ok: true };
-	}
-
-	const newSize = Buffer.byteLength(newContent, "utf8");
-
-	// FEAT-703: `force:true` bypasses the size-shrink heuristic. Parse-
-	// regression check stays on regardless — force is for "I really mean
-	// to overwrite", not "ship a broken file".
-	if (oldSize >= SHRINK_GUARD_MIN_BYTES && !options.force) {
-		const floor = Math.max(SHRINK_GUARD_FLOOR_BYTES, Math.floor(oldSize * SHRINK_GUARD_RATIO));
-		if (newSize < floor) {
-			return {
-				ok: false,
-				code: "WRITE_SHRINK_BLOCKED",
-				detail: `write would shrink ${absolutePath} from ${oldSize} bytes to ${newSize} bytes (floor ${floor}). Pass force:true to bypass.`,
-			};
-		}
 	}
 
 	const oldContent = readFileSync(absolutePath, "utf8");
@@ -126,17 +79,4 @@ export function evaluateWriteGuards(
 	}
 
 	return { ok: true };
-}
-
-/**
- * Diagnostic probe exported for tests: confirms the dependency the prior
- * implementation relied on is still absent, so the fix above remains
- * necessary rather than cosmetic.
- */
-export function probeCodeBufferStatusCommand(): { available: boolean; output: string } {
-	const result = executeCodeBuffer({ command: "status", file: "/tmp/__probe__" });
-	return {
-		available: result.error !== true,
-		output: typeof result.output === "string" ? result.output : JSON.stringify(result.output ?? null),
-	};
 }

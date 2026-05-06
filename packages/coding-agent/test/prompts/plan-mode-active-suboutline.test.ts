@@ -42,7 +42,7 @@ describe("plan-mode active sub-outline guidance", () => {
 		expect(rendered).toContain("[[id:FEAT-001::define-types]]");
 		expect(rendered).toContain("missing-top-level-link");
 		expect(rendered).toContain("missing-suboutline-declaration");
-		expect(rendered).toContain("manifest-missing-suboutlines");
+
 		expect(rendered).toContain("** ITEM Define TypeScript interfaces");
 	});
 

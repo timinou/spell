@@ -102,13 +102,13 @@ describe("GetTool", () => {
 		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: "*.ts" }));
 	});
 
-	it("passes line slice params (offset/limit) to native", async () => {
+	it("passes line shorthand target unchanged to native", async () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
 			makeChunk([{ locator: "src/main.ts:1:1", kind: "line", content: { text: "line one" } }]),
 		]);
 		const tool = new GetTool();
-		await tool.execute("t", { target: "src/main.ts", offset: 5, limit: 10 });
-		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ offset: 5, limit: 10 }));
+		await tool.execute("t", { target: "src/main.ts:5-15" });
+		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: "src/main.ts:5-15" }));
 	});
 
 	it("passes regex grep target to native", async () => {
@@ -664,145 +664,98 @@ describe("GetTool", () => {
 	});
 
 	// ─────────────────────────────────────────────────────────────
-	// BUG-347: head/tail/offset/limit must slice single-node text
+	// FEAT-720: line-shorthand targets pass through to kernel; the
+	// agent no longer applies any post-slicing.
 	// ─────────────────────────────────────────────────────────────
-	describe("BUG-347: pagination on single-node text", () => {
-		const FIVE_LINES = ["alpha", "beta", "gamma", "delta", "epsilon"].join("\n") + "\n";
+	describe("FEAT-720: line shorthand passthrough", () => {
+		it.each([
+			["foo.ts:50", "head N"],
+			["foo.ts:-50", "tail N"],
+			["foo.ts:80-130", "range A-B"],
+			["foo.ts:80-", "A to EOF"],
+			["foo.ts:80+50", "A+N"],
+			["foo.ts::Sym:80-90", "absolute slice within symbol"],
+			["foo.ts::Sym:±5", "symbol ±5"],
+			["foo.ts#stat", "#stat qualifier"],
+		])("forwards %s (%s) to kernel unchanged", async (target: string) => {
+			const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+				makeChunk([{ locator: target, kind: "file", content: { text: "x" } }]),
+			]);
+			const tool = new GetTool();
+			await tool.execute("t", { target });
+			expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target }));
+		});
 
-		it("head N returns first N lines of single text-content node", async () => {
-			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-bug347-head");
+		it("renders grep shape for §line[text~=...] results", async () => {
+			spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+				makeChunk([
+					{ locator: "src/a.ts:12:1", kind: "line", content: { text: "// TODO fix" } },
+					{ locator: "src/b.ts:34:1", kind: "line", content: { text: "const x = TODO();" } },
+				]),
+			]);
+			const tool = new GetTool();
+			const result = await tool.execute("t", { target: '**/*.ts::§line[text~="TODO"]' });
+			const text = getText(result);
+			expect(text).toContain("TODO");
+		});
+
+		it("slices target body when kernel returns shape: 'slice' §line node", async () => {
+			// FEAT-716/715: kernel returns a single sliced body for `path:A-B`.
+			// We assert the agent surfaces it verbatim (no second-pass slicing).
+			spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+				{
+					nodes: [
+						{
+							locator: "src/server.ts::<line 80..130>",
+							rangeStart: 0,
+							rangeEnd: 0,
+							kind: "§line",
+							content: { kind: "text", value: "line 80\nline 81\nline 82" },
+							metadata: { shape: "slice", lineStart: 80, lineEnd: 130 },
+							diagnostics: [],
+						},
+					],
+					diagnostics: [],
+					done: true,
+				} as unknown as ReturnType<typeof makeChunk>,
+			]);
+			const tool = new GetTool();
+			const result = await tool.execute("t", { target: "src/server.ts:80-130" });
+			const text = getText(result);
+			expect(text).toContain("line 80");
+			expect(text).toContain("line 82");
+		});
+
+		it("#stat qualifier surfaces lineCount metadata", async () => {
+			// Real kernel; #stat should expose lineCount per FEAT-717.
+			(spyOn(nativesModule, "executeCodePath") as unknown as { mockRestore?: () => void }).mockRestore?.();
+			const tmp = nodePath.join(process.cwd(), "test/tmp-feat720-stat");
 			await fs.mkdir(tmp, { recursive: true });
-			const real = nodePath.join(tmp, "file.txt");
-			await fs.writeFile(real, FIVE_LINES, "utf-8");
+			const real = nodePath.join(tmp, "f.txt");
+			await fs.writeFile(real, "a\nb\nc\n", "utf-8");
 			try {
-				spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-					makeChunk([{ locator: real, kind: "file", content: { text: FIVE_LINES } }]),
-				]);
 				const tool = new GetTool();
-				const result = await tool.execute("t", { target: real, head: 2 });
+				const result = await tool.execute("t", { target: `${real}#stat` });
 				const text = getText(result);
-				expect(text).toContain("alpha");
-				expect(text).toContain("beta");
-				expect(text).not.toContain("gamma");
-				expect(text).not.toContain("epsilon");
+				expect(text).toContain("lineCount");
 			} finally {
 				await fs.rm(tmp, { recursive: true });
 			}
 		});
+	});
 
-		it("tail N returns last N lines of single text-content node", async () => {
-			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-bug347-tail");
-			await fs.mkdir(tmp, { recursive: true });
-			const real = nodePath.join(tmp, "file.txt");
-			await fs.writeFile(real, FIVE_LINES, "utf-8");
-			try {
-				spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-					makeChunk([{ locator: real, kind: "file", content: { text: FIVE_LINES } }]),
-				]);
-				const tool = new GetTool();
-				const result = await tool.execute("t", { target: real, tail: 2 });
-				const text = getText(result);
-				expect(text).toContain("delta");
-				expect(text).toContain("epsilon");
-				expect(text).not.toContain("alpha");
-				expect(text).not.toContain("beta");
-			} finally {
-				await fs.rm(tmp, { recursive: true });
-			}
-		});
-
-		it("offset+limit returns the requested slice", async () => {
-			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-bug347-slice");
-			await fs.mkdir(tmp, { recursive: true });
-			const real = nodePath.join(tmp, "file.txt");
-			await fs.writeFile(real, FIVE_LINES, "utf-8");
-			try {
-				spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-					makeChunk([{ locator: real, kind: "file", content: { text: FIVE_LINES } }]),
-				]);
-				const tool = new GetTool();
-				const result = await tool.execute("t", { target: real, offset: 2, limit: 2 });
-				const text = getText(result);
-				expect(text).toContain("gamma");
-				expect(text).toContain("delta");
-				expect(text).not.toContain("alpha");
-				expect(text).not.toContain("epsilon");
-			} finally {
-				await fs.rm(tmp, { recursive: true });
-			}
-		});
-
-		it("no pagination params returns full content", async () => {
-			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-bug347-full");
-			await fs.mkdir(tmp, { recursive: true });
-			const real = nodePath.join(tmp, "file.txt");
-			await fs.writeFile(real, FIVE_LINES, "utf-8");
-			try {
-				spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-					makeChunk([{ locator: real, kind: "file", content: { text: FIVE_LINES } }]),
-				]);
-				const tool = new GetTool();
-				const result = await tool.execute("t", { target: real });
-				const text = getText(result);
-				expect(text).toContain("alpha");
-				expect(text).toContain("epsilon");
-			} finally {
-				await fs.rm(tmp, { recursive: true });
-			}
-		});
-
-		it("slices content carried in node.content.value (kernel raw extractor)", async () => {
-			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-bug347-value");
-			await fs.mkdir(tmp, { recursive: true });
-			const real = nodePath.join(tmp, "file.txt");
-			await fs.writeFile(real, FIVE_LINES, "utf-8");
-			try {
-				// Mimic the kernel's TextResolver shape: content.value, not content.text.
-				spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-					{
-						nodes: [
-							{
-								locator: real,
-								rangeStart: 0,
-								rangeEnd: FIVE_LINES.length,
-								kind: "§file",
-								content: { kind: "text", value: FIVE_LINES },
-								metadata: {},
-								diagnostics: [],
-							},
-						],
-						diagnostics: [],
-						done: true,
-					} as any,
-				]);
-				const tool = new GetTool();
-				const result = await tool.execute("t", { target: real, head: 2 });
-				const text = getText(result);
-				expect(text).toContain("alpha");
-				expect(text).toContain("beta");
-				expect(text).not.toContain("gamma");
-			} finally {
-				await fs.rm(tmp, { recursive: true });
-			}
-		});
-
-		it("head 0 returns no content lines (param is honoured, not ignored)", async () => {
-			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-bug347-zero");
-			await fs.mkdir(tmp, { recursive: true });
-			const real = nodePath.join(tmp, "file.txt");
-			await fs.writeFile(real, FIVE_LINES, "utf-8");
-			try {
-				spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-					makeChunk([{ locator: real, kind: "file", content: { text: FIVE_LINES } }]),
-				]);
-				const tool = new GetTool();
-				const result = await tool.execute("t", { target: real, head: 0 });
-				const text = getText(result);
-				expect(text).not.toContain("alpha");
-				expect(text).not.toContain("beta");
-			} finally {
-				await fs.rm(tmp, { recursive: true });
-			}
+	// ─────────────────────────────────────────────────────────────
+	// FEAT-720: schema rejects removed pagination params.
+	// ─────────────────────────────────────────────────────────────
+	describe("FEAT-720: schema removed pagination fields", () => {
+		it("getSchema rejects head, tail, offset, limit (additionalProperties: false)", async () => {
+			const { Value } = await import("@sinclair/typebox/value");
+			const { getSchema } = await import("@oh-my-pi/pi-coding-agent/tools/codepath-types");
+			expect(Value.Check(getSchema, { target: "x" })).toBe(true);
+			expect(Value.Check(getSchema, { target: "x", head: 5 })).toBe(false);
+			expect(Value.Check(getSchema, { target: "x", tail: 5 })).toBe(false);
+			expect(Value.Check(getSchema, { target: "x", offset: 5 })).toBe(false);
+			expect(Value.Check(getSchema, { target: "x", limit: 5 })).toBe(false);
 		});
 	});
 
@@ -900,6 +853,93 @@ describe("GetTool", () => {
 			} finally {
 				await fs.rm(tmp, { recursive: true });
 			}
+		});
+	});
+
+	describe("FEAT-815: JS-preferred scheme preempt", () => {
+		it("resolves jobs://<id> via internal router instead of kernel", async () => {
+			const { AsyncJobManager } = await import("@oh-my-pi/pi-coding-agent/async");
+			const { InternalUrlRouter, JobsProtocolHandler } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
+
+			const manager = new AsyncJobManager({ onJobComplete: async () => {} });
+			const jobId = manager.register("bash", "echo hi", async () => "hello world", { id: "9-Feat238" });
+			// Wait for the job's promise to resolve so the result is recorded.
+			const job = manager.getJob(jobId);
+			await job?.promise;
+
+			const router = new InternalUrlRouter();
+			router.register(new JobsProtocolHandler({ getAsyncJobManager: () => manager }));
+
+			// The kernel must NOT be consulted — the JS preempt owns this scheme.
+			const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([]);
+
+			const tool = new GetTool(createSession({ internalRouter: router }));
+			const result = await tool.execute("t", { target: "jobs://9-Feat238" });
+
+			const text = getText(result);
+			expect(text).toContain("# Job 9-Feat238");
+			expect(text).toContain("hello world");
+			expect(spy).not.toHaveBeenCalled();
+		});
+
+		it("resolves memory:// via JS router and forwards codepath suffix to kernel on sourcePath", async () => {
+			const { InternalUrlRouter, MemoryProtocolHandler } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
+
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-feat815-memory");
+			await fs.mkdir(tmp, { recursive: true });
+			await fs.writeFile(nodePath.join(tmp, "memory_summary.md"), "# Memory\nline two\n", "utf-8");
+			try {
+				const router = new InternalUrlRouter();
+				router.register(new MemoryProtocolHandler({ getMemoryRoot: () => tmp }));
+
+				// Without codepath suffix: JS resolves directly, kernel untouched.
+				const kernelSpy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([]);
+				const tool = new GetTool(createSession({ internalRouter: router }));
+				const plain = await tool.execute("t", { target: "memory://root" });
+				expect(getText(plain)).toContain("# Memory");
+				expect(kernelSpy).not.toHaveBeenCalled();
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		it("forwards codepath suffix on memory:// to kernel using resolved sourcePath", async () => {
+			const { InternalUrlRouter, MemoryProtocolHandler } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
+
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-feat815-memory-cp");
+			await fs.mkdir(tmp, { recursive: true });
+			const summary = nodePath.join(tmp, "memory_summary.md");
+			await fs.writeFile(summary, "alpha\nbeta\ngamma\n", "utf-8");
+			try {
+				const router = new InternalUrlRouter();
+				router.register(new MemoryProtocolHandler({ getMemoryRoot: () => tmp }));
+
+				const kernelSpy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: summary, kind: "file", content: { text: "beta\n" } }]),
+				]);
+				const tool = new GetTool(createSession({ internalRouter: router }));
+				const sliced = await tool.execute("t", { target: "memory://root::§line[2..2]" });
+				expect(getText(sliced)).toContain("beta");
+				// Kernel was invoked, but with the resolved filesystem sourcePath +
+				// suffix — not the original URI.
+				expect(kernelSpy).toHaveBeenCalledWith(expect.objectContaining({ target: `${summary}::§line[2..2]` }));
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		it("notes that codepath qualifiers on virtual resources are ignored (pi://)", async () => {
+			const { InternalUrlRouter, PiProtocolHandler } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
+			const router = new InternalUrlRouter();
+			router.register(new PiProtocolHandler());
+
+			const kernelSpy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([]);
+			const tool = new GetTool(createSession({ internalRouter: router }));
+			// pi:// returns a virtual sourcePath — the kernel must not be consulted
+			// for the codepath suffix; instead the response includes a [note].
+			const result = await tool.execute("t", { target: "pi://nonexistent.md::§line[1..2]" });
+			expect(getText(result)).toContain("[§error] pi://nonexistent.md::§line[1..2]");
+			expect(kernelSpy).not.toHaveBeenCalled();
 		});
 	});
 });
