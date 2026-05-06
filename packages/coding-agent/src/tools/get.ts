@@ -1,9 +1,9 @@
-import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
-import type { Component } from "@oh-my-pi/pi-tui";
-import { executeCodePath, getRegisteredExtensions } from "@oh-my-pi/pi-natives";
-import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import { executeCodePath } from "@oh-my-pi/pi-natives";
+import type { Component } from "@oh-my-pi/pi-tui";
+import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
 import getDescription from "../prompts/tools/get.md" with { type: "text" };
 import { renderCodeCell } from "../tui";
@@ -11,14 +11,6 @@ import { type CodePathFormatMode, formatCodePathResult } from "./codepath-result
 import type { GetParams } from "./codepath-types";
 import { getSchema } from "./codepath-types";
 import { replaceTabs } from "./render-utils";
-
-let _sourceExtensions: Set<string> | null = null;
-function getSourceExtensions(): Set<string> {
-	if (!_sourceExtensions) {
-		_sourceExtensions = new Set(getRegisteredExtensions());
-	}
-	return _sourceExtensions;
-}
 import { type DetailsWithMeta, toolResult } from "./tool-result";
 
 type GetToolResultDetails = DetailsWithMeta & {
@@ -38,7 +30,7 @@ function classifyBareTarget(target: string): "bare-plain" | "qualified" | "other
 	if (target.includes("://")) return "other";
 	if (target.includes("::")) return "other";
 	if (target.includes(";")) return "other";
-	if (/[*?\[]/.test(target)) return "other";
+	if (/[*?[]/.test(target)) return "other";
 	if (target.includes("#")) return "qualified";
 	return "bare-plain";
 }
@@ -54,6 +46,108 @@ function buildDirQualifier(target: string, params: GetParams): string {
 	if (params.recursive) return `${target}#tree`;
 	return `${target}#listing`;
 }
+
+/**
+ * BUG-348: detect whether an absolute path is inside the walker root.
+ * The kernel's FsWalker only walks subtrees of `opts.root`; absolute
+ * paths outside that subtree are silently invisible to the walker, and
+ * `gitignore:false` does nothing for them. Callers need a distinct
+ * diagnostic so they don't confuse "out-of-root" with "gitignored".
+ */
+function isInsideRoot(absPath: string, root: string): boolean {
+	const normRoot = path.resolve(root);
+	const normPath = path.resolve(absPath);
+	if (normPath === normRoot) return true;
+	return normPath.startsWith(normRoot + path.sep);
+}
+
+/**
+ * BUG-347: slice a text body by line range using head/tail/offset/limit.
+ * Pagination params on a single text-content node operated at *node count*
+ * before this fix, which made `head: N` a silent no-op for `#raw` results.
+ * This helper applies them at *line count* so the surface contract matches
+ * what agents migrating from `cat | head -N` expect.
+ *
+ * Semantics:
+ * - `offset`: 0-indexed line offset to start from.
+ * - `head`/`limit`: keep the first N lines (after offset). `head: 0` keeps
+ *   zero lines (param is honoured, not ignored).
+ * - `tail`: keep the last N lines. Wins over head/limit when both set.
+ */
+function applyTextSlice(
+	text: string,
+	params: Pick<GetParams, "head" | "tail" | "offset" | "limit">,
+): { text: string; sliced: boolean; total: number; from?: number; to?: number } {
+	const lines = text.split("\n");
+	// Trailing newline produces a final empty element; preserve it.
+	const hasTrailingNewline = text.endsWith("\n");
+	const contentLines = hasTrailingNewline ? lines.slice(0, -1) : lines;
+	const total = contentLines.length;
+
+	let sliced = false;
+	let start = 0;
+	let end = total;
+
+	if (params.offset !== undefined) {
+		start = Math.max(0, Math.min(params.offset, total));
+		sliced = true;
+	}
+
+	if (params.tail !== undefined) {
+		const n = Math.max(0, Math.min(params.tail, total - start));
+		start = total - n;
+		end = total;
+		sliced = true;
+	} else {
+		const headOrLimit = params.head ?? params.limit;
+		if (headOrLimit !== undefined) {
+			end = Math.min(total, start + Math.max(0, headOrLimit));
+			sliced = true;
+		}
+	}
+
+	if (!sliced) return { text, sliced: false, total };
+
+	const slice = contentLines.slice(start, end);
+	const out = slice.join("\n") + (slice.length > 0 && hasTrailingNewline ? "\n" : "");
+	return { text: out, sliced: true, total, from: start + 1, to: end };
+}
+
+/**
+ * Detect whether GetParams asks for line-level pagination of text content.
+ */
+function wantsTextSlice(params: GetParams): boolean {
+	return (
+		params.head !== undefined ||
+		params.tail !== undefined ||
+		params.offset !== undefined ||
+		params.limit !== undefined
+	);
+}
+
+/**
+ * FEAT-714: build a structured §no-results diagnostic with attached
+ * qualifier, resolved path, and an actionable next-step hint. Replaces
+ * the overloaded single-line message that conflated 6+ different
+ * causes (empty outline, gitignore, out-of-root, pagination overshoot).
+ */
+function buildNoResults(opts: {
+	target: string;
+	attachedQualifier: string | null;
+	resolvedAbs: string | null;
+	reason: string;
+	tryNext: string | null;
+	evidence?: string | null;
+}): string {
+	const lines: string[] = [`[§no-results] ${opts.target}`];
+	if (opts.attachedQualifier) lines.push(`  attached:  ${opts.attachedQualifier}`);
+	if (opts.resolvedAbs) lines.push(`  resolved:  ${opts.resolvedAbs}`);
+	lines.push(`  reason:    ${opts.reason}`);
+	if (opts.evidence) lines.push(`  evidence:  ${opts.evidence}`);
+	if (opts.tryNext) lines.push(`  try next:  ${opts.tryNext}`);
+	return lines.join("\n");
+}
+
 /**
  * When the kernel surfaces a [DID_YOU_MEAN] diagnostic, replace the raw
  * machine-oriented line with a friendly hint.
@@ -74,6 +168,7 @@ function prettifyDidYouMean(text: string): string {
 		},
 	);
 }
+
 export class GetTool implements AgentTool<typeof getSchema> {
 	readonly name = "get";
 	readonly label = "Get";
@@ -88,48 +183,65 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		_onUpdate?: AgentToolUpdateCallback,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult> {
-		// UX: bare file paths returning kernel metadata (no content) trips models
-		// migrating from the legacy `read` tool. Auto-attach `#raw` when the target
-		// Auto-attach qualifiers for bare filesystem paths.
-		// - Files → `#raw` (existing behavior)
-		// - Directories → `#listing` by default, `#tree`/`#tree[depth=N]` when recursive/depth set
-		// - `content: false` opts out for callers wanting the raw node
-		// - Already-qualified targets pass through unchanged
 		let target = params.target;
-		// FEAT-711: a `/regex/` literal looks like a bare-plain target to
+		// FEAT-711: a `/regex/` literal looks like bare-plain to
 		// classifyBareTarget but is meant for the kernel's grep dialect.
-		// Skip the stat probe so we don't trip ENOENT on the pattern.
-		// Heuristic: starts with `/`, ends with `/[flags]`, no embedded
-		// path separators between, and contains regex meta chars.
-		const looksLikeRegex =
-			/^\/[^\/]+\/[a-z]*$/.test(target) && /[.*+?()|\\\[\]]/.test(target);
+		const looksLikeRegex = /^\/[^/]+\/[a-z]*$/.test(target) && /[.*+?()|\\[\]]/.test(target);
+
+		let statProbeFoundFile = false;
+		let attachedQualifier: string | null = null;
+		let resolvedAbs: string | null = null;
+
 		if (params.content !== false && !looksLikeRegex && classifyBareTarget(target) === "bare-plain") {
 			const normalized = target.replace(/\/+$/, "");
-			const absCandidate = path.isAbsolute(normalized) ? normalized : path.resolve(params.root ?? process.cwd(), normalized);
+			const rootDir = params.root ?? process.cwd();
+			const absCandidate = path.isAbsolute(normalized) ? normalized : path.resolve(rootDir, normalized);
+
 			try {
 				const stat = await fs.stat(absCandidate);
- 			if (stat.isFile()) {
- 					const ext = path.extname(normalized).slice(1);
-					const isSourceFile = getSourceExtensions().has(ext);
- 					target = isSourceFile
- 						? `${normalized}#outline`
- 						: `${normalized}#raw`;
+				resolvedAbs = absCandidate;
+				const inRoot = isInsideRoot(absCandidate, rootDir);
+
+				if (stat.isFile()) {
+					statProbeFoundFile = true;
+
+					// BUG-348: out-of-root path. The kernel walker can't see it.
+					if (!inRoot) {
+						if (params.gitignore === false) {
+							// Direct read short-circuit: caller explicitly opted in.
+							const raw = await fs.readFile(absCandidate, "utf-8");
+							const slice = applyTextSlice(raw, params);
+							return toolResult<GetToolResultDetails>({
+								target: params.target,
+								format: params.format,
+							})
+								.text(slice.text)
+								.done();
+						}
+						const hint = `(hint: pass gitignore: false to read this file directly, or set root: "${path.dirname(absCandidate)}" to walk from there.)`;
+						return toolResult<GetToolResultDetails>({
+							target: params.target,
+							error: "OUT_OF_PROJECT_ROOT",
+						})
+							.text(
+								`OUT_OF_PROJECT_ROOT: ${params.target}\n  project root: ${rootDir}\n  resolved:     ${absCandidate}\n\n${hint}`,
+							)
+							.done();
+					}
+
+					// FEAT-713: always #raw for bare-path files. Drops the
+					// outline-first default that returned [§file] markers
+					// without content for source files (T1.1, T1.8 + repro).
+					target = `${normalized}#raw`;
+					attachedQualifier = "#raw (auto)";
 				} else if (stat.isDirectory()) {
 					target = buildDirQualifier(normalized, params);
+					attachedQualifier = `${target.slice(normalized.length)} (auto)`;
 				}
 			} catch (err) {
-				// FEAT-711: classify ENOENT/EACCES when the caller passed
-				// an explicit path (absolute, or contains `/`). Bare
-				// basenames flow through to the kernel so its suffix
-				// fallback / glob walk can still find the file.
 				const code = (err as NodeJS.ErrnoException | undefined)?.code;
-				// Only fire on absolute or explicitly-relative (./, ../) paths
-				// — relative basenames flow through to kernel suffix
-				// fallback so partial paths still resolve.
 				const isExplicitPath =
-					path.isAbsolute(normalized) ||
-					normalized.startsWith("./") ||
-					normalized.startsWith("../");
+					path.isAbsolute(normalized) || normalized.startsWith("./") || normalized.startsWith("../");
 				if (isExplicitPath && code === "ENOENT") {
 					return toolResult<GetToolResultDetails>({
 						target: params.target,
@@ -159,6 +271,7 @@ export class GetTool implements AgentTool<typeof getSchema> {
 			offset: params.offset,
 			format: params.format,
 			root: params.root,
+			gitignore: params.gitignore,
 			abortSignal: signal,
 		});
 
@@ -167,10 +280,59 @@ export class GetTool implements AgentTool<typeof getSchema> {
 			limit: params.limit,
 		});
 
-  const displayText = result.text?.trim()
-  			|| `[§no-results] No content for target: ${params.target}`;
-  		const text = prettifyDidYouMean(displayText);
-  		const builder = toolResult<GetToolResultDetails>({ format: params.format }).text(text);
+		let displayText = result.text?.trim();
+
+		// BUG-347: post-slice single-node text bodies when pagination params
+		// are set. The kernel applies head/tail/offset/limit at node count;
+		// for #raw results that's a single node, so the params would no-op.
+		// Slicing here makes them honour line semantics, matching cat|head.
+		if (wantsTextSlice(params) && displayText) {
+			const allNodes = chunks.flatMap(c => c.nodes);
+			const textNodes = allNodes.filter(
+				n => n.content && (n.content as { text?: string; value?: string }).text !== undefined,
+			);
+			if (textNodes.length === 1 && allNodes.length === 1) {
+				const rawText =
+					(textNodes[0].content as { text?: string; value?: string }).text ??
+					(textNodes[0].content as { value?: string }).value ??
+					"";
+				const slice = applyTextSlice(rawText, params);
+				if (slice.sliced) displayText = slice.text;
+			}
+		}
+
+		if (!displayText) {
+			// FEAT-714: structured diagnostic with reason + try-next hint.
+			let reason = "empty-result";
+			let tryNext: string | null = null;
+			const evidence: string | null = null;
+
+			if (statProbeFoundFile && wantsTextSlice(params) && attachedQualifier === "#raw (auto)") {
+				reason = "pagination-overshoot";
+				tryNext = `reduce offset/head, or use target: "${params.target}::§line[a..b]"`;
+			} else if (statProbeFoundFile && classifyBareTarget(params.target) === "qualified") {
+				reason = "qualifier-empty";
+				tryNext = `target: "${params.target.split("#")[0]}#raw" or target: "${params.target.split("#")[0]}::§line[1..50]"`;
+			} else if (statProbeFoundFile) {
+				reason = "empty-content";
+				tryNext = `target: "${params.target}::§line[1..50]"`;
+			} else if (classifyBareTarget(params.target).startsWith("qualified") || params.target.includes("::")) {
+				reason = "no-match";
+				tryNext = `verify path/symbol exists, or try target: "${params.target.split(/[#:]/)[0]}"`;
+			}
+
+			displayText = buildNoResults({
+				target: params.target,
+				attachedQualifier,
+				resolvedAbs,
+				reason,
+				evidence,
+				tryNext,
+			});
+		}
+
+		const text = prettifyDidYouMean(displayText);
+		const builder = toolResult<GetToolResultDetails>({ format: params.format }).text(text);
 		if (result.meta) {
 			builder.limits({
 				resultLimit: result.meta.limits?.resultLimit?.reached,
