@@ -89,3 +89,110 @@ describe("formatStatMetadata (FEAT-709)", () => {
 		expect(out).toContain("target=real.txt");
 	});
 });
+
+describe("buildNodeList grep shape (FEAT-719)", () => {
+	function matchLine(path: string, line: number, anchor: string, body: string): NodeRefDto {
+		return makeNode({
+			locator: `${path}::<line ${line}#${anchor}>`,
+			kind: "\u00a7line",
+			content: { kind: "text", value: body },
+			metadata: { shape: "match", anchorId: anchor, line },
+		});
+	}
+
+	// W5a: §line[text~=...] renders as `path:line:  content` per match, no LOC#ID block.
+	it("W5a: text-match renders grep -n shape without LINE#ID anchor", () => {
+		const node = matchLine("src/foo.ts", 42, "AB", "  const cached = useState(initial);");
+		const out = formatNodes([node]);
+		expect(out).toBe("src/foo.ts:42:    const cached = useState(initial);");
+		expect(out).not.toContain("#AB");
+		expect(out).not.toContain("[\u00a7line]");
+	});
+
+	// W5b: multiple matches sorted ascending by line, joined newline-only (no blank gap).
+	it("W5b: multiple matches sorted by line, joined by newline", () => {
+		const nodes = [
+			matchLine("src/foo.ts", 58, "CD", "\tconst [_, setX] = useState(0);"),
+			matchLine("src/foo.ts", 42, "AB", "\tconst cached = useState(initial);"),
+		];
+		const out = formatNodes(nodes);
+		const lines = out.split("\n");
+		expect(lines).toEqual([
+			"src/foo.ts:42:  \tconst cached = useState(initial);",
+			"src/foo.ts:58:  \tconst [_, setX] = useState(0);",
+		]);
+	});
+
+	// W5c: glob — group/sort by file path then line; each row keeps `path:line:  content`.
+	it("W5c: glob matches sort by file then line", () => {
+		const nodes = [
+			matchLine("src/b.ts", 3, "M3", "todo"),
+			matchLine("src/a.ts", 7, "M1", "todo seven"),
+			matchLine("src/a.ts", 2, "M2", "todo two"),
+		];
+		const out = formatNodes(nodes);
+		expect(out.split("\n")).toEqual([
+			"src/a.ts:2:  todo two",
+			"src/a.ts:7:  todo seven",
+			"src/b.ts:3:  todo",
+		]);
+	});
+
+	// W5d: §line[N] (no shape metadata) keeps LINE#ID block (regression).
+	it("W5d: ordinal §line[N] keeps LINE#ID anchor block", () => {
+		const node = makeNode({
+			locator: "src/foo.ts::<line 5#QW>",
+			kind: "\u00a7line",
+			content: { kind: "text", value: "console.log(1);" },
+			metadata: { anchorId: "QW", line: 5 },
+		});
+		const out = formatNodes([node]);
+		expect(out).toContain("5#QW");
+		expect(out).toContain("[\u00a7line]");
+		expect(out).toContain("console.log(1);");
+	});
+
+	// W5e: §line[A..B] / shape=slice renders single body, unchanged path.
+	it("W5e: slice shape (range) renders single body block", () => {
+		const node = makeNode({
+			locator: "src/foo.ts::<line 3#XX>",
+			kind: "\u00a7line",
+			content: { kind: "text", value: "line three\nline four\nline five" },
+			metadata: { shape: "slice", line: 3 },
+		});
+		const out = formatNodes([node]);
+		expect(out).toContain("line three\nline four\nline five");
+		expect(out).toContain("[\u00a7line]");
+		expect(out).not.toMatch(/^src\/foo\.ts:3:  /);
+	});
+
+	// Edge case: matched line containing colons stays verbatim after the separator.
+	it("matched line containing colons preserves rest verbatim", () => {
+		const node = matchLine("src/foo.ts", 10, "ZZ", "  url: 'http://x.y'; port: 80");
+		const out = formatNodes([node]);
+		expect(out).toBe("src/foo.ts:10:    url: 'http://x.y'; port: 80");
+	});
+
+	// Mixed shapes in one stream: match-shape block and ordinal block don't interleave.
+	it("mixed match + ordinal nodes don't interleave", () => {
+		const ordinal = makeNode({
+			locator: "src/foo.ts::<line 1#QQ>",
+			kind: "\u00a7line",
+			content: { kind: "text", value: "first" },
+			metadata: { anchorId: "QQ", line: 1 },
+		});
+		const m = matchLine("src/foo.ts", 7, "AB", "foo todo");
+		const out = formatNodes([m, ordinal]);
+		// Match block flushed first (in order encountered), then ordinal.
+		expect(out).toBe("src/foo.ts:7:  foo todo\n\nsrc/foo.ts:1#QQ  [\u00a7line]\nfirst");
+	});
+
+	// Acceptance: 10 matches in 1000-line file < 1KB.
+	it("byte-count for 10 matches ≤ 1KB", () => {
+		const nodes = Array.from({ length: 10 }, (_, i) =>
+			matchLine("src/big.ts", (i + 1) * 100, `H${i}`, `match number ${i} content`),
+		);
+		const out = formatNodes(nodes);
+		expect(Buffer.byteLength(out, "utf8")).toBeLessThanOrEqual(1024);
+	});
+});

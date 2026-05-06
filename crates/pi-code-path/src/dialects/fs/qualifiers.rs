@@ -172,6 +172,15 @@ fn resolve_stat(node: &NodeRef, root: &Path) -> Result<Vec<NodeRef>, Diagnostic>
 	}
 	metadata.insert("kind".to_string(), serde_json::Value::String(kind.clone()));
 
+	if !meta.is_dir() {
+		if let Some(count) = line_count_for_stat(&full_path, size) {
+			metadata.insert(
+				"lineCount".to_string(),
+				serde_json::Value::Number(count.into()),
+			);
+		}
+	}
+
 	let mut node = node.clone();
 	node.metadata = metadata;
 	node.kind = kind;
@@ -186,6 +195,28 @@ fn resolve_full_path(path: &Path, root: &Path) -> PathBuf {
 	} else {
 		root.join(path)
 	}
+}
+
+/// Counts addressable lines in a regular file for `#stat`.
+///
+/// Returns `None` for binary files (UTF-8 sniff fails on first 8 KiB) so
+/// `lineCount` is omitted from `#stat` metadata. For text files we count
+/// `\n` bytes; if the file is non-empty and does not end in `\n` we add 1
+/// because the unterminated final line is still addressable by `:N` (this
+/// diverges from `wc -l` deliberately — agents need addressable lines, not
+/// strictly terminated ones).
+fn line_count_for_stat(path: &Path, size: u64) -> Option<u64> {
+	if size == 0 {
+		return Some(0);
+	}
+	let bytes = std::fs::read(path).ok()?;
+	let sniff_end = std::cmp::min(bytes.len(), 8192);
+	if std::str::from_utf8(&bytes[..sniff_end]).is_err() {
+		return None;
+	}
+	let newlines = bytes.iter().filter(|&&b| b == b'\n').count() as u64;
+	let trailing = if bytes.last() == Some(&b'\n') { 0 } else { 1 };
+	Some(newlines + trailing)
 }
 
 #[cfg(test)]
@@ -252,5 +283,60 @@ mod tests {
 		assert!(meta.contains_key("size"));
 		assert!(meta.contains_key("mtime"));
 		assert_eq!(meta.get("kind"), Some(&serde_json::Value::String("§file".to_string())));
+	}
+
+	fn line_count(meta: &HashMap<String, serde_json::Value>) -> Option<u64> {
+		meta.get("lineCount")?.as_u64()
+	}
+
+	#[test]
+	fn qualifier_stat_line_count_terminated() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::write(root.join("f.txt"), "a\nb\nc\n").unwrap();
+
+		let n = node("f.txt", "§file");
+		let qual = Qualifier { name: "stat".to_string(), args: None };
+		let results = resolve(&n, &qual, &root).unwrap();
+		assert_eq!(line_count(&results[0].metadata), Some(3));
+	}
+
+	#[test]
+	fn qualifier_stat_line_count_unterminated() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::write(root.join("f.txt"), "a\nb\nc").unwrap();
+
+		let n = node("f.txt", "§file");
+		let qual = Qualifier { name: "stat".to_string(), args: None };
+		let results = resolve(&n, &qual, &root).unwrap();
+		// `wc -l` would say 2; we count the unterminated line as addressable.
+		assert_eq!(line_count(&results[0].metadata), Some(3));
+	}
+
+	#[test]
+	fn qualifier_stat_line_count_empty() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::write(root.join("empty.txt"), "").unwrap();
+
+		let n = node("empty.txt", "§file");
+		let qual = Qualifier { name: "stat".to_string(), args: None };
+		let results = resolve(&n, &qual, &root).unwrap();
+		assert_eq!(line_count(&results[0].metadata), Some(0));
+	}
+
+	#[test]
+	fn qualifier_stat_line_count_omitted_for_binary() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		// PNG signature + a NUL run — fails UTF-8 sniff.
+		let bytes: Vec<u8> = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d];
+		fs::write(root.join("img.png"), &bytes).unwrap();
+
+		let n = node("img.png", "§file");
+		let qual = Qualifier { name: "stat".to_string(), args: None };
+		let results = resolve(&n, &qual, &root).unwrap();
+		assert!(!results[0].metadata.contains_key("lineCount"));
 	}
 }

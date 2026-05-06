@@ -133,6 +133,18 @@ impl CodeResolver for CodeResolverImpl {
 		let root = tree.root_node();
 		let nodes = evaluate_query(query, vec![root], &src, dialect, cancel);
 
+		// FEAT-718: Extract a SymbolSlice predicate from the terminal step (if any).
+		// The slice transforms each resolved symbol node into a sliced text body.
+		let symbol_slice: Option<(Option<i64>, Option<i64>, bool)> = query
+			.steps()
+			.last()
+			.and_then(|step| step.predicates.iter().find_map(|p| match p {
+				pi_code_path::ast::Predicate::SymbolSlice { start, end, relative } => {
+					Some((*start, *end, *relative))
+				},
+				_ => None,
+			}));
+
 		let locator = file.to_string_lossy().into_owned();
 		let mut results = Vec::with_capacity(nodes.len());
 		for node in nodes {
@@ -144,6 +156,11 @@ impl CodeResolver for CodeResolverImpl {
 				metadata:    HashMap::new(),
 				diagnostics: Vec::new(),
 			};
+			// FEAT-718: Apply SymbolSlice (when present) BEFORE the qualifier so
+			// that any subsequent qualifier (e.g. #raw) sees a sliced text body.
+			if let Some((s_start, s_end, relative)) = symbol_slice {
+				apply_symbol_slice(&mut nref, &node, &src, s_start, s_end, relative);
+			}
 			if let Some(q) = _qualifier {
 				if let Some(qspec) = dialect.qualifiers.iter().find(|qs| qs.name == q.name) {
 					if qspec.applies_to.iter().any(|k| k == node.kind()) {
@@ -185,6 +202,119 @@ impl CodeResolver for CodeResolverImpl {
 
 		Ok(results)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// FEAT-718: SymbolSlice application
+// ---------------------------------------------------------------------------
+
+/// Apply a `SymbolSlice` predicate to a resolved symbol node, replacing the
+/// node ref's range/content/kind with the sliced text body.
+///
+/// Semantics (FEAT-718):
+/// - Absolute (`relative=false`): result = lines `max(start, sym.first)..min(end, sym.last)`.
+///   Empty intersection ⇒ `symbol-slice-disjoint` diagnostic, range unchanged.
+/// - Relative (`relative=true`): result = lines `sym.first + start .. sym.last + end`,
+///   each clamped to `[1, file.line_count]`.
+/// - Open ends (None) substitute the symbol's own bound for that side.
+fn apply_symbol_slice(
+	nref: &mut NodeRef,
+	node: &Node<'_>,
+	src: &str,
+	start: Option<i64>,
+	end: Option<i64>,
+	relative: bool,
+) {
+	let sym_first = node.start_position().row as i64 + 1;
+	let sym_last = node.end_position().row as i64 + 1;
+	let line_count = line_count_of(src);
+	if line_count == 0 {
+		return;
+	}
+
+	let (target_first, target_last, requested) = if relative {
+		let s_off = start.unwrap_or(0);
+		let e_off = end.unwrap_or(0);
+		let f = (sym_first + s_off).clamp(1, line_count);
+		let l = (sym_last + e_off).clamp(1, line_count);
+		(f, l, format!("{s_off:+}..{e_off:+}"))
+	} else {
+		let req_first = start.unwrap_or(sym_first);
+		let req_last = end.unwrap_or(sym_last);
+		let first = req_first.max(sym_first);
+		let last = req_last.min(sym_last);
+		(first, last, format!("{req_first}-{req_last}"))
+	};
+
+	if target_first > target_last {
+		nref.diagnostics.push(Diagnostic {
+			variant: DiagnosticVariant::NoMatches,
+			message: format!(
+				"symbol-slice-disjoint: requested {requested}, symbol spans {sym_first}-{sym_last}"
+			),
+			span:    None,
+		});
+		return;
+	}
+
+	let (start_byte, end_byte) = match line_byte_range(src, target_first, target_last) {
+		Some(r) => r,
+		None => return,
+	};
+
+	nref.range = start_byte..end_byte;
+	nref.kind = format!("§line[{target_first}..{target_last}]");
+	nref.content = Some(pi_code_path::types::Content::Text {
+		value: src[start_byte..end_byte].to_string(),
+	});
+}
+
+fn line_count_of(src: &str) -> i64 {
+	if src.is_empty() {
+		return 0;
+	}
+	let mut n: i64 = 1;
+	for b in src.bytes() {
+		if b == b'\n' {
+			n += 1;
+		}
+	}
+	// If the file ends with a newline, the trailing empty "line" is not
+	// counted (matches `wc -l`-style convention used by lineCount).
+	if src.ends_with('\n') {
+		n -= 1;
+	}
+	n
+}
+
+/// Compute the byte range covering lines `[first, last]` (1-indexed, inclusive)
+/// in `src`. Returns `None` if either bound is outside the file.
+fn line_byte_range(src: &str, first: i64, last: i64) -> Option<(usize, usize)> {
+	if first < 1 || last < first {
+		return None;
+	}
+	let bytes = src.as_bytes();
+	let mut line: i64 = 1;
+	let mut start: Option<usize> = if first == 1 { Some(0) } else { None };
+	let mut end: Option<usize> = None;
+	for (i, &b) in bytes.iter().enumerate() {
+		if b == b'\n' {
+			if line == last {
+				end = Some(i + 1);
+				break;
+			}
+			line += 1;
+			if line == first {
+				start = Some(i + 1);
+			}
+		}
+	}
+	let s = start?;
+	let e = end.unwrap_or(bytes.len());
+	if s > e {
+		return None;
+	}
+	Some((s, e))
 }
 
 // ---------------------------------------------------------------------------
@@ -607,5 +737,108 @@ mod tests {
 		// Tree-sitter still produces a tree (with ERROR nodes); walker should function.
 		assert!(!results.is_empty());
 		assert!(results.iter().any(|r| r.kind == "§ERROR"));
+	}
+
+	// ------------------------------------------------------------------
+	// FEAT-718: SymbolSlice (symbol + line slice composition)
+	// ------------------------------------------------------------------
+
+	/// Build a 20-line TypeScript file where `foo` spans lines 5..18.
+	fn ts_with_long_foo() -> tempfile::NamedTempFile {
+		let mut src = String::new();
+		src.push_str("// L1\n");
+		src.push_str("// L2\n");
+		src.push_str("// L3\n");
+		src.push_str("// L4\n");
+		src.push_str("function foo() {\n"); // L5
+		for i in 6..=17 {
+			src.push_str(&format!("  // body {i}\n"));
+		}
+		src.push_str("}\n"); // L18
+		src.push_str("// L19\n");
+		src.push_str("// L20\n");
+		temp_file(".ts", &src)
+	}
+
+	fn slice_query(name: &str, start: Option<i64>, end: Option<i64>, relative: bool) -> Query {
+		Query::single(Step {
+			axis:       None,
+			head:       Head::Name(NamePayload::Raw(name.into())),
+			predicates: vec![Predicate::SymbolSlice { start, end, relative }],
+		})
+	}
+
+	#[test]
+	fn w3a_absolute_inside_symbol_clamps_to_request() {
+		let resolver = resolver();
+		let f = ts_with_long_foo();
+		let results = run_query(&resolver, f.path(), slice_query("foo", Some(8), Some(12), false));
+		assert_eq!(results.len(), 1);
+		assert_eq!(results[0].kind, "§line[8..12]");
+		let text = match results[0].content.as_ref().expect("content") { pi_code_path::types::Content::Text { value } => value.clone(), _ => panic!("expected text content") };
+		assert!(text.contains("// body 8"), "got: {text}");
+		assert!(text.contains("// body 12"));
+		assert!(!text.contains("// body 7"));
+		assert!(!text.contains("// body 13"));
+	}
+
+	#[test]
+	fn w3b_absolute_disjoint_emits_diagnostic() {
+		let resolver = resolver();
+		let f = ts_with_long_foo();
+		let results = run_query(&resolver, f.path(), slice_query("foo", Some(1), Some(3), false));
+		assert_eq!(results.len(), 1);
+		assert!(
+			results[0].diagnostics.iter().any(|d| d.message.contains("symbol-slice-disjoint")),
+			"diagnostics: {:?}", results[0].diagnostics
+		);
+	}
+
+	#[test]
+	fn w4a_relative_symmetric() {
+		let resolver = resolver();
+		let f = ts_with_long_foo();
+		// Sym:±2 ⇒ (5-2)..(18+2) = 3..20
+		let results = run_query(&resolver, f.path(), slice_query("foo", Some(-2), Some(2), true));
+		assert_eq!(results.len(), 1);
+		assert_eq!(results[0].kind, "§line[3..20]");
+	}
+
+	#[test]
+	fn w4b_relative_asymmetric() {
+		let resolver = resolver();
+		let f = ts_with_long_foo();
+		// Sym:-1..+1 ⇒ (5-1)..(18+1) = 4..19
+		let results = run_query(&resolver, f.path(), slice_query("foo", Some(-1), Some(1), true));
+		assert_eq!(results.len(), 1);
+		assert_eq!(results[0].kind, "§line[4..19]");
+	}
+
+	#[test]
+	fn w4e_relative_clamps_to_file_bounds() {
+		let resolver = resolver();
+		let f = ts_with_long_foo();
+		// Sym:-100..+100 ⇒ clamps to (1, 20)
+		let results = run_query(&resolver, f.path(), slice_query("foo", Some(-100), Some(100), true));
+		assert_eq!(results.len(), 1);
+		assert_eq!(results[0].kind, "§line[1..20]");
+	}
+
+	#[test]
+	fn line_count_helper_matches_wc_l() {
+		assert_eq!(super::line_count_of(""), 0);
+		assert_eq!(super::line_count_of("a"), 1);
+		assert_eq!(super::line_count_of("a\n"), 1);
+		assert_eq!(super::line_count_of("a\nb"), 2);
+		assert_eq!(super::line_count_of("a\nb\n"), 2);
+		assert_eq!(super::line_count_of("a\nb\nc\n"), 3);
+	}
+
+	#[test]
+	fn line_byte_range_basic() {
+		let src = "l1\nl2\nl3\nl4\n";
+		assert_eq!(super::line_byte_range(src, 1, 1), Some((0, 3)));
+		assert_eq!(super::line_byte_range(src, 2, 3), Some((3, 9)));
+		assert_eq!(super::line_byte_range(src, 4, 4), Some((9, 12)));
 	}
 }

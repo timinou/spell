@@ -186,6 +186,11 @@ pub enum Predicate {
 	/// [count OP N] — typed count comparison (kept for back-compat; new code
 	/// uses Compare).
 	Count { kind: Option<String>, op: CompareOp, value: u64 },
+	/// FEAT-718: trailing line-slice on a symbol step (`Bar.method:80-90`,
+	/// `Bar.method:±5`, `Bar.method:-5..+10`). Sign-disambiguated:
+	/// `relative=false` ⇒ absolute file lines (intersected with symbol span);
+	/// `relative=true` ⇒ offsets applied to the symbol span boundaries.
+	SymbolSlice { start: Option<i64>, end: Option<i64>, relative: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

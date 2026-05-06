@@ -1,0 +1,43 @@
+#+TITLE: pi-code-path rust dialect: render_segments unreachable!() on uncommon RustSegment variants aborts napi
+#+STATE: ITEM
+#+SESSION_ID: 14d6607fc1369b3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T07-59-37-220Z_14d6607fc1369b3d.jsonl]]
+#+CUSTOM_ID: BUG-349-pi-code-path-rust-dialect-render-segment
+#+LAYER: pi-code-path
+#+PRIORITY: #A
+
+* Initial Message
+
+ok so your previous analysis is great *but* I would like to make CodePath more ergonomic and able to refer to all the empirical evidence of the bash tools directly in code path, without having to have a battery of arguments to the get tool. let's brainstorm, you can push back if you deem it worthy
+
+* Initial Message
+
+While running cargo+bun tests for PLAN-303, the napi async worker aborted with:
+
+#+begin_src text
+thread '<unnamed>' panicked at crates/pi-code-path/src/dialects/rust.rs:232:26:
+internal error: entered unreachable code
+thread caused non-unwinding panic. aborting.
+#+end_src
+
+Aborting the napi worker terminates the entire process tree (swarm-killer).
+
+* Cause
+
+=render_segments= in =crates/pi-code-path/src/dialects/rust.rs= line ~210 has a nested match. Outer match handles =Turbofish= and =ImplFor= explicitly. Inner match (catch-all branch) handles =Ident=, =Keyword=, =Raw= — and ends in =_ => unreachable!()=. Any other =RustSegment= variant (e.g. =Lifetime=, =Generic=, =Const=) hits this and aborts the napi async worker via the non-unwinding panic boundary.
+
+* Fix
+
+Replace =unreachable!()= with an exhaustive match (compile-time error if a variant is missed) OR a defensive fallback that returns the segment's debug representation as text. Prefer compile-time exhaustive: add explicit branches for every variant of =RustSegment=.
+
+Also: audit other =unreachable!()=/=panic!()= in dialects under napi async-work boundaries — convert to errors that the napi layer can surface as JS exceptions, rather than process-aborting panics.
+
+* Acceptance
+
+- =render_segments= matches all =RustSegment= variants exhaustively (no =unreachable!()=)
+- Test that exercises every variant
+- Sweep: any other =unreachable!()= / =panic!()= reachable from napi worker boundary either becomes an =Err= or is provably unreachable (with a comment justifying)
+
+* Verification
+
+=cargo test -p pi-code-path rust=

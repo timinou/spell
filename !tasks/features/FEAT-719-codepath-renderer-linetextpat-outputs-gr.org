@@ -1,0 +1,55 @@
+#+TITLE: CodePath renderer: §line[text~=PAT] outputs grep -n shape (LINE: content)
+#+STATE: ITEM
+#+SESSION_ID: 14d6607fc1369b3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T07-59-37-220Z_14d6607fc1369b3d.jsonl]]
+#+CUSTOM_ID: FEAT-719-codepath-renderer-linetextpat-outputs-gr
+#+EFFORT: 2h
+#+LAYER: pi-code-path coding-agent
+#+PARENT: PLAN-303-codepath-line-range-ergonomics-shorthand
+#+PRIORITY: #B
+
+* Initial Message
+
+ok so your previous analysis is great *but* I would like to make CodePath more ergonomic and able to refer to all the empirical evidence of the bash tools directly in code path, without having to have a battery of arguments to the get tool. let's brainstorm, you can push back if you deem it worthy
+
+* Initial Message
+
+103 =grep -n PAT FILE= calls in recent sessions. CodePath has =§line[text~=PAT]= but renders each match as =LOC#ID  [§line]
+  body
+
+= which is unfamiliar and ~5x verbose. Render predicate-matched line nodes in =grep -n= shape:
+
+#+begin_src text
+42:  const cached = useState(initial);
+58:  const [_, setX] = useState(0);
+#+end_src
+
+* Scope
+- File: =crates/pi-code-path/src/renderer.rs= (273 LoC) — node-list rendering for §line nodes
+- OR =packages/coding-agent/src/tools/codepath-result.ts= if rendering happens TS-side (verify which renders)
+- The line number must remain machine-parsable so =edit= can resolve anchor from it
+
+* Behavior switch
+- §line node carrying a TextMatch / LiteralMatch predicate ancestry ⇒ render as =LINE:  content=
+- §line node from range/slice (FEAT-716) ⇒ unchanged (content is whole sliced body, no per-line wrapping)
+- §line node from single ordinal (=§line[N]=) ⇒ keep current LINE#ID anchor form (anchor lookup workflow)
+
+* Tests
+- W5a: =foo.ts::§line[text~="useState"]= renders as =42:  ...= per match, no LOC#ID block
+- W5b: Multiple matches ⇒ each on its own line, sorted by line number
+- W5c: Glob: =**/*.ts::§line[text~="TODO"]= prefixes match line with =FILE:LINE: content=
+- W5d: =§line[N]= still renders LINE#ID (regression check)
+- W5e: =§line[A..B]= still renders single body (regression check)
+
+* Edge cases
+- Matched line containing a colon ⇒ first colon after line number is the separator; rest is content
+- Multi-line content via context (future) ⇒ separator =--= between non-adjacent matches (mirrors =grep -A/-B/-C=)
+
+* Acceptance
+- =cargo test -p pi-code-path render=
+- Manual: =get { target: "packages/coding-agent/src/tools/get.ts::§line[text~=\"applyTextSlice\"]" }= shows clean grep output
+- Byte-count for 10 matches in a 1000-line file ≤ 1KB
+
+* Verification
+=cargo test -p pi-code-path renderer=
+=bun test packages/coding-agent/test/get.test.ts=

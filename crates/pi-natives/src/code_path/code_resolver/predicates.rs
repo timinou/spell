@@ -54,5 +54,10 @@ pub fn eval(pred: &Predicate, node: &Node, src: &str, dialect: &LanguageDialect)
 			// Delegated to the walker which owns subquery evaluation.
 			true
 		},
+		Predicate::SymbolSlice { .. } => {
+			// FEAT-718: SymbolSlice does not filter — it transforms matched
+			// symbol nodes into sliced text bodies. The walker applies it.
+			true
+		},
 	}
 }

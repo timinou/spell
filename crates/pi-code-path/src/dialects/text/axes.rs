@@ -9,7 +9,7 @@ use regex::Regex;
 use super::{anchor::line_anchor_id, line_index::LineIndex, para_index::ParaIndex};
 use crate::{
 	ast::{CompareOp, Predicate, Step},
-	types::{Content, NodeRef},
+	types::{Content, Diagnostic, DiagnosticVariant, NodeRef},
 };
 
 // ── §line ────────────────────────────────────────────────────────
@@ -18,6 +18,11 @@ use crate::{
 pub fn line_steps(content: &[u8], step: &Step) -> Vec<NodeRef> {
 	let line_index = LineIndex::build(content);
 	let text = String::from_utf8_lossy(content);
+	// Slice mode: exactly one Range predicate → emit ONE node with joined text.
+	if let Some((start, end)) = slice_range_only(&step.predicates) {
+		return vec![build_line_slice(content, &text, &line_index, start, end)];
+	}
+
 	let mut selected: Vec<usize> = (1..=line_index.line_count()).collect();
 
 	for pred in &step.predicates {
@@ -43,6 +48,105 @@ pub fn line_steps(content: &[u8], step: &Step) -> Vec<NodeRef> {
 			}
 		})
 		.collect()
+}
+
+/// Returns Some((start, end)) when `predicates` is exactly one `Range` predicate.
+/// `start`/`end` are the raw isize bounds (negatives allowed; `None` = open).
+fn slice_range_only(predicates: &[Predicate]) -> Option<(Option<isize>, Option<isize>)> {
+	if predicates.len() != 1 {
+		return None;
+	}
+	match &predicates[0] {
+		Predicate::Range { start, end } => Some((*start, *end)),
+		_ => None,
+	}
+}
+
+/// Build a single sliced `§line` node from `start..=end` (1-indexed, inclusive).
+/// Negative bounds resolve from EOF; out-of-range bounds clamp with a warning.
+fn build_line_slice(
+	content: &[u8],
+	text: &str,
+	line_index: &LineIndex,
+	start_raw: Option<isize>,
+	end_raw: Option<isize>,
+) -> NodeRef {
+	let count = line_index.line_count() as isize;
+	let resolve = |raw: isize| -> isize {
+		if raw < 0 { count + raw + 1 } else { raw }
+	};
+	let (resolved_start, resolved_end) = match (start_raw, end_raw) {
+		(None, None) => (1, count),
+		(Some(s), None) => (resolve(s), count),
+		(None, Some(e)) => (1, resolve(e)),
+		(Some(s), Some(e)) => (resolve(s), resolve(e)),
+	};
+
+	let mut diagnostics: Vec<Diagnostic> = Vec::new();
+
+	// Inverted bounds (start > end) ⇒ explicit diagnostic, empty body.
+	if resolved_start > resolved_end {
+		diagnostics.push(Diagnostic {
+			variant: DiagnosticVariant::RangeBoundsInverted,
+			message: format!(
+				"§line range bounds inverted: start={resolved_start} > end={resolved_end}"
+			),
+			span:    None,
+		});
+		return slice_node(0..0, String::new(), resolved_start, resolved_end, diagnostics);
+	}
+
+	// 0-line file or empty intersection ⇒ empty body, no diagnostic.
+	if count == 0 {
+		return slice_node(0..0, String::new(), resolved_start, resolved_end, diagnostics);
+	}
+
+	// Clamp to file extent (1..=count). Emit warning if either bound was outside.
+	let clamped_start = resolved_start.max(1).min(count);
+	let clamped_end = resolved_end.max(1).min(count);
+	let clamped =
+		resolved_start != clamped_start || resolved_end != clamped_end;
+	if clamped {
+		diagnostics.push(Diagnostic {
+			variant: DiagnosticVariant::RangeClamped,
+			message: format!(
+				"§line range {resolved_start}..{resolved_end} clamped to {clamped_start}..{clamped_end} (file has {count} line(s))"
+			),
+			span:    None,
+		});
+	}
+
+	let first = clamped_start as usize;
+	let last = clamped_end as usize;
+	let start_range = line_index.line_range(first, content.len()).unwrap_or(0..0);
+	let end_range = line_index.line_range(last, content.len()).unwrap_or(0..0);
+	let byte_range = start_range.start..end_range.end;
+	let body = text[byte_range.clone()].to_string();
+	slice_node(byte_range, body, clamped_start, clamped_end, diagnostics)
+}
+
+fn slice_node(
+	range: std::ops::Range<usize>,
+	body: String,
+	start: isize,
+	end: isize,
+	diagnostics: Vec<Diagnostic>,
+) -> NodeRef {
+	let mut metadata = HashMap::new();
+	metadata.insert(
+		"shape".to_string(),
+		serde_json::Value::String("slice".to_string()),
+	);
+	metadata.insert("lineStart".to_string(), serde_json::Value::Number(start.into()));
+	metadata.insert("lineEnd".to_string(), serde_json::Value::Number(end.into()));
+	NodeRef {
+		locator: format!("<line {start}..{end}>"),
+		range,
+		kind: "§line".to_string(),
+		content: Some(Content::Text { value: body }),
+		metadata,
+		diagnostics,
+	}
 }
 
 fn line_predicate(
@@ -320,9 +424,20 @@ mod tests {
 		let content = b"a\nb\nc\nd\n";
 		let nodes =
 			line_steps(content, &step(vec![Predicate::Range { start: Some(2), end: Some(3) }]));
-		assert_eq!(nodes.len(), 2);
-		assert!(nodes[0].locator.starts_with("<line 2#"), "{}", nodes[0].locator); // 1-indexed: 2..=3 => lines 2 & 3
-		assert!(nodes[1].locator.starts_with("<line 3#"), "{}", nodes[1].locator);
+		assert_eq!(nodes.len(), 1);
+		let n = &nodes[0];
+		assert_eq!(n.kind, "§line");
+		assert_eq!(n.locator, "<line 2..3>");
+		let body = match n.content.as_ref().unwrap() {
+			Content::Text { value } => value.as_str(),
+			_ => panic!("slice node must be Text"),
+		};
+		assert_eq!(body, "b\nc\n");
+		assert!(n.diagnostics.is_empty(), "in-bounds slice has no diagnostics");
+		assert_eq!(
+			n.metadata.get("shape").and_then(|v| v.as_str()),
+			Some("slice")
+		);
 	}
 
 	#[test]
@@ -450,8 +565,138 @@ mod tests {
 	fn line_axis_negative_range_tail() {
 		let content = b"1\n2\n3\n4\n5\n";
 		let nodes = line_steps(content, &step(vec![Predicate::Range { start: Some(-2), end: None }]));
+		assert_eq!(nodes.len(), 1);
+		assert_eq!(nodes[0].locator, "<line 4..5>");
+		let body = match nodes[0].content.as_ref().unwrap() {
+			Content::Text { value } => value.as_str(),
+			_ => panic!("slice node must be Text"),
+		};
+		assert_eq!(body, "4\n5\n");
+	}
+
+	// ── FEAT-716 slice-shape coverage (W2a–W2g) ────────────────────────────
+
+	fn slice_body(node: &NodeRef) -> &str {
+		match node.content.as_ref().unwrap() {
+			Content::Text { value } => value.as_str(),
+			_ => panic!("slice node must be Text"),
+		}
+	}
+
+	#[test]
+	fn w2a_range_a_to_b_single_body() {
+		let content = b"l1\nl2\nl3\nl4\n";
+		let nodes =
+			line_steps(content, &step(vec![Predicate::Range { start: Some(2), end: Some(3) }]));
+		assert_eq!(nodes.len(), 1);
+		assert_eq!(slice_body(&nodes[0]), "l2\nl3\n");
+		assert_eq!(nodes[0].locator, "<line 2..3>");
+		assert!(nodes[0].diagnostics.is_empty());
+	}
+
+	#[test]
+	fn w2b_head_open_start() {
+		let content = b"l1\nl2\nl3\nl4\nl5\n";
+		let nodes = line_steps(content, &step(vec![Predicate::Range { start: None, end: Some(3) }]));
+		assert_eq!(nodes.len(), 1);
+		assert_eq!(slice_body(&nodes[0]), "l1\nl2\nl3\n");
+		assert!(nodes[0].diagnostics.is_empty());
+	}
+
+	#[test]
+	fn w2c_tail_open_end() {
+		let content = b"l1\nl2\nl3\nl4\n";
+		let nodes = line_steps(content, &step(vec![Predicate::Range { start: Some(3), end: None }]));
+		assert_eq!(nodes.len(), 1);
+		assert_eq!(slice_body(&nodes[0]), "l3\nl4\n");
+		assert_eq!(nodes[0].locator, "<line 3..4>");
+	}
+
+	#[test]
+	fn w2d_negative_anchor_tail_n() {
+		let content = b"l1\nl2\nl3\nl4\n";
+		let nodes = line_steps(content, &step(vec![Predicate::Range { start: Some(-2), end: None }]));
+		assert_eq!(nodes.len(), 1);
+		assert_eq!(slice_body(&nodes[0]), "l3\nl4\n");
+	}
+
+	#[test]
+	fn w2e_single_ordinal_keeps_anchor() {
+		let content = b"l1\nl2\nl3\nl4\n";
+		let nodes = line_steps(content, &step(vec![Predicate::Ordinal(2)]));
+		assert_eq!(nodes.len(), 1);
+		assert!(nodes[0].locator.starts_with("<line 2#"), "{}", nodes[0].locator);
+		// keeps per-line anchor metadata, not slice metadata
+		assert!(nodes[0].metadata.contains_key("anchorId"));
+		assert!(!nodes[0].metadata.contains_key("shape"));
+	}
+
+	#[test]
+	fn w2f_text_match_keeps_per_line() {
+		let content = b"foo\nbar\nbaz\n";
+		let nodes = line_steps(content, &step(vec![Predicate::TextMatch(r"ba.".to_string())]));
 		assert_eq!(nodes.len(), 2);
-		assert!(nodes[0].locator.starts_with("<line 4#"), "{}", nodes[0].locator);
-		assert!(nodes[1].locator.starts_with("<line 5#"), "{}", nodes[1].locator);
+		assert!(nodes[0].locator.starts_with("<line 2#"));
+		assert!(nodes[1].locator.starts_with("<line 3#"));
+	}
+
+	#[test]
+	fn w2g_eof_clamp_with_warning() {
+		let content = b"l1\nl2\nl3\n";
+		let nodes =
+			line_steps(content, &step(vec![Predicate::Range { start: Some(2), end: Some(99) }]));
+		assert_eq!(nodes.len(), 1);
+		assert_eq!(slice_body(&nodes[0]), "l2\nl3\n");
+		assert_eq!(nodes[0].diagnostics.len(), 1);
+		assert!(matches!(
+			nodes[0].diagnostics[0].variant,
+			DiagnosticVariant::RangeClamped
+		));
+	}
+
+	#[test]
+	fn slice_inverted_bounds_emits_diagnostic() {
+		let content = b"l1\nl2\nl3\n";
+		let nodes =
+			line_steps(content, &step(vec![Predicate::Range { start: Some(10), end: Some(5) }]));
+		assert_eq!(nodes.len(), 1);
+		assert_eq!(slice_body(&nodes[0]), "");
+		assert_eq!(nodes[0].diagnostics.len(), 1);
+		assert!(matches!(
+			nodes[0].diagnostics[0].variant,
+			DiagnosticVariant::RangeBoundsInverted
+		));
+	}
+
+	#[test]
+	fn slice_zero_line_file_empty_no_diag() {
+		let content = b"";
+		let nodes =
+			line_steps(content, &step(vec![Predicate::Range { start: Some(1), end: Some(5) }]));
+		assert_eq!(nodes.len(), 1);
+		assert_eq!(slice_body(&nodes[0]), "");
+		assert!(nodes[0].diagnostics.is_empty());
+	}
+
+	#[test]
+	fn slice_no_trailing_newline_final_line_counted() {
+		let content = b"l1\nl2\nl3";
+		let nodes = line_steps(content, &step(vec![Predicate::Range { start: Some(2), end: None }]));
+		assert_eq!(nodes.len(), 1);
+		assert_eq!(slice_body(&nodes[0]), "l2\nl3");
+	}
+
+	#[test]
+	fn slice_byte_overhead_bounded() {
+		// Output bytes for a 50-line slice ≤ source-bytes + small header.
+		let mut src = String::new();
+		for i in 1..=50 {
+			src.push_str(&format!("line {i}\n"));
+		}
+		let content = src.as_bytes();
+		let nodes =
+			line_steps(content, &step(vec![Predicate::Range { start: Some(1), end: Some(50) }]));
+		assert_eq!(nodes.len(), 1);
+		assert_eq!(slice_body(&nodes[0]).len(), src.len());
 	}
 }

@@ -91,6 +91,7 @@ function formatStatMetadata(node: NodeRefDto): string | null {
 		parts.push(`mtime=${iso}`);
 	}
 	if (typeof meta.target === "string") parts.push(`target=${meta.target}`);
+	if (typeof meta.lineCount === "number") parts.push(`lineCount=${meta.lineCount}`);
 	if (parts.length === 0) return null;
 	return ` [${node.kind} ${parts.join(" ")}]`;
 }
@@ -132,18 +133,60 @@ function getManagePayloadText(node: NodeRefDto): string | undefined {
 	}
 	return undefined;
 }
+function isMatchShapeNode(node: NodeRefDto): boolean {
+	return (node.metadata as Record<string, unknown> | undefined)?.shape === "match";
+}
+
+function renderMatchLine(node: NodeRefDto): string {
+	// FEAT-719: predicate-matched §line nodes render as `path:line:  content`
+	// (grep -n shape). LINE#ID anchor is intentionally omitted — anchor lookup
+	// is the ordinal form `§line[N]`. The line number stays machine-parsable so
+	// `edit` can still resolve the line.
+	const { path, line } = formatLocator(node.locator);
+	const raw = getNodeText(node) ?? "";
+	const content = raw.replace(/\r?\n$/, "");
+	const loc = path !== undefined && line !== undefined ? `${path}:${line}` : (path ?? node.locator);
+	return `${loc}:  ${content}`;
+}
+
+function compareMatchNodes(a: NodeRefDto, b: NodeRefDto): number {
+	const la = formatLocator(a.locator);
+	const lb = formatLocator(b.locator);
+	const pa = la.path ?? "";
+	const pb = lb.path ?? "";
+	if (pa !== pb) return pa < pb ? -1 : 1;
+	return (la.line ?? 0) - (lb.line ?? 0);
+}
+
 function buildNodeList(nodes: NodeRefDto[]): string {
-	return nodes
-		.map(node => {
-			const loc = nodeToLocation(node);
-			const text = getManagePayloadText(node) ?? getNodeText(node);
-			const kind = getNodeKindLabel(node);
-			if (text !== undefined) {
-				return `${loc}  [${kind}]\n${text}`;
-			}
-			return `${loc}  [${kind}]`;
-		})
-		.join("\n\n");
+	// Partition match-shape lines so the contiguous grep block renders together,
+	// preserves cross-file ordering, and can't be visually broken up by other
+	// node kinds in the same chunk batch.
+	const out: string[] = [];
+	let matchBuf: NodeRefDto[] = [];
+	const flushMatches = () => {
+		if (matchBuf.length === 0) return;
+		const sorted = [...matchBuf].sort(compareMatchNodes);
+		out.push(sorted.map(renderMatchLine).join("\n"));
+		matchBuf = [];
+	};
+	for (const node of nodes) {
+		if (isMatchShapeNode(node)) {
+			matchBuf.push(node);
+			continue;
+		}
+		flushMatches();
+		const loc = nodeToLocation(node);
+		const text = getManagePayloadText(node) ?? getNodeText(node);
+		const kind = getNodeKindLabel(node);
+		if (text !== undefined) {
+			out.push(`${loc}  [${kind}]\n${text}`);
+		} else {
+			out.push(`${loc}  [${kind}]`);
+		}
+	}
+	flushMatches();
+	return out.join("\n\n");
 }
 
 function buildLocations(nodes: NodeRefDto[]): string {

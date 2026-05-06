@@ -1,0 +1,103 @@
+#+TITLE: get tool: drop head/tail/offset/limit; rewrite prompt to teach line shorthand
+#+STATE: ITEM
+#+SESSION_ID: 14d6607fc1369b3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T07-59-37-220Z_14d6607fc1369b3d.jsonl]]
+#+CUSTOM_ID: FEAT-720-get-tool-drop-head-tail-offset-limit-rew
+#+DEPENDS: FEAT-715-codepath-parser-bare-path-line-shorthand FEAT-716-codepath-text-dialect-linea-b-returns-si
+#+EFFORT: 2h
+#+LAYER: coding-agent
+#+PARENT: PLAN-303-codepath-line-range-ergonomics-shorthand
+#+PRIORITY: #A
+
+* Initial Message
+
+ok so your previous analysis is great *but* I would like to make CodePath more ergonomic and able to refer to all the empirical evidence of the bash tools directly in code path, without having to have a battery of arguments to the get tool. let's brainstorm, you can push back if you deem it worthy
+
+* Initial Message
+
+After parser shorthand (FEAT-715) and §line range fix (FEAT-716) land, the =get= tool no longer needs line-level pagination params. Slicing flows through the path string. One reader, one mental model.
+
+* Scope
+- File: =packages/coding-agent/src/tools/codepath-types.ts= lines 83-118 — remove =head=, =tail=, =offset=, =limit= from =getSchema=
+- File: =packages/coding-agent/src/tools/get.ts= (388 LoC) — remove =applyTextSlice= helper (BUG-347 dies here), remove =wantsTextSlice=, remove their wiring; keep =limit= internally as an option to =executeCodePath= for glob-cap purposes only (not exposed in schema)
+- File: =packages/coding-agent/src/prompts/tools/get.md= — full rewrite of slicing examples and =<critical>= block
+- File: =packages/coding-agent/test/get.test.ts= — replace head/tail/offset/limit tests with shorthand tests
+
+* Schema after trim
+
+#+begin_src ts
+export const getSchema = Type.Object(
+  {
+    target: Type.String({ description: "..." }),
+    format: Type.Optional(Type.String({ description: "..." })),
+    root: Type.Optional(Type.String({ ... })),
+    content: Type.Optional(Type.Boolean({ ... })),
+    recursive: Type.Optional(Type.Boolean({ ... })),
+    depth: Type.Optional(Type.Integer({ ... })),
+    gitignore: Type.Optional(Type.Boolean({ ... })),
+  },
+  { additionalProperties: false },
+);
+#+end_src
+
+* Validation hint for old params
+
+If a caller still passes =head/tail/offset/limit= (typebox rejects with =additionalProperties: false=), surface an actionable error in the wrapping tool result:
+
+#+begin_src text
+[§unsupported-param] head/tail/offset/limit removed.
+  use:  target: "foo.ts:50"           (head 50)
+        target: "foo.ts:-50"          (tail 50)
+        target: "foo.ts:80-130"       (range)
+        target: "foo.ts::§line[N]"    (single line with anchor)
+#+end_src
+
+(Implementation: validation already runs in =executeTool= wrapper; verify the rejection message routes through somewhere agent-visible.)
+
+* Prompt rewrite (new examples block)
+
+#+begin_src text
+<examples>
+get { target: "src/server.ts" }                      # full file
+get { target: "src/server.ts:50" }                   # first 50 lines
+get { target: "src/server.ts:-50" }                  # last 50 lines
+get { target: "src/server.ts:80-130" }               # lines 80..130
+get { target: "src/server.ts:80-" }                  # line 80 to EOF
+get { target: "src/server.ts:80+50" }                # 50 lines from 80
+get { target: "src/server.ts::App.handleRequest" }   # symbol body
+get { target: "src/server.ts::App.handle:±5" }       # symbol ±5 lines
+get { target: "src/server.ts::App.handle:80-90" }    # absolute slice within symbol
+get { target: "src/**/*.test.ts" }                   # glob
+get { target: "**/*.ts::§line[text~=\"TODO\"]" }     # grep across files
+get { target: "src/server.ts::§line[42]" }           # single line with LINE#ID anchor
+get { target: "config.json#stat" }                   # size, mtime, lineCount
+get { target: "src/", recursive: true }              # tree
+get { target: "memory://root" }                      # URI
+</examples>
+
+<critical>
+- You **MUST** use `get` instead of bash equivalents `cat`, `grep`, `find`, `rg`, `ls`, `sed`, `awk`, `head`, `tail`, `wc -l`.
+- Range syntax: `path:N` head, `path:-N` tail, `path:A-B` range, `path:A-` from-A, `path:A+N` N-from-A.
+- Symbol + slice: bare digits = absolute file lines; `+`/`-` digits = relative to symbol bounds.
+- For regex search: `**/*.ts::§line[text~="pat"]` (renders as `LINE: content`).
+- For single line + anchor: `foo.ts::§line[N]` (returns LINE#ID for `edit`).
+</critical>
+#+end_src
+
+* Tests
+- W7a: =getSchema= rejects =head=, =tail=, =offset=, =limit=
+- W7b: Existing tests in =get.test.ts= referencing those params are rewritten to use shorthand
+- W7c: =get { target: "fixture.ts:80-130" }= returns sliced body
+- W7d: =get { target: "fixture.ts::method:±5" }= returns extended slice
+- W7e: =get { target: "fixture.ts#stat" }= returns lineCount
+
+* Acceptance
+- =bun test packages/coding-agent/test/get.test.ts= passes
+- =bun run check:ts= for coding-agent passes
+- Prompt rewrite committed in same change
+- =applyTextSlice= function deleted (no callers remain)
+- =BUG-347= reference comment removed (issue absorbed by removal)
+
+* Verification
+=bun test packages/coding-agent/test/get.test.ts=
+=tsgo -p packages/coding-agent/tsconfig.json --noEmit=

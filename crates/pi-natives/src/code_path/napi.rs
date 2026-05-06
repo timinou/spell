@@ -882,9 +882,10 @@ mod tests {
 		)
 		.unwrap();
 		let nodes: Vec<_> = chunks.iter().flat_map(|c| c.nodes.iter()).collect();
-		assert_eq!(nodes.len(), 2);
-		assert!(nodes[0].locator.contains("<line 2#"));
-		assert!(nodes[1].locator.contains("<line 3#"));
+		assert_eq!(nodes.len(), 1, "FEAT-716: range slice = single body");
+		assert!(nodes[0].locator.ends_with("<line 2..3>"), "{}", nodes[0].locator);
+		let c = nodes[0].content.as_ref().expect("content expected");
+		assert_eq!(c.value.as_deref(), Some("l2\nl3\n"));
 	}
 	#[test]
 	fn regex_grep_over_glob() {

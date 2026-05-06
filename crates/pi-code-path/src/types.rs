@@ -119,6 +119,10 @@ pub enum DiagnosticVariant {
 	ZeroByteDeleteBlocked,
 	/// Timeout or cancellation.
 	Cancelled,
+	/// `§line[A..B]` with start > end (e.g. `§line[10..5]`).
+	RangeBoundsInverted,
+	/// Range predicate bounds clamped to file extent.
+	RangeClamped,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

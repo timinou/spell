@@ -58,7 +58,8 @@ pub fn parse_code_path<N: NameLexer>(input: &str, name_lexer: &N) -> Result<Code
 			}
 			Ok(cp)
 		},
-		Err(_) => Err(Diagnostic {
+		Err(InnerErr::Shorthand(d)) => Err(d),
+		Err(InnerErr::Parse) => Err(Diagnostic {
 			variant: DiagnosticVariant::ParseError,
 			message: format!("parse failed at position {}", input.len() - working.len()),
 			span:    Some(Span { start: input.len() - working.len(), end: input.len() }),
@@ -78,18 +79,96 @@ pub fn parse_locator(input: &str) -> Result<Locator, Diagnostic> {
 
 // ── CodePath top-level (recursive descent) ──────────────────────
 
-fn parse_code_path_inner<N: NameLexer>(input: &mut &str, name_lexer: &N) -> ModalResult<CodePath> {
+/// Internal error for `parse_code_path_inner`. `Parse` collapses to the
+/// generic position-based diagnostic; `Shorthand` carries a specific message
+/// for FEAT-715 line-slice bound violations.
+enum InnerErr {
+	Parse,
+	Shorthand(Diagnostic),
+}
+
+impl From<winnow::error::ErrMode<winnow::error::ContextError>> for InnerErr {
+	fn from(_: winnow::error::ErrMode<winnow::error::ContextError>) -> Self {
+		InnerErr::Parse
+	}
+}
+
+fn parse_code_path_inner<N: NameLexer>(
+	input: &mut &str,
+	name_lexer: &N,
+) -> Result<CodePath, InnerErr> {
 	let loc = locator(input)?;
 	let _ = ws(input);
-	let q = if input.starts_with("::") {
-		"::".parse_next(input)?;
+
+	// FEAT-715: line-slice shorthand. Sniffed only when no `::Symbol`
+	// follows; produces a synthesised `§line[..]` query so downstream
+	// rendering / matching paths reuse the existing range predicate.
+	let shorthand_q = if input.starts_with(':') && !input.starts_with("::") {
+		let probe_before = *input;
+		let mut probe = probe_before;
+		match parse_line_slice_suffix(&mut probe) {
+			Some((start, end)) => {
+				validate_line_slice(start, end)?;
+				*input = probe;
+				Some(synth_line_slice_query(start, end))
+			},
+			None => None,
+		}
+	} else {
+		None
+	};
+
+	let _ = ws(input);
+	let q = if let Some(s) = shorthand_q {
+		Some(s)
+	} else if input.starts_with("::") {
+		let _: ModalResult<&str> = "::".parse_next(input);
+		// Above always succeeds because we just sniffed `::`.
 		let _ = ws(input);
 		Some(parse_query(input, name_lexer)?)
 	} else {
 		None
 	};
-	let qual = opt(qualifier).parse_next(input)?;
+	let qual: Option<Qualifier> = opt(qualifier).parse_next(input)?;
 	Ok(CodePath { locator: loc, query: q, qualifier: qual })
+}
+
+/// Bounds validation for shorthand line slices. Surfaces specific diagnostics
+/// per FEAT-715 acceptance:
+/// - any `Some(0)` → `line-numbers-are-1-indexed`
+/// - positive start > positive end → `range-bounds-inverted`
+///
+/// Negative start (tail form `:-N`) is intentionally exempt from the
+/// 1-indexed check; `0` end alone is also a 1-indexed violation.
+fn validate_line_slice(start: Option<isize>, end: Option<isize>) -> Result<(), InnerErr> {
+	if start == Some(0) || end == Some(0) {
+		return Err(InnerErr::Shorthand(Diagnostic {
+			variant: DiagnosticVariant::ParseError,
+			message: "line-numbers-are-1-indexed".to_string(),
+			span:    None,
+		}));
+	}
+	if let (Some(a), Some(b)) = (start, end) {
+		if a > 0 && b > 0 && a > b {
+			return Err(InnerErr::Shorthand(Diagnostic {
+				variant: DiagnosticVariant::ParseError,
+				message: "range-bounds-inverted".to_string(),
+				span:    None,
+			}));
+		}
+	}
+	Ok(())
+}
+
+fn synth_line_slice_query(start: Option<isize>, end: Option<isize>) -> Query {
+	Query {
+		head:  Step {
+			axis:       Some(Axis::Structural),
+			head:       Head::NodeKind("line".to_string()),
+			predicates: vec![Predicate::Range { start, end }],
+		},
+		chain: Vec::new(),
+	}
 }
 
 fn parse_query<N: NameLexer>(input: &mut &str, name_lexer: &N) -> ModalResult<Query> {
@@ -124,7 +203,15 @@ fn parse_step<N: NameLexer>(input: &mut &str, name_lexer: &N) -> ModalResult<Ste
 		Some(Axis::Anchor) => Head::AnchorName(ident(input)?.to_string()),
 		None => parse_head_payload(input, name_lexer)?,
 	};
-	let predicates: Vec<Predicate> = repeat(0.., predicate).parse_next(input)?;
+	let mut predicates: Vec<Predicate> = repeat(0.., predicate).parse_next(input)?;
+	// FEAT-718: trailing slice suffix `:80-90`, `:±5`, `:-5..+10` on a
+	// symbol step (axis None + Head::Name). The suffix lives outside the
+	// `[ ]` predicate brackets so it is parsed here rather than in `predicate`.
+	if ax.is_none() && matches!(head, Head::Name(_)) {
+		if let Some((start, end, relative)) = parse_symbol_slice_suffix(input) {
+			predicates.push(Predicate::SymbolSlice { start, end, relative });
+		}
+	}
 	Ok(Step { axis: ax, head, predicates })
 }
 
@@ -160,6 +247,200 @@ fn integer(input: &mut &str) -> ModalResult<isize> {
 	Ok(if neg { -value } else { value })
 }
 
+// ── FEAT-715: line-slice shorthand suffix ────────────────────────
+//
+// Parses the `:N` / `:-N` / `:A-B` / `:A-` / `:A+N` suffix that follows a
+// file path (or, per FEAT-718, a symbol). On match the lexer advances
+// `*input` past the suffix and returns a `(start, end)` pair sharing the
+// encoding of `Predicate::Range`:
+//
+//   `:N`   → `(None,        Some(N))`        head N
+//   `:-N`  → `(Some(-N),    None)`           tail N (negative = from-EOF)
+//   `:A-B` → `(Some(A),     Some(B))`        inclusive range
+//   `:A-`  → `(Some(A),     None)`           A..EOF
+//   `:A+N` → `(Some(A),     Some(A+N-1))`    count form
+//
+// On non-match the lexer returns `None` and leaves `*input` unchanged.
+// Bounds validation (1-indexed, inverted) is the caller's responsibility.
+pub(crate) fn parse_line_slice_suffix(
+	input: &mut &str,
+) -> Option<(Option<isize>, Option<isize>)> {
+	let s = *input;
+	let bytes = s.as_bytes();
+	if bytes.first().copied() != Some(b':') {
+		return None;
+	}
+	// Reject `::` here so callers may safely sniff in either direction.
+	if bytes.get(1).copied() == Some(b':') {
+		return None;
+	}
+	// Scan the suffix until a kernel boundary: `#`, ` `, `:`, or EOF.
+	let mut end = 1;
+	while end < bytes.len() {
+		let b = bytes[end];
+		if b == b'#' || b == b' ' || b == b':' {
+			break;
+		}
+		end += 1;
+	}
+	let payload = &s[1..end];
+	if payload.is_empty() {
+		return None;
+	}
+	let parsed = parse_slice_payload(payload)?;
+	*input = &s[end..];
+	Some(parsed)
+}
+
+fn parse_slice_payload(s: &str) -> Option<(Option<isize>, Option<isize>)> {
+	// `:-N` → tail (single negative integer).
+	if let Some(rest) = s.strip_prefix('-') {
+		if !is_pos_digits(rest) {
+			return None;
+		}
+		let n: isize = rest.parse().ok()?;
+		return Some((Some(-n), None));
+	}
+	// `:A+N` → count form (no leading `+` since 0-index excluded above).
+	if let Some(idx) = s.find('+') {
+		let (a_s, rest) = s.split_at(idx);
+		let n_s = &rest[1..];
+		if !is_pos_digits(a_s) || !is_pos_digits(n_s) {
+			return None;
+		}
+		let a: isize = a_s.parse().ok()?;
+		let n: isize = n_s.parse().ok()?;
+		return Some((Some(a), Some(a.saturating_add(n).saturating_sub(1))));
+	}
+	// `:A-B` or `:A-` → range form.
+	if let Some(idx) = s.find('-') {
+		let (a_s, rest) = s.split_at(idx);
+		let b_s = &rest[1..];
+		if !is_pos_digits(a_s) {
+			return None;
+		}
+		let a: isize = a_s.parse().ok()?;
+		if b_s.is_empty() {
+			return Some((Some(a), None));
+		}
+		if !is_pos_digits(b_s) {
+			return None;
+		}
+		let b: isize = b_s.parse().ok()?;
+		return Some((Some(a), Some(b)));
+	}
+	// `:N` → head (pure positive integer).
+	if is_pos_digits(s) {
+		let n: isize = s.parse().ok()?;
+		return Some((None, Some(n)));
+	}
+	None
+}
+
+// ── FEAT-718: symbol line-slice suffix ──────────────────────────
+//
+// Parses the slice token that may follow a symbol step.  Supported forms:
+//   `:80-90`    absolute file lines (both unsigned, `-` separator)
+//   `:±N`       sugar for `-N..+N`               (relative)
+//   `:A..B`     `..` separator; if either bound has explicit `+`/`-` ⇒ relative
+//   `:0..+5`    relative trailing-context-only
+//   `:-3..0`    relative leading-context-only
+//
+// Sign rule (locked by PLAN-303): bare digits ⇒ ABSOLUTE; explicit `+` or `-`
+// on either bound ⇒ RELATIVE.  Returns `(start, end, relative)` and advances
+// `*input` past the suffix on match.  On non-match, leaves `*input` unchanged.
+pub(crate) fn parse_symbol_slice_suffix(
+	input: &mut &str,
+) -> Option<(Option<i64>, Option<i64>, bool)> {
+	let s = *input;
+	let bytes = s.as_bytes();
+	if bytes.first().copied() != Some(b':') {
+		return None;
+	}
+	// Reject `::` so symbol-of-symbol parses are unaffected.
+	if bytes.get(1).copied() == Some(b':') {
+		return None;
+	}
+	// Scan to the next kernel boundary.
+	let mut end = 1;
+	while end < s.len() {
+		let b = bytes[end];
+		if b == b'#' || b == b' ' || b == b':' || b == b'[' || b == b'(' {
+			break;
+		}
+		end += 1;
+	}
+	let payload = &s[1..end];
+	if payload.is_empty() {
+		return None;
+	}
+	let parsed = parse_symbol_slice_payload(payload)?;
+	*input = &s[end..];
+	Some(parsed)
+}
+
+fn parse_symbol_slice_payload(s: &str) -> Option<(Option<i64>, Option<i64>, bool)> {
+	// `±N` shorthand → (-N, +N) relative.
+	if let Some(rest) = s.strip_prefix('±') {
+		if !is_pos_digits(rest) {
+			return None;
+		}
+		let n: i64 = rest.parse().ok()?;
+		return Some((Some(-n), Some(n), true));
+	}
+	// `A..B` form — sign-rule decides relative vs absolute.
+	if let Some(idx) = s.find("..") {
+		let a = &s[..idx];
+		let b = &s[idx + 2..];
+		if a.is_empty() || b.is_empty() {
+			return None;
+		}
+		let (av, a_signed) = parse_signed_int_token(a)?;
+		let (bv, b_signed) = parse_signed_int_token(b)?;
+		let relative = a_signed || b_signed;
+		return Some((Some(av), Some(bv), relative));
+	}
+	// `A-B` absolute (both unsigned, single dash). Reject leading `-` to avoid
+	// matching `-N` (tail-form), which is not a symbol-slice form.
+	if !s.starts_with('-') {
+		if let Some(idx) = s.find('-') {
+			let a = &s[..idx];
+			let b = &s[idx + 1..];
+			if !is_pos_digits(a) || !is_pos_digits(b) {
+				return None;
+			}
+			let av: i64 = a.parse().ok()?;
+			let bv: i64 = b.parse().ok()?;
+			return Some((Some(av), Some(bv), false));
+		}
+	}
+	None
+}
+
+/// Parse a token that may carry an explicit sign. Returns `(value, had_sign)`.
+fn parse_signed_int_token(s: &str) -> Option<(i64, bool)> {
+	if let Some(rest) = s.strip_prefix('+') {
+		if !is_pos_digits(rest) {
+			return None;
+		}
+		rest.parse::<i64>().ok().map(|n| (n, true))
+	} else if let Some(rest) = s.strip_prefix('-') {
+		if !is_pos_digits(rest) {
+			return None;
+		}
+		rest.parse::<i64>().ok().map(|n| (-n, true))
+	} else {
+		if !is_pos_digits(s) {
+			return None;
+		}
+		s.parse::<i64>().ok().map(|n| (n, false))
+	}
+}
+
+fn is_pos_digits(s: &str) -> bool {
+	!s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn locator(input: &mut &str) -> ModalResult<Locator> {
 	alt((uri_locator.map(Locator::Uri), fs_locator.map(Locator::Fs))).parse_next(input)
 }
@@ -167,7 +448,7 @@ fn locator(input: &mut &str) -> ModalResult<Locator> {
 fn uri_locator(input: &mut &str) -> ModalResult<UriLocator> {
 	let scheme: &str = ident.parse_next(input)?;
 	"://".parse_next(input)?;
-	let path = path_until_kernel_op(input);
+	let path = path_until_kernel_op(input, false);
 	Ok(UriLocator { scheme: scheme.to_string(), path })
 }
 
@@ -177,7 +458,7 @@ fn uri_locator(input: &mut &str) -> ModalResult<UriLocator> {
 /// Consume input up to a kernel boundary: `::`, ` ::`, `#`, or bare space.
 /// Backtick-quoted regions are taken verbatim so `\`weird::name with spaces\``
 /// is one literal.
-fn path_until_kernel_op(input: &mut &str) -> String {
+fn path_until_kernel_op(input: &mut &str, shorthand_break: bool) -> String {
 	let mut s = String::new();
 	let mut consumed = 0;
 	let mut in_backtick = false;
@@ -205,6 +486,15 @@ fn path_until_kernel_op(input: &mut &str) -> String {
 		if c == '#' {
 			break;
 		}
+		// FEAT-715: stop at `:` beginning a line-slice shorthand suffix so
+		// the suffix is not absorbed into the FS path. URI paths (e.g.
+		// `http://x.com:8080`) pass `shorthand_break=false` to keep `:` literal.
+		if shorthand_break && c == ':' {
+			let mut probe = &input[idx..];
+			if parse_line_slice_suffix(&mut probe).is_some() {
+				break;
+			}
+		}
 		if c == ' ' {
 			break;
 		}
@@ -216,7 +506,7 @@ fn path_until_kernel_op(input: &mut &str) -> String {
 }
 
 fn fs_locator(input: &mut &str) -> ModalResult<FsLocator> {
-	let raw = path_until_kernel_op(input);
+	let raw = path_until_kernel_op(input, true);
 	if raw.is_empty() {
 		return Err(winnow::error::ErrMode::Backtrack(winnow::error::ContextError::default()));
 	}
@@ -1160,5 +1450,194 @@ mod tests {
 			"expected DidYouMean hint, got: {}",
 			diag.message
 		);
+	}
+
+	// ── FEAT-715: line-slice shorthand ────────────────────────────
+
+	/// Pull the `Range` predicate from a synthesised `§line[..]` query.
+	fn shorthand_range(cp: &CodePath) -> (Option<isize>, Option<isize>) {
+		let q = cp.query.as_ref().expect("shorthand should synth a query");
+		assert!(matches!(q.head.axis, Some(Axis::Structural)));
+		match &q.head.head {
+			Head::NodeKind(s) => assert_eq!(s, "line"),
+			other => panic!("expected NodeKind(line), got {other:?}"),
+		}
+		assert_eq!(q.head.predicates.len(), 1);
+		match &q.head.predicates[0] {
+			Predicate::Range { start, end } => (*start, *end),
+			other => panic!("expected Range, got {other:?}"),
+		}
+	}
+
+	#[test]
+	fn shorthand_w1a_head() {
+		// `:N` → head N: (None, Some(N))
+		let cp = parse_code_path("foo.ts:50", &DotLexer).unwrap();
+		assert!(matches!(cp.locator, Locator::Fs(_)));
+		assert_eq!(shorthand_range(&cp), (None, Some(50)));
+	}
+
+	#[test]
+	fn shorthand_w1a_tail() {
+		// `:-N` → tail N: (Some(-N), None)
+		let cp = parse_code_path("foo.ts:-25", &DotLexer).unwrap();
+		assert_eq!(shorthand_range(&cp), (Some(-25), None));
+	}
+
+	#[test]
+	fn shorthand_w1a_range() {
+		// `:A-B` → inclusive range: (Some(A), Some(B))
+		let cp = parse_code_path("foo.ts:10-40", &DotLexer).unwrap();
+		assert_eq!(shorthand_range(&cp), (Some(10), Some(40)));
+	}
+
+	#[test]
+	fn shorthand_w1a_open_range() {
+		// `:A-` → A..EOF: (Some(A), None)
+		let cp = parse_code_path("foo.ts:80-", &DotLexer).unwrap();
+		assert_eq!(shorthand_range(&cp), (Some(80), None));
+	}
+
+	#[test]
+	fn shorthand_w1a_count() {
+		// `:A+N` → (Some(A), Some(A+N-1))
+		let cp = parse_code_path("foo.ts:30+5", &DotLexer).unwrap();
+		assert_eq!(shorthand_range(&cp), (Some(30), Some(34)));
+	}
+
+	#[test]
+	fn shorthand_helper_advances_input() {
+		// Helper exposed `pub(crate)` for FEAT-718 reuse: must consume only
+		// the matched suffix and leave the remainder untouched.
+		let mut s = ":50#raw";
+		let got = parse_line_slice_suffix(&mut s);
+		assert_eq!(got, Some((None, Some(50))));
+		assert_eq!(s, "#raw");
+
+		let mut s = ":10-40 trailing";
+		let got = parse_line_slice_suffix(&mut s);
+		assert_eq!(got, Some((Some(10), Some(40))));
+		assert_eq!(s, " trailing");
+
+		let mut s = ":abc";
+		assert_eq!(parse_line_slice_suffix(&mut s), None);
+		assert_eq!(s, ":abc", "non-match must leave input untouched");
+
+		let mut s = "::Symbol";
+		assert_eq!(parse_line_slice_suffix(&mut s), None);
+		assert_eq!(s, "::Symbol", "`::` must never be consumed as shorthand");
+	}
+
+	#[test]
+	fn shorthand_w1b_no_dual_match() {
+		// `foo.ts::Bar.method` — `::Symbol` parsing wins; the synthesised
+		// `§line` query MUST NOT appear.
+		let cp = parse_code_path("foo.ts::Bar.method", &DotLexer).unwrap();
+		let q = cp.query.unwrap();
+		assert!(matches!(q.head.head, Head::Name(_)));
+	}
+
+	#[test]
+	fn shorthand_w1c_url_form_unaffected() {
+		// `http://x.com:80/path` keeps URL form (URI sniff wins, and the
+		// URI path scanner does not break on shorthand `:`).
+		let cp = parse_code_path("http://x.com:80/path", &DotLexer).unwrap();
+		match &cp.locator {
+			Locator::Uri(u) => {
+				assert_eq!(u.scheme, "http");
+				assert_eq!(u.path, "x.com:80/path");
+			},
+			other => panic!("expected URI locator, got {other:?}"),
+		}
+		assert!(cp.query.is_none());
+	}
+
+	#[test]
+	fn shorthand_w1c_url_with_pure_port() {
+		// `http://x.com:8080` (no trailing path): also keeps URL form.
+		let cp = parse_code_path("http://x.com:8080", &DotLexer).unwrap();
+		match &cp.locator {
+			Locator::Uri(u) => assert_eq!(u.path, "x.com:8080"),
+			other => panic!("expected URI locator, got {other:?}"),
+		}
+		assert!(cp.query.is_none());
+	}
+
+	#[test]
+	fn shorthand_w1c_windows_path_falls_through() {
+		// `C:/path/file.ts` — suffix `/path/file.ts` is non-numeric, so the
+		// shorthand sniff fails and the `:` is kept literal in the FS path.
+		let cp = parse_code_path("C:/path/file.ts", &DotLexer).unwrap();
+		assert!(matches!(cp.locator, Locator::Fs(_)));
+		assert!(cp.query.is_none());
+	}
+
+	#[test]
+	fn shorthand_w1d_non_numeric_falls_through() {
+		// `foo.ts:abc` — not shorthand. Currently parses as path containing `:`
+		// (no synthesised query).
+		let cp = parse_code_path("foo.ts:abc", &DotLexer).unwrap();
+		assert!(cp.query.is_none(), "non-shorthand must not synth query");
+	}
+
+	#[test]
+	fn shorthand_w1e_composes_with_qualifier() {
+		// `foo.ts:50#raw` — `:50` consumed, `#raw` remains a qualifier.
+		let cp = parse_code_path("foo.ts:50#raw", &DotLexer).unwrap();
+		assert_eq!(shorthand_range(&cp), (None, Some(50)));
+		let qual = cp.qualifier.expect("qualifier #raw should be attached");
+		assert_eq!(qual.name, "raw");
+	}
+
+	#[test]
+	fn shorthand_w1e_range_with_qualifier() {
+		let cp = parse_code_path("foo.ts:80-130#raw", &DotLexer).unwrap();
+		assert_eq!(shorthand_range(&cp), (Some(80), Some(130)));
+		assert_eq!(cp.qualifier.unwrap().name, "raw");
+	}
+
+	#[test]
+	fn shorthand_w1f_zero_start_rejected() {
+		let d = parse_code_path("foo.ts:0", &DotLexer).unwrap_err();
+		assert!(
+			d.message.contains("line-numbers-are-1-indexed"),
+			"expected 1-indexed diagnostic, got: {}",
+			d.message
+		);
+	}
+
+	#[test]
+	fn shorthand_w1f_zero_in_range_rejected() {
+		let d = parse_code_path("foo.ts:0-10", &DotLexer).unwrap_err();
+		assert!(d.message.contains("line-numbers-are-1-indexed"));
+		let d2 = parse_code_path("foo.ts:10-0", &DotLexer).unwrap_err();
+		assert!(d2.message.contains("line-numbers-are-1-indexed"));
+	}
+
+	#[test]
+	fn shorthand_w1g_inverted_rejected() {
+		let d = parse_code_path("foo.ts:200-100", &DotLexer).unwrap_err();
+		assert!(
+			d.message.contains("range-bounds-inverted"),
+			"expected inverted-bounds diagnostic, got: {}",
+			d.message
+		);
+	}
+
+	#[test]
+	fn shorthand_round_trip() {
+		// FEAT-715 acceptance: parse(serialize(parse(s))) == parse(s) for
+		// every valid form. Renderer emits canonical `§line[..]` form which
+		// re-parses back to the identical AST.
+		for form in [
+			"foo.ts:50",
+			"foo.ts:-25",
+			"foo.ts:10-40",
+			"foo.ts:80-",
+			"foo.ts:30+5",
+			"foo.ts:50#raw",
+		] {
+			rt(form);
+		}
 	}
 }
