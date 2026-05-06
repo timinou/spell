@@ -1,0 +1,31 @@
+#+TITLE: JS InternalUrlRouter as single source for &lt;scheme&gt;:// resolution
+#+STATE: DONE
+#+SESSION_ID: 14d6907eb0fbe7f4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T11-29-19-043Z_14d6907eb0fbe7f4.jsonl]]
+#+CUSTOM_ID: FEAT-723-js-internalurlrouter-as-single-source-fo
+
+* Initial Message
+
+i validate it all. swarm orchestrate all FEATs and BUGs, testing and committing as you go
+
+* Scope
+Remove the JS_PREFERRED_SCHEMES allowlist in get.ts. Any scheme registered with the InternalUrlRouter is JS-owned. Kernel never sees `<scheme>://` targets when `router.canHandle(uriBase) === true`.
+
+* Implementation
+- packages/coding-agent/src/tools/get.ts: drop JS_PREFERRED_SCHEMES + extractTargetScheme; use router.canHandle(uriBase). Keep the splitCodepath suffix-forwarding path identical (filesystem sourcePath → re-route via executeCodePath; virtual sourcePath → emit `[note]`).
+- packages/coding-agent/test/get.test.ts: replace allowlist-coupled test names with router-based assertion ("any registered scheme preempts kernel"). Add negative test: unknown scheme `nope://x` falls through to kernel and surfaces kernel diagnostic.
+
+* Tests
+- bun test packages/coding-agent/test/get.test.ts
+- Verify FEAT-815 tests still green
+
+* Edge Cases
+- Codepath suffix on URI with virtual sourcePath
+- Suffix on URI with filesystem sourcePath
+- Unknown scheme
+
+* Acceptance Criteria
+- No JS_PREFERRED_SCHEMES symbol remains in get.ts
+- All scheme tests pass via router-based dispatch
+
+NOTE [2026-05-06]: Commit 3c886e4d8

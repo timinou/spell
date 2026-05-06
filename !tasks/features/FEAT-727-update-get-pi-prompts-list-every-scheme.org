@@ -1,0 +1,32 @@
+#+TITLE: Update get/pi:// prompts: list every scheme + drop legacy tool mentions
+#+STATE: DONE
+#+SESSION_ID: 14d6907eb0fbe7f4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T11-29-19-043Z_14d6907eb0fbe7f4.jsonl]]
+#+CUSTOM_ID: FEAT-727-update-get-pi-prompts-list-every-scheme
+
+* Initial Message
+
+i validate it all. swarm orchestrate all FEATs and BUGs, testing and committing as you go
+
+* Scope
+Reflect the FEAT-721 cutover in user-facing prompts.
+
+* Implementation
+- packages/coding-agent/src/prompts/tools/get.md:
+  - Replace existing URI schemes bullet with a complete list, one-line semantics each: jobs, mcp, task, data, org, canvas, agent, artifact, local, memory, pi, rule, skill
+  - Add a sentence: "Any `<scheme>://X` resolving to a filesystem path supports `::§line[]`, `::Symbol`, `#stat`, etc., the same way bare paths do."
+- Search for and remove any remaining legacy mentions of read/write/grep/find/code/ast_grep/ast_edit in prompts:
+  - packages/coding-agent/src/prompts/system/*.md
+  - packages/coding-agent/src/prompts/tools/*.md
+
+* Tests
+- bun test packages/coding-agent/test/prompts/
+
+* Edge Cases
+- Snapshot tests must be updated alongside
+
+* Acceptance Criteria
+- All schemes listed in get.md
+- No "read tool"/"grep tool"/"ast_grep tool" affordances remain in prompt corpus (string mentions in narrative prose may stay if they describe the legacy state explicitly; live affordance instructions must use `get`/`edit`/`create`)
+
+NOTE [2026-05-06]: Commit da092aa69

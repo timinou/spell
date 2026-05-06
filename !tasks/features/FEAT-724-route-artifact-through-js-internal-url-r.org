@@ -1,0 +1,33 @@
+#+TITLE: Route artifact:// through JS internal-URL router
+#+STATE: DONE
+#+SESSION_ID: 14d6907eb0fbe7f4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T11-29-19-043Z_14d6907eb0fbe7f4.jsonl]]
+#+CUSTOM_ID: FEAT-724-route-artifact-through-js-internal-url-r
+
+* Initial Message
+
+i validate it all. swarm orchestrate all FEATs and BUGs, testing and committing as you go
+
+* Scope
+Move artifact:// to the JS-only path so a single router owns every scheme. Preserve binary-detection note ("[Binary artifact …]") and codepath suffix forwarding via sourcePath.
+
+* Implementation
+- packages/coding-agent/src/internal-urls/artifact-handler.ts (existing): ensure resolve() returns sourcePath pointing at the on-disk artifact file when present so `artifact://<id>::§line[1..50]` composes through executeCodePath; binary case returns synthesized notes content with virtual sourcePath.
+- packages/coding-agent/src/tools/get.ts: drop the special-case for artifact:// (now handled by router.canHandle).
+- crates/pi-natives/src/code_path/uri/artifact.rs: DELETE.
+- crates/pi-natives/src/code_path/uri/mod.rs: remove artifact registration; default_registry() empty.
+
+* Tests
+- packages/coding-agent/test/internal-urls/artifact-handler.test.ts (existing or new): verify text artifact returns sourcePath, binary returns notes, suffix slice composes correctly.
+- bun test packages/coding-agent/test/get.test.ts
+
+* Edge Cases
+- Legacy `artifact://<id>` (no agent/tool segments)
+- Binary artifact with `#image` qualifier
+- Artifact with codepath suffix `::§line[1..50]`
+
+* Acceptance Criteria
+- Rust artifact.rs deleted; default_registry() registers nothing
+- artifact:// works for text and binary; codepath suffix composes
+
+NOTE [2026-05-06]: Commit 8e7cde094

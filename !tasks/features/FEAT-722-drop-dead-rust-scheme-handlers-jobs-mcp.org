@@ -1,0 +1,47 @@
+#+TITLE: Drop dead Rust scheme handlers (jobs/mcp/memory/pi/local/skill/rule/agent)
+#+STATE: DONE
+#+SESSION_ID: 14d6907eb0fbe7f4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T11-29-19-043Z_14d6907eb0fbe7f4.jsonl]]
+#+CUSTOM_ID: FEAT-722-drop-dead-rust-scheme-handlers-jobs-mcp
+
+* Initial Message
+
+i validate it all. swarm orchestrate all FEATs and BUGs, testing and committing as you go
+
+* Scope
+Delete divergent Rust scheme handlers; their truth lives in JS-side managers. Subsumes the BUG-350..357 cluster (jobs/mcp/memory/pi/local/skill/rule/agent rot).
+
+* Implementation
+Files to delete:
+- crates/pi-natives/src/code_path/uri/agent.rs
+- crates/pi-natives/src/code_path/uri/jobs.rs
+- crates/pi-natives/src/code_path/uri/jobs_tests.rs
+- crates/pi-natives/src/code_path/uri/local.rs
+- crates/pi-natives/src/code_path/uri/mcp.rs
+- crates/pi-natives/src/code_path/uri/mcp_tests.rs
+- crates/pi-natives/src/code_path/uri/memory.rs
+- crates/pi-natives/src/code_path/uri/pi.rs
+- crates/pi-natives/src/code_path/uri/rule.rs
+- crates/pi-natives/src/code_path/uri/skill.rs
+KEEP for now: artifact.rs (FEAT-724 will move it last).
+Files to edit:
+- crates/pi-natives/src/code_path/uri/mod.rs — drop module decls + registry entries; default_registry() registers only artifact
+- crates/pi-natives/src/code_path/marshal.rs — drop DiagnosticVariant entries (JobNotFound, McpSchemeNotImplemented, MemoryPathNotFound, PiPathNotFound, SkillNotFound, AgentNotFound) iff no other consumers; otherwise keep
+- crates/pi-code-path/src/types.rs — same pruning policy
+
+* Tests
+- cargo test -p pi-natives (green; obsolete tests deleted)
+- cargo test -p pi-code-path (green)
+- bun test packages/coding-agent/test/get.test.ts (still green; JS preempt covers all schemes)
+
+* Edge Cases
+- Cargo workspace builds; NAPI bindings still compile
+- DiagnosticVariant removal must not break TS marshalling
+
+* Acceptance Criteria
+- 9 Rust handler files deleted (incl. tests)
+- mod.rs registers only artifact
+- cargo build -p pi-natives green
+- bun test green for affected JS suites
+
+NOTE [2026-05-06]: Commit c4890bc4d

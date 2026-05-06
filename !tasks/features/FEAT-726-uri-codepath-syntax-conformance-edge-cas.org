@@ -1,0 +1,33 @@
+#+TITLE: URI + codepath syntax conformance edge-case tests
+#+STATE: DONE
+#+SESSION_ID: 14d6907eb0fbe7f4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T11-29-19-043Z_14d6907eb0fbe7f4.jsonl]]
+#+CUSTOM_ID: FEAT-726-uri-codepath-syntax-conformance-edge-cas
+
+* Initial Message
+
+i validate it all. swarm orchestrate all FEATs and BUGs, testing and committing as you go
+
+* Scope
+Lock down the parsing rule: `<scheme>://<rest>` is a URI; everything past the first `::` is codepath; `#fragment` is URI-level (not codepath). Add edge-case tests + parser invariant docs.
+
+* Implementation
+- packages/coding-agent/test/internal-urls/uri-syntax-conformance.test.ts (NEW). Cases:
+  - `agent://X/.foo[0]` (jq path on URL, no `::` suffix) — URL passes through to handler intact
+  - `memory://root::§line[2..2]` — preempt + suffix forwarded to executeCodePath against summary file
+  - `jobs://9-Feat238#stdout` — handler reads URI fragment "stdout"
+  - `local://MY_PLAN.md::App.handle` — preempt + suffix forwarded; if no parser, kernel returns clean diagnostic surfaced by JS
+- packages/coding-agent/src/prompts/tools/get.md: append a "URI vs codepath" line documenting the split rule (after the URI schemes bullet)
+
+* Tests
+- bun test packages/coding-agent/test/internal-urls/uri-syntax-conformance.test.ts
+
+* Edge Cases
+- Empty suffix (`memory://root::`) → treated as no suffix
+- Multiple `::` in URI portion (e.g., agent IDs with `::`) → split on FIRST `::` after `://<host>`
+
+* Acceptance Criteria
+- All 4 conformance cases pass
+- get.md documents the rule
+
+NOTE [2026-05-06]: Commit 5176735a4

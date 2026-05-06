@@ -1,0 +1,31 @@
+#+TITLE: Tool registry cleanup: drop legacy alias comments + add invariant test
+#+STATE: DONE
+#+SESSION_ID: 14d6907eb0fbe7f4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T11-29-19-043Z_14d6907eb0fbe7f4.jsonl]]
+#+CUSTOM_ID: FEAT-728-tool-registry-cleanup-drop-legacy-alias
+
+* Initial Message
+
+i validate it all. swarm orchestrate all FEATs and BUGs, testing and committing as you go
+
+* Scope
+Final cleanup of BUILTIN_TOOLS / TOOL_TIERS post-cutover.
+
+* Implementation
+- packages/coding-agent/src/tools/index.ts:
+  - Remove the dead-aliases biome-ignore block + commented-out `// edit: s => new EditTool(s)` line
+  - Confirm BUILTIN_TOOLS has no entries for read/write/grep/find/code/ast_grep/ast_edit (delete any survivors)
+- packages/coding-agent/test/tools/index.test.ts:
+  - Add invariant test: every key in BUILTIN_TOOLS appears in TOOL_TIERS ∪ HIDDEN_TOOLS
+
+* Tests
+- bun test packages/coding-agent/test/tools/index.test.ts
+
+* Edge Cases
+- HIDDEN_TOOLS may not exist as a named export — if absent, invariant becomes "BUILTIN_TOOLS keys ⊆ TOOL_TIERS keys"
+
+* Acceptance Criteria
+- No dead-alias comments in tools/index.ts
+- Invariant test added and green
+
+NOTE [2026-05-06]: Commit a09f6be48

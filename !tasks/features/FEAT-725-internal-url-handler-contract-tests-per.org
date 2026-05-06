@@ -1,0 +1,33 @@
+#+TITLE: Internal-URL handler contract tests (per-scheme matrix)
+#+STATE: DONE
+#+SESSION_ID: 14d6907eb0fbe7f4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T11-29-19-043Z_14d6907eb0fbe7f4.jsonl]]
+#+CUSTOM_ID: FEAT-725-internal-url-handler-contract-tests-per
+
+* Initial Message
+
+i validate it all. swarm orchestrate all FEATs and BUGs, testing and committing as you go
+
+* Scope
+One contract test that exercises every registered handler against a uniform matrix.
+
+* Implementation
+- packages/coding-agent/test/internal-urls/handler-contract.test.ts (NEW)
+- For each scheme registered with `defaultInternalUrlRouter()` (jobs, mcp, task, data, org, canvas, pi, local, memory, skill, rule, agent, artifact):
+  1. canHandle(scheme://x) === true
+  2. resolve() returns { url, content, contentType, size, sourcePath? }
+  3. sourcePath is filesystem path OR `<scheme>://...` virtual marker (asserted per-scheme expectation)
+  4. did-you-mean shape on miss is consistent (use prettifyDidYouMean)
+
+* Tests
+- bun test packages/coding-agent/test/internal-urls/handler-contract.test.ts
+
+* Edge Cases
+- Schemes that need session/manager fixtures (jobs, mcp, task, data, org, canvas) — use minimal mocks
+- Skill/rule schemes that aggregate across user+project — fixture both directories
+
+* Acceptance Criteria
+- Test file covers every router-registered scheme
+- All handlers pass the matrix
+
+NOTE [2026-05-06]: Commit 9846c2b4e
