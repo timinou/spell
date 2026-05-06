@@ -942,4 +942,20 @@ describe("GetTool", () => {
 			expect(kernelSpy).not.toHaveBeenCalled();
 		});
 	});
+
+	it("falls through to kernel for unknown scheme", async () => {
+		const { InternalUrlRouter } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
+		const router = new InternalUrlRouter();
+		// nope:// is not registered, so router.canHandle returns false.
+
+		const kernelSpy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+			makeChunk([
+				{ locator: "nope://x", kind: "text", content: { text: "[§error] Unknown locator scheme 'nope'" } },
+			]),
+		]);
+		const tool = new GetTool(createSession({ internalRouter: router }));
+		const result = await tool.execute("t", { target: "nope://x" });
+		expect(kernelSpy).toHaveBeenCalledWith(expect.objectContaining({ target: "nope://x" }));
+		expect(getText(result)).toContain("Unknown locator scheme");
+	});
 });
