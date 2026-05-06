@@ -46,3 +46,5 @@ Invert the default. =#raw= for *all* bare paths to existing files (source or not
 - Outline rendering quality (separate concern).
 - Pagination semantics (BUG-347).
 - =§no-results= diagnostic enrichment (FEAT-714).
+
+NOTE [2026-05-06]: Follow-up landed [2026-05-06]: native binary rebuilt (`bun run --cwd packages/natives dev:native`). Explicit `#outline` qualifier now routes to code_resolver as designed (`is_outline_qualifier` in napi.rs:737); `getRegisteredExtensions` now exported. Verified live: bare-path TS returns full source; explicit `target: "foo.ts#outline"` returns symbol outline; gitignore plumbing operational (gitignore:false flag honoured by TextResolver).

@@ -21,6 +21,7 @@ fn opts_with_root(target: impl Into<String>, root: PathBuf) -> CodePathTaskOptio
 		actions:            None,
 		manage:             None,
 		artifact_threshold: None,
+		gitignore:          None,
 		session_id:         None,
 	}
 }
@@ -223,6 +224,7 @@ fn opts_edit_with_root(
 		actions:            Some(actions),
 		manage:             None,
 		artifact_threshold: None,
+		gitignore:          None,
 		session_id:         None,
 	}
 }
@@ -432,6 +434,7 @@ fn opts_edit_strict(
 		actions:            Some(actions),
 		manage:             None,
 		artifact_threshold: None,
+		gitignore:          None,
 		session_id:         None,
 	}
 }

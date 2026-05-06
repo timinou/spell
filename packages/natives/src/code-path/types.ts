@@ -16,6 +16,8 @@ export interface CodePathOptions {
 	/** Timeout in milliseconds for the operation. */
 	timeoutMs?: number;
 	artifactThreshold?: number;
+	/** Honour .gitignore rules when resolving file targets (default: true). */
+	gitignore?: boolean;
 }
 
 export interface SpanDto {

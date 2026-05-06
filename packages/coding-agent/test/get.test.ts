@@ -751,6 +751,41 @@ describe("GetTool", () => {
 			}
 		});
 
+		it("slices content carried in node.content.value (kernel raw extractor)", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-bug347-value");
+			await fs.mkdir(tmp, { recursive: true });
+			const real = nodePath.join(tmp, "file.txt");
+			await fs.writeFile(real, FIVE_LINES, "utf-8");
+			try {
+				// Mimic the kernel's TextResolver shape: content.value, not content.text.
+				spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					{
+						nodes: [
+							{
+								locator: real,
+								rangeStart: 0,
+								rangeEnd: FIVE_LINES.length,
+								kind: "§file",
+								content: { kind: "text", value: FIVE_LINES },
+								metadata: {},
+								diagnostics: [],
+							},
+						],
+						diagnostics: [],
+						done: true,
+					} as any,
+				]);
+				const tool = new GetTool();
+				const result = await tool.execute("t", { target: real, head: 2 });
+				const text = getText(result);
+				expect(text).toContain("alpha");
+				expect(text).toContain("beta");
+				expect(text).not.toContain("gamma");
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
 		it("head 0 returns no content lines (param is honoured, not ignored)", async () => {
 			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-bug347-zero");
 			await fs.mkdir(tmp, { recursive: true });
