@@ -75,11 +75,7 @@ pub fn diagnostic_variant_to_string(v: &DiagnosticVariant) -> String {
 		DiagnosticVariant::ParseError => "parse_error".to_string(),
 		DiagnosticVariant::FileNotFound => "file_not_found".to_string(),
 		DiagnosticVariant::ArtifactNotFound => "artifact_not_found".to_string(),
-		DiagnosticVariant::MemoryPathNotFound => "memory_path_not_found".to_string(),
-		DiagnosticVariant::SkillNotFound => "skill_not_found".to_string(),
-		DiagnosticVariant::AgentNotFound => "agent_not_found".to_string(),
-		DiagnosticVariant::JobNotFound => "job_not_found".to_string(),
-		DiagnosticVariant::PiPathNotFound => "pi_path_not_found".to_string(),
+
 		DiagnosticVariant::UnknownLocatorScheme { .. } => "unknown_locator_scheme".to_string(),
 		DiagnosticVariant::SuffixSuggestion { .. } => "suffix_suggestion".to_string(),
 		DiagnosticVariant::NoMatches => "no_matches".to_string(),

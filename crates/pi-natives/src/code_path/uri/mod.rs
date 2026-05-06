@@ -1,31 +1,15 @@
 //! URI scheme registry and handlers for internal Spell URLs.
 //!
-//! Covers artifact://, memory://, skill://, local://, pi://, rule://,
-//! agent://, jobs:// and mcp://.
+//! artifact:// remains in Rust; all other schemes are owned by the JS
+//! InternalUrlRouter (FEAT-721).
 
 use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use pi_code_path::resolver::SchemeHandler;
 
-mod agent;
 mod artifact;
-mod jobs;
-mod local;
-mod mcp;
-mod memory;
-mod pi;
-mod rule;
-mod skill;
 
-pub use agent::*;
 pub use artifact::*;
-pub use jobs::*;
-pub use local::*;
-pub use mcp::*;
-pub use memory::*;
-pub use pi::*;
-pub use rule::*;
-pub use skill::*;
 
 /// Registry that maps scheme names to their handlers.
 #[derive(Default)]
@@ -50,30 +34,12 @@ impl SchemeRegistry {
 	}
 }
 
-/// Build a registry with all 9 default handlers wired.
-pub fn default_registry(
-	project_root: PathBuf,
-	artifact_root: PathBuf,
-	agent_blobs_root: PathBuf,
-) -> SchemeRegistry {
+/// Build a registry with only the artifact handler wired.
+pub fn default_registry(artifact_root: PathBuf) -> SchemeRegistry {
 	let mut reg = SchemeRegistry::new();
 	reg.register(Arc::new(ArtifactHandler { root: artifact_root }));
-	reg.register(Arc::new(MemoryHandler { project_root: project_root.clone() }));
-	reg.register(Arc::new(SkillHandler { project_root: project_root.clone() }));
-	reg.register(Arc::new(LocalHandler { project_root: project_root.clone() }));
-	reg.register(Arc::new(PiHandler { project_root: project_root.clone() }));
-	reg.register(Arc::new(RuleHandler { project_root: project_root.clone() }));
-	reg.register(Arc::new(AgentHandler { agent_blobs_root }));
-	reg.register(Arc::new(JobsHandler { project_root: project_root.clone() }));
-	reg.register(Arc::new(McpHandler));
 	reg
 }
-
-#[cfg(test)]
-mod jobs_tests;
-
-#[cfg(test)]
-mod mcp_tests;
 
 #[cfg(test)]
 mod tests {
@@ -81,18 +47,13 @@ mod tests {
 
 	#[test]
 	fn unknown_scheme_returns_none() {
-		let reg =
-			default_registry(PathBuf::from("/tmp"), PathBuf::from("/tmp"), PathBuf::from("/tmp"));
+		let reg = default_registry(PathBuf::from("/tmp"));
 		assert!(reg.lookup("no-such-scheme").is_none());
 	}
 
 	#[test]
-	fn all_nine_schemes_registered() {
-		let reg =
-			default_registry(PathBuf::from("/tmp"), PathBuf::from("/tmp"), PathBuf::from("/tmp"));
-		for scheme in &["artifact", "memory", "skill", "local", "pi", "rule", "agent", "jobs", "mcp"]
-		{
-			assert!(reg.lookup(scheme).is_some(), "scheme {} should be registered", scheme);
-		}
+	fn only_artifact_scheme_registered() {
+		let reg = default_registry(PathBuf::from("/tmp"));
+		assert!(reg.lookup("artifact").is_some(), "scheme artifact should be registered");
 	}
 }

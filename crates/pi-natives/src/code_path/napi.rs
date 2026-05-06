@@ -627,7 +627,7 @@ pub fn execute_code_path_inner(
 		},
 		Locator::Uri(uri) => {
 			let scheme_registry =
-				default_registry(root.clone(), root.clone(), root.join(".spell/agent/blobs"));
+				default_registry(root.join(".spell/agent/blobs"));
 			if let Some(handler) = scheme_registry.lookup(&uri.scheme) {
 				vec![
 					handler
@@ -916,23 +916,7 @@ mod tests {
 				.any(|n| n.locator.contains("b.txt") && n.locator.contains("<line 2#"))
 		);
 	}
-	#[test]
-	fn memory_uri_scheme() {
-		let dir = tempfile::tempdir().unwrap();
-		let root = dir.path().to_path_buf();
-		std::fs::create_dir_all(root.join("memory")).unwrap();
-		std::fs::write(root.join("memory/root"), b"memory data").unwrap();
-		let chunks = execute_code_path_inner(
-			opts_with_root("memory://root", root),
-			crate::task::CancelToken::default(),
-		)
-		.unwrap();
-		assert_eq!(chunks.len(), 1);
-		assert!(chunks[0].done);
-		assert_eq!(chunks[0].nodes.len(), 1);
-		assert_eq!(chunks[0].nodes[0].kind, "§memory");
-		assert_eq!(chunks[0].nodes[0].locator, "memory://root");
-	}
+
 	#[test]
 	fn cancellation_aborts_mid_walk() {
 		let dir = tempfile::tempdir().unwrap();
