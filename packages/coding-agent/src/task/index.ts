@@ -692,7 +692,12 @@ export class TaskTool implements AgentTool<TaskSchema, TaskToolDetails, Theme> {
 				gatesVerified = gateResult !== undefined;
 			}
 		} else {
-			status = "failed";
+			if (result.outcome === "gate_failed") {
+				status = "gate_failed";
+				gateFailures = result.gateFailures;
+			} else {
+				status = "failed";
+			}
 		}
 
 		const verificationSummary = await this.#buildDelegatedVerificationSummary(

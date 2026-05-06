@@ -19,6 +19,7 @@ interface MockAnthropicStream extends AsyncIterable<MockEvent>, AsyncIterator<Mo
 interface MockStreamSpec {
 	events: MockEvent[];
 	stallAfterEvents?: boolean;
+	consumeFetch?: boolean;
 }
 
 let streamSpecs: MockStreamSpec[] = [{ events: [] }];
@@ -26,11 +27,36 @@ let streamCallCount = 0;
 let lastStream: MockAnthropicStream | null = null;
 let createdStreams: MockAnthropicStream[] = [];
 
+type MockAnthropicFetch = (input: unknown, init?: { signal?: AbortSignal; method?: string }) => Promise<Response>;
+
 class MockAnthropic {
+	private fetch?: MockAnthropicFetch;
+	constructor(opts?: { fetch?: MockAnthropicFetch }) {
+		this.fetch = opts?.fetch;
+	}
 	messages = {
 		stream: (_params: unknown, options?: { signal?: AbortSignal }) => {
 			const spec = streamSpecs[Math.min(streamCallCount, streamSpecs.length - 1)] ?? { events: [] };
 			streamCallCount += 1;
+			if (spec.consumeFetch && this.fetch) {
+				const capturedFetch = this.fetch;
+				void (async () => {
+					try {
+						const response = await capturedFetch("https://api.anthropic.com/v1/messages", {
+							signal: options?.signal,
+							method: "POST",
+						});
+						if (!response.body) return;
+						const reader = response.body.getReader();
+						while (true) {
+							const { done } = await reader.read();
+							if (done) return;
+						}
+					} catch {
+						/* signal abort or stream end; ignored */
+					}
+				})();
+			}
 			lastStream = createMockAnthropicStream(spec.events, {
 				signal: options?.signal,
 				stallAfterEvents: spec.stallAfterEvents,
@@ -43,6 +69,7 @@ class MockAnthropic {
 
 mock.module("@anthropic-ai/sdk", () => ({
 	default: MockAnthropic,
+	Anthropic: MockAnthropic,
 }));
 
 const { streamAnthropic } = await import("../../src/providers/anthropic");

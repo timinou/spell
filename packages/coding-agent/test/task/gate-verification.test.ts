@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { $ } from "bun";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -290,6 +291,73 @@ describe("gate verification", () => {
 					detail: "No successful execution matched the gate command.",
 				});
 			});
+		});
+	});
+});
+
+describe("detectGitCommit through shell wrappers (BUG-355)", () => {
+	it("detects git commit nested inside bash -c", () => {
+		const executions: TrackedBashExecution[] = [
+			{ command: 'bash -c "git commit -m foo"', exitCode: 0 },
+		];
+		expect(detectGitCommit(executions)).toBe(true);
+	});
+
+	it("detects git commit nested inside sh -c", () => {
+		const executions: TrackedBashExecution[] = [
+			{ command: "sh -c 'git commit -m foo'", exitCode: 0 },
+		];
+		expect(detectGitCommit(executions)).toBe(true);
+	});
+
+	it("detects git commit nested inside bash -lc", () => {
+		const executions: TrackedBashExecution[] = [
+			{ command: "bash -lc 'git commit -m foo'", exitCode: 0 },
+		];
+		expect(detectGitCommit(executions)).toBe(true);
+	});
+});
+
+describe("verifyGates with baselineHeadCommit (BUG-355)", () => {
+	async function withGitRepo<T>(fn: (dir: string, baseline: string) => Promise<T>): Promise<T> {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "gate-verification-git-"));
+		try {
+			await $`git init -q`.cwd(dir).quiet().nothrow();
+			await $`git config user.email test@example.com`.cwd(dir).quiet().nothrow();
+			await $`git config user.name Test`.cwd(dir).quiet().nothrow();
+			await fs.writeFile(path.join(dir, "a.txt"), "x");
+			await $`git add . && git commit -q -m baseline`.cwd(dir).quiet().nothrow();
+			const baseline = (await $`git rev-parse HEAD`.cwd(dir).quiet().nothrow().text()).trim();
+			return await fn(dir, baseline);
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	}
+
+	it("passes when HEAD advanced past baseline even with no executions", async () => {
+		await withGitRepo(async (dir, baseline) => {
+			await fs.writeFile(path.join(dir, "b.txt"), "y");
+			await $`git add . && git commit -q -m advance`.cwd(dir).quiet().nothrow();
+			const result = await verifyGates({
+				gateCommit: true,
+				executions: [],
+				cwd: dir,
+				baselineHeadCommit: baseline,
+			});
+			expect(result.passed).toBe(true);
+		});
+	});
+
+	it("fails when HEAD did not advance, even with bash entries mentioning git commit", async () => {
+		await withGitRepo(async (dir, baseline) => {
+			const result = await verifyGates({
+				gateCommit: true,
+				executions: [{ command: "git commit -m noop", exitCode: 0 }],
+				cwd: dir,
+				baselineHeadCommit: baseline,
+			});
+			expect(result.passed).toBe(false);
+			expect(result.failures[0]?.gate).toBe("gateCommit");
 		});
 	});
 });

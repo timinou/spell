@@ -5,6 +5,7 @@ import { type Static, Type } from "@sinclair/typebox";
 import type { TodoGroup } from "../tools/todo-write";
 import type { BatchImplicitBlocker } from "./batch-scheduler";
 import type { NestedRepoPatch } from "./worktree";
+import type { GateFailure } from "./gate-verification";
 
 /** Source of an agent definition */
 export type AgentSource = "bundled" | "user" | "project";
@@ -282,6 +283,8 @@ export interface SingleResult {
 	/** Output metadata for agent:// URL integration */
 	outputMeta?: { lineCount: number; charCount: number };
 	spawnAudit?: SpawnAuditEntry;
+	/** Gate verification failures observed mid-execution (set when outcome === "gate_failed"). */
+	gateFailures?: GateFailure[];
 }
 
 /** Tool details for TUI rendering */

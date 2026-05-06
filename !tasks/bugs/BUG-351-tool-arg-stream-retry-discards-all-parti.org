@@ -1,0 +1,103 @@
+#+TITLE: Tool-arg stream retry discards all partial JSON progress; 3× retries hit identical wall
+#+STATE: DONE
+#+SESSION_ID: 14d710a4d6119236
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T20-49-12-536Z_14d710a4d6119236.jsonl]]
+#+CUSTOM_ID: BUG-351-tool-arg-stream-retry-discards-all-parti
+#+DEPENDS: BUG-350-anthropic-sdk-swallows-ping-events-idle
+#+LAYER: packages/ai
+#+PRIORITY: #A
+#+SESSION_ID: 14d710a4d6119236
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T20-49-12-536Z_14d710a4d6119236.jsonl]]
+
+* Initial Message
+
+two things I need you to find root causes for:
+
+1. Create on long files reaches timeout and crashes
+
+
+ Create
+ ┌─── ✔ Create ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Tool call create stalled while streaming incomplete tool arguments. Parsed keys: _i, path. Idle timeout: 180000ms. Retry attempts: 3.      │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Create
+ ┌─── ✔ Create ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Tool execution failed due to an error: Tool call create stalled while streaming incomplete tool arguments. Parsed keys: _i, path. Idle     │
+ │ timeout: 180000ms. Retry attempts: 3.                                                                                                      │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-hotelcomm/2026-05-06T14-23-35-549Z_14d6b8621f4e3f90.jsonl
+ ID: 14d6b8621f4e3f90
+
+
+
+
+==> can you trace the timeout crashes of create and tell me if data came in and if you can make sure streamed data doesn't stop because of timeout?
+
+
+
+
+
+2. Recent agents show as 'failed' even though they actually got completed. It seems like 'submit_result' hangs and then it fails, instead of marking itself as completed. Here's an example:
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T11-29-19-043Z_14d6907eb0fbe7f4.jsonl
+ ID: 14d6907eb0fbe7f4
+
+
+
+
+
+Please find the root causes and explain how you'd fix them.
+
+* Initial Message
+
+When an Anthropic tool-arg stream stalls, all 3 retry attempts re-stream from scratch, burn ~12.5 minutes total, and fail at the same byte position every time.
+
+* Cause
+
+=packages/ai/src/providers/anthropic.ts:899-905= resets all output state on retry:
+
+#+begin_src ts
+providerRetryAttempt++;
+await abortableSleep(getToolCallStreamRetryDelayMs(providerRetryAttempt), options?.signal);
+output.content.length = 0;          // ← discards partial JSON
+output.stopReason = "stop";
+firstTokenTime = undefined;
+started = false;
+#+end_src
+
+=stalled_incomplete_tool_args= is classified as transient (=isTransientStreamParseError(streamError) || stallDiagnostic?.state === "stalled_incomplete_tool_args"=). The retry budget is 3 attempts. Anthropic has no "continue this tool call from byte N" API, so each retry literally re-asks the model. For a deterministic stall (same prompt + context produces the same pause), every retry hits the same wall.
+
+Evidence: session =14d6b8621f4e3f90= had identical =rawPartialJsonArtifact= bytes across retries 1, 2, 3.
+
+* Fix
+
+Two levers, apply both:
+
+1. Track a high-water mark of =rawPartialJson.length= across attempts. If a retry produces ≤ same bytes as a prior retry, classify as non-transient and abort retries instead of running the full budget.
+2. Reduce =TOOL_CALL_STREAM_MAX_RETRIES= when the stall is =stalled_incomplete_tool_args= specifically. Empirically these don't recover; one retry max is enough to absorb genuine transients without compounding cost.
+
+Apply same logic to all providers that call =getToolArgumentStreamIdleTimeoutMs=: anthropic, amazon-bedrock, azure-openai-responses, better-ccflare, openai-codex-responses, openai-responses.
+
+* Acceptance
+
+- Tool-arg stalls that don't make progress across attempts fail fast (≤ 1 retry, not 3)
+- Total wall-clock for a deterministic stall capped near (idleTimeout × 2), not (idleTimeout × 3 + retry delays)
+- Test that asserts a stalling stream with no progress is NOT retried 3 times
+
+* Verification
+
+=bun test packages/ai/test/providers/openai-responses-idle-timeout.test.ts=
+=bun test packages/ai/test/providers/anthropic.test.ts=
+
+* Resolution [2026-05-06]
+Track =lastStallPartialJsonBytes= across the do/while retry loop in =anthropic.ts=. When a =stalled_incomplete_tool_args= retry produces ≤ same bytes as the previous attempt, throw immediately instead of continuing through 3 retries. Test in =anthropic-idle-timeout.test.ts:noProgressShortCircuit= asserts identical-bytes retries fail fast.

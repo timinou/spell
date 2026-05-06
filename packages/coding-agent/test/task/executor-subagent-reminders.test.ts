@@ -477,7 +477,9 @@ describe("runSubprocess submit_result reminders", () => {
 		expect(prompts).toHaveLength(2);
 		expect(result.exitCode).toBe(1);
 		expect(result.error).toContain(SUBAGENT_WARNING_MISSING_VERIFICATION_PROOF);
-		expect(result.structuredResult).toBeUndefined();
+		expect(result.outcome).toBe("gate_failed");
+		// BUG-354: structured result is preserved when submit_result was called with success but gates rejected.
+		expect(result.structuredResult).toEqual({ attempt: 2 });
 	});
 
 	it("keeps null submit_result warning when subagent submits success without data", async () => {

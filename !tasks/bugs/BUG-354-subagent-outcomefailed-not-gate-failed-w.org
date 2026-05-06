@@ -1,0 +1,117 @@
+#+TITLE: Subagent outcome=failed (not gate_failed) when submit_result succeeds but mid-execution gate verification rejects extracted data
+#+STATE: DONE
+#+SESSION_ID: 14d710a4d6119236
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T20-49-12-536Z_14d710a4d6119236.jsonl]]
+#+CUSTOM_ID: BUG-354-subagent-outcomefailed-not-gate-failed-w
+#+LAYER: packages/coding-agent
+#+PRIORITY: #A
+#+SESSION_ID: 14d710a4d6119236
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T20-49-12-536Z_14d710a4d6119236.jsonl]]
+
+* Initial Message
+
+two things I need you to find root causes for:
+
+1. Create on long files reaches timeout and crashes
+
+
+ Create
+ ┌─── ✔ Create ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Tool call create stalled while streaming incomplete tool arguments. Parsed keys: _i, path. Idle timeout: 180000ms. Retry attempts: 3.      │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Create
+ ┌─── ✔ Create ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Tool execution failed due to an error: Tool call create stalled while streaming incomplete tool arguments. Parsed keys: _i, path. Idle     │
+ │ timeout: 180000ms. Retry attempts: 3.                                                                                                      │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-hotelcomm/2026-05-06T14-23-35-549Z_14d6b8621f4e3f90.jsonl
+ ID: 14d6b8621f4e3f90
+
+
+
+
+==> can you trace the timeout crashes of create and tell me if data came in and if you can make sure streamed data doesn't stop because of timeout?
+
+
+
+
+
+2. Recent agents show as 'failed' even though they actually got completed. It seems like 'submit_result' hangs and then it fails, instead of marking itself as completed. Here's an example:
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T11-29-19-043Z_14d6907eb0fbe7f4.jsonl
+ ID: 14d6907eb0fbe7f4
+
+
+
+
+
+Please find the root causes and explain how you'd fix them.
+
+* Initial Message
+
+User report: "Recent agents show as 'failed' even though they actually got completed. submit_result hangs and then it fails, instead of marking itself as completed." Example session =14d6907eb0fbe7f4=.
+
+* Cause
+
+In =packages/coding-agent/src/task/executor.ts=, the =tool_execution_end= handler (lines ~983-1090) runs =verifyGates(...)= synchronously when =submit_result= arrives. If gates fail it sets =acceptExtractedData = false= and =acceptSubmitResult = false=. As a result:
+
+#+begin_src ts
+if (extractedData !== undefined && acceptExtractedData) {  // ← gated out
+  ...
+  progress.extractedToolData[event.toolName] = existing;
+  if (event.toolName === "submit_result") {
+    submitResultCalled = acceptSubmitResult;
+  }
+}
+#+end_src
+
+The =submit_result= entry is NEVER pushed to =progress.extractedToolData.submit_result=. Consequence chain:
+1. =submitResultCalled= stays false → reminder loop runs
+2. After reminder, line ~1591 sets =error = verificationMessage; exitCode = 1=
+3. =finalizeSubprocessOutput= sees =hasSubmitResult = false= (because the array wasn't populated) and skips the =exitCode = 0= recovery
+4. Outcome resolves to =failed=
+5. Parent task tracker (=task/index.ts:683-687=) receives outcome=failed and sets todo status=failed
+
+The =gate_failed= status exists in =task/index.ts= but only fires when outcome is successful AND post-completion =verifyTaskGates= fails. The mid-execution path can't produce =gate_failed= today — it only produces =failed= even when the actual situation is "submit_result succeeded but gates didn't accept it".
+
+* Fix
+
+Decouple recording from acceptance:
+1. ALWAYS push the submit_result event into =progress.extractedToolData.submit_result=, regardless of gate verification.
+2. Track gate acceptance as a separate flag (e.g. =progress.lastSubmitResultGateAccepted= or a per-entry tag).
+3. In =finalizeSubprocessOutput=, when =hasSubmitResult= is true but the last entry was not gate-accepted, emit a new outcome value =gate-failed= (or extend the existing =SubagentOutcome= union). Preserve =structuredResult= so the parent can render the work that was done.
+4. Plumb =gate-failed= through to the parent task tracker so =finalizeTodoRef= maps it to status=gate_failed instead of failed.
+
+This preserves the user-visible distinction between "agent didn't submit" (truly failed) and "agent submitted but gate didn't accept" (gate_failed — recoverable).
+
+* Acceptance
+
+- Subagent that calls submit_result(success) but fails gateCommit verification produces outcome=gate-failed, NOT outcome=failed
+- =progress.extractedToolData.submit_result= contains the entry regardless of gate verdict
+- Parent todo status flips to =gate_failed=, not =failed=
+- =structuredResult= remains accessible to the parent
+- Reminder loop still runs (so the agent has a chance to repair) but a successful repair on retry promotes back to outcome=completed
+- Test: gate-failed submit_result produces outcome=gate-failed and preserves data
+
+* Verification
+
+=bun test packages/coding-agent/test/task/executor.test.ts=
+=bun test packages/coding-agent/test/task/gate-verification.test.ts=
+
+* Resolution [2026-05-06]
+- =SubmitResultItem= extended with =gateAccepted: boolean= and =gateFailures?: GateFailure[]=, stamped at extract time.
+- submit_result entries are ALWAYS pushed to =progress.extractedToolData.submit_result= regardless of acceptance.
+- =finalizeSubprocessOutput= sets =exitCode=1= + verification stderr while preserving =structuredResult= when =gateAccepted === false=.
+- Outcome resolution emits new =SubagentOutcome = "gate_failed"= when submit_result(success) was rejected by gates.
+- =index.ts::#finalizeTodoRef= maps =result.outcome === "gate_failed"= to todo =status = "gate_failed"= directly, bypassing the post-completion =verifyTaskGates= rerun.
+- Existing test =executor-subagent-reminders.test.ts:fails-honestly= updated to assert new behavior (structuredResult preserved, outcome=gate_failed).

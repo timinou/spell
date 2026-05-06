@@ -95,7 +95,10 @@ export function matchesGateCmd(gateCmd: string, executions: TrackedBashExecution
 }
 
 export function detectGitCommit(executions: TrackedBashExecution[]): boolean {
-	return executions.some(execution => /\bgit\s+commit\b/.test(execution.command));
+	const pattern = /\bgit\s+commit\b/;
+	return executions.some(
+		execution => pattern.test(execution.command) || pattern.test(normalizeCommand(execution.command)),
+	);
 }
 
 /**
@@ -149,16 +152,15 @@ export async function verifyGates(opts: {
 	}
 
 	if (opts.gateCommit) {
-		const committed =
-			opts.worktreeDir && opts.baselineHeadCommit
-				? await detectGitCommitInWorktree(opts.worktreeDir, opts.baselineHeadCommit)
-				: detectGitCommit(opts.executions);
+		const committed = opts.baselineHeadCommit
+			? await detectGitCommitInWorktree(opts.worktreeDir ?? opts.cwd, opts.baselineHeadCommit)
+			: detectGitCommit(opts.executions);
 		if (!committed) {
 			failures.push({
 				gate: "gateCommit",
 				expected: "git commit",
-				detail: opts.worktreeDir
-					? "HEAD did not advance past the pre-run baseline in the worktree."
+				detail: opts.baselineHeadCommit
+					? "HEAD did not advance past the pre-run baseline."
 					: "No git commit execution was detected.",
 			});
 		}

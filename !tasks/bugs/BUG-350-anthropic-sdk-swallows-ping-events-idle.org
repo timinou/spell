@@ -1,0 +1,102 @@
+#+TITLE: Anthropic SDK swallows ping events; idle watchdog can't see provider liveness during long tool-arg streams
+#+STATE: DONE
+#+SESSION_ID: 14d710a4d6119236
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T20-49-12-536Z_14d710a4d6119236.jsonl]]
+#+CUSTOM_ID: BUG-350-anthropic-sdk-swallows-ping-events-idle
+#+LAYER: packages/ai
+#+PRIORITY: #A
+#+SESSION_ID: 14d710a4d6119236
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T20-49-12-536Z_14d710a4d6119236.jsonl]]
+
+* Initial Message
+
+two things I need you to find root causes for:
+
+1. Create on long files reaches timeout and crashes
+
+
+ Create
+ ┌─── ✔ Create ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Tool call create stalled while streaming incomplete tool arguments. Parsed keys: _i, path. Idle timeout: 180000ms. Retry attempts: 3.      │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Create
+ ┌─── ✔ Create ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Tool execution failed due to an error: Tool call create stalled while streaming incomplete tool arguments. Parsed keys: _i, path. Idle     │
+ │ timeout: 180000ms. Retry attempts: 3.                                                                                                      │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-hotelcomm/2026-05-06T14-23-35-549Z_14d6b8621f4e3f90.jsonl
+ ID: 14d6b8621f4e3f90
+
+
+
+
+==> can you trace the timeout crashes of create and tell me if data came in and if you can make sure streamed data doesn't stop because of timeout?
+
+
+
+
+
+2. Recent agents show as 'failed' even though they actually got completed. It seems like 'submit_result' hangs and then it fails, instead of marking itself as completed. Here's an example:
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T11-29-19-043Z_14d6907eb0fbe7f4.jsonl
+ ID: 14d6907eb0fbe7f4
+
+
+
+
+
+Please find the root causes and explain how you'd fix them.
+
+* Initial Message
+
+create on long files reaches timeout and crashes; user asked whether streamed data could keep flowing without timing out.
+
+* Cause
+
+=node_modules/@anthropic-ai/sdk/src/core/streaming.ts:78-80= drops every =event: ping= SSE chunk:
+
+#+begin_src js
+if (sse.event === 'ping') {
+  continue;
+}
+#+end_src
+
+Anthropic's transport keep-alive (~10s cadence) is precisely the signal that proves the connection is alive while the model is internally working. Our =iterateWithIdleTimeout= in =packages/ai/src/utils/idle-iterator.ts= only resets its timer on a yielded item, so it can't distinguish "model thinking" from "dead socket". With opus-4 + large context + extended thinking, gaps between =input_json_delta= events legitimately exceed 180s.
+
+Empirical proof from session =14d6b8621f4e3f90=, tool call =toolu_017wEgCpYPvBHpxdp43M3ivc=:
+- Partial JSON received: 115 bytes (=_i=, =path=) before silence on every retry
+- =rawPartialJsonArtifact= identical across all 3 attempts
+- =firstTokenTimeMs= 377s (attempt 2), 573s (attempt 3) — connection stayed open, model just paused
+
+* Fix
+
+Tap the underlying SSE byte stream so ping events (and raw bytes) reset the idle watchdog regardless of what the SDK yields. Two viable shapes:
+
+1. Wrap the HTTP response body through a =TransformStream= that calls a "tickle" callback on every chunk; pass the callback into =iterateWithIdleTimeout= as a sibling reset path.
+2. Bypass =client.messages.stream= for streamed calls and consume raw SSE ourselves (we already do this for OpenAI codex/responses providers — pattern exists).
+
+Apply the same fix to other SDK-wrapped providers if they exhibit the same suppression (=amazon-bedrock=, =openai-responses=, =better-ccflare= all call =getToolArgumentStreamIdleTimeoutMs=).
+
+* Acceptance
+
+- =iterateWithIdleTimeout= resets on any provider liveness signal (ping or raw byte), not only yielded SDK items
+- Synthetic test: stream that emits only ping events for 5× the idle timeout does NOT trigger the watchdog
+- Synthetic test: stream that goes truly silent for 1× the idle timeout DOES trigger the watchdog
+
+* Verification
+
+=bun test packages/ai/test/utils/idle-iterator.test.ts=
+=bun test packages/ai/test/providers/=
+
+* Resolution [2026-05-06]
+Implemented `IdleTickle` class in =idle-iterator.ts=. Anthropic provider installs a fetch tee that calls =tickle.tick()= on every response chunk, so PING SSE entries (which the SDK swallows before yielding) still reset the watchdog. Test in =anthropic-idle-timeout.test.ts:tickleResetsTimer= asserts a stream emitting only pings does not throw.
