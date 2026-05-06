@@ -24,7 +24,7 @@ use super::{
 	code_resolver, dialect_registry,
 	extractors::default_extractors,
 	marshal::{ARTIFACT_THRESHOLD, diagnostic_to_dto, mutation_outcome_to_dto, nodes_to_dtos},
-	uri::default_registry,
+
 };
 use crate::task::CancelToken;
 
@@ -626,17 +626,7 @@ pub fn execute_code_path_inner(
 			}
 		},
 		Locator::Uri(uri) => {
-			let scheme_registry =
-				default_registry(root.join(".spell/agent/blobs"));
-			if let Some(handler) = scheme_registry.lookup(&uri.scheme) {
-				vec![
-					handler
-						.handle(&uri.path, &pi_token)
-						.map_err(|d| Error::from_reason(d.message))?,
-				]
-			} else {
-				return Err(Error::from_reason(format!("unknown locator scheme: {}", uri.scheme)));
-			}
+			return Err(Error::from_reason(format!("unknown locator scheme: {}", uri.scheme)));
 		},
 	};
 

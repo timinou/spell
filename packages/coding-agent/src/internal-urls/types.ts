@@ -20,7 +20,7 @@ export interface InternalResource {
 	/** Underlying filesystem path (for debugging, not exposed to agent) */
 	sourcePath?: string;
 	/** Additional notes about resolution */
-	notes?: string[];
+	notes?: readonly string[];
 }
 
 /**

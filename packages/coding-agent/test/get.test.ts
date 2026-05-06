@@ -958,4 +958,27 @@ describe("GetTool", () => {
 		expect(kernelSpy).toHaveBeenCalledWith(expect.objectContaining({ target: "nope://x" }));
 		expect(getText(result)).toContain("Unknown locator scheme");
 	});
+	it("surfaces resource.notes as [note] lines in output", async () => {
+		const { InternalUrlRouter } = await import("@oh-my-pi/pi-coding-agent/internal-urls");
+		const router = new InternalUrlRouter();
+		router.register({
+			scheme: "stub",
+			async resolve() {
+				return {
+					url: "stub://x.png",
+					content: "",
+					contentType: "text/plain" as const,
+					sourcePath: "/tmp/x.png",
+					notes: ["Binary artifact (png)"],
+				};
+			},
+		});
+
+		const kernelSpy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([]);
+		const tool = new GetTool(createSession({ internalRouter: router }));
+		const result = await tool.execute("t", { target: "stub://x.png" });
+
+		expect(kernelSpy).not.toHaveBeenCalled();
+		expect(getText(result)).toContain("[note] Binary artifact (png)");
+	});
 });
