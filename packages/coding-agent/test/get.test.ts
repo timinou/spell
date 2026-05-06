@@ -922,7 +922,9 @@ describe("GetTool", () => {
 				expect(getText(sliced)).toContain("beta");
 				// Kernel was invoked, but with the resolved filesystem sourcePath +
 				// suffix — not the original URI.
-				expect(kernelSpy).toHaveBeenCalledWith(expect.objectContaining({ target: `${summary}::§line[2..2]` }));
+				expect(kernelSpy).toHaveBeenCalledWith(
+					expect.objectContaining({ target: `${nodePath.relative(process.cwd(), summary)}::§line[2..2]` }),
+				);
 			} finally {
 				await fs.rm(tmp, { recursive: true });
 			}
