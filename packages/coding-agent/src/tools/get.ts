@@ -342,9 +342,18 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		const notePrefix = resource.notes?.length ? `${resource.notes.map(n => `[note] ${n}`).join("\n")}\n` : "";
 		const sourcePath = resource.sourcePath;
 		if (codepathSuffix && sourcePath && !sourcePath.includes("://")) {
+			// FEAT-726: kernel codepath qualifiers only work on relative targets;
+			// convert absolute sourcePaths when they sit under the active root.
+			let effectiveTarget = sourcePath + codepathSuffix;
+			if (path.isAbsolute(sourcePath)) {
+				const rel = path.relative(params.root ?? process.cwd(), sourcePath);
+				if (!rel.startsWith("..")) {
+					effectiveTarget = rel + codepathSuffix;
+				}
+			}
 			const chunks = await executeCodePath({
 				command: "get",
-				target: sourcePath + codepathSuffix,
+				target: effectiveTarget,
 				format: params.format,
 
 				gitignore: params.gitignore,
