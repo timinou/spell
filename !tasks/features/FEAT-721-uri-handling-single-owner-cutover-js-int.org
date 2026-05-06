@@ -1,0 +1,47 @@
+#+TITLE: URI handling: single-owner cutover (JS internal-URL router)
+#+STATE: DONE
+#+SESSION_ID: 14d6907eb0fbe7f4
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T11-29-19-043Z_14d6907eb0fbe7f4.jsonl]]
+#+CUSTOM_ID: FEAT-721-uri-handling-single-owner-cutover-js-int
+
+* Initial Message
+
+i validate it all. swarm orchestrate all FEATs and BUGs, testing and committing as you go
+
+* Scope
+Promote the JS InternalUrlRouter to the sole owner of `<scheme>://` resolution. Delete the dead/divergent Rust scheme handlers. Compose the kernel into JS only when a resolved resource has a real filesystem path so codepath qualifiers (`::§line[]`, `::Symbol`, `#tree`) keep composing on file-backed resources.
+
+* Implementation
+Sub-outlines (waves):
+- A: FEAT-821 (drop Rust scheme handlers), FEAT-822 (router as single source), FEAT-827 (tool registry cleanup)
+- B: FEAT-823 (artifact via JS) + FEAT-826 (prompts)
+- C: FEAT-824 (handler contract tests), FEAT-825 (URI syntax conformance edge cases)
+
+* Tests
+Per-scheme contract test (FEAT-824) + URI syntax conformance edge cases (FEAT-825) + targeted regressions in test/get.test.ts.
+
+* Edge Cases
+- Codepath suffix on URI resolved to filesystem path → forward to kernel via sourcePath
+- Virtual sourcePath (e.g., embedded docs) → drop suffix with `[note]`
+- Unknown scheme → kernel returns clean diagnostic, JS surfaces it
+
+* Acceptance Criteria
+- One stack per resource kind: kernel for filesystem + code structure; JS router for everything addressed by a custom scheme
+- Rust `pi-natives` no longer registers `<scheme>://` handlers (artifact stays JS too post-823)
+- All BUGs 350-357 closed by FEAT-821 deletion
+- `bun test` green for `test/tools/`, `test/get.test.ts`, `test/internal-urls/`
+- `cargo test -p pi-natives` green
+
+* Completion [2026-05-06]
+** Verification
+- All 7 sub-FEATs landed across 3 waves (commits c4890bc4d, 3c886e4d8, a09f6be48, 8e7cde094, da092aa69, 9846c2b4e, 5176735a4)
+- Post-cutover cleanup: 4c70d24e6 (drop legacy search-path-lists test rot + update FEAT-815 memory test)
+- cargo test -p pi-natives --lib code_path: 197 passed, 0 failed
+- bun test test/get.test.ts test/tools/index.test.ts test/internal-urls/: green (excluding 1 pre-existing baseline failure unrelated to FEAT-721)
+- Rust kernel <scheme>:// registry: empty (was 9 handlers); JS InternalUrlRouter is sole owner
+
+** Architecture invariant locked
+One stack per resource kind: kernel for filesystem + code structure (paths, globs, ::Symbol, §line[], #tree, #stat); JS router for every <scheme>://. URI + codepath split rule documented in get.md and locked by FEAT-726 conformance tests.
+
+** Subsumed BUGs
+BUG-350..357 cluster (jobs/mcp/memory/pi/local/skill/rule/agent/artifact rust handler rot) closed by FEAT-722 + FEAT-724 deletion.
