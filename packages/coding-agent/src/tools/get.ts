@@ -122,25 +122,6 @@ function prettifyDidYouMean(text: string): string {
  * is forwarded to the kernel against that path; otherwise simple
  * head/tail/offset/limit projections are applied locally.
  */
-const JS_PREFERRED_SCHEMES: ReadonlySet<string> = new Set([
-	"jobs",
-	"mcp",
-	"task",
-	"data",
-	"org",
-	"canvas",
-	"pi",
-	"local",
-	"memory",
-	"skill",
-	"rule",
-	"agent",
-]);
-
-function extractTargetScheme(target: string): string | null {
-	const match = /^([a-z][a-z0-9+.-]*):\/\//i.exec(target);
-	return match ? match[1].toLowerCase() : null;
-}
 
 /**
  * Split a target into URI base and codepath suffix on the `::` separator.
@@ -326,27 +307,23 @@ export class GetTool implements AgentTool<typeof getSchema> {
 
 	/**
 	 * Resolve targets whose authoritative state lives in JS via the session's
-	 * internal URL router. Returns null when the target is not a JS-preferred
-	 * scheme, the router is unavailable, or resolution fails (in which case
-	 * the caller falls through to `executeCodePath`).
+	 * internal URL router. Returns null when the router is unavailable or
+	 * cannot handle the target, or when resolution fails (in which case the
+	 * caller falls through to `executeCodePath`).
 	 */
 	private async tryResolveViaInternalRouter(
 		target: string,
 		params: GetParams,
 		signal?: AbortSignal,
 	): Promise<AgentToolResult | null> {
-		const scheme = extractTargetScheme(target);
-		if (!scheme || !JS_PREFERRED_SCHEMES.has(scheme)) return null;
-
 		const router: InternalUrlRouter | undefined = this.session?.internalRouter;
-		if (!router) return null;
 
 		// Codepath syntax (`<uri>::<qualifier>`) is split off so the JS handler
 		// only sees the URI base. The suffix is forwarded back to the kernel
 		// against the resolved sourcePath when the resource is filesystem-backed,
 		// or applied as a best-effort projection on plain content otherwise.
 		const { uriBase, codepathSuffix } = splitCodepath(target);
-		if (!router.canHandle(uriBase)) return null;
+		if (!router || !router.canHandle(uriBase)) return null;
 
 		let resource: { url?: string; content: string; sourcePath?: string };
 		try {
@@ -383,6 +360,8 @@ export class GetTool implements AgentTool<typeof getSchema> {
 
 		let text: string = resource.content;
 		if (codepathSuffix) {
+			const schemeMatch = /^([a-z][a-z0-9+.-]*):\/\//i.exec(uriBase);
+			const scheme = schemeMatch ? schemeMatch[1].toLowerCase() : "unknown";
 			text = `${text || ""}\n[note] codepath qualifier '${codepathSuffix}' ignored (resource '${scheme}://' is not filesystem-backed)`;
 		}
 		return toolResult<GetToolResultDetails>({ format: params.format, target })
