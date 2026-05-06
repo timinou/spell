@@ -1,0 +1,41 @@
+#+TITLE: get: head/tail/offset/limit silent no-op on #raw qualifier
+#+STATE: DONE
+#+SESSION_ID: 14d6607fc1369b3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T07-59-37-220Z_14d6607fc1369b3d.jsonl]]
+#+CUSTOM_ID: BUG-347-get-head-tail-offset-limit-silent-no-op
+
+* Initial Message
+
+Look at recent usages of the get tool and tell me what isn't ergonomic or surprising (agents often resort to bash after using Get, which means it's not up to par). Do a deep review
+
+* Symptom
+=get { target: "AGENTS.md#raw", head: 3 }= returns the *full* 231-line file. Display layer tail-truncates to its 1KB inline budget, so the agent sees lines 215-231 with header "Showing lines 215-231 of 231". Agent assumes pagination is broken and reaches for =cat | head=.
+
+Reproducible live (this session): rows 3, 4, 5 of the deep review.
+
+* Root Cause
+The =#raw= resolver returns one =NodeRef= containing the whole file as a single =Content::Text=. =formatCodePathResult= applies =limit= as a *node-count* slice, not a *line-count* slice, so on a single-node result the params are no-ops. =§line[a..b]= works because line axis yields N nodes.
+
+Files:
+- =packages/coding-agent/src/tools/codepath-result.ts= (formatter, applies limit at node level)
+- =packages/coding-agent/src/tools/get.ts= (passes head/tail/offset/limit straight through)
+- Possibly =crates/pi-natives/src/code_path/code_resolver/walker.rs= (raw branch returns single text node)
+
+* Acceptance
+- =get { target: "AGENTS.md#raw", head: 3 }= returns first 3 lines.
+- =get { target: "AGENTS.md#raw", tail: 3 }= returns last 3 lines.
+- =get { target: "AGENTS.md#raw", offset: 100, limit: 5 }= returns lines 101-105.
+- =get { target: "AGENTS.md#raw" }= unchanged: returns full file.
+- Same params work identically for bare-path auto-attached =#raw= (e.g. =get { target: "AGENTS.md", head: 3 }=).
+- New tests in =packages/coding-agent/test/get.test.ts= covering each scenario.
+
+* Edge Cases
+- File ends without trailing newline → last line still returned.
+- =head: 0= → empty result, not "ignore param".
+- =head + tail= both set → last wins (consistent with current behavior on §line axis).
+- Binary files (=#bytes=) — out of scope, params still no-op.
+
+* Plan
+1. In =formatCodePathResult= or in =get.ts= post-process: when result is a single node with =Content::Text= and any of head/tail/offset/limit is set, slice the text by lines.
+2. Update text rendering to reflect the slice (so display shows "Showing lines 1-3 of 231").
+3. Tests.

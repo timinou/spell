@@ -1,0 +1,58 @@
+#+TITLE: get: gitignore hint fires falsely + gitignore:false placebo for out-of-root paths
+#+STATE: DONE
+#+SESSION_ID: 14d6607fc1369b3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T07-59-37-220Z_14d6607fc1369b3d.jsonl]]
+#+CUSTOM_ID: BUG-348-get-gitignore-hint-fires-falsely-gitigno
+
+* Initial Message
+
+Look at recent usages of the get tool and tell me what isn't ergonomic or surprising (agents often resort to bash after using Get, which means it's not up to par). Do a deep review
+
+* Symptom
+Two related defects in =get.ts=:
+
+** A. False-positive hint for tracked files
+=get { target: "AGENTS.md", offset: 1, limit: 5 }= returns:
+#+begin_example
+[§no-results] No content for target: AGENTS.md
+
+(hint: file exists on disk but may be excluded by .gitignore rules. Use gitignore: false to bypass.)
+#+end_example
+
+AGENTS.md is *tracked in git*, not ignored. The "no results" cause was pagination-overshoot on a single-node =#raw= result (BUG-347), not gitignore. The hint sends the agent on a wild goose chase.
+
+** B. =gitignore: false= placebo
+For absolute paths *outside the project root*:
+- =get { target: "/tmp/foo/visible.txt" }= returns =§no-results= + gitignore hint, even though the file is not gitignored.
+- =get { target: "/tmp/foo/visible.txt", gitignore: false }= still returns =§no-results=.
+
+Root cause: =FsWalker= in =crates/pi-code-path/src/dialects/fs/walker.rs:42-46= walks from =opts.root= (the project root). Absolute paths outside that subtree are never reached by the walker, so toggling =gitignore= filters has no effect.
+
+* Root Cause
+=packages/coding-agent/src/tools/get.ts:175-177=:
+#+begin_example
+if (statProbeFoundFile && params.gitignore !== false) {
+    displayText = `[§no-results] ... (hint: file exists on disk but may be excluded by .gitignore rules. ...)`;
+}
+#+end_example
+
+The hint fires whenever stat probe succeeded AND result was empty. It does *not* check whether the path is actually gitignored, nor whether the path is even inside the walked root.
+
+* Acceptance
+- =get { target: "AGENTS.md", offset: 1, limit: 5 }= no longer suggests gitignore (file is tracked).
+- =get { target: "/tmp/anywhere/file.txt" }= produces a diagnostic distinguishing "path is outside project root" from "path is gitignored".
+- =get { target: <truly-gitignored>, gitignore: false }= actually returns the file content.
+- =get { target: <truly-gitignored> }= still returns =§no-results= but with a *correct* gitignore hint (only when the path matches an active ignore rule).
+- New tests in =packages/coding-agent/test/get.test.ts= covering: tracked file empty result, out-of-root absolute, in-root truly-gitignored, =gitignore:false= override.
+
+* Edge Cases
+- Path absolute and inside project root + truly gitignored: hint fires, =gitignore:false= bypasses.
+- Path absolute and outside project root: distinct =OUT_OF_ROOT= diagnostic; =gitignore:false= alone doesn't fix it (needs a different param or rooted call).
+- Symlinks pointing outside root: treat as out-of-root.
+- Project has no =.git/= and no =.gitignore=: hint never fires.
+
+* Plan
+1. Replace the blanket gitignore hint with a positive check (use =ignore= crate matcher or shell out to =git check-ignore=).
+2. Detect out-of-root absolute paths in =get.ts= and emit =OUT_OF_PROJECT_ROOT= with the actual project root and a hint to set =root= param or use bash for system files.
+3. Make =gitignore: false= effective: if path is out-of-root, skip the walker and read directly via =fs.readFile=; otherwise pass through as today.
+4. Tests.

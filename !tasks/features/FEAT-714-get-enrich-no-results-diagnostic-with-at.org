@@ -1,0 +1,62 @@
+#+TITLE: get: enrich §no-results diagnostic with attached qualifier + cause + next-step hint
+#+STATE: DONE
+#+SESSION_ID: 14d6607fc1369b3d
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T07-59-37-220Z_14d6607fc1369b3d.jsonl]]
+#+CUSTOM_ID: FEAT-714-get-enrich-no-results-diagnostic-with-at
+
+* Initial Message
+
+Look at recent usages of the get tool and tell me what isn't ergonomic or surprising (agents often resort to bash after using Get, which means it's not up to par). Do a deep review
+
+* Why
+=[§no-results] No content for target: <path>= is the most common failure surface of =get=, and it's overloaded across at least 6 different causes:
+
+1. Auto-attached =#outline= produced 0 symbols (parser yielded no top-level decls).
+2. =#raw= + =offset >= 1= overshoots a single-node result (BUG-347).
+3. Path is outside project root and the walker can't reach it (BUG-348).
+4. Path is genuinely gitignored.
+5. Symbol query matched 0 declarations.
+6. =format: "content-only"= stripped marker nodes that had no =text= content.
+
+Today the agent gets the same string for every cause. With no signal about *which* repair to attempt, agents fall back to bash. Sessions =14d5227f8af016a9= and =14d54ac36af57267= each show 75+ =cat=/=head= commands after the first =get= dead-end.
+
+* What
+Replace the single =[§no-results] No content for target: <path>= line with a structured diagnostic:
+
+#+begin_example
+[§no-results] <path>
+  attached:    #outline (auto)        ← what get tried
+  resolved:    /abs/path/here         ← what the kernel saw
+  reason:      empty-outline          ← classified cause
+  evidence:    file is 234 lines, ext=ts, 0 outline symbols extracted
+  try next:    target: "<path>#raw"   ← actionable repair
+#+end_example
+
+Reason taxonomy (closed enum):
+- =empty-outline=
+- =single-node-pagination= (head/tail/offset/limit on raw → fixed by BUG-347)
+- =out-of-project-root=
+- =gitignored= (only if matcher confirms — see BUG-348)
+- =symbol-no-match= (=Did you mean= candidates if available)
+- =content-only-stripped-markers=
+- =unknown=
+
+* Acceptance
+- Bare-path TS file with empty outline → =reason: empty-outline=, =try next: target: "<path>#raw"=.
+- Out-of-root path → =reason: out-of-project-root=, =try next: target: "<path>", root: "<containing-dir>"=.
+- Genuinely gitignored → =reason: gitignored=, =try next: gitignore: false=.
+- Pagination overshoot → =reason: single-node-pagination=, =try next: reduce offset / use §line[a..b]=.
+- Tests in =packages/coding-agent/test/get.test.ts= for each reason.
+- =renderResult= preserves the new structure (don't tail-truncate the diagnostic itself).
+
+* Edge Cases
+- Multiple reasons stack (out-of-root *and* gitignored) → pick most-actionable.
+- Reason classification must be deterministic; never crash on malformed kernel output.
+
+* Dependencies
+- BUG-347 lands first (pagination); after that =single-node-pagination= ceases to fire and is removed from the taxonomy.
+- BUG-348 lands first (gitignore matcher); reason =gitignored= depends on real check.
+- Optional: FEAT-713 lands first to reduce =empty-outline= incidence.
+
+* Out of Scope
+- Changing kernel-side diagnostic format. This is purely a get-tool wrapper concern.

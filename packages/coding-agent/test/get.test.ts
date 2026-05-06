@@ -444,67 +444,75 @@ describe("GetTool", () => {
 
 		// T2.1: only §file + §dir nodes, format unset → fs-listing layout
 		it("auto-promotes to fs-listing layout when all nodes are fs nodes (format unset)", () => {
-			const chunks = [{
-				nodes: [
-					makeNode("specs/README.md", "file", undefined),
-					makeNode("specs/plan.md", "file", undefined),
-					makeNode("specs/subdir", "dir", undefined),
-				],
-				diagnostics: [],
-				done: true,
-			}];
+			const chunks = [
+				{
+					nodes: [
+						makeNode("specs/README.md", "file", undefined),
+						makeNode("specs/plan.md", "file", undefined),
+						makeNode("specs/subdir", "dir", undefined),
+					],
+					diagnostics: [],
+					done: true,
+				},
+			];
 			const result = formatCodePathResult(chunks as any, {});
-   expect(result.text).not.toContain("  [file]");
-   		expect(result.text).not.toContain("  [dir]");
-   		expect(result.text).toContain("specs/README.md");
-   		expect(result.text).toContain("specs/plan.md");
-   		expect(result.text).toContain("specs/subdir/");
+			expect(result.text).not.toContain("  [file]");
+			expect(result.text).not.toContain("  [dir]");
+			expect(result.text).toContain("specs/README.md");
+			expect(result.text).toContain("specs/plan.md");
+			expect(result.text).toContain("specs/subdir/");
 		});
 
 		// T2.2: same nodes, format: "node-list" explicit → existing node-list shape
 		it("honors explicit format even when all nodes are fs nodes", () => {
-			const chunks = [{
-				nodes: [
-					makeNode("specs/README.md", "file", "content"),
-				],
-				diagnostics: [],
-				done: true,
-			}];
+			const chunks = [
+				{
+					nodes: [makeNode("specs/README.md", "file", "content")],
+					diagnostics: [],
+					done: true,
+				},
+			];
 			const result = formatCodePathResult(chunks as any, { format: "node-list" });
-   expect(result.text).toContain("  [file]");
-   			expect(result.text).toContain("specs/README.md");
+			expect(result.text).toContain("  [file]");
+			expect(result.text).toContain("specs/README.md");
 		});
 
 		// T2.3: mixed §file + §symbol node → falls back to existing node-list
 		it("falls back to node-list when nodes are mixed fs and non-fs", () => {
-			const chunks = [{
-				nodes: [
-					makeNode("src/server.ts", "file", undefined),
-					makeNode("src/server.ts", "symbol", "handleRequest"),
-				],
-				diagnostics: [],
-				done: true,
-			}];
+			const chunks = [
+				{
+					nodes: [
+						makeNode("src/server.ts", "file", undefined),
+						makeNode("src/server.ts", "symbol", "handleRequest"),
+					],
+					diagnostics: [],
+					done: true,
+				},
+			];
 			const result = formatCodePathResult(chunks as any, {});
-   expect(result.text).toContain("  [file]");
-   		expect(result.text).toContain("  [symbol]");
+			expect(result.text).toContain("  [file]");
+			expect(result.text).toContain("  [symbol]");
 		});
 
 		// T2.4: §stat node from #stat qualifier → metadata rendered
 		it("renders metadata for §stat nodes", () => {
-			const chunks = [{
-				nodes: [{
-					locator: "specs",
-					rangeStart: 0,
-					rangeEnd: 0,
-					kind: "stat",
-					content: undefined,
-					metadata: { size: 4096, mtime: "2026-01-15T10:30:00Z" },
+			const chunks = [
+				{
+					nodes: [
+						{
+							locator: "specs",
+							rangeStart: 0,
+							rangeEnd: 0,
+							kind: "stat",
+							content: undefined,
+							metadata: { size: 4096, mtime: "2026-01-15T10:30:00Z" },
+							diagnostics: [],
+						},
+					],
 					diagnostics: [],
-				}],
-				diagnostics: [],
-				done: true,
-			}];
+					done: true,
+				},
+			];
 			const result = formatCodePathResult(chunks as any, {});
 			expect(result.text).toContain("size=4096");
 			expect(result.text).toContain("2026-01-15T10:30:00Z");
@@ -512,11 +520,13 @@ describe("GetTool", () => {
 
 		// T2.5: single §dir with no children → degenerate hint
 		it("emits degenerate-result hint when only a single §dir node is returned", () => {
-			const chunks = [{
-				nodes: [makeNode("specs", "dir", undefined)],
-				diagnostics: [],
-				done: true,
-			}];
+			const chunks = [
+				{
+					nodes: [makeNode("specs", "dir", undefined)],
+					diagnostics: [],
+					done: true,
+				},
+			];
 			const result = formatCodePathResult(chunks as any, {});
 			expect(result.text).toContain("specs/");
 			expect(result.text).toContain("hint");
@@ -524,67 +534,337 @@ describe("GetTool", () => {
 
 		// T2.6: §file + §symlink nodes → fs-listing layout
 		it("auto-promotes mixed §file + §symlink nodes to fs-listing", () => {
-			const chunks = [{
-				nodes: [
-					makeNode("lib", "symlink", undefined),
-					makeNode("lib/foo.ts", "file", undefined),
-				],
-				diagnostics: [],
-				done: true,
-			}];
+			const chunks = [
+				{
+					nodes: [makeNode("lib", "symlink", undefined), makeNode("lib/foo.ts", "file", undefined)],
+					diagnostics: [],
+					done: true,
+				},
+			];
 			const result = formatCodePathResult(chunks as any, {});
-   expect(result.text).not.toContain("  [file]");
-   		expect(result.text).not.toContain("  [symlink]");
+			expect(result.text).not.toContain("  [file]");
+			expect(result.text).not.toContain("  [symlink]");
 		});
 
 		// T2.7: empty dir → placeholder
 		it("renders placeholder for empty directory", () => {
-			const chunks = [{
-				nodes: [],
-				diagnostics: [],
-				done: true,
-			}];
+			const chunks = [
+				{
+					nodes: [],
+					diagnostics: [],
+					done: true,
+				},
+			];
 			const result = formatCodePathResult(chunks as any, {});
 			expect(result.text).toContain("(no entries)");
 		});
 
 		// T2.8: §stat node with metadata kind
 		it("renders stat kind for stat nodes", () => {
-			const chunks = [{
-				nodes: [{
-					locator: "specs",
-					rangeStart: 0,
-					rangeEnd: 0,
-					kind: "stat",
-					content: undefined,
-					metadata: { size: 0, mtime: "2026-01-15T10:30:00Z", kind: "§dir" },
+			const chunks = [
+				{
+					nodes: [
+						{
+							locator: "specs",
+							rangeStart: 0,
+							rangeEnd: 0,
+							kind: "stat",
+							content: undefined,
+							metadata: { size: 0, mtime: "2026-01-15T10:30:00Z", kind: "§dir" },
+							diagnostics: [],
+						},
+					],
 					diagnostics: [],
-				}],
-				diagnostics: [],
-				done: true,
-			}];
+					done: true,
+				},
+			];
 			const result = formatCodePathResult(chunks as any, {});
 			expect(result.text).toContain("kind=§dir");
 		});
 
 		// T2.9: §stat node for file with size
 		it("renders metadata for §stat on file", () => {
-			const chunks = [{
-				nodes: [{
-					locator: "package.json",
-					rangeStart: 0,
-					rangeEnd: 0,
-					kind: "stat",
-					content: undefined,
-					metadata: { size: 2048, mtime: "2026-01-15T10:30:00Z", kind: "§file" },
+			const chunks = [
+				{
+					nodes: [
+						{
+							locator: "package.json",
+							rangeStart: 0,
+							rangeEnd: 0,
+							kind: "stat",
+							content: undefined,
+							metadata: { size: 2048, mtime: "2026-01-15T10:30:00Z", kind: "§file" },
+							diagnostics: [],
+						},
+					],
 					diagnostics: [],
-				}],
-				diagnostics: [],
-				done: true,
-			}];
+					done: true,
+				},
+			];
 			const result = formatCodePathResult(chunks as any, {});
 			expect(result.text).toContain("size=2048");
 			expect(result.text).toContain("kind=§file");
+		});
+	});
+
+	// ─────────────────────────────────────────────────────────────
+	// FEAT-713: source-extension files default to #raw, not #outline.
+	// ─────────────────────────────────────────────────────────────
+	describe("FEAT-713: bare-file default qualifier", () => {
+		it("auto-attaches #raw for bare .ts path (no #outline)", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-feat713-ts");
+			await fs.mkdir(tmp, { recursive: true });
+			const real = nodePath.join(tmp, "sample.ts");
+			await fs.writeFile(real, "export const x = 1;\n", "utf-8");
+			try {
+				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: real, kind: "file", content: { text: "export const x = 1;\n" } }]),
+				]);
+				const tool = new GetTool();
+				await tool.execute("t", { target: real });
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${real}#raw` }));
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		it("auto-attaches #raw for bare .md path", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-feat713-md");
+			await fs.mkdir(tmp, { recursive: true });
+			const real = nodePath.join(tmp, "NOTES.md");
+			await fs.writeFile(real, "# title\n", "utf-8");
+			try {
+				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: real, kind: "file", content: { text: "# title\n" } }]),
+				]);
+				const tool = new GetTool();
+				await tool.execute("t", { target: real });
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${real}#raw` }));
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		it("auto-attaches #raw for bare .rs path", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-feat713-rs");
+			await fs.mkdir(tmp, { recursive: true });
+			const real = nodePath.join(tmp, "lib.rs");
+			await fs.writeFile(real, "fn main() {}\n", "utf-8");
+			try {
+				const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: real, kind: "file", content: { text: "fn main() {}\n" } }]),
+				]);
+				const tool = new GetTool();
+				await tool.execute("t", { target: real });
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${real}#raw` }));
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+	});
+
+	// ─────────────────────────────────────────────────────────────
+	// BUG-347: head/tail/offset/limit must slice single-node text
+	// ─────────────────────────────────────────────────────────────
+	describe("BUG-347: pagination on single-node text", () => {
+		const FIVE_LINES = ["alpha", "beta", "gamma", "delta", "epsilon"].join("\n") + "\n";
+
+		it("head N returns first N lines of single text-content node", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-bug347-head");
+			await fs.mkdir(tmp, { recursive: true });
+			const real = nodePath.join(tmp, "file.txt");
+			await fs.writeFile(real, FIVE_LINES, "utf-8");
+			try {
+				spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: real, kind: "file", content: { text: FIVE_LINES } }]),
+				]);
+				const tool = new GetTool();
+				const result = await tool.execute("t", { target: real, head: 2 });
+				const text = getText(result);
+				expect(text).toContain("alpha");
+				expect(text).toContain("beta");
+				expect(text).not.toContain("gamma");
+				expect(text).not.toContain("epsilon");
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		it("tail N returns last N lines of single text-content node", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-bug347-tail");
+			await fs.mkdir(tmp, { recursive: true });
+			const real = nodePath.join(tmp, "file.txt");
+			await fs.writeFile(real, FIVE_LINES, "utf-8");
+			try {
+				spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: real, kind: "file", content: { text: FIVE_LINES } }]),
+				]);
+				const tool = new GetTool();
+				const result = await tool.execute("t", { target: real, tail: 2 });
+				const text = getText(result);
+				expect(text).toContain("delta");
+				expect(text).toContain("epsilon");
+				expect(text).not.toContain("alpha");
+				expect(text).not.toContain("beta");
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		it("offset+limit returns the requested slice", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-bug347-slice");
+			await fs.mkdir(tmp, { recursive: true });
+			const real = nodePath.join(tmp, "file.txt");
+			await fs.writeFile(real, FIVE_LINES, "utf-8");
+			try {
+				spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: real, kind: "file", content: { text: FIVE_LINES } }]),
+				]);
+				const tool = new GetTool();
+				const result = await tool.execute("t", { target: real, offset: 2, limit: 2 });
+				const text = getText(result);
+				expect(text).toContain("gamma");
+				expect(text).toContain("delta");
+				expect(text).not.toContain("alpha");
+				expect(text).not.toContain("epsilon");
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		it("no pagination params returns full content", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-bug347-full");
+			await fs.mkdir(tmp, { recursive: true });
+			const real = nodePath.join(tmp, "file.txt");
+			await fs.writeFile(real, FIVE_LINES, "utf-8");
+			try {
+				spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: real, kind: "file", content: { text: FIVE_LINES } }]),
+				]);
+				const tool = new GetTool();
+				const result = await tool.execute("t", { target: real });
+				const text = getText(result);
+				expect(text).toContain("alpha");
+				expect(text).toContain("epsilon");
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		it("head 0 returns no content lines (param is honoured, not ignored)", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-bug347-zero");
+			await fs.mkdir(tmp, { recursive: true });
+			const real = nodePath.join(tmp, "file.txt");
+			await fs.writeFile(real, FIVE_LINES, "utf-8");
+			try {
+				spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+					makeChunk([{ locator: real, kind: "file", content: { text: FIVE_LINES } }]),
+				]);
+				const tool = new GetTool();
+				const result = await tool.execute("t", { target: real, head: 0 });
+				const text = getText(result);
+				expect(text).not.toContain("alpha");
+				expect(text).not.toContain("beta");
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+	});
+
+	// ─────────────────────────────────────────────────────────────
+	// BUG-348: gitignore diagnostics — no false positives,
+	// gitignore:false actually works for files outside walker root.
+	// ─────────────────────────────────────────────────────────────
+	describe("BUG-348: gitignore hint truth", () => {
+		it("emits OUT_OF_PROJECT_ROOT for absolute paths outside cwd", async () => {
+			const outsideRoot = nodePath.join("/tmp", `spell-bug348-${Date.now()}`);
+			await fs.mkdir(outsideRoot, { recursive: true });
+			const real = nodePath.join(outsideRoot, "out.txt");
+			await fs.writeFile(real, "hello\n", "utf-8");
+			try {
+				const tool = new GetTool();
+				const result = await tool.execute("t", { target: real });
+				const text = getText(result);
+				expect(text).toContain("OUT_OF_PROJECT_ROOT");
+				// Must not falsely claim the file is gitignored — only mention
+				// the gitignore: false param as a possible repair.
+				expect(text).not.toContain("may be excluded by .gitignore");
+			} finally {
+				await fs.rm(outsideRoot, { recursive: true });
+			}
+		});
+
+		it("gitignore:false reads out-of-root file directly", async () => {
+			const outsideRoot = nodePath.join("/tmp", `spell-bug348b-${Date.now()}`);
+			await fs.mkdir(outsideRoot, { recursive: true });
+			const real = nodePath.join(outsideRoot, "out.txt");
+			await fs.writeFile(real, "out-of-root content\n", "utf-8");
+			try {
+				const tool = new GetTool();
+				const result = await tool.execute("t", { target: real, gitignore: false });
+				const text = getText(result);
+				expect(text).toContain("out-of-root content");
+			} finally {
+				await fs.rm(outsideRoot, { recursive: true });
+			}
+		});
+
+		it("does not suggest gitignore for tracked file with empty kernel result", async () => {
+			// A tracked file that the kernel happens to return zero nodes for
+			// (e.g. due to pagination or query filter) must NOT trigger a
+			// false gitignore hint.
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-bug348-tracked");
+			await fs.mkdir(tmp, { recursive: true });
+			const real = nodePath.join(tmp, "tracked.txt");
+			await fs.writeFile(real, "hi\n", "utf-8");
+			try {
+				spyOn(nativesModule, "executeCodePath").mockResolvedValue([makeChunk([])]);
+				const tool = new GetTool();
+				const result = await tool.execute("t", { target: real });
+				const text = getText(result);
+				expect(text).not.toContain("gitignore");
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+	});
+
+	// ─────────────────────────────────────────────────────────────
+	// FEAT-714: enriched §no-results diagnostic with reason + try-next
+	// ─────────────────────────────────────────────────────────────
+	describe("FEAT-714: enriched §no-results", () => {
+		it("includes attached qualifier when kernel returns empty for bare path", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-feat714-attached");
+			await fs.mkdir(tmp, { recursive: true });
+			const real = nodePath.join(tmp, "empty.txt");
+			await fs.writeFile(real, "", "utf-8");
+			try {
+				spyOn(nativesModule, "executeCodePath").mockResolvedValue([makeChunk([])]);
+				const tool = new GetTool();
+				const result = await tool.execute("t", { target: real });
+				const text = getText(result);
+				expect(text).toContain("§no-results");
+				expect(text).toContain("attached:");
+				expect(text).toContain("#raw");
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
+		});
+
+		it("emits try-next hint pointing to a different qualifier", async () => {
+			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-feat714-trynext");
+			await fs.mkdir(tmp, { recursive: true });
+			const real = nodePath.join(tmp, "empty.txt");
+			await fs.writeFile(real, "", "utf-8");
+			try {
+				spyOn(nativesModule, "executeCodePath").mockResolvedValue([makeChunk([])]);
+				const tool = new GetTool();
+				const result = await tool.execute("t", { target: real });
+				const text = getText(result);
+				expect(text).toContain("try next:");
+			} finally {
+				await fs.rm(tmp, { recursive: true });
+			}
 		});
 	});
 });

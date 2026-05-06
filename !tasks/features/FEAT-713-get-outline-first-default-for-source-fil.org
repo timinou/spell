@@ -1,5 +1,5 @@
 #+TITLE: get: outline-first default for source files — §outline + #raw inversion
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14d5505d7e65f2fa
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-05T12-10-38-969Z_14d5505d7e65f2fa.jsonl]]
 #+CUSTOM_ID: FEAT-713-get-outline-first-default-for-source-fil
@@ -13,3 +13,36 @@ look at the beginning of File:
 
 
 and tell me if BUG-338--343 address any of the bugs/ergonomics of the get tool being given up on in that session?
+
+* Problem (concretized 2026-05-06)
+Reproduced live: =get { target: "packages/coding-agent/src/tools/get.ts" }= returns =get.ts  [§file]= and nothing else. Same for =AGENTS.md=, any tracked .ts/.tsx/.md/.org file. The bare-path auto-attach in =packages/coding-agent/src/tools/get.ts:60-63= routes source files (any extension registered in =getRegisteredExtensions()= with =capabilities.outline=) to =#outline=. =walker.rs:103-130= then walks =root.named_children()= and either returns an empty body (when no top-level decls extract) or produces an outline that the agent never asked for.
+
+Sessions =14d5c54652a2aea9= (concept), =14d5227f8af016a9=, =14d54ac36af57267= all show this pattern: 4× =get= → empty/stub → 8+ =cat=/=head=/=sed -n= for the rest of the session.
+
+* Decision
+Invert the default. =#raw= for *all* bare paths to existing files (source or not). =#outline= becomes an explicit qualifier (and is also wired as a first-class qualifier so explicit =target: "foo.ts#outline"= no longer errors).
+
+* Files
+- =packages/coding-agent/src/tools/get.ts= — flip lines 60-63: drop =isSourceFile= branch, always =#raw= for files.
+- =crates/pi-natives/src/code_path/napi.rs:580-620= — ensure =is_outline_qualifier= matches *before* the FsResolver claims =#outline= as unknown. Currently explicit =foo.ts#outline= errors with "unknown qualifier: outline" (verified live).
+- =packages/coding-agent/test/get.test.ts= — update the bare-path test to assert =#raw= for .ts; add explicit =#outline= test.
+
+* Acceptance
+- =get { target: "src/foo.ts" }= → returns full source.
+- =get { target: "src/foo.ts#raw" }= → unchanged (full source).
+- =get { target: "src/foo.ts#outline" }= → returns outline (no longer "unknown qualifier"). 
+- =get { target: "src/foo.md" }= → returns markdown source.
+- =get { target: "src/foo.ex" }= (Elixir) → returns full source.
+- =bun test packages/coding-agent/test/get.test.ts= passes.
+- No removal of the outline machinery — only the default routing.
+
+* Edge Cases
+- Files with extension not in any registered language → already =#raw=, unchanged.
+- Bare directory → =#listing= unchanged (FEAT-688).
+- =content: false= → unchanged (no auto-attach).
+- Already-qualified target → unchanged.
+
+* Out of Scope
+- Outline rendering quality (separate concern).
+- Pagination semantics (BUG-347).
+- =§no-results= diagnostic enrichment (FEAT-714).
