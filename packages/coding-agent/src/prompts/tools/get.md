@@ -8,6 +8,7 @@ Retrieve code, files, symbols, or matches using a CodePath target. Supports path
   - **Regex filter**: `"foo.ts::§line[text~=\"TODO\"]"` for lines matching pattern.
   - **Code symbol**: `"src/foo.ts::Bar.method"` for specific declaration.
   - **URI schemes**: `"memory://root"`, `"artifact://..."`, `"skill://name"`, `"agent://id"`, `"rule://name"`, `"local://..."`, `"pi://..."`.
+  - **URI vs codepath**: `<scheme>://<rest>` is a URI; everything past the first `::` is codepath syntax against the resolved resource. Filesystem-backed resources support `::§line[]`, `::Symbol`, `#stat`, `#tree`. Virtual resources (embedded docs, in-memory state) drop the suffix with a `[note]` warning.
 - `format` controls output structure:
   - `"node-list"` — structured nodes with LOC#ID anchors, source ranges, metadata.
   - `"locations"` — file:line:col locations only.
