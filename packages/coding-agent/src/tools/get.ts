@@ -288,9 +288,10 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		// Slicing here makes them honour line semantics, matching cat|head.
 		if (wantsTextSlice(params) && displayText) {
 			const allNodes = chunks.flatMap(c => c.nodes);
-			const textNodes = allNodes.filter(
-				n => n.content && (n.content as { text?: string; value?: string }).text !== undefined,
-			);
+			const textNodes = allNodes.filter(n => {
+				const c = n.content as { text?: string; value?: string } | undefined;
+				return c !== undefined && (c.text !== undefined || c.value !== undefined);
+			});
 			if (textNodes.length === 1 && allNodes.length === 1) {
 				const rawText =
 					(textNodes[0].content as { text?: string; value?: string }).text ??

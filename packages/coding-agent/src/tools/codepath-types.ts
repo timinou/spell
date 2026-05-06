@@ -101,6 +101,12 @@ export const getSchema = Type.Object(
 		content: Type.Optional(Type.Boolean({ description: "Include content in output" })),
 		recursive: Type.Optional(Type.Boolean({ description: "Recurse into subdirectories (default: false)" })),
 		depth: Type.Optional(Type.Integer({ description: "Max recursion depth (1 = one level, overrides recursive)" })),
+		gitignore: Type.Optional(
+			Type.Boolean({
+				description:
+					"Honour .gitignore rules when resolving file targets (default: true). Set false to read gitignored files.",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );

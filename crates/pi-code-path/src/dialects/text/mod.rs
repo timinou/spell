@@ -26,15 +26,21 @@ use crate::{
 pub struct TextResolver {
 	pub format_extractors: Vec<Arc<dyn FormatExtractor>>,
 	pub root:              PathBuf,
+	pub gitignore:         bool,
 }
 
 impl TextResolver {
 	pub fn new(root: PathBuf) -> Self {
-		Self { format_extractors: Vec::new(), root }
+		Self { format_extractors: Vec::new(), root, gitignore: true }
 	}
 
 	pub fn with_extractors(mut self, extractors: Vec<Arc<dyn FormatExtractor>>) -> Self {
 		self.format_extractors = extractors;
+		self
+	}
+
+	pub fn with_gitignore(mut self, gitignore: bool) -> Self {
+		self.gitignore = gitignore;
 		self
 	}
 }
@@ -57,7 +63,8 @@ impl Resolver for TextResolver {
 		};
 
 		let _anchor_ctx = DefaultFsAnchorContext::new(self.root.clone());
-		let opts = WalkOpts { hidden: true, gitignore: true, root: self.root.clone() };
+		let opts =
+			WalkOpts { hidden: true, gitignore: self.gitignore, root: self.root.clone() };
 		let walk_results = walk(fs_loc, &opts, cancel);
 		let file_paths: Vec<PathBuf> = walk_results
 			.into_iter()

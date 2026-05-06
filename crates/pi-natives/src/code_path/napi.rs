@@ -94,6 +94,7 @@ pub struct CodePathOptions<'env> {
 	#[napi(ts_type = "any")]
 	pub actions:            Option<serde_json::Value>,
 	pub manage:             Option<String>,
+	pub gitignore:          Option<bool>,
 	#[napi(js_name = "sessionId")]
 	pub session_id:         Option<String>,
 	pub abort_signal:       Option<Unknown<'env>>,
@@ -186,6 +187,7 @@ pub struct CodePathTaskOptions {
 	pub root:               Option<String>,
 	pub actions:            Option<serde_json::Value>,
 	pub manage:             Option<String>,
+	pub gitignore:          Option<bool>,
 	pub session_id:         Option<String>,
 	pub artifact_threshold: Option<u32>,
 }
@@ -208,6 +210,7 @@ impl From<CodePathOptions<'_>> for CodePathTaskOptions {
 			actions:            value.actions,
 			manage:             value.manage,
 			session_id:         value.session_id,
+			gitignore:          value.gitignore,
 			artifact_threshold: value.artifact_threshold,
 		}
 	}
@@ -540,13 +543,19 @@ pub fn execute_code_path_inner(
 				// the FsResolver claims the path and emits "unknown
 				// qualifier" because it only knows listing/tree/stat.
 				let extractors = default_extractors();
-				let resolver = TextResolver::new(root.clone()).with_extractors(extractors);
+				let mut resolver = TextResolver::new(root.clone()).with_extractors(extractors);
+				if let Some(gitignore) = opts.gitignore {
+					resolver = resolver.with_gitignore(gitignore);
+				}
 				resolver
 					.resolve(&cp, &pi_token)
 					.map_err(|d| Error::from_reason(d.message))?
 			} else if is_pure_text_query(&cp) {
 				let extractors = default_extractors();
-				let resolver = TextResolver::new(root).with_extractors(extractors);
+				let mut resolver = TextResolver::new(root).with_extractors(extractors);
+				if let Some(gitignore) = opts.gitignore {
+					resolver = resolver.with_gitignore(gitignore);
+				}
 				resolver
 					.resolve(&cp, &pi_token)
 					.map_err(|d| Error::from_reason(d.message))?
@@ -785,6 +794,7 @@ mod tests {
 			root:               None,
 			actions:            None,
 			manage:             None,
+			gitignore:          None,
 			artifact_threshold: None,
 			session_id:         None,
 		}
@@ -802,6 +812,7 @@ mod tests {
 			root:               Some(root.to_string_lossy().to_string()),
 			actions:            None,
 			manage:             None,
+			gitignore:          None,
 			artifact_threshold: None,
 			session_id:         None,
 		}
@@ -823,6 +834,7 @@ mod tests {
 			root: Some(root.to_string_lossy().to_string()),
 			actions,
 			manage: None,
+			gitignore: None,
 			artifact_threshold: None,
 			session_id: None,
 		}

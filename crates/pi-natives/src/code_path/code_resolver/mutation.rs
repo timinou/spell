@@ -381,7 +381,11 @@ mod tests {
 
 		let resolver = ts_resolver();
 		let target = ts_symbol_path(&path, "main");
-		let action = Action::InsertBefore { pos: None, line: None, lines: ActionContent::Single("// before main".into()) };
+		let action = Action::InsertBefore {
+			pos:   None,
+			line:  None,
+			lines: ActionContent::Single("// before main".into()),
+		};
 
 		let outcome = resolver
 			.apply(&target, &action, &CancellationToken::new())
