@@ -1,0 +1,89 @@
+#+TITLE: Stalled tool-arg diagnostic message hides rawPartialJsonArtifact URI from the assistant
+#+STATE: DONE
+#+SESSION_ID: 14d710a4d6119236
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T20-49-12-536Z_14d710a4d6119236.jsonl]]
+#+CUSTOM_ID: BUG-353-stalled-tool-arg-diagnostic-message-hide
+#+LAYER: packages/ai
+#+PRIORITY: #C
+#+SESSION_ID: 14d710a4d6119236
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T20-49-12-536Z_14d710a4d6119236.jsonl]]
+
+* Initial Message
+
+two things I need you to find root causes for:
+
+1. Create on long files reaches timeout and crashes
+
+
+ Create
+ ┌─── ✔ Create ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Tool call create stalled while streaming incomplete tool arguments. Parsed keys: _i, path. Idle timeout: 180000ms. Retry attempts: 3.      │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Create
+ ┌─── ✔ Create ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Tool execution failed due to an error: Tool call create stalled while streaming incomplete tool arguments. Parsed keys: _i, path. Idle     │
+ │ timeout: 180000ms. Retry attempts: 3.                                                                                                      │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-hotelcomm/2026-05-06T14-23-35-549Z_14d6b8621f4e3f90.jsonl
+ ID: 14d6b8621f4e3f90
+
+
+
+
+==> can you trace the timeout crashes of create and tell me if data came in and if you can make sure streamed data doesn't stop because of timeout?
+
+
+
+
+
+2. Recent agents show as 'failed' even though they actually got completed. It seems like 'submit_result' hangs and then it fails, instead of marking itself as completed. Here's an example:
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T11-29-19-043Z_14d6907eb0fbe7f4.jsonl
+ ID: 14d6907eb0fbe7f4
+
+
+
+
+
+Please find the root causes and explain how you'd fix them.
+
+* Initial Message
+
+When a tool-arg stream stalls, the diagnostic stored in the transcript carries =rawPartialJsonArtifact.uri= but the user-visible / assistant-visible error message doesn't surface it. The agent has no way to read what it had partially streamed and recover (e.g., split the write into pieces).
+
+In the example session the user manually told the assistant: "if it's not, write the document in several pieces than concatenate them. Keep the same scope and the exact same content that you were about to write." That instruction would be unnecessary if the assistant could read =artifact://<session>/main/tool-call-diagnostic/<n>.json= directly.
+
+* Cause
+
+=packages/ai/src/utils/tool-call-diagnostics.ts::formatToolCallStreamDiagnosticMessage= concatenates state + idle timeout + retries, but never includes =diagnostic.rawPartialJsonArtifact.uri= even though the field exists on =ToolCallStreamDiagnostic= and is already populated.
+
+* Fix
+
+Append the artifact URI to the formatted message when present, e.g.:
+
+#+begin_src
+Tool call create stalled while streaming incomplete tool arguments. Parsed keys: _i, path. Idle timeout: 180000ms. Retry attempts: 3. Partial arguments saved to artifact://14d6b8621f4e3f90/main/tool-call-diagnostic/238.json (115 bytes) — read it with the get tool to recover and continue.
+#+end_src
+
+* Acceptance
+
+- =formatToolCallStreamDiagnosticMessage= includes the artifact URI and byte size when =rawPartialJsonArtifact= is set
+- Existing test in =packages/coding-agent/test/session/tool-call-diagnostics.test.ts= updated for new format
+
+* Verification
+
+=bun test packages/ai/test/utils/tool-call-diagnostics.test.ts=
+=bun test packages/coding-agent/test/session/tool-call-diagnostics.test.ts=
+
+* Resolution [2026-05-06]
+=formatToolCallStreamDiagnosticMessage= now appends "Partial arguments saved to <uri> (<bytes> bytes) — read it with the get tool to recover." when =rawPartialJsonArtifact.uri= is present. Test in =tool-call-diagnostics.test.ts= asserts the URI is surfaced.

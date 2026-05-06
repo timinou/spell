@@ -261,6 +261,15 @@ export function formatToolCallStreamDiagnosticMessage(diagnostic: ToolCallStream
 	if (diagnostic.providerRetryAttempt > 0) {
 		details.push(`Retry attempts: ${diagnostic.providerRetryAttempt}.`);
 	}
+	if (diagnostic.rawPartialJsonArtifact?.uri) {
+		const bytes = diagnostic.rawPartialJsonBytes ?? 0;
+		details.push(
+			`Partial arguments saved to ${diagnostic.rawPartialJsonArtifact.uri} (${bytes} bytes) — read it with the get tool to recover.`,
+		);
+	}
+	if (diagnostic.state === "stalled_incomplete_tool_args") {
+		details.push("Override timeout with PI_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS=<ms> (0 disables).");
+	}
 	return [summarizeToolCallStreamDiagnostic(diagnostic), ...details].join(" ").trim();
 }
 

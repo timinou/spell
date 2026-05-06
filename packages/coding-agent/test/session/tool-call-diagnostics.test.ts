@@ -60,6 +60,8 @@ describe("formatAssistantToolCallFailureMessage", () => {
 		expect(formatted).toContain("Idle timeout: 45000ms.");
 		expect(formatted).toContain("Retry attempts: 2.");
 		expect(formatted).toContain("artifact://14b7be567342b8fe/main/tool-call-diagnostic/0.json");
+		expect(formatted).toContain("Partial arguments saved to artifact://14b7be567342b8fe/main/tool-call-diagnostic/0.json (54 bytes)");
+		expect(formatted).toContain("Override timeout with PI_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS=<ms>");
 		expect(formatted).not.toContain("legacy provider string");
 	});
 

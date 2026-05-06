@@ -49,7 +49,7 @@ export function getBedrockStreamIdleTimeoutMs(): number | undefined {
 	return normalizeIdleTimeoutMs($env.PI_BEDROCK_STREAM_IDLE_TIMEOUT_MS, DEFAULT_BEDROCK_STREAM_IDLE_TIMEOUT_MS);
 }
 
-const DEFAULT_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS = 180_000;
+export const DEFAULT_TOOL_ARGUMENT_STREAM_IDLE_TIMEOUT_MS = 600_000;
 
 /**
  * Returns the idle timeout used while a provider is actively streaming tool arguments.
@@ -68,6 +68,12 @@ export interface IdleTimeoutIteratorOptions {
 	getIdleTimeoutMs?: () => number | undefined;
 	errorMessage: string;
 	onIdle?: () => void;
+	/**
+	 * Optional liveness signal source. When set, `subscribe(reset)` is invoked once at iterator
+	 * start; calling `reset()` (e.g. on a provider keep-alive ping) restarts the active idle timer.
+	 * The returned function unsubscribes and is invoked when the iterator finishes.
+	 */
+	tickle?: { subscribe: (reset: () => void) => () => void };
 }
 
 /**
@@ -79,42 +85,81 @@ export async function* iterateWithIdleTimeout<T>(
 ): AsyncGenerator<T> {
 	const iterator = iterable[Symbol.asyncIterator]();
 
-	while (true) {
-		const idleTimeoutMs = options.getIdleTimeoutMs?.() ?? options.idleTimeoutMs;
-		const nextResultPromise = iterator.next().then(
-			result => ({ kind: "next" as const, result }),
-			error => ({ kind: "error" as const, error }),
-		);
+	let currentReset: (() => void) | undefined;
+	const tickleHandler = (): void => {
+		currentReset?.();
+	};
+	const unsubscribeTickle = options.tickle?.subscribe(tickleHandler);
 
-		let timeoutPromise: Promise<{ kind: "timeout" }> | undefined;
-		let timer: NodeJS.Timeout | undefined;
-		if (idleTimeoutMs !== undefined && idleTimeoutMs > 0) {
-			const timeoutResult = Promise.withResolvers<{ kind: "timeout" }>();
-			timeoutPromise = timeoutResult.promise;
-			timer = setTimeout(() => timeoutResult.resolve({ kind: "timeout" }), idleTimeoutMs);
-		}
+	try {
+		while (true) {
+			const idleTimeoutMs = options.getIdleTimeoutMs?.() ?? options.idleTimeoutMs;
+			const nextResultPromise = iterator.next().then(
+				result => ({ kind: "next" as const, result }),
+				error => ({ kind: "error" as const, error }),
+			);
 
-		try {
-			const outcome = timeoutPromise
-				? await Promise.race([nextResultPromise, timeoutPromise])
-				: await nextResultPromise;
-			if (outcome.kind === "timeout") {
-				options.onIdle?.();
-				const returnPromise = iterator.return?.();
-				if (returnPromise) {
-					void returnPromise.catch(() => {});
+			let timeoutPromise: Promise<{ kind: "timeout" }> | undefined;
+			let timer: NodeJS.Timeout | undefined;
+			if (idleTimeoutMs !== undefined && idleTimeoutMs > 0) {
+				const timeoutResult = Promise.withResolvers<{ kind: "timeout" }>();
+				timeoutPromise = timeoutResult.promise;
+				timer = setTimeout(() => timeoutResult.resolve({ kind: "timeout" }), idleTimeoutMs);
+				currentReset = () => {
+					if (!timer) return;
+					clearTimeout(timer);
+					timer = setTimeout(() => timeoutResult.resolve({ kind: "timeout" }), idleTimeoutMs);
+				};
+			} else {
+				currentReset = undefined;
+			}
+
+			try {
+				const outcome = timeoutPromise
+					? await Promise.race([nextResultPromise, timeoutPromise])
+					: await nextResultPromise;
+				if (outcome.kind === "timeout") {
+					options.onIdle?.();
+					const returnPromise = iterator.return?.();
+					if (returnPromise) {
+						void returnPromise.catch(() => {});
+					}
+					throw new Error(options.errorMessage);
 				}
-				throw new Error(options.errorMessage);
+				if (outcome.kind === "error") {
+					throw outcome.error;
+				}
+				if (outcome.result.done) {
+					return;
+				}
+				yield outcome.result.value;
+			} finally {
+				if (timer) clearTimeout(timer);
+				currentReset = undefined;
 			}
-			if (outcome.kind === "error") {
-				throw outcome.error;
-			}
-			if (outcome.result.done) {
-				return;
-			}
-			yield outcome.result.value;
-		} finally {
-			if (timer) clearTimeout(timer);
 		}
+	} finally {
+		unsubscribeTickle?.();
+	}
+}
+
+/**
+ * Liveness signal source for {@link iterateWithIdleTimeout}. Producers (e.g. an HTTP body
+ * tee) call {@link tick} on every keep-alive byte chunk; the iterator restarts its idle timer.
+ *
+ * Multiple subscribers are supported (each `subscribe` returns its own unsubscribe).
+ */
+export class IdleTickle {
+	readonly #subscribers = new Set<() => void>();
+
+	subscribe(reset: () => void): () => void {
+		this.#subscribers.add(reset);
+		return () => {
+			this.#subscribers.delete(reset);
+		};
+	}
+
+	tick(): void {
+		for (const fn of this.#subscribers) fn();
 	}
 }

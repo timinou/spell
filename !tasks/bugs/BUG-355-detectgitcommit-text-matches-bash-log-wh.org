@@ -1,0 +1,102 @@
+#+TITLE: detectGitCommit text-matches bash log when a baseline HEAD is available; produces false negatives on real commits
+#+STATE: DONE
+#+SESSION_ID: 14d710a4d6119236
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T20-49-12-536Z_14d710a4d6119236.jsonl]]
+#+CUSTOM_ID: BUG-355-detectgitcommit-text-matches-bash-log-wh
+#+LAYER: packages/coding-agent
+#+PRIORITY: #A
+#+SESSION_ID: 14d710a4d6119236
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T20-49-12-536Z_14d710a4d6119236.jsonl]]
+
+* Initial Message
+
+two things I need you to find root causes for:
+
+1. Create on long files reaches timeout and crashes
+
+
+ Create
+ ┌─── ✔ Create ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Tool call create stalled while streaming incomplete tool arguments. Parsed keys: _i, path. Idle timeout: 180000ms. Retry attempts: 3.      │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Create
+ ┌─── ✔ Create ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ Tool execution failed due to an error: Tool call create stalled while streaming incomplete tool arguments. Parsed keys: _i, path. Idle     │
+ │ timeout: 180000ms. Retry attempts: 3.                                                                                                      │
+ └────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-hotelcomm/2026-05-06T14-23-35-549Z_14d6b8621f4e3f90.jsonl
+ ID: 14d6b8621f4e3f90
+
+
+
+
+==> can you trace the timeout crashes of create and tell me if data came in and if you can make sure streamed data doesn't stop because of timeout?
+
+
+
+
+
+2. Recent agents show as 'failed' even though they actually got completed. It seems like 'submit_result' hangs and then it fails, instead of marking itself as completed. Here's an example:
+
+Session Info
+
+ File: /home/user/.spell/agent/sessions/-code-ora-spell/2026-05-06T11-29-19-043Z_14d6907eb0fbe7f4.jsonl
+ ID: 14d6907eb0fbe7f4
+
+
+
+
+
+Please find the root causes and explain how you'd fix them.
+
+* Initial Message
+
+Subagents that genuinely commit hit "gateCommit not satisfied: expected =git commit=; No git commit execution was detected." See session =14d6907eb0fbe7f4= where multiple subagents fired the reminder loop despite committing.
+
+* Cause
+
+=packages/coding-agent/src/task/gate-verification.ts:detectGitCommit=:
+
+#+begin_src ts
+export function detectGitCommit(executions: TrackedBashExecution[]): boolean {
+  return executions.some(execution => /\bgit\s+commit\b/.test(execution.command));
+}
+#+end_src
+
+This is text-matching against the bash event's =args.command= string. False-negative paths:
+
+1. Subagent runs the commit through =bash -c '... git commit ...'= or a heredoc / multi-line script where the text isn't matched by the regex (=unwrapTransparentCommand= covers some shells but not all wrappers).
+2. Subagent uses a tool wrapper (e.g. async dispatch, chained commands) where the stored =args.command= doesn't include the verb.
+3. Out-of-order events: bash event arrives after =submit_result= was already evaluated.
+4. =progress.extractedToolData.bash= is empty for any race/filtering reason.
+
+The worktree branch =detectGitCommitInWorktree= is robust (=git rev-parse HEAD != baseline=) but only fires when BOTH =worktreeDir= AND =baselineHeadCommit= are set. For non-worktree tasks with a known baseline, this evidence is ignored.
+
+* Fix
+
+1. Whenever a =baselineHeadCommit= is captured (whether or not a worktree is active), use =git rev-parse HEAD= against the relevant cwd as the primary signal. Fall back to bash text matching only when no baseline exists.
+2. Improve =extractCommandPreamble= to peek into single-arg =bash -c "..."= / =sh -c "..."= and recursively look for =git commit= inside the inner string.
+3. Add a unit test for: heredoc-wrapped =git commit=, =bash -c '...git commit...'=, baseline-advanced HEAD with NO bash entry.
+
+* Acceptance
+
+- A subagent that commits via =bash -c "...git commit..."= passes gateCommit
+- A subagent in a non-worktree task with baselineHeadCommit captured + HEAD advanced passes gateCommit even if no bash entry mentions git
+- Existing positive/negative tests still pass
+
+* Verification
+
+=bun test packages/coding-agent/test/task/gate-verification.test.ts=
+
+* Resolution [2026-05-06]
+- =verifyGates= now uses =detectGitCommitInWorktree(worktreeDir ?? cwd, baseline)= whenever =baselineHeadCommit= is set, regardless of whether a worktree is active. Bash text matching becomes the fallback only when no baseline was captured.
+- =detectGitCommit= also tests =normalizeCommand(execution.command)= so wrappers that =unwrapTransparentCommand= already handles (=bash -c=, =sh -c=, =bash -lc=) are matched.
+- Tests in =gate-verification.test.ts= cover both the baseline-HEAD branch (real temp git repo) and the bash -c wrapper unwrap.
