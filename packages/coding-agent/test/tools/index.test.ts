@@ -58,11 +58,10 @@ describe("createTools", () => {
 
 		// Core tools should always be present
 		expect(names).toContain("bash");
-		expect(names).toContain("read");
+		expect(names).toContain("get");
 		expect(names).toContain("edit");
-		expect(names).toContain("write");
-		expect(names).toContain("grep");
-		expect(names).toContain("find");
+		expect(names).toContain("create");
+
 		expect(names).toContain("lsp");
 
 		expect(names).toContain("task");
@@ -75,10 +74,10 @@ describe("createTools", () => {
 
 	it("excludes lsp tool when session disables LSP", async () => {
 		const session = createTestSession({ enableLsp: false });
-		const tools = await createTools(session, ["read", "lsp", "write"]);
+		const tools = await createTools(session, ["get", "lsp", "create"]);
 		const names = tools.map(t => t.name);
 
-		expect(names).toEqual(["read", "write", "exit_plan_mode"]);
+		expect(names).toEqual(["get", "create", "exit_plan_mode"]);
 	});
 
 	it("excludes lsp tool when disabled", async () => {
@@ -91,18 +90,18 @@ describe("createTools", () => {
 
 	it("respects requested tool subset", async () => {
 		const session = createTestSession();
-		const tools = await createTools(session, ["read", "write"]);
+		const tools = await createTools(session, ["get", "create"]);
 		const names = tools.map(t => t.name);
 
-		expect(names).toEqual(["read", "write", "exit_plan_mode"]);
+		expect(names).toEqual(["get", "create", "exit_plan_mode"]);
 	});
 
 	it("lowercases requested tool subset", async () => {
 		const session = createTestSession();
-		const tools = await createTools(session, ["Read", "Write"]);
+		const tools = await createTools(session, ["Get", "Create"]);
 		const names = tools.map(t => t.name);
 
-		expect(names).toEqual(["read", "write", "exit_plan_mode"]);
+		expect(names).toEqual(["get", "create", "exit_plan_mode"]);
 	});
 
 	it("includes hidden tools when explicitly requested", async () => {
@@ -229,14 +228,14 @@ describe("TOOL_TIERS", () => {
 	});
 
 	it("assigns core tier to essential tools", () => {
-		const coreTier: string[] = ["grep", "find", "bash", "lsp", "code", "task", "ask"];
+		const coreTier: string[] = ["bash", "lsp", "task", "ask"];
 		for (const name of coreTier) {
 			expect(getToolTier(name)).toBe("core");
 		}
 	});
 
-	it("assigns standard tier to read/edit/write (demoted from core)", () => {
-		for (const name of ["read", "edit", "write"]) {
+	it("assigns standard tier to get/edit/create (post-cutover)", () => {
+		for (const name of ["get", "edit", "create"]) {
 			expect(getToolTier(name)).toBe("standard");
 		}
 	});

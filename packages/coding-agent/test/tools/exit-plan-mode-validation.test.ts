@@ -178,15 +178,9 @@ describe("ExitPlanModeTool validation", () => {
 		);
 	});
 
-	it("rejects child items missing structured sub-outline CUSTOM_IDs", async () => {
-		await writeOrgItem("features", "FEAT-104-legacy", LEGACY_BODY);
-		await writeOrgItem("plans", "PLAN-104-test", buildPlanBody("FEAT-104-legacy"));
-
-		const tool = new ExitPlanModeTool(createSession());
-		await expect(
-			tool.execute("call-missing-suboutlines", { title: "TEST_PLAN", itemId: "PLAN-104-test" }),
-		).rejects.toThrow("FILE-LEVEL-ID::suboutline-id");
-	});
+	// FEAT-816: removed — "missing structured sub-outline CUSTOM_IDs" relied on
+	// the manifest-missing-suboutlines false-positive trigger. Children with
+	// LEGACY_BODY no longer fail validation; structural format is advisory.
 
 	it("rejects sub-outline CUSTOM_IDs outside the owning child namespace", async () => {
 		await writeOrgItem(

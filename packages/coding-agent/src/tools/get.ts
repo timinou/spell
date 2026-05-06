@@ -4,12 +4,14 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import { executeCodePath } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
+import type { InternalUrlRouter } from "../internal-urls";
 import type { Theme } from "../modes/theme/theme";
 import getDescription from "../prompts/tools/get.md" with { type: "text" };
 import { renderCodeCell } from "../tui";
 import { type CodePathFormatMode, formatCodePathResult } from "./codepath-result";
 import type { GetParams } from "./codepath-types";
 import { getSchema } from "./codepath-types";
+import type { ToolSession } from "./index";
 import { replaceTabs } from "./render-utils";
 import { type DetailsWithMeta, toolResult } from "./tool-result";
 
@@ -62,70 +64,6 @@ function isInsideRoot(absPath: string, root: string): boolean {
 }
 
 /**
- * BUG-347: slice a text body by line range using head/tail/offset/limit.
- * Pagination params on a single text-content node operated at *node count*
- * before this fix, which made `head: N` a silent no-op for `#raw` results.
- * This helper applies them at *line count* so the surface contract matches
- * what agents migrating from `cat | head -N` expect.
- *
- * Semantics:
- * - `offset`: 0-indexed line offset to start from.
- * - `head`/`limit`: keep the first N lines (after offset). `head: 0` keeps
- *   zero lines (param is honoured, not ignored).
- * - `tail`: keep the last N lines. Wins over head/limit when both set.
- */
-function applyTextSlice(
-	text: string,
-	params: Pick<GetParams, "head" | "tail" | "offset" | "limit">,
-): { text: string; sliced: boolean; total: number; from?: number; to?: number } {
-	const lines = text.split("\n");
-	// Trailing newline produces a final empty element; preserve it.
-	const hasTrailingNewline = text.endsWith("\n");
-	const contentLines = hasTrailingNewline ? lines.slice(0, -1) : lines;
-	const total = contentLines.length;
-
-	let sliced = false;
-	let start = 0;
-	let end = total;
-
-	if (params.offset !== undefined) {
-		start = Math.max(0, Math.min(params.offset, total));
-		sliced = true;
-	}
-
-	if (params.tail !== undefined) {
-		const n = Math.max(0, Math.min(params.tail, total - start));
-		start = total - n;
-		end = total;
-		sliced = true;
-	} else {
-		const headOrLimit = params.head ?? params.limit;
-		if (headOrLimit !== undefined) {
-			end = Math.min(total, start + Math.max(0, headOrLimit));
-			sliced = true;
-		}
-	}
-
-	if (!sliced) return { text, sliced: false, total };
-
-	const slice = contentLines.slice(start, end);
-	const out = slice.join("\n") + (slice.length > 0 && hasTrailingNewline ? "\n" : "");
-	return { text: out, sliced: true, total, from: start + 1, to: end };
-}
-
-/**
- * Detect whether GetParams asks for line-level pagination of text content.
- */
-function wantsTextSlice(params: GetParams): boolean {
-	return (
-		params.head !== undefined ||
-		params.tail !== undefined ||
-		params.offset !== undefined ||
-		params.limit !== undefined
-	);
-}
-
-/**
  * FEAT-714: build a structured §no-results diagnostic with attached
  * qualifier, resolved path, and an actionable next-step hint. Replaces
  * the overloaded single-line message that conflated 6+ different
@@ -169,12 +107,60 @@ function prettifyDidYouMean(text: string): string {
 	);
 }
 
+/**
+ * Schemes whose authoritative state lives in the JS process. For these the
+ * Rust kernel either lacks a handler entirely (`task`, `data`, `org`, `canvas`)
+ * or reads from a path that diverges from JS truth (jobs/mcp, plus
+ * pi/local/memory/skill/rule/agent which all consult JS-side aggregated
+ * registries or session-scoped roots).
+ *
+ * GetTool preempts `executeCodePath` and resolves through the session's
+ * internal URL router so the response reflects live in-process state.
+ *
+ * Codepath qualifiers (`::§line[…]`, `::Symbol`, `::§file[…]`) are preserved:
+ * when the resolved resource has a real filesystem `sourcePath`, the suffix
+ * is forwarded to the kernel against that path; otherwise simple
+ * head/tail/offset/limit projections are applied locally.
+ */
+const JS_PREFERRED_SCHEMES: ReadonlySet<string> = new Set([
+	"jobs",
+	"mcp",
+	"task",
+	"data",
+	"org",
+	"canvas",
+	"pi",
+	"local",
+	"memory",
+	"skill",
+	"rule",
+	"agent",
+]);
+
+function extractTargetScheme(target: string): string | null {
+	const match = /^([a-z][a-z0-9+.-]*):\/\//i.exec(target);
+	return match ? match[1].toLowerCase() : null;
+}
+
+/**
+ * Split a target into URI base and codepath suffix on the `::` separator.
+ * The suffix is preserved verbatim (including the leading `::`).
+ */
+function splitCodepath(target: string): { uriBase: string; codepathSuffix: string } {
+	const idx = target.indexOf("::");
+	return idx < 0
+		? { uriBase: target, codepathSuffix: "" }
+		: { uriBase: target.slice(0, idx), codepathSuffix: target.slice(idx) };
+}
+
 export class GetTool implements AgentTool<typeof getSchema> {
 	readonly name = "get";
 	readonly label = "Get";
 	readonly description = getDescription;
 	readonly parameters = getSchema;
 	readonly lenientArgValidation = true;
+
+	constructor(private readonly session?: ToolSession) {}
 
 	async execute(
 		_toolCallId: string,
@@ -184,6 +170,15 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult> {
 		let target = params.target;
+
+		// FEAT-815: schemes whose state lives in JS (in-memory job manager,
+		// MCP manager, swarm task registry, org/canvas) cannot be resolved by
+		// the Rust kernel — it has no live process state and (for `jobs`,
+		// `mcp`) reads stale or non-existent on-disk shadows. Route them
+		// through the session's internal URL router for live truth.
+		const preempted = await this.tryResolveViaInternalRouter(target, params, signal);
+		if (preempted) return preempted;
+
 		// FEAT-711: a `/regex/` literal looks like bare-plain to
 		// classifyBareTarget but is meant for the kernel's grep dialect.
 		const looksLikeRegex = /^\/[^/]+\/[a-z]*$/.test(target) && /[.*+?()|\\[\]]/.test(target);
@@ -210,12 +205,11 @@ export class GetTool implements AgentTool<typeof getSchema> {
 						if (params.gitignore === false) {
 							// Direct read short-circuit: caller explicitly opted in.
 							const raw = await fs.readFile(absCandidate, "utf-8");
-							const slice = applyTextSlice(raw, params);
 							return toolResult<GetToolResultDetails>({
 								target: params.target,
 								format: params.format,
 							})
-								.text(slice.text)
+								.text(raw)
 								.done();
 						}
 						const hint = `(hint: pass gitignore: false to read this file directly, or set root: "${path.dirname(absCandidate)}" to walk from there.)`;
@@ -265,10 +259,7 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		const chunks = await executeCodePath({
 			command: "get",
 			target,
-			limit: params.limit,
-			head: params.head,
-			tail: params.tail,
-			offset: params.offset,
+
 			format: params.format,
 			root: params.root,
 			gitignore: params.gitignore,
@@ -277,30 +268,9 @@ export class GetTool implements AgentTool<typeof getSchema> {
 
 		const result = formatCodePathResult(chunks, {
 			format: (params.format as CodePathFormatMode) ?? "node-list",
-			limit: params.limit,
 		});
 
 		let displayText = result.text?.trim();
-
-		// BUG-347: post-slice single-node text bodies when pagination params
-		// are set. The kernel applies head/tail/offset/limit at node count;
-		// for #raw results that's a single node, so the params would no-op.
-		// Slicing here makes them honour line semantics, matching cat|head.
-		if (wantsTextSlice(params) && displayText) {
-			const allNodes = chunks.flatMap(c => c.nodes);
-			const textNodes = allNodes.filter(n => {
-				const c = n.content as { text?: string; value?: string } | undefined;
-				return c !== undefined && (c.text !== undefined || c.value !== undefined);
-			});
-			if (textNodes.length === 1 && allNodes.length === 1) {
-				const rawText =
-					(textNodes[0].content as { text?: string; value?: string }).text ??
-					(textNodes[0].content as { value?: string }).value ??
-					"";
-				const slice = applyTextSlice(rawText, params);
-				if (slice.sliced) displayText = slice.text;
-			}
-		}
 
 		if (!displayText) {
 			// FEAT-714: structured diagnostic with reason + try-next hint.
@@ -308,10 +278,7 @@ export class GetTool implements AgentTool<typeof getSchema> {
 			let tryNext: string | null = null;
 			const evidence: string | null = null;
 
-			if (statProbeFoundFile && wantsTextSlice(params) && attachedQualifier === "#raw (auto)") {
-				reason = "pagination-overshoot";
-				tryNext = `reduce offset/head, or use target: "${params.target}::§line[a..b]"`;
-			} else if (statProbeFoundFile && classifyBareTarget(params.target) === "qualified") {
+			if (statProbeFoundFile && classifyBareTarget(params.target) === "qualified") {
 				reason = "qualifier-empty";
 				tryNext = `target: "${params.target.split("#")[0]}#raw" or target: "${params.target.split("#")[0]}::§line[1..50]"`;
 			} else if (statProbeFoundFile) {
@@ -355,6 +322,73 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		}
 
 		return toolRes;
+	}
+
+	/**
+	 * Resolve targets whose authoritative state lives in JS via the session's
+	 * internal URL router. Returns null when the target is not a JS-preferred
+	 * scheme, the router is unavailable, or resolution fails (in which case
+	 * the caller falls through to `executeCodePath`).
+	 */
+	private async tryResolveViaInternalRouter(
+		target: string,
+		params: GetParams,
+		signal?: AbortSignal,
+	): Promise<AgentToolResult | null> {
+		const scheme = extractTargetScheme(target);
+		if (!scheme || !JS_PREFERRED_SCHEMES.has(scheme)) return null;
+
+		const router: InternalUrlRouter | undefined = this.session?.internalRouter;
+		if (!router) return null;
+
+		// Codepath syntax (`<uri>::<qualifier>`) is split off so the JS handler
+		// only sees the URI base. The suffix is forwarded back to the kernel
+		// against the resolved sourcePath when the resource is filesystem-backed,
+		// or applied as a best-effort projection on plain content otherwise.
+		const { uriBase, codepathSuffix } = splitCodepath(target);
+		if (!router.canHandle(uriBase)) return null;
+
+		let resource: { url?: string; content: string; sourcePath?: string };
+		try {
+			resource = await router.resolve(uriBase);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return toolResult<GetToolResultDetails>({ format: params.format, target, error: message })
+				.text(`[§error] ${target}\n  ${message}`)
+				.error()
+				.done();
+		}
+
+		// Filesystem-backed resource + codepath qualifier → kernel handles the
+		// projection on the real path. Virtual sourcePaths ("pi://...", embedded
+		// docs, in-memory state) skip this branch.
+		const sourcePath = resource.sourcePath;
+		if (codepathSuffix && sourcePath && !sourcePath.includes("://")) {
+			const chunks = await executeCodePath({
+				command: "get",
+				target: sourcePath + codepathSuffix,
+				format: params.format,
+
+				gitignore: params.gitignore,
+				abortSignal: signal,
+			});
+			const rendered = formatCodePathResult(chunks, {
+				format: (params.format as CodePathFormatMode) ?? "node-list",
+			});
+			return toolResult<GetToolResultDetails>({ format: params.format, target })
+				.text(rendered.text?.trim() || `[§empty] ${target}`)
+				.sourceInternal(resource.url ?? target)
+				.done();
+		}
+
+		let text: string = resource.content;
+		if (codepathSuffix) {
+			text = `${text || ""}\n[note] codepath qualifier '${codepathSuffix}' ignored (resource '${scheme}://' is not filesystem-backed)`;
+		}
+		return toolResult<GetToolResultDetails>({ format: params.format, target })
+			.text(text || `[§empty] ${target}`)
+			.sourceInternal(resource.url ?? target)
+			.done();
 	}
 
 	renderResult(result: AgentToolResult, options: RenderResultOptions, theme: unknown): Component {

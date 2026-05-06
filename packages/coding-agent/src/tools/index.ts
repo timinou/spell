@@ -272,7 +272,7 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	loop_done: s => (s.loopManager ? new LoopDoneTool(s) : null),
 	gateway: GatewayTool.createIf,
 	// Generic code-path tools (coexistence wave; override legacy registrations)
-	get: () => new GetTool(),
+	get: s => new GetTool(s),
 	manage: () => new ManageTool(),
 	create: s => new CreateTool(s),
 	edit: s => new CodepathEditTool(s),
@@ -282,20 +282,17 @@ export type ToolTier = "core" | "standard" | "specialized";
 
 export const TOOL_TIERS: Record<string, ToolTier> = {
 	// Core — always loaded, essential for any task
-	grep: "core",
-	find: "core",
+
 	bash: "core",
 	lsp: "core",
-	code: "core",
+
 	task: "core",
 	ask: "core",
 
 	// Standard — loaded by default, common development tools
-	read: "standard",
+
 	edit: "standard",
-	write: "standard",
-	ast_grep: "standard",
-	ast_edit: "standard",
+
 	todo_write: "standard",
 	org: "standard",
 	fetch: "standard",

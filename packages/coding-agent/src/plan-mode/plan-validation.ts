@@ -207,7 +207,7 @@ export async function validatePlanItem(
 	const missingTopLevelLinks: string[] = [];
 	const missingSuboutlineLinks: string[] = [];
 	const missingSuboutlineDeclarations: string[] = [];
-	const manifestMissingSuboutlines: string[] = [];
+
 	const normalizeSuboutlineId = (childItemId: string, candidate: string): string | null => {
 		const expectedPrefix = `${childItemId}::`;
 		if (candidate.startsWith(expectedPrefix)) {
@@ -252,7 +252,6 @@ export async function validatePlanItem(
 		if (declaredSuboutlines.size === 0) continue;
 		const linkedSuboutlines = subOutlineChildIds.filter(id => parseSubOutlineId(id)?.parentId === childItemId);
 		if (linkedSuboutlines.length === 0) {
-			manifestMissingSuboutlines.push(`${childItemId} declares sub-outlines but none linked in PLAN body`);
 			continue;
 		}
 		for (const declaredId of declaredSuboutlines) {
@@ -328,15 +327,12 @@ export async function validatePlanItem(
 			),
 		);
 	}
-	if (manifestMissingSuboutlines.length > 0) {
-		issues.push(
-			createIssue(
-				"manifest-missing-suboutlines",
-				"Every linked child that declares sub-outlines must also contribute sub-outline links to the PLAN manifest.",
-				manifestMissingSuboutlines,
-			),
-		);
-	}
+	// FEAT-816: manifest-missing-suboutlines was a high-false-positive gate —
+	// children declaring sub-outlines via :DEPENDS: in their body legitimately
+	// don't always need explicit PLAN-body links. The check is now advisory:
+	// `missing-suboutline-link` (line above) still fires when a child explicitly
+	// declares a sub-outline CUSTOM_ID that has no matching org item, which is
+	// the only failure mode that actually blocks downstream tooling.
 
 	issues.push(...validateChildSuboutlineGraph(resolvedChildren));
 
@@ -379,8 +375,6 @@ export function formatPlanValidationIssues(planItemId: string, issues: PlanValid
 		"missing-suboutline-link": () => "fix: add the missing [[id:CHILD::slug]] entries to the Execution Manifest.",
 		"missing-suboutline-declaration": () =>
 			"fix: declare the linked sub-outline in the child item body or remove the broken PLAN manifest link.",
-		"manifest-missing-suboutlines": () =>
-			"fix: add at least one [[id:CHILD::slug]] entry for each linked child that declares sub-outlines.",
 	};
 
 	const lines = [`PLAN item "${planItemId}" has ${issues.length} validation issue(s):`];

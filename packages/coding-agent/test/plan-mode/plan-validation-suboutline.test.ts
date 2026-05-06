@@ -116,26 +116,9 @@ describe("validatePlanItem dual-link manifest", () => {
 		]);
 	});
 
-	test("validator_rejects_top_level_without_manifest_coverage", async () => {
-		await seedFeature(
-			"FEAT-100",
-			"backend",
-			detailedFeatureBody("FEAT-100", [
-				"** ITEM Define API",
-				":PROPERTIES:",
-				":CUSTOM_ID: FEAT-100::api",
-				":END:",
-				"** ITEM Implement API",
-				":PROPERTIES:",
-				":CUSTOM_ID: FEAT-100::impl",
-				":END:",
-			]),
-		);
-		await seedPlan("PLAN-202", "* Context\n- [[id:FEAT-100]]");
-
-		const result = await validatePlanItem(settings, tmpDir, "PLAN-202");
-		expect(result?.issues.map(issue => issue.category)).toContain("manifest-missing-suboutlines");
-	});
+	// FEAT-816: "manifest-missing-suboutlines" was removed for false-positive
+	// rate; declaring children no longer require explicit PLAN-body sub-outline
+	// links to validate.
 
 	test("validator_rejects_phantom_sub_outline_link_and_missing_suboutline_links", async () => {
 		await seedFeature(
@@ -243,15 +226,11 @@ describe("validatePlanItem dual-link manifest", () => {
 				message: "m3",
 				items: ["FEAT-100::bogus not declared in FEAT-100"],
 			},
-			{
-				category: "manifest-missing-suboutlines",
-				message: "m4",
-				items: ["FEAT-100 declares sub-outlines but none linked in PLAN body"],
-			},
+
 		]);
 		expect(formatted).toContain("missing top level link");
 		expect(formatted).toContain("missing suboutline link");
 		expect(formatted).toContain("missing suboutline declaration");
-		expect(formatted).toContain("manifest missing suboutlines");
+
 	});
 });
