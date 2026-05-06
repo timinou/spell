@@ -37,7 +37,7 @@ describe("plan-mode active sub-outline guidance", () => {
 		expect(rendered).toContain("** File-level DAG");
 		expect(rendered).toContain("** Subfeature-level DAG");
 		expect(rendered).toContain("edge `from` depends on `to`");
-		expect(rendered).toContain("DAG headings are context only and MUST NOT use the `:wave:` tag");
+		expect(rendered).toContain("DAG headings are context only and **MUST NOT** use the `:wave:` tag");
 		expect(rendered).toContain("[[id:FEAT-001]]");
 		expect(rendered).toContain("[[id:FEAT-001::define-types]]");
 		expect(rendered).toContain("missing-top-level-link");

@@ -31,7 +31,7 @@ Main branch: {{git.mainBranch}}
 {{#if skills.length}}
 Skills are specialized knowledge.
 You **MUST** scan descriptions for your task domain.
-If a skill covers your output, you **MUST** read `skill://<name>` before proceeding.
+If a skill covers your output, you **MUST** get `skill://<name>` before proceeding.
 <skills>
 {{#list skills join="\n"}}
 <skill name="{{name}}">
@@ -42,7 +42,7 @@ If a skill covers your output, you **MUST** read `skill://<name>` before proceed
 {{/if}}
 {{#if rules.length}}
 Rules are local constraints.
-You **MUST** read `rule://<name>` when working in that domain.
+You **MUST** get `rule://<name>` when working in that domain.
 <rules>
 {{#list rules join="\n"}}
 <rule name="{{name}}">

@@ -12,7 +12,7 @@ Text for navigation/DOM queries; images for screenshots.
 </output>
 
 <browser>
-The BrowserWindow is launched from `canvas://stdlib/canvas/BrowserWindow.qml` with an optional `initialUrl`. Default armed tools: `["read", "write", "grep", "find"]`.
+The BrowserWindow is launched from `canvas://stdlib/canvas/BrowserWindow.qml` with an optional `initialUrl`. Default armed tools: `["get", "create", "edit"]`.
 
 Supported actions, abbreviated: `browser:sync`, `browser:goto`, `browser:force_reload`, `browser:evaluate`, `browser:observe`, `browser:click`, `browser:type`, `browser:fill`, `browser:press`, `browser:scroll`, `browser:drag`, `browser:wait_for_selector`, `browser:get_text`, `browser:get_html`, `browser:get_attribute`, `browser:extract_readable`, `browser:screenshot`.
 

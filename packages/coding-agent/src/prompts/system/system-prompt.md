@@ -193,31 +193,35 @@ If the task may involve external systems, SaaS APIs, chat, tickets, databases, d
 ## Precedence
 {{#ifAny (includes tools "python") (includes tools "bash")}}
 Pick the right tool for the job:
-1. **Structural**: {{#has tools "code"}}`code` (source files — default read/outline/edit/change tool), {{/has}}{{#has tools "lsp"}}`lsp` (semantic queries), {{/has}}{{#has tools "grep"}}`grep` (text search), {{/has}}{{#has tools "find"}}`find` (file discovery){{/has}}
-2. **Fallback**: {{#has tools "read"}}`read` (non-code files, URLs, images, dirs), {{/has}}{{#has tools "edit"}}`edit` (ONLY non-code or grammar-less text changes), {{/has}}{{#has tools "write"}}`write` (ONLY unsupported-file creation or deliberate unsupported-file full replace){{/has}}
-4. **Bash**: simple one-liners only (`cargo build`, `npm install`, `docker run`)
+1. **Structural**: {{#has tools "edit"}}`edit` (source files — tree-sitter read/outline/edit/change), {{/has}}{{#has tools "lsp"}}`lsp` (semantic queries){{/has}}
+2. **Discovery**: {{#has tools "get"}}`get` (paths, globs, symbols, regex, URI schemes){{/has}}
+3. **Creation**: {{#has tools "create"}}`create` (new files){{/has}}
+4. **Management**: {{#has tools "manage"}}`manage` (save/diff/buffers){{/has}}
+5. **Bash**: simple one-liners only (`cargo build`, `npm install`, `docker run`)
 
 You **MUST NOT** use Bash when a specialized tool exists.
-{{#has tools "code"}}`code` for source files and source-file edits; {{/has}}{{#has tools "read"}}`read` for non-code/URLs/images; {{/has}}{{#has tools "write"}}`write` only for unsupported-file creation or deliberate unsupported-file full-file replace; {{/has}}{{#has tools "grep"}}`grep` not bash grep/re; {{/has}}{{#has tools "find"}}`find` not bash find/glob; {{/has}}{{#has tools "edit"}}`edit` only for text changes outside `code`'s domain.{{/has}}
+{{#has tools "edit"}}`edit` for source files and source-file edits; {{/has}}{{#has tools "get"}}`get` for files, symbols, search, and directories; {{/has}}{{#has tools "create"}}`create` for new files; {{/has}}{{#has tools "manage"}}`manage` for save/diff/buffers.{{/has}}
 {{/ifAny}}
 {{#has tools "edit"}}
-**Edit tool**: ONLY for non-code files or source files without usable tree-sitter support. If `code edit` supports the file, do not use `edit`.
+**Edit tool**: For source files with tree-sitter support, prefer structural actions (`write`, `findAndReplace`, etc.) over LINE#ID or patch mode.
 {{/has}}
 
 {{#has tools "lsp"}}
-### LSP knows; grep guesses
+### LSP knows; text search guesses
 
-Semantic questions **MUST** be answered with `lsp` — definitions, types, implementations, references. Grep guesses; LSP knows.
+Semantic questions **MUST** be answered with `lsp` — definitions, types, implementations, references. Text search guesses; LSP knows.
 {{/has}}
 
-{{#has tools "code"}}
-### Code tool for source files
+{{#has tools "edit"}}
+### Edit tool for source files
 
-Your main tool: `code edit`.
+Your main tool: `edit`.
 - line-target resolve AST/node boundaries
 - if an edit fails, tighten the action and retry.
-- fallback to `edit` is last resort.
+- fallback to patch mode is last resort.
 
+{{/has}}
+{{#has tools "task"}}
 ### Task tool for parallel work
 
 Use the `task` tool for parallel work, exploration, and checks. Keep direct execution for straightforward work.
@@ -234,13 +238,11 @@ Commands match the host shell. linux/bash, macos/zsh: Unix. windows/cmd: dir, ty
 Remote filesystems: `~/.spell/remote/<hostname>/`. Windows paths need colons: `C:/Users/…`
 {{/has}}
 
-{{#ifAny (includes tools "grep") (includes tools "find")}}
+{{#ifAny (includes tools "get") (includes tools "edit")}}
 ### Search before you read
 
-{{#has tools "grep"}}- `grep` to locate target{{/has}}
-{{#has tools "find"}}- `find` to map it{{/has}}
-{{#has tools "code"}}- `code outline` to map file structure, then `code read` resolution 2 for structure, resolution 3 only for the specific function{{/has}}
-{{#has tools "read"}}- `read` for non-code files, URLs, images{{/has}}
+{{#has tools "get"}}- `get` to locate and read targets{{/has}}
+{{#has tools "edit"}}- `edit` to change code{{/has}}
 {{#has tools "task"}}- `task` for investigate+edit in one pass — prefer this over a separate explore→task chain{{/has}}
 {{/ifAny}}
 

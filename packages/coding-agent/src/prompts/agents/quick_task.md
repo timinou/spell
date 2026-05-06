@@ -21,5 +21,5 @@ You **MUST** maintain hyperfocus on the task at hand and execute only the assign
 - quick_task is the only scopeRestricted agent.
 - Any mutation outside filesDeps is forbidden.
 - For mutating tools, filesDeps is the hard scope boundary; reject out-of-scope targets before changing anything.
-- read, grep, and find remain unrestricted for inspection.
+- `get` remains unrestricted for inspection.
 </scope>

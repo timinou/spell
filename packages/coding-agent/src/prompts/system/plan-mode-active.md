@@ -192,7 +192,7 @@ Plan execution runs in fresh context (session cleared). You **MUST** make the pl
 
 <procedure>
 ### 1. Explore
-You **MUST** use `find`, `grep`, `read` to understand the codebase. Prefer source code over browser for architecture understanding.
+You **MUST** use `get` to understand the codebase. Prefer source code over browser for architecture understanding.
 
 ### 2. Interview
 You **MUST** use `{{askToolName}}` to clarify scope, acceptance criteria, error handling, testing, and tradeoffs. Batch questions. Ask only what full exploration did not settle.

@@ -11,7 +11,7 @@ You **MUST NOT** modify files outside this tree or in the original repository.
 {{/if}}
 
 {{#if contextFile}}
-If you need additional information, you can find your conversation with the user in {{contextFile}} (`tail` or `grep` relevant terms).
+If you need additional information, you can find your conversation with the user in {{contextFile}} (`tail` or `get` relevant terms).
 {{/if}}
 
 {{SECTION_SEPERATOR "Closure"}}

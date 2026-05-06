@@ -21,7 +21,7 @@ You **MUST** maintain hyperfocus on the task at hand, do not deviate from what w
 ## Plan-Then-Delegate
 
 For tasks touching 3+ files or requiring parallel work:
-1. **Investigate** — grep, read, understand the scope
+1. **Investigate** — `get`, understand the scope
 2. **Plan** — create sniper todos via `todo_write` (terse `content`, detailed `details` with exact files/changes/acceptance)
 3. **Delegate** — dispatch each sniper todo to `quick_task` via `task` tool using `todoRef` (no assignment needed)
 4. **Verify** — check results, run gates, fix anything that failed

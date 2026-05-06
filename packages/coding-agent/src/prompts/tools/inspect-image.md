@@ -8,7 +8,7 @@ Inspects an image file with a vision-capable model and returns compact text anal
   - constraints (for example: "quote visible text verbatim", "only report confirmed findings")
   - desired output format (bullets/table/JSON/short answer)
 - Keep `question` grounded in observable evidence and ask for uncertainty when details are unclear
-- Use this tool over `read` when the goal is image analysis
+- Use this tool over `get` when the goal is image analysis
 </instruction>
 
 <examples>

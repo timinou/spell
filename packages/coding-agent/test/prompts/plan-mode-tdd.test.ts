@@ -33,7 +33,7 @@ describe("plan-mode TDD prompt guidance", () => {
 
 		expect(rendered).toContain("test-first sub-outline ordering **REQUIRED** for pure functions/new types");
 		expect(rendered).toContain("Test sub-items **MUST** precede implementation sub-items in dependency graph");
-		expect(rendered).toContain("** Write parser tests (TDD: before implementation)");
+		expect(rendered).toContain("** ITEM Write parser tests (TDD: before implementation)");
 		expect(rendered).toContain(":DEPENDS: FEAT-001::define-types");
 		expect(rendered).toContain(":DEPENDS: FEAT-001::parser-tests");
 		expect(rendered).toContain("Scenarios from Tests section as initially-failing tests");
@@ -42,9 +42,9 @@ describe("plan-mode TDD prompt guidance", () => {
 		expect(rendered).not.toContain("** verify                                          :wave:");
 		expect(rendered).toContain("**Anti-pattern: tests-last ordering.**");
 
-		const defineTypesIndex = rendered.indexOf("** Define TypeScript interfaces");
-		const parserTestsIndex = rendered.indexOf("** Write parser tests (TDD: before implementation)");
-		const implementParserIndex = rendered.indexOf("** Implement core parser (satisfies parser-tests)");
+		const defineTypesIndex = rendered.indexOf("** ITEM Define TypeScript interfaces");
+		const parserTestsIndex = rendered.indexOf("** ITEM Write parser tests (TDD: before implementation)");
+		const implementParserIndex = rendered.indexOf("** ITEM Implement core parser (satisfies parser-tests)");
 		expect(defineTypesIndex).toBeGreaterThan(-1);
 		expect(parserTestsIndex).toBeGreaterThan(defineTypesIndex);
 		expect(implementParserIndex).toBeGreaterThan(parserTestsIndex);
