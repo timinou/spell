@@ -359,3 +359,12 @@ describe("compact description wrapping on real tool objects", () => {
 		}
 	});
 });
+
+describe("registry invariants", () => {
+	it("every BUILTIN_TOOLS key is classified in TOOL_TIERS", () => {
+		const builtin = Object.keys(BUILTIN_TOOLS);
+		const tiered = new Set(Object.keys(TOOL_TIERS));
+		const unclassified = builtin.filter(k => !tiered.has(k));
+		expect(unclassified).toEqual([]);
+	});
+});

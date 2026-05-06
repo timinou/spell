@@ -244,8 +244,6 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 
 	calc: s => new CalculatorTool(s),
 	ssh: loadSshTool,
-	// biome-ignore lint/suspicious/noDuplicateObjectKeys: coexistence override; new registration below
-	// edit: s => new EditTool(s), // Replaced by CodepathEditTool below
 
 	lsp: LspTool.createIf,
 
