@@ -1921,25 +1921,33 @@ export class AuthStorage {
 			return result.apiKey;
 		} catch (error) {
 			const errorMsg = String(error);
-			// Only remove credentials for definitive auth failures
-			// Keep credentials for transient errors (network, 5xx) and block temporarily
-			const isDefinitiveFailure =
-				/invalid_grant|invalid_token|revoked|unauthorized|expired.*refresh|refresh.*expired/i.test(errorMsg) ||
-				(/\b(401|403)\b/.test(errorMsg) && !/timeout|network|fetch failed|ECONNREFUSED/i.test(errorMsg));
+			// Categorize the failure to decide between permanent disable vs. long block
+			// invalid_grant on refresh = refresh token expired → needs re-login, not perm disable
+			const isRefreshTokenExpired =
+				/invalid_grant|expired.*refresh|refresh.*expired/i.test(errorMsg);
+			const isCredentialRevoked =
+				!isRefreshTokenExpired &&
+				(/invalid_token|revoked|unauthorized/i.test(errorMsg) ||
+				 (/\b(401|403)\b/.test(errorMsg) && !/timeout|network|fetch failed|ECONNREFUSED/i.test(errorMsg)));
 
 			logger.warn("OAuth token refresh failed", {
 				provider,
 				index: selection.index,
 				error: errorMsg,
-				isDefinitiveFailure,
+				isRefreshTokenExpired,
+				isCredentialRevoked,
 			});
 
-			if (isDefinitiveFailure) {
-				// Permanently disable invalid credentials with an explicit cause for inspection/debugging
+			if (isCredentialRevoked) {
+				// Permanently disable credentials that are definitively revoked/unauthorized
 				this.#disableCredentialAt(provider, selection.index, `oauth refresh failed: ${errorMsg}`);
 				if (this.#getCredentialsForProvider(provider).some(credential => credential.type === "oauth")) {
 					return this.getApiKey(provider, sessionId, options);
 				}
+			} else if (isRefreshTokenExpired) {
+				// Refresh token expired → block long-term (30 days) rather than perm-disable.
+				// User must re-login, but the provider remains visible so they know why.
+				this.#markCredentialBlocked(providerKey, selection.index, Date.now() + 30 * 24 * 60 * 60 * 1000);
 			} else {
 				// Block temporarily for transient failures (5 minutes)
 				this.#markCredentialBlocked(providerKey, selection.index, Date.now() + 5 * 60 * 1000);
