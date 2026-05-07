@@ -11,8 +11,10 @@ const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://api.anthropic.com/v1/oauth/token";
 const CALLBACK_PORT = 54545;
 const CALLBACK_PATH = "/callback";
-// offline_access required for long-lived refresh tokens (~12-24h without it)
-const SCOPES = "org:create_api_key user:profile user:inference offline_access";
+const SCOPES = "org:create_api_key user:profile user:inference";
+// Request 1-year token lifetime to avoid frequent refresh cycles
+const ONE_YEAR_SECONDS = 31536000;
+
 
 type AnthropicOAuthErrorPayload = {
 	error?: string | { message?: unknown };
@@ -91,6 +93,7 @@ export class AnthropicOAuthFlow extends OAuthCallbackFlow {
 				state: exchangeState,
 				redirect_uri: redirectUri,
 				code_verifier: this.#verifier,
+				expires_in: ONE_YEAR_SECONDS,
 			}),
 		});
 
@@ -137,6 +140,7 @@ export async function refreshAnthropicToken(refreshToken: string): Promise<OAuth
 			grant_type: "refresh_token",
 			client_id: CLIENT_ID,
 			refresh_token: refreshToken,
+			expires_in: ONE_YEAR_SECONDS,
 		}),
 	});
 
