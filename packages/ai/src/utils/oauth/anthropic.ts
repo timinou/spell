@@ -11,7 +11,8 @@ const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://api.anthropic.com/v1/oauth/token";
 const CALLBACK_PORT = 54545;
 const CALLBACK_PATH = "/callback";
-const SCOPES = "org:create_api_key user:profile user:inference";
+// offline_access required for long-lived refresh tokens (~12-24h without it)
+const SCOPES = "org:create_api_key user:profile user:inference offline_access";
 
 type AnthropicOAuthErrorPayload = {
 	error?: string | { message?: unknown };
