@@ -352,9 +352,7 @@ export function createReplyRouterMiddleware(
 
 			// Resolve the event via registry
 			registry.resolveEvent(pending.sessionId, pending.eventId, {
-				type: "event_response",
-				kind: "hook_input", // Free-form reply uses hook_input pattern
-				eventId: pending.eventId,
+				kind: "hook_input",
 				value: replyText,
 			});
 
@@ -469,9 +467,7 @@ export function createVoiceReplyHandler(
 
 			// Resolve the event via registry
 			registry.resolveEvent(pending.sessionId, pending.eventId, {
-				type: "event_response",
 				kind: "hook_input",
-				eventId: pending.eventId,
 				value: transcript,
 			});
 
