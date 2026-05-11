@@ -339,7 +339,7 @@ export function createReplyRouterMiddleware(
 			// Verify auth
 			const userId = ctx.from?.id;
 			if (!userId || !telegramConfig.users[String(userId)]) {
-				logger.warn("reply-router: unauthorized reply", { userId, chatId: ctx.chat.id });
+				logger.warn("reply-router: unauthorized reply", { userId, chatId: ctx.chat?.id });
 				return;
 			}
 
