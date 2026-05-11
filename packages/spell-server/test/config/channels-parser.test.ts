@@ -819,4 +819,272 @@ describe("parseChannelsConfig attach blocks", () => {
 
 		expect(config.telegram?.sessionNotifications?.attaches).toEqual([]);
 	});
+
+describe("parseChannelsConfig attach with summarize", () => {
+	it("parses attach with summarize block and all attributes", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval"
+				notify-owners #true
+				renderer "pdf" {
+					command "bash" "render.sh"
+					mime "application/pdf"
+					extension "pdf"
+				}
+				attach renderer="pdf" {
+					transcript "full"
+					on "plan_approval"
+					summarize {
+						when "message-count>30"
+						model "gpt-4-mini"
+						endpoint "https://api.openai.com/v1/chat/completions"
+						api-key "sk-test-key"
+						max-tokens 250
+						prompt-style "needs-input-recap"
+					}
+				}
+			}
+		}`);
+
+		expect(config.telegram?.sessionNotifications?.attaches?.[0]?.summarize).toEqual({
+			when: { kind: "message-count", threshold: 30 },
+			model: "gpt-4-mini",
+			endpoint: "https://api.openai.com/v1/chat/completions",
+			apiKey: "sk-test-key",
+			maxTokens: 250,
+			promptStyle: "needs-input-recap",
+		});
+	});
+
+	it("parses attach with byte-count threshold", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval"
+				notify-owners #true
+				renderer "pdf" {
+					command "bash" "render.sh"
+					mime "application/pdf"
+					extension "pdf"
+				}
+				attach renderer="pdf" {
+					transcript "full"
+					on "plan_approval"
+					summarize {
+						when "byte-count>50000"
+						model "gpt-4-mini"
+						endpoint "https://api.openai.com/v1"
+						api-key "test"
+					}
+				}
+			}
+		}`);
+
+		expect(config.telegram?.sessionNotifications?.attaches?.[0]?.summarize?.when).toEqual({
+			kind: "byte-count",
+			threshold: 50000,
+		});
+	});
+
+	it("throws when summarize is missing required model field", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					renderer "pdf" {
+						command "bash" "render.sh"
+						mime "application/pdf"
+						extension "pdf"
+					}
+					attach renderer="pdf" {
+						transcript "full"
+						on "plan_approval"
+						summarize {
+							when "message-count>30"
+							endpoint "https://api.openai.com"
+							api-key "test"
+						}
+					}
+				}
+			}`)
+		).toThrow(/model is required/);
+	});
+
+	it("throws when summarize is missing required endpoint field", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					renderer "pdf" {
+						command "bash" "render.sh"
+						mime "application/pdf"
+						extension "pdf"
+					}
+					attach renderer="pdf" {
+						transcript "full"
+						on "plan_approval"
+						summarize {
+							when "message-count>30"
+							model "gpt-4"
+							api-key "test"
+						}
+					}
+				}
+			}`)
+		).toThrow(/endpoint is required/);
+	});
+
+	it("throws when summarize is missing required api-key field", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					renderer "pdf" {
+						command "bash" "render.sh"
+						mime "application/pdf"
+						extension "pdf"
+					}
+					attach renderer="pdf" {
+						transcript "full"
+						on "plan_approval"
+						summarize {
+							when "message-count>30"
+							model "gpt-4"
+							endpoint "https://api.openai.com"
+						}
+					}
+				}
+			}`)
+		).toThrow(/api-key is required/);
+	});
+
+	it("applies default max-tokens=250 when omitted from summarize", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval"
+				notify-owners #true
+				renderer "pdf" {
+					command "bash" "render.sh"
+					mime "application/pdf"
+					extension "pdf"
+				}
+				attach renderer="pdf" {
+					transcript "full"
+					on "plan_approval"
+					summarize {
+						when "message-count>30"
+						model "gpt-4"
+						endpoint "https://api.openai.com"
+						api-key "test"
+					}
+				}
+			}
+		}`);
+
+		expect(config.telegram?.sessionNotifications?.attaches?.[0]?.summarize?.maxTokens).toBe(250);
+	});
+
+	it("resolves env() in summarize api-key field", () => {
+		const config = parseChannelsConfig(
+			`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					renderer "pdf" {
+						command "bash" "render.sh"
+						mime "application/pdf"
+						extension "pdf"
+					}
+					attach renderer="pdf" {
+						transcript "full"
+						on "plan_approval"
+						summarize {
+							when "message-count>30"
+							model "gpt-4"
+							endpoint "https://api.openai.com"
+							api-key "env(OPENAI_API_KEY)"
+						}
+					}
+				}
+			}`,
+			undefined,
+			{ OPENAI_API_KEY: "sk-from-env" },
+		);
+
+		expect(config.telegram?.sessionNotifications?.attaches?.[0]?.summarize?.apiKey).toBe(
+			"sk-from-env",
+		);
+	});
+
+	it("throws when summarize when clause has invalid format", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					renderer "pdf" {
+						command "bash" "render.sh"
+						mime "application/pdf"
+						extension "pdf"
+					}
+					attach renderer="pdf" {
+						transcript "full"
+						on "plan_approval"
+						summarize {
+							when "invalid-format"
+							model "gpt-4"
+							endpoint "https://api.openai.com"
+							api-key "test"
+						}
+					}
+				}
+			}`)
+		).toThrow(/must match pattern/);
+	});
+
+	it("defaults attach summarize to undefined when not present", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval"
+				notify-owners #true
+				renderer "pdf" {
+					command "bash" "render.sh"
+					mime "application/pdf"
+					extension "pdf"
+				}
+				attach renderer="pdf" {
+					transcript "full"
+					on "plan_approval"
+				}
+			}
+		}`);
+
+		expect(config.telegram?.sessionNotifications?.attaches?.[0]?.summarize).toBeUndefined();
+	});
+});
+
 });

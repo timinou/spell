@@ -5,6 +5,7 @@ import type { NotificationSender } from "../hooks/notification-sender";
 import { enforceCaptionBudget } from "./caption-budget";
 import type { RendererExecutor } from "./renderer";
 import { renderSessionMarkdown } from "./transcript-store";
+import { Summarizer } from "./summarizer";
 import type { TelegramInlineKeyboardMarkup, TelegramParseMode } from "../hooks/types";
 import type { SessionRegistryEntry, SocketSessionRegistry } from "../socket";
 import type {
@@ -301,9 +302,36 @@ export function setupSessionNotifications(
 
 			for (const attach of matchingAttaches) {
 				try {
+
+				// Summarize before rendering
+				let markdownToRender = rendered.markdown;
+				let captionContent = message.text ?? "";
+
+				if (attach.summarize) {
+					const summarizer = new Summarizer({ config: attach.summarize });
+					const summarizeResult = await summarizer.summarize({
+						markdown: rendered.markdown,
+						messageCount: rendered.messageCount,
+						byteCount: rendered.markdown.length,
+					});
+
+					if (summarizeResult.ok) {
+						// Prepend summary to markdown
+						markdownToRender = `## Summary\n\n${summarizeResult.tldr}\n\n---\n\n${rendered.markdown}`;
+						// Replace caption with tldr
+						captionContent = summarizeResult.tldr;
+					} else if (summarizeResult.reason !== "threshold-not-met") {
+						logger.warn("Summarization failed", {
+							reason: summarizeResult.reason,
+							message: summarizeResult.message,
+							renderId: attach.rendererId,
+						});
+					}
+				}
+
 					const renderResult = await rendererExecutor.render({
 					rendererId: attach.rendererId,
-						markdown: rendered.markdown,
+						markdown: markdownToRender,
 						env: {
 							SPELL_RENDER_TITLE: `${entry.projectName}/${entry.sessionId}`,
 							SPELL_RENDER_STATUS: event.kind,
@@ -357,7 +385,7 @@ export function setupSessionNotifications(
 
 					const windowId = entry.sessionId.slice(0, 8);
 					const fileName = `${entry.projectName}-${windowId}-${Date.now()}.${rendererConfig.extension}`;
-					const caption = enforceCaptionBudget(message.text ?? "", "document");
+					const caption = enforceCaptionBudget(captionContent, "document");
 
 		for (const chatId of chatIds) {
 						try {
