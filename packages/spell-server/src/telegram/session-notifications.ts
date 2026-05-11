@@ -224,7 +224,7 @@ export function setupSessionNotifications(
 		const message = formatBlockingEventNotification(entry, event);
 
 		// Find attaches matching this event kind
-		const matchingAttaches = notificationConfig.attaches.filter(
+		const matchingAttaches = (notificationConfig.attaches ?? []).filter(
 			attach => attach.on.includes(event.kind),
 		);
 
@@ -350,6 +350,8 @@ export function setupSessionNotifications(
 			}
 		}
 	};
+	registry.onBlockingEvent(handler);
+
 	return () => {
 		registry.offBlockingEvent(handler);
 	};
