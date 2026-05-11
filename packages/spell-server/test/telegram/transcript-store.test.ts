@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { renderSessionMarkdown } from "../../src/telegram/transcript-store";
