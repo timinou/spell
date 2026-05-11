@@ -116,7 +116,7 @@ export class RendererExecutor {
 
 			// Check cache if cacheBy is enabled
 			if (renderer.cacheBy === "transcript-hash") {
-				const cacheKey = this.computeCacheKey(req.markdown, renderer);
+				const cacheKey = this.computeCacheKey(req.markdown, renderer, req.env);
 				const cached = this.cache.get(cacheKey);
 				if (cached) {
 					logger.debug("Cache hit for renderer", { rendererId: req.rendererId });
@@ -215,9 +215,10 @@ export class RendererExecutor {
 		this.breakerStates.set(rendererId, state);
 	}
 
-	private computeCacheKey(markdown: string, renderer: RendererConfig): string {
+	private computeCacheKey(markdown: string, renderer: RendererConfig, env?: Record<string, string>): string {
 		const rendererSignature = this.computeRendererSignature(renderer);
-		const combined = markdown + rendererSignature;
+		const canonicalEnv = env ? JSON.stringify(Object.entries(env).sort(([a], [b]) => a.localeCompare(b))) : "{}";
+		const combined = markdown + rendererSignature + canonicalEnv;
 		return createHash("sha256").update(combined).digest("hex");
 	}
 
