@@ -4,6 +4,7 @@ import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { resolveEnvString } from "./env-resolver";
 import type {
 	ChannelsConfig,
+	SessionNotificationRendererConfig,
 	SttConfig,
 	SttProvider,
 	TelegramUserConfig,
@@ -308,6 +309,100 @@ function parseUserNode(node: Node, users: Record<string, TelegramUserConfig>): v
 	};
 }
 
+function parseRendererNode(
+	node: Node,
+	context: string,
+): SessionNotificationRendererConfig {
+	const idArg = node.getArgument(0);
+	if (typeof idArg !== "string" || idArg.length === 0) {
+		throw new Error(`${context}: renderer must have a non-empty string id argument`);
+	}
+	const id = idArg;
+
+	let command: string | undefined;
+	let args: string[] = [];
+	let mime: string | undefined;
+	let extension: string | undefined;
+	let timeoutMs = 20000;
+	let cacheBy: 'transcript-hash' | 'none' = 'transcript-hash';
+
+	for (const child of node.children?.nodes ?? []) {
+		const name = child.getName();
+
+		if (name === "command") {
+			const values = child.getArguments();
+			if (values.length === 0 || !values.every(v => typeof v === "string")) {
+				throw new Error(`${context}.command must have at least one string argument`);
+			}
+			command = values[0] as string;
+			args = (values.slice(1) as string[]) ?? [];
+			continue;
+		}
+
+		if (name === "mime") {
+			const value = child.getArgument(0);
+			if (typeof value !== "string" || value.length === 0) {
+				throw new Error(`${context}.mime must have a non-empty string argument`);
+			}
+			mime = value;
+			continue;
+		}
+
+		if (name === "extension") {
+			const value = child.getArgument(0);
+			if (typeof value !== "string" || value.length === 0) {
+				throw new Error(`${context}.extension must have a non-empty string argument`);
+			}
+			extension = value;
+			continue;
+		}
+
+		if (name === "timeout-ms") {
+			const value = child.getArgument(0);
+			if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+				throw new Error(`${context}.timeout-ms must be a positive number`);
+			}
+			timeoutMs = value;
+			continue;
+		}
+
+		if (name === "cache-by") {
+			const value = child.getArgument(0);
+			if (typeof value !== "string" || (value !== "transcript-hash" && value !== "none")) {
+				throw new Error(`${context}.cache-by must be "transcript-hash" or "none"`);
+			}
+			cacheBy = value;
+			continue;
+		}
+
+		// Unknown child node
+		throw new Error(`${context}.renderer.${name} is not supported`);
+	}
+
+	// Validate required fields
+	if (!command) {
+		throw new Error(`${context}.command is required`);
+	}
+
+	if (!mime) {
+		throw new Error(`${context}.mime is required`);
+	}
+
+	if (!extension) {
+		throw new Error(`${context}.extension is required`);
+	}
+
+	return {
+		id,
+		command,
+		args,
+		mime,
+		extension,
+		timeoutMs,
+		cacheBy,
+	};
+}
+
 function parseSessionNotificationsNode(
 	node: Node,
 	context = "channels.telegram.session-notifications",
@@ -315,6 +410,8 @@ function parseSessionNotificationsNode(
 	let events: string[] = [];
 	let notifyOwners = true;
 	const additionalChatIds: number[] = [];
+	const renderers: SessionNotificationRendererConfig[] = [];
+	const rendererIds = new Set<string>();
 
 	for (const child of node.children?.nodes ?? []) {
 		const name = child.getName();
@@ -352,10 +449,21 @@ function parseSessionNotificationsNode(
 				throw new Error(`${context}.notify-chat-id must be a number`);
 			}
 			additionalChatIds.push(value);
+			continue;
+		}
+
+		if (name === "renderer") {
+			const renderer = parseRendererNode(child, context);
+			if (rendererIds.has(renderer.id)) {
+				throw new Error(`${context}: duplicate renderer id "${renderer.id}"`);
+			}
+			rendererIds.add(renderer.id);
+			renderers.push(renderer);
+			continue;
 		}
 	}
 
-	return { events, notifyOwners, additionalChatIds };
+	return { events, notifyOwners, additionalChatIds, renderers };
 }
 
 const VALID_STT_PROVIDERS = new Set(["deepgram", "openai"]);

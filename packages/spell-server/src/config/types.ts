@@ -16,7 +16,7 @@ export interface SpellServerConfig {
 
 /**
  * Web frontend authentication subsystem. Multiple named bearer tokens
- * authenticate human identities (“alice”, “bob” ...) against the same
+ * authenticate human identities ("alice", "bob" ...) against the same
  * `/web/*` route surface (HTTP + WebSocket).
  */
 export interface WebConfig {
@@ -71,6 +71,44 @@ export interface TelegramUserConfig {
 	voice?: UserVoiceConfig;
 }
 
+/** Renderer config used by RendererExecutor. */
+export interface RendererConfig {
+	/** Renderer ID (unique within channel context). */
+	id: string;
+	/** Command to execute (e.g., "pandoc", "/opt/custom-renderer"). */
+	command: string;
+	/** Command arguments. */
+	args: string[];
+	/** Timeout in milliseconds for subprocess execution. */
+	timeoutMs: number;
+	/** Cache strategy. 'transcript-hash' = SHA256(markdown || rendererSignature). undefined = no cache. */
+	cacheBy?: 'transcript-hash';
+	/** MIME type of output (e.g., "application/pdf"). */
+	mime: string;
+	/** File extension of output (e.g., "pdf"). */
+	extension: string;
+	/** Optional extra env vars forwarded to subprocess. */
+	env?: Record<string, string>;
+}
+
+/** Renderer config parsed from KDL session-notifications block. */
+export interface SessionNotificationRendererConfig {
+	/** Renderer ID (unique within channel context). */
+	id: string;
+	/** Command to execute (e.g., "pandoc", "/opt/custom-renderer"). */
+	command: string;
+	/** Command arguments. */
+	args: string[];
+	/** Timeout in milliseconds for subprocess execution. */
+	timeoutMs: number;
+	/** Cache strategy. 'transcript-hash' = SHA256(markdown || rendererSignature), 'none' = no cache. */
+	cacheBy: 'transcript-hash' | 'none';
+	/** MIME type of output (e.g., "application/pdf"). */
+	mime: string;
+	/** File extension of output (e.g., "pdf"). */
+	extension: string;
+}
+
 /** Full Telegram channel configuration parsed from channels.kdl */
 export interface TelegramChannelConfig {
 	/** Bot token (read from inline value or file) */
@@ -102,6 +140,7 @@ export interface TelegramChannelConfig {
 		events: string[];
 		notifyOwners: boolean;
 		additionalChatIds: number[];
+		renderers: SessionNotificationRendererConfig[];
 	};
 }
 
