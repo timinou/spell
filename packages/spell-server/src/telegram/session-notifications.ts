@@ -228,13 +228,13 @@ export function setupSessionNotifications(
 		const message = formatBlockingEventNotification(entry, event);
 
 		// Find attaches matching this event kind
-		const matchingAttaches = (notificationConfig.attaches ?? []).filter(
+		const matchingAttach = (notificationConfig.attaches ?? []).find(
 			attach => attach.on.includes(event.kind),
 		);
 
 		// If no attaches match or renderers not available, send text-only
 		if (
-			matchingAttaches.length === 0 ||
+			!matchingAttach ||
 			!rendererExecutor ||
 			!(entry as any).sessionFile
 		) {
@@ -300,94 +300,59 @@ export function setupSessionNotifications(
 		try {
 			const rendered = await renderSessionMarkdown(sessionFile);
 
-			for (const attach of matchingAttaches) {
-				try {
+			if (matchingAttach) {
+			const attach = matchingAttach;
+			try {
 
-				// Summarize before rendering
-				let markdownToRender = rendered.markdown;
-				let captionContent = message.text ?? "";
+			// Summarize before rendering
+			let markdownToRender = rendered.markdown;
+			let captionContent = message.text ?? "";
 
-				if (attach.summarize) {
-					const summarizer = new Summarizer({ config: attach.summarize });
-					const summarizeResult = await summarizer.summarize({
-						markdown: rendered.markdown,
-						messageCount: rendered.messageCount,
-						byteCount: rendered.markdown.length,
+			if (attach.summarize) {
+				const summarizer = new Summarizer({ config: attach.summarize });
+				const summarizeResult = await summarizer.summarize({
+					markdown: rendered.markdown,
+					messageCount: rendered.messageCount,
+					byteCount: rendered.markdown.length,
+				});
+
+				if (summarizeResult.ok) {
+					// Prepend summary to markdown
+					markdownToRender = `## Summary\n\n${summarizeResult.tldr}\n\n---\n\n${rendered.markdown}`;
+					// Replace caption with tldr
+					captionContent = summarizeResult.tldr;
+				} else if (summarizeResult.reason !== "threshold-not-met") {
+					logger.warn("Summarization failed", {
+						reason: summarizeResult.reason,
+						message: summarizeResult.message,
+						renderId: attach.rendererId,
 					});
-
-					if (summarizeResult.ok) {
-						// Prepend summary to markdown
-						markdownToRender = `## Summary\n\n${summarizeResult.tldr}\n\n---\n\n${rendered.markdown}`;
-						// Replace caption with tldr
-						captionContent = summarizeResult.tldr;
-					} else if (summarizeResult.reason !== "threshold-not-met") {
-						logger.warn("Summarization failed", {
-							reason: summarizeResult.reason,
-							message: summarizeResult.message,
-							renderId: attach.rendererId,
-						});
-					}
 				}
+			}
 
-					const renderResult = await rendererExecutor.render({
-					rendererId: attach.rendererId,
-						markdown: markdownToRender,
-						env: {
-							SPELL_RENDER_TITLE: `${entry.projectName}/${entry.sessionId}`,
-							SPELL_RENDER_STATUS: event.kind,
-							SPELL_RENDER_PROJECT: entry.projectName,
-							SPELL_RENDER_SESSION_ID: entry.sessionId,
-							SPELL_RENDER_EVENT_KIND: event.kind,
-							SPELL_RENDER_MESSAGES: String(rendered.messageCount),
-						},
-					});
-
-					if (!renderResult.ok) {
-						logger.warn("Renderer failed", {
-							renderId: attach.rendererId,
-							reason: renderResult.reason,
-							message: renderResult.message,
-						});
-		for (const chatId of chatIds) {
-			notificationSender.sendMessage(chatId, message).then(result => {
-				void replyRouter?.register(result.messageId, {
-					chatId,
-					sessionId,
-					eventId: event.eventId,
-					eventKind: event.kind,
-					sessionTitle: entry.projectName,
-				}).catch(regError => {
-					logger.warn("Failed to register message with reply router", {
-						chatId,
-						sessionId,
-						messageId: result.messageId,
-						error: String(regError),
-					});
-				});
-			}).catch(error => {
-				logger.warn("Failed to send session notification", {
-					chatId,
-					sessionId,
-					eventId: event.eventId,
-					error: String(error),
-				});
+			const renderResult = await rendererExecutor.render({
+				renderId: attach.rendererId,
+				markdown: markdownToRender,
+				env: {
+					SPELL_RENDER_TITLE: `${entry.projectName}/${entry.sessionId}`,
+					SPELL_RENDER_STATUS: event.kind,
+					SPELL_RENDER_PROJECT: entry.projectName,
+					SPELL_RENDER_SESSION_ID: entry.sessionId,
+					SPELL_RENDER_EVENT_KIND: event.kind,
+					SPELL_RENDER_MESSAGES: String(rendered.messageCount),
+				},
 			});
-		}
-						continue;
-		}
 
-					const rendererConfig = notificationConfig.renderers.find(
-						r => r.id === attach.rendererId,
-					);
-					if (!rendererConfig) {
-						continue;
-					}
-
+			if (renderResult.ok) {
+				const rendererConfig = notificationConfig.renderers.find(
+					r => r.id === attach.rendererId,
+				);
+				if (rendererConfig) {
 					const windowId = entry.sessionId.slice(0, 8);
 					const fileName = `${entry.projectName}-${windowId}-${Date.now()}.${rendererConfig.extension}`;
 					const caption = enforceCaptionBudget(captionContent, "document");
 
-		for (const chatId of chatIds) {
+					for (const chatId of chatIds) {
 						try {
 							const docResult = await notificationSender.sendDocument(chatId, {
 								buffer: renderResult.bytes,
@@ -413,19 +378,52 @@ export function setupSessionNotifications(
 							});
 						} catch (error) {
 							logger.warn("Failed to send document", {
-					chatId,
-					sessionId,
-					error: String(error),
+								chatId,
+								sessionId,
+								error: String(error),
 							});
 						}
 					}
-				} catch (error) {
-					logger.warn("Attach render failed", {
-						renderId: attach.rendererId,
-					error: String(error),
+				}
+			} else {
+				logger.warn("Renderer failed", {
+					renderId: attach.rendererId,
+					reason: renderResult.reason,
+					message: renderResult.message,
+				});
+				for (const chatId of chatIds) {
+					notificationSender.sendMessage(chatId, message).then(result => {
+						void replyRouter?.register(result.messageId, {
+							chatId,
+							sessionId,
+							eventId: event.eventId,
+							eventKind: event.kind,
+							sessionTitle: entry.projectName,
+						}).catch(regError => {
+							logger.warn("Failed to register message with reply router", {
+								chatId,
+								sessionId,
+								messageId: result.messageId,
+								error: String(regError),
+							});
+						});
+					}).catch(error => {
+						logger.warn("Failed to send session notification", {
+							chatId,
+							sessionId,
+							eventId: event.eventId,
+							error: String(error),
+						});
 					});
 				}
 			}
+		} catch (error) {
+			logger.warn("Attach render failed", {
+				renderId: attach.rendererId,
+				error: String(error),
+			});
+		}
+	}
 		} catch (error) {
 			logger.warn("Transcript render failed", { sessionId, error: String(error) });
 		for (const chatId of chatIds) {
