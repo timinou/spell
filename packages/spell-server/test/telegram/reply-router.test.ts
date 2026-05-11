@@ -329,12 +329,12 @@ describe("ReplyRouter", () => {
 describe("Voice Reply Handler", () => {
 	it("voice reply with high confidence transcription resolves event", async () => {
 		// Test that high confidence (>= 0.4) transcriptions resolve the event
-		const mockSttProvider = {
-			transcribe: async () => ({
-				text: "hello world",
-				confidence: 0.9,
-			}),
-		};
+			const mockSttProvider = {
+		transcribe: async (_buf?: Buffer, _opts?: { mimeType?: string }) => ({
+			text: "hello world",
+			confidence: 0.9,
+		}),
+	};
 
 		// Test STT provider returns high confidence
 		const result = await mockSttProvider.transcribe(Buffer.alloc(0), {
@@ -347,7 +347,7 @@ describe("Voice Reply Handler", () => {
 	it("voice reply with low confidence does not resolve event", async () => {
 		// Test that low confidence (< 0.4) transcriptions do not resolve
 		const mockSttProvider = {
-			transcribe: async () => ({
+			transcribe: async (_buf?: Buffer, _opts?: { mimeType?: string }) => ({
 				text: "",
 				confidence: 0.1,
 			}),
