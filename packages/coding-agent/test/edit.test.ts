@@ -539,3 +539,37 @@ describe("BUG-342 batch fail-fast + transaction:strict", () => {
 		expect(result.details).toBeDefined();
 	});
 });
+
+describe("cwd-prefix duplication guard", () => {
+	beforeEach(async () => {
+		await fs.mkdir(tmpDir, { recursive: true }).catch(() => {});
+	});
+	afterEach(async () => {
+		await fs.rm(tmpDir, { recursive: true }).catch(() => {});
+	});
+
+	it("rejects relative target that duplicates cwd tail without touching fs", async () => {
+		const nested = path.join(tmpDir, "apps", "hotelcomm");
+		await fs.mkdir(nested, { recursive: true });
+		const tool = new CodepathEditTool({
+			cwd: nested,
+			hasUI: false,
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			settings: Settings.isolated(),
+		});
+		const result = await tool.execute("t", {
+			operations: [
+				{
+					target: "apps/hotelcomm/lib/foo.ex",
+					action: { kind: "append", lines: ["x"] },
+				},
+			],
+		});
+		const text = result.content.find(c => c.type === "text")?.text ?? "";
+		expect(text).toContain("cwd prefix");
+		expect(text).toContain("apps/hotelcomm");
+		// File at the doubled location must not exist.
+		expect(await fs.exists(path.join(nested, "apps", "hotelcomm", "lib", "foo.ex"))).toBe(false);
+	});
+});

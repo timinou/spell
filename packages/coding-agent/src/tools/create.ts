@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import { executeCodePath } from "@oh-my-pi/pi-natives";
 import type { Component } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import type { Theme } from "../modes/theme/theme";
@@ -13,7 +14,7 @@ import type { CreateParams } from "./codepath-types";
 import { createSchema } from "./codepath-types";
 import { evaluateWriteGuards } from "./managed-buffer-guards";
 import { enforceModeWrite } from "./mode-guard";
-import { executeCodePath } from "@oh-my-pi/pi-natives";
+import { detectCwdPrefixDuplication, formatCwdPrefixDuplicationMessage } from "./path-resolution";
 import { replaceTabs } from "./render-utils";
 import { type DetailsWithMeta, toolResult } from "./tool-result";
 
@@ -42,6 +43,23 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult> {
 		const sessionCwd = this.session.cwd;
+
+		// cwd-prefix duplication guard: catches the silent-nesting bug where the
+		// agent passes a path containing the cwd's tail segments (e.g. cwd
+		// `/proj/apps/foo` + path `apps/foo/lib/x.ts` → would resolve to
+		// `/proj/apps/foo/apps/foo/lib/x.ts`). Without this, `path.resolve`
+		// happily double-prefixes and the success message echoes the input
+		// verbatim, leaving the agent no feedback signal to self-correct.
+		const duplication = detectCwdPrefixDuplication(sessionCwd, params.path);
+		if (duplication) {
+			return toolResult<CreateToolResultDetails>({
+				path: params.path,
+				error: "cwd_prefix_duplication",
+			})
+				.text(formatCwdPrefixDuplicationMessage(params.path, sessionCwd, duplication))
+				.done();
+		}
+
 		const resolvedPath = path.isAbsolute(params.path) ? params.path : path.resolve(sessionCwd, params.path);
 
 		// Mode + sandbox guards (throw on violation, mirroring edit.ts).
@@ -111,8 +129,13 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 		// Verify by stat — surfaces e.g. permission/quota failures the kernel
 		// promise might mask, and provides byte-count display.
 		const stat = await fs.stat(resolvedPath);
+		// Echo BOTH the relative-to-cwd path AND the absolute resolved path.
+		// This is the second half of the silent-nesting defence: even if the
+		// duplication guard ever misses, the agent sees on the next turn where
+		// the file actually landed and can self-correct on the next write.
+		const relFromCwd = path.relative(sessionCwd, resolvedPath) || params.path;
 		return toolResult<CreateToolResultDetails>({ path: params.path, created: true, bytes: stat.size })
-			.text(`Created ${params.path} (${stat.size} bytes)`)
+			.text(`Created ${relFromCwd} (${stat.size} bytes)\n   → ${resolvedPath}`)
 			.done();
 	}
 

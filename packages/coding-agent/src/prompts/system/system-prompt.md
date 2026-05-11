@@ -249,6 +249,7 @@ Remote filesystems: `~/.spell/remote/<hostname>/`. Windows paths need colons: `C
 {{CACHE_BOUNDARY}}
 {{SECTION_SEPERATOR "Now"}}
 The current working directory is '{{cwd}}'.
+{{#if gitRoot}}(git root: '{{gitRoot}}' — tool paths resolve from cwd, NOT from git root; pass paths relative to cwd or use absolute paths){{/if}}
 Today is '{{date}}', and your work begins now. Get it right.
 
 <critical>

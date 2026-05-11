@@ -1,0 +1,172 @@
+#+TITLE: create tool silently nests paths when session cwd is below project namespace root
+#+STATE: DONE
+#+SESSION_ID: 14dc5b33ab1d8adb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-27-21-772Z_14dc5b33ab1d8adb.jsonl]]
+#+CUSTOM_ID: BUG-358-create-tool-silently-nests-paths-when-se
+#+EFFORT: 1h
+#+LAYER: coding-agent
+#+PRIORITY: #A
+
+NOTE [2026-05-10]: Fixed in same session.
+
+Files changed:
+- packages/coding-agent/src/tools/path-resolution.ts (new) — segment-aligned duplication detector + uniform diagnostic formatter; exempts absolute paths and ./../ anchored paths
+- packages/coding-agent/src/tools/create.ts — guard before resolvedPath; success text echoes cwd-relative path AND absolute resolved path on second line
+- packages/coding-agent/src/tools/edit.ts — guard inside per-op loop; fails the op with cwd_prefix_duplication before any fs work
+- packages/coding-agent/src/prompts/tools/create.md — documents cwd resolution rule + cwd_prefix_duplication diagnostic
+- packages/coding-agent/src/prompts/system/system-prompt.md — one-line warning rendered only when git-toplevel differs from cwd
+- packages/coding-agent/src/system-prompt.ts — computes gitRoot via new getGitToplevelSync; gates render on cwdBelowGitRoot
+- packages/coding-agent/src/session/git-baseline.ts — exports getGitToplevelSync
+
+Tests added:
+- packages/coding-agent/test/tools/path-resolution.test.ts (new): 9 cases
+- packages/coding-agent/test/create.test.ts: +4 cases
+- packages/coding-agent/test/edit.test.ts: +1 case
+- packages/coding-agent/test/system-prompt-gitroot.test.ts (new): 2 cases
+
+Verification:
+- tsgo -p packages/coding-agent: clean
+- bun test create.test.ts path-resolution.test.ts create-e2e-regression.test.ts system-prompt-gitroot.test.ts: 25/25 pass
+- bun test edit.test.ts: 31 pass; the 2 failures pre-existed on main (BUG-342 batch fail-fast tests), unrelated
+- E2E regression test confirms new echo format: "Created apps/hotelcomm/... → /tmp/.../apps/hotelcomm/..."
+
+* Initial Message
+
+3. proxy_create nested-path bug recurring — 3 separate agents hit apps/hotelcomm/apps/hotelcomm/...
+ accidental nesting. Worth a tooling fix.
+
+in /home/user/.spell/agent/sessions/-code-ora-monorepo-apps-hotelcomm/2026-05-06T14-23-35-549Z_14d6b8621f4e3f90.jsonl
+
+
+explain the root cause
+
+* Initial Message
+
+3 separate agents hit =apps/hotelcomm/apps/hotelcomm/...= accidental nesting via =create= calls. Worth a tooling fix.
+
+Evidence transcript: =/home/user/.spell/agent/sessions/-code-ora-monorepo-apps-hotelcomm/2026-05-06T14-23-35-549Z_14d6b8621f4e3f90.jsonl=
+
+Concrete reproduction in the log:
+- session cwd: =/home/user/code/ora/monorepo/apps/hotelcomm=
+- agent call (line 2745): =create { path: "apps/hotelcomm/lib/hotelcomm_web/controllers/dev_auth_controller.ex", ... }=
+- result message (line 2746): =Created apps/hotelcomm/lib/hotelcomm_web/controllers/dev_auth_controller.ex (1323 bytes)= ← echoes input verbatim
+- actual file on disk (line 2755 find output): =/home/user/code/ora/monorepo/apps/hotelcomm/apps/hotelcomm/lib/hotelcomm_web/controllers/dev_auth_controller.ex=
+
+* Root Cause
+
+In =packages/coding-agent/src/tools/create.ts=:
+
+#+begin_src ts
+const sessionCwd = this.session.cwd;
+const resolvedPath = path.isAbsolute(params.path)
+  ? params.path
+  : path.resolve(sessionCwd, params.path);
+#+end_src
+
+And success render:
+#+begin_src ts
+.text(`Created ${params.path} (${stat.size} bytes)`)
+#+end_src
+
+Three compounding factors:
+1. *Naive resolve* — =path.resolve(sessionCwd, params.path)= silently double-prefixes when =params.path= already starts with the cwd's tail segment.
+2. *Misleading echo* — success message returns =params.path= (relative-as-given), not the resolved path. Agent has no feedback signal to detect mis-placement on the next turn.
+3. *cwd ≠ namespace root* — agents read AGENTS.md, plan org items, specs, code-review notes that all address files as =apps/hotelcomm/lib/...= from the monorepo root. The harness session cwd is =/monorepo/apps/hotelcomm=. Agent's mental model and tool's resolution root disagree silently.
+
+Recurrence across 3 agents → not a model slip; deterministic for any agent that takes the monorepo-root view (the natural reading).
+
+* Scope
+
+In scope:
+- =packages/coding-agent/src/tools/create.ts= — duplication guard + resolved-path echo
+- =packages/coding-agent/src/tools/edit.ts= — same guard for =kind: "create"= / =kind: "write"= when the target is a new file path
+- =packages/coding-agent/src/prompts/tools/create.md= — document cwd resolution
+- system prompt boot — surface cwd vs git-toplevel asymmetry when they differ
+
+Out of scope:
+- Changing the resolution root (sessionCwd stays correct semantics)
+- Auto-correcting the duplication silently (we reject + diagnose)
+
+* Implementation
+
+** A. Duplication guard
+
+In =CreateTool.execute=, after computing =resolvedPath= for relative paths:
+
+#+begin_src ts
+if (!path.isAbsolute(params.path)) {
+  const cwdSegments = sessionCwd.split(path.sep).filter(Boolean);
+  const pathSegments = params.path.split(path.sep).filter(Boolean);
+  const overlap = longestSuffixPrefixOverlap(cwdSegments, pathSegments);
+  if (overlap > 0) {
+    const stripped = pathSegments.slice(overlap).join(path.sep);
+    return toolResult({ path: params.path, error: "cwd_prefix_duplication" })
+      .text(`Path "${params.path}" appears to include the cwd prefix `
+          + `"${cwdSegments.slice(-overlap).join(path.sep)}". `
+          + `Session cwd is ${sessionCwd}. `
+          + `Pass "${stripped}" (relative to cwd) or an absolute path.`)
+      .done();
+  }
+}
+#+end_src
+
+Where =longestSuffixPrefixOverlap= returns the longest k such that =cwd.endsWith(path[0..k])= matches. Handles =apps/hotelcomm= + =apps/hotelcomm/...= and deeper duplications.
+
+Apply the same guard in =EditTool= for =kind: "create"= and =kind: "write"= on new-file paths.
+
+** B. Echo resolved path in success message
+
+#+begin_src ts
+const relFromCwd = path.relative(sessionCwd, resolvedPath);
+.text(`Created ${relFromCwd} (${stat.size} bytes)
+   → ${resolvedPath}`)
+#+end_src
+
+The relative-to-cwd echo gives the agent immediate, unambiguous feedback. The absolute path lets the agent disambiguate cwd assumptions on first inspection.
+
+** C. Update =prompts/tools/create.md=
+
+Add to top of doc:
+- "Paths resolve from session cwd, NOT from project / git root."
+- "Pass paths relative to cwd, or use absolute paths."
+- "If you'd write =apps/hotelcomm/lib/...= in a spec and cwd is =apps/hotelcomm=, pass =lib/...=."
+
+** D. Surface cwd asymmetry in system prompt
+
+Where the agent system prompt renders cwd, also detect git-toplevel and warn when they differ:
+
+#+begin_src
+cwd: /home/user/code/ora/monorepo/apps/hotelcomm
+(git root: /home/user/code/ora/monorepo — paths resolve from cwd, not git root)
+#+end_src
+
+Renders only when =cwd !== git-toplevel=. No noise for sessions at repo root.
+
+* Tests
+
+- T1: create with relative path duplicating cwd tail → returns =cwd_prefix_duplication= diagnostic, no file written.
+- T2: create with relative path NOT duplicating → succeeds, success text contains both relative and absolute resolved paths.
+- T3: create with absolute path → succeeds, no duplication check.
+- T4: create with cwd-tail substring that ISN'T a path segment (e.g. =cwd=/foo/bar=, path=barbazz/x.ts=) → succeeds, no false positive.
+- T5: edit =kind: create= same duplication guard fires.
+
+* Edge Cases
+
+- Duplication overlap of length k where k > path-segment-count: clamp to min(cwd-segs, path-segs).
+- Symlinks in cwd: resolve once, then compare segments — don't realpath, as it would change other semantics.
+- Case-insensitive filesystems: leave case-sensitive; cwd is normally lowercased and false positives from case skew are rare and recoverable.
+- Whitelist absolute path inputs: do not run the guard for absolute paths.
+
+* Acceptance Criteria
+
+1. Repro from the linked transcript fails the guard with an actionable message.
+2. Success message for any legitimate create shows the resolved absolute path on a second line.
+3. =create.md= prompt documents the resolution rule.
+4. System prompt surfaces cwd ≠ git-toplevel divergence (one line, only when they differ).
+5. =bun run --parallel check:ts= and targeted =bun test packages/coding-agent/test/tools/create.test.ts= pass.
+
+* Verification
+
+- =bun test packages/coding-agent/test/tools/create.test.ts=
+- =bun run check:ts=
+- Manual: run create with relative path containing cwd tail → diagnostic; with clean relative → success with resolved echo.

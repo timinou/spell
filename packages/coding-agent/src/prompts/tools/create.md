@@ -1,7 +1,10 @@
 Create a new file with text, bytes from an artifact URI, or base64-encoded content.
 
 <instruction>
-- `path` is the file path (relative or absolute).
+- `path` is the file path. Relative paths resolve against the **session cwd**, NOT against the project / git root.
+  - If a spec or AGENTS.md addresses files as `apps/foo/lib/...` from the monorepo root, and the session cwd is `apps/foo`, pass `lib/...` — not `apps/foo/lib/...`.
+  - Passing `apps/foo/lib/x.ts` while cwd is `apps/foo` is rejected with `cwd_prefix_duplication` (would silently nest at `apps/foo/apps/foo/lib/x.ts`).
+  - Use an absolute path when you want to bypass cwd resolution entirely.
 - `content` accepts three forms:
   - **String**: Direct text content.
   - **Bytes**: `{ kind: "bytes", artifactUri: "artifact://..." }` to copy from an artifact.
@@ -14,8 +17,8 @@ Create a new file with text, bytes from an artifact URI, or base64-encoded conte
 </instruction>
 
 <output>
-- Returns success with file path and byte count.
-- On error, returns diagnostic with reason (`FileExists`, `WriteShrink`, `ParseRegression`, `SandboxViolation`).
+- Returns success with relative-to-cwd path, byte count, AND the absolute resolved path on a second line. Inspect the second line to confirm the file landed where you expected.
+- On error, returns diagnostic with reason (`FileExists`, `WriteShrink`, `ParseRegression`, `SandboxViolation`, `cwd_prefix_duplication`).
 </output>
 
 <examples>
