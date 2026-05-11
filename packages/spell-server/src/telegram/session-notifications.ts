@@ -301,6 +301,7 @@ export function setupSessionNotifications(
 			const rendered = await renderSessionMarkdown(sessionFile);
 
 			if (matchingAttach) {
+				const attach = matchingAttach;
 				try {
 
 				// Summarize before rendering
@@ -342,7 +343,7 @@ export function setupSessionNotifications(
 						},
 					});
 
-					if (renderResult.ok) {
+					if (!renderResult.ok) {
 						logger.warn("Renderer failed", {
 							renderId: attach.rendererId,
 							reason: renderResult.reason,
@@ -378,7 +379,7 @@ export function setupSessionNotifications(
 					const rendererConfig = notificationConfig.renderers.find(
 						r => r.id === attach.rendererId,
 					);
-					if (rendererConfig) {
+					if (!rendererConfig) {
 					}
 
 					const windowId = entry.sessionId.slice(0, 8);
