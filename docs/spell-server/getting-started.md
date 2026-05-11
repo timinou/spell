@@ -430,3 +430,67 @@ Start the server, then visit `http://localhost:<port>/web/`. Paste the token to 
 - Open the Artifacts tab to preview generated PDFs/images via short-lived signed URLs.
 
 If the bundle is missing the server returns a friendly placeholder explaining how to run `build:web`. See [`web.md`](./web.md) for the full reference.
+## Telegram needs-input notifications with PDF attachments
+
+When a goal requires user input during execution, Spell can forward the transcript to Telegram as a styled PDF attachment, giving users rich context for decision-making. This feature combines the `renderer` block (which declares a subprocess that converts markdown to PDF) with the `attach` block in `session-notifications` (which routes the output to Telegram).
+
+### Before you start
+
+The typst+cmarker PDF rendering pipeline is **optional and user-supplied**. Spell Server provides the architecture; you create the rendering subprocess. A complete worked example using Typst is available in the [Typst PDF cookbook](./cookbook/typst-pdf.md).
+
+### Example: needs_input with PDF transcript
+
+Add a `renderer` block and `session-notifications` with `attach` to `.spell/channels.kdl`:
+
+```kdl
+telegram {
+  bot-token-file ".spell/bot-token"
+  owners 123456789
+  default-model "claude-sonnet-4-5"
+  upload-dir "/tmp/spell-telegram-uploads"
+
+  // Declare a named renderer
+  renderer "typst-pdf" {
+    command "bash render/typst-render.sh"
+    mime "application/pdf"
+    extension "pdf"
+    timeout-ms 30000
+    cache-by "hash"
+  }
+
+  // Route needs_input events to Telegram with PDF transcript
+  session-notifications {
+    events "needs_input"
+    notify-owners #true
+    reply-routing #false
+    reply-ttl "24h"
+    attach renderer="typst-pdf" {
+      transcript "latest 50"
+      on "needs_input"
+      summarize {
+        style "bullet"
+        max-tokens 500
+      }
+    }
+  }
+}
+```
+
+Key fields:
+
+- `renderer "<id>" { command ... }` — Declare a subprocess that accepts markdown on stdin and writes binary bytes (e.g., PDF) to stdout.
+- `attach renderer="<id>"` — Include a rendered attachment when events fire.
+- `transcript "latest 50"` — Include the most recent 50 lines from the session transcript.
+- `summarize { style "bullet" max-tokens 500 }` — Optionally summarize the transcript before rendering to keep PDFs concise.
+- `reply-routing #false` — Send notifications to `notify-owners` and `notify-chat-id` lists (not session-specific).
+- `reply-ttl "24h"` — Keep the notification open in Telegram for 24 hours (users can reply or dismiss).
+
+When the goal emits a `needs_input` event, Spell will:
+
+1. Capture the latest N lines of the session transcript (or summarize them).
+2. Pass the markdown to your renderer subprocess.
+3. Receive the binary output (PDF bytes).
+4. Attach the PDF to the Telegram notification.
+5. Send the notification with the file to the owners.
+
+For a complete step-by-step guide to installing Typst, writing the render script, and configuring the template, see [Typst PDF cookbook](./cookbook/typst-pdf.md).
