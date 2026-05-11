@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseChannelsConfig, resolveChannelsBotToken } from "../../src/config/channels-parser";
+import { logger } from "@oh-my-pi/pi-utils";
 
 const tempDirs = new Set<string>();
 
@@ -853,7 +854,7 @@ describe("parseChannelsConfig attach with summarize", () => {
 			when: { kind: "message-count", threshold: 30 },
 			model: "gpt-4-mini",
 			endpoint: "https://api.openai.com/v1/chat/completions",
-			apiKey: "sk-test-key",
+			apiKey: "sk-test-key", // pragma: allowlist secret
 			maxTokens: 250,
 			promptStyle: "needs-input-recap",
 		});
@@ -1027,7 +1028,7 @@ describe("parseChannelsConfig attach with summarize", () => {
 				}
 			}`,
 			undefined,
-			{ OPENAI_API_KEY: "sk-from-env" },
+			{ OPENAI_API_KEY: "sk-from-env" }, // pragma: allowlist secret
 		);
 
 		expect(config.telegram?.sessionNotifications?.attaches?.[0]?.summarize?.apiKey).toBe(
@@ -1087,4 +1088,50 @@ describe("parseChannelsConfig attach with summarize", () => {
 	});
 });
 
+
+	it("successfully parses config with overlapping on sets (logs warning)", () => {
+		// When two attaches have overlapping event-kind sets, parsing should succeed
+		// and a warning should be logged (not an error)
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval" "ask" "hook_selector"
+				notify-owners #true
+				renderer "pdf" {
+					command "bash" "render.sh"
+					mime "application/pdf"
+					extension "pdf"
+				}
+				renderer "markdown" {
+					command "cat"
+					mime "text/markdown"
+					extension "md"
+				}
+				attach renderer="pdf" {
+					transcript "full"
+					on "plan_approval" "ask"
+				}
+				attach renderer="markdown" {
+					transcript "last-turn"
+					on "ask" "hook_selector"
+				}
+			}
+		}`);
+
+		// Should succeed (not throw)
+		expect(config.telegram?.sessionNotifications?.attaches).toHaveLength(2);
+		
+		// Both attaches should be present
+		expect(config.telegram?.sessionNotifications?.attaches?.[0]?.rendererId).toBe("pdf");
+		expect(config.telegram?.sessionNotifications?.attaches?.[1]?.rendererId).toBe("markdown");
+		
+		// Attaches should have the expected "on" events
+		expect(config.telegram?.sessionNotifications?.attaches?.[0]?.on).toEqual(["plan_approval", "ask"]);
+		expect(config.telegram?.sessionNotifications?.attaches?.[1]?.on).toEqual(["ask", "hook_selector"]);
+		
+		// The overlap is on "ask" event between pdf and markdown renderers
+		// No error should be thrown, just a warning logged internally
+	});
 });

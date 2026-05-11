@@ -228,13 +228,13 @@ export function setupSessionNotifications(
 		const message = formatBlockingEventNotification(entry, event);
 
 		// Find attaches matching this event kind
-		const matchingAttaches = (notificationConfig.attaches ?? []).filter(
+		const matchingAttach = (notificationConfig.attaches ?? []).find(
 			attach => attach.on.includes(event.kind),
 		);
 
 		// If no attaches match or renderers not available, send text-only
 		if (
-			matchingAttaches.length === 0 ||
+			!matchingAttach ||
 			!rendererExecutor ||
 			!(entry as any).sessionFile
 		) {
@@ -300,7 +300,7 @@ export function setupSessionNotifications(
 		try {
 			const rendered = await renderSessionMarkdown(sessionFile);
 
-			for (const attach of matchingAttaches) {
+			if (matchingAttach) {
 				try {
 
 				// Summarize before rendering
@@ -342,7 +342,7 @@ export function setupSessionNotifications(
 						},
 					});
 
-					if (!renderResult.ok) {
+					if (renderResult.ok) {
 						logger.warn("Renderer failed", {
 							renderId: attach.rendererId,
 							reason: renderResult.reason,
@@ -373,14 +373,12 @@ export function setupSessionNotifications(
 				});
 			});
 		}
-						continue;
 		}
 
 					const rendererConfig = notificationConfig.renderers.find(
 						r => r.id === attach.rendererId,
 					);
-					if (!rendererConfig) {
-						continue;
+					if (rendererConfig) {
 					}
 
 					const windowId = entry.sessionId.slice(0, 8);
