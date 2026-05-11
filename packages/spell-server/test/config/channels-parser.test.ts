@@ -317,3 +317,357 @@ async function createTempDir(): Promise<string> {
 	tempDirs.add(tempDir);
 	return tempDir;
 }
+
+describe("parseSessionNotifications", () => {
+	it("parses session-notifications with empty renderers by default", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval"
+				notify-owners #true
+			}
+		}`);
+
+		expect(config.telegram?.sessionNotifications?.renderers).toEqual([]);
+	});
+
+	it("parses a single renderer with all attributes", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval"
+				notify-owners #true
+				renderer "pdf" {
+					command "bash" "render/typst-render.sh"
+					mime "application/pdf"
+					extension "pdf"
+					timeout-ms 20000
+					cache-by "transcript-hash"
+				}
+			}
+		}`);
+
+		expect(config.telegram?.sessionNotifications?.renderers).toEqual([{
+			id: "pdf",
+			command: "bash",
+			args: ["render/typst-render.sh"],
+			mime: "application/pdf",
+			extension: "pdf",
+			timeoutMs: 20000,
+			cacheBy: "transcript-hash",
+		}]);
+	});
+
+	it("applies default timeout-ms=20000 when omitted", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval"
+				renderer "pdf" {
+					command "bash" "render.sh"
+					mime "application/pdf"
+					extension "pdf"
+				}
+			}
+		}`);
+
+		expect(config.telegram?.sessionNotifications?.renderers[0]?.timeoutMs).toBe(20000);
+	});
+
+	it("applies default cache-by='transcript-hash' when omitted", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval"
+				renderer "pdf" {
+					command "bash" "render.sh"
+					mime "application/pdf"
+					extension "pdf"
+				}
+			}
+		}`);
+
+		expect(config.telegram?.sessionNotifications?.renderers[0]?.cacheBy).toBe("transcript-hash");
+	});
+
+	it("parses two renderers with distinct ids", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval"
+				renderer "pdf" {
+					command "bash" "render/typst.sh"
+					mime "application/pdf"
+					extension "pdf"
+				}
+				renderer "html" {
+					command "node" "render/html.js"
+					mime "text/html"
+					extension "html"
+					cache-by "none"
+				}
+			}
+		}`);
+
+		expect(config.telegram?.sessionNotifications?.renderers).toHaveLength(2);
+		expect(config.telegram?.sessionNotifications?.renderers[0]).toEqual({
+			id: "pdf",
+			command: "bash",
+			args: ["render/typst.sh"],
+			mime: "application/pdf",
+			extension: "pdf",
+			timeoutMs: 20000,
+			cacheBy: "transcript-hash",
+		});
+		expect(config.telegram?.sessionNotifications?.renderers[1]).toEqual({
+			id: "html",
+			command: "node",
+			args: ["render/html.js"],
+			mime: "text/html",
+			extension: "html",
+			timeoutMs: 20000,
+			cacheBy: "none",
+		});
+	});
+
+	it("rejects two renderers with duplicate id", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					renderer "pdf" {
+						command "bash" "render1.sh"
+						mime "application/pdf"
+						extension "pdf"
+					}
+					renderer "pdf" {
+						command "bash" "render2.sh"
+						mime "application/pdf"
+						extension "pdf"
+					}
+				}
+			}`)
+		).toThrow(/duplicate renderer id "pdf"/);
+	});
+
+	it("rejects missing command field", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					renderer "pdf" {
+						mime "application/pdf"
+						extension "pdf"
+					}
+				}
+			}`)
+		).toThrow(/command is required/);
+	});
+
+	it("rejects empty command args", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					renderer "pdf" {
+						command
+						mime "application/pdf"
+						extension "pdf"
+					}
+				}
+			}`)
+		).toThrow(/command must have at least one string argument/);
+	});
+
+	it("rejects unknown child node in renderer", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					renderer "pdf" {
+						command "bash" "render.sh"
+						mime "application/pdf"
+						extension "pdf"
+						unknown-field "value"
+					}
+				}
+			}`)
+		).toThrow(/unknown-field is not supported/);
+	});
+
+	it("rejects negative timeout-ms", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					renderer "pdf" {
+						command "bash" "render.sh"
+						mime "application/pdf"
+						extension "pdf"
+						timeout-ms -1000
+					}
+				}
+			}`)
+		).toThrow(/timeout-ms must be a positive number/);
+	});
+
+	it("rejects zero timeout-ms", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					renderer "pdf" {
+						command "bash" "render.sh"
+						mime "application/pdf"
+						extension "pdf"
+						timeout-ms 0
+					}
+				}
+			}`)
+		).toThrow(/timeout-ms must be a positive number/);
+	});
+
+	it("rejects invalid cache-by value", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					renderer "pdf" {
+						command "bash" "render.sh"
+						mime "application/pdf"
+						extension "pdf"
+						cache-by "invalid"
+					}
+				}
+			}`)
+		).toThrow(/cache-by must be "transcript-hash" or "none"/);
+	});
+
+	it("accepts cache-by 'none'", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval"
+				renderer "pdf" {
+					command "bash" "render.sh"
+					mime "application/pdf"
+					extension "pdf"
+					cache-by "none"
+				}
+			}
+		}`);
+
+		expect(config.telegram?.sessionNotifications?.renderers[0]?.cacheBy).toBe("none");
+	});
+
+	it("rejects renderer with empty id", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					renderer "" {
+						command "bash" "render.sh"
+						mime "application/pdf"
+						extension "pdf"
+					}
+				}
+			}`)
+		).toThrow(/renderer must have a non-empty string id argument/);
+	});
+
+	it("rejects missing mime field", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					renderer "pdf" {
+						command "bash" "render.sh"
+						extension "pdf"
+					}
+				}
+			}`)
+		).toThrow(/mime is required/);
+	});
+
+	it("rejects missing extension field", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					renderer "pdf" {
+						command "bash" "render.sh"
+						mime "application/pdf"
+					}
+				}
+			}`)
+		).toThrow(/extension is required/);
+	});
+
+	it("parses multiple command args", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval"
+				renderer "pdf" {
+					command "python" "render.py" "--format" "pdf"
+					mime "application/pdf"
+					extension "pdf"
+				}
+			}
+		}`);
+
+		expect(config.telegram?.sessionNotifications?.renderers[0]).toEqual({
+			id: "pdf",
+			command: "python",
+			args: ["render.py", "--format", "pdf"],
+			mime: "application/pdf",
+			extension: "pdf",
+			timeoutMs: 20000,
+			cacheBy: "transcript-hash",
+		});
+	});
+});
