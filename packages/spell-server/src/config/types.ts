@@ -152,6 +152,10 @@ export interface TelegramChannelConfig {
 		additionalChatIds: number[];
 		renderers: SessionNotificationRendererConfig[];
 		attaches: AttachConfig[];
+		/** Enable reply routing: replies to notifications are routed back to pending events. Default: false */
+		replyRouting?: boolean;
+		/** TTL for pending reply mappings in milliseconds. Default: 24h (86_400_000). */
+		replyTtlMs?: number;
 	};
 }
 

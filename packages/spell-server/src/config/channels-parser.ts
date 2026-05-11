@@ -468,6 +468,36 @@ function parseAttachNode(
 	return { rendererId, transcript, on };
 }
 
+
+/**
+ * Parse a duration string into milliseconds.
+ * Supports: ms, s, m, h, d suffixes
+ * Examples: "1000ms", "5s", "30m", "24h", "7d"
+ */
+function parseDuration(durationStr: string): number {
+	const match = /^(\d+)(ms|s|m|h|d)$/.exec(durationStr.trim());
+	if (!match) {
+		throw new Error(`Invalid duration format: "${durationStr}". Expected format: <number><unit> where unit is ms|s|m|h|d`);
+	}
+
+	const value = parseInt(match[1], 10);
+	const unit = match[2];
+
+	const unitToMs: Record<string, number> = {
+		'ms': 1,
+		's': 1000,
+		'm': 60 * 1000,
+		'h': 60 * 60 * 1000,
+		'd': 24 * 60 * 60 * 1000,
+	};
+
+	const ms = value * (unitToMs[unit] ?? 1);
+	if (ms <= 0) {
+		throw new Error(`Duration must be positive, got: ${ms}ms`);
+	}
+	return ms;
+}
+
 function parseSessionNotificationsNode(
 	node: Node,
 	context = "channels.telegram.session-notifications",
@@ -478,6 +508,8 @@ function parseSessionNotificationsNode(
 	const renderers: SessionNotificationRendererConfig[] = [];
 	const attaches: AttachConfig[] = [];
 	const rendererIds = new Set<string>();
+	let replyRouting = false;
+	let replyTtlMs = 24 * 60 * 60 * 1000; // default 24h
 
 	for (const child of node.children?.nodes ?? []) {
 		const name = child.getName();
@@ -532,6 +564,24 @@ function parseSessionNotificationsNode(
 			attaches.push(attach);
 			continue;
 		}
+
+		if (name === "reply-routing") {
+			const value = child.getArgument(0);
+			if (typeof value !== "boolean") {
+				throw new Error(`${context}.reply-routing must be a boolean`);
+			}
+			replyRouting = value;
+			continue;
+		}
+
+		if (name === "reply-ttl") {
+			const value = child.getArgument(0);
+			if (typeof value !== "string" || value.length === 0) {
+				throw new Error(`${context}.reply-ttl must be a non-empty string`);
+			}
+			replyTtlMs = parseDuration(value);
+			continue;
+		}
 	}
 
 	// Validate that all attach rendererId references exist
@@ -548,7 +598,7 @@ function parseSessionNotificationsNode(
 		});
 	}
 
-	return { events, notifyOwners, additionalChatIds, renderers, attaches };
+	return { events, notifyOwners, additionalChatIds, renderers, attaches, replyRouting, replyTtlMs };
 }
 
 const VALID_STT_PROVIDERS = new Set(["deepgram", "openai"]);
