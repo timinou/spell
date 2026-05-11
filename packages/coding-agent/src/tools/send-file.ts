@@ -6,7 +6,7 @@ import { type Static, Type } from "@sinclair/typebox";
 import sendFileDescription from "../prompts/tools/send-file.md" with { type: "text" };
 import type { ToolSession } from "./index";
 import type { OutputMeta } from "./output-meta";
-import { resolveToCwd } from "./path-utils";
+import { resolveCwdRelativePath } from "./path-resolution";
 import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
@@ -90,7 +90,8 @@ export class SendFileTool implements AgentTool<typeof sendFileSchema, SendFileDe
 		_onUpdate?: AgentToolUpdateCallback<SendFileDetails>,
 		_context?: AgentToolContext,
 	): Promise<AgentToolResult<SendFileDetails>> {
-		const absolutePath = resolveToCwd(params.path, this.session.cwd);
+		const resolvedSendFile = resolveCwdRelativePath(this.session.cwd, params.path, { mode: "file" });
+		const absolutePath = resolvedSendFile.path;
 
 		const stat = await fs.stat(absolutePath).catch((error: unknown) => {
 			if (isEnoent(error)) {
@@ -119,7 +120,9 @@ export class SendFileTool implements AgentTool<typeof sendFileSchema, SendFileDe
 		};
 
 		return toolResult<SendFileDetails>({ delivery })
-			.text(`File queued for delivery: ${fileName} (${formatFileSize(stat.size)})`)
+			.text(
+				`File queued for delivery: ${fileName} (${formatFileSize(stat.size)})${resolvedSendFile.warning ? `\n⚠ ${resolvedSendFile.warning}` : ""}`,
+			)
 			.done();
 	}
 }

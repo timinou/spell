@@ -1,0 +1,47 @@
+#+TITLE: resolveToCwd silently nests paths for browser screenshot, send-file, bash cwd, patch
+#+STATE: DONE
+#+SESSION_ID: 14dc5b33ab1d8adb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-27-21-772Z_14dc5b33ab1d8adb.jsonl]]
+#+CUSTOM_ID: BUG-361-resolvetocwd-silently-nests-paths-for-br
+#+EFFORT: 1h
+#+LAYER: coding-agent
+
+* Initial Message
+
+Read proxy_create_nested_path_bug.md -> your fixes weren't enough. find the true root causes, explain them, file BUGs, then fix
+
+* Initial Message
+
+BUG-358 only patched =create.ts= and =edit.ts=. The underlying =resolveToCwd()= helper in =packages/coding-agent/src/tools/path-utils.ts= does naive =path.resolve(cwd, p)= for all other path-taking tools.
+
+* Affected call sites
+
+| File | Risk |
+|---|---|
+| =tools/browser.ts:135= (=resolveScreenshotArtifactPath=) | Screenshots saved to nested dir — the *primary symptom* in 5/6 documented sessions (FEAT-274, 277, 278, 282, 289) |
+| =tools/send-file.ts:93= | File-send recipient reads wrong path |
+| =tools/bash.ts:385= (=cwd= arg) | Shell command runs at non-existent dir → harmless errors but confusing |
+| =lsp/index.ts:1135,1236= | LSP queries miss the file silently |
+| =patch/diff.ts:290,393,394=, =patch/applicator.ts:1359= | Patch apply hits wrong file |
+| =session/agent-session.ts:1339,1393,2232= | Plan-file path nesting |
+| =tools/mode-guard.ts:19= | Sandbox check against wrong path |
+
+* Fix
+
+Add a sibling helper =resolveCwdRelativePath(cwd, p, opts)= in =path-utils.ts= that:
+1. Calls =detectCwdPrefixDuplication=
+2. Applies the BUG-360 coalesce-or-keep decision based on parent-dir existence
+3. Returns ={ path, dup?, warning? }=
+
+Switch the hot path-consuming tools (=browser= screenshot, =send-file=, =bash= cwd) to the new helper. Surface the warning in their result text.
+
+Leave =resolveToCwd= as-is for non-tool internal use (it's overloaded with =~= expansion and absolute handling; touching it risks regressions in LSP/patch internals).
+
+* Acceptance
+
+#+begin_src
+cwd = /tmp/repro/apps/hotelcomm
+proxy_screenshot { path: "apps/hotelcomm/design/sshot.png" }
+→ Saves to /tmp/repro/apps/hotelcomm/design/sshot.png (auto-coalesced)
+→ Text includes warning
+#+end_src

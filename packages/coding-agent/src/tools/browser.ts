@@ -21,7 +21,7 @@ import type { ToolSession } from "../sdk";
 import { formatDimensionNote, resizeImage } from "../utils/image-resize";
 import { htmlToBasicMarkdown } from "../web/scrapers/types";
 import type { OutputMeta } from "./output-meta";
-import { resolveToCwd } from "./path-utils";
+import { resolveCwdRelativePath } from "./path-resolution";
 import stealthTamperingScript from "./puppeteer/00_stealth_tampering.txt" with { type: "text" };
 import stealthActivityScript from "./puppeteer/01_stealth_activity.txt" with { type: "text" };
 import stealthHairlineScript from "./puppeteer/02_stealth_hairline.txt" with { type: "text" };
@@ -127,18 +127,24 @@ function normalizeSelector(selector: string): string {
 	return selector;
 }
 
-function resolveScreenshotArtifactPath(requestedPath: string | undefined, cwd: string): string {
+interface ScreenshotPath {
+	path: string;
+	warning: string | null;
+}
+
+function resolveScreenshotArtifactPath(requestedPath: string | undefined, cwd: string): ScreenshotPath {
 	if (!requestedPath?.trim()) {
-		return path.join(os.tmpdir(), `spell-sshots-${Snowflake.next()}.png`);
+		return { path: path.join(os.tmpdir(), `spell-sshots-${Snowflake.next()}.png`), warning: null };
 	}
 
-	const resolvedPath = resolveToCwd(requestedPath, cwd);
-	const ext = path.extname(resolvedPath);
+	// Same cwd-prefix duplication guard as create.ts / edit.ts — screenshots
+	// were the *primary symptom* in 5/6 documented sessions (see proxy_create_nested_path_bug.md).
+	const resolved = resolveCwdRelativePath(cwd, requestedPath, { mode: "file" });
+	const ext = path.extname(resolved.path);
 	if (ext && ext.toLowerCase() !== ".png") {
 		throw new ToolError("Screenshot path must end in .png because browser screenshots are saved as PNG files.");
 	}
-
-	return resolvedPath;
+	return { path: resolved.path, warning: resolved.warning };
 }
 
 type ActionabilityResult = { ok: true; x: number; y: number } | { ok: false; reason: string };
@@ -1361,9 +1367,10 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 				case "screenshot": {
 					const page = await this.#ensurePage(params);
 					const fullPage = params.selector ? false : (params.full_page ?? false);
-					const requestedScreenshotPath = params.path?.trim()
+					const screenshotArtifact = params.path?.trim()
 						? resolveScreenshotArtifactPath(params.path, this.session.cwd)
 						: undefined;
+					const requestedScreenshotPath = screenshotArtifact?.path;
 					const artifact = await this.session.allocateOutputArtifact?.("screenshot", "png");
 					let buffer: Buffer;
 
@@ -1389,7 +1396,7 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 					const fallbackScreenshotPath =
 						requestedScreenshotPath ??
 						artifact?.path ??
-						resolveScreenshotArtifactPath(undefined, this.session.cwd);
+						resolveScreenshotArtifactPath(undefined, this.session.cwd).path;
 					if (!requestedScreenshotPath && !artifact?.path) {
 						await Bun.write(fallbackScreenshotPath, buffer);
 					}
@@ -1423,6 +1430,12 @@ export class BrowserTool implements AgentTool<typeof browserSchema, BrowserToolD
 					);
 					if (dimensionNote) {
 						lines.push(dimensionNote);
+					}
+					// Surface the cwd-prefix coalesce warning so the agent self-corrects.
+					// Screenshots were the primary symptom of BUG-358; without this signal
+					// the agent re-issues the same wrong path next turn.
+					if (screenshotArtifact?.warning) {
+						lines.push(`⚠ ${screenshotArtifact.warning}`);
 					}
 
 					return toolResult(details)

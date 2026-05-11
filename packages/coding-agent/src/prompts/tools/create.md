@@ -2,8 +2,9 @@ Create a new file with text, bytes from an artifact URI, or base64-encoded conte
 
 <instruction>
 - `path` is the file path. Relative paths resolve against the **session cwd**, NOT against the project / git root.
-  - If a spec or AGENTS.md addresses files as `apps/foo/lib/...` from the monorepo root, and the session cwd is `apps/foo`, pass `lib/...` — not `apps/foo/lib/...`.
-  - Passing `apps/foo/lib/x.ts` while cwd is `apps/foo` is rejected with `cwd_prefix_duplication` (would silently nest at `apps/foo/apps/foo/lib/x.ts`).
+  - If a spec or AGENTS.md addresses files as `apps/foo/lib/...` from the monorepo root and the session cwd is `apps/foo`, both forms work — `lib/...` is preferred; `apps/foo/lib/...` is auto-coalesced (duplicated cwd-tail stripped) with a `⚠` warning so you can pass the cleaner form next call.
+  - Auto-coalesce is suppressed when the literal nested location already exists on disk; the tool writes there and notes "Kept literal interpretation".
+  - Degenerate case (path equals the cwd-tail exactly, e.g. `apps/foo`) returns `cwd_prefix_duplication` as a hard error.
   - Use an absolute path when you want to bypass cwd resolution entirely.
 - `content` accepts three forms:
   - **String**: Direct text content.
@@ -18,6 +19,7 @@ Create a new file with text, bytes from an artifact URI, or base64-encoded conte
 
 <output>
 - Returns success with relative-to-cwd path, byte count, AND the absolute resolved path on a second line. Inspect the second line to confirm the file landed where you expected.
+- When the path triggered cwd-prefix auto-coalesce or kept-nested, a third line begins with `⚠` and explains what was decided — you **MUST** use the cleaner form on the next call.
 - On error, returns diagnostic with reason (`FileExists`, `WriteShrink`, `ParseRegression`, `SandboxViolation`, `cwd_prefix_duplication`).
 </output>
 

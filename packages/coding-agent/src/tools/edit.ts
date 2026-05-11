@@ -26,7 +26,7 @@ import { formatCodePathResult } from "./codepath-result";
 import type { CodePathAction, EditParams } from "./codepath-types";
 import { editSchema } from "./codepath-types";
 import { enforceModeWrite } from "./mode-guard";
-import { detectCwdPrefixDuplication, formatCwdPrefixDuplicationMessage } from "./path-resolution";
+import { resolveCwdRelativePath } from "./path-resolution";
 import { replaceTabs } from "./render-utils";
 import { type DetailsWithMeta, toolResult } from "./tool-result";
 
@@ -184,15 +184,25 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		const transactionMode: "best-effort" | "strict" = params.transaction ?? "best-effort";
 
 		// Pre-resolve target paths once; used by strict snapshot and the loop.
+		// resolveCwdRelativePath auto-coalesces the cwd-prefix duplication pattern
+		// (e.g. cwd `/proj/apps/foo` + target `apps/foo/lib/x.ts` → silent nest) when
+		// on-disk evidence supports it. Degenerate paths (target == cwd-tail) are
+		// the only hard-reject case; warnings are surfaced in per-op result text.
 		const ops = params.operations
 			.map((op, i) => {
 				if (!op) return null;
-				const targetPath = nodePath.isAbsolute(op.target) ? op.target : nodePath.resolve(sessionCwd, op.target);
-				return { i, op, targetPath };
+				const resolved = resolveCwdRelativePath(sessionCwd, op.target, { mode: "file" });
+				return { i, op, targetPath: resolved.path, resolved };
 			})
 			.filter(
-				(x): x is { i: number; op: NonNullable<EditParams["operations"][number]>; targetPath: string } =>
-					x !== null,
+				(
+					x,
+				): x is {
+					i: number;
+					op: NonNullable<EditParams["operations"][number]>;
+					targetPath: string;
+					resolved: ReturnType<typeof resolveCwdRelativePath>;
+				} => x !== null,
 			);
 
 		// Strict transaction: snapshot every unique target file before any op runs.
@@ -212,19 +222,17 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		let failedOpIndex: number | null = null;
 		const skippedOpIndices: number[] = [];
 
-		for (const { i, op, targetPath } of ops) {
-			// cwd-prefix duplication guard (see path-resolution.ts).
-			// Catches `apps/foo/apps/foo/...` style silent nesting that otherwise
-			// either creates a misplaced file (anchorless create-via-append) or
-			// returns a misleading "File not found" for normal mutations.
-			// Fires only on relative targets; absolute paths are exempted.
-			const duplication = detectCwdPrefixDuplication(sessionCwd, op.target);
-			if (duplication) {
+		for (const { i, op, targetPath, resolved } of ops) {
+			// Degenerate cwd-prefix duplication (target path equals cwd-tail) is the
+			// only case the coalesce helper cannot rescue; treat as fail-fast like
+			// other batch-stopping diagnostics. Coalesced / kept-nested decisions are
+			// surfaced as warnings on the per-op success text further below.
+			if (resolved.decision === "degenerate") {
 				const result = toolResult<EditToolResultDetails>({
 					target: op.target,
 					error: "cwd_prefix_duplication",
 				})
-					.text(formatCwdPrefixDuplicationMessage(op.target, sessionCwd, duplication))
+					.text(resolved.warning ?? "cwd_prefix_duplication")
 					.done();
 				result.isError = true;
 				results.push(result);
@@ -255,6 +263,21 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 				failedOpIndex = i + 1;
 				for (let j = i + 1; j < params.operations.length; j++) skippedOpIndices.push(j + 1);
 				break;
+			}
+			// Surface the coalesce/kept-nested warning so the agent self-corrects on
+			// the next call. We append it; we do NOT mark the result as an error —
+			// the op succeeded at the resolved location.
+			if (resolved.warning && !isErrorResult(result)) {
+				result = {
+					...result,
+					content: result.content.map((c, idx, all) => {
+						// Append warning to the FIRST text node so single-op consumers
+						// (which read result.content.find(type=text)) see it inline.
+						if (c.type !== "text") return c;
+						const firstTextIdx = all.findIndex(x => x.type === "text");
+						return idx === firstTextIdx ? { ...c, text: `${c.text}\n⚠ ${resolved.warning}` } : c;
+					}),
+				};
 			}
 			results.push(result);
 		}

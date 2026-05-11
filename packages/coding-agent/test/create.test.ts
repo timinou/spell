@@ -162,9 +162,11 @@ describe("CreateTool", () => {
 	});
 
 	describe("cwd-prefix duplication guard", () => {
-		it("rejects path that duplicates cwd tail and suggests stripped path", async () => {
+		it("auto-coalesces path that duplicates cwd tail (bug pattern, no nested evidence)", async () => {
 			// Mirror the bug from the linked transcript: cwd = .../monorepo/apps/hotelcomm,
-			// agent passes "apps/hotelcomm/lib/foo.ex". Must not write anything.
+			// agent passes "apps/hotelcomm/lib/foo.ex". The nested parent dir does not
+			// exist on disk → helper coalesces and writes at the stripped location,
+			// surfacing a warning so the agent self-corrects next turn.
 			const nested = path.join(tmpDir, "apps", "hotelcomm");
 			await fs.mkdir(nested, { recursive: true });
 			const tool = new CreateTool(createSession({ cwd: nested }));
@@ -173,12 +175,32 @@ describe("CreateTool", () => {
 				content: "defmodule Foo do\nend\n",
 			});
 			const text = getText(result);
-			expect(text).toContain("cwd prefix");
+			expect(text).toContain("Created");
+			expect(text).toContain("auto-stripped");
 			expect(text).toContain("apps/hotelcomm");
-			expect(text).toContain("lib/foo.ex"); // stripped suggestion
-			// No file written at the doubled location.
+			expect(text).toContain("lib/foo.ex");
+			// File written at the coalesced (correct) location, NOT the doubled one.
 			const doubled = path.join(nested, "apps", "hotelcomm", "lib", "foo.ex");
+			const coalesced = path.join(nested, "lib", "foo.ex");
 			expect(await fs.exists(doubled)).toBe(false);
+			expect(await fs.exists(coalesced)).toBe(true);
+		});
+
+		it("keeps literal nested path when nested parent dir exists (legit nesting)", async () => {
+			// User actually wants a nested layout: cwd `/tmp/x/apps/foo`, target
+			// `apps/foo/sub.ts`, and `apps/foo/` already exists under cwd.
+			const nested = path.join(tmpDir, "apps", "foo");
+			await fs.mkdir(path.join(nested, "apps", "foo"), { recursive: true });
+			const tool = new CreateTool(createSession({ cwd: nested }));
+			const result = await tool.execute("t", {
+				path: "apps/foo/sub.ts",
+				content: "export const x = 1;\n",
+			});
+			const text = getText(result);
+			expect(text).toContain("Created");
+			expect(text).toContain("Kept literal interpretation");
+			// File written at the nested (literal) location.
+			expect(await fs.exists(path.join(nested, "apps", "foo", "sub.ts"))).toBe(true);
 		});
 
 		it("does NOT false-positive on partial-segment substring overlap", async () => {
