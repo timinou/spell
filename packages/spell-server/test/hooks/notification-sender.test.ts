@@ -37,7 +37,12 @@ describe("notification sender wiring", () => {
 					path: new URL(request.url).pathname,
 					body: (await request.json()) as { chat_id: number; text: string },
 				});
-				return new Response("ok");
+				return new Response(
+					JSON.stringify({
+						ok: true,
+						result: { message_id: 123 },
+					})
+				);
 			},
 			async url => {
 				const sender = createNotificationSender(
@@ -78,7 +83,12 @@ describe("notification sender wiring", () => {
 					path: new URL(request.url).pathname,
 					body: await request.json(),
 				});
-				return new Response("ok");
+				return new Response(
+					JSON.stringify({
+						ok: true,
+						result: { message_id: 456 },
+					})
+				);
 			},
 			async url => {
 				const sender = new TelegramNotificationSender("123456:ABC", new Set([42]), { apiBaseUrl: url });
@@ -147,5 +157,98 @@ describe("notification sender wiring", () => {
 		);
 
 		expect(requestCount).toBe(0);
+	});
+
+	it("returns messageId from sendMessage", async () => {
+		let messageId: number = 0;
+
+		await withServer(
+			async request => {
+				return new Response(
+					JSON.stringify({
+						ok: true,
+						result: { message_id: 12345 },
+					})
+				);
+			},
+			async url => {
+				const sender = new TelegramNotificationSender("123456:ABC", new Set([42]), {
+					apiBaseUrl: url,
+				});
+				const result = await sender.sendMessage(42, "Test");
+				messageId = result.messageId;
+			},
+		);
+
+		expect(messageId).toBe(12345);
+	});
+
+	it("sendDocument enforces caption budget", async () => {
+		const captions: string[] = [];
+
+		await withServer(
+			async request => {
+				if (request.method === "POST") {
+					const formData = await request.formData();
+					const caption = formData.get("caption");
+					if (caption) captions.push(String(caption));
+				}
+				return new Response(
+					JSON.stringify({
+						ok: true,
+						result: { message_id: 999 },
+					})
+				);
+			},
+			async url => {
+				const sender = new TelegramNotificationSender("123456:ABC", new Set([42]), {
+					apiBaseUrl: url,
+				});
+				const longCaption = "x".repeat(2000);
+				await sender.sendDocument(42, {
+					buffer: Buffer.from("PDF"),
+					fileName: "test.pdf",
+					mime: "application/pdf",
+					caption: longCaption,
+				});
+			},
+		);
+
+		expect(captions).toHaveLength(1);
+		expect(captions[0]).toHaveLength(1024);
+	});
+
+	it("sendDocument skips unauthorized recipients", async () => {
+		let requestCount = 0;
+
+		await withServer(
+			() => {
+				requestCount += 1;
+				return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }));
+			},
+			async url => {
+				const sender = new TelegramNotificationSender("123456:ABC", new Set([42]), {
+					apiBaseUrl: url,
+				});
+				const result = await sender.sendDocument(99, {
+					buffer: Buffer.from("data"),
+					fileName: "test.pdf",
+					mime: "application/pdf",
+				});
+				expect(result.messageId).toBe(0);
+			},
+		);
+
+		expect(requestCount).toBe(0);
+	});
+
+	it("NoopNotificationSender.sendDocument returns messageId: 0", async () => {
+		const sender = new NoopNotificationSender();
+		const result = await sender.sendDocument(42, {
+			buffer: Buffer.from("test"),
+			fileName: "test.pdf",
+			mime: "application/pdf",
+		});
+		expect(result.messageId).toBe(0);
 	});
 });

@@ -135,15 +135,15 @@ impl CodeResolver for CodeResolverImpl {
 
 		// FEAT-718: Extract a SymbolSlice predicate from the terminal step (if any).
 		// The slice transforms each resolved symbol node into a sliced text body.
-		let symbol_slice: Option<(Option<i64>, Option<i64>, bool)> = query
-			.steps()
-			.last()
-			.and_then(|step| step.predicates.iter().find_map(|p| match p {
-				pi_code_path::ast::Predicate::SymbolSlice { start, end, relative } => {
-					Some((*start, *end, *relative))
-				},
-				_ => None,
-			}));
+		let symbol_slice: Option<(Option<i64>, Option<i64>, bool)> =
+			query.steps().last().and_then(|step| {
+				step.predicates.iter().find_map(|p| match p {
+					pi_code_path::ast::Predicate::SymbolSlice { start, end, relative } => {
+						Some((*start, *end, *relative))
+					},
+					_ => None,
+				})
+			});
 
 		let locator = file.to_string_lossy().into_owned();
 		let mut results = Vec::with_capacity(nodes.len());
@@ -212,10 +212,11 @@ impl CodeResolver for CodeResolverImpl {
 /// node ref's range/content/kind with the sliced text body.
 ///
 /// Semantics (FEAT-718):
-/// - Absolute (`relative=false`): result = lines `max(start, sym.first)..min(end, sym.last)`.
-///   Empty intersection ⇒ `symbol-slice-disjoint` diagnostic, range unchanged.
-/// - Relative (`relative=true`): result = lines `sym.first + start .. sym.last + end`,
-///   each clamped to `[1, file.line_count]`.
+/// - Absolute (`relative=false`): result = lines `max(start,
+///   sym.first)..min(end, sym.last)`. Empty intersection ⇒
+///   `symbol-slice-disjoint` diagnostic, range unchanged.
+/// - Relative (`relative=true`): result = lines `sym.first + start .. sym.last
+///   + end`, each clamped to `[1, file.line_count]`.
 /// - Open ends (None) substitute the symbol's own bound for that side.
 fn apply_symbol_slice(
 	nref: &mut NodeRef,
@@ -264,9 +265,8 @@ fn apply_symbol_slice(
 
 	nref.range = start_byte..end_byte;
 	nref.kind = format!("§line[{target_first}..{target_last}]");
-	nref.content = Some(pi_code_path::types::Content::Text {
-		value: src[start_byte..end_byte].to_string(),
-	});
+	nref.content =
+		Some(pi_code_path::types::Content::Text { value: src[start_byte..end_byte].to_string() });
 }
 
 fn line_count_of(src: &str) -> i64 {
@@ -686,6 +686,42 @@ mod tests {
 	}
 
 	// ------------------------------------------------------------------
+	// Elixir
+	// ------------------------------------------------------------------
+
+	#[test]
+	fn elixir_top_level_def() {
+		let resolver = resolver();
+		let f = temp_file(
+			".ex",
+			"defmodule Calc do\n  def add(a, b), do: a + b\nend\n",
+		);
+		let query = Query::single(Step {
+			axis:       None,
+			head:       Head::Name(NamePayload::Raw("Calc.add".into())),
+			predicates: vec![],
+		});
+		let results = run_query(&resolver, f.path(), query);
+		assert!(!results.is_empty(), "elixir Calc.add must resolve via dialect");
+	}
+
+	#[test]
+	fn elixir_exs_defp_resolves() {
+		let resolver = resolver();
+		let f = temp_file(
+			".exs",
+			"defmodule G do\n  defp h(x), do: x * 2\n  def go, do: h(1)\nend\n",
+		);
+		let query = Query::single(Step {
+			axis:       None,
+			head:       Head::Name(NamePayload::Raw("G.h".into())),
+			predicates: vec![],
+		});
+		let results = run_query(&resolver, f.path(), query);
+		assert!(!results.is_empty(), "elixir defp G.h must resolve via dialect");
+	}
+
+	// ------------------------------------------------------------------
 	// Markdown
 	// ------------------------------------------------------------------
 
@@ -775,7 +811,10 @@ mod tests {
 		let results = run_query(&resolver, f.path(), slice_query("foo", Some(8), Some(12), false));
 		assert_eq!(results.len(), 1);
 		assert_eq!(results[0].kind, "§line[8..12]");
-		let text = match results[0].content.as_ref().expect("content") { pi_code_path::types::Content::Text { value } => value.clone(), _ => panic!("expected text content") };
+		let text = match results[0].content.as_ref().expect("content") {
+			pi_code_path::types::Content::Text { value } => value.clone(),
+			_ => panic!("expected text content"),
+		};
 		assert!(text.contains("// body 8"), "got: {text}");
 		assert!(text.contains("// body 12"));
 		assert!(!text.contains("// body 7"));
@@ -789,8 +828,12 @@ mod tests {
 		let results = run_query(&resolver, f.path(), slice_query("foo", Some(1), Some(3), false));
 		assert_eq!(results.len(), 1);
 		assert!(
-			results[0].diagnostics.iter().any(|d| d.message.contains("symbol-slice-disjoint")),
-			"diagnostics: {:?}", results[0].diagnostics
+			results[0]
+				.diagnostics
+				.iter()
+				.any(|d| d.message.contains("symbol-slice-disjoint")),
+			"diagnostics: {:?}",
+			results[0].diagnostics
 		);
 	}
 

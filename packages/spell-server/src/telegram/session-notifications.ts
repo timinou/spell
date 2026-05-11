@@ -1,6 +1,10 @@
 import { logger } from "@oh-my-pi/pi-utils";
+import * as path from "node:path";
 import type { TelegramChannelConfig } from "../config/types";
 import type { NotificationSender } from "../hooks/notification-sender";
+import { enforceCaptionBudget } from "./caption-budget";
+import type { RendererExecutor } from "./renderer";
+import { renderSessionMarkdown } from "./transcript-store";
 import type { TelegramInlineKeyboardMarkup, TelegramParseMode } from "../hooks/types";
 import type { SessionRegistryEntry, SocketSessionRegistry } from "../socket";
 import type {
@@ -186,6 +190,7 @@ export function setupSessionNotifications(
 	registry: SocketSessionRegistry,
 	notificationSender: NotificationSender,
 	config: TelegramChannelConfig,
+	rendererExecutor?: RendererExecutor,
 ): () => void {
 	const notificationConfig = config.sessionNotifications;
 	if (!notificationConfig) {
@@ -206,7 +211,7 @@ export function setupSessionNotifications(
 		return () => {};
 	}
 
-	const handler = (sessionId: string, event: BlockingEventPayload): void => {
+	const handler = async (sessionId: string, event: BlockingEventPayload): Promise<void> => {
 		if (!allowedEvents.has(event.kind)) {
 			return;
 		}
@@ -217,6 +222,18 @@ export function setupSessionNotifications(
 		}
 
 		const message = formatBlockingEventNotification(entry, event);
+
+		// Find attaches matching this event kind
+		const matchingAttaches = notificationConfig.attaches.filter(
+			attach => attach.on.includes(event.kind),
+		);
+
+		// If no attaches match or renderers not available, send text-only
+		if (
+			matchingAttaches.length === 0 ||
+			!rendererExecutor ||
+			!(entry as any).sessionFile
+		) {
 		for (const chatId of chatIds) {
 			void notificationSender.sendMessage(chatId, message).catch(error => {
 				logger.warn("Failed to send session notification", {
@@ -225,11 +242,114 @@ export function setupSessionNotifications(
 					eventId: event.eventId,
 					error: String(error),
 				});
+				});
+	}
+			return;
+		}
+
+		const sessionFile = (entry as any).sessionFile as string | undefined;
+		if (!sessionFile) {
+			logger.warn("Session file path not available", { sessionId });
+		for (const chatId of chatIds) {
+			void notificationSender.sendMessage(chatId, message).catch(error => {
+				logger.warn("Failed to send session notification", {
+					chatId,
+					sessionId,
+					eventId: event.eventId,
+					error: String(error),
 			});
+				});
+		}
+			return;
+		}
+
+		try {
+			const rendered = await renderSessionMarkdown(sessionFile);
+
+			for (const attach of matchingAttaches) {
+				try {
+					const renderResult = await rendererExecutor.render({
+					rendererId: attach.rendererId,
+						markdown: rendered.markdown,
+						env: {
+							SPELL_RENDER_TITLE: `${entry.projectName}/${entry.sessionId}`,
+							SPELL_RENDER_STATUS: event.kind,
+							SPELL_RENDER_PROJECT: entry.projectName,
+							SPELL_RENDER_SESSION_ID: entry.sessionId,
+							SPELL_RENDER_EVENT_KIND: event.kind,
+							SPELL_RENDER_MESSAGES: String(rendered.messageCount),
+						},
+					});
+
+					if (!renderResult.ok) {
+						logger.warn("Renderer failed", {
+							renderId: attach.rendererId,
+							reason: renderResult.reason,
+							message: renderResult.message,
+						});
+		for (const chatId of chatIds) {
+			void notificationSender.sendMessage(chatId, message).catch(error => {
+				logger.warn("Failed to send session notification", {
+					chatId,
+					sessionId,
+					eventId: event.eventId,
+					error: String(error),
+								});
+							});
+		}
+						continue;
+		}
+
+					const rendererConfig = notificationConfig.renderers.find(
+						r => r.id === attach.rendererId,
+					);
+					if (!rendererConfig) {
+						continue;
+					}
+
+					const windowId = entry.sessionId.slice(0, 8);
+					const fileName = `${entry.projectName}-${windowId}-${Date.now()}.${rendererConfig.extension}`;
+					const caption = enforceCaptionBudget(message.text ?? "", "document");
+
+		for (const chatId of chatIds) {
+						try {
+							await notificationSender.sendDocument(chatId, {
+								buffer: renderResult.bytes,
+								fileName,
+								mime: renderResult.mime,
+								caption,
+								parseMode: "Markdown" as TelegramParseMode,
+								replyMarkup: message.replyMarkup,
+							});
+						} catch (error) {
+							logger.warn("Failed to send document", {
+					chatId,
+					sessionId,
+					error: String(error),
+							});
+						}
+					}
+				} catch (error) {
+					logger.warn("Attach render failed", {
+						renderId: attach.rendererId,
+					error: String(error),
+					});
+				}
+			}
+		} catch (error) {
+			logger.warn("Transcript render failed", { sessionId, error: String(error) });
+		for (const chatId of chatIds) {
+			void notificationSender.sendMessage(chatId, message).catch(error => {
+				logger.warn("Failed to send session notification", {
+					chatId,
+					sessionId,
+					eventId: event.eventId,
+					error: String(error),
+					});
+				});
+			}
 		}
 	};
-
-	registry.onBlockingEvent(handler);
 	return () => {
 		registry.offBlockingEvent(handler);
 	};

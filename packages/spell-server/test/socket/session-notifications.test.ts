@@ -122,7 +122,10 @@ describe("formatBlockingEventNotification", () => {
 describe("setupSessionNotifications", () => {
 	it("returns noop when config has no sessionNotifications", () => {
 		const registry = new SocketSessionRegistry();
-		const sender = { sendMessage: async () => {} };
+		const sender = {
+			sendMessage: async () => ({ messageId: 0 }),
+			sendDocument: async () => ({ messageId: 0 }),
+		};
 		const config = { owners: [123] } as TelegramChannelConfig;
 
 		const cleanup = setupSessionNotifications(registry, sender, config);
@@ -135,8 +138,10 @@ describe("setupSessionNotifications", () => {
 		const sentMessages: Array<{ chatId: number; text: string }> = [];
 		const sender = {
 			sendMessage: async (chatId: number, message: { text: string }) => {
+				return { messageId: 0 };
 				sentMessages.push({ chatId, text: message.text });
 			},
+			sendDocument: async () => ({ messageId: 0 }),
 		};
 
 		const config = {
@@ -185,8 +190,10 @@ describe("setupSessionNotifications", () => {
 		const sentMessages: Array<{ chatId: number }> = [];
 		const sender = {
 			sendMessage: async (chatId: number) => {
+				return { messageId: 0 };
 				sentMessages.push({ chatId });
 			},
+			sendDocument: async () => ({ messageId: 0 }),
 		};
 
 		const config = {

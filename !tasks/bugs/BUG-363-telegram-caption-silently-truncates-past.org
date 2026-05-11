@@ -1,0 +1,39 @@
+#+TITLE: Telegram caption silently truncates past 1024 chars — current code may exceed limit on large planSummary
+#+STATE: ITEM
+#+SESSION_ID: 14dc602dbbba509c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-49-06-414Z_14dc602dbbba509c.jsonl]]
+#+CUSTOM_ID: BUG-363-telegram-caption-silently-truncates-past
+#+DEPENDS: PROJ-076-spell-remote-needs-input-feed-to-telegra
+#+EFFORT: 1h
+#+LAYER: packages/spell-server
+#+PRIORITY: #B
+
+* Initial Message
+
+tell me how I would add a feature to the spell server so that, whenever a session in the repo turns into needs input, it sends me what the agent wrote (summary in the message, PDF of the full chat using typst + cmarker typst extension, operated through a kdl config line that assumes the markdown is in the stdin of the shell command passed, unless you have a better design [pushback encouraged])
+
+To answer, I need to cite that message and answer, or specifically answer to that message, whatever is most delightful for a telegram bot where I may have several pending 'next steps' messages.
+
+Tell me what the feature needs, how you'll change the kdl config, then make a folder in ../spell-remote-example/, in which you copy the telegram creds and numbers from ../growth (we're reusing the same bot), and put an example of a nice telegram bot that has its own link to my computer through a spell server instance. you are allowed to think of more features to integrate there, and new features to add to spell to enable cool stuff
+
+* Parent
+[[id:PROJ-076-spell-remote-needs-input-feed-to-telegra]]
+
+* Reproduction
+~packages/spell-server/src/telegram/session-notifications.ts~ uses
+~MAX_SUMMARY_LENGTH = 2_000~ on planSummary, then appends headers/footers. Telegram
+caps message text at 4096 chars and *document captions* at 1024 chars. Once
+~sendDocument~ is wired (FEAT-731), captions risk exceeding 1024 and Telegram
+will return 400 ~"Bad Request: caption too long"~.
+
+* Files
+- ~packages/spell-server/src/telegram/session-notifications.ts~
+- ~packages/spell-server/src/hooks/notification-sender.ts~ (enforce on send path)
+- ~packages/spell-server/test/telegram/session-notifications.test.ts~
+
+* Expected
+- Caption budget: 1024 chars for ~sendDocument~, 4096 for ~sendMessage~.
+- On overflow: trim mid-content with "… (full transcript attached)" suffix.
+
+* Acceptance
+- Tests with 5000-char planSummary stay within caption limits.

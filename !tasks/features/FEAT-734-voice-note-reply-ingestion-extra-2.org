@@ -1,0 +1,51 @@
+#+TITLE: Voice-note reply ingestion (extra #2)
+#+STATE: ITEM
+#+SESSION_ID: 14dc602dbbba509c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-49-06-414Z_14dc602dbbba509c.jsonl]]
+#+CUSTOM_ID: FEAT-734-voice-note-reply-ingestion-extra-2
+#+DEPENDS: FEAT-reply-router
+#+EFFORT: 4h
+#+LAYER: packages/spell-server
+#+PRIORITY: #B
+
+* Initial Message
+
+tell me how I would add a feature to the spell server so that, whenever a session in the repo turns into needs input, it sends me what the agent wrote (summary in the message, PDF of the full chat using typst + cmarker typst extension, operated through a kdl config line that assumes the markdown is in the stdin of the shell command passed, unless you have a better design [pushback encouraged])
+
+To answer, I need to cite that message and answer, or specifically answer to that message, whatever is most delightful for a telegram bot where I may have several pending 'next steps' messages.
+
+Tell me what the feature needs, how you'll change the kdl config, then make a folder in ../spell-remote-example/, in which you copy the telegram creds and numbers from ../growth (we're reusing the same bot), and put an example of a nice telegram bot that has its own link to my computer through a spell server instance. you are allowed to think of more features to integrate there, and new features to add to spell to enable cool stuff
+
+* Parent
+[[id:PROJ-076-spell-remote-needs-input-feed-to-telegra]]
+
+* Scope
+Reuse the existing Deepgram STT provider (configured under
+~telegram.voice.stt-provider~) so that owners can answer a notification by
+*voice* — long-press → Reply → record voice — and the transcript routes
+into the session as if they had typed it.
+
+* Files
+- ~packages/spell-server/src/telegram/bot/bot.ts~ : add ~message:voice~ handler
+  alongside the new ~message:text~ reply-router handler.
+- ~packages/spell-server/src/telegram/voice/~ : surface the existing
+  ~SttProvider~ as a reusable dependency for reply-router (already used by
+  bridge mode).
+- ~packages/spell-server/src/telegram/reply-router.ts~ : add ~handleVoiceReply~
+  that downloads the .ogg, calls STT, then resolves the event the same way as text.
+- ~packages/spell-server/test/telegram/reply-router-voice.test.ts~ (new).
+
+* Tests (TDD)
+- Voice reply by owner → STT runs → event resolved with transcript.
+- STT returns empty/low-confidence → polite "couldn't transcribe" reply, event NOT resolved.
+- Voice STT not configured → polite "voice replies not enabled" reply.
+- Mock STT provider used in tests; real Deepgram only in opt-in manual run.
+
+* Edge Cases
+- Voice file >20MB Telegram limit (multi-part voice) → handle gracefully.
+- Multi-language: STT respects ~language-hint~ from voice config.
+- Background noise yields garbage transcript → confidence threshold gate.
+
+* Acceptance
+- Tests green.
+- Manual: phone voice note → session ingests the spoken text as the answer.

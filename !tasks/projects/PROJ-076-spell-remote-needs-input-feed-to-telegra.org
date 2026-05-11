@@ -1,0 +1,171 @@
+#+TITLE: Spell remote — needs-input feed to Telegram (PDF + reply-routing)
+#+STATE: ITEM
+#+SESSION_ID: 14dc602dbbba509c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-49-06-414Z_14dc602dbbba509c.jsonl]]
+#+CUSTOM_ID: PROJ-076-spell-remote-needs-input-feed-to-telegra
+#+EFFORT: 3d
+#+LAYER: packages/spell-server
+#+PRIORITY: #A
+#+SUPERSEDES: PROJ-003-generalize-spell-telegram-rich-delivery
+
+* Initial Message
+
+tell me how I would add a feature to the spell server so that, whenever a session in the repo turns into needs input, it sends me what the agent wrote (summary in the message, PDF of the full chat using typst + cmarker typst extension, operated through a kdl config line that assumes the markdown is in the stdin of the shell command passed, unless you have a better design [pushback encouraged])
+
+To answer, I need to cite that message and answer, or specifically answer to that message, whatever is most delightful for a telegram bot where I may have several pending 'next steps' messages.
+
+Tell me what the feature needs, how you'll change the kdl config, then make a folder in ../spell-remote-example/, in which you copy the telegram creds and numbers from ../growth (we're reusing the same bot), and put an example of a nice telegram bot that has its own link to my computer through a spell server instance. you are allowed to think of more features to integrate there, and new features to add to spell to enable cool stuff
+
+* Intention & Purpose
+Bring local interactive `spell` sessions onto Telegram as a high-fidelity remote-control surface:
+when a session transitions to ~needs_input~, ~pending_approval~, ~ask~, ~hook_input~, or ~hook_selector~,
+the owner receives:
+
+- a *short summary in the message body* (status emoji, project, title, last assistant text),
+- a *PDF of the full chat*, rendered through a user-configured shell command
+  (typst + cmarker locally) so the toolchain stays out of the spell tree,
+- optional inline buttons for enum choices (~plan_approval~, ~hook_selector~), AND
+- free-form *Telegram-native replies* (long-press → Reply) that route back to the originating
+  session through ~reply_to_message_id~ — so multiple parallel sessions stay unambiguous.
+
+* Context & Narrative
+~packages/spell-server~ already plumbs ~BlockingEventPayload~ (the 5 needs-input variants) from
+each socket-connected session to ~telegram/session-notifications.ts~, which today emits only
+text + inline-button messages. The bridge mode (~bridge/rpc-to-telegram.ts~) already supports
+file attachments and Deepgram voice — but that's a different operating mode (Telegram drives
+the session). The *notifications mode* (local session, Telegram as side-channel) is the gap.
+
+A working prototype lives at ~/home/user/code/ora/spell-remote-example/~ that proves the UX
+today by watching ~~/.spell/status/*.json~ and routing answers through a side-channel
+~~/.spell/telegram-inbox/<sessionId>.json~ directory. This PROJ closes the loop in-tree.
+
+A design draft for the rich Telegram payload type was previously captured as
+~PROJ-003~ in the ~/growth~ repo. This PROJ supersedes it, scoped to the full notifications-mode
+feature with explicit attachment + reply-routing + extras.
+
+* Scope
+** In-scope
+- New KDL nodes inside ~telegram { session-notifications { … } }~:
+  ~renderer "<id>" { command … mime … extension … timeout-ms … cache-by … }~,
+  ~attach renderer="<id>" { transcript "<scope>" on "<event>" … }~,
+  ~reply-routing #true~ and ~reply-ttl "<duration>"~.
+- ~NotificationSender.sendDocument()~ via grammy ~InputFile~ (already imported in
+  ~bridge/rpc-to-telegram.ts~ and ~bot/invite.ts~).
+- Renderer executor with timeout, env metadata forwarding, transcript-hash cache,
+  circuit-breaker after N failures.
+- ~telegram/transcript-store.renderMarkdown(sessionId, scope, opts)~ producing
+  *newest-first* markdown matching the prototype's transcript.ts ordering.
+- ~telegram/reply-router.ts~ persistent map ~(chatId,msgId) → (sessionId,eventId,kind)~
+  with TTL eviction; grammy middleware turning ~reply_to_message_id~ into
+  ~EventResponsePayload~ on the socket.
+- Three extra features (priority order: TL;DR first):
+  1. Auto-TL;DR pre-renderer summarization when ~messageCount > N~.
+  2. Voice-note reply ingestion (reuses Deepgram STT from voice config).
+  3. Per-event renderer choice (~attach renderer=…~ binding per event kind).
+- Cutover of ~spell-remote-example~ from side-channel inbox to upstream socket.
+
+** Out-of-scope
+- A separate bot process. The existing ~spell-server~ bot handles everything.
+- Markdown rendering inside spell-server (the renderer contract is shell-stdin/stdout).
+- ~plan_approval~ workflow changes — buttons stay as-is.
+- Non-Telegram channels (Slack, Matrix). The ~renderer~ block is channel-agnostic,
+  but only Telegram is wired in this PROJ.
+
+* Existing Patterns
+- ~packages/spell-server/src/hooks/notification-sender.ts~ : current text-only sender.
+- ~packages/spell-server/src/hooks/types.ts~ : ~TelegramMessagePayload~ shape.
+- ~packages/spell-server/src/telegram/session-notifications.ts~ : event-to-message router.
+- ~packages/spell-server/src/telegram/bridge/rpc-to-telegram.ts~ : already uses ~InputFile~ +
+  ~replyWithVoice~ + Deepgram TTS, harvest patterns for the renderer pipeline.
+- ~packages/spell-server/src/telegram/transcript-store.ts~ : scaffolding to extend.
+- ~packages/spell-server/src/socket/session-registry.ts~ : ~currentBlockingEvent~ +
+  ~setBlockingEvent~ — the resolution path the reply-router calls.
+- ~packages/spell-server/src/config/channels-parser.ts~ : KDL parser to extend.
+- ~/home/user/code/ora/spell-remote-example/~ : working prototype (renderer pipeline,
+  transcript ordering, reply-map design, status-watcher fallback).
+
+* Tests
+- Workflow 1: session emits ~ask~ → bot delivers (caption, PDF, message_id stored).
+- Workflow 2: owner replies to the bot's message → reply-router resolves the event
+  and the session's input callback receives the text.
+- Workflow 3: parallel sessions emit needs_input concurrently → each gets a distinct
+  PDF + distinct reply-mapping entry → replies route correctly per session.
+- Workflow 4: renderer subprocess hangs → timeout fires, text-only fallback sent,
+  next event triggers circuit-breaker on the 3rd consecutive failure.
+- Workflow 5: ~messageCount > 50~ → auto-TL;DR runs before renderer; PDF prepends
+  a "Summary" card; caption uses the TL;DR for body text.
+- Workflow 6: owner replies with a voice note → STT transcribes → routed as text.
+- Workflow 7: ~attach renderer="pdf" on "ask"~ + ~attach renderer="diff" on "hook_input"~
+  → each event kind uses the bound renderer.
+- Workflow 8: PDF exceeds 50MB Telegram cap → renderer auto-truncates to last-N
+  messages and adds a footer noting the truncation.
+- Workflow 9: ~reply-ttl "24h"~ → mapping older than 24h evicted and replies to
+  expired messages return a polite "expired" notice.
+
+* Implementation
+Sub-outline: see Execution Manifest below.
+
+
+
+** Children (work graph)
+- [[id:FEAT-729-renderer-pipeline-kdl-block-executor-std]] — renderer KDL block + subprocess executor (W1)
+- [[id:FEAT-730-transcript-store-rendermarkdown-newest-f]] — transcript-store newest-first renderer (W0)
+- [[id:FEAT-731-notificationsender-senddocument-attach-b]] — sendDocument + attach binding (W2)
+- [[id:FEAT-732-reply-router-reply-to-message-id-eventre]] — reply_to_message_id → EventResponsePayload (W2)
+- [[id:FEAT-733-auto-tldr-pre-renderer-summarization-pri]] — auto-TL;DR pre-renderer (W3, priority extra #1)
+- [[id:FEAT-734-voice-note-reply-ingestion-extra-2]] — voice-note reply (W3, extra #2)
+- [[id:FEAT-735-per-event-renderer-choice-extra-3]] — per-event renderer choice (W3, extra #3)
+- [[id:FEAT-736-cutover-spell-remote-example-to-upstream]] — example cutover (W4)
+- [[id:BUG-362-session-notifications-doesnt-escape-mark]] — MarkdownV2 escape gap (W0, blocks W2)
+- [[id:BUG-363-telegram-caption-silently-truncates-past]] — caption length enforcement (W2)
+- [[id:FUP-083-document-the-renderer-contract-in-kdl-sc]] — operator docs (W4)
+
+* Edge Cases
+- Non-owner sends a reply → silently ignored OR error returned (config-driven).
+- Renderer config references a missing binary → boot fails fast with diagnostic;
+  loaded notifications continue without the attachment.
+- Same session emits two needs_input events before the first is resolved → second
+  event supersedes the first; the first reply-map entry is marked stale (resolved
+  events should return "moved on" notice if user replies late).
+- Markdown special chars in session title / project name break Telegram caption
+  parsing → caption escape pass separate from renderer markdown input.
+- ~cache-by "transcript-hash"~ but renderer-defining KDL changes → cache key
+  includes renderer signature hash too.
+- bot already running in spell-server, prototype bot also tries to long-poll →
+  Telegram returns 409; spec mandates one bot process per token; doc note in
+  ~spell-remote-example/README.md~ already covers this.
+- Voice note transcription returns empty or noise → reject with notice, do not
+  inject silent or garbage input.
+
+* Acceptance Criteria
+- KDL ~renderer~ + ~attach~ + ~reply-routing~ blocks parse and validate.
+- ~NotificationSender.sendDocument()~ exists with strong types and is the only path
+  for attachment-bearing notifications.
+- Session-notifications routes attachments without regressing text-only path
+  (~PROJ-003~ tests still pass).
+- Reply-routing wires through the existing ~EventResponsePayload~ contract;
+  free-form ~ask~ / ~hook_input~ answers reach the session within 2s p99.
+- Auto-TL;DR, voice-reply, per-event renderer choice each pass their integration tests.
+- ~spell-remote-example~ cutover removes the side-channel inbox and only uses
+  in-tree spell-server surfaces.
+- A visual QA artifact (PNG renders of each event-kind's PDF) is attached to the
+  closing report.
+- ~bun --cwd packages/spell-server test~ green; ~bun --cwd packages/spell-server tsgo -p .~ green.
+
+* Risks
+- *Bridge-mode regression.* The renderer/attachment plumbing touches the same
+  ~NotificationSender~ used by ~bridge/rpc-to-telegram.ts~. Mitigation: new method,
+  no signature changes to existing methods.
+- *Renderer subprocess as DoS vector.* User KDL controls a shell command run by
+  spell-server. Mitigation: sandbox via env-allowlist + timeout + per-fire memory
+  cap; document the "you own this command" contract loudly.
+- *Cache invalidation.* Transcript-hash cache may mask a renderer config drift.
+  Mitigation: cache key = SHA256(transcript-md ‖ renderer-signature).
+- *Reply ambiguity.* Two notifications, user replies to wrong one. Reply-routing
+  uses ~reply_to_message_id~ which is unambiguous server-side; spec calls out the
+  "quote preview" UX as the right disambiguation surface in the README.
+
+* Reference
+- [[file:/home/user/code/ora/spell-remote-example/]]
+- ~packages/spell-server/src/{hooks,telegram,socket,config}/~
+- ~packages/desktop-common/src/status-derive.ts~ (~AgentStatus~ taxonomy)

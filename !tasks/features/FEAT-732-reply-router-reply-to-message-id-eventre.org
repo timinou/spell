@@ -1,0 +1,76 @@
+#+TITLE: Reply-router — reply_to_message_id → EventResponsePayload
+#+STATE: ITEM
+#+SESSION_ID: 14dc602dbbba509c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-49-06-414Z_14dc602dbbba509c.jsonl]]
+#+CUSTOM_ID: FEAT-732-reply-router-reply-to-message-id-eventre
+#+DEPENDS: FEAT-sendDocument-attach
+#+EFFORT: 5h
+#+LAYER: packages/spell-server
+#+PRIORITY: #A
+
+* Initial Message
+
+tell me how I would add a feature to the spell server so that, whenever a session in the repo turns into needs input, it sends me what the agent wrote (summary in the message, PDF of the full chat using typst + cmarker typst extension, operated through a kdl config line that assumes the markdown is in the stdin of the shell command passed, unless you have a better design [pushback encouraged])
+
+To answer, I need to cite that message and answer, or specifically answer to that message, whatever is most delightful for a telegram bot where I may have several pending 'next steps' messages.
+
+Tell me what the feature needs, how you'll change the kdl config, then make a folder in ../spell-remote-example/, in which you copy the telegram creds and numbers from ../growth (we're reusing the same bot), and put an example of a nice telegram bot that has its own link to my computer through a spell server instance. you are allowed to think of more features to integrate there, and new features to add to spell to enable cool stuff
+
+* Parent
+[[id:PROJ-076-spell-remote-needs-input-feed-to-telegra]]
+
+* Scope
+- New ~packages/spell-server/src/telegram/reply-router.ts~ : persistent map
+  ~messageId → { chatId, sessionId, eventId, eventKind, sentAt, sessionTitle }~
+  backed by JSON file (~~/.spell/telegram-state.json~ shares the path).
+- Add KDL nodes ~reply-routing #true~ and ~reply-ttl "<duration>"~ (default ~"24h"~)
+  under ~session-notifications~.
+- grammy middleware in ~telegram/bot/bot.ts~:
+  on ~message:text~ with ~ctx.message.reply_to_message~ →
+    lookup mapping →
+      if owner-authorized + event still pending → resolve via socket
+      ~EventResponsePayload~ (existing contract on ~session-registry~).
+- Mapping is set by ~session-notifications.ts~ after a successful send.
+- TTL eviction on boot + periodic (~5 min interval).
+- Authorization: only ~telegram.users~ entries or ~owners~ may resolve events.
+
+
+
+** Locked policy (2026-05-10)
+- Authorization: anyone in ~telegram.users~ may resolve a reply (matches existing
+  bridge-mode auth). ~telegram.owners~ is implicitly within ~telegram.users~ since
+  the parser folds owners in.
+- Persistence file: ~~/.spell/telegram-reply-map.json~ (separate from telegram-state.json
+  to avoid namespace collision with tokens).
+- Concurrency for same session: when ~setBlockingEvent~ supersedes a prior event,
+  reply-router marks the prior mapping as stale; late replies to stale mappings get
+  a polite "moved on" notice instead of resolving the new event.
+* Files
+- ~packages/spell-server/src/telegram/reply-router.ts~ (new)
+- ~packages/spell-server/src/telegram/bot/bot.ts~ (extend grammy middleware)
+- ~packages/spell-server/src/config/channels-parser.ts~ (parse new nodes)
+- ~packages/spell-server/src/telegram/session-notifications.ts~ (call into router)
+- ~packages/spell-server/src/socket/session-registry.ts~ (verify the resolve path
+  already exists — it does, ~setBlockingEvent~ + response payload)
+- ~packages/spell-server/test/telegram/reply-router.test.ts~ (new)
+- ~packages/spell-server/test/config/channels-parser.test.ts~ (extend)
+
+* Tests (TDD)
+- Storage round-trip: set + load from disk.
+- TTL eviction: entry older than ~reply-ttl~ disappears on next read.
+- Middleware: reply by owner → event resolved with correct ~eventId~ + answer text.
+- Middleware: reply by non-owner → silently dropped, log line emitted.
+- Middleware: reply to expired/missing mapping → polite "expired" reply.
+- Middleware: reply while event already resolved → polite "moved on" reply.
+- Concurrent replies to two different sessions → each routes correctly.
+
+* Edge Cases
+- Same session resolves the event before user replies → reply ignored, "moved on" notice.
+- Telegram delivers the same callback twice (rare) → idempotent: second resolve is a no-op.
+- ~reply-ttl~ shorter than the actual blocking event lifetime → user gets "expired" on
+  a still-pending event; doc note recommends 24h minimum.
+
+* Acceptance
+- Tests green.
+- Manual: trigger ~ask~ in a real session → reply on phone → session prints the answer.
+- ~tsgo -p .~ clean.

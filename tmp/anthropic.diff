@@ -1,0 +1,119 @@
+diff --git a/packages/ai/src/providers/anthropic.ts b/packages/ai/src/providers/anthropic.ts
+index f0cf36e30..96435ebfa 100644
+--- a/packages/ai/src/providers/anthropic.ts
++++ b/packages/ai/src/providers/anthropic.ts
+@@ -50,6 +50,7 @@ import { finalizeErrorMessage, type RawHttpRequestDump } from "../utils/http-ins
+ import {
+ 	getAnthropicStreamIdleTimeoutMs,
+ 	getToolArgumentStreamIdleTimeoutMs,
++	IdleTickle,
+ 	iterateWithIdleTimeout,
+ } from "../utils/idle-iterator";
+ import { parseStreamingJson } from "../utils/json-parse";
+@@ -395,6 +396,7 @@ export type AnthropicClientOptionsArgs = {
+ 	headers?: Record<string, string>;
+ 	dynamicHeaders?: Record<string, string>;
+ 	isOAuth?: boolean;
++	fetch?: AnthropicSdkClientOptions["fetch"];
+ };
+ 
+ export type AnthropicClientOptionsResult = {
+@@ -406,6 +408,7 @@ export type AnthropicClientOptionsResult = {
+ 	dangerouslyAllowBrowser: boolean;
+ 	defaultHeaders: Record<string, string | null>;
+ 	fetchOptions?: AnthropicSdkClientOptions["fetchOptions"];
++	fetch?: AnthropicSdkClientOptions["fetch"];
+ };
+ 
+ const CLAUDE_CODE_TLS_CIPHERS = tls.DEFAULT_CIPHERS;
+@@ -635,6 +638,26 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
+ 			const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
+ 			const baseUrl = resolveAnthropicBaseUrl(model, apiKey) ?? "https://api.anthropic.com";
+ 
++			const tickle = new IdleTickle();
++			const originalFetch: NonNullable<AnthropicSdkClientOptions["fetch"]> = (input, init) =>
++				globalThis.fetch(input as Parameters<typeof globalThis.fetch>[0], init);
++			const teeFetch: NonNullable<AnthropicSdkClientOptions["fetch"]> = async (input, init) => {
++				const response = await originalFetch(input, init);
++				if (!response.body) return response;
++				const teed = response.body.pipeThrough(
++					new TransformStream<Uint8Array, Uint8Array>({
++						transform(chunk, controller) {
++							tickle.tick();
++							controller.enqueue(chunk);
++						},
++					}),
++				);
++				return new Response(teed, {
++					status: response.status,
++					statusText: response.statusText,
++					headers: response.headers,
++				});
++			};
+ 			const { client, isOAuthToken } = createClient(model, {
+ 				model,
+ 				apiKey,
+@@ -644,6 +667,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
+ 				headers: options?.headers,
+ 				dynamicHeaders: copilotDynamicHeaders?.headers,
+ 				isOAuth: options?.isOAuth,
++				fetch: teeFetch,
+ 			});
+ 			let params = buildParams(model, context, isOAuthToken, options);
+ 			const replacementPayload = await options?.onPayload?.(params, model);
+@@ -674,6 +698,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
+ 			const toolArgumentIdleTimeoutMs = getToolArgumentStreamIdleTimeoutMs(streamIdleTimeoutMs);
+ 			let providerRetryAttempt = 0;
+ 			let started = false;
++			let lastStallPartialJsonBytes: number | undefined;
+ 			do {
+ 				const requestAbortController = new AbortController();
+ 				const requestSignal = options?.signal
+@@ -691,6 +716,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
+ 							hasActiveToolArgumentStreaming(output) ? toolArgumentIdleTimeoutMs : streamIdleTimeoutMs,
+ 						errorMessage: "Anthropic messages stream stalled while waiting for the next event",
+ 						onIdle: () => requestAbortController.abort(),
++						tickle,
+ 					})) {
+ 						started = true;
+ 						if (event.type === "message_start") {
+@@ -889,6 +915,15 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
+ 						: streamError;
+ 					const isTransient =
+ 						isTransientStreamParseError(streamError) || stallDiagnostic?.state === "stalled_incomplete_tool_args";
++					if (stallDiagnostic?.state === "stalled_incomplete_tool_args") {
++						if (
++							stallDiagnostic.rawPartialJsonBytes !== undefined &&
++							stallDiagnostic.rawPartialJsonBytes <= (lastStallPartialJsonBytes ?? -1)
++						) {
++							throw finalStreamError;
++						}
++						lastStallPartialJsonBytes = stallDiagnostic.rawPartialJsonBytes;
++					}
+ 					if (
+ 						options?.signal?.aborted ||
+ 						providerRetryAttempt >= getToolCallStreamMaxRetries() ||
+@@ -1013,6 +1048,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
+ 		headers,
+ 		dynamicHeaders,
+ 		isOAuth,
++		fetch,
+ 	} = args;
+ 	const oauthToken = isOAuth ?? isAnthropicOAuthToken(apiKey);
+ 	const baseUrl = resolveAnthropicBaseUrl(model, apiKey);
+@@ -1044,6 +1080,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
+ 			dangerouslyAllowBrowser: true,
+ 			defaultHeaders,
+ 			...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
++			...(fetch ? { fetch } : {}),
+ 		};
+ 	}
+ 
+@@ -1070,6 +1107,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
+ 		dangerouslyAllowBrowser: true,
+ 		defaultHeaders,
+ 		...(tlsFetchOptions ? { fetchOptions: tlsFetchOptions } : {}),
++		...(fetch ? { fetch } : {}),
+ 	};
+ }
+ 

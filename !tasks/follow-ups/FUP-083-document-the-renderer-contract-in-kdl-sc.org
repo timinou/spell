@@ -1,0 +1,35 @@
+#+TITLE: Document the renderer contract in kdl-schema-reference.md + getting-started.md
+#+STATE: ITEM
+#+SESSION_ID: 14dc602dbbba509c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-49-06-414Z_14dc602dbbba509c.jsonl]]
+#+CUSTOM_ID: FUP-083-document-the-renderer-contract-in-kdl-sc
+#+DEPENDS: FEAT-renderer-pipeline FEAT-sendDocument-attach FEAT-reply-router
+#+EFFORT: 2h
+#+LAYER: packages/spell-server
+#+PRIORITY: #B
+
+* Initial Message
+
+tell me how I would add a feature to the spell server so that, whenever a session in the repo turns into needs input, it sends me what the agent wrote (summary in the message, PDF of the full chat using typst + cmarker typst extension, operated through a kdl config line that assumes the markdown is in the stdin of the shell command passed, unless you have a better design [pushback encouraged])
+
+To answer, I need to cite that message and answer, or specifically answer to that message, whatever is most delightful for a telegram bot where I may have several pending 'next steps' messages.
+
+Tell me what the feature needs, how you'll change the kdl config, then make a folder in ../spell-remote-example/, in which you copy the telegram creds and numbers from ../growth (we're reusing the same bot), and put an example of a nice telegram bot that has its own link to my computer through a spell server instance. you are allowed to think of more features to integrate there, and new features to add to spell to enable cool stuff
+
+* Parent
+[[id:PROJ-076-spell-remote-needs-input-feed-to-telegra]]
+
+* Scope
+Document the new KDL surface in operator docs so the renderer contract, attach
+binding, and reply-routing are discoverable without reading source.
+
+* Files
+- ~packages/spell-server/docs/kdl-schema-reference.md~
+- ~packages/spell-server/docs/getting-started.md~ (add "Telegram notifications
+  with PDF attachments" walkthrough)
+- ~packages/spell-server/docs/cookbook/typst-pdf.md~ (new) : a copy-pasteable
+  shell+typst recipe mirroring ~/home/user/code/ora/spell-remote-example/render/~.
+
+* Acceptance
+- A new operator can follow the cookbook end-to-end without referring to source.
+- Schema reference covers ~renderer~ / ~attach~ / ~reply-routing~ / ~summarize~.

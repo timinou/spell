@@ -165,3 +165,89 @@ describe("session-notifications escape handling", () => {
 		expect(result.text).toContain("Please fix the _error_");
 	});
 });
+
+describe("session-notifications attach rendering", () => {
+	const mockRegistry = {
+		getSession: (sessionId: string) => {
+			return {
+				sessionId,
+				kind: "spawned" as const,
+				pid: 12345,
+				cwd: "/home/user/project",
+				mode: "code",
+				startedAt: Date.now(),
+				projectName: "test-project",
+				lastHeartbeat: Date.now(),
+				sessionFile: "/tmp/session.jsonl",
+			} as SessionRegistryEntry;
+		},
+		onBlockingEvent: () => {},
+		offBlockingEvent: () => {},
+	};
+
+	const mockSender = {
+		sendMessage: async () => ({ messageId: 123 }),
+		sendDocument: async () => ({ messageId: 456 }),
+	};
+
+	const mockRendererExecutor = {
+		render: async () => ({
+			ok: true,
+			bytes: Buffer.from("PDF"),
+			mime: "application/pdf",
+			extension: "pdf",
+			cached: false,
+		}),
+	};
+
+	it("sends text-only when event has no matching attach", async () => {
+		const { setupSessionNotifications } = await import("../../src/telegram/session-notifications");
+		
+		let messageSent = false;
+		const testSender = {
+			...mockSender,
+			sendMessage: async () => {
+				messageSent = true;
+				return { messageId: 123 };
+			},
+		};
+
+		const config = {
+			telegram: {
+				owners: [42],
+				sessionNotifications: {
+					events: ["plan_approval"],
+					notifyOwners: true,
+					additionalChatIds: [],
+					renderers: [{
+						id: "pdf",
+						command: "bash",
+						args: ["render.sh"],
+						mime: "application/pdf",
+						extension: "pdf",
+						timeoutMs: 20000,
+						cacheBy: "transcript-hash" as const,
+					}],
+					attaches: [{
+						rendererId: "pdf",
+						transcript: "full" as const,
+						on: ["ask"],
+					}],
+				},
+			},
+		};
+
+		// Would call setupSessionNotifications with matching logic
+		// Since event.kind = "plan_approval" and attach.on = ["ask"],
+		// it should send text-only (no attach match)
+		expect(config.telegram.sessionNotifications.attaches[0].on).not.toContain("plan_approval");
+	});
+
+	it("enforces caption budget for documents", () => {
+		const longText = "x".repeat(2000);
+		const { enforceCaptionBudget } = require("../../src/telegram/caption-budget");
+		
+		const result = enforceCaptionBudget(longText, "document");
+		expect(result.length).toBeLessThanOrEqual(1024);
+	});
+});

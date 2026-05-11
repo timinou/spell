@@ -671,3 +671,152 @@ describe("parseSessionNotifications", () => {
 		});
 	});
 });
+
+describe("parseChannelsConfig attach blocks", () => {
+	it("parses single attach block with full transcript", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval" "ask"
+				notify-owners #true
+				renderer "pdf" {
+					command "bash" "render.sh"
+					mime "application/pdf"
+					extension "pdf"
+				}
+				attach renderer="pdf" {
+					transcript "full"
+					on "plan_approval"
+				}
+			}
+		}`);
+
+		expect(config.telegram?.sessionNotifications?.attaches).toEqual([{
+			rendererId: "pdf",
+			transcript: "full",
+			on: ["plan_approval"],
+		}]);
+	});
+
+	it("parses attach with last-turn transcript", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "ask"
+				notify-owners #true
+				renderer "pdf" {
+					command "bash" "render.sh"
+					mime "application/pdf"
+					extension "pdf"
+				}
+				attach renderer="pdf" {
+					transcript "last-turn"
+					on "ask"
+				}
+			}
+		}`);
+
+		expect(config.telegram?.sessionNotifications?.attaches?.[0]).toEqual({
+			rendererId: "pdf",
+			transcript: "last-turn",
+			on: ["ask"],
+		});
+	});
+
+	it("parses multiple attach blocks", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval" "ask"
+				notify-owners #true
+				renderer "pdf" {
+					command "bash" "render.sh"
+					mime "application/pdf"
+					extension "pdf"
+				}
+				renderer "markdown" {
+					command "cat"
+					mime "text/markdown"
+					extension "md"
+				}
+				attach renderer="pdf" {
+					transcript "full"
+					on "plan_approval"
+				}
+				attach renderer="markdown" {
+					transcript "last-turn"
+					on "ask"
+				}
+			}
+		}`);
+
+		expect(config.telegram?.sessionNotifications?.attaches).toHaveLength(2);
+		expect(config.telegram?.sessionNotifications?.attaches?.[0]?.rendererId).toBe("pdf");
+		expect(config.telegram?.sessionNotifications?.attaches?.[1]?.rendererId).toBe("markdown");
+	});
+
+	it("throws error on unknown renderer reference in attach", () => {
+		expect(() =>
+			parseChannelsConfig(`telegram {
+				bot-token "123456:ABC-DEF"
+				default-model "claude-sonnet-4-5"
+				owners 12345
+				session-notifications {
+					events "plan_approval"
+					notify-owners #true
+					attach renderer="unknown" {
+						transcript "full"
+						on "plan_approval"
+					}
+				}
+			}`)
+		).toThrow(/unknown renderer/i);
+	});
+
+	it("filters out unknown event kinds from attach on list", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval" "ask" "unknown_event"
+				notify-owners #true
+				renderer "pdf" {
+					command "bash" "render.sh"
+					mime "application/pdf"
+					extension "pdf"
+				}
+				attach renderer="pdf" {
+					transcript "full"
+					on "plan_approval" "unknown_event" "ask"
+				}
+			}
+		}`);
+
+		// Only "plan_approval" and "ask" should remain after filtering
+		expect(config.telegram?.sessionNotifications?.attaches?.[0]?.on).toEqual([
+			"plan_approval",
+			"ask",
+		]);
+	});
+
+	it("defaults attaches to empty array when not present", () => {
+		const config = parseChannelsConfig(`telegram {
+			bot-token "123456:ABC-DEF"
+			default-model "claude-sonnet-4-5"
+			owners 12345
+			session-notifications {
+				events "plan_approval"
+				notify-owners #true
+			}
+		}`);
+
+		expect(config.telegram?.sessionNotifications?.attaches).toEqual([]);
+	});
+});
