@@ -7,7 +7,7 @@ import type { OperatorActionHandler } from "../http/routes/operator-actions";
 import type { SocketSessionRegistry } from "../socket";
 import type { AuthContext } from "./bot/auth";
 import { authMiddleware } from "./bot/auth";
-import { createCommandRouter, createMessageHandler, type TelegramBot } from "./bot/bot";
+import { createCommandRouter, createMessageHandler, createReplyRouterMiddleware, type TelegramBot } from "./bot/bot";
 import { TokenStore } from "./bot/tokens";
 import { type CommandContext, registerCommands } from "./commands";
 import { startLogViewer } from "./log-viewer/server";
@@ -150,6 +150,9 @@ require("os").homedir(), ".spell", "telegram-reply-map.json"),
 				);
 				}
 			bot.use(createCommandRouter(this.#tokenStore, botUsername, cmdCtx));
+			if (this.#config.sessionNotifications?.replyRouting && this.#replyRouter && this.#sessionRegistry) {
+				bot.use(createReplyRouterMiddleware(this.#replyRouter, this.#sessionRegistry, this.#config));
+			}
 			bot.use(createMessageHandler(cmdCtx));
 
 			this.#bot = bot;

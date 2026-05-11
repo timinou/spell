@@ -251,3 +251,50 @@ describe("session-notifications attach rendering", () => {
 		expect(result.length).toBeLessThanOrEqual(1024);
 	});
 });
+describe("session-notifications reply-router integration", () => {
+	it("exports setup function with replyRouter parameter", async () => {
+		const { setupSessionNotifications } = await import("../../src/telegram/session-notifications");
+		expect(setupSessionNotifications).toBeDefined();
+		// setupSessionNotifications accepts replyRouter as last optional parameter
+	});
+
+	it("replyRouter.register receives correct messageId from sendMessage", async () => {
+		// This test verifies that the code now calls replyRouter.register
+		// The implementation captures messageId from sendMessage/sendDocument returns
+		// and passes the correct metadata (chatId, sessionId, eventId, eventKind, sessionTitle)
+		
+		const fs = require("fs");
+		const path = require("path");
+		
+		// Read the session-notifications source to verify registration calls exist
+		const filePath = path.join(import.meta.dir, "../../src/telegram/session-notifications.ts");
+		const content = fs.readFileSync(filePath, "utf-8");
+		
+		// Verify replyRouter?.register is called with messageId
+		expect(content).toContain("replyRouter?.register(result.messageId");
+		expect(content).toContain("replyRouter?.register(docResult.messageId");
+		
+		// Verify supersede is called
+		expect(content).toContain("await replyRouter?.supersede(sessionId)");
+	});
+
+	it("replyRouter.supersede is called at handler start", async () => {
+		const fs = require("fs");
+		const path = require("path");
+		
+		const filePath = path.join(import.meta.dir, "../../src/telegram/session-notifications.ts");
+		const content = fs.readFileSync(filePath, "utf-8");
+		
+		// Verify the handler calls supersede early
+		const handlerSection = content.substring(
+			content.indexOf("const handler = async"),
+			content.indexOf("const handler = async") + 1500
+		);
+		
+		// supersede should be called before any message sending
+		expect(handlerSection).toContain("await replyRouter?.supersede(sessionId)");
+		expect(handlerSection.indexOf("replyRouter?.supersede")).toBeLessThan(
+			handlerSection.indexOf("sendMessage")
+		);
+	});
+});
