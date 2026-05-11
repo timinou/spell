@@ -119,32 +119,91 @@ Important rules:
 - `auto-send-images` is an optional boolean (default `#true`). When `#true`, images generated during a session are automatically sent to the chat.
 - Use `#null` (canonical KDL null) for nullable values such as `idle-timeout #null`. Bare `null` is also accepted by the parser but `#null` is canonical.
 
-### `session-notifications`
+### `renderer "<id>" { ... }`
 
-Forward selected local session bridge events to Telegram chats.
+Declare a named subprocess renderer for converting session transcripts to formatted documents (e.g., PDF via Typst). Renderers receive markdown on stdin and must output binary bytes (e.g., PDF) to stdout.
 
 ```kdl
 telegram {
-  session-notifications {
-    events "plan_approval" "ask" "pending_action"
-    notify-owners #true
-    notify-chat-id 123456789
-    notify-chat-id 987654321
+  renderer "typst-pdf" {
+    command "bash render/typst-render.sh"
+    mime "application/pdf"
+    extension "pdf"
+    timeout-ms 30000
+    cache-by "hash"
   }
 }
 ```
 
 | Child node | Type | Required | Default | Notes |
 | --- | --- | --- | --- | --- |
-| `events` | string list | No | empty list | Known blocking kinds: `plan_approval`, `ask`, `pending_action`, `hook_selector`, `hook_input`. Unknown values are ignored with a warning for forward compatibility. |
-| `notify-owners` | boolean | No | `#true` | When true, send notifications to configured Telegram owners. |
-| `notify-chat-id` | number | No | none | Repeatable; each occurrence appends one additional target chat ID. |
+| `command` | string | Yes | — | Shell command or path. Called with markdown on stdin; must write binary bytes to stdout. |
+| `mime` | string | Yes | — | MIME type of the output (e.g., `application/pdf`). |
+| `extension` | string | Yes | — | File extension without the dot (e.g., `pdf`). Used when attaching to notifications. |
+| `timeout-ms` | number | No | `10000` | Subprocess timeout in milliseconds. |
+| `cache-by` | string | No | `none` | One of `none`, `hash`, `session`. Controls whether rendered output is cached and reused. |
 
 Notes:
 
-- Omit the block to disable Telegram notifications for local session events.
-- `notify-chat-id` may appear multiple times and all values are collected.
+- The renderer subprocess receives optional metadata via environment variables: `SPELL_RENDER_TITLE`, `SPELL_RENDER_STATUS`, `SPELL_RENDER_PROJECT`, `SPELL_RENDER_MESSAGES`.
+- Renderers are referenced by ID in `attach` directives within `session-notifications`.
+- See [Typst PDF cookbook](./cookbook/typst-pdf.md) for a complete worked example.
 
+### `session-notifications`
+
+Forward selected local session bridge events to Telegram chats with optional document attachments.
+
+```kdl
+telegram {
+  session-notifications {
+    events "plan_approval" "ask" "pending_action" "needs_input"
+    notify-owners #true
+    notify-chat-id 123456789
+    reply-routing #false
+    reply-ttl "24h"
+    attach renderer="typst-pdf" {
+      transcript "latest 50"
+      on "needs_input"
+      summarize {
+        style "bullet"
+        max-tokens 500
+      }
+    }
+  }
+}
+```
+
+| Child node | Type | Required | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `events` | string list | No | empty list | Known blocking kinds: `plan_approval`, `ask`, `pending_action`, `hook_selector`, `hook_input`, `needs_input`. Unknown values are ignored with a warning for forward compatibility. |
+| `notify-owners` | boolean | No | `#true` | When true, send notifications to configured Telegram owners. |
+| `notify-chat-id` | number | No | none | Repeatable; each occurrence appends one additional target chat ID. |
+| `reply-routing` | boolean | No | `#false` | When true, route event notifications to the active Telegram session associated with the goal instead of the global owner/chat lists. |
+| `reply-ttl` | string | No | `"inf"` | How long a notification remains open for replies in Telegram. Duration string: `"24h"`, `"30m"`, `"inf"` (no expiry). |
+| `attach` | block | No | — | Repeatable. Declares a renderer-backed attachment to include with matching event notifications. |
+
+#### `attach renderer="<id>" { ... }` — Attachment block
+
+| Child node | Type | Required | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `renderer` | string (attribute) | Yes | — | References a named renderer declared in the `telegram` block. |
+| `transcript` | string | No | `"full"` | Which transcript lines to include. Values: `"full"`, `"latest N"` (e.g., `"latest 50"`), `"summary"`. |
+| `on` | string | No | — | Attach only when this event kind fires (e.g., `"needs_input"`). If omitted, attaches to all matching events. |
+| `summarize` | block | No | — | Optional summarization of the transcript before rendering. |
+
+#### `summarize { ... }` — Summarize block (inside `attach`)
+
+| Child node | Type | Required | Default | Notes |
+| --- | --- | --- | --- | --- |
+| `style` | string | No | `"narrative"` | Summary style: `"bullet"`, `"narrative"`, `"digest"`. |
+| `max-tokens` | number | No | `500` | Maximum tokens for the summary. |
+
+Notes:
+
+- Omit the entire `session-notifications` block to disable Telegram notifications for local session events.
+- `notify-chat-id` may appear multiple times; all values are collected.
+- `attach` blocks are optional and repeatable. Each may render the same or different aspects of the transcript.
+- `reply-routing` and `reply-ttl` apply to all notifications in the block.
 
 ### `voice`
 
