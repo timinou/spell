@@ -693,4 +693,63 @@ fi
 			expect(result3Again.cached).toBe(true); // Still in cache
 		}
 	});
+
+	it("cache key is sensitive to request env", async () => {
+		const renderers: RendererConfig[] = [
+			{
+				id: "env-renderer",
+				command: "sh",
+				args: ["-c", "echo \"SPELL_RENDER_TITLE=$SPELL_RENDER_TITLE\" && cat"],
+				timeoutMs: 5000,
+				cacheBy: "transcript-hash",
+				mime: "text/plain",
+				extension: "txt",
+			},
+		];
+
+		const executor = new RendererExecutor({
+			renderers,
+			cwd: testDir,
+		});
+
+		const markdown = "test markdown content";
+
+		// First request with one env var
+		const result1 = await executor.render({
+			rendererId: "env-renderer",
+			markdown,
+			env: { SPELL_RENDER_TITLE: "Title1" },
+		});
+
+		expect(result1.ok).toBe(true);
+		if (result1.ok) {
+			expect(result1.cached).toBe(false);
+		}
+
+		// Second request with same markdown but different env var
+		const result2 = await executor.render({
+			rendererId: "env-renderer",
+			markdown,
+			env: { SPELL_RENDER_TITLE: "Title2" },
+		});
+
+		expect(result2.ok).toBe(true);
+		if (result2.ok) {
+			// Should not be cached (different env)
+			expect(result2.cached).toBe(false);
+		}
+
+		// Third request with same markdown and same env as first - should be cached
+		const result3 = await executor.render({
+			rendererId: "env-renderer",
+			markdown,
+			env: { SPELL_RENDER_TITLE: "Title1" },
+		});
+
+		expect(result3.ok).toBe(true);
+		if (result3.ok) {
+			// Should be cached (same markdown and env as first)
+			expect(result3.cached).toBe(true);
+		}
+	});
 });
