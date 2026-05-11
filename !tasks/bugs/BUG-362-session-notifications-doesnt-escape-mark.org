@@ -1,5 +1,5 @@
 #+TITLE: session-notifications doesn't escape Markdown in caption — session titles with * _ ` break parsing
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14dc602dbbba509c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-49-06-414Z_14dc602dbbba509c.jsonl]]
 #+CUSTOM_ID: BUG-362-session-notifications-doesnt-escape-mark
