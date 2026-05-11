@@ -266,36 +266,8 @@ export function setupSessionNotifications(
 			return;
 		}
 
-		const sessionFile = (entry as any).sessionFile as string | undefined;
-		if (!sessionFile) {
-			logger.warn("Session file path not available", { sessionId });
-		for (const chatId of chatIds) {
-			notificationSender.sendMessage(chatId, message).then(result => {
-				void replyRouter?.register(result.messageId, {
-					chatId,
-					sessionId,
-					eventId: event.eventId,
-					eventKind: event.kind,
-					sessionTitle: entry.projectName,
-				}).catch(regError => {
-					logger.warn("Failed to register message with reply router", {
-						chatId,
-						sessionId,
-						messageId: result.messageId,
-						error: String(regError),
-					});
-				});
-			}).catch(error => {
-				logger.warn("Failed to send session notification", {
-					chatId,
-					sessionId,
-					eventId: event.eventId,
-					error: String(error),
-				});
-			});
-		}
-			return;
-		}
+		const sessionFile = (entry as { sessionFile?: string }).sessionFile as string;
+		// sessionFile is guaranteed non-empty here — the early-return guard above this block already filtered missing sessionFile cases.
 
 		try {
 			const rendered = await renderSessionMarkdown(sessionFile);
