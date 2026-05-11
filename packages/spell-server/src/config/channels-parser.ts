@@ -710,23 +710,6 @@ function parseSessionNotificationsNode(
 		});
 	}
 
-
-	// Detect overlapping event-kind sets in attaches
-	for (let i = 0; i < attaches.length; i++) {
-		for (let j = i + 1; j < attaches.length; j++) {
-			const attach1 = attaches[i];
-			const attach2 = attaches[j];
-			const overlap = attach1.on.filter(k => attach2.on.includes(k));
-			if (overlap.length > 0) {
-				logger.warn("Overlapping event-kind sets in attach definitions", {
-					kinds: overlap,
-					rendererIds: [attach1.rendererId, attach2.rendererId],
-					context,
-				});
-			}
-		}
-	}
-
 	return { events, notifyOwners, additionalChatIds, renderers, attaches, replyRouting, replyTtlMs };
 }
 
