@@ -3,6 +3,7 @@ import { type Node, parse } from "@bgotink/kdl";
 import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { resolveEnvString } from "./env-resolver";
 import type {
+	SummarizeConfig,
 	ChannelsConfig,
 	AttachConfig,
 	SessionNotificationRendererConfig,
@@ -162,7 +163,7 @@ export function parseChannelsConfig(
 			continue;
 		}
 		if (name === "session-notifications") {
-			sessionNotifications = parseSessionNotificationsNode(child);
+			sessionNotifications = parseSessionNotificationsNode(child, undefined, env);
 		}
 	}
 
@@ -404,9 +405,115 @@ function parseRendererNode(
 	};
 }
 
+function parseSummarizeNode(
+	node: Node,
+	context: string,
+	env?: Record<string, string | undefined>,
+): SummarizeConfig {
+	let whenStr = "message-count>30";
+	let model: string | undefined;
+	let endpoint: string | undefined;
+	let apiKey: string | undefined;
+	let maxTokens = 250;
+	let promptStyle: "needs-input-recap" = "needs-input-recap";
+
+	for (const child of node.children?.nodes ?? []) {
+		const name = child.getName();
+
+		if (name === "when") {
+			const value = child.getArgument(0);
+			if (typeof value !== "string" || value.length === 0) {
+				throw new Error(`${context}.when must have a non-empty string argument`);
+			}
+			whenStr = value;
+			continue;
+		}
+
+		if (name === "model") {
+			const value = child.getArgument(0);
+			if (typeof value !== "string" || value.length === 0) {
+				throw new Error(`${context}.model must have a non-empty string argument`);
+			}
+			model = value;
+			continue;
+		}
+
+		if (name === "endpoint") {
+			const value = child.getArgument(0);
+			if (typeof value !== "string" || value.length === 0) {
+				throw new Error(`${context}.endpoint must have a non-empty string argument`);
+			}
+			endpoint = value;
+			continue;
+		}
+
+		if (name === "api-key") {
+			const value = child.getArgument(0);
+			if (typeof value !== "string" || value.length === 0) {
+				throw new Error(`${context}.api-key must have a non-empty string argument`);
+			}
+			apiKey = resolveEnvString(value, `${context}.api-key`, env);
+			continue;
+		}
+
+		if (name === "max-tokens") {
+			const value = child.getArgument(0);
+			if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+				throw new Error(`${context}.max-tokens must be a positive number`);
+			}
+			maxTokens = value;
+			continue;
+		}
+
+		if (name === "prompt-style") {
+			const value = child.getArgument(0);
+			if (typeof value !== "string" || value.length === 0) {
+				throw new Error(`${context}.prompt-style must have a non-empty string argument`);
+			}
+			if (value !== "needs-input-recap") {
+				throw new Error(`${context}.prompt-style must be "needs-input-recap", got "${value}"`);
+			}
+			promptStyle = value;
+			continue;
+		}
+	}
+
+	// Validate required fields
+	if (!model) {
+		throw new Error(`${context}.model is required`);
+	}
+	if (!endpoint) {
+		throw new Error(`${context}.endpoint is required`);
+	}
+	if (!apiKey) {
+		throw new Error(`${context}.api-key is required`);
+	}
+
+	// Parse when clause
+	const whenMatch = /^(message-count|byte-count)>(\d+)$/.exec(whenStr);
+	if (!whenMatch) {
+		throw new Error(
+			`${context}.when must match pattern "message-count>N" or "byte-count>N", got "${whenStr}"`,
+		);
+	}
+
+	const whenKind = whenMatch[1] as "message-count" | "byte-count";
+	const threshold = parseInt(whenMatch[2] ?? "30", 10);
+
+	return {
+		when: { kind: whenKind, threshold },
+		model,
+		endpoint,
+		apiKey,
+		maxTokens,
+		promptStyle,
+	};
+}
+
 function parseAttachNode(
 	node: Node,
 	context: string,
+	env?: Record<string, string | undefined>,
 ): AttachConfig {
 	const rendererIdAttr = node.getProperty('renderer');
 	if (typeof rendererIdAttr !== 'string' || rendererIdAttr.length === 0) {
@@ -416,6 +523,7 @@ function parseAttachNode(
 
 	let transcript: 'full' | 'last-turn' | { kind: 'last-n'; n: number } = 'full';
 	let on: string[] = [];
+	let summarize: SummarizeConfig | undefined;
 
 	for (const child of node.children?.nodes ?? []) {
 		const name = child.getName();
@@ -463,12 +571,15 @@ function parseAttachNode(
 			}
 			continue;
 		}
+		if (name === 'summarize') {
+			summarize = parseSummarizeNode(child, context, env);
+			continue;
+		}
 	}
 
-	return { rendererId, transcript, on };
+
+	return { rendererId, transcript, on, summarize };
 }
-
-
 /**
  * Parse a duration string into milliseconds.
  * Supports: ms, s, m, h, d suffixes
@@ -501,6 +612,7 @@ function parseDuration(durationStr: string): number {
 function parseSessionNotificationsNode(
 	node: Node,
 	context = "channels.telegram.session-notifications",
+	env?: Record<string, string | undefined>,
 ): NonNullable<NonNullable<ChannelsConfig["telegram"]>["sessionNotifications"]> {
 	let events: string[] = [];
 	let notifyOwners = true;
@@ -560,7 +672,7 @@ function parseSessionNotificationsNode(
 			continue;
 		}
 		if (name === 'attach') {
-			const attach = parseAttachNode(child, context);
+			const attach = parseAttachNode(child, context, env);
 			attaches.push(attach);
 			continue;
 		}

@@ -109,6 +109,22 @@ export interface SessionNotificationRendererConfig {
 	extension: string;
 }
 
+/** Summarize configuration for pre-renderer TL;DR generation. */
+export interface SummarizeConfig {
+	/** When to trigger summarization (message count or byte count threshold). */
+	when: { kind: 'message-count' | 'byte-count'; threshold: number };
+	/** LLM model to use for summarization. */
+	model: string;
+	/** HTTP endpoint for summarization (OpenAI-compatible). */
+	endpoint: string;
+	/** API key for authentication. */
+	apiKey: string;
+	/** Max tokens in summary response. Default 250. */
+	maxTokens: number;
+	/** Prompt style for summarization. */
+	promptStyle: 'needs-input-recap';
+}
+
 /** Attach configuration for rendering session transcripts. */
 export interface AttachConfig {
 	/** Renderer ID (matches a RendererConfig.id in session-notifications). */
@@ -117,6 +133,8 @@ export interface AttachConfig {
 	transcript: 'full' | 'last-turn' | { kind: 'last-n'; n: number };
 	/** Event kinds that trigger this attachment (subset of BlockingEventKind). */
 	on: string[];
+	/** Optional summarize config for TL;DR generation before rendering. */
+	summarize?: SummarizeConfig;
 }
 
 /** Full Telegram channel configuration parsed from channels.kdl */
