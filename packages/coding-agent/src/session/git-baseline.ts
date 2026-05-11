@@ -48,6 +48,16 @@ function gitSync(args: string[], cwd: string): string | null {
 	}
 }
 
+/**
+ * Resolve the git working-tree root for `cwd`, or null when `cwd` is not
+ * inside a git repository (or git is unavailable). Used by the system
+ * prompt to surface cwd vs project-root asymmetry so the agent does not
+ * silently double-prefix paths against the session cwd.
+ */
+export function getGitToplevelSync(cwd: string): string | null {
+	return gitSync(["rev-parse", "--show-toplevel"], cwd);
+}
+
 function parseStatusChangedFiles(statusOutput: string): string[] {
 	return statusOutput
 		.split("\n")

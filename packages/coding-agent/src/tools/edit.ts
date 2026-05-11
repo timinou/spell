@@ -26,6 +26,7 @@ import { formatCodePathResult } from "./codepath-result";
 import type { CodePathAction, EditParams } from "./codepath-types";
 import { editSchema } from "./codepath-types";
 import { enforceModeWrite } from "./mode-guard";
+import { detectCwdPrefixDuplication, formatCwdPrefixDuplicationMessage } from "./path-resolution";
 import { replaceTabs } from "./render-utils";
 import { type DetailsWithMeta, toolResult } from "./tool-result";
 
@@ -212,6 +213,26 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 		const skippedOpIndices: number[] = [];
 
 		for (const { i, op, targetPath } of ops) {
+			// cwd-prefix duplication guard (see path-resolution.ts).
+			// Catches `apps/foo/apps/foo/...` style silent nesting that otherwise
+			// either creates a misplaced file (anchorless create-via-append) or
+			// returns a misleading "File not found" for normal mutations.
+			// Fires only on relative targets; absolute paths are exempted.
+			const duplication = detectCwdPrefixDuplication(sessionCwd, op.target);
+			if (duplication) {
+				const result = toolResult<EditToolResultDetails>({
+					target: op.target,
+					error: "cwd_prefix_duplication",
+				})
+					.text(formatCwdPrefixDuplicationMessage(op.target, sessionCwd, duplication))
+					.done();
+				result.isError = true;
+				results.push(result);
+				failedOpIndex = i + 1;
+				for (let j = i + 1; j < params.operations.length; j++) skippedOpIndices.push(j + 1);
+				break;
+			}
+
 			enforceModeWrite(this.session, targetPath, { op: "update" });
 			const sandboxError = enforcePathWrite(targetPath, sessionCwd, this.session.sandboxPolicy);
 			if (sandboxError) throw new Error(sandboxError);

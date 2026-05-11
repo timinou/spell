@@ -18,6 +18,7 @@ import { loadSkills, type Skill } from "./extensibility/skills";
 import cavemanPromptTemplate from "./prompts/system/caveman.md" with { type: "text" };
 import customSystemPromptTemplate from "./prompts/system/custom-system-prompt.md" with { type: "text" };
 import systemPromptTemplate from "./prompts/system/system-prompt.md" with { type: "text" };
+import { getGitToplevelSync } from "./session/git-baseline";
 
 function firstNonEmpty(...values: (string | undefined | null)[]): string | null {
 	for (const value of values) {
@@ -502,6 +503,17 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 	const dateTime = date;
 	const promptCwd = resolvedCwd.replace(/\\/g, "/");
 
+	// Surface cwd vs git-toplevel asymmetry: when the session cwd is below
+	// the git working tree, agents that read project-rooted paths from
+	// AGENTS.md / specs / plan items will silently double-prefix when
+	// passing them to path-resolving tools (see BUG: cwd_prefix_duplication).
+	// We render a one-line warning only when they differ; no noise at
+	// repo-root sessions.
+	const gitToplevelRaw = getGitToplevelSync(resolvedCwd);
+	const gitToplevel = gitToplevelRaw ? gitToplevelRaw.replace(/\\/g, "/") : null;
+	const cwdBelowGitRoot = gitToplevel !== null && gitToplevel !== promptCwd && promptCwd.startsWith(`${gitToplevel}/`);
+	const gitRootForPrompt = cwdBelowGitRoot ? gitToplevel : null;
+
 	const cavemanLevel = settings?.get("caveman.defaultLevel") ?? "off";
 	const cavemanThinkingMode = settings?.get("caveman.thinkingMode") ?? "caveman";
 	const cavemanAffectSubagents = settings?.get("caveman.affectSubagents") ?? true;
@@ -569,6 +581,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 		date,
 		dateTime,
 		cwd: promptCwd,
+		gitRoot: gitRootForPrompt,
 		intentTracing: !!intentField,
 		intentField: intentField ?? "",
 		mcpDiscoveryMode,

@@ -160,4 +160,62 @@ describe("CreateTool", () => {
 		const tools = await createTools(createSession());
 		expect(tools.some(t => t.name === "create")).toBe(true);
 	});
+
+	describe("cwd-prefix duplication guard", () => {
+		it("rejects path that duplicates cwd tail and suggests stripped path", async () => {
+			// Mirror the bug from the linked transcript: cwd = .../monorepo/apps/hotelcomm,
+			// agent passes "apps/hotelcomm/lib/foo.ex". Must not write anything.
+			const nested = path.join(tmpDir, "apps", "hotelcomm");
+			await fs.mkdir(nested, { recursive: true });
+			const tool = new CreateTool(createSession({ cwd: nested }));
+			const result = await tool.execute("t", {
+				path: "apps/hotelcomm/lib/foo.ex",
+				content: "defmodule Foo do\nend\n",
+			});
+			const text = getText(result);
+			expect(text).toContain("cwd prefix");
+			expect(text).toContain("apps/hotelcomm");
+			expect(text).toContain("lib/foo.ex"); // stripped suggestion
+			// No file written at the doubled location.
+			const doubled = path.join(nested, "apps", "hotelcomm", "lib", "foo.ex");
+			expect(await fs.exists(doubled)).toBe(false);
+		});
+
+		it("does NOT false-positive on partial-segment substring overlap", async () => {
+			// cwd ends with `src`, path starts with `srcs/...` — segments differ,
+			// must succeed.
+			const src = path.join(tmpDir, "src");
+			await fs.mkdir(src, { recursive: true });
+			const tool = new CreateTool(createSession({ cwd: src }));
+			const result = await tool.execute("t", {
+				path: "srcs/foo.ts",
+				content: "export const x = 1;\n",
+			});
+			expect(getText(result)).toContain("Created");
+			expect(await fs.exists(path.join(src, "srcs", "foo.ts"))).toBe(true);
+		});
+
+		it("exempts absolute paths from the guard", async () => {
+			const nested = path.join(tmpDir, "apps", "hotelcomm");
+			await fs.mkdir(nested, { recursive: true });
+			const absTarget = path.join(nested, "apps", "hotelcomm", "lib", "abs.ex");
+			const tool = new CreateTool(createSession({ cwd: nested }));
+			const result = await tool.execute("t", {
+				path: absTarget,
+				content: "defmodule Abs do\nend\n",
+			});
+			expect(getText(result)).toContain("Created");
+			expect(await fs.exists(absTarget)).toBe(true);
+		});
+
+		it("echoes the absolute resolved path on success", async () => {
+			const tool = new CreateTool(createSession());
+			const result = await tool.execute("t", { path: "echo.txt", content: "hi" });
+			const text = getText(result);
+			expect(text).toContain("Created echo.txt");
+			// Second line includes the absolute resolved path — lets the agent
+			// self-check the resolution against its mental model.
+			expect(text).toContain(`→ ${path.join(tmpDir, "echo.txt")}`);
+		});
+	});
 });
