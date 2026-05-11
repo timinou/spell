@@ -1,23 +1,31 @@
 import { describe, expect, it } from "bun:test";
 import type { SessionRegistryEntry } from "../../src/socket";
-import type { PlanApprovalBlockingEventPayload } from "../../src/socket/types";
+import type {
+	AskBlockingEventPayload,
+	AskQuestion,
+	HookSelectorBlockingEventPayload,
+	PendingActionBlockingEventPayload,
+	PlanApprovalBlockingEventPayload,
+} from "../../src/socket/types";
 import { formatBlockingEventNotification } from "../../src/telegram/session-notifications";
 
 describe("session-notifications escape handling", () => {
 	const mockEntry: SessionRegistryEntry = {
 		sessionId: "session-123",
+		kind: "spawned",
+		pid: 12345,
 		cwd: "/home/user/project",
-		project: "test-project",
 		mode: "code",
-		voiceReplyOverride: undefined,
-		showThinking: false,
-		sessionPath: "/path/to/session",
+		startedAt: Date.now(),
+		projectName: "test-project",
+		lastHeartbeat: Date.now(),
 	};
 
 	it("escapes special characters in plan title", () => {
 		const payload: PlanApprovalBlockingEventPayload = {
 			kind: "plan_approval",
 			eventId: "event-456",
+			itemId: "item-123",
 			title: "Plan with *special* [characters]",
 			planSummary: "Summary text",
 			selectorOptions: [],
@@ -32,6 +40,7 @@ describe("session-notifications escape handling", () => {
 		const payload: PlanApprovalBlockingEventPayload = {
 			kind: "plan_approval",
 			eventId: "event-456",
+			itemId: "item-123",
 			title: "Approval",
 			planSummary: "Summary with _underscore_ and `backticks`",
 			selectorOptions: [],
@@ -50,6 +59,7 @@ describe("session-notifications escape handling", () => {
 		const payload: PlanApprovalBlockingEventPayload = {
 			kind: "plan_approval",
 			eventId: "event-456",
+			itemId: "item-123",
 			title: "Approval",
 			planSummary: "",
 			selectorOptions: [],
@@ -63,6 +73,7 @@ describe("session-notifications escape handling", () => {
 		const payload: PlanApprovalBlockingEventPayload = {
 			kind: "plan_approval",
 			eventId: "event-456",
+			itemId: "item-123",
 			title: "Test*Plan",
 			planSummary: "Summary with _formatting_",
 			selectorOptions: ["Option 1", "Option 2"],
@@ -81,6 +92,7 @@ describe("session-notifications escape handling", () => {
 		const payload: PlanApprovalBlockingEventPayload = {
 			kind: "plan_approval",
 			eventId: "event-456",
+			itemId: "item-123",
 			title: "Approval",
 			planSummary: "",
 			selectorOptions: [],
@@ -94,6 +106,7 @@ describe("session-notifications escape handling", () => {
 		const payload: PlanApprovalBlockingEventPayload = {
 			kind: "plan_approval",
 			eventId: "event-456",
+			itemId: "item-123",
 			title: "Approval",
 			planSummary: "",
 			selectorOptions: [],
@@ -104,19 +117,20 @@ describe("session-notifications escape handling", () => {
 	});
 
 	it("escapes special characters in ask message", () => {
-		const payload = {
-			kind: "ask" as const,
-			eventId: "event-456",
-			questions: [
-				{
-					question: "Do you want to continue with *this* operation?",
-					options: [
-						{ label: "Yes [proceed]", description: "" },
-						{ label: "No", description: "" },
-					],
-					recommended: 0,
-				},
+		const question: AskQuestion = {
+			id: "q-1",
+			question: "Do you want to continue with *this* operation?",
+			options: [
+				{ label: "Yes [proceed]" },
+				{ label: "No" },
 			],
+			recommended: 0,
+		};
+
+		const payload: AskBlockingEventPayload = {
+			kind: "ask",
+			eventId: "event-456",
+			questions: [question],
 		};
 
 		const result = formatBlockingEventNotification(mockEntry, payload);
@@ -126,8 +140,8 @@ describe("session-notifications escape handling", () => {
 	});
 
 	it("escapes special characters in hook selector", () => {
-		const payload = {
-			kind: "hook_selector" as const,
+		const payload: HookSelectorBlockingEventPayload = {
+			kind: "hook_selector",
 			eventId: "event-456",
 			title: "Select *option*",
 			options: ["Option (1)", "Option [2]"],
@@ -140,15 +154,14 @@ describe("session-notifications escape handling", () => {
 	});
 
 	it("escapes description in generic blocking message", () => {
-		const payload = {
-			kind: "pending_action" as const,
+		const payload: PendingActionBlockingEventPayload = {
+			kind: "pending_action",
 			eventId: "event-456",
-			title: "Action <required>",
+			actionType: "approval",
 			description: "Please fix the _error_",
 		};
 
 		const result = formatBlockingEventNotification(mockEntry, payload);
-		expect(result.text).toContain("Action <required>");
 		expect(result.text).toContain("Please fix the _error_");
 	});
 });
