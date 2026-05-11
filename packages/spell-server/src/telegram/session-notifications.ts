@@ -1,7 +1,7 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import type { TelegramChannelConfig } from "../config/types";
 import type { NotificationSender } from "../hooks/notification-sender";
-import type { TelegramInlineKeyboardMarkup } from "../hooks/types";
+import type { TelegramInlineKeyboardMarkup, TelegramParseMode } from "../hooks/types";
 import type { SessionRegistryEntry, SocketSessionRegistry } from "../socket";
 import type {
 	AskBlockingEventPayload,
@@ -9,6 +9,7 @@ import type {
 	HookSelectorBlockingEventPayload,
 	PlanApprovalBlockingEventPayload,
 } from "../socket/types";
+import { escapeForTelegram, type TelegramParseMode as EscapedTelegramParseMode } from "./escape";
 
 const CALLBACK_PREFIX = "se:";
 const MAX_SUMMARY_LENGTH = 2_000;
@@ -51,12 +52,13 @@ function createDismissMarkup(sessionId: string, eventId: string): TelegramInline
 function formatPlanApprovalMessage(
 	entry: SessionRegistryEntry,
 	payload: PlanApprovalBlockingEventPayload,
-): { text: string; replyMarkup: TelegramInlineKeyboardMarkup } {
+): { text: string; replyMarkup: TelegramInlineKeyboardMarkup; parseMode?: TelegramParseMode } {
+	const parseMode: EscapedTelegramParseMode = undefined;
 	const lines = [
 		"Plan Approval Required",
-		`Title: ${payload.title}`,
-		`Session: ${entry.cwd}`,
-		payload.planSummary ? `Summary: ${payload.planSummary.slice(0, MAX_SUMMARY_LENGTH)}` : "",
+		`Title: ${escapeForTelegram(parseMode, payload.title)}`,
+		`Session: ${escapeForTelegram(parseMode, entry.cwd)}`,
+		payload.planSummary ? `Summary: ${escapeForTelegram(parseMode, payload.planSummary.slice(0, MAX_SUMMARY_LENGTH))}` : "",
 	].filter(line => line.length > 0);
 	const replyMarkup: TelegramInlineKeyboardMarkup = {
 		inlineKeyboard: [
@@ -74,29 +76,31 @@ function formatPlanApprovalMessage(
 			],
 		],
 	};
-	return { text: lines.join("\n\n"), replyMarkup };
+	return { text: lines.join("\n\n"), replyMarkup, parseMode };
 }
 
 function formatAskMessage(
 	entry: SessionRegistryEntry,
 	payload: AskBlockingEventPayload,
-): { text: string; replyMarkup: TelegramInlineKeyboardMarkup } {
+): { text: string; replyMarkup: TelegramInlineKeyboardMarkup; parseMode?: TelegramParseMode } {
+	const parseMode: EscapedTelegramParseMode = undefined;
 	const question = payload.questions[0];
 	if (!question) {
 		return {
-			text: ["Agent Question", `Session: ${entry.cwd}`, "No questions available."].join("\n\n"),
+			text: ["Agent Question", `Session: ${escapeForTelegram(parseMode, entry.cwd)}`, "No questions available."].join("\n\n"),
 			replyMarkup: createDismissMarkup(entry.sessionId, payload.eventId),
+			parseMode,
 		};
 	}
 
-	const lines = ["Agent Question", `Session: ${entry.cwd}`, question.question];
+	const lines = ["Agent Question", `Session: ${escapeForTelegram(parseMode, entry.cwd)}`, escapeForTelegram(parseMode, question.question)];
 	const replyMarkup: TelegramInlineKeyboardMarkup = {
 		inlineKeyboard: [
 			...question.options.map((option, index) => {
 				const suffix = question.recommended === index ? " (Rec)" : "";
 				return [
 					{
-						text: `${option.label}${suffix}`,
+						text: `${escapeForTelegram(parseMode, option.label)}${suffix}`,
 						callbackData: buildSessionEventCallbackData(entry.sessionId, payload.eventId, `a:${index}`),
 					},
 				];
@@ -109,18 +113,19 @@ function formatAskMessage(
 			],
 		],
 	};
-	return { text: lines.join("\n\n"), replyMarkup };
+	return { text: lines.join("\n\n"), replyMarkup, parseMode };
 }
 
 function formatHookSelectorMessage(
 	entry: SessionRegistryEntry,
 	payload: HookSelectorBlockingEventPayload,
-): { text: string; replyMarkup: TelegramInlineKeyboardMarkup } {
+): { text: string; replyMarkup: TelegramInlineKeyboardMarkup; parseMode?: TelegramParseMode } {
+	const parseMode: EscapedTelegramParseMode = undefined;
 	const replyMarkup: TelegramInlineKeyboardMarkup = {
 		inlineKeyboard: [
 			...payload.options.map((option, index) => [
 				{
-					text: option,
+					text: escapeForTelegram(parseMode, option),
 					callbackData: buildSessionEventCallbackData(entry.sessionId, payload.eventId, `s:${index}`),
 				},
 			]),
@@ -133,35 +138,38 @@ function formatHookSelectorMessage(
 		],
 	};
 	return {
-		text: ["Selection Required", `Session: ${entry.cwd}`, `Title: ${payload.title}`].join("\n\n"),
+		text: ["Selection Required", `Session: ${escapeForTelegram(parseMode, entry.cwd)}`, `Title: ${escapeForTelegram(parseMode, payload.title)}`].join("\n\n"),
 		replyMarkup,
+		parseMode,
 	};
 }
 
 function formatGenericBlockingMessage(
 	entry: SessionRegistryEntry,
 	payload: BlockingEventPayload,
-): { text: string; replyMarkup: TelegramInlineKeyboardMarkup } {
+): { text: string; replyMarkup: TelegramInlineKeyboardMarkup; parseMode?: TelegramParseMode } {
+	const parseMode: EscapedTelegramParseMode = undefined;
 	const lines = [
 		payload.kind === "pending_action"
 			? "Action Required"
 			: payload.kind === "hook_input"
 				? "Input Required"
 				: "Attention Required",
-		`Session: ${entry.cwd}`,
-		"title" in payload ? `Title: ${payload.title}` : "",
-		"description" in payload ? `Description: ${payload.description}` : "",
+		`Session: ${escapeForTelegram(parseMode, entry.cwd)}`,
+		"title" in payload ? `Title: ${escapeForTelegram(parseMode, payload.title)}` : "",
+		"description" in payload ? `Description: ${escapeForTelegram(parseMode, payload.description)}` : "",
 	].filter(line => line.length > 0);
 	return {
 		text: lines.join("\n\n"),
 		replyMarkup: createDismissMarkup(entry.sessionId, payload.eventId),
+		parseMode,
 	};
 }
 
 export function formatBlockingEventNotification(
 	entry: SessionRegistryEntry,
 	payload: BlockingEventPayload,
-): { text: string; replyMarkup: TelegramInlineKeyboardMarkup } {
+): { text: string; replyMarkup: TelegramInlineKeyboardMarkup; parseMode?: TelegramParseMode } {
 	switch (payload.kind) {
 		case "plan_approval":
 			return formatPlanApprovalMessage(entry, payload);
