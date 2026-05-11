@@ -1,0 +1,32 @@
+#+TITLE: create tool's cwd_prefix_duplication diagnostic omits isError=true
+#+STATE: DONE
+#+SESSION_ID: 14dc5b33ab1d8adb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-27-21-772Z_14dc5b33ab1d8adb.jsonl]]
+#+CUSTOM_ID: BUG-359-create-tools-cwd-prefix-duplication-diag
+#+EFFORT: 15m
+#+LAYER: coding-agent
+
+* Initial Message
+
+Read proxy_create_nested_path_bug.md -> your fixes weren't enough. find the true root causes, explain them, file BUGs, then fix
+
+* Initial Message
+
+When the BUG-358 guard fires in =packages/coding-agent/src/tools/create.ts=, the returned =AgentToolResult= has =isError: undefined=. The diagnostic text is present, but the model receives it as informational content, not as a failure signal.
+
+=edit.ts= already sets =result.isError = true= after =toolResult(...).done()=. =create.ts= does not.
+
+* Reproduction
+
+#+begin_src ts
+const r = await tool.execute("t1", { path: "apps/hotelcomm/lib/foo.ex", content: "test" });
+console.log(r.isError); // undefined ← should be true
+#+end_src
+
+* Why it matters
+
+Models batch-process tool results. Many use =isError= as the primary "should I retry/correct?" signal. Without it, the diagnostic may be skimmed and the agent moves on, never re-issuing the call.
+
+* Fix
+
+Mirror edit.ts: assign =result.isError = true= on the duplication result before returning. Apply same audit to other diagnostic returns in create.ts (=invalid_artifact_uri=, write-guard failures, kernel diagnostics).

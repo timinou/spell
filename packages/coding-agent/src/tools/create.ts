@@ -14,7 +14,7 @@ import type { CreateParams } from "./codepath-types";
 import { createSchema } from "./codepath-types";
 import { evaluateWriteGuards } from "./managed-buffer-guards";
 import { enforceModeWrite } from "./mode-guard";
-import { detectCwdPrefixDuplication, formatCwdPrefixDuplicationMessage } from "./path-resolution";
+import { resolveCwdRelativePath } from "./path-resolution";
 import { replaceTabs } from "./render-utils";
 import { type DetailsWithMeta, toolResult } from "./tool-result";
 
@@ -47,20 +47,22 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 		// cwd-prefix duplication guard: catches the silent-nesting bug where the
 		// agent passes a path containing the cwd's tail segments (e.g. cwd
 		// `/proj/apps/foo` + path `apps/foo/lib/x.ts` → would resolve to
-		// `/proj/apps/foo/apps/foo/lib/x.ts`). Without this, `path.resolve`
-		// happily double-prefixes and the success message echoes the input
-		// verbatim, leaving the agent no feedback signal to self-correct.
-		const duplication = detectCwdPrefixDuplication(sessionCwd, params.path);
-		if (duplication) {
-			return toolResult<CreateToolResultDetails>({
+		// `/proj/apps/foo/apps/foo/lib/x.ts`). resolveCwdRelativePath auto-coalesces
+		// when on-disk evidence supports the bug-pattern interpretation, and emits
+		// a warning we surface in the success text. Legit nested dirs are kept.
+		// Degenerate (path == cwd-tail) is the only hard-reject case.
+		const resolved = resolveCwdRelativePath(sessionCwd, params.path, { mode: "file" });
+		if (resolved.decision === "degenerate") {
+			const r = toolResult<CreateToolResultDetails>({
 				path: params.path,
 				error: "cwd_prefix_duplication",
 			})
-				.text(formatCwdPrefixDuplicationMessage(params.path, sessionCwd, duplication))
+				.text(resolved.warning ?? "cwd_prefix_duplication")
 				.done();
+			r.isError = true;
+			return r;
 		}
-
-		const resolvedPath = path.isAbsolute(params.path) ? params.path : path.resolve(sessionCwd, params.path);
+		const resolvedPath = resolved.path;
 
 		// Mode + sandbox guards (throw on violation, mirroring edit.ts).
 		enforceModeWrite(this.session, resolvedPath, { op: "create" });
@@ -134,8 +136,11 @@ export class CreateTool implements AgentTool<typeof createSchema> {
 		// duplication guard ever misses, the agent sees on the next turn where
 		// the file actually landed and can self-correct on the next write.
 		const relFromCwd = path.relative(sessionCwd, resolvedPath) || params.path;
+		// Surface the duplication-coalesce warning so the agent self-corrects on the
+		// next call. Without this signal, the bug pattern would recur indefinitely.
+		const dupNote = resolved.warning ? `\n   ⚠ ${resolved.warning}` : "";
 		return toolResult<CreateToolResultDetails>({ path: params.path, created: true, bytes: stat.size })
-			.text(`Created ${relFromCwd} (${stat.size} bytes)\n   → ${resolvedPath}`)
+			.text(`Created ${relFromCwd} (${stat.size} bytes)\n   → ${resolvedPath}${dupNote}`)
 			.done();
 	}
 

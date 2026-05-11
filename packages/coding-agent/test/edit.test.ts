@@ -548,7 +548,7 @@ describe("cwd-prefix duplication guard", () => {
 		await fs.rm(tmpDir, { recursive: true }).catch(() => {});
 	});
 
-	it("rejects relative target that duplicates cwd tail without touching fs", async () => {
+	it("auto-coalesces relative target that duplicates cwd tail (bug pattern)", async () => {
 		const nested = path.join(tmpDir, "apps", "hotelcomm");
 		await fs.mkdir(nested, { recursive: true });
 		const tool = new CodepathEditTool({
@@ -567,9 +567,11 @@ describe("cwd-prefix duplication guard", () => {
 			],
 		});
 		const text = result.content.find(c => c.type === "text")?.text ?? "";
-		expect(text).toContain("cwd prefix");
+		// Warning text surfaced from the coalesce decision.
+		expect(text).toContain("auto-stripped");
 		expect(text).toContain("apps/hotelcomm");
-		// File at the doubled location must not exist.
+		// File written at the coalesced (correct) location, NOT the doubled one.
 		expect(await fs.exists(path.join(nested, "apps", "hotelcomm", "lib", "foo.ex"))).toBe(false);
+		expect(await fs.exists(path.join(nested, "lib", "foo.ex"))).toBe(true);
 	});
 });

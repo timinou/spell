@@ -1,0 +1,52 @@
+#+TITLE: cwd-prefix duplication hard-rejects when auto-coalesce matches dispatch reality
+#+STATE: DONE
+#+SESSION_ID: 14dc5b33ab1d8adb
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-27-21-772Z_14dc5b33ab1d8adb.jsonl]]
+#+CUSTOM_ID: BUG-360-cwd-prefix-duplication-hard-rejects-when
+#+EFFORT: 1h
+#+LAYER: coding-agent
+
+* Initial Message
+
+Read proxy_create_nested_path_bug.md -> your fixes weren't enough. find the true root causes, explain them, file BUGs, then fix
+
+* Initial Message
+
+BUG-358 shipped a hard-reject guard. =proxy_create_nested_path_bug.md= explicitly recommends going further:
+
+#+begin_quote
+*Better still*: emit a warning + auto-coalesce (strip the prefix) for the common case where the agent meant a monorepo-root path. Agents will keep doing this because their dispatch contexts naturally reference monorepo-root paths.
+#+end_quote
+
+* Why hard-reject is wrong here
+
+1. Dispatch contexts (task tool =assignment=, plan body, AGENTS.md) phrase work in *monorepo-root paths*. The session cwd is one level deeper. The agent faithfully passes what's in its context.
+2. Hard-reject burns a turn: agent receives diagnostic, retries with the stripped path. Net: 2x latency + 2x tokens for an entirely-correctable input.
+3. The bug doc says agents hit this *6+ times across ~10 days*. Even with a clean rejection, the agent has to re-call. The right tool behaviour is to do the right thing on the *first* call and *teach* via a warning.
+
+* Disambiguation
+
+Auto-coalesce should preserve legitimate nested directories. The disambiguator is *parent-directory existence on disk*:
+
+| nested parent exists? | stripped parent exists? | action |
+|---|---|---|
+| yes | -- | use nested (legit; no coalesce); silent or info note |
+| no | yes | *coalesce*; warn loudly |
+| no | no | coalesce (best guess; this is the bug case); warn loudly |
+
+* Behaviour
+
+- =create.ts=: always pre-resolve via this logic before mode/sandbox/exists checks.
+- =edit.ts=: same; for non-=create= ops, the disambiguator is *target-file existence*, not just dir existence (modifying a file requires it to exist).
+- Result text shows both the supplied path AND the resolved absolute path on a second line so the agent sees what happened.
+
+* Acceptance
+
+After the fix:
+
+#+begin_src
+cwd = /tmp/repro/apps/hotelcomm   # apps/hotelcomm/ exists; apps/hotelcomm/apps/ does NOT
+proxy_create { path: "apps/hotelcomm/lib/foo.ex", content: "hi" }
+→ Creates /tmp/repro/apps/hotelcomm/lib/foo.ex
+→ Returns isError=undefined, text includes warning about auto-coalesce + resolved path
+#+end_src

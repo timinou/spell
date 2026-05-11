@@ -83,3 +83,130 @@ export function formatCwdPrefixDuplicationMessage(
 		`Paths resolve from cwd, not from project / git root.`
 	);
 }
+
+/**
+ * Decision taken by `resolveCwdRelativePath`.
+ *
+ * - `no-overlap`: no duplication detected; path resolved against cwd as-is.
+ * - `kept-nested`: duplication detected, but on-disk evidence (nested parent
+ *   or nested file exists) suggests the caller meant the literal nested path;
+ *   we keep it and emit an info-level warning.
+ * - `coalesced`: duplication detected, on-disk evidence is consistent with the
+ *   bug pattern (nested parent / file does not exist, stripped sibling does or
+ *   neither exists); we strip the duplicated prefix and emit a strong warning.
+ * - `degenerate`: the entire path equals the duplicated prefix (e.g. cwd ends
+ *   with `apps/foo` and path is `apps/foo`); coalescing would leave an empty
+ *   target. Callers must reject.
+ */
+export type CwdResolutionDecision = "no-overlap" | "kept-nested" | "coalesced" | "degenerate";
+
+export interface ResolvedCwdRelativePath {
+	/** Final absolute path the caller should use. Empty when degenerate. */
+	path: string;
+	/** Cwd-relative path corresponding to `path` (for echoing back to agent). */
+	relative: string;
+	decision: CwdResolutionDecision;
+	/** Present when `decision !== "no-overlap"` — the original duplication descriptor. */
+	dup?: CwdPrefixDuplication;
+	/** Human-readable warning when coalescing or kept-nested; null for `no-overlap` and `degenerate`. */
+	warning: string | null;
+}
+
+export interface ResolveCwdRelativePathOptions {
+	/** "file" (default): existence check looks at the target file OR its parent dir. "dir": only parent dir. Used by edit on non-create ops where the target file must exist. */
+	mode?: "file" | "dir";
+	/**
+	 * Injected fs-exists predicate (for tests). Defaults to node:fs sync exists.
+	 * Sync because tool entry points are already async and a single sync stat
+	 * is cheaper than threading an awaited helper through the guard.
+	 */
+	exists?: (p: string) => boolean;
+}
+
+/**
+ * Single source of truth for the BUG-358/360 cwd-prefix duplication decision.
+ * Combines detection, on-disk disambiguation, and message formatting.
+ *
+ * Callers that previously used `path.isAbsolute(p) ? p : path.resolve(cwd, p)`
+ * with naive semantics should switch to this helper, surface the returned
+ * `warning` in their tool result text, and use `resolved.path` for fs work.
+ */
+export function resolveCwdRelativePath(
+	cwd: string,
+	suppliedPath: string,
+	options: ResolveCwdRelativePathOptions = {},
+): ResolvedCwdRelativePath {
+	// Absolute / dot-anchored paths skip the guard entirely.
+	if (path.isAbsolute(suppliedPath) || suppliedPath.startsWith(".")) {
+		const abs = path.isAbsolute(suppliedPath) ? suppliedPath : path.resolve(cwd, suppliedPath);
+		return {
+			path: abs,
+			relative: path.relative(cwd, abs) || suppliedPath,
+			decision: "no-overlap",
+			warning: null,
+		};
+	}
+
+	const dup = detectCwdPrefixDuplication(cwd, suppliedPath);
+	if (!dup) {
+		const abs = path.resolve(cwd, suppliedPath);
+		return { path: abs, relative: suppliedPath, decision: "no-overlap", warning: null };
+	}
+
+	// Degenerate: path equals the duplicated prefix; strip leaves nothing.
+	if (!dup.strippedPath) {
+		return {
+			path: "",
+			relative: suppliedPath,
+			decision: "degenerate",
+			dup,
+			warning: `Path "${suppliedPath}" equals the cwd-tail prefix "${dup.duplicatedPrefix}"; cannot resolve to a valid target.`,
+		};
+	}
+
+	const nested = path.resolve(cwd, suppliedPath);
+	const stripped = path.resolve(cwd, dup.strippedPath);
+	const exists = options.exists ?? defaultExists;
+	const mode = options.mode ?? "file";
+
+	// Disambiguation: prefer literal-nested interpretation only when on-disk
+	// evidence supports it (the nested target itself, or its parent dir, exists).
+	const nestedEvidence =
+		mode === "file" ? exists(nested) || exists(path.dirname(nested)) : exists(path.dirname(nested));
+	if (nestedEvidence) {
+		const evidencePath = mode === "file" && exists(nested) ? nested : path.dirname(nested);
+		return {
+			path: nested,
+			relative: suppliedPath,
+			decision: "kept-nested",
+			dup,
+			warning:
+				`Path "${suppliedPath}" overlaps cwd-tail "${dup.duplicatedPrefix}". ` +
+				`Kept literal interpretation because "${path.relative(cwd, evidencePath)}" exists on disk; ` +
+				`if you meant the cwd-relative path, pass "${dup.strippedPath}".`,
+		};
+	}
+
+	// No nested evidence → coalesce. This is the bug pattern.
+	return {
+		path: stripped,
+		relative: dup.strippedPath,
+		decision: "coalesced",
+		dup,
+		warning:
+			`Path "${suppliedPath}" included cwd-tail prefix "${dup.duplicatedPrefix}" — ` +
+			`auto-stripped to "${dup.strippedPath}". ` +
+			`Tool paths resolve from cwd (${cwd}), not from project / git root. ` +
+			`Pass "${dup.strippedPath}" next time to avoid this warning.`,
+	};
+}
+
+// Lazy fs import to keep the pure detector cheap to import in non-fs contexts.
+let _existsSync: ((p: string) => boolean) | null = null;
+function defaultExists(p: string): boolean {
+	if (!_existsSync) {
+		const fs = require("node:fs") as typeof import("node:fs");
+		_existsSync = (q: string) => fs.existsSync(q);
+	}
+	return _existsSync(p);
+}
