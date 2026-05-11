@@ -1,5 +1,5 @@
 #+TITLE: Spell remote — needs-input feed to Telegram (PDF + reply-routing)
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14dc602dbbba509c
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-49-06-414Z_14dc602dbbba509c.jsonl]]
 #+CUSTOM_ID: PROJ-076-spell-remote-needs-input-feed-to-telegra
