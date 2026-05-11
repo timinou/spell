@@ -222,6 +222,7 @@ export function setupSessionNotifications(
 		if (!entry) {
 			return;
 		}
+		await replyRouter?.supersede(sessionId);
 
 		const message = formatBlockingEventNotification(entry, event);
 
@@ -237,14 +238,29 @@ export function setupSessionNotifications(
 			!(entry as any).sessionFile
 		) {
 		for (const chatId of chatIds) {
-			void notificationSender.sendMessage(chatId, message).catch(error => {
+			notificationSender.sendMessage(chatId, message).then(result => {
+				void replyRouter?.register(result.messageId, {
+					chatId,
+					sessionId,
+					eventId: event.eventId,
+					eventKind: event.kind,
+					sessionTitle: entry.projectName,
+				}).catch(regError => {
+					logger.warn("Failed to register message with reply router", {
+						chatId,
+						sessionId,
+						messageId: result.messageId,
+						error: String(regError),
+					});
+				});
+			}).catch(error => {
 				logger.warn("Failed to send session notification", {
 					chatId,
 					sessionId,
 					eventId: event.eventId,
 					error: String(error),
 				});
-				});
+			});
 	}
 			return;
 		}
@@ -253,14 +269,29 @@ export function setupSessionNotifications(
 		if (!sessionFile) {
 			logger.warn("Session file path not available", { sessionId });
 		for (const chatId of chatIds) {
-			void notificationSender.sendMessage(chatId, message).catch(error => {
+			notificationSender.sendMessage(chatId, message).then(result => {
+				void replyRouter?.register(result.messageId, {
+					chatId,
+					sessionId,
+					eventId: event.eventId,
+					eventKind: event.kind,
+					sessionTitle: entry.projectName,
+				}).catch(regError => {
+					logger.warn("Failed to register message with reply router", {
+						chatId,
+						sessionId,
+						messageId: result.messageId,
+						error: String(regError),
+					});
+				});
+			}).catch(error => {
 				logger.warn("Failed to send session notification", {
 					chatId,
 					sessionId,
 					eventId: event.eventId,
 					error: String(error),
-			});
 				});
+			});
 		}
 			return;
 		}
@@ -290,14 +321,29 @@ export function setupSessionNotifications(
 							message: renderResult.message,
 						});
 		for (const chatId of chatIds) {
-			void notificationSender.sendMessage(chatId, message).catch(error => {
+			notificationSender.sendMessage(chatId, message).then(result => {
+				void replyRouter?.register(result.messageId, {
+					chatId,
+					sessionId,
+					eventId: event.eventId,
+					eventKind: event.kind,
+					sessionTitle: entry.projectName,
+				}).catch(regError => {
+					logger.warn("Failed to register message with reply router", {
+						chatId,
+						sessionId,
+						messageId: result.messageId,
+						error: String(regError),
+					});
+				});
+			}).catch(error => {
 				logger.warn("Failed to send session notification", {
 					chatId,
 					sessionId,
 					eventId: event.eventId,
 					error: String(error),
-								});
-							});
+				});
+			});
 		}
 						continue;
 		}
@@ -315,13 +361,27 @@ export function setupSessionNotifications(
 
 		for (const chatId of chatIds) {
 						try {
-							await notificationSender.sendDocument(chatId, {
+							const docResult = await notificationSender.sendDocument(chatId, {
 								buffer: renderResult.bytes,
 								fileName,
 								mime: renderResult.mime,
 								caption,
 								parseMode: "Markdown" as TelegramParseMode,
 								replyMarkup: message.replyMarkup,
+							});
+							await replyRouter?.register(docResult.messageId, {
+								chatId,
+								sessionId,
+								eventId: event.eventId,
+								eventKind: event.kind,
+								sessionTitle: entry.projectName,
+							}).catch(regError => {
+								logger.warn("Failed to register document with reply router", {
+									chatId,
+									sessionId,
+									messageId: docResult.messageId,
+									error: String(regError),
+								});
 							});
 						} catch (error) {
 							logger.warn("Failed to send document", {
@@ -341,14 +401,29 @@ export function setupSessionNotifications(
 		} catch (error) {
 			logger.warn("Transcript render failed", { sessionId, error: String(error) });
 		for (const chatId of chatIds) {
-			void notificationSender.sendMessage(chatId, message).catch(error => {
+			notificationSender.sendMessage(chatId, message).then(result => {
+				void replyRouter?.register(result.messageId, {
+					chatId,
+					sessionId,
+					eventId: event.eventId,
+					eventKind: event.kind,
+					sessionTitle: entry.projectName,
+				}).catch(regError => {
+					logger.warn("Failed to register message with reply router", {
+						chatId,
+						sessionId,
+						messageId: result.messageId,
+						error: String(regError),
+					});
+				});
+			}).catch(error => {
 				logger.warn("Failed to send session notification", {
 					chatId,
 					sessionId,
 					eventId: event.eventId,
 					error: String(error),
-					});
 				});
+			});
 			}
 		}
 	};
