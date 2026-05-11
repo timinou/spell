@@ -1,3 +1,5 @@
+import * as os from "node:os";
+import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
 import { Bot } from "grammy";
 import { TelegramNotificationSender } from "../hooks/notification-sender";
@@ -10,6 +12,7 @@ import { TokenStore } from "./bot/tokens";
 import { type CommandContext, registerCommands } from "./commands";
 import { startLogViewer } from "./log-viewer/server";
 import { ProcessManager } from "./process-manager";
+import { ReplyRouter } from "./reply-router";
 import { setupSessionNotifications } from "./session-notifications";
 import { RendererExecutor } from "./renderer";
 import type { TelegramBridgeConfig } from "./types";
@@ -33,6 +36,7 @@ interface TelegramBotServiceDependencies {
  */
 export class TelegramBotService {
 	#config: TelegramBridgeConfig;
+	#replyRouter: ReplyRouter | null = null;
 	#processManager: ProcessManager;
 	#tokenStore: TokenStore;
 	#bot: TelegramBot | null = null;
@@ -65,6 +69,16 @@ export class TelegramBotService {
 		try {
 			await this.#processManager.loadState();
 			await this.#tokenStore.load();
+
+		// Initialize reply router if enabled
+		if (this.#config.sessionNotifications?.replyRouting) {
+			this.#replyRouter = new ReplyRouter({
+				persistencePath: path.join(
+require("os").homedir(), ".spell", "telegram-reply-map.json"),
+				ttlMs: this.#config.sessionNotifications.replyTtlMs ?? 24 * 60 * 60 * 1000,
+			});
+			await this.#replyRouter.load();
+		}
 
 			const bot = this.#createBot(this.#config.botToken);
 
@@ -131,7 +145,8 @@ export class TelegramBotService {
 					this.#sessionRegistry,
 					sessionSender,
 					this.#config,
-				rendererExecutor,
+					rendererExecutor,
+					this.#replyRouter ?? undefined,
 				);
 				}
 			bot.use(createCommandRouter(this.#tokenStore, botUsername, cmdCtx));
@@ -205,6 +220,11 @@ export class TelegramBotService {
 		if (this.#logViewerServer) {
 			this.#logViewerServer.stop();
 			this.#logViewerServer = null;
+		}
+
+				if (this.#replyRouter) {
+			this.#replyRouter.dispose();
+			this.#replyRouter = null;
 		}
 
 		await Promise.allSettled([

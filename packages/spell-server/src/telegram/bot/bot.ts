@@ -300,3 +300,71 @@ export async function startBot(
 		unregisterHandlers();
 	}
 }
+
+// Reply router middleware - added to route Telegram replies back to pending events
+export function createReplyRouterMiddleware(
+	replyRouter: any, // ReplyRouter type
+	registry: any, // SocketSessionRegistry type
+	telegramConfig: any, // TelegramChannelConfig type
+): MiddlewareFn<AuthContext> {
+	return async (ctx, next) => {
+		const message = ctx.message;
+		if (!message || message.message_id === undefined) {
+			await next();
+			return;
+		}
+
+		// Check if this is a reply to another message
+		const orig = "reply_to_message" in message ? message.reply_to_message : null;
+		if (!orig) {
+			await next();
+			return;
+		}
+
+		try {
+			// Look up the pending reply mapping
+			const pending = await replyRouter.lookup(orig.message_id);
+			if (!pending) {
+				// Not bound to a session, continue processing
+				await next();
+				return;
+			}
+
+			// Check if mapping is stale
+			if (pending.stale) {
+				await ctx.reply("That session has moved on; the question is no longer pending.");
+				return;
+			}
+
+			// Verify auth
+			const userId = ctx.from?.id;
+			if (!userId || !telegramConfig.users[String(userId)]) {
+				logger.warn("reply-router: unauthorized reply", { userId, chatId: ctx.chat.id });
+				return;
+			}
+
+			// Extract reply text
+			const replyText = "text" in message ? message.text : "";
+			if (!replyText) {
+				await ctx.reply("Reply must contain text.");
+				return;
+			}
+
+			// Resolve the event via registry
+			registry.resolveEvent(pending.sessionId, pending.eventId, {
+				type: "event_response",
+				kind: "hook_input", // Free-form reply uses hook_input pattern
+				eventId: pending.eventId,
+				value: replyText,
+			});
+
+			await ctx.reply(`✓ delivered to your session`, { 
+				reply_parameters: { message_id: ctx.message?.message_id } 
+			});
+		} catch (error) {
+			logger.error("Reply router middleware error", { error: String(error) });
+			// Don't disrupt normal message processing on error
+			await next();
+		}
+	};
+}

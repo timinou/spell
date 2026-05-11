@@ -13,6 +13,7 @@ import type {
 	HookSelectorBlockingEventPayload,
 	PlanApprovalBlockingEventPayload,
 } from "../socket/types";
+import type { ReplyRouter } from "./reply-router";
 import { escapeForTelegram, type TelegramParseMode as EscapedTelegramParseMode } from "./escape";
 
 const CALLBACK_PREFIX = "se:";
@@ -191,6 +192,7 @@ export function setupSessionNotifications(
 	notificationSender: NotificationSender,
 	config: TelegramChannelConfig,
 	rendererExecutor?: RendererExecutor,
+	replyRouter?: ReplyRouter,
 ): () => void {
 	const notificationConfig = config.sessionNotifications;
 	if (!notificationConfig) {
