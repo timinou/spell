@@ -1623,7 +1623,7 @@ fn elixir_profile() -> LanguageProfile {
 		all_types: gd.all_types,
 		supertypes: gd.supertypes,
 		ts_language: tree_sitter_elixir::LANGUAGE.into(),
-		dialect: None,
+		dialect: Some(pi_code_path::dialects::elixir_dialect()),
 		enclosing_statement_kinds: Vec::new(),
 	}
 }
@@ -1713,6 +1713,15 @@ mod tests {
 		assert!(reg.get(&LanguageId::new("elixir")).is_some());
 		assert!(reg.get(&LanguageId::new("org")).is_some());
 		assert!(reg.get(&LanguageId::new("haskell")).is_none());
+	}
+
+	#[test]
+	fn elixir_profile_has_dialect() {
+		let reg = LanguageRegistry::with_builtins().expect("builtins should load");
+		let profile = reg
+			.get(&LanguageId::new("elixir"))
+			.expect("elixir registered");
+		assert!(profile.dialect.is_some(), "elixir profile must have a code dialect wired");
 	}
 
 	#[test]

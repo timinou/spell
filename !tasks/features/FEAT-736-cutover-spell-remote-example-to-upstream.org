@@ -1,0 +1,41 @@
+#+TITLE: Cutover spell-remote-example to upstream socket
+#+STATE: ITEM
+#+SESSION_ID: 14dc602dbbba509c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-49-06-414Z_14dc602dbbba509c.jsonl]]
+#+CUSTOM_ID: FEAT-736-cutover-spell-remote-example-to-upstream
+#+DEPENDS: FEAT-reply-router
+#+EFFORT: 3h
+#+LAYER: spell-remote-example
+#+PRIORITY: #B
+
+* Initial Message
+
+tell me how I would add a feature to the spell server so that, whenever a session in the repo turns into needs input, it sends me what the agent wrote (summary in the message, PDF of the full chat using typst + cmarker typst extension, operated through a kdl config line that assumes the markdown is in the stdin of the shell command passed, unless you have a better design [pushback encouraged])
+
+To answer, I need to cite that message and answer, or specifically answer to that message, whatever is most delightful for a telegram bot where I may have several pending 'next steps' messages.
+
+Tell me what the feature needs, how you'll change the kdl config, then make a folder in ../spell-remote-example/, in which you copy the telegram creds and numbers from ../growth (we're reusing the same bot), and put an example of a nice telegram bot that has its own link to my computer through a spell server instance. you are allowed to think of more features to integrate there, and new features to add to spell to enable cool stuff
+
+* Parent
+[[id:PROJ-076-spell-remote-needs-input-feed-to-telegra]]
+
+* Scope
+Once spell-server's reply-router lands, retire the side-channel inbox in
+~/home/user/code/ora/spell-remote-example/~ and document how to enable the
+in-tree path via KDL alone (no separate bot process needed).
+
+* Files
+- ~/home/user/code/ora/spell-remote-example/README.md~ : rewrite the "Run" + "How
+  it composes" sections to point at spell-server config only.
+- ~/home/user/code/ora/spell-remote-example/bot/~ : keep the source as a reference
+  prototype but mark it deprecated in code comments.
+- Add a ~~/.spell/channels.kdl~ exemplar wired to the renderer pipeline at
+  ~render/typst-render.sh~.
+
+* Tests
+- E2E manual: one spell session running, one channels.kdl loaded, reply on phone
+  → session prints the answer. No prototype bot process running.
+
+* Acceptance
+- README accurately reflects the supported path.
+- Side-channel inbox dir deletable without breaking anything.

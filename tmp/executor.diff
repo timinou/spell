@@ -1,0 +1,118 @@
+diff --git a/packages/coding-agent/src/task/executor.ts b/packages/coding-agent/src/task/executor.ts
+index 62fde4e38..647801426 100644
+--- a/packages/coding-agent/src/task/executor.ts
++++ b/packages/coding-agent/src/task/executor.ts
+@@ -309,6 +309,10 @@ export interface SubmitResultItem {
+ 	data?: unknown;
+ 	status?: "success" | "aborted";
+ 	error?: string;
++	/** True when runtime gate verification accepted this submission. Stamped by the executor at extract time. */
++	gateAccepted?: boolean;
++	/** Gate verification failures recorded when gateAccepted === false. */
++	gateFailures?: GateFailure[];
+ }
+ 
+ interface FinalizeSubprocessOutputArgs {
+@@ -437,8 +441,15 @@ export function finalizeSubprocessOutput(args: FinalizeSubprocessOutputArgs): Fi
+ 					const errorMessage = err instanceof Error ? err.message : String(err);
+ 					rawOutput = `{"error":"Failed to serialize submit_result data: ${errorMessage}"}`;
+ 				}
+-				exitCode = 0;
+-				stderr = "";
++				if (lastSubmitResult?.gateAccepted === false) {
++					// BUG-354: keep structuredResult accessible (rawOutput already serialized) but mark
++					// the run as gate-failed via non-zero exitCode and a clear stderr message.
++					if (exitCode === 0) exitCode = 1;
++					stderr = buildMissingVerificationProofMessage(lastSubmitResult.gateFailures ?? []);
++				} else {
++					exitCode = 0;
++					stderr = "";
++				}
+ 			}
+ 		}
+ 	} else {
+@@ -800,6 +811,9 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
+ 	let activeSession: AgentSession | null = null;
+ 	let unsubscribe: (() => void) | null = null;
+ 	let submitResultCalled = false;
++	// BUG-356: latched on submit_result success → blocks the agent loop from issuing further
++	// reminder/retry prompts even when async event ordering races the abort signal.
++	let terminating = false;
+ 	let pendingEventProcessing = Promise.resolve();
+ 	let missingVerificationFailures: GateFailure[] | undefined;
+ 
+@@ -1051,23 +1065,36 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
+ 								acceptSubmitResult = submitResult.status === "success" || submitResult.status === "aborted";
+ 							}
+ 						}
+-						if (extractedData !== undefined && acceptExtractedData) {
+-							progress.extractedToolData = progress.extractedToolData || {};
+-							const existing = progress.extractedToolData[event.toolName] || [];
+-							const findingKey = event.toolName === "report_finding" ? getReportFindingKey(extractedData) : null;
+-							if (findingKey) {
+-								const existingIndex = existing.findIndex(item => getReportFindingKey(item) === findingKey);
+-								if (existingIndex >= 0) {
+-									existing[existingIndex] = extractedData;
++						if (extractedData !== undefined) {
++							if (event.toolName === "submit_result") {
++								// BUG-354: always record submit_result entries; stamp the runtime gate verdict
++								// so finalization can distinguish gate-failed from a successful submission.
++								const submitItem = extractedData as SubmitResultItem;
++								submitItem.gateAccepted = acceptSubmitResult;
++								if (!acceptSubmitResult && missingVerificationFailures) {
++									submitItem.gateFailures = missingVerificationFailures;
++								}
++								progress.extractedToolData = progress.extractedToolData || {};
++								const existing = progress.extractedToolData.submit_result || [];
++								existing.push(submitItem);
++								progress.extractedToolData.submit_result = existing;
++								submitResultCalled = acceptSubmitResult;
++							} else if (acceptExtractedData) {
++								progress.extractedToolData = progress.extractedToolData || {};
++								const existing = progress.extractedToolData[event.toolName] || [];
++								const findingKey =
++									event.toolName === "report_finding" ? getReportFindingKey(extractedData) : null;
++								if (findingKey) {
++									const existingIndex = existing.findIndex(item => getReportFindingKey(item) === findingKey);
++									if (existingIndex >= 0) {
++										existing[existingIndex] = extractedData;
++									} else {
++										existing.push(extractedData);
++									}
+ 								} else {
+ 									existing.push(extractedData);
+ 								}
+-							} else {
+-								existing.push(extractedData);
+-							}
+-							progress.extractedToolData[event.toolName] = existing;
+-							if (event.toolName === "submit_result") {
+-								submitResultCalled = acceptSubmitResult;
++								progress.extractedToolData[event.toolName] = existing;
+ 							}
+ 						}
+ 					}
+@@ -1085,6 +1112,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
+ 						shouldTerminate = false;
+ 					}
+ 					if (shouldTerminate) {
++						terminating = true;
+ 						requestAbort("terminate");
+ 					}
+ 				}
+@@ -1588,6 +1616,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
+ 
+ 				const reminderToolChoice = buildNamedToolChoice("submit_result", session.model);
+ 				if (
++					!terminating &&
+ 					!submitResultCalled &&
+ 					missingVerificationFailures &&
+ 					(!abortSignal.aborted || abortReason === "terminate")
+@@ -1611,6 +1640,7 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
+ 				}
+ 				let retryCount = 0;
+ 				while (
++					!terminating &&
+ 					!submitResultCalled &&
+ 					!missingVerificationFailures &&
+ 					retryCount < MAX_SUBMIT_RESULT_RETRIES &&

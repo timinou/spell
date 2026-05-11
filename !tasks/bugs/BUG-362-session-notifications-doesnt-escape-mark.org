@@ -1,0 +1,46 @@
+#+TITLE: session-notifications doesn't escape Markdown in caption — session titles with * _ ` break parsing
+#+STATE: ITEM
+#+SESSION_ID: 14dc602dbbba509c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-49-06-414Z_14dc602dbbba509c.jsonl]]
+#+CUSTOM_ID: BUG-362-session-notifications-doesnt-escape-mark
+#+DEPENDS: PROJ-076-spell-remote-needs-input-feed-to-telegra
+#+EFFORT: 1h
+#+LAYER: packages/spell-server
+#+PRIORITY: #A
+
+* Initial Message
+
+tell me how I would add a feature to the spell server so that, whenever a session in the repo turns into needs input, it sends me what the agent wrote (summary in the message, PDF of the full chat using typst + cmarker typst extension, operated through a kdl config line that assumes the markdown is in the stdin of the shell command passed, unless you have a better design [pushback encouraged])
+
+To answer, I need to cite that message and answer, or specifically answer to that message, whatever is most delightful for a telegram bot where I may have several pending 'next steps' messages.
+
+Tell me what the feature needs, how you'll change the kdl config, then make a folder in ../spell-remote-example/, in which you copy the telegram creds and numbers from ../growth (we're reusing the same bot), and put an example of a nice telegram bot that has its own link to my computer through a spell server instance. you are allowed to think of more features to integrate there, and new features to add to spell to enable cool stuff
+
+* Parent
+[[id:PROJ-076-spell-remote-needs-input-feed-to-telegra]]
+
+* Reproduction
+In ~packages/spell-server/src/telegram/session-notifications.ts~,
+~formatBlockingEventNotification~ builds caption lines that interpolate session
+titles, project paths, and (for plan_approval) ~planSummary~ without escaping.
+
+Telegram's ~Markdown~ / ~MarkdownV2~ parse modes treat ~* _ ` [~ as formatting
+characters; raw titles containing them either break the message (~"Bad Request:
+can't parse entities"~) or silently mis-render.
+
+* Repro steps
+1. Start a session with title containing an asterisk, e.g. ~"fix the `null` deref *now*"~.
+2. Trigger any ~ask~ / ~plan_approval~ event.
+3. Telegram returns 400 OR message renders with collapsed formatting.
+
+* Expected
+Caption renders the title literally, with special chars escaped per the active parse mode.
+
+* Files
+- ~packages/spell-server/src/telegram/session-notifications.ts~ : add ~escapeForTelegram(parseMode, raw)~ pass on every interpolated field.
+- ~packages/spell-server/src/telegram/bridge/markdown-html.ts~ : reuse if it already handles MarkdownV2 entities; otherwise add a small escape util.
+- ~packages/spell-server/test/telegram/session-notifications.test.ts~ : add a test with adversarial title.
+
+* Acceptance
+- Adversarial title test green.
+- No regression in existing tests.

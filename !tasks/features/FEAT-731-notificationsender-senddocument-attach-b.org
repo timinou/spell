@@ -1,0 +1,63 @@
+#+TITLE: NotificationSender.sendDocument + attach binding in session-notifications
+#+STATE: ITEM
+#+SESSION_ID: 14dc602dbbba509c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-49-06-414Z_14dc602dbbba509c.jsonl]]
+#+CUSTOM_ID: FEAT-731-notificationsender-senddocument-attach-b
+#+DEPENDS: FEAT-renderer-pipeline FEAT-transcript-renderMarkdown
+#+EFFORT: 5h
+#+LAYER: packages/spell-server
+#+PRIORITY: #A
+
+* Initial Message
+
+tell me how I would add a feature to the spell server so that, whenever a session in the repo turns into needs input, it sends me what the agent wrote (summary in the message, PDF of the full chat using typst + cmarker typst extension, operated through a kdl config line that assumes the markdown is in the stdin of the shell command passed, unless you have a better design [pushback encouraged])
+
+To answer, I need to cite that message and answer, or specifically answer to that message, whatever is most delightful for a telegram bot where I may have several pending 'next steps' messages.
+
+Tell me what the feature needs, how you'll change the kdl config, then make a folder in ../spell-remote-example/, in which you copy the telegram creds and numbers from ../growth (we're reusing the same bot), and put an example of a nice telegram bot that has its own link to my computer through a spell server instance. you are allowed to think of more features to integrate there, and new features to add to spell to enable cool stuff
+
+* Parent
+[[id:PROJ-076-spell-remote-needs-input-feed-to-telegra]]
+
+* Scope
+- Add ~sendDocument(chatId, { buffer, fileName, mime, caption, parseMode, replyMarkup }): Promise<{ messageId: number }>~
+  to ~NotificationSender~ (and the noop variant), using grammy ~InputFile~.
+- Add the ~attach renderer="<id>" { transcript "<scope>" on "<event>" … }~ KDL node parse.
+- Wire ~session-notifications.ts~:
+  1. compute caption via existing ~formatBlockingEventNotification~ (or its successor),
+  2. find matching ~attach~ binding for the event kind,
+  3. ~transcriptStore.renderMarkdown(sessionId, { scope })~,
+  4. ~rendererExecutor.render(rendererId, markdown, envMetadata)~,
+  5. ~sender.sendDocument(...)~,
+  6. on render failure → fall back to ~sender.sendMessage(...)~.
+- Return ~messageId~ all the way out so reply-router can store it.
+- Telegram caption escape pass for ~MarkdownV2~ — never inject raw user content unescaped.
+
+* Files
+- ~packages/spell-server/src/hooks/notification-sender.ts~
+- ~packages/spell-server/src/hooks/types.ts~ (any new payload shapes)
+- ~packages/spell-server/src/telegram/session-notifications.ts~
+- ~packages/spell-server/src/config/channels-parser.ts~ (parse ~attach~ node)
+- ~packages/spell-server/test/hooks/notification-sender.test.ts~
+- ~packages/spell-server/test/telegram/session-notifications.test.ts~
+
+* Tests (TDD)
+- ~sendDocument~ POSTs to Telegram with multipart/form-data, includes caption + parse_mode.
+- Returned ~messageId~ matches Telegram's response.
+- ~attach~ binding matches event kind → renderer runs, document sent.
+- ~attach~ has no match for event → text-only message (regression: existing path).
+- Renderer fails → text-only fallback sent, error logged, no crash.
+- ~MarkdownV2~ characters in title (~* _ ` [~) are escaped in caption.
+- Oversize doc (>50MB) → executor returns full bytes but sender returns
+  diagnostic + sends text-only with "PDF too large" notice.
+
+* Edge Cases
+- Caption >1024 chars (Telegram cap) → truncate with ellipsis, full text remains in PDF.
+- Multiple ~attach~ bindings for the same event → first match wins; warn on conflict at boot.
+- No renderers configured but ~attach~ block present → boot diagnostic.
+
+* Acceptance
+- Tests above green.
+- Existing text-only path (no ~attach~ block) unchanged: all current
+  ~session-notifications.test.ts~ assertions pass.
+- ~tsgo -p .~ clean.

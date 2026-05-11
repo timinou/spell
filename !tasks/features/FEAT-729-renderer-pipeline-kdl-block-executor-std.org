@@ -1,0 +1,63 @@
+#+TITLE: Renderer pipeline KDL block + executor (stdin=markdown, stdout=bytes)
+#+STATE: ITEM
+#+SESSION_ID: 14dc602dbbba509c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-49-06-414Z_14dc602dbbba509c.jsonl]]
+#+CUSTOM_ID: FEAT-729-renderer-pipeline-kdl-block-executor-std
+#+DEPENDS: PROJ-076-spell-remote-needs-input-feed-to-telegra
+#+EFFORT: 6h
+#+LAYER: packages/spell-server
+#+PRIORITY: #A
+
+* Initial Message
+
+tell me how I would add a feature to the spell server so that, whenever a session in the repo turns into needs input, it sends me what the agent wrote (summary in the message, PDF of the full chat using typst + cmarker typst extension, operated through a kdl config line that assumes the markdown is in the stdin of the shell command passed, unless you have a better design [pushback encouraged])
+
+To answer, I need to cite that message and answer, or specifically answer to that message, whatever is most delightful for a telegram bot where I may have several pending 'next steps' messages.
+
+Tell me what the feature needs, how you'll change the kdl config, then make a folder in ../spell-remote-example/, in which you copy the telegram creds and numbers from ../growth (we're reusing the same bot), and put an example of a nice telegram bot that has its own link to my computer through a spell server instance. you are allowed to think of more features to integrate there, and new features to add to spell to enable cool stuff
+
+* Parent
+[[id:PROJ-076-spell-remote-needs-input-feed-to-telegra]]
+
+* Scope
+- Add ~renderer "<id>" { … }~ KDL node to ~channels.kdl~ schema (under
+  ~telegram.session-notifications~).
+- Required attrs: ~command~ (string + positional args), ~mime~, ~extension~.
+- Optional attrs: ~timeout-ms~ (default 20000), ~cache-by~ (~"transcript-hash"~ | ~"none"~,
+  default ~"transcript-hash"~).
+- Subprocess executor: stdin = piped markdown, stdout = bytes, stderr captured for diagnostics.
+- Env metadata forwarding: ~SPELL_RENDER_TITLE~, ~SPELL_RENDER_STATUS~, ~SPELL_RENDER_PROJECT~,
+  ~SPELL_RENDER_MESSAGES~, ~SPELL_RENDER_EVENT_KIND~, ~SPELL_RENDER_SESSION_ID~.
+- Hash-based cache keyed on SHA256(markdown ‖ rendererSignature); LRU-N in memory.
+- Circuit-breaker: 3 consecutive failures of the same renderer id → mark stale for
+  60s, fall back to text-only with a log line.
+
+* Files
+- ~packages/spell-server/src/config/types.ts~ : extend ~TelegramChannelConfig.sessionNotifications~
+  with ~renderers: RendererConfig[]~.
+- ~packages/spell-server/src/config/channels-parser.ts~ : parse the new node.
+- ~packages/spell-server/src/telegram/renderer.ts~ (new) : ~RendererExecutor~ class wrapping
+  ~node:child_process.spawn~, mirroring the working prototype at
+  ~/home/user/code/ora/spell-remote-example/bot/render.ts~.
+- ~packages/spell-server/test/config/channels-parser.test.ts~ : parser tests.
+- ~packages/spell-server/test/telegram/renderer.test.ts~ : timeout, success, failure,
+  cache hit, circuit-breaker.
+
+* Tests (TDD)
+- ~renderer~ parses with all attrs.
+- ~renderer~ rejects unknown attrs with diagnostic.
+- subprocess success → resolves with bytes; cache populated.
+- second identical call → cache hit, no subprocess spawn.
+- subprocess hang → SIGKILL after ~timeout-ms~, rejects with TimeoutError.
+- subprocess nonzero exit → rejects with stderr in message.
+- 3 consecutive failures → executor returns ~CircuitOpenError~ for 60s.
+
+* Edge Cases
+- Command not on PATH → ENOENT surfaces with clear "command X not found" error.
+- Output >50MB → executor returns the bytes; size enforcement belongs to the caller (notification-sender).
+- Renderer subprocess writes to stderr but exits 0 → success, stderr logged.
+
+* Acceptance
+- ~bun --cwd packages/spell-server test test/config/channels-parser.test.ts test/telegram/renderer.test.ts~ green.
+- ~bun --cwd packages/spell-server tsgo -p .~ exit 0.
+- No regression in existing channels-parser tests.

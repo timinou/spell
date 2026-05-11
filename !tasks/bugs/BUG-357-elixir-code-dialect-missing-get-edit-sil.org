@@ -1,0 +1,101 @@
+#+TITLE: Elixir code dialect missing — get/edit silently degrade to text on .ex/.exs
+#+STATE: DONE
+#+SESSION_ID: 14db96e70791cf5f
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T09-09-43-071Z_14db96e70791cf5f.jsonl]]
+#+CUSTOM_ID: BUG-357-elixir-code-dialect-missing-get-edit-sil
+#+EFFORT: 2h
+#+LAYER: pi-code-path pi-code-engine
+
+* Initial Message
+
+check and validate the effectiveness of the edit tool for .ex and .exs files please. I am worried because my recent Elixir sessions have beem using Python to modify files
+
+* Initial Message
+
+User reported recent Elixir sessions kept reaching for Python to mutate `.ex`/`.exs` files. Investigation traced the cause: the elixir tree-sitter grammar and `LanguageProfile` exist, but no `LanguageDialect` is wired in, so the code-path resolver falls back to the text dialect.
+
+* Symptom
+
+`get .scratch/elixir/calculator.ex::Calculator.add` returns:
+#+BEGIN_EXAMPLE
+.scratch/elixir/calculator.ex  [§file]
+
+Diagnostics:
+[unsupported_operation] no code dialect for extension ex; falling back to text dialect
+#+END_EXAMPLE
+
+The fallback returns the *whole file* with the dialect diagnostic — visually similar to "no symbol exists", which led prior sessions to abandon the structural path.
+
+`edit … file.ex::Symbol …` (findAndReplace, delete, rename, insertAfter) actually *works* because the engine's edit resolver uses the parser+profile directly. But:
+- `edit file.ex … findAndReplace …` (no `::Symbol` scope) fails with `no resolver supports action FindAndReplace`.
+- `wrap` produces broken `$BODY` substitution on elixir defs.
+- `get … #stat` and `get … ::Symbol` both degrade.
+
+* Root cause
+
+- =crates/pi-code-engine/src/language/mod.rs:1626= sets =dialect: None= in =elixir_profile()=.
+- =crates/pi-code-path/src/dialects/= has no =elixir.rs= module. Spec at =crates/pi-code-path/src/dialects/mod.rs= lists 8 planned dialects (TS, Rust, Python, Go, Haskell, HTML, CSS, MD/Org); Elixir was never on the list.
+- The walker at =crates/pi-natives/src/code_path/code_resolver/walker.rs:60-66= reads =profile.dialect=, errors with the diagnostic, and returns =Err(NoMatches…)= which the upstream coerces to a degraded full-file payload.
+
+* Scope
+
+In scope:
+- New =crates/pi-code-path/src/dialects/elixir.rs= with =ElixirName=, =ElixirNameLexer=, anchor patterns, qualifier specs, and =elixir_dialect()= factory.
+- Re-export from =crates/pi-code-path/src/dialects/mod.rs=.
+- Wire =dialect: Some(elixir_dialect())= at =crates/pi-code-engine/src/language/mod.rs:1626=.
+- Unit tests for the lexer (round-trip, bad input rejection, dialect_factory_populates_registries shape check).
+- Integration test confirming =get file.ex::Module.fn= resolves and =edit file.ex … findAndReplace= no longer errors at file scope.
+
+Out of scope:
+- Clojure, Go, Haskell dialect wiring (same class of bug; tracked separately).
+- Fixing =wrap= =$BODY= substitution semantics for elixir defs (separate edit-engine concern).
+- Fixing the misleading "fall back to file payload" rendering (separate FUP).
+
+* Existing patterns
+
+- Python is the closest model: dotted module paths (=Foo.Bar=), function names. See =crates/pi-code-path/src/dialects/python.rs= (524 lines) — segments + lexer + anchors + qualifiers + factory.
+- Elixir-specific identifier syntax: =Module.Sub.fn= and arity form =Module.fn/2=. Module names are =CamelCase=, function/atom names are =snake_case=. Names can also be quoted atoms (=:"foo bar"=) but the dialect can punt on those for v1.
+- Anchor candidates by tree-sitter elixir node type (=call= with =target=identifier ∈ {defmodule, def, defp, alias, import, require, use}=): "module", "def", "defp", "first-import".
+- Qualifier candidates: =body= (=do_block= field), =sig= (=target= + =arguments=), =name= (=target=), =doc= (preceding =@doc= / =@moduledoc= attribute calls).
+
+* Tests
+
+Workflow 1 (verification of fix):
+- =get .scratch/elixir/calculator.ex::Calculator.add= returns the function body (no degradation diagnostic).
+- =get .scratch/elixir/calculator.ex#stat= returns size/mtime/lineCount.
+- =edit .scratch/elixir/calculator.ex= with file-scoped =findAndReplace= succeeds.
+
+Workflow 2 (lexer round-trip):
+- Parse =Foo.Bar.baz=, =Foo.bar/2=, =baz=, then render → identical string.
+- Reject =Foo..bar=, empty input.
+
+Workflow 3 (dialect factory shape):
+- =elixir_dialect().anchors.len() >= 3=.
+- =elixir_dialect().qualifiers.len() >= 3=.
+
+* Acceptance criteria
+
+- =cargo test -p pi-code-path elixir= passes.
+- =cargo test -p pi-code-engine= passes.
+- =bun run --parallel check:ts check:rs= clean.
+- Manual probe on =.scratch/elixir/calculator.ex= shows no =no code dialect for extension ex= diagnostic on symbol/stat reads.
+
+* Verification
+
+- =cargo test -p pi-code-path=
+- =cargo test -p pi-code-engine=
+- Manual: create =/tmp scratch dir inside repo root with .ex and .exs= files, exercise =get ::Symbol=, =get #stat=, file-scoped =edit findAndReplace=.
+
+* Non-goals
+
+- Do not touch Clojure, Go, or Haskell wiring.
+- Do not redesign =wrap= =$BODY= semantics.
+- Do not change how the resolver renders dialect-fallback diagnostics.
+
+* Related
+
+- Reference impl: =crates/pi-code-path/src/dialects/python.rs=.
+- Engine wiring site: =crates/pi-code-engine/src/language/mod.rs:1535-1626= (=elixir_profile=).
+- Walker fallback site: =crates/pi-natives/src/code_path/code_resolver/walker.rs:60=.
+
+NOTE [2026-05-10]: Implemented `crates/pi-code-path/src/dialects/elixir.rs` (429 LOC, 10 unit tests). Wired `dialect: Some(elixir_dialect())` at `crates/pi-code-engine/src/language/mod.rs:1626`. Added 2 e2e resolver tests in `crates/pi-natives/src/code_path/code_resolver/walker.rs` (`elixir_top_level_def`, `elixir_exs_defp_resolves`) — both green. Tests: pi-code-path 346/0, pi-code-engine 191/12/11/0, pi-natives elixir 4/0. elixir.rs is clippy-clean. NB: runtime probe via the `get` tool will only pick up the fix after the agent host reloads the rebuilt `pi_natives.node` (next session start). Pre-existing baseline issues NOT addressed: 119 clippy warnings in pi-code-path, `memory_uri_scheme_returns_memory_node` failure in pi-natives — orthogonal to this bug.

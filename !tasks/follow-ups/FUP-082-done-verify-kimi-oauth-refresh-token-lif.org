@@ -1,0 +1,14 @@
+#+TITLE: DONE: Verify Kimi OAuth refresh token lifetime
+#+STATE: DONE
+#+SESSION_ID: 14d7a534a913af78
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-07T07-38-17-124Z_14d7a534a913af78.jsonl]]
+#+CUSTOM_ID: FUP-082-done-verify-kimi-oauth-refresh-token-lif
+
+* Initial Message
+
+dude why does my Anthropic and Kimi logins get invalid every 12 hours it seems?
+
+Verified: Kimi OAuth is healthy (23 days alive, no disabled rows).
+No scope parameters exist for Kimi device flow; server controls lifetime.
+Covered by same error handling fix in 28a5b9408.
+No further action needed.

@@ -4,6 +4,7 @@ import { isEnoent, logger } from "@oh-my-pi/pi-utils";
 import { resolveEnvString } from "./env-resolver";
 import type {
 	ChannelsConfig,
+	AttachConfig,
 	SessionNotificationRendererConfig,
 	SttConfig,
 	SttProvider,
@@ -403,6 +404,70 @@ function parseRendererNode(
 	};
 }
 
+function parseAttachNode(
+	node: Node,
+	context: string,
+): AttachConfig {
+	const rendererIdAttr = node.getProperty('renderer');
+	if (typeof rendererIdAttr !== 'string' || rendererIdAttr.length === 0) {
+		throw new Error(`${context}: attach must have a renderer="<id>" named attribute`);
+	}
+	const rendererId = rendererIdAttr;
+
+	let transcript: 'full' | 'last-turn' | { kind: 'last-n'; n: number } = 'full';
+	let on: string[] = [];
+
+	for (const child of node.children?.nodes ?? []) {
+		const name = child.getName();
+
+		if (name === 'transcript') {
+			const arg = child.getArgument(0);
+			if (typeof arg === 'string') {
+				if (arg === 'full' || arg === 'last-turn') {
+					transcript = arg;
+				} else {
+					throw new Error(`${context}.transcript must be 'full', 'last-turn', or a last-n node`);
+				}
+				continue;
+			}
+			// Check if it's a nested last-n node
+			if (child.children?.nodes && child.children.nodes.length > 0) {
+				// This shouldn't happen in KDL; throw error
+				throw new Error(`${context}.transcript: unexpected structure`);
+			}
+			continue;
+		}
+
+		if (name === 'last-n') {
+			const arg = child.getArgument(0);
+			if (typeof arg !== 'number' || !Number.isFinite(arg) || arg <= 0) {
+				throw new Error(`${context}.last-n must have a positive integer argument`);
+			}
+			transcript = { kind: 'last-n', n: arg };
+			continue;
+		}
+
+		if (name === 'on') {
+			const values = child.getArguments();
+			if (!values.every(v => typeof v === 'string')) {
+				throw new Error(`${context}.on must contain only string event kinds`);
+			}
+			on = values as string[];
+			for (const eventKind of on) {
+				if (!SESSION_NOTIFICATION_EVENT_KINDS.has(eventKind)) {
+					logger.warn('Ignoring unknown event kind in attach', {
+						eventKind,
+						context,
+					});
+				}
+			}
+			continue;
+		}
+	}
+
+	return { rendererId, transcript, on };
+}
+
 function parseSessionNotificationsNode(
 	node: Node,
 	context = "channels.telegram.session-notifications",
@@ -411,6 +476,7 @@ function parseSessionNotificationsNode(
 	let notifyOwners = true;
 	const additionalChatIds: number[] = [];
 	const renderers: SessionNotificationRendererConfig[] = [];
+	const attaches: AttachConfig[] = [];
 	const rendererIds = new Set<string>();
 
 	for (const child of node.children?.nodes ?? []) {
@@ -461,9 +527,28 @@ function parseSessionNotificationsNode(
 			renderers.push(renderer);
 			continue;
 		}
+		if (name === 'attach') {
+			const attach = parseAttachNode(child, context);
+			attaches.push(attach);
+			continue;
+		}
 	}
 
-	return { events, notifyOwners, additionalChatIds, renderers };
+	// Validate that all attach rendererId references exist
+	for (const attach of attaches) {
+		if (!rendererIds.has(attach.rendererId)) {
+			throw new Error(`${context}: attach references unknown renderer "${attach.rendererId}"`);
+		}
+		// Filter out unknown event kinds from on array
+		attach.on = attach.on.filter(eventKind => {
+			if (!SESSION_NOTIFICATION_EVENT_KINDS.has(eventKind)) {
+				return false;
+			}
+			return true;
+		});
+	}
+
+	return { events, notifyOwners, additionalChatIds, renderers, attaches };
 }
 
 const VALID_STT_PROVIDERS = new Set(["deepgram", "openai"]);

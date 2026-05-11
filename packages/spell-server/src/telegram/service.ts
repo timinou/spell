@@ -11,6 +11,7 @@ import { type CommandContext, registerCommands } from "./commands";
 import { startLogViewer } from "./log-viewer/server";
 import { ProcessManager } from "./process-manager";
 import { setupSessionNotifications } from "./session-notifications";
+import { RendererExecutor } from "./renderer";
 import type { TelegramBridgeConfig } from "./types";
 import { createSttProvider, createTtsProvider, type SttProvider, type TtsProvider } from "./voice";
 
@@ -105,14 +106,34 @@ export class TelegramBotService {
 				const sessionChatIds = new Set(this.#config.owners);
 				for (const id of this.#config.sessionNotifications.additionalChatIds) {
 					sessionChatIds.add(id);
-				}
+			}
 				const sessionSender = new TelegramNotificationSender(this.#config.botToken, sessionChatIds);
+
+			// Create RendererExecutor for rendering transcripts
+			let rendererExecutor: RendererExecutor | undefined;
+			if (this.#config.sessionNotifications.renderers.length > 0) {
+				const renderers = this.#config.sessionNotifications.renderers.map(r => ({
+					id: r.id,
+					command: r.command,
+					args: r.args,
+					timeoutMs: r.timeoutMs,
+					cacheBy: r.cacheBy === 'none' ? undefined : r.cacheBy,
+					mime: r.mime,
+					extension: r.extension,
+				}));
+				rendererExecutor = new RendererExecutor({
+					renderers,
+					cwd: process.cwd(),
+				});
+			}
+
 				this.#cleanupSessionNotifications = setupSessionNotifications(
 					this.#sessionRegistry,
 					sessionSender,
 					this.#config,
+				rendererExecutor,
 				);
-			}
+				}
 			bot.use(createCommandRouter(this.#tokenStore, botUsername, cmdCtx));
 			bot.use(createMessageHandler(cmdCtx));
 

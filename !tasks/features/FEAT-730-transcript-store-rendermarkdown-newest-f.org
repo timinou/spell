@@ -1,0 +1,59 @@
+#+TITLE: Transcript-store renderMarkdown (newest-first, scope-aware)
+#+STATE: ITEM
+#+SESSION_ID: 14dc602dbbba509c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-49-06-414Z_14dc602dbbba509c.jsonl]]
+#+CUSTOM_ID: FEAT-730-transcript-store-rendermarkdown-newest-f
+#+DEPENDS: PROJ-076-spell-remote-needs-input-feed-to-telegra
+#+EFFORT: 4h
+#+LAYER: packages/spell-server
+#+PRIORITY: #A
+
+* Initial Message
+
+tell me how I would add a feature to the spell server so that, whenever a session in the repo turns into needs input, it sends me what the agent wrote (summary in the message, PDF of the full chat using typst + cmarker typst extension, operated through a kdl config line that assumes the markdown is in the stdin of the shell command passed, unless you have a better design [pushback encouraged])
+
+To answer, I need to cite that message and answer, or specifically answer to that message, whatever is most delightful for a telegram bot where I may have several pending 'next steps' messages.
+
+Tell me what the feature needs, how you'll change the kdl config, then make a folder in ../spell-remote-example/, in which you copy the telegram creds and numbers from ../growth (we're reusing the same bot), and put an example of a nice telegram bot that has its own link to my computer through a spell server instance. you are allowed to think of more features to integrate there, and new features to add to spell to enable cool stuff
+
+* Parent
+[[id:PROJ-076-spell-remote-needs-input-feed-to-telegra]]
+
+* Scope
+- Extend ~packages/spell-server/src/telegram/transcript-store.ts~ with
+  ~renderMarkdown(sessionId: string, opts: { scope, attachToolCalls?, maxToolBytes? }): Promise<RenderedTranscript>~.
+- ~scope: "full" | "last-turn" | { kind: "last-n", n: number }~.
+- *Newest-first ordering* — most recent exchange at the top, matches the
+  prototype's ~bot/transcript.ts~.
+- Sequence badges: each rendered turn carries ~#N~ (1 = oldest in time); the topmost
+  rendered turn additionally carries the ~— latest~ tag.
+- Block kinds rendered: ~text~, ~toolCall~ (intent + clipped JSON args), ~toolResult~
+  (clipped string).
+- Token-budget guard: if rendered markdown exceeds ~maxBytes~ (default 64KB), shrink
+  by clipping tool bodies first, then ~toolResult~ bodies, then fall back to last-N.
+
+* Files
+- ~packages/spell-server/src/telegram/transcript-store.ts~ (extend)
+- ~packages/spell-server/test/telegram/transcript-store.test.ts~ (extend)
+- New fixture: ~packages/spell-server/test/telegram/fixtures/sample-session.jsonl~ —
+  trimmed real-world session log, ~30 messages.
+
+* Tests (TDD)
+- Newest-first ordering: first ~##~ heading in output corresponds to last message
+  in input JSONL.
+- ~scope: "last-turn"~ returns exactly the last assistant turn + preceding user turn.
+- ~scope: "last-n", n: 5~ returns 5 messages newest-first.
+- ~toolCall~ blocks: intent comment + JSON args under fenced ~json~ block.
+- ~toolResult~ blocks: clipped to 800 chars by default; clip marker present.
+- Empty session JSONL → returns ~{ markdown: "", lastAssistantText: "", messageCount: 0 }~.
+- Token-budget shrinkage: oversized session → markdown shrinks under budget.
+
+* Edge Cases
+- Malformed JSONL lines (mid-write) → skipped silently, log warn count.
+- Non-message records (heartbeat, log entries) → ignored.
+- ~content~ as bare string (legacy) → treated as single text block.
+
+* Acceptance
+- ~bun --cwd packages/spell-server test test/telegram/transcript-store.test.ts~ green.
+- Renders the same logical content as the prototype renderer
+  (~/home/user/code/ora/spell-remote-example/bot/transcript.ts~) on the same fixture.

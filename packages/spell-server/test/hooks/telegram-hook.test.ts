@@ -20,13 +20,22 @@ const BASE_CONTEXT: HookContext = {
 class RecordingSender {
 	calls: Array<{ chatId: number; message: TelegramMessage }> = [];
 
-	async sendMessage(chatId: number, message: TelegramMessage): Promise<void> {
+	async sendMessage(chatId: number, message: TelegramMessage): Promise<{ messageId: number }> {
 		this.calls.push({ chatId, message });
+		return { messageId: 0 };
+	}
+
+	async sendDocument(): Promise<{ messageId: number }> {
+		return { messageId: 0 };
 	}
 }
 
 class FailingSender {
-	async sendMessage(): Promise<void> {
+	async sendMessage(): Promise<{ messageId: number }> {
+		throw new Error("telegram offline");
+	}
+
+	async sendDocument(): Promise<{ messageId: number }> {
 		throw new Error("telegram offline");
 	}
 }

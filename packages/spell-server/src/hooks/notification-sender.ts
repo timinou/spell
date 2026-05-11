@@ -1,15 +1,26 @@
 import { logger } from "@oh-my-pi/pi-utils";
+import { InputFile } from "grammy";
 import type { ChannelsConfig } from "../config/types";
+import { enforceCaptionBudget } from "../telegram/caption-budget";
 import type {
 	TelegramInlineKeyboardButton,
 	TelegramInlineKeyboardMarkup,
 	TelegramLinkPreviewOptions,
+	TelegramParseMode,
 	TelegramMessage,
 	TelegramMessagePayload,
 } from "./types";
 
 export interface NotificationSender {
-	sendMessage(chatId: number, message: TelegramMessage): Promise<void>;
+	sendMessage(chatId: number, message: TelegramMessage): Promise<{ messageId: number }>;
+	sendDocument(chatId: number, doc: {
+		buffer: Buffer;
+		fileName: string;
+		mime: string;
+		caption?: string;
+		parseMode?: TelegramParseMode;
+		replyMarkup?: TelegramInlineKeyboardMarkup;
+	}): Promise<{ messageId: number }>;
 }
 
 export interface TelegramNotificationSenderOptions {
@@ -83,8 +94,24 @@ function toRequestBody(chatId: number, message: TelegramMessage): TelegramSendMe
 }
 
 export class NoopNotificationSender implements NotificationSender {
-	async sendMessage(_chatId: number, _message: TelegramMessage): Promise<void> {
+	async sendMessage(_chatId: number, _message: TelegramMessage): Promise<{ messageId: number }> {
 		// No-op when Telegram is not configured.
+		return { messageId: 0 };
+	}
+
+	async sendDocument(
+		_chatId: number,
+		_doc: {
+			buffer: Buffer;
+			fileName: string;
+			mime: string;
+			caption?: string;
+			parseMode?: TelegramParseMode;
+			replyMarkup?: TelegramInlineKeyboardMarkup;
+		},
+	): Promise<{ messageId: number }> {
+		// No-op when Telegram is not configured.
+		return { messageId: 0 };
 	}
 }
 
@@ -101,10 +128,10 @@ export class TelegramNotificationSender implements NotificationSender {
 		this.#fetchImpl = options.fetchImpl ?? fetch;
 	}
 
-	async sendMessage(chatId: number, message: TelegramMessage): Promise<void> {
+	async sendMessage(chatId: number, message: TelegramMessage): Promise<{ messageId: number }> {
 		if (!this.#owners.has(chatId)) {
 			logger.warn("Skipping Telegram notification for unauthorized chat", { chatId });
-			return;
+			return { messageId: 0 };
 		}
 
 		const response = await this.#fetchImpl(`${this.#apiBaseUrl}/bot${this.#botToken}/sendMessage`, {
@@ -113,11 +140,58 @@ export class TelegramNotificationSender implements NotificationSender {
 			body: JSON.stringify(toRequestBody(chatId, message)),
 		});
 		if (response.ok) {
-			return;
+			const json = (await response.json()) as { ok: boolean; result: { message_id: number } };
+			return { messageId: json.result.message_id };
 		}
 
 		const responseText = await response.text();
 		throw new Error(`Telegram send failed with ${response.status}: ${responseText}`);
+	}
+
+	async sendDocument(chatId: number, doc: {
+		buffer: Buffer;
+		fileName: string;
+		mime: string;
+		caption?: string;
+		parseMode?: TelegramParseMode;
+		replyMarkup?: TelegramInlineKeyboardMarkup;
+	}): Promise<{ messageId: number }> {
+		if (!this.#owners.has(chatId)) {
+			logger.warn("Skipping Telegram document notification for unauthorized chat", { chatId });
+			return { messageId: 0 };
+		}
+
+		const caption = doc.caption ? enforceCaptionBudget(doc.caption, 'document') : undefined;
+
+		// Use FormData to send the file as multipart/form-data
+		const formData = new FormData();
+		formData.append('chat_id', String(chatId));
+		formData.append('document', new Blob([doc.buffer], { type: doc.mime }), doc.fileName);
+		if (caption) {
+			formData.append('caption', caption);
+		}
+		if (doc.parseMode) {
+			formData.append('parse_mode', doc.parseMode);
+		}
+		if (doc.replyMarkup) {
+			formData.append('reply_markup', JSON.stringify({
+				inline_keyboard: doc.replyMarkup.inlineKeyboard.map(row =>
+					row.map(button => toInlineKeyboardButton(button))
+				),
+			}));
+		}
+
+		const response = await this.#fetchImpl(`${this.#apiBaseUrl}/bot${this.#botToken}/sendDocument`, {
+			method: "POST",
+			body: formData,
+		});
+		if (response.ok) {
+			const json = (await response.json()) as { ok: boolean; result: { message_id: number } };
+			return { messageId: json.result.message_id };
+		}
+
+		const responseText = await response.text();
+		throw new Error(`Telegram sendDocument failed with ${response.status}: ${responseText}`);
 	}
 }
 

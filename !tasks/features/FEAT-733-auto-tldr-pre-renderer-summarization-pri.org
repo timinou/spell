@@ -1,0 +1,87 @@
+#+TITLE: Auto-TL;DR pre-renderer summarization (priority extra #1)
+#+STATE: ITEM
+#+SESSION_ID: 14dc602dbbba509c
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-10T23-49-06-414Z_14dc602dbbba509c.jsonl]]
+#+CUSTOM_ID: FEAT-733-auto-tldr-pre-renderer-summarization-pri
+#+DEPENDS: FEAT-sendDocument-attach
+#+EFFORT: 5h
+#+LAYER: packages/spell-server
+#+PRIORITY: #A
+
+* Initial Message
+
+tell me how I would add a feature to the spell server so that, whenever a session in the repo turns into needs input, it sends me what the agent wrote (summary in the message, PDF of the full chat using typst + cmarker typst extension, operated through a kdl config line that assumes the markdown is in the stdin of the shell command passed, unless you have a better design [pushback encouraged])
+
+To answer, I need to cite that message and answer, or specifically answer to that message, whatever is most delightful for a telegram bot where I may have several pending 'next steps' messages.
+
+Tell me what the feature needs, how you'll change the kdl config, then make a folder in ../spell-remote-example/, in which you copy the telegram creds and numbers from ../growth (we're reusing the same bot), and put an example of a nice telegram bot that has its own link to my computer through a spell server instance. you are allowed to think of more features to integrate there, and new features to add to spell to enable cool stuff
+
+* Parent
+[[id:PROJ-076-spell-remote-needs-input-feed-to-telegra]]
+
+* Scope
+When the rendered transcript exceeds a threshold (~messageCount > N~ or
+~markdown.length > Mbytes~), call a cheap model to produce a TL;DR section that:
+
+1. is *prepended* to the markdown fed into the renderer (so the PDF gets a
+   "Summary" card on page 1),
+2. is *also used* as the body of the Telegram caption (so the message-body
+   text isn't just the verbatim last assistant turn — it's a thoughtful
+   summary covering what's pending and why).
+
+KDL config:
+
+#+begin_src kdl
+attach renderer="pdf" {
+    transcript "full"
+    on "ask" "hook_input" "plan_approval"
+    summarize when="message-count>30" {
+        model "gpt-5.4-nano"
+        max-tokens 250
+        prompt-style "needs-input-recap"
+    }
+}
+#+end_src
+
+
+
+** Planning gap (resolved 2026-05-10)
+spell-server has NO dep on ~packages/agent~ or ~packages/coding-agent~ — confirmed in
+~packages/spell-server/package.json~ (only @bgotink/kdl, pi-utils, croner, handlebars,
+qrcode, grammy).
+
+Resolution: implement a thin OpenAI-compatible POST client inside
+~packages/spell-server/src/telegram/summarizer.ts~ that reads endpoint + key + slug
+from KDL (mirror of how ~telegram/voice/~ talks to Deepgram). No new package dep.
+Default endpoint + slug ship as constants overridable in KDL.
+* Files
+- ~packages/spell-server/src/telegram/summarizer.ts~ (new) : pure function
+  ~summarize(markdown, opts) → Promise<{ tldr: string, prepended: string }>~,
+  using the existing model registry from ~packages/agent~.
+- ~packages/spell-server/src/telegram/session-notifications.ts~ : add the
+  conditional summarize step before renderer.
+- ~packages/spell-server/src/config/channels-parser.ts~ : parse ~summarize~ block.
+- ~packages/spell-server/src/config/types.ts~ : ~SummarizeConfig~ type.
+- Tests: ~packages/spell-server/test/telegram/summarizer.test.ts~.
+
+* Tests (TDD)
+- ~messageCount~ below threshold → summarizer not called; existing flow unchanged.
+- ~messageCount~ above threshold → summarizer called once; TL;DR prepended to markdown
+  AND used as caption body.
+- Summarizer error → fall back to last-assistant-text caption + un-summarized PDF
+  (no fatal failure on user-facing path).
+- Summary cached by transcript hash (so re-fires don't re-summarize the same content).
+- Summary respects ~max-tokens~ (truncated cleanly with ellipsis).
+- Prompt style ~"needs-input-recap"~ produces TL;DR oriented around what the user
+  is being asked to decide (verified by snapshot test of the system prompt).
+
+* Edge Cases
+- Model not found → boot diagnostic; ~summarize~ block ignored at runtime.
+- Network failure to upstream → fall back without retry storm.
+- Threshold expression (~"message-count>30"~) parse error → boot diagnostic.
+
+* Acceptance
+- Tests green.
+- Manual artifact: a ~50-message session renders a PDF with a Summary card on page 1
+  AND a Telegram caption that summarizes (not just last-assistant-text).
+- Caption length stays within Telegram's 1024-char limit even after summarization.

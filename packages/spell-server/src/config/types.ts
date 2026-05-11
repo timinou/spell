@@ -109,6 +109,16 @@ export interface SessionNotificationRendererConfig {
 	extension: string;
 }
 
+/** Attach configuration for rendering session transcripts. */
+export interface AttachConfig {
+	/** Renderer ID (matches a RendererConfig.id in session-notifications). */
+	rendererId: string;
+	/** Transcript scope to render. */
+	transcript: 'full' | 'last-turn' | { kind: 'last-n'; n: number };
+	/** Event kinds that trigger this attachment (subset of BlockingEventKind). */
+	on: string[];
+}
+
 /** Full Telegram channel configuration parsed from channels.kdl */
 export interface TelegramChannelConfig {
 	/** Bot token (read from inline value or file) */
@@ -141,6 +151,7 @@ export interface TelegramChannelConfig {
 		notifyOwners: boolean;
 		additionalChatIds: number[];
 		renderers: SessionNotificationRendererConfig[];
+		attaches: AttachConfig[];
 	};
 }
 
