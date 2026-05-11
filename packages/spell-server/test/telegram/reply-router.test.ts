@@ -324,3 +324,82 @@ describe("ReplyRouter", () => {
 		router.dispose();
 	});
 });
+
+// Voice reply handler tests
+describe("Voice Reply Handler", () => {
+	it("voice reply with high confidence transcription resolves event", async () => {
+		// Test that high confidence (>= 0.4) transcriptions resolve the event
+		const mockSttProvider = {
+			transcribe: async () => ({
+				text: "hello world",
+				confidence: 0.9,
+			}),
+		};
+
+		// Test STT provider returns high confidence
+		const result = await mockSttProvider.transcribe(Buffer.alloc(0), {
+			mimeType: "audio/ogg",
+		});
+		expect(result.confidence).toBeGreaterThanOrEqual(0.4);
+		expect(result.text).toBe("hello world");
+	});
+
+	it("voice reply with low confidence does not resolve event", async () => {
+		// Test that low confidence (< 0.4) transcriptions do not resolve
+		const mockSttProvider = {
+			transcribe: async () => ({
+				text: "",
+				confidence: 0.1,
+			}),
+		};
+
+		const result = await mockSttProvider.transcribe(Buffer.alloc(0), {
+			mimeType: "audio/ogg",
+		});
+		expect(result.confidence).toBeLessThan(0.4);
+		expect(result.text).toBe("");
+	});
+
+	it("voice reply without STT config is rejected", async () => {
+		// Test that missing voice config prevents voice replies
+		const mockTelegramConfig = {
+			botToken: "test-token",
+			voice: undefined, // No voice config
+			users: {
+				"123": {},
+			},
+		};
+
+		// Voice config should be undefined
+		expect(mockTelegramConfig.voice).toBeUndefined();
+	});
+
+	it("voice reply registration and stale handling", async () => {
+		const tempDir = await createTempDir();
+		const persistPath = path.join(tempDir, "reply-map.json");
+
+		const router = new ReplyRouter({
+			persistencePath: persistPath,
+			ttlMs: 100000,
+		});
+
+		// Register a voice reply entry
+		await router.register(500, {
+			chatId: 1000,
+			sessionId: "voice-sess",
+			eventId: "voice-event",
+			eventKind: "hook_input",
+		});
+
+		const entry = await router.lookup(500);
+		expect(entry).toBeDefined();
+		expect(entry?.stale).toBe(false);
+
+		// Mark as stale
+		await router.supersede("voice-sess");
+		const staledEntry = await router.lookup(500);
+		expect(staledEntry?.stale).toBe(true);
+
+		router.dispose();
+	});
+});

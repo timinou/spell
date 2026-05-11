@@ -368,3 +368,119 @@ export function createReplyRouterMiddleware(
 		}
 	};
 }
+
+// Voice reply router handler - routes voice replies to pending events
+export function createVoiceReplyHandler(
+	replyRouter: any, // ReplyRouter type
+	registry: any, // SocketSessionRegistry type
+	telegramConfig: any, // TelegramChannelConfig type
+	sttProvider?: SttProvider,
+): MiddlewareFn<AuthContext> {
+	return async (ctx, next) => {
+		const message = ctx.message;
+		if (!message || !("voice" in message) || !message.voice || message.message_id === undefined) {
+			await next();
+			return;
+		}
+
+		// Check if this is a reply to another message
+		const orig = "reply_to_message" in message ? message.reply_to_message : null;
+		if (!orig) {
+			await next();
+			return;
+		}
+
+		try {
+			// Look up the pending reply mapping
+			const pending = await replyRouter.lookup(orig.message_id);
+			if (!pending) {
+				// Not bound to a session, continue processing
+				await next();
+				return;
+			}
+
+			// Check if mapping is stale
+			if (pending.stale) {
+				await ctx.reply("That session has moved on; the question is no longer pending.");
+				return;
+			}
+
+			// Verify auth
+			const userId = ctx.from?.id;
+			if (!userId || !telegramConfig.users[String(userId)]) {
+				logger.warn("reply-router: unauthorized voice reply", { userId, chatId: ctx.chat?.id });
+				return;
+			}
+
+			// Check if voice config is present
+			if (!telegramConfig.voice?.stt) {
+				await ctx.reply("Voice replies aren't enabled in your spell-server config.");
+				return;
+			}
+
+			// Check if STT provider is available
+			if (!sttProvider) {
+				logger.error("STT provider not initialized for voice reply");
+				await ctx.reply("Voice transcription is not available. Please contact the server administrator.");
+				return;
+			}
+
+			// Download the voice file
+			const voice = message.voice;
+			const telegramFile = await ctx.api.getFile(voice.file_id);
+			if (!telegramFile.file_path) {
+				logger.error("Telegram voice file path missing", { fileId: voice.file_id });
+				await ctx.reply("Failed to download voice file. Please try again.");
+				return;
+			}
+
+			const fileUrl = `https://api.telegram.org/file/bot${telegramConfig.botToken}/${telegramFile.file_path}`;
+			const response = await fetch(fileUrl);
+			if (!response.ok) {
+				logger.error("Failed to download voice from Telegram", { status: response.status, fileId: voice.file_id });
+				await ctx.reply("Failed to download voice file. Please try again.");
+				return;
+			}
+
+			const audioBuffer = Buffer.from(await response.arrayBuffer());
+
+			// Transcribe the voice using STT provider
+			let transcript = "";
+			let confidence = 0;
+			try {
+				const sttLanguage = telegramConfig.voice.stt.language ?? "en";
+				const result = await sttProvider.transcribe(audioBuffer, {
+					mimeType: voice.mime_type ?? "audio/ogg",
+					language: sttLanguage,
+				});
+				transcript = result.text?.trim() ?? "";
+				confidence = result.confidence ?? 0;
+			} catch (error) {
+				logger.error("STT transcription failed", { error: String(error) });
+				await ctx.reply("Voice transcription failed. Please try again or send text.");
+				return;
+			}
+
+			// Check if transcription is confident enough
+			if (confidence < 0.4 || !transcript) {
+				await ctx.reply("Couldn't transcribe that voice note clearly. Please try again or send text.");
+				return;
+			}
+
+			// Resolve the event via registry
+			registry.resolveEvent(pending.sessionId, pending.eventId, {
+				type: "event_response",
+				kind: "hook_input",
+				eventId: pending.eventId,
+				value: transcript,
+			});
+
+			await ctx.reply(`✓ voice delivered as: ${transcript}`, {
+				reply_parameters: { message_id: ctx.message?.message_id },
+			});
+		} catch (error) {
+			logger.error("Voice reply handler error", { error: String(error) });
+			await next();
+		}
+	};
+}
