@@ -1,0 +1,8 @@
+---
+source: crates/pi-code-path/tests/diagnostic_render_tests.rs
+expression: d.render(None)
+---
+E_NO_MATCHES
+
+  ⚠ no results for query
+  help: The path resolved to zero results; try broadening the query

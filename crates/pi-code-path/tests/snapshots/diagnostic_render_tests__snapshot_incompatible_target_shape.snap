@@ -1,0 +1,8 @@
+---
+source: crates/pi-code-path/tests/diagnostic_render_tests.rs
+expression: d.render(None)
+---
+E_INCOMPATIBLE_TARGET_SHAPE
+
+  × cannot apply symbolReplace to a line target
+  help: The target shape is incompatible with the requested Op family

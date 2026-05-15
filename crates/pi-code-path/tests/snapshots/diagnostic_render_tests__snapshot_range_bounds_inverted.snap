@@ -1,0 +1,8 @@
+---
+source: crates/pi-code-path/tests/diagnostic_render_tests.rs
+expression: d.render(None)
+---
+E_RANGE_BOUNDS_INVERTED
+
+  × range 10..5 has start > end
+  help: The start of the range is greater than the end (e.g. [10..5]); swap the bounds

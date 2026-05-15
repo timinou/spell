@@ -1,0 +1,8 @@
+---
+source: crates/pi-code-path/tests/diagnostic_render_tests.rs
+expression: d.render(None)
+---
+E_STALE_ANCHOR
+
+  × anchor hash mismatch; file changed
+  help: The file has changed since the anchor was read; re-read and retry

@@ -1,0 +1,8 @@
+---
+source: crates/pi-code-path/tests/diagnostic_render_tests.rs
+expression: d.render(None)
+---
+E_ARTIFACT_NOT_FOUND
+
+  × artifact `abc123` not found
+  help: The artifact may have expired or been deleted

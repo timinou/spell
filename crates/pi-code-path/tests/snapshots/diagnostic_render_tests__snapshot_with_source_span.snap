@@ -1,0 +1,13 @@
+---
+source: crates/pi-code-path/tests/diagnostic_render_tests.rs
+expression: "d.render(Some(\"hello @world\"))"
+---
+E_PARSE_ERROR
+
+  × unexpected token at position 5
+   ╭─[codepath:1:6]
+ 1 │ hello @world
+   ·      ┬
+   ·      ╰── here
+   ╰────
+  help: Check the CodePath syntax; see the specification for valid grammar
