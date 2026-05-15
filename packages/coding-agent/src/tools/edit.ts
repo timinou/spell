@@ -123,10 +123,93 @@ function resolveEditAnchors(action: CodePathAction, editIndex: number): Hashline
 }
 
 function normalizeStructuralAction(action: CodePathAction): Record<string, unknown> {
-	const out: Record<string, unknown> = { kind: action.kind };
+	// Reverse map new kind names back to legacy wire format for executeCodePath.
+	// The kernel still expects legacy Action enum variants.
+	const newToLegacyKind: Record<string, string> = {
+		fileCreate: "create",
+		symbolReplace: "write",
+		fileWrite: "write",
+		symbolDelete: "delete",
+		fileDelete: "delete",
+		symbolRename: "rename",
+		symbolWrap: "wrap",
+		symbolFindReplace: "findAndReplace",
+		symbolRawTextReplace: "rawTextReplace",
+		fileFindReplace: "findAndReplace",
+		fileRawTextReplace: "rawTextReplace",
+		symbolSplice: "splice",
+		symbolMove: "move",
+		symbolClone: "clone",
+		symbolTranspose: "transpose",
+		symbolInsertBefore: "insertBefore",
+		symbolInsertAfter: "insertAfter",
+		fileAppend: "append",
+		lineAppend: "append",
+		linePrepend: "prepend",
+		lineInsert: "insertBefore", // default; will adjust based on at.side
+		filePrepend: "prepend",
+		lineReplace: "replace",
+		filePatch: "patch",
+		headingPromote: "promote",
+		headingDemote: "demote",
+		headingReplaceBlock: "replaceCodeBlock",
+		cssRenameClassToken: "renameClassToken",
+		cssRenameIdToken: "renameIdToken",
+		cssRenameCustomProp: "renameCustomProperty",
+		cssRemoveDeadStyle: "removeDeadStyle",
+	};
+	const legacyKind = newToLegacyKind[action.kind] || action.kind;
+	const actionAny = action as any;
+
+	const out: Record<string, unknown> = { kind: legacyKind };
+	// Reverse field mappings for new kinds:
+	// - symbolRename: newName → content
+	if (action.kind === "symbolRename" && (action as any).newName) {
+		out.content = (action as any).newName;
+	}
+	// - symbolClone: renameTo → content
+	else if (action.kind === "symbolClone" && (action as any).renameTo) {
+		out.content = (action as any).renameTo;
+	}
+	// - cssRename*: replace → content, find stays
+	else if (
+		(action.kind === "cssRenameClassToken" ||
+			action.kind === "cssRenameIdToken" ||
+			action.kind === "cssRenameCustomProp") &&
+		(action as any).replace
+	) {
+		out.content = (action as any).replace;
+		if ((action as any).find) out.find = (action as any).find;
+	}
+	// - lineReplace: span → pos/end
+	else if (action.kind === "lineReplace" && (action as any).span) {
+		if ((action as any).span.start) out.pos = (action as any).span.start;
+		if ((action as any).span.end) out.end = (action as any).span.end;
+	}
+	// - lineInsert: at{side, anchor} → pos + kind adjustment
+	else if (action.kind === "lineInsert" && actionAny.at) {
+		if (actionAny.at.anchor) out.pos = actionAny.at.anchor;
+		// Adjust kind based on side
+		if (actionAny.at.side === "after") {
+			out.kind = "insertAfter";
+		} else {
+			out.kind = "insertBefore";
+		}
+		if (actionAny.content !== undefined) out.lines = normalizeLines(actionAny.content);
+	}
 	if (action.scope) out.scope = action.scope;
-	if (action.content !== undefined) out.content = normalizeLines(action.content);
-	if (action.find !== undefined) out.find = normalizeLines(action.find);
+	// Only copy content/find if not already set by reverse mapping
+	if (action.content !== undefined && out.content === undefined) out.content = normalizeLines(action.content);
+	// For operations where kernel expects `lines` instead of `content`, convert here
+	const needsLines = ["insertBefore", "insertAfter", "append", "prepend", "splice"];
+	if (needsLines.includes(legacyKind) && action.content !== undefined && out.lines === undefined) {
+		out.lines = normalizeLines(action.content);
+		// Remove content since kernel doesn't expect both
+		if (out.content !== undefined && legacyKind !== "splice") {
+			delete out.content;
+		}
+	}
+	if (action.find !== undefined && out.find === undefined) out.find = normalizeLines(action.find);
 	// FEAT-701: lines/pos/end/diff were silently dropped; the kernel
 	// Action enum requires `lines` for InsertBefore/InsertAfter/Append/
 	// Prepend/Splice replacement, `pos`/`end` for LINE#ID anchors, and
@@ -182,6 +265,34 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 	): Promise<AgentToolResult> {
 		const sessionCwd = this.session.cwd;
 		const transactionMode: "best-effort" | "strict" = params.transaction ?? "best-effort";
+
+		// History ops (undo/redo): dispatch via kernel manage subcommand and short-circuit.
+		// Reject batches mixing history with regular edits — history ops are atomic on
+		// the workspace edit log, not per-target.
+		const historyKinds = new Set(["undo", "redo"]);
+		const hasHistory = params.operations.some(op => op && historyKinds.has(op.action.kind));
+		if (hasHistory) {
+			if (params.operations.length > 1) {
+				const err = toolResult<EditToolResultDetails>({
+					error: "history_op_in_batch",
+				})
+					.text("undo/redo operations must be dispatched alone; cannot be mixed with edits in the same batch.")
+					.done();
+				err.isError = true;
+				return err;
+			}
+			const kind = params.operations[0].action.kind as "undo" | "redo";
+			const chunks = await executeCodePath({
+				command: "manage",
+				manage: kind,
+				target: "",
+				abortSignal: signal,
+			});
+			const formatted = formatCodePathResult(chunks, { format: "node-list" });
+			return toolResult<EditToolResultDetails>({ action: kind })
+				.text(formatted.text ?? `${kind} complete`)
+				.done();
+		}
 
 		// Pre-resolve target paths once; used by strict snapshot and the loop.
 		// resolveCwdRelativePath auto-coalesces the cwd-prefix duplication pattern

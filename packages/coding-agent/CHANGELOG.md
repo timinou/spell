@@ -5,6 +5,13 @@
 ### Added
 
 - Added `/login deepseek` and `/login kimi` API-key flows. Selecting `DeepSeek (API Key)` validates a DeepSeek key against `https://api.deepseek.com/v1` and stores it under the `deepseek` provider; selecting `Kimi (API Key)` validates a Kimi key against `https://api.kimi.com/coding/v1` and persists it under the existing `kimi-code` provider so the bundled Kimi Code models pick it up alongside the OAuth device flow.
+- **PLAN-306**: CodePath tool-surface redesign (JS-side wave). New tools `find` and `status` registered alongside legacy `get`/`manage` aliases (kept as `REMOVE_AT_WAVE_11`).
+  - `find { target }` — single-field envelope over the CodePath grammar; subsumes get's read/search/list/stat/symbol/uri surface. Injects session.cwd as walker root.
+  - `status { command }` — kernel observability only. Drops `save`/`diff`/`buffers`/`context` (save: edits auto-persist; undo/redo: moved to `edit`; diff: will move to `find { target: "<path>#diff" }` after the W8 kernel rebuild).
+  - `edit` accepts `kind: "undo" | "redo"` and dispatches to the kernel's manage(undo/redo). History ops mixed with regular edits rejected with `history_op_in_batch`.
+  - All five tool prompts (`find`, `edit`, `status`, `create`, `bash`) rewritten in symbolic style. Most `MUST NOT` rules dropped in favour of recipe tables.
+  - New test suite at `packages/coding-agent/test/codepath/` covers NAPI bridge integrity, language matrix (6 languages × 3 symbol Ops), end-to-end pipelines, negative space, replay corpus, and prompt-baseline snapshots. 65 tests, 0 failures.
+  - Plan: PLAN-306-codepath-tool-surface-redesign-find-edit. Kernel work (W8–W10) and final cleanup (W11) deferred per JS-first ordering.
 - Added `OAuthProviderInfo.storageId` aliasing so the OAuth selector and `/logout` flow display logged-in state and remove credentials at the underlying provider key when a UI entry is intentionally a thin wrapper (e.g. `Kimi (API Key)` -> `kimi-code`).
 - Added `agents { rule ... }` block to spell.kdl for declarative per-agent / glob-pattern overrides of model, thinking-level, tools, and disabled flag. Resolves at runtime via task tool.
 - Added per-call `model` field on the task tool's task items and batch payload for caller-supplied model selection.

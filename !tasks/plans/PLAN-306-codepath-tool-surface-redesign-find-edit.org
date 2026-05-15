@@ -1,0 +1,208 @@
+#+TITLE: CodePath tool-surface redesign — find/edit/status/create/bash, JS-first, language-matrix-complete
+#+STATE: DOING
+#+SESSION_ID: 14dd802985b2a5f1
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
+#+CUSTOM_ID: PLAN-306-codepath-tool-surface-redesign-find-edit
+#+EFFORT: 60h
+#+LAYER: coding-agent natives pi-code-path pi-natives
+#+PRIORITY: #A
+
+* Initial Message
+
+what makes the 'reviewer' task type special? where in the code? how does that fit the general idea of typed outputs and DAG workflows in Spell tasks?
+
+* Goal
+
+Collapse 7+ overlapping tools (get, code_search, lsp, manage, read, grep, find, ast_grep) into a 5-tool surface backed by the existing pi-code-path grammar. JS-side ships first using current NAPI; kernel rebuild happens after the JS surface and full language-matrix test suite are green.
+
+* Final tool surface
+
+| tool   | input                  | role                                                    |
+|--------|------------------------|---------------------------------------------------------|
+| find   | { target }             | read · search · list · stat · diff · graph              |
+| edit   | { target, action }     | mutations, symbol-first, owns undo/redo                 |
+| status | { command, file? }     | kernel observability (was: manage; no save/diff/buffers)|
+| create | { path, content }      | new files only                                          |
+| bash   | { command }            | processes only (build, test, git, scripts)              |
+
+CodePath grammar is the only DSL the agent learns. `find { target: "src/**/*.ts::§line[text~=\"TODO\"]" }`. Errors render at kernel via ariadne — read & retry.
+
+* Non-goals
+
+- Do NOT change kernel grammar in JS-side waves. JS uses what the kernel already accepts.
+- Do NOT touch PLAN-304 (typed Op surface) territory — coordinate via rebase, not parallel edit.
+- Do NOT add a TS-side parser. The kernel is sole authority; TS calls `parseCodePath()` via NAPI.
+
+* Execution manifest
+
+** Wave 0 — Inventory & guardrails [parallel]
+
+- T0.1 Survey current consumers of get, code_search, lsp, manage to enumerate call-sites
+- T0.2 Snapshot current bash/get/edit/manage prompt files for diffing against new versions
+- T0.3 Capture replay corpus: 50 recent bash calls from session logs, classified by intent
+- T0.4 Capture supported-language manifest from pi-code-engine::generated.rs
+
+** Wave 1 — JS schemas & types [parallel, no logic]
+
+- T1.1 Define `find` schema (single `target: string` field, no params) in codepath-types.ts
+- T1.2 Extend `edit` schema with `undo` / `redo` action variants (no LINE#ID variants in TS surface; lineReplace/lineInsert/lineAppend/linePrepend remain in Rust as legacy, gated behind feature flag for now)
+- T1.3 Define `status` schema (drop save, diff, buffers, context commands)
+- T1.4 Polish `create` schema (no schema change; doc cleanup)
+- T1.5 Bash schema unchanged; only prompt rewrite is needed (Wave 4)
+
+** Wave 2 — find tool implementation [serial after Wave 1]
+
+- T2.1 Implement find.ts thin wrapper calling existing executeCodePath (re-using current get.ts logic; rename + scope reduction)
+- T2.2 Result formatter: route output by qualifier/query shape (content vs locations vs stat vs diff vs tree)
+- T2.3 Register `find` in BUILTIN_TOOLS; mark `get` as deprecated alias forwarding to find for one cycle
+- T2.4 Tests: basic dispatch parity with current get behavior
+
+** Wave 3 — edit refactor [serial after Wave 1]
+
+- T3.1 Add undo/redo action kinds in TS schema, dispatch to existing manage("undo"|"redo")
+- T3.2 Hide LINE#ID action kinds from TS surface (still accepted via legacy alias, but not in schema or prompt)
+- T3.3 Symbol-first migration helpers: when agent supplies bare-path target with insert*, return diagnostic suggesting symbol target
+- T3.4 Tests: edit-undo-redo.test.ts, symbol-first regression tests
+
+** Wave 4 — status (rename manage) [serial after Wave 1]
+
+- T4.1 Rename manage.ts → status.ts, manageSchema → statusSchema
+- T4.2 Drop save, diff, buffers, context commands from TS surface (kept in Rust, hidden from agent)
+- T4.3 Diff routes through find { target: "#diff" } (qualifier resolver wave 6)
+- T4.4 Update all internal callers of `manage` tool name
+- T4.5 Register `status` in BUILTIN_TOOLS; remove `manage` from default tool list
+
+** Wave 5 — JS test suite, all-language matrix [parallel after Wave 2-4]
+
+- T5.1 Language matrix fixtures: 12 languages × 7 symbol Ops × paired before/after files
+- T5.2 NAPI bridge integrity tests (every public NAPI fn exercised by some TS test)
+- T5.3 Replay corpus: 50 bash patterns → find/edit equivalents asserted equivalent
+- T5.4 End-to-end pipelines: rename-across-callers, extract-fn, add-import (3 pipelines minimum)
+- T5.5 Prompt snapshot tests (placeholder — full snapshot only after kernel introspection lands)
+- T5.6 Negative space: 30 impossible target shapes → expected diagnostic variant per shape
+
+** Wave 6 — JS prompt rewrite (symbolic style) [parallel after Wave 2-4]
+
+- T6.1 find.md (symbolic)
+- T6.2 edit.md (symbolic, generated Op table placeholder)
+- T6.3 status.md (symbolic)
+- T6.4 create.md (symbolic, terse)
+- T6.5 bash.md (symbolic, drop most MUST NOT)
+
+** Wave 7 — JS cleanup & gates [serial after Waves 5-6]
+
+- T7.1 Drop dead tools from BUILTIN_TOOLS: loop_prepare, loop_launch, loop_done, gateway, generate_image, code_search (rename to web_code_search) if zero recent usage
+- T7.2 Remove `get`, `manage`, `read`, `grep`, `find` (legacy), `ast_grep`, `lsp` from active registry; keep behind --legacy-tools flag for one cycle
+- T7.3 Update task agent prompts that reference removed tools
+- T7.4 Run full bun test, bun check:ts; fix all regressions
+- T7.5 Commit gate: all JS-side tests pass, no regressions in existing test files
+
+*** JS-GREEN GATE ***
+No kernel work begins until this point. JS side is shipped and stable.
+
+** Wave 8 — Kernel additions [parallel after JS-GREEN]
+
+- T8.1 Add `#diff` qualifier to pi-natives code_resolver (git-backed; falls back gracefully)
+- T8.2 Add introspection NAPI: list_op_kinds, list_qualifiers, list_edge_kinds, list_diagnostic_variants, list_language_dialects
+- T8.3 Integrate miette (preferred over ariadne for Rust 2024 edition) for diagnostic rendering on Diagnostic::render() path
+- T8.4 Per-language qualifier coverage audit: ensure every dialect supports the qualifier set referenced from find.md
+
+** Wave 9 — Rust language matrix [parallel after Wave 8]
+
+- T9.1 Mirror JS language matrix on Rust side: for each (Op × language), assert kernel-level resolve/dispatch
+- T9.2 Diagnostic snapshot tests (insta crate) for every DiagnosticVariant rendered through miette
+- T9.3 Negative corpus: every fixture from JS Wave 5.6 also tested at Rust kernel level
+- T9.4 Performance ceilings: grep across 3K-file repo < 500ms; symbol resolve < 100ms; def→ traversal < 200ms
+
+** Wave 10 — Bridge integration & rebuild [serial after Wave 9]
+
+- T10.1 Wire introspection NAPI calls into JS prompt generator (build-time)
+- T10.2 Replace Wave 6 prompt placeholders with kernel-derived tables
+- T10.3 Snapshot test: generated edit.md / find.md byte-equal to kernel render
+- T10.4 Rebuild @oh-my-pi/pi-natives NAPI artifact
+- T10.5 Update Pi consumers (pi-agent-core) to handle new diagnostic shape
+
+** Wave 11 — Final sweep & docs
+
+- T11.1 Update AGENTS.md, memory_summary.md, skill files referencing old tool names
+- T11.2 Migration note in CHANGELOG
+- T11.3 Final fresh-session smoke test (manual): agent loops with new tools only
+- T11.4 Close legacy tool aliases (no more --legacy-tools flag)
+
+* Dependencies
+
+#+begin_src dot
+W0 → W1 → {W2, W3, W4} → {W5, W6} → W7 →[GATE]→ W8 → W9 → W10 → W11
+#+end_src
+
+Critical path is W1 → W2 → W5 → W7 → W8 → W9 → W10. Waves 3, 4, 6 parallelize off W1 and W2.
+
+* Verification per wave
+
+| Wave  | gate                                                   |
+|-------|--------------------------------------------------------|
+| W0    | corpus artifacts written to plan-artifacts/PLAN-XXX/  |
+| W1    | schema files compile; no logic changes; bun check:ts  |
+| W2    | find tool roundtrips on 10 fixture queries            |
+| W3    | edit undo/redo works in fresh session; symbol-first OK |
+| W4    | status tool replaces manage in all call sites          |
+| W5    | language-matrix.test.ts passes 12 langs × 7 ops       |
+| W6    | prompts render; lint clean                             |
+| W7    | bun test (all packages); bun check:ts; check:rs       |
+| W8    | cargo test -p pi-code-path -p pi-natives              |
+| W9    | per-language matrix passes on Rust side                |
+| W10   | snapshot tests prove TS prompts ≡ kernel render        |
+| W11   | manual smoke test + migration note                     |
+
+* Risk register
+
+- R1 — PLAN-304 ships parallel edits to op.rs; mitigate by rebasing W8 onto post-304 state
+- R2 — Legacy tool consumers (task agents, subagent prompts) may reference removed tools; W7.3 audits
+- R3 — Kernel rebuild may surface latent NAPI ABI issues; W10 includes Pi-side smoke test
+- R4 — Performance ceilings in W9.4 may flag pre-existing slow paths; track separately, don't block
+- R5 — Language matrix gaps: not all 12 languages may have full Op support in current kernel; document in W0.4 and scope W9.1 accordingly
+
+* Acceptance
+
+- 5 tools registered, 7+ removed
+- 12 languages tested with symbol Ops
+- Diagnostics render via miette at kernel boundary; TS passes through unmodified
+- Prompts byte-equal to kernel-derived templates
+- No regression in existing test suite
+- Migration note documents alias deprecation timeline
+
+* Post-smoke separation discipline
+
+The initial separation of concerns is **TS = transport envelope, kernel = sole authority on grammar/Ops/diagnostics**. Every parallel surface that exists today (31-variant per-Op TS schemas, bag-of-fields legacyActionSchema, dual range-syntax doc) must be **deleted** after the smoke-test gate passes — not deprecated, not kept behind a flag.
+
+** What gets deleted in Wave 11 (post-smoke)
+
+- =packages/coding-agent/src/tools/codepath-types.ts=: the per-variant Op exports (=fileCreateOp=, =fileWriteOp=, =symbolReplaceOp=, ... all 31). Replaced by bag-of-fields passthrough alone.
+- =legacyActionSchema= once kernel diagnostics are good enough (Wave 8 miette work makes this possible).
+- =editOpSchema= union — unused by editOperationSchema, just exported for legacy callers; delete with their last reference.
+- Any TS-side validation logic for CodePath target strings; only =parseCodePath= NAPI call validates.
+- Any TS-side format inference (auto-#raw, auto-#listing); kernel auto-attaches.
+- Legacy tool aliases (=get=, =manage=, =read=, =grep=, =find= the tool, =ast_grep=, =ast_edit=, =write= the tool, =code=, =resolve= for non-deferrable sessions).
+- Any TS-side mapping between =kind= legacy aliases (=write= → =fileWrite=, etc.); kernel does this.
+
+** During execution (waves 2-7)
+
+- NEW tools (find, status, edit refactor) are **envelope-only** from day 1
+- NO new TS-side enumeration of kernel-owned concepts (Op kinds, diagnostic variants, qualifier names, edge kinds, language ids)
+- Wave 1 already-shipped findSchema/statusSchema are the model: =target: string= only, =command: enum-of-5= for status
+- Adding =kind: "undo" | "redo"= to a TS-side Op union is the exact smell to avoid — undo/redo dispatch via top-level =history?= field or =edit { operations: [{ target: "", action: { kind: "undo" }}]}= where =kind= is passthrough string
+
+** Cleanup gate
+
+Wave 11.4 ("Remove --legacy-tools flag") expands to:
+
+- T11.4.a Delete per-variant Op exports from codepath-types.ts
+- T11.4.b Delete editOpSchema union
+- T11.4.c Replace legacyActionSchema with minimal bag-of-fields (drop pos/end/lines if kernel handles them)
+- T11.4.d Delete legacy tool aliases from BUILTIN_TOOLS
+- T11.4.e Delete TS-side target validation / format inference
+- T11.4.f Final type-check + smoke-test gate (T11.3)
+
+** Acceptance (updated)
+
+Original acceptance + the codepath-types.ts file is at most ~80 lines (findSchema, statusSchema, editSchema-envelope, createSchema, type re-exports from @oh-my-pi/pi-natives). No per-Op TS schemas. No kernel-mirror enumerations.
