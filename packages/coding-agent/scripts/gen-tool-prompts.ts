@@ -96,7 +96,6 @@ function genEditOps(): string {
 function genFindRecipes(): string {
 	const qualifiers = listQualifiers().sort((a, b) => a.name.localeCompare(b.name));
 	const edges = listEdgeKinds().sort((a, b) => a.symbol.localeCompare(b.symbol));
-	const dialects = listLanguageDialects().sort((a, b) => a.id.localeCompare(b.id));
 
 	const lines: string[] = [];
 
@@ -120,15 +119,18 @@ function genFindRecipes(): string {
 	}
 	lines.push("");
 
-	lines.push("## Language dialects");
-	lines.push("");
+	return lines.join("\n");
+}
+
+function genDialects(): string {
+	const dialects = listLanguageDialects().sort((a, b) => a.id.localeCompare(b.id));
+	const lines: string[] = [];
 	lines.push("| dialect | extensions | capabilities |");
 	lines.push("|---|---|---|");
 	for (const d of dialects) {
 		lines.push(`| ${d.id} | ${d.extensions.join(", ") || "—"} | ${d.capabilities.join(", ") || "—"} |`);
 	}
 	lines.push("");
-
 	return lines.join("\n");
 }
 
@@ -176,10 +178,11 @@ async function main() {
 
 	await fs.writeFile(path.join(OUT_DIR, "edit-ops.md"), genEditOps(), "utf-8");
 	await fs.writeFile(path.join(OUT_DIR, "find-recipes.md"), genFindRecipes(), "utf-8");
+	await fs.writeFile(path.join(OUT_DIR, "dialects.md"), genDialects(), "utf-8");
 	await fs.writeFile(path.join(OUT_DIR, "status-cmds.md"), genStatusCmds(), "utf-8");
 	await fs.writeFile(path.join(OUT_DIR, "diag-vocabulary.md"), genDiagVocabulary(), "utf-8");
 
-	console.log("✓ Generated 4 fragment files in", OUT_DIR);
+	console.log("✓ Generated 5 fragment files in", OUT_DIR);
 }
 
 main().catch(err => {
