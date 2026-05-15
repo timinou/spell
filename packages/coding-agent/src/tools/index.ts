@@ -9,7 +9,8 @@ import type { Skill } from "../extensibility/skills";
 import type { InternalUrlRouter } from "../internal-urls";
 
 import type { LoopManager } from "../loop/loop-manager";
-import { LoopDoneTool, LoopLaunchTool, LoopPrepareTool } from "../loop/loop-tools";
+// REMOVED_PLAN_306_W11: Loop tools had zero session usage in W0-3 replay corpus
+// import { LoopDoneTool, LoopLaunchTool, LoopPrepareTool } from "../loop/loop-tools";
 import { LspTool } from "../lsp";
 import type { DiscoverableMCPSearchIndex, DiscoverableMCPTool } from "../mcp/discoverable-tool-metadata";
 import type { CanvasOrchestratorManager } from "../orchestrators/canvas-orchestrator";
@@ -40,7 +41,8 @@ import { CodepathEditTool } from "./edit";
 import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FetchTool } from "./fetch";
 
-import { GatewayTool } from "./gateway";
+// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
+// import { GatewayTool } from "./gateway";
 import { FindTool } from "./find";
 import { GetTool } from "./get";
 import { StatusTool } from "./status";
@@ -269,10 +271,14 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	send_file: s => new SendFileTool(s),
 	canvas: s => new CanvasTool(s),
 	canvas_cast: CanvasCastTool.createIf,
-	loop_prepare: s => (s.loopManager ? new LoopPrepareTool(s) : null),
-	loop_launch: s => (s.loopManager ? new LoopLaunchTool(s) : null),
-	loop_done: s => (s.loopManager ? new LoopDoneTool(s) : null),
-	gateway: GatewayTool.createIf,
+	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
+	// loop_prepare: s => (s.loopManager ? new LoopPrepareTool(s) : null),
+	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
+	// loop_launch: s => (s.loopManager ? new LoopLaunchTool(s) : null),
+	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
+	// loop_done: s => (s.loopManager ? new LoopDoneTool(s) : null),
+	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
+	// gateway: GatewayTool.createIf,
 	// Generic code-path tools (coexistence wave; override legacy registrations)
 	find: s => new FindTool(s),
 	status: () => new StatusTool(),
@@ -322,10 +328,14 @@ export const TOOL_TIERS: Record<string, ToolTier> = {
 	checkpoint: "specialized",
 	rewind: "specialized",
 	calc: "specialized",
-	loop_prepare: "specialized",
-	loop_launch: "specialized",
-	loop_done: "specialized",
-	gateway: "specialized",
+	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
+	// loop_prepare: "specialized",
+	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
+	// loop_launch: "specialized",
+	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
+	// loop_done: "specialized",
+	// REMOVED_PLAN_306_W11: Zero session usage in W0-3 replay corpus
+	// gateway: "specialized",
 	search_tool_bm25: "specialized",
 	send_file: "specialized",
 };
