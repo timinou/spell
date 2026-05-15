@@ -7,6 +7,7 @@ target ::= Locator (Query)? (Qualifier)?
   Combinator  / // ^ ^^ << >> ref→ def→ call→ import→ bind→ | & −
   Qualifier   #body #sig #stat #tree #diff #listing #raw
 
+<!-- @generated:find-recipes -->
 <recipes>
 | want                | target                                      |
 |---------------------|---------------------------------------------|
@@ -25,6 +26,7 @@ target ::= Locator (Query)? (Qualifier)?
 | recent              | `src/**/*.ts[mtime>2026-05-01]`             |
 | uri                 | `memory://root` · `artifact://…` · `skill://…` |
 </recipes>
+<!-- @end -->
 
 <rules>
 - one field: `target`. Slicing/grep/range/tree/stat all live in the target string
