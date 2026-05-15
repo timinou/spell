@@ -129,6 +129,17 @@ pub struct Span {
 	pub end:   usize,
 }
 
+impl Diagnostic {
+	/// Render this diagnostic to a pretty multi-line string using miette.
+	///
+	/// When `source` is provided and this diagnostic has a `span`, the
+	/// output includes a source-code annotation with a caret pointing at
+	/// the relevant region.
+	pub fn render(&self, source: Option<&str>) -> String {
+		crate::diagnostic_render::render_diagnostic(self, source)
+	}
+}
+
 // ── Chunk for streaming ──────────────────────────────────────────
 
 /// Emitted by the streaming resolver.

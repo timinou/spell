@@ -226,13 +226,13 @@ export class Settings {
 
 	/**
 	 * Set a setting value (sync).
-	 * Default tier is "session" (in-memory only). Use "project" or "user" for persistent writes.
+	 * Default tier is "user" (persisted to spell.kdl). Use "session" for in-memory, "project" for project-local.
 	 * Triggers hooks for settings that have side effects.
 	 */
 	set<P extends SettingPath>(path: P, value: SettingValue<P>, tier?: WriteTier): void {
 		const prev = this.get(path);
 		const segments = parsePath(path);
-		switch (tier ?? "session") {
+		switch (tier ?? "user") {
 			case "session":
 				setByPath(this.#overrides, segments, value);
 				break;

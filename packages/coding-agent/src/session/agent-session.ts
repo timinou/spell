@@ -907,10 +907,14 @@ export class AgentSession {
 				.find((message): message is AssistantMessage => message.role === "assistant");
 			const msg = this.#lastAssistantMessage ?? fallbackAssistant;
 			this.#lastAssistantMessage = undefined;
-			if (!msg) return;
+			if (!msg) {
+				await this.#forceEndRetryChain({ finalError: "Retry chain interrupted: no assistant message" });
+				return;
+			}
 
 			if (this.#skipPostTurnMaintenanceAssistantTimestamp === msg.timestamp) {
 				this.#skipPostTurnMaintenanceAssistantTimestamp = undefined;
+				await this.#forceEndRetryChain({ finalError: "Retry chain interrupted: post-turn maintenance skipped" });
 				return;
 			}
 
@@ -918,6 +922,13 @@ export class AgentSession {
 			if (this.#isRetryableError(msg)) {
 				const didRetry = await this.#handleRetryableError(msg);
 				if (didRetry) return; // Retry was initiated, don't proceed to compaction
+			}
+
+			// BUG-369: non-retryable error while a retry chain is live should end the chain
+			if (!this.#isRetryableError(msg) && msg.stopReason === "error" && (this.#retryAttempt > 0 || this.#retryPromise)) {
+				await this.#forceEndRetryChain({
+					finalError: formatAssistantToolCallFailureMessage(msg) ?? msg.errorMessage ?? "Unknown error",
+				});
 			}
 
 			if (msg.stopReason === "aborted" && this.#checkpointState) {
@@ -934,6 +945,11 @@ export class AgentSession {
 			// Check for incomplete todos only after a final assistant stop, not intermediate tool-use turns.
 			const hasToolCalls = msg.content.some(content => content.type === "toolCall");
 			if (hasToolCalls) {
+				if (this.#retryPromise) {
+					await this.#forceEndRetryChain({
+						finalError: formatAssistantToolCallFailureMessage(msg) ?? msg.errorMessage ?? "Retry chain interrupted: tool-calls present",
+					});
+				}
 				return;
 			}
 			if (msg.stopReason !== "error" && msg.stopReason !== "aborted") {
@@ -955,6 +971,27 @@ export class AgentSession {
 			this.#retryResolve = undefined;
 			this.#retryPromise = undefined;
 		}
+	}
+
+	/**
+	 * Force-end an active retry chain, emitting auto_retry_end with success:false.
+	 * Idempotent: no-op if no retry is active.
+	 */
+	async #forceEndRetryChain(reason: { finalError: string; attempt?: number }): Promise<void> {
+		if (this.#retryAttempt === 0 && !this.#retryPromise) return;
+		const attempt = reason.attempt ?? this.#retryAttempt;
+		if (this.#retryAbortController) {
+			this.#retryAbortController.abort();
+			this.#retryAbortController = undefined;
+		}
+		this.#retryAttempt = 0;
+		await this.#emitSessionEvent({
+			type: "auto_retry_end",
+			success: false,
+			attempt,
+			finalError: reason.finalError,
+		});
+		this.#resolveRetry();
 	}
 
 	/** Create the TTSR resume gate promise if one doesn't already exist. */
@@ -5103,7 +5140,16 @@ export class AgentSession {
 		this.#retryAbortController = undefined;
 
 		// Retry via continue() outside the agent_end event callback chain.
-		this.#scheduleAgentContinue({ delayMs: 1, generation });
+		this.#scheduleAgentContinue({
+			delayMs: 1,
+			generation,
+			onError: () => {
+				void this.#forceEndRetryChain({ finalError: "agent.continue() failed during retry" });
+			},
+			onSkip: () => {
+				void this.#forceEndRetryChain({ finalError: "Retry continuation skipped (generation rolled over)" });
+			},
+		});
 
 		return true;
 	}
@@ -5150,6 +5196,13 @@ export class AgentSession {
 	 */
 	setAutoRetryEnabled(enabled: boolean): void {
 		this.settings.set("retry.enabled", enabled);
+	}
+
+	/**
+	 * @internal For testing only. Set the skip-post-turn-maintenance timestamp.
+	 */
+	setSkipPostTurnMaintenanceForTimestamp(ts: number): void {
+		this.#skipPostTurnMaintenanceAssistantTimestamp = ts;
 	}
 
 	// =========================================================================

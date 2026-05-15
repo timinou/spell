@@ -143,7 +143,6 @@ describe("AgentSession stream stall retry visibility", () => {
 
 		try {
 			await emitAssistantTurn(session, createStallMessage({ timestamp: 1 }));
-			await Bun.sleep(20);
 			await emitAssistantTurn(session, createStallMessage({ timestamp: 2 }));
 
 			const assistantMessages = getPersistedAssistantMessages(session);

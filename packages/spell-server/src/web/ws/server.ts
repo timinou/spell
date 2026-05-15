@@ -122,6 +122,22 @@ export class WebSubsystem {
 				}
 			}
 		});
+
+		this.#deps.hub.onProcessInfo(sample => {
+			for (const c of this.#connections) {
+				if (c.wants(sample.sessionId, "state")) {
+					c.send({
+						type: "process_info",
+						sessionId: sample.sessionId,
+						pid: sample.pid,
+						rssBytes: sample.rssBytes,
+						cpuPercent: sample.cpuPercent,
+						uptimeMs: sample.uptimeMs,
+						ts: sample.ts,
+					});
+				}
+			}
+		});
 	}
 
 	// ---- HTTP REST router -------------------------------------------------
@@ -266,6 +282,7 @@ export class WebSubsystem {
 				case "subscribe": {
 					connection.subscribe(msg.sessionId, msg.channels as Channel[], msg.artifactExt);
 					if (msg.channels.includes("events")) this.#tapEvents(connection, msg.sessionId);
+					if (msg.channels.includes("debug")) this.#tapStderr(connection, msg.sessionId);
 					return;
 				}
 				case "unsubscribe":
@@ -372,13 +389,26 @@ export class WebSubsystem {
 
 	#tapEvents(connection: WebConnection, sessionId: string): void {
 		try {
-			this.#deps.hub.subscribeEvents(sessionId, event => {
+			const unsub = this.#deps.hub.subscribeEvents(sessionId, event => {
 				if (!connection.wants(sessionId, "events")) return;
 				if (event.type === "response") return;
 				connection.send({ type: "rpc_event", sessionId, event });
 			});
+			connection.registerTap(sessionId, "events", unsub);
 		} catch {
 			// Spawned session may have ended; silent
+		}
+	}
+
+	#tapStderr(connection: WebConnection, sessionId: string): void {
+		try {
+			const unsub = this.#deps.hub.subscribeStderr(sessionId, line => {
+				if (!connection.wants(sessionId, "debug")) return;
+				connection.send({ type: "rpc_stderr", sessionId, line, ts: Date.now() });
+			});
+			connection.registerTap(sessionId, "debug", unsub);
+		} catch {
+			// External session or already ended; silent (debug is best-effort)
 		}
 	}
 }

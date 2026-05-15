@@ -30,8 +30,48 @@ interface SpawnedRecord {
 	sessionId: string;
 	rpcClient: RpcClient;
 	listeners: Set<EventListener>;
+	stderrListeners: Set<(line: string) => void>;
 	rootListener: (event: RpcEvent) => void;
+	stderrUnsub?: () => void;
+	processInfoTimer?: ReturnType<typeof setInterval>;
+	lastCpuSample?: { jiffies: number; ts: number };
+	startedAtMs: number;
 	watchActive: boolean;
+}
+
+export interface ProcessInfoSample {
+	sessionId: string;
+	pid: number;
+	rssBytes: number;
+	cpuPercent: number;
+	uptimeMs: number;
+	ts: number;
+}
+
+type ProcessInfoListener = (sample: ProcessInfoSample) => void;
+
+const PROCESS_INFO_INTERVAL_MS = 5_000;
+const PAGE_SIZE_BYTES = 4096;
+const CLOCK_TICKS_PER_SEC = 100;
+
+/** Parse /proc/<pid>/stat for rss + cumulative CPU jiffies. Linux only. */
+async function readProcStat(pid: number): Promise<{ rssBytes: number; jiffies: number } | null> {
+	try {
+		const raw = await Bun.file(`/proc/${pid}/stat`).text();
+		// Field 2 (comm) is in parentheses and can contain spaces; everything
+		// after the LAST ')' is space-delimited.
+		const lastParen = raw.lastIndexOf(")");
+		if (lastParen < 0) return null;
+		const rest = raw.slice(lastParen + 2).split(" ");
+		// rest[0] is field 3 (state). field N is index (N-3) in rest.
+		const utime = Number(rest[11]); // field 14
+		const stime = Number(rest[12]); // field 15
+		const rssPages = Number(rest[21]); // field 24
+		if (!Number.isFinite(utime) || !Number.isFinite(stime) || !Number.isFinite(rssPages)) return null;
+		return { rssBytes: rssPages * PAGE_SIZE_BYTES, jiffies: utime + stime };
+	} catch {
+		return null;
+	}
 }
 
 let spawnedSeq = 0;
@@ -56,6 +96,7 @@ export class WebSessionHub {
 	#deps: WebSessionHubDeps;
 	#records = new Map<string, SpawnedRecord>();
 	#lifecycle = new Set<LifecycleListener>();
+	#processInfo = new Set<ProcessInfoListener>();
 	#nextCommandId = 0;
 	#sessionRoots = new Map<string, string>();
 
@@ -89,6 +130,7 @@ export class WebSessionHub {
 			sessionId,
 			rpcClient: client,
 			listeners: new Set(),
+			stderrListeners: new Set(),
 			rootListener: event => {
 				if (event.type === "error") {
 					logger.warn("web spawned session error", { sessionId, message: event.message });
@@ -97,9 +139,35 @@ export class WebSessionHub {
 				}
 				for (const listener of record.listeners) listener(event);
 			},
+			startedAtMs: Date.now(),
 			watchActive: false,
 		};
 		client.onEvent(record.rootListener);
+		// onStderr / pid are post-Wave-2 additions. Treat as optional so older
+		// stubs (and any non-spawning RpcClient impls) keep working.
+		if (typeof client.onStderr === "function") {
+			record.stderrUnsub = client.onStderr(line => {
+				for (const listener of record.stderrListeners) {
+					try {
+						listener(line);
+					} catch (error) {
+						logger.debug("hub stderr listener threw", { sessionId, error: String(error) });
+					}
+				}
+			});
+		}
+		const pid = client.pid;
+		if (typeof pid === "number") {
+			const tick = (): void => {
+				void this.#sampleProcessInfo(record, pid);
+			};
+			record.processInfoTimer = setInterval(tick, PROCESS_INFO_INTERVAL_MS);
+			if (typeof record.processInfoTimer === "object" && record.processInfoTimer && "unref" in record.processInfoTimer) {
+				(record.processInfoTimer as NodeJS.Timeout).unref();
+			}
+			// First sample shortly after spawn to give the UI immediate data.
+			setTimeout(tick, 100);
+		}
 		this.#records.set(sessionId, record);
 
 		this.#deps.registry.registerSpawned({
@@ -184,12 +252,65 @@ export class WebSessionHub {
 		if (!record) return;
 		this.#records.delete(sessionId);
 		record.rpcClient.offEvent(record.rootListener);
+		record.stderrUnsub?.();
+		if (record.processInfoTimer) clearInterval(record.processInfoTimer);
 		this.#deps.registry.deregister(sessionId);
 		if (record.watchActive) {
 			this.#deps.artifactWatcher?.unwatch(sessionId);
 		}
 		this.#sessionRoots.delete(sessionId);
 		this.#emit({ type: "session_removed", sessionId });
+	}
+
+	/** Subscribe to a session's stderr line stream. Returns unsubscribe fn. */
+	subscribeStderr(sessionId: string, listener: (line: string) => void): () => void {
+		const record = this.#records.get(sessionId);
+		if (!record) {
+			throw new Error(`Unknown spawned session '${sessionId}'`);
+		}
+		record.stderrListeners.add(listener);
+		return () => {
+			record.stderrListeners.delete(listener);
+		};
+	}
+
+	/** Listen for periodic process telemetry across ALL spawned sessions. */
+	onProcessInfo(listener: ProcessInfoListener): () => void {
+		this.#processInfo.add(listener);
+		return () => {
+			this.#processInfo.delete(listener);
+		};
+	}
+
+	async #sampleProcessInfo(record: SpawnedRecord, pid: number): Promise<void> {
+		const stat = await readProcStat(pid);
+		const ts = Date.now();
+		let cpuPercent = 0;
+		if (stat && record.lastCpuSample) {
+			const dj = stat.jiffies - record.lastCpuSample.jiffies;
+			const dsec = (ts - record.lastCpuSample.ts) / 1000;
+			if (dsec > 0) {
+				cpuPercent = Math.max(0, (dj / CLOCK_TICKS_PER_SEC / dsec) * 100);
+			}
+		}
+		if (stat) {
+			record.lastCpuSample = { jiffies: stat.jiffies, ts };
+		}
+		const sample: ProcessInfoSample = {
+			sessionId: record.sessionId,
+			pid,
+			rssBytes: stat?.rssBytes ?? 0,
+			cpuPercent,
+			uptimeMs: ts - record.startedAtMs,
+			ts,
+		};
+		for (const listener of this.#processInfo) {
+			try {
+				listener(sample);
+			} catch (error) {
+				logger.debug("process_info listener threw", { sessionId: record.sessionId, error: String(error) });
+			}
+		}
 	}
 
 	async #waitForReady(client: RpcClient, timeoutMs = 30_000): Promise<void> {

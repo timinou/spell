@@ -60,11 +60,50 @@ export interface CodePathChunk {
 	done: boolean;
 }
 
+// ── Introspection types ────────────────────────────────────────────
+
+export interface OpKindInfo {
+	kind: string;
+	family: string;
+	target_shape: string;
+	required_fields: string[];
+	optional_fields: string[];
+}
+
+export interface QualifierInfo {
+	name: string;
+	args_schema: string | null;
+	applies_to: string[];
+}
+
+export interface EdgeKindInfo {
+	symbol: string;
+	name: string;
+	description: string;
+}
+
+export interface DiagnosticVariantInfo {
+	variant: string;
+	severity: string;
+	template: string;
+}
+
+export interface LanguageDialectInfo {
+	id: string;
+	extensions: string[];
+	capabilities: string[];
+}
+
 declare module "../bindings" {
 	interface NativeBindings {
 		executeCodePath(options: CodePathOptions): Promise<CodePathChunk[]>;
 		parseCodePath(target: string): any;
 		renderCodePath(ast: any): string;
 		getRegisteredExtensions(): string[];
+		listOpKinds(): OpKindInfo[];
+		listQualifiers(): QualifierInfo[];
+		listEdgeKinds(): EdgeKindInfo[];
+		listDiagnosticVariants(): DiagnosticVariantInfo[];
+		listLanguageDialects(): LanguageDialectInfo[];
 	}
 }

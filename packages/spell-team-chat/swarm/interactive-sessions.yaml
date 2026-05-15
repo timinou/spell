@@ -1,0 +1,459 @@
+# Spell Team Chat — Interactive Sessions Swarm
+#
+# Purpose: Prove interactive sessions actually work end-to-end. Three waves:
+#   1. Cassette infrastructure  — make LLM calls deterministic in tests
+#   2. WebSocket observability  — peek into as much process state as possible
+#   3. Interactive E2E verify   — prove prompt → response → UI render works
+#
+# Each wave is followed by a reviewer wave that gates progression. Reviewers
+# read the diff/state and either pass (write a wave report) or block (write
+# follow-up tasks for the next implementation wave to address before progress).
+#
+# Execution model: matches packages/swarm-extension/README.md YAML format.
+# DAG built from `waits_for` edges; agents in the same topological layer run
+# in parallel. Workspace is the monorepo root; agents edit non-overlapping
+# files within their declared scope.
+
+swarm:
+  name: spell-team-chat-interactive
+  workspace: ../../.. # repo root
+  mode: sequential # waves enforce ordering via waits_for
+
+  agents:
+    # ============================================================
+    # WAVE 1 — Cassette infrastructure
+    # ============================================================
+    # Goal: deterministic LLM responses in tests. Record once, replay forever.
+    # Output of wave: a `cassetteFetch(realFetch, opts)` factory in @oh-my-pi/ai
+    # that can be injected into provider HTTP paths. Anthropic SSE captured
+    # chunk-by-chunk, replayed with fast-forward timing.
+
+    cassette_core:
+      role: ai-test-infra
+      task: |
+        Implement a fetch-level cassette middleware in @oh-my-pi/ai.
+
+        ## Target files (new)
+        - packages/ai/src/cassette/index.ts        — public API: `cassetteFetch`, `CassetteOptions`, `CassetteMode`
+        - packages/ai/src/cassette/store.ts        — disk store: read/write JSON cassette files
+        - packages/ai/src/cassette/match.ts        — request fingerprint + match logic
+        - packages/ai/src/cassette/sse.ts          — SSE chunk capture/replay (for streaming responses)
+        - packages/ai/src/cassette/redact.ts       — strip auth headers before persisting
+        - packages/ai/test/cassette/cassette.test.ts — unit tests for record→replay round-trip
+
+        ## Public API contract (DO NOT DEVIATE)
+
+        export type CassetteMode = "record" | "replay" | "passthrough";
+
+        export interface CassetteOptions {
+          /** Directory holding cassette files. One file per fingerprint. */
+          dir: string;
+          /** Behavior. `passthrough` = no-op (return raw fetch). */
+          mode: CassetteMode;
+          /** Optional fingerprint customization (default: method + URL + body hash). */
+          fingerprint?: (req: Request) => string;
+          /** Hook to redact request before persisting (e.g. strip auth headers). */
+          redactRequest?: (req: Request) => Request;
+        }
+
+        /** Wraps an existing fetch with record/replay behavior. Drop-in replacement. */
+        export function cassetteFetch(
+          inner: typeof globalThis.fetch,
+          opts: CassetteOptions,
+        ): typeof globalThis.fetch;
+
+        ## Behavior
+
+        1. `passthrough` — return inner fetch unmodified.
+        2. `record` — call inner fetch; clone the response; persist `{request, response}`
+           keyed by fingerprint; return the original response to the caller.
+           For SSE responses, tee the body into the cassette file chunk-by-chunk,
+           recording each chunk with its arrival delta-time.
+        3. `replay` — compute fingerprint of the incoming request, look up cassette
+           file. If found, synthesize a Response. For SSE: emit chunks back via a
+           ReadableStream, optionally with original timing (capped at 10ms/chunk).
+           If not found, throw an explicit error mentioning the fingerprint.
+        4. Redact `Authorization`, `x-api-key`, `anthropic-api-key`, `cookie` headers
+           by default; allow override via `redactRequest`.
+
+        ## Fingerprint default
+        SHA-256 of: `${method}\n${url-without-trailing-slash}\n${stable-stringified-body}`.
+        Strip ephemeral headers (Date, User-Agent, ...) before hashing.
+        Use `node:crypto` for hashing.
+
+        ## Cassette file shape (JSON)
+        {
+          "fingerprint": "sha256:...",
+          "request": { "method": "POST", "url": "...", "headers": {...}, "body": "..." },
+          "response": {
+            "status": 200,
+            "statusText": "OK",
+            "headers": {...},
+            "kind": "buffered" | "sse",
+            "body": "<string or base64 for buffered>",
+            "events": [{ "deltaMs": 12, "data": "..." }]  // sse only
+          },
+          "recordedAt": "ISO-8601"
+        }
+
+        ## Tests
+        - Round-trip: record a fake fetch's response, replay it, assert bodies match.
+        - SSE: capture two chunks, replay, assert chunk order + content.
+        - Replay miss: throws explicit error with fingerprint in message.
+        - Redaction: Authorization header NEVER appears in persisted cassette.
+
+        ## Constraints
+        - No new runtime deps. Use node:crypto, node:fs/promises only.
+        - Tests in bun:test.
+        - Must compile under packages/ai/tsconfig.json.
+        - Export `cassetteFetch` from packages/ai/src/index.ts.
+
+    cassette_provider_wire:
+      role: ai-test-infra
+      waits_for: [cassette_core]
+      task: |
+        Wire cassetteFetch into the Anthropic provider's fetch injection point
+        via env-driven activation. This is a SURGICAL change to one file.
+
+        ## Target file (modify)
+        - packages/ai/src/providers/anthropic.ts (around the `originalFetch` const,
+          currently near line 642).
+
+        ## Change
+        Replace the bare `originalFetch` definition with:
+
+        ```ts
+        const baseFetch: NonNullable<AnthropicSdkClientOptions["fetch"]> = (input, init) =>
+            globalThis.fetch(input as Parameters<typeof globalThis.fetch>[0], init);
+        const cassetteDir = process.env.SPELL_CASSETTE_DIR;
+        const cassetteMode = (process.env.SPELL_CASSETTE_MODE as CassetteMode | undefined) ?? "passthrough";
+        const originalFetch: typeof baseFetch = cassetteDir
+            ? cassetteFetch(baseFetch as typeof globalThis.fetch, { dir: cassetteDir, mode: cassetteMode }) as typeof baseFetch
+            : baseFetch;
+        ```
+
+        Add the necessary `import { cassetteFetch, type CassetteMode } from "../cassette";` at top.
+
+        ## Other providers
+        Do NOT touch other providers in this wave — Anthropic-only proves the pattern.
+        FUP item to fan out later if needed.
+
+        ## Verify
+        bun --cwd packages/ai run check passes.
+
+    cassette_fixture:
+      role: ai-test-infra
+      waits_for: [cassette_core]
+      task: |
+        Hand-craft a tiny realistic Anthropic SSE cassette to bootstrap E2E
+        tests in wave 3. This is a fixture, not generated by recording.
+
+        ## Target file (new)
+        - packages/spell-team-chat/test/cassettes/anthropic-say-alive.json
+
+        ## Content
+        Cassette captures one POST to https://api.anthropic.com/v1/messages
+        with a body containing a single user message "say only the word alive".
+        Response is SSE with: message_start → content_block_start (text) →
+        content_block_delta (text="alive") → content_block_stop → message_delta
+        (stop_reason="end_turn") → message_stop.
+
+        Use real Anthropic SSE event shapes per
+        https://docs.anthropic.com/en/api/messages-streaming — DO NOT INVENT
+        fields. Match what claude-3-5-haiku-latest would emit.
+
+        ## Fingerprint
+        Use a stable fingerprint computed from method+URL+body-hash. Document
+        the body shape (system prompt empty, model "claude-3-5-haiku-latest",
+        max_tokens 64, single user message). The wave-3 test must construct an
+        identical request body or the fingerprint won't match.
+
+        ## Schema
+        Match the schema implemented by cassette_core in store.ts. If the schema
+        in store.ts differs, follow store.ts (cassette_core is upstream).
+
+    # ============================================================
+    # REVIEW 1 — Gate before Wave 2
+    # ============================================================
+
+    review_wave1:
+      role: reviewer
+      waits_for: [cassette_core, cassette_provider_wire, cassette_fixture]
+      task: |
+        Review the cassette infrastructure (wave 1). Check:
+
+        1. **Security**: Authorization / x-api-key / cookie headers MUST NOT
+           appear in any persisted cassette JSON. Read packages/ai/src/cassette/redact.ts
+           and verify the redact list. Read the test fixture and confirm no leaks.
+        2. **Determinism**: cassetteFetch(replay) must NEVER make a real network
+           call. Audit packages/ai/src/cassette/index.ts for any fallback path
+           that could leak through.
+        3. **Fingerprint stability**: same request bytes → same fingerprint.
+           Different bytes → different fingerprint. Read match.ts.
+        4. **SSE replay**: chunk order and content preserved. Read sse.ts and
+           the test in cassette.test.ts.
+        5. **Provider wiring**: anthropic.ts change is minimal, env-driven,
+           defaults to passthrough. Read the diff.
+        6. **Tests pass**: bun --cwd packages/ai test cassette completes 0 fail.
+        7. **Lint/typecheck**: bun --cwd packages/ai run check is clean.
+
+        Write report to packages/spell-team-chat/swarm/reports/wave-1-review.md.
+        Format:
+
+        ```
+        # Wave 1 Review
+
+        ## Verdict
+        PASS | BLOCK | PASS_WITH_FOLLOWUPS
+
+        ## Findings
+        - **[severity]** finding with file:line
+        - ...
+
+        ## Required fixes before Wave 2
+        - (empty if PASS)
+        - file:line — what to change and why
+
+        ## Suggested follow-ups (non-blocking)
+        - ...
+
+        ## Test evidence
+        - bun --cwd packages/ai test cassette: N pass / M fail
+        - bun --cwd packages/ai run check: clean | errors
+        ```
+
+        Be strict. The point of a review wave is to catch what implementers miss.
+
+    # ============================================================
+    # WAVE 2 — WebSocket observability deepening
+    # ============================================================
+
+    observability_process_info:
+      role: spell-server-internals
+      waits_for: [review_wave1]
+      task: |
+        Add a `process_info` event type to /web/ws. Each spawned RPC subprocess
+        gets periodic (5s) process telemetry pushed to all subscribers of its
+        `state` channel.
+
+        ## Target files (modify)
+        - packages/spell-server/src/web/ws/protocol.ts — add ProcessInfoEvent
+          to WsServerMessage union
+        - packages/spell-server/src/web/session/web-session-hub.ts — collect
+          and emit telemetry from spawned record
+        - packages/spell-server/src/web/ws/server.ts — fan event out to
+          subscribers when collected
+
+        ## ProcessInfoEvent shape
+        {
+          type: "process_info",
+          sessionId: string,
+          pid: number,
+          rssBytes: number,        // resident memory
+          cpuPercent: number,      // since last sample
+          uptimeMs: number,
+          ts: number,
+        }
+
+        ## Collection
+        Bun.spawn's returned Subprocess exposes `pid`. Read /proc/<pid>/stat
+        and /proc/<pid>/status on Linux (graceful fallback on other OS: omit
+        cpuPercent). Sample every 5_000 ms; clear timer on session removal.
+
+        ## Subscription
+        Only fan out to connections that subscribed with `state` in channels.
+        Default subscriptions in the Svelte SPA already include "state" for
+        spawned sessions, so no UI change needed in this wave.
+
+        ## Constraints
+        - No new deps. Use node:fs.
+        - Add a test in packages/spell-server/test/web/process-info.test.ts that
+          mocks the subprocess and asserts the event shape.
+
+    observability_stderr_tap:
+      role: spell-server-internals
+      waits_for: [review_wave1]
+      task: |
+        Add an `rpc_stderr` event type to /web/ws. Each line written to a
+        spawned subprocess's stderr is forwarded as a discrete event.
+
+        ## Target files (modify)
+        - packages/spell-server/src/rpc/rpc-client.ts — already consumes stderr;
+          expose a new event hook
+        - packages/spell-server/src/web/ws/protocol.ts — add RpcStderrEvent
+        - packages/spell-server/src/web/session/web-session-hub.ts — wire the
+          stderr lines into the lifecycle subscriber pipeline
+        - packages/spell-server/src/web/ws/server.ts — fan out to debug channel
+          subscribers
+
+        ## RpcStderrEvent shape
+        {
+          type: "rpc_stderr",
+          sessionId: string,
+          line: string,
+          ts: number,
+        }
+
+        ## Channel
+        Introduce a new optional subscription channel `"debug"` (alongside
+        events, artifacts, state). Subscribers must opt in. This is a firehose
+        — no implicit subscription.
+
+        ## Buffering
+        Line-buffered (split on \n). Drop lines >4KB to prevent DOS.
+
+        ## Test
+        packages/spell-server/test/web/stderr-tap.test.ts — feed a fake stderr,
+        assert events arrive in order, oversized lines dropped.
+
+    observability_ui_debug_panel:
+      role: spell-team-chat-ui
+      waits_for: [review_wave1]
+      task: |
+        Add a "Debug" panel to the Svelte SPA that subscribes to the new
+        `debug` channel and renders process_info + rpc_stderr events.
+
+        ## Target files
+        - packages/spell-team-chat/src/lib/protocol.ts — add the new event types
+          (mirror what observability_process_info + observability_stderr_tap
+          define; expect them to match exactly)
+        - packages/spell-team-chat/src/lib/stores.svelte.ts — add debug log
+          slice on SessionState
+        - packages/spell-team-chat/src/lib/reducers.ts — add appendProcessInfo,
+          appendStderr pure reducers + unit tests in test/unit/
+        - packages/spell-team-chat/src/components/DebugPanel.svelte — new
+        - packages/spell-team-chat/src/components/Shell.svelte — add a toggle
+          button to expand the debug panel (right side, slide-in)
+        - packages/spell-team-chat/src/App.svelte — subscribe to `debug`
+          channel on session_added when a debug panel is open
+
+        ## DebugPanel UI
+        - Tabbed: "Process" (latest process_info), "Stderr" (tail of last 200 lines)
+        - Updates live as events arrive
+        - Statusbar shows when debug subscription is active
+
+        ## Tests
+        Add 3 reducer tests in test/unit/reducers.test.ts:
+        - appendProcessInfo keeps only the latest sample
+        - appendStderr appends with timestamp
+        - appendStderr caps the log at 200 lines (drop oldest)
+
+    # ============================================================
+    # REVIEW 2 — Gate before Wave 3
+    # ============================================================
+
+    review_wave2:
+      role: reviewer
+      waits_for:
+        - observability_process_info
+        - observability_stderr_tap
+        - observability_ui_debug_panel
+      task: |
+        Review the observability extensions (wave 2). Check:
+
+        1. **No secrets leak**: stderr forwarder must NOT expose env vars,
+           file paths to credentials, or auth tokens. Review the rpc_stderr
+           buffering logic.
+        2. **Backpressure**: a flood of stderr lines must not crash the server
+           or memory-bloat the client. Read the cap logic.
+        3. **Auth gating**: `debug` channel subscription requires the same
+           bearer-token identity check as other channels. Verify in server.ts.
+        4. **Backwards compat**: existing /web/ws clients that subscribe only
+           to events/artifacts must not receive the new types. Audit fan-out.
+        5. **UI doesn't crash on missing debug data**: a session with no
+           process_info yet renders an empty Process tab gracefully.
+        6. **Tests pass**: bun --cwd packages/spell-server test web,
+           bun --cwd packages/spell-team-chat test:unit.
+        7. **Lint/typecheck**: bun --cwd packages/spell-server run check,
+           bun --cwd packages/spell-team-chat run check.
+
+        Write report to packages/spell-team-chat/swarm/reports/wave-2-review.md
+        with same format as wave-1-review.md.
+
+    # ============================================================
+    # WAVE 3 — Interactive E2E verification
+    # ============================================================
+
+    interactive_e2e:
+      role: spell-team-chat-e2e
+      waits_for: [review_wave2]
+      # pragma: allowlist secret
+      task: | # pragma: allowlist secret
+        Write the headline test: a real interactive session, end-to-end,
+        deterministically reproducible.
+
+        ## Target file (new)
+        - packages/spell-team-chat/test/e2e/interactive.test.ts
+
+        ## Test flow
+        1. Start a test spell-server (test-server.ts helper) configured with:
+           - SPELL_CASSETTE_DIR pointing at packages/spell-team-chat/test/cassettes
+           - SPELL_CASSETTE_MODE=replay
+           - ANTHROPIC_API_KEY=dummy (replay mode doesn't validate it)
+           - autonomy.kdl declaring a "noop" setup
+        2. Launch Chromium, log in, spawn a session at the test's cwd with
+           initialPrompt="say only the word alive".
+        3. Wait for the assistant bubble to render "alive" within 10s.
+           This proves: WS auth → spawn → prompt routing → RPC subprocess →
+           cassette replay → SSE event → message_update → bubble render.
+        4. Assert `process_info` events arrive on the state channel for the
+           spawned session (process_info inside 6s).
+        5. Subscribe explicitly to the debug channel and assert at least one
+           rpc_stderr event arrives (the RPC subprocess emits startup logs).
+
+        ## Helpers
+        Add to test/helpers/test-server.ts an option {cassetteDir, cassetteMode}
+        that is plumbed into the spell-server subprocess env.
+
+        ## Constraints
+        - Total test must complete in <30s when cassette is present.
+        - Test must FAIL with a clear error if SPELL_CASSETTE_MODE=replay finds
+          no cassette match for the request (this is what catches drift).
+        - Skip the test (not fail) if the cassette file is absent — give a
+          helpful "run with SPELL_CASSETTE_MODE=record first" message.
+
+    cassette_record_docs:
+      role: spell-team-chat-docs
+      waits_for: [review_wave2]
+      task: |
+        Document the record/replay workflow.
+
+        ## Target file (modify)
+        - packages/spell-team-chat/README.md — add a "Recording cassettes"
+          section between "Testing" and "Design DNA".
+
+        ## Content
+        Explain:
+        - When to record (cassette drift; new test; protocol change)
+        - How to record: `SPELL_CASSETTE_DIR=test/cassettes SPELL_CASSETTE_MODE=record bun run test:e2e`
+        - Where cassettes are stored
+        - Reviewing recorded cassettes: never commit Authorization headers
+          (the redact list is the safety net but READ the JSON before commit)
+        - When NOT to commit: cassettes recorded against accounts with PII
+
+    # ============================================================
+    # REVIEW 3 — Final gate
+    # ============================================================
+
+    review_wave3:
+      role: reviewer
+      waits_for: [interactive_e2e, cassette_record_docs]
+      task: |
+        Final review. Check:
+
+        1. **Headline claim verified**: the interactive_e2e test, run in
+           replay mode, demonstrates a full prompt → "alive" response cycle.
+           Run it: bun --cwd packages/spell-team-chat run test:e2e (with
+           the cassette fixture present from wave 1).
+        2. **All three tiers green together**:
+           - bun --cwd packages/spell-team-chat run test:unit
+           - bun --cwd packages/spell-team-chat run test:e2e
+           - bun --cwd packages/ai test cassette (or whatever subset)
+        3. **No regressions**: bun --cwd packages/spell-server test web
+           still passes.
+        4. **Docs accurate**: the record workflow in README matches the
+           actual implementation.
+        5. **Net diff is reviewable**: not so large that a human can't audit
+           it in 30 minutes. Estimate LoC added.
+
+        Write final report at packages/spell-team-chat/swarm/reports/wave-3-final.md.

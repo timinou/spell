@@ -6,6 +6,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { type Agent, type AgentMessage, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Message, Model, UsageReport } from "@oh-my-pi/pi-ai";
+import { type AgentStatus, type AgentStatusContext, deriveAgentStatus } from "@oh-my-pi/pi-desktop-common";
 import { NiriOverviewController } from "@oh-my-pi/pi-niri";
 import { appendItemToFile, generateId, orgToMarkdown, resolveCategories } from "@oh-my-pi/pi-org";
 import type { Component, OverlayHandle, SlashCommand } from "@oh-my-pi/pi-tui";
@@ -54,6 +55,7 @@ import type { ExitPlanModeDetails } from "../tools";
 import { replaceTabs, TRUNCATE_LENGTHS } from "../tools/render-utils";
 import { isDelegatedTask } from "../tools/todo-write";
 import type { EventBus } from "../utils/event-bus";
+import type { BlockingEventLike } from "../utils/intention-summarizer";
 import { setTerminalTitle } from "../utils/title-generator";
 import type { AssistantMessageComponent } from "./components/assistant-message";
 import { AuditModeOverlay } from "./components/audit-mode-overlay";
@@ -72,6 +74,7 @@ import { CommandController } from "./controllers/command-controller";
 import { EventController } from "./controllers/event-controller";
 import { ExtensionUiController } from "./controllers/extension-ui-controller";
 import { InputController } from "./controllers/input-controller";
+import { IntentionController } from "./controllers/intention-controller";
 import { MCPCommandController } from "./controllers/mcp-command-controller";
 import { SelectorController } from "./controllers/selector-controller";
 import { SSHCommandController } from "./controllers/ssh-command-controller";
@@ -264,6 +267,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	readonly #eventController: EventController;
 	readonly #extensionUiController: ExtensionUiController;
 	readonly #inputController: InputController;
+	readonly #intentionController: IntentionController;
+	#lastDerivedStatus: AgentStatus | null = null;
+	#intentionSubscriptionUnsub?: () => void;
 	readonly #selectorController: SelectorController;
 	readonly #uiHelpers: UiHelpers;
 	#niriController: NiriOverviewController | undefined = undefined;
@@ -385,6 +391,27 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#commandController = new CommandController(this);
 		this.#selectorController = new SelectorController(this);
 		this.#inputController = new InputController(this);
+		this.#intentionController = new IntentionController({
+			sessionManager: this.sessionManager,
+			settings: this.settings,
+			modelRegistry: this.session.modelRegistry,
+			getStatusContext: () => this.#buildStatusContext(),
+			getCurrentBlockingEvent: () => this.#getCurrentBlockingEventLike(),
+			getCurrentModel: () => this.session.model,
+			getSessionId: () => this.session.sessionId,
+			getFirstUserMessage: () => {
+				const firstUser = this.session.messages.find(m => m.role === "user");
+				if (!firstUser) return "";
+				if (typeof firstUser.content === "string") return firstUser.content;
+				return firstUser.content
+					.filter(c => typeof c === "object" && "type" in c && c.type === "text")
+					.map(c => (c as { text?: string }).text ?? "")
+					.join("\n");
+			},
+			getRecentAssistantTexts: () => this.#getRecentAssistantTexts(),
+			getInProgressTodoTitles: () => this.#getInProgressTodoTitles(),
+			getSessionTitle: () => this.sessionManager.getSessionName(),
+		});
 	}
 
 	async init(): Promise<void> {
@@ -602,6 +629,15 @@ export class InteractiveMode implements InteractiveModeContext {
 				},
 			});
 		}
+		this.#intentionSubscriptionUnsub = this.session.subscribe(() => {
+			const ctx = this.#buildStatusContext();
+			const next = deriveAgentStatus(ctx);
+			const prev = this.#lastDerivedStatus;
+			this.#lastDerivedStatus = next;
+			if (prev !== next) {
+				this.#intentionController.handleStatusChange(prev, next);
+			}
+		});
 
 		// Initial top border update
 		this.updateEditorTopBorder();
@@ -1605,6 +1641,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#cleanupUnsubscribe) {
 			this.#cleanupUnsubscribe();
 		}
+		this.#intentionSubscriptionUnsub?.();
+		this.#intentionController.dispose();
 		this.#niriController?.destroy();
 		this.sessionBridge?.dispose();
 		this.sessionBridge = undefined;
@@ -1621,6 +1659,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Flush pending session writes before shutdown
 		await this.sessionManager.flush();
 		this.#btwController.dispose();
+		this.#intentionSubscriptionUnsub?.();
+		this.#intentionController.dispose();
 
 		// Emit shutdown event to hooks
 		await this.session.dispose();
@@ -2232,6 +2272,63 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#extensionUiController.showToolError(toolName, error);
 	}
 
+	#buildStatusContext(): AgentStatusContext {
+		return {
+			isStreaming: this.session.isStreaming,
+			isPendingApproval: this.isPendingApproval,
+			isAwaitingHookInput: this.hookSelector !== undefined || this.hookInput !== undefined,
+			isUserPaused: this.#isUserPaused,
+			hasInputCallback: this.onInputCallback !== undefined,
+			todoPhases: this.session.getTodoGroups(),
+		};
+	}
+
+	#getCurrentBlockingEventLike(): BlockingEventLike | undefined {
+		if (this.isPendingApproval) {
+			return { kind: "plan_approval", eventId: "plan", title: "Plan approval pending" };
+		}
+		if (this.hookSelector) {
+			return { kind: "hook_selector", eventId: "sel", title: "Awaiting selection" };
+		}
+		if (this.hookInput) {
+			return { kind: "hook_input", eventId: "in", title: "Awaiting input" };
+		}
+		return undefined;
+	}
+
+	#getRecentAssistantTexts(): string[] {
+		const out: string[] = [];
+		const messages = this.session.messages;
+		let lastUserIdx = -1;
+		for (let i = messages.length - 1; i >= 0; i--) {
+			if (messages[i].role === "user") {
+				lastUserIdx = i;
+				break;
+			}
+		}
+		for (let i = lastUserIdx + 1; i < messages.length; i++) {
+			const m = messages[i];
+			if (m.role !== "assistant") continue;
+			const txt = Array.isArray(m.content)
+				? m.content
+						.filter(c => typeof c === "object" && "type" in c && c.type === "text")
+						.map(c => (c as { text?: string }).text ?? "")
+						.join("\n")
+				: (m.content as string);
+			if (txt) out.push(txt);
+		}
+		return out.slice(-3);
+	}
+
+	#getInProgressTodoTitles(): string[] {
+		const titles: string[] = [];
+		for (const phase of this.session.getTodoGroups()) {
+			for (const task of phase.tasks) {
+				if (task.status === "in_progress") titles.push(task.content);
+			}
+		}
+		return titles.slice(0, 5);
+	}
 	#subscribeToAgent(): void {
 		this.#eventController.subscribeToAgent();
 	}

@@ -142,6 +142,60 @@ loader + happy-dom. As of May 2026, Svelte 5 + Bun + happy-dom has
 known runes bugs. Tier 3 covers the same surface in a real browser
 without the workarounds.
 
+## Recording cassettes
+
+The Tier-3 E2E suite uses HTTP cassettes (`packages/ai/src/cassette/`) to make LLM-driven flows deterministic. When the headline `test/e2e/interactive.test.ts` runs in replay mode, the Anthropic SDK's fetch is intercepted and served from `packages/spell-team-chat/test/cassettes/`.
+
+### When to record
+
+- Adding a new e2e test that prompts the agent.
+- The provider's wire shape changed (new SDK version, new headers in request).
+- Cassette drift (fingerprint mismatch error in test output — see below).
+
+### How to record
+
+1. Export real Anthropic credentials in your shell:
+   ```bash
+   export ANTHROPIC_API_KEY=sk-ant-...
+   ```
+2. Run the test suite in record mode:
+   ```bash
+   SPELL_CASSETTE_DIR=packages/spell-team-chat/test/cassettes \
+   SPELL_CASSETTE_MODE=record \
+   bun --cwd packages/spell-team-chat run test:e2e
+   ```
+3. Each provider call writes a `<fingerprint>.json` file in the cassette dir.
+
+### Where cassettes live
+
+`packages/spell-team-chat/test/cassettes/<sha256-hex>.json`. Filenames are deterministic — they're the SHA-256 of `method + URL + stable-stringified body`. Two callers issuing the same request bytes produce the same fingerprint, so cassettes are commit-stable.
+
+### Reviewing before commit
+
+Before committing a recorded cassette, **read the JSON**:
+
+- `request.headers.authorization` MUST be `<redacted>` (the redact pass in `packages/ai/src/cassette/redact.ts` handles this automatically — verify it actually fired)
+- `request.headers.x-api-key` and `anthropic-api-key` must also be redacted
+- `response.headers` for `set-cookie` (we strip these too)
+- The request body must NOT contain PII you don't want in version control
+
+If any of the above leaked, **delete the cassette and re-record after fixing redaction.**
+
+### When NOT to commit
+
+Cassettes recorded against accounts with PII, or against responses containing the real user's data, do not belong in git. Mark them with a `.local.json` suffix and add a `.gitignore` rule if you don't want them to round-trip.
+
+### Cassette drift
+
+If an existing test starts failing with:
+```
+No cassette match for fingerprint=<hex>. Hint: record first with SPELL_CASSETTE_MODE=record.
+```
+
+The request body changed since the cassette was recorded. Either:
+- Roll back the change that altered the request body, or
+- Re-record (with real creds) and commit the new cassette.
+
 ## Design DNA
 
 Tokens lifted wholesale from `~/code/personal/sakya/src/app.css`, with two swaps:

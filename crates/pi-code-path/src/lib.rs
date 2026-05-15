@@ -15,10 +15,12 @@
 pub mod ast;
 pub mod dialect;
 pub mod dialects;
+pub mod introspection;
 pub mod op;
 pub mod parser;
 pub mod renderer;
 pub mod resolver;
+pub mod diagnostic_render;
 pub mod types;
 
 pub use ast::*;
@@ -30,4 +32,5 @@ pub use op::{
 pub use parser::{parse_code_path, parse_locator};
 pub use renderer::render_code_path;
 pub use resolver::traits::MutationResolver;
+pub use introspection::*;
 pub use types::*;

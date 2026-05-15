@@ -3,7 +3,26 @@ import type { BlockingEventPayload, EventLogEntry, EventResponsePayload } from "
 import type { ArtifactCreatedEvent } from "../artifacts/types";
 
 /** Subscribable channel set per session. */
-export type Channel = "events" | "artifacts" | "state";
+export type Channel = "events" | "artifacts" | "state" | "debug";
+
+/** Periodic sample of a spawned RPC subprocess's resource usage. */
+export interface ProcessInfoEvent {
+	type: "process_info";
+	sessionId: string;
+	pid: number;
+	rssBytes: number;
+	cpuPercent: number;
+	uptimeMs: number;
+	ts: number;
+}
+
+/** One line of stderr from a spawned RPC subprocess. */
+export interface RpcStderrEvent {
+	type: "rpc_stderr";
+	sessionId: string;
+	line: string;
+	ts: number;
+}
 
 export interface SessionSummary {
 	sessionId: string;
@@ -71,7 +90,9 @@ export type WsServerMessage =
 	| { type: "artifact_url"; sessionId: string; url: string; expiresAt: number; correlationId?: string }
 	| { type: "spawn_result"; sessionId: string; correlationId?: string }
 	| { type: "error"; code: string; message: string; correlationId?: string }
-	| { type: "pong"; correlationId?: string };
+	| { type: "pong"; correlationId?: string }
+	| ProcessInfoEvent
+	| RpcStderrEvent;
 
 export function isWsClientMessage(value: unknown): value is WsClientMessage {
 	if (typeof value !== "object" || value === null) return false;

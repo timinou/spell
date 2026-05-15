@@ -61,7 +61,7 @@ describe("autocompleteMaxVisible setting", () => {
 			editor: { setAutocompleteMaxVisible },
 		} as unknown as ConstructorParameters<typeof SelectorController>[0]);
 
-		controller.handleSettingChange("autocompleteMaxVisible", "10");
+		controller.handleSettingChange("autocompleteMaxVisible", "10", "user");
 
 		expect(setAutocompleteMaxVisible).toHaveBeenCalledWith(10);
 	});

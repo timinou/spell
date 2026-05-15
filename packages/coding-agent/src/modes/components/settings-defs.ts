@@ -241,6 +241,14 @@ const OPTION_PROVIDERS: Partial<Record<SettingPath, OptionProvider>> = {
 		{ value: "2000", label: "2000 lines", description: "~10K tokens" },
 		{ value: "5000", label: "5000 lines", description: "~25K tokens" },
 	],
+	"tools.getSpillThreshold": [
+		{ value: "5000", label: "5K tokens", description: "~20 KB; tight" },
+		{ value: "10000", label: "10K tokens", description: "~40 KB" },
+		{ value: "25000", label: "25K tokens", description: "Default; ~100 KB" },
+		{ value: "50000", label: "50K tokens", description: "~200 KB" },
+		{ value: "100000", label: "100K tokens", description: "~400 KB" },
+		{ value: "200000", label: "200K tokens", description: "~800 KB" },
+	],
 	// Read line limit
 	"read.defaultLimit": [
 		{ value: "200", label: "200 lines" },

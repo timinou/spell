@@ -31,7 +31,34 @@ export interface SkillPromptDetails {
 	args?: string;
 	lineCount: number;
 }
+export const INTENTION_SUMMARY_MESSAGE_TYPE = "intentionSummary";
 
+export interface IntentionSummaryDetails {
+	did: string;
+	/** Absent or empty when there is nothing the agent is blocked on. */
+	stuck?: string;
+	ask: string;
+	/** Which blocking-state triggered this briefing. */
+	trigger: "needs_input" | "pending_approval";
+	/** Origin BlockingEvent.eventId; used by the controller to supersede prior cards. */
+	eventId?: string;
+	/** True until the smol-model generation resolves; component renders the "summarizing…" state. */
+	pending?: boolean;
+	/** True once a later briefing supersedes this card; component renders a dimmed historic state. */
+	superseded?: boolean;
+}
+
+/**
+ * Plain-text serialisation of an IntentionSummaryDetails. Used as the `content`
+ * argument to SessionManager.appendCustomMessageEntry so that resume paths
+ * which strip `details` still produce a readable history line.
+ */
+export function buildIntentionSummaryContent(details: IntentionSummaryDetails): string {
+	const lines = [`DID: ${details.did}`];
+	if (details.stuck && details.stuck.length > 0) lines.push(`STUCK: ${details.stuck}`);
+	lines.push(`ASK: ${details.ask}`);
+	return lines.join("\n");
+}
 function getPrunedToolResultContent(message: ToolResultMessage): (TextContent | ImageContent)[] {
 	if (message.prunedAt === undefined) {
 		return message.content;

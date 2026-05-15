@@ -22,6 +22,10 @@ export interface WebConnectionData {
 export class WebConnection {
 	#ws: ServerWebSocket<WebConnectionData>;
 	#subs = new Map<string, SubscriptionState>();
+	/** Hub-side unsubscribe handles, keyed by `<sessionId>:<channel>`. Replaced
+	 * on resubscribe and drained on dispose so per-connection listeners never
+	 * outlive their WebSocket. */
+	#taps = new Map<string, () => void>();
 	identity: WebIdentity;
 
 	constructor(ws: ServerWebSocket<WebConnectionData>, identity: WebIdentity) {
@@ -71,8 +75,31 @@ export class WebConnection {
 		return filterByExt(sub.artifactExt, event);
 	}
 
-	/** Drop all subscriptions on disconnect. */
+	/** Register a hub-side unsubscribe handle; replaces any prior tap for the
+	 * same `(sessionId, channel)` so resubscribes don't leak listeners. */
+	registerTap(sessionId: string, channel: Channel, unsub: () => void): void {
+		const key = `${sessionId}:${channel}`;
+		const existing = this.#taps.get(key);
+		if (existing) {
+			try {
+				existing();
+			} catch (error) {
+				logger.debug("prior tap unsubscribe threw", { error: String(error) });
+			}
+		}
+		this.#taps.set(key, unsub);
+	}
+
+	/** Drop all subscriptions and drain registered taps on disconnect. */
 	dispose(): void {
 		this.#subs.clear();
+		for (const unsub of this.#taps.values()) {
+			try {
+				unsub();
+			} catch (error) {
+				logger.debug("tap unsubscribe threw on dispose", { error: String(error) });
+			}
+		}
+		this.#taps.clear();
 	}
 }

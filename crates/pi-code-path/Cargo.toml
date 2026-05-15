@@ -27,8 +27,10 @@ image = { version = "0.25", default-features = false, features = [
    "webp",
 ] }
 diffy = "0.4"
+miette = { version = "7", features = ["fancy-no-backtrace"] }
 tempfile = "3"
 strum = { version = "0.26", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3"
+insta = { version = "1", features = ["yaml"] }
