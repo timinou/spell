@@ -1,0 +1,8 @@
+---
+source: crates/pi-code-path/tests/diagnostic_render_tests.rs
+expression: d.render(None)
+---
+E_UNSUPPORTED_OPERATION
+
+  × delete not supported by this resolver
+  help: This resolver does not support the requested operation

@@ -1,0 +1,8 @@
+---
+source: crates/pi-code-path/tests/diagnostic_render_tests.rs
+expression: d.render(None)
+---
+E_SUFFIX_SUGGESTION
+
+  ⚠ no matches; did you mean `bar`?
+  help: Did you mean `bar` instead of `foo`?

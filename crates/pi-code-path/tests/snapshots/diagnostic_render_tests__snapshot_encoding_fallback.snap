@@ -1,0 +1,8 @@
+---
+source: crates/pi-code-path/tests/diagnostic_render_tests.rs
+expression: d.render(None)
+---
+E_ENCODING_FALLBACK
+
+  ⚠ file is not UTF-8; using lossy fallback
+  help: File is not valid UTF-8; contents were read with a lossy encoding fallback

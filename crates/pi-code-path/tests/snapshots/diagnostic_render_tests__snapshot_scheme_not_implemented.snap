@@ -1,0 +1,8 @@
+---
+source: crates/pi-code-path/tests/diagnostic_render_tests.rs
+expression: d.render(None)
+---
+E_SCHEME_NOT_IMPLEMENTED
+
+  × scheme `ftp` is not implemented
+  help: The requested URI scheme is not implemented in this release

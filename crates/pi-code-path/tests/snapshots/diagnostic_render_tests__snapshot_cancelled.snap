@@ -1,0 +1,8 @@
+---
+source: crates/pi-code-path/tests/diagnostic_render_tests.rs
+expression: d.render(None)
+---
+E_CANCELLED
+
+  ⚠ operation cancelled by user
+  help: The operation was cancelled; retry if this was unexpected
