@@ -1,0 +1,31 @@
+{
+	"type": "module",
+	"name": "@oh-my-pi/spell-team-chat",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Spell Team Chat — multiplayer Svelte UI served by spell-server",
+	"homepage": "https://github.com/can1357/oh-my-pi",
+	"license": "GPL-3.0-only",
+	"bin": {
+		"spell-team-chat": "./bin/spell-team-chat.ts"
+	},
+	"scripts": {
+		"dev": "vite",
+		"build": "vite build",
+		"preview": "vite preview --port 5175",
+		"check": "svelte-check --tsconfig ./tsconfig.json --threshold warning",
+		"start": "bun run bin/spell-team-chat.ts"
+	},
+	"dependencies": {
+		"@oh-my-pi/spell-server": "workspace:*"
+	},
+	"devDependencies": {
+		"@sveltejs/vite-plugin-svelte": "^5.0.3",
+		"@tsconfig/svelte": "^5.0.4",
+		"svelte": "^5.20.0",
+		"svelte-check": "^4.1.4",
+		"typescript": "^5.7.3",
+		"vite": "^6.0.0"
+	},
+	"files": ["src", "bin", "dist", "index.html", "svelte.config.js", "vite.config.ts", "tsconfig.json"]
+}

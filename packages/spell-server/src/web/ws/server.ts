@@ -314,12 +314,31 @@ export class WebSubsystem {
 							connection.send({ type: "spawn_result", sessionId: result.sessionId, correlationId });
 							return;
 						}
-						connection.send({
-							type: "error",
-							code: "not_implemented",
-							message: "raw spawn without templateName is not yet implemented",
-							correlationId,
+						if (!msg.cwd) {
+							connection.send({
+								type: "error",
+								code: "missing_cwd",
+								message: "spawn requires either templateName or cwd",
+								correlationId,
+							});
+							return;
+						}
+						// Raw chat spawn: minimal BaseSpawnOptions with no setup constraints,
+						// then fire initialPrompt as the first prompt command if provided.
+						const { sessionId } = await this.#deps.hub.spawn({
+							ownedBy: connection.identity.name,
+							mode: msg.mode ?? "rpc",
+							base: { cwd: msg.cwd, tools: [] },
 						});
+						// Ack the spawn immediately so the UI can switch over. The initial
+						// prompt is fire-and-forget: its response will arrive as a normal
+						// rpc_event stream, no need to block spawn_result on it.
+						connection.send({ type: "spawn_result", sessionId, correlationId });
+						if (msg.initialPrompt && msg.initialPrompt.trim().length > 0) {
+							void this.#deps.hub.send(sessionId, { type: "prompt", message: msg.initialPrompt }).catch(error => {
+								logger.warn("raw spawn: initial prompt send failed", { sessionId, error: String(error) });
+							});
+						}
 					} catch (error) {
 						connection.send({ type: "error", code: "spawn_failed", message: String(error), correlationId });
 					}

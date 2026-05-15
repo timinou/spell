@@ -292,6 +292,12 @@ export async function startSpellServer(
 }
 
 function resolveSpellWebDist(cwd: string): string {
+	// Highest precedence: explicit override via env (used by `spell-team-chat`
+	// and any custom front-end launcher).
+	const override = process.env.SPELL_WEB_DIST;
+	if (override && override.length > 0) {
+		return override;
+	}
 	// Prefer the package's own bundled dist (works whether spell-server is
 	// installed via the monorepo or as a symlinked dependency); fall back to
 	// the workspace layout when running directly from the repo root.
