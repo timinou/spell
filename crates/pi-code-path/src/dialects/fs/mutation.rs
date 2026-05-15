@@ -4,7 +4,8 @@ use std::{
 };
 
 use crate::{
-	ast::{Action, ActionKind, CodePath, FsSegment, Locator, MutationOutcome},
+	ast::{ActionContent, CodePath, FsSegment, Locator, MutationOutcome},
+	op::Op,
 	resolver::{CancellationToken, MutationResolver},
 	types::{Diagnostic, DiagnosticVariant},
 };
@@ -49,87 +50,95 @@ fn write_file_atomic(target: &Path, content: &str) -> Result<(), std::io::Error>
 	Ok(())
 }
 
-impl MutationResolver for super::FsResolver {
-	fn supports(&self, path: &CodePath, kind: ActionKind) -> bool {
-		// FEAT-689: only claim filesystem-shaped mutations on bare-file
-		// targets. A symbol-target Delete (`a.ts::Foo`) or any qualifier
-		// (`a.ts#stat`, `a.ts#raw`, …) MUST go to another resolver
-		// instead of nuking the whole host file.
-		if !matches!(kind, ActionKind::Create | ActionKind::Write | ActionKind::Delete) {
-			return false;
-		}
-		!path.has_target_query()
-	}
-
-	fn apply(
+impl super::FsResolver {
+	fn apply_create(
 		&self,
 		target: &CodePath,
-		action: &Action,
-		_cancel: &CancellationToken,
+		content: &ActionContent,
+		force: bool,
 	) -> Result<MutationOutcome, Diagnostic> {
 		let path = resolve_target_path(&self.root, target)?;
-		match action {
-			Action::Create { content, force } => {
-				if path.exists() && !force {
-					return Err(Diagnostic {
-						variant: DiagnosticVariant::FileExists,
-						message: format!("file already exists: {}", path.display()),
-						span:    None,
-					});
-				}
-				let text = content.join("\n");
-				write_file_atomic(&path, &text).map_err(|e| Diagnostic {
-					variant: DiagnosticVariant::Inaccessible,
-					message: format!("failed to create file: {e}"),
-					span:    None,
-				})?;
-				Ok(MutationOutcome {
-					edit_count:     1,
-					created:        true,
-					target_summary: Some(path.to_string_lossy().to_string()),
-					diff:           None,
-				})
-			},
-			Action::Write { content, .. } => {
-				let existed = path.exists();
-				let text = content.join("\n");
-				write_file_atomic(&path, &text).map_err(|e| Diagnostic {
-					variant: DiagnosticVariant::Inaccessible,
-					message: format!("failed to write file: {e}"),
-					span:    None,
-				})?;
-				Ok(MutationOutcome {
-					edit_count:     1,
-					created:        !existed,
-					target_summary: Some(path.to_string_lossy().to_string()),
-					diff:           None,
-				})
-			},
-			Action::Delete => {
-				if !path.exists() {
-					return Err(Diagnostic {
-						variant: DiagnosticVariant::FileNotFound,
-						message: format!("file not found: {}", path.display()),
-						span:    None,
-					});
-				}
-				std::fs::remove_file(&path).map_err(|e| Diagnostic {
-					variant: DiagnosticVariant::Inaccessible,
-					message: format!("failed to delete file: {e}"),
-					span:    None,
-				})?;
-				Ok(MutationOutcome {
-					edit_count:     1,
-					created:        false,
-					target_summary: Some(path.to_string_lossy().to_string()),
-					diff:           None,
-				})
-			},
-			_ => Err(Diagnostic {
-				variant: DiagnosticVariant::UnsupportedOperation,
-				message: format!("unsupported action for FsResolver: {:?}", action.kind()),
+		if path.exists() && !force {
+			return Err(Diagnostic {
+				variant: DiagnosticVariant::FileExists,
+				message: format!("file already exists: {}", path.display()),
 				span:    None,
-			}),
+			});
+		}
+		let text = content.join("\n");
+		write_file_atomic(&path, &text).map_err(|e| Diagnostic {
+			variant: DiagnosticVariant::Inaccessible,
+			message: format!("failed to create file: {e}"),
+			span:    None,
+		})?;
+		Ok(MutationOutcome {
+			edit_count:     1,
+			created:        true,
+			target_summary: Some(path.to_string_lossy().to_string()),
+			diff:           None,
+		})
+	}
+
+	fn apply_write(
+		&self,
+		target: &CodePath,
+		content: &ActionContent,
+		_force: bool,
+	) -> Result<MutationOutcome, Diagnostic> {
+		let path = resolve_target_path(&self.root, target)?;
+		let existed = path.exists();
+		let text = content.join("\n");
+		write_file_atomic(&path, &text).map_err(|e| Diagnostic {
+			variant: DiagnosticVariant::Inaccessible,
+			message: format!("failed to write file: {e}"),
+			span:    None,
+		})?;
+		Ok(MutationOutcome {
+			edit_count:     1,
+			created:        !existed,
+			target_summary: Some(path.to_string_lossy().to_string()),
+			diff:           None,
+		})
+	}
+
+	fn apply_delete(&self, target: &CodePath) -> Result<MutationOutcome, Diagnostic> {
+		let path = resolve_target_path(&self.root, target)?;
+		if !path.exists() {
+			return Err(Diagnostic {
+				variant: DiagnosticVariant::FileNotFound,
+				message: format!("file not found: {}", path.display()),
+				span:    None,
+			});
+		}
+		std::fs::remove_file(&path).map_err(|e| Diagnostic {
+			variant: DiagnosticVariant::Inaccessible,
+			message: format!("failed to delete file: {e}"),
+			span:    None,
+		})?;
+		Ok(MutationOutcome {
+			edit_count:     1,
+			created:        false,
+			target_summary: Some(path.to_string_lossy().to_string()),
+			diff:           None,
+		})
+	}
+}
+
+impl MutationResolver for super::FsResolver {
+	fn try_apply(
+		&self,
+		op: &Op,
+		_cancel: &CancellationToken,
+	) -> Option<Result<MutationOutcome, Diagnostic>> {
+		match op {
+			Op::FileCreate { target, content, force } => {
+				Some(self.apply_create(target.as_codepath(), content, *force))
+			},
+			Op::FileWrite { target, content, force } => {
+				Some(self.apply_write(target.as_codepath(), content, *force))
+			},
+			Op::FileDelete { target } => Some(self.apply_delete(target.as_codepath())),
+			_ => None,
 		}
 	}
 }
@@ -138,27 +147,35 @@ impl MutationResolver for super::FsResolver {
 mod tests {
 	use super::super::FsResolver;
 	use crate::{
-		ast::{Action, ActionContent, CodePath, FsLocator, FsSegment, Locator},
+		ast::{ActionContent, CodePath, FsLocator, FsSegment, Locator},
+		op::Op,
 		resolver::{CancellationToken, MutationResolver},
 		types::DiagnosticVariant,
 	};
+
+	fn bare_file_target(name: &str) -> crate::op::FileTarget {
+		let cp = CodePath {
+			locator:   Locator::Fs(FsLocator { segments: vec![FsSegment::Literal(name.to_string())] }),
+			query:     None,
+			qualifier: None,
+		};
+		crate::op::FileTarget::new(cp).unwrap()
+	}
 
 	#[test]
 	fn create_new_file() {
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		let resolver = FsResolver::new(root.clone());
-		let target = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("new.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: None,
+		let target = bare_file_target("new.txt");
+		let op = Op::FileCreate {
+			target,
+			content: ActionContent::Single("hello".to_string()),
+			force: false,
 		};
-		let action =
-			Action::Create { content: ActionContent::Single("hello".to_string()), force: false };
 		let outcome = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap();
 		assert!(outcome.created);
 		assert_eq!(outcome.edit_count, 1);
@@ -172,17 +189,12 @@ mod tests {
 		let root = dir.path().to_path_buf();
 		std::fs::write(root.join("exists.txt"), "old").unwrap();
 		let resolver = FsResolver::new(root.clone());
-		let target = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("exists.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: None,
-		};
-		let action =
-			Action::Create { content: ActionContent::Single("new".to_string()), force: false };
+		let target = bare_file_target("exists.txt");
+		let op =
+			Op::FileCreate { target, content: ActionContent::Single("new".to_string()), force: false };
 		let err = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap_err();
 		assert!(matches!(err.variant, DiagnosticVariant::FileExists));
 	}
@@ -193,17 +205,12 @@ mod tests {
 		let root = dir.path().to_path_buf();
 		std::fs::write(root.join("force.txt"), "old").unwrap();
 		let resolver = FsResolver::new(root.clone());
-		let target = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("force.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: None,
-		};
-		let action =
-			Action::Create { content: ActionContent::Single("new".to_string()), force: true };
+		let target = bare_file_target("force.txt");
+		let op =
+			Op::FileCreate { target, content: ActionContent::Single("new".to_string()), force: true };
 		let outcome = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap();
 		assert!(outcome.created);
 		assert_eq!(outcome.edit_count, 1);
@@ -217,19 +224,15 @@ mod tests {
 		let root = dir.path().to_path_buf();
 		std::fs::write(root.join("write.txt"), "old").unwrap();
 		let resolver = FsResolver::new(root.clone());
-		let target = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("write.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: None,
-		};
-		let action = Action::Write {
+		let target = bare_file_target("write.txt");
+		let op = Op::FileWrite {
+			target,
 			content: ActionContent::Single("new content".to_string()),
-			force:   false,
+			force: false,
 		};
 		let outcome = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap();
 		assert_eq!(outcome.edit_count, 1);
 		let content = std::fs::read_to_string(root.join("write.txt")).unwrap();
@@ -242,16 +245,11 @@ mod tests {
 		let root = dir.path().to_path_buf();
 		std::fs::write(root.join("del.txt"), "bye").unwrap();
 		let resolver = FsResolver::new(root.clone());
-		let target = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("del.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: None,
-		};
-		let action = Action::Delete;
+		let target = bare_file_target("del.txt");
+		let op = Op::FileDelete { target };
 		let outcome = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap();
 		assert_eq!(outcome.edit_count, 1);
 		assert!(!root.join("del.txt").exists());
@@ -262,17 +260,23 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		let resolver = FsResolver::new(root.clone());
-		let target = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("missing.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: None,
-		};
-		let action = Action::Delete;
+		let target = bare_file_target("missing.txt");
+		let op = Op::FileDelete { target };
 		let err = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap_err();
 		assert!(matches!(err.variant, DiagnosticVariant::FileNotFound));
+	}
+
+	#[test]
+	fn non_file_op_returns_none() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		let resolver = FsResolver::new(root);
+		let target = bare_file_target("test.txt");
+		let op = Op::FileAppend { target, content: ActionContent::Single("append".to_string()) };
+		let result = resolver.try_apply(&op, &CancellationToken::new());
+		assert!(result.is_none(), "FsResolver should return None for FileAppend");
 	}
 }

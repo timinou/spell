@@ -1,11 +1,15 @@
 //! MutationResolver implementation for CodeResolverImpl.
 //!
+//! Wave 2 (PLAN-304): migrated from supports+apply to try_apply with Op enum.
 //! Delegates structural edits to the existing `execute_code_buffer_inner`
 //! machinery in `crate::code_buffer`.
 
 use pi_code_path::{
-	ast::{Action, ActionKind, CodePath, MutationOutcome, NamePayload},
+	ast::{
+		ActionContent, CodePath, Direction, MutationOutcome, NamePayload, Occurrence, SpliceMode,
+	},
 	dialect::NameLexer,
+	op::{Op, SymScope},
 	renderer::render_code_path,
 	resolver::traits::{CancellationToken, MutationResolver},
 	types::{Diagnostic, DiagnosticVariant},
@@ -75,106 +79,216 @@ fn absolutise(file_part: &str, root: Option<&std::path::Path>) -> String {
 	}
 }
 
-/// Convert an `Action` into the JSON shape expected by
-/// `execute_code_buffer_inner`.
-fn action_to_value(action: &Action) -> Value {
-	let mut value = serde_json::to_value(action).expect("Action serializes to JSON");
-	// The kernel Action enum uses `lines` for insertBefore/insertAfter,
-	// but the code_buffer surface expects `content`.
-	if let Some(obj) = value.as_object_mut() {
-		if let Some(lines) = obj.remove("lines") {
-			obj.insert("content".into(), lines);
+fn flatten_string_array(obj: &mut serde_json::Map<String, Value>, key: &str) {
+	if let Some(Value::Array(arr)) = obj.get(key) {
+		if arr.iter().all(|v| v.is_string()) {
+			let joined: String = arr
+				.iter()
+				.filter_map(|v| v.as_str())
+				.collect::<Vec<_>>()
+				.join("\n");
+			obj.insert(key.to_string(), Value::String(joined));
 		}
-		// FEAT-689 / FEAT-702: code_buffer's `action_content` calls
-		// `required_str`, but the kernel ActionContent allows arrays.
-		// Flatten array content to a newline-joined string here so the
-		// legacy surface accepts wrap/findAndReplace/etc.
+	}
+}
+
+/// Convert an Op variant into the JSON shape expected by
+/// `execute_code_buffer_inner`.
+fn op_to_code_buffer_action(op: &Op) -> Value {
+	let mut value = match op {
+		Op::SymbolReplace { scope, content, .. } => {
+			let scope_str = match scope {
+				SymScope::Whole => "target",
+				SymScope::Body => "body",
+				SymScope::Sig => "sig", /* May not be supported yet; code_buffer will return error if
+				                         * not */
+			};
+			json!({
+				"kind": "write",
+				"scope": scope_str,
+				"content": content_to_string(content)
+			})
+		},
+		Op::SymbolRename { new_name, .. } => json!({
+			"kind": "rename",
+			"content": new_name.0
+		}),
+		Op::SymbolWrap { content, .. } => json!({
+			"kind": "wrap",
+			"content": content_to_string(content)
+		}),
+		Op::SymbolDelete { allow_sibling_delete, .. } => json!({
+			"kind": "delete",
+			"allowSiblingDelete": allow_sibling_delete
+		}),
+		Op::SymbolInsertBefore { content, .. } => json!({
+			"kind": "insertBefore",
+			"content": content_to_string(content)
+		}),
+		Op::SymbolInsertAfter { content, .. } => json!({
+			"kind": "insertAfter",
+			"content": content_to_string(content)
+		}),
+		Op::SymbolFindReplace { find, content, occurrence, .. } => {
+			let mut obj = json!({
+				"kind": "findAndReplace",
+				"find": content_to_string(find),
+				"content": content_to_string(content)
+			});
+			if let Some(occ) = occurrence {
+				let occ_str = match occ {
+					Occurrence::First => "first",
+					Occurrence::Last => "last",
+					Occurrence::All => "all",
+					Occurrence::Index(n) => {
+						obj.as_object_mut()
+							.unwrap()
+							.insert("occurrence".to_string(), json!(n));
+						return obj;
+					},
+				};
+				obj.as_object_mut()
+					.unwrap()
+					.insert("occurrence".to_string(), json!(occ_str));
+			}
+			obj
+		},
+		Op::SymbolRawTextReplace { find, content, occurrence, .. } => {
+			let mut obj = json!({
+				"kind": "rawTextReplace",
+				"find": content_to_string(find),
+				"content": content_to_string(content)
+			});
+			if let Some(occ) = occurrence {
+				let occ_str = match occ {
+					Occurrence::First => "first",
+					Occurrence::Last => "last",
+					Occurrence::All => "all",
+					Occurrence::Index(n) => {
+						obj.as_object_mut()
+							.unwrap()
+							.insert("occurrence".to_string(), json!(n));
+						return obj;
+					},
+				};
+				obj.as_object_mut()
+					.unwrap()
+					.insert("occurrence".to_string(), json!(occ_str));
+			}
+			obj
+		},
+		Op::FileFindReplace { find, content, occurrence, .. } => {
+			let mut obj = json!({
+				"kind": "findAndReplace",
+				"find": content_to_string(find),
+				"content": content_to_string(content)
+			});
+			if let Some(occ) = occurrence {
+				let occ_str = match occ {
+					Occurrence::First => "first",
+					Occurrence::Last => "last",
+					Occurrence::All => "all",
+					Occurrence::Index(n) => {
+						obj.as_object_mut()
+							.unwrap()
+							.insert("occurrence".to_string(), json!(n));
+						return obj;
+					},
+				};
+				obj.as_object_mut()
+					.unwrap()
+					.insert("occurrence".to_string(), json!(occ_str));
+			}
+			obj
+		},
+		Op::FileRawTextReplace { find, content, occurrence, .. } => {
+			let mut obj = json!({
+				"kind": "rawTextReplace",
+				"find": content_to_string(find),
+				"content": content_to_string(content)
+			});
+			if let Some(occ) = occurrence {
+				let occ_str = match occ {
+					Occurrence::First => "first",
+					Occurrence::Last => "last",
+					Occurrence::All => "all",
+					Occurrence::Index(n) => {
+						obj.as_object_mut()
+							.unwrap()
+							.insert("occurrence".to_string(), json!(n));
+						return obj;
+					},
+				};
+				obj.as_object_mut()
+					.unwrap()
+					.insert("occurrence".to_string(), json!(occ_str));
+			}
+			obj
+		},
+		Op::SymbolMove { direction, .. } => {
+			let dir_str = match direction {
+				Direction::Up => "up",
+				Direction::Down => "down",
+			};
+			json!({
+				"kind": "move",
+				"direction": dir_str
+			})
+		},
+		Op::SymbolClone { rename_to, .. } => {
+			let mut obj = json!({ "kind": "clone" });
+			if let Some(name) = rename_to {
+				obj.as_object_mut()
+					.unwrap()
+					.insert("content".to_string(), json!(name.0));
+			}
+			obj
+		},
+		Op::SymbolSplice { mode, .. } => {
+			let mode_str = match mode {
+				SpliceMode::OnlySelf => "self",
+				SpliceMode::Up => "up",
+				SpliceMode::Down => "down",
+			};
+			json!({
+				"kind": "splice",
+				"mode": mode_str
+			})
+		},
+		Op::SymbolTranspose { column, .. } => json!({
+			"kind": "transpose",
+			"column": column
+		}),
+		_ => unreachable!("op_to_code_buffer_action called with non-Symbol Op"),
+	};
+
+	if let Some(obj) = value.as_object_mut() {
 		flatten_string_array(obj, "content");
 		flatten_string_array(obj, "find");
 	}
 	value
 }
 
-fn flatten_string_array(obj: &mut serde_json::Map<String, Value>, key: &str) {
-	if let Some(Value::Array(arr)) = obj.get(key)
-		&& arr.iter().all(|v| v.is_string())
-	{
-		let joined: String = arr
-			.iter()
-			.filter_map(|v| v.as_str())
-			.collect::<Vec<_>>()
-			.join(
-				"
-",
-			);
-		obj.insert(key.to_string(), Value::String(joined));
+fn content_to_string(content: &ActionContent) -> String {
+	match content {
+		ActionContent::Single(s) => s.clone(),
+		ActionContent::Multi(v) => v.join("\n"),
 	}
 }
 
-// ── MutationResolver impl ────────────────────────────────────────
+// ── CodeResolverImpl methods ─────────────────────────────────────
 
-impl MutationResolver for CodeResolverImpl {
-	fn supports(&self, path: &CodePath, kind: ActionKind) -> bool {
-		if !matches!(
-			kind,
-			ActionKind::Rename
-				| ActionKind::Wrap
-				| ActionKind::FindAndReplace
-				| ActionKind::RawTextReplace
-				| ActionKind::Splice
-				| ActionKind::Move
-				| ActionKind::Clone
-				| ActionKind::Transpose
-				| ActionKind::Promote
-				| ActionKind::Demote
-				| ActionKind::ReplaceCodeBlock
-				| ActionKind::RenameClassToken
-				| ActionKind::RenameIdToken
-				| ActionKind::RenameCustomProperty
-				| ActionKind::RemoveDeadStyle
-				| ActionKind::InsertBefore
-				| ActionKind::InsertAfter
-				| ActionKind::Delete
-		) {
-			return false;
-		}
-		path.has_target_query()
-	}
-
-	fn apply(
+impl CodeResolverImpl {
+	/// Shared helper for code_buffer-based mutations.
+	///
+	/// Wave 2: extracted from old `apply` to enable reuse by CssResolver
+	/// and HeadingResolver.
+	pub(crate) fn apply_via_code_buffer(
 		&self,
 		target: &CodePath,
-		action: &Action,
-		_cancel: &CancellationToken,
+		action_json: &Value,
 	) -> Result<MutationOutcome, Diagnostic> {
-		let kind = action.kind();
-
-		// Actions that have no direct mapping in the code_buffer surface;
-		// they rely on language-profile procedures that may or may not exist.
-		// We surface them as unsupported for now.
-		if matches!(
-			kind,
-			ActionKind::Promote
-				| ActionKind::Demote
-				| ActionKind::ReplaceCodeBlock
-				| ActionKind::RenameClassToken
-				| ActionKind::RenameIdToken
-				| ActionKind::RenameCustomProperty
-				| ActionKind::RemoveDeadStyle
-		) {
-			return Err(Diagnostic {
-				variant: DiagnosticVariant::UnsupportedOperation,
-				message: format!(
-					"action {:?} not implemented in CodeResolver mutation surface yet",
-					kind
-				),
-				span:    None,
-			});
-		}
-
 		let target_id = build_target_id(target, self.root.as_deref())?;
-		let action_json = action_to_value(action);
-
 		let request = json!({
 			"command": "edit",
 			"sessionId": self.session_id.as_deref().unwrap_or(MUTATION_SESSION_ID),
@@ -249,6 +363,38 @@ impl MutationResolver for CodeResolverImpl {
 	}
 }
 
+impl MutationResolver for CodeResolverImpl {
+	fn try_apply(
+		&self,
+		op: &Op,
+		_cancel: &CancellationToken,
+	) -> Option<Result<MutationOutcome, Diagnostic>> {
+		match op {
+			Op::SymbolReplace { target, .. }
+			| Op::SymbolRename { target, .. }
+			| Op::SymbolWrap { target, .. }
+			| Op::SymbolDelete { target, .. }
+			| Op::SymbolInsertBefore { target, .. }
+			| Op::SymbolInsertAfter { target, .. }
+			| Op::SymbolFindReplace { target, .. }
+			| Op::SymbolRawTextReplace { target, .. }
+			| Op::SymbolMove { target, .. }
+			| Op::SymbolClone { target, .. }
+			| Op::SymbolSplice { target, .. }
+			| Op::SymbolTranspose { target, .. } => {
+				let action_json = op_to_code_buffer_action(op);
+				Some(self.apply_via_code_buffer(target.as_codepath(), &action_json))
+			},
+			Op::FileFindReplace { target, .. }
+			| Op::FileRawTextReplace { target, .. } => {
+				let action_json = op_to_code_buffer_action(op);
+				Some(self.apply_via_code_buffer(target.as_codepath(), &action_json))
+			},
+			_ => None,
+		}
+	}
+}
+
 // ── Tests ────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -257,11 +403,10 @@ mod tests {
 
 	use pi_code_path::{
 		ast::{
-			Action, ActionContent, ActionKind, CodePath, FsLocator, FsSegment, Head, Locator,
-			NamePayload, Occurrence, Query, Step,
+			ActionContent, CodePath, FsLocator, FsSegment, Head, Locator, NamePayload, Query, Step,
 		},
+		op::{Identifier, Op, SymScope, SymbolTarget},
 		resolver::traits::{CancellationToken, MutationResolver},
-		types::DiagnosticVariant,
 	};
 
 	use super::CodeResolverImpl;
@@ -269,16 +414,6 @@ mod tests {
 	fn ts_resolver() -> CodeResolverImpl {
 		let registry = pi_code_engine::language::LanguageRegistry::with_builtins().expect("builtins");
 		CodeResolverImpl::new(Arc::new(registry))
-	}
-
-	fn ts_path(file: &std::path::Path) -> CodePath {
-		CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal(file.display().to_string())],
-			}),
-			query:     None,
-			qualifier: None,
-		}
 	}
 
 	fn ts_symbol_path(file: &std::path::Path, symbol: &str) -> CodePath {
@@ -305,11 +440,13 @@ mod tests {
 		}
 
 		let resolver = ts_resolver();
-		let target = ts_symbol_path(&path, "oldName");
-		let action = Action::Rename { content: "newName".into() };
+		let cp = ts_symbol_path(&path, "oldName");
+		let target = SymbolTarget::new(cp).unwrap();
+		let op = Op::SymbolRename { target, new_name: Identifier("newName".to_string()) };
 
 		let outcome = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap();
 		assert_eq!(outcome.edit_count, 1);
 		let src = std::fs::read_to_string(&path).unwrap();
@@ -317,99 +454,77 @@ mod tests {
 	}
 
 	#[test]
-	fn find_and_replace_occurrence_all() {
+	fn op_symbol_replace_whole_routes_through_code_resolver() {
+		// The original PLAN-304 motivating bug: edit { target: "a.ts::Foo", kind: "write" }
+		// returned "no resolver supports action Write". With Op enum + typed dispatch
+		// this must now succeed.
 		let dir = tempfile::tempdir().unwrap();
-		let path = dir.path().join("foo.ts");
-		{
-			let mut f = std::fs::File::create(&path).unwrap();
-			write!(f, "function main() {{\n  return oldApi();\n}}\nconst x = oldApi();\n").unwrap();
-		}
+		let root = dir.path().to_path_buf();
+		std::fs::write(
+			root.join("a.ts"),
+			"function oldName() { return 1; }\n",
+		)
+		.unwrap();
 
-		let resolver = ts_resolver();
-		let target = ts_path(&path);
-		let action = Action::FindAndReplace {
-			find:       ActionContent::Single("oldApi".into()),
-			content:    ActionContent::Single("newApi".into()),
-			occurrence: Some(Occurrence::All),
+		let cp = ts_symbol_path(&root.join("a.ts"), "oldName");
+		let target = SymbolTarget::new(cp).unwrap();
+		let op = Op::SymbolReplace {
+			target,
+			scope: SymScope::Whole,
+			content: ActionContent::Single(
+				"function newName() { return 2; }".into(),
+			),
 		};
 
-		let outcome = resolver
-			.apply(&target, &action, &CancellationToken::new())
-			.unwrap();
-		assert!(outcome.edit_count >= 1, "expected at least one edit");
-		let src = std::fs::read_to_string(&path).unwrap();
-		assert!(!src.contains("oldApi"), "all occurrences should be replaced: {src}");
-		assert!(src.contains("newApi"), "expected newApi: {src}");
+		let resolver = ts_resolver();
+		let resolver_with_root = CodeResolverImpl { root: Some(root.clone()), ..resolver };
+		let result = resolver_with_root.try_apply(&op, &CancellationToken::new());
+		assert!(matches!(result, Some(Ok(_))), "expected Some(Ok(_)), got {:?}", result);
+		let src = std::fs::read_to_string(root.join("a.ts")).unwrap();
+		assert!(src.contains("newName") && src.contains("return 2"), "expected replacement: {src}");
 	}
 
 	#[test]
-	fn splice_mode_self_deletes_target() {
+	fn wrap_symbol_succeeds() {
 		let dir = tempfile::tempdir().unwrap();
 		let path = dir.path().join("foo.ts");
-		{
-			let mut f = std::fs::File::create(&path).unwrap();
-			write!(
-				f,
-				"function oldName() {{\n  return 1;\n}}\n\nfunction other() {{\n  return 2;\n}}\n"
-			)
-			.unwrap();
-		}
+		std::fs::write(&path, "function main() { return 1; }\n").unwrap();
 
 		let resolver = ts_resolver();
-		let target = ts_symbol_path(&path, "oldName");
-		let action = Action::Splice { mode: Some(pi_code_path::ast::SpliceMode::OnlySelf) };
-
-		let outcome = resolver
-			.apply(&target, &action, &CancellationToken::new())
-			.unwrap();
-		assert_eq!(outcome.edit_count, 1);
-		let src = std::fs::read_to_string(&path).unwrap();
-		assert!(
-			!src.contains("function other"),
-			"splice self should remove sibling declarations: {src}"
-		);
-	}
-
-	#[test]
-	fn insert_before_adds_comment() {
-		let dir = tempfile::tempdir().unwrap();
-		let path = dir.path().join("foo.ts");
-		{
-			let mut f = std::fs::File::create(&path).unwrap();
-			write!(f, "function main() {{\n  return 1;\n}}\n").unwrap();
-		}
-
-		let resolver = ts_resolver();
-		let target = ts_symbol_path(&path, "main");
-		let action = Action::InsertBefore {
-			pos:   None,
-			line:  None,
-			lines: ActionContent::Single("// before main".into()),
+		let cp = ts_symbol_path(&path, "main");
+		let target = SymbolTarget::new(cp).unwrap();
+		let op = Op::SymbolWrap {
+			target,
+			content: ActionContent::Multi(vec![
+				"try {".to_string(),
+				"  $BODY".to_string(),
+				"} catch (e) { throw e; }".to_string(),
+			]),
 		};
 
 		let outcome = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap();
 		assert_eq!(outcome.edit_count, 1);
 		let src = std::fs::read_to_string(&path).unwrap();
-		assert!(src.contains("// before main"), "expected inserted comment: {src}");
+		assert!(src.contains("try {"), "expected wrap: {src}");
 	}
 
 	#[test]
 	fn delete_removes_target() {
 		let dir = tempfile::tempdir().unwrap();
 		let path = dir.path().join("foo.ts");
-		{
-			let mut f = std::fs::File::create(&path).unwrap();
-			write!(f, "function oldName() {{\n  return 1;\n}}\n").unwrap();
-		}
+		std::fs::write(&path, "function oldName() { return 1; }\n").unwrap();
 
 		let resolver = ts_resolver();
-		let target = ts_symbol_path(&path, "oldName");
-		let action = Action::Delete;
+		let cp = ts_symbol_path(&path, "oldName");
+		let target = SymbolTarget::new(cp).unwrap();
+		let op = Op::SymbolDelete { target, allow_sibling_delete: false };
 
 		let outcome = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap();
 		assert_eq!(outcome.edit_count, 1);
 		let src = std::fs::read_to_string(&path).unwrap();
@@ -417,60 +532,18 @@ mod tests {
 	}
 
 	#[test]
-	fn unsupported_action_returns_error() {
-		let dir = tempfile::tempdir().unwrap();
-		let path = dir.path().join("foo.ts");
-		std::fs::write(&path, "function main() {}\n").unwrap();
-
+	fn non_symbol_op_returns_none() {
 		let resolver = ts_resolver();
-		let target = ts_symbol_path(&path, "main");
-		let action = Action::Promote;
-
-		let err = resolver
-			.apply(&target, &action, &CancellationToken::new())
-			.unwrap_err();
-		assert!(matches!(err.variant, DiagnosticVariant::UnsupportedOperation));
-		assert!(err.message.contains("Promote"));
-	}
-
-	#[test]
-	fn code_resolver_rejects_bare_path_delete() {
-		let cp = ts_path(std::path::Path::new("foo.ts"));
-		let resolver = ts_resolver();
-		assert!(!resolver.supports(&cp, ActionKind::Delete));
-	}
-
-	#[test]
-	fn code_resolver_accepts_qualified_delete() {
-		let cp = ts_symbol_path(std::path::Path::new("foo.ts"), "Foo");
-		let resolver = ts_resolver();
-		assert!(resolver.supports(&cp, ActionKind::Delete));
-	}
-
-	#[test]
-	fn code_resolver_rejects_bare_path_for_all_symbol_kinds() {
-		let cp = ts_path(std::path::Path::new("foo.ts"));
-		let resolver = ts_resolver();
-		for k in [
-			ActionKind::Rename,
-			ActionKind::Wrap,
-			ActionKind::Splice,
-			ActionKind::Clone,
-			ActionKind::InsertBefore,
-			ActionKind::InsertAfter,
-			ActionKind::FindAndReplace,
-			ActionKind::RawTextReplace,
-			ActionKind::Move,
-			ActionKind::Transpose,
-			ActionKind::Promote,
-			ActionKind::Demote,
-			ActionKind::ReplaceCodeBlock,
-			ActionKind::RenameClassToken,
-			ActionKind::RenameIdToken,
-			ActionKind::RenameCustomProperty,
-			ActionKind::RemoveDeadStyle,
-		] {
-			assert!(!resolver.supports(&cp, k), "rejects {k:?} on bare path");
-		}
+		let cp = CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![FsSegment::Literal("test.ts".to_string())],
+			}),
+			query:     None,
+			qualifier: None,
+		};
+		let target = pi_code_path::op::FileTarget::new(cp).unwrap();
+		let op = Op::FileDelete { target };
+		let result = resolver.try_apply(&op, &CancellationToken::new());
+		assert!(result.is_none(), "CodeResolverImpl should return None for FileDelete");
 	}
 }

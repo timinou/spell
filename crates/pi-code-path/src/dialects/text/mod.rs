@@ -212,11 +212,15 @@ fn apply_step(content: &[u8], step: &Step, path: &std::path::Path) -> Vec<NodeRe
 	for n in &mut nodes {
 		n.locator = format!("{}::{}", path.to_string_lossy(), n.locator);
 	}
-	// FEAT-719: mark predicate-matched §line nodes so the renderer can switch to grep -n shape.
-	// Pure ordinal/range queries leave shape unset; FEAT-716 may add `shape=slice` for sliced bodies.
+	// FEAT-719: mark predicate-matched §line nodes so the renderer can switch to
+	// grep -n shape. Pure ordinal/range queries leave shape unset; FEAT-716 may
+	// add `shape=slice` for sliced bodies.
 	if matches!(&step.head, Head::NodeKind(k) if k == "line") {
 		let is_match = step.predicates.iter().any(|p| {
-			matches!(p, Predicate::TextMatch(_) | Predicate::LiteralMatch(_) | Predicate::Compare { .. })
+			matches!(
+				p,
+				Predicate::TextMatch(_) | Predicate::LiteralMatch(_) | Predicate::Compare { .. }
+			)
 		});
 		if is_match {
 			for n in &mut nodes {
@@ -586,13 +590,17 @@ mod tests {
 
 		let resolver = make_resolver(root.clone());
 		let cp_ord = parse_code_path("a.txt::\u{a7}line[2]", &DummyLexer).unwrap();
-		let ordinal_nodes = resolver.resolve(&cp_ord, &CancellationToken::new()).unwrap();
+		let ordinal_nodes = resolver
+			.resolve(&cp_ord, &CancellationToken::new())
+			.unwrap();
 		for n in &ordinal_nodes {
 			assert!(n.metadata.get("shape").is_none(), "ordinal must not carry shape metadata");
 		}
 
 		let cp_range = parse_code_path("a.txt::\u{a7}line[2..3]", &DummyLexer).unwrap();
-		let range_nodes = resolver.resolve(&cp_range, &CancellationToken::new()).unwrap();
+		let range_nodes = resolver
+			.resolve(&cp_range, &CancellationToken::new())
+			.unwrap();
 		for n in &range_nodes {
 			assert!(
 				n.metadata.get("shape").is_none()

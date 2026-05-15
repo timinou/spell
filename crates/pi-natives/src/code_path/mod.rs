@@ -8,10 +8,12 @@
 
 pub mod abort;
 pub mod code_resolver;
+pub mod css_resolver;
 pub mod dialect_registry;
 pub mod edge_resolver;
 pub mod edit_history;
 pub mod extractors;
+pub mod heading_resolver;
 pub mod image_pipeline;
 pub mod manage;
 pub mod marshal;
@@ -24,3 +26,5 @@ mod dispatch_tests;
 mod manage_tests;
 #[cfg(test)]
 mod routing_tests;
+#[cfg(test)]
+mod op_matrix_tests;

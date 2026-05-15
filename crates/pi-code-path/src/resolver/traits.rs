@@ -117,29 +117,22 @@ pub trait FormatExtractor: Send + Sync {
 
 /// Applies mutations (edit actions) to a resolved target.
 pub trait MutationResolver: Send + Sync {
-	/// Whether this resolver claims responsibility for `(path, kind)`.
+	/// Returns Some(_) iff this resolver owns the Op's variant family.
+	/// Returns None to defer to the next resolver in the dispatch chain.
 	///
-	/// FEAT-689: dispatchers MUST consult `path` (not just `kind`) so a
-	/// symbol-target Delete is not silently routed to FsResolver, which
-	/// would `remove_file` the entire host file.
-	fn supports(&self, path: &CodePath, kind: ActionKind) -> bool {
-		let _ = (path, kind);
-		false
-	}
-
-	fn apply(
+	/// The dispatcher (napi.rs::dispatch_op) statically proves exactly
+	/// one resolver owns each Op variant via exhaustive match; in practice
+	/// Some(_) is mandatory when dispatch_op routes here.
+	///
+	/// Wave 2 (PLAN-304): replaces `supports + apply` with typed Op-based
+	/// dispatch. The exhaustive match in dispatch_op ensures totality at
+	/// compile time — adding an Op variant without updating the dispatcher
+	/// = compile error.
+	fn try_apply(
 		&self,
-		target: &CodePath,
-		action: &Action,
+		op: &crate::op::Op,
 		cancel: &CancellationToken,
-	) -> Result<MutationOutcome, Diagnostic> {
-		let _ = (target, action, cancel);
-		Err(Diagnostic {
-			variant: crate::types::DiagnosticVariant::UnsupportedOperation,
-			message: format!("unsupported action: {:?}", action.kind()),
-			span:    None,
-		})
-	}
+	) -> Option<Result<MutationOutcome, Diagnostic>>;
 }
 
 #[cfg(test)]

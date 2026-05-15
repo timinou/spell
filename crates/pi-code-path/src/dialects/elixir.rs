@@ -58,14 +58,15 @@ impl NameLexer for ExNameLexer {
 				let leaf = leaf.split('/').next().unwrap_or(leaf);
 				if node.kind() == "call"
 					&& let Some(target_child) = node.child_by_field_name("target")
-						&& let Some(text) = src.get(target_child.start_byte()..target_child.end_byte())
-					{
-						return text == leaf;
-					}
+					&& let Some(text) = src.get(target_child.start_byte()..target_child.end_byte())
+				{
+					return text == leaf;
+				}
 				if node.kind() == "identifier"
-					&& let Some(text) = src.get(node.start_byte()..node.end_byte()) {
-						return text == leaf;
-					}
+					&& let Some(text) = src.get(node.start_byte()..node.end_byte())
+				{
+					return text == leaf;
+				}
 				false
 			},
 			NamePayload::Quoted(target) => {
@@ -210,22 +211,23 @@ mod qualifiers {
 			while let Some(n) = sib {
 				if n.kind() == "call"
 					&& let Some(target) = n.child_by_field_name("target")
-						&& let Some(text) = src.get(target.start_byte()..target.end_byte())
-							&& text == "@"
-								&& let Some(args) = n.child_by_field_name("arguments") {
-									let mut cursor = args.walk();
-									if let Some(first_arg) = args.children(&mut cursor).next()
-										&& let Some(arg_text) =
-											src.get(first_arg.start_byte()..first_arg.end_byte())
-											&& (arg_text == "moduledoc" || arg_text == "doc") {
-												last = Some(n);
-												if first.is_none() {
-													first = Some(n);
-												}
-												sib = n.prev_sibling();
-												continue;
-											}
-								}
+					&& let Some(text) = src.get(target.start_byte()..target.end_byte())
+					&& text == "@"
+					&& let Some(args) = n.child_by_field_name("arguments")
+				{
+					let mut cursor = args.walk();
+					if let Some(first_arg) = args.children(&mut cursor).next()
+						&& let Some(arg_text) = src.get(first_arg.start_byte()..first_arg.end_byte())
+						&& (arg_text == "moduledoc" || arg_text == "doc")
+					{
+						last = Some(n);
+						if first.is_none() {
+							first = Some(n);
+						}
+						sib = n.prev_sibling();
+						continue;
+					}
+				}
 				break;
 			}
 			match (first, last) {
@@ -315,10 +317,11 @@ pub fn elixir_dialect() -> LanguageDialect {
 					while let Some(p) = sib {
 						if p.kind() == "call"
 							&& let Some(ptarget) = p.child_by_field_name("target")
-								&& let Some(ptext) = src.get(ptarget.start_byte()..ptarget.end_byte())
-									&& matches!(ptext, "alias" | "import" | "require" | "use") {
-										return false;
-									}
+							&& let Some(ptext) = src.get(ptarget.start_byte()..ptarget.end_byte())
+							&& matches!(ptext, "alias" | "import" | "require" | "use")
+						{
+							return false;
+						}
 						sib = p.prev_sibling();
 					}
 					true

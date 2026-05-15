@@ -692,10 +692,7 @@ mod tests {
 	#[test]
 	fn elixir_top_level_def() {
 		let resolver = resolver();
-		let f = temp_file(
-			".ex",
-			"defmodule Calc do\n  def add(a, b), do: a + b\nend\n",
-		);
+		let f = temp_file(".ex", "defmodule Calc do\n  def add(a, b), do: a + b\nend\n");
 		let query = Query::single(Step {
 			axis:       None,
 			head:       Head::Name(NamePayload::Raw("Calc.add".into())),
@@ -708,10 +705,8 @@ mod tests {
 	#[test]
 	fn elixir_exs_defp_resolves() {
 		let resolver = resolver();
-		let f = temp_file(
-			".exs",
-			"defmodule G do\n  defp h(x), do: x * 2\n  def go, do: h(1)\nend\n",
-		);
+		let f =
+			temp_file(".exs", "defmodule G do\n  defp h(x), do: x * 2\n  def go, do: h(1)\nend\n");
 		let query = Query::single(Step {
 			axis:       None,
 			head:       Head::Name(NamePayload::Raw("G.h".into())),

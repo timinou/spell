@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// The unified return shape from CodePath resolution.
 /// Every node in the result set is a `NodeRef` with optional content
 /// populated only when the path includes a content-class qualifier.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeRef {
 	/// Canonical CodePath locator for this node.
 	pub locator:     String,
@@ -63,7 +63,7 @@ pub enum Content {
 // ── Diagnostic ────────────────────────────────────────────────────
 
 /// A diagnostic produced during CodePath resolution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Diagnostic {
 	pub variant: DiagnosticVariant,
 	pub message: String,
@@ -71,7 +71,7 @@ pub struct Diagnostic {
 	pub span:    Option<Span>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticVariant {
 	ParseError,
@@ -119,9 +119,11 @@ pub enum DiagnosticVariant {
 	RangeBoundsInverted,
 	/// Range predicate bounds clamped to file extent.
 	RangeClamped,
+	/// Target shape incompatible with the requested Op family.
+	IncompatibleTargetShape,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Span {
 	pub start: usize,
 	pub end:   usize,
@@ -130,7 +132,7 @@ pub struct Span {
 // ── Chunk for streaming ──────────────────────────────────────────
 
 /// Emitted by the streaming resolver.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CodePathChunk {
 	pub nodes:       Vec<NodeRef>,
 	pub done:        bool,

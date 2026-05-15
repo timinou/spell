@@ -10,9 +10,10 @@ use std::{
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use pi_code_path::{
-	ast::{Action, ActionKind, Axis, CodePath, Head, Locator, MutationOutcome},
+	ast::{Action, Axis, CodePath, Head, Locator, MutationOutcome},
 	dialect::NameLexer,
 	dialects::{fs::FsResolver, text::TextResolver},
+	op::Op,
 	parser::parse_code_path,
 	renderer::render_code_path,
 	resolver::{CancellationToken, CodeResolver, MutationResolver, Resolver},
@@ -21,8 +22,9 @@ use pi_code_path::{
 use winnow::{Parser, token::take_while};
 
 use super::{
-	code_resolver, dialect_registry,
+	code_resolver, css_resolver, dialect_registry,
 	extractors::default_extractors,
+	heading_resolver,
 	marshal::{ARTIFACT_THRESHOLD, diagnostic_to_dto, mutation_outcome_to_dto, nodes_to_dtos},
 };
 use crate::task::CancelToken;
@@ -393,6 +395,36 @@ pub fn execute_code_path_inner(
 
 	let pi_token = CancellationToken::new();
 
+
+	/// Compile-time totality: every Op variant routes to exactly one resolver.
+	/// Adding an Op variant without updating this match = compile error.
+	fn dispatch_op<'a>(
+		op: &Op,
+		fs: &'a FsResolver,
+		text: &'a TextResolver,
+		code: &'a code_resolver::CodeResolverImpl,
+		css: &'a css_resolver::CssResolver,
+		heading: &'a heading_resolver::HeadingResolver,
+	) -> &'a dyn MutationResolver {
+		match op {
+			Op::FileCreate { .. } | Op::FileWrite { .. } | Op::FileDelete { .. } => fs,
+			Op::FileAppend { .. } | Op::FilePrepend { .. } | Op::FilePatch { .. }
+			| Op::LineReplace { .. } | Op::LineInsert { .. }
+			| Op::LineAppend { .. } | Op::LinePrepend { .. } => text,
+			Op::SymbolReplace { .. } | Op::SymbolRename { .. } | Op::SymbolWrap { .. }
+			| Op::SymbolDelete { .. } | Op::SymbolInsertBefore { .. }
+			| Op::SymbolInsertAfter { .. } | Op::SymbolFindReplace { .. }
+			| Op::SymbolRawTextReplace { .. } | Op::SymbolMove { .. }
+			| Op::SymbolClone { .. } | Op::SymbolSplice { .. }
+			| Op::SymbolTranspose { .. }
+			| Op::FileFindReplace { .. } | Op::FileRawTextReplace { .. } => code,
+			Op::CssRenameClassToken { .. } | Op::CssRenameIdToken { .. }
+			| Op::CssRenameCustomProp { .. } | Op::CssRemoveDeadStyle { .. } => css,
+			Op::HeadingPromote { .. } | Op::HeadingDemote { .. }
+			| Op::HeadingReplaceBlock { .. } => heading,
+		}
+	}
+
 	// ── Edit command branch ──────────────────────────────────────
 	if opts.command == "edit" {
 		let actions: Vec<Action> = match opts.actions {
@@ -420,6 +452,9 @@ pub fn execute_code_path_inner(
 		if let Some(ref sid) = opts.session_id {
 			code_resolver = code_resolver.with_session_id(sid.clone());
 		}
+		let code_resolver_arc = std::sync::Arc::new(code_resolver);
+		let css_resolver = css_resolver::CssResolver::new(code_resolver_arc.clone());
+		let heading_resolver = heading_resolver::HeadingResolver::new(code_resolver_arc.clone());
 
 		// FEAT-712: when transaction:"strict", snapshot every target
 		// file before the loop. On any failure, restore the snapshots
@@ -451,55 +486,30 @@ pub fn execute_code_path_inner(
 
 		let mut outcomes: Vec<MutationOutcome> = Vec::new();
 		for action in &actions {
-			let resolver: &dyn MutationResolver = if fs_resolver.supports(&cp, action.kind()) {
-				&fs_resolver
-			} else if text_resolver.supports(&cp, action.kind()) {
-				&text_resolver
-			} else if code_resolver.supports(&cp, action.kind()) {
-				&code_resolver
-			} else {
-				// FEAT-712: rollback prior writes if strict mode.
-				let rolled = if strict_mode {
-					restore_strict(&snapshots)
-				} else {
-					0
-				};
-				// FEAT-689: distinguish the "would have nuked the file"
-				// case so the agent can self-correct.
-				let (variant, message) = if matches!(action.kind(), ActionKind::Delete)
-					&& matches!(cp.locator, Locator::Fs(_))
-					&& cp.query.is_some()
-				{
-					(
-						"symbol_delete_without_resolver".to_string(),
-						format!(
-							"Delete on symbol target {:?} not supported by any resolver. 							 Routing \
-							 to FsResolver was rejected to prevent host-file deletion. 							 Use a \
-							 code-resolver-backed declaration target.",
-							render_code_path(&cp, &DotLexer)
-						),
-					)
-				} else {
-					(
-						"unsupported_action_for_resolver".to_string(),
-						format!("no resolver supports action {:?}", action.kind()),
-					)
-				};
-				let final_message = if strict_mode {
-					format!("{message} (rolled back {rolled} file(s))")
-				} else {
-					message
-				};
-				return Ok(vec![CodePathChunk {
-					nodes:       outcomes.into_iter().map(mutation_outcome_to_dto).collect(),
-					diagnostics: vec![DiagnosticDto { variant, message: final_message, span: None }],
-					done:        true,
-				}]);
+			// Wave 2 (PLAN-304): Action → Op → typed dispatch
+			let op = match Op::from_legacy(action, &cp) {
+				Ok(o) => o,
+				Err(d) => {
+					let diag = diagnostic_to_dto(d);
+					let rolled = if strict_mode { restore_strict(&snapshots) } else { 0 };
+					let final_message = if strict_mode {
+						format!("{} (rolled back {rolled} file(s))", diag.message)
+					} else {
+						diag.message
+					};
+					return Ok(vec![CodePathChunk {
+						nodes:       outcomes.into_iter().map(mutation_outcome_to_dto).collect(),
+						diagnostics: vec![DiagnosticDto { variant: diag.variant, message: final_message, span: diag.span }],
+						done:        true,
+					}]);
+				},
 			};
 
-			match resolver.apply(&cp, action, &pi_token) {
-				Ok(outcome) => outcomes.push(outcome),
-				Err(d) => {
+			let resolver = dispatch_op(&op, &fs_resolver, &text_resolver, &code_resolver_arc, &css_resolver, &heading_resolver);
+
+			match resolver.try_apply(&op, &pi_token) {
+				Some(Ok(outcome)) => outcomes.push(outcome),
+				Some(Err(d)) => {
 					let mut diag = diagnostic_to_dto(d);
 					if strict_mode {
 						let rolled = restore_strict(&snapshots);
@@ -508,6 +518,21 @@ pub fn execute_code_path_inner(
 					return Ok(vec![CodePathChunk {
 						nodes:       outcomes.into_iter().map(mutation_outcome_to_dto).collect(),
 						diagnostics: vec![diag],
+						done:        true,
+					}]);
+				},
+				None => {
+					// Unreachable due to dispatch_op exhaustiveness, but handle defensively
+					let rolled = if strict_mode { restore_strict(&snapshots) } else { 0 };
+					let message = format!("internal error: no resolver claimed Op variant {:?}", op.kind());
+					let final_message = if strict_mode {
+						format!("{message} (rolled back {rolled} file(s))")
+					} else {
+						message
+					};
+					return Ok(vec![CodePathChunk {
+						nodes:       outcomes.into_iter().map(mutation_outcome_to_dto).collect(),
+						diagnostics: vec![DiagnosticDto { variant: "internal_error".to_string(), message: final_message, span: None }],
 						done:        true,
 					}]);
 				},

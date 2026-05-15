@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::{
-	ast::{Action, ActionKind, CodePath, FsSegment, Locator, MutationOutcome},
+	ast::{ActionContent, CodePath, FsSegment, Locator, MutationOutcome},
+	op::{LineAnchor, LineAt, LineSpan, Op},
 	resolver::{CancellationToken, MutationResolver},
 	types::{Diagnostic, DiagnosticVariant},
 };
@@ -128,138 +129,149 @@ fn make_diff(old: &str, new: &str) -> Option<String> {
 }
 
 impl MutationResolver for super::TextResolver {
-	fn supports(&self, path: &CodePath, kind: ActionKind) -> bool {
-		match kind {
-			// Whole-file ops: claim only bare paths (no qualifier)
-			ActionKind::Append | ActionKind::Prepend | ActionKind::Patch => path.qualifier.is_none(),
-			// Line-anchored ops: claim bare paths or text qualifiers
-			ActionKind::Insert | ActionKind::Replace => {
-				path.qualifier.is_none() || path.has_target_query()
-			},
-			_ => false,
-		}
-	}
-
-	fn apply(
+	fn try_apply(
 		&self,
-		target: &CodePath,
-		action: &Action,
+		op: &Op,
 		_cancel: &CancellationToken,
-	) -> Result<MutationOutcome, Diagnostic> {
-		let path = resolve_target_path(&self.root, target)?;
-		match action {
-			Action::Append { lines } => {
-				let (_old_text, mut file_lines) = read_file(&path)?;
-				let old = std::fs::read_to_string(&path).map_err(|e| Diagnostic {
-					variant: DiagnosticVariant::Inaccessible,
-					message: format!("cannot read file: {e}"),
-					span:    None,
-				})?;
-				let new_lines: Vec<String> = lines.lines();
-				file_lines.extend(new_lines);
-				let new = write_file(&path, &file_lines)?;
-				Ok(MutationOutcome {
-					edit_count:     1,
-					diff:           make_diff(&old, &new),
-					created:        false,
-					target_summary: Some(path.to_string_lossy().to_string()),
-				})
-			},
-			Action::Prepend { lines } => {
-				let old = std::fs::read_to_string(&path).map_err(|e| Diagnostic {
-					variant: DiagnosticVariant::Inaccessible,
-					message: format!("cannot read file: {e}"),
-					span:    None,
-				})?;
-				let (_old_text, mut file_lines) = read_file(&path)?;
-				let mut prepended: Vec<String> = lines.lines();
-				prepended.append(&mut file_lines);
-				let new = write_file(&path, &prepended)?;
-				Ok(MutationOutcome {
-					edit_count:     1,
-					diff:           make_diff(&old, &new),
-					created:        false,
-					target_summary: Some(path.to_string_lossy().to_string()),
-				})
-			},
-			Action::Insert { pos, line, lines } => {
-				let line_num = if let Some(pos) = pos {
-					verify_anchor(&path, pos)?
-				} else if let Some(line) = line {
-					*line as usize
-				} else {
-					return Err(Diagnostic {
-						variant: DiagnosticVariant::ParseError,
-						message: "insert requires pos or line".into(),
-						span:    None,
-					});
+	) -> Option<Result<MutationOutcome, Diagnostic>> {
+		match op {
+			Op::FileAppend { target, content } => {
+				let path = match resolve_target_path(&self.root, target.as_codepath()) {
+					Ok(p) => p,
+					Err(e) => return Some(Err(e)),
 				};
-				let (old, mut file_lines) = read_file(&path)?;
-				let text_lines: Vec<String> = lines.lines();
-				let insert_idx = line_num.saturating_sub(1);
-				for (i, l) in text_lines.into_iter().enumerate() {
-					if insert_idx + i <= file_lines.len() {
-						file_lines.insert(insert_idx + i, l);
-					} else {
-						file_lines.push(l);
-					}
-				}
-				let new = write_file(&path, &file_lines)?;
-				if old == new {
-					return Ok(MutationOutcome {
-						edit_count:     0,
-						diff:           None,
-						created:        false,
-						target_summary: Some(path.to_string_lossy().to_string()),
-					});
-				}
-				Ok(MutationOutcome {
-					edit_count:     1,
-					diff:           make_diff(&old, &new),
-					created:        false,
-					target_summary: Some(path.to_string_lossy().to_string()),
-				})
-			},
-			Action::Replace { pos, end, line, lines } => {
-				let start_line = if let Some(pos) = pos {
-					verify_anchor(&path, pos)?
-				} else if let Some(line) = line {
-					*line as usize
-				} else {
-					return Err(Diagnostic {
-						variant: DiagnosticVariant::ParseError,
-						message: "replace requires pos or line".into(),
-						span:    None,
-					});
-				};
-
-				let end_line = if let Some(end) = end {
-					let parts: Vec<&str> = end.split('#').collect();
-					if parts.len() != 2 {
-						return Err(Diagnostic {
-							variant: DiagnosticVariant::ParseError,
-							message: format!("invalid end anchor format: {end}"),
+				let old = match std::fs::read_to_string(&path) {
+					Ok(s) => s,
+					Err(e) => {
+						return Some(Err(Diagnostic {
+							variant: DiagnosticVariant::Inaccessible,
+							message: format!("cannot read file: {e}"),
 							span:    None,
-						});
-					}
-					parts[0].parse::<usize>().map_err(|_| Diagnostic {
-						variant: DiagnosticVariant::ParseError,
-						message: format!("invalid end line number: {end}"),
+						}));
+					},
+				};
+				let (_, mut file_lines) = match read_file(&path) {
+					Ok(f) => f,
+					Err(e) => return Some(Err(e)),
+				};
+				let new_lines: Vec<String> = content.lines();
+				file_lines.extend(new_lines);
+				let new = match write_file(&path, &file_lines) {
+					Ok(n) => n,
+					Err(e) => return Some(Err(e)),
+				};
+				Some(Ok(MutationOutcome {
+					edit_count:     1,
+					diff:           make_diff(&old, &new),
+					created:        false,
+					target_summary: Some(path.to_string_lossy().to_string()),
+				}))
+			},
+			Op::FilePrepend { target, content } => {
+				let path = match resolve_target_path(&self.root, target.as_codepath()) {
+					Ok(p) => p,
+					Err(e) => return Some(Err(e)),
+				};
+				let old = match std::fs::read_to_string(&path) {
+					Ok(s) => s,
+					Err(e) => {
+						return Some(Err(Diagnostic {
+							variant: DiagnosticVariant::Inaccessible,
+							message: format!("cannot read file: {e}"),
+							span:    None,
+						}));
+					},
+				};
+				let (_, mut file_lines) = match read_file(&path) {
+					Ok(f) => f,
+					Err(e) => return Some(Err(e)),
+				};
+				let mut prepended: Vec<String> = content.lines();
+				prepended.append(&mut file_lines);
+				let new = match write_file(&path, &prepended) {
+					Ok(n) => n,
+					Err(e) => return Some(Err(e)),
+				};
+				Some(Ok(MutationOutcome {
+					edit_count:     1,
+					diff:           make_diff(&old, &new),
+					created:        false,
+					target_summary: Some(path.to_string_lossy().to_string()),
+				}))
+			},
+			Op::FilePatch { target, diff } => {
+				let path = match resolve_target_path(&self.root, target.as_codepath()) {
+					Ok(p) => p,
+					Err(e) => return Some(Err(e)),
+				};
+				let old = match std::fs::read_to_string(&path) {
+					Ok(s) => s,
+					Err(e) => {
+						return Some(Err(Diagnostic {
+							variant: DiagnosticVariant::Inaccessible,
+							message: format!("cannot read file: {e}"),
+							span:    None,
+						}));
+					},
+				};
+				let patch = match diffy::Patch::from_str(diff) {
+					Ok(p) => p,
+					Err(e) => {
+						return Some(Err(Diagnostic {
+							variant: DiagnosticVariant::ParseError,
+							message: format!("invalid diff format: {e}"),
+							span:    None,
+						}));
+					},
+				};
+				let new = match diffy::apply(&old, &patch) {
+					Ok(n) => n,
+					Err(e) => {
+						return Some(Err(Diagnostic {
+							variant: DiagnosticVariant::ParseError,
+							message: format!("failed to apply patch: {e}"),
+							span:    None,
+						}));
+					},
+				};
+				if let Err(e) = std::fs::write(&path, &new) {
+					return Some(Err(Diagnostic {
+						variant: DiagnosticVariant::Inaccessible,
+						message: format!("cannot write file: {e}"),
 						span:    None,
-					})?
+					}));
+				}
+				Some(Ok(MutationOutcome {
+					edit_count:     1,
+					diff:           make_diff(&old, &new),
+					created:        false,
+					target_summary: Some(path.to_string_lossy().to_string()),
+				}))
+			},
+			Op::LineReplace { target, span, content } => {
+				let path = match resolve_target_path(&self.root, target.as_codepath()) {
+					Ok(p) => p,
+					Err(e) => return Some(Err(e)),
+				};
+				let start_line =
+					match verify_anchor(&path, &format!("{}#{}", span.start.line, span.start.hash)) {
+						Ok(n) => n,
+						Err(e) => return Some(Err(e)),
+					};
+				let end_line = if let Some(ref end_anchor) = span.end {
+					end_anchor.line as usize
 				} else {
 					start_line
 				};
-
-				let (old, file_lines) = read_file(&path)?;
-				let replacement_lines: Vec<String> =
-					lines.as_ref().map(|l| l.lines()).unwrap_or_default();
-
+				let (old, file_lines) = match read_file(&path) {
+					Ok(f) => f,
+					Err(e) => return Some(Err(e)),
+				};
+				let replacement_lines: Vec<String> = content.lines();
 				let start_idx = start_line.saturating_sub(1);
 				let end_idx = end_line
 					.saturating_sub(1)
 					.min(file_lines.len().saturating_sub(1));
-
 				let mut new_lines = file_lines.clone();
 				for _ in start_idx..=end_idx {
 					if start_idx < new_lines.len() {
@@ -269,56 +281,161 @@ impl MutationResolver for super::TextResolver {
 				for (i, l) in replacement_lines.iter().enumerate() {
 					new_lines.insert(start_idx + i, l.clone());
 				}
-
-				let new = write_file(&path, &new_lines)?;
+				let new = match write_file(&path, &new_lines) {
+					Ok(n) => n,
+					Err(e) => return Some(Err(e)),
+				};
 				if old == new {
-					return Ok(MutationOutcome {
+					return Some(Ok(MutationOutcome {
 						edit_count:     0,
 						diff:           None,
 						created:        false,
 						target_summary: Some(path.to_string_lossy().to_string()),
-					});
+					}));
 				}
-				Ok(MutationOutcome {
+				Some(Ok(MutationOutcome {
 					edit_count:     1,
 					diff:           make_diff(&old, &new),
 					created:        false,
 					target_summary: Some(path.to_string_lossy().to_string()),
-				})
+				}))
 			},
-			Action::Patch { diff } => {
-				let old = std::fs::read_to_string(&path).map_err(|e| Diagnostic {
-					variant: DiagnosticVariant::Inaccessible,
-					message: format!("cannot read file: {e}"),
-					span:    None,
-				})?;
-				let patch = diffy::Patch::from_str(diff).map_err(|e| Diagnostic {
-					variant: DiagnosticVariant::ParseError,
-					message: format!("invalid diff format: {e}"),
-					span:    None,
-				})?;
-				let new = diffy::apply(&old, &patch).map_err(|e| Diagnostic {
-					variant: DiagnosticVariant::ParseError,
-					message: format!("failed to apply patch: {e}"),
-					span:    None,
-				})?;
-				std::fs::write(&path, &new).map_err(|e| Diagnostic {
-					variant: DiagnosticVariant::Inaccessible,
-					message: format!("cannot write file: {e}"),
-					span:    None,
-				})?;
-				Ok(MutationOutcome {
+			Op::LineInsert { target, at, content } => {
+				let path = match resolve_target_path(&self.root, target.as_codepath()) {
+					Ok(p) => p,
+					Err(e) => return Some(Err(e)),
+				};
+				let line_num = match at {
+					LineAt::Before { anchor } => {
+						match verify_anchor(&path, &format!("{}#{}", anchor.line, anchor.hash)) {
+							Ok(n) => n,
+							Err(e) => return Some(Err(e)),
+						}
+					},
+					LineAt::After { anchor } => {
+						match verify_anchor(&path, &format!("{}#{}", anchor.line, anchor.hash)) {
+							Ok(n) => n + 1,
+							Err(e) => return Some(Err(e)),
+						}
+					},
+				};
+				let (old, mut file_lines) = match read_file(&path) {
+					Ok(f) => f,
+					Err(e) => return Some(Err(e)),
+				};
+				let text_lines: Vec<String> = content.lines();
+				let insert_idx = line_num.saturating_sub(1);
+				for (i, l) in text_lines.into_iter().enumerate() {
+					if insert_idx + i <= file_lines.len() {
+						file_lines.insert(insert_idx + i, l);
+					} else {
+						file_lines.push(l);
+					}
+				}
+				let new = match write_file(&path, &file_lines) {
+					Ok(n) => n,
+					Err(e) => return Some(Err(e)),
+				};
+				if old == new {
+					return Some(Ok(MutationOutcome {
+						edit_count:     0,
+						diff:           None,
+						created:        false,
+						target_summary: Some(path.to_string_lossy().to_string()),
+					}));
+				}
+				Some(Ok(MutationOutcome {
 					edit_count:     1,
 					diff:           make_diff(&old, &new),
 					created:        false,
 					target_summary: Some(path.to_string_lossy().to_string()),
-				})
+				}))
 			},
-			_ => Err(Diagnostic {
-				variant: DiagnosticVariant::UnsupportedOperation,
-				message: format!("unsupported action for TextResolver: {:?}", action.kind()),
-				span:    None,
-			}),
+			Op::LineAppend { target, at, content } => {
+				// LineAppend is semantically "insert after anchor"
+				let path = match resolve_target_path(&self.root, target.as_codepath()) {
+					Ok(p) => p,
+					Err(e) => return Some(Err(e)),
+				};
+				let line_num = match verify_anchor(&path, &format!("{}#{}", at.line, at.hash)) {
+					Ok(n) => n + 1, // insert AFTER the anchor line
+					Err(e) => return Some(Err(e)),
+				};
+				let (old, mut file_lines) = match read_file(&path) {
+					Ok(f) => f,
+					Err(e) => return Some(Err(e)),
+				};
+				let text_lines: Vec<String> = content.lines();
+				let insert_idx = line_num.saturating_sub(1);
+				for (i, l) in text_lines.into_iter().enumerate() {
+					if insert_idx + i <= file_lines.len() {
+						file_lines.insert(insert_idx + i, l);
+					} else {
+						file_lines.push(l);
+					}
+				}
+				let new = match write_file(&path, &file_lines) {
+					Ok(n) => n,
+					Err(e) => return Some(Err(e)),
+				};
+				if old == new {
+					return Some(Ok(MutationOutcome {
+						edit_count:     0,
+						diff:           None,
+						created:        false,
+						target_summary: Some(path.to_string_lossy().to_string()),
+					}));
+				}
+				Some(Ok(MutationOutcome {
+					edit_count:     1,
+					diff:           make_diff(&old, &new),
+					created:        false,
+					target_summary: Some(path.to_string_lossy().to_string()),
+				}))
+			},
+			Op::LinePrepend { target, at, content } => {
+				// LinePrepend is semantically "insert before anchor"
+				let path = match resolve_target_path(&self.root, target.as_codepath()) {
+					Ok(p) => p,
+					Err(e) => return Some(Err(e)),
+				};
+				let line_num = match verify_anchor(&path, &format!("{}#{}", at.line, at.hash)) {
+					Ok(n) => n,
+					Err(e) => return Some(Err(e)),
+				};
+				let (old, mut file_lines) = match read_file(&path) {
+					Ok(f) => f,
+					Err(e) => return Some(Err(e)),
+				};
+				let text_lines: Vec<String> = content.lines();
+				let insert_idx = line_num.saturating_sub(1);
+				for (i, l) in text_lines.into_iter().enumerate() {
+					if insert_idx + i <= file_lines.len() {
+						file_lines.insert(insert_idx + i, l);
+					} else {
+						file_lines.push(l);
+					}
+				}
+				let new = match write_file(&path, &file_lines) {
+					Ok(n) => n,
+					Err(e) => return Some(Err(e)),
+				};
+				if old == new {
+					return Some(Ok(MutationOutcome {
+						edit_count:     0,
+						diff:           None,
+						created:        false,
+						target_summary: Some(path.to_string_lossy().to_string()),
+					}));
+				}
+				Some(Ok(MutationOutcome {
+					edit_count:     1,
+					diff:           make_diff(&old, &new),
+					created:        false,
+					target_summary: Some(path.to_string_lossy().to_string()),
+				}))
+			},
+			_ => None,
 		}
 	}
 }
@@ -327,12 +444,20 @@ impl MutationResolver for super::TextResolver {
 mod tests {
 	use super::{super::TextResolver, compute_line_hash};
 	use crate::{
-		ast::{
-			Action, ActionContent, ActionKind, CodePath, FsLocator, FsSegment, Locator, Qualifier,
-		},
+		ast::{ActionContent, CodePath, FsLocator, FsSegment, Locator},
+		op::{FileTarget, LineAnchor, LineAt, LineSpan, Op},
 		resolver::{CancellationToken, MutationResolver},
 		types::DiagnosticVariant,
 	};
+
+	fn bare_file_target(name: &str) -> FileTarget {
+		let cp = CodePath {
+			locator:   Locator::Fs(FsLocator { segments: vec![FsSegment::Literal(name.to_string())] }),
+			query:     None,
+			qualifier: None,
+		};
+		FileTarget::new(cp).unwrap()
+	}
 
 	#[test]
 	fn append_to_file() {
@@ -340,18 +465,14 @@ mod tests {
 		let root = dir.path().to_path_buf();
 		std::fs::write(root.join("a.txt"), "line1\nline2\n").unwrap();
 		let resolver = TextResolver::new(root.clone());
-		let target = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("a.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: None,
-		};
-		let action = Action::Append {
-			lines: ActionContent::Multi(vec!["line3".to_string(), "line4".to_string()]),
+		let target = bare_file_target("a.txt");
+		let op = Op::FileAppend {
+			target,
+			content: ActionContent::Multi(vec!["line3".to_string(), "line4".to_string()]),
 		};
 		let outcome = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap();
 		assert_eq!(outcome.edit_count, 1);
 		let content = std::fs::read_to_string(root.join("a.txt")).unwrap();
@@ -364,18 +485,14 @@ mod tests {
 		let root = dir.path().to_path_buf();
 		std::fs::write(root.join("a.txt"), "line2\nline3\n").unwrap();
 		let resolver = TextResolver::new(root.clone());
-		let target = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("a.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: None,
-		};
-		let action = Action::Prepend {
-			lines: ActionContent::Multi(vec!["line0".to_string(), "line1".to_string()]),
+		let target = bare_file_target("a.txt");
+		let op = Op::FilePrepend {
+			target,
+			content: ActionContent::Multi(vec!["line0".to_string(), "line1".to_string()]),
 		};
 		let outcome = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap();
 		assert_eq!(outcome.edit_count, 1);
 		let content = std::fs::read_to_string(root.join("a.txt")).unwrap();
@@ -383,28 +500,21 @@ mod tests {
 	}
 
 	#[test]
-	fn replace_by_pos_hash_match() {
+	fn replace_by_line_span() {
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		std::fs::write(root.join("a.txt"), "foo\nbar\nbaz\n").unwrap();
 		let resolver = TextResolver::new(root.clone());
-		let target = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("a.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: None,
-		};
+		let target = bare_file_target("a.txt");
 		let hash = compute_line_hash(2, "bar");
-		let pos = format!("2#{hash}");
-		let action = Action::Replace {
-			pos:   Some(pos),
-			end:   None,
-			line:  None,
-			lines: Some(ActionContent::Single("qux".to_string())),
+		let op = Op::LineReplace {
+			target,
+			span: LineSpan { start: LineAnchor { line: 2, hash }, end: None },
+			content: ActionContent::Single("qux".to_string()),
 		};
 		let outcome = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap();
 		assert_eq!(outcome.edit_count, 1);
 		let content = std::fs::read_to_string(root.join("a.txt")).unwrap();
@@ -417,21 +527,15 @@ mod tests {
 		let root = dir.path().to_path_buf();
 		std::fs::write(root.join("a.txt"), "foo\nbar\nbaz\n").unwrap();
 		let resolver = TextResolver::new(root.clone());
-		let target = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("a.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: None,
-		};
-		let action = Action::Replace {
-			pos:   Some("2#ZZ".to_string()),
-			end:   None,
-			line:  None,
-			lines: Some(ActionContent::Single("qux".to_string())),
+		let target = bare_file_target("a.txt");
+		let op = Op::LineReplace {
+			target,
+			span: LineSpan { start: LineAnchor { line: 2, hash: "ZZ".to_string() }, end: None },
+			content: ActionContent::Single("qux".to_string()),
 		};
 		let err = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap_err();
 		assert!(matches!(err.variant, DiagnosticVariant::StaleAnchor));
 	}
@@ -442,17 +546,12 @@ mod tests {
 		let root = dir.path().to_path_buf();
 		std::fs::write(root.join("a.txt"), "foo\nbar\nbaz\n").unwrap();
 		let resolver = TextResolver::new(root.clone());
-		let target = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("a.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: None,
-		};
+		let target = bare_file_target("a.txt");
 		let diff = "--- a.txt\n+++ a.txt\n@@ -1,3 +1,3 @@\n foo\n-bar\n+qux\n baz\n".to_string();
-		let action = Action::Patch { diff };
+		let op = Op::FilePatch { target, diff };
 		let outcome = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap();
 		assert_eq!(outcome.edit_count, 1);
 		let content = std::fs::read_to_string(root.join("a.txt")).unwrap();
@@ -460,108 +559,57 @@ mod tests {
 	}
 
 	#[test]
-	fn replace_idempotent_same_content() {
+	fn insert_before() {
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
-		std::fs::write(root.join("a.txt"), "foo\nbar\nbaz\n").unwrap();
+		std::fs::write(root.join("a.txt"), "foo\nbar\n").unwrap();
 		let resolver = TextResolver::new(root.clone());
-		let target = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("a.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: None,
-		};
+		let target = bare_file_target("a.txt");
 		let hash = compute_line_hash(2, "bar");
-		let pos = format!("2#{hash}");
-		let action = Action::Replace {
-			pos:   Some(pos),
-			end:   None,
-			line:  None,
-			lines: Some(ActionContent::Single("bar".to_string())),
+		let op = Op::LineInsert {
+			target,
+			at: LineAt::Before { anchor: LineAnchor { line: 2, hash } },
+			content: ActionContent::Single("inserted".to_string()),
 		};
 		let outcome = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap();
-		assert_eq!(outcome.edit_count, 0);
+		assert_eq!(outcome.edit_count, 1);
 		let content = std::fs::read_to_string(root.join("a.txt")).unwrap();
-		assert_eq!(content, "foo\nbar\nbaz\n");
+		assert_eq!(content, "foo\ninserted\nbar\n");
 	}
 
 	#[test]
-	fn replace_same_content_non_idempotent_emits_noop() {
+	fn insert_after() {
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
-		std::fs::write(root.join("a.txt"), "foo\nbar\nbaz\n").unwrap();
+		std::fs::write(root.join("a.txt"), "foo\nbar\n").unwrap();
 		let resolver = TextResolver::new(root.clone());
-		let target = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("a.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: None,
-		};
-		let action = Action::Replace {
-			pos:   None,
-			end:   None,
-			line:  Some(2),
-			lines: Some(ActionContent::Single("bar".to_string())),
+		let target = bare_file_target("a.txt");
+		let hash = compute_line_hash(1, "foo");
+		let op = Op::LineInsert {
+			target,
+			at: LineAt::After { anchor: LineAnchor { line: 1, hash } },
+			content: ActionContent::Single("inserted".to_string()),
 		};
 		let outcome = resolver
-			.apply(&target, &action, &CancellationToken::new())
+			.try_apply(&op, &CancellationToken::new())
+			.expect("should return Some")
 			.unwrap();
-		assert_eq!(outcome.edit_count, 0);
+		assert_eq!(outcome.edit_count, 1);
 		let content = std::fs::read_to_string(root.join("a.txt")).unwrap();
-		assert_eq!(content, "foo\nbar\nbaz\n");
+		assert_eq!(content, "foo\ninserted\nbar\n");
 	}
 
 	#[test]
-	fn text_resolver_rejects_qualified_path_for_whole_file_ops() {
+	fn non_text_op_returns_none() {
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		let resolver = TextResolver::new(root);
-		let qualified = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("a.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: Some(Qualifier { name: "raw".into(), args: None }),
-		};
-		assert!(!resolver.supports(&qualified, ActionKind::Patch));
-		assert!(!resolver.supports(&qualified, ActionKind::Append));
-		assert!(!resolver.supports(&qualified, ActionKind::Prepend));
-	}
-
-	#[test]
-	fn text_resolver_accepts_bare_path_for_whole_file_ops() {
-		let dir = tempfile::tempdir().unwrap();
-		let root = dir.path().to_path_buf();
-		let resolver = TextResolver::new(root);
-		let bare = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("a.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: None,
-		};
-		assert!(resolver.supports(&bare, ActionKind::Patch));
-		assert!(resolver.supports(&bare, ActionKind::Append));
-		assert!(resolver.supports(&bare, ActionKind::Prepend));
-	}
-
-	#[test]
-	fn text_resolver_accepts_qualified_path_for_line_ops() {
-		let dir = tempfile::tempdir().unwrap();
-		let root = dir.path().to_path_buf();
-		let resolver = TextResolver::new(root);
-		let qualified = CodePath {
-			locator:   Locator::Fs(FsLocator {
-				segments: vec![FsSegment::Literal("a.txt".to_string())],
-			}),
-			query:     None,
-			qualifier: Some(Qualifier { name: "lines".into(), args: None }),
-		};
-		assert!(resolver.supports(&qualified, ActionKind::Insert));
-		assert!(resolver.supports(&qualified, ActionKind::Replace));
+		let target = bare_file_target("test.txt");
+		let op = Op::FileDelete { target };
+		let result = resolver.try_apply(&op, &CancellationToken::new());
+		assert!(result.is_none(), "TextResolver should return None for FileDelete");
 	}
 }
