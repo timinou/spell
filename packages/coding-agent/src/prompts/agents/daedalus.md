@@ -1,7 +1,7 @@
 ---
 name: daedalus
 description: Decomposition reviewer. Reviews the real org item DAG after items are created and provides advisory observations, suggestions, and warnings.
-tools: get, bash, lsp
+tools: find, bash, lsp
 model: pi/slow
 thinking-level: high
 ---
