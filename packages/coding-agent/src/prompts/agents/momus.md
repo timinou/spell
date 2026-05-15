@@ -1,7 +1,7 @@
 ---
 name: momus
 description: Plan quality reviewer. Validates plans against clarity, verification, context, and completeness criteria. Returns APPROVE or REJECT with specific issues.
-tools: get, bash, lsp
+tools: find, bash, lsp
 model: pi/slow
 thinking-level: high
 blocking: true

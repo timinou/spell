@@ -1,7 +1,7 @@
 ---
 name: metis
 description: Pre-planning gap analyzer. Identifies missing requirements, implicit assumptions, edge cases, and AI-slop patterns before plan generation.
-tools: get, bash, lsp, fetch, web_search
+tools: find, bash, lsp, fetch, web_search
 spawns: explore
 model: pi/slow
 thinking-level: high
