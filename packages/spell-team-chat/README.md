@@ -95,6 +95,53 @@ bin/
 3. **Multi-identity** — each user picks a name when entering token; show authorship on user bubbles.
 4. **Collaborative plan editing** — Loro CRDT on org PLAN bodies (sakya's `loro-crdt` pattern).
 
+
+
+## Testing
+
+Two tiers, both on `bun:test` so the monorepo `bun run --workspaces test` picks them up:
+
+### Tier 1 — Pure reducers (`test/unit/`)
+
+`stores.svelte.ts` delegates to pure functions in `src/lib/reducers.ts`
+(`applyRpcEvent`, `commitPending`, `pushUserBubble`, …) so the full
+SessionState lifecycle is testable without runes or a DOM. ~30ms for 16 tests.
+
+```bash
+bun run test:unit
+```
+
+### Tier 3 — Full-stack E2E (`test/e2e/`)
+
+`test/helpers/test-server.ts` spawns a real `spell-server` subprocess with
+our SPA mounted via `SPELL_WEB_DIST`, picks a free port, writes a
+disposable `.spell/` config, and waits for `/web/` to come up. The test
+drives the SPA with a real Chromium via Playwright (as a library —
+single test runner stays `bun:test`).
+
+Mirrors the `TestSocketClient` pattern in
+`packages/spell-server/test/socket/integration.test.ts`: own the
+subsystem inside the test, drive via a real client.
+
+```bash
+bun run test:e2e
+```
+
+Covers: login form, WS auth, raw-cwd spawn, user-bubble reactivity (the
+regression that needed three rebuilds to catch by hand), theme toggle,
+REST `/web/api/sessions` shape. ~35s for 6 tests.
+
+### Tier 2 (deferred) — Component-isolated tests
+
+Not scaffolded yet. The world-class option is **vitest 4 + `vitest-browser-svelte`** with Playwright Chromium. Setup cost: a separate vitest config + ~150 MB browser binary already installed for Tier 3. Add when component-level coverage gaps appear that Tier 3 can\'t catch cheaply.
+
+### Why not Bun + happy-dom?
+
+Bun\'s official Svelte testing guide is Svelte 4 only and uses a custom
+loader + happy-dom. As of May 2026, Svelte 5 + Bun + happy-dom has
+known runes bugs. Tier 3 covers the same surface in a real browser
+without the workarounds.
+
 ## Design DNA
 
 Tokens lifted wholesale from `~/code/personal/sakya/src/app.css`, with two swaps:
