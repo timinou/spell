@@ -22,6 +22,8 @@ export interface TestSpellServerOptions {
 	cassetteDir?: string;
 	cassetteMode?: "record" | "replay" | "passthrough";
 	extraEnv?: Record<string, string>;
+	/** Env vars to remove from the inherited parent env before launching. */
+	unsetEnv?: string[];
 }
 
 async function pickFreePort(): Promise<number> {
@@ -78,6 +80,7 @@ export async function startTestSpellServer(opts: TestSpellServerOptions = {}): P
 		PI_LOG_LEVEL: "warn",
 		...(opts.extraEnv ?? {}),
 	};
+	for (const key of opts.unsetEnv ?? []) delete env[key];
 	if (opts.cassetteDir) {
 		env.SPELL_CASSETTE_DIR = path.resolve(opts.cassetteDir);
 		env.SPELL_CASSETTE_MODE = opts.cassetteMode ?? "passthrough";
