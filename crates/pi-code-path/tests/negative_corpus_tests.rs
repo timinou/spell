@@ -404,7 +404,11 @@ fn uri_locator_with_query_dispatch_returns_diagnostic() {
 #[test]
 fn non_existent_file_returns_not_found() {
     let _cp = parse_code_path("nonexistent-xyzpdq.ts", &TsNameLexer).unwrap();
-    // Unreachable until dispatch is wired
+    // STUB: when un-ignoring this test, replace the panic with
+    // `assert_eq!(diag.variant, DiagnosticVariant::FileNotFound)` against the
+    // wired FS resolver. The panic ensures removing `#[ignore]` alone does
+    // not yield a trivially-passing test that masks resolver regressions.
+    panic!("STUB: assertion pending FS resolver wiring (PROJ-066)");
 }
 
 /// SHOULD return a diagnostic (out-of-root or inaccessible).
@@ -413,6 +417,7 @@ fn non_existent_file_returns_not_found() {
 #[test]
 fn out_of_root_absolute_path_returns_diagnostic() {
     let _cp = parse_code_path("/etc/passwd", &TsNameLexer).unwrap();
+    panic!("STUB: assert root-enforcement diagnostic when FS resolver gains it");
 }
 
 /// SHOULD return `IncompatibleTargetShape`.
@@ -422,6 +427,7 @@ fn out_of_root_absolute_path_returns_diagnostic() {
 #[test]
 fn range_on_glob_returns_incompatible() {
     let _cp = parse_code_path("src/**/*.ts:50-80", &TsNameLexer).unwrap();
+    panic!("STUB: assert IncompatibleTargetShape when resolver validates glob+range");
 }
 
 /// SHOULD return `NoMatches` or `UnsupportedOperation`.
@@ -430,6 +436,7 @@ fn range_on_glob_returns_incompatible() {
 #[test]
 fn symbol_on_non_code_file_returns_no_matches() {
     let _cp = parse_code_path("foo.txt::Bar", &TsNameLexer).unwrap();
+    panic!("STUB: assert NoMatches or UnsupportedOperation when code resolver checks file type");
 }
 
 /// SHOULD return `NoMatches`.
@@ -438,6 +445,7 @@ fn symbol_on_non_code_file_returns_no_matches() {
 #[test]
 fn missing_symbol_returns_no_matches() {
     let _cp = parse_code_path("foo.ts::NonExistent", &TsNameLexer).unwrap();
+    panic!("STUB: assert NoMatches when code resolver searches symbols");
 }
 
 /// SHOULD return `RangeBoundsInverted`.
@@ -447,6 +455,7 @@ fn missing_symbol_returns_no_matches() {
 #[test]
 fn inverted_range_returns_range_bounds_inverted() {
     let _cp = parse_code_path("foo.ts::§line[10..5]", &TsNameLexer).unwrap();
+    panic!("STUB: assert RangeBoundsInverted when resolver validates range");
 }
 
 /// SHOULD return `FileExists`.
@@ -455,6 +464,7 @@ fn inverted_range_returns_range_bounds_inverted() {
 #[test]
 fn file_create_on_existing_file_returns_file_exists() {
     let _cp = bare_file_path();
+    panic!("STUB: assert FileExists when mutation resolver checks fs state");
 }
 
 /// SHOULD return `NoMatches`.
@@ -464,6 +474,7 @@ fn file_create_on_existing_file_returns_file_exists() {
 #[test]
 fn symbol_rename_on_non_existent_returns_no_matches() {
     let _target = SymbolTarget::new(symbol_path()).unwrap();
+    panic!("STUB: assert NoMatches when code resolver rejects rename of missing symbol");
 }
 
 /// SHOULD return `NoMatches`.
@@ -472,6 +483,7 @@ fn symbol_rename_on_non_existent_returns_no_matches() {
 #[test]
 fn symbol_wrap_on_non_existent_returns_no_matches() {
     let _target = SymbolTarget::new(symbol_path()).unwrap();
+    panic!("STUB: assert NoMatches when code resolver rejects wrap of missing symbol");
 }
 
 /// SHOULD return a diagnostic (empty content rejected by resolver).
@@ -486,6 +498,7 @@ fn empty_content_for_symbol_replace_is_rejected() {
     };
     // Op construction succeeds; resolver should reject empty content
     let _ = op;
+    panic!("STUB: assert resolver-level rejection of empty content for SymbolReplace");
 }
 
 /// SHOULD return `IncompatibleTargetShape`.

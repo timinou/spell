@@ -29,7 +29,11 @@ use std::io::Write;
 // ── Constants ────────────────────────────────────────────────────
 
 /// Root of the spell repository for the grep benchmark.
-const REPO_ROOT: &str = env!("CARGO_MANIFEST_DIR");
+///
+/// `CARGO_MANIFEST_DIR` is the *crate* dir (`crates/pi-natives`). The grep
+/// bench is named `grep_todo_spell_repo` because it should cover the whole
+/// workspace, so we walk two levels up to the workspace root.
+const REPO_ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
 
 // ── Lexer ───────────────────────────────────────────────────────
 
@@ -195,9 +199,12 @@ fn bench_resolve_50_symbols(c: &mut Criterion) {
 	{
 		let mut f = std::fs::File::create(&file_path).expect("create temp file");
 		writeln!(f, "// Generated symbols for benchmark").expect("write");
+		// Emit syntactically valid TypeScript so the TS grammar produces a clean
+		// parse tree (not a recovery-mode parse from Rust syntax in a .ts file).
 		for i in 0..25 {
-			writeln!(f, "fn handler_{i}(x: i32) -> i32 {{ x + {i} }}").expect("write");
-			writeln!(f, "struct Config_{i} {{ field: String }}").expect("write");
+			writeln!(f, "function handler_{i}(x: number): number {{ return x + {i}; }}")
+				.expect("write");
+			writeln!(f, "class Config_{i} {{ field: string = ''; }}").expect("write");
 		}
 	}
 
