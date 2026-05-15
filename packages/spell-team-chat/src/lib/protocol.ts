@@ -5,7 +5,7 @@
  */
 
 export type SessionKind = "external" | "spawned";
-export type Channel = "events" | "artifacts" | "state";
+export type Channel = "events" | "artifacts" | "state" | "debug";
 
 export interface SessionSummary {
 	sessionId: string;
@@ -132,6 +132,19 @@ export interface ArtifactCreatedEvent {
 	ts: number;
 }
 
+export interface ProcessInfoEvent {
+	pid: number;
+	rssBytes: number;
+	cpuPercent: number;
+	uptimeMs: number;
+	ts: number;
+}
+
+export interface RpcStderrEvent {
+	line: string;
+	ts: number;
+}
+
 /* -- WebSocket frames -------------------------------------------------- */
 export type WsClientMessage =
 	| { type: "list_sessions"; correlationId?: string }
@@ -167,5 +180,7 @@ export type WsServerMessage =
 	| { type: "artifact_created"; sessionId: string; artifact: ArtifactCreatedEvent }
 	| { type: "artifact_url"; sessionId: string; url: string; expiresAt: number; correlationId?: string }
 	| { type: "spawn_result"; sessionId: string; correlationId?: string }
+	| { type: "process_info"; sessionId: string; pid: number; rssBytes: number; cpuPercent: number; uptimeMs: number; ts: number }
+	| { type: "rpc_stderr"; sessionId: string; line: string; ts: number }
 	| { type: "error"; code: string; message: string; correlationId?: string }
 	| { type: "pong"; correlationId?: string };

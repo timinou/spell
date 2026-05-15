@@ -291,6 +291,13 @@ export class AuthStorage {
 	#usageCache: UsageCache;
 	#usageRequestInFlight: Map<string, Promise<UsageReport | null>> = new Map();
 	#usageReportsInFlight: Map<string, Promise<UsageReport[]>> = new Map();
+	/**
+	 * Deduplicates concurrent OAuth token refresh calls per (provider, refresh-token).
+	 * Providers that rotate refresh tokens (e.g. Kimi Code) invalidate the prior refresh
+	 * token on first use; without dedup, two concurrent refreshes race and the loser sees
+	 * invalid_grant, which classifies as "refresh expired" and forces the user to re-login.
+	 */
+	#oauthRefreshInFlight: Map<string, Promise<OAuthCredentials>> = new Map();
 	#usageFetch: typeof fetch;
 	#usageRequestTimeoutMs: number;
 	#usageLogger?: UsageLogger;
@@ -1803,6 +1810,63 @@ export class AuthStorage {
 		options?: { force?: boolean },
 	): Promise<OAuthCredentials> {
 		if (!options?.force && Date.now() < credential.expires) return credential;
+
+		// Key by the refresh token currently being exchanged. Two concurrent callers holding
+		// the same refresh token must share a single network round-trip; otherwise providers
+		// that rotate refresh tokens reject the second request and we permanently block the
+		// credential. Once the in-flight promise settles the entry is cleared, so the next
+		// caller (which by then sees the rotated token on disk) starts a fresh exchange.
+		const key = `${provider}\u0000${credential.refresh}`;
+		const inflight = this.#oauthRefreshInFlight.get(key);
+		if (inflight) return inflight;
+
+		const promise = this.#performOAuthRefresh(provider, credential).finally(() => {
+			if (this.#oauthRefreshInFlight.get(key) === promise) {
+				this.#oauthRefreshInFlight.delete(key);
+			}
+		});
+		this.#oauthRefreshInFlight.set(key, promise);
+		return promise;
+	}
+
+	/**
+	 * Cross-process race recovery for OAuth providers that rotate refresh tokens.
+	 *
+	 * When our refresh attempt for credential row N fails (typically `invalid_grant`),
+	 * another Spell process sharing this `agent.db` may have already exchanged the
+	 * same refresh token, rotated it, and persisted a fresh credential. Re-reading
+	 * directly from the underlying store (bypassing our per-instance in-memory
+	 * cache) reveals that race; if observed, we adopt the rotated credential into
+	 * our cache and return its access token instead of condemning the user to a
+	 * 30-day block.
+	 *
+	 * Returns the access token to surface, or undefined when no concurrent rotation
+	 * is visible — in which case the caller falls through to its existing
+	 * blocked/disabled classification.
+	 */
+	#tryAdoptCrossProcessRotation(
+		provider: Provider,
+		selection: { credential: OAuthCredential; index: number },
+	): string | undefined {
+		const entries = this.#getStoredCredentials(provider);
+		const target = entries[selection.index];
+		if (!target) return undefined;
+
+		const fresh = this.#store.listAuthCredentials(provider).find(record => record.id === target.id);
+		if (!fresh || fresh.credential.type !== "oauth") return undefined;
+		if (fresh.credential.refresh === selection.credential.refresh) return undefined;
+		if (Date.now() >= fresh.credential.expires) return undefined;
+
+		const rotated = fresh.credential;
+		const updated = [...entries];
+		updated[selection.index] = { id: target.id, credential: rotated };
+		this.#setStoredCredentials(provider, updated);
+
+		const customProvider = getOAuthProvider(provider);
+		return customProvider?.getApiKey ? customProvider.getApiKey(rotated) : rotated.access;
+	}
+
+	async #performOAuthRefresh(provider: Provider, credential: OAuthCredential): Promise<OAuthCredentials> {
 		const customProvider = getOAuthProvider(provider);
 		let refreshPromise: Promise<OAuthCredentials>;
 		if (customProvider) {
@@ -1921,14 +1985,24 @@ export class AuthStorage {
 			return result.apiKey;
 		} catch (error) {
 			const errorMsg = String(error);
+
+			// Cross-process race recovery: another Spell instance sharing this credential
+			// file may have already rotated the refresh token between our load and our
+			// refresh attempt, in which case the failure is benign — the persisted
+			// credential is healthy and we should adopt it rather than block the user.
+			const recovered = this.#tryAdoptCrossProcessRotation(provider, selection);
+			if (recovered !== undefined) {
+				this.#recordSessionCredential(provider, sessionId, "oauth", selection.index);
+				return recovered;
+			}
+
 			// Categorize the failure to decide between permanent disable vs. long block
 			// invalid_grant on refresh = refresh token expired → needs re-login, not perm disable
-			const isRefreshTokenExpired =
-				/invalid_grant|expired.*refresh|refresh.*expired/i.test(errorMsg);
+			const isRefreshTokenExpired = /invalid_grant|expired.*refresh|refresh.*expired/i.test(errorMsg);
 			const isCredentialRevoked =
 				!isRefreshTokenExpired &&
 				(/invalid_token|revoked|unauthorized/i.test(errorMsg) ||
-				 (/\b(401|403)\b/.test(errorMsg) && !/timeout|network|fetch failed|ECONNREFUSED/i.test(errorMsg)));
+					(/\b(401|403)\b/.test(errorMsg) && !/timeout|network|fetch failed|ECONNREFUSED/i.test(errorMsg)));
 
 			logger.warn("OAuth token refresh failed", {
 				provider,
@@ -2033,7 +2107,9 @@ export class AuthStorage {
 		// Fall back to environment variable
 		const envKey = getEnvApiKey(provider);
 		if (envKey) {
-			console.error(`[AUTH-TRACE] env var resolved key for "${provider}" (key prefix: ${envKey.substring(0, 10)}...)`);
+			console.error(
+				`[AUTH-TRACE] env var resolved key for "${provider}" (key prefix: ${envKey.substring(0, 10)}...)`,
+			);
 			return envKey;
 		}
 
@@ -2486,7 +2562,6 @@ export class AuthCredentialStore {
 		}
 		return results;
 	}
-
 
 	/**
 	 * Check if provider has any disabled OAuth credentials.

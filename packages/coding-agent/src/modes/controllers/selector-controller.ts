@@ -4,7 +4,7 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import { Input, Loader, Spacer, Text } from "@oh-my-pi/pi-tui";
 import { getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import { MODEL_ROLES } from "../../config/model-registry";
-import { settings } from "../../config/settings";
+import { settings, type WriteTier } from "../../config/settings";
 import { DebugSelectorComponent } from "../../debug";
 import { disableProvider, enableProvider } from "../../discovery";
 import {
@@ -89,7 +89,7 @@ export class SelectorController {
 						cwd: getProjectDir(),
 					},
 					{
-						onChange: (id, value) => this.handleSettingChange(id, value),
+						onChange: (id, value, tier) => this.handleSettingChange(id, value, tier),
 						onThemePreview: async themeName => {
 							const result = await previewTheme(themeName);
 							if (result.success) {
@@ -205,7 +205,9 @@ export class SelectorController {
 	 * Most settings are saved directly via SettingsManager in the definitions.
 	 * This handles side effects and session-specific settings.
 	 */
-	handleSettingChange(id: string, value: unknown): void {
+	handleSettingChange(id: string, value: unknown, tier: WriteTier): void {
+		// Persist to the requested tier (session methods also write, but override wins)
+		settings.set(id as never, value as never, tier);
 		// Discovery provider toggles
 		if (id.startsWith("discovery.")) {
 			const providerId = id.replace("discovery.", "");

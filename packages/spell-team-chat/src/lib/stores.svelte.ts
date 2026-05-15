@@ -2,6 +2,7 @@ import type {
 	ArtifactCreatedEvent,
 	BlockingEventPayload,
 	EventLogEntry,
+	ProcessInfoEvent,
 	RpcEvent,
 	SessionSummary,
 } from "./protocol";
@@ -11,6 +12,8 @@ import {
 	applyRpcEvent,
 	appendArtifact,
 	appendExternalLog,
+	appendProcessInfo,
+	appendStderr,
 	freshSessionStateCore,
 	newBubble,
 	pushBlocking,
@@ -128,6 +131,14 @@ class AppStore {
 
 	noteArtifact(sessionId: string, artifact: ArtifactCreatedEvent): void {
 		this.#update(sessionId, s => ({ ...s, ...appendArtifact(s, artifact) }));
+	}
+
+	noteProcessInfo(sessionId: string, info: ProcessInfoEvent): void {
+		this.#update(sessionId, s => ({ ...s, ...appendProcessInfo(s, info) }));
+	}
+
+	noteStderr(sessionId: string, line: string, ts?: number): void {
+		this.#update(sessionId, s => ({ ...s, ...appendStderr(s, line, ts) }));
 	}
 }
 

@@ -14,6 +14,7 @@ pub mod edge_resolver;
 pub mod edit_history;
 pub mod extractors;
 pub mod heading_resolver;
+pub mod introspection_napi;
 pub mod image_pipeline;
 pub mod manage;
 pub mod marshal;

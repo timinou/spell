@@ -46,6 +46,7 @@ export class RpcClient {
 	#command: string;
 	#spawn: typeof Bun.spawn;
 	#stderrLines: string[] = [];
+	#stderrListeners = new Set<(line: string) => void>();
 
 	constructor(options: RpcSpawnOptions, dependencies: RpcClientDependencies = {}) {
 		this.#options = options;
@@ -351,23 +352,53 @@ export class RpcClient {
 	}
 
 	#consumeStderr(stream: ReadableStream<Uint8Array>): void {
+		// Line-buffered with a 4096-char per-line cap. Cross-chunk lines are
+		// joined via `buffer`; the trailing partial line is held until newline
+		// arrives so we never emit fragments. Oversize lines (>4 KB) are
+		// dropped silently — backpressure protection.
 		const decoder = new TextDecoder();
+		let buffer = "";
 		void (async () => {
 			for await (const chunk of stream) {
-				const text = decoder.decode(chunk, { stream: true });
-				for (const line of text.split("\n")) {
-					const trimmed = line.trim();
-					if (!trimmed) continue;
-					logger.debug("[spell-server:rpc] stderr", { text: trimmed });
-					this.#stderrLines.push(trimmed);
-					if (this.#stderrLines.length > STDERR_RING_SIZE) {
-						this.#stderrLines.shift();
-					}
-				}
+				buffer += decoder.decode(chunk, { stream: true });
+				const lines = buffer.split("\n");
+				buffer = lines.pop() ?? "";
+				for (const raw of lines) this.#handleStderrLine(raw);
 			}
+			buffer += decoder.decode();
+			if (buffer) this.#handleStderrLine(buffer);
 		})().catch(error => {
 			logger.warn("RPC stderr reader failed", { error: String(error) });
 		});
+	}
+
+	#handleStderrLine(raw: string): void {
+		const line = raw.replace(/\r$/, "").trim();
+		if (!line) return;
+		if (line.length > 4096) return;
+		logger.debug("[spell-server:rpc] stderr", { text: line });
+		this.#stderrLines.push(line);
+		if (this.#stderrLines.length > STDERR_RING_SIZE) this.#stderrLines.shift();
+		for (const listener of this.#stderrListeners) {
+			try {
+				listener(line);
+			} catch (error) {
+				logger.debug("stderr listener threw", { error: String(error) });
+			}
+		}
+	}
+
+	/** Subscribe to each line written to the subprocess's stderr. Returns an unsubscribe fn. */
+	onStderr(listener: (line: string) => void): () => void {
+		this.#stderrListeners.add(listener);
+		return () => {
+			this.#stderrListeners.delete(listener);
+		};
+	}
+
+	/** PID of the spawned subprocess, undefined before start() or after exit. */
+	get pid(): number | undefined {
+		return this.#process?.pid;
 	}
 
 	#emitEvent(event: RpcEvent): void {

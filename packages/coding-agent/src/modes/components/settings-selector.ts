@@ -12,7 +12,7 @@ import {
 	TabBar,
 	Text,
 } from "@oh-my-pi/pi-tui";
-import { type SettingPath, settings } from "../../config/settings";
+import { type SettingPath, settings, type WriteTier } from "../../config/settings";
 import type {
 	SettingTab,
 	StatusLinePreset,
@@ -20,7 +20,13 @@ import type {
 	StatusLineSeparatorStyle,
 } from "../../config/settings-schema";
 import { SETTING_TABS, TAB_METADATA } from "../../config/settings-schema";
-import { getCurrentThemeName, getSelectListTheme, getSettingsListTheme, theme } from "../../modes/theme/theme";
+import {
+	getCurrentThemeName,
+	getSelectListTheme,
+	getSettingsListTheme,
+	type ThemeColor,
+	theme,
+} from "../../modes/theme/theme";
 import { getTabBarTheme } from "../shared";
 import { DynamicBorder } from "./dynamic-border";
 import { PluginSettingsComponent } from "./plugin-settings";
@@ -154,7 +160,7 @@ export interface StatusLinePreviewSettings {
 
 export interface SettingsCallbacks {
 	/** Called when any setting value changes */
-	onChange: (path: SettingPath, newValue: unknown) => void;
+	onChange: (path: SettingPath, newValue: unknown, tier: WriteTier) => void;
 	/** Called for theme preview while browsing */
 	onThemePreview?: (theme: string) => void | Promise<void>;
 	/** Called for status line preview while configuring */
@@ -179,6 +185,7 @@ export class SettingsSelectorComponent extends Container {
 	#statusPreviewContainer: Container | null = null;
 	#statusPreviewText: Text | null = null;
 	#currentTabId: SettingTab | "plugins" = "appearance";
+	#currentTier: WriteTier = "user";
 
 	constructor(
 		private readonly context: SettingsRuntimeContext,
@@ -376,7 +383,7 @@ export class SettingsSelectorComponent extends Container {
 			currentValue,
 			value => {
 				this.#setSettingValue(def.path, value);
-				this.callbacks.onChange(def.path, value);
+				this.callbacks.onChange(def.path, value, this.#currentTier);
 				done(value);
 			},
 			() => {
@@ -395,15 +402,15 @@ export class SettingsSelectorComponent extends Container {
 		// Handle number conversions
 		const currentValue = settings.get(path);
 		if (path === "compaction.thresholdPercent" && value === "default") {
-			settings.set(path, -1 as never);
+			settings.set(path, -1 as never, this.#currentTier);
 		} else if (path === "compaction.thresholdTokens" && value === "default") {
-			settings.set(path, -1 as never);
+			settings.set(path, -1 as never, this.#currentTier);
 		} else if (typeof currentValue === "number") {
-			settings.set(path, Number(value) as never);
+			settings.set(path, Number(value) as never, this.#currentTier);
 		} else if (typeof currentValue === "boolean") {
-			settings.set(path, (value === "true") as never);
+			settings.set(path, (value === "true") as never, this.#currentTier);
 		} else {
-			settings.set(path, value as never);
+			settings.set(path, value as never, this.#currentTier);
 		}
 	}
 
@@ -432,6 +439,12 @@ export class SettingsSelectorComponent extends Container {
 			this.addChild(this.#statusPreviewContainer);
 		}
 
+		// Tier indicator: shows where settings will be saved
+		const tierLabel = `  Tier: ${this.#currentTier === "user" ? "[user] ~/.spell/spell.kdl" : this.#currentTier === "project" ? "[project] ./spell.kdl" : "[session] in-memory only"}`;
+		const tierColors: Record<WriteTier, ThemeColor> = { user: "accent", project: "success", session: "warning" };
+		this.addChild(new Text(theme.fg(tierColors[this.#currentTier], tierLabel), 0, 0));
+		this.addChild(new Spacer(1));
+
 		this.#currentList = new SettingsList(
 			items,
 			10,
@@ -444,15 +457,15 @@ export class SettingsSelectorComponent extends Container {
 
 				if (def.type === "boolean") {
 					const boolValue = newValue === "true";
-					settings.set(path, boolValue as never);
-					this.callbacks.onChange(path, boolValue);
+					settings.set(path, boolValue as never, this.#currentTier);
+					this.callbacks.onChange(path, boolValue, this.#currentTier);
 
 					if (tabId === "appearance") {
 						this.#triggerStatusLinePreview();
 					}
 				} else if (def.type === "enum") {
-					settings.set(path, newValue as never);
-					this.callbacks.onChange(path, newValue);
+					settings.set(path, newValue as never, this.#currentTier);
+					this.callbacks.onChange(path, newValue, this.#currentTier);
 				}
 				// Submenu types are handled in createSubmenu
 			},
@@ -509,6 +522,15 @@ export class SettingsSelectorComponent extends Container {
 	}
 
 	handleInput(data: string): void {
+		// Ctrl+T cycles the write tier (user → project → session → user)
+		if (matchesKey(data, "ctrl+t")) {
+			this.#currentTier =
+				this.#currentTier === "user" ? "project" : this.#currentTier === "project" ? "session" : "user";
+			// Refresh the list to update the tier indicator
+			this.#switchToTab(this.#currentTabId);
+			return;
+		}
+
 		// Handle tab switching first (tab, shift+tab, or left/right arrows)
 		if (
 			matchesKey(data, "tab") ||

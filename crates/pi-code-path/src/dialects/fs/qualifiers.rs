@@ -12,11 +12,21 @@ use crate::{
 ///
 /// `#listing` returns one-level children.  `#tree[depth=N]` returns a
 /// recursive listing capped at depth *N*.  `#stat` returns metadata.
+///
+/// `#diff` is declared here but must be resolved via the pi-natives outer
+/// dispatch layer (napi.rs `is_diff_qualifier` routing). The kernel returns
+/// `UnsupportedOperation`; the outer layer catches this before the FsResolver
+/// fallthrough and routes to `diff_qualifier::resolve()`.
 pub fn resolve(node: &NodeRef, qual: &Qualifier, root: &Path) -> Result<Vec<NodeRef>, Diagnostic> {
 	match qual.name.as_str() {
 		"listing" => resolve_listing(node, root),
 		"tree" => resolve_tree(node, qual.args.as_deref(), root),
 		"stat" => resolve_stat(node, root),
+		"diff" => Err(Diagnostic {
+			variant: DiagnosticVariant::UnsupportedOperation,
+			message: "#diff must be resolved via pi-natives outer dispatch layer".into(),
+			span:    None,
+		}),
 		_ => Err(Diagnostic {
 			variant: DiagnosticVariant::UnsupportedOperation,
 			message: format!("unknown qualifier: {}", qual.name),

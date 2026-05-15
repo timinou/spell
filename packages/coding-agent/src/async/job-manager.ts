@@ -6,6 +6,8 @@ const DELIVERY_RETRY_MAX_MS = 30_000;
 const DELIVERY_RETRY_JITTER_MS = 200;
 const DEFAULT_RETENTION_MS = 5 * 60 * 1000;
 const DEFAULT_MAX_RUNNING_JOBS = 15;
+const DEFAULT_JOB_TIMEOUT_MS = 25 * 60 * 1000;
+const DEFAULT_WATCHDOG_GRACE_MS = 2_000;
 const MAX_RETAINED_FINISHED_JOBS = 100;
 const MAX_PENDING_DELIVERIES = 200;
 
@@ -34,6 +36,10 @@ export interface AsyncJobManagerOptions {
 	onJobComplete: (jobId: string, text: string, job?: AsyncJob) => void | Promise<void>;
 	maxRunningJobs?: number;
 	retentionMs?: number;
+	/** Per-job liveness watchdog timeout in ms. 0 disables. Default: 25 * 60_000. */
+	jobTimeoutMs?: number;
+	/** Grace window after abort before forcing terminal status. Default: 2_000ms. */
+	watchdogGraceMs?: number;
 }
 
 interface AsyncJobDelivery {
@@ -54,6 +60,8 @@ export interface AsyncJobDeliveryState {
 export interface AsyncJobRegisterOptions {
 	id?: string;
 	onProgress?: (text: string, details?: Record<string, unknown>) => void | Promise<void>;
+	/** Override the manager's default job timeout. 0 disables. */
+	timeoutMs?: number;
 }
 
 export class AsyncJobManager {
@@ -64,6 +72,10 @@ export class AsyncJobManager {
 	readonly #onJobComplete: AsyncJobManagerOptions["onJobComplete"];
 	readonly #maxRunningJobs: number;
 	readonly #retentionMs: number;
+	readonly #jobTimeoutMs: number;
+	readonly #watchdogGraceMs: number;
+	readonly #watchdogTimers = new Map<string, { timer: NodeJS.Timeout; timeoutMs: number; graceMs: number; inGrace?: boolean }>();
+	readonly #watchdogRejects = new Map<string, (error: Error) => void>();
 	#deliveryLoop: Promise<void> | undefined;
 	#activeDelivery: AsyncJobDelivery | undefined;
 	#disposed = false;
@@ -72,6 +84,8 @@ export class AsyncJobManager {
 		this.#onJobComplete = options.onJobComplete;
 		this.#maxRunningJobs = Math.max(1, Math.floor(options.maxRunningJobs ?? DEFAULT_MAX_RUNNING_JOBS));
 		this.#retentionMs = Math.max(0, Math.floor(options.retentionMs ?? DEFAULT_RETENTION_MS));
+		this.#jobTimeoutMs = Math.max(0, Math.floor(options.jobTimeoutMs ?? DEFAULT_JOB_TIMEOUT_MS));
+		this.#watchdogGraceMs = Math.max(0, Math.floor(options.watchdogGraceMs ?? DEFAULT_WATCHDOG_GRACE_MS));
 	}
 
 	register(
@@ -115,6 +129,7 @@ export class AsyncJobManager {
 				...(details ? { details } : {}),
 				updatedAt: Date.now(),
 			};
+			this.#rescheduleWatchdog(id);
 			if (!options?.onProgress) return;
 			try {
 				await options.onProgress(text, details);
@@ -125,9 +140,27 @@ export class AsyncJobManager {
 				});
 			}
 		};
+
+		let rejectWatchdog: (error: Error) => void;
+		const runPromise = run({ jobId: id, signal: abortController.signal, reportProgress });
+		runPromise.catch(() => {});
+		const runRace = Promise.race([
+			runPromise,
+			new Promise<never>((_, reject) => {
+				rejectWatchdog = reject;
+			}),
+		]);
+		this.#watchdogRejects.set(id, rejectWatchdog!);
+
 		job.promise = (async () => {
 			try {
-				const text = await run({ jobId: id, signal: abortController.signal, reportProgress });
+				const text = await runRace;
+				this.#clearWatchdog(id);
+				this.#watchdogRejects.delete(id);
+				if (job.status === "failed") {
+					this.#scheduleEviction(id);
+					return;
+				}
 				if (job.status === "cancelled") {
 					job.resultText = text;
 					this.#scheduleEviction(id);
@@ -139,6 +172,12 @@ export class AsyncJobManager {
 				this.#enqueueDelivery(id, text);
 				this.#scheduleEviction(id);
 			} catch (error) {
+				this.#clearWatchdog(id);
+				this.#watchdogRejects.delete(id);
+				if (job.status === "failed") {
+					this.#scheduleEviction(id);
+					return;
+				}
 				if (job.status === "cancelled") {
 					job.errorText = error instanceof Error ? error.message : String(error);
 					this.#scheduleEviction(id);
@@ -154,6 +193,10 @@ export class AsyncJobManager {
 		})();
 
 		this.#jobs.set(id, job);
+		const effectiveTimeoutMs = options?.timeoutMs ?? this.#jobTimeoutMs;
+		if (effectiveTimeoutMs > 0) {
+			this.#scheduleWatchdog(id, effectiveTimeoutMs, this.#watchdogGraceMs);
+		}
 		return id;
 	}
 
@@ -229,6 +272,7 @@ export class AsyncJobManager {
 			job.abortController.abort();
 			this.#scheduleEviction(job.id);
 		}
+		this.#clearAllWatchdogTimers();
 	}
 
 	async waitForAll(): Promise<void> {
@@ -269,6 +313,7 @@ export class AsyncJobManager {
 	async dispose(options?: { timeoutMs?: number }): Promise<boolean> {
 		this.#disposed = true;
 		this.#clearEvictionTimers();
+		this.#clearAllWatchdogTimers();
 		this.cancelAll();
 		await this.waitForAll();
 		const drained = await this.drainDeliveries({ timeoutMs: options?.timeoutMs ?? 3_000 });
@@ -302,6 +347,12 @@ export class AsyncJobManager {
 			clearTimeout(timer);
 			this.#evictionTimers.delete(jobId);
 		}
+		const watchdogEntry = this.#watchdogTimers.get(jobId);
+		if (watchdogEntry) {
+			clearTimeout(watchdogEntry.timer);
+			this.#watchdogTimers.delete(jobId);
+		}
+		this.#watchdogRejects.delete(jobId);
 		this.#suppressedDeliveries.delete(jobId);
 		this.#deliveries.splice(
 			0,
@@ -352,6 +403,75 @@ export class AsyncJobManager {
 			clearTimeout(timer);
 		}
 		this.#evictionTimers.clear();
+	}
+
+	#scheduleWatchdog(jobId: string, timeoutMs: number, graceMs: number): void {
+		const existing = this.#watchdogTimers.get(jobId);
+		if (existing) {
+			clearTimeout(existing.timer);
+		}
+		const timer = setTimeout(() => this.#fireWatchdog(jobId), timeoutMs);
+		timer.unref?.();
+		this.#watchdogTimers.set(jobId, { timer, timeoutMs, graceMs });
+	}
+
+	#rescheduleWatchdog(jobId: string): void {
+		const entry = this.#watchdogTimers.get(jobId);
+		if (!entry || entry.inGrace) return;
+		clearTimeout(entry.timer);
+		const timer = setTimeout(() => this.#fireWatchdog(jobId), entry.timeoutMs);
+		timer.unref?.();
+		entry.timer = timer;
+	}
+
+	#clearWatchdog(jobId: string): void {
+		const entry = this.#watchdogTimers.get(jobId);
+		if (entry) {
+			clearTimeout(entry.timer);
+			this.#watchdogTimers.delete(jobId);
+		}
+	}
+
+	#fireWatchdog(jobId: string): void {
+		const job = this.#jobs.get(jobId);
+		if (!job || job.status !== "running") {
+			this.#watchdogTimers.delete(jobId);
+			return;
+		}
+		const entry = this.#watchdogTimers.get(jobId);
+		const timeoutMs = entry?.timeoutMs ?? this.#jobTimeoutMs;
+		const graceMs = entry?.graceMs ?? this.#watchdogGraceMs;
+		if (entry) {
+			clearTimeout(entry.timer);
+			entry.inGrace = true;
+		}
+		job.abortController.abort();
+		const graceTimer = setTimeout(() => {
+			this.#watchdogTimers.delete(jobId);
+			this.#watchdogRejects.get(jobId)?.(
+				new Error(`Job exceeded ${Math.round(timeoutMs / 1000)}s watchdog timeout`),
+			);
+			this.#watchdogRejects.delete(jobId);
+			const j = this.#jobs.get(jobId);
+			if (!j || j.status !== "running") return;
+			j.status = "failed";
+			j.errorText = `Job exceeded ${Math.round(timeoutMs / 1000)}s watchdog timeout`;
+			j.endTime = Date.now();
+			this.#enqueueDelivery(jobId, j.errorText);
+			this.#scheduleEviction(jobId);
+		}, graceMs);
+		graceTimer.unref?.();
+		if (entry) {
+			entry.timer = graceTimer;
+		}
+	}
+
+	#clearAllWatchdogTimers(): void {
+		for (const entry of this.#watchdogTimers.values()) {
+			clearTimeout(entry.timer);
+		}
+		this.#watchdogTimers.clear();
+		this.#watchdogRejects.clear();
 	}
 
 	#dropOldestDeliveries(reason: "queue_cap" | "retry_queue_cap", incomingJobId: string): void {

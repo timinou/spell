@@ -17,6 +17,13 @@ export interface TestSpellServer {
 	stop: () => Promise<void>;
 }
 
+export interface TestSpellServerOptions {
+	token?: string;
+	cassetteDir?: string;
+	cassetteMode?: "record" | "replay" | "passthrough";
+	extraEnv?: Record<string, string>;
+}
+
 async function pickFreePort(): Promise<number> {
 	return new Promise((resolve, reject) => {
 		const s = net.createServer();
@@ -46,7 +53,7 @@ async function waitForHttp(url: string, deadlineMs: number): Promise<void> {
 	throw new Error(`server at ${url} did not become ready within ${deadlineMs}ms`);
 }
 
-export async function startTestSpellServer(opts: { token?: string } = {}): Promise<TestSpellServer> {
+export async function startTestSpellServer(opts: TestSpellServerOptions = {}): Promise<TestSpellServer> {
 	const token = opts.token ?? `tok-${Math.random().toString(36).slice(2, 10)}`;
 	const port = await pickFreePort();
 	const configDir = await fs.mkdtemp(path.join(os.tmpdir(), "spell-team-chat-e2e-"));
@@ -65,9 +72,20 @@ export async function startTestSpellServer(opts: { token?: string } = {}): Promi
 	const serverEntry = path.join(repoRoot, "packages", "spell-server", "src", "main.ts");
 	const distDir = path.resolve(import.meta.dir, "..", "..", "dist");
 
+	const env: Record<string, string> = {
+		...process.env,
+		SPELL_WEB_DIST: distDir,
+		PI_LOG_LEVEL: "warn",
+		...(opts.extraEnv ?? {}),
+	};
+	if (opts.cassetteDir) {
+		env.SPELL_CASSETTE_DIR = path.resolve(opts.cassetteDir);
+		env.SPELL_CASSETTE_MODE = opts.cassetteMode ?? "passthrough";
+	}
+
 	const child: ChildProcess = spawn("bun", ["run", serverEntry, "--config-dir", dotSpell], {
 		cwd: repoRoot,
-		env: { ...process.env, SPELL_WEB_DIST: distDir, PI_LOG_LEVEL: "warn" },
+		env,
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 

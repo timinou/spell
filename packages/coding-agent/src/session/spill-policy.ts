@@ -21,11 +21,27 @@ export const LEGACY_WRAPPER_TAIL_LINES = 500;
 export const LEGACY_STREAM_TAIL_BYTES = 50 * 1024;
 export const UNBOUNDED_SPILL_LINES = Number.MAX_SAFE_INTEGER;
 
+/**
+ * Deterministic chars-per-token ratio used across the codebase
+ * (see commit/map-reduce/utils.ts::estimateTokens and
+ * session/compaction/compaction.ts::estimateTokens). Used to convert the
+ * user-facing tools.getSpillThreshold (tokens) to bytes on the hot path
+ * without a tokenizer dependency.
+ */
+export const TOKEN_BYTE_RATIO = 4;
+
 const SPILL_SETTING_PATHS = [
 	"tools.artifactSpillThreshold",
 	"tools.artifactTailBytes",
 	"tools.artifactTailLines",
 ] as const;
+
+/**
+ * Canonical name of the `get` tool. Routed to a dedicated policy in
+ * resolveToolSpillPolicy and also listed in PRECISION_SPILL_EXEMPT_TOOLS
+ * as a defensive fallback when callers bypass the dedicated route.
+ */
+export const GET_TOOL_NAME = "get";
 
 export const PRECISION_SPILL_EXEMPT_TOOLS = new Set([
 	"read",
@@ -36,6 +52,7 @@ export const PRECISION_SPILL_EXEMPT_TOOLS = new Set([
 	"lsp",
 	"ast_grep",
 	"ast_edit",
+	GET_TOOL_NAME,
 ]);
 
 function getConfiguredSuccessBudget(settings: Settings | undefined): SpillBudget {
@@ -82,11 +99,33 @@ export function getLegacyStreamSpillPolicy(): SpillPolicy {
 	};
 }
 
+/**
+ * Dedicated policy for the `get` tool. Trigger and inline tail are both
+ * sized to `tools.getSpillThreshold` (tokens × TOKEN_BYTE_RATIO bytes), so:
+ *   - reads ≤ threshold → full inline, never spilled
+ *   - reads > threshold → spill artifact + tail-mode inline up to threshold
+ * Line-count caps are unbounded; `get` slices are explicit and the byte
+ * cap is the single authoritative ceiling.
+ */
+export function getGetToolSpillPolicy(settings: Settings | undefined): SpillPolicy {
+	const tokens = settings?.get("tools.getSpillThreshold") ?? getDefault("tools.getSpillThreshold");
+	const maxBytes = tokens * TOKEN_BYTE_RATIO;
+	const budget: SpillBudget = { maxBytes, maxLines: UNBOUNDED_SPILL_LINES };
+	return {
+		trigger: budget,
+		success: budget,
+		failure: budget,
+	};
+}
+
 export function resolveToolSpillPolicy(
 	options: { settings?: Settings; toolName?: string; lenient?: boolean } = {},
 ): SpillPolicy {
 	if (options.lenient) {
 		return getLegacyStreamSpillPolicy();
+	}
+	if (options.toolName === GET_TOOL_NAME) {
+		return getGetToolSpillPolicy(options.settings);
 	}
 	if (
 		options.toolName &&

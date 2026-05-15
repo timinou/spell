@@ -8,13 +8,20 @@ import { BranchSummaryMessageComponent } from "../../modes/components/branch-sum
 import { CompactionSummaryMessageComponent } from "../../modes/components/compaction-summary-message";
 import { CustomMessageComponent } from "../../modes/components/custom-message";
 import { DynamicBorder } from "../../modes/components/dynamic-border";
+import { IntentionSummaryMessageComponent } from "../../modes/components/intention-summary-message";
 import { ReadToolGroupComponent } from "../../modes/components/read-tool-group";
 import { SkillMessageComponent } from "../../modes/components/skill-message";
 import { ToolExecutionComponent } from "../../modes/components/tool-execution";
 import { UserMessageComponent } from "../../modes/components/user-message";
 import { theme } from "../../modes/theme/theme";
 import type { CompactionQueuedMessage, InteractiveModeContext } from "../../modes/types";
-import { type CustomMessage, SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
+import {
+	type CustomMessage,
+	INTENTION_SUMMARY_MESSAGE_TYPE,
+	type IntentionSummaryDetails,
+	SKILL_PROMPT_MESSAGE_TYPE,
+	type SkillPromptDetails,
+} from "../../session/messages";
 import type { SessionContext } from "../../session/session-manager";
 import { formatAssistantToolCallFailureMessage } from "../../session/tool-call-diagnostics";
 import { formatBytes, formatDuration } from "../../tools/render-utils";
@@ -112,6 +119,14 @@ export class UiHelpers {
 					}
 					if (message.customType === SKILL_PROMPT_MESSAGE_TYPE) {
 						const component = new SkillMessageComponent(message as CustomMessage<SkillPromptDetails>);
+						component.setExpanded(this.ctx.toolOutputExpanded);
+						this.ctx.chatContainer.addChild(component);
+						break;
+					}
+					if (message.customType === INTENTION_SUMMARY_MESSAGE_TYPE) {
+						const component = new IntentionSummaryMessageComponent(
+							message as CustomMessage<IntentionSummaryDetails>,
+						);
 						component.setExpanded(this.ctx.toolOutputExpanded);
 						this.ctx.chatContainer.addChild(component);
 						break;

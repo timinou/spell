@@ -1,0 +1,70 @@
+//! HeadingResolver — routes markdown/org heading Op variants to code_buffer.
+//!
+//! Wave 2 (PLAN-304): Heading-specific Op variants (HeadingPromote,
+//! HeadingDemote, HeadingReplaceBlock) delegate to the existing code_buffer
+//! procedure machinery via CodeResolverImpl::apply_via_code_buffer.
+
+use std::sync::Arc;
+
+use pi_code_path::{
+	ast::{ActionContent, MutationOutcome},
+	op::Op,
+	resolver::traits::{CancellationToken, MutationResolver},
+	types::Diagnostic,
+};
+use serde_json::json;
+
+use super::code_resolver::CodeResolverImpl;
+
+pub struct HeadingResolver {
+	inner: Arc<CodeResolverImpl>,
+}
+
+impl HeadingResolver {
+	pub fn new(inner: Arc<CodeResolverImpl>) -> Self {
+		Self { inner }
+	}
+}
+
+impl MutationResolver for HeadingResolver {
+	fn try_apply(
+		&self,
+		op: &Op,
+		_cancel: &CancellationToken,
+	) -> Option<Result<MutationOutcome, Diagnostic>> {
+		match op {
+			Op::HeadingPromote { target } => {
+				let action_json = json!({ "kind": "promote" });
+				Some(
+					self
+						.inner
+						.apply_via_code_buffer(target.as_codepath(), &action_json),
+				)
+			},
+			Op::HeadingDemote { target } => {
+				let action_json = json!({ "kind": "demote" });
+				Some(
+					self
+						.inner
+						.apply_via_code_buffer(target.as_codepath(), &action_json),
+				)
+			},
+			Op::HeadingReplaceBlock { target, content } => {
+				let content_str = match content {
+					ActionContent::Single(s) => s.clone(),
+					ActionContent::Multi(v) => v.join("\n"),
+				};
+				let action_json = json!({
+					"kind": "replaceCodeBlock",
+					"content": content_str
+				});
+				Some(
+					self
+						.inner
+						.apply_via_code_buffer(target.as_codepath(), &action_json),
+				)
+			},
+			_ => None,
+		}
+	}
+}

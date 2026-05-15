@@ -6,6 +6,7 @@ import type {
 	ArtifactCreatedEvent,
 	BlockingEventPayload,
 	EventLogEntry,
+	ProcessInfoEvent,
 	RpcEvent,
 } from "./protocol";
 
@@ -40,6 +41,8 @@ export interface SessionStateCore {
 	bubbles: ChatBubble[];
 	pendingAssistant: ChatBubble | null;
 	busy: boolean;
+	latestProcessInfo: ProcessInfoEvent | null;
+	stderrLog: Array<{ ts: number; line: string }>;
 }
 
 let bubbleCounter = 0;
@@ -178,6 +181,16 @@ export function pushBlocking(s: SessionStateCore, payload: BlockingEventPayload)
 	};
 }
 
+export function appendProcessInfo(s: SessionStateCore, info: ProcessInfoEvent): SessionStateCore {
+	return { ...s, latestProcessInfo: info };
+}
+
+export function appendStderr(s: SessionStateCore, line: string, ts = Date.now()): SessionStateCore {
+	const next = [...s.stderrLog, { ts, line }];
+	if (next.length > 200) next.shift();
+	return { ...s, stderrLog: next };
+}
+
 export function freshSessionStateCore(): SessionStateCore {
-	return { bubbles: [], pendingAssistant: null, busy: false };
+	return { bubbles: [], pendingAssistant: null, busy: false, latestProcessInfo: null, stderrLog: [] };
 }

@@ -151,13 +151,31 @@ describe("server command config discovery", () => {
 });
 
 describe("resolveDefaultConfigDir", () => {
-	it("falls back to ~/.spell on ENOENT from ./.spell", async () => {
+	it("falls back to ~/.spell when ./.spell is ENOENT and ~/.spell/server.kdl exists", async () => {
+		const homeDir = "/tmp/home-spell";
+		vi.spyOn(process, "cwd").mockReturnValue("/tmp/workspace");
+		vi.spyOn(os, "homedir").mockReturnValue(homeDir);
+		const enoent = Object.assign(new Error("missing"), { code: "ENOENT" });
+		vi.spyOn(fs, "stat").mockImplementation((async (target: unknown) => {
+			if (typeof target === "string" && target === path.join(homeDir, ".spell", "server.kdl")) {
+				return { isDirectory: () => false };
+			}
+			throw enoent;
+		}) as typeof fs.stat);
+
+		await expect(resolveDefaultConfigDir()).resolves.toBe(path.join(homeDir, ".spell"));
+	});
+
+	it("throws a candidate-listing error when neither ./.spell nor ~/.spell/server.kdl exist", async () => {
 		const homeDir = "/tmp/home-spell";
 		vi.spyOn(process, "cwd").mockReturnValue("/tmp/workspace");
 		vi.spyOn(os, "homedir").mockReturnValue(homeDir);
 		vi.spyOn(fs, "stat").mockRejectedValue(Object.assign(new Error("missing"), { code: "ENOENT" }));
 
-		await expect(resolveDefaultConfigDir()).resolves.toBe(path.join(homeDir, ".spell"));
+		await expect(resolveDefaultConfigDir()).rejects.toThrow(/No spell-server config directory found/);
+		await expect(resolveDefaultConfigDir()).rejects.toThrow("/tmp/workspace/.spell/");
+		await expect(resolveDefaultConfigDir()).rejects.toThrow(path.join(homeDir, ".spell", "server.kdl"));
+		await expect(resolveDefaultConfigDir()).rejects.toThrow(/--config-dir/);
 	});
 
 	it("rethrows non-ENOENT errors from ./.spell stat", async () => {

@@ -9,6 +9,7 @@ import type {
 	MessageParam,
 } from "@anthropic-ai/sdk/resources/messages";
 import { $env, abortableSleep, isEnoent } from "@oh-my-pi/pi-utils";
+import { cassetteFetch, type CassetteMode } from "../cassette";
 import { mapEffortToAnthropicAdaptiveEffort } from "../model-thinking";
 import { calculateCost } from "../models";
 import { getEnvApiKey, OUTPUT_FALLBACK_BUFFER } from "../stream";
@@ -639,8 +640,20 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			const baseUrl = resolveAnthropicBaseUrl(model, apiKey) ?? "https://api.anthropic.com";
 
 			const tickle = new IdleTickle();
-			const originalFetch: NonNullable<AnthropicSdkClientOptions["fetch"]> = (input, init) =>
+			const baseFetch: NonNullable<AnthropicSdkClientOptions["fetch"]> = (input, init) =>
 				globalThis.fetch(input as Parameters<typeof globalThis.fetch>[0], init);
+			const cassetteDir = process.env.SPELL_CASSETTE_DIR;
+			const rawCassetteMode = process.env.SPELL_CASSETTE_MODE?.trim().toLowerCase();
+			const cassetteMode: CassetteMode =
+				rawCassetteMode === "record" || rawCassetteMode === "replay" || rawCassetteMode === "passthrough"
+					? rawCassetteMode
+					: "passthrough";
+			const originalFetch: NonNullable<AnthropicSdkClientOptions["fetch"]> = cassetteDir
+				? (cassetteFetch(baseFetch as typeof globalThis.fetch, {
+						dir: cassetteDir,
+						mode: cassetteMode,
+					}) as NonNullable<AnthropicSdkClientOptions["fetch"]>)
+				: baseFetch;
 			const teeFetch: NonNullable<AnthropicSdkClientOptions["fetch"]> = async (input, init) => {
 				const response = await originalFetch(input, init);
 				if (!response.body) return response;

@@ -13,6 +13,8 @@ import {
 	applyRpcEvent,
 	appendArtifact,
 	appendExternalLog,
+	appendProcessInfo,
+	appendStderr,
 	commitPending,
 	freshSessionStateCore,
 	pushBlocking,
@@ -200,5 +202,34 @@ describe("appendArtifact / appendExternalLog / pushBlocking", () => {
 			toolName: undefined,
 		});
 		expect(s.bubbles[0]).toMatchObject({ kind: "external_log", ts: 99, text: "from TUI" });
+	});
+});
+
+describe("appendProcessInfo / appendStderr", () => {
+	it("appendProcessInfo keeps only the latest sample", () => {
+		const s1 = appendProcessInfo(freshSessionStateCore(), { pid: 1, rssBytes: 1000, cpuPercent: 5, uptimeMs: 100 });
+		const s2 = appendProcessInfo(s1, { pid: 2, rssBytes: 2000, cpuPercent: 10, uptimeMs: 200 });
+		expect(s2.latestProcessInfo).toEqual({ pid: 2, rssBytes: 2000, cpuPercent: 10, uptimeMs: 200 });
+	});
+
+	it("appendStderr accumulates with timestamp", () => {
+		let s = freshSessionStateCore();
+		s = appendStderr(s, "line one", 1);
+		s = appendStderr(s, "line two", 2);
+		s = appendStderr(s, "line three", 3);
+		expect(s.stderrLog).toHaveLength(3);
+		expect(s.stderrLog[0]).toEqual({ ts: 1, line: "line one" });
+		expect(s.stderrLog[1]).toEqual({ ts: 2, line: "line two" });
+		expect(s.stderrLog[2]).toEqual({ ts: 3, line: "line three" });
+	});
+
+	it("appendStderr caps the log at 200 lines", () => {
+		let s = freshSessionStateCore();
+		for (let i = 1; i <= 250; i++) {
+			s = appendStderr(s, `line ${i}`, i);
+		}
+		expect(s.stderrLog).toHaveLength(200);
+		expect(s.stderrLog[0]).toEqual({ ts: 51, line: "line 51" });
+		expect(s.stderrLog[199]).toEqual({ ts: 250, line: "line 250" });
 	});
 });

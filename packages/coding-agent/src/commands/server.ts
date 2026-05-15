@@ -67,5 +67,24 @@ export async function resolveDefaultConfigDir(): Promise<string> {
 	} catch (error) {
 		if (!isEnoent(error)) throw error;
 	}
-	return path.join(os.homedir(), ".spell");
+
+	// Fall back to the global config in ~/.spell ONLY when it actually contains
+	// a spell-server entrypoint. ~/.spell is shared with coding-agent (which puts
+	// `spell.kdl` there for its own, unrelated config). Probing server.kdl avoids
+	// committing to a directory that exists but will never satisfy loadConfig —
+	// which would otherwise produce a misleading error path.
+	const homeConfig = path.join(os.homedir(), ".spell");
+	try {
+		await fs.stat(path.join(homeConfig, "server.kdl"));
+		return homeConfig;
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+
+	throw new Error(
+		`No spell-server config directory found. Tried:\n` +
+			`  - ${cwdConfig}/ (current workspace)\n` +
+			`  - ${homeConfig}/server.kdl (global)\n` +
+			`Pass --config-dir <path> to point at one explicitly, or create one of the above.`,
+	);
 }

@@ -110,6 +110,12 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 		accessor: "property",
 		propertyName: "tail-lines",
 	},
+	"tools.getSpillThreshold": {
+		block: "appearance",
+		nodePath: "artifacts",
+		accessor: "property",
+		propertyName: "get-spill-threshold",
+	},
 
 	// ── Model & Sampling ─────────────────────────────────────────────────
 	defaultThinkingLevel: { block: "model", nodePath: "thinking", accessor: "argument" },
@@ -486,6 +492,7 @@ export const KDL_SETTINGS_MAP: Partial<Record<SettingPath, KdlSettingMapping>> =
 	"browser.headless": { block: "tools", nodePath: "browser", accessor: "property", propertyName: "headless" },
 	"async.enabled": { block: "tools", nodePath: "async", accessor: "property", propertyName: "enabled" },
 	"async.maxJobs": { block: "tools", nodePath: "async", accessor: "property", propertyName: "max-jobs" },
+	"async.jobTimeoutMs": { block: "tools", nodePath: "async", accessor: "property", propertyName: "job-timeout-ms" },
 	"mcp.enableProjectConfig": { block: "tools", nodePath: "mcp", accessor: "property", propertyName: "project-config" },
 	"mcp.discoveryMode": { block: "tools", nodePath: "mcp", accessor: "property", propertyName: "discovery-mode" },
 	"mcp.notifications": { block: "tools", nodePath: "mcp", accessor: "property", propertyName: "notifications" },

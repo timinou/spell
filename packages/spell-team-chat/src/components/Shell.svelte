@@ -4,8 +4,11 @@
 	import SessionList from "./SessionList.svelte";
 	import ChatPane from "./ChatPane.svelte";
 	import SpawnDialog from "./SpawnDialog.svelte";
+	import DebugPanel from "./DebugPanel.svelte";
 
 	interface Props {
+		debugOpen: boolean;
+		onToggleDebug: (open: boolean) => void;
 		token: string;
 		templates: ManifestTemplate[];
 		onSpawn: (input: { cwd: string; initialPrompt: string; templateName?: string }) => Promise<void>;
@@ -15,7 +18,7 @@
 		onBlockingAction: (sessionId: string, eventId: string, choice: string | number) => void;
 		onSignOut: () => void;
 	}
-	let { token, templates, onSpawn, onSubmit, onAbort, onKill, onBlockingAction, onSignOut }: Props = $props();
+	let { token, templates, debugOpen, onToggleDebug, onSpawn, onSubmit, onAbort, onKill, onBlockingAction, onSignOut }: Props = $props();
 
 	let spawnOpen = $state(false);
 
@@ -73,11 +76,17 @@
 		<button class="btn btn-ghost small" onclick={toggleTheme} title="Toggle theme">
 			{app.theme === "dark" ? "☀" : "🌙"}
 		</button>
+		<button class="btn btn-ghost small" onclick={() => onToggleDebug(!debugOpen)} title="Toggle debug">
+			{debugOpen ? "🐛" : "Debug"}
+		</button>
 		<button class="btn btn-ghost small" onclick={onSignOut}>Sign out</button>
 	</footer>
 
 	{#if spawnOpen}
 		<SpawnDialog {templates} onCancel={() => (spawnOpen = false)} onSubmit={handleSpawn} />
+	{/if}
+	{#if debugOpen && app.current}
+		<DebugPanel sessionState={app.current} onClose={() => onToggleDebug(false)} />
 	{/if}
 </div>
 

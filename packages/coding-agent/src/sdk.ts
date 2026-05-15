@@ -900,6 +900,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const enableLsp = options.enableLsp ?? true;
 	const asyncEnabled = settings.get("async.enabled");
 	const asyncMaxJobs = Math.min(100, Math.max(1, settings.get("async.maxJobs") ?? 100));
+	const asyncJobTimeoutMs = Math.max(0, settings.get("async.jobTimeoutMs") ?? 1_500_000);
 	const ASYNC_INLINE_RESULT_MAX_CHARS = 12_000;
 	const ASYNC_PREVIEW_MAX_CHARS = 4_000;
 	const formatAsyncResultForFollowUp = async (result: string): Promise<string> => {
@@ -925,6 +926,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const asyncJobManager = asyncEnabled
 		? new AsyncJobManager({
 				maxRunningJobs: asyncMaxJobs,
+				jobTimeoutMs: asyncJobTimeoutMs,
 				onJobComplete: async (jobId, result, job) => {
 					if (!session) return;
 					const formattedResult = await formatAsyncResultForFollowUp(result);

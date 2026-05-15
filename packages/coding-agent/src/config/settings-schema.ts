@@ -264,6 +264,17 @@ export const SETTINGS_SCHEMA = {
 			submenu: true,
 		},
 	},
+	"tools.getSpillThreshold": {
+		type: "number",
+		default: 25000,
+		ui: {
+			tab: "tools",
+			label: "Get tool spill threshold (tokens)",
+			description:
+				"Spill trigger for the get tool; outputs above this token estimate (chars/4) spill to artifacts with tail-mode inline",
+			submenu: true,
+		},
+	},
 
 	"loop.autoApproveEnabled": {
 		type: "boolean",
@@ -1229,6 +1240,16 @@ export const SETTINGS_SCHEMA = {
 			tab: "tools",
 			label: "Max Async Jobs",
 			description: "Maximum concurrent background jobs (1-100)",
+			submenu: true,
+		},
+	},
+	"async.jobTimeoutMs": {
+		type: "number",
+		default: 1_500_000,
+		ui: {
+			tab: "tools",
+			label: "Async Job Timeout",
+			description: "Per-job liveness watchdog (ms). 0 disables. Resets on progress updates.",
 			submenu: true,
 		},
 	},

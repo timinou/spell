@@ -10,6 +10,7 @@
 	let token = $state<string | null>(tokenStore.get());
 	let ws: WsClient | null = $state(null);
 	let templates = $state<ManifestTemplate[]>([]);
+	let debugOpen = $state(false);
 
 	function connect(t: string): void {
 		token = t;
@@ -30,20 +31,24 @@
 					case "session_list":
 						app.setAll(msg.sessions);
 						for (const s of msg.sessions) {
+							const channels: string[] = s.kind === "spawned" ? ["events", "artifacts", "state"] : ["events", "artifacts"];
+							if (debugOpen) channels.push("debug");
 							client.send({
 								type: "subscribe",
 								sessionId: s.sessionId,
-								channels: s.kind === "spawned" ? ["events", "artifacts", "state"] : ["events", "artifacts"],
+								channels: channels as import("./lib/protocol").Channel[],
 								artifactExt: s.watchExtensions,
 							});
 						}
 						break;
 					case "session_added": {
 						app.upsert(msg.session);
+						const channels: string[] = msg.session.kind === "spawned" ? ["events", "artifacts", "state"] : ["events", "artifacts"];
+						if (debugOpen) channels.push("debug");
 						client.send({
 							type: "subscribe",
 							sessionId: msg.session.sessionId,
-							channels: msg.session.kind === "spawned" ? ["events", "artifacts", "state"] : ["events", "artifacts"],
+							channels: channels as import("./lib/protocol").Channel[],
 							artifactExt: msg.session.watchExtensions,
 						});
 						if (!app.selected) app.select(msg.session.sessionId);
@@ -66,6 +71,12 @@
 						break;
 					case "artifact_created":
 						app.noteArtifact(msg.sessionId, msg.artifact);
+						break;
+					case "process_info":
+						app.noteProcessInfo(msg.sessionId, { pid: msg.pid, rssBytes: msg.rssBytes, cpuPercent: msg.cpuPercent, uptimeMs: msg.uptimeMs, ts: msg.ts });
+						break;
+					case "rpc_stderr":
+						app.noteStderr(msg.sessionId, msg.line, msg.ts);
 						break;
 					case "error":
 						if (msg.code === "auth_failed" || msg.code === "unauthorized") {
@@ -159,6 +170,16 @@
 	<Shell
 		{token}
 		{templates}
+		{debugOpen}
+		onToggleDebug={(open: boolean) => {
+			debugOpen = open;
+			if (!ws || !app.current) return;
+			if (open) {
+				ws.send({ type: "subscribe", sessionId: app.current.summary.sessionId, channels: ["debug"] });
+			} else {
+				ws.send({ type: "unsubscribe", sessionId: app.current.summary.sessionId, channels: ["debug"] });
+			}
+		}}
 		{onSpawn}
 		{onSubmit}
 		{onAbort}
