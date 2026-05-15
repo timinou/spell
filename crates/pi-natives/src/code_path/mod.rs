@@ -7,6 +7,7 @@
 //! pi-code-graph).
 
 pub mod abort;
+pub mod diff_qualifier;
 pub mod code_resolver;
 pub mod css_resolver;
 pub mod dialect_registry;

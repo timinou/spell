@@ -1,8 +1,28 @@
 import { native } from "../native";
 
-import type { CodePathOptions, CodePathChunk, OpKindInfo, QualifierInfo, EdgeKindInfo, DiagnosticVariantInfo, LanguageDialectInfo } from "./types";
+import type {
+	CodePathChunk,
+	CodePathOptions,
+	DiagnosticVariantInfo,
+	EdgeKindInfo,
+	LanguageDialectInfo,
+	OpKindInfo,
+	QualifierInfo,
+} from "./types";
 
-export type { CodePathOptions, CodePathChunk, NodeRefDto, ContentDto, DiagnosticDto, SpanDto, OpKindInfo, QualifierInfo, EdgeKindInfo, DiagnosticVariantInfo, LanguageDialectInfo } from "./types";
+export type {
+	CodePathChunk,
+	CodePathOptions,
+	ContentDto,
+	DiagnosticDto,
+	DiagnosticVariantInfo,
+	EdgeKindInfo,
+	LanguageDialectInfo,
+	NodeRefDto,
+	OpKindInfo,
+	QualifierInfo,
+	SpanDto,
+} from "./types";
 
 export async function executeCodePath(options: CodePathOptions): Promise<CodePathChunk[]> {
 	return native.executeCodePath(options);
