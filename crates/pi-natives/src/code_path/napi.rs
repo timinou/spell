@@ -3,6 +3,7 @@
 //! Exposes `executeCodePath`, `parseCodePath`, and `renderCodePath`.
 
 use std::{
+	collections::HashMap,
 	path::{Path, PathBuf},
 	sync::{Arc, OnceLock},
 };
@@ -10,19 +11,19 @@ use std::{
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use pi_code_path::{
-	ast::{Action, Axis, CodePath, Head, Locator, MutationOutcome},
+	ast::{Action, Axis, CodePath, FsSegment, Head, Locator, MutationOutcome},
 	dialect::NameLexer,
 	dialects::{fs::FsResolver, text::TextResolver},
 	op::Op,
 	parser::parse_code_path,
 	renderer::render_code_path,
 	resolver::{CancellationToken, CodeResolver, MutationResolver, Resolver},
-	types::{Diagnostic, DiagnosticVariant},
+	types::{Diagnostic, DiagnosticVariant, NodeRef},
 };
 use winnow::{Parser, token::take_while};
 
 use super::{
-	code_resolver, css_resolver, dialect_registry,
+	code_resolver, css_resolver, dialect_registry, diff_qualifier,
 	extractors::default_extractors,
 	heading_resolver,
 	marshal::{ARTIFACT_THRESHOLD, diagnostic_to_dto, mutation_outcome_to_dto, nodes_to_dtos},
@@ -642,6 +643,19 @@ pub fn execute_code_path_inner(
 					}
 				}
 				results
+			} else if is_diff_qualifier(&cp) {
+				let qualifier = cp.qualifier.as_ref().unwrap();
+				let locator_str = fs_locator_to_path(&cp.locator);
+				let diff_node = NodeRef {
+					locator:     locator_str,
+					range:       0..0,
+					kind:        "§file".into(),
+					content:     None,
+					metadata:    HashMap::new(),
+					diagnostics: Vec::new(),
+				};
+				diff_qualifier::resolve(&diff_node, qualifier, &root)
+					.map_err(|d| Error::from_reason(d.message))?
 			} else {
 				let resolver = FsResolver::new(root);
 				resolver
@@ -750,6 +764,37 @@ fn is_text_qualifier_only(cp: &CodePath) -> bool {
 /// #outline qualifier routes to the code resolver (symbol outline).
 fn is_outline_qualifier(cp: &CodePath) -> bool {
 	cp.query.is_none() && cp.qualifier.as_ref().is_some_and(|q| q.name == "outline")
+}
+
+/// Check if the CodePath has a `#diff` qualifier (routes to diff_qualifier).
+fn is_diff_qualifier(cp: &CodePath) -> bool {
+	cp.query.is_none()
+		&& cp.qualifier.as_ref().is_some_and(|q| q.name == "diff")
+}
+
+/// Convert an FsLocator to a relative path string for the diff qualifier.
+/// Joins literal segments, dropping separators that are just "/".
+fn fs_locator_to_path(locator: &Locator) -> String {
+	match locator {
+		Locator::Fs(fs) => {
+			let mut parts: Vec<String> = Vec::new();
+			for seg in &fs.segments {
+				match seg {
+					FsSegment::Literal(s) if s == "/" => {},
+					FsSegment::Literal(s) => parts.push(s.clone()),
+					FsSegment::Star => parts.push("*".to_string()),
+					FsSegment::DoubleStar => parts.push("**".to_string()),
+					_ => {},
+				}
+			}
+			if parts.is_empty() {
+				".".to_string()
+			} else {
+				parts.join("")
+			}
+		},
+		Locator::Uri(_) => ".".to_string(),
+	}
 }
 
 fn is_symbol_query(cp: &CodePath) -> bool {
