@@ -1,0 +1,218 @@
+/*
+ * Spell Team Chat — design tokens lifted from sakya, accents tuned for Spell.
+ * Sakya: ~/code/personal/sakya/src/app.css
+ */
+
+/* -- Reset --------------------------------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; padding: 0; }
+body {
+	font-family: var(--font-sans);
+	font-size: var(--font-size-base);
+	line-height: var(--line-height-normal);
+	color: var(--text-primary);
+	background: var(--bg-primary);
+	-webkit-font-smoothing: antialiased;
+	text-rendering: optimizeLegibility;
+}
+button { font: inherit; color: inherit; }
+input, textarea, button { font-family: inherit; }
+a { color: var(--text-link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+:root {
+	/* -- Surface / Background Colors ------------------------------------- */
+	--bg-primary:    #faf8f5;
+	--bg-secondary:  #f2efe9;
+	--bg-tertiary:   #eae6de;
+	--bg-elevated:   #ffffff;
+	--bg-overlay:    rgba(20, 16, 12, 0.42);
+
+	/* -- Text Colors ----------------------------------------------------- */
+	--text-primary:   #1a1614;
+	--text-secondary: #5c554e;
+	--text-tertiary:  #8a837b;
+	--text-inverse:   #faf8f5;
+	--text-link:      #5b4ec8;
+
+	/* -- Border Colors --------------------------------------------------- */
+	--border-primary:   #d9d4cc;
+	--border-secondary: #ebe7e0;
+	--border-accent:    #6b5cd8;
+
+	/* -- Accent (Spell identity) ---------------------------------------- */
+	--accent-primary:    #6b5cd8;  /* Spell purple */
+	--accent-secondary:  #3b6fd4;  /* sakya blue, demoted */
+	--accent-faint:      rgba(107, 92, 216, 0.10);
+
+	/* -- Semantic -------------------------------------------------------- */
+	--color-success: #2d8a4e;
+	--color-warning: #c27a1e;
+	--color-error:   #c4392b;
+	--color-info:    #2b7ec4;
+
+	/* -- Session-kind colors -------------------------------------------- */
+	--color-kind-spawned:  #6b5cd8;
+	--color-kind-external: #2d8a4e;
+
+	/* -- Spacing --------------------------------------------------------- */
+	--spacing-xs:  0.25rem;
+	--spacing-sm:  0.5rem;
+	--spacing-md:  1rem;
+	--spacing-lg:  1.5rem;
+	--spacing-xl:  2rem;
+	--spacing-2xl: 3rem;
+
+	/* -- Typography ----------------------------------------------------- */
+	--font-sans:  'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+	--font-mono:  'JetBrains Mono', 'Fira Code', Consolas, monospace;
+
+	--font-size-xs:   0.75rem;
+	--font-size-sm:   0.8125rem;
+	--font-size-base: 0.875rem;
+	--font-size-md:   1rem;
+	--font-size-lg:   1.125rem;
+	--font-size-xl:   1.5rem;
+	--font-size-2xl:  2rem;
+
+	--font-weight-normal:   400;
+	--font-weight-medium:   500;
+	--font-weight-semibold: 600;
+	--font-weight-bold:     700;
+
+	--line-height-tight:   1.25;
+	--line-height-normal:  1.5;
+	--line-height-relaxed: 1.75;
+
+	/* -- Borders / Radii / Shadow / Transition -------------------------- */
+	--radius-sm: 4px;
+	--radius-md: 6px;
+	--radius-lg: 10px;
+	--radius-pill: 999px;
+
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+	--shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
+	--shadow-lg: 0 6px 20px rgba(0, 0, 0, 0.12);
+	--shadow-xl: 0 12px 40px rgba(0, 0, 0, 0.18);
+
+	--transition-fast:   120ms ease;
+	--transition-normal: 200ms ease;
+	--transition-slow:   320ms ease;
+
+	/* -- Layout --------------------------------------------------------- */
+	--rail-width:    280px;
+	--details-width: 320px;
+	--toolbar-height: 44px;
+	--statusbar-height: 28px;
+
+	/* -- z-index -------------------------------------------------------- */
+	--z-base:    0;
+	--z-overlay: 50;
+	--z-modal:   100;
+	--z-toast:   200;
+}
+
+[data-theme="dark"] {
+	--bg-primary:    #1e1c1a;
+	--bg-secondary:  #262421;
+	--bg-tertiary:   #2e2b28;
+	--bg-elevated:   #353230;
+	--bg-overlay:    rgba(0, 0, 0, 0.6);
+
+	--text-primary:   #e8e4df;
+	--text-secondary: #a09890;
+	--text-tertiary:  #6e665e;
+	--text-inverse:   #1e1c1a;
+	--text-link:      #9b88f0;
+
+	--border-primary:   #3e3a36;
+	--border-secondary: #302d29;
+	--border-accent:    #9b88f0;
+
+	--accent-primary:   #9b88f0;
+	--accent-secondary: #6b9ceb;
+	--accent-faint:     rgba(155, 136, 240, 0.14);
+
+	--color-success: #4caf6e;
+	--color-warning: #e0a040;
+	--color-error:   #e05a4f;
+	--color-info:    #5a9ee0;
+
+	--color-kind-spawned:  #9b88f0;
+	--color-kind-external: #4caf6e;
+
+	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+	--shadow-md: 0 2px 8px rgba(0, 0, 0, 0.32);
+	--shadow-lg: 0 6px 20px rgba(0, 0, 0, 0.5);
+	--shadow-xl: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
+
+/* -- Utilities --------------------------------------------------------- */
+.muted { color: var(--text-tertiary); }
+.mono  { font-family: var(--font-mono); }
+.kbd {
+	display: inline-block;
+	padding: 1px 6px;
+	border: 1px solid var(--border-primary);
+	border-bottom-width: 2px;
+	border-radius: var(--radius-sm);
+	font-family: var(--font-mono);
+	font-size: var(--font-size-xs);
+	color: var(--text-secondary);
+	background: var(--bg-elevated);
+}
+
+.btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--spacing-sm);
+	padding: 6px 12px;
+	border-radius: var(--radius-md);
+	border: 1px solid var(--border-primary);
+	background: var(--bg-elevated);
+	color: var(--text-primary);
+	font-size: var(--font-size-sm);
+	font-weight: var(--font-weight-medium);
+	cursor: pointer;
+	transition: background-color var(--transition-fast), border-color var(--transition-fast),
+		box-shadow var(--transition-fast);
+}
+.btn:hover { border-color: var(--accent-primary); box-shadow: var(--shadow-sm); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-primary {
+	background: var(--accent-primary);
+	border-color: var(--accent-primary);
+	color: var(--text-inverse);
+}
+.btn-primary:hover { filter: brightness(1.08); box-shadow: var(--shadow-md); border-color: var(--accent-primary); }
+.btn-ghost { background: transparent; border-color: transparent; }
+.btn-ghost:hover { background: var(--bg-tertiary); border-color: var(--border-secondary); }
+
+/* -- Form ------------------------------------------------------------- */
+input[type="text"], input[type="password"], textarea {
+	width: 100%;
+	padding: 8px 10px;
+	border-radius: var(--radius-md);
+	border: 1px solid var(--border-primary);
+	background: var(--bg-elevated);
+	color: var(--text-primary);
+	font-size: var(--font-size-sm);
+	transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+input[type="text"]:focus, input[type="password"]:focus, textarea:focus {
+	outline: none;
+	border-color: var(--accent-primary);
+	box-shadow: 0 0 0 3px var(--accent-faint);
+}
+textarea { resize: vertical; line-height: var(--line-height-normal); font-family: inherit; }
+
+/* -- Scrollbars (Webkit) ---------------------------------------------- */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+	background: var(--border-primary);
+	border-radius: var(--radius-pill);
+	border: 2px solid var(--bg-primary);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }
