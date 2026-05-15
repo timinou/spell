@@ -5,33 +5,45 @@ call ::= edit { operations: [{ target, action: { kind, …fields } }] }
 target ::= `<file>`  (file-scoped Ops)
        ·  `<file>::<Symbol>`  (symbol-scoped Ops)
 
+<!-- @generated:edit-ops -->
 <ops>
 symbol-scoped — target must be `<file>::Symbol`
-  symbolReplace      replace declaration body  (scope: whole|body|sig)
-  symbolRename       rename declaration         (newName)
-  symbolWrap         wrap in outer syntax       (content with $BODY placeholder)
-  symbolDelete       remove declaration
-  symbolInsertBefore insert sibling before
-  symbolInsertAfter  insert sibling after
-  symbolFindReplace  search within declaration  (find, content, occurrence?)
-  symbolMove         drag sibling up/down       (direction)
-  symbolSplice       inline / extract           (mode)
+  symbolClone            (renameTo?)
+  symbolDelete           (allowSiblingDelete?)
+  symbolFindReplace      (find, content) (occurrence?)
+  symbolInsertAfter      (content)
+  symbolInsertBefore     (content)
+  symbolMove             (direction)
+  symbolRawTextReplace   (find, content) (occurrence?)
+  symbolRename           (newName)
+  symbolReplace          (content) (scope?)
+  symbolSplice           (mode)
+  symbolTranspose        (column)
+  symbolWrap             (content)
 
 file-scoped — target is `<file>`
-  fileCreate         new file                   (force?)
-  fileWrite          overwrite                  (force?)
+  fileAppend             (content)
+  fileCreate             (content) (force?)
   fileDelete
-  fileAppend         · filePrepend
-  fileFindReplace    search whole file          (find, content, occurrence?)
-  filePatch          unified diff               (diff)
+  fileFindReplace        (find, content) (occurrence?)
+  filePatch              (diff)
+  filePrepend            (content)
+  fileRawTextReplace     (find, content) (occurrence?)
+  fileWrite              (content) (force?)
+
+line-scoped — target is `<file>`
+  lineAppend             (at, content)
+  lineInsert             (at, content)
+  linePrepend            (at, content)
+  lineReplace            (span, content)
 
 heading/css — Markdown/Org/CSS specific
-  headingPromote · headingDemote · headingReplaceBlock
-  cssRenameClassToken · cssRenameIdToken · cssRenameCustomProp · cssRemoveDeadStyle
+  headingDemote · headingPromote · headingReplaceBlock · cssRemoveDeadStyle · cssRenameClassToken · cssRenameCustomProp · cssRenameIdToken
 
 history — no target, dispatched alone (not mixed with other ops)
   undo · redo
 </ops>
+<!-- @end -->
 
 <patterns>
 | want                          | call                                                                |
