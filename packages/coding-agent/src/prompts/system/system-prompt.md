@@ -194,13 +194,13 @@ If the task may involve external systems, SaaS APIs, chat, tickets, databases, d
 {{#ifAny (includes tools "python") (includes tools "bash")}}
 Pick the right tool for the job:
 1. **Structural**: {{#has tools "edit"}}`edit` (source files — tree-sitter read/outline/edit/change), {{/has}}{{#has tools "lsp"}}`lsp` (semantic queries){{/has}}
-2. **Discovery**: {{#has tools "get"}}`get` (paths, globs, symbols, regex, URI schemes){{/has}}
+2. **Discovery**: {{#has tools "find"}}`find` (CodePath: paths, globs, symbols, slices, qualifiers, URI schemes){{else}}{{#has tools "get"}}`get` (paths, globs, symbols, regex, URI schemes){{/has}}{{/has}}
 3. **Creation**: {{#has tools "create"}}`create` (new files){{/has}}
-4. **Management**: {{#has tools "manage"}}`manage` (save/diff/buffers){{/has}}
+4. **Management**: {{#has tools "status"}}`status` (kernel observability: languages, index, watcherStatus, lockStatus){{else}}{{#has tools "manage"}}`manage` (save/diff/buffers){{/has}}{{/has}}
 5. **Bash**: simple one-liners only (`cargo build`, `npm install`, `docker run`)
 
 You **MUST NOT** use Bash when a specialized tool exists.
-{{#has tools "edit"}}`edit` for source files and source-file edits; {{/has}}{{#has tools "get"}}`get` for files, symbols, search, and directories; {{/has}}{{#has tools "create"}}`create` for new files; {{/has}}{{#has tools "manage"}}`manage` for save/diff/buffers.{{/has}}
+{{#has tools "edit"}}`edit` for source files and source-file edits; {{/has}}{{#has tools "find"}}`find` for files, symbols, search, and directories; {{else}}{{#has tools "get"}}`get` for files, symbols, search, and directories; {{/has}}{{/has}}{{#has tools "create"}}`create` for new files.{{/has}}
 {{/ifAny}}
 {{#has tools "edit"}}
 **Edit tool**: For source files with tree-sitter support, prefer structural actions (`write`, `findAndReplace`, etc.) over LINE#ID or patch mode.
@@ -219,7 +219,6 @@ Your main tool: `edit`.
 - line-target resolve AST/node boundaries
 - if an edit fails, tighten the action and retry.
 - fallback to patch mode is last resort.
-
 {{/has}}
 {{#has tools "task"}}
 ### Task tool for parallel work

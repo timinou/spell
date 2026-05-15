@@ -1,65 +1,53 @@
-Perform structural code edits, LINE#ID-based text edits, or apply unified diffs. Supports 18+ action kinds with occurrence selectors and idempotent semantics.
+Apply Op to target. Symbol-first. Auto-persists.
 
-<instruction>
-- Each operation has a `target` (file path or `file.ts::Symbol.member`) and an `action`.
-- Action kinds fall into three families:
-  - **Structural** (tree-sitter): `write`, `findAndReplace`, `rawTextReplace`, `wrap`, `rename`, `delete`, `insertBefore`, `insertAfter`, `splice`, `move`, `clone`, `transpose`, `renameClassToken`, `renameIdToken`, `renameCustomProperty`, `removeDeadStyle`, `promote`, `demote`, `replaceCodeBlock`.
-  - **LINE#ID** (text): `replace`, `append`, `prepend` using anchors copied from `get` output (e.g. `42#AB`).
-  - **Patch**: `patch` with a unified diff string.
-- `occurrence` disambiguates duplicates: `first`, `last`, `all`, or `1`-indexed number. Default is unique-or-fail.
-- `idempotent=true` allows an edit to succeed when it produces no semantic change. Set only when a no-op is expected.
-- `force=true` bypasses write-shrink and parse-regression guards. Use only when deliberately replacing a file wholesale.
-- LINE#ID edits detect stale anchors: if the line hash mismatches, the tool returns a diagnostic with the current file state. Re-read and retry with fresh anchors.
-- `children` enables nested operations under the same root target tree.
-- `scope: "body"` restricts writes to a declaration body; prefer the `#body` qualifier in the target path when dialects support it.
-</instruction>
+call ::= edit { operations: [{ target, action: { kind, …fields } }] }
 
-<output>
-- Returns structured diff with applied changes, affected line ranges, and any diagnostics.
-- Stale anchor errors include current file state for re-anchoring.
-- Parse errors include tree-sitter diagnostic details.
-</output>
+target ::= `<file>`  (file-scoped Ops)
+       ·  `<file>::<Symbol>`  (symbol-scoped Ops)
 
-<examples>
-**Structural edits:**
-```
-edit { operations: [{ target: "src/server.ts::handleRequest", action: { kind: "findAndReplace", find: "timeout", content: "deadline" } }] }
-edit { operations: [{ target: "src/config.ts", action: { kind: "findAndReplace", find: "legacyApi", content: "modernApi", occurrence: "all" } }] }
-edit { operations: [{ target: "src/app.ts::App.handle", action: { kind: "wrap", content: ["try {", "  $BODY", "} catch (e) {", "  throw e;", "}"] } }] }
-edit { operations: [{ target: "src/auth.ts::validateToken", action: { kind: "rename", content: "verifyToken" } }] }
-edit { operations: [{ target: "src/old.ts::legacyFn", action: { kind: "delete" } }] }
-```
+<ops>
+symbol-scoped — target must be `<file>::Symbol`
+  symbolReplace      replace declaration body  (scope: whole|body|sig)
+  symbolRename       rename declaration         (newName)
+  symbolWrap         wrap in outer syntax       (content with $BODY placeholder)
+  symbolDelete       remove declaration
+  symbolInsertBefore insert sibling before
+  symbolInsertAfter  insert sibling after
+  symbolFindReplace  search within declaration  (find, content, occurrence?)
+  symbolMove         drag sibling up/down       (direction)
+  symbolSplice       inline / extract           (mode)
 
-**LINE#ID edits:**
-```
-edit { operations: [{ target: "src/server.ts", action: { kind: "replace", pos: "42#AB", end: "45#CD", lines: ["const x = 1;"] } }] }
-edit { operations: [{ target: "config.txt", action: { kind: "append", pos: "10#XY", lines: ["new line"] } }] }
-edit { operations: [{ target: "src/server.ts", action: { kind: "insertBefore", pos: "5#QW", lines: ["// inserted\n"] } }] }
-```
+file-scoped — target is `<file>`
+  fileCreate         new file                   (force?)
+  fileWrite          overwrite                  (force?)
+  fileDelete
+  fileAppend         · filePrepend
+  fileFindReplace    search whole file          (find, content, occurrence?)
+  filePatch          unified diff               (diff)
 
-**Patch mode:**
-```
-edit { operations: [{ target: "src/server.ts", action: { kind: "patch", diff: "--- a/src/server.ts\n+++ b/src/server.ts\n@@ -1,3 +1,3 @@\n-foo\n+bar\n" } }] }
-```
+heading/css — Markdown/Org/CSS specific
+  headingPromote · headingDemote · headingReplaceBlock
+  cssRenameClassToken · cssRenameIdToken · cssRenameCustomProp · cssRemoveDeadStyle
 
-**Nested edits:**
-```
-edit { operations: [{ target: "src/server.ts::Server", action: { kind: "wrap", content: ["try {", "  $BODY", "}"] }, children: [{ target: "src/server.ts::Server.handle", action: { kind: "findAndReplace", find: "legacyCall()", content: "modernCall()" } }] }] }
-```
+history — no target, dispatched alone (not mixed with other ops)
+  undo · redo
+</ops>
 
-**Multi-file batch:**
-```
-edit { operations: [
-  { target: "src/api.ts::Api.fetch", action: { kind: "findAndReplace", find: "timeout", content: "deadline" } },
-  { target: "src/config.ts", action: { kind: "findAndReplace", find: "const timeout = 5000", content: "const timeout = 30000" } }
-] }
-```
-</examples>
+<patterns>
+| want                          | call                                                                |
+|-------------------------------|---------------------------------------------------------------------|
+| insert after fn               | `target: "foo.ts::handleX"  action: { kind: "symbolInsertAfter", content: "…" }` |
+| rename + update callers       | loop: `find { ::X def→ }` → `edit` each call site                   |
+| rewrite test count            | `target: "foo.rs"  action: { kind: "fileFindReplace", find: "29", content: "31" }` |
+| rewrite block                 | `target: "foo.ts::Bar.method"  action: { kind: "symbolReplace", content: "…" }`   |
+| revert last                   | `action: { kind: "undo" }`                                          |
+| atomic multi-file             | `operations: [...]  transaction: "strict"` (all-or-nothing rollback) |
+</patterns>
 
-<critical>
-- You **MUST** use `edit` instead of legacy `code edit`, `ast-edit`, or `write` for mutations.
-- You **MUST NOT** use `write` to modify existing files; use `create` for new files and `edit` for mutations.
-- For non-code text changes outside tree-sitter support, LINE#ID or patch mode is acceptable.
-- Successful managed edits do not require a fresh `get` before the next edit; if an edit fails, tighten the target/action and retry narrowly.
-- When using LINE#ID anchors, always copy them from fresh `get` output to avoid stale-anchor errors.
-</critical>
+<rules>
+- target shape ↔ Op family: kernel returns IncompatibleTargetShape if mismatched (e.g. `symbolReplace` with bare path)
+- occurrence ∈ { first, last, all, N } · default = unique-or-fail
+- edits commit immediately. undo/redo via this tool.
+- batches: best-effort (default — keep applied, skip failing) or strict (snapshot, rollback on any failure)
+- prefer symbol targets over file targets for surgical edits — diffs review better
+</rules>

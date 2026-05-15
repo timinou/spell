@@ -1,17 +1,33 @@
-Finds files using fast pattern matching.
+Resolve a CodePath. Read · search · list · stat · diff · graph — one verb.
 
-<instruction>
-- Pattern includes the search path.
-- You may provide comma/space-separated path lists; each item is searched and results are merged.
-- Simple patterns like `*.ts` search recursively from cwd.
-- Hidden files are included by default.
-- Use multiple searches in parallel when useful.
-</instruction>
+target ::= Locator (Query)? (Qualifier)?
+  Locator   path · glob · uri://
+  Query     ::Sym  · ::§kind  · ::¶anchor  · ::field:  · A combinator B
+  Pred      [N] [a..b] [text~="re"] [attr=val] [size>1M] [mtime>2026-01-01]
+  Combinator  / // ^ ^^ << >> ref→ def→ call→ import→ bind→ | & −
+  Qualifier   #body #sig #stat #tree #diff #listing #raw
 
-<output>
-- Matching file paths are sorted by modification time; truncated at 1000 entries or 50KB.
-</output>
+<recipes>
+| want                | target                                      |
+|---------------------|---------------------------------------------|
+| read file           | `foo.ts`                                    |
+| slice               | `foo.ts:80-130`                             |
+| grep one            | `foo.ts::§line[text~="TODO"]`               |
+| grep many           | `src/**/*.ts::§line[text~="TODO"]`          |
+| find files          | `src/**/*.ts`                               |
+| tree                | `src/#tree`                                 |
+| size                | `foo.ts#stat`                               |
+| diff                | `foo.ts#diff`  ·  `#diff` (workspace)       |
+| symbol              | `foo.ts::Bar.method`                        |
+| symbol body         | `foo.ts::Bar.method#body`                   |
+| callers             | `foo.ts::Bar.method def→`                   |
+| definition          | `foo.ts::useX ref→`                         |
+| recent              | `src/**/*.ts[mtime>2026-05-01]`             |
+| uri                 | `memory://root` · `artifact://…` · `skill://…` |
+</recipes>
 
-<avoid>
-- For open-ended searches requiring multiple rounds of globbing and grepping, you **MUST** use Task tool instead.
-</avoid>
+<rules>
+- one field: `target`. Slicing/grep/range/tree/stat all live in the target string
+- errors render at kernel via miette — read & retry
+- globs ✗ slice  ·  uri ✗ query  ·  graph edges (def→/ref→/call→/import→/bind→) need `status index` ready
+</rules>

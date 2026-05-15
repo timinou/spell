@@ -41,7 +41,9 @@ import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FetchTool } from "./fetch";
 
 import { GatewayTool } from "./gateway";
+import { FindTool } from "./find";
 import { GetTool } from "./get";
+import { StatusTool } from "./status";
 import { GoalsTool } from "./goals-tool";
 
 import { InspectImageTool } from "./inspect-image";
@@ -97,6 +99,8 @@ export * from "./goals-tool";
 
 export * from "./inspect-image";
 export * from "./manage";
+export * from "./find";
+export * from "./status";
 export * from "./pending-action";
 
 export * from "./render-mermaid";
@@ -270,8 +274,10 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	loop_done: s => (s.loopManager ? new LoopDoneTool(s) : null),
 	gateway: GatewayTool.createIf,
 	// Generic code-path tools (coexistence wave; override legacy registrations)
-	get: s => new GetTool(s),
-	manage: () => new ManageTool(),
+	find: s => new FindTool(s),
+	status: () => new StatusTool(),
+	get: s => new GetTool(s), // legacy alias — REMOVE_AT_WAVE_11
+	manage: () => new ManageTool(), // legacy alias — REMOVE_AT_WAVE_11 (replaced by `status`)
 	create: s => new CreateTool(s),
 	edit: s => new CodepathEditTool(s),
 };
