@@ -6,7 +6,6 @@ target ::= `<file>`  (file-scoped Ops)
        ·  `<file>::<Symbol>`  (symbol-scoped Ops)
 
 <!-- @generated:edit-ops -->
-<ops>
 symbol-scoped — target must be `<file>::Symbol`
   symbolClone            (renameTo?)
   symbolDelete           (allowSiblingDelete?)
@@ -24,7 +23,7 @@ symbol-scoped — target must be `<file>::Symbol`
 file-scoped — target is `<file>`
   fileAppend             (content)
   fileCreate             (content) (force?)
-  fileDelete
+  fileDelete             
   fileFindReplace        (find, content) (occurrence?)
   filePatch              (diff)
   filePrepend            (content)
@@ -42,7 +41,6 @@ heading/css — Markdown/Org/CSS specific
 
 history — no target, dispatched alone (not mixed with other ops)
   undo · redo
-</ops>
 <!-- @end -->
 
 <patterns>

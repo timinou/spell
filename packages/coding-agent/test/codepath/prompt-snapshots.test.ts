@@ -10,7 +10,7 @@
 // reversion to legacy prose).
 
 import { describe, expect, test } from "bun:test";
-import { listOpKinds, listQualifiers, listDiagnosticVariants } from "@oh-my-pi/pi-natives";
+import { listEdgeKinds, listOpKinds, listQualifiers, listDiagnosticVariants } from "@oh-my-pi/pi-natives";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -98,25 +98,80 @@ describe("prompt snapshots — find/edit/status/create/bash", () => {
 		return content.slice(start + startTag.length, end);
 	}
 
-	test("kernel-generated Op table in edit.md matches listOpKinds()", () => {
-		const block = extractSentinel(EDIT_MD, "edit-ops");
+	// ── Kernel-parity tests ──
+	// These check that the prompts surface every kernel-known entity. The check
+	// is honest — it scans the *whole* prompt file (not just sentinel blocks)
+	// because the sentinel-wrapping is currently a partial integration: some
+	// kernel content lives outside sentinels (e.g. find.md's recipe table
+	// mentions qualifiers in tutorial form, not as a generated reference table).
+	// Stronger byte-equality between generator output and sentinel content is
+	// tracked under W10.2 follow-up; this tier is the floor.
+
+	test("edit.md mentions every Op kind from listOpKinds()", () => {
+		const content = fs.readFileSync(EDIT_MD, "utf-8");
 		const ops = listOpKinds();
-		for (const op of ops) expect(block).toContain(op.kind);
+		for (const op of ops) expect(content).toContain(op.kind);
 	});
 
-	test("kernel-generated Qualifier list in find.md matches listQualifiers()", () => {
-		const block = extractSentinel(FIND_MD, "find-recipes");
+	test("find.md mentions every qualifier from listQualifiers()", () => {
+		const content = fs.readFileSync(FIND_MD, "utf-8");
 		const quals = listQualifiers();
-		for (const q of ["stat", "tree", "diff", "body"]) {
-			if (quals.some(qq => qq.name === q)) expect(block).toMatch(new RegExp(`#${q}\\b|\\b${q}\\b`));
+		for (const q of quals) {
+			expect(content).toContain(q.name);
 		}
 	});
 
-	test("kernel-generated Diagnostic vocabulary matches listDiagnosticVariants()", () => {
+	test("find.md mentions every edge symbol from listEdgeKinds()", () => {
+		const content = fs.readFileSync(FIND_MD, "utf-8");
+		const edges = listEdgeKinds();
+		for (const e of edges) {
+			expect(content).toContain(e.symbol);
+		}
+	});
+
+	test("diag-vocabulary.md covers every DiagnosticVariant", () => {
 		const diagPath = path.join(GENERATED_DIR, "diag-vocabulary.md");
 		expect(fs.existsSync(diagPath)).toBe(true);
 		const content = fs.readFileSync(diagPath, "utf-8");
 		const diags = listDiagnosticVariants();
 		for (const d of diags) expect(content).toContain(d.variant);
+	});
+
+	test("sentinel blocks exist for kernel-derived content", () => {
+		const edit = fs.readFileSync(EDIT_MD, "utf-8");
+		const find = fs.readFileSync(FIND_MD, "utf-8");
+		expect(edit).toContain("<!-- @generated:edit-ops -->");
+		expect(edit).toContain("<!-- @end -->");
+		expect(find).toContain("<!-- @generated:find-recipes -->");
+		expect(find).toContain("<!-- @end -->");
+	});
+
+	// ── Byte-equality tests ──
+	// The honest contract: content between sentinels in find.md / edit.md is
+	// byte-equal to the corresponding generated fragment. Prompts can't drift
+	// from kernel because regenerating overwrites the sentinel block. Tests
+	// fail if anyone hand-edits the inside-sentinel content without also
+	// regenerating.
+
+	function sentinelContent(filePath: string, name: string): string {
+		const raw = fs.readFileSync(filePath, "utf-8");
+		const startTag = `<!-- @generated:${name} -->`;
+		const endTag = "<!-- @end -->";
+		const start = raw.indexOf(startTag);
+		const end = raw.indexOf(endTag, start);
+		if (start < 0 || end < 0) throw new Error(`missing sentinel ${name} in ${filePath}`);
+		return raw.slice(start + startTag.length, end);
+	}
+
+	test("find.md sentinel content is byte-equal to _generated/find-recipes.md", () => {
+		const inside = sentinelContent(FIND_MD, "find-recipes").trim();
+		const generated = fs.readFileSync(path.join(GENERATED_DIR, "find-recipes.md"), "utf-8").trim();
+		expect(inside).toBe(generated);
+	});
+
+	test("edit.md sentinel content is byte-equal to _generated/edit-ops.md", () => {
+		const inside = sentinelContent(EDIT_MD, "edit-ops").trim();
+		const generated = fs.readFileSync(path.join(GENERATED_DIR, "edit-ops.md"), "utf-8").trim();
+		expect(inside).toBe(generated);
 	});
 });
