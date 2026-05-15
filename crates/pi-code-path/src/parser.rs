@@ -46,12 +46,7 @@ pub fn parse_code_path<N: NameLexer>(input: &str, name_lexer: &N) -> Result<Code
 					variant: DiagnosticVariant::ParseError,
 					message: format!(
 						"unexpected trailing input: {working:?}{}",
-						if working.contains(' ') || working.contains('*') || working.contains('"') {
-							" — try backtick-quoting the symbol or use a structural axis like \
-							 §export_statement[text~=\"...\"]"
-						} else {
-							""
-						}
+						hint_for_trailing(working),
 					),
 					span:    Some(Span { start: input.len() - working.len(), end: input.len() }),
 				});
@@ -76,7 +71,73 @@ pub fn parse_locator(input: &str) -> Result<Locator, Diagnostic> {
 		span:    None,
 	})
 }
+/// Targeted hint appended to the generic "unexpected trailing input" error.
+///
+/// Distinct heuristics, ordered by specificity:
+/// 1. `[A-B]` / `[<digits>-<digits>]` — agent mixed the shorthand range
+///    delimiter (`-`) with the axis-form brackets, which need `..`. Direct
+///    cause of repeat session failures; emit the corrected forms.
+/// 2. Whitespace / `*` / `"` in the tail — likely an unquoted symbol with
+///    spaces or a stray axis fragment.
+/// 3. Otherwise no hint.
+fn hint_for_trailing(working: &str) -> &'static str {
+	if looks_like_dashed_range(working) {
+		return " — line-range predicate uses '..' not '-': try §line[A..B] (axis) or :A-B (shorthand, no brackets)";
+	}
+	if working.contains(' ') || working.contains('*') || working.contains('"') {
+		return " — try backtick-quoting the symbol or use a structural axis like §export_statement[text~=\"...\"]";
+	}
+	""
+}
 
+/// Detects the common `[A-B]` mistake: an opening `[`, optional sign + digits,
+/// a `-` separator, optional sign + digits, and a `]`. We allow signs because
+/// `§line[-3..]` accepts negative indices; users sometimes write `[-3-1]`.
+fn looks_like_dashed_range(s: &str) -> bool {
+	let bytes = s.as_bytes();
+	if bytes.first() != Some(&b'[') {
+		return false;
+	}
+	let mut i = 1;
+	let n = bytes.len();
+	while i < n && bytes[i] == b' ' {
+		i += 1;
+	}
+	if i < n && (bytes[i] == b'-' || bytes[i] == b'+') {
+		i += 1;
+	}
+	let start_digits_at = i;
+	while i < n && bytes[i].is_ascii_digit() {
+		i += 1;
+	}
+	if i == start_digits_at {
+		return false;
+	}
+	while i < n && bytes[i] == b' ' {
+		i += 1;
+	}
+	if i >= n || bytes[i] != b'-' {
+		return false;
+	}
+	i += 1;
+	while i < n && bytes[i] == b' ' {
+		i += 1;
+	}
+	if i < n && (bytes[i] == b'-' || bytes[i] == b'+') {
+		i += 1;
+	}
+	let end_digits_at = i;
+	while i < n && bytes[i].is_ascii_digit() {
+		i += 1;
+	}
+	if i == end_digits_at {
+		return false;
+	}
+	while i < n && bytes[i] == b' ' {
+		i += 1;
+	}
+	i < n && bytes[i] == b']'
+}
 // ── CodePath top-level (recursive descent) ──────────────────────
 
 /// Internal error for `parse_code_path_inner`. `Parse` collapses to the
@@ -262,9 +323,7 @@ fn integer(input: &mut &str) -> ModalResult<isize> {
 //
 // On non-match the lexer returns `None` and leaves `*input` unchanged.
 // Bounds validation (1-indexed, inverted) is the caller's responsibility.
-pub(crate) fn parse_line_slice_suffix(
-	input: &mut &str,
-) -> Option<(Option<isize>, Option<isize>)> {
+pub(crate) fn parse_line_slice_suffix(input: &mut &str) -> Option<(Option<isize>, Option<isize>)> {
 	let s = *input;
 	let bytes = s.as_bytes();
 	if bytes.first().copied() != Some(b':') {
@@ -1452,6 +1511,46 @@ mod tests {
 		);
 	}
 
+	// ── BUG: agent wrote `[A-B]` (shorthand `-`) inside axis brackets;
+	// before the hint, this surfaced as a generic "unexpected trailing input".
+	#[test]
+	fn bracket_dashed_range_hint() {
+		let result = parse_code_path("foo.ts::§line[85-180]", &DotLexer);
+		let diag = result.unwrap_err();
+		assert!(
+			diag.message.contains("'..' not '-'"),
+			"expected dashed-range hint, got: {}",
+			diag.message
+		);
+		assert!(diag.message.contains("[A..B]"), "hint should show corrected axis form: {}", diag.message);
+		assert!(diag.message.contains(":A-B"), "hint should mention shorthand alternative: {}", diag.message);
+	}
+
+	#[test]
+	fn bracket_dashed_range_hint_negative_start() {
+		let result = parse_code_path("foo.ts::§line[-3-10]", &DotLexer);
+		let diag = result.unwrap_err();
+		assert!(
+			diag.message.contains("'..' not '-'"),
+			"expected dashed-range hint for negative start, got: {}",
+			diag.message
+		);
+	}
+
+	#[test]
+	fn valid_dotted_range_unchanged() {
+		// Regression: ensure the correct axis form still parses without producing the hint.
+		let cp = parse_code_path("foo.ts::§line[85..180]", &DotLexer).unwrap();
+		assert!(cp.query.is_some());
+	}
+
+	#[test]
+	fn shorthand_range_unchanged() {
+		// Regression: ensure `:A-B` shorthand (no brackets) still parses.
+		let cp = parse_code_path("foo.ts:85-180", &DotLexer).unwrap();
+		assert!(cp.query.is_some());
+	}
+
 	// ── FEAT-715: line-slice shorthand ────────────────────────────
 
 	/// Pull the `Range` predicate from a synthesised `§line[..]` query.
@@ -1629,14 +1728,9 @@ mod tests {
 		// FEAT-715 acceptance: parse(serialize(parse(s))) == parse(s) for
 		// every valid form. Renderer emits canonical `§line[..]` form which
 		// re-parses back to the identical AST.
-		for form in [
-			"foo.ts:50",
-			"foo.ts:-25",
-			"foo.ts:10-40",
-			"foo.ts:80-",
-			"foo.ts:30+5",
-			"foo.ts:50#raw",
-		] {
+		for form in
+			["foo.ts:50", "foo.ts:-25", "foo.ts:10-40", "foo.ts:80-", "foo.ts:30+5", "foo.ts:50#raw"]
+		{
 			rt(form);
 		}
 	}

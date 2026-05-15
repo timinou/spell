@@ -2,7 +2,7 @@
 //!
 //! `§line`, `§para`, and `§chunk` are the supported node-kind heads.
 
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap, ops::Range};
 
 use regex::Regex;
 
@@ -14,26 +14,36 @@ use crate::{
 
 // ── §line ────────────────────────────────────────────────────────
 
+/// Decode `content[range]` as UTF-8 with `U+FFFD` replacement for invalid
+/// bytes. Slicing the raw `&[u8]` first keeps caller-facing byte ranges in
+/// original-content coordinates; decoding per slice avoids the offset drift
+/// that a single pre-decoded `String::from_utf8_lossy(content)` introduces
+/// when invalid bytes expand to a 3-byte `�` and shift downstream indices.
+fn slice_lossy(content: &[u8], range: Range<usize>) -> Cow<'_, str> {
+	let end = range.end.min(content.len());
+	let start = range.start.min(end);
+	String::from_utf8_lossy(&content[start..end])
+}
+
 /// Apply a `§line` step to `content`.
 pub fn line_steps(content: &[u8], step: &Step) -> Vec<NodeRef> {
 	let line_index = LineIndex::build(content);
-	let text = String::from_utf8_lossy(content);
 	// Slice mode: exactly one Range predicate → emit ONE node with joined text.
 	if let Some((start, end)) = slice_range_only(&step.predicates) {
-		return vec![build_line_slice(content, &text, &line_index, start, end)];
+		return vec![build_line_slice(content, &line_index, start, end)];
 	}
 
 	let mut selected: Vec<usize> = (1..=line_index.line_count()).collect();
 
 	for pred in &step.predicates {
-		selected.retain(|ln| line_predicate(pred, *ln, content, &line_index, &text));
+		selected.retain(|ln| line_predicate(pred, *ln, content, &line_index));
 	}
 
 	selected
 		.into_iter()
 		.map(|ln| {
 			let range = line_index.line_range(ln, content.len()).unwrap_or(0..0);
-			let line_text = text[range.clone()].to_string();
+			let line_text = slice_lossy(content, range.clone()).into_owned();
 			let anchor = line_anchor_id(line_text.trim_end_matches(['\n', '\r']));
 			let mut metadata = HashMap::new();
 			metadata.insert("anchorId".to_string(), serde_json::Value::String(anchor.clone()));
@@ -50,8 +60,9 @@ pub fn line_steps(content: &[u8], step: &Step) -> Vec<NodeRef> {
 		.collect()
 }
 
-/// Returns Some((start, end)) when `predicates` is exactly one `Range` predicate.
-/// `start`/`end` are the raw isize bounds (negatives allowed; `None` = open).
+/// Returns Some((start, end)) when `predicates` is exactly one `Range`
+/// predicate. `start`/`end` are the raw isize bounds (negatives allowed; `None`
+/// = open).
 fn slice_range_only(predicates: &[Predicate]) -> Option<(Option<isize>, Option<isize>)> {
 	if predicates.len() != 1 {
 		return None;
@@ -62,19 +73,17 @@ fn slice_range_only(predicates: &[Predicate]) -> Option<(Option<isize>, Option<i
 	}
 }
 
-/// Build a single sliced `§line` node from `start..=end` (1-indexed, inclusive).
-/// Negative bounds resolve from EOF; out-of-range bounds clamp with a warning.
+/// Build a single sliced `§line` node from `start..=end` (1-indexed,
+/// inclusive). Negative bounds resolve from EOF; out-of-range bounds clamp with
+/// a warning.
 fn build_line_slice(
 	content: &[u8],
-	text: &str,
 	line_index: &LineIndex,
 	start_raw: Option<isize>,
 	end_raw: Option<isize>,
 ) -> NodeRef {
 	let count = line_index.line_count() as isize;
-	let resolve = |raw: isize| -> isize {
-		if raw < 0 { count + raw + 1 } else { raw }
-	};
+	let resolve = |raw: isize| -> isize { if raw < 0 { count + raw + 1 } else { raw } };
 	let (resolved_start, resolved_end) = match (start_raw, end_raw) {
 		(None, None) => (1, count),
 		(Some(s), None) => (resolve(s), count),
@@ -104,13 +113,13 @@ fn build_line_slice(
 	// Clamp to file extent (1..=count). Emit warning if either bound was outside.
 	let clamped_start = resolved_start.max(1).min(count);
 	let clamped_end = resolved_end.max(1).min(count);
-	let clamped =
-		resolved_start != clamped_start || resolved_end != clamped_end;
+	let clamped = resolved_start != clamped_start || resolved_end != clamped_end;
 	if clamped {
 		diagnostics.push(Diagnostic {
 			variant: DiagnosticVariant::RangeClamped,
 			message: format!(
-				"§line range {resolved_start}..{resolved_end} clamped to {clamped_start}..{clamped_end} (file has {count} line(s))"
+				"§line range {resolved_start}..{resolved_end} clamped to \
+				 {clamped_start}..{clamped_end} (file has {count} line(s))"
 			),
 			span:    None,
 		});
@@ -121,7 +130,7 @@ fn build_line_slice(
 	let start_range = line_index.line_range(first, content.len()).unwrap_or(0..0);
 	let end_range = line_index.line_range(last, content.len()).unwrap_or(0..0);
 	let byte_range = start_range.start..end_range.end;
-	let body = text[byte_range.clone()].to_string();
+	let body = slice_lossy(content, byte_range.clone()).into_owned();
 	slice_node(byte_range, body, clamped_start, clamped_end, diagnostics)
 }
 
@@ -133,10 +142,7 @@ fn slice_node(
 	diagnostics: Vec<Diagnostic>,
 ) -> NodeRef {
 	let mut metadata = HashMap::new();
-	metadata.insert(
-		"shape".to_string(),
-		serde_json::Value::String("slice".to_string()),
-	);
+	metadata.insert("shape".to_string(), serde_json::Value::String("slice".to_string()));
 	metadata.insert("lineStart".to_string(), serde_json::Value::Number(start.into()));
 	metadata.insert("lineEnd".to_string(), serde_json::Value::Number(end.into()));
 	NodeRef {
@@ -154,7 +160,6 @@ fn line_predicate(
 	line_num: usize,
 	content: &[u8],
 	line_index: &LineIndex,
-	text: &str,
 ) -> bool {
 	match pred {
 		Predicate::Range { start, end } => {
@@ -177,17 +182,17 @@ fn line_predicate(
 			let range = line_index
 				.line_range(line_num, content.len())
 				.unwrap_or(0..0);
-			let line_text = &text[range];
+			let line_text = slice_lossy(content, range);
 			Regex::new(pattern)
-				.map(|re| re.is_match(line_text))
+				.map(|re| re.is_match(&line_text))
 				.unwrap_or(false)
 		},
 		Predicate::LiteralMatch(lit) => {
 			let range = line_index
 				.line_range(line_num, content.len())
 				.unwrap_or(0..0);
-			let line_text = &text[range];
-			line_text.contains(lit)
+			let line_text = slice_lossy(content, range);
+			line_text.contains(lit.as_str())
 		},
 		Predicate::Compare { name, op, value } => {
 			if name != "len" {
@@ -205,7 +210,7 @@ fn line_predicate(
 				let range = line_index
 					.line_range(line_num, content.len())
 					.unwrap_or(0..0);
-				let line_text = &text[range];
+				let line_text = slice_lossy(content, range);
 				line_text.trim().is_empty()
 			},
 			"last" => line_num == line_index.line_count(),
@@ -220,18 +225,17 @@ fn line_predicate(
 /// Apply a `§para` step to `content`.
 pub fn para_steps(content: &[u8], step: &Step) -> Vec<NodeRef> {
 	let para_index = ParaIndex::build(content);
-	let text = String::from_utf8_lossy(content);
 	let mut selected: Vec<usize> = (1..=para_index.para_count()).collect();
 
 	for pred in &step.predicates {
-		selected.retain(|pn| para_predicate(pred, *pn, content, &para_index, &text));
+		selected.retain(|pn| para_predicate(pred, *pn, content, &para_index));
 	}
 
 	selected
 		.into_iter()
 		.map(|pn| {
 			let range = para_index.para_range(pn, content.len()).unwrap_or(0..0);
-			let para_text = text[range.clone()].to_string();
+			let para_text = slice_lossy(content, range.clone()).into_owned();
 			NodeRef {
 				locator: format!("<para {}>", pn),
 				range,
@@ -249,7 +253,6 @@ fn para_predicate(
 	para_num: usize,
 	content: &[u8],
 	para_index: &ParaIndex,
-	text: &str,
 ) -> bool {
 	match pred {
 		Predicate::Range { start, end } => {
@@ -272,17 +275,17 @@ fn para_predicate(
 			let range = para_index
 				.para_range(para_num, content.len())
 				.unwrap_or(0..0);
-			let para_text = &text[range];
+			let para_text = slice_lossy(content, range);
 			Regex::new(pattern)
-				.map(|re| re.is_match(para_text))
+				.map(|re| re.is_match(&para_text))
 				.unwrap_or(false)
 		},
 		Predicate::LiteralMatch(lit) => {
 			let range = para_index
 				.para_range(para_num, content.len())
 				.unwrap_or(0..0);
-			let para_text = &text[range];
-			para_text.contains(lit)
+			let para_text = slice_lossy(content, range);
+			para_text.contains(lit.as_str())
 		},
 		Predicate::Compare { name, op, value } => {
 			if name != "len" {
@@ -311,7 +314,6 @@ fn para_predicate(
 /// `[n=20]` (Attribute) or `[n==20]` / `[n=20]` (Compare with Eq).
 pub fn chunk_steps(content: &[u8], step: &Step) -> Vec<NodeRef> {
 	let line_index = LineIndex::build(content);
-	let text = String::from_utf8_lossy(content);
 	let line_count = line_index.line_count();
 	let chunk_size = parse_chunk_size(&step.predicates).unwrap_or(50).max(1) as usize;
 	let chunk_count = line_count.div_ceil(chunk_size);
@@ -334,7 +336,7 @@ pub fn chunk_steps(content: &[u8], step: &Step) -> Vec<NodeRef> {
 				.line_range(end_line, content.len())
 				.unwrap_or(0..0);
 			let range = start_range.start..end_range.end;
-			let chunk_text = text[range.clone()].to_string();
+			let chunk_text = slice_lossy(content, range.clone()).into_owned();
 			NodeRef {
 				locator: format!("<chunk {}>", cn),
 				range,
@@ -434,10 +436,7 @@ mod tests {
 		};
 		assert_eq!(body, "b\nc\n");
 		assert!(n.diagnostics.is_empty(), "in-bounds slice has no diagnostics");
-		assert_eq!(
-			n.metadata.get("shape").and_then(|v| v.as_str()),
-			Some("slice")
-		);
+		assert_eq!(n.metadata.get("shape").and_then(|v| v.as_str()), Some("slice"));
 	}
 
 	#[test]
@@ -648,10 +647,7 @@ mod tests {
 		assert_eq!(nodes.len(), 1);
 		assert_eq!(slice_body(&nodes[0]), "l2\nl3\n");
 		assert_eq!(nodes[0].diagnostics.len(), 1);
-		assert!(matches!(
-			nodes[0].diagnostics[0].variant,
-			DiagnosticVariant::RangeClamped
-		));
+		assert!(matches!(nodes[0].diagnostics[0].variant, DiagnosticVariant::RangeClamped));
 	}
 
 	#[test]
@@ -662,10 +658,7 @@ mod tests {
 		assert_eq!(nodes.len(), 1);
 		assert_eq!(slice_body(&nodes[0]), "");
 		assert_eq!(nodes[0].diagnostics.len(), 1);
-		assert!(matches!(
-			nodes[0].diagnostics[0].variant,
-			DiagnosticVariant::RangeBoundsInverted
-		));
+		assert!(matches!(nodes[0].diagnostics[0].variant, DiagnosticVariant::RangeBoundsInverted));
 	}
 
 	#[test]
@@ -698,5 +691,59 @@ mod tests {
 			line_steps(content, &step(vec![Predicate::Range { start: Some(1), end: Some(50) }]));
 		assert_eq!(nodes.len(), 1);
 		assert_eq!(slice_body(&nodes[0]).len(), src.len());
+	}
+
+	// ── invalid-UTF-8 regression ───────────────────────────────────
+	//
+	// `line_predicate` / chunk / para used to share a single
+	// `String::from_utf8_lossy(content)` buffer while indexing with
+	// raw-byte `LineIndex` offsets. Invalid bytes expand to a 3-byte
+	// `U+FFFD`, shifting downstream offsets and causing
+	// `&text[range]` to land mid-`�` → "not a char boundary" panic
+	// (surfaced as an abort across the napi async-work FFI boundary).
+
+	#[test]
+	fn line_predicate_literal_invalid_utf8_no_panic() {
+		// `\xC3\x28` is an invalid UTF-8 sequence.
+		let content: &[u8] = b"hello \xC3\x28 world\nsecond line\n";
+		let nodes = line_steps(
+			content,
+			&step(vec![Predicate::LiteralMatch("world".to_string())]),
+		);
+		assert_eq!(nodes.len(), 1);
+		assert!(matches!(
+			&nodes[0].content,
+			Some(Content::Text { value }) if value.contains("world")
+		));
+	}
+
+	#[test]
+	fn line_slice_invalid_utf8_no_panic() {
+		// Multi-byte invalid sequences (binary-blob shape) plus a final
+		// newline so LineIndex produces a valid range whose `end` lands
+		// where a single shared `from_utf8_lossy` would split a `ÿfd`.
+		let mut content: Vec<u8> = Vec::new();
+		content.extend_from_slice(b"prefix\n");
+		content.extend_from_slice(&[0x84, 0xFE, 0xC0, 0x80, 0xFF]);
+		content.extend_from_slice(b"\nsuffix\n");
+		let nodes = line_steps(
+			&content,
+			&step(vec![Predicate::Range { start: Some(1), end: Some(3) }]),
+		);
+		assert_eq!(nodes.len(), 1);
+		// Round-trips through lossy decoding; must not panic.
+		assert!(slice_body(&nodes[0]).contains("prefix"));
+		assert!(slice_body(&nodes[0]).contains("suffix"));
+	}
+
+	#[test]
+	fn chunk_steps_invalid_utf8_no_panic() {
+		let mut content: Vec<u8> = Vec::new();
+		for _ in 0..3 {
+			content.extend_from_slice(b"ok line\n");
+			content.extend_from_slice(&[0xC3, 0x28, b'\n']);
+		}
+		let nodes = chunk_steps(&content, &step(vec![]));
+		assert!(!nodes.is_empty());
 	}
 }

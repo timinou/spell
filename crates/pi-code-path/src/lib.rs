@@ -15,6 +15,7 @@
 pub mod ast;
 pub mod dialect;
 pub mod dialects;
+pub mod op;
 pub mod parser;
 pub mod renderer;
 pub mod resolver;
@@ -22,6 +23,10 @@ pub mod types;
 
 pub use ast::*;
 pub use dialect::*;
+pub use op::{
+	CssTarget, FileTarget, HeadingTarget, Identifier, LineAnchor, LineAt, LineSpan, Op, OpKind,
+	SymScope, SymbolTarget,
+};
 pub use parser::{parse_code_path, parse_locator};
 pub use renderer::render_code_path;
 pub use resolver::traits::MutationResolver;

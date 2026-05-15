@@ -174,10 +174,7 @@ fn resolve_stat(node: &NodeRef, root: &Path) -> Result<Vec<NodeRef>, Diagnostic>
 
 	if !meta.is_dir() {
 		if let Some(count) = line_count_for_stat(&full_path, size) {
-			metadata.insert(
-				"lineCount".to_string(),
-				serde_json::Value::Number(count.into()),
-			);
+			metadata.insert("lineCount".to_string(), serde_json::Value::Number(count.into()));
 		}
 	}
 
@@ -331,7 +328,8 @@ mod tests {
 		let dir = tempfile::tempdir().unwrap();
 		let root = dir.path().to_path_buf();
 		// PNG signature + a NUL run — fails UTF-8 sniff.
-		let bytes: Vec<u8> = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d];
+		let bytes: Vec<u8> =
+			vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d];
 		fs::write(root.join("img.png"), &bytes).unwrap();
 
 		let n = node("img.png", "§file");
