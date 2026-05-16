@@ -1,0 +1,149 @@
+#+TITLE: find/get: out-of-root dir/glob targets silently return empty instead of OUT_OF_PROJECT_ROOT
+#+STATE: ITEM
+#+SESSION_ID: 14e36d0179617e04
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T11-14-31-013Z_14e36d0179617e04.jsonl]]
+#+CUSTOM_ID: BUG-373-find-get-out-of-root-dir-glob-targets-si
+#+DEPENDS: BUG-348-get-gitignore-hint-fires-falsely-gitigno
+#+EFFORT: 3h
+#+LAYER: coding-agent
+#+PRIORITY: #B
+
+* Initial Message
+
+Find
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ metadata error: No such file or directory (os error 2)                                            │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Find
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ [§no-results] .#tree                                                                              │
+ │   reason:    no-match                                                                             │
+ │   try next:  verify path/symbol exists, or try target: "."                                        │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Get
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ [§no-results] .                                                                                   │
+ │   attached:  #listing (auto)                                                                      │
+ │   resolved:  /home/user/code/ora/cais                                                             │
+ │   reason:    empty-result                                                                         │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+in File: /home/user/.spell/agent/sessions/-code-ora-cais/2026-05-16T11-12-33-866Z_14e36c8f12b84467.jsonl
+
+
+
+Please explain what went wrong.
+
+
+* Initial Message
+
+The =get= tool already emits a structured =OUT_OF_PROJECT_ROOT=
+diagnostic when an absolute *file* path sits outside the walker
+root (BUG-348). The same condition for an absolute *directory*,
+*glob*, or *qualified* target silently degrades to
+=[§no-results] empty-result=.
+
+In a session whose cwd was =/home/user/code/ora/cais= the user
+saw three failures (BUG-371, BUG-372 cover the first two). The
+third — =get { target: "." }= → =empty-result= — looked like the
+listing tool was broken, when the actual cause is the same
+out-of-root scoping that BUG-348 already diagnoses for files.
+
+User direction: =let it walk outside by default=. Until that
+default flips (tracked in FUP-086), the immediate fix is to make
+the failure mode honest — same =OUT_OF_PROJECT_ROOT= diagnostic
+for directories, globs, and qualified absolute paths.
+
+* Symptom
+1. =get { target: "/home/user/code/ora/cais" }= run from a
+   spell session rooted at =/home/user/code/ora/spell= →
+   =[§no-results] empty-result= (no =OUT_OF_PROJECT_ROOT=).
+2. =get { target: "/some/abs/path/*" }= same.
+3. =get { target: "/some/abs/path/#tree" }= same.
+4. =get { target: "/some/abs/path/file.txt" }= correctly emits
+   =OUT_OF_PROJECT_ROOT=. The asymmetry is the bug.
+
+* Root Cause
+=packages/coding-agent/src/tools/get.ts= guards out-of-root paths
+only inside =classifyBareTarget(target) === "bare-plain"= and
+only when =stat()= reports =isFile()=. Three branches drop out:
+
+#+begin_example
+if (params.content !== false && !looksLikeRegex
+    && classifyBareTarget(target) === "bare-plain") {
+    …
+    if (stat.isFile()) {
+        if (!inRoot) {  // ← only place OUT_OF_PROJECT_ROOT is raised
+            …
+        }
+    } else if (stat.isDirectory()) {
+        target = buildDirQualifier(normalized, params); // no root check
+    }
+}
+#+end_example
+
+- Directories: stat probe attaches =#listing= and hands off; the
+  walker silently returns =[]=.
+- Globs: =classifyBareTarget= returns ="other"=; the probe is
+  skipped entirely.
+- Qualified targets (=path#tree=, =path#stat=, …):
+  =classifyBareTarget= returns ="qualified"=; probe skipped.
+
+The kernel walker has no notion of "you asked for an absolute
+path outside my root" — it just returns =[]=. The user-facing
+result is indistinguishable from "exists but everything is
+gitignored", which is the exact confusion BUG-348 was supposed to
+end.
+
+* Acceptance
+- For every absolute target whose resolved path is outside the
+  walker root (file, dir, glob, qualified, or with shorthand
+  slice), =get= emits a single structured =OUT_OF_PROJECT_ROOT=
+  diagnostic with =project root=, =resolved=, and the same
+  =gitignore: false= / =root:= hint already used for files.
+- =gitignore: false= continues to short-circuit file reads
+  (BUG-348). For dirs/globs/qualifiers, the diagnostic explains
+  that =gitignore: false= alone won't reach the path and points at
+  the =root:= override.
+- The check happens *before* the kernel call so the diagnostic is
+  unambiguous; we do not first run the walker and then guess.
+
+* Edge Cases
+- Relative paths are unchanged (resolved against =cwd= → always
+  in-root by construction).
+- =memory://=, =artifact://=, =skill://=, =rule://=, =agent://=
+  URIs are unaffected (routed before the FS check).
+- Symlinks pointing outside root: treated as out-of-root.
+- The session's =root= override (=root: "/other/path"=) shifts the
+  comparison anchor as expected.
+
+* Tests (failing — TDD)
+- =packages/coding-agent/test/get.test.ts::"OUT_OF_PROJECT_ROOT for absolute directory"=
+- =packages/coding-agent/test/get.test.ts::"OUT_OF_PROJECT_ROOT for absolute glob"=
+- =packages/coding-agent/test/get.test.ts::"OUT_OF_PROJECT_ROOT for absolute qualified target"=
+- =packages/coding-agent/test/get.test.ts::"OUT_OF_PROJECT_ROOT honours root override"=
+
+* Verification
+- =bun test packages/coding-agent/test/get.test.ts -t "OUT_OF_PROJECT_ROOT"=
+- Manual: from this repo, =get { target: "/home/user/code/ora/cais" }= must
+  return =OUT_OF_PROJECT_ROOT= with =resolved: /home/user/code/ora/cais=
+  and a hint mentioning =root:= override.
+
+* Non-goals
+- Changing the default scope to "walk anywhere": that is FUP-086
+  (KDL-tuned authorization scheme).
+- Cross-mount or chroot handling.
+
+* Related
+- [[id:BUG-348-get-gitignore-hint-fires-falsely-gitigno]]
+- [[id:BUG-371-find-get-path-tree-errors-with-bare-meta]]
+- [[id:BUG-372-find-get-and-tree-not-treated-as-current]]
+- [[id:FUP-086-find-get-walk-outside-project-root-by-d]] (next id reserved below)

@@ -984,3 +984,80 @@ describe("GetTool", () => {
 		expect(getText(result)).toContain("[note] Binary artifact (png)");
 	});
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// BUG-373: out-of-root dir/glob/qualified targets must emit the same
+// structured OUT_OF_PROJECT_ROOT diagnostic that BUG-348 introduced for
+// files — not silent `[§no-results] empty-result`.
+// ───────────────────────────────────────────────────────────────────────────
+describe("BUG-373: out-of-root symmetry for non-file targets", () => {
+	it("emits OUT_OF_PROJECT_ROOT for an absolute directory outside cwd", async () => {
+		const outsideRoot = nodePath.join("/tmp", `spell-bug373a-${Date.now()}`);
+		await fs.mkdir(outsideRoot, { recursive: true });
+		await fs.writeFile(nodePath.join(outsideRoot, "a.txt"), "hi", "utf-8");
+		try {
+			const tool = new GetTool();
+			const result = await tool.execute("t", { target: outsideRoot });
+			const text = getText(result);
+			expect(text).toContain("OUT_OF_PROJECT_ROOT");
+			// Must not regress to the old empty-result framing.
+			expect(text).not.toMatch(/empty-result/);
+		} finally {
+			await fs.rm(outsideRoot, { recursive: true });
+		}
+	});
+
+	it("emits OUT_OF_PROJECT_ROOT for an absolute glob outside cwd", async () => {
+		const outsideRoot = nodePath.join("/tmp", `spell-bug373b-${Date.now()}`);
+		await fs.mkdir(outsideRoot, { recursive: true });
+		await fs.writeFile(nodePath.join(outsideRoot, "x.ts"), "", "utf-8");
+		try {
+			const tool = new GetTool();
+			const result = await tool.execute("t", {
+				target: `${outsideRoot}/*.ts`,
+			});
+			const text = getText(result);
+			expect(text).toContain("OUT_OF_PROJECT_ROOT");
+		} finally {
+			await fs.rm(outsideRoot, { recursive: true });
+		}
+	});
+
+	it("emits OUT_OF_PROJECT_ROOT for an absolute qualified target outside cwd", async () => {
+		const outsideRoot = nodePath.join("/tmp", `spell-bug373c-${Date.now()}`);
+		await fs.mkdir(outsideRoot, { recursive: true });
+		await fs.writeFile(nodePath.join(outsideRoot, "a.txt"), "", "utf-8");
+		try {
+			const tool = new GetTool();
+			const result = await tool.execute("t", {
+				target: `${outsideRoot}#tree`,
+			});
+			const text = getText(result);
+			expect(text).toContain("OUT_OF_PROJECT_ROOT");
+			// And it must not be the cryptic `metadata error` from BUG-371.
+			expect(text).not.toContain("metadata error");
+		} finally {
+			await fs.rm(outsideRoot, { recursive: true });
+		}
+	});
+
+	it("honours an explicit `root:` override for out-of-cwd targets", async () => {
+		const outsideRoot = nodePath.join("/tmp", `spell-bug373d-${Date.now()}`);
+		await fs.mkdir(outsideRoot, { recursive: true });
+		await fs.writeFile(nodePath.join(outsideRoot, "a.txt"), "hi", "utf-8");
+		try {
+			const tool = new GetTool();
+			const result = await tool.execute("t", {
+				target: outsideRoot,
+				root: outsideRoot,
+			});
+			const text = getText(result);
+			// With root pinned, the listing must succeed — no OUT_OF_PROJECT_ROOT.
+			expect(text).not.toContain("OUT_OF_PROJECT_ROOT");
+			expect(text).toContain("a.txt");
+		} finally {
+			await fs.rm(outsideRoot, { recursive: true });
+		}
+	});
+});
+

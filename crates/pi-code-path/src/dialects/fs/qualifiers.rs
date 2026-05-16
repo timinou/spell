@@ -347,4 +347,52 @@ mod tests {
 		let results = resolve(&n, &qual, &root).unwrap();
 		assert!(!results[0].metadata.contains_key("lineCount"));
 	}
+
+	// ─────────────────────────────────────────────────────────────
+	// BUG-371: a single dangling symlink must not abort the entire
+	// `#tree` walk. The user reproduction (running `/abs/cais/#tree`
+	// on a repo with a Node-built phoenix-colocated symlink) failed
+	// with a bare `metadata error: No such file or directory` because
+	// resolve_tree propagated `?` on the first stat() that followed a
+	// dangling link. Expected: per-entry diagnostic, walk continues.
+	// ─────────────────────────────────────────────────────────────
+	#[test]
+	#[cfg(unix)]
+	fn bug371_tree_walk_swallows_dangling_symlinks() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::create_dir(root.join("keep")).unwrap();
+		fs::write(root.join("keep/real.txt"), "x").unwrap();
+		// Dangling symlink pointing at a path that does not exist.
+		std::os::unix::fs::symlink(
+			root.join("nope/target"),
+			root.join("keep/broken"),
+		).unwrap();
+
+		let n = node("", "§dir");
+		let qual = Qualifier { name: "tree".to_string(), args: None };
+		let res = resolve(&n, &qual, &root);
+		assert!(
+			res.is_ok(),
+			"a single dangling symlink must not abort the whole tree walk; got: {:?}",
+			res.as_ref().err().map(|d| &d.message)
+		);
+		let nodes = res.unwrap();
+		// Real children survive.
+		assert!(
+			nodes.iter().any(|n| n.locator.ends_with("keep/real.txt")),
+			"healthy entries must survive a dangling sibling; got: {:?}",
+			nodes.iter().map(|n| &n.locator).collect::<Vec<_>>()
+		);
+		// The broken link is reported with a diagnostic attached to its
+		// own node, not as a hard error.
+		let broken = nodes
+			.iter()
+			.find(|n| n.locator.ends_with("keep/broken"))
+			.expect("dangling entry must appear in the result set");
+		assert!(
+			!broken.diagnostics.is_empty(),
+			"dangling entry must carry a per-node diagnostic"
+		);
+	}
 }

@@ -1,0 +1,133 @@
+#+TITLE: find/get: walk outside project root by default; KDL authorization scheme
+#+STATE: ITEM
+#+SESSION_ID: 14e36d0179617e04
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T11-14-31-013Z_14e36d0179617e04.jsonl]]
+#+CUSTOM_ID: FUP-086-find-get-walk-outside-project-root-by-de
+#+DEPENDS: BUG-373-find-get-out-of-root-dir-glob-targets-si
+#+EFFORT: 6h
+#+LAYER: coding-agent pi-code-path
+#+PRIORITY: #C
+
+* Initial Message
+
+Find
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ metadata error: No such file or directory (os error 2)                                            │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Find
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ [§no-results] .#tree                                                                              │
+ │   reason:    no-match                                                                             │
+ │   try next:  verify path/symbol exists, or try target: "."                                        │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Get
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ [§no-results] .                                                                                   │
+ │   attached:  #listing (auto)                                                                      │
+ │   resolved:  /home/user/code/ora/cais                                                             │
+ │   reason:    empty-result                                                                         │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+in File: /home/user/.spell/agent/sessions/-code-ora-cais/2026-05-16T11-12-33-866Z_14e36c8f12b84467.jsonl
+
+
+
+Please explain what went wrong.
+
+
+* Initial Message
+
+User direction (2026-05-16 session): "let it walk outside by
+default, maybe add a KDL setting to tune the authorization scheme
+as an FUP".
+
+Today every read-side fs operation in =find= / =get= is silently
+clamped to the session's project root. Crossing the boundary —
+even with =root: "/other"= explicitly passed — already works for
+the kernel, but the default UX teaches agents that absolute paths
+"don't exist", which leads to needless =bash ls= fallbacks.
+
+* Scope
+- Make the default behaviour of =find= and =get= permissive:
+  absolute paths outside the project root are walked as long as the
+  process has read permission.
+- Gate the new default through a single KDL knob so deployments
+  that need strict scoping (multi-tenant servers, CI, sandbox) can
+  opt back in.
+- Preserve every existing diagnostic for relative/in-root paths.
+- Out of scope: mutating operations (=edit=, =create=) — those stay
+  scoped; cross-mount semantics; remote URIs.
+
+* Proposed Design
+** KDL knob
+=fs= block under the root document, mirroring the existing
+=tasks= / =org= sections in =spell.kdl=:
+
+#+begin_src kdl
+fs {
+    // walk-mode "permissive"        // default
+    // walk-mode "scoped"            // legacy: project-root only
+    // walk-mode "allowlist"
+    // allowlist "/home/user/code" "/tmp"
+    // denylist  "/etc" "/var/log"
+}
+#+end_src
+
+Three modes:
+- =permissive= — read any path the process can stat; reject
+  =denylist= matches with a structured diagnostic.
+- =scoped= — current behaviour; absolute paths outside walker root
+  return =OUT_OF_PROJECT_ROOT=.
+- =allowlist= — only paths whose canonical prefix matches one of
+  =allowlist= entries; everything else is =OUT_OF_AUTHORIZED_SCOPE=.
+
+** Wiring
+1. Extend =Settings= (=packages/coding-agent/src/config/settings.ts=)
+   with =fs.walkMode= + =fs.allowlist= / =fs.denylist=.
+2. =get.ts= consults =Settings= when deciding whether to short-circuit
+   with =OUT_OF_PROJECT_ROOT=; new diagnostic =OUT_OF_AUTHORIZED_SCOPE=
+   for denylist/allowlist violations.
+3. =find.ts= still passes =root: session.cwd= to the kernel, but the
+   walker root becomes the *nearest allowed ancestor* rather than the
+   session cwd in =permissive= mode, so absolute paths are reachable
+   without losing relative-target ergonomics.
+4. Kernel side: extend =WalkOpts= with an optional second root so a
+   single resolve call can walk an out-of-root absolute target.
+
+** Acceptance
+- Default install: =find { target: "/home/user/notes/" }= returns the
+  listing; no =OUT_OF_PROJECT_ROOT=.
+- =fs walk-mode "scoped"= in =spell.kdl=: existing behaviour preserved
+  exactly (regression tests from BUG-348 / BUG-373 pass).
+- =fs walk-mode "allowlist" allowlist="/home/user/code"= rejects
+  =/etc/passwd= with =OUT_OF_AUTHORIZED_SCOPE=.
+- =edit=, =create=, =bash= are unaffected.
+
+** Risks
+- Sandbox/server deployments may rely on the current implicit
+  containment; default flip is a behaviour change. Mitigation:
+  ship with =scoped= as the default for =spell-server= and
+  =permissive= for the local CLI, then revisit after a release.
+- Symlink escape: =canonicalize= every absolute path before
+  comparison; reject if it escapes the configured roots after
+  resolution.
+
+* Tests
+- =packages/coding-agent/test/config/fs-scope.test.ts= — KDL parse
+  and defaulting.
+- =packages/coding-agent/test/get.test.ts::"permissive walks outside root by default"=
+- =packages/coding-agent/test/get.test.ts::"allowlist rejects with OUT_OF_AUTHORIZED_SCOPE"=
+- =packages/coding-agent/test/get.test.ts::"denylist takes precedence over permissive"=
+
+* Dependencies
+- BUG-373 lands first (out-of-root diagnostics become symmetric
+  and structured). This FUP then flips the default and adds the
+  KDL knob on top of the same code path.
