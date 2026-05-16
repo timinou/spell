@@ -1,3 +1,4 @@
+pub(crate) use crate::sys::stubs::async_pipe;
 pub mod commands;
 pub mod fd;
 pub mod fs;
