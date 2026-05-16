@@ -196,8 +196,14 @@ function legacyKindAdapter(action: any, target: string): { action: any; deprecat
   // Legacy insertBefore/insertAfter on non-symbol target → kernel Op `lineInsert`
   // requires `at: { side, anchor }`. Synthesize from legacy `pos` so dispatch
   // routing (see execute()) recognises this as a LINE#ID line-anchor insert.
-  if ((legacyKind === "insertBefore" || legacyKind === "insertAfter") && !isSymbolTarget && action.pos !== undefined) {
-    translated.at = { side: legacyKind === "insertBefore" ? "before" : "after", anchor: action.pos };
+  // Don't overwrite a caller-supplied `at` (mixed-shape inputs preserve intent).
+  if ((legacyKind === "insertBefore" || legacyKind === "insertAfter") && !isSymbolTarget && action.at === undefined) {
+    if (action.pos !== undefined) {
+      translated.at = { side: legacyKind === "insertBefore" ? "before" : "after", anchor: action.pos };
+    }
+    // else: no anchor + no `at` — caller intended line-insert but supplied no anchor.
+    // Let dispatch fall through to executeStructural; kernel will produce a clear
+    // missing-`at` diagnostic rather than us throwing here (no surprise raises in adapter).
   }
   if (legacyKind === "rename" && action.content !== undefined) {
     translated.newName = action.content;

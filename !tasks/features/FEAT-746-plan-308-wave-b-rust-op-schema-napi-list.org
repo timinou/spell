@@ -1,5 +1,5 @@
 #+TITLE: PLAN-308 Wave B — Rust op_schema + NAPI listOps() introspection extension
-#+STATE: ITEM
+#+STATE: DONE
 #+SESSION_ID: 14dd802985b2a5f1
 #+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-11T20-47-19-574Z_14dd802985b2a5f1.jsonl]]
 #+CUSTOM_ID: FEAT-746-plan-308-wave-b-rust-op-schema-napi-list
