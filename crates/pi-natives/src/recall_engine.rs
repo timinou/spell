@@ -134,12 +134,26 @@ pub fn get_or_create(
 	let base_owned = cache_base.map(Path::to_path_buf);
 	let h = Arc::new(RecallEngineHandle::new(canon.clone(), cache_dir, base_owned));
 	map.push((canon, Arc::clone(&h)));
-	while map.len() > ENGINES_CAP {
-		// Drop the LRU entry. The `Arc` may still be held by an in-flight
-		// query on another thread; in that case its resources release when
-		// that query returns. New calls for the evicted repo will rebuild.
-		let evicted = map.remove(0);
-		engine_log!("LRU evicted {} (cap={ENGINES_CAP})", evicted.0.display());
+	// LRU eviction: only evict entries whose Arc strong count is 1 (no
+	// in-flight query holds a clone). Evicting an in-use handle would still
+	// leak its Tantivy `INDEX_WRITER_LOCK` until the in-flight query
+	// returns; the next `get_or_create` for the evicted repo would then
+	// fail `open_fts` with `LockBusy`. We walk LRU-first and skip live
+	// entries; under sustained pressure the map may briefly exceed
+	// `ENGINES_CAP`, but never indefinitely (queries are bounded in time).
+	let mut scan_idx = 0;
+	while map.len() > ENGINES_CAP && scan_idx < map.len() {
+		if Arc::strong_count(&map[scan_idx].1) == 1 {
+			let evicted = map.remove(scan_idx);
+			engine_log!(
+				"LRU evicted {} (cap={ENGINES_CAP}, len was {})",
+				evicted.0.display(),
+				map.len() + 1,
+			);
+			// scan_idx stays; next iteration retests this position.
+		} else {
+			scan_idx += 1;
+		}
 	}
 	Ok(h)
 }
@@ -938,6 +952,53 @@ mod tests {
 		assert!(
 			mtime2 > mtime1,
 			"engine.bin mtime should advance after stale-fingerprint rebuild"
+		);
+		forget(repo.path());
+	}
+
+	/// Regression: PersistedOrgItem used to omit the `relations` field, so a
+	/// disk warm restore silently dropped every `:RELATIONS:` drawer edge
+	/// (FEAT-631 Involved/About/Produced/etc.). The rebuilt TypedGraph was
+	/// missing those edges — affecting the built-in `priors` profile and
+	/// graph-kind queries until an unrelated invalidation triggered
+	/// `full_rebuild`. Pin the round-trip here so a future regression to
+	/// PersistedOrgItem (or its From impls) fails loudly.
+	#[test]
+	fn disk_fast_path_preserves_relations_drawer() {
+		let _no_worker = force_no_worker("disk-relations");
+		let repo = tempdir().unwrap();
+		write_item(
+			&repo.path().join("!tasks"),
+			"F.org",
+			"* TODO F\n:PROPERTIES:\n:CUSTOM_ID: F-1\n:END:\n:RELATIONS:\nABOUT: G-1\nINVOLVED: H-1\n:END:\n* TODO G\n:PROPERTIES:\n:CUSTOM_ID: G-1\n:END:\n* TODO H\n:PROPERTIES:\n:CUSTOM_ID: H-1\n:END:\n",
+		);
+		let cache = tempdir().unwrap();
+
+		// Cold build → engine.bin contains F-1 with its 2 relations.
+		get_or_create(repo.path(), Some(cache.path()))
+			.unwrap()
+			.query(q("F"))
+			.unwrap();
+		forget(repo.path());
+
+		// Disk fast path: re-open, then exercise a graph query that DEPENDS on
+		// F-1's relations. Recall with text="" and focus="F-1" walks the
+		// graph 1 hop from F-1; without relations the result is empty;
+		// with relations preserved it surfaces G-1 / H-1.
+		let hits = get_or_create(repo.path(), Some(cache.path()))
+			.unwrap()
+			.query(RecallQuery {
+				text:        None,
+				focus:       Some("F-1".into()),
+				graph_hops:  1,
+				limit:       10,
+				..Default::default()
+			})
+			.unwrap();
+		let ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+		assert!(
+			ids.contains(&"G-1") || ids.contains(&"H-1"),
+			"disk-restored graph must include 1-hop neighbours from :RELATIONS:; got {ids:?}"
 		);
 		forget(repo.path());
 	}
