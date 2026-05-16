@@ -7,6 +7,7 @@ use std::{
 use pi_org_engine::{
 	OrgItem,
 	clock::ClockEntry,
+	edge::EdgeKind,
 	extract_items_from_source,
 	query::{self, QueryFilter},
 };
@@ -48,6 +49,16 @@ pub struct PersistedOrgItem {
 	pub clocks:     Vec<ClockEntry>,
 	pub byte_range: (usize, usize),
 	pub children:   Vec<Self>,
+	/// Typed edges from the `:RELATIONS:` drawer (FEAT-631). Persisted as
+	/// `(token, target_id)` rather than `(EdgeKind, target_id)` because
+	/// `EdgeKind`'s serde repr (`tag = "kind", content = "value"`) requires
+	/// `deserialize_identifier`, which bincode does not support. We round
+	/// trip through `EdgeKind::token()` / `EdgeKind::parse()` in the From
+	/// impls; both are total functions (unknown tokens become
+	/// `EdgeKind::Other`). Defaulted on deserialize so older cache files
+	/// without this field remain loadable.
+	#[serde(default)]
+	pub relations:  Vec<(String, String)>,
 }
 
 impl From<OrgItem> for PersistedOrgItem {
@@ -66,6 +77,11 @@ impl From<OrgItem> for PersistedOrgItem {
 			clocks:     value.clocks,
 			byte_range: value.byte_range,
 			children:   value.children.into_iter().map(Self::from).collect(),
+			relations:  value
+				.relations
+				.into_iter()
+				.map(|(kind, target)| (kind.token(), target))
+				.collect(),
 		}
 	}
 }
@@ -78,7 +94,11 @@ impl From<PersistedOrgItem> for OrgItem {
 			state:      value.state,
 			category:   value.category,
 			dir:        value.dir,
-			relations:  Vec::new(),
+			relations:  value
+				.relations
+				.into_iter()
+				.map(|(token, target)| (EdgeKind::parse(&token), target))
+				.collect(),
 			file:       value.file,
 			line:       value.line,
 			level:      value.level,
