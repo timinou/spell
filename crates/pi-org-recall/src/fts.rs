@@ -20,7 +20,9 @@ use crate::error::{Error, Result};
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn repo_hash(root: &Path) -> Result<String> {
+/// 12-character blake3 hex of the canonicalized repo path. Used as a stable
+/// per-repo cache key so multiple checkouts don't collide.
+pub fn repo_hash(root: &Path) -> Result<String> {
 	let canonical = std::fs::canonicalize(root)
 		.map_err(|e| Error::RepoHash(format!("{}: {e}", root.display())))?;
 	let mut h = Hasher::new();
@@ -28,7 +30,9 @@ fn repo_hash(root: &Path) -> Result<String> {
 	Ok(h.finalize().to_hex().chars().take(12).collect())
 }
 
-fn cache_base() -> PathBuf {
+/// Root of the per-machine recall cache. Resolves from `XDG_CACHE_HOME`,
+/// then `$HOME/.cache/spell/recall`, then a working-directory fallback.
+pub fn cache_base() -> PathBuf {
 	if let Ok(xdg) = std::env::var("XDG_CACHE_HOME") {
 		return PathBuf::from(xdg).join("spell/recall");
 	}
@@ -36,6 +40,19 @@ fn cache_base() -> PathBuf {
 		return PathBuf::from(home).join(".cache/spell/recall");
 	}
 	PathBuf::from("./.spell-cache/recall")
+}
+
+/// Per-repo cache directory: `{cache_base}/{repo_hash(root)}/`. Both the FTS
+/// index (`fts/` subdirectory) and engine-level sidecars (`engine.bin`,
+/// `vec.bin`) live here.
+pub fn repo_cache_dir(repo_root: &Path) -> Result<PathBuf> {
+	repo_cache_dir_at(repo_root, &cache_base())
+}
+
+/// Per-repo cache directory under a caller-provided base. Mainly for tests
+/// that want isolation from `XDG_CACHE_HOME`.
+pub fn repo_cache_dir_at(repo_root: &Path, cache_base: &Path) -> Result<PathBuf> {
+	Ok(cache_base.join(repo_hash(repo_root)?))
 }
 
 fn kind_of(item: &pi_org_engine::item::OrgItem) -> &str {

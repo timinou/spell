@@ -90,6 +90,7 @@ pub mod keys;
 pub mod language;
 pub mod org_buffer;
 pub mod org_index;
+pub mod recall_engine;
 pub mod prof;
 pub mod projfs_overlay;
 pub mod ps;
