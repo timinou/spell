@@ -86,14 +86,21 @@ function resolveEditAnchors(action: any, editIndex: number): HashlineEdit[] {
 	// Op uses `content`; legacy used `lines`. Read either.
 	const lines = normalizeLines(action.lines ?? action.content);
 	const contentLines = lines === undefined ? [] : lines.split("\n");
-	const op =
-		action.kind === "append" || action.kind === "prepend"
-			? action.kind
-			: action.kind === "insertBefore"
+	// Map both legacy and new kind names to internal op verbs.
+	const kind = action.kind as string | undefined;
+	const atSide = (action.at && typeof action.at === "object") ? action.at.side : undefined;
+	const op: "append" | "prepend" | "replace" =
+		kind === "append" || kind === "fileAppend" || kind === "lineAppend"
+			? "append"
+			: kind === "prepend" || kind === "filePrepend" || kind === "linePrepend"
 				? "prepend"
-				: action.kind === "insertAfter"
-					? "append"
-					: "replace";
+				: kind === "insertBefore"
+					? "prepend"
+					: kind === "insertAfter"
+						? "append"
+						: kind === "lineInsert"
+							? (atSide === "after" ? "append" : "prepend")
+							: "replace";
 	const pos = action.pos !== undefined ? parseHashlineAnchor(action.pos, "pos", editIndex) : undefined;
 	const end = action.end !== undefined ? parseHashlineAnchor(action.end, "end", editIndex) : undefined;
 
@@ -185,6 +192,12 @@ function legacyKindAdapter(action: any, target: string): { action: any; deprecat
   if (translated.lines !== undefined && translated.content === undefined) {
     translated.content = translated.lines;
     delete translated.lines;
+  }
+  // Legacy insertBefore/insertAfter on non-symbol target → kernel Op `lineInsert`
+  // requires `at: { side, anchor }`. Synthesize from legacy `pos` so dispatch
+  // routing (see execute()) recognises this as a LINE#ID line-anchor insert.
+  if ((legacyKind === "insertBefore" || legacyKind === "insertAfter") && !isSymbolTarget && action.pos !== undefined) {
+    translated.at = { side: legacyKind === "insertBefore" ? "before" : "after", anchor: action.pos };
   }
   if (legacyKind === "rename" && action.content !== undefined) {
     translated.newName = action.content;
@@ -334,7 +347,8 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
   				opKind === "lineReplace" ||
   				opKind === "lineAppend" ||
   				opKind === "linePrepend" ||
-  				(opKind === "lineInsert" && (normalizedAction as any).at !== undefined)
+  				(opKind === "lineInsert" && (normalizedAction as any).at !== undefined) ||
+  				((opKind === "fileAppend" || opKind === "filePrepend") && !(normalizedAction as any).pos && !(normalizedAction as any).end)
   			) {
   				result = await this.#executeLineId(targetPath, normalizedAction, i + 1, idempotent);
   			} else {
@@ -473,6 +487,13 @@ export class CodepathEditTool implements AgentTool<typeof editSchema> {
 					.done();
 			}
 			throw new Error(`File not found: ${targetPath}`);
+		}
+
+		// Existing-file anchorless append/prepend → delegate to kernel TextResolver
+		// (EOF append / BOF prepend native semantics). #executeLineId only handles
+		// LINE#ID anchor edits; without an anchor, kernel does the right thing.
+		if ((action.kind === "fileAppend" || action.kind === "filePrepend") && !action.pos && !action.end && action.at === undefined) {
+			return await this.#executeStructural(targetPath, action);
 		}
 
 		const anchorEdits = resolveEditAnchors(action, editIndex);
