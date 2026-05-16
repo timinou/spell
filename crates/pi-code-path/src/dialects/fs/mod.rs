@@ -197,4 +197,198 @@ mod tests {
 		let arr = did_you_mean.as_array().unwrap();
 		assert_eq!(arr.len(), 2);
 	}
+
+	// ─────────────────────────────────────────────────────────────
+	// BUG-371: <abs-dir>/#tree must not surface bare `metadata error`
+	// ─────────────────────────────────────────────────────────────
+
+	/// A target that points to an existing directory MUST resolve as a tree,
+	/// whether or not it carries a trailing slash. The grammar treats
+	/// `<dir>#tree` as canonical; `<dir>/#tree` is what an agent writes
+	/// after seeing `<dir>/` printed in a listing.
+	#[test]
+	fn bug371_trailing_slash_qualifier_equivalent_to_bare() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::create_dir(root.join("src")).unwrap();
+		fs::write(root.join("src/a.rs"), "").unwrap();
+
+		// `<abs>/` with a trailing slash. The parser produces a final empty
+		// segment after the last `/`; the walker must treat that as the
+		// directory itself, identical to the no-slash form.
+		let with_slash = CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![
+					FsSegment::Literal(root.to_string_lossy().to_string()),
+					FsSegment::Literal("/".to_string()),
+				],
+			}),
+			query:     None,
+			qualifier: Some(crate::ast::Qualifier { name: "tree".to_string(), args: None }),
+		};
+		let without_slash = CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![FsSegment::Literal(root.to_string_lossy().to_string())],
+			}),
+			query:     None,
+			qualifier: Some(crate::ast::Qualifier { name: "tree".to_string(), args: None }),
+		};
+
+		let resolver = FsResolver::new(root.clone());
+		let a = resolver.resolve(&with_slash, &CancellationToken::new())
+			.expect("trailing slash + #tree must not error on an existing dir");
+		let b = resolver.resolve(&without_slash, &CancellationToken::new()).expect("control");
+		assert_eq!(
+			a.len(),
+			b.len(),
+			"`<dir>/#tree` and `<dir>#tree` must produce the same shape; got {} vs {}",
+			a.len(),
+			b.len()
+		);
+		assert!(
+			a.iter().any(|n| n.locator.ends_with("src/a.rs")),
+			"tree must include src/a.rs, got: {:?}",
+			a.iter().map(|n| &n.locator).collect::<Vec<_>>()
+		);
+	}
+
+	/// Suffix fallback is meant for plain bare-path lookups: "I typed
+	/// `foo.ts` and meant `src/foo.ts`". When the CodePath carries an
+	/// explicit qualifier the caller is asking about a specific path,
+	/// not fuzzy-matching by basename — fallback must NOT fire.
+	#[test]
+	fn bug371_suffix_fallback_skipped_when_qualifier_present() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::create_dir(root.join("a")).unwrap();
+		fs::create_dir(root.join("b")).unwrap();
+		fs::write(root.join("a/foo.ts"), b"1").unwrap();
+		fs::write(root.join("b/foo.ts"), b"2").unwrap();
+
+		let cp = CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![FsSegment::Literal("foo.ts".to_string())],
+			}),
+			query:     None,
+			qualifier: Some(crate::ast::Qualifier { name: "stat".to_string(), args: None }),
+		};
+		let resolver = FsResolver::new(root);
+		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
+		assert!(
+			!nodes.iter().any(|n| n.kind == "§not-found"),
+			"§not-found from suffix fallback must not appear with a qualifier; got: {:?}",
+			nodes.iter().map(|n| (&n.kind, &n.locator)).collect::<Vec<_>>()
+		);
+	}
+
+	/// Even if a §not-found node leaks through, qualifier resolution
+	/// must be a no-op on it: applying #tree / #stat / #listing to a
+	/// not-found marker is a category error.
+	#[test]
+	fn bug371_not_found_node_terminal_for_qualifier() {
+		use crate::ast::Qualifier;
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		// Construct two basename collisions so the resolver synthesises a
+		// §not-found node, then attach a qualifier.
+		fs::create_dir(root.join("a")).unwrap();
+		fs::create_dir(root.join("b")).unwrap();
+		fs::write(root.join("a/cais"), b"").unwrap();
+		fs::write(root.join("b/cais"), b"").unwrap();
+
+		let cp = CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![FsSegment::Literal("cais".to_string())],
+			}),
+			query:     None,
+			qualifier: Some(Qualifier { name: "tree".to_string(), args: None }),
+		};
+		let resolver = FsResolver::new(root);
+		let res = resolver.resolve(&cp, &CancellationToken::new());
+		assert!(
+			res.is_ok(),
+			"resolver must not surface a bare `metadata error` for §not-found + qualifier; got: {:?}",
+			res.as_ref().err().map(|d| &d.message)
+		);
+	}
+
+	// ─────────────────────────────────────────────────────────────
+	// BUG-372: `.` and `.#tree` are the cwd, not hidden filenames.
+	// ─────────────────────────────────────────────────────────────
+
+	#[test]
+	fn bug372_dot_alias_resolves_to_root() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::write(root.join("README.md"), "hi").unwrap();
+		fs::create_dir(root.join("src")).unwrap();
+		fs::write(root.join("src/a.rs"), "").unwrap();
+
+		let cp = CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![FsSegment::Literal(".".to_string())],
+			}),
+			query:     None,
+			qualifier: None,
+		};
+		let resolver = FsResolver::new(root);
+		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
+		assert!(
+			!nodes.is_empty(),
+			"`.` must resolve to the walker root, got empty result"
+		);
+	}
+
+	#[test]
+	fn bug372_dot_with_tree_qualifier() {
+		use crate::ast::Qualifier;
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::create_dir(root.join("src")).unwrap();
+		fs::write(root.join("src/a.rs"), "").unwrap();
+
+		let cp = CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![FsSegment::Literal(".".to_string())],
+			}),
+			query:     None,
+			qualifier: Some(Qualifier { name: "tree".to_string(), args: None }),
+		};
+		let resolver = FsResolver::new(root);
+		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
+		assert!(
+			nodes.iter().any(|n| n.locator.ends_with("src/a.rs")
+				|| n.locator == "src/a.rs"),
+			"`.#tree` must include nested entries, got: {:?}",
+			nodes.iter().map(|n| &n.locator).collect::<Vec<_>>()
+		);
+	}
+
+	#[test]
+	fn bug372_dot_slash_segment_resolves() {
+		let dir = tempfile::tempdir().unwrap();
+		let root = dir.path().to_path_buf();
+		fs::create_dir(root.join("src")).unwrap();
+		fs::write(root.join("src/a.rs"), "").unwrap();
+
+		// `./src` — leading dot-slash must behave like `src`.
+		let cp = CodePath {
+			locator:   Locator::Fs(FsLocator {
+				segments: vec![
+					FsSegment::Literal(".".to_string()),
+					FsSegment::Literal("/".to_string()),
+					FsSegment::Literal("src".to_string()),
+				],
+			}),
+			query:     None,
+			qualifier: None,
+		};
+		let resolver = FsResolver::new(root);
+		let nodes = resolver.resolve(&cp, &CancellationToken::new()).unwrap();
+		assert!(
+			nodes.iter().any(|n| n.locator.ends_with("src") || n.locator == "src"),
+			"`./src` must resolve like `src`, got: {:?}",
+			nodes.iter().map(|n| &n.locator).collect::<Vec<_>>()
+		);
+	}
 }

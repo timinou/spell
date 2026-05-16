@@ -1,0 +1,129 @@
+#+TITLE: find/get: `.` and `.#tree` not treated as current directory
+#+STATE: ITEM
+#+SESSION_ID: 14e36d0179617e04
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T11-14-31-013Z_14e36d0179617e04.jsonl]]
+#+CUSTOM_ID: BUG-372-find-get-and-tree-not-treated-as-current
+#+EFFORT: 2h
+#+LAYER: coding-agent pi-code-path
+#+PRIORITY: #B
+
+* Initial Message
+
+Find
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ metadata error: No such file or directory (os error 2)                                            │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Find
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ [§no-results] .#tree                                                                              │
+ │   reason:    no-match                                                                             │
+ │   try next:  verify path/symbol exists, or try target: "."                                        │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Get
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ [§no-results] .                                                                                   │
+ │   attached:  #listing (auto)                                                                      │
+ │   resolved:  /home/user/code/ora/cais                                                             │
+ │   reason:    empty-result                                                                         │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+in File: /home/user/.spell/agent/sessions/-code-ora-cais/2026-05-16T11-12-33-866Z_14e36c8f12b84467.jsonl
+
+
+
+Please explain what went wrong.
+
+
+* Initial Message
+
+In a session whose cwd was =/home/user/code/ora/cais= the agent issued:
+
+#+begin_example
+find { target: ".#tree" }
+#+end_example
+
+and received:
+
+#+begin_example
+[§no-results] .#tree
+  reason:    no-match
+  try next:  verify path/symbol exists, or try target: "."
+#+end_example
+
+The hint sent the agent to =target: "."= — which then returned
+=[§no-results]= as well. In effect, the CodePath grammar refuses
+to admit the most basic shell affordance: =.= as "this directory".
+
+* Symptom
+1. =find { target: ".#tree" }= → no-match (parser reads =.= as a
+   hidden filename literal, not a directory).
+2. =find { target: "." }= → empty (walker doesn't recognise the
+   literal =.= as the root alias).
+3. =find { target: "./" }=, =find { target: "./#tree" }= — both fail
+   the same way.
+
+Bare =.= and =.#tree= must Just Work. Every shell, every CLI, every
+fs API treats =.= as the cwd; CodePath silently dropping it is
+hostile to anyone reaching for the lowest-friction listing call.
+
+* Root Cause
+=crates/pi-code-path/src/parser.rs::path_until_kernel_op= happily
+consumes =.= as a literal FS segment. =tokenise_fs_path= produces
+=FsLocator { segments: [Literal(".")] }=. Then in
+=crates/pi-code-path/src/dialects/fs/walker.rs=:
+
+#+begin_example
+let pattern = fs_locator_to_glob(loc);  // "."
+let globset = build_globset(&pattern);  // matches paths literally named "."
+…
+let rel = path.strip_prefix(&opts.root)?;  // "" for the root entry
+if !gs.is_match(rel) { continue; }        // "" never matches "."
+#+end_example
+
+So the literal =.= glob never matches the empty relative path that
+=ignore::WalkBuilder= emits for the root directory. =FsResolver=
+returns =Ok([])= and the qualifier loop has nothing to apply
+=#tree= to.
+
+* Acceptance
+- =find { target: "." }= returns =#listing= of the walker root
+  (matches the behaviour the TS-side auto-attach already promises
+  for bare directory paths).
+- =find { target: ".#tree" }= returns the recursive tree of the
+  walker root.
+- =find { target: "./" }=, =find { target: "./src" }=,
+  =find { target: "../" }= behave consistently with their non-=.=
+  equivalents.
+- =edit { target: ".", action: ... }= is still rejected for
+  ambiguity — this fix only touches read-side resolution.
+
+* Edge Cases
+- Hidden file actually named =.= or =.foo= must still resolve
+  normally (covered by tokenising =.= followed by another path
+  segment as a literal name rather than a cwd alias).
+- =..= alias outside the project root: surfaced via BUG-373
+  (OUT_OF_PROJECT_ROOT for non-bare-plain absolute targets).
+- =cd= isn't a thing here — the walker root is the session cwd
+  (find delegates with =root: session.cwd=).
+
+* Tests (failing — TDD)
+- =crates/pi-code-path/src/dialects/fs/mod.rs::dot_alias_resolves_to_root=
+- =crates/pi-code-path/src/dialects/fs/mod.rs::dot_with_tree_qualifier=
+- =crates/pi-code-path/src/dialects/fs/mod.rs::dot_slash_segment_resolves=
+- =packages/coding-agent/test/get.test.ts::"GetTool > resolves '.' as cwd listing"=
+
+* Verification
+- =cargo test -p pi-code-path dialects::fs::tests::dot=
+- =bun test packages/coding-agent/test/get.test.ts -t "resolves '.'"=
+
+* Non-goals
+- Symbolic =$CWD= or =@cwd= aliases; only the =.= / =./= surface.
+- Changing edit/create semantics.

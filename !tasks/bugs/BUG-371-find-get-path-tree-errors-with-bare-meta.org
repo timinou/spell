@@ -1,0 +1,154 @@
+#+TITLE: find/get: `<path>/#tree` errors with bare `metadata error` on real repos
+#+STATE: ITEM
+#+SESSION_ID: 14e36d0179617e04
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T11-14-31-013Z_14e36d0179617e04.jsonl]]
+#+CUSTOM_ID: BUG-371-find-get-path-tree-errors-with-bare-meta
+#+EFFORT: 3h
+#+LAYER: coding-agent pi-code-path
+#+PRIORITY: #B
+
+* Initial Message
+
+Find
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ metadata error: No such file or directory (os error 2)                                            │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Find
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ [§no-results] .#tree                                                                              │
+ │   reason:    no-match                                                                             │
+ │   try next:  verify path/symbol exists, or try target: "."                                        │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Get
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ [§no-results] .                                                                                   │
+ │   attached:  #listing (auto)                                                                      │
+ │   resolved:  /home/user/code/ora/cais                                                             │
+ │   reason:    empty-result                                                                         │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+in File: /home/user/.spell/agent/sessions/-code-ora-cais/2026-05-16T11-12-33-866Z_14e36c8f12b84467.jsonl
+
+
+
+Please explain what went wrong.
+
+
+* Initial Message
+
+In a session whose cwd was =/home/user/code/ora/cais= the agent issued:
+
+#+begin_example
+find { target: "/home/user/code/ora/cais/#tree" }
+#+end_example
+
+and received:
+
+#+begin_example
+metadata error: No such file or directory (os error 2)
+#+end_example
+
+The directory exists. Re-running with the documented form
+=<dir>#tree= (no trailing slash) returns nothing more useful, and
+the bare ~metadata error~ tells the caller nothing about what to fix.
+
+The user's verdict: a CodePath that targets an existing directory
+*must not* surface a raw stat() error.
+
+* Symptom
+1. =find { target: "<abs-existing-dir>/#tree" }= → ~metadata error: No such file or directory (os error 2)~
+2. Re-run on a real Elixir/JS repo with a dangling symlink anywhere
+   in the subtree (here: =cais/_build/test/phoenix-colocated/cais/node_modules/phoenix-colocated=)
+   reproduces it deterministically.
+3. The same target without the trailing slash, =<abs-dir>#tree=, returns
+   =[§no-results]= instead — also wrong, but at least diagnostic.
+
+* Root Cause
+Five compounding defects in =crates/pi-code-path=:
+
+** 1. Parser keeps the trailing =/= in the FsLocator
+~parse_code_path("/abs/dir/#tree")~ tokenises the locator as
+
+#+begin_example
+[Literal("/"), Literal("home"), Literal("/"), …, Literal("cais"), Literal("/")]
+#+end_example
+
+The empty segment after the final =/= turns the locator into a glob
+shaped like ~/.../cais/~ rather than the directory itself.
+
+** 2. Walker can't match an absolute path glob against its relative-path entries
+=walker.rs::walk= builds a globset from the locator and matches it
+against ~path.strip_prefix(opts.root)~. When ~opts.root~ equals the
+absolute path, the relative entries are bare names ("README.md",
+"src", …) — they never match the glob =/home/user/code/ora/cais/=.
+Walker therefore returns 0 entries.
+
+** 3. Suffix fallback runs on qualified targets
+With 0 walker entries, =FsResolver::resolve= falls through to
+=try_suffix_match=. That basename-fuzzy search finds three files
+literally named ~cais~ (~lib/cais/~, ~test/cais/~, …) and pushes a
+=§not-found= NodeRef carrying the *original* locator string
+=/home/user/code/ora/cais/=.
+
+Suffix fallback was designed for plain bare-path lookups. Applying
+it to a target with an explicit qualifier (=#tree=, =#listing=,
+=#stat=) is meaningless: the caller asked for *this* path, not for
+"a file with this basename somewhere in the tree".
+
+** 4. Qualifier loop fires on =§not-found= sentinel nodes
+=fs/mod.rs::FsResolver::resolve= unconditionally pipes every node —
+including the synthetic =§not-found= — through =qualifiers::resolve=.
+=#tree= on a not-found marker is a category error.
+
+** 5. =resolve_tree= aborts globally on the first dangling symlink
+=qualifiers.rs::resolve_tree= uses ~std::fs::metadata~ (which
+follows symlinks) and propagates the first error with =?=. One stale
+symlink anywhere in the subtree kills the entire tree response with
+a bare ~metadata error: No such file or directory~ — no path, no
+context, no partial results.
+
+The cais reproduction stops at
+=_build/test/phoenix-colocated/cais/node_modules/phoenix-colocated=.
+
+* Acceptance
+- =find { target: "<abs-existing-dir>/#tree" }= returns the same tree
+  as =find { target: "<abs-existing-dir>#tree" }= and never surfaces
+  a bare =metadata error=.
+- Dangling symlinks inside a =#tree= walk produce per-entry
+  diagnostics (path + reason) attached to the offending NodeRef
+  instead of aborting the whole walk.
+- =§not-found= nodes from =try_suffix_match= are terminal: qualifiers
+  are not applied to them.
+- =try_suffix_match= is skipped entirely when the CodePath carries a
+  qualifier — fuzzy basename fallback only fires for plain bare-path
+  lookups.
+
+* Edge Cases
+- Trailing slash on a glob target (=src/**/=) must still work as today.
+- =/=, =./=, =../= as locators: behaviour gated by BUG-372 (dot alias).
+- Permission-denied entries inside =#tree=: same per-entry treatment
+  as dangling symlinks.
+
+* Tests (failing — TDD)
+- =crates/pi-code-path/src/dialects/fs/qualifiers.rs::tree_walk_swallows_dangling_symlinks=
+- =crates/pi-code-path/src/dialects/fs/mod.rs::tree_with_trailing_slash_equivalent_to_bare=
+- =crates/pi-code-path/src/dialects/fs/mod.rs::suffix_fallback_skipped_when_qualifier_present=
+- =crates/pi-code-path/src/dialects/fs/mod.rs::not_found_node_terminal_for_qualifier=
+
+* Verification
+- =cargo test -p pi-code-path qualifiers::tests::tree_walk_swallows_dangling_symlinks=
+- =cargo test -p pi-code-path dialects::fs::tests=
+- Manual: reproduce on =cais/= and confirm the response lists top-level
+  entries with per-symlink diagnostics rather than a global error.
+
+* Non-goals
+- Reworking the FS dialect grammar (out of scope; covered by FUP-086 if needed).
+- Symlink semantics beyond reporting (no follow/no-follow toggle here).
