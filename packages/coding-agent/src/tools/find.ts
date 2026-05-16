@@ -14,12 +14,7 @@
  * REMOVE_AT_WAVE_11: the GetTool delegation is a transitional shim.
  */
 
-import type {
-	AgentTool,
-	AgentToolContext,
-	AgentToolResult,
-	AgentToolUpdateCallback,
-} from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import type { Component } from "@oh-my-pi/pi-tui";
 import type { RenderResultOptions } from "../extensibility/custom-tools/types";
 import findDescription from "../prompts/tools/find.md" with { type: "text" };
@@ -50,13 +45,14 @@ export class FindTool implements AgentTool<typeof findSchema> {
 		onUpdate?: AgentToolUpdateCallback,
 		context?: AgentToolContext,
 	): Promise<AgentToolResult> {
-		// Single field passthrough. Inject session.cwd as walker root so target
-		// resolution honours the session's working directory — not the kernel's
-		// global project-root default. (Without this, absolute paths outside the
-		// project tree return OUT_OF_PROJECT_ROOT.)
+		// Single field passthrough. Delegate to GetTool. For absolute targets,
+		// omit `root` so GetTool's auto-root from the longest absolute prefix wins;
+		// for relative targets, anchor on session.cwd so they resolve correctly
+		// even when process.cwd() differs (e.g. subagent sessions).
+		const isAbsTarget = params.target.length > 0 && params.target.startsWith("/");
 		return this.delegate.execute(
 			toolCallId,
-			{ target: params.target, root: this.session?.cwd },
+			{ target: params.target, root: isAbsTarget ? undefined : this.session?.cwd },
 			signal,
 			onUpdate,
 			context,

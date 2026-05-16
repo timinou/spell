@@ -1,0 +1,230 @@
+#+TITLE: find/get: absolute target equal to root resolves to empty
+#+STATE: DONE
+#+SESSION_ID: 14e3a518bc01b3f3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T15-19-34-896Z_14e3a518bc01b3f3.jsonl]]
+#+CUSTOM_ID: BUG-380-find-get-absolute-target-equal-to-root-r
+#+DEPENDS: BUG-379-find-get-delete-out-of-project-root-abso
+#+EFFORT: 30m
+#+LAYER: coding-agent
+#+PRIORITY: #B
+
+* Initial Message
+
+Get
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ [§no-results]                                                                                     │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/directory      │
+ │   attached:  #listing (auto)                                                                      │
+ │   resolved:                                                                                       │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/directory      │
+ │   reason:    empty-result                                                                         │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Find
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ OUT_OF_PROJECT_ROOT:                                                                              │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/**/*lock*      │
+ │   project root: /home/user/code/ora/spell                                                         │
+ │   resolved:     /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src│
+ │                                                                                                   │
+ │ (hint: pass gitignore: false to read this file directly, or set root:                             │
+ │ "/home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src" to walk from │
+ │ there.)                                                                                           │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Find
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ OUT_OF_PROJECT_ROOT:                                                                              │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/#tree          │
+ │   project root: /home/user/code/ora/spell                                                         │
+ │   resolved:     /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src│
+ │                                                                                                   │
+ │ (hint: pass gitignore: false to read this file directly, or set root:                             │
+ │ "/home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src" to walk from │
+ │ there.)                                                                                           │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+ I need to use gitignore: false or use get with the right root. Let me try a different approach.
+
+
+ Get
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ [§no-results] /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/ │
+ │   attached:  #tree (auto)                                                                         │
+ │   resolved:  /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src   │
+ │   reason:    empty-result                                                                         │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+ The get tool isn't working with out-of-project paths even with gitignore: false. Let me try bash.
+
+
+ ┌─── ✔ Bash ────────────────────────────────────────────────────────────────────────────────────────┐
+ │ $ find /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src -name   │
+ │ '*.rs' | xargs grep -l 'lock' | head -10                                                          │
+ ├─── Output ────────────────────────────────────────────────────────────────────────────────────────┤
+ │ … (10 earlier lines, showing 10 of 20) (ctrl+o to expand)                                         │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/aggregation/buc│
+ │ ket                                                                                               │
+ │ /term_agg.rs                                                                                      │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/aggregation/cac│
+ │ hed                                                                                               │
+ │ _sub_aggs.rs                                                                                      │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/aggregation/col│
+ │ lec                                                                                               │
+ │ tor.rs                                                                                            │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/aggregation/met│
+ │ ric                                                                                               │
+ │ /cardinality.rs                                                                                   │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/aggregation/met│
+ │ ric
+
+
+
+
+
+------
+
+
+Find the root cause of this issue; this is a confusing surface for the get/find tools....
+
+* Initial Message
+
+Observed in session
+=/home/user/.spell/agent/sessions/-code-ora-concept/2026-05-16T16-09-32-240Z_14e3b087d426cfb5.jsonl=
+(cwd =/home/user/code/ora/concept=, a different project from
+spell).
+
+#+begin_example
+[1] find { target: "/home/user/code/ora/concept/#tree" }
+      → [§no-results] reason: no-match
+[2] get  { target: "/home/user/code/ora/concept/" }
+      → [§no-results] resolved: /home/user/code/ora/concept, reason: empty-result
+[3] bash { command: "ls -la" }
+      → works; 19 entries
+[4..N] all subsequent reads are bash (cat / sed / find | xargs cat / wc -l).
+#+end_example
+
+The agent did exactly the right first move (=find=, then =get=).
+Two consecutive structured no-results on the project's own root
+killed its trust in the structured tools; it escalated to =bash=
+and never came back.
+
+* Symptom
+
+For *any* absolute target whose resolved filesystem path equals
+the walker's root (with or without trailing =/= or =#qualifier=),
+=get= and =find= return =[§no-results]= even though =ls= /
+=cat= on the same path work.
+
+#+begin_example
+find { target: "/home/user/code/ora/concept/#tree" }   → [§no-results]
+get  { target: "/home/user/code/ora/concept/" }         → [§no-results]
+get  { target: "/home/user/code/ora/concept" }          → [§no-results]
+#+end_example
+
+This is reproducible after the BUG-379 fix; this bug exposes a
+residual hole in =makeRelativeToRoot=.
+
+* Root Cause
+
+=packages/coding-agent/src/tools/get.ts::makeRelativeToRoot=:
+
+#+begin_src ts
+const rel = path.relative(rootDir, base);
+if (rel === "") return target;   // ← target IS root → return absolute → kernel chokes
+if (!rel.startsWith("..") && !path.isAbsolute(rel)) return rel + suffix;
+return target;
+#+end_src
+
+When the absolute target resolves to the walker root itself,
+=path.relative= returns =""=. The early-return passes the absolute
+target back to the kernel. The kernel walker treats =target= as a
+path /inside/ =root=, so =root=, =target=/=root/=, =target=/=root/=,
+or =target=/=root/#tree=, =target= all resolve to "find an entry
+named =<root>= inside =<root>=" → empty.
+
+The correct mapping when =rel === ""= is =.= (or =suffix= alone if
+suffix already begins with =#=/=:=) so the walker resolves to the
+root entry itself.
+
+* Acceptance
+
+** Behaviour
+- =get { target: "/abs/root" }= where =/abs/root= equals the
+  computed walker root → returns the directory listing.
+- =get { target: "/abs/root/" }= → same.
+- =get { target: "/abs/root#tree" }= → returns the tree.
+- =get { target: "/abs/root#listing" }= → returns one-level listing.
+- =find { target: "/abs/root/#tree" }= from a session rooted at
+  =/abs/root= → returns the tree (regression of the original repro).
+- Existing FEAT-816 tests still pass (no regression in
+  out-of-cwd handling).
+
+** Mechanism
+In =makeRelativeToRoot=, replace the =if (rel === "") return target=
+branch with =if (rel === "") return "." + suffix= (suffix carries
+the qualifier/symbol-query verbatim, so =.#tree=, =.#listing=,
+=.::§line[...]= all work).
+
+* Edge Cases
+
+- =suffix === ""= (bare path equal to root) → =target = "."=.
+  Kernel must accept =.= as the entire target. If not, fallback to
+  =buildDirQualifier(".",  params)= attaching =#listing= — but the
+  bare-plain branch in =execute()= already does this for relative
+  =.=, so we should be re-using that path. Verify in a test.
+- Trailing-slash variation: =/abs/root/= and =/abs/root= must yield
+  the same answer.
+- Qualifier with embedded =/=: =/abs/root/file#raw= where the
+  prefix is also =/abs/root= — =base= is =/abs/root/file=,
+  =rel = "file"=, =rel + "#raw"= → unchanged. No regression.
+- =root: "/other"= override with target =/abs/root= where
+  =/abs/root= sits under =/other=: =rel= becomes non-empty, no
+  change. Already covered.
+
+* Tests (TDD — new describe `BUG-380` inside get.test.ts)
+
+1. ="get on absolute path equal to session cwd lists directory"= —
+   create =/tmp/spell-bug380-<id>/{a.txt,b.txt}=, run with
+   =process.cwd()= temporarily set OR pass explicit
+   =root: outsideRoot=; assert both filenames appear, no
+   =[§no-results]=.
+2. ="get on absolute path equal to root with #tree returns tree"= —
+   same fixture with nested =a/b/leaf.txt=; target
+   =${root}#tree=; assert =leaf.txt= present.
+3. ="find on absolute path equal to session.cwd lists directory"= —
+   construct =FindTool= with =createSession({ cwd: outsideRoot })=;
+   target =outsideRoot=; assert listing present (matches the
+   original session's repro shape).
+4. ="trailing slash on root-equal target behaves like no slash"= —
+   target =`${root}/`=; assert identical to target =root=.
+
+* Verification
+
+#+begin_src bash
+bun test packages/coding-agent/test/get.test.ts -t "BUG-380"
+bun test packages/coding-agent/test/get.test.ts
+cd packages/coding-agent && bun run check
+#+end_src
+
+Manual repro (post-fix):
+=find { target: "<your cwd>/#tree" }= → tree output, no =[§no-results]=.
+
+* Non-goals
+
+- Surfacing the overloaded =[§no-results]= problem at large
+  (separate FUP: distinguish "directory empty" from "kernel
+  can't address target").
+- Kernel-side fix: TS-side mapping is sufficient and cheaper.
+
+* Related
+- [[id:BUG-379-find-get-delete-out-of-project-root-abso]]
+- Session: =/home/user/.spell/agent/sessions/-code-ora-concept/2026-05-16T16-09-32-240Z_14e3b087d426cfb5.jsonl=
+
+NOTE [2026-05-16]: Fixed TDD-style. Root cause: `makeRelativeToRoot` returned the original absolute target when `path.relative === ""`, but the kernel can't resolve `<root>` inside `<root>` for some root paths (incl. spell's own cwd) and returns []. Compounded by a cwd-skip optimization that bypassed the conversion for all in-cwd absolute paths. Fix: (1) when `rel === ""`, return `.` + suffix (special-case `#listing` → bare `.` because kernel rejects `.#listing`); (2) hoist a `rootEqual` escape past the cwd-skip so root-equal targets always convert. 4 new BUG-380 tests + 10 wire-format updates to existing T1.* tests (the old assertions locked in the broken `<abs>#qual` wire format). 75/75 in get.test.ts; 89/89 across get/negative/get-image. Smoke test on the original spell cwd repro returns content correctly.

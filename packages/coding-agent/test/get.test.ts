@@ -46,12 +46,12 @@ describe("GetTool", () => {
 
 	it("dispatches bare path target (non-existent file passes through unchanged)", async () => {
 		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
-			makeChunk([{ locator: "src/main.ts", kind: "file", content: { text: "export const x = 1;" } }]),
+			makeChunk([{ locator: "nonexistent-feat816", kind: "file", content: { text: "content" } }]),
 		]);
 		const tool = new GetTool();
-		const result = await tool.execute("t", { target: "src/main.ts" });
-		expect(getText(result)).toContain("src/main.ts");
-		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ command: "get", target: "src/main.ts" }));
+		const result = await tool.execute("t", { target: "nonexistent-feat816" });
+		expect(getText(result)).toContain("nonexistent-feat816");
+		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ command: "get", target: "nonexistent-feat816" }));
 	});
 
 	it("auto-attaches #raw when target is a bare path to an existing file", async () => {
@@ -242,7 +242,9 @@ describe("GetTool", () => {
 				]);
 				const tool = new GetTool();
 				await tool.execute("t", { target: tmp });
-				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#listing` }));
+				// BUG-380: bare dir target self-roots to itself; root-equal
+				// case collapses to `.` (kernel can't address `<root>#listing`).
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: ".", root: tmp }));
 			} finally {
 				await fs.rm(tmp, { recursive: true });
 			}
@@ -258,7 +260,7 @@ describe("GetTool", () => {
 				]);
 				const tool = new GetTool();
 				await tool.execute("t", { target: `${tmp}/` });
-				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#listing` }));
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: ".", root: tmp }));
 			} finally {
 				await fs.rm(tmp, { recursive: true });
 			}
@@ -274,7 +276,7 @@ describe("GetTool", () => {
 				]);
 				const tool = new GetTool();
 				await tool.execute("t", { target: tmp });
-				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#listing` }));
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: ".", root: tmp }));
 			} finally {
 				await fs.rm(tmp, { recursive: true });
 			}
@@ -290,7 +292,7 @@ describe("GetTool", () => {
 				]);
 				const tool = new GetTool();
 				await tool.execute("t", { target: tmp, recursive: true });
-				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#tree` }));
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: ".#tree", root: tmp }));
 			} finally {
 				await fs.rm(tmp, { recursive: true });
 			}
@@ -306,7 +308,7 @@ describe("GetTool", () => {
 				]);
 				const tool = new GetTool();
 				await tool.execute("t", { target: tmp, depth: 2 });
-				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#tree[depth=2]` }));
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: ".#tree[depth=2]", root: tmp }));
 			} finally {
 				await fs.rm(tmp, { recursive: true });
 			}
@@ -322,13 +324,14 @@ describe("GetTool", () => {
 				]);
 				const tool = new GetTool();
 				await tool.execute("t", { target: tmp, recursive: true, depth: 3 });
-				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#tree[depth=3]` }));
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: ".#tree[depth=3]", root: tmp }));
 			} finally {
 				await fs.rm(tmp, { recursive: true });
 			}
 		});
 
-		// T1.7: content: false + bare dir → unchanged (no auto-attach, escape hatch)
+		// T1.7: content: false + bare dir → unchanged at the qualifier level, but
+		// still self-roots and addresses root via `.` (kernel quirk, BUG-380).
 		it("does not auto-attach when content=false for a directory", async () => {
 			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-get-nocontent");
 			await fs.mkdir(tmp, { recursive: true });
@@ -338,7 +341,7 @@ describe("GetTool", () => {
 				]);
 				const tool = new GetTool();
 				await tool.execute("t", { target: tmp, content: false });
-				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: tmp }));
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: ".", root: tmp }));
 			} finally {
 				await fs.rm(tmp, { recursive: true });
 			}
@@ -387,7 +390,7 @@ describe("GetTool", () => {
 				]);
 				const tool = new GetTool();
 				await tool.execute("t", { target: `${tmp}#tree[depth=1]` });
-				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#tree[depth=1]` }));
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: ".#tree[depth=1]", root: tmp }));
 			} finally {
 				await fs.rm(tmp, { recursive: true });
 			}
@@ -403,7 +406,7 @@ describe("GetTool", () => {
 				]);
 				const tool = new GetTool();
 				await tool.execute("t", { target: `${tmp}#listing`, recursive: true });
-				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#listing` }));
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: ".", root: tmp }));
 			} finally {
 				await fs.rm(tmp, { recursive: true });
 			}
@@ -419,7 +422,7 @@ describe("GetTool", () => {
 				]);
 				const tool = new GetTool();
 				await tool.execute("t", { target: tmp, depth: 5, recursive: false });
-				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: `${tmp}#tree[depth=5]` }));
+				expect(spy).toHaveBeenCalledWith(expect.objectContaining({ target: ".#tree[depth=5]", root: tmp }));
 			} finally {
 				await fs.rm(tmp, { recursive: true });
 			}
@@ -760,62 +763,6 @@ describe("GetTool", () => {
 	});
 
 	// ─────────────────────────────────────────────────────────────
-	// BUG-348: gitignore diagnostics — no false positives,
-	// gitignore:false actually works for files outside walker root.
-	// ─────────────────────────────────────────────────────────────
-	describe("BUG-348: gitignore hint truth", () => {
-		it("emits OUT_OF_PROJECT_ROOT for absolute paths outside cwd", async () => {
-			const outsideRoot = nodePath.join("/tmp", `spell-bug348-${Date.now()}`);
-			await fs.mkdir(outsideRoot, { recursive: true });
-			const real = nodePath.join(outsideRoot, "out.txt");
-			await fs.writeFile(real, "hello\n", "utf-8");
-			try {
-				const tool = new GetTool();
-				const result = await tool.execute("t", { target: real });
-				const text = getText(result);
-				expect(text).toContain("OUT_OF_PROJECT_ROOT");
-				// Must not falsely claim the file is gitignored — only mention
-				// the gitignore: false param as a possible repair.
-				expect(text).not.toContain("may be excluded by .gitignore");
-			} finally {
-				await fs.rm(outsideRoot, { recursive: true });
-			}
-		});
-
-		it("gitignore:false reads out-of-root file directly", async () => {
-			const outsideRoot = nodePath.join("/tmp", `spell-bug348b-${Date.now()}`);
-			await fs.mkdir(outsideRoot, { recursive: true });
-			const real = nodePath.join(outsideRoot, "out.txt");
-			await fs.writeFile(real, "out-of-root content\n", "utf-8");
-			try {
-				const tool = new GetTool();
-				const result = await tool.execute("t", { target: real, gitignore: false });
-				const text = getText(result);
-				expect(text).toContain("out-of-root content");
-			} finally {
-				await fs.rm(outsideRoot, { recursive: true });
-			}
-		});
-
-		it("does not suggest gitignore for tracked file with empty kernel result", async () => {
-			// A tracked file that the kernel happens to return zero nodes for
-			// (e.g. due to pagination or query filter) must NOT trigger a
-			// false gitignore hint.
-			const tmp = nodePath.join(process.cwd(), "packages/coding-agent/test/tmp-bug348-tracked");
-			await fs.mkdir(tmp, { recursive: true });
-			const real = nodePath.join(tmp, "tracked.txt");
-			await fs.writeFile(real, "hi\n", "utf-8");
-			try {
-				spyOn(nativesModule, "executeCodePath").mockResolvedValue([makeChunk([])]);
-				const tool = new GetTool();
-				const result = await tool.execute("t", { target: real });
-				const text = getText(result);
-				expect(text).not.toContain("gitignore");
-			} finally {
-				await fs.rm(tmp, { recursive: true });
-			}
-		});
-	});
 
 	// ─────────────────────────────────────────────────────────────
 	// FEAT-714: enriched §no-results diagnostic with reason + try-next
@@ -985,76 +932,302 @@ describe("GetTool", () => {
 	});
 });
 
-// ───────────────────────────────────────────────────────────────────────────
-// BUG-373: out-of-root dir/glob/qualified targets must emit the same
-// structured OUT_OF_PROJECT_ROOT diagnostic that BUG-348 introduced for
-// files — not silent `[§no-results] empty-result`.
-// ───────────────────────────────────────────────────────────────────────────
-describe("BUG-373: out-of-root symmetry for non-file targets", () => {
-	it("emits OUT_OF_PROJECT_ROOT for an absolute directory outside cwd", async () => {
-		const outsideRoot = nodePath.join("/tmp", `spell-bug373a-${Date.now()}`);
+
+// ─────────────────────────────────────────────────────────────
+// FEAT-816: absolute targets outside session cwd self-root via
+// effectiveRoot computation — no OUT_OF_PROJECT_ROOT wall.
+// ─────────────────────────────────────────────────────────────
+describe("FEAT-816: absolute targets self-root", () => {
+	afterEach(() => {
+		try {
+			(spyOn(nativesModule, "executeCodePath") as any).mockRestore?.();
+		} catch {}
+	});
+
+	it("reads an absolute file outside session cwd", async () => {
+		const outsideRoot = nodePath.join("/tmp", `spell-feat816-read-${Date.now()}-${Math.random()}`);
 		await fs.mkdir(outsideRoot, { recursive: true });
-		await fs.writeFile(nodePath.join(outsideRoot, "a.txt"), "hi", "utf-8");
+		const real = nodePath.join(outsideRoot, "out.txt");
+		await fs.writeFile(real, "hello world\n", "utf-8");
+		try {
+			const tool = new GetTool();
+			const result = await tool.execute("t", { target: real });
+			const text = getText(result);
+			expect(text).toContain("hello world");
+			expect(text).not.toContain("OUT_OF_PROJECT_ROOT");
+		} finally {
+			await fs.rm(outsideRoot, { recursive: true });
+		}
+	});
+
+	it("lists an absolute directory outside session cwd", async () => {
+		const outsideRoot = nodePath.join("/tmp", `spell-feat816-list-${Date.now()}-${Math.random()}`);
+		await fs.mkdir(outsideRoot, { recursive: true });
+		await fs.writeFile(nodePath.join(outsideRoot, "a.txt"), "", "utf-8");
+		await fs.writeFile(nodePath.join(outsideRoot, "b.txt"), "", "utf-8");
 		try {
 			const tool = new GetTool();
 			const result = await tool.execute("t", { target: outsideRoot });
 			const text = getText(result);
-			expect(text).toContain("OUT_OF_PROJECT_ROOT");
-			// Must not regress to the old empty-result framing.
-			expect(text).not.toMatch(/empty-result/);
-		} finally {
-			await fs.rm(outsideRoot, { recursive: true });
-		}
-	});
-
-	it("emits OUT_OF_PROJECT_ROOT for an absolute glob outside cwd", async () => {
-		const outsideRoot = nodePath.join("/tmp", `spell-bug373b-${Date.now()}`);
-		await fs.mkdir(outsideRoot, { recursive: true });
-		await fs.writeFile(nodePath.join(outsideRoot, "x.ts"), "", "utf-8");
-		try {
-			const tool = new GetTool();
-			const result = await tool.execute("t", {
-				target: `${outsideRoot}/*.ts`,
-			});
-			const text = getText(result);
-			expect(text).toContain("OUT_OF_PROJECT_ROOT");
-		} finally {
-			await fs.rm(outsideRoot, { recursive: true });
-		}
-	});
-
-	it("emits OUT_OF_PROJECT_ROOT for an absolute qualified target outside cwd", async () => {
-		const outsideRoot = nodePath.join("/tmp", `spell-bug373c-${Date.now()}`);
-		await fs.mkdir(outsideRoot, { recursive: true });
-		await fs.writeFile(nodePath.join(outsideRoot, "a.txt"), "", "utf-8");
-		try {
-			const tool = new GetTool();
-			const result = await tool.execute("t", {
-				target: `${outsideRoot}#tree`,
-			});
-			const text = getText(result);
-			expect(text).toContain("OUT_OF_PROJECT_ROOT");
-			// And it must not be the cryptic `metadata error` from BUG-371.
-			expect(text).not.toContain("metadata error");
-		} finally {
-			await fs.rm(outsideRoot, { recursive: true });
-		}
-	});
-
-	it("honours an explicit `root:` override for out-of-cwd targets", async () => {
-		const outsideRoot = nodePath.join("/tmp", `spell-bug373d-${Date.now()}`);
-		await fs.mkdir(outsideRoot, { recursive: true });
-		await fs.writeFile(nodePath.join(outsideRoot, "a.txt"), "hi", "utf-8");
-		try {
-			const tool = new GetTool();
-			const result = await tool.execute("t", {
-				target: outsideRoot,
-				root: outsideRoot,
-			});
-			const text = getText(result);
-			// With root pinned, the listing must succeed — no OUT_OF_PROJECT_ROOT.
-			expect(text).not.toContain("OUT_OF_PROJECT_ROOT");
 			expect(text).toContain("a.txt");
+			expect(text).toContain("b.txt");
+			expect(text).not.toContain("OUT_OF_PROJECT_ROOT");
+		} finally {
+			await fs.rm(outsideRoot, { recursive: true });
+		}
+	});
+
+	it("trees an absolute directory outside session cwd with #tree", async () => {
+		const outsideRoot = nodePath.join("/tmp", `spell-feat816-tree-${Date.now()}-${Math.random()}`);
+		await fs.mkdir(nodePath.join(outsideRoot, "a", "b"), { recursive: true });
+		const leaf = nodePath.join(outsideRoot, "a", "b", "leaf.txt");
+		await fs.writeFile(leaf, "", "utf-8");
+		try {
+			const tool = new GetTool();
+			const result = await tool.execute("t", { target: `${outsideRoot}#tree` });
+			const text = getText(result);
+			expect(text).toContain("leaf.txt");
+			expect(text).not.toContain("OUT_OF_PROJECT_ROOT");
+		} finally {
+			await fs.rm(outsideRoot, { recursive: true });
+		}
+	});
+
+	it("walks an absolute glob outside session cwd", async () => {
+		const outsideRoot = nodePath.join("/tmp", `spell-feat816-glob-${Date.now()}-${Math.random()}`);
+		await fs.mkdir(outsideRoot, { recursive: true });
+		await fs.writeFile(nodePath.join(outsideRoot, "a.ts"), "", "utf-8");
+		await fs.writeFile(nodePath.join(outsideRoot, "b.ts"), "", "utf-8");
+		await fs.writeFile(nodePath.join(outsideRoot, "c.md"), "", "utf-8");
+		try {
+			const tool = new GetTool();
+			const result = await tool.execute("t", { target: `${outsideRoot}/*.ts` });
+			const text = getText(result);
+			expect(text).toContain("a.ts");
+			expect(text).toContain("b.ts");
+			expect(text).not.toContain("c.md");
+			expect(text).not.toContain("OUT_OF_PROJECT_ROOT");
+		} finally {
+			await fs.rm(outsideRoot, { recursive: true });
+		}
+	});
+
+	it("applies grep qualifier to an absolute path outside session cwd", async () => {
+		const outsideRoot = nodePath.join("/tmp", `spell-feat816-grep-${Date.now()}-${Math.random()}`);
+		await fs.mkdir(outsideRoot, { recursive: true });
+		await fs.writeFile(nodePath.join(outsideRoot, "notes.txt"), "TODO: fix me\n", "utf-8");
+		try {
+			const tool = new GetTool();
+			const result = await tool.execute("t", {
+				target: `${outsideRoot}/*.txt::§line[text~="TODO"]`,
+			});
+			const text = getText(result);
+			expect(text).toContain("TODO");
+			expect(text).not.toContain("OUT_OF_PROJECT_ROOT");
+		} finally {
+			await fs.rm(outsideRoot, { recursive: true });
+		}
+	});
+
+	it("explicit root: override still wins over auto-root", async () => {
+		const outDir = nodePath.join("/tmp", `spell-feat816-root-${Date.now()}-${Math.random()}`);
+		await fs.mkdir(outDir, { recursive: true });
+		const absFile = nodePath.join(outDir, "x.txt");
+		await fs.writeFile(absFile, "data", "utf-8");
+		const otherDir = nodePath.join("/tmp", `spell-feat816-other-${Date.now()}-${Math.random()}`);
+		await fs.mkdir(otherDir, { recursive: true });
+		try {
+			const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+				makeChunk([{ locator: absFile, kind: "file", content: { text: "data" } }]),
+			]);
+			const tool = new GetTool();
+			await tool.execute("t", { target: absFile, root: otherDir });
+			expect(spy).toHaveBeenCalledWith(
+				expect.objectContaining({ command: "get", target: `${absFile}#raw`, root: otherDir }),
+			);
+		} finally {
+			await fs.rm(outDir, { recursive: true });
+			await fs.rm(otherDir, { recursive: true });
+		}
+	});
+
+	it("relative bare glob still scoped to session cwd", async () => {
+		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+			makeChunk([{ locator: "nonexistent-feat816-marker", kind: "file" }]),
+		]);
+		const tool = new GetTool();
+		await tool.execute("t", { target: "**/*.nonexistent-feat816-marker" });
+		expect(spy).toHaveBeenCalledWith(
+			expect.objectContaining({ root: process.cwd() }),
+		);
+	});
+
+	it("relative path with ../ still resolves against cwd", async () => {
+		const relPath = `../spell-feat816-relative-${Date.now()}-${Math.random()}.txt`;
+		const absPath = nodePath.resolve(process.cwd(), relPath);
+		await fs.writeFile(absPath, "relative test\n", "utf-8");
+		try {
+			const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+				makeChunk([{ locator: relPath, kind: "file", content: { text: "relative test\n" } }]),
+			]);
+			const tool = new GetTool();
+			await tool.execute("t", { target: relPath });
+			expect(spy).toHaveBeenCalledWith(
+				expect.objectContaining({ root: process.cwd() }),
+			);
+		} finally {
+			await fs.rm(absPath, { force: true });
+		}
+	});
+
+	it("gitignore: false still works for in-root gitignored files", async () => {
+		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+			makeChunk([{ locator: "gitignored.txt", kind: "file", content: { text: "ignored" } }]),
+		]);
+		const tool = new GetTool();
+		await tool.execute("t", { target: "gitignored.txt", gitignore: false });
+		expect(spy).toHaveBeenCalledWith(
+			expect.objectContaining({ gitignore: false }),
+		);
+	});
+
+	it("find tool surfaces same absolute-target reads", async () => {
+		const outsideRoot = nodePath.join("/tmp", `spell-feat816-find-${Date.now()}-${Math.random()}`);
+		await fs.mkdir(outsideRoot, { recursive: true });
+		await fs.writeFile(nodePath.join(outsideRoot, "listed.txt"), "", "utf-8");
+		try {
+			const { FindTool } = await import("@oh-my-pi/pi-coding-agent/tools");
+			const findTool = new FindTool();
+			const result = await findTool.execute("t", { target: outsideRoot });
+			const text = getText(result);
+			expect(text).toContain("listed.txt");
+			expect(text).not.toContain("OUT_OF_PROJECT_ROOT");
+		} finally {
+			await fs.rm(outsideRoot, { recursive: true });
+		}
+	});
+
+	it("find tool auto-roots absolute target even when session.cwd is set", async () => {
+		// Regression: session.cwd must NOT clobber auto-root for absolute
+		// targets. Otherwise find from a spell session would re-introduce
+		// the OUT_OF_PROJECT_ROOT wall this BUG-379 deletes.
+		const outsideRoot = nodePath.join("/tmp", `spell-feat816-findses-${Date.now()}-${Math.random()}`);
+		await fs.mkdir(outsideRoot, { recursive: true });
+		await fs.writeFile(nodePath.join(outsideRoot, "anchored.txt"), "", "utf-8");
+		try {
+			const { FindTool } = await import("@oh-my-pi/pi-coding-agent/tools");
+			const findTool = new FindTool(createSession({ cwd: process.cwd() }));
+			const result = await findTool.execute("t", { target: outsideRoot });
+			const text = getText(result);
+			expect(text).toContain("anchored.txt");
+			expect(text).not.toContain("OUT_OF_PROJECT_ROOT");
+		} finally {
+			await fs.rm(outsideRoot, { recursive: true });
+		}
+	});
+
+	it("find tool anchors relative target to session.cwd", async () => {
+		// The auto-root opt-out for absolute targets must NOT regress
+		// the relative-path case: relative targets still resolve against
+		// session.cwd, not process.cwd().
+		const { FindTool } = await import("@oh-my-pi/pi-coding-agent/tools");
+		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([makeChunk([])]);
+		const findTool = new FindTool(createSession({ cwd: "/tmp" }));
+		await findTool.execute("t", { target: "relative/path.ts" });
+		expect(spy).toHaveBeenCalledWith(expect.objectContaining({ root: "/tmp" }));
+	});
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// BUG-380: absolute target equal to walker root must list/tree the root,
+// not silently return [§no-results]. Original repro:
+//   session.cwd === process.cwd() === /abs/repo
+//   find { target: "/abs/repo/#tree" } → [§no-results]   (was)
+//                                       → tree of /abs/repo  (now)
+// ───────────────────────────────────────────────────────────────────────────
+describe("BUG-380: absolute target equal to root", () => {
+	// The kernel walker treats `target` as a path inside `root`. When `target`
+	// resolves to the root itself, the kernel returns []. The TS layer must map
+	// the root-equal case to `.` + suffix so the kernel resolves to root.
+	// These tests assert the conversion at the kernel boundary directly
+	// (kernel-path-specific quirks are not hermetically reproducible).
+
+	afterEach(() => {
+		try {
+			(spyOn(nativesModule, "executeCodePath") as any).mockRestore?.();
+		} catch {}
+	});
+
+	it("converts bare absolute target equal to root into '.'", async () => {
+		// Bare dir target auto-attaches `#listing`. The kernel rejects
+		// `.#listing` ("Not a directory"), so the root-equal mapping collapses
+		// to plain `.` which produces the same listing.
+		const outsideRoot = nodePath.join("/tmp", `spell-bug380-${Date.now()}-${Math.random()}`);
+		await fs.mkdir(outsideRoot, { recursive: true });
+		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+			makeChunk([{ locator: "alpha.txt", kind: "file", content: { text: "" } }]),
+		]);
+		try {
+			const tool = new GetTool();
+			await tool.execute("t", { target: outsideRoot });
+			expect(spy).toHaveBeenCalledWith(
+				expect.objectContaining({ target: ".", root: outsideRoot }),
+			);
+		} finally {
+			await fs.rm(outsideRoot, { recursive: true });
+		}
+	});
+
+	it("converts qualified absolute target equal to root into '.#tree'", async () => {
+		const outsideRoot = nodePath.join("/tmp", `spell-bug380-tree-${Date.now()}-${Math.random()}`);
+		await fs.mkdir(outsideRoot, { recursive: true });
+		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+			makeChunk([{ locator: "leaf.txt", kind: "file", content: { text: "" } }]),
+		]);
+		try {
+			const tool = new GetTool();
+			await tool.execute("t", { target: `${outsideRoot}#tree` });
+			expect(spy).toHaveBeenCalledWith(
+				expect.objectContaining({ target: ".#tree", root: outsideRoot }),
+			);
+		} finally {
+			await fs.rm(outsideRoot, { recursive: true });
+		}
+	});
+
+	it("converts trailing-slash absolute target equal to root into '.'", async () => {
+		const outsideRoot = nodePath.join("/tmp", `spell-bug380-slash-${Date.now()}-${Math.random()}`);
+		await fs.mkdir(outsideRoot, { recursive: true });
+		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+			makeChunk([{ locator: "x.txt", kind: "file", content: { text: "" } }]),
+		]);
+		try {
+			const tool = new GetTool();
+			await tool.execute("t", { target: `${outsideRoot}/#tree` });
+			expect(spy).toHaveBeenCalledWith(
+				expect.objectContaining({ target: ".#tree", root: outsideRoot }),
+			);
+		} finally {
+			await fs.rm(outsideRoot, { recursive: true });
+		}
+	});
+
+	it("sub-path under explicit root still converts to relative, not '.'", async () => {
+		// Regression: don't break the FEAT-816 non-equal case. With an
+		// explicit `root:` that anchors above the target, the relative path
+		// must be non-empty.
+		const outsideRoot = nodePath.join("/tmp", `spell-bug380-sub-${Date.now()}-${Math.random()}`);
+		await fs.mkdir(nodePath.join(outsideRoot, "sub"), { recursive: true });
+		await fs.writeFile(nodePath.join(outsideRoot, "sub", "x.txt"), "", "utf-8");
+		const spy = spyOn(nativesModule, "executeCodePath").mockResolvedValue([
+			makeChunk([{ locator: "sub/x.txt", kind: "file", content: { text: "" } }]),
+		]);
+		try {
+			const tool = new GetTool();
+			await tool.execute("t", { target: `${outsideRoot}/sub`, root: outsideRoot });
+			expect(spy).toHaveBeenCalledWith(
+				expect.objectContaining({ target: "sub#listing", root: outsideRoot }),
+			);
 		} finally {
 			await fs.rm(outsideRoot, { recursive: true });
 		}

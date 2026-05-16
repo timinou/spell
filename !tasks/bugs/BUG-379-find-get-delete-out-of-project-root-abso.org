@@ -1,0 +1,277 @@
+#+TITLE: find/get: delete OUT_OF_PROJECT_ROOT — absolute targets self-root
+#+STATE: DONE
+#+SESSION_ID: 14e3a518bc01b3f3
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T15-19-34-896Z_14e3a518bc01b3f3.jsonl]]
+#+CUSTOM_ID: BUG-379-find-get-delete-out-of-project-root-abso
+#+DEPENDS: BUG-348-get-gitignore-hint-fires-falsely-gitigno BUG-373-find-get-out-of-root-dir-glob-targets-si
+#+EFFORT: 2h
+#+LAYER: coding-agent
+#+PRIORITY: #B
+#+SUPERSEDES: FUP-086-find-get-walk-outside-project-root-by-de
+
+* Initial Message
+
+Get
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ [§no-results]                                                                                     │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/directory      │
+ │   attached:  #listing (auto)                                                                      │
+ │   resolved:                                                                                       │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/directory      │
+ │   reason:    empty-result                                                                         │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Find
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ OUT_OF_PROJECT_ROOT:                                                                              │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/**/*lock*      │
+ │   project root: /home/user/code/ora/spell                                                         │
+ │   resolved:     /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src│
+ │                                                                                                   │
+ │ (hint: pass gitignore: false to read this file directly, or set root:                             │
+ │ "/home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src" to walk from │
+ │ there.)                                                                                           │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+ Find
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ OUT_OF_PROJECT_ROOT:                                                                              │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/#tree          │
+ │   project root: /home/user/code/ora/spell                                                         │
+ │   resolved:     /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src│
+ │                                                                                                   │
+ │ (hint: pass gitignore: false to read this file directly, or set root:                             │
+ │ "/home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src" to walk from │
+ │ there.)                                                                                           │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+ I need to use gitignore: false or use get with the right root. Let me try a different approach.
+
+
+ Get
+ ┌─── ✔ Get ─────────────────────────────────────────────────────────────────────────────────────────┐
+ │ [§no-results] /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/ │
+ │   attached:  #tree (auto)                                                                         │
+ │   resolved:  /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src   │
+ │   reason:    empty-result                                                                         │
+ └───────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+ The get tool isn't working with out-of-project paths even with gitignore: false. Let me try bash.
+
+
+ ┌─── ✔ Bash ────────────────────────────────────────────────────────────────────────────────────────┐
+ │ $ find /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src -name   │
+ │ '*.rs' | xargs grep -l 'lock' | head -10                                                          │
+ ├─── Output ────────────────────────────────────────────────────────────────────────────────────────┤
+ │ … (10 earlier lines, showing 10 of 20) (ctrl+o to expand)                                         │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/aggregation/buc│
+ │ ket                                                                                               │
+ │ /term_agg.rs                                                                                      │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/aggregation/cac│
+ │ hed                                                                                               │
+ │ _sub_aggs.rs                                                                                      │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/aggregation/col│
+ │ lec                                                                                               │
+ │ tor.rs                                                                                            │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/aggregation/met│
+ │ ric                                                                                               │
+ │ /cardinality.rs                                                                                   │
+ │ /home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/aggregation/met│
+ │ ric
+
+
+
+
+
+------
+
+
+Find the root cause of this issue; this is a confusing surface for the get/find tools....
+
+* Initial Message
+
+User direction (2026-05-16): "what is most ergonomic? please
+explain simply and comprehensively" → conclusion: =OUT_OF_PROJECT_ROOT=
+should not exist. An absolute target carries its own scope; the
+project-root guard exists to protect *relative* targets from
+escaping the session cwd, not to deny absolute targets the kernel
+can otherwise read.
+
+This supersedes FUP-086 (KDL =fs.walk-mode= scheme): no new
+config knob, no allowlist/denylist, no three-mode toggle. Just
+delete the wall.
+
+* Symptom
+
+In a spell session rooted at =/home/user/code/ora/spell=, the user
+tried to read tantivy source from the cargo registry:
+
+#+begin_example
+get { target: "/home/user/.cargo/.../tantivy-0.26.1/src/directory" }
+  → [§no-results] empty-result (silent; BUG-373 escape hatch did not fire
+                                because the file is a *directory*, not
+                                a file path going through the bare-plain
+                                short-circuit's isFile() branch)
+
+find { target: ".../tantivy-0.26.1/src/**/*lock*" }
+  → OUT_OF_PROJECT_ROOT
+    hint: "pass gitignore: false to read this file directly"
+  ↑ misleading: find has *no* gitignore parameter (findSchema is one-field).
+
+get { target: ".../src/", gitignore: false }
+  → [§no-results] empty-result
+  ↑ broken: gitignore:false short-circuit only handles isFile(); for
+    directories the bare-plain branch silently re-falls-through to the
+    kernel walker.
+#+end_example
+
+The error class is artificial. The kernel can walk arbitrary
+absolute paths when given the right =root=. The TS surface was
+fighting that capability.
+
+* Root Cause
+
+=packages/coding-agent/src/tools/get.ts= treats =isInsideRoot(prefix, cwd)=
+as a hard wall and forces the caller to pass an escape hatch
+(=gitignore: false= for files; =root: "..."= for everything else).
+But:
+
+1. The =gitignore: false= escape only works for *files* (the
+   =stat.isFile()= branch at L220). Directories, globs, and
+   qualified targets silently degrade to =empty-result= because
+   the bare-plain =isDirectory()= branch never checks =inRoot=.
+
+2. The =root:= override works for both =get= and =find=, but
+   =findSchema= does not expose =root= or =gitignore=, so the
+   diagnostic's hint is unreachable from =find=.
+
+3. The pre-check at L170 is skipped whenever =gitignore === false=,
+   which silences the only diagnostic dirs/globs would have gotten,
+   producing the silent =empty-result= the user saw.
+
+The underlying truth: an absolute target like =/abs/dir/= is
+self-scoping. The session's project root is only meaningful for
+*relative* paths (`src/foo.ts`, `**/*.rs`) where the walker must
+choose a base. For absolute targets the walker simply needs the
+right base — which we already have, embedded in the target.
+
+* Acceptance
+
+** Behaviour
+- =get { target: "/abs/file.rs" }= → reads the file.
+- =get { target: "/abs/dir/" }= → lists the directory.
+- =get { target: "/abs/dir/#tree" }= → tree.
+- =get { target: "/abs/dir/**/*.rs" }= → walks under =/abs/dir/=.
+- =get { target: "/abs/file.rs::§line[text~='TODO']" }= → grep.
+- =find { target: "/abs/..." }= → identical (no schema changes).
+- =get { target: "src/foo.rs" }= → unchanged (resolves against session cwd).
+- =get { target: "**/*.rs" }= → unchanged (scoped to session cwd).
+- =get { target: "../../etc/passwd" }= → unchanged (still resolves against cwd, still scoped).
+
+** Surface
+- =OUT_OF_PROJECT_ROOT= error class deleted from =get.ts= and from
+  =GetToolResultDetails.error= contract.
+- =isInsideRoot= helper deleted (no other consumers).
+- =gitignore: false= remains as the escape hatch for *in-root*
+  gitignored files. Out-of-root semantics no longer depend on it.
+- =findSchema= unchanged (still single =target= field).
+- Diagnostic hint =(hint: pass gitignore: false …)= deleted.
+
+** Mechanism
+=get.ts= computes an =effectiveRoot= by extracting the longest
+absolute directory prefix from =target= (stripping qualifier,
+symbol query, and glob tail). When the caller passes =root:=
+explicitly, that wins. When the target is relative, =sessionCwd=
+wins. The result is threaded through both the bare-plain stat
+probe and =executeCodePath({ root })=.
+
+* Edge Cases
+
+- Symbolic links: pass through to kernel; permission/cycle handling
+  remains kernel's responsibility.
+- Symlink that points outside the chosen root: same as today.
+  Kernel walker rules apply.
+- =~/foo= shorthand: not currently expanded by =get= (out of scope).
+- Absolute glob with no fixed prefix (=/**/foo=): degenerate;
+  prefix becomes =/=, walker root =/=. Same behaviour as kernel
+  invoked with =root: "/"=. Accept and let kernel decide.
+- =canonicalize= is NOT applied: the user gave an absolute path,
+  honour it lexically. Symlink-escape protection was never offered
+  by the previous code either.
+- =gitignore: false= for an in-root file: unchanged.
+- =gitignore: false= for an out-of-root file: no longer special — the
+  file is reachable through the auto-root, gitignore semantics still
+  apply within that root.
+
+* Tests (TDD — written first, must fail before impl lands)
+
+** Delete
+- =packages/coding-agent/test/get.test.ts::"BUG-348: gitignore hint truth" → "emits OUT_OF_PROJECT_ROOT for absolute paths outside cwd"=
+- Same describe → =gitignore:false reads out-of-root file directly=
+  (the gitignore:false code path goes away; keep a new test asserting
+  the file reads with no flag).
+- =packages/coding-agent/test/get.test.ts::"BUG-373: out-of-root symmetry for non-file targets"= block — entirely.
+
+** Replace with (new describe: "FEAT-816: absolute targets self-root")
+1. =reads an absolute file outside session cwd= — assert file contents
+   appear in output; no =OUT_OF_PROJECT_ROOT= text.
+2. =lists an absolute directory outside session cwd= — assert filenames
+   appear; no =OUT_OF_PROJECT_ROOT=.
+3. =trees an absolute directory outside session cwd with #tree= — assert
+   tree output includes nested filename.
+4. =walks an absolute glob outside session cwd= — assert matched
+   filenames appear.
+5. =applies grep qualifier to an absolute path outside session cwd= —
+   create a file with "TODO" and assert the match shows up.
+6. =explicit root: override still wins over auto-root= — pass a
+   different root and prove the walker honours it.
+7. =relative bare glob still scoped to session cwd= — regression guard
+   that =**/*.rs= does not walk =/=.
+8. =relative path with ../ still resolves against cwd= — regression
+   guard for traversal containment.
+9. =find tool surfaces same absolute-target reads= — assert via
+   FindTool (single-field schema) that the same calls succeed.
+
+** Update
+- =packages/coding-agent/test/codepath/negative.test.ts:38= comment
+  no longer references =OUT_OF_PROJECT_ROOT=. Confirm no assertions
+  still depend on that error code.
+
+* Verification
+
+#+begin_src bash
+bun test packages/coding-agent/test/get.test.ts
+bun test packages/coding-agent/test/codepath/negative.test.ts
+bun run --filter @oh-my-pi/pi-coding-agent check:ts
+#+end_src
+
+Manual proof from the original repro:
+#+begin_example
+get { target: "/home/user/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tantivy-0.26.1/src/directory" }
+  → listing of directory contents (no OUT_OF_PROJECT_ROOT)
+
+find { target: ".../tantivy-0.26.1/src/**/*lock*" }
+  → matching files
+#+end_example
+
+* Non-goals
+
+- KDL =fs.walk-mode= scheme (FUP-086 design). Superseded by this
+  bug; sandbox/server deployments that need scoping should rely on
+  OS-level permissions or process-level sandboxing.
+- Mutation operations (=edit=, =create=). Untouched.
+- Symlink-escape canonicalization.
+- =~= expansion.
+
+* Related
+- [[id:BUG-348-get-gitignore-hint-fires-falsely-gitigno]]
+- [[id:BUG-373-find-get-out-of-root-dir-glob-targets-si]]
+- [[id:FUP-086-find-get-walk-outside-project-root-by-de]] (superseded)
+
+NOTE [2026-05-16]: Fixed via TDD swarm (wave 1 failing tests, wave 2 impl). `OUT_OF_PROJECT_ROOT` deleted from `get.ts`; `isInsideRoot` helper deleted; new helpers `extractAbsolutePrefix`, `nearestExistingDir`, `effectiveRootFor` thread an auto-computed walker root through both the stat probe and `executeCodePath`. `makeRelativeToRoot` converts out-of-cwd absolute targets to relative form so the kernel subtree walker can resolve them. `find.ts` opts out of `root: session.cwd` for absolute targets so auto-root wins, but keeps it for relative targets so session-scoped resolution survives. 71/71 tests green in `get.test.ts`; typecheck clean. Net 4 files, +265/-176.

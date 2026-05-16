@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
@@ -50,17 +51,87 @@ function buildDirQualifier(target: string, params: GetParams): string {
 }
 
 /**
- * BUG-348: detect whether an absolute path is inside the walker root.
- * The kernel's FsWalker only walks subtrees of `opts.root`; absolute
- * paths outside that subtree are silently invisible to the walker, and
- * `gitignore:false` does nothing for them. Callers need a distinct
- * diagnostic so they don't confuse "out-of-root" with "gitignored".
+ * Extract the longest absolute directory prefix from a CodePath target.
+ * Strips, in order: symbol query (`::...`), qualifier (`#...`), glob meta
+ * (everything from first `*`, `?`, or `[`), and trailing `/`.
+ * Returns the stripped string if absolute; otherwise `null`.
  */
-function isInsideRoot(absPath: string, root: string): boolean {
-	const normRoot = path.resolve(root);
-	const normPath = path.resolve(absPath);
-	if (normPath === normRoot) return true;
-	return normPath.startsWith(normRoot + path.sep);
+function extractAbsolutePrefix(target: string): string | null {
+	const stripped = target
+		.replace(/::.*$/, "") // symbol query
+		.replace(/#.*$/, "") // qualifier
+		.replace(/[*?[].*$/, "") // glob meta
+		.replace(/\/+$/, ""); // trailing slash
+	return path.isAbsolute(stripped) ? stripped : null;
+}
+
+/**
+ * Walk up from `absPath` until an existing directory is found.
+ * Uses sync stat (cheap, bounded). Returns `/` as ultimate fallback.
+ */
+function nearestExistingDir(absPath: string): string {
+	let dir = absPath;
+	for (;;) {
+		try {
+			if (statSync(dir).isDirectory()) return dir;
+		} catch {
+			// ENOENT / EACCES — continue walking up
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) return dir; // reached filesystem root
+		dir = parent;
+	}
+}
+
+/**
+ * Compute the effective walker root for a CodePath target.
+ * - Explicit `providedRoot` wins unconditionally.
+ * - For absolute targets, extract the directory prefix and find the
+ *   nearest existing ancestor directory.
+ * - Relative targets fall back to `sessionCwd`.
+ */
+function effectiveRootFor(target: string, providedRoot: string | undefined, sessionCwd: string): string {
+	if (providedRoot) return providedRoot;
+	const prefix = extractAbsolutePrefix(target);
+	if (!prefix) return sessionCwd;
+	return nearestExistingDir(prefix);
+}
+
+/**
+ * Convert an absolute CodePath target to a relative path against `rootDir`.
+ * Preserves qualifiers (`#...`, `::...`). When the target is already relative
+ * or the conversion would escape `rootDir`, returns the original target.
+ */
+function makeRelativeToRoot(target: string, rootDir: string): string {
+	if (!rootDir || !path.isAbsolute(target)) return target;
+
+	// Find the first structural separator that splits the filesystem path from qualifiers.
+	// The target can have `::` and `#` in any order; pick the earliest split point.
+	const qi = target.indexOf("::");
+	const hi = target.indexOf("#");
+	let splitAt = -1;
+	if (qi >= 0 && hi >= 0) {
+		splitAt = Math.min(qi, hi);
+	} else if (qi >= 0) {
+		splitAt = qi;
+	} else if (hi >= 0) {
+		splitAt = hi;
+	}
+
+	const base = splitAt >= 0 ? target.slice(0, splitAt) : target;
+	const suffix = splitAt >= 0 ? target.slice(splitAt) : "";
+
+	const rel = path.relative(rootDir, base);
+	// BUG-380: when target resolves to root itself, address the root via `.`
+	// (kernel can't resolve `<root>` inside `<root>` — returns []).
+	// `#listing` is the kernel's directory-listing op which rejects the
+	// `.` prefix ("Not a directory"); bare `.` produces the equivalent
+	// listing, so collapse it.
+	if (rel === "") return suffix === "#listing" ? "." : `.${suffix}`;
+	if (!rel.startsWith("..") && !path.isAbsolute(rel)) {
+		return rel + suffix;
+	}
+	return target;
 }
 
 /**
@@ -168,74 +239,18 @@ export class GetTool implements AgentTool<typeof getSchema> {
 		let attachedQualifier: string | null = null;
 		let resolvedAbs: string | null = null;
 
-		// BUG-373: symmetric OUT_OF_PROJECT_ROOT for *every* absolute target
-		// (file, dir, glob, qualified). The bare-plain branch below handles
-		// the file case; this pre-check handles dir/glob/qualified targets
-		// that would otherwise silently degrade to `empty-result` because
-		// the kernel walker can't see paths outside its root.
-		if (
-			!looksLikeRegex
-			&& !target.includes("://")
-			&& params.gitignore !== false
-			&& path.isAbsolute(target.replace(/^[!~]/, ""))
-		) {
-			const rootDir = params.root ?? process.cwd();
-			// Strip qualifier (`#...`), glob tail (everything from first
-			// `*`/`?`/`[`), and symbol query (`::Sym`) to get the longest
-			// absolute prefix we can sanity-check against the walker root.
-			const prefix = target
-				.replace(/::.*$/, "")
-				.replace(/#.*$/, "")
-				.replace(/[*?[].*$/, "")
-				.replace(/\/+$/, "");
-			if (path.isAbsolute(prefix) && !isInsideRoot(prefix, rootDir)) {
-				const hint = `(hint: pass gitignore: false to read this file directly, or set root: "${prefix}" to walk from there.)`;
-				return toolResult<GetToolResultDetails>({
-					target: params.target,
-					error: "OUT_OF_PROJECT_ROOT",
-				})
-					.text(
-						`OUT_OF_PROJECT_ROOT: ${params.target}\n  project root: ${rootDir}\n  resolved:     ${prefix}\n\n${hint}`,
-					)
-					.done();
-			}
-		}
+		const rootDir = effectiveRootFor(target, params.root, process.cwd());
 
 		if (params.content !== false && !looksLikeRegex && classifyBareTarget(target) === "bare-plain") {
 			const normalized = target.replace(/\/+$/, "");
-			const rootDir = params.root ?? process.cwd();
 			const absCandidate = path.isAbsolute(normalized) ? normalized : path.resolve(rootDir, normalized);
 
 			try {
 				const stat = await fs.stat(absCandidate);
 				resolvedAbs = absCandidate;
-				const inRoot = isInsideRoot(absCandidate, rootDir);
 
 				if (stat.isFile()) {
 					statProbeFoundFile = true;
-
-					// BUG-348: out-of-root path. The kernel walker can't see it.
-					if (!inRoot) {
-						if (params.gitignore === false) {
-							// Direct read short-circuit: caller explicitly opted in.
-							const raw = await fs.readFile(absCandidate, "utf-8");
-							return toolResult<GetToolResultDetails>({
-								target: params.target,
-								format: params.format,
-							})
-								.text(raw)
-								.done();
-						}
-						const hint = `(hint: pass gitignore: false to read this file directly, or set root: "${path.dirname(absCandidate)}" to walk from there.)`;
-						return toolResult<GetToolResultDetails>({
-							target: params.target,
-							error: "OUT_OF_PROJECT_ROOT",
-						})
-							.text(
-								`OUT_OF_PROJECT_ROOT: ${params.target}\n  project root: ${rootDir}\n  resolved:     ${absCandidate}\n\n${hint}`,
-							)
-							.done();
-					}
 
 					// FEAT-713: always #raw for bare-path files. Drops the
 					// outline-first default that returned [§file] markers
@@ -270,12 +285,26 @@ export class GetTool implements AgentTool<typeof getSchema> {
 			}
 		}
 
+		// Normalize absolute targets to relative against the auto-computed root
+		// so the kernel's subtree walker can resolve them. In-cwd paths
+		// normally pass through unchanged (the kernel handles them directly),
+		// but the root-equal case (BUG-380) must always convert: the kernel
+		// can't resolve `<root>` inside `<root>` and returns []. `.` is the
+		// portable address for the root itself.
+		const absPrefix = extractAbsolutePrefix(target);
+		if (!looksLikeRegex && absPrefix !== null) {
+			const rootEqual = path.resolve(absPrefix) === path.resolve(rootDir);
+			if (rootEqual || !absPrefix.startsWith(process.cwd())) {
+				target = makeRelativeToRoot(target, rootDir);
+			}
+		}
+
 		const chunks = await executeCodePath({
 			command: "get",
 			target,
 
 			format: params.format,
-			root: params.root,
+			root: rootDir,
 			gitignore: params.gitignore,
 			abortSignal: signal,
 		});
