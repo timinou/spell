@@ -1,0 +1,87 @@
+#+TITLE: brush-core cmd substitution deadlocks in bash tool
+#+STATE: DOING
+#+SESSION_ID: 14e36d0179617e04
+#+TRANSCRIPT_PATH: [[file:/home/user/.spell/agent/sessions/-code-ora-spell/2026-05-16T11-14-31-013Z_14e36d0179617e04.jsonl]]
+#+CUSTOM_ID: BUG-375-brush-core-cmd-substitution-deadlocks-in
+
+* Initial Message
+
+why tf did that command time out?
+
+┌─── ✘ Bash ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │ $ cd /home/user/code/ora/spell && sleep 0.05 && printf 'fn bbbbbbb() {}\n' > crates/pi-code-engine/test-bug374/repro.rs; echo "wrote │
+ │ B, size=$(stat -c%s crates/pi-code-engine/test-bug374/repro.rs)"; cat crates/pi-code-engine/test-bug374/repro.rs                     │
+ ├─── Output ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+ │ [Command exceeded hard timeout after 305 seconds]                                                                                    │
+ └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+* WHEN
+2026-05-16, while diagnosing why a routine ~printf > file; echo "$(stat ...)"~ command in the agent's =bash= tool hung exactly 305s before being killed by the hard-timeout watchdog.
+
+* SYMPTOM
+Bash commands of the shape =<external>; <something> "$(<external>)"= deadlock the persistent brush-core =Shell= session. Each hang lasts ~hardTimeoutMs + HARD_TIMEOUT_GRACE_MS= (default 305s) and produces no output. The shell is then marked broken; subsequent commands spawn a fresh session and behave normally.
+
+** Minimal reproducer (reliably hangs after 1-3 invocations)
+#+BEGIN_SRC bash
+/bin/true; /bin/echo "x=$(/bin/echo hi)"
+#+END_SRC
+
+Variants that hang:
+- =sleep 0.05 && printf 'x' > F; echo "size=$(stat -c%s F)"=
+- =for i in 1 2 3 4 5; do /bin/true && echo "trial$i=$(/bin/echo $i)"; done=
+
+Variants that **don't** hang (no prior external before the cmdsub):
+- =echo "x=$(/bin/echo hi)"=
+
+* ROOT CAUSE
+=brush-core-vendored/src/commands.rs::invoke_command_in_subshell_and_get_output= (line 551) uses an unsafe sync-blocking-IO-inside-async pattern:
+
+#+BEGIN_SRC rust
+let cmd_join_handle = tokio::task::spawn_blocking(move || {
+    let rt = tokio::runtime::Handle::current();
+    rt.block_on(run_substitution_command(subshell, params, s))
+});
+
+let output_str = std::io::read_to_string(reader)?;   // ← blocks the async worker
+let run_result = cmd_join_handle.await?;
+#+END_SRC
+
+- =std::io::read_to_string= is a synchronous blocking syscall. It runs on the calling async task's worker thread, pinning that tokio worker.
+- The inner command (in =spawn_blocking + rt.block_on=) needs SIGCHLD delivery via tokio's signal driver, which is scheduled on the runtime's worker pool.
+- Combined with brush-core's =ChildProcess::wait= also registering its own =tokio::signal::unix::signal(SignalKind::child())= listener, the SIGCHLD wakeup path becomes thread-affinity-sensitive. When the runtime is napi-rs's default multi-threaded tokio (worker count = num_cpus) and one worker has just executed an external command, the next cmdsub's read+wait can land such that the SIGCHLD driver wake-up is starved, the inner child's =wait()= never resolves, =run_substitution_command= never returns, the writer side of the cmd-sub pipe is never dropped, and =read_to_string(reader)= waits for EOF that never comes.
+
+The hang is **intermittent** by nature (depends on tokio scheduling) but quickly becomes deterministic once a session has accumulated state (e.g., post-=build:native=).
+
+* UPSTREAM STATUS
+brush HEAD already fixed this. Replaces the entire pattern with proper async:
+
+#+BEGIN_SRC rust
+let mut async_reader = sys::async_pipe::AsyncPipeReader::new(reader)?;
+let cmd_join_handle = tokio::spawn(run_substitution_command(subshell, params, s));
+let output_str = async_reader.read_to_string().await?;
+let run_result = cmd_join_handle.await?;
+#+END_SRC
+
+Where =AsyncPipeReader= wraps =tokio::net::unix::pipe::Receiver= on Unix and falls back to =spawn_blocking= read on other platforms.
+
+This eliminates the deadlock class entirely:
+- =tokio::spawn= is a proper runtime task, not a worker-thread-blocking re-entrant =rt.block_on=.
+- =async_reader.read_to_string().await= is non-blocking, frees the worker between polls.
+- SIGCHLD delivery path is now decoupled from any single thread.
+
+* FIX (port upstream)
+1. Add =crates/brush-core-vendored/src/sys/unix/async_pipe.rs= (=tokio::net::unix::pipe::Receiver= wrapper).
+2. Add =crates/brush-core-vendored/src/sys/stubs/async_pipe.rs= (=spawn_blocking= fallback).
+3. Wire =pub mod async_pipe= through =sys/unix.rs=, =sys/windows.rs=, =sys/stubs.rs=, =sys.rs=.
+4. Patch =commands.rs::invoke_command_in_subshell_and_get_output= to the upstream pattern.
+5. Add a failing-then-passing integration test in =crates/brush-core-vendored/tests/= covering the reproducer.
+
+* VERIFICATION
+- Pre-fix: reproducer hangs ≥305s (this session, confirmed).
+- Post-fix: reproducer completes in <100ms; full loop variant in <500ms.
+- Existing test suites pass (=cargo test -p brush-core-vendored=, =cargo test -p pi-natives=).
+- Workspace =bun run check:rs= clean.
+
+* SCOPE NOTES
+- This is the same class of bug as upstream brush PR #748 ("fix: command substitutions with large output") - that PR fixed the *buffer-fill* variant; HEAD's later refactor to =AsyncPipeReader= fixes the *signal-starvation* variant we are hitting.
+- Watchdog (~bash-executor.ts~ =brokenShellSessions=) is doing its job; this BUG eliminates the need to ever reach the watchdog.

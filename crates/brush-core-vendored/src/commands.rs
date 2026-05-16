@@ -564,6 +564,13 @@ pub(crate) async fn invoke_command_in_subshell_and_get_output(
     let (reader, writer) = std::io::pipe()?;
     params.set_fd(OpenFiles::STDOUT_FD, writer.into());
 
+    // Wrap the reader for async draining. Using async I/O here (rather than
+    // the previous `std::io::read_to_string` + `spawn_blocking` + `rt.block_on`
+    // pattern) avoids pinning the calling tokio worker thread, which used to
+    // deadlock when the substituted command's `wait()` relied on SIGCHLD
+    // delivery from the same runtime (BUG-375).
+    let mut async_reader = sys::async_pipe::AsyncPipeReader::new(reader)?;
+
     // Start the execution of the command, but don't wait for it to
     // complete. In case the command generates lots of output, we
     // need to start reading in parallel so the command doesn't block
@@ -571,13 +578,10 @@ pub(crate) async fn invoke_command_in_subshell_and_get_output(
     // subshell and params to run_substitution_command; we must
     // ensure that they're both dropped by the time this call
     // returns (so they're not holding onto the write end of the pipe).
-    let cmd_join_handle = tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Handle::current();
-        rt.block_on(run_substitution_command(subshell, params, s))
-    });
+    let cmd_join_handle = tokio::spawn(run_substitution_command(subshell, params, s));
 
     // Extract output.
-    let output_str = std::io::read_to_string(reader)?;
+    let output_str = async_reader.read_to_string().await?;
 
     // Now observe the command's completion.
     let run_result = cmd_join_handle.await?;

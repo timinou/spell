@@ -1,3 +1,4 @@
+pub(crate) mod async_pipe;
 pub mod commands;
 pub mod fd;
 pub mod fs;
