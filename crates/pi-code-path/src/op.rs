@@ -292,6 +292,7 @@ pub enum Op {
 	},
 	SymbolRename {
 		target:   SymbolTarget,
+		#[serde(rename = "newName")]
 		new_name: Identifier,
 	},
 	SymbolWrap {
@@ -301,6 +302,7 @@ pub enum Op {
 	SymbolDelete {
 		target:               SymbolTarget,
 		#[serde(default)]
+		#[serde(rename = "allowSiblingDelete")]
 		allow_sibling_delete: bool,
 	},
 	SymbolInsertBefore {
@@ -332,6 +334,7 @@ pub enum Op {
 	SymbolClone {
 		target:    SymbolTarget,
 		#[serde(default)]
+		#[serde(rename = "renameTo")]
 		rename_to: Option<Identifier>,
 	},
 	SymbolSplice {
